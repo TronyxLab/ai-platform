@@ -299,10 +299,10 @@ echo "EXIT_CODE:$?"
 
 
 def test_ssh_command_construction(caplog) -> None:
-    """Verify build_ssh_cmd() constructs correctly quoted SSH command."""
+    """Verify build_ssh_cmd() constructs correctly quoted SSH command (new 4-param signature)."""
     caplog.set_level(logging.DEBUG)
 
-    test_call = """build_ssh_cmd "test-node" "ssh-ed25519 AAAATestKey test@example.com" "AGE-SECRET-KEY-12345"
+    test_call = """build_ssh_cmd "test-node" "ssh-ed25519 AAAATestKey test@example.com" "ssh-ed25519 AAAACiKey ci-deploy@test" "AGE-SECRET-KEY-12345"
 echo "[IMP:9][build_ssh_cmd] SSH command constructed"
 """
     stdout, stderr, rc = _test_func(
@@ -324,24 +324,27 @@ echo "[IMP:9][build_ssh_cmd] SSH command constructed"
     assert "--node-yaml" in cmd
     assert "/opt/node-configs/test-node/node.yaml" in cmd
     assert "--owner-key" in cmd
+    assert "--ci-deploy-key" in cmd, f"Expected --ci-deploy-key in command: {cmd}"
     assert "--age-secret-key" not in cmd
     assert "--resume" in cmd
     # printf percentq uses backslash-escaping for spaces
     assert (
         "ssh-ed25519\\ AAAATestKey\\ test@example.com" in cmd or "'ssh-ed25519 AAAATestKey test@example.com'" in cmd
     ), f"Expected printf percentq quoting: {cmd}"
-    logger.info("[IMP:9][test_ssh_command_construction][assert] SSH command validated")
+    logger.info("[IMP:9][test_ssh_command_construction][assert] SSH command validated with ci_deploy_key")
 
-    # Test without age key
+    # Test without age key (but with ci_deploy_key)
     stdout3, _stderr3, rc3 = _test_func(
         REMOTE_CMD_SH,
         ["build_ssh_cmd"],
-        'build_ssh_cmd "test-node" "key" ""; echo "[IMP:9][build_ssh_cmd] No-key test"',
+        'build_ssh_cmd "test-node" "key" "ci-key" ""; echo "[IMP:9][build_ssh_cmd] No-age-key test"',
         env={"__LOG_PREFIX": "test"},
     )
     assert rc3 == 0
-    assert "--age-secret-key" not in stdout3.split("\n")[0]
-    logger.info("[IMP:9][test_ssh_command_construction][assert] Without key: flag omitted")
+    cmd3 = stdout3.split("\n")[0]
+    assert "--age-secret-key" not in cmd3
+    assert "--ci-deploy-key" in cmd3, f"Expected --ci-deploy-key without age key: {cmd3}"
+    logger.info("[IMP:9][test_ssh_command_construction][assert] Without age key: ci-deploy-key present, age flag omitted")
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
@@ -688,6 +691,184 @@ echo "[IMP:9][docker_test] auth exit=$?"
     assert "testuser" in stderr2 or "testuser" in stdout2, "Expected testuser in output"
     logger.info("[IMP:9][test_docker_login_set_u_safe][assert] Authenticated path works")
     assert found_imp9_2, "Critical LDD Error: No IMP:9 business logic log found (auth)"
+
+
+# endregion
+
+
+# region TEST_test_ci_deploy_key_extracted_from_node_yaml
+# 🧪 TRAP[TEST] · 2026-07-17 · ci_deploy_key extraction from node.yaml
+# · Regression: schema declares node.ci_deploy_key but bootstrap.sh didn't consume it (D1)
+# · Scenario: node.yaml with ci_deploy_key → extracted value is non-empty;
+#             node.yaml without ci_deploy_key → empty string, not fatal
+# · Last fail: N/A (new test)
+# · Remove if: ci_deploy_key extraction logic changes fundamentally
+
+
+def test_ci_deploy_key_extracted_from_node_yaml(caplog, tmp_path) -> None:
+    """Verify bootstrap.sh extracts ci_deploy_key from node.yaml (or returns empty without fatal)."""
+    caplog.set_level(logging.DEBUG)
+
+    # ── Scenario 1: node.yaml WITH ci_deploy_key ────────────────────────
+    node_yaml_with_key = tmp_path / "node_with_key.yaml"
+    node_yaml_with_key.write_text("""node:
+  name: test-node
+  ci_deploy_key: "ssh-ed25519 AAAATestCiKey ci-deploy@test"
+  owner_key: "ssh-ed25519 AAAATestOwnerKey owner@test"
+""")
+
+    bash_script_with = f"""set -euo pipefail
+CI_DEPLOY_KEY=$(python3 -c "import yaml; f=open('{node_yaml_with_key}'); d=yaml.safe_load(f); print(d.get('node',{{}}).get('ci_deploy_key',''))" 2>/dev/null) || true
+if [[ -n "${{CI_DEPLOY_KEY}}" ]]; then
+    echo "[IMP:9][ci_deploy_key] KEY_FOUND=${{CI_DEPLOY_KEY}}"
+else
+    echo "[IMP:9][ci_deploy_key] KEY_EMPTY"
+fi
+"""
+    stdout1, stderr1, rc1 = _bash(bash_script_with)
+    found1 = _print_ldd(stderr1, stdout1)
+    assert rc1 == 0, f"Extraction with key failed: {stderr1}"
+    assert "KEY_FOUND" in stdout1, f"Expected KEY_FOUND: {stdout1}"
+    assert "ci-deploy@test" in stdout1, f"Expected ci-deploy key value: {stdout1}"
+    logger.info("[IMP:9][test_ci_deploy_key_extracted][assert] ci_deploy_key extracted from node.yaml")
+
+    # ── Scenario 2: node.yaml WITHOUT ci_deploy_key (not fatal) ─────────
+    node_yaml_without_key = tmp_path / "node_without_key.yaml"
+    node_yaml_without_key.write_text("""node:
+  name: test-node
+  owner_key: "ssh-ed25519 AAAATestOwnerKey owner@test"
+""")
+
+    bash_script_without = f"""set -euo pipefail
+CI_DEPLOY_KEY=$(python3 -c "import yaml; f=open('{node_yaml_without_key}'); d=yaml.safe_load(f); print(d.get('node',{{}}).get('ci_deploy_key',''))" 2>/dev/null) || true
+echo "[IMP:9][ci_deploy_key] VALUE=[${{CI_DEPLOY_KEY}}]"
+echo "[IMP:9][ci_deploy_key] LEN=${{#CI_DEPLOY_KEY}}"
+"""
+    stdout2, stderr2, rc2 = _bash(bash_script_without)
+    found2 = _print_ldd(stderr2, stdout2)
+    assert rc2 == 0, f"Extraction without key failed: {stderr2}"
+    assert "VALUE=[]" in stdout2, f"Expected empty VALUE: {stdout2}"
+    assert "LEN=0" in stdout2, f"Expected LEN=0: {stdout2}"
+    logger.info("[IMP:9][test_ci_deploy_key_extracted][assert] ci_deploy_key absent: empty string, not fatal")
+
+    # ── Scenario 3: env PLATFORM_CI_DEPLOY_KEY override ─────────────────
+    bash_script_env = f"""set -euo pipefail
+CI_DEPLOY_KEY=$(python3 -c "import yaml; f=open('{node_yaml_without_key}'); d=yaml.safe_load(f); print(d.get('node',{{}}).get('ci_deploy_key',''))" 2>/dev/null) || true
+# Env override
+if [[ -n "${{PLATFORM_CI_DEPLOY_KEY:-}}" ]]; then
+    CI_DEPLOY_KEY="${{PLATFORM_CI_DEPLOY_KEY}}"
+fi
+echo "[IMP:9][ci_deploy_key] VALUE=[${{CI_DEPLOY_KEY}}]"
+"""
+    stdout3, stderr3, rc3 = _bash(
+        bash_script_env,
+        env={"PLATFORM_CI_DEPLOY_KEY": "ssh-ed25519 OVERRIDE_KEY ci-deploy@override"},
+    )
+    found3 = _print_ldd(stderr3, stdout3)
+    assert rc3 == 0, f"Env override failed: {stderr3}"
+    assert "OVERRIDE_KEY" in stdout3, f"Expected env override key: {stdout3}"
+    logger.info("[IMP:9][test_ci_deploy_key_extracted][assert] PLATFORM_CI_DEPLOY_KEY env override works")
+
+    assert found1 and found2 and found3, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
+# region TEST_test_build_ssh_cmd_includes_ci_deploy_key
+# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd includes --ci-deploy-key flag
+# · Regression: after build_ssh_cmd signature change (3→4 params), ci_deploy_key must appear
+# · Scenario: non-empty ci_deploy_key → `--ci-deploy-key` with %q-quoted value in SSH command
+# · Last fail: N/A (new test)
+# · Remove if: build_ssh_cmd ci_deploy_key handling changes
+
+
+def test_build_ssh_cmd_includes_ci_deploy_key(caplog) -> None:
+    """Verify build_ssh_cmd() includes --ci-deploy-key with printf %q quoting when key is non-empty."""
+    caplog.set_level(logging.DEBUG)
+
+    ci_key = "ssh-ed25519 AAAACiDeployKey ci-deploy@example.com"
+    test_call = f"""build_ssh_cmd "test-node" "ssh-ed25519 AAAATestOwnerKey owner@test" "{ci_key}" "AGE-SECRET-KEY-12345"
+echo "[IMP:9][build_ssh_cmd_ci] Exit=$?"
+"""
+    stdout, stderr, rc = _test_func(
+        REMOTE_CMD_SH,
+        ["build_ssh_cmd"],
+        test_call,
+        env={"__LOG_PREFIX": "test"},
+    )
+
+    found_imp9 = _print_ldd(stderr, stdout)
+    assert rc == 0, f"build_ssh_cmd failed: {stderr}"
+    cmd = stdout.split("\n")[0]
+
+    assert "--ci-deploy-key" in cmd, f"Expected --ci-deploy-key flag: {cmd}"
+    # Verify the key value is %q-quoted (spaces escaped with backslash)
+    assert (
+        "ssh-ed25519\\\\\\ AAAACiDeployKey\\\\\\ ci-deploy@example.com" in cmd
+        or "ssh-ed25519\\ AAAACiDeployKey\\ ci-deploy@example.com" in cmd
+        or "'ssh-ed25519 AAAACiDeployKey ci-deploy@example.com'" in cmd
+    ), f"Expected %q-quoted ci_deploy_key value: {cmd}"
+    logger.info("[IMP:9][test_build_ssh_cmd_ci][assert] --ci-deploy-key present with %q quoting")
+
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
+# region TEST_test_build_ssh_cmd_empty_ci_deploy_key_omits_flag
+# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd omits --ci-deploy-key when empty
+# · Regression: empty ci_deploy_key must NOT emit --ci-deploy-key flag (backward compat)
+# · Scenario: empty ci_deploy_key string → no `--ci-deploy-key` in SSH command
+# · Last fail: N/A (new test)
+# · Remove if: build_ssh_cmd ci_deploy_key handling changes
+
+
+def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
+    """Verify build_ssh_cmd() omits --ci-deploy-key when the key is empty (backward compat)."""
+    caplog.set_level(logging.DEBUG)
+
+    stdout, stderr, rc = _test_func(
+        REMOTE_CMD_SH,
+        ["build_ssh_cmd"],
+        'build_ssh_cmd "test-node" "ssh-ed25519 AAAATestOwnerKey owner@test" "" "AGE-SECRET-KEY-12345"\n'
+        'echo "[IMP:9][build_ssh_cmd_empty] Exit=$?"',
+        env={"__LOG_PREFIX": "test"},
+    )
+
+    found_imp9 = _print_ldd(stderr, stdout)
+    assert rc == 0, f"build_ssh_cmd with empty ci_deploy_key failed: {stderr}"
+    cmd = stdout.split("\n")[0]
+
+    # When ci_deploy_key is empty, the age_key becomes $3 (shifted from $4 due to $3 being empty)
+    # Actually no — the signature is now: node, owner_key, ci_deploy_key, age_key, passthrough...
+    # So $3="" and $4="AGE-SECRET-KEY-12345"
+    assert "--ci-deploy-key" not in cmd, (
+        f"Expected NO --ci-deploy-key flag when key is empty: {cmd}"
+    )
+    # Verify other expected flags are still present (backward compat)
+    assert "--owner-key" in cmd
+    assert "--node-name" in cmd
+    assert "--resume" in cmd
+    assert "--age-secret-key" not in cmd
+    logger.info("[IMP:9][test_build_ssh_cmd_empty][assert] --ci-deploy-key omitted when empty (backward compat)")
+
+    # Also test with both ci_deploy_key AND age_key empty
+    stdout2, stderr2, rc2 = _test_func(
+        REMOTE_CMD_SH,
+        ["build_ssh_cmd"],
+        'build_ssh_cmd "test-node" "key" "" ""\n'
+        'echo "[IMP:9][build_ssh_cmd_both_empty] Exit=$?"',
+        env={"__LOG_PREFIX": "test"},
+    )
+    assert rc2 == 0, f"build_ssh_cmd both empty failed: {stderr2}"
+    cmd2 = stdout2.split("\n")[0]
+    assert "--ci-deploy-key" not in cmd2
+    assert "export AGE_SECRET_KEY=" not in cmd2
+    logger.info("[IMP:9][test_build_ssh_cmd_empty][assert] Both keys empty: all optional flags omitted")
+
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
 # endregion

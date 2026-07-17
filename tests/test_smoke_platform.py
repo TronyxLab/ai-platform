@@ -334,38 +334,21 @@ def test_platform_starts_all_containers(
     # endregion
 
     # region BLOCK_CollectExpected
+    # Use docker ps with project label filter instead of docker compose ps.
+    # Reason: docker compose ps with profile-gated services (all modules use
+    # `profiles: [module-name]`) may not show containers reliably — COMPOSE_PROFILES
+    # env var is inconsistently honored by `docker compose ps` across Docker Compose
+    # versions. docker ps --filter by project label is deterministic and env-agnostic.
     expected_services: list[str] = []
-    for module_name in started:
-        compose_path = all_compose_files.get(module_name)
-        if compose_path is None:
-            continue
-        # Use same compose args as platform_services fixture: base + test overlay
-        # NOTE: --all flag is critical — docker compose ps without --all does NOT
-        # show containers when COMPOSE_PROFILES filtering leaves no active services
-        # visible (all services are profile-gated). Adding --all ensures we always
-        # see containers regardless of profile state, then filter by running via docker ps.
-        ps_args = ["docker", "compose", "-f", compose_path]
-        test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
-        if os.path.exists(test_override):
-            ps_args.extend(["-f", test_override])
-        ps_args.extend(["-p", "ai-platform-test", "ps", "--all", "--format", "{{.Name}}"])
-        result = _run_docker(
-            ps_args,
-            timeout=30,
-            env_override={"COMPOSE_PROFILES": module_name},
-        )
-        if result.returncode != 0:
-            logger.warning(
-                "[IMP:7][test_platform_starts_all_containers] Cannot list services for '%s': %s",
-                module_name,
-                result.stderr,
-            )
-            continue
-        for line in result.stdout.strip().splitlines():
-            service_name = line.strip()
-            if service_name:
-                expected_services.append(service_name)
-                # [IMP:8] Expected service: {service_name}
+    _ps_result = subprocess.run(
+        ["docker", "ps", "--all", "--filter", "label=com.docker.compose.project=ai-platform-test",
+         "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    for line in _ps_result.stdout.strip().splitlines():
+        cname = line.strip()
+        if cname:
+            expected_services.append(cname)
     # endregion
 
     # region BLOCK_CheckRunning
@@ -478,38 +461,20 @@ def test_critical_services_healthy(
     # endregion
 
     # region BLOCK_ResolveContainers
-    # Step 1: collect all container names from running compose services
+    # Step 1: collect all container names via docker ps (not compose ps)
+    # Same rationale as test_platform_starts_all_containers — docker compose ps with
+    # profile-gated services is unreliable across compose versions. Use docker ps
+    # with project label filter instead.
     all_container_names: list[str] = []
-    for module_name in started:
-        compose_path = all_compose_files.get(module_name)
-        if compose_path is None:
-            logger.warning(
-                "[IMP:7][test_critical_services_healthy] No compose file for module '%s' — skip",
-                module_name,
-            )
-            continue
-        # NOTE: same --all rationale as test_platform_starts_all_containers
-        ps_args = ["docker", "compose", "-f", compose_path]
-        test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
-        if os.path.exists(test_override):
-            ps_args.extend(["-f", test_override])
-        ps_args.extend(["-p", "ai-platform-test", "ps", "--all", "--format", "{{.Name}}"])
-        result = _run_docker(
-            ps_args,
-            timeout=30,
-            env_override={"COMPOSE_PROFILES": module_name},
-        )
-        if result.returncode != 0:
-            logger.warning(
-                "[IMP:7][test_critical_services_healthy] Cannot list services for '%s': %s",
-                module_name,
-                result.stderr.strip(),
-            )
-            continue
-        for line in result.stdout.strip().splitlines():
-            cname = line.strip()
-            if cname:
-                all_container_names.append(cname)
+    _ps_result = subprocess.run(
+        ["docker", "ps", "--all", "--filter", "label=com.docker.compose.project=ai-platform-test",
+         "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    for line in _ps_result.stdout.strip().splitlines():
+        cname = line.strip()
+        if cname:
+            all_container_names.append(cname)
 
     if not all_container_names:
         logger.error(
@@ -521,8 +486,7 @@ def test_critical_services_healthy(
             f"Diagnosis: Containers may not have started or docker compose ps failed."
         )
 
-    # Deduplicate — docker compose ps for different modules may return
-    # overlapping containers when they share the same project name
+    # Deduplicate
     all_container_names = sorted(set(all_container_names))
 
     logger.info(

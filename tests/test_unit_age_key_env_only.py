@@ -104,7 +104,7 @@ def _run_build_ssh_cmd(
 
         {func_def}
 
-        cmd=$(build_ssh_cmd "{node_name}" "{owner_key}" "{age_key}")
+        cmd=$(build_ssh_cmd "{node_name}" "{owner_key}" "" "{age_key}")
         echo "$cmd"
         echo "[IMP:9][test][build_ssh_cmd] Command constructed, length=${{#cmd}}"
     """)

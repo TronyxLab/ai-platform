@@ -337,6 +337,31 @@ step_6_create_ci_deploy_user() {
     fi
 }
 
+# ─── STEP 6b: Create /opt/projects base directory ─────────
+## @purpose  Ensure /opt/projects base directory exists with ci-deploy ownership.
+##           This directory is the root for all project payloads delivered via
+##           forced-command platform-deliver verb (D2). Idempotent: mkdir -p + chown
+##           are safe to rerun; checkpoint ensures no-op on subsequent boots.
+## @invariants
+##   - Runs AFTER step_6 (ci-deploy user must exist for chown to succeed)
+##   - mkdir -p is idempotent; chown ci-deploy:ci-deploy is safe to repeat
+##   - Projects base is a single fixed path (/opt/projects) shared with deploy-project.sh
+## @rationale Per DevPlan 008 Contract 2 (DD2): bootstrap creates base directory ownership;
+##            platform-deliver verb guarantees PROJECT_DIR even on nodes bootstrapped
+##            before this fix (defense in depth).
+step_6b_create_projects_base() {
+    step_start "projects-base" "Ensuring /opt/projects base directory"
+    if [[ -d "/opt/projects" ]]; then
+        step_skip "projects-base" "/opt/projects already exists"
+    else
+        mkdir -p /opt/projects
+        step_done "projects-base" "/opt/projects directory created"
+    fi
+    # Always ensure ownership (idempotent — chown is safe to repeat)
+    chown ci-deploy:ci-deploy /opt/projects
+    echo "[IMP:9][bootstrap][projects-base] /opt/projects ownership set to ci-deploy:ci-deploy" >&2
+}
+
 # ─── STEP 7: Firewall (ufw declarative) ──────────────────
 step_7_firewall() {
     step_start "firewall" "Applying declarative ufw firewall baseline"
@@ -464,6 +489,23 @@ step_13_sudoers() {
     fi
 
     step_done "sudoers" "sudoers generated + validated: all files owner=root:root mode≤0440"
+}
+
+# ─── STEP 13b: Install acme.sh (init only) ─────────────────
+## @brief  Install acme.sh and DNS API extensions for SSL provisioning.
+## @detail  Called once at bootstrap/init, BEFORE node-update. At update time,
+##          issue-cert.sh is called directly (acme.sh already installed).
+##          Delegates to install-acme.sh. Idempotent: skips if already installed.
+## @rationale  T3 (DevPlan 005): Split ssl-provision.sh into install-acme.sh
+##             (init-only) and issue-cert.sh (update-time). This step ensures
+##             acme.sh binary exists before SSL certificate issuance.
+_step_install_acme() {
+    step_start "install-acme" "Installing acme.sh for SSL provisioning (init only)"
+    if bash "${CORE_DIR}/internal/bootstrap/install-acme.sh" 2>&1; then
+        step_done "install-acme" "acme.sh installed"
+    else
+        step_warn "install-acme" "acme.sh install failed — SSL provisioning will fail later"
+    fi
 }
 
 # ─── STEP 14: Node update (post-init) ─────────────────────
@@ -643,18 +685,20 @@ update_step_2_provision() {
 ## @purpose  Provision SSL/TLS certificates via acme.sh DNS-01 BEFORE docker deploy.
 ##           Ensures nginx has valid cert at /etc/letsencrypt/live/<domain>/ before
 ##           docker compose up. DNS-01 validation does NOT require nginx to be running.
-## @detail   Delegates to ssl-provision.sh. Idempotent: skips if cert already exists.
+## @detail   Delegates to issue-cert.sh (cert issuance only). Idempotent: skips if
+##           cert already exists. acme.sh was already installed at init (install-acme.sh).
 ##           Extracts domain/email/dns_plugin from NODE_YAML via python3/yaml.
 ## @invariants
 ##   - Called after provision (step 2) and before deploy-docker (step 4)
 ##   - Failure is NON-FATAL for non-nginx modules (warn only)
 ##   - WEBNAMES_API_KEY must be in secrets for webnames DNS plugin
+##   - acme.sh must be installed first (install-acme.sh called at init)
 update_step_3_ssl_provision() {
     step_start "ssl-provision" "Provisioning SSL certificates via acme.sh DNS-01"
 
-    local ssl_script="${CORE_DIR}/internal/bootstrap/ssl-provision.sh"
+    local ssl_script="${CORE_DIR}/internal/bootstrap/issue-cert.sh"
     if [[ ! -f "$ssl_script" ]]; then
-        log_step "ssl-provision" "WARN" "ssl-provision.sh not found at ${ssl_script} — skipping SSL provisioning"
+        log_step "ssl-provision" "WARN" "issue-cert.sh not found at ${ssl_script} — skipping SSL provisioning"
         return 0
     fi
 
@@ -682,21 +726,15 @@ PYEOF
         export PLATFORM_PROJECT_DOMAINS="$(echo "$domain_info" | grep '^project_domains:' | cut -d: -f2-)"
     fi
 
-    local cert_path="/etc/letsencrypt/live/${PLATFORM_DOMAIN:-}/fullchain.pem"
-    if [[ -n "${PLATFORM_DOMAIN:-}" ]] && [[ -f "$cert_path" ]]; then
-        log_step "ssl-provision" "SKIP" "Certificate already exists: ${cert_path} (idempotent)"
-        return 0
-    fi
-
     if [[ -z "${PLATFORM_DOMAIN:-}" ]]; then
         log_step "ssl-provision" "WARN" "PLATFORM_DOMAIN not set — skipping SSL provisioning (no domain configured)"
         return 0
     fi
 
     # ── Source secrets.env for WEBNAMES_API_KEY ────────────────────────
-    # T3 (DevPlan 005): Source existing secrets.env before ssl-provision.sh.
+    # T3 (DevPlan 005): Source existing secrets.env before issue-cert.sh.
     # WEBNAMES_API_KEY is required for webnames DNS plugin. If secrets.env
-    # is missing (e.g. after reboot), warn but don't fail — ssl-provision
+    # is missing (e.g. after reboot), warn but don't fail — issue-cert.sh
     # skips if cert already exists (idempotent). Uses SECRETS_ENV_FILE env
     # var from lib/secrets.sh with fallback to /run/platform/secrets.env.
     local secrets_env="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
@@ -705,6 +743,9 @@ PYEOF
         # shellcheck disable=SC1090
         source "$secrets_env"
         set +a
+        # Clear HTTP_PROXY/HTTPS_PROXY — secrets.env has host.docker.internal:8118
+        # which doesn't resolve on the host and breaks acme.sh curl requests.
+        unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy
         if [[ -n "${WEBNAMES_API_KEY:-}" ]]; then
             echo "[IMP:8][node-lifecycle][ssl-provision] WEBNAMES_API_KEY loaded from ${secrets_env}" >&2
         else
@@ -845,9 +886,10 @@ main() {
             echo "[IMP:9][node-lifecycle][dry-run] NODE_YAML: ${NODE_YAML:-<unset>}"
             echo "[IMP:9][node-lifecycle][dry-run] Steps: " >&2
             echo "[IMP:9][node-lifecycle][dry-run]   1. ssh-access  2. apt-deps  3. [tor]  4. install-docker  5. users" >&2
-            echo "[IMP:9][node-lifecycle][dry-run]   6. firewall  7. verify-core  8. verify-node-configs  9. decrypt-secrets" >&2
-            echo "[IMP:9][node-lifecycle][dry-run]   10. ensure-secrets  11. read-node-yaml  12. ghcr-auth  13. sudoers" >&2
-            echo "[IMP:9][node-lifecycle][dry-run]   14. node-update  15. logrotate  16. audit  17. telegram" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   6. ci-deploy-user  6b. projects-base  7. firewall  8. verify-core" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   9. verify-node-configs  10. decrypt-secrets  11. ensure-secrets" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   12. read-node-yaml  13. ghcr-auth  14. sudoers" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   14b. install-acme  15. node-update  16. logrotate  17. audit  18. telegram" >&2
             echo "[IMP:9][node-lifecycle][dry-run] Bootstrap DRY RUN — no mutations performed, exit 0" >&2
             exit 0
         fi
@@ -904,6 +946,8 @@ PYEOF
             checkpoint_step "user-platform" step_5_create_platform_user
         CHECKPOINT_STEP_HASH="$(_step_hash "user-ci-deploy")" \
             checkpoint_step "user-ci-deploy" step_6_create_ci_deploy_user
+        CHECKPOINT_STEP_HASH="$(_step_hash "projects-base")" \
+            checkpoint_step "projects-base" step_6b_create_projects_base
         CHECKPOINT_STEP_HASH="$(_step_hash "firewall" "${CORE_DIR}/internal/bootstrap/firewall.sh")" \
             checkpoint_step "firewall" step_7_firewall
         CHECKPOINT_STEP_HASH="$(_step_hash "verify-core")" \
@@ -925,6 +969,12 @@ PYEOF
             checkpoint_step "ghcr-auth" step_12_ghcr_auth
         CHECKPOINT_STEP_HASH="$(_step_hash "sudoers" "${CORE_DIR}/internal/bootstrap/setup-node.sh")" \
             checkpoint_step "sudoers" step_13_sudoers
+        # ── Install acme.sh (init only — needed once, not at each update) ──
+        # T3 (DevPlan 005): install-acme.sh is called at init BEFORE node-update.
+        # Update mode calls issue-cert.sh directly (acme.sh already installed).
+        CHECKPOINT_STEP_HASH="$(_step_hash "install-acme" \
+            "${CORE_DIR}/internal/bootstrap/install-acme.sh")" \
+            checkpoint_step "install-acme" _step_install_acme
         CHECKPOINT_STEP_HASH="$(_step_hash "node-update" "${CORE_DIR}/internal/bootstrap/node-lifecycle.sh")" \
             checkpoint_step "node-update" step_14_node_update
         CHECKPOINT_STEP_HASH="$(_step_hash "audit-summary")" \
@@ -1003,7 +1053,7 @@ PYEOF
 
         # ── Step 3: SSL certificate provisioning ──────────────────────
         CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision" \
-            "${CORE_DIR}/internal/bootstrap/ssl-provision.sh")" \
+            "${CORE_DIR}/internal/bootstrap/issue-cert.sh")" \
             checkpoint_step "ssl-provision" update_step_3_ssl_provision
 
         # ── Step 4: Deploy docker modules ─────────────────────────────
