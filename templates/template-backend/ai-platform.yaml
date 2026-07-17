@@ -18,7 +18,7 @@ platform_domain: __PLATFORM_DOMAIN__
 
 needs:
   domain: __DOMAIN__
-  database: true
+  database: false
   expose: false
 
 monitoring:
