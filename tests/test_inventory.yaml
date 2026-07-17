@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-17 | regenerated (825 tests)
+## @changes — 2026-07-17 | regenerated (877 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -184,6 +184,10 @@ test_nodeids:
 - tests/test_add_vhost.py::test_add_vhost_cert_path_independent
 - tests/test_add_vhost.py::test_fqdn_check_delegates_to_validate
 - tests/test_add_vhost.py::test_vhost_template_http2_directive
+- tests/test_adopt_project_org_validation.py::test_adopt_fails_without_org
+- tests/test_adopt_project_org_validation.py::test_context_mismatch_detected
+- tests/test_adopt_project_org_validation.py::test_ghcr_path_lowercased
+- tests/test_adopt_project_org_validation.py::test_uses_preserves_exact_case
 - tests/test_backup_config.py::test_all_vars_present
 - tests/test_backup_config.py::test_context_resolution[corporate-corporate]
 - tests/test_backup_config.py::test_context_resolution[not-set-default]
@@ -221,6 +225,9 @@ test_nodeids:
 - tests/test_backup_retention.py::test_retention_policy[monthly-objects2-policy_kwargs2-3-3]
 - tests/test_backup_retention.py::test_retention_policy[weekly-objects1-policy_kwargs1-4-4]
 - tests/test_backup_retention.py::test_sunday_and_first_of_month_same_day
+- tests/test_bootstrap_auto.py::test_build_ssh_cmd_empty_ci_deploy_key_omits_flag
+- tests/test_bootstrap_auto.py::test_build_ssh_cmd_includes_ci_deploy_key
+- tests/test_bootstrap_auto.py::test_ci_deploy_key_extracted_from_node_yaml
 - tests/test_bootstrap_auto.py::test_detect_age_key_from_env
 - tests/test_bootstrap_auto.py::test_detect_age_key_missing_warns
 - tests/test_bootstrap_auto.py::test_docker_login_set_u_safe
@@ -295,6 +302,11 @@ test_nodeids:
 - tests/test_contract_deploy_audit.py::test_audit_log_fallback_stderr
 - tests/test_contract_deploy_audit.py::test_audit_log_format
 - tests/test_contract_deploy_audit.py::test_audit_log_ordering
+- tests/test_contract_deploy_deliver.py::test_deliver_invalid_project_name
+- tests/test_contract_deploy_deliver.py::test_deliver_rejects_oversize
+- tests/test_contract_deploy_deliver.py::test_deliver_rejects_path_traversal
+- tests/test_contract_deploy_deliver.py::test_deliver_skips_non_whitelisted
+- tests/test_contract_deploy_deliver.py::test_deliver_valid_payload
 - tests/test_contract_deploy_pruning.py::test_prune_default_keep
 - tests/test_contract_deploy_pruning.py::test_prune_empty_images
 - tests/test_contract_deploy_pruning.py::test_prune_enforces_keep
@@ -355,6 +367,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_setup-node]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_deploy_deploy-project]
@@ -363,7 +376,11 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_provision-environment]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_add-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_add-vhost]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_adopt-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_context-init]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_gen-env-platform]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_project-list]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_remove-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_validate_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_audit]
@@ -390,6 +407,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_setup-node]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_deploy_deploy-project]
@@ -398,7 +416,11 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_provision-environment]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_add-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_add-vhost]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_adopt-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_context-init]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_gen-env-platform]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_project-list]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_remove-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_validate_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_audit]
@@ -425,6 +447,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_setup-node]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_deploy_deploy-project]
@@ -433,7 +456,11 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_provision-environment]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_add-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_add-vhost]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_adopt-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_context-init]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_gen-env-platform]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_project-list]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_remove-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_validate_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_audit]
@@ -674,6 +701,22 @@ test_nodeids:
 - tests/test_predeploy_hermes_invariants.py::test_invariant_violation[hard_stop_disabled-context_data2-tool_loop_guardrails.hard_stop_enabled]
 - tests/test_predeploy_hermes_invariants.py::test_invariant_violation[redact_secrets-context_data1-security.redact_secrets]
 - tests/test_predeploy_hermes_invariants.py::test_invariant_violation[terminal_backend_local-context_data3-terminal.backend]
+- tests/test_project_ci_contract.py::test_deploy_yml_calls_reusable_workflow
+- tests/test_project_ci_contract.py::test_deploy_yml_no_resolve_node_action
+- tests/test_project_ci_contract.py::test_platform_deploy_yml_deleted_from_templates
+- tests/test_project_ci_contract.py::test_reusable_workflow_no_node_configs_token
+- tests/test_project_ci_contract.py::test_reusable_workflow_schema
+- tests/test_project_ci_contract.py::test_reusable_workflow_uses_org_variable
+- tests/test_project_ci_contract.py::test_template_has_env_platform_makefile_agents
+- tests/test_project_lifecycle.py::test_adopt_idempotent
+- tests/test_project_lifecycle.py::test_adopt_personal_domain_cert_path
+- tests/test_project_lifecycle.py::test_adopt_preserves_project_files
+- tests/test_project_lifecycle.py::test_deploy_verb_contract_backward_compat
+- tests/test_project_lifecycle.py::test_project_list_offline
+- tests/test_project_lifecycle.py::test_remove_hooks_triggered_in_runtime
+- tests/test_project_lifecycle.py::test_remove_is_safe_no_data_deletion
+- tests/test_project_lifecycle.py::test_unregister_idempotent
+- tests/test_project_lifecycle.py::test_unregister_removes_project_entry
 - tests/test_project_schema.py::test_expose_true_requires_domain_string
 - tests/test_project_schema.py::test_fqdn_conflict_blocks_deploy
 - tests/test_project_schema.py::test_fqdn_same_project_no_conflict
@@ -700,6 +743,15 @@ test_nodeids:
 - tests/test_s3_client.py::test_delete_objects_batch
 - tests/test_s3_client.py::test_list_objects_empty
 - tests/test_s3_client.py::test_list_objects_pagination
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_dsn_format
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_dsn_host_is_pgbouncer
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_has_header
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_idempotent
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_min_vars
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_missing_yaml
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_no_proxy_internal
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_provides_in_profiles
+- tests/test_scaffold_env_platform.py::test_gen_env_platform_provides_list
 - tests/test_secrets_validation.py::test_context_image_not_old_name
 - tests/test_secrets_validation.py::test_no_secret_leaks_in_compose
 - tests/test_secrets_validation.py::test_openai_key_matches_litellm_master_key
