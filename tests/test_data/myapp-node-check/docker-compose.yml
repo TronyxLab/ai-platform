@@ -1,2 +1,0 @@
-# @purpose Test fixture — minimal docker-compose for myapp-node-check bootstrap tests
-x-dummy: config

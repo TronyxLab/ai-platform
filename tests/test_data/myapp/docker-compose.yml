@@ -1,2 +1,0 @@
-# @purpose Test fixture — minimal docker-compose for myapp deploy parsing tests
-x-dummy: config

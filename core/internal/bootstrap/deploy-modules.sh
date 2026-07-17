@@ -688,15 +688,15 @@ required = d.get('env_requires') or []
 if not required:
     sys.exit(0)
 secrets_file = os.environ.get('SECRETS_ENV_FILE', '/run/platform/secrets.env')
-secrets = {}
+_env_map = {}
 if os.path.isfile(secrets_file):
     with open(secrets_file) as sf:
         for line in sf:
             line = line.strip()
             if '=' in line and not line.startswith('#'):
                 k, _, v = line.partition('=')
-                secrets[k.strip()] = v.strip()
-missing = [v for v in required if not os.environ.get(v, '') and not secrets.get(v, '')]
+                _env_map[k.strip()] = v.strip()
+missing = [v for v in required if not os.environ.get(v, '') and not _env_map.get(v, '')]
 if missing:
     print(','.join(missing))
     sys.exit(1)

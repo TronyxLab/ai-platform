@@ -165,8 +165,8 @@ def test_cleanup_snapshots_keeps_exactly_n(tmp_path: pathlib.Path) -> None:
         '  touch "$SNAPSHOT_DIR/images-$ts.json"\n'
         "done\n"
         "_cleanup_snapshots\n"
-        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -line | xargs)"\n'
-        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -line | xargs)"\n'
+        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -l | xargs)"\n'
+        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -l | xargs)"\n'
         'echo "HAS_STARTED=$([ -f "$SNAPSHOT_DIR/.deploy-started" ] && echo yes || echo no)"\n'
     )
 
@@ -207,8 +207,8 @@ def test_cleanup_snapshots_default_keep(tmp_path: pathlib.Path) -> None:
         '  touch "$SNAPSHOT_DIR/images-$ts.json"\n'
         "done\n"
         "_cleanup_snapshots\n"
-        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -line | xargs)"\n'
-        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -line | xargs)"\n'
+        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -l | xargs)"\n'
+        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -l | xargs)"\n'
     )
 
     result = _run_bash(tmp_path, code, env={"PROJECT_DIR": str(tmp_path)})
@@ -412,8 +412,8 @@ def test_snapshot_format_timestamp(tmp_path: pathlib.Path) -> None:
         'SERVICE_NAME="test-app"\n'
         "capture_deploy_snapshot\n"
         'SNAPSHOT_DIR="${PROJECT_DIR}/.deploy-snapshots"\n'
-        'echo "PS_FILES=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -line | xargs)"\n'
-        'echo "IMAGES_FILES=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -line | xargs)"\n'
+        'echo "PS_FILES=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -l | xargs)"\n'
+        'echo "IMAGES_FILES=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -l | xargs)"\n'
         'echo "HAS_STARTED=$([ -f "$SNAPSHOT_DIR/.deploy-started" ] && echo yes || echo no)"\n'
     )
 

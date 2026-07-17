@@ -257,11 +257,16 @@ docker() {
 #           проект существует с docker-compose.yml и ai-platform.yaml (custom service)
 # Last fail: None
 # Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_parse_ssh_command_valid_forced_command(caplog) -> None:
+def test_parse_ssh_command_valid_forced_command(tmp_path, caplog) -> None:
     """Verify parse_ssh_command() parses valid forced-command — sets PROJECT, REF, SERVICE_NAME."""
     caplog.set_level(logging.DEBUG)
 
-    projects_base = os.path.join(os.path.dirname(__file__), "..", "tests", "test_data")
+    # ⚠️ TRAP[BUG] · 2026-07-17 · MED · Tests wrote runtime fixtures INTO the repo (tests/test_data/myapp*)
+    # · Symptom: check-compose-spec hook flip-flop — committed x-dummy fixture overwritten with 'dummy: config' at every test run
+    # · Root: preamble used os.path.dirname(__file__)/../tests/test_data as PROJECTS_BASE — repo mutation from tests
+    # · Fix: tmp_path per Zero Hardcode Rule; runtime artifacts deleted from git
+    # · Prevention: tests must never write outside tmp_path
+    projects_base = str(tmp_path)
     project_dir = os.path.join(projects_base, "myapp")
 
     preamble = f"""set -euo pipefail
@@ -358,11 +363,11 @@ echo "[IMP:9][verify] UNEXPECTED_SUCCESS"
 #           Функция должна игнорировать NODE_NAME и правильно распарсить команду
 # Last fail: None
 # Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_parse_ssh_command_node_name_mismatch(caplog) -> None:
+def test_parse_ssh_command_node_name_mismatch(tmp_path, caplog) -> None:
     """Verify parse_ssh_command() ignores NODE_NAME and parses SSH_ORIGINAL_COMMAND correctly."""
     caplog.set_level(logging.DEBUG)
 
-    projects_base = os.path.join(os.path.dirname(__file__), "..", "tests", "test_data")
+    projects_base = str(tmp_path)
     project_dir = os.path.join(projects_base, "myapp-node-check")
 
     preamble = f"""set -euo pipefail
@@ -419,11 +424,11 @@ echo "[IMP:9][verify] NODE_NAME=${NODE_NAME}"
 #           FIRST_DEPLOY=0, PREVIOUS_IMAGE_ID и PREVIOUS_IMAGE_TAG установлены
 # Last fail: None
 # Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_save_previous_image_exists(caplog) -> None:
+def test_save_previous_image_exists(tmp_path, caplog) -> None:
     """Verify save_previous_image() captures image ID and tag when a previous image exists."""
     caplog.set_level(logging.DEBUG)
 
-    projects_base = os.path.join(os.path.dirname(__file__), "..", "tests", "test_data")
+    projects_base = str(tmp_path)
     project_dir = os.path.join(projects_base, "myapp-img")
 
     preamble = f"""set -euo pipefail
@@ -482,11 +487,11 @@ echo "[IMP:9][verify] PREVIOUS_IMAGE_TAG=${PREVIOUS_IMAGE_TAG}"
 #           Функция устанавливает FIRST_DEPLOY=1 и возвращает 0
 # Last fail: None
 # Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_save_previous_image_none(caplog) -> None:
+def test_save_previous_image_none(tmp_path, caplog) -> None:
     """Verify save_previous_image() sets FIRST_DEPLOY=1 when no previous image exists."""
     caplog.set_level(logging.DEBUG)
 
-    project_dir = os.path.join(os.path.dirname(__file__), "..", "tests", "test_data", "myapp-new")
+    project_dir = os.path.join(str(tmp_path), "myapp-new")
 
     preamble = f"""set -euo pipefail
 {LOG_STUBS}
@@ -535,11 +540,11 @@ echo "[IMP:9][verify] PREVIOUS_IMAGE_TAG=[${PREVIOUS_IMAGE_TAG}]"
 # Scenario: docker возвращает non-zero exit code, функция должна exit 1
 # Last fail: None
 # Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_save_previous_image_docker_error(caplog) -> None:
+def test_save_previous_image_docker_error(tmp_path, caplog) -> None:
     """Verify save_previous_image() exits 1 when docker compose images fails."""
     caplog.set_level(logging.DEBUG)
 
-    project_dir = os.path.join(os.path.dirname(__file__), "..", "tests", "test_data", "myapp-err")
+    project_dir = os.path.join(str(tmp_path), "myapp-err")
 
     preamble = f"""set -euo pipefail
 {LOG_STUBS}
