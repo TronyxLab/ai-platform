@@ -84,9 +84,17 @@ build_ssh_cmd() {
     fi
 
     # Export PLATFORM_CI_DEPLOY_KEY on remote before running orchestrator (used by step_6_create_ci_deploy_user)
-    if [[ -n "${PLATFORM_CI_DEPLOY_KEY:-}" ]]; then
+    # Falls back to ci_deploy_key parameter when key is from node.yaml (not env).
+    # ⚠️ TRAP[BUG] · 2026-07-17 · P2 · ci_deploy_key from node.yaml not exported
+    # · Symptom: when CI_DEPLOY_KEY extracted from node.yaml (not env), the remote
+    #   PLATFORM_CI_DEPLOY_KEY env was empty even though --ci-deploy-key CLI flag was set.
+    # · Root: line only checked ${PLATFORM_CI_DEPLOY_KEY:-} (local env), not the parameter.
+    # · Fix: fallback to ci_deploy_key parameter when env var is unset.
+    # · Prevention: always use effective_ci_key combining env + parameter fallback.
+    local effective_ci_key="${PLATFORM_CI_DEPLOY_KEY:-${ci_deploy_key:-}}"
+    if [[ -n "${effective_ci_key}" ]]; then
         local quoted_ci_key
-        quoted_ci_key="$(printf '%q' "${PLATFORM_CI_DEPLOY_KEY}")"
+        quoted_ci_key="$(printf '%q' "${effective_ci_key}")"
         cmd+=" && export PLATFORM_CI_DEPLOY_KEY=${quoted_ci_key}"
     fi
 
