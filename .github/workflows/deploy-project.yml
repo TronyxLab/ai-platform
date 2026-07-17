@@ -11,7 +11,7 @@
 ##   - Uses `vars.NODE_HOST_MAP` (JSON) for zero-secret node resolution (K4)
 ##   - Uses `secrets: inherit` for CI_DEPLOY_KEY — no project-level secrets
 ##   - No org-specific references — any context org can use this workflow (DD1)
-##   - No NODE_CONFIGS_TOKEN — deprecated by NODE_HOST_MAP (DD4)
+## - Zero-secret node resolution via NODE_HOST_MAP variable (DD4)
 ## @rationale Single reusable workflow eliminates 3× duplicate deploy patterns across templates,
 ##            centralizes node resolution, and keeps CI/CD thin (DD1, DD4).
 ##            Org-agnostic = context-safe: private workflows are org-scoped by default.
@@ -20,7 +20,7 @@
 
 name: Deploy Project (Reusable)
 
-on:
+"on":
   workflow_call:
     inputs:
       project_name:

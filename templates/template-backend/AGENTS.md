@@ -1,3 +1,6 @@
+# GREP_SUMMARY: project AGENTS.md platform-context commands domain __PROJECT_NAME__
+# STRUCTURE: ┌platform context┐ → ◇ what platform provides → ◇ commands → ◇ DO NOT
+
 # Project __PROJECT_NAME__
 
 ## Platform context
