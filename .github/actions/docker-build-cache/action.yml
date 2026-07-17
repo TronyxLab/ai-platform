@@ -46,6 +46,8 @@ runs:
         load: true
         tags: ${{ inputs.tags }}
         cache-from: type=gha,scope=${{ inputs.cache-scope }}
-        cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
+        # DIAGNOSTIC: disabled cache-to to work around persistent 'failed to reserve cache'
+        # error when BuildKit tries to write layer blobs to GHA cache.
+        # cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
         provenance: false
         sbom: false
