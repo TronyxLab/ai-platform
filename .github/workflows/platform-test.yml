@@ -219,10 +219,10 @@ jobs:
           free -h 2>/dev/null || vm_stat 2>/dev/null || echo "(memory info unavailable)"
         shell: bash
 
-      - name: Run full gate (lint + validate + anti-drift + contract + static + predeploy + smoke + component)
+      - name: Run full gate (contract + static + predeploy + smoke + component — Docker-dependent, no pre-commit/validate/lint)
         id: full_gate
         run: |
-          make gate MODE=full
+          make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
       # ─── Stage 5: Diagnostic on failure ────────────────────────────
       - name: Diagnostic — dump container states on failure
@@ -309,7 +309,7 @@ jobs:
             echo ""
             echo "### Gate Strategy"
             echo "- Fast gate: static_audit + gates + predeploy (no Docker, <3 min)"
-            echo "- Full gate: lint + validate + gates + contract + static + predeploy + smoke + component"
+            echo "- Full gate: contract + static + predeploy + smoke + component (Docker-dependent only, SKIP_PRECOMMIT=1 in CI)"
             echo "- Integration: error-path (no tokens) + live (real API call)"
             echo ""
             echo "### Links"

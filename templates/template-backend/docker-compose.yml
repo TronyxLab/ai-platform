@@ -1,13 +1,13 @@
-# GREP_SUMMARY: docker-compose backend shared-db-net healthcheck
-# STRUCTURE: service(<project>) → networks(<project>-net + shared-db-net:external + proxy-net:external) → healthcheck
+# GREP_SUMMARY: docker-compose backend shared-db-net proxy-net env_file
+# STRUCTURE: service(<project>) → env_file(.env.platform) → networks(shared-db-net + proxy-net:external) → healthcheck
 # region MODULE_CONTRACT
-## @purpose  Development and production compose definition for backend projects (04-templates §3)
-## @scope    Defined with IMAGE_REGISTRY for CI/CD substitution
+## @purpose  Development and production compose definition for backend projects
+## @scope    Service with platform env_file contract
 ## @invariants
 ##   - shared-db-net is external (created by postgres-shared module)
 ##   - proxy-net is external (created by nginx module)
-##   - Healthcheck on /health endpoint
-## @rationale Backend services use shared database; optional HTTP ingress via nginx-proxy when domain set
+##   - env_file: .env.platform — единственный источник платформенных переменных
+## @rationale .env.platform заменяет environment-блок; исключает дрейф между проектами (DD5)
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -29,6 +29,8 @@ services:
         limits:
           memory: 1G
     logging: *default-logging
+    env_file:
+      - .env.platform
     environment:
       - PYTHONUNBUFFERED=1
     volumes:

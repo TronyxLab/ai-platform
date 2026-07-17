@@ -5,7 +5,7 @@
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
 ##   - container_name: cadvisor-test, node-exporter-test, nginx-prometheus-exporter-test, redis-exporter-test
-##   - restart: "no" для всех контейнеров
+##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
 ##   - Port mappings: смещённые (1XXXX:YYYY)
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
 ## @changes — 2026-07-16 | 18080→18081 cadvisor-test: collided with nginx-test port (F-8)
@@ -23,20 +23,20 @@ services:
     # · Prevention: coordinate test-overlay port assignments across modules.
     ports:
       - "127.0.0.1:18081:8080"
-    restart: "no"
+    restart: unless-stopped
 
   node-exporter:
     container_name: node-exporter-test
     ports:
       - "127.0.0.1:19100:9100"
-    restart: "no"
+    restart: unless-stopped
 
   nginx-prometheus-exporter:
     container_name: nginx-prometheus-exporter-test
     ports:
       - "127.0.0.1:19113:9113"
-    restart: "no"
+    restart: unless-stopped
 
   redis-exporter:
     container_name: redis-exporter-test
-    restart: "no"
+    restart: unless-stopped

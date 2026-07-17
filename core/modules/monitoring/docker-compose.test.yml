@@ -5,7 +5,7 @@
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
 ##   - container_name: prometheus-test, grafana-test
-##   - restart: "no" для всех контейнеров
+##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
 ##   - Prometheus port: 127.0.0.1:19090:9090
 ##   - Grafana port: 127.0.0.1:13030:3000
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
@@ -16,10 +16,10 @@ services:
     container_name: prometheus-test
     ports:
       - "127.0.0.1:19090:9090"
-    restart: "no"
+    restart: unless-stopped
 
   grafana:
     container_name: grafana-test
     ports:
       - "127.0.0.1:13030:3000"
-    restart: "no"
+    restart: unless-stopped

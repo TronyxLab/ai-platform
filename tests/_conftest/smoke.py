@@ -21,6 +21,7 @@
 ##              platform_services → lifecycle fixture: start/stop compose stack
 # endregion MODULE_CONTRACT
 
+import json
 import logging
 import os
 import platform as _platform
@@ -215,6 +216,69 @@ def _wait_for_loki_ready(
     return False
 
 
+def _wait_for_minio_healthy(
+    compose_base_args: list[str],
+    timeout: int,
+    logger: logging.Logger,
+) -> bool:
+    """Poll docker compose ps --format json until minio container is healthy.
+
+    ## @purpose — Wait for minio (not minio-createbuckets one-shot init container)
+    ##            to become healthy. minio-createbuckets exits 0 after creating
+    ##            buckets, which makes `docker compose up --wait` return 1 even
+    ##            though minio itself is healthy. This function polls only the
+    ##            minio container's Health status.
+    ## @io — ⇥ compose_base_args, timeout, logger → ⎋ bool (healthy within timeout)
+    ## @complexity — O(T) where T = timeout / poll_interval
+    ## @rationale — D5: one-shot init container exits 0, breaking --wait contract.
+    ##              Separate health poll avoids coupling to createbuckets lifecycle.
+    """
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        try:
+            ps_result = subprocess.run(
+                [*compose_base_args, "ps", "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if ps_result.returncode != 0:
+                logger.warning("[IMP:8][conftest][_wait_for_minio_healthy] docker compose ps failed")
+                _time.sleep(2)
+                continue
+
+            # Parse JSONL output — one JSON object per line (one per container)
+            for line in ps_result.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    container = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                service = container.get("Service", "")
+                state = container.get("State", "")
+                health = container.get("Health", "")
+
+                if service == "minio" and state == "running" and health == "healthy":
+                    logger.info(
+                        "[IMP:9][conftest][_wait_for_minio_healthy] MinIO is healthy (service=%s state=%s health=%s)",
+                        service,
+                        state,
+                        health,
+                    )
+                    return True
+
+            _time.sleep(2)
+
+        except subprocess.TimeoutExpired:
+            logger.warning("[IMP:8][conftest][_wait_for_minio_healthy] docker compose ps timed out")
+            _time.sleep(2)
+
+    logger.warning("[IMP:9][conftest][_wait_for_minio_healthy] MinIO not healthy within %ds", timeout)
+    return False
+
+
 @pytest.fixture(scope="session")
 def platform_env() -> dict[str, str]:
     """Inject SMOKE_ENV into os.environ; restore on teardown.
@@ -316,12 +380,50 @@ def platform_services(
         _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
 
         # ── Start up ──────────────────────────────────────────────────
-        compose_up_args = [*compose_base_args, "up", "-d", "--wait", "--wait-timeout", str(PLATFORM_COMPOSE_TIMEOUT)]
-        result = _run_docker_smoke(
-            compose_up_args,
-            timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
-            env_override={"COMPOSE_PROFILES": module_name},
-        )
+        if module_name == "minio":
+            # D5: MinIO has a one-shot init container (minio-createbuckets) that
+            # exits 0 after creating buckets. `docker compose up --wait` considers
+            # the exited container a failure (returncode 1) even though minio
+            # itself is healthy. Start without --wait, then poll for minio health.
+            # ⚠️ TRAP[DECISION] · 2026-07-17 · — · MinIO --wait workaround
+            # · Rejected: depends_on condition: service_completed_successfully
+            # · Reason: deferred — that would require compose schema v3.8+ changes
+            # · Rev: if compose schema is ever upgraded, use depends_on instead.
+            compose_up_args = [*compose_base_args, "up", "-d"]
+            result = _run_docker_smoke(
+                compose_up_args,
+                timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
+            if result.returncode == 0:
+                _minio_ok = _wait_for_minio_healthy(
+                    compose_base_args=compose_base_args,
+                    timeout=PLATFORM_COMPOSE_TIMEOUT,
+                    logger=_logger,
+                )
+                if not _minio_ok:
+                    _logger.error(
+                        "[IMP:9][conftest][platform_services] MinIO did not become healthy within %ds",
+                        PLATFORM_COMPOSE_TIMEOUT,
+                    )
+                    # Force failure path after the if-else block
+                    result = subprocess.CompletedProcess(
+                        args=compose_up_args, returncode=1, stdout="", stderr="MinIO health check timeout"
+                    )
+        else:
+            compose_up_args = [
+                *compose_base_args,
+                "up",
+                "-d",
+                "--wait",
+                "--wait-timeout",
+                str(PLATFORM_COMPOSE_TIMEOUT),
+            ]
+            result = _run_docker_smoke(
+                compose_up_args,
+                timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
         if result.returncode != 0:
             # ── Diagnostic: collect logs for failure analysis ─────────────
             log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
@@ -338,7 +440,29 @@ def platform_services(
             )
             failed.append(module_name)
         else:
-            started.append(module_name)
+            # ── Post-up container existence check ─────────────────────────────────
+            # Root cause (from CI diagnostic run): `docker compose up -d --wait`
+            # returns exit code 0 on GHA runner even when containers fail to start
+            # (e.g., when `--wait-timeout` expires or image pull fails silently).
+            # `docker compose ps --all` returns empty despite returncode=0.
+            # Add explicit container count check to distinguish true success from
+            # silent compose failure. If zero containers → treat as failure.
+            _ps_check = _run_docker_smoke(
+                [*compose_base_args, "ps", "--all", "--format", "{{.Name}}"],
+                timeout=15,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
+            _container_count = len([cname for cname in _ps_check.stdout.strip().splitlines() if cname.strip()])
+            if _container_count == 0:
+                _logger.error(
+                    "[IMP:9][conftest][platform_services] '%s' compose up returned 0 but "
+                    "no containers exist (docker compose ps --all = empty). "
+                    "CI runner silent compose failure — treating as failed.",
+                    module_name,
+                )
+                failed.append(module_name)
+            else:
+                started.append(module_name)
 
             # ---- Loki readiness HTTP-poll ------------------------------------
             if module_name == "observability":

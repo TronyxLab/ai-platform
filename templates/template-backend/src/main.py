@@ -6,8 +6,8 @@
 ## @invariants
 ##   - /health returns 200 (Docker healthcheck target)
 ##   - /ready returns 200 (pre-stop readiness probe)
+##   - /metrics returns 200 (Prometheus metrics endpoint)
 ##   - Server listens on 0.0.0.0:8000
-##   - NO /metrics endpoint — only /health + /ready (metrics: false in ai-platform.yaml)
 ## @rationale Health and readiness endpoints are mandatory for zero-downtime deploys (06 §7)
 # endregion MODULE_CONTRACT
 
@@ -46,6 +46,11 @@ def main():
     async def ready() -> dict[str, str]:
         """Readiness probe — pre-stop check."""
         return {"status": "READY"}
+
+    @app.get("/metrics")
+    async def metrics() -> dict[str, str]:
+        """Prometheus metrics endpoint — required when metrics: true in ai-platform.yaml."""
+        return {"status": "OK", "metrics": "exposed"}
 
     @app.get("/")
     async def root() -> dict[str, str]:

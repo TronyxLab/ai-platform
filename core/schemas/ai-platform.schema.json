@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://core/schemas/ai-platform.schema.json",
-  "$comment": "💼 TRAP[BUSINESS] · 2026-07-01 · HI · Структура ~/projects/ — разделение контекстов. Source: platform owner. Risk: AI-агенты путают репозитории разных контекстов. ~/projects/ai-platform/ — платформа (общий инструмент). ~/projects/hermes-agent/ — базовый образ агента. ~/projects/<org>/hermes-agent/ — контекстный оверлей агента. ~/projects/<org>/node-configs/ — конфигурация узлов контекста. ~/projects/<org>/<project>/ — проекты контекста. Контексты изолированы, связь только через node-configs внутри контекста.",
+  "$comment": "GREP_SUMMARY: ai-platform schema validation project-manifest needs domain platform_domain expose FQDN\nSTRUCTURE: root(properties) → needs(expose,domain,database,cache,storage,llm) → monitoring(metrics,logs,alerts) → if/then(conditional validation)\n💼 TRAP[BUSINESS] · 2026-07-01 · HI · Структура ~/projects/ — разделение контекстов. Source: platform owner. Risk: AI-агенты путают репозитории разных контекстов. ~/projects/ai-platform/ — платформа (общий инструмент). ~/projects/hermes-agent/ — базовый образ агента. ~/projects/<org>/hermes-agent/ — контекстный оверлей агента. ~/projects/<org>/node-configs/ — конфигурация узлов контекста. ~/projects/<org>/<project>/ — проекты контекста. Контексты изолированы, связь только через node-configs внутри контекста.",
   "title": "AI-Platform Declaration",
   "description": "Schema for ai-platform.yaml — единый манифест проекта AI Platform (деплой + мониторинг). ЕДИНСТВЕННЫЙ формат манифеста — AD-2.",
   "type": "object",
@@ -58,6 +58,21 @@
         "description": "Semver string (e.g. '1.3.0' or '15.2') — 'latest' or empty rejected"
       }
     },
+    "platform_domain": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^__[A-Z_]+__$",
+          "description": "Template placeholder — replaced by add-project.sh"
+        },
+        {
+          "type": "string",
+          "pattern": "^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$",
+          "description": "FQDN — platform root domain"
+        }
+      ],
+      "description": "Platform root domain for auto-generated project domains — project FQDN = <name>.<platform_domain>. Use __PLATFORM_DOMAIN__ placeholder in templates."
+    },
     "needs": {
       "type": "object",
       "description": "Project resource needs declared to the platform (00 §5)",
@@ -66,8 +81,8 @@
           "oneOf": [
             {
               "type": "string",
-              "pattern": "^__[A-Z_]+__$",
-              "description": "Template placeholder (e.g. '__DOMAIN__') — replaced by add-project.sh"
+              "pattern": "^__DOMAIN__$",
+              "description": "Template placeholder — replaced by add-project.sh with auto-domain <name>.<platform_domain>"
             },
             {
               "type": "string",

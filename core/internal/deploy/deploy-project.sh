@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: deploy-project ci-deploy rollback docker-compose atomic-rollback healthcheck audit prune-images forced-command hook-invocation module-hooks
-# STRUCTURE: parse_ssh_command → load_config → save_previous → pull_image → atomic_up → wait_health(≤60s) → tag_current/rollback → prune_old(N=3) → trigger_deploy_hooks → notify_hook → audit_log
+# GREP_SUMMARY: deploy-project ci-deploy rollback docker-compose atomic-rollback healthcheck audit prune-images forced-command hook-invocation module-hooks remove status lifecycle
+# STRUCTURE: parse_ssh_command|flags(─remove|─status) → load_config → save_previous → pull_image → atomic_up → wait_health(≤60s) → tag_current/rollback → prune_old(N=3) → trigger_deploy_hooks|trigger_remove_hooks → notify_hook → audit_log
 # region MODULE_CONTRACT
-## @purpose  Whitelisted entry-point for ci-deploy SSH forced-command: atomic deploy with healthcheck-based rollback (04-templates §7)
-## @scope    Executed exclusively via SSH authorized_keys command="..." + restrict; receives <project> <ref> via $SSH_ORIGINAL_COMMAND
+## @purpose  Whitelisted entry-point for ci-deploy SSH forced-command: atomic deploy with healthcheck-based rollback (04-templates §7) + remove/status verbs
+## @scope    Executed exclusively via SSH authorized_keys command="..." + restrict; receives <project> <ref> via $SSH_ORIGINAL_COMMAND or flags via CLI
 ## @location core/internal/deploy/deploy-project.sh — moved from core/scripts/platform-deploy.sh
 ## @invariants
-##   - PROJECT and REF parsed from SSH_ORIGINAL_COMMAND; exit 1 if missing or invalid
+##   - Deploy: PROJECT and REF parsed from SSH_ORIGINAL_COMMAND; exit 1 if missing or invalid
+##   - Remove: `docker compose down` БЕЗ `-v` (данные не удаляются, O7/DD10)
+##   - Status: JSON stdout with docker compose ps + last deploy-result.json
+##   - Stop/remove/restart не затрагивают volumes, БД, images (O7)
+##   - remove/status переиспользуют deploy forced-command channel (DD12)
+##   - Хуки `on_project_remove` идемпотентны и неразрушающи (K2)
 ##   - previous_image_id saved BEFORE pull; if absent → first deploy (no rollback possible, escalate 🔴)
 ##   - atomic docker compose up -d <service>; healthcheck poll ≤60s (start_period + interval * retries)
 ##   - healthy: tag :current → notify-hook(🚀 ✅) → audit_log(SUCCESS) → exit 0
@@ -23,6 +28,7 @@
 ##   Rejected: full shell access for ci-deploy.
 ##   Reason: security — exactly one allowed command, no SSH escalation possible.
 ##   ci-deploy in docker group → no sudo for docker commands (principle of least privilege, 06 §4.2).
+## @changes 2026-07-17 · T6 — Added verb contract K1 (--remove, --status), _trigger_remove_hooks(), TRAP[BUSINESS]
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -102,7 +108,6 @@ _restore_from_snapshot() {
     if [[ -n "$latest_images" ]]; then
         log_imp 8 "rollback" "Previous images snapshot: $latest_images"
         # Attempt rollback via existing perform_rollback() or direct compose up
-        # The existing perform_rollback() handles re-tag and up
         if declare -f perform_rollback >/dev/null 2>&1; then
             perform_rollback
         else
@@ -178,8 +183,7 @@ parse_ssh_command() {
         exit 1
     fi
 
-    local cleaned
-    cleaned="${raw#platform-deploy }"
+    local cleaned="${raw#platform-deploy }"
     cleaned="${cleaned#platform-deploy}"
 
     cleaned="$(echo "$cleaned" | sed '/^export /d' | xargs)"
@@ -492,7 +496,7 @@ handle_first_deploy() {
 }
 # endregion HANDLE_FIRST_DEPLOY
 
-# region HOOK_INVOCATION
+# region DEPLOY_HOOK_INVOCATION
 ## @purpose  Invoke module hooks after successful deploy — iterate module.yaml hooks.on_project_deploy
 _trigger_deploy_hooks() {
     local module_yaml
@@ -514,7 +518,36 @@ _trigger_deploy_hooks() {
         fi
     done
 }
-# endregion HOOK_INVOCATION
+# endregion DEPLOY_HOOK_INVOCATION
+
+# region REMOVE_HOOK_INVOCATION
+## @purpose  Invoke module hooks after project remove — iterate module.yaml hooks.on_project_remove (K2)
+##           Mirror of _trigger_deploy_hooks() for the remove lifecycle phase.
+## @invariants — Hooks MUST be idempotent and non-destructive (O7)
+##             — 0 modules defining on_project_remove today is valid
+##             — Hook contract: backup/notification OK; DROP DATABASE forbidden
+_trigger_remove_hooks() {
+    local module_yaml
+    for module_yaml in "${CORE_DIR}"/modules/*/module.yaml; do
+        [[ -f "$module_yaml" ]] || continue
+        local hook
+        hook=$(yaml_get_field "$module_yaml" "hooks.on_project_remove" 2>/dev/null) || continue
+        [[ -z "$hook" ]] && continue
+        local hook_script
+        hook_script="$(dirname "$module_yaml")/$hook"
+        if [[ -x "$hook_script" ]]; then
+            local module_name
+            module_name="$(basename "$(dirname "$module_yaml")")"
+            log_imp 8 "hooks" "Triggering remove hook for module: ${module_name}"
+            if bash "$hook_script" "$PROJECT_DIR" "$PROJECT" "$NODE_NAME"; then
+                audit_log "hook:${module_name}" "SUCCESS" "Remove hook completed for ${module_name}"
+            else
+                audit_log "hook:${module_name}" "HOOK-FAIL" "Remove hook failed (non-fatal) for ${module_name}"
+            fi
+        fi
+    done
+}
+# endregion REMOVE_HOOK_INVOCATION
 
 # region FUNC_capture_deploy_snapshot
 ## @purpose  Capture pre-deploy state snapshot for guaranteed rollback
@@ -548,10 +581,154 @@ capture_deploy_snapshot() {
 }
 # endregion FUNC_capture_deploy_snapshot
 
+# ═══════════════════════════════════════════════════════════════════
+# HANDLE_REMOVE — verb contract K1
+# ═══════════════════════════════════════════════════════════════════
+# region HANDLE_REMOVE
+## @purpose  Safely remove (disconnect) a project: stop containers WITHOUT destroying data (O7/DD10).
+##           No `down -v`, no `volume rm`, no `image rm`.
+## @invariants — docker compose down without -v (data preserved)
+##             — Idempotent: if already stopped/removed → SKIP, exit 0
+##             - Vhost removal is handled by the caller (remove-project.sh)
+##             - Audit log written on actual removal
+# 💼 TRAP[BUSINESS] · 2026-07-17 · HI · remove = disconnect, данные не удаляются автоматически
+# · Source: owner (O7/DD10)
+# · Risk: авто-очистка = невосстановимая потеря БД проекта
+# · Safeguard: `down -v` запрещён; volumes/БД/images/репо — НЕ трогаются
+handle_remove() {
+    local project="${PROJECT:-${1:-}}"
+
+    if [[ -z "$project" ]]; then
+        log_imp 10 "remove" "FATAL: --remove requires project name"
+        exit 1
+    fi
+
+    PROJECT="$project"
+    PROJECT_DIR="${PROJECTS_BASE}/${PROJECT}"
+
+    log_imp 9 "remove" "=== project REMOVE START: ${PROJECT} ==="
+
+    if [[ ! -d "$PROJECT_DIR" ]]; then
+        log_imp 9 "remove" "Project directory not found: ${PROJECT_DIR} — already removed (idempotent)"
+        audit_log "${AUDIT_TAG}:remove:${PROJECT}" "SKIP" "Project directory not found — already removed"
+        exit 0
+    fi
+
+    # docker compose down — БЕЗ -v (O7 — data preserved)
+    log_imp 9 "remove" "Stopping containers for ${PROJECT} (data preserved, no -v)..."
+    if cd "$PROJECT_DIR" 2>/dev/null; then
+        docker compose down --timeout 30 2>/dev/null || log_imp 4 "remove" "docker compose down failed (non-fatal, may already be stopped)"
+        log_imp 9 "remove" "Containers stopped for ${PROJECT}"
+    else
+        log_imp 8 "remove" "Cannot cd to ${PROJECT_DIR} — project may already be gone"
+    fi
+
+    # Trigger remove hooks (K2)
+    _trigger_remove_hooks
+
+    # Audit log
+    audit_log "${AUDIT_TAG}:remove:${PROJECT}" "DONE" \
+        "Project ${PROJECT} removed (disconnected). Data preserved: volumes, images, repository, project directory."
+
+    log_imp 9 "remove" "=== project REMOVE DONE: ${PROJECT} ==="
+}
+# endregion HANDLE_REMOVE
+
+# ═══════════════════════════════════════════════════════════════════
+# HANDLE_STATUS — verb contract K1
+# ═══════════════════════════════════════════════════════════════════
+# region HANDLE_STATUS
+## @purpose  Print JSON status for a project: docker compose ps + last deploy-result.json
+## @invariants — Always writes valid JSON to stdout
+##             - If project directory missing → status: "not_found"
+##             - If no deploy history → last_deploy: null
+## @output    stdout: JSON with project, node, containers[], last_deploy{}
+handle_status() {
+    local project="${PROJECT:-${1:-}}"
+
+    if [[ -z "$project" ]]; then
+        log_imp 10 "status" "FATAL: --status requires project name"
+        exit 1
+    fi
+
+    PROJECT="$project"
+    PROJECT_DIR="${PROJECTS_BASE}/${PROJECT}"
+
+    log_imp 9 "status" "=== project STATUS: ${PROJECT} ==="
+
+    if [[ ! -d "$PROJECT_DIR" ]]; then
+        # Project not found — not an error, just report status
+        echo "{
+  \"project\": \"${PROJECT}\",
+  \"node\": \"${NODE_NAME}\",
+  \"status\": \"not_found\",
+  \"containers\": [],
+  \"last_deploy\": null
+}"
+        log_imp 9 "status" "Project ${PROJECT}: not found (${PROJECT_DIR} does not exist)"
+        exit 0
+    fi
+
+    # Docker compose ps
+    local ps_json="[]"
+    if cd "$PROJECT_DIR" 2>/dev/null; then
+        ps_json="$(docker compose ps --format json 2>/dev/null || echo "[]")"
+    fi
+
+    # Last deploy result
+    local deploy_result_file="${PROJECT_DIR}/.deploy-snapshots/deploy-result.json"
+    local last_deploy="null"
+    if [[ -f "$deploy_result_file" ]]; then
+        last_deploy="$(cat "$deploy_result_file")"
+    fi
+
+    cat <<EOF
+{
+  "project": "${PROJECT}",
+  "node": "${NODE_NAME}",
+  "status": "found",
+  "containers": ${ps_json},
+  "last_deploy": ${last_deploy}
+}
+EOF
+    log_imp 9 "status" "Project ${PROJECT}: status reported"
+}
+# endregion HANDLE_STATUS
+
 # region MAIN
 main() {
+    # ── Check for verb flags from entrypoint dispatch (K1) ──────────
+    if [[ $# -gt 0 ]]; then
+        case "$1" in
+            --remove)
+                handle_remove "${2:-}"
+                exit 0
+                ;;
+            --status)
+                handle_status "${2:-}"
+                exit 0
+                ;;
+            --help|-h)
+                echo "Usage: deploy-project.sh [--remove <project>|--status <project>|<project> <ref> [env]]"
+                exit 0
+                ;;
+        esac
+    fi
+
+    # ── Legacy deploy (backward compat with forced-command) ─────────
+    # If we have positional args (from deploy.sh dispatch or local testing),
+    # set PROJECT/REF before parse_ssh_command
+    if [[ $# -ge 2 ]]; then
+        PROJECT="${1:-}"
+        REF="${2:-}"
+        PROJECT_DIR="${PROJECTS_BASE}/${PROJECT}"
+        # Still call parse_ssh_command for SSH_ORIGINAL_COMMAND side effects
+        # but it will skip if PROJECT already set
+    fi
+
     log_imp 9 "main" "=== platform-deploy START ==="
 
+    # parse_ssh_command reads SSH_ORIGINAL_COMMAND and sets PROJECT/REF
     parse_ssh_command
 
     local safe_invocation

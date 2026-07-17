@@ -1,0 +1,694 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2034
+# GREP_SUMMARY: adopt-project lifecycle migration existing-project env-sync makefile agents-doc domain register vhost
+# STRUCTURE: ▶ init → parse_args → detect project_type → [gen minimal ai-platform.yaml if missing] → simplify_deploy_yml → delete_platform_deploy_yml → gen_env_platform → [gen Makefile/AGENTS.md if missing] → register_in_node_yaml → configure_vhost → print_diff_report
+# region MODULE_CONTRACT
+## @purpose  Adopt an existing project into the ai-platform lifecycle: generate .env.platform,
+##           add Makefile/AGENTS.md if missing, register in node.yaml, configure vhost.
+##           Preserves all existing project files (src/, Dockerfile, etc.).
+## @scope    Called from scaffold.sh adopt-project.
+## @io       stdout: diff report of what was changed
+##           stderr: LDD logs via log_imp at IMP:7-10
+## @invariants
+##   - NEVER modifies src/, Dockerfile, docker-compose.yml (application code)
+##   - .env.platform regenerated; existing Makefile/AGENTS.md preserved (without --force)
+##   - Supports personal domains (O11) — separate cert path
+##   - Idempotent: second call with same project → no-op (exit 0) except .env.platform regeneration
+##   - deploy.yml simplified to use reusable workflow (if exists)
+##   - platform-deploy.yml deleted if exists
+## @rationale Migration tool for existing projects (like dance-site with personal domain).
+##            Without this, existing projects cannot adopt the connection-model without
+##            manual intervention. --force flag for Makefile/AGENTS.md replaces existing.
+## @links    CALLED_BY: scaffold.sh (adopt-project)
+##           CALLS: gen-env-platform.sh, add-vhost.sh, yq for node.yaml manipulation
+## @changes  2026-07-17 · T11 — full implementation
+# endregion MODULE_CONTRACT
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")}"
+PROJECTS_ROOT="${PROJECTS_ROOT:-$(dirname "$PLATFORM_ROOT")}"
+TEMPLATES_DIR="${PLATFORM_ROOT}/templates"
+
+__LOG_PREFIX="adopt-project"
+source "${PLATFORM_ROOT}/core/lib/logging.sh"
+
+# ═══════════════════════════════════════════════════════════════════
+# GLOBALS
+# ═══════════════════════════════════════════════════════════════════
+PROJECT_DIR=""
+PROJECT_NAME=""
+PROJECT_ORG=""
+PROJECT_NODE=""
+PROJECT_DOMAIN=""
+FORCE=0
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_usage
+## @purpose  Print usage guide
+## @io       stdout: usage text
+usage() {
+    cat <<'HELP'
+USAGE: adopt-project.sh --dir <project_dir> [OPTIONS]
+
+Adopt an existing project into the ai-platform lifecycle.
+
+REQUIRED:
+  --dir <dir>       Path to existing project directory
+
+OPTIONS:
+  --name <name>     Project name (auto-detected from directory basename)
+  --org <org>       Organization name (from ai-platform.yaml or auto-detected)
+  --node <node>     Target node name (from ai-platform.yaml or default)
+  --domain <domain> Custom domain (e.g. sexydancerostov.ru for O11)
+  --force           Regenerate Makefile/AGENTS.md even if they exist
+  --help            Show this help
+
+NOTE: Does NOT modify src/, Dockerfile, or application code.
+HELP
+}
+# endregion FUNC_usage
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_parse_args
+## @purpose  Parse CLI arguments
+## @io       Sets PROJECT_DIR, PROJECT_NAME, PROJECT_ORG, PROJECT_NODE,
+##           PROJECT_DOMAIN, FORCE globals
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dir)    shift; PROJECT_DIR="$1" ;;
+            --name)   shift; PROJECT_NAME="$1" ;;
+            --org)    shift; PROJECT_ORG="$1" ;;
+            --node)   shift; PROJECT_NODE="$1" ;;
+            --domain) shift; PROJECT_DOMAIN="$1" ;;
+            --force)  FORCE=1 ;;
+            --help|-h) usage; exit 0 ;;
+            *) log_imp 9 "-" "Unknown arg: $1"; usage >&2; exit 1 ;;
+        esac
+        shift
+    done
+
+    if [[ -z "$PROJECT_DIR" ]]; then
+        log_imp 10 "-" "FAIL-FAST: --dir is required"
+        usage >&2
+        exit 1
+    fi
+
+    if [[ ! -d "$PROJECT_DIR" ]]; then
+        log_imp 10 "-" "FAIL-FAST: project directory not found: ${PROJECT_DIR}"
+        exit 1
+    fi
+
+    # Auto-detect name from dir basename if not given
+    if [[ -z "$PROJECT_NAME" ]]; then
+        PROJECT_NAME="$(basename "$PROJECT_DIR")"
+        log_imp 7 "-" "Auto-detected project name: ${PROJECT_NAME}"
+    fi
+
+    # Read existing ai-platform.yaml for defaults
+    local yaml_file="${PROJECT_DIR}/ai-platform.yaml"
+    if [[ -f "$yaml_file" ]]; then
+        if [[ -z "$PROJECT_NODE" ]]; then
+            PROJECT_NODE="$(grep -E '^\s*target_node:\s*' "$yaml_file" 2>/dev/null | head -1 | awk '{print $2}' || true)"
+            [[ -n "$PROJECT_NODE" ]] && log_imp 6 "-" "Node from ai-platform.yaml: ${PROJECT_NODE}"
+        fi
+        if [[ -z "$PROJECT_ORG" ]]; then
+            # Try to extract org from context field
+            local ctx
+            ctx="$(grep -E '^\s*context:\s*' "$yaml_file" 2>/dev/null | head -1 | awk '{print $2}' || true)"
+            [[ -n "$ctx" ]] && PROJECT_ORG="$ctx"
+        fi
+        if [[ -z "$PROJECT_DOMAIN" ]]; then
+            local dm
+            dm="$(grep -E '^\s*domain:\s*' "$yaml_file" 2>/dev/null | head -1 | awk '{sub(/^[[:space:]]*domain:[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print $1}' || true)"
+            if [[ -n "$dm" && "$dm" != "false" ]]; then
+                PROJECT_DOMAIN="$dm"
+                log_imp 6 "-" "Domain from ai-platform.yaml: ${PROJECT_DOMAIN}"
+            fi
+        fi
+    fi
+
+    # Apply env defaults
+    PROJECT_ORG="${PROJECT_ORG:-${PLATFORM_ORG:-personal}}"
+    PROJECT_NODE="${PROJECT_NODE:-${PLATFORM_DEFAULT_NODE:-tronyx-vps}}"
+
+    log_imp 7 "-" "Args: dir=${PROJECT_DIR} name=${PROJECT_NAME} org=${PROJECT_ORG} node=${PROJECT_NODE} domain=${PROJECT_DOMAIN:-<none>} force=${FORCE}"
+}
+# endregion FUNC_parse_args
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_is_ignored_path
+## @purpose  Check if a path should be excluded from modification checks
+## @param $1  Relative path from project root
+## @return   0 if ignored, 1 if should be checked
+is_ignored_path() {
+    local relpath="$1"
+    case "$relpath" in
+        .git/*|.gitignore|.env|.env.platform|_SETUP_CHECKLIST.md|README.md)
+            return 0 ;;
+        src/*|Dockerfile*|docker-compose.yml|compose.yaml|nginx/*)
+            return 0 ;;
+        node_modules/*|__pycache__/*|*.pyc|.deploy-snapshots/*)
+            return 0 ;;
+        *)
+            return 1 ;;
+    esac
+}
+# endregion FUNC_is_ignored_path
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_generate_minimal_ai_platform_yaml
+## @purpose  Generate a minimal ai-platform.yaml if not present.
+##           Prompts user for values, uses sensible defaults.
+## @io       Creates <project_dir>/ai-platform.yaml if missing
+generate_minimal_ai_platform_yaml() {
+    local yaml_file="${PROJECT_DIR}/ai-platform.yaml"
+
+    if [[ -f "$yaml_file" ]]; then
+        log_imp 6 "-" "ai-platform.yaml exists: ${yaml_file} — preserving"
+        return 0
+    fi
+
+    log_imp 7 "-" "No ai-platform.yaml found — generating minimal"
+
+    local type_guess="backend"
+    if [[ -f "${PROJECT_DIR}/src/index.html" ]] || [[ -d "${PROJECT_DIR}/frontend" ]]; then
+        type_guess="frontend"
+    fi
+    if [[ -d "${PROJECT_DIR}/frontend" && -d "${PROJECT_DIR}/backend" ]]; then
+        type_guess="fullstack"
+    fi
+
+    log_imp 7 "-" "  Guessed project type: ${type_guess}"
+
+    cat > "$yaml_file" <<YAML
+# =============================================================================
+# ai-platform.yaml — единый манифест проекта AI Platform
+# =============================================================================
+# GENERATED by adopt-project.sh — PLEASE REVIEW
+# Project: ${PROJECT_NAME}
+# Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+# =============================================================================
+
+name: ${PROJECT_NAME}
+type: ${type_guess}
+target_node: ${PROJECT_NODE}
+context: ${PROJECT_ORG}
+
+needs:
+  domain: ${PROJECT_DOMAIN:-false}
+  expose: $( [[ -n "$PROJECT_DOMAIN" ]] && echo "true" || echo "false" )
+
+monitoring:
+  metrics: false
+  logs_retention: 7d
+  alerting: false
+  dashboard: false
+YAML
+
+    log_imp 7 "-" "Minimal ai-platform.yaml generated: ${yaml_file}"
+    log_imp 8 "-" "  ⚠️  REVIEW and adjust type/domain/monitoring values"
+}
+# endregion FUNC_generate_minimal_ai_platform_yaml
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_simplify_deploy_yml
+## @purpose  Simplify deploy.yml to use the reusable workflow pattern (K4).
+##           Rewrites .github/workflows/deploy.yml to call
+##           __ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml@main.
+##           Does NOT modify the file if it already uses the new pattern.
+## @io       Rewrites <project_dir>/.github/workflows/deploy.yml
+## @rationale Existing projects have old deploy.yml with resolve-node action and
+##            inline build/deploy. New template uses reusable workflow only.
+simplify_deploy_yml() {
+    local deploy_yml="${PROJECT_DIR}/.github/workflows/deploy.yml"
+    local deploy_yml_new="${PROJECT_DIR}/.github/workflows/platform-deploy.yml"
+
+    if [[ ! -f "$deploy_yml" ]]; then
+        log_imp 6 "-" "No deploy.yml found — nothing to simplify"
+        return 0
+    fi
+
+    # Check if it already uses the new reusable workflow pattern
+    if grep -q "uses:.*/ai-platform/.github/workflows/deploy-project.yml" "$deploy_yml" 2>/dev/null; then
+        log_imp 6 "-" "deploy.yml already uses reusable workflow — preserving"
+        return 0
+    fi
+
+    log_imp 7 "-" "Simplifying deploy.yml to use reusable workflow (K4)"
+
+    if [[ "$FORCE" -ne 1 ]]; then
+        read -r -p "  Rewrite deploy.yml to use reusable workflow? [y/N] " response
+        case "$response" in
+            [yY][eE][sS]|[yY]) ;;
+            *) log_imp 7 "-" "  deploy.yml simplification skipped"; return 0 ;;
+        esac
+    fi
+
+    # Backup original
+    cp "$deploy_yml" "${deploy_yml}.bak" 2>/dev/null || true
+
+    # Determine org for the uses: path
+    local workflow_org="${PROJECT_ORG:-__ORG_NAME__}"
+
+    cat > "$deploy_yml" <<YAMLDEPLOY
+# GENERATED by adopt-project.sh — simplified to reusable workflow
+# Original backed up at deploy.yml.bak
+
+name: Deploy ${PROJECT_NAME}
+
+on:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/${workflow_org}/${PROJECT_NAME}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            \${{ env.IMAGE_NAME }}:\${{ github.sha }}
+            \${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [build-and-push]
+    if: github.ref_name == 'main'
+    uses: ${workflow_org}/ai-platform/.github/workflows/deploy-project.yml@main
+    with:
+      project_name: ${PROJECT_NAME}
+      image_tag: \${{ github.sha }}
+    secrets: inherit
+
+  deploy-staging:
+    needs: [build-and-push]
+    if: github.ref_name == 'staging'
+    uses: ${workflow_org}/ai-platform/.github/workflows/deploy-project.yml@main
+    with:
+      project_name: ${PROJECT_NAME}
+      image_tag: \${{ github.sha }}
+    secrets: inherit
+YAMLDEPLOY
+
+    log_imp 9 "-" "deploy.yml simplified: ${deploy_yml}"
+    log_imp 6 "-" "  Original backed up: ${deploy_yml}.bak"
+}
+# endregion FUNC_simplify_deploy_yml
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_delete_platform_deploy_yml
+## @purpose  Delete platform-deploy.yml if it exists (deprecated).
+## @io       Removes <project_dir>/.github/workflows/platform-deploy.yml
+## @rationale platform-deploy.yml is replaced by the reusable workflow pattern.
+delete_platform_deploy_yml() {
+    local pd_yml="${PROJECT_DIR}/.github/workflows/platform-deploy.yml"
+
+    if [[ ! -f "$pd_yml" ]]; then
+        log_imp 6 "-" "platform-deploy.yml not found — nothing to delete"
+        return 0
+    fi
+
+    log_imp 7 "-" "Removing deprecated platform-deploy.yml: ${pd_yml}"
+    rm -f "$pd_yml"
+    log_imp 9 "-" "platform-deploy.yml deleted"
+}
+# endregion FUNC_delete_platform_deploy_yml
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_gen_env_platform
+## @purpose  Generate .env.platform in the project directory via gen-env-platform.sh.
+## @io       Calls gen-env-platform.sh --name <NAME> --domain <DOMAIN> --output <.env.platform>
+## @rationale Regenerate .env.platform for the existing project. Always regenerated.
+gen_env_platform() {
+    local gen_script="${SCRIPT_DIR}/gen-env-platform.sh"
+    local env_file="${PROJECT_DIR}/.env.platform"
+
+    if [[ ! -x "$gen_script" ]]; then
+        log_imp 8 "-" "gen-env-platform.sh not found at ${gen_script} — skipping .env.platform generation"
+        return 0
+    fi
+
+    log_imp 7 "-" "Generating .env.platform from platform-env.yaml"
+
+    if "$gen_script" \
+        --name "$PROJECT_NAME" \
+        --domain "${PROJECT_DOMAIN:-}" \
+        --output "$env_file"; then
+        log_imp 9 "-" ".env.platform generated: ${env_file}"
+    else
+        log_imp 8 "-" "gen-env-platform.sh returned non-zero — .env.platform might be incomplete"
+    fi
+}
+# endregion FUNC_gen_env_platform
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_gen_project_makefile
+## @purpose  Generate a minimal Makefile in the project directory (K3 contract).
+##           Preserves existing Makefile unless --force is set.
+## @io       Creates <project_dir>/Makefile if not present or --force
+gen_project_makefile() {
+    local makefile="${PROJECT_DIR}/Makefile"
+
+    if [[ -f "$makefile" ]]; then
+        if [[ "$FORCE" -ne 1 ]]; then
+            log_imp 6 "-" "Makefile exists — SKIP (use --force to regenerate)"
+            return 0
+        fi
+        log_imp 7 "-" "Force mode: overwriting existing Makefile"
+    fi
+
+    log_imp 7 "-" "Generating project Makefile: ${makefile}"
+
+    cat > "$makefile" <<MAKEFILE
+# GENERATED by adopt-project.sh — DO NOT EDIT manually
+# Project: ${PROJECT_NAME}
+# ai-platform project Makefile (K3 contract)
+
+PLATFORM_DIR ?= \$(HOME)/projects/ai-platform
+
+## sync-env: Re-generate .env.platform from platform-env.yaml
+sync-env:
+\t@echo "[IMP:7][project] Syncing .env.platform..."
+\t@\$(MAKE) -C \$(PLATFORM_DIR) project-sync-env NAME=${PROJECT_NAME} DOMAIN=${PROJECT_DOMAIN:-}
+\t@echo "[IMP:9][project] .env.platform sync complete"
+
+## status: Show live project status from target node
+status:
+\t@echo "[IMP:7][project] Querying project status..."
+\t@\$(MAKE) -C \$(PLATFORM_DIR) project-status NAME=${PROJECT_NAME}
+\t@echo "[IMP:9][project] Status query complete"
+
+## help: Show all available commands
+help:
+\t@grep -E '^## ' \$(MAKEFILE_LIST) | column -t -s ':'
+MAKEFILE
+
+    log_imp 7 "-" "Project Makefile generated: ${makefile}"
+}
+# endregion FUNC_gen_project_makefile
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_gen_project_agents
+## @purpose  Generate AGENTS.md in the project directory (DD13 contract, ≤60 lines).
+##           Preserves existing AGENTS.md unless --force is set.
+## @io       Creates <project_dir>/AGENTS.md if not present or --force
+gen_project_agents() {
+    local agents_file="${PROJECT_DIR}/AGENTS.md"
+
+    if [[ -f "$agents_file" ]]; then
+        if [[ "$FORCE" -ne 1 ]]; then
+            log_imp 6 "-" "AGENTS.md exists — SKIP (use --force to regenerate)"
+            return 0
+        fi
+        log_imp 7 "-" "Force mode: overwriting existing AGENTS.md"
+    fi
+
+    log_imp 7 "-" "Generating project AGENTS.md: ${agents_file}"
+
+    cat > "$agents_file" <<AGENTS
+# AGENTS.md — ${PROJECT_NAME} (ai-platform project)
+
+## Platform provides
+Template-based services: postgres, redis, litellm, langfuse, minio, clickhouse, nginx
+See \`.env.platform\` for exact host/port/DSN/URL.
+
+Domain: ${PROJECT_DOMAIN:-<not set>}
+Node: ${PROJECT_NODE}
+Target node: ${PROJECT_NODE}
+
+## DO NOT
+- Edit \`.env.platform\` manually (regenerate with \`make sync-env\`)
+- Store secrets, tokens, or API keys in project files
+- Delete this file or Makefile (project platform contract)
+
+## Commands from this directory
+- \`make sync-env\` — regenerate .env.platform from platform-env.yaml
+- \`make status\` — show live container status from target node
+- \`make help\` — show all available commands
+
+## Configuration
+\`\`\`
+name: ${PROJECT_NAME}
+org: ${PROJECT_ORG}
+node: ${PROJECT_NODE}
+AGENTS
+
+    log_imp 7 "-" "Project AGENTS.md generated: ${agents_file}"
+}
+# endregion FUNC_gen_project_agents
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_register_in_node_yaml
+## @purpose  Register the project in node.yaml (idempotent — SKIP if already registered).
+## @io       Modifies node.yaml via yq (append to projects[] if not present)
+## @complexity O(1) — single yq append
+register_in_node_yaml() {
+    local node_yaml="${PROJECTS_ROOT}/${PROJECT_ORG}/node-configs/${PROJECT_NODE}/node.yaml"
+
+    log_imp 7 "-" "Registering project in node.yaml: ${node_yaml}"
+
+    if [[ ! -f "$node_yaml" ]]; then
+        log_imp 8 "-" "node.yaml not found: ${node_yaml}"
+        log_imp 8 "-" "  Create it or register manually:"
+        log_imp 8 "-" "    yq eval -i '.projects += [{\"name\": \"${PROJECT_NAME}\", \"repo\": \"${PROJECT_ORG}/${PROJECT_NAME}\", \"type\": \"project\"}]' ${node_yaml}"
+        return 0
+    fi
+
+    # Idempotent check
+    if command -v yq &>/dev/null; then
+        local existing
+        existing=$(yq eval ".projects[] | select(.name == \"${PROJECT_NAME}\") | .name" "$node_yaml" 2>/dev/null || true)
+        if [[ -n "$existing" && "$existing" != "null" ]]; then
+            log_imp 9 "-" "Project already registered in node.yaml: ${PROJECT_NAME} — SKIP (idempotent)"
+            return 0
+        fi
+
+        local entry="{\"name\": \"${PROJECT_NAME}\", \"repo\": \"${PROJECT_ORG}/${PROJECT_NAME}\", \"type\": \"adopted\""
+        if [[ -n "$PROJECT_DOMAIN" ]]; then
+            entry+=", \"domain\": \"${PROJECT_DOMAIN}\""
+        fi
+        entry+="}"
+
+        yq eval -i ".projects += [${entry}]" "$node_yaml"
+        log_imp 9 "-" "Project registered in node.yaml: ${PROJECT_NAME}"
+    elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+        log_imp 7 "-" "yq not available — using python3+yaml fallback"
+        ADOPT_NAME="$PROJECT_NAME" \
+        ADOPT_REPO="${PROJECT_ORG}/${PROJECT_NAME}" \
+        ADOPT_DOMAIN="$PROJECT_DOMAIN" \
+        ADOPT_YAML="$node_yaml" \
+        python3 <<'PYEOF' || log_imp 8 "-" "Python registration failed — register manually"
+import os, yaml, sys
+
+name = os.environ.get('ADOPT_NAME', '')
+repo = os.environ.get('ADOPT_REPO', '')
+domain = os.environ.get('ADOPT_DOMAIN', '')
+yaml_path = os.environ.get('ADOPT_YAML', '')
+
+if not name or not repo or not yaml_path:
+    sys.exit(0)
+
+with open(yaml_path) as f:
+    data = yaml.safe_load(f)
+
+if 'projects' in data:
+    for p in data['projects']:
+        if p.get('name') == name or p.get('repo') == repo:
+            print(f"[IMP:9][adopt][register] Idempotent SKIP — {name} already in node.yaml", file=sys.stderr)
+            sys.exit(0)
+
+entry = {'name': name, 'repo': repo, 'type': 'adopted'}
+if domain:
+    entry['domain'] = domain
+
+if 'projects' not in data:
+    data['projects'] = []
+data['projects'].append(entry)
+
+with open(yaml_path, 'w') as f:
+    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+print(f"[IMP:9][adopt][register] Registered {name} → {yaml_path}", file=sys.stderr)
+PYEOF
+    else
+        log_imp 8 "-" "Neither yq nor python3+yaml available — cannot auto-register"
+    fi
+}
+# endregion FUNC_register_in_node_yaml
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_configure_vhost
+## @purpose  Configure nginx vhost for the project if domain is set.
+##           Calls add-vhost.sh for standard domains.
+## @io       Delegates to add-vhost.sh if available
+configure_vhost() {
+    if [[ -z "$PROJECT_DOMAIN" ]]; then
+        log_imp 6 "-" "No domain configured — skipping vhost"
+        return 0
+    fi
+
+    local add_vhost_script="${SCRIPT_DIR}/add-vhost.sh"
+
+    if [[ ! -x "$add_vhost_script" ]]; then
+        log_imp 8 "-" "add-vhost.sh not found at ${add_vhost_script} — skipping vhost generation"
+        log_imp 8 "-" "  Manual: cp <template>/nginx/default.conf to node-configs overlays"
+        return 0
+    fi
+
+    # Ensure ai-platform.yaml has the domain set
+    local yaml_file="${PROJECT_DIR}/ai-platform.yaml"
+    if [[ -f "$yaml_file" ]]; then
+        # Update needs.domain in yaml if present
+        if grep -qE '^\s*domain:' "$yaml_file" 2>/dev/null; then
+            sed -i.bak "s/^\(\s*domain:\s*\).*$/\1${PROJECT_DOMAIN}/" "$yaml_file" && rm -f "${yaml_file}.bak" 2>/dev/null || true
+        fi
+        # Ensure expose: true
+        if grep -qE '^\s*expose:' "$yaml_file" 2>/dev/null; then
+            sed -i.bak "s/^\(\s*expose:\s*\).*$/\1true/" "$yaml_file" && rm -f "${yaml_file}.bak" 2>/dev/null || true
+        fi
+    fi
+
+    local node_configs_dir="${PROJECTS_ROOT}/${PROJECT_ORG}/node-configs"
+
+    if [[ ! -d "$node_configs_dir" ]]; then
+        log_imp 8 "-" "node-configs dir not found: ${node_configs_dir}"
+        log_imp 8 "-" "  Manual: create vhost manually in overlays/nginx/"
+        return 0
+    fi
+
+    log_imp 7 "-" "Configuring nginx vhost via add-vhost.sh for domain: ${PROJECT_DOMAIN}"
+
+    "$add_vhost_script" \
+        --project-dir "$PROJECT_DIR" \
+        --node-configs-dir "$node_configs_dir" || {
+        log_imp 8 "-" "add-vhost.sh returned non-zero — check vhost manually"
+    }
+
+    log_imp 9 "-" "Vhost configured for: ${PROJECT_DOMAIN}"
+}
+# endregion FUNC_configure_vhost
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_print_diff_report
+## @purpose  Print a human-readable diff report of what was changed
+## @io       stdout: formatted report
+print_diff_report() {
+    local changes=("$@")
+
+    echo ""
+    echo "────────────────────────────────────────────────────────────"
+    echo "  ✅ adopt-project: ${PROJECT_NAME}"
+    echo "────────────────────────────────────────────────────────────"
+    echo ""
+    if [[ ${#changes[@]} -eq 0 ]]; then
+        echo "  No changes made (everything up to date)"
+    else
+        echo "  Changes:"
+        for c in "${changes[@]}"; do
+            echo "    ${c}"
+        done
+    fi
+    echo ""
+    echo "  ❗ NOT modified (preserved): src/, Dockerfile, application code"
+    echo ""
+    echo "────────────────────────────────────────────────────────────"
+    log_imp 9 "-" "adopt-project DONE: ${PROJECT_NAME}"
+}
+# endregion FUNC_print_diff_report
+
+# ──────────────────────────────────────────────────────────────────
+# region FUNC_main
+## @purpose  Main entry point — orchestrate project adoption
+main() {
+    log_imp 6 "-" "Starting adopt-project.sh (T11 full implementation)"
+
+    parse_args "$@"
+
+    local changes=()
+
+    log_imp 7 "-" "Adopting project: ${PROJECT_DIR}"
+
+    # ── Step 1: Generate or verify ai-platform.yaml ──
+    log_imp 7 "-" "Step 1/7: Ensure ai-platform.yaml exists"
+    generate_minimal_ai_platform_yaml
+    changes+=("✔ ai-platform.yaml checked/generated")
+
+    # ── Step 2: Simplify deploy.yml ──
+    log_imp 7 "-" "Step 2/7: Simplify deploy.yml to reusable workflow"
+    local deploy_yml="${PROJECT_DIR}/.github/workflows/deploy.yml"
+    local deploy_was_simplified=false
+    if [[ -f "$deploy_yml" ]] && ! grep -q "uses:.*/ai-platform/.github/workflows/deploy-project.yml" "$deploy_yml" 2>/dev/null; then
+        simplify_deploy_yml
+        if grep -q "uses:.*/ai-platform/.github/workflows/deploy-project.yml" "$deploy_yml" 2>/dev/null; then
+            deploy_was_simplified=true
+        fi
+    else
+        log_imp 6 "-" "deploy.yml already uses reusable workflow or not present"
+    fi
+    if [[ "$deploy_was_simplified" == "true" ]]; then
+        changes+=("✔ deploy.yml simplified (uses: org/ai-platform/...)")
+    else
+        changes+=("- deploy.yml unchanged or already simplified")
+    fi
+
+    # ── Step 3: Delete platform-deploy.yml ──
+    log_imp 7 "-" "Step 3/7: Remove deprecated platform-deploy.yml"
+    delete_platform_deploy_yml
+    changes+=("✔ platform-deploy.yml removed (if existed)")
+
+    # ── Step 4: Generate .env.platform ──
+    log_imp 7 "-" "Step 4/7: Generate .env.platform"
+    gen_env_platform
+    changes+=("✔ .env.platform regenerated")
+
+    # ── Step 5: Generate Makefile and AGENTS.md ──
+    log_imp 7 "-" "Step 5/7: Generate project Makefile and AGENTS.md"
+    gen_project_makefile
+    gen_project_agents
+    changes+=("✔ Makefile/AGENTS.md ensured")
+
+    # ── Step 6: Register in node.yaml ──
+    log_imp 7 "-" "Step 6/7: Register in node.yaml (idempotent)"
+    register_in_node_yaml
+    changes+=("✔ node.yaml registration checked")
+
+    # ── Step 7: Configure vhost ──
+    log_imp 7 "-" "Step 7/7: Configure nginx vhost"
+    configure_vhost
+    if [[ -n "$PROJECT_DOMAIN" ]]; then
+        changes+=("✔ Vhost configured for: ${PROJECT_DOMAIN}")
+    else
+        changes+=("- No domain — vhost skipped")
+    fi
+
+    # ── Print report ──
+    print_diff_report "${changes[@]}"
+}
+# endregion FUNC_main
+
+main "$@"

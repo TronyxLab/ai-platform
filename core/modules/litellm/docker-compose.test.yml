@@ -5,7 +5,7 @@
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
 ##   - container_name: litellm-test — предотвращает конфликт с production litellm
-##   - restart: "no" — тестовые контейнеры не авто-перезапускаются
+##   - restart: unless-stopped — тестовые контейнеры перезапускаются при креше (--wait совместимость)
 ##   - Port: 127.0.0.1:14000:4000 — избежать production конфликтов
 ##   - DATABASE_URL: PostgreSQL — spend_logs запись через pgbouncer:6432 на shared-db-net
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). PostgreSQL для
@@ -17,7 +17,7 @@ services:
     container_name: litellm-test
     ports:
       - "127.0.0.1:14000:4000"
-    restart: "no"
+    restart: unless-stopped
     environment:
       # PostgreSQL DSN — pgbouncer:6432 на shared-db-net (постгрес запускается тестовой фикстурой)
       DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@pgbouncer:6432/litellm?sslmode=disable"

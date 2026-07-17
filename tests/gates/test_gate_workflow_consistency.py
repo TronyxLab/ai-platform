@@ -43,6 +43,7 @@ _MAKEFILE_PATH: pathlib.Path = _PROJECT_ROOT / "Makefile"
 _EXPECTED_WORKFLOWS: set[str] = {
     "build-platform.yml",
     "core-deploy.yml",
+    "deploy-project.yml",
     "mirror.yml",
     "nightly-gate.yml",
     "platform-deploy.yml",
@@ -51,8 +52,9 @@ _EXPECTED_WORKFLOWS: set[str] = {
     "stage-deploy.yml",
 }
 
-# Expected count after main-full-gate.yml deletion (9→8 files, main-full-gate removed)
-_EXPECTED_WORKFLOW_COUNT: int = 8
+# Expected count after main-full-gate.yml deletion and deploy-project.yml addition
+# (9→8 main-full-gate removed, 8→9 deploy-project.yml added)
+_EXPECTED_WORKFLOW_COUNT: int = 9
 
 # Deploy workflows that should trigger on platform-test (workflow_run)
 _DEPLOY_WORKFLOWS: set[str] = {

@@ -101,6 +101,26 @@ scaffold:
     mechanism: shell-script
     delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh
     description: "Create a new deployment context (GitHub org + repos)"
+  - make_target: project-sync-env
+    mechanism: shell-script
+    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/gen-env-platform.sh
+    description: "Sync .env.platform from platform-env.yaml"
+  - make_target: remove-project
+    mechanism: shell-script
+    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh
+    description: "Remove project from lifecycle (safe — compose down without -v, vhost off)"
+  - make_target: adopt-project
+    mechanism: shell-script
+    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen-env-platform.sh
+    description: "Adopt existing project into platform lifecycle"
+  - make_target: project-list
+    mechanism: shell-script
+    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh
+    description: "List registered projects from local node.yaml (offline)"
+  - make_target: project-status
+    mechanism: shell-script
+    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status
+    description: "Query live status of project(s) on target node via SSH"
 
 secrets:
   - make_target: secrets-unlock
@@ -383,6 +403,11 @@ allowed_verbs:
   - test-inventory-sync
   - new-project
   - new-context
+  - project-sync-env
+  - remove-project
+  - adopt-project
+  - project-list
+  - project-status
   - secrets-unlock
   - provision
   - backup
