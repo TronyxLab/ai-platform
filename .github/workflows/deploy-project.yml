@@ -1,0 +1,61 @@
+# GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy
+# STRUCTURE: inputs(project_name) → ○ resolve node from NODE_HOST_MAP → ◇ fromJson → ⊕ ssh_host → ⎋ SSH deploy-project.sh
+# region MODULE_CONTRACT
+## @purpose  Reusable workflow for deploying projects — resolves target node from
+##           NODE_HOST_MAP org variable, then SSH-deploys via forced-command.
+##           Org-agnostic — no hardcoded org references (DD9).
+## @scope    Called ONCE per project via `uses: <org>/ai-platform/.github/workflows/deploy-project.yml@main`
+##           from project-level .github/workflows/deploy.yml
+## @invariants
+##   - `on.workflow_call` with single required input: project_name
+##   - Uses `vars.NODE_HOST_MAP` (JSON) for zero-secret node resolution (K4)
+##   - Uses `secrets: inherit` for CI_DEPLOY_KEY — no project-level secrets
+##   - No org-specific references — any context org can use this workflow (DD1)
+##   - No NODE_CONFIGS_TOKEN — deprecated by NODE_HOST_MAP (DD4)
+## @rationale Single reusable workflow eliminates 3× duplicate deploy patterns across templates,
+##            centralizes node resolution, and keeps CI/CD thin (DD1, DD4).
+##            Org-agnostic = context-safe: private workflows are org-scoped by default.
+## @usecases  project deploy -> git push -> CI -> reusable workflow -> SSH forced-command
+# endregion MODULE_CONTRACT
+
+name: Deploy Project (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        required: true
+        type: string
+        description: "Project name to deploy — must match ai-platform.yaml in checkout root"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target node
+        id: resolve-node
+        env:
+          NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
+        run: |
+          TARGET_NODE=$(python3 -c "import yaml; d=yaml.safe_load(open('ai-platform.yaml')); print(d.get('target_node','tronyx-vps'))" 2>/dev/null || echo "tronyx-vps")
+          echo "[IMP:9][resolve-node] target_node=${TARGET_NODE}"
+          echo "target_node=${TARGET_NODE}" >> "${GITHUB_ENV}"
+
+          if [ -z "${NODE_HOST_MAP}" ]; then
+            echo "[IMP:10][resolve-node] FATAL: NODE_HOST_MAP org variable not configured (K5)"
+            exit 1
+          fi
+
+          SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 -c "import json,sys; m=json.load(sys.stdin); n='${TARGET_NODE}'; h=m.get(n,''); print(h if h else (print(f'K5: node {n} not found in NODE_HOST_MAP',file=sys.stderr) or exit(1)))")
+          echo "[IMP:9][resolve-node] ssh_host=${SSH_HOST}"
+          echo "ssh_host=${SSH_HOST}" >> "${GITHUB_ENV}"
+
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.ssh_host }}
+          username: ci-deploy
+          key: ${{ secrets.CI_DEPLOY_KEY }}
+          script: /opt/platform/core/entrypoints/deploy.sh ${{ inputs.project_name }} ${{ github.sha }} production
