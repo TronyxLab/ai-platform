@@ -67,7 +67,8 @@ for module_yaml in "${PLATFORM_ROOT}"/core/modules/*/module.yaml; do
     elif [ "$INSTALL_TYPE" = "docker" ]; then
         # Default mode for docker modules: docker inspect
         # Get ALL container_name entries from base.yml (no head -1 — all containers matter)
-        mapfile -t CONTAINER_NAMES < <(grep -E 'container_name:' "${PLATFORM_ROOT}/core/modules/${MODULE}/docker-compose.base.yml" 2>/dev/null | awk '{print $2}')
+        # Anchored to line start: comment lines (## @purpose ... container_name: ...) must not match
+        mapfile -t CONTAINER_NAMES < <(grep -E '^[[:space:]]*container_name:' "${PLATFORM_ROOT}/core/modules/${MODULE}/docker-compose.base.yml" 2>/dev/null | awk '{print $2}')
         if [ ${#CONTAINER_NAMES[@]} -eq 0 ]; then
             CONTAINER_NAMES=("$MODULE")
         fi
