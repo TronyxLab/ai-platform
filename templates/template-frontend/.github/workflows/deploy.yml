@@ -1,11 +1,13 @@
 # GREP_SUMMARY: GitHub Actions CI/CD deploy reusable workflow frontend
 # STRUCTURE: on(push:main) → deploy(uses __ORG_NAME__/ai-platform/deploy-project.yml)
-# @purpose  Simplified CI/CD: build+delegation to reusable platform workflow (T13)
+# region MODULE_CONTRACT
+## @purpose  Simplified CI/CD: build+delegation to reusable platform workflow (T13)
 ## @invariants
 ##   - Единственный job делегирует в reusable workflow платформы
 ##   - secrets: inherit — CI_DEPLOY_KEY, GITHUB_TOKEN наследуются
 ##   - org-agnostic (__ORG_NAME__ заменяется при scaffold)
 ##   - ≤40 строк, ≤15 non-comment
+# endregion MODULE_CONTRACT
 name: Deploy
 
 on:
