@@ -340,11 +340,15 @@ def test_platform_starts_all_containers(
         if compose_path is None:
             continue
         # Use same compose args as platform_services fixture: base + test overlay
+        # NOTE: --all flag is critical — docker compose ps without --all does NOT
+        # show containers when COMPOSE_PROFILES filtering leaves no active services
+        # visible (all services are profile-gated). Adding --all ensures we always
+        # see containers regardless of profile state, then filter by running via docker ps.
         ps_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
         if os.path.exists(test_override):
             ps_args.extend(["-f", test_override])
-        ps_args.extend(["-p", "ai-platform-test", "ps", "--format", "{{.Name}}"])
+        ps_args.extend(["-p", "ai-platform-test", "ps", "--all", "--format", "{{.Name}}"])
         result = _run_docker(
             ps_args,
             timeout=30,
@@ -395,53 +399,6 @@ def test_platform_starts_all_containers(
         if attempt < max_retries:
             # [IMP:7][test_platform_starts_all_containers] Attempt {attempt}/{max_retries}: {len(missing)} container(s) not running
             time.sleep(retry_interval)
-    # endregion
-
-    # region BLOCK_DIAG
-    if not all_running:
-        # ── DIAGNOSTIC: check what docker sees ────────────────────────
-        _diag_ps = subprocess.run(
-            ["docker", "ps", "--filter", "label=com.docker.compose.project=ai-platform-test", "--format", "{{.Names}}"],
-            capture_output=True, text=True, timeout=15,
-        )
-        _diag_containers = [_l.strip() for _l in _diag_ps.stdout.strip().splitlines() if _l.strip()]
-        logger.error(
-            "[IMP:9][test_platform_starts_all_containers] DIAG: containers with project=ai-platform-test: %s",
-            _diag_containers,
-        )
-        # Also check compose ps for first expected
-        if expected_services:
-            logger.error(
-                "[IMP:9][test_platform_starts_all_containers] DIAG: expected_services=%s",
-                expected_services[:5],
-            )
-        else:
-            # Try running compose ps directly for first started module
-            if started:
-                _diag_mod = started[0]
-                _diag_cp = all_compose_files.get(_diag_mod)
-                if _diag_cp:
-                    _diag_args = ["docker", "compose", "-f", _diag_cp]
-                    _diag_to = os.path.join(os.path.dirname(_diag_cp), "docker-compose.test.yml")
-                    if os.path.exists(_diag_to):
-                        _diag_args.extend(["-f", _diag_to])
-                    _diag_args.extend(["-p", "ai-platform-test", "ps", "--all", "--format", "{{.Name}}"])
-                    _diag_r = subprocess.run(_diag_args, capture_output=True, text=True, timeout=15,
-                        env={**os.environ, **SMOKE_ENV, "COMPOSE_PROFILES": _diag_mod})
-                    logger.error(
-                        "[IMP:9][test_platform_starts_all_containers] DIAG: compose ps for '%s' (--all): stdout='%s' stderr='%s'",
-                        _diag_mod, _diag_r.stdout.strip()[:200], _diag_r.stderr.strip()[:200],
-                    )
-                    # Also check raw docker ps for all -test containers
-                    _diag_docker = subprocess.run(
-                        ["docker", "ps", "--all", "--filter", "name=-test$", "--format", "{{.Names}}\t{{.Status}}"],
-                        capture_output=True, text=True, timeout=15,
-                    )
-                    logger.error(
-                        "[IMP:9][test_platform_starts_all_containers] DIAG: docker ps (-test):\n%s",
-                        _diag_docker.stdout.strip()[:500],
-                    )
-
     # endregion
 
     # region BLOCK_Assert
@@ -531,11 +488,12 @@ def test_critical_services_healthy(
                 module_name,
             )
             continue
+        # NOTE: same --all rationale as test_platform_starts_all_containers
         ps_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
         if os.path.exists(test_override):
             ps_args.extend(["-f", test_override])
-        ps_args.extend(["-p", "ai-platform-test", "ps", "--format", "{{.Name}}"])
+        ps_args.extend(["-p", "ai-platform-test", "ps", "--all", "--format", "{{.Name}}"])
         result = _run_docker(
             ps_args,
             timeout=30,
