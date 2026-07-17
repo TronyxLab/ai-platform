@@ -1,31 +1,22 @@
-# GREP_SUMMARY: ai-platform.yaml project-manifest frontend monitoring template
-# STRUCTURE: ┌manifest┐ → scaffold(create_project) → generate-catalog → deploy(node)
+# GREP_SUMMARY: ai-platform.yaml project-manifest frontend template
+# STRUCTURE: ┌manifest┐ → deploy(node) → sync-env
 # region MODULE_CONTRACT
 ## @purpose   Manifest проекта для платформы ai-platform (шаблон frontend-проекта)
-## @scope     Определяет имя, тип, целевой узел, зависимости и мониторинг проекта.
-##            Используется platform-deploy.sh (_reconfigure_monitoring) и generate-catalog.sh.
+## @scope     Определяет имя, тип, целевой узел, домен платформы и зависимости
 ## @invariants
 ##   - type: frontend — для frontend-проектов
-##   - metrics_port: 3000 — порт метрик по умолчанию для frontend
-##   - $PROJECT_NAME и $NODE_NAME заменяются при создании проекта из шаблона
-## @rationale  Единый манифест для деплоя, мониторинга и каталогизации проекта.
-##             Трёхуровневый мерж (L1 defaults → L2 org overrides → L3 project config).
+##   - __PROJECT_NAME__, __NODE_NAME__, __DOMAIN__, __PLATFORM_DOMAIN__ заменяются при scaffold
+##   - expose: true — frontend обычно public
+## @rationale  Единый манифест для деплоя и каталогизации; используется add-project.sh и adopt-project.sh
 # endregion MODULE_CONTRACT
 
-name: $PROJECT_NAME
+name: __PROJECT_NAME__
 type: frontend
 context: personal
-target_node: $NODE_NAME
+target_node: __NODE_NAME__
+platform_domain: __PLATFORM_DOMAIN__
 
 needs:
-  domain: "$DOMAIN"       # e.g., app.myproject.com
-  database: false         # frontend typically needs no DB
-  llm: false
-  expose: false
-
-monitoring:
-  metrics: true
-  metrics_port: 3000
-  logs_retention: 7d
-  alerting: false
-  dashboard: false
+  domain: __DOMAIN__
+  database: false
+  expose: true

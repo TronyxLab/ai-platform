@@ -1,13 +1,13 @@
-# GREP_SUMMARY: docker-compose __PROJECT_NAME__ proxy-net frontend nginx proxy
-# STRUCTURE: service(<project>-app) → networks(<project>-net + proxy-net:external) → healthcheck
+# GREP_SUMMARY: docker-compose __PROJECT_NAME__ proxy-net frontend nginx proxy env_file
+# STRUCTURE: service(<project>-app) → env_file(.env.platform) → networks(proxy-net:external) → healthcheck
 # region MODULE_CONTRACT
-## @purpose  Development and production compose definition (04-templates §3)
-## @scope    Defined with IMAGE_REGISTRY for CI/CD substitution
+## @purpose  Development and production compose definition
+## @scope    Service with platform env_file contract
 ## @invariants
 ##   - proxy-net is external (created by nginx module)
+##   - env_file: .env.platform — единственный источник платформенных переменных
 ##   - Ports NOT published (nginx proxy handles ingress)
-##   - Healthcheck on /health endpoint
-## @rationale External proxy-net = nginx module owns TLS termination; projects don't manage certs
+## @rationale .env.platform заменяет environment-блок; исключает дрейф между проектами (DD5)
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -29,6 +29,8 @@ services:
         limits:
           memory: 256M
     logging: *default-logging
+    env_file:
+      - .env.platform
     environment:
       - NODE_ENV=production
     networks:
