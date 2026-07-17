@@ -28,9 +28,7 @@ logger = logging.getLogger(__name__)
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
 _TEMPLATES_DIR: pathlib.Path = _PROJECT_ROOT / "templates"
-_DEPLOY_PROJECT_YML: pathlib.Path = (
-    _PROJECT_ROOT / ".github" / "workflows" / "deploy-project.yml"
-)
+_DEPLOY_PROJECT_YML: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows" / "deploy-project.yml"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,15 +80,9 @@ def test_deploy_yml_calls_reusable_workflow(caplog) -> None:
             non_comment,
         )
 
-        assert len(lines) <= 40, (
-            f"{template_name}: {len(lines)} lines (max 40)"
-        )
-        assert non_comment <= 15, (
-            f"{template_name}: {non_comment} non-comment lines (max 15)"
-        )
-        assert (
-            "__ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml" in content
-        ), (
+        assert len(lines) <= 40, f"{template_name}: {len(lines)} lines (max 40)"
+        assert non_comment <= 15, f"{template_name}: {non_comment} non-comment lines (max 15)"
+        assert "__ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml" in content, (
             f"{template_name}: missing __ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml reference"
         )
         logger.info("[IMP:9][test][deploy_yml] %s: contract OK", template_name)
@@ -121,9 +113,7 @@ def test_deploy_yml_no_resolve_node_action(caplog) -> None:
                     relative,
                 )
 
-    assert not found_issues, (
-        f"resolve-node action still referenced in: {found_issues}"
-    )
+    assert not found_issues, f"resolve-node action still referenced in: {found_issues}"
     logger.info("[IMP:9][test][no_resolve_node] No resolve-node references found")
 
 
@@ -148,8 +138,7 @@ def test_reusable_workflow_schema(caplog) -> None:
     # YAML 1.1 parses bare `on:` as boolean True — handle both
     on_section = data.get("on") or data.get(True, {})
     assert "workflow_call" in on_section, (
-        f"{_DEPLOY_PROJECT_YML}: 'on' must include 'workflow_call'. "
-        f"Found keys: {list(on_section.keys())}"
+        f"{_DEPLOY_PROJECT_YML}: 'on' must include 'workflow_call'. Found keys: {list(on_section.keys())}"
     )
     workflow_call = on_section["workflow_call"]
     assert isinstance(workflow_call, dict), "workflow_call must be a dict"
@@ -161,9 +150,7 @@ def test_reusable_workflow_schema(caplog) -> None:
         f"Found inputs: {list(inputs.keys())}"
     )
     project_name_input = inputs["project_name"]
-    assert project_name_input.get("required", False) is True, (
-        "Input 'project_name' must be required"
-    )
+    assert project_name_input.get("required", False) is True, "Input 'project_name' must be required"
 
     logger.info(
         "[IMP:9][test][reusable_schema] deploy-project.yml validated with on.workflow_call and required project_name"
@@ -180,16 +167,13 @@ def test_reusable_workflow_no_node_configs_token(caplog) -> None:
     if _DEPLOY_PROJECT_YML.exists():
         search_files.append(_DEPLOY_PROJECT_YML)
 
-    for tpl_deploy in _get_template_deploy_ymls():
-        search_files.append(tpl_deploy)
+    search_files.extend(_get_template_deploy_ymls())
 
     found_issues: list[str] = []
     for yml_file in search_files:
         relative = yml_file.relative_to(_PROJECT_ROOT)
         content = yml_file.read_text()
-        # Only flag actual usage patterns (node_configs_token in workflow context),
-        # not comments explaining deprecation
-        usage_patterns = ["\${{", "NODE_CONFIGS_TOKEN"] if True else []
+        # Only flag actual usage in non-comment lines (exclude deprecation notes)
         for line in content.splitlines():
             stripped = line.strip()
             # Skip comment-only lines and lines where it's mentioned in a deprecation note
@@ -201,9 +185,7 @@ def test_reusable_workflow_no_node_configs_token(caplog) -> None:
                     stripped,
                 )
 
-    assert not found_issues, (
-        f"NODE_CONFIGS_TOKEN usage found in:\n" + "\n".join(f"  - {i}" for i in found_issues)
-    )
+    assert not found_issues, "NODE_CONFIGS_TOKEN usage found in:\n" + "\n".join(f"  - {i}" for i in found_issues)
     logger.info("[IMP:9][test][no_node_token] No NODE_CONFIGS_TOKEN usage found in non-comment lines")
 
 
@@ -239,9 +221,7 @@ def test_reusable_workflow_uses_org_variable(caplog) -> None:
             "(must use __ORG_NAME__ placeholder per DD9)"
         )
 
-    logger.info(
-        "[IMP:9][test][uses_org_variable] deploy-project.yml uses NODE_HOST_MAP and no hardcoded org"
-    )
+    logger.info("[IMP:9][test][uses_org_variable] deploy-project.yml uses NODE_HOST_MAP and no hardcoded org")
 
 
 @ldd_trajectory
@@ -293,11 +273,9 @@ def test_template_has_env_platform_makefile_agents(caplog) -> None:
                     agents_lines,
                 )
                 if agents_lines > 60:
-                    issues.append(
-                        f"{tpl_name}: AGENTS.md has {agents_lines} lines (max 60)"
-                    )
+                    issues.append(f"{tpl_name}: AGENTS.md has {agents_lines} lines (max 60)")
             else:
                 logger.info("[IMP:7][test][template_files] %s: %s present", tpl_name, req_file)
 
-    assert not issues, f"Template contract violations:\n" + "\n".join(f"  - {i}" for i in issues)
+    assert not issues, "Template contract violations:\n" + "\n".join(f"  - {i}" for i in issues)
     logger.info("[IMP:9][test][template_files] All templates have required files, AGENTS.md ≤60 lines")

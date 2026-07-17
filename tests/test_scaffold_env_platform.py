@@ -16,7 +16,6 @@
 import logging
 import pathlib
 import subprocess
-import sys
 
 import pytest
 import yaml
@@ -27,9 +26,7 @@ logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
-_GEN_ENV_SCRIPT: pathlib.Path = (
-    _PROJECT_ROOT / "core" / "internal" / "scaffold" / "gen-env-platform.sh"
-)
+_GEN_ENV_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "gen-env-platform.sh"
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -153,13 +150,10 @@ def test_gen_env_platform_min_vars(caplog, platform_env_yaml: pathlib.Path) -> N
     )
 
     assert result.returncode == 0, f"Script failed: stderr={result.stderr}"
-    plat_lines = [l for l in result.stdout.splitlines() if l.startswith("PLATFORM_")]
+    plat_lines = [line for line in result.stdout.splitlines() if line.startswith("PLATFORM_")]
     plat_count = len(plat_lines)
     logger.info("[IMP:7][test][min_vars] PLATFORM_* count=%d", plat_count)
-    assert plat_count >= 8, (
-        f"Expected ≥8 PLATFORM_* variables, got {plat_count}. "
-        f"Lines: {plat_lines}"
-    )
+    assert plat_count >= 8, f"Expected ≥8 PLATFORM_* variables, got {plat_count}. Lines: {plat_lines}"
     logger.info("[IMP:9][test][min_vars] Verified: %d PLATFORM_* variables", plat_count)
 
 
@@ -189,9 +183,7 @@ def test_gen_env_platform_provides_list(caplog, platform_env_yaml: pathlib.Path)
     # Expected: sorted keys from fixture = postgres,redis
     expected = "postgres,redis"
     actual = provides_line.split("=", 1)[1]
-    assert actual == expected, (
-        f"PLATFORM_PROVIDES mismatch: expected '{expected}', got '{actual}'"
-    )
+    assert actual == expected, f"PLATFORM_PROVIDES mismatch: expected '{expected}', got '{actual}'"
     logger.info("[IMP:9][test][provides_list] PLATFORM_PROVIDES=%s", actual)
 
 
@@ -224,9 +216,7 @@ def test_gen_env_platform_dsn_format(caplog, platform_env_yaml: pathlib.Path) ->
     dsn_value = dsn_line.split("=", 1)[1]
 
     pattern = r"^\w+://[^:]+:\*\*\*@[^:]+:\d+/\w+$"
-    assert re.match(pattern, dsn_value), (
-        f"DSN format mismatch: '{dsn_value}' does not match '{pattern}'"
-    )
+    assert re.match(pattern, dsn_value), f"DSN format mismatch: '{dsn_value}' does not match '{pattern}'"
     logger.info("[IMP:9][test][dsn_format] DSN format valid: %s", dsn_value)
 
 
@@ -329,18 +319,13 @@ def test_gen_env_platform_idempotent(caplog, platform_env_yaml: pathlib.Path) ->
         )
         assert result.returncode == 0, f"Script failed: stderr={result.stderr}"
         # Skip timestamp line (different on each run)
-        return [
-            l
-            for l in result.stdout.splitlines()
-            if not l.startswith("# Generated:")
-        ]
+        return [line for line in result.stdout.splitlines() if not line.startswith("# Generated:")]
 
     output1 = run_script()
     output2 = run_script()
 
     assert output1 == output2, (
-        "Idempotency violation: two runs produced different output "
-        "(ignoring # Generated: timestamp)"
+        "Idempotency violation: two runs produced different output (ignoring # Generated: timestamp)"
     )
     logger.info("[IMP:9][test][idempotent] Verified: both runs produce identical output (%d lines)", len(output1))
 
@@ -361,9 +346,7 @@ def test_gen_env_platform_missing_yaml(caplog, tmp_path: pathlib.Path) -> None:
         timeout=30,
     )
 
-    assert result.returncode != 0, (
-        "Expected non-zero exit for missing YAML, got 0"
-    )
+    assert result.returncode != 0, "Expected non-zero exit for missing YAML, got 0"
     assert "not found" in result.stderr.lower() or "not found" in result.stdout.lower(), (
         f"Expected error message about missing file. stdout={result.stdout}, stderr={result.stderr}"
     )
@@ -389,13 +372,10 @@ def test_gen_env_platform_provides_in_profiles(
         timeout=30,
     )
 
-    assert result.returncode != 0, (
-        "Expected non-zero exit for provides⊄profiles, got 0"
-    )
+    assert result.returncode != 0, "Expected non-zero exit for provides⊄profiles, got 0"
     error_text = (result.stderr + " " + result.stdout).lower()
     assert "redis" in error_text, (
-        f"Expected error to mention the offending key 'redis'. "
-        f"stdout={result.stdout}, stderr={result.stderr}"
+        f"Expected error to mention the offending key 'redis'. stdout={result.stdout}, stderr={result.stderr}"
     )
     assert "not in profiles" in error_text or "profiles" in error_text, (
         f"Expected error about profiles. stdout={result.stdout}, stderr={result.stderr}"
