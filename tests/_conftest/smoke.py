@@ -338,7 +338,29 @@ def platform_services(
             )
             failed.append(module_name)
         else:
-            started.append(module_name)
+            # ── Post-up container existence check ─────────────────────────────────
+            # Root cause (from CI diagnostic run): `docker compose up -d --wait`
+            # returns exit code 0 on GHA runner even when containers fail to start
+            # (e.g., when `--wait-timeout` expires or image pull fails silently).
+            # `docker compose ps --all` returns empty despite returncode=0.
+            # Add explicit container count check to distinguish true success from
+            # silent compose failure. If zero containers → treat as failure.
+            _ps_check = _run_docker_smoke(
+                [*compose_base_args, "ps", "--all", "--format", "{{.Name}}"],
+                timeout=15,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
+            _container_count = len([l for l in _ps_check.stdout.strip().splitlines() if l.strip()])
+            if _container_count == 0:
+                _logger.error(
+                    "[IMP:9][conftest][platform_services] '%s' compose up returned 0 but "
+                    "no containers exist (docker compose ps --all = empty). "
+                    "CI runner silent compose failure — treating as failed.",
+                    module_name,
+                )
+                failed.append(module_name)
+            else:
+                started.append(module_name)
 
             # ---- Loki readiness HTTP-poll ------------------------------------
             if module_name == "observability":
