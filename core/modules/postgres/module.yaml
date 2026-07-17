@@ -1,0 +1,40 @@
+# GREP_SUMMARY: postgres module docker shared-db-net pgbouncer liveness pg_isready restart-always severity critical
+# STRUCTURE: ▶ module:postgres → shared-db-net → no-ports → pg_isready → pgbouncer → ┐
+# region MODULE_CONTRACT
+## @purpose  Shared PostgreSQL 16 instance for all platform projects via shared-db-net
+## @scope    Single node; all projects use the same DB instance; connection by name/user/password
+## @invariants
+##   - install_type: docker — managed by compose, NOT systemd
+##   - No ports exposed to host (internal network only)
+##   - restart: always — Docker policy (not manual up/down)
+##   - stop_grace_period: 60s — allows WAL flush and clean shutdown
+##   - Resource limits: memory 1G (синхронизировано с compose)
+##   - Version pinned here, not in docker-compose (AR6 — no per-module VERSION file)
+##   - severity: critical — deploy failure causes exit 2 (fatal), blocking node-update
+## @rationale postgres needs graceful shutdown time for WAL and connection drain;
+##           severity=critical because all platform projects depend on the shared PG instance
+# endregion MODULE_CONTRACT
+
+name: postgres
+install_type: docker
+description: "Shared PostgreSQL 16 with PgBouncer connection pooler"
+
+depends_on: []
+
+severity: critical
+
+spool_dir: /var/lib/platform/postgres-data/
+spool_volume: postgres-data
+
+hooks:
+  on_project_deploy: hooks/on-project-deploy.sh
+
+resources:
+  limits:
+    memory: 1G
+  reservations:
+    memory: 512M
+
+env_requires:
+  - POSTGRES_USER
+  - POSTGRES_PASSWORD

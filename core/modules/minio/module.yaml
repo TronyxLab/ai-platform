@@ -1,0 +1,29 @@
+# GREP_SUMMARY: minio module docker backup-net shared-db-net local-s3 spool-minio
+# STRUCTURE: ▶ module:minio → backup-net + shared-db-net → local S3 (loopback :9000/:9001) → ┐
+# region MODULE_CONTRACT
+## @purpose  MinIO local S3-compatible object storage — backup-cron spool + langfuse events storage
+## @scope    Single-node; local-only (loopback); integrates with backup-net and shared-db-net
+## @invariants
+##   - install_type: docker — managed by compose, NOT systemd
+##   - depends_on: [] — standalone service, no platform dependencies
+##   - Networks: backup-net + shared-db-net (external:true) — consumers already in these networks
+##   - Ports: 127.0.0.1:9000 (S3 API) + 127.0.0.1:9001 (Console) — loopback-only, no internet access
+##   - One-shot init container (minio-createbuckets) creates platform-backups and langfuse-events buckets
+##   - Resource limits: 512M memory, 256M reservation
+## @rationale MinIO serves as local S3 for two consumers: backup-cron and langfuse.
+# endregion MODULE_CONTRACT
+
+name: minio
+install_type: docker
+description: MinIO local S3-compatible object storage for platform backup spool and langfuse events
+depends_on: []
+spool_dir: /var/lib/platform/minio-data
+spool_volume: minio-data
+resources:
+  limits:
+    memory: 512M
+  reservations:
+    memory: 256M
+env_requires:
+  - MINIO_ROOT_USER
+  - MINIO_ROOT_PASSWORD

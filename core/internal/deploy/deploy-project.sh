@@ -1,0 +1,642 @@
+#!/usr/bin/env bash
+# GREP_SUMMARY: deploy-project ci-deploy rollback docker-compose atomic-rollback healthcheck audit prune-images forced-command hook-invocation module-hooks
+# STRUCTURE: parse_ssh_command → load_config → save_previous → pull_image → atomic_up → wait_health(≤60s) → tag_current/rollback → prune_old(N=3) → trigger_deploy_hooks → notify_hook → audit_log
+# region MODULE_CONTRACT
+## @purpose  Whitelisted entry-point for ci-deploy SSH forced-command: atomic deploy with healthcheck-based rollback (04-templates §7)
+## @scope    Executed exclusively via SSH authorized_keys command="..." + restrict; receives <project> <ref> via $SSH_ORIGINAL_COMMAND
+## @location core/internal/deploy/deploy-project.sh — moved from core/scripts/platform-deploy.sh
+## @invariants
+##   - PROJECT and REF parsed from SSH_ORIGINAL_COMMAND; exit 1 if missing or invalid
+##   - previous_image_id saved BEFORE pull; if absent → first deploy (no rollback possible, escalate 🔴)
+##   - atomic docker compose up -d <service>; healthcheck poll ≤60s (start_period + interval * retries)
+##   - healthy: tag :current → notify-hook(🚀 ✅) → audit_log(SUCCESS) → exit 0
+##   - failed/timeout: re-tag previous_image_id → compose up -d --force-recreate → audit_log(ROLLBACK) → notify-hook(🚀 ⚠️) → exit 1
+##   - N=3 images kept; older pruned after successful deploy
+##   - every invocation writes to /var/log/platform/audit.log (00-foundation §13)
+##   - no shell, no interactive input, no arbitrary commands (SSH restrict enforces this)
+##   - GHCR registry auth configured centrally via SOPS/bootstrap on VPS (04 §10); no per-repo --ghcr-token
+## @rationale
+##   ⚠️ TRAP[DECISION] Rollback on-node, not in CI/CD — eliminates network roundtrip, keeps CI/CD thin (04 §7).
+##   Rejected: CI/CD-driven rollback (re-deploy previous image via GitHub Actions).
+##   Reason: instant rollback without CI pipeline wait.
+##   ⚠️ TRAP[DECISION] SSH forced-command instead of shell — command="${PLATFORM_ROOT}/core/internal/deploy/deploy-project.sh ...",restrict; ci-deploy has no shell.
+##   Rejected: full shell access for ci-deploy.
+##   Reason: security — exactly one allowed command, no SSH escalation possible.
+##   ci-deploy in docker group → no sudo for docker commands (principle of least privilege, 06 §4.2).
+# endregion MODULE_CONTRACT
+
+set -euo pipefail
+shopt -s lastpipe
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly CORE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+readonly PROJECTS_BASE="${PROJECTS_BASE:-/opt/projects}"
+readonly MAX_WAIT_SEC="${PLATFORM_DEPLOY_TIMEOUT:-60}"
+readonly KEEP_IMAGES="${PLATFORM_DEPLOY_KEEP_IMAGES:-3}"
+readonly AUDIT_LOG="/var/log/platform/audit.log"
+readonly AUDIT_TAG="platform-audit"
+readonly KEEP_SNAPSHOTS="${KEEP_SNAPSHOTS:-3}"
+
+DEPLOY_STATUS="failed"
+NODE_NAME="${1:-$(hostname)}"
+
+# Source audit helper (canonical lib version)
+source "${SCRIPT_DIR}/../../lib/audit_logging.sh" 2>/dev/null || true
+
+__LOG_PREFIX="platform-deploy"
+source "${SCRIPT_DIR}/../../lib/logging.sh"
+source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
+source "${SCRIPT_DIR}/../../lib/docker.sh"
+# shellcheck source=core/lib/paths.sh
+source "${SCRIPT_DIR}/../../lib/paths.sh"
+# shellcheck source=core/lib/yaml_read.sh
+source "${SCRIPT_DIR}/../../lib/yaml_read.sh"
+
+# ⚠️ TRAP[DECISION] · 2026-07-17 · — · audit_log() replaces audit_write()
+# · Rejected: keeping audit_write() in deploy-project.sh (duplicate)
+# · Reason: audit_log() from lib/audit_logging.sh is the canonical function.
+#   audit_write() was a local duplicate with identical signature (step, status, msg)
+#   but different implementation (no syslog, direct file append, explicit IMP:9 echo).
+#   audit_log() provides: syslog via logger -t platform-audit + file append + structured
+#   IMP:8 fallback. Removing the local duplicate eliminates drift between the two.
+# · Rev: if audit_log() signature changes, all call sites in deploy-project.sh must be updated
+
+# region TRAP_ROLLBACK
+## @purpose  ERR trap handler — initiates rollback on any command failure during deploy
+_rollback_on_error() {
+    local exit_code=$?
+    log_imp 10 "rollback" "CRITICAL: Deploy error detected (exit code $exit_code) at line ${BASH_LINENO[0]}"
+    DEPLOY_STATUS="failed"
+    _restore_from_snapshot
+    exit 1
+}
+# endregion TRAP_ROLLBACK
+
+# region TRAP_FINALIZE
+## @purpose  EXIT trap handler — always fires, cleans up regardless of success/failure
+_finalize_deploy() {
+    if [[ "${DEPLOY_STATUS:-}" == "success" ]]; then
+        _cleanup_snapshots
+    fi
+    _write_deploy_result
+}
+# endregion TRAP_FINALIZE
+
+# region RESTORE_FROM_SNAPSHOT
+## @purpose  Restore previous container state from snapshot
+_restore_from_snapshot() {
+    local snapshot_dir="${PROJECT_DIR}/.deploy-snapshots"
+    local started_file="$snapshot_dir/.deploy-started"
+
+    if [[ ! -f "$started_file" ]]; then
+        log_imp 9 "rollback" "No pre-deploy snapshot found — cannot rollback"
+        return 1
+    fi
+
+    log_imp 9 "rollback" "Restoring previous container state from snapshot..."
+
+    # Find the latest images snapshot
+    local latest_images
+    latest_images=$(ls -t "$snapshot_dir"/images-*.json 2>/dev/null | head -1)
+
+    if [[ -n "$latest_images" ]]; then
+        log_imp 8 "rollback" "Previous images snapshot: $latest_images"
+        # Attempt rollback via existing perform_rollback() or direct compose up
+        # The existing perform_rollback() handles re-tag and up
+        if declare -f perform_rollback >/dev/null 2>&1; then
+            perform_rollback
+        else
+            # Fallback: stop new containers, start from snapshot state
+            log_imp 9 "rollback" "Stopping current containers..."
+            docker compose down --timeout 30 2>/dev/null || log_imp 4 "rollback" "docker compose down failed (non-fatal)"
+            log_imp 9 "rollback" "Starting previous containers..."
+            docker compose up -d --no-recreate 2>/dev/null || log_imp 4 "rollback" "docker compose up failed (non-fatal)"
+        fi
+    else
+        log_imp 9 "rollback" "No images snapshot available — manual intervention required"
+    fi
+}
+# endregion RESTORE_FROM_SNAPSHOT
+
+# region CLEANUP_SNAPSHOTS
+## @purpose  Remove old snapshots, keeping only the last KEEP_SNAPSHOTS=3
+_cleanup_snapshots() {
+    local snapshot_dir="${PROJECT_DIR}/.deploy-snapshots"
+    local keep=${KEEP_SNAPSHOTS:-3}
+    log_imp 7 "snapshot" "Cleaning old snapshots (keeping $keep)"
+    # Remove .deploy-started marker
+    rm -f "$snapshot_dir/.deploy-started"
+    # Keep only the latest N snapshot pairs
+    cd "$snapshot_dir" 2>/dev/null || return 0
+    ls -t ps-*.json 2>/dev/null | tail -n +$((keep + 1)) | xargs rm -f 2>/dev/null || true
+    ls -t images-*.json 2>/dev/null | tail -n +$((keep + 1)) | xargs rm -f 2>/dev/null || true
+    cd - >/dev/null || true
+}
+# endregion CLEANUP_SNAPSHOTS
+
+# region WRITE_DEPLOY_RESULT
+## @purpose  Write deploy-result.json with outcome metadata
+_write_deploy_result() {
+    local status="${DEPLOY_STATUS:-unknown}"
+    local result_file="${PROJECT_DIR}/.deploy-snapshots/deploy-result.json"
+
+    cat > "$result_file" << EOF
+{
+  "status": "${status}",
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "project": "${PROJECT:-unknown}",
+  "ref": "${REF:-unknown}"
+}
+EOF
+    log_imp 9 "deploy" "Deploy result: $status (written to $result_file)"
+}
+# endregion WRITE_DEPLOY_RESULT
+
+trap '_rollback_on_error' ERR
+trap '_finalize_deploy' EXIT
+
+# region NOTIFY_HOOK
+notify_hook() {
+    local message="${1:-}"
+    local hook_script="${PLATFORM_ROOT}/core/internal/notify/notify-hook.sh"
+
+    if [[ -x "$hook_script" ]]; then
+        "$hook_script" "$message" 2>/dev/null || true
+        log_imp 7 "notify" "Hook called: ${message}"
+    else
+        log_imp 6 "notify" "Hook not available (${hook_script} missing); status: ${message}"
+    fi
+}
+# endregion NOTIFY_HOOK
+
+# region PARSE_SSH_COMMAND
+parse_ssh_command() {
+    local raw="${SSH_ORIGINAL_COMMAND:-}"
+
+    if [[ -z "$raw" ]]; then
+        log_imp 10 "args" "FATAL: SSH_ORIGINAL_COMMAND not set — script must be executed via SSH forced command"
+        exit 1
+    fi
+
+    local cleaned
+    cleaned="${raw#platform-deploy }"
+    cleaned="${cleaned#platform-deploy}"
+
+    cleaned="$(echo "$cleaned" | sed '/^export /d' | xargs)"
+
+    PROJECT="${cleaned%% *}"
+    REF="${cleaned#* }"
+
+    if [[ "$PROJECT" == "$REF" ]]; then
+        REF=""
+    fi
+
+    if [[ -z "$PROJECT" || -z "$REF" ]]; then
+        log_imp 10 "args" "FATAL: invalid invocation — expects <project> <ref>, got '${raw}'"
+        exit 1
+    fi
+
+    PROJECT_DIR="${PROJECTS_BASE}/${PROJECT}"
+
+    if [[ ! -d "$PROJECT_DIR" ]]; then
+        log_imp 10 "args" "FATAL: project directory not found: ${PROJECT_DIR}"
+        exit 1
+    fi
+
+    if [[ ! -f "${PROJECT_DIR}/docker-compose.yml" ]] && [[ ! -f "${PROJECT_DIR}/compose.yaml" ]]; then
+        log_imp 10 "args" "FATAL: no docker-compose.yml found in ${PROJECT_DIR}"
+        exit 1
+    fi
+
+    SERVICE_NAME="${PROJECT}"
+    local services_yaml="${PROJECT_DIR}/ai-platform.yaml"
+    if [[ -f "$services_yaml" ]]; then
+        local svc
+        svc="$(grep -m1 '^[[:space:]]*service:' "${services_yaml}" 2>/dev/null | awk '{print $2}' || true)"
+        if [[ -n "$svc" ]]; then
+            SERVICE_NAME="$svc"
+        fi
+    fi
+
+    log_imp 8 "args" "Parsed: PROJECT=${PROJECT} REF=${REF} SERVICE=${SERVICE_NAME} DIR=${PROJECT_DIR}"
+}
+# endregion PARSE_SSH_COMMAND
+
+# region SAVE_PREVIOUS_IMAGE
+save_previous_image() {
+    PREVIOUS_IMAGE_ID=""
+    PREVIOUS_IMAGE_TAG=""
+
+    cd "$PROJECT_DIR" || {
+        log_imp 10 "save-prev" "FATAL: cannot cd to ${PROJECT_DIR}"
+        exit 1
+    }
+
+    PREVIOUS_IMAGE_ID="$(docker compose images -q "$SERVICE_NAME" 2>/dev/null)" || {
+        log_imp 10 "save-prev" "CRITICAL: docker compose images failed for service '${SERVICE_NAME}'"
+        exit 1
+    }
+
+    if [[ -z "$PREVIOUS_IMAGE_ID" ]]; then
+        log_imp 10 "save-prev" "FIRST DEPLOY: no previous image for service '${SERVICE_NAME}' — rollback NOT possible"
+        FIRST_DEPLOY=1
+        return 0
+    fi
+
+    FIRST_DEPLOY=0
+
+    PREVIOUS_IMAGE_TAG="$(docker image inspect "$PREVIOUS_IMAGE_ID" \
+        --format '{{index .RepoTags 0}}' 2>/dev/null)" || true
+
+    if [[ -z "$PREVIOUS_IMAGE_TAG" || "$PREVIOUS_IMAGE_TAG" == "<none>:<none>" ]]; then
+        PREVIOUS_IMAGE_TAG="${PROJECT}:previous-rollback"
+        docker tag "$PREVIOUS_IMAGE_ID" "$PREVIOUS_IMAGE_TAG" 2>/dev/null || true
+        log_imp 8 "save-prev" "Created fallback tag for dangling image: ${PREVIOUS_IMAGE_TAG}"
+    fi
+
+    log_imp 9 "save-prev" "Previous image saved: ID=${PREVIOUS_IMAGE_ID} TAG=${PREVIOUS_IMAGE_TAG}"
+}
+# endregion SAVE_PREVIOUS_IMAGE
+
+# region PULL_IMAGE_WITH_RETRY
+pull_image_with_retry() {
+    log_imp 8 "pull" "Pulling image for service '${SERVICE_NAME}' with IMAGE_TAG=${REF}"
+
+    cd "$PROJECT_DIR" || exit 1
+
+    export IMAGE_TAG="$REF"
+
+    local max_attempts=3
+    local delays=(5 10 20)
+    local attempt=1
+
+    while [[ $attempt -le $max_attempts ]]; do
+        local pull_output
+        pull_output="$(docker compose pull "$SERVICE_NAME" 2>&1)" || {
+            local exit_code=$?
+
+            if echo "$pull_output" | grep -qi "toomanyrequests\|429\|rate limit"; then
+                log_imp 9 "pull" "Rate limit hit on attempt ${attempt} — waiting ${delays[$((attempt-1))]}s before retry"
+            else
+                log_imp 9 "pull" "Pull failed on attempt ${attempt} (exit=${exit_code}) — waiting ${delays[$((attempt-1))]}s before retry"
+            fi
+            log_imp 7 "pull" "Output: ${pull_output}"
+
+            if [[ $attempt -lt $max_attempts ]]; then
+                sleep "${delays[$((attempt-1))]}"
+                attempt=$((attempt + 1))
+                continue
+            fi
+
+            log_imp 10 "pull" "FATAL: docker compose pull failed after ${max_attempts} attempts for ${SERVICE_NAME}:${REF}"
+            audit_log "platform-deploy:${PROJECT}" "FAIL" "Pull failed after ${max_attempts} attempts: ${SERVICE_NAME}:${REF}"
+            notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+- Pull error: ${PROJECT}/${SERVICE_NAME}:${REF} — failed after ${max_attempts} attempts"
+            exit 1
+        }
+
+        log_imp 8 "pull" "Pull complete: ${SERVICE_NAME}:${REF}"
+        return 0
+    done
+}
+# endregion PULL_IMAGE_WITH_RETRY
+
+# region ATOMIC_UP
+atomic_up() {
+    log_imp 9 "up" "Atomic deploy: docker compose up -d ${SERVICE_NAME} (IMAGE_TAG=${REF})"
+
+    cd "$PROJECT_DIR" || exit 1
+
+    export IMAGE_TAG="$REF"
+
+    local up_output
+    up_output="$(docker compose up -d "$SERVICE_NAME" 2>&1)"
+    local up_rc=$?
+    echo "$up_output" | while IFS= read -r line; do
+        log_imp 7 "up" "${line}"
+    done
+
+    if [[ "$up_rc" -ne 0 ]]; then
+        log_imp 10 "up" "FATAL: docker compose up -d failed (exit code=${up_rc})"
+        return 1
+    fi
+
+    log_imp 8 "up" "Container started for ${SERVICE_NAME}"
+}
+# endregion ATOMIC_UP
+
+# region CHECK_DEPLOY_HEALTH
+_check_deploy_health() {
+    local cid
+    cid="$(docker compose ps -q "$SERVICE_NAME" 2>/dev/null || true)"
+    [[ -z "$cid" ]] && return 1
+    check_docker_health "$cid" && return 0
+    local hc_rc=$?
+    if [[ $hc_rc -eq 2 ]]; then
+        local status
+        status="$(docker inspect --format='{{.State.Status}}' "$cid" 2>/dev/null || echo "unknown")"
+        [[ "$status" == "running" ]] && return 0
+    fi
+    return 1
+}
+# endregion CHECK_DEPLOY_HEALTH
+
+# region TAG_CURRENT
+tag_current() {
+    local new_image_id
+    new_image_id="$(docker compose images -q "$SERVICE_NAME" 2>/dev/null)" || {
+        log_imp 8 "tag" "WARNING: docker compose images failed — skipping :current tag"
+        return 0
+    }
+
+    if [[ -z "$new_image_id" ]]; then
+        log_imp 9 "tag" "Cannot determine new image ID — skipping :current tag"
+        return 0
+    fi
+
+    docker tag "$new_image_id" "${SERVICE_NAME}:current" 2>/dev/null || {
+        log_imp 8 "tag" "Failed to tag ${new_image_id} as ${SERVICE_NAME}:current (may already exist)"
+        return 0
+    }
+
+    log_imp 9 "tag" "Tagged ${new_image_id} → ${SERVICE_NAME}:current"
+}
+# endregion TAG_CURRENT
+
+# region PERFORM_ROLLBACK
+perform_rollback() {
+    log_imp 10 "rollback" "ROLLING BACK ${SERVICE_NAME} to previous image ${PREVIOUS_IMAGE_ID}"
+
+    cd "$PROJECT_DIR" || exit 1
+
+    if [[ -n "$PREVIOUS_IMAGE_TAG" ]]; then
+        docker tag "$PREVIOUS_IMAGE_ID" "$PREVIOUS_IMAGE_TAG" 2>/dev/null || {
+            log_imp 10 "rollback" "CRITICAL: failed to re-tag previous image ${PREVIOUS_IMAGE_ID} → ${PREVIOUS_IMAGE_TAG}"
+        }
+        log_imp 9 "rollback" "Re-tagged ${PREVIOUS_IMAGE_ID} → ${PREVIOUS_IMAGE_TAG}"
+    fi
+
+    local rollback_output
+    rollback_output="$(docker compose up -d --force-recreate "$SERVICE_NAME" 2>&1)"
+    local rollback_rc=$?
+    echo "$rollback_output" | while IFS= read -r line; do
+        log_imp 7 "rollback" "${line}"
+    done
+
+    if [[ "$rollback_rc" -ne 0 ]]; then
+        log_imp 10 "rollback" "CRITICAL: rollback compose up failed (exit code=${rollback_rc})"
+        audit_log "platform-deploy:${PROJECT}" "ROLLBACK-FAIL" \
+            "Rollback compose up FAILED for ${SERVICE_NAME} (previous=${PREVIOUS_IMAGE_ID}, exit=${rollback_rc})"
+        notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+- ROLLBACK FAILED: ${PROJECT}/${SERVICE_NAME} → manual intervention required!"
+        exit 1
+    fi
+
+    log_imp 10 "rollback" "Rollback complete: ${SERVICE_NAME} restored to ${PREVIOUS_IMAGE_ID}"
+
+    audit_log "platform-deploy:${PROJECT}" "ROLLBACK" \
+        "Deploy FAILED — rolled back ${SERVICE_NAME} from ${REF} to ${PREVIOUS_IMAGE_ID}"
+
+    local tail_logs
+    tail_logs="$(docker compose logs --tail 20 "$SERVICE_NAME" 2>/dev/null || echo "(logs unavailable)")"
+    notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+- Deploy FAILED & ROLLED BACK: ${PROJECT}/${SERVICE_NAME} ${REF} → restored ${PREVIOUS_IMAGE_TAG:-previous}
+- Logs (tail 20):
+- ${tail_logs}"
+
+    return 1
+}
+# endregion PERFORM_ROLLBACK
+
+# region PRUNE_OLD_IMAGES
+prune_old_images() {
+    log_imp 8 "prune" "Pruning old images for service '${SERVICE_NAME}' (keep ${KEEP_IMAGES})"
+
+    local config_output image_pattern
+    config_output="$(docker compose config 2>/dev/null)" || {
+        log_imp 8 "prune" "WARNING: docker compose config failed — using project name as fallback"
+        image_pattern="${PROJECT}"
+    }
+
+    if [[ -z "${image_pattern:-}" ]]; then
+        image_pattern="$(echo "$config_output" \
+            | grep -A1 "^  ${SERVICE_NAME}:" \
+            | grep "image:" \
+            | awk '{print $2}' \
+            | sed 's/:.*//')"
+    fi
+
+    if [[ -z "$image_pattern" ]]; then
+        image_pattern="${PROJECT}"
+        log_imp 7 "prune" "Cannot determine image pattern from compose config; using '${image_pattern}'"
+    fi
+
+    local images
+    images="$(docker images --format '{{.ID}} {{.Repository}} {{.CreatedAt}}' \
+        | grep -i "$image_pattern" \
+        | sort -k3 -r 2>/dev/null || true)"
+
+    if [[ -z "$images" ]]; then
+        log_imp 7 "prune" "No images found matching pattern '${image_pattern}'"
+        return 0
+    fi
+
+    local count
+    count="$(echo "$images" | grep -c . || echo 0)"
+
+    if [[ "$count" -le "$KEEP_IMAGES" ]]; then
+        log_imp 7 "prune" "Image count (${count}) ≤ keep limit (${KEEP_IMAGES}) — nothing to prune"
+        return 0
+    fi
+
+    local to_remove
+    to_remove="$(echo "$images" | tail -n +$((KEEP_IMAGES + 1)) | awk '{print $1}')"
+
+    if [[ -z "$to_remove" ]]; then
+        return 0
+    fi
+
+    log_imp 8 "prune" "Removing $(echo "$to_remove" | wc -l | xargs) old images..."
+
+    local removed=0
+    local failed=0
+    for img_id in $to_remove; do
+        if docker rmi "$img_id" 2>/dev/null; then
+            removed=$((removed + 1))
+        else
+            failed=$((failed + 1))
+            log_imp 7 "prune" "Could not remove image ${img_id} (may be referenced by another tag)"
+        fi
+    done
+
+    log_imp 8 "prune" "Prune complete: removed=${removed} failed=${failed} kept=${KEEP_IMAGES}"
+}
+# endregion PRUNE_OLD_IMAGES
+
+# region HANDLE_FIRST_DEPLOY
+handle_first_deploy() {
+    log_imp 10 "first-deploy" "CRITICAL: FIRST DEPLOY FAILED for ${SERVICE_NAME} — no previous image to rollback"
+
+    audit_log "platform-deploy:${PROJECT}" "FIRST-DEPLOY-FAIL" \
+        "First deploy FAILED for ${SERVICE_NAME}:${REF} — NO ROLLBACK POSSIBLE (no previous image)"
+
+    local tail_logs
+    tail_logs="$(docker compose logs --tail 30 "$SERVICE_NAME" 2>/dev/null || echo "(logs unavailable)")"
+    notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+- FIRST DEPLOY FAILED: ${PROJECT}/${SERVICE_NAME}:${REF} — manual intervention required
+- No previous image exists for rollback. Container left in failed state.
+- Logs (tail 30):
+- ${tail_logs}"
+
+    exit 1
+}
+# endregion HANDLE_FIRST_DEPLOY
+
+# region HOOK_INVOCATION
+## @purpose  Invoke module hooks after successful deploy — iterate module.yaml hooks.on_project_deploy
+_trigger_deploy_hooks() {
+    local module_yaml
+    for module_yaml in "${CORE_DIR}"/modules/*/module.yaml; do
+        [[ -f "$module_yaml" ]] || continue
+        local hook
+        hook=$(yaml_get_field "$module_yaml" "hooks.on_project_deploy" 2>/dev/null) || continue
+        [[ -z "$hook" ]] && continue
+        local hook_script
+        hook_script="$(dirname "$module_yaml")/$hook"
+        if [[ -x "$hook_script" ]]; then
+            local module_name
+            module_name="$(basename "$(dirname "$module_yaml")")"
+            if bash "$hook_script" "$PROJECT_DIR" "$PROJECT" "$NODE_NAME"; then
+                audit_log "hook:${module_name}" "SUCCESS" "Hook completed for ${module_name}"
+            else
+                audit_log "hook:${module_name}" "HOOK-FAIL" "Hook failed (non-fatal) for ${module_name}"
+            fi
+        fi
+    done
+}
+# endregion HOOK_INVOCATION
+
+# region FUNC_capture_deploy_snapshot
+## @purpose  Capture pre-deploy state snapshot for guaranteed rollback
+## @io       Creates .deploy-snapshots/ in PROJECT_DIR with:
+##           - ps-<timestamp>.json (docker compose ps output)
+##           - images-<timestamp>.json (docker compose images output)
+##           - .deploy-started (timestamp marker)
+## @complexity O(1) — two docker compose calls
+capture_deploy_snapshot() {
+    local snapshot_dir="${PROJECT_DIR}/.deploy-snapshots"
+    mkdir -p "$snapshot_dir"
+    local ts
+    ts=$(date +%s)
+
+    log_imp 8 "snapshot" "Capturing pre-deploy snapshot to ${snapshot_dir}"
+
+    if docker compose ps --format json > "$snapshot_dir/ps-${ts}.json" 2>/dev/null; then
+        log_imp 8 "snapshot" "Container state snapshot saved"
+    else
+        log_imp 9 "snapshot" "WARNING: could not capture ps snapshot (containers may not be running)"
+    fi
+
+    if docker compose images --format json > "$snapshot_dir/images-${ts}.json" 2>/dev/null; then
+        log_imp 8 "snapshot" "Image state snapshot saved"
+    else
+        log_imp 9 "snapshot" "WARNING: could not capture images snapshot"
+    fi
+
+    echo "$ts" > "$snapshot_dir/.deploy-started"
+    log_imp 8 "snapshot" "Pre-deploy snapshot complete (ts=$ts)"
+}
+# endregion FUNC_capture_deploy_snapshot
+
+# region MAIN
+main() {
+    log_imp 9 "main" "=== platform-deploy START ==="
+
+    parse_ssh_command
+
+    local safe_invocation
+    safe_invocation="$(echo "${SSH_ORIGINAL_COMMAND:-}" | sed 's/export [A-Z_]\{1,\}=/export ***=/g')"
+    log_imp 9 "main" "Invocation: SSH_ORIGINAL_COMMAND='${safe_invocation}'"
+
+    audit_log "platform-deploy:${PROJECT}" "START" "Deploy ${PROJECT}/${SERVICE_NAME} → ${REF}"
+
+    save_previous_image
+    capture_deploy_snapshot
+
+    local validate_script="${SCRIPT_DIR}/../../internal/validate/validate.sh"
+    if [[ -x "$validate_script" ]]; then
+        log_imp 8 "fqdn" "Checking FQDN uniqueness for ${PROJECT}..."
+        local fqdn_output fqdn_rc=0
+        fqdn_output="$("$validate_script" --check-fqdn "$PROJECT_DIR" 2>&1)" || fqdn_rc=$?
+        while IFS= read -r line; do
+            log_imp 7 "fqdn" "${line}"
+        done <<< "$fqdn_output"
+        if [[ "$fqdn_rc" -ne 0 ]]; then
+            log_imp 10 "fqdn" "FATAL: FQDN conflict detected — deploy blocked (E1)"
+            audit_log "platform-deploy:${PROJECT}" "FAIL" "FQDN conflict blocked deploy for ${SERVICE_NAME}:${REF}"
+            notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+- FQDN conflict blocked deploy: ${PROJECT}/${SERVICE_NAME}:${REF}"
+            exit 1
+        fi
+    else
+        log_imp 6 "fqdn" "validate.sh not found at ${validate_script} — skipping FQDN check"
+    fi
+
+    docker_login
+    pull_image_with_retry
+
+    local host_port
+    host_port="$(yaml_get_field "${PROJECT_DIR}/ai-platform.yaml" "monitoring.host_port" 2>/dev/null || echo "0")"
+    if [[ "$host_port" -gt 0 ]]; then
+        log_imp 8 "ports" "Checking port ${host_port} for ${PROJECT}..."
+        if ss -tlnp 2>/dev/null | grep -q ":${host_port} "; then
+            log_imp 10 "ports" "FATAL: Port ${host_port} already in use — deploy blocked"
+            audit_log "platform-deploy:${PROJECT}" "FAIL" "Port ${host_port} conflict — deploy blocked"
+            notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+- Port conflict: ${PROJECT}/${SERVICE_NAME} — port ${host_port} already in use"
+            exit 1
+        fi
+        log_imp 8 "ports" "Port ${host_port} available"
+    fi
+
+    if ! atomic_up; then
+        log_imp 10 "main" "atomic_up returned non-zero"
+        if [[ "${FIRST_DEPLOY:-0}" -eq 1 ]]; then
+            handle_first_deploy
+        else
+            perform_rollback
+        fi
+        exit 1
+    fi
+
+    if poll_until_healthy "${SERVICE_NAME}" "_check_deploy_health" "$MAX_WAIT_SEC" 2; then
+        log_imp 9 "main" "Deploy SUCCESS: ${SERVICE_NAME} → ${REF}"
+
+        tag_current
+        prune_old_images
+        _trigger_deploy_hooks
+
+        audit_log "platform-deploy:${PROJECT}" "DONE" \
+            "Deploy success: ${SERVICE_NAME} → ${REF} (prev=${PREVIOUS_IMAGE_ID:-none})"
+        notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён ✅
+${PROJECT}/${SERVICE_NAME} → ${REF}"
+
+        log_imp 9 "main" "=== platform-deploy DONE (success) ==="
+        DEPLOY_STATUS="success"
+        exit 0
+    else
+        log_imp 10 "main" "Healthcheck FAILED for ${SERVICE_NAME}:${REF}"
+
+        if [[ "${FIRST_DEPLOY:-0}" -eq 1 ]]; then
+            handle_first_deploy
+        fi
+
+        perform_rollback
+        exit 1
+    fi
+}
+# endregion MAIN
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

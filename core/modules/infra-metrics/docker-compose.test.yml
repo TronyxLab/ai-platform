@@ -1,0 +1,42 @@
+# GREP_SUMMARY: infra-metrics docker-compose test override container_name-test cadvisor node-exporter nginx-exporter redis-exporter
+# STRUCTURE: base.yml + test.yml → all infra-metrics containers with -test suffix
+# region MODULE_CONTRACT
+## @purpose  Test override for infra-metrics — -test container_name for all 4 containers
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: cadvisor-test, node-exporter-test, nginx-prometheus-exporter-test, redis-exporter-test
+##   - restart: "no" для всех контейнеров
+##   - Port mappings: смещённые (1XXXX:YYYY)
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+## @changes — 2026-07-16 | 18080→18081 cadvisor-test: collided with nginx-test port (F-8)
+## @changes — 2026-07-15 | Added redis-exporter-test (wave-redis)
+# endregion MODULE_CONTRACT
+
+services:
+  cadvisor:
+    container_name: cadvisor-test
+    # ⚠️ TRAP[BUG] · 2026-07-16 · HI · cadvisor-test port 18080 collided with nginx-test
+    # · Symptom: smoke test infra-metrics compose failed — Bind for 127.0.0.1:18080 already allocated
+    # · Root: nginx-test (18080:80) and cadvisor-test (18080:8080) used same host port 18080.
+    #   Tests run in parallel/same session — nginx-test occupies 18080 first.
+    # · Fix: cadvisor-test shifted to 18081 (free port, verified no collisions).
+    # · Prevention: coordinate test-overlay port assignments across modules.
+    ports:
+      - "127.0.0.1:18081:8080"
+    restart: "no"
+
+  node-exporter:
+    container_name: node-exporter-test
+    ports:
+      - "127.0.0.1:19100:9100"
+    restart: "no"
+
+  nginx-prometheus-exporter:
+    container_name: nginx-prometheus-exporter-test
+    ports:
+      - "127.0.0.1:19113:9113"
+    restart: "no"
+
+  redis-exporter:
+    container_name: redis-exporter-test
+    restart: "no"

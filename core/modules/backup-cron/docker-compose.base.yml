@@ -1,0 +1,123 @@
+# GREP_SUMMARY: backup-cron docker-compose backup-net spool-volume restart-always stop-grace-period no-resource-limits
+# STRUCTURE: ▶ docker-compose.base → ┌ backup-cron ┐ → backup-net + shared-db-net → liveness + readiness → ┘
+# @purpose  Base compose definition for backup-cron Docker module
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for backup-cron Docker module
+## @scope    Phase 02: cron schedule + spool volume; S3 logic stub until phase 06
+## @invariants
+##   - NO ports: — backup-net internal only (on-demand)
+##   - restart: always — cron daemon must survive container crash
+##   - stop_grace_period: 120s — finish current backup or abort+cleanup (06 §13)
+##   - Spool volume: /var/lib/platform/backup-spool/ (03 §4)
+##   - Resource limits: memory 128M (limits protect host from OOM; backup partial-state risk accepted)
+##   - backup-net declared as external: true — pre-created by deploy-modules.sh (TASK-02-03)
+##   - Also connected to shared-db-net for pg_dump access (external: true)
+## @rationale on-demand network model: backup-cron connects to shared-db-net only during backup run
+## ⚠️ TRAP[DECISION] · 2026-07-01 · — · stop_grace_period 120s, parallel cron collision acceptable
+## ·   — Memory limit: 128M (limits protect host from OOM). AR3 cancelled (owner verdict Q2a).
+## ·     Previous AR3 logic: "no limits = no OOM mid-backup" — but 128M limit keeps
+## ·   Rev: if OOM or disk contention observed, add queue or space backups 1h apart
+## ·     backup from exhausting host memory while accepting partial-state risk.
+## ·   — stop_grace_period: 120s — finish current backup or abort+cleanup (06 §13).
+## ·   — Parallel cron collision: v1 design explicitly allows overlapping runs.
+## ·     If 03:00 backup takes >30min, 03:30 starts concurrently. Both write to
+## ·     separate spool subdirs (postgres/ vs app-data/). Risk: CPU/disk contention
+## ·     on low-spec VPS. Accepted for v1 — monitor via cadvisor.
+## ·   Rejected: serial backup queue (systemd timer after completion) — adds complexity
+## ·   Rejected: resource limits (AR3 override) — backup is non-critical best-effort
+## ·   Rev: if OOM or disk contention observed, add queue or space backups 1h apart
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  backup-cron:
+    # [IMP:8][backup-cron-compose] Build from local Dockerfile or use pre-built image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: backup-cron:latest
+    container_name: backup-cron
+    profiles: [backup-cron]
+    restart: always
+    stop_grace_period: 120s
+
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging: *default-logging
+
+    # [IMP:9][backup-cron-compose] NO ports: — backup-net isolation enforced
+    # ports: deliberately absent
+
+    environment:
+      POSTGRES_HOST: "pgbouncer"
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "${POSTGRES_DB:-platform}"
+      BACKUP_SPOOL_DIR: "/var/lib/platform/backup-spool"
+      # S3 config — Timeweb S3 (AR8: only provider, no fallback)
+      # upload.py (boto3) uses S3_ACCESS_KEY / S3_SECRET_KEY / S3_ENDPOINT_URL
+      # upload-s3.sh falls back to AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / S3_ENDPOINT
+      S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-${S3_ENDPOINT:-https://s3.timeweb.cloud}}"
+      S3_ENDPOINT: "${S3_ENDPOINT:-${S3_ENDPOINT_URL:-https://s3.timeweb.cloud}}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-${AWS_ACCESS_KEY_ID}}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-${S3_ACCESS_KEY}}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-${AWS_SECRET_ACCESS_KEY}}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-${S3_SECRET_KEY}}"
+      S3_BUCKET: "${S3_BUCKET}"
+      S3_REGION: "${S3_REGION:-ru-1}"
+      S3_PREFIX: "${S3_PREFIX:-platform/backups}"
+      PLATFORM_CONTEXT: "${PLATFORM_CONTEXT:-personal}"
+      NODE_NAME: "${NODE_NAME:-unknown}"
+
+    volumes:
+      # [IMP:8][backup-cron-compose] Spool volume: local staging before S3 upload (03 §4)
+      - backup-spool:/var/lib/platform/backup-spool
+      - backup-logs:/var/log/platform/backup
+
+    networks:
+      backup-net:
+        aliases:
+          - backup-cron
+      shared-db-net: {}
+
+    tmpfs:
+      - /tmp:size=32M,noexec,nosuid
+      - /run:size=16M,noexec,nosuid
+
+    # LIVENESS healthcheck — pgrep confirms cron daemon is running
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep cron > /dev/null 2>&1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # [IMP:8][backup-cron-compose] Resource limits: 128M — limits protect host from OOM (AR3 cancelled)
+
+volumes:
+  backup-spool:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/backup-spool
+
+  backup-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/platform/backup
+
+networks:
+  backup-net:
+    external: true
+  shared-db-net:
+    external: true

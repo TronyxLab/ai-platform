@@ -1,0 +1,22 @@
+# GREP_SUMMARY: config.yaml hermes approvals manual
+# STRUCTURE: ▶ approvals:manual → dashboard:basic-auth → telegram:enabled → llm:deepseek → ┘
+# region MODULE_CONTRACT
+## @purpose     Hermes Agent main configuration
+## @scope       approvals, dashboard, telegram, llm providers
+## @invariants  approvals.mode MUST NOT be "off" (enforced by test_hermes_best_practices.py)
+## @changes     CREATED: 2026-07-03 | To fix skipped best-practices test (no config.yaml existed)
+# endregion MODULE_CONTRACT
+
+approvals:
+  mode: manual  # REQUIRED: not "off" — test_approvals_mode_not_off validates this
+
+dashboard:
+  basic_auth: true
+  insecure: false
+
+telegram:
+  enabled: true
+
+llm:
+  provider: deepseek
+  model: deepseek-chat

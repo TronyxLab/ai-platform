@@ -1,0 +1,32 @@
+# GREP_SUMMARY: platform-agent-watchdog systemd oneshot unit hermes-agent self-update monitor readiness rollback external-controller
+# STRUCTURE: ▶ timer triggers → ▶ ExecStart script → ▶ poll /ready → ⊕ success | ◇ rollback → ⎋ exit
+#
+# region MODULE_CONTRACT [DOMAIN(DevOps): Agent self-update watchdog; CONCEPT(Watchdog): external controller for agent; TECH(Systemd): oneshot unit]
+## @purpose  Systemd oneshot unit that executes platform-agent-watchdog.sh to monitor agent self-update readiness.
+## @scope    Phase 04: external watchdog for hermes-agent self-update; triggered by platform-agent-watchdog.timer.
+## @invariants
+##   - Type: oneshot — runs once per activation, exits after completion
+##   - RemainAfterExit: no — unit is inactive between timer ticks
+##   - After: docker.service — ensures Docker daemon is running before script executes
+##   - WantedBy: multi-user.target — starts at normal system boot
+##   - Watchdog is external to agent process — survives agent crash/restart (07 §6)
+##   - sudo privileges only for docker compose commands on hermes-agent module (sudo-whitelist.conf)
+## @rationale
+##   Q: Why oneshot, not simple/forking?
+##   A: Watchdog runs a single check-and-decide cycle per timer tick; no persistent daemon needed.
+##   Q: Why external systemd watchdog, not internal agent self-check?
+##   A: If agent fails to start during self-update, no agent process exists to roll back — external controller required (05 §5, 07 §6).
+## @links_to_spec  plans/BRIEF/05-service-update.md §5 (steps 1-7)
+# endregion MODULE_CONTRACT
+
+[Unit]
+Description=Platform Agent Watchdog — hermes-agent self-update monitor
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/platform-agent-watchdog.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

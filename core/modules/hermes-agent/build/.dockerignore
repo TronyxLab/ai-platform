@@ -1,0 +1,10 @@
+# ⚠️ DO NOT exclude *.md globally — skills/**/*.md and templates/**/*.md are needed in the image!
+# Exclude only doc files in the build context root
+/README.md
+*.py
+.git/
+.DS_Store
+.env
+.gitignore
+__pycache__/
+*.pyc

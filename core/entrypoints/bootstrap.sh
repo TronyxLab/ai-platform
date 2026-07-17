@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# GREP_SUMMARY: entrypoint bootstrap node orchestrator node-resolver resolve ssh scp age-key detect-age-key dry-run
+# STRUCTURE: ▶ init → ◇ --help? → ◇ --resolve? → ○ resolve_node_yaml → ○ extract owner_key → ○ extract host → ◇ host? → ⚡ SCP core+node-configs → ⚡ SSH orchestrator | ⎋ exec orchestrator --resume
+# region MODULE_CONTRACT
+## @purpose  Entry-point for `make bootstrap-node`: resolves node.yaml → detects SSH host → SCPs
+##           core + node-configs → SSH-executes orchestrator (or locally if no host).
+##           Thin-wrapper: delegates SCP/SSH to internal/ libraries.
+## @scope    Called ONLY from Makefile. Owns: usage, detect_age_key, auto_detect_node_name, main.
+##           Delegates scp_to_server + prepare_ssh_opts → scp-deliver.sh, build_ssh_cmd → remote-cmd.sh.
+## @invariants
+##   - 4 functions max: usage, detect_age_key, auto_detect_node_name, main
+##   - NODE=<name> is OPTIONAL in --resolve mode (auto-detection from /opt/node-configs/)
+##   - AGE_SECRET_KEY detection chain: env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE
+##   - Missing AGE key = WARN (not fatal)
+##   - --dry-run prints SCP + SSH commands without executing
+##   - --resume always passed to node-lifecycle.sh --mode init for idempotency
+##   - Without --resolve: passes all args through to node-lifecycle.sh --mode init (manual mode)
+## @rationale Thin-wrapper per DevPlan 020 T4+T15. Auto-SSH + SCP eliminates manual rsync + SSH steps.
+## @changes 2026-07-17 | T15 — Layer re-homing: scp_to_server+prepare_ssh_opts→scp-deliver.sh, build_ssh_cmd→remote-cmd.sh
+##           2026-07-17 | Lifecycle refactoring: ORCHESTRATOR→NODE_LIFECYCLE, --mode init passthrough
+# endregion MODULE_CONTRACT
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+source "${CORE_DIR}/lib/paths.sh"
+source "${CORE_DIR}/internal/bootstrap/scp-deliver.sh"
+source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"
+NODE_LIFECYCLE="${PATHS_INTERNAL_DIR}/bootstrap/node-lifecycle.sh"
+
+## @purpose  Print usage and exit 0
+usage() { cat <<'EOF'
+Usage: bootstrap.sh --node <name> --resolve [--dry-run] [--force]
+Entry-point for idempotent node bootstrap. Resolves node.yaml, detects SSH
+host, SCPs core+node-configs to remote, delegates to node-lifecycle.sh --mode init remotely
+or locally. Modes: --resolve (extract owner_key+host), --dry-run (print only),
+--help. Without --resolve: pass args to node-lifecycle.sh --mode init.
+Examples: make bootstrap-node NODE=tronyx-vps  |  bootstrap.sh --resolve
+EOF
+exit 0; }
+
+## @purpose  Detect AGE_SECRET_KEY from env chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE
+detect_age_key() {
+    if [[ -n "${AGE_SECRET_KEY:-}" ]]; then
+        local m; m="$(echo "${AGE_SECRET_KEY}" | cut -c1-8)"
+        echo "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY found in environment (${m}...)" >&2
+        echo "${AGE_SECRET_KEY}"; return 0
+    fi
+    if [[ -n "${SOPS_AGE_KEY:-}" ]]; then
+        local m; m="$(echo "${SOPS_AGE_KEY}" | cut -c1-8)"
+        echo "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY set from SOPS_AGE_KEY (${m}...)" >&2
+        echo "${SOPS_AGE_KEY}"; return 0
+    fi
+    if [[ -n "${AGE_SECRET_KEY_FILE:-}" ]] && [[ -f "${AGE_SECRET_KEY_FILE}" ]]; then
+        local key; key="$(head -1 "${AGE_SECRET_KEY_FILE}")"
+        if [[ -n "${key}" ]]; then
+            local m; m="$(echo "${key}" | cut -c1-8)"
+            echo "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY read from file ${AGE_SECRET_KEY_FILE} (${m}...)" >&2
+            echo "${key}"; return 0
+        fi
+        echo "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY_FILE=${AGE_SECRET_KEY_FILE} is empty" >&2
+    fi
+    echo "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy" >&2
+    return 1
+}
+## @purpose  Auto-detect node name from /opt/node-configs/ directories
+auto_detect_node_name() {
+    local d="/opt/node-configs"
+    [[ -d "$d" ]] || { echo "[IMP:8][bootstrap][auto-detect] ${d} does not exist" >&2; return 1; }
+    local candidates=() dir
+    for dir in "$d"/*/; do
+        [[ -d "$dir" ]] || continue
+        local b; b="$(basename "$dir")"
+        [[ "$b" == "scripts" || "$b" == "secrets" ]] && continue
+        candidates+=("$b")
+    done
+    [[ ${#candidates[@]} -eq 0 ]] && { echo "[IMP:10][bootstrap][auto-detect] No node directories found" >&2; return 1; }
+    [[ ${#candidates[@]} -gt 1 ]] && { echo "[IMP:10][bootstrap][auto-detect] Multiple directories: ${candidates[*]}" >&2; return 1; }
+    echo "${candidates[0]}"
+    echo "[IMP:9][bootstrap][auto-detect] Auto-detected node: ${candidates[0]}" >&2
+    return 0
+}
+NODE_NAME=""; RESOLVE_MODE=false; DRY_RUN=false; PASSTHROUGH_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --node|--node-name) NODE_NAME="$2"; shift 2 ;;
+        --help|-h) usage ;;
+        --resolve) RESOLVE_MODE=true; shift ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        *) PASSTHROUGH_ARGS+=("$1"); shift ;;
+    esac
+done
+
+## @purpose  Execute bootstrap workflow — resolve mode or passthrough
+main() {
+    if ! $RESOLVE_MODE; then exec "${NODE_LIFECYCLE}" "--mode" "init" "$@"; fi
+
+    # ── Validate/resolve node name ──────────────────────────────────
+    if [[ -z "$NODE_NAME" ]]; then
+        echo "[IMP:8][bootstrap][entrypoint] Auto-detecting node name"
+        NODE_NAME=$(auto_detect_node_name) || {
+            echo "[IMP:10][bootstrap][entrypoint] FATAL: Cannot detect node — use make bootstrap-node NODE=<name>" >&2; exit 1
+        }
+        echo "[IMP:9][bootstrap][entrypoint] Auto-detected NODE_NAME=${NODE_NAME}"
+    fi
+
+    source "${CORE_DIR}/lib/node-resolver.sh"
+    echo "[IMP:8][bootstrap][entrypoint] Resolving node.yaml for node=${NODE_NAME}"
+    NODE_YAML=$(resolve_node_yaml "$NODE_NAME" "${PLATFORM_ROOT}" "${HOME}/projects") || {
+        echo "[IMP:10][bootstrap][entrypoint] FATAL: Cannot resolve node.yaml" >&2; exit 1
+    }
+
+    echo "[IMP:8][bootstrap][entrypoint] Extracting owner_key"
+    OWNER_KEY=$(python3 -c "import yaml; f=open('${NODE_YAML}'); d=yaml.safe_load(f); print(d.get('node',{}).get('owner_key',''))" 2>/dev/null) || true
+    [[ -n "$OWNER_KEY" ]] || { echo "[IMP:10][bootstrap][entrypoint] FATAL: owner_key not found" >&2; exit 1; }
+    echo "[IMP:9][bootstrap][entrypoint] Resolved: node=${NODE_NAME}"
+
+    SSH_HOST="$(extract_node_host "${NODE_YAML}")" || { echo "[IMP:8][bootstrap][entrypoint] WARN: No SSH host — local mode" >&2; SSH_HOST=""; }
+    DETECTED_AGE_KEY="$(detect_age_key)" || DETECTED_AGE_KEY=""
+
+    # ── Local bootstrap ─────────────────────────────────────────────
+    if [[ -z "${SSH_HOST}" ]]; then
+        echo "[IMP:9][bootstrap][entrypoint] No SSH host — executing node-lifecycle.sh --mode init LOCALLY"
+        local a=(--node-name "$NODE_NAME" --node-yaml "$NODE_YAML" --owner-key "$OWNER_KEY" --resume)
+        [[ -n "${DETECTED_AGE_KEY}" ]] && a+=(--age-secret-key "${DETECTED_AGE_KEY}")
+        a+=("${PASSTHROUGH_ARGS[@]}")
+        $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ${NODE_LIFECYCLE} ${a[*]}" >&2; exit 0; }
+        exec "${NODE_LIFECYCLE}" "--mode" "init" "${a[@]}"
+    fi
+
+    echo "[IMP:9][bootstrap][entrypoint] SSH host: ${SSH_HOST} — REMOTE bootstrap"
+    NODE_CONFIGS_DIR="$(dirname "$(dirname "${NODE_YAML}")")"
+    if $DRY_RUN; then
+        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync core/ + platform-env.yaml + Makefile → ${SSH_HOST}"
+        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync node-configs/ → /opt/node-configs/"
+        [[ -d "${NODE_CONFIGS_DIR}/secrets" ]] && echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync secrets/"
+    else
+        prepare_ssh_opts "${SSH_HOST}"
+        scp_to_server "${SSH_HOST}" "${NODE_NAME}" "${NODE_CONFIGS_DIR}" "${CORE_DIR}" || { echo "[IMP:10][bootstrap][entrypoint] FATAL: SCP phase failed" >&2; exit 1; }
+        echo "[IMP:9][bootstrap][scp] SCP phase complete"
+    fi
+
+    REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${DETECTED_AGE_KEY}" "${PASSTHROUGH_ARGS[@]}")"
+    local masked_remote_cmd="${REMOTE_CMD}"
+    if [[ -n "${DETECTED_AGE_KEY}" ]]; then
+        local m; m="$(echo "${DETECTED_AGE_KEY}" | cut -c1-8)"
+        masked_remote_cmd="${REMOTE_CMD//${DETECTED_AGE_KEY}/<AGE_KEY:${m}...>}"
+    fi
+    $DRY_RUN && {
+        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS[*]} root@${SSH_HOST} ${masked_remote_cmd}" >&2
+        echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0
+    }
+    echo "[IMP:9][bootstrap][entrypoint] SSH node-lifecycle.sh --mode init on root@${SSH_HOST}"
+    exec ssh "${SSH_OPTS[@]}" "root@${SSH_HOST}" "${REMOTE_CMD}"
+}
+
+main "$@"

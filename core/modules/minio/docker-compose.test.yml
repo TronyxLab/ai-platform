@@ -1,0 +1,14 @@
+# GREP_SUMMARY: minio docker-compose test-override container_name-test
+# STRUCTURE: ┌minio-test.yml┐ → container_name: minio-test
+# region MODULE_CONTRACT
+## @purpose  Test environment override for minio — container_name: minio-test
+## @scope    Test isolation only. Never used in production.
+## @invariants
+##   - container_name: minio-test
+##   - No port mappings (minio is internal-only in test mode)
+## @rationale Standard test-overlay contract per DevPlan 04 DD2
+# endregion MODULE_CONTRACT
+
+services:
+  minio:
+    container_name: minio-test

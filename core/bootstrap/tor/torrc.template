@@ -1,0 +1,26 @@
+# Tor configuration — managed by install-tor-proxy.sh
+# GREP_SUMMARY: tor torrc socks5 proxy template bridges obfs4 russia
+#
+# 🔧 BRIDGES REQUIRED IN RUSSIA:
+#    Tor is blocked by RKN/ISPs — without bridges, Tor circuit will FAIL.
+#    Bridges are injected from ${BRIDGES_FILE} when --tor-bridges-file is passed
+#    to install-tor-proxy.sh (via bootstrap orchestrator --tor-bridges-file).
+#
+#    Bridges file format (one bridge per line):
+#      Bridge obfs4 <IP>:<PORT> <FINGERPRINT> cert=<CERT> iat-mode=0
+#
+#    Get bridges from: https://bridges.torproject.org/bridges?transport=obfs4
+#    Or email bridges@torproject.org with subject "get transport obfs4"
+#
+#    Place bridges file at: /opt/node-configs/${NODE_NAME}/overlays/tor/bridges.txt
+#    Or pass explicit path: --tor-bridges-file /path/to/bridges.txt
+#
+#    If bridges file is NOT provided, Tor will try direct connection (WILL FAIL in Russia).
+#
+SOCKSPort 127.0.0.1:9050
+Log notice file /var/log/tor/notices.log
+DataDirectory /var/lib/tor
+
+# Bridges are injected from ${BRIDGES_FILE} if provided via --tor-bridges-file
+# UseBridges 1
+# ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy

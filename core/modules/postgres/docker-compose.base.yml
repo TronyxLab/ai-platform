@@ -1,0 +1,130 @@
+# @purpose  Base compose definition for postgres Docker module — container_name:postgres/pgbouncer, profiles, x-logging, command loads mounted configs
+# GREP_SUMMARY: postgres docker-compose shared-db-net profiles restart-unless-stopped stop-grace-period pgbouncer command-loads-config
+# STRUCTURE: ▶ postgres:16 [profiles:postgres] → ⚡ command -c config_file -c hba_file → shared-db-net → pgbouncer:6432 [profiles:postgres] → pg_isready healthcheck → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for postgres Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [postgres] — pluggability: only included when COMPOSE_PROFILES contains postgres
+##   - NO ports: directive — no host port mapping (internal network only)
+##   - restart: unless-stopped — Docker policy (not manual lifecycle management)
+##   - stop_grace_period: 60s — WAL flush time
+##   - shared-db-net: external: true + name: shared-db-net — фиксированное имя сети
+##     (параметризация DB_NET_NAME удалена по решению Q4: YAGNI, сужение поверхности дрейфа)
+##   - Data volume mounted for persistence
+##   - command: postgres -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/etc/postgresql/pg_hba.conf
+##     — bind-mounted configs are applied via -c flags, NOT via default paths
+## @rationale Profiles enable selective startup via `make up MODULES=postgres`.
+##            command -c flags are REQUIRED: without them, postgres ignores bind-mounted
+##            config files and uses its own defaults (B1 fix, T5.2).
+##            DB_NET_NAME parametrization была удалена (Q4: YAGNI — ни одного сценария
+##            переименования сети). Фиксированное имя shared-db-net уменьшает поверхность дрейфа.
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16@sha256:17e67d7b9890c99b055ba1e0d5c5be4ec27c9d3a72bda32db24a5e5d8a85af0c
+    container_name: postgres
+    profiles: [postgres]
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    logging: *default-logging
+
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "${POSTGRES_DB:-platform}"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - wal-archive:/var/lib/platform/wal-archive
+
+    networks:
+      shared-db-net:
+        aliases:
+          - postgres
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -h 127.0.0.1 -t 5"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  pgbouncer:
+    image: ${PGBOUNCER_IMAGE:-edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340}
+    container_name: pgbouncer
+    profiles: [postgres]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/platform,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/litellm,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/langfuse"
+      DB_USER: "${POSTGRES_USER:-postgres}"
+      DB_PASSWORD: "${POSTGRES_PASSWORD}"
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "50"
+      DEFAULT_POOL_SIZE: "10"
+      RESERVE_POOL_SIZE: "5"
+      SERVER_IDLE_TIMEOUT: "600"
+      AUTH_TYPE: scram-sha-256
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+    networks:
+      shared-db-net:
+        aliases:
+          - pgbouncer
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U ${POSTGRES_USER:-postgres} -t 3"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/postgres-data
+
+  wal-archive:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/wal-archive
+
+networks:
+  # ⚠️ TRAP[BUG] · 2026-07-15 · MED · DNS-коллизия алиаса "postgres" при двух стеках на одной shared-db-net
+  # · Symptom: pgbouncer тестового стека коннектится к чужому postgres → wrong password type
+  # · Root: alias postgres не уникален в внешней сети, Docker DNS round-robin
+  # · Fix: DB_NET_NAME parametrization REMOVED (Q4: YAGNI). shared-db-net фиксирован.
+  # ·   Тестовые стеки используют изолированные сети — коллизия не возникает.
+  shared-db-net:
+    external: true
+    name: shared-db-net

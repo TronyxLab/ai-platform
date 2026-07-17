@@ -1,0 +1,46 @@
+# GREP_SUMMARY: backup-cron crontab schedule 03:00 03:30 04:00 full-backup app-data cleanup
+# region MODULE_CONTRACT
+## @purpose  Cron schedule for platform backup jobs (03 §4)
+## @scope    Installed to /etc/cron.d/platform-backup in the container
+## @invariants
+##   - 03:00 UTC — full postgres pg_dumpall backup
+##   - 03:30 UTC — application data backup (file volumes)
+##   - 04:00 UTC — spool cleanup (remove files older than 7 days, 03 §3 retention)
+##   - All scripts log to /var/log/platform/backup/
+##   - Collision risk (03 §8): parallel start allowed in v1; no queue implementation
+## @rationale Schedule mirrors 03 §4 spec; cleanup at 04:00 after both backups complete
+## ⚠️ TRAP[DECISION] · 2026-07-01 · — · Backup sequence order (project→service→node)
+## ·   Cron schedule enforces strict order: 03:00 postgres (DB-first, most critical),
+## ·   03:30 app-data (files), 04:00 cleanup, 05:00 S3 retention rotation,
+## ·   Rev: if backup times grow beyond schedule window, decouple into separate systemd timers
+## ·   05:00 Sunday — restore verification.
+## ·   Rationale: postgres is the slowest and most important backup; run it first
+## ·   Rejected: randomize order for fairness — postgres always needs priority
+# endregion MODULE_CONTRACT
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# m   h   dom mon dow  command
+# [IMP:8][crontab] 03:00 UTC — full postgres backup
+0   3   *   *   *   root /usr/local/bin/backup-postgres.sh >> /var/log/platform/backup/postgres.log 2>&1
+
+# [IMP:8][crontab] 03:30 UTC — application data backup
+30  3   *   *   *   root /usr/local/bin/backup-app-data.sh >> /var/log/platform/backup/app-data.log 2>&1
+
+# [IMP:8][crontab] 03:45 UTC — nightly image pre-warming (TASK-10)
+45  3   *   *   *   root /usr/local/bin/warm-images.sh >> /var/log/platform/backup/warm-images.log 2>&1
+
+# [IMP:8][crontab] 04:00 UTC — spool cleanup (7-day retention, 03 §3)
+0   4   *   *   *   root /usr/local/bin/backup-cleanup.sh >> /var/log/platform/backup/cleanup.log 2>&1
+
+# [IMP:8][crontab] 05:00 UTC — S3 retention rotation (7/28/90, phase 06 §3)
+0   5   *   *   *   root /usr/local/bin/retention.py >> /var/log/platform/backup/retention.log 2>&1
+
+# [IMP:8][crontab] 05:00 UTC Sunday — backup restore verification (stub, Wave 6.3)
+0   5   *   *   0   root /scripts/backup-restore-test.sh >> /var/log/platform/backup/restore-test.log 2>&1
+
+# [IMP:8][crontab] * * * * * — Docker daemon healthcheck (TASK-11)
+* * * * *   root /opt/core/internal/healthcheck/docker-healthcheck.sh >> /var/log/platform/backup/docker-healthcheck.log 2>&1
+# [IMP:8][crontab] 0 * * * * — Disk space monitor + docker prune (TASK-12)
+0   *   *   *   *   root /opt/core/modules/backup-cron/scripts/disk-monitor.sh >> /var/log/platform/backup/disk-monitor.log 2>&1

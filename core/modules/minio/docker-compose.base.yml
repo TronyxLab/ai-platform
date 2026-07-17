@@ -1,0 +1,104 @@
+# @purpose  Base compose definition for minio — official minio/minio image, loopback-only ports
+# GREP_SUMMARY: minio docker-compose local-s3 backup-net shared-db-net loopback-127001 one-shot-createbuckets
+# STRUCTURE: ▶ minio:RELEASE → backup-net + shared-db-net → healthcheck /dev/tcp:9000 → one-shot mc createbuckets → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for minio — official minio/minio RELEASE image, loopback-only ports
+## @scope    Local S3 for backup-cron (backup-net) and langfuse (shared-db-net); two services: minio + minio-createbuckets
+## @invariants
+##   - Ports: 127.0.0.1:${MINIO_PORT:-9000}:9000 (S3 API) + 127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001 — loopback ONLY
+##   - Networks: backup-net + shared-db-net (both external:true)
+##   - restart: unless-stopped (minio), restart: "no" (minio-createbuckets — one-shot)
+##   - Healthcheck (minio): bash /dev/tcp to port 9000
+##   - Healthcheck (minio-createbuckets): disable: true — one-shot exits after work
+##   - Container name: minio
+##   - Profiles: [minio] on both services
+## @rationale MinIO serves as local S3 for backup-cron and langfuse event upload.
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  minio:
+    # 🧐 TRAP[DECISION] · 2026-07-15 · HI · Pinned RELEASE tag (verified 2026-07-15 via Docker Hub API)
+    # · Rejected: :latest (platform pinning policy); @sha256 digest (project convention: tag-pin only)
+    # · Old tag RELEASE.2025-02-07T23-41-23Z confirmed 404 (community releases stopped 2025-09)
+    # · Pin digest == :latest digest at pin time → zero runtime change
+    # · Rev: pin to a semver or RELEASE tag if MinIO publishes stable tagged versions.
+    image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    container_name: minio
+    profiles: [minio]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      backup-net:
+        aliases:
+          - minio
+      shared-db-net:
+        aliases:
+          - minio
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      MINIO_BROWSER: "on"
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - minio-data:/data
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  minio-createbuckets:
+    # 🧐 TRAP[DECISION] · 2026-07-15 · HI · mc pinned RELEASE tag — same policy as minio/minio
+    # · Tag RELEASE.2025-08-13T08-35-41Z verified via Docker Hub API 2026-07-15
+    # · digest == :latest at pin time
+    # · Rev: pin to a semver or RELEASE tag if MinIO publishes stable tagged versions
+    image: minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    profiles: [minio]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      S3_BUCKET: "${S3_BUCKET:-platform-backups}"
+      LANGFUSE_S3_BUCKET: "${LANGFUSE_S3_BUCKET:-langfuse-events}"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && \
+        mc mb --ignore-existing local/$${S3_BUCKET} && \
+        mc mb --ignore-existing local/$${LANGFUSE_S3_BUCKET}
+    networks:
+      - backup-net
+      - shared-db-net
+    logging: *default-logging
+
+volumes:
+  minio-data:
+    driver: local
+
+networks:
+  backup-net:
+    external: true
+  shared-db-net:
+    external: true

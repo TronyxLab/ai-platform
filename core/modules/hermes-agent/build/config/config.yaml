@@ -1,0 +1,151 @@
+# GREP_SUMMARY: config.yaml blank-slate base-agent platform hermes guardrails checkpoints approvals compression session security
+# STRUCTURE: ▶ model:deepseek → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
+# @purpose — Base platform Hermes agent configuration — Blank Slate foundation
+# region MODULE_CONTRACT
+## @purpose     Base platform Hermes agent configuration — Blank Slate foundation
+## @scope       Minimal infrastructure layer; profiles add personality, tools, and task-specific settings
+## @invariants
+##   - model.provider: deepseek (primary), zai/GLM (fallback)
+##   - platform.dashboard.insecure: false — MANDATORY, never true
+##   - terminal.backend: docker — production mode
+##   - approvals.mode: smart — auxiliary LLM auto-approves low-risk commands
+##   - tool_loop_guardrails.hard_stop_enabled: true — runaway loop prevention
+##   - security.redact_secrets: true — never expose credentials in output
+##   - compression.threshold: 0.65 — trigger before model degrades on long contexts (~83K tokens)
+## @rationale   Blank Slate: base provides security-critical infrastructure (provider, sandbox, guardrails,
+##              compression, session lifecycle, browser sandbox). Profiles carry personality params only.
+## @changes     LAST_CHANGE: 2026-07-06 | Config v30→v32, z.ai fallback, DOCREF
+# endregion MODULE_CONTRACT
+
+_config_version: 32                      # Hermes config schema version (v2026.7.1)
+
+# GREP_SUMMARY: config.yaml blank-slate base-agent platform hermes guardrails checkpoints approvals compression session security
+# STRUCTURE: ▶ model:deepseek → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
+# DOCREF: Hermes Agent documentation references
+#   - GitHub:          https://github.com/NousResearch/hermes-agent
+#   - Releases:        https://github.com/NousResearch/hermes-agent/releases
+#   - Docs:            https://hermes-agent.nousresearch.com/docs
+#   - Config Ref:      https://hermes-agent.nousresearch.com/docs/user-guide/configuration
+#   - Env Vars:        https://hermes-agent.nousresearch.com/docs/user-guide/configuration/environment-variables
+#   - Profiles:        https://hermes-agent.nousresearch.com/docs/user-guide/profiles
+#   - Blank Slate:     https://hermes-agent.nousresearch.com/docs/user-guide/blank-slate
+
+# 💼 TRAP[BUSINESS] · 2026-06-28 · HI · Blank Slate base config.
+#   Source: user-request · Risk: profiles must carry their own temperature/max_tokens now
+# 🧐 TRAP[DECISION] · 2026-07-06 · — · Z.AI as fallback, not primary
+# · Rejected: z.ai as primary provider · Reason: DeepSeek primary (lower cost, better RU availability),
+# ·   z.ai reserved as fallback for when DeepSeek is unavailable or rate-limited
+# · Rev: if DeepSeek becomes unreliable, swap primary↔fallback
+
+model:
+  provider: deepseek
+  fallback_provider: zai
+  api_timeout: 300                        # 5 min — достаточн для multi-turn reasoning DeepSeek
+  stream_timeouts:
+    read: 120
+    connect: 30
+
+fallback_model:
+  provider: zai
+  model: glm-4-plus
+  api_timeout: 600                       # 10 min — z.ai may be slower for first request
+
+platform:
+  telegram:
+    enabled: true
+    reactions: true
+    extra:
+      rich_messages: true
+  api:
+    rate_limit: 60
+  dashboard:
+    insecure: false                       # MANDATORY: never true
+
+terminal:
+  backend: docker                         # Production: docker backend
+  docker:
+    read_only_rootfs: true
+    remove_after_exit: true
+
+browser:
+  engine: auto                            # Auto-detect available engine
+  session_timeout: 300                    # 5 min browser session
+
+stt:
+  provider: local                         # Local whisper for voice input
+
+agent:
+  background_notifications: result        # Notify on background task completion
+
+compression:
+  enabled: true
+  threshold: 0.65                         # Trigger at 65% context (~83K tokens) before quality degrades
+  target_ratio: 0.25                      # Compress only 25% of context — rest untouched
+  protect_last_n: 15                      # Keep last 15 turns uncompressed
+  preserve_system_message: true
+
+session:
+  idle_minutes: 180                       # Reset after 3 hours of inactivity
+  reset_hour: 4                           # Daily reset at 04:00
+
+security:
+  redact_secrets: true                    # Scan output for API keys, tokens, passwords → [REDACTED]
+
+tool_loop_guardrails:
+  hard_stop_enabled: true
+  max_consecutive_auto_tool_calls: 20
+
+checkpoints:
+  enabled: true
+  max_snapshots: 20
+  max_total_size_mb: 500
+
+approvals:
+  mode: smart                             # Auxiliary LLM auto-approves low-risk commands
+  auto_approve_patterns:
+    - ls
+    - cat
+    - git status
+    - git diff
+    - pip list
+    - npm list
+    - grep
+  max_denial_retries: 3
+  require_approval_for_unknown_tools: true
+
+gateway:
+  message_timestamps:
+    enabled: true
+
+telemetry:
+  log_level: INFO
+
+memory:
+  flush_min_turns: 3
+
+display:
+  show_reasoning: true
+  show_cost: true
+  runtime_footer:
+    enabled: true
+
+auxiliary:
+  vision:
+    provider: deepseek
+    model: deepseek-chat
+  compression:
+    provider: deepseek
+    model: deepseek-chat
+
+# 🧐 TRAP[DECISION] · 2026-07-06 · — · Fallback configuration
+# · cooldown_minutes: 5 prevents runaway retry loops burning tokens
+# · notify_on_fallback: true ensures operator knows about provider degradation
+# · Rev: if fallback provider changes or new providers added, review cooldown/retry values
+fallback:
+  enabled: true
+  max_retries: 2
+  cooldown_minutes: 5
+  notify_on_fallback: true
+
+streaming:
+  enabled: true

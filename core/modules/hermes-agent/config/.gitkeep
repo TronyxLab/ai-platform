@@ -1,0 +1,11 @@
+# GREP_SUMMARY: hermes-agent config empty placeholder .gitkeep
+# STRUCTURE: empty directory — no default configs in base-layer; context-layer overlay populates at deploy
+# region MODULE_CONTRACT
+## @purpose  Empty placeholder directory for hermes-agent config files
+## @scope    Base-layer — holds no configs. Context-layer overlay (node-configs) populates at deploy time.
+## @invariants
+##   - Directory must exist for Docker COPY to succeed even when overlay has no configs
+##   - .gitkeep preserves the empty dir in git
+##   - Actual configs come from node-configs/overlays/hermes-agent/config/ via multi-stage overlay
+## @rationale Base-layer must provide the skeleton directory so Dockerfile COPY overlays/ never fails
+# endregion MODULE_CONTRACT

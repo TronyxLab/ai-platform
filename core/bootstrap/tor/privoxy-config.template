@@ -1,0 +1,11 @@
+# Privoxy configuration — managed by install-tor-proxy.sh
+# GREP_SUMMARY: privoxy http-proxy socks5 forward template
+# ⚠️ TRAP[BUGFIX] · 2026-06-24 · HI · Docker-контейнеры не могли достучаться до Privoxy
+# · Причина: listen-address 127.0.0.1:8118 → контейнеры через host.docker.internal
+#   стучатся на docker bridge gateway, а Privoxy слушал только localhost.
+# · Исправление: 0.0.0.0:8118 + permit-access для Docker bridge подсетей (172.16.0.0/12)
+#   + permit-access для localhost. UFW/iptables дополняют защиту.
+listen-address 0.0.0.0:8118
+permit-access 172.16.0.0/12
+permit-access 127.0.0.1
+forward-socks5t / 127.0.0.1:9050 .

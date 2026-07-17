@@ -1,0 +1,39 @@
+# GREP_SUMMARY: hermes-agent test-override docker-managed-volume no-bind-mount
+# STRUCTURE: base.yml + test.yml → hermes-agent with Docker-managed volume
+# region MODULE_CONTRACT
+## @purpose  Test override for hermes-agent — replaces bind-mount volume
+##           with Docker-managed volume for cross-platform test compatibility
+## @scope    Only overrides volumes section — no changes to service definition
+## @invariants
+##   - Uses Docker-managed volume (no bind-mount to /var/lib/platform/)
+##   - Compatible with both Linux CI and macOS Docker Desktop
+##   - All other service settings unchanged
+## @rationale Bind-mount to /var/lib/platform/hermes-agent/data requires host
+##            path inside Docker VM. On macOS Docker Desktop, /var/lib/ is outside
+##            the VM's filesystem. Docker-managed volumes work on all platforms.
+## ⚠️ TRAP[DECISION] · 2026-07-03 · — · Docker-managed volume for tests
+## ·   Same rationale as postgres-shared test.yml — CI tests production
+## ·   bind-mounts on Linux; local tests verify application logic.
+## ·   Rev: if Docker Desktop adds macOS /var/lib/ file sharing, remove.
+# endregion MODULE_CONTRACT
+
+services:
+  hermes-agent:
+    container_name: hermes-agent-test
+    # ---- Test override: accelerated healthcheck for CI/smoke ------------------
+    # 🧐 TRAP[DECISION] · 2026-07-11 · -- · start_period=10s for tests
+    # · Hermes under QEMU emulation on macOS starts slower (30-60s).
+    # · Accelerated start_period (20s rightarrow 10s) + interval (15s rightarrow 10s) shortens
+    # · health-wait cycle from ~50s to ~30s in the worst case.
+    # · CI on Linux x86_64 is native -- startup is faster (10-20s).
+    # · Rev: if architecture invalidates this decision
+    healthcheck:
+      start_period: 10s
+      interval: 10s
+    volumes:
+      - hermes-data-test:/opt/data:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  hermes-data-test:
+    driver: local

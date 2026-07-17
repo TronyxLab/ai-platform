@@ -1,0 +1,37 @@
+# GREP_SUMMARY: backup-cron module docker backup-net cron-schedule spool-volume liveness readiness skeleton
+# STRUCTURE: ▶ module:backup-cron → cron-schedule → backup-net → spool-volume → readiness → ⎋
+# region MODULE_CONTRACT
+## @purpose  Cron-based backup orchestrator; schedules pg_dump + file backup runs
+## @scope    Phase 02 skeleton: scheduling + network + spool volume ready; S3 upload = stub (Phase 06)
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Network: backup-net (on-demand, isolated, no permanent connections)
+##   - stop_grace_period: 120s — time to finish current backup or abort+cleanup (06 §13)
+##   - restart: always — cron daemon must be persistent
+##   - Spool volume: /var/lib/platform/backup-spool/ — local staging before S3 upload
+##   - S3 upload logic = STUB in this phase (see scripts/upload-s3.sh)
+##   - Resource limits: memory 128M (синхронизировано с compose; AR3 cancelled)
+##   - Schedule: 03:00 full, 03:30 app-data, 04:00 cleanup (03 §4)
+## @rationale backup-net on-demand: cron connects only when backup runs, isolates from web traffic (00 §9)
+# endregion MODULE_CONTRACT
+
+name: backup-cron
+install_type: docker
+description: >
+  Cron-based backup orchestrator for platform data.
+  Schedules pg_dump and file backup runs with S3 upload staging.
+  Runs in backup-net with on-demand connection model.
+
+depends_on:
+  - postgres
+
+spool_dir: /var/lib/platform/backup-spool/
+spool_volume: backup-spool
+
+resources:
+  limits:
+    memory: 128M
+
+env_requires:
+  - POSTGRES_PASSWORD
+  - S3_BUCKET

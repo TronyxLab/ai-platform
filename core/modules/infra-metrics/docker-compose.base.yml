@@ -1,0 +1,232 @@
+# @purpose  Base compose definition for infra-metrics module — cAdvisor + Node Exporter + Nginx Exporter + Redis Exporter
+# GREP_SUMMARY: infra-metrics docker-compose cadvisor node-exporter nginx-prometheus-exporter redis-exporter profiles x-logging observability-net shared-cache-net
+# STRUCTURE: ▶ cadvisor:v0.55.1 [profiles:infra-metrics] → ┬─ ▶ node-exporter:v1.12.0 [profiles:infra-metrics] → ┬─ ▶ nginx-exp:1.5.1 [profiles:infra-metrics] → ┬─ ▶ redis-exp:v1.86.0 [profiles:infra-metrics] → observability-net + shared-cache-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for infra-metrics Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [infra-metrics] — pluggability: only included when COMPOSE_PROFILES contains infra-metrics
+##   - cAdvisor: granular caps (SYS_ADMIN + DAC_READ_SEARCH), no privileged mode
+##   - Node Exporter: bind mount /host:ro (no rslave — macOS compatible)
+##   - Nginx Exporter: scrape URI → http://nginx:8081/stub_status (Docker DNS, NOT host.docker.internal)
+##   - Redis Exporter: scrape redis://redis:6379, healthcheck via --version (scratch image, no shell)
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - redis-exporter on BOTH observability-net (Prometheus scrape) and shared-cache-net (Redis access)
+##   - All TRAP comments from root compose preserved
+##   - nginx-exporter and redis-exporter: healthcheck via --help/--version (scratch image, no shell)
+## @rationale Profiles enable selective startup via `make up MODULES=infra-metrics`
+##   nginx-exporter uses Docker DNS (nginx:8081) because nginx is now a Docker container
+##   redis-exporter uses pattern from nginx-prometheus-exporter: scratch image, healthcheck via binary flag
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ── cAdvisor (Container Metrics) ──────────────────────────────────────────
+  # region service:cadvisor
+  cadvisor:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · cAdvisor upgraded v0.52.0 → v0.55.1 (TASK-2)
+    # · v0.55.1 is latest stable on GCR (scratch-based, no breaking changes expected)
+    # · Rev: on next major upstream release — reevaluate pin
+    image: gcr.io/cadvisor/cadvisor:v0.55.1@sha256:3de2bd5203120b866d74a9b283b2ffb8ec382fbf9dc321814700c6ea6f44ec57
+    container_name: cadvisor
+    profiles: [infra-metrics]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+    logging: *default-logging
+
+    ports:
+      - "127.0.0.1:${CADVISOR_PORT:-8080}:8080"
+
+    command:
+      - "--housekeeping_interval=30s"
+      - "--docker_only=true"
+      - "--storage_duration=2m"
+
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+
+    cap_add:
+      - SYS_ADMIN
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - observability-net
+
+    # 🧐 TRAP[TASK-3] · 2026-07-02 · Optimized: start_period 30→15s (container startup optimization)
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:cadvisor
+
+  # ── Node Exporter (Host Metrics) ─────────────────────────────────────────
+  # ⚠️ TRAP[DECISION] · 2026-06-28 · Switched from network_mode: host to observability-net.
+  # · network_mode: host prevents joining Docker networks; Prometheus on
+  # ·   observability-net couldn't reach node-exporter through cross-bridge routing.
+  # ·   Node-exporter reads host /proc and /sys via bind mounts (/host:ro)
+  # ·   and --path.rootfs=/host — host networking not required for core metrics.
+  # ·   Rev: if Docker Desktop adds native network_mode: host support, revert to host mode
+  # ·   Port 9100 exposed only on localhost for security.
+  # · [2026-07-11] rslave removed from /host volume — macOS Docker Desktop compatibility.
+  # region service:node-exporter
+  node-exporter:
+    # 🧐 TRAP[DECISION] · 2026-07-12 · — · Node Exporter upgraded v1.10.2 → v1.12.0 (BulkV0)
+    # · v1.12.0 is +2 minor versions — API is stable, no breaking changes expected
+    # · Rev: on next major upstream release — reevaluate pin
+    image: prom/node-exporter:v1.12.0@sha256:9b0ade5e607f9dbedb0a8e11151b6011ae5bd79304c261804cfdd2cadf200a80
+    container_name: node-exporter
+    profiles: [infra-metrics]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+    logging: *default-logging
+
+    ports:
+      - "127.0.0.1:${NODE_EXPORTER_PORT:-9100}:9100"
+
+    command:
+      - "--path.rootfs=/host"
+
+    volumes:
+      # 🧐 TRAP[DECISION] · 2026-07-11 · — · rslave removed for macOS Docker Desktop compatibility
+      # · rslave (rbind+rslave mount propagation) — Linux kernel feature not supported
+      # · by Docker Desktop on macOS (virtiofs/grpcfuse). Node-exporter reads /host/proc
+      # · and /host/sys — static filesystems that don't need mount propagation.
+      # · ro (read-only bind) is sufficient for host metrics collection on all platforms.
+      # · Rev: if Docker Desktop adds Linux mount propagation support for macOS, restore rslave
+      - /:/host:ro
+
+    networks:
+      - observability-net
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9100/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:node-exporter
+
+  # ── Nginx Prometheus Exporter (Metrics Bridge) ──────────────────────────
+  # 🧐 TASK-R3 · 2026-07-03 · Added nginx-prometheus-exporter to expose stub_status as Prometheus metrics
+  # · nginx stub_status endpoint is on nginx:8081 (Docker DNS, NOT host.docker.internal)
+  # · ⚠️ nginx is now a Docker container on observability-net — Docker DNS resolves nginx:8081
+  # region service:nginx-prometheus-exporter
+  nginx-prometheus-exporter:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Nginx Exporter upgraded 1.4.0 → 1.5.1 (TASK-2)
+    # · 1.5.1 is latest stable; scratch-based Go binary (no shell/wget/curl)
+    # · Healthcheck already disabled — compatible with new version
+    # · Rev: on next major upstream release — reevaluate pin
+    image: nginx/nginx-prometheus-exporter:1.5.1@sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625
+    container_name: nginx-prometheus-exporter
+    profiles: [infra-metrics]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+        reservations:
+          memory: 16M
+    logging: *default-logging
+
+    # ⚠️ DD2: nginx is now a Docker container — use Docker DNS instead of host.docker.internal
+    command:
+      - "-nginx.scrape-uri=http://nginx:8081/stub_status"
+
+    ports:
+      - "127.0.0.1:${NGINX_EXPORTER_PORT:-9113}:9113"
+
+    networks:
+      observability-net:
+        aliases:
+          - nginx-prometheus-exporter
+
+    # ⚠️ TRAP[BUG] · 2026-07-03 · P1 · Healthcheck disabled: scratch image has no shell/wget/curl.
+    # · DevPlan 2026-07-08 suggests: wget http://127.0.0.1:9113/metrics — not possible (no wget).
+    # · image contains only Go binary. --help returns 0 (false positive for HTTP readiness,
+    #   but sufficient for liveness — binary is running).
+    # · Monitoring via Prometheus up{} metric + alert rule for HTTP readiness.
+    # · Healthcheck is REQUIRED for docker compose up -d --wait (exit code 1 without it).
+    # · Rev: If nginx-prometheus-exporter image adds busybox, add HTTP healthcheck.
+    healthcheck:
+      # ✅ TRAP[DECISION] · 2026-07-12 · — · Verified binary path /usr/bin/nginx-prometheus-exporter
+      # · Docker image inspect confirmed ENTRYPOINT ["/usr/bin/nginx-prometheus-exporter"]
+      # · COPY --from=builder .../nginx-prometheus-exporter /usr/bin/
+      # · Using absolute path /usr/bin/nginx-prometheus-exporter ensures healthcheck works
+      # · regardless of PATH or scratch image behaviour.
+      # · Rev: If the image adds busybox or switches to alpine, revert to relative path.
+      test: ["CMD", "/usr/bin/nginx-prometheus-exporter", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:nginx-prometheus-exporter
+
+  # ── Redis Exporter (Metrics Bridge) ────────────────────────────────────────
+  # Added per owner verdict wave-redis 2026-07-15: monitor redis cache metrics
+  # region service:redis-exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.86.0@sha256:2e9795be900db073e9475fdb9c5124db309b07a3e4e75a1770705cb03be1a1c8
+    container_name: redis-exporter
+    profiles: [infra-metrics]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+        reservations:
+          memory: 16M
+    logging: *default-logging
+
+    # ⚠️ TRAP[DECISION] · 2026-07-15 · — · Redis Exporter added: oliver006/redis_exporter:v1.86.0
+    # · Pattern: nginx-prometheus-exporter (scratch image, healthcheck via binary --version)
+    # · Scrapes redis://redis:6379 — Docker DNS resolves redis on shared-cache-net
+    # · Network: shared-cache-net (reach redis) + observability-net (Prometheus scrape)
+    # · Rev: if redis_exporter image adds busybox, add HTTP healthcheck
+    # · Entrypoint: /redis_exporter (verified by image inspect — single Go binary)
+    # · Port 9121 exposed only for Prometheus (internal, not host-published)
+    command:
+      - "--redis.addr=redis://redis:6379"
+
+    networks:
+      observability-net:
+        aliases:
+          - redis-exporter
+      shared-cache-net:
+        aliases:
+          - redis-exporter
+
+    # Healthcheck: scratch image has no shell/wget/curl — use --version (returns 0)
+    healthcheck:
+      test: ["CMD", "/redis_exporter", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:redis-exporter
+
+networks:
+  observability-net:
+    external: true
+  shared-cache-net:
+    external: true

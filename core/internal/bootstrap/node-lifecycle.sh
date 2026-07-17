@@ -1,0 +1,869 @@
+#!/usr/bin/env bash
+# GREP_SUMMARY: node-lifecycle bootstrap init update orchestrator idempotent sequential-steps checkpoint-resume docker ufw nginx sops users sudoers audit telegram scp-deploy no-git deploy-modules healthcheck per-step-content-hash
+# STRUCTURE: ▶ --mode init (17 sequential steps → update → audit → telegram) | --mode update (5 steps → audit) → checkpoint/resume at each step; SCP-delivered code (no git); node-update-fail non-fatal
+# region MODULE_CONTRACT
+## @purpose  Unified node lifecycle orchestrator: transforms bare VPS into a fully configured platform node (init mode, 17 steps) or performs incremental update (update mode, 5 steps). Merged from orchestrator.sh + node-update.sh.
+## @scope    Called from Makefile via entrypoints/bootstrap.sh (--mode init) or entrypoints/node-update.sh (--mode update); idempotent — safe to re-run on provisioned node
+## @location core/internal/bootstrap/node-lifecycle.sh — merged from orchestrator.sh + node-update.sh
+## @invariants
+##   - All steps executed; failures in critical bootstrap steps cause exit 1
+##   - Step 14 (node-update) delegates to --mode update (self-invocation) for provision + deploy-modules + healthcheck
+##   - Audit log always runs; Telegram notification non-fatal
+##   - Steps declared in execution order; declaration order matches main() call order
+##   - update-mode failures in step_5 are LOGGED (non-fatal) — bootstrap continues
+##   - age key from AGE_SECRET_KEY env (with SOPS_AGE_KEY fallback); never written to persistent disk
+##   - exit 0 on success; exit 1 on critical failure with descriptive message
+##   - Core delivery: SCP/rsync only (push-based, no git)
+##   - Context-overlay delivery: git clone/pull (deploy-modules.sh → ensure_context_repo)
+##   - NO git for core code; context repo uses git for overlay customization
+##   - Env vars or CLI args: NODE_NAME, NODE_YAML, PLATFORM_OWNER_KEY, PLATFORM_CI_DEPLOY_KEY
+## @rationale Single orchestrator for both bootstrap (init) and incremental update modes.
+##            Previously two separate scripts (orchestrator.sh, node-update.sh) with ~60%
+##            duplicated boilerplate (arg parsing, logging, checkpoint, sourcing). Merging
+##            eliminates duplication, reduces cognitive load, and ensures consistent
+##            checkpoint/hash behavior across both modes.
+# endregion MODULE_CONTRACT
+
+set -euo pipefail
+
+# ─── Parse mode ────────────────────────────────────────
+MODE=""
+if [[ "${1:-}" == "--mode" ]]; then
+    shift
+    MODE="${1:-}"
+    shift || true
+fi
+if [[ "$MODE" != "init" && "$MODE" != "update" ]]; then
+    echo "[IMP:10][node-lifecycle][args] ERROR: First argument must be --mode init or --mode update" >&2
+    exit 1
+fi
+
+# ─── Defaults ───────────────────────────────────────────
+CHECKPOINT_DIR="/var/lib/platform/.bootstrap-checkpoints"
+RESUME_MODE=false
+FORCE_MODE=false
+
+# ─── Parse CLI args ──────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --resume)            RESUME_MODE=true; shift ;;
+        --force)             FORCE_MODE=true; shift ;;
+        --node-name)         export NODE_NAME="$2"; shift 2 ;;
+        --node-yaml)         export NODE_YAML="$2"; shift 2 ;;
+        --owner-key)         if [[ -z "${PLATFORM_OWNER_KEY:-}" ]]; then export PLATFORM_OWNER_KEY="$2"; fi; shift 2 ;;
+        --ci-deploy-key)     if [[ -z "${PLATFORM_CI_DEPLOY_KEY:-}" ]]; then export PLATFORM_CI_DEPLOY_KEY="$2"; fi; shift 2 ;;
+        --age-secret-key)    if [[ -z "${AGE_SECRET_KEY:-}" ]]; then export AGE_SECRET_KEY="$2"; fi; shift 2 ;;
+        --docker-hub-username)  if [[ -z "${DOCKER_HUB_USERNAME:-}" ]]; then export DOCKER_HUB_USERNAME="$2"; fi; shift 2 ;;
+        --docker-hub-token)  if [[ -z "${DOCKER_HUB_TOKEN:-}" ]]; then export DOCKER_HUB_TOKEN="$2"; fi; shift 2 ;;
+        --postgres-password) if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then export POSTGRES_PASSWORD="$2"; fi; shift 2 ;;
+        --age-secret-key-file)
+            if [[ ! -f "$2" ]]; then echo "[IMP:10][node-lifecycle][args] ERROR: file not found: $2" >&2; exit 1; fi
+            AGE_SECRET_KEY="$(< "$2")"
+            export AGE_SECRET_KEY
+            shift 2 ;;
+        --docker-hub-username-file)
+            if [[ ! -f "$2" ]]; then echo "[IMP:10][node-lifecycle][args] ERROR: file not found: $2" >&2; exit 1; fi
+            DOCKER_HUB_USERNAME="$(< "$2")"
+            export DOCKER_HUB_USERNAME
+            shift 2 ;;
+        --docker-hub-token-file)
+            if [[ ! -f "$2" ]]; then echo "[IMP:10][node-lifecycle][args] ERROR: file not found: $2" >&2; exit 1; fi
+            DOCKER_HUB_TOKEN="$(< "$2")"
+            export DOCKER_HUB_TOKEN
+            shift 2 ;;
+        --postgres-password-file)
+            if [[ ! -f "$2" ]]; then echo "[IMP:10][node-lifecycle][args] ERROR: file not found: $2" >&2; exit 1; fi
+            POSTGRES_PASSWORD="$(< "$2")"
+            export POSTGRES_PASSWORD
+            shift 2 ;;
+        --tor-bridges-file)   export TOR_BRIDGES_FILE="$2"; shift 2 ;;
+        --skip-tor-verify)    export SKIP_TOR_VERIFY="true"; shift ;;
+        --) shift; break ;;
+        -*) echo "[IMP:10][node-lifecycle][args] ERROR: Unknown argument: $1" >&2; exit 1 ;;
+        *) break ;;
+    esac
+done
+
+# SOPS_AGE_KEY fallback: if AGE_SECRET_KEY is still empty, use SOPS_AGE_KEY from env
+if [[ -z "${AGE_SECRET_KEY:-}" ]] && [[ -n "${SOPS_AGE_KEY:-}" ]]; then
+    export AGE_SECRET_KEY="$SOPS_AGE_KEY"
+    echo "[IMP:8][node-lifecycle][args] AGE_SECRET_KEY set from SOPS_AGE_KEY env var" >&2
+fi
+
+# ─── Source libraries ────────────────────────────────────
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../lib/paths.sh"
+CORE_DIR="${PATHS_CORE_DIR}"
+
+source "${CORE_DIR}/internal/audit/audit.sh"
+
+STEP=0
+STEP_ERRORS=()
+
+if [[ "$MODE" == "init" ]]; then
+    __LOG_PREFIX="bootstrap"
+else
+    __LOG_PREFIX="node-update"
+fi
+source "${CORE_DIR}/lib/logging.sh"
+step_start() { STEP=$(( STEP + 1 )); log_step "$1" "START" "${2:-}"; }
+step_done()  { log_step "$1" "DONE"  "${2:-}"; }
+step_skip()  { log_step "$1" "SKIP"  "${2:-}"; }
+# 🧐 TRAP[DECISION] · 2026-07-09 · — · step_warn rename not needed
+# · Rejected: renaming step_warn → log_step_WARN for consistency with log_step
+# · Reason: step_warn name is consistent within node-lifecycle.sh (4 local calls as of original orchestrator.sh).
+#   The function is not sourced/exported, so it has no cross-file naming conflicts.
+#   Rename would introduce churn without benefit — every caller references the same function by the same name.
+# · Rev: if step_warn is ever exported to lib/logging.sh, rename then for consistency
+step_warn()  { log_step "$1" "WARN"  "${2:-}"; STEP_ERRORS+=("Step ${STEP}: $1 — $2"); }
+
+source "${CORE_DIR}/lib/checkpoint.sh"
+source "${CORE_DIR}/internal/bootstrap/content-hash.sh"
+source "${CORE_DIR}/lib/secrets.sh"
+
+# ─── Content hash helper (T20) ──────────────────────────
+# Computes per-step content hash for checkpoint invalidation.
+# Always includes node-lifecycle.sh + caller-specified script paths.
+# Usage: _step_hash "step-name" [extra_path1 ...]
+_step_hash() {
+    local step="$1"
+    shift
+    compute_step_hash "$step" "${CORE_DIR}/internal/bootstrap/node-lifecycle.sh" "$@"
+}
+# ─── End content hash helper ────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════
+# INIT MODE — Bootstrap (17 steps)
+# ══════════════════════════════════════════════════════════════════
+
+# region VALIDATE_BOOTSTRAP_ENV
+validate_bootstrap_env() {
+    local required_vars=(NODE_NAME NODE_YAML PLATFORM_OWNER_KEY)
+    local missing=()
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            missing+=("$var")
+        fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "[IMP:10][bootstrap][validate] FAIL: Missing required: ${missing[*]}" >&2
+        echo "[IMP:10][bootstrap][validate] Pass as CLI args or set env vars:" >&2
+        echo "  sudo ${PLATFORM_ROOT}/core/internal/bootstrap/node-lifecycle.sh --mode init --node-name NAME --node-yaml PATH --owner-key KEY" >&2
+        echo "  Or set env vars: export NODE_NAME=... && sudo ${PLATFORM_ROOT}/core/internal/bootstrap/node-lifecycle.sh --mode init" >&2
+        exit 1
+    fi
+    log_step "validate-env" "OK" "Required env vars present"
+}
+# endregion VALIDATE_BOOTSTRAP_ENV
+
+# ─── STEP 1: SSH as root ─────────────────────────────────
+step_1_ssh_access() {
+    step_start "ssh-access" "Verifying bootstrap runs as root"
+    if [[ "$(id -u)" -ne 0 ]]; then
+        echo "[IMP:10][bootstrap][step-1] ERROR: node-lifecycle.sh must run as root" >&2
+        exit 1
+    fi
+    step_done "ssh-access" "Running as root — OK"
+}
+
+# ─── STEP 2: apt dependencies ────────────────────────────
+step_2_apt_deps() {
+    step_start "apt-deps" "Installing base apt dependencies"
+    local apt_deps=(make curl ufw python3-yaml python3-jsonschema)
+
+    if [[ "${TOR_ENABLED:-false}" == "true" ]]; then
+        apt_deps+=(tor privoxy obfs4proxy)
+        log_step "apt-deps" "INFO" "Tor enabled — added tor/privoxy/obfs4proxy to apt packages"
+    else
+        log_step "apt-deps" "INFO" "Tor disabled — skipping tor/privoxy/obfs4proxy packages"
+    fi
+    local apt_to_install=()
+    for pkg in "${apt_deps[@]}"; do
+        if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
+            apt_to_install+=("$pkg")
+        fi
+    done
+
+    local need_sops=false
+    if ! command -v sops &>/dev/null 2>&1; then
+        need_sops=true
+    fi
+
+    if [[ ${#apt_to_install[@]} -gt 0 ]]; then
+        apt-get update -qq
+        local apt_err; apt_err="$(apt-get install -y -qq "${apt_to_install[@]}" 2>&1)" || {
+            log_step "apt-deps" "FAIL" "apt-get install failed: ${apt_err}"
+            exit 1
+        }
+        for pkg in "${apt_to_install[@]}"; do
+            if dpkg -s "$pkg" &>/dev/null 2>&1; then
+                log_step "apt-deps" "DONE" "Installed via apt: ${pkg}"
+            else
+                log_step "apt-deps" "FAIL" "Package '${pkg}' not installed via apt — dpkg check failed"
+                exit 1
+            fi
+        done
+    else
+        step_skip "apt-deps" "All apt packages already installed"
+    fi
+
+    if [[ "$need_sops" == true ]]; then
+        log_step "apt-deps" "WARN" "sops not in apt repos — installing from GitHub v3.9.4"
+        local sops_arch
+        sops_arch="$(dpkg --print-architecture 2>/dev/null || echo 'amd64')"
+        case "$sops_arch" in
+            amd64) sops_arch="amd64" ;;
+            arm64) sops_arch="arm64" ;;
+            *) log_step "apt-deps" "FAIL" "Unsupported sops arch: ${sops_arch}"; exit 1 ;;
+        esac
+        if ! curl -sSLo /usr/local/bin/sops "https://github.com/getsops/sops/releases/download/v3.9.4/sops-v3.9.4.linux.${sops_arch}"; then
+            log_step "apt-deps" "FAIL" "sops: GitHub download failed"
+            exit 1
+        fi
+        chmod 0755 /usr/local/bin/sops
+        log_step "apt-deps" "DONE" "sops installed from GitHub v3.9.4"
+    else
+        log_step "apt-deps" "SKIP" "sops already installed"
+    fi
+
+    if [[ ${#apt_to_install[@]} -gt 0 ]] || [[ "$need_sops" == true ]]; then
+        step_done "apt-deps" "Packages installed: apt=${#apt_to_install[@]} sops=$need_sops"
+    fi
+}
+
+# ─── STEP 3: Tor + Privoxy proxy for Telegram ─────────────
+step_3_tor_proxy() {
+    step_start "tor-proxy" "Installing Tor + Privoxy proxy for Telegram"
+
+    local bridges_file="${TOR_BRIDGES_FILE:-}"
+    if [[ -z "$bridges_file" ]]; then
+        local overlay_bridges="/opt/node-configs/${NODE_NAME}/overlays/tor/bridges.txt"
+        if [[ -f "$overlay_bridges" ]]; then
+            bridges_file="$overlay_bridges"
+        fi
+    fi
+
+    local tor_args=()
+    if [[ -n "$bridges_file" ]]; then
+        tor_args+=("--tor-bridges-file" "$bridges_file")
+    fi
+    if [[ "${SKIP_TOR_VERIFY:-}" == "true" ]]; then
+        tor_args+=("--skip-tor-verify")
+    fi
+
+    if bash "${CORE_DIR}/internal/bootstrap/install-tor-proxy.sh" "${tor_args[@]}"; then
+        step_done "tor-proxy" "Tor + Privoxy installed and verified"
+    else
+        step_warn "tor-proxy" "Tor circuit failed to establish — Telegram notifications will be unavailable"
+    fi
+}
+
+# ─── STEP 4: Docker installation ─────────────────────────
+step_4_install_docker() {
+    step_start "install-docker" "Installing Docker + Compose plugin"
+    bash "${CORE_DIR}/internal/bootstrap/install-docker.sh"
+    step_done "install-docker" "Docker ready"
+}
+
+# ─── STEP 5: Create user 'platform' ──────────────────────
+step_5_create_platform_user() {
+    step_start "user-platform" "Ensuring user 'platform'"
+    if id "platform" &>/dev/null 2>&1; then
+        step_skip "user-platform" "User 'platform' already exists"
+    else
+        useradd --system --shell /bin/bash --create-home --home-dir /home/platform --groups docker platform
+        step_done "user-platform" "User 'platform' created"
+    fi
+
+    if [[ -n "${PLATFORM_OWNER_KEY:-}" ]]; then
+        local auth_keys="/home/platform/.ssh/authorized_keys"
+        mkdir -p /home/platform/.ssh
+        chmod 0700 /home/platform/.ssh
+        chown platform:platform /home/platform/.ssh
+        if ! grep -qF "$PLATFORM_OWNER_KEY" "$auth_keys" 2>/dev/null; then
+            printf '%s\n' "$PLATFORM_OWNER_KEY" >> "$auth_keys"
+            chmod 0600 "$auth_keys"
+            chown platform:platform "$auth_keys"
+            step_done "user-platform-key" "Owner SSH key added"
+        else
+            step_skip "user-platform-key" "Owner SSH key already present"
+        fi
+    fi
+}
+
+# ─── STEP 6: Create user 'ci-deploy' ──────────────────────
+step_6_create_ci_deploy_user() {
+    step_start "user-ci-deploy" "Ensuring user 'ci-deploy'"
+    if id "ci-deploy" &>/dev/null 2>&1; then
+        step_skip "user-ci-deploy" "User 'ci-deploy' already exists"
+    else
+        useradd --system --shell /bin/bash --create-home --home-dir /home/ci-deploy --groups docker ci-deploy
+        step_done "user-ci-deploy" "User 'ci-deploy' created"
+    fi
+
+    if [[ -n "${PLATFORM_CI_DEPLOY_KEY:-}" ]]; then
+        local auth_keys="/home/ci-deploy/.ssh/authorized_keys"
+        mkdir -p /home/ci-deploy/.ssh
+        chmod 0700 /home/ci-deploy/.ssh
+        chown ci-deploy:ci-deploy /home/ci-deploy/.ssh
+        if ! grep -qF "$PLATFORM_CI_DEPLOY_KEY" "$auth_keys" 2>/dev/null; then
+            [[ "$NODE_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || {
+                log_step "user-ci-deploy" "FATAL" "Invalid NODE_NAME: ${NODE_NAME}"
+                exit 1
+            }
+            printf 'command="%s/core/internal/deploy/deploy-project.sh %s",restrict %s\n' "$PLATFORM_ROOT" "$NODE_NAME" "$PLATFORM_CI_DEPLOY_KEY" >> "$auth_keys"
+            chmod 0600 "$auth_keys"
+            chown ci-deploy:ci-deploy "$auth_keys"
+            step_done "user-ci-deploy-key" "ci-deploy key added with command=restrict"
+        else
+            step_skip "user-ci-deploy-key" "ci-deploy SSH key already present"
+        fi
+    fi
+}
+
+# ─── STEP 7: Firewall (ufw declarative) ──────────────────
+step_7_firewall() {
+    step_start "firewall" "Applying declarative ufw firewall baseline"
+    local extra_ports=()
+    if [[ -n "${FIREWALL_EXTRA_PORTS:-}" ]]; then
+        IFS=' ' read -ra extra_ports <<< "$FIREWALL_EXTRA_PORTS"
+    fi
+    bash "${CORE_DIR}/internal/bootstrap/firewall.sh" "${extra_ports[@]:-}"
+    step_done "firewall" "Firewall applied: 22/80/443 + extra=[${extra_ports[*]:-}]"
+}
+
+# ─── STEP 8: Verify core directory ────────────────────────
+# 🧐 TRAP[DECISION] · 2026-07-17 · — · CORE_DEPLOY_DIR dead code removed
+# · Rejected: keeping CORE_DEPLOY_DIR with fallback (dead code — never set, always falls back)
+# · Reason: CORE_DEPLOY_DIR was a relic from before CORE_DIR/PLATFORM_ROOT standardization.
+#   All code uses CORE_DIR via paths.sh. The fallback `${PLATFORM_ROOT}/core` was the
+#   only effective value — the variable was never exported. Removing 4 lines of dead code
+#   reduces confusion for agents reading this file.
+# · Rev: if a future change needs a deploy-specific core path, reintroduce as a new named var
+step_8_verify_core() {
+    step_start "verify-core" "Verifying core files (SCP-delivered)"
+    local core_dir="${PLATFORM_ROOT}/core"
+    local marker="${core_dir}/internal/bootstrap/node-lifecycle.sh"
+
+    if [[ ! -f "$marker" ]]; then
+        log_step "verify-core" "FAIL" "Core bootstrap not found at ${marker}"
+        echo "[IMP:10][bootstrap][step-8] ERROR: Core files not found. Deploy first:" >&2
+        echo "  rsync -avz core/ root@<server>:${PLATFORM_ROOT}/core/" >&2
+        exit 1
+    fi
+
+    local ver_file="${core_dir}/VERSION"
+    if [[ -f "$ver_file" ]]; then
+        local ver; ver="$(head -1 "$ver_file")"
+        step_done "verify-core" "Core v${ver} at ${core_dir}"
+    else
+        step_done "verify-core" "Core found at ${core_dir}"
+    fi
+}
+
+# ─── STEP 9: Verify node-configs ─────────────────────────
+step_9_verify_node_configs() {
+    step_start "verify-node-configs" "Verifying node-configs (SCP-delivered)"
+
+    if [[ ! -f "$NODE_YAML" ]]; then
+        log_step "verify-node-configs" "FAIL" "node.yaml not found: ${NODE_YAML}"
+        echo "[IMP:10][bootstrap][step-9] ERROR: node.yaml not found at ${NODE_YAML}" >&2
+        echo "  rsync -avz node-configs/ root@<server>:/opt/node-configs/" >&2
+        exit 1
+    fi
+    step_done "verify-node-configs" "node.yaml: ${NODE_YAML}"
+}
+
+# ─── STEP 11: Read node.yaml → desired module state ──────
+step_11_read_node_yaml() {
+    step_start "read-node-yaml" "Validating and reading node.yaml"
+
+    export PYTHONPATH=""
+    local schema_file="${CORE_DIR}/schemas/node.schema.json"
+    if python3 - "$NODE_YAML" "$schema_file" <<'PYEOF' 2>/dev/null; then
+import json, yaml, jsonschema, sys
+
+with open(sys.argv[1]) as f:
+    instance = yaml.safe_load(f)
+with open(sys.argv[2]) as f:
+    schema = json.load(f)
+
+jsonschema.validate(instance, schema)
+PYEOF
+        step_done "read-node-yaml" "node.yaml valid against schema"
+    else
+        step_warn "read-node-yaml" "node.yaml validation failed — check schemas"
+    fi
+}
+
+# ─── STEP 12: Configure GHCR auth for ci-deploy ─────────
+step_12_ghcr_auth() {
+    step_start "ghcr-auth" "Configuring Docker GHCR login for ci-deploy user"
+    if [[ -n "${GHCR_PULL_TOKEN:-}" ]]; then
+        echo "${GHCR_PULL_TOKEN}" | sudo -u ci-deploy docker login ghcr.io \
+            -u x-access-token --password-stdin 2>/dev/null && \
+            step_done "ghcr-auth" "ci-deploy authenticated to ghcr.io" || \
+            step_warn "ghcr-auth" "GHCR login failed"
+    else
+        step_skip "ghcr-auth" "GHCR_PULL_TOKEN not set in secrets"
+    fi
+}
+
+# ─── STEP 13: Sudoers generation + validation ─────────────
+# ⚠️ TRAP[BUSINESS] · 2026-07-09 · HI · Step declaration order must match main() execution order
+step_13_sudoers() {
+    step_start "sudoers" "Generating sudoers via visudo -c + atomic mv"
+    bash "${CORE_DIR}/internal/bootstrap/setup-node.sh"
+
+    local errors=0
+    local sudoers_d="/etc/sudoers.d"
+    if [[ -d "$sudoers_d" ]]; then
+        local f
+        while IFS= read -r -d '' f; do
+            local basename
+            basename="$(basename "$f")"
+            [[ "$basename" == "README" ]] && continue
+
+            local owner mode
+            owner="$(stat -c '%u:%g' "$f" 2>/dev/null || true)"
+            mode="$(stat -c '%a' "$f" 2>/dev/null || true)"
+
+            if [[ "$owner" != "0:0" ]]; then
+                log_step "sudoers-d" "FAIL" "${basename}: владелец ${owner} вместо 0:0"
+                errors=$(( errors + 1 ))
+            fi
+            if [[ "${mode:-444}" -gt 440 ]] 2>/dev/null; then
+                log_step "sudoers-d" "FAIL" "${basename}: права ${mode} вместо ≤0440"
+                errors=$(( errors + 1 ))
+            fi
+        done < <(find "$sudoers_d" -type f -print0 2>/dev/null)
+    fi
+
+    if [[ "$errors" -gt 0 ]]; then
+        log_step "sudoers-d" "FAIL" "${errors} файл(ов) с неверным владельцем/правами — отмена bootstrap"
+        echo "[IMP:10][bootstrap][validate-sudoers-d] ERROR: Исправь вручную:" >&2
+        echo "  chown root:root ${sudoers_d}/*" >&2
+        echo "  chmod 0440 ${sudoers_d}/*" >&2
+        exit 1
+    fi
+
+    step_done "sudoers" "sudoers generated + validated: all files owner=root:root mode≤0440"
+}
+
+# ─── STEP 14: Node update (post-init) ─────────────────────
+## @brief  Post-init update: provision + deploy-modules + healthcheck
+## @detail  Delegates to node-lifecycle.sh --mode update which handles all post-bootstrap
+##          update steps (provision, docker deploy, system deploy, healthcheck).
+##          This replaces the previous inline deploy-modules + healthcheck logic
+##          (T19: bootstrap-node → INIT-only with optional cleanup).
+step_14_node_update() {
+    step_start "node-update" "Running node-update (post-init: provision + deploy-modules + healthcheck)"
+
+    # Export auth tokens for downstream step (deploy-modules.sh needs them)
+    if [[ -n "${DOCKER_HUB_USERNAME:-}" ]] && [[ -n "${DOCKER_HUB_TOKEN:-}" ]]; then
+        export DOCKER_HUB_USERNAME DOCKER_HUB_TOKEN
+    fi
+    if [[ -n "${GHCR_PULL_TOKEN:-}" ]]; then
+        export GHCR_PULL_TOKEN
+    fi
+
+    # Extract domain and project domain config from node.yaml for nginx/letsencrypt
+    if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
+        local domain_info
+        domain_info="$(python3 - "$NODE_YAML" <<'PYEOF'
+import yaml, sys
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f)
+domain = data.get('domain', '')
+email = data.get('email', '')
+acme_dns_plugin = data.get('acme_dns_plugin', '')
+projects = data.get('projects', [])
+project_domains = [p.get('domain', '') for p in projects if isinstance(p, dict) and p.get('domain')]
+print(f"platform_domain:{domain}")
+print(f"email:{email}")
+print(f"acme_dns_plugin:{acme_dns_plugin}")
+print(f"project_domains:{' '.join(project_domains)}")
+PYEOF
+)"
+        local yaml_domain yaml_email yaml_project_domains yaml_acme_dns
+        yaml_domain="$(echo "$domain_info" | grep '^platform_domain:' | cut -d: -f2-)"
+        yaml_email="$(echo "$domain_info" | grep '^email:' | cut -d: -f2-)"
+        yaml_project_domains="$(echo "$domain_info" | grep '^project_domains:' | cut -d: -f2-)"
+        yaml_acme_dns="$(echo "$domain_info" | grep '^acme_dns_plugin:' | cut -d: -f2-)"
+
+        # Export with fallback: node.yaml value takes priority, then existing env, then empty
+        export PLATFORM_DOMAIN="${yaml_domain:-${PLATFORM_DOMAIN:-}}"
+        export PLATFORM_EMAIL="${yaml_email:-${PLATFORM_EMAIL:-}}"
+        export PLATFORM_PROJECT_DOMAINS="${yaml_project_domains:-${PLATFORM_PROJECT_DOMAINS:-}}"
+        export PLATFORM_ACME_DNS_PLUGIN="${yaml_acme_dns:-${PLATFORM_ACME_DNS_PLUGIN:-}}"
+    fi
+
+    echo "[IMP:9][bootstrap][step-14] INVOKING: node-lifecycle.sh --mode update (post-init update)"
+    if bash "${CORE_DIR}/internal/bootstrap/node-lifecycle.sh" "--mode" "update" 2>&1; then
+        step_done "node-update" "Node update completed successfully"
+    else
+        step_warn "node-update" "Node update had failures — check logs"
+    fi
+}
+
+# ─── STEP 16: Audit log summary ──────────────────────────
+step_16_audit_log() {
+    step_start "audit-summary" "Writing bootstrap audit summary"
+    local ts
+    ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    audit_log "bootstrap:complete" "DONE" "Bootstrap finished at ${ts} | node=${NODE_NAME} | warnings=${#STEP_ERRORS[@]}"
+
+    if [[ ${#STEP_ERRORS[@]} -gt 0 ]]; then
+        audit_log "bootstrap:warnings" "WARN" "Warning steps: ${STEP_ERRORS[*]}"
+    fi
+    step_done "audit-summary" "Audit log updated: /var/log/platform/audit.log"
+}
+
+# ─── STEP 17: Telegram notification ──────────────────────
+step_17_telegram() {
+    if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+        log_step "telegram" "SKIP" "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set"
+        return 0
+    fi
+
+    local ts
+    ts="$(TZ='Europe/Moscow' date '+%d.%m.%Y %H:%M:%S')"
+
+    local status_suffix
+    if [[ ${#STEP_ERRORS[@]} -gt 0 ]]; then
+        status_suffix="c ⚠️ Warnings:"
+    else
+        status_suffix="✅"
+    fi
+    local msg="🚀 [node: ${NODE_NAME}] Узел обновлён ${status_suffix}"$'\n'
+    msg+="Время: ${ts}"
+
+    if [[ ${#STEP_ERRORS[@]} -gt 0 ]]; then
+        msg+=$'\n'
+        for err in "${STEP_ERRORS[@]}"; do
+            msg+=$'\n'"- ${err}"
+        done
+    fi
+
+    local proxy_url="${TELEGRAM_PROXY_URL:-http://127.0.0.1:8118}"
+    curl -s -o /dev/null --proxy "$proxy_url" --max-time 30 -G \
+        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+        --data-urlencode "text=${msg}" \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        || log_step "telegram" "WARN" "Telegram notification failed (non-fatal)"
+}
+
+# region INSTALL_LOGROTATE
+install_logrotate() {
+    local logrotate_src="${CORE_DIR}/bootstrap/platform-audit.logrotate"
+    local logrotate_dst="/etc/logrotate.d/platform-audit"
+    if [[ -f "$logrotate_src" ]] && [[ ! -f "$logrotate_dst" ]]; then
+        cp "$logrotate_src" "$logrotate_dst"
+        chmod 0644 "$logrotate_dst"
+        log_step "logrotate" "DONE" "logrotate config installed: ${logrotate_dst}"
+    else
+        log_step "logrotate" "SKIP" "logrotate config already present"
+    fi
+}
+# endregion INSTALL_LOGROTATE
+
+# ══════════════════════════════════════════════════════════════════
+# UPDATE MODE — Incremental node update (5 steps)
+# ══════════════════════════════════════════════════════════════════
+
+# region FUNC_update_step_1_verify_core
+## @purpose  Verify that core files are properly delivered and compute
+##           content hash to detect changes. If core code changed since
+##           last update, all downstream checkpoints are cleared.
+## @param    none (uses CORE_DIR from paths.sh)
+## @io       out: stderr → verification status at IMP:8-9
+##            effect: triggers checkpoint invalidation if hash changed
+## @complexity O(n) where n = number of verified core files
+## @invariants — node-lifecycle.sh existence is the primary delivery marker
+##             - Content hash covers node-lifecycle.sh + checkpoint.sh + content-hash.sh
+##             - VERSION file is read for display but NOT used for invalidation
+update_step_1_verify_core() {
+    step_start "verify-core" "Verifying core files (SCP-delivered)"
+
+    local marker="${CORE_DIR}/internal/bootstrap/node-lifecycle.sh"
+    if [[ ! -f "$marker" ]]; then
+        log_step "verify-core" "FAIL" "Core lifecycle script not found at ${marker}"
+        echo "[IMP:10][node-update][step-1] ERROR: Core files not delivered. Run bootstrap first." >&2
+        exit 1
+    fi
+
+    local ver_file="${CORE_DIR}/VERSION"
+    if [[ -f "$ver_file" ]]; then
+        local ver
+        ver="$(head -1 "$ver_file")"
+        step_done "verify-core" "Core v${ver} at ${CORE_DIR}"
+    else
+        step_done "verify-core" "Core found at ${CORE_DIR} (no VERSION file)"
+    fi
+}
+# endregion FUNC_update_step_1_verify_core
+
+# region FUNC_update_step_2_provision
+## @purpose  Provision environment: networks, volumes (env = CI-only via Makefile).
+##           Delegates to provision-environment.sh --scope networks --scope volumes.
+##           --scope env не вызывается — это CI-only прерогатива Makefile.
+update_step_2_provision() {
+    step_start "provision" "Running environment provision (networks + volumes)"
+
+    local prov_exit=0
+    bash "${CORE_DIR}/internal/provision-environment.sh" --scope networks --scope volumes 2>&1 || prov_exit=$?
+
+    if [[ $prov_exit -eq 0 ]]; then
+        step_done "provision" "Environment provision completed"
+    else
+        log_step "provision" "FAIL" "Environment provision failed (exit=${prov_exit})"
+        exit 1
+    fi
+}
+# endregion FUNC_update_step_2_provision
+
+# region FUNC_update_step_3_deploy_docker
+## @purpose  Deploy docker modules via deploy-modules.sh.
+##           Deploys all modules defined in node.yaml with docker compose.
+update_step_3_deploy_docker() {
+    step_start "deploy-docker" "Deploying docker modules"
+
+    export NODE_YAML
+    if bash "${CORE_DIR}/internal/bootstrap/deploy-modules.sh" 2>&1; then
+        step_done "deploy-docker" "Docker module deployment complete"
+    else
+        log_step "deploy-docker" "FAIL" "Docker module deployment failed"
+        exit 1
+    fi
+}
+# endregion FUNC_update_step_3_deploy_docker
+
+# region FUNC_update_step_4_deploy_system
+## @purpose  Deploy/update system modules (non-docker) via deploy-modules.sh.
+update_step_4_deploy_system() {
+    step_start "deploy-system" "Updating system modules"
+
+    export NODE_YAML
+    if bash "${CORE_DIR}/internal/bootstrap/deploy-modules.sh" --system 2>&1; then
+        step_done "deploy-system" "System module update complete"
+    else
+        log_step "deploy-system" "FAIL" "System module update failed"
+        exit 1
+    fi
+}
+# endregion FUNC_update_step_4_deploy_system
+
+# region FUNC_update_step_5_healthcheck
+## @purpose  Run healthchecks on all deployed modules. Failure is non-fatal
+##           — logged as warning, bootstrap continues.
+update_step_5_healthcheck() {
+    step_start "healthcheck-all" "Running healthchecks (failure non-fatal)"
+    local hc_fail=0
+
+    local node_yaml="${NODE_YAML:-}"
+    if [[ -z "$node_yaml" ]] || [[ ! -f "$node_yaml" ]]; then
+        log_step "healthcheck-all" "WARN" "NODE_YAML not set or not found — skipping healthchecks"
+        return 0
+    fi
+
+    local modules_raw
+    modules_raw="$(python3 - "$node_yaml" <<'PYEOF' 2>/dev/null
+import yaml, sys
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f)
+modules = data.get('modules', {})
+if isinstance(modules, dict):
+    for name, value in modules.items():
+        enabled = str(value.get('enabled', True) if isinstance(value, dict) else value).lower()
+        print(f'{name}:{enabled}')
+elif isinstance(modules, list):
+    for m in modules:
+        name = m.get('name', '')
+        enabled = str(m.get('enabled', True)).lower()
+        print(f'{name}:{enabled}')
+PYEOF
+)"
+
+    if [[ -z "$modules_raw" ]]; then
+        log_step "healthcheck-all" "SKIP" "No modules found in node.yaml"
+        return 0
+    fi
+
+    local hc_max_retries=4
+    local hc_retry_interval=3
+
+    while IFS=: read -r mod_name mod_enabled; do
+        [[ -z "$mod_name" ]] && continue
+        [[ "$mod_enabled" != "true" ]] && continue
+
+        local hc_script="${CORE_DIR}/modules/${mod_name}/healthcheck.sh"
+        if [[ -f "$hc_script" ]]; then
+            local attempt=0 hc_passed=0
+            while [[ $attempt -lt $hc_max_retries ]]; do
+                if bash "$hc_script" liveness &>/dev/null 2>&1; then
+                    log_step "healthcheck:${mod_name}" "DONE" "Healthcheck PASS (attempt $((attempt + 1))/${hc_max_retries})"
+                    hc_passed=1
+                    break
+                fi
+                attempt=$(( attempt + 1 ))
+                if [[ $attempt -lt $hc_max_retries ]]; then
+                    sleep "$hc_retry_interval"
+                fi
+            done
+            if [[ $hc_passed -eq 0 ]]; then
+                step_warn "healthcheck:${mod_name}" "Healthcheck FAILED after ${hc_max_retries} attempts"
+                hc_fail=$(( hc_fail + 1 ))
+            fi
+        fi
+    done <<< "$modules_raw"
+
+    if [[ "$hc_fail" -gt 0 ]]; then
+        log_step "healthcheck-all" "WARN" "${hc_fail} healthcheck(s) failed — node partially ready"
+    else
+        step_done "healthcheck-all" "All healthchecks passed"
+    fi
+}
+# endregion FUNC_update_step_5_healthcheck
+
+# ══════════════════════════════════════════════════════════════════
+# MAIN ORCHESTRATOR
+# ══════════════════════════════════════════════════════════════════
+main() {
+    if [[ "$MODE" == "init" ]]; then
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+        echo "[IMP:9][node-lifecycle][main] Platform Node Bootstrap START (--mode init)" >&2
+        echo "[IMP:9][node-lifecycle][main] Node: ${NODE_NAME:-<unset>}" >&2
+        echo "[IMP:9][node-lifecycle][main] Deploy: core=SCP/rsync, context=git" >&2
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+
+        if [[ "$FORCE_MODE" == "true" ]]; then
+            echo "[IMP:8][node-lifecycle][checkpoint] --force: Clearing all checkpoints in ${CHECKPOINT_DIR}" >&2
+            rm -rf "$CHECKPOINT_DIR"
+        fi
+
+        mkdir -p "$CHECKPOINT_DIR"
+
+        validate_bootstrap_env
+
+        TOR_ENABLED=false
+        if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
+            TOR_ENABLED=$(python3 - "$NODE_YAML" <<'PYEOF' 2>/dev/null || echo "false"
+import yaml, sys
+
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f)
+tor = data.get('tor', {})
+print('true' if tor.get('enabled', False) else 'false')
+PYEOF
+)
+        fi
+        log_step "tor-enable" "INFO" "TOR_ENABLED=${TOR_ENABLED} (from ${NODE_YAML:-<unset>})"
+
+        install_logrotate
+
+        # ── Checkpoint steps with per-step content hash (T20) ─────────
+        # Each step sets CHECKPOINT_STEP_HASH via _step_hash() helper,
+        # which always includes node-lifecycle.sh + step-specific scripts.
+        # Content hash changes → only that step's checkpoint invalidated.
+
+        CHECKPOINT_STEP_HASH="$(_step_hash "ssh-access")" \
+            checkpoint_step "ssh-access" step_1_ssh_access
+        CHECKPOINT_STEP_HASH="$(_step_hash "apt-deps")" \
+            checkpoint_step "apt-deps" step_2_apt_deps
+
+        if [[ "${TOR_ENABLED:-false}" == "true" ]]; then
+            CHECKPOINT_STEP_HASH="$(_step_hash "tor-proxy" "${CORE_DIR}/internal/bootstrap/install-tor-proxy.sh")" \
+                checkpoint_step "tor-proxy" step_3_tor_proxy
+        else
+            echo "[IMP:8][node-lifecycle][main] Tor disabled — skipping tor-proxy step" >&2
+        fi
+
+        CHECKPOINT_STEP_HASH="$(_step_hash "install-docker" "${CORE_DIR}/internal/bootstrap/install-docker.sh")" \
+            checkpoint_step "install-docker" step_4_install_docker
+        CHECKPOINT_STEP_HASH="$(_step_hash "user-platform")" \
+            checkpoint_step "user-platform" step_5_create_platform_user
+        CHECKPOINT_STEP_HASH="$(_step_hash "user-ci-deploy")" \
+            checkpoint_step "user-ci-deploy" step_6_create_ci_deploy_user
+        CHECKPOINT_STEP_HASH="$(_step_hash "firewall" "${CORE_DIR}/internal/bootstrap/firewall.sh")" \
+            checkpoint_step "firewall" step_7_firewall
+        CHECKPOINT_STEP_HASH="$(_step_hash "verify-core")" \
+            checkpoint_step "verify-core" step_8_verify_core
+        CHECKPOINT_STEP_HASH="$(_step_hash "verify-node-configs")" \
+            checkpoint_step "verify-node-configs" step_9_verify_node_configs
+
+        # decrypt-secrets depends on lib/secrets.sh (step logic extracted there)
+        CHECKPOINT_STEP_HASH="$(_step_hash "decrypt-secrets" "${CORE_DIR}/lib/secrets.sh")" \
+            checkpoint_step "decrypt-secrets" step_10_decrypt_secrets _verify_secrets_loaded
+
+        # ensure-secrets depends on lib/secrets.sh
+        CHECKPOINT_STEP_HASH="$(_step_hash "ensure-secrets" "${CORE_DIR}/lib/secrets.sh")" \
+            checkpoint_step "ensure-secrets" step_12b_ensure_secrets
+
+        CHECKPOINT_STEP_HASH="$(_step_hash "read-node-yaml")" \
+            checkpoint_step "read-node-yaml" step_11_read_node_yaml
+        CHECKPOINT_STEP_HASH="$(_step_hash "ghcr-auth")" \
+            checkpoint_step "ghcr-auth" step_12_ghcr_auth
+        CHECKPOINT_STEP_HASH="$(_step_hash "sudoers" "${CORE_DIR}/internal/bootstrap/setup-node.sh")" \
+            checkpoint_step "sudoers" step_13_sudoers
+        CHECKPOINT_STEP_HASH="$(_step_hash "node-update" "${CORE_DIR}/internal/bootstrap/node-lifecycle.sh")" \
+            checkpoint_step "node-update" step_14_node_update
+        CHECKPOINT_STEP_HASH="$(_step_hash "audit-summary")" \
+            checkpoint_step "audit-summary" step_16_audit_log
+        CHECKPOINT_STEP_HASH="$(_step_hash "telegram")" \
+            checkpoint_step "telegram" step_17_telegram
+
+        CHECKPOINT_STEP_HASH=""
+
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+        echo "[IMP:9][node-lifecycle][main] Bootstrap COMPLETE — exit 0" >&2
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+    elif [[ "$MODE" == "update" ]]; then
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+        echo "[IMP:9][node-lifecycle][main] Node Update START (--mode update)" >&2
+        echo "[IMP:9][node-lifecycle][main] Node: ${NODE_NAME:-<unset>}" >&2
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+
+        if [[ "$FORCE_MODE" == "true" ]]; then
+            echo "[IMP:8][node-lifecycle][checkpoint] --force: Clearing all checkpoints in ${CHECKPOINT_DIR}" >&2
+            rm -rf "$CHECKPOINT_DIR"
+        fi
+
+        mkdir -p "$CHECKPOINT_DIR"
+
+        # ── Step 1: Verify core (content hash tracked) ────────────────
+        CHECKPOINT_STEP_HASH="$(_step_hash "verify-core" \
+            "${CORE_DIR}/lib/checkpoint.sh" \
+            "${CORE_DIR}/internal/bootstrap/content-hash.sh")" \
+            checkpoint_step "verify-core" update_step_1_verify_core
+
+        # ── Step 2: Provision environment ─────────────────────────────
+        CHECKPOINT_STEP_HASH="$(_step_hash "provision" \
+            "${CORE_DIR}/internal/provision-environment.sh")" \
+            checkpoint_step "provision" update_step_2_provision
+
+        # ── Step 3: Deploy docker modules ─────────────────────────────
+        CHECKPOINT_STEP_HASH="$(_step_hash "deploy-docker" \
+            "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
+            checkpoint_step "deploy-docker" update_step_3_deploy_docker
+
+        # ── Step 4: Deploy system modules ─────────────────────────────
+        CHECKPOINT_STEP_HASH="$(_step_hash "deploy-system" \
+            "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
+            checkpoint_step "deploy-system" update_step_4_deploy_system
+
+        # ── Step 5: Healthcheck ───────────────────────────────────────
+        CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")" \
+            checkpoint_step "healthcheck-all" update_step_5_healthcheck
+
+        CHECKPOINT_STEP_HASH=""
+
+        # ── Audit log ─────────────────────────────────────────────────
+        audit_log "node-update:complete" "DONE" \
+            "Node update finished | node=${NODE_NAME:-<unset>} | warnings=${#STEP_ERRORS[@]}"
+
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+        echo "[IMP:9][node-lifecycle][main] Node Update COMPLETE — exit 0" >&2
+        echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+    fi
+}
+
+main "$@"

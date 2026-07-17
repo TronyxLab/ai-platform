@@ -1,0 +1,947 @@
+#!/usr/bin/env bash
+# GREP_SUMMARY: deploy-modules docker-network proxy-net shared-db-net backup-net compose-up system-module install.sh ensure-spool verify-only sudoers-modules --modules severity critical warn exit-code topo-sort transitive-deps
+# STRUCTURE: [--modules flag] → ensure_networks → ensure_spool_dirs → parse node.yaml → expand_transitive_deps(--modules) → separate system|docker → filter(--modules set) → system:install.sh → docker:_topo_sort.py(groups) → deploy_docker_group(parallel) → severity_aggregate → [critical→exit 2|warn→exit 1|ok→exit 0]
+# region MODULE_CONTRACT
+## @purpose  Deploy all modules declared in node.yaml: create Docker networks, run system install.sh or docker compose up
+## @scope    Called from node-lifecycle.sh --mode init/update; idempotent via docker network inspect + compose up -d
+## @location core/internal/bootstrap/deploy-modules.sh — moved from core/bootstrap/deploy-modules.sh
+## @invariant Verified 2026-07-09: 6/6 existing healthcheck.sh modules source ../../lib/healthcheck.sh
+##   (platform-secrets has no healthcheck.sh — uses systemd service, not Docker module)
+## @invariants
+##   - Docker networks and canonical volumes created via provision-environment.sh (NOT local loop)
+##   - Fallback to legacy ensure_docker_network loop if provisioner not found
+##   - system modules: calls modules/<name>/install.sh (idempotent by design)
+##   - docker modules: docker compose up -d (no-op if unchanged)
+##   - healthcheck failures are logged but do NOT abort deploy
+##   - node.yaml must be parsed before this script is called; NODE_YAML env var provides path
+##   - spool dirs verified (not created) — provisioner creates them via platform-env.yaml volumes[]
+##   - Missing spool dirs logged as WARN with recommendation to run `make provision`
+##   - module sudoers generated from sudo-whitelist.conf after module deploy
+## @rationale Networks must pre-exist before any compose up referencing them
+# endregion MODULE_CONTRACT
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/paths.sh"
+source "${SCRIPT_DIR}/../../internal/audit/audit.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/../../lib/docker.sh"
+
+# 🧐 TRAP[DECISION] · 2026-07-09 · — · Staging via separate compose project, not --with-staging flag
+# · Rejected: --with-staging flag in deploy-modules.sh · Reason: staging uses separate compose project
+#   (staging-<name>) with +10000 port offset, separate networks — architectural decision, not script flag
+
+# region PLATFORM_NETWORKS_LOADER
+# Read PLATFORM_NETWORKS from platform-env.yaml (Single Source of Truth per P5)
+_load_platform_networks() {
+    local platform_env="${SCRIPT_DIR}/../../../platform-env.yaml"
+    if [[ ! -f "$platform_env" ]]; then
+        log_step "platform-env" "ERROR" "platform-env.yaml not found at ${platform_env}"
+        return 1
+    fi
+    # Используем python3 (гарантирован после Step 2 bootstrap — python3-yaml)
+    python3 -c "
+import yaml
+with open('${platform_env}') as f:
+    data = yaml.safe_load(f)
+for net in data.get('networks', []):
+    print(net['name'])
+" 2>/dev/null || {
+        log_step "platform-env" "ERROR" "Failed to parse platform-env.yaml (python3+yaml required)"
+        return 1
+    }
+}
+PLATFORM_NETWORKS=()
+while IFS= read -r net; do
+    [[ -n "$net" ]] && PLATFORM_NETWORKS+=("$net")
+done < <(_load_platform_networks)
+readonly PLATFORM_NETWORKS
+# endregion PLATFORM_NETWORKS_LOADER
+readonly COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-2}"
+
+# Global array tracking failed module names for severity-based exit code
+FAILED_MODULE_NAMES=()
+
+__LOG_PREFIX="deploy-modules"
+source "${SCRIPT_DIR}/../../lib/logging.sh"
+
+# 🧐 TRAP[DECISION] · 2026-07-17 · — · ghcr_login() moved to lib/docker.sh
+# · Rejected: keeping ghcr_login() defined locally in deploy-modules.sh
+# · Reason: ghcr_login() is now a library function in lib/docker.sh alongside
+#   docker_login(). deploy-modules.sh sources lib/docker.sh at line 28 and
+#   calls ghcr_login() at line 608 — the definition is no longer needed here.
+# · Rev: if ghcr_login() signature changes, update lib/docker.sh, not this file.
+
+# 🧐 TRAP[DECISION] · 2026-07-17 · — · ensure_docker_network() as runtime fallback
+# · Rejected: removing ensure_docker_network() entirely (only provisioner should create networks)
+# · Reason: provision-environment.sh --scope networks is the PRIMARY network creator
+#   (reads PLATFORM_NETWORKS from platform-env.yaml). ensure_docker_network() is a runtime
+#   fallback for CI scenarios where provisioner hasn't been run (e.g. first-time deploy
+#   in a new context). It uses docker network inspect/create loop as belt-and-suspenders.
+#   Removing it would break CI environments that skip provision step.
+# · Rev: if provision-environment.sh becomes mandatory in ALL deploy paths (CI included),
+#   remove this function and make network-precreation a hard requirement.
+# region ENSURE_DOCKER_NETWORK
+ensure_docker_network() {
+    local network_name="$1"
+    local driver="${2:-bridge}"
+
+    if docker network inspect "$network_name" &>/dev/null 2>&1; then
+        log_step "network:${network_name}" "SKIP" "Docker network '${network_name}' already exists"
+        return 0
+    fi
+
+    log_step "network:${network_name}" "START" "Creating Docker network: ${network_name} (driver: ${driver})"
+    docker network create --driver "$driver" "$network_name"
+    log_step "network:${network_name}" "DONE" "Docker network '${network_name}' created"
+}
+# endregion ENSURE_DOCKER_NETWORK
+
+# region ENSURE_SPOOL_DIRS
+ensure_spool_dirs() {
+    log_step "spool-dirs" "START" "Verifying platform spool and data directories (verify-only)"
+    # 🧐 TRAP[DECISION] · 2026-07-17 · — · ensure_spool_dirs() verify-only
+    # · Rejected: mkdir -p in deploy-modules.sh (creating dirs at deploy time)
+    # · Reason: spool dirs are declared in platform-env.yaml volumes[] and created
+    #   by provision-environment.sh --scope volumes (make provision). deploy-modules.sh
+    #   should only verify existence, not create. mkdir -p here would mask missing
+    #   platform-env.yaml entries — silent creation prevents detection of drift.
+    # · Rev: if provision-environment.sh stops covering all spool dirs, reintroduce
+    #   creation here with explicit WARN that provisioner is out of date
+
+    local -a platform_dirs=("/var/log/platform/backup")
+    for dir in "${platform_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            log_step "spool-dirs" "SKIP" "Already exists: ${dir}"
+        else
+            log_step "spool-dirs" "WARN" "Platform dir ${dir} не существует — запусти make provision"
+        fi
+    done
+
+    local modules_dir="${PATHS_MODULES_DIR}"
+    local spool_found=0
+    local spool_missing_modules=()
+
+    for module_yaml in "${modules_dir}"/*/module.yaml; do
+        [[ -f "$module_yaml" ]] || continue
+
+        local module_name
+        module_name=$(basename "$(dirname "$module_yaml")")
+
+        # Prefer spool_dir over spool_volume — spool_dir is an absolute path.
+        # spool_volume is a Docker volume name (not a path) and is verified for reference only.
+        local spool_path
+        spool_path=$(grep -E '^spool_dir:' "$module_yaml" | head -1 | awk -F': ' '{print $2}' | tr -d ' "' || true)
+        if [[ -z "$spool_path" ]]; then
+            spool_path=$(grep -E '^spool_volume:' "$module_yaml" | head -1 | awk -F': ' '{print $2}' | tr -d ' "' || true)
+        fi
+
+        if [[ -n "$spool_path" ]]; then
+            spool_found=$((spool_found + 1))
+
+            if [[ -d "$spool_path" ]]; then
+                log_step "spool-dirs" "SKIP" "Already exists (${module_name}): ${spool_path}"
+            else
+                log_step "spool-dirs" "WARN" "Module ${module_name} spool ${spool_path} не существует — запусти make provision"
+            fi
+        else
+            # Log warning for modules without spool_dir or spool_volume
+            # (some modules legitimately don't need spool dirs, e.g. nginx reverse proxy)
+            spool_missing_modules+=("$module_name")
+            log_step "spool-dirs" "WARN" "No spool_dir or spool_volume in ${module_name}/module.yaml — no spool dir to verify"
+        fi
+    done
+
+    # 🧐 TRAP[DECISION] · 2026-07-17 · — · wal-archive verify-only (deferred to provisioner)
+    # · Rejected: mkdir -p /var/lib/platform/wal-archive in deploy-modules.sh
+    # · Reason: wal-archive is now in platform-env.yaml volumes[] — provisioner creates it.
+    #   Verify-only to detect drift if provisioner hasn't been run.
+    # · Rev: if wal-archive dir is consistently missing, ensure platform-env.yaml entry is correct
+    if [[ -d "/var/lib/platform/wal-archive" ]]; then
+        log_step "spool-dirs" "SKIP" "Already exists: /var/lib/platform/wal-archive"
+    else
+        log_step "spool-dirs" "WARN" "postgres wal-archive /var/lib/platform/wal-archive не существует — запусти make provision"
+    fi
+
+    if [[ -d "${modules_dir}/observability" ]]; then
+        local -a obs_dirs=(
+            "/var/lib/platform/grafana-data"
+            "/var/lib/platform/prometheus-data"
+            "/var/lib/platform/loki-data"
+        )
+        for dir in "${obs_dirs[@]}"; do
+            if [[ -d "$dir" ]]; then
+                log_step "spool-dirs" "SKIP" "Already exists (observability): ${dir}"
+            else
+                log_step "spool-dirs" "WARN" "observability dir ${dir} не существует — запусти make provision"
+            fi
+        done
+    fi
+
+    if [[ "$spool_found" -eq 0 ]]; then
+        log_step "spool-dirs" "WARN" "No module.yaml spool paths found — verifying hardcoded fallback dirs"
+        local -a fallback_dirs=(
+            "/var/lib/platform/postgres-data"
+            "/var/lib/platform/backup-spool"
+            "/var/lib/platform/backup-spool/postgres"
+            "/var/lib/platform/backup-spool/app-data"
+        )
+        for dir in "${fallback_dirs[@]}"; do
+            if [[ -d "$dir" ]]; then
+                log_step "spool-dirs" "SKIP" "Already exists: ${dir}"
+            else
+                log_step "spool-dirs" "WARN" "Fallback dir ${dir} не существует — запусти make provision"
+            fi
+        done
+    fi
+
+    log_step "spool-dirs" "DONE" "Spool dir verification complete (verify-only, spool_field_count=${spool_found})"
+}
+# endregion ENSURE_SPOOL_DIRS
+
+# region ENSURE_CONTEXT_REPO
+ensure_context_repo() {
+    local node_yaml="$1"
+    local context_name
+    context_name=$(grep "^context:" "$node_yaml" | awk '{print $2}' 2>/dev/null || echo "")
+
+    if [[ -z "$context_name" ]]; then
+        log_step "context-repo" "SKIP" "No context field in node.yaml — context repo will not be cloned"
+        return 0
+    fi
+
+    local context_path="/opt/${context_name}/platform"
+
+    if [[ -d "$context_path" ]]; then
+        log_step "context-repo" "INFO" "Context repo exists: ${context_path} — pulling latest"
+        git -C "$context_path" pull --ff-only 2>/dev/null || \
+            log_step "context-repo" "WARN" "git pull failed (non-fatal): ${context_path}"
+        return 0
+    fi
+
+    local context_repo_url
+    context_repo_url=$(python3 -c "
+import yaml, sys
+with open('${node_yaml}') as f:
+    data = yaml.safe_load(f)
+repos = data.get('repos', {})
+print(repos.get('platform', ''))
+" 2>/dev/null || echo "")
+
+    if [[ -n "$context_repo_url" ]]; then
+        log_step "context-repo" "INFO" "Cloning context repo: ${context_repo_url} → ${context_path}"
+        git clone "$context_repo_url" "$context_path" 2>/dev/null || {
+            log_step "context-repo" "WARN" "git clone failed — create ${context_path} manually or add repos.platform to node.yaml"
+            return 1
+        }
+        log_step "context-repo" "DONE" "Context repo cloned: ${context_path}"
+    else
+        log_step "context-repo" "WARN" "No repos.platform in node.yaml — context overlay auto-resolve will fail"
+        log_step "context-repo" "WARN" "Create ${context_path} manually or add repos.platform to node.yaml"
+    fi
+}
+# endregion ENSURE_CONTEXT_REPO
+
+# region GENERATE_MODULE_SUDOERS
+generate_module_sudoers() {
+    local module_name="$1"
+    local module_dir="${SCRIPT_DIR}/../../modules/${module_name}"
+    local whitelist="${module_dir}/sudo-whitelist.conf"
+
+    if [[ ! -f "$whitelist" ]]; then
+        log_step "sudoers:${module_name}" "SKIP" "No sudo-whitelist.conf for module ${module_name}"
+        return 0
+    fi
+
+    local sudoers_file="/etc/sudoers.d/platform-${module_name}"
+    local tmp_sudoers
+    tmp_sudoers="$(mktemp /tmp/platform-sudoers-module-XXXXXX)"
+    chmod 0440 "$tmp_sudoers"
+
+    log_step "sudoers:${module_name}" "START" "Generating module sudoers from ${whitelist}"
+
+    cat > "$tmp_sudoers" <<EOF
+# platform module sudoers — ${module_name}
+# Generated by deploy-modules.sh at $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+# Source: modules/${module_name}/sudo-whitelist.conf
+# DO NOT edit manually — managed by core bootstrap
+
+EOF
+
+    local make_bin="/usr/bin/make"
+    local module_abs_dir
+    module_abs_dir="$(realpath "${module_dir}")"
+
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+
+        local role action _path
+        read -r role action _path <<< "$line" || continue
+        [[ -z "$role" || -z "$action" ]] && continue
+
+        if [[ "$action" == make:* ]]; then
+            local target="${action#make:}"
+            local username
+            case "$role" in
+                owner)   username="platform" ;;
+                agent)   username="platform-agent" ;;
+                ci)      username="ci-deploy" ;;
+                monitor) username="platform-monitor" ;;
+                *)       username="$role" ;;
+            esac
+
+            printf '%s ALL=(root) NOPASSWD: %s -C %s %s\n' \
+                "$username" "$make_bin" "$module_abs_dir" "$target" >> "$tmp_sudoers"
+        fi
+    done < <(grep -v '^[[:space:]]*#' "$whitelist" | grep -v '^[[:space:]]*$')
+
+    if ! visudo -c -f "$tmp_sudoers" &>/dev/null 2>&1; then
+        local visudo_err
+        visudo_err="$(visudo -c -f "$tmp_sudoers" 2>&1 || true)"
+        log_step "sudoers:${module_name}" "FAIL" "visudo -c FAILED: ${visudo_err} — original NOT touched"
+        rm -f "$tmp_sudoers"
+        return 1
+    fi
+
+    mv "$tmp_sudoers" "$sudoers_file"
+    log_step "sudoers:${module_name}" "DONE" "Module sudoers generated: ${sudoers_file}"
+}
+# endregion GENERATE_MODULE_SUDOERS
+
+# region DEPLOY_SYSTEM_MODULE
+deploy_system_module() {
+    local module_name="$1"
+    local overlay_dir="${2:-}"
+
+    local install_script="${PATHS_MODULES_DIR}/${module_name}/install.sh"
+    if [[ ! -f "$install_script" ]]; then
+        log_step "system:${module_name}" "FAIL" "install.sh not found: ${install_script}"
+        return 1
+    fi
+
+    log_step "system:${module_name}" "START" "Deploying system module: ${module_name}"
+    export PLATFORM_CONFIG_OVERLAY="$overlay_dir"
+    if ! bash "$install_script"; then
+        log_step "system:${module_name}" "FAIL" "install.sh exited with error — check logs above"
+        return 1
+    fi
+    log_step "system:${module_name}" "DONE" "System module deployed: ${module_name}"
+}
+# endregion DEPLOY_SYSTEM_MODULE
+
+# region DEPLOY_DOCKER_MODULE
+deploy_docker_module() {
+    local module_name="$1"
+    local overlay_dir="${2:-}"
+
+    local module_dir="${PATHS_MODULES_DIR}/${module_name}"
+    local compose_file="${module_dir}/compose.yaml"
+    if [[ ! -f "$compose_file" ]]; then
+        compose_file="${module_dir}/docker-compose.yaml"
+    fi
+    if [[ ! -f "$compose_file" ]]; then
+        compose_file="${module_dir}/docker-compose.base.yml"
+    fi
+
+    if [[ ! -f "$compose_file" ]]; then
+        log_step "docker:${module_name}" "FAIL" "compose file not found in ${module_dir} (tried compose.yaml, docker-compose.yaml, docker-compose.base.yml)"
+        return 1
+    fi
+
+    log_step "docker:${module_name}" "START" "Deploying docker module: ${module_name}"
+
+    local env_file="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
+    local compose_args=("-f" "$compose_file")
+    if [[ -f "$env_file" ]]; then
+        compose_args+=("--env-file" "$env_file")
+    fi
+    if [[ -n "$overlay_dir" ]] && [[ -f "${overlay_dir}/compose.override.yaml" ]]; then
+        compose_args+=("-f" "${overlay_dir}/compose.override.yaml")
+    fi
+
+    if [[ "$module_name" == "hermes-agent" ]]; then
+        local legacy_container="hermes-base-agent"
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$legacy_container"; then
+            log_step "docker:${module_name}" "INFO" "Stopping legacy container: ${legacy_container}"
+            docker stop "$legacy_container" 2>/dev/null || true
+            docker rm "$legacy_container" 2>/dev/null || true
+            log_step "docker:${module_name}" "INFO" "Legacy container removed: ${legacy_container}"
+        fi
+    fi
+
+    if [[ "$module_name" == "observability" ]]; then
+        # 🧐 TRAP[DECISION] · 2026-07-17 · — · Dynamic service list via docker compose config --services
+        # · Rejected: hardcoded list (drift vector when services are added/removed in docker-compose.base.yml)
+        # · Reason: docker compose config --services is the single source of truth for the compose file
+        # · Rev: if compose file is broken/unparseable, fallback is empty list (no cleanup)
+        local -a obs_containers
+        mapfile -t obs_containers < <(docker compose -f "$compose_file" config --services 2>/dev/null)
+        # Cache docker ps to avoid N socket calls (H1 fix)
+        local _all_containers
+        _all_containers=$(docker ps -a --format '{{.Names}}' 2>/dev/null)
+        for cname in "${obs_containers[@]}"; do
+            if grep -qx "$cname" <<< "$_all_containers"; then
+                docker stop "$cname" 2>/dev/null || true
+                docker rm "$cname" 2>/dev/null || true
+                log_step "docker:${module_name}" "INFO" "Cleaned up pre-existing container: ${cname}"
+            fi
+        done
+    fi
+
+    # 🧐 TRAP[DECISION] · 2026-07-16 · — · --profile required for standalone base.yml deploy
+    # · Rejected: removing profiles from base.yml (would break root docker-compose.yml include)
+    # · Reason: all module base.yml files use profiles:[module-name]; standalone deploy must pass --profile
+    # · Rev: if compose file format changes to not require profiles, remove this flag
+    compose_args+=("--profile" "$module_name")
+    docker compose "${compose_args[@]}" up -d --remove-orphans
+    sleep 1
+    log_step "docker:${module_name}" "DONE" "Docker module running: ${module_name}"
+}
+# endregion DEPLOY_DOCKER_MODULE
+
+# region WAIT_FOR_READINESS
+wait_for_readiness() {
+    local module_name="$1"
+    local max_attempts="${2:-15}"
+    local interval_sec="${3:-2}"
+
+    local healthcheck_script="${PATHS_MODULES_DIR}/${module_name}/healthcheck.sh"
+    if [[ ! -f "$healthcheck_script" ]]; then
+        log_step "wait:${module_name}" "SKIP" "No healthcheck.sh for ${module_name} — skipping readiness poll"
+        return 0
+    fi
+
+    log_step "wait:${module_name}" "START" "Waiting for readiness (max_attempts=${max_attempts}, interval=${interval_sec}s)"
+
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if bash "$healthcheck_script" readiness 2>/dev/null; then
+            log_step "wait:${module_name}" "DONE" "Module ready after $((attempt + 1)) attempts"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [[ $attempt -lt $max_attempts ]]; then
+            sleep "$interval_sec"
+        fi
+    done
+
+    log_step "wait:${module_name}" "WARN" "Readiness timeout after ${max_attempts} attempts — continuing (non-fatal)"
+    return 1
+}
+# endregion WAIT_FOR_READINESS
+
+readonly HEALTHCHECK_MAX_RETRIES=4
+readonly HEALTHCHECK_RETRY_INTERVAL=3
+
+# region RUN_HEALTHCHECK
+run_healthcheck() {
+    local module_name="$1"
+    local install_type="$2"
+
+    local healthcheck_script="${PATHS_MODULES_DIR}/${module_name}/healthcheck.sh"
+    if [[ ! -f "$healthcheck_script" ]]; then
+        log_step "health:${module_name}" "SKIP" "No healthcheck.sh for module ${module_name}"
+        return 0
+    fi
+
+    log_step "health:${module_name}" "START" "Running healthcheck for: ${module_name}"
+    local attempt=0 hc_output
+    while [[ $attempt -lt $HEALTHCHECK_MAX_RETRIES ]]; do
+        hc_output="$(bash "$healthcheck_script" liveness 2>&1)" && {
+            log_step "health:${module_name}" "DONE" "Healthcheck PASS (attempt $((attempt + 1))/${HEALTHCHECK_MAX_RETRIES})"
+            return 0
+        }
+        attempt=$((attempt + 1))
+        if [[ $attempt -eq 1 ]]; then
+            log_step "health:${module_name}" "DIAG" "Healthcheck stderr: ${hc_output}"
+        fi
+        if [[ $attempt -lt $HEALTHCHECK_MAX_RETRIES ]]; then
+            log_step "health:${module_name}" "INFO" "Healthcheck attempt ${attempt}/${HEALTHCHECK_MAX_RETRIES} failed, retrying in ${HEALTHCHECK_RETRY_INTERVAL}s..."
+            sleep "$HEALTHCHECK_RETRY_INTERVAL"
+        fi
+    done
+
+    log_step "health:${module_name}" "WARN" "Healthcheck FAILED after ${HEALTHCHECK_MAX_RETRIES} attempts — last error: ${hc_output}"
+}
+# endregion RUN_HEALTHCHECK
+
+# region PARSE_NODE_YAML
+parse_modules_from_node_yaml() {
+    local node_yaml="$1"
+
+    python3 - <<PYEOF
+import yaml, sys
+
+with open('${node_yaml}') as f:
+    data = yaml.safe_load(f)
+
+modules = data.get('modules', {})
+if isinstance(modules, dict):
+    for name, value in modules.items():
+        if isinstance(value, dict):
+            enabled = str(value.get('enabled', True)).lower()
+            overlay = value.get('config_overlay', '')
+        else:
+            enabled = str(value).lower() if not isinstance(value, bool) else str(value).lower()
+            overlay = ''
+        print(f"{name}:{enabled}:{overlay}")
+elif isinstance(modules, list):
+    for m in modules:
+        name = m.get('name', '')
+        enabled = str(m.get('enabled', True)).lower()
+        overlay = m.get('config_overlay', '')
+        print(f"{name}:{enabled}:{overlay}")
+PYEOF
+}
+# endregion PARSE_NODE_YAML
+
+# region DETECT_MODULE_TYPE
+detect_install_type() {
+    local module_name="$1"
+    local module_yaml="${PATHS_MODULES_DIR}/${module_name}/module.yaml"
+
+    if [[ ! -f "$module_yaml" ]]; then
+        echo "unknown"
+        return 0
+    fi
+
+    python3 -c "
+import yaml
+with open('${module_yaml}') as f:
+    d = yaml.safe_load(f)
+print(d.get('install_type', 'unknown'))
+"
+}
+# endregion DETECT_MODULE_TYPE
+
+# region GET_MODULE_SEVERITY
+## @purpose  Read severity field from module.yaml (critical|warn, default warn)
+## @io       str (module_name) → stdout: "critical" or "warn"; return 0
+## @complexity 1 — single python3 call
+_get_module_severity() {
+    local module_name="$1"
+    local module_yaml="${PATHS_MODULES_DIR}/${module_name}/module.yaml"
+    if [[ ! -f "$module_yaml" ]]; then
+        echo "warn"
+        return 0
+    fi
+    python3 -c "
+import yaml
+with open('${module_yaml}') as f:
+    d = yaml.safe_load(f)
+print(d.get('severity', 'warn'))
+"
+}
+# endregion GET_MODULE_SEVERITY
+
+# region EXPAND_TRANSITIVE_DEPS
+## @purpose  Expand comma-separated module list with transitive depends_on using BFS over module.yaml DAG
+## @io       str (comma-separated module names) → stdout: space-separated expanded list
+## @complexity 3 — O(V+E) BFS over module DAG; validates all seed modules exist
+## @errors   Prints ERROR to stderr and exits 1 if any seed module is unknown
+## @invariants
+##   - Only modules with module.yaml files are considered (system and docker)
+##   - Unknown seed modules → stderr + exit 1
+##   - Modules with no depends_on have empty dependency lists
+##   - Circular deps are not trapped (BFS converges on visited set)
+_expand_transitive_deps() {
+    local modules_filter="$1"
+    python3 -c "
+import yaml, sys
+from pathlib import Path
+
+modules_dir = '${PATHS_MODULES_DIR}'
+seed_modules = [m.strip() for m in '$modules_filter'.split(',') if m.strip()]
+
+if not seed_modules:
+    sys.exit(0)
+
+# Build DAG from all module.yaml files (system + docker)
+modules_path = Path(modules_dir)
+dag = {}
+for yf in sorted(modules_path.glob('*/module.yaml')):
+    with open(yf) as f:
+        data = yaml.safe_load(f)
+    if data is None:
+        continue
+    name = data.get('name', yf.parent.name)
+    deps = data.get('depends_on')
+    if isinstance(deps, list):
+        dag[name] = [d for d in deps if isinstance(d, str)]
+    else:
+        dag[name] = []
+
+# Validate: all seed modules must exist in DAG
+for m in seed_modules:
+    if m not in dag:
+        print(f'ERROR: Unknown module: {m}', file=sys.stderr)
+        sys.exit(1)
+
+# BFS to find transitive closure through depends_on
+expanded = set(seed_modules)
+queue = list(seed_modules)
+while queue:
+    node = queue.pop(0)
+    for dep in dag.get(node, []):
+        if dep not in expanded:
+            expanded.add(dep)
+            queue.append(dep)
+
+print(' '.join(sorted(expanded)))
+"
+}
+# endregion EXPAND_TRANSITIVE_DEPS
+
+# region DEPLOY_DOCKER_GROUP
+deploy_docker_group() {
+    local -a entries=("$@")
+    local -a pids=()
+    local -a names=()
+    local parallel_limit="${COMPOSE_PARALLEL_LIMIT:-2}"
+    local group_deployed=0 group_failed=0
+
+    log_step "parallel" "INFO" "Parallel limit: ${parallel_limit}, modules: ${#entries[@]}"
+
+    for entry in "${entries[@]}"; do
+        local mod_name="${entry%%:*}"
+        local mod_overlay="${entry#*:}"
+        [[ "$mod_overlay" == "$mod_name" ]] && mod_overlay=""
+
+        while [[ ${#pids[@]} -ge $parallel_limit ]]; do
+            for i in "${!pids[@]}"; do
+                if ! kill -0 "${pids[$i]}" 2>/dev/null; then
+                    wait "${pids[$i]}"
+                    if [[ $? -eq 0 ]]; then
+                        group_deployed=$(( group_deployed + 1 ))
+                        run_healthcheck "${names[$i]}" "docker"
+                        generate_module_sudoers "${names[$i]}" || true
+                    else
+                        group_failed=$(( group_failed + 1 ))
+                        FAILED_MODULE_NAMES+=("${names[$i]}")
+                    fi
+                    unset 'pids[$i]'
+                    unset 'names[$i]'
+                fi
+            done
+            pids=("${pids[@]}")
+            names=("${names[@]}")
+            [[ ${#pids[@]} -ge $parallel_limit ]] && sleep 1
+        done
+
+        (
+            deploy_docker_module "$mod_name" "$mod_overlay" && exit 0 || exit 1
+        ) &
+        pids+=($!)
+        names+=("$mod_name")
+    done
+
+    local i
+    for i in "${!pids[@]}"; do
+        wait "${pids[$i]}"
+        if [[ $? -eq 0 ]]; then
+            group_deployed=$(( group_deployed + 1 ))
+            run_healthcheck "${names[$i]}" "docker"
+            generate_module_sudoers "${names[$i]}" || true
+        else
+            group_failed=$(( group_failed + 1 ))
+            FAILED_MODULE_NAMES+=("${names[$i]}")
+        fi
+    done
+
+    deployed=$(( deployed + group_deployed ))
+    failed=$(( failed + group_failed ))
+    log_step "parallel" "DONE" "Group complete: deployed=${group_deployed} failed=${group_failed}"
+}
+# endregion DEPLOY_DOCKER_GROUP
+
+main() {
+    local modules_filter=""
+
+    # ── Parse --modules flag ──
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --modules)
+                shift
+                if [[ -z "${1:-}" || "$1" == --* ]]; then
+                    echo "[IMP:10][deploy-modules][main] ERROR: --modules requires a comma-separated list" >&2
+                    exit 1
+                fi
+                modules_filter="$1"
+                shift
+                ;;
+            *)
+                # Stop parsing at first positional arg (backward compat)
+                break
+                ;;
+        esac
+    done
+
+    if [[ "$(id -u)" -ne 0 ]]; then
+        echo "[IMP:10][deploy-modules][main] ERROR: must run as root" >&2
+        exit 1
+    fi
+
+    local node_yaml="${NODE_YAML:-}"
+    if [[ -z "$node_yaml" ]] || [[ ! -f "$node_yaml" ]]; then
+        echo "[IMP:10][deploy-modules][main] ERROR: NODE_YAML not set or file not found: '${node_yaml}'" >&2
+        exit 1
+    fi
+
+    # Provisioner: canonical Docker networks + volumes (idempotent)
+    local provisioner="${PATHS_INTERNAL_DIR}/provision-environment.sh"
+    if [[ -f "$provisioner" ]]; then
+        log_step "provisioner" "START" "Delegating networks to provisioner"
+        bash "$provisioner" --scope networks || log_step "provisioner" "WARN" "Provisioner --scope networks had warnings"
+        log_step "provisioner" "INFO" "Provisioner networks complete — delegated from PLATFORM_NETWORKS loop"
+
+        log_step "provisioner" "START" "Delegating volumes to provisioner"
+        bash "$provisioner" --scope volumes || log_step "provisioner" "WARN" "Provisioner --scope volumes had warnings"
+        log_step "provisioner" "INFO" "Provisioner volumes complete"
+    else
+        log_step "provisioner" "WARN" "Provisioner not found at ${provisioner} — using legacy network loop"
+        for network in "${PLATFORM_NETWORKS[@]}"; do
+            ensure_docker_network "$network"
+        done
+        log_step "networks" "DONE" "All platform networks ready (legacy): ${PLATFORM_NETWORKS[*]}"
+    fi
+
+    ensure_spool_dirs
+    docker_login
+    ghcr_login
+    ensure_context_repo "$node_yaml"
+
+    local modules_raw
+    modules_raw="$(parse_modules_from_node_yaml "$node_yaml")"
+
+    if [[ -z "$modules_raw" ]]; then
+        log_step "modules" "SKIP" "No modules declared in ${node_yaml}"
+        exit 0
+    fi
+
+    if grep -q '^hermes-agent:true' <<< "$modules_raw"; then
+        export PLATFORM_HERMES_ENABLED=true
+        log_step "hermes-dashboard" "INFO" "hermes-agent enabled — PLATFORM_HERMES_ENABLED=true exported"
+    else
+        export PLATFORM_HERMES_ENABLED=false
+        log_step "hermes-dashboard" "INFO" "hermes-agent not found — PLATFORM_HERMES_ENABLED=false"
+    fi
+
+    if grep -q '^observability:true' <<< "$modules_raw"; then
+        export PLATFORM_OBSERVABILITY_ENABLED=true
+        log_step "observability" "INFO" "observability enabled — PLATFORM_OBSERVABILITY_ENABLED=true exported"
+    else
+        export PLATFORM_OBSERVABILITY_ENABLED=false
+        log_step "observability" "INFO" "observability not found — PLATFORM_OBSERVABILITY_ENABLED=false"
+    fi
+
+    local deployed=0 skipped=0 failed=0
+    local -a system_modules=()
+    local -a docker_modules=()
+
+    while IFS=: read -r mod_name mod_enabled mod_overlay; do
+        [[ -z "$mod_name" ]] && continue
+
+        if [[ "$mod_enabled" != "true" ]]; then
+            log_step "module:${mod_name}" "SKIP" "Module disabled in node.yaml"
+            skipped=$(( skipped + 1 ))
+            continue
+        fi
+
+        local install_type
+        install_type="$(detect_install_type "$mod_name")"
+        log_step "module:${mod_name}" "INFO" "install_type=${install_type}"
+
+        if [[ -z "$mod_overlay" ]]; then
+            local context_name
+            context_name=$(grep "^context:" "$node_yaml" | awk '{print $2}' 2>/dev/null || echo "")
+            if [[ -n "$context_name" ]]; then
+                local convention_path="/opt/${context_name}/platform/modules/${mod_name}"
+                if [[ -d "$convention_path" ]]; then
+                    mod_overlay="$convention_path"
+                    log_step "module:${mod_name}" "INFO" "Auto-resolved context overlay: ${convention_path}"
+                fi
+            fi
+        fi
+
+        case "$install_type" in
+            system)
+                system_modules+=("$mod_name:$mod_overlay")
+                ;;
+            docker)
+                docker_modules+=("$mod_name:$mod_overlay")
+                ;;
+            *)
+                log_step "module:${mod_name}" "WARN" "Unknown install_type '${install_type}' — skipping"
+                skipped=$(( skipped + 1 ))
+                ;;
+        esac
+    done <<< "$modules_raw"
+
+    # ── If --modules flag given, filter to expanded set (seed + transitive depends_on) ──
+    if [[ -n "$modules_filter" ]]; then
+        local expanded_modules
+        expanded_modules="$(_expand_transitive_deps "$modules_filter")" || {
+            local expand_exit=$?
+            log_step "modules" "FAIL" "Module filter expansion failed (exit ${expand_exit})"
+            exit 1
+        }
+
+        log_step "modules" "INFO" "Expanded --modules filter: ${expanded_modules}"
+
+        # Filter system modules
+        local -a filtered_system=()
+        for entry in "${system_modules[@]}"; do
+            local m="${entry%%:*}"
+            if [[ " $expanded_modules " == *" $m "* ]]; then
+                filtered_system+=("$entry")
+            else
+                log_step "module:${m}" "SKIP" "Excluded by --modules filter"
+                skipped=$((skipped + 1))
+            fi
+        done
+        system_modules=("${filtered_system[@]}")
+
+        # Filter docker modules
+        local -a filtered_docker=()
+        for entry in "${docker_modules[@]}"; do
+            local m="${entry%%:*}"
+            if [[ " $expanded_modules " == *" $m "* ]]; then
+                filtered_docker+=("$entry")
+            else
+                log_step "module:${m}" "SKIP" "Excluded by --modules filter"
+                skipped=$((skipped + 1))
+            fi
+        done
+        docker_modules=("${filtered_docker[@]}")
+    fi
+
+    local entry mod_name mod_overlay
+    for entry in "${system_modules[@]}"; do
+        mod_name="${entry%%:*}"
+        mod_overlay="${entry#*:}"
+        [[ "$mod_overlay" == "$mod_name" ]] && mod_overlay=""
+        if deploy_system_module "$mod_name" "$mod_overlay"; then
+            deployed=$(( deployed + 1 ))
+        else
+            failed=$(( failed + 1 ))
+            FAILED_MODULE_NAMES+=("$mod_name")
+        fi
+        run_healthcheck "$mod_name" "system"
+        generate_module_sudoers "$mod_name" || true
+    done
+
+    # ── Topological sort via _topo_sort.py (dynamic group auto-resolution) ──
+    # B3: Group order is auto-resolved from module.yaml depends_on.
+    # _topo_sort.py reads all module.yaml files, builds a DAG from depends_on,
+    # and applies Kahn's algorithm to produce parallel-deploy groups.
+    # NO hardcoded group constants — groups are dynamically computed.
+    # The output JSON groups are consumed below: each group deploys in parallel,
+    # group[0] has no dependencies, group[1] depends on group[0], etc.
+    local _topo_script="${PATHS_INTERNAL_DIR}/bootstrap/_topo_sort.py"
+    local -a _docker_names=()
+    for entry in "${docker_modules[@]}"; do
+        _docker_names+=("${entry%%:*}")
+    done
+
+    local _topo_result
+    _topo_result=$(python3 "$_topo_script" \
+        --modules-dir "${PATHS_MODULES_DIR}" \
+        --filter-names "${_docker_names[@]}") || {
+        log_step "topo-sort" "FAIL" "Topological sort failed — falling back to sequential deploy"
+        for entry in "${docker_modules[@]}"; do
+            local m="${entry%%:*}"
+            local o="${entry#*:}"
+            [[ "$o" == "$m" ]] && o=""
+            if deploy_docker_module "$m" "$o"; then
+                deployed=$(( deployed + 1 ))
+            else
+                failed=$(( failed + 1 ))
+                FAILED_MODULE_NAMES+=("$m")
+            fi
+            run_healthcheck "$m" "docker"
+            generate_module_sudoers "$m" || true
+        done
+        _topo_result=""
+    }
+
+    if [[ -n "$_topo_result" ]]; then
+        # Parse JSON groups from _topo_sort.py
+        local _group_idx=0
+        local _hermes_deployed=false
+        while true; do
+            local _group_json
+            _group_json=$(echo "$_topo_result" | python3 -c "
+import json,sys
+groups = json.load(sys.stdin)['groups']
+if $_group_idx < len(groups):
+    print(json.dumps(groups[$_group_idx]))
+else:
+    print('')
+" 2>/dev/null)
+            [[ -z "$_group_json" ]] && break
+
+            local -a _group_entries=()
+            while IFS= read -r _mod_name; do
+                [[ -z "$_mod_name" ]] && continue
+                for entry in "${docker_modules[@]}"; do
+                    if [[ "${entry%%:*}" == "$_mod_name" ]]; then
+                        _group_entries+=("$entry")
+                        [[ "$_mod_name" == "hermes-agent" ]] && _hermes_deployed=true
+                    fi
+                done
+            done < <(echo "$_group_json" | python3 -c "
+import json,sys
+for m in json.load(sys.stdin):
+    print(m)
+")
+
+            _group_idx=$((_group_idx + 1))
+            if [[ ${#_group_entries[@]} -gt 0 ]]; then
+                log_step "parallel" "G${_group_idx}" "Deploying group ${_group_idx} (parallel): ${_group_entries[*]}"
+                deploy_docker_group "${_group_entries[@]}"
+            fi
+        done
+
+        # Hermes-agent special handling: readiness polling after its group
+        if [[ "$_hermes_deployed" == "true" ]]; then
+            log_step "parallel" "POST" "Polling hermes-agent readiness..."
+            wait_for_readiness "hermes-agent" 15 2 || log_imp 9 "readiness" "hermes-agent not ready after timeout"
+        fi
+    fi
+
+    log_step "main" "DONE" "Module deploy complete: deployed=${deployed} skipped=${skipped} failed=${failed}"
+
+    # ── Severity-based exit code ──
+    # If --modules filter was applied but has no matches, that's a usage error
+    if [[ -n "$modules_filter" ]] && [[ "$deployed" -eq 0 ]] && [[ "$skipped" -eq "$(echo "$modules_filter" | tr ',' ' ' | wc -w | tr -d ' ')" ]]; then
+        log_step "main" "WARN" "All specified modules were excluded after filtering — exiting 1"
+        FAILED_MODULE_NAMES+=("${modules_filter}")
+    fi
+
+    local critical_failed=0 warn_failed=0
+    for failed_mod in "${FAILED_MODULE_NAMES[@]}"; do
+        local sev
+        sev="$(_get_module_severity "$failed_mod")"
+        if [[ "$sev" == "critical" ]]; then
+            critical_failed=$((critical_failed + 1))
+            log_step "main" "CRITICAL" "Module ${failed_mod} FAILED with severity=critical → exit 2"
+        else
+            warn_failed=$((warn_failed + 1))
+            log_step "main" "WARN" "Module ${failed_mod} FAILED with severity=warn"
+        fi
+    done
+
+    if [[ "$critical_failed" -gt 0 ]]; then
+        log_step "main" "WARN" "Severity summary: critical=${critical_failed} warn=${warn_failed} — exiting 2"
+        exit 2
+    elif [[ "$warn_failed" -gt 0 ]]; then
+        log_step "main" "WARN" "Severity summary: critical=${critical_failed} warn=${warn_failed} — exiting 1"
+        exit 1
+    elif [[ "$failed" -gt 0 ]]; then
+        log_step "main" "WARN" "Legacy fallback: some modules failed but severity undetermined — exiting 1"
+        exit 1
+    fi
+}
+
+main "$@"

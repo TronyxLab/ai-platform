@@ -1,0 +1,28 @@
+# GREP_SUMMARY: platform-secrets sops age systemd oneshot secrets.env tmpfs decrypt
+# STRUCTURE: ▶ boot → sops-decrypt → tmpfs:/run/platform/secrets.env → docker.service → ┐
+# region MODULE_CONTRACT
+## @purpose  Systemd oneshot that decrypts SOPS/age secrets to tmpfs on boot.
+##           Provides /run/platform/secrets.env for all docker containers.
+## @scope    Boot-time secret provisioning; depends on host-age-key being pre-configured.
+## @invariants
+##   - install_type: system — NOT Docker, systemd-managed
+##   - Runs before docker.service (RequiredBy=docker.service)
+##   - Secrets written to tmpfs (in-memory, never touches disk decrypted)
+##   - Fails closed: if age key missing, service fails and docker doesn't start
+##   # 📝 TRAP[DEBT] · 2026-07-15 · MED · Unit lacks RequiredBy=docker.service — fails-closed invariant not enforced
+##   # · Observed: unit has only Before=docker.service + WantedBy=multi-user.target; docker starts even if platform-secrets fails
+##   # · Suspected: RequiredBy dropped during unit authoring; needs [Install] RequiredBy or docker.service drop-in
+##   # · Impact: containers start without secrets.env → cascade of auth failures instead of clean boot halt
+##   # · When: wave T5.1 platform-secrets audit (DevPlan 008) — deferred, boot-behavior change out of wave scope
+## @rationale  Centralised secret management avoids per-container .env files on disk.
+##             SOPS/age chosen for simplicity over Vault (no cluster needed).
+# endregion MODULE_CONTRACT
+
+name: platform-secrets
+install_type: system
+description: "Systemd oneshot service that regenerates /run/platform/secrets.env from encrypted SOPS/age secrets"
+
+depends_on: []
+
+env_requires:
+  - AGE_SECRET_KEY

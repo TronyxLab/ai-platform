@@ -1,0 +1,18 @@
+# logrotate configuration for platform audit log
+# Installed to: /etc/logrotate.d/platform-audit
+# Retention: 30 days (daily rotation, 30 copies)
+
+/var/log/platform/audit.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    sharedscripts
+    postrotate
+        # Signal rsyslog to reopen log file after rotation
+        /usr/bin/systemctl kill -s HUP rsyslog 2>/dev/null || true
+    endscript
+}
