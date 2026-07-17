@@ -9,7 +9,7 @@
 ##   - container_name: backup-cron-test (avoids conflicts with production backup-cron container)
 ##   - volumes: backup-spool-test + backup-logs-test Docker-managed volumes (no bind-mount — cross-platform, macOS compatible)
 ##   - Healthcheck interval reduced to 15s (vs 60s production) for faster CI feedback
-##   - restart: "no" — test containers should not auto-restart
+##   - restart: unless-stopped — containers restart on crash (--wait compatible; D5 fix)
 ##   - Build context and Dockerfile preserved from base.yml
 ##   - Environment variables preserved from base.yml
 ##   - Networks (backup-net, shared-db-net) preserved — external networks
@@ -42,7 +42,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    restart: "no"
+    restart: unless-stopped
 
 volumes:
   backup-spool-test:

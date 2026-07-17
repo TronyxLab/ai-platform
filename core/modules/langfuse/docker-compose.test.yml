@@ -5,7 +5,7 @@
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
 ##   - container_name: langfuse-test — предотвращает конфликт с production langfuse
-##   - restart: "no" — тестовые контейнеры не авто-перезапускаются
+##   - restart: unless-stopped — тестовые контейнеры перезапускаются при креше (--wait совместимость)
 ##   - Port: 127.0.0.1:13000:3000 — избежать production конфликтов
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
 # endregion MODULE_CONTRACT
@@ -15,4 +15,4 @@ services:
     container_name: langfuse-test
     ports:
       - "127.0.0.1:13000:3000"
-    restart: "no"
+    restart: unless-stopped
