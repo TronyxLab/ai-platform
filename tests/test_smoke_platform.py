@@ -341,9 +341,18 @@ def test_platform_starts_all_containers(
     # versions. docker ps --filter by project label is deterministic and env-agnostic.
     expected_services: list[str] = []
     _ps_result = subprocess.run(
-        ["docker", "ps", "--all", "--filter", "label=com.docker.compose.project=ai-platform-test",
-         "--format", "{{.Names}}"],
-        capture_output=True, text=True, timeout=30,
+        [
+            "docker",
+            "ps",
+            "--all",
+            "--filter",
+            "label=com.docker.compose.project=ai-platform-test",
+            "--format",
+            "{{.Names}}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     for line in _ps_result.stdout.strip().splitlines():
         cname = line.strip()
@@ -467,9 +476,18 @@ def test_critical_services_healthy(
     # with project label filter instead.
     all_container_names: list[str] = []
     _ps_result = subprocess.run(
-        ["docker", "ps", "--all", "--filter", "label=com.docker.compose.project=ai-platform-test",
-         "--format", "{{.Names}}"],
-        capture_output=True, text=True, timeout=30,
+        [
+            "docker",
+            "ps",
+            "--all",
+            "--filter",
+            "label=com.docker.compose.project=ai-platform-test",
+            "--format",
+            "{{.Names}}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     for line in _ps_result.stdout.strip().splitlines():
         cname = line.strip()

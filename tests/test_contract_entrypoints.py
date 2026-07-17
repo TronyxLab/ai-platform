@@ -399,35 +399,32 @@ def test_node_update_has_ssh_proxy() -> None:
     assert len(node_update_manifest_paths) > 0, (
         "[IMP:9][test] FAIL: node-update.sh not found in entrypoint-manifest.yaml"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: node-update.sh in manifest: %s", node_update_manifest_paths[0])
+    logger.info(
+        "[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: node-update.sh in manifest: %s",
+        node_update_manifest_paths[0],
+    )
 
     # ── Check 2: node-update.sh exists on disk ──
     node_update_path = os.path.join(PLATFORM_ROOT, node_update_manifest_paths[0])
     assert os.path.isfile(node_update_path), (
-        "[IMP:9][test] FAIL: node-update.sh not found on disk at %s" % node_update_path
+        f"[IMP:9][test] FAIL: node-update.sh not found on disk at {node_update_path}"
     )
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: node-update.sh exists on disk")
 
     # ── Check 3: has valid shebang ──
     with open(node_update_path) as f:
         first_line = f.readline().strip()
-    assert first_line.startswith("#!"), (
-        "[IMP:9][test] FAIL: node-update.sh missing shebang"
-    )
+    assert first_line.startswith("#!"), "[IMP:9][test] FAIL: node-update.sh missing shebang"
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 3 PASS: shebang OK")
 
     # ── Check 4: has --age-secret-key-file flag ──
     with open(node_update_path) as f:
         content = f.read()
-    assert "--age-secret-key-file" in content, (
-        "[IMP:9][test] FAIL: node-update.sh must accept --age-secret-key-file"
-    )
+    assert "--age-secret-key-file" in content, "[IMP:9][test] FAIL: node-update.sh must accept --age-secret-key-file"
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 4 PASS: --age-secret-key-file flag present")
 
     # ── Check 5: has detect_age_key() ──
-    assert "detect_age_key" in content, (
-        "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
-    )
+    assert "detect_age_key" in content, "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: detect_age_key() present")
 
     # ── Check 6: has SSH_HOST/local exec fallback ──
@@ -435,9 +432,7 @@ def test_node_update_has_ssh_proxy() -> None:
         "[IMP:9][test] FAIL: node-update.sh must handle SSH_HOST"
     )
     has_local_fallback = any(kw in content.lower() for kw in ("locally", "local exec", "local mode", "LOCALLY"))
-    assert has_local_fallback, (
-        "[IMP:9][test] FAIL: node-update.sh must have local exec fallback"
-    )
+    assert has_local_fallback, "[IMP:9][test] FAIL: node-update.sh must have local exec fallback"
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 6 PASS: SSH proxy + local fallback")
 
     logger.info("[IMP:9][test_node_update_has_ssh_proxy] ALL CHECKS PASS")
