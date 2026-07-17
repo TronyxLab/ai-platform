@@ -1,24 +1,27 @@
-# GREP_SUMMARY: docker-build-cache composite-action gha-cache build-push load-true provenance-sbom-false
-# STRUCTURE: inputs(context,tags,cache-scope,file?) → ◇ docker/build-push-action@v7 with standardized cache params → ⎋ built image
+# GREP_SUMMARY: docker-build-cache composite-action registry-cache gha-cache build-push load-true provenance-sbom-false cache-backend
+# STRUCTURE: inputs(context,tags,cache-scope,cache-backend,file?) → ◇ ┌cache_params┐ → ◇ docker/build-push-action@v7 with cache-from/to → ⎋ built image
 # region MODULE_CONTRACT
-## @purpose  Standardized Docker image build with GHA cache configuration.
+## @purpose  Standardized Docker image build with configurable cache backend (registry|gha).
 ##           Eliminates 3× duplicate docker/build-push-action@v7 boilerplate
-##           with consistent provenance:false, sbom:false, load:true, GHA cache.
+##           with consistent provenance:false, sbom:false, load:true.
 ## @scope    Used by platform-test.yml (backup-cron, hermes-agent-base) and
 ##           build-platform.yml (hermes-agent-base) — 3 identical build patterns.
 ## @invariants
 ##   - Always uses docker/build-push-action@v7
 ##   - load: true — images available locally after build
-##   - cache-from + cache-to: type=gha,mode=max with scoped key
+##   - cache-backend=registry → type=registry,mode=max,ref=ghcr.io/tronyx161/ai-platform-build-cache:<scope>
+##   - cache-backend=gha → type=gha,mode=max,scope=<scope>
 ##   - provenance: false, sbom: false — no attestations for local builds
 ## @rationale  DevPlan 017 T12: consolidate 3× duplicate docker build configs.
-##             Scoped GHA cache by image name isolates cache keys, preventing
-##             cross-image cache poisoning and enabling parallel cache warm-up.
+##             DevPlan 006 D3: registry cache (ghcr.io) for reliable cache across builds.
+##             GHA cache suffers from "failed to reserve cache" with large images (>500MB)
+##             and 10GB eviction policy. Registry cache has no size limits.
 ## @changes — 2026-07-16 | Extracted from 3× identical blocks per DevPlan 017 T12
+## @changes — 2026-07-17 | Added cache-backend input (gha|registry, default registry) per DevPlan 006 T2
 # endregion MODULE_CONTRACT
 
-name: 'Docker Build with GHA Cache'
-description: 'Build Docker image with standardized GHA cache configuration (load:true, provenance:false)'
+name: 'Docker Build with Registry/GHA Cache'
+description: 'Build Docker image with configurable cache backend (registry|gha) — load:true, provenance:false'
 
 inputs:
   context:
@@ -32,12 +35,30 @@ inputs:
     description: 'Image tags (space-separated)'
     required: true
   cache-scope:
-    description: 'Cache scope for type=gha (e.g. backup-cron, hermes-agent-base)'
+    description: 'Cache scope (e.g. backup-cron, hermes-agent-base) — used as cache key for both gha and registry backends'
     required: true
+  cache-backend:
+    description: 'Cache backend: registry (ghcr.io) or gha (GitHub Actions cache). Default: registry'
+    required: false
+    default: 'registry'
 
 runs:
   using: 'composite'
   steps:
+    - name: Set cache parameters (${{ inputs.cache-backend }})
+      id: cache_params
+      shell: bash
+      run: |
+        if [ "${{ inputs.cache-backend }}" = "registry" ]; then
+          echo "cache-from=type=registry,ref=ghcr.io/tronyx161/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          echo "cache-to=type=registry,mode=max,ref=ghcr.io/tronyx161/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          echo "[IMP:8][docker] cache-backend=registry — ref=ghcr.io/tronyx161/ai-platform-build-cache:${{ inputs.cache-scope }}"
+        else
+          echo "cache-from=type=gha,scope=${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          echo "cache-to=type=gha,mode=max,scope=${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          echo "[IMP:7][docker] cache-backend=gha — scope=${{ inputs.cache-scope }}"
+        fi
+
     - name: Build Docker image (${{ inputs.cache-scope }})
       uses: docker/build-push-action@v7
       with:
@@ -45,7 +66,7 @@ runs:
         file: ${{ inputs.file }}
         load: true
         tags: ${{ inputs.tags }}
-        cache-from: type=gha,scope=${{ inputs.cache-scope }}
-        cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
+        cache-from: ${{ steps.cache_params.outputs.cache-from }}
+        cache-to: ${{ steps.cache_params.outputs.cache-to }}
         provenance: false
         sbom: false

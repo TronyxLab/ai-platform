@@ -134,6 +134,15 @@ jobs:
             echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
           fi
 
+      - name: Authenticate ghcr.io (registry cache)
+        run: |
+          if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+            echo "[IMP:8][docker] ghcr.io authenticated — registry cache available"
+          else
+            echo "[IMP:7][docker] GHCR_TOKEN not set — falling back to GHA cache"
+          fi
+
       # Single Source of Truth: networks + volumes + env vars from platform-env.yaml
       - name: Provision environment (networks + volumes + CI env defaults)
         uses: ./.github/actions/provisioner-call
