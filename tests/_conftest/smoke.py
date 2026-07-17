@@ -350,7 +350,7 @@ def platform_services(
                 timeout=15,
                 env_override={"COMPOSE_PROFILES": module_name},
             )
-            _container_count = len([l for l in _ps_check.stdout.strip().splitlines() if l.strip()])
+            _container_count = len([cname for cname in _ps_check.stdout.strip().splitlines() if cname.strip()])
             if _container_count == 0:
                 _logger.error(
                     "[IMP:9][conftest][platform_services] '%s' compose up returned 0 but "

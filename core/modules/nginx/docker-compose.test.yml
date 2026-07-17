@@ -5,7 +5,7 @@
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
 ##   - container_name: nginx-test — предотвращает конфликт с production nginx
-##   - restart: "no" — тестовые контейнеры не авто-перезапускаются
+##   - restart: unless-stopped — тестовые контейнеры перезапускаются при креше (--wait совместимость)
 ##   - Port mappings: !override — смещённые порты (18080, 18443); порты из base.yml (80:80, 443:443) НЕ склеиваются
 ##   - Все конфиги сохраняются через bind-mount (read-only)
 ## @rationale container_name override через отдельный test.yml — единственный способ
@@ -19,4 +19,4 @@ services:
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-16 · HIGH · compose merge склеивает ports base+test → тестовый nginx биндил 80/443 (F-7) · Fix: !override
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
-    restart: "no"
+    restart: unless-stopped
