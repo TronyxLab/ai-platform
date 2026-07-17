@@ -521,7 +521,8 @@ step_16_audit_log() {
 # ─── STEP 17: Telegram notification ──────────────────────
 step_17_telegram() {
     if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
-        log_step "telegram" "SKIP" "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set"
+        log_step "telegram" "SKIP" "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — notifications disabled"
+        echo "[IMP:9][node-lifecycle][telegram] INFO: Telegram notifications skipped (tokens not configured)" >&2
         return 0
     fi
 
@@ -567,7 +568,7 @@ install_logrotate() {
 # endregion INSTALL_LOGROTATE
 
 # ══════════════════════════════════════════════════════════════════
-# UPDATE MODE — Incremental node update (5 steps)
+# UPDATE MODE — Incremental node update (6 steps)
 # ══════════════════════════════════════════════════════════════════
 
 # region FUNC_update_step_1_verify_core
@@ -621,10 +622,74 @@ update_step_2_provision() {
 }
 # endregion FUNC_update_step_2_provision
 
-# region FUNC_update_step_3_deploy_docker
-## @purpose  Deploy docker modules via deploy-modules.sh.
+# region FUNC_update_step_3_ssl_provision
+## @purpose  Provision SSL/TLS certificates via acme.sh DNS-01 BEFORE docker deploy.
+##           Ensures nginx has valid cert at /etc/letsencrypt/live/<domain>/ before
+##           docker compose up. DNS-01 validation does NOT require nginx to be running.
+## @detail   Delegates to ssl-provision.sh. Idempotent: skips if cert already exists.
+##           Extracts domain/email/dns_plugin from NODE_YAML via python3/yaml.
+## @invariants
+##   - Called after provision (step 2) and before deploy-docker (step 4)
+##   - Failure is NON-FATAL for non-nginx modules (warn only)
+##   - WEBNAMES_API_KEY must be in secrets for webnames DNS plugin
+update_step_3_ssl_provision() {
+    step_start "ssl-provision" "Provisioning SSL certificates via acme.sh DNS-01"
+
+    local ssl_script="${CORE_DIR}/internal/bootstrap/ssl-provision.sh"
+    if [[ ! -f "$ssl_script" ]]; then
+        log_step "ssl-provision" "WARN" "ssl-provision.sh not found at ${ssl_script} — skipping SSL provisioning"
+        return 0
+    fi
+
+    # Export domain config from node.yaml (same pattern as step_14 in init mode)
+    if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
+        local domain_info
+        domain_info="$(python3 - "$NODE_YAML" <<'PYEOF'
+import yaml, sys
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f)
+domain = data.get('domain', '')
+email = data.get('email', '')
+acme_dns_plugin = data.get('acme_dns_plugin', '')
+projects = data.get('projects', [])
+project_domains = [p.get('domain', '') for p in projects if isinstance(p, dict) and p.get('domain')]
+print(f"platform_domain:{domain}")
+print(f"email:{email}")
+print(f"acme_dns_plugin:{acme_dns_plugin}")
+print(f"project_domains:{' '.join(project_domains)}")
+PYEOF
+)"
+        export PLATFORM_DOMAIN="$(echo "$domain_info" | grep '^platform_domain:' | cut -d: -f2-)"
+        export PLATFORM_EMAIL="$(echo "$domain_info" | grep '^email:' | cut -d: -f2-)"
+        export PLATFORM_ACME_DNS_PLUGIN="$(echo "$domain_info" | grep '^acme_dns_plugin:' | cut -d: -f2-)"
+        export PLATFORM_PROJECT_DOMAINS="$(echo "$domain_info" | grep '^project_domains:' | cut -d: -f2-)"
+    fi
+
+    local cert_path="/etc/letsencrypt/live/${PLATFORM_DOMAIN:-}/fullchain.pem"
+    if [[ -n "${PLATFORM_DOMAIN:-}" ]] && [[ -f "$cert_path" ]]; then
+        log_step "ssl-provision" "SKIP" "Certificate already exists: ${cert_path} (idempotent)"
+        return 0
+    fi
+
+    if [[ -z "${PLATFORM_DOMAIN:-}" ]]; then
+        log_step "ssl-provision" "WARN" "PLATFORM_DOMAIN not set — skipping SSL provisioning (no domain configured)"
+        return 0
+    fi
+
+    echo "[IMP:9][node-lifecycle][ssl-provision] Issuing SSL certificate for ${PLATFORM_DOMAIN}"
+    if bash "$ssl_script" 2>&1; then
+        step_done "ssl-provision" "SSL certificate provisioned for ${PLATFORM_DOMAIN}"
+    else
+        step_warn "ssl-provision" "SSL provisioning failed — nginx will not have HTTPS until resolved"
+    fi
+}
+# endregion FUNC_update_step_3_ssl_provision
+
+# region FUNC_update_step_4_deploy_docker
+## @purpose  Deploy docker modules via deploy-modules.sh
+##           (renumbered from step 3 to 4 after SSL provision insertion).
 ##           Deploys all modules defined in node.yaml with docker compose.
-update_step_3_deploy_docker() {
+update_step_4_deploy_docker() {
     step_start "deploy-docker" "Deploying docker modules"
 
     export NODE_YAML
@@ -635,11 +700,11 @@ update_step_3_deploy_docker() {
         exit 1
     fi
 }
-# endregion FUNC_update_step_3_deploy_docker
+# endregion FUNC_update_step_4_deploy_docker
 
-# region FUNC_update_step_4_deploy_system
+# region FUNC_update_step_5_deploy_system
 ## @purpose  Deploy/update system modules (non-docker) via deploy-modules.sh.
-update_step_4_deploy_system() {
+update_step_5_deploy_system() {
     step_start "deploy-system" "Updating system modules"
 
     export NODE_YAML
@@ -650,12 +715,12 @@ update_step_4_deploy_system() {
         exit 1
     fi
 }
-# endregion FUNC_update_step_4_deploy_system
+# endregion FUNC_update_step_5_deploy_system
 
-# region FUNC_update_step_5_healthcheck
+# region FUNC_update_step_6_healthcheck
 ## @purpose  Run healthchecks on all deployed modules. Failure is non-fatal
 ##           — logged as warning, bootstrap continues.
-update_step_5_healthcheck() {
+update_step_6_healthcheck() {
     step_start "healthcheck-all" "Running healthchecks (failure non-fatal)"
     local hc_fail=0
 
@@ -722,7 +787,7 @@ PYEOF
         step_done "healthcheck-all" "All healthchecks passed"
     fi
 }
-# endregion FUNC_update_step_5_healthcheck
+# endregion FUNC_update_step_6_healthcheck
 
 # ══════════════════════════════════════════════════════════════════
 # MAIN ORCHESTRATOR
@@ -775,6 +840,10 @@ PYEOF
                 checkpoint_step "tor-proxy" step_3_tor_proxy
         else
             echo "[IMP:8][node-lifecycle][main] Tor disabled — skipping tor-proxy step" >&2
+            if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+                echo "[IMP:9][node-lifecycle][main] WARNING: Telegram is configured but Tor is disabled — notifications will NOT be delivered" >&2
+                echo "[IMP:9][node-lifecycle][main] To enable: set tor.enabled=true in node.yaml and provide tor/bridges.txt" >&2
+            fi
         fi
 
         CHECKPOINT_STEP_HASH="$(_step_hash "install-docker" "${CORE_DIR}/internal/bootstrap/install-docker.sh")" \
@@ -840,19 +909,24 @@ PYEOF
             "${CORE_DIR}/internal/provision-environment.sh")" \
             checkpoint_step "provision" update_step_2_provision
 
-        # ── Step 3: Deploy docker modules ─────────────────────────────
+        # ── Step 3: SSL certificate provisioning ──────────────────────
+        CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision" \
+            "${CORE_DIR}/internal/bootstrap/ssl-provision.sh")" \
+            checkpoint_step "ssl-provision" update_step_3_ssl_provision
+
+        # ── Step 4: Deploy docker modules ─────────────────────────────
         CHECKPOINT_STEP_HASH="$(_step_hash "deploy-docker" \
             "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
-            checkpoint_step "deploy-docker" update_step_3_deploy_docker
+            checkpoint_step "deploy-docker" update_step_4_deploy_docker
 
-        # ── Step 4: Deploy system modules ─────────────────────────────
+        # ── Step 5: Deploy system modules ─────────────────────────────
         CHECKPOINT_STEP_HASH="$(_step_hash "deploy-system" \
             "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
-            checkpoint_step "deploy-system" update_step_4_deploy_system
+            checkpoint_step "deploy-system" update_step_5_deploy_system
 
-        # ── Step 5: Healthcheck ───────────────────────────────────────
+        # ── Step 6: Healthcheck ───────────────────────────────────────
         CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")" \
-            checkpoint_step "healthcheck-all" update_step_5_healthcheck
+            checkpoint_step "healthcheck-all" update_step_6_healthcheck
 
         CHECKPOINT_STEP_HASH=""
 

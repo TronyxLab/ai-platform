@@ -21,7 +21,17 @@
 ## ·   Rejected: Traefik/Caddy — overkill for current scale; nginx is proven, simple
 # endregion MODULE_CONTRACT
 
-# 📝 TRAP[DEBT] · 2026-07-16 · MED · legacy system-nginx installer (systemctl)
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ DEPRECATED — install.sh is NOT called for docker-type nginx
+# · nginx is install_type: docker (module.yaml:15) → deploy-modules.sh
+# ·   uses docker compose up, NOT deploy_system_module().
+# · ACME SSL provisioning has been extracted to:
+# ·   core/internal/bootstrap/ssl-provision.sh
+# · This file is retained for reference only. Do NOT add new logic.
+# · See DevPlan 002 for migration rationale.
+# ══════════════════════════════════════════════════════════════════
+
+# 📝 TRAP[DEBT] · 2026-07-16 · MED · legacy system-nginx installer (systemctl) — extracted to ssl-provision.sh
 # · Observed: модуль конвертирован в docker (module.yaml install_type: docker);
 #   deploy-modules.sh вызывает install.sh только для system-модулей.
 # · Suspected: install.sh — мёртвый код для docker-модуля nginx, не вызывается

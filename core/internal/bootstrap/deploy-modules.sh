@@ -39,7 +39,7 @@ _load_platform_networks() {
         log_step "platform-env" "ERROR" "platform-env.yaml not found at ${platform_env}"
         return 1
     fi
-    # Используем python3 (гарантирован после Step 2 bootstrap — python3-yaml)
+    # Используем python3 (гарантирован после Step 2 bootstrap — python3-yaml installed in apt-deps)
     python3 -c "
 import yaml
 with open('${platform_env}') as f:
@@ -330,6 +330,24 @@ deploy_system_module() {
 }
 # endregion DEPLOY_SYSTEM_MODULE
 
+# region CHECK_IMAGE_EXISTS
+## @purpose  Verify Docker image exists in registry before attempting deploy.
+##           Uses docker manifest inspect (no layer download) for fast check.
+## @param    $1  image_name:tag  Full image reference (e.g. ghcr.io/org/image:tag)
+## @return   0 if image manifest found, 1 if not found or inspect failed
+## @complexity 1 — single docker command
+_check_image_exists() {
+    local image_ref="$1"
+    log_step "image-check" "START" "Verifying image exists: ${image_ref}"
+    if docker manifest inspect "$image_ref" &>/dev/null 2>&1; then
+        log_step "image-check" "DONE" "Image found in registry: ${image_ref}"
+        return 0
+    fi
+    log_step "image-check" "FAIL" "Image NOT FOUND in registry: ${image_ref}"
+    return 1
+}
+# endregion CHECK_IMAGE_EXISTS
+
 # region DEPLOY_DOCKER_MODULE
 deploy_docker_module() {
     local module_name="$1"
@@ -367,6 +385,28 @@ deploy_docker_module() {
             docker stop "$legacy_container" 2>/dev/null || true
             docker rm "$legacy_container" 2>/dev/null || true
             log_step "docker:${module_name}" "INFO" "Legacy container removed: ${legacy_container}"
+        fi
+    fi
+
+    # Pre-deploy image check for hermes-agent (L1 base + L2 context images)
+    if [[ "$module_name" == "hermes-agent" ]]; then
+        local hermes_context="${CONTEXT_NAME:-tronyx-lab}"
+        local l1_image="ghcr.io/tronyx161/hermes-agent-base:latest"
+        local l2_image="ghcr.io/tronyx161/hermes-agent-${hermes_context}:latest"
+
+        if ! _check_image_exists "$l2_image"; then
+            if ! _check_image_exists "$l1_image"; then
+                log_step "docker:${module_name}" "FAIL" "hermes-agent L1 base image not found: ${l1_image}"
+                echo "[IMP:10][deploy-modules][hermes-agent] Build required:" >&2
+                echo "  make hermes-build-platform    # Build L1 base image locally" >&2
+                echo "  make hermes-push-l1           # Push L1 to ghcr.io" >&2
+                echo "  make hermes-build-context CONTEXT=${hermes_context}  # Build L2 context image" >&2
+            else
+                log_step "docker:${module_name}" "FAIL" "hermes-agent L2 context image not found: ${l2_image}"
+                echo "[IMP:10][deploy-modules][hermes-agent] Build required:" >&2
+                echo "  make hermes-build-context CONTEXT=${hermes_context}  # Build L2 context image" >&2
+            fi
+            return 1
         fi
     fi
 

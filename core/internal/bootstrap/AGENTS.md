@@ -34,9 +34,10 @@ node-lifecycle.sh --mode init
 node-lifecycle.sh --mode update
 ├── 1. verify-core         # Content hash verification of delivered core
 ├── 2. provision            # Environment provision (networks + volumes)
-├── 3. deploy docker        # Docker modules via deploy-modules.sh
-├── 4. deploy system        # System modules via deploy-modules.sh
-└── 5. healthcheck          # Per-module healthcheck after deploy
+├── 3. ssl-provision        # SSL certificate provisioning (acme.sh DNS-01) [NEW]
+├── 4. deploy docker        # Docker modules via deploy-modules.sh
+├── 5. deploy system        # System modules via deploy-modules.sh
+└── 6. healthcheck          # Per-module healthcheck after deploy
 ```
 
 **Вызов:** Только через `node-lifecycle.sh --mode init` или `node-lifecycle.sh --mode update`. Никогда напрямую.
@@ -53,7 +54,7 @@ node-lifecycle.sh --mode update
 
 ### `--mode update` — инкрементальный update
 
-Выполняет 5 шагов на уже забутстрапленной ноде: verify-core (content-hash) → provision (networks + volumes) → deploy docker modules → deploy system modules → healthcheck. Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из step-14 init-режима (post-init update).
+Выполняет 6 шагов на уже забутстрапленной ноде: verify-core (content-hash) → provision (networks + volumes) → ssl-provision (acme.sh DNS-01 wildcard cert) → deploy docker modules → deploy system modules → healthcheck. Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из step-14 init-режима (post-init update).
 
 ---
 
