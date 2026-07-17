@@ -115,6 +115,32 @@ main() {
     [[ -n "$OWNER_KEY" ]] || { echo "[IMP:10][bootstrap][entrypoint] FATAL: owner_key not found" >&2; exit 1; }
     echo "[IMP:9][bootstrap][entrypoint] Resolved: node=${NODE_NAME}"
 
+    # ── Extract ci_deploy_key ───────────────────────────────────────────
+    # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · ci_deploy_key not consumed by bootstrap channel
+    # · Symptom: ci_deploy_key declared in node.schema.json (node.ci_deploy_key) but never
+    #   extracted by bootstrap.sh — step_6_create_ci_deploy_user always skipped on first
+    #   bootstrap (no --ci-deploy-key / PLATFORM_CI_DEPLOY_KEY env). Every first bootstrap
+    #   of a new node required manual env override.
+    # · Root: bootstrap.sh extracted owner_key (line 114) but not ci_deploy_key — the key
+    #   was schema-valid but had no delivery channel to node-lifecycle.sh.
+    # · Fix: extract ci_deploy_key by same python3+yaml pattern as owner_key; env-приоритет:
+    #   явный PLATFORM_CI_DEPLOY_KEY (env) > node.yaml.
+    # · Prevention: schema-based contract test — every key in node.schema.json → extracted
+    #   by bootstrap.sh and passed to step_*.
+    # · Source: .ai/plans/007-dance-site-launch/02-Debt.md D1
+    echo "[IMP:8][bootstrap][entrypoint] Extracting ci_deploy_key"
+    CI_DEPLOY_KEY=$(python3 -c "import yaml; f=open('${NODE_YAML}'); d=yaml.safe_load(f); print(d.get('node',{}).get('ci_deploy_key',''))" 2>/dev/null) || true
+    # Env override: explicit PLATFORM_CI_DEPLOY_KEY takes priority over node.yaml
+    if [[ -n "${PLATFORM_CI_DEPLOY_KEY:-}" ]]; then
+        CI_DEPLOY_KEY="$PLATFORM_CI_DEPLOY_KEY"
+        echo "[IMP:8][bootstrap][entrypoint] CI_DEPLOY_KEY from env PLATFORM_CI_DEPLOY_KEY (override)"
+    fi
+    if [[ -n "$CI_DEPLOY_KEY" ]]; then
+        echo "[IMP:9][bootstrap][entrypoint] ci_deploy_key resolved"
+    else
+        echo "[IMP:8][bootstrap][entrypoint] ci_deploy_key not set — ci-deploy restricted key setup will be skipped"
+    fi
+
     SSH_HOST="$(extract_node_host "${NODE_YAML}")" || { echo "[IMP:8][bootstrap][entrypoint] WARN: No SSH host — local mode" >&2; SSH_HOST=""; }
     DETECTED_AGE_KEY="$(detect_age_key)" || DETECTED_AGE_KEY=""
 
@@ -123,6 +149,7 @@ main() {
         echo "[IMP:9][bootstrap][entrypoint] No SSH host — executing node-lifecycle.sh --mode init LOCALLY"
         local a=(--node-name "$NODE_NAME" --node-yaml "$NODE_YAML" --owner-key "$OWNER_KEY" --resume)
         [[ -n "${DETECTED_AGE_KEY}" ]] && a+=(--age-secret-key "${DETECTED_AGE_KEY}")
+        [[ -n "${CI_DEPLOY_KEY}" ]] && a+=(--ci-deploy-key "${CI_DEPLOY_KEY}")
         a+=("${PASSTHROUGH_ARGS[@]}")
         $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ${NODE_LIFECYCLE} ${a[*]}" >&2; exit 0; }
         exec "${NODE_LIFECYCLE}" "--mode" "init" "${a[@]}"
@@ -140,7 +167,7 @@ main() {
         echo "[IMP:9][bootstrap][scp] SCP phase complete"
     fi
 
-    REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${DETECTED_AGE_KEY}" "${PASSTHROUGH_ARGS[@]}")"
+    REMOTE_CMD="$(build_ssh_cmd "${NODE_NAME}" "${OWNER_KEY}" "${CI_DEPLOY_KEY}" "${DETECTED_AGE_KEY}" "${PASSTHROUGH_ARGS[@]}")"
     local masked_remote_cmd="${REMOTE_CMD}"
     if [[ -n "${DETECTED_AGE_KEY}" ]]; then
         local m; m="$(echo "${DETECTED_AGE_KEY}" | cut -c1-8)"

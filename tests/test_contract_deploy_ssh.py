@@ -1150,7 +1150,7 @@ def test_build_ssh_cmd_no_cli_age_key(caplog) -> None:
     stdout, stderr, rc = _test_func(
         REMOTE_CMD_SH,
         ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "{GOLDEN_AGE_KEY}"
+        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}"
 echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 """,
     )
@@ -1191,7 +1191,7 @@ def test_build_ssh_cmd_has_env_export(caplog) -> None:
     stdout, stderr, rc = _test_func(
         REMOTE_CMD_SH,
         ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "{GOLDEN_AGE_KEY}"
+        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}"
 echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 """,
     )
@@ -1220,7 +1220,7 @@ def test_build_ssh_cmd_empty_key(caplog) -> None:
     stdout, stderr, rc = _test_func(
         REMOTE_CMD_SH,
         ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" ""
+        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" ""
 echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 """,
     )
@@ -1256,7 +1256,7 @@ def test_build_ssh_cmd_owner_key_quoting(caplog) -> None:
     stdout, stderr, rc = _test_func(
         REMOTE_CMD_SH,
         ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "{GOLDEN_AGE_KEY}"
+        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}"
 echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 """,
     )
@@ -1293,7 +1293,7 @@ def test_build_ssh_cmd_passthrough_args(caplog) -> None:
     stdout, stderr, rc = _test_func(
         REMOTE_CMD_SH,
         ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "{GOLDEN_AGE_KEY}" "--force" "--custom-flag=value"
+        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}" "--force" "--custom-flag=value"
 echo "[IMP:9][test][build_ssh_cmd] Passthrough args test"
 """,
     )

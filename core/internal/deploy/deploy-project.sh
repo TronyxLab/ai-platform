@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: deploy-project ci-deploy rollback docker-compose atomic-rollback healthcheck audit prune-images forced-command hook-invocation module-hooks remove status lifecycle
-# STRUCTURE: parse_ssh_command|flags(─remove|─status) → load_config → save_previous → pull_image → atomic_up → wait_health(≤60s) → tag_current/rollback → prune_old(N=3) → trigger_deploy_hooks|trigger_remove_hooks → notify_hook → audit_log
+# GREP_SUMMARY: deploy-project ci-deploy rollback docker-compose atomic-rollback healthcheck audit prune-images forced-command hook-invocation module-hooks remove status lifecycle platform-deliver deliver-verb
+# STRUCTURE: parse_ssh_command|flags(─remove|─status) → ◇ platform-deliver dispatch (D2) → load_config → save_previous → pull_image → atomic_up → wait_health(≤60s) → tag_current/rollback → prune_old(N=3) → trigger_deploy_hooks|trigger_remove_hooks → notify_hook → audit_log
 # region MODULE_CONTRACT
 ## @purpose  Whitelisted entry-point for ci-deploy SSH forced-command: atomic deploy with healthcheck-based rollback (04-templates §7) + remove/status verbs
 ## @scope    Executed exclusively via SSH authorized_keys command="..." + restrict; receives <project> <ref> via $SSH_ORIGINAL_COMMAND or flags via CLI
@@ -29,6 +29,7 @@
 ##   Reason: security — exactly one allowed command, no SSH escalation possible.
 ##   ci-deploy in docker group → no sudo for docker commands (principle of least privilege, 06 §4.2).
 ## @changes 2026-07-17 · T6 — Added verb contract K1 (--remove, --status), _trigger_remove_hooks(), TRAP[BUSINESS]
+##           2026-07-17 · T2 — Added verb platform-deliver (handle_deliver, _validate_project_name), TRAP[DECISION]
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -174,6 +175,200 @@ notify_hook() {
 }
 # endregion NOTIFY_HOOK
 
+# region VALIDATE_PROJECT_NAME
+## @purpose  Validate project name: reject empty, '/' or '..' (defense against path traversal in deliver verb)
+## @io       ⇥ project_name → ⎋ return 0 if valid, return 1 if invalid (log IMP:10 FATAL)
+## @complexity O(1)
+## @invariants — rejects '/', '..', empty string; used by handle_deliver and reusable for deploy branch
+_validate_project_name() {
+    local name="$1"
+    if [[ -z "$name" ]]; then
+        log_imp 10 "deliver" "FATAL: project name is empty"
+        return 1
+    fi
+    if [[ "$name" == *"/"* || "$name" == *".."* ]]; then
+        log_imp 10 "deliver" "FATAL: project name '${name}' contains invalid characters ('/' or '..')"
+        return 1
+    fi
+    return 0
+}
+# endregion VALIDATE_PROJECT_NAME
+
+# region HANDLE_DELIVER
+## @purpose  Deliver project payload via stdin tar.gz stream (verb contract D2).
+##           Reads tar.gz from stdin (max 1 MiB), validates content against whitelist,
+##           extracts to temp dir, and atomically moves files to PROJECTS_BASE/<project>.
+## @io       ⇥ (project_name) → reads stdin (tar.gz) → \n creates/moves files in PROJECTS_BASE/<project>
+##           ⎋ exit 0 = success, exit 1 = validation/size/extract error (PROJECT_DIR unchanged)
+## @invariants
+##   - stdin: max 1 MiB (hard cap; excess → fail, nothing written)
+##   - whitelist: docker-compose.yml | compose.yaml | ai-platform.yaml | .env.platform (top-level only)
+##   - NO directories, symlinks, or hardlinks in archive
+##   - tar --no-same-owner; extract to mktemp -d → validate → atomic mv to ${PROJECTS_BASE}/${PROJECT}
+##   - audit_log: DELIVER-START / DELIVER-SUCCESS / DELIVER-FAIL
+##   - PROJECTS_BASE — единственный источник пути (никаких /opt/projects хардкодов в новых строках)
+handle_deliver() {
+    local project="$1"
+    local tmp_tar=""
+    local tmp_dir=""
+
+    # ── Cleanup helper ──
+    _cleanup_deliver_temp() {
+        [[ -n "$tmp_dir" && -d "$tmp_dir" ]] && rm -rf "$tmp_dir"
+        [[ -n "$tmp_tar" && -f "$tmp_tar" ]] && rm -f "$tmp_tar"
+    }
+
+    audit_log "platform-deliver:${project}" "DELIVER-START" "Starting payload delivery for ${project}"
+    log_imp 9 "deliver" "=== platform-deliver START: ${project} ==="
+
+    # Validate project name (reuse _validate_project_name)
+    if ! _validate_project_name "$project"; then
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Invalid project name '${project}'"
+        exit 1
+    fi
+
+    local project_dir="${PROJECTS_BASE}/${project}"
+
+    # Create temp files
+    tmp_tar=$(mktemp) || { log_imp 10 "deliver" "FATAL: mktemp failed for tar"; exit 1; }
+    tmp_dir=$(mktemp -d) || {
+        log_imp 10 "deliver" "FATAL: mktemp -d failed for extract dir"
+        rm -f "$tmp_tar"
+        exit 1
+    }
+
+    # ── Read stdin with 1 MiB hard cap ──
+    # head -c reads exactly N bytes (1 MiB + 1 for oversize detection), then exits.
+    # Unlike dd bs=N count=M (which counts read() calls, not bytes — platform-dependent),
+    # head -c guarantees byte-precise capping on all platforms.
+    head -c $((1048576 + 1)) > "$tmp_tar" 2>/dev/null || true
+    local actual_size
+    actual_size=$(wc -c < "$tmp_tar" | xargs)
+
+    if [[ "$actual_size" -gt 1048576 ]]; then
+        _cleanup_deliver_temp
+        log_imp 10 "deliver" "FATAL: payload exceeds 1 MiB limit ($actual_size bytes)"
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Payload exceeds 1 MiB limit ($actual_size bytes)"
+        exit 1
+    fi
+
+    if [[ "$actual_size" -eq 0 ]]; then
+        _cleanup_deliver_temp
+        log_imp 10 "deliver" "FATAL: empty payload"
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Empty payload"
+        exit 1
+    fi
+
+    # ── Extract to temp dir ──
+    if ! tar -xzf "$tmp_tar" --no-same-owner -C "$tmp_dir" 2>/dev/null; then
+        _cleanup_deliver_temp
+        log_imp 10 "deliver" "FATAL: tar extraction failed for ${project}"
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Tar extraction failed"
+        exit 1
+    fi
+
+    # ── Validate extracted content ──
+    # Check 1: no path traversal (subdirectory files)
+    local subdir_files
+    subdir_files=$(find "$tmp_dir" -mindepth 2 -type f 2>/dev/null | wc -l | xargs)
+    if [[ "$subdir_files" -gt 0 ]]; then
+        _cleanup_deliver_temp
+        log_imp 10 "deliver" "FATAL: subdirectory files in payload (path traversal)"
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Subdirectory files rejected (path traversal)"
+        exit 1
+    fi
+
+    # Check 2: validate each top-level entry
+    local has_invalid=0
+    local entry
+    local basename
+    local link_count
+
+    for entry in "$tmp_dir"/*; do
+        [[ -e "$entry" ]] || continue  # glob matched nothing
+
+        basename=$(basename "$entry")
+
+        # Reject symlinks
+        if [[ -L "$entry" ]]; then
+            log_imp 10 "deliver" "FATAL: symlink in payload: ${basename}"
+            has_invalid=1
+            break
+        fi
+
+        # Reject non-regular files (directories, devices, etc.)
+        if [[ ! -f "$entry" ]]; then
+            log_imp 10 "deliver" "FATAL: non-regular file in payload: ${basename}"
+            has_invalid=1
+            break
+        fi
+
+        # Reject hardlinks (stat -f%l on macOS, stat -c%h on Linux)
+        link_count=$(stat -f%l "$entry" 2>/dev/null || stat -c%h "$entry" 2>/dev/null)
+        if [[ "${link_count:-1}" -gt 1 ]]; then
+            log_imp 10 "deliver" "FATAL: hardlink in payload: ${basename} (links=${link_count})"
+            has_invalid=1
+            break
+        fi
+
+        # Check whitelist
+        case "$basename" in
+            docker-compose.yml|compose.yaml|ai-platform.yaml|.env.platform)
+                log_imp 7 "deliver" "Whitelist OK: ${basename}"
+                ;;
+            *)
+                log_imp 10 "deliver" "FATAL: non-whitelisted file in payload: ${basename}"
+                has_invalid=1
+                break
+                ;;
+        esac
+    done
+
+    if [[ "$has_invalid" -ne 0 ]]; then
+        _cleanup_deliver_temp
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Content validation failed — invalid entries"
+        exit 1
+    fi
+
+    # Check 3: verify at least one whitelist file present
+    local found_compose=0
+    if [[ -f "${tmp_dir}/docker-compose.yml" || -f "${tmp_dir}/compose.yaml" ]]; then
+        found_compose=1
+    fi
+    if [[ "$found_compose" -eq 0 ]]; then
+        _cleanup_deliver_temp
+        log_imp 10 "deliver" "FATAL: no docker-compose.yml or compose.yaml in payload"
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Missing compose file"
+        exit 1
+    fi
+
+    # ── Atomic move to PROJECT_DIR ──
+    mkdir -p "$project_dir" || {
+        _cleanup_deliver_temp
+        log_imp 10 "deliver" "FATAL: cannot create project directory ${project_dir}"
+        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Cannot create ${project_dir}"
+        exit 1
+    }
+
+    for entry in "$tmp_dir"/*; do
+        [[ -e "$entry" ]] || continue
+        mv "$entry" "$project_dir/" || {
+            _cleanup_deliver_temp
+            log_imp 10 "deliver" "FATAL: mv failed for $(basename "$entry")"
+            audit_log "platform-deliver:${project}" "DELIVER-FAIL" "mv failed during atomic copy"
+            exit 1
+        }
+    done
+
+    # Cleanup temp files
+    _cleanup_deliver_temp
+
+    audit_log "platform-deliver:${project}" "DELIVER-SUCCESS" "Payload delivered to ${project_dir}"
+    log_imp 9 "deliver" "=== platform-deliver DONE (success) ==="
+    exit 0
+}
+# endregion HANDLE_DELIVER
+
 # region PARSE_SSH_COMMAND
 parse_ssh_command() {
     local raw="${SSH_ORIGINAL_COMMAND:-}"
@@ -183,6 +378,32 @@ parse_ssh_command() {
         exit 1
     fi
 
+    # ═══════════════════════════════════════════════════════════════
+    # Verb: platform-deliver (D2 — payload delivery via stdin tar.gz)
+    # Dispatch BEFORE deploy branch to avoid any side effects.
+    # ═══════════════════════════════════════════════════════════════
+    # 🧐 TRAP[DECISION] · 2026-07-17 · — · Deliver via forced-command stdin verb, not sftp/git-pull
+    # · Rejected: sftp-chroot user (second SSH key), git-pull projects (deploy-keys on node, pull-based)
+    # · Reason: zero new channels/keys, restrict preserved, decision confirmed by user
+    # · Rev: if payload size exceeds 1M regularly → consider SCP variant with separate authorized_keys entry
+    # · See: .ai/plans/007-dance-site-launch/02-Debt.md D2
+    if [[ "$raw" == "platform-deliver "* ]]; then
+        local project="${raw#platform-deliver }"
+        # Trim whitespace
+        project="$(echo "$project" | xargs)"
+        log_imp 8 "args" "Dispatching deliver for project=${project}"
+        # Set PROJECT_DIR so _finalize_deploy EXIT trap has a valid path
+        PROJECT="${project}"
+        PROJECT_DIR="${PROJECTS_BASE}/${PROJECT}"
+        # Deploy status — not a deploy, prevent _cleanup_snapshots
+        DEPLOY_STATUS="deliver"
+        handle_deliver "$project"
+        exit 0
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # Verb: platform-deploy (existing — unchanged)
+    # ═══════════════════════════════════════════════════════════════
     local cleaned="${raw#platform-deploy }"
     cleaned="${cleaned#platform-deploy}"
 

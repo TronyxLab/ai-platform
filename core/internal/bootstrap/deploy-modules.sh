@@ -519,6 +519,10 @@ for svc in cfg.get('services', {}).values():
     # · Reason: all module base.yml files use profiles:[module-name]; standalone deploy must pass --profile
     # · Rev: if compose file format changes to not require profiles, remove this flag
     compose_args+=("--profile" "$module_name")
+    # Export NGINX_OVERLAY_DIR for nginx module so overlay vhosts from node-configs are mounted
+    if [[ "$module_name" == "nginx" ]] && [[ -n "$overlay_dir" ]]; then
+        export NGINX_OVERLAY_DIR="$overlay_dir"
+    fi
     docker compose "${compose_args[@]}" up -d --remove-orphans
     sleep 1
     log_step "docker:${module_name}" "DONE" "Docker module running: ${module_name}"

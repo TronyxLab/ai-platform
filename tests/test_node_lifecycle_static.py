@@ -244,55 +244,62 @@ def test_entrypoint_flags_contract(caplog) -> None:
 
 
 # region FUNC_test_node_update_has_ssh_proxy
-## @purpose  Verify node-update.sh contains SSH proxy logic: resolve_node_yaml,
-##           extract_node_host, SSH_HOST fallback (no SSH_HOST → local exec).
+## @purpose  Verify node-update.sh delegates to execute_remote_update() in remote-cmd.sh,
+##           and that remote-cmd.sh contains the SSH proxy logic (resolve_node_yaml +
+##           extract_node_host). Local exec fallback remains in entrypoint.
 ## @io       Script content → grep → assert patterns present
 ## @complexity O(S)
-## @invariants — SSH proxy (resolve → extract → SSH exec) and local fallback
+## @invariants — Entrypoint calls execute_remote_update; remote-cmd.sh has SSH proxy;
+##               local fallback in entrypoint
 @pytest.mark.static_audit
 def test_node_update_has_ssh_proxy(caplog) -> None:
-    """node-update.sh: resolve_node_yaml + extract_node_host + SSH_HOST fallback."""
-    # 🧪 TRAP[TEST] · Regression: T1 — SSH proxy in node-update.sh
+    """node-update.sh: delegates to execute_remote_update(); remote-cmd.sh has SSH proxy."""
+    # 🧪 TRAP[TEST] · Regression: T1 — SSH proxy in remote-cmd.sh via execute_remote_update
     # · Scenario: make node-update from macOS fails "must run as root"
     # · Last fail: Wave 1 pre-merge (no SSH proxy)
     # · Remove if: entrypoint no longer needs SSH proxy
     logger.info("[IMP:7][test_node_update_has_ssh_proxy] START")
     caplog.set_level(logging.DEBUG)
 
-    content = ENTRYPOINT_SCRIPT.read_text()
+    entrypoint_content = ENTRYPOINT_SCRIPT.read_text()
+    remote_cmd_script = CORE_DIR / "internal" / "bootstrap" / "remote-cmd.sh"
+    remote_content = remote_cmd_script.read_text()
 
-    # ── Check 1: resolve_node_yaml called ──
-    assert "resolve_node_yaml" in content, (
-        "[IMP:9][test] FAIL: node-update.sh must call resolve_node_yaml()"
+    # ── Check 1: execute_remote_update called from entrypoint ──
+    assert "execute_remote_update" in entrypoint_content, (
+        "[IMP:9][test] FAIL: node-update.sh must call execute_remote_update()"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: resolve_node_yaml() called")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: execute_remote_update() called from entrypoint")
 
-    # ── Check 2: extract_node_host called ──
-    assert "extract_node_host" in content, (
-        "[IMP:9][test] FAIL: node-update.sh must call extract_node_host()"
+    # ── Check 2: resolve_node_yaml in remote-cmd.sh (SSH proxy moved) ──
+    assert "resolve_node_yaml" in remote_content, (
+        "[IMP:9][test] FAIL: remote-cmd.sh must call resolve_node_yaml() inside execute_remote_update"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: extract_node_host() called")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: resolve_node_yaml() in remote-cmd.sh")
 
-    # ── Check 3: SSH_HOST fallback — local exec path exists ──
-    assert "ssh_host" in content.lower() or "SSH_HOST" in content, (
-        "[IMP:9][test] FAIL: node-update.sh must have SSH_HOST detection"
+    # ── Check 3: extract_node_host in remote-cmd.sh (SSH proxy moved) ──
+    assert "extract_node_host" in remote_content, (
+        "[IMP:9][test] FAIL: remote-cmd.sh must call extract_node_host() inside execute_remote_update"
     )
-    assert "LOCALLY" in content or "local" in content.lower(), (
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 3 PASS: extract_node_host() in remote-cmd.sh")
+
+    # ── Check 4: SSH_HOST fallback — local exec path exists in entrypoint ──
+    assert "LOCALLY" in entrypoint_content or "local" in entrypoint_content.lower(), (
         "[IMP:9][test] FAIL: node-update.sh must have local exec fallback when SSH_HOST absent"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 3 PASS: SSH_HOST fallback present")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 4 PASS: local exec fallback in entrypoint")
 
-    # ── Check 4: --age-secret-key-file accepted ──
-    assert "--age-secret-key-file" in content, (
+    # ── Check 5: --age-secret-key-file accepted ──
+    assert "--age-secret-key-file" in entrypoint_content, (
         "[IMP:9][test] FAIL: node-update.sh must accept --age-secret-key-file"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 4 PASS: --age-secret-key-file flag")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: --age-secret-key-file flag")
 
-    # ── Check 5: detect_age_key exists ──
-    assert "detect_age_key" in content, (
+    # ── Check 6: detect_age_key exists in entrypoint ──
+    assert "detect_age_key" in entrypoint_content, (
         "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: detect_age_key() present")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 6 PASS: detect_age_key() present")
 
     logger.info("[IMP:9][test_node_update_has_ssh_proxy] ALL CHECKS PASS")
 

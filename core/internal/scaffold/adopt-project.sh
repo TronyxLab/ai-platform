@@ -130,9 +130,23 @@ parse_args() {
         fi
     fi
 
-    # Apply env defaults
-    PROJECT_ORG="${PROJECT_ORG:-${PLATFORM_ORG:-personal}}"
+    # Apply env defaults (org requires explicit setting, no silent default)
+    if [[ -z "${PROJECT_ORG:-}" ]]; then
+        PROJECT_ORG="${PLATFORM_ORG:-}"
+    fi
     PROJECT_NODE="${PROJECT_NODE:-${PLATFORM_DEFAULT_NODE:-tronyx-vps}}"
+
+    # ⚠️ TRAP[BUG] · 2026-07-17 · D3 — молчаливый дефолт "personal" + отсутствие casing-нормализации
+    # породили конфиг-drift dance-site (см. .ai/plans/007-dance-site-launch/02-Debt.md D3)
+    # Root: дефолт "personal" скрывал отсутствие --org → org резолвилась в неверное имя,
+    #       а отсутствие lowercase-нормализации ghcr.io приводило к несовпадению registry paths
+    # Fix: fail-fast exit 1 с подсказкой + lowercase для ghcr + exact-case для uses: + сверка с node.yaml
+    # Prevention: org всегда явный — отказ вместо молчания
+    if [[ -z "${PROJECT_ORG:-}" ]]; then
+        log_imp 10 "-" "FAIL-FAST: PROJECT_ORG is not set. Use --org <github-org> or set PLATFORM_ORG env."
+        usage >&2
+        exit 1
+    fi
 
     log_imp 7 "-" "Args: dir=${PROJECT_DIR} name=${PROJECT_NAME} org=${PROJECT_ORG} node=${PROJECT_NODE} domain=${PROJECT_DOMAIN:-<none>} force=${FORCE}"
 }
@@ -265,7 +279,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: ghcr.io/${workflow_org}/${PROJECT_NAME}
+  IMAGE_NAME: ghcr.io/${workflow_org,,}/${PROJECT_NAME}
 
 jobs:
   build-and-push:
@@ -622,12 +636,61 @@ print_diff_report() {
 # endregion FUNC_print_diff_report
 
 # ──────────────────────────────────────────────────────────────────
+# region FUNC_validate_org_against_node_yaml
+## @purpose  Validate PROJECT_ORG against node.yaml context (case-insensitive).
+##           If node.yaml has context with different casing → WARN + adopt node.yaml variant.
+##           If node.yaml has different org name → exit 1.
+## @io       Updates PROJECT_ORG if casing differs; exits 1 on name mismatch
+## @invariants PROJECT_ORG must be non-empty at entry
+## @rationale Предотвращает конфиг-drift между adopt-project.sh и node.yaml (Debt D3).
+##            Без этой проверки расхождение casing между --org и node.yaml.context
+##            приводит к неработающим ghcr-путям при деплое.
+validate_org_against_node_yaml() {
+    local node_yaml="${PROJECTS_ROOT}/${PROJECT_ORG}/node-configs/${PROJECT_NODE}/node.yaml"
+
+    if [[ ! -f "$node_yaml" ]]; then
+        log_imp 6 "-" "node.yaml not found at ${node_yaml} — skipping context validation"
+        return 0
+    fi
+
+    local node_context
+    node_context="$(grep -E '^\s*context:\s*' "$node_yaml" 2>/dev/null | head -1 | awk '{print $2}' || true)"
+
+    if [[ -z "$node_context" ]]; then
+        log_imp 6 "-" "node.yaml has no context field — skipping validation"
+        return 0
+    fi
+
+    # Case-insensitive comparison
+    local org_lower="${PROJECT_ORG,,}"
+    local node_ctx_lower="${node_context,,}"
+
+    if [[ "$org_lower" != "$node_ctx_lower" ]]; then
+        log_imp 10 "-" "FAIL-FAST: PROJECT_ORG='${PROJECT_ORG}' does not match node.yaml context='${node_context}'"
+        log_imp 10 "-" "  Either use --org ${node_context} or update node.yaml context"
+        exit 1
+    fi
+
+    # Casing mismatch only → WARN and adopt node.yaml casing for consistency
+    if [[ "$PROJECT_ORG" != "$node_context" ]]; then
+        log_imp 8 "-" "Casing mismatch: PROJECT_ORG='${PROJECT_ORG}' vs node.yaml context='${node_context}' — using node.yaml variant"
+        PROJECT_ORG="$node_context"
+    fi
+
+    log_imp 7 "-" "node.yaml context validated: ${PROJECT_ORG}"
+}
+# endregion FUNC_validate_org_against_node_yaml
+
+# ──────────────────────────────────────────────────────────────────
 # region FUNC_main
 ## @purpose  Main entry point — orchestrate project adoption
 main() {
     log_imp 6 "-" "Starting adopt-project.sh (T11 full implementation)"
 
     parse_args "$@"
+
+    # ── Org validation against node.yaml (Contract 4.3) ──
+    validate_org_against_node_yaml
 
     local changes=()
 
