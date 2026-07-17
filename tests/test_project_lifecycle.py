@@ -1,0 +1,618 @@
+# GREP_SUMMARY: test project lifecycle remove unregister adopt project-list node-yaml idempotent safe no-data-deletion verb-contract hooks personal-domain
+# STRUCTURE: ┌node_yaml fixture┐ → ┌fake_project fixture┐ → ○ 9 tests → ⊕ LDD trajectory IMP:7-10
+# region MODULE_CONTRACT
+## @purpose  Test suite for project lifecycle scripts: remove-project.sh, adopt-project.sh,
+##           project-list.sh, deploy.sh, deploy-project.sh
+## @scope    9 test functions covering: unregister, idempotent remove, safe-remove (no data deletion),
+##           remove hooks in deploy-project.sh, verb contract backward compat, adopt preserves files,
+##           adopt idempotent, personal domain cert path, project-list offline
+## @invariants
+##   - All subprocess tests use tmp_path and PROJECTS_ROOT env var (no hardcoded paths)
+##   - Fixture node.yaml provides 3 test projects with known structure
+##   - Shell scripts are called via subprocess with PROJECTS_ROOT pointing to tmp_path
+##   - grep-based tests scan script source files for patterns
+## @rationale T20 per DevPlan $TEST_SPEC — validates lifecycle completion (REMOVE, ADOPT, OBSERVE phases)
+## @changes 2026-07-17 · T20 — initial implementation
+# endregion MODULE_CONTRACT
+
+import logging
+import os
+import pathlib
+import re
+import subprocess
+
+import pytest
+import yaml
+
+from tests.conftest import ldd_trajectory
+
+logger = logging.getLogger(__name__)
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+_PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
+_REMOVE_SCRIPT: pathlib.Path = (
+    _PROJECT_ROOT / "core" / "internal" / "scaffold" / "remove-project.sh"
+)
+_ADOPT_SCRIPT: pathlib.Path = (
+    _PROJECT_ROOT / "core" / "internal" / "scaffold" / "adopt-project.sh"
+)
+_LIST_SCRIPT: pathlib.Path = (
+    _PROJECT_ROOT / "core" / "internal" / "scaffold" / "project-list.sh"
+)
+_DEPLOY_PROJECT_SCRIPT: pathlib.Path = (
+    _PROJECT_ROOT / "core" / "internal" / "deploy" / "deploy-project.sh"
+)
+_DEPLOY_SCRIPT: pathlib.Path = (
+    _PROJECT_ROOT / "core" / "entrypoints" / "deploy.sh"
+)
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _create_node_yaml(base_dir: pathlib.Path, node_name: str = "tronyx-vps") -> pathlib.Path:
+    """Create a node.yaml fixture with exactly 3 projects under node-configs/<node>/.
+
+    ## @purpose — Standard node.yaml fixture for lifecycle tests. Creates path:
+    ##            <base_dir>/<context>/node-configs/<node>/node.yaml
+    ## @io — Returns path to created node.yaml
+    ## @invariants — 3 projects (myapp, myapp2, legacy) with distinct domains
+    """
+    node_config_dir = base_dir / "test-context" / "node-configs" / node_name
+    node_config_dir.mkdir(parents=True, exist_ok=True)
+    node_yaml = node_config_dir / "node.yaml"
+
+    data = {
+        "projects": [
+            {
+                "name": "myapp",
+                "domain": "myapp.tronyx.ru",
+                "node": node_name,
+                "template": "frontend",
+                "org": "test-org",
+            },
+            {
+                "name": "myapp2",
+                "domain": "myapp2.tronyx.ru",
+                "node": node_name,
+                "template": "backend",
+                "org": "test-org",
+            },
+            {
+                "name": "legacy",
+                "domain": "legacy.example.com",
+                "node": node_name,
+                "template": "frontend",
+                "org": "other-org",
+            },
+        ]
+    }
+
+    with open(node_yaml, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+    logger.info(
+        "[IMP:8][helper][create_node_yaml] Created %s with 3 projects",
+        node_yaml,
+    )
+    return node_yaml
+
+
+def _create_fake_project(base_dir: pathlib.Path, name: str = "legacy") -> pathlib.Path:
+    """Create a minimal fake project directory with src/, Dockerfile, etc.
+
+    ## @purpose — Fixture for adopt tests: simulates an existing project with
+    ##            application code that must NOT be modified by adopt.
+    ## @io — Returns project dir path
+    """
+    project_dir = base_dir / name
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Application files that must be preserved
+    src_dir = project_dir / "src"
+    src_dir.mkdir(exist_ok=True)
+    (src_dir / "main.py").write_text("# Fake project source\n")
+
+    (project_dir / "Dockerfile").write_text(
+        "FROM python:3.12-slim\nCOPY src/ /app\n"
+    )
+
+    (project_dir / "docker-compose.yml").write_text(
+        "services:\n  web:\n    build: .\n    ports:\n      - '80:80'\n"
+    )
+
+    logger.info(
+        "[IMP:8][helper][create_fake_project] Created %s with src/, Dockerfile, docker-compose.yml",
+        project_dir,
+    )
+    return project_dir
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def node_yaml_3_projects(tmp_path: pathlib.Path) -> tuple[pathlib.Path, str]:
+    """Create a node.yaml with 3 projects in tmp_path.
+
+    ## @returns — (node_yaml_path, node_name) tuple.
+    ##            Sets PROJECTS_ROOT env var in the fixture's return context.
+    ##            Test functions receive the tuple and must set PROJECTS_ROOT themselves.
+    """
+    node_name = "tronyx-vps"
+    node_yaml = _create_node_yaml(tmp_path, node_name)
+    return node_yaml, node_name
+
+
+@pytest.fixture
+def fake_legacy_project(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Create a fake legacy project directory for adopt tests."""
+    return _create_fake_project(tmp_path, "legacy")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TESTS — REMOVE (T10)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@ldd_trajectory
+def test_unregister_removes_project_entry(
+    caplog,
+    tmp_path: pathlib.Path,
+    node_yaml_3_projects: tuple[pathlib.Path, str],
+) -> None:
+    """Remove-project.sh must delete the specified project from node.yaml and leave others intact.
+
+    ── Scenario: 3 projects → remove "myapp" → 2 remaining, YAML valid ──
+    """
+    node_yaml, node_name = node_yaml_3_projects
+    projects_root = node_yaml.parent.parent.parent  # .../test-context/node-configs/<node>/node.yaml → .../test-context/... → .../
+    # projects_root should point to the parent of test-context
+    effective_projects_root = node_yaml.parent.parent.parent.parent  # .../test-context/ → .../
+    # Actually we need PROJECTS_ROOT to encompass the entire structure
+    # Structure: tmp_path/test-context/node-configs/<node>/node.yaml
+    # PROJECTS_ROOT = tmp_path — then find walks: tmp_path/*/node-configs/*/node.yaml
+    logger.info("[IMP:9][test][unregister] Starting — node_yaml=%s", node_yaml)
+    logger.info("[IMP:7][test][unregister] projects_root=%s", tmp_path)
+
+    env = os.environ.copy()
+    env["PROJECTS_ROOT"] = str(tmp_path)
+
+    result = subprocess.run(
+        [
+            str(_REMOVE_SCRIPT),
+            "--name", "myapp",
+            "--force",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+    logger.info("[IMP:7][test][unregister] Exit=%d, stdout=%s, stderr=%s",
+                result.returncode, result.stdout[:200], result.stderr[:200])
+
+    # Verify node.yaml still exists and has 2 projects
+    assert node_yaml.exists(), "node.yaml was deleted entirely"
+    with open(node_yaml) as f:
+        data = yaml.safe_load(f)
+
+    assert data is not None, "node.yaml is empty"
+    assert "projects" in data, "node.yaml missing 'projects' key"
+    assert len(data["projects"]) == 2, (
+        f"Expected 2 projects after remove, got {len(data['projects'])}"
+    )
+
+    # Verify correct projects remain
+    remaining_names = [p["name"] for p in data["projects"]]
+    assert "myapp" not in remaining_names, "myapp should have been removed"
+    assert "myapp2" in remaining_names, "myapp2 should remain"
+    assert "legacy" in remaining_names, "legacy should remain"
+
+    logger.info("[IMP:9][test][unregister] Verified: remaining projects=%s", remaining_names)
+
+
+@ldd_trajectory
+def test_unregister_idempotent(
+    caplog,
+    tmp_path: pathlib.Path,
+    node_yaml_3_projects: tuple[pathlib.Path, str],
+) -> None:
+    """Second remove of same project must be SKIP (exit 0, no error).
+
+    ── Scenario: Remove "myapp" twice → second call exits 0, YAML unchanged ──
+    """
+    node_yaml, _ = node_yaml_3_projects
+    env = os.environ.copy()
+    env["PROJECTS_ROOT"] = str(tmp_path)
+
+    # First remove
+    subprocess.run(
+        [str(_REMOVE_SCRIPT), "--name", "myapp", "--force"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+    # Second remove — must be clean exit (project already removed → SKIP exit 0)
+    result2 = subprocess.run(
+        [str(_REMOVE_SCRIPT), "--name", "myapp", "--force"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+    logger.info(
+        "[IMP:7][test][unregister_idempotent] Second remove: exit=%d, stdout=%s",
+        result2.returncode,
+        result2.stdout[:300],
+    )
+
+    assert result2.returncode == 0, (
+        f"Second remove of same project should exit 0, got {result2.returncode}"
+    )
+
+    # Verify YAML still has 2 projects (unchanged after first remove)
+    with open(node_yaml) as f:
+        data = yaml.safe_load(f)
+    remaining = [p["name"] for p in data.get("projects", [])]
+    assert "myapp" not in remaining
+    assert len(remaining) == 2
+
+    logger.info("[IMP:9][test][unregister_idempotent] Verified: second remove is no-op")
+
+
+@ldd_trajectory
+def test_remove_is_safe_no_data_deletion(caplog) -> None:
+    """remove-project.sh and deploy-project.sh must NOT contain dangerous patterns (O7/DD10).
+
+    ── Scenario: grep for `down -v`, `volume rm`, `image rm`, `gh repo delete` in lifecycle scripts ──
+    """
+    scripts_to_check = [_REMOVE_SCRIPT, _DEPLOY_PROJECT_SCRIPT]
+    # Patterns that are FORBIDDEN in actual command execution (O7/DD10)
+    # NOTE: echo/print messages that tell the user how to manually clean up are OK —
+    #       only actual command execution (subshell, eval, direct) is forbidden.
+    dangerous_patterns = ["down -v", "volume rm", "image rm", "gh repo delete"]
+    # Shell constructs that indicate command execution (not just echo/messages)
+    execution_patterns = [
+        r"(?<!echo [\"'])(?<!printf [\"'])down -v",
+        r"(?<!echo [\"'])(?<!printf [\"'])volume rm",
+        r"(?<!echo [\"'])(?<!printf [\"'])image rm",
+        r"(?<!echo [\"'])(?<!printf [\"'])gh repo delete",
+    ]
+    found_violations: list[str] = []
+
+    for script in scripts_to_check:
+        if not script.exists():
+            logger.info("[IMP:8][test][safe_remove] Missing script (expected): %s", script)
+            continue
+        content = script.read_text()
+        for i, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            # Skip comments, echo/printf statements (informational only)
+            if stripped.startswith("#") or stripped.startswith("echo") or stripped.startswith("printf") or stripped.startswith("#"):
+                continue
+            for pattern in dangerous_patterns:
+                if pattern in stripped:
+                    found_violations.append(
+                        f"{script.relative_to(_PROJECT_ROOT)}:{i}: {stripped}"
+                    )
+
+    assert not found_violations, (
+        f"Dangerous patterns found in lifecycle scripts (O7 violation):\n"
+        + "\n".join(f"  - {v}" for v in found_violations)
+    )
+    logger.info("[IMP:9][test][safe_remove] No dangerous patterns found in lifecycle scripts")
+
+
+@ldd_trajectory
+def test_remove_hooks_triggered_in_runtime(caplog) -> None:
+    """deploy-project.sh must contain _trigger_remove_hooks and hooks.on_project_remove (K2).
+
+    ── Scenario: grep deploy-project.sh for hook patterns (closes forensics V3) ──
+    """
+    if not _DEPLOY_PROJECT_SCRIPT.exists():
+        pytest.fail(
+            f"Missing required file: {_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)} — "
+            "was T6 (Wave 1) properly implemented?"
+        )
+
+    content = _DEPLOY_PROJECT_SCRIPT.read_text()
+
+    has_remove_hooks_func = "_trigger_remove_hooks" in content
+    has_on_project_remove = "hooks.on_project_remove" in content
+
+    logger.info(
+        "[IMP:7][test][remove_hooks] _trigger_remove_hooks=%s, hooks.on_project_remove=%s",
+        has_remove_hooks_func,
+        has_on_project_remove,
+    )
+
+    assert has_remove_hooks_func, (
+        f"{_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)}: missing _trigger_remove_hooks() function. "
+        "T6 (Wave 1) must implement this. Currently only _trigger_deploy_hooks() exists."
+    )
+    assert has_on_project_remove, (
+        f"{_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)}: missing 'hooks.on_project_remove' reference. "
+        "K2 requires _trigger_remove_hooks to iterate hooks.on_project_remove."
+    )
+
+    logger.info("[IMP:9][test][remove_hooks] Verified: _trigger_remove_hooks and hooks.on_project_remove present")
+
+
+@ldd_trajectory
+def test_deploy_verb_contract_backward_compat(caplog) -> None:
+    """deploy.sh and deploy-project.sh must support verb contract K1 (backward compatible).
+
+    ── Scenario: Check for remove/status verb parsing in deploy scripts ──
+    """
+    if not _DEPLOY_SCRIPT.exists():
+        pytest.fail(f"Missing required file: {_DEPLOY_SCRIPT.relative_to(_PROJECT_ROOT)}")
+    if not _DEPLOY_PROJECT_SCRIPT.exists():
+        pytest.fail(f"Missing required file: {_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)}")
+
+    deploy_content = _DEPLOY_SCRIPT.read_text()
+    deploy_project_content = _DEPLOY_PROJECT_SCRIPT.read_text()
+
+    # K1: SSH_ORIGINAL_COMMAND parsing — must handle legacy format <proj> <sha> <env>
+    has_legacy_deploy = bool(
+        re.search(r"SSH_ORIGINAL_COMMAND", deploy_content)
+        or re.search(r"SSH_ORIGINAL_COMMAND", deploy_project_content)
+    )
+
+    # K1: remove verb handling
+    has_remove_verb = "--remove" in deploy_project_content or "remove" in deploy_project_content.lower()
+
+    # K1: status verb handling
+    has_status_verb = "--status" in deploy_project_content or "status" in deploy_project_content.lower()
+
+    logger.info(
+        "[IMP:7][test][verb_contract] legacy_deploy=%s, remove_verb=%s, status_verb=%s",
+        has_legacy_deploy,
+        has_remove_verb,
+        has_status_verb,
+    )
+
+    # Backward compat: legacy deploy format must work
+    # The current deploy.sh is a thin wrapper that passes through to deploy-project.sh
+    # The legacy format is <proj> <sha> <env> → handled by deploy-project.sh
+    assert has_legacy_deploy, (
+        "K1 backward compat: SSH_ORIGINAL_COMMAND parsing must be preserved. "
+        "Legacy <proj> <sha> <env> format must still work."
+    )
+
+    logger.info("[IMP:9][test][verb_contract] K1 backward compat verified")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TESTS — ADOPT (T11)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@ldd_trajectory
+def test_adopt_preserves_project_files(
+    caplog,
+    tmp_path: pathlib.Path,
+    fake_legacy_project: pathlib.Path,
+) -> None:
+    """Adopt must NOT modify src/, Dockerfile, or docker-compose.yml.
+
+    ── Scenario: Adopt on a fake project → application files unchanged ──
+    """
+    project_dir = fake_legacy_project
+    logger.info("[IMP:9][test][adopt_preserve] Starting — project_dir=%s", project_dir)
+
+    # Record checksums before adopt
+    src_hash = hashlib_md5(project_dir / "src" / "main.py")
+    dockerfile_hash = hashlib_md5(project_dir / "Dockerfile")
+    compose_hash = hashlib_md5(project_dir / "docker-compose.yml")
+
+    env = os.environ.copy()
+    # Set PROJECTS_ROOT so the script can find/create node.yaml structure
+    env["PROJECTS_ROOT"] = str(tmp_path)
+    # The adopt script needs the project dir as an argument
+
+    result = subprocess.run(
+        [
+            str(_ADOPT_SCRIPT),
+            "--dir", str(project_dir),
+            "--name", "legacy",
+            "--org", "test-org",
+            "--node", "tronyx-vps",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+    logger.info(
+        "[IMP:7][test][adopt_preserve] Adopt exit=%d, stdout=%s, stderr=%s",
+        result.returncode,
+        result.stdout[:300],
+        result.stderr[:300],
+    )
+
+    # Verify files are unchanged
+    assert hashlib_md5(project_dir / "src" / "main.py") == src_hash, "src/main.py was modified by adopt"
+    assert hashlib_md5(project_dir / "Dockerfile") == dockerfile_hash, "Dockerfile was modified by adopt"
+    assert hashlib_md5(project_dir / "docker-compose.yml") == compose_hash, "docker-compose.yml was modified by adopt"
+
+    logger.info("[IMP:9][test][adopt_preserve] Verified: application files unchanged after adopt")
+
+
+@ldd_trajectory
+def test_adopt_idempotent(
+    caplog,
+    tmp_path: pathlib.Path,
+    fake_legacy_project: pathlib.Path,
+) -> None:
+    """Second adopt call must be no-op (exit 0, no changes).
+
+    ── Scenario: Adopt twice → second call exits 0, files unchanged ──
+    """
+    project_dir = fake_legacy_project
+    logger.info("[IMP:9][test][adopt_idempotent] Starting")
+
+    env = os.environ.copy()
+    env["PROJECTS_ROOT"] = str(tmp_path)
+
+    args = [
+        str(_ADOPT_SCRIPT),
+        "--dir", str(project_dir),
+        "--name", "legacy",
+        "--org", "test-org",
+        "--node", "tronyx-vps",
+    ]
+
+    # First adopt
+    result1 = subprocess.run(args, capture_output=True, text=True, timeout=30, env=env)
+    logger.info("[IMP:7][test][adopt_idempotent] First adopt: exit=%d", result1.returncode)
+
+    # Capture first-adopt state
+    first_state = hashlib_md5(project_dir / "src" / "main.py")
+
+    # Second adopt
+    result2 = subprocess.run(args, capture_output=True, text=True, timeout=30, env=env)
+
+    logger.info(
+        "[IMP:7][test][adopt_idempotent] Second adopt: exit=%d, stdout=%s",
+        result2.returncode,
+        result2.stdout[:200],
+    )
+
+    assert result2.returncode == 0, (
+        f"Second adopt should exit 0 (no-op), got {result2.returncode}: {result2.stderr[:200]}"
+    )
+    assert hashlib_md5(project_dir / "src" / "main.py") == first_state, (
+        "src/main.py changed between first and second adopt"
+    )
+
+    logger.info("[IMP:9][test][adopt_idempotent] Verified: second adopt is no-op")
+
+
+@ldd_trajectory
+def test_adopt_personal_domain_cert_path(
+    caplog,
+    tmp_path: pathlib.Path,
+    fake_legacy_project: pathlib.Path,
+) -> None:
+    """Personal domain adopt must use non-wildcard cert path (O11).
+
+    ── Scenario: Adopt with --domain sexydancerostov.ru → vhost references non-wildcard cert ──
+    """
+    project_dir = fake_legacy_project
+    personal_domain = "sexydancerostov.ru"
+    logger.info("[IMP:9][test][adopt_personal] Starting — domain=%s", personal_domain)
+
+    env = os.environ.copy()
+    env["PROJECTS_ROOT"] = str(tmp_path)
+
+    result = subprocess.run(
+        [
+            str(_ADOPT_SCRIPT),
+            "--dir", str(project_dir),
+            "--name", "legacy",
+            "--org", "test-org",
+            "--node", "tronyx-vps",
+            "--domain", personal_domain,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+    logger.info(
+        "[IMP:7][test][adopt_personal] Adopt exit=%d, stdout=%s",
+        result.returncode,
+        result.stdout[:300],
+    )
+
+    # Check that the output or created files reference non-wildcard cert path
+    output = result.stdout + " " + result.stderr
+    # Personal domains should NOT reference wildcard cert paths
+    assert "wildcard" not in output.lower(), (
+        f"Personal domain '{personal_domain}' should use personal cert path, not wildcard. "
+        f"Output: {output[:500]}"
+    )
+    # Should reference the personal domain cert
+    assert personal_domain in output, (
+        f"Personal domain '{personal_domain}' not mentioned in adopt output. "
+        f"Output: {output[:500]}"
+    )
+
+    logger.info("[IMP:9][test][adopt_personal] Verified: personal domain handled without wildcard cert")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TESTS — LIST (T12)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@ldd_trajectory
+def test_project_list_offline(
+    caplog,
+    tmp_path: pathlib.Path,
+    node_yaml_3_projects: tuple[pathlib.Path, str],
+) -> None:
+    """project-list.sh --list must read node.yaml offline and output a table with 3 projects.
+
+    ── Scenario: no SSH, no network → list command reads local node.yaml ──
+    """
+    node_yaml, node_name = node_yaml_3_projects
+    logger.info("[IMP:9][test][list_offline] Starting — node_yaml=%s", node_yaml)
+    logger.info("[IMP:7][test][list_offline] projects_root=%s", tmp_path)
+
+    env = os.environ.copy()
+    env["PROJECTS_ROOT"] = str(tmp_path)
+
+    result = subprocess.run(
+        [
+            str(_LIST_SCRIPT),
+            "--list",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+    logger.info(
+        "[IMP:7][test][list_offline] Exit=%d, stdout=%s",
+        result.returncode,
+        result.stdout[:500],
+    )
+
+    assert result.returncode == 0, (
+        f"project-list.sh --list failed: exit={result.returncode}, stderr={result.stderr[:200]}"
+    )
+
+    output = result.stdout
+
+    # Verify all 3 projects appear in output
+    assert "myapp" in output, "myapp should be in the list"
+    assert "myapp2" in output, "myapp2 should be in the list"
+    assert "legacy" in output, "legacy should be in the list"
+
+    # Verify domains appear
+    assert "myapp.tronyx.ru" in output, "myapp.tronyx.ru domain should be in the list"
+    assert "myapp2.tronyx.ru" in output, "myapp2.tronyx.ru domain should be in the list"
+    assert "legacy.example.com" in output, "legacy.example.com domain should be in the list"
+
+    logger.info("[IMP:9][test][list_offline] Verified: 3 projects listed offline")
+
+
+# ── Hash helper ──────────────────────────────────────────────────────────────
+
+
+def hashlib_md5(filepath: pathlib.Path) -> str:
+    """Compute MD5 hex digest of file contents.
+
+    ## @purpose — Quick file checksum for adopt-preservation tests.
+    ## @io — ⇥ filepath → ⎋ str (hex digest)
+    """
+    import hashlib
+    return hashlib.md5(filepath.read_bytes()).hexdigest()

@@ -31,6 +31,11 @@
 | `make gate` | Production gate (MODE=fast/full). MODE=full: validate→lint→gates→contract→static→predeploy→smoke→component. MODE=fast: validate→lint→gates→static→predeploy. | `make gate [MODE=fast|full]` | validate.sh + линтеры + pytest + MODE-диспетчеризация |
 | `make new-project` | Создать проект из шаблона | `make new-project NAME=<n> TEMPLATE=<t>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/add-project.sh` |
 | `make new-context` | Создать контекст деплоя | `make new-context NODE=<n>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/context-init.sh` |
+| `make project-sync-env` | Синхронизация .env.platform из platform-env.yaml | `make project-sync-env [NAME=<name>] [DOMAIN=<domain>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/gen-env-platform.sh` |
+| `make remove-project` | Удаление проекта из lifecycle (safe — без потери данных) | `make remove-project NAME=<name> [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/remove-project.sh` |
+| `make adopt-project` | Адаптация существующего проекта в lifecycle | `make adopt-project DIR=<dir> [NAME=<name>] [DOMAIN=<domain>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/adopt-project.sh` |
+| `make project-list` | Список зарегистрированных проектов (offline) | `make project-list [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/project-list.sh` |
+| `make project-status` | Статус проектов на target node (SSH) | `make project-status NAME=<name> [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/project-list.sh --status` |
 | `make validate` | Schema-валидация | `make validate [FILES=...]` | `core/entrypoints/validate.sh` |
 | `make lint` | shellcheck + yamllint + pytest-lint | `make lint` | `core/entrypoints/validate.sh --lint` |
 | `make audit` | Системный аудит платформы | `make audit [NODE=...]` | `core/entrypoints/audit.sh` |
@@ -90,6 +95,10 @@ core/
 │   ├── scaffold/add-project.sh
 │   ├── scaffold/context-init.sh
 │   ├── scaffold/add-vhost.sh
+│   ├── scaffold/gen-env-platform.sh
+│   ├── scaffold/remove-project.sh
+│   ├── scaffold/adopt-project.sh
+│   └── scaffold/project-list.sh
 │   ├── notify/notify-hook.sh
 │   ├── catalog/generate-catalog.sh
 │   ├── provision-environment.sh

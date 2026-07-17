@@ -1,146 +1,20 @@
-# GREP_SUMMARY: GitHub Actions CI/CD docker build push deploy node-configs centralized-host reusable
-# STRUCTURE: resolve-node → build-image → deploy(platform-deploy.yml reusable workflow)
-# @purpose  GitHub Actions CI/CD workflow: build → push → deploy for frontend projects
-# region MODULE_CONTRACT
-## @purpose  GitHub Actions workflow: build Docker image → push → deploy on node (04-templates §7)
-## @scope    Runs on push to main (production) and staging branches
+# GREP_SUMMARY: GitHub Actions CI/CD deploy reusable workflow frontend
+# STRUCTURE: on(push:main) → deploy(uses __ORG_NAME__/ai-platform/deploy-project.yml)
+# @purpose  Simplified CI/CD: build+delegation to reusable platform workflow (T13)
 ## @invariants
-##   - resolve-node: reads target_node from ai-platform.yaml → clones node-configs → resolves SSH_HOST
-##   - build-image: builds + pushes Docker image with sha + latest tags
-##   - deploy: production deploy on main branch via platform-deploy.yml (reusable)
-##   - deploy-staging: staging deploy on staging branch via platform-deploy.yml (reusable)
-##   - Only CI_DEPLOY_KEY + NODE_CONFIGS_TOKEN stored as per-repo secrets; host is NOT a secret
-##   - IMAGE_TAG passed as second arg to deploy-project.sh (NOT via echo)
-## @rationale 3-job pattern: resolve-node parallelizes with checkout/build-image;
-##   deploy uses reusable workflow (D2 — workflow copied into project repo, not imported from ai-platform)
-##
-## 🧐 TRAP[DECISION] · ci-deploy has NO shell; authorized_keys forces deploy-project.sh
-##   Rejected: full SSH access
-##   Reason: security — single whitelisted command (AR09)
-##
-## 🧐 TRAP[DECISION] · Rollback выполняется НА НОДЕ, не в CI/CD
-##   Rejected: rollback в Actions
-##   Reason: быстрый откат без network roundtrip (AR11)
-##
-## 🧐 TRAP[DECISION] · GHCR auth на VPS через SOPS/bootstrap, не через CI-токены
-##   Reason: единая точка конфигурации, меньше секретов в репозитории
-##
-## ⚠️ TRAP[DECISION] · 2026-07-01 · — · NODE_CONFIGS_TOKEN read-only scope
-## ·   NODE_CONFIGS_TOKEN (stored as GitHub secret) has read-only scope — can only
-## ·   clone tronyx-lab/platform (read-only). It CANNOT push, create repos, or modify anything.
-## ·   Rationale: a compromised CI pipeline could exfiltrate the PAT; read-only scope
-## ·   limits blast radius to reading node IPs and project configs (non-secret metadata).
-##
-## ⚠️ TRAP[DECISION] · 2026-07-01 · — · Node IP from node-configs only
-## ·   SSH host is resolved at CI runtime by cloning node-configs → reading node.yaml
-## ·   → extracting node.host. It is NOT stored as a GitHub secret.
-## ·   Rationale: node IPs change (provider migration, reimage). Storing IP as secret
-## ·   means updating it in every project repo. Centralized node-configs is single
-## ·   source of truth.
-## ·   Rejected: hardcode IP in GitHub secrets — manual update on every IP change
-## ·   Rejected: DNS A record for node — provider may not support API-driven DNS
-##
-## ⚠️ TRAP[DECISION] · 2026-07-01 · — · AR11: no canary/blue-green
-## ·   Deploy strategy is atomic swap (stop old → start new) with healthcheck rollback.
-## ·   No canary or blue-green deployment — VPS has only 8GB RAM, insufficient for
-## ·   running two versions simultaneously.
-## ·   Rejected: blue-green with two compose projects — doubles resource requirement
-## ·   Rev: if hardware is upgraded, implement blue-green with nginx traffic switch
-##
-## ⚠️ TRAP[DECISION] · 2026-07-01 · — · ci-deploy role separate from ci
-## ·   ci-deploy is a dedicated SSH user with forced-command only (deploy-project.sh).
-## ·   It is NOT the same as the `ci` user (which may have broader access).
-## ·   Rationale: least privilege — the CI job runner that builds images should NOT
-## ·   have SSH deploy access. Only the deploy job (separate step) uses ci-deploy key.
-# endregion MODULE_CONTRACT
-
-name: Deploy __PROJECT_NAME__
+##   - Единственный job делегирует в reusable workflow платформы
+##   - secrets: inherit — CI_DEPLOY_KEY, GITHUB_TOKEN наследуются
+##   - org-agnostic (__ORG_NAME__ заменяется при scaffold)
+##   - ≤40 строк, ≤15 non-comment
+name: Deploy
 
 on:
   push:
-    branches: [main, staging]
-  workflow_dispatch:
-
-env:
-  IMAGE_NAME: ghcr.io/__ORG_NAME__/__PROJECT_NAME__
+    branches: [main]
 
 jobs:
-  # ─── Job 1: Resolve SSH host from centralized node-configs ───
-  resolve-node:
-    runs-on: ubuntu-latest
-    outputs:
-      ssh_host: ${{ steps.resolve-node.outputs.ssh_host }}
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Read target_node from ai-platform.yaml
-        id: read
-        run: |
-          TARGET=$(python3 -c "
-          import yaml
-          with open('ai-platform.yaml') as f:
-              d = yaml.safe_load(f)
-          print(d.get('target_node', 'tronyx-vps'))
-          ")
-          echo "target_node=${TARGET}" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve node SSH host
-        id: resolve-node
-        uses: ./.github/actions/resolve-node
-        with:
-          target_node: ${{ steps.read.outputs.target_node }}
-          node_configs_token: ${{ secrets.NODE_CONFIGS_TOKEN }}
-
-  # ─── Job 2: Build and push Docker image ───
-  build-image:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ─── Job 3: Deploy to production (main branch) ───
   deploy:
-    needs: [resolve-node, build-image]
-    if: github.ref_name == 'main'
-    uses: ./.github/workflows/platform-deploy.yml
+    uses: __ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml@main
     with:
       project_name: __PROJECT_NAME__
-      image_tag: ${{ github.sha }}
-      ssh_host: ${{ needs.resolve-node.outputs.ssh_host }}
-    secrets: inherit
-
-  # ─── Job 4: Deploy to staging (staging branch) ───
-  deploy-staging:
-    needs: [resolve-node, build-image]
-    if: github.ref_name == 'staging'
-    uses: ./.github/workflows/platform-deploy.yml
-    with:
-      project_name: __PROJECT_NAME__
-      image_tag: ${{ github.sha }}
-      ssh_host: ${{ needs.resolve-node.outputs.ssh_host }}
     secrets: inherit

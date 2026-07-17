@@ -1,14 +1,13 @@
-# GREP_SUMMARY: docker-compose fullstack backend frontend proxy-net shared-db-net
-# STRUCTURE: service(backend) + service(frontend) → networks(proxy-net:external + shared-db-net:external)
+# GREP_SUMMARY: docker-compose fullstack backend frontend proxy-net shared-db-net env_file
+# STRUCTURE: service(backend) + service(frontend) → both env_file(.env.platform) → networks(proxy-net + shared-db-net)
 # region MODULE_CONTRACT
-## @purpose  Development and production compose definition for fullstack projects (04-templates §3)
-## @scope    Defines backend + frontend services with shared network topology
+## @purpose  Development and production compose definition for fullstack projects
+## @scope    Defines backend + frontend services with shared network topology and env_file contract
 ## @invariants
 ##   - shared-db-net is external (created by postgres-shared module)
 ##   - proxy-net is external (created by nginx module)
-##   - Backend healthcheck on /health; frontend healthcheck on /health (nginx)
-##   - Backend not exposed to proxy-net (only frontend)
-## @rationale Fullstack = backend (API + DB) + frontend (SPA via nginx), separate networks
+##   - env_file: .env.platform на обоих сервисах — единственный источник платформенных переменных
+## @rationale .env.platform заменяет environment-блок; исключает дрейф между проектами (DD5)
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -31,6 +30,8 @@ services:
         limits:
           memory: 1G
     logging: *default-logging
+    env_file:
+      - .env.platform
     environment:
       - PYTHONUNBUFFERED=1
     volumes:
@@ -56,6 +57,8 @@ services:
     restart: always
     stop_grace_period: 30s
     logging: *default-logging
+    env_file:
+      - .env.platform
     environment:
       - NODE_ENV=production
     networks:
