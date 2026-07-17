@@ -27,6 +27,7 @@ import os
 import platform as _platform
 import subprocess
 import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pytest
@@ -279,6 +280,204 @@ def _wait_for_minio_healthy(
     return False
 
 
+def _build_waves(module_graph: dict[str, list[str]]) -> list[list[str]]:
+    """Group modules into waves by dependency depth.
+
+    ## @purpose — Convert module_graph (topologically sorted) into waves of
+    ##            independent modules that can be started in parallel.
+    ##            Wave 0: modules with no dependencies.
+    ##            Wave N: modules whose dependencies are all in waves < N.
+    ## @io — ⇥ module_graph {module → [deps]} → ⎋ list[list[str]] waves
+    ## @complexity — O(M * D) where M=modules, D=avg dependencies per module
+    ## @invariants
+    ##   - module_graph is already topologically sorted (dict insertion order)
+    ##   - Unassigned dependencies default to wave -1 (safe fallback)
+    ##   - Result preserves module order within each wave
+    """
+    _logger = logging.getLogger(__name__)
+    assigned: dict[str, int] = {}
+
+    for module_name, deps in module_graph.items():
+        if not deps:
+            assigned[module_name] = 0
+        else:
+            # Find the highest wave among all dependencies
+            max_dep_wave = max(assigned.get(dep, -1) for dep in deps)
+            assigned[module_name] = max_dep_wave + 1
+
+    if not assigned:
+        return []
+
+    max_wave = max(assigned.values())
+    waves: list[list[str]] = [[] for _ in range(max_wave + 1)]
+    for module_name, wave_idx in assigned.items():
+        waves[wave_idx].append(module_name)
+
+    _logger.info(
+        "[IMP:8][conftest][_build_waves] Built %d wave(s) from %d module(s)",
+        len(waves),
+        len(assigned),
+    )
+    return waves
+
+
+def _start_single_module(
+    module_name: str,
+    compose_path: str,
+    all_compose_files: dict[str, str],
+    module_graph: dict[str, list[str]],
+    platform_ports: dict[str, int],
+    compose_timeout: int,
+    compose_extra_timeout: int,
+    compose_down_timeout: int,
+    docker_log_timeout: int,
+    stderr_tail_lines: int,
+    loki_timeout: int,
+) -> dict:
+    """Start one module's compose stack, return success/failure status.
+
+    ## @purpose — Extracted from platform_services loop for wave-parallel execution.
+    ##            Each call handles one module's lifecycle: pre-cleanup down,
+    ##            compose up (with minio --wait workaround), post-up container
+    ##            existence check, and loki readiness HTTP poll.
+    ## @io — ⇥ module params → ⎋ dict with "success": bool, "module_name": str
+    ## @complexity — O(1) per module (subprocess calls + optional HTTP poll)
+    ## @invariants
+    ##   - compose_path must be a valid file path (validated by caller)
+    ##   - Pre-cleanup down intentionally WITHOUT --remove-orphans (T3b fix)
+    ##   - MinIO uses up -d without --wait, then polls health directly (D5)
+    ##   - Post-up container existence check catches silent CI compose failures
+    ##   - Loki readiness poll only runs for module_name == "observability"
+    ## @rationale — Extracting to a standalone function allows ThreadPoolExecutor
+    ##              to call it in parallel threads. Each module runs its own
+    ##              compose subprocess, so GIL is not a bottleneck (I/O-bound).
+    """
+    _logger = logging.getLogger(__name__)
+
+    if compose_path is None:
+        _logger.warning(
+            "[IMP:8][conftest][_start_single_module] No compose path for '%s'",
+            module_name,
+        )
+        return {"success": False, "module_name": module_name}
+
+    # ── Build compose base args (files + project name) ──────────────
+    compose_base_args = ["docker", "compose", "-f", compose_path]
+    test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
+    if os.path.exists(test_override):
+        compose_base_args.extend(["-f", test_override])
+    macos_override = os.path.join(os.path.dirname(compose_path), "docker-compose.macos.yml")
+    if _platform.system() == "Darwin" and os.path.exists(macos_override):
+        compose_base_args.extend(["-f", macos_override])
+    compose_base_args.extend(["-p", "ai-platform-test"])
+
+    # ── Pre-cleanup: docker compose down before up (SAME module only) ─
+    # NOTE: intentionally WITHOUT --remove-orphans — that flag in a per-module
+    # down would kill previously started modules' containers since all modules
+    # share the same compose project name (ai-platform-test) but are defined
+    # in different compose files. Global cleanup above already removed orphans.
+    _down_args = [*compose_base_args, "down", "--timeout", str(compose_down_timeout)]
+    _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
+
+    # ── Start up ──────────────────────────────────────────────────
+    if module_name == "minio":
+        # D5: MinIO has a one-shot init container (minio-createbuckets) that
+        # exits 0 after creating buckets. `docker compose up --wait` considers
+        # the exited container a failure (returncode 1) even though minio
+        # itself is healthy. Start without --wait, then poll for minio health.
+        # ⚠️ TRAP[DECISION] · 2026-07-17 · — · MinIO --wait workaround
+        # · Rejected: depends_on condition: service_completed_successfully
+        # · Reason: deferred — that would require compose schema v3.8+ changes
+        # · Rev: if compose schema is ever upgraded, use depends_on instead.
+        compose_up_args = [*compose_base_args, "up", "-d"]
+        result = _run_docker_smoke(
+            compose_up_args,
+            timeout=compose_timeout + compose_extra_timeout,
+            env_override={"COMPOSE_PROFILES": module_name},
+        )
+        if result.returncode == 0:
+            _minio_ok = _wait_for_minio_healthy(
+                compose_base_args=compose_base_args,
+                timeout=compose_timeout,
+                logger=_logger,
+            )
+            if not _minio_ok:
+                _logger.error(
+                    "[IMP:9][conftest][_start_single_module] MinIO did not become healthy within %ds",
+                    compose_timeout,
+                )
+                # Force failure path after the if-else block
+                result = subprocess.CompletedProcess(
+                    args=compose_up_args, returncode=1, stdout="", stderr="MinIO health check timeout"
+                )
+    else:
+        compose_up_args = [
+            *compose_base_args,
+            "up",
+            "-d",
+            "--wait",
+            "--wait-timeout",
+            str(compose_timeout),
+        ]
+        result = _run_docker_smoke(
+            compose_up_args,
+            timeout=compose_timeout + compose_extra_timeout,
+            env_override={"COMPOSE_PROFILES": module_name},
+        )
+
+    if result.returncode != 0:
+        # ── Diagnostic: collect logs for failure analysis ─────────────
+        log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
+        logs = _run_docker_smoke(
+            log_args, timeout=docker_log_timeout, env_override={"COMPOSE_PROFILES": module_name}
+        )
+        _logger.error(
+            "[IMP:9][conftest][_start_single_module] Failed to start '%s' — "
+            "returncode=%d\nstderr: %s\ndiagnostic logs:\n%s",
+            module_name,
+            result.returncode,
+            result.stderr.strip()[-stderr_tail_lines:],
+            (logs.stdout or logs.stderr).strip()[-500:],
+        )
+        return {"success": False, "module_name": module_name}
+
+    # ── Post-up container existence check ─────────────────────────────────
+    # Root cause (from CI diagnostic run): `docker compose up -d --wait`
+    # returns exit code 0 on GHA runner even when containers fail to start
+    # (e.g., when `--wait-timeout` expires or image pull fails silently).
+    # `docker compose ps --all` returns empty despite returncode=0.
+    # Add explicit container count check to distinguish true success from
+    # silent compose failure. If zero containers → treat as failure.
+    _ps_check = _run_docker_smoke(
+        [*compose_base_args, "ps", "--all", "--format", "{{.Name}}"],
+        timeout=15,
+        env_override={"COMPOSE_PROFILES": module_name},
+    )
+    _container_count = len([cname for cname in _ps_check.stdout.strip().splitlines() if cname.strip()])
+    if _container_count == 0:
+        _logger.error(
+            "[IMP:9][conftest][_start_single_module] '%s' compose up returned 0 but "
+            "no containers exist (docker compose ps --all = empty). "
+            "CI runner silent compose failure — treating as failed.",
+            module_name,
+        )
+        return {"success": False, "module_name": module_name}
+
+    # ---- Loki readiness HTTP-poll ------------------------------------
+    if module_name == "observability":
+        _loki_ready = _wait_for_loki_ready(
+            url=f"http://localhost:{platform_ports['LOKI_PORT']}/ready",
+            timeout=loki_timeout,
+            logger=_logger,
+        )
+        if not _loki_ready:
+            _logger.warning(
+                "[IMP:9][conftest][_start_single_module] Loki /ready timeout - proceeding",
+            )
+
+    return {"success": True, "module_name": module_name}
+
+
 @pytest.fixture(scope="session")
 def platform_env() -> dict[str, str]:
     """Inject SMOKE_ENV into os.environ; restore on teardown.
@@ -376,127 +575,66 @@ def platform_services(
         _run_docker_smoke(_cleanup_args, timeout=20)
     _logger.info("[IMP:8][conftest][platform_services] Global pre-cleanup complete")
 
-    # ── Start compose files in topological order ─────────────────────────────
+    # ── Start compose files in wave-parallel order ──────────────────────────
     started: list[str] = []
     failed: list[str] = []
-    for module_name in module_graph:
-        compose_path = all_compose_files.get(module_name)
-        if compose_path is None:
-            continue
-        # ── Build base compose args (files + project name) ──────────────
-        compose_base_args = ["docker", "compose", "-f", compose_path]
-        test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
-        if os.path.exists(test_override):
-            compose_base_args.extend(["-f", test_override])
-        macos_override = os.path.join(os.path.dirname(compose_path), "docker-compose.macos.yml")
-        if _platform.system() == "Darwin" and os.path.exists(macos_override):
-            compose_base_args.extend(["-f", macos_override])
-        compose_base_args.extend(["-p", "ai-platform-test"])
+    waves = _build_waves(module_graph)
+    _logger.info(
+        "[IMP:8][conftest][platform_services] Built %d wave(s) from %d module(s)",
+        len(waves),
+        len(module_graph),
+    )
 
-        # ── Pre-cleanup: docker compose down before up (SAME module only) ─
-        # NOTE: intentionally WITHOUT --remove-orphans — that flag in a per-module
-        # down would kill previously started modules' containers since all modules
-        # share the same compose project name (ai-platform-test) but are defined
-        # in different compose files. Global cleanup above already removed orphans.
-        _down_args = [*compose_base_args, "down", "--timeout", str(_COMPOSE_DOWN_TIMEOUT)]
-        _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
+    for wave_idx, wave_modules in enumerate(waves):
+        _logger.info(
+            "[IMP:8][conftest][platform_services] Wave %d: starting %d module(s) in parallel",
+            wave_idx,
+            len(wave_modules),
+        )
 
-        # ── Start up ──────────────────────────────────────────────────
-        if module_name == "minio":
-            # D5: MinIO has a one-shot init container (minio-createbuckets) that
-            # exits 0 after creating buckets. `docker compose up --wait` considers
-            # the exited container a failure (returncode 1) even though minio
-            # itself is healthy. Start without --wait, then poll for minio health.
-            # ⚠️ TRAP[DECISION] · 2026-07-17 · — · MinIO --wait workaround
-            # · Rejected: depends_on condition: service_completed_successfully
-            # · Reason: deferred — that would require compose schema v3.8+ changes
-            # · Rev: if compose schema is ever upgraded, use depends_on instead.
-            compose_up_args = [*compose_base_args, "up", "-d"]
-            result = _run_docker_smoke(
-                compose_up_args,
-                timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
-                env_override={"COMPOSE_PROFILES": module_name},
-            )
-            if result.returncode == 0:
-                _minio_ok = _wait_for_minio_healthy(
-                    compose_base_args=compose_base_args,
-                    timeout=PLATFORM_COMPOSE_TIMEOUT,
-                    logger=_logger,
-                )
-                if not _minio_ok:
-                    _logger.error(
-                        "[IMP:9][conftest][platform_services] MinIO did not become healthy within %ds",
-                        PLATFORM_COMPOSE_TIMEOUT,
-                    )
-                    # Force failure path after the if-else block
-                    result = subprocess.CompletedProcess(
-                        args=compose_up_args, returncode=1, stdout="", stderr="MinIO health check timeout"
-                    )
-        else:
-            compose_up_args = [
-                *compose_base_args,
-                "up",
-                "-d",
-                "--wait",
-                "--wait-timeout",
-                str(PLATFORM_COMPOSE_TIMEOUT),
-            ]
-            result = _run_docker_smoke(
-                compose_up_args,
-                timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
-                env_override={"COMPOSE_PROFILES": module_name},
-            )
-        if result.returncode != 0:
-            # ── Diagnostic: collect logs for failure analysis ─────────────
-            log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
-            logs = _run_docker_smoke(
-                log_args, timeout=_DOCKER_LOG_TIMEOUT, env_override={"COMPOSE_PROFILES": module_name}
-            )
-            _logger.error(
-                "[IMP:9][conftest][platform_services] Failed to start '%s' — "
-                "returncode=%d\nstderr: %s\ndiagnostic logs:\n%s",
-                module_name,
-                result.returncode,
-                result.stderr.strip()[-_STDERR_TAIL_LINES:],
-                (logs.stdout or logs.stderr).strip()[-500:],
-            )
-            failed.append(module_name)
-        else:
-            # ── Post-up container existence check ─────────────────────────────────
-            # Root cause (from CI diagnostic run): `docker compose up -d --wait`
-            # returns exit code 0 on GHA runner even when containers fail to start
-            # (e.g., when `--wait-timeout` expires or image pull fails silently).
-            # `docker compose ps --all` returns empty despite returncode=0.
-            # Add explicit container count check to distinguish true success from
-            # silent compose failure. If zero containers → treat as failure.
-            _ps_check = _run_docker_smoke(
-                [*compose_base_args, "ps", "--all", "--format", "{{.Name}}"],
-                timeout=15,
-                env_override={"COMPOSE_PROFILES": module_name},
-            )
-            _container_count = len([cname for cname in _ps_check.stdout.strip().splitlines() if cname.strip()])
-            if _container_count == 0:
-                _logger.error(
-                    "[IMP:9][conftest][platform_services] '%s' compose up returned 0 but "
-                    "no containers exist (docker compose ps --all = empty). "
-                    "CI runner silent compose failure — treating as failed.",
-                    module_name,
-                )
-                failed.append(module_name)
-            else:
-                started.append(module_name)
-
-            # ---- Loki readiness HTTP-poll ------------------------------------
-            if module_name == "observability":
-                _loki_ready = _wait_for_loki_ready(
-                    url=f"http://localhost:{platform_ports['LOKI_PORT']}/ready",
-                    timeout=PLATFORM_LOKI_TIMEOUT,
-                    logger=_logger,
-                )
-                if not _loki_ready:
+        with ThreadPoolExecutor(max_workers=len(wave_modules)) as executor:
+            futures = {}
+            for _wm_module_name in wave_modules:
+                _wm_compose_path = all_compose_files.get(_wm_module_name)
+                if _wm_compose_path is None:
                     _logger.warning(
-                        "[IMP:9][conftest][platform_services] Loki /ready timeout - proceeding",
+                        "[IMP:8][conftest][platform_services] Wave %d: no compose path for '%s' — skipping",
+                        wave_idx,
+                        _wm_module_name,
                     )
+                    continue
+                future = executor.submit(
+                    _start_single_module,
+                    _wm_module_name,
+                    _wm_compose_path,
+                    all_compose_files,
+                    module_graph,
+                    platform_ports,
+                    PLATFORM_COMPOSE_TIMEOUT,
+                    _COMPOSE_EXTRA_TIMEOUT,
+                    _COMPOSE_DOWN_TIMEOUT,
+                    _DOCKER_LOG_TIMEOUT,
+                    _STDERR_TAIL_LINES,
+                    PLATFORM_LOKI_TIMEOUT,
+                )
+                futures[future] = _wm_module_name
+
+            for future in as_completed(futures):
+                _wm_module_name = futures[future]
+                try:
+                    _wm_result = future.result()
+                    if isinstance(_wm_result, dict) and _wm_result.get("success"):
+                        started.append(_wm_module_name)
+                    else:
+                        failed.append(_wm_module_name)
+                except Exception as exc:
+                    _logger.error(
+                        "[IMP:9][conftest][platform_services] Wave %d module '%s' raised: %s",
+                        wave_idx,
+                        _wm_module_name,
+                        exc,
+                    )
+                    failed.append(_wm_module_name)
 
     # ── DIAGNOSTIC: check containers visible to compose ps ──────────────
     import sys as _sys
