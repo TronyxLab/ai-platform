@@ -322,6 +322,74 @@ def platform_services(
             timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
             env_override={"COMPOSE_PROFILES": module_name},
         )
+        # ── DIAGNOSTIC BLOCK: dump container state after EVERY compose up attempt ──
+        # Purpose: Distinguish (a) project-name mismatch, (b) compose up silent failure,
+        #          (c) container_name pattern mismatch — the three hypotheses for the
+        #          "No container names resolved" failure on CI (DevPlan D1).
+        # These diagnostics are temporary and will be removed after root cause is found.
+        _project = "ai-platform-test"
+        _logger.info("[IMP:9][DIAG][%s] === POST-COMPOSE-UP DIAGNOSTIC ===", module_name)
+        _logger.info("[IMP:9][DIAG][%s] compose_base_args=%s", module_name, compose_base_args)
+        _logger.info("[IMP:9][DIAG][%s] COMPOSE_PROFILES=%s", module_name, module_name)
+        _logger.info(
+            "[IMP:9][DIAG][%s] COMPOSE_PROJECT_NAME=%s / -p=%s",
+            module_name,
+            os.environ.get("COMPOSE_PROJECT_NAME", "(not set)"),
+            _project,
+        )
+        # (a) docker compose -p <project> ps --all
+        _ps_all = _run_docker_smoke(
+            [*compose_base_args, "ps", "--all"],
+            timeout=20,
+            env_override={"COMPOSE_PROFILES": module_name},
+        )
+        _logger.info(
+            "[IMP:9][DIAG][%s] (a) docker compose ps --all (stdout):\n%s",
+            module_name,
+            _ps_all.stdout.strip()[:2000] or "(empty stdout)",
+        )
+        if _ps_all.stderr.strip():
+            _logger.info(
+                "[IMP:9][DIAG][%s] (a) docker compose ps --all (stderr):\n%s",
+                module_name,
+                _ps_all.stderr.strip()[:1000],
+            )
+        # (b) docker ps -a --filter name=<project> (raw Docker, not compose)
+        _docker_ps = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"name={_project}",
+                "--format",
+                "table {{.Names}}\t{{.Status}}\t{{.Image}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        _logger.info(
+            "[IMP:9][DIAG][%s] (b) docker ps -a (filter name=%s):\n%s",
+            module_name,
+            _project,
+            _docker_ps.stdout.strip()[:2000] or "(empty — no containers match filter)",
+        )
+        if _docker_ps.stderr.strip():
+            _logger.info("[IMP:9][DIAG][%s] (b) docker ps stderr: %s", module_name, _docker_ps.stderr.strip()[:500])
+        # (c) docker compose -p <project> logs --tail 20
+        _logs = _run_docker_smoke(
+            [*compose_base_args, "logs", "--tail", "20"],
+            timeout=_DOCKER_LOG_TIMEOUT,
+            env_override={"COMPOSE_PROFILES": module_name},
+        )
+        _logger.info(
+            "[IMP:9][DIAG][%s] (c) docker compose logs --tail 20:\n%s",
+            module_name,
+            (_logs.stdout or _logs.stderr).strip()[:2000] or "(empty)",
+        )
+        # ── END DIAGNOSTIC BLOCK ──────────────────────────────────────────
+
         if result.returncode != 0:
             # ── Diagnostic: collect logs for failure analysis ─────────────
             log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
