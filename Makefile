@@ -276,9 +276,10 @@ pre-commit-run:
 	}
 	@echo "[IMP:9][make][pre-commit-run] All pre-commit hooks passed"
 
-## gate: Production Gate. Usage: make gate [MODE=fast|full]
+## gate: Production Gate. Usage: make gate [MODE=fast|full|ci-docker]
 ##   MODE=full (default) — validate → lint → gates → contract → static → predeploy → smoke → component
 ##   MODE=fast — validate → lint → gates → static → predeploy (no Docker)
+##   MODE=ci-docker — contract → static → predeploy → smoke → component → skip-enforcement (Docker-dependent only, no pre-commit/validate/lint)
 # 📝 TRAP[DEBT] · 2026-07-16 · HI · make gate MODE=fast проглатывает падения шагов lint/gates/static
 # · Observed: gate напечатал «ALL PASS (MODE=fast)» при report-static.xml failures=10 и 3 FAILED в шаге gates
 # · Suspected: shell-цепочка `pytest gates && echo …; pytest static && echo …; pytest predeploy || exit 1` —
@@ -291,8 +292,12 @@ gate:
 	@if [ "$(MODE)" = "fast" ]; then \
 		echo "[IMP:7][make][gate] MODE=fast — 6 steps: pre-commit, validate, lint, gates, static, predeploy..."; \
 		rm -f tests/report.xml tests/report*.xml && \
-		echo "[IMP:7][make][gate] Step 1/6: pre-commit-run..."; \
-		$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; exit 1; }; \
+		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
+			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run..."; \
+			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; exit 1; }; \
+		else \
+			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
+		fi; \
 		echo "[IMP:7][make][gate] Step 2/6: validate..."; \
 		bash $(_platform_root)/core/entrypoints/validate.sh || { echo "[IMP:9][make][gate] FAIL: validate"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 3/6: lint..."; \
@@ -311,8 +316,12 @@ gate:
 		echo "[IMP:7][make][gate] MODE=full — running complete gate pipeline (canonical order)..."; \
 		GATE_FAILED=0; \
 		rm -f tests/report.xml tests/report*.xml; \
-		echo "[IMP:7][make][gate] Step 1/10: pre-commit-run..."; \
-		$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; GATE_FAILED=1; }; \
+		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
+			echo "[IMP:7][make][gate] Step 1/10: pre-commit-run..."; \
+			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; GATE_FAILED=1; }; \
+		else \
+			echo "[IMP:7][make][gate] Step 1/10: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
+		fi; \
 		echo "[IMP:7][make][gate] Step 2/10: validate..."; \
 		$(MAKE) validate || { echo "[IMP:9][make][gate] FAIL: validate"; GATE_FAILED=1; }; \
 		echo "[IMP:7][make][gate] Step 3/10: lint..."; \
@@ -347,8 +356,37 @@ gate:
 			echo "[IMP:9][make][gate] Gate: FAILURES DETECTED (MODE=full) — see individual FAIL messages above"; \
 			exit 1; \
 		fi; \
+	elif [ "$(MODE)" = "ci-docker" ]; then \
+		echo "[IMP:7][make][gate] MODE=ci-docker — running Docker-dependent gate pipeline (no pre-commit/validate/lint)..."; \
+		GATE_FAILED=0; \
+		rm -f tests/report.xml tests/report*.xml; \
+		echo "[IMP:7][make][gate] Step 1/6: contract tests..."; \
+		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 2/6: static tests..."; \
+		$(MAKE) test MARKER=static_audit || { echo "[IMP:9][make][gate] FAIL: static"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 3/6: predeploy tests..."; \
+		$(MAKE) test MARKER=predeploy || { echo "[IMP:9][make][gate] FAIL: predeploy"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 4/6: smoke tests..."; \
+		$(MAKE) test MARKER=smoke || { echo "[IMP:9][make][gate] FAIL: smoke"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 5/6: component tests..."; \
+		$(MAKE) test MARKER=component || { echo "[IMP:9][make][gate] FAIL: component"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Merging JUnit XML reports..."; \
+		$(PYTHON) tests/merge_junit.py \
+			tests/report-contract.xml \
+			tests/report-static.xml \
+			tests/report-predeploy.xml \
+			tests/report-smoke.xml \
+			tests/report-component.xml \
+			-o tests/report.xml || { echo "[IMP:9][make][gate] FAIL: JUnit merge"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 6/6: skip enforcement gate..."; \
+		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest \
+			tests/gates/test_gate_skip_enforcement.py -v || { echo "[IMP:9][make][gate] FAIL: skip enforcement"; GATE_FAILED=1; }; \
+		if [ $$GATE_FAILED -ne 0 ]; then \
+			echo "[IMP:9][make][gate] Gate: FAILURES DETECTED (MODE=ci-docker) — see individual FAIL messages above"; \
+			exit 1; \
+		fi; \
 	else \
-		echo "[IMP:9][make][gate] ERROR: Unknown MODE='$(MODE)'. Valid values: fast, full" >&2; \
+		echo "[IMP:9][make][gate] ERROR: Unknown MODE='$(MODE)'. Valid values: fast, full, ci-docker" >&2; \
 		exit 1; \
 	fi
 	@echo "[IMP:9][make][gate] Gate: ALL PASS (MODE=$(MODE))"
