@@ -61,6 +61,8 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/internal/healthcheck/*.sh",
     "core/modules/hermes-agent/build/scripts/*.sh",
     "core/modules/hermes-agent/context/scripts/*.sh",
+    # backward-compat thin wrapper — delegates to install-acme.sh + issue-cert.sh
+    "core/internal/bootstrap/ssl-provision.sh",
 ]
 
 # Subdirectory names to exclude when globbing for shebang files.
