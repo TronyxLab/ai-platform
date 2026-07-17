@@ -231,6 +231,10 @@ step_2_apt_deps() {
 }
 
 # ─── STEP 3: Tor + Privoxy proxy for Telegram ─────────────
+# ⚠️ TRAP[DECISION] · 2026-07-17 · HI · Shared bridges.txt в core/bootstrap/tor/
+# · Риск: bridges.txt — git-tracked, публикация репозитория раскроет bridge-адреса
+# · Решение: bridges.txt в private repo; CI rsync --delete доставляет на VPS
+# · Rev: если репозиторий станет публичным — перенести bridges в per-node overlay или secrets
 step_3_tor_proxy() {
     step_start "tor-proxy" "Installing Tor + Privoxy proxy for Telegram"
 
@@ -239,6 +243,13 @@ step_3_tor_proxy() {
         local overlay_bridges="/opt/node-configs/${NODE_NAME}/overlays/tor/bridges.txt"
         if [[ -f "$overlay_bridges" ]]; then
             bridges_file="$overlay_bridges"
+        fi
+    fi
+    if [[ -z "$bridges_file" ]]; then
+        local shared_bridges="${CORE_DIR}/bootstrap/tor/bridges.txt"
+        if [[ -f "$shared_bridges" ]]; then
+            bridges_file="$shared_bridges"
+            log_step "tor-proxy" "INFO" "Using shared bridges: ${shared_bridges}"
         fi
     fi
 

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: install-tor-proxy idempotent tor privoxy obfs4proxy bootstrap systemd
-# STRUCTURE: check_packages → write_torrc(bridges) → write_privoxy_config → enable_start_services → verify_tor_circuit → exit
+# GREP_SUMMARY: install-tor-proxy idempotent tor privoxy obfs4proxy webtunnel bootstrap systemd transport-detection degradation
+# STRUCTURE: check_packages → write_torrc(dynamic-transport) → write_privoxy_config → enable_start_services → verify_tor_circuit → exit
 # region MODULE_CONTRACT
 ## @purpose  Idempotent installation of Tor + Privoxy chain for Telegram Bot API proxy
 ## @scope    Called from bootstrap.sh step_install_tor_proxy; safe to re-run on provisioned node
 ## @invariants
 ##   - Idempotent: repeated runs do not corrupt configuration
 ##   - Base torrc written first; bridges appended from file if --tor-bridges-file provided
+##   - Transport auto-detection: parses Bridge lines → emits ClientTransportPlugin per unique transport
+##   - Degradation: webtunnel binary absent → drop webtunnel Bridge lines, continue obfs4-only
+##   - Fail-fast: unknown transport (no registered binary path) → ERROR + exit 1
 ##   - Privoxy config lines are inserted only if absent (grep guard)
 ##   - Tor circuit verification via check.torproject.org with up to 60s retry
 ##   - Verification failure (optional via --skip-tor-verify) returns 1, non-fatal to bootstrap
@@ -47,19 +50,63 @@ parse_args() {
 # region INSTALL_PACKAGES
 install_packages() {
     local missing=()
+    local webtunnel_requested=false
+
     for pkg in tor privoxy obfs4proxy; do
         if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
             missing+=("$pkg")
         fi
     done
 
+    if ! dpkg -s webtunnel &>/dev/null 2>&1; then
+        missing+=("webtunnel")
+        webtunnel_requested=true
+    fi
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_step "packages" "START" "Installing packages: ${missing[*]}"
         apt-get update -qq
-        local apt_err; apt_err="$(apt-get install -y -qq "${missing[@]}" 2>&1)" || {
-            log_step "packages" "FAIL" "apt-get install failed: ${apt_err}"
-            exit 1
-        }
+
+        # Probe webtunnel availability after repo update
+        if [[ "$webtunnel_requested" == true ]] && ! apt-cache show webtunnel &>/dev/null 2>&1; then
+            # ⚠️ TRAP[DECISION] · 2026-07-17 · — · webtunnel binary delivery: apt preferred, static binary reserved
+            # · Rejected: static binary in core/bootstrap/tor/bin/webtunnel (not yet packaged for noble)
+            # · Reason: apt package is cleaner; first release degrades to obfs4-only if absent
+            # · Rev: if webtunnel apt package remains unavailable → implement static binary delivery
+            log_step "packages" "WARN" "webtunnel not in apt repositories — skipping"
+            webtunnel_requested=false
+            local filtered=()
+            for pkg in "${missing[@]}"; do
+                [[ "$pkg" != "webtunnel" ]] && filtered+=("$pkg")
+            done
+            missing=("${filtered[@]}")
+        fi
+
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            local apt_err
+            apt_err="$(apt-get install -y -qq "${missing[@]}" 2>&1)" || {
+                if [[ "$webtunnel_requested" == true ]]; then
+                    # ⚠️ TRAP[DECISION] · 2026-07-17 · MED · webtunnel apt failure → degradation, not abort
+                    # · If webtunnel install fails → drop webtunnel from install list, continue with base packages
+                    # · Rationale: webtunnel is optional; obfs4 is the primary transport for Telegram Bot API
+                    # · Rev: if production requires webtunnel → fail instead of degrade
+                    log_step "packages" "WARN" "apt-get install failed for webtunnel (degradation): ${apt_err}"
+                    local no_web=()
+                    for pkg in "${missing[@]}"; do
+                        [[ "$pkg" != "webtunnel" ]] && no_web+=("$pkg")
+                    done
+                    if [[ ${#no_web[@]} -gt 0 ]]; then
+                        apt_err="$(apt-get install -y -qq "${no_web[@]}" 2>&1)" || {
+                            log_step "packages" "FAIL" "apt-get install failed: ${apt_err}"
+                            exit 1
+                        }
+                    fi
+                else
+                    log_step "packages" "FAIL" "apt-get install failed: ${apt_err}"
+                    exit 1
+                fi
+            }
+        fi
         log_step "packages" "DONE" "Installed: ${missing[*]}"
     else
         log_step "packages" "SKIP" "All packages already installed"
@@ -88,13 +135,65 @@ BASE
 
     # Append bridges if file provided
     if [[ -n "$BRIDGES_FILE" ]] && [[ -f "$BRIDGES_FILE" ]]; then
-        cat >> "$TOR_CONFIG" <<'BRIDGE_HEADER'
+        # ⚠️ TRAP[DECISION] · 2026-07-17 · MED · webtunnel binary absent → degradation to obfs4-only
+        # · If webtunnel binary not found → drop webtunnel Bridge lines, continue with obfs4-only
+        # · Rationale: webtunnel is optional; obfs4 is the primary transport for Telegram Bot API
+        # · Rev: if context requires webtunnel → fail instead of degrade
+        # ⚠️ TRAP[DECISION] · 2026-07-17 · — · dynamic ClientTransportPlugin detection (not hardcoded)
+        # · Rejected: hardcoded ClientTransportPlugin obfs4 (cannot support mixed transports)
+        # · Reason: single bridges.txt may contain obfs4 + webtunnel lines; Tor needs CTP per transport
+        # · Rev: if transport count grows past 3 → move mapping to external config
 
-UseBridges 1
-ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy
-BRIDGE_HEADER
-        cat "$BRIDGES_FILE" >> "$TOR_CONFIG"
-        log_step "torrc" "INFO" "Bridges appended from ${BRIDGES_FILE}"
+        # Transport binary path registry
+        declare -A TRANSPORT_BIN
+        TRANSPORT_BIN[obfs4]="/usr/bin/obfs4proxy"
+        TRANSPORT_BIN[webtunnel]="/usr/bin/webtunnel"
+
+        local filtered_bridges=""
+        local -A seen_transports
+        local transports_to_emit=()
+
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" =~ ^Bridge[[:space:]]+([a-zA-Z0-9_-]+) ]]; then
+                local transport="${BASH_REMATCH[1]}"
+
+                # Fail-fast: unknown transport → no registered binary
+                if [[ -z "${TRANSPORT_BIN[$transport]+_}" ]]; then
+                    log_step "torrc" "ERROR" "Unknown transport '${transport}' — no registered binary path"
+                    exit 1
+                fi
+
+                # Degradation: webtunnel binary not found → drop line
+                if [[ "$transport" == "webtunnel" ]] && ! command -v webtunnel &>/dev/null; then
+                    log_step "torrc" "WARN" "webtunnel binary not found — dropping webtunnel bridge line"
+                    continue
+                fi
+
+                filtered_bridges+="${line}"$'\n'
+                if [[ -z "${seen_transports[$transport]+_}" ]]; then
+                    seen_transports[$transport]=1
+                    transports_to_emit+=("$transport")
+                fi
+            else
+                # Non-Bridge line — pass through (comments, blanks)
+                filtered_bridges+="${line}"$'\n'
+            fi
+        done < "$BRIDGES_FILE"
+
+        if [[ ${#transports_to_emit[@]} -eq 0 ]]; then
+            log_step "torrc" "WARN" "No usable bridges found in ${BRIDGES_FILE} (all dropped or empty)"
+        else
+            {
+                echo ""
+                echo "UseBridges 1"
+                for transport in "${transports_to_emit[@]}"; do
+                    echo "ClientTransportPlugin ${transport} exec ${TRANSPORT_BIN[$transport]}"
+                done
+                echo ""
+                echo -n "$filtered_bridges"
+            } >> "$TOR_CONFIG"
+            log_step "torrc" "INFO" "Bridges appended from ${BRIDGES_FILE} — transports: ${transports_to_emit[*]}"
+        fi
     else
         log_step "torrc" "INFO" "No bridges file — Tor will connect directly"
     fi

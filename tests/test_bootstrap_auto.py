@@ -630,3 +630,64 @@ echo "[IMP:9][resolve] OK: ${{M[0]}}"
 
 
 # endregion
+
+
+# region TEST_test_docker_login_set_u_safe
+
+
+def test_docker_login_set_u_safe(caplog) -> None:
+    """Verify docker_login() does not crash under set -euo pipefail when vars unset."""
+    caplog.set_level(logging.DEBUG)
+
+    docker_sh = os.path.join(CORE_LIB, "docker.sh")
+
+    # Scenario 1: no env vars → anonymous fallback
+    test_call_anon = """set -euo pipefail
+unset DOCKER_HUB_USERNAME DOCKER_HUB_TOKEN
+__LOG_PREFIX="test"
+docker_login
+echo "[IMP:9][docker_test] exit=$?"
+"""
+    stdout, stderr, rc = _test_func(
+        docker_sh,
+        ["docker_login"],
+        test_call_anon,
+        env={"__LOG_PREFIX": "test"},
+        preamble=LOG_STUBS,
+    )
+
+    found_imp9 = _print_ldd(stderr, stdout)
+    assert rc == 0, f"docker_login crashed under set -euo pipefail (no vars): {stderr}"
+    combined = stdout + "\n" + stderr
+    assert "anonymous" in combined.lower(), f"Expected anonymous fallback WARN: {combined}"
+    logger.info("[IMP:9][test_docker_login_set_u_safe][assert] Anonymous fallback exits 0")
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+    # Scenario 2: env vars set → authenticated login with mock docker
+    test_call_auth = """set -euo pipefail
+__LOG_PREFIX="test"
+docker() {
+    echo "[IMP:9][mock-docker] login --username ${DOCKER_HUB_USERNAME} --password-stdin" >&2
+    return 0
+}
+export DOCKER_HUB_USERNAME="testuser"
+export DOCKER_HUB_TOKEN="testtoken123"
+docker_login
+echo "[IMP:9][docker_test] auth exit=$?"
+"""
+    stdout2, stderr2, rc2 = _test_func(
+        docker_sh,
+        ["docker_login"],
+        test_call_auth,
+        env={"__LOG_PREFIX": "test"},
+        preamble=LOG_STUBS,
+    )
+
+    found_imp9_2 = _print_ldd(stderr2, stdout2)
+    assert rc2 == 0, f"docker_login crashed with vars set: {stderr2}"
+    assert "testuser" in stderr2 or "testuser" in stdout2, f"Expected testuser in output"
+    logger.info("[IMP:9][test_docker_login_set_u_safe][assert] Authenticated path works")
+    assert found_imp9_2, "Critical LDD Error: No IMP:9 business logic log found (auth)"
+
+
+# endregion

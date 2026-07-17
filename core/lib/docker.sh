@@ -66,7 +66,11 @@ source "${BASH_SOURCE[0]%/*}/logging.sh"
 ##             — Never writes to stdout (all output via stderr)
 ##             - stdout from docker login (Login Succeeded) redirected to /dev/null
 docker_login() {
-    if [[ -n "$DOCKER_HUB_USERNAME" && -n "$DOCKER_HUB_TOKEN" ]]; then
+    # ⚠️ TRAP[BUGFIX] · 2026-07-17 · HI · unbound variable under set -euo pipefail
+    # · Symptom: bash dies with "DOCKER_HUB_USERNAME: unbound variable" under set -euo pipefail
+    # · Root: env probe ${VAR} without default expansion syntax ${VAR:-}
+    # · Fix: added :- default values; sibling ghcr_login() already used correct pattern
+    if [[ -n "${DOCKER_HUB_USERNAME:-}" && -n "${DOCKER_HUB_TOKEN:-}" ]]; then
         # Happy path: credentials present → attempt authenticated login
         log_imp 8 "docker_login" "Authenticating to Docker Hub as ${DOCKER_HUB_USERNAME}"
         echo "$DOCKER_HUB_TOKEN" | docker login --username "$DOCKER_HUB_USERNAME" --password-stdin 2>/dev/null && {
