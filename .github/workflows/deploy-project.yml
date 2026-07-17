@@ -1,5 +1,5 @@
-# GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy
-# STRUCTURE: inputs(project_name) → ○ resolve node from NODE_HOST_MAP → ◇ fromJson → ⊕ ssh_host → ⎋ SSH deploy-project.sh
+# GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy deliver-payload platform-deliver
+# STRUCTURE: inputs(project_name) → ○ resolve node from NODE_HOST_MAP → ◇ fromJson → ⊕ ssh_host → ◆ deliver-payload (tar→SSH) → ⎋ SSH deploy-project.sh
 # region MODULE_CONTRACT
 ## @purpose  Reusable workflow for deploying projects — resolves target node from
 ##           NODE_HOST_MAP org variable, then SSH-deploys via forced-command.
@@ -51,6 +51,25 @@ jobs:
           SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 -c "import json,sys; m=json.load(sys.stdin); n='${TARGET_NODE}'; h=m.get(n,''); print(h if h else (print(f'K5: node {n} not found in NODE_HOST_MAP',file=sys.stderr) or exit(1)))")
           echo "[IMP:9][resolve-node] ssh_host=${SSH_HOST}"
           echo "ssh_host=${SSH_HOST}" >> "${GITHUB_ENV}"
+
+      - name: Deliver project payload
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CI_DEPLOY_KEY }}" > ~/.ssh/ci_deploy_key
+          chmod 600 ~/.ssh/ci_deploy_key
+          ssh-keyscan -H "${{ env.ssh_host }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # Build file list — docker-compose.yml OR compose.yaml, ai-platform.yaml always, .env.platform if exists
+          FILES="ai-platform.yaml"
+          [ -f docker-compose.yml ] && FILES="$FILES docker-compose.yml"
+          [ -f compose.yaml ] && FILES="$FILES compose.yaml"
+          [ -f .env.platform ] && FILES="$FILES .env.platform"
+
+          echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
+          tar czf - $FILES | ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=no ci-deploy@${{ env.ssh_host }} "platform-deliver ${{ inputs.project_name }}"
+          echo "[IMP:9][deliver] Delivery complete"
+        shell: bash
 
       - name: SSH deploy
         uses: appleboy/ssh-action@v1.0.3

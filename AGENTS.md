@@ -27,7 +27,7 @@
 
 ---
 
-## Dual Delivery Model
+## Triple Delivery Model
 
 ```
                     ┌─ Core (SCP/rsync, push-based, NO git)
@@ -51,12 +51,13 @@
                     │   git clone/pull → /opt/<context>/platform/
 ```
 
-### Два канала доставки кода на VPS
+### Три канала доставки кода на VPS
 
 | Канал | Механизм | Направление | Применение |
 |-------|----------|-------------|------------|
 | **Core** | SCP/rsync | Push (с машины оператора/CI) | `core/`, `node-configs/`, `secrets/` — инфраструктурный код платформы |
 | **Context-overlay** | git clone/pull | Pull (с VPS в репозиторий) | Контекстные overlay, модульные конфигурации, кастомизации |
+| **Project payload** | tar по SSH forced-command (`platform-deliver`) | Push (CI) | docker-compose.yml, ai-platform.yaml, .env.platform |
 
 ### Инварианты
 
