@@ -130,6 +130,8 @@ scp_to_server() {
         --exclude=.git \
         --exclude=__pycache__ \
         --exclude=.pytest_cache \
+        --exclude='default-user.xml' \
+        --exclude='.env' \
         "${core_src}" \
         "${core_dst}"; then
         echo "[IMP:10][bootstrap][scp] FATAL: rsync core/ failed for ${ssh_host}" >&2

@@ -27,8 +27,11 @@
       "description": "Список модулей, от которых зависит этот модуль (для _topo_sort.py)"
     },
     "spool_dir": {
-      "type": "string",
-      "description": "Абсолютный путь к spool-директории на хосте"
+      "oneOf": [
+        {"type": "string", "pattern": "^/"},
+        {"type": "string", "enum": ["none"]}
+      ],
+      "description": "Абсолютный путь к spool-директории на хосте, или \"none\" для stateless-модулей"
     },
     "spool_volume": {
       "type": "string",

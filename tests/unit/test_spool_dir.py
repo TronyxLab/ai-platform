@@ -97,10 +97,109 @@ def test_spool_dir_paths_are_absolute():
     bad_paths = []
     for name, cfg in modules.items():
         spool_dir = cfg.get("spool_dir")
-        if spool_dir and not spool_dir.startswith("/"):
+        if spool_dir and spool_dir != "none" and not spool_dir.startswith("/"):
             bad_paths.append(f"{name}: {spool_dir}")
 
     assert bad_paths == [], f"Modules with non-absolute spool_dir paths: {bad_paths}"
 
 
 # endregion FUNC_test_spool_dir_paths_are_absolute
+
+
+# region FUNC_test_spool_dir_none_no_warn
+## @purpose  Verify modules with spool_dir: none are properly declared (stateless) and
+##           deploy-modules.sh ensure_spool_dirs() handles "none" → INFO, not WARN.
+## @io       _load_module_yamls + read deploy-modules.sh → assert conditions
+## @complexity 2 — iterates modules + grep script
+# 🧪 TRAP[TEST] · Regression: T4 — spool_dir: none stateless declaration
+# · Scenario: module.yaml with spool_dir: none → ensure_spool_dirs logs INFO not WARN
+# · Last fail: WARN for nginx/redis/platform-secrets (no spool decl, always WARN)
+# · Remove if: ensure_spool_dirs "none" check removed from deploy-modules.sh
+def test_spool_dir_none_no_warn() -> None:
+    """Modules with spool_dir: none must be declared and handled as stateless (INFO, not WARN)."""
+    modules = _load_module_yamls()
+
+    # Check 1: specific modules must have spool_dir: none
+    expected_none = {"nginx", "redis", "platform-secrets"}
+    actual_none = {name for name, cfg in modules.items() if cfg.get("spool_dir") == "none"}
+    missing = expected_none - actual_none
+    assert not missing, (
+        f"[IMP:9][test] Modules expected to have spool_dir: none but missing: {missing}"
+    )
+
+    # Check 2: ensure actual_none modules are not flagged by the missing-spool gate
+    for name in actual_none:
+        if name in JUSTIFIED_EXCLUSIONS:
+            continue  # was already excluded, now also has explicit decl
+        cfg = modules[name]
+        has_spool = "spool_dir" in cfg or "spool_volume" in cfg
+        assert has_spool, f"[IMP:9][test] {name} has spool_dir: none but it's missing from module.yaml dict"
+
+    # Check 3: deploy-modules.sh ensure_spool_dirs has "none" handling
+    deploy_script = MODULES_DIR.parent / "internal" / "bootstrap" / "deploy-modules.sh"
+    content = deploy_script.read_text()
+    assert '"none"' in content or "== 'none'" in content or 'spool_path == "none"' in content, (
+        "[IMP:9][test] FAIL: deploy-modules.sh ensure_spool_dirs must check for 'none' value"
+    )
+    # The "none" check should log INFO (not WARN)
+    none_check_context = content[content.find('spool_path == "none"'):][:500] if 'spool_path == "none"' in content else ''
+    if none_check_context:
+        assert 'INFO' in none_check_context or 'Stateless' in none_check_context, (
+            "[IMP:9][test] FAIL: spool_dir: none must produce INFO log, not WARN"
+        )
+
+    print("[IMP:9][test_spool_dir_none_no_warn] PASS: spool_dir: none declared and handled")
+
+
+# endregion FUNC_test_spool_dir_none_no_warn
+
+
+# region FUNC_test_spool_dir_missing_still_warns
+## @purpose  Verify ensure_spool_dirs() still emits WARN for modules without spool_dir/spool_volume
+##           (drift detection preserved for new modules that forget to declare).
+## @io       Read deploy-modules.sh ensure_spool_dirs region → assert WARN present for missing decl
+## @complexity 1 — grep function body
+# 🧪 TRAP[TEST] · Regression: T4 — spool_dir omission still triggers WARN
+# · Scenario: a new module.yaml without spool_dir/spool_volume → ensure_spool_dirs must WARN
+# · Last fail: n/a (new test)
+# · Remove if: all modules always declare spool_dir (even stateless ones)
+def test_spool_dir_missing_still_warns() -> None:
+    """Modules without spool_dir/spool_volume (and not in JUSTIFIED_EXCLUSIONS) must still trigger WARN."""
+    modules = _load_module_yamls()
+
+    # Simulate what ensure_spool_dirs does: collect modules without spool_dir/spool_volume
+    # that would get the WARN log
+    would_warn = []
+    for name, cfg in modules.items():
+        if name in JUSTIFIED_EXCLUSIONS:
+            continue  # explicit exclusion — no WARN
+        install_type = cfg.get("install_type", "docker")
+        if install_type != "docker":
+            continue
+        has_spool = "spool_dir" in cfg or "spool_volume" in cfg
+        if not has_spool:
+            would_warn.append(name)
+
+    # All docker modules should have spool_dir or spool_volume (or be in exclusions)
+    assert would_warn == [], (
+        f"[IMP:9][test] These modules would trigger WARN (no spool_dir/spool_volume, not excluded): {would_warn}"
+    )
+
+    # Verify deploy-modules.sh still has the WARN path for missing declarations
+    deploy_script = MODULES_DIR.parent / "internal" / "bootstrap" / "deploy-modules.sh"
+    content = deploy_script.read_text()
+    func_start = content.find("# region ENSURE_SPOOL_DIRS")
+    func_end = content.find("# endregion ENSURE_SPOOL_DIRS")
+    assert func_start != -1 and func_end != -1, "ENSURE_SPOOL_DIRS region not found"
+    func_body = content[func_start:func_end]
+    non_comment = "\n".join(l for l in func_body.split("\n") if not l.strip().startswith("#"))
+
+    # Must have WARN for modules without spool_dir/spool_volume
+    assert 'WARN' in non_comment and 'No spool_dir' in func_body, (
+        "[IMP:9][test] FAIL: ensure_spool_dirs must emit WARN for modules without spool_dir"
+    )
+
+    print("[IMP:9][test_spool_dir_missing_still_warns] PASS: missing spool decl still triggers WARN")
+
+
+# endregion FUNC_test_spool_dir_missing_still_warns

@@ -137,6 +137,12 @@ ensure_spool_dirs() {
         fi
 
         if [[ -n "$spool_path" ]]; then
+            # spool_dir: none = stateless module (explicit declaration, no WARN)
+            if [[ "$spool_path" == "none" ]]; then
+                log_step "spool-dirs" "INFO" "Stateless module (declared spool_dir: none): ${module_name}"
+                continue
+            fi
+
             spool_found=$((spool_found + 1))
 
             if [[ -d "$spool_path" ]]; then
@@ -147,6 +153,11 @@ ensure_spool_dirs() {
         else
             # Log warning for modules without spool_dir or spool_volume
             # (some modules legitimately don't need spool dirs, e.g. nginx reverse proxy)
+            # 🧐 TRAP[DECISION] · 2026-07-17 · — · WARN preserved for drift detection
+            # · Rejected: silent skip (would hide missing decl in new modules)
+            # · Reason: absence of spool_dir is legitimate for some modules, but WARN
+            #   ensures new modules without declarative metadata are flagged.
+            # · Rev: if all modules explicitly declare spool_dir, switch to CRITICAL
             spool_missing_modules+=("$module_name")
             log_step "spool-dirs" "WARN" "No spool_dir or spool_volume in ${module_name}/module.yaml — no spool dir to verify"
         fi
@@ -314,6 +325,11 @@ deploy_system_module() {
     local module_name="$1"
     local overlay_dir="${2:-}"
 
+    # env_requires gate (T3): fail fast before any deploy action
+    if ! _check_env_requires "$module_name"; then
+        return 1
+    fi
+
     local install_script="${PATHS_MODULES_DIR}/${module_name}/install.sh"
     if [[ ! -f "$install_script" ]]; then
         log_step "system:${module_name}" "FAIL" "install.sh not found: ${install_script}"
@@ -353,6 +369,11 @@ deploy_docker_module() {
     local module_name="$1"
     local overlay_dir="${2:-}"
 
+    # env_requires gate (T3): fail fast before any deploy action
+    if ! _check_env_requires "$module_name"; then
+        return 1
+    fi
+
     local module_dir="${PATHS_MODULES_DIR}/${module_name}"
     local compose_file="${module_dir}/compose.yaml"
     if [[ ! -f "$compose_file" ]]; then
@@ -388,24 +409,33 @@ deploy_docker_module() {
         fi
     fi
 
-    # Pre-deploy image check for hermes-agent (L1 base + L2 context images)
+    # Pre-deploy image check for hermes-agent — resolve actual images from compose config (T4)
+    # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Hardcoded hermes images drifted from compose
+    # · Symptom: hermes-agent deployed with stale image (tronyx161/hermes-agent-tronyx-lab:latest
+    #   vs tronyxlab/hermes-agent-context:v2026.7.1), no tty/command → restart loop 101 times
+    # · Root: hardcoded image names duplicated knowledge — compose and deploy-modules.sh diverged
+    #   when CONTEXT_IMAGE changed in .env / secrets.env
+    # · Fix: derive images from `docker compose config --images` (single source of truth)
+    # · Prevention: deploy-modules.sh must NOT hardcode any image names — always resolve from compose
     if [[ "$module_name" == "hermes-agent" ]]; then
-        local hermes_context="${CONTEXT_NAME:-tronyx-lab}"
-        local l1_image="ghcr.io/tronyx161/hermes-agent-base:latest"
-        local l2_image="ghcr.io/tronyx161/hermes-agent-${hermes_context}:latest"
-
-        if ! _check_image_exists "$l2_image"; then
-            if ! _check_image_exists "$l1_image"; then
-                log_step "docker:${module_name}" "FAIL" "hermes-agent L1 base image not found: ${l1_image}"
-                echo "[IMP:10][deploy-modules][hermes-agent] Build required:" >&2
-                echo "  make hermes-build-platform    # Build L1 base image locally" >&2
-                echo "  make hermes-push-l1           # Push L1 to ghcr.io" >&2
-                echo "  make hermes-build-context CONTEXT=${hermes_context}  # Build L2 context image" >&2
-            else
-                log_step "docker:${module_name}" "FAIL" "hermes-agent L2 context image not found: ${l2_image}"
-                echo "[IMP:10][deploy-modules][hermes-agent] Build required:" >&2
-                echo "  make hermes-build-context CONTEXT=${hermes_context}  # Build L2 context image" >&2
+        local -a hermes_images=()
+        mapfile -t hermes_images < <(docker compose "${compose_args[@]}" --profile "$module_name" config --images 2>/dev/null || true)
+        if [[ ${#hermes_images[@]} -eq 0 ]]; then
+            log_step "docker:${module_name}" "FAIL" "No images resolved from compose config — compose file may be broken"
+            return 1
+        fi
+        local _all_found=true
+        for _img in "${hermes_images[@]}"; do
+            if ! _check_image_exists "$_img"; then
+                _all_found=false
+                log_step "docker:${module_name}" "FAIL" "hermes-agent image not found: ${_img}"
             fi
+        done
+        if ! $_all_found; then
+            echo "[IMP:10][deploy-modules][hermes-agent] Build required:" >&2
+            echo "  make hermes-build-platform    # Build L1 base image locally" >&2
+            echo "  make hermes-push-l1           # Push L1 to ghcr.io" >&2
+            echo "  make hermes-build-context     # Build L2 context image" >&2
             return 1
         fi
     fi
@@ -427,6 +457,61 @@ deploy_docker_module() {
                 log_step "docker:${module_name}" "INFO" "Cleaned up pre-existing container: ${cname}"
             fi
         done
+    fi
+
+    # ── Orphan container reconciliation (T4) ──
+    # Before compose up, check if any service container_name is occupied by a container from
+    # a DIFFERENT compose project (foreign). If so, stop + rm it to prevent name-conflict failure.
+    # compose up --remove-orphans only removes services NOT in the current compose file, it does
+    # NOT handle foreign containers with matching names from other compose projects.
+    # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Foreign container blocks compose up, restart-loop 101
+    # · Symptom: hermes-agent container_name occupied by container from different compose project
+    # · Root: no pre-up check — compose up fails silently on name conflict, stale container lives
+    # · Fix: reconcile foreign containers by stopping/removing them before compose up
+    local _orphan_lines
+    _orphan_lines=$(python3 -c "
+import json, subprocess, sys
+
+module_name = '${module_name}'
+# Build docker compose config command
+docker_cmd = ['docker', 'compose']
+docker_cmd += '${compose_args[*]}'.split()
+docker_cmd += ['--profile', module_name, 'config', '--format', 'json']
+try:
+    r = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        sys.exit(0)
+    cfg = json.loads(r.stdout)
+except Exception:
+    sys.exit(0)
+
+# Get existing container names
+ps_r = subprocess.run(['docker', 'ps', '-a', '--format', '{{.Names}}'], capture_output=True, text=True, timeout=15)
+existing = set(ps_r.stdout.splitlines())
+
+for svc in cfg.get('services', {}).values():
+    cname = svc.get('container_name', '')
+    if not cname:
+        cname = svc.get('name', '')
+    if not cname or cname not in existing:
+        continue
+    # Check compose project label on the existing container
+    ins_r = subprocess.run(
+        ['docker', 'inspect', '--format', '{{index .Config.Labels \"com.docker.compose.project\"}}', cname],
+        capture_output=True, text=True, timeout=15)
+    proj = ins_r.stdout.strip()
+    if not proj or proj != module_name:
+        print(f'{cname}|{proj}')
+" 2>/dev/null || true)
+
+    if [[ -n "$_orphan_lines" ]]; then
+        while IFS='|' read -r _cname _project; do
+            [[ -z "$_cname" ]] && continue
+            log_step "docker:${module_name}" "INFO" "Reconciling orphan container: ${_cname} (project=${_project:-<none>})"
+            docker stop "$_cname" 2>/dev/null || true
+            docker rm "$_cname" 2>/dev/null || true
+            log_step "docker:${module_name}" "INFO" "Orphan container removed: ${_cname}"
+        done <<< "$_orphan_lines"
     fi
 
     # 🧐 TRAP[DECISION] · 2026-07-16 · — · --profile required for standalone base.yml deploy
@@ -574,6 +659,57 @@ print(d.get('severity', 'warn'))
 "
 }
 # endregion GET_MODULE_SEVERITY
+
+# region CHECK_ENV_REQUIRES
+## @purpose  Parse module.yaml env_requires list and verify each required env var is
+##           non-empty in current process env OR in the secrets env file. Fail-fast
+##           before any deploy action — prevents deploy with empty secrets (P3 fix).
+## @io       str (module_name) → stdout: comma-separated missing vars (on failure); return 0/1
+## @complexity 1 — single python3 call per module
+## @invariants
+##   - Checks both ${!var} (process env) and SECRETS_ENV_FILE (secrets.env)
+##   - Empty env_requires list → no-op (return 0)
+##   - Missing module.yaml → no-op (return 0)
+##   - Missing vars → log_step FAIL with list + return 1
+##   - Incident 2026-07-17: minio deployed with empty MINIO_ROOT_USER/PASSWORD → Access Denied
+_check_env_requires() {
+    local module_name="$1"
+    local module_yaml="${PATHS_MODULES_DIR}/${module_name}/module.yaml"
+    if [[ ! -f "$module_yaml" ]]; then
+        return 0
+    fi
+
+    local _missing
+    _missing=$(python3 -c "
+import yaml, os, sys
+with open('${module_yaml}') as f:
+    d = yaml.safe_load(f)
+required = d.get('env_requires') or []
+if not required:
+    sys.exit(0)
+secrets_file = os.environ.get('SECRETS_ENV_FILE', '/run/platform/secrets.env')
+secrets = {}
+if os.path.isfile(secrets_file):
+    with open(secrets_file) as sf:
+        for line in sf:
+            line = line.strip()
+            if '=' in line and not line.startswith('#'):
+                k, _, v = line.partition('=')
+                secrets[k.strip()] = v.strip()
+missing = [v for v in required if not os.environ.get(v, '') and not secrets.get(v, '')]
+if missing:
+    print(','.join(missing))
+    sys.exit(1)
+sys.exit(0)
+")
+    local _py_exit=$?
+    if [[ "$_py_exit" -ne 0 ]] && [[ -n "$_missing" ]]; then
+        log_step "env-gate:${module_name}" "FAIL" "Missing required env vars: ${_missing} — add to SOPS secrets"
+        return 1
+    fi
+    return 0
+}
+# endregion CHECK_ENV_REQUIRES
 
 # region EXPAND_TRANSITIVE_DEPS
 ## @purpose  Expand comma-separated module list with transitive depends_on using BFS over module.yaml DAG

@@ -20,7 +20,4 @@ depends_on: []
 env_shared:
   PLATFORM_DOMAIN: "${PLATFORM_DOMAIN}"
 
-# spool_dir: not applicable — nginx is a reverse proxy with no persistent data.
-# All config files are mounted read-only from the host. Docker logging driver
-# handles log output — no spool directory needed.
-# spool_volume: not applicable
+spool_dir: none  # reverse proxy — no persistent data (stateless)

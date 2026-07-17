@@ -285,20 +285,25 @@ def test_redis_image(redis_compose_base_path, caplog):
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_redis_module_yaml_no_spool_dir(redis_module_yaml_path, caplog):
-    """redis module.yaml must NOT have spool_dir."""
+    """redis module.yaml must have spool_dir: none (cache-only, stateless)."""
     data = _load_yaml(redis_module_yaml_path)
 
-    has_spool_dir = "spool_dir" in data
-    has_spool_volume = "spool_volume" in data
+    spool_dir = data.get("spool_dir")
+    spool_volume = data.get("spool_volume")
 
     logger.critical(
         "[IMP:9][test_redis][module_yaml] ASSERT: spool_dir=%s spool_volume=%s",
-        has_spool_dir,
-        has_spool_volume,
+        spool_dir,
+        spool_volume,
     )
-    assert not has_spool_dir, f"redis module.yaml must NOT have spool_dir (cache-only). Found: {data.get('spool_dir')}"
-    assert not has_spool_volume, (
-        f"redis module.yaml must NOT have spool_volume (cache-only). Found: {data.get('spool_volume')}"
+
+    # spool_dir must be "none" (explicit stateless declaration per T4 DevPlan 004)
+    assert spool_dir == "none", (
+        f"redis module.yaml must have spool_dir: none (cache-only, stateless). "
+        f"Found: spool_dir={spool_dir!r}"
+    )
+    assert not spool_volume, (
+        f"redis module.yaml must NOT have spool_volume (cache-only). Found: {spool_volume!r}"
     )
 
 

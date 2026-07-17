@@ -98,7 +98,7 @@ def test_spool_dir_format(caplog):
         if data.get("install_type") != "docker":
             continue
 
-        if spool_dir and not spool_dir.startswith("/"):
+        if spool_dir and spool_dir != "none" and not spool_dir.startswith("/"):
             failed.append(f"{module_name}: spool_dir '{spool_dir}' is not absolute path")
             logger.info("[IMP:9][gate] FAIL: %s spool_dir not absolute", module_name)
 

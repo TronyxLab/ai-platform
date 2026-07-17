@@ -66,34 +66,61 @@ for module_yaml in "${PLATFORM_ROOT}"/core/modules/*/module.yaml; do
         fi
     elif [ "$INSTALL_TYPE" = "docker" ]; then
         # Default mode for docker modules: docker inspect
-        CONTAINER_NAME=$(grep -E 'container_name:' "${PLATFORM_ROOT}/core/modules/${MODULE}/docker-compose.base.yml" 2>/dev/null | head -1 | awk '{print $2}' || echo "$MODULE")
-
-        # Extract primary container name from base.yml
-        if [ -z "$CONTAINER_NAME" ] || [ "$CONTAINER_NAME" = "$MODULE" ]; then
-            # Try to get the first service name
-            CONTAINER_NAME="$MODULE"
+        # Get ALL container_name entries from base.yml (no head -1 — all containers matter)
+        mapfile -t CONTAINER_NAMES < <(grep -E 'container_name:' "${PLATFORM_ROOT}/core/modules/${MODULE}/docker-compose.base.yml" 2>/dev/null | awk '{print $2}')
+        if [ ${#CONTAINER_NAMES[@]} -eq 0 ]; then
+            CONTAINER_NAMES=("$MODULE")
         fi
 
-        HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "not-found")
+        for CONTAINER_NAME in "${CONTAINER_NAMES[@]}"; do
+            # Inspect health status, restarting state, and restart count
+            HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "not-found")
 
-        case "$HEALTH_STATUS" in
-            "healthy")
-                log_imp 8 "check" "PASS: ${MODULE} → ${CONTAINER_NAME} healthy"
-                ;;
-            "unhealthy")
-                log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} unhealthy"
-                FAILED=1
-                ;;
-            "starting"|"")
-                log_imp 8 "check" "WARN: ${MODULE} → ${CONTAINER_NAME} starting or no healthcheck"
-                ;;
-            "not-found")
-                log_imp 8 "check" "SKIP: ${MODULE} → container ${CONTAINER_NAME} not found"
-                ;;
-            *)
-                log_imp 8 "check" "WARN: ${MODULE} → ${CONTAINER_NAME} status=${HEALTH_STATUS}"
-                ;;
-        esac
+            if [ "$HEALTH_STATUS" != "not-found" ]; then
+                RESTARTING=$(docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME" 2>/dev/null || echo "false")
+                RESTART_COUNT=$(docker inspect --format='{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo "0")
+            else
+                RESTARTING="false"
+                RESTART_COUNT="0"
+            fi
+
+            # Determine FAIL condition: restart loop overrides health status
+            IS_RESTART_LOOP=false
+            if [ "$RESTARTING" = "true" ]; then
+                IS_RESTART_LOOP=true
+            elif [ "$RESTART_COUNT" != "not-found" ] && [ "$RESTART_COUNT" -gt 5 ] 2>/dev/null; then
+                IS_RESTART_LOOP=true
+            fi
+
+            case "$HEALTH_STATUS" in
+                "healthy")
+                    if $IS_RESTART_LOOP; then
+                        log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} restart loop (restarting=${RESTARTING}, restarts=${RESTART_COUNT})"
+                        FAILED=1
+                    else
+                        log_imp 8 "check" "PASS: ${MODULE} → ${CONTAINER_NAME} healthy"
+                    fi
+                    ;;
+                "unhealthy")
+                    log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} unhealthy"
+                    FAILED=1
+                    ;;
+                "starting"|"")
+                    if $IS_RESTART_LOOP; then
+                        log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} restart loop (restarting=${RESTARTING}, restarts=${RESTART_COUNT})"
+                        FAILED=1
+                    else
+                        log_imp 8 "check" "WARN: ${MODULE} → ${CONTAINER_NAME} starting or no healthcheck"
+                    fi
+                    ;;
+                "not-found")
+                    log_imp 8 "check" "SKIP: ${MODULE} → container ${CONTAINER_NAME} not found"
+                    ;;
+                *)
+                    log_imp 8 "check" "WARN: ${MODULE} → ${CONTAINER_NAME} status=${HEALTH_STATUS}"
+                    ;;
+            esac
+        done
     else
         # System module: run healthcheck.sh liveness
         hc_script="${PLATFORM_ROOT}/core/modules/${MODULE}/healthcheck.sh"

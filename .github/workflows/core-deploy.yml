@@ -125,6 +125,8 @@ jobs:
             --exclude '.git/' \
             --exclude '__pycache__/' \
             --exclude '*.pyc' \
+            --exclude 'default-user.xml' \
+            --exclude '.env' \
             ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
           echo "[IMP:9][deploy][rsync] core/ rsync complete — SHA $SHA"
 

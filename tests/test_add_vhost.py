@@ -67,9 +67,9 @@ domain: app.test.local
 target_node: mynode
 """)
 
-    # 4. Create node-configs directory
+    # 4. Create node-configs directory (flat layout — no conf.d/ subdir)
     node_configs_dir = tmp_path / "node-configs"
-    (node_configs_dir / "mynode" / "overlays" / "nginx" / "conf.d").mkdir(parents=True)
+    (node_configs_dir / "mynode" / "overlays" / "nginx").mkdir(parents=True)
 
     # 5. Set PLATFORM_ROOT + PLATFORM_DOMAIN (app.test.local is subdomain of test.local)
     env = {
@@ -87,8 +87,8 @@ target_node: mynode
     # ── Assert ──
     assert result.returncode == 0, f"main() failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
 
-    # Read generated vhost
-    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "conf.d" / "app.test.local.conf"
+    # Read generated vhost (flat layout per DRIFT-1 fix)
+    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "app.test.local.conf"
     assert vhost_file.is_file(), f"Vhost file not generated: {vhost_file}"
     vhost_content = vhost_file.read_text()
 
@@ -149,7 +149,7 @@ target_node: mynode
 """)
 
     node_configs_dir = tmp_path / "node-configs"
-    (node_configs_dir / "mynode" / "overlays" / "nginx" / "conf.d").mkdir(parents=True)
+    (node_configs_dir / "mynode" / "overlays" / "nginx").mkdir(parents=True)
 
     env = {
         "PLATFORM_ROOT": str(PLATFORM_ROOT),
@@ -166,7 +166,7 @@ target_node: mynode
     # ── Assert ──
     assert result.returncode == 0, f"main() failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
 
-    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "conf.d" / "myapp.com.conf"
+    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "myapp.com.conf"
     assert vhost_file.is_file(), f"Vhost file not generated: {vhost_file}"
     vhost_content = vhost_file.read_text()
 
@@ -235,9 +235,9 @@ domain: example.com
 target_node: mynode
 """)
 
-    # 4. Create node-configs directory
+    # 4. Create node-configs directory (flat layout — no conf.d/ subdir)
     node_configs_dir = tmp_path / "node-configs"
-    (node_configs_dir / "mynode" / "overlays" / "nginx" / "conf.d").mkdir(parents=True)
+    (node_configs_dir / "mynode" / "overlays" / "nginx").mkdir(parents=True)
 
     # 5. Set PLATFORM_ROOT to real project root (so logging.sh resolves)
     env = {
@@ -267,8 +267,8 @@ target_node: mynode
         "validate.sh did not receive project directory.\nMock lines:\n" + "\n".join(mock_output)
     )
 
-    # Verify the nginx vhost was generated (confirming full flow completed)
-    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "conf.d" / "example.com.conf"
+    # Verify the nginx vhost was generated (confirming full flow completed, flat layout)
+    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "example.com.conf"
     assert vhost_file.is_file(), f"Vhost file was not generated: {vhost_file}"
     assert "proxy_pass" in vhost_file.read_text(), "Vhost missing proxy_pass directive"
 
@@ -277,3 +277,110 @@ target_node: mynode
 
 
 # endregion FUNC_test_fqdn_check_delegates_to_validate
+
+
+# region FUNC_test_vhost_template_http2_directive
+## @purpose  Verify generated vhost uses modern http2 syntax: `listen 443 ssl;` + `http2 on;`
+##           instead of deprecated `listen 443 ssl http2;` (T3 from DevPlan 004).
+## @io       ⇥ tmp_path → ◇ run add-vhost.sh → ◇ parse vhost → ⊕ assert http2 on; present
+##           ⊕ assert listen.*http2 absent
+## @complexity O(1)
+## @invariants
+##   - Generated vhost must contain `http2 on;` on a separate line
+##   - Generated vhost must NOT contain `listen .* http2` (deprecated syntax)
+##   - Both IPv4 (443) and IPv6 ([::]:443) listeners must be clean
+
+
+# 🧪 TRAP[TEST] · Regression: T3 — add-vhost.sh http2 modernization
+# · Scenario: add-vhost.sh generates nginx vhost for domain with SSL
+# · Last fail: WARN on VPS — deprecated listen ... http2, protocol options redefined
+# · Remove if: nginx stops supporting http2 on; directive (unlikely)
+def test_vhost_template_http2_directive(tmp_path: Path) -> None:
+    """Generated vhost uses modern http2 syntax: listen 443 ssl; + separate http2 on; line."""
+    # ── Arrange ──
+
+    # 1. Copy add-vhost.sh to temp
+    script_copy = tmp_path / "add-vhost.sh"
+    shutil.copy2(str(SCRIPT_PATH), str(script_copy))
+
+    # 2. Create mock validate.sh
+    mock_validate = tmp_path / "validate.sh"
+    mock_validate.write_text("""#!/bin/bash
+echo "[IMP:9][validate][mock] Called with: $@" >&2
+exit 0
+""")
+    mock_validate.chmod(0o755)
+
+    # 3. Create project directory with ai-platform.yaml
+    project_dir = tmp_path / "test-project"
+    project_dir.mkdir()
+    (project_dir / "ai-platform.yaml").write_text("""expose: true
+domain: example.com
+target_node: mynode
+""")
+
+    # 4. Create node-configs directory
+    node_configs_dir = tmp_path / "node-configs"
+    (node_configs_dir / "mynode" / "overlays" / "nginx").mkdir(parents=True)
+
+    # 5. Set PLATFORM_ROOT
+    env = {
+        "PLATFORM_ROOT": str(PLATFORM_ROOT),
+    }
+
+    # ── Act ──
+    result = source_and_run(
+        f'main "--project-dir" "{project_dir}" "--node-configs-dir" "{node_configs_dir}"',
+        env=env,
+        script_path=str(script_copy),
+    )
+
+    # ── Assert ──
+    assert result.returncode == 0, f"main() failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+
+    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "example.com.conf"
+    assert vhost_file.is_file(), f"Vhost file not generated: {vhost_file}"
+    vhost_content = vhost_file.read_text()
+
+    print("--- VHOST CONTENT ---")
+    print(vhost_content)
+    print("--- END VHOST ---")
+
+    # Check 1: modern http2 on; on its own line
+    assert "http2 on;" in vhost_content, (
+        f"Vhost must contain 'http2 on;' directive:\n{vhost_content}"
+    )
+    # Ensure http2 is on its own line, not part of listen directive
+    http2_lines = [l.strip() for l in vhost_content.split('\n') if 'http2' in l]
+    assert all(l == 'http2 on;' or l.startswith('#') for l in http2_lines if 'http2' in l), (
+        f"'http2' lines must be 'http2 on;', not part of listen: {http2_lines}"
+    )
+
+    # Check 2: no deprecated listen ... http2
+    listen_lines = [l.strip() for l in vhost_content.split('\n') if 'listen' in l]
+    for line in listen_lines:
+        assert ' http2' not in line.split('ssl')[1] if 'ssl' in line else True, (
+            f"Deprecated listen ... http2 found: '{line}'"
+        )
+    assert 'http2' not in ' '.join([l for l in listen_lines if 'ssl' in l]), (
+        f"No listen line should contain 'http2': {listen_lines}"
+    )
+
+    # Check 3: both IPv4 and IPv6 listen have ssl without http2 flag
+    assert 'listen 443 ssl;' in vhost_content, "Missing IPv4 ssl listen"
+    assert 'listen [::]:443 ssl;' in vhost_content, "Missing IPv6 ssl listen"
+
+    # LDD telemetry (IMP:9 from vhost content)
+    print("--- LDD TRAJECTORY (stderr) ---")
+    for line in result.stderr.splitlines():
+        if "[IMP:" in line:
+            try:
+                imp_level = int(line.split("[IMP:")[1].split("]")[0])
+                if imp_level >= 7:
+                    print(line)
+            except (ValueError, IndexError):
+                pass
+    print("--- END LDD TRAJECTORY ---")
+
+
+# endregion FUNC_test_vhost_template_http2_directive

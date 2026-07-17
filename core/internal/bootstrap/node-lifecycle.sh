@@ -17,6 +17,11 @@
 ##   - Context-overlay delivery: git clone/pull (deploy-modules.sh → ensure_context_repo)
 ##   - NO git for core code; context repo uses git for overlay customization
 ##   - Env vars or CLI args: NODE_NAME, NODE_YAML, PLATFORM_OWNER_KEY, PLATFORM_CI_DEPLOY_KEY
+##   - NODE_YAML derivation (update-mode): if not set via env/CLI, resolved from NODE_NAME via
+##     lib/node-resolver.sh (candidate paths: platform_root/node-configs/, projects/*/node-configs/,
+##     /opt/node-configs/). Unresolvable → exit 1 BEFORE any mutations.
+##   - --dry-run: accepted by parser, both modes print plan + exit 0 BEFORE mkdir $CHECKPOINT_DIR
+##     and any other mutations. dry-run печать стоит до --force/mkdir/checkpoint операций.
 ## @rationale Single orchestrator for both bootstrap (init) and incremental update modes.
 ##            Previously two separate scripts (orchestrator.sh, node-update.sh) with ~60%
 ##            duplicated boilerplate (arg parsing, logging, checkpoint, sourcing). Merging
@@ -48,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --resume)            RESUME_MODE=true; shift ;;
         --force)             FORCE_MODE=true; shift ;;
+        --dry-run)           DRY_RUN_MODE=true; shift ;;
         --node-name)         export NODE_NAME="$2"; shift 2 ;;
         --node-yaml)         export NODE_YAML="$2"; shift 2 ;;
         --owner-key)         if [[ -z "${PLATFORM_OWNER_KEY:-}" ]]; then export PLATFORM_OWNER_KEY="$2"; fi; shift 2 ;;
@@ -811,6 +817,20 @@ main() {
         echo "[IMP:9][node-lifecycle][main] Deploy: core=SCP/rsync, context=git" >&2
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
 
+        # T2: --dry-run mode (before any mutations)
+        if [[ "${DRY_RUN_MODE:-}" == "true" ]]; then
+            echo "[IMP:9][node-lifecycle][dry-run] ===== DRY RUN: init mode ====="
+            echo "[IMP:9][node-lifecycle][dry-run] NODE_NAME: ${NODE_NAME:-<unset>}"
+            echo "[IMP:9][node-lifecycle][dry-run] NODE_YAML: ${NODE_YAML:-<unset>}"
+            echo "[IMP:9][node-lifecycle][dry-run] Steps: " >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   1. ssh-access  2. apt-deps  3. [tor]  4. install-docker  5. users" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   6. firewall  7. verify-core  8. verify-node-configs  9. decrypt-secrets" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   10. ensure-secrets  11. read-node-yaml  12. ghcr-auth  13. sudoers" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   14. node-update  15. logrotate  16. audit  17. telegram" >&2
+            echo "[IMP:9][node-lifecycle][dry-run] Bootstrap DRY RUN — no mutations performed, exit 0" >&2
+            exit 0
+        fi
+
         if [[ "$FORCE_MODE" == "true" ]]; then
             echo "[IMP:8][node-lifecycle][checkpoint] --force: Clearing all checkpoints in ${CHECKPOINT_DIR}" >&2
             rm -rf "$CHECKPOINT_DIR"
@@ -901,6 +921,46 @@ PYEOF
         echo "[IMP:9][node-lifecycle][main] Node Update START (--mode update)" >&2
         echo "[IMP:9][node-lifecycle][main] Node: ${NODE_NAME:-<unset>}" >&2
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
+
+        # ════════════════════════════════════════════════════════════════
+        # T1: NODE_YAML derivation + validate (before any mutations)
+        # ════════════════════════════════════════════════════════════════
+
+        # T1a: NODE_NAME must be set (fail-fast)
+        if [[ -z "${NODE_NAME:-}" ]]; then
+            echo "[IMP:10][node-lifecycle][update] FATAL: NODE_NAME is required for --mode update" >&2
+            echo "[IMP:10][node-lifecycle][update] Usage: --node-name <name>" >&2
+            exit 1
+        fi
+
+        # T1b: Derive NODE_YAML if not set or missing, via node-resolver.sh
+        # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · NODE_YAML not passed from entrypoint
+        # · Symptom: `make node-update` падал "NODE_YAML not set" на шаге 4/5 (deploy-modules, healthcheck)
+        # · Root: entrypoint не передавал --node-yaml; update-mode main() не резолвил, полагаясь на env
+        # · Fix: derivation через node-resolver.sh (единственный Source of Truth резолва node.yaml)
+        # · Prevention: contract-тест флагов (каждый флаг node-update.sh → node-lifecycle.sh)
+        if [[ -z "${NODE_YAML:-}" ]] || [[ ! -f "${NODE_YAML:-}" ]]; then
+            echo "[IMP:8][node-lifecycle][update] NODE_YAML not set or missing — resolving via node-resolver" >&2
+            source "${CORE_DIR}/lib/node-resolver.sh"
+            NODE_YAML="$(resolve_node_yaml "${NODE_NAME}")" || {
+                echo "[IMP:10][node-lifecycle][update] FATAL: Cannot resolve NODE_YAML for node=${NODE_NAME}" >&2
+                resolve_node_yaml "${NODE_NAME}" 2>&1 | grep -E "^.*Searched:" | head -1 || true
+                echo "[IMP:10][node-lifecycle][update]   Tried candidate paths: platform_root/node-configs/, projects/*/node-configs/, /opt/node-configs/" >&2
+                exit 1
+            }
+            export NODE_YAML
+            echo "[IMP:9][node-lifecycle][update] Resolved NODE_YAML=${NODE_YAML}" >&2
+        fi
+
+        # T2: --dry-run mode (after resolution, before any mutations)
+        if [[ "${DRY_RUN_MODE:-}" == "true" ]]; then
+            echo "[IMP:9][node-lifecycle][dry-run] ===== DRY RUN: update mode ====="
+            echo "[IMP:9][node-lifecycle][dry-run] NODE_NAME: ${NODE_NAME}"
+            echo "[IMP:9][node-lifecycle][dry-run] NODE_YAML: ${NODE_YAML}"
+            echo "[IMP:9][node-lifecycle][dry-run] Steps: verify-core → provision → ssl-provision → deploy-docker → deploy-system → healthcheck"
+            echo "[IMP:9][node-lifecycle][dry-run] Node update DRY RUN — no mutations performed, exit 0"
+            exit 0
+        fi
 
         if [[ "$FORCE_MODE" == "true" ]]; then
             echo "[IMP:8][node-lifecycle][checkpoint] --force: Clearing all checkpoints in ${CHECKPOINT_DIR}" >&2

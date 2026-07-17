@@ -175,8 +175,9 @@ server {
 
 # HTTPS vhost
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name ${fqdn};
 
     ssl_certificate /etc/letsencrypt/live/${cert_domain}/fullchain.pem;

@@ -95,7 +95,7 @@ main() {
         exit 1
     fi
 
-    local args=("--node" "${NODE_NAME}")
+    local args=("--node-name" "${NODE_NAME}")
     $DRY_RUN && args+=("--dry-run")
 
     echo "[IMP:8][node-update][entrypoint] Delegating to internal/bootstrap/node-lifecycle.sh --mode update" >&2

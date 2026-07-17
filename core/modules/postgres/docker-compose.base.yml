@@ -47,6 +47,13 @@ services:
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      # 📝 TRAP[DEBT] · 2026-07-17 · MED · POSTGRES_PASSWORD rotation risk
+      # · Observed: POSTGRES_PASSWORD is consumed at initdb time and stored in data dir.
+      # ·   Changing the env var does NOT rotate the password in the running DB.
+      # · Suspected: password is written to data dir during first init; env change on
+      # ·   container restart does not update it — similar to ClickHouse P1 pattern.
+      # · Impact: password rotation requires manual ALTER USER or data dir cleanup.
+      # · When: T1 implementation — deferred, out of scope (analogous to ClickHouse per-file mount fix)
       POSTGRES_DB: "${POSTGRES_DB:-platform}"
 
     volumes:

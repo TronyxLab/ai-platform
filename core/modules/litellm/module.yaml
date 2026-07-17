@@ -38,6 +38,8 @@ resources:
 
 env_requires:
   - LITELLM_MASTER_KEY
-  - LITELLM_LICENSE
+  # LITELLM_LICENSE removed from env_requires — optional (empty = OSS mode).
+  # ## @rationale env_requires gate (deploy-modules.sh) treats empty as missing → would
+  # false-fail litellm deploy on every node without an enterprise license (2026-07-17).
   - POSTGRES_PASSWORD
   - OPENAI_API_KEY
