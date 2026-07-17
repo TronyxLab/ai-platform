@@ -11,7 +11,7 @@
 
 # AGENTS.md — ~/projects/ (проекты и контексты ai-platform)
 
-> Статус: контракт плана `ai-platform/.ai/plans/001-project-connection-model/05-DevPlan-connect-lifecycle.md`. До его реализации доступны только: `new-project`, `new-context`, `context-promote`, деплой через `git push`.
+
 
 ## Структура папки
 
