@@ -365,6 +365,8 @@ def test_platform_starts_all_containers(
                 result.stderr,
             )
             continue
+        # DIAG: print raw compose ps output for debugging
+        logger.error("=== DIAG [%s] stdout=%s stderr=%s", module_name, result.stdout.strip(), result.stderr.strip()[:200])
         for line in result.stdout.strip().splitlines():
             service_name = line.strip()
             if service_name:
