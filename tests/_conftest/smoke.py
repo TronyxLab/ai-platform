@@ -21,6 +21,7 @@
 ##              platform_services → lifecycle fixture: start/stop compose stack
 # endregion MODULE_CONTRACT
 
+import json
 import logging
 import os
 import platform as _platform
@@ -212,6 +213,64 @@ def _wait_for_loki_ready(
         "[IMP:9][conftest][_wait_for_loki_ready] Loki /ready timeout after %ds",
         timeout,
     )
+    return False
+
+
+def _wait_for_minio_healthy(
+    compose_base_args: list[str],
+    timeout: int,
+    logger: logging.Logger,
+) -> bool:
+    """Poll docker compose ps --format json until minio container is healthy.
+
+    ## @purpose — Wait for minio (not minio-createbuckets one-shot init container)
+    ##            to become healthy. minio-createbuckets exits 0 after creating
+    ##            buckets, which makes `docker compose up --wait` return 1 even
+    ##            though minio itself is healthy. This function polls only the
+    ##            minio container's Health status.
+    ## @io — ⇥ compose_base_args, timeout, logger → ⎋ bool (healthy within timeout)
+    ## @complexity — O(T) where T = timeout / poll_interval
+    ## @rationale — D5: one-shot init container exits 0, breaking --wait contract.
+    ##              Separate health poll avoids coupling to createbuckets lifecycle.
+    """
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        try:
+            ps_result = subprocess.run(
+                [*compose_base_args, "ps", "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if ps_result.returncode != 0:
+                logger.warning("[IMP:8][conftest][_wait_for_minio_healthy] docker compose ps failed")
+                _time.sleep(2)
+                continue
+
+            # Parse JSONL output — one JSON object per line (one per container)
+            for line in ps_result.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    container = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                service = container.get("Service", "")
+                state = container.get("State", "")
+                health = container.get("Health", "")
+
+                if service == "minio" and state == "running" and health == "healthy":
+                    logger.info("[IMP:9][conftest][_wait_for_minio_healthy] MinIO is healthy (service=%s state=%s health=%s)", service, state, health)
+                    return True
+
+            _time.sleep(2)
+
+        except subprocess.TimeoutExpired:
+            logger.warning("[IMP:8][conftest][_wait_for_minio_healthy] docker compose ps timed out")
+            _time.sleep(2)
+
+    logger.warning("[IMP:9][conftest][_wait_for_minio_healthy] MinIO not healthy within %ds", timeout)
     return False
 
 
