@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-17 | regenerated (818 tests)
+## @changes — 2026-07-17 | regenerated (822 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -450,6 +450,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_validate]
 - tests/test_contract_entrypoints.py::test_manifest_covers_all_entrypoints
 - tests/test_contract_entrypoints.py::test_manifest_parses
+- tests/test_contract_entrypoints.py::test_node_update_has_ssh_proxy
 - tests/test_cross_layer_imports.py::test_cross_layer_imports
 - tests/test_date_parser.py::test_extract_date_from_key_variants
 - tests/test_date_parser.py::test_is_first_of_month[20260230-False]
@@ -621,7 +622,10 @@ test_nodeids:
 - tests/test_no_hardcoded_credentials.py::test_no_token_in_git_url_workflows
 - tests/test_node_lifecycle_static.py::test_dry_run_flag_accepted
 - tests/test_node_lifecycle_static.py::test_entrypoint_flags_contract
+- tests/test_node_lifecycle_static.py::test_node_update_has_ssh_proxy
+- tests/test_node_lifecycle_static.py::test_remote_cmd_has_update_mode
 - tests/test_node_lifecycle_static.py::test_update_mode_resolves_node_yaml
+- tests/test_node_lifecycle_static.py::test_update_ssl_step_sources_secrets_env
 - tests/test_node_yaml_domains.py::test_node_yaml_domain_extraction
 - tests/test_node_yaml_domains.py::test_node_yaml_no_projects
 - tests/test_pgbouncer_static.py::test_each_database_has_host_port_dbname

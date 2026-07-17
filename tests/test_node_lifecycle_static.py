@@ -1,6 +1,6 @@
 """
 Static tests for node-lifecycle.sh — NODE_YAML derivation, --dry-run, and flags contract.
-# GREP_SUMMARY: test node-lifecycle node-yaml node-resolver dry-run flags contract static-audit
+# GREP_SUMMARY: test node-lifecycle node-yaml node-resolver dry-run flags contract static-audit ssh-proxy remote-cmd secrets-env ssl-provision
 # STRUCTURE: ▶ read node-lifecycle.sh + node-update.sh → ◇ grep patterns → ⊕ assertions
 # region MODULE_CONTRACT
 ## @purpose  Static analysis tests verifying:
@@ -208,7 +208,235 @@ def test_entrypoint_flags_contract(caplog) -> None:
     )
     logger.info("[IMP:8][test_entrypoint_flags_contract] Check 4 PASS: explicit --dry-run case")
 
+    # ── Check 5: --age-secret-key-file accepted by node-lifecycle.sh parser ──
+    assert "--age-secret-key-file" in lifecycle_content, (
+        "[IMP:9][test] FAIL: --age-secret-key-file not in node-lifecycle.sh parser"
+    )
+    # Verify that the area around --age-secret-key-file references AGE_SECRET_KEY.
+    # The flag line itself only has `--age-secret-key-file)`, but the handling
+    # block reads file content into AGE_SECRET_KEY. Check the context after it.
+    age_key_idx = lifecycle_content.find("--age-secret-key-file")
+    assert age_key_idx >= 0, "[IMP:9][test] FAIL: --age-secret-key-file not found in lifecycle"
+    context_after = lifecycle_content[age_key_idx : age_key_idx + 500]
+    assert "AGE_SECRET_KEY" in context_after, (
+        "[IMP:9][test] FAIL: --age-secret-key-file case must read file into AGE_SECRET_KEY"
+    )
+    logger.info("[IMP:8][test_entrypoint_flags_contract] Check 5 PASS: --age-secret-key-file in lifecycle parser")
+
+    # ── Check 6: --age-secret-key-file accepted by node-update.sh entrypoint ──
+    assert "--age-secret-key-file" in entrypoint_content, (
+        "[IMP:9][test] FAIL: --age-secret-key-file not in node-update.sh parser"
+    )
+    # Verify node-update.sh sets AGE_SECRET_KEY_FILE from flag (consumed by detect_age_key)
+    assert "AGE_SECRET_KEY_FILE" in entrypoint_content, (
+        "[IMP:9][test] FAIL: node-update.sh must set AGE_SECRET_KEY_FILE from --age-secret-key-file"
+    )
+    # Verify detect_age_key function exists in entrypoint
+    assert "detect_age_key" in entrypoint_content, (
+        "[IMP:9][test] FAIL: node-update.sh must have detect_age_key() to consume AGE_SECRET_KEY_FILE"
+    )
+    logger.info("[IMP:8][test_entrypoint_flags_contract] Check 6 PASS: --age-secret-key-file in entrypoint + detect_age_key")
+
     logger.info("[IMP:9][test_entrypoint_flags_contract] ALL CHECKS PASS")
 
 
 # endregion FUNC_test_entrypoint_flags_contract
+
+
+# region FUNC_test_node_update_has_ssh_proxy
+## @purpose  Verify node-update.sh contains SSH proxy logic: resolve_node_yaml,
+##           extract_node_host, SSH_HOST fallback (no SSH_HOST → local exec).
+## @io       Script content → grep → assert patterns present
+## @complexity O(S)
+## @invariants — SSH proxy (resolve → extract → SSH exec) and local fallback
+@pytest.mark.static_audit
+def test_node_update_has_ssh_proxy(caplog) -> None:
+    """node-update.sh: resolve_node_yaml + extract_node_host + SSH_HOST fallback."""
+    # 🧪 TRAP[TEST] · Regression: T1 — SSH proxy in node-update.sh
+    # · Scenario: make node-update from macOS fails "must run as root"
+    # · Last fail: Wave 1 pre-merge (no SSH proxy)
+    # · Remove if: entrypoint no longer needs SSH proxy
+    logger.info("[IMP:7][test_node_update_has_ssh_proxy] START")
+    caplog.set_level(logging.DEBUG)
+
+    content = ENTRYPOINT_SCRIPT.read_text()
+
+    # ── Check 1: resolve_node_yaml called ──
+    assert "resolve_node_yaml" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must call resolve_node_yaml()"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: resolve_node_yaml() called")
+
+    # ── Check 2: extract_node_host called ──
+    assert "extract_node_host" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must call extract_node_host()"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: extract_node_host() called")
+
+    # ── Check 3: SSH_HOST fallback — local exec path exists ──
+    assert "ssh_host" in content.lower() or "SSH_HOST" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must have SSH_HOST detection"
+    )
+    assert "LOCALLY" in content or "local" in content.lower(), (
+        "[IMP:9][test] FAIL: node-update.sh must have local exec fallback when SSH_HOST absent"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 3 PASS: SSH_HOST fallback present")
+
+    # ── Check 4: --age-secret-key-file accepted ──
+    assert "--age-secret-key-file" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must accept --age-secret-key-file"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 4 PASS: --age-secret-key-file flag")
+
+    # ── Check 5: detect_age_key exists ──
+    assert "detect_age_key" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: detect_age_key() present")
+
+    logger.info("[IMP:9][test_node_update_has_ssh_proxy] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_node_update_has_ssh_proxy
+
+
+# region FUNC_test_remote_cmd_has_update_mode
+## @purpose  Verify remote-cmd.sh contains build_update_ssh_cmd() with --mode update.
+## @io       Script content → grep → assert patterns present
+## @complexity O(S)
+## @invariants — build_update_ssh_cmd exists; contains --mode update; no --resume (D2)
+@pytest.mark.static_audit
+def test_remote_cmd_has_update_mode(caplog) -> None:
+    """remote-cmd.sh: build_update_ssh_cmd exists with --mode update, no --resume."""
+    # 🧪 TRAP[TEST] · Regression: T2 — build_update_ssh_cmd contract
+    # · Scenario: SSH proxy calls build_update_ssh_cmd but internal changes signature
+    # · Last fail: Wave 1 pre-merge (function didn't exist)
+    # · Remove if: remote-cmd.sh no longer needed for SSH proxy
+    logger.info("[IMP:7][test_remote_cmd_has_update_mode] START")
+    caplog.set_level(logging.DEBUG)
+
+    remote_cmd_script = CORE_DIR / "internal" / "bootstrap" / "remote-cmd.sh"
+    content = remote_cmd_script.read_text()
+
+    # ── Check 1: build_update_ssh_cmd exists ──
+    assert "build_update_ssh_cmd" in content, (
+        "[IMP:9][test] FAIL: remote-cmd.sh must define build_update_ssh_cmd()"
+    )
+    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 1 PASS: build_update_ssh_cmd() defined")
+
+    # ── Check 2: contains --mode update ──
+    # Check within the build_update_ssh_cmd function body (not file-wide).
+    # Find the actual function definition (with {), not comment mentions.
+    update_func_start = content.find("build_update_ssh_cmd() {")
+    assert update_func_start >= 0, "[IMP:9][test] FAIL: build_update_ssh_cmd() { not found"
+    update_func_body = content[update_func_start:]
+    assert "--mode" in update_func_body and "update" in update_func_body, (
+        "[IMP:9][test] FAIL: build_update_ssh_cmd must reference --mode update"
+    )
+    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 2 PASS: --mode update present")
+
+    # ── Check 3: does NOT contain --resume in function body (D2: update steps independent) ──
+    # NOTE: --resume may appear in file-level comments but must NOT be in the function body
+    assert "--resume" not in update_func_body, (
+        "[IMP:9][test] FAIL: build_update_ssh_cmd must NOT contain --resume (D2)"
+    )
+    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 3 PASS: --resume absent from function body (per D2)")
+
+    # ── Check 4: does NOT contain --owner-key in function body (D2: not needed in update mode) ──
+    assert "--owner-key" not in update_func_body, (
+        "[IMP:9][test] FAIL: build_update_ssh_cmd must NOT contain --owner-key (D2)"
+    )
+    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 4 PASS: --owner-key absent from function body (per D2)")
+
+    # ── Check 5: uses printf %q for quoting ──
+    assert "printf '%q'" in content, (
+        "[IMP:9][test] FAIL: build_update_ssh_cmd must use printf %%q for shell-safe quoting"
+    )
+    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 5 PASS: printf %%q quoting")
+
+    # ── Check 6: exports AGE_SECRET_KEY ──
+    assert "AGE_SECRET_KEY" in content, (
+        "[IMP:9][test] FAIL: build_update_ssh_cmd must handle AGE_SECRET_KEY export"
+    )
+    logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 6 PASS: AGE_SECRET_KEY handling")
+
+    logger.info("[IMP:9][test_remote_cmd_has_update_mode] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_remote_cmd_has_update_mode
+
+
+# region FUNC_test_update_ssl_step_sources_secrets_env
+## @purpose  Verify update_step_3_ssl_provision() sources /run/platform/secrets.env
+##           before calling ssl-provision.sh. Uses SECRETS_ENV_FILE from lib/secrets.sh
+##           with fallback to /run/platform/secrets.env.
+## @io       Script content → grep → assert patterns present in function
+## @complexity O(S)
+## @invariants — source secrets.env before ssl-provision; WEBNAMES_API_KEY loaded log;
+##               WARN if file missing; NOT fail (ssl-provision skips if cert exists)
+@pytest.mark.static_audit
+def test_update_ssl_step_sources_secrets_env(caplog) -> None:
+    """update_step_3_ssl_provision: sources secrets.env before ssl-provision.sh."""
+    # 🧪 TRAP[TEST] · Regression: T3 — WEBNAMES_API_KEY not set in update mode
+    # · Scenario: SSL cert renewal fails because secrets.env not sourced
+    # · Last fail: Wave 1 production (WARN "WEBNAMES_API_KEY not set")
+    # · Remove if: ssl-provision no longer needs WEBNAMES_API_KEY
+    logger.info("[IMP:7][test_update_ssl_step_sources_secrets_env] START")
+    caplog.set_level(logging.DEBUG)
+
+    content = LIFECYCLE_SCRIPT.read_text()
+
+    # ── Check 1: Source secrets.env pattern exists ──
+    assert "secrets_env" in content.lower() or "secrets.env" in content.lower(), (
+        "[IMP:9][test] FAIL: update_step_3_ssl_provision must reference secrets.env"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 1 PASS: secrets.env referenced")
+
+    # ── Check 2: Uses SECRETS_ENV_FILE or /run/platform/secrets.env ──
+    assert "SECRETS_ENV_FILE" in content or "/run/platform/secrets.env" in content, (
+        "[IMP:9][test] FAIL: must use SECRETS_ENV_FILE from lib/secrets.sh"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 2 PASS: SECRETS_ENV_FILE used")
+
+    # ── Check 3: Uses set -a / source / set +a for export ──
+    assert "set -a" in content and "set +a" in content, (
+        "[IMP:9][test] FAIL: must use set -a/+a around source for var export"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: set -a/+a export")
+
+    # ── Check 4: WEBNAMES_API_KEY log exists ──
+    assert "WEBNAMES_API_KEY" in content, (
+        "[IMP:9][test] FAIL: must log WEBNAMES_API_KEY status after source"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: WEBNAMES_API_KEY log")
+
+    # ── Check 5: WARN log for missing secrets.env ──
+    # The log message uses bash variable: "${secrets_env} missing — cert renewal may fail if cert expires"
+    # where secrets_env resolves to /run/platform/secrets.env. Check for "secrets_env.*missing" pattern.
+    import re
+    warn_missing_pattern = r'secrets_env.*missing'
+    assert re.search(warn_missing_pattern, content, re.IGNORECASE), (
+        "[IMP:9][test] FAIL: must have WARN log for missing secrets.env (expected pattern: secrets_env.*missing)"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: WARN for missing file")
+
+    # ── Check 6: Source before ssl-provision.sh call ──
+    # Find the function body and verify order: source before ssl_script invocation
+    func_start = content.find("update_step_3_ssl_provision()")
+    assert func_start >= 0, "[IMP:9][test] FAIL: update_step_3_ssl_provision function not found"
+
+    func_body = content[func_start:]
+    source_pos = func_body.find("secrets_env")
+    ssl_call_pos = func_body.find('bash "$ssl_script"')
+    assert source_pos >= 0 and ssl_call_pos >= 0, (
+        "[IMP:9][test] FAIL: Could not locate source and ssl_script call in function"
+    )
+    assert source_pos < ssl_call_pos, (
+        f"[IMP:9][test] FAIL: secrets_env source ({source_pos}) must precede ssl_script call ({ssl_call_pos})"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: source before ssl-provision.sh call")
+
+    logger.info("[IMP:9][test_update_ssl_step_sources_secrets_env] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_update_ssl_step_sources_secrets_env

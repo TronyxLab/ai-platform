@@ -393,17 +393,24 @@ bootstrap-node:
 
 
 ## node-update: Update an already-provisioned node (CI regular update)
-##   Usage: make node-update NODE=<name> [DRY_RUN=1]
+##   Usage: make node-update NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]
 ##   Delegates to core/entrypoints/node-update.sh → internal/bootstrap/node-lifecycle.sh --mode update
 ##     5-step flow: verify_core → provision --scope networks --scope volumes → deploy docker modules
 ##     → deploy system modules → healthcheck
+##   Variables:
+##     NODE               Node name to update (required)
+##     AGE_SECRET_KEY_FILE (optional) Path to AGE secret key file
+##     DRY_RUN            (optional) Set to 1 for dry-run mode (print SSH command only)
 node-update:
 	@echo "[IMP:9][make][node-update] Updating node NODE=$(NODE)..."
 	@if [[ -z "$(NODE)" ]]; then \
-		echo "[IMP:9][make][node-update] ERROR: NODE not set — usage: make node-update NODE=<name>" >&2; \
+		echo "[IMP:9][make][node-update] ERROR: NODE not set — usage: make node-update NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]" >&2; \
 		exit 1; \
 	fi
-	@$(_platform_root)/core/entrypoints/node-update.sh --node "$(NODE)" $(if $(filter 1,$(DRY_RUN)),--dry-run)
+	@PLATFORM_ROOT="$(_platform_root)" $(_platform_root)/core/entrypoints/node-update.sh \
+		--node "$(NODE)" \
+		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file '$(AGE_SECRET_KEY_FILE)') \
+		$(if $(filter 1,$(DRY_RUN)),--dry-run)
 	@echo "[IMP:9][make][node-update] Node update complete"
 
 

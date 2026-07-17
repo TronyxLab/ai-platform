@@ -693,6 +693,27 @@ PYEOF
         return 0
     fi
 
+    # ── Source secrets.env for WEBNAMES_API_KEY ────────────────────────
+    # T3 (DevPlan 005): Source existing secrets.env before ssl-provision.sh.
+    # WEBNAMES_API_KEY is required for webnames DNS plugin. If secrets.env
+    # is missing (e.g. after reboot), warn but don't fail — ssl-provision
+    # skips if cert already exists (idempotent). Uses SECRETS_ENV_FILE env
+    # var from lib/secrets.sh with fallback to /run/platform/secrets.env.
+    local secrets_env="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
+    if [[ -f "$secrets_env" ]]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$secrets_env"
+        set +a
+        if [[ -n "${WEBNAMES_API_KEY:-}" ]]; then
+            echo "[IMP:8][node-lifecycle][ssl-provision] WEBNAMES_API_KEY loaded from ${secrets_env}" >&2
+        else
+            echo "[IMP:8][node-lifecycle][ssl-provision] INFO: ${secrets_env} sourced but WEBNAMES_API_KEY not set — cert renewal via webnames will fail if cert expires" >&2
+        fi
+    else
+        echo "[IMP:8][node-lifecycle][ssl-provision] WARN: ${secrets_env} missing — cert renewal may fail if cert expires" >&2
+    fi
+
     echo "[IMP:9][node-lifecycle][ssl-provision] Issuing SSL certificate for ${PLATFORM_DOMAIN}"
     if bash "$ssl_script" 2>&1; then
         step_done "ssl-provision" "SSL certificate provisioned for ${PLATFORM_DOMAIN}"

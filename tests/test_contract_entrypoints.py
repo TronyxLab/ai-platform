@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: contract-test entrypoint-manifest yaml shebang bash-n syntax smoke subprocess
+# GREP_SUMMARY: contract-test entrypoint-manifest yaml shebang bash-n syntax smoke subprocess node-update ssh-proxy age-secret-key-file detect-age-key
 # STRUCTURE: ▶ manifest path → parse YAML → extract .sh paths → parametrized tests (exists|shebang|syntax|help-smoke)
 # region MODULE_CONTRACT
 ## @purpose  Mass contract tests for ALL entrypoint scripts declared in entrypoint-manifest.yaml.
@@ -374,3 +374,73 @@ def test_manifest_covers_all_entrypoints() -> None:
 
 
 # endregion FUNC_test_manifest_covers_all_entrypoints
+
+
+# region FUNC_test_node_update_has_ssh_proxy
+## @purpose  Verify node-update.sh entrypoint contract: registered in manifest,
+##           has SSH proxy flags (--age-secret-key-file, --dry-run, --node) and
+##           detect_age_key() function. Validates entrypoint↔manifest consistency.
+## @io       Manifest extractor + script content → grep → assertions
+## @complexity O(M + S) where M = manifest entries, S = script content
+## @invariants — node-update.sh in manifest; --age-secret-key-file and
+##               detect_age_key are present in the entrypoint
+@pytest.mark.contract
+def test_node_update_has_ssh_proxy() -> None:
+    """Entrypoint contract: node-update.sh registered in manifest with SSH proxy flags."""
+    # 🧪 TRAP[TEST] · Regression: T5 — entrypoint contract for SSH proxy
+    # · Scenario: node-update.sh modified but SSH proxy flags dropped
+    # · Last fail: Wave 1 pre-merge (entrypoint missing --age-secret-key-file)
+    # · Remove if: node-update.sh no longer needs SSH proxy
+    logger.info("[IMP:7][test_node_update_has_ssh_proxy] START")
+
+    # ── Check 1: node-update.sh is registered in the manifest ──
+    manifest_scripts = extract_script_paths(MANIFEST_PATH)
+    node_update_manifest_paths = [s for s in manifest_scripts if "node-update" in s]
+    assert len(node_update_manifest_paths) > 0, (
+        "[IMP:9][test] FAIL: node-update.sh not found in entrypoint-manifest.yaml"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: node-update.sh in manifest: %s", node_update_manifest_paths[0])
+
+    # ── Check 2: node-update.sh exists on disk ──
+    node_update_path = os.path.join(PLATFORM_ROOT, node_update_manifest_paths[0])
+    assert os.path.isfile(node_update_path), (
+        "[IMP:9][test] FAIL: node-update.sh not found on disk at %s" % node_update_path
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: node-update.sh exists on disk")
+
+    # ── Check 3: has valid shebang ──
+    with open(node_update_path) as f:
+        first_line = f.readline().strip()
+    assert first_line.startswith("#!"), (
+        "[IMP:9][test] FAIL: node-update.sh missing shebang"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 3 PASS: shebang OK")
+
+    # ── Check 4: has --age-secret-key-file flag ──
+    with open(node_update_path) as f:
+        content = f.read()
+    assert "--age-secret-key-file" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must accept --age-secret-key-file"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 4 PASS: --age-secret-key-file flag present")
+
+    # ── Check 5: has detect_age_key() ──
+    assert "detect_age_key" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: detect_age_key() present")
+
+    # ── Check 6: has SSH_HOST/local exec fallback ──
+    assert "ssh_host" in content.lower() or "SSH_HOST" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must handle SSH_HOST"
+    )
+    has_local_fallback = any(kw in content.lower() for kw in ("locally", "local exec", "local mode", "LOCALLY"))
+    assert has_local_fallback, (
+        "[IMP:9][test] FAIL: node-update.sh must have local exec fallback"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 6 PASS: SSH proxy + local fallback")
+
+    logger.info("[IMP:9][test_node_update_has_ssh_proxy] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_node_update_has_ssh_proxy
