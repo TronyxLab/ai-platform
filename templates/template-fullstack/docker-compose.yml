@@ -1,0 +1,89 @@
+# GREP_SUMMARY: docker-compose fullstack backend frontend proxy-net shared-db-net
+# STRUCTURE: service(backend) + service(frontend) → networks(proxy-net:external + shared-db-net:external)
+# region MODULE_CONTRACT
+## @purpose  Development and production compose definition for fullstack projects (04-templates §3)
+## @scope    Defines backend + frontend services with shared network topology
+## @invariants
+##   - shared-db-net is external (created by postgres-shared module)
+##   - proxy-net is external (created by nginx module)
+##   - Backend healthcheck on /health; frontend healthcheck on /health (nginx)
+##   - Backend not exposed to proxy-net (only frontend)
+## @rationale Fullstack = backend (API + DB) + frontend (SPA via nginx), separate networks
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  # ═══════════ Backend service ═══════════
+  __PROJECT_NAME__-backend:
+    # ⚠️ TRAP[BUG] · 2026-06-11 · P1 · GHCR требует lowercase org names
+    #   Root: Docker registry spec — repository name must be lowercase
+    #   Fix: передавайте --org в lowercase (e.g., tronyxlab, не TronyxLab)
+    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__-backend:${IMAGE_TAG:-latest}"
+    restart: always
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    logging: *default-logging
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - __PROJECT_NAME__-backend-data:/app/data
+    networks:
+      - __PROJECT_NAME__-net
+      - shared-db-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    labels:
+      - "platform.type=backend"
+
+  # ═══════════ Frontend service ═══════════
+  __PROJECT_NAME__-frontend:
+    # ⚠️ TRAP[BUG] · 2026-06-11 · P1 · GHCR требует lowercase org names
+    #   Root: Docker registry spec — repository name must be lowercase
+    #   Fix: передавайте --org в lowercase (e.g., tronyxlab, не TronyxLab)
+    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__-frontend:${IMAGE_TAG:-latest}"
+    restart: always
+    stop_grace_period: 30s
+    logging: *default-logging
+    environment:
+      - NODE_ENV=production
+    networks:
+      - __PROJECT_NAME__-net
+      - proxy-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health"]
+      # ⚠️ TRAP[BUG] Use 127.0.0.1 NOT localhost — Alpine resolves localhost to ::1 (IPv6),
+      #   but nginx binds to 0.0.0.0 (IPv4), causing healthcheck to always fail
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    labels:
+      - "platform.type=frontend"
+      - "platform.domain=__DOMAIN__"
+
+volumes:
+  __PROJECT_NAME__-backend-data:
+    name: __PROJECT_NAME__-backend-data
+
+networks:
+  __PROJECT_NAME__-net:
+    name: __PROJECT_NAME__-net
+    driver: bridge
+  proxy-net:
+    name: proxy-net
+    external: true
+  shared-db-net:
+    name: shared-db-net
+    external: true

@@ -1,0 +1,13 @@
+# GREP_SUMMARY: template context org node platform
+# STRUCTURE: context.yaml → modules/hermes-agent/ → projects/ → deploy(node)
+# region MODULE_CONTRACT
+## @purpose  Template for new organization context scaffold — defines context name, owning org, and default node
+## @scope    Context manifest for platform; __CONTEXT__ name, __ORG_NAME__, __NODE_NAME__ default node
+## @invariants
+##   - name, org, default_node are required fields
+##   - All placeholders (__ORG_NAME__, __CONTEXT__, __NODE_NAME__) must be replaced before use
+## @rationale Centralized context definition for org deployment scaffold
+# endregion MODULE_CONTRACT
+name: __CONTEXT__
+org: __ORG_NAME__
+default_node: __NODE_NAME__

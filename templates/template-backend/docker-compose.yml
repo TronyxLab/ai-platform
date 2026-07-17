@@ -1,0 +1,63 @@
+# GREP_SUMMARY: docker-compose backend shared-db-net healthcheck
+# STRUCTURE: service(<project>) → networks(<project>-net + shared-db-net:external + proxy-net:external) → healthcheck
+# region MODULE_CONTRACT
+## @purpose  Development and production compose definition for backend projects (04-templates §3)
+## @scope    Defined with IMAGE_REGISTRY for CI/CD substitution
+## @invariants
+##   - shared-db-net is external (created by postgres-shared module)
+##   - proxy-net is external (created by nginx module)
+##   - Healthcheck on /health endpoint
+## @rationale Backend services use shared database; optional HTTP ingress via nginx-proxy when domain set
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  __PROJECT_NAME__:
+    # ⚠️ TRAP[BUG] · 2026-06-11 · P1 · GHCR требует lowercase org names
+    #   Root: Docker registry spec — repository name must be lowercase
+    #   Fix: передавайте --org в lowercase (e.g., tronyxlab, не TronyxLab)
+    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__:${IMAGE_TAG:-latest}"
+    restart: always
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    logging: *default-logging
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - __PROJECT_NAME__-data:/app/data
+    networks:
+      - __PROJECT_NAME__-net
+      - shared-db-net
+      - proxy-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    labels:
+      - "platform.type=backend"
+      - "platform.domain=__DOMAIN__"
+
+volumes:
+  __PROJECT_NAME__-data:
+    name: __PROJECT_NAME__-data
+
+networks:
+  __PROJECT_NAME__-net:
+    name: __PROJECT_NAME__-net
+    driver: bridge
+  shared-db-net:
+    name: shared-db-net
+    external: true
+  proxy-net:
+    name: proxy-net
+    external: true

@@ -1,0 +1,55 @@
+# GREP_SUMMARY: docker-compose __PROJECT_NAME__ proxy-net frontend nginx proxy
+# STRUCTURE: service(<project>-app) → networks(<project>-net + proxy-net:external) → healthcheck
+# region MODULE_CONTRACT
+## @purpose  Development and production compose definition (04-templates §3)
+## @scope    Defined with IMAGE_REGISTRY for CI/CD substitution
+## @invariants
+##   - proxy-net is external (created by nginx module)
+##   - Ports NOT published (nginx proxy handles ingress)
+##   - Healthcheck on /health endpoint
+## @rationale External proxy-net = nginx module owns TLS termination; projects don't manage certs
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  __PROJECT_NAME__:
+    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__:${IMAGE_TAG:-latest}"
+    # ⚠️ TRAP[BUG] Docker requires lowercase repo names (e.g., tronyxlab, not TronyxLab).
+    #   Pass --org in lowercase, or the image pull will fail with:
+    #   "repository name (Xxx/yyy) must be lowercase"
+    restart: always
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging: *default-logging
+    environment:
+      - NODE_ENV=production
+    networks:
+      - __PROJECT_NAME__-net
+      - proxy-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health"]
+      # ⚠️ TRAP[BUG] Use 127.0.0.1 NOT localhost — Alpine resolves localhost to ::1 (IPv6),
+      #   but nginx binds to 0.0.0.0 (IPv4), causing healthcheck to always fail
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    labels:
+      - "platform.type=frontend"
+      - "platform.domain=__DOMAIN__"
+
+networks:
+  __PROJECT_NAME__-net:
+    name: __PROJECT_NAME__-net
+    driver: bridge
+  proxy-net:
+    name: proxy-net
+    external: true
