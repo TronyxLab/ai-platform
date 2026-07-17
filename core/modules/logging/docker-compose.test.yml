@@ -1,0 +1,23 @@
+# GREP_SUMMARY: logging docker-compose test override container_name-test loki promtail
+# STRUCTURE: base.yml + test.yml → loki + promtail with -test suffix and shifted ports
+# region MODULE_CONTRACT
+## @purpose  Test override for logging — -test container_name for loki and promtail
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: loki-test, promtail-test
+##   - restart: "no" для всех контейнеров
+##   - Loki port: 127.0.0.1:13100:3100
+##   - Promtail no ports exposed (internal collector)
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+# endregion MODULE_CONTRACT
+
+services:
+  loki:
+    container_name: loki-test
+    ports:
+      - "127.0.0.1:13100:3100"
+    restart: "no"
+
+  promtail:
+    container_name: promtail-test
+    restart: "no"

@@ -1,0 +1,69 @@
+# GREP_SUMMARY: grafana contact point telegram built-in alerting severity critical warning routing
+# @purpose  Grafana contact points for Telegram alerts routed by severity
+# @scope    Provisioned alongside alert-rules.yml in GF_PROVISIONING_ALERTING_PATH
+# @invariants
+#   - Two contact points: telegram-critical (immediate) and telegram-warning (grouped)
+#   - Uses Grafana built-in Telegram type (no external webhook service needed)
+#   - TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID_* from secrets.env (Grafana env substitution)
+#   - No authentication required (Grafana direct Telegram Bot API call)
+#   - Notification policies route by severity label
+# @rationale Grafana 11.6.16 has built-in Telegram Bot API support; avoids the complexity
+#           of maintaining a separate notify-hook-web service and uses the same bot token
+#           as the existing notify-hook.sh CLI script.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: "Telegram Critical"
+    receivers:
+      - uid: "telegram-critical"
+        type: "telegram"
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          chatid: "${TELEGRAM_CHAT_ID_CRITICAL}"
+          message: '{{ template "telegram.default.message" . }}'
+          disable_notifications: false
+          uploadImage: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: "Telegram Warning"
+    receivers:
+      - uid: "telegram-warning"
+        type: "telegram"
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          chatid: "${TELEGRAM_CHAT_ID_WARNING}"
+          message: '{{ template "telegram.default.message" . }}'
+          disable_notifications: true
+          uploadImage: false
+        disableResolveMessage: false
+
+# 🧐 TRAP[DECISION] · 2026-07-02 · — · Grafana 11.6.16 receiver names use contactPoint name (not uid)
+# · Grafana provisioning: `receiver` field must match contactPoint `name`
+# · (e.g. "Telegram Critical"), not the receiver `uid` (e.g. "telegram-critical").
+# · Using uid caused "receiver 'telegram-critical' does not exist" at startup.
+# · Rejected: downgrade Grafana · Reason: 11.6.16 is current stable
+policies:
+  - orgId: 1
+    receiver: "Telegram Warning"
+    group_by: ["alertname", "severity"]
+    group_wait: "5m"
+    group_interval: "5m"
+    repeat_interval: "1h"
+    routes:
+      - receiver: "Telegram Critical"
+        matchers:
+          - severity="critical"
+        group_wait: "1s"
+        group_interval: "1s"
+        repeat_interval: "5m"
+        sendReminder: false
+      - receiver: "Telegram Warning"
+        matchers:
+          - severity="warning"
+        group_wait: "5m"
+        group_interval: "5m"
+        repeat_interval: "1h"
+        sendReminder: true

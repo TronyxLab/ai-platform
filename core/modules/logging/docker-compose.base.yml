@@ -1,0 +1,138 @@
+# @purpose  Base compose definition for logging module — Loki + Promtail
+# GREP_SUMMARY: logging docker-compose loki promtail observability-net profiles x-logging
+# STRUCTURE: ▶ loki:3.7.3 [profiles:logging] → observability-net → ┬─ ▶ promtail:3.6.11 [profiles:logging] → loki(dep) → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for logging Docker module
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [logging] — pluggability: only included when COMPOSE_PROFILES contains logging
+##   - Loki: scratch image (no shell/wget/curl), liveness via /usr/bin/loki -version
+##   - Promtail: depends on loki (same module), Docker socket + nginx log scraping
+##   - Networks declared as external: true — pre-created by deploy-modules.sh
+##   - All TRAP comments from root compose preserved
+## @rationale Profiles enable selective startup via `make up MODULES=logging`
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+
+  # ── Loki (Log Storage) ───────────────────────────────────────────────────
+  # region service:loki
+  loki:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Loki upgraded 3.6.0 → 3.7.3 (TASK-2)
+    # · 3.7.3 is latest stable (2026-06-24); scratch image (no wget/curl)
+    # · CHANGELOG: breaking change only for OpenShift operator — not relevant
+    # · Our loki-config.yml (filesystem storage, compactor, v13 schema) is compatible
+    # · Rev: on next major upstream release — reevaluate pin
+    image: grafana/loki:3.7.3@sha256:70b9f699fc9bb868b62f1cfd4f787dfa50242f1fd92e6089787d5d7daea75fe8
+    container_name: loki
+    profiles: [logging]
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+    logging: *default-logging
+
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+
+    command:
+      - "-config.file=/etc/loki/loki-config.yml"
+
+    volumes:
+      - ./config/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - ./config/loki-runtime-config.yml:/etc/loki/runtime-config.yml:rw
+      - loki-data:/loki
+
+    networks:
+      - observability-net
+
+    tmpfs:
+      - /tmp:size=64M,noexec,nosuid
+
+    # ⚠️ TRAP[BUG] · 2026-07-08 · Loki scratch-образ не содержит shell/wget/curl.
+    # · /ready endpoint (port 3100) невозможно прозвонить изнутри контейнера —
+    #   scratch-образ физически не включает HTTP-клиент (ни busybox, ни wget, ни curl).
+    # · Вариант docker healthcheck: test: ["CMD", "wget", "http://127.0.0.1:3100/ready"]
+    #   НЕРАБОТОСПОСОБЕН — нет бинарника wget в $PATH scratch-контейнера.
+    # · Принятое решение:
+    #   - Liveness: check /usr/bin/loki -version (процесс жив → alive),
+    #     потеря readiness при зависшем event-loop НЕ детектируется этим чеком.
+    #   - Readiness: мониторинг метрики loki_ready через Prometheus +
+    #     алерт-правило (alert-rules.yml: LokiNotReady) — внешний HTTP-проб
+    #     на http://loki:3100/ready, выполняемый Prometheus, не изнутри контейнера.
+    # · Альтернатива: перейти на shell-based образ (grafana/loki:3.7.3-alpine),
+    #   если такой существует — требует отдельного исследования совместимости
+    #   (конфиги, сигналы, entrypoint). Не реализовано.
+    # · Rev: при появлении Loki alpine-образа — заменить liveness на wget /ready,
+    #   убрать внешний readiness-мониторинг loki_ready (станет избыточным).
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:loki
+
+  # ── Promtail (Log Collector) ─────────────────────────────────────────────
+  # region service:promtail
+  promtail:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Promtail upgraded 3.6.0 → 3.6.11 (TASK-2)
+    # · 3.6.11 is latest 3.6.x patch (3.7.x not yet released as of 2026-07-06)
+    # · Config format unchanged at 3.6.x level — fully compatible
+    # · Rev: on next major upstream release — reevaluate pin
+    image: grafana/promtail:3.6.11@sha256:a761cb834cfaeee29745440d4884d6748f0a08d8f68928db1d707018c1dcfbe9
+    container_name: promtail
+    profiles: [logging]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+    logging: *default-logging
+
+    command:
+      - "-config.file=/etc/promtail/promtail-config.yml"
+
+    volumes:
+      - ./config/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/nginx:/var/log/nginx:ro
+
+    networks:
+      - observability-net
+
+    tmpfs:
+      - /tmp:size=64M,noexec,nosuid
+
+    depends_on:
+      loki:
+        condition: service_healthy
+
+    # 🧐 TRAP[TASK-3] · 2026-07-02 · Optimized: start_period 30→15s (container startup optimization)
+    healthcheck:
+      test: ["CMD", "pgrep", "promtail"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+  # endregion service:promtail
+
+volumes:
+  loki-data:
+    driver: local
+
+networks:
+  observability-net:
+    external: true

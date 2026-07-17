@@ -1,0 +1,18 @@
+# GREP_SUMMARY: redis docker-compose test override container_name-test cache-only
+# STRUCTURE: ↑ overrides base.yml → container_name: redis-test (no volume override — cache-only has no volumes)
+# region MODULE_CONTRACT
+## @purpose  Test environment override for redis — overrides container_name only.
+##           Volume override removed per owner verdict wave-redis: cache-only, no persistence volumes.
+## @scope    Only used in test fixtures via `docker compose -f base.yml -f test.yml`.
+##           Never used in production deployments.
+## @invariants
+##   - Service volumes not overridden (cache-only — no volumes in base)
+##   - Container name: redis-test (VPS conflict avoidance)
+## @rationale Only container_name override needed. Volume override was only needed for bind-mount
+##            workaround (macOS Docker Desktop) — now removed since cache-only has no volumes at all.
+## @changes — UPDATED: 2026-07-15 | Cache-only: removed volume override, updated container_name only
+# endregion MODULE_CONTRACT
+
+services:
+  redis:
+    container_name: redis-test

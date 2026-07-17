@@ -1,0 +1,62 @@
+# GREP_SUMMARY: monitoring defaults global type-defaults frontend backend fullstack metrics logs_retention ai_retention alerting dashboard type-defaults
+# STRUCTURE: ▶ L1:defaults.yaml → L2:org-overrides → L3:project-config → deep-merge → effective config → ⎋
+# region MODULE_CONTRACT
+## @purpose  Platform monitoring defaults by project type (L1 layer in three-layer config merge)
+## @scope    Read by platform-deploy.sh _reconfigure_monitoring() to compute effective monitoring config
+## @invariants
+##   - global: fallback when project type is unknown or not matched
+##   - type-defaults: per-project-type overrides merged on top of global defaults
+##   - All monitoring fields are optional — missing means "inherit from L1/L2"
+##   - ai_retention is always 30d in defaults; only activated when needs.llm is set
+## @rationale Three-layer config: L1 (defaults.yaml) → L2 (org overrides) → L3 (ai-platform.yaml project config)
+##           This file is the platform baseline; orgs override via node-configs, projects override locally.
+##
+## Layer reference:
+##   L1: core/modules/monitoring/defaults.yaml           (this file)
+##   L2: /opt/platform/node-configs/<node>/projects/<name>.yaml (org overrides)
+##   L3: <project-root>/ai-platform.yaml                    (project config)
+# endregion MODULE_CONTRACT
+# ⚠️ TRAP[DECISION] · 2026-07-01 · — · Three-layer config merge (L1→L2→L3)
+# ·   Monitoring config is merged L1 ← L2 ← L3 in _reconfigure_monitoring().
+# ·   L1: platform-wide defaults by project type (this file).
+# ·   L2: org-level overrides in node-configs (node-specific).
+# ·   L3: per-project ai-platform.yaml (project owner controls).
+# ·   Rev: if merge logic becomes too complex (nested objects), switch to deep-merge with json-schema validation
+# ·   Each level overrides the previous — last writer wins per field.
+# ·   Rejected: single monolithic config file — doesn't scale for multiple orgs
+# ·   Rejected: YAML anchor inheritance — fragile across file boundaries
+
+# ── Global defaults (when project type not matched or no type override) ──────
+monitoring:
+  metrics: false
+  metrics_port: 3000
+  logs_retention: 7d        # 7 days default for unknown types
+  ai_retention: 30d         # 30 days (only active if needs.llm is set)
+  alerting: false
+  dashboard: false
+
+# ── Per-project-type defaults (merged on top of global defaults) ────────────
+type-defaults:
+  frontend:
+    metrics: false
+    metrics_port: 3000
+    logs_retention: 3d
+    # ai_retention: not set (frontends typically don't use LLM)
+    alerting: false
+    dashboard: false
+
+  backend:
+    metrics: true
+    metrics_port: 8080
+    logs_retention: 14d
+    # ai_retention: not set (backends may use LLM via needs.llm)
+    alerting: false
+    dashboard: false
+
+  fullstack:
+    metrics: true
+    metrics_port: 8080
+    logs_retention: 30d
+    ai_retention: 30d
+    alerting: true
+    dashboard: true

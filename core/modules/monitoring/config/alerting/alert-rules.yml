@@ -1,0 +1,222 @@
+# GREP_SUMMARY: grafana alert rules grafana12 service-down high-memory disk-space llm-api-errors telegram webhook
+# STRUCTURE: ▶ 4-rules ┌ ServiceDown → CRITICAL ┐ ┌ HighMemory → WARNING ┐ ┌ DiskSpace → CRITICAL ┐ ┌ LLMAPIErrors → WARNING ┐ → Grafana-provisioning → ┘
+# region MODULE_CONTRACT
+## @purpose  4 Grafana 12 alert rules: ServiceDown, HighMemory, DiskSpace, LLMAPIErrors
+## @scope    Provisioned via GF_PROVISIONING_ALERTING_PATH; uses Prometheus datasource (uid: prometheus)
+## @invariants
+##   - All rules use datasource UID "prometheus" (must match datasources.yml provisioning)
+##   - Each rule uses classic_conditions expression for threshold evaluation
+##   - Contact point: telegram-webhook (provisioned in contact-points.yml)
+##   - Rules are idempotent — safe to re-provision on every deploy
+## @rationale Grafana 12 requires data section with datasourceUid, refId, and model.expr;
+##           classic_conditions pattern ensures cross-Grafana-version compatibility.
+##
+## RULES:
+##   1. ServiceDown:    up == 0          for 1m → CRITICAL
+##   2. HighMemory:     mem_usage > 90%  for 5m → WARNING
+##   3. DiskSpace:      avail < 20%      for 0s → CRITICAL
+##   4. LLMAPIErrors:   error_rate>0.1/s for 0s → WARNING
+# endregion MODULE_CONTRACT
+
+apiVersion: 1
+
+groups:
+  - name: "AI Platform Alerts"
+    folder: "AI Platform"
+    interval: 30s
+    rules:
+      # ── 1. ServiceDown ───────────────────────────────────────────────────────
+      - uid: "service_down"
+        title: "Service Down"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "up == 0"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 120
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "NoData"
+        execErrState: "Error"
+        for: "1m"
+        annotations:
+          summary: "Service {{ $labels.job }} is down on {{ $labels.instance }}"
+          description: "Prometheus target {{ $labels.instance }} (job={{ $labels.job }}) has been unreachable for over 1 minute."
+        labels:
+          severity: "critical"
+
+      # ── 2. HighMemory ───────────────────────────────────────────────────────
+      - uid: "high_memory"
+        title: "High Memory Usage"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "5m"
+        annotations:
+          summary: "Container {{ $labels.container }} memory usage exceeds 90%"
+          description: "Memory usage for container {{ $labels.container }} on {{ $labels.instance }} is above 90% for more than 5 minutes."
+        labels:
+          severity: "warning"
+
+      # ── 3. DiskSpace ────────────────────────────────────────────────────────
+      - uid: "disk_space"
+        title: "Disk Space Low"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "0s"
+        annotations:
+          summary: "Disk space below 20% on {{ $labels.device }} ({{ $labels.mountpoint }})"
+          description: "Available disk space on {{ $labels.device }} mounted at {{ $labels.mountpoint }} is below 20%. Current usage: {{ $value | humanizePercentage }}."
+        labels:
+          severity: "critical"
+
+      # ── 4. LLMAPIErrors ─────────────────────────────────────────────────────
+      - uid: "llm_api_errors"
+        title: "LLM API Error Rate High"
+        condition: "C"
+        data:
+          - refId: "A"
+            datasourceUid: "prometheus"
+            model:
+              expr: "rate(litellm_proxy_total_requests_metric_total{status=\"failure\"}[5m]) > 0.1"
+              refId: "A"
+            queryType: ""
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: "B"
+            datasourceUid: "__expr__"
+            model:
+              expression: "A"
+              refId: "B"
+              reducer: "last"
+              type: "reduce"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: "C"
+            datasourceUid: "__expr__"
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: "gt"
+                  type: "query"
+              expression: "B"
+              refId: "C"
+              type: "threshold"
+            queryType: ""
+            relativeTimeRange:
+              from: 0
+              to: 0
+        noDataState: "OK"
+        execErrState: "Error"
+        for: "0s"
+        annotations:
+          summary: "LLM API error rate exceeds 0.1/s over the last 5 minutes"
+          description: "The LiteLLM failure rate is {{ $value | humanize }} per second over the last 5 minutes. Check upstream LLM provider status."
+        labels:
+          severity: "warning"

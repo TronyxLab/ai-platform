@@ -1,0 +1,37 @@
+# GREP_SUMMARY: langfuse module llm-tracing langfuse postgres clickhouse observability-net
+# STRUCTURE: ▶ module:langfuse → langfuse:3.212.0 → observability-net + shared-db-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Langfuse LLM Tracing — trace, monitor, debug LLM application calls
+## @scope    LLM trace storage with PostgreSQL + ClickHouse backend
+## @invariants
+##   - install_type: docker — managed by compose
+##   - 1.5GB memory limit for cold-start (423 Prisma + ClickHouse migrations)
+##   - NODE_OPTIONS max-old-space-size=1024 to prevent OOM
+##   - depends_on: [postgres, clickhouse] for startup ordering
+##   - Headless initialization via LANGFUSE_INIT_* vars
+##   - Healthcheck via /api/public/health on eth0 IP
+## @rationale Split from observability module per Phase 3 refactoring (D1)
+# endregion MODULE_CONTRACT
+
+name: langfuse
+install_type: docker
+description: "Langfuse LLM Tracing — trace, monitor, and debug LLM application calls with PostgreSQL + ClickHouse"
+
+depends_on:
+  - postgres
+  - clickhouse
+
+spool_dir: /var/lib/platform/langfuse-data
+
+resources:
+  limits:
+    memory: 1536M
+  reservations:
+    memory: 512M
+
+env_requires:
+  - NEXTAUTH_SECRET
+  - SALT
+  - LANGFUSE_INIT_ORG_ID
+  - LANGFUSE_INIT_PROJECT_ID
+  - CLICKHOUSE_PASSWORD

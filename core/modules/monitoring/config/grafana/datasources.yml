@@ -1,0 +1,31 @@
+# GREP_SUMMARY: grafana datasources prometheus loki provisioning
+# STRUCTURE: ▶ 2-datasources ┌ Prometheus:http://prometheus:9090(isDefault) ┐ ┌ Loki:http://loki:3100 ┐ → provisioning → ┘
+# region MODULE_CONTRACT
+## @purpose  Grafana datasource provisioning: Prometheus (metrics) + Loki (logs)
+## @scope    Provisioned at container start; datasources are read-only managed
+## @invariants
+##   - Prometheus: URL = http://prometheus:9090 (on observability-net)
+##   - Loki: URL = http://loki:3100 (on observability-net)
+##   - Both datasources are provisioned with isDefault flag (Prometheus = default)
+##   - No authentication needed (internal network)
+## @rationale Provisioned datasources survive container recreation and are ready
+##           at first Grafana startup — no manual setup needed (AC-6).
+# endregion MODULE_CONTRACT
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000

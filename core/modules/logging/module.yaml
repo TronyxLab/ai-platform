@@ -1,0 +1,31 @@
+# GREP_SUMMARY: logging module loki promtail logs observability-net
+# STRUCTURE: ▶ module:logging → loki:3.7.3 + promtail:3.6.11 → observability-net → ┐
+# region MODULE_CONTRACT
+## @purpose  Loki log storage + Promtail log collector for platform observability
+## @scope    Log aggregation (Loki), log collection (Promtail via Docker socket + nginx logs)
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Loki: scratch image, 3.7.3, filesystem storage with compactor
+##   - Promtail: Docker socket + nginx log scraping
+##   - Promtail depends on Loki (same-module)
+##   - No host port for Promtail (internal collector)
+##   - Loki port 3100 on localhost only
+## @rationale Split from observability module per Phase 3 refactoring (D1)
+# endregion MODULE_CONTRACT
+
+name: logging
+install_type: docker
+description: "Loki log storage and Promtail log collector — platform logging stack"
+
+depends_on: []
+
+spool_dir: /var/lib/platform/loki-data
+spool_volume: loki-data
+
+resources:
+  limits:
+    memory: 384M
+  reservations:
+    memory: 128M
+
+env_requires: []

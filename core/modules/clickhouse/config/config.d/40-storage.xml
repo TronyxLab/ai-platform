@@ -1,0 +1,10 @@
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <default>
+                <!-- Reserve 1GB free disk space — prevent disk-full scenarios -->
+                <keep_free_space_bytes>1073741824</keep_free_space_bytes>
+            </default>
+        </disks>
+    </storage_configuration>
+</clickhouse>

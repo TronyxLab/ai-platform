@@ -1,0 +1,4 @@
+<clickhouse>
+    <!-- Memory limit: 80% of container limit (512MB * 0.80 = ~410MB for ClickHouse) -->
+    <max_server_memory_usage_to_ram_ratio>0.80</max_server_memory_usage_to_ram_ratio>
+</clickhouse>

@@ -1,0 +1,28 @@
+# GREP_SUMMARY: grafana contact-points disabled no-receivers no-policies safe-default
+# STRUCTURE: ▶ empty-contact-points + empty-policies → no-notifications → safe-default ┘
+# region MODULE_CONTRACT
+## @purpose  Safe default contact-points — no receivers, no notification policies. Grafana starts cleanly without Telegram env vars.
+## @scope    Mounted as contact-points.yml when Telegram alerting is NOT configured.
+## @invariants
+##   - No contactPoints defined — safe when TELEGRAM_BOT_TOKEN is empty
+##   - No notification policies — no routing to non-existent receivers
+##   - alert-rules.yml still works (rules fire, but no notifications)
+## @rationale Grafana 11.6.16 crashes at provisioning when contactPoints reference empty Telegram env vars
+##           ("could not find Bot Token in settings"). This file ensures Grafana starts regardless of env var state.
+##           To enable Telegram: rename contact-points.yml.telegram → contact-points.yml and restart Grafana.
+## 🔧 HOW TO ENABLE TELEGRAM ALERTING:
+##    1. Set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID_CRITICAL/TELEGRAM_CHAT_ID_WARNING in secrets.env
+##    2. cd core/modules/monitoring/config/alerting/
+##    3. mv contact-points.yml contact-points.yml.disabled
+##    4. mv contact-points.yml.telegram contact-points.yml
+##    5. docker compose restart grafana
+# endregion MODULE_CONTRACT
+
+apiVersion: 1
+
+# ⚠️ No contact points — Grafana starts cleanly without Telegram env vars.
+# When Telegram is configured, swap this file with contact-points.yml.telegram.
+contactPoints: []
+
+# ⚠️ No notification policies — rules in alert-rules.yml fire but no notifications are sent.
+policies: []

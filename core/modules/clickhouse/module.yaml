@@ -1,0 +1,40 @@
+# GREP_SUMMARY: clickhouse module docker observability-net analytical-db liveness wget-ping
+# STRUCTURE: ▶ module:clickhouse → observability-net → config.d/*.xml → wget /ping → ┐
+# region MODULE_CONTRACT
+## @purpose  ClickHouse analytical DB — telemetry storage, metrics aggregation, high-cardinality event queries
+## @scope    Single-node; part of observability stack; HTTP/Native access via observability-net
+## @invariants
+##   - install_type: docker — managed by compose, NOT systemd
+##   - depends_on: [] — standalone service, no platform dependencies
+##   - Network: observability-net (shared with Prometheus/Grafana) — no separate clickhouse-net
+##   - ClickHouse is part of observability stack, not shared infrastructure — hence shared network
+##   - No ports exposed to host beyond 127.0.0.1 bindings (internal Docker network only)
+##   - restart: unless-stopped — Docker policy
+##   - stop_grace_period: 60s — allows merge queue flush and clean shutdown
+##   - Resource limits: 512M memory, 1.0 CPU (no overhead policy)
+##   - Version pinned: 24.12 LTS (not latest — platform policy)
+## @rationale ClickHouse is an analytical DB serving the observability stack, not a shared infrastructure
+##   service — hence no separate network, no depends_on. Observability-net shared with Prometheus/Grafana
+##   for native scrape and dashboard access without extra network hops.
+# endregion MODULE_CONTRACT
+
+name: clickhouse
+install_type: docker
+description: >
+  ClickHouse 24.12 analytical columnar DB for telemetry storage,
+  metrics aggregation, and high-cardinality event queries.
+  Part of observability stack in observability-net.
+
+depends_on: []
+
+spool_dir: /var/lib/platform/clickhouse-data
+spool_volume: clickhouse-data
+
+resources:
+  limits:
+    memory: 512M
+  reservations:
+    memory: 256M
+
+env_requires:
+  - CLICKHOUSE_PASSWORD

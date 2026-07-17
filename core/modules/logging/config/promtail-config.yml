@@ -1,0 +1,136 @@
+# GREP_SUMMARY: promtail config docker_sd_config static_config file_target structured_metadata
+# STRUCTURE: ▶ 2-scrape-configs ┌ docker_sd:container-logs → json→labels→structured_metadata ┐ ┌ static_config:nginx-logs → json ┐ → loki:3100 → ┘
+# region MODULE_CONTRACT
+## @purpose  Promtail configuration: Docker container log scraping + Nginx file log scraping
+## @scope    Mounted as /etc/promtail/promtail-config.yml in promtail container
+## @invariants
+##   - Docker socket scrape: docker_sd_config — auto-discovers all local containers
+##   - Nginx file scrape: static_config — /var/log/nginx/access.log (JSON format)
+##   - pipeline_stages: json → labels → structured_metadata (D7: session_id/user_id)
+##   - session_id/user_id → structured_metadata (NOT labels — high cardinality, D7)
+##   - Container labels preserved: service, project, agent (low cardinality labels)
+##   - Single promtail instance — two scrape configs (D5: one agent is enough)
+##   - All logs sent to loki:3100 on observability-net
+## @rationale D7: structured_metadata avoids TSDB index explosion from high-cardinality
+##           fields while still enabling LogQL filtering without full JSON scan.
+##           D5: Single Promtail with multiple configs is simpler than two instances.
+# endregion MODULE_CONTRACT
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+
+  # ── Docker Container Logs (auto-discovery via Docker socket) ─────────────
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+        filters:
+          - name: label
+            values: []
+
+    # ⚠️ TRAP[DECISION] · 2026-06-28 · — · relaxed pipeline stages
+    # · Complexity: JSON parsing is attempted on ALL container logs, including
+    # ·   non-JSON logs (nginx error logs, etc.). Non-JSON lines fail the json
+    # ·   Rev: if Promtail adds conditional pipeline stages, replace relaxed JSON parse
+    # ·   stage silently (promtail treats parse failure as non-fatal) and pass
+    # ·   through without labels/metadata extraction — they're still stored in
+    # ·   Loki as plain text.
+    # · Performance: parse failure per line adds ~microsecond overhead. At the
+    # ·   log volume of this platform (< 100 lines/min), this is negligible.
+    # · Rejected: adding a conditional JSON parse stage · Reason: Loki pipeline
+    # ·   does NOT support if/else or try/catch. A `match` stage could be added
+    # ·   per container label, but that creates 8+ identical config blocks.
+    # ·   Single relaxed pipeline = simpler to maintain.
+    pipeline_stages:
+      # Stage 1: Parse JSON (non-JSON lines silently pass through)
+      - json:
+          expressions:
+            level: level
+            session_id: session_id
+            user_id: user_id
+            event: event
+            service: service
+            agent: agent
+            project: project
+
+      # Drop debug/trace logs from litellm container (TASK-7)
+      - match:
+          selector: '{compose_service="litellm"}'
+          stages:
+            - drop:
+                source: level
+                expression: "(?i)debug|trace"
+      # Drop debug/trace logs from langfuse container (TASK-7)
+      - match:
+          selector: '{compose_service="langfuse"}'
+          stages:
+            - drop:
+                source: level
+                expression: "(?i)debug|trace"
+
+      # Stage 2: Extract low-cardinality fields as stream labels
+      - labels:
+          level: ""
+          service: ""
+          agent: ""
+          project: ""
+
+      # Stage 3: Extract high-cardinality fields as structured metadata (D7)
+      #   structured_metadata is supported in Loki ≥2.9 — stores in separate index,
+      #   does NOT cause cardinality explosion like stream labels would.
+      - structured_metadata:
+          session_id: ""
+          user_id: ""
+
+    # Container labels also copied to Loki labels for identification
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: "container"
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        regex: "(.+)"
+        target_label: "compose_service"
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        regex: "(.+)"
+        target_label: "compose_project"
+
+  # ── Nginx Access Logs (file scrape) ──────────────────────────────────────
+  - job_name: nginx
+    static_configs:
+      - targets: ["localhost"]
+        labels:
+          job: "nginx"
+          service: "nginx"
+          __path__: /var/log/nginx/access.log
+
+    pipeline_stages:
+      # Stage 1: Parse JSON — nginx.conf uses json_combined log_format
+      - json:
+          expressions:
+            remote_addr: remote_addr
+            remote_user: remote_user
+            request: request
+            status: status
+            body_bytes_sent: body_bytes_sent
+            request_time: request_time
+            http_referer: http_referer
+            http_user_agent: http_user_agent
+            upstream_addr: upstream_addr
+            upstream_status: upstream_status
+            host: host
+            request_method: request_method
+
+      # Stage 2: Extract low-cardinality labels
+      - labels:
+          status: ""
+          request_method: ""
+          host: ""

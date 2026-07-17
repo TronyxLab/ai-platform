@@ -1,0 +1,23 @@
+# GREP_SUMMARY: litellm docker-compose test override container_name-test cross-platform
+# STRUCTURE: base.yml + test.yml → litellm with -test container_name and shifted port
+# region MODULE_CONTRACT
+## @purpose  Test override for litellm — -test container_name, shifted port (14000:4000), PostgreSQL DATABASE_URL
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: litellm-test — предотвращает конфликт с production litellm
+##   - restart: "no" — тестовые контейнеры не авто-перезапускаются
+##   - Port: 127.0.0.1:14000:4000 — избежать production конфликтов
+##   - DATABASE_URL: PostgreSQL — spend_logs запись через pgbouncer:6432 на shared-db-net
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). PostgreSQL для
+##            spend_logs — тестовый контур должен проверять persistency (T10).
+# endregion MODULE_CONTRACT
+
+services:
+  litellm:
+    container_name: litellm-test
+    ports:
+      - "127.0.0.1:14000:4000"
+    restart: "no"
+    environment:
+      # PostgreSQL DSN — pgbouncer:6432 на shared-db-net (постгрес запускается тестовой фикстурой)
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@pgbouncer:6432/litellm?sslmode=disable"

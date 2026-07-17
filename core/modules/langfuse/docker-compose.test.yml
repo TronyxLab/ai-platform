@@ -1,0 +1,18 @@
+# GREP_SUMMARY: langfuse docker-compose test override container_name-test cross-platform
+# STRUCTURE: base.yml + test.yml → langfuse with -test container_name and shifted port
+# region MODULE_CONTRACT
+## @purpose  Test override for langfuse — -test container_name, shifted port (13000:3000)
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: langfuse-test — предотвращает конфликт с production langfuse
+##   - restart: "no" — тестовые контейнеры не авто-перезапускаются
+##   - Port: 127.0.0.1:13000:3000 — избежать production конфликтов
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+# endregion MODULE_CONTRACT
+
+services:
+  langfuse:
+    container_name: langfuse-test
+    ports:
+      - "127.0.0.1:13000:3000"
+    restart: "no"

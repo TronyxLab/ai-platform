@@ -1,0 +1,6 @@
+<clickhouse>
+    <!-- Listen on all interfaces — required for Docker port forwarding (host → container)
+         and Docker network access (Grafana/Prometheus on observability-net).
+         Security: host ports are bound to 127.0.0.1 only — no external exposure. -->
+    <listen_host>0.0.0.0</listen_host>
+</clickhouse>

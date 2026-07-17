@@ -1,0 +1,46 @@
+# @purpose  Docker Compose test override for ClickHouse — Docker-managed volume, test container name
+# GREP_SUMMARY: docker-compose test-override clickhouse managed-volume test-container cross-platform
+# STRUCTURE: ▶ base.yml + test.yml → merge → ⚡ clickhouse-test override → Docker-managed volume → ┘
+# region MODULE_CONTRACT
+## @purpose  Test override for ClickHouse: Docker-managed volume (cross-platform), test container name,
+##           test-specific host ports (non-standard — avoid conflicts with production)
+## @scope    CI/test environments only. Merged with docker-compose.base.yml via `docker compose -f base.yml -f test.yml`.
+## @invariants
+##   - container_name: clickhouse-test (avoids conflicts with production clickhouse container)
+##   - volumes: clickhouse-data-test Docker-managed volume (no bind-mount — cross-platform, macOS compatible)
+##   - Host ports: 127.0.0.1:18123:8123 (HTTP) + 127.0.0.1:19363:9363 (Prometheus metrics)
+##     — non-standard ports to avoid conflicts with production on same Docker host
+##   - Healthcheck preserved from base.yml (wget --spider /ping, 15s interval, 20s start_period)
+##   - Config bind-mounts (config.d/*.xml, users.d/*.xml) preserved intact from base.yml
+##   - observability-net preserved (external network required for Prometheus scraping)
+## @rationale
+##   Q: Why test-specific host ports (18123/19363) instead of no ports?
+##   A: Component tests need direct HTTP access to ClickHouse for /ping, /metrics, and SQL queries.
+##      Non-standard ports prevent conflicts with production clickhouse (8123/9000/9363) on same Docker host.
+##   Q: Why Docker-managed volume instead of bind-mount?
+##   A: Docker Desktop on macOS doesn't support bind-mount driver_opts. Docker-managed volumes
+##      work on all platforms. Follows same pattern as observability/docker-compose.test.yml.
+## @changes
+##   2026-07-12 · INITIAL · Created docker-compose.test.yml for ClickHouse component tests
+## @modulemap
+##   base.yml + test.yml → full ClickHouse compose config for CI/component tests
+## @usecases
+##   pytest test_component_clickhouse.py (uses docker compose -f base.yml -f test.yml up --wait)
+# endregion MODULE_CONTRACT
+
+services:
+  clickhouse:
+    container_name: clickhouse-test
+    # ── Test-specific host ports (non-standard — avoid production conflicts) ──
+    ports:
+      - "127.0.0.1:18123:8123"     # HTTP interface
+      - "127.0.0.1:19363:9363"     # Prometheus metrics endpoint
+    # ── Docker-managed volume (cross-platform, no bind-mount) ──
+    volumes:
+      - clickhouse-data-test:/var/lib/clickhouse
+      - ./config/config.d:/etc/clickhouse-server/config.d:ro
+      - ./config/users.d:/etc/clickhouse-server/users.d
+
+volumes:
+  clickhouse-data-test:
+    driver: local

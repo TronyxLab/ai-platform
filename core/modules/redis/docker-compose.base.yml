@@ -1,0 +1,90 @@
+# @purpose  Base compose definition for redis — cache-only redis:7.4-alpine, no persistence, allkeys-lfu
+# GREP_SUMMARY: redis docker-compose redis-7.4-alpine shared-cache-net cache-only allkeys-lfu healthcheck
+# STRUCTURE: ▶ redis:7.4-alpine → shared-cache-net → cache-only → allkeys-lfu → redis-cli ping → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for redis — pure cache instance. NO persistence (no AOF, no RDB).
+## @scope    Shared cache: no host ports, network shared-cache-net, allkeys-lfu eviction at 256mb
+## @invariants
+##   - Image: redis:7.4-alpine (pinned minor version for stability, upgraded TASK-2: 7-alpine → 7.4-alpine)
+##   - NO ports: directive — no host port mapping (internal network only) (00 §9)
+##   - restart: always — Docker policy (not manual lifecycle management)
+##   - stop_grace_period: 10s (no persistence flush needed)
+##   - Command: --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lfu
+##   - Network: shared-cache-net (external:true, pre-created by deploy-modules.sh)
+##   - NO volumes — cache-only, no persistence data to store (owner verdict wave-redis 2026-07-15)
+##   - Resource limits: memory 256M — intentional (AR3 cancelled: limits protect host from OOM)
+##   - Container name: redis
+## @rationale Owner verdict wave-redis 2026-07-15: redis is pure cache. Persistence removed entirely
+##   (no AOF, no RDB, no volume). Eviction policy changed from allkeys-lru to allkeys-lfu for better
+##   cache efficiency (frequency-based eviction ← recency-based). stop_grace_period reduced from 30s to
+##   10s since there is no AOF flush on shutdown. no host ports — internal network only (D4).
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  redis:
+    # 🧐 TRAP[DECISION] · 2026-07-07 · — · Redis pinned 7-alpine → 7.4-alpine (TASK-2)
+    # · 7-alpine gives any 7.x — non-deterministic across rebuilds
+    # · 7.4-alpine pins minor version but allows security patches (7.4.x)
+    # · Latest: 7.4.9-alpine3.21 (as of 2026-07-07)
+    # · Rev: on next major upstream release — reevaluate pin
+    image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    container_name: redis
+    profiles: [redis]
+    restart: always
+    stop_grace_period: 10s
+
+    # 🧐 TRAP[DECISION] · 2026-07-16 · — · AR3 cancelled — resource limits intentional
+    # · Previously: NO resource limits (AR3 rule from 00 §15, owner verdict Q2a)
+    # · Decision: limits protect host from OOM — remain in place
+    # · Rev: if OOM becomes issue for this module, consider adjusting limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    logging: *default-logging
+
+    # [IMP:9][redis-compose] Cache-only: NO persistence (no AOF, no RDB), allkeys-lfu eviction
+    # Owner verdict wave-redis 2026-07-15: redis is pure cache — no volume, no dump
+    # 🧐 TRAP[DECISION] · 2026-07-15 · — · Cache-only: persistence removed (AOF+RDB+volume)
+    # · Rejected: AOF persistence
+    # · Reason: owner verdict wave-redis — redis is pure cache, queues get noeviction Redis elsewhere
+    # · Rev: if queue/critical state moves to this redis
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lfu
+
+    # [IMP:9][redis-compose] NO ports: — network isolation enforced, shared-cache-net only
+    # ports: deliberately absent (D4, AC-3)
+
+    # [IMP:9][redis-compose] NO volumes: — cache-only, no persistence data to store
+    # volumes: deliberately absent by owner verdict wave-redis 2026-07-15
+
+    networks:
+      shared-cache-net:
+        aliases:
+          - redis
+
+    # LIVENESS healthcheck — triggers Docker restart on failure
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "127.0.0.1", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # [IMP:8][redis-compose] Resource limits: 256M — intentional (limits protect host from OOM)
+
+networks:
+  shared-cache-net:
+    external: true

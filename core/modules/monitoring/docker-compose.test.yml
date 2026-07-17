@@ -1,0 +1,25 @@
+# GREP_SUMMARY: monitoring docker-compose test override container_name-test prometheus grafana
+# STRUCTURE: base.yml + test.yml → prometheus + grafana with -test suffix and shifted ports
+# region MODULE_CONTRACT
+## @purpose  Test override for monitoring — -test container_name for prometheus and grafana
+## @scope    Only used in test fixtures. Never used in production.
+## @invariants
+##   - container_name: prometheus-test, grafana-test
+##   - restart: "no" для всех контейнеров
+##   - Prometheus port: 127.0.0.1:19090:9090
+##   - Grafana port: 127.0.0.1:13030:3000
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+# endregion MODULE_CONTRACT
+
+services:
+  prometheus:
+    container_name: prometheus-test
+    ports:
+      - "127.0.0.1:19090:9090"
+    restart: "no"
+
+  grafana:
+    container_name: grafana-test
+    ports:
+      - "127.0.0.1:13030:3000"
+    restart: "no"

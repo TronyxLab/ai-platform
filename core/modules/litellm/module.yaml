@@ -1,0 +1,43 @@
+# GREP_SUMMARY: litellm module llm-gateway proxy postgres litellm spend-logs
+# STRUCTURE: ▶ module:litellm → litellm:v1.91.2 → observability-net + shared-db-net → ┐
+# region MODULE_CONTRACT
+## @purpose  LiteLLM LLM Gateway proxy — model routing, spend tracking, API key management
+## @scope    LLM proxy with PostgreSQL backend for persistence, Langfuse tracing integration
+## @invariants
+##   - install_type: docker — managed by compose
+##   - Wolfi-based image (Chainguard), v1.91.2 with digest pin
+##   - Requires PostgreSQL for spend_logs (no SQLite)
+##   - depends_on: [postgres] for startup ordering
+##   - Langfuse tracing via LANGFUSE_HOST env var
+##   - Healthcheck: /health/readiness (no auth required)
+## @rationale Split from observability module per Phase 3 refactoring (D1)
+# endregion MODULE_CONTRACT
+
+# 🧐 TRAP[DECISION] · 2026-07-15 · — · Контекстные LLM-конфиги: декларативный llm-policy.yaml (aliases + fallbacks + virtual_keys) в context-overlay (/opt/<context>/platform/modules/litellm/), рендерер base+policy → litellm-config.yml, идемпотентный key-провижнер (/key/info → /key/generate, значения → SOPS), gate: каждый alias обязан иметь fallback-цепочку
+# · Rejected: полная замена конфига через overlay (drift boilerplate с core), DB-driven через LiteLLM UI (нарушает config-as-code + инвариант #9 о пересоздаваемом сервере), env-параметризация (aliases/fallbacks/keys — структурные списки, не скаляры)
+# · Reason: суперпозиция коллапсирована владельцем в Option B (сессия wave-litellm, 2026-07-15) · реализация — отдельная будущая задача
+# · Rev: при старте задачи «context LLM configs» — новый DevPlan; схема: aliases{smart|fast|cheap|vision|coding-model}, fallbacks{alias: [providers]}, virtual_keys{service: models+budget+rpm}
+
+name: litellm
+install_type: docker
+description: "LiteLLM LLM Gateway proxy — model routing, spend tracking, API key management with PostgreSQL"
+
+depends_on:
+  - postgres
+
+spool_dir: /var/lib/platform/litellm-data
+
+# ⚠️ TRAP[DECISION] · 2026-06-29 · HI · OOM-kill risk
+# · Удалён limits.memory: 1G — LiteLLM нуждается в ~700MB+.
+# · Только cpus: 2.0 из docker-compose.base.yml.
+# · reservations не используются — нет в compose.
+# · Rev: monitor with cadvisor; re-add limit if runaway memory occurs
+resources:
+  limits:
+    cpus: "2.0"
+
+env_requires:
+  - LITELLM_MASTER_KEY
+  - LITELLM_LICENSE
+  - POSTGRES_PASSWORD
+  - OPENAI_API_KEY

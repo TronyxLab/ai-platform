@@ -1,0 +1,74 @@
+# GREP_SUMMARY: litellm config deepseek prometheus metrics public health single-provider
+# STRUCTURE: ▶ single-deepseek-provider → model_list:4 → prometheus+langfuse callbacks → /health:200 → ┘
+# region MODULE_CONTRACT
+## @purpose  LiteLLM Proxy with DeepSeek models and Prometheus metrics endpoint.
+##           Single DeepSeek provider — no multi-provider routing needed.
+## @scope    Mounted as /app/config/litellm-config.yml in litellm container.
+## @invariants
+##   - Single provider (deepseek) — routing_strategy not applicable (TASK-5)
+##   - master_key from LITELLM_MASTER_KEY env var (no fallback per TASK-1)
+##   - Prometheus metrics enabled: success_callback and failure_callback
+##   - Health/auth bypass: both env var AND config-level set (defense in depth)
+##   - model_list: legacy deepseek-chat/reasoner → deepseek-v4-pro for backward compat
+## @rationale Single provider eliminates need for latency-based routing.
+##           Dual auth bypass (env + config) prevents regression in newer LiteLLM versions.
+# endregion MODULE_CONTRACT
+
+# 🧐 TRAP[DECISION] · 2026-06-29 · — · DeepSeek model routing
+# · deepseek-chat/reasoner (legacy) routed to deepseek-v4-pro for backward compat.
+# · deepseek-v4-pro/flash (current DeepSeek API models) added as primary model names.
+# · Rejected: separate provider routing per model — LiteLLM handles provider selection.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # 🧐 TRAP[DECISION] · 2026-07-12 · — · database_url — PostgreSQL for v1.90.2
+  # · v1.90.2 is Wolfi-based (Chainguard) — Prisma + PostgreSQL works correctly
+  # · Prisma Wolfi incompatibility that affected v1.55+ is resolved in v1.90+
+  # · Enables UI dashboard, API key management, spend_logs persistence
+  # · Rev: if Prisma Wolfi breaks in a future upgrade, remove and switch to SQLite mode
+  database_url: os.environ/DATABASE_URL
+  json_logs: true
+  debug: false
+  num_retries: 3
+  # ✅ TRAP[INCIDENT] · 2026-06-29 · P0 · /health returned 401 despite DISABLE_AUTH_FOR_HEALTH_CHECK=true · RESOLVED 2026-07-07
+  # · Symptom: curl http://127.0.0.1:4000/health → 401 "No api key passed in"
+  # · Root: LiteLLM env var LITELLM_DISABLE_AUTH_FOR_HEALTH_CHECK ignored in newer versions;
+  # ·   config-level setting general_settings.disable_auth_for_health_check is authoritative.
+  # · Fix: Added disable_auth_for_health_check: true to general_settings in litellm-config.yml.
+  # · Prevention: Always set BOTH env var and config-level for auth bypass settings in LiteLLM.
+  disable_auth_for_health_check: true
+
+model_list:
+  # Legacy model names — routed to current DeepSeek models for backward compatibility
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+
+  # Current DeepSeek API model names
+  - model_name: deepseek-v4-pro
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+
+router_settings:
+  # routing_strategy not needed — single DeepSeek provider (TASK-5)
+  num_retries: 3
+
+litellm_settings:
+  json_logs: true
+  drop_params: true
+  require_auth_for_metrics_endpoint: true
+  disable_auth_for_health_check: true
+  success_callback: ["prometheus", "langfuse"]
+  failure_callback: ["prometheus"]
+  # 🧐 TRAP[DECISION] · 2026-07-11 · — · langfuse removed from failure_callback
+  # · langfuse in failure_callback causes LiteLLM crash when LANGFUSE keys are empty/unset
+  # · Prometheus metrics cover failure monitoring — langfuse not needed for errors
+  # · success_callback: ["prometheus", "langfuse"] kept unchanged — langfuse traces for success are valuable
+  # · Rev: If LiteLLM fixes empty-key handling for failure_callback, langfuse can be restored
