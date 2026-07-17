@@ -24,6 +24,20 @@
 #     approved_by: "@reviewer"
 
 removed:
+  # ── 008-Wave-2 (T3): ssl-provision.sh split → backward-compat wrapper ──
+  - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_ssl-provision]"
+    reason: "T3 split: ssl-provision.sh → thin wrapper (35 lines). Entrypoint contract moved to install-acme.sh + issue-cert.sh which are both registered. ssl-provision.sh is backward-compat only — entrypoint tests not needed."
+    issue: "008-Wave-2 T3"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_ssl-provision]"
+    reason: "T3 split: ssl-provision.sh → thin wrapper. Same rationale as above."
+    issue: "008-Wave-2 T3"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_ssl-provision]"
+    reason: "T3 split: ssl-provision.sh → thin wrapper. Same rationale as above."
+    issue: "008-Wave-2 T3"
+    approved_by: "@tronyx"
+
   # ── DevPlan 019 (gate-scope-closure): compose profile contract consolidation ──
   - nodeid: "tests/gates/test_gate_compose_base_contract.py::test_all_base_yml_have_profiles"
     reason: "Consolidated into test_gate_module_profiles.py — profile contract moved from weak test_gate_compose_base_contract.py to dedicated profiles gate with stronger contract (all services have profiles, profile matches module dir name, no stale profiles). test_all_base_yml_have_profiles removed as duplicate."

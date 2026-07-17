@@ -93,6 +93,9 @@ _EXCEPTION_PATHS: tuple[str, ...] = (
     # (${CORE_DIR}/internal/catalog/generate-catalog.sh) from node-lifecycle.sh
     # and deploy-project.sh; static call graph builder cannot resolve ${CORE_DIR}
     "core/internal/catalog/generate-catalog.sh",
+    # backward-compat thin wrapper — delegates to install-acme.sh + issue-cert.sh;
+    # no direct callers remain after T3 split (all migrated to issue-cert.sh/install-acme.sh)
+    "core/internal/bootstrap/ssl-provision.sh",
 )
 
 
