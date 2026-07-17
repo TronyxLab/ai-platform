@@ -1,0 +1,2 @@
+# @purpose Test fixture — minimal ai-platform.yaml for myapp deploy parsing tests
+service: web

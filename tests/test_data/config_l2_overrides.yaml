@@ -1,0 +1,16 @@
+# GREP_SUMMARY: config-merge L2 overrides test-data monitoring alerts
+# STRUCTURE: ▶ L2(org overrides) → ◇ merge over L1 → ◇ partial override → ⊕ test_config_merge validates → ⎋ PASS
+# region MODULE_CONTRACT
+## @purpose  L2 org-level overrides for config merge tests — overrides some L1 fields, keeps others
+## @scope    Used by test_config_merge.py; simulates node-configs org overrides
+## @rationale L2 merges on top of L1: deep merge preserves L1 fields not mentioned here.
+# endregion MODULE_CONTRACT
+
+monitoring:
+  metrics: true
+  metrics_port: 9090
+  logs_retention: 14d
+  alerts:
+    slack:
+      enabled: true
+      webhook: "https://hooks.slack.com/services/T00/B00/test"

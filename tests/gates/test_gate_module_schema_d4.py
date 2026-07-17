@@ -1,0 +1,92 @@
+# GREP_SUMMARY: gate-test schema-d4 module-yaml validation jsonschema
+# STRUCTURE: ▶ test_all_modules_valid_against_d4_schema → ◇ module.yaml × count → ⊕ jsonschema.validate → ◇ test_schema_allows_additional_properties → ◇ test_schema_required_fields
+# region MODULE_CONTRACT
+## @purpose  Gate tests: validate all module.yaml against D4 schema (DevPlan 04 TASK-G1)
+## @scope    Validates module.schema.json (D4) + all module.yaml files
+## @invariants
+##   - Все module.yaml проходят JSON Schema валидацию против D4-схемы
+##   - Schema имеет additionalProperties: true
+##   - Schema требует name, install_type, description
+## @rationale D4-схема — Source of Truth (core/modules/AGENTS.md §module.yaml D4 контракт)
+## @changes — 2026-07-16 | Doc strings use dynamic count instead of hardcoded "12" (T7)
+# endregion MODULE_CONTRACT
+
+import json
+from pathlib import Path
+
+import jsonschema
+import pytest
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SCHEMA_PATH = PROJECT_ROOT / "core" / "schemas" / "module.schema.json"
+MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+
+
+def _load_schema() -> dict:
+    with open(SCHEMA_PATH) as f:
+        return json.load(f)
+
+
+def _discover_module_yamls() -> list[Path]:
+    return sorted(MODULES_DIR.glob("*/module.yaml"))
+
+
+def _load_module_yaml(path: Path) -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+MODULE_YAMLS = _discover_module_yamls()
+SCHEMA = _load_schema()
+
+
+class TestModuleSchemaD4:
+    @pytest.mark.gate
+    def test_all_modules_valid_against_d4_schema(self) -> None:
+        """Все module.yaml проходят JSON Schema валидацию против D4-схемы (счёт динамический)."""
+        # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: module.yaml перестаёт валидироваться против D4-схемы
+        errors: list[str] = []
+        for mod_path in MODULE_YAMLS:
+            mod_name = mod_path.parent.name
+            try:
+                module_data = _load_module_yaml(mod_path)
+                jsonschema.validate(module_data, SCHEMA)
+            except yaml.YAMLError as e:
+                errors.append(f"{mod_name}: YAML parse error: {e}")
+            except jsonschema.ValidationError as e:
+                errors.append(f"{mod_name}: Validation error: {e.message} (path: {list(e.absolute_path)})")
+            except Exception as e:
+                errors.append(f"{mod_name}: Unexpected error: {e}")
+
+        assert not errors, f"D4 schema validation failed for {len(errors)} module(s):\n" + "\n".join(errors)
+
+    @pytest.mark.gate
+    def test_schema_allows_additional_properties(self) -> None:
+        """Schema имеет additionalProperties: true."""
+        # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: additionalProperties изменено на false (нарушение D4-контракта)
+        assert SCHEMA.get("additionalProperties") is True, (
+            f"Expected additionalProperties: true, got: {SCHEMA.get('additionalProperties')}"
+        )
+
+    @pytest.mark.gate
+    def test_schema_required_fields(self) -> None:
+        """Schema требует name, install_type, description."""
+        # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: required поля изменены/удалены
+        required = SCHEMA.get("required", [])
+        for field in ("name", "install_type", "description"):
+            assert field in required, f"Required field '{field}' missing from schema.required. Got: {required}"
+
+    @pytest.mark.gate
+    def test_version_not_in_required(self) -> None:
+        """version не должен быть в required (D4-формат)."""
+        # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: version добавлен обратно в required (D3→D4 регресс)
+        required = SCHEMA.get("required", [])
+        assert "version" not in required, f"Field 'version' should NOT be in required for D4 schema. Got: {required}"
+
+    @pytest.mark.gate
+    def test_no_version_field_in_schema(self) -> None:
+        """D4-схема не содержит version property."""
+        # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: version property добавлено обратно в D4-схему
+        properties = SCHEMA.get("properties", {})
+        assert "version" not in properties, "Property 'version' should NOT be in D4 schema properties"

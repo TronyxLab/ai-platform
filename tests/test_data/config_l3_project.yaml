@@ -1,0 +1,14 @@
+# GREP_SUMMARY: config-merge L3 project test-data monitoring alerts
+# STRUCTURE: ▶ L3(project overrides) → ◇ merge over L2 → ◇ deep-merge → ⊕ test_config_merge validates → ⎋ PASS
+# region MODULE_CONTRACT
+## @purpose  L3 project-level overrides for config merge tests — overrides L2, adds new fields
+## @scope    Used by test_config_merge.py; simulates project ai-platform.yaml
+## @rationale L3 merges on top of L2: deep merge preserves L1 and L2 fields not mentioned here.
+# endregion MODULE_CONTRACT
+
+monitoring:
+  metrics_port: 8080
+  alerting: true
+  alerts:
+    slack:
+      channel: "#project-alerts"

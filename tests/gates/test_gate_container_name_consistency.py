@@ -1,0 +1,100 @@
+# GREP_SUMMARY: gate-test container-name consistency compose registry check
+# STRUCTURE: ▶ test_all_container_names_extracted → ◇ test_depends_on_references_exist
+# region MODULE_CONTRACT
+## @purpose  Gate tests: validate container_name consistency across compose and module.yaml (DevPlan 04 TASK-B5)
+## @scope    Извлекает все container_name из docker-compose.base.yml → реестр, проверяет ссылки
+## @invariants
+##   - Все container_name из docker-compose.base.yml извлечены в реестр
+##   - Все depends_on ссылки разрешимы в container_name registry
+##   - Env hostname resolution superseded by test_p20_container_coupling.py::test_env_hostnames_resolvable
+## @rationale Предотвращает дрейф container_name (DevPlan 04 DD8)
+## @changes
+##   2026-07-15 · Removed dead test_env_requires_hosts_exist (vacuum loop with pass)
+##              · Superseded by test_p20_container_coupling.py::test_env_hostnames_resolvable
+# endregion MODULE_CONTRACT
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+
+
+def _extract_container_registry() -> dict[str, str]:
+    """Извлекает все container_name: из docker-compose.base.yml → {container_name: module_name}."""
+    registry: dict[str, str] = {}
+    for compose_file in sorted(MODULES_DIR.glob("*/docker-compose.base.yml")):
+        module_name = compose_file.parent.name
+        with open(compose_file) as f:
+            try:
+                data = yaml.safe_load(f)
+            except yaml.YAMLError:
+                continue
+            if not data or "services" not in data:
+                continue
+            for service_name, service_config in data["services"].items():
+                if service_config is None:
+                    continue
+                cname = service_config.get("container_name", service_name)
+                registry[cname] = module_name
+    return registry
+
+
+def _get_module_yamls() -> list[tuple[str, Path]]:
+    """Возвращает [(module_name, path), ...] для всех module.yaml."""
+    return [(mod_path.parent.name, mod_path) for mod_path in sorted(MODULES_DIR.glob("*/module.yaml"))]
+
+
+REGISTRY = _extract_container_registry()
+MODULE_YAMLS = _get_module_yamls()
+
+
+class TestContainerNameConsistency:
+    @pytest.mark.gate
+    def test_all_container_names_extracted(self) -> None:
+        """Все container_name из docker-compose.base.yml извлечены в реестр."""
+        assert len(REGISTRY) > 0, (
+            "No container names extracted from docker-compose.base.yml files. "
+            "Check that compose files exist and are valid YAML."
+        )
+        # Log for debugging
+        print(f"\nContainer registry ({len(REGISTRY)} entries):")
+        for cname, module in sorted(REGISTRY.items()):
+            print(f"  {cname} → {module}")
+
+    @pytest.mark.gate
+    def test_depends_on_references_exist(self) -> None:
+        """Все depends_on (из compose) ссылки разрешимы в container_name registry."""
+        errors: list[str] = []
+        for compose_file in sorted(MODULES_DIR.glob("*/docker-compose.base.yml")):
+            module_name = compose_file.parent.name
+            with open(compose_file) as f:
+                data = yaml.safe_load(f)
+            if not data or "services" not in data:
+                continue
+            for service_name, service_config in data["services"].items():
+                if service_config is None:
+                    continue
+                depends_on = service_config.get("depends_on", {}) or {}
+                if isinstance(depends_on, list):
+                    deps = depends_on
+                elif isinstance(depends_on, dict):
+                    deps = list(depends_on.keys())
+                else:
+                    continue
+                errors.extend(
+                    f"{module_name}/{service_name}: depends_on '{dep}' not found in "
+                    f"container_name registry. Registered: {sorted(REGISTRY.keys())}"
+                    for dep in deps
+                    if dep not in REGISTRY
+                )
+        assert not errors, "Unresolved depends_on references:\n" + "\n".join(errors)
+
+    # 🧐 TRAP[ARCHIVED] · 2026-07-15 · — · test_env_requires_hosts_exist (removed)
+    # · Reason: superseded by test_p20_container_coupling.py::test_env_hostnames_resolvable
+    # · The env_requires/module.yaml approach was a dead end — module.yaml contains only
+    #   variable names, not hostname values. Real hostname references live in compose env values.
+    # · test_env_hostnames_resolvable extracts hostnames from compose env and validates
+    #   they are in aliases ∪ container_names ∪ service_names — a strict superset.

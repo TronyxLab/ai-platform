@@ -1,0 +1,51 @@
+# GREP_SUMMARY: test-inventory-changelog, removals, documented, approved
+# STRUCTURE: ┌test_inventory_changes.yaml┐ → ◇ removed list → ◇ gate validates removals are documented → ⊕ FAIL if undocumented removal
+# region MODULE_CONTRACT
+## @purpose — Change log for test inventory. Any removal of a test from the suite
+##            MUST be documented here with reason, issue reference, and approval.
+## @rationale — Prevents silent test erosion. Combined with test_gate_test_inventory.py,
+##              ensures every test removal is intentional and reviewed.
+## @changes — 2026-07-10 | Created per TestsMetaDevPlan2.md TASK-10
+## @changes — 2026-07-17 | Truncated to active window per A4 (023-debt-cleanup): older
+##            entries merged into summary below. Full history in git log.
+## @summary — Historical removals (DevPlan 008–016) covered: wave-postgres pgbouncer consolidation
+##            (5 nodeids), wave-litellm (2 nodeids test_component_observability + test_platform_endpoints),
+##            Phase 3 gate-list audit (test_gate_pluggability_profiles 2 nodeids), wave-infra-metrics
+##            (2 nodeids test_platform_endpoints), wave-hermes-agent (7 nodeids test_e2e_hermes_*),
+##            wave-monitoring/logging (3 nodeids from split observability), DevPlan 011 (+1 langfuse
+##            static drift-gate), proxy-isolation gate rewrite (2 nodeids test_gate_env_shared_consistency).
+# endregion MODULE_CONTRACT
+#
+# Format:
+# removed:
+#   - nodeid: "tests/old_module.py::test_removed"
+#     reason: "Brief explanation of why the test was removed"
+#     issue: "#123"
+#     approved_by: "@reviewer"
+
+removed:
+  # ── DevPlan 019 (gate-scope-closure): compose profile contract consolidation ──
+  - nodeid: "tests/gates/test_gate_compose_base_contract.py::test_all_base_yml_have_profiles"
+    reason: "Consolidated into test_gate_module_profiles.py — profile contract moved from weak test_gate_compose_base_contract.py to dedicated profiles gate with stronger contract (all services have profiles, profile matches module dir name, no stale profiles). test_all_base_yml_have_profiles removed as duplicate."
+    issue: "DevPlan 019 (gate-scope-closure) / DevPlan-fix-D12 — QAAudit F1"
+    approved_by: "@tronyx"
+
+  # ── DevPlan 023 (debt-cleanup) — A3: deleted test_gate_image_naming.py ──
+  - nodeid: "tests/gates/test_gate_image_naming.py::test_no_deprecated_image_names_in_code"
+    reason: "Deleted per A3: dead gate — protected against names nobody uses anymore."
+    issue: "023-debt-cleanup A3"
+    approved_by: "@tronyx"
+
+  # ── DevPlan 023 (debt-cleanup) — A7: deleted test_gate_skip_enforcement.py ──
+  - nodeid: "tests/gates/test_gate_skip_enforcement.py::test_executed_tests_greater_than_zero"
+    reason: "Deleted per A7: dead mechanism — known_ci_skips.yaml + test_gate_skip_enforcement.py removed."
+    issue: "023-debt-cleanup A7"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_gate_skip_enforcement.py::test_no_expired_skips"
+    reason: "Deleted per A7: dead mechanism — known_ci_skips.yaml + test_gate_skip_enforcement.py removed."
+    issue: "023-debt-cleanup A7"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_gate_skip_enforcement.py::test_no_unexpected_skips"
+    reason: "Deleted per A7: dead mechanism — known_ci_skips.yaml + test_gate_skip_enforcement.py removed."
+    issue: "023-debt-cleanup A7"
+    approved_by: "@tronyx"
