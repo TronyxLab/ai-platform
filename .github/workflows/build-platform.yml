@@ -61,6 +61,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Authenticate ghcr.io (registry cache)
+        run: |
+          if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+            echo "[IMP:8][docker] ghcr.io authenticated — registry cache available"
+          else
+            echo "[IMP:7][docker] GHCR_TOKEN not set — falling back to GHA cache"
+          fi
+
       # ─── Step 3: Provision environment ────────────────────────────────
       - name: Provision Docker environment (networks + volumes)
         uses: ./.github/actions/provisioner-call
