@@ -261,7 +261,12 @@ def _wait_for_minio_healthy(
                 health = container.get("Health", "")
 
                 if service == "minio" and state == "running" and health == "healthy":
-                    logger.info("[IMP:9][conftest][_wait_for_minio_healthy] MinIO is healthy (service=%s state=%s health=%s)", service, state, health)
+                    logger.info(
+                        "[IMP:9][conftest][_wait_for_minio_healthy] MinIO is healthy (service=%s state=%s health=%s)",
+                        service,
+                        state,
+                        health,
+                    )
                     return True
 
             _time.sleep(2)
@@ -375,12 +380,50 @@ def platform_services(
         _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
 
         # ── Start up ──────────────────────────────────────────────────
-        compose_up_args = [*compose_base_args, "up", "-d", "--wait", "--wait-timeout", str(PLATFORM_COMPOSE_TIMEOUT)]
-        result = _run_docker_smoke(
-            compose_up_args,
-            timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
-            env_override={"COMPOSE_PROFILES": module_name},
-        )
+        if module_name == "minio":
+            # D5: MinIO has a one-shot init container (minio-createbuckets) that
+            # exits 0 after creating buckets. `docker compose up --wait` considers
+            # the exited container a failure (returncode 1) even though minio
+            # itself is healthy. Start without --wait, then poll for minio health.
+            # ⚠️ TRAP[DECISION] · 2026-07-17 · — · MinIO --wait workaround
+            # · Rejected: depends_on condition: service_completed_successfully
+            # · Reason: deferred — that would require compose schema v3.8+ changes
+            # · Rev: if compose schema is ever upgraded, use depends_on instead.
+            compose_up_args = [*compose_base_args, "up", "-d"]
+            result = _run_docker_smoke(
+                compose_up_args,
+                timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
+            if result.returncode == 0:
+                _minio_ok = _wait_for_minio_healthy(
+                    compose_base_args=compose_base_args,
+                    timeout=PLATFORM_COMPOSE_TIMEOUT,
+                    logger=_logger,
+                )
+                if not _minio_ok:
+                    _logger.error(
+                        "[IMP:9][conftest][platform_services] MinIO did not become healthy within %ds",
+                        PLATFORM_COMPOSE_TIMEOUT,
+                    )
+                    # Force failure path after the if-else block
+                    result = subprocess.CompletedProcess(
+                        args=compose_up_args, returncode=1, stdout="", stderr="MinIO health check timeout"
+                    )
+        else:
+            compose_up_args = [
+                *compose_base_args,
+                "up",
+                "-d",
+                "--wait",
+                "--wait-timeout",
+                str(PLATFORM_COMPOSE_TIMEOUT),
+            ]
+            result = _run_docker_smoke(
+                compose_up_args,
+                timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
         if result.returncode != 0:
             # ── Diagnostic: collect logs for failure analysis ─────────────
             log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
