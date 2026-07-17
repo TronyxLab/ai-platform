@@ -1,0 +1,96 @@
+# GREP_SUMMARY: yamllint config, rules, ignore, line-length, indentation, key-duplicates
+# region MODULE_CONTRACT
+## @purpose  yamllint configuration for ai-platform — style checks beyond basic YAML syntax
+## @scope    Rules for all *.yaml/*.yml except .github/workflows/ (validated by check-jsonschema)
+## @rationale
+##   - check-yaml (pre-commit-hooks) validates syntax only — yamllint adds style & duplicate key detection
+##   - .github/workflows/ excluded — check-jsonschema handles those with full GitHub Actions schema
+##   - templates/ excluded — generated files, not subject to style enforcement
+##   - node_modules/, .venv/, .kilo/ excluded — third-party content
+# endregion MODULE_CONTRACT
+
+extends: default
+
+ignore: |
+  .github/workflows/
+  templates/
+  node_modules/
+  .venv/
+  .kilo/
+  .vscode/
+
+rules:
+  # ── Length ──
+  line-length:
+    max: 160
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+    level: warning
+
+  # ── Indentation ──
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+    check-multi-line-strings: false
+
+  # ── Duplicates ──
+  key-duplicates:
+    level: error
+
+  # ── Whitespace ──
+  trailing-spaces: enable
+  new-line-at-end-of-file: disable  # handled by end-of-file-fixer
+  empty-lines:
+    max: 2
+    max-end: 1
+
+  # ── Comments ──
+  comments:
+    min-spaces-from-content: 1
+    level: warning
+
+  comments-indentation:
+    level: warning
+
+  # ── Document ──
+  document-start: disable  # not all YAML files need ---
+  document-end: disable
+
+  # ── Truthy values ──
+  truthy:
+    level: warning
+    allowed-values:
+      - "true"
+      - "false"
+      - "on"
+      - "off"
+      - "yes"
+      - "no"
+
+  # ── Colons ──
+  colons:
+    max-spaces-before: 0
+    max-spaces-after: -1  # allow alignment (e.g., prometheus.yml, backup-cron/module.yaml)
+
+  # ── Hyphens ──
+  hyphens:
+    max-spaces-after: 1
+
+  # ── Braces ──
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+
+  # ── Brackets ──
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+
+  # ── Empty values ──
+  empty-values:
+    forbid-in-block-mappings: false
+    forbid-in-flow-mappings: false
+
+  # ── Octal values ──
+  octal-values:
+    forbid-implicit-octal: true

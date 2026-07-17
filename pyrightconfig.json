@@ -1,0 +1,27 @@
+{
+  "typeCheckingMode": "basic",
+  "include": [
+    "."
+  ],
+  "exclude": [
+    ".venv",
+    "node_modules",
+    "templates",
+    "tests",
+    ".kilo",
+    ".ai",
+    ".pytest_cache",
+    "**/__pycache__",
+    "**/node_modules"
+  ],
+  "extraPaths": [],
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+  "reportPrivateImportUsage": "none",
+  "reportOptionalMemberAccess": "warning",
+  "reportGeneralTypeIssues": "warning",
+  "reportUnusedVariable": "warning",
+  "reportUnusedImport": "warning",
+  "pythonVersion": "3.10",
+  "pythonPlatform": "All"
+}

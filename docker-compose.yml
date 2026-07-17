@@ -1,0 +1,51 @@
+# GREP_SUMMARY: docker-compose root include profiles networks volumes x-logging
+# STRUCTURE: ▶ include: 12 docker modules → networks: 6 external → volumes: 11 driver:local → x-logging
+# region MODULE_CONTRACT
+## @purpose  Root docker-compose — include: всех docker-модулей + networks + volumes + x-logging
+## @scope    Локальный полный стек (инвариант #7) и VPS; сервисы только через include:, без инлайна
+## @invariants
+##   - Только include: модулей — инлайн-сервисы запрещены (core/modules/AGENTS.md запрет #7)
+##   - Каждый модуль фильтруется profiles: [module-name] (pluggability)
+##   - networks/volumes согласованы с platform-env.yaml
+## @rationale Единая точка компоновки стека; модульность через include + profiles (DD1/DD3)
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+include:
+  - path: core/modules/backup-cron/docker-compose.base.yml
+  - path: core/modules/clickhouse/docker-compose.base.yml
+  - path: core/modules/hermes-agent/docker-compose.base.yml
+  - path: core/modules/infra-metrics/docker-compose.base.yml
+  - path: core/modules/langfuse/docker-compose.base.yml
+  - path: core/modules/litellm/docker-compose.base.yml
+  - path: core/modules/logging/docker-compose.base.yml
+  - path: core/modules/minio/docker-compose.base.yml
+  - path: core/modules/monitoring/docker-compose.base.yml
+  - path: core/modules/nginx/docker-compose.base.yml
+  - path: core/modules/postgres/docker-compose.base.yml
+  - path: core/modules/redis/docker-compose.base.yml
+networks:
+  proxy-net:           { external: true, name: proxy-net }
+  shared-db-net:       { external: true, name: shared-db-net }
+  shared-cache-net:    { external: true, name: shared-cache-net }
+  hermes-agent-net:    { external: true, name: hermes-agent-net }
+  observability-net:   { external: true, name: observability-net }
+  backup-net:          { external: true, name: backup-net }
+
+volumes:
+  postgres-data:       { driver: local }
+  wal-archive:         { driver: local }
+  redis-data:          { driver: local }
+  hermes-data:         { driver: local }
+  grafana-data:        { driver: local }
+  prometheus-data:     { driver: local }
+  loki-data:           { driver: local }
+  backup-spool:        { driver: local }
+  backup-logs:         { driver: local }
+  clickhouse-data:     { driver: local }
+  minio-data:          { driver: local }

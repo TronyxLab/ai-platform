@@ -1,0 +1,246 @@
+# GREP_SUMMARY: pre-commit gitleaks ruff yamllint check-jsonschema shellcheck check-yaml trailing-whitespace end-of-file-fixer check-merge-conflict detect-private-key check-added-large-files mixed-line-ending check-toml check-json basedpyright bandit check-manifest-parity check-doc-headers name-linter commit-msg pre-push-gate
+# STRUCTURE: repos → gitleaks(v8.30.1) → ruff(v0.15) → yamllint(v1.38) → local(check-doc-headers + name-linter) → shellcheck(v0.11) → check-jsonschema(0.37) → pre-commit-hooks(v6.0 + check-merge-conflict + detect-private-key + check-added-large-files + mixed-line-ending + check-toml + check-json) → local(basedpyright + bandit + commit-msg + pre-push-gate + check-manifest-parity)
+# region MODULE_CONTRACT
+## @purpose  Unified pre-commit hooks via pre-commit framework (per DevPlan 001):
+##           - gitleaks (secret scanning) + ruff (verify only: check + format --check; auto-fix: ruff check --fix . && ruff format .)
+##           - yamllint (YAML style) + check-jsonschema (GHA workflows + docker-compose)
+##           - basedpyright (static type checking) + bandit (security scanner)
+##           - check-doc-headers (GREP_SUMMARY/MODULE_CONTRACT/STRUCTURE/regions)
+##           - name-linter (make-target validation) + shellcheck + check-yaml
+##           - trailing-whitespace + end-of-file-fixer
+##           - DRIFT-PREVENTION: check-merge-conflict + detect-private-key + check-added-large-files
+##           - DRIFT-PREVENTION: mixed-line-ending + check-toml + check-json
+##           - check-manifest-parity (manifest ↔ AGENTS.md ↔ Makefile bidirectional sync)
+##           - commit-msg (Conventional Commits) + pre-push-gate (fast gate)
+## @scope    Pre-commit (all hooks + 6 hygiene hooks + manifest-parity drift prevention), commit-msg (commit message validation), pre-push (blocking fast gate)
+## @invariants
+##   - gitleaks v8.18.0+ with .gitleaks.toml config
+##   - yamllint v1.38 checks style — complements check-yaml syntax validation
+##   - check-jsonschema validates GHA workflows against GitHub Actions schema and docker-compose against compose-spec
+##   - basedpyright basic mode — catches real type errors without noise on pytest fixtures
+##   - bandit scans for security vulnerabilities (hardcoded passwords, unsafe eval, etc.)
+##   - check-yaml validates all YAML files except .github/workflows/ (delegated to check-jsonschema) and bootstrap/
+##   - trailing-whitespace and end-of-file-fixer are zero-cost hygiene
+##   - check-merge-conflict blocks commit with <<<<<<< markers
+##   - detect-private-key warns on hardcoded private keys (complements gitleaks)
+##   - check-added-large-files blocks files >500KB to prevent binary blobs
+##   - mixed-line-ending normalizes CRLF → LF on text files
+##   - check-toml and check-json validate syntax of TOML/JSON files
+##   - check-manifest-parity: validates bidirectional sync between entrypoint-manifest.yaml,
+##     AGENTS.md, and Makefiles — triggers only on manifest/AGENTS.md/Makefile changes
+##   - commit-msg enforces Conventional Commits 1.0.0 format
+##   - pre-push-gate blocks push on make gate MODE=fast failure
+##   - Install: make pre-commit-install (= pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg)
+## @rationale  Unified pre-commit framework eliminates custom .git/hooks/pre-commit conflicts.
+##             check-doc-headers combines doc validation in one efficient script.
+##             Blocking pre-push gate prevents pushing broken code to CI.
+##             Four new hooks (yamllint, check-jsonschema, basedpyright, bandit) strengthen static analysis.
+# endregion MODULE_CONTRACT
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        name: gitleaks
+        description: Detect hardcoded secrets, API keys, and passwords
+        entry: gitleaks git --pre-commit --verbose
+        language: system
+        stages: [pre-commit]
+        args: ["--config", ".gitleaks.toml"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      - id: ruff-check
+        name: ruff-check (lint, verify only)
+        description: "Verify Ruff lint rules on staged Python files (no auto-fix — run: ruff check --fix . && ruff format .)"
+        types_or: [python, pyi]
+        stages: [pre-commit]
+
+      - id: ruff-format
+        name: ruff-format (verify only)
+        description: "Verify Ruff formatting on staged Python files (no auto-format — run: ruff check --fix . && ruff format .)"
+        args: [--check]
+        types_or: [python, pyi]
+        stages: [pre-commit]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        name: yamllint
+        description: Check YAML file style (indentation, line-length, key-duplicates, etc.)
+        args: ["--config-file", ".yamllint"]
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            \.github/workflows/|
+            templates/|
+            node_modules/|
+            \.venv/
+          )$
+
+  - repo: local
+    hooks:
+      - id: check-doc-headers
+        name: Doc headers (GREP_SUMMARY + MODULE_CONTRACT + STRUCTURE + regions + YAML @purpose)
+        entry: core/entrypoints/check-doc-headers.sh
+        language: script
+        files: '\.(py|yaml|yml|sh|md)$'
+        exclude: ^\.kilo/|^\.ai/|^\.pytest_cache/
+        stages: [pre-commit]
+
+      - id: name-linter
+        name: Validate target/script names against manifest allowed_verbs
+        entry: bash core/entrypoints/lint.sh namelint
+        language: system
+        stages: [pre-commit]
+        files: '^(Makefile|core/Makefile\.common|core/modules/.*/Makefile|core/entrypoints/.*\.sh|core/entrypoint-manifest\.yaml)$'
+        pass_filenames: false
+        always_run: true
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        description: Static analysis of shell scripts (error level only)
+        args: ["--severity=error"]
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            core/modules/backup-cron/Dockerfile|
+            core/modules/hermes-agent/build/Dockerfile
+          )$
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.4
+    hooks:
+      - id: check-github-workflows
+        name: check-github-workflows
+        description: Validate GitHub Actions workflow files against JSON schema
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            templates/|
+            .*docker-compose\.macos\.yml
+          )$
+
+      - id: check-compose-spec
+        name: check-compose-spec
+        description: Validate docker-compose YAML files against compose-spec schema
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            templates/|
+            .*docker-compose\.macos\.yml|
+            core/modules/nginx/docker-compose\.test\.yml
+          )$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        name: check-yaml
+        description: Validate YAML syntax in staged files
+        args: [--allow-multiple-documents]
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            core/bootstrap/.*\.yaml|
+            \.github/workflows/.*\.yml|
+            .*docker-compose\.macos\.yml|
+            core/modules/nginx/docker-compose\.test\.yml
+          )$
+
+      - id: trailing-whitespace
+        name: trailing-whitespace
+        description: Trim trailing whitespace from text files
+        stages: [pre-commit]
+
+      - id: end-of-file-fixer
+        name: end-of-file-fixer
+        description: Ensure files end with a single newline
+        stages: [pre-commit]
+        exclude: >
+          (?x)^(
+            .*\.md|
+            tests/\.test_counter\.json
+          )$
+
+      - id: check-merge-conflict
+        name: check-merge-conflict
+        description: Check for merge conflict markers (<<<<<<<, =======, >>>>>>>)
+        stages: [pre-commit]
+
+      - id: detect-private-key
+        name: detect-private-key
+        description: Detect hardcoded private keys (complements gitleaks)
+        stages: [pre-commit]
+
+      - id: check-added-large-files
+        name: check-added-large-files
+        description: Prevent accidentally committing large files (>500KB)
+        args: ["--maxkb=500"]
+        stages: [pre-commit]
+
+      - id: mixed-line-ending
+        name: mixed-line-ending
+        description: Normalize mixed line endings (CRLF → LF)
+        args: ["--fix=lf"]
+        stages: [pre-commit]
+
+      - id: check-toml
+        name: check-toml
+        description: Validate TOML file syntax
+        stages: [pre-commit]
+
+      - id: check-json
+        name: check-json
+        description: Validate JSON file syntax
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      - id: basedpyright
+        name: basedpyright (static type checking)
+        description: Check Python type annotations with basedpyright (strict pyright fork)
+        entry: basedpyright
+        language: python
+        additional_dependencies: ["basedpyright==1.39.9"]
+        types: [python]
+        stages: [manual]
+        args: ["--level", "warning"]
+
+      - id: bandit
+        name: bandit (security scanner)
+        description: Scan Python code for security vulnerabilities
+        entry: bandit
+        language: python
+        additional_dependencies: ["bandit==1.9.4"]
+        types: [python]
+        stages: [pre-commit]
+        args: ["--skip", "B101"]
+        exclude: ^tests/|^.venv/|^templates/
+
+      - id: commit-msg
+        name: Conventional Commits
+        entry: core/entrypoints/check-commit-msg.sh
+        language: script
+        stages: [commit-msg]
+
+      - id: pre-push-gate
+        name: Fast gate before push
+        entry: core/entrypoints/pre-push-gate.sh
+        language: script
+        stages: [pre-push]
+        always_run: true
+      - id: check-manifest-parity
+        name: Manifest ↔ AGENTS.md ↔ Makefile parity
+        description: Validate bidirectional sync between manifest, AGENTS.md, and Makefiles
+        entry: python -m pytest tests/gates/test_gate_manifest_integrity.py -v --tb=short -p no:warnings
+        language: system
+        files: ^(core/entrypoint-manifest\.yaml|core/AGENTS\.md|Makefile|core/modules/.*/Makefile)$
+        pass_filenames: false
+        stages: [pre-commit]

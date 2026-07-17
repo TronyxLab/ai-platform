@@ -1,0 +1,126 @@
+# GREP_SUMMARY: platform-env, environment-descriptor, networks, volumes, env-defaults, profiles
+# STRUCTURE: ┌networks (8)┐ → ┌volumes (16)┐ → ┌env_defaults (13)┐ → ┌profiles (12)┐
+
+# region MODULE_CONTRACT
+## @purpose  Canonical environment descriptor — single source of truth for Docker networks,
+##           volume directories, CI/env defaults, and Docker Compose profiles.
+## @scope    Consumed by provision-environment.sh, tests/_conftest/infra.py,
+##           deploy-modules.sh, CI workflows, Makefile.
+## @invariants
+##   - This is the ONLY place where networks, volumes, and CI env vars are defined
+##   - Consumers MUST read this file, never hardcode
+##   - env_defaults are CI/test defaults only — do NOT override .env
+##   - profiles are 1:1 with core/modules/ directory names
+## @rationale P5: Eliminates 4 independent sources of environment config (Makefile,
+##            infra.py, CI workflows, deploy-modules.sh). D2: Separate from
+##            entrypoint-manifest.yaml (state vs verbs — different responsibility zones).
+# endregion MODULE_CONTRACT
+
+networks:
+  - name: proxy-net
+    driver: bridge
+  - name: shared-db-net
+    driver: bridge
+  - name: shared-cache-net
+    driver: bridge
+  - name: hermes-agent-net
+    driver: bridge
+  - name: observability-net
+    driver: bridge
+  - name: backup-net
+    driver: bridge
+  # Staging networks (production VPS only — created idempotently, no-op elsewhere)
+  - name: staging-proxy-net
+    driver: bridge
+  - name: staging-shared-db-net
+    driver: bridge
+
+volumes:
+  # Prometheus config directories (bind-mount for dynamic targets/rules)
+  - path: /opt/platform/prometheus-rules
+  - path: /opt/platform/prometheus-targets
+  # Backup
+  - path: /var/lib/platform/backup-spool
+  - path: /var/lib/platform/backup-spool/app-data
+  - path: /var/lib/platform/backup-spool/postgres
+  # Clickhouse
+  - path: /var/lib/platform/clickhouse-data
+  # Observability (monitoring + logging)
+  - path: /var/lib/platform/grafana-data
+  - path: /var/lib/platform/hermes-agent/data
+  # Infra metrics
+  - path: /var/lib/platform/infra-metrics-data
+  # Langfuse + LiteLLM
+  - path: /var/lib/platform/langfuse-data
+  - path: /var/lib/platform/litellm-data
+  # Loki
+  - path: /var/lib/platform/loki-data
+  # Minio
+  - path: /var/lib/platform/minio-data
+  # Postgres
+  - path: /var/lib/platform/postgres-data
+  - path: /var/lib/platform/prometheus-data
+  # Logs
+  - path: /var/lib/platform/wal-archive
+  - path: /var/log/platform/backup
+
+proxy:
+  # Opt-in контракт: прокси-переменные (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) декларируют
+  # только модули из consumers — единственные реальные потребители прокси-канала
+  # hermes-agent: Telegram → Tor → Privoxy. Все остальные модули — внутренний трафик без прокси.
+  # ⚠️ Добавление модуля сюда БЕЗ env_shared в module.yaml = красный гейт T8.5 (opt-in reverse)
+  consumers:
+    - hermes-agent
+  # Канонический список внутренних NO_PROXY-исключений (SoT).
+  # .env/.env.example/fallback в hermes-agent docker-compose ⊇ этого списка
+  no_proxy_internal: "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse"
+
+port_mappings:
+  # Canonical port numbers — single source of truth for all tests
+  # Used by platform_ports fixture; any test using hardcoded ports must migrate
+  POSTGRES_PORT: 6432
+  REDIS_PORT: 6379
+  CLICKHOUSE_HTTP_PORT: 8123
+  CLICKHOUSE_NATIVE_PORT: 9000
+  MINIO_PORT: 9000
+  MINIO_CONSOLE_PORT: 9001
+  LITELLM_PORT: 4000
+  LANGFUSE_PORT: 3001
+  HERMES_DASHBOARD_PORT: 9119
+  HERMES_DESKTOP_PORT: 8642
+  NGINX_EXPORTER_PORT: 9113
+  GRAFANA_PORT: 3000
+  PROMETHEUS_PORT: 9090
+  LOKI_PORT: 3100
+  CADVISOR_PORT: 8080
+  NODE_EXPORTER_PORT: 9100
+
+env_defaults:
+  # CI/test defaults — do NOT override .env
+  HERMES_DASHBOARD_PASSWORD: "test-db-pwd"
+  LANGFUSE_SECRET_KEY: "ci-test-secret-key"
+  LANGFUSE_PUBLIC_KEY: "ci-test-public-key"
+  LANGFUSE_INIT_ORG_ID: "ci-test-org"
+  LANGFUSE_INIT_PROJECT_ID: "ci-test-project"
+  NEXTAUTH_SECRET: "ci-test-nextauth-secret-32-chars-min!!"
+  SALT: "ci-test-salt-value"
+  LITELLM_MASTER_KEY: "sk-ci-test-master-key"
+  LANGFUSE_INIT_USER_PASSWORD: "ci-test-langfuse-pwd"
+  CLICKHOUSE_URL: "http://clickhouse:8123"
+  CLICKHOUSE_PASSWORD: "test-clickhouse-pwd-not-for-prod"
+  POSTGRES_PASSWORD: "test-pg-pwd"
+  PROMETHEUS_RULES_DIR: "/opt/platform/prometheus-rules"
+
+profiles:
+  - postgres
+  - redis
+  - nginx
+  - litellm
+  - langfuse
+  - hermes-agent
+  - clickhouse
+  - infra-metrics
+  - logging
+  - monitoring
+  - backup-cron
+  - minio

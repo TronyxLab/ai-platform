@@ -1,0 +1,221 @@
+# GREP_SUMMARY: core-deploy sha-aware-aggregator workflow-run platform-test rsync ssh-native bootstrap node-arg ci-pipeline audit-trail
+# STRUCTURE: on:workflow_run(platform-test:completed,main) + workflow_dispatch → push-filter → verify SHA via GitHub API → rsync core/ → /opt/platform/ → ssh make node-update NODE=<name> → cleanup
+# region MODULE_CONTRACT
+## @purpose  CI pipeline for core code delivery to VPS — SHA-aware aggregator:
+##           Triggers on platform-test completion (push to main only), verifies platform-test success
+##           for same SHA, then rsyncs core/ and bootstraps on VPS with NODE= argument.
+## @scope    Triggered by workflow_run on platform-test (completed, success, push event) OR manual workflow_dispatch
+## @invariants
+##   - Triggers ONLY on platform-test success (main-full-gate removed — Plan 2 consolidation)
+##   - Push filter: github.event.workflow_run.event == 'push' prevents deploy on PR trigger
+##   - Verifies platform-test succeeded for the same SHA via GitHub API
+##   - SHA from workflow_run.head_sha (not github.sha)
+##   - Rsync excludes: .git/, __pycache__/, *.pyc
+##   - Destination: /opt/platform/core/ on VPS
+##   - SSH user default: ci-deploy
+##   - Node-update: `cd /opt/platform && make node-update NODE=<name>` (bootstrap-node сохранён как INIT-only manual fallback)
+##   - NODE= auto-detected from /opt/node-configs/ on VPS (P11 fix replaced by auto-detection)
+##   - Audit trail via GITHUB_SHA logged at deploy time
+##   - workflow_dispatch: manual override with SHA validation
+## @rationale  SHA-aware aggregator prevents deploy after partial pipeline (D4).
+##             Plan 2 consolidation: main-full-gate removed, deploy workflows trigger
+##             on platform-test with push event filter (no race condition P6).
+##             NODE= auto-detected via auto_detect_node_name() in bootstrap.sh (replaces P11 fix).
+## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
+## @changes — 2026-07-15 | NODE auto-detected (Option A, replacing P11 secrets-based fix)
+# endregion MODULE_CONTRACT
+
+name: core-deploy
+
+on:
+  workflow_run:
+    workflows: ["platform-test"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  VPS_USER: ci-deploy
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-deploy:
+    # Push filter: only deploy when triggered by push event (not PR)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # 📝 TRAP[DEBT] · 2026-07-16 · MED · Inline SHA verification instead of shared sha-resolve composite
+      # · Observed: core-deploy.yml uses inline gh API call for SHA verification (Step 1+2).
+      # ·   build-platform.yml and mirror.yml use the shared ./.github/actions/sha-resolve composite action.
+      # · Suspected: legacy from pre-composite-action era; downstream if: chain (skip outputs)
+      # ·   would require non-trivial restructuring to adopt sha-resolve.
+      # · Impact: 3-way SHA verification duplication — drift risk when updating verification logic.
+      # · When: T9 CI/CD audit — deferred, if: chain restructure too risky without CI test
+      # ─── Step 1: Determine SHA ─────────────────────────────────────────
+      - name: Determine SHA for deployment
+        id: sha
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ─── Step 2: SHA-aware verification ────────────────────────────────
+      - name: Verify platform-test also succeeded for this SHA
+        id: verify
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          echo "[IMP:9][deploy][verify] Verifying SHA: $SHA"
+
+          # Check platform-test workflow status for this SHA
+          PLATFORM_STATUS=$(gh api \
+            "/repos/${{ github.repository }}/actions/workflows/platform-test.yml/runs?head_sha=$SHA&status=success&per_page=1" \
+            --jq '.total_count')
+
+          if [ "$PLATFORM_STATUS" -eq 0 ]; then
+            echo "[IMP:10][deploy][verify] ERROR: platform-test has no successful run for SHA $SHA"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "[IMP:9][deploy][verify] All upstream workflows succeeded for SHA $SHA"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # ─── Step 3: Checkout repository for rsync ─────────────────────────
+      - name: Checkout repository
+        if: steps.verify.outputs.skip != 'true'
+        uses: actions/checkout@v7
+
+      # ─── Step 4: Guard — check required secrets ────────────────────────
+      - name: Check required secrets
+        id: secrets-check
+        if: steps.verify.outputs.skip != 'true'
+        run: |
+          if [ -z "${{ secrets.VPS_HOST }}" ] || [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
+            echo "::warning::[IMP:8][deploy][skip] Required secrets VPS_HOST and/or VPS_SSH_KEY are not set — skipping deploy"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ─── Step 5: Rsync core/ to VPS (3m) ──────────────────────────────
+      - name: Rsync core/ to VPS
+        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          ssh ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
+          rsync -avz --delete \
+            --exclude '.git/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
+          echo "[IMP:9][deploy][rsync] core/ rsync complete — SHA $SHA"
+
+      # 📝 TRAP[DEBT] · 2026-07-16 · HI · platform-env.yaml rsync отсутствовал (drift vector D7)
+      # · Observed: CI core-deploy синхронизировал только ./core/; platform-env.yaml
+      # ·   доставлялся ТОЛЬКО через make bootstrap-node (Phase 1b).
+      # · Impact: изменения platform-env.yaml (новые networks/volumes/profiles) НЕ
+      # ·   попадали на VPS через CI. После CI-деплоя VPS использовал stale platform-env.yaml.
+      # · Fix: добавлен отдельный rsync шаг для platform-env.yaml (повторяет структуру bootstrap.sh Phase 1b)
+      # · Rev: если появятся другие root-level файлы — реализовать manifest-based sync подход
+      # ─── Step 5b: Rsync platform-env.yaml to VPS ──────────────────────
+      - name: Rsync platform-env.yaml to VPS
+        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          rsync -avz \
+            ./platform-env.yaml ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/platform-env.yaml
+          echo "[IMP:9][deploy][rsync] platform-env.yaml rsync complete — SHA $SHA"
+
+      # ─── Step 5c: Rsync Makefile to VPS ──────────────────────────────
+      - name: Rsync Makefile to VPS
+        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          rsync -avz \
+            ./Makefile ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/Makefile
+          echo "[IMP:9][deploy][rsync] Makefile rsync complete — SHA $SHA"
+
+      # ─── Step 6: Provision environment on VPS (networks + volumes) ────
+      # ✅ TRAP[DRIFT] · 2026-07-15 · RESOLVED · FIX-1: multi-scope парсер исправлен
+      # · Resolution: provision-environment.sh теперь поддерживает --scope networks --scope volumes
+      # · Workaround: используется --scope all (эквивалент, идемпотентно на VPS)
+      # · Fix applied: provision-environment.sh L285 → массив scopes=() вместо скаляра
+      # · Detected during: QA audit DevPlan 001 — bootstrap-test-ci-unification
+      # 🧐 TRAP[DECISION] · 2026-07-16 → 2026-07-17 · — · on-node provision: raw call вместо make provision
+      # · Rejected: make provision на VPS (пока)
+      # · Reason исторический: Makefile НЕ входил в rsync-манифест core-deploy (только core/ + platform-env.yaml).
+      # ·   Makefile находится в корне репозитория и не синхронизировался на VPS.
+      # ·   После rsync Makefile отсутствовал в /opt/platform/ → make provision недоступен.
+      # · Статус: T6 (2026-07-17) добавил Makefile в rsync-манифест — Rev-условие выполнено.
+      # ·   Унаследованное поведение (raw internal/provision-environment.sh --scope all) работает
+      # ·   корректно для production VPS. Смена на make provision — отдельное решение (out of scope T6).
+      # · Documented system exception: on-node raw вызов core/internal/ зарегистрирован в allowlist
+      # ·   gate-теста test_gate_workflow_consistency.py::_RAW_INTERNAL_ALLOWLIST (не в манифесте —
+      # ·   механизм Makefile→manifest→gate работает только для make-фасада).
+      # · Rev: [ВЫПОЛНЕНО] Makefile присутствует в rsync-манифесте с T6. Решение о смене
+      # ·   provision на make provision — deferred (требует CI-теста).
+      # Step 6: Provision networks + volumes (T2 invariant: env-scope = CI-only).
+      # --scope networks --scope volumes instead of --scope all per T2 contract:
+      # env/profiles on VPS produce no useful effect (env writes to absent GITHUB_ENV,
+      # profiles only logs count). TRAP[DECISION]:162-174 (raw call vs make) unchanged —
+      # this scoping fix is orthogonal to the call mechanism.
+      - name: Provision environment on VPS (networks + volumes)
+        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=10 \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "cd /opt/platform && bash core/internal/provision-environment.sh --scope networks --scope volumes"
+
+      # ─── Step 7: Node update on VPS (5m) ──────────────────────────────
+      # T18: заменён make bootstrap-node → make node-update.
+      # bootstrap-node сохранён как manual fallback (INIT-only) через
+      # make bootstrap-node NODE=<name> — недоступен через CI, только shell.
+      - name: Node update on VPS (native SSH)
+        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          ssh -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=10 \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "cd /opt/platform && GITHUB_SHA=$SHA make node-update"
+
+      # ─── Step 8: Audit trail ──────────────────────────────────────────
+      - name: Log deployment audit trail
+        if: steps.secrets-check.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          echo "[DEPLOY] core SHA $SHA → ${{ secrets.VPS_HOST }}:/opt/platform/core/"
+
+      # ─── Step 9: Failure notification ─────────────────────────────────
+      - name: Notify on failure
+        if: failure() && steps.secrets-check.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          echo "::error::core-deploy FAILED for SHA $SHA on ${{ secrets.VPS_HOST }}"
+          echo "::error::Action required: investigate and rollback if needed"
+
+      # ─── Step 10: Cleanup SSH key ─────────────────────────────────────
+      - name: Cleanup SSH key
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa ~/.ssh/known_hosts
+          echo "[IMP:7][deploy][cleanup] SSH key cleaned up"

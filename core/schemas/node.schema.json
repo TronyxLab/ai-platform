@@ -1,0 +1,282 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://core/schemas/node.schema.json",
+  "$comment": "GREP_SUMMARY: node, node-configs, declarative, apply, schema, context, project, module, domain, secrets, TLS, wildcard, contexts, tor | STRUCTURE: ▶ node.yaml → ┌contexts+node+domain┐ → ◇ validate ← ⊕ modules+projects+secrets+firewall → ⚡ registry | MODULE_CONTRACT: @purpose Validate node.yaml declarative desired state for platform deploy and diff computation; @scope Full node declaration — contexts, node, modules, projects, firewall, secrets, domain, postgres, repos; @invariants Backward-compatible — all legacy fields continue to validate unchanged; @rationale Single source of truth for make bootstrap-node NODE=<name> — describes desired state, used by diff engine to compute changes vs actual state on VPS | LDD: IMP:9[SCHEMA_VALIDATE] validate() → check required fields [node, modules] → assert property types → validate enum (project.type) → assert minLength → pattern validation → ⚡ schema registry OK",
+  "title": "NodeDeclaration",
+  "description": "Schema for node.yaml — declares a platform node, its contexts, desired module/project state, firewall rules, secrets, and declarative deploy configuration",
+  "type": "object",
+  "required": [
+    "node",
+    "modules",
+    "context"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "context": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Deployment context identifier (e.g. production, staging). Legacy field — use contexts array for new configs."
+    },
+    "contexts": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Context name — referenced by projects[].context"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this context"
+          },
+          "node_configs_repo": {
+            "type": "string",
+            "minLength": 1,
+            "description": "GitHub repository for node-configs (org/repo)"
+          },
+          "hermes_agent_repo": {
+            "type": "string",
+            "minLength": 1,
+            "description": "GitHub repository for hermes-agent overlay (org/repo)"
+          }
+        }
+      },
+      "description": "Declared deployment contexts — each context defines an isolated environment with its own node-configs and hermes-agent repos"
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Wildcard TLS domain (e.g. tronyx.ru) — acme.sh issues *.domain via DNS-01 challenge; auto-renewed via cron"
+    },
+    "email": {
+      "type": "string",
+      "description": "Contact email for acme.sh TLS certificate registration and notifications"
+    },
+    "acme_dns_plugin": {
+      "type": "string",
+      "enum": ["webnames", "cf", "dp", "generic"],
+      "description": "DNS provider plugin for acme.sh DNS-01 wildcard challenge. webnames=Webnames.ru API, cf=Cloudflare, dp=DigitalOcean, generic=any acme.sh dnsapi plugin (set via env var)"
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "name",
+        "host",
+        "owner_key"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Node name (used as hostname label)"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "description": "IP address or FQDN of the node"
+        },
+        "owner_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SSH public key of the node owner (added to platform user authorized_keys)"
+        },
+        "ci_deploy_key": {
+          "type": "string",
+          "description": "SSH public key for ci-deploy user (used with command= restrict)"
+        },
+        "timezone": {
+          "type": "string",
+          "default": "UTC",
+          "description": "System timezone (e.g. Europe/Moscow)"
+        }
+      }
+    },
+    "firewall": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extra_ports": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "description": "Additional TCP ports to allow inbound beyond baseline 22/80/443"
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Secrets configuration — references to encrypted files and required API keys sourced from env vars at runtime",
+      "properties": {
+        "enc_file": {
+          "type": "string",
+          "description": "Path to SOPS/age encrypted secrets file relative to node-configs repo"
+        },
+        "required": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "env_var"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Secret identifier (e.g. webnames_api_key, dockerhub_token)"
+              },
+              "env_var": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Environment variable name that supplies this secret at runtime — never written to disk"
+              },
+              "description": {
+                "type": "string",
+                "description": "Purpose of this secret"
+              }
+            }
+          },
+          "description": "List of required secrets sourced from env vars — runtime only, never persisted to disk (see D-6: secrets in env/tmpfs)"
+        }
+      }
+    },
+    "tor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tor + Privoxy proxy configuration for bypassing IP restrictions. Uses host-level systemd services (Option A architecture). HTTP_PROXY passed to containers via secrets.env at host.docker.internal:8118.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Tor + Privoxy proxy on this node. Required for Telegram Bot API access from IP-restricted regions (e.g. Russia)."
+        },
+        "skip_verify": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip Tor circuit verification during bootstrap (useful when bridges are not yet configured)"
+        },
+        "bridges_file": {
+          "type": "string",
+          "description": "Path to obfs4 bridges file relative to node config directory (e.g. overlays/tor/bridges.txt)"
+        }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "enabled"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Module name (matches modules/<name>/ directory)"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this module should be deployed"
+          },
+          "config_overlay": {
+            "type": "string",
+            "description": "Path to node-specific config overlay relative to node-configs repo"
+          }
+        }
+      },
+      "description": "List of modules to deploy on this node"
+    },
+    "projects": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "repo",
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Project name (matches GitHub repo name)"
+          },
+          "repo": {
+            "type": "string",
+            "minLength": 1,
+            "description": "GitHub repository path (org/repo)"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "frontend",
+              "backend",
+              "fullstack",
+              "agent",
+              "bot",
+              "landing"
+            ],
+            "description": "Project type — determines deployment strategy"
+          },
+          "domain": {
+            "type": "string",
+            "description": "FQDN for HTTP-routable projects (required for frontend/landing types)"
+          },
+          "database": {
+            "type": "string",
+            "description": "Database name in postgres (required for backend/bot types)"
+          },
+          "context": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Context name this project belongs to — must reference a contexts[].name entry"
+          }
+        }
+      },
+      "description": "Registered projects deployed on this node"
+    },
+    "postgres_init_databases": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Database name to create in postgres on bootstrap"
+      },
+      "description": "Databases to initialize in postgres"
+    },
+    "repos": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "core": {
+          "type": "string",
+          "description": "Git URL for core repository"
+        },
+        "node_configs": {
+          "type": "string",
+          "description": "Git URL for node-configs repository"
+        }
+      }
+    }
+  }
+}

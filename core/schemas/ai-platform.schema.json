@@ -1,0 +1,203 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://core/schemas/ai-platform.schema.json",
+  "$comment": "💼 TRAP[BUSINESS] · 2026-07-01 · HI · Структура ~/projects/ — разделение контекстов. Source: platform owner. Risk: AI-агенты путают репозитории разных контекстов. ~/projects/ai-platform/ — платформа (общий инструмент). ~/projects/hermes-agent/ — базовый образ агента. ~/projects/<org>/hermes-agent/ — контекстный оверлей агента. ~/projects/<org>/node-configs/ — конфигурация узлов контекста. ~/projects/<org>/<project>/ — проекты контекста. Контексты изолированы, связь только через node-configs внутри контекста.",
+  "title": "AI-Platform Declaration",
+  "description": "Schema for ai-platform.yaml — единый манифест проекта AI Platform (деплой + мониторинг). ЕДИНСТВЕННЫЙ формат манифеста — AD-2.",
+  "type": "object",
+  "required": ["name", "type", "context", "target_node"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "description": "Project name — alphanumeric, hyphens, underscores only"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["frontend", "backend", "fullstack"],
+      "description": "Project category (frontend|backend|fullstack) — agent is a platform component, not a project type (AD-1)"
+    },
+    "context": {
+      "type": "string",
+      "enum": ["personal", "corporate", "project-specific"],
+      "description": "Ownership context — must match node context (00 §1.5)",
+      "$comment": "🧐 TRAP[DECISION] · 2026-07-07 · — · context enum preserved · Rejected: free string (loses validation) · Rationale: enum guarantees valid ownership context values; free string would allow invalid values that downstream agents cannot validate"
+    },
+    "target_node": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Target node name for deployment (matches node-configs)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable project description"
+    },
+    "environments": {
+      "type": "object",
+      "properties": {
+        "production": {
+          "type": "boolean",
+          "description": "Production environment enabled"
+        },
+        "staging": {
+          "type": "boolean",
+          "description": "Staging environment enabled (affects deploy.yml flow, 04 §4)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "platform_services": {
+      "type": "object",
+      "description": "Platform service versions required by this project — MUST be pinned in semver format (04 §5)",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$",
+        "description": "Semver string (e.g. '1.3.0' or '15.2') — 'latest' or empty rejected"
+      }
+    },
+    "needs": {
+      "type": "object",
+      "description": "Project resource needs declared to the platform (00 §5)",
+      "properties": {
+        "domain": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^__[A-Z_]+__$",
+              "description": "Template placeholder (e.g. '__DOMAIN__') — replaced by add-project.sh"
+            },
+            {
+              "type": "string",
+              "pattern": "^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$",
+              "description": "FQDN — must be a valid domain name (e.g. 'example.com')"
+            },
+            {"type": "boolean", "enum": [false]}
+          ],
+          "description": "FQDN — first claimant owns it; conflict blocks deploy (06 §5.4 E1)"
+        },
+        "database": {
+          "oneOf": [
+            {"type": "string", "minLength": 1},
+            {"type": "boolean", "enum": [false]}
+          ],
+          "description": "Database name or false"
+        },
+        "cache": {
+          "type": "boolean",
+          "description": "Redis cache required"
+        },
+        "storage": {
+          "type": "boolean",
+          "description": "S3 storage bucket required"
+        },
+        "expose": {
+          "type": "boolean",
+          "description": "Public HTTP(S) exposure via nginx-proxy"
+        },
+        "llm": {
+          "oneOf": [
+            {"type": "string", "enum": ["local", "remote"]},
+            {"type": "boolean", "enum": [false]}
+          ],
+          "description": "LLM access: local | remote | false"
+        }
+      },
+      "additionalProperties": false
+    },
+    "stop_grace_period": {
+      "type": "string",
+      "pattern": "^[0-9]+[smh]$",
+      "description": "Docker stop_grace_period — recommended 30s (06 §13)"
+    },
+    "version": {
+      "type": "string",
+      "description": "Optional project version string"
+    },
+    "node": {
+      "type": "string",
+      "description": "Deprecated alias for target_node — use target_node"
+    },
+    "modules": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Module names required by this project"
+    },
+    "env": {
+      "type": "object",
+      "description": "Environment variables passed to the project (non-secret)"
+    },
+    "secrets_ref": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Keys from decrypted secrets to inject as env vars"
+    },
+    "monitoring": {
+      "type": "object",
+      "description": "Per-project monitoring configuration — all fields are optional; falls back to L1 defaults → L2 org overrides",
+      "properties": {
+        "metrics": {
+          "type": "boolean",
+          "description": "Scrape /metrics endpoint via Prometheus file_sd"
+        },
+        "logs_retention": {
+          "type": "string",
+          "pattern": "^\\d+(h|d)|forever$",
+          "description": "Log retention period: 24h | 3d | 7d | 14d | 30d | 90d | 365d | forever"
+        },
+        "ai_retention": {
+          "type": "string",
+          "pattern": "^\\d+(h|d)|forever$",
+          "description": "Langfuse trace retention (only active if needs.llm is set)"
+        },
+        "alerting": {
+          "type": "boolean",
+          "description": "Enable standard alerts (container down, OOM, errors)"
+        },
+        "dashboard": {
+          "type": "boolean",
+          "description": "Auto-provision Grafana dashboard for this project"
+        },
+        "metrics_port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535,
+          "default": 3000,
+          "description": "Prometheus metrics port (default 3000; backend/fullstack = 8080)"
+        },
+        "host_port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Optional host port for port conflict validation"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "if": {
+    "properties": {
+      "needs": {
+        "properties": {
+          "expose": { "const": true }
+        },
+        "required": ["expose"]
+      }
+    },
+    "required": ["needs"]
+  },
+  "then": {
+    "properties": {
+      "needs": {
+        "properties": {
+          "domain": {
+            "not": { "enum": [false] }
+          }
+        },
+        "required": ["domain"]
+      }
+    }
+  }
+}

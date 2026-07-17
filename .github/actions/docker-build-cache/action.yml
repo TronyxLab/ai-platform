@@ -1,0 +1,51 @@
+# GREP_SUMMARY: docker-build-cache composite-action gha-cache build-push load-true provenance-sbom-false
+# STRUCTURE: inputs(context,tags,cache-scope,file?) → ◇ docker/build-push-action@v7 with standardized cache params → ⎋ built image
+# region MODULE_CONTRACT
+## @purpose  Standardized Docker image build with GHA cache configuration.
+##           Eliminates 3× duplicate docker/build-push-action@v7 boilerplate
+##           with consistent provenance:false, sbom:false, load:true, GHA cache.
+## @scope    Used by platform-test.yml (backup-cron, hermes-agent-base) and
+##           build-platform.yml (hermes-agent-base) — 3 identical build patterns.
+## @invariants
+##   - Always uses docker/build-push-action@v7
+##   - load: true — images available locally after build
+##   - cache-from + cache-to: type=gha,mode=max with scoped key
+##   - provenance: false, sbom: false — no attestations for local builds
+## @rationale  DevPlan 017 T12: consolidate 3× duplicate docker build configs.
+##             Scoped GHA cache by image name isolates cache keys, preventing
+##             cross-image cache poisoning and enabling parallel cache warm-up.
+## @changes — 2026-07-16 | Extracted from 3× identical blocks per DevPlan 017 T12
+# endregion MODULE_CONTRACT
+
+name: 'Docker Build with GHA Cache'
+description: 'Build Docker image with standardized GHA cache configuration (load:true, provenance:false)'
+
+inputs:
+  context:
+    description: 'Build context directory'
+    required: true
+  file:
+    description: 'Dockerfile path (relative to context). Omit to use context/Dockerfile.'
+    required: false
+    default: ''
+  tags:
+    description: 'Image tags (space-separated)'
+    required: true
+  cache-scope:
+    description: 'Cache scope for type=gha (e.g. backup-cron, hermes-agent-base)'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build Docker image (${{ inputs.cache-scope }})
+      uses: docker/build-push-action@v7
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        load: true
+        tags: ${{ inputs.tags }}
+        cache-from: type=gha,scope=${{ inputs.cache-scope }}
+        cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
+        provenance: false
+        sbom: false

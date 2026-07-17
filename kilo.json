@@ -1,0 +1,48 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "instructions": [
+    ".kilo/rules/*.md"
+  ],
+  "agent": {
+    "verifier": {
+      "disable": true
+    },
+    "sysadmin": {
+      "disable": true
+    },
+    "code": {
+      "disable": true
+    },
+    "docs": {
+      "disable": true
+    },
+    "plan": {
+      "disable": true
+    },
+    "explore": {
+      "disable": false
+    },
+    "qa": {
+      "disable": true
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "task": "allow",
+    "todowrite": "allow",
+    "question": "allow",
+    "skill": "allow",
+    "doom_loop": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "edit": "allow",
+    "bash": "allow"
+  },
+  "experimental": {
+    "openTelemetry": true
+  },
+  "snapshot": true
+}

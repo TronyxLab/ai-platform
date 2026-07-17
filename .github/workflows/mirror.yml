@@ -1,0 +1,163 @@
+# GREP_SUMMARY: mirror auto-sync sha-aware platform-test workflow_run Tronyx161 TronyxLab mirror.yml git-push workflow actions
+# STRUCTURE: ┌workflow_run[platform-test] + workflow_dispatch┐ → ◇ if:conclusion=success+push-filter → ○ resolve SHA → ◇ verify → ○ checkout(fetch-depth=0) → ⊕ git push TronyxLab/ai-platform HEAD:main
+# region MODULE_CONTRACT
+## @purpose  SHA-aware mirror sync: triggers on platform-test completion (push main only).
+##           Verifies gate passed before mirroring. Prevents mirroring untested code.
+## @scope    Source → Destination push only; no force push, no history rewrite
+## @invariants
+##   - Triggers on workflow_run: platform-test completed successfully (push only)
+##   - Push filter: github.event.workflow_run.event == 'push' prevents mirror on PR trigger
+##   - Also supports workflow_dispatch for manual mirror
+##   - Blocking SHA verification for workflow_dispatch (API check)
+##   - Never triggers on push from mirror (recursion guard)
+##   - GIT_MIRROR_TOKEN must have Contents:Write on TronyxLab/ai-platform
+##   - Mirror stays up-to-date without force push
+## @rationale SHA-aware aggregator (D4) ensures only tested code is mirrored.
+##            Plan 2 consolidation: main-full-gate removed, trigger on platform-test.
+## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
+# endregion MODULE_CONTRACT
+# ═══════════════════════════════════════════════════════════════════
+# MODULE_CONTRACT: Mirror workflow — SHA-aware auto-sync from Tronyx161/ai-platform to TronyxLab/ai-platform
+# ═══════════════════════════════════════════════════════════════════
+# ## @purpose:   SHA-aware mirror sync: triggers on platform-test completion.
+#                Verifies gate passed before mirroring. Prevents mirroring untested code.
+# ## @scope:     Source → Destination push only; no force push, no history rewrite
+# ## @invariants:
+#                - Triggers on workflow_run: platform-test completed successfully
+#                - Also supports workflow_dispatch for manual mirror
+#                - Blocking SHA verification for workflow_dispatch (API check)
+#                - Never triggers on push from mirror (recursion guard)
+#                - GIT_MIRROR_TOKEN must have Contents:Write on TronyxLab/ai-platform
+#                - Mirror stays up-to-date without force push
+# ## @rationale:  SHA-aware aggregator (D4) ensures only tested code is mirrored.
+#                Mirror in TronyxLab is read-only, used by TronyxLab CI.
+# 🧐 TRAP[DECISION] · 2026-07-11 · — · platform-test not verified via API
+# · Rejected: dual workflow verification (main-full-gate + platform-test)
+# · Reason: platform-test runs on every PR/push — its completion is a weak signal
+# ·   (PR may not be merged). main-full-gate is the final gate. Checking both
+# ·   is redundant. Accepted in 002-fix-gate-coverage.
+# ## @changes:    2026-07-15 · Switched trigger to platform-test per Plan 2
+# ## @changes:    2026-07-10 · SHA-aware verification per TestsMetaDevPlan2.md TASK-7
+# ## @changes:    2026-07-07 · Initial implementation (TASK-3)
+# ## @links:      AGENTS.md §Architecture
+# ═══════════════════════════════════════════════════════════════════
+
+# 🧐 TRAP[DECISION] · 2026-07-07 · — · Recursion guard via repository_owner check
+# · Rejected: `[skip ci]` in commit message of mirrored commits
+# · Reason: `if: github.repository_owner == 'Tronyx161'` prevents the mirror.yml
+# ·   from re-triggering when the mirror push arrives at TronyxLab/ai-platform.
+# · Rev: If this workflow is ever copied to TronyxLab/ai-platform with the same
+# ·   guard, it would never fire — that is the desired invariant.
+
+name: Mirror to TronyxLab
+
+on:
+  workflow_run:
+    workflows: ["platform-test"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-mirror:
+    if: >
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+       && github.event.workflow_run.event == 'push'
+       || github.event_name == 'workflow_dispatch')
+      && github.repository_owner == 'Tronyx161'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # region STEP_ResolveSHA
+      ## @purpose: Resolve SHA + verify platform-test via canonical composite action
+      ## @io:      Event context → SHA output for subsequent steps
+      - name: Resolve SHA + verify platform-test
+        id: sha
+        uses: ./.github/actions/sha-resolve
+        with:
+          verify: 'true'
+      # endregion STEP_ResolveSHA
+
+      # region STEP_Checkout
+      ## @purpose: Full checkout with complete git history for accurate mirror push
+      ## @io:      Source: Tronyx161/ai-platform@main → Local: full clone
+      ## @complexity: O(1) — fixed step
+      - name: Checkout full repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.sha.outputs.sha }}
+      # endregion STEP_Checkout
+
+      # region STEP_PushToMirror
+      ## @purpose: Push all commits on main to TronyxLab/ai-platform mirror
+      ## @io:      Local main branch → TronyxLab/ai-platform main branch
+      ## @complexity: O(n) — proportional to commit count since last sync
+      - name: Push to TronyxLab/ai-platform
+        env:
+          GIT_MIRROR_TOKEN: ${{ secrets.GIT_MIRROR_TOKEN }}
+        run: |
+          # ──────────────────────────────────────────────────────────
+          # [IMP:9][PUSH][CONFIG] Set up mirror remote with GIT_ASKPASS
+          # ⚠️ TRAP[BUG] · 2026-07-16 · HI · token-in-URL → GIT_ASKPASS
+          # · Symptom: токен в remote URL (виден в git remote -v, конфиге и процесс-листе)
+          # · Root: gate сканировал только core/**/*.sh, не .github/**/*.yml
+          # · Fix: GIT_ASKPASS — временный скрипт в $RUNNER_TEMP, URL без креденшалов
+          # · Prevention: TASK-4 расширяет скоуп credential-gate на .github/**/*.yml
+          # ──────────────────────────────────────────────────────────
+
+          # Cleanup handler — удаляет GIT_ASKPASS при любом завершении шага
+          cleanup() { rm -f "${RUNNER_TEMP}/git-askpass.sh" 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          # Создаём временный GIT_ASKPASS-скрипт
+          export GIT_ASKPASS="${RUNNER_TEMP}/git-askpass.sh"
+          cat > "${GIT_ASKPASS}" <<-'ASKPASS_EOF'
+          #!/usr/bin/env bash
+          echo "${GIT_MIRROR_TOKEN}"
+          ASKPASS_EOF
+          chmod 700 "${GIT_ASKPASS}"
+
+          # Remote URL без креденшалов — GIT_ASKPASS передаёт токен на запрос
+          git remote add mirror \
+            https://github.com/TronyxLab/ai-platform.git
+
+          # ──────────────────────────────────────────────────────────
+          # [IMP:8][PUSH][EXECUTE] Push main to mirror with GPG signing disabled
+          # ──────────────────────────────────────────────────────────
+          if git -c commit.gpgsign=false push mirror HEAD:main 2>&1; then
+            echo "[IMP:9][MIRROR][PUSH] Push to TronyxLab/ai-platform successful"
+          else
+            echo "[IMP:10][MIRROR][PUSH] FAILED: push to TronyxLab/ai-platform failed"
+            exit 1
+          fi
+
+          # ──────────────────────────────────────────────────────────
+          # [IMP:8][MIRROR][VERIFY] Post-push verification
+          # ──────────────────────────────────────────────────────────
+          MIRROR_HEAD=$(git ls-remote mirror HEAD | awk '{print $1}')
+          SOURCE_HEAD=$(git rev-parse HEAD)
+          echo "[IMP:8][MIRROR][VERIFY] Source HEAD: ${SOURCE_HEAD}"
+          echo "[IMP:8][MIRROR][VERIFY] Mirror HEAD: ${MIRROR_HEAD}"
+
+          if [[ "${MIRROR_HEAD}" != "${SOURCE_HEAD}" ]]; then
+            echo "[IMP:10][MIRROR][VERIFY] FAIL: mirror HEAD (${MIRROR_HEAD:0:7}) != source HEAD (${SOURCE_HEAD:0:7})"
+            exit 1
+          fi
+          echo "[IMP:9][MIRROR][VERIFY] Mirror sync verified: ${SOURCE_HEAD:0:7}"
+
+      # 💼 TRAP[DEBT] · 2026-07-07 · LOW · Manual force-sync may be needed
+      # · If mirror.yml push fails due to non-fast-forward, manual force-sync:
+      # ·   git remote add mirror https://github.com/TronyxLab/ai-platform.git
+      # ·   git push -f mirror HEAD:main
+      # · Prevention: never force-push to Tronyx161/ai-platform main branch.
+      # ·
+      # · ⚠️ DO NOT EDIT code in TronyxLab/ai-platform — changes will be overwritten.
+      # endregion STEP_PushToMirror

@@ -1,0 +1,26 @@
+{
+  "host": "103.88.243.151",
+  "hostname": "tronyx-vps",
+  "auth_method": "ssh",
+  "workdir": "/opt/core",
+  "user": "platform",
+  "node_name": "tronyx-vps",
+  "os_type": "linux",
+  "os_version": "Ubuntu 24.04 (6.8.0-124-generic x86_64)",
+  "shell": "/bin/bash",
+  "package_manager": "apt",
+  "case_sensitive_fs": true,
+  "node_context": "production",
+  "secrets": {
+    "secrets_env_path": "/run/platform/secrets.env",
+    "secrets_env_note": "tmpfs, AGE-decrypted, created by bootstrap.sh. Read via SSH, not stored locally.",
+    "platform_env_path": "/opt/platform/.env",
+    "module_env_path": "/opt/core/modules/hermes-agent/.env",
+    "ghcr_pull_token_env": "GHCR_PULL_TOKEN",
+    "token_scope_required": "write:packages"
+  },
+  "networks": {
+    "tor_proxy_port": 8118,
+    "tor_proxy_url": "http://172.23.0.1:8118"
+  }
+}

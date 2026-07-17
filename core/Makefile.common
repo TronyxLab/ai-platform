@@ -1,0 +1,26 @@
+# Makefile.common — Shared targets for all modules
+# Usage: MODULE_NAME := <name>; include ../../Makefile.common
+
+COMPOSE_CMD ?= docker compose
+
+.PHONY: start stop restart status logs build up
+
+start:
+	$(COMPOSE_CMD) up -d
+
+stop:
+	$(COMPOSE_CMD) down
+
+restart: stop start
+
+status:
+	$(COMPOSE_CMD) ps
+
+logs:
+	$(COMPOSE_CMD) logs -f
+
+build:
+	$(COMPOSE_CMD) build
+
+up:
+	$(COMPOSE_CMD) up -d --force-recreate

@@ -1,0 +1,50 @@
+# GREP_SUMMARY: docker-compose test template override container_name-test port healthcheck restart
+# STRUCTURE: base.yml + test.yml → canonical test-overlay: container_name=-test, restart:no, Docker-managed volumes
+# region MODULE_CONTRACT
+## @purpose  Канонический шаблон test-overlay для Docker-модулей — каждый сервис получает -test суффикс container_name
+## @scope    Используется для всех 11 Docker-модулей. Обеспечивает параллельный запуск make up + make test без конфликтов имён.
+## @usage    Заменить {{MODULE_NAME}}, {{TEST_PORT}}, {{TEST_NETWORK}} на актуальные значения.
+##           Для модулей с несколькими контейнерами — повторить блок services для каждого контейнера.
+## @invariants
+##   - container_name: <container>-test (для ВСЕХ контейнеров модуля) — предотвращает конфликты с production
+##   - restart: "no" — тестовые контейнеры не должны авто-перезапускаться
+##   - Volumes: Docker-managed (не bind-mount — macOS-совместимость)
+##   - Port mappings: смещённые по правилу `1{port}` — к оригинальному номеру порта добавляется префикс `1`
+##     (например, 80 → 18080, 443 → 18443, 5432 → 15432). Всегда биндить на 127.0.0.1.
+##   - Healthcheck: ускоренный (start_period=10s, interval=10s) для CI
+##   - Все остальные настройки сервиса — без изменений из base.yml
+## @collision-policy
+##   - Если `1{port}` уже занят другим production портом (например, 8080 → 18080 коллизит с production 8080,
+##     если тестируемый модуль использует порт 8000 → 18000 коллизит с 8000), то коллизию резолвит
+##     разработчик модуля одним из:
+##     (a) 2{port} — префикс `2` вместо `1` (например, 8000 → 28000)
+##     (b) Сдвиг в другую десятичную разрядность (например, 3XXXX)
+##     (c) Документировать коллизию в TRAP[DECISION] модуля и явно задать свободный порт
+##   - Все порты тестового контейнера должны быть явно перечислены — Docker Compose merge НЕ склеивает
+##     порты из base.yml при использовании `ports: !override` (см. TRAP[BUG] nginx).
+##   - Порты без коллизий строго следуют `1{port}` — никаких произвольных смещений.
+## @rationale container_name в Docker Compose НЕ переопределяется через env vars.
+##   Единственный способ переопределить — через override-файл. Единый шаблон гарантирует
+##   одинаковое поведение для всех модулей. (DD2 из DevPlan 04)
+## @changes
+##   2026-07-09 · Created from hermes-agent docker-compose.test.yml as parameterized template
+##   2026-07-15 · Канонический шаблон: restart:no, Docker-managed volumes, -test suffix
+# endregion MODULE_CONTRACT
+
+services:
+  {{CONTAINER_NAME}}:
+    container_name: {{CONTAINER_NAME}}-test
+    # Port shift rule: TEST_PORT = "1" + ORIGINAL_PORT (e.g., 80→18080). Collision policy in @invariants.
+    ports:
+      - "127.0.0.1:{{TEST_PORT}}:{{ORIGINAL_PORT}}"
+    volumes:
+      - {{VOLUME_NAME}}-test:/var/lib/data:rw
+    restart: "no"
+    # Accelerated healthcheck for CI/smoke
+    healthcheck:
+      start_period: 10s
+      interval: 10s
+
+volumes:
+  {{VOLUME_NAME}}-test:
+    driver: local

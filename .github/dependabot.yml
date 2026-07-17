@@ -1,0 +1,28 @@
+# GREP_SUMMARY: dependabot github-actions weekly automated updates
+# STRUCTURE: ┌weekly schedule┐ → ◇ scan GHA workflows → ○ check version bumps → ⊕ create PR → ⎋ exit
+# region MODULE_CONTRACT
+## @purpose  Automated dependency updates for GitHub Actions via Dependabot
+## @scope    Scans all workflow files in / for action version bumps
+## @invariants
+##   - Weekly schedule: Monday 09:00 MSK (Europe/Moscow)
+##   - Max 5 open PRs at once
+##   - Commit message prefix: "chore(scope)"
+## @rationale
+##   SHA-pinned actions need regular updates to stay current with security patches.
+##   Dependabot automates this while keeping PR volume manageable (5 limit).
+##   Weekly cadence matches typical GHA release cycle.
+# endregion MODULE_CONTRACT
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/Moscow"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"

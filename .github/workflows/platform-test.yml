@@ -1,0 +1,343 @@
+# GREP_SUMMARY: platform-test unified-gate full-gate integration-live error-path monitoring-logging cleanup
+# STRUCTURE: on:pull_request+push(main) → job(platform-test:checkout→gitleaks→pre-commit→dora→fast-gate→docker-setup→provision→build→full-gate→integration→cleanup)
+# region MODULE_CONTRACT
+## @purpose — Unified CI gate for platform code quality: fast gate (no Docker) + full gate (Docker) + integration tests.
+##            Consolidates former static-gate + basedpyright-tests + platform-integration into a single job (Plan 2).
+## @scope — Runs in GitHub Actions on ai-platform repository. Serves as the single gate for push to main (replaces main-full-gate.yml).
+## @invariants
+##   - Single unified job: platform-test (replaces 3 separate jobs)
+##   - Fast gate (make gate MODE=fast) runs BEFORE Docker setup — fail-fast on syntax/static issues
+##   - Full gate (make gate MODE=full) runs AFTER Docker provisioning — includes smoke + component tests
+##   - Integration tests: error-path (always) + live (when secrets available)
+##   - All obsolescence references use monitoring + logging (not observability) — D1 fix
+##   - basedpyright-tests removed (informational only, never blocked merge)
+##   - gitleaks uses composite action setup-gitleaks (single source of truth)
+##   - Provisioner: provision-environment.sh from platform-env.yaml (Plan 1)
+##   - Cleanup runs unconditionally
+## @rationale — Plan 2 CI Unification: 9→7 workflows. Single job eliminates race condition P6
+##   (dual main-full-gate + platform-integration make gate MODE=full). Fast gate before Docker
+##   provides <3 min feedback for syntax/static issues. D1 fix removes observability dead reference.
+## @changes — 2026-07-15 | Consolidated 3 jobs→1 unified job per DevPlan 002 TASK-3
+## @changes — 2026-07-15 | D1 fix: observability→monitoring+logging paths
+## @changes — 2026-07-15 | Removed basedpyright-tests (informational only, never blocked)
+## @changes — 2026-07-15 | gitleaks inline install→composite action setup-gitleaks
+# endregion MODULE_CONTRACT
+
+name: platform-test
+
+# 🧐 TRAP[DECISION] · 2026-07-11 · — · pull_request_target chosen over pull_request
+# · Rejected: `pull_request` — workflow file runs from PR branch. An attacker with
+# ·   push access to the branch can modify the workflow to exfiltrate secrets
+# ·   (secrets are available in the PR context). GitHub Docs recommend against this.
+# · Reason: `pull_request_target` runs the workflow from the base branch (main),
+# ·   so the workflow file itself cannot be modified by the PR author. Combined
+# ·   with explicit `ref: ${{ github.event.pull_request.head.sha }}`, the checkout
+# ·   still tests the PR's code. This is the recommended pattern per GitHub Docs.
+# · Rev: if `pull_request_target` causes unexpected behavior with fork PRs
+# ·   (e.g., build failures due to missing secrets), consider `pull_request`
+# ·   with explicit secret-availability guards instead.
+#
+# 🧐 TRAP[DECISION] · 2026-07-10 · — · merge_group trigger removed (migrated from main-full-gate.yml)
+# · Rejected: merge_group + Repository Ruleset merge queue (TestsMetaDevPlan2 §4.4.1)
+# · Reason: GitHub Pro required for private repos (Tronyx161/ai-platform is PRIVATE).
+# ·   Branch Protection Rules (free) used instead: required checks on PR
+# ·   (platform-test unified job) block merge without Pro subscription.
+# ·   SHA-aware aggregator in deploy workflows provides additional post-merge safety net.
+# · Rev: when repo visibility changes to PUBLIC OR GitHub Pro is purchased:
+# ·   1. Add `merge_group:` trigger back to this workflow
+# ·   2. Configure Repository Ruleset with merge queue
+# ·   3. Add platform-test to required checks for merge queue
+
+on:
+  pull_request_target:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  platform-test:
+    name: Platform Test (unified gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      INTEGRATION_MODE: live
+      HERMES_DASHBOARD_PASSWORD: ${{ secrets.HERMES_DASHBOARD_PASSWORD }}
+
+    steps:
+      # ─── Stage 1: Setup (fast gate — no Docker needed) ──────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Fetch origin/main for inventory baseline
+        run: git fetch origin main:refs/remotes/origin/main --depth=1 || true
+
+      - name: Setup gitleaks (composite action)
+        uses: ./.github/actions/setup-gitleaks
+
+      - name: Setup Python venv
+        uses: ./.github/actions/setup-python-venv
+        with:
+          install-pre-commit: 'true'
+
+      - name: Cache pre-commit venv
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit hooks (gitleaks + check-doc-headers + code quality)
+        run: make pre-commit-run
+        env:
+          SKIP: "no-commit-to-branch"
+
+      # shellcheck — delegated to pre-commit hooks (single SoT)
+      # D1 fix: observability → monitoring (DORA dashboard path)
+      - name: Validate DORA dashboard JSON
+        run: |
+          echo "::group::DORA dashboard JSON validation"
+          python3 -c "
+          import json
+          path = 'core/modules/monitoring/config/dashboards/dora-ci-cd.json'
+          with open(path) as f:
+              data = json.load(f)
+          assert data.get('uid') == 'dora-ci-cd', 'Wrong UID'
+          panels = data.get('panels', [])
+          required = {'Deploy Frequency', 'Lead Time for Changes', 'Mean Time to Recovery (MTTR)', 'Change Failure Rate (CFR)'}
+          found = {p.get('title', '') for p in panels}
+          missing = required - found
+          assert not missing, f'Missing panels: {missing}'
+          print(f'DORA dashboard OK: {len(panels)} panels, {len(required)} required present')
+          "
+
+      # Fast gate before Docker setup — fail-fast on syntax/static issues
+      # Включает: py_compile syntax check, JSON validation, anti-drift gates, static tests, predeploy
+      - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
+        run: make gate MODE=fast
+
+      # ─── Stage 2: Docker setup + provisioning ───────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Authenticate Docker Hub (rate limit mitigation)
+        run: |
+          if [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
+            echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
+            echo "[IMP:8][docker] Docker Hub authenticated — rate limit 200/6h"
+          else
+            echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
+          fi
+
+      # Single Source of Truth: networks + volumes + env vars from platform-env.yaml
+      - name: Provision environment (networks + volumes + CI env defaults)
+        uses: ./.github/actions/provisioner-call
+        with:
+          scope: all
+
+      - name: Override HERMES_DASHBOARD_PASSWORD with secret (if available)
+        if: env.HERMES_DASHBOARD_PASSWORD != ''
+        run: echo "HERMES_DASHBOARD_PASSWORD=${{ secrets.HERMES_DASHBOARD_PASSWORD }}" >> "$GITHUB_ENV"
+
+      # D1 fix: observability → monitoring + logging in pre-pull
+      - name: Pre-pull Docker images (parallel)
+        continue-on-error: true
+        run: |
+          echo "::group::Pre-pulling Docker images (parallel)"
+          for compose_file in \
+            core/modules/backup-cron/docker-compose.base.yml \
+            core/modules/clickhouse/docker-compose.base.yml \
+            core/modules/hermes-agent/docker-compose.base.yml \
+            core/modules/infra-metrics/docker-compose.base.yml \
+            core/modules/langfuse/docker-compose.base.yml \
+            core/modules/litellm/docker-compose.base.yml \
+            core/modules/logging/docker-compose.base.yml \
+            core/modules/minio/docker-compose.base.yml \
+            core/modules/monitoring/docker-compose.base.yml \
+            core/modules/nginx/docker-compose.base.yml \
+            core/modules/postgres/docker-compose.base.yml \
+            core/modules/redis/docker-compose.base.yml; do
+            module=$(basename "$(dirname "$compose_file")")
+            (echo "[pull:$module] Starting..." && docker compose -f "$compose_file" pull --ignore-buildable 2>&1 | sed "s/^/[pull:$module] /" || echo "[pull:$module] WARNING: some images failed") &
+          done
+          wait
+          echo "[pull] All parallel pulls completed"
+          echo "[pull] Pulling postgres:16-alpine for monitoring test override..."
+          docker pull postgres:16-alpine 2>&1 || echo "[warn] postgres:16-alpine pull failed — continuing"
+          echo "::endgroup::"
+
+      # ─── Stage 3: Build Docker images ────────────────────────────────
+      - name: Build backup-cron image (scoped GHA cache)
+        uses: ./.github/actions/docker-build-cache
+        with:
+          context: core/modules/backup-cron
+          tags: backup-cron:latest
+          cache-scope: backup-cron
+
+      - name: Build hermes-agent-base image (scoped GHA cache)
+        uses: ./.github/actions/docker-build-cache
+        with:
+          context: core/modules/hermes-agent/build
+          file: core/modules/hermes-agent/build/Dockerfile
+          tags: hermes-agent-base:latest
+          cache-scope: hermes-agent-base
+
+      # ─── Stage 4: Full Gate (Docker-dependent) ──────────────────────
+      - name: Diagnostic — LiteLLM pre-flight (stale containers + image digest)
+        run: |
+          echo "=== LiteLLM Pre-flight Diagnostic ==="
+          echo ""
+
+          # 1. Check for stale litellm containers from previous runs
+          echo "--- Stale litellm-test containers ---"
+          docker ps -a --filter "name=litellm-test" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" || echo "(none)"
+          echo ""
+
+          # 2. Verify LiteLLM image is available locally
+          echo "--- LiteLLM image existence check ---"
+          LITELLM_IMAGE="ghcr.io/berriai/litellm:v1.91.2"
+          if docker image inspect "${LITELLM_IMAGE}" >/dev/null 2>&1; then
+            echo "[IMP:9][litellm-preflight] Image ${LITELLM_IMAGE} present"
+          else
+            echo "[IMP:9][litellm-preflight] Image ${LITELLM_IMAGE} NOT found — pull required"
+            echo "Run: docker pull ${LITELLM_IMAGE}"
+          fi
+          echo ""
+
+          # 3. Check Docker disk space (monitoring + logging stacks ~4GB total)
+          echo "--- Docker disk usage ---"
+          docker system df --format "table {{.Type}}\t{{.TotalCount}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/null || echo "(df failed)"
+          echo ""
+
+          # 4. Check available system memory
+          echo "--- System memory ---"
+          free -h 2>/dev/null || vm_stat 2>/dev/null || echo "(memory info unavailable)"
+        shell: bash
+
+      - name: Run full gate (lint + validate + anti-drift + contract + static + predeploy + smoke + component)
+        id: full_gate
+        run: |
+          make gate MODE=full
+
+      # ─── Stage 5: Diagnostic on failure ────────────────────────────
+      - name: Diagnostic — dump container states on failure
+        if: failure()
+        run: |
+          echo "=== All Running Containers ==="
+          docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
+          echo ""
+
+          echo "=== LiteLLM Container Logs (full startup, litellm-test) ==="
+          if docker ps -a --format "{{.Names}}" | grep -q "litellm-test"; then
+            docker logs litellm-test 2>&1 || echo "(no logs)"
+          else
+            echo "litellm-test container not found — may have been cleaned up"
+          fi
+          echo ""
+
+          echo "=== Failed Container Logs (last 100 lines each) ==="
+          for c in $(docker ps -a --format "{{.Names}}" | grep -E "(test$|ai-platform)" || true); do
+            echo "--- Logs for $c ---"
+            docker logs "$c" --tail 100 2>&1 || echo "(no logs)"
+            echo ""
+          done
+          echo "=== Healthcheck Status ==="
+          for c in $(docker ps -a --format "{{.Names}}" | grep -E "(test$|ai-platform)" || true); do
+            echo "$c: $(docker inspect "$c" --format '{{.State.Health.Status}}' 2>/dev/null || echo 'no healthcheck')"
+          done
+          echo ""
+          echo "=== Docker Compose Debug Log ==="
+          if [ -f /tmp/docker-compose-up-failed.log ]; then
+            cat /tmp/docker-compose-up-failed.log
+          else
+            echo "/tmp/docker-compose-up-failed.log not found"
+          fi
+        shell: bash
+
+      # ─── Stage 6: Integration Tests ─────────────────────────────────
+      - name: Integration test — error-path mode (no API keys needed)
+        id: integration_error_path
+        run: |
+          INTEGRATION_MODE=error-path make test MARKER=integration && rc=0 || rc=$?
+          if [ $rc -eq 5 ]; then
+            echo "[integration-error-path] No integration tests collected — skipping (exit 5 is OK)"
+            exit 0
+          fi
+          exit $rc
+
+      - name: Integration test — live mode (requires API keys)
+        id: integration_live
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+        run: |
+          if [ -z "${{ secrets.DEEPSEEK_API_KEY }}" ] || [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "[IMP:9][integration-live] Required API keys not available — skipping live integration (fork PR path)"
+            exit 0
+          fi
+          make test MARKER=integration && rc=0 || rc=$?
+          if [ $rc -eq 5 ]; then
+            echo "[integration-live] No integration tests collected — skipping (exit 5 is OK)"
+            exit 0
+          fi
+          exit $rc
+
+      # ─── Stage 7: Job Summary ─────────────────────────────────────
+      - name: Generate Job Summary with stage timing
+        if: always()
+        run: |
+          {
+            echo "## ⏱️ CI Stage Timing — platform-test (unified)"
+            echo ""
+            echo "| Stage | Duration |"
+            echo "|-------|----------|"
+            echo "| Setup + Fast Gate | (see individual step logs) |"
+            echo "| Docker Setup + Provision | (see individual step logs) |"
+            echo "| Pre-pull + Build  | (see individual step logs) |"
+            echo "| Full Gate         | (see step timing in UI) |"
+            echo "| Integration (error-path) | (see step timing in UI) |"
+            echo "| Integration (live) | (see step timing in UI) |"
+            echo "| Cleanup           | (see step timing in UI) |"
+            echo ""
+            echo "_Timing details available in individual step logs._"
+            echo ""
+            echo "### Gate Strategy"
+            echo "- Fast gate: static_audit + gates + predeploy (no Docker, <3 min)"
+            echo "- Full gate: lint + validate + gates + contract + static + predeploy + smoke + component"
+            echo "- Integration: error-path (no tokens) + live (real API call)"
+            echo ""
+            echo "### Links"
+            echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─── Stage 8: Cleanup ──────────────────────────────────────────
+      # D1 fix: observability → monitoring + logging in cleanup
+      - name: Cleanup Docker resources
+        if: always()
+        run: |
+          echo "::group::Cleanup Docker Compose stacks"
+          for compose_file in \
+            core/modules/backup-cron/docker-compose.base.yml \
+            core/modules/clickhouse/docker-compose.base.yml \
+            core/modules/hermes-agent/docker-compose.base.yml \
+            core/modules/infra-metrics/docker-compose.base.yml \
+            core/modules/langfuse/docker-compose.base.yml \
+            core/modules/litellm/docker-compose.base.yml \
+            core/modules/logging/docker-compose.base.yml \
+            core/modules/minio/docker-compose.base.yml \
+            core/modules/monitoring/docker-compose.base.yml \
+            core/modules/nginx/docker-compose.base.yml \
+            core/modules/postgres/docker-compose.base.yml \
+            core/modules/redis/docker-compose.base.yml; do
+            if [ -f "$compose_file" ]; then
+              docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
+              docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
+            fi
+          done
+          echo "::endgroup::"

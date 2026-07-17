@@ -1,0 +1,58 @@
+# GREP_SUMMARY: sudo-whitelist template roles owner agent ci monitor make-targets no-stop
+# region MODULE_CONTRACT
+## @purpose  Declarative sudo permission map template — parameterized per module
+## @scope    Parsed by bootstrap/setup-node.sh generate_sudoers_for_module() to emit /etc/sudoers.d/
+## @usage    Replace {{MODULE_NAME}} with module name (e.g. hermes-agent)
+## @invariants
+##   - agent: status, logs, restart, backup — NO stop (agent cannot stop itself, 07 §2.3)
+##   - owner: ALL targets (full control)
+##   - ci: start, stop, restart, status, logs — CI/CD pipeline (no backup triggers from CI)
+##   - monitor: status, logs only (read-only observability)
+##   - Format: <role> make:<target> <absolute-makefile-path>
+##   - Template path: /opt/core/modules/{{MODULE_NAME}}/Makefile
+##   - Generated via visudo -c + atomic mv (lockout-safe, 00 §12)
+## @rationale Agent cannot stop itself — prevents self-shutdown that would break monitoring (07 §2.3)
+##   Restore omitted — Phase 2 scope; if needed later, add make:restore explicitly
+## @changes
+##   2026-07-09 · Created from hermes-agent sudo-whitelist.conf as parameterized template
+##   · Removed build/deploy/build-local targets (removed in Phase 2)
+## @modulemap MODULE_NAME → module directory and Makefile path
+# endregion MODULE_CONTRACT
+
+# AUTO-GENERATED — do not edit directly.
+# Source of truth: core/templates/sudo-whitelist.template
+# Module name is substituted at bootstrap time: sed "s/{{MODULE_NAME}}/<name>/g"
+# Generated from core/templates/sudo-whitelist.template
+
+# Module: {{MODULE_NAME}}
+# Sudo whitelist — merged into /etc/sudoers.d/platform-{{MODULE_NAME}} by setup-node.sh
+# Template: replace {{MODULE_NAME}} with actual module name before deployment
+#
+# Usage:
+#   sed "s/{{MODULE_NAME}}/$(MODULE_NAME)/g" sudo-whitelist.template > sudo-whitelist.conf
+#   Or: cp sudo-whitelist.template <module-dir>/sudo-whitelist.conf && edit placeholders
+
+# owner — full control (ALL make targets)
+owner make:start    /opt/core/modules/{{MODULE_NAME}}/Makefile
+owner make:stop     /opt/core/modules/{{MODULE_NAME}}/Makefile
+owner make:restart  /opt/core/modules/{{MODULE_NAME}}/Makefile
+owner make:status   /opt/core/modules/{{MODULE_NAME}}/Makefile
+owner make:logs     /opt/core/modules/{{MODULE_NAME}}/Makefile
+owner make:backup   /opt/core/modules/{{MODULE_NAME}}/Makefile
+
+# agent — status, logs, restart, backup — NO stop (07 §2.3)
+agent make:status   /opt/core/modules/{{MODULE_NAME}}/Makefile
+agent make:logs     /opt/core/modules/{{MODULE_NAME}}/Makefile
+agent make:restart  /opt/core/modules/{{MODULE_NAME}}/Makefile
+agent make:backup   /opt/core/modules/{{MODULE_NAME}}/Makefile
+
+# ci — start, stop, restart, status, logs (CI/CD pipeline, no backup from CI)
+ci make:start       /opt/core/modules/{{MODULE_NAME}}/Makefile
+ci make:stop        /opt/core/modules/{{MODULE_NAME}}/Makefile
+ci make:restart     /opt/core/modules/{{MODULE_NAME}}/Makefile
+ci make:status      /opt/core/modules/{{MODULE_NAME}}/Makefile
+ci make:logs        /opt/core/modules/{{MODULE_NAME}}/Makefile
+
+# monitor — read-only status and logs
+monitor make:status /opt/core/modules/{{MODULE_NAME}}/Makefile
+monitor make:logs   /opt/core/modules/{{MODULE_NAME}}/Makefile

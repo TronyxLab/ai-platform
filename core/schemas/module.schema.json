@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-platform.tronyx.ru/schemas/module.schema.json",
+  "title": "Module Descriptor (D4)",
+  "description": "D4-формат module.yaml — Source of Truth: core/modules/AGENTS.md §module.yaml D4 контракт",
+  "type": "object",
+  "required": ["name", "install_type", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Имя модуля — совпадает с именем директории в core/modules/"
+    },
+    "install_type": {
+      "type": "string",
+      "enum": ["docker", "system"],
+      "description": "Тип установки: docker (compose) или system (apt/pip)"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Человекочитаемое описание модуля"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Список модулей, от которых зависит этот модуль (для _topo_sort.py)"
+    },
+    "spool_dir": {
+      "type": "string",
+      "description": "Абсолютный путь к spool-директории на хосте"
+    },
+    "spool_volume": {
+      "type": "string",
+      "description": "Имя Docker volume для persistent данных"
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "limits": {
+          "type": "object",
+          "properties": {
+            "memory": {"type": "string"},
+            "cpus": {"type": "string"}
+          }
+        },
+        "reservations": {
+          "type": "object",
+          "properties": {
+            "memory": {"type": "string"},
+            "cpus": {"type": "string"}
+          }
+        }
+      }
+    },
+    "env_shared": {
+      "type": "object",
+      "description": "Переменные окружения, общие для всех контейнеров модуля"
+    },
+    "env_requires": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Обязательные ключи в .env/secrets для работы модуля"
+    }
+  },
+  "additionalProperties": true
+}

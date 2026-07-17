@@ -1,0 +1,395 @@
+# GREP_SUMMARY: entrypoint-manifest, yaml, canonical-targets, operations-registry, forbidden
+# STRUCTURE: ┌Makefile targets┐ → ◇ map target→script→delegation → ⊕ CI gates verify parity with AGENTS.md triad
+# region MODULE_CONTRACT
+## @purpose  Canonical operations registry consumed by CI gates (no-unregistered-entrypoint, manifest-integrity). Each entry defines a make target, its mechanism, delegation path, and description.
+## @scope    Lists all canonical make targets, CI gates, forbidden scripts/directories/verbs, and allowed_verbs dictionary
+## @invariants
+##   - Every Makefile .PHONY target must have a corresponding entry in this manifest
+##   - Every entry here must have a corresponding entry in core/AGENTS.md
+##   - allowed_verbs list must match Makefile canonical targets
+##   - Forbidden lists are explicit deny — no additions without Architect approval
+## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad
+##            automatically. Manual sync validation replaced by automated parity checks (Phase 5).
+##            YAML chosen over JSON for inline comments and readability in code review.
+# endregion MODULE_CONTRACT
+# =============================================================================
+# core/entrypoint-manifest.yaml
+# =============================================================================
+# SYNCHRONIZED WITH: core/AGENTS.md (table of canonical operations)
+# USED BY: CI gates (no-unregistered-entrypoint, manifest-integrity)
+# =============================================================================
+
+bootstrap:
+  - make_target: bootstrap-node
+    mechanism: ssh+rsync
+    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/deploy-modules.sh
+    description: "Idempotent bootstrap of a new node (LIFE CYCLE/INIT, not DEPLOY)"
+
+deploy:
+  - make_target: deploy
+    mechanism: git-push-ci
+    delegates_to: core/entrypoints/deploy.sh → git push → CI → core/internal/deploy/deploy-project.sh → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh
+    description: "Deploy a project via git push → CI → SSH forced-command on VPS"
+  - make_target: context-promote
+    mechanism: git-push-context
+    delegates_to: core/entrypoints/context-promote.sh → copy to <context>/ai-platform → CI
+    description: "Promote platform to a context org (copy + CI + auto-deploy)"
+
+build:
+  - make_target: hermes-build-platform
+    mechanism: docker-build
+    delegates_to: core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-platform
+    description: "Build L1 (hermes-agent-base) locally + push to ghcr.io as backup"
+  - make_target: hermes-build-context
+    mechanism: docker-build
+    delegates_to: core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context
+    description: "Build L1→L2 (hermes-agent-context), optionally push to GHCR"
+  - make_target: hermes-push-l1
+    mechanism: docker-push
+    delegates_to: "docker tag + docker push to ghcr.io"
+    description: "Push L1 (hermes-agent-base) to ghcr.io as disaster recovery backup"
+
+validate:
+  - make_target: validate
+    mechanism: shell-script
+    delegates_to: core/entrypoints/validate.sh → core/internal/validate/validate.sh
+    description: "Schema validation of project files"
+  - make_target: lint
+    mechanism: shell-script
+    delegates_to: core/entrypoints/validate.sh --lint → core/internal/validate/validate.sh
+    description: "shellcheck + yamllint + pytest-lint"
+  - make_target: audit
+    mechanism: shell-script
+    delegates_to: core/entrypoints/audit.sh → core/internal/audit/audit.sh
+    description: "System audit of platform (local or remote node)"
+  - make_target: check-file-lines
+    mechanism: shell-script
+    delegates_to: core/entrypoints/check-file-lines.sh
+    description: "Scan files exceeding line limit (default 500) — non-blocking warning"
+
+# NOTE: lint.sh = pre-commit hooks only, validate.sh --lint = CI/manual linting
+lint:
+  - script: lint.sh
+    mechanism: pre-commit-hook
+    delegates_to: core/entrypoints/lint.sh
+    description: "Pre-commit hook runner for GREP_SUMMARY validation + target name check"
+  - script: check-doc-headers.sh
+    mechanism: pre-commit-hook
+    delegates_to: core/entrypoints/check-doc-headers.sh
+    description: "Validates GREP_SUMMARY, MODULE_CONTRACT, STRUCTURE, regions in source files"
+  - script: check-commit-msg.sh
+    mechanism: commit-msg-hook
+    delegates_to: core/entrypoints/check-commit-msg.sh
+    description: "Conventional Commits message validation (commit-msg hook)"
+
+test:
+  - make_target: test
+    mechanism: pytest
+    delegates_to: "make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]"
+    description: "Run tests with MARKER filter. MARKER=all (default) runs full suite."
+  - make_target: test-inventory-sync
+    mechanism: pytest-collect
+    delegates_to: tests/tools/sync_inventory.py
+    description: "Regenerate tests/test_inventory.yaml from pytest --collect-only"
+
+scaffold:
+  - make_target: new-project
+    mechanism: shell-script
+    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh
+    description: "Create a new project from template"
+  - make_target: new-context
+    mechanism: shell-script
+    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh
+    description: "Create a new deployment context (GitHub org + repos)"
+
+secrets:
+  - make_target: secrets-unlock
+    mechanism: shell-script
+    delegates_to: core/entrypoints/secrets.sh → core/internal/secrets/decrypt-secrets.sh
+    description: "Decrypt SOPS/age secrets (local or remote node)"
+
+test/gate:
+  - make_target: gate
+    mechanism: pytest+lint
+    delegates_to: "make gate [MODE=fast|full]"
+    description: "Production gate. MODE=full (default): lint+validate+gates+static+predeploy+smoke+component. MODE=fast: syntax+JSON+gates+static+predeploy (no Docker)."
+  - script: pre-push-gate.sh
+    mechanism: pre-push-hook
+    delegates_to: core/entrypoints/pre-push-gate.sh
+    description: "Blocking pre-push gate that runs make gate MODE=fast"
+
+lifecycle:
+  - make_target: healthcheck
+    mechanism: shell-script
+    delegates_to: core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh
+    description: "Health check of platform (local compose or remote node via SSH)"
+  - make_target: up
+    mechanism: provisioner + docker-compose
+    delegates_to: core/internal/provision-environment.sh → docker compose up
+    description: "Provision environment (networks, volumes, CI env) from platform-env.yaml, then start local compose lifecycle"
+  - make_target: down
+    mechanism: docker-compose
+    delegates_to: "docker compose down"
+    description: "Stop local compose lifecycle"
+  - make_target: restart
+    mechanism: docker-compose
+    delegates_to: "docker compose down && docker compose up -d"
+    description: "Hard restart local compose services (down + up -d)"
+  - make_target: status
+    mechanism: docker-compose
+    delegates_to: "docker compose ps"
+    description: "Show status of local compose services"
+  - make_target: backup
+    mechanism: shell-script
+    delegates_to: "Module backup scripts"
+    description: "Run backup for platform services"
+  - make_target: restore
+    mechanism: shell-script
+    delegates_to: "Module restore scripts"
+    description: "Restore from backup"
+  - make_target: node-update
+    mechanism: ssh+rsync
+    delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → provision + deploy-modules + healthcheck
+    description: "Regular CI update of an already-provisioned node (not INIT)"
+
+# ---------------------------------------------------------------------------
+# Provision — environment provisioning (P5: Single Source of Truth)
+# Consumed by Makefile up, CI workflows, and deploy-modules.sh
+# ---------------------------------------------------------------------------
+provision:
+  - make_target: provision
+    mechanism: shell-script
+    delegates_to: core/internal/provision-environment.sh
+    description: "Idempotent environment provisioner — reads platform-env.yaml and creates Docker networks, volume directories, and CI env vars"
+
+# ---------------------------------------------------------------------------
+# Dev — local development operations
+# ---------------------------------------------------------------------------
+dev:
+  - make_target: discover-modules
+    mechanism: python-script
+    delegates_to: core/internal/bootstrap/discover_modules.py
+    description: "Auto-discover modules and regenerate docker-compose.yml include section"
+  - make_target: dev-certs
+    mechanism: shell-script
+    delegates_to: core/modules/nginx/generate-dev-certs.sh
+    description: "Idempotent generation of self-signed dev SSL certificates for nginx (hybrid mkcert→openssl)"
+
+# ---------------------------------------------------------------------------
+# Module lifecycle — targets from core/templates/module.mk + system module ops
+# These are NOT in the canonical verb dictionary (not in AGENTS.md table)
+# but are valid targets for module Makefiles. Consumed by CI gates
+# (no-unregistered-entrypoint, name-linter) as the single source of truth.
+# ---------------------------------------------------------------------------
+module_lifecycle:
+  - start
+  - stop
+  # restart uses hard restart semantics: docker compose down && docker compose up -d
+  - restart
+  - status
+  - logs
+  - build
+  - up
+  - backup
+  - restore
+
+# ---------------------------------------------------------------------------
+# Name linter configuration — rules for make target name validation
+# Consumed by bash (lint.sh namelint). Python linter logic migrated to
+# test_gate_manifest_integrity.py internal helper (name_linter.py deleted).
+# MODULE_DICTIONARY is defined as: module_lifecycle ∪ {"backup", "help"}
+# (backup is in lifecycle, help is a system exception).
+# ---------------------------------------------------------------------------
+name_linter:
+  system_exceptions:
+    - help
+    - venv
+    - pre-commit-install
+    - pre-commit-run
+  system_prefixes:
+    - test-
+    - gate-
+    - pre-commit-
+  namespace_collision_names:
+    - deploy
+
+# ---------------------------------------------------------------------------
+# CI gates — anti-drift validation (Phase 5)
+# Every gate is a pytest test in tests/gates/ with marker @pytest.mark.gate
+# ---------------------------------------------------------------------------
+gates:
+  # AUTO-DISCOVERED: all test_gate_*.py files in tests/gates/. Keep this list
+  # in sync with the actual files. CI gate checks validate bidirectional coverage.
+  - id: no-unregistered-entrypoint
+    description: Every shebang file and Makefile target is registered in this manifest
+    test_file: test_gate_no_unregistered_entrypoint.py
+  - id: manifest-integrity
+    description: Manifest bidirectional integrity — delegates_to paths, allowed_verbs ↔ Makefile ↔ AGENTS.md, forbidden structures, forbidden verbs, module targets, entrypoint registration
+    test_file: test_gate_manifest_integrity.py
+  - id: ci-coverage
+    description: CI skip documentation, SHA-aware aggregator, MODE=fast exclusions, check-doc-headers, main-full-gate trigger, origin/main fetch, MARKER=all contract
+    test_file: test_gate_ci_coverage.py
+  - id: ci-env-vars
+    description: CI environment variables match platform-env.yaml defaults, no hardcoded secrets in workflows
+    test_file: test_gate_ci_env_vars.py
+  - id: compose-base-contract
+    description: docker-compose.base.yml contract enforcement (profiles, logging, healthcheck)
+    test_file: test_gate_compose_base_contract.py
+  - id: compose-files-no-base-image
+    description: hermes-agent-base (L1) not used in production compose files
+    test_file: test_gate_compose_no_base_image.py
+  - id: compose-include-sync
+    description: Include section in root docker-compose.yml matches discovered modules; regeneration is noop on committed state
+    test_file: test_gate_compose_include_sync.py
+  - id: contract-test-gate
+    description: make test MARKER=contract passes (contract tests validate entrypoint scripts)
+    test_file: test_gate_contract.py
+  - id: cross-layer
+    description: Cross-layer import rules enforced (entrypoints/internal/modules isolation)
+    test_file: test_gate_cross_layer.py
+  - id: dead-code-gate
+    description: All entrypoints and internal scripts have a live caller in the call graph
+    test_file: test_gate_dead_code.py
+  - id: dockerignore-symlink
+    description: .dockerignore symlink integrity (must symlink to templates/.dockerignore)
+    test_file: test_gate_dockerignore_symlink.py
+  - id: env-hostname-drift
+    description: Hostname drift detection between .env and docker-compose service names
+    test_file: test_gate_env_hostname_drift.py
+  - id: env-example-sync
+    description: Bidirectional key sync between .env.example and .env — mirror structure enforcement, no duplicate keys
+    test_file: test_gate_env_example_sync.py
+  - id: env-shared-consistency
+    description: env_shared declare→inject contract + proxy opt-in (T8.5)
+    test_file: test_gate_env_shared_consistency.py
+  - id: exception-audit
+    description: No hardcoded target sets in gates (dynamic discovery via entrypoint-manifest)
+    test_file: test_gate_exception_audit.py
+  - id: gitleaks-version
+    description: Single gitleaks version (8.30.1) across all workflows, composite action usage enforcement
+    test_file: test_gate_gitleaks_version.py
+  - id: grep-summary-linter
+    description: All .sh and .py files in core/ and tests/ have GREP_SUMMARY header
+    test_file: test_gate_grep_summary.py
+  - id: lint-quality
+    description: Linter configuration parity between shell and Python (lint.sh ↔ Python linter logic)
+    test_file: test_gate_lint_quality.py
+  - id: module-yaml-contract
+    description: module.yaml D4 contract validation (required fields, naming conventions)
+    test_file: test_gate_module_yaml_contract.py
+  - id: no-simulators
+    description: No simulator classes in test suite (prevents fake-backend patterns)
+    test_file: test_gate_no_simulators.py
+  - id: platform-env-schema
+    description: platform-env.yaml schema validation (networks, volumes, profiles)
+    test_file: test_gate_platform_env_schema.py
+  - id: security-config
+    description: Security configuration audit (secrets, permissions, network policies)
+    test_file: test_gate_security_config.py
+  - id: template-metrics
+    description: Template metrics and structure validation
+    test_file: test_gate_template_metrics.py
+  - id: test-inventory
+    description: Bi-directional inventory match, registered markers, no removal without changelog
+    test_file: test_gate_test_inventory.py
+  - id: topology
+    description: Module dependency topology validation (module.yaml depends_on field)
+    test_file: test_gate_topology.py
+  - id: workflow-consistency
+    description: Workflow count=8, main-full-gate deleted, platform-test single job, no observability refs, deploy triggers, push filter, NODE=, provisioner usage
+    test_file: test_gate_workflow_consistency.py
+  - id: container-name-consistency
+    description: Container_name consistency across compose files and module.yaml depends_on / env_requires references
+    test_file: test_gate_container_name_consistency.py
+  - id: healthcheck-contract
+    description: Healthcheck.sh contracts (deep-mode early exit, check_http, 127.0.0.1, postgres deep includes pgbouncer, logging deep includes promtail)
+    test_file: test_gate_healthcheck_contract.py
+  - id: module-schema-d4
+    description: All module.yaml files validated against D4 JSON Schema (module.schema.json)
+    test_file: test_gate_module_schema_d4.py
+  - id: litellm-pg-enforcement
+    description: LiteLLM PostgreSQL enforcement — DATABASE_URL must be postgres://, never sqlite:///
+    test_file: test_gate_litellm_pg_enforcement.py
+  - id: module-profiles
+    description: Docker Compose profiles pluggability validation — profiles on each service, profile matches module name
+    test_file: test_gate_module_profiles.py
+  - id: nginx-domain-contract
+    description: Nginx server_name uses PLATFORM_DOMAIN placeholder, base.yml mounts templates
+    test_file: test_gate_nginx_domain_contract.py
+  - id: p20-container-coupling
+    description: Container coupling validation — referenced container names have alias, env hostnames resolvable, prometheus targets resolvable
+    test_file: test_p20_container_coupling.py
+  - id: restart-consistency
+    description: Restart consistency validation across compose files
+    test_file: test_restart_consistency.py
+  - id: thin-wrapper
+    description: All entrypoints ≤150 LOC, ≤4 functions, no direct binary calls
+    test_file: test_gate_thin_wrapper.py
+  - id: module-hooks
+    description: Module hook scripts exist, are executable, have GREP_SUMMARY + MODULE_CONTRACT
+    test_file: test_gate_module_hooks.py
+  - id: pytest-markers
+    description: Pytest markers in pyproject.toml only (not pytest.ini); strict markers enabled
+    test_file: test_gate_pytest_markers.py
+
+# ---------------------------------------------------------------------------
+# Forbidden directories — directories that MUST NOT contain executable scripts
+# ---------------------------------------------------------------------------
+forbidden_directories:
+  - core/scripts/e2e
+  - core/scripts
+
+# ---------------------------------------------------------------------------
+# Forbidden scripts — script names that are deprecated / forbidden
+# ---------------------------------------------------------------------------
+forbidden_scripts:
+  - dev.sh
+  - platform-push.sh
+  - apply.sh
+  - bare-metal-reset.sh
+  - prepare-bare-server.sh
+  - stage-manager.sh
+  - image-prewarm.sh
+
+# ---------------------------------------------------------------------------
+# Forbidden verbs — verb names that MUST NOT be used as make targets
+# ---------------------------------------------------------------------------
+forbidden_verbs:
+  - push-core
+  - deploy-node
+  - build-local
+  - bootstrap-core
+  - hermes-deploy-vps
+
+# ---------------------------------------------------------------------------
+# Allowed verbs — canonical verb dictionary (from RefactoringBrief.md §3.3)
+# Every make target must use one of these verbs.
+# ---------------------------------------------------------------------------
+allowed_verbs:
+  - deploy
+  - bootstrap-node
+  - context-promote
+  - discover-modules
+  - dev-certs
+  - hermes-build-platform
+  - hermes-build-context
+  - hermes-push-l1
+  - validate
+  - lint
+  - audit
+  - test
+  - gate
+  - check-file-lines
+  - test-inventory-sync
+  - new-project
+  - new-context
+  - secrets-unlock
+  - provision
+  - backup
+  - restore
+  - healthcheck
+  - up
+  - down
+  - restart
+  - status
+  - node-update

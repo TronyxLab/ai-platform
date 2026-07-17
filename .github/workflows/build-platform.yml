@@ -1,0 +1,125 @@
+# GREP_SUMMARY: build-platform sha-aware-aggregator workflow-run platform-test hermes-agent-base docker-buildx smoke-test load-true provisioner
+# STRUCTURE: on:workflow_run(platform-test:completed,main) + workflow_dispatch → push-filter → verify SHA → build L1 hermes-agent-base (load:true) → smoke test → cleanup
+# region MODULE_CONTRACT
+## @purpose  SHA-aware platform agent build: triggered by platform-test success, builds L1 image
+##           locally (load:true), runs smoke test. Manual workflow_dispatch also validates SHA.
+## @scope    Uses SHA-aware aggregator (D4): verifies platform-test success for the same SHA before building.
+## @invariants
+##   - Triggers on workflow_run of platform-test (main-full-gate removed — Plan 2 consolidation)
+##   - Push filter: github.event.workflow_run.event == 'push' prevents build on PR trigger
+##   - Verifies platform-test succeeded for same SHA via GitHub API
+##   - Builds locally via load:true; L1 pushed to ghcr.io as disaster recovery backup (not used directly by contexts)
+##   - Smoke test: docker compose up + curl :9119/ + docker compose down
+##   - Cache: type=gha,scope=hermes-agent-base
+##   - Provisioner: provision-environment.sh replaces inline docker network create
+## @rationale  SHA-aware prevents build after partial pipeline. load:true builds L1 locally.
+##             L1 pushed to ghcr.io as disaster recovery backup — never used directly by contexts
+##             (per RefactoringBrief M19/R6 context isolation).
+## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
+## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks --scope volumes
+## @changes — 2026-07-15 | Removed inline sudo mkdir (provisioner volumes scope handles it)
+# endregion MODULE_CONTRACT
+
+name: Build Platform Agent
+
+on:
+  workflow_run:
+    workflows: ["platform-test"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/hermes-agent-base
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  verify-and-build:
+    # Push filter: only build when triggered by push event (not PR)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      # ─── Step 1: SHA resolution + verification (canonical composite) ──
+      - name: Resolve SHA + verify platform-test
+        id: sha
+        uses: ./.github/actions/sha-resolve
+        with:
+          verify: 'true'
+
+      # ─── Step 2: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # ─── Step 3: Provision environment ────────────────────────────────
+      - name: Provision Docker environment (networks + volumes)
+        uses: ./.github/actions/provisioner-call
+        with:
+          scope: networks,volumes
+
+      # ─── Step 4: Build L1 locally (load:true) ────────────────────────
+      - name: Build hermes-agent-base image
+        uses: ./.github/actions/docker-build-cache
+        with:
+          context: core/modules/hermes-agent/build
+          file: core/modules/hermes-agent/build/Dockerfile
+          tags: hermes-agent-base:latest
+          cache-scope: hermes-agent-base
+
+      # ─── Step 5: Smoke test ───────────────────────────────────────────
+      - name: Pull dependency images
+        run: |
+          echo "=== Pulling images from compose file ==="
+          docker compose -f core/modules/hermes-agent/docker-compose.base.yml pull --ignore-buildable 2>/dev/null || true
+
+      - name: Smoke test — compose up and healthcheck
+        run: |
+          echo "=== Smoke test: Starting hermes-agent with built image ==="
+          SHA="${{ steps.sha.outputs.sha }}"
+          CONTEXT_IMAGE="hermes-agent-base:latest" \
+          docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+            --project-name build-platform-smoke \
+            up -d
+
+          echo "=== Waiting for agent readiness (80s max) ==="
+          for i in $(seq 1 40); do
+            if curl -sf http://localhost:9119/ > /dev/null 2>&1; then
+              echo "=== Agent ready on :9119 after ${i}s ==="
+              break
+            fi
+            if [ $i -eq 40 ]; then
+              echo "=== ERROR: Agent not ready after 80s ==="
+              docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+                --project-name build-platform-smoke logs
+              docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+                --project-name build-platform-smoke down -v
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "=== Dashboard endpoint: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:9119/) ==="
+          echo "=== Smoke test PASSED ==="
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
+            --project-name build-platform-smoke down -v 2>/dev/null || true
+
+      # ─── Step 6: Push L1 to ghcr.io (disaster recovery backup) ───────────
+      - name: Push L1 to ghcr.io (backup)
+        if: success()
+        run: |
+          docker tag hermes-agent-base:latest ghcr.io/${{ github.repository_owner }}/hermes-agent-base:latest
+          docker push ghcr.io/${{ github.repository_owner }}/hermes-agent-base:latest

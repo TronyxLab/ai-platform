@@ -1,0 +1,62 @@
+# GREP_SUMMARY: gitleaks config allowlist env-example placeholder test-data secrets
+# STRUCTURE: title → [rules] (extends gitleaks default) → [allowlist] (excluded paths/regexes)
+# region MODULE_CONTRACT
+## @purpose  Gitleaks configuration for ai-platform — extends default rules with allowlist for
+##           .env.example placeholders and test data fixtures.
+## @scope    Used by .pre-commit-config.yaml gitleaks hook
+## @invariants
+##   - .env.example with `sk-your-*-here` placeholders NEVER blocks commits
+##   - tests/test_data/ fixtures with known test tokens NEVER block commits
+##   - All standard gitleaks rules apply (no custom rules needed — defaults cover sk-*, AIza*, ghp_*)
+##   - allowlist entries are scoped by path and regex for precision
+## @rationale Default gitleaks rules already catch API key patterns (sk-, AIza-, etc.).
+##   Allowlist prevents false positives from templated .env.example and test fixtures.
+# endregion MODULE_CONTRACT
+
+title = "ai-platform gitleaks config"
+
+# ── Extend default gitleaks rules ──
+# No custom rules needed — default rules cover:
+#   - sk-[a-zA-Z0-9]{20,}  (OpenAI/DeepSeek-style keys)
+#   - AIza[0-9A-Za-z_-]{35} (Google API keys)
+#   - ghp_[0-9a-zA-Z]{36} (GitHub tokens)
+#   - etc.
+#
+# ⚠️ TRAP[BUG] · 2026-07-12 · useDefault MUST be under [extend] section
+#   — top-level useDefault = true is silently ignored by gitleaks v8.30.1
+#   because the Go struct Extend.UseDefault is only populated from the
+#   [extend] TOML table. When absent, extendDefault() is never called,
+#   and gitleaks scans with ZERO detection rules.
+#   Fixed: wrapped in [extend] (gitleaks/gitleaks#1985 related).
+[extend]
+useDefault = true
+
+# ── Allowlist ─────────────────────────────────────────────────────────────
+# Entries here are NEVER flagged by gitleaks, even if they match default rules.
+
+[allowlist]
+
+description = "Allow .env.example files with placeholder API keys and test data fixtures"
+
+# Allow .env.example files + test data fixtures
+paths = [
+    '''(?i)\.env\.example$''',
+    '''\.env\.example\.md$''',
+    '''(?i)\.env\.example''',
+    '''tests/test_data/''',
+    '''test_data/''',
+    '''test/fixtures/''',
+]
+
+# Allow specific regex patterns that match placeholder/template values
+regexes = [
+    '''your[-_][a-zA-Z]+[-_]key[-_]here''',     # sk-your-key-here patterns
+    '''your[-_][a-zA-Z]+[-_]password[-_]here''',  # password placeholders
+    '''your[-_]?placeholder''',                    # explicit placeholder markers
+    '''sk-test-not-for-production''',              # test-only keys (component tests)
+]
+
+# Allow specific commit authors (e.g., bots, CI)
+commits = [
+    "0000000000000000000000000000000000000000",  # Allow initial (empty tree) commits
+]

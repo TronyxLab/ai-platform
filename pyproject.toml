@@ -1,0 +1,66 @@
+# GREP_SUMMARY: pyproject, dependencies, pytest, ruff, ai-platform
+# STRUCTURE: [project] → name+version+python+dependencies → [project.optional-dependencies] dev → [tool.pytest.ini_options] markers → [tool.ruff] ref to ruff.toml
+# region MODULE_CONTRACT
+## @purpose  Project metadata and dependency management for ai-platform
+## @scope    Declares runtime dependencies, dev dependencies (pytest, ruff, basedpyright),
+##           pytest marker registry, ruff configuration reference
+## @invariants
+##   - Runtime dependencies are pinned to minimum compatible versions
+##   - Dev dependencies are in [project.optional-dependencies] dev
+##   - pytest markers registry matches test markers used across the suite
+##   - ruff config lives in ruff.toml (not duplicated here)
+## @rationale  Single source of truth for dependencies replaces hardcoded pip install in Makefile.
+##             pyproject.toml is the Python community standard for project metadata (PEP 621).
+# endregion MODULE_CONTRACT
+
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []
+
+[project]
+name = "ai-platform"
+version = "1.0.0"
+description = "AI Platform — containerized LLM deployment stack"
+requires-python = ">=3.10"
+dependencies = [
+    "boto3>=1.28.0",
+    "jsonschema>=4.17.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "basedpyright>=1.12.0",
+    "boto3-stubs>=1.28.0",
+    "pytest>=7.4.0",
+    "ruff==0.15.21",
+    "types-pyyaml>=6.0.12",
+]
+
+[tool.pytest.ini_options]
+testpaths = "tests"
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short -rs --strict-markers --strict-config"
+markers = [
+    "static_audit: static analysis tests (schema validation, unit tests, no Docker)",
+    "smoke: compose lifecycle + healthchecks (needs Docker)",
+    "component: hermes-agent + observability health endpoints (needs Docker)",
+    "integration: full hermes LLM stack (needs Docker)",
+    "predeploy: container/config/network validation (needs Docker)",
+    "contract: contract tests for entrypoint scripts (no Docker)",
+    "e2e: manual end-to-end tests against external *.tronyx.ru (no Docker, dev-only)",
+    "gate: CI gate tests",
+    "skip_enforcement: skip enforcement gate tests",
+    "requires_docker: tests that require a running Docker daemon",
+    "local_auth: tests that require local auth setup",
+    "backup: backup/restore tests",
+]
+
+# Ruff configuration lives in ruff.toml (project root) — auto-discovered by ruff

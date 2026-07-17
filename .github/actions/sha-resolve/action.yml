@@ -1,0 +1,73 @@
+# GREP_SUMMARY: sha-resolve composite-action sha-verification platform-test workflow_run workflow_dispatch
+# STRUCTURE: inputs:verify(default:true) → ○ resolve SHA from event context → ◇ verify platform-test:SHA succeeds → ⎋ sha output
+# region MODULE_CONTRACT
+## @purpose  Canonical SHA resolution + platform-test verification in one composite action.
+##           Eliminates 3× duplicate SHA resolution blocks across workflows (build-platform,
+##           mirror) with a single Source of Truth for SHA-aware aggregator pattern.
+## @scope    Used by build-platform.yml, mirror.yml and similar workflows that need to
+##           resolve SHA from workflow_run or workflow_dispatch event and verify that
+##           platform-test succeeded for that commit.
+## @invariants
+##   - Resolves SHA from workflow_run.head_sha or github.sha depending on event
+##   - When verify=true (default): calls GitHub API to verify platform-test success for SHA
+##   - When verify=false: only resolves SHA without API call (for workflows without gating)
+##   - Requires GH_TOKEN env when verify=true (set at action level)
+## @rationale  SHA-aware aggregator (D4) pattern was duplicated across build-platform.yml
+##             and mirror.yml with identical 15-line blocks. Consolidation reduces drift risk.
+## @changes — 2026-07-16 | Extracted from build-platform.yml + mirror.yml per DevPlan 017 T12
+# endregion MODULE_CONTRACT
+
+name: 'Resolve SHA'
+description: 'Determine SHA from event context and optionally verify platform-test succeeded for SHA'
+
+inputs:
+  verify:
+    description: 'Verify platform-test succeeded for the SHA via GitHub API (true/false)'
+    required: false
+    default: 'true'
+
+outputs:
+  sha:
+    description: 'Resolved commit SHA'
+    value: ${{ steps.resolve.outputs.sha }}
+
+runs:
+  using: 'composite'
+  steps:
+    # ─── Step 1: Resolve SHA from event context ──────────────────────────
+    - name: Resolve SHA from event
+      id: resolve
+      shell: bash
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          SHA="${{ github.sha }}"
+          echo "[IMP:9][sha-resolve] Manual trigger — using SHA: $SHA"
+        elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "[IMP:9][sha-resolve] workflow_run trigger — using head SHA: $SHA"
+        else
+          SHA="${{ github.sha }}"
+          echo "[IMP:9][sha-resolve] Default — using github.sha: $SHA"
+        fi
+        echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+    # ─── Step 2: Verify platform-test success (optional) ─────────────────
+    - name: Verify platform-test succeeded for SHA
+      if: inputs.verify == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        SHA="${{ steps.resolve.outputs.sha }}"
+        echo "[IMP:9][sha-resolve][verify] Verifying platform-test for SHA: $SHA"
+
+        COUNT=$(gh api \
+          "/repos/${{ github.repository }}/actions/workflows/platform-test.yml/runs?head_sha=$SHA&status=success&per_page=1" \
+          --jq '.total_count')
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo "[IMP:10][sha-resolve][verify] ERROR: platform-test has no successful run for SHA $SHA"
+          exit 1
+        fi
+
+        echo "[IMP:9][sha-resolve][verify] platform-test succeeded for SHA $SHA"

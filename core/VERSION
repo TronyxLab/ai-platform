@@ -1,0 +1,11 @@
+# ⚠️ TRAP[DECISION] · 2026-07-01 · — · AR6 — single VERSION on core, no per-module versioning
+# ·   There is ONE version file for the entire platform: core/VERSION.
+# ·   Modules do NOT have their own versioning — they are deployed as part of the
+# ·   platform bundle and versioned by core/VERSION.
+# ·   Rationale: per-module versioning adds complexity (need to track module versions
+# ·   in catalog, validate compatibility matrix). At current scale (5-10 modules),
+# ·   monoversion is simpler and sufficient.
+# ·   Rejected: semver per module (module.yaml has version field but it is informational)
+# ·   Rev: if platform grows beyond 20 modules or needs independent module lifecycle,
+# ·   implement per-module semver with compatibility matrix
+1.0.0

@@ -1,0 +1,72 @@
+# ─── OS metadata ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Logs & caches ─────────────────────────────────────────────────
+*.log
+.pytest_cache
+__pycache__/
+docker.txt
+
+# ─── IDE ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── AI tools ──────────────────────────────────────────────────────
+.ai/
+.doxygen/
+
+# ─── Dev certs (mkcert, per-developer) ────────────────────────────
+core/modules/nginx/dev-certs/
+
+# ─── node-configs (орг-репозиторий, не в платформе) ────────────────
+node-configs/
+
+# ─── Secrets ───────────────────────────────────────────────────────
+.env
+*.secret
+*.pem
+*.key
+modules/hermes-agent/.env
+
+# ─── Python build ──────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+!core/internal/build/
+!core/modules/hermes-agent/build/
+
+# ─── E2E tests (Playwright) ────────────────────────────────────────
+e2e/screenshots/
+e2e/report/
+e2e/test-results/
+e2e/playwright/.cache/
+e2e/node_modules/
+e2e/.last-run.json
+
+# ─── Kilo agent state ──────────────────────────────────────────────
+.kilo/server-state.json
+.kilo/local/
+.kilo/plans/
+
+# ─── Other ─────────────────────────────────────────────────────────
+INSTALL.md
+*.tsbuildinfo
+.kilo/plans/
+
+# ─── ClickHouse auto-generated config (from CLICKHOUSE_PASSWORD env var) ─
+core/modules/clickhouse/config/users.d/default-user.xml
+
+# ─── Docker Compose per-project overrides ──────────────────────────────
+docker-compose.override.yml
+
+# ─── Test reports ────────────────────────────────────────────────────
+tests/report*.xml
+tests/.test_counter.json
+
+.mypy_cache/
+.docker-mounts/
+.ai/server-state.json

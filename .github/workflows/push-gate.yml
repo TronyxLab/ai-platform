@@ -1,0 +1,74 @@
+# GREP_SUMMARY: push-gate quick-gate any-branch pre-commit static-audit predeploy gitleaks-composite provisioner
+# STRUCTURE: on:push(branches-ignore:main) → quick-gate(pre-commit+static+predeploy) → teardown(docker-network-cleanup)
+# region MODULE_CONTRACT
+## @purpose — Lightweight CI gate on push to any branch (except main): pre-commit hooks + static audit + predeploy checks
+## @scope — Runs on every git push to non-main branches; cancelled on new pushes to same branch
+## @invariants
+##   - No Docker compose stacks are started — only Docker networks for predeploy tests
+##   - Pre-commit run includes: gitleaks, check-yaml, trailing-whitespace, end-of-file-fixer
+##   - Python syntax + JSON validation run before pytest (fail-fast)
+##   - Parallel static_audit + unit tests (~93 tests across 17 files)
+##   - Predeploy tests validate networks, compose config, and schema against JSON Schema
+##   - Timeout: 5 minutes (pre-commit ~10s, py/JSON check ~5s, static ~30s, predeploy ~60s)
+##   - Docker networks created via provision-environment.sh (Plan 1 foundation)
+##   - Gitleaks uses composite action setup-gitleaks (single source of truth)
+##   - Cleanup runs unconditionally — removes Docker networks created by predeploy tests
+## @rationale — Fast feedback (<3 min) for every push. Catches gitleaks leaks, malformed YAML/JSON/Python,
+##   config schema violations, and network inconsistencies before PR is opened.
+##   Main-branch gate uses platform-test.yml with full gate-full suite.
+## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks
+## @changes — 2026-07-15 | Inline gitleaks install → composite action setup-gitleaks
+# endregion MODULE_CONTRACT
+
+name: push-gate
+
+on:
+  push:
+    branches-ignore: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick-gate:
+    name: Quick Gate (static + predeploy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup gitleaks (composite action)
+        uses: ./.github/actions/setup-gitleaks
+
+      - name: Setup Python venv
+        uses: ./.github/actions/setup-python-venv
+        with:
+          install-pre-commit: 'true'
+
+      - name: Cache pre-commit venv
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      # Provisioner integration — replaces inline docker network create
+      - name: Provision Docker environment (networks only)
+        uses: ./.github/actions/provisioner-call
+        with:
+          scope: networks
+
+      - name: Run pre-commit hooks (gitleaks + code quality)
+        run: make pre-commit-run
+
+      - name: Run fast gate (syntax/JSON check + gates + static + predeploy)
+        run: make gate MODE=fast
+
+      - name: Cleanup Docker networks
+        if: always()
+        run: |
+          docker network rm proxy-net shared-db-net hermes-agent-net backup-net shared-cache-net observability-net 2>/dev/null || true

@@ -1,0 +1,66 @@
+# GREP_SUMMARY: composite-action setup-python-venv pip-cache symlink reusable
+# STRUCTURE: ▶ actions/setup-python → ◇ cache .venv → ◇ pip install → ◇ symlink → ⎋ GITHUB_PATH
+# region MODULE_CONTRACT
+## @purpose  Reusable composite action: Python venv setup with pip cache, dependency install, and symlink.
+##           Eliminates 6× duplicate boilerplate across CI workflows.
+## @scope    All .github/workflows/*.yml that need Python + pytest dependencies
+## @invariants
+##   - Python version: 3.10 (default, overridable via input)
+##   - pip cache: actions/setup-python cache: 'pip'
+##   - .venv cache key: venv-${{ runner.os }}-${{ hashFiles('Makefile') }}
+##   - Dependencies: pytest, pyyaml, jsonschema, requests, python-dotenv, boto3, botocore
+##   - Optional: pre-commit (via install-pre-commit input)
+## @rationale  TestsMetaDevPlan2.md audit identified 6× identical .venv setup sequences
+##             across workflows. Composite action reduces drift risk and maintenance toil.
+# endregion MODULE_CONTRACT
+
+name: 'Setup Python venv'
+description: 'Cache and setup Python .venv with test dependencies and GITHUB_PATH symlink'
+
+inputs:
+  python-version:
+    description: 'Python version'
+    required: false
+    default: '3.10'
+  install-pre-commit:
+    description: 'Install pre-commit in venv (true/false)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: 'pip'
+
+    - name: Cache .venv
+      uses: actions/cache@v6
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ hashFiles('Makefile') }}
+        restore-keys: |
+          venv-${{ runner.os }}-
+
+    - name: Install test dependencies
+      shell: bash
+      run: |
+        if [ ! -d .venv/bin ]; then
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          DEPS="pytest pyyaml jsonschema requests python-dotenv boto3 botocore"
+          if [ "${{ inputs.install-pre-commit }}" = "true" ]; then
+            DEPS="$DEPS pre-commit"
+          fi
+          .venv/bin/pip install $DEPS
+        fi
+
+    - name: Setup .venv symlink for make targets
+      shell: bash
+      run: |
+        mkdir -p .venv/bin
+        ln -sf "$(which python3)" .venv/bin/python
+        ln -sf "$(which pip3)" .venv/bin/pip
+        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"

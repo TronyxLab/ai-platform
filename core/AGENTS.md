@@ -1,0 +1,192 @@
+<!-- GREP_SUMMARY: AGENTS.md, core, operations-catalog, canonical-targets, layer-structure, verb-dictionary, forbidden -->
+
+# GREP_SUMMARY: AGENTS.md, core, operations-catalog, canonical-targets, layer-structure, verb-dictionary, forbidden
+# STRUCTURE: ┌canonical operations table┐ → ◇ core/ dir structure → ◇ cross-layer import rules → ◇ forbidden lists → ⎋ navigation refs
+# region MODULE_CONTRACT
+## @purpose  Catalog of canonical make targets, core/ directory structure, cross-layer import rules, and forbidden scripts/verbs for the ai-platform core
+## @scope    All operations that pass through Makefile; layer isolation rules; deleted/forbidden script inventory
+## @invariants
+##   - Every Makefile .PHONY target maps to a row in the canonical operations table
+##   - Entrypoints only call internal/ or lib/ — never modules/
+##   - Forbidden lists are explicit deny — no additions without Architect approval
+## @rationale Machine-readable operations catalog enables CI gates to validate Makefile/AGENTS.md/filesystem triad
+# endregion MODULE_CONTRACT
+
+# AGENTS.md — core/
+
+---
+
+## Канонические операции
+
+| Канонический таргет | Операция | Сигнатура | Делегирует в (internal) |
+|---|---|---|---|
+| `make deploy` | Деплой проекта | `make deploy PROJECT=<dir>` | git push → CI → `core/internal/deploy/deploy-project.sh` |
+| `make bootstrap-node` | Идемпотентный bootstrap ноды | `make bootstrap-node NODE=<name>` | `core/entrypoints/bootstrap.sh` → `core/internal/bootstrap/node-lifecycle.sh --mode init` |
+| `make context-promote` | Промоут платформы в контекст | `make context-promote CONTEXT=<context>` | `core/entrypoints/context-promote.sh` → копирование кода в `<context>/ai-platform` |
+| `make hermes-build-platform` | Сборка L1 локально | `make hermes-build-platform` | `core/entrypoints/build.sh` → `core/internal/build/hermes-images.sh build-platform` |
+| `make hermes-build-context` | Сборка L1→L2, опционально push | `make hermes-build-context CONTEXT=<context>` | `core/entrypoints/build.sh` → `core/internal/build/hermes-images.sh build-context` |
+| `make hermes-push-l1` | Push L1 в ghcr.io (backup) | `make hermes-push-l1` | docker tag + docker push |
+| `make test` | Тесты с MARKER-фильтром. MARKER=all (default): validate→lint→gates→contract→static→predeploy→smoke→component→integration | `make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]` | pytest с MARKER-диспетчеризацией + validate.sh + lint |
+| `make test-inventory-sync` | Регенерация test_inventory.yaml из pytest --collect-only | `make test-inventory-sync` | `tests/tools/sync_inventory.py` |
+| `make gate` | Production gate (MODE=fast/full). MODE=full: validate→lint→gates→contract→static→predeploy→smoke→component. MODE=fast: validate→lint→gates→static→predeploy. | `make gate [MODE=fast|full]` | validate.sh + линтеры + pytest + MODE-диспетчеризация |
+| `make new-project` | Создать проект из шаблона | `make new-project NAME=<n> TEMPLATE=<t>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/add-project.sh` |
+| `make new-context` | Создать контекст деплоя | `make new-context NODE=<n>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/context-init.sh` |
+| `make validate` | Schema-валидация | `make validate [FILES=...]` | `core/entrypoints/validate.sh` |
+| `make lint` | shellcheck + yamllint + pytest-lint | `make lint` | `core/entrypoints/validate.sh --lint` |
+| `make audit` | Системный аудит платформы | `make audit [NODE=...]` | `core/entrypoints/audit.sh` |
+| `make check-file-lines` | Проверка длины файлов | `make check-file-lines [MAX_LINES=500]` | `core/entrypoints/check-file-lines.sh` |
+| `make dev-certs` | Генерация dev SSL-сертификатов (idempotent, hybrid mkcert→openssl) | `make dev-certs [CERT_BACKEND=auto|mkcert|openssl]` | `core/modules/nginx/generate-dev-certs.sh` |
+| `make provision` | Provision окружения | `make provision [SCOPE=all|networks|volumes|env]` | `core/internal/provision-environment.sh` |
+| `make discover-modules` | Авто-обнаружение модулей и обновление docker-compose.yml | `make discover-modules` | `core/internal/bootstrap/discover_modules.py` |
+| `make secrets-unlock` | Расшифровка SOPS/age секретов | `make secrets-unlock [NODE=...]` | `core/entrypoints/secrets.sh` → `core/internal/secrets/decrypt-secrets.sh` |
+| `make healthcheck` | Проверка здоровья платформы | `make healthcheck [NODE=...]` | `core/entrypoints/healthcheck.sh` → `core/internal/healthcheck/modules-healthcheck.sh` |
+| `make node-update` | Update provisioned node | `make node-update NODE=<name>` | `core/entrypoints/node-update.sh` → `core/internal/bootstrap/node-lifecycle.sh --mode update` |
+| `make up` / `make down` | Локальный compose-lifecycle | `make up [PROJECT=...]` | docker compose |
+| `make status` | Статус compose-стека | `make status [PROJECT=...]` | docker compose ps |
+| `make restart` | Жёсткий перезапуск compose-стека | `make restart [PROJECT=...]` | docker compose down && docker compose up -d |
+| `make backup` | Резервное копирование стека | `make backup [NODE=...]` | Модульные healthcheck.sh + snapshot |
+| `make restore` | Восстановление из бэкапа | `make restore NODE=<n> DUMP_FILE=<f>` | Модульные restore-скрипты |
+| `make build` | Сборка Docker-образа модуля | `make build (в модуле)` | docker compose build |
+| `make logs` | Логи модуля | `make logs (в модуле)` | docker compose logs -f |
+| `make start` | Старт модуля | `make start (в модуле)` | docker compose up -d |
+| `make stop` | Стоп модуля | `make stop (в модуле)` | docker compose down |
+
+**По умолчанию:** `make healthcheck` и `make audit` без NODE проверяют локальный docker compose. С NODE — удалённую ноду через SSH.
+
+---
+
+## Структура core/
+
+```
+core/
+├── entrypoints/                # Internal-обёртки — только из Makefile
+│   ├── deploy.sh
+│   ├── bootstrap.sh
+│   ├── context-promote.sh
+│   ├── build.sh
+│   ├── scaffold.sh
+│   ├── validate.sh
+│   ├── audit.sh
+│   ├── secrets.sh
+│   ├── healthcheck.sh
+│   ├── check-file-lines.sh
+│   ├── lint.sh
+│   ├── check-commit-msg.sh
+│   ├── check-doc-headers.sh
+│   └── pre-push-gate.sh
+├── internal/                   # Внутренние скрипты — не вызывать напрямую
+│   ├── deploy/deploy-project.sh
+│   ├── healthcheck/
+│   │   ├── docker-healthcheck.sh
+│   │   ├── modules-healthcheck.sh
+│   │   └── tor-proxy-healthcheck.sh
+│   ├── bootstrap/node-lifecycle.sh        (объединяет orchestrator.sh + node-update.sh, mode dispatch)
+│   ├── bootstrap/deploy-modules.sh
+│   ├── bootstrap/install-tor-proxy.sh
+│   ├── bootstrap/setup-node.sh
+│   ├── bootstrap/install-docker.sh
+│   ├── bootstrap/firewall.sh
+│   ├── build/hermes-images.sh             (бывший build-hermes-images.sh)
+│   ├── scaffold/add-project.sh
+│   ├── scaffold/context-init.sh
+│   ├── scaffold/add-vhost.sh
+│   ├── notify/notify-hook.sh
+│   ├── catalog/generate-catalog.sh
+│   ├── provision-environment.sh
+│   ├── secrets/decrypt-secrets.sh
+│   ├── validate/validate.sh
+│   └── audit/audit.sh
+├── lib/                        # Библиотеки (logging, healthcheck, node-resolver, paths)
+├── modules/{module}/           # Docker-сервисы
+│   ├── module.yaml, docker-compose.base.yml
+│   ├── */healthcheck.sh       → source ../../lib/healthcheck.sh
+│   ├── Makefile              → include ../../templates/module.mk
+│   ├── .dockerignore         → symlink ../../templates/.dockerignore
+│   └── {build,context}/      # (только hermes-agent) Dockerfile L1/L2
+├── templates/                  # module.mk, sudo-whitelist.template, docker-compose.test.template, .dockerignore
+├── entrypoint-manifest.yaml
+└── VERSION
+```
+
+### Cross-layer import rules
+
+| Слой | Может импортировать | Запрещено |
+|------|--------------------|-----------|
+| `entrypoints/` | `internal/`, `lib/` | Всё остальное |
+| `internal/` | `internal/`, `lib/` | Всё остальное |
+| `modules/` | `lib/`, `templates/` | `internal/` |
+
+---
+
+## Удалённые / устаревшие скрипты
+
+Следующие скрипты удалены из проекта или помечены к удалению в Фазе 2:
+
+| Файл | Статус | Причина |
+|------|--------|---------|
+| dev.sh | 💀 УДАЛЁН | Функционал — в Makefile |
+| bare-metal-reset.sh | 💀 УДАЛЁН | Сирота, 0 живых вызывателей |
+| prepare-bare-server.sh | 💀 УДАЛЁН | Сирота, самоссылающийся кластер |
+| stage-manager.sh | 💀 УДАЛЁН | Сирота |
+| image-prewarm.sh | 💀 УДАЛЁН | Сирота |
+| e2e/setup-vps.sh | 💀 УДАЛЁН | Сирота |
+| platform-push.sh | 💀 УДАЛЁН | Rsync-логика → CI-воркфлоу core-deploy.yml |
+| apply.sh | 💀 УДАЛЁН | Деплой → make deploy / make context-promote |
+| `docker-healthcheck.sh` | ✅ LIVE: core/internal/healthcheck/docker-healthcheck.sh — вызывается crontab'ом каждую минуту |
+| `gate-loop SKILL.md` | 💀 УДАЛЁН | Заменён на make gate → make context-promote |
+
+---
+
+## Forbidden
+
+### Запрещённые директории
+
+Директории, в которых **НЕ ДОЛЖНЫ** находиться исполняемые скрипты:
+
+- `core/scripts/e2e/` — удалена
+- `core/scripts/` — legacy, заменена на `core/entrypoints/` + `core/internal/`
+
+### Запрещённые скрипты (имена)
+
+Следующие имена скриптов не должны существовать нигде в проекте:
+
+- dev.sh
+- platform-push.sh
+- bare-metal-reset.sh
+- prepare-bare-server.sh
+- stage-manager.sh
+- image-prewarm.sh
+- apply.sh
+
+### Запрещённые глаголы (make-таргеты)
+
+Следующие глаголы **ЗАПРЕЩЕНЫ** к использованию в качестве имён таргетов:
+
+- `push-core`
+- `deploy-node`
+- `build-local`
+- `bootstrap-core`
+- `hermes-deploy-vps`
+
+### Разрешённые глаголы
+
+Полный список разрешённых глаголов см. в таблице «Канонические операции» выше и в [`entrypoint-manifest.yaml`](entrypoint-manifest.yaml) (`allowed_verbs`).
+
+---
+
+## Архитектурные инварианты
+
+10 архитектурных инвариантов платформы определены **только** в [`AGENTS.md`](../AGENTS.md#region-MODULE_CONTRACT) (root). Настоящий файл не дублирует их — все расхождения между копиями устранены в пользу root как единственного Source of Truth.
+
+**Правило:** если новый инвариант затрагивает общую архитектуру платформы — добавляй в root AGENTS.md. В core/AGENTS.md описываются только core-специфичные контракты (операции, структура, forbidden-списки).
+
+---
+
+## Навигация
+
+| Файл | Назначение |
+|------|-----------|
+| [`AGENTS.md`](../AGENTS.md) (root) | **Единственный Source of Truth** — архитектурные инварианты, модель деплоя, глоссарий глаголов |
+| [`modules/AGENTS.md`](modules/AGENTS.md) | Шаблон модуля, контракты |
+| [`entrypoint-manifest.yaml`](entrypoint-manifest.yaml) | Машиночитаемый YAML-реестр |
+| [`templates/`](templates/) | Параметризованные шаблоны |

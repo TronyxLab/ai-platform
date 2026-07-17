@@ -1,0 +1,57 @@
+# GREP_SUMMARY: ruff config linter formatter target-version line-length select ignore exclude UP RUF PIE RET PERF
+# STRUCTURE: ▶ [ruff] target-version=py310 line-length=120 → [lint] select(E4/E7/E9/F/I/B/SIM/C4/UP/RUF/PIE/RET/PERF)+ignore+per-file-ignores → [format] quote-style=double → ⎋
+
+target-version = "py310"
+line-length = 120
+
+exclude = [
+    ".venv",
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+]
+
+[lint]
+select = [
+    "E4", "E7", "E9",   # pycodestyle errors
+    "F",                  # Pyflakes
+    "I",                  # isort
+    "B",                  # flake8-bugbear
+    "SIM",                # flake8-simplify
+    "C4",                 # flake8-comprehensions
+    "UP",                 # pyupgrade — modern typing (dict, X | None), deprecated typing.*
+    "RUF",                # ruff-specific — unused noqa, implicit Any, __all__ sort
+    "PIE",                # flake8-pie — unnecessary pass/spread/kwargs
+    "RET",                # flake8-return — superfluous else/return
+    "PERF",               # Perflint — list comprehensions, unnecessary copies
+]
+ignore = [
+    "E501",              # line-too-long — handled by formatter
+    "E402",              # module-import-not-at-top-of-file — project convention: #region MODULE_CONTRACT before imports
+    "RUF001",            # ambiguous-unicode-character-string — Cyrillic in project strings is intentional
+    "RUF002",            # ambiguous-unicode-character-docstring — Cyrillic in project docstrings is intentional
+    "RUF003",            # ambiguous-unicode-character-comment — Cyrillic in project comments is intentional
+]
+
+# Кастомные doc-заголовки проекта несовместимы с pydocstyle
+# D1-D4: отсутствие docstring/структуры — конфликтует с # region/#endregion стилем
+# D2: D205 (blank line after summary) — конфликтует с докстрингами без пустой строки
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "SIM108",            # Use ternary operator — в тестах if/else читаемее
+    "PERF203",           # try-except-in-loop — in tests, per-item error handling is intentional
+]
+"**/conftest.py" = [
+    "SIM108",            # Use ternary operator
+]
+"**/merge_junit.py" = [
+    "PERF203",           # try-except-in-loop — file-by-file merge with per-item error handling
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

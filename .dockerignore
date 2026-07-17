@@ -1,0 +1,26 @@
+# GREP_SUMMARY: dockerignore L2-context build hermes-agent docker-buildx
+# STRUCTURE: **/* → exclude all → !core/modules/hermes-agent/context/** → include only L2 context
+# region MODULE_CONTRACT
+## @purpose  Root .dockerignore — оптимизирует сборочный контекст для L2 Docker-образа hermes-agent-context.
+##           L2-сборка (`hermes-images.sh build-context`) использует `${PLATFORM_ROOT}` как контекст,
+##           но реально копирует только `core/modules/hermes-agent/context/`. Этот файл исключает всё остальное,
+##           сокращая передачу контекста Docker daemon'у с сотен MB до нескольких KB.
+## @scope    Действует ТОЛЬКО для Docker-сборок с контекстом = корень репозитория (L2 build).
+##           Не влияет на compose-сборки (backup-cron: context=./core/modules/backup-cron) и L1-сборку
+##           (hermes-agent/build: context=./core/modules/hermes-agent/build/).
+## @invariants
+##   - L2 Dockerfile COPY-пути (`core/modules/hermes-agent/context/*`) должны оставаться доступны
+##   - Не влияет на другие Docker-операции (L1 build, compose build)
+##   - Не затрагивает L0/L1/L2 архитектуру (RefactoringBrief §3.5)
+## @rationale  L2 Dockerfile копирует только файлы из `core/modules/hermes-agent/context/`,
+##             но сборочный контекст = весь репозиторий. Исключение ненужных файлов ускоряет
+##             передачу контекста Docker daemon'у на 30-60 секунд.
+# endregion MODULE_CONTRACT
+
+# Exclude everything except L2 context directory tree
+# L2 Dockerfile (core/modules/hermes-agent/context/Dockerfile) COPY-пути:
+#   COPY core/modules/hermes-agent/context/config/ ... /opt/hermes/context/config/
+#   COPY core/modules/hermes-agent/context/skills/ ... /opt/hermes/context/skills/
+#   COPY core/modules/hermes-agent/context/scripts/init-context.sh ... /etc/cont-init.d/04-context-init
+**/*
+!core/modules/hermes-agent/context/**
