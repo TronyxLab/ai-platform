@@ -20,3 +20,8 @@ needs:
   domain: __DOMAIN__
   database: true
   expose: true
+
+monitoring:
+  metrics: true
+  metrics_port: 3000
+  logs_retention: 7d
