@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # GREP_SUMMARY: content-hash sha256sum compute-step-hash step-hash-changed checkpoint content-invalidation per-step
 # STRUCTURE: ▶ compute_step_hash(step, paths...) → sha256sum → ┌store .hash┐ → ○ step_hash_changed(step, hash) → ◇ match? → 0/1
 # ═══════════════════════════════════════════════════════════════════

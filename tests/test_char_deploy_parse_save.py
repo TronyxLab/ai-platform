@@ -110,7 +110,7 @@ def _extract_func(filepath: str, func_name: str) -> str:
                 line_start = 0
             else:
                 line_start += 1
-            prefix = content[line_start: m.start()]
+            prefix = content[line_start : m.start()]
             if prefix.strip() == "" or prefix.strip().startswith("#"):
                 start = m.start()
                 break
@@ -291,21 +291,21 @@ echo "[IMP:9][verify] PROJECT=${PROJECT} REF=${REF} SERVICE_NAME=${SERVICE_NAME}
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"parse_ssh_command failed with rc={rc}: stderr={stderr}"
 
-    assert f"PROJECT={GOLDEN_PROJECT}" in stdout, (
-        f"Expected PROJECT={GOLDEN_PROJECT} in stdout, got: {stdout}"
-    )
-    assert f"REF={GOLDEN_REF}" in stdout, (
-        f"Expected REF={GOLDEN_REF} in stdout, got: {stdout}"
-    )
+    assert f"PROJECT={GOLDEN_PROJECT}" in stdout, f"Expected PROJECT={GOLDEN_PROJECT} in stdout, got: {stdout}"
+    assert f"REF={GOLDEN_REF}" in stdout, f"Expected REF={GOLDEN_REF} in stdout, got: {stdout}"
     assert f"SERVICE_NAME={GOLDEN_SERVICE_FROM_YAML}" in stdout, (
         f"Expected SERVICE_NAME={GOLDEN_SERVICE_FROM_YAML} in stdout, got: {stdout}"
     )
-    assert str(project_dir) in stdout, (
-        f"Expected PROJECT_DIR={project_dir} in stdout, got: {stdout}"
+    assert str(project_dir) in stdout, f"Expected PROJECT_DIR={project_dir} in stdout, got: {stdout}"
+    logger.info(
+        "[IMP:9][test_parse_ssh_command_valid][assert] PROJECT=%s REF=%s SERVICE=%s",
+        GOLDEN_PROJECT,
+        GOLDEN_REF,
+        GOLDEN_SERVICE_FROM_YAML,
     )
-    logger.info("[IMP:9][test_parse_ssh_command_valid][assert] PROJECT=%s REF=%s SERVICE=%s",
-                GOLDEN_PROJECT, GOLDEN_REF, GOLDEN_SERVICE_FROM_YAML)
     assert found_imp9, f"Critical LDD Error: No IMP:9 business logic log found. stdout={stdout!r}"
+
+
 # endregion
 
 
@@ -339,17 +339,15 @@ echo "[IMP:9][verify] UNEXPECTED_SUCCESS"
     )
 
     found_imp9 = _print_ldd(stderr, stdout)
-    assert rc != 0, (
-        f"parse_ssh_command should have failed with empty command, got rc=0. stdout={stdout}"
-    )
+    assert rc != 0, f"parse_ssh_command should have failed with empty command, got rc=0. stdout={stdout}"
     assert FATAL_SSH_NOT_SET in stderr or FATAL_INVALID_INVOCATION in stderr, (
         f"Expected fatal error message in stderr, got: {stderr}"
     )
-    assert "UNEXPECTED_SUCCESS" not in stdout, (
-        f"Function should have exited before this line: {stdout}"
-    )
+    assert "UNEXPECTED_SUCCESS" not in stdout, f"Function should have exited before this line: {stdout}"
     logger.info("[IMP:9][test_parse_ssh_command_empty][assert] Empty command correctly rejected")
     assert found_imp9, f"Critical LDD Error: No IMP:9 business logic log found. stderr={stderr!r}"
+
+
 # endregion
 
 
@@ -394,23 +392,18 @@ echo "[IMP:9][verify] NODE_NAME=${NODE_NAME}"
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"parse_ssh_command failed with rc={rc}: stderr={stderr}"
     # Despite NODE_NAME being "wrong-node", the function should parse correctly
-    assert "PROJECT=myapp-node-check" in stdout, (
-        f"Expected PROJECT=myapp-node-check, got: {stdout}"
-    )
-    assert "REF=v2.0.0" in stdout, (
-        f"Expected REF=v2.0.0, got: {stdout}"
-    )
+    assert "PROJECT=myapp-node-check" in stdout, f"Expected PROJECT=myapp-node-check, got: {stdout}"
+    assert "REF=v2.0.0" in stdout, f"Expected REF=v2.0.0, got: {stdout}"
     # Current behavior: SERVICE_NAME falls back to PROJECT when no ai-platform.yaml
     assert "SERVICE_NAME=myapp-node-check" in stdout, (
         f"Expected SERVICE_NAME=myapp-node-check (fallback), got: {stdout}"
     )
     # Verify NODE_NAME is not overwritten by parse_ssh_command
-    assert "NODE_NAME=wrong-node" in stdout, (
-        f"Expected NODE_NAME=wrong-node preserved, got: {stdout}"
-    )
-    logger.info("[IMP:9][test_parse_ssh_command_node_mismatch][assert] "
-                "NODE_NAME mismatch does not affect parsing")
+    assert "NODE_NAME=wrong-node" in stdout, f"Expected NODE_NAME=wrong-node preserved, got: {stdout}"
+    logger.info("[IMP:9][test_parse_ssh_command_node_mismatch][assert] NODE_NAME mismatch does not affect parsing")
     assert found_imp9, f"Critical LDD Error: No IMP:9 business logic log found. stdout={stdout!r}"
+
+
 # endregion
 
 
@@ -464,18 +457,21 @@ echo "[IMP:9][verify] PREVIOUS_IMAGE_TAG=${PREVIOUS_IMAGE_TAG}"
 
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"save_previous_image failed with rc={rc}: stderr={stderr}"
-    assert "FIRST_DEPLOY=0" in stdout, (
-        f"Expected FIRST_DEPLOY=0 (image exists), got: {stdout}"
-    )
+    assert "FIRST_DEPLOY=0" in stdout, f"Expected FIRST_DEPLOY=0 (image exists), got: {stdout}"
     assert f"PREVIOUS_IMAGE_ID={GOLDEN_IMAGE_ID}" in stdout, (
         f"Expected PREVIOUS_IMAGE_ID={GOLDEN_IMAGE_ID}, got: {stdout}"
     )
     assert f"PREVIOUS_IMAGE_TAG={GOLDEN_IMAGE_TAG}" in stdout, (
         f"Expected PREVIOUS_IMAGE_TAG={GOLDEN_IMAGE_TAG}, got: {stdout}"
     )
-    logger.info("[IMP:9][test_save_previous_image_exists][assert] "
-                "Image ID=%s Tag=%s captured", GOLDEN_IMAGE_ID, GOLDEN_IMAGE_TAG)
+    logger.info(
+        "[IMP:9][test_save_previous_image_exists][assert] Image ID=%s Tag=%s captured",
+        GOLDEN_IMAGE_ID,
+        GOLDEN_IMAGE_TAG,
+    )
     assert found_imp9, f"Critical LDD Error: No IMP:9 log found. stdout={stdout!r}"
+
+
 # endregion
 
 
@@ -521,22 +517,15 @@ echo "[IMP:9][verify] PREVIOUS_IMAGE_TAG=[${PREVIOUS_IMAGE_TAG}]"
 
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"save_previous_image failed with rc={rc}: stderr={stderr}"
-    assert "FIRST_DEPLOY=1" in stdout, (
-        f"Expected FIRST_DEPLOY=1 (first deploy), got: {stdout}"
-    )
-    assert "PREVIOUS_IMAGE_ID=[]" in stdout, (
-        f"Expected empty PREVIOUS_IMAGE_ID, got: {stdout}"
-    )
-    assert "PREVIOUS_IMAGE_TAG=[]" in stdout, (
-        f"Expected empty PREVIOUS_IMAGE_TAG, got: {stdout}"
-    )
+    assert "FIRST_DEPLOY=1" in stdout, f"Expected FIRST_DEPLOY=1 (first deploy), got: {stdout}"
+    assert "PREVIOUS_IMAGE_ID=[]" in stdout, f"Expected empty PREVIOUS_IMAGE_ID, got: {stdout}"
+    assert "PREVIOUS_IMAGE_TAG=[]" in stdout, f"Expected empty PREVIOUS_IMAGE_TAG, got: {stdout}"
     # stderr should contain FIRST_DEPLOY log message
-    assert FIRST_DEPLOY_MSG in stderr, (
-        f"Expected '{FIRST_DEPLOY_MSG}' log message in stderr, got: {stderr}"
-    )
-    logger.info("[IMP:9][test_save_previous_image_none][assert] "
-                "First deploy detected correctly")
+    assert FIRST_DEPLOY_MSG in stderr, f"Expected '{FIRST_DEPLOY_MSG}' log message in stderr, got: {stderr}"
+    logger.info("[IMP:9][test_save_previous_image_none][assert] First deploy detected correctly")
     assert found_imp9, f"Critical LDD Error: No IMP:9 log found. stderr={stderr!r}"
+
+
 # endregion
 
 
@@ -578,16 +567,11 @@ echo "[IMP:9][verify] UNEXPECTED_SUCCESS"
     )
 
     found_imp9 = _print_ldd(stderr, stdout)
-    assert rc != 0, (
-        f"save_previous_image should have failed with docker error, got rc=0. stdout={stdout}"
-    )
-    assert CRITICAL_DOCKER_FAILED in stderr, (
-        f"Expected '{CRITICAL_DOCKER_FAILED}' in stderr, got: {stderr}"
-    )
-    assert "UNEXPECTED_SUCCESS" not in stdout, (
-        f"Function should have exited before this line: {stdout}"
-    )
-    logger.info("[IMP:9][test_save_previous_image_docker_error][assert] "
-                "Docker error correctly escalated")
+    assert rc != 0, f"save_previous_image should have failed with docker error, got rc=0. stdout={stdout}"
+    assert CRITICAL_DOCKER_FAILED in stderr, f"Expected '{CRITICAL_DOCKER_FAILED}' in stderr, got: {stderr}"
+    assert "UNEXPECTED_SUCCESS" not in stdout, f"Function should have exited before this line: {stdout}"
+    logger.info("[IMP:9][test_save_previous_image_docker_error][assert] Docker error correctly escalated")
     assert found_imp9, f"Critical LDD Error: No IMP:9 log found. stderr={stderr!r}"
+
+
 # endregion

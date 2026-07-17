@@ -80,7 +80,9 @@ def test_env_requires_gate_present(caplog) -> None:
 
     docker_content = content[docker_region_start:docker_region_end]
     has_docker_call = "_check_env_requires" in docker_content
-    logger.critical("[IMP:9][test_env_requires_gate] deploy_docker_module calls _check_env_requires: %s", has_docker_call)
+    logger.critical(
+        "[IMP:9][test_env_requires_gate] deploy_docker_module calls _check_env_requires: %s", has_docker_call
+    )
     assert has_docker_call, "deploy_docker_module() does not call _check_env_requires"
 
     # deploy_system_module region
@@ -91,7 +93,9 @@ def test_env_requires_gate_present(caplog) -> None:
 
     system_content = content[system_region_start:system_region_end]
     has_system_call = "_check_env_requires" in system_content
-    logger.critical("[IMP:9][test_env_requires_gate] deploy_system_module calls _check_env_requires: %s", has_system_call)
+    logger.critical(
+        "[IMP:9][test_env_requires_gate] deploy_system_module calls _check_env_requires: %s", has_system_call
+    )
     assert has_system_call, "deploy_system_module() does not call _check_env_requires"
 
     # ── LDD trajectory ─────────────────────────────────────────────────────
@@ -161,7 +165,7 @@ def test_no_hardcoded_hermes_images(caplog) -> None:
         pytest.fail(
             f"deploy-modules.sh contains {len(hardcoded_lines)} hardcoded 'ghcr.io/tronyx161/hermes-agent' reference(s).\n"
             f"Image checks must derive from `docker compose config --images` (T4).\n"
-            f"Offending lines: {[l for l, _ in hardcoded_lines]}"
+            f"Offending lines: {[line for line, _ in hardcoded_lines]}"
         )
 
     logger.critical("[IMP:9][test_no_hardcoded_hermes] ✅ No hardcoded hermes images found")
@@ -235,10 +239,7 @@ def test_clickhouse_password_url_safe(caplog) -> None:
     )
 
     # Check constraint comment exists near CLICKHOUSE_PASSWORD
-    has_constraint_comment = (
-        "CLICKHOUSE_PASSWORD must match" in env_content
-        or "[A-Za-z0-9._-]" in env_content
-    )
+    has_constraint_comment = "CLICKHOUSE_PASSWORD must match" in env_content or "[A-Za-z0-9._-]" in env_content
     logger.critical(
         "[IMP:9][test_clickhouse_pwd] Constraint comment present in .env.example: %s",
         has_constraint_comment,

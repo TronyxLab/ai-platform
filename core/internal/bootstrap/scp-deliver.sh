@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # GREP_SUMMARY: bootstrap scp-deliver scp_to_server prepare_ssh_opts rsync ssh ssh-keygen ssh-opts mkdir-p remote-transfer
 # STRUCTURE: ▶ init SSH_OPTS → ⚡ prepare_ssh_opts(ssh_host) → ⚡ scp_to_server(host, node, ncd, cd) → ┌mkdir -p┐ → ⚡ phase 1/4 rsync core/ → ⚡ phase 1b/4 rsync platform-env.yaml → ⚡ phase 1c/4 rsync Makefile → ⚡ phase 2/4 rsync node-configs/ → ◇ secrets? → ⚡ phase 3/4 rsync secrets/ → ⎋ return 0|1
 # region MODULE_CONTRACT

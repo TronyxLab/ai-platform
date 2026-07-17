@@ -149,7 +149,7 @@ lifecycle:
     description: "Restore from backup"
   - make_target: node-update
     mechanism: ssh+rsync
-    delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → provision + deploy-modules + healthcheck
+    delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/ssl-provision.sh + provision + deploy-modules + healthcheck
     description: "Regular CI update of an already-provisioned node (not INIT)"
 
 # ---------------------------------------------------------------------------

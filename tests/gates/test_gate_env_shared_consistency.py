@@ -22,13 +22,12 @@
 
 import logging
 import os
-import re
 
 import pytest
 import yaml
 
-from tests.conftest import ldd_trajectory
 from tests._conftest.audit import discover_docker_modules
+from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +153,7 @@ def test_env_shared_vars_injected_in_compose(caplog) -> None:
         )
         assert not violations, (
             f"GATE_ENV_SHARED_NOT_INJECTED: {len(violations)} module(s) have env_shared vars "
-            f"not referenced in their docker-compose.base.yml:\n  "
-            + "\n  ".join(violations)
+            f"not referenced in their docker-compose.base.yml:\n  " + "\n  ".join(violations)
         )
         logger.info("[IMP:9][gate][forward] PASS: all env_shared vars are injected in compose")
 
@@ -205,23 +203,21 @@ def test_proxy_vars_are_opt_in(caplog) -> None:
         # Violation B: module is in consumers but does NOT declare proxy
         missing_declarations = allowed_consumers - proxy_declaring_modules
 
-        violations: list[str] = []
-        for mod in sorted(undeclared_consumers):
-            violations.append(
-                f"{mod}: declares proxy vars in env_shared but NOT in platform-env.yaml proxy.consumers"
-            )
-        for mod in sorted(missing_declarations):
-            violations.append(
-                f"{mod}: in platform-env.yaml proxy.consumers but does NOT declare proxy vars in env_shared"
-            )
+        violations: list[str] = [
+            f"{mod}: declares proxy vars in env_shared but NOT in platform-env.yaml proxy.consumers"
+            for mod in sorted(undeclared_consumers)
+        ]
+        violations.extend(
+            f"{mod}: in platform-env.yaml proxy.consumers but does NOT declare proxy vars in env_shared"
+            for mod in sorted(missing_declarations)
+        )
 
         logger.critical(
             "[IMP:9][gate][reverse] ASSERT: %d opt-in violation(s)",
             len(violations),
         )
         assert not violations, (
-            f"GATE_PROXY_OPT_IN_FAILED: {len(violations)} proxy opt-in violation(s):\n  "
-            + "\n  ".join(violations)
+            f"GATE_PROXY_OPT_IN_FAILED: {len(violations)} proxy opt-in violation(s):\n  " + "\n  ".join(violations)
         )
         logger.info("[IMP:9][gate][reverse] PASS: proxy opt-in contract holds")
 
@@ -281,9 +277,7 @@ def test_env_noproxy_covers_internal_services(caplog) -> None:
         platform_env = _load_platform_env()
         proxy_config = platform_env.get("proxy", {})
         no_proxy_internal_raw: str = proxy_config.get("no_proxy_internal", "")
-        no_proxy_internal_set: set[str] = {
-            entry.strip() for entry in no_proxy_internal_raw.split(",") if entry.strip()
-        }
+        no_proxy_internal_set: set[str] = {entry.strip() for entry in no_proxy_internal_raw.split(",") if entry.strip()}
         logger.info("[IMP:8][gate][sot_coverage] SoT no_proxy_internal = %s", sorted(no_proxy_internal_set))
 
         # ── Validate .env.example ──

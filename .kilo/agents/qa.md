@@ -56,30 +56,30 @@ permission: {}
 
     2. **Phase 2 — Cross-File Drift Detection (NEW, core QA capability):**
        **Expand scope** per §INVARIANT (Scope Expansion) rules.
-       
+
        Automated drift checks:
-       
+
        a. **Image version drift:** grep `image:` across all compose files → build matrix: service × file × version. Flag version mismatches.
           → DRIFT "image redis: 7.4.9-alpine (root) vs 7.4-alpine (base) — different pin granularity"
-       
+
        b. **Env variable drift:** extract all env var names from .env → grep each name in compose files + CI workflows + conftest.py. Flag any missing.
           → DRIFT "VAR_X defined in .env but not present in CI workflow Y or SMOKE_ENV"
-       
+
        c. **Healthcheck duplication:** for each service, find ALL healthcheck implementations (Docker HEALTHCHECK, shell healthcheck.sh, docker inspect fallback). Flag >1 mechanism.
           → DRIFT "litellm has 3 healthcheck mechanisms: Docker HEALTHCHECK (/health/readiness), shell curl (/health), docker inspect fallback"
-       
+
        d. **Module contract violations:** for each module directory, verify required files exist: docker-compose.base.yml + healthcheck.sh + Makefile + module.yaml. Flag missing files.
           → CONTRACT "module nginx: missing docker-compose.base.yml (required by core/modules/AGENTS.md)"
-       
+
        e. **Cross-file value mismatch:** for semantically identical values across files (NO_PROXY, network names, volume paths, image versions), extract and compare. Flag differences.
           → MISMATCH "NO_PROXY: hermes-agent has 3 hosts, litellm has 11 hosts. Internal service names missing from hermes-agent."
-       
+
        f. **Manifest parity:** compare entrypoint-manifest.yaml registered targets vs actual Makefile .PHONY targets vs actual filesystem scripts. Flag orphans in either direction.
           → DRIFT "manifest lists module-build, module-up, module-status — none exist in module Makefiles"
-       
+
        g. **Version consistency:** compare all version strings: core/VERSION vs module.yaml `version` fields vs docker-compose image tags. Flag divergences.
           → DRIFT "module.yaml version 0.1.0 ≠ core/VERSION 0.5.0 — monoversion invariant violated"
-       
+
        h. **Network/volume consistency:** extract network names and volume bind paths from root compose → grep in test infrastructure (conftest, networks.py, infra.py). Flag undefined networks/volumes.
           → DRIFT "network 'backup-net' defined in compose but not referenced in tests/_conftest/networks.py"
 
@@ -94,22 +94,22 @@ permission: {}
 
     4. **Phase 4 — Test Quality Deep Audit (ENHANCED):**
         Inherits mechanical checks (stub, grep-style, skip-rate) PLUS:
-       
+
        a. **Invariant coverage gap:** for each invariant from Phase 3, check if any test explicitly verifies it (grep invariant keywords in test files). Flag uncovered invariants.
           → GAP "invariant 'Makefile — единый фасад' has no test coverage"
-       
+
        b. **Contract test presence:** for each cross-layer contract from DevPlan/AGENTS.md, verify gate tests exist.
           → GAP "contract 'entrypoint→internal delegation' has no gate test"
-       
+
        c. **Semantic assertion check:** categorize each test assertion:
           - Substring match on code structure (grep, `assert "string" in content`) → IMPLEMENTATION test
           - Return value / side effect / behavioral assertion → BEHAVIORAL test
           Flag files with >50% implementation tests.
           → IMPL_TEST "test_gate_grep_summary.py: 8/10 assertions are substring matches on code text"
-       
+
        d. **Drift gate test presence:** for each Phase 2 drift check, verify a corresponding gate test exists.
           → GAP "no gate test for image version consistency across compose files"
-       
+
        e. **Test fragility index:** count tests with skip markers OR unchanged >90 days.
           → FRAGILE "N tests stale (skip-marked or unchanged >90 days)"
 
@@ -124,18 +124,18 @@ permission: {}
 
     6. **Phase 6 — Config Sync Audit (NEW):**
        For each config domain, verify single source of truth propagates correctly:
-       
+
        a. **Env variable propagation chain:**
           .env → .env.example → docker-compose.yml → docker-compose.base.yml →
           CI workflow files → tests/conftest.py (SMOKE_ENV)
           → For each variable in .env: trace through chain, flag break points.
           → CHAIN "HERMES_DASHBOARD_PASSWORD: .env ✓ → .env.example ✓ → compose ✓ → CI ✗ (missing in nightly-gate.yml)"
-       
+
        b. **Compose override consistency:**
           base.yml → test.yml → macos.yml → platform-dev.yml
           → For each service: verify override chain doesn't silently drop or duplicate config.
           → OVERRIDE "cAdvisor volumes: base.yml defines socket mount, macos.yml overrides with !override — intentional but fragile"
-       
+
        c. **Docker network consistency:**
           root compose networks: → test conftest networks.py → module compose files
           → Verify all network names are defined in all locations that reference them.

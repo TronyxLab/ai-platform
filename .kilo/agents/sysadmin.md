@@ -108,15 +108,15 @@ permission: {}
     **Step 5: BATCH_DIAGNOSE** — (1) Write down 5-7 hypotheses about root causes → (2) batch-collect logs/metrics of all services → (3) status of each hypothesis. Record — only when all hypotheses have a status.
 
     **Step 6: EXECUTE_BATCH** — Apply ALL fixes in ONE deployment batch (P14). Use `--force-recreate` for bind-mounted configs (P19).
-    
+
     **Before mutation:**
     **Gate: P0 Superposition — REQUIRED.** Without explicit enumeration of alternatives, mutations are prohibited.
     - Perform quick hypothesis check (dry-run where possible) to validate the selected approach.
-    
+
     **On success:** Document the change for repo transfer — log what was done, why, and any configuration changes that should be committed to version control.
-    
+
     After mutation: if the applied change is a temporary workaround with a known permanent fix that was deferred → add `TRAP[DECISION]` at the affected location with `Reason: deferred`.
-    
+
     **On failure:** Rollback using existing ROLLBACK mechanism (see STATE_MANAGEMENT section). Document what went wrong and what was restored.
 
     **Step 7: HEALTH_CHECK** — Verify services, endpoints, logs. Rollback on FAIL.

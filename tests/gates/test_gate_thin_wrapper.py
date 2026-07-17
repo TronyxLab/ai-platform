@@ -26,7 +26,6 @@ import re
 import subprocess
 
 import pytest
-
 from conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -46,11 +45,13 @@ ENTRYPOINTS_DIR: pathlib.Path = pathlib.Path(PLATFORM_ROOT) / "core" / "entrypoi
 # the allowlist once it is reduced to ≤150 LOC and ≤4 functions.
 # ═══════════════════════════════════════════════════════════════════════════
 
-ALLOWLIST: frozenset[str] = frozenset({
-    "bootstrap.sh",       # Will be refactored to ~150 LOC in T15
-    "lint.sh",            # External tool orchestrator — 221 LOC, 6 functions
-    "check-doc-headers.sh",  # Documentation audit utility — 215 LOC, 6 functions
-})
+ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "bootstrap.sh",  # Will be refactored to ~150 LOC in T15
+        "lint.sh",  # External tool orchestrator — 221 LOC, 6 functions
+        "check-doc-headers.sh",  # Documentation audit utility — 215 LOC, 6 functions
+    }
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Patterns
@@ -98,8 +99,9 @@ def filter_allowlisted(files: list[pathlib.Path]) -> list[pathlib.Path]:
             logger.info("[IMP:7][allowlist] Skipping %s (allowlisted)", f.name)
         else:
             checked.append(f)
-    logger.info("[IMP:9][filter_allowlisted] %d to check, %d allowlisted (skipped)",
-                len(checked), len(files) - len(checked))
+    logger.info(
+        "[IMP:9][filter_allowlisted] %d to check, %d allowlisted (skipped)", len(checked), len(files) - len(checked)
+    )
     return checked
 
 
@@ -116,7 +118,9 @@ def count_loc(filepath: pathlib.Path) -> int:
     """
     result: subprocess.CompletedProcess = subprocess.run(
         ["wc", "-l", str(filepath)],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     loc_str: str = result.stdout.strip().split()[0]
     loc: int = int(loc_str)
@@ -140,7 +144,8 @@ def count_functions(filepath: pathlib.Path) -> int:
     """
     result: subprocess.CompletedProcess = subprocess.run(
         ["grep", "-cE", r"^\s*(function\s+\w+|\w+\s*\(\)\s*\{)", str(filepath)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     stdout: str = result.stdout.strip()
     count: int = int(stdout) if stdout else 0
@@ -197,20 +202,20 @@ def find_binary_violations(filepath: pathlib.Path) -> list[tuple[int, str]]:
 @pytest.mark.gate
 def test_discovery() -> None:
     """Verify entrypoint discovery works and finds expected baseline files.
-    
+
     ## @purpose — Ensure glob-based discovery is operational before main checks.
     ##            Fast smoke: if discovery breaks, all other tests will cascade-fail.
     """
     logger.info("[IMP:8][test_discovery] Verifying entrypoint discovery")
-    
+
     files = get_entrypoints()
     assert len(files) >= 10, f"Expected ≥10 entrypoints, found {len(files)}"
-    
+
     names: set[str] = {f.name for f in files}
     assert "bootstrap.sh" in names, "bootstrap.sh not found in entrypoints"
     assert "deploy.sh" in names, "deploy.sh not found in entrypoints"
     assert "build.sh" in names, "build.sh not found in entrypoints"
-    
+
     logger.info("[IMP:9][test_discovery] PASS — %d entrypoints found, baseline files present", len(files))
 
 
@@ -241,7 +246,7 @@ def test_entrypoint_loc(caplog) -> None:
             logger.info("[IMP:9][loc][FAIL] %s exceeds 150 LOC (%d)", f.name, loc)
 
     if violations:
-        pytest.fail(f"Entrypoint LOC violations (≤150 expected):\n" + "\n".join(violations))
+        pytest.fail("Entrypoint LOC violations (≤150 expected):\n" + "\n".join(violations))
 
     logger.info("[IMP:9][test_entrypoint_loc] PASS — all %d entrypoints ≤150 LOC", len(files))
 
@@ -276,7 +281,7 @@ def test_entrypoint_function_count(caplog) -> None:
             logger.info("[IMP:9][funcs][FAIL] %s exceeds 4 functions (%d)", f.name, func_count)
 
     if violations:
-        pytest.fail(f"Entrypoint function count violations (≤4 expected):\n" + "\n".join(violations))
+        pytest.fail("Entrypoint function count violations (≤4 expected):\n" + "\n".join(violations))
 
     logger.info("[IMP:9][test_entrypoint_function_count] PASS — all %d entrypoints ≤4 functions", len(files))
 
@@ -311,11 +316,11 @@ def test_entrypoint_no_direct_binary_calls(caplog) -> None:
         violations: list[tuple[int, str]] = find_binary_violations(f)
         if violations:
             detail: str = "\n".join(f"  {f.name}:{ln} — {txt}" for ln, txt in violations)
-            logger.info("[IMP:9][binary][FAIL] %s has %d binary call violation(s):\n%s",
-                        f.name, len(violations), detail)
+            logger.info(
+                "[IMP:9][binary][FAIL] %s has %d binary call violation(s):\n%s", f.name, len(violations), detail
+            )
             pytest.fail(
-                f"{f.name} contains direct binary call(s) (rsync/ssh/scp/ssh-keygen) "
-                f"in executable code:\n{detail}"
+                f"{f.name} contains direct binary call(s) (rsync/ssh/scp/ssh-keygen) in executable code:\n{detail}"
             )
         logger.info("[IMP:7][binary][PASS] %s: clean", f.name)
 

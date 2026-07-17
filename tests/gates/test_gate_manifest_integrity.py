@@ -407,7 +407,9 @@ def _load_module_dictionary() -> set[str]:
     manifest = _load_manifest()
     module_lifecycle: set[str] = set(manifest.get("module_lifecycle", []))
     module_dict: set[str] = module_lifecycle | {"backup", "help"}
-    logger.debug("[IMP:8][_load_module_dictionary] Loaded %d targets from manifest module_lifecycle + extras", len(module_dict))
+    logger.debug(
+        "[IMP:8][_load_module_dictionary] Loaded %d targets from manifest module_lifecycle + extras", len(module_dict)
+    )
     return module_dict
 
 
@@ -542,12 +544,20 @@ def test_allowed_verbs_match_makefile(caplog) -> None:
     )
 
     if manifest_not_in_makefile:
-        logger.warning("[IMP:7][allowed_verbs][MISSING_IN_MAKEFILE] %d verb(s): %s", len(manifest_not_in_makefile), sorted(manifest_not_in_makefile))
+        logger.warning(
+            "[IMP:7][allowed_verbs][MISSING_IN_MAKEFILE] %d verb(s): %s",
+            len(manifest_not_in_makefile),
+            sorted(manifest_not_in_makefile),
+        )
     else:
         logger.info("[IMP:9][allowed_verbs][MAKEFILE_OK] All manifest verbs have Makefile targets")
 
     if makefile_not_in_manifest:
-        logger.warning("[IMP:7][allowed_verbs][MISSING_IN_MANIFEST] %d target(s): %s", len(makefile_not_in_manifest), sorted(makefile_not_in_manifest))
+        logger.warning(
+            "[IMP:7][allowed_verbs][MISSING_IN_MANIFEST] %d target(s): %s",
+            len(makefile_not_in_manifest),
+            sorted(makefile_not_in_manifest),
+        )
     else:
         logger.info("[IMP:9][allowed_verbs][MANIFEST_OK] All Makefile targets registered in manifest")
 
@@ -566,7 +576,11 @@ def test_allowed_verbs_match_makefile(caplog) -> None:
         )
 
     assert not errors, "\n\n".join(errors)
-    logger.info("[IMP:9][test_allowed_verbs_match_makefile] %d root allowed verbs ↔ %d targets: SYNC OK", len(root_allowed_verbs), len(operational_targets))
+    logger.info(
+        "[IMP:9][test_allowed_verbs_match_makefile] %d root allowed verbs ↔ %d targets: SYNC OK",
+        len(root_allowed_verbs),
+        len(operational_targets),
+    )
 
 
 # endregion FUNC_test_allowed_verbs_match_makefile
@@ -596,16 +610,28 @@ def test_agents_md_synced_with_manifest(caplog) -> None:
 
     logger.info("[IMP:8][agents_md] %d verb(s) in core/AGENTS.md table", len(agents_verbs))
     if agents_not_in_manifest:
-        logger.warning("[IMP:7][agents_md][EXTRA_IN_DOCS] %d verb(s) in core/AGENTS.md but not in manifest: %s", len(agents_not_in_manifest), sorted(agents_not_in_manifest))
+        logger.warning(
+            "[IMP:7][agents_md][EXTRA_IN_DOCS] %d verb(s) in core/AGENTS.md but not in manifest: %s",
+            len(agents_not_in_manifest),
+            sorted(agents_not_in_manifest),
+        )
     if manifest_not_in_agents:
-        logger.warning("[IMP:7][agents_md][DOCS_GAP] %d manifest verb(s) not documented in core/AGENTS.md: %s", len(manifest_not_in_agents), sorted(manifest_not_in_agents))
+        logger.warning(
+            "[IMP:7][agents_md][DOCS_GAP] %d manifest verb(s) not documented in core/AGENTS.md: %s",
+            len(manifest_not_in_agents),
+            sorted(manifest_not_in_agents),
+        )
 
     module_verbs: set[str] = _extract_module_verbs(_MODULES_AGENTS_PATH)
     module_forbidden_conflict: set[str] = module_verbs & forbidden_verbs
 
     logger.info("[IMP:8][modules_agents] %d module verb(s) in core/modules/AGENTS.md", len(module_verbs))
     if module_forbidden_conflict:
-        logger.warning("[IMP:7][modules_agents][FORBIDDEN_CONFLICT] %d module verb(s) are in manifest forbidden_verbs: %s", len(module_forbidden_conflict), sorted(module_forbidden_conflict))
+        logger.warning(
+            "[IMP:7][modules_agents][FORBIDDEN_CONFLICT] %d module verb(s) are in manifest forbidden_verbs: %s",
+            len(module_forbidden_conflict),
+            sorted(module_forbidden_conflict),
+        )
     else:
         logger.info("[IMP:9][modules_agents][NO_CONFLICT] No module verbs conflict with forbidden_verbs")
 
@@ -629,7 +655,10 @@ def test_agents_md_synced_with_manifest(caplog) -> None:
         )
 
     assert not errors, "\n\n".join(errors)
-    logger.info("[IMP:9][test_agents_md_synced_with_manifest] core/AGENTS.md ↔ manifest: %d verbs in sync; modules/AGENTS.md ↔ forbidden: 0 conflicts", len(allowed_verbs))
+    logger.info(
+        "[IMP:9][test_agents_md_synced_with_manifest] core/AGENTS.md ↔ manifest: %d verbs in sync; modules/AGENTS.md ↔ forbidden: 0 conflicts",
+        len(allowed_verbs),
+    )
 
 
 # endregion FUNC_test_agents_md_synced_with_manifest
@@ -652,7 +681,9 @@ def test_forbidden_directories_absent(caplog) -> None:
     forbidden_dirs: list[str] = manifest.get("forbidden_directories", [])
     forbidden_scripts: list[str] = manifest.get("forbidden_scripts", [])
 
-    logger.info("[IMP:8][forbidden] %d forbidden dir(s), %d forbidden script(s)", len(forbidden_dirs), len(forbidden_scripts))
+    logger.info(
+        "[IMP:8][forbidden] %d forbidden dir(s), %d forbidden script(s)", len(forbidden_dirs), len(forbidden_scripts)
+    )
 
     found_dirs: list[str] = []
     for rel_dir in forbidden_dirs:
@@ -689,7 +720,11 @@ def test_forbidden_directories_absent(caplog) -> None:
         )
 
     assert not errors, "\n\n".join(errors)
-    logger.info("[IMP:9][test_forbidden_directories_absent] %d dir(s) + %d script(s): ALL ABSENT — clean", len(forbidden_dirs), len(forbidden_scripts))
+    logger.info(
+        "[IMP:9][test_forbidden_directories_absent] %d dir(s) + %d script(s): ALL ABSENT — clean",
+        len(forbidden_dirs),
+        len(forbidden_scripts),
+    )
 
 
 # endregion FUNC_test_forbidden_directories_absent
@@ -780,14 +815,25 @@ def test_module_makefiles_have_required_module_targets(caplog) -> None:
 
     errors: list[str] = []
     if missing_up:
-        errors.append(f"MISSING_TARGET: {len(missing_up)} module(s) missing 'up':\n" + "\n".join(f"  {m}" for m in missing_up))
+        errors.append(
+            f"MISSING_TARGET: {len(missing_up)} module(s) missing 'up':\n" + "\n".join(f"  {m}" for m in missing_up)
+        )
     if missing_status:
-        errors.append(f"MISSING_TARGET: {len(missing_status)} module(s) missing 'status':\n" + "\n".join(f"  {m}" for m in missing_status))
+        errors.append(
+            f"MISSING_TARGET: {len(missing_status)} module(s) missing 'status':\n"
+            + "\n".join(f"  {m}" for m in missing_status)
+        )
     if missing_build:
-        errors.append(f"MISSING_TARGET: {len(missing_build)} module(s) missing 'build':\n" + "\n".join(f"  {m}" for m in missing_build))
+        errors.append(
+            f"MISSING_TARGET: {len(missing_build)} module(s) missing 'build':\n"
+            + "\n".join(f"  {m}" for m in missing_build)
+        )
 
     assert not errors, "\n\n".join(errors)
-    logger.info("[IMP:9][test_required_module_targets] ALL PASS — all %d modules have up, status and build", len(module_makefiles))
+    logger.info(
+        "[IMP:9][test_required_module_targets] ALL PASS — all %d modules have up, status and build",
+        len(module_makefiles),
+    )
 
 
 # endregion FUNC_test_module_makefiles_have_required_module_targets
@@ -806,7 +852,11 @@ def test_no_forbidden_verbs_in_makefiles(caplog) -> None:
     manifest = _load_manifest()
     allowed_verbs: set[str] = set(manifest.get("allowed_verbs", []))
     forbidden_verbs: set[str] = set(manifest.get("forbidden_verbs", []))
-    logger.info("[IMP:8][test_no_forbidden_verbs_in_makefiles] Manifest loaded: %d allowed, %d forbidden", len(allowed_verbs), len(forbidden_verbs))
+    logger.info(
+        "[IMP:8][test_no_forbidden_verbs_in_makefiles] Manifest loaded: %d allowed, %d forbidden",
+        len(allowed_verbs),
+        len(forbidden_verbs),
+    )
 
     errors: list[str] = []
     root_targets = _get_all_targets(_MAKEFILE_PATH)
@@ -858,7 +908,9 @@ def test_module_targets_use_canonical_names(caplog) -> None:
     for mf in module_makefiles:
         module_name = os.path.basename(os.path.dirname(mf))
         targets = _get_all_targets(mf)
-        logger.debug("[IMP:7][test_module_targets_use_canonical_names] Module '%s': %d targets", module_name, len(targets))
+        logger.debug(
+            "[IMP:7][test_module_targets_use_canonical_names] Module '%s': %d targets", module_name, len(targets)
+        )
 
         for target in sorted(targets):
             if _is_namespace_collision(target):
@@ -883,7 +935,10 @@ def test_module_targets_use_canonical_names(caplog) -> None:
         logger.error("[IMP:9][test_module_targets_use_canonical_names] %d violation(s) found", len(errors))
         pytest.fail("\n".join(errors))
 
-    logger.info("[IMP:9][test_module_targets_use_canonical_names] ALL PASS — all %d module Makefiles use canonical names", len(module_makefiles))
+    logger.info(
+        "[IMP:9][test_module_targets_use_canonical_names] ALL PASS — all %d module Makefiles use canonical names",
+        len(module_makefiles),
+    )
 
 
 @pytest.mark.gate
@@ -900,7 +955,9 @@ def test_entrypoint_names_match_manifest(caplog) -> None:
                 if isinstance(entry, dict) and "delegates_to" in entry:
                     delegates_to_values.add(entry["delegates_to"])
 
-    logger.info("[IMP:8][test_entrypoint_names_match_manifest] Manifest has %d delegates_to entries", len(delegates_to_values))
+    logger.info(
+        "[IMP:8][test_entrypoint_names_match_manifest] Manifest has %d delegates_to entries", len(delegates_to_values)
+    )
 
     scripts = _get_entrypoint_scripts()
     logger.info("[IMP:8][test_entrypoint_names_match_manifest] Found %d entrypoint scripts", len(scripts))
@@ -923,7 +980,10 @@ def test_entrypoint_names_match_manifest(caplog) -> None:
         logger.error("[IMP:9][test_entrypoint_names_match_manifest] %d violation(s) found", len(errors))
         pytest.fail("\n".join(errors))
 
-    logger.info("[IMP:9][test_entrypoint_names_match_manifest] ALL PASS — all %d entrypoint scripts are registered in manifest", len(scripts))
+    logger.info(
+        "[IMP:9][test_entrypoint_names_match_manifest] ALL PASS — all %d entrypoint scripts are registered in manifest",
+        len(scripts),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

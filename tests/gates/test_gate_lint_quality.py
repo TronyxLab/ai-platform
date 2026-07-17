@@ -137,7 +137,9 @@ def _run_python_linter(test_targets: dict[str, str]) -> list[str]:
     forbidden_verbs: set[str] = set(manifest.get("forbidden_verbs", []))
     name_linter_config: dict = manifest.get("name_linter", {})
     system_exceptions: set[str] = set(name_linter_config.get("system_exceptions", ["help", "venv"]))
-    system_prefixes: tuple[str, ...] = tuple(name_linter_config.get("system_prefixes", ["test-", "gate-", "pre-commit-"]))
+    system_prefixes: tuple[str, ...] = tuple(
+        name_linter_config.get("system_prefixes", ["test-", "gate-", "pre-commit-"])
+    )
 
     all_allowed: set[str] = allowed_verbs | module_lifecycle | system_exceptions
 
@@ -152,7 +154,9 @@ def _run_python_linter(test_targets: dict[str, str]) -> list[str]:
             continue
         failed_targets.append(target)
 
-    logger.info("[IMP:8][_run_python_linter] Python linter: %d FAIL out of %d targets", len(failed_targets), len(test_targets))
+    logger.info(
+        "[IMP:8][_run_python_linter] Python linter: %d FAIL out of %d targets", len(failed_targets), len(test_targets)
+    )
     return failed_targets
 
 
@@ -204,6 +208,8 @@ def test_linter_parity(caplog, tmp_path) -> None:
     if errors:
         logger.error("[IMP:9][test_linter_parity] FAIL: %d disagreement(s)", len(errors))
     else:
-        logger.info("[IMP:9][test_linter_parity] ALL PASS — bash and Python linters agree on all %d targets", len(target_names))
+        logger.info(
+            "[IMP:9][test_linter_parity] ALL PASS — bash and Python linters agree on all %d targets", len(target_names)
+        )
 
     assert not errors, "\n".join(errors)

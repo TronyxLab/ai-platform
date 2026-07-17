@@ -167,12 +167,8 @@ def monitoring_compose():
     env_up = {
         **subprocess.os.environ,
         "COMPOSE_PROFILES": "monitoring",
-        "PROMETHEUS_TARGETS_DIR": subprocess.os.environ.get(
-            "PROMETHEUS_TARGETS_DIR", "/tmp/prometheus-targets"
-        ),
-        "PROMETHEUS_RULES_DIR": subprocess.os.environ.get(
-            "PROMETHEUS_RULES_DIR", "/tmp/prometheus-rules"
-        ),
+        "PROMETHEUS_TARGETS_DIR": subprocess.os.environ.get("PROMETHEUS_TARGETS_DIR", "/tmp/prometheus-targets"),
+        "PROMETHEUS_RULES_DIR": subprocess.os.environ.get("PROMETHEUS_RULES_DIR", "/tmp/prometheus-rules"),
     }
 
     try:

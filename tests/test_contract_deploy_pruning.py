@@ -27,7 +27,6 @@ import pathlib
 import subprocess
 
 import pytest
-
 from conftest import assert_ldd_stderr
 
 # ── Paths ──────────────────────────────────────────────────────────────────
@@ -57,47 +56,47 @@ def _run_bash(
 
     # Default docker mock — handles all subcommands used by prune_old_images
     default_docker_mock = (
-        'docker() {\n'
+        "docker() {\n"
         '  local cmd="$1"; shift\n'
         '  echo "[MOCK:docker] $cmd $*" >&2\n'
         '  case "$cmd" in\n'
-        '    compose)\n'
+        "    compose)\n"
         '      local sub="$1"; shift\n'
         '      case "$sub" in\n'
-        '        config)\n'
+        "        config)\n"
         '          echo "services:"\n'
         '          echo "  test-app:"\n'
         '          echo "    image: registry.io/test/app:latest"\n'
-        '          ;;\n'
-        '        *) return 0 ;;\n'
-        '      esac\n'
-        '      ;;\n'
-        '    images)\n'
+        "          ;;\n"
+        "        *) return 0 ;;\n"
+        "      esac\n"
+        "      ;;\n"
+        "    images)\n"
         '      echo "sha256:aaa registry.io/test/app 2026-07-17"\n'
         '      echo "sha256:bbb registry.io/test/app 2026-07-10"\n'
         '      echo "sha256:ccc registry.io/test/app 2026-07-01"\n'
         '      echo "sha256:ddd registry.io/test/app 2026-06-15"\n'
         '      echo "sha256:eee registry.io/test/app 2026-06-01"\n'
-        '      ;;\n'
-        '    rmi)\n'
-        '      return 0\n'
-        '      ;;\n'
-        '    *) return 0 ;;\n'
-        '  esac\n'
-        '}\n'
+        "      ;;\n"
+        "    rmi)\n"
+        "      return 0\n"
+        "      ;;\n"
+        "    *) return 0 ;;\n"
+        "  esac\n"
+        "}\n"
     )
 
     docker_mock = docker_mock_code if docker_mock_code is not None else default_docker_mock
 
     script_content = (
-        '#!/usr/bin/env bash\n'
-        'set -euo pipefail\n'
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
         'logger() { local tag="$2"; shift 2; echo "[MOCK:logger] tag=" "$tag" "msg=$*" >&2; }\n'
-        f'{docker_mock}\n'
-        'export -f logger docker\n'
+        f"{docker_mock}\n"
+        "export -f logger docker\n"
         f'source "{deploy_path_escaped}"\n'
-        'trap - ERR EXIT\n'
-        f'{code}\n'
+        "trap - ERR EXIT\n"
+        f"{code}\n"
     )
     script.write_text(script_content)
     script.chmod(0o755)
@@ -140,16 +139,19 @@ def test_prune_enforces_keep(tmp_path: pathlib.Path) -> None:
     code = (
         'SERVICE_NAME="test-app"\n'
         'PROJECT="test-project"\n'
-        'prune_old_images\n'
+        "prune_old_images\n"
         'log_imp 9 "test" "Verification: prune complete"\n'
     )
 
     result = _run_bash(tmp_path, code, env={"PLATFORM_DEPLOY_KEEP_IMAGES": "3"})
 
-    assert_ldd_stderr(result, expected_patterns=[
-        "Pruning old images",
-        "Prune complete: removed=2",
-    ])
+    assert_ldd_stderr(
+        result,
+        expected_patterns=[
+            "Pruning old images",
+            "Prune complete: removed=2",
+        ],
+    )
 
     print("[IMP:9][test_prune_enforces_keep] PASS: 2 of 5 images removed (KEEP_IMAGES=3)")
     print("--- END LDD TRAJECTORY ---")
@@ -170,16 +172,19 @@ def test_prune_default_keep(tmp_path: pathlib.Path) -> None:
     code = (
         'SERVICE_NAME="test-app"\n'
         'PROJECT="test-project"\n'
-        'prune_old_images\n'
+        "prune_old_images\n"
         'log_imp 9 "test" "Verification: prune complete"\n'
     )
 
     result = _run_bash(tmp_path, code)
 
-    assert_ldd_stderr(result, expected_patterns=[
-        "Pruning old images",
-        "Prune complete: removed=2",
-    ])
+    assert_ldd_stderr(
+        result,
+        expected_patterns=[
+            "Pruning old images",
+            "Prune complete: removed=2",
+        ],
+    )
 
     print("[IMP:9][test_prune_default_keep] PASS: default KEEP_IMAGES=3 enforced")
     print("--- END LDD TRAJECTORY ---")
@@ -198,44 +203,46 @@ def test_prune_fallback_pattern(tmp_path: pathlib.Path) -> None:
     # ▶ docker compose config fails → fallback to PROJECT="test-app" → ◇ pruning works → ⎋ pass
     """
     mock_with_fallback = (
-        'docker() {\n'
+        "docker() {\n"
         '  local cmd="$1"; shift\n'
         '  echo "[MOCK:docker] $cmd $*" >&2\n'
         '  case "$cmd" in\n'
-        '    compose)\n'
+        "    compose)\n"
         '      local sub="$1"; shift\n'
         '      case "$sub" in\n'
-        '        config) return 1 ;;\n'  # Simulate failure
-        '        *) return 0 ;;\n'
-        '      esac\n'
-        '      ;;\n'
-        '    images)\n'
+        "        config) return 1 ;;\n"  # Simulate failure
+        "        *) return 0 ;;\n"
+        "      esac\n"
+        "      ;;\n"
+        "    images)\n"
         '      echo "sha256:aaa test-app-image 2026-07-17"\n'
         '      echo "sha256:bbb test-app-image 2026-07-10"\n'
         '      echo "sha256:ccc test-app-image 2026-07-01"\n'
         '      echo "sha256:ddd test-app-image 2026-06-15"\n'
         '      echo "sha256:eee test-app-image 2026-06-01"\n'
-        '      ;;\n'
-        '    rmi) return 0 ;;\n'
-        '    *) return 0 ;;\n'
-        '  esac\n'
-        '}\n'
+        "      ;;\n"
+        "    rmi) return 0 ;;\n"
+        "    *) return 0 ;;\n"
+        "  esac\n"
+        "}\n"
     )
 
     code = (
         'SERVICE_NAME="test-app"\n'
         'PROJECT="test-app"\n'
-        'prune_old_images\n'
+        "prune_old_images\n"
         'log_imp 9 "test" "Verification: prune complete with fallback"\n'
     )
 
-    result = _run_bash(tmp_path, code, env={"PLATFORM_DEPLOY_KEEP_IMAGES": "3"},
-                       docker_mock_code=mock_with_fallback)
+    result = _run_bash(tmp_path, code, env={"PLATFORM_DEPLOY_KEEP_IMAGES": "3"}, docker_mock_code=mock_with_fallback)
 
-    assert_ldd_stderr(result, expected_patterns=[
-        "docker compose config failed",
-        "Prune complete: removed=2",
-    ])
+    assert_ldd_stderr(
+        result,
+        expected_patterns=[
+            "docker compose config failed",
+            "Prune complete: removed=2",
+        ],
+    )
 
     print("[IMP:9][test_prune_fallback_pattern] PASS: fallback to PROJECT name when compose config fails")
     print("--- END LDD TRAJECTORY ---")
@@ -254,55 +261,57 @@ def test_prune_rmi_error_handling(tmp_path: pathlib.Path) -> None:
     # ▶ docker rmi fails for 1 image → prune_old_images → ◇ removed=1 failed=1 → ⎋ pass
     """
     mock_with_rmi_failure = (
-        'docker() {\n'
+        "docker() {\n"
         '  local cmd="$1"; shift\n'
         '  echo "[MOCK:docker] $cmd $*" >&2\n'
         '  case "$cmd" in\n'
-        '    compose)\n'
+        "    compose)\n"
         '      local sub="$1"; shift\n'
         '      case "$sub" in\n'
-        '        config)\n'
+        "        config)\n"
         '          echo "services:"\n'
         '          echo "  test-app:"\n'
         '          echo "    image: registry.io/test/app:latest"\n'
-        '          ;;\n'
-        '        *) return 0 ;;\n'
-        '      esac\n'
-        '      ;;\n'
-        '    images)\n'
+        "          ;;\n"
+        "        *) return 0 ;;\n"
+        "      esac\n"
+        "      ;;\n"
+        "    images)\n"
         '      echo "sha256:aaa registry.io/test/app 2026-07-17"\n'
         '      echo "sha256:bbb registry.io/test/app 2026-07-10"\n'
         '      echo "sha256:ccc registry.io/test/app 2026-07-01"\n'
         '      echo "sha256:ddd registry.io/test/app 2026-06-15"\n'
         '      echo "sha256:eee registry.io/test/app 2026-06-01"\n'
-        '      ;;\n'
-        '    rmi)\n'
+        "      ;;\n"
+        "    rmi)\n"
         '      if echo "$*" | grep -q ddd; then\n'
         '        echo "Error: image referenced by multiple tags" >&2\n'
-        '        return 1\n'
-        '      fi\n'
-        '      return 0\n'
-        '      ;;\n'
-        '    *) return 0 ;;\n'
-        '  esac\n'
-        '}\n'
+        "        return 1\n"
+        "      fi\n"
+        "      return 0\n"
+        "      ;;\n"
+        "    *) return 0 ;;\n"
+        "  esac\n"
+        "}\n"
     )
 
     code = (
         'SERVICE_NAME="test-app"\n'
         'PROJECT="test-project"\n'
-        'prune_old_images\n'
+        "prune_old_images\n"
         'log_imp 9 "test" "Verification: prune with rmi errors"\n'
     )
 
-    result = _run_bash(tmp_path, code, env={"PLATFORM_DEPLOY_KEEP_IMAGES": "3"},
-                       docker_mock_code=mock_with_rmi_failure)
+    result = _run_bash(tmp_path, code, env={"PLATFORM_DEPLOY_KEEP_IMAGES": "3"}, docker_mock_code=mock_with_rmi_failure)
 
-    assert_ldd_stderr(result, expected_patterns=[
-        "Pruning old images",
-        "Could not remove image",
-        "Prune complete: removed=1 failed=1",
-    ])
+    assert_ldd_stderr(
+        result,
+        expected_patterns=[
+            "Pruning old images",
+            "Could not remove image",
+            "Prune complete: removed=1 failed=1",
+        ],
+    )
 
     print("[IMP:9][test_prune_rmi_error_handling] PASS: rmi failures counted, function continues")
     print("--- END LDD TRAJECTORY ---")
@@ -320,45 +329,47 @@ def test_prune_noop_when_below_keep(tmp_path: pathlib.Path) -> None:
     # ▶ 2 images, KEEP=3 → prune_old_images → ◇ "nothing to prune" → ⎋ pass
     """
     mock_few_images = (
-        'docker() {\n'
+        "docker() {\n"
         '  local cmd="$1"; shift\n'
         '  echo "[MOCK:docker] $cmd $*" >&2\n'
         '  case "$cmd" in\n'
-        '    compose)\n'
+        "    compose)\n"
         '      local sub="$1"; shift\n'
         '      case "$sub" in\n'
-        '        config)\n'
+        "        config)\n"
         '          echo "services:"\n'
         '          echo "  test-app:"\n'
         '          echo "    image: registry.io/test/app:latest"\n'
-        '          ;;\n'
-        '        *) return 0 ;;\n'
-        '      esac\n'
-        '      ;;\n'
-        '    images)\n'
+        "          ;;\n"
+        "        *) return 0 ;;\n"
+        "      esac\n"
+        "      ;;\n"
+        "    images)\n"
         '      echo "sha256:aaa registry.io/test/app 2026-07-17"\n'
         '      echo "sha256:bbb registry.io/test/app 2026-07-10"\n'
-        '      ;;\n'
-        '    rmi) return 0 ;;\n'
-        '    *) return 0 ;;\n'
-        '  esac\n'
-        '}\n'
+        "      ;;\n"
+        "    rmi) return 0 ;;\n"
+        "    *) return 0 ;;\n"
+        "  esac\n"
+        "}\n"
     )
 
     code = (
         'SERVICE_NAME="test-app"\n'
         'PROJECT="test-project"\n'
-        'prune_old_images\n'
+        "prune_old_images\n"
         'log_imp 9 "test" "Verification: prune noop"\n'
     )
 
-    result = _run_bash(tmp_path, code, env={"PLATFORM_DEPLOY_KEEP_IMAGES": "3"},
-                       docker_mock_code=mock_few_images)
+    result = _run_bash(tmp_path, code, env={"PLATFORM_DEPLOY_KEEP_IMAGES": "3"}, docker_mock_code=mock_few_images)
 
-    assert_ldd_stderr(result, expected_patterns=[
-        "Pruning old images",
-        "nothing to prune",
-    ])
+    assert_ldd_stderr(
+        result,
+        expected_patterns=[
+            "Pruning old images",
+            "nothing to prune",
+        ],
+    )
 
     print("[IMP:9][test_prune_noop_when_below_keep] PASS: no-op when count ≤ KEEP")
     print("--- END LDD TRAJECTORY ---")
@@ -376,34 +387,34 @@ def test_prune_empty_images(tmp_path: pathlib.Path) -> None:
     # ▶ docker images returns empty → prune_old_images → ◇ "No images found" → ⎋ pass
     """
     mock_empty = (
-        'docker() {\n'
+        "docker() {\n"
         '  local cmd="$1"; shift\n'
         '  echo "[MOCK:docker] $cmd $*" >&2\n'
         '  case "$cmd" in\n'
-        '    compose)\n'
+        "    compose)\n"
         '      local sub="$1"; shift\n'
         '      case "$sub" in\n'
-        '        config)\n'
+        "        config)\n"
         '          echo "services:"\n'
         '          echo "  test-app:"\n'
         '          echo "    image: registry.io/test/app:latest"\n'
-        '          ;;\n'
-        '        *) return 0 ;;\n'
-        '      esac\n'
-        '      ;;\n'
-        '    images)\n'
-        '      return 0\n'
-        '      ;;\n'
-        '    rmi) return 0 ;;\n'
-        '    *) return 0 ;;\n'
-        '  esac\n'
-        '}\n'
+        "          ;;\n"
+        "        *) return 0 ;;\n"
+        "      esac\n"
+        "      ;;\n"
+        "    images)\n"
+        "      return 0\n"
+        "      ;;\n"
+        "    rmi) return 0 ;;\n"
+        "    *) return 0 ;;\n"
+        "  esac\n"
+        "}\n"
     )
 
     code = (
         'SERVICE_NAME="test-app"\n'
         'PROJECT="test-project"\n'
-        'prune_old_images\n'
+        "prune_old_images\n"
         'log_imp 9 "test" "Verification: prune empty"\n'
     )
 

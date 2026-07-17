@@ -44,9 +44,7 @@ def test_users_d_per_file_mount(caplog) -> None:
         per_file_mount,
         has_per_file,
     )
-    assert has_per_file, (
-        f"Expected per-file ro mount '{per_file_mount}' in {_BASE_YML}"
-    )
+    assert has_per_file, f"Expected per-file ro mount '{per_file_mount}' in {_BASE_YML}"
     logger.info("[IMP:8][test_clickhouse][mount] Per-file ro mount confirmed")
 
     # ── Check 2: no users.d directory mount in the volumes block ──────────
@@ -56,10 +54,14 @@ def test_users_d_per_file_mount(caplog) -> None:
     has_dir_mount = False
     for line in content.splitlines():
         stripped = line.strip()
-        if stripped.startswith("- ") and "users.d" in stripped and "10-users.xml" not in stripped:
-            if dir_mount_yaml in stripped:
-                has_dir_mount = True
-                break
+        if (
+            stripped.startswith("- ")
+            and "users.d" in stripped
+            and "10-users.xml" not in stripped
+            and dir_mount_yaml in stripped
+        ):
+            has_dir_mount = True
+            break
 
     logger.critical(
         "[IMP:9][test_clickhouse][mount] Directory bind mount YAML present: %s",

@@ -39,7 +39,6 @@ def test_healthcheck_checks_all_containers(caplog) -> None:
     # ── Check: no head -1 in the docker container_name resolution pipeline ──
     # Look for `| head -1` in a command pipeline (not in comments describing the fix)
     has_pipeline_head = "| head -1" in content or "|head -1" in content
-    has_mapfile = "mapfile -t CONTAINER_NAMES" in content
     logger.critical(
         "[IMP:9][test_healthcheck][all] Pipeline `head -1` present: %s",
         has_pipeline_head,
@@ -51,8 +50,7 @@ def test_healthcheck_checks_all_containers(caplog) -> None:
     logger.info("[IMP:8][test_healthcheck][all] No head -1 in pipeline — all containers checked")
 
     # ── Check: mapfile or loop over multiple containers ────────────────────
-    has_container_loop = "mapfile -t CONTAINER_NAMES" in content or \
-                         "for CONTAINER_NAME in" in content
+    has_container_loop = "mapfile -t CONTAINER_NAMES" in content or "for CONTAINER_NAME in" in content
     logger.critical(
         "[IMP:9][test_healthcheck][all] Container iteration loop present: %s",
         has_container_loop,

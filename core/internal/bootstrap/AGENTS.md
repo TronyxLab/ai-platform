@@ -63,7 +63,7 @@ node-lifecycle.sh --mode update
 `deploy-modules.sh` обрабатывает два типа модулей, декларированных в `node.yaml`:
 
 ### system-модули
-- Устанавливаются через `install.sh` в директории модуля
+- Устанавливаются через install.sh в директории модуля
 - Поддерживаются через `deploy_system_module()`:
   - `systemctl daemon-reload && systemctl enable --now <service>`
   - healthcheck: `healthcheck.sh` (liveness или deep mode)

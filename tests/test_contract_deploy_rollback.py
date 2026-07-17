@@ -28,7 +28,6 @@ import pathlib
 import subprocess
 
 import pytest
-
 from conftest import assert_ldd_stderr
 
 # ── Paths ──────────────────────────────────────────────────────────────────
@@ -63,43 +62,43 @@ def _run_bash(
     deploy_path_escaped = str(DEPLOY_SCRIPT_PATH)
 
     script_content = (
-        '#!/usr/bin/env bash\n'
-        'set -euo pipefail\n'
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
         # Shell function mocks MUST be defined BEFORE sourcing deploy-project.sh
         # so they shadow external commands (logger, date, docker).
         # Mock logger FAILS (returns 1) so audit_log()'s fallback writes to stderr for test capture
-        'logger() { return 1; }\n'
-        'docker() {\n'
+        "logger() { return 1; }\n"
+        "docker() {\n"
         '  local cmd="$1"; shift\n'
-        '  local ec=0\n'
+        "  local ec=0\n"
         '  echo "[MOCK:docker] $cmd $*" >&2\n'
         '  case "$cmd" in\n'
-        '    compose)\n'
+        "    compose)\n"
         '      local sub="$1"; shift\n'
         '      case "$sub" in\n'
-        '        up|down|config) : ;;\n'
+        "        up|down|config) : ;;\n"
         '        ps|images) echo \'{"mock":"json"}\' ;;\n'
-        '        *) : ;;\n'
-        '      esac\n'
-        '      ;;\n'
+        "        *) : ;;\n"
+        "      esac\n"
+        "      ;;\n"
         # deploy-project.sh redirects docker tag stderr (2>/dev/null)
         # and compose stderr (2>&1) — use stdout for mock traces
         '    tag) echo "[MOCK:docker] tag $*" ;;\n'
-        '    rmi|image) : ;;\n'
+        "    rmi|image) : ;;\n"
         '    *) echo "[MOCK:docker] $cmd $*" ;;\n'
-        '  esac\n'
-        '  return $ec\n'
-        '}\n'
+        "  esac\n"
+        "  return $ec\n"
+        "}\n"
         # NOTE: no export -f (macOS /bin/bash v3.2 doesn't support it + functions
         # are accessible in the same shell process without export)
-        'export -f docker\n'
+        "export -f docker\n"
         f'source "{deploy_path_escaped}"\n'
         # Remove traps set by deploy-project.sh — they interfere with tests
-        'trap - ERR EXIT\n'
+        "trap - ERR EXIT\n"
         # Override audit paths to force fallback (mock logger returns 1 + file write fails on SIP)
         'PLATFORM_LOG_DIR="/nonexistent-root-only/platform"\n'
         'PLATFORM_AUDIT_LOG="/nonexistent-root-only/platform/audit.log"\n'
-        f'{code}\n'
+        f"{code}\n"
     )
     script.write_text(script_content)
     script.chmod(0o755)
@@ -122,10 +121,10 @@ def _run_bash(
 
 # endregion FUNC__run_bash
 
+
 # Helper: assert IMP:7+ in stderr for functions that only log at IMP:7-8
 # (not requiring IMP:9 like assert_ldd_stderr does)
-def _assert_ldd_stderr_imp7(result: subprocess.CompletedProcess,
-                             expected_patterns: list[str] | None = None) -> None:
+def _assert_ldd_stderr_imp7(result: subprocess.CompletedProcess, expected_patterns: list[str] | None = None) -> None:
     """Print LDD trajectory from stderr, assert at least IMP:7+ log lines exist."""
     found_any = False
     print("--- LDD TRAJECTORY (IMP:7-10) [from stderr] ---")
@@ -161,13 +160,13 @@ def test_cleanup_snapshots_keeps_exactly_n(tmp_path: pathlib.Path) -> None:
         'mkdir -p "$SNAPSHOT_DIR"\n'
         'echo "started" > "$SNAPSHOT_DIR/.deploy-started"\n'
         # Create 5 snapshot pairs with different timestamps
-        'for ts in 100 200 300 400 500; do\n'
+        "for ts in 100 200 300 400 500; do\n"
         '  touch "$SNAPSHOT_DIR/ps-$ts.json"\n'
         '  touch "$SNAPSHOT_DIR/images-$ts.json"\n'
-        'done\n'
-        '_cleanup_snapshots\n'
-        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -l | xargs)"\n'
-        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -l | xargs)"\n'
+        "done\n"
+        "_cleanup_snapshots\n"
+        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -line | xargs)"\n'
+        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -line | xargs)"\n'
         'echo "HAS_STARTED=$([ -f "$SNAPSHOT_DIR/.deploy-started" ] && echo yes || echo no)"\n'
     )
 
@@ -176,9 +175,9 @@ def test_cleanup_snapshots_keeps_exactly_n(tmp_path: pathlib.Path) -> None:
     _assert_ldd_stderr_imp7(result, expected_patterns=["Cleaning old snapshots"])
 
     stdout = result.stdout
-    ps_count = int([l for l in stdout.splitlines() if "PS_COUNT=" in l][0].split("=")[1])
-    images_count = int([l for l in stdout.splitlines() if "IMAGES_COUNT=" in l][0].split("=")[1])
-    has_started = [l for l in stdout.splitlines() if "HAS_STARTED=" in l][0].split("=")[1]
+    ps_count = int(next(line for line in stdout.splitlines() if "PS_COUNT=" in line).split("=")[1])
+    images_count = int(next(line for line in stdout.splitlines() if "IMAGES_COUNT=" in line).split("=")[1])
+    has_started = next(line for line in stdout.splitlines() if "HAS_STARTED=" in line).split("=")[1]
 
     assert ps_count == 3, f"[IMP:9][cleanup] Expected 3 ps-*.json, got {ps_count}\n{stdout}"
     assert images_count == 3, f"[IMP:9][cleanup] Expected 3 images-*.json, got {images_count}\n{stdout}"
@@ -203,13 +202,13 @@ def test_cleanup_snapshots_default_keep(tmp_path: pathlib.Path) -> None:
     code = (
         'SNAPSHOT_DIR="${PROJECT_DIR}/.deploy-snapshots"\n'
         'mkdir -p "$SNAPSHOT_DIR"\n'
-        'for ts in 100 200 300 400 500; do\n'
+        "for ts in 100 200 300 400 500; do\n"
         '  touch "$SNAPSHOT_DIR/ps-$ts.json"\n'
         '  touch "$SNAPSHOT_DIR/images-$ts.json"\n'
-        'done\n'
-        '_cleanup_snapshots\n'
-        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -l | xargs)"\n'
-        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -l | xargs)"\n'
+        "done\n"
+        "_cleanup_snapshots\n"
+        'echo "PS_COUNT=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -line | xargs)"\n'
+        'echo "IMAGES_COUNT=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -line | xargs)"\n'
     )
 
     result = _run_bash(tmp_path, code, env={"PROJECT_DIR": str(tmp_path)})
@@ -217,8 +216,8 @@ def test_cleanup_snapshots_default_keep(tmp_path: pathlib.Path) -> None:
     _assert_ldd_stderr_imp7(result, expected_patterns=["Cleaning old snapshots"])
 
     stdout = result.stdout
-    ps_count = int([l for l in stdout.splitlines() if "PS_COUNT=" in l][0].split("=")[1])
-    images_count = int([l for l in stdout.splitlines() if "IMAGES_COUNT=" in l][0].split("=")[1])
+    ps_count = int(next(line for line in stdout.splitlines() if "PS_COUNT=" in line).split("=")[1])
+    images_count = int(next(line for line in stdout.splitlines() if "IMAGES_COUNT=" in line).split("=")[1])
 
     assert ps_count == 3, f"Expected 3 ps-*.json, got {ps_count}"
     assert images_count == 3, f"Expected 3 images-*.json, got {images_count}"
@@ -244,17 +243,13 @@ def test_restore_no_snapshot(tmp_path: pathlib.Path) -> None:
     # ▶ empty .deploy-snapshots/ → _restore_from_snapshot → ◇ returncode 1
     #   + "cannot rollback" log → ⎋ pass
     """
-    code = (
-        'mkdir -p "${PROJECT_DIR}/.deploy-snapshots"\n'
-        '_restore_from_snapshot || ec=$?\n'
-        'echo "EXIT_CODE=${ec:-0}"\n'
-    )
+    code = 'mkdir -p "${PROJECT_DIR}/.deploy-snapshots"\n_restore_from_snapshot || ec=$?\necho "EXIT_CODE=${ec:-0}"\n'
 
     result = _run_bash(tmp_path, code, env={"PROJECT_DIR": str(tmp_path)})
 
     assert_ldd_stderr(result, expected_patterns=["No pre-deploy snapshot found"])
     stdout = result.stdout
-    exit_code = int([l for l in stdout.splitlines() if "EXIT_CODE=" in l][0].split("=")[1])
+    exit_code = int(next(line for line in stdout.splitlines() if "EXIT_CODE=" in line).split("=")[1])
     assert exit_code == 1, f"Expected exit_code=1, got {exit_code}"
 
     print("[IMP:9][test_restore_no_snapshot] PASS: returns 1 when no pre-deploy snapshot")
@@ -285,7 +280,7 @@ def test_restore_with_snapshot(tmp_path: pathlib.Path) -> None:
         'PREVIOUS_IMAGE_TAG="registry.io/test-app:previous"\n'
         'PROJECT="test-project"\n'
         'REF="v1.0.0"\n'
-        '_restore_from_snapshot || true\n'
+        "_restore_from_snapshot || true\n"
     )
 
     result = _run_bash(tmp_path, code, env={"PROJECT_DIR": str(tmp_path)})
@@ -328,20 +323,23 @@ def test_perform_rollback_invokes_compose_up(tmp_path: pathlib.Path) -> None:
         'REF="v1.0.0"\n'
         'touch "$PROJECT_DIR/docker-compose.yml"\n'
         # perform_rollback returns 1 on success (line 415)
-        'perform_rollback && exit_code=0 || exit_code=$?\n'
+        "perform_rollback && exit_code=0 || exit_code=$?\n"
         'echo "EXIT_CODE=${exit_code}"\n'
     )
 
     result = _run_bash(tmp_path, code)
 
-    assert_ldd_stderr(result, expected_patterns=[
-        "ROLLING BACK",
-        "Re-tagged",
-        "Rollback complete",
-        "ROLLBACK",
-    ])
+    assert_ldd_stderr(
+        result,
+        expected_patterns=[
+            "ROLLING BACK",
+            "Re-tagged",
+            "Rollback complete",
+            "ROLLBACK",
+        ],
+    )
     stdout = result.stdout
-    exit_code = int([l for l in stdout.splitlines() if "EXIT_CODE=" in l][0].split("=")[1])
+    exit_code = int(next(line for line in stdout.splitlines() if "EXIT_CODE=" in line).split("=")[1])
     assert exit_code == 1, f"Expected exit_code=1 from perform_rollback, got {exit_code}"
 
     print("[IMP:9][test_perform_rollback_invokes_compose_up] PASS: rollback calls docker compose up")
@@ -369,7 +367,7 @@ def test_perform_rollback_no_previous_tag(tmp_path: pathlib.Path) -> None:
         'PROJECT="test-project"\n'
         'REF="v1.0.0"\n'
         'touch "$PROJECT_DIR/docker-compose.yml"\n'
-        'perform_rollback && exit_code=0 || exit_code=$?\n'
+        "perform_rollback && exit_code=0 || exit_code=$?\n"
         'echo "EXIT_CODE=${exit_code}"\n'
     )
 
@@ -379,7 +377,7 @@ def test_perform_rollback_no_previous_tag(tmp_path: pathlib.Path) -> None:
 
     # Verify docker tag was NOT called (PREVIOUS_IMAGE_TAG was empty)
     stderr = result.stderr
-    tag_lines = [l for l in stderr.splitlines() if "MOCK:docker tag" in l]
+    tag_lines = [line for line in stderr.splitlines() if "MOCK:docker tag" in line]
     assert len(tag_lines) == 0, (
         f"[IMP:9][rollback] Expected NO docker tag call when PREVIOUS_IMAGE_TAG is empty, "
         f"but found {len(tag_lines)} tag calls"
@@ -412,10 +410,10 @@ def test_snapshot_format_timestamp(tmp_path: pathlib.Path) -> None:
         'cd "$PROJECT_DIR"\n'
         'touch "$PROJECT_DIR/docker-compose.yml"\n'
         'SERVICE_NAME="test-app"\n'
-        'capture_deploy_snapshot\n'
+        "capture_deploy_snapshot\n"
         'SNAPSHOT_DIR="${PROJECT_DIR}/.deploy-snapshots"\n'
-        'echo "PS_FILES=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -l | xargs)"\n'
-        'echo "IMAGES_FILES=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -l | xargs)"\n'
+        'echo "PS_FILES=$(ls "$SNAPSHOT_DIR"/ps-*.json 2>/dev/null | wc -line | xargs)"\n'
+        'echo "IMAGES_FILES=$(ls "$SNAPSHOT_DIR"/images-*.json 2>/dev/null | wc -line | xargs)"\n'
         'echo "HAS_STARTED=$([ -f "$SNAPSHOT_DIR/.deploy-started" ] && echo yes || echo no)"\n'
     )
 
@@ -423,9 +421,9 @@ def test_snapshot_format_timestamp(tmp_path: pathlib.Path) -> None:
 
     _assert_ldd_stderr_imp7(result, expected_patterns=["Pre-deploy snapshot complete"])
     stdout = result.stdout
-    ps_files = int([l for l in stdout.splitlines() if "PS_FILES=" in l][0].split("=")[1])
-    images_files = int([l for l in stdout.splitlines() if "IMAGES_FILES=" in l][0].split("=")[1])
-    has_started = [l for l in stdout.splitlines() if "HAS_STARTED=" in l][0].split("=")[1]
+    ps_files = int(next(line for line in stdout.splitlines() if "PS_FILES=" in line).split("=")[1])
+    images_files = int(next(line for line in stdout.splitlines() if "IMAGES_FILES=" in line).split("=")[1])
+    has_started = next(line for line in stdout.splitlines() if "HAS_STARTED=" in line).split("=")[1]
 
     assert ps_files == 1, f"Expected 1 ps-*.json file, got {ps_files}"
     assert images_files == 1, f"Expected 1 images-*.json file, got {images_files}"

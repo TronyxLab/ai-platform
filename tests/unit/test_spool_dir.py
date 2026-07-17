@@ -123,9 +123,7 @@ def test_spool_dir_none_no_warn() -> None:
     expected_none = {"nginx", "redis", "platform-secrets"}
     actual_none = {name for name, cfg in modules.items() if cfg.get("spool_dir") == "none"}
     missing = expected_none - actual_none
-    assert not missing, (
-        f"[IMP:9][test] Modules expected to have spool_dir: none but missing: {missing}"
-    )
+    assert not missing, f"[IMP:9][test] Modules expected to have spool_dir: none but missing: {missing}"
 
     # Check 2: ensure actual_none modules are not flagged by the missing-spool gate
     for name in actual_none:
@@ -142,9 +140,11 @@ def test_spool_dir_none_no_warn() -> None:
         "[IMP:9][test] FAIL: deploy-modules.sh ensure_spool_dirs must check for 'none' value"
     )
     # The "none" check should log INFO (not WARN)
-    none_check_context = content[content.find('spool_path == "none"'):][:500] if 'spool_path == "none"' in content else ''
+    none_check_context = (
+        content[content.find('spool_path == "none"') :][:500] if 'spool_path == "none"' in content else ""
+    )
     if none_check_context:
-        assert 'INFO' in none_check_context or 'Stateless' in none_check_context, (
+        assert "INFO" in none_check_context or "Stateless" in none_check_context, (
             "[IMP:9][test] FAIL: spool_dir: none must produce INFO log, not WARN"
         )
 
@@ -192,10 +192,10 @@ def test_spool_dir_missing_still_warns() -> None:
     func_end = content.find("# endregion ENSURE_SPOOL_DIRS")
     assert func_start != -1 and func_end != -1, "ENSURE_SPOOL_DIRS region not found"
     func_body = content[func_start:func_end]
-    non_comment = "\n".join(l for l in func_body.split("\n") if not l.strip().startswith("#"))
+    non_comment = "\n".join(line for line in func_body.split("\n") if not line.strip().startswith("#"))
 
     # Must have WARN for modules without spool_dir/spool_volume
-    assert 'WARN' in non_comment and 'No spool_dir' in func_body, (
+    assert "WARN" in non_comment and "No spool_dir" in func_body, (
         "[IMP:9][test] FAIL: ensure_spool_dirs must emit WARN for modules without spool_dir"
     )
 

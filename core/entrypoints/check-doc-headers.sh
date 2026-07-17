@@ -60,7 +60,7 @@ check_grep_summary() {
     # · Fix: grep reads file directly — no pipe, no SIGPIPE
     for kw in $keywords; do
         if [ -n "$kw" ]; then
-            if ! grep -qiF "$kw" "$file"; then
+            if ! grep -qiF -- "$kw" "$file"; then
                 echo "[FAIL] $file: GREP_SUMMARY keyword '$kw' not found in file content"
                 return 1
             fi

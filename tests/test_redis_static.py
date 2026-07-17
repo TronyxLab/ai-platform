@@ -274,9 +274,7 @@ def test_redis_image(redis_compose_base_path, caplog):
         "[IMP:9][test_redis][image] ASSERT: image=%s",
         image,
     )
-    assert image.startswith("redis:7.4-alpine"), (
-        f"Redis image must start with 'redis:7.4-alpine', got: '{image}'"
-    )
+    assert image.startswith("redis:7.4-alpine"), f"Redis image must start with 'redis:7.4-alpine', got: '{image}'"
 
 
 # ── Test 7: Module.yaml has NO spool_dir ───────────────────────────────────
@@ -299,12 +297,9 @@ def test_redis_module_yaml_no_spool_dir(redis_module_yaml_path, caplog):
 
     # spool_dir must be "none" (explicit stateless declaration per T4 DevPlan 004)
     assert spool_dir == "none", (
-        f"redis module.yaml must have spool_dir: none (cache-only, stateless). "
-        f"Found: spool_dir={spool_dir!r}"
+        f"redis module.yaml must have spool_dir: none (cache-only, stateless). Found: spool_dir={spool_dir!r}"
     )
-    assert not spool_volume, (
-        f"redis module.yaml must NOT have spool_volume (cache-only). Found: {spool_volume!r}"
-    )
+    assert not spool_volume, f"redis module.yaml must NOT have spool_volume (cache-only). Found: {spool_volume!r}"
 
 
 # ── Test 8: Module.yaml env_requires is empty list ─────────────────────────
@@ -382,9 +377,10 @@ def test_infra_metrics_redis_exporter(infra_metrics_compose_path, caplog):
         "[IMP:9][test_redis][infra_metrics] ASSERT: image=%s",
         image,
     )
-    assert image == "oliver006/redis_exporter:v1.86.0@sha256:2e9795be900db073e9475fdb9c5124db309b07a3e4e75a1770705cb03be1a1c8", (
-        f"redis-exporter image must be 'oliver006/redis_exporter:v1.86.0@sha256:...', got: '{image}'"
-    )
+    assert (
+        image
+        == "oliver006/redis_exporter:v1.86.0@sha256:2e9795be900db073e9475fdb9c5124db309b07a3e4e75a1770705cb03be1a1c8"
+    ), f"redis-exporter image must be 'oliver006/redis_exporter:v1.86.0@sha256:...', got: '{image}'"
 
     # Must have shared-cache-net
     networks = redis_exp.get("networks", {})

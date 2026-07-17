@@ -72,8 +72,8 @@ def test_no_host_variable_in_server_name(caplog) -> None:
     for cf in config_files:
         text = cf.read_text()
         for pattern, label in [
-            ('server_name\\s+\\$host', "server_name $host"),
-            ('live/\\$host', "live/$host"),
+            ("server_name\\s+\\$host", "server_name $host"),
+            ("live/\\$host", "live/$host"),
         ]:
             for match in re.finditer(pattern, text):
                 line_no = text[: match.start()].count("\n") + 1
@@ -131,9 +131,7 @@ def test_platform_domain_placeholder_present(caplog) -> None:
             logger.info("[IMP:9][gate] FAIL: %s ssl_certificate missing PLATFORM_DOMAIN", fname)
 
         if has_in_ssl_cert:
-            logger.info(
-                "[IMP:8][gate] OK: %s has PLATFORM_DOMAIN in server_name + ssl_certificate", fname
-            )
+            logger.info("[IMP:8][gate] OK: %s has PLATFORM_DOMAIN in server_name + ssl_certificate", fname)
 
     # ── Check platform-default.conf at least one occurrence ─────────────────
     pd_path = _NGINX_CONFIG_DIR / "platform-default.conf"
@@ -144,16 +142,12 @@ def test_platform_domain_placeholder_present(caplog) -> None:
             violations.append("platform-default.conf: does not contain ${PLATFORM_DOMAIN}")
             logger.info("[IMP:9][gate] FAIL: platform-default.conf missing PLATFORM_DOMAIN")
         else:
-            logger.info(
-                "[IMP:8][gate] OK: platform-default.conf contains %d PLATFORM_DOMAIN occurrences", count
-            )
+            logger.info("[IMP:8][gate] OK: platform-default.conf contains %d PLATFORM_DOMAIN occurrences", count)
     else:
         violations.append("platform-default.conf: file not found")
         logger.info("[IMP:9][gate] FAIL: platform-default.conf not found")
 
-    assert not violations, (
-        f"PLATFORM_DOMAIN placerholder violations ({len(violations)}):\n" + "\n".join(violations)
-    )
+    assert not violations, f"PLATFORM_DOMAIN placerholder violations ({len(violations)}):\n" + "\n".join(violations)
     logger.info(
         "[IMP:9][gate] PASS: All %d vhost configs + platform-default.conf use PLATFORM_DOMAIN",
         len(_VHOST_CONF_FILES),
@@ -214,24 +208,20 @@ def test_base_yml_mounts_templates(caplog) -> None:
         if colon_idx == -1:
             violations.append(f"{matched_fname}: no colon after filename in '{vol_entry}'")
             continue
-        target = after_fname[colon_idx + 1:]
+        target = after_fname[colon_idx + 1 :]
         # Strip trailing :ro, :rw, :z, :Z options
         for suffix in (":ro", ":rw", ":z", ":Z"):
             if target.endswith(suffix):
-                target = target[:-len(suffix)]
+                target = target[: -len(suffix)]
                 break
 
         expected_prefix = "/etc/nginx/templates/"
         expected_suffix = ".conf.template"
         if not target.startswith(expected_prefix):
-            violations.append(
-                f"{matched_fname}: target '{target}' does not start with '{expected_prefix}'"
-            )
+            violations.append(f"{matched_fname}: target '{target}' does not start with '{expected_prefix}'")
             logger.info("[IMP:9][gate] FAIL: %s target prefix mismatch: %s", matched_fname, target)
         if not target.endswith(expected_suffix):
-            violations.append(
-                f"{matched_fname}: target '{target}' does not end with '{expected_suffix}'"
-            )
+            violations.append(f"{matched_fname}: target '{target}' does not end with '{expected_suffix}'")
             logger.info("[IMP:9][gate] FAIL: %s target suffix mismatch: %s", matched_fname, target)
         if target.startswith(expected_prefix) and target.endswith(expected_suffix):
             logger.info("[IMP:8][gate] OK: %s → %s", matched_fname, target)
@@ -243,9 +233,7 @@ def test_base_yml_mounts_templates(caplog) -> None:
         for m in sorted(missing):
             logger.info("[IMP:9][gate] FAIL: %s not mounted as template", m)
 
-    assert not violations, (
-        f"Template mount violations ({len(violations)}):\n" + "\n".join(violations)
-    )
+    assert not violations, f"Template mount violations ({len(violations)}):\n" + "\n".join(violations)
     logger.info("[IMP:9][gate] PASS: All %d conf mounts use /etc/nginx/templates/*.conf.template", len(checked))
 
 

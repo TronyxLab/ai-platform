@@ -86,21 +86,21 @@ name: post-refactor-recovery
   1. SNAPSHOT — записать текущее состояние затрагиваемых файлов
      git diff {file} > .ai/snapshots/{wave-id}-{file}.diff
      (или checksum, если git недоступен)
-  
+
   2. PRE-CHECK — перед написанием fix проверить:
      - Доступность инструментов в контейнере (shell, wget, curl)
      - Актуальные версии зависимостей
      - Runtime-окружение
-  
+
   3. FIX — делегировать:
      - coder — для code-фиксов (.py, .ts, .js, тесты, миграции)
      - sysadmin — для infra-фиксов (Dockerfile, CI, compose, env)
-  
+
   4. VERIFY — QA проверяет fix:
      - Статический анализ (синтаксис, типы)
      - Runtime-проверка (если применимо)
      - Отсутствие регрессий в затронутых тестах
-  
+
   5. ACCEPT/REJECT — Architect принимает или отправляет на доработку
      - Accept → snapshot помечается как успешный
      - Reject → откат по snapshot, повтор цикла

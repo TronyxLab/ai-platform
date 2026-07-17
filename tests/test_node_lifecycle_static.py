@@ -48,43 +48,47 @@ def test_update_mode_resolves_node_yaml(caplog) -> None:
     content = LIFECYCLE_SCRIPT.read_text()
 
     # ── Check 1: NODE_NAME validation (fail-fast) ──
-    assert 'NODE_NAME.*exit 1' in content.replace('\n', ' ') or \
-           ('NODE_NAME' in content and 'exit 1' in content), \
-           "[IMP:9][test] FAIL: update-mode must validate NODE_NAME with exit 1"
+    assert "NODE_NAME.*exit 1" in content.replace("\n", " ") or ("NODE_NAME" in content and "exit 1" in content), (
+        "[IMP:9][test] FAIL: update-mode must validate NODE_NAME with exit 1"
+    )
     logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 1 PASS: NODE_NAME validation present")
 
     # ── Check 2: node-resolver.sh sourced ──
-    assert 'node-resolver.sh' in content, \
-           "[IMP:9][test] FAIL: update-mode must source lib/node-resolver.sh for NODE_YAML derivation"
+    assert "node-resolver.sh" in content, (
+        "[IMP:9][test] FAIL: update-mode must source lib/node-resolver.sh for NODE_YAML derivation"
+    )
     logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 2 PASS: node-resolver.sh sourced")
 
     # ── Check 3: resolve_node_yaml called ──
-    assert 'resolve_node_yaml' in content, \
-           "[IMP:9][test] FAIL: update-mode must call resolve_node_yaml()"
+    assert "resolve_node_yaml" in content, "[IMP:9][test] FAIL: update-mode must call resolve_node_yaml()"
     logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 3 PASS: resolve_node_yaml() called")
 
     # ── Check 4: unresolvable → exit 1 with candidate paths ──
-    assert 'exit 1' in content and ('candidate' in content.lower() or \
-           'searched' in content.lower() or 'Tried' in content), \
-           "[IMP:9][test] FAIL: unresolvable NODE_YAML must exit 1 with candidate paths listed"
+    assert "exit 1" in content and (
+        "candidate" in content.lower() or "searched" in content.lower() or "Tried" in content
+    ), "[IMP:9][test] FAIL: unresolvable NODE_YAML must exit 1 with candidate paths listed"
     logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 4 PASS: unresolvable → exit 1 + paths")
 
     # ── Check 5: Resolution + dry-run happen BEFORE mkdir $CHECKPOINT_DIR ──
-    update_section = content[content.find('elif [[ "$MODE" == "update" ]]'):]
+    update_section = content[content.find('elif [[ "$MODE" == "update" ]]') :]
     mkdir_pos = update_section.find('mkdir -p "$CHECKPOINT_DIR"')
-    resolver_pos = update_section.find('resolve_node_yaml')
-    dry_run_pos = update_section.find('DRY_RUN_MODE')
+    resolver_pos = update_section.find("resolve_node_yaml")
+    dry_run_pos = update_section.find("DRY_RUN_MODE")
 
     # resolution and dry-run check must be before mkdir
     if resolver_pos >= 0:
-        assert resolver_pos < mkdir_pos, \
+        assert resolver_pos < mkdir_pos, (
             f"[IMP:9][test] FAIL: resolve_node_yaml ({resolver_pos}) must precede mkdir ({mkdir_pos})"
+        )
     if dry_run_pos >= 0:
-        assert dry_run_pos < mkdir_pos, \
+        assert dry_run_pos < mkdir_pos, (
             f"[IMP:9][test] FAIL: dry-run check ({dry_run_pos}) must precede mkdir ({mkdir_pos})"
+        )
     logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 5 PASS: resolution/dry-run before mkdir")
 
     logger.info("[IMP:9][test_update_mode_resolves_node_yaml] ALL CHECKS PASS")
+
+
 # endregion FUNC_test_update_mode_resolves_node_yaml
 
 
@@ -107,44 +111,46 @@ def test_dry_run_flag_accepted(caplog) -> None:
     content = LIFECYCLE_SCRIPT.read_text()
 
     # ── Check 1: Parser accepts --dry-run ──
-    assert '--dry-run' in content, \
-           "[IMP:9][test] FAIL: parser must accept --dry-run flag"
-    assert 'DRY_RUN_MODE=true' in content or 'DRY_RUN_MODE' in content, \
-           "[IMP:9][test] FAIL: --dry-run must set DRY_RUN_MODE=true"
+    assert "--dry-run" in content, "[IMP:9][test] FAIL: parser must accept --dry-run flag"
+    assert "DRY_RUN_MODE=true" in content or "DRY_RUN_MODE" in content, (
+        "[IMP:9][test] FAIL: --dry-run must set DRY_RUN_MODE=true"
+    )
     logger.info("[IMP:8][test_dry_run_flag_accepted] Check 1 PASS: --dry-run in parser")
 
     # ── Check 2: Init mode has dry-run block ──
     # Find main() first, then locate the init branch within it
-    main_start = content.find('main() {')
+    main_start = content.find("main() {")
     assert main_start >= 0, "[IMP:9][test] FAIL: main() not found"
     main_content = content[main_start:]
-    init_block = main_content[main_content.find('if [[ "$MODE" == "init" ]]'):]
-    init_block = init_block[:init_block.find('elif [[ "$MODE" == "update" ]]')]
-    assert 'DRY_RUN_MODE' in init_block, \
-           "[IMP:9][test] FAIL: init mode main() must have DRY_RUN_MODE check"
+    init_block = main_content[main_content.find('if [[ "$MODE" == "init" ]]') :]
+    init_block = init_block[: init_block.find('elif [[ "$MODE" == "update" ]]')]
+    assert "DRY_RUN_MODE" in init_block, "[IMP:9][test] FAIL: init mode main() must have DRY_RUN_MODE check"
     init_mkdir_pos = init_block.find('mkdir -p "$CHECKPOINT_DIR"')
-    init_dry_run_pos = init_block.find('DRY_RUN_MODE')
+    init_dry_run_pos = init_block.find("DRY_RUN_MODE")
     if init_dry_run_pos >= 0 and init_mkdir_pos >= 0:
-        assert init_dry_run_pos < init_mkdir_pos, \
+        assert init_dry_run_pos < init_mkdir_pos, (
             f"[IMP:9][test] FAIL: init dry-run ({init_dry_run_pos}) before mkdir ({init_mkdir_pos})"
+        )
     logger.info("[IMP:8][test_dry_run_flag_accepted] Check 2 PASS: init mode dry-run before mkdir")
 
     # ── Check 3: Update mode has dry-run block before mkdir ──
-    update_section = content[content.find('elif [[ "$MODE" == "update" ]]'):]
+    update_section = content[content.find('elif [[ "$MODE" == "update" ]]') :]
     update_mkdir_pos = update_section.find('mkdir -p "$CHECKPOINT_DIR"')
-    update_dry_run_pos = update_section.find('DRY_RUN_MODE')
+    update_dry_run_pos = update_section.find("DRY_RUN_MODE")
     if update_dry_run_pos >= 0 and update_mkdir_pos >= 0:
-        assert update_dry_run_pos < update_mkdir_pos, \
+        assert update_dry_run_pos < update_mkdir_pos, (
             f"[IMP:9][test] FAIL: update dry-run ({update_dry_run_pos}) before mkdir ({update_mkdir_pos})"
+        )
     logger.info("[IMP:8][test_dry_run_flag_accepted] Check 3 PASS: update mode dry-run before mkdir")
 
     # ── Check 4: Dry-run prints plan and exit 0 ──
-    assert 'exit 0' in update_section[:update_mkdir_pos] if update_mkdir_pos > 0 else True
-    assert 'DRY RUN' in content, \
-           "[IMP:9][test] FAIL: dry-run must print 'DRY RUN' plan header"
+    assert "exit 0" in update_section[:update_mkdir_pos] if update_mkdir_pos > 0 else True
+    assert "DRY RUN" in content, "[IMP:9][test] FAIL: dry-run must print 'DRY RUN' plan header"
     logger.info("[IMP:8][test_dry_run_flag_accepted] Check 4 PASS: dry-run prints plan + exit 0")
 
     logger.info("[IMP:9][test_dry_run_flag_accepted] ALL CHECKS PASS")
+
+
 # endregion FUNC_test_dry_run_flag_accepted
 
 
@@ -172,38 +178,37 @@ def test_entrypoint_flags_contract(caplog) -> None:
     # The case statements in node-update.sh also accept --node (aliased to --node-name)
 
     # ── Check 1: --node-name accepted by node-lifecycle.sh ──
-    assert '--node-name' in lifecycle_content, \
-           "[IMP:9][test] FAIL: --node-name not in node-lifecycle.sh parser"
+    assert "--node-name" in lifecycle_content, "[IMP:9][test] FAIL: --node-name not in node-lifecycle.sh parser"
     logger.info("[IMP:8][test_entrypoint_flags_contract] Check 1 PASS: --node-name in lifecycle parser")
 
     # ── Check 2: --dry-run accepted by node-lifecycle.sh ──
-    assert '--dry-run' in lifecycle_content, \
-           "[IMP:9][test] FAIL: --dry-run not in node-lifecycle.sh parser"
+    assert "--dry-run" in lifecycle_content, "[IMP:9][test] FAIL: --dry-run not in node-lifecycle.sh parser"
     logger.info("[IMP:8][test_entrypoint_flags_contract] Check 2 PASS: --dry-run in lifecycle parser")
 
     # ── Check 3: node-update.sh forwards --node-name (not --node) ──
     # Lines 75-82: case --node|--node-name → NODE_NAME="$2"; DRY_RUN=true for --dry-run
-    assert '--node-name' in entrypoint_content, \
-           "[IMP:9][test] FAIL: node-update.sh must forward --node-name"
-    assert '--dry-run' in entrypoint_content, \
-           "[IMP:9][test] FAIL: node-update.sh must accept --dry-run"
+    assert "--node-name" in entrypoint_content, "[IMP:9][test] FAIL: node-update.sh must forward --node-name"
+    assert "--dry-run" in entrypoint_content, "[IMP:9][test] FAIL: node-update.sh must accept --dry-run"
     logger.info("[IMP:8][test_entrypoint_flags_contract] Check 3 PASS: entrypoint forwards both flags")
 
     # ── Check 4: No 'Unknown argument' exit for these flags in node-lifecycle.sh ──
     # Ensure the main case block doesn't reject --dry-run via the `-*)` catch-all
-    parser_section = lifecycle_content[:lifecycle_content.find('# SOPS_AGE_KEY fallback')]
+    parser_section = lifecycle_content[: lifecycle_content.find("# SOPS_AGE_KEY fallback")]
     # The `-*)` catch-all pattern should NOT be reached by --dry-run
-    assert '--dry-run' in parser_section, \
-           "[IMP:9][test] FAIL: --dry-run must be in node-lifecycle.sh case block, not catch-all"
+    assert "--dry-run" in parser_section, (
+        "[IMP:9][test] FAIL: --dry-run must be in node-lifecycle.sh case block, not catch-all"
+    )
     # Verify the case block has explicit --dry-run entry (not caught by -*)"
     case_block = lifecycle_content[
-        lifecycle_content.find('while [[ $# -gt 0 ]]; do'):
-        lifecycle_content.find('# SOPS_AGE_KEY fallback')
+        lifecycle_content.find("while [[ $# -gt 0 ]]; do") : lifecycle_content.find("# SOPS_AGE_KEY fallback")
     ]
-    dry_run_lines = [l for l in case_block.split('\n') if '--dry-run' in l]
-    assert any('DRY_RUN_MODE=true' in l for l in dry_run_lines), \
-           "[IMP:9][test] FAIL: case --dry-run) must set DRY_RUN_MODE=true"
+    dry_run_lines = [line for line in case_block.split("\n") if "--dry-run" in line]
+    assert any("DRY_RUN_MODE=true" in line for line in dry_run_lines), (
+        "[IMP:9][test] FAIL: case --dry-run) must set DRY_RUN_MODE=true"
+    )
     logger.info("[IMP:8][test_entrypoint_flags_contract] Check 4 PASS: explicit --dry-run case")
 
     logger.info("[IMP:9][test_entrypoint_flags_contract] ALL CHECKS PASS")
+
+
 # endregion FUNC_test_entrypoint_flags_contract

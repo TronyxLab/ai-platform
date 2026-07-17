@@ -147,11 +147,18 @@ class TestPytestMarkers:
 
         # Collect all markers actually used in tests via pytest --collect-only markers dump
         result = subprocess.run(
-            [  # noqa: S607
-                "python", "-m", "pytest", "tests/",
-                "--collect-only", "-q", "--no-header",  # noqa: S603
+            [
+                "python",
+                "-m",
+                "pytest",
+                "tests/",
+                "--collect-only",
+                "-q",
+                "--no-header",
             ],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
             cwd=str(PROJECT_ROOT),
         )
 
@@ -165,7 +172,9 @@ class TestPytestMarkers:
         # Alternative: use pytest --markers to list all registered markers
         markers_result = subprocess.run(
             ["python", "-m", "pytest", "--markers", "-q", "--no-header"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=str(PROJECT_ROOT),
         )
 
@@ -173,22 +182,30 @@ class TestPytestMarkers:
         for line in markers_result.stdout.splitlines():
             line = line.strip()
             if line.startswith("@pytest.mark."):
-                m = line[len("@pytest.mark."):].split(":")[0].strip()
+                m = line[len("@pytest.mark.") :].split(":")[0].strip()
                 used_markers.add(m)
 
         # Better approach: collect directly via pytest --co
-        collector_result = subprocess.run(
+        subprocess.run(
             [
-                "python", "-m", "pytest", "tests/",
-                "--co", "-q", "--no-header",  # noqa: S603
+                "python",
+                "-m",
+                "pytest",
+                "tests/",
+                "--co",
+                "-q",
+                "--no-header",
             ],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
             cwd=str(PROJECT_ROOT),
         )
 
         # Parse marker usage from collector output (--co is not standard)
         # Fallback: use grep on test files
         import re as _re
+
         _all_tests_markers: set[str] = set()
         tests_dir = PROJECT_ROOT / "tests"
         for pyfile in tests_dir.rglob("test_*.py"):
@@ -206,7 +223,7 @@ class TestPytestMarkers:
         dead_markers -= env_dependent
 
         assert not dead_markers, (
-            f"Dead markers found (registered in pyproject.toml but 0 tests use them): "
+            "Dead markers found (registered in pyproject.toml but 0 tests use them): "
             + ", ".join(sorted(dead_markers))
             + f"\nUsed markers: {', '.join(sorted(_all_tests_markers))}"
         )

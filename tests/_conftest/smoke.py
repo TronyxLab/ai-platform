@@ -317,11 +317,17 @@ def platform_services(
 
         # ── Start up ──────────────────────────────────────────────────
         compose_up_args = [*compose_base_args, "up", "-d", "--wait", "--wait-timeout", str(PLATFORM_COMPOSE_TIMEOUT)]
-        result = _run_docker_smoke(compose_up_args, timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT, env_override={"COMPOSE_PROFILES": module_name})
+        result = _run_docker_smoke(
+            compose_up_args,
+            timeout=PLATFORM_COMPOSE_TIMEOUT + _COMPOSE_EXTRA_TIMEOUT,
+            env_override={"COMPOSE_PROFILES": module_name},
+        )
         if result.returncode != 0:
             # ── Diagnostic: collect logs for failure analysis ─────────────
             log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
-            logs = _run_docker_smoke(log_args, timeout=_DOCKER_LOG_TIMEOUT, env_override={"COMPOSE_PROFILES": module_name})
+            logs = _run_docker_smoke(
+                log_args, timeout=_DOCKER_LOG_TIMEOUT, env_override={"COMPOSE_PROFILES": module_name}
+            )
             _logger.error(
                 "[IMP:9][conftest][platform_services] Failed to start '%s' — "
                 "returncode=%d\nstderr: %s\ndiagnostic logs:\n%s",

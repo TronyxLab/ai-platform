@@ -74,10 +74,7 @@ _MODULES_DIR: pathlib.Path = _PROJECT_ROOT / "core" / "modules"
 
 def _get_actual_modules() -> set[str]:
     """Discover modules on disk that have docker-compose.base.yml."""
-    return {
-        p.parent.name
-        for p in _MODULES_DIR.glob("*/docker-compose.base.yml")
-    }
+    return {p.parent.name for p in _MODULES_DIR.glob("*/docker-compose.base.yml")}
 
 
 def _extract_module_list_from_content(content: str) -> set[str]:
@@ -406,7 +403,9 @@ def test_workflow_module_lists_match_filesystem(caplog):
 
         logger.info(
             "[IMP:8][test] %s: %d modules in workflow, %d on disk",
-            wf_name, len(wf_modules), len(actual_modules),
+            wf_name,
+            len(wf_modules),
+            len(actual_modules),
         )
 
     if all_failures:
@@ -456,7 +455,10 @@ def test_no_raw_internal_calls_in_workflows(caplog):
                         allowed = True
                         logger.info(
                             "[IMP:8][test][allowlisted] %s:%d %s — %s",
-                            rel_path, i, matched_script, reason,
+                            rel_path,
+                            i,
+                            matched_script,
+                            reason,
                         )
                         break
 
@@ -464,20 +466,19 @@ def test_no_raw_internal_calls_in_workflows(caplog):
                     findings.append((rel_path, i, matched_script))
                     logger.warning(
                         "[IMP:7][test][violation] %s:%d raw internal call: %s",
-                        rel_path, i, matched_script,
+                        rel_path,
+                        i,
+                        matched_script,
                     )
 
     if findings:
-        detail_lines = [
-            f"  {fp}:{ln} → {script}"
-            for fp, ln, script in sorted(findings)
-        ]
+        detail_lines = [f"  {fp}:{ln} → {script}" for fp, ln, script in sorted(findings)]
         logger.error("[IMP:9][test] ⛔ Found %d raw core/internal/ call(s) in .github YAML files", len(findings))
         pytest.fail(
             f"Found {len(findings)} raw core/internal/*.sh call(s) in .github YAML files.\n"
             f"All operations must go through the Makefile facade.\n"
-            f"To add a documented exception, add to _RAW_INTERNAL_ALLOWLIST in this test file.\n" +
-            "\n".join(detail_lines)
+            f"To add a documented exception, add to _RAW_INTERNAL_ALLOWLIST in this test file.\n"
+            + "\n".join(detail_lines)
         )
 
     logger.info("[IMP:9][test] ✅ No unauthorized raw core/internal/ calls in .github YAML files")

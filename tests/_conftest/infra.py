@@ -98,7 +98,9 @@ def platform_ports() -> dict[str, int]:
         len(_ports),
         _ports,
     )
-    assert len(_ports) > 0, "[IMP:9][conftest][platform_ports] CRITICAL: port_mappings section is empty or missing in platform-env.yaml"
+    assert len(_ports) > 0, (
+        "[IMP:9][conftest][platform_ports] CRITICAL: port_mappings section is empty or missing in platform-env.yaml"
+    )
     return _ports
 
 

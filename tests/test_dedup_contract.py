@@ -249,7 +249,9 @@ def test_module_whitelist_equals_listing(
             actual_dirs.add(entry)
 
     logger.info("[IMP:8][test_module_whitelist] Actual module dirs (%d): %s", len(actual_dirs), sorted(actual_dirs))
-    logger.info("[IMP:8][test_module_whitelist] PLATFORM_MODULES  (%d): %s", len(PLATFORM_MODULES), sorted(PLATFORM_MODULES))
+    logger.info(
+        "[IMP:8][test_module_whitelist] PLATFORM_MODULES  (%d): %s", len(PLATFORM_MODULES), sorted(PLATFORM_MODULES)
+    )
 
     if actual_dirs == PLATFORM_MODULES:
         logger.info("[IMP:9][test_module_whitelist] ✅ Modules match: set(%s) == PLATFORM_MODULES", sorted(actual_dirs))

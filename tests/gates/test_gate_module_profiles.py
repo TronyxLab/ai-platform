@@ -20,7 +20,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import re
 from pathlib import Path
 
 import pytest
@@ -71,17 +70,16 @@ class TestModuleProfiles:
                     continue
                 profiles = svc_config.get("profiles", [])
                 if mod_name not in profiles:
-                    errors.append(
-                        f"{mod_name}/{svc_name}: profiles={profiles!r} does not contain '{mod_name}'"
-                    )
+                    errors.append(f"{mod_name}/{svc_name}: profiles={profiles!r} does not contain '{mod_name}'")
                     logger.info(
                         "[IMP:9][gate] FAIL: %s/%s profiles %r missing '%s'",
-                        mod_name, svc_name, profiles, mod_name,
+                        mod_name,
+                        svc_name,
+                        profiles,
+                        mod_name,
                     )
 
-        assert not errors, (
-            f"Profile contract violations in {len(errors)} service(s):\n" + "\n".join(errors)
-        )
+        assert not errors, f"Profile contract violations in {len(errors)} service(s):\n" + "\n".join(errors)
         logger.info("[IMP:9][gate] PASS: All %d modules have correct profiles", len(BASE_YMLS))
 
     @pytest.mark.gate
@@ -113,12 +111,13 @@ class TestModuleProfiles:
                     )
                     logger.info(
                         "[IMP:9][gate] FAIL: %s/%s first profile %r != module dir '%s'",
-                        mod_name, svc_name, profiles[0] if profiles else '<empty>', mod_name,
+                        mod_name,
+                        svc_name,
+                        profiles[0] if profiles else "<empty>",
+                        mod_name,
                     )
 
-        assert not errors, (
-            f"Profile name mismatch in {len(errors)} service(s):\n" + "\n".join(errors)
-        )
+        assert not errors, f"Profile name mismatch in {len(errors)} service(s):\n" + "\n".join(errors)
         logger.info("[IMP:9][gate] PASS: All %d modules have profile matching module dir name", len(BASE_YMLS))
 
     @pytest.mark.gate
@@ -151,13 +150,13 @@ class TestModuleProfiles:
                     )
                     logger.info(
                         "[IMP:9][gate] WARN: %s/%s multiple profiles %r",
-                        mod_name, svc_name, profiles,
+                        mod_name,
+                        svc_name,
+                        profiles,
                     )
 
         if warnings:
             logger.info("[IMP:9][gate] SKIP: stale profiles detected — %s", "; ".join(warnings))
-            pytest.skip(
-                "Non-critical: " + "; ".join(warnings)
-            )
+            pytest.skip("Non-critical: " + "; ".join(warnings))
         else:
             logger.info("[IMP:9][gate] PASS: No stale profiles detected")

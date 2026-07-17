@@ -28,7 +28,6 @@ import pathlib
 import subprocess
 
 import pytest
-
 from conftest import assert_ldd_stderr
 
 # ── Paths ──────────────────────────────────────────────────────────────────
@@ -56,13 +55,13 @@ def _run_bash(
     deploy_path_escaped = str(DEPLOY_SCRIPT_PATH)
 
     script_content = (
-        '#!/usr/bin/env bash\n'
-        'set -euo pipefail\n'
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
         'logger() { local tag="$2"; shift 2; echo "[MOCK:logger] tag=" "$tag" "msg=$*" >&2; }\n'
-        'export -f logger\n'
+        "export -f logger\n"
         f'source "{deploy_path_escaped}"\n'
-        'trap - ERR EXIT\n'
-        f'{code}\n'
+        "trap - ERR EXIT\n"
+        f"{code}\n"
     )
     script.write_text(script_content)
     script.chmod(0o755)
@@ -107,7 +106,7 @@ def test_parse_ssh_command_basic(tmp_path: pathlib.Path) -> None:
 
     code = (
         'SSH_ORIGINAL_COMMAND="platform-deploy myapp main"\n'
-        'parse_ssh_command\n'
+        "parse_ssh_command\n"
         'log_imp 9 "test" "Verification: parsed PROJECT=${PROJECT} REF=${REF}"\n'
         'echo "PROJECT=${PROJECT}"\n'
         'echo "REF=${REF}"\n'
@@ -120,15 +119,15 @@ def test_parse_ssh_command_basic(tmp_path: pathlib.Path) -> None:
     assert_ldd_stderr(result)
     stdout = result.stdout
     lines = stdout.splitlines()
-    proj_line = next(l for l in lines if l.startswith("PROJECT="))
-    ref_line = next(l for l in lines if l.startswith("REF="))
-    svc_line = next(l for l in lines if l.startswith("SERVICE_NAME="))
+    proj_line = next(line for line in lines if line.startswith("PROJECT="))
+    ref_line = next(line for line in lines if line.startswith("REF="))
+    svc_line = next(line for line in lines if line.startswith("SERVICE_NAME="))
 
     assert proj_line == "PROJECT=myapp", f"Unexpected: {proj_line}"
     assert ref_line == "REF=main", f"Unexpected: {ref_line}"
     assert svc_line == "SERVICE_NAME=myapp", f"Unexpected: {svc_line}"
 
-    print(f"[IMP:9][test_parse_ssh_command_basic] PASS: parsed PROJECT=myapp REF=main")
+    print("[IMP:9][test_parse_ssh_command_basic] PASS: parsed PROJECT=myapp REF=main")
     print("--- END LDD TRAJECTORY ---")
 
 
@@ -155,7 +154,7 @@ def test_parse_ssh_command_with_export(tmp_path: pathlib.Path) -> None:
     code = (
         'SSH_ORIGINAL_COMMAND="platform-deploy export CI=true\n'  # <-- real newline
         'myapp main"\n'
-        'parse_ssh_command\n'
+        "parse_ssh_command\n"
         'log_imp 9 "test" "Verification: parsed PROJECT=${PROJECT} REF=${REF}"\n'
         'echo "PROJECT=${PROJECT}"\n'
         'echo "REF=${REF}"\n'
@@ -165,8 +164,8 @@ def test_parse_ssh_command_with_export(tmp_path: pathlib.Path) -> None:
 
     assert_ldd_stderr(result)
     stdout = result.stdout
-    proj = [l for l in stdout.splitlines() if l.startswith("PROJECT=")][0].split("=")[1]
-    ref = [l for l in stdout.splitlines() if l.startswith("REF=")][0].split("=")[1]
+    proj = next(line for line in stdout.splitlines() if line.startswith("PROJECT=")).split("=")[1]
+    ref = next(line for line in stdout.splitlines() if line.startswith("REF=")).split("=")[1]
     assert proj == "myapp", f"Expected PROJECT=myapp, got {proj}"
     assert ref == "main", f"Expected REF=main, got {ref}"
 
@@ -191,20 +190,14 @@ def test_parse_ssh_command_missing_ref(tmp_path: pathlib.Path) -> None:
     proj_dir.mkdir()
     (proj_dir / "docker-compose.yml").touch()
 
-    code = (
-        'SSH_ORIGINAL_COMMAND="platform-deploy myapp"\n'
-        'parse_ssh_command\n'
-        'echo "SHOULD_NOT_REACH"\n'
-    )
+    code = 'SSH_ORIGINAL_COMMAND="platform-deploy myapp"\nparse_ssh_command\necho "SHOULD_NOT_REACH"\n'
 
     result = _run_bash(tmp_path, code)
 
     assert result.returncode == 1, f"Expected exit code 1, got {result.returncode}"
-    assert "invalid invocation" in result.stderr, (
-        f"Expected 'invalid invocation' in stderr:\n{result.stderr}"
-    )
+    assert "invalid invocation" in result.stderr, f"Expected 'invalid invocation' in stderr:\n{result.stderr}"
     # LDD: check stderr for IMP:10 FATAL from parse_ssh_command
-    found_imp10 = any("[IMP:10]" in l for l in result.stderr.splitlines())
+    found_imp10 = any("[IMP:10]" in line for line in result.stderr.splitlines())
     assert found_imp10, "Expected IMP:10 FATAL log for missing ref"
 
     print("[IMP:9][test_parse_ssh_command_missing_ref] PASS: exit 1 on missing ref")
@@ -223,11 +216,7 @@ def test_parse_ssh_command_project_not_found(tmp_path: pathlib.Path) -> None:
     # ▶ SSH_ORIGINAL_COMMAND="platform-deploy nonexistent main" → parse_ssh_command
     #   → ◇ exit 1 "project directory not found" + IMP:10 → ⎋ pass
     """
-    code = (
-        'SSH_ORIGINAL_COMMAND="platform-deploy nonexistent main"\n'
-        'parse_ssh_command\n'
-        'echo "SHOULD_NOT_REACH"\n'
-    )
+    code = 'SSH_ORIGINAL_COMMAND="platform-deploy nonexistent main"\nparse_ssh_command\necho "SHOULD_NOT_REACH"\n'
 
     result = _run_bash(tmp_path, code)
 
@@ -235,7 +224,7 @@ def test_parse_ssh_command_project_not_found(tmp_path: pathlib.Path) -> None:
     assert "project directory not found" in result.stderr, (
         f"Expected 'project directory not found' in stderr:\n{result.stderr}"
     )
-    found_imp10 = any("[IMP:10]" in l for l in result.stderr.splitlines())
+    found_imp10 = any("[IMP:10]" in line for line in result.stderr.splitlines())
     assert found_imp10, "Expected IMP:10 FATAL log for missing project dir"
 
     print("[IMP:9][test_parse_ssh_command_project_not_found] PASS: exit 1 on missing project dir")
@@ -257,11 +246,7 @@ def test_parse_ssh_command_no_compose_file(tmp_path: pathlib.Path) -> None:
     proj_dir = tmp_path / "myapp"
     proj_dir.mkdir()  # No compose file
 
-    code = (
-        'SSH_ORIGINAL_COMMAND="platform-deploy myapp main"\n'
-        'parse_ssh_command\n'
-        'echo "SHOULD_NOT_REACH"\n'
-    )
+    code = 'SSH_ORIGINAL_COMMAND="platform-deploy myapp main"\nparse_ssh_command\necho "SHOULD_NOT_REACH"\n'
 
     result = _run_bash(tmp_path, code)
 
@@ -294,7 +279,7 @@ def test_parse_ssh_command_service_override(tmp_path: pathlib.Path) -> None:
 
     code = (
         'SSH_ORIGINAL_COMMAND="platform-deploy myapp main"\n'
-        'parse_ssh_command\n'
+        "parse_ssh_command\n"
         'log_imp 9 "test" "Verification: SERVICE_NAME=${SERVICE_NAME}"\n'
         'echo "SERVICE_NAME=${SERVICE_NAME}"\n'
     )
@@ -303,7 +288,7 @@ def test_parse_ssh_command_service_override(tmp_path: pathlib.Path) -> None:
 
     assert_ldd_stderr(result)
     stdout = result.stdout
-    svc = [l for l in stdout.splitlines() if l.startswith("SERVICE_NAME=")][0].split("=")[1]
+    svc = next(line for line in stdout.splitlines() if line.startswith("SERVICE_NAME=")).split("=")[1]
     assert svc == "custom-svc", f"Expected SERVICE_NAME=custom-svc, got {svc}"
 
     print("[IMP:9][test_parse_ssh_command_service_override] PASS: service override from yaml")
@@ -350,7 +335,9 @@ GOLDEN_AGE_LOG_FOUND_ENV = "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY found in 
 GOLDEN_AGE_LOG_FOUND_SOPS = "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY set from SOPS_AGE_KEY"
 GOLDEN_AGE_LOG_FOUND_FILE = "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY read from file"
 GOLDEN_AGE_LOG_FILE_EMPTY = "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY_FILE="
-GOLDEN_AGE_LOG_NOT_FOUND = "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy"
+GOLDEN_AGE_LOG_NOT_FOUND = (
+    "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy"
+)
 
 GOLDEN_AUTO_LOG_SUCCESS = "[IMP:9][bootstrap][auto-detect] Auto-detected node:"
 GOLDEN_AUTO_LOG_NO_DIRS = "[IMP:10][bootstrap][auto-detect] No node directories found"
@@ -437,7 +424,7 @@ def _extract_func(filepath: str, func_name: str) -> str:
                 line_start = 0
             else:
                 line_start += 1
-            prefix = content[line_start: m.start()]
+            prefix = content[line_start : m.start()]
             if prefix.strip() == "" or prefix.strip().startswith("#"):
                 start = m.start()
                 break
@@ -537,7 +524,7 @@ def test_detect_age_key_from_env(caplog) -> None:
     """detect_age_key() returns the key when AGE_SECRET_KEY env is set (chain 1)."""
     caplog.set_level(logging.DEBUG)
 
-    test_call = textwrap.dedent(f"""\
+    test_call = textwrap.dedent("""\
         detected=$(detect_age_key)
         rc=$?
         echo "[IMP:9][test][detect_age_key] exit_code=$rc"
@@ -555,16 +542,16 @@ def test_detect_age_key_from_env(caplog) -> None:
 
     # Golden output: key should appear in stdout
     assert "KEY_VALUE:" in stdout, f"Expected KEY_VALUE in stdout: {stdout}"
-    key_line = [l for l in stdout.split("\n") if l.startswith("KEY_VALUE:")][0]
+    key_line = next(line for line in stdout.split("\n") if line.startswith("KEY_VALUE:"))
     assert GOLDEN_AGE_KEY in key_line, f"Expected '{GOLDEN_AGE_KEY}' in '{key_line}'"
 
     # Golden log: AGE_SECRET_KEY found in environment
-    assert GOLDEN_AGE_LOG_FOUND_ENV in stderr, (
-        f"Expected golden log '{GOLDEN_AGE_LOG_FOUND_ENV}' in stderr"
-    )
+    assert GOLDEN_AGE_LOG_FOUND_ENV in stderr, f"Expected golden log '{GOLDEN_AGE_LOG_FOUND_ENV}' in stderr"
 
     logger.info("[IMP:9][test][detect_age_key] AGE_SECRET_KEY from env: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -595,7 +582,7 @@ def test_detect_age_key_from_sops_env(caplog) -> None:
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"detect_age_key failed with rc={rc}: {stderr}"
 
-    key_line = [l for l in stdout.split("\n") if l.startswith("KEY_VALUE:")][0]
+    key_line = next(line for line in stdout.split("\n") if line.startswith("KEY_VALUE:"))
     assert test_key in key_line, f"Expected '{test_key}' in '{key_line}'"
 
     # Golden log: set from SOPS_AGE_KEY
@@ -603,6 +590,8 @@ def test_detect_age_key_from_sops_env(caplog) -> None:
 
     logger.info("[IMP:9][test][detect_age_key] SOPS_AGE_KEY fallback: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -635,13 +624,15 @@ def test_detect_age_key_from_file(caplog, tmp_path) -> None:
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"detect_age_key failed with rc={rc}: {stderr}"
 
-    key_line = [l for l in stdout.split("\n") if l.startswith("KEY_VALUE:")][0]
+    key_line = next(line for line in stdout.split("\n") if line.startswith("KEY_VALUE:"))
     assert GOLDEN_AGE_KEY in key_line, f"Expected '{GOLDEN_AGE_KEY}' in '{key_line}'"
 
     assert GOLDEN_AGE_LOG_FOUND_FILE in stderr
 
     logger.info("[IMP:9][test][detect_age_key] AGE_SECRET_KEY_FILE: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -674,16 +665,14 @@ def test_detect_age_key_not_found(caplog) -> None:
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"Script crashed: {stderr}"
 
-    assert "EXPECTED_FAILURE" in stdout, (
-        f"Expected EXPECTED_FAILURE, got: {stdout}"
-    )
+    assert "EXPECTED_FAILURE" in stdout, f"Expected EXPECTED_FAILURE, got: {stdout}"
     combined = stdout + "\n" + stderr
-    assert GOLDEN_AGE_LOG_NOT_FOUND in combined, (
-        f"Golden WARN message missing. Got: {combined[:500]}"
-    )
+    assert GOLDEN_AGE_LOG_NOT_FOUND in combined, f"Golden WARN message missing. Got: {combined[:500]}"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][detect_age_key] Key not found — WARN + exit 1: PASS")
+
+
 # endregion
 
 
@@ -694,6 +683,7 @@ def test_detect_age_key_not_found(caplog) -> None:
 #   In tests, we replace this path via string substitution to use tmp_path.
 #   This preserves the function's logic while allowing isolated testing.
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region test_auto_detect_node_name_success
 # 🧪 TRAP[TEST] · 2026-07-17 · auto_detect_node_name single non-service dir
@@ -727,13 +717,13 @@ def test_auto_detect_node_name_success(caplog, tmp_path) -> None:
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"Script failed: {stderr}"
 
-    assert "result=tronyx-vps" in stdout, (
-        f"Expected 'result=tronyx-vps' in stdout: {stdout[:300]}"
-    )
+    assert "result=tronyx-vps" in stdout, f"Expected 'result=tronyx-vps' in stdout: {stdout[:300]}"
 
     assert GOLDEN_AUTO_LOG_SUCCESS in stderr
     logger.info("[IMP:9][test][auto_detect] Single node found: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -770,6 +760,8 @@ def test_auto_detect_node_name_no_configs_dir(caplog) -> None:
     # pattern is "[IMP:8][bootstrap][auto-detect] /opt/node-configs does not exist"
     # which after replacement becomes "[IMP:8][bootstrap][auto-detect] /tmp/... does not exist"
     logger.info("[IMP:9][test][auto_detect] Missing configs dir: PASS")
+
+
 # endregion
 
 
@@ -807,11 +799,11 @@ def test_auto_detect_node_name_no_dirs(caplog, tmp_path) -> None:
     assert "EXPECTED_FAILURE" in stdout, f"Expected failure, got: {stdout}"
 
     # The "No node directories found" message is emitted on stderr by the function
-    assert "No node directories found" in stdout, (
-        f"Expected 'No node directories found' in stdout: {stdout[:400]}"
-    )
+    assert "No node directories found" in stdout, f"Expected 'No node directories found' in stdout: {stdout[:400]}"
     logger.info("[IMP:9][test][auto_detect] No candidate dirs: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -848,11 +840,11 @@ def test_auto_detect_node_name_multi_dirs(caplog, tmp_path) -> None:
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"Script crashed: {stderr}"
     assert "EXPECTED_FAILURE" in stdout, f"Expected failure, got: {stdout}"
-    assert "Multiple directories:" in stdout, (
-        f"Expected 'Multiple directories:' in stdout: {stdout[:400]}"
-    )
+    assert "Multiple directories:" in stdout, f"Expected 'Multiple directories:' in stdout: {stdout[:400]}"
     logger.info("[IMP:9][test][auto_detect] Multiple nodes ambiguous: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -864,6 +856,7 @@ def test_auto_detect_node_name_multi_dirs(caplog, tmp_path) -> None:
 #   Mock rsync logs via "[IMP:9][mock-rsync]" for assertion in LDD.
 #   Mock ssh does the same.
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region test_scp_to_server_all_phases
 # 🧪 TRAP[TEST] · 2026-07-17 · scp_to_server all 4 phases with secrets + platform-env
@@ -905,7 +898,7 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
         rc=$?
         echo "[IMP:9][test][scp] exit_code=$rc"
     """)
-    stdout, stderr, rc = _test_func(
+    stdout, stderr, _rc = _test_func(
         SCP_DELIVER_SH,
         ["scp_to_server"],
         test_call,
@@ -925,14 +918,12 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
     assert GOLDEN_SCP_LOG_CORE_DONE in stdout
 
     # Mock calls go to stderr
-    mock_ssh_lines = [l for l in stderr.split("\n") if "[IMP:9][mock-ssh]" in l]
+    mock_ssh_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-ssh]" in line]
     assert len(mock_ssh_lines) == 1, f"Expected 1 ssh mock call, got {len(mock_ssh_lines)}"
 
-    mock_rsync_lines = [l for l in stderr.split("\n") if "[IMP:9][mock-rsync]" in l]
+    mock_rsync_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line]
     # With platform-env.yaml present: core, platform-env, Makefile, node-configs, secrets = 5 rsync calls
-    assert len(mock_rsync_lines) >= 4, (
-        f"Expected ≥4 rsync mock calls, got {len(mock_rsync_lines)}: {stderr[:500]}"
-    )
+    assert len(mock_rsync_lines) >= 4, f"Expected ≥4 rsync mock calls, got {len(mock_rsync_lines)}: {stderr[:500]}"
 
     # Verify rsync destinations
     all_rsync_args = " ".join(mock_rsync_lines)
@@ -941,13 +932,15 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
     assert "root@192.168.1.100:/opt/node-configs/secrets/" in all_rsync_args
 
     # core rsync should have --delete --exclude=.git
-    core_rsync = [l for l in mock_rsync_lines if "/opt/platform/core/" in l]
+    core_rsync = [line for line in mock_rsync_lines if "/opt/platform/core/" in line]
     assert len(core_rsync) >= 1
     assert "--delete" in core_rsync[0]
     assert "--exclude=.git" in core_rsync[0]
 
     logger.info("[IMP:9][test][scp] All 4+ phases executed: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -986,7 +979,7 @@ def test_scp_to_server_no_secrets(caplog, tmp_path) -> None:
         rc=$?
         echo "[IMP:9][test][scp] exit_code=$rc"
     """)
-    stdout, stderr, rc = _test_func(
+    stdout, stderr, _rc = _test_func(
         SCP_DELIVER_SH,
         ["scp_to_server"],
         test_call,
@@ -1000,16 +993,15 @@ def test_scp_to_server_no_secrets(caplog, tmp_path) -> None:
 
     # No secrets rsync calls
     mock_rsync_secrets = [
-        l for l in stderr.split("\n")
-        if "[IMP:9][mock-rsync]" in l and "/node-configs/secrets/" in l
+        line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line and "/node-configs/secrets/" in line
     ]
-    assert len(mock_rsync_secrets) == 0, (
-        f"Expected no secrets rsync calls, got {len(mock_rsync_secrets)}"
-    )
+    assert len(mock_rsync_secrets) == 0, f"Expected no secrets rsync calls, got {len(mock_rsync_secrets)}"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][scp] No secrets — SKIP log: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -1048,7 +1040,7 @@ def test_scp_to_server_ssh_failure(caplog, tmp_path) -> None:
         rc=$?
         echo "[IMP:9][test][scp] exit_code=$rc"
     """)
-    stdout, stderr, rc = _test_func(
+    stdout, stderr, _rc = _test_func(
         SCP_DELIVER_SH,
         ["scp_to_server"],
         test_call,
@@ -1059,20 +1051,16 @@ def test_scp_to_server_ssh_failure(caplog, tmp_path) -> None:
     assert "exit_code=1" in stdout, f"Expected exit_code=1, got stdout: {stdout[:300]}, stderr: {stderr[:300]}"
 
     # Fatal log goes to stderr (uses >&2)
-    assert GOLDEN_SCP_LOG_MKDIR_FAIL in stderr, (
-        f"Expected golden mkdir failure log, got: {stderr[:500]}"
-    )
+    assert GOLDEN_SCP_LOG_MKDIR_FAIL in stderr, f"Expected golden mkdir failure log, got: {stderr[:500]}"
 
     # No rsync calls should happen
-    mock_rsync_lines = [
-        l for l in stderr.split("\n") if "[IMP:9][mock-rsync]" in l
-    ]
-    assert len(mock_rsync_lines) == 0, (
-        f"Expected 0 rsync calls after SSH failure, got {len(mock_rsync_lines)}"
-    )
+    mock_rsync_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line]
+    assert len(mock_rsync_lines) == 0, f"Expected 0 rsync calls after SSH failure, got {len(mock_rsync_lines)}"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][scp] SSH failure → abort with exit 1: PASS")
+
+
 # endregion
 
 
@@ -1125,7 +1113,7 @@ def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
         rc=$?
         echo "[IMP:9][test][scp] exit_code=$rc"
     """)
-    stdout, stderr, rc = _test_func(
+    stdout, stderr, _rc = _test_func(
         SCP_DELIVER_SH,
         ["scp_to_server"],
         test_call,
@@ -1135,18 +1123,19 @@ def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
     assert "exit_code=1" in stdout, f"Expected exit_code=1, got stdout: {stdout[:300]}, stderr: {stderr[:300]}"
 
     # Fatal log goes to stderr (uses >&2)
-    assert GOLDEN_SCP_LOG_CORE_FAIL in stderr, (
-        f"Expected golden core failure log, got: {stderr[:500]}"
-    )
+    assert GOLDEN_SCP_LOG_CORE_FAIL in stderr, f"Expected golden core failure log, got: {stderr[:500]}"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][scp] rsync core/ failure → exit 1: PASS")
+
+
 # endregion
 
 
 # ═══════════════════════════════════════════════════════════════════
 # build_ssh_cmd
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region test_build_ssh_cmd_no_cli_age_key
 # 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd no --age-secret-key CLI in remote command
@@ -1184,6 +1173,8 @@ echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][build_ssh_cmd] --age-secret-key absent: PASS")
+
+
 # endregion
 
 
@@ -1209,10 +1200,10 @@ echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 
     cmd = stdout.split("\n")[0]
 
-    assert GOLDEN_SSH_CMD_EXPORT in cmd, (
-        f"build_ssh_cmd missing export AGE_SECRET_KEY=: {cmd[:300]}...\n"
-    )
+    assert GOLDEN_SSH_CMD_EXPORT in cmd, f"build_ssh_cmd missing export AGE_SECRET_KEY=: {cmd[:300]}...\n"
     logger.info("[IMP:9][test][build_ssh_cmd] export AGE_SECRET_KEY= present: PASS")
+
+
 # endregion
 
 
@@ -1247,6 +1238,8 @@ echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][build_ssh_cmd] Empty key — no export: PASS")
+
+
 # endregion
 
 
@@ -1282,6 +1275,8 @@ echo "[IMP:9][test][build_ssh_cmd] Command constructed"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][build_ssh_cmd] Owner key %q quoting: PASS")
+
+
 # endregion
 
 
@@ -1313,15 +1308,15 @@ echo "[IMP:9][test][build_ssh_cmd] Passthrough args test"
     custom_pos = cmd.find("--custom-flag=value")
 
     assert resume_pos >= 0, f"--resume missing: {cmd[:300]}"
-    assert force_pos > resume_pos, (
-        f"--force should come after --resume. resume_pos={resume_pos}, force_pos={force_pos}"
-    )
+    assert force_pos > resume_pos, f"--force should come after --resume. resume_pos={resume_pos}, force_pos={force_pos}"
     assert custom_pos > resume_pos, (
         f"--custom-flag should come after --resume. resume_pos={resume_pos}, custom_pos={custom_pos}"
     )
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
     logger.info("[IMP:9][test][build_ssh_cmd] Passthrough args appended: PASS")
+
+
 # endregion
 
 # endregion build_ssh_cmd

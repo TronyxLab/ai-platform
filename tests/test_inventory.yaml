@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-17 | regenerated (800 tests)
+## @changes — 2026-07-17 | regenerated (818 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -183,6 +183,7 @@ test_nodeids:
 - tests/test_add_vhost.py::test_add_vhost_cert_path
 - tests/test_add_vhost.py::test_add_vhost_cert_path_independent
 - tests/test_add_vhost.py::test_fqdn_check_delegates_to_validate
+- tests/test_add_vhost.py::test_vhost_template_http2_directive
 - tests/test_backup_config.py::test_all_vars_present
 - tests/test_backup_config.py::test_context_resolution[corporate-corporate]
 - tests/test_backup_config.py::test_context_resolution[not-set-default]
@@ -222,6 +223,7 @@ test_nodeids:
 - tests/test_backup_retention.py::test_sunday_and_first_of_month_same_day
 - tests/test_bootstrap_auto.py::test_detect_age_key_from_env
 - tests/test_bootstrap_auto.py::test_detect_age_key_missing_warns
+- tests/test_bootstrap_auto.py::test_docker_login_set_u_safe
 - tests/test_bootstrap_auto.py::test_extract_node_host_from_yaml
 - tests/test_bootstrap_auto.py::test_orchestrator_age_key_flag
 - tests/test_bootstrap_auto.py::test_platform_secrets_idempotent
@@ -234,7 +236,8 @@ test_nodeids:
 - tests/test_char_deploy_parse_save.py::test_save_previous_image_docker_error
 - tests/test_char_deploy_parse_save.py::test_save_previous_image_exists
 - tests/test_char_deploy_parse_save.py::test_save_previous_image_none
-- tests/test_clickhouse_config.py::test_default_user_xml_auto_generated_and_ignored
+- tests/test_clickhouse_config.py::test_no_default_user_artifact_in_repo
+- tests/test_clickhouse_config.py::test_users_d_per_file_mount
 - tests/test_clickhouse_static.py::test_clickhouse_config_xml_valid
 - tests/test_clickhouse_static.py::test_clickhouse_healthcheck_contract
 - tests/test_clickhouse_static.py::test_clickhouse_makefile_template
@@ -350,6 +353,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_setup-node]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_deploy_deploy-project]
@@ -383,6 +387,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_setup-node]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_deploy_deploy-project]
@@ -416,6 +421,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_setup-node]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_deploy_deploy-project]
@@ -464,6 +470,11 @@ test_nodeids:
 - tests/test_dedup_contract.py::test_sudo_whitelist_all_symlinks
 - tests/test_dedup_contract.py::test_sudo_whitelist_symlinks_point_to_template
 - tests/test_dedup_contract.py::test_sudo_whitelist_template_exists_and_valid
+- tests/test_deploy_delivery_static.py::test_rsync_excludes_runtime_artifacts
+- tests/test_deploy_gates_static.py::test_clickhouse_password_url_safe
+- tests/test_deploy_gates_static.py::test_env_requires_gate_present
+- tests/test_deploy_gates_static.py::test_minio_env_requires_documented
+- tests/test_deploy_gates_static.py::test_no_hardcoded_hermes_images
 - tests/test_e2e_grafana_api.py::test_grafana_admin_login
 - tests/test_e2e_grafana_api.py::test_grafana_dashboard_search
 - tests/test_e2e_grafana_api.py::test_grafana_datasources
@@ -481,6 +492,8 @@ test_nodeids:
 - tests/test_healthcheck_contract.py::test_litellm_healthcheck_fallback
 - tests/test_healthcheck_contract.py::test_nginx_docker_healthcheck
 - tests/test_healthcheck_contract.py::test_nginx_healthcheck_deep_http
+- tests/test_healthcheck_static.py::test_healthcheck_checks_all_containers
+- tests/test_healthcheck_static.py::test_healthcheck_detects_restart_loop
 - tests/test_hermes_best_practices.py::test_approvals_mode_not_off
 - tests/test_hermes_best_practices.py::test_dashboard_basic_auth_in_env
 - tests/test_hermes_best_practices.py::test_dotenv_in_gitignore
@@ -606,6 +619,9 @@ test_nodeids:
 - tests/test_no_hardcoded_credentials.py::test_no_password_fallback_in_install_scripts
 - tests/test_no_hardcoded_credentials.py::test_no_token_in_git_url
 - tests/test_no_hardcoded_credentials.py::test_no_token_in_git_url_workflows
+- tests/test_node_lifecycle_static.py::test_dry_run_flag_accepted
+- tests/test_node_lifecycle_static.py::test_entrypoint_flags_contract
+- tests/test_node_lifecycle_static.py::test_update_mode_resolves_node_yaml
 - tests/test_node_yaml_domains.py::test_node_yaml_domain_extraction
 - tests/test_node_yaml_domains.py::test_node_yaml_no_projects
 - tests/test_pgbouncer_static.py::test_each_database_has_host_port_dbname
@@ -817,6 +833,8 @@ test_nodeids:
 - tests/unit/test_discover_modules.py::test_update_compose_include_idempotent
 - tests/unit/test_discover_modules.py::test_update_compose_include_preserves_other_sections
 - tests/unit/test_spool_dir.py::test_all_docker_modules_have_spool_dir
+- tests/unit/test_spool_dir.py::test_spool_dir_missing_still_warns
+- tests/unit/test_spool_dir.py::test_spool_dir_none_no_warn
 - tests/unit/test_spool_dir.py::test_spool_dir_paths_are_absolute
 - tests/unit/test_sync_inventory.py::test_sync_output_matches_collect
 - tests/unit/test_sync_inventory.py::test_sync_yaml_format_roundtrip

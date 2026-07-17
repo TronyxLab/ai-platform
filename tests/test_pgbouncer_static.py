@@ -439,15 +439,11 @@ def test_pgbouncer_no_proxy_includes(hermes_agent_compose_path, caplog) -> None:
 
         proxy_config = platform_env.get("proxy", {})
         no_proxy_internal_raw: str = proxy_config.get("no_proxy_internal", "")
-        sot_entries: set[str] = {
-            e.strip() for e in no_proxy_internal_raw.split(",") if e.strip()
-        }
+        sot_entries: set[str] = {e.strip() for e in no_proxy_internal_raw.split(",") if e.strip()}
         logger.info("[IMP:8][test_pgbouncer][no_proxy] SoT entries: %s", sorted(sot_entries))
 
         # ── Extract NO_PROXY fallback from hermes-agent compose ──
-        assert os.path.isfile(hermes_agent_compose_path), (
-            f"Hermes-agent compose not found: {hermes_agent_compose_path}"
-        )
+        assert os.path.isfile(hermes_agent_compose_path), f"Hermes-agent compose not found: {hermes_agent_compose_path}"
         with open(hermes_agent_compose_path) as f:
             data = yaml.safe_load(f)
 
@@ -484,9 +480,7 @@ def test_pgbouncer_no_proxy_includes(hermes_agent_compose_path, caplog) -> None:
             "No NO_PROXY with ${NO_PROXY:-fallback} pattern found in hermes-agent docker-compose.base.yml"
         )
 
-        fallback_entries: set[str] = {
-            e.strip() for e in fallback_value.split(",") if e.strip()
-        }
+        fallback_entries: set[str] = {e.strip() for e in fallback_value.split(",") if e.strip()}
         missing_entries = sot_entries - fallback_entries
 
         logger.critical(

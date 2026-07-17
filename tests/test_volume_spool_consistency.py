@@ -350,7 +350,7 @@ def test_ensure_spool_dirs_is_verify_only(platform_root, caplog) -> None:
     func_end = script_content.find("# endregion ENSURE_SPOOL_DIRS")
     assert func_start != -1, "ENSURE_SPOOL_DIRS region start not found"
     assert func_end != -1, "ENSURE_SPOOL_DIRS region end not found"
-    func_body = script_content[func_start:func_end + len("# endregion ENSURE_SPOOL_DIRS")]
+    func_body = script_content[func_start : func_end + len("# endregion ENSURE_SPOOL_DIRS")]
 
     logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] Extracted function body (%d chars)", len(func_body))
 
@@ -360,28 +360,30 @@ def test_ensure_spool_dirs_is_verify_only(platform_root, caplog) -> None:
 
     # Check 1: NO mkdir -p in non-comment code inside ensure_spool_dirs()
     assert "mkdir -p" not in non_comment_body, (
-        f"ensure_spool_dirs() contains 'mkdir -p' in code — should be verify-only!\n"
-        f"Remove mkdir -p calls, replace with test -d || log_step ... WARN"
+        "ensure_spool_dirs() contains 'mkdir -p' in code — should be verify-only!\n"
+        "Remove mkdir -p calls, replace with test -d || log_step ... WARN"
     )
     logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 1 PASS: No mkdir -p in ensure_spool_dirs() code")
 
     # Check 2: Contains test -d or [[ -d (verify-only pattern, non-comment code)
     assert "test -d" in non_comment_body or "[[ -d " in non_comment_body, (
-        f"ensure_spool_dirs() missing 'test -d' or '[[ -d ' — verify-only requires directory existence check"
+        "ensure_spool_dirs() missing 'test -d' or '[[ -d ' — verify-only requires directory existence check"
     )
     logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 2 PASS: test -d/[[ -d  present in code")
 
     # Check 3: Contains WARN log for missing dirs
     assert "WARN" in non_comment_body, (
-        f"ensure_spool_dirs() missing 'WARN' log — verify-only must emit WARN for missing dirs"
+        "ensure_spool_dirs() missing 'WARN' log — verify-only must emit WARN for missing dirs"
     )
     logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 3 PASS: WARN log present in code")
 
     # Check 4: Contains 'make provision' recommendation
     assert "make provision" in non_comment_body, (
-        f"ensure_spool_dirs() missing 'make provision' recommendation — must tell user how to create missing dirs"
+        "ensure_spool_dirs() missing 'make provision' recommendation — must tell user how to create missing dirs"
     )
-    logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 4 PASS: 'make provision' recommendation present in code")
+    logger.info(
+        "[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 4 PASS: 'make provision' recommendation present in code"
+    )
 
     logger.info("[IMP:9][test_ensure_spool_dirs_is_verify_only] ensure_spool_dirs() is verify-only: ALL CHECKS PASS")
 

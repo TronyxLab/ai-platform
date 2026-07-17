@@ -347,28 +347,26 @@ target_node: mynode
     print("--- END VHOST ---")
 
     # Check 1: modern http2 on; on its own line
-    assert "http2 on;" in vhost_content, (
-        f"Vhost must contain 'http2 on;' directive:\n{vhost_content}"
-    )
+    assert "http2 on;" in vhost_content, f"Vhost must contain 'http2 on;' directive:\n{vhost_content}"
     # Ensure http2 is on its own line, not part of listen directive
-    http2_lines = [l.strip() for l in vhost_content.split('\n') if 'http2' in l]
-    assert all(l == 'http2 on;' or l.startswith('#') for l in http2_lines if 'http2' in l), (
+    http2_lines = [line.strip() for line in vhost_content.split("\n") if "http2" in line]
+    assert all(line == "http2 on;" or line.startswith("#") for line in http2_lines if "http2" in line), (
         f"'http2' lines must be 'http2 on;', not part of listen: {http2_lines}"
     )
 
     # Check 2: no deprecated listen ... http2
-    listen_lines = [l.strip() for l in vhost_content.split('\n') if 'listen' in l]
+    listen_lines = [line.strip() for line in vhost_content.split("\n") if "listen" in line]
     for line in listen_lines:
-        assert ' http2' not in line.split('ssl')[1] if 'ssl' in line else True, (
+        assert " http2" not in line.split("ssl")[1] if "ssl" in line else True, (
             f"Deprecated listen ... http2 found: '{line}'"
         )
-    assert 'http2' not in ' '.join([l for l in listen_lines if 'ssl' in l]), (
+    assert "http2" not in " ".join([line for line in listen_lines if "ssl" in line]), (
         f"No listen line should contain 'http2': {listen_lines}"
     )
 
     # Check 3: both IPv4 and IPv6 listen have ssl without http2 flag
-    assert 'listen 443 ssl;' in vhost_content, "Missing IPv4 ssl listen"
-    assert 'listen [::]:443 ssl;' in vhost_content, "Missing IPv6 ssl listen"
+    assert "listen 443 ssl;" in vhost_content, "Missing IPv4 ssl listen"
+    assert "listen [::]:443 ssl;" in vhost_content, "Missing IPv6 ssl listen"
 
     # LDD telemetry (IMP:9 from vhost content)
     print("--- LDD TRAJECTORY (stderr) ---")

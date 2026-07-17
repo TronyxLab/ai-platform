@@ -190,27 +190,29 @@ def test_modules_filter_flag_present(caplog) -> None:
     main_body = _extract_main_body(content)
 
     # Core assertion: --modules case handling in main()
-    assert '--modules' in main_body, (
+    assert "--modules" in main_body, (
         "--modules flag parsing not found in main() — selective deploy would be broken\n"
         "DevPlan 020 T21: --modules nginx,postgres filters to specified modules + transitive deps"
     )
 
     # Verify error message for missing argument
-    assert 'requires a comma-separated list' in content, (
+    assert "requires a comma-separated list" in content, (
         "--modules missing value error message not found — usage help would be unhelpful"
     )
 
     # Verify _expand_transitive_deps function exists
-    assert '_expand_transitive_deps' in content, (
+    assert "_expand_transitive_deps" in content, (
         "_expand_transitive_deps function not found — transitive dependency expansion required"
     )
 
     # Verify expanded_modules variable is assigned
-    assert 'expanded_modules=' in main_body, (
+    assert "expanded_modules=" in main_body, (
         "expanded_modules assignment not found in main() — filter expansion result not consumed"
     )
 
     logger.info("[IMP:9][test][--modules] --modules flag parsing and transitive expansion confirmed")
+
+
 # endregion
 
 
@@ -228,7 +230,7 @@ def test_modules_filter_unknown_module_error(caplog) -> None:
     content = _read_source()
 
     # Verify _expand_transitive_deps validates seed modules
-    assert 'ERROR: Unknown module' in content or 'exit 1' in content, (
+    assert "ERROR: Unknown module" in content or "exit 1" in content, (
         "_expand_transitive_deps must validate that all seed modules exist in DAG\n"
         "DevPlan 020 T21: --modules nonexistent → exit 1"
     )
@@ -240,6 +242,8 @@ def test_modules_filter_unknown_module_error(caplog) -> None:
     )
 
     logger.info("[IMP:9][test][--modules] Unknown module validation confirmed in _expand_transitive_deps")
+
+
 # endregion
 
 
@@ -256,7 +260,7 @@ def test_get_module_severity_function(caplog) -> None:
     content = _read_source()
 
     # Core assertion: _get_module_severity function exists
-    assert '_get_module_severity()' in content, (
+    assert "_get_module_severity()" in content, (
         "_get_module_severity() function not found — severity-based exit code would be broken\n"
         "DevPlan 020 T21: severity read from module.yaml (critical|warn, default warn)"
     )
@@ -268,6 +272,8 @@ def test_get_module_severity_function(caplog) -> None:
     )
 
     logger.info("[IMP:9][test][severity] _get_module_severity() function with warn default confirmed")
+
+
 # endregion
 
 
@@ -285,32 +291,28 @@ def test_severity_exit_codes(caplog) -> None:
     main_body = _extract_main_body(content)
 
     # Verify FAILED_MODULE_NAMES array initialized
-    assert 'FAILED_MODULE_NAMES' in content, (
+    assert "FAILED_MODULE_NAMES" in content, (
         "FAILED_MODULE_NAMES array not found — module failure tracking required for severity exit"
     )
 
     # Verify severity aggregation
-    assert 'critical_failed' in main_body, (
+    assert "critical_failed" in main_body, (
         "critical_failed counter not found in main() — CRITICAL severity not aggregated"
     )
-    assert 'warn_failed' in main_body, (
-        "warn_failed counter not found in main() — WARN severity not aggregated"
-    )
+    assert "warn_failed" in main_body, "warn_failed counter not found in main() — WARN severity not aggregated"
 
     # Verify exit code logic
-    assert 'exit 2' in main_body, (
-        "exit 2 not found in main() — CRITICAL failures must exit 2"
-    )
-    assert 'exit 1' in main_body, (
-        "exit 1 not found in main() — WARN failures must exit 1"
-    )
+    assert "exit 2" in main_body, "exit 2 not found in main() — CRITICAL failures must exit 2"
+    assert "exit 1" in main_body, "exit 1 not found in main() — WARN failures must exit 1"
 
     # Verify severity is read per failed module
-    assert '_get_module_severity' in main_body or '_get_module_severity' in content, (
+    assert "_get_module_severity" in main_body or "_get_module_severity" in content, (
         "_get_module_severity not referenced — severity per-failed-module not checked"
     )
 
     logger.info("[IMP:9][test][severity-exit] Severity exit code logic confirmed: critical→exit2, warn→exit1")
+
+
 # endregion
 
 
@@ -336,12 +338,14 @@ def test_postgres_module_severity_critical() -> None:
         content = f.read()
 
     # Verify severity: critical is present
-    assert 'severity: critical' in content, (
+    assert "severity: critical" in content, (
         "postgres/module.yaml must have severity: critical\n"
         "DevPlan 020 T21: CRITICAL module failure → exit 2 (blocks node-update)"
     )
 
     print("[IMP:9][test][postgres-severity] postgres/module.yaml has severity: critical")
+
+
 # endregion
 
 
@@ -358,18 +362,20 @@ def test_expand_transitive_deps_function(caplog) -> None:
     content = _read_source()
 
     # Verify BFS / transitive expansion pattern
-    assert 'BFS' in content or 'queue' in content or 'transitive' in content, (
+    assert "BFS" in content or "queue" in content or "transitive" in content, (
         "_expand_transitive_deps must use BFS or queue-based transitive dependency resolution\n"
         "DevPlan 020 T21: keep specified modules + transitive depends_on"
     )
 
     # Verify expanded set is sorted (deterministic output)
-    assert 'sorted(expanded)' in content or 'sorted' in content, (
+    assert "sorted(expanded)" in content or "sorted" in content, (
         "_expand_transitive_deps output should be sorted for deterministic filtering\n"
         "DevPlan 020 T21: deterministic filter ordering"
     )
 
     logger.info("[IMP:9][test][transitive-deps] _expand_transitive_deps BFS expansion confirmed")
+
+
 # endregion
 
 
@@ -386,19 +392,15 @@ def test_failed_module_names_tracking(caplog) -> None:
     content = _read_source()
 
     # Verify FAILED_MODULE_NAMES is referenced in system module deploy path
-    assert 'FAILED_MODULE_NAMES' in content, (
-        "FAILED_MODULE_NAMES not found — severity exit code has no failure input"
-    )
+    assert "FAILED_MODULE_NAMES" in content, "FAILED_MODULE_NAMES not found — severity exit code has no failure input"
 
     # Verify failure tracking in system module loop
-    assert 'FAILED_MODULE_NAMES+=(\"$mod_name\")' in content, (
-        "System module failure not tracked in FAILED_MODULE_NAMES"
-    )
+    assert 'FAILED_MODULE_NAMES+=("$mod_name")' in content, "System module failure not tracked in FAILED_MODULE_NAMES"
 
     # Verify failure tracking in docker deploy paths
-    assert 'FAILED_MODULE_NAMES' in content, (
-        "FAILED_MODULE_NAMES tracking confirmed in deploy-modules.sh"
-    )
+    assert "FAILED_MODULE_NAMES" in content, "FAILED_MODULE_NAMES tracking confirmed in deploy-modules.sh"
 
     logger.info("[IMP:9][test][failure-tracking] FAILED_MODULE_NAMES tracking confirmed in all failure paths")
+
+
 # endregion

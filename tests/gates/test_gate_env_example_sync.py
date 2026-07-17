@@ -189,8 +189,8 @@ def test_env_noproxy_subset(caplog):
         logger.info("[IMP:7][gate] NO_PROXY not set in one or both files — skipping")
         return
 
-    env_hosts = set(h.strip() for h in env_noproxy.split(",") if h.strip())
-    example_hosts = set(h.strip() for h in example_noproxy.split(",") if h.strip())
+    env_hosts = {h.strip() for h in env_noproxy.split(",") if h.strip()}
+    example_hosts = {h.strip() for h in example_noproxy.split(",") if h.strip()}
 
     violations = []
     extra_hosts = env_hosts - example_hosts

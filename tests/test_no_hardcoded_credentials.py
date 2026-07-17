@@ -562,9 +562,10 @@ def test_no_token_in_git_url_workflows(
     if pathlib.Path(workflows_dir).exists():
         findings = _scan_directory_for_token_in_git_url(workflows_dir, "*.yml", platform_root, logger)
         all_findings.extend(findings)
-        logger.info("[IMP:8][test_git_url_workflows] Scanned workflows/: %d files checked", len(
-            list(pathlib.Path(workflows_dir).rglob("*.yml"))
-        ))
+        logger.info(
+            "[IMP:8][test_git_url_workflows] Scanned workflows/: %d files checked",
+            len(list(pathlib.Path(workflows_dir).rglob("*.yml"))),
+        )
     else:
         logger.info("[IMP:4][test_git_url_workflows] workflows/ directory not found — skipping")
     # endregion
@@ -574,9 +575,10 @@ def test_no_token_in_git_url_workflows(
     if pathlib.Path(actions_dir).exists():
         findings = _scan_directory_for_token_in_git_url(actions_dir, "*.yml", platform_root, logger)
         all_findings.extend(findings)
-        logger.info("[IMP:8][test_git_url_workflows] Scanned actions/: %d files checked", len(
-            list(pathlib.Path(actions_dir).rglob("*.yml"))
-        ))
+        logger.info(
+            "[IMP:8][test_git_url_workflows] Scanned actions/: %d files checked",
+            len(list(pathlib.Path(actions_dir).rglob("*.yml"))),
+        )
     else:
         logger.info("[IMP:4][test_git_url_workflows] actions/ directory not found — skipping")
     # endregion

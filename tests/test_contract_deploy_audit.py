@@ -70,15 +70,14 @@ def _extract_audit_entries(stderr: str) -> list[str]:
         if m:
             idx = line.find(FALLBACK_PREFIX)
             if idx >= 0:
-                entries.append(line[idx + len(FALLBACK_PREFIX):])
+                entries.append(line[idx + len(FALLBACK_PREFIX) :])
     return entries
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _assert_ldd_audit(result: subprocess.CompletedProcess,
-                      expected_patterns: list[str] | None = None) -> None:
+def _assert_ldd_audit(result: subprocess.CompletedProcess, expected_patterns: list[str] | None = None) -> None:
     """Print LDD trajectory from stderr, assert at least IMP:7+ AND an audit fallback entry.
 
     ## @purpose — Local assertion for audit tests (audit_log uses IMP:8 fallback, not IMP:9)
@@ -124,18 +123,18 @@ def _run_bash(
     deploy_path_escaped = str(DEPLOY_SCRIPT_PATH)
 
     script_content = (
-        '#!/usr/bin/env bash\n'
-        'set -euo pipefail\n'
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
         # Mock logger that FAILS (returns 1) to trigger audit_log's fallback stderr path
         # NOTE: no export -f (macOS /bin/bash v3.2 doesn't support it + not needed —
         #   audit_log runs in the same shell process, function is in scope without export)
-        'logger() { return 1; }\n'
+        "logger() { return 1; }\n"
         f'source "{deploy_path_escaped}"\n'
-        'trap - ERR EXIT\n'
+        "trap - ERR EXIT\n"
         # Override audit paths to guarantee fallback (mock logger fails + file write fails)
         'PLATFORM_LOG_DIR="/nonexistent-root-only/platform"\n'
         'PLATFORM_AUDIT_LOG="/nonexistent-root-only/platform/audit.log"\n'
-        f'{code}\n'
+        f"{code}\n"
     )
     script.write_text(script_content)
     script.chmod(0o755)
@@ -174,9 +173,7 @@ def test_audit_log_format(tmp_path: pathlib.Path) -> None:
     #   → ◇ stderr matches [IMP:8][audit][fallback] ts | step | STATUS | msg
     #   → ⎋ pass
     """
-    code = (
-        'audit_log "platform-deploy:test" "START" "Deploy started"\n'
-    )
+    code = 'audit_log "platform-deploy:test" "START" "Deploy started"\n'
 
     result = _run_bash(tmp_path, code)
 
@@ -305,15 +302,11 @@ def test_audit_log_fallback_stderr(tmp_path: pathlib.Path) -> None:
     # ▶ audit_log "platform-deploy:test" "SUCCESS" "Completed"
     #   → ◇ stderr has [IMP:8][audit][fallback] entry → ⎋ pass
     """
-    code = (
-        'audit_log "platform-deploy:test" "SUCCESS" "Completed"\n'
-    )
+    code = 'audit_log "platform-deploy:test" "SUCCESS" "Completed"\n'
 
     result = _run_bash(tmp_path, code)
 
-    assert FALLBACK_PREFIX.strip() in result.stderr, (
-        f"Expected audit fallback line in stderr:\n{result.stderr}"
-    )
+    assert FALLBACK_PREFIX.strip() in result.stderr, f"Expected audit fallback line in stderr:\n{result.stderr}"
     # Verify entry content: step | status | msg
     assert "platform-deploy:test | SUCCESS | Completed" in result.stderr, (
         f"Expected audit entry content in stderr:\n{result.stderr}"

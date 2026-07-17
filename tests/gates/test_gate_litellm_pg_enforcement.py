@@ -17,8 +17,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import os
-import re
 from pathlib import Path
 
 import pytest
@@ -147,7 +145,6 @@ def test_no_sqlite_in_litellm_config() -> None:
                 continue
 
     assert not sqlite_refs, (
-        "GATE_LITELLM_PG_ENFORCEMENT: SQLite URL references found in LiteLLM config:\n  "
-        + "\n  ".join(sqlite_refs)
+        "GATE_LITELLM_PG_ENFORCEMENT: SQLite URL references found in LiteLLM config:\n  " + "\n  ".join(sqlite_refs)
     )
     logger.info("[IMP:9][gate] PASS: No SQLite references in LiteLLM module config")

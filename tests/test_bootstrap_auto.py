@@ -685,7 +685,7 @@ echo "[IMP:9][docker_test] auth exit=$?"
 
     found_imp9_2 = _print_ldd(stderr2, stdout2)
     assert rc2 == 0, f"docker_login crashed with vars set: {stderr2}"
-    assert "testuser" in stderr2 or "testuser" in stdout2, f"Expected testuser in output"
+    assert "testuser" in stderr2 or "testuser" in stdout2, "Expected testuser in output"
     logger.info("[IMP:9][test_docker_login_set_u_safe][assert] Authenticated path works")
     assert found_imp9_2, "Critical LDD Error: No IMP:9 business logic log found (auth)"
 

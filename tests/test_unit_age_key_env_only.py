@@ -67,7 +67,7 @@ def _extract_func(func_name: str, source_path: str) -> str:
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
-            if f"{func_name}()" in line or stripped.startswith(f"{func_name} "):
+            if f"{func_name}()" in line or stripped.startswith(f"{func_name} "):  # noqa: SIM102 — cannot combine: outer else depends on A-or-B not being just A
                 if f"{func_name}()" in line:
                     in_func = True
                     func_lines.append(line)

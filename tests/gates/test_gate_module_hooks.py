@@ -17,7 +17,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import os
 import stat
 from pathlib import Path
 
@@ -43,6 +42,8 @@ def _get_module_yamls() -> list[Path]:
     if not yamls:
         logger.warning("[IMP:7][_get_module_yamls] No module.yaml files found in %s", MODULES_DIR)
     return yamls
+
+
 # endregion FUNC_get_module_yamls
 
 
@@ -57,7 +58,7 @@ def _get_hook_paths(module_yaml: Path) -> dict[str, str | None]:
     ##   - Возвращает None для hook_type, отсутствующего в YAML
     ##   - Не валидирует содержимое — только чтение
     """
-    with open(module_yaml, "r") as f:
+    with open(module_yaml) as f:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
@@ -73,6 +74,8 @@ def _get_hook_paths(module_yaml: Path) -> dict[str, str | None]:
         "on_project_deploy": hooks.get("on_project_deploy"),
         "on_project_remove": hooks.get("on_project_remove"),
     }
+
+
 # endregion FUNC_get_hook_paths
 
 
@@ -109,25 +112,21 @@ def _verify_hook_script(hook_path: Path) -> None:
 
     # 3. GREP_SUMMARY
     content = hook_path.read_text()
-    assert "# GREP_SUMMARY:" in content, (
-        f"Hook file missing '# GREP_SUMMARY:' line: {hook_path}"
-    )
+    assert "# GREP_SUMMARY:" in content, f"Hook file missing '# GREP_SUMMARY:' line: {hook_path}"
     logger.info("[IMP:8][_verify_hook_script] GREP_SUMMARY present: %s", hook_path)
 
     # 4. MODULE_CONTRACT (region + @purpose)
-    assert "# region MODULE_CONTRACT" in content, (
-        f"Hook file missing '# region MODULE_CONTRACT': {hook_path}"
-    )
-    assert "## @purpose" in content, (
-        f"Hook file missing '## @purpose' in MODULE_CONTRACT: {hook_path}"
-    )
+    assert "# region MODULE_CONTRACT" in content, f"Hook file missing '# region MODULE_CONTRACT': {hook_path}"
+    assert "## @purpose" in content, f"Hook file missing '## @purpose' in MODULE_CONTRACT: {hook_path}"
     logger.info("[IMP:8][_verify_hook_script] MODULE_CONTRACT present: %s", hook_path)
 
     # 5. Sourcing from ../../lib/
-    assert '../lib/' in content or '../../lib/' in content, (
+    assert "../lib/" in content or "../../lib/" in content, (
         f"Hook file does not source from '../../lib/' (missing '../lib/' or '../../lib/' pattern): {hook_path}"
     )
     logger.info("[IMP:9][_verify_hook_script] All contract checks passed: %s", hook_path)
+
+
 # endregion FUNC_verify_hook_script
 
 
@@ -154,7 +153,12 @@ def _verify_module_hooks(module_yaml: Path) -> list[str]:
             continue
 
         if not isinstance(hook_rel_path, str):
-            logger.warning("[IMP:7][_verify_module_hooks] %s: %s hook is not a string (%r) — skip", module_name, hook_type, hook_rel_path)
+            logger.warning(
+                "[IMP:7][_verify_module_hooks] %s: %s hook is not a string (%r) — skip",
+                module_name,
+                hook_type,
+                hook_rel_path,
+            )
             continue
 
         hook_abs_path = (module_dir / hook_rel_path).resolve()
@@ -163,11 +167,15 @@ def _verify_module_hooks(module_yaml: Path) -> list[str]:
         logger.info("[IMP:9][_verify_module_hooks] %s: %s hook verified OK", module_name, hook_type)
 
     if verified_hooks:
-        logger.info("[IMP:9][_verify_module_hooks] Module %s: all %d hook(s) passed gate", module_name, len(verified_hooks))
+        logger.info(
+            "[IMP:9][_verify_module_hooks] Module %s: all %d hook(s) passed gate", module_name, len(verified_hooks)
+        )
     else:
         logger.info("[IMP:7][_verify_module_hooks] Module %s: no hooks declared — skipped", module_name)
 
     return verified_hooks
+
+
 # endregion FUNC_verify_module_hooks
 
 
@@ -231,6 +239,8 @@ def test_hook_contract_validation(module_yaml: Path, caplog):
                 found_imp9 = True
     print("--- END LDD TRAJECTORY ---")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion FUNC_test_hook_contract_validation
 
 
@@ -247,11 +257,11 @@ def test_all_hooks_are_specified_as_strings():
     ##   - Missing hooks → not a failure
     ## @complexity — O(N) where N = module.yaml count
     ## @rationale YAML allows any type; typo like hooks.on_project_deploy: true would parse as bool
-    """  # noqa: D401
+    """
     errors: list[str] = []
     for module_yaml in _get_module_yamls():
         module_dir = module_yaml.parent
-        with open(module_yaml, "r") as f:
+        with open(module_yaml) as f:
             data = yaml.safe_load(f)
         hooks = (data or {}).get("hooks") or {}
         if not isinstance(hooks, dict):
@@ -263,5 +273,7 @@ def test_all_hooks_are_specified_as_strings():
                 errors.append(f"{rel_path}/module.yaml: hooks.{hook_type} is {type(val).__name__}, expected str")
 
     assert not errors, "Hook type violations:\n" + "\n".join(errors)
+
+
 # endregion FUNC_test_all_hooks_are_specified_as_strings
 # 🧪 TRAP[TEST] · 2026-07-17 · Regression: hook type coercion · Last fail: N/A · Remove if: gate schema validated elsewhere

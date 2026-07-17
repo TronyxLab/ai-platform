@@ -23,7 +23,6 @@ import os
 import pathlib
 
 import dotenv
-import pytest
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -52,29 +51,18 @@ def _load_platform_env_yaml() -> dict:
     ## @returns — Parsed YAML dict
     ## @raises — AssertionError if file missing or unparseable
     """
-    assert os.path.isfile(PLATFORM_ENV_YAML), (
-        f"[IMP:9] platform-env.yaml not found at {PLATFORM_ENV_YAML}"
-    )
+    assert os.path.isfile(PLATFORM_ENV_YAML), f"[IMP:9] platform-env.yaml not found at {PLATFORM_ENV_YAML}"
     print(f"[IMP:7][load] platform-env.yaml found at {PLATFORM_ENV_YAML}")
 
     with open(PLATFORM_ENV_YAML) as f:
         data = yaml.safe_load(f)
 
     assert data is not None, "[IMP:9] platform-env.yaml is empty or invalid"
-    assert "env_defaults" in data, (
-        "[IMP:9] platform-env.yaml missing env_defaults section"
-    )
-    assert isinstance(data["env_defaults"], dict), (
-        "[IMP:9] env_defaults is not a dict"
-    )
-    assert "volumes" in data, (
-        "[IMP:9] platform-env.yaml missing volumes section"
-    )
+    assert "env_defaults" in data, "[IMP:9] platform-env.yaml missing env_defaults section"
+    assert isinstance(data["env_defaults"], dict), "[IMP:9] env_defaults is not a dict"
+    assert "volumes" in data, "[IMP:9] platform-env.yaml missing volumes section"
 
-    print(
-        f"[IMP:8][load] Loaded {len(data['env_defaults'])} env_defaults, "
-        f"{len(data['volumes'])} volumes"
-    )
+    print(f"[IMP:8][load] Loaded {len(data['env_defaults'])} env_defaults, {len(data['volumes'])} volumes")
     return data
 
 
@@ -86,9 +74,7 @@ def _load_dotenv_example() -> dict[str, str]:
     ## @returns — Dict of {key: value} from .env.example
     ## @raises — AssertionError if file missing
     """
-    assert os.path.isfile(DOT_ENV_EXAMPLE), (
-        f"[IMP:9] .env.example not found at {DOT_ENV_EXAMPLE}"
-    )
+    assert os.path.isfile(DOT_ENV_EXAMPLE), f"[IMP:9] .env.example not found at {DOT_ENV_EXAMPLE}"
     print(f"[IMP:7][load] .env.example found at {DOT_ENV_EXAMPLE}")
 
     env_dict = dotenv.dotenv_values(DOT_ENV_EXAMPLE)
@@ -144,13 +130,9 @@ def test_env_example_matches_platform_env_defaults() -> None:
 
     # Assert exact count
     assert len(env_defaults) == EXPECTED_ENV_DEFAULTS_COUNT, (
-        f"Expected {EXPECTED_ENV_DEFAULTS_COUNT} env_defaults, "
-        f"got {len(env_defaults)}"
+        f"Expected {EXPECTED_ENV_DEFAULTS_COUNT} env_defaults, got {len(env_defaults)}"
     )
-    print(
-        f"[IMP:8][parity] env_defaults count: {len(env_defaults)} "
-        f"(expected {EXPECTED_ENV_DEFAULTS_COUNT})"
-    )
+    print(f"[IMP:8][parity] env_defaults count: {len(env_defaults)} (expected {EXPECTED_ENV_DEFAULTS_COUNT})")
 
     # Check each key-value pair
     mismatches: list[str] = []
@@ -167,35 +149,19 @@ def test_env_example_matches_platform_env_defaults() -> None:
         actual_value_str = actual_value if actual_value is not None else ""
 
         if actual_value_str != expected_value:
-            mismatches.append(
-                f"{key}: .env.example='{actual_value_str}' "
-                f"≠ env_defaults='{expected_value}'"
-            )
-            print(
-                f"[IMP:7][parity] Value mismatch for '{key}': "
-                f"'{actual_value_str}' ≠ '{expected_value}'"
-            )
+            mismatches.append(f"{key}: .env.example='{actual_value_str}' ≠ env_defaults='{expected_value}'")
+            print(f"[IMP:7][parity] Value mismatch for '{key}': '{actual_value_str}' ≠ '{expected_value}'")
         else:
-            print(
-                f"[IMP:8][parity] '{key}' matches: '{expected_value}'"
-            )
+            print(f"[IMP:8][parity] '{key}' matches: '{expected_value}'")
 
     # Fail on missing or mismatched keys
     error_parts = []
     if missing_keys:
-        error_parts.append(
-            f"Missing in .env.example ({len(missing_keys)}): "
-            f"{', '.join(missing_keys)}"
-        )
+        error_parts.append(f"Missing in .env.example ({len(missing_keys)}): {', '.join(missing_keys)}")
     if mismatches:
-        error_parts.append(
-            f"Value mismatches ({len(mismatches)}):\n"
-            + "\n".join(mismatches)
-        )
+        error_parts.append(f"Value mismatches ({len(mismatches)}):\n" + "\n".join(mismatches))
 
-    assert not error_parts, (
-        "Parity check failed:\n" + "\n".join(error_parts)
-    )
+    assert not error_parts, "Parity check failed:\n" + "\n".join(error_parts)
 
     _print_ldd_trajectory()
 
@@ -218,50 +184,30 @@ def test_prometheus_dirs_canonical() -> None:
 
     # ── Check .env.example has PROMETHEUS_TARGETS_DIR with canonical path ──
     targets_dir = env_example.get("PROMETHEUS_TARGETS_DIR")
-    assert targets_dir is not None, (
-        "[IMP:9] PROMETHEUS_TARGETS_DIR missing from .env.example"
-    )
-    print(
-        f"[IMP:8][prometheus] PROMETHEUS_TARGETS_DIR={targets_dir} "
-        f"in .env.example"
-    )
+    assert targets_dir is not None, "[IMP:9] PROMETHEUS_TARGETS_DIR missing from .env.example"
+    print(f"[IMP:8][prometheus] PROMETHEUS_TARGETS_DIR={targets_dir} in .env.example")
     assert targets_dir == PROMETHEUS_TARGETS_DIR_CANONICAL, (
-        f"[IMP:9] PROMETHEUS_TARGETS_DIR='{targets_dir}' "
-        f"≠ canonical '{PROMETHEUS_TARGETS_DIR_CANONICAL}'"
+        f"[IMP:9] PROMETHEUS_TARGETS_DIR='{targets_dir}' ≠ canonical '{PROMETHEUS_TARGETS_DIR_CANONICAL}'"
     )
 
     # ── Check .env.example has PROMETHEUS_RULES_DIR with canonical path ──
     rules_dir = env_example.get("PROMETHEUS_RULES_DIR")
-    assert rules_dir is not None, (
-        "[IMP:9] PROMETHEUS_RULES_DIR missing from .env.example"
-    )
-    print(
-        f"[IMP:8][prometheus] PROMETHEUS_RULES_DIR={rules_dir} "
-        f"in .env.example"
-    )
+    assert rules_dir is not None, "[IMP:9] PROMETHEUS_RULES_DIR missing from .env.example"
+    print(f"[IMP:8][prometheus] PROMETHEUS_RULES_DIR={rules_dir} in .env.example")
     assert rules_dir == PROMETHEUS_RULES_DIR_CANONICAL, (
-        f"[IMP:9] PROMETHEUS_RULES_DIR='{rules_dir}' "
-        f"≠ canonical '{PROMETHEUS_RULES_DIR_CANONICAL}'"
+        f"[IMP:9] PROMETHEUS_RULES_DIR='{rules_dir}' ≠ canonical '{PROMETHEUS_RULES_DIR_CANONICAL}'"
     )
 
     # ── Check both paths are registered in platform-env.yaml volumes ──
     volume_paths = _collect_volume_paths(platform_data)
     assert PROMETHEUS_TARGETS_DIR_CANONICAL in volume_paths, (
-        f"[IMP:9] Volume '{PROMETHEUS_TARGETS_DIR_CANONICAL}' "
-        f"not registered in platform-env.yaml volumes"
+        f"[IMP:9] Volume '{PROMETHEUS_TARGETS_DIR_CANONICAL}' not registered in platform-env.yaml volumes"
     )
-    print(
-        f"[IMP:8][prometheus] {PROMETHEUS_TARGETS_DIR_CANONICAL} "
-        f"registered in platform-env.yaml volumes"
-    )
+    print(f"[IMP:8][prometheus] {PROMETHEUS_TARGETS_DIR_CANONICAL} registered in platform-env.yaml volumes")
 
     assert PROMETHEUS_RULES_DIR_CANONICAL in volume_paths, (
-        f"[IMP:9] Volume '{PROMETHEUS_RULES_DIR_CANONICAL}' "
-        f"not registered in platform-env.yaml volumes"
+        f"[IMP:9] Volume '{PROMETHEUS_RULES_DIR_CANONICAL}' not registered in platform-env.yaml volumes"
     )
-    print(
-        f"[IMP:8][prometheus] {PROMETHEUS_RULES_DIR_CANONICAL} "
-        f"registered in platform-env.yaml volumes"
-    )
+    print(f"[IMP:8][prometheus] {PROMETHEUS_RULES_DIR_CANONICAL} registered in platform-env.yaml volumes")
 
     _print_ldd_trajectory()

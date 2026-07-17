@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # GREP_SUMMARY: bootstrap remote-cmd build_ssh_cmd ssh-command quoting printf or node-yaml owner-key age-key
 # STRUCTURE: ▶ build_ssh_cmd(node, key, age, passthrough...) → ┌printf %q ┐ → ⚡ set -euo → ◇ age_key? → ⚡ export AGE_SECRET_KEY → ⚡ node-lifecycle.sh --mode init + flags → ⚡ --resume → ⚡ passthrough args → ⎋ echo cmd
 # region MODULE_CONTRACT
