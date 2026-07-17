@@ -235,7 +235,9 @@ def test_entrypoint_flags_contract(caplog) -> None:
     assert "detect_age_key" in entrypoint_content, (
         "[IMP:9][test] FAIL: node-update.sh must have detect_age_key() to consume AGE_SECRET_KEY_FILE"
     )
-    logger.info("[IMP:8][test_entrypoint_flags_contract] Check 6 PASS: --age-secret-key-file in entrypoint + detect_age_key")
+    logger.info(
+        "[IMP:8][test_entrypoint_flags_contract] Check 6 PASS: --age-secret-key-file in entrypoint + detect_age_key"
+    )
 
     logger.info("[IMP:9][test_entrypoint_flags_contract] ALL CHECKS PASS")
 
@@ -296,9 +298,7 @@ def test_node_update_has_ssh_proxy(caplog) -> None:
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: --age-secret-key-file flag")
 
     # ── Check 6: detect_age_key exists in entrypoint ──
-    assert "detect_age_key" in entrypoint_content, (
-        "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
-    )
+    assert "detect_age_key" in entrypoint_content, "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 6 PASS: detect_age_key() present")
 
     logger.info("[IMP:9][test_node_update_has_ssh_proxy] ALL CHECKS PASS")
@@ -326,9 +326,7 @@ def test_remote_cmd_has_update_mode(caplog) -> None:
     content = remote_cmd_script.read_text()
 
     # ── Check 1: build_update_ssh_cmd exists ──
-    assert "build_update_ssh_cmd" in content, (
-        "[IMP:9][test] FAIL: remote-cmd.sh must define build_update_ssh_cmd()"
-    )
+    assert "build_update_ssh_cmd" in content, "[IMP:9][test] FAIL: remote-cmd.sh must define build_update_ssh_cmd()"
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 1 PASS: build_update_ssh_cmd() defined")
 
     # ── Check 2: contains --mode update ──
@@ -344,9 +342,7 @@ def test_remote_cmd_has_update_mode(caplog) -> None:
 
     # ── Check 3: does NOT contain --resume in function body (D2: update steps independent) ──
     # NOTE: --resume may appear in file-level comments but must NOT be in the function body
-    assert "--resume" not in update_func_body, (
-        "[IMP:9][test] FAIL: build_update_ssh_cmd must NOT contain --resume (D2)"
-    )
+    assert "--resume" not in update_func_body, "[IMP:9][test] FAIL: build_update_ssh_cmd must NOT contain --resume (D2)"
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 3 PASS: --resume absent from function body (per D2)")
 
     # ── Check 4: does NOT contain --owner-key in function body (D2: not needed in update mode) ──
@@ -362,9 +358,7 @@ def test_remote_cmd_has_update_mode(caplog) -> None:
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 5 PASS: printf %%q quoting")
 
     # ── Check 6: exports AGE_SECRET_KEY ──
-    assert "AGE_SECRET_KEY" in content, (
-        "[IMP:9][test] FAIL: build_update_ssh_cmd must handle AGE_SECRET_KEY export"
-    )
+    assert "AGE_SECRET_KEY" in content, "[IMP:9][test] FAIL: build_update_ssh_cmd must handle AGE_SECRET_KEY export"
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 6 PASS: AGE_SECRET_KEY handling")
 
     logger.info("[IMP:9][test_remote_cmd_has_update_mode] ALL CHECKS PASS")
@@ -412,16 +406,15 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: set -a/+a export")
 
     # ── Check 4: WEBNAMES_API_KEY log exists ──
-    assert "WEBNAMES_API_KEY" in content, (
-        "[IMP:9][test] FAIL: must log WEBNAMES_API_KEY status after source"
-    )
+    assert "WEBNAMES_API_KEY" in content, "[IMP:9][test] FAIL: must log WEBNAMES_API_KEY status after source"
     logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: WEBNAMES_API_KEY log")
 
     # ── Check 5: WARN log for missing secrets.env ──
     # The log message uses bash variable: "${secrets_env} missing — cert renewal may fail if cert expires"
     # where secrets_env resolves to /run/platform/secrets.env. Check for "secrets_env.*missing" pattern.
     import re
-    warn_missing_pattern = r'secrets_env.*missing'
+
+    warn_missing_pattern = r"secrets_env.*missing"
     assert re.search(warn_missing_pattern, content, re.IGNORECASE), (
         "[IMP:9][test] FAIL: must have WARN log for missing secrets.env (expected pattern: secrets_env.*missing)"
     )

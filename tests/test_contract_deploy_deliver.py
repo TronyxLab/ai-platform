@@ -137,10 +137,12 @@ def _run_deliver(
 ## @scenario  tar.gz with docker-compose.yml + ai-platform.yaml → exit 0, files exist, DELIVER-SUCCESS audit
 def test_deliver_valid_payload(tmp_path: pathlib.Path) -> None:
     """# ▶ tar.gz with whitelist files → handle_deliver → ◇ extract + validate + mv → ⎋ DELIVER-SUCCESS"""
-    tar_data = _make_tar([
-        ("docker-compose.yml", b"version: '3'\nservices:\n  web:\n    image: nginx\n"),
-        ("ai-platform.yaml", b"service: web\nmonitoring:\n  host_port: 8080\n"),
-    ])
+    tar_data = _make_tar(
+        [
+            ("docker-compose.yml", b"version: '3'\nservices:\n  web:\n    image: nginx\n"),
+            ("ai-platform.yaml", b"service: web\nmonitoring:\n  host_port: 8080\n"),
+        ]
+    )
 
     result = _run_deliver(tmp_path, "myproject", tar_data)
 
@@ -192,10 +194,12 @@ def test_deliver_rejects_path_traversal(tmp_path: pathlib.Path) -> None:
     """# ▶ tar.gz with ../evil entry → handle_deliver → ◇ subdir file detected → ⎋ exit 1, no dir created"""
     # Create a tar with a path traversal entry
     # When extracted to tmp_dir, ../evil resolves outside tmp_dir
-    tar_data = _make_tar([
-        ("../evil", b"malicious content"),
-        ("docker-compose.yml", b"version: '3'\n"),
-    ])
+    tar_data = _make_tar(
+        [
+            ("../evil", b"malicious content"),
+            ("docker-compose.yml", b"version: '3'\n"),
+        ]
+    )
 
     result = _run_deliver(tmp_path, "safe_project", tar_data)
 
@@ -216,9 +220,7 @@ def test_deliver_rejects_path_traversal(tmp_path: pathlib.Path) -> None:
 
     # PROJECT_DIR should NOT exist (script cleaned up and didn't create it)
     proj_dir = tmp_path / "safe_project"
-    assert not proj_dir.exists(), (
-        f"Project directory should NOT exist after failed deliver: {proj_dir}"
-    )
+    assert not proj_dir.exists(), f"Project directory should NOT exist after failed deliver: {proj_dir}"
 
     # Verify LDD failure markers
     assert "=== platform-deliver START: safe_project ===" in result.stderr
@@ -240,10 +242,12 @@ def test_deliver_rejects_path_traversal(tmp_path: pathlib.Path) -> None:
 ## @scenario  tar with docker-compose.yml + extra.sh → exit 1, DELIVER-FAIL, only whitelist NOT delivered
 def test_deliver_skips_non_whitelisted(tmp_path: pathlib.Path) -> None:
     """# ▶ tar.gz with docker-compose.yml + extra.sh → handle_deliver → ◇ non-whitelisted detected → ⎋ exit 1"""
-    tar_data = _make_tar([
-        ("docker-compose.yml", b"version: '3'\n"),
-        ("extra.sh", b"#!/bin/sh\necho malicious\n"),
-    ])
+    tar_data = _make_tar(
+        [
+            ("docker-compose.yml", b"version: '3'\n"),
+            ("extra.sh", b"#!/bin/sh\necho malicious\n"),
+        ]
+    )
 
     result = _run_deliver(tmp_path, "myproject", tar_data)
 
@@ -265,9 +269,7 @@ def test_deliver_skips_non_whitelisted(tmp_path: pathlib.Path) -> None:
 
     # PROJECT_DIR should NOT exist (validation failed before mkdir)
     proj_dir = tmp_path / "myproject"
-    assert not proj_dir.exists(), (
-        f"Project directory should NOT exist after failed deliver: {proj_dir}"
-    )
+    assert not proj_dir.exists(), f"Project directory should NOT exist after failed deliver: {proj_dir}"
 
     # LDD verification
     found_imp9 = any("[IMP:9]" in line for line in result.stderr.splitlines())
@@ -310,9 +312,7 @@ def test_deliver_rejects_oversize(tmp_path: pathlib.Path) -> None:
 
     # PROJECT_DIR should NOT exist
     proj_dir = tmp_path / "oversize_project"
-    assert not proj_dir.exists(), (
-        f"Project directory should NOT exist after oversize: {proj_dir}"
-    )
+    assert not proj_dir.exists(), f"Project directory should NOT exist after oversize: {proj_dir}"
 
     # LDD verification
     found_imp9 = any("[IMP:9]" in line for line in result.stderr.splitlines())
@@ -330,9 +330,11 @@ def test_deliver_rejects_oversize(tmp_path: pathlib.Path) -> None:
 ## @scenario  SSH_ORIGINAL_COMMAND="platform-deliver ../x" → exit 1, DELIVER-FAIL
 def test_deliver_invalid_project_name(tmp_path: pathlib.Path) -> None:
     """# ▶ SSH_ORIGINAL_COMMAND="platform-deliver ../x" → parse_ssh_command → ◇ _validate_project_name FAIL → ⎋ exit 1"""
-    tar_data = _make_tar([
-        ("docker-compose.yml", b"version: '3'\n"),
-    ])
+    tar_data = _make_tar(
+        [
+            ("docker-compose.yml", b"version: '3'\n"),
+        ]
+    )
 
     result = _run_deliver(tmp_path, "../x", tar_data)
 
@@ -350,17 +352,13 @@ def test_deliver_invalid_project_name(tmp_path: pathlib.Path) -> None:
     print("--- END LDD TRAJECTORY ---")
 
     assert result.returncode == 1, f"Expected exit 1, got {result.returncode}"
-    assert "invalid characters" in result.stderr, (
-        f"Expected 'invalid characters' in stderr:\n{result.stderr[:500]}"
-    )
+    assert "invalid characters" in result.stderr, f"Expected 'invalid characters' in stderr:\n{result.stderr[:500]}"
     assert ".." in result.stderr, "Expected mention of '..' in validation error"
 
     # PROJECT_DIR should NOT exist
     # ../x resolves to parent of tmp_path — make sure nothing was created there
     parent_of_tmp = tmp_path.parent / "x"
-    assert not parent_of_tmp.exists(), (
-        f"Directory escaped: {parent_of_tmp} exists despite invalid project name"
-    )
+    assert not parent_of_tmp.exists(), f"Directory escaped: {parent_of_tmp} exists despite invalid project name"
 
     # LDD verification
     found_imp9 = any("[IMP:9]" in line for line in result.stderr.splitlines())

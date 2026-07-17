@@ -208,13 +208,7 @@ def _run_adopt_bash(
 
     test_script = (
         "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        + content
-        + "\n"
-        + "trap - ERR EXIT\n"
-        + "unset -f main\n"
-        + code
-        + "\n"
+        "set -euo pipefail\n" + content + "\n" + "trap - ERR EXIT\n" + "unset -f main\n" + code + "\n"
     )
 
     script_file = tmp_path / "test_adopt_runner.sh"
@@ -317,9 +311,7 @@ def test_ghcr_path_lowercased(caplog, tmp_path) -> None:
     proj_dir = tmp_path / "myproject"
     proj_dir.mkdir()
     (proj_dir / ".github" / "workflows").mkdir(parents=True)
-    (proj_dir / ".github" / "workflows" / "deploy.yml").write_text(
-        "name: Deploy\non: push\njobs: {}\n"
-    )
+    (proj_dir / ".github" / "workflows" / "deploy.yml").write_text("name: Deploy\non: push\njobs: {}\n")
 
     code = f"""
 PROJECT_DIR="{proj_dir}"
@@ -375,9 +367,7 @@ def test_uses_preserves_exact_case(caplog, tmp_path) -> None:
     proj_dir = tmp_path / "myproject"
     proj_dir.mkdir()
     (proj_dir / ".github" / "workflows").mkdir(parents=True)
-    (proj_dir / ".github" / "workflows" / "deploy.yml").write_text(
-        "name: Deploy\non: push\njobs: {}\n"
-    )
+    (proj_dir / ".github" / "workflows" / "deploy.yml").write_text("name: Deploy\non: push\njobs: {}\n")
 
     code = f"""
 PROJECT_DIR="{proj_dir}"
@@ -404,9 +394,7 @@ echo "=== END ==="
         f"Expected exact-case 'uses: TronyxLab/ai-platform/...' in:\n{output}"
     )
     # uses: must NOT contain lowercase org
-    assert "uses: tronyxlab/ai-platform/" not in output, (
-        f"uses: must NOT contain lowercase org:\n{output}"
-    )
+    assert "uses: tronyxlab/ai-platform/" not in output, f"uses: must NOT contain lowercase org:\n{output}"
 
     logger.info("[IMP:9][test_uses_preserves_exact_case][assert] uses: exact-case verified")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
@@ -465,14 +453,10 @@ echo "FINAL_ORG=${{PROJECT_ORG}}"
 
     # Verify casing mismatch WARN was emitted
     combined = stderr + "\n" + stdout
-    assert "Casing mismatch" in combined, (
-        f"Expected 'Casing mismatch' WARN in output:\n{combined[:1000]}"
-    )
+    assert "Casing mismatch" in combined, f"Expected 'Casing mismatch' WARN in output:\n{combined[:1000]}"
 
     # PROJECT_ORG must adopt node.yaml's casing (lowercase)
-    assert "FINAL_ORG=tronyxlab" in stdout, (
-        f"Expected FINAL_ORG=tronyxlab (from node.yaml), got:\n{stdout[:500]}"
-    )
+    assert "FINAL_ORG=tronyxlab" in stdout, f"Expected FINAL_ORG=tronyxlab (from node.yaml), got:\n{stdout[:500]}"
 
     logger.info("[IMP:9][test_context_mismatch_detected][assert] Casing drift detected and adapted")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"

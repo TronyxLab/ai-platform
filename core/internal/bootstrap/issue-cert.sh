@@ -436,61 +436,75 @@ PYEOF
     local dns_plugin="${PLATFORM_ACME_DNS_PLUGIN:-}"
     local project_domains="${PLATFORM_PROJECT_DOMAINS:-}"
 
-    # ── Idempotency: skip if cert already exists ────────────────────
+    # ── Idempotency: skip main cert if already exists ──────────────
+    # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Early exit blocked project domains
+    # · Symptom: project domains skipped on subsequent node-update runs because early
+    #   `exit 0` on main cert exists check happened BEFORE _issue_project_certs
+    # · Root: idempotency check used `exit 0` which terminated the entire process
+    # · Fix: use boolean flag to skip main cert issuance but continue to project domains
+    # · Prevention: always process project domains independently of main cert status
+    # ⚠️ TRAP[DECISION] · 2026-07-17 · — · exit → return in main()
+    # · Rejected: keeping exit (breaks source-ability and causes early termination)
+    # · Reason: return is semantically correct for functions; caller (main "$@") handles exit
+    # · Rev: if main() needs to truly terminate parent process, use exit selectively
     local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
+    local main_cert_exists=false
     if [[ -n "$domain" ]] && [[ -f "$cert_path" ]]; then
         log_step "main" "SKIP" "Certificate already exists: ${cert_path} (idempotent)"
-        log_imp 9 "-" "BUSINESS INVARIANT: cert exists — SKIP, no re-issue"
-        exit 0
+        log_imp 9 "-" "BUSINESS INVARIANT: main cert exists — skip main, continue project domains"
+        main_cert_exists=true
     fi
 
-    # ── Validate required environment ───────────────────────────────
-    if [[ -z "$domain" ]]; then
-        log_fail "PLATFORM_DOMAIN not set — cannot provision SSL certificate"
-        exit 1
-    fi
+    if ! $main_cert_exists; then
+        # ── Validate required environment ───────────────────────────────
+        if [[ -z "$domain" ]]; then
+            log_fail "PLATFORM_DOMAIN not set — cannot provision SSL certificate"
+            return 1
+        fi
 
-    if [[ -z "$email" ]]; then
-        log_fail "PLATFORM_EMAIL not set — required for Let's Encrypt registration"
-        exit 1
-    fi
+        if [[ -z "$email" ]]; then
+            log_fail "PLATFORM_EMAIL not set — required for Let's Encrypt registration"
+            return 1
+        fi
 
-    if [[ -z "$dns_plugin" ]]; then
-        log_fail "PLATFORM_ACME_DNS_PLUGIN not set — required for DNS-01 challenge"
-        exit 1
-    fi
+        if [[ -z "$dns_plugin" ]]; then
+            log_fail "PLATFORM_ACME_DNS_PLUGIN not set — required for DNS-01 challenge"
+            return 1
+        fi
 
-    if [[ "$dns_plugin" == "webnames" ]] && [[ -z "${WEBNAMES_API_KEY:-}" ]]; then
-        log_fail "WEBNAMES_API_KEY not set — required for webnames DNS-01 TLS"
-        exit 1
-    fi
+        if [[ "$dns_plugin" == "webnames" ]] && [[ -z "${WEBNAMES_API_KEY:-}" ]]; then
+            log_fail "WEBNAMES_API_KEY not set — required for webnames DNS-01 TLS"
+            return 1
+        fi
 
-    # ── Step 1: Issue wildcard TLS certificate ─────────────────────
-    log_step "main" "START" "SSL provisioning for ${domain} via acme.sh (${dns_plugin})"
-    if ! issue_tls_cert "$domain" "$email" "$dns_plugin" "true"; then
-        log_fail "TLS certificate issuance failed for ${domain}"
-        exit 1
-    fi
+        # ── Step 1: Issue wildcard TLS certificate ─────────────────────
+        log_step "main" "START" "SSL provisioning for ${domain} via acme.sh (${dns_plugin})"
+        if ! issue_tls_cert "$domain" "$email" "$dns_plugin" "true"; then
+            log_fail "TLS certificate issuance failed for ${domain}"
+            return 1
+        fi
 
-    # ── Step 2: Install acme.sh cron for daily renewal ─────────────
-    # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cron must be installed when TLS cert exists
-    if [[ -f "$cert_path" ]]; then
-        _acme_install_cron || log_warn "acme.sh cron install failed — cert still valid, renew manually"
-    fi
+        # ── Step 2: Install acme.sh cron for daily renewal ─────────────
+        # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cron must be installed when TLS cert exists
+        if [[ -f "$cert_path" ]]; then
+            _acme_install_cron || log_warn "acme.sh cron install failed — cert still valid, renew manually"
+        fi
 
-    # ── Step 3: Verify certificate expiry >30 days ─────────────────
-    # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cert must be valid >30 days
-    _acme_verify_cert "$domain" || log_warn "Certificate expires within 30 days — renew soon"
+        # ── Step 3: Verify certificate expiry >30 days ─────────────────
+        # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cert must be valid >30 days
+        _acme_verify_cert "$domain" || log_warn "Certificate expires within 30 days — renew soon"
+    fi
 
     # ── Step 4 (Optional): Issue project domain certs ─────────────
     # [IMP:9][issue-cert][main] BUSINESS INVARIANT: independent project domains
     # get single-domain certs. Skips subdomains of PLATFORM_DOMAIN (covered by wildcard).
+    # ALWAYS processed — NOT blocked by main cert idempotency check (see TRAP[BUG] above).
     if [[ -n "$project_domains" ]]; then
         _issue_project_certs "$domain" "$email" "$dns_plugin"
     fi
 
     log_step "main" "DONE" "SSL provisioning complete for ${domain}"
-    exit 0
+    return 0
 }
 # endregion MAIN
 

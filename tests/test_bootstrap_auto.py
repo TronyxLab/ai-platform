@@ -344,7 +344,9 @@ echo "[IMP:9][build_ssh_cmd] SSH command constructed"
     cmd3 = stdout3.split("\n")[0]
     assert "--age-secret-key" not in cmd3
     assert "--ci-deploy-key" in cmd3, f"Expected --ci-deploy-key without age key: {cmd3}"
-    logger.info("[IMP:9][test_ssh_command_construction][assert] Without age key: ci-deploy-key present, age flag omitted")
+    logger.info(
+        "[IMP:9][test_ssh_command_construction][assert] Without age key: ci-deploy-key present, age flag omitted"
+    )
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
@@ -844,9 +846,7 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
     # When ci_deploy_key is empty, the age_key becomes $3 (shifted from $4 due to $3 being empty)
     # Actually no — the signature is now: node, owner_key, ci_deploy_key, age_key, passthrough...
     # So $3="" and $4="AGE-SECRET-KEY-12345"
-    assert "--ci-deploy-key" not in cmd, (
-        f"Expected NO --ci-deploy-key flag when key is empty: {cmd}"
-    )
+    assert "--ci-deploy-key" not in cmd, f"Expected NO --ci-deploy-key flag when key is empty: {cmd}"
     # Verify other expected flags are still present (backward compat)
     assert "--owner-key" in cmd
     assert "--node-name" in cmd
@@ -858,8 +858,7 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
     stdout2, stderr2, rc2 = _test_func(
         REMOTE_CMD_SH,
         ["build_ssh_cmd"],
-        'build_ssh_cmd "test-node" "key" "" ""\n'
-        'echo "[IMP:9][build_ssh_cmd_both_empty] Exit=$?"',
+        'build_ssh_cmd "test-node" "key" "" ""\necho "[IMP:9][build_ssh_cmd_both_empty] Exit=$?"',
         env={"__LOG_PREFIX": "test"},
     )
     assert rc2 == 0, f"build_ssh_cmd both empty failed: {stderr2}"
