@@ -358,6 +358,24 @@ def platform_services(
         "[IMP:9][conftest][platform_services] External networks ready: %d external network(s)", len(external_nets)
     )
 
+    # ── Global pre-cleanup: down ALL compose files before starting ─────────
+    # ⚠️ TRAP[BUG] · 2026-07-17 · HI · `--remove-orphans` in per-module cleanup
+    #    kills containers from previously started modules (all share project=ai-platform-test
+    #    but different compose files). Fix: global cleanup at start + per-module down
+    #    WITHOUT --remove-orphans preserves cross-module containers.
+    # · Before: per-module down --remove-orphans — each iteration killed previous modules
+    # · After: global cleanup once, per-module down without --remove-orphans
+    # · Rev: none — fix is stable
+    _logger.info("[IMP:8][conftest][platform_services] Global pre-cleanup: down all compose files")
+    for _cleanup_name, _cleanup_path in sorted(all_compose_files.items()):
+        _cleanup_args = ["docker", "compose", "-f", _cleanup_path]
+        _test_override = os.path.join(os.path.dirname(_cleanup_path), "docker-compose.test.yml")
+        if os.path.exists(_test_override):
+            _cleanup_args.extend(["-f", _test_override])
+        _cleanup_args.extend(["-p", "ai-platform-test", "down", "--timeout", str(_COMPOSE_DOWN_TIMEOUT), "--remove-orphans"])
+        _run_docker_smoke(_cleanup_args, timeout=20)
+    _logger.info("[IMP:8][conftest][platform_services] Global pre-cleanup complete")
+
     # ── Start compose files in topological order ─────────────────────────────
     started: list[str] = []
     failed: list[str] = []
@@ -375,8 +393,12 @@ def platform_services(
             compose_base_args.extend(["-f", macos_override])
         compose_base_args.extend(["-p", "ai-platform-test"])
 
-        # ── Pre-cleanup: docker compose down before up ──────────────
-        _down_args = [*compose_base_args, "down", "--timeout", str(_COMPOSE_DOWN_TIMEOUT), "--remove-orphans"]
+        # ── Pre-cleanup: docker compose down before up (SAME module only) ─
+        # NOTE: intentionally WITHOUT --remove-orphans — that flag in a per-module
+        # down would kill previously started modules' containers since all modules
+        # share the same compose project name (ai-platform-test) but are defined
+        # in different compose files. Global cleanup above already removed orphans.
+        _down_args = [*compose_base_args, "down", "--timeout", str(_COMPOSE_DOWN_TIMEOUT)]
         _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
 
         # ── Start up ──────────────────────────────────────────────────
@@ -475,6 +497,28 @@ def platform_services(
                     _logger.warning(
                         "[IMP:9][conftest][platform_services] Loki /ready timeout - proceeding",
                     )
+
+    # ── DIAGNOSTIC: check containers visible to compose ps ──────────────
+    import sys as _sys
+    _diag_ps = subprocess.run(
+        ["docker", "ps", "--filter", "label=com.docker.compose.project=ai-platform-test", "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    _diag_containers = [_l.strip() for _l in _diag_ps.stdout.strip().splitlines() if _l.strip()]
+    print(f"[DIAG][platform_services] docker ps --filter project=ai-platform-test: {_diag_containers}", file=_sys.stderr)
+    # Also check: what does compose ps show for first started module?
+    if started:
+        _first = started[0]
+        _first_path = all_compose_files.get(_first)
+        if _first_path:
+            _first_args = ["docker", "compose", "-f", _first_path]
+            _to = os.path.join(os.path.dirname(_first_path), "docker-compose.test.yml")
+            if os.path.exists(_to):
+                _first_args.extend(["-f", _to])
+            _first_args.extend(["-p", "ai-platform-test", "ps", "--format", "{{.Name}}"])
+            _first_result = subprocess.run(_first_args, capture_output=True, text=True, timeout=15,
+                env={**os.environ, **SMOKE_ENV, "COMPOSE_PROFILES": _first})
+            print(f"[DIAG][platform_services] compose ps for '{_first}': stdout='{_first_result.stdout.strip()}' stderr='{_first_result.stderr.strip()[:200]}'", file=_sys.stderr)
 
     _logger.info("[IMP:9][conftest][platform_services] Result: %d started, %d failed", len(started), len(failed))
     yield {"started": started, "failed": failed}
