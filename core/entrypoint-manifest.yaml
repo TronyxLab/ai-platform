@@ -22,7 +22,7 @@
 bootstrap:
   - make_target: bootstrap-node
     mechanism: ssh+rsync
-    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/deploy-modules.sh
+    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/deploy-modules.sh
     description: "Idempotent bootstrap of a new node (LIFE CYCLE/INIT, not DEPLOY)"
 
 deploy:
@@ -169,7 +169,7 @@ lifecycle:
     description: "Restore from backup"
   - make_target: node-update
     mechanism: ssh+rsync
-    delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/ssl-provision.sh + provision + deploy-modules + healthcheck
+    delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + core/internal/bootstrap/ssl-provision.sh + provision + deploy-modules + healthcheck
     description: "Regular CI update of an already-provisioned node (not INIT)"
 
 # ---------------------------------------------------------------------------
