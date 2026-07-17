@@ -337,7 +337,9 @@ def test_docker_compose_test_overlay(caplog) -> None:
     assert loki_svc.get("container_name") == "loki-test", (
         f"loki container_name={loki_svc.get('container_name')}, expected loki-test"
     )
-    assert loki_svc.get("restart") == "no", f"loki restart={loki_svc.get('restart')}, expected 'no'"
+    assert loki_svc.get("restart") == "unless-stopped", (
+        f"loki restart={loki_svc.get('restart')}, expected 'unless-stopped'"
+    )
     ports = loki_svc.get("ports", [])
     assert "127.0.0.1:13100:3100" in ports, f"loki ports={ports}, expected to contain 127.0.0.1:13100:3100"
 
@@ -347,7 +349,9 @@ def test_docker_compose_test_overlay(caplog) -> None:
     assert promtail_svc.get("container_name") == "promtail-test", (
         f"promtail container_name={promtail_svc.get('container_name')}, expected promtail-test"
     )
-    assert promtail_svc.get("restart") == "no", f"promtail restart={promtail_svc.get('restart')}, expected 'no'"
+    assert promtail_svc.get("restart") == "unless-stopped", (
+        f"promtail restart={promtail_svc.get('restart')}, expected 'unless-stopped'"
+    )
 
     logger.info(
         "[IMP:8][test_test_overlay] loki container=%s port=%s restart=%s",
