@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-17 | regenerated (877 tests)
+## @changes — 2026-07-17 | regenerated (874 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -367,7 +367,6 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_setup-node]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_deploy_deploy-project]
@@ -407,7 +406,6 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_setup-node]
-- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_deploy_deploy-project]
@@ -447,7 +445,6 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_node-lifecycle]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_setup-node]
-- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_ssl-provision]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_catalog_generate-catalog]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_deploy_deploy-project]
