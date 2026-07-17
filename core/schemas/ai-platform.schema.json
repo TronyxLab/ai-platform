@@ -59,9 +59,19 @@
       }
     },
     "platform_domain": {
-      "type": "string",
-      "pattern": "^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$",
-      "description": "Platform root domain for auto-generated project domains — project FQDN = <name>.<platform_domain>"
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^__[A-Z_]+__$",
+          "description": "Template placeholder — replaced by add-project.sh"
+        },
+        {
+          "type": "string",
+          "pattern": "^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$",
+          "description": "FQDN — platform root domain"
+        }
+      ],
+      "description": "Platform root domain for auto-generated project domains — project FQDN = <name>.<platform_domain>. Use __PLATFORM_DOMAIN__ placeholder in templates."
     },
     "needs": {
       "type": "object",
