@@ -35,7 +35,6 @@ import subprocess
 import tarfile
 
 import pytest
-from conftest import assert_ldd_stderr
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 

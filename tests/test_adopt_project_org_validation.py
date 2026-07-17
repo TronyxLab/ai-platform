@@ -222,14 +222,13 @@ def _run_adopt_bash(
     if env:
         merged_env.update(env)
 
-    proc = subprocess.run(
+    return subprocess.run(
         ["bash", str(script_file)],
         capture_output=True,
         text=True,
         timeout=15,
         env=merged_env,
     )
-    return proc
 
 
 # endregion HELPERS
@@ -275,7 +274,7 @@ echo "[IMP:9][test] UNEXPECTED_SUCCESS"
         preamble=LOG_STUBS,
     )
 
-    found_imp9 = _print_ldd(stderr, stdout)
+    _print_ldd(stderr, stdout)
     assert rc == 1, f"Expected exit code 1, got {rc}"
     assert "PROJECT_ORG is not set" in stderr + stdout, (
         f"Expected 'PROJECT_ORG is not set' in output:\nstdout={stdout}\nstderr={stderr}"
