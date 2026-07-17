@@ -92,6 +92,10 @@
 | ✅ | `test-inventory-sync` | Регенерация test_inventory.yaml из pytest --collect-only (make test-inventory-sync → tests/tools/sync_inventory.py) |
 | ✅ | `gate` | Production gate (`make gate [MODE=fast|full]`) |
 | ✅ | `new-project` / `new-context` | Создание из шаблона |
+| ✅ | `project-sync-env` | Синхронизация .env.platform из platform-env.yaml (make project-sync-env → scaffold.sh sync-env) |
+| ✅ | `remove-project` | Безопасное удаление проекта из lifecycle (unregister + compose down без -v) |
+| ✅ | `project-adopt` | Адаптация существующего проекта в lifecycle платформы |
+| ✅ | `project-list` / `project-status` | Список проектов (offline) и live-статус на ноде |
 | ✅ | `backup` / `restore` | Резервное копирование |
 | ✅ | `healthcheck` | Проверка здоровья |
 | ✅ | `node-update` | Регулярный update ноды (make node-update → provision + deploy-modules + healthcheck) |

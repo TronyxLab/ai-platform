@@ -111,6 +111,51 @@ env_defaults:
   POSTGRES_PASSWORD: "test-pg-pwd"
   PROMETHEUS_RULES_DIR: "/opt/platform/prometheus-rules"
 
+provides:
+  postgres:
+    host: pgbouncer
+    port: 6432
+    dsn_template: "postgresql://${NAME}_user:***@pgbouncer:6432/${NAME}_db"
+    networks:
+      - shared-db-net
+  redis:
+    host: redis
+    port: 6379
+    url_template: "redis://redis:6379/0"
+    networks:
+      - shared-cache-net
+  nginx:
+    host: nginx-proxy
+    port: 443
+    url_template: "https://${DOMAIN}"
+    networks:
+      - proxy-net
+  litellm:
+    host: litellm
+    port: 4000
+    url_template: "http://litellm:4000"
+    networks:
+      - hermes-agent-net
+  langfuse:
+    host: langfuse
+    port: 3001
+    url_template: "http://langfuse:3001"
+    networks:
+      - hermes-agent-net
+  minio:
+    host: minio
+    port: 9000
+    url_template: "http://minio:9000"
+    networks:
+      - hermes-agent-net
+  clickhouse:
+    host: clickhouse
+    port: 8123
+    url_template: "http://clickhouse:8123"
+    dsn_template: "clickhouse://clickhouse:8123/${NAME}"
+    networks:
+      - hermes-agent-net
+
 profiles:
   - postgres
   - redis
