@@ -1,6 +1,6 @@
-# @purpose  Base compose definition for infra-metrics module — cAdvisor + Node Exporter + Nginx Exporter + Redis Exporter
-# GREP_SUMMARY: infra-metrics docker-compose cadvisor node-exporter nginx-prometheus-exporter redis-exporter profiles x-logging observability-net shared-cache-net
-# STRUCTURE: ▶ cadvisor:v0.55.1 [profiles:infra-metrics] → ┬─ ▶ node-exporter:v1.12.0 [profiles:infra-metrics] → ┬─ ▶ nginx-exp:1.5.1 [profiles:infra-metrics] → ┬─ ▶ redis-exp:v1.86.0 [profiles:infra-metrics] → observability-net + shared-cache-net → ┐
+# @purpose  Base compose definition for infra-metrics module — cAdvisor + Node Exporter + Nginx Exporter + Redis Exporter + Postgres Exporter
+# GREP_SUMMARY: infra-metrics docker-compose cadvisor node-exporter nginx-prometheus-exporter redis-exporter postgres-exporter profiles x-logging observability-net shared-cache-net shared-db-net
+# STRUCTURE: ▶ cadvisor:v0.55.1 [profiles:infra-metrics] → ┬─ ▶ node-exporter:v1.12.0 → ┬─ ▶ nginx-exp:1.5.1 → ┬─ ▶ redis-exp:v1.86.0 → ┬─ ▶ postgres-exp:v0.16.0 → observability-net + shared-cache-net + shared-db-net → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for infra-metrics Docker module
 ## @scope    Merged with root docker-compose.yml via include:
@@ -10,13 +10,16 @@
 ##   - Node Exporter: bind mount /host:ro (no rslave — macOS compatible)
 ##   - Nginx Exporter: scrape URI → http://nginx:8081/stub_status (Docker DNS, NOT host.docker.internal)
 ##   - Redis Exporter: scrape redis://redis:6379, healthcheck via --version (scratch image, no shell)
+##   - Postgres Exporter: DATA_SOURCE_NAME DSN → postgres:5432, healthcheck via --version (distroless image, no shell)
 ##   - Networks declared as external: true — pre-created by deploy-modules.sh
 ##   - redis-exporter on BOTH observability-net (Prometheus scrape) and shared-cache-net (Redis access)
+##   - postgres-exporter on BOTH observability-net (Prometheus scrape) and shared-db-net (postgres access)
 ##   - All TRAP comments from root compose preserved
-##   - nginx-exporter and redis-exporter: healthcheck via --help/--version (scratch image, no shell)
+##   - nginx-exporter, redis-exporter, postgres-exporter: healthcheck via --help/--version (scratch/distroless image, no shell)
 ## @rationale Profiles enable selective startup via `make up MODULES=infra-metrics`
 ##   nginx-exporter uses Docker DNS (nginx:8081) because nginx is now a Docker container
 ##   redis-exporter uses pattern from nginx-prometheus-exporter: scratch image, healthcheck via binary flag
+##   postgres-exporter follows redis-exporter pattern for distroless images without shell
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -225,8 +228,56 @@ services:
       start_period: 15s
   # endregion service:redis-exporter
 
+  # ── Postgres Exporter (Metrics Bridge) ──────────────────────────────────────
+  # Added per Q1 drift-audit ISS-R2: monitor postgres query performance,
+  # connection count, replication lag. Targets postgres-exporter:9187 on
+  # observability-net (scrape) and shared-db-net (postgres access).
+  # region service:postgres-exporter
+  postgres-exporter:
+    # ⚠️ TRAP[DECISION] · 2026-07-18 · — · postgres-exporter v0.16.0 — digest not pinned
+    # · Rejected: pinned digest unavailable offline — tag-only pin is weaker
+    # · Reason: digest unavailable at implementation time; future task should pin
+    # · Rev: before production deployment, resolve digest via `docker pull && docker inspect`
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    container_name: postgres-exporter
+    profiles: [infra-metrics]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+        reservations:
+          memory: 16M
+    logging: *default-logging
+
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform}?sslmode=disable"
+
+    networks:
+      observability-net:
+        aliases:
+          - postgres-exporter
+      shared-db-net:
+        aliases:
+          - postgres-exporter
+
+    # ⚠️ TRAP[DECISION] · 2026-07-18 · — · postgres-exporter healthcheck via --version
+    # · Rejected: HTTP healthcheck on /metrics endpoint — requires shell/wget (image is distroless)
+    # · Reason: follows redis-exporter pattern (scratch/distroless, --version returns 0)
+    # · Binary path: /postgres_exporter (confirmed by image layers — single Go binary)
+    # · Rev: if image switches to alpine or adds shell, replace with HTTP healthcheck
+    healthcheck:
+      test: ["CMD", "/postgres_exporter", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  # endregion service:postgres-exporter
+
 networks:
   observability-net:
     external: true
   shared-cache-net:
+    external: true
+  shared-db-net:
     external: true

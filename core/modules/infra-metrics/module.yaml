@@ -1,20 +1,24 @@
-# GREP_SUMMARY: infra-metrics module cadvisor node-exporter nginx-exporter redis-exporter metrics
-# STRUCTURE: ▶ module:infra-metrics → cadvisor:v0.55.1 + node-exp:v1.12.0 + nginx-exp:1.5.1 + redis-exp:v1.86.0 → observability-net + shared-cache-net → ┐
+# GREP_SUMMARY: infra-metrics module cadvisor node-exporter nginx-exporter redis-exporter postgres-exporter metrics
+# STRUCTURE: ▶ module:infra-metrics → cadvisor:v0.55.1 + node-exp:v1.12.0 + nginx-exp:1.5.1 + redis-exp:v1.86.0 + postgres-exp:v0.16.0 → observability-net + shared-cache-net + shared-db-net → ┐
 # region MODULE_CONTRACT
-## @purpose  Infrastructure metrics collection: cAdvisor, Node Exporter, Nginx Prometheus Exporter, Redis Exporter
-## @scope    Container metrics (cAdvisor), host metrics (Node Exporter), nginx stub_status bridge, redis cache metrics
+## @purpose  Infrastructure metrics collection: cAdvisor, Node Exporter, Nginx Prometheus Exporter, Redis Exporter, Postgres Exporter
+## @scope    Container metrics (cAdvisor), host metrics (Node Exporter), nginx stub_status bridge, redis cache metrics, postgres db metrics
 ## @invariants
 ##   - install_type: docker — managed by compose
 ##   - cAdvisor: granular caps (SYS_ADMIN + DAC_READ_SEARCH), no privileged mode
 ##   - Node Exporter: bind mount /host:ro (no rslave — macOS compatible)
 ##   - Nginx Exporter: scrape URI → http://nginx:8081/stub_status (Docker DNS)
 ##   - Redis Exporter: scrape redis://redis:6379 (Docker DNS, via shared-cache-net)
+##   - Postgres Exporter: DATA_SOURCE_NAME → postgres://postgres:5432 (via shared-db-net)
 ##   - redis-exporter on both observability-net (Prometheus) and shared-cache-net (Redis access)
+##   - postgres-exporter on both observability-net (Prometheus) and shared-db-net (Postgres access)
 ##   - All services on observability-net for Prometheus scraping
 ##   - No host machine access needed beyond bind mounts
 ## @rationale Split from observability module per Phase 3 refactoring (D1)
 ##   nginx-exporter now uses Docker DNS (nginx container) instead of host.docker.internal
 ##   redis-exporter added per owner verdict wave-redis 2026-07-15 for cache monitoring
+##   postgres-exporter added per ISS-R2 drift-audit fix for postgres query monitoring
+## @changes — 2026-07-18 | Added postgres-exporter (ISS-R2)
 ## @changes — 2026-07-15 | Added redis-exporter (wave-redis)
 # endregion MODULE_CONTRACT
 
@@ -36,4 +40,6 @@ resources:
   reservations:
     memory: 64M
 
-env_requires: []
+env_requires:
+  - POSTGRES_USER
+  - POSTGRES_PASSWORD

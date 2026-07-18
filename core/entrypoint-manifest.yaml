@@ -409,6 +409,9 @@ gates:
   - id: env-chain
     description: prometheus config after envsubst has no literal ${...} placeholders (D5b env chain)
     test_file: test_gate_env_chain.py
+  - id: path-consistency
+    description: No orphan /opt/core/ references — canonical PLATFORM_ROOT is /opt/platform/
+    test_file: test_gate_path_consistency.py
 
 # ---------------------------------------------------------------------------
 # Forbidden directories — directories that MUST NOT contain executable scripts

@@ -1,13 +1,14 @@
-# GREP_SUMMARY: infra-metrics docker-compose test override container_name-test cadvisor node-exporter nginx-exporter redis-exporter
+# GREP_SUMMARY: infra-metrics docker-compose test override container_name-test cadvisor node-exporter nginx-exporter redis-exporter postgres-exporter
 # STRUCTURE: base.yml + test.yml → all infra-metrics containers with -test suffix
 # region MODULE_CONTRACT
-## @purpose  Test override for infra-metrics — -test container_name for all 4 containers
+## @purpose  Test override for infra-metrics — -test container_name for all 5 containers
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
-##   - container_name: cadvisor-test, node-exporter-test, nginx-prometheus-exporter-test, redis-exporter-test
+##   - container_name: cadvisor-test, node-exporter-test, nginx-prometheus-exporter-test, redis-exporter-test, postgres-exporter-test
 ##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
 ##   - Port mappings: смещённые (1XXXX:YYYY)
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+## @changes — 2026-07-18 | Added postgres-exporter-test (ISS-R2)
 ## @changes — 2026-07-16 | 18080→18081 cadvisor-test: collided with nginx-test port (F-8)
 ## @changes — 2026-07-15 | Added redis-exporter-test (wave-redis)
 # endregion MODULE_CONTRACT
@@ -39,4 +40,8 @@ services:
 
   redis-exporter:
     container_name: redis-exporter-test
+    restart: unless-stopped
+
+  postgres-exporter:
+    container_name: postgres-exporter-test
     restart: unless-stopped

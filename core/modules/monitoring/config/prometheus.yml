@@ -1,5 +1,5 @@
-# GREP_SUMMARY: prometheus scrape_config litellm node-exporter cadvisor redis-exporter
-# STRUCTURE: ▶ global:30s → rule_files:* -alerts.yml → 7-scrape-configs → file_sd dynamic-targets → ┘
+# GREP_SUMMARY: prometheus scrape_config litellm node-exporter cadvisor redis-exporter postgres-exporter
+# STRUCTURE: ▶ global:30s → rule_files:* -alerts.yml → 8-scrape-configs → file_sd dynamic-targets → ┘
 # region MODULE_CONTRACT
 ## @purpose  Prometheus scrape configuration for observability stack
 ## @scope    Mounted as /etc/prometheus/prometheus.yml in prometheus container
@@ -11,6 +11,7 @@
 ##   - LiteLLM scraped on observability-net (litellm:4000)
 ##   - Self-scrape: prometheus:9090
 ##   - LiteLLM metrics require bearer_token auth (LITELLM_METRICS_TOKEN from secrets.env)
+##   - Postgres Exporter scraped on observability-net (postgres-exporter:9187) via shared-db-net
 ## @rationale 30s interval balances metric granularity with storage/CPU cost on 4-core 8GB VPS.
 # endregion MODULE_CONTRACT
 # ⚠️ TRAP[DECISION] · 2026-07-01 · — · file_sd_configs for dynamic targets
@@ -119,6 +120,19 @@ scrape_configs:
         labels:
           service: "redis"
           component: "cache"
+
+  # ── Postgres Exporter (database metrics via postgres-exporter) ─────────────
+  # Added per drift-audit ISS-R2: monitor postgres query performance,
+  # connection count, replication lag, deadlocks. Targets postgres-exporter:9187
+  # on observability-net (scrape) and shared-db-net (postgres access).
+  - job_name: "postgres-exporter"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "postgres-exporter:9187"
+        labels:
+          service: "postgres"
+          component: "database"
 
   # ── Platform Projects (dynamic via file_sd_configs, TASK-12) ─────────────
   - job_name: "platform-projects"

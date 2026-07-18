@@ -40,7 +40,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # [IMP:8][crontab] 05:00 UTC Sunday — backup restore verification (stub, Wave 6.3)
 0   5   *   *   0   root /scripts/backup-restore-test.sh >> /var/log/platform/backup/restore-test.log 2>&1
 
+# ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Cron paths used /opt/core/ instead of /opt/platform/core/
+# · Symptom: cron jobs silently failed — /opt/core/ does not exist on VPS; only /opt/platform/ exists
+# · Root: path written before PLATFORM_ROOT canonicalization (core/lib/paths.sh → PLATFORM_ROOT=/opt/platform)
+# · Fix: replaced /opt/core/ → /opt/platform/core/ per paths.sh canonical root
+# · Prevention: gate test_gate_path_consistency scans repo for orphan /opt/core/ references
 # [IMP:8][crontab] * * * * * — Docker daemon healthcheck (TASK-11)
-* * * * *   root /opt/core/internal/healthcheck/docker-healthcheck.sh >> /var/log/platform/backup/docker-healthcheck.log 2>&1
+* * * * *   root /opt/platform/core/internal/healthcheck/docker-healthcheck.sh >> /var/log/platform/backup/docker-healthcheck.log 2>&1
 # [IMP:8][crontab] 0 * * * * — Disk space monitor + docker prune (TASK-12)
-0   *   *   *   *   root /opt/core/modules/backup-cron/scripts/disk-monitor.sh >> /var/log/platform/backup/disk-monitor.log 2>&1
+0   *   *   *   *   root /opt/platform/core/modules/backup-cron/scripts/disk-monitor.sh >> /var/log/platform/backup/disk-monitor.log 2>&1
