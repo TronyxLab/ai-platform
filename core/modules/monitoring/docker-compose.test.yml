@@ -1,14 +1,15 @@
-# GREP_SUMMARY: monitoring docker-compose test override container_name-test prometheus grafana
-# STRUCTURE: base.yml + test.yml → prometheus + grafana with -test suffix and shifted ports
+# GREP_SUMMARY: monitoring docker-compose test override container_name-test prometheus grafana prometheus-config-init
+# STRUCTURE: base.yml + test.yml → prometheus + grafana + prometheus-config-init with -test suffix and shifted ports
 # region MODULE_CONTRACT
-## @purpose  Test override for monitoring — -test container_name for prometheus and grafana
+## @purpose  Test override for monitoring — -test container_name for prometheus, grafana, and prometheus-config-init
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
-##   - container_name: prometheus-test, grafana-test
-##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
+##   - container_name: prometheus-test, grafana-test, prometheus-config-init-test
+##   - restart: unless-stopped для prometheus/grafana, restart: "no" для prometheus-config-init (one-shot)
 ##   - Prometheus port: 127.0.0.1:19090:9090
 ##   - Grafana port: 127.0.0.1:13030:3000
-## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). prometheus-config-init-test
+##            добавлен post-factum: init-контейнер конфликтовал по container_name с продом.
 # endregion MODULE_CONTRACT
 
 services:
@@ -23,3 +24,7 @@ services:
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый grafana биндит 3000 (F-7) · Fix: !override
       - "127.0.0.1:13030:3000"
     restart: unless-stopped
+
+  prometheus-config-init:
+    container_name: prometheus-config-init-test
+    restart: "no"

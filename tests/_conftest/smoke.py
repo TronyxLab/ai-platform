@@ -616,7 +616,8 @@ def platform_services(
         "prometheus-test",
         "grafana-test",
         "hermes-agent-test",
-        "prometheus-config-init",
+        "langfuse-redis-test",
+        "prometheus-config-init-test",
     ]
     for _cname in _STALE_CONTAINER_NAMES:
         subprocess.run(

@@ -149,9 +149,9 @@ def monitoring_compose():
     # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · prometheus-config-init one-shot container blocks compose
     # · Root: platform_services starts prometheus-config-init as part of monitoring module.
     # ·   This Exited container persists and blocks the monitoring_compose fixture from
-    # ·   recreating it (container name "prometheus-config-init" is already in use).
-    # · Fix: include prometheus-config-init in stale container removal.
-    _stale_containers = ["prometheus-test", "grafana-test", "prometheus-config-init"]
+    # ·   recreating it (container name "prometheus-config-init-test" collision with stale run).
+    # · Fix: include prometheus-config-init-test in stale container removal.
+    _stale_containers = ["prometheus-test", "grafana-test", "prometheus-config-init-test"]
     for _c in _stale_containers:
         _logger.info("[IMP:8][fixture][setup] Cleaning stale container: %s", _c)
         subprocess.run(

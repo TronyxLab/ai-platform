@@ -153,3 +153,70 @@ class TestSmokeTestIsolation:
             f"Test containers must use -test suffix to avoid conflicts."
         )
         logger.info("[IMP:9][gate][isolation] No container name collisions ✓")
+
+    @pytest.mark.gate
+    @ldd_trajectory
+    def test_all_base_container_names_have_test_override(self, caplog) -> None:
+        """Для КАЖДОГО сервиса с container_name в base.yml — соответствующий -test оверрайд в test.yml.
+
+        ## @purpose — R5 anti-survivorship: isolation-gate (test_all_test_containers_have_test_suffix)
+        ##            проверял только то, что УЖЕ есть в test.yml, но НЕ ловил пропущенные
+        ##            сервисы (langfuse-redis, prometheus-config-init). Эта проверка идёт
+        ##            от base.yml: если в production-конфиге сервис объявил container_name,
+        ##            тестовый overlay ОБЯЗАН переопределить его с -test суффиксом.
+        ## @rationale — init/oneshot-контейнеры (prometheus-config-init) тоже конфликтуют
+        ##              по container_name с прод-стеком — им тоже нужен -test оверрайд.
+        ##              Сервисы без явного container_name (Docker генерирует имя из
+        ##              compose project + service name) не конфликтуют — пропускаются.
+        """
+        errors: list[str] = []
+
+        for base_file in sorted(MODULES_DIR.glob("*/docker-compose.base.yml")):
+            module_name = base_file.parent.name
+            test_file = base_file.parent / "docker-compose.test.yml"
+            if not test_file.exists():
+                continue
+
+            # Читаем base.yml — собираем сервисы с явным container_name
+            with open(base_file) as f:
+                base_data = yaml.safe_load(f)
+            base_services: dict[str, str] = {}
+            if base_data and "services" in base_data:
+                for svc_name, svc_cfg in base_data["services"].items():
+                    if svc_cfg and svc_cfg.get("container_name"):
+                        base_services[svc_name] = svc_cfg["container_name"]
+
+            if not base_services:
+                continue
+
+            # Читаем test.yml — собираем container_name оверрайды
+            with open(test_file) as f:
+                test_data = yaml.safe_load(f)
+            test_overrides: dict[str, str] = {}
+            if test_data and "services" in test_data:
+                for svc_name, svc_cfg in test_data["services"].items():
+                    if svc_cfg and svc_cfg.get("container_name"):
+                        test_overrides[svc_name] = svc_cfg["container_name"]
+
+            # Проверяем: каждый сервис из base с container_name должен иметь -test оверрайд
+            for svc_name, prod_cname in base_services.items():
+                test_cname = test_overrides.get(svc_name)
+                if not test_cname:
+                    errors.append(
+                        f"{module_name}: service '{svc_name}' has container_name "
+                        f"'{prod_cname}' in base.yml but NO container_name override in test.yml"
+                    )
+                elif not test_cname.endswith("-test"):
+                    errors.append(
+                        f"{module_name}: service '{svc_name}' container_name "
+                        f"'{test_cname}' in test.yml does not end with '-test'"
+                    )
+
+        logger.info(
+            "[IMP:9][gate][isolation] Checked %d modules for base container_name coverage",
+            len(list(MODULES_DIR.glob("*/docker-compose.base.yml"))),
+        )
+        assert not errors, (
+            f"Services with container_name in base.yml missing -test override:\n" + "\n".join(errors)
+        )
+        logger.info("[IMP:9][gate][isolation] All base container_names have -test override ✓")

@@ -1,13 +1,17 @@
-# GREP_SUMMARY: langfuse docker-compose test override container_name-test cross-platform
-# STRUCTURE: base.yml + test.yml → langfuse with -test container_name and shifted port
+# GREP_SUMMARY: langfuse docker-compose test override container_name-test cross-platform langfuse-redis-test
+# STRUCTURE: base.yml + test.yml → langfuse + langfuse-redis with -test suffix and shifted port
 # region MODULE_CONTRACT
-## @purpose  Test override for langfuse — -test container_name, shifted port (13000:3000)
+## @purpose  Test override for langfuse — -test container_name for langfuse AND langfuse-redis,
+##           shifted port (13000:3000), REDIS_CONNECTION_STRING переопределён на -test контейнер
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
-##   - container_name: langfuse-test — предотвращает конфликт с production langfuse
-##   - restart: unless-stopped — тестовые контейнеры перезапускаются при креше (--wait совместимость)
+##   - container_name: langfuse-test, langfuse-redis-test
+##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
 ##   - Port: 127.0.0.1:13000:3000 — избежать production конфликтов
-## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).
+##   - langfuse-redis: networks: !override — shared-db-net БЕЗ aliases (предотвращает DNS-загрязнение)
+##   - REDIS_CONNECTION_STRING указывает на langfuse-redis-test, а не на langfuse-redis (прода)
+## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). langfuse-redis добавлен
+##            post-factum (F-7 class): фикс изоляции второго контейнера в модуле.
 # endregion MODULE_CONTRACT
 
 services:
@@ -16,3 +20,17 @@ services:
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый langfuse биндит 3001 (F-7) · Fix: !override
       - "127.0.0.1:13000:3000"
     restart: unless-stopped
+    environment:
+      # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · REDIS_CONNECTION_STRING указывала на langfuse-redis (прод)
+      # · Root: base.yml использует redis://langfuse-redis:6379 — при сосуществовании с прод-стеком
+      # ·   тестовый langfuse мог подключиться к продакшен redis, и наоборот.
+      # · Fix: переопределяем на langfuse-redis-test (изолированный тестовый экземпляр).
+      REDIS_CONNECTION_STRING: "redis://langfuse-redis-test:6379"
+
+  langfuse-redis:
+    container_name: langfuse-redis-test
+    restart: unless-stopped
+    networks: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · alias langfuse-redis на external-сети shared-db-net —
+      # · при сосуществовании с прод-стеком DNS возвращает 2 IP → загрязнение данных.
+      # · Fix: !override без aliases — контейнер доступен по container_name langfuse-redis-test.
+      - shared-db-net
