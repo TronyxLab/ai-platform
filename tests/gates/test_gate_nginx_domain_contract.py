@@ -29,7 +29,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _NGINX_CONFIG_DIR = _PROJECT_ROOT / "core" / "modules" / "nginx" / "config"
 _BASE_YML = _PROJECT_ROOT / "core" / "modules" / "nginx" / "docker-compose.base.yml"
 
-# Files that must use templates (7 files, excludes nginx.conf)
+# Files that must use templates (9 files, excludes nginx.conf + includes/security-headers.conf)
 _TEMPLATE_CONF_FILES = {
     "platform-default.conf",
     "platform-http.conf",
@@ -38,9 +38,12 @@ _TEMPLATE_CONF_FILES = {
     "langfuse-vhost.conf",
     "loki-vhost.conf",
     "prometheus-vhost.conf",
+    "ssl-params.conf.template",
 }
 
 # 5 vhost configs that must contain ${PLATFORM_DOMAIN} in server_name AND ssl_certificate
+# (audit 013: ssl_certificate moved to shared ssl-params.conf include — vhosts must either
+#  have inline ssl_certificate with PLATFORM_DOMAIN OR include ssl-params.conf)
 _VHOST_CONF_FILES = {
     "grafana-vhost.conf",
     "hermes-dashboard.conf",
@@ -123,15 +126,17 @@ def test_platform_domain_placeholder_present(caplog) -> None:
                 violations.append(f"{fname}: server_name does not contain ${{PLATFORM_DOMAIN}}")
                 logger.info("[IMP:9][gate] FAIL: %s server_name missing PLATFORM_DOMAIN", fname)
 
-        # Check ssl_certificate contains ${PLATFORM_DOMAIN}
+        # Check ssl_certificate contains ${PLATFORM_DOMAIN} (inline) OR vhost includes ssl-params.conf
         ssl_cert_lines = re.findall(r"ssl_certificate\s+([^;]+);", text)
         has_in_ssl_cert = any("${PLATFORM_DOMAIN}" in line for line in ssl_cert_lines)
-        if not has_in_ssl_cert:
-            violations.append(f"{fname}: ssl_certificate does not contain ${{PLATFORM_DOMAIN}}")
-            logger.info("[IMP:9][gate] FAIL: %s ssl_certificate missing PLATFORM_DOMAIN", fname)
-
-        if has_in_ssl_cert:
-            logger.info("[IMP:8][gate] OK: %s has PLATFORM_DOMAIN in server_name + ssl_certificate", fname)
+        has_ssl_include = "ssl-params.conf" in text
+        if not has_in_ssl_cert and not has_ssl_include:
+            violations.append(f"{fname}: ssl_certificate does not contain ${{PLATFORM_DOMAIN}} and no ssl-params.conf include")
+            logger.info("[IMP:9][gate] FAIL: %s ssl_certificate missing PLATFORM_DOMAIN (no ssl-params.conf include)", fname)
+        elif has_ssl_include and not has_in_ssl_cert:
+            logger.info("[IMP:8][gate] OK: %s delegates ssl_certificate to ssl-params.conf", fname)
+        elif has_in_ssl_cert:
+            logger.info("[IMP:8][gate] OK: %s has PLATFORM_DOMAIN in inline ssl_certificate", fname)
 
     # ── Check platform-default.conf at least one occurrence ─────────────────
     pd_path = _NGINX_CONFIG_DIR / "platform-default.conf"
@@ -146,6 +151,21 @@ def test_platform_domain_placeholder_present(caplog) -> None:
     else:
         violations.append("platform-default.conf: file not found")
         logger.info("[IMP:9][gate] FAIL: platform-default.conf not found")
+
+    # ── Check ssl-params.conf.template (shared SSL snippet) ──────────────────
+    # audit 013: ssl_certificate moved from vhosts to ssl-params.conf.template.
+    # The template must contain ${PLATFORM_DOMAIN} for envsubst rendering.
+    ssl_params_path = _NGINX_CONFIG_DIR / "ssl-params.conf.template"
+    if ssl_params_path.exists():
+        ssl_text = ssl_params_path.read_text()
+        ssl_count = ssl_text.count("${PLATFORM_DOMAIN}")
+        if ssl_count < 1:
+            violations.append("ssl-params.conf.template: does not contain ${PLATFORM_DOMAIN}")
+            logger.info("[IMP:9][gate] FAIL: ssl-params.conf.template missing PLATFORM_DOMAIN")
+        else:
+            logger.info("[IMP:8][gate] OK: ssl-params.conf.template contains %d PLATFORM_DOMAIN occurrences", ssl_count)
+    else:
+        logger.info("[IMP:8][gate] SKIP: ssl-params.conf.template not found (not yet created)")
 
     assert not violations, f"PLATFORM_DOMAIN placerholder violations ({len(violations)}):\n" + "\n".join(violations)
     logger.info(

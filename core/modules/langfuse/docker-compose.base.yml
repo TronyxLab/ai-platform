@@ -95,6 +95,9 @@ services:
       # Disable telemetry
       TELEMETRY_ENABLED: "false"
 
+      # Security: disable public signup (audit 013 C1)
+      AUTH_DISABLE_SIGNUP: "true"
+
     networks:
       shared-db-net:
         aliases:
