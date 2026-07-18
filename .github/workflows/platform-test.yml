@@ -232,6 +232,21 @@ jobs:
           free -h 2>/dev/null || vm_stat 2>/dev/null || echo "(memory info unavailable)"
         shell: bash
 
+      # Pre-generate dev certs for nginx smoke tests — openssl is always available in CI
+      - name: Generate dev SSL certs for nginx tests
+        run: |
+          echo "[IMP:7][dev-certs-pregen] Generating dev SSL certs for nginx tests..."
+          mkdir -p core/modules/nginx/dev-certs
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout core/modules/nginx/dev-certs/_local-key.pem \
+            -out core/modules/nginx/dev-certs/_local.pem \
+            -days 825 \
+            -subj "/CN=*.ai-platform.local" \
+            -addext "subjectAltName=DNS:*.ai-platform.local,DNS:localhost,IP:127.0.0.1" \
+            2>&1 | sed 's/^/[IMP:8][openssl] /'
+          echo "[IMP:9][dev-certs-pregen] ✅ Dev SSL certs generated in core/modules/nginx/dev-certs/"
+        shell: bash
+
       - name: Run full gate (contract + static + predeploy + smoke + component — Docker-dependent, no pre-commit/validate/lint)
         id: full_gate
         env:
@@ -242,15 +257,6 @@ jobs:
           # ·   test_component_hermes.py ENV_HERMES reads CONTEXT_IMAGE from os.environ.
           # · Rev: when CI gains ghcr.io access to tronyxlab org, remove this override.
           CONTEXT_IMAGE: hermes-agent-base:latest
-          # 🧐 TRAP[DECISION] · 2026-07-18 · — · Explicit PLATFORM_DOMAIN for nginx dev-certs in CI
-          # · CI runner sets PLATFORM_DOMAIN=test.local (via env inheritance), which causes
-          # ·   generate-dev-certs.sh to fail with set -euo pipefail (openssl SAN generation
-          # ·   with unexpected context domain triggers cascading failure).
-          # · Fix: pin to ai-platform.local + openssl backend (no mkcert in CI).
-          # ·   test_nginx_dev_certs.py::test_generate_certs_openssl_backend confirms openssl works.
-          # · Rev: if CI runner PLATFORM_DOMAIN changes or openssl is removed from base image.
-          PLATFORM_DOMAIN: ai-platform.local
-          CERT_BACKEND: openssl
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
