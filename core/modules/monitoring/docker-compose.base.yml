@@ -23,11 +23,19 @@ x-logging: &default-logging
 services:
 
   # ⚠️ TRAP[BUG] · 2026-07-18 · P2 · LITELLM_METRICS_TOKEN envsubst — init-контейнер
-  # · Symptom: prometheus.yml использует "${LITELLM_METRICS_TOKEN}" literal — mount :ro, envsubst нет
-  # · Root: prometheus не разворачивает env var в YAML-конфиге; mount :ro предотвращает запись
-  # · Fix: init-контейнер prometheus-config-init генерирует prometheus.yml из шаблона (.tmpl) через sed
-  # ·   Init-контейнер монтирует ./config:rw, запускается ДО prometheus (depends_on: completed),
-  # ·   заменяет ${LITELLM_METRICS_TOKEN} на фактическое значение env var.
+  # · Symptom: после `docker compose up` трекаемый файл config/prometheus.yml обнуляется (0 байт).
+  # ·   Лог init-контейнера: «sed: no previous regexp», при этом печатает «generated» (ошибка проглочена).
+  # · Root (compose-interpolation): sed-паттерн 's/${LITELLM_METRICS_TOKEN}/...' НЕ экранирован
+  # ·   для compose-интерполяции — compose подставляет пустое значение → s//.../ → «no previous regexp».
+  # ·   Нужен $$ для literal-паттерна. Также нет `set -eu` — sed падает, redirect уже обнулил файл,
+  # ·   контейнер выходит с 0. Архитектурный дефект: init пишет в bind-mount ./config:rw ПОВЕРХ
+  # ·   трекаемого файла — dirty working tree.
+  # · Fix v2:
+  # ·   1. $$-escape compose-интерполяции в sed-паттерне
+  # ·   2. set -eu для fail-fast
+  # ·   3. Генерация в Docker named volume (prometheus-config-gen), а НЕ в ./config
+  # ·   4. mount ./config:/config:ro (read-only, не перезаписывает трекаемый файл)
+  # ·   5. Prometheus читает сгенерированный конфиг из named volume
   # · Prevention: gate-тест test_prometheus_config_no_unexpanded_vars проверяет отсутствие literal placeholder'ов
   # ── Prometheus Config Init (envsubst) ──────────────────────────────────────
   prometheus-config-init:
@@ -35,17 +43,18 @@ services:
     profiles: [monitoring]
     container_name: prometheus-config-init
     restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ["/bin/sh", "-ceu"]
     command:
       - |
         echo "[IMP:7][prometheus-config-init] Generating prometheus.yml from template..."
-        sed 's/${LITELLM_METRICS_TOKEN}/'"${LITELLM_METRICS_TOKEN}"'/g' \
-          /config/prometheus.yml.tmpl > /config/prometheus.yml
+        sed 's/$${LITELLM_METRICS_TOKEN}/'"${LITELLM_METRICS_TOKEN}"'/g' \
+          /config/prometheus.yml.tmpl > /generated/prometheus.yml
         echo "[IMP:9][prometheus-config-init] prometheus.yml generated"
     environment:
       LITELLM_METRICS_TOKEN: "${LITELLM_METRICS_TOKEN:-}"
     volumes:
-      - ./config:/config:rw
+      - ./config:/config:ro
+      - prometheus-config-gen:/generated:rw
 
   # ── Prometheus (Metrics TSDB) ─────────────────────────────────────────────
   # region service:prometheus
@@ -75,14 +84,14 @@ services:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
 
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--config.file=/etc/prometheus/generated/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
       - "--web.console.libraries=/usr/share/prometheus/console_libraries"
       - "--web.console.templates=/usr/share/prometheus/consoles"
 
     volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-config-gen:/etc/prometheus/generated:ro
       - prometheus-data:/prometheus
       - ${PROMETHEUS_TARGETS_DIR:-/opt/platform/prometheus-targets}:/prometheus-targets:ro
       - ${PROMETHEUS_RULES_DIR:-/opt/platform/prometheus-rules}:/opt/platform/prometheus-rules:ro
@@ -201,6 +210,9 @@ volumes:
     driver: local
 
   prometheus-data:
+    driver: local
+
+  prometheus-config-gen:
     driver: local
 
 networks:
