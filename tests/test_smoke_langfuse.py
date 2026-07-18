@@ -23,7 +23,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 LANGFUSE_HOST = "127.0.0.1"
-LANGFUSE_PORT = int(os.environ.get("LANGFUSE_PORT", "3001"))
+LANGFUSE_PORT = int(os.environ.get("LANGFUSE_TEST_PORT", "13000"))
 LANGFUSE_BASE = f"http://{LANGFUSE_HOST}:{LANGFUSE_PORT}"
 LANGFUSE_HEALTH_URL = f"{LANGFUSE_BASE}/api/public/health"
 LANGFUSE_INGESTION_URL = f"{LANGFUSE_BASE}/api/public/ingestion"
@@ -58,7 +58,10 @@ def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
 
 
 @pytest.mark.smoke
-def test_langfuse_health(caplog):
+def test_langfuse_health(caplog, platform_services):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
+    if "langfuse" in platform_services.get("failed", []):
+        pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
     if not _port_reachable():
         pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
@@ -70,7 +73,10 @@ def test_langfuse_health(caplog):
 
 
 @pytest.mark.smoke
-def test_langfuse_ingestion(caplog):
+def test_langfuse_ingestion(caplog, platform_services):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
+    if "langfuse" in platform_services.get("failed", []):
+        pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
     if not _port_reachable():
         pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
@@ -97,7 +103,10 @@ def test_langfuse_ingestion(caplog):
 
 
 @pytest.mark.smoke
-def test_langfuse_login(caplog):
+def test_langfuse_login(caplog, platform_services):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
+    if "langfuse" in platform_services.get("failed", []):
+        pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
     if not _port_reachable():
         pytest.skip(f"Port {LANGFUSE_PORT} not reachable")

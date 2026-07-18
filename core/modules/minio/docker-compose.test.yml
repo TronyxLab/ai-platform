@@ -12,3 +12,4 @@
 services:
   minio:
     container_name: minio-test
+    ports: !override []  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый minio биндит 9000/9001 (F-7) · Fix: !override — minio internal-only в тестах

@@ -117,6 +117,13 @@ SMOKE_ENV: dict[str, str] = {
     "PROMETHEUS_RULES_DIR": "/tmp/prometheus-rules",
     "NGINX_CONF_DIR": "./dev-config",
     "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
+    # Test port overrides — shifted ports (1XXXX) for test overlay coexistence with production
+    "LITELLM_TEST_PORT": "14000",
+    "HERMES_DASHBOARD_TEST_PORT": "19119",
+    "HERMES_DESKTOP_TEST_PORT": "18642",
+    "LANGFUSE_TEST_PORT": "13000",
+    "PROMETHEUS_TEST_PORT": "19090",
+    "GRAFANA_TEST_PORT": "13030",
 }
 
 _SMOKE_VOLUME_BIND_DIRS: list[str] = [

@@ -41,6 +41,9 @@ def _build_litellm_url(port: int, path: str) -> str:
     return f"http://localhost:{port}{path}"
 
 
+_LITELLM_TEST_PORT = int(os.environ.get("LITELLM_TEST_PORT", "14000"))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Test 1: LiteLLM /health/readiness must return HTTP 200
 # ══════════════════════════════════════════════════════════════════════════════
@@ -49,20 +52,24 @@ def _build_litellm_url(port: int, path: str) -> str:
 @pytest.mark.smoke
 @pytest.mark.requires_docker
 @ldd_trajectory
-def test_litellm_readiness(caplog, platform_services, platform_ports) -> None:
+def test_litellm_readiness(caplog, platform_services) -> None:
     """Verify LiteLLM /health/readiness returns HTTP 200 (proxy fully initialized).
 
     ## @purpose — LiteLLM is the LLM gateway / proxy. /health/readiness confirms the
     ##            proxy is running and connected to its DB — does not require
     ##            model list initialization or API key auth.
     ## @io — ⇥ platform_services (fixture) →
-    ##       ⚡ HTTP GET http://localhost:4000/health/readiness →
+    ##       ⚡ HTTP GET http://localhost:14000/health/readiness →
     ##       ⎋ None (asserts 200)
     ## @complexity — O(1)
     """
     # region FUNC_test_litellm_readiness
 
-    url = _build_litellm_url(platform_ports["LITELLM_PORT"], "/health/readiness")
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
+    if "litellm" in platform_services.get("failed", []):
+        pytest.fail("litellm-test did not start — smoke tests require running containers")
+
+    url = _build_litellm_url(_LITELLM_TEST_PORT, "/health/readiness")
     logger.info("[IMP:7][test_litellm_readiness] Checking LiteLLM %s ...", url)
 
     try:
@@ -86,13 +93,13 @@ def test_litellm_readiness(caplog, platform_services, platform_ports) -> None:
 @pytest.mark.smoke
 @pytest.mark.requires_docker
 @ldd_trajectory
-def test_litellm_models_api(caplog, platform_services, platform_ports) -> None:
+def test_litellm_models_api(caplog, platform_services) -> None:
     """Verify LiteLLM /v1/models returns HTTP 200 with model list via Bearer auth.
 
     ## @purpose — Models API confirms LiteLLM has loaded model_list from config and
     ##            is ready to proxy requests. Requires valid LITELLM_MASTER_KEY.
     ## @io — ⇥ platform_services (fixture) →
-    ##       ⚡ HTTP GET http://localhost:4000/v1/models (Authorization: Bearer $LITELLM_MASTER_KEY) →
+    ##       ⚡ HTTP GET http://localhost:14000/v1/models (Authorization: Bearer $LITELLM_MASTER_KEY) →
     ##       ⎋ None (asserts 200 + non-empty data)
     ## @complexity — O(1)
     """
@@ -102,7 +109,7 @@ def test_litellm_models_api(caplog, platform_services, platform_ports) -> None:
     if not master_key:
         pytest.skip("LITELLM_MASTER_KEY not set — cannot authenticate /v1/models")
 
-    url = _build_litellm_url(platform_ports["LITELLM_PORT"], "/v1/models")
+    url = _build_litellm_url(_LITELLM_TEST_PORT, "/v1/models")
     headers = {"Authorization": f"Bearer {master_key}"}
     logger.info("[IMP:7][test_litellm_models_api] Checking LiteLLM %s ...", url)
 

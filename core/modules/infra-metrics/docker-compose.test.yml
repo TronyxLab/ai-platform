@@ -22,19 +22,19 @@ services:
     #   Tests run in parallel/same session — nginx-test occupies 18080 first.
     # · Fix: cadvisor-test shifted to 18081 (free port, verified no collisions).
     # · Prevention: coordinate test-overlay port assignments across modules.
-    ports:
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый cadvisor биндит 8080 (F-7) · Fix: !override
       - "127.0.0.1:18081:8080"
     restart: unless-stopped
 
   node-exporter:
     container_name: node-exporter-test
-    ports:
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый node-exporter биндит 9100 (F-7) · Fix: !override
       - "127.0.0.1:19100:9100"
     restart: unless-stopped
 
   nginx-prometheus-exporter:
     container_name: nginx-prometheus-exporter-test
-    ports:
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый nginx-exporter биндит 9113 (F-7) · Fix: !override
       - "127.0.0.1:19113:9113"
     restart: unless-stopped
 

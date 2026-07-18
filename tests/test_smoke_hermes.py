@@ -58,6 +58,10 @@ def _hermes_credentials() -> tuple[str, str]:
 
 API_SERVER_KEY = os.environ.get("API_SERVER_KEY")
 
+# Test ports — shifted (1XXXX) for test overlay coexistence with production
+_HERMES_DASHBOARD_TEST_PORT = int(os.environ.get("HERMES_DASHBOARD_TEST_PORT", "19119"))
+_HERMES_DESKTOP_TEST_PORT = int(os.environ.get("HERMES_DESKTOP_TEST_PORT", "18642"))
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Test 1: Hermes Dashboard health — redirects to login
@@ -67,7 +71,7 @@ API_SERVER_KEY = os.environ.get("API_SERVER_KEY")
 @pytest.mark.smoke
 @pytest.mark.requires_docker
 @ldd_trajectory
-def test_hermes_dashboard_health(caplog, platform_services, platform_ports) -> None:
+def test_hermes_dashboard_health(caplog, platform_services) -> None:
     """Verify Hermes Dashboard root redirects to login page (302).
 
     ## @purpose — Dashboard is the web UI entry point. A 302 redirect to
@@ -76,7 +80,11 @@ def test_hermes_dashboard_health(caplog, platform_services, platform_ports) -> N
     ##       ⚡ HTTP GET / → ⎋ None (asserts 302 redirect to /auth/login)
     ## @complexity — O(1)
     """
-    dash_port = platform_ports["HERMES_DASHBOARD_PORT"]
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
+    if "hermes-agent" in platform_services.get("failed", []):
+        pytest.fail("hermes-agent-test did not start — smoke tests require running containers")
+
+    dash_port = _HERMES_DASHBOARD_TEST_PORT
     hermes_dashboard_url = os.environ.get("HERMES_DASHBOARD_URL", _build_url(dash_port))
     url = f"{hermes_dashboard_url}/"
     logger.info("[IMP:7][test_hermes_dashboard_health] Checking Hermes Dashboard at %s ...", url)
@@ -102,7 +110,7 @@ def test_hermes_dashboard_health(caplog, platform_services, platform_ports) -> N
 @pytest.mark.smoke
 @pytest.mark.requires_docker
 @ldd_trajectory
-def test_hermes_auth_login(caplog, platform_services, platform_ports) -> None:
+def test_hermes_auth_login(caplog, platform_services) -> None:
     """Verify password login returns ok:true with session cookies.
 
     ## @purpose — Auth gate uses username/password provider. Successful login
@@ -112,11 +120,15 @@ def test_hermes_auth_login(caplog, platform_services, platform_ports) -> None:
     ##       ⎋ None (asserts 200 + ok:true + session cookies)
     ## @complexity — O(1)
     """
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
+    if "hermes-agent" in platform_services.get("failed", []):
+        pytest.fail("hermes-agent-test did not start — smoke tests require running containers")
+
     hermes_user, hermes_pass = _hermes_credentials()
     if not hermes_pass:
         pytest.skip("HERMES_DASHBOARD_PASSWORD not set")
 
-    dash_port = platform_ports["HERMES_DASHBOARD_PORT"]
+    dash_port = _HERMES_DASHBOARD_TEST_PORT
     hermes_dashboard_url = os.environ.get("HERMES_DASHBOARD_URL", _build_url(dash_port))
     url = f"{hermes_dashboard_url}/auth/password-login"
     payload = {
@@ -148,7 +160,7 @@ def test_hermes_auth_login(caplog, platform_services, platform_ports) -> None:
 @pytest.mark.smoke
 @pytest.mark.requires_docker
 @ldd_trajectory
-def test_hermes_api_completions(caplog, platform_services, platform_ports) -> None:
+def test_hermes_api_completions(caplog, platform_services) -> None:
     """Verify Hermes API server responds to /v1/chat/completions.
 
     ## @purpose — API server on port HERMES_DESKTOP_PORT is the OpenAI-compatible
@@ -159,10 +171,14 @@ def test_hermes_api_completions(caplog, platform_services, platform_ports) -> No
     ##       ⎋ None (asserts 200 + choices[0].message.content)
     ## @complexity — O(1) — single HTTP POST to LLM proxy
     """
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
+    if "hermes-agent" in platform_services.get("failed", []):
+        pytest.fail("hermes-agent-test did not start — smoke tests require running containers")
+
     if not API_SERVER_KEY:
         pytest.skip("API_SERVER_KEY not set — cannot authenticate")
 
-    api_port = platform_ports["HERMES_DESKTOP_PORT"]
+    api_port = _HERMES_DESKTOP_TEST_PORT
     hermes_api_url = os.environ.get("HERMES_API_URL", _build_url(api_port))
     url = f"{hermes_api_url}/v1/chat/completions"
     payload = {

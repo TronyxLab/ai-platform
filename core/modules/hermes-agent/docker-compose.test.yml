@@ -20,6 +20,9 @@
 services:
   hermes-agent:
     container_name: hermes-agent-test
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый hermes-agent биндит 9119/8642 (F-7) · Fix: !override
+      - "127.0.0.1:19119:9119"
+      - "127.0.0.1:18642:8642"
     # ---- Test override: accelerated healthcheck for CI/smoke ------------------
     # 🧐 TRAP[DECISION] · 2026-07-11 · -- · start_period=10s for tests
     # · Hermes under QEMU emulation on macOS starts slower (30-60s).

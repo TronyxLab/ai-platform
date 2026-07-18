@@ -13,6 +13,6 @@
 services:
   langfuse:
     container_name: langfuse-test
-    ports:
+    ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый langfuse биндит 3001 (F-7) · Fix: !override
       - "127.0.0.1:13000:3000"
     restart: unless-stopped

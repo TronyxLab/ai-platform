@@ -40,9 +40,9 @@ _COMPOSE_TEST = _MONITORING_MODULE / "docker-compose.test.yml"
 _WAVE_PROJECT = "wave-monitoring"
 _SMOKE_PROJECT = "wave-monitoring-smoke"
 
-# Ports (from base.yml with fallback)
-_PROMETHEUS_PORT = 9090
-_GRAFANA_PORT = 3000
+# Ports (from test.yml — shifted for test overlay coexistence with production)
+_PROMETHEUS_PORT = 19090
+_GRAFANA_PORT = 13030
 
 # Endpoints
 _PROMETHEUS_HEALTH_URL = f"http://127.0.0.1:{_PROMETHEUS_PORT}/-/healthy"
