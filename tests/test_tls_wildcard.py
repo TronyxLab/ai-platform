@@ -368,7 +368,9 @@ def test_vhost_configs_use_wildcard_cert_path(
                         paths = _extract_ssl_cert_paths(sp_f.read())
                     logger.info(
                         "[IMP:8][test_vhost_configs_use_wildcard_cert_path] %s: resolved %d cert path(s) via %s",
-                        filename, len(paths), candidate,
+                        filename,
+                        len(paths),
+                        candidate,
                     )
                     break
         if not paths:
@@ -643,7 +645,8 @@ def test_hermes_vhost_conditionally_deployed(
                 if cert_paths:
                     logger.info(
                         "[IMP:8][test_hermes_vhost_conditionally_deployed] Resolved %d cert path(s) from %s",
-                        len(cert_paths), candidate,
+                        len(cert_paths),
+                        candidate,
                     )
                 break
     has_template_cert = any(PLATFORM_DOMAIN_TEMPLATE in p for p in cert_paths)
