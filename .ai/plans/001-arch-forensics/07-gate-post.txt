@@ -1,0 +1,3 @@
+Gate test timing: 24.76s (37 tests, including ShellCheck data-flow analysis)
+
+ShellCheck version: 0.11.0
