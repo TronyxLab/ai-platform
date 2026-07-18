@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-18 | regenerated (954 tests)
+## @changes — 2026-07-18 | regenerated (970 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -63,6 +63,8 @@ test_nodeids:
 - tests/gates/test_gate_env_shared_consistency.py::test_no_hardcoded_noproxy_in_base_yml
 - tests/gates/test_gate_env_shared_consistency.py::test_proxy_vars_are_opt_in
 - tests/gates/test_gate_exception_audit.py::test_no_hardcoded_target_sets_in_gates
+- tests/gates/test_gate_executable_bit.py::test_executable_bit_outside_lib
+- tests/gates/test_gate_executable_bit.py::test_negative_detects_644_outside_lib
 - tests/gates/test_gate_gitleaks_version.py::test_gitleaks_composite_action_used
 - tests/gates/test_gate_gitleaks_version.py::test_single_gitleaks_version
 - tests/gates/test_gate_grep_summary.py::test_all_py_files_have_grep_summary
@@ -146,8 +148,12 @@ test_nodeids:
 - tests/gates/test_gate_platform_env_schema.py::test_volumes_path_field_required
 - tests/gates/test_gate_platform_env_schema.py::test_volumes_section_exists
 - tests/gates/test_gate_project_compose.py::test_env_file_platform_present
+- tests/gates/test_gate_project_compose.py::test_negative_compose_without_proxy_net
 - tests/gates/test_gate_project_compose.py::test_no_ports_published
+- tests/gates/test_gate_project_compose.py::test_proxy_net_external_declared
+- tests/gates/test_gate_project_compose.py::test_proxy_net_is_external
 - tests/gates/test_gate_project_compose.py::test_proxy_net_with_alias
+- tests/gates/test_gate_project_compose.py::test_templates_declare_proxy_net
 - tests/gates/test_gate_project_compose.py::test_valid_project_passes
 - tests/gates/test_gate_pytest_markers.py::test_no_dead_markers
 - tests/gates/test_gate_pytest_markers.py::test_pyproject_toml_has_all_markers
@@ -364,6 +370,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_check-doc-headers]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_context-promote]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_lint]
@@ -374,6 +381,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_verify]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_audit_audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_deploy-modules]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_firewall]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_install-acme]
@@ -406,6 +414,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_check-doc-headers]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_context-promote]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_lint]
@@ -416,6 +425,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_verify]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_audit_audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_deploy-modules]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_firewall]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_install-acme]
@@ -448,6 +458,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_check-doc-headers]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_context-promote]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_lint]
@@ -458,6 +469,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_verify]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_audit_audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_deploy-modules]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_firewall]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_install-acme]
@@ -490,6 +502,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_check-doc-headers]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_context-promote]
+- tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_lint]
@@ -558,6 +571,9 @@ test_nodeids:
 - tests/test_dedup_contract.py::test_sudo_whitelist_symlinks_point_to_template
 - tests/test_dedup_contract.py::test_sudo_whitelist_template_exists_and_valid
 - tests/test_deploy_delivery_static.py::test_rsync_excludes_runtime_artifacts
+- tests/test_deploy_finalization.py::test_deploy_health_fails_exit_1
+- tests/test_deploy_finalization.py::test_deploy_success_audit_unavailable
+- tests/test_deploy_finalization.py::test_deploy_success_notify_missing
 - tests/test_deploy_gates_static.py::test_clickhouse_password_url_safe
 - tests/test_deploy_gates_static.py::test_env_requires_gate_present
 - tests/test_deploy_gates_static.py::test_minio_env_requires_documented
