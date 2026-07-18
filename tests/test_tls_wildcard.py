@@ -359,6 +359,20 @@ def test_vhost_configs_use_wildcard_cert_path(
         paths = _extract_ssl_cert_paths(content)
 
         if not paths:
+            # Wave 1: SSL certificate paths delegated to ssl-params.conf include snippet
+            if "include /etc/nginx/conf.d/ssl-params.conf" in content:
+                config_dir = os.path.join(_platform_root, VHOST_CONFIG_DIR_REL)
+                for candidate in ("ssl-params.conf", "ssl-params.conf.template"):
+                    ssl_params_path = os.path.join(config_dir, candidate)
+                    if os.path.isfile(ssl_params_path):
+                        with open(ssl_params_path) as sp_f:
+                            paths = _extract_ssl_cert_paths(sp_f.read())
+                        logger.info(
+                            "[IMP:8][test_vhost_configs_use_wildcard_cert_path] %s: resolved %d cert path(s) via %s",
+                            filename, len(paths), candidate,
+                        )
+                        break
+        if not paths:
             errors.append(f"[{filename}] No ssl_certificate directives found (expected SSL-configured vhost)")
             logger.error("[IMP:4][test_vhost_configs_use_wildcard_cert_path] %s: no ssl_certificate found", filename)
             continue
@@ -619,6 +633,21 @@ def test_hermes_vhost_conditionally_deployed(
 
     # region BLOCK_CheckCert
     cert_paths = _extract_ssl_cert_paths(content)
+    if not cert_paths:
+        # Wave 1: SSL delegated to ssl-params.conf snippet — resolve from shared file
+        if "include /etc/nginx/conf.d/ssl-params.conf" in content:
+            config_dir = os.path.join(_platform_root, VHOST_CONFIG_DIR_REL)
+            for candidate in ("ssl-params.conf", "ssl-params.conf.template"):
+                ssl_params_path = os.path.join(config_dir, candidate)
+                if os.path.isfile(ssl_params_path):
+                    with open(ssl_params_path) as sp_f:
+                        cert_paths = _extract_ssl_cert_paths(sp_f.read())
+                    if cert_paths:
+                        logger.info(
+                            "[IMP:8][test_hermes_vhost_conditionally_deployed] Resolved %d cert path(s) from %s",
+                            len(cert_paths), candidate,
+                        )
+                    break
     has_template_cert = any(PLATFORM_DOMAIN_TEMPLATE in p for p in cert_paths)
     logger.info(
         "[IMP:8][test_hermes_vhost_conditionally_deployed] Cert paths: %d, contains template: %s",

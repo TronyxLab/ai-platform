@@ -37,6 +37,7 @@ DEV_CONFIG_DIR = os.path.join(
 EXCLUDE_FROM_SERVER_CHECK: set[str] = {
     "nginx.conf",
     "platform-http.conf",
+    "security-headers.conf",  # Wave 1: include snippet, no server block
 }
 
 
