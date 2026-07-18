@@ -70,3 +70,6 @@ tests/.test_counter.json
 .mypy_cache/
 .docker-mounts/
 .ai/server-state.json
+
+# zcode ephemeral session plans (accidentally committed in a0c7dc1)
+.zcode/

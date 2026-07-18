@@ -131,8 +131,12 @@ def test_platform_domain_placeholder_present(caplog) -> None:
         has_in_ssl_cert = any("${PLATFORM_DOMAIN}" in line for line in ssl_cert_lines)
         has_ssl_include = "ssl-params.conf" in text
         if not has_in_ssl_cert and not has_ssl_include:
-            violations.append(f"{fname}: ssl_certificate does not contain ${{PLATFORM_DOMAIN}} and no ssl-params.conf include")
-            logger.info("[IMP:9][gate] FAIL: %s ssl_certificate missing PLATFORM_DOMAIN (no ssl-params.conf include)", fname)
+            violations.append(
+                f"{fname}: ssl_certificate does not contain ${{PLATFORM_DOMAIN}} and no ssl-params.conf include"
+            )
+            logger.info(
+                "[IMP:9][gate] FAIL: %s ssl_certificate missing PLATFORM_DOMAIN (no ssl-params.conf include)", fname
+            )
         elif has_ssl_include and not has_in_ssl_cert:
             logger.info("[IMP:8][gate] OK: %s delegates ssl_certificate to ssl-params.conf", fname)
         elif has_in_ssl_cert:
