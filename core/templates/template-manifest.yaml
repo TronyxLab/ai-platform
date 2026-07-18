@@ -1,0 +1,142 @@
+# GREP_SUMMARY: template-manifest yaml template-engine render check vars
+# STRUCTURE: ┌version┐ → ◇ standard_vars → ◇ templates[] (template→consumer→vars)
+# region MODULE_CONTRACT
+## @purpose  Single source of truth: template → consumer → vars mapping
+## @scope    Used by template-engine.py (render-all, check), CI gates (syntax, drift)
+## @invariants
+##   - Every template path is relative to this manifest file's directory
+##   - type: single — single file template; type: directory — recursive directory
+##   - dual_role: true — file is both a template AND a live config (e.g., alert-rules.yml)
+##   - consumer documents WHERE the template is consumed (script:function)
+##   - output: null means render-at-use (no committed artifact)
+## @rationale Single registry eliminates scattered sed/envsubst calls.
+##            YAML chosen for inline comments and readability in code review.
+## @usecases
+##   - make templates-check → check_all() validates all templates resolvable
+##   - make templates-render → render_all() renders to output paths
+##   - CI gates validate strict grammar and drift
+# endregion MODULE_CONTRACT
+
+version: 1
+
+standard_vars:
+  PLATFORM_ROOT:
+    source: auto
+    default: /opt/platform
+    resolve_from:
+      - env.PLATFORM_ROOT
+  PLATFORM_DOMAIN:
+    source: auto
+    default: null
+    resolve_from:
+      - env.PLATFORM_DOMAIN
+
+templates:
+  # ── Sudo whitelist template (render-at-use) ──────────────────────────────
+  - template: ../templates/sudo-whitelist.template
+    output: null
+    type: single
+    consumer: core/internal/bootstrap/deploy-modules.sh:generate_module_sudoers()
+    vars:
+      MODULE_NAME:
+        required: true
+        source: per-module
+      PLATFORM_ROOT:
+        required: true
+        source: standard
+
+  # ── SSL params template ──────────────────────────────────────────────────
+  - template: ../modules/nginx/config/ssl-params.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/install.sh:deploy_shared_snippets()
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Nginx default vhost template ─────────────────────────────────────────
+  - template: ../modules/nginx/config/platform-default.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/install.sh:_deploy_vhost_full()
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Alert rules (dual-role: template + live config) ──────────────────────
+  - template: ../modules/monitoring/config/alert-rules.yml
+    output: null
+    type: single
+    dual_role: true
+    consumer: core/modules/monitoring/hooks/on-project-deploy.sh:generate_alert_rules()
+    vars:
+      PROJECT:
+        required: true
+        source: CLI
+
+  # ── Template directories (scaffold) ──────────────────────────────────────
+  - template: ../../templates/template-backend/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/add-project.sh:render_project_template()
+    vars:
+      PROJECT_NAME:
+        required: true
+      ORG_NAME:
+        required: true
+      DOMAIN:
+        required: false
+      NODE_NAME:
+        required: true
+      PLATFORM_DOMAIN:
+        required: false
+
+  - template: ../../templates/template-frontend/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/add-project.sh
+    vars:
+      PROJECT_NAME:
+        required: true
+      ORG_NAME:
+        required: true
+      DOMAIN:
+        required: false
+      NODE_NAME:
+        required: true
+      PLATFORM_DOMAIN:
+        required: false
+
+  - template: ../../templates/template-fullstack/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/add-project.sh
+    vars:
+      PROJECT_NAME:
+        required: true
+      ORG_NAME:
+        required: true
+      DOMAIN:
+        required: false
+      NODE_NAME:
+        required: true
+      PLATFORM_DOMAIN:
+        required: false
+
+  - template: ../../templates/template-context/
+    output: null
+    type: directory
+    recursive: true
+    consumer: core/internal/scaffold/context-init.sh
+    vars:
+      CONTEXT:
+        required: true
+      ORG_NAME:
+        required: true
+      NODE_NAME:
+        required: true

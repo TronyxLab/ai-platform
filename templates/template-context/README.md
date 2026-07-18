@@ -15,9 +15,9 @@
 cp -r templates/template-context ~/projects/<org>/platform
 
 # Заменить плейсхолдеры
-sed -i 's/__ORG_NAME__/<org>/g' ~/projects/<org>/platform/context.yaml
-sed -i 's/__CONTEXT__/<context>/g' ~/projects/<org>/platform/context.yaml
-sed -i 's/__NODE_NAME__/<node>/g' ~/projects/<org>/platform/context.yaml
+sed -i 's/{{ORG_NAME}}/<org>/g' ~/projects/<org>/platform/context.yaml
+sed -i 's/{{CONTEXT}}/<context>/g' ~/projects/<org>/platform/context.yaml
+sed -i 's/{{NODE_NAME}}/<node>/g' ~/projects/<org>/platform/context.yaml
 ```
 
 ## Структура

@@ -17,11 +17,11 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  __PROJECT_NAME__:
+  {{PROJECT_NAME}}:
     # ⚠️ TRAP[BUG] · 2026-06-11 · P1 · GHCR требует lowercase org names
     #   Root: Docker registry spec — repository name must be lowercase
     #   Fix: передавайте --org в lowercase (e.g., tronyxlab, не TronyxLab)
-    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__:${IMAGE_TAG:-latest}"
+    image: "${IMAGE_REGISTRY:-ghcr.io}/{{ORG_NAME}}/{{PROJECT_NAME}}:${IMAGE_TAG:-latest}"
     restart: always
     stop_grace_period: 30s
     deploy:
@@ -34,13 +34,13 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
     volumes:
-      - __PROJECT_NAME__-data:/app/data
+      - {{PROJECT_NAME}}-data:/app/data
     networks:
-      __PROJECT_NAME__-net:
+      {{PROJECT_NAME}}-net:
       shared-db-net:
       proxy-net:
         aliases:
-          - __PROJECT_NAME__
+          - {{PROJECT_NAME}}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -49,15 +49,15 @@ services:
       retries: 3
     labels:
       - "platform.type=backend"
-      - "platform.domain=__DOMAIN__"
+      - "platform.domain={{DOMAIN}}"
 
 volumes:
-  __PROJECT_NAME__-data:
-    name: __PROJECT_NAME__-data
+  {{PROJECT_NAME}}-data:
+    name: {{PROJECT_NAME}}-data
 
 networks:
-  __PROJECT_NAME__-net:
-    name: __PROJECT_NAME__-net
+  {{PROJECT_NAME}}-net:
+    name: {{PROJECT_NAME}}-net
     driver: bridge
   shared-db-net:
     name: shared-db-net

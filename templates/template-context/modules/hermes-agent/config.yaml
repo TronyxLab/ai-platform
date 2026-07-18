@@ -2,11 +2,11 @@
 # STRUCTURE: ┌config.yaml┐ → read(hermes-agent) → apply_context_overrides(org+context)
 # region MODULE_CONTRACT
 ## @purpose  Template context overlay for hermes-agent — defines context and org overrides
-## @scope    Minimal config; __CONTEXT__ and __ORG_NAME__ are template placeholders
+## @scope    Minimal config; {{CONTEXT}} and {{ORG_NAME}} are template placeholders
 ## @invariants
 ##   - context and org are required
-##   - __ORG_NAME__ and __CONTEXT__ must be replaced before agent startup
+##   - {{ORG_NAME}} and {{CONTEXT}} must be replaced before agent startup
 ## @rationale Context-unique overrides for hermes-agent; per-context customization
 # endregion MODULE_CONTRACT
-context: __CONTEXT__
-org: __ORG_NAME__
+context: {{CONTEXT}}
+org: {{ORG_NAME}}

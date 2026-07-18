@@ -1,11 +1,11 @@
-# GREP_SUMMARY: project AGENTS.md platform-context commands domain __PROJECT_NAME__
+# GREP_SUMMARY: project AGENTS.md platform-context commands domain {{PROJECT_NAME}}
 # STRUCTURE: ┌platform context┐ → ◇ what platform provides → ◇ commands → ◇ DO NOT
 
-# Project __PROJECT_NAME__
+# Project {{PROJECT_NAME}}
 
 ## Platform context
-- Domain: __DOMAIN__
-- CI/CD: __ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml@main
+- Domain: {{DOMAIN}}
+- CI/CD: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@main
 
 ## What platform provides
 Run `grep PLATFORM_ .env.platform` for full service list.

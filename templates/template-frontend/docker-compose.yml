@@ -1,4 +1,4 @@
-# GREP_SUMMARY: docker-compose __PROJECT_NAME__ proxy-net frontend nginx proxy env_file
+# GREP_SUMMARY: docker-compose {{PROJECT_NAME}} proxy-net frontend nginx proxy env_file
 # STRUCTURE: service(<project>-app) → env_file(.env.platform) → networks(proxy-net:external) → healthcheck
 # region MODULE_CONTRACT
 ## @purpose  Development and production compose definition
@@ -17,8 +17,8 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  __PROJECT_NAME__:
-    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__:${IMAGE_TAG:-latest}"
+  {{PROJECT_NAME}}:
+    image: "${IMAGE_REGISTRY:-ghcr.io}/{{ORG_NAME}}/{{PROJECT_NAME}}:${IMAGE_TAG:-latest}"
     # ⚠️ TRAP[BUG] Docker requires lowercase repo names (e.g., tronyxlab, not TronyxLab).
     #   Pass --org in lowercase, or the image pull will fail with:
     #   "repository name (Xxx/yyy) must be lowercase"
@@ -34,10 +34,10 @@ services:
     environment:
       - NODE_ENV=production
     networks:
-      __PROJECT_NAME__-net:
+      {{PROJECT_NAME}}-net:
       proxy-net:
         aliases:
-          - __PROJECT_NAME__
+          - {{PROJECT_NAME}}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health"]
       # ⚠️ TRAP[BUG] Use 127.0.0.1 NOT localhost — Alpine resolves localhost to ::1 (IPv6),
@@ -48,11 +48,11 @@ services:
       retries: 3
     labels:
       - "platform.type=frontend"
-      - "platform.domain=__DOMAIN__"
+      - "platform.domain={{DOMAIN}}"
 
 networks:
-  __PROJECT_NAME__-net:
-    name: __PROJECT_NAME__-net
+  {{PROJECT_NAME}}-net:
+    name: {{PROJECT_NAME}}-net
     driver: bridge
   proxy-net:
     name: proxy-net

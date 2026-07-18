@@ -88,6 +88,8 @@
 | ✅ | `hermes-build-context` | Сборка L1→L2 |
 | ✅ | `hermes-push-l1` | Push L1 в ghcr.io как disaster recovery backup (make hermes-push-l1 → docker tag + docker push) |
 | ✅ | `provision` | Provision окружения (сети, volumes, CI env) из platform-env.yaml (`make provision [SCOPE=all|networks|volumes|env]`) |
+| ✅ | `templates-check` | Dry-run проверка разрешимости шаблонов |
+| ✅ | `templates-render` | Рендер шаблонов по манифесту |
 | ✅ | `validate` / `lint` / `audit` / `check-file-lines` | Проверки и аудит |
 | ✅ | `secrets-unlock` | Расшифровка SOPS/age секретов |
 | ✅ | `test` | Тестирование (`make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]`) |
@@ -127,6 +129,8 @@
 | [`AGENTS.md`](AGENTS.md) | Root architecture, invariants, deploy model, glossary | Канонический |
 | [`core/AGENTS.md`](core/AGENTS.md) | Каталог операций, слои, forbidden-списки | Канонический |
 | [`core/modules/AGENTS.md`](core/modules/AGENTS.md) | Шаблон модуля, healthcheck/Makefile-контракты | Канонический |
+| [`core/internal/template_engine.py`](core/internal/template_engine.py) | Python-ядро template engine | Канонический |
+| [`core/templates/template-manifest.yaml`](core/templates/template-manifest.yaml) | Единый манифест шаблонов | Канонический |
 | [`core/internal/bootstrap/AGENTS.md`](core/internal/bootstrap/AGENTS.md) | Bootstrap pipeline, node lifecycle | Вспомогательный |
 | [`tests/gates/AGENTS.md`](tests/gates/AGENTS.md) | Gate test conventions, invariant testing | Вспомогательный |
 | [`templates/template-backend/AGENTS.md`](templates/template-backend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |

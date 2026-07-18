@@ -33,7 +33,7 @@ DEV_CONFIG_DIR = os.path.join(
 
 # Файлы, которые не обязаны содержать server-блоки (main nginx.conf, шаблоны и т.д.)
 # nginx.conf — основной конфиг (events/http block, без server)
-# platform-http.conf — HTTP-шаблон для platform-default.conf, не содержит server {}
+# platform-http.conf — HTTP-шаблон для platform-default.conf.template, не содержит server {}
 EXCLUDE_FROM_SERVER_CHECK: set[str] = {
     "nginx.conf",
     "platform-http.conf",

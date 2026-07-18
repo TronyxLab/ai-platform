@@ -1,4 +1,4 @@
-# __PROJECT_NAME__ dependencies
+# {{PROJECT_NAME}} dependencies
 fastapi>=0.139.0
 uvicorn[standard]>=0.51.0
 requests>=2.31.0

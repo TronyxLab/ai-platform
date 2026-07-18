@@ -1,7 +1,7 @@
 # GREP_SUMMARY: template fullstack project backend frontend fastapi nginx docker-compose sync-env
 # STRUCTURE: ┌template vars┐ → scaffold(bash) → project_dir → backend(8000)+frontend(80)
 
-# __PROJECT_NAME__
+# {{PROJECT_NAME}}
 
 > Fullstack проект, создан из шаблона `template-fullstack` (AI-platform).
 
@@ -38,24 +38,24 @@ make status
 
 | Плейсхолдер | Значение | Обязательность |
 |------------|----------|---------------|
-| `__PROJECT_NAME__` | Имя проекта | обязательный |
-| `__ORG_NAME__` | Организация в GHCR (только **lowercase**!) | обязательный |
-| `__NODE_NAME__` | Целевая нода | обязательный |
-| `__DOMAIN__` | FQDN домена | опционально |
-| `__PLATFORM_DOMAIN__` | Домен платформы | опционально |
-| `__DATABASE__` | Имя базы данных | опционально |
+| `{{PROJECT_NAME}}` | Имя проекта | обязательный |
+| `{{ORG_NAME}}` | Организация в GHCR (только **lowercase**!) | обязательный |
+| `{{NODE_NAME}}` | Целевая нода | обязательный |
+| `{{DOMAIN}}` | FQDN домена | опционально |
+| `{{PLATFORM_DOMAIN}}` | Домен платформы | опционально |
+| `{{DATABASE}}` | Имя базы данных | опционально |
 
-> ⚠️ **`__ORG_NAME__` ОБЯЗАТЕЛЬНО в lowercase** — GHCR registry rejects uppercase org names.
+> ⚠️ **`{{ORG_NAME}}` ОБЯЗАТЕЛЬНО в lowercase** — GHCR registry rejects uppercase org names.
 
 ## Локальная разработка
 
 ```bash
 # Backend
-docker compose up -d __PROJECT_NAME__-backend
+docker compose up -d {{PROJECT_NAME}}-backend
 curl http://localhost:8000/health
 
 # Frontend
-docker compose up -d __PROJECT_NAME__-frontend
+docker compose up -d {{PROJECT_NAME}}-frontend
 curl http://localhost:80/health
 ```
 

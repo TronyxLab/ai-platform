@@ -1,7 +1,7 @@
 # GREP_SUMMARY: template frontend project nginx health ready node Makefile sync-env
 # STRUCTURE: ┌template vars┐ → scaffold(bash) → project_dir → healthcheck(80)
 
-# __PROJECT_NAME__
+# {{PROJECT_NAME}}
 
 > Frontend проект, создан из шаблона `template-frontend` (AI-platform).
 
@@ -42,13 +42,13 @@ make status
 
 | Плейсхолдер | Значение | Обязательность |
 |------------|----------|---------------|
-| `__PROJECT_NAME__` | Имя проекта | обязательный |
-| `__ORG_NAME__` | Организация в GHCR (только **lowercase**!) | обязательный |
-| `__NODE_NAME__` | Целевая нода | обязательный |
-| `__DOMAIN__` | FQDN домена | опционально |
-| `__PLATFORM_DOMAIN__` | Домен платформы | опционально |
+| `{{PROJECT_NAME}}` | Имя проекта | обязательный |
+| `{{ORG_NAME}}` | Организация в GHCR (только **lowercase**!) | обязательный |
+| `{{NODE_NAME}}` | Целевая нода | обязательный |
+| `{{DOMAIN}}` | FQDN домена | опционально |
+| `{{PLATFORM_DOMAIN}}` | Домен платформы | опционально |
 
-> ⚠️ **`__ORG_NAME__` ОБЯЗАТЕЛЬНО в lowercase** — GHCR registry rejects uppercase org names.
+> ⚠️ **`{{ORG_NAME}}` ОБЯЗАТЕЛЬНО в lowercase** — GHCR registry rejects uppercase org names.
 > Передавайте `--org tronyxlab`, не `--org TronyxLab`.
 
 ## Деплой

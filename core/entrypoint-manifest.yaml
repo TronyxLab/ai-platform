@@ -50,6 +50,14 @@ build:
     description: "Push L1 (hermes-agent-base) to ghcr.io as disaster recovery backup"
 
 validate:
+  - make_target: templates-check
+    mechanism: python-script
+    delegates_to: core/internal/template-engine.sh check --verbose
+    description: "Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic"
+  - make_target: templates-render
+    mechanism: python-script
+    delegates_to: core/internal/template-engine.sh render-all
+    description: "Render all templates from manifest to output paths"
   - make_target: validate
     mechanism: shell-script
     delegates_to: core/entrypoints/validate.sh → core/internal/validate/validate.sh
@@ -338,6 +346,12 @@ gates:
   - id: security-config
     description: Security configuration audit (secrets, permissions, network policies)
     test_file: test_gate_security_config.py
+  - id: template-syntax
+    description: All template files use unified {{UPPER_SNAKE}} syntax, no legacy __VAR__ or ${VAR} placeholders (except compose runtime vars)
+    test_file: test_gate_template_syntax.py
+  - id: template-drift
+    description: All templates in template-manifest.yaml render without unresolved placeholders; dry-run check passes
+    test_file: test_gate_template_drift.py
   - id: template-metrics
     description: Template metrics and structure validation
     test_file: test_gate_template_metrics.py
@@ -430,6 +444,8 @@ forbidden_verbs:
 # Every make target must use one of these verbs.
 # ---------------------------------------------------------------------------
 allowed_verbs:
+  - templates-check
+  - templates-render
   - deploy
   - bootstrap-node
   - context-promote
