@@ -36,7 +36,7 @@ _COMPOSE_BASE = _NGINX_MODULE / "docker-compose.base.yml"
 _COMPOSE_TEST = _NGINX_MODULE / "docker-compose.test.yml"
 
 # Compose project names
-_EXISTING_PROJECT = "ai-platform-test"  # existing production/live-verification project
+_EXISTING_PROJECT = "ai-platform-existing"  # existing production/live-verification project — NOT "ai-platform-test" to avoid destroying the platform_services session stack
 _SMOKE_PROJECT = "wave-nginx-smoke"  # isolated smoke test project
 
 # Default test container name (from test.yml override)
@@ -211,7 +211,17 @@ def nginx_compose():
         )
     _logger.info("[IMP:9][nginx_compose][setup] Dev certificates ensured")
 
-    # ── Step 5: Start compose (dev-config with auto-generated TLS) ────────────
+    # ── Step 5: Remove stale container from shared stack ──────────────────────
+    _logger.info("[IMP:8][fixture][setup] Cleaning stale container: nginx-test")
+    subprocess.run(
+        ["docker", "rm", "-f", "nginx-test"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    # ── Step 6: Start compose (dev-config with auto-generated TLS) ────────────
     _logger.info("[IMP:7][nginx_compose][setup] Starting nginx compose (%s)", _SMOKE_PROJECT)
     env = {"NGINX_CONF_DIR": "./dev-config", "NGINX_CERT_DIR": "./dev-certs"}
     up_args = [

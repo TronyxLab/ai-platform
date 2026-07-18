@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Resolve target node
-        id: resolve-node
+        id: node-resolution
         env:
           NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
         run: |
@@ -49,16 +49,16 @@ jobs:
           if [ -z "${TARGET_NODE}" ]; then
             TARGET_NODE=$(python3 -c "import yaml; d=yaml.safe_load(open('ai-platform.yaml')); print(d.get('target_node','tronyx-vps'))" 2>/dev/null || echo "tronyx-vps")
           fi
-          echo "[IMP:9][resolve-node] target_node=${TARGET_NODE}"
+          echo "[IMP:9][node-resolve] target_node=${TARGET_NODE}"
           echo "target_node=${TARGET_NODE}" >> "${GITHUB_ENV}"
 
           if [ -z "${NODE_HOST_MAP}" ]; then
-            echo "[IMP:10][resolve-node] FATAL: NODE_HOST_MAP org variable not configured (K5)"
+            echo "[IMP:10][node-resolve] FATAL: NODE_HOST_MAP org variable not configured (K5)"
             exit 1
           fi
 
           SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 -c "import json,sys; m=json.load(sys.stdin); n='${TARGET_NODE}'; h=m.get(n,''); print(h if h else (print(f'K5: node {n} not found in NODE_HOST_MAP',file=sys.stderr) or exit(1)))")
-          echo "[IMP:9][resolve-node] ssh_host=${SSH_HOST}"
+          echo "[IMP:9][node-resolve] ssh_host=${SSH_HOST}"
           echo "ssh_host=${SSH_HOST}" >> "${GITHUB_ENV}"
 
       - name: Deliver project payload

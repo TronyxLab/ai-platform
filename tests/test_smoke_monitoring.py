@@ -145,7 +145,50 @@ def monitoring_compose():
             _logger.error("[IMP:9][monitoring_compose][setup] Timeout checking %s", net)
             pytest.fail(f"Failed to ensure network {net} exists")
 
-    # ── Step 3: Start monitoring compose ──────────────────────────────────
+    # ── Step 3: Remove stale containers from shared stack ─────────────────────
+    # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · prometheus-config-init one-shot container blocks compose
+    # · Root: platform_services starts prometheus-config-init as part of monitoring module.
+    # ·   This Exited container persists and blocks the monitoring_compose fixture from
+    # ·   recreating it (container name "prometheus-config-init" is already in use).
+    # · Fix: include prometheus-config-init in stale container removal.
+    _stale_containers = ["prometheus-test", "grafana-test", "prometheus-config-init"]
+    for _c in _stale_containers:
+        _logger.info("[IMP:8][fixture][setup] Cleaning stale container: %s", _c)
+        subprocess.run(
+            ["docker", "rm", "-f", _c],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+    # ── Step 4: Ensure external networks still exist (may have been removed by prior test teardown) ──
+    # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · observability-net removed by prior module fixture teardown
+    # · Root: module-scoped fixtures (infra_metrics, logging, etc.) create and later remove
+    # ·   external networks during their lifecycle. By the time monitoring_compose runs,
+    # ·   observability-net and proxy-net may have been destroyed.
+    # · Fix: recreate networks unconditionally before compose up, even if they exist.
+    for net in _EXTERNAL_NETWORKS:
+        _net_check = subprocess.run(
+            ["docker", "network", "inspect", net],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if _net_check.returncode != 0:
+            _logger.info("[IMP:8][monitoring_compose][setup] Recreating network '%s'", net)
+            subprocess.run(
+                ["docker", "network", "create", net],
+                capture_output=True,
+                text=True,
+                timeout=_NETWORK_CREATE_TIMEOUT,
+                check=True,
+            )
+            _logger.info("[IMP:9][monitoring_compose][setup] Recreated network '%s'", net)
+        else:
+            _logger.info("[IMP:8][monitoring_compose][setup] Network '%s' already exists", net)
+
+    # ── Step 5: Start monitoring compose ──────────────────────────────────
     _logger.info("[IMP:7][monitoring_compose][setup] Starting wave-monitoring-smoke compose")
     compose_up_args = [
         "docker",
@@ -203,10 +246,11 @@ def monitoring_compose():
                 env=env_up,
             )
             _logger.error(
-                "[IMP:9][monitoring_compose][setup] Compose up failed — rc=%d\nstderr: %s\nlogs: %s",
+                "[IMP:9][monitoring_compose][setup] Compose up failed — rc=%d\nstdout: %s\nstderr: %s\nlogs: %s",
                 up_result.returncode,
-                up_result.stderr.strip()[-300:],
-                (logs_result.stdout or logs_result.stderr).strip()[-300:],
+                up_result.stdout.strip()[-500:],
+                up_result.stderr.strip()[-500:],
+                (logs_result.stdout or logs_result.stderr).strip()[-500:],
             )
             pytest.fail(f"docker compose up failed with rc={up_result.returncode}")
 

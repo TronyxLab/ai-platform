@@ -55,13 +55,12 @@ services:
     # · Fix: aligned to L0/L1/L2 exactly matching AGENTS.md canonical layer naming
     # · Rev: if AGENTS.md layer notation changes
     # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
-    # ⚠️ TRAP[DECISION] · 2026-07-16 · MED · Context overlay digest not resolved
-    # · Image ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1 is built by context CI
-    # ·   and not available in this session's registry. Resolve via:
-    # ·   docker buildx imagetools inspect ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1
-    # ·   then append @sha256:<digest> to the tag in the fallback value below.
-    # · Rev: remove this comment once digest is pinned — tag@digest required by T4 (DevPlan 017).
-    image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1}
+    # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
+    # ⚡ TRAP[PERF] · 2026-07-18 · >0 · hermes-agent-context:latest — no digest pin
+    # · Root: context overlay image has no versioned tag in ghcr.io; tag@digest pinned
+    # ·   below. Update digest when CI pushes new overlay image.
+    # · Rev: when CI pipeline pushes versioned tags (e.g. v2026.7.2), switch to tag@digest.
+    image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:cd4ab1957172d97e2611a2afe5839136b208fc5b3a29fecab038823dd24d6bab}
     # 🧐 TRAP[DECISION] · 2026-07-11 · — · Platform pin: linux/amd64 for cross-platform compatibility
     # · Hermes-agent upstream image (nousresearch/hermes-agent:v2026.7.1) and context overlay
     # · (ghcr.io/tronyxlab/hermes-agent-context:latest) are built for x86_64 only.

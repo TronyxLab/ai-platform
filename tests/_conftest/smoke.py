@@ -113,6 +113,10 @@ SMOKE_ENV: dict[str, str] = {
     "S3_SECRET_KEY": "test-secret-key",
     "TELEGRAM_BOT_TOKEN": "",
     "TELEGRAM_ALLOWED_USERS": "",
+    "PROMETHEUS_TARGETS_DIR": "/tmp/prometheus-targets",
+    "PROMETHEUS_RULES_DIR": "/tmp/prometheus-rules",
+    "NGINX_CONF_DIR": "./dev-config",
+    "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
 }
 
 _SMOKE_VOLUME_BIND_DIRS: list[str] = [
@@ -123,6 +127,8 @@ _SMOKE_VOLUME_BIND_DIRS: list[str] = [
     "/var/lib/platform/loki-data",
     "/var/lib/platform/hermes-agent/data",
     "/var/log/platform/backup",
+    "/tmp/prometheus-targets",
+    "/tmp/prometheus-rules",
 ]
 
 
@@ -590,6 +596,29 @@ def platform_services(
         )
         _run_docker_smoke(_cleanup_args, timeout=20)
     _logger.info("[IMP:8][conftest][platform_services] Global pre-cleanup complete")
+
+    # ── Safety net: remove stale test containers from crashed previous runs ──
+    # ⚠️ TRAP[BUG] · 2026-07-18 · D3 · stale containers block test run
+    # · docker compose down does not remove containers created with a different
+    # · set of compose files (project labels don't match). After crash (Ctrl+C,
+    # · OOM) containers remain and block container names ("already in use").
+    # · Safety net: docker rm -f by known test container names — unconditional,
+    # · idempotent.
+    _STALE_CONTAINER_NAMES = [
+        "nginx-test",
+        "prometheus-test",
+        "grafana-test",
+        "hermes-agent-test",
+        "prometheus-config-init",
+    ]
+    for _cname in _STALE_CONTAINER_NAMES:
+        subprocess.run(
+            ["docker", "rm", "-f", _cname],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    _logger.info("[IMP:8][conftest][platform_services] Safety net: stale containers removed")
 
     # ── Start compose files in wave-parallel order ──────────────────────────
     started: list[str] = []

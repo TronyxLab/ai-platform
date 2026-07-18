@@ -136,7 +136,17 @@ def redis_compose():
         _logger.error("[IMP:9][redis_compose][setup] Timeout checking/creating shared-cache-net")
         pytest.fail("Failed to ensure shared-cache-net exists")
 
-    # ── Step 3: Start redis compose ───────────────────────────────────────────
+    # ── Step 3: Remove stale container from shared stack ──────────────────────
+    _logger.info("[IMP:8][fixture][setup] Cleaning stale container: redis-test")
+    subprocess.run(
+        ["docker", "rm", "-f", "redis-test"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    # ── Step 4: Start redis compose ───────────────────────────────────────────
     _logger.info("[IMP:7][redis_compose][setup] Starting wave-redis-smoke compose")
     compose_up_args = [
         "docker",

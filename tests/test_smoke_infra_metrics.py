@@ -33,7 +33,7 @@ _COMPOSE_TEST = _INFRA_METRICS_MODULE / "docker-compose.test.yml"
 _HEALTHCHECK_SH = _INFRA_METRICS_MODULE / "healthcheck.sh"
 
 # Compose project names
-_EXISTING_PROJECT = "ai-platform-test"  # existing production/live-verification project
+_EXISTING_PROJECT = "ai-platform-existing"  # existing production/live-verification project — NOT "ai-platform-test" to avoid destroying the platform_services session stack
 _SMOKE_PROJECT = "wave-infra-metrics-smoke"  # isolated smoke test project
 
 # Default test container names (from test.yml override)
@@ -180,7 +180,19 @@ def infra_metrics_compose():
         len(created_nets),
     )
 
-    # ── Step 4: Start infra-metrics compose ───────────────────────────────────
+    # ── Step 4: Remove stale containers from shared stack ─────────────────────
+    _stale_containers = ["cadvisor-test", "node-exporter-test", "nginx-prometheus-exporter-test", "redis-exporter-test"]
+    for _c in _stale_containers:
+        _logger.info("[IMP:8][fixture][setup] Cleaning stale container: %s", _c)
+        subprocess.run(
+            ["docker", "rm", "-f", _c],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+    # ── Step 5: Start infra-metrics compose ───────────────────────────────────
     up_args = [
         "docker",
         "compose",

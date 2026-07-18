@@ -334,20 +334,16 @@ def test_platform_starts_all_containers(
     # endregion
 
     # region BLOCK_CollectExpected
-    # Use docker compose ps per module with COMPOSE_PROFILES env var.
-    # docker ps --filter by compose project label is not reliable because
-    # profile-gated modules may not set a unified project label.
-    # COMPOSE_PROFILES env var is set to match the module's profile name.
     expected_services: list[str] = []
     for module_name in started:
         compose_path = all_compose_files.get(module_name)
         if compose_path is None:
             continue
         # Use same compose args as platform_services fixture: base + test overlay
-        # NOTE: --all flag is critical — docker compose ps without --all does NOT
-        # show containers when COMPOSE_PROFILES filtering leaves no active services
-        # visible (all services are profile-gated). Adding --all ensures we always
-        # see containers regardless of profile state, then filter by running via docker ps.
+        # NOTE: --all is intentional — with COMPOSE_PROFILES=module_name, --status running
+        # only returns containers matching the current profile, missing other started modules.
+        # --all returns ALL project containers regardless of profile, then we deduplicate and
+        # filter one-shot containers below.
         ps_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
         if os.path.exists(test_override):
@@ -358,27 +354,6 @@ def test_platform_starts_all_containers(
             timeout=30,
             env_override={"COMPOSE_PROFILES": module_name},
         )
-        logger.info("[IMP:9][DIAG][test_platform_starts_all_containers] ps returncode=%d", result.returncode)
-        logger.info(
-            "[IMP:9][DIAG][test_platform_starts_all_containers] ps stdout=\n%s",
-            result.stdout.strip()[:2000] or "(empty)",
-        )
-        if result.stderr.strip():
-            logger.info(
-                "[IMP:9][DIAG][test_platform_starts_all_containers] ps stderr=\n%s", result.stderr.strip()[:1000]
-            )
-        # ── DIAGNOSTIC: also run docker ps -a to see ALL containers on runner ──
-        _all_ps = subprocess.run(
-            ["docker", "ps", "-a", "--format", "table {{.Names}}\t{{.Status}}\t{{.Image}}"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        logger.info(
-            "[IMP:9][DIAG][test_platform_starts_all_containers] docker ps -a (ALL):\n%s",
-            _all_ps.stdout.strip()[:2000] or "(empty)",
-        )
-        # ── END DIAGNOSTIC ──
         if result.returncode != 0:
             logger.warning(
                 "[IMP:7][test_platform_starts_all_containers] Cannot list services for '%s': %s",
@@ -386,14 +361,15 @@ def test_platform_starts_all_containers(
                 result.stderr,
             )
             continue
-        # DIAG: print raw compose ps output for debugging
-        logger.error(
-            "=== DIAG [%s] stdout=%s stderr=%s", module_name, result.stdout.strip(), result.stderr.strip()[:200]
-        )
         for line in result.stdout.strip().splitlines():
             service_name = line.strip()
             if service_name:
                 expected_services.append(service_name)
+    # ── Filter one-shot containers (defense in depth) ─────────────────────────
+    _ONESHOT_CONTAINERS = {"ai-platform-test-minio-createbuckets-1", "prometheus-config-init"}
+    expected_services = [s for s in expected_services if s not in _ONESHOT_CONTAINERS]
+    # ── Deduplicate ───────────────────────────────────────────────────────────
+    expected_services = sorted(set(expected_services))
     # endregion
 
     # region BLOCK_CheckRunning
@@ -507,8 +483,6 @@ def test_critical_services_healthy(
 
     # region BLOCK_ResolveContainers
     # Step 1: collect all container names from running compose services
-    # Uses per-module docker compose ps (same approach as test_platform_starts_all_containers).
-    # Profile-gated services require COMPOSE_PROFILES env var to be visible.
     all_container_names: list[str] = []
     for module_name in started:
         compose_path = all_compose_files.get(module_name)
@@ -518,7 +492,6 @@ def test_critical_services_healthy(
                 module_name,
             )
             continue
-        # NOTE: same --all rationale as test_platform_starts_all_containers
         ps_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
         if os.path.exists(test_override):
@@ -541,46 +514,11 @@ def test_critical_services_healthy(
             if cname:
                 all_container_names.append(cname)
 
-    # ── DIAGNOSTIC: log raw ps result per module before dedup ──
-    logger.info(
-        "[IMP:9][DIAG][test_critical_services_healthy] Raw container names per module before dedup: %s",
-        all_container_names,
-    )
-    # ── END DIAGNOSTIC ──
-
     # Deduplicate — docker compose ps for different modules may return
     # overlapping containers when they share the same project name
     all_container_names = sorted(set(all_container_names))
 
     if not all_container_names:
-        # ── DIAGNOSTIC: before failing, dump global docker ps -a ──
-        _dump = subprocess.run(
-            ["docker", "ps", "-a", "--format", "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        logger.error(
-            "[IMP:9][DIAG][test_critical_services_healthy] DOCKER PS -A (before fail):\n%s",
-            _dump.stdout.strip()[:3000] or "(empty)",
-        )
-        # Also try docker compose ps -a for each started module with the actual project
-        for _m in started:
-            _cp = all_compose_files.get(_m)
-            if not _cp:
-                continue
-            _r2 = _run_docker(
-                ["docker", "compose", "-f", _cp, "-p", "ai-platform-test", "ps", "--all"],
-                timeout=15,
-                env_override={"COMPOSE_PROFILES": _m},
-            )
-            logger.error(
-                "[IMP:9][DIAG][test_critical_services_healthy] Module '%s' compose ps --all:\n%s",
-                _m,
-                _r2.stdout.strip()[:1000] or "(empty)",
-            )
-        # ── END DIAGNOSTIC ──
-
         logger.error(
             "[IMP:9][test_critical_services_healthy] No container names resolved from started modules %s",
             started,

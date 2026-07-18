@@ -43,8 +43,19 @@ def _build_url(port: int, path: str = "") -> str:
     return f"http://localhost:{port}{path}"
 
 
-HERMES_USER = os.environ.get("HERMES_DASHBOARD_USERNAME", "tronyx")
-HERMES_PASS = os.environ.get("HERMES_DASHBOARD_PASSWORD")
+def _hermes_credentials() -> tuple[str, str]:
+    """Read Hermes dashboard credentials from environment at call time.
+
+    ## @purpose — Module-level constant would capture os.environ BEFORE
+    ##            platform_env fixture sets SMOKE_ENV overrides. Reading
+    ##            at call time ensures consistency with container env vars.
+    ## @io — ⎋ (username: str, password: str)
+    """
+    username = os.environ.get("HERMES_DASHBOARD_USERNAME", "tronyx")
+    password = os.environ.get("HERMES_DASHBOARD_PASSWORD")
+    return username, password
+
+
 API_SERVER_KEY = os.environ.get("API_SERVER_KEY")
 
 
@@ -101,19 +112,20 @@ def test_hermes_auth_login(caplog, platform_services, platform_ports) -> None:
     ##       ⎋ None (asserts 200 + ok:true + session cookies)
     ## @complexity — O(1)
     """
-    if not HERMES_PASS:
+    hermes_user, hermes_pass = _hermes_credentials()
+    if not hermes_pass:
         pytest.skip("HERMES_DASHBOARD_PASSWORD not set")
 
     dash_port = platform_ports["HERMES_DASHBOARD_PORT"]
     hermes_dashboard_url = os.environ.get("HERMES_DASHBOARD_URL", _build_url(dash_port))
     url = f"{hermes_dashboard_url}/auth/password-login"
     payload = {
-        "username": HERMES_USER,
-        "password": HERMES_PASS,
+        "username": hermes_user,
+        "password": hermes_pass,
         "provider": "basic",
         "next": "",
     }
-    logger.info("[IMP:7][test_hermes_auth_login] Logging in as %s ...", HERMES_USER)
+    logger.info("[IMP:7][test_hermes_auth_login] Logging in as %s ...", hermes_user)
 
     try:
         r = requests.post(url, json=payload, timeout=15)

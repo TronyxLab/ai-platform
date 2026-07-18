@@ -143,7 +143,19 @@ def logging_compose():
             _logger.error("[IMP:9][logging_compose][setup] Timeout checking %s", net)
             pytest.fail(f"Failed to ensure network {net} exists")
 
-    # ── Step 3: Start logging compose ──────────────────────────────────────
+    # ── Step 3: Remove stale containers from shared stack ─────────────────────
+    _stale_containers = ["loki-test", "promtail-test"]
+    for _c in _stale_containers:
+        _logger.info("[IMP:8][fixture][setup] Cleaning stale container: %s", _c)
+        subprocess.run(
+            ["docker", "rm", "-f", _c],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+    # ── Step 4: Start logging compose ──────────────────────────────────────
     _logger.info("[IMP:7][logging_compose][setup] Starting wave-logging-smoke compose")
     compose_up_args = [
         "docker",

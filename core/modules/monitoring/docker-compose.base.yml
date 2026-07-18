@@ -31,7 +31,7 @@ services:
   # · Prevention: gate-тест test_prometheus_config_no_unexpanded_vars проверяет отсутствие literal placeholder'ов
   # ── Prometheus Config Init (envsubst) ──────────────────────────────────────
   prometheus-config-init:
-    image: busybox:1.36@sha256:7cae1f9e99a6efea08d36a15759d28c6542e6d7e4d1c4c90e912ef47fa686465
+    image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
     profiles: [monitoring]
     container_name: prometheus-config-init
     restart: "no"

@@ -600,4 +600,5 @@ def hashlib_md5(filepath: pathlib.Path) -> str:
     ## @io — ⇥ filepath → ⎋ str (hex digest)
     """
     import hashlib
+
     return hashlib.md5(filepath.read_bytes()).hexdigest()

@@ -30,11 +30,21 @@ LANGFUSE_INGESTION_URL = f"{LANGFUSE_BASE}/api/public/ingestion"
 LANGFUSE_CSRF_URL = f"{LANGFUSE_BASE}/api/auth/csrf"
 LANGFUSE_LOGIN_URL = f"{LANGFUSE_BASE}/api/auth/callback/credentials"
 
-# Use root .env values (headless-init generated keys), ignoring hermes-agent test keys
-LANGFUSE_PUBLIC_KEY = "pk-lf_68db9366171efc2a510743dea2cc1259"
-LANGFUSE_SECRET_KEY = "sk-lf_3d233e93f5b8a0e55cde74d048c1eb5a"
 LANGFUSE_EMAIL = os.environ.get("LANGFUSE_INIT_USER_EMAIL", "admin@ai-platform.local")
 LANGFUSE_PASS = os.environ.get("LANGFUSE_INIT_USER_PASSWORD", "testpass")
+
+
+def _langfuse_credentials() -> tuple[str, str]:
+    """Read Langfuse API credentials from environment at call time.
+
+    ## @purpose — Module-level constants would capture os.environ BEFORE
+    ##            platform_env fixture sets SMOKE_ENV overrides. Reading
+    ##            at call time ensures consistency with container env vars.
+    ## @io — ⎋ (public_key: str, secret_key: str)
+    """
+    pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "pk-test-langfuse-public")
+    sk = os.environ.get("LANGFUSE_SECRET_KEY", "sk-test-langfuse-secret")
+    return pk, sk
 
 
 def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
@@ -64,8 +74,9 @@ def test_langfuse_ingestion(caplog):
     caplog.set_level(logging.INFO)
     if not _port_reachable():
         pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
+    langfuse_pk, langfuse_sk = _langfuse_credentials()
     now = time.time()
-    _basic = base64.b64encode(f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()).decode()
+    _basic = base64.b64encode(f"{langfuse_pk}:{langfuse_sk}".encode()).decode()
     resp = requests.post(
         LANGFUSE_INGESTION_URL,
         json={
