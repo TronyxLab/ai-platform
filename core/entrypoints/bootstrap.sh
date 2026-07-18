@@ -162,7 +162,7 @@ main() {
         echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync node-configs/ → /opt/node-configs/"
         [[ -d "${NODE_CONFIGS_DIR}/secrets" ]] && echo "[IMP:8][bootstrap][dry-run] DRY-RUN: Would rsync secrets/"
     else
-        prepare_ssh_opts "${SSH_HOST}"
+        prepare_ssh_opts "${SSH_HOST}" "init"
         scp_to_server "${SSH_HOST}" "${NODE_NAME}" "${NODE_CONFIGS_DIR}" "${CORE_DIR}" || { echo "[IMP:10][bootstrap][entrypoint] FATAL: SCP phase failed" >&2; exit 1; }
         echo "[IMP:9][bootstrap][scp] SCP phase complete"
     fi

@@ -564,6 +564,52 @@ PYEOF
     fi
 }
 
+# ─── STEP 15: Converge (desired-state reconciler) ──────────
+## @purpose  Run converge.sh to reconcile 6 R-units (permissions, audit log,
+##           projects, networks, /etc/hosts drift, vhost configs). Idempotent:
+##           on repeat run, all R-units report SKIP if already converged.
+## @detail   In init mode: converge = required — must pass for bootstrap to succeed.
+##           In update mode: converge = non-fatal — failures are WARN + continue.
+## @invariants
+##   - RUNS AFTER step_14 (node-update) so all modules are deployed before converge
+##   - RUNS BEFORE step_16 (audit) so converge events are captured in audit log
+##   - DRY_RUN mode: prints converge.sh command without executing
+##   - converge.sh exit code: 0=converged, 1=mutations (normal), 2=errors
+##   - --report-only not used from lifecycle — only standalone mode
+step_15_converge() {
+    step_start "converge" "Running desired-state reconciler (converge.sh)"
+
+    local converge_script="${CORE_DIR}/internal/bootstrap/converge.sh"
+    if [[ ! -f "$converge_script" ]]; then
+        log_step "converge" "WARN" "converge.sh not found at ${converge_script} — skipping"
+        return 0
+    fi
+
+    local converge_args=("--node" "${NODE_NAME}")
+    if [[ "${DRY_RUN_MODE:-}" == "true" ]]; then
+        converge_args+=("--dry-run")
+    fi
+
+    echo "[IMP:9][bootstrap][step-15] INVOKING: ${converge_script} ${converge_args[*]}" >&2
+    if bash "${converge_script}" "${converge_args[@]}" 2>&1; then
+        local converge_rc=$?
+        if [[ $converge_rc -eq 0 ]]; then
+            step_done "converge" "Fully converged — no drifts"
+        elif [[ $converge_rc -eq 1 ]]; then
+            step_done "converge" "Mutations applied — node reconciled"
+        else
+            step_warn "converge" "Converge returned exit ${converge_rc} — some R-units failed"
+        fi
+    else
+        local converge_rc=$?
+        if [[ "${MODE}" == "init" ]]; then
+            step_warn "converge" "Converge failed (exit ${converge_rc}) — bootstrap continues but node may have drifts"
+        else
+            step_warn "converge" "Converge failed (exit ${converge_rc}) — node may have drifts"
+        fi
+    fi
+}
+
 # ─── STEP 16: Audit log summary ──────────────────────────
 step_16_audit_log() {
     step_start "audit-summary" "Writing bootstrap audit summary"
@@ -888,7 +934,7 @@ main() {
             echo "[IMP:9][node-lifecycle][dry-run]   6. ci-deploy-user  6b. projects-base  7. firewall  8. verify-core" >&2
             echo "[IMP:9][node-lifecycle][dry-run]   9. verify-node-configs  10. decrypt-secrets  11. ensure-secrets" >&2
             echo "[IMP:9][node-lifecycle][dry-run]   12. read-node-yaml  13. ghcr-auth  14. sudoers" >&2
-            echo "[IMP:9][node-lifecycle][dry-run]   14b. install-acme  15. node-update  16. logrotate  17. audit  18. telegram" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   14b. install-acme  15. node-update  16. converge  17. audit  18. telegram" >&2
             echo "[IMP:9][node-lifecycle][dry-run] Bootstrap DRY RUN — no mutations performed, exit 0" >&2
             exit 0
         fi
@@ -976,6 +1022,11 @@ PYEOF
             checkpoint_step "install-acme" _step_install_acme
         CHECKPOINT_STEP_HASH="$(_step_hash "node-update" "${CORE_DIR}/internal/bootstrap/node-lifecycle.sh")" \
             checkpoint_step "node-update" step_14_node_update
+        # ── Step 15: Converge (desired-state reconciler) ──────────────
+        # Runs after node-update (modules deployed) but before audit logging.
+        # Uses converge.sh with all 6 R-units.
+        CHECKPOINT_STEP_HASH="$(_step_hash "converge" "${CORE_DIR}/internal/bootstrap/converge.sh")" \
+            checkpoint_step "converge" step_15_converge
         CHECKPOINT_STEP_HASH="$(_step_hash "audit-summary")" \
             checkpoint_step "audit-summary" step_16_audit_log
         CHECKPOINT_STEP_HASH="$(_step_hash "telegram")" \
@@ -1027,7 +1078,7 @@ PYEOF
             echo "[IMP:9][node-lifecycle][dry-run] ===== DRY RUN: update mode ====="
             echo "[IMP:9][node-lifecycle][dry-run] NODE_NAME: ${NODE_NAME}"
             echo "[IMP:9][node-lifecycle][dry-run] NODE_YAML: ${NODE_YAML}"
-            echo "[IMP:9][node-lifecycle][dry-run] Steps: verify-core → provision → ssl-provision → deploy-docker → deploy-system → healthcheck"
+            echo "[IMP:9][node-lifecycle][dry-run] Steps: verify-core → provision → ssl-provision → deploy-docker → deploy-system → healthcheck → converge"
             echo "[IMP:9][node-lifecycle][dry-run] Node update DRY RUN — no mutations performed, exit 0"
             exit 0
         fi
@@ -1068,6 +1119,13 @@ PYEOF
         # ── Step 6: Healthcheck ───────────────────────────────────────
         CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")" \
             checkpoint_step "healthcheck-all" update_step_6_healthcheck
+
+        # ── Step 7: Converge (desired-state reconciler) ───────────────
+        # Runs after healthchecks. In update mode, converge failures are
+        # logged as warnings — node continues operating with reported drifts.
+        CHECKPOINT_STEP_HASH="$(_step_hash "converge" \
+            "${CORE_DIR}/internal/bootstrap/converge.sh")" \
+            checkpoint_step "converge" step_15_converge
 
         CHECKPOINT_STEP_HASH=""
 

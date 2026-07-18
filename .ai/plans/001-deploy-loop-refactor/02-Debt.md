@@ -231,7 +231,7 @@ Phase 1 (eval)  Phase 2 (platform)  Phase 3 (projects)  Phase 4 (cut-over)  Phas
    nginx +        nginx + Traefik     Traefik             Traefik            Traefik
    Traefik        (parallel,           (all vhosts        (sole proxy,       (sole proxy,
    (staging)       staged per            migrated)          ports 80/443)      cleaned)
-                   service)                                                   
+                   service)
 ```
 
 ---

@@ -354,6 +354,162 @@ delete_platform_deploy_yml() {
 # endregion FUNC_delete_platform_deploy_yml
 
 # ──────────────────────────────────────────────────────────────────
+# region FUNC_validate_compose_networks
+## @purpose  Validate project docker-compose declares proxy-net (external).
+##           If the project has a domain, at least one service MUST be connected to
+##           proxy-net with external:true. FAILs with clear instructions otherwise.
+##           Does NOT mutate the compose file — validation only.
+## @param $1  compose_path — path to project compose file (compose.yaml or docker-compose.yml)
+## @return   0 if valid, 1 if validation fails (caller decides action)
+## @complexity O(S × N) where S = services, N = networks per service
+## @invariants — Validation only: no mutation of compose files
+##             - Handles both compose.yaml and docker-compose.yml names
+##             - Uses `docker compose config` if docker available (resolves anchors/aliases)
+##             - Falls back to python3 yaml parser
+##             - If neither docker nor python3+yaml available → WARN + return 0 (best-effort)
+## @rationale Предотвращает регрессию M4: adopted project without proxy-net будет недоступен
+##            через nginx. Валидация до регистрации — fail-fast, не «надеемся на CI».
+validate_compose_networks() {
+    local compose_path="$1"
+
+    # If no domain configured, project doesn't need proxy-net (backend-only)
+    if [[ -z "$PROJECT_DOMAIN" ]]; then
+        log_imp 7 "validate_net" "No domain configured — skipping proxy-net validation"
+        return 0
+    fi
+
+    log_imp 7 "validate_net" "Validating proxy-net in compose: ${compose_path}"
+
+    local resolved_content=""
+    local parse_ok=false
+
+    # Method 1: docker compose config (resolves anchors, aliases, extends)
+    if command -v docker &>/dev/null; then
+        local docker_result
+        docker_result="$(docker compose -f "$compose_path" config 2>/dev/null)" || true
+        if [[ -n "$docker_result" ]]; then
+            resolved_content="$docker_result"
+            parse_ok=true
+            log_imp 7 "validate_net" "Compose parsed via docker compose config"
+        fi
+    fi
+
+    # Method 2: python3 yaml fallback
+    if [[ "$parse_ok" == false ]] && command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+        resolved_content="$(python3 -c "
+import sys, yaml
+with open('${compose_path}') as f:
+    data = yaml.safe_load(f)
+if not data or not isinstance(data, dict):
+    sys.exit(1)
+import json
+print(json.dumps(data))
+" 2>/dev/null)" || true
+        if [[ -n "$resolved_content" ]]; then
+            parse_ok=true
+            log_imp 7 "validate_net" "Compose parsed via python3 yaml"
+        fi
+    fi
+
+    if [[ "$parse_ok" == false ]]; then
+        log_imp 8 "validate_net" "Cannot parse compose — neither docker nor python3+yaml available"
+        log_imp 8 "validate_net" "  WARN: skipping proxy-net validation (best-effort)"
+        return 0
+    fi
+
+    # Check for proxy-net in networks section
+    local has_proxy_net=false
+    local has_proxy_external=false
+    local services_on_proxy_net=0
+
+    # Use python3 for structured JSON/YAML analysis
+    local analysis
+    analysis="$(echo "$resolved_content" | python3 -c "
+import sys, json
+
+try:
+    data = json.load(sys.stdin)
+except (json.JSONDecodeError, Exception):
+    print('PARSE_ERROR')
+    sys.exit(0)
+
+networks = data.get('networks', {})
+if not isinstance(networks, dict):
+    print('NO_NETWORKS')
+    sys.exit(0)
+
+proxy_net = networks.get('proxy-net', {})
+if not isinstance(proxy_net, dict):
+    print('PROXY_NOT_MAP')
+    sys.exit(0)
+
+external = proxy_net.get('external', False)
+if isinstance(external, dict):
+    # external: true (docker compose config resolves to bool)
+    external = True
+has_external = bool(external)
+
+services = data.get('services', {})
+if not isinstance(services, dict):
+    services = {}
+
+svc_count = 0
+for svc_name, svc_config in services.items():
+    if not isinstance(svc_config, dict):
+        continue
+    svc_networks = svc_config.get('networks', {})
+    if isinstance(svc_networks, dict) and 'proxy-net' in svc_networks:
+        svc_count += 1
+    elif isinstance(svc_networks, list) and 'proxy-net' in svc_networks:
+        svc_count += 1
+
+print(f'HAS_PROXY_NET={has_external}')
+print(f'SVC_COUNT={svc_count}')
+" 2>/dev/null || echo "PARSE_ERROR")"
+
+    if [[ "$analysis" == "PARSE_ERROR" ]]; then
+        log_imp 8 "validate_net" "Could not analyze compose structure — skipping validation"
+        return 0
+    fi
+
+    # Parse analysis results
+    while IFS= read -r line; do
+        if [[ "$line" == "HAS_PROXY_NET=True" ]]; then
+            has_proxy_external=true
+        elif [[ "$line" =~ ^SVC_COUNT=([0-9]+)$ ]]; then
+            services_on_proxy_net="${BASH_REMATCH[1]}"
+        fi
+    done <<< "$analysis"
+
+    if [[ "$has_proxy_external" == false ]]; then
+        log_imp 10 "validate_net" "FAIL: compose does not declare networks.proxy-net with external:true"
+        log_imp 10 "validate_net" "  Add to ${compose_path}:"
+        log_imp 10 "validate_net" "    networks:"
+        log_imp 10 "validate_net" "      proxy-net:"
+        log_imp 10 "validate_net" "        name: proxy-net"
+        log_imp 10 "validate_net" "        external: true"
+        log_imp 10 "validate_net" "  And connect at least one service:"
+        log_imp 10 "validate_net" "    services:"
+        log_imp 10 "validate_net" "      <name>:"
+        log_imp 10 "validate_net" "        networks:"
+        log_imp 10 "validate_net" "          proxy-net:"
+        log_imp 10 "validate_net" "            aliases:"
+        log_imp 10 "validate_net" "              - <name>"
+        return 1
+    fi
+
+    if [[ "$services_on_proxy_net" -eq 0 ]]; then
+        log_imp 10 "validate_net" "FAIL: compose has proxy-net external but no service is connected to it"
+        log_imp 10 "validate_net" "  Connect at least one service to proxy-net with an alias"
+        return 1
+    fi
+
+    log_imp 9 "validate_net" "PASS: compose declares proxy-net (external) with ${services_on_proxy_net} service(s) connected"
+    return 0
+}
+# endregion FUNC_validate_compose_networks
+
+# ──────────────────────────────────────────────────────────────────
 # region FUNC_gen_env_platform
 ## @purpose  Generate .env.platform in the project directory via gen-env-platform.sh.
 ## @io       Calls gen-env-platform.sh --name <NAME> --domain <DOMAIN> --output <.env.platform>
@@ -733,13 +889,36 @@ main() {
     gen_project_agents
     changes+=("✔ Makefile/AGENTS.md ensured")
 
-    # ── Step 6: Register in node.yaml ──
-    log_imp 7 "-" "Step 6/7: Register in node.yaml (idempotent)"
+    # ── Step 6: Validate compose networks (proxy-net) ──
+    log_imp 7 "-" "Step 6/8: Validate compose proxy-net (M4 gate)"
+    local compose_validated=true
+    local compose_candidate=""
+    if [[ -f "${PROJECT_DIR}/compose.yaml" ]]; then
+        compose_candidate="${PROJECT_DIR}/compose.yaml"
+    elif [[ -f "${PROJECT_DIR}/docker-compose.yml" ]]; then
+        compose_candidate="${PROJECT_DIR}/docker-compose.yml"
+    fi
+
+    if [[ -n "$compose_candidate" ]]; then
+        if validate_compose_networks "$compose_candidate"; then
+            changes+=("✔ Compose proxy-net validated")
+        else
+            log_imp 8 "-" "  ⚠️  proxy-net validation FAILED — adopt continues, but fix before deploy"
+            changes+=("⚠️  Compose proxy-net VALIDATION FAILED — must fix before deploy")
+            compose_validated=false
+        fi
+    else
+        log_imp 6 "-" "No compose file found — skipping proxy-net validation"
+        changes+=("- No compose file — proxy-net validation skipped")
+    fi
+
+    # ── Step 7: Register in node.yaml ──
+    log_imp 7 "-" "Step 7/8: Register in node.yaml (idempotent)"
     register_in_node_yaml
     changes+=("✔ node.yaml registration checked")
 
-    # ── Step 7: Configure vhost ──
-    log_imp 7 "-" "Step 7/7: Configure nginx vhost"
+    # ── Step 8: Configure vhost ──
+    log_imp 7 "-" "Step 8/8: Configure nginx vhost"
     configure_vhost
     if [[ -n "$PROJECT_DOMAIN" ]]; then
         changes+=("✔ Vhost configured for: ${PROJECT_DOMAIN}")

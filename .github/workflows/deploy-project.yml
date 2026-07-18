@@ -80,7 +80,7 @@ jobs:
           [ -f .env.platform ] && FILES="$FILES .env.platform"
 
           echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
-          tar czf - $FILES | ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=no ci-deploy@${{ env.ssh_host }} "platform-deliver ${{ inputs.project_name }}"
+          tar czf - $FILES | ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new ci-deploy@${{ env.ssh_host }} "platform-deliver ${{ inputs.project_name }}"
           echo "[IMP:9][deliver] Delivery complete"
         shell: bash
 

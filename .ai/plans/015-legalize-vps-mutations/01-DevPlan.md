@@ -1,4 +1,4 @@
-<!-- GREP_SUMMARY: DevPlan, legalize-vps-mutations, converge, reconciler, deploy-project-B1, executable-bit-M1, audit-log-M2, projects-scaffold-M3, proxy-net-M4, etc-hosts-M5, repo-secrets-M6, known-hosts-M7, nginx-overlay-B5, context-promote-B4, ghcr-403-B2, org-secrets-B3, render-vhosts-S1, verify-vhosts-R6, generative-overlay -->
+<!-- GREP_SUMMARY: DevPlan, legalize-vps-mutations, converge, reconciler, deploy-project-B1, executable-bit-M1, audit-log-M2, projects-scaffold-M3, proxy-net-M4, etc-hosts-M5, repo-secrets-M6, known-hosts-M7, nginx-overlay-B5, context-promote-B4, ghcr-403-B2, org-secrets-B3, render-vhosts-S1, verify-vhosts-R6, generative-overlay, file-manifest, preimpl-verified -->
 <!-- STRUCTURE: ┌$ARTIFACT_CONTRACT┐ → ◇ реестр+root-cause → ◇ GAPS-резолюция → ◇ TRAP[DECISION] отвергнутые гипотезы → ◇ архитектура converge → ⊕ волны 1-4 (задачи+edge cases) → ◇ Code Graph XML → ◇ Data Flow → ◇ Acceptance Criteria → ⎋ File Manifest + OperatorChecklist + риски -->
 
 # $START_DEVPLAN
@@ -9,7 +9,7 @@
 - **RATIONALE:** Коллапс суперпозиции FULL (4 гипотезы) выполнен пользователем: выбрана D. Суперпозиция раскрыта повторно (2026-07-18, после уточнения масштаба: +1-2 контекста, +5-10 проектов за ~6 мес) — синтез D⊕B, коллапс точки интеграции также выполнен пользователем: S1. A/C отвергнуты, B поглощена синтезом, S2/S3 отвергнуты — см. TRAP[DECISION] §4. Root cause B1 и M1 подтверждены объективно до планирования (git-индекс 100644, поздняя инициализация DEPLOY_STATUS). GAPS закрыты ответами пользователя (§3).
 - **ACCEPTANCE_CRITERIA:** (1) `make gate MODE=fast` зелёный; (2) двойной запуск `make converge NODE=tronyx-vps` — второй прогон no-op; (3) негативные gate-тесты на M1–M5 проходят; (4) `docker compose up --force-recreate` проектов не роняет nginx; (5) deploy-result.json=success и exit 0 при отсутствующем notify-hook; (6) CI зелёный у платформы и обоих проектов (для B2/B3 допустим исход BLOCKED + OperatorChecklist).
 - **IMPLEMENTS:** Бриф «легализация ручных мутаций tronyx-vps + автоматизация first-deploy» (A1–A12); реестр проблем сессии 014 (B1–B5, M1–M7); .ai/plans/014-rebootstrap-tronyx-vps/01-StatusReport.md.
-- **IMPACTS:** ai-platform (core/internal/bootstrap/, core/internal/deploy/, core/entrypoints/, Makefile, entrypoint-manifest.yaml, root AGENTS.md, tests/gates/, .github/workflows/), node-configs (overlays/nginx/), tronyx-site (.github/workflows/), dance-site (docker-compose.yml).
+- **IMPACTS:** ai-platform (core/internal/bootstrap/, core/internal/deploy/, core/entrypoints/, Makefile, entrypoint-manifest.yaml, root AGENTS.md, tests/gates/, .github/workflows/), node-configs (overlays/nginx/), tronyx-site (.github/workflows/), dance-site (docker-compose.yml — verify-only по D2; удаление .github/workflows/deploy.yml.bak).
 - **REQUIRES:** Ответы пользователя на 9 вопросов (получены 2026-07-18); доступ QA к tronyx-vps через канонические таргеты; для B2/B3 — права org-админа TronyxLab (вне кода, OperatorChecklist).
 $END_ARTIFACT_CONTRACT
 
@@ -38,7 +38,7 @@ $END_DOCUMENT_PLAN
 
 | ID | Симптом | Подтверждённый root cause | Evidence |
 |----|---------|---------------------------|----------|
-| B1 | «Deploy SUCCESS» → «Deploy result: failed», exit 1 | `DEPLOY_STATUS="success"` присваивается только на deploy-project.sh:1010 — ПОСЛЕ `tag_current`→`prune_old_images`→`_trigger_deploy_hooks`→`audit_log`→`notify_hook` (строки 1000–1007). Любой сбой этих шагов под `set -e` убивает скрипт до присвоения → EXIT-trap `_finalize_deploy` (строка 84) пишет `failed`. Вероятный триггер — `audit_log` → permission denied на audit.log (= M2) либо неисполнимый notify-hook.sh (= M1: mode 100644 в git) | Чтение deploy-project.sh:998–1011; git ls-files -s |
+| B1 | «Deploy SUCCESS» → «Deploy result: failed», exit 1 | `DEPLOY_STATUS="success"` присваивается только на deploy-project.sh:1010 — ПОСЛЕ `tag_current`→`prune_old_images`→`_trigger_deploy_hooks`→`audit_log`→`notify_hook` (строки 1000–1007). Любой сбой этих шагов под `set -e` убивает скрипт до присвоения → EXIT-trap `_finalize_deploy` (строка 84) пишет `failed`. Кандидаты-триггеры: `tag_current` / `prune_old_images` / `_trigger_deploy_hooks` (:1000–1002). ⚠️ Опровергнуто верификацией (02-VerificationReport-preimpl D1): `audit_log()` нефатален (audit_logging.sh:46–56 — записи под `\|\| rc=$?`, fallback stderr, всегда возвращает 0), `notify_hook()` при mode 644 уходит в else-ветку с log_imp 6 (deploy-project.sh:169–174) — оба НЕ триггеры. Структурный root cause (позднее присвоение под set -e) валиден; фикс T3.1 покрывает все реальные кандидаты | Чтение deploy-project.sh:998–1011; git ls-files -s; verification 2026-07-18 |
 | M1 | rsync доставил deploy-project.sh с mode 644 | **33 tracked `.sh` имеют mode 100644 в git-индексе** (deploy-project.sh, notify-hook.sh, verify-domains.sh, весь core/internal/bootstrap/, cron-скрипты backup-cron, install.sh модулей). rsync `-a` честно сохраняет права источника — источник неправ. `core/lib/*.sh` — sourced-only, для них 644 допустимо | `git ls-files -s -- '*.sh' \| awk '$1=="100644"'` |
 | M2 | audit_logging.sh падает под ci-deploy | `_ensure_log_dir()` (core/lib/audit_logging.sh:17–27) создаёт dir 0750 root:adm, файл создаётся `>>` с umask-правами root (644) — ci-deploy не может писать. ci-deploy УЖЕ в группе adm (setup-node.sh:99) — достаточно mode 664 файла и g+w учёта | Чтение audit_logging.sh, setup-node.sh |
 | M3 | FATAL: project directory not found | `/opt/projects` создаётся step_6b (node-lifecycle.sh:352–362), но per-project каталоги — только в `handle_deliver`; deploy-verb (parse_ssh_command:426) требует каталог с compose ДО деплоя. Итерации по `node.yaml#projects` с mkdir нет нигде | Разведка node-lifecycle.sh, deploy-project.sh |
@@ -50,7 +50,7 @@ $END_DOCUMENT_PLAN
 | B4 | context-promote неработоспособен | GIT_MIRROR_TOKEN отсутствует в tronyx-vps.enc.yaml (56 ключей проверены) И context-promote.sh выполняется локально у оператора — node-секреты ему всё равно недоступны | Разведка enc-файла + context-promote.sh:35–70 |
 | B5 | deprecated `listen ... http2`; мёртвый conf.d/tronyx.ru.conf | nginx.conf overlay: 4 вхождения `listen 443 ssl http2` (строки 44,45,94,95); conf.d/tronyx.ru.conf не монтируется (монтируется только `overlays/nginx/` → `/etc/nginx/conf.d/overlay/`, подкаталог conf.d мёртв) | Разведка overlay |
 
-**Уточнение брифа (A5):** все три `templates/template-*/docker-compose.yml` УЖЕ объявляют `proxy-net (external)`. Реальная дыра — adopted-проекты (dance-site): adopt-project.sh осознанно не трогает compose (строка 164 exclude-список).
+**Уточнение брифа (A5):** все три `templates/template-*/docker-compose.yml` УЖЕ объявляют `proxy-net (external)`. Верификация 2026-07-18 (D2): `dance-site/docker-compose.yml` (:27, :44–45) И tronyx-site compose (:27, :44–45) ТОЖЕ уже содержат `proxy-net (external)` — «реальная дыра adopted-проектов» закрыта до начала реализации. Остаётся превентивный слой против регрессии: валидация в adopt-project.sh (T2.4) + gate-тест (T2.5); T2.3 переквалифицирован в verify-only.
 
 ---
 
@@ -66,12 +66,12 @@ FULL-режим, 4 гипотезы, ADVERSARIAL по лидерам A/B — с�
 |-----|---------|-----------------|
 | G1 (M2) | audit.log **664 root:adm** (группа platform НЕ создаётся) | T1.3 |
 | G2 (M3) | Каталог **+ stub-файлы** (ai-platform.yaml, пустой .env.platform) if-missing, как в брифе | T1.4; stub помечается marker-комментарием, deliver перезаписывает |
-| G3 (M1) | Решено evidence: чинить в git-индексе + defense-in-depth `--chmod` в rsync + R-PERMS в converge | T1.2, T1.8 |
+| G3 (M1) | Решено evidence: двухслойная защита — git-индекс (превентивно, T1.8) + R1 reconcile_perms в converge (лечебно, T1.2). rsync `--chmod` НЕ вводим — ломает семантику `-a` (см. §5.3, source of truth) | T1.2, T1.8 |
 | G4 (M7) | `ssh-keygen -R` **только в init**; update/deploy доверяют сохранённому ключу (honest TOFU) | T1.9 |
-| G5 (M5) | Удаление /etc/hosts-записей — **ручной runbook**; converge только ДЕТЕКТИРУЕТ дрейф (WARN) | T1.6, OperatorChecklist §10 |
+| G5 (M5) | Удаление /etc/hosts-записей — **ручной runbook**; converge только ДЕТЕКТИРУЕТ дрейф (WARN) | T1.6, OperatorChecklist §11 |
 | G6 (A9) | tronyx-site — **полная миграция на reusable** deploy-project.yml (как dance-site); platform-deploy.yml удаляется | T3.3 |
 | G8 (B4) | context-promote: **SSH push (git@github.com:<org>) с HTTPS+token fallback**; токен перестаёт быть обязательным | T3.4 |
-| G7+G12 (B3/M6) | Значения repo-secrets — из **SOPS enc-файла**, раскатка `gh secret set`; артефакт «OperatorChecklist» допустим в DoD | T3.6, §10 |
+| G7+G12 (B3/M6) | Значения repo-secrets — из **SOPS enc-файла**, раскатка `gh secret set`; артефакт «OperatorChecklist» допустим в DoD | T3.6, §11 |
 | G11 (QA) | QA-доступ к tronyx-vps **разрешён через канонические таргеты** (verify/healthcheck/node-update/converge, module restart-hard); ad-hoc SSH запрещён | Волна 4 |
 | G9 (B2) | Открыт частично: диагностика может закончиться BLOCKED — допустимо, фиксируется в OperatorChecklist | T3.5 |
 | G10 (A5) | Решено evidence: шаблоны уже ок; gate-тест распространяется на adopted-проекты + валидация в adopt-project.sh | T2.4, T2.5 |
@@ -149,7 +149,7 @@ make render-vhosts NODE=<n>
 ```
 
 Вызовы:
-1. `node-lifecycle.sh --mode init` — новый checkpoint-шаг `step_17_converge` (после deploy-modules, до финального audit).
+1. `node-lifecycle.sh --mode init` — новый checkpoint-шаг `step_15_converge` (после `step_14_node_update` :978, до audit :980 — свободный слот; имена step_16/step_17 УЖЕ заняты `step_16_audit_log` :568 и `step_17_telegram` :581 — коллизия D3 верификации).
 2. `node-lifecycle.sh --mode update` — новый update-шаг (каждый node-update конвергирует).
 3. Standalone `make converge NODE=<name>` — точечная реконсиляция без полного update.
 
@@ -178,7 +178,7 @@ make render-vhosts NODE=<n>
 ### Волна 1 — Reconciler + source-side фиксы (Кодер 1, ai-platform)
 
 **T1.1 — Каркас converge**
-- Создать `core/internal/bootstrap/converge.sh`: MODULE_CONTRACT, GREP_SUMMARY, STRUCTURE, argparse (`--node`, `--dry-run`, `--report-only`), main-диспетчер R1–R5, LDD-логи [IMP:7–10].
+- Создать `core/internal/bootstrap/converge.sh`: MODULE_CONTRACT, GREP_SUMMARY, STRUCTURE, argparse (`--node`, `--dry-run`, `--report-only`), main-диспетчер R1–R6, LDD-логи [IMP:7–10].
 - Создать `core/entrypoints/converge.sh` (thin wrapper: локальный exec или SSH-proxy через `remote-cmd.sh`, по образцу node-update.sh).
 - Makefile: таргет `converge`; entrypoint-manifest.yaml: секция lifecycle, op `converge`; root AGENTS.md: строка глоссария; core/AGENTS.md: строка канонических операций.
 - Edge cases: node.yaml отсутствует/невалидный YAML → FATAL exit 2 с [IMP:10] (не молчаливый skip); `--node` не задан локально → auto-detect как в bootstrap.sh:67; конкурентный запуск (converge поверх идущего node-update) → flock-лок `/var/lock/platform-converge.lock`, второй процесс — немедленный exit 3 «already running»; повторный запуск → все юниты SKIP (сценарий SCENARIO_IDEMPOTENT).
@@ -193,11 +193,12 @@ make render-vhosts NODE=<n>
 - Edge cases: audit.log — symlink (атака) → отказ + [IMP:10] FATAL юнита; файл >N ГБ → не трогать содержимое (ротация — logrotate, уже есть install_logrotate); ci-deploy вне группы adm (дрейф юзера) → R2 детектирует через `id -nG ci-deploy` и чинит `usermod -aG adm`; конкурентная запись audit_log из двух деплоев → append-only O_APPEND, безопасно.
 
 **T1.4 — R3 reconcile_projects (M3, G2)**
-- Функция `reconcile_projects()`: читает `node.yaml#projects` (переиспользовать паттерн inline-python из node-lifecycle.sh:529); для каждого `name`: `mkdir -p /opt/projects/<name>`, `chown ci-deploy:ci-deploy`, stub `ai-platform.yaml` (маркер `# GENERATED-STUB by converge — overwritten by CI deliver` + `project:`/`service:` = name) и пустой `.env.platform` (0640 ci-deploy) — **только if-missing**.
+- Функция `reconcile_projects()`: читает `node.yaml#projects` (переиспользовать паттерн inline-python из node-lifecycle.sh:531); для каждого `name`: `mkdir -p /opt/projects/<name>`, `chown ci-deploy:ci-deploy`, stub `ai-platform.yaml` (маркер `# GENERATED-STUB by converge — overwritten by CI deliver` + `project:`/`service:` = name) и пустой `.env.platform` (0640 ci-deploy) — **только if-missing**.
 - Edge cases: `projects: []` или секция отсутствует → SKIP (не ошибка); имя проекта с `/` или `..` → отвергнуть юнитом (переиспользовать семантику `_validate_project_name`), [IMP:10], юнит FAIL; существующий НЕ-stub ai-platform.yaml → НЕ трогать (идемпотентность + миграция существующих данных); существующий stub → не перезаписывать (no-op); каталог существует с чужим владельцем → chown только каталога, содержимое не рекурсивно (не сломать доставленный payload); частичный сбой (создан каталог, упал chown) → повторный запуск дочинивает — операции атомарны поэлементно, отката не требуется.
 
 **T1.5 — R4 reconcile_networks (M4)**
-- Функция `reconcile_networks()`: `docker network inspect proxy-net || docker network create` (переиспользовать `ensure_docker_network()` из deploy-modules.sh:75 — вынести в `core/lib/docker.sh`, чтобы не дублировать); для каждого запущенного project-контейнера из node.yaml#projects: если не подключён к proxy-net → WARN [IMP:9] (подключение — забота compose проекта, см. T2.4; авто-`network connect` создал бы дрейф compose-vs-runtime).
+- Функция `reconcile_networks()`: `docker network inspect proxy-net || docker network create` (переиспользовать `ensure_docker_network()` из deploy-modules.sh:85 — вынести в `core/lib/docker.sh`, чтобы не дублировать); для каждого запущенного project-контейнера из node.yaml#projects: если не подключён к proxy-net → WARN [IMP:9] (подключение — забота compose проекта, см. T2.4; авто-`network connect` создал бы дрейф compose-vs-runtime).
+- Семантика R4 — строго runtime-fallback (D7): primary-источник сетей — provisioner из `platform-env.yaml` (proxy-net :20, «the ONLY place where networks are defined»); TRAP[DECISION] 2026-07-17 в deploy-modules.sh:75 легализует ensure_docker_network именно как fallback. R4 НЕ претендует на роль источника истины — сохранить эту семантику в MODULE_CONTRACT converge.sh.
 - Edge cases: docker daemon недоступен → юнит FAIL exit-code 2, остальные юниты продолжают; proxy-net существует с другим driver → WARN, не пересоздавать (пересоздание = обрыв всех подключённых); конкурентный `docker network create` (гонка с deploy-modules) → inspect-after-fail паттерн.
 
 **T1.6 — R5 detect_hosts_drift (M5, G5 — только детекция)**
@@ -209,17 +210,17 @@ make render-vhosts NODE=<n>
 - Edge cases: nginx-контейнер не запущен → пропустить `nginx -t` с WARN (синтаксис уже проверен у оператора), остальные проверки выполнить; overlay-каталог пуст при `projects` с доменами → FAIL; проект без `domain` (backend-only) → SKIP этого проекта; legacy-conf без GENERATED-маркера в переходный период (до завершения T2.2) → WARN, после миграции → FAIL (переключение строгости — маркер завершения миграции в node-configs, напр. отсутствие legacy-файлов); конфиг-сирота `*.conf.bak`/не-conf файлы в overlay → игнор (nginx включает только *.conf).
 
 **T1.7 — Врезка в lifecycle**
-- `node-lifecycle.sh`: init — `checkpoint_step "converge" step_17_converge` (соблюсти TRAP[BUSINESS] node-lifecycle.sh:454 — порядок объявления = порядок main); update — вызов converge до healthchecks.
+- `node-lifecycle.sh`: init — `checkpoint_step "converge" step_15_converge` (свободный слот 15: step_16_audit_log и step_17_telegram уже существуют; соблюсти TRAP[BUSINESS] node-lifecycle.sh:454 — порядок объявления = порядок main); update — вызов converge до healthchecks.
 - Edge cases: DRY_RUN=1 bootstrap → converge в dry-run; сбой converge в init → bootstrap FAIL (init обязан сконвергировать); сбой в update → WARN + продолжение (update толерантен), но exit code node-update отражает degraded.
 
 **T1.8 — Санация git-индекса (M1, превентивный слой)**
-- `git update-index --chmod=+x` для всех 33 файлов ИЗ СПИСКА КРОМЕ `core/lib/*.sh` (11 lib-файлов остаются 644 — sourced-only политика §5.3). Итого ~22 файла.
+- `git update-index --chmod=+x` для всех 33 файлов ИЗ СПИСКА КРОМЕ `core/lib/*.sh` (10 lib-файлов остаются 644 — sourced-only политика §5.3). Итого 23 файла (числа уточнены верификацией D5; фильтр по пути — источник истины).
 - Новый gate-тест `tests/gates/test_gate_executable_bit.py`: читает `git ls-files -s -- '*.sh'`; RED если файл вне `core/lib/` имеет 100644 или файл в `core/lib/` имеет shebang и вызывается напрямую (cross-check с dead-code gate данными); негативный тест `_negative`: фикстура с симулированным 100644-списком → gate обязан упасть (R5 test honesty).
 - Edge cases: новый .sh добавлен без +x в будущем → gate ловит на CI (в этом смысл); Windows-checkout контрибьютора — mode в индексе, не в FS, стабильно.
 
 **T1.9 — known_hosts init-only (M7, G4)**
 - `scp-deliver.sh::prepare_ssh_opts()` — новый параметр `mode`; `ssh-keygen -R` выполняется ТОЛЬКО при `mode=init`; вызовы из bootstrap.sh передают init, из node-update/core-deploy — update. `StrictHostKeyChecking=accept-new` сохраняется везде.
-- Заменить `StrictHostKeyChecking=no` на `accept-new` в project-list.sh:295 и remove-project.sh:330,355 (унификация политики).
+- Заменить `StrictHostKeyChecking=no` на `accept-new` в project-list.sh:295, remove-project.sh:330,355 И `.github/workflows/deploy-project.yml:83` (deliver-канал CI; на эфемерном runner'е поведение идентично — known_hosts пуст, accept-new принимает ключ; политика унифицируется по всей базе — решение D4, 2026-07-18).
 - Обновить TRAP-блок в scp-deliver.sh (легализация решения G4).
 - Edge cases: переустановленная нода при mode=update → SSH упадёт с host key mismatch — это ЖЕЛАЕМОЕ поведение (сигнал оператору выполнить bootstrap init); отсутствующий known_hosts файл → accept-new создаёт; CI-runner (эфемерный) → known_hosts пуст, accept-new, не регрессия.
 
@@ -236,9 +237,9 @@ make render-vhosts NODE=<n>
 - Устаревший TRAP[DECISION] (nginx.conf:78–83 «Static IP proxy_pass — System nginx not in Docker») → ARCHIVED (Rev исполнен: nginx давно Docker-модуль на proxy-net), ссылка на TRAP S1 в §4.
 - Edge cases (миграция данных): у tronyx-site в node.yaml `domain: www.tronyx.ru`, а vhost обслуживает пару apex+www → шаблон обязан канонизировать domain→(apex, www-redirect) — зафиксировать правило нормализации в add-vhost.sh (иначе рендер по node.yaml сломает redirect-блок); rollback при инциденте: git revert в node-configs + `make node-update` (прежние конфиги в git-истории); переходный период: R6 в режиме WARN до удаления последнего legacy-файла (T1.6b); отказ внешней зависимости (docker недоступен локально для harness) → render FAIL до записи, не «рендер без валидации».
 
-**T2.3 — dance-site compose: proxy-net (M4/G10)**
-- `dance-site/docker-compose.yml`: добавить `networks: [dance-site-net, proxy-net]` сервису + `proxy-net: {external: true, name: proxy-net}` — по образцу template-frontend.
-- Проверить tronyx-site compose на тот же контракт (доставляется deliver-payload'ом).
+**T2.3 — dance-site/tronyx-site compose: proxy-net (M4/G10) — VERIFY-ONLY (переквалифицировано по верификации D2, 2026-07-18)**
+- 0 правок compose: `dance-site/docker-compose.yml` УЖЕ объявляет `proxy-net (external)` (:27, :44–45); tronyx-site compose — тоже (:27, :44–45). Верифицировать текущее состояние и зафиксировать в итоговом 03-VerificationReport.
+- Превентивный слой против будущей регрессии — T2.4 (валидация в adopt) + T2.5 (gate-тест); они сохраняют полную ценность.
 - Edge cases: контейнер уже запущен на старой сети → следующий deploy пересоздаст с новыми сетями (compose diff); external-сеть отсутствует на ноде → compose up FAIL — R4 converge гарантирует существование до деплоя.
 
 **T2.4 — adopt-project.sh: валидация proxy-net**
@@ -248,7 +249,7 @@ make render-vhosts NODE=<n>
 **T2.5 — Gate-тест сети проектов (M4)**
 - Расширить `tests/gates/test_gate_project_compose.py`: каждый шаблонный + adopted compose (фикстуры из templates/ и tests/test_data/) объявляет `proxy-net external`. Негативная фикстура `_negative`: compose без proxy-net → gate падает.
 
-**T2.6 — Runbook: очистка /etc/hosts (G5)** — секция OperatorChecklist §10, п.3: однократное удаление строк `172.18.0.5 tronyx-site` / `172.18.0.6 dance-site` ПОСЛЕ раскатки T2.1 (порядок критичен: сначала resolver-конфиг + node-update, потом очистка, иначе nginx с old-конфигом упадёт).
+**T2.6 — Runbook: очистка /etc/hosts (G5)** — секция OperatorChecklist §11, п.3: однократное удаление строк `172.18.0.5 tronyx-site` / `172.18.0.6 dance-site` ПОСЛЕ раскатки T2.1 (порядок критичен: сначала resolver-конфиг + node-update, потом очистка, иначе nginx с old-конфигом упадёт).
 
 ### Волна 3 — Deploy pipeline и CI (Кодер 1, ai-platform + tronyx-site)
 
@@ -275,6 +276,7 @@ make render-vhosts NODE=<n>
 **T3.5 — Диагностика B2 (ghcr 403 dance-site)**
 - Диагностический протокол (исполняет оператор/QA c правами org): сравнить `gh api /orgs/TronyxLab/packages?package_type=container` — привязка пакета dance-site к репо; проверить package settings → Manage Actions access; при отсутствии пакета — первый push с PAT (write:packages) и связка с репо.
 - Acceptance: либо зелёный push, либо BLOCKED с зафиксированной причиной в OperatorChecklist. Кода в репо не порождает (кроме возможного TRAP[DECISION] в dance-site deploy.yml по итогам).
+- Попутная чистка (D8): удалить мусорный `dance-site/.github/workflows/deploy.yml.bak` из workflows-каталога.
 
 **T3.6 — Диагностика B3 + раскатка repo-secrets (M6/A11/G7)**
 - Диагностика: минимальный тестовый workflow в приватном репо TronyxLab, читающий org-secret → подтвердить/опровергнуть ограничение GitHub Free.
@@ -289,10 +291,10 @@ make render-vhosts NODE=<n>
 - Q4.2 `make bootstrap-node NODE=tronyx-vps DRY_RUN=1` — план без мутаций, converge-шаг виден в плане.
 - Q4.3 `make converge NODE=tronyx-vps` дважды: первый — отчёт мутаций (легализация текущего дрейфа), второй — полный no-op (все юниты SKIP). Сохранить `--report-only` JSON до/после как evidence.
 - Q4.4 Негативные gate-тесты M1–M5 + R6: test_gate_executable_bit (M1), unit-тесты R2 прав audit.log (M2), R3 идемпотентность на tmp-фикстуре node.yaml (M3), test_gate_project_compose расширенный (M4), R5 детекция hosts-дрейфа на фикстуре (M5), R6 на фикстуре: удалённый vhost → FAIL, правленный (hash mismatch) → drift, сирота → WARN (AC12). Все — с LDD-трассировкой и негативными парами (Test Honesty R5).
-- Q4.5 Раскатка по порядку G13: ai-platform push (CI) → `make render-vhosts NODE=tronyx-vps` + commit node-configs (ревью diff: рукописные vhost → GENERATED) → `make node-update NODE=tronyx-vps` → OperatorChecklist п.3 (/etc/hosts) → project CI.
+- Q4.5 Раскатка по порядку G13: ai-platform push (CI) → `make render-vhosts NODE=tronyx-vps` + commit node-configs — авторитетное дерево: **`tronyx-lab/platform/node-configs/`** (путь `tronyx-lab/node-configs` — симлинк на него, единое working tree репо TronyxLab/AI-platform; уточнено по D6) — (ревью diff: рукописные vhost → GENERATED) → `make node-update NODE=tronyx-vps` → OperatorChecklist п.3 (/etc/hosts) → project CI.
 - Q4.6 Финал SCENARIO_RECREATE: `restart-hard` проектных контейнеров (module-level canonical verb) → `make verify NODE=tronyx-vps` + `make healthcheck NODE=tronyx-vps`: nginx НЕ падает, домены отвечают (отказ от /etc/hosts подтверждён).
 - Q4.7 SCENARIO_B1_NEGATIVE на реальном деплое: `make deploy PROJECT=tronyx-site` → CI зелёный, deploy-result.json=success, exit 0.
-- Вердикт по единой шкале (SUCCESS/PARTIAL/FAIL/BLOCKED) в `02-VerificationReport.md`.
+- Вердикт по канонической QA-шкале (STABLE/DRIFTED/DEGRADED/BROKEN/BLOCKED) в `03-VerificationReport.md` (02 занят preimpl-отчётом).
 
 ---
 
@@ -302,7 +304,7 @@ make render-vhosts NODE=<n>
 1. Оператор: make bootstrap-node NODE=tronyx-vps        (bare-metal init)
    ├─ scp-deliver: prepare_ssh_opts(mode=init) → ssh-keygen -R + accept-new   [M7 закрыт]
    ├─ rsync -a core/ → права из git-индекса УЖЕ 755                            [M1 превентивно]
-   └─ node-lifecycle init: ... → step_17_converge
+   └─ node-lifecycle init: ... → step_15_converge
         ├─ R1: chmod-дочинка (0 файлов — уже 755) → SKIP
         ├─ R2: /var/log/platform 0750 root:adm; audit.log 0664 root:adm        [M2 закрыт]
         ├─ R3: /opt/projects/{tronyx-site,dance-site}/ + stub-файлы, ci-deploy [M3 закрыт]
@@ -329,7 +331,7 @@ make render-vhosts NODE=<n>
 <CodeGraph plan="015-legalize-vps-mutations">
   <Entity name="converge_sh" TYPE="SCRIPT" path="core/internal/bootstrap/converge.sh">
     <keywords>reconciler, desired-state, idempotent, node-yaml, drift</keywords>
-    <annotation>Реконсилер R1-R5; вызывается из node-lifecycle (init/update) и entrypoint</annotation>
+    <annotation>Реконсилер R1-R6; вызывается из node-lifecycle (init/update) и entrypoint</annotation>
     <CrossLinks>node_lifecycle_sh, docker_lib_sh, audit_logging_sh, entrypoint_converge_sh</CrossLinks>
     <Func name="reconcile_perms_FUNC"/>
     <Func name="reconcile_audit_log_FUNC"/>
@@ -403,25 +405,60 @@ make render-vhosts NODE=<n>
 | AC11 | `make render-vhosts NODE=tronyx-vps` детерминирован: повторный рендер без изменений node.yaml → пустой git-diff | T2.1 |
 | AC12 | R6: удалённый/вручную правленный vhost на фикстуре → converge FAIL/WARN по §5.4; негативная пара теста присутствует | T1.6b + Q4.4 |
 
-## §10. OperatorChecklist (ручные операции вне кода — допущены решением G7+G12)
+## §10. File Manifest (файл × волна × операция)
 
-1. **[B3-диагностика]** Прогнать тестовый workflow чтения org-secret в приватном репо TronyxLab; зафиксировать результат в 02-VerificationReport.
+| Репо | Файл | Волна | Операция | Задачи |
+|------|------|-------|----------|--------|
+| ai-platform | `core/internal/bootstrap/converge.sh` | 1 | create | T1.1–T1.6b |
+| ai-platform | `core/entrypoints/converge.sh` | 1 | create | T1.1 |
+| ai-platform | `Makefile` | 1,2,3 | modify | T1.1 (converge), T2.1 (render-vhosts), T3.6 (project-sync-secrets) |
+| ai-platform | `core/entrypoint-manifest.yaml` | 1,2,3 | modify | T1.1 (lifecycle), T2.1 (scaffold), T3.6 (scaffold) |
+| ai-platform | `AGENTS.md` (root) | 1,2,3 | modify | глоссарий: converge, render-vhosts, project-sync-secrets; итог B3 (T3.6) |
+| ai-platform | `core/AGENTS.md` | 1,2 | modify | T1.1, T2.1 (каталог операций) |
+| ai-platform | `core/lib/docker.sh` | 1 | create | T1.5 (вынос ensure_docker_network) |
+| ai-platform | `core/internal/deploy/deploy-modules.sh` | 1 | modify | T1.5 (source core/lib/docker.sh) |
+| ai-platform | `core/lib/audit_logging.sh` | 1 | modify | T1.3 (_ensure_log_dir 0664) |
+| ai-platform | `core/internal/bootstrap/node-lifecycle.sh` | 1 | modify | T1.7 (step_15_converge + update-шаг) |
+| ai-platform | git-индекс: 23 × `*.sh` вне core/lib/ | 1 | chmod 100755 | T1.8 |
+| ai-platform | `tests/gates/test_gate_executable_bit.py` | 1 | create | T1.8 |
+| ai-platform | `core/internal/bootstrap/scp-deliver.sh` | 1 | modify | T1.9 (prepare_ssh_opts mode) |
+| ai-platform | `core/internal/scaffold/project-list.sh` | 1 | modify | T1.9 (:295 accept-new) |
+| ai-platform | `core/internal/scaffold/remove-project.sh` | 1 | modify | T1.9 (:330, :355 accept-new) |
+| ai-platform | `.github/workflows/deploy-project.yml` | 1,3 | modify | T1.9 (:83 accept-new — D4), T3.3 (валидация NODE_HOST_MAP) |
+| ai-platform | `core/internal/scaffold/add-vhost.sh` | 2 | modify | T2.1 (шаблон §5.4 + --render-all) |
+| ai-platform | `core/entrypoints/scaffold.sh` | 2 | modify | T2.1 (субкоманда render-vhosts) |
+| ai-platform | `core/internal/scaffold/adopt-project.sh` | 2 | modify | T2.4 (validate_compose_networks) |
+| ai-platform | `tests/gates/test_gate_project_compose.py` | 2 | modify | T2.5 (+ негативная фикстура) |
+| ai-platform | `core/internal/deploy/deploy-project.sh` | 3 | modify | T3.1 (финализация B1) |
+| ai-platform | `tests/test_deploy_finalization.py` | 3 | create | T3.2 |
+| ai-platform | `core/entrypoints/context-promote.sh` | 3 | modify | T3.4 (SSH push + fallback) |
+| ai-platform | `core/internal/scaffold/sync-repo-secrets.sh` | 3 | create (условно, по итогам B3) | T3.6 |
+| node-configs (`tronyx-lab/platform/node-configs/`) | `tronyx-vps/overlays/nginx/*.conf` | 2 | regenerate (GENERATED) | T2.2 |
+| node-configs | `tronyx-vps/overlays/nginx/conf.d/` | 2 | delete (мёртвый каталог) | T2.2 |
+| tronyx-site | `.github/workflows/deploy.yml` | 3 | rewrite (reusable) | T3.3 |
+| tronyx-site | `.github/workflows/platform-deploy.yml` | 3 | delete | T3.3 |
+| dance-site | `docker-compose.yml` | 2 | verify-only (0 правок — D2) | T2.3 |
+| dance-site | `.github/workflows/deploy.yml.bak` | 3 | delete (D8) | T3.5 |
+
+## §11. OperatorChecklist (ручные операции вне кода — допущены решением G7+G12)
+
+1. **[B3-диагностика]** Прогнать тестовый workflow чтения org-secret в приватном репо TronyxLab; зафиксировать результат в 03-VerificationReport.
 2. **[B2]** GitHub UI/`gh api`: проверить привязку пакета `ghcr.io/tronyxlab/dance-site` к репо; при отсутствии — первый push с PAT write:packages, связать с репо; при недостатке прав — BLOCKED.
 3. **[M5-миграция]** ПОСЛЕ node-update с GENERATED vhost-конфигами (T2.1/T2.2): удалить из /etc/hosts на tronyx-vps строки `tronyx-site` и `dance-site`; затем Q4.6. Единственная разовая ручная операция — легализована решением G5 как runbook.
 4. **[NODE_HOST_MAP]** Убедиться, что org-variable `NODE_HOST_MAP={"tronyx-vps":"103.88.243.151"}` существует в TronyxLab (бриф утверждает — создана; верифицировать).
 5. **[gh auth]** `gh auth login` с правами repo+secrets для project-sync-secrets (T3.6).
 
-## §11. Открытые риски
+## §12. Открытые риски
 
 | Риск | Митигация |
 |------|-----------|
-| R1: converge — новый глагол; гейты manifest-integrity/thin-wrapper/dead-code/name-linter упадут при рассинхроне регистрации | T1.1 включает ВСЕ точки регистрации атомарно; gate MODE=fast до push |
-| R2: B2/B3 зависят от прав в GitHub UI — DoD «оба CI зелёные» может застрять в BLOCKED | Явно допущено (G9/G12): BLOCKED + OperatorChecklist = валидный частичный исход |
-| R3: раскатка nginx-конфига и очистка /etc/hosts чувствительны к порядку — обратный порядок уронит прод-ingress | Жёсткий порядок в Q4.5/§10.3; resolver-конфиг обратно-совместим с наличием hosts-записей |
-| R4: stub ai-platform.yaml (G2) может замаскировать неполный deliver-payload | Stub с маркером GENERATED-STUB; deploy-verb использует `service:` из stub = имя проекта — совпадает с конвенцией; deliver перезаписывает |
-| R5: 4 репозитория, gate только в ai-platform — node-configs/проекты меняются без CI-сети безопасности | nginx -t локально (T2.1); compose config валидация (T2.3); порядок G13 |
-| R6: sync-repo-secrets работает с расшифрованными секретами | stdin-only передача, значения не логируются (Конституция §2), tmp-файлы не создаются |
-| R7: баг vhost-шаблона затрагивает все домены разом (цена генеративности, главный контраргумент B) | Тройной барьер S1: git-ревью diff в node-configs → локальный nginx -t harness до push → R6 nginx -t на ноде до reload; работающий nginx не применяет битый конфиг (reload-валидация); откат = git revert + node-update |
-| R8: рассинхрон «шаблон обновлён, vhost не перерендерены» (новый класс дрейфа, порождаемый S1) | R6 сверяет content-hash тела с ожидаемым от текущего шаблона; render-vhosts в чеклист релиза при изменении add-vhost.sh |
+| RISK-1: converge — новый глагол; гейты manifest-integrity/thin-wrapper/dead-code/name-linter упадут при рассинхроне регистрации | T1.1 включает ВСЕ точки регистрации атомарно; gate MODE=fast до push |
+| RISK-2: B2/B3 зависят от прав в GitHub UI — DoD «оба CI зелёные» может застрять в BLOCKED | Явно допущено (G9/G12): BLOCKED + OperatorChecklist = валидный частичный исход |
+| RISK-3: раскатка nginx-конфига и очистка /etc/hosts чувствительны к порядку — обратный порядок уронит прод-ingress | Жёсткий порядок в Q4.5/§11.3; resolver-конфиг обратно-совместим с наличием hosts-записей |
+| RISK-4: stub ai-platform.yaml (G2) может замаскировать неполный deliver-payload | Stub с маркером GENERATED-STUB; deploy-verb использует `service:` из stub = имя проекта — совпадает с конвенцией; deliver перезаписывает |
+| RISK-5: 4 репозитория, gate только в ai-platform — node-configs/проекты меняются без CI-сети безопасности | nginx -t локально (T2.1); compose config валидация (T2.4); порядок G13 |
+| RISK-6: sync-repo-secrets работает с расшифрованными секретами | stdin-only передача, значения не логируются (Конституция §2), tmp-файлы не создаются |
+| RISK-7: баг vhost-шаблона затрагивает все домены разом (цена генеративности, главный контраргумент B) | Тройной барьер S1: git-ревью diff в node-configs → локальный nginx -t harness до push → R6 nginx -t на ноде до reload; работающий nginx не применяет битый конфиг (reload-валидация); откат = git revert + node-update |
+| RISK-8: рассинхрон «шаблон обновлён, vhost не перерендерены» (новый класс дрейфа, порождаемый S1) | R6 сверяет content-hash тела с ожидаемым от текущего шаблона; render-vhosts в чеклист релиза при изменении add-vhost.sh |
 
 # $END_DEVPLAN

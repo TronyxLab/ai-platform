@@ -327,7 +327,7 @@ ssh_compose_down() {
         log_imp 6 "-" "  Attempting SSH as: ${ssh_target}"
 
         # Test SSH connection with timeout
-        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
+        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
             "$ssh_target" "echo OK" 2>/dev/null | grep -q "OK"; then
             ssh_user="$try_user"
             ssh_ok=true
@@ -352,7 +352,7 @@ ssh_compose_down() {
 
     # Run docker compose down — WITHOUT -v per O7/DD10
     local ssh_output
-    ssh_output="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
+    ssh_output="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
         "$ssh_target" \
         "cd /opt/projects/${project} 2>/dev/null && docker compose down --timeout 30 2>&1 || docker compose -p ${project} down --timeout 30 2>&1" 2>&1)" || {
         local rc=$?

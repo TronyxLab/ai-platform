@@ -292,7 +292,7 @@ get_status_via_ssh() {
         fi
 
         log_imp 6 "-" "  Trying SSH as: ${try_target}"
-        if ssh_output="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
+        if ssh_output="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
             "$try_target" \
             "cd /opt/projects/${project} 2>/dev/null && docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>&1 || docker compose -p ${project} ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>&1" 2>&1)"; then
             ssh_target="$try_target"

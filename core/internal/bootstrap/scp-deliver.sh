@@ -53,21 +53,33 @@ fi
 # SSH: Clean host key + build opts
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_prepare_ssh_opts
-## @purpose  Remove old SSH host key (server recreation) and populate SSH_OPTS array
+## @purpose  Populate SSH_OPTS array. Conditionally remove old SSH host key.
 ## @param $1  SSH host (IP or domain)
+## @param $2  mode — "init" (bootstrap, removes old key) or "update" (preserve known_hosts)
 ## @globals  SSH_OPTS — array of -o flags for ssh
 ## @complexity O(1)
 ## @invariants
-##   - ssh-keygen -R is always run first (may fail if host not in known_hosts)
+##   - ssh-keygen -R only runs when mode=init (honest TOFU for update/deploy)
 ##   - StrictHostKeyChecking=accept-new allows new host keys without manual prompt
 ##   - ConnectTimeout=30 avoids hanging on unreachable hosts
 ##   - ServerAliveInterval=30 + ServerAliveCountMax=10 for long-running SSH sessions
+## ⚠️ TRAP[DECISION] · 2026-07-18 · HI · M7/G4: known_hosts init-only
+## · Rejected: ssh-keygen -R at every deploy (MITM protection defeated)
+## · Reason: per G4 resolution, ssh-keygen -R only in init mode. Update/deploy
+##   trust the saved key (honest TOFU). This is the user-chosen security trade-off.
+## · Rev: if reinstall-detection is needed in CI, add a separate mechanism
 prepare_ssh_opts() {
     local ssh_host="$1"
+    local mode="${2:-init}"
 
-    # Remove old host key to gracefully handle server recreation
-    echo "[IMP:8][bootstrap][ssh] Cleaning SSH host key for ${ssh_host} (server recreation safe)"
-    ssh-keygen -R "${ssh_host}" 2>/dev/null || true
+    # Remove old host key ONLY in init mode (bootstrap)
+    # In update/deploy mode, preserve known_hosts for honest TOFU
+    if [[ "${mode}" == "init" ]]; then
+        echo "[IMP:8][bootstrap][ssh] Cleaning SSH host key for ${ssh_host} (mode=init)"
+        ssh-keygen -R "${ssh_host}" 2>/dev/null || true
+    else
+        echo "[IMP:8][bootstrap][ssh] Preserving known_hosts for ${ssh_host} (mode=${mode})"
+    fi
 
     # Populate global SSH_OPTS array
     SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=10)

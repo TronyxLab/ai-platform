@@ -96,7 +96,7 @@ ssl-provision.sh
 
 ### ## @rationale DD2: Извлечение (extract), а не source из nginx/install.sh
 **Q:** Почему не сделать `source core/modules/nginx/install.sh` и вызвать готовые функции?
-**A:** 
+**A:**
 - `install.sh` завязан на systemctl, nginx apt-пакеты, и system-nginx конфигурацию — source притащит десятки нерелевантных функций и констант
 - Cross-layer violation: internal/bootstrap не должен зависеть от modules/
 - `install.sh` — depreciруемый код (TRAP[DEBT] от 2026-07-16), source создаст обратную зависимость

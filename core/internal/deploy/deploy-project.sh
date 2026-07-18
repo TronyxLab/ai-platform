@@ -14,12 +14,16 @@
 ##   - Хуки `on_project_remove` идемпотентны и неразрушающи (K2)
 ##   - previous_image_id saved BEFORE pull; if absent → first deploy (no rollback possible, escalate 🔴)
 ##   - atomic docker compose up -d <service>; healthcheck poll ≤60s (start_period + interval * retries)
-##   - healthy: tag :current → notify-hook(🚀 ✅) → audit_log(SUCCESS) → exit 0
+##   - healthy (B1): DEPLOY_STATUS=success сразу после health-gate → trap - ERR
+##   - Finalization non-fatal: tag/prune/hooks/audit/notify — ни один НЕ роняет success (B1)
 ##   - failed/timeout: re-tag previous_image_id → compose up -d --force-recreate → audit_log(ROLLBACK) → notify-hook(🚀 ⚠️) → exit 1
 ##   - N=3 images kept; older pruned after successful deploy
 ##   - every invocation writes to /var/log/platform/audit.log (00-foundation §13)
 ##   - no shell, no interactive input, no arbitrary commands (SSH restrict enforces this)
 ##   - GHCR registry auth configured centrally via SOPS/bootstrap on VPS (04 §10); no per-repo --ghcr-token
+##   - B1 root cause: DEPLOY_STATUS="success" was set AFTER non-fatal steps under set -e → any failure killed script before assignment → exit 1 with "failed"
+##   - ERR trap removed AFTER health-gate; non-fatal zone cannot trigger rollback
+##   - Double EXIT-trap: bash guarantees single execution
 ## @rationale
 ##   ⚠️ TRAP[DECISION] Rollback on-node, not in CI/CD — eliminates network roundtrip, keeps CI/CD thin (04 §7).
 ##   Rejected: CI/CD-driven rollback (re-deploy previous image via GitHub Actions).
@@ -30,10 +34,23 @@
 ##   ci-deploy in docker group → no sudo for docker commands (principle of least privilege, 06 §4.2).
 ## @changes 2026-07-17 · T6 — Added verb contract K1 (--remove, --status), _trigger_remove_hooks(), TRAP[BUSINESS]
 ##           2026-07-17 · T2 — Added verb platform-deliver (handle_deliver, _validate_project_name), TRAP[DECISION]
+##           2026-07-18 · T3.1/B1 — DEPLOY_STATUS=success сразу после health-gate; trap - ERR; нефатальная финализация; TRAP[BUG] B1
 # endregion MODULE_CONTRACT
 
+# ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Deploy reports 'failed' despite success (B1)
+# · Symptom: Deploy SUCCESS in logs, but deploy-result.json=status:"failed" and exit 1
+# · Root: DEPLOY_STATUS="success" was assigned at LINE 1010 (OLD) — AFTER tag_current (L1000),
+#   prune_old_images (L1001), _trigger_deploy_hooks (L1002), audit_log (L1004–1005), notify_hook (L1006–1007).
+#   Under `set -e`, any failure of these non-fatal steps killed the script BEFORE DEPLOY_STATUS
+#   assignment → EXIT-trap `_finalize_deploy` wrote "failed" → exit 1.
+#   Pre-verification (02-VerificationReport-preimpl D1) proved audit_log() and notify_hook()
+#   were already safe (always return 0), but tag_current/prune/hooks remained vulnerable.
+# · Fix: DEPLOY_STATUS="success" assigned IMMEDIATELY after poll_until_healthy (before any non-fatal steps);
+#   trap - ERR after health-gate; non-fatal steps wrapped with `|| log_imp` guards.
+# · Prevention: Any code added after health-gate in main() must be guarded (|| true pattern).
+
 set -euo pipefail
-shopt -s lastpipe
+shopt -s lastpipe 2>/dev/null || true  # macOS bash 3.2: lastpipe not available — non-fatal
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CORE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -997,17 +1014,24 @@ main() {
     if poll_until_healthy "${SERVICE_NAME}" "_check_deploy_health" "$MAX_WAIT_SEC" 2; then
         log_imp 9 "main" "Deploy SUCCESS: ${SERVICE_NAME} → ${REF}"
 
-        tag_current
-        prune_old_images
-        _trigger_deploy_hooks
+        # ═══════════════════════════════════════════════════════════════
+        # B1 fix: DEPLOY_STATUS and trap - ERR сразу после health-gate.
+        # Все шаги ниже — нефатальная housekeeping: ни один не должен
+        # ронять success (см. TRAP[BUG] B1 в MODULE_CONTRACT).
+        # ═══════════════════════════════════════════════════════════════
+        DEPLOY_STATUS="success"
+        trap - ERR
+
+        tag_current || log_imp 8 "main" "tag_current skipped (non-fatal)"
+        prune_old_images || log_imp 8 "main" "prune skipped (non-fatal)"
+        _trigger_deploy_hooks || log_imp 8 "main" "hooks skipped (non-fatal)"
 
         audit_log "platform-deploy:${PROJECT}" "DONE" \
-            "Deploy success: ${SERVICE_NAME} → ${REF} (prev=${PREVIOUS_IMAGE_ID:-none})"
+            "Deploy success: ${SERVICE_NAME} → ${REF} (prev=${PREVIOUS_IMAGE_ID:-none})" || log_imp 6 "main" "audit unavailable"
         notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён ✅
 ${PROJECT}/${SERVICE_NAME} → ${REF}"
 
         log_imp 9 "main" "=== platform-deploy DONE (success) ==="
-        DEPLOY_STATUS="success"
         exit 0
     else
         log_imp 10 "main" "Healthcheck FAILED for ${SERVICE_NAME}:${REF}"
@@ -1016,6 +1040,8 @@ ${PROJECT}/${SERVICE_NAME} → ${REF}"
             handle_first_deploy
         fi
 
+        # B1 fix: set DEPLOY_STATUS before notify_hook inside perform_rollback
+        DEPLOY_STATUS="degraded"
         perform_rollback
         exit 1
     fi

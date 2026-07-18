@@ -1,8 +1,8 @@
 # 01-StatusReport.md — Wave 2 Node Update (tronyx-vps)
 # $STATUS: ARCHIVED
 
-**Date:** 2026-07-17T13:06+03:00  
-**Node:** tronyx-vps (103.88.243.151)  
+**Date:** 2026-07-17T13:06+03:00
+**Node:** tronyx-vps (103.88.243.151)
 **Platform:** /opt/platform (Ubuntu 24.04, Docker 29.6.2)
 
 ---

@@ -70,7 +70,7 @@
 - **Где:** `tronyx-lab/platform` ↔ `TronyxLab/ai-platform` ↔ mirror.yml
 - **Проблема:** Контекстный оверлей (`~/projects/tronyx-lab/platform`) использует origin remote `https://github.com/TronyxLab/AI-platform.git` — тот же репозиторий, куда mirror.yml из source пушит source main. Следующий push из source (после `make context-promote`) будет не-fast-forward и либо перезатрёт контекстные изменения, либо упадёт с ошибкой.
 - **Обоснование:** AGENTS.md декларирует модель «TronyxLab/ai-platform (read-only)», но контекстный оверлей пишет в этот же репозиторий. Нужен отдельный репозиторий для контекстного оверлея (например, `tronyx-lab/platform`), а mirror.yml должен пушить в TronyxLab/ai-platform (read-only mirror без overlay-коммитов).
-- **Рекомендация:** 
+- **Рекомендация:**
   1. Создать отдельный репозиторий `tronyx-lab/platform` на GitHub
   2. Перенести туда context-specific коммиты
   3. Обновить origin remote в `~/projects/tronyx-lab/platform`

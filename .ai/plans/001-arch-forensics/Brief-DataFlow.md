@@ -93,13 +93,13 @@ def _collect_path_variables() -> dict[str, str]:
     """Parse core/lib/paths.sh and extract all VAR=value assignments."""
     paths_file = PROJECT_ROOT / "core" / "lib" / "paths.sh"
     variables: dict[str, str] = {}
-    
+
     for line in paths_file.read_text().splitlines():
         # PATHS_CORE_DIR="${PATHS_LIB_DIR}/.."
         if match := re.match(r'^(\w+)=["\']?(.+?)["\']?\s*(?:#.*)?$', line):
             name, value = match.groups()
             variables[name] = value
-    
+
     return variables
 
 _KNOWN_PATH_VARIABLES = _collect_path_variables()
@@ -109,17 +109,17 @@ _KNOWN_PATH_VARIABLES = _collect_path_variables()
 ```python
 def _looks_like_path(text: str) -> bool:
     t = text.strip().strip("'\"")
-    
+
     # Existing checks
     has_separator = "/" in t
     has_var_prefix = t.startswith("${") and "/" in t
     has_relative = t.startswith("..")
     has_absolute = t.startswith("/") and t != "/"
-    
+
     # NEW: bare variable reference — potentially a path
     # We'll resolve it later in resolve_import
     is_variable = t.startswith("$") and not t.startswith("${") and t not in _NON_IMPORT_ARGS
-    
+
     return has_separator or has_var_prefix or has_relative or has_absolute or is_variable
 ```
 
@@ -131,14 +131,14 @@ def resolve_import(source_file: Path, import_path: str, source_layer: str) -> Pa
     for var_name, var_value in _KNOWN_PATH_VARIABLES.items():
         resolved = resolved.replace(f"${{{var_name}}}", var_value)
         resolved = resolved.replace(f"${var_name}", var_value)
-    
+
     # Step 2: if still a bare variable, try to trace its assignment in the current file
     if resolved.startswith("$") and "/" not in resolved:
         var_name = resolved.lstrip("$").strip("{}")
         traced = _trace_variable_assignment(source_file, var_name)
         if traced:
             resolved = traced
-    
+
     # Continue with existing resolution logic...
 ```
 

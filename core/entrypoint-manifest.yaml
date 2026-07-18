@@ -129,6 +129,14 @@ scaffold:
     mechanism: shell-script
     delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status
     description: "Query live status of project(s) on target node via SSH"
+  - make_target: render-vhosts
+    mechanism: shell-script
+    delegates_to: core/internal/scaffold/add-vhost.sh --render-all --node <n>
+    description: "Regenerate Nginx vhost configs from node.yaml#projects with domain (GENERATED, S1)"
+  - make_target: project-sync-secrets
+    mechanism: shell-script
+    delegates_to: core/internal/scaffold/sync-repo-secrets.sh
+    description: "Sync project repo-secrets from SOPS enc-file via gh CLI"
 
 secrets:
   - make_target: secrets-unlock
@@ -147,6 +155,10 @@ test/gate:
     description: "Blocking pre-push gate that runs make gate MODE=fast"
 
 lifecycle:
+  - make_target: converge
+    mechanism: ssh+script
+    delegates_to: core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh
+    description: "Idempotent reconcile — конвергирует ноду с desired state из node.yaml; standalone или из node-lifecycle"
   - make_target: healthcheck
     mechanism: shell-script
     delegates_to: core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh
@@ -481,4 +493,7 @@ allowed_verbs:
   - down
   - restart
   - status
+  - converge
+  - render-vhosts
+  - project-sync-secrets
   - node-update

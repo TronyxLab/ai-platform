@@ -103,6 +103,9 @@
 | ✅ | `backup` / `restore` | Резервное копирование. Root = оркестрация стека, module = один модуль |
 | ✅ | `healthcheck` | Проверка здоровья |
 | ✅ | `node-update` | Регулярный update ноды (make node-update → provision + deploy-modules + healthcheck) |
+| ✅ | `converge` | Idempotent reconcile — конвергирует ноду с desired state из node.yaml (make converge NODE=&lt;name&gt;) |
+| ✅ | `render-vhosts` | Генерация nginx vhost конфигов из node.yaml (make render-vhosts NODE=&lt;name&gt;) |
+| ✅ | `project-sync-secrets` | Раскатка repo-secrets из SOPS enc-файла через gh CLI (make project-sync-secrets NAME=&lt;name&gt;) |
 | ✅ | `up` | Root = оркестрация стека, module = один модуль (compose up) |
 | ✅ | `down` | Root = оркестрация стека, module = алиас `stop` (discoverability) |
 | ✅ | `restart` | Soft restart (stop + start). Root = оркестрация стека, module = один модуль |

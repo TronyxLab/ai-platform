@@ -245,8 +245,8 @@ execute_remote_update() {
 
     echo "[IMP:9][node-update][remote] SSH host: ${ssh_host} — REMOTE update via SSH" >&2
 
-    # ── Prepare SSH opts ───────────────────────────────────────────
-    prepare_ssh_opts "${ssh_host}"
+    # ── Prepare SSH opts (mode=update — preserve known_hosts, honest TOFU) ──
+    prepare_ssh_opts "${ssh_host}" "update"
 
     # ── Build remote command ───────────────────────────────────────
     local remote_cmd
@@ -273,3 +273,120 @@ execute_remote_update() {
     exec ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" "${remote_cmd}"
 }
 # endregion FUNC_execute_remote_update
+
+# ═══════════════════════════════════════════════════════════════════
+# BUILD REMOTE SSH COMMAND — CONVERGE MODE
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_build_converge_ssh_cmd
+## @purpose  Build the remote converge.sh SSH command with proper shell-safe quoting.
+##           Calls converge.sh directly (not through node-lifecycle.sh dispatch).
+## @param $1  Node name
+## @param @2+  Passthrough args (--dry-run, --report-only, etc.)
+## @stdout   eval-safe remote command string
+## @complexity O(1) — string concatenation with printf %q
+## @rationale Converge mode is a standalone command — no mode dispatch needed.
+##            No AGE key handling (converge R-units don't decrypt secrets).
+##            Follows same printf %q quoting pattern as build_ssh_cmd / build_update_ssh_cmd.
+## @invariants
+##   - Each argument is independently quoted with printf '%q'
+##   - Remote converge.sh path = /opt/platform/core/internal/bootstrap/converge.sh
+##   - No --mode flag (converge.sh uses its own --node / --dry-run / --report-only args)
+##   - No --resume (converge R-units are independent, idempotent by design)
+##   - No AGE_SECRET_KEY export (converge does not need secrets)
+build_converge_ssh_cmd() {
+    local node_name="$1"
+    shift 1
+    local passthrough_args=("$@")
+
+    local remote_converge="${PLATFORM_ROOT:-/opt/platform}/core/internal/bootstrap/converge.sh"
+
+    local cmd="set -euo pipefail"
+    cmd+=" && bash $(printf '%q' "${remote_converge}")"
+    cmd+=" $(printf '%q' '--node') $(printf '%q' "${node_name}")"
+
+    local arg
+    for arg in "${passthrough_args[@]}"; do
+        cmd+=" $(printf '%q' "${arg}")"
+    done
+
+    echo "${cmd}"
+}
+# endregion FUNC_build_converge_ssh_cmd
+
+# ═══════════════════════════════════════════════════════════════════
+# EXECUTE REMOTE CONVERGE VIA SSH
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_execute_remote_converge
+## @purpose  Resolve node.yaml → detect SSH host → prepare SSH opts → build remote cmd → exec ssh
+##           on the remote VPS. Returns 2 if no SSH host (caller handles local exec),
+##           otherwise exec ssh or exit 0 (DRY_RUN).
+## @param $1  Node name
+## @param @2+  Passthrough args for converge.sh
+## @exit 0   — DRY_RUN complete (printed command, script exits)
+## @exit 1   — Fatal error (node.yaml not resolvable)
+## @return 2 — No SSH host; caller should execute locally
+## @complexity O(N) — node resolution + SSH exec
+## @rationale Mirrors execute_remote_update() pattern for converge operations.
+##            Encapsulates: resolve_node_yaml → extract_node_host → prepare_ssh_opts →
+##            build_converge_ssh_cmd → exec ssh. All SSH proxy logic in one place.
+## @invariants
+##   - Sources node-resolver.sh and scp-deliver.sh (function definition libs, idempotent)
+##   - Returns 2 for local fallback (no SSH host); always returns 1 on fatal error
+##   - On DRY_RUN: exit 0 (prints SSH command, stops script)
+##   - On SSH exec: replaces process (never returns on success)
+##   - DRY_RUN global variable controls dry-run mode (set by entrypoint)
+execute_remote_converge() {
+    local node_name="$1"
+    shift 1
+    local passthrough_args=("$@")
+
+    # ── Source dependencies (function-only libs, idempotent) ────────
+    local _erc_dir
+    _erc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=../../lib/node-resolver.sh
+    source "${_erc_dir}/../../lib/node-resolver.sh"
+    # shellcheck source=./scp-deliver.sh
+    source "${_erc_dir}/scp-deliver.sh"
+
+    # ── Resolve node.yaml ──────────────────────────────────────────
+    local node_yaml
+    node_yaml="$(resolve_node_yaml "${node_name}" "${PLATFORM_ROOT}" "${HOME}/projects")" || {
+        echo "[IMP:10][converge][remote] FATAL: Cannot resolve node.yaml for node=${node_name}" >&2
+        return 1
+    }
+    echo "[IMP:9][converge][remote] Resolved node.yaml: ${node_yaml}" >&2
+
+    # ── Extract SSH host ───────────────────────────────────────────
+    local ssh_host
+    ssh_host="$(extract_node_host "${node_yaml}")" || {
+        echo "[IMP:8][converge][remote] WARN: No SSH host in node.yaml — local mode" >&2
+        ssh_host=""
+    }
+
+    if [[ -z "${ssh_host}" ]]; then
+        echo "[IMP:9][converge][remote] No SSH host — returning for local fallback" >&2
+        return 2
+    fi
+
+    echo "[IMP:9][converge][remote] SSH host: ${ssh_host} — REMOTE converge via SSH" >&2
+
+    # ── Prepare SSH opts (mode=update — same host-key pattern) ──
+    prepare_ssh_opts "${ssh_host}" "update"
+
+    # ── Build remote command ───────────────────────────────────────
+    local remote_cmd
+    remote_cmd="$(build_converge_ssh_cmd "${node_name}" "${passthrough_args[@]}")"
+
+    # ── DRY_RUN mode ───────────────────────────────────────────────
+    if ${DRY_RUN:-false}; then
+        echo "[IMP:8][converge][dry-run] DRY-RUN: ssh ${SSH_OPTS[*]} root@${ssh_host} ${remote_cmd}" >&2
+        echo "[IMP:9][converge][dry-run] DRY-RUN complete" >&2
+        exit 0
+    fi
+
+    # ── Execute SSH ────────────────────────────────────────────────
+    echo "[IMP:9][converge][remote] Executing converge.sh on root@${ssh_host}" >&2
+    # shellcheck disable=SC2086,SC2048  # SSH_OPTS intentionally word-split from array
+    exec ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" "${remote_cmd}"
+}
+# endregion FUNC_execute_remote_converge

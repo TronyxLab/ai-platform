@@ -24,6 +24,29 @@ _ensure_log_dir() {
         chmod 0750 "$PLATFORM_LOG_DIR"
         chown root:adm "$PLATFORM_LOG_DIR" 2>/dev/null || chown root:root "$PLATFORM_LOG_DIR"
     fi
+    # ═══════════════════════════════════════════════════════════════
+    # M2/G1 fix (T1.3): после append гарантировать 0664 mode
+    # Под root: create + chmod. Под ci-deploy: только запись,
+    # без chown (нет прав — не фатально, log_imp 6).
+    # ═══════════════════════════════════════════════════════════════
+    if [[ ! -f "$PLATFORM_AUDIT_LOG" ]]; then
+        if [[ "$(id -u)" -eq 0 ]]; then
+            touch "$PLATFORM_AUDIT_LOG" 2>/dev/null || true
+            chmod 0664 "$PLATFORM_AUDIT_LOG" 2>/dev/null || true
+            chown root:adm "$PLATFORM_AUDIT_LOG" 2>/dev/null || true
+        else
+            # Under ci-deploy: best-effort write only, no chown
+            touch "$PLATFORM_AUDIT_LOG" 2>/dev/null || \
+                echo "[IMP:6][audit][_ensure_log_dir] WARN: Cannot create ${PLATFORM_AUDIT_LOG} as non-root" >&2
+        fi
+    elif [[ "$(id -u)" -eq 0 ]]; then
+        # Under root: verify 0664
+        local current_mode
+        current_mode="$(stat -c '%a' "$PLATFORM_AUDIT_LOG" 2>/dev/null || echo "")"
+        if [[ "$current_mode" != "0664" ]] && [[ -n "$current_mode" ]]; then
+            chmod 0664 "$PLATFORM_AUDIT_LOG" 2>/dev/null || true
+        fi
+    fi
 }
 # endregion ENSURE_LOG_DIR
 

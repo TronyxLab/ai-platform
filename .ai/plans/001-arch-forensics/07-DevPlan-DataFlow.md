@@ -138,7 +138,7 @@ Wave 6 (GATE REGISTRATION)
 ```python
 def _collect_path_variables() -> dict[str, str]:
     """Parse core/lib/paths.sh and extract all VAR=value assignments.
-    
+
     Returns dict mapping variable name → raw value (with ${} references unresolved).
     Handles: readonly VAR="value", bare VAR=value, VAR='value'.
     Skips: comments, empty lines, export (paths.sh doesn't use export).
@@ -203,7 +203,7 @@ def _substitute_variables(resolved: str, source_file: Path, source_layer: str) -
     for var_name, var_value in _KNOWN_PATH_VARIABLES.items():
         resolved = resolved.replace(f"${{{var_name}}}", var_value)
         resolved = resolved.replace(f"${var_name}", var_value)
-    
+
     # Шаг 2: contextual variables (не из paths.sh, зависят от source_file)
     contextual = {
         "_EP_DIR": str(source_file.parent),
@@ -218,7 +218,7 @@ def _substitute_variables(resolved: str, source_file: Path, source_layer: str) -
     for var_name, var_value in contextual.items():
         resolved = resolved.replace(f"${{{var_name}}}", var_value)
         resolved = resolved.replace(f"${var_name}", var_value)
-    
+
     return resolved
 ```
 
@@ -249,13 +249,13 @@ return has_separator or has_var_prefix or has_relative or has_absolute
 ```python
 def _looks_like_path(text: str) -> bool:
     t = text.strip().strip("'\"")
-    
+
     # Существующие проверки
     has_separator = "/" in t
     has_var_prefix = t.startswith("${") and "/" in t
     has_relative = t.startswith("..")
     has_absolute = t.startswith("/") and t != "/"
-    
+
     # NEW: bare variable reference — potentially a path
     # Проверяем что это $variable (не флаг, не спец-переменная)
     is_bare_variable = (
@@ -264,7 +264,7 @@ def _looks_like_path(text: str) -> bool:
         and t not in _NON_IMPORT_ARGS
         and not re.match(r'^\$[\d@*!#?\-]$', t)  # спец-переменные: $1, $@, $*, $!, $#, $?, $-
     )
-    
+
     return has_separator or has_var_prefix or has_relative or has_absolute or is_bare_variable
 ```
 
@@ -300,7 +300,7 @@ _NON_IMPORT_ARGS: set[str] = {
 ```python
 def _trace_variable_assignment(file_path: Path, var_name: str) -> str | None:
     """Trace a variable to its last assignment in the same file.
-    
+
     Searches for: local VAR=..., export VAR=..., VAR=... (bare assignment).
     Resolves nested ${} references using _KNOWN_PATH_VARIABLES.
     Returns resolved path if it contains '/', or None.
@@ -314,24 +314,24 @@ def _trace_variable_assignment(file_path: Path, var_name: str) -> str | None:
         content = file_path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return None
-    
+
     # Шаблон: local/export/ничего VAR=value
     # Многострочность НЕ поддерживается — только однострочные присвоения
     pattern = rf'(?:local\s+|export\s+)?{re.escape(var_name)}=["\']?([^"\'\n]+)'
-    
+
     matches = list(re.finditer(pattern, content))
     if not matches:
         return None
-    
+
     # Берём ПОСЛЕДНЕЕ присвоение (ближайшее к использованию)
     last_match = matches[-1]
     value = last_match.group(1).strip()
-    
+
     # Резолвим вложенные ${VAR} и $VAR
     for nested_name, nested_value in _KNOWN_PATH_VARIABLES.items():
         value = value.replace(f"${{{nested_name}}}", nested_value)
         value = value.replace(f"${nested_name}", nested_value)
-    
+
     # Если результат содержит / — это путь
     if "/" in value:
         return value
@@ -365,19 +365,19 @@ def _trace_variable_assignment(file_path: Path, var_name: str) -> str | None:
 def resolve_import(source_file: Path, import_path: str, source_layer: str) -> Path | None:
     if not _looks_like_path(import_path):
         return None
-    
+
     resolved = import_path.strip()
-    
+
     # Шаг 1: подстановка известных переменных
     resolved = _substitute_variables(resolved, source_file, source_layer)
-    
+
     # Шаг 2: если результат — bare $variable без пути, пробуем локальный трейсинг
     if resolved.startswith("$") and "/" not in resolved:
         var_name = resolved.lstrip("$").strip("{}")
         traced = _trace_variable_assignment(source_file, var_name)
         if traced:
             resolved = traced
-    
+
     # Шаг 3: strip quotes, ./, resolve path (существующая логика)
     resolved = resolved.replace('"', "").replace("'", "")
     if resolved.startswith("./"):
@@ -386,13 +386,13 @@ def resolve_import(source_file: Path, import_path: str, source_layer: str) -> Pa
         return None
     if not resolved.startswith("/") and not resolved.startswith("..") and not resolved.startswith("${"):
         return None
-    
+
     result = Path(resolved)
     if result.is_absolute():
         final = result.resolve()
     else:
         final = (source_file.parent / result).resolve()
-    
+
     if not str(final).startswith(str(CORE_DIR)):
         return None
     return final
@@ -467,7 +467,7 @@ def _check_shellcheck_available() -> tuple[bool, str]:
 
 def _parse_shellcheck_sc2154(file_path: Path) -> list[str]:
     """Run shellcheck -f json and extract variable names from SC2154 warnings.
-    
+
     SC2154 = "variable is referenced but not assigned" — ShellCheck detected
     a variable that is used but was never assigned in the current scope.
     This means the variable likely comes from an external source.
@@ -482,9 +482,9 @@ def _parse_shellcheck_sc2154(file_path: Path) -> list[str]:
             if result.returncode > 1:
                 logger.warning("[IMP:6][shellcheck] ShellCheck error on %s: %s", file_path, result.stderr[:200])
                 return []
-        
+
         diagnostics = json.loads(result.stdout) if result.stdout.strip() else []
-        
+
         sc2154_vars: list[str] = []
         for diag in diagnostics:
             if diag.get("code") == 2154:
@@ -493,7 +493,7 @@ def _parse_shellcheck_sc2154(file_path: Path) -> list[str]:
                 m = re.match(r'^(\w+)\s+is\s+referenced', message)
                 if m:
                     sc2154_vars.append(m.group(1))
-        
+
         return sc2154_vars
     except json.JSONDecodeError:
         logger.warning("[IMP:6][shellcheck] Invalid JSON from shellcheck on %s", file_path)
@@ -508,34 +508,34 @@ def _parse_shellcheck_sc2154(file_path: Path) -> list[str]:
 
 def get_shellcheck_bash_calls(file_path: Path) -> list[tuple[int, str]]:
     """Detect bash/sh/source calls where the argument is a variable assigned from a path literal.
-    
+
     Approach:
     1. Run shellcheck to find SC2154 variables (used but not locally assigned)
     2. For each SC2154 variable, grep the file for its assignment (local/export/VAR=)
     3. If assignment value looks like a path, check if variable is used in bash/sh/source/. call
     4. Return (lineno, import_path) for each detected call
-    
+
     Returns empty list if shellcheck not available (graceful degradation).
     """
     available, version_str = _check_shellcheck_available()
     if not available:
         logger.warning("[IMP:7][shellcheck] ShellCheck unavailable: %s — skipping data-flow analysis", version_str)
         return []
-    
+
     logger.info("[IMP:8][shellcheck] ShellCheck %s available — analysing %s", version_str, file_path)
-    
+
     # Step 1: get SC2154 variables
     sc2154_vars = _parse_shellcheck_sc2154(file_path)
     if not sc2154_vars:
         return []
-    
+
     # Step 2: read file content
     try:
         content = file_path.read_text(encoding="utf-8", errors="replace")
         lines = content.split("\n")
     except Exception:
         return []
-    
+
     # Step 3: for each SC2154 variable, find its assignment
     var_assignments: dict[str, str] = {}
     for var_name in sc2154_vars:
@@ -550,10 +550,10 @@ def get_shellcheck_bash_calls(file_path: Path) -> list[tuple[int, str]]:
                     value = value.replace(nested.group(0), var_assignments[nested_name])
             if "/" in value:
                 var_assignments[var_name] = value
-    
+
     if not var_assignments:
         return []
-    
+
     # Step 4: find bash/sh/source/. calls using these variables
     results: list[tuple[int, str]] = []
     bash_pattern = re.compile(r'(?:^|\s)(?:bash|/bin/bash|sh|/bin/sh|source|\.)\s+(\S+)')
@@ -571,7 +571,7 @@ def get_shellcheck_bash_calls(file_path: Path) -> list[tuple[int, str]]:
                 var_name = arg_clean.lstrip("$").strip("{}")
                 if var_name in var_assignments:
                     results.append((i, arg))
-    
+
     return results
 ```
 
@@ -620,7 +620,7 @@ def get_shellcheck_bash_calls(file_path: Path) -> list[tuple[int, str]]:
 def scan_sh_file(file_path: Path, source_layer: str | None = None) -> list[tuple[int, str, bool]]:
     imports: list[tuple[int, str, bool]] = []
     # ... существующая логика (source, ., exec, bash/sh паттерны) ...
-    
+
     # NEW: ShellCheck data-flow analysis (дополнительный слой)
     # Вызывается только для importing layers (не для lib/ и templates/)
     if source_layer in _IMPORTING_LAYERS:
@@ -638,7 +638,7 @@ def scan_sh_file(file_path: Path, source_layer: str | None = None) -> list[tuple
                     imports.append((lineno, imp_path, exempt))
         except ImportError:
             logger.debug("[IMP:5][scan][shellcheck] Module not available for %s", file_path)
-    
+
     return imports
 ```
 
@@ -716,42 +716,42 @@ if m:
 ```python
 class TestLooksLikePath:
     """Unit tests for _looks_like_path() function."""
-    
+
     def test_literal_path(self):
         """Literal path with / is detected."""
         assert _looks_like_path("modules/postgres/healthcheck.sh") is True
-    
+
     def test_variable_with_path(self):
         """${VAR}/path is detected."""
         assert _looks_like_path("${CORE_DIR}/modules/postgres/healthcheck.sh") is True
-    
+
     def test_bare_variable(self):
         """Bare $variable (no /) is detected as potential path."""
         assert _looks_like_path("$hc_script") is True
-    
+
     def test_bare_variable_braces(self):
         """${variable} without / is NOT detected as path (bare braces, no separator)."""
         # _looks_like_path требует / для ${}-переменных (has_var_prefix проверяет "/" in t)
         # ${bare} без / → False. Это ожидаемо — резолвится в resolve_import через substitution.
         assert _looks_like_path("${hc_script}") is False
-    
+
     def test_flag_minus_c(self):
         """Flag argument is not a path."""
         assert _looks_like_path("-c") is False
-    
+
     def test_special_vars(self):
         """Special shell variables are not paths."""
         for var in ["$?", "$#", "$$", "$!", "$@", "$*", "$-", "$0"]:
             assert _looks_like_path(var) is False, f"{var} should not be path"
-    
+
     def test_empty_string(self):
         """Empty string is not a path."""
         assert _looks_like_path("") is False
-    
+
     def test_quoted_bare_variable(self):
         """Quoted bare variable is detected."""
         assert _looks_like_path('"$hc_script"') is True
-    
+
     def test_multiple_variables_in_string(self):
         """String with multiple $vars and / is detected."""
         assert _looks_like_path("${CORE_DIR}/modules/${mod_name}/healthcheck.sh") is True
@@ -764,7 +764,7 @@ class TestLooksLikePath:
 ```python
 class TestResolveImport:
     """Unit tests for resolve_import() function."""
-    
+
     def test_known_variable_substitution(self, tmp_path):
         """Auto-collected variable from paths.sh is substituted."""
         # PATHS_MODULES_DIR = core/modules (from paths.sh)
@@ -775,7 +775,7 @@ class TestResolveImport:
         )
         assert result is not None
         assert "core/modules/postgres/healthcheck.sh" in str(result)
-    
+
     def test_local_assignment_trace(self, tmp_path):
         """Variable assigned locally is traced to its value."""
         f = tmp_path / "test.sh"
@@ -783,7 +783,7 @@ class TestResolveImport:
         # NOTE: resolve_import вызывается с extracted import_path, не с содержимым файла
         # Правильный тест: тестируем _trace_variable_assignment отдельно
         pass  # См. T4.4
-    
+
     def test_unresolved_bare_variable(self, tmp_path):
         """Bare variable without assignment returns None."""
         result = resolve_import(
@@ -793,7 +793,7 @@ class TestResolveImport:
         )
         # $unknown_var не в _KNOWN_PATH_VARIABLES, не присвоена локально → None
         assert result is None
-    
+
     def test_bare_variable_with_trace(self, tmp_path):
         """Bare variable traced to local assignment resolves correctly."""
         f = tmp_path / "test.sh"
@@ -802,7 +802,7 @@ class TestResolveImport:
         traced = _trace_variable_assignment(f, "hc_script")
         assert traced is not None
         assert "modules/postgres/healthcheck.sh" in traced
-    
+
     def test_nested_variable_substitution(self):
         """Nested variable references are resolved recursively."""
         # PATHS_CORE_DIR = ${PATHS_LIB_DIR}/.. → оба разрешаются
@@ -814,7 +814,7 @@ class TestResolveImport:
         assert result is not None
         # PATHS_CORE_DIR резолвится в core/
         assert str(result).endswith("core/modules/postgres/healthcheck.sh")
-    
+
     def test_contextual_variable(self, tmp_path):
         """Contextual variable (_EP_DIR) resolves to source file directory."""
         source = tmp_path / "entrypoints" / "test.sh"
@@ -832,7 +832,7 @@ class TestResolveImport:
 ```python
 class TestCollectPathVariables:
     """Unit tests for _collect_path_variables() function."""
-    
+
     def test_paths_sh_parsed(self):
         """Real paths.sh is parsed and returns expected variables."""
         variables = _collect_path_variables()
@@ -844,13 +844,13 @@ class TestCollectPathVariables:
         assert "PATHS_TEMPLATES_DIR" in variables
         assert "PATHS_INTERNAL_DIR" in variables
         assert "PLATFORM_ROOT" in variables
-    
+
     def test_all_values_are_non_empty(self):
         """All collected variables have non-empty values."""
         variables = _collect_path_variables()
         for name, value in variables.items():
             assert value, f"Variable {name} has empty value"
-    
+
     def test_empty_file(self, tmp_path):
         """Empty file returns empty dict (test with mock — but _collect_path_variables
         uses fixed PROJECT_ROOT path). Instead, test that function doesn't crash
@@ -878,7 +878,7 @@ class TestCollectPathVariables:
         assert len(variables) >= 6
         assert "PATHS_MODULES_DIR" in variables
         assert "PLATFORM_ROOT" in variables
-    
+
     def test_custom_paths_file(self, tmp_path):
         f = tmp_path / "paths.sh"
         f.write_text('readonly MY_DIR="/opt/myapp"\nexport MY_OTHER="/var/lib/myapp"\n')
@@ -886,13 +886,13 @@ class TestCollectPathVariables:
         assert "MY_DIR" in variables
         assert variables["MY_DIR"] == "/opt/myapp"
         assert "MY_OTHER" in variables
-    
+
     def test_empty_file(self, tmp_path):
         f = tmp_path / "empty.sh"
         f.write_text("")
         variables = _collect_path_variables(f)
         assert variables == {}
-    
+
     def test_only_comments(self, tmp_path):
         f = tmp_path / "comments.sh"
         f.write_text("# This is a comment\n# Another comment\n")
@@ -907,7 +907,7 @@ class TestCollectPathVariables:
 ```python
 class TestTraceVariableAssignment:
     """Unit tests for _trace_variable_assignment() function."""
-    
+
     def test_local_assignment_found(self, tmp_path):
         """local var=path is traced correctly."""
         f = tmp_path / "test.sh"
@@ -915,14 +915,14 @@ class TestTraceVariableAssignment:
         result = _trace_variable_assignment(f, "hc_script")
         assert result is not None
         assert "healthcheck.sh" in result
-    
+
     def test_no_assignment(self, tmp_path):
         """Variable not assigned locally returns None."""
         f = tmp_path / "test.sh"
         f.write_text('bash "$hc_script"\n')
         result = _trace_variable_assignment(f, "hc_script")
         assert result is None
-    
+
     def test_multiple_assignments_last_wins(self, tmp_path):
         """Last assignment is used."""
         f = tmp_path / "test.sh"
@@ -934,14 +934,14 @@ class TestTraceVariableAssignment:
         result = _trace_variable_assignment(f, "var")
         assert result is not None
         assert "second" in result
-    
+
     def test_assignment_without_path(self, tmp_path):
         """Assignment without / in value returns None."""
         f = tmp_path / "test.sh"
         f.write_text('local flag="--verbose"\n')
         result = _trace_variable_assignment(f, "flag")
         assert result is None
-    
+
     def test_export_assignment(self, tmp_path):
         """export var=path is traced."""
         f = tmp_path / "test.sh"
@@ -949,7 +949,7 @@ class TestTraceVariableAssignment:
         result = _trace_variable_assignment(f, "MY_SCRIPT")
         assert result is not None
         assert "healthcheck.sh" in result
-    
+
     def test_readonly_assignment(self, tmp_path):
         """readonly var=path is traced."""
         f = tmp_path / "test.sh"
@@ -968,14 +968,14 @@ class TestTraceVariableAssignment:
 ```python
 class TestShellCheckIntegration:
     """Tests for tests/_conftest/shellcheck.py integration."""
-    
+
     def test_check_available_returns_bool(self):
         """_check_shellcheck_available returns (bool, str)."""
         from _conftest.shellcheck import _check_shellcheck_available
         available, msg = _check_shellcheck_available()
         assert isinstance(available, bool)
         assert isinstance(msg, str)
-    
+
     def test_parse_sc2154_empty_file(self, tmp_path):
         """Empty file has no SC2154 diagnostics."""
         from _conftest.shellcheck import _parse_shellcheck_sc2154
@@ -983,7 +983,7 @@ class TestShellCheckIntegration:
         f.write_text("#!/bin/bash\n")
         vars_found = _parse_shellcheck_sc2154(f)
         assert vars_found == []
-    
+
     def test_parse_sc2154_unassigned_var(self, tmp_path):
         """Unassigned variable triggers SC2154."""
         from _conftest.shellcheck import _parse_shellcheck_sc2154
@@ -992,7 +992,7 @@ class TestShellCheckIntegration:
         vars_found = _parse_shellcheck_sc2154(f)
         # hc_script is not assigned in this file → SC2154 should fire
         assert "hc_script" in vars_found
-    
+
     def test_get_bash_calls_with_shellcheck(self, tmp_path):
         """ShellCheck detects bash call with variable assigned from path."""
         from _conftest.shellcheck import get_shellcheck_bash_calls
@@ -1010,7 +1010,7 @@ class TestShellCheckIntegration:
         # Variable IS assigned locally → no SC2154 → no ShellCheck detection
         # This is expected — _trace_variable_assignment handles this case
         assert isinstance(calls, list)
-    
+
     def test_get_bash_calls_cross_scope(self, tmp_path):
         """ShellCheck detects bash call where var assigned in different function."""
         from _conftest.shellcheck import get_shellcheck_bash_calls

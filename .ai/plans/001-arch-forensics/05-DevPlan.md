@@ -293,7 +293,7 @@ interfaces:                      # массив строк — интерфей�
 
 **Per-module assignments (T4–T16, все параллельны):**
 
-| Task | Модуль | interfaces | 
+| Task | Модуль | interfaces |
 |------|--------|------------|
 | T4 | postgres | `[healthcheck, deploy-hook]` |
 | T5 | redis | `[healthcheck]` |

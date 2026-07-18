@@ -48,6 +48,9 @@
 | `make secrets-unlock` | Расшифровка SOPS/age секретов | `make secrets-unlock [NODE=...]` | `core/entrypoints/secrets.sh` → `core/internal/secrets/decrypt-secrets.sh` |
 | `make healthcheck` | Проверка здоровья платформы | `make healthcheck [NODE=...]` | `core/entrypoints/healthcheck.sh` → `core/internal/healthcheck/modules-healthcheck.sh` |
 | `make node-update` | Update provisioned node | `make node-update NODE=<name>` | `core/entrypoints/node-update.sh` → `core/internal/bootstrap/node-lifecycle.sh --mode update` |
+| `make converge` | Реконсиляция ноды с desired state | `make converge NODE=<name>` | `core/entrypoints/converge.sh` → `core/internal/bootstrap/converge.sh` |
+| `make render-vhosts` | Генерация vhost конфигов из node.yaml | `make render-vhosts NODE=<name>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/add-vhost.sh --render-all` |
+| `make project-sync-secrets` | Раскатка repo-secrets из SOPS enc-файла | `make project-sync-secrets NAME=<name>` | `core/internal/scaffold/sync-repo-secrets.sh` |
 | `make verify` | Пост-деплойная HTTPS-верификация | `make verify NODE=<node>` | `core/entrypoints/verify.sh` → `core/internal/verify/verify-domains.sh` |
 | `make up` / `make down` | Локальный compose-lifecycle | `make up [PROJECT=...]` | docker compose |
 | `make status` | Статус compose-стека | `make status [PROJECT=...]` | docker compose ps |
