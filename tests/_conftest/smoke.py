@@ -521,6 +521,7 @@ def _start_single_module(
 ##   - Возвращает True если контейнер запущен, False если отсутствует/не запущен
 ##   - logging.getLogger('conftest') для LDD-логов
 
+
 def _module_container_running(
     platform_services_result: dict[str, list[str]],
     module_name: str,
