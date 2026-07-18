@@ -31,7 +31,7 @@ _BASE_YML = _PROJECT_ROOT / "core" / "modules" / "nginx" / "docker-compose.base.
 
 # Files that must use templates (9 files, excludes nginx.conf + includes/security-headers.conf)
 _TEMPLATE_CONF_FILES = {
-    "platform-default.conf",
+    "platform-default.conf.template",
     "platform-http.conf",
     "grafana-vhost.conf",
     "hermes-dashboard.conf",
@@ -99,9 +99,9 @@ def test_platform_domain_placeholder_present(caplog) -> None:
     """Vhost configs используют `${PLATFORM_DOMAIN}` в server_name и ssl_certificate.
 
     ## @purpose — Verify each vhost config contains `${PLATFORM_DOMAIN}` in server_name
-    ##            directives AND ssl_certificate paths. Also verify platform-default.conf
+    ##            directives AND ssl_certificate paths. Also verify platform-default.conf.template
     ##            contains the placerholder at least once.
-    ## @io — ⇥ 5 vhost confs + platform-default.conf → ⚡ regex search → ⊕ assert all required
+    ## @io — ⇥ 5 vhost confs + platform-default.conf.template → ⚡ regex search → ⊕ assert all required
     ## @complexity — O(N × L)
     """
     # 🧪 TRAP[TEST] · 2026-07-16 · gate/nginx-domain · Revert D12 — verify PLATFORM_DOMAIN restored
@@ -142,19 +142,18 @@ def test_platform_domain_placeholder_present(caplog) -> None:
         elif has_in_ssl_cert:
             logger.info("[IMP:8][gate] OK: %s has PLATFORM_DOMAIN in inline ssl_certificate", fname)
 
-    # ── Check platform-default.conf at least one occurrence ─────────────────
-    pd_path = _NGINX_CONFIG_DIR / "platform-default.conf"
+    # ── Check platform-default.conf.template at least one occurrence ─────────
+    pd_path = _NGINX_CONFIG_DIR / "platform-default.conf.template"
     if pd_path.exists():
         pd_text = pd_path.read_text()
         count = pd_text.count("${PLATFORM_DOMAIN}")
         if count < 1:
-            violations.append("platform-default.conf: does not contain ${PLATFORM_DOMAIN}")
-            logger.info("[IMP:9][gate] FAIL: platform-default.conf missing PLATFORM_DOMAIN")
+            violations.append("platform-default.conf.template: does not contain ${PLATFORM_DOMAIN}")
+            logger.info("[IMP:9][gate] FAIL: platform-default.conf.template missing PLATFORM_DOMAIN")
         else:
-            logger.info("[IMP:8][gate] OK: platform-default.conf contains %d PLATFORM_DOMAIN occurrences", count)
-    else:
-        violations.append("platform-default.conf: file not found")
-        logger.info("[IMP:9][gate] FAIL: platform-default.conf not found")
+            logger.info("[IMP:8][gate] OK: platform-default.conf.template contains %d PLATFORM_DOMAIN occurrences", count)
+        violations.append("platform-default.conf.template: file not found")
+        logger.info("[IMP:9][gate] FAIL: platform-default.conf.template not found")
 
     # ── Check ssl-params.conf.template (shared SSL snippet) ──────────────────
     # audit 013: ssl_certificate moved from vhosts to ssl-params.conf.template.
@@ -173,7 +172,7 @@ def test_platform_domain_placeholder_present(caplog) -> None:
 
     assert not violations, f"PLATFORM_DOMAIN placerholder violations ({len(violations)}):\n" + "\n".join(violations)
     logger.info(
-        "[IMP:9][gate] PASS: All %d vhost configs + platform-default.conf use PLATFORM_DOMAIN",
+        "[IMP:9][gate] PASS: All %d vhost configs + platform-default.conf.template use PLATFORM_DOMAIN",
         len(_VHOST_CONF_FILES),
     )
 

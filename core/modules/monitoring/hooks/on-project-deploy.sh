@@ -208,11 +208,20 @@ print(str(data.get('dashboard', 'false')).lower())
 
     mkdir -p "$dashboards_dir"
     local dash_file="${dashboards_dir}/${HOOK_PROJECT}.json"
-    sed \
-        -e "s/\$PROJECT/${HOOK_PROJECT}/g" \
-        -e "s/\$TYPE/${PROJECT_TYPE}/g" \
-        -e "s/\$NODE/${HOOK_NODE_NAME}/g" \
-        "$template" > "$dash_file"
+    local engine="${PLATFORM_ROOT}/core/internal/template-engine.sh"
+    if [[ -f "$engine" ]]; then
+        "$engine" render "$template" "$dash_file" \
+            "PROJECT=${HOOK_PROJECT}" \
+            "TYPE=${PROJECT_TYPE}" \
+            "NODE=${HOOK_NODE_NAME}"
+    else
+        log_imp 6 "grafana" "template-engine.sh not found at ${engine} — falling back to sed"
+        sed \
+            -e "s/\$PROJECT/${HOOK_PROJECT}/g" \
+            -e "s/\$TYPE/${PROJECT_TYPE}/g" \
+            -e "s/\$NODE/${HOOK_NODE_NAME}/g" \
+            "$template" > "$dash_file"
+    fi
     log_imp 9 "grafana" "Dashboard generated: ${dash_file}"
 }
 # endregion GRAFANA_DASHBOARDS
@@ -368,7 +377,13 @@ print(str(data.get('alerting', 'false')).lower())
     fi
 
     mkdir -p "$rules_dir"
-    sed "s/\${PROJECT}/${HOOK_PROJECT}/g" "$template" > "$output_file"
+    local engine="${PLATFORM_ROOT}/core/internal/template-engine.sh"
+    if [[ -f "$engine" ]]; then
+        "$engine" render "$template" "$output_file" "PROJECT=${HOOK_PROJECT}"
+    else
+        log_imp 6 "alerting" "template-engine.sh not found at ${engine} — falling back to sed"
+        sed "s/\${PROJECT}/${HOOK_PROJECT}/g" "$template" > "$output_file"
+    fi
     log_imp 8 "alerting" "Alert rules generated: ${output_file}"
 }
 # endregion GENERATE_ALERT_RULES

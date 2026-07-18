@@ -18,11 +18,11 @@ x-logging: &default-logging
 
 services:
   # ═══════════ Backend service ═══════════
-  __PROJECT_NAME__-backend:
+  {{PROJECT_NAME}}-backend:
     # ⚠️ TRAP[BUG] · 2026-06-11 · P1 · GHCR требует lowercase org names
     #   Root: Docker registry spec — repository name must be lowercase
     #   Fix: передавайте --org в lowercase (e.g., tronyxlab, не TronyxLab)
-    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__-backend:${IMAGE_TAG:-latest}"
+    image: "${IMAGE_REGISTRY:-ghcr.io}/{{ORG_NAME}}/{{PROJECT_NAME}}-backend:${IMAGE_TAG:-latest}"
     restart: always
     stop_grace_period: 30s
     deploy:
@@ -35,9 +35,9 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
     volumes:
-      - __PROJECT_NAME__-backend-data:/app/data
+      - {{PROJECT_NAME}}-backend-data:/app/data
     networks:
-      __PROJECT_NAME__-net:
+      {{PROJECT_NAME}}-net:
       shared-db-net:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -49,11 +49,11 @@ services:
       - "platform.type=backend"
 
   # ═══════════ Frontend service ═══════════
-  __PROJECT_NAME__-frontend:
+  {{PROJECT_NAME}}-frontend:
     # ⚠️ TRAP[BUG] · 2026-06-11 · P1 · GHCR требует lowercase org names
     #   Root: Docker registry spec — repository name must be lowercase
     #   Fix: передавайте --org в lowercase (e.g., tronyxlab, не TronyxLab)
-    image: "${IMAGE_REGISTRY:-ghcr.io}/__ORG_NAME__/__PROJECT_NAME__-frontend:${IMAGE_TAG:-latest}"
+    image: "${IMAGE_REGISTRY:-ghcr.io}/{{ORG_NAME}}/{{PROJECT_NAME}}-frontend:${IMAGE_TAG:-latest}"
     restart: always
     stop_grace_period: 30s
     logging: *default-logging
@@ -62,10 +62,10 @@ services:
     environment:
       - NODE_ENV=production
     networks:
-      __PROJECT_NAME__-net:
+      {{PROJECT_NAME}}-net:
       proxy-net:
         aliases:
-          - __PROJECT_NAME__
+          - {{PROJECT_NAME}}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health"]
       # ⚠️ TRAP[BUG] Use 127.0.0.1 NOT localhost — Alpine resolves localhost to ::1 (IPv6),
@@ -76,15 +76,15 @@ services:
       retries: 3
     labels:
       - "platform.type=frontend"
-      - "platform.domain=__DOMAIN__"
+      - "platform.domain={{DOMAIN}}"
 
 volumes:
-  __PROJECT_NAME__-backend-data:
-    name: __PROJECT_NAME__-backend-data
+  {{PROJECT_NAME}}-backend-data:
+    name: {{PROJECT_NAME}}-backend-data
 
 networks:
-  __PROJECT_NAME__-net:
-    name: __PROJECT_NAME__-net
+  {{PROJECT_NAME}}-net:
+    name: {{PROJECT_NAME}}-net
     driver: bridge
   proxy-net:
     name: proxy-net

@@ -24,23 +24,23 @@ except ImportError:
     FASTAPI_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("__PROJECT_NAME__")
+logger = logging.getLogger("{{PROJECT_NAME}}")
 
-app = FastAPI(title="__PROJECT_NAME__", version="0.1.0") if FASTAPI_AVAILABLE else None
+app = FastAPI(title="{{PROJECT_NAME}}", version="0.1.0") if FASTAPI_AVAILABLE else None
 
 
 def main():
     """Entry point: start HTTP server with health endpoints."""
-    logger.info("[IMP:8][__PROJECT_NAME__][main] Starting __PROJECT_NAME__ service")
+    logger.info("[IMP:8][{{PROJECT_NAME}}][main] Starting {{PROJECT_NAME}} service")
 
     if not FASTAPI_AVAILABLE:
-        logger.error("[IMP:10][__PROJECT_NAME__][main] FastAPI not installed; install: pip install fastapi uvicorn")
+        logger.error("[IMP:10][{{PROJECT_NAME}}][main] FastAPI not installed; install: pip install fastapi uvicorn")
         sys.exit(1)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
         """Docker HEALTHCHECK target — must return 200."""
-        return {"status": "OK", "service": "__PROJECT_NAME__"}
+        return {"status": "OK", "service": "{{PROJECT_NAME}}"}
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:
@@ -54,7 +54,7 @@ def main():
 
     @app.get("/")
     async def root() -> dict[str, str]:
-        return {"message": "__PROJECT_NAME__ is running"}
+        return {"message": "{{PROJECT_NAME}} is running"}
 
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

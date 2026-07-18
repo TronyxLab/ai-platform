@@ -181,6 +181,32 @@ make up                        → все модули (profiles не фильт
 
 ---
 
+## docker-compose.test.yml contract
+
+Каждый Docker-модуль предоставляет `docker-compose.test.yml` — test-overlay,
+параллельный production-конфигурации через container_name суффикс `-test`.
+
+### Инварианты
+- `container_name: <container>-test` для ВСЕХ контейнеров модуля — предотвращает конфликты с production
+- `restart: "no"` — тестовые контейнеры не авто-перезапускаются
+- Volumes: Docker-managed (не bind-mount)
+- Port mappings: смещённые по правилу `1{port}` (e.g., 80→18080, 5432→15432) на 127.0.0.1
+- Healthcheck: ускоренный (start_period=10s, interval=10s) для CI
+
+### Collision policy
+При коллизии `1{port}` с production портом — разработчик модуля выбирает:
+(a) префикс `2` (e.g., 8000→28000)
+(b) сдвиг разрядности (e.g., 3XXXX)
+(c) явный свободный порт с TRAP[DECISION]
+
+### Gate coverage
+- test_gate_compose_no_base_image: нет L1-образа в production compose
+- test_restart_consistency: restart-политика
+- test_gate_container_name_consistency: container_name консистентность
+- test_gate_healthcheck_contract: healthcheck контракты
+
+---
+
 ## Навигация
 
 | Файл | Назначение |

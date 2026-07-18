@@ -36,6 +36,8 @@
 | `make adopt-project` | Адаптация существующего проекта в lifecycle | `make adopt-project DIR=<dir> [NAME=<name>] [DOMAIN=<domain>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/adopt-project.sh` |
 | `make project-list` | Список зарегистрированных проектов (offline) | `make project-list [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/project-list.sh` |
 | `make project-status` | Статус проектов на target node (SSH) | `make project-status NAME=<name> [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/project-list.sh --status` |
+| `make templates-check` | Dry-run проверка разрешимости всех шаблонов | `make templates-check` | `core/internal/template-engine.sh check --verbose` |
+| `make templates-render` | Рендер всех шаблонов по манифесту | `make templates-render` | `core/internal/template-engine.sh render-all` |
 | `make validate` | Schema-валидация | `make validate [FILES=...]` | `core/entrypoints/validate.sh` |
 | `make lint` | shellcheck + yamllint + pytest-lint | `make lint` | `core/entrypoints/validate.sh --lint` |
 | `make audit` | Системный аудит платформы | `make audit [NODE=...]` | `core/entrypoints/audit.sh` |
@@ -93,6 +95,8 @@ core/
 │   ├── bootstrap/install-docker.sh
 │   ├── bootstrap/firewall.sh
 │   ├── build/hermes-images.sh             (бывший build-hermes-images.sh)
+│   ├── template_engine.py                (NEW — Python template engine)
+│   ├── template-engine.sh                (NEW — Bash CLI wrapper)
 │   ├── scaffold/add-project.sh
 │   ├── scaffold/context-init.sh
 │   ├── scaffold/add-vhost.sh
@@ -113,7 +117,7 @@ core/
 │   ├── Makefile              → include ../../templates/module.mk
 │   ├── .dockerignore         → symlink ../../templates/.dockerignore
 │   └── {build,context}/      # (только hermes-agent) Dockerfile L1/L2
-├── templates/                  # module.mk, sudo-whitelist.template, docker-compose.test.template, .dockerignore
+├── templates/                  # module.mk, sudo-whitelist.template, template-manifest.yaml, .dockerignore
 ├── entrypoint-manifest.yaml
 └── VERSION
 ```

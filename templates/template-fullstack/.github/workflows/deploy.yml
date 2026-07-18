@@ -1,11 +1,11 @@
 # GREP_SUMMARY: GitHub Actions CI/CD deploy reusable workflow fullstack
-# STRUCTURE: on(push:main) → deploy(uses __ORG_NAME__/ai-platform/deploy-project.yml)
+# STRUCTURE: on(push:main) → deploy(uses {{ORG_NAME}}/ai-platform/deploy-project.yml)
 # region MODULE_CONTRACT
 ## @purpose  Simplified CI/CD: build+delegation to reusable platform workflow (T15)
 ## @invariants
 ##   - Единственный job делегирует в reusable workflow платформы
 ##   - secrets: inherit — CI_DEPLOY_KEY, GITHUB_TOKEN наследуются
-##   - org-agnostic (__ORG_NAME__ заменяется при scaffold)
+##   - org-agnostic ({{ORG_NAME}} заменяется при scaffold)
 ##   - ≤40 строк, ≤15 non-comment
 # endregion MODULE_CONTRACT
 name: Deploy
@@ -16,7 +16,7 @@ on:
 
 jobs:
   deploy:
-    uses: __ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml@main
+    uses: {{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml@main
     with:
-      project_name: __PROJECT_NAME__
+      project_name: {{PROJECT_NAME}}
     secrets: inherit

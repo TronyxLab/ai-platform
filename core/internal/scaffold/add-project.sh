@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: add-project CLI template copy placeholder-replace git-init checklist FQDN-conflict dev-cli register node-yaml context auto-domain gen-env-platform Makefile AGENTS
-# STRUCTURE: parse_args → auto_domain → validate_inputs → show_plan → confirm → copy_template [--exclude platform-deploy.yml] → gen_ai_platform_yaml → replace_placeholders → gen_env_platform → gen_project_makefile → gen_project_agents → git_init → create_github_repo → checklist → [add-vhost] → [register_in_node_yaml] → summary
+# GREP_SUMMARY: add-project CLI template copy render-project-template git-init checklist FQDN-conflict dev-cli register node-yaml context auto-domain gen-env-platform Makefile AGENTS
+# STRUCTURE: parse_args → auto_domain → validate_inputs → show_plan → confirm → copy_template [--exclude platform-deploy.yml] → gen_ai_platform_yaml → render_project_template → gen_env_platform → gen_project_makefile → gen_project_agents → git_init → create_github_repo → checklist → [add-vhost] → [register_in_node_yaml] → summary
 # region MODULE_CONTRACT
 ## @purpose  Create a new project from a template in the organization directory, outside ai-platform/.
 ##           T9 update: auto-domain, gen-env-platform.sh integration, project Makefile/AGENTS.md generation,
@@ -322,51 +322,45 @@ YAML
 }
 # endregion GENERATE_AI_PLATFORM_YAML
 
-# region REPLACE_PLACEHOLDERS
-replace_placeholders() {
+# region RENDER_PROJECT_TEMPLATE
+## @purpose  Render project template files via template-engine.sh (replaces inline sed).
+## @io       Calls: template-engine.sh render-dir <project_dir> with PROJECT_NAME, ORG_NAME, DOMAIN, etc.
+## @rationale T2A: replaced inline sed with template engine for strict grammar {{VAR}} and testability.
+## @changes 2026-07-18 · T2A — replaced replace_placeholders() with render_project_template() calling template-engine.sh
+render_project_template() {
     local project_dir="${PROJECTS_ROOT}/${ORG}/${NAME}"
 
     if [[ "$DRY_RUN" == true ]]; then
-        log_imp 7 "-" "[DRY-RUN] Would replace placeholders in: ${project_dir}"
+        log_imp 7 "-" "[DRY-RUN] Would render templates in: ${project_dir}"
         return 0
     fi
 
-    log_imp 7 "-" "Replacing placeholders in project files"
+    log_imp 7 "-" "Rendering project templates via template-engine.sh"
 
     local domain_val="${DOMAIN:-false}"
+    local engine_script="${SCRIPT_DIR}/../template-engine.sh"
 
-    while IFS= read -r -d '' file; do
-        if [[ "$file" == *"/.git/"* ]]; then
-            continue
-        fi
+    if [[ ! -x "$engine_script" ]]; then
+        log_crit "Template engine not found: ${engine_script}"
+        return 1
+    fi
 
-        if ! file -b --mime-type "$file" | grep -qE '^text/|application/json|application/xml|inode/x-empty'; then
-            log_imp 6 "-" "Skipping non-text file: ${file}"
-            continue
-        fi
+    bash "$engine_script" render-dir "$project_dir" \
+        PROJECT_NAME="${NAME}" \
+        ORG_NAME="${ORG}" \
+        DOMAIN="${domain_val}" \
+        NODE_NAME="${NODE_NAME}" \
+        PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-}"
 
-        local modified=false
-
-        if grep -q "__PROJECT_NAME__" "$file" 2>/dev/null; then
-            sed -i.bak "s/__PROJECT_NAME__/${NAME}/g" "$file" && rm "${file}.bak"
-            modified=true
-        fi
-        if grep -q "__DOMAIN__" "$file" 2>/dev/null; then
-            sed -i.bak "s/__DOMAIN__/${domain_val}/g" "$file" && rm "${file}.bak"
-            modified=true
-        fi
-        if grep -q "__ORG_NAME__" "$file" 2>/dev/null; then
-            sed -i.bak "s/__ORG_NAME__/${ORG}/g" "$file" && rm "${file}.bak"
-            modified=true
-        fi
-        if [[ "$modified" == true ]]; then
-            log_imp 6 "-" "  Replaced placeholders in: ${file#"${project_dir}"/}"
-        fi
-    done < <(find "$project_dir" -type f -print0)
-
-    log_imp 7 "-" "Placeholders replaced"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        log_imp 9 "-" "Project templates rendered successfully"
+    else
+        log_crit "Template rendering failed (exit=${rc})"
+        return 1
+    fi
 }
-# endregion REPLACE_PLACEHOLDERS
+# endregion RENDER_PROJECT_TEMPLATE
 
 # region GEN_ENV_PLATFORM
 ## @purpose  Generate .env.platform in the project directory via gen-env-platform.sh.
@@ -808,7 +802,7 @@ main() {
     generate_ai_platform_yaml \
         "${PROJECTS_ROOT}/${ORG}/${NAME}" \
         "$NAME" "$TEMPLATE" "$ORG" "$NODE" "$DOMAIN" "$DATABASE" "$MODE" "$CONTEXT"
-    replace_placeholders
+    render_project_template
     gen_env_platform
     gen_project_makefile
     gen_project_agents

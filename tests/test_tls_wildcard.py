@@ -56,7 +56,7 @@ LE_CERT_PATH_PREFIX: str = "/etc/letsencrypt/live/"
 # Vhost config files that SHOULD contain SSL blocks (HTTPS enabled)
 SSL_VHOST_FILES: frozenset = frozenset(
     {
-        "platform-default.conf",
+        "platform-default.conf.template",
         "hermes-dashboard.conf",
         "grafana-vhost.conf",
         "prometheus-vhost.conf",
@@ -68,7 +68,7 @@ SSL_VHOST_FILES: frozenset = frozenset(
 # All vhost config files (including HTTP-only bootstrap), excluding main nginx.conf
 ALL_VHOST_FILES: frozenset = frozenset(
     {
-        "platform-default.conf",
+        "platform-default.conf.template",
         "platform-http.conf",
         "hermes-dashboard.conf",
         "grafana-vhost.conf",
@@ -500,7 +500,7 @@ def test_vhost_server_name_uses_domain_template(
 
 
 # region FUNC_test_platform_default_conf_has_ssl
-## @purpose — Verify platform-default.conf contains a proper HTTPS block:
+## @purpose — Verify platform-default.conf.template contains a proper HTTPS block:
 ##            `listen 443 ssl` and `ssl_certificate` referencing ${PLATFORM_DOMAIN}.
 ##            This is the primary platform vhost — if it lacks SSL, the entire
 ##            platform is served over HTTP.
@@ -510,7 +510,7 @@ def test_vhost_server_name_uses_domain_template(
 ##   - Must contain `listen 443 ssl` (may also have http2, default_server)
 ##   - Must contain at least one ssl_certificate directive
 ##   - The ssl_certificate path must contain PLATFORM_DOMAIN_TEMPLATE
-## @rationale — platform-default.conf is the main vhost for ${PLATFORM_DOMAIN}.
+## @rationale — platform-default.conf.template is the main vhost for ${PLATFORM_DOMAIN}.
 ##              Without its HTTPS block, the platform root URL serves HTTP only.
 
 
@@ -521,13 +521,13 @@ def test_platform_default_conf_has_ssl(
     _platform_root: str,
 ) -> None:
     """
-    # ▶ platform-default.conf → ⚡ read → ◇ 'listen 443 ssl'?
+    # ▶ platform-default.conf.template → ⚡ read → ◇ 'listen 443 ssl'?
     # → ◇ ssl_certificate + PLATFORM_DOMAIN_TEMPLATE? → ⎋ pass | fail
     """
 
     # 🧪 TRAP[TEST] · Regression: platform-default.conf HTTPS was commented out (TRAP[BUG] 2026-06-07) · Scenario: read config → check 'listen 443 ssl' + ssl_certificate PLATFORM_DOMAIN · Last fail: Never · Remove if: platform vhost template replaced with non-nginx solution
     # region BLOCK_Setup
-    filename = "platform-default.conf"
+    filename = "platform-default.conf.template"
     logger.info("[IMP:7][test_platform_default_conf_has_ssl] Checking %s for HTTPS block ...", filename)
     # endregion
 
@@ -556,14 +556,14 @@ def test_platform_default_conf_has_ssl(
     # region BLOCK_Assert
     failures: list[str] = []
     if not has_ssl_listen:
-        failures.append("platform-default.conf: missing 'listen 443 ssl' directive")
+        failures.append("platform-default.conf.template: missing 'listen 443 ssl' directive")
     if not has_cert:
-        failures.append("platform-default.conf: no ssl_certificate directive found")
+        failures.append("platform-default.conf.template: no ssl_certificate directive found")
     if not has_template_cert:
-        failures.append(f"platform-default.conf: ssl_certificate paths missing '{PLATFORM_DOMAIN_TEMPLATE}' template")
+        failures.append(f"platform-default.conf.template: ssl_certificate paths missing '{PLATFORM_DOMAIN_TEMPLATE}' template")
 
     if failures:
-        pytest.fail("platform-default.conf SSL validation failed:\n" + "\n".join(f"  - {f}" for f in failures))
+        pytest.fail("platform-default.conf.template SSL validation failed:\n" + "\n".join(f"  - {f}" for f in failures))
 
     logger.info(
         "[IMP:9][test_platform_default_conf_has_ssl] ✅ %s: HTTPS block with wildcard cert path confirmed", filename

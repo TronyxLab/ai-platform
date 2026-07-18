@@ -31,7 +31,19 @@ venv: $(VENV)
 # test infrastructure (volume dirs, Docker networks) is managed by tests/conftest.py
 # test_infra fixture — autouse session-scoped, replaces former test-infra-up/down targets.
 
-.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync hermes-build-platform hermes-build-context hermes-push-l1 deploy bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify
+.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify
+
+## templates-check: Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic at unresolved
+templates-check:
+	@echo "[IMP:7][make][templates-check] Checking template resolvability..."
+	@core/internal/template-engine.sh check --verbose
+	@echo "[IMP:9][make][templates-check] All templates resolvable"
+
+## templates-render: Render all templates per manifest
+templates-render:
+	@echo "[IMP:7][make][templates-render] Rendering templates from manifest..."
+	@core/internal/template-engine.sh render-all
+	@echo "[IMP:9][make][templates-render] All templates rendered"
 
 ## discover-modules: Auto-discover modules and regenerate docker-compose.yml include section
 discover-modules:

@@ -94,13 +94,33 @@ def test_template_validates_against_schema(template_path: str) -> None:
         schema = json.load(f)
     logger.info("[IMP:8] Schema loaded from %s", SCHEMA_PATH)
 
-    # --- [IMP:8] Загрузка шаблона
-    with open(template_path) as f:
-        manifest = yaml.safe_load(f)
+        # --- [IMP:8] Загрузка шаблона с заменой {{VAR}} placeholder'ов перед YAML-парсингом
+    # Шаблоны теперь используют {{VAR}} синтаксис template engine, который не является
+    # валидным YAML ({{}} интерпретируется как flow mapping). Заменяем на текстовые
+    # значения ДО safe_load, чтобы YAML-парсер не падал.
+    _TEMPLATE_VAR_RE = re.compile(r"\{\{[A-Z][A-Z0-9_]*\}\}")
+    _VAR_REPLACEMENTS = {
+        "{{PROJECT_NAME}}": "testproject",
+        "{{ORG_NAME}}": "testorg",
+        "{{DOMAIN}}": "example.com",
+        "{{NODE_NAME}}": "node1",
+        "{{PLATFORM_DOMAIN}}": "platform.example.com",
+        "{{CONTEXT}}": "testctx",
+    }
 
-    # --- [IMP:8] Замена placeholder'ов на валидные тестовые значения
+    with open(template_path) as f:
+        raw_text = f.read()
+
+    def _replace_var(m: re.Match) -> str:
+        return _VAR_REPLACEMENTS.get(m.group(0), "testvalue")
+
+    clean_text = _TEMPLATE_VAR_RE.sub(_replace_var, raw_text)
+    manifest = yaml.safe_load(clean_text)
+    logger.info("[IMP:8] {{VAR}} placeholders replaced for %s", template_path)
+
+    # --- [IMP:8] Old-style ($VAR) placeholder replacement (for backward compat)
     manifest_clean = _replace_placeholders(manifest)
-    logger.info("[IMP:8] Placeholders replaced for %s", template_path)
+    logger.info("[IMP:8] $VAR placeholders (if any) replaced for %s", template_path)
 
     # --- [IMP:9] Валидация
     try:

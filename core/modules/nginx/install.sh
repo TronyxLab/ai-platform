@@ -629,6 +629,9 @@ _deploy_shared_snippets() {
     fi
 
     # ── ssl-params.conf (requires PLATFORM_DOMAIN substitution) ───────────
+    # NOT a template-engine target — file uses ${PLATFORM_DOMAIN} (envsubst syntax)
+    # for Docker container compatibility. template-engine.sh only handles {{VAR}}.
+    # sed is kept as the substitution mechanism for the bare-metal nginx path.
     local ssl_src="${SCRIPT_DIR}/config/ssl-params.conf.template"
     local ssl_dst="/etc/nginx/conf.d/ssl-params.conf"
     if [[ -f "$ssl_src" ]]; then
@@ -659,7 +662,7 @@ _deploy_vhost_full() {
     local overlay_dir="${2:-}"
     local dst="$3"
 
-    local vhost_src="${SCRIPT_DIR}/config/platform-default.conf"
+    local vhost_src="${SCRIPT_DIR}/config/platform-default.conf.template"
     if [[ ! -f "$vhost_src" ]]; then
         log_step "deploy-config" "FAIL" "Full vhost template not found: ${vhost_src}"
         return 1
@@ -672,6 +675,8 @@ _deploy_vhost_full() {
     fi
 
     # Substitute ${PLATFORM_DOMAIN} with actual domain via sed
+    # NOT a template-engine target — file uses ${PLATFORM_DOMAIN} (envsubst syntax)
+    # for Docker container compatibility. template-engine.sh only handles {{VAR}}.
     local resolved_src
     resolved_src="$(mktemp)"
     sed "s|\${PLATFORM_DOMAIN}|${domain}|g" "$vhost_src" > "$resolved_src"
