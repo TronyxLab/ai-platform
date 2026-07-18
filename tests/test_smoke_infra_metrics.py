@@ -18,6 +18,7 @@
 # endregion MODULE_CONTRACT
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -181,7 +182,13 @@ def infra_metrics_compose():
     )
 
     # ── Step 4: Remove stale containers from shared stack ─────────────────────
-    _stale_containers = ["cadvisor-test", "node-exporter-test", "nginx-prometheus-exporter-test", "redis-exporter-test"]
+    _stale_containers = [
+        "cadvisor-test",
+        "node-exporter-test",
+        "nginx-prometheus-exporter-test",
+        "redis-exporter-test",
+        "postgres-exporter-test",
+    ]
     for _c in _stale_containers:
         _logger.info("[IMP:8][fixture][setup] Cleaning stale container: %s", _c)
         subprocess.run(
@@ -212,7 +219,16 @@ def infra_metrics_compose():
     ]
 
     _logger.info("[IMP:7][infra_metrics_compose][setup] Starting infra-metrics stack")
-    up_result = _run_docker(up_args, timeout=_COMPOSE_UP_TIMEOUT)
+    # Set env vars for postgres-exporter (needs POSTGRES_PASSWORD for DATA_SOURCE_NAME)
+    up_result = _run_docker(
+        up_args,
+        timeout=_COMPOSE_UP_TIMEOUT,
+        env_override={
+            "POSTGRES_USER": os.environ.get("POSTGRES_USER", "postgres"),
+            "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", "test_password_2024"),
+            "POSTGRES_DB": os.environ.get("POSTGRES_DB", "platform"),
+        },
+    )
 
     if up_result.returncode != 0:
         _logger.error(

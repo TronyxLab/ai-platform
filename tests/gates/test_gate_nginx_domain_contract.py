@@ -31,7 +31,7 @@ _BASE_YML = _PROJECT_ROOT / "core" / "modules" / "nginx" / "docker-compose.base.
 
 # Files that must use templates (9 files, excludes nginx.conf + includes/security-headers.conf)
 _TEMPLATE_CONF_FILES = {
-    "platform-default.conf.template",
+    "platform-default.conf",
     "platform-http.conf",
     "grafana-vhost.conf",
     "hermes-dashboard.conf",
@@ -151,7 +151,10 @@ def test_platform_domain_placeholder_present(caplog) -> None:
             violations.append("platform-default.conf.template: does not contain ${PLATFORM_DOMAIN}")
             logger.info("[IMP:9][gate] FAIL: platform-default.conf.template missing PLATFORM_DOMAIN")
         else:
-            logger.info("[IMP:8][gate] OK: platform-default.conf.template contains %d PLATFORM_DOMAIN occurrences", count)
+            logger.info(
+                "[IMP:8][gate] OK: platform-default.conf.template contains %d PLATFORM_DOMAIN occurrences", count
+            )
+    else:
         violations.append("platform-default.conf.template: file not found")
         logger.info("[IMP:9][gate] FAIL: platform-default.conf.template not found")
 

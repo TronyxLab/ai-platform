@@ -234,11 +234,11 @@ services:
   # observability-net (scrape) and shared-db-net (postgres access).
   # region service:postgres-exporter
   postgres-exporter:
-    # ⚠️ TRAP[DECISION] · 2026-07-18 · — · postgres-exporter v0.16.0 — digest not pinned
-    # · Rejected: pinned digest unavailable offline — tag-only pin is weaker
-    # · Reason: digest unavailable at implementation time; future task should pin
-    # · Rev: before production deployment, resolve digest via `docker pull && docker inspect`
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    # ✅ TRAP[DECISION] · 2026-07-18 · — · postgres-exporter v0.16.0 digest pinned
+    # · Digest resolved via `docker pull && docker inspect` — sha256:6999a7657e2f2fb0ca6ebf417213eebf6dc7d21b30708c622f6fcb11183a2bb0
+    # · Reason: tag + digest pinning ensures reproducible builds
+    # · Rev: on next upstream release — reevaluate pin
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0@sha256:6999a7657e2f2fb0ca6ebf417213eebf6dc7d21b30708c622f6fcb11183a2bb0
     container_name: postgres-exporter
     profiles: [infra-metrics]
     restart: unless-stopped
@@ -264,10 +264,10 @@ services:
     # ⚠️ TRAP[DECISION] · 2026-07-18 · — · postgres-exporter healthcheck via --version
     # · Rejected: HTTP healthcheck on /metrics endpoint — requires shell/wget (image is distroless)
     # · Reason: follows redis-exporter pattern (scratch/distroless, --version returns 0)
-    # · Binary path: /postgres_exporter (confirmed by image layers — single Go binary)
+    # · Binary path: /bin/postgres_exporter (not /postgres_exporter — image stores in /bin/)
     # · Rev: if image switches to alpine or adds shell, replace with HTTP healthcheck
     healthcheck:
-      test: ["CMD", "/postgres_exporter", "--version"]
+      test: ["CMD", "/bin/postgres_exporter", "--version"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -94,7 +94,7 @@ def test_template_validates_against_schema(template_path: str) -> None:
         schema = json.load(f)
     logger.info("[IMP:8] Schema loaded from %s", SCHEMA_PATH)
 
-        # --- [IMP:8] Загрузка шаблона с заменой {{VAR}} placeholder'ов перед YAML-парсингом
+    # --- [IMP:8] Загрузка шаблона с заменой {{VAR}} placeholder'ов перед YAML-парсингом
     # Шаблоны теперь используют {{VAR}} синтаксис template engine, который не является
     # валидным YAML ({{}} интерпретируется как flow mapping). Заменяем на текстовые
     # значения ДО safe_load, чтобы YAML-парсер не падал.

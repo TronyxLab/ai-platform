@@ -48,7 +48,11 @@ def _find_template_yamls() -> list[tuple[str, pathlib.Path, dict]]:
             continue
 
         with open(yaml_path) as f:
-            data = yaml.safe_load(f)
+            raw = f.read()
+        # Replace {{...}} placeholders with valid YAML strings before parsing
+        # (Mustache-style placeholders crash yaml.safe_load as unhashable dict keys)
+        processed = re.sub(r"\{\{(\w+)\}\}", r"placeholder_\1", raw)
+        data = yaml.safe_load(processed)
 
         # Check metrics flag
         monitoring = data.get("monitoring", {}) or {}

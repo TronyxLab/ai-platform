@@ -150,7 +150,7 @@ def _collect_path_variables(paths_file: Path | None = None) -> dict[str, str]:
     variables: dict[str, str] = {}
     # Pattern: optional readonly/export prefix, VAR=value
     # Value may be quoted ("..." or '...') or bare
-    pattern = re.compile(r'^(?:readonly\s+|export\s+)?(\w+)=(.*)')
+    pattern = re.compile(r"^(?:readonly\s+|export\s+)?(\w+)=(.*)")
 
     for line in content.split("\n"):
         stripped = line.strip()
@@ -165,8 +165,9 @@ def _collect_path_variables(paths_file: Path | None = None) -> dict[str, str]:
         raw_value = m.group(2).strip()
 
         # Strip surrounding quotes
-        if (raw_value.startswith('"') and raw_value.endswith('"')) or \
-           (raw_value.startswith("'") and raw_value.endswith("'")):
+        if (raw_value.startswith('"') and raw_value.endswith('"')) or (
+            raw_value.startswith("'") and raw_value.endswith("'")
+        ):
             raw_value = raw_value[1:-1]
 
         # Strip trailing inline comments (# ...)
@@ -286,7 +287,7 @@ def _looks_like_path(text: str) -> bool:
         and len(t) > 1  # single $ is not a variable
         and not t.startswith("${")  # ${var}/path уже покрыто has_var_prefix
         and t not in _NON_IMPORT_ARGS
-        and not re.match(r'^\$[\d@*!#?\-]$', t)  # спец-переменные: $1, $@, $*, $!, $#, $?, $-
+        and not re.match(r"^\$[\d@*!#?\-]$", t)  # спец-переменные: $1, $@, $*, $!, $#, $?, $-
     )
 
     return has_separator or has_var_prefix or has_relative or has_absolute or is_bare_variable
@@ -524,7 +525,7 @@ def scan_sh_file(file_path: Path, source_layer: str | None = None) -> list[tuple
             continue
 
         # Pattern 5 (NEW DataFlow T3.1): make -C <path>
-        m = re.search(r'(?:^|\s)make\s+-C\s+(\S+)', stripped)
+        m = re.search(r"(?:^|\s)make\s+-C\s+(\S+)", stripped)
         if m:
             path = m.group(1)
             if _looks_like_path(path):
@@ -532,7 +533,7 @@ def scan_sh_file(file_path: Path, source_layer: str | None = None) -> list[tuple
             continue
 
         # Pattern 6 (NEW DataFlow T3.2): docker compose -f <path>
-        m = re.search(r'(?:^|\s)docker[\s-]+compose\s+(?:.*\s)?-f\s+(\S+)', stripped)
+        m = re.search(r"(?:^|\s)docker[\s-]+compose\s+(?:.*\s)?-f\s+(\S+)", stripped)
         if m:
             path = m.group(1)
             if _looks_like_path(path) and path not in ("-f",):
@@ -663,19 +664,23 @@ def _detect_invoke_calls(source_file: Path) -> list[dict]:
             interface = m.group(2)
             # Skip if either is a variable reference (starts with $)
             if module.startswith("$") or interface.startswith("$"):
-                calls.append({
-                    "module": module,
-                    "interface": interface,
-                    "lineno": i,
-                    "warn": True,  # variable args — can't statically validate
-                })
+                calls.append(
+                    {
+                        "module": module,
+                        "interface": interface,
+                        "lineno": i,
+                        "warn": True,  # variable args — can't statically validate
+                    }
+                )
             else:
-                calls.append({
-                    "module": module,
-                    "interface": interface,
-                    "lineno": i,
-                    "warn": False,
-                })
+                calls.append(
+                    {
+                        "module": module,
+                        "interface": interface,
+                        "lineno": i,
+                        "warn": False,
+                    }
+                )
 
     return calls
 
@@ -722,8 +727,7 @@ def _validate_interfaces(
         module_yaml = CORE_DIR / "modules" / module / "module.yaml"
         if not module_yaml.exists():
             violations.append(
-                f"  {source_file}:{lineno} — [internal→modules·invoke] "
-                f"module.yaml not found for module '{module}'"
+                f"  {source_file}:{lineno} — [internal→modules·invoke] module.yaml not found for module '{module}'"
             )
             continue
 
@@ -732,8 +736,7 @@ def _validate_interfaces(
             content = module_yaml.read_text(encoding="utf-8", errors="replace")
         except Exception:
             violations.append(
-                f"  {source_file}:{lineno} — [internal→modules·invoke] "
-                f"Cannot read module.yaml for '{module}'"
+                f"  {source_file}:{lineno} — [internal→modules·invoke] Cannot read module.yaml for '{module}'"
             )
             continue
 
@@ -815,14 +818,11 @@ def _detect_direct_module_calls(source_file: Path) -> list[tuple[int, str, str]]
                 target = m.group(1)
                 # Check if target literally contains "modules/" (direct path)
                 if "modules/" in target:
-                    direct_calls.append((i, f"bash (direct path)", target))
+                    direct_calls.append((i, "bash (direct path)", target))
                 # Check if target is "${...}" or "$..." with modules/ in the resolved path
                 # (variable references)
-                elif target.startswith("$") or target.startswith('"$'):
-                    # Check if the variable was assigned from a modules/ path
-                    # (simple assignment tracking)
-                    if _resolve_var_to_modules_path(target, content):
-                        direct_calls.append((i, f"bash (variable → modules/)", target))
+                elif target.startswith(("$", '"$')) and _resolve_var_to_modules_path(target, content):
+                    direct_calls.append((i, "bash (variable → modules/)", target))
 
         # Pattern: source modules/<name>/...
         m = re.search(r"(?:^|\s)(?:source)\s+(\S+)", stripped)
@@ -835,9 +835,8 @@ def _detect_direct_module_calls(source_file: Path) -> list[tuple[int, str, str]]
         m = re.search(r"(?:^|\s)\.\s+(\S+)", stripped)
         if m:
             target = m.group(1)
-            if target not in ('"$@"', "${@}", "$@", '".",'):
-                if "modules/" in target:
-                    direct_calls.append((i, ". (direct path)", target))
+            if target not in ('"$@"', "${@}", "$@", '".",') and "modules/" in target:
+                direct_calls.append((i, ". (direct path)", target))
 
     return direct_calls
 
@@ -863,15 +862,11 @@ def _resolve_var_to_modules_path(var_ref: str, file_content: str) -> bool:
     # local hook_script="$(dirname "$module_yaml")/..."  (indirect — hooks)
     # local install_script="${PATHS_MODULES_DIR}/..."
     patterns = [
-        rf'local\s+{re.escape(var_name)}\s*=\s*.*modules/',
-        rf'{re.escape(var_name)}\s*=\s*.*modules/',
-        rf'local\s+{re.escape(var_name)}\s*=\s*.*dirname\s+\${{?module_yaml}}?.*hook',
+        rf"local\s+{re.escape(var_name)}\s*=\s*.*modules/",
+        rf"{re.escape(var_name)}\s*=\s*.*modules/",
+        rf"local\s+{re.escape(var_name)}\s*=\s*.*dirname\s+\${{?module_yaml}}?.*hook",
     ]
-    for pattern in patterns:
-        if re.search(pattern, file_content):
-            return True
-
-    return False
+    return any(re.search(pattern, file_content) for pattern in patterns)
 
 
 # ─── VIOLATION CHECK ─────────────────────────────────────────────────────
@@ -1103,10 +1098,7 @@ def test_direct_module_call_detected(tmp_path: Path) -> None:
     """
     # region FUNC_test_direct_module_call_detected
     test_file = tmp_path / "test.sh"
-    test_file.write_text(
-        '#!/usr/bin/env bash\n'
-        'bash "${CORE_DIR}/modules/postgres/healthcheck.sh" liveness\n'
-    )
+    test_file.write_text('#!/usr/bin/env bash\nbash "${CORE_DIR}/modules/postgres/healthcheck.sh" liveness\n')
     calls = _detect_direct_module_calls(test_file)
     assert len(calls) == 1, f"Expected 1 direct call, got {len(calls)}: {calls}"
     assert "modules/" in calls[0][2], f"Expected modules/ in target: {calls[0]}"
@@ -1127,17 +1119,18 @@ def test_gate8_original_blindness_fixed(tmp_path: Path) -> None:
     # region FUNC_test_gate8_original_blindness_fixed
     test_file = tmp_path / "test.sh"
     test_file.write_text(
-        '#!/usr/bin/env bash\n'
+        "#!/usr/bin/env bash\n"
         'local hc_script="${CORE_DIR}/modules/postgres/healthcheck.sh"\n'
         'bash "$hc_script" liveness\n'
     )
     calls = _detect_direct_module_calls(test_file)
     assert len(calls) >= 1, (
-        f"Gate #8 v2 must detect bash via variable — old gate was blind to this pattern. "
-        f"Calls found: {calls}"
+        f"Gate #8 v2 must detect bash via variable — old gate was blind to this pattern. Calls found: {calls}"
     )
     logger.info("[IMP:9][gate8-v2][test] Old blind pattern detected: %s", calls)
     # endregion FUNC_test_gate8_original_blindness_fixed
+
+
 # endregion TEST_DETECT_DIRECT_CALL
 
 
@@ -1158,18 +1151,10 @@ def test_invoke_registered_interface_passes(tmp_path: Path) -> None:
     module_dir = CORE_DIR / "modules" / "_test_registered"
     module_dir.mkdir(parents=True, exist_ok=True)
     module_yaml = module_dir / "module.yaml"
-    module_yaml.write_text(
-        "name: _test_registered\n"
-        "install_type: docker\n"
-        "interfaces:\n"
-        "  - healthcheck\n"
-    )
+    module_yaml.write_text("name: _test_registered\ninstall_type: docker\ninterfaces:\n  - healthcheck\n")
 
     test_file = tmp_path / "deploy.sh"
-    test_file.write_text(
-        '#!/usr/bin/env bash\n'
-        'invoke_module_interface _test_registered healthcheck liveness\n'
-    )
+    test_file.write_text("#!/usr/bin/env bash\ninvoke_module_interface _test_registered healthcheck liveness\n")
 
     try:
         invoke_calls = _detect_invoke_calls(test_file)
@@ -1180,6 +1165,7 @@ def test_invoke_registered_interface_passes(tmp_path: Path) -> None:
     finally:
         # Cleanup
         import shutil
+
         shutil.rmtree(module_dir, ignore_errors=True)
     # endregion FUNC_test_invoke_registered_interface_passes
 
@@ -1200,17 +1186,10 @@ def test_invoke_unregistered_interface_fails(tmp_path: Path) -> None:
     module_dir = CORE_DIR / "modules" / "_test_unregistered"
     module_dir.mkdir(parents=True, exist_ok=True)
     module_yaml = module_dir / "module.yaml"
-    module_yaml.write_text(
-        "name: _test_unregistered\n"
-        "install_type: docker\n"
-        "interfaces: []\n"
-    )
+    module_yaml.write_text("name: _test_unregistered\ninstall_type: docker\ninterfaces: []\n")
 
     test_file = tmp_path / "deploy.sh"
-    test_file.write_text(
-        '#!/usr/bin/env bash\n'
-        'invoke_module_interface _test_unregistered healthcheck liveness\n'
-    )
+    test_file.write_text("#!/usr/bin/env bash\ninvoke_module_interface _test_unregistered healthcheck liveness\n")
 
     try:
         invoke_calls = _detect_invoke_calls(test_file)
@@ -1221,6 +1200,7 @@ def test_invoke_unregistered_interface_fails(tmp_path: Path) -> None:
         logger.info("[IMP:9][gate8-v2][test] Unregistered interface detected: %s", violations[0])
     finally:
         import shutil
+
         shutil.rmtree(module_dir, ignore_errors=True)
     # endregion FUNC_test_invoke_unregistered_interface_fails
 
@@ -1239,18 +1219,16 @@ def test_all_call_sites_use_invoke() -> None:
     violations = lint_core()
 
     # Filter to only Gate #8 v2 violations (direct calls + invoke validation)
-    gate8_violations = [
-        v for v in violations
-        if "[internal→modules·direct]" in v or "[internal→modules·invoke]" in v
-    ]
+    gate8_violations = [v for v in violations if "[internal→modules·direct]" in v or "[internal→modules·invoke]" in v]
 
     # After call site refactoring, there should be 0 Gate #8 v2 violations
     assert len(gate8_violations) == 0, (
-        f"Gate #8 v2 found {len(gate8_violations)} typed contract violation(s):\n"
-        + "\n".join(gate8_violations)
+        f"Gate #8 v2 found {len(gate8_violations)} typed contract violation(s):\n" + "\n".join(gate8_violations)
     )
     logger.info("[IMP:9][gate8-v2][test] All call sites validated — 0 typed contract violations")
     # endregion FUNC_test_all_call_sites_use_invoke
+
+
 # endregion TEST_INVOKE_VALIDATION
 
 
@@ -1345,6 +1323,8 @@ class TestLooksLikePath:
     def test_positional_param(self) -> None:
         """Positional parameter $1 is not a path."""
         assert _looks_like_path("$1") is False
+
+
 # endregion TEST_LOOKS_LIKE_PATH
 
 
@@ -1390,9 +1370,7 @@ class TestResolveImport:
     def test_bare_variable_with_trace(self, tmp_path: Path) -> None:
         """Bare variable traced to local assignment resolves correctly."""
         f = tmp_path / "test.sh"
-        f.write_text(
-            'local hc_script="${CORE_DIR}/modules/postgres/healthcheck.sh"\n'
-        )
+        f.write_text('local hc_script="${CORE_DIR}/modules/postgres/healthcheck.sh"\n')
         traced = _trace_variable_assignment(f, "hc_script")
         assert traced is not None
         assert "modules/postgres/healthcheck.sh" in traced
@@ -1435,6 +1413,8 @@ class TestResolveImport:
             # Clean up parent if empty
             if source.parent.exists() and not any(source.parent.iterdir()):
                 source.parent.rmdir()
+
+
 # endregion TEST_RESOLVE_IMPORT
 
 
@@ -1467,9 +1447,7 @@ class TestCollectPathVariables:
     def test_custom_paths_file(self, tmp_path: Path) -> None:
         """Custom paths file is parsed correctly."""
         f = tmp_path / "paths.sh"
-        f.write_text(
-            'readonly MY_DIR="/opt/myapp"\nexport MY_OTHER="/var/lib/myapp"\n'
-        )
+        f.write_text('readonly MY_DIR="/opt/myapp"\nexport MY_OTHER="/var/lib/myapp"\n')
         variables = _collect_path_variables(f)
         assert "MY_DIR" in variables
         assert variables["MY_DIR"] == "/opt/myapp"
@@ -1494,6 +1472,8 @@ class TestCollectPathVariables:
         f.write_text("# This is a comment\n# Another comment\n")
         variables = _collect_path_variables(f)
         assert variables == {}
+
+
 # endregion TEST_COLLECT_PATH_VARIABLES
 
 
@@ -1512,10 +1492,7 @@ class TestTraceVariableAssignment:
     def test_local_assignment_found(self, tmp_path: Path) -> None:
         """local var=path is traced correctly."""
         f = tmp_path / "test.sh"
-        f.write_text(
-            'local hc_script="${CORE_DIR}/modules/postgres/healthcheck.sh"\n'
-            'bash "$hc_script"\n'
-        )
+        f.write_text('local hc_script="${CORE_DIR}/modules/postgres/healthcheck.sh"\nbash "$hc_script"\n')
         result = _trace_variable_assignment(f, "hc_script")
         assert result is not None
         assert "healthcheck.sh" in result
@@ -1536,11 +1513,7 @@ class TestTraceVariableAssignment:
     def test_multiple_assignments_last_wins(self, tmp_path: Path) -> None:
         """Last assignment is used."""
         f = tmp_path / "test.sh"
-        f.write_text(
-            'local var="/first/path.sh"\n'
-            'local var="/second/path.sh"\n'
-            'bash "$var"\n'
-        )
+        f.write_text('local var="/first/path.sh"\nlocal var="/second/path.sh"\nbash "$var"\n')
         result = _trace_variable_assignment(f, "var")
         assert result is not None
         assert "second" in result
@@ -1561,9 +1534,7 @@ class TestTraceVariableAssignment:
     def test_export_assignment(self, tmp_path: Path) -> None:
         """export var=path is traced."""
         f = tmp_path / "test.sh"
-        f.write_text(
-            'export MY_SCRIPT="/opt/platform/core/modules/postgres/healthcheck.sh"\n'
-        )
+        f.write_text('export MY_SCRIPT="/opt/platform/core/modules/postgres/healthcheck.sh"\n')
         result = _trace_variable_assignment(f, "MY_SCRIPT")
         assert result is not None
         assert "healthcheck.sh" in result
@@ -1578,6 +1549,8 @@ class TestTraceVariableAssignment:
         result = _trace_variable_assignment(f, "MY_DIR")
         assert result is not None
         assert "postgres" in result
+
+
 # endregion TEST_TRACE_VARIABLE_ASSIGNMENT
 
 
@@ -1635,9 +1608,7 @@ class TestShellCheckIntegration:
 
         f = tmp_path / "test.sh"
         f.write_text(
-            '#!/bin/bash\n'
-            'local hc_script="${CORE_DIR}/modules/postgres/healthcheck.sh"\n'
-            'bash "$hc_script" liveness\n'
+            '#!/bin/bash\nlocal hc_script="${CORE_DIR}/modules/postgres/healthcheck.sh"\nbash "$hc_script" liveness\n'
         )
         # hc_script is locally assigned → SC2154 NOT triggered (it IS assigned)
         # This tests the limitation: ShellCheck layer B only helps when
@@ -1650,4 +1621,6 @@ class TestShellCheckIntegration:
             len(calls),
             calls,
         )
+
+
 # endregion TEST_SHELLCHECK_INTEGRATION

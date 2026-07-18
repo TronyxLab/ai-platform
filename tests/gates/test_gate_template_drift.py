@@ -11,15 +11,13 @@
 ## @usecases make gate MODE=fast runs this automatically via @pytest.mark.gate
 # endregion MODULE_CONTRACT
 
-import pytest
-import os
 import logging
+import os
 
+import pytest
 from conftest import ldd_trajectory
 
-PROJECT_ROOT = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
+PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 @pytest.mark.gate
@@ -67,4 +65,6 @@ def test_all_templates_resolvable(caplog):
         pytest.fail(f"Unresolved template placeholders:\n{error_msg}")
 
     logger.critical("[IMP:9][gate][template-drift] All templates resolvable")
+
+
 # endregion

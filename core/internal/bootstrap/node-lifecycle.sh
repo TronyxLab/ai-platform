@@ -857,7 +857,6 @@ PYEOF
                 step_warn "healthcheck:${mod_name}" "Healthcheck FAILED after ${hc_max_retries} attempts"
                 hc_fail=$(( hc_fail + 1 ))
             fi
-        fi
     done <<< "$modules_raw"
 
     if [[ "$hc_fail" -gt 0 ]]; then

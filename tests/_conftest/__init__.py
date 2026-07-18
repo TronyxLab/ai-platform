@@ -62,17 +62,17 @@ from _conftest.secrets import (  # noqa: F401
     scan_directory_for_secrets,
 )
 
+# ── session ───────────────────────────────────────────────────────────
+from _conftest.session import (  # noqa: F401
+    pytest_sessionfinish,
+    pytest_sessionstart,
+)
+
 # ── shellcheck ──────────────────────────────────────────────────────────
 from _conftest.shellcheck import (  # noqa: F401
     _check_shellcheck_available,
     _parse_shellcheck_sc2154,
     get_shellcheck_bash_calls,
-)
-
-# ── session ───────────────────────────────────────────────────────────
-from _conftest.session import (  # noqa: F401
-    pytest_sessionfinish,
-    pytest_sessionstart,
 )
 
 # ── skip_gate ─────────────────────────────────────────────────────────

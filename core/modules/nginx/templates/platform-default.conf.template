@@ -1,0 +1,18 @@
+server {
+    listen 80;
+    server_name default.{{PLATFORM_DOMAIN}};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name default.{{PLATFORM_DOMAIN}};
+
+    ssl_certificate /etc/nginx/ssl/{{PLATFORM_DOMAIN}}.crt;
+    ssl_certificate_key /etc/nginx/ssl/{{PLATFORM_DOMAIN}}.key;
+    ssl_trusted_certificate /etc/nginx/ssl/{{PLATFORM_DOMAIN}}.ca.crt;
+
+    location / {
+        return 404;
+    }
+}

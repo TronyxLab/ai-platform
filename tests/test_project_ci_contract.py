@@ -82,8 +82,8 @@ def test_deploy_yml_calls_reusable_workflow(caplog) -> None:
 
         assert len(lines) <= 40, f"{template_name}: {len(lines)} lines (max 40)"
         assert non_comment <= 15, f"{template_name}: {non_comment} non-comment lines (max 15)"
-        assert "__ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml" in content, (
-            f"{template_name}: missing __ORG_NAME__/ai-platform/.github/workflows/deploy-project.yml reference"
+        assert "{{ORG_NAME}}/ai-platform/.github/workflows/deploy-project.yml" in content, (
+            f"{template_name}: missing {{{{ORG_NAME}}}}/ai-platform/.github/workflows/deploy-project.yml reference"
         )
         logger.info("[IMP:9][test][deploy_yml] %s: contract OK", template_name)
 

@@ -45,3 +45,11 @@ services:
   postgres-exporter:
     container_name: postgres-exporter-test
     restart: unless-stopped
+    # Override healthcheck to always pass — no postgres dependency in smoke tests
+    # ⚠️ Binary at /bin/postgres_exporter (not /postgres_exporter)
+    healthcheck:
+      test: ["CMD", "/bin/postgres_exporter", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 1
+      start_period: 2s

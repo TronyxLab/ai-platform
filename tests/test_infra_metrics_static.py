@@ -38,7 +38,7 @@ HEALTHCHECK_SH = os.path.join(INFRA_METRICS_DIR, "healthcheck.sh")
 # ── Expected values ───────────────────────────────────────────────────────────
 EXPECTED_MODULE_NAME = "infra-metrics"
 EXPECTED_INSTALL_TYPE = "docker"
-EXPECTED_ENV_REQUIRES: list[str] = []
+EXPECTED_ENV_REQUIRES: list[str] = ["POSTGRES_USER", "POSTGRES_PASSWORD"]
 EXPECTED_SERVICES = [
     "cadvisor",
     "node-exporter",

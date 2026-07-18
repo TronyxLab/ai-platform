@@ -560,7 +560,9 @@ def test_platform_default_conf_has_ssl(
     if not has_cert:
         failures.append("platform-default.conf.template: no ssl_certificate directive found")
     if not has_template_cert:
-        failures.append(f"platform-default.conf.template: ssl_certificate paths missing '{PLATFORM_DOMAIN_TEMPLATE}' template")
+        failures.append(
+            f"platform-default.conf.template: ssl_certificate paths missing '{PLATFORM_DOMAIN_TEMPLATE}' template"
+        )
 
     if failures:
         pytest.fail("platform-default.conf.template SSL validation failed:\n" + "\n".join(f"  - {f}" for f in failures))

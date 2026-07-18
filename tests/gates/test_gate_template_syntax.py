@@ -12,15 +12,13 @@
 ## @usecases make gate MODE=fast runs this automatically via @pytest.mark.gate
 # endregion MODULE_CONTRACT
 
-import pytest
-import re
 import os
+import re
 
+import pytest
 from conftest import ldd_trajectory
 
-PROJECT_ROOT = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
+PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # Compose runtime vars that are ALLOWED (Docker Compose runtime substitution)
 # These are NOT template placeholders — they are resolved at compose up time
@@ -45,6 +43,7 @@ TEMPLATE_ENGINE_VAR = re.compile(r"\{\{[A-Z][A-Z0-9_]*\}\}")
 def test_all_templates_use_strict_grammar(caplog):
     """Verify all template files use unified {{UPPER_SNAKE}} syntax — no legacy __VAR__ or ${VAR} except compose runtime vars."""
     import logging
+
     logger = logging.getLogger(__name__)
 
     manifest_path = os.path.join(PROJECT_ROOT, "core", "templates", "template-manifest.yaml")
@@ -90,6 +89,8 @@ def test_all_templates_use_strict_grammar(caplog):
         pytest.fail(f"Template syntax violations:\n{error_msg}")
 
     logger.critical("[IMP:9][gate][template-syntax] All templates use strict grammar")
+
+
 # endregion
 
 
@@ -106,7 +107,6 @@ def _is_dual_role_file(display_path: str) -> bool:
     entrypoint) and bare-metal sed rendering. These are NOT migrated to {{VAR}}
     because envsubst only handles ${VAR} syntax.
     """
-    basename = os.path.basename(display_path)
     return "nginx" in display_path and ".template" in display_path
 
 
@@ -139,7 +139,7 @@ def _check_file(filepath: str, display_path: str, errors: list[str], *, is_dual_
     is_nginx_dual = _is_dual_role_file(display_path)
     is_readme = _is_readme_documentation(display_path)
     try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        with open(filepath, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError as e:
         errors.append(f"READ_ERR: {display_path}: {e}")
@@ -153,8 +153,7 @@ def _check_file(filepath: str, display_path: str, errors: list[str], *, is_dual_
             legacy_matches = LEGACY_DOUBLE_UNDERSCORE.findall(stripped)
             if legacy_matches:
                 errors.append(
-                    f"LEGACY_SYNTAX: {display_path}:{line_no}: "
-                    f"found __VAR__ syntax: {', '.join(legacy_matches)}"
+                    f"LEGACY_SYNTAX: {display_path}:{line_no}: found __VAR__ syntax: {', '.join(legacy_matches)}"
                 )
 
         # Check for ${VAR} — but allow in compose files (runtime vars) and nginx dual-role files
@@ -162,8 +161,7 @@ def _check_file(filepath: str, display_path: str, errors: list[str], *, is_dual_
             dollar_matches = re.findall(r"\$\{[A-Z_]+[^}]*\}", stripped)
             if dollar_matches:
                 errors.append(
-                    f"DOLLAR_SYNTAX: {display_path}:{line_no}: "
-                    f"found ${{VAR}} syntax: {', '.join(dollar_matches)}"
+                    f"DOLLAR_SYNTAX: {display_path}:{line_no}: found ${{VAR}} syntax: {', '.join(dollar_matches)}"
                 )
 
 

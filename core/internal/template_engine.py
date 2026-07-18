@@ -14,12 +14,12 @@
 ##            коллизию с Go-templating ({{ $labels.x }}) и Grafana ({{instance}}).
 # endregion MODULE_CONTRACT
 
+import contextlib
+import logging
 import os
 import re
 import sys
 import tempfile
-import logging
-from typing import IO
 
 try:
     import yaml
@@ -89,6 +89,7 @@ def parse_vars(var_pairs: list[str]) -> dict[str, str]:
 
 
 # endregion FUNC_PARSE_VARS
+
 
 # region FUNC_RENDER_TEMPLATE
 ## @purpose  Render a template file substituting {{VAR}} placeholders
@@ -212,6 +213,7 @@ def render_template(
 
 # endregion FUNC_RENDER_TEMPLATE
 
+
 # region FUNC_CHECK_UNCLOSED
 def _check_unclosed(content: str, template_path: str) -> None:
     """Check for unclosed ``{{`` placeholders.
@@ -236,6 +238,7 @@ def _check_unclosed(content: str, template_path: str) -> None:
 
 # endregion FUNC_CHECK_UNCLOSED
 
+
 # region FUNC_READ_LARGE_FILE
 def _read_large_file(path: str, chunk_size: int = 64 * 1024) -> str:
     """Read a large file (>100MB) in chunks to avoid memory detonation."""
@@ -257,6 +260,7 @@ def _read_large_file(path: str, chunk_size: int = 64 * 1024) -> str:
 
 # endregion FUNC_READ_LARGE_FILE
 
+
 # region FUNC_ATOMIC_WRITE
 def _atomic_write(content: str, output_path: str) -> None:
     """Write content atomically via temp file + os.rename.
@@ -264,7 +268,6 @@ def _atomic_write(content: str, output_path: str) -> None:
     Uses the same directory as output_path to ensure same-filesystem rename.
     """
     import os
-    import tempfile
 
     dir_name = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(dir_name, exist_ok=True)
@@ -280,14 +283,13 @@ def _atomic_write(content: str, output_path: str) -> None:
         os.rename(tmp_path, output_path)
     except BaseException:
         # Clean up temp file on any failure
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
 
 
 # endregion FUNC_ATOMIC_WRITE
+
 
 # region FUNC_RENDER_ALL
 ## @purpose  Read template-manifest.yaml and render all entries
@@ -323,7 +325,7 @@ def render_all(
     if yaml is None:
         raise ImportError("PyYAML is required for manifest support")
 
-    with open(manifest_path, "r") as f:
+    with open(manifest_path) as f:
         manifest = yaml.safe_load(f)
 
     if not manifest or "templates" not in manifest:
@@ -357,7 +359,6 @@ def render_all(
         entry_vars = entry.get("vars", {})
         for var_name, var_def in entry_vars.items():
             if isinstance(var_def, dict):
-                required = var_def.get("required", False)
                 default = var_def.get("default")
                 if default is not None:
                     merged_vars[var_name] = str(default)
@@ -373,9 +374,7 @@ def render_all(
 
         # Merge extra_vars (CLI overrides)
         if extra_vars:
-            for k, v in extra_vars.items():
-                if v is not None:
-                    merged_vars[k] = v
+            merged_vars.update({k: v for k, v in extra_vars.items() if v is not None})
 
         # Determine which vars are required (not optional) when allow_missing=False
         required_vars_list: list[str] = []
@@ -422,6 +421,7 @@ def render_all(
 
 # endregion FUNC_RENDER_ALL
 
+
 # region FUNC_RENDER_DIRECTORY
 def _render_directory(dir_path: str, vars: dict[str, str], *, dry_run: bool = False) -> None:
     """Recursively render all text files in a directory.
@@ -451,6 +451,7 @@ def _render_directory(dir_path: str, vars: dict[str, str], *, dry_run: bool = Fa
 
 # endregion FUNC_RENDER_DIRECTORY
 
+
 # region FUNC_CHECK_ALL
 ## @purpose  Dry-run render of all manifest entries; return diagnostics
 ## @io       Input: manifest_path → Output: (success, diagnostics_list)
@@ -479,7 +480,7 @@ def check_all(
     if yaml is None:
         raise ImportError("PyYAML is required for manifest support")
 
-    with open(manifest_path, "r") as f:
+    with open(manifest_path) as f:
         manifest = yaml.safe_load(f)
 
     if not manifest or "templates" not in manifest:
@@ -511,9 +512,7 @@ def check_all(
 
         # Merge extra_vars
         if extra_vars:
-            for k, v in extra_vars.items():
-                if v is not None:
-                    test_vars[k] = v
+            test_vars.update({k: v for k, v in extra_vars.items() if v is not None})
 
         manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
         abs_tmpl_path = os.path.join(manifest_dir, tmpl_path) if not os.path.isabs(tmpl_path) else tmpl_path
@@ -553,6 +552,7 @@ def check_all(
 
 
 # endregion FUNC_CHECK_ALL
+
 
 # region FUNC_RENDER_DIRECTORY_IN_PLACE
 ## @purpose  Render all text files in a directory in-place, writing rendered output back.
@@ -620,6 +620,7 @@ def render_directory_in_place(
 
 
 # endregion FUNC_RENDER_DIRECTORY_IN_PLACE
+
 
 # region CLI_MAIN
 def main() -> None:

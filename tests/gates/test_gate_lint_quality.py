@@ -97,6 +97,13 @@ def _run_bash_linter(makefile_path: pathlib.Path, tmp_path: pathlib.Path) -> lis
     paths_script = temp_lib / "paths.sh"
     paths_script.write_text(_PATHS_SH_PATH.read_text())
 
+    # Create stub for module-interface.sh (needed by paths.sh since gate8-v2)
+    stub_interface = temp_lib / "module-interface.sh"
+    stub_interface.write_text("""#!/usr/bin/env bash
+# Stub for test isolation
+invoke_module_interface() { return 0; }
+""")
+
     lint_script = temp_entrypoints / "lint.sh"
     lint_script.write_text(_LINT_SH_PATH.read_text())
     lint_script.chmod(0o755)

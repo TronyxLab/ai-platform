@@ -110,15 +110,14 @@ def _parse_shellcheck_sc2154(file_path: Path) -> list[str]:
             text=True,
             timeout=30,
         )
-        if result.returncode not in (0, 1):
+        if result.returncode not in (0, 1) and result.returncode > 1:
             # returncode 1 = warnings found (normal), >1 = error
-            if result.returncode > 1:
-                logger.warning(
-                    "[IMP:6][shellcheck] ShellCheck error on %s: %s",
-                    file_path,
-                    result.stderr[:200],
-                )
-                return []
+            logger.warning(
+                "[IMP:6][shellcheck] ShellCheck error on %s: %s",
+                file_path,
+                result.stderr[:200],
+            )
+            return []
 
         diagnostics = json.loads(result.stdout) if result.stdout.strip() else []
 

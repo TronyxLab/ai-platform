@@ -12,19 +12,18 @@
 ##            covering all edge cases from DevPlan T1.4.
 # endregion MODULE_CONTRACT
 
-import pytest
-import os
 import logging
 
-from core.internal.template_engine import (
-    render_template,
-    parse_vars,
-    check_all,
-    render_all,
-    TemplateError,
-    PLACEHOLDER_RE,
-)
+import pytest
 from conftest import ldd_trajectory
+
+from core.internal.template_engine import (
+    TemplateError,
+    check_all,
+    parse_vars,
+    render_all,
+    render_template,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,9 @@ def test_render_single_placeholder(caplog, tmp_path):
     result = render_template(str(tmpl), vars={"NAME": "world"}, dry_run=True)
     assert result == "Hello, world!"
     logger.critical("[IMP:9][test][render] Single placeholder OK")
-# endregion
+
+
+# endregion TEST_RENDER_SINGLE_PLACEHOLDER
 
 
 # region TEST_RENDER_MULTIPLE_PLACEHOLDERS
@@ -56,7 +57,9 @@ def test_render_multiple_placeholders(caplog, tmp_path):
     result = render_template(str(tmpl), vars={"GREETING": "Hello", "TARGET": "world"}, dry_run=True)
     assert result == "Hello, world!"
     logger.critical("[IMP:9][test][render] Multiple placeholders OK")
-# endregion
+
+
+# endregion TEST_RENDER_MULTIPLE_PLACEHOLDERS
 
 
 # region TEST_RENDER_NO_PLACEHOLDERS
@@ -71,7 +74,9 @@ def test_render_no_placeholders(caplog, tmp_path):
     result = render_template(str(tmpl), dry_run=True)
     assert result == "Hello, world!\n"
     logger.critical("[IMP:9][test][render] No placeholders OK")
-# endregion
+
+
+# endregion TEST_RENDER_NO_PLACEHOLDERS
 
 
 # region TEST_RENDER_EMPTY_TEMPLATE
@@ -86,7 +91,9 @@ def test_render_empty_template(caplog, tmp_path):
     result = render_template(str(tmpl), dry_run=True)
     assert result == ""
     logger.critical("[IMP:9][test][render] Empty template OK")
-# endregion
+
+
+# endregion TEST_RENDER_EMPTY_TEMPLATE
 
 
 # region TEST_STRICT_GRAMMAR_REJECTS_LOWERCASE
@@ -102,7 +109,9 @@ def test_strict_grammar_rejects_lowercase(caplog, tmp_path):
     # Strict grammar does NOT match {{name}} (lowercase 'n')
     assert result == "{{name}}"
     logger.critical("[IMP:9][test][grammar] Lowercase placeholder not matched (strict grammar)")
-# endregion
+
+
+# endregion TEST_STRICT_GRAMMAR_REJECTS_LOWERCASE
 
 
 # region TEST_STRICT_GRAMMAR_REJECTS_SPACES
@@ -118,7 +127,9 @@ def test_strict_grammar_rejects_spaces(caplog, tmp_path):
     # Strict grammar does NOT match {{ $labels.instance }}
     assert result == "{{ $labels.instance }}"
     logger.critical("[IMP:9][test][grammar] Prometheus syntax not matched (strict grammar)")
-# endregion
+
+
+# endregion TEST_STRICT_GRAMMAR_REJECTS_SPACES
 
 
 # region TEST_UNRESOLVED_PLACEHOLDER_BLOCKING
@@ -134,7 +145,9 @@ def test_unresolved_placeholder_blocking(caplog, tmp_path):
         render_template(str(tmpl), vars={"OTHER": "val"}, dry_run=True)
     assert "unresolved" in str(exc.value).lower()
     logger.critical("[IMP:9][test][error] Blocking unresolved placeholder raises TemplateError")
-# endregion
+
+
+# endregion TEST_UNRESOLVED_PLACEHOLDER_BLOCKING
 
 
 # region TEST_UNRESOLVED_PLACEHOLDER_ALLOW
@@ -149,7 +162,9 @@ def test_unresolved_placeholder_allow(caplog, tmp_path):
     result = render_template(str(tmpl), vars={"OTHER": "val"}, allow_missing=True, dry_run=True)
     assert result == "Value: {{X}}"
     logger.critical("[IMP:9][test][allow] Unresolved placeholder preserved with allow_missing=True")
-# endregion
+
+
+# endregion TEST_UNRESOLVED_PLACEHOLDER_ALLOW
 
 
 # region TEST_UNCLOSED_PLACEHOLDER
@@ -165,7 +180,9 @@ def test_unclosed_placeholder(caplog, tmp_path):
         render_template(str(tmpl), vars={"UNCLOSED": "val"}, dry_run=True)
     assert "unclosed" in str(exc.value).lower()
     logger.critical("[IMP:9][test][error] Unclosed placeholder raises TemplateError")
-# endregion
+
+
+# endregion TEST_UNCLOSED_PLACEHOLDER
 
 
 # region TEST_SPECIAL_CHARS_IN_VALUE
@@ -184,7 +201,9 @@ def test_special_chars_in_value(caplog, tmp_path):
     )
     assert result == "Path=/opt/platform/core&Newline=line1\nline2&Amp=a&b"
     logger.critical("[IMP:9][test][render] Special characters preserved")
-# endregion
+
+
+# endregion TEST_SPECIAL_CHARS_IN_VALUE
 
 
 # region TEST_PARSE_VARS
@@ -197,7 +216,9 @@ def test_parse_vars(caplog):
     result = parse_vars(["A=1", "B=2", "NAME=hello"])
     assert result == {"A": "1", "B": "2", "NAME": "hello"}
     logger.critical("[IMP:9][test][parse] parse_vars basic OK")
-# endregion
+
+
+# endregion TEST_PARSE_VARS
 
 
 # region TEST_PARSE_VARS_EMPTY_KEY
@@ -210,7 +231,9 @@ def test_parse_vars_empty_key(caplog):
     with pytest.raises(ValueError, match="Empty key"):
         parse_vars(["=val"])
     logger.critical("[IMP:9][test][parse] parse_vars rejects empty key")
-# endregion
+
+
+# endregion TEST_PARSE_VARS_EMPTY_KEY
 
 
 # region TEST_PARSE_VARS_NO_EQUALS
@@ -223,7 +246,9 @@ def test_parse_vars_no_equals(caplog):
     with pytest.raises(ValueError, match="Invalid variable format"):
         parse_vars(["invalid"])
     logger.critical("[IMP:9][test][parse] parse_vars rejects no-equals")
-# endregion
+
+
+# endregion TEST_PARSE_VARS_NO_EQUALS
 
 
 # region TEST_PARSE_VARS_DUPLICATE
@@ -236,7 +261,9 @@ def test_parse_vars_duplicate(caplog):
     result = parse_vars(["X=first", "X=second"])
     assert result == {"X": "second"}
     logger.critical("[IMP:9][test][parse] parse_vars duplicate: last wins")
-# endregion
+
+
+# endregion TEST_PARSE_VARS_DUPLICATE
 
 
 # region TEST_ATOMIC_WRITE_OUTPUT
@@ -252,7 +279,9 @@ def test_atomic_write_output(caplog, tmp_path):
     render_template(str(tmpl), output_path=str(out), vars={"MSG": "atomic"}, dry_run=False)
     assert out.read_text() == "atomic"
     logger.critical("[IMP:9][test][write] Atomic write OK")
-# endregion
+
+
+# endregion TEST_ATOMIC_WRITE_OUTPUT
 
 
 # region TEST_RENDERALL_MISSING_MANIFEST
@@ -265,7 +294,9 @@ def test_renderall_missing_manifest(caplog):
     with pytest.raises(FileNotFoundError):
         render_all("/nonexistent/manifest.yaml")
     logger.critical("[IMP:9][test][render-all] Missing manifest raises FileNotFoundError")
-# endregion
+
+
+# endregion TEST_RENDERALL_MISSING_MANIFEST
 
 
 # region TEST_CHECK_ALL_EMPTY_MANIFEST
@@ -277,10 +308,12 @@ def test_check_all_empty_manifest(caplog, tmp_path):
     # · Remove if: check_all signature changes
     manifest = tmp_path / "empty.yaml"
     manifest.write_text("version: 1\ntemplates: []")
-    ok, diag = check_all(str(manifest))
+    ok, _diag = check_all(str(manifest))
     assert ok is True
     logger.critical("[IMP:9][test][check] Empty manifest OK")
-# endregion
+
+
+# endregion TEST_CHECK_ALL_EMPTY_MANIFEST
 
 
 # region TEST_DETERMINISTIC_OUTPUT
@@ -298,10 +331,12 @@ def test_deterministic_output(caplog, tmp_path):
     assert r1 == r2
     assert r1 == "x-y"
     logger.critical("[IMP:9][test][render] Deterministic output OK")
-# endregion
 
 
-# region_TEST_BINARY_TEMPLATE
+# endregion TEST_DETERMINISTIC_OUTPUT
+
+
+# region TEST_BINARY_TEMPLATE
 @ldd_trajectory
 def test_binary_template(caplog, tmp_path):
     """Template with null byte raises TemplateError('binary content detected')."""
@@ -314,7 +349,9 @@ def test_binary_template(caplog, tmp_path):
         render_template(str(tmpl), dry_run=True)
     assert "binary" in str(exc.value).lower()
     logger.critical("[IMP:9][test][error] Binary template raises TemplateError")
-# endregion
+
+
+# endregion TEST_BINARY_TEMPLATE
 
 
 # region TEST_PLACEHOLDER_SYMBOLIC_LINK
@@ -331,4 +368,6 @@ def test_placeholder_symbolic_link(caplog, tmp_path):
     result = render_template(str(link), vars={"MSG": "symlink"}, dry_run=True)
     assert result == "symlink"
     logger.critical("[IMP:9][test][render] Symlink resolution OK")
-# endregion
+
+
+# endregion TEST_PLACEHOLDER_SYMBOLIC_LINK

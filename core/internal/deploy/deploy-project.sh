@@ -730,7 +730,6 @@ _trigger_deploy_hooks() {
             else
                 audit_log "hook:${module_name}" "HOOK-FAIL" "Hook failed (non-fatal) for ${module_name}"
             fi
-        fi
     done
 }
 # endregion DEPLOY_HOOK_INVOCATION
@@ -753,7 +752,6 @@ _trigger_remove_hooks() {
             else
                 audit_log "hook:${module_name}" "HOOK-FAIL" "Remove hook failed (non-fatal) for ${module_name}"
             fi
-        fi
     done
 }
 # endregion REMOVE_HOOK_INVOCATION

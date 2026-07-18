@@ -125,7 +125,7 @@ repos:
         stages: [pre-commit]
         exclude: >
           (?x)^(
-            templates/|
+            templates/.*|
             .*docker-compose\.macos\.yml
           )$
 
@@ -135,7 +135,7 @@ repos:
         stages: [pre-commit]
         exclude: >
           (?x)^(
-            templates/|
+            templates/.*|
             .*docker-compose\.macos\.yml|
             core/modules/nginx/docker-compose\.test\.yml
           )$
@@ -150,6 +150,7 @@ repos:
         stages: [pre-commit]
         exclude: >
           (?x)^(
+            templates/.*|
             core/bootstrap/.*\.yaml|
             \.github/workflows/.*\.yml|
             .*docker-compose\.macos\.yml|
