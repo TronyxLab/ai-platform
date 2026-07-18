@@ -38,6 +38,7 @@ source "${_EP_DIR}/../lib/logging.sh"
 ##   - status → --status flag
 ##   - anything else → deploy (positional args: <project> <ref> [env])
 ##   - "platform-deploy" prefix handled for legacy compat
+echo "[IMP:7][deploy][main] Starting deploy entrypoint" >&2
 parse_verb() {
     local raw="${SSH_ORIGINAL_COMMAND:-}"
 

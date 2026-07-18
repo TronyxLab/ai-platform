@@ -1,4 +1,5 @@
 # GREP_SUMMARY: redis Makefile start stop restart status logs help
+# STRUCTURE: ┌redis lifecycle┐ → ◇ module.mk include → ⊕ custom start (PONG readiness)
 # region MODULE_CONTRACT
 ## @purpose  Module lifecycle management for redis Docker module
 ## @scope    Called by platform users per role; sudo-whitelist enforces per-role restrictions
@@ -43,3 +44,9 @@ status: ## Show redis container status
 	docker inspect --format='{{.State.Health.Status}}' $(CONTAINER) 2>/dev/null || echo "container not running"
 	@echo "[IMP:7][redis-make][status] Redis PING:"
 	docker exec $(CONTAINER) redis-cli -h 127.0.0.1 ping 2>/dev/null || echo "  not responding"
+
+# 🧐 TRAP[DECISION] · 2026-07-18 · — · Custom overrides: Redis PONG readiness + PING status
+# · Rejected: module.mk defaults (status просто docker compose ps)
+# · Reason: redis требует PONG-проверки перед использованием (readiness), и PING
+# ·   в status для оперативной диагностики через redis-cli
+# · Rev: когда module.mk получит configurable readiness_check — migrate

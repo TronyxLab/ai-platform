@@ -23,6 +23,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][add-vhost][main] Starting vhost management" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || echo "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")")}"
 
@@ -239,11 +240,14 @@ server {
     ssl_certificate /etc/letsencrypt/live/${cert_domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${cert_domain}/privkey.pem;
 
+    resolver 127.0.0.11;
+
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
 
     location / {
-        proxy_pass http://${project_name}:80;
+        set \$upstream_${project_name} ${project_name}:80;
+        proxy_pass http://\$upstream_${project_name};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -255,7 +259,7 @@ server {
     }
 
     location /health {
-        proxy_pass http://${project_name}:80/health;
+        proxy_pass http://\$upstream_${project_name}/health;
         access_log off;
     }
 }
@@ -308,6 +312,7 @@ remove_vhost() {
 # ═══════════════════════════════════════════════════════════════════
 # region MAIN
 main() {
+    echo "[IMP:8][add-vhost][main] Mode=${MODE} dir=${PROJECT_DIR}" >&2
     parse_args "$@"
 
     log_imp 8 "main" "START: add-vhost mode=${MODE} for ${PROJECT_DIR}"

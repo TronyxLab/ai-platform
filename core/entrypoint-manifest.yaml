@@ -153,8 +153,8 @@ lifecycle:
     description: "Stop local compose lifecycle"
   - make_target: restart
     mechanism: docker-compose
-    delegates_to: "docker compose down && docker compose up -d"
-    description: "Hard restart local compose services (down + up -d)"
+    delegates_to: "docker compose stop && docker compose start"
+    description: "Soft restart local compose services (stop + start)"
   - make_target: status
     mechanism: docker-compose
     delegates_to: "docker compose ps"
@@ -171,6 +171,10 @@ lifecycle:
     mechanism: ssh+rsync
     delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules + healthcheck
     description: "Regular CI update of an already-provisioned node (not INIT)"
+  - make_target: verify
+    mechanism: shell-script
+    delegates_to: core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh
+    description: "Post-deploy HTTPS verification — curl all expose:true domains from node.yaml, exit 0 if all HTTP 200"
 
 # ---------------------------------------------------------------------------
 # Provision — environment provisioning (P5: Single Source of Truth)
@@ -196,7 +200,17 @@ dev:
     description: "Idempotent generation of self-signed dev SSL certificates for nginx (hybrid mkcert→openssl)"
 
 # ---------------------------------------------------------------------------
-# Module lifecycle — targets from core/templates/module.mk + system module ops
+# Module hooks — hook scripts called from module.yaml hooks system
+# These are NOT make targets — they are lifecycle hooks triggered by deploy flow
+# Consumed by CI gates (test_gate_module_hooks.py).
+# ---------------------------------------------------------------------------
+module_hooks:
+  - script: nginx_reload_hook.sh
+    path: core/modules/nginx/nginx_reload_hook.sh
+    description: "Nginx config validation and reload after project deploy — called via module.yaml hooks.on_project_deploy"
+
+# ---------------------------------------------------------------------------
+# Module lifecycle — targets from core/templates/module.mk (Docker modules)
 # These are NOT in the canonical verb dictionary (not in AGENTS.md table)
 # but are valid targets for module Makefiles. Consumed by CI gates
 # (no-unregistered-entrypoint, name-linter) as the single source of truth.
@@ -204,14 +218,32 @@ dev:
 module_lifecycle:
   - start
   - stop
-  # restart uses hard restart semantics: docker compose down && docker compose up -d
+  # restart uses soft restart semantics (stop + start) from Makefile.common
   - restart
+  # restart-hard: hard restart with --force-recreate (module.mk override)
+  - restart-hard
   - status
   - logs
   - build
   - up
+  # down: discoverability alias for stop
+  - down
   - backup
   - restore
+
+# ---------------------------------------------------------------------------
+# System module lifecycle — targets from core/templates/module-system.mk
+# For install_type: system modules (e.g. platform-secrets). Different contract
+# from Docker modules — systemd-native operations only, no docker compose.
+# ---------------------------------------------------------------------------
+system_module_lifecycle:
+  - module: platform-secrets
+    type: system
+    targets:
+      install: core/modules/platform-secrets/Makefile
+      status: core/modules/platform-secrets/Makefile
+      restart: core/modules/platform-secrets/Makefile
+      logs: core/modules/platform-secrets/Makefile
 
 # ---------------------------------------------------------------------------
 # Name linter configuration — rules for make target name validation
@@ -321,6 +353,9 @@ gates:
   - id: container-name-consistency
     description: Container_name consistency across compose files and module.yaml depends_on / env_requires references
     test_file: test_gate_container_name_consistency.py
+  - id: project-compose
+    description: Project docker-compose.yml validation — no ports, proxy-net alias, env_file .env.platform
+    test_file: test_gate_project_compose.py
   - id: healthcheck-contract
     description: Healthcheck.sh contracts (deep-mode early exit, check_http, 127.0.0.1, postgres deep includes pgbouncer, logging deep includes promtail)
     test_file: test_gate_healthcheck_contract.py
@@ -351,6 +386,15 @@ gates:
   - id: pytest-markers
     description: Pytest markers in pyproject.toml only (not pytest.ini); strict markers enabled
     test_file: test_gate_pytest_markers.py
+  - id: local-stack
+    description: docker-compose.yml full stack resolution (Inv 7, static check) — compose config resolves all includes, modules in sync with discover_modules
+    test_file: test_gate_local_stack.py
+  - id: context-overlay-git
+    description: git commands only in ensure_context_repo(); rsync excludes .git/ (D1/D2/D3 delivery invariants)
+    test_file: test_gate_context_overlay_git.py
+  - id: env-chain
+    description: prometheus config after envsubst has no literal ${...} placeholders (D5b env chain)
+    test_file: test_gate_env_chain.py
 
 # ---------------------------------------------------------------------------
 # Forbidden directories — directories that MUST NOT contain executable scripts
@@ -413,6 +457,7 @@ allowed_verbs:
   - backup
   - restore
   - healthcheck
+  - verify
   - up
   - down
   - restart

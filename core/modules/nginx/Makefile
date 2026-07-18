@@ -15,3 +15,9 @@
 
 MODULE_NAME := nginx
 include ../../templates/module.mk
+
+# 🧐 TRAP[DECISION] · 2026-07-18 · — · Minimal module Makefile — includes module.mk без overrides
+# · Rejected: inline docker compose commands per target
+# · Reason: module.mk предоставляет zero-boilerplate lifecycle; overrides только для
+# ·   module-specific поведения (redis PONG, postgres pg_dump, backup-cron docker exec)
+# · Rev: когда модулю требуется кастомный таргет → override ПОСЛЕ include (GNU Make last-recipe-wins)

@@ -1,5 +1,5 @@
-# GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy deliver-payload platform-deliver
-# STRUCTURE: inputs(project_name) → ○ resolve node from NODE_HOST_MAP → ◇ fromJson → ⊕ ssh_host → ◆ deliver-payload (tar→SSH) → ⎋ SSH deploy-project.sh
+# GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy deliver-payload platform-deliver verify
+# STRUCTURE: inputs(project_name, [node]) → ○ resolve node from NODE_HOST_MAP or inputs.node → ◇ fromJson → ⊕ ssh_host → ◆ deliver-payload (tar→SSH) → ◆ deploy → ◆ verify → ⎋ done
 # region MODULE_CONTRACT
 ## @purpose  Reusable workflow for deploying projects — resolves target node from
 ##           NODE_HOST_MAP org variable, then SSH-deploys via forced-command.
@@ -7,7 +7,7 @@
 ## @scope    Called ONCE per project via `uses: <org>/ai-platform/.github/workflows/deploy-project.yml@main`
 ##           from project-level .github/workflows/deploy.yml
 ## @invariants
-##   - `on.workflow_call` with single required input: project_name
+##   - `on.workflow_call` with required input: project_name, optional: node
 ##   - Uses `vars.NODE_HOST_MAP` (JSON) for zero-secret node resolution (K4)
 ##   - Uses `secrets: inherit` for CI_DEPLOY_KEY — no project-level secrets
 ##   - No org-specific references — any context org can use this workflow (DD1)
@@ -27,19 +27,28 @@ name: Deploy Project (Reusable)
         required: true
         type: string
         description: "Project name to deploy — must match ai-platform.yaml in checkout root"
+      node:
+        required: false
+        type: string
+        description: "Target node name (e.g. tronyx-vps) — overrides auto-resolution from ai-platform.yaml"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Resolve target node
         id: resolve-node
         env:
           NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
         run: |
-          TARGET_NODE=$(python3 -c "import yaml; d=yaml.safe_load(open('ai-platform.yaml')); print(d.get('target_node','tronyx-vps'))" 2>/dev/null || echo "tronyx-vps")
+          # Use inputs.node if provided, otherwise resolve from ai-platform.yaml
+          TARGET_NODE="${{ inputs.node }}"
+          if [ -z "${TARGET_NODE}" ]; then
+            TARGET_NODE=$(python3 -c "import yaml; d=yaml.safe_load(open('ai-platform.yaml')); print(d.get('target_node','tronyx-vps'))" 2>/dev/null || echo "tronyx-vps")
+          fi
           echo "[IMP:9][resolve-node] target_node=${TARGET_NODE}"
           echo "target_node=${TARGET_NODE}" >> "${GITHUB_ENV}"
 
@@ -72,9 +81,20 @@ jobs:
         shell: bash
 
       - name: SSH deploy
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.ssh_host }}
           username: ci-deploy
           key: ${{ secrets.CI_DEPLOY_KEY }}
           script: /opt/platform/core/entrypoints/deploy.sh ${{ inputs.project_name }} ${{ github.sha }} production
+
+      - name: Post-deploy verify
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ env.ssh_host }}
+          username: ci-deploy
+          key: ${{ secrets.CI_DEPLOY_KEY }}
+          script: |
+            echo "[IMP:9][verify] Starting post-deploy verification for ${{ inputs.project_name }} on ${TARGET_NODE}"
+            make verify NODE=${{ env.target_node }}
+            echo "[IMP:10][verify] Verification PASSED — all endpoints healthy for ${{ inputs.project_name }}"

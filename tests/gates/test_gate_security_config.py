@@ -101,6 +101,10 @@ def _parse_xml_safe(xml_path: pathlib.Path) -> ET.Element | None:
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_clickhouse_no_literal_passwords(caplog) -> None:
     """Verify no literal passwords in ClickHouse users XML.
 

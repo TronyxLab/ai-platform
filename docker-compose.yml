@@ -40,7 +40,6 @@ networks:
 volumes:
   postgres-data:       { driver: local }
   wal-archive:         { driver: local }
-  redis-data:          { driver: local }
   hermes-data:         { driver: local }
   grafana-data:        { driver: local }
   prometheus-data:     { driver: local }

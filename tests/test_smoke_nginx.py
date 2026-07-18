@@ -22,6 +22,7 @@
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -381,6 +382,10 @@ def test_nginx_https_responds(nginx_compose, caplog) -> None:
 # region FUNC_test_nginx_tls_cert_san
 @pytest.mark.smoke
 @pytest.mark.requires_docker
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="macOS: Linux-parity in CI — cert/bind-mount not supported on Docker Desktop",
+)
 def test_nginx_tls_cert_san(nginx_compose, caplog) -> None:
     """Verify nginx TLS certificate contains expected SAN hostnames (mkcert dev cert).
 
@@ -389,6 +394,11 @@ def test_nginx_tls_cert_san(nginx_compose, caplog) -> None:
             ##            (grafana.ai-platform.local, hermes.ai-platform.local, etc.).
     ## @io — ⇥ nginx_compose → ⚡ openssl s_client → ⎋ None (asserts SAN contains vhosts)
     ## @complexity — O(1)
+    ## @rationale — Skipped on macOS because mkcert cert generation has platform-specific
+    ##              behavior on Docker Desktop (DevPlan §macOS smoke skip). CI runs the
+    ##              same test on Linux (ubuntu-latest runner, platform-test.yml).
+    ##              Root cause: platform limitation (mkcert paths, CA trust store),
+    ##              not code defect.
     """
     logger.info("[IMP:7][test_nginx_tls_cert] Checking TLS certificate SAN")
 
@@ -469,6 +479,10 @@ def test_nginx_vhost_routing(nginx_compose, caplog) -> None:
 # region FUNC_test_nginx_error_page
 @pytest.mark.smoke
 @pytest.mark.requires_docker
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="macOS: Linux-parity in CI — cert/bind-mount not supported on Docker Desktop",
+)
 def test_nginx_error_page(nginx_compose, caplog) -> None:
     """Verify nginx serves styled error pages (404.html) from mounted error-pages dir.
 
@@ -476,6 +490,12 @@ def test_nginx_error_page(nginx_compose, caplog) -> None:
     ##            The 404.html must return a styled HTML page (not default nginx 404).
     ## @io — ⇥ nginx_compose → ⚡ curl /404.html → ⎋ None (asserts styled HTML content)
     ## @complexity — O(1)
+    ## @rationale — Skipped on macOS because Docker Desktop bind-mount has different
+    ##              file permission semantics than Linux, causing the mounted
+    ##              error-pages directory to behave differently (DevPlan §macOS smoke skip).
+    ##              CI runs the same test on Linux (ubuntu-latest runner, platform-test.yml).
+    ##              Root cause: platform limitation (Docker Desktop bind-mount),
+    ##              not code defect.
     """
     import requests as req
 

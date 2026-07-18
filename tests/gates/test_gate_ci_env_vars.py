@@ -54,6 +54,10 @@ def _extract_platform_env_defaults() -> dict[str, str]:
 
 
 @pytest.mark.gate
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_ci_env_vars_match_platform_env(caplog):
     """Verify CI env vars used in workflows exist in platform-env.yaml env_defaults."""
     caplog.set_level(logging.INFO)

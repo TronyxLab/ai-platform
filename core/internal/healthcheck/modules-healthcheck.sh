@@ -13,6 +13,7 @@
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
+echo "[IMP:7][modules-healthcheck][main] Starting module healthcheck orchestration" >&2
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_ROOT="$(cd "${_SCRIPT_DIR}/../../.." && pwd)"
 unset _SCRIPT_DIR
@@ -140,7 +141,9 @@ done
 
 if [[ "$FAILED" -eq 0 ]]; then
     log_imp 9 "summary" "ALL MODULES HEALTHY"
+    echo "[IMP:9][modules-healthcheck][summary] ALL MODULES HEALTHY" >&2
 else
     log_imp 9 "summary" "SOME MODULES UNHEALTHY"
+    echo "[IMP:9][modules-healthcheck][summary] SOME MODULES UNHEALTHY (exit ${FAILED})" >&2
 fi
 exit "$FAILED"

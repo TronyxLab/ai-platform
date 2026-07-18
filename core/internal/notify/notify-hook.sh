@@ -16,6 +16,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][notify-hook][main] Starting notification hook" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../internal/audit/audit.sh" 2>/dev/null || true
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || echo "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")")}"
@@ -107,6 +108,7 @@ send_telegram() {
 }
 # endregion SEND_TELEGRAM
 
+echo "[IMP:8][notify-hook][main] Sending: ${FULL_MESSAGE:0:80}..." >&2
 log_imp 8 "-" "${FULL_MESSAGE}"
 audit_log "notify-hook" "INFO" "${FULL_MESSAGE}" 2>/dev/null || true
 

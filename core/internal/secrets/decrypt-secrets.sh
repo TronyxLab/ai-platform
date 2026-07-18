@@ -16,6 +16,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][decrypt-secrets][main] Starting secrets decryption" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../internal/audit/audit.sh" 2>/dev/null || true
 if [[ -z "${PLATFORM_ROOT:-}" ]]; then
@@ -185,6 +186,7 @@ cleanup_all() {
 # endregion CLEANUP_ALL
 
 main() {
+    echo "[IMP:8][decrypt-secrets][main] Validating environment" >&2
     validate_env
 
     local tmp_key output_file
@@ -207,6 +209,7 @@ main() {
     trap - EXIT INT TERM
 
     log_step "main" "DONE" "Secrets ready at: ${env_file} (key and plaintext wiped)"
+    echo "[IMP:9][decrypt-secrets][main] Secrets ready: ${env_file}" >&2
 }
 
 main "$@"

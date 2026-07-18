@@ -81,6 +81,10 @@ def _parse_container_names():
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_env_example_hostnames_match_containers(caplog):
     """All *_HOST values in .env.example match container_name in docker-compose.base.yml."""
     env_path = os.path.join(ROOT_DIR, ".env.example")

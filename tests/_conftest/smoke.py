@@ -51,6 +51,26 @@ from _conftest.networks import docker_available, ensure_external_networks, is_pr
 
 # ── Platform compose --wait timeouts with env-var override ──────────────
 _IS_MACOS = _platform.system() == "Darwin"
+
+
+def is_macos() -> bool:
+    """Detect macOS (Darwin) platform for test skipping.
+
+    ## @purpose — Public helper for @pytest.mark.skipif on macOS-specific tests.
+    ##            Used by test_smoke_nginx.py to skip cert generation and
+    ##            bind-mount tests that fail on Docker Desktop (macOS).
+    ## @io — ⎋ bool: True if running on macOS/Darwin
+    ## @complexity — O(1)
+    ## @rationale — macOS Docker Desktop has known limitations with mkcert cert
+    ##              generation and bind-mount file permissions. CI runs same
+    ##              tests on Linux (ubuntu-latest runner, platform-test.yml),
+    ##              so skipping on macOS does not reduce coverage — it follows
+    ##              the "Linux-parity in CI" pattern (DevPlan §macOS smoke skip).
+    ##              Root cause: platform limitation, not code defect.
+    """
+    return _platform.system() == "Darwin"
+
+
 # --wait-timeout for docker compose up (env overrides platform default)
 PLATFORM_COMPOSE_TIMEOUT = int(os.environ.get("PLATFORM_COMPOSE_TIMEOUT", "120" if _IS_MACOS else "90"))
 # External Loki /ready probe (Loki healthcheck is liveness-only, --wait

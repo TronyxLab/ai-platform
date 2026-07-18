@@ -14,5 +14,9 @@
         (Domain ← Application ← Infrastructure) — domain logic never imports
         infrastructure. Modules interact only through explicit typed public contracts,
         never through each other's internals. Details: skill `arch-patterns`.
+     9. **Read before Act** — Before planning, implementing, or deploying, read existing
+        knowledge artifacts in affected modules: TRAP annotations, DEBT registries
+        (.ai/plans/*/*-Debt.md), VerificationReports from prior waves. Knowledge
+        recorded but not read is wasted.
 
-<!-- ai-instructions:0.5.16 -->
+<!-- ai-instructions:0.5.18 -->

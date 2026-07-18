@@ -11,6 +11,7 @@
 ## @rationale Thin wrapper — all security logic in internal/secrets/decrypt-secrets.sh
 # endregion MODULE_CONTRACT
 set -euo pipefail
+echo "[IMP:7][secrets][main] Starting secrets-unlock entrypoint" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
 
@@ -24,4 +25,5 @@ if [[ "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
+echo "[IMP:8][secrets][main] Delegating to decrypt-secrets.sh" >&2
 exec "${PATHS_INTERNAL_DIR}/secrets/decrypt-secrets.sh" "$@"

@@ -15,6 +15,8 @@
 ##            Readonly guard ensures idempotent sourcing — second source is a no-op.
 # endregion MODULE_CONTRACT
 
+echo "[IMP:7][paths][lib] Loading paths library" >&2
+
 # Guard against re-sourcing (readonly-collision pattern)
 if [[ -n "${PATHS_LIB_DIR:-}" ]]; then
     return 0

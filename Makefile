@@ -31,7 +31,7 @@ venv: $(VENV)
 # test infrastructure (volume dirs, Docker networks) is managed by tests/conftest.py
 # test_infra fixture — autouse session-scoped, replaces former test-infra-up/down targets.
 
-.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync hermes-build-platform hermes-build-context hermes-push-l1 deploy bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update
+.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync hermes-build-platform hermes-build-context hermes-push-l1 deploy bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify
 
 ## discover-modules: Auto-discover modules and regenerate docker-compose.yml include section
 discover-modules:
@@ -51,13 +51,22 @@ dev-certs:
 	@echo "[IMP:9][make][dev-certs] Dev certificates check complete"
 
 ## provision: Provision environment (networks, volumes, CI env) from platform-env.yaml
-##   Usage: make provision [SCOPE=all|networks|volumes|env]
+##   Usage: make provision [SCOPE=all|networks,volumes]
 ##   SCOPE=all (default): networks + volumes + CI env vars
+##   SCOPE=networks,volumes — comma-separated → повторяемые --scope флаги
 ##   Delegates to core/internal/provision-environment.sh (idempotent)
+## ## @invariants
+##   - SCOPE=networks,volumes → разворачивается в --scope networks --scope volumes
+##   - Скрипт поддерживает массив scopes=() (multi-scope), НЕ скаляр
 provision:
 	@echo "[IMP:7][make][provision] Provisioning environment (SCOPE=$(or $(SCOPE),all))..."
-	@bash $(_platform_root)/core/internal/provision-environment.sh \
-		--scope $(or $(SCOPE),all) \
+	@_scopes="$(or $(SCOPE),all)"; \
+	_scope_args=""; \
+	for _s in $${_scopes//,/ }; do \
+		_scope_args="$${_scope_args} --scope $$_s"; \
+	done; \
+	bash $(_platform_root)/core/internal/provision-environment.sh \
+		$${_scope_args} \
 		--platform-env $(_platform_root)/platform-env.yaml
 	@echo "[IMP:9][make][provision] Environment provisioned"
 
@@ -106,15 +115,24 @@ healthcheck:
 	@echo "[IMP:7][make][healthcheck] Running all module healthchecks via entrypoint..."
 	@bash $(_platform_root)/core/entrypoints/healthcheck.sh
 
-## restart: Hard restart all Docker compose services (down + up -d)
+## verify: Post-deploy HTTPS verification for all expose:true domains on a node
+##   Usage: make verify NODE=<node>
+##   Reads node.yaml → curl all domains with expose:true → exit 0 if all 200, exit 1 otherwise
+##   Delegates to core/entrypoints/verify.sh
+verify:
+	@if [ -z "$(NODE)" ]; then echo "[IMP:9][make][verify] ERROR: NODE not set — usage: make verify NODE=<node>" >&2; exit 1; fi
+	@echo "[IMP:7][make][verify] Running post-deploy verification for NODE=$(NODE)..."
+	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/verify.sh "$(NODE)"
+
+## restart: Soft restart all Docker compose services (stop + start)
 restart:
-	@echo "[IMP:7][make][restart] Hard restarting all services..."
+	@echo "[IMP:7][make][restart] Soft restarting all services..."
 	@_compose_files="-f docker-compose.yml -f docker-compose.platform-dev.yml"; \
 	if [ "$$(uname)" = "Darwin" ] && [ -f docker-compose.macos.yml ]; then \
 		_compose_files="$$_compose_files -f docker-compose.macos.yml"; \
 	fi; \
-	docker compose $$_compose_files down && docker compose $$_compose_files up -d
-	@echo "[IMP:9][make][restart] All services hard restarted"
+	docker compose $$_compose_files stop && docker compose $$_compose_files start
+	@echo "[IMP:9][make][restart] All services soft restarted"
 
 ## status: Show running Docker compose services status
 status:

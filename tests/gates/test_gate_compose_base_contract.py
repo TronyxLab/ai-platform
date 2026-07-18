@@ -48,6 +48,10 @@ def _get_base_ymls():
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_all_base_yml_have_x_logging(caplog):
     """Each docker-compose.base.yml has x-logging anchor."""
     modules = _get_base_ymls()
@@ -108,6 +112,9 @@ def test_healthcheck_present(caplog):
     for module_name, _yaml_path, data in modules:
         services = data.get("services", {})
         for svc_name, svc_config in services.items():
+            # Skip init containers — они не требуют healthcheck (run-to-completion)
+            if svc_config.get("restart") == "no":
+                continue
             if "healthcheck" not in svc_config:
                 failed.append(f"{module_name}/{svc_name}: missing healthcheck")
                 logger.info("[IMP:9][gate] FAIL: %s/%s has no healthcheck", module_name, svc_name)

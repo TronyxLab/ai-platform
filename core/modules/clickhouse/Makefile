@@ -1,4 +1,5 @@
 # GREP_SUMMARY: clickhouse Makefile start stop restart status logs help
+# STRUCTURE: ┌clickhouse targets┐ → ◇ module.mk include → ⊕ compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Module lifecycle management for clickhouse Docker module
 ## @scope    Called by platform users per role; sudo-whitelist enforces per-role restrictions
@@ -13,3 +14,8 @@
 MODULE_NAME := clickhouse
 
 include ../../templates/module.mk
+
+# 🧐 TRAP[DECISION] · 2026-07-18 · — · Minimal module Makefile — clickhouse lifecycle through module.mk
+# · Rejected: inline docker compose commands per target
+# · Reason: module.mk provides zero-boilerplate lifecycle for all docker modules
+# · Rev: when module needs custom behavior → override targets after include

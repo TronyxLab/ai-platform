@@ -30,6 +30,9 @@ HEALTHCHECK_FILES = {
 }
 
 
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Healthcheck contract — все модули следуют liveness/deep контракту
+# · Last fail: N/A (preventive)
+# · Remove if: healthcheck контракт заменён новым механизмом
 class TestHealthcheckContract:
     @pytest.mark.gate
     def test_deep_mode_has_early_exit(self) -> None:

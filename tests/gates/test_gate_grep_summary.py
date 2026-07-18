@@ -157,6 +157,10 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_all_sh_files_have_grep_summary(caplog: pytest.LogCaptureFixture) -> None:
     """
     # ◇ core/**/*.sh → ∋ _is_excluded → ○ first_10_lines → ◇ contains "GREP_SUMMARY"?

@@ -39,6 +39,9 @@ def _discover_base_ymls() -> list[Path]:
 BASE_YMLS = _discover_base_ymls()
 
 
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Module profiles — все base.yml используют profiles: [module-name]
+# · Last fail: N/A (preventive)
+# · Remove if: profiles-механизм заменён в compose-архитектуре
 class TestModuleProfiles:
     @pytest.mark.gate
     def test_all_base_yml_have_profiles(self, caplog) -> None:

@@ -9,10 +9,15 @@
 ## @rationale Тестовая изоляция через test-overlay (DevPlan 04 DD2)
 # endregion MODULE_CONTRACT
 
+import logging
 from pathlib import Path
 
 import pytest
 import yaml
+
+from tests._conftest.ldd import ldd_trajectory
+
+logger = logging.getLogger(__name__)
 
 
 # ── YAML !override tag support ───────────────────────────────────────────────
@@ -70,7 +75,8 @@ def _get_production_containers() -> set[str]:
 
 class TestSmokeTestIsolation:
     @pytest.mark.gate
-    def test_all_docker_modules_have_test_overlay(self) -> None:
+    @ldd_trajectory
+    def test_all_docker_modules_have_test_overlay(self, caplog) -> None:
         """Все 11 Docker-модулей имеют docker-compose.test.yml (AC4 DevPlan-04).
 
         ## @purpose — Enforce that every module with docker-compose.base.yml
@@ -93,14 +99,19 @@ class TestSmokeTestIsolation:
             if module_name not in test_files:
                 missing_test_overlay.append(module_name)
 
+        total_base = len(base_files)
+        total_test = len(test_files)
+        logger.info("[IMP:9][gate][isolation] Base compose files: %d, Test overlays: %d", total_base, total_test)
         assert len(base_files) >= 11, f"Expected at least 11 Docker modules, found {len(base_files)} base compose files"
         assert not missing_test_overlay, (
             f"Docker modules missing docker-compose.test.yml: {missing_test_overlay}. "
             f"Every Docker module must have a test overlay with -test container_name suffix."
         )
+        logger.info("[IMP:9][gate][isolation] All %d Docker modules have test overlay ✓", total_base - 1)
 
     @pytest.mark.gate
-    def test_all_test_containers_have_test_suffix(self) -> None:
+    @ldd_trajectory
+    def test_all_test_containers_have_test_suffix(self, caplog) -> None:
         """Все контейнеры в test-проекте имеют -test суффикс."""
         test_containers = _get_test_yml_containers()
         errors: list[str] = []
@@ -114,10 +125,14 @@ class TestSmokeTestIsolation:
                 if not cname.endswith("-test")
             )
 
+        container_count = sum(len(c) for c in test_containers.values())
+        logger.info("[IMP:9][gate][isolation] Checking %d test containers for -test suffix", container_count)
         assert not errors, "Test containers without -test suffix:\n" + "\n".join(errors)
+        logger.info("[IMP:9][gate][isolation] All %d test containers have -test suffix ✓", container_count)
 
     @pytest.mark.gate
-    def test_no_container_name_collision(self) -> None:
+    @ldd_trajectory
+    def test_no_container_name_collision(self, caplog) -> None:
         """Нет пересечений container_name между production и test."""
         test_containers = _get_test_yml_containers()
         production = _get_production_containers()
@@ -127,7 +142,14 @@ class TestSmokeTestIsolation:
             test_names.update(containers)
 
         conflicts = test_names & production
+        logger.info(
+            "[IMP:9][gate][isolation] Test names: %d, Production names: %d, Conflicts: %d",
+            len(test_names),
+            len(production),
+            len(conflicts),
+        )
         assert not conflicts, (
             f"Container name collision between production and test: {conflicts}. "
             f"Test containers must use -test suffix to avoid conflicts."
         )
+        logger.info("[IMP:9][gate][isolation] No container name collisions ✓")

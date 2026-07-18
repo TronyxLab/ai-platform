@@ -34,8 +34,10 @@ services:
     environment:
       - NODE_ENV=production
     networks:
-      - __PROJECT_NAME__-net
-      - proxy-net
+      __PROJECT_NAME__-net:
+      proxy-net:
+        aliases:
+          - __PROJECT_NAME__
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health"]
       # ⚠️ TRAP[BUG] Use 127.0.0.1 NOT localhost — Alpine resolves localhost to ::1 (IPv6),

@@ -60,11 +60,13 @@ _DEFAULT_CONTEXT = "personal"
 
 
 # region FUNC_get_backup_config
-# @purpose  Load backup configuration from environment variables.
-# @io       None → Dict[str, str]
-# @complexity 2
+## @purpose  Load S3 backup configuration from environment variables with validation
+## @io       None → BackupConfig dict
+## @complexity 2
 def get_backup_config() -> BackupConfig:
     """
+    ▶ ┌env vars┐ → ◇ validate required (S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET) → ⊕ BackupConfig dict → ⎋ raise RuntimeError if missing
+
     Load backup S3 configuration from environment variables.
 
     Returns:
@@ -124,9 +126,9 @@ def get_backup_config() -> BackupConfig:
 
 
 # region FUNC_detect_context
-# @purpose  Detect platform context from PLATFORM_CONTEXT env variable.
-# @io       None → str
-# @complexity 1
+## @purpose  Detect platform context from PLATFORM_CONTEXT env variable
+## @io       None → str ("personal"|"corporate"|"project-{name}")
+## @complexity 1
 def _detect_context() -> str:
     """
     Detect platform context from PLATFORM_CONTEXT env variable.

@@ -7,18 +7,19 @@
 ## @scope    All docker/systemd service modules under core/modules/
 ## @invariants
 ##   - module.yaml — единственный source of truth метаданных модуля (не Docker-specific)
-##   - healthcheck.sh: liveness = docker inspect (default), diagnostics = shell healthcheck.sh (MODE=deep)
-##   - Makefile: include ../../templates/module.mk; переопределять только канонические таргеты
-##   - .dockerignore → symlink ../../templates/.dockerignore
-##   - docker-compose.base.yml: profiles: [module-name] на каждом сервисе, x-logging: &default-logging
-## @rationale Стандартизированный контракт обеспечивает pluggability через profiles, единый healthcheck и zero-touch деплой; DD1/DD3 — архитектурные стандарты (см. core/AGENTS.md §Pluggability)
+##   - Docker-модули (install_type: docker): healthcheck.sh = docker inspect (default), Makefile = include module.mk
+##   - System-модули (install_type: system): Makefile = include module-system.mk; NO docker-compose, NO healthcheck.sh, NO .dockerignore
+##   - Docker-модули: .dockerignore → symlink ../../templates/.dockerignore
+##   - Docker-модули: docker-compose.base.yml: profiles: [module-name] на каждом сервисе, x-logging: &default-logging
+##   - System-модули: lifecycle через systemctl/journalctl, таргеты: install/status/restart/logs
+## @rationale Стандартизированный контракт обеспечивает pluggability через profiles, единый healthcheck и zero-touch деплой; DD1/DD3 — архитектурные стандарты (см. core/AGENTS.md §Pluggability). System-контракт добавлен для модулей вне Docker (D3).
 # endregion MODULE_CONTRACT
 
 # AGENTS.md — core/modules/
 
 ---
 
-## Структура модуля
+## Структура модуля (Docker)
 
 ```
 core/modules/{module}/
@@ -31,7 +32,20 @@ core/modules/{module}/
 └── {build,context}/            # (только hermes-agent) Dockerfile L1/L2
 ```
 
-Шаблоны: [`core/templates/`](../templates/) — `module.mk`, `.dockerignore`, `docker-compose.test.template`.
+## Структура модуля (System)
+
+```
+core/modules/{module}/
+├── module.yaml                 # D4-контракт метаданных (install_type: system)
+├── *.service                   # systemd unit file(s)
+├── Makefile                    # include ../../templates/module-system.mk
+├── install.sh                  # (опционально) скрипт установки для CI
+└── config/                     # (опционально)
+```
+
+**System-модули НЕ содержат:** `docker-compose.base.yml`, `healthcheck.sh`, `.dockerignore`.
+
+Шаблоны: [`core/templates/`](../templates/) — `module.mk` (Docker), `module-system.mk` (systemd), `.dockerignore`, `docker-compose.test.template`.
 
 ---
 
@@ -85,7 +99,7 @@ check_docker_health "$CONTAINER" || exit 1
 
 ---
 
-## Makefile-контракт
+## Makefile-контракт (Docker-модули)
 
 ```makefile
 MODULE_NAME := example
@@ -94,8 +108,40 @@ include ../../templates/module.mk
 ```
 
 Канонические таргеты (определены в `module.mk`): `start`, `stop`, `restart`, `status`, `logs`, `build`, `up`, `backup`, `restore`.
-Все restart-таргеты используют **hard restart** (`docker compose down && docker compose up -d`), не soft restart (`docker compose restart`). Это обеспечивает гарантированную перезагрузку контейнеров с пересозданием сети и монтирований.
+`restart` использует **soft restart** (`docker compose stop && docker compose start`) — остановка и запуск без пересоздания контейнеров (сохраняет сеть, монтирования и состояние). Для **hard restart** с пересозданием (down + up -d --force-recreate) используйте таргет `restart-hard`, определённый в `module.mk`.
 Запрещено: переопределять канонические имена, добавлять свои `build`/`deploy`, healthcheck-логика в Makefile.
+
+---
+
+## Makefile-контракт (System-модули)
+
+Для модулей с `install_type: system` (например, `platform-secrets` — systemd oneshot service) используется альтернативный шаблон `module-system.mk`:
+
+```makefile
+SERVICE_NAME := my-systemd-service
+include ../../templates/module-system.mk
+```
+
+Канонические таргеты (определены в `module-system.mk`): **`install`, `status`, `restart`, `logs`** — все через systemctl/journalctl.
+
+**Запрещённые таргеты** (Docker-семантика, не применима к systemd-модулям): `build`, `up`, `backup`, `down`, `stop`, `start`.
+
+**Контракт:**
+| Таргет | Операция | Команда |
+|--------|----------|---------|
+| `install` | Установка/обновление systemd unit + enable + restart | `cp *.service → /etc/systemd/system/; systemctl daemon-reload; systemctl enable; systemctl restart` |
+| `status` | Статус сервиса | `systemctl status --no-pager` |
+| `restart` | Перезапуск через systemd | `systemctl restart` |
+| `logs` | Логи сервиса | `journalctl -u <unit> --no-pager -n 50` |
+
+**Отличия от Docker-контракта:**
+1. Нет `start`/`stop` — systemd управляет жизненным циклом через `install`/`restart`
+2. Нет `build` — образы не собираются (systemd-модули не контейнеризированы)
+3. Нет `backup`/`restore` — stateful persistence не предусмотрена (tmpfs-based)
+4. `install` — первичная установка (копирование unit-файла, включение, запуск)
+5. `restart` — перезапуск через systemd (аналог `systemctl restart`)
+
+**Важно:** System-модули НЕ имеют `docker-compose.base.yml`, `.dockerignore`, `healthcheck.sh` (healthcheck — через systemd unit-статус). Метрики и мониторинг — через journald.
 
 ---
 
@@ -131,6 +177,7 @@ make up                        → все модули (profiles не фильт
 | 5 | Healthcheck-логика в Makefile | Только `healthcheck.sh` |
 | 6 | `${VAR:?error}` в `docker-compose.base.yml` | Блокирует валидацию неактивных profiles (DD3) |
 | 7 | Инлайн-сервисы в root `docker-compose.yml` | Только `include:` модулей |
+| 8 | Docker-таргеты (build/up/backup/down) в system-модулях | System-модули используют module-system.mk, не module.mk |
 
 ---
 
@@ -140,5 +187,5 @@ make up                        → все модули (profiles не фильт
 |------|-----------|
 | [`core/AGENTS.md`](../AGENTS.md) | Канонические операции, структура слоёв, forbidden-списки |
 | [`AGENTS.md`](../../AGENTS.md) (root) | Архитектурные инварианты, модель деплоя, глоссарий глаголов |
-| [`core/templates/`](../templates/) | Шаблоны module.mk, .dockerignore |
+| [`core/templates/`](../templates/) | Шаблоны module.mk, module-system.mk, .dockerignore |
 | [`core/lib/`](../lib/) | Библиотеки healthcheck, logging |

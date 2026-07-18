@@ -44,4 +44,4 @@ name: dev-pipeline
   Output artifact paths (DevPlan, VerificationReport), final verdict, test summary.
   Then STOP (§COMPLETION_PROTOCOL).
 
-<!-- ai-instructions:0.5.16 -->
+<!-- ai-instructions:0.5.18 -->

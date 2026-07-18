@@ -30,6 +30,10 @@ from tests.test_cross_layer_imports import lint_core
 @pytest.mark.gate
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-07-09 · gate/cross-layer-linter · wrapper around lint_core()
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_gate_cross_layer(caplog) -> None:
     """CI gate #8: enforce zero cross-layer import violations in core/.
 

@@ -918,6 +918,7 @@ EOF
 
 # region MAIN
 main() {
+    echo "[IMP:7][deploy-project][main] Starting deploy-project main" >&2
     # ── Check for verb flags from entrypoint dispatch (K1) ──────────
     if [[ $# -gt 0 ]]; then
         case "$1" in

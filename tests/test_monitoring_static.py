@@ -165,6 +165,10 @@ def test_compose_healthcheck_present(caplog) -> None:
         data = yaml.safe_load(f)
 
     for svc_name, svc in data.get("services", {}).items():
+        # Skip init containers — они не требуют healthcheck (run-to-completion)
+        if svc.get("restart") == "no":
+            logger.info("[IMP:8][test_healthcheck] %s init container — skipping healthcheck", svc_name)
+            continue
         hc = svc.get("healthcheck")
         logger.info("[IMP:8][test_healthcheck] %s healthcheck=%s", svc_name, hc is not None)
         assert hc is not None, f"Service {svc_name} missing healthcheck"

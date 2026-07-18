@@ -17,6 +17,7 @@
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
+echo "[IMP:7][pre-push-gate][main] Starting pre-push gate" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
 
@@ -31,7 +32,7 @@ if [[ "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
-echo "[pre-push-gate] Running fast gate before push..."
+echo "[IMP:9][pre-push-gate][main] Running fast gate before push (blocking)"
 
 # Non-blocking: update pipx project install
 if command -v pipx >/dev/null 2>&1; then
@@ -40,5 +41,5 @@ else
     echo "[pre-push-gate] pipx not installed — skipping pipx update (non-blocking)"
 fi
 
-echo "[pre-push-gate] Running make gate MODE=fast (blocking)..."
+echo "[IMP:9][pre-push-gate][main] Executing make gate MODE=fast"
 make gate MODE=fast

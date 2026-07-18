@@ -71,6 +71,7 @@ jobs:
   deploy-staging:
     name: Deploy → staging
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # [IMP:9][deploy][staging-gate] Triggered when caller passes environment: staging
     if: inputs.environment == 'staging' && inputs.project_name != ''
     environment:
@@ -123,6 +124,7 @@ jobs:
   deploy-production:
     name: Deploy → production
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: inputs.environment == 'production' && inputs.project_name != ''
     # [IMP:9][deploy][prod-gate] Owner confirmation required for production (04 §4)
     environment:
@@ -155,7 +157,8 @@ jobs:
     needs: deploy-production
     if: inputs.environment == 'production'
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
       - name: Smoke test — health endpoint
         run: curl --fail --retry 3 --retry-delay 5 --max-time 10 '${{ secrets.E2E_BASE_URL }}/health'
       - name: Smoke test — Grafana

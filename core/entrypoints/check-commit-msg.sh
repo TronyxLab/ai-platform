@@ -16,6 +16,7 @@
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
+echo "[IMP:7][check-commit-msg][main] Validating commit message format" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
 
@@ -26,6 +27,7 @@ COMMIT_MSG=$(cat "$COMMIT_MSG_FILE" 2>/dev/null || echo "")
 
 # Skip validation for auto-generated commits (git merge / revert)
 if echo "$COMMIT_MSG" | grep -qE '^(Merge|Revert) '; then
+    echo "[IMP:7][check-commit-msg][main] Merge/revert commit — skipping validation" >&2
     exit 0
 fi
 
@@ -38,10 +40,12 @@ PATTERN='^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\([a-zA
 
 if echo "$COMMIT_MSG" | head -1 | grep -qE "$PATTERN"; then
     # Valid conventional commit
+    echo "[IMP:9][check-commit-msg][main] Commit message valid" >&2
     exit 0
 fi
 
 # Invalid format — print error and help
+echo "[IMP:9][check-commit-msg][main] Commit message invalid — blocking" >&2
 FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
 echo ""
 echo "ERROR: Invalid commit message format." >&2

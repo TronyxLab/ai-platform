@@ -129,6 +129,4 @@ jobs:
       # ─── Step 6: Push L1 to ghcr.io (disaster recovery backup) ───────────
       - name: Push L1 to ghcr.io (backup)
         if: success()
-        run: |
-          docker tag hermes-agent-base:latest ghcr.io/${{ github.repository_owner }}/hermes-agent-base:latest
-          docker push ghcr.io/${{ github.repository_owner }}/hermes-agent-base:latest
+        run: make hermes-push-l1

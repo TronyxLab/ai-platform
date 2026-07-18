@@ -21,3 +21,12 @@ env_shared:
   PLATFORM_DOMAIN: "${PLATFORM_DOMAIN}"
 
 spool_dir: none  # reverse proxy — no persistent data (stateless)
+
+# region HOOKS
+## @purpose  Module hooks invoked by deploy-project.sh lifecycle phases.
+##           Each key = lifecycle event, value = script path relative to module directory.
+##           Simple string format for compatibility with _trigger_deploy_hooks().
+##           See nginx_reload_hook.sh for implementation.
+hooks:
+  on_project_deploy: nginx_reload_hook.sh
+# endregion HOOKS

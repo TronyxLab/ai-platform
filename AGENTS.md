@@ -9,7 +9,7 @@
 ##   1. Makefile — единый фасад. Все операции через `make <target>`. entrypoints — internal-обёртки.
 ##   2. Модель деплоя: git push → CI. Для проекта: `make deploy` (git push → CI → forced-command). Для платформы: `make context-promote` (копирование в контекстную org → CI → деплой). Core-код доставляется CI-воркфлоу (rsync/scp с аудит-трейлом).
 ##   3. org = context. tronyx161 — исходный репозиторий. Каждый контекст — отдельная GitHub-организация.
-##   4. AGENTS.md — три файла (root, core/, core/modules/), минимальные, без дублей. Публикуются после завершения Фаз 2-3.
+##   4. AGENTS.md — 3 канонических файла (root, core/, core/modules/) + вспомогательные, перечисленные в §Навигация; файлы в templates/template-*/ — payload шаблонов new-project/new-context, вне скоупа инварианта.
 ##   5. core/entrypoint-manifest.yaml — YAML-реестр канонических операций для CI-gate'ов.
 ##   6. make bootstrap-node — строго идемпотентный. Второй вызов = no-op (INIT, не DEPLOY).
 ##   7. Полный локальный стек через `docker compose up` на macOS разработчика.
@@ -17,6 +17,7 @@
 ##   9. Тестовый сервер может быть пересоздан заново — обратная совместимость не требуется.
 ##   10. Сборка образов hermes: `make hermes-build-platform` (L1, локально + push в ghcr.io как backup), `make hermes-push-l1` (L1 push в ghcr.io как disaster recovery) и `make hermes-build-context CONTEXT=<context>` (L1→L2, контекстная разработка и production).
 ## @rationale Single source of truth for platform architecture consumed by autonomous agents and developers
+## @rationale (D2) Invariant 4 обновлён по результатам drift-аудита: 3 канонических + 2 вспомогательных (core/internal/bootstrap/, tests/gates/) в §Навигация root AGENTS.md; templates/template-*/ — payload `make new-project`/`make new-context`, вне скоупа инварианта (не являются архитектурной документацией платформы)
 ## ⚠️ TRAP[DECISION] · 2026-07-15 · HI · L1 pushed to ghcr.io as backup, never used directly by contexts
 ## · Rejected: local-only L1 (risk: loss of build machine → rebuild from scratch)
 ## · Reason: L1 contains no secrets (only Python dependencies). Push = disaster recovery, not delivery model change.
@@ -97,13 +98,19 @@
 | ✅ | `remove-project` | Безопасное удаление проекта из lifecycle (unregister + compose down без -v) |
 | ✅ | `project-adopt` | Адаптация существующего проекта в lifecycle платформы |
 | ✅ | `project-list` / `project-status` | Список проектов (offline) и live-статус на ноде |
-| ✅ | `backup` / `restore` | Резервное копирование |
+| ✅ | `backup` / `restore` | Резервное копирование. Root = оркестрация стека, module = один модуль |
 | ✅ | `healthcheck` | Проверка здоровья |
 | ✅ | `node-update` | Регулярный update ноды (make node-update → provision + deploy-modules + healthcheck) |
-| ✅ | `up` / `down` / `restart` / `status` | Локальный compose-lifecycle |
+| ✅ | `up` | Root = оркестрация стека, module = один модуль (compose up) |
+| ✅ | `down` | Root = оркестрация стека, module = алиас `stop` (discoverability) |
+| ✅ | `restart` | Soft restart (stop + start). Root = оркестрация стека, module = один модуль |
+| ✅ | `restart-hard` | Hard restart c `--force-recreate` (module-level target) |
+| ✅ | `status` | Локальный compose-lifecycle |
 | ❌ | `push-core`, `deploy-node`, `build-local`, `bootstrap-core`, `hermes-deploy-vps` | Запрещены — не из словаря |
 
 **Правило:** одно имя таргета не может означать разное в разных Makefile. Все таргеты регистрируются в `core/entrypoint-manifest.yaml`.
+
+**Двухуровневая семантика:** root-глагол = оркестрация стека, module-глагол = операция одного модуля. Глаголы `up`, `down`, `restart`, `backup`, `restore` имеют разную реализацию на уровне root Makefile (весь стек) и в module.mk (один модуль).
 
 ---
 
@@ -115,8 +122,13 @@
 
 ## Навигация
 
-| Файл | Назначение |
-|------|-----------|
-| [`core/AGENTS.md`](core/AGENTS.md) | Каталог канонических операций, структура слоёв, forbidden-списки |
-| [`core/modules/AGENTS.md`](core/modules/AGENTS.md) | Шаблон модуля, healthcheck/Makefile-контракты |
-| [`core/entrypoint-manifest.yaml`](core/entrypoint-manifest.yaml) | Машиночитаемый YAML-реестр операций |
+| Файл | Назначение | Статус |
+|------|-----------|--------|
+| [`AGENTS.md`](AGENTS.md) | Root architecture, invariants, deploy model, glossary | Канонический |
+| [`core/AGENTS.md`](core/AGENTS.md) | Каталог операций, слои, forbidden-списки | Канонический |
+| [`core/modules/AGENTS.md`](core/modules/AGENTS.md) | Шаблон модуля, healthcheck/Makefile-контракты | Канонический |
+| [`core/internal/bootstrap/AGENTS.md`](core/internal/bootstrap/AGENTS.md) | Bootstrap pipeline, node lifecycle | Вспомогательный |
+| [`tests/gates/AGENTS.md`](tests/gates/AGENTS.md) | Gate test conventions, invariant testing | Вспомогательный |
+| [`templates/template-backend/AGENTS.md`](templates/template-backend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |
+| [`templates/template-frontend/AGENTS.md`](templates/template-frontend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |
+| [`templates/template-fullstack/AGENTS.md`](templates/template-fullstack/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |

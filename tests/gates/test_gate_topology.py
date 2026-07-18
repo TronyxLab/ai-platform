@@ -88,6 +88,10 @@ def _compute_dynamic_groups(module_graph: dict[str, list[str]]) -> dict[str, int
 
 
 @pytest.mark.gate
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_no_cyclic_dependencies(module_graph: dict[str, list[str]]) -> None:
     """Verify module dependency graph is acyclic.
 

@@ -1,9 +1,20 @@
 ---
-color: '#000000'
-description: ''
+color: '#00B894'
+description: 'Ai-Instructions: Implement solutions with full semantic markup and tests'
 model: deepseek/deepseek-v4-flash
 name: Code
-permission: {}
+permission:
+  bash:
+    '*': allow
+    git push*: ask
+    rm -rf *: deny
+    sudo *: deny
+  edit: allow
+  glob: allow
+  grep: allow
+  list: allow
+  question: allow
+  read: allow
 ---
 
 # §ROLE
@@ -486,4 +497,4 @@ permission: {}
     - **Results are supplementary** — prefer official docs over blog posts, source code over tutorials
     - **Do NOT search for project-internal information** — it's in the repo, not on the web
 
-<!-- ai-instructions:0.5.16 -->
+<!-- ai-instructions:0.5.18 -->

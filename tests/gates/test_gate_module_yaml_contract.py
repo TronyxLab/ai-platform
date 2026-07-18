@@ -15,10 +15,12 @@
 ##              at commit time to prevent configuration drift across all modules.
 ## @changes — 2026-07-14 | Created per TASK-T8.1
 ## @changes — 2026-07-16 | DOCKER_MODULES hardcoded list removed → discover_docker_modules (T7)
+## @changes — 2026-07-18 | Added test_system_module_contract (T3/D3, DevPlan 011 T7)
 # endregion MODULE_CONTRACT
 
 import logging
 import os
+import re
 
 import pytest
 import yaml
@@ -51,6 +53,10 @@ def _get_module_yamls():
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_all_modules_have_required_fields(caplog):
     """All discovered module.yaml contain name, install_type, description, depends_on."""
     modules = _get_module_yamls()
@@ -126,3 +132,87 @@ def test_env_requires_no_duplicates(caplog):
 
     assert not failed, "[IMP:9][gate] env_requires violations:\n" + "\n".join(failed)
     logger.info("[IMP:9][gate] PASS: No duplicate env_requires")
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · System-module contract for platform-secrets (T3)
+# · Last fail: N/A (preventive)
+# · Remove if: platform-secrets migrates from systemd to Docker or contract changes
+def test_system_module_contract(caplog):
+    """platform-secrets is valid per system-module contract (not docker).
+
+    ## @purpose — Validate that platform-secrets (install_type: system) follows
+    ##            the system-module contract: includes module-system.mk, NOT module.mk,
+    ##            has no docker targets, has system targets (install/status/restart/logs).
+    ##            Per D3/T3: system modules have a different contract than docker modules.
+    ## @io — ⎋ None (asserts system module contract)
+    ## @complexity — O(1) on module.yaml + Makefile read
+    """
+    platform_secrets_dir = os.path.join(MODULES_DIR, "platform-secrets")
+    yaml_path = os.path.join(platform_secrets_dir, "module.yaml")
+    makefile_path = os.path.join(platform_secrets_dir, "Makefile")
+
+    # Check module.yaml exists and has install_type: system
+    assert os.path.isfile(yaml_path), f"module.yaml not found: {yaml_path}"
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f)
+
+    install_type = data.get("install_type", "")
+    assert install_type == "system", (
+        f"[IMP:9][gate][system_contract] platform-secrets install_type should be 'system', got '{install_type}'"
+    )
+    logger.info("[IMP:9][gate][system_contract] platform-secrets install_type=system ✓")
+
+    # Check Makefile includes module-system.mk, NOT module.mk
+    assert os.path.isfile(makefile_path), f"Makefile not found: {makefile_path}"
+    with open(makefile_path) as f:
+        makefile_content = f.read()
+
+    has_system_mk = "module-system.mk" in makefile_content
+
+    assert has_system_mk, (
+        f"[IMP:9][gate][system_contract] platform-secrets Makefile should include module-system.mk, "
+        f"content:\n{makefile_content}"
+    )
+    logger.info("[IMP:9][gate][system_contract] platform-secrets Makefile includes module-system.mk ✓")
+
+    # Check no docker targets in Makefile
+    docker_targets = ["build", "up", "backup", "down"]
+    for target in docker_targets:
+        # Check for target definition (line starting with target:)
+        target_pattern = re.compile(rf"^{target}:", re.MULTILINE)
+        has_target = bool(target_pattern.search(makefile_content))
+        if has_target:
+            logger.warning("[IMP:7][gate][system_contract] platform-secrets Makefile has docker target '%s'", target)
+        # The module-system.mk template should NOT define these, and the
+        # platform-secrets Makefile itself should not define them either
+        assert not has_target, (
+            f"[IMP:9][gate][system_contract] FAIL: platform-secrets Makefile defines docker target '{target}'"
+        )
+
+    logger.info("[IMP:9][gate][system_contract] platform-secrets has NO docker targets ✓")
+
+    # Check system targets are present (via module-system.mk include)
+    system_targets = ["install", "status", "restart", "logs"]
+    # These are provided by module-system.mk template, check the template exists
+    template_system_mk = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "core",
+        "templates",
+        "module-system.mk",
+    )
+    if os.path.isfile(template_system_mk):
+        with open(template_system_mk) as f:
+            template_content = f.read()
+        for target in system_targets:
+            target_pattern = re.compile(rf"^{target}:", re.MULTILINE)
+            assert bool(target_pattern.search(template_content)), (
+                f"[IMP:9][gate][system_contract] module-system.mk missing system target '{target}'"
+            )
+        logger.info(
+            "[IMP:9][gate][system_contract] All %d system targets found in module-system.mk ✓", len(system_targets)
+        )
+
+    logger.info("[IMP:9][gate][system_contract] PASS: platform-secrets follows system-module contract")

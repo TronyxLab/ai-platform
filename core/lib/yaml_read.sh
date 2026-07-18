@@ -46,6 +46,8 @@
 
 set -euo pipefail
 
+echo "[IMP:7][yaml_read][lib] Loading YAML read library" >&2
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # region yaml_get_field
 ## @purpose  Read a scalar or complex value from YAML by dotted key path.
@@ -62,6 +64,7 @@ set -euo pipefail
 ## @complexity O(d) where d = depth of dotted key
 ##             Each key traversal is O(1) dict lookup in Python.
 yaml_get_field() {
+    echo "[IMP:8][yaml_read][yaml_get_field] Reading ${1} key=${2}" >&2
     local yaml_path="$1"
     local dotted_key="$2"
 
@@ -108,6 +111,7 @@ except FileNotFoundError as _e:
 ##             `while IFS= read -r line; do ... done`.
 ## @complexity O(n) where n = number of items in the list
 yaml_get_list() {
+    echo "[IMP:8][yaml_read][yaml_get_list] Reading list from ${1} key=${2}" >&2
     local yaml_path="$1"
     local dotted_key="$2"
 

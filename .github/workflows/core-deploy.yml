@@ -161,31 +161,18 @@ jobs:
       # · Workaround: используется --scope all (эквивалент, идемпотентно на VPS)
       # · Fix applied: provision-environment.sh L285 → массив scopes=() вместо скаляра
       # · Detected during: QA audit DevPlan 001 — bootstrap-test-ci-unification
-      # 🧐 TRAP[DECISION] · 2026-07-16 → 2026-07-17 · — · on-node provision: raw call вместо make provision
-      # · Rejected: make provision на VPS (пока)
-      # · Reason исторический: Makefile НЕ входил в rsync-манифест core-deploy (только core/ + platform-env.yaml).
-      # ·   Makefile находится в корне репозитория и не синхронизировался на VPS.
-      # ·   После rsync Makefile отсутствовал в /opt/platform/ → make provision недоступен.
-      # · Статус: T6 (2026-07-17) добавил Makefile в rsync-манифест — Rev-условие выполнено.
-      # ·   Унаследованное поведение (raw internal/provision-environment.sh --scope all) работает
-      # ·   корректно для production VPS. Смена на make provision — отдельное решение (out of scope T6).
-      # · Documented system exception: on-node raw вызов core/internal/ зарегистрирован в allowlist
-      # ·   gate-теста test_gate_workflow_consistency.py::_RAW_INTERNAL_ALLOWLIST (не в манифесте —
-      # ·   механизм Makefile→manifest→gate работает только для make-фасада).
-      # · Rev: [ВЫПОЛНЕНО] Makefile присутствует в rsync-манифесте с T6. Решение о смене
-      # ·   provision на make provision — deferred (требует CI-теста).
-      # Step 6: Provision networks + volumes (T2 invariant: env-scope = CI-only).
-      # --scope networks --scope volumes instead of --scope all per T2 contract:
-      # env/profiles on VPS produce no useful effect (env writes to absent GITHUB_ENV,
-      # profiles only logs count). TRAP[DECISION]:162-174 (raw call vs make) unchanged —
-      # this scoping fix is orthogonal to the call mechanism.
+      # ✅ TRAP[DECISION] · 2026-07-16 → 2026-07-18 · ARCHIVED · Rev выполнен: Makefile в rsync-манифесте, Step 5c:150
+# · Resolution: T1 (Wave 2) заменил raw вызов provision-environment.sh на make provision SCOPE=networks,volumes.
+# · Makefile теперь поддерживает comma-separated SCOPE → повторяемые --scope флаги.
+# · Текущий статус: инвариант 1 (Makefile-фасад) восстановлен — все provision-операции через make.
+# Step 6: Provision networks + volumes on VPS via make provision (Invariant 1).
       - name: Provision environment on VPS (networks + volumes)
         if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
         run: |
           ssh -o StrictHostKeyChecking=accept-new \
             -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            "cd /opt/platform && bash core/internal/provision-environment.sh --scope networks --scope volumes"
+            "cd /opt/platform && make provision SCOPE=networks,volumes"
 
       # ─── Step 7: Node update on VPS (5m) ──────────────────────────────
       # T18: заменён make bootstrap-node → make node-update.

@@ -129,6 +129,10 @@ def _extract_ci_skip_steps() -> list[dict]:
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-07-11 · gate/ci-coverage · D3 integration test run model
 ## @renamed_from — test_integration_steps_have_structured_logging (2026-07-11, D3 changed test purpose)
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_integration_steps_have_structured_logging(caplog) -> None:
     """Verify CI integration test steps exist and are properly structured.
 

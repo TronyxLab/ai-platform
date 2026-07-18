@@ -111,6 +111,10 @@ def _load_file_lines(filepath: str) -> list[str] | None:
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_env_shared_vars_injected_in_compose(caplog) -> None:
     """Forward-контракт: каждая переменная env_shared из module.yaml присутствует
     как ${VAR_NAME} в environment docker-compose.base.yml того же модуля.

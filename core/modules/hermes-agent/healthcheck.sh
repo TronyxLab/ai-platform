@@ -17,6 +17,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][hermes-agent-hc][main] Starting hermes-agent healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
@@ -138,5 +139,7 @@ if [ "$MODE" = "deep" ]; then
 fi
 
 # Default liveness check via docker inspect
+echo "[IMP:8][hermes-agent-hc][liveness] Running default liveness check" >&2
 check_docker_health "$CONTAINER" || exit 1
+echo "[IMP:9][hermes-agent-hc][liveness] Container healthy" >&2
 exit 0

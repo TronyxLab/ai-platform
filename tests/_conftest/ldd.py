@@ -87,7 +87,7 @@ def ldd_trajectory(func):
             caplog.set_level(_logging.DEBUG)
 
         try:
-            return func(*args, **kwargs)
+            result = func(*args, **kwargs)
         except Exception:
             if caplog is not None:
                 _print_ldd_trajectory(caplog)
@@ -97,6 +97,7 @@ def ldd_trajectory(func):
             if caplog is not None:
                 found = _print_ldd_trajectory(caplog)
                 assert found, "Critical LDD Error: No IMP:9 business logic log found"
+            return result
 
     return wrapper
 

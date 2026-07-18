@@ -57,7 +57,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
   platform-test:
@@ -150,28 +150,22 @@ jobs:
         with:
           scope: all
 
-      - name: Override HERMES_DASHBOARD_PASSWORD with secret (if available)
-        if: env.HERMES_DASHBOARD_PASSWORD != ''
-        run: echo "HERMES_DASHBOARD_PASSWORD=${{ secrets.HERMES_DASHBOARD_PASSWORD }}" >> "$GITHUB_ENV"
+      # ── Generate dynamic module list from discover_modules.py ──────────
+      # Single Source of Truth: module list generated from core/modules/*/module.yaml
+      - name: Generate module list
+        id: module_list
+        run: |
+          python3 -c "import json; from pathlib import Path; modules=[]; [modules.append('core/modules/'+m.parent.name+'/docker-compose.base.yml') for m in sorted(Path('core/modules').glob('*/module.yaml')) if 'install_type: system' not in m.read_text()]; print(json.dumps(modules))" > /tmp/module_list.json
+          count=$(python3 -c "import json; print(len(json.load(open('/tmp/module_list.json'))))")
+          echo "[IMP:8][module-list] Generated list of $count modules"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
 
       # D1 fix: observability → monitoring + logging in pre-pull
       - name: Pre-pull Docker images (parallel)
         continue-on-error: true
         run: |
           echo "::group::Pre-pulling Docker images (parallel)"
-          for compose_file in \
-            core/modules/backup-cron/docker-compose.base.yml \
-            core/modules/clickhouse/docker-compose.base.yml \
-            core/modules/hermes-agent/docker-compose.base.yml \
-            core/modules/infra-metrics/docker-compose.base.yml \
-            core/modules/langfuse/docker-compose.base.yml \
-            core/modules/litellm/docker-compose.base.yml \
-            core/modules/logging/docker-compose.base.yml \
-            core/modules/minio/docker-compose.base.yml \
-            core/modules/monitoring/docker-compose.base.yml \
-            core/modules/nginx/docker-compose.base.yml \
-            core/modules/postgres/docker-compose.base.yml \
-            core/modules/redis/docker-compose.base.yml; do
+          for compose_file in $(python3 -c "import json; [print(f) for f in json.load(open('/tmp/module_list.json'))]"); do
             module=$(basename "$(dirname "$compose_file")")
             (echo "[pull:$module] Starting..." && docker compose -f "$compose_file" pull --ignore-buildable 2>&1 | sed "s/^/[pull:$module] /" || echo "[pull:$module] WARNING: some images failed") &
           done
@@ -332,22 +326,14 @@ jobs:
         if: always()
         run: |
           echo "::group::Cleanup Docker Compose stacks"
-          for compose_file in \
-            core/modules/backup-cron/docker-compose.base.yml \
-            core/modules/clickhouse/docker-compose.base.yml \
-            core/modules/hermes-agent/docker-compose.base.yml \
-            core/modules/infra-metrics/docker-compose.base.yml \
-            core/modules/langfuse/docker-compose.base.yml \
-            core/modules/litellm/docker-compose.base.yml \
-            core/modules/logging/docker-compose.base.yml \
-            core/modules/minio/docker-compose.base.yml \
-            core/modules/monitoring/docker-compose.base.yml \
-            core/modules/nginx/docker-compose.base.yml \
-            core/modules/postgres/docker-compose.base.yml \
-            core/modules/redis/docker-compose.base.yml; do
-            if [ -f "$compose_file" ]; then
-              docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
-              docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
-            fi
-          done
+          if [ -f /tmp/module_list.json ]; then
+            while IFS= read -r compose_file; do
+              if [ -f "$compose_file" ]; then
+                docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
+                docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
+              fi
+            done < <(python3 -c "import json; [print(f) for f in json.load(open('/tmp/module_list.json'))]")
+          else
+            echo "[cleanup] Module list not found — skipping cleanup"
+          fi
           echo "::endgroup::"

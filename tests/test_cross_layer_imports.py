@@ -13,8 +13,9 @@
 ##     (warns instead — TASK-6C Phase 6)
 ##   - /opt/ paths are filtered for entrypoints/ and internal/ but NOT for
 ##     modules/ (TASK-6C Phase 6: modules→/opt/ may be cross-layer violations)
-##   - Every modules/*/Makefile must include ../../templates/module.mk or
-##     ../../Makefile.common (Makefile contract — TASK-6C Phase 6)
+##   - Every modules/*/Makefile must include ../../templates/module.mk,
+##     ../../templates/module-system.mk, or ../../Makefile.common
+##     (Makefile contract — TASK-6C Phase 6, extended T3 D3)
 ##   - Zero violations → PASS; any violation → FAIL with file:line report
 ## @rationale  Physical enforcement of architectural invariants — prevents
 ##             layer-boundary violations from entering the codebase.
@@ -57,8 +58,10 @@ _IMPORT_RULES: dict[str, set[str]] = {
 _IMPORTING_LAYERS: set[str] = {"entrypoints", "internal", "modules"}
 
 # Allowed Makefile includes from modules/ (exact relative paths)
+# Docker modules include module.mk; system modules (install_type: system) include module-system.mk
 _MODULE_MAKEFILE_ALLOWED_INCLUDES: set[str] = {
     "../../templates/module.mk",
+    "../../templates/module-system.mk",
     "../../Makefile.common",
 }
 
@@ -401,8 +404,8 @@ def check_violation(
                 return None
             return (
                 f"  {source_file}:{lineno} — [modules·make] "
-                f"include '{import_path}' — only ../../templates/module.mk "
-                f"or ../../Makefile.common allowed"
+                f"include '{import_path}' — only ../../templates/module.mk, "
+                f"../../templates/module-system.mk, or ../../Makefile.common allowed"
             )
         return None
 
@@ -491,7 +494,7 @@ def lint_core() -> list[str]:
             violations.append(
                 f"  {mf} — [modules·makefile-contract] "
                 f"Missing include of {_MODULE_MAKEFILE_ALLOWED_INCLUDES} — "
-                f"every module Makefile must include templates/module.mk"
+                f"every module Makefile must include templates/module.mk or module-system.mk"
             )
 
     if read_errors:

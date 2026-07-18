@@ -166,6 +166,10 @@ def _run_python_linter(test_targets: dict[str, str]) -> list[str]:
 @pytest.mark.gate
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-07-10 · gate/linter-parity · G1.3 bash↔Python parity
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_linter_parity(caplog, tmp_path) -> None:
     """Validate bash and Python linters produce identical results on test targets.
 

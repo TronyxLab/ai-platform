@@ -24,6 +24,8 @@
 
 set -euo pipefail
 
+echo "[IMP:7][postgres-hc][main] Starting postgres healthcheck" >&2
+
 # ── Shared library ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
@@ -57,11 +59,14 @@ if [ "$MODE" = "deep" ]; then
     fi
 
     log_imp 9 "deep" "All postgres/pgbouncer containers running"
+    echo "[IMP:9][postgres-hc][deep] All containers running" >&2
     exit 0
 fi
 
 # Default liveness: delegate to Docker's HEALTHCHECK status (compose runs pg_isready internally)
 # check_docker_health reads State.Health.Status from docker inspect — non-duplicative of compose
+echo "[IMP:8][postgres-hc][liveness] Running default liveness check" >&2
 check_docker_health "$POSTGRES_CONTAINER" || exit 1
 check_docker_health "$PGBOUNCER_CONTAINER" || exit 1
+echo "[IMP:9][postgres-hc][liveness] All containers healthy" >&2
 exit 0
