@@ -106,7 +106,7 @@ def test_deploy_yml_no_resolve_node_action(caplog) -> None:
         for yml_file in search_dir.rglob("*.yml"):
             relative = yml_file.relative_to(_PROJECT_ROOT)
             content = yml_file.read_text()
-            if "./.github/actions/resolve-node" in content:
+            if "./.github/actions/resolve-node" in content or "resolve-node" in content:
                 found_issues.append(str(relative))
                 logger.info(
                     "[IMP:8][test][no_resolve_node] Found resolve-node reference in %s",

@@ -358,6 +358,27 @@ def test_platform_starts_all_containers(
             timeout=30,
             env_override={"COMPOSE_PROFILES": module_name},
         )
+        logger.info("[IMP:9][DIAG][test_platform_starts_all_containers] ps returncode=%d", result.returncode)
+        logger.info(
+            "[IMP:9][DIAG][test_platform_starts_all_containers] ps stdout=\n%s",
+            result.stdout.strip()[:2000] or "(empty)",
+        )
+        if result.stderr.strip():
+            logger.info(
+                "[IMP:9][DIAG][test_platform_starts_all_containers] ps stderr=\n%s", result.stderr.strip()[:1000]
+            )
+        # ── DIAGNOSTIC: also run docker ps -a to see ALL containers on runner ──
+        _all_ps = subprocess.run(
+            ["docker", "ps", "-a", "--format", "table {{.Names}}\t{{.Status}}\t{{.Image}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        logger.info(
+            "[IMP:9][DIAG][test_platform_starts_all_containers] docker ps -a (ALL):\n%s",
+            _all_ps.stdout.strip()[:2000] or "(empty)",
+        )
+        # ── END DIAGNOSTIC ──
         if result.returncode != 0:
             logger.warning(
                 "[IMP:7][test_platform_starts_all_containers] Cannot list services for '%s': %s",
@@ -520,7 +541,46 @@ def test_critical_services_healthy(
             if cname:
                 all_container_names.append(cname)
 
+    # ── DIAGNOSTIC: log raw ps result per module before dedup ──
+    logger.info(
+        "[IMP:9][DIAG][test_critical_services_healthy] Raw container names per module before dedup: %s",
+        all_container_names,
+    )
+    # ── END DIAGNOSTIC ──
+
+    # Deduplicate — docker compose ps for different modules may return
+    # overlapping containers when they share the same project name
+    all_container_names = sorted(set(all_container_names))
+
     if not all_container_names:
+        # ── DIAGNOSTIC: before failing, dump global docker ps -a ──
+        _dump = subprocess.run(
+            ["docker", "ps", "-a", "--format", "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        logger.error(
+            "[IMP:9][DIAG][test_critical_services_healthy] DOCKER PS -A (before fail):\n%s",
+            _dump.stdout.strip()[:3000] or "(empty)",
+        )
+        # Also try docker compose ps -a for each started module with the actual project
+        for _m in started:
+            _cp = all_compose_files.get(_m)
+            if not _cp:
+                continue
+            _r2 = _run_docker(
+                ["docker", "compose", "-f", _cp, "-p", "ai-platform-test", "ps", "--all"],
+                timeout=15,
+                env_override={"COMPOSE_PROFILES": _m},
+            )
+            logger.error(
+                "[IMP:9][DIAG][test_critical_services_healthy] Module '%s' compose ps --all:\n%s",
+                _m,
+                _r2.stdout.strip()[:1000] or "(empty)",
+            )
+        # ── END DIAGNOSTIC ──
+
         logger.error(
             "[IMP:9][test_critical_services_healthy] No container names resolved from started modules %s",
             started,
@@ -530,14 +590,6 @@ def test_critical_services_healthy(
             f"Diagnosis: Containers may not have started or docker compose ps failed."
         )
 
-    # Deduplicate
-    all_container_names = sorted(set(all_container_names))
-
-    logger.info(
-        "[IMP:7][test_critical_services_healthy] Resolved %d container(s): %s",
-        len(all_container_names),
-        all_container_names,
-    )
     # endregion
 
     # region BLOCK_FilterCritical

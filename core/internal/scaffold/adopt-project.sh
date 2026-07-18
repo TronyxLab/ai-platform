@@ -147,7 +147,6 @@ parse_args() {
         usage >&2
         exit 1
     fi
-
     log_imp 7 "-" "Args: dir=${PROJECT_DIR} name=${PROJECT_NAME} org=${PROJECT_ORG} node=${PROJECT_NODE} domain=${PROJECT_DOMAIN:-<none>} force=${FORCE}"
 }
 # endregion FUNC_parse_args
@@ -691,7 +690,6 @@ main() {
 
     # ── Org validation against node.yaml (Contract 4.3) ──
     validate_org_against_node_yaml
-
     local changes=()
 
     log_imp 7 "-" "Adopting project: ${PROJECT_DIR}"
