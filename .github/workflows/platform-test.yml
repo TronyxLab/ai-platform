@@ -234,6 +234,14 @@ jobs:
 
       - name: Run full gate (contract + static + predeploy + smoke + component — Docker-dependent, no pre-commit/validate/lint)
         id: full_gate
+        env:
+          # ⚡ TRAP[PERF] · 2026-07-18 · >0 · CI uses local L1 image instead of ghcr.io context overlay
+          # · Root: CI cannot access ghcr.io/tronyxlab (403). `docker compose up` for hermes-agent
+          # ·   fails with "denied" when CONTEXT_IMAGE defaults to context overlay image.
+          # · Fix: use locally-built hermes-agent-base:latest (built in previous CI step).
+          # ·   test_component_hermes.py ENV_HERMES reads CONTEXT_IMAGE from os.environ.
+          # · Rev: when CI gains ghcr.io access to tronyxlab org, remove this override.
+          CONTEXT_IMAGE: hermes-agent-base:latest
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
