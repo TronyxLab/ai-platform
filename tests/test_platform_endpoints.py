@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test-platform-endpoints localhost hermes-dashboard prometheus grafana langfuse healthcheck
-# STRUCTURE: ⚡[HTTP GET localhost:9119/]→test_hermes_dashboard_endpoint || ⊕[summary IMP:9]
+# STRUCTURE: ⚡[HTTP GET localhost:19119/]→test_hermes_dashboard_endpoint || ⊕[summary IMP:9]
 # @file test_platform_endpoints.py
 # @purpose  Health-check tests for platform endpoints: Hermes Dashboard,
 #           Prometheus, Grafana, Langfuse.
@@ -7,13 +7,19 @@
 #           (fixture starts all compose modules before tests, tears down after).
 # @invariants
 #   - All tests use @pytest.mark.smoke and @pytest.mark.requires_docker markers
-#   - HTTP requests to localhost, timeout 10s
+#   - HTTP requests to localhost (shifted test ports, NOT canonical production ports)
+#   - HTTP timeout: 10s
 #   - LDD trajectory (IMP:7-10) printed before every assert
 # @rationale  These endpoints were reported as "errors" by the user.
 #             Testing them explicitly ensures the platform is healthy from a user's perspective.
 #             Tests run against services started by platform_services fixture (Docker compose lifecycle).
 #             LiteLLM smoke tests moved to test_smoke_litellm.py (wave-litellm reset).
 #             Loki smoke tests moved to test_smoke_logging.py (wave-logging reset).
+# ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · До F-7 тест проходил через side-effect склейки портов
+# · Root: compose merge склеивал ports из base+test → тестовые контейнеры биндили canonical порты
+# ·   на host → этот тест (пишущий на canonical порты) случайно проходил.
+# · Fix: после !override (F-7) контейнеры биндят только shifted ports (1XXXX). Тест переведён
+# ·   на сдвинутые порты, читаемые из SMOKE_ENV/SMOKE_ENV-констант.
 
 # region MODULE_CONTRACT
 ## @purpose  — Health-check tests for platform endpoints: Hermes Dashboard,
@@ -34,12 +40,21 @@ def _module_contract():
 # endregion MODULE_CONTRACT
 
 import logging
+import os
 
 import pytest
 import requests
 from conftest import _handle_e2e_error, ldd_trajectory
 
 logger = logging.getLogger(__name__)
+
+# Test ports — shifted (1XXXX) for test overlay coexistence with production (F-7)
+# ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · canonical ports больше не работают из-за !override
+# Читаются из SMOKE_ENV, задаваемой platform_env fixture (tests/_conftest/smoke.py:SMOKE_ENV)
+_HERMES_DASHBOARD_TEST_PORT = int(os.environ.get("HERMES_DASHBOARD_TEST_PORT", "19119"))
+_PROMETHEUS_TEST_PORT = int(os.environ.get("PROMETHEUS_TEST_PORT", "19090"))
+_GRAFANA_TEST_PORT = int(os.environ.get("GRAFANA_TEST_PORT", "13030"))
+_LANGFUSE_TEST_PORT = int(os.environ.get("LANGFUSE_TEST_PORT", "13000"))
 
 
 def _build_url(port: int, path: str) -> str:
@@ -57,16 +72,17 @@ def _build_url(port: int, path: str) -> str:
 @pytest.mark.requires_docker
 @pytest.mark.smoke
 @ldd_trajectory
-def test_hermes_dashboard_endpoint(caplog, platform_services, platform_ports) -> None:
+def test_hermes_dashboard_endpoint(caplog, platform_services) -> None:
     """Verify Hermes Dashboard / is reachable — accepts HTTP 200 or 302.
 
-    ## @purpose — Hermes Dashboard on port platform_ports[HERMES_DASHBOARD_PORT]
+    ## @purpose — Hermes Dashboard on test port HERMES_DASHBOARD_TEST_PORT (19119)
     ##            is behind basic auth gate. Without credentials, it redirects
     ##            (302) to /auth/login. With credentials, it returns HTTP 200.
-    ## @io — ⇥ caplog, platform_ports → ⚡ HTTP GET → ⎋ None (asserts 2xx/302)
+    ##            Uses shifted test port (F-7), not canonical 9119.
+    ## @io — ⇥ caplog → ⚡ HTTP GET → ⎋ None (asserts 2xx/302)
     ## @complexity — O(1)
     """
-    url = _build_url(platform_ports["HERMES_DASHBOARD_PORT"], "/")
+    url = _build_url(_HERMES_DASHBOARD_TEST_PORT, "/")
     logger.info("[IMP:7][test_hermes_dashboard_endpoint] Checking Hermes Dashboard at %s", url)
 
     try:
@@ -130,15 +146,15 @@ def _check_port_forwarded(port: int, http_path: str = "/") -> bool:
 @pytest.mark.requires_docker
 @pytest.mark.smoke
 @ldd_trajectory
-def test_prometheus_healthy_endpoint(caplog, platform_services, platform_ports) -> None:
+def test_prometheus_healthy_endpoint(caplog, platform_services) -> None:
     """Verify Prometheus /-/healthy returns HTTP 200.
 
-    ## @purpose — Prometheus health endpoint confirms the server is operational
-    ##            and ready to serve metrics queries.
-    ## @io — ⇥ caplog, platform_ports → ⚡ HTTP GET → ⎋ None (asserts 200)
+    ## @purpose — Prometheus health endpoint confirms the server is operational.
+    ##            Uses shifted test port PROMETHEUS_TEST_PORT (19090), not canonical 9090 (F-7).
+    ## @io — ⇥ caplog → ⚡ HTTP GET → ⎋ None (asserts 200)
     ## @complexity — O(1)
     """
-    url = _build_url(platform_ports["PROMETHEUS_PORT"], "/-/healthy")
+    url = _build_url(_PROMETHEUS_TEST_PORT, "/-/healthy")
     logger.info("[IMP:7][test_prometheus_healthy_endpoint] Checking Prometheus /-/healthy at %s", url)
 
     try:
@@ -166,15 +182,15 @@ def test_prometheus_healthy_endpoint(caplog, platform_services, platform_ports) 
 @pytest.mark.requires_docker
 @pytest.mark.smoke
 @ldd_trajectory
-def test_grafana_health_endpoint(caplog, platform_services, platform_ports) -> None:
+def test_grafana_health_endpoint(caplog, platform_services) -> None:
     """Verify Grafana /api/health returns HTTP 200.
 
     ## @purpose — Grafana health endpoint returns database and server health status.
-    ##            Does not require authentication.
-    ## @io — ⇥ caplog, platform_ports → ⚡ HTTP GET → ⎋ None (asserts 200)
+    ##            Uses shifted test port GRAFANA_TEST_PORT (13030), not canonical 3000 (F-7).
+    ## @io — ⇥ caplog → ⚡ HTTP GET → ⎋ None (asserts 200)
     ## @complexity — O(1)
     """
-    url = _build_url(platform_ports["GRAFANA_PORT"], "/api/health")
+    url = _build_url(_GRAFANA_TEST_PORT, "/api/health")
     logger.info("[IMP:7][test_grafana_health_endpoint] Checking Grafana /api/health at %s", url)
 
     try:
@@ -198,20 +214,19 @@ def test_grafana_health_endpoint(caplog, platform_services, platform_ports) -> N
 @pytest.mark.requires_docker
 @pytest.mark.smoke
 @ldd_trajectory
-def test_langfuse_health_endpoint(caplog, platform_services, platform_ports) -> None:
+def test_langfuse_health_endpoint(caplog, platform_services) -> None:
     """Verify Langfuse /api/public/health returns HTTP 200, or skip if port not forwarded.
 
     ## @purpose — Langfuse public health endpoint. In test environment, langfuse
-    ##            uses shifted port 127.0.0.1:13000:3000 (docker-compose.test.yml)
-    ##            to avoid conflicts with production. This test validates the endpoint
-    ##            when accessible and skips with a descriptive message when port is blocked.
-    ## @io — ⇥ caplog, platform_ports → ⚡ port check → ◇ forwarded → HTTP GET → ⎋ None
-    ##                                   → ◇ not forwarded → ⎋ pytest.skip
+    ##            uses shifted port LANGFUSE_TEST_PORT (13000) to avoid conflicts with
+    ##            production (F-7). This test validates the endpoint when accessible
+    ##            and skips with a descriptive message when port is blocked.
+    ## @io — ⇥ caplog → ⚡ port check → ◇ forwarded → HTTP GET → ⎋ None
+    ##                           → ◇ not forwarded → ⎋ pytest.skip
     ## @complexity — O(1)
-    ## @changes — 2026-07-16 | T7: Fixed stale skip text — shifted port 13000:3000, not ports: []
-    ##            2026-07-16 | T11: Port from platform_ports fixture (platform-env.yaml)
+    ## @changes — 2026-07-18 | F-7: Port shifted to LANGFUSE_TEST_PORT=13000, !override prevents merge
     """
-    port = platform_ports["LANGFUSE_PORT"]
+    port = _LANGFUSE_TEST_PORT
     url = _build_url(port, "/api/public/health")
 
     # Check if port is actually forwarded from a Docker container
