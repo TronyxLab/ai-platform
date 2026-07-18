@@ -357,16 +357,29 @@ def test_infra_metrics_healthcheck(caplog, infra_metrics_compose) -> None:
 
     ## @purpose — The module healthcheck.sh script validates all containers
     ##            and HTTP endpoints. Deep mode checks /healthz and /metrics.
+    ##            Passes shifted test ports (CADVISOR_PORT=18081,
+    ##            NODE_EXPORTER_PORT=19100) — скрипт использует их через env.
     ## @io — ⇥ caplog → ⚡ bash healthcheck.sh deep → ⎋ None (asserts exit 0)
     ## @complexity — O(N)
+    ## ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · тест проходил через F-7 side-effect
+    ## · Root: до !override тестовые контейнеры биндили canonical порты 8080/9100
+    ## ·   (склейка base+test), и healthcheck.sh с hardcoded портами проходил.
+    ## · Fix: порты параметризованы через env; тест передаёт shifted порты.
     """
     logger.info("[IMP:7][smoke][healthcheck] Running healthcheck.sh deep")
 
+    # ⚠️ Передаём shifted test порты (F-7): CADVISOR_PORT=18081, NODE_EXPORTER_PORT=19100
+    healthcheck_env = {
+        **os.environ,
+        "CADVISOR_PORT": str(_CADVISOR_PORT),
+        "NODE_EXPORTER_PORT": str(_NODE_EXPORTER_PORT),
+    }
     result = subprocess.run(
         ["bash", str(_HEALTHCHECK_SH), "deep"],
         capture_output=True,
         text=True,
         timeout=30,
+        env=healthcheck_env,
     )
 
     logger.info(

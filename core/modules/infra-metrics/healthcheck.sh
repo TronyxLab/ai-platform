@@ -7,10 +7,12 @@
 ## @invariants
 ##   - Default mode: check_docker_health for all containers
 ##   - MODE=deep: HTTP endpoint checks on cadvisor and node-exporter
+##   - Deep порты переопределяемы через env: CADVISOR_PORT, NODE_EXPORTER_PORT
 ##   - nginx-exporter and redis-exporter: scratch images — skip deep check
 ##   - Exits 0 only if all containers are healthy
 ## @rationale Standard module healthcheck contract per core/modules/AGENTS.md
 ## @changes — 2026-07-15 | Added redis-exporter (wave-redis)
+## @changes — 2026-07-18 | Deep порты параметризованы через env (F-7: smoke использует shifted порты 18081/19100)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -22,12 +24,20 @@ source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 CONTAINERS=("cadvisor" "node-exporter" "nginx-prometheus-exporter" "redis-exporter")
 MODE="${1:-}"
 
+# ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · hardcoded canonical порты ломали smoke
+# · Root: F-7 rolled out !override — test containers bind shifted ports (18081/19100),
+# ·   но healthcheck.sh deep ходил на canonical (8080/9100).
+# · Fix: порты через env с каноническими дефолтами; smoke передаёт shifted.
+# · Rev: если добавится новый deep-проверяемый сервис — по тому же паттерну.
+CADVISOR_PORT="${CADVISOR_PORT:-8080}"
+NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-9100}"
+
 if [ "$MODE" = "deep" ]; then
     # Deep checks: verify HTTP endpoints on cadvisor and node-exporter
-    log_imp 8 "healthcheck" "Deep mode: checking HTTP endpoints"
+    log_imp 8 "healthcheck" "Deep mode: checking HTTP endpoints (CADVISOR_PORT=${CADVISOR_PORT}, NODE_EXPORTER_PORT=${NODE_EXPORTER_PORT})"
 
-    check_http "http://127.0.0.1:8080/healthz" "200" || exit 1
-    check_http "http://127.0.0.1:9100/metrics" "200" || exit 1
+    check_http "http://127.0.0.1:${CADVISOR_PORT}/healthz" "200" || exit 1
+    check_http "http://127.0.0.1:${NODE_EXPORTER_PORT}/metrics" "200" || exit 1
 
     # nginx-exporter: scratch image — skip HTTP, rely on docker inspect
     log_imp 8 "healthcheck" "nginx-exporter: deep HTTP check unavailable (scratch image)"
