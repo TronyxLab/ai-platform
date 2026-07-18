@@ -31,7 +31,7 @@ venv: $(VENV)
 # test infrastructure (volume dirs, Docker networks) is managed by tests/conftest.py
 # test_infra fixture — autouse session-scoped, replaces former test-infra-up/down targets.
 
-.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts project-sync-secrets
+.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts
 
 ## templates-check: Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic at unresolved
 templates-check:
@@ -653,13 +653,13 @@ render-vhosts:
 	@bash core/internal/scaffold/add-vhost.sh --render-all --node $(NODE)
 	@echo "[IMP:9][make][render-vhosts] Vhost generation complete"
 
-## project-sync-secrets: Sync project repo-secrets from SOPS enc-file via gh CLI
-##   Usage: make project-sync-secrets NAME=<project> [NODE=<node>]
-##   Delegates to core/internal/scaffold/sync-repo-secrets.sh
-project-sync-secrets:
-	@echo "[IMP:7][make][project-sync-secrets] Syncing repo secrets..."
-	@bash core/internal/scaffold/sync-repo-secrets.sh --name $(NAME) $(if $(NODE),--node $(NODE),)
-	@echo "[IMP:9][make][project-sync-secrets] Repo secrets sync complete"
+# ## project-sync-secrets: Sync project repo-secrets from SOPS enc-file via gh CLI (DISABLED — requires T3.6)
+# ##   Usage: make project-sync-secrets NAME=<project> [NODE=<node>]
+# ##   Delegates to core/internal/scaffold/sync-repo-secrets.sh
+# project-sync-secrets:
+# 	@echo "[IMP:7][make][project-sync-secrets] Syncing repo secrets..."
+# 	@bash core/internal/scaffold/sync-repo-secrets.sh --name $(NAME) $(if $(NODE),--node $(NODE),)
+# 	@echo "[IMP:9][make][project-sync-secrets] Repo secrets sync complete"
 
 ## help: Show this help
 help:

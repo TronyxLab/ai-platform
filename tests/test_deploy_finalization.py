@@ -17,15 +17,11 @@
 # endregion MODULE_CONTRACT
 
 import json
-import os
-import shlex
-import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
-
 
 # region FAKE_DOCKER_SCRIPT
 ## @purpose  Fake docker executable that returns controlled responses.
@@ -172,18 +168,22 @@ def deploy_harness(tmp_path: Path):
     projects_base = tmp_path / "projects"
     project_dir = projects_base / project_name
     project_dir.mkdir(parents=True)
-    (project_dir / "docker-compose.yml").write_text(textwrap.dedent("""\
+    (project_dir / "docker-compose.yml").write_text(
+        textwrap.dedent("""\
         version: "3.8"
         services:
           testproj:
             image: test:latest
             ports:
               - "3000:3000"
-    """))
-    (project_dir / "ai-platform.yaml").write_text(textwrap.dedent("""\
+    """)
+    )
+    (project_dir / "ai-platform.yaml").write_text(
+        textwrap.dedent("""\
         project: testproj
         service: testproj
-    """))
+    """)
+    )
 
     # ── Repo root ──
     repo_root = Path(__file__).resolve().parent.parent
@@ -203,6 +203,8 @@ def deploy_harness(tmp_path: Path):
         "wrapper_script": wrapper,
         "repo_root": repo_root,
     }
+
+
 # endregion HARNESS_FIXTURE
 
 
@@ -228,7 +230,7 @@ def _run_deploy(
     if extra_env:
         env.update(extra_env)
 
-    proc = subprocess.run(
+    return subprocess.run(
         ["bash", str(harness["wrapper_script"]), str(harness["repo_root"])],
         capture_output=True,
         text=True,
@@ -236,7 +238,8 @@ def _run_deploy(
         cwd=str(harness["tmp_path"]),
         env=env,
     )
-    return proc
+
+
 # endregion UTIL_RUN_DEPLOY
 
 
@@ -257,6 +260,8 @@ def _check_ldd_trajectory(stderr: str) -> bool:
                 found = True
     print("--- END LDD TRAJECTORY ---")
     return found
+
+
 # endregion LDD_CHECK_HELPER
 
 
@@ -269,20 +274,23 @@ def test_deploy_success_notify_missing(deploy_harness, caplog):
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
     # Exit 0 expected (B1 fix: non-fatal zone does not kill deploy)
-    assert proc.returncode == 0, \
-        f"Expected exit 0, got {proc.returncode}. Stderr tail:\n" + "\n".join((proc.stderr or "").splitlines()[-20:])
+    assert proc.returncode == 0, f"Expected exit 0, got {proc.returncode}. Stderr tail:\n" + "\n".join(
+        (proc.stderr or "").splitlines()[-20:]
+    )
 
     # deploy-result.json = success
     result_file = deploy_harness["project_dir"] / ".deploy-snapshots" / "deploy-result.json"
     assert result_file.exists(), f"deploy-result.json not found at {result_file}"
     result = json.loads(result_file.read_text())
-    assert result["status"] == "success", \
-        f"Expected status='success', got '{result['status']}': {result}"
+    assert result["status"] == "success", f"Expected status='success', got '{result['status']}': {result}"
 
-    assert any("Deploy result: success" in line for line in (proc.stderr or "").splitlines()), \
+    assert any("Deploy result: success" in line for line in (proc.stderr or "").splitlines()), (
         "Expected 'Deploy result: success' in stderr — B1 fix not active"
+    )
 
     print(f"[IMP:9][test] PASS: B1 notify-missing → exit {proc.returncode}, status={result['status']}")
+
+
 # endregion TEST_NOTIFY_MISSING
 # 🧪 TRAP[TEST] · Regression · B1 notify-hook absent → success · Last fail: 2026-07-18 (pre-fix) · Remove if: B1 regression impossible (structural fix)
 
@@ -294,23 +302,28 @@ def test_deploy_success_audit_unavailable(deploy_harness, caplog):
     audit_dir.mkdir()
     audit_dir.chmod(0o444)
 
-    proc = _run_deploy(deploy_harness, extra_env={
-        "PLATFORM_LOG_DIR": str(audit_dir),
-    })
+    proc = _run_deploy(
+        deploy_harness,
+        extra_env={
+            "PLATFORM_LOG_DIR": str(audit_dir),
+        },
+    )
     found_imp9 = _check_ldd_trajectory(proc.stderr or "")
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
-    assert proc.returncode == 0, \
-        f"Expected exit 0, got {proc.returncode}. Stderr tail:\n" + "\n".join((proc.stderr or "").splitlines()[-20:])
+    assert proc.returncode == 0, f"Expected exit 0, got {proc.returncode}. Stderr tail:\n" + "\n".join(
+        (proc.stderr or "").splitlines()[-20:]
+    )
 
     result_file = deploy_harness["project_dir"] / ".deploy-snapshots" / "deploy-result.json"
     assert result_file.exists(), f"deploy-result.json not found at {result_file}"
     result = json.loads(result_file.read_text())
-    assert result["status"] == "success", \
-        f"Expected status='success', got '{result['status']}': {result}"
+    assert result["status"] == "success", f"Expected status='success', got '{result['status']}': {result}"
 
     print(f"[IMP:9][test] PASS: B1 audit-denied → exit {proc.returncode}, status={result['status']}")
+
+
 # endregion TEST_AUDIT_DENIED
 # 🧪 TRAP[TEST] · Regression · B1 audit.log unwritable → success · Last fail: 2026-07-18 (pre-fix) · Remove if: B1 regression impossible (structural fix)
 
@@ -318,27 +331,33 @@ def test_deploy_success_audit_unavailable(deploy_harness, caplog):
 # region TEST_HEALTH_FAILS
 def test_deploy_health_fails_exit_1(deploy_harness, caplog):
     """Negative B1: health-gate failure → exit 1, deploy-result.json=failed."""
-    proc = _run_deploy(deploy_harness, extra_env={
-        "FAKE_HEALTH_CHECK": "fail",
-    })
+    proc = _run_deploy(
+        deploy_harness,
+        extra_env={
+            "FAKE_HEALTH_CHECK": "fail",
+        },
+    )
     found_imp9 = _check_ldd_trajectory(proc.stderr or "")
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
     # Exit 1 expected (health-gate failure is still fatal)
-    assert proc.returncode != 0, \
-        f"Expected non-zero exit (health failed), got 0. Stderr:\n{proc.stderr}"
+    assert proc.returncode != 0, f"Expected non-zero exit (health failed), got 0. Stderr:\n{proc.stderr}"
 
     result_file = deploy_harness["project_dir"] / ".deploy-snapshots" / "deploy-result.json"
     if result_file.exists():
         result = json.loads(result_file.read_text())
-        assert result["status"] != "success", \
+        assert result["status"] != "success", (
             f"Expected status!='success' for health failure, got '{result['status']}': {result}"
+        )
         print(f"[IMP:9][test] PASS: health-fail → exit {proc.returncode}, status={result['status']}")
     else:
         print(f"[IMP:9][test] PASS: health-fail → exit {proc.returncode} (no result file)")
 
-    assert any("Healthcheck FAILED" in line for line in (proc.stderr or "").splitlines()), \
+    assert any("Healthcheck FAILED" in line for line in (proc.stderr or "").splitlines()), (
         "Expected 'Healthcheck FAILED' in stderr for health-fail test"
+    )
+
+
 # endregion TEST_HEALTH_FAILS
 # 🧪 TRAP[TEST] · Negative · B1 health-gate still fails · Last fail: N/A · Remove if: health-gate logic changes fundamentally

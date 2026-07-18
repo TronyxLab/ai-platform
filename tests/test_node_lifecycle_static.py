@@ -341,12 +341,20 @@ def test_remote_cmd_has_update_mode(caplog) -> None:
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 2 PASS: --mode update present")
 
     # ── Check 3: does NOT contain --resume in function body (D2: update steps independent) ──
-    # NOTE: --resume may appear in file-level comments but must NOT be in the function body
-    assert "--resume" not in update_func_body, "[IMP:9][test] FAIL: build_update_ssh_cmd must NOT contain --resume (D2)"
+    # NOTE: --resume may appear in file-level comments but must NOT be in the function body.
+    # Scope the check to only the build_update_ssh_cmd function, not the rest of the file
+    # (which contains build_converge_ssh_cmd with --resume in its docstring).
+    update_func_end = content.find("# endregion FUNC_build_update_ssh_cmd")
+    if update_func_end < 0:
+        update_func_end = update_func_start + 500
+    bounded_func_body = content[update_func_start:update_func_end]
+    assert "--resume" not in bounded_func_body, (
+        "[IMP:9][test] FAIL: build_update_ssh_cmd must NOT contain --resume (D2)"
+    )
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 3 PASS: --resume absent from function body (per D2)")
 
     # ── Check 4: does NOT contain --owner-key in function body (D2: not needed in update mode) ──
-    assert "--owner-key" not in update_func_body, (
+    assert "--owner-key" not in bounded_func_body, (
         "[IMP:9][test] FAIL: build_update_ssh_cmd must NOT contain --owner-key (D2)"
     )
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 4 PASS: --owner-key absent from function body (per D2)")

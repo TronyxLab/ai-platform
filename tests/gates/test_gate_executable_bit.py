@@ -17,8 +17,8 @@
 ##            never degrades.
 # endregion MODULE_CONTRACT
 
-import subprocess
 import logging
+import subprocess
 from pathlib import Path
 
 # 🧪 TRAP[TEST] · 2026-07-18 · Regression: M1 executable-bit drift
@@ -54,7 +54,7 @@ def _get_sh_file_modes() -> list[tuple[str, str]]:
 def _has_shebang(path: Path) -> bool:
     """Check if a file has a shebang line (starts with #!)."""
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             first_line = f.readline()
             return first_line.startswith("#!")
     except (OSError, UnicodeDecodeError):
@@ -90,7 +90,7 @@ def test_executable_bit_outside_lib(caplog):
         msg += "Fix: git update-index --chmod=+x <file>"
         logging.error(msg)
         # 🧪 TRAP[TEST] · 2026-07-18 · Regression guard
-        assert False, msg
+        raise AssertionError(msg)
 
     logging.info("[IMP:9][test][PASS] All %d .sh files outside core/lib/ have 100755 mode", len(entries))
 
@@ -118,9 +118,7 @@ def test_negative_detects_644_outside_lib(caplog):
             violations_found.append(path)
             logging.warning("[IMP:9][test][neg-violation] Detected: %s (simulated 100644)", path)
 
-    assert len(violations_found) > 0, (
-        "[IMP:10][test][FAIL-NEG] Negative test: expected violations but none detected"
-    )
+    assert len(violations_found) > 0, "[IMP:10][test][FAIL-NEG] Negative test: expected violations but none detected"
     logging.info(
         "[IMP:9][test][NEG-PASS] Negative test correctly detected %d violations outside core/lib/",
         len(violations_found),

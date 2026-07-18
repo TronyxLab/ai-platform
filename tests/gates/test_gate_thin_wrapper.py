@@ -50,6 +50,7 @@ ALLOWLIST: frozenset[str] = frozenset(
         "bootstrap.sh",  # Will be refactored to ~150 LOC in T15
         "lint.sh",  # External tool orchestrator — 221 LOC, 6 functions
         "check-doc-headers.sh",  # Documentation audit utility — 215 LOC, 6 functions
+        "context-promote.sh",  # Uses ssh -T for SSH auth detection (B4), direct git push
     }
 )
 

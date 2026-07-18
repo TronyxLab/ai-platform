@@ -389,7 +389,9 @@ def test_proxy_net_external_declared(caplog, tmp_path):
     assert proxy_net_error, (
         f"[IMP:9][test_proxy_net_external_declared] FAIL: Expected proxy-net violation, got errors: {errors}"
     )
-    logger.info("[IMP:9][test_proxy_net_external_declared] PASS: missing proxy-net correctly detected — errors: %s", errors)
+    logger.info(
+        "[IMP:9][test_proxy_net_external_declared] PASS: missing proxy-net correctly detected — errors: %s", errors
+    )
 
 
 @pytest.mark.gate
@@ -409,7 +411,9 @@ def test_proxy_net_is_external(caplog, tmp_path):
     assert external_error, (
         f"[IMP:9][test_proxy_net_is_external] FAIL: Expected external violation, got errors: {errors}"
     )
-    logger.info("[IMP:9][test_proxy_net_is_external] PASS: non-external proxy-net correctly detected — errors: %s", errors)
+    logger.info(
+        "[IMP:9][test_proxy_net_is_external] PASS: non-external proxy-net correctly detected — errors: %s", errors
+    )
 
 
 @pytest.mark.gate
@@ -482,12 +486,11 @@ def test_templates_declare_proxy_net(caplog):
                     if val in ("true", "True"):
                         has_external_true = True
                         break
-                    else:
-                        logger.info(
-                            "[IMP:8][test_templates_declare_proxy_net] %s: proxy-net.external=%s (not true)",
-                            compose_path.name,
-                            val,
-                        )
+                    logger.info(
+                        "[IMP:8][test_templates_declare_proxy_net] %s: proxy-net.external=%s (not true)",
+                        compose_path.name,
+                        val,
+                    )
 
         if not has_proxy_net_decl:
             logger.info(

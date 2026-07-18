@@ -133,10 +133,10 @@ scaffold:
     mechanism: shell-script
     delegates_to: core/internal/scaffold/add-vhost.sh --render-all --node <n>
     description: "Regenerate Nginx vhost configs from node.yaml#projects with domain (GENERATED, S1)"
-  - make_target: project-sync-secrets
-    mechanism: shell-script
-    delegates_to: core/internal/scaffold/sync-repo-secrets.sh
-    description: "Sync project repo-secrets from SOPS enc-file via gh CLI"
+  # - make_target: project-sync-secrets
+  #   mechanism: shell-script
+  #   delegates_to: core/internal/scaffold/sync-repo-secrets.sh
+  #   description: "Sync project repo-secrets from SOPS enc-file via gh CLI (DISABLED — requires sync-repo-secrets.sh, T3.6 conditional)"
 
 secrets:
   - make_target: secrets-unlock
@@ -495,5 +495,5 @@ allowed_verbs:
   - status
   - converge
   - render-vhosts
-  - project-sync-secrets
+  # project-sync-secrets — DISABLED, requires core/internal/scaffold/sync-repo-secrets.sh (T3.6)
   - node-update

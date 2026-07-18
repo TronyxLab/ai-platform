@@ -88,8 +88,20 @@ HELP
 ##             - Hash includes everything after first blank line + trailing newline
 compute_body_hash() {
     local vhost_file="$1"
-    # Hash everything after the first blank line (skipping GENERATED header)
-    sed -n '/^$/,$$ p' "$vhost_file" 2>/dev/null | sha256sum | cut -d' ' -f1
+    # Use content-hash.sh if available, otherwise fallback to a simple awk/sha256sum-based hash
+    local content_hash_sh
+    content_hash_sh="$(dirname "${BASH_SOURCE[0]}")/../bootstrap/content-hash.sh"
+    if [[ -f "$content_hash_sh" ]]; then
+        # shellcheck source=../bootstrap/content-hash.sh
+        source "$content_hash_sh"
+        compute_content_hash "$vhost_file"
+    else
+        command -v sha256sum &>/dev/null && sha256sum "$vhost_file" | cut -d' ' -f1 || \
+        command -v shasum &>/dev/null && shasum -a 256 "$vhost_file" | cut -d' ' -f1 || {
+            echo "unavailable"
+            return 0
+        }
+    fi
 }
 # endregion FUNC_compute_hash
 
@@ -460,23 +472,33 @@ generate_vhost() {
     log_info "Generating nginx vhost: ${vhost_file}"
 
     # Generate body first to compute hash
+    # ⚠️ Split local+assign to avoid set -e false positive on command substitution
     local body
-    body="$(generate_vhost_body "$fqdn" "$project_name" "$cert_domain")"
+    body="$(generate_vhost_body "$fqdn" "$project_name" "$cert_domain")" || {
+        log_crit "generate_vhost_body failed for ${fqdn}"
+        exit 1
+    }
 
     # Write to temp file for hash computation
     local tmp_body
-    tmp_body="$(mktemp)"
-    echo "$body" > "$tmp_body"
+    tmp_body="$(mktemp)" || {
+        log_crit "mktemp failed"
+        exit 1
+    }
+    printf '%s\n' "$body" > "$tmp_body"
     local body_hash
-    body_hash="$(compute_body_hash "$tmp_body")"
+    body_hash="$(compute_body_hash "$tmp_body")" || body_hash="unavailable"
+    if [[ -z "$body_hash" ]]; then
+        body_hash="unavailable"
+    fi
 
-    # Build complete file: GENERATED header + body
+    rm -f "$tmp_body"
+
+    # Write complete file with GENERATED header
     {
         generated_header "$project_name" "$fqdn" "$node" "$body_hash"
         echo "$body"
     } > "$vhost_file"
-
-    rm -f "$tmp_body"
 
     log_imp 9 "vhost" "Nginx vhost generated: ${vhost_file} (cert_domain=${cert_domain}, hash=${body_hash:0:12})"
     log_ok "Nginx vhost written: ${vhost_file}"

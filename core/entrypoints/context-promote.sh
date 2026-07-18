@@ -61,7 +61,7 @@ if [[ "$SSH_AVAILABLE" -eq 0 && -z "$GIT_MIRROR_TOKEN" ]]; then
     echo "[IMP:10][context-promote] FATAL: SSH unavailable AND GIT_MIRROR_TOKEN not set" >&2
     echo "Either ensure ssh-agent has a key for git@github.com, or set GIT_MIRROR_TOKEN PAT" >&2
     echo "  (1) ssh-add -L | grep github.com || ssh-add ~/.ssh/id_ed25519" >&2
-    echo "  (2) GIT_MIRROR_TOKEN=ghp_... CONTEXT=<org> make context-promote" >&2
+    echo "  (2) Set GIT_MIRROR_TOKEN (your GitHub PAT) and CONTEXT, then: make context-promote" >&2
     exit 1
 fi
 # endregion GIT_TOKEN_RESOLUTION
