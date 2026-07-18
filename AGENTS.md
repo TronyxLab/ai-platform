@@ -90,7 +90,7 @@
 | ✅ | `provision` | Provision окружения (сети, volumes, CI env) из platform-env.yaml (`make provision [SCOPE=all|networks|volumes|env]`) |
 | ✅ | `templates-check` | Dry-run проверка разрешимости шаблонов |
 | ✅ | `templates-render` | Рендер шаблонов по манифесту |
-| ✅ | `validate` / `lint` / `audit` / `check-file-lines` | Проверки и аудит |
+| ✅ | `validate` / `lint` / `audit` / `check-file-lines` / `verify` | Проверки и аудит |
 | ✅ | `secrets-unlock` | Расшифровка SOPS/age секретов |
 | ✅ | `test` | Тестирование (`make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]`) |
 | ✅ | `test-inventory-sync` | Регенерация test_inventory.yaml из pytest --collect-only (make test-inventory-sync → tests/tools/sync_inventory.py) |
@@ -98,7 +98,7 @@
 | ✅ | `new-project` / `new-context` | Создание из шаблона |
 | ✅ | `project-sync-env` | Синхронизация .env.platform из platform-env.yaml (make project-sync-env → scaffold.sh sync-env) |
 | ✅ | `remove-project` | Безопасное удаление проекта из lifecycle (unregister + compose down без -v) |
-| ✅ | `project-adopt` | Адаптация существующего проекта в lifecycle платформы |
+| ✅ | `adopt-project` | Адаптация существующего проекта в lifecycle платформы (make adopt-project DIR=&lt;dir&gt;) |
 | ✅ | `project-list` / `project-status` | Список проектов (offline) и live-статус на ноде |
 | ✅ | `backup` / `restore` | Резервное копирование. Root = оркестрация стека, module = один модуль |
 | ✅ | `healthcheck` | Проверка здоровья |
@@ -106,7 +106,7 @@
 | ✅ | `up` | Root = оркестрация стека, module = один модуль (compose up) |
 | ✅ | `down` | Root = оркестрация стека, module = алиас `stop` (discoverability) |
 | ✅ | `restart` | Soft restart (stop + start). Root = оркестрация стека, module = один модуль |
-| ✅ | `restart-hard` | Hard restart c `--force-recreate` (module-level target) |
+| ✅ | `restart-hard` | Hard restart c `--force-recreate` (module-level target only — нет root Makefile target) |
 | ✅ | `status` | Локальный compose-lifecycle |
 | ❌ | `push-core`, `deploy-node`, `build-local`, `bootstrap-core`, `hermes-deploy-vps` | Запрещены — не из словаря |
 

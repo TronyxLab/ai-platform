@@ -16,7 +16,10 @@ docker.txt
 *~
 
 # ─── AI tools ──────────────────────────────────────────────────────
-.ai/
+# .ai/plans/ is tracked: cross-session knowledge (Read-before-Act) — worktrees
+# must see the full plans history, otherwise NNN allocation collides on 001-
+.ai/*
+!.ai/plans/
 .doxygen/
 
 # ─── Dev certs (mkcert, per-developer) ────────────────────────────
