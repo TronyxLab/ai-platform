@@ -216,7 +216,5 @@ class TestSmokeTestIsolation:
             "[IMP:9][gate][isolation] Checked %d modules for base container_name coverage",
             len(list(MODULES_DIR.glob("*/docker-compose.base.yml"))),
         )
-        assert not errors, (
-            f"Services with container_name in base.yml missing -test override:\n" + "\n".join(errors)
-        )
+        assert not errors, "Services with container_name in base.yml missing -test override:\n" + "\n".join(errors)
         logger.info("[IMP:9][gate][isolation] All base container_names have -test override ✓")
