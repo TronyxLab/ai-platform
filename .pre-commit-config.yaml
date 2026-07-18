@@ -133,11 +133,14 @@ repos:
         name: check-compose-spec
         description: Validate docker-compose YAML files against compose-spec schema
         stages: [pre-commit]
+        # F-7: Все test-overlay модулей используют !override (YAML-тег, не парсится
+        # compose-spec валидатором). Изоляция портов покрыта gate-тестами
+        # test_smoke_test_isolation.
         exclude: >
           (?x)^(
             templates/.*|
             .*docker-compose\.macos\.yml|
-            core/modules/nginx/docker-compose\.test\.yml
+            core/modules/[^/]+/docker-compose\.test\.yml
           )$
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -148,13 +151,15 @@ repos:
         description: Validate YAML syntax in staged files
         args: [--allow-multiple-documents]
         stages: [pre-commit]
+        # F-7: Те же test-overlay с !override — check-yaml (yaml.safe_load) не парсит
+        # кастомный YAML-тег. Тесты на изоляцию портов в test_smoke_test_isolation.
         exclude: >
           (?x)^(
             templates/.*|
             core/bootstrap/.*\.yaml|
             \.github/workflows/.*\.yml|
             .*docker-compose\.macos\.yml|
-            core/modules/nginx/docker-compose\.test\.yml
+            core/modules/[^/]+/docker-compose\.test\.yml
           )$
 
       - id: trailing-whitespace
