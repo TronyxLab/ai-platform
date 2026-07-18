@@ -31,6 +31,10 @@ name: Deploy Project (Reusable)
         required: false
         type: string
         description: "Target node name (e.g. tronyx-vps) — overrides auto-resolution from ai-platform.yaml"
+    secrets:
+      CI_DEPLOY_KEY:
+        description: "SSH private key for CI deploy user on target node"
+        required: true
 
 jobs:
   deploy:
