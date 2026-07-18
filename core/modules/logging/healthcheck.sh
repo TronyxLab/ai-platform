@@ -13,6 +13,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][logging-hc][main] Starting logging healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 

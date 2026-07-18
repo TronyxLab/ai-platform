@@ -21,6 +21,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][install-acme][main] Starting acme.sh installation" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/paths.sh"
 __LOG_PREFIX="install-acme"
@@ -49,6 +50,7 @@ install_acme() {
 
     if [[ -x "$acme_sh" ]]; then
         log_step "acme" "SKIP" "acme.sh already installed at ${acme_home}"
+        echo "[IMP:9][install-acme][acme] SKIP — already installed at ${acme_home}" >&2
         return 0
     fi
 
@@ -70,6 +72,7 @@ install_acme() {
     fi
 
     log_step "acme" "DONE" "acme.sh installed at ${acme_home}"
+    echo "[IMP:9][install-acme][acme] Installation complete: ${acme_home}" >&2
 }
 # endregion INSTALL_ACME
 

@@ -49,6 +49,10 @@ def _parse_keys_in_order(env_path):
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_env_example_well_formed(caplog):
     """.env.example must have no duplicate keys."""
     assert os.path.isfile(ENV_EXAMPLE_PATH), f".env.example not found at {ENV_EXAMPLE_PATH}"

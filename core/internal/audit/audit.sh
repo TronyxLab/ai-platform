@@ -12,10 +12,12 @@
 ##   the modules→internal cross-layer rule (TASK-6A)
 # endregion MODULE_CONTRACT
 
+echo "[IMP:7][audit][main] Starting audit wrapper" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/audit_logging.sh"
 
 # If executed directly (not sourced), write a test entry
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "[IMP:8][audit][main] Direct invocation — writing audit entry" >&2
     audit_log "${1:-test}" "${2:-INFO}" "${3:-audit.sh direct invocation}"
 fi

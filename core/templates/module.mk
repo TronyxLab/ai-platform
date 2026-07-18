@@ -59,7 +59,7 @@ COMPOSE_CMD ?= docker compose -f $(COMPOSE_FILE) $(if $(wildcard $(SECRETS_ENV))
 
 include ../../Makefile.common
 
-.PHONY: start stop restart status logs build up backup restore help
+.PHONY: start stop restart restart-hard status logs build up down backup restore help
 
 ## start: Start $(MODULE_NAME) container
 start: ## Start $(MODULE_NAME) (compose up -d)
@@ -74,11 +74,16 @@ stop: ## Stop $(MODULE_NAME) (compose down) — OWNER ONLY
 	$(COMPOSE_CMD) down --timeout 30
 	@echo "[IMP:9][$(MODULE_NAME)-mk][stop] $(MODULE_NAME) stopped"
 
-## restart: Hard restart $(MODULE_NAME)
-restart: ## Hard restart $(MODULE_NAME)
-	@echo "[IMP:7][$(MODULE_NAME)-mk][restart] Hard restarting $(MODULE_NAME)"
-	$(COMPOSE_CMD) down && $(COMPOSE_CMD) up -d
-	@echo "[IMP:8][$(MODULE_NAME)-mk][restart] $(MODULE_NAME) hard restarted"
+## restart-hard: Hard restart $(MODULE_NAME) with --force-recreate
+# ALIAS: hard restart with --force-recreate
+restart-hard: ## Hard restart $(MODULE_NAME) (--force-recreate)
+	@echo "[IMP:7][$(MODULE_NAME)-mk][restart-hard] Hard restarting $(MODULE_NAME) with force-recreate"
+	$(COMPOSE_CMD) down && $(COMPOSE_CMD) up -d --force-recreate
+	@echo "[IMP:8][$(MODULE_NAME)-mk][restart-hard] $(MODULE_NAME) hard restarted"
+
+## down: Alias for stop (discoverability)
+# ALIAS for discoverability — see 'stop' for implementation
+down: stop ## ALIAS: stop the module (discoverability alias)
 
 ## status: Show container status with liveness
 status: ## Show $(MODULE_NAME) container status

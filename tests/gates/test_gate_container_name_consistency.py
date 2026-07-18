@@ -13,10 +13,15 @@
 ##              · Superseded by test_p20_container_coupling.py::test_env_hostnames_resolvable
 # endregion MODULE_CONTRACT
 
+import logging
 from pathlib import Path
 
 import pytest
 import yaml
+
+from tests._conftest.ldd import ldd_trajectory
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULES_DIR = PROJECT_ROOT / "core" / "modules"
@@ -51,10 +56,15 @@ REGISTRY = _extract_container_registry()
 MODULE_YAMLS = _get_module_yamls()
 
 
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Container name consistency — все контейнеры следуют конвенции именования
+# · Last fail: N/A (preventive)
+# · Remove if: naming convention changes fundamentally
 class TestContainerNameConsistency:
     @pytest.mark.gate
-    def test_all_container_names_extracted(self) -> None:
+    @ldd_trajectory
+    def test_all_container_names_extracted(self, caplog) -> None:
         """Все container_name из docker-compose.base.yml извлечены в реестр."""
+        logger.info("[IMP:9][gate][container-registry] Extracted %d container names", len(REGISTRY))
         assert len(REGISTRY) > 0, (
             "No container names extracted from docker-compose.base.yml files. "
             "Check that compose files exist and are valid YAML."
@@ -63,9 +73,11 @@ class TestContainerNameConsistency:
         print(f"\nContainer registry ({len(REGISTRY)} entries):")
         for cname, module in sorted(REGISTRY.items()):
             print(f"  {cname} → {module}")
+        logger.info("[IMP:9][gate][container-registry] All %d container names extracted successfully", len(REGISTRY))
 
     @pytest.mark.gate
-    def test_depends_on_references_exist(self) -> None:
+    @ldd_trajectory
+    def test_depends_on_references_exist(self, caplog) -> None:
         """Все depends_on (из compose) ссылки разрешимы в container_name registry."""
         errors: list[str] = []
         for compose_file in sorted(MODULES_DIR.glob("*/docker-compose.base.yml")):
@@ -90,6 +102,13 @@ class TestContainerNameConsistency:
                     for dep in deps
                     if dep not in REGISTRY
                 )
+        if errors:
+            logger.error("[IMP:9][gate][depends-on] %d unresolved depends_on references found", len(errors))
+        else:
+            logger.info(
+                "[IMP:9][gate][depends-on] All depends_on references resolved (%d compose files checked)",
+                len(list(MODULES_DIR.glob("*/docker-compose.base.yml"))),
+            )
         assert not errors, "Unresolved depends_on references:\n" + "\n".join(errors)
 
     # 🧐 TRAP[ARCHIVED] · 2026-07-15 · — · test_env_requires_hosts_exist (removed)

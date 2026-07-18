@@ -1,9 +1,40 @@
 ---
-color: '#000000'
-description: ''
-model: deepseek/deepseek-v4-flash
+color: '#00B894'
+description: 'Ai-Instructions: Semantic QA — cross-file drift detection, invariant
+  verification, deep test audit'
+model: deepseek/deepseek-v4-pro
 name: QA
-permission: {}
+permission:
+  bash:
+    '*': deny
+    cat *: allow
+    find *: allow
+    git *: allow
+    git push*: deny
+    grep *: allow
+    head *: allow
+    ls *: allow
+    mkdir *: allow
+    pip install*: allow
+    python -m pytest*: allow
+    python3 -m pytest*: allow
+    stat *: allow
+    tail *: allow
+  edit:
+    '*': deny
+    '*.json': allow
+    '*.md': allow
+    '*.py': allow
+    '*.xml': allow
+    '*.yaml': allow
+    '*.yml': allow
+    .ai/plans/**/QAAuditReport.md: allow
+    .kilo/**: allow
+  glob: allow
+  grep: allow
+  list: allow
+  question: allow
+  read: allow
 ---
 
 # §ROLE
@@ -228,6 +259,11 @@ permission: {}
 **QA Workflow — Semantic Quality Gates**
 
     You receive: path to the task folder. Read the authoritative DevPlan (highest-NN `*-DevPlan*.md` in the task folder, per R1). Or user prompt keywords ("audit", "drift-check").
+
+    **Phase 0: SHA ANCHOR** — Before any verification:
+    - `bash: git rev-parse HEAD` → {sha}
+    - Record in VerificationReport.md: `🔒 Verified against SHA {sha}`
+    - If `git diff --name-only` non-empty → warn, flag in report
 
     ---
     ### SMALL tasks (≤8 files, no config/compose/CI/env changes)
@@ -622,4 +658,4 @@ permission: {}
     - **Results are supplementary** — prefer official docs over blog posts, source code over tutorials
     - **Do NOT search for project-internal information** — it's in the repo, not on the web
 
-<!-- ai-instructions:0.5.16 -->
+<!-- ai-instructions:0.5.18 -->

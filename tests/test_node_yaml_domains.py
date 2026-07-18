@@ -18,12 +18,15 @@
 
 """Tests for node.yaml domain extraction — node-lifecycle.sh --mode update inline Python script."""
 
+import logging
 import pathlib
 import subprocess
 
 import pytest
 
 from tests.conftest import ldd_trajectory
+
+_logger = logging.getLogger(__name__)
 
 _TEST_DATA_DIR = pathlib.Path(__file__).resolve().parent / "test_data"
 _NODE_YAML_PATH = _TEST_DATA_DIR / "node.yaml"
@@ -68,6 +71,7 @@ print(f"project_domains:{' '.join(project_domains)}")
     assert result.returncode == 0, f"Python script failed:\n{result.stderr}"
 
     stdout_lines = result.stdout.strip().splitlines()
+    _logger.critical("[IMP:9][test][node_yaml] Parsed %d stdout lines", len(stdout_lines))
 
     # Verify platform_domain
     domain_line = [line for line in stdout_lines if line.startswith("platform_domain:")]
@@ -75,11 +79,13 @@ print(f"project_domains:{' '.join(project_domains)}")
     assert domain_line[0] == "platform_domain:test.local", (
         f"Expected 'platform_domain:test.local', got '{domain_line[0]}'"
     )
+    _logger.critical("[IMP:9][test][node_yaml] platform_domain extracted: %s", domain_line[0])
 
     # Verify email
     email_line = [line for line in stdout_lines if line.startswith("email:")]
     assert email_line, "Missing email line in output"
     assert email_line[0] == "email:admin@test.local", f"Expected 'email:admin@test.local', got '{email_line[0]}'"
+    _logger.critical("[IMP:9][test][node_yaml] email extracted: %s", email_line[0])
 
     # Verify project_domains
     project_line = [line for line in stdout_lines if line.startswith("project_domains:")]
@@ -88,6 +94,11 @@ print(f"project_domains:{' '.join(project_domains)}")
     assert "app.test.local" in project_domains, f"Expected 'app.test.local' in project_domains: '{project_domains}'"
     assert "independent-project.com" in project_domains, (
         f"Expected 'independent-project.com' in project_domains: '{project_domains}'"
+    )
+    _logger.critical(
+        "[IMP:9][test][node_yaml] project_domains extracted: %d domains: %s",
+        len(project_domains.split()),
+        project_domains,
     )
 
     # Verify both domains are present (order shouldn't matter)
@@ -131,9 +142,12 @@ print(f"project_domains:{' '.join(project_domains)}")
     print(result.stderr)
     print("--- END ---")
 
+    _logger.critical("[IMP:9][test][node_yaml] Testing node.yaml without projects field")
     assert result.returncode == 0
     assert "platform_domain:example.com" in result.stdout
+    _logger.critical("[IMP:9][test][node_yaml] platform_domain extracted (no projects): example.com")
     assert "project_domains:" in result.stdout
     # project_domains should be empty
     project_part = next(line for line in result.stdout.splitlines() if line.startswith("project_domains:"))
     assert project_part == "project_domains:", f"Expected empty project_domains, got: {project_part}"
+    _logger.critical("[IMP:9][test][node_yaml] Empty project_domains confirmed — graceful handling of missing projects")

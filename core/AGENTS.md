@@ -46,9 +46,10 @@
 | `make secrets-unlock` | Расшифровка SOPS/age секретов | `make secrets-unlock [NODE=...]` | `core/entrypoints/secrets.sh` → `core/internal/secrets/decrypt-secrets.sh` |
 | `make healthcheck` | Проверка здоровья платформы | `make healthcheck [NODE=...]` | `core/entrypoints/healthcheck.sh` → `core/internal/healthcheck/modules-healthcheck.sh` |
 | `make node-update` | Update provisioned node | `make node-update NODE=<name>` | `core/entrypoints/node-update.sh` → `core/internal/bootstrap/node-lifecycle.sh --mode update` |
+| `make verify` | Пост-деплойная HTTPS-верификация | `make verify NODE=<node>` | `core/entrypoints/verify.sh` → `core/internal/verify/verify-domains.sh` |
 | `make up` / `make down` | Локальный compose-lifecycle | `make up [PROJECT=...]` | docker compose |
 | `make status` | Статус compose-стека | `make status [PROJECT=...]` | docker compose ps |
-| `make restart` | Жёсткий перезапуск compose-стека | `make restart [PROJECT=...]` | docker compose down && docker compose up -d |
+| `make restart` | Мягкий перезапуск compose-стека | `make restart [PROJECT=...]` | docker compose stop && docker compose start |
 | `make backup` | Резервное копирование стека | `make backup [NODE=...]` | Модульные healthcheck.sh + snapshot |
 | `make restore` | Восстановление из бэкапа | `make restore NODE=<n> DUMP_FILE=<f>` | Модульные restore-скрипты |
 | `make build` | Сборка Docker-образа модуля | `make build (в модуле)` | docker compose build |

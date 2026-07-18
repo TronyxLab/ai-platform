@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 class DateParser:
     """Static date parsing utilities for backup retention logic."""
 
+    # region METHOD_extract_date_from_key
+    ## @purpose  Extract date (YYYYMMDD) from S3 object key by regex pattern
+    ## @io       key: str → str | None
+    ## @complexity 1
     @staticmethod
     def extract_date_from_key(key: str) -> str | None:
         """
@@ -41,6 +45,12 @@ class DateParser:
             return match.group(1)
         return None
 
+    # endregion METHOD_extract_date_from_key
+
+    # region METHOD_is_sunday
+    ## @purpose  Check if YYYYMMDD date string falls on a Sunday
+    ## @io       date_str: str → bool
+    ## @complexity 1
     @staticmethod
     def is_sunday(date_str: str) -> bool:
         """Check if a YYYYMMDD date falls on a Sunday."""
@@ -50,6 +60,12 @@ class DateParser:
         except ValueError:
             return False
 
+    # endregion METHOD_is_sunday
+
+    # region METHOD_is_first_of_month
+    ## @purpose  Check if YYYYMMDD date string is the 1st day of the month
+    ## @io       date_str: str → bool
+    ## @complexity 1
     @staticmethod
     def is_first_of_month(date_str: str) -> bool:
         """Check if a YYYYMMDD date is the 1st day of the month."""
@@ -58,6 +74,8 @@ class DateParser:
             return dt.day == 1
         except ValueError:
             return False
+
+    # endregion METHOD_is_first_of_month
 
 
 # endregion CLASS_DateParser

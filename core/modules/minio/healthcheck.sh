@@ -11,10 +11,16 @@
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
+echo "[IMP:7][minio-hc][main] Starting minio healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 CONTAINER="minio"
 MODE="${1:-}"
-[ "$MODE" = "deep" ] && { check_http "http://127.0.0.1:9000/minio/health/live" "200" || exit 1; }
+[ "$MODE" = "deep" ] && {
+    echo "[IMP:8][minio-hc][deep] Running deep HTTP healthcheck" >&2
+    check_http "http://127.0.0.1:9000/minio/health/live" "200" || exit 1
+}
+echo "[IMP:8][minio-hc][liveness] Running default liveness check" >&2
 check_docker_health "$CONTAINER" || exit 1
+echo "[IMP:9][minio-hc][liveness] Container healthy" >&2
 exit 0

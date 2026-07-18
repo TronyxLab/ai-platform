@@ -185,6 +185,10 @@ def _verify_module_hooks(module_yaml: Path) -> list[str]:
 # region FUNC_test_hook_contract_validation
 @pytest.mark.gate
 @pytest.mark.parametrize("module_yaml", _get_module_yamls(), ids=lambda p: p.parent.name)
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_hook_contract_validation(module_yaml: Path, caplog):
     """Parametrized gate test: validate all hook fields in a module.yaml.
 

@@ -37,8 +37,8 @@ services:
     volumes:
       - __PROJECT_NAME__-backend-data:/app/data
     networks:
-      - __PROJECT_NAME__-net
-      - shared-db-net
+      __PROJECT_NAME__-net:
+      shared-db-net:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -62,8 +62,10 @@ services:
     environment:
       - NODE_ENV=production
     networks:
-      - __PROJECT_NAME__-net
-      - proxy-net
+      __PROJECT_NAME__-net:
+      proxy-net:
+        aliases:
+          - __PROJECT_NAME__
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health"]
       # ⚠️ TRAP[BUG] Use 127.0.0.1 NOT localhost — Alpine resolves localhost to ::1 (IPv6),

@@ -9,7 +9,9 @@
 ## @rationale Transitional entrypoint — audit logic in core/internal/audit/audit.sh
 # endregion MODULE_CONTRACT
 set -euo pipefail
+echo "[IMP:7][audit][main] Starting system audit entrypoint" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
 
+echo "[IMP:8][audit][main] Delegating to audit.sh" >&2
 exec "${PATHS_INTERNAL_DIR}/audit/audit.sh" "$@"

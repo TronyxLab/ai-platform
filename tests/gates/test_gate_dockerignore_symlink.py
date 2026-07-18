@@ -36,6 +36,10 @@ from tests._conftest.audit import discover_docker_modules
 
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_all_docker_modules_have_dockerignore_symlink(caplog):
     """All docker modules have .dockerignore → symlink to ../../templates/.dockerignore (via discover_docker_modules)."""
     docker_modules = discover_docker_modules(MODULES_DIR)

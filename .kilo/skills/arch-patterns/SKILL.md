@@ -40,4 +40,4 @@ name: arch-patterns
 
   Note: testing patterns (DI > mocks, headless UI) live in §TESTING — single source of truth.
 
-<!-- ai-instructions:0.5.16 -->
+<!-- ai-instructions:0.5.18 -->

@@ -24,6 +24,9 @@
     },
     "qa": {
       "disable": true
+    },
+    "architect": {
+      "disable": true
     }
   },
   "permission": {
@@ -40,9 +43,6 @@
     "websearch": "allow",
     "edit": "allow",
     "bash": "allow"
-  },
-  "experimental": {
-    "openTelemetry": true
   },
   "snapshot": true
 }

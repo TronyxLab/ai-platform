@@ -1,4 +1,5 @@
 # GREP_SUMMARY: litellm Makefile start stop restart status logs backup compose include module-mk
+# STRUCTURE: ┌litellm targets┐ → ◇ module.mk include → ⊕ compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Makefile for litellm module — LiteLLM compose lifecycle
 ## @scope    LiteLLM LLM Gateway proxy
@@ -11,3 +12,8 @@
 MODULE_NAME := litellm
 CONTAINER := litellm
 include ../../templates/module.mk
+
+# 🧐 TRAP[DECISION] · 2026-07-18 · — · Minimal module Makefile — litellm lifecycle through module.mk
+# · Rejected: inline docker compose commands per target
+# · Reason: module.mk provides zero-boilerplate lifecycle for all docker modules
+# · Rev: when module needs custom behavior → override targets after include

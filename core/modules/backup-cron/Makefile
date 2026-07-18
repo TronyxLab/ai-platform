@@ -1,4 +1,5 @@
 # GREP_SUMMARY: backup-cron Makefile start stop restart status logs backup restore
+# STRUCTURE: ┌backup lifecycle┐ → ◇ module.mk include → ⊕ custom start/stop/restore/backup
 # region MODULE_CONTRACT
 ## @purpose  Module lifecycle management for backup-cron Docker module
 ## @scope    Called by platform users per role; sudo-whitelist enforces per-role restrictions
@@ -32,13 +33,13 @@ stop: ## Stop backup-cron (compose stop with 120s grace)
 	$(COMPOSE_CMD) stop --timeout 120
 	@echo "[IMP:8][backup-cron-make][stop] backup-cron stopped"
 
-# ── Custom restart (hard restart) ──
+# ── Custom restart-hard (hard restart with --force-recreate) ──
 
-## restart: Hard restart backup-cron
-restart: ## Hard restart backup-cron
-	@echo "[IMP:7][backup-cron-make][restart] Hard restarting backup-cron"
-	$(COMPOSE_CMD) down && $(COMPOSE_CMD) up -d
-	@echo "[IMP:8][backup-cron-make][restart] backup-cron hard restarted"
+## restart-hard: Hard restart backup-cron with --force-recreate
+restart-hard: ## Hard restart backup-cron (--force-recreate)
+	@echo "[IMP:7][backup-cron-make][restart-hard] Hard restarting backup-cron with force-recreate"
+	$(COMPOSE_CMD) down && $(COMPOSE_CMD) up -d --force-recreate
+	@echo "[IMP:8][backup-cron-make][restart-hard] backup-cron hard restarted"
 
 # ── Custom status (no curl — use docker inspect) ──
 
@@ -76,3 +77,9 @@ restore: ## Restore postgres from DUMP_FILE (owner only)
 	fi
 	@echo "[IMP:8][backup-cron-make][restore] Delegating restore to postgres module"
 	make -C "$(MODULE_DIR)/../postgres" restore DUMP_FILE="$(DUMP_FILE)"
+
+# 🧐 TRAP[DECISION] · 2026-07-18 · — · Custom overrides: backup-cron специфичная lifecycle
+# · Rejected: module.mk defaults (120s stop timeout, exec-based backup)
+# · Reason: backup-cron требует 120s grace для long-running backup jobs (WAL dump),
+# ·   backup триггерит docker exec backup-postgres.sh, restore делегирует postgres модулю
+# · Rev: когда module.mk получит configurable stop_timeout — migrate custom stop

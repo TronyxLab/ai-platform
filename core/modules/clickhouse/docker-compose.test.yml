@@ -39,7 +39,7 @@ services:
     volumes:
       - clickhouse-data-test:/var/lib/clickhouse
       - ./config/config.d:/etc/clickhouse-server/config.d:ro
-      - ./config/users.d:/etc/clickhouse-server/users.d
+      - ./config/users.d/10-users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro
 
 volumes:
   clickhouse-data-test:

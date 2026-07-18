@@ -63,6 +63,8 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/modules/hermes-agent/context/scripts/*.sh",
     # backward-compat thin wrapper — delegates to install-acme.sh + issue-cert.sh
     "core/internal/bootstrap/ssl-provision.sh",
+    # module hook scripts — called from deploy-project.sh _trigger_deploy_hooks via module.yaml hooks: section
+    "core/modules/nginx/nginx_reload_hook.sh",
 ]
 
 # Subdirectory names to exclude when globbing for shebang files.
@@ -240,6 +242,10 @@ def _collect_sh_files() -> list[str]:
 # 🧪 TRAP[TEST] · REGRESSION(GATE-5G1) · SCENARIO(shebang-manifest-parity) · LAST_FAIL(unregistered entrypoint) · REMOVE_IF(all shebangs registered)
 @pytest.mark.gate
 @ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_all_shebang_files_in_manifest(caplog) -> None:
     """Core check: every shebang file must be in manifest delegates_to or
     be a documented exception (lib/, module healthcheck/install, bootstrap/systemd/, s6 scripts)."""

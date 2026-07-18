@@ -60,6 +60,8 @@ case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;;
 # SETUP
 # ═══════════════════════════════════════════════════════════════════
 
+echo "[IMP:7][healthcheck][lib] Loading healthcheck library" >&2
+
 # Determine script directory for sourcing sibling modules
 # ⚠️ TRAP[BUG] · 2026-07-07 · P1 · SCRIPT_DIR collision with readonly from caller scripts
 # · Root: library files are sourced by caller scripts that may declare SCRIPT_DIR

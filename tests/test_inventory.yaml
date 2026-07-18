@@ -175,11 +175,11 @@ test_nodeids:
 - tests/gates/test_p20_container_coupling.py::test_env_hostnames_resolvable
 - tests/gates/test_p20_container_coupling.py::test_prometheus_targets_resolvable
 - tests/gates/test_p20_container_coupling.py::test_referenced_container_names_have_alias
-- tests/gates/test_restart_consistency.py::test_manifest_restart_mechanism
-- tests/gates/test_restart_consistency.py::test_module_mk_restart_uses_hard
+- tests/gates/test_restart_consistency.py::test_manifest_restart_is_soft
+- tests/gates/test_restart_consistency.py::test_module_mk_restart_hard_exists
 - tests/gates/test_restart_consistency.py::test_no_soft_restart_in_docker_makefiles
 - tests/gates/test_restart_consistency.py::test_platform_secrets_excluded
-- tests/gates/test_restart_consistency.py::test_root_makefile_restart_uses_hard
+- tests/gates/test_restart_consistency.py::test_root_makefile_restart_is_soft
 - tests/test_add_vhost.py::test_add_vhost_cert_path
 - tests/test_add_vhost.py::test_add_vhost_cert_path_independent
 - tests/test_add_vhost.py::test_fqdn_check_delegates_to_validate

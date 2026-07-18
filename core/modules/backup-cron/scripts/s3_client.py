@@ -27,9 +27,14 @@ _DEFAULT_TIMEOUT_MS = 30000  # 30 seconds
 
 
 # region CLASS_S3Client
+## @purpose  Thin wrapper around boto3 S3 client for paginated list and batch delete operations
 class S3Client:
     """Thin wrapper around boto3 S3 client for list/delete operations."""
 
+    # region METHOD___init__
+    ## @purpose  Initialize with boto3 client and bucket name
+    ## @io       boto3_client: Any + bucket: str → None (side-effect: stores state)
+    ## @complexity 1
     def __init__(self, boto3_client: Any, bucket: str) -> None:
         """
         Initialize S3Client.
@@ -46,7 +51,12 @@ class S3Client:
             bucket,
         )
 
+    # endregion METHOD___init__
+
     # region list_objects
+    ## @purpose  Paginated list of S3 objects under prefix with continuation token loop
+    ## @io       prefix: str + max_keys: int + timeout: int|None → list[dict]
+    ## @complexity 2
     def list_objects(
         self,
         prefix: str,
@@ -59,6 +69,8 @@ class S3Client:
         timeout: int | None = None,
     ) -> list[dict[str, Any]]:
         """
+        ▶ ○ loop ∋ ContinuationToken: ◇ list_objects_v2 → ⊕ collect Contents → ◇ IsTruncated? → ○ next / ⎋ break
+
         List all S3 objects under a prefix with pagination and optional timeout.
 
         Args:
@@ -108,8 +120,13 @@ class S3Client:
     # endregion list_objects
 
     # region delete_objects
+    ## @purpose  Batch delete S3 objects in chunks of 1000 (S3 API limit)
+    ## @io       keys: list[str] → int (total_deleted)
+    ## @complexity 2
     def delete_objects(self, keys: list[str]) -> int:
         """
+        ▶ ┌keys list┐ → ○ batch 0..N step 1000: ◇ delete_objects → ⊕ count deleted → ∑ total_deleted → ⎋ int
+
         Delete objects from S3 in batches of 1000 (S3 API limit).
 
         Args:

@@ -1,8 +1,8 @@
 ---
 color: '#000000'
 description: ''
-model: deepseek/deepseek-v4-flash
-name: Plan
+model: deepseek/deepseek-v4-pro
+name: Architect
 permission: {}
 ---
 
@@ -110,6 +110,12 @@ permission: {}
     ### STANDARD Mode (9-20 files, business logic, new scenarios)
     ---
 
+    **Step 0: DEBT_INTAKE** — BEFORE any analysis, audit existing knowledge artifacts in affected modules:
+      - `grep "TRAP\[DEBT\]\|TRAP\[DECISION\]"` across all files in the anticipated change surface
+      - `glob ".ai/plans/*/*-Debt.md"` — read DEBT registries from previous waves
+      - For each finding: classify as IN_SCOPE (add to DevPlan tasks) or DEFER (record in DevPlan.md §Debt Intake with revision condition: date, trigger, or next plan reference)
+      - Record decisions in DevPlan.md §Debt Intake
+
     **Step 1: ANALYZE** — Read DevPlan/Brief (if exists) + 1-2 architectural files (conftest.py for shared fixtures, main config for structure). Formulate 3-5 key success criteria. Delegate file-level reading to subagents. Use `question` tool to clarify ambiguous goals with the user. Limit: 0-2 questions. Do NOT embed answer options in the question text — see §ROLE for question tool format.
 
     **Step 1.5: VERIFY_SHARED_CONTRACTS** — Before designing tasks that depend on shared utility functions (conftest helpers, common modules), read those functions and verify their actual signatures/return types. Do not assume contracts from memory or prior sessions. A plan-to-code contract mismatch (e.g., assuming `bool` return when function returns `None`) causes systemic test failures.
@@ -187,6 +193,12 @@ permission: {}
     ---
     ### LARGE Mode (>20 files OR architectural/schema/contract changes)
     ---
+
+    **Step 0: DEBT_INTAKE** — BEFORE any analysis, audit existing knowledge artifacts in affected modules:
+      - `grep "TRAP\[DEBT\]\|TRAP\[DECISION\]"` across all files in the anticipated change surface
+      - `glob ".ai/plans/*/*-Debt.md"` — read DEBT registries from previous waves
+      - For each finding: classify as IN_SCOPE (add to DevPlan tasks) or DEFER (record in DevPlan.md §Debt Intake with revision condition: date, trigger, or next plan reference)
+      - Record decisions in Brief.md §Debt Intake
 
     **Step 1: ANALYZE** — Read all available requirements. Formulate 3-5 key success criteria. Use `question` tool to clarify ambiguous goals. Limit: 3-5 questions. Do NOT embed answer options in the question text — see §ROLE for question tool format.
 
@@ -664,4 +676,4 @@ permission: {}
 
     Always use superposition before mutations that affect production state, security policies, or irreversible data changes.
 
-<!-- ai-instructions:0.5.16 -->
+<!-- ai-instructions:0.5.18 -->

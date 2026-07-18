@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+echo "[IMP:7][lint][main] Starting lint entrypoint" >&2
+
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
 PLATFORM_ROOT="$(cd "$PATHS_CORE_DIR/.." && pwd)"
@@ -157,6 +159,7 @@ check_namelint() {
 }
 
 # ── Main ──
+echo "[IMP:8][lint][main] Mode: ${1:-none}" >&2
 case "${1:-}" in
     --help|-h)
         echo "Usage: $0 {grepsummary|namelint}"
@@ -167,7 +170,7 @@ case "${1:-}" in
         exit 0
         ;;
     grepsummary)
-        echo "[lint.sh] Running GREP_SUMMARY validation..."
+        echo "[IMP:9][lint][grepsummary] Running GREP_SUMMARY validation"
         # Scan all tracked files for GREP_SUMMARY lines
         # Use git ls-files to stay within repo
         if git rev-parse --git-dir > /dev/null 2>&1; then
@@ -197,19 +200,23 @@ case "${1:-}" in
 
         if [ "$ERRORS" -gt 0 ]; then
             red "[lint.sh] FAILED — $ERRORS error(s) found"
+            echo "[IMP:9][lint][grepsummary] FAILED — ${ERRORS} error(s)" >&2
             exit 1
         fi
         green "[lint.sh] PASS — all GREP_SUMMARY keywords verified, .sh references valid"
+        echo "[IMP:9][lint][grepsummary] PASS" >&2
         exit 0
         ;;
     namelint)
-        echo "[lint.sh] Running namelint validation..."
+        echo "[IMP:9][lint][namelint] Running namelint validation"
         check_namelint
         if [ "$ERRORS" -gt 0 ]; then
             red "[lint.sh] FAILED — $ERRORS error(s) found"
+            echo "[IMP:9][lint][namelint] FAILED — ${ERRORS} error(s)" >&2
             exit 1
         fi
         green "[lint.sh] PASS — all make targets validated against manifest"
+        echo "[IMP:9][lint][namelint] PASS" >&2
         exit 0
         ;;
     *)

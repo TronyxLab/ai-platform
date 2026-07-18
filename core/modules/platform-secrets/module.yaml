@@ -9,17 +9,26 @@
 ##   - Runs before docker.service (RequiredBy=docker.service)
 ##   - Secrets written to tmpfs (in-memory, never touches disk decrypted)
 ##   - Fails closed: if age key missing, service fails and docker doesn't start
-##   # 📝 TRAP[DEBT] · 2026-07-15 · MED · Unit lacks RequiredBy=docker.service — fails-closed invariant not enforced
-##   # · Observed: unit has only Before=docker.service + WantedBy=multi-user.target; docker starts even if platform-secrets fails
-##   # · Suspected: RequiredBy dropped during unit authoring; needs [Install] RequiredBy or docker.service drop-in
-##   # · Impact: containers start without secrets.env → cascade of auth failures instead of clean boot halt
-##   # · When: wave T5.1 platform-secrets audit (DevPlan 008) — deferred, boot-behavior change out of wave scope
+##   # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · RequiredBy=docker.service added — fails-closed invariant enforced
+##   # · Symptom: TRAP[DEBT] #2 from drift audit — unit had only Before=docker.service +
+##   #   WantedBy=multi-user.target; docker started even if platform-secrets failed, violating
+##   #   the declared fails-closed contract
+##   # · Root: RequiredBy dropped during unit authoring; [Install] section lacked RequiredBy
+##   # · Fix: added RequiredBy=docker.service to platform-secrets.service [Install] section (D3b)
+##   # · Prevention: predeploy gate checks that `systemctl show docker -p Requires` contains
+##   #   platform-secrets.service
 ## @rationale  Centralised secret management avoids per-container .env files on disk.
 ##             SOPS/age chosen for simplicity over Vault (no cluster needed).
+## @changes
+##   2026-07-18 · Replaced TRAP[DEBT] #2 with TRAP[BUG] — RequiredBy=docker.service added (D3b)
+##              · Added systemd.required_by field to module.yaml
 # endregion MODULE_CONTRACT
 
 name: platform-secrets
 install_type: system
+systemd:
+  unit: platform-secrets.service
+  required_by: docker.service
 description: "Systemd oneshot service that regenerates /run/platform/secrets.env from encrypted SOPS/age secrets"
 
 depends_on: []

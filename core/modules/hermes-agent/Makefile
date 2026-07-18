@@ -1,4 +1,5 @@
 # GREP_SUMMARY: hermes-agent Makefile start stop restart status logs help
+# STRUCTURE: ┌hermes-agent targets┐ → ◇ module.mk include → ⊕ compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Module lifecycle management for hermes-agent Docker module
 ## @scope    Called by platform users per role; sudo-whitelist enforces per-role restrictions
@@ -12,3 +13,9 @@
 MODULE_NAME := hermes-agent
 
 include ../../templates/module.mk
+
+# 🧐 TRAP[DECISION] · 2026-07-18 · — · Minimal module Makefile — hermes-agent lifecycle through module.mk
+# · Rejected: inline docker compose commands per target
+# · Reason: module.mk provides zero-boilerplate lifecycle for all docker modules;
+# ·   hermes-agent build (L1/L2) managed by root Makefile hermes-build-* targets
+# · Rev: when module needs custom behavior → override targets after include

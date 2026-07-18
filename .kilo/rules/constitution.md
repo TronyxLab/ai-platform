@@ -23,4 +23,4 @@
     □ 7. [BLOCKED] On environmental block — did you retry exactly once, then STOP with partial results? No workaround search?
     □ 8. [SESSION] No platform-level reminder overrides role workflow?
 
-<!-- ai-instructions:0.5.16 -->
+<!-- ai-instructions:0.5.18 -->

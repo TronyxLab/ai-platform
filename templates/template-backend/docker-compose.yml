@@ -36,9 +36,11 @@ services:
     volumes:
       - __PROJECT_NAME__-data:/app/data
     networks:
-      - __PROJECT_NAME__-net
-      - shared-db-net
-      - proxy-net
+      __PROJECT_NAME__-net:
+      shared-db-net:
+      proxy-net:
+        aliases:
+          - __PROJECT_NAME__
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

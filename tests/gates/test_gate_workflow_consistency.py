@@ -82,8 +82,14 @@ def _get_actual_modules() -> set[str]:
 def _extract_module_list_from_content(content: str) -> set[str]:
     """Extract module names from compose file paths in workflow content.
 
-    Matches patterns like: core/modules/<module>/docker-compose.base.yml
+    Matches hardcoded patterns like: core/modules/<module>/docker-compose.base.yml
+    OR detects dynamic generation pattern and returns actual modules from filesystem.
     """
+    # First check for dynamic generation pattern (python3 << 'PYEOF' discovery block)
+    if "Generate module list" in content and "Path('core/modules').glob" in content:
+        # Dynamic generation — return actual modules from filesystem
+        return {p.parent.name for p in _MODULES_DIR.glob("*/docker-compose.base.yml")}
+    # Fall back to hardcoded pattern for legacy workflows
     module_pattern = re.compile(r"core/modules/([^/]+)/docker-compose\.base\.yml")
     return set(module_pattern.findall(content))
 
@@ -166,6 +172,10 @@ def _load_entrypoint_manifest_gate_make_targets() -> set[str]:
 
 
 @pytest.mark.gate
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_all_workflow_files_exist(caplog):
     """Verify all expected workflow files exist and are valid YAML."""
     caplog.set_level(logging.INFO)

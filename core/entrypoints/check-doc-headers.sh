@@ -20,6 +20,7 @@
 ## @changes — 2026-07-10 | Created per TestsMetaDevPlan2.md TASK-1
 
 set -euo pipefail
+echo "[IMP:7][check-doc-headers][main] Starting doc header validation" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
 
@@ -208,8 +209,10 @@ done
 
 if [ "$HAS_ERROR" -ne 0 ]; then
     echo "[FAIL] check-doc-headers: One or more files failed documentation header validation"
+    echo "[IMP:9][check-doc-headers][main] Validation FAILED — ${HAS_ERROR} error(s)" >&2
     exit 1
 fi
 
 echo "[PASS] check-doc-headers: All staged files passed documentation header validation"
+echo "[IMP:9][check-doc-headers][main] Validation PASS — all headers OK" >&2
 exit 0

@@ -63,3 +63,17 @@ removed:
     reason: "Deleted per A7: dead mechanism — known_ci_skips.yaml + test_gate_skip_enforcement.py removed."
     issue: "023-debt-cleanup A7"
     approved_by: "@tronyx"
+
+  # ── DevPlan 011 T4 (D4→A): restart semantics convergence ──
+  - nodeid: "tests/gates/test_restart_consistency.py::test_root_makefile_restart_uses_hard"
+    reason: "D4→A renamed to test_root_makefile_restart_is_soft — restart semantics changed from hard to soft"
+    issue: "011-drift-arch-decisions T4"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_restart_consistency.py::test_module_mk_restart_uses_hard"
+    reason: "D4→A renamed to test_module_mk_restart_hard_exists — module.mk now has restart-hard, regular restart is inherited soft"
+    issue: "011-drift-arch-decisions T4"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_restart_consistency.py::test_manifest_restart_mechanism"
+    reason: "D4→A renamed to test_manifest_restart_is_soft — manifest now describes soft restart"
+    issue: "011-drift-arch-decisions T4"
+    approved_by: "@tronyx"

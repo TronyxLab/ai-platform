@@ -40,6 +40,10 @@ def _import_discover_modules():
 
 
 @pytest.mark.gate
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_include_matches_discovered_modules():
     """include: section in docker-compose.yml == discover_modules() output (sorted)."""
     assert COMPOSE_FILE.exists(), f"docker-compose.yml not found at {COMPOSE_FILE}"

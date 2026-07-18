@@ -1,4 +1,5 @@
 # GREP_SUMMARY: postgres Makefile start stop restart status logs backup restore
+# STRUCTURE: ┌postgres lifecycle┐ → ◇ module.mk include → ⊕ custom start/stop/backup/restore
 # region MODULE_CONTRACT
 ## @purpose  Module lifecycle management for postgres Docker module
 ## @scope    Called by platform users per role; sudo-whitelist enforces per-role restrictions
@@ -30,12 +31,12 @@ stop: ## Stop postgres (compose stop — 60s grace)
 	$(COMPOSE_CMD) stop --timeout 60
 	@echo "[IMP:8][postgres-make][stop] postgres stopped"
 
-# ── Custom restart (hard restart) ──
-## restart: Hard restart postgres
-restart: ## Hard restart postgres (compose down && up -d)
-	@echo "[IMP:7][postgres-make][restart] Hard restarting postgres"
-	$(COMPOSE_CMD) down && $(COMPOSE_CMD) up -d
-	@echo "[IMP:8][postgres-make][restart] postgres hard restarted"
+# ── Custom restart-hard (hard restart with --force-recreate) ──
+## restart-hard: Hard restart postgres with --force-recreate
+restart-hard: ## Hard restart postgres (--force-recreate)
+	@echo "[IMP:7][postgres-make][restart-hard] Hard restarting postgres with force-recreate"
+	$(COMPOSE_CMD) down && $(COMPOSE_CMD) up -d --force-recreate
+	@echo "[IMP:8][postgres-make][restart-hard] postgres hard restarted"
 
 # ── Custom status ──
 ## status: Show container status
@@ -74,3 +75,9 @@ restore: ## Restore from dump file (owner only, requires DUMP_FILE=)
 	fi
 	docker exec -i $(CONTAINER) psql -U postgres < "$(DUMP_FILE)"
 	@echo "[IMP:8][postgres-make][restore] Restore complete from $(DUMP_FILE)"
+
+# 🧐 TRAP[DECISION] · 2026-07-18 · — · Custom overrides: postgres-specific lifecycle
+# · Rejected: use module.mk defaults only (not flexible enough)
+# · Reason: postgres требует 60s stop grace (WAL flush), pg_dump backup via docker exec,
+# ·   restore через psql. Эти опции не покрываются module.mk без variable-параметров.
+# · Rev: когда module.mk получит configurable stop_timeout — migrate custom stop/start

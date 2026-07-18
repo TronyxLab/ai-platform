@@ -14,6 +14,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][platform-secrets-hc][main] Starting platform-secrets healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 

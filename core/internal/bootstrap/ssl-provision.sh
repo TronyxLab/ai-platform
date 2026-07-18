@@ -30,6 +30,11 @@
 
 set -euo pipefail
 
+echo "[IMP:7][ssl-provision][main] Starting SSL provision (backward-compat wrapper)" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-bash "${SCRIPT_DIR}/install-acme.sh" "$@" && bash "${SCRIPT_DIR}/issue-cert.sh" "$@"
+echo "[IMP:8][ssl-provision][main] Delegating to install-acme.sh" >&2
+bash "${SCRIPT_DIR}/install-acme.sh" "$@" && {
+    echo "[IMP:8][ssl-provision][main] Delegating to issue-cert.sh" >&2
+    bash "${SCRIPT_DIR}/issue-cert.sh" "$@"
+}

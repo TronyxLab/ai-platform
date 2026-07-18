@@ -93,39 +93,39 @@ jobs:
           fi
           exit $rc
 
-      # ── Stage 4: Alert on failure ─────────────────────────────────────
+      # ── Stage 5: Alert on failure ─────────────────────────────────────
       - name: Alert on test failures
         if: failure()
         run: |
           echo "::warning::[nightly-gate] One or more stages FAILED — investigate"
           echo "::warning::[nightly-gate] Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+      # ── Stage 4b: Generate module list ──────────────────────────────────
+      # Single Source of Truth: module list generated from core/modules/*/module.yaml
+      - name: Generate module list
+        id: module_list
+        run: |
+          python3 -c "import json; from pathlib import Path; modules=[]; [modules.append('core/modules/'+m.parent.name+'/docker-compose.base.yml') for m in sorted(Path('core/modules').glob('*/module.yaml')) if 'install_type: system' not in m.read_text()]; print(json.dumps(modules))" > /tmp/module_list.json
+          echo "[IMP:8][module-list] Generated module list"
+
       # ── Stage 5: Cleanup Docker resources ──────────────────────────
       - name: Cleanup Docker resources
         if: always()
         run: |
           echo "::group::Cleanup Docker Compose stacks"
-          for compose_file in \
-            core/modules/backup-cron/docker-compose.base.yml \
-            core/modules/clickhouse/docker-compose.base.yml \
-            core/modules/hermes-agent/docker-compose.base.yml \
-            core/modules/infra-metrics/docker-compose.base.yml \
-            core/modules/langfuse/docker-compose.base.yml \
-            core/modules/litellm/docker-compose.base.yml \
-            core/modules/logging/docker-compose.base.yml \
-            core/modules/minio/docker-compose.base.yml \
-            core/modules/monitoring/docker-compose.base.yml \
-            core/modules/nginx/docker-compose.base.yml \
-            core/modules/postgres/docker-compose.base.yml \
-            core/modules/redis/docker-compose.base.yml; do
-            if [ -f "$compose_file" ]; then
-              docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
-              docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
-            fi
-          done
+          if [ -f /tmp/module_list.json ]; then
+            while IFS= read -r compose_file; do
+              if [ -f "$compose_file" ]; then
+                docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
+                docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
+              fi
+            done < <(python3 -c "import json; [print(f) for f in json.load(open('/tmp/module_list.json'))]")
+          else
+            echo "[cleanup] Module list not found — skipping cleanup"
+          fi
           echo "::endgroup::"
 
-      # ── Stage 6: Summary ─────────────────────────────────────────────
+      # ── Stage 7: Summary ─────────────────────────────────────────────
       - name: Generate Nightly Audit Summary
         if: always()
         run: |

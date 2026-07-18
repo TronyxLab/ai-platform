@@ -12,11 +12,16 @@
 # endregion MODULE_CONTRACT
 
 import json
+import logging
 from pathlib import Path
 
 import jsonschema
 import pytest
 import yaml
+
+from tests._conftest.ldd import ldd_trajectory
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = PROJECT_ROOT / "core" / "schemas" / "module.schema.json"
@@ -41,9 +46,13 @@ MODULE_YAMLS = _discover_module_yamls()
 SCHEMA = _load_schema()
 
 
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · D4 module schema — все module.yaml валидны против D4-схемы
+# · Last fail: N/A (preventive)
+# · Remove if: D4 схема заменена или module.yaml упразднён
 class TestModuleSchemaD4:
     @pytest.mark.gate
-    def test_all_modules_valid_against_d4_schema(self) -> None:
+    @ldd_trajectory
+    def test_all_modules_valid_against_d4_schema(self, caplog) -> None:
         """Все module.yaml проходят JSON Schema валидацию против D4-схемы (счёт динамический)."""
         # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: module.yaml перестаёт валидироваться против D4-схемы
         errors: list[str] = []
@@ -59,34 +68,45 @@ class TestModuleSchemaD4:
             except Exception as e:
                 errors.append(f"{mod_name}: Unexpected error: {e}")
 
+        total = len(MODULE_YAMLS)
+        failed = len(errors)
+        passed = total - failed
+        logger.info("[IMP:9][gate][schema-d4] Schema validation: %d/%d module.yaml files passed", passed, total)
         assert not errors, f"D4 schema validation failed for {len(errors)} module(s):\n" + "\n".join(errors)
 
     @pytest.mark.gate
-    def test_schema_allows_additional_properties(self) -> None:
+    @ldd_trajectory
+    def test_schema_allows_additional_properties(self, caplog) -> None:
         """Schema имеет additionalProperties: true."""
         # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: additionalProperties изменено на false (нарушение D4-контракта)
-        assert SCHEMA.get("additionalProperties") is True, (
-            f"Expected additionalProperties: true, got: {SCHEMA.get('additionalProperties')}"
-        )
+        add_props = SCHEMA.get("additionalProperties")
+        logger.info("[IMP:9][gate][schema-d4] additionalProperties=%s", add_props)
+        assert add_props is True, f"Expected additionalProperties: true, got: {add_props}"
 
     @pytest.mark.gate
-    def test_schema_required_fields(self) -> None:
+    @ldd_trajectory
+    def test_schema_required_fields(self, caplog) -> None:
         """Schema требует name, install_type, description."""
         # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: required поля изменены/удалены
         required = SCHEMA.get("required", [])
+        logger.info("[IMP:9][gate][schema-d4] Required fields: %s", required)
         for field in ("name", "install_type", "description"):
             assert field in required, f"Required field '{field}' missing from schema.required. Got: {required}"
 
     @pytest.mark.gate
-    def test_version_not_in_required(self) -> None:
+    @ldd_trajectory
+    def test_version_not_in_required(self, caplog) -> None:
         """version не должен быть в required (D4-формат)."""
         # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: version добавлен обратно в required (D3→D4 регресс)
         required = SCHEMA.get("required", [])
+        logger.info("[IMP:9][gate][schema-d4] version NOT in required fields ✓")
         assert "version" not in required, f"Field 'version' should NOT be in required for D4 schema. Got: {required}"
 
     @pytest.mark.gate
-    def test_no_version_field_in_schema(self) -> None:
+    @ldd_trajectory
+    def test_no_version_field_in_schema(self, caplog) -> None:
         """D4-схема не содержит version property."""
         # 🧪 TRAP[TEST] · 2026-07-15 · gate/schema-d4 · Регресс: version property добавлено обратно в D4-схему
         properties = SCHEMA.get("properties", {})
+        logger.info("[IMP:9][gate][schema-d4] version NOT in schema properties ✓")
         assert "version" not in properties, "Property 'version' should NOT be in D4 schema properties"

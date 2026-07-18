@@ -403,12 +403,23 @@ def _is_namespace_collision(target: str) -> bool:
 
 
 def _load_module_dictionary() -> set[str]:
-    """Build MODULE_DICTIONARY from manifest: module_lifecycle ∪ {backup, help}."""
+    """Build MODULE_DICTIONARY from manifest: module_lifecycle ∪ system_module_lifecycle ∪ {backup, help}."""
     manifest = _load_manifest()
     module_lifecycle: set[str] = set(manifest.get("module_lifecycle", []))
-    module_dict: set[str] = module_lifecycle | {"backup", "help"}
+
+    # System module lifecycle targets (e.g. install) — different contract from Docker
+    system_module_lifecycle = manifest.get("system_module_lifecycle", [])
+    system_targets: set[str] = set()
+    for entry in system_module_lifecycle:
+        if isinstance(entry, dict) and "targets" in entry:
+            system_targets.update(entry["targets"].keys())
+
+    module_dict: set[str] = module_lifecycle | system_targets | {"backup", "help"}
     logger.debug(
-        "[IMP:8][_load_module_dictionary] Loaded %d targets from manifest module_lifecycle + extras", len(module_dict)
+        "[IMP:8][_load_module_dictionary] Loaded %d targets (Docker: %d, system: %d, extras: 2)",
+        len(module_dict),
+        len(module_lifecycle),
+        len(system_targets),
     )
     return module_dict
 
@@ -470,6 +481,10 @@ def manifest():
 # region FUNC_test_delegates_to_paths_exist
 ## @purpose — Verify every delegates_to shell-script path in manifest exists on disk.
 ##            FAIL code: MANIFEST_STALE
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_delegates_to_paths_exist(caplog) -> None:
     """Direction A.1-A.2: manifest → delegates_to files exist."""
     # 🧪 TRAP[TEST] · 2026-07-09 · gate/manifest-parity · delegates_to path existence check
@@ -776,62 +791,74 @@ def test_module_makefiles_no_deprecated_module_deploy(caplog) -> None:
 # region FUNC_test_module_makefiles_have_required_module_targets
 ## @purpose — Verify EVERY module Makefile has `module-up`, `module-status`, `build`.
 ##            FAIL code: MISSING_TARGET
+def _get_install_type(module_dir: str) -> str:
+    """Read install_type from module.yaml. Defaults to 'docker' if absent."""
+    module_yaml_path = os.path.join(module_dir, "module.yaml")
+    if os.path.exists(module_yaml_path):
+        with open(module_yaml_path) as f:
+            module_yaml = yaml.safe_load(f)
+            if module_yaml and "install_type" in module_yaml:
+                return module_yaml["install_type"]
+    return "docker"
+
+
 def test_module_makefiles_have_required_module_targets(caplog) -> None:
-    """Verify every module Makefile (incl. includes) has required targets."""
+    """Verify every module Makefile (incl. includes) has required targets per install_type."""
     # 🧪 TRAP[TEST] · 2026-07-10 · gate/manifest-parity · module-up + module-status presence
     # · Regression: module-up or module-status removed from include chain
     # · Remove if: module-up and module-status are permanently frozen
+    # · Updated 2026-07-18 · system-module contract (D3): check install_type for required targets
 
     logger.info("[IMP:8][test_required_module_targets] === Module required targets check ===")
 
     module_makefiles = _get_module_makefiles()
     logger.info("[IMP:8][module_makefiles] Found %d module Makefiles", len(module_makefiles))
 
-    missing_up: list[str] = []
-    missing_status: list[str] = []
-    missing_build: list[str] = []
+    errors: list[str] = []
 
     for mf_path in module_makefiles:
         targets = _resolve_module_targets(mf_path)
-        module_name = os.path.basename(os.path.dirname(mf_path))
+        module_dir = os.path.dirname(mf_path)
+        module_name = os.path.basename(module_dir)
+        install_type = _get_install_type(module_dir)
 
-        if "up" not in targets:
-            missing_up.append(module_name)
-            logger.warning("[IMP:7][MISSING] %s — missing up", module_name)
+        if install_type == "system":
+            # System modules require: install, status, restart, logs (module-system.mk contract)
+            for req in ("install", "status", "restart", "logs"):
+                if req not in targets:
+                    errors.append(f"MISSING_TARGET: System module '{module_name}' missing '{req}'")
+                    logger.warning("[IMP:7][MISSING] %s — missing %s", module_name, req)
+                else:
+                    logger.info("[IMP:9][OK] %s — has %s", module_name, req)
+
+            # Docker targets forbidden in system modules
+            for fbd in ("up", "build", "backup", "down", "start", "stop"):
+                if fbd in targets:
+                    errors.append(f"FORBIDDEN_TARGET: System module '{module_name}' has Docker target '{fbd}'")
+                    logger.warning("[IMP:7][FORBIDDEN] %s — has Docker target %s", module_name, fbd)
         else:
-            logger.info("[IMP:9][OK] %s — has up", module_name)
+            # Docker modules require: up, status, build (module.mk contract)
+            if "up" not in targets:
+                errors.append(f"MISSING_TARGET: Docker module '{module_name}' missing 'up'")
+                logger.warning("[IMP:7][MISSING] %s — missing up", module_name)
+            else:
+                logger.info("[IMP:9][OK] %s — has up", module_name)
 
-        if "status" not in targets:
-            missing_status.append(module_name)
-            logger.warning("[IMP:7][MISSING] %s — missing status", module_name)
-        else:
-            logger.info("[IMP:9][OK] %s — has status", module_name)
+            if "status" not in targets:
+                errors.append(f"MISSING_TARGET: Docker module '{module_name}' missing 'status'")
+                logger.warning("[IMP:7][MISSING] %s — missing status", module_name)
+            else:
+                logger.info("[IMP:9][OK] %s — has status", module_name)
 
-        if "build" not in targets:
-            missing_build.append(module_name)
-            logger.warning("[IMP:7][MISSING] %s — missing build", module_name)
-        else:
-            logger.info("[IMP:9][OK] %s — has build", module_name)
-
-    errors: list[str] = []
-    if missing_up:
-        errors.append(
-            f"MISSING_TARGET: {len(missing_up)} module(s) missing 'up':\n" + "\n".join(f"  {m}" for m in missing_up)
-        )
-    if missing_status:
-        errors.append(
-            f"MISSING_TARGET: {len(missing_status)} module(s) missing 'status':\n"
-            + "\n".join(f"  {m}" for m in missing_status)
-        )
-    if missing_build:
-        errors.append(
-            f"MISSING_TARGET: {len(missing_build)} module(s) missing 'build':\n"
-            + "\n".join(f"  {m}" for m in missing_build)
-        )
+            if "build" not in targets:
+                errors.append(f"MISSING_TARGET: Docker module '{module_name}' missing 'build'")
+                logger.warning("[IMP:7][MISSING] %s — missing build", module_name)
+            else:
+                logger.info("[IMP:9][OK] %s — has build", module_name)
 
     assert not errors, "\n\n".join(errors)
     logger.info(
-        "[IMP:9][test_required_module_targets] ALL PASS — all %d modules have up, status and build",
+        "[IMP:9][test_required_module_targets] ALL PASS — all %d modules have required targets per install_type",
         len(module_makefiles),
     )
 

@@ -19,6 +19,7 @@
 
 set -euo pipefail
 
+echo "[IMP:7][context-init][main] Starting context scaffold" >&2
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || true)}"
 readonly PROJECTS_DIR="${HOME}/projects"

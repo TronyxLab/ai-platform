@@ -77,6 +77,10 @@ def _find_postgres_urls_in_yaml(compose_path: Path) -> list[str]:
 
 
 @pytest.mark.gate
+
+# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
+# · Last fail: N/A (preventive)
+# · Remove if: entire gate category is superseded by a newer mechanism
 def test_litellm_env_database_url_is_postgres() -> None:
     """DATABASE_URL in .env (if set) must be PostgreSQL, not SQLite."""
     db_url = _parse_env_value(ENV_PATH, "DATABASE_URL")

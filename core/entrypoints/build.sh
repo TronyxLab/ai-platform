@@ -10,6 +10,7 @@
 ## @rationale Thin wrapper — all build logic in internal/build/hermes-images.sh
 # endregion MODULE_CONTRACT
 set -euo pipefail
+echo "[IMP:7][build][main] Starting build entrypoint" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
 
@@ -25,4 +26,5 @@ if [[ -z "$ACTION" ]]; then
     exit 1
 fi
 
+echo "[IMP:8][build][main] Delegating to hermes-images.sh action=${ACTION}" >&2
 exec "${PATHS_INTERNAL_DIR}/build/hermes-images.sh" "$ACTION"

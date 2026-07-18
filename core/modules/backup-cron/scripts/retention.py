@@ -83,10 +83,10 @@ _MAX_LIST_KEYS = 1000
 
 
 # region CLASS_RetentionPolicy
-# @purpose  Apply 7/28/90 retention to S3 backup objects.
-# @uses     boto3 S3 client, backup_config
-# @io       S3 bucket + prefix → kept/deleted counts
-# @complexity 4
+## @purpose  Apply 7/28/90 retention to S3 backup objects
+## @uses     boto3 S3 client, backup_config
+## @io       S3 bucket + prefix → kept/deleted counts
+## @complexity 4
 class RetentionPolicy:
     """
     Apply 3-tier retention to S3 backup objects.
@@ -98,6 +98,9 @@ class RetentionPolicy:
     """
 
     # region CTOR
+    ## @purpose  Initialize retention policy with S3 client, parser, bucket/prefix, and tier counts
+    ## @io       s3 + parser + bucket + prefix + tiers + now → None (side-effect: stores state)
+    ## @complexity 1
     def __init__(
         self,
         s3: S3Client,
@@ -144,11 +147,13 @@ class RetentionPolicy:
     # endregion CTOR
 
     # region FUNC_apply
-    # @purpose  Main entry point: scan S3 objects, classify, determine deletions.
-    # @io       bool (dry_run) → dict[str, Any]
-    # @complexity 4
+    ## @purpose  Main entry: scan S3 objects, group by date, classify, determine deletions
+    ## @io       dry_run: bool → dict (kept, deleted, kept_keys, deleted_keys, dry_run, timestamp)
+    ## @complexity 4
     def apply(self, dry_run: bool = False) -> dict[str, Any]:
         """
+        ▶ ┌S3 prefix┐ → ◇ list objects → ⊕ group_by_date → ⊕ compute_retention (daily/weekly/monthly) → ⊕ delete outside windows → ⎋ result dict
+
         Apply retention policy to S3 objects.
 
         Args:
@@ -247,9 +252,9 @@ class RetentionPolicy:
     # endregion FUNC_apply
 
     # region FUNC_group_by_date
-    # @purpose  Group S3 objects by date extracted from key name.
-    # @io       list[dict] → dict[str, list[dict]]
-    # @complexity 2
+    ## @purpose  Group S3 objects by date extracted from key name
+    ## @io       list[dict] → dict[str, list[dict]]
+    ## @complexity 2
     def _group_by_date(self, objects: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         """
         Group objects by date extracted from key filename.
@@ -286,11 +291,15 @@ class RetentionPolicy:
     # · Rev: если S3 Object Lock/Tags станут доступны, хранить дату в тегах как авторитетный источник
 
     # region FUNC_compute_retention
-    # @purpose  Compute which objects to keep based on 7/28/90 retention tiers.
-    # @io       dict[str, list[dict]] → set[str] (keys to keep)
-    # @complexity 3
+    ## @purpose  Compute which objects to keep based on 7/28/90 retention tiers
+    ## @io       dict[str, list[dict]] → set[str] (keys to keep)
+    ## @complexity 3
     def _compute_retention(self, date_groups: dict[str, list[dict[str, Any]]]) -> set[str]:
-        """Compute the set of S3 keys to keep based on retention policy."""
+        """
+        ▶ ┌date_groups sorted desc┐ → ◇ Tier1: daily (last 7d) → ◇ Tier2: weekly (4 Sundays) → ◇ Tier3: monthly (3 first-of-month) → ⊕ union all kept keys → ⎋ set[str]
+
+        Compute the set of S3 keys to keep based on retention policy.
+        """
         keep_keys: set[str] = set()
         now = self._now
 
@@ -364,11 +373,13 @@ class RetentionPolicy:
 
 
 # region FUNC_main
-# @purpose  CLI entry point for retention.py.
-# @io       sys.argv → exit 0|2
-# @complexity 2
+## @purpose  CLI entry point: parse args → load config → create S3 client → apply retention → exit
+## @io       sys.argv → exit 0 (success) | exit 2 (config error)
+## @complexity 2
 def main() -> None:
     """
+    ▶ ┌sys.argv --dry-run┐ → ◇ get_backup_config → ⊕ boto3 S3 client → ◇ RetentionPolicy.apply → ◇ print result → ⎋ exit 0|2
+
     CLI entry point for retention.py.
 
     Usage: retention.py [--dry-run]

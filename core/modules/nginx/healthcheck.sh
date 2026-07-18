@@ -15,6 +15,8 @@
 
 set -euo pipefail
 
+echo "[IMP:7][nginx-hc][main] Starting nginx healthcheck" >&2
+
 # ── Shared library ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
@@ -29,9 +31,11 @@ if [ "$MODE" = "deep" ]; then
     if command -v docker &>/dev/null && docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
         if docker exec "$CONTAINER" curl -sf --max-time 5 http://localhost:80/ > /dev/null 2>&1; then
             log_imp 8 "deep" "nginx HTTP port 80 OK (docker exec)"
+            echo "[IMP:9][nginx-hc][deep] HTTP port 80 OK" >&2
             exit 0
         fi
         log_imp 9 "deep" "nginx HTTP port 80 FAIL"
+        echo "[IMP:9][nginx-hc][deep] HTTP port 80 FAIL" >&2
         exit 1
     fi
     exit 1
