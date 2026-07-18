@@ -305,7 +305,7 @@ gates:
     description: make test MARKER=contract passes (contract tests validate entrypoint scripts)
     test_file: test_gate_contract.py
   - id: cross-layer
-    description: Cross-layer import rules enforced (entrypoints/internal/modules isolation)
+    description: Cross-layer typed contract enforcement — internal→modules only via invoke_module_interface with registered interfaces + Extended Registry + ShellCheck data-flow analysis
     test_file: test_gate_cross_layer.py
   - id: dead-code-gate
     description: All entrypoints and internal scripts have a live caller in the call graph

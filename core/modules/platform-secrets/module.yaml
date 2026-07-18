@@ -31,6 +31,9 @@ systemd:
   required_by: docker.service
 description: "Systemd oneshot service that regenerates /run/platform/secrets.env from encrypted SOPS/age secrets"
 
+interfaces:
+  - install
+
 depends_on: []
 
 env_requires:

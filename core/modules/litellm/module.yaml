@@ -25,6 +25,9 @@ description: "LiteLLM LLM Gateway proxy — model routing, spend tracking, API k
 depends_on:
   - postgres
 
+interfaces:
+  - healthcheck
+
 spool_dir: /var/lib/platform/litellm-data
 
 # ⚠️ TRAP[DECISION] · 2026-06-29 · HI · OOM-kill risk

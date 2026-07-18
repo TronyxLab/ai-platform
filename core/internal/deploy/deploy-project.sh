@@ -723,15 +723,9 @@ _trigger_deploy_hooks() {
     local module_yaml
     for module_yaml in "${CORE_DIR}"/modules/*/module.yaml; do
         [[ -f "$module_yaml" ]] || continue
-        local hook
-        hook=$(yaml_get_field "$module_yaml" "hooks.on_project_deploy" 2>/dev/null) || continue
-        [[ -z "$hook" ]] && continue
-        local hook_script
-        hook_script="$(dirname "$module_yaml")/$hook"
-        if [[ -x "$hook_script" ]]; then
-            local module_name
-            module_name="$(basename "$(dirname "$module_yaml")")"
-            if bash "$hook_script" "$PROJECT_DIR" "$PROJECT" "$NODE_NAME"; then
+        local module_name
+        module_name="$(basename "$(dirname "$module_yaml")")"
+        if invoke_module_interface "$module_name" deploy-hook "$PROJECT_DIR" "$PROJECT" "$NODE_NAME"; then
                 audit_log "hook:${module_name}" "SUCCESS" "Hook completed for ${module_name}"
             else
                 audit_log "hook:${module_name}" "HOOK-FAIL" "Hook failed (non-fatal) for ${module_name}"
@@ -751,16 +745,10 @@ _trigger_remove_hooks() {
     local module_yaml
     for module_yaml in "${CORE_DIR}"/modules/*/module.yaml; do
         [[ -f "$module_yaml" ]] || continue
-        local hook
-        hook=$(yaml_get_field "$module_yaml" "hooks.on_project_remove" 2>/dev/null) || continue
-        [[ -z "$hook" ]] && continue
-        local hook_script
-        hook_script="$(dirname "$module_yaml")/$hook"
-        if [[ -x "$hook_script" ]]; then
-            local module_name
-            module_name="$(basename "$(dirname "$module_yaml")")"
-            log_imp 8 "hooks" "Triggering remove hook for module: ${module_name}"
-            if bash "$hook_script" "$PROJECT_DIR" "$PROJECT" "$NODE_NAME"; then
+        local module_name
+        module_name="$(basename "$(dirname "$module_yaml")")"
+        log_imp 8 "hooks" "Triggering remove hook for module: ${module_name}"
+        if invoke_module_interface "$module_name" remove-hook "$PROJECT_DIR" "$PROJECT" "$NODE_NAME"; then
                 audit_log "hook:${module_name}" "SUCCESS" "Remove hook completed for ${module_name}"
             else
                 audit_log "hook:${module_name}" "HOOK-FAIL" "Remove hook failed (non-fatal) for ${module_name}"

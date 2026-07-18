@@ -25,6 +25,9 @@ description: >
 depends_on:
   - postgres
 
+interfaces:
+  - healthcheck
+
 spool_dir: /var/lib/platform/backup-spool/
 spool_volume: backup-spool
 

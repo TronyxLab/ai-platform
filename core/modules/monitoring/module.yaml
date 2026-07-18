@@ -19,6 +19,10 @@ description: "Prometheus metrics TSDB and Grafana dashboards — platform monito
 depends_on:
   - nginx
 
+interfaces:
+  - healthcheck
+  - deploy-hook
+
 spool_dir: /var/lib/platform/grafana-data
 spool_volume: grafana-data
 

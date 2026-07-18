@@ -354,7 +354,7 @@ deploy_system_module() {
 
     log_step "system:${module_name}" "START" "Deploying system module: ${module_name}"
     export PLATFORM_CONFIG_OVERLAY="$overlay_dir"
-    if ! bash "$install_script"; then
+    if ! invoke_module_interface "$module_name" install; then
         log_step "system:${module_name}" "FAIL" "install.sh exited with error — check logs above"
         return 1
     fi
@@ -551,17 +551,11 @@ wait_for_readiness() {
     local max_attempts="${2:-15}"
     local interval_sec="${3:-2}"
 
-    local healthcheck_script="${PATHS_MODULES_DIR}/${module_name}/healthcheck.sh"
-    if [[ ! -f "$healthcheck_script" ]]; then
-        log_step "wait:${module_name}" "SKIP" "No healthcheck.sh for ${module_name} — skipping readiness poll"
-        return 0
-    fi
-
     log_step "wait:${module_name}" "START" "Waiting for readiness (max_attempts=${max_attempts}, interval=${interval_sec}s)"
 
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        if bash "$healthcheck_script" readiness 2>/dev/null; then
+        if invoke_module_interface "$module_name" healthcheck readiness 2>/dev/null; then
             log_step "wait:${module_name}" "DONE" "Module ready after $((attempt + 1)) attempts"
             return 0
         fi
@@ -584,16 +578,10 @@ run_healthcheck() {
     local module_name="$1"
     local install_type="$2"
 
-    local healthcheck_script="${PATHS_MODULES_DIR}/${module_name}/healthcheck.sh"
-    if [[ ! -f "$healthcheck_script" ]]; then
-        log_step "health:${module_name}" "SKIP" "No healthcheck.sh for module ${module_name}"
-        return 0
-    fi
-
     log_step "health:${module_name}" "START" "Running healthcheck for: ${module_name}"
     local attempt=0 hc_output
     while [[ $attempt -lt $HEALTHCHECK_MAX_RETRIES ]]; do
-        hc_output="$(bash "$healthcheck_script" liveness 2>&1)" && {
+        hc_output="$(invoke_module_interface "$module_name" healthcheck liveness 2>&1)" && {
             log_step "health:${module_name}" "DONE" "Healthcheck PASS (attempt $((attempt + 1))/${HEALTHCHECK_MAX_RETRIES})"
             return 0
         }

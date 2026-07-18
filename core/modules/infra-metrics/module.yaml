@@ -25,6 +25,9 @@ description: "Infrastructure metrics: cAdvisor (container), Node Exporter (host)
 depends_on:
   - nginx
 
+interfaces:
+  - healthcheck
+
 spool_dir: /var/lib/platform/infra-metrics-data
 
 resources:

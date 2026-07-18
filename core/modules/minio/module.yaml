@@ -17,6 +17,9 @@ name: minio
 install_type: docker
 description: MinIO local S3-compatible object storage for platform backup spool and langfuse events
 depends_on: []
+
+interfaces: []
+
 spool_dir: /var/lib/platform/minio-data
 spool_volume: minio-data
 resources:

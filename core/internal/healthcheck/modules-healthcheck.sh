@@ -21,6 +21,9 @@ unset _SCRIPT_DIR
 _HEALTHCHECK_LIB_DIR="${PLATFORM_ROOT}/core/lib"
 source "${_HEALTHCHECK_LIB_DIR}/logging.sh"
 
+# Source paths + module-interface for typed contract cross-layer calls
+source "${_HEALTHCHECK_LIB_DIR}/paths.sh"
+
 __LOG_PREFIX="modules-healthcheck"
 
 if [[ "${1:-}" == "--help" ]]; then
@@ -53,17 +56,12 @@ for module_yaml in "${PLATFORM_ROOT}"/core/modules/*/module.yaml; do
     INSTALL_TYPE=$(grep -E '^install_type:' "$module_yaml" | awk '{print $2}' || echo "docker")
 
     if [ "$MODE" = "deep" ]; then
-        # Deep mode: run module healthcheck.sh with MODE=deep
-        hc_script="${PLATFORM_ROOT}/core/modules/${MODULE}/healthcheck.sh"
-        if [[ -f "$hc_script" ]]; then
-            if bash "$hc_script" deep 2>/dev/null; then
-                log_imp 8 "check" "PASS (deep): ${MODULE}"
-            else
-                log_imp 9 "check" "FAIL (deep): ${MODULE}"
-                FAILED=1
-            fi
+        # Deep mode: run module healthcheck.sh with MODE=deep via typed contract
+        if invoke_module_interface "$MODULE" healthcheck deep 2>/dev/null; then
+            log_imp 8 "check" "PASS (deep): ${MODULE}"
         else
-            log_imp 8 "check" "SKIP (no healthcheck.sh): ${MODULE}"
+            log_imp 9 "check" "FAIL (deep): ${MODULE}"
+            FAILED=1
         fi
     elif [ "$INSTALL_TYPE" = "docker" ]; then
         # Default mode for docker modules: docker inspect
@@ -124,17 +122,12 @@ for module_yaml in "${PLATFORM_ROOT}"/core/modules/*/module.yaml; do
             esac
         done
     else
-        # System module: run healthcheck.sh liveness
-        hc_script="${PLATFORM_ROOT}/core/modules/${MODULE}/healthcheck.sh"
-        if [[ -f "$hc_script" ]]; then
-            if bash "$hc_script" liveness 2>/dev/null; then
-                log_imp 8 "check" "PASS (liveness): ${MODULE}"
-            else
-                log_imp 9 "check" "FAIL (liveness): ${MODULE}"
-                FAILED=1
-            fi
+        # System module: run healthcheck.sh liveness via typed contract
+        if invoke_module_interface "$MODULE" healthcheck liveness 2>/dev/null; then
+            log_imp 8 "check" "PASS (liveness): ${MODULE}"
         else
-            log_imp 8 "check" "SKIP (no healthcheck.sh): ${MODULE}"
+            log_imp 9 "check" "FAIL (liveness): ${MODULE}"
+            FAILED=1
         fi
     fi
 done

@@ -23,6 +23,10 @@ depends_on: []
 
 severity: critical
 
+interfaces:
+  - healthcheck
+  - deploy-hook
+
 spool_dir: /var/lib/platform/postgres-data/
 spool_volume: postgres-data
 

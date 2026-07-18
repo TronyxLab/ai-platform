@@ -31,6 +31,9 @@ description: >
 
 depends_on: []
 
+interfaces:
+  - healthcheck
+
 spool_dir: /var/lib/platform/clickhouse-data
 spool_volume: clickhouse-data
 

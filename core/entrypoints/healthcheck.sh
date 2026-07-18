@@ -9,7 +9,8 @@
 ##   - Passes through all arguments and exit code to modules-healthcheck.sh
 ## @rationale Q: Why a thin wrapper?
 ##            A: Compliance with core/AGENTS.md cross-layer rule: entrypoints → modules is forbidden.
-##            internal/ → modules is permitted. The --help and PLATFORM_ROOT computation stay here
+##            internal/ → modules is permitted through typed contract (invoke_module_interface + module.yaml.interfaces).
+##            The --help and PLATFORM_ROOT computation stay here
 ##            to maintain CLI contract for make healthcheck.
 # endregion MODULE_CONTRACT
 set -euo pipefail

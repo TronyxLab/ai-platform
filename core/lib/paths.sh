@@ -27,6 +27,9 @@ readonly PATHS_MODULES_DIR="${PATHS_CORE_DIR}/modules"
 readonly PATHS_TEMPLATES_DIR="${PATHS_CORE_DIR}/templates"
 readonly PATHS_INTERNAL_DIR="${PATHS_CORE_DIR}/internal"
 
+# Source module-interface library for typed contract cross-layer calls
+source "${PATHS_LIB_DIR}/module-interface.sh"
+
 # Canonical platform root — single source of truth for all `/opt/platform` references
 # ⚠️ NOT readonly: some entrypoints (lint.sh) override PLATFORM_ROOT from PATHS_CORE_DIR/..
 # for local dev where /opt/platform may not exist. Readonly guard would break those scripts.

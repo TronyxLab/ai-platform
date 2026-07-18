@@ -839,11 +839,11 @@ PYEOF
         [[ -z "$mod_name" ]] && continue
         [[ "$mod_enabled" != "true" ]] && continue
 
-        local hc_script="${CORE_DIR}/modules/${mod_name}/healthcheck.sh"
-        if [[ -f "$hc_script" ]]; then
-            local attempt=0 hc_passed=0
-            while [[ $attempt -lt $hc_max_retries ]]; do
-                if bash "$hc_script" liveness &>/dev/null 2>&1; then
+        local attempt=0 hc_passed=0
+        while [[ $attempt -lt $hc_max_retries ]]; do
+            local hc_rc=0
+            invoke_module_interface "$mod_name" healthcheck liveness &>/dev/null 2>&1 || hc_rc=$?
+            if [[ $hc_rc -eq 0 ]]; then
                     log_step "healthcheck:${mod_name}" "DONE" "Healthcheck PASS (attempt $((attempt + 1))/${hc_max_retries})"
                     hc_passed=1
                     break

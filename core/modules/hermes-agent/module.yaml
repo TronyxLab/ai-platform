@@ -27,6 +27,9 @@ depends_on:
   - redis
   - litellm
 
+interfaces:
+  - healthcheck
+
 spool_dir: /var/lib/platform/hermes-agent/data
 spool_volume: hermes-data
 

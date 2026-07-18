@@ -17,6 +17,11 @@ description: "Reverse proxy — TLS termination, subdomain routing, auth"
 
 depends_on: []
 
+interfaces:
+  - healthcheck
+  - install
+  - deploy-hook
+
 env_shared:
   PLATFORM_DOMAIN: "${PLATFORM_DOMAIN}"
 

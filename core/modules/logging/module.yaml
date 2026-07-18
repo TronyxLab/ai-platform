@@ -19,6 +19,9 @@ description: "Loki log storage and Promtail log collector — platform logging s
 
 depends_on: []
 
+interfaces:
+  - healthcheck
+
 spool_dir: /var/lib/platform/loki-data
 spool_volume: loki-data
 

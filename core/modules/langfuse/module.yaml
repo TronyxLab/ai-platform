@@ -21,6 +21,9 @@ depends_on:
   - postgres
   - clickhouse
 
+interfaces:
+  - healthcheck
+
 spool_dir: /var/lib/platform/langfuse-data
 
 resources:

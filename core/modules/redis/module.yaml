@@ -30,6 +30,9 @@ description: >
 
 depends_on: []
 
+interfaces:
+  - healthcheck
+
 resources:
   limits:
     memory: 256M

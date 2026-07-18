@@ -56,6 +56,13 @@ name: postgres                    # без -shared суффикса
 install_type: docker              # docker | system
 description: "..."
 depends_on: [redis]               # для _topo_sort.py
+interfaces:                       # массив строк — typed contract для cross-layer вызовов
+  - healthcheck                  # из internal/bootstrap (healthcheck liveness/readiness)
+  - install                      # из internal/bootstrap (system-модули)
+  - deploy-hook                  # из internal/deploy (on_project_deploy)
+  - remove-hook                  # из internal/deploy (on_project_remove)
+  # Пустой [] валиден — модуль не вызывается из internal/
+  # Отсутствующее поле = [] (backward compat)
 spool_dir: /var/lib/platform/...  # абсолютный путь (deploy-modules.sh)
 spool_volume: volume-name
 resources:                        # опционально, синхронизировано с base.yml
@@ -70,6 +77,8 @@ env_requires:                     # обязательные в .env/secrets
 ```
 
 **Удалены из D4:** `version` (моно-версия), `config.network`, `config.readiness_endpoint`, `config.liveness_endpoint`, `config.stop_grace_period`, `ports`. Docker-specific поля — в `docker-compose.base.yml`.
+
+**Добавлено в D4:** `interfaces` (2026-07-18) — typed contract для cross-layer вызовов из `internal/` в `modules/`. См. `core/lib/module-interface.sh` и `core/AGENTS.md` cross-layer правила.
 
 **Proxy opt-in rule:** Прокси-переменные (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) декларирует в `env_shared` ТОЛЬКО модуль `hermes-agent` — единственный реальный потребитель прокси-канала (Telegram → Tor → Privoxy). Любой другой модуль, которому требуется прокси, должен: (1) добавить переменные в свой `env_shared`, (2) добавить имя модуля в `platform-env.yaml proxy.consumers`. Гейт T8.5 валидирует opt-in контракт — добавление без обоих шагов = красный гейт.
 

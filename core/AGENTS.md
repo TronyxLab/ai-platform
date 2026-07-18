@@ -127,8 +127,15 @@ core/
 | Слой | Может импортировать | Запрещено |
 |------|--------------------|-----------|
 | `entrypoints/` | `internal/`, `lib/` | Всё остальное |
-| `internal/` | `internal/`, `lib/` | Всё остальное |
+| `internal/` | `internal/`, `lib/`, `modules/` (через `invoke_module_interface` + `interfaces`) | Прямые вызовы `modules/` без регистрации |
 | `modules/` | `lib/`, `templates/` | `internal/` |
+
+**Typed contract:** `internal/` вызывает `modules/` **только** через `invoke_module_interface()` из `core/lib/module-interface.sh`. Модуль должен регистрировать интерфейсы в `module.yaml#interfaces`. Gate #8 v2 валидирует оба условия — прямой вызов `bash modules/<name>/...` без `invoke_module_interface` = violation, вызов незарегистрированного интерфейса = violation.
+
+**DataFlow enhancements (Gate #8 v3):** Детекция расширена тремя механизмами:
+1. **Extended Variable Registry** — авто-сбор переменных из `core/lib/paths.sh` (`_collect_path_variables`), подстановка в `resolve_import` вместо 9 хардкоженных переменных
+2. **Local Variable Tracking** — `_trace_variable_assignment` отслеживает локальные присвоения переменных (`local VAR=path`, `export VAR=path`, `readonly VAR=path`) в пределах одного файла
+3. **ShellCheck Data-Flow Analysis** — слой B детекции через SC2154 (переменная «referenced but not assigned»), обнаруживает вызовы `bash "$variable"` где переменная присвоена из path-литерала в другом скоупе. Graceful degradation: при отсутствии ShellCheck слой B отключается без ошибки.
 
 ---
 
