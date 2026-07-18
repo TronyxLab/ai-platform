@@ -242,6 +242,15 @@ jobs:
           # ·   test_component_hermes.py ENV_HERMES reads CONTEXT_IMAGE from os.environ.
           # · Rev: when CI gains ghcr.io access to tronyxlab org, remove this override.
           CONTEXT_IMAGE: hermes-agent-base:latest
+          # 🧐 TRAP[DECISION] · 2026-07-18 · — · Explicit PLATFORM_DOMAIN for nginx dev-certs in CI
+          # · CI runner sets PLATFORM_DOMAIN=test.local (via env inheritance), which causes
+          # ·   generate-dev-certs.sh to fail with set -euo pipefail (openssl SAN generation
+          # ·   with unexpected context domain triggers cascading failure).
+          # · Fix: pin to ai-platform.local + openssl backend (no mkcert in CI).
+          # ·   test_nginx_dev_certs.py::test_generate_certs_openssl_backend confirms openssl works.
+          # · Rev: if CI runner PLATFORM_DOMAIN changes or openssl is removed from base image.
+          PLATFORM_DOMAIN: ai-platform.local
+          CERT_BACKEND: openssl
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
