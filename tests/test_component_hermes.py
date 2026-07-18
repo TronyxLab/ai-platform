@@ -767,7 +767,12 @@ def test_hermes_dashboard_auth(hermes_up, caplog) -> None:
     except ImportError:
         pytest.skip("requests not installed — install with: pip install requests")
 
-    dashboard_url = "http://127.0.0.1:9119/"
+    # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · F-7: test переведён на shifted порт 19119
+    # · Root: до !override hermes-agent-test биндил canonical 9119 через склейку ports.
+    # · После !override доступен только 127.0.0.1:19119 (test.yml).
+    # · docker exec curl внутри контейнера (test_healthcheck_passes) использует 9119 —
+    # ·   это корректно (container port, не host port).
+    dashboard_url = "http://127.0.0.1:19119/"
 
     with caplog.at_level(logging.DEBUG):
         # Step 1: GET / without auth → 302 redirect to /login

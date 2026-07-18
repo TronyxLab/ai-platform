@@ -19,6 +19,7 @@ import time
 
 import pytest
 import requests
+from conftest import _module_container_running
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +60,8 @@ def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
 
 @pytest.mark.smoke
 def test_langfuse_health(caplog, platform_services):
-    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
-    if "langfuse" in platform_services.get("failed", []):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
+    if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
         pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
     if not _port_reachable():
@@ -74,8 +75,8 @@ def test_langfuse_health(caplog, platform_services):
 
 @pytest.mark.smoke
 def test_langfuse_ingestion(caplog, platform_services):
-    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
-    if "langfuse" in platform_services.get("failed", []):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
+    if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
         pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
     if not _port_reachable():
@@ -104,8 +105,8 @@ def test_langfuse_ingestion(caplog, platform_services):
 
 @pytest.mark.smoke
 def test_langfuse_login(caplog, platform_services):
-    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
-    if "langfuse" in platform_services.get("failed", []):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
+    if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
         pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
     if not _port_reachable():

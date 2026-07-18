@@ -30,3 +30,4 @@ from _conftest.ldd import (  # noqa: F401
     _handle_e2e_error,
     _print_ldd_trajectory,
 )
+from _conftest.smoke import _module_container_running  # noqa: F401

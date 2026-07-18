@@ -509,6 +509,69 @@ def _start_single_module(
     return {"success": True, "module_name": module_name}
 
 
+# region R4_HELPER
+## @purpose — Live container check для R4 fail-fast. Когда модуль в failed списке
+##            platform_services, это может быть ложноположительным из-за restart:
+##            unless-stopped — контейнер может восстановиться после первого --wait
+##            timeout. Делаем docker inspect для верификации фактического состояния.
+## @rationale — Липкая failed-метка не учитывает recover-семантику restart-политик.
+##              R4 должен фейлить только при реальном отсутствии контейнера.
+## @invariants
+##   - container_name указывает на test-контейнер (с -test суффиксом)
+##   - Возвращает True если контейнер запущен, False если отсутствует/не запущен
+##   - logging.getLogger('conftest') для LDD-логов
+
+def _module_container_running(
+    platform_services_result: dict[str, list[str]],
+    module_name: str,
+    container_name: str,
+    logger: logging.Logger,
+    timeout: int = 10,
+) -> bool:
+    """Verify module test container is actually running.
+
+    ## @purpose — If module is in failed list (--wait timeout), check live
+    ##            container state via docker inspect. restart: unless-stopped
+    ##            may have recovered the container after the initial timeout.
+    ## @io — ⇥ platform_services_result, module_name, container_name, logger
+    ##       → ⎋ bool (True if running)
+    ## @complexity — O(1) — single docker inspect call
+    """
+    if module_name not in platform_services_result.get("failed", []):
+        return True  # module started fine
+
+    # Module in failed list — check if container actually recovered
+    import subprocess as _sp
+
+    try:
+        _r = _sp.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if _r.returncode == 0 and _r.stdout.strip() == "true":
+            logger.warning(
+                "[IMP:8][R4][%s] Module in failed list but container '%s' IS running"
+                " — recovered after first --wait timeout",
+                module_name,
+                container_name,
+            )
+            return True
+    except (_sp.TimeoutExpired, OSError):
+        pass
+
+    logger.error(
+        "[IMP:9][R4][%s] Container '%s' is NOT running — module truly failed",
+        module_name,
+        container_name,
+    )
+    return False
+
+
+# endregion R4_HELPER
+
+
 @pytest.fixture(scope="session")
 def platform_env() -> dict[str, str]:
     """Inject SMOKE_ENV into os.environ; restore on teardown.

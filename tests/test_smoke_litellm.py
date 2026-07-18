@@ -31,7 +31,7 @@ import os
 
 import pytest
 import requests
-from conftest import _handle_e2e_error, ldd_trajectory
+from conftest import _handle_e2e_error, _module_container_running, ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +65,15 @@ def test_litellm_readiness(caplog, platform_services) -> None:
     """
     # region FUNC_test_litellm_readiness
 
-    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
-    if "litellm" in platform_services.get("failed", []):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check
+    # · failed лист липкий (первый --wait timeout), restart: unless-stopped мог восстановить.
+    # · Используем docker inspect для верификации реального состояния.
+    # ⚠️ TRAP[DEBT] · 2026-07-18 · MED · litellm first-start crash (httpx.ConnectError)
+    # · Observed: litellm может упасть на Application startup (httpx.ConnectError к модели),
+    # ·   после чего restart: unless-stopped поднимает контейнер. Это латентная проблема,
+    # ·   не связанная с F-7. Связана с Brief 017 (DNS-alias изоляция shared-сетей).
+    # · Suspected: pgbouncer alias-коллизия на shared-db-net при живом прод-стеке.
+    if not _module_container_running(platform_services, "litellm", "litellm-test", logger):
         pytest.fail("litellm-test did not start — smoke tests require running containers")
 
     url = _build_litellm_url(_LITELLM_TEST_PORT, "/health/readiness")

@@ -33,7 +33,7 @@ import os
 
 import pytest
 import requests
-from conftest import _handle_e2e_error, ldd_trajectory
+from conftest import _handle_e2e_error, _module_container_running, ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,8 @@ def test_hermes_dashboard_health(caplog, platform_services) -> None:
     ##       ⚡ HTTP GET / → ⎋ None (asserts 302 redirect to /auth/login)
     ## @complexity — O(1)
     """
-    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
-    if "hermes-agent" in platform_services.get("failed", []):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
+    if not _module_container_running(platform_services, "hermes-agent", "hermes-agent-test", logger):
         pytest.fail("hermes-agent-test did not start — smoke tests require running containers")
 
     dash_port = _HERMES_DASHBOARD_TEST_PORT
@@ -120,8 +120,8 @@ def test_hermes_auth_login(caplog, platform_services) -> None:
     ##       ⎋ None (asserts 200 + ok:true + session cookies)
     ## @complexity — O(1)
     """
-    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
-    if "hermes-agent" in platform_services.get("failed", []):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
+    if not _module_container_running(platform_services, "hermes-agent", "hermes-agent-test", logger):
         pytest.fail("hermes-agent-test did not start — smoke tests require running containers")
 
     hermes_user, hermes_pass = _hermes_credentials()
@@ -171,8 +171,8 @@ def test_hermes_api_completions(caplog, platform_services) -> None:
     ##       ⎋ None (asserts 200 + choices[0].message.content)
     ## @complexity — O(1) — single HTTP POST to LLM proxy
     """
-    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: если модуль не запустился — fail, не skip
-    if "hermes-agent" in platform_services.get("failed", []):
+    # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
+    if not _module_container_running(platform_services, "hermes-agent", "hermes-agent-test", logger):
         pytest.fail("hermes-agent-test did not start — smoke tests require running containers")
 
     if not API_SERVER_KEY:
