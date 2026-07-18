@@ -594,8 +594,60 @@ deploy_nginx_config() {
     # ── Deploy default static root and error pages ─────────────────────
     _deploy_static_assets
 
+    # ── Deploy shared snippets (security-headers + SSL params) ─────────
+    # audit 013: security-headers.conf → /etc/nginx/includes/
+    #            ssl-params.conf.template → /etc/nginx/conf.d/ (sed PLATFORM_DOMAIN)
+    _deploy_shared_snippets "$domain"
+
     log_step "deploy-config" "DONE" "nginx config deployed"
 }
+
+# region _DEPLOY_SHARED_SNIPPETS
+## @brief  Deploy shared nginx snippet files (security-headers.conf, ssl-params.conf).
+## @param  domain  Domain name for ${PLATFORM_DOMAIN} substitution in ssl-params.conf.template
+## @note   security-headers.conf has no PLATFORM_DOMAIN placeholders — plain copy.
+##         ssl-params.conf.template requires sed substitution for PLATFORM_DOMAIN.
+## @changes 2026-07-18 · audit 013 · Added for security hardening wave 1.
+_deploy_shared_snippets() {
+    local domain="$1"
+    local includes_dir="/etc/nginx/includes"
+
+    # ── security-headers.conf (no substitution needed) ────────────────────
+    local headers_src="${SCRIPT_DIR}/config/security-headers.conf"
+    if [[ -f "$headers_src" ]]; then
+        mkdir -p "$includes_dir"
+        if [[ ! -f "${includes_dir}/security-headers.conf" ]] || \
+           ! diff -q "$headers_src" "${includes_dir}/security-headers.conf" &>/dev/null; then
+            cp "$headers_src" "${includes_dir}/security-headers.conf"
+            chmod 644 "${includes_dir}/security-headers.conf"
+            log_step "shared-snippets" "DONE" "security-headers.conf deployed to ${includes_dir}/"
+        else
+            log_step "shared-snippets" "SKIP" "security-headers.conf already up-to-date"
+        fi
+    else
+        log_step "shared-snippets" "WARN" "security-headers.conf not found at ${headers_src}"
+    fi
+
+    # ── ssl-params.conf (requires PLATFORM_DOMAIN substitution) ───────────
+    local ssl_src="${SCRIPT_DIR}/config/ssl-params.conf.template"
+    local ssl_dst="/etc/nginx/conf.d/ssl-params.conf"
+    if [[ -f "$ssl_src" ]]; then
+        if [[ -n "$domain" ]]; then
+            local rendered
+            rendered="$(mktemp)"
+            sed "s|\${PLATFORM_DOMAIN}|${domain}|g" "$ssl_src" > "$rendered"
+            write_config_atomic "$rendered" "$ssl_dst"
+            rm -f "$rendered"
+        else
+            # No domain — copy as-is (PLATFORM_DOMAIN stays unresolved, may break)
+            log_step "shared-snippets" "WARN" "No PLATFORM_DOMAIN set — ssl-params.conf deployed with unresolved placeholder"
+            write_config_atomic "$ssl_src" "$ssl_dst"
+        fi
+    else
+        log_step "shared-snippets" "WARN" "ssl-params.conf.template not found at ${ssl_src}"
+    fi
+}
+# endregion _DEPLOY_SHARED_SNIPPETS
 
 # region _DEPLOY_VHOST_FULL
 ## @brief  Deploy full HTTPS vhost config (platform-default.conf) with domain substitution.

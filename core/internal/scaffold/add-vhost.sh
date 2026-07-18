@@ -242,8 +242,12 @@ server {
 
     resolver 127.0.0.11;
 
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
+    # ── Security headers (platform policy) ─────────────────────────────────
+    include /etc/nginx/includes/security-headers.conf;
+
+    # ── Rate limiting (dynamic zone: 10 r/s, burst 20) ─────────────────────
+    limit_req zone=dynamic burst=20 nodelay;
+    limit_req_status 429;
 
     location / {
         set \$upstream_${project_name} ${project_name}:80;

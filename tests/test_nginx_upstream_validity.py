@@ -333,8 +333,11 @@ def test_vhost_files_have_corresponding_service(platform_root, all_compose_files
     vhost_files = _get_vhost_files(platform_root)
     logger.info("[IMP:8][test_vhost_files_have_corresponding_service] Found %d vhost files", len(vhost_files))
 
-    # Files that serve static/default content (no proxy_pass to any backend service)
-    _STATIC_VHOST_FILES = {"platform-default.conf", "platform-http.conf", "nginx.conf"}
+    # Files that serve static/default content or are shared snippets (no proxy_pass to any backend service)
+    _STATIC_VHOST_FILES = {
+        "platform-default.conf", "platform-http.conf", "nginx.conf",
+        "security-headers.conf", "ssl-params.conf",  # shared snippets (audit 013)
+    }
 
     unmatched_vhosts = []
 

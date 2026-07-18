@@ -9,9 +9,11 @@
 ##   - Ports: 80 (HTTP) + 443 (HTTPS TLS)
 ##   - restart: unless-stopped — Docker policy
 ##   - proxy-net + observability-net — nginx needs both for proxying to backend services
-##   - Config files are mounted as /etc/nginx/templates/*.conf.template (7 files) —
+##   - Config files are mounted as /etc/nginx/templates/*.conf.template (9 files) —
 ##     official nginx entrypoint runs envsubst on templates with PLATFORM_DOMAIN,
-##     outputs rendered configs to /etc/nginx/conf.d/. nginx.conf mounted directly (no vars).
+##     outputs rendered configs to /etc/nginx/conf.d/. Shared snippets (security-headers.conf,
+##     ssl-params.conf.template) are mounted to /etc/nginx/includes/ and
+##     /etc/nginx/templates/ respectively. nginx.conf mounted directly (no vars).
 ##   - PLATFORM_DOMAIN env var required for production render; passed via environment
 ##   - Overlay vhosts: ${NGINX_OVERLAY_DIR:-./overlays} mounted ro into /etc/nginx/conf.d/overlay/
 ##     Overlay files are plain *.conf (NOT .conf.template), no envsubst applied.
@@ -57,6 +59,9 @@ services:
       - ${NGINX_CONF_DIR:-./config}/langfuse-vhost.conf:/etc/nginx/templates/langfuse-vhost.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/loki-vhost.conf:/etc/nginx/templates/loki-vhost.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/prometheus-vhost.conf:/etc/nginx/templates/prometheus-vhost.conf.template:ro
+      # Shared snippets — included by vhosts via include directive
+      - ${NGINX_CONF_DIR:-./config}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro
+      - ${NGINX_CONF_DIR:-./config}/ssl-params.conf.template:/etc/nginx/templates/ssl-params.conf.template:ro
       # Error pages (static content) — mounted for standalone dev mode
       - ./error-pages:/var/www/platform-default/error-pages:ro
       # Default index — иначе default vhost отдаёт 403 (root без index)
