@@ -1,13 +1,13 @@
-<!-- GREP_SUMMARY: Brief, status-page, deploy-verification, secret-token-url, ci-gate, rollback, healthcheck, freshness-contract, superposition-open -->
-<!-- STRUCTURE: ┌ARTIFACT_CONTRACT┐ → ◇ Background (existing primitives) → ◇ Problem → ◇ Superposition (5 options, collapse OPEN) → ◇ Security sub-decision → ◇ CI-gate contract → ◇ Extra ideas → ◇ Acceptance Criteria → ◇ Non-scope → ⎋ Open Questions -->
+<!-- GREP_SUMMARY: Brief, status-page, deploy-verification, secret-token-url, ci-gate, rollback, healthcheck, live-service, collapsed-option-A, rate-limit, docker-sock -->
+<!-- STRUCTURE: ┌ARTIFACT_CONTRACT┐ → ◇ Background (existing primitives) → ◇ Problem → ◇ Superposition (5 options, COLLAPSED → A) → ◇ Collapse Result → ◇ Security sub-decision → ◇ CI-gate contract → ◇ Extra ideas → ◇ Acceptance Criteria → ◇ Non-scope → ⎋ Design Notes for Architect -->
 
 # $ARTIFACT_CONTRACT
 - **PURPOSE:** Бриф фичи «Node Status Page» — единый URL на главном домене ноды с секретным токеном, который отдаёт агрегированный статус всех сайтов и сервисов ноды: человеку — HTML со ссылками для ручной проверки после деплоя, CI — машиночитаемый эндпоинт как финальный gate работоспособности (fail → rollback). Без реализации — только план.
-- **DESCRIPTION:** Фиксирует существующие примитивы платформы (`make verify`, `make healthcheck`, cron `docker-healthcheck.sh`, monitoring), разрыв между ними, суперпозицию из 5 вариантов реализации (коллапс НЕ выполнен — открытый вопрос), суб-решение по защите URL, контракт CI-gate, дополнительные идеи и критерии приёмки.
+- **DESCRIPTION:** Фиксирует существующие примитивы платформы (`make verify`, `make healthcheck`, cron `docker-healthcheck.sh`, monitoring), разрыв между ними, суперпозицию из 5 вариантов реализации (КОЛЛАПС ВЫПОЛНЕН: Option A — live-сервис, токен в path, shallow+deep в v1), суб-решение по защите URL, контракт CI-gate, обязательные требования live-сервиса и критерии приёмки.
 - **RATIONALE:** После деплоя оператору нужна одна страница: кликнуть → увидеть статус всех vhosts и сервисов → перейти по ссылкам для ручной проверки. CI нужен тот же источник истины как финальный smoke: один `curl -f`, non-200 → rollback. Сейчас эти данные размазаны по `make verify` (внешний pull, только expose:true домены), `make healthcheck` (SSH), cron-healthcheck (результат не публикуется) и Grafana (не является deploy-gate).
-- **ACCEPTANCE_CRITERIA:** (1) один URL на главном домене ноды защищён секретом ≥32 hex из SOPS/age; (2) HTML-вид: таблица всех vhosts + сервисов, статус, кликабельные ссылки; (3) JSON-вид для CI + бинарный маркер PASS/FAIL, потребляемый одним `curl -f`; (4) freshness-контракт — устаревший статус = FAIL; (5) страница не зависит от проверяемых сервисов и не проверяет себя; (6) токен нигде не попадает в git/логи в открытом виде; (7) все новые операции проходят через Makefile-фасад без новых глаголов вне глоссария.
-- **IMPLEMENTS:** skill `superposition` (FULL mode, collapse OPEN), протокол `dev-pipeline` (Brief → Architect → Coder → QA)
-- **IMPACTS:** `core/internal/healthcheck/docker-healthcheck.sh` (crontab, генерация статуса — Option B), `core/modules/nginx/templates/` (vhost location с токеном), `core/internal/verify/verify-domains.sh` (потребление status-эндпоинта в CI), `node.yaml` schema (источник списка проверяемых доменов/сервисов), `core/entrypoint-manifest.yaml` (если появится новый таргет — см. Open Questions), CI workflow post-deploy шаг (gate + rollback)
+- **ACCEPTANCE_CRITERIA:** (1) один URL на главном домене ноды защищён секретом ≥32 hex из SOPS/age; (2) HTML-вид: таблица всех vhosts + сервисов, live-статус, кликабельные ссылки; (3) JSON-вид для CI + бинарный вердикт `/health` (200 PASS / 503 FAIL), потребляемый одним `curl -f`; (4) rate-limit и timeout-бюджет — 1 внешний запрос не превращается в DoS-усилитель, зависшая проверка не подвешивает страницу; (5) status-page не зависит от проверяемых сервисов и не проверяет себя; (6) токен нигде не попадает в git/логи/Referer в открытом виде; (7) все новые операции проходят через Makefile-фасад без новых глаголов вне глоссария.
+- **IMPLEMENTS:** skill `superposition` (FULL mode, collapsed 2026-07-18 → Option A), протокол `dev-pipeline` (Brief → Architect → Coder → QA)
+- **IMPACTS:** `core/modules/status-page/` (НОВЫЙ модуль — module.yaml, docker-compose.base.yml, healthcheck.sh, Makefile→module.mk), `core/modules/nginx/templates/` (vhost location с токеном + rate-limit zone), `core/internal/verify/verify-domains.sh` (потребление status-эндпоинта в CI), `node.yaml` schema (источник списка проверяемых доменов/сервисов), `core/internal/bootstrap/discover_modules.py` (авто-подхват нового модуля), `core/entrypoint-manifest.yaml` (если появится новый таргет — см. Design Notes), CI workflow post-deploy шаг (gate + rollback)
 - **REQUIRES:** `AGENTS.md` (root — инварианты 1, 5; secrets NEVER via git), `core/AGENTS.md` (каталог операций), `core/internal/verify/verify-domains.sh`, `core/entrypoints/healthcheck.sh`, node.yaml выбранной ноды
 
 $START_BRIEF
@@ -33,33 +33,39 @@ $START_BRIEF
 2. **CI:** дёрнуть тот же источник истины как финальный smoke-тест; fail → rollback.
 3. **Безопасность:** страница раскрывает топологию ноды → доступ только по секрету; секрет не в git (модель доставки секретов: SOPS/age + SCP).
 
-## SUPERPOSITION: варианты реализации (коллапс OPEN)
+## SUPERPOSITION: варианты реализации (COLLAPSED → Option A, 2026-07-18)
 
-### Option A: Микро-модуль `status-page` (live-агрегатор) [score: 6/10]
-- **Approach:** Новый контейнер `core/modules/status-page/`: по HTTP-запросу выполняет проверки (curl vhosts изнутри, docker inspect health), рендерит HTML + JSON. nginx `location /_status/<token>/ → proxy_pass`.
-- **Trade-offs:** Realtime по клику; но +1 рантайм-сервис (поверхность атаки), обязательный rate-limit (иначе DoS-усилитель: 1 внешний запрос → N внутренних), chicken-egg «кто проверяет проверяющего», доступ к docker.sock из контейнера — отдельное security-решение.
-- **Best when:** нужны on-demand deep-проверки и расширяемость логики.
+### Option A: Микро-модуль `status-page` (live-агрегатор) [score: 6/10] ✅ CHOSEN
+- **Approach:** Новый контейнер `core/modules/status-page/`: по HTTP-запросу выполняет проверки (curl vhosts изнутри, статус health контейнеров), рендерит HTML + JSON. nginx `location /_status/<token>/ → proxy_pass`.
+- **Trade-offs:** Realtime по клику; но +1 рантайм-сервис (поверхность атаки), обязательный rate-limit (иначе DoS-усилитель: 1 внешний запрос → N внутренних), chicken-egg «кто проверяет проверяющего», доступ к статусам docker — отдельное security-решение.
+- **Chosen because:** оператору важен realtime-статус в момент клика после деплоя, без лага cron-периода; расширяемость deep-проверок.
 
-### Option B: Static artifact — cron публикует status.json + HTML [score: 8/10] ⭐ recommended
+### Option B: Static artifact — cron публикует status.json + HTML [score: 8/10] — NOT CHOSEN
 - **Approach:** Расширить существующий cron `docker-healthcheck.sh`: каждый прогон пишет `status.json` + рендерит статический `index.html` в volume, который nginx отдаёт по секретному пути. Бинарный маркер для CI: файл `health` создаётся только при полном PASS, удаляется при FAIL → `curl -f .../health` → 404 = fail.
-- **Trade-offs:** Ноль нового рантайма, минимальная поверхность (чистая статика); но лаг до периода cron (≤60 сек) и обязательный **freshness-контракт**: `generated_at` в JSON, статус старше 2× периода cron = FAIL (иначе умерший cron неотличим от «всё хорошо»).
-- **Best when:** Small Simple Blocks, максимум реиспользования существующей инфраструктуры. Базовый вариант.
+- **Not chosen:** лаг до периода cron неприемлем для сценария «кликнул сразу после деплоя — увидел актуальный статус». Остаётся fallback-вариантом, если live-сервис окажется слишком дорогим в сопровождении; freshness-контракт из этого варианта переносится в A как деградационный режим (см. Design Notes).
 
-### Option C: Готовый инструмент — Gatus как модуль [score: 7/10]
-- **Approach:** Gatus (declarative uptime dashboard) как модуль платформы; список endpoints генерируется из node.yaml по паттерну `render-vhosts`. Из коробки: история, flapping-детект, alerting, badges, `/api/v1/endpoints/statuses` для CI. Токен-защита через nginx.
-- **Trade-offs:** Фичи бесплатно; но +1 сторонний сервис, новый контур конфиг-генерации, шире исходной задачи.
-- **Best when:** понадобится история/алерты/badges — эволюционный путь B→C без выбрасывания B (Gatus заменяет генератор, nginx-контур остаётся).
+### Option C: Готовый инструмент — Gatus как модуль [score: 7/10] — NOT CHOSEN
+- **Not chosen:** шире исходной задачи, +1 сторонний сервис. Остаётся эволюционным путём, если понадобится история/алерты/badges.
 
-### Option D: Pull-only — `make verify MODE=deep` + HTML-отчёт как CI-артефакт [score: 6/10]
-- **Approach:** Никакой страницы на ноде. CI после деплоя гоняет расширенный verify (домены + `/health` сервисов через SSH) и генерирует HTML-отчёт со ссылками как артефакт workflow.
-- **Trade-offs:** Zero attack surface на VPS; но нет «открыть URL с телефона», отчёт живёт в CI UI, не live.
-- **Best when:** безопасность абсолютный приоритет, CI — единственный потребитель.
+### Option D: Pull-only — `make verify MODE=deep` + HTML-отчёт как CI-артефакт [score: 6/10] — NOT CHOSEN
+- **Not chosen:** не закрывает сценарий «открыть URL с телефона после деплоя».
 
 ### Option E: nginx + client-side JS (fetch из браузера) [score: 3/10] — REJECTED
-- **Approach:** Статичный HTML, JS fetch'ит `/health` каждого домена из браузера пользователя.
 - **Rejected:** CORS-конфигурация на каждом vhost; CI не исполняет JS (headless-браузер в CI противоречит тестовым правилам); внутренние сервисы из браузера недоступны. Зафиксировано, чтобы не возвращаться.
 
-### Recommendation: **Option B**, эволюционный путь B→C. Коллапс — за оператором.
+### Collapse Result (2026-07-18, оператор)
+
+| Вопрос | Решение |
+|---|---|
+| Q1 Архитектура | **Option A** — live-сервис `status-page` |
+| Q2 Защита URL | **Токен в path** + обязательные митигации (см. суб-решение ниже) |
+| Q3 Глубина проверок | **Shallow + deep сразу в v1** |
+| Q4 История прогонов | Не в v1 (не выбран C) — при потребности отдельный бриф |
+
+⚠️ TRAP[DECISION] · 2026-07-18 · HI · Выбран A (live) вопреки рекомендации B (static)
+· Основание: realtime-статус в момент клика важнее минимализма; лаг cron неприемлем для post-deploy сценария.
+· Цена: обязательные rate-limit, security-решение по доступу к docker-статусам, бюджет времени ответа, timeout-каскад.
+· Rev: если сопровождение live-сервиса окажется дороже пользы — деградация до B без смены внешнего контракта (URL/JSON/health не меняются).
 
 ## Суб-решение: защита URL (секретный токен)
 
@@ -79,48 +85,56 @@ $START_BRIEF
 
 ```
 post-deploy шаг CI:
-  1. sleep <период cron + запас>          # только для Option B
-  2. curl -fsS https://<main-domain>/_status/<token>/health
+  1. curl -fsS --max-time 60 --retry 3 --retry-delay 10 \
+       https://<main-domain>/_status/<token>/health
      → HTTP 200 body=PASS  → деплой подтверждён
-     → HTTP 404 / non-200 / timeout → rollback (существующий механизм)
-  3. (опц.) curl .../status.json → приложить к job summary
+     → HTTP 503 / non-200 / timeout → rollback (существующий механизм)
+  2. (опц.) curl .../status.json → приложить к job summary
 ```
 
-Требования: один вызов, ноль парсинга для вердикта, JSON — только для диагностики. Freshness проверяется на стороне генератора (stale → маркер удаляется), CI об этом знать не должен.
+Требования: один вызов (с retry на warm-up), ноль парсинга для вердикта, JSON — только для диагностики. `--max-time` обязан покрывать полный каскад внутренних проверок (см. Design Notes: timeout-бюджет). Retry покрывает окно старта контейнеров сразу после деплоя.
 
-## Дополнительные идеи (brainstorm, приоритизировать при коллапсе)
+## Дополнительные идеи (brainstorm, приоритизация в DevPlan)
 
 1. **Version drift detect** — сервисы отдают git SHA + deploy timestamp; страница сравнивает с ожидаемым SHA деплоя → ловит «деплой прошёл, контейнер старый» (silent failure, классика).
-2. **Shallow vs deep уровни** — shallow: HTTP 200 vhosts; deep: redis PING, LiteLLM liveliness, pg SELECT 1 через существующие module healthcheck.sh.
-3. **Prometheus textfile-экспорт** того же status.json → алерты в Grafana без нового кода.
-4. **История последних N прогонов** (ring buffer в JSON) → виден flapping. Если нужно всерьёз — это сигнал коллапса в Option C.
-5. **Ссылки на внутренние админки** (Grafana, Langfuse, MinIO console) в HTML-таблице — ручная проверка «перейти на все нужные сервисы» из одной точки.
-6. ⚠️ TRAP[DESIGN] **Anti-recursion:** страница не проверяет сама себя; генератор не зависит от проверяемых сервисов (никакого postgres/litellm в цепочке рендера — только shell + статика).
-7. **Глоссарий глаголов:** новый make-глагол не требуется — генерация = расширение `healthcheck`, потребление в CI = расширение `verify`. Если Architect решит иначе — регистрация в `entrypoint-manifest.yaml` обязательна (инвариант 5).
+2. **Prometheus scrape** того же status.json (или /metrics у status-page) → алерты в Grafana без нового кода.
+3. **История последних N прогонов** (ring buffer) → виден flapping. Не в v1 (см. Collapse Result Q4).
+4. **Ссылки на внутренние админки** (Grafana, Langfuse, MinIO console) в HTML-таблице — ручная проверка «перейти на все нужные сервисы» из одной точки.
+5. ⚠️ TRAP[DESIGN] **Anti-recursion:** status-page не проверяет сам себя и не зависит от проверяемых сервисов (никакого postgres/litellm/redis в цепочке рендера — только собственный процесс + исходящие проверки).
+6. **Cache коротких TTL (5–15 сек)** внутри сервиса — дополнение к nginx rate-limit: повторный клик не запускает новый каскад проверок.
 
 ## Acceptance Criteria (черновик — уточняет Architect в DevPlan)
 
-1. `https://<main-domain>/_status/<token>/` отдаёт HTML: таблица всех vhosts из node.yaml + всех модулей ноды, статус, кликабельные ссылки.
-2. `.../status.json` — машиночитаемый агрегат: `{status, generated_at, checks[]}`.
-3. `.../health` — бинарный маркер: 200+PASS только при «все проверки OK и статус свежий», иначе 404.
+1. `https://<main-domain>/_status/<token>/` отдаёт HTML: таблица всех vhosts из node.yaml + всех модулей ноды, live-статус на момент запроса, кликабельные ссылки.
+2. `.../status.json` — машиночитаемый агрегат: `{status, generated_at, duration_ms, checks[]}`, где checks[] содержит shallow (HTTP-код vhost) и deep (module health) результаты.
+3. `.../health` — бинарный вердикт: HTTP 200 + body `PASS` только при «все проверки OK»; иначе HTTP 503 + body `FAIL` (live-сервис отвечает всегда; 404/connection refused означает «проверяющий мёртв» — для CI это тоже FAIL).
 4. Неверный токен → 404, ответ неотличим от несуществующего пути.
-5. Токен отсутствует в git, в открытых логах nginx и в Referer исходящих переходов.
-6. CI post-deploy шаг: fail эндпоинта → rollback; проверено негативным тестом (R5: убить один сервис → маркер исчезает → CI fail).
-7. Умерший генератор статуса (cron остановлен) → `.../health` = 404 не позже 2× периода генерации.
-8. Все операции — через Makefile-фасад; новые глаголы не вводятся либо регистрируются в entrypoint-manifest.yaml.
+5. Токен отсутствует в git, в открытых логах nginx и в Referer исходящих переходов (`Referrer-Policy: no-referrer` проверен тестом).
+6. nginx rate-limit на location: превышение → 429 без запуска внутренних проверок; негативный тест обязателен.
+7. Полный каскад проверок укладывается в timeout-бюджет (см. Design Notes); зависший внутренний сервис = FAIL этой проверки, не подвисание всей страницы.
+8. CI post-deploy шаг: fail эндпоинта → rollback; проверено негативным тестом (R5: убить один сервис → `/health` = 503 → CI fail).
+9. Падение самого status-page → CI curl fail (502 от nginx / connection refused) → rollback-триггер срабатывает. Chicken-egg закрыт: «проверяющий мёртв» = «деплой не подтверждён».
+10. Модуль соответствует шаблону `core/modules/AGENTS.md` (module.yaml + interfaces, healthcheck.sh, Makefile→module.mk, обнаруживается `make discover-modules`).
+11. Все операции — через Makefile-фасад; новые глаголы не вводятся либо регистрируются в entrypoint-manifest.yaml (инвариант 5).
 
 ## Non-scope
 
-- Alerting/уведомления (существующий monitoring; либо Option C позже).
+- Alerting/уведомления (существующий monitoring; либо Gatus-эволюция позже).
 - Публичная status page для пользователей (это внутренний операторский инструмент).
 - Автоматический rollback-механизм как таковой — используется существующий, бриф определяет только триггер.
 - Мультинодная агрегация (одна страница = одна нода; агрегация — отдельный бриф при необходимости).
+- История прогонов / flapping-аналитика (Q4 коллапса: не в v1).
 
-## Open Questions (для коллапса)
+## Design Notes for Architect (открытые инженерные решения в рамках Option A)
 
-1. **Q1 (главный):** Вариант реализации — B (static artifact, recommended) / C (Gatus) / A (live-сервис) / D (pull-only)?
-2. **Q2:** Защита — токен в path (с митигациями) или Basic Auth?
-3. **Q3:** Уровень проверки в v1 — shallow (HTTP 200) или сразу deep (module healthchecks)?
-4. **Q4:** Нужна ли история прогонов в v1 (если да — сильный аргумент за C)?
+1. **Доступ к статусам docker** — суб-суперпозиция, решает Architect:
+   - (a) docker-socket-proxy (например tecnativa) с allow только `GET /containers/*` — статусы health из compose-healthchecks;
+   - (b) без docker.sock вообще: deep-статусы читаются из результата cron `docker-healthcheck.sh` (гибрид A+B: live shallow + published deep), тогда для deep обязателен freshness-контракт (`generated_at` старше 2× периода cron = FAIL);
+   - (c) docker.sock read-only напрямую — наихудший по безопасности, требует явного обоснования в DevPlan.
+2. **Timeout-бюджет:** total ≤ 30 сек; параллельный fan-out проверок; per-check timeout ≤ 5 сек.
+3. **Источник списка проверок:** node.yaml — единственный source of truth (как у `render-vhosts` и `verify-domains.sh`). Никаких дублирующих списков в конфиге модуля.
+4. **Технология сервиса:** минимальный рантайм (статический бинарь или python3-stdlib без фреймворка) — с оглядкой на Small Simple Blocks; решение за Architect.
+5. **Make-глагол:** новый таргет не требуется — деплой через стандартный module lifecycle, потребление в CI — расширение `verify`. Если Architect решит иначе — регистрация в `entrypoint-manifest.yaml` обязательна (инвариант 5).
+6. **Деградационный режим:** внешний контракт (URL, status.json, /health) спроектировать так, чтобы возможный откат на Option B (static) не менял потребителей — см. TRAP[DECISION] в Collapse Result.
 
 $END_BRIEF
