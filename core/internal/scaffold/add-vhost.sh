@@ -413,6 +413,11 @@ server {
     proxy_buffers 8 4k;
     proxy_busy_buffers_size 8k;
 
+    # ── Graceful degradation (S4 DevPlan 019) ────────────────────────────
+    # Global resolver (127.0.0.11 valid=30s) in nginx.conf http-block + variable
+    # proxy_pass provides lazy DNS resolution. If upstream container is not running,
+    # nginx starts successfully and returns 502 on request (graceful degradation).
+    # No need for upstream containers to exist at nginx startup.
     location / {
         # Lazy DNS resolution via variable
         set \$upstream_${project_name} http://${project_name}:80;
@@ -722,7 +727,9 @@ render_all() {
 
     # ── Step 1: Parse node.yaml projects ─────────────────────────
     local projects_json
-    NODE_YAML_PATH="$node_yaml" projects_json="$(read_node_yaml_projects "$node_yaml")"
+    # ⚠️ TRAP[BUG] · 2026-07-20 · S1 · export mandatory for command substitution (subshell environ)
+    export NODE_YAML_PATH="$node_yaml"
+    projects_json="$(read_node_yaml_projects "$node_yaml")"
 
     # Filter only projects with domain
     local project_entries=()

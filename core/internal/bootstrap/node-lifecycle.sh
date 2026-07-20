@@ -727,6 +727,44 @@ update_step_2_provision() {
 }
 # endregion FUNC_update_step_2_provision
 
+# region FUNC_update_step_2_5_deliver_overlays
+## @purpose  S2 (DevPlan 019): Verify and activate vhost overlays delivered from local
+##           node-configs/<node>/overlays/nginx/ to /opt/node-configs/<node>/overlays/nginx/.
+##           Idempotent — reloads nginx only if conf files changed.
+## @detail   Vhost files are rsync'd by entrypoints/node-update.sh or scp-deliver.sh
+##           (Phase 2/4). This step verifies they exist and reloads nginx if running.
+## @invariants
+##   - Called after provision (step 2) and before ssl-provision (step 3)
+##   - Failure is NON-FATAL: skips gracefully if no overlays
+##   - NODE_NAME must be set to derive the overlay path
+update_step_2_5_deliver_overlays() {
+    step_start "deliver-overlays" "Verifying vhost overlay files"
+    local overlay_dir="/opt/node-configs/${NODE_NAME}/overlays/nginx"
+    if [[ ! -d "${overlay_dir}" ]]; then
+        step_done "deliver-overlays" "No overlay directory at ${overlay_dir} — skipping"
+        return 0
+    fi
+    local conf_count
+    conf_count=$(find "${overlay_dir}" -maxdepth 1 -name '*.conf' -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "${conf_count}" -eq 0 ]]; then
+        step_done "deliver-overlays" "No .conf files in ${overlay_dir} — skipping"
+        return 0
+    fi
+    log_step "deliver-overlays" "INFO" "Found ${conf_count} vhost overlay(s) in ${overlay_dir}"
+    # Reload nginx to pick up new vhosts (if nginx container is running)
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'nginx'; then
+        log_step "deliver-overlays" "INFO" "Reloading nginx to pick up overlay vhosts"
+        if docker exec nginx nginx -s reload 2>/dev/null; then
+            step_done "deliver-overlays" "Nginx reloaded successfully"
+        else
+            log_step "deliver-overlays" "WARN" "Nginx reload failed — container may be unhealthy"
+        fi
+    else
+        step_done "deliver-overlays" "Nginx not running — overlays will be picked up on next start"
+    fi
+}
+# endregion FUNC_update_step_2_5_deliver_overlays
+
 # region FUNC_update_step_3_ssl_provision
 ## @purpose  Provision SSL/TLS certificates via acme.sh DNS-01 BEFORE docker deploy.
 ##           Ensures nginx has valid cert at /etc/letsencrypt/live/<domain>/ before
@@ -948,6 +986,22 @@ main() {
 
         validate_bootstrap_env
 
+        # ── S5: Pre-flight YAML syntax validation (init-mode) ──
+        if [[ -f "$NODE_YAML" ]]; then
+            if ! python3 -c "
+import yaml, sys
+try:
+    with open('$NODE_YAML') as f:
+        yaml.safe_load(f)
+except Exception as e:
+    print(f'FATAL: node.yaml is not valid YAML: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null; then
+                echo "[IMP:10][node-lifecycle][init] FATAL: node.yaml is not valid YAML — check syntax at ${NODE_YAML}" >&2
+                exit 1
+            fi
+        fi
+
         TOR_ENABLED=false
         if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
             TOR_ENABLED=$(python3 - "$NODE_YAML" <<'PYEOF' 2>/dev/null || echo "false"
@@ -1073,6 +1127,22 @@ PYEOF
             echo "[IMP:9][node-lifecycle][update] Resolved NODE_YAML=${NODE_YAML}" >&2
         fi
 
+        # ── S5: Pre-flight YAML syntax validation (update-mode) ──
+        if [[ -f "$NODE_YAML" ]]; then
+            if ! python3 -c "
+import yaml, sys
+try:
+    with open('$NODE_YAML') as f:
+        yaml.safe_load(f)
+except Exception as e:
+    print(f'FATAL: node.yaml is not valid YAML: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null; then
+                echo "[IMP:10][node-lifecycle][update] FATAL: node.yaml is not valid YAML — check syntax at ${NODE_YAML}" >&2
+                exit 1
+            fi
+        fi
+
         # T2: --dry-run mode (after resolution, before any mutations)
         if [[ "${DRY_RUN_MODE:-}" == "true" ]]; then
             echo "[IMP:9][node-lifecycle][dry-run] ===== DRY RUN: update mode ====="
@@ -1100,6 +1170,11 @@ PYEOF
         CHECKPOINT_STEP_HASH="$(_step_hash "provision" \
             "${CORE_DIR}/internal/provision-environment.sh")" \
             checkpoint_step "provision" update_step_2_provision
+
+        # ── Step 2.5: Deliver vhost overlays (S2 DevPlan 019) ──────────
+        CHECKPOINT_STEP_HASH="$(_step_hash "deliver-overlays" \
+            "${CORE_DIR}/internal/scaffold/add-vhost.sh")" \
+            checkpoint_step "deliver-overlays" update_step_2_5_deliver_overlays
 
         # ── Step 3: SSL certificate provisioning ──────────────────────
         CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision" \

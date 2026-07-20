@@ -928,6 +928,20 @@ main() {
         log_step "observability" "INFO" "observability not found — PLATFORM_OBSERVABILITY_ENABLED=false"
     fi
 
+    # ── S3 (DevPlan 019): Ensure PLATFORM_DOMAIN from node.yaml ──
+    # PLATFORM_DOMAIN must be in docker compose environment for nginx vhost templates.
+    # Extracted from node.yaml as SSoT — independent of checkpoint state in node-lifecycle.sh.
+    if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
+        local _domain
+        _domain=$(python3 -c "import yaml; print(yaml.safe_load(open('$NODE_YAML')).get('domain',''))" 2>/dev/null)
+        if [[ -n "$_domain" ]]; then
+            export PLATFORM_DOMAIN="$_domain"
+            echo "[IMP:9][deploy-modules][S3] PLATFORM_DOMAIN=${_domain} exported from node.yaml" >&2
+        else
+            echo "[IMP:8][deploy-modules][S3] WARN: domain not found in node.yaml — PLATFORM_DOMAIN may be empty" >&2
+        fi
+    fi
+
     local deployed=0 skipped=0 failed=0
     local -a system_modules=()
     local -a docker_modules=()

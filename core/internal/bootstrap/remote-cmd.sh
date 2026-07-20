@@ -390,3 +390,92 @@ execute_remote_converge() {
     exec ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" "${remote_cmd}"
 }
 # endregion FUNC_execute_remote_converge
+
+# ═══════════════════════════════════════════════════════════════════
+# DELIVER VHOST OVERLAYS (S2 DevPlan 019)
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_deliver_vhost_overlays
+## @purpose  S2 (DevPlan 019): rsync generated vhost overlays from local
+##           node-configs/<node>/overlays/nginx/*.conf to server before remote update.
+##           Called from entrypoints/node-update.sh (thin wrapper — just the call).
+## @param $1  Node name
+## @sideeffect rsync to remote server; no-op if no .conf files or no SSH host
+## @exit 0    Success or graceful skip (no overlays, no host)
+## @exit 1    Fatal error (rsync failed)
+## @invariants
+##   - Sources node-resolver.sh and scp-deliver.sh (idempotent, function-libs)
+##   - Uses prepare_ssh_opts "update" mode — preserves host keys (honest TOFU)
+##   - --delete on rsync: removes stale vhosts from server
+##   - Graceful skip if no overlays, no host, or dry-run mode
+deliver_vhost_overlays() {
+    local node_name="$1"
+
+    # ── Source dependencies (function-only libs, idempotent) ────────
+    local _dvo_dir
+    _dvo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=../../lib/node-resolver.sh
+    source "${_dvo_dir}/../../lib/node-resolver.sh"
+    # shellcheck source=./scp-deliver.sh
+    source "${_dvo_dir}/scp-deliver.sh"
+
+    # ── Resolve node.yaml ──────────────────────────────────────────
+    local node_yaml
+    node_yaml="$(resolve_node_yaml "${node_name}" "${PLATFORM_ROOT}" "${HOME}/projects")" || {
+        echo "[IMP:8][node-update][overlays] WARN: Cannot resolve node.yaml for ${node_name} — skipping overlay delivery" >&2
+        return 0
+    }
+    echo "[IMP:8][node-update][overlays] Resolved node.yaml: ${node_yaml}" >&2
+
+    # ── Extract SSH host ───────────────────────────────────────────
+    local ssh_host
+    ssh_host="$(extract_node_host "${node_yaml}")" || ssh_host=""
+    if [[ -z "${ssh_host}" ]]; then
+        echo "[IMP:8][node-update][overlays] No SSH host — skipping overlay delivery (local mode)" >&2
+        return 0
+    fi
+
+    # ── Check local overlay dir ────────────────────────────────────
+    local local_overlay="${PLATFORM_ROOT}/node-configs/${node_name}/overlays/nginx"
+    if [[ ! -d "${local_overlay}" ]]; then
+        echo "[IMP:8][node-update][overlays] No local overlay dir: ${local_overlay} — skipping" >&2
+        return 0
+    fi
+    local conf_count
+    conf_count=$(find "${local_overlay}" -maxdepth 1 -name '*.conf' -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "${conf_count}" -eq 0 ]]; then
+        echo "[IMP:8][node-update][overlays] No .conf files in ${local_overlay} — skipping" >&2
+        return 0
+    fi
+
+    echo "[IMP:9][node-update][overlays] Delivering ${conf_count} vhost overlay(s) to ${ssh_host}:/opt/node-configs/${node_name}/overlays/nginx/" >&2
+
+    # ── DRY_RUN mode ───────────────────────────────────────────────
+    if ${DRY_RUN:-false}; then
+        echo "[IMP:8][node-update][dry-run] DRY-RUN: rsync ${local_overlay}/ → root@${ssh_host}:/opt/node-configs/${node_name}/overlays/nginx/" >&2
+        return 0
+    fi
+
+    # ── Prepare SSH opts ───────────────────────────────────────────
+    prepare_ssh_opts "${ssh_host}" "update"
+
+    # ── Create remote dir ──────────────────────────────────────────
+    # shellcheck disable=SC2086  # SSH_OPTS intentionally word-split
+    ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" \
+        "mkdir -p /opt/node-configs/${node_name}/overlays/nginx" || {
+        echo "[IMP:10][node-update][overlays] FATAL: Cannot create remote overlay dir on ${ssh_host}" >&2
+        return 1
+    }
+
+    # ── rsync overlays ─────────────────────────────────────────────
+    # shellcheck disable=SC2086  # SSH_OPTS intentionally word-split
+    rsync -avz --delete \
+        -e "ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30}" \
+        "${local_overlay}/" \
+        "root@${ssh_host}:/opt/node-configs/${node_name}/overlays/nginx/" || {
+        echo "[IMP:10][node-update][overlays] FATAL: rsync overlay delivery failed" >&2
+        return 1
+    }
+
+    echo "[IMP:9][node-update][overlays] Overlay delivery complete" >&2
+}
+# endregion FUNC_deliver_vhost_overlays
