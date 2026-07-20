@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-19 | regenerated (971 tests)
+## @changes — 2026-07-20 | regenerated (977 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -159,6 +159,10 @@ test_nodeids:
 - tests/gates/test_gate_pytest_markers.py::test_pyproject_toml_has_all_markers
 - tests/gates/test_gate_pytest_markers.py::test_pytest_ini_has_no_markers
 - tests/gates/test_gate_pytest_markers.py::test_strict_markers_in_pyproject_toml
+- tests/gates/test_gate_secrets_manifest.py::test_manifest_vs_env_example
+- tests/gates/test_gate_secrets_manifest.py::test_manifest_vs_module_yaml
+- tests/gates/test_gate_secrets_manifest.py::test_manifest_vs_workflows
+- tests/gates/test_gate_secrets_manifest.py::test_no_hardcoded_secrets_in_core
 - tests/gates/test_gate_security_config.py::test_clickhouse_access_management_not_1
 - tests/gates/test_gate_security_config.py::test_clickhouse_no_literal_passwords
 - tests/gates/test_gate_security_config.py::test_clickhouse_no_open_networks
@@ -870,6 +874,8 @@ test_nodeids:
 - tests/test_smoke_test_isolation.py::test_all_docker_modules_have_test_overlay
 - tests/test_smoke_test_isolation.py::test_all_test_containers_have_test_suffix
 - tests/test_smoke_test_isolation.py::test_no_container_name_collision
+- tests/test_smoke_test_isolation.py::test_no_prod_network_in_test_overlay
+- tests/test_smoke_test_isolation.py::test_test_network_consistency
 - tests/test_template_engine.py::test_atomic_write_output
 - tests/test_template_engine.py::test_binary_template
 - tests/test_template_engine.py::test_check_all_empty_manifest
