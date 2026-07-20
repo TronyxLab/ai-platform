@@ -93,12 +93,11 @@ jobs:
           script: /opt/platform/core/entrypoints/deploy.sh ${{ inputs.project_name }} ${{ github.sha }} production
 
       - name: Post-deploy verify
+        # ⚠️ TRAP[BUG] · 2026-07-20 · ci-deploy forced-command blocks arbitrary scripts.
+        # Use 'verify <node>' verb (verb contract, dispatched by deploy.sh entrypoint).
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.ssh_host }}
           username: ci-deploy
           key: ${{ secrets.CI_DEPLOY_KEY }}
-          script: |
-            echo "[IMP:9][verify] Starting post-deploy verification for ${{ inputs.project_name }} on ${TARGET_NODE}"
-            make verify NODE=${{ env.target_node }}
-            echo "[IMP:10][verify] Verification PASSED — all endpoints healthy for ${{ inputs.project_name }}"
+          script: verify ${{ env.target_node }}

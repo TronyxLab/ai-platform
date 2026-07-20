@@ -90,6 +90,14 @@ parse_verb() {
             log_imp 9 "entrypoint" "Verb: status project=${project_name}"
             exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --status "$project_name"
             ;;
+        verify)
+            # ⚠️ verb contract: "verify <node>" — runs verify.sh for post-deploy health validation
+            # Added 2026-07-20 to support CI reusable workflow verification through forced-command
+            local node="${cleaned#verify }"
+            node="$(echo "$node" | xargs)"
+            log_imp 9 "entrypoint" "Verb: verify node=${node}"
+            exec "${PATHS_EP_DIR}/verify.sh" "$node"
+            ;;
         *)
             # Deploy format (backward compat): <project> <sha> [environment]
             log_imp 9 "entrypoint" "Verb: deploy (backward compat): ${cleaned}"
