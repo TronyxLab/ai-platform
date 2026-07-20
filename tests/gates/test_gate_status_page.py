@@ -1,9 +1,9 @@
-# GREP_SUMMARY: test-gate-status-page module-contract htpasswd-consistency nginx-stealth secrets-registered ci-negative dockerignore-symlink
+# GREP_SUMMARY: test-gate-status-page module-contract htpasswd-consistency platform-vhost secrets-registered ci-negative dockerignore-symlink
 # STRUCTURE: ▶ test_gate_status_page_module_contract → assert module.yaml D4
 #            ▶ test_gate_status_page_htpasswd_consistency → assert no .htpasswd-monitoring in nginx configs
-#            ▶ test_gate_status_page_nginx_stealth → assert return 444 + @stealth_drop + access_log off
+#            ▶ test_gate_status_page_nginx_vhost → assert platform-vhost auth + proxy to status-page:8080 + default catch-all return 444
 #            ▶ test_gate_status_page_secrets_registered → assert PLATFORM_MASTER_* in secrets-manifest.yaml
-#            ▶ test_gate_status_page_ci_negative → assert no Basic Auth → 444 (stealth)
+#            ▶ test_gate_status_page_ci_negative → assert platform-vhost requires auth + no status-page in default vhost
 #            ▶ test_gate_status_page_dockerignore_symlink → assert .dockerignore symlink to templates/.dockerignore
 # @file test_gate_status_page.py
 # @purpose  CI gate tests for 016-node-status-page feature — validates module contract,
@@ -14,8 +14,8 @@
 #   - R5 (anti-survivorship): negative test for CI /health without auth
 #   - No hardcoded secrets in test code
 #   - Uses Path (not os.path) for portability
-# @rationale  Gate tests prevent regressions: htpasswd drift, nginx stealth degradation,
-#             module contract violations. Negative test ensures stealth 444 works correctly.
+# @rationale  Gate tests prevent regressions: htpasswd drift, nginx platform-vhost auth contract,
+#             module contract violations. Negative test ensures auth is enforced on platform subdomain.
 # region MODULE_CONTRACT
 ## @purpose  Gate tests for 016 status-page — contract enforcement
 ## @scope    Static analysis gate tests — no Docker, no live services
@@ -125,28 +125,42 @@ class TestGateStatusPageHtpasswdConsistency:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TEST: nginx stealth config
+# TEST: nginx platform-vhost config
 # ═══════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.gate
-class TestGateStatusPageNginxStealth:
-    """Gate: nginx config contains stealth 444 and auth directives."""
+class TestGateStatusPageNginxVhost:
+    """Gate: platform-vhost.conf.template contains auth and proxy directives."""
 
-    def test_nginx_stealth_return_444(self):
-        """platform-default.conf.template contains return 444 and @stealth_drop."""
-        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-default.conf.template")
+    def test_platform_vhost_exists_and_has_auth(self):
+        """platform-vhost.conf.template proxies to status-page with Basic Auth."""
+        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-vhost.conf.template")
 
-        assert "return 444" in content, "Missing 'return 444' — stealth connection close"
-        assert "@stealth_drop" in content, "Missing '@stealth_drop' named location"
-        assert "access_log off" in content, "Missing 'access_log off' for stealth location"
-
-    def test_nginx_login_location(self):
-        """platform-default.conf.template has /login/ location with auth_basic."""
-        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-default.conf.template")
-
-        assert "location = /login/" in content, "Missing /login/ location"
+        assert content, "platform-vhost.conf.template is empty or missing"
+        assert "server_name platform.${PLATFORM_DOMAIN}" in content, (
+            "Missing server_name platform.${PLATFORM_DOMAIN}"
+        )
         assert "auth_basic" in content, "Missing auth_basic directive"
+        assert ".htpasswd-platform" in content, "Must use .htpasswd-platform"
+        assert "status-page:8080" in content, "Must proxy_pass to status-page:8080"
+
+    def test_platform_vhost_health_location(self):
+        """platform-vhost.conf.template has /health location with auth and proxy."""
+        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-vhost.conf.template")
+
+        assert "location /health" in content, "Missing /health location"
+        assert "proxy_pass" in content, "Missing proxy_pass in /health location"
+
+    def test_platform_default_catch_all_return_444(self):
+        """platform-default.conf.template default catch-all returns 444 (not status-page)."""
+        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-default.conf.template")
+
+        assert "return 444" in content, "Missing 'return 444' in default catch-all"
+        # Verify no status-page proxy in default catch-all (it's now in platform-vhost)
+        assert "status-page:8080" not in content, (
+            "status-page proxy must NOT be in platform-default.conf.template — moved to platform-vhost"
+        )
 
     def test_nginx_htpasswd_mount(self):
         """nginx docker-compose.base.yml mounts .htpasswd-platform."""
@@ -211,30 +225,42 @@ class TestGateStatusPageSecretsRegistered:
 
 @pytest.mark.gate
 class TestGateStatusPageCiNegative:
-    """Gate: R5 — negative test for /health without auth (should get 444, not 200)."""
+    """Gate: R5 — negative test for platform-vhost requires auth (401 without creds)."""
 
-    def test_nginx_config_blocks_unauthorized(self):
-        """nginx config blocks requests without Authorization header (return 444)."""
-        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-default.conf.template")
+    def test_platform_vhost_requires_auth(self):
+        """platform-vhost.conf.template requires Basic Auth for all paths."""
+        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-vhost.conf.template")
 
-        # Verify the stealth logic: empty Authorization → 444
-        assert '$http_authorization = ""' in content or '$http_authorization =""' in content, (
-            "Missing check for empty Authorization header"
+        # All locations have auth_basic
+        assert "auth_basic" in content, "platform-vhost must have auth_basic"
+        assert ".htpasswd-platform" in content, "Must use .htpasswd-platform"
+        # No free access — every location has auth
+        auth_count = content.count("auth_basic")
+        loc_count = content.count("location ")
+        assert auth_count >= loc_count, (
+            f"auth_basic count ({auth_count}) must be >= location count ({loc_count}) "
+            f"— every location must be protected"
         )
-        # Verify that successful auth leads to proxy_pass, NOT free access
-        assert "proxy_pass http://$upstream_status_page" in content, "Missing proxy_pass for authenticated requests"
 
-    def test_negative_no_auth_returns_444(self):
-        """Configuration enforces: no auth → 444 (connection close, no response)."""
+    def test_platform_vhost_proxies_to_status_page(self):
+        """platform-vhost.conf.template proxies to status-page:8080 on auth success."""
+        content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-vhost.conf.template")
+
+        assert "proxy_pass http://$upstream_platform" in content, (
+            "Missing proxy_pass for authenticated requests in platform-vhost"
+        )
+        assert "status-page:8080" in content, "Must proxy to status-page:8080"
+
+    def test_default_catch_all_no_status_page(self):
+        """platform-default.conf.template default_server must NOT serve status-page."""
         content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-default.conf.template")
 
-        # Extract the location / block to verify the logic chain
-        # No Authorization → 444 (stealth drop, no response)
-        # Wrong Authorization → 444 (via @stealth_drop)
-        # Correct Authorization → proxy_pass to status-page
-        assert "return 444" in content
-        assert "@stealth_drop" in content
-        assert "error_page 401 = @stealth_drop" in content
+        # Status-page is on platform.tronyx.ru subdomain now, not at apex
+        assert "status-page:8080" not in content, (
+            "status-page proxy must NOT be in platform-default — it's in platform-vhost.conf.template"
+        )
+        # Default catch-all returns 444
+        assert "return 444" in content, "Default catch-all must return 444"
 
 
 # ═══════════════════════════════════════════════════════════════════

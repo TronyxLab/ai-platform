@@ -25,13 +25,15 @@ x-logging: &default-logging
 
 services:
   status-page:
-    image: python:3.12-alpine@sha256:fa94c7740b6f0b8899af0c4f3c791ec50e9f1da49034e5fa40426f1efbf70134
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: status-page:latest
     container_name: status-page
     profiles: [status-page]
     restart: unless-stopped
 
     volumes:
-      # App code — mounted for dev; production builds use Dockerfile COPY
       - ./app.py:/app/app.py:ro
       # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
       - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-test-node}/node.yaml:/opt/node-configs/${NODE_NAME:-test-node}/node.yaml:ro

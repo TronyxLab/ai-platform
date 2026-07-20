@@ -12,7 +12,7 @@
 ##            external dep needed for node.yaml parsing. No pip install of frameworks.
 # endregion MODULE_CONTRACT
 
-FROM python:3.12-alpine@sha256:fa94c7740b6f0b8899af0c4f3c791ec50e9f1da49034e5fa40426f1efbf70134
+FROM python:3.12-alpine
 
 RUN pip install --no-cache-dir pyyaml==6.0.2
 

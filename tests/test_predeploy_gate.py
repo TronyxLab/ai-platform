@@ -71,6 +71,7 @@ SKIP_DOC_VARS: frozenset = frozenset({"VAR"})
 KNOWN_LATEST_EXCEPTIONS: frozenset = frozenset(
     {
         "backup-cron:latest",  # Local build — no published version
+        "status-page:latest",  # Local build — no published version
     }
 )
 

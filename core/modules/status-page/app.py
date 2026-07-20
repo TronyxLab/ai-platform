@@ -22,6 +22,7 @@
 import http.server
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -172,10 +173,19 @@ def _curl_vhost(domain: str, timeout: int = PER_CHECK_TIMEOUT) -> dict:
 
 # region FUNC_check_container
 def _check_container(container: dict) -> dict:
-    """Check a single container from docker-health.json data. Returns check result."""
+    """Check a single container from docker-health.json data. Returns check result.
+
+    Status logic:
+    - Running & healthy → PASS
+    - Running & not healthy → WARN
+    - Not running, exit_code=0 OR status_line contains "Exited (0)" → PASS (oneshot/init completed)
+    - Not running, exit_code>0 OR status_line contains "Exited (non-zero)" → FAIL
+    - Other non-running → FAIL
+    """
     name = container.get("container_name", "unknown")
     running = container.get("running", False)
     healthy = container.get("healthy", False)
+    exit_code = container.get("exit_code")
     status_line = container.get("status_line", "")
 
     # Anti-recursion: skip self
@@ -186,6 +196,14 @@ def _check_container(container: dict) -> dict:
         check_status = "PASS"
     elif running and not healthy:
         check_status = "WARN"
+    elif not running:
+        # Determine exit code: prefer explicit field, fall back to parsing status_line
+        if exit_code is None:
+            # Parse "Exited (N)" from status_line
+            m = re.search(r"Exited\s*\((\d+)\)", status_line)
+            exit_code = int(m.group(1)) if m else None
+        # Oneshot/init container that completed successfully → PASS, otherwise FAIL
+        check_status = "PASS" if (exit_code is not None and exit_code == 0) else "FAIL"
     else:
         check_status = "FAIL"
 
@@ -195,6 +213,7 @@ def _check_container(container: dict) -> dict:
         "status": check_status,
         "running": running,
         "healthy": healthy,
+        "exit_code": exit_code,
         "status_line": status_line,
         "error": None if check_status == "PASS" else f"status: {status_line}",
     }

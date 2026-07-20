@@ -52,13 +52,14 @@ services:
 
     volumes:
       - ${NGINX_CONF_DIR:-./config}/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${NGINX_CONF_DIR:-./config}/platform-default.conf:/etc/nginx/templates/platform-default.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/platform-default.conf.template:/etc/nginx/templates/platform-default.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/platform-http.conf:/etc/nginx/templates/platform-http.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/grafana-vhost.conf:/etc/nginx/templates/grafana-vhost.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/hermes-dashboard.conf:/etc/nginx/templates/hermes-dashboard.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/langfuse-vhost.conf:/etc/nginx/templates/langfuse-vhost.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/loki-vhost.conf:/etc/nginx/templates/loki-vhost.conf.template:ro
       - ${NGINX_CONF_DIR:-./config}/prometheus-vhost.conf:/etc/nginx/templates/prometheus-vhost.conf.template:ro
+      - ${NGINX_CONF_DIR:-./config}/platform-vhost.conf.template:/etc/nginx/templates/platform-vhost.conf.template:ro
       # Shared snippets — included by vhosts via include directive
       - ${NGINX_CONF_DIR:-./config}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro
       - ${NGINX_CONF_DIR:-./config}/ssl-params.conf.template:/etc/nginx/templates/ssl-params.conf.template:ro
