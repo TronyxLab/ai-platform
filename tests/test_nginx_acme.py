@@ -663,11 +663,13 @@ def test_project_certs_skips_subdomain(caplog, tmp_path) -> None:
 @pytest.mark.contract
 @ldd_trajectory
 def test_project_certs_issues_independent(caplog, tmp_path) -> None:
-    """Verify _issue_project_certs() issues single-domain cert for independent domain.
+    """Verify _issue_project_certs() issues wildcard cert for independent domain.
 
     ## @scenario  PLATFORM_PROJECT_DOMAINS="myapp.com",
-    ##            PLATFORM_DOMAIN="test.local" → calls issue_tls_cert with wildcard=false
-    ## @regression  Independent domains should get single-domain certs (no wildcard)
+    ##            PLATFORM_DOMAIN="test.local" → calls issue_tls_cert with wildcard=true
+    ## @regression  Independent domains should get wildcard certs (*.domain)
+    ##              to support arbitrary subdomains (www, api, etc.).
+    ##              Subdomains of platform domain are skipped (covered by platform wildcard).
     """
     acme_home = _create_mock_acme(tmp_path)
     env = {
@@ -680,19 +682,17 @@ def test_project_certs_issues_independent(caplog, tmp_path) -> None:
         env=env,
     )
 
-    logger.critical("[IMP:9][test_project_certs_issues_independent] ASSERT: independent domain issued, no *.domain")
+    logger.critical("[IMP:9][test_project_certs_issues_independent] ASSERT: independent domain issued with wildcard")
     print("--- STDERR ---")
     print(result.stderr)
     print("--- END STDERR ---")
 
     assert result.returncode == 0, f"Function failed: {result.stderr}"
-    # Mock acme.sh should have been called with -d "myapp.com" but NOT *.myapp.com
+    # Mock acme.sh should have been called with -d "myapp.com" AND -d "*.myapp.com"
     assert "-d" in result.stderr
-    assert "*.myapp.com" not in result.stderr, f"Independent domain should NOT get wildcard cert:\n{result.stderr}"
+    assert "*.myapp.com" in result.stderr, f"Independent domain SHOULD get wildcard cert:\n{result.stderr}"
 
-    logger.critical(
-        "[IMP:9][test_project_certs_issues_independent] PASS: independent domain cert issued without wildcard"
-    )
+    logger.critical("[IMP:9][test_project_certs_issues_independent] PASS: independent domain cert issued with wildcard")
 
 
 @pytest.mark.contract

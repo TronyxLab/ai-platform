@@ -286,10 +286,12 @@ _is_subdomain() {
 ## @env      PLATFORM_PROJECT_DOMAINS  Space-separated list of project domains
 ## @invariants
 ##   - Skips domains that are subdomains of platform_domain (covered by wildcard)
-##   - Issues single-domain certs (wildcard=false) for independent domains
+##   - Issues wildcard certs (*.domain) for independent domains (not subdomains of platform)
 ##   - Idempotent: issue_tls_cert() skips if cert already exists
 ##   - Non-fatal: failure for one domain does not stop processing others
-## @rationale  Project domains use single-domain LE certs to avoid LE rate limit issues
+## @rationale  Independent project domains (not subdomains of platform domain) need
+##   their own wildcard certs to support arbitrary subdomains (www, api, etc.).
+##   Subdomains of platform domain are covered by the platform wildcard cert.
 _issue_project_certs() {
     local platform_domain="${1:-}"
     local email="${2:-}"
@@ -318,8 +320,8 @@ _issue_project_certs() {
             continue
         fi
 
-        log_step "project-certs" "INFO" "Issuing single-domain cert for: ${domain}"
-        if issue_tls_cert "$domain" "$email" "$dns_plugin" "false"; then
+        log_step "project-certs" "INFO" "Issuing wildcard cert for: ${domain}"
+        if issue_tls_cert "$domain" "$email" "$dns_plugin" "true"; then
             issued=$((issued + 1))
         else
             log_step "project-certs" "WARN" "Failed to issue cert for ${domain} — continuing"
