@@ -237,8 +237,8 @@ fi
 ## SUPERPOSITION: S4 — Graceful degradation nginx без project upstream
 
 ### Option A: Глобальный resolver + fallback переменная [score: 9/10]
-**Approach**: 
-1. В `nginx.conf` (http-блок) уже есть `resolver 127.0.0.11 valid=30s ipv6=off;` (строка 110) — **уже сделано**. 
+**Approach**:
+1. В `nginx.conf` (http-блок) уже есть `resolver 127.0.0.11 valid=30s ipv6=off;` (строка 110) — **уже сделано**.
 2. В шаблоне vhost (`add-vhost.sh generate_vhost_body`) добавить fallback: если переменная не определена (Docker DNS не доступен на старте), использовать пустой upstream с 502:
 ```nginx
 # Current (строка 418):
