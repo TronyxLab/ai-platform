@@ -20,10 +20,20 @@
 services:
   hermes-agent:
     container_name: hermes-agent-test
-    networks: !override  # DevPlan 017 W3.3 — test network isolation (proxy for nginx, hermes for litellm, observability for scraping)
+    networks: !override  # DevPlan 017 W3.3 + fixed — test network isolation (proxy for nginx, hermes for litellm, observability for scraping, shared-db for postgres, shared-cache for redis)
+      # ⚠️ TRAP[BUG] · 2026-07-20 · P1 · Hermes-agent cannot reach pgbouncer/redis in CI after !override networks
+      # · Symptom: ConnectionResetError on http://localhost:19119/ in CI; tests pass locally on macOS
+      # · Root: base.yml has no shared-db-net/shared-cache-net, but hermes-agent depends on DNS
+      # ·   resolution of pgbouncer:6432 (on test-shared-db-net) and redis:6379 (on test-shared-cache-net).
+      # ·   Without these test networks, Docker DNS cannot resolve them → agent crashes → ConnectionResetError.
+      # · Fix: add test-shared-db-net (for pgbouncer) and test-shared-cache-net (for redis)
+      # · Prevention: test_test_network_consistency gate should detect missing test-* networks
+      # ·   against ALL service dependencies, not just base.yml networks.
       - test-proxy-net
       - test-hermes-agent-net
       - test-observability-net
+      - test-shared-db-net       # ⚡ pgbouncer:6432 (PostgreSQL session storage)
+      - test-shared-cache-net     # ⚡ redis:6379 (Redis cache — agent state, conversation history)
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый hermes-agent биндит 9119/8642 (F-7) · Fix: !override
       - "127.0.0.1:19119:9119"
       - "127.0.0.1:18642:8642"
@@ -51,4 +61,8 @@ networks:
   test-hermes-agent-net:
     external: true
   test-observability-net:
+    external: true
+  test-shared-db-net:
+    external: true
+  test-shared-cache-net:
     external: true
