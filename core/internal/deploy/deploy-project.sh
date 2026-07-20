@@ -163,6 +163,11 @@ _write_deploy_result() {
     local status="${DEPLOY_STATUS:-unknown}"
     local result_file="${PROJECT_DIR}/.deploy-snapshots/deploy-result.json"
 
+    # ⚠️ TRAP[BUG] · 2026-07-20 · platform-deliver exit code 1 despite success
+    # Root cause: first-time deliver (no .deploy-snapshots/) → cat fails → ERR trap fires → exit 1
+    # Fix: mkdir -p before writing (idempotent, no-op if dir exists)
+    mkdir -p "$(dirname "$result_file")"
+
     cat > "$result_file" << EOF
 {
   "status": "${status}",
