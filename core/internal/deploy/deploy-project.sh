@@ -401,6 +401,22 @@ parse_ssh_command() {
     fi
 
     # ═══════════════════════════════════════════════════════════════
+    # Strip script path prefix (appleboy/ssh-action sends full path,
+    # raw ssh sends just the verb). Both flow through the same forced
+    # command → deploy.sh entrypoint → exec deploy-project.sh here,
+    # but SSH_ORIGINAL_COMMAND is preserved across exec.
+    # ═══════════════════════════════════════════════════════════════
+    # ⚠️ TRAP[BUG] · 2026-07-20 · raw="deploy.sh dance-site <sha>" → PROJECT=deploy.sh
+    # Root cause: path prefix "/opt/platform/core/entrypoints/deploy.sh" not stripped
+    # in parse_ssh_command. entrypoint deploy.sh does strip it, but SSH_ORIGINAL_COMMAND
+    # is an env var — survives exec unchanged. Fix: strip prefix before parsing.
+    local stripped="${raw#/opt/platform/core/entrypoints/deploy.sh }"
+    if [[ "$stripped" != "$raw" ]]; then
+        raw="$stripped"
+        log_imp 8 "args" "Stripped entrypoint path prefix from SSH_ORIGINAL_COMMAND"
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
     # Verb: platform-deliver (D2 — payload delivery via stdin tar.gz)
     # Dispatch BEFORE deploy branch to avoid any side effects.
     # ═══════════════════════════════════════════════════════════════
