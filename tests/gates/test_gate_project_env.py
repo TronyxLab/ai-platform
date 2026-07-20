@@ -39,6 +39,15 @@ _logger = logging.getLogger(__name__)
 
 # Regex to match PLATFORM_<SERVICE>_* variable names
 _PLATFORM_VAR_RE = re.compile(r"^PLATFORM_([A-Z][A-Z0-9_]+)_")
+# Extracted service names that are NOT actual services (networks, internal metadata, etc.)
+# These arise from variables like PLATFORM_NO_PROXY (→ 'no'), PLATFORM_*_NET (→ network names)
+_NON_SERVICE_NAMES: set[str] = {
+    "no",  # PLATFORM_NO_PROXY — exclusions list, not a service
+    "proxy",  # PLATFORM_PROXY_NET — Docker network, not a service
+    "hermes_agent",  # PLATFORM_HERMES_AGENT_NET — Docker network, not a service
+    "shared_cache",  # PLATFORM_SHARED_CACHE_NET — Docker network, not a service
+    "shared_db",  # PLATFORM_SHARED_DB_NET — Docker network, not a service
+}
 
 
 # region FUNC_load_provides_profiles
@@ -54,7 +63,7 @@ def _load_provides_profiles() -> tuple[set[str], set[str]]:
         _logger.warning("[IMP:7][gate][env] platform-env.yaml not found at %s", _PLATFORM_ENV_YAML)
         return set(), set()
 
-    with open(_PLATFORM_ENV_YAML, "r") as f:
+    with open(_PLATFORM_ENV_YAML) as f:
         data = yaml.safe_load(f)
 
     if data is None:
@@ -136,7 +145,7 @@ def test_project_env_platform(caplog) -> None:
             continue
 
         try:
-            with open(env_platform_path, "r") as f:
+            with open(env_platform_path) as f:
                 env_content = f.read()
         except Exception as exc:
             issues.append(f"{rel_project}/.env.platform: cannot read: {exc}")
@@ -152,6 +161,11 @@ def test_project_env_platform(caplog) -> None:
             match = _PLATFORM_VAR_RE.match(line)
             if match:
                 service_name = match.group(1).lower()
+                if service_name in _NON_SERVICE_NAMES:
+                    _logger.debug(
+                        "[IMP:8][gate][env] Skipping non-service ref: %s → %s", line.split("=", 1)[0], service_name
+                    )
+                    continue
                 referenced_services.add(service_name)
 
         _logger.info(
@@ -173,9 +187,7 @@ def test_project_env_platform(caplog) -> None:
                     f"{rel_project}/.env.platform: references '{svc}' from provides, "
                     f"but '{svc}' is not in platform-env.yaml profiles ({sorted(profile_names)})"
                 )
-                _logger.error(
-                    "[IMP:9][gate][env] UNPROFILED SERVICE: %s → %s not in profiles", rel_project, svc
-                )
+                _logger.error("[IMP:9][gate][env] UNPROFILED SERVICE: %s → %s not in profiles", rel_project, svc)
 
     # endregion
 

@@ -86,7 +86,7 @@ def test_project_context_consistency(caplog) -> None:
 
         # Read YAML and check for legacy context field
         try:
-            with open(yaml_path, "r") as f:
+            with open(yaml_path) as f:
                 data = yaml.safe_load(f)
         except Exception as exc:
             issues.append(f"{yaml_path}: cannot parse YAML: {exc}")
@@ -99,9 +99,7 @@ def test_project_context_consistency(caplog) -> None:
             continue
 
         if "context" in data:
-            issues.append(
-                f"{yaml_path}: contains legacy 'context: {data['context']}' field — D2 requires removal"
-            )
+            issues.append(f"{yaml_path}: contains legacy 'context: {data['context']}' field — D2 requires removal")
             _logger.error("[IMP:9][gate][context] LEGACY FIELD: %s → context=%s", yaml_path, data["context"])
 
     # endregion

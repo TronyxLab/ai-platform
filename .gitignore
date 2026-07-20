@@ -28,6 +28,9 @@ core/modules/nginx/dev-certs/
 # ─── node-configs (орг-репозиторий, не в платформе) ────────────────
 node-configs/
 
+# ─── projects (локальный symlink, не в платформе) ─────────────────
+/projects
+
 # ─── Secrets ───────────────────────────────────────────────────────
 .env
 *.secret
