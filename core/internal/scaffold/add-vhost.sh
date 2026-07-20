@@ -94,7 +94,7 @@ compute_body_hash() {
     if [[ -f "$content_hash_sh" ]]; then
         # shellcheck source=../bootstrap/content-hash.sh
         source "$content_hash_sh"
-        compute_content_hash "$vhost_file"
+        compute_step_hash "$(basename "$vhost_file")" "$vhost_file"
     else
         command -v sha256sum &>/dev/null && sha256sum "$vhost_file" | cut -d' ' -f1 || \
         command -v shasum &>/dev/null && shasum -a 256 "$vhost_file" | cut -d' ' -f1 || {
@@ -603,8 +603,10 @@ nginx_t_harness() {
 
     log_imp 7 "harness" "Starting nginx -t validation harness (nginx:${nginx_version})"
 
-    # Create a minimal nginx.conf for validation
-    cat > "${harness_dir}/nginx.conf" <<'HARNESS_CONF'
+    # Create a minimal nginx.conf for validation (in subdir to avoid glob collision with overlay mount)
+    local harness_nginx_dir="${harness_dir}/nginx-main"
+    mkdir -p "$harness_nginx_dir"
+    cat > "${harness_nginx_dir}/nginx.conf" <<'HARNESS_CONF'
 events {
     worker_connections 64;
 }
@@ -679,7 +681,7 @@ HARNESS_SEC
     local result
     if command -v docker &>/dev/null; then
         if docker run --rm \
-            -v "${harness_dir}/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "${harness_nginx_dir}/nginx.conf:/etc/nginx/nginx.conf:ro" \
             -v "${harness_dir}/dev-certs:/etc/nginx/dev-certs:ro" \
             -v "${harness_dir}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro" \
             -v "${harness_dir}:/etc/nginx/conf.d/overlay:ro" \

@@ -650,7 +650,7 @@ converge:
 ##   Delegates to core/internal/scaffold/add-vhost.sh --render-all --node
 render-vhosts:
 	@echo "[IMP:7][make][render-vhosts] Generating vhost configs from node.yaml..."
-	@bash core/internal/scaffold/add-vhost.sh --render-all --node $(NODE)
+	@bash core/internal/scaffold/add-vhost.sh --render-all --node $(NODE) --node-configs-dir $(NODE_CONFIGS_DIR)
 	@echo "[IMP:9][make][render-vhosts] Vhost generation complete"
 
 # ## project-sync-secrets: Sync project repo-secrets from SOPS enc-file via gh CLI (DISABLED — requires T3.6)
