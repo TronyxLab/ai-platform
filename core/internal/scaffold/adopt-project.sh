@@ -114,12 +114,6 @@ parse_args() {
             PROJECT_NODE="$(grep -E '^\s*target_node:\s*' "$yaml_file" 2>/dev/null | head -1 | awk '{print $2}' || true)"
             [[ -n "$PROJECT_NODE" ]] && log_imp 6 "-" "Node from ai-platform.yaml: ${PROJECT_NODE}"
         fi
-        if [[ -z "$PROJECT_ORG" ]]; then
-            # Try to extract org from context field
-            local ctx
-            ctx="$(grep -E '^\s*context:\s*' "$yaml_file" 2>/dev/null | head -1 | awk '{print $2}' || true)"
-            [[ -n "$ctx" ]] && PROJECT_ORG="$ctx"
-        fi
         if [[ -z "$PROJECT_DOMAIN" ]]; then
             local dm
             dm="$(grep -E '^\s*domain:\s*' "$yaml_file" 2>/dev/null | head -1 | awk '{sub(/^[[:space:]]*domain:[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print $1}' || true)"
@@ -127,6 +121,19 @@ parse_args() {
                 PROJECT_DOMAIN="$dm"
                 log_imp 6 "-" "Domain from ai-platform.yaml: ${PROJECT_DOMAIN}"
             fi
+        fi
+    fi
+
+    # Derive org from directory path if not set by --org or PLATFORM_ORG
+    # projects/<org>/<project>/ → org = basename(dirname(project_dir_abs))
+    if [[ -z "${PROJECT_ORG:-}" ]]; then
+        local _project_dir_abs
+        _project_dir_abs="$(cd "$PROJECT_DIR" && pwd -P 2>/dev/null || echo "$PROJECT_DIR")"
+        local _derived_org
+        _derived_org="$(basename "$(dirname "$_project_dir_abs")")"
+        if [[ -n "$_derived_org" ]]; then
+            PROJECT_ORG="$_derived_org"
+            log_imp 7 "-" "Derived org from path: ${PROJECT_ORG}"
         fi
     fi
 
@@ -208,7 +215,6 @@ generate_minimal_ai_platform_yaml() {
 name: ${PROJECT_NAME}
 type: ${type_guess}
 target_node: ${PROJECT_NODE}
-context: ${PROJECT_ORG}
 
 needs:
   domain: ${PROJECT_DOMAIN:-false}

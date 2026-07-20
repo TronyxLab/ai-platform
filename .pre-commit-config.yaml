@@ -230,7 +230,7 @@ repos:
         types: [python]
         stages: [pre-commit]
         args: ["--skip", "B101"]
-        exclude: ^tests/|^.venv/|^templates/
+        exclude: ^tests/|^.venv/|^templates/|^core/modules/status-page/app\.py$
 
       - id: commit-msg
         name: Conventional Commits

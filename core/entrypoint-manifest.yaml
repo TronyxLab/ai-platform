@@ -432,6 +432,18 @@ gates:
     description: Status-page 016 gate — module contract, htpasswd consistency, nginx stealth, secrets registration, CI negative auth test, .dockerignore symlink
     test_file: test_gate_status_page.py
     markers: gate
+  - id: vhost-nginx-t
+    description: D1 vhost gate — validates generated nginx vhosts pass `nginx -t` in Docker (hyphen normalization, subdomain wildcard, independent domain cert paths)
+    test_file: test_gate_vhost_nginx_t.py
+    markers: gate
+  - id: project-context
+    description: D2 gate — validates context is derived from path (projects/<org>/<project>/), no legacy context field in ai-platform.yaml
+    test_file: test_gate_project_context.py
+    markers: gate
+  - id: project-env-platform
+    description: D3 gate — validates .env.platform presence and provides ⊆ profiles consistency for all registered projects
+    test_file: test_gate_project_env.py
+    markers: gate
 
 # ---------------------------------------------------------------------------
 # Forbidden directories — directories that MUST NOT contain executable scripts

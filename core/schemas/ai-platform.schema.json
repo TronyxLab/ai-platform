@@ -5,7 +5,7 @@
   "title": "AI-Platform Declaration",
   "description": "Schema for ai-platform.yaml — единый манифест проекта AI Platform (деплой + мониторинг). ЕДИНСТВЕННЫЙ формат манифеста — AD-2.",
   "type": "object",
-  "required": ["name", "type", "context", "target_node"],
+  "required": ["name", "type", "target_node"],
   "additionalProperties": false,
   "properties": {
     "name": {
@@ -18,12 +18,6 @@
       "type": "string",
       "enum": ["frontend", "backend", "fullstack"],
       "description": "Project category (frontend|backend|fullstack) — agent is a platform component, not a project type (AD-1)"
-    },
-    "context": {
-      "type": "string",
-      "enum": ["personal", "corporate", "project-specific"],
-      "description": "Ownership context — must match node context (00 §1.5)",
-      "$comment": "🧐 TRAP[DECISION] · 2026-07-07 · — · context enum preserved · Rejected: free string (loses validation) · Rationale: enum guarantees valid ownership context values; free string would allow invalid values that downstream agents cannot validate"
     },
     "target_node": {
       "type": "string",

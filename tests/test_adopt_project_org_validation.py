@@ -239,23 +239,23 @@ def _run_adopt_bash(
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-# region TEST_test_adopt_fails_without_org
+# region TEST_test_adopt_derives_org_from_path
 @pytest.mark.contract
-# 🧪 TRAP[TEST] · 2026-07-17 · adopt-project fails fast without --org or PLATFORM_ORG
-# · Regression: if personal default is re-added, silent drift returns
-# · Scenario: no --org flag, no PLATFORM_ORG env, no context in ai-platform.yaml
-# · Last fail: N/A (new test)
-# · Remove if: Contract 4.1 org validation is removed or reverted
-def test_adopt_fails_without_org(caplog, tmp_path) -> None:
-    """adopt-project.sh exits 1 with IMP:10 when PROJECT_ORG is not set.
+# 🧪 TRAP[TEST] · 2026-07-20 · adopt-project derives org from directory path (D2)
+# · Regression: if context field is re-added to YAML, path derivation may be shadowed
+# · Scenario: project at projects/testorg/myproject/ → org derived as testorg
+# · Last fail: N/A (updated for D2 context removal)
+# · Remove if: path-based org derivation is replaced
+def test_adopt_derives_org_from_path(caplog, tmp_path) -> None:
+    """adopt-project.sh derives PROJECT_ORG from directory path when no --org is given.
 
-    # ▶ parse_args "--dir" <proj_dir> (no --org, no PLATFORM_ORG)
-    #   → ◇ fail-fast check: PROJECT_ORG empty → IMP:10 "PROJECT_ORG is not set" → exit 1 → ⎋ pass
+    # ▶ parse_args "--dir" <proj_dir_in_org> (no --org, no PLATFORM_ORG)
+    #   → ◇ path derivation: basename(dirname(proj_dir)) → testorg → ⎋ pass
     """
     caplog.set_level(logging.DEBUG)
 
-    proj_dir = tmp_path / "myproject"
-    proj_dir.mkdir()
+    proj_dir = tmp_path / "testorg" / "myproject"
+    proj_dir.mkdir(parents=True)
 
     test_call = f"""set -euo pipefail
 # Initialize globals (GLOBALS section in adopt-project.sh)
@@ -264,7 +264,7 @@ PROJECT_NODE=""
 PROJECT_DOMAIN=""
 FORCE=0
 parse_args "--dir" "{proj_dir}"
-echo "[IMP:9][test] UNEXPECTED_SUCCESS"
+echo "[IMP:9][test] PROJECT_ORG=${{PROJECT_ORG}}"
 """
     stdout, stderr, rc = _test_func(
         ADOPT_SCRIPT_PATH,
@@ -274,22 +274,15 @@ echo "[IMP:9][test] UNEXPECTED_SUCCESS"
         preamble=LOG_STUBS,
     )
 
-    _print_ldd(stderr, stdout)
-    assert rc == 1, f"Expected exit code 1, got {rc}"
-    assert "PROJECT_ORG is not set" in stderr + stdout, (
-        f"Expected 'PROJECT_ORG is not set' in output:\nstdout={stdout}\nstderr={stderr}"
-    )
-    # Verify IMP:10 FATAL log is emitted (fail-fast)
-    has_imp10 = any("[IMP:10]" in line for line in stderr.split("\n"))
-    assert has_imp10, "Expected IMP:10 FATAL log for missing PROJECT_ORG"
+    found_imp9 = _print_ldd(stderr, stdout)
+    assert rc == 0, f"Expected exit code 0, got {rc}: stderr={stderr}"
+    assert "PROJECT_ORG=testorg" in stdout, f"Expected org derived as 'testorg', got:\n{stdout}"
 
-    logger.info("[IMP:9][test_adopt_fails_without_org][assert] FAIL-FAST on missing org verified")
-    # For this failure test: IMP:10 is the expected signal (instead of silent "personal" default)
-    # _print_ldd found IMP:10 (which is >=9) but the true criterion is the IMP:10 fail-fast message.
-    assert has_imp10, "IMP:10 fail-fast log required"
+    logger.info("[IMP:9][test_adopt_derives_org_from_path][assert] Org 'testorg' derived from path")
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
-# endregion TEST_test_adopt_fails_without_org
+# endregion TEST_test_adopt_derives_org_from_path
 
 
 # region TEST_test_ghcr_path_lowercased

@@ -62,7 +62,6 @@ def project_schema() -> dict:
         {
             "name": "my-frontend",
             "type": "frontend",
-            "context": "personal",
             "target_node": "mercury",
             "environments": {"production": True, "staging": False},
             "platform_services": {"nginx-proxy": "1.3.0"},
@@ -79,7 +78,6 @@ def project_schema() -> dict:
         {
             "name": "my-backend",
             "type": "backend",
-            "context": "personal",
             "target_node": "mercury",
             "environments": {"production": True, "staging": False},
             "platform_services": {"nginx-proxy": "1.3.0", "postgres": "15.2.0"},
@@ -188,7 +186,6 @@ def test_version_latest_rejected_by_schema(project_schema, caplog) -> None:
         data_with_latest = {
             "name": "test-project",
             "type": "backend",
-            "context": "personal",
             "target_node": "mercury",
             "platform_services": {"nginx-proxy": "latest"},
         }
@@ -202,7 +199,6 @@ def test_version_latest_rejected_by_schema(project_schema, caplog) -> None:
         data_with_empty_version = {
             "name": "test-project",
             "type": "backend",
-            "context": "personal",
             "target_node": "mercury",
             "platform_services": {"nginx-proxy": ""},
         }
@@ -213,7 +209,6 @@ def test_version_latest_rejected_by_schema(project_schema, caplog) -> None:
         data_with_valid_semver = {
             "name": "test-project",
             "type": "backend",
-            "context": "personal",
             "target_node": "mercury",
             "platform_services": {"nginx-proxy": "1.3.0"},
         }
@@ -248,7 +243,6 @@ def test_invalid_domain_rejected_by_schema(project_schema, caplog) -> None:
         data_invalid_domain = {
             "name": "test-project",
             "type": "frontend",
-            "context": "personal",
             "target_node": "mercury",
             "needs": {
                 "domain": "bad",
@@ -262,7 +256,6 @@ def test_invalid_domain_rejected_by_schema(project_schema, caplog) -> None:
         data_valid_domain = {
             "name": "test-project",
             "type": "frontend",
-            "context": "personal",
             "target_node": "mercury",
             "needs": {
                 "domain": "example.com",
@@ -298,7 +291,6 @@ def test_expose_true_requires_domain_string(project_schema, caplog) -> None:
         data_expose_no_domain = {
             "name": "test-project",
             "type": "frontend",
-            "context": "personal",
             "target_node": "mercury",
             "needs": {
                 "domain": False,
@@ -312,7 +304,6 @@ def test_expose_true_requires_domain_string(project_schema, caplog) -> None:
         data_no_expose_no_domain = {
             "name": "test-project",
             "type": "backend",
-            "context": "personal",
             "target_node": "mercury",
             "needs": {
                 "domain": False,
@@ -351,7 +342,6 @@ def test_project_type_enum(project_type, project_schema, caplog) -> None:
         invalid_data = {
             "name": "test",
             "type": project_type,
-            "context": "personal",
             "target_node": "mercury",
         }
 
@@ -376,7 +366,6 @@ def test_project_missing_target_node(project_schema, caplog) -> None:
         invalid_data = {
             "name": "test",
             "type": "backend",
-            "context": "personal",
             # target_node missing
         }
 

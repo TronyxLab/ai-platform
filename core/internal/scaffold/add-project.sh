@@ -41,7 +41,6 @@ DRY_RUN=false
 CI_MODE="${CI_MODE:-0}"
 MODE=""
 REGISTER=false
-CONTEXT=""
 
 __LOG_PREFIX="add-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
@@ -62,8 +61,7 @@ OPTIONAL:
   --database <name>    Database name for backend/fullstack projects
   --dry-run            Show plan without creating files
   --mode <mode>        dev mode: enables staging
-  --register           Register project in node.yaml (requires --context)
-  --context <name>     Context name for node.yaml registration
+  --register           Register project in node.yaml
 
 ENVIRONMENT:
   PLATFORM_ROOT        Path to ai-platform/ (auto-detected)
@@ -94,7 +92,6 @@ parse_args() {
             --dry-run)  DRY_RUN=true; shift ;;
             --mode)     MODE="$2"; shift 2 ;;
             --register) REGISTER=true; shift ;;
-            --context)  CONTEXT="$2"; shift 2 ;;
             --help|-h)  usage ;;
             *)          log_crit "Unknown argument: $1"; usage ;;
         esac
@@ -125,11 +122,6 @@ parse_args() {
         frontend|backend|fullstack) ;;
         *) log_crit "Invalid template type: '$TEMPLATE'. Must be: frontend | backend | fullstack"; exit 1 ;;
     esac
-
-    if [[ "$REGISTER" == true ]] && [[ -z "$CONTEXT" ]]; then
-        log_crit "--register requires --context <name>."
-        exit 1
-    fi
 
     if [[ ! "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         log_crit "Invalid project name: '$NAME'. Use alphanumeric, hyphens, underscores only."
@@ -233,14 +225,12 @@ generate_ai_platform_yaml() {
     local domain="$6"
     local database="$7"
     local mode="$8"
-    local context="${9:-personal}"
-
     local yaml_file="${project_dir}/ai-platform.yaml"
 
     log_imp 7 "-" "Generating ai-platform.yaml: ${yaml_file}"
 
     if [[ "$DRY_RUN" == true ]]; then
-        log_imp 7 "-" "[DRY-RUN] Would generate ai-platform.yaml with context=${context} at: ${yaml_file}"
+        log_imp 7 "-" "[DRY-RUN] Would generate ai-platform.yaml at: ${yaml_file}"
         return 0
     fi
 
@@ -257,7 +247,6 @@ name: ${name}
 type: ${type}
 description: "${name} project (${type})"
 target_node: ${node}
-context: ${context}
 
 needs:
 YAML
@@ -686,9 +675,8 @@ register_in_node_yaml() {
     local org="$2"
     local node="$3"
     local ptype="$4"
-    local context="$5"
-    local domain="$6"
-    local database="$7"
+    local domain="$5"
+    local database="$6"
 
     local node_configs_dir="${PROJECTS_ROOT}/${org}/node-configs"
     local node_yaml="${node_configs_dir}/${node}/node.yaml"
@@ -709,11 +697,11 @@ register_in_node_yaml() {
         fi
 
         if [[ "$DRY_RUN" == true ]]; then
-            log_imp 7 "-" "[DRY-RUN] Would register in node.yaml: name=${name} repo=${org}/${name} type=${ptype} context=${context}"
+            log_imp 7 "-" "[DRY-RUN] Would register in node.yaml: name=${name} repo=${org}/${name} type=${ptype}"
             return 0
         fi
 
-        local yaml_entry="{\"name\": \"${name}\", \"repo\": \"${org}/${name}\", \"type\": \"${ptype}\", \"context\": \"${context}\""
+        local yaml_entry="{\"name\": \"${name}\", \"repo\": \"${org}/${name}\", \"type\": \"${ptype}\""
         if [[ -n "$domain" ]]; then
             yaml_entry+=", \"domain\": \"${domain}\""
         fi
@@ -723,20 +711,19 @@ register_in_node_yaml() {
         yaml_entry+="}"
 
         yq eval -i ".projects += [${yaml_entry}]" "$node_yaml"
-        log_imp 9 "-" "Project registered in node.yaml: ${name} (context: ${context})"
+        log_imp 9 "-" "Project registered in node.yaml: ${name}"
 
     elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
         log_info "yq not found — using Python3+yaml fallback for node.yaml registration"
 
         if [[ "$DRY_RUN" == true ]]; then
-            log_imp 7 "-" "[DRY-RUN] Would register in node.yaml: name=${name} repo=${org}/${name} type=${ptype} context=${context}"
+            log_imp 7 "-" "[DRY-RUN] Would register in node.yaml: name=${name} repo=${org}/${name} type=${ptype}"
             return 0
         fi
 
         REG_NAME="$name" \
         REG_REPO="${org}/${name}" \
         REG_TYPE="$ptype" \
-        REG_CONTEXT="$context" \
         REG_DOMAIN="$domain" \
         REG_DATABASE="$database" \
         REG_NODE_YAML="$node_yaml" \
@@ -746,7 +733,6 @@ import os, yaml, sys
 name = os.environ.get('REG_NAME', '')
 repo = os.environ.get('REG_REPO', '')
 ptype = os.environ.get('REG_TYPE', '')
-ctx = os.environ.get('REG_CONTEXT', '')
 domain = os.environ.get('REG_DOMAIN', '')
 database = os.environ.get('REG_DATABASE', '')
 node_yaml_path = os.environ.get('REG_NODE_YAML', '')
@@ -763,7 +749,7 @@ if 'projects' in data:
             print(f"[IMP:9][add-project][register] Idempotent SKIP — {name} already in node.yaml", file=sys.stderr)
             sys.exit(0)
 
-entry = {'name': name, 'repo': repo, 'type': ptype, 'context': ctx}
+entry = {'name': name, 'repo': repo, 'type': ptype}
 if domain:
     entry['domain'] = domain
 if database:
@@ -801,7 +787,7 @@ main() {
     copy_template
     generate_ai_platform_yaml \
         "${PROJECTS_ROOT}/${ORG}/${NAME}" \
-        "$NAME" "$TEMPLATE" "$ORG" "$NODE" "$DOMAIN" "$DATABASE" "$MODE" "$CONTEXT"
+        "$NAME" "$TEMPLATE" "$ORG" "$NODE" "$DOMAIN" "$DATABASE" "$MODE"
     render_project_template
     gen_env_platform
     gen_project_makefile
@@ -813,9 +799,9 @@ main() {
 
     if [[ "$REGISTER" == true ]]; then
         register_in_node_yaml \
-            "$NAME" "$ORG" "$NODE" "$TEMPLATE" "$CONTEXT" "$DOMAIN" "$DATABASE"
+            "$NAME" "$ORG" "$NODE" "$TEMPLATE" "$DOMAIN" "$DATABASE"
     else
-        log_imp 6 "-" "Registration skipped (use --register --context <name> to register in node.yaml)"
+        log_imp 6 "-" "Registration skipped (use --register to register in node.yaml)"
     fi
 
     local project_dir="${PROJECTS_ROOT}/${ORG}/${NAME}"

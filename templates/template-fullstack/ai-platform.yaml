@@ -12,7 +12,6 @@
 
 name: {{PROJECT_NAME}}
 type: fullstack
-context: personal
 target_node: {{NODE_NAME}}
 platform_domain: {{PLATFORM_DOMAIN}}
 
