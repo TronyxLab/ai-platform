@@ -447,6 +447,18 @@ parse_ssh_command() {
 
     cleaned="$(echo "$cleaned" | sed '/^export /d' | xargs)"
 
+    # ═══════════════════════════════════════════════════════════════
+    # Verb: verify (D4 — post-deploy health validation via verify.sh)
+    # Dispatched BEFORE project/ref parsing so standalone verbs don't
+    # leak into PROJECT/REF. Uses same verify.sh as 'make verify'.
+    # ═══════════════════════════════════════════════════════════════
+    if [[ "$cleaned" == "verify "* ]]; then
+        local node="${cleaned#verify }"
+        node="$(echo "$node" | xargs)"
+        log_imp 9 "args" "Verb: verify node=${node}"
+        exec "${PLATFORM_ROOT}/core/entrypoints/verify.sh" "$node"
+    fi
+
     PROJECT="${cleaned%% *}"
     REF="${cleaned#* }"
 
