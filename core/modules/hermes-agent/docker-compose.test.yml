@@ -44,3 +44,11 @@ services:
 volumes:
   hermes-data-test:
     driver: local
+
+networks:
+  test-proxy-net:
+    external: true
+  test-hermes-agent-net:
+    external: true
+  test-observability-net:
+    external: true

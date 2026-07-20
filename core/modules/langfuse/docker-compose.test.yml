@@ -29,3 +29,9 @@ services:
     networks: !override  # DevPlan 017 W3.1 — test network isolation (shared-db-net → test-shared-db-net)
       - test-shared-db-net
     restart: unless-stopped
+
+networks:
+  test-shared-db-net:
+    external: true
+  test-observability-net:
+    external: true

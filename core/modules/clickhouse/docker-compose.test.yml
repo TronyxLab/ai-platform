@@ -46,3 +46,7 @@ services:
 volumes:
   clickhouse-data-test:
     driver: local
+
+networks:
+  test-observability-net:
+    external: true

@@ -19,3 +19,7 @@ services:
   minio-createbuckets:
     networks: !override  # DevPlan 017 W2.3 — test-shared-db-net only (no backup-net in tests)
       - test-shared-db-net
+
+networks:
+  test-shared-db-net:
+    external: true

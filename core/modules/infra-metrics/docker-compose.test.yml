@@ -65,3 +65,11 @@ services:
       timeout: 3s
       retries: 1
       start_period: 2s
+
+networks:
+  test-observability-net:
+    external: true
+  test-shared-cache-net:
+    external: true
+  test-shared-db-net:
+    external: true

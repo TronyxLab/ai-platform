@@ -33,3 +33,9 @@ services:
   prometheus-config-init:
     container_name: prometheus-config-init-test
     restart: "no"
+
+networks:
+  test-observability-net:
+    external: true
+  test-proxy-net:
+    external: true

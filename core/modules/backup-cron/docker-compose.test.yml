@@ -51,3 +51,7 @@ volumes:
     driver: local
   backup-logs-test:
     driver: local
+
+networks:
+  test-shared-db-net:
+    external: true

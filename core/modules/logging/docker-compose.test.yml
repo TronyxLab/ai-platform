@@ -25,3 +25,7 @@ services:
     networks: !override  # DevPlan 017 W2.5 — test network isolation
       - test-observability-net
     restart: unless-stopped
+
+networks:
+  test-observability-net:
+    external: true

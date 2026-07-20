@@ -78,3 +78,7 @@ volumes:
     driver: local
   wal-archive-test:
     driver: local
+
+networks:
+  test-shared-db-net:
+    external: true

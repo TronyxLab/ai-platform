@@ -23,3 +23,9 @@ services:
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
     restart: unless-stopped
+
+networks:
+  test-proxy-net:
+    external: true
+  test-observability-net:
+    external: true
