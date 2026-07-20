@@ -450,6 +450,11 @@ parse_ssh_command() {
     PROJECT="${cleaned%% *}"
     REF="${cleaned#* }"
 
+    # ⚠️ TRAP[BUG] · 2026-07-20 · REF="<sha> production" — env suffix leaks into image tag
+    # Result: "invalid reference format" because docker pulls "image:sha production"
+    # Fix: strip optional third token (environment: production|staging|dev)
+    REF="${REF%% *}"
+
     if [[ "$PROJECT" == "$REF" ]]; then
         REF=""
     fi
