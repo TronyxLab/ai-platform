@@ -138,9 +138,7 @@ class TestGateStatusPageNginxVhost:
         content = _read_file(PROJECT_ROOT / "core" / "modules" / "nginx" / "config" / "platform-vhost.conf.template")
 
         assert content, "platform-vhost.conf.template is empty or missing"
-        assert "server_name platform.${PLATFORM_DOMAIN}" in content, (
-            "Missing server_name platform.${PLATFORM_DOMAIN}"
-        )
+        assert "server_name platform.${PLATFORM_DOMAIN}" in content, "Missing server_name platform.${PLATFORM_DOMAIN}"
         assert "auth_basic" in content, "Missing auth_basic directive"
         assert ".htpasswd-platform" in content, "Must use .htpasswd-platform"
         assert "status-page:8080" in content, "Must proxy_pass to status-page:8080"

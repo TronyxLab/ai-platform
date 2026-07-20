@@ -124,6 +124,9 @@ SMOKE_ENV: dict[str, str] = {
     "LANGFUSE_TEST_PORT": "13000",
     "PROMETHEUS_TEST_PORT": "19090",
     "GRAFANA_TEST_PORT": "13030",
+    # Node config paths for modules that mount node.yaml and docker-health.json (status-page, etc.)
+    "NODE_NAME": "test-node",
+    "NODE_CONFIGS_DIR": "/tmp/test-node-configs",
 }
 
 _SMOKE_VOLUME_BIND_DIRS: list[str] = [
@@ -136,6 +139,8 @@ _SMOKE_VOLUME_BIND_DIRS: list[str] = [
     "/var/log/platform/backup",
     "/tmp/prometheus-targets",
     "/tmp/prometheus-rules",
+    "/tmp/test-node-configs/test-node",
+    "/tmp/run/platform",
 ]
 
 

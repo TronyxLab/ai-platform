@@ -171,8 +171,8 @@ Nginx выбирает server-блок по правилам приоритет�
 ### Агент для исправления
 
 ```
-Sysadmin: исправь проблему с дефолтным vhost на tronyx-vps — 
-пустая директория platform-default.conf вместо файла, 
+Sysadmin: исправь проблему с дефолтным vhost на tronyx-vps —
+пустая директория platform-default.conf вместо файла,
 из-за чего grafana-vhost.conf стал имплицитным default_server.
 См. .ai/plans/015-nginx-vhost-default/01-StatusReport.md
 ```

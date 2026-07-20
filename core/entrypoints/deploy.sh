@@ -96,7 +96,9 @@ parse_verb() {
             local node="${cleaned#verify }"
             node="$(echo "$node" | xargs)"
             log_imp 9 "entrypoint" "Verb: verify node=${node}"
-            exec "${PATHS_EP_DIR}/verify.sh" "$node"
+            # Delegate directly to internal/verify/verify-domains.sh (not via entrypoint — cross-layer rule)
+            local platform_root="${PLATFORM_ROOT:-/opt/platform}"
+            exec "${PATHS_INTERNAL_DIR}/verify/verify-domains.sh" "${node}" "${platform_root}"
             ;;
         *)
             # Deploy format (backward compat): <project> <sha> [environment]
