@@ -424,6 +424,10 @@ gates:
   - id: path-consistency
     description: No orphan /opt/core/ references — canonical PLATFORM_ROOT is /opt/platform/
     test_file: test_gate_path_consistency.py
+  - id: secrets-manifest-consistency
+    description: Bidirectional consistency between secrets-manifest.yaml ↔ module.yaml env_requires ↔ workflow secrets ↔ .env.example CI section; no hardcoded credentials in core/**/*.sh
+    test_file: test_gate_secrets_manifest.py
+    markers: gate
 
 # ---------------------------------------------------------------------------
 # Forbidden directories — directories that MUST NOT contain executable scripts

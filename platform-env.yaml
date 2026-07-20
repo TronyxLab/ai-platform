@@ -34,6 +34,17 @@ networks:
     driver: bridge
   - name: staging-shared-db-net
     driver: bridge
+  # Test networks (test-only external networks for DNS-alias isolation — DevPlan 017 Option B)
+  - name: test-shared-db-net
+    driver: bridge
+  - name: test-shared-cache-net
+    driver: bridge
+  - name: test-observability-net
+    driver: bridge
+  - name: test-proxy-net
+    driver: bridge
+  - name: test-hermes-agent-net
+    driver: bridge
 
 volumes:
   # Prometheus config directories (bind-mount for dynamic targets/rules)

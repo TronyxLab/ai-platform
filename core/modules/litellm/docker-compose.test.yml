@@ -7,7 +7,7 @@
 ##   - container_name: litellm-test — предотвращает конфликт с production litellm
 ##   - restart: unless-stopped — тестовые контейнеры перезапускаются при креше (--wait совместимость)
 ##   - Port: 127.0.0.1:14000:4000 — избежать production конфликтов
-##   - DATABASE_URL: PostgreSQL — spend_logs запись через pgbouncer:6432 на shared-db-net
+##   - DATABASE_URL: PostgreSQL — spend_logs запись через pgbouncer:6432 на test-shared-db-net (DevPlan 017 W3.2)
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). PostgreSQL для
 ##            spend_logs — тестовый контур должен проверять persistency (T10).
 # endregion MODULE_CONTRACT
@@ -15,9 +15,13 @@
 services:
   litellm:
     container_name: litellm-test
+    networks: !override  # DevPlan 017 W3.2 — test network isolation (db for postgres, observability for scraping, hermes for proxy)
+      - test-shared-db-net
+      - test-observability-net
+      - test-hermes-agent-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый litellm биндит 4000 (F-7) · Fix: !override
       - "127.0.0.1:14000:4000"
     restart: unless-stopped
     environment:
-      # PostgreSQL DSN — pgbouncer:6432 на shared-db-net (постгрес запускается тестовой фикстурой)
+      # PostgreSQL DSN — pgbouncer:6432 на test-shared-db-net (постгрес запускается тестовой фикстурой)
       DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@pgbouncer:6432/litellm?sslmode=disable"

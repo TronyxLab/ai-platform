@@ -34,7 +34,7 @@ import pytest
 import yaml as _yaml
 
 from _conftest.ldd import _ensure_volume_dirs
-from _conftest.networks import docker_available, ensure_external_networks, is_production_host
+from _conftest.networks import TEST_NETWORKS, docker_available, ensure_external_networks, is_production_host
 
 # region SMOKE_PLATFORM_FIXTURES
 ## @purpose — Session-scoped fixtures and helpers for smoke platform tests.
@@ -652,6 +652,14 @@ def platform_services(
         "[IMP:9][conftest][platform_services] External networks ready: %d external network(s)", len(external_nets)
     )
 
+    # ── Pre-create test-only external networks (DevPlan 017 Option B) ─────────
+    _logger.info("[IMP:8][conftest][platform_services] Pre-creating %d test network(s)", len(TEST_NETWORKS))
+    for net_name in sorted(TEST_NETWORKS):
+        ensure_external_networks([net_name])
+    _logger.info(
+        "[IMP:9][conftest][platform_services] Test networks ready: %d test external network(s)", len(TEST_NETWORKS)
+    )
+
     # ── Global pre-cleanup: down ALL compose files before starting ─────────
     # ⚠️ TRAP[BUG] · 2026-07-17 · HI · per-module `down --remove-orphans` killed
     #    previously started modules (all share project=ai-platform-test). Fix:
@@ -790,6 +798,17 @@ def platform_services(
             text=True,
             timeout=30,
         )
+
+    # ── Remove pre-created test networks (DevPlan 017 Option B) ──────────────
+    _logger.info("[IMP:8][conftest][platform_services] Removing %d test network(s)", len(TEST_NETWORKS))
+    for net_name in sorted(TEST_NETWORKS):
+        subprocess.run(
+            ["docker", "network", "rm", net_name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
     _logger.info("[IMP:9][conftest][platform_services] Cleanup complete")
 
 

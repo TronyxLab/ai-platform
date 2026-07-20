@@ -161,10 +161,11 @@ step_10_decrypt_secrets() {
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_step_12b_ensure_secrets
 ## @purpose  Validate that all required platform secrets are present after
-##           decryption. Auto-generates ephemeral defaults for any missing
-##           secrets using openssl rand. This pattern is reusable for
-##           node-update: run after decrypt-secrets to guarantee all platform
-##           secrets are available before deploying modules.
+##           decryption. Auto-generates ephemeral defaults for missing
+##           generated-секреты using openssl rand. Persists generated secrets
+##           to encrypted SOPS file via sops --set if the file exists.
+##           Reads generated-секреты from secrets-manifest.yaml (SSoT).
+##           Falls back to hardcoded list if manifest is unavailable.
 ##
 ##           Reusable pattern for node-update:
 ##             source lib/secrets.sh
@@ -175,19 +176,29 @@ step_10_decrypt_secrets() {
 ##
 ## @param    (none — depends on env vars)
 ## @io       in:  SECRETS_FILE (env, default: /run/platform/secrets.env)
+##            in:  PATHS_CORE_DIR (env, set via paths.sh — for manifest path)
+##            in:  NODE_CONFIGS_DIR (env, default: /opt/node-configs)
+##            in:  NODE_NAME (env — for encrypted file path)
 ##            out: exports LITELLM_MASTER_KEY, LANGFUSE_INIT_ORG_ID,
 ##                 LANGFUSE_INIT_PROJECT_ID, LANGFUSE_PUBLIC_KEY,
 ##                 LANGFUSE_SECRET_KEY, NEXTAUTH_SECRET, SALT
 ##            return: 0 (always — non-critical warnings only)
-## @complexity O(1) — fixed 7 secret checks
+## @complexity O(n) where n = number of generated secrets in manifest
 ## @dependencies — openssl rand (for secret generation)
+##               — python3 + PyYAML (for manifest parsing)
+##               — sops (optional, for sops --set persistence)
 ##               — step_start/step_done/log_step from consumer
 ## @invariants — If secrets.env does not exist → generate ALL secrets in-memory
 ##             - Nested _ensure_secret() is defined inside the function (bash local scope)
 ##             - Auto-generated secrets get a WARN log — MUST be encrypted in SOPS
 ##             - Secrets are exported to the shell but are EPHEMERAL (lost on shell exit)
+##             - If encrypted file exists: sops --set writes generated values back
+##             - If encrypted file missing: WARN, secret exported to env only
+##             - If sops --set fails: ERROR, bootstrap continues (secret in env)
+##             - If manifest unavailable: fallback to hardcoded list of 7 secrets
 ##             - Always returns 0 — missing secrets are non-fatal (generated on the fly)
-## @rationale Pure extraction from orchestrator.sh — behavior preserved exactly.
+## @rationale Manifest-driven generation replaces hardcoded list for SSoT consistency.
+##            sops --set persistence ensures generated secrets survive bootstrap restarts.
 ##            The _ensure_secret closure pattern (function defined inside function)
 ##            is preserved as-is from the original orchestrator.sh to avoid
 ##            any behavioral regression in bash variable scoping.
@@ -205,6 +216,10 @@ step_12b_ensure_secrets() {
     local generated=()
     local missing=()
 
+    # ═══════════════════════════════════════════════════
+    # _ensure_secret — bash closure defined inside function
+    # ═══════════════════════════════════════════════════
+    # Preserved without changes per TASK-4 requirement.
     _ensure_secret() {
         local var_name="$1"
         local pattern="$2"
@@ -221,14 +236,66 @@ step_12b_ensure_secrets() {
             log_step "ensure-secrets" "WARN" "Auto-generated $var_name (MUST be added to SOPS for production)"
         fi
     }
+    # ═══════════════════════════════════════════════════
 
-    _ensure_secret "LITELLM_MASTER_KEY" 'echo "sk-$(openssl rand -hex 32)"'
-    _ensure_secret "LANGFUSE_INIT_ORG_ID" 'echo "org_$(openssl rand -hex 4)"'
-    _ensure_secret "LANGFUSE_INIT_PROJECT_ID" 'echo "proj_$(openssl rand -hex 4)"'
-    _ensure_secret "LANGFUSE_PUBLIC_KEY" 'echo "pk-lf_$(openssl rand -hex 16)"'
-    _ensure_secret "LANGFUSE_SECRET_KEY" 'echo "sk-lf_$(openssl rand -hex 16)"'
-    _ensure_secret "NEXTAUTH_SECRET" 'openssl rand -hex 32'
-    _ensure_secret "SALT" 'openssl rand -hex 16'
+    local manifest="${PATHS_CORE_DIR:-/opt/platform/core}/secrets-manifest.yaml"
+    local manifest_loaded=false
+
+    if [[ -f "$manifest" ]] && command -v python3 &>/dev/null; then
+        # Read generated secrets from manifest (tier=generated)
+        local _gen_spec
+        _gen_spec=$(python3 -c "
+import yaml, sys
+with open('${manifest}') as f:
+    data = yaml.safe_load(f)
+for s in data.get('secrets', []):
+    if s.get('tier') == 'generated':
+        print(f\"{s['name']}|{s.get('gen_command', '')}\")
+" 2>/dev/null) || _gen_spec=""
+
+        if [[ -n "$_gen_spec" ]]; then
+            manifest_loaded=true
+            log_step "ensure-secrets" "INFO" "Reading generated secrets from manifest: ${manifest}"
+            while IFS='|' read -r _var _cmd; do
+                [[ -z "$_var" || -z "$_cmd" ]] && continue
+                _ensure_secret "$_var" "$_cmd"
+            done <<< "$_gen_spec"
+        else
+            log_step "ensure-secrets" "WARN" "Manifest has no generated secrets — fallback to hardcoded list"
+        fi
+    else
+        log_step "ensure-secrets" "INFO" "Manifest not found at ${manifest} — fallback to hardcoded list"
+    fi
+
+    # ── Fallback: hardcoded list if manifest not available ──
+    if ! $manifest_loaded; then
+        _ensure_secret "LITELLM_MASTER_KEY" 'echo "sk-$(openssl rand -hex 32)"'
+        _ensure_secret "LANGFUSE_INIT_ORG_ID" 'echo "org_$(openssl rand -hex 4)"'
+        _ensure_secret "LANGFUSE_INIT_PROJECT_ID" 'echo "proj_$(openssl rand -hex 4)"'
+        _ensure_secret "LANGFUSE_PUBLIC_KEY" 'echo "pk-lf_$(openssl rand -hex 16)"'
+        _ensure_secret "LANGFUSE_SECRET_KEY" 'echo "sk-lf_$(openssl rand -hex 16)"'
+        _ensure_secret "NEXTAUTH_SECRET" 'openssl rand -hex 32'
+        _ensure_secret "SALT" 'openssl rand -hex 16'
+    fi
+
+    # ── sops --set persistence for all generated secrets ──
+    if [[ ${#generated[@]} -gt 0 ]]; then
+        local configs_dir="${NODE_CONFIGS_DIR:-/opt/node-configs}"
+        local enc_file="${configs_dir}/secrets/${NODE_NAME}.enc.yaml"
+
+        if [[ -f "$enc_file" ]] && command -v sops &>/dev/null; then
+            for _gvar in "${generated[@]}"; do
+                local _gval="${!_gvar:-}"
+                if [[ -n "$_gval" ]]; then
+                    sops --set '["'"$_gvar"'"] "'"$_gval"'"' "$enc_file" 2>/dev/null || {
+                        log_step "ensure-secrets" "ERROR" "sops --set failed for $_gvar — value in env but NOT persisted"
+                    }
+                fi
+            done
+        elif [[ ! -f "$enc_file" ]]; then
+            log_step "ensure-secrets" "WARN" "Encrypted file not found at ${enc_file} — generated secrets NOT persisted"
+        fi
+    fi
 
     if [[ ${#generated[@]} -gt 0 ]]; then
         log_step "ensure-secrets" "WARN" "Generated ${#generated[@]} secrets: ${generated[*]}"

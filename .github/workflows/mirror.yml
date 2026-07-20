@@ -10,11 +10,65 @@
 ##   - Also supports workflow_dispatch for manual mirror
 ##   - Blocking SHA verification for workflow_dispatch (API check)
 ##   - Never triggers on push from mirror (recursion guard)
-##   - GIT_MIRROR_TOKEN must have Contents:Write on TronyxLab/ai-platform
+##   - GIT_MIRROR_TOKEN is optional HTTPS fallback (SSH primary is the target)
+##   - context-promote.sh already uses SSH primary (Plan 015 T3.4)
 ##   - Mirror stays up-to-date without force push
+##   - SSH deploy key transition deferred — see TRAP[DECISION] below
 ## @rationale SHA-aware aggregator (D4) ensures only tested code is mirrored.
 ##            Plan 2 consolidation: main-full-gate removed, trigger on platform-test.
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
+## @changes — 2026-07-20 | Deployment flow documented (Plan 018)
+##
+## ☆ DEPLOYMENT FLOW (canonical — see also context-promote.sh)
+##
+##   Локальная разработка (feature branch)
+##       │
+##       ▼ CI test (platform-test.yml на PR/push)
+##       │
+##       ▼ Слияние в main (Tronyx161/ai-platform) — решение человеком
+##       │
+##       ▼ mirror.yml: автоматическое копирование в TronyxLab/ai-platform
+##       │   (workflow_run trigger — gate пройден, код доставлен в личный контекст)
+##       │
+##       ▼ Ручное тестирование на личном контексте (несколько дней)
+##       │   [IMP:7] Человек вручную убеждается, что платформа работает,
+##       │   обновление делает то что предполагалось.
+##       │
+##       ▼ context-promote.sh: ручная команда (или агент по команде человека)
+##       │   make context-promote CONTEXT=<target-org>
+##       │   Копирует базовую платформу в GitHub-организации контекстов
+##       │   (один или все сразу).
+##       │
+##       ▼ CI/CD в контекстной org: build-platform.yml + stage-deploy.yml
+##       │   Запускается в контекстном репозитории <org>/ai-platform
+##       │
+##       ▼ Production deployment на VPS контекста
+##
+##   ⚠️ TRAP[DECISION] · 2026-07-20 · HI · mirror — авто, promote — ручной
+##   · Авто-зеркало: Tronyx161→TronyxLab (личный контекст, песочинца).
+##     Безопасно: если сломается — не страшно, там пет-проекты.
+##   · Promote: ручной (человек решает когда и куда копировать платформу).
+##     Причина: только человек может судить о готовности после ручного тестирования
+##     (автоматические тесты не покрывают семантику бизнес-логики).
+##   · Rev: если появится N контекстов и ручное promote станет узким горлом —
+##     добавить `make context-promote-all` с batch-логикой, но не авто-триггер.
+##
+## ⚡ TOKEN NOTE (Plan 018 — secrets consolidation):
+##   GIT_MIRROR_TOKEN используется только mirror.yml (автоматический CI)
+##   и опциональный HTTPS-fallback context-promote.sh (если SSH недоступен).
+##   context-promote.sh использует SSH primary (ssh-agent оператора) —
+##   для ручного promote токен не нужен. См. Plan 018 Brief.
+##
+## 🧐 TRAP[DECISION] · 2026-07-20 · — · mirror.yml SSH deploy key transition deferred
+## · Rejected: SSH deploy key — generate key pair, add public key as deploy key on
+##   TronyxLab/ai-platform, add private key as repo secret, rewrite push step (GIT_ASKPASS→SSH)
+## · Reason: deferred — requires GitHub-side configuration (separate operational task).
+##   GIT_MIRROR_TOKEN (HTTPS+GIT_ASKPASS) continues as current implementation.
+##   context-promote.sh уже использует SSH primary (Plan 015 T3.4) — для ручного promote
+##   SSH deploy key не нужен, используется ssh-agent оператора.
+## · Rev: когда GIT_MIRROR_TOKEN станет недоступен или SSH setup будет сделан —
+##   переписать push step на `git push git@github.com:TronyxLab/ai-platform.git HEAD:main`
+##
 # endregion MODULE_CONTRACT
 # ═══════════════════════════════════════════════════════════════════
 # MODULE_CONTRACT: Mirror workflow — SHA-aware auto-sync from Tronyx161/ai-platform to TronyxLab/ai-platform

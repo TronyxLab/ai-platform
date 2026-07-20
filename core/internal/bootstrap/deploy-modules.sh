@@ -669,31 +669,39 @@ print(d.get('severity', 'warn'))
 # endregion GET_MODULE_SEVERITY
 
 # region CHECK_ENV_REQUIRES
-## @purpose  Parse module.yaml env_requires list and verify each required env var is
-##           non-empty in current process env OR in the secrets env file. Fail-fast
-##           before any deploy action — prevents deploy with empty secrets (P3 fix).
+## @purpose  Read secrets-manifest.yaml and verify all secrets required by the
+##           given module (consumers includes module_name, tier ∈ {required, generated})
+##           are non-empty in current process env OR in the secrets env file.
+##           Fail-fast before any deploy action. Manifest-driven per Plan 018.
 ## @io       str (module_name) → stdout: comma-separated missing vars (on failure); return 0/1
-## @complexity 1 — single python3 call per module
+## @complexity 1 — single python3 call per module (YAML manifest lookup)
 ## @invariants
-##   - Checks both ${!var} (process env) and SECRETS_ENV_FILE (secrets.env)
-##   - Empty env_requires list → no-op (return 0)
-##   - Missing module.yaml → no-op (return 0)
-##   - Missing vars → log_step FAIL with list + return 1
+##   - Checks both process env (${!var}) and SECRETS_ENV_FILE (secrets.env)
+##   - Uses secrets-manifest.yaml consumers[] to determine per-module secrets
+##   - If manifest absent → return 0 (graceful degradation, SSoT not yet available)
+##   - Missing required vars → log_step FAIL with list + return 1
 ##   - Incident 2026-07-17: minio deployed with empty MINIO_ROOT_USER/PASSWORD → Access Denied
+## @rationale Manifest-driven approach replaces module.yaml env_requires parsing.
+##            secrets-manifest.yaml is the Single Source of Truth. Gate validates
+##            bidirectional consistency between module.yaml env_requires and manifest.
 _check_env_requires() {
     local module_name="$1"
-    local module_yaml="${PATHS_MODULES_DIR}/${module_name}/module.yaml"
-    if [[ ! -f "$module_yaml" ]]; then
+    local manifest="${PATHS_CORE_DIR}/secrets-manifest.yaml"
+    if [[ ! -f "$manifest" ]]; then
+        log_step "env-gate:${module_name}" "INFO" "Manifest not found at ${manifest} — skipping env check (graceful degradation)"
         return 0
     fi
 
     local _missing
     _missing=$(python3 -c "
 import yaml, os, sys
-with open('${module_yaml}') as f:
-    d = yaml.safe_load(f)
-required = d.get('env_requires') or []
-if not required:
+with open('${manifest}') as f:
+    data = yaml.safe_load(f)
+secrets = data.get('secrets', [])
+# Find all secrets where consumers includes this module AND tier ∈ {required, generated}
+module_secrets = [s for s in secrets if '${module_name}' in s.get('consumers', [])
+                  and s.get('tier') in ('required', 'generated')]
+if not module_secrets:
     sys.exit(0)
 secrets_file = os.environ.get('SECRETS_ENV_FILE', '/run/platform/secrets.env')
 _env_map = {}
@@ -704,7 +712,8 @@ if os.path.isfile(secrets_file):
             if '=' in line and not line.startswith('#'):
                 k, _, v = line.partition('=')
                 _env_map[k.strip()] = v.strip()
-missing = [v for v in required if not os.environ.get(v, '') and not _env_map.get(v, '')]
+missing = [s['name'] for s in module_secrets
+           if not os.environ.get(s['name'], '') and not _env_map.get(s['name'], '')]
 if missing:
     print(','.join(missing))
     sys.exit(1)

@@ -1,4 +1,4 @@
-# GREP_SUMMARY: networks, topology, Docker, external-networks, constants, utilities, conftest
+# GREP_SUMMARY: networks, topology, Docker, external-networks, constants, utilities, conftest, TEST_NETWORKS, test-isolation
 # STRUCTURE: ┌PLATFORM_NETWORKS + EXEMPT_CREATED_NETWORKS┐ → ┌docker_available┐ → ◇ is_production_host → ○ ensure_external_networks(∋name) → ⊕ inspect ∨ create → ⎋ None
 
 # region MODULE_CONTRACT
@@ -6,6 +6,7 @@
 ## @scope — Extracted from tests/conftest.py to eliminate duplication across test_network_consistency.py and test_module_dependency_graph.py.
 ## @invariants
 ##   - PLATFORM_NETWORKS: networks pre-created by deploy-modules.sh before compose up
+##   - TEST_NETWORKS: test-only network equivalents for DNS-alias isolation (DevPlan 017 Option B)
 ##   - EXEMPT_CREATED_NETWORKS: networks created by modules (non-external) intentionally not in PLATFORM_NETWORKS
 ##   - docker_available() checks CLI only (not Docker daemon responsiveness)
 ##   - ensure_external_networks() is idempotent — safe to call multiple times
@@ -33,6 +34,16 @@ PLATFORM_NETWORKS: set[str] = {
     "hermes-agent-net",
     "shared-cache-net",
     "observability-net",
+}
+
+# Test-only external networks for DNS-alias isolation (DevPlan 017 Option B).
+# Pre-created by platform_services fixture in smoke.py alongside PLATFORM_NETWORKS.
+TEST_NETWORKS: set[str] = {
+    "test-shared-db-net",
+    "test-shared-cache-net",
+    "test-observability-net",
+    "test-proxy-net",
+    "test-hermes-agent-net",
 }
 
 # Networks created by modules (non-external in compose) that are intentionally NOT

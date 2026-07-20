@@ -8,7 +8,7 @@
 ##   - container_name: langfuse-test, langfuse-redis-test
 ##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
 ##   - Port: 127.0.0.1:13000:3000 — избежать production конфликтов
-##   - langfuse-redis: networks: !override — shared-db-net БЕЗ aliases (предотвращает DNS-загрязнение)
+##   - langfuse-redis: networks: !override — test-shared-db-net БЕЗ aliases (предотвращает DNS-загрязнение, DevPlan 017 W3.1)
 ##   - REDIS_CONNECTION_STRING указывает на langfuse-redis-test, а не на langfuse-redis (прода)
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2). langfuse-redis добавлен
 ##            post-factum (F-7 class): фикс изоляции второго контейнера в модуле.
@@ -17,20 +17,15 @@
 services:
   langfuse:
     container_name: langfuse-test
+    networks: !override  # DevPlan 017 W3.1 — test network isolation (db for postgres + observability for scraping)
+      - test-shared-db-net
+      - test-observability-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый langfuse биндит 3001 (F-7) · Fix: !override
       - "127.0.0.1:13000:3000"
     restart: unless-stopped
-    environment:
-      # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · REDIS_CONNECTION_STRING указывала на langfuse-redis (прод)
-      # · Root: base.yml использует redis://langfuse-redis:6379 — при сосуществовании с прод-стеком
-      # ·   тестовый langfuse мог подключиться к продакшен redis, и наоборот.
-      # · Fix: переопределяем на langfuse-redis-test (изолированный тестовый экземпляр).
-      REDIS_CONNECTION_STRING: "redis://langfuse-redis-test:6379"
 
   langfuse-redis:
     container_name: langfuse-redis-test
+    networks: !override  # DevPlan 017 W3.1 — test network isolation (shared-db-net → test-shared-db-net)
+      - test-shared-db-net
     restart: unless-stopped
-    networks: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · alias langfuse-redis на external-сети shared-db-net —
-      # · при сосуществовании с прод-стеком DNS возвращает 2 IP → загрязнение данных.
-      # · Fix: !override без aliases — контейнер доступен по container_name langfuse-redis-test.
-      - shared-db-net

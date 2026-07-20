@@ -38,6 +38,8 @@
 services:
   postgres:
     container_name: postgres-test
+    networks: !override  # DevPlan 017 W2.1 — test network isolation
+      - test-shared-db-net
     environment:
       # 🧐 TRAP[DECISION] · 2026-07-03 · — · POSTGRES_HOST_AUTH_METHOD=trust для тестов
       # · Rejected: md5/scram-sha-256 (production)
@@ -55,6 +57,8 @@ services:
 
   pgbouncer:
     container_name: pgbouncer-test
+    networks: !override  # DevPlan 017 W2.1 — test network isolation
+      - test-shared-db-net
     environment:
       # 🧐 TRAP[DECISION] · 2026-07-03 · — · AUTH_TYPE=trust для тестов
       # · Rejected: scram-sha-256 (production) / md5 (не работает с PGPASSWORD)

@@ -1,12 +1,15 @@
-# GREP_SUMMARY: smoke-test isolation container-name conflict parallel up test
-# STRUCTURE: ▶ test_all_test_containers_have_test_suffix → ◇ test_no_container_name_collision
+# GREP_SUMMARY: smoke-test isolation container-name conflict parallel up test network-isolation
+# STRUCTURE: ▶ test_all_test_containers_have_test_suffix → ◇ test_no_container_name_collision → ◇ test_all_base_container_names_have_test_override → ◇ test_no_prod_network_in_test_overlay → ◇ test_test_network_consistency
 # region MODULE_CONTRACT
-## @purpose  Smoke test: verify test isolation — no container_name conflicts (DevPlan 04 TASK-G5)
-## @scope    Проверяет -test суффикс во всех test.yml, отсутствие конфликтов с production
+## @purpose  Smoke test: verify test isolation — no container_name conflicts + network isolation (DevPlan 04 TASK-G5, DevPlan 017)
+## @scope    Проверяет -test суффикс во всех test.yml, отсутствие конфликтов с production,
+##           отсутствие prod-сетей в test.yml, консистентность test-* сетей с prod-эквивалентами
 ## @invariants
 ##   - Все контейнеры в test-проекте имеют -test суффикс
 ##   - Нет пересечений container_name между production и test
-## @rationale Тестовая изоляция через test-overlay (DevPlan 04 DD2)
+##   - Ни один test.yml не ссылается на production-сети (все должны быть с префиксом test-)
+##   - Для каждого сервиса: prod-сеть X → test-сеть test-X
+## @rationale Тестовая изоляция через test-overlay (DevPlan 04 DD2) + DNS-alias изоляция (DevPlan 017 Option B)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -33,6 +36,78 @@ yaml.add_constructor("!override", _yaml_override_constructor, Loader=yaml.SafeLo
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+
+# DevPlan 017 — network isolation: prod → test network mapping
+PROD_TO_TEST_NET_MAP: dict[str, str] = {
+    "shared-db-net": "test-shared-db-net",
+    "shared-cache-net": "test-shared-cache-net",
+    "observability-net": "test-observability-net",
+    "proxy-net": "test-proxy-net",
+    "hermes-agent-net": "test-hermes-agent-net",
+    "backup-net": "test-shared-db-net",  # backup-net → test-shared-db-net (D4: no test-backup-net)
+}
+
+
+def _extract_network_names(net_config: list | dict | None) -> set[str]:
+    """Extract network names from a service-level networks config.
+
+    ## @purpose — Normalise both dict-style (with aliases) and list-style network declarations.
+    ##            base.yml uses dict: {net_name: {aliases: [...]}} or list: [net_name, ...].
+    ##            test.yml uses !override list: [test-net-name, ...].
+    ## @io — ⇥ net_config (list|dict|None) → ⎋ set[str] of network names
+    ## @complexity — O(N) where N = networks count
+    """
+    if net_config is None:
+        return set()
+    if isinstance(net_config, list):
+        return {str(n) for n in net_config if n is not None}
+    if isinstance(net_config, dict):
+        return set(net_config.keys())
+    return set()
+
+
+def _get_test_yml_networks() -> dict[str, dict[str, set[str]]]:
+    """Извлекает networks из всех docker-compose.test.yml.
+    Возвращает {module_name: {service_name: {network, ...}}}."""
+    result: dict[str, dict[str, set[str]]] = {}
+    for test_file in sorted(MODULES_DIR.glob("*/docker-compose.test.yml")):
+        module_name = test_file.parent.name
+        with open(test_file) as f:
+            data = yaml.safe_load(f)
+        if not data or "services" not in data:
+            continue
+        svc_networks: dict[str, set[str]] = {}
+        for svc_name, svc_config in data["services"].items():
+            if svc_config is None:
+                continue
+            net_config = svc_config.get("networks", None)
+            svc_networks[svc_name] = _extract_network_names(net_config)
+        if svc_networks:
+            result[module_name] = svc_networks
+    return result
+
+
+def _get_base_yml_networks() -> dict[str, dict[str, set[str]]]:
+    """Извлекает networks из всех docker-compose.base.yml (production).
+    Возвращает {module_name: {service_name: {network, ...}}}."""
+    result: dict[str, dict[str, set[str]]] = {}
+    for base_file in sorted(MODULES_DIR.glob("*/docker-compose.base.yml")):
+        module_name = base_file.parent.name
+        with open(base_file) as f:
+            data = yaml.safe_load(f)
+        if not data or "services" not in data:
+            continue
+        svc_networks: dict[str, set[str]] = {}
+        for svc_name, svc_config in data["services"].items():
+            if svc_config is None:
+                continue
+            net_config = svc_config.get("networks", None)
+            net_names = _extract_network_names(net_config)
+            if net_names:
+                svc_networks[svc_name] = net_names
+        if svc_networks:
+            result[module_name] = svc_networks
+    return result
 
 
 def _get_test_yml_containers() -> dict[str, list[str]]:
@@ -217,4 +292,145 @@ class TestSmokeTestIsolation:
             len(list(MODULES_DIR.glob("*/docker-compose.base.yml"))),
         )
         assert not errors, "Services with container_name in base.yml missing -test override:\n" + "\n".join(errors)
-        logger.info("[IMP:9][gate][isolation] All base container_names have -test override ✓")
+
+        # ── R5 anti-survivorship expansion (DevPlan 017 W4.3): также проверяем networks: !override ──
+        net_errors: list[str] = []
+        for base_file in sorted(MODULES_DIR.glob("*/docker-compose.base.yml")):
+            module_name = base_file.parent.name
+            test_file = base_file.parent / "docker-compose.test.yml"
+            if not test_file.exists():
+                continue
+
+            with open(base_file) as f:
+                base_data = yaml.safe_load(f)
+            base_services_with_net: set[str] = set()
+            if base_data and "services" in base_data:
+                for svc_name, svc_cfg in base_data["services"].items():
+                    if svc_cfg and svc_cfg.get("networks") is not None:
+                        base_services_with_net.add(svc_name)
+
+            if not base_services_with_net:
+                continue
+
+            with open(test_file) as f:
+                test_data = yaml.safe_load(f)
+            test_services_with_net: dict[str, set[str]] = {}
+            if test_data and "services" in test_data:
+                for svc_name, svc_cfg in test_data["services"].items():
+                    if svc_cfg and svc_cfg.get("networks") is not None:
+                        test_services_with_net[svc_name] = _extract_network_names(svc_cfg["networks"])
+
+            for svc_name in base_services_with_net:
+                if svc_name not in test_services_with_net:
+                    net_errors.append(
+                        f"{module_name}: service '{svc_name}' has networks in base.yml "
+                        f"but NO networks: !override in test.yml (DevPlan 017)"
+                    )
+                else:
+                    test_nets = test_services_with_net[svc_name]
+                    net_errors.extend(
+                        f"{module_name}: service '{svc_name}' networks contains non-test network '{tnet}' in test.yml"
+                        for tnet in test_nets
+                        if not tnet.startswith("test-")
+                    )
+
+        if net_errors:
+            logger.info(
+                "[IMP:8][gate][isolation] Networks check failed for %d service(s)",
+                len(net_errors),
+            )
+        assert not net_errors, (
+            "Services with networks in base.yml missing networks: !override in test.yml:\n" + "\n".join(net_errors)
+        )
+        logger.info("[IMP:9][gate][isolation] All base container_names have -test override and networks: !override ✓")
+
+    @pytest.mark.gate
+    @ldd_trajectory
+    def test_no_prod_network_in_test_overlay(self, caplog) -> None:
+        # 🧪 TRAP[TEST] · Regression: новый модуль может получить test.yml с prod-сетью
+        # · Scenario: scan all test.yml → fail if any network doesn't start with test-
+        # · Last fail: never (new test)
+        # · Remove if: network isolation model changes (e.g., single shared test network)
+        """Ни один docker-compose.test.yml не ссылается на production-сети (DevPlan 017 W4.1).
+
+        ## @purpose — Gate проверяет что test-изоляция полная: все networks в test.yml
+        ##            имеют префикс test-. Любая prod-сеть (shared-db-net, observability-net, etc.)
+        ##            в test.yml = нарушение изоляции (DNS-загрязнение).
+        ## @rationale — DevPlan 017 AC3: "Ни один alias не дублируется между prod и test".
+        ##              Этот тест — автоматическая проверка, предотвращающая регрессию.
+        """
+        test_nets = _get_test_yml_networks()
+        errors: list[str] = []
+
+        for module_name, services in sorted(test_nets.items()):
+            for svc_name, networks in sorted(services.items()):
+                for net_name in sorted(networks):
+                    if net_name is None or net_name == "":
+                        continue
+                    if not net_name.startswith("test-"):
+                        errors.append(
+                            f"{module_name}: service '{svc_name}' has non-test network '{net_name}' in test.yml"
+                        )
+
+        logger.info(
+            "[IMP:9][gate][isolation] Checked %d test modules for prod network references",
+            len(test_nets),
+        )
+        assert not errors, f"{len(errors)} production network(s) found in test overlay:\n" + "\n".join(errors)
+        logger.info("[IMP:9][gate][isolation] No production networks in test overlay ✓")
+
+    @pytest.mark.gate
+    @ldd_trajectory
+    def test_test_network_consistency(self, caplog) -> None:
+        # 🧪 TRAP[TEST] · Regression: новый модуль может получить test-* сеть не соответствующую prod-сети
+        # · Scenario: compare each test service networks → verify test-* equivalent exists for every prod network
+        # · Last fail: never (new test)
+        # · Remove if: PROD_TO_TEST_NET_MAP is removed or network model fundamentally changes
+        """Для каждого test-сервиса: если prod-сервис на сети X, test-сервис должен быть на test-X (DevPlan 017 W4.2).
+
+        ## @purpose — Сверяет соответствие prod→test сетей: если в production сервис на
+        ##            shared-db-net, в test он должен быть на test-shared-db-net.
+        ##            Проверка идёт от base.yml → test.yml, обнаруживает пропущенные
+        ##            или неконсистентные network-оверрайды.
+        ## @invariants
+        ##   - Каждая prod-сеть X должна иметь test-X эквивалент в PROD_TO_TEST_NET_MAP
+        ##   - Test-сервис может иметь ДОПОЛНИТЕЛЬНЫЕ test-сети (например, exporters на observability)
+        ##   - Test-сервис НЕ может иметь prod-сети (это покрывается test_no_prod_network_in_test_overlay)
+        ## @rationale — DevPlan 017 AC2: "Все test.yml сервисов получают networks: !override
+        ##              с test-* эквивалентами prod-сетей". Bез этой проверки новый модуль
+        ##              может получить networks: !override с неправильной test-сетью.
+        """
+        base_nets = _get_base_yml_networks()
+        test_nets = _get_test_yml_networks()
+        errors: list[str] = []
+
+        for module_name, base_services in sorted(base_nets.items()):
+            test_services = test_nets.get(module_name, {})
+            for svc_name, prod_networks in sorted(base_services.items()):
+                test_networks = test_services.get(svc_name, set())
+                if not test_networks:
+                    # Сервис есть в base.yml но не переопределён в test.yml — допустимо
+                    # если у сервиса нет container_name (Docker генерирует уникальное имя)
+                    continue
+
+                for prod_net in sorted(prod_networks):
+                    expected_test_net = PROD_TO_TEST_NET_MAP.get(prod_net)
+                    if expected_test_net is None:
+                        errors.append(
+                            f"{module_name}: unknown prod network '{prod_net}' "
+                            f"in service '{svc_name}' — no mapping in PROD_TO_TEST_NET_MAP"
+                        )
+                        continue
+                    if expected_test_net not in test_networks:
+                        errors.append(
+                            f"{module_name}: service '{svc_name}' is on prod network "
+                            f"'{prod_net}' but test overlay does not include "
+                            f"'{expected_test_net}' (has: {sorted(test_networks)})"
+                        )
+
+        logger.info(
+            "[IMP:9][gate][isolation] Checked network consistency across %d modules",
+            len(base_nets),
+        )
+        assert not errors, "Test network consistency violations:\n" + "\n".join(errors)
+        logger.info("[IMP:9][gate][isolation] All test networks are consistent with prod equivalents ✓")

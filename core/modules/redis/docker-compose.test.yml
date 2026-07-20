@@ -16,3 +16,5 @@
 services:
   redis:
     container_name: redis-test
+    networks: !override  # DevPlan 017 W2.4 — test network isolation
+      - test-shared-cache-net

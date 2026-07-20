@@ -12,7 +12,7 @@
 ##     — non-standard ports to avoid conflicts with production on same Docker host
 ##   - Healthcheck preserved from base.yml (wget --spider /ping, 15s interval, 20s start_period)
 ##   - Config bind-mounts (config.d/*.xml, users.d/*.xml) preserved intact from base.yml
-##   - observability-net preserved (external network required for Prometheus scraping)
+##   - test-observability-net (external network required for Prometheus scraping, DevPlan 017 W2.2)
 ## @rationale
 ##   Q: Why test-specific host ports (18123/19363) instead of no ports?
 ##   A: Component tests need direct HTTP access to ClickHouse for /ping, /metrics, and SQL queries.
@@ -31,6 +31,8 @@
 services:
   clickhouse:
     container_name: clickhouse-test
+    networks: !override  # DevPlan 017 W2.2 — test network isolation
+      - test-observability-net
     # ── Test-specific host ports (non-standard — avoid production conflicts) ──
     ports:
       - "127.0.0.1:18123:8123"     # HTTP interface

@@ -12,7 +12,7 @@
 ##   - restart: unless-stopped — containers restart on crash (--wait compatible; D5 fix)
 ##   - Build context and Dockerfile preserved from base.yml
 ##   - Environment variables preserved from base.yml
-##   - Networks (backup-net, shared-db-net) preserved — external networks
+##   - Networks: test-shared-db-net only — external network (test isolation, DevPlan 017 W3.6)
 ##   - tmpfs mounts preserved from base.yml
 ## @rationale
 ##   Q: Why Docker-managed volumes instead of bind-mount?
@@ -31,6 +31,8 @@
 services:
   backup-cron:
     container_name: backup-cron-test
+    networks: !override  # DevPlan 017 W3.6 — test network isolation (db for backup)
+      - test-shared-db-net
     # ── Docker-managed volumes (cross-platform, no bind-mount) ──
     volumes:
       - backup-spool-test:/var/lib/platform/backup-spool

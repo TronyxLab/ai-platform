@@ -171,10 +171,33 @@ def _scan_shell_for_literal_assignments(
     except (FileNotFoundError, PermissionError):
         return findings
 
+    # Track inline Python blocks (e.g., python3 -c "...") to skip
+    # False positive mitigation: Python code embedded in bash heredocs
+    # is not shell credential assignment and should not be scanned.
+    # ⚠️ TRAP[BUG] · 2026-07-20 · P2 · False positives in python -c inline code
+    # · Symptom: Secrets manifest Python inline code (Plan 018 TASK-5) triggered
+    #   false positives on lines like "secrets = data.get('secrets', [])"
+    # · Root: Scanner regex matched Python assignment syntax inside bash heredoc
+    # · Fix: Skip lines inside python3/python -c blocks (heredoc via double-quote)
+    # · Prevention: If new false positives appear from Python inline code in shell,
+    #   extend the _in_python_block tracking below
+    _in_python_block: bool = False
+
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+
+        # Track python -c inline blocks to skip Python code
+        if re.search(r'(?:python|python3)\s+-c\s+"[^"]*$', stripped) or _in_python_block:
+            if stripped.endswith('")'):
+                _in_python_block = False
+            elif not _in_python_block:
+                _in_python_block = True
+            # Skip lines inside Python inline code — they are not shell assignments
+            if _in_python_block or stripped.endswith('")'):
+                continue
+            _in_python_block = bool(re.search(r'(?:python|python3)\s+-c\s+"[^"]*$', stripped))
 
         for varname in varname_substrings:
             # Match: [export] [local] [readonly] VAR=<value> with flexible prefix

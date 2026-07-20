@@ -16,6 +16,9 @@
 services:
   nginx:
     container_name: nginx-test
+    networks: !override  # DevPlan 017 W3.5 — test network isolation (proxy for frontend, observability for metrics)
+      - test-proxy-net
+      - test-observability-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-16 · HIGH · compose merge склеивает ports base+test → тестовый nginx биндил 80/443 (F-7) · Fix: !override
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
