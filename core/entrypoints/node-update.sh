@@ -8,8 +8,9 @@
 ## @invariants
 ##   - --node is REQUIRED; missing → usage error, exit 1
 ##   - --dry-run prints command without executing
-##   - SSH proxy logic lives entirely in remote-cmd.sh (execute_remote_update)
+##   - SSH proxy logic lives entirely in remote-cmd.sh (execute_remote_update, deliver_vhost_overlays)
 ##   - Without SSH_HOST: local exec (backward compatible)
+##   - S2 (DevPlan 019): generated vhost overlays are delivered via remote-cmd.sh
 ## @rationale Thin-wrapper per DevPlan 020. SSH proxy extracted to remote-cmd.sh.
 # endregion MODULE_CONTRACT
 set -euo pipefail
@@ -96,6 +97,14 @@ main() {
     echo "[IMP:9][node-update][entrypoint] Starting node-update for NODE=${NODE_NAME}" >&2
     local detected_age_key
     detected_age_key="$(detect_age_key)" || detected_age_key=""
+    # ── S2 (DevPlan 019): deliver generated vhost overlays to server ──
+    if ! $DRY_RUN; then
+        source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"
+        deliver_vhost_overlays "${NODE_NAME}" || {
+            echo "[IMP:10][node-update][entrypoint] FATAL: Vhost overlay delivery failed" >&2
+            exit 1
+        }
+    fi
     # ── SSH proxy (preferred) ──
     execute_remote_update "${NODE_NAME}" "${detected_age_key}" "${PASSTHROUGH_ARGS[@]}"
     local remote_rc=$?
