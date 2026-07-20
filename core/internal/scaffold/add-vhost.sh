@@ -96,11 +96,20 @@ compute_body_hash() {
         source "$content_hash_sh"
         compute_step_hash "$(basename "$vhost_file")" "$vhost_file"
     else
-        command -v sha256sum &>/dev/null && sha256sum "$vhost_file" | cut -d' ' -f1 || \
-        command -v shasum &>/dev/null && shasum -a 256 "$vhost_file" | cut -d' ' -f1 || {
+        # ⚠️ TRAP[BUG] · 2026-07-20 · P1 · `||` chain with pipefail evaluates ALL branches
+        # · Symptom: sha256sum AND shasum both output hash → body_hash=hash\nhash (129 chars)
+        # · Root: A && B || C && D || E — `||` does NOT short-circuit because pipefail
+        #   interacts with bash operator precedence; both B and D execute unconditionally
+        # · Fix: use if-elif-else instead of &&/|| chain
+        # · Prevention: avoid mixing pipes with &&/|| chains under `set -o pipefail`
+        if command -v sha256sum &>/dev/null; then
+            sha256sum "$vhost_file" | cut -d' ' -f1
+        elif command -v shasum &>/dev/null; then
+            shasum -a 256 "$vhost_file" | cut -d' ' -f1
+        else
             echo "unavailable"
             return 0
-        }
+        fi
     fi
 }
 # endregion FUNC_compute_hash
@@ -364,6 +373,7 @@ resolve_cert_domain() {
 ## @stdout   Vhost config body
 generate_vhost_body() {
     local fqdn="$1" project_name="$2" cert_domain="$3"
+    local nginx_safe_name="${project_name//-/_}"
 
     cat <<VHOSTBODY
 # HTTP → HTTPS redirect
@@ -420,8 +430,8 @@ server {
     # No need for upstream containers to exist at nginx startup.
     location / {
         # Lazy DNS resolution via variable
-        set \$upstream_${project_name} http://${project_name}:80;
-        proxy_pass \$upstream_${project_name};
+        set \$upstream_${nginx_safe_name} http://${project_name}:80;
+        proxy_pass \$upstream_${nginx_safe_name};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -434,7 +444,7 @@ server {
     }
 
     location /health {
-        proxy_pass \$upstream_${project_name}/health;
+        proxy_pass \$upstream_${nginx_safe_name}/health;
         access_log off;
     }
 }
@@ -637,8 +647,19 @@ http {
 }
 HARNESS_CONF
 
-    # Create stub security-headers.conf
-    cat > "${harness_dir}/security-headers.conf" <<'HARNESS_SEC'
+    # 🧐 TRAP[DECISION] · 2026-07-20 · — · nginx_t_harness: isolate overlay vhosts from harness_dir
+    # · Rejected: storing vhosts and harness support files (security-headers.conf) in same dir
+    # · Reason: mount -v ${harness_dir}:/etc/nginx/conf.d/overlay:ro exposes ALL .conf files
+    #   in harness_dir as vhost configs. security-headers.conf is NOT a valid vhost → nginx -t fails
+    #   with 'unknown directive' on parsed content. Fix: put patched vhosts in
+    #   ${harness_dir}/vhosts/ subdir, security-headers in ${harness_dir}/includes/ subdir.
+    # · Rev: if harness nginx.conf is changed to use a non-glob include pattern for vhosts
+    # Create stub security-headers.conf in a subdirectory (NOT in harness_dir root,
+    # because harness_dir is mounted as overlay and *.conf files there would be
+    # picked up by nginx include directive as vhost configs)
+    local includes_dir="${harness_dir}/includes"
+    mkdir -p "$includes_dir"
+    cat > "${includes_dir}/security-headers.conf" <<'HARNESS_SEC'
 # Stub security-headers.conf for nginx -t validation
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
@@ -659,13 +680,17 @@ HARNESS_SEC
     fi
 
     # For each rendered vhost, create a dev-version with SSL paths swapped to dev-certs
-    # This is the harness-only path swap — original rendered files are not modified
+    # This is the harness-only path swap — original rendered files are not modified.
+    # Dev vhosts go into a `vhosts/` subdirectory to avoid colliding with other
+    # harness files (e.g., security-headers.conf) that must not be in the overlay mount.
     local vhost_count=0
     local vhost_file
+    local overlay_vhosts_dir="${harness_dir}/vhosts"
+    mkdir -p "$overlay_vhosts_dir"
     for vhost_file in "${temp_dir}"/*.conf; do
         [[ -f "$vhost_file" ]] || continue
         vhost_count=$((vhost_count + 1))
-        local dev_vhost="${harness_dir}/dev-${vhost_file##*/}"
+        local dev_vhost="${overlay_vhosts_dir}/${vhost_file##*/}"
         # Replace production SSL paths with dev-certs for validation
         sed 's|/etc/letsencrypt/live/[^/]*/fullchain.pem|/etc/nginx/dev-certs/fullchain.pem|g;
              s|/etc/letsencrypt/live/[^/]*/privkey.pem|/etc/nginx/dev-certs/privkey.pem|g;
@@ -688,8 +713,8 @@ HARNESS_SEC
         if docker run --rm \
             -v "${harness_nginx_dir}/nginx.conf:/etc/nginx/nginx.conf:ro" \
             -v "${harness_dir}/dev-certs:/etc/nginx/dev-certs:ro" \
-            -v "${harness_dir}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro" \
-            -v "${harness_dir}:/etc/nginx/conf.d/overlay:ro" \
+            -v "${includes_dir}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro" \
+            -v "${overlay_vhosts_dir}:/etc/nginx/conf.d/overlay:ro" \
             "nginx:${nginx_version}" nginx -t 2>&1; then
             log_imp 9 "harness" "nginx -t PASS: ${vhost_count} vhost(s) valid"
             result=0
@@ -727,7 +752,12 @@ render_all() {
 
     # ── Step 1: Parse node.yaml projects ─────────────────────────
     local projects_json
-    # ⚠️ TRAP[BUG] · 2026-07-20 · S1 · export mandatory for command substitution (subshell environ)
+    # 🧐 TRAP[DECISION] · 2026-07-20 · — · export NODE_YAML_PATH for python3 subprocess visibility
+    # · Rejected: NODE_YAML_PATH="$node_yaml" without export
+    # · Reason: bash VAR=value prefix to $() does NOT export to child processes (python3 sees empty env).
+    #   Shell variable vs env var: $() runs function in subshell, function spawns python3 as subprocess,
+    #   but unexported shell variables are invisible to subprocesses.
+    # · Rev: if python3 parser is replaced with pure bash implementation, revert to unexported var
     export NODE_YAML_PATH="$node_yaml"
     projects_json="$(read_node_yaml_projects "$node_yaml")"
 
@@ -825,7 +855,7 @@ render_all() {
     local gen_file
     for gen_file in "${overlay_dir}"/*.conf; do
         [[ -f "$gen_file" ]] || continue
-        if head -1 "$gen_file" 2>/dev/null | grep -q "GENERATED by add-vhost.sh"; then
+        if grep -q "GENERATED by add-vhost.sh" "$gen_file" 2>/dev/null; then
             rm -f "$gen_file"
             existing_count=$((existing_count + 1))
         fi

@@ -83,7 +83,6 @@ def _make_config(**overrides) -> dict:
         "bucket": "test-bucket",
         "region": "us-east-1",
         "prefix": "platform/backups",
-        "context": "personal",
         "node_name": "test-node",
     }
     config.update(overrides)

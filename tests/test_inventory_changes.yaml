@@ -24,6 +24,13 @@
 #     approved_by: "@reviewer"
 
 removed:
+
+  # ── DevPlan 020 (D2 context removal): test_adopt_fails_without_org → test_adopt_derives_org_from_path ──
+  - nodeid: "tests/test_adopt_project_org_validation.py::test_adopt_fails_without_org"
+    reason: "D2 context removal: adopt-project.sh now derives org from directory path (projects/<org>/<project>/), not from YAML context: field. Test replaced with test_adopt_derives_org_from_path."
+    issue: "020-deploy-pipeline-hardening D2"
+    approved_by: "@tronyx"
+
   # ── 008-Wave-2 (T3): ssl-provision.sh split → backward-compat wrapper ──
   - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_ssl-provision]"
     reason: "T3 split: ssl-provision.sh → thin wrapper (35 lines). Entrypoint contract moved to install-acme.sh + issue-cert.sh which are both registered. ssl-provision.sh is backward-compat only — entrypoint tests not needed."

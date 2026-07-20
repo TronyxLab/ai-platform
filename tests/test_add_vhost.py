@@ -382,3 +382,275 @@ target_node: mynode
 
 
 # endregion FUNC_test_vhost_template_http2_directive
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WAVE 2: D1 unit tests (DevPlan 020)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_add_vhost_hyphen_normalization
+## @purpose  Verify that generate_vhost_body() normalizes hyphens to underscores in nginx
+##           upstream variable names. Project name `my-cool-app` → `$upstream_my_cool_app`
+##           (underscores), NOT `$upstream_my-cool-app` (which nginx would parse as variable minus literals).
+## @regression  D1.1: hyphens in project name cause nginx syntax error in upstream variable
+## @io       ⇥ tmp_path → ◇ source_and_run(generate_vhost_body) → ⊕ assert upstream uses underscores
+##           ⊕ assert no hyphenated upstream variable ⊕ assert server_name preserves hyphens
+## @complexity O(1)
+
+
+# 🧪 TRAP[TEST] · Regression: D1.1 — hyphens in project name → underscore normalization
+# · Scenario: my-cool-app project → generate_vhost_body → must use $upstream_my_cool_app
+# · Last fail: nginx syntax error on $upstream_my minus cool minus app
+# · Remove if: nginx variable names are no longer derived from project name
+def test_add_vhost_hyphen_normalization(tmp_path: Path) -> None:
+    """Verify vhost body uses underscores in upstream variable for hyphenated project names."""
+    # ── Arrange ──
+    script_copy = tmp_path / "add-vhost.sh"
+    shutil.copy2(str(SCRIPT_PATH), str(script_copy))
+
+    # Create mock validate.sh (needed for script source, not used by generate_vhost_body directly)
+    mock_validate = tmp_path / "validate.sh"
+    mock_validate.write_text("""#!/bin/bash
+echo "[IMP:9][validate][mock] Called with: $@" >&2
+exit 0
+""")
+    mock_validate.chmod(0o755)
+
+    env = {
+        "PLATFORM_ROOT": str(PLATFORM_ROOT),
+    }
+
+    # ── Act: call generate_vhost_body directly ──
+    function_call = 'generate_vhost_body "app.test.local" "my-cool-app" "test.local"'
+    result = source_and_run(function_call, env=env, script_path=str(script_copy))
+
+    # ── Assert ──
+    assert result.returncode == 0, f"generate_vhost_body failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+    body = result.stdout
+
+    print("--- VHOST BODY (hyphen normalization) ---")
+    print(body)
+    print("--- END VHOST ---")
+
+    # Must use underscores in upstream variable name
+    assert "$upstream_my_cool_app" in body, f"Vhost body must contain '$upstream_my_cool_app' (underscores):\n{body}"
+
+    # Must NOT use hyphens in upstream variable name (would cause nginx syntax error)
+    assert "$upstream_my-cool-app" not in body, (
+        f"Vhost body must NOT contain '$upstream_my-cool-app' (hyphens):\n{body}"
+    )
+
+    # server_name can still use hyphens (nginx allows hyphens in server_name)
+    assert "server_name app.test.local" in body, f"Vhost body must contain 'server_name app.test.local':\n{body}"
+
+    # LDD telemetry — generate_vhost_body has no log_imp calls (pure stdout),
+    # so manual trajectory print without IMP:9 assertion
+    print("--- LDD TRAJECTORY (stderr) ---")
+    for line in result.stderr.splitlines():
+        if "[IMP:" in line:
+            try:
+                imp_level = int(line.split("[IMP:")[1].split("]")[0])
+                if imp_level >= 7:
+                    print(line)
+            except (ValueError, IndexError):
+                pass
+    print("--- END LDD TRAJECTORY ---")
+
+
+# endregion FUNC_test_add_vhost_hyphen_normalization
+
+
+# region FUNC_test_add_vhost_wildcard_cert_resolution
+## @purpose  Verify resolve_cert_domain() returns correct cert path:
+##           - Subdomains of PLATFORM_DOMAIN → wildcard cert path (PLATFORM_DOMAIN)
+##           - Apex PLATFORM_DOMAIN → wildcard cert path (PLATFORM_DOMAIN)
+##           - Independent domains → personal cert path (own FQDN)
+## @regression  Ensure cert path resolution for DD3 (wildcard) and O11 (own cert)
+## @io       ⇥ tmp_path → ◇ source_and_run(resolve_cert_domain) with various FQDNs
+##           ⊕ assert stdout contains expected cert domain
+## @complexity O(1)
+
+
+# 🧪 TRAP[TEST] · Regression: cert domain resolution — subdomain/apex/independent
+# · Scenario: resolve_cert_domain with app.tronyx.ru → platform domain;
+#             resolve_cert_domain with myapp.com → own domain
+# · Last fail: N/A (new test)
+# · Remove if: cert resolution logic is replaced with different mechanism
+def test_add_vhost_wildcard_cert_resolution(tmp_path: Path) -> None:
+    """Verify resolve_cert_domain returns correct cert domain for subdomain, apex, and independent domains."""
+    # ── Arrange ──
+    script_copy = tmp_path / "add-vhost.sh"
+    shutil.copy2(str(SCRIPT_PATH), str(script_copy))
+
+    # Base env: PLATFORM_DOMAIN + PLATFORM_ROOT for logging.sh
+    env = {
+        "PLATFORM_DOMAIN": "tronyx.ru",
+        "PLATFORM_ROOT": str(PLATFORM_ROOT),
+    }
+
+    # ── Test 1: Subdomain of PLATFORM_DOMAIN → wildcard cert path ──
+    result = source_and_run(
+        'resolve_cert_domain "app.tronyx.ru"',
+        env=env,
+        script_path=str(script_copy),
+    )
+    assert result.returncode == 0, (
+        f"resolve_cert_domain subdomain failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+    )
+    print("--- Test 1: subdomain app.tronyx.ru ---")
+    print(f"STDOUT: [{result.stdout.strip()}]")
+    print(f"STDERR: [{result.stderr.strip()}]")
+    assert "tronyx.ru" in result.stdout, (
+        f"Subdomain should resolve to wildcard cert domain 'tronyx.ru', got: '{result.stdout.strip()}'"
+    )
+
+    # ── Test 2: Apex domain → wildcard cert path (apex IS the platform domain) ──
+    result = source_and_run(
+        'resolve_cert_domain "tronyx.ru"',
+        env=env,
+        script_path=str(script_copy),
+    )
+    assert result.returncode == 0, f"resolve_cert_domain apex failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+    print("--- Test 2: apex tronyx.ru ---")
+    print(f"STDOUT: [{result.stdout.strip()}]")
+    assert "tronyx.ru" in result.stdout, (
+        f"Apex domain should resolve to its own cert path 'tronyx.ru', got: '{result.stdout.strip()}'"
+    )
+
+    # ── Test 3: Independent domain (not subdomain of PLATFORM_DOMAIN) → personal cert path ──
+    result = source_and_run(
+        'resolve_cert_domain "myapp.com"',
+        env=env,
+        script_path=str(script_copy),
+    )
+    assert result.returncode == 0, (
+        f"resolve_cert_domain independent failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+    )
+    print("--- Test 3: independent myapp.com ---")
+    print(f"STDOUT: [{result.stdout.strip()}]")
+    assert "myapp.com" in result.stdout, (
+        f"Independent domain should resolve to personal cert domain 'myapp.com', got: '{result.stdout.strip()}'"
+    )
+
+    # LDD telemetry from last result
+    assert_ldd_stderr(result)
+
+
+# endregion FUNC_test_add_vhost_wildcard_cert_resolution
+
+
+# region FUNC_test_add_vhost_stale_cleanup_on_rerender
+## @purpose  Verify that render_all cleans up stale vhost files for removed projects.
+##           1. node.yaml with project A + project B → render_all → 2 vhost files
+##           2. node.yaml with only project A → render_all → project B vhost removed
+## @regression  D1.2: `head -1` (old) missed GENERATED marker on line 2 → stale vhosts not removed.
+##              Now uses `grep -q` to find marker anywhere in file.
+## @io       ⇥ tmp_path → ◇ render_all 2× (first with 2 projects, then 1)
+##           ⊕ assert vhost count changes from 2 → 1
+## @complexity O(P) where P = number of projects
+
+
+# 🧪 TRAP[TEST] · Regression: D1.2 — stale vhost cleanup on rerender
+# · Scenario: render_all with 2 projects → render_all with 1 project → vhost for removed project gone
+# · Last fail: old `head -1` didn't reach GENERATED marker on line 2 → stale vhosts persisted
+# · Remove if: vhost cleanup logic is replaced with different mechanism
+def test_add_vhost_stale_cleanup_on_rerender(tmp_path: Path) -> None:
+    """Verify render_all removes stale vhosts for projects removed from node.yaml."""
+    # ── Arrange ──
+    script_copy = tmp_path / "add-vhost.sh"
+    shutil.copy2(str(SCRIPT_PATH), str(script_copy))
+
+    # Create mock validate.sh (sourced by script, only needed for sourcing)
+    mock_validate = tmp_path / "validate.sh"
+    mock_validate.write_text("""#!/bin/bash
+echo "[IMP:9][validate][mock] Called with: $@" >&2
+exit 0
+""")
+    mock_validate.chmod(0o755)
+
+    # Create node-configs directory structure
+    node_configs_dir = tmp_path / "node-configs"
+    overlay_dir = node_configs_dir / "testnode" / "overlays" / "nginx"
+    overlay_dir.mkdir(parents=True)
+
+    env = {
+        "PLATFORM_ROOT": str(PLATFORM_ROOT),
+        "PLATFORM_DOMAIN": "test.local",
+    }
+
+    # ── Phase 1: Render with 2 projects ──
+    # Create node.yaml with project-a and project-b
+    node_yaml = node_configs_dir / "testnode" / "node.yaml"
+    node_yaml.write_text("""domain: test.local
+projects:
+  - name: project-a
+    domain: a.test.local
+    repo: git@github.com:test/a.git
+  - name: project-b
+    domain: b.test.local
+    repo: git@github.com:test/b.git
+""")
+
+    # Mock nginx_t_harness to skip Docker validation (unit test focus: file cleanup)
+    function_call = (
+        'nginx_t_harness() { log_imp 7 "harness" "MOCK: skipping nginx -t for unit test"; return 0; }; '
+        'parse_args "--render-all" "--node" "testnode" '
+        f'"--node-configs-dir" "{node_configs_dir}" && render_all'
+    )
+    result = source_and_run(function_call, env=env, script_path=str(script_copy))
+
+    # Verify both vhosts were rendered
+    assert result.returncode == 0, f"First render_all failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+
+    vhost_files_p1 = list(overlay_dir.glob("*.conf"))
+    print("--- Phase 1: vhost files ---")
+    for f in vhost_files_p1:
+        print(f"  {f.name}")
+    print(f"  Count: {len(vhost_files_p1)}")
+    print("--- END Phase 1 ---")
+
+    assert len(vhost_files_p1) == 2, (
+        f"Phase 1: expected 2 vhost files, got {len(vhost_files_p1)}: {[f.name for f in vhost_files_p1]}"
+    )
+    assert (overlay_dir / "a.test.local.conf").is_file(), "Phase 1: a.test.local.conf not generated"
+    assert (overlay_dir / "b.test.local.conf").is_file(), "Phase 1: b.test.local.conf not generated"
+
+    # ── Phase 2: Render with only 1 project ──
+    # Update node.yaml — remove project-b
+    node_yaml.write_text("""domain: test.local
+projects:
+  - name: project-a
+    domain: a.test.local
+    repo: git@github.com:test/a.git
+""")
+
+    result = source_and_run(function_call, env=env, script_path=str(script_copy))
+
+    # Verify only project-a vhost remains
+    assert result.returncode == 0, f"Second render_all failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+
+    vhost_files_p2 = list(overlay_dir.glob("*.conf"))
+    print("--- Phase 2: vhost files ---")
+    for f in vhost_files_p2:
+        print(f"  {f.name}")
+    print(f"  Count: {len(vhost_files_p2)}")
+    print("--- END Phase 2 ---")
+
+    assert len(vhost_files_p2) == 1, (
+        f"Phase 2: expected 1 vhost file, got {len(vhost_files_p2)}: {[f.name for f in vhost_files_p2]}"
+    )
+
+    # project-a vhost must still exist
+    assert (overlay_dir / "a.test.local.conf").is_file(), "Phase 2: a.test.local.conf should still exist"
+
+    # project-b vhost must be GONE
+    assert not (overlay_dir / "b.test.local.conf").is_file(), (
+        "Phase 2: b.test.local.conf should have been removed (stale cleanup)"
+    )
+
+    # LDD telemetry from second render
+    assert_ldd_stderr(result)
+
+
+# endregion FUNC_test_add_vhost_stale_cleanup_on_rerender
