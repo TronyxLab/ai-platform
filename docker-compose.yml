@@ -29,6 +29,7 @@ include:
   - path: core/modules/nginx/docker-compose.base.yml
   - path: core/modules/postgres/docker-compose.base.yml
   - path: core/modules/redis/docker-compose.base.yml
+  - path: core/modules/status-page/docker-compose.base.yml
 networks:
   proxy-net:           { external: true, name: proxy-net }
   shared-db-net:       { external: true, name: shared-db-net }

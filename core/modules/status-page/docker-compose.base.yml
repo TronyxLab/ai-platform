@@ -1,0 +1,66 @@
+# @purpose  Base compose definition for status-page Docker module — container_name:status-page, profiles, proxy-net, volumes
+# GREP_SUMMARY: status-page docker-compose proxy-net profiles volumes healthcheck node.yaml docker-health.json
+# STRUCTURE: ▶ status-page:python-3.12-alpine [profiles:status-page] → proxy-net → volumes (app, node.yaml ro, docker-health.json ro) → healthcheck → ┐
+# region MODULE_CONTRACT
+## @purpose  Base compose definition for status-page Docker module — live node status aggregation
+## @scope    Merged with root docker-compose.yml via include:
+## @invariants
+##   - profiles: [status-page] — pluggability: only included when COMPOSE_PROFILES contains status-page
+##   - Port: NO external ports — accessed via nginx proxy_pass on proxy-net
+##   - restart: unless-stopped — Docker policy
+##   - proxy-net — required for nginx proxy_pass to status-page:8080
+##   - node.yaml: mounted ro from host /opt/node-configs/<node>/node.yaml
+##   - docker-health.json: mounted ro from host /run/platform/docker-health.json (tmpfs, cron-refreshed)
+##   - healthcheck: curl localhost:8080/health — verifies status-page is responding
+## @rationale   Profiles enable selective startup via `make up MODULES=status-page`.
+##              No external ports — all access via nginx Basic Auth proxy.
+##              Docker socket NOT mounted — reads pre-exported health JSON from cron.
+# endregion MODULE_CONTRACT
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  status-page:
+    image: python:3.12-alpine@sha256:fa94c7740b6f0b8899af0c4f3c791ec50e9f1da49034e5fa40426f1efbf70134
+    container_name: status-page
+    profiles: [status-page]
+    restart: unless-stopped
+
+    volumes:
+      # App code — mounted for dev; production builds use Dockerfile COPY
+      - ./app.py:/app/app.py:ro
+      # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
+      - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-test-node}/node.yaml:/opt/node-configs/${NODE_NAME:-test-node}/node.yaml:ro
+      # docker-health.json — container statuses (cron-exported every 1m)
+      - /run/platform/docker-health.json:/run/platform/docker-health.json:ro
+
+    environment:
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}
+      NODE_NAME: ${NODE_NAME:-test-node}
+      NODE_CONFIGS_DIR: ${NODE_CONFIGS_DIR:-/opt/node-configs}
+
+    networks:
+      proxy-net:
+        aliases:
+          - status-page
+
+    logging: *default-logging
+
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+    # Override entrypoint to run app.py directly
+    entrypoint: ["python3", "/app/app.py"]
+    working_dir: /app
+
+networks:
+  proxy-net:
+    external: true

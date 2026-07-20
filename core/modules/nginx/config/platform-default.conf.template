@@ -121,7 +121,51 @@ server {
     # ·   Registered subdomains (overlay vhosts) match by exact server_name and win over default_server.
     # ·   Unregistered subdomains get nothing — no information disclosure.
     # · Rev: if 444 causes issues with monitoring probes, switch to 403.
+    #
+    # ── Status-page (016): Basic Auth + stealth 444 ─────────────────────
+    # ⚠️ TRAP[DECISION] · 2026-07-20 · HI · Status-page auth = Basic Auth via nginx, stealth 444
+    # · /login/ — единственный путь, возвращающий 401 + WWW-Authenticate (браузерный диалог)
+    # · Все остальные пути без Authorization → 444 (connection close, access_log off)
+    # · Неверные креды → 444 (через @stealth_drop, не 401)
+    # · Валидные креды → proxy_pass http://status-page:8080/
+    # · /health — CI-gate: curl -f -u email:pass .../health → 200 PASS / 503 FAIL
+    # · Rev: если Basic Auth окажется проблемным — можно добавить token-in-path параллельно
+
+    # /login/ — единственный путь, показывающий 401 с WWW-Authenticate
+    location = /login/ {
+        auth_basic "Platform";
+        auth_basic_user_file /etc/nginx/conf.d/.htpasswd-platform;
+        satisfy any;
+        return 302 /;
+    }
+
+    # /health — CI-gate: бинарный вердикт, proxy_pass на status-page
+    # ⚠️ TRAP[BUG] · 2026-07-16 · HI · loopback→Docker-DNS (см. config/nginx.conf)
+    location /health {
+        auth_basic "Platform";
+        auth_basic_user_file /etc/nginx/conf.d/.htpasswd-platform;
+        error_page 401 = @stealth_drop;
+        set $upstream_status_page status-page:8080;
+        proxy_pass http://$upstream_status_page;
+    }
+
+    # Status-page proxy: Basic Auth + stealth 444
     location / {
+        access_log off;
+        # No Authorization header → stealth drop (444, no response, not logged)
+        if ($http_authorization = "") {
+            return 444;
+        }
+        auth_basic "Platform";
+        auth_basic_user_file /etc/nginx/conf.d/.htpasswd-platform;
+        error_page 401 = @stealth_drop;
+        set $upstream_status_page status-page:8080;
+        proxy_pass http://$upstream_status_page;
+    }
+
+    # @stealth_drop — закрывает TCP-соединение без ответа (ни байта, ни заголовков)
+    location @stealth_drop {
+        access_log off;
         return 444;
     }
 

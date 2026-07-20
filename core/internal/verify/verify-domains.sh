@@ -192,9 +192,53 @@ for d in doms:
     echo ""
     if [[ "${all_ok}" == true ]]; then
         log_imp 9 "verify" "ALL DOMAINS PASS — HTTP 200 for all ${#domains[@]} domain(s)"
-        return 0
     else
         log_imp 9 "verify" "SOME DOMAINS FAILED — review output above"
+    fi
+
+    # ── Status-page health check (016) — CI post-deploy gate ──
+    # Checks /health endpoint on the main domain with Basic Auth.
+    # Verifies the status-page service is operational and all internal checks pass.
+    local status_page_ok=true
+    local main_domain="${PLATFORM_DOMAIN:-}"
+    local master_email="${PLATFORM_MASTER_EMAIL:-}"
+    local master_password="${PLATFORM_MASTER_PASSWORD:-}"
+
+    if [[ -n "$main_domain" && -n "$master_email" && -n "$master_password" ]]; then
+        log_imp 7 "status-page" "Checking status-page /health on https://${main_domain}/health"
+        local health_http_code=""
+        set +e
+        health_http_code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            --max-time 30 \
+            -u "${master_email}:${master_password}" \
+            "https://${main_domain}/health" 2>/dev/null)"
+        local health_exit=$?
+        set -e
+
+        if [[ $health_exit -ne 0 ]]; then
+            echo "  status-page /health -> CONNECTION FAILED (curl exit ${health_exit})"
+            log_imp 9 "status-page" "Status-page health check FAILED — connection error"
+            status_page_ok=false
+            all_ok=false
+        elif [[ "${health_http_code}" == "200" ]]; then
+            echo "  status-page /health -> HTTP 200 PASS ✓"
+            log_imp 7 "status-page" "Status-page health check PASSED"
+        else
+            echo "  status-page /health -> HTTP ${health_http_code} FAIL ⚠️"
+            log_imp 9 "status-page" "Status-page health check FAILED (HTTP ${health_http_code})"
+            status_page_ok=false
+            all_ok=false
+        fi
+    else
+        log_imp 8 "status-page" "Skipping status-page health check — missing PLATFORM_DOMAIN or credentials"
+    fi
+    echo ""
+
+    if [[ "${all_ok}" == true ]]; then
+        log_imp 9 "verify" "ALL CHECKS PASS — domains + status-page health"
+        return 0
+    else
+        log_imp 9 "verify" "SOME CHECKS FAILED — review output above"
         return 1
     fi
 }

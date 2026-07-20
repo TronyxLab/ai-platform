@@ -180,3 +180,4 @@ profiles:
   - monitoring
   - backup-cron
   - minio
+  - status-page

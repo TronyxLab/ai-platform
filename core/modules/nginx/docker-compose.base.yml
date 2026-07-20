@@ -76,6 +76,9 @@ services:
       # Default: ./overlays (empty dir, .gitkeep ensures git tracks the directory)
       # Production: NGINX_OVERLAY_DIR=/opt/node-configs/<node>/overlays/nginx
       - ${NGINX_OVERLAY_DIR:-./overlays}:/etc/nginx/conf.d/overlay:ro
+      # htpasswd-platform — generated from PLATFORM_MASTER_CREDENTIALS by secrets.sh
+      # Used by platform-default.conf.template (+ prometheus/loki vhosts) for Basic Auth
+      - /run/platform/.htpasswd-platform:/etc/nginx/conf.d/.htpasswd-platform:ro
 
     networks:
       proxy-net:

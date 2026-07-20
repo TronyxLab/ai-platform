@@ -157,6 +157,86 @@ step_10_decrypt_secrets() {
 # endregion FUNC_step_10_decrypt_secrets
 
 # ═══════════════════════════════════════════════════════════════════
+# HTPASSWD: Generate platform htpasswd from master credentials
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC__ensure_htpasswd_generated
+## @purpose  Generate /run/platform/.htpasswd-platform from PLATFORM_MASTER_EMAIL
+##           and PLATFORM_MASTER_PASSWORD. Idempotent — checks existing file and
+##           verifies hash matches current credentials before regeneration.
+##           Exports HTPASSWD_FILE path for nginx container mount.
+## @param    (none — depends on env vars)
+## @io       in:  PLATFORM_MASTER_EMAIL (env)
+##            in:  PLATFORM_MASTER_PASSWORD (env)
+##            out: HTPASSWD_FILE exported
+##            effect: creates/updates /run/platform/.htpasswd-platform
+##            return: 0 on success, 1 if credentials missing or openssl fails
+## @complexity O(1)
+## @dependencies — openssl (for APR1 password hash generation)
+## @invariants — Requires both PLATFORM_MASTER_EMAIL and PLATFORM_MASTER_PASSWORD
+##             - Runs idempotently: if file exists and hash matches, no-op
+##             - Exports HTPASSWD_FILE variable for consumer scripts
+##             - File permissions: 644, owner: current user
+## @rationale Master credentials unlock all platform services (status-page, Prometheus, Loki,
+##            Grafana, Langfuse, Hermes). A single htpasswd file generated from these creds
+##            is mounted into nginx for all vhost auth_basic blocks.
+_ensure_htpasswd_generated() {
+    local email="${PLATFORM_MASTER_EMAIL:-}"
+    local password="${PLATFORM_MASTER_PASSWORD:-}"
+    local htpasswd_file="${HTPASSWD_FILE:-/run/platform/.htpasswd-platform}"
+
+    if [[ -z "$email" ]]; then
+        log_step "htpasswd" "WARN" "PLATFORM_MASTER_EMAIL not set — skipping htpasswd generation"
+        return 1
+    fi
+
+    if [[ -z "$password" ]]; then
+        log_step "htpasswd" "WARN" "PLATFORM_MASTER_PASSWORD not set — skipping htpasswd generation"
+        return 1
+    fi
+
+    # ── Ensure output directory exists ──
+    mkdir -p "$(dirname "$htpasswd_file")" 2>/dev/null || true
+
+    # ── Idempotency: check existing file ──
+    if [[ -f "$htpasswd_file" ]]; then
+        # Verify hash matches current credentials using openssl passwd verification
+        local existing_hash
+        existing_hash=$(grep "^${email}:" "$htpasswd_file" 2>/dev/null | cut -d: -f2)
+        if [[ -n "$existing_hash" ]]; then
+            # Verify by generating a fresh hash with the same password and comparing format
+            # APR1 hashes contain the same salt each time — we verify by checking we can re-generate
+            local salt
+            salt=$(echo "$existing_hash" | cut -d'$' -f3)
+            if [[ -n "$salt" ]]; then
+                local verify_hash
+                verify_hash=$(openssl passwd -apr1 -salt "$salt" "$password" 2>/dev/null)
+                if [[ "$verify_hash" == "$existing_hash" ]]; then
+                    export HTPASSWD_FILE="$htpasswd_file"
+                    log_step "htpasswd" "INFO" "htpasswd file exists and matches credentials — no-op"
+                    return 0
+                fi
+            fi
+        fi
+        log_step "htpasswd" "INFO" "htpasswd file exists but credentials changed — regenerating"
+    fi
+
+    # ── Generate htpasswd entry ──
+    local apr1_hash
+    apr1_hash=$(openssl passwd -apr1 "$password" 2>/dev/null) || {
+        log_step "htpasswd" "FAIL" "openssl passwd -apr1 failed — cannot generate htpasswd"
+        return 1
+    }
+
+    echo "${email}:${apr1_hash}" > "$htpasswd_file"
+    chmod 644 "$htpasswd_file" 2>/dev/null || true
+
+    export HTPASSWD_FILE="$htpasswd_file"
+    log_step "htpasswd" "INFO" "htpasswd file generated: ${htpasswd_file} (user: ${email})"
+    return 0
+}
+# endregion FUNC__ensure_htpasswd_generated
+
+# ═══════════════════════════════════════════════════════════════════
 # STEP 12b: Ensure required secrets (post-decrypt, pre-deploy)
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_step_12b_ensure_secrets
@@ -307,6 +387,9 @@ for s in data.get('secrets', []):
     else
         log_step "ensure-secrets" "INFO" "All required secrets present"
     fi
+
+    # ── Generate platform htpasswd from master credentials ──
+    _ensure_htpasswd_generated || log_step "ensure-secrets" "WARN" "htpasswd generation failed — status-page auth will be unavailable"
 
     step_done "ensure-secrets" "Secrets validation complete"
 }

@@ -53,6 +53,7 @@ PLATFORM_MODULES: set[str] = {
     "platform-secrets",
     "postgres",
     "redis",
+    "status-page",
 }
 
 # Modules that should have a sudo-whitelist.conf symlink

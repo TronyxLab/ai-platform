@@ -1,0 +1,41 @@
+# GREP_SUMMARY: status-page module docker live-status health endpoint basic-auth ci-gate
+# STRUCTURE: ▶ module:status-page → proxy-net → /health + /status.json → depends_on:nginx → ┐
+# region MODULE_CONTRACT
+## @purpose  Live status-page service — aggregates node health (vhosts + containers), renders HTML table,
+##           exposes /health for CI post-deploy gate. Protected by nginx Basic Auth with stealth 444.
+## @scope    Docker module, runs on proxy-net, reads node.yaml + docker-health.json, live-curls vhosts
+## @invariants
+##   - install_type: docker — managed by compose
+##   - profiles: [status-page] — pluggable via COMPOSE_PROFILES
+##   - Networks: proxy-net (external:true, pre-created by bootstrap)
+##   - restart: unless-stopped
+##   - Healthcheck: curl localhost:8080/health → 200
+##   - NO ports — accessed via nginx proxy_pass only
+##   - Anti-recursion: excludes status-page container from self-checks
+##   - Timeout budget: total ≤30s, per-check ≤5s
+##   - Reads /run/platform/docker-health.json (tmpfs, cron-refreshed every 1m)
+##   - Reads node.yaml ro from /opt/node-configs/<node>/node.yaml
+## @rationale Live-агрегатор статуса ноды: оператору — HTML со ссылками, CI — /health как финальный gate.
+##            docker-healthcheck.sh-гибрид (cron → JSON-файл) вместо docker.sock для безопасности.
+##            python3-stdlib (http.server) для минимального образа без зависимостей.
+# endregion MODULE_CONTRACT
+
+name: status-page
+install_type: docker
+description: "Live status-page service — node health aggregation (vhosts + containers), HTML table with links, /health CI-gate endpoint. Protected by nginx Basic Auth."
+
+depends_on:
+  - nginx
+
+interfaces:
+  - healthcheck
+
+spool_dir: /var/lib/platform/status-page/data
+spool_volume: status-page-data
+
+env_shared:
+  PLATFORM_DOMAIN: "${PLATFORM_DOMAIN}"
+
+env_requires:
+  - PLATFORM_MASTER_EMAIL
+  - PLATFORM_MASTER_PASSWORD

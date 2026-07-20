@@ -1,0 +1,27 @@
+# GREP_SUMMARY: status-page test overlay shifted-ports 18080 container_name status-page-test
+# STRUCTURE: ▶ status-page-test [profiles:status-page] → port 18080:8080 → ┐
+# region MODULE_CONTRACT
+## @purpose  Test overlay for status-page — shifts port to 18080 for CI isolation,
+##           overrides container_name to status-page-test
+## @scope    Included in docker-compose.test.yml via include
+## @invariants
+##   - container_name: status-page-test (prevents collision with base status-page container)
+##   - Port: 18080:8080 (shifted from base 8080 for test isolation)
+##   - profiles: [status-page] (consistent with base)
+##   - !override tag on overridden keys per test overlay convention (F-7)
+## @rationale Test overlay pattern from F-7: shifted ports prevent port conflicts in CI;
+##            unique container_name prevents collision with base compose services
+##            when both test and base compose files are loaded.
+# endregion MODULE_CONTRACT
+
+services:
+  status-page:
+    container_name: status-page-test
+    networks: !override
+      - test-proxy-net
+    ports: !override
+      - "18080:8080"
+
+networks:
+  test-proxy-net:
+    external: true
