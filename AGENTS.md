@@ -151,6 +151,13 @@
 · Reason: Code review + AGENTS.md (настоящий раздел) + pre-commit hook на новые inline python3 = достаточная защита при текущем масштабе команды и velocity. CI gate добавит friction без пропорционального gains.
 · Rev: если через квартал (2026-10-21) зафиксировано >3 нарушений языковой политики → поднять вопрос о CI gate (Whitelist .sh через core/entrypoint-manifest.yaml).
 
+⚠️ TRAP[DECISION] · 2026-07-21 · HI · SSH staging-gate для lib/ssh.sh — single point of failure для всех remote-операций
+· Rejected: Прямой merge в main без staging-test (риск: единая точка отказа для deploy/bootstrap/healthcheck/node-update/converge/project-list/remove-project/verify)
+· Reason: `core/lib/ssh.sh` (Wave 2 W2-E1) — единственный source of truth для всех remote-команд платформы. Любая бага в `ssh_exec/ssh_read` блокирует все remote-операции одновременно. Staging-test обязателен перед merge: `make converge NODE=<test> && make project-list NODE=<test> && make project-status NAME=<p> NODE=<test>` — все 3 проходят без hang. Feature-branch с explicit merge-commit для audit-trail.
+· Revert-path: `git revert <merge-commit>` + `make bootstrap-node NODE=<prod>` (SCP/rsync доставит старую версию lib/).
+· DRIFT-note: macOS dev-machine не имеет GNU `timeout` — локальная проверка `ssh_read` падает с `command not found`. CI/runner/VPS = Linux, где `timeout` доступен. Если нужно локальное тестирование — `brew install coreutils && gtimeout` alias.
+· Rev: если CI-deploy стабильно < 300s → снизить deploy-default timeout с 600s до 400s (TRAP в lib/ssh.sh).
+
 ---
 
 ## Правило
