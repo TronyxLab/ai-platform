@@ -23,9 +23,12 @@ services:
       - "127.0.0.1:14000:4000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      # ⚠️ TRAP[BUG] · 2026-07-21 · MED · curl не установлен в litellm образе (ghcr.io/berriai/litellm)
+      # · Root: healthcheck использовал curl, но образ на базе python3 не содержит curl.
+      # · Fix: заменён на python3 — доступен во всех образах litellm.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
       interval: 10s
-      start_period: 15s
+      start_period: 30s
       retries: 6
     environment:
       # PostgreSQL DSN — pgbouncer:6432 на test-shared-db-net (постгрес запускается тестовой фикстурой)
