@@ -20,7 +20,8 @@
 
 | Канонический таргет | Операция | Сигнатура | Делегирует в (internal) |
 |---|---|---|---|
-| `make deploy` | Деплой проекта | `make deploy PROJECT=<dir>` | git push → CI → `core/internal/deploy/deploy-project.sh` |
+| `make deploy` | Деплой проекта через git push → CI | `make deploy PROJECT=<dir>` | git push → CI → `core/internal/deploy/deploy-project.sh` |
+| `make deploy-project` | Прямой деплой минуя CI (emergency) | `make deploy-project PROJECT=<dir> NODE=<node>` | `core/entrypoints/deploy-project.sh` → SSH platform-deliver + deploy.sh |
 | `make bootstrap-node` | Идемпотентный bootstrap ноды | `make bootstrap-node NODE=<name>` | `core/entrypoints/bootstrap.sh` → `core/internal/bootstrap/node-lifecycle.sh --mode init` |
 | `make context-promote` | Промоут платформы в контекст | `make context-promote CONTEXT=<context>` | `core/entrypoints/context-promote.sh` → копирование кода в `<context>/ai-platform` |
 | `make hermes-build-platform` | Сборка L1 локально | `make hermes-build-platform` | `core/entrypoints/build.sh` → `core/internal/build/hermes-images.sh build-platform` |
@@ -72,6 +73,7 @@
 core/
 ├── entrypoints/                # Internal-обёртки — только из Makefile
 │   ├── deploy.sh
+│   ├── deploy-project.sh
 │   ├── bootstrap.sh
 │   ├── context-promote.sh
 │   ├── build.sh

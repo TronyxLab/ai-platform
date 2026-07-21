@@ -33,7 +33,7 @@
 
 **Из папки проекта:** `make sync-env` (обновить .env.platform), `make status` (live-статус на ноде). Деплой = `git push` (main → production, staging → staging). Секреты в проекте настраивать не нужно.
 
-**Из `ai-platform/`:** `make new-project NAME=<n> TEMPLATE=<t> [DOMAIN=<d>]` · `make project-adopt PROJECT_DIR=<dir> [DOMAIN=<d>]` · `make remove-project PROJECT=<n> NODE=<node>` (безопасный: данные/volumes/репо не удаляются) · `make project-list` · `make project-status PROJECT=<n>` · `make new-context NODE=<n>` · `make context-promote CONTEXT=<ctx>`.
+**Из `ai-platform/`:** `make new-project NAME=<n> TEMPLATE=<t> [DOMAIN=<d>]` · `make project-adopt PROJECT_DIR=<dir> [DOMAIN=<d>]` · `make remove-project PROJECT=<n> NODE=<node>` (безопасный: данные/volumes/репо не удаляются) · `make project-list` · `make project-status PROJECT=<n>` · `make new-context NODE=<n>` · `make context-promote CONTEXT=<ctx>` · `make deploy-project PROJECT=<dir> NODE=<node>` (прямой деплой минуя CI, emergency).
 
 Не изобретай новые скрипты — все операции только через перечисленные make-таргеты (`ai-platform/core/entrypoint-manifest.yaml` — реестр).
 
@@ -42,6 +42,10 @@
 ```
 git push → CI проекта (≤15 строк) → reusable workflow из <org>/ai-platform@main
         → build ghcr.io → SSH forced-command → атомарный деплой на VPS + healthcheck rollback
+        (нормальный путь)
+
+make deploy-project → tar+ssh (platform-deliver + deploy.sh) → VPS
+        (прямой путь, emergency, аудит DEPLOY-DIRECT)
 ```
 
 Обновление платформенного CI не требует правок проектов (workflow подтягивается `@main`; в org — зеркало `<org>/ai-platform`, обновляется `make context-promote`).

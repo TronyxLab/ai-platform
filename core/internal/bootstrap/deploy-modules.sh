@@ -728,6 +728,58 @@ sys.exit(0)
 }
 # endregion CHECK_ENV_REQUIRES
 
+# region VALIDATE_SECRET_CHARSETS
+## @purpose  Validate all secrets with charset field in secrets-manifest.yaml match their declared regex charset.
+##           Fails fast before any docker compose up if any secret violates its charset constraint.
+## @io       None (reads secrets-manifest.yaml + env vars) → return 0/1
+## @complexity 2 — single python3 call iterating over manifest secrets
+## @invariants
+##   - Only secrets with explicit charset field are validated (no charset = skip)
+##   - Empty/missing env vars are skipped (checked separately by _check_env_requires)
+##   - Uses re.match (full string match, not re.search)
+##   - Graceful degradation: if manifest file not found → WARN + return 0
+##   - IMP:8 log for OK, IMP:9 for FAIL (stderr)
+## @rationale Charset constraint prevents pgbouncer crash-loop from special characters in POSTGRES_PASSWORD.
+##            Validation happens at deploy time (not decrypt time) because secrets-manifest.yaml is consumed
+##            by deploy-modules.sh and this is the last checkpoint before docker compose up.
+_validate_secret_charsets() {
+    local manifest="${PLATFORM_ROOT}/core/secrets-manifest.yaml"
+    local failed=0
+
+    if [[ ! -f "$manifest" ]]; then
+        log_step "charset" "WARN" "Manifest not found at ${manifest} — skipping charset validation (graceful degradation)"
+        return 0
+    fi
+
+    python3 -c "
+import yaml, os, sys, re
+with open('${manifest}') as f:
+    data = yaml.safe_load(f)
+failed = 0
+for s in data.get('secrets', []):
+    charset = s.get('charset', '')
+    if not charset:
+        continue
+    name = s['name']
+    val = os.environ.get(name, '')
+    if not val:
+        continue
+    if not re.match(charset, val):
+        print(f'[IMP:9][charset] FAIL: {name} does not match charset {charset}', file=sys.stderr)
+        failed += 1
+    else:
+        print(f'[IMP:8][charset] OK: {name} matches {charset}', file=sys.stderr)
+sys.exit(failed)
+" || {
+        log_step "charset" "FAIL" "Secret charset validation failed — aborting deploy"
+        return 1
+    }
+
+    log_step "charset" "DONE" "All secrets passed charset validation"
+    return 0
+}
+# endregion VALIDATE_SECRET_CHARSETS
+
 # region EXPAND_TRANSITIVE_DEPS
 ## @purpose  Expand comma-separated module list with transitive depends_on using BFS over module.yaml DAG
 ## @io       str (comma-separated module names) → stdout: space-separated expanded list
@@ -880,6 +932,9 @@ main() {
         echo "[IMP:10][deploy-modules][main] ERROR: NODE_YAML not set or file not found: '${node_yaml}'" >&2
         exit 1
     fi
+
+    # ── Secret charset validation (fail-fast before any docker compose ops) ──
+    _validate_secret_charsets || exit 1
 
     # Provisioner: canonical Docker networks + volumes (idempotent)
     local provisioner="${PATHS_INTERNAL_DIR}/provision-environment.sh"

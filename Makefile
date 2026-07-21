@@ -31,7 +31,7 @@ venv: $(VENV)
 # test infrastructure (volume dirs, Docker networks) is managed by tests/conftest.py
 # test_infra fixture — autouse session-scoped, replaces former test-infra-up/down targets.
 
-.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts
+.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy deploy-project bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts
 
 ## templates-check: Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic at unresolved
 templates-check:
@@ -430,17 +430,43 @@ _platform_root := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 # PLATFORM DEPLOYMENT OPERATIONS
 # ═══════════════════════════════════════════════════════════════════
 
-## deploy: Deploy project via CI pipeline
-##   Usage: make deploy PROJECT=<dir> [ENV=...] [BRANCH=...]
-##   Delegates to core/entrypoints/deploy.sh → git push → CI → forced-command
+## deploy: Deploy project via git push → CI pipeline
+##   Usage: make deploy PROJECT=<dir>
+##   Pushes main branch to origin, triggering CI workflow
 deploy:
-	@echo "[IMP:7][make][deploy] Deploying project PROJECT=$(PROJECT)..."
+	@echo "[IMP:7][make][deploy] Deploying PROJECT=$(PROJECT)..."
 	@if [[ -z "$(PROJECT)" ]]; then \
 		echo "[IMP:9][make][deploy] ERROR: PROJECT not set — usage: make deploy PROJECT=<dir>" >&2; \
 		exit 1; \
 	fi
-	@$(_platform_root)/core/entrypoints/deploy.sh "$(PROJECT)"
-	@echo "[IMP:9][make][deploy] Deploy complete"
+	@if [[ ! -d "$(PROJECT)/.git" ]]; then \
+		echo "[IMP:9][make][deploy] ERROR: $(PROJECT) is not a git repository" >&2; \
+		exit 1; \
+	fi
+	@if ! git -C "$(PROJECT)" remote get-url origin >/dev/null 2>&1; then \
+		echo "[IMP:9][make][deploy] ERROR: No git remote 'origin' in $(PROJECT)" >&2; \
+		exit 1; \
+	fi
+	@cd "$(PROJECT)" && git push origin main
+	@echo "[IMP:9][make][deploy] Git push complete — CI pipeline triggered"
+
+## deploy-project: Direct project deploy bypassing CI (emergency fallback)
+##   Usage: make deploy-project PROJECT=<dir> NODE=<node> [SKIP_VERIFY=1] [DRY_RUN=1]
+##   Validates PROJECT has ai-platform.yaml, resolves NODE→SSH host, deploys with audit
+deploy-project:
+	@echo "[IMP:7][make][deploy-project] Direct deploy PROJECT=$(PROJECT) NODE=$(NODE)..."
+	@if [[ -z "$(PROJECT)" ]]; then \
+		echo "[IMP:9][make][deploy-project] ERROR: PROJECT not set" >&2; exit 1; \
+	fi
+	@if [[ -z "$(NODE)" ]]; then \
+		echo "[IMP:9][make][deploy-project] ERROR: NODE not set" >&2; exit 1; \
+	fi
+	@$(_platform_root)/core/entrypoints/deploy-project.sh \
+		--project "$(PROJECT)" \
+		--node "$(NODE)" \
+		$(if $(filter 1,$(SKIP_VERIFY)),--skip-verify) \
+		$(if $(filter 1,$(DRY_RUN)),--dry-run)
+	@echo "[IMP:9][make][deploy-project] Direct deploy complete"
 
 ## bootstrap-node: Idempotent node bootstrap
 ##   Usage: make bootstrap-node [NODE=<name>] [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]

@@ -31,6 +31,11 @@ name: Deploy Project (Reusable)
         required: false
         type: string
         description: "Target node name (e.g. tronyx-vps) — overrides auto-resolution from ai-platform.yaml"
+      org:
+        required: false
+        default: ''
+        type: string
+        description: "Organization name (for org-aware paths)"
     secrets:
       CI_DEPLOY_KEY:
         description: "SSH private key for CI deploy user on target node"
@@ -80,7 +85,7 @@ jobs:
           [ -f .env.platform ] && FILES="$FILES .env.platform"
 
           echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
-          tar czf - $FILES | ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new ci-deploy@${{ env.ssh_host }} "platform-deliver ${{ inputs.project_name }}"
+          tar czf - $FILES | ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new ci-deploy@${{ env.ssh_host }} "platform-deliver ${{ inputs.org && format('{0} {1}', inputs.org, inputs.project_name) || inputs.project_name }}"
           echo "[IMP:9][deliver] Delivery complete"
         shell: bash
 

@@ -39,6 +39,7 @@ def _module_contract():
 import logging
 import os
 import shutil
+from pathlib import Path
 
 import pytest
 import yaml
@@ -578,6 +579,51 @@ def test_each_database_has_host_port_dbname(postgres_fixtures, caplog) -> None:
                 params["host"],
                 params["port"],
             )
+
+
+# ── Test 8: Charset Constraint Awareness ──────────────────────────
+
+
+@pytest.mark.static_audit
+@ldd_trajectory
+def test_pgbouncer_password_charset_constraint(postgres_fixtures, caplog) -> None:
+    """PgBouncer DATABASE_URLS uses ${POSTGRES_PASSWORD} directly (charset constraint guarantees safety, no ENCODED needed).
+
+    ## @purpose — Verify that pgbouncer compose uses ${POSTGRES_PASSWORD} directly without
+    ##            ENCODED variant. Charset constraint ^[A-Za-z0-9._-]+$ guarantees URL safety.
+    ## @io — ⇥ postgres_fixtures: fixture → ⎋ None
+    ## @complexity — O(1) — single file read + substring checks
+    ## @invariants
+    ##   - ${POSTGRES_PASSWORD} present in postgres docker-compose.base.yml
+    ##   - POSTGRES_PASSWORD_ENCODED absent (rejected Option B artifact per DevPlan 014)
+    """
+    # 🧪 TRAP[TEST] · 2026-07-21 · Regression: charset constraint guarantees ${POSTGRES_PASSWORD} safe in URL · Scenario: pgbouncer compose must use raw POSTGRES_PASSWORD without ENCODED variant · Remove if: charset constraint ^[A-Za-z0-9._-]+$ is removed or relaxed
+    with caplog.at_level(logging.DEBUG):
+        logger.info("[IMP:7][test_pgbouncer][charset_constraint] START")
+
+        compose_path = postgres_fixtures["COMPOSE_FILE"]
+        assert os.path.isfile(compose_path), f"Compose file not found: {compose_path}"
+
+        compose_text = Path(compose_path).read_text()
+
+        has_direct_usage = "${POSTGRES_PASSWORD}" in compose_text
+        has_encoded = "POSTGRES_PASSWORD_ENCODED" in compose_text
+
+        logger.critical(
+            "[IMP:9][test_pgbouncer][charset_constraint] ASSERT: ${POSTGRES_PASSWORD}=%s POSTGRES_PASSWORD_ENCODED=%s",
+            has_direct_usage,
+            has_encoded,
+        )
+        assert has_direct_usage, "pgbouncer compose must use ${POSTGRES_PASSWORD} directly in DATABASE_URLS"
+        assert not has_encoded, (
+            "POSTGRES_PASSWORD_ENCODED must not exist — charset constraint makes it unnecessary. "
+            "Remove any ENCODED references."
+        )
+        logger.info(
+            "[IMP:8][test_pgbouncer][charset_constraint] PASS: direct=%s no_encoded=%s",
+            has_direct_usage,
+            not has_encoded,
+        )
 
 
 # endregion PGBOUNCER_STATIC_AUDIT_TESTS

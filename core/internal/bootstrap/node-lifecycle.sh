@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: node-lifecycle bootstrap init update orchestrator idempotent sequential-steps checkpoint-resume docker ufw nginx sops users sudoers audit telegram scp-deploy no-git deploy-modules healthcheck per-step-content-hash
-# STRUCTURE: ▶ --mode init (17 sequential steps → update → audit → telegram) | --mode update (5 steps → audit) → checkpoint/resume at each step; SCP-delivered code (no git); node-update-fail non-fatal
+# STRUCTURE: ▶ --mode init (18 sequential steps → update → audit → telegram) | --mode update (5 steps → audit) → checkpoint/resume at each step; SCP-delivered code (no git); node-update-fail non-fatal
 # region MODULE_CONTRACT
-## @purpose  Unified node lifecycle orchestrator: transforms bare VPS into a fully configured platform node (init mode, 17 steps) or performs incremental update (update mode, 5 steps). Merged from orchestrator.sh + node-update.sh.
+## @purpose  Unified node lifecycle orchestrator: transforms bare VPS into a fully configured platform node (init mode, 18 steps) or performs incremental update (update mode, 5 steps). Merged from orchestrator.sh + node-update.sh.
 ## @scope    Called from Makefile via entrypoints/bootstrap.sh (--mode init) or entrypoints/node-update.sh (--mode update); idempotent — safe to re-run on provisioned node
 ## @location core/internal/bootstrap/node-lifecycle.sh — merged from orchestrator.sh + node-update.sh
 ## @invariants
@@ -138,7 +138,7 @@ _step_hash() {
 # ─── End content hash helper ────────────────────────────
 
 # ══════════════════════════════════════════════════════════════════
-# INIT MODE — Bootstrap (17 steps)
+# INIT MODE — Bootstrap (18 steps)
 # ══════════════════════════════════════════════════════════════════
 
 # region VALIDATE_BOOTSTRAP_ENV
@@ -359,6 +359,8 @@ step_6b_create_projects_base() {
     fi
     # Always ensure ownership (idempotent — chown is safe to repeat)
     chown ci-deploy:ci-deploy /opt/projects
+    # Org subdirectories are created dynamically by handle_deliver() in
+    # deploy-project.sh on first platform-deliver call. No static creation needed.
     echo "[IMP:9][bootstrap][projects-base] /opt/projects ownership set to ci-deploy:ci-deploy" >&2
 }
 
@@ -505,6 +507,30 @@ _step_install_acme() {
         step_done "install-acme" "acme.sh installed"
     else
         step_warn "install-acme" "acme.sh install failed — SSL provisioning will fail later"
+    fi
+}
+
+# ─── STEP 13c: Initialize service passwords (secrets-init) ──────────
+## @brief  Initialize all service passwords (HERMES_DASHBOARD_PASSWORD,
+##         GF_SECURITY_ADMIN_PASSWORD, LANGFUSE_INIT_USER_PASSWORD) from
+##         PLATFORM_MASTER_PASSWORD. Called once at bootstrap init, NOT at update.
+## @detail  Delegates to secrets-init.sh. Idempotent: if a service password is
+##          already set (operator-defined), it is NOT overwritten. Non-fatal —
+##          if secrets-init.sh fails, bootstrap continues with WARN (passwords
+##          may already be set in SOPS). Init-only — update mode does NOT call
+##          this again (passwords already initialized at init).
+## @invariants
+##   - Runs AFTER ensure-secrets (step_12b) so all basic secrets are in env
+##   - Runs BEFORE read-node-yaml, ghcr-auth, sudoers — service passwords are
+##     available for any downstream step that may need them
+##   - secrets-init.sh must exist; if missing, log WARN, continue without fail
+##   - In update mode: NOT called (secrets-init.sh is init-only)
+_step_secrets_init() {
+    step_start "secrets-init" "Initializing service passwords from PLATFORM_MASTER_PASSWORD"
+    if bash "${CORE_DIR}/internal/bootstrap/secrets-init.sh" 2>&1; then
+        step_done "secrets-init" "Service passwords initialized"
+    else
+        step_warn "secrets-init" "secrets-init.sh failed — passwords may be set in SOPS"
     fi
 }
 
@@ -970,7 +996,7 @@ main() {
             echo "[IMP:9][node-lifecycle][dry-run] Steps: " >&2
             echo "[IMP:9][node-lifecycle][dry-run]   1. ssh-access  2. apt-deps  3. [tor]  4. install-docker  5. users" >&2
             echo "[IMP:9][node-lifecycle][dry-run]   6. ci-deploy-user  6b. projects-base  7. firewall  8. verify-core" >&2
-            echo "[IMP:9][node-lifecycle][dry-run]   9. verify-node-configs  10. decrypt-secrets  11. ensure-secrets" >&2
+            echo "[IMP:9][node-lifecycle][dry-run]   9. verify-node-configs  10. decrypt-secrets  11. ensure-secrets  11b. secrets-init" >&2
             echo "[IMP:9][node-lifecycle][dry-run]   12. read-node-yaml  13. ghcr-auth  14. sudoers" >&2
             echo "[IMP:9][node-lifecycle][dry-run]   14b. install-acme  15. node-update  16. converge  17. audit  18. telegram" >&2
             echo "[IMP:9][node-lifecycle][dry-run] Bootstrap DRY RUN — no mutations performed, exit 0" >&2
@@ -1061,6 +1087,13 @@ PYEOF
         # ensure-secrets depends on lib/secrets.sh
         CHECKPOINT_STEP_HASH="$(_step_hash "ensure-secrets" "${CORE_DIR}/lib/secrets.sh")" \
             checkpoint_step "ensure-secrets" step_12b_ensure_secrets
+
+        # secrets-init: initialize service passwords from PLATFORM_MASTER_PASSWORD
+        # Init-only — NOT called in update mode (passwords already initialized at init)
+        # Non-fatal: if secrets-init.sh fails, continue with WARN
+        CHECKPOINT_STEP_HASH="$(_step_hash "secrets-init" \
+            "${CORE_DIR}/internal/bootstrap/secrets-init.sh")" \
+            checkpoint_step "secrets-init" _step_secrets_init
 
         CHECKPOINT_STEP_HASH="$(_step_hash "read-node-yaml")" \
             checkpoint_step "read-node-yaml" step_11_read_node_yaml

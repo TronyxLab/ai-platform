@@ -107,7 +107,7 @@ services:
       HERMES_DASHBOARD_HOST: "0.0.0.0"
       # HERMES_DASHBOARD_INSECURE is NOT set — dashboard always behind Basic Auth (ai-platform.yaml §security)
       HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${HERMES_DASHBOARD_USERNAME:-tronyx}"
-      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${HERMES_DASHBOARD_PASSWORD:-}"
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${HERMES_DASHBOARD_PASSWORD}"
 
       # LLM API Keys (passthrough from secrets.env)
       # ⚠️ TRAP[DECISION] · 2026-06-28 · — · LiteLLM Proxy as LLM gateway

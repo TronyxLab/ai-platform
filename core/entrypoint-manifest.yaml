@@ -22,14 +22,18 @@
 bootstrap:
   - make_target: bootstrap-node
     mechanism: ssh+rsync
-    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/deploy-modules.sh
+    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/secrets-init.sh + core/internal/bootstrap/deploy-modules.sh
     description: "Idempotent bootstrap of a new node (LIFE CYCLE/INIT, not DEPLOY)"
 
 deploy:
   - make_target: deploy
-    mechanism: git-push-ci
-    delegates_to: core/entrypoints/deploy.sh → git push → CI → core/internal/deploy/deploy-project.sh → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh
+    mechanism: git-push
+    delegates_to: git push → CI → core/entrypoints/deploy.sh (VPS forced-command) → core/internal/deploy/deploy-project.sh → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh
     description: "Deploy a project via git push → CI → SSH forced-command on VPS"
+  - make_target: deploy-project
+    mechanism: ssh+tar
+    delegates_to: core/entrypoints/deploy-project.sh → ssh platform-deliver + ssh deploy.sh → core/internal/deploy/deploy-project.sh
+    description: "Direct project deploy bypassing CI (emergency fallback) — tar+ssh deliver, deploy with DEPLOY-DIRECT audit, optional post-deploy verify"
   - make_target: context-promote
     mechanism: git-push-context
     delegates_to: core/entrypoints/context-promote.sh → copy to <context>/ai-platform → CI
@@ -400,6 +404,10 @@ gates:
   - id: p20-container-coupling
     description: Container coupling validation — referenced container names have alias, env hostnames resolvable, prometheus targets resolvable
     test_file: test_p20_container_coupling.py
+  - id: password-charset
+    description: "Password charset constraint validation — all URL-embedded passwords must match ^[A-Za-z0-9._-]+$"
+    test_file: test_gate_password_charset.py
+    markers: gate
   - id: restart-consistency
     description: Restart consistency validation across compose files
     test_file: test_restart_consistency.py
@@ -517,3 +525,4 @@ allowed_verbs:
   - render-vhosts
   # project-sync-secrets — DISABLED, requires core/internal/scaffold/sync-repo-secrets.sh (T3.6)
   - node-update
+  - deploy-project

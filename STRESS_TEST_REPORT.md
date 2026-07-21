@@ -1,3 +1,6 @@
+# GREP_SUMMARY: stress-test report tronyx-vps load-test performance benchmark
+# STRUCTURE: ▶ pre-deploy gates → ◇ deploy sequence → ◇ verify → ⊕ load test → ⎋ summary
+
 # Stress Test Report — tronyx-vps
 
 ## Дата: 2026-07-20
@@ -14,7 +17,7 @@
 | `make test MARKER=e2e` | SKIPPED | E2E не запускались по причине незавершённого gate |
 
 **Исправленные дефекты:**
-1. Cross-layer violation в `deploy.sh:99` — вызов `verify.sh` из entrypoints (entrypoint→entrypoint) заменён на прямой вызов `internal/verify/verify-domains.sh`
+1. Cross-layer violation в `deploy.sh:99` — вызов `verify.sh` из entrypoints (entrypoint→entrypoint) заменён на прямой вызов `core/internal/verify/verify-domains.sh`
 2. .env drift — добавлены недостающие ключи `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GLM_API_KEY`
 3. Formatting — `ruff format` + trailing whitespace в StatusReport.md
 4. SMOKE_ENV — добавлены `NODE_NAME` и `NODE_CONFIGS_DIR` для корректной работы status-page в тестовом окружении macOS

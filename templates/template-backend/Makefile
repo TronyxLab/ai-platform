@@ -5,6 +5,7 @@
 #   - PLATFORM_DIR настраивается под локальное расположение платформы
 #   - Все таргеты делегируют в Makefile платформы с PROJECT=$(CURDIR)
 PLATFORM_DIR ?= $(HOME)/projects/ai-platform
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · PLATFORM_DIR not org-dependent — no T2 changes needed
 
 sync-env: ; @$(MAKE) -C $(PLATFORM_DIR) project-sync-env PROJECT=$(CURDIR)
 status:   ; @$(MAKE) -C $(PLATFORM_DIR) project-status PROJECT=$(CURDIR)

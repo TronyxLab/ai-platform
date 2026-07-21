@@ -65,6 +65,8 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/internal/bootstrap/ssl-provision.sh",
     # module hook scripts — called from deploy-project.sh _trigger_deploy_hooks via module.yaml hooks: section
     "core/modules/nginx/nginx_reload_hook.sh",
+    # SSH forced-command entrypoint on VPS — not called from Makefile directly
+    "core/entrypoints/deploy.sh",
 ]
 
 # Subdirectory names to exclude when globbing for shebang files.

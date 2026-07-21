@@ -231,8 +231,10 @@ _validate_project_name() {
 ##   - PROJECTS_BASE — единственный источник пути (никаких /opt/projects хардкодов в новых строках)
 handle_deliver() {
     local project="$1"
+    local org="${2:-}"
     local tmp_tar=""
     local tmp_dir=""
+    local deliver_ctx="${org:+${org}/}${project}"
 
     # ── Cleanup helper ──
     _cleanup_deliver_temp() {
@@ -240,16 +242,16 @@ handle_deliver() {
         [[ -n "$tmp_tar" && -f "$tmp_tar" ]] && rm -f "$tmp_tar"
     }
 
-    audit_log "platform-deliver:${project}" "DELIVER-START" "Starting payload delivery for ${project}"
-    log_imp 9 "deliver" "=== platform-deliver START: ${project} ==="
+    audit_log "platform-deliver:${deliver_ctx}" "DELIVER-START" "Starting payload delivery for ${deliver_ctx}"
+    log_imp 9 "deliver" "=== platform-deliver START: ${deliver_ctx} ==="
 
     # Validate project name (reuse _validate_project_name)
     if ! _validate_project_name "$project"; then
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Invalid project name '${project}'"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Invalid project name '${project}'"
         exit 1
     fi
 
-    local project_dir="${PROJECTS_BASE}/${project}"
+    local project_dir="${PROJECTS_BASE}/${org:+${org}/}${project}"
 
     # Create temp files
     tmp_tar=$(mktemp) || { log_imp 10 "deliver" "FATAL: mktemp failed for tar"; exit 1; }
@@ -270,14 +272,14 @@ handle_deliver() {
     if [[ "$actual_size" -gt 1048576 ]]; then
         _cleanup_deliver_temp
         log_imp 10 "deliver" "FATAL: payload exceeds 1 MiB limit ($actual_size bytes)"
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Payload exceeds 1 MiB limit ($actual_size bytes)"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Payload exceeds 1 MiB limit ($actual_size bytes)"
         exit 1
     fi
 
     if [[ "$actual_size" -eq 0 ]]; then
         _cleanup_deliver_temp
         log_imp 10 "deliver" "FATAL: empty payload"
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Empty payload"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Empty payload"
         exit 1
     fi
 
@@ -285,7 +287,7 @@ handle_deliver() {
     if ! tar -xzf "$tmp_tar" --no-same-owner -C "$tmp_dir" 2>/dev/null; then
         _cleanup_deliver_temp
         log_imp 10 "deliver" "FATAL: tar extraction failed for ${project}"
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Tar extraction failed"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Tar extraction failed"
         exit 1
     fi
 
@@ -296,7 +298,7 @@ handle_deliver() {
     if [[ "$subdir_files" -gt 0 ]]; then
         _cleanup_deliver_temp
         log_imp 10 "deliver" "FATAL: subdirectory files in payload (path traversal)"
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Subdirectory files rejected (path traversal)"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Subdirectory files rejected (path traversal)"
         exit 1
     fi
 
@@ -348,7 +350,7 @@ handle_deliver() {
 
     if [[ "$has_invalid" -ne 0 ]]; then
         _cleanup_deliver_temp
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Content validation failed — invalid entries"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Content validation failed — invalid entries"
         exit 1
     fi
 
@@ -360,7 +362,7 @@ handle_deliver() {
     if [[ "$found_compose" -eq 0 ]]; then
         _cleanup_deliver_temp
         log_imp 10 "deliver" "FATAL: no docker-compose.yml or compose.yaml in payload"
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Missing compose file"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Missing compose file"
         exit 1
     fi
 
@@ -368,7 +370,7 @@ handle_deliver() {
     mkdir -p "$project_dir" || {
         _cleanup_deliver_temp
         log_imp 10 "deliver" "FATAL: cannot create project directory ${project_dir}"
-        audit_log "platform-deliver:${project}" "DELIVER-FAIL" "Cannot create ${project_dir}"
+        audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "Cannot create ${project_dir}"
         exit 1
     }
 
@@ -377,7 +379,7 @@ handle_deliver() {
         mv "$entry" "$project_dir/" || {
             _cleanup_deliver_temp
             log_imp 10 "deliver" "FATAL: mv failed for $(basename "$entry")"
-            audit_log "platform-deliver:${project}" "DELIVER-FAIL" "mv failed during atomic copy"
+            audit_log "platform-deliver:${deliver_ctx}" "DELIVER-FAIL" "mv failed during atomic copy"
             exit 1
         }
     done
@@ -385,7 +387,7 @@ handle_deliver() {
     # Cleanup temp files
     _cleanup_deliver_temp
 
-    audit_log "platform-deliver:${project}" "DELIVER-SUCCESS" "Payload delivered to ${project_dir}"
+    audit_log "platform-deliver:${deliver_ctx}" "DELIVER-SUCCESS" "Payload delivered to ${project_dir}"
     log_imp 9 "deliver" "=== platform-deliver DONE (success) ==="
     exit 0
 }
@@ -425,17 +427,35 @@ parse_ssh_command() {
     # · Reason: zero new channels/keys, restrict preserved, decision confirmed by user
     # · Rev: if payload size exceeds 1M regularly → consider SCP variant with separate authorized_keys entry
     # · See: .ai/plans/007-dance-site-launch/02-Debt.md D2
+    # 🧐 TRAP[DECISION] · 2026-07-21 · — · platform-deliver backward compat via argument count
+    # · Rejected: --org flag (breaks existing CI calls immediately)
+    # · Reason: 1-arg = old format, 2-arg = new format. Project names validated as [a-zA-Z0-9_-]+
+    #   (no spaces) → space-separated detection is unambiguous.
+    # · Rev: if project names ever allow spaces → switch to explicit --org flag
     if [[ "$raw" == "platform-deliver "* ]]; then
-        local project="${raw#platform-deliver }"
-        # Trim whitespace
-        project="$(echo "$project" | xargs)"
-        log_imp 8 "args" "Dispatching deliver for project=${project}"
-        # Set PROJECT_DIR so _finalize_deploy EXIT trap has a valid path
+        local args="${raw#platform-deliver }"
+        args="$(echo "$args" | xargs)"
+        local org=""
+        local project=""
+        # Detect format: two tokens = org+project (new), one token = project (old)
+        if [[ "$args" == *" "* ]]; then
+            org="${args%% *}"
+            project="${args#* }"
+            project="$(echo "$project" | xargs)"
+            # Validate org does not contain '/'
+            if [[ "$org" == */* ]]; then
+                log_imp 10 "args" "FATAL: org '${org}' contains '/' — invalid"
+                exit 1
+            fi
+            log_imp 8 "args" "platform-deliver: org=${org} project=${project}"
+        else
+            project="$args"
+            log_imp 8 "args" "platform-deliver (legacy): project=${project}"
+        fi
         PROJECT="${project}"
-        PROJECT_DIR="${PROJECTS_BASE}/${PROJECT}"
-        # Deploy status — not a deploy, prevent _cleanup_snapshots
+        PROJECT_DIR="${PROJECTS_BASE}/${org:+${org}/}${project}"
         DEPLOY_STATUS="deliver"
-        handle_deliver "$project"
+        handle_deliver "$project" "$org"
         exit 0
     fi
 
@@ -998,7 +1018,19 @@ main() {
     safe_invocation="$(echo "${SSH_ORIGINAL_COMMAND:-}" | sed 's/export [A-Z_]\{1,\}=/export ***=/g')"
     log_imp 9 "main" "Invocation: SSH_ORIGINAL_COMMAND='${safe_invocation}'"
 
-    audit_log "platform-deploy:${PROJECT}" "START" "Deploy ${PROJECT}/${SERVICE_NAME} → ${REF}"
+    # ═══════════════════════════════════════════════════════════════
+    # Direct deploy detection (DEPLOY-DIRECT audit marking, D5)
+    # PLATFORM_DEPLOY_DIRECT=1 is set by deploy-project.sh entrypoint
+    # when deploying via `make deploy-project` (emergency bypass-CI).
+    # If unset — normal CI deploy (no behavioral change).
+    # ═══════════════════════════════════════════════════════════════
+    if [[ "${PLATFORM_DEPLOY_DIRECT:-}" == "1" ]]; then
+        local deploy_source="DEPLOY-DIRECT (from ${SSH_CLIENT:-unknown})"
+        log_imp 9 "main" "Direct deploy detected — source: ${deploy_source}"
+    fi
+
+    local deploy_tag="${PLATFORM_DEPLOY_DIRECT:+DEPLOY-DIRECT:}platform-deploy:${PROJECT}"
+    audit_log "${deploy_tag}" "START" "Deploy ${PROJECT}/${SERVICE_NAME} → ${REF} [source: ${PLATFORM_DEPLOY_DIRECT:+direct}${PLATFORM_DEPLOY_DIRECT:-CI}]"
 
     save_previous_image
     capture_deploy_snapshot
@@ -1064,7 +1096,7 @@ main() {
         prune_old_images || log_imp 8 "main" "prune skipped (non-fatal)"
         _trigger_deploy_hooks || log_imp 8 "main" "hooks skipped (non-fatal)"
 
-        audit_log "platform-deploy:${PROJECT}" "DONE" \
+        audit_log "${deploy_tag}" "DONE" \
             "Deploy success: ${SERVICE_NAME} → ${REF} (prev=${PREVIOUS_IMAGE_ID:-none})" || log_imp 6 "main" "audit unavailable"
         notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён ✅
 ${PROJECT}/${SERVICE_NAME} → ${REF}"

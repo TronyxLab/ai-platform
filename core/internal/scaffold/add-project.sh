@@ -30,6 +30,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")}"
 PROJECTS_ROOT="${PROJECTS_ROOT:-$(dirname "$PLATFORM_ROOT")}"
 TEMPLATES_DIR="${PLATFORM_ROOT}/templates"
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · Org-aware path verified — no changes needed for T2
+# · Reason: PROJECTS_ROOT="${PROJECTS_ROOT:-$(dirname "$PLATFORM_ROOT")}" and
+#   project_dir="${PROJECTS_ROOT}/${ORG}/${NAME}" already use org correctly
 
 ORG=""
 NAME=""

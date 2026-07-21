@@ -222,6 +222,10 @@ def _scan_shell_for_literal_assignments(
             if _is_shell_variable_ref(raw_value):
                 continue
 
+            # Skip shell array declarations (VAR=(...) — array values are not credentials)
+            if raw_value.startswith("("):
+                continue
+
             # Strip leading quotes for path/value inspection
             stripped_value: str = raw_value.lstrip("\"'")
             # Skip path-like values (absolute paths starting with /)

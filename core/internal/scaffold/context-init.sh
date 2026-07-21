@@ -142,6 +142,11 @@ _create_dirs() {
 }
 # endregion FUNC_create_dirs
 
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · secrets-init called at bootstrap, not context-init
+# · Rejected: calling secrets-init.sh from context-init.sh
+# · Reason: PLATFORM_MASTER_PASSWORD not available at scaffold time — operator sets it in SOPS secrets before bootstrap
+# · Rev: if context-init gains access to PLATFORM_MASTER_PASSWORD at scaffold time → call secrets-init.sh here
+
 # region FUNC_create_skeleton_node_yaml
 _create_skeleton_node_yaml() {
     local skeleton_path="${CONTEXT_DIR}/node-configs/node.yaml"

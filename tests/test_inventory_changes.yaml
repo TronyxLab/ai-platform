@@ -25,6 +25,24 @@
 
 removed:
 
+  # ── DevPlan 021 (TASK-T1/T3): deploy.sh excluded from entrypoint testing ──
+  - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_deploy]"
+    reason: "021-deploy-direct-hotfix T1/T3: deploy.sh is SSH forced-command entrypoint on VPS — not called from Makefile directly. Registered as shebang exception, not a canonical entrypoint."
+    issue: "021-deploy-direct-hotfix T4"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_deploy]"
+    reason: "Same as above — deploy.sh excluded from canonical entrypoint testing."
+    issue: "021-deploy-direct-hotfix T4"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_deploy]"
+    reason: "Same as above — deploy.sh is SSH forced-command, not Makefile entrypoint."
+    issue: "021-deploy-direct-hotfix T4"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_deploy]"
+    reason: "Same as above — deploy.sh intentionally excluded from entrypoint tests."
+    issue: "021-deploy-direct-hotfix T4"
+    approved_by: "@tronyx"
+
   # ── DevPlan 020 (D2 context removal): test_adopt_fails_without_org → test_adopt_derives_org_from_path ──
   - nodeid: "tests/test_adopt_project_org_validation.py::test_adopt_fails_without_org"
     reason: "D2 context removal: adopt-project.sh now derives org from directory path (projects/<org>/<project>/), not from YAML context: field. Test replaced with test_adopt_derives_org_from_path."
