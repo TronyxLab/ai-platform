@@ -121,6 +121,16 @@ removed:
     issue: "011-drift-arch-decisions T4"
     approved_by: "@tronyx"
 
+  # ── DevPlan 034 (component-test-network-fix) — удалён observability integration test ──
+  - nodeid: "tests/test_integration_hermes_llm.py::test_hermes_llm_error_path_logged"
+    reason: "B5 (DevPlan 034): observability module split into 5 constituent modules (TASK-3). The single remaining reference to core/modules/observability/docker-compose.base.yml was dead — module no longer exists, test always skipped."
+    issue: "034-component-test-network-fix B5"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_integration_hermes_llm.py::test_hermes_llm_live_success"
+    reason: "Same as above — dead code referencing deleted observability module."
+    issue: "034-component-test-network-fix B5"
+    approved_by: "@tronyx"
+
   # ── DevPlan 026 (gate-systemic-fix) — удалён test_gate_zero_new_entrypoints ──
   - nodeid: "tests/gates/test_gate_sequencing.py::test_gate_zero_new_entrypoints"
     reason: "Removed — duplicate of test_all_shebang_files_in_manifest which covers zero-new-entrypoint invariant. Gate sequencing test suite consolidated in DevPlan 025, this test was kept in STRUCTURE comment but never implemented as a function."

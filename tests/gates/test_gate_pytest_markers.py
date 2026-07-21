@@ -62,7 +62,12 @@ EXPECTED_MARKERS = (
     "static_audit",
     "smoke",
     "component",
-    "integration",
+    # 🧐 TRAP[DECISION] · 2026-07-21 · — · integration marker removed per B5 (DevPlan 034)
+    # · Rejected: keep dead marker registered with no tests using it
+    # · Reason: integration tests (test_integration_hermes_llm.py) were the only consumers
+    # ·   of the integration marker. After B5 deletion, no tests use it. Removing both the
+    # ·   pyproject.toml entry and EXPECTED_MARKERS to avoid dead marker drift.
+    # · Rev: If integration tests are recreated in the future, add the marker back.
     "predeploy",
     "contract",
     "e2e",

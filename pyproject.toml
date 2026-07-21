@@ -52,7 +52,6 @@ markers = [
     "static_audit: static analysis tests (schema validation, unit tests, no Docker)",
     "smoke: compose lifecycle + healthchecks (needs Docker)",
     "component: hermes-agent + observability health endpoints (needs Docker)",
-    "integration: full hermes LLM stack (needs Docker)",
     "predeploy: container/config/network validation (needs Docker)",
     "contract: contract tests for entrypoint scripts (no Docker)",
     "e2e: manual end-to-end tests against external *.tronyx.ru (no Docker, dev-only)",
