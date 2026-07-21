@@ -95,9 +95,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       # ─── Step 3: Checkout repository for rsync ─────────────────────────
-      - name: Checkout repository
+      - name: Setup platform (composite — checkout only)
         if: steps.verify.outputs.skip != 'true'
-        uses: actions/checkout@v7
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: ''
+          install-gitleaks: 'false'
+          run-provisioner: 'false'
 
       # ─── Step 4: Guard — check required secrets ────────────────────────
       - name: Check required secrets

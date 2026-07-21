@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-21 | regenerated (1105 tests)
+## @changes — 2026-07-21 | regenerated (1117 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -62,9 +62,11 @@ test_nodeids:
 - tests/gates/test_gate_env_shared_consistency.py::test_env_shared_vars_injected_in_compose
 - tests/gates/test_gate_env_shared_consistency.py::test_no_hardcoded_noproxy_in_base_yml
 - tests/gates/test_gate_env_shared_consistency.py::test_proxy_vars_are_opt_in
+- tests/gates/test_gate_env_shared_consistency_negative.py::test_env_shared_divergence_detected
 - tests/gates/test_gate_exception_audit.py::test_no_hardcoded_target_sets_in_gates
 - tests/gates/test_gate_executable_bit.py::test_executable_bit_outside_lib
 - tests/gates/test_gate_executable_bit.py::test_negative_detects_644_outside_lib
+- tests/gates/test_gate_fixture_schema.py::test_all_test_fixtures_match_schemas
 - tests/gates/test_gate_gitleaks_version.py::test_gitleaks_composite_action_used
 - tests/gates/test_gate_gitleaks_version.py::test_single_gitleaks_version
 - tests/gates/test_gate_grep_summary.py::test_all_py_files_have_grep_summary
@@ -78,6 +80,7 @@ test_nodeids:
 - tests/gates/test_gate_litellm_pg_enforcement.py::test_litellm_compose_test_database_url_is_postgres
 - tests/gates/test_gate_litellm_pg_enforcement.py::test_litellm_env_database_url_is_postgres
 - tests/gates/test_gate_litellm_pg_enforcement.py::test_no_sqlite_in_litellm_config
+- tests/gates/test_gate_litellm_pg_enforcement_negative.py::test_litellm_sqlite_config_detected
 - tests/gates/test_gate_local_stack.py::test_all_modules_included
 - tests/gates/test_gate_local_stack.py::test_compose_config_resolves_full_stack
 - tests/gates/test_gate_manifest_integrity.py::test_agents_md_synced_with_manifest
@@ -114,6 +117,7 @@ test_nodeids:
 - tests/gates/test_gate_module_schema_d4.py::test_schema_allows_additional_properties
 - tests/gates/test_gate_module_schema_d4.py::test_schema_required_fields
 - tests/gates/test_gate_module_schema_d4.py::test_version_not_in_required
+- tests/gates/test_gate_module_schema_d4_negative.py::test_module_yaml_missing_required_fields
 - tests/gates/test_gate_module_yaml_contract.py::test_all_modules_have_required_fields
 - tests/gates/test_gate_module_yaml_contract.py::test_env_requires_no_duplicates
 - tests/gates/test_gate_module_yaml_contract.py::test_no_version_field
@@ -314,9 +318,6 @@ test_nodeids:
 - tests/test_clickhouse_static.py::test_clickhouse_makefile_template
 - tests/test_clickhouse_static.py::test_clickhouse_module_yaml_structure
 - tests/test_clickhouse_static.py::test_clickhouse_users_xml_no_hardcoded_password
-- tests/test_component_clickhouse.py::test_clickhouse_basic_query
-- tests/test_component_clickhouse.py::test_clickhouse_ping
-- tests/test_component_clickhouse.py::test_clickhouse_prometheus_metrics
 - tests/test_component_hermes.py::test_healthcheck_passes
 - tests/test_component_hermes.py::test_hermes_agent_starts
 - tests/test_component_hermes.py::test_hermes_compose_up
@@ -450,6 +451,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_gen-env-platform]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_project-list]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_remove-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scripts-audit]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_template-engine]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_validate_validate]
@@ -496,6 +498,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_gen-env-platform]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_project-list]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_remove-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scripts-audit]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_template-engine]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_validate_validate]
@@ -542,6 +545,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_gen-env-platform]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_project-list]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_remove-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scripts-audit]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_template-engine]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_validate_validate]
@@ -644,6 +648,8 @@ test_nodeids:
 - tests/test_deploy_gates_static.py::test_env_requires_gate_present
 - tests/test_deploy_gates_static.py::test_minio_env_requires_documented
 - tests/test_deploy_gates_static.py::test_no_hardcoded_hermes_images
+- tests/test_deploy_module_env.py::test_compose_args_has_platform_env
+- tests/test_deploy_module_env.py::test_prepull_skips_local_build
 - tests/test_deploy_modules.py::test_batch_module_metadata
 - tests/test_deploy_modules.py::test_batch_orphan
 - tests/test_deploy_modules.py::test_batch_sudoers
@@ -654,6 +660,8 @@ test_nodeids:
 - tests/test_deploy_modules.py::test_skip_provision_flag
 - tests/test_deploy_modules.py::test_topo_sort_enriched_output
 - tests/test_deploy_modules.py::test_yaml_read_domain_config
+- tests/test_deploy_verbs.py::test_exit_verb_returns_zero
+- tests/test_deploy_verbs.py::test_ping_verb_returns_pong
 - tests/test_e2e_grafana_api.py::test_grafana_admin_login
 - tests/test_e2e_grafana_api.py::test_grafana_dashboard_search
 - tests/test_e2e_grafana_api.py::test_grafana_datasources
@@ -736,6 +744,15 @@ test_nodeids:
 - tests/test_lib_node_resolver.py::test_resolve_from_platform_root
 - tests/test_lib_node_resolver.py::test_resolve_from_projects_glob
 - tests/test_lib_node_resolver.py::test_resolve_not_found
+- tests/test_lib_ssh.py::test_dry_run
+- tests/test_lib_ssh.py::test_ssh_exec_fail
+- tests/test_lib_ssh.py::test_ssh_exec_success
+- tests/test_lib_ssh.py::test_ssh_exec_timeout
+- tests/test_lib_ssh.py::test_ssh_opts_common_readonly
+- tests/test_lib_ssh.py::test_ssh_read_default_timeout
+- tests/test_lib_ssh.py::test_validation_fails[ssh_exec "" "user" "cmd" 60-empty host]
+- tests/test_lib_ssh.py::test_validation_fails[ssh_exec "host" "user" "" 60-empty command]
+- tests/test_lib_ssh.py::test_validation_fails[ssh_exec "host" "user" "cmd" "abc"-non-integer timeout]
 - tests/test_litellm_static.py::test_litellm_config_has_required_keys
 - tests/test_litellm_static.py::test_litellm_healthcheck_sh_exists
 - tests/test_litellm_static.py::test_litellm_model_list_non_empty
@@ -881,17 +898,6 @@ test_nodeids:
 - tests/test_project_scaffold.py::test_converge_r3_scaffold
 - tests/test_project_scaffold.py::test_gen_env_platform_interface
 - tests/test_project_scaffold.py::test_step_6b_calls_converge
-- tests/test_project_schema.py::test_expose_true_requires_domain_string
-- tests/test_project_schema.py::test_fqdn_conflict_blocks_deploy
-- tests/test_project_schema.py::test_fqdn_same_project_no_conflict
-- tests/test_project_schema.py::test_invalid_domain_rejected_by_schema
-- tests/test_project_schema.py::test_project_missing_target_node
-- tests/test_project_schema.py::test_project_type_enum[]
-- tests/test_project_schema.py::test_project_type_enum[cli-tool]
-- tests/test_project_schema.py::test_project_type_enum[microservice]
-- tests/test_project_schema.py::test_valid_project_yaml[valid_project_yaml0]
-- tests/test_project_schema.py::test_valid_project_yaml[valid_project_yaml1]
-- tests/test_project_schema.py::test_version_latest_rejected_by_schema
 - tests/test_reconcile.py::test_reconcile_already_deployed_skip
 - tests/test_reconcile.py::test_reconcile_direct_invocation_guard
 - tests/test_reconcile.py::test_reconcile_empty_projects
@@ -1095,19 +1101,25 @@ test_nodeids:
 - tests/test_upload.py::test_upload_file_boto_error
 - tests/test_upload.py::test_upload_file_not_found
 - tests/test_upload.py::test_upload_file_success
-- tests/test_validate.py::test_module_install_type_validation[invalid-install-type]
-- tests/test_validate.py::test_module_install_type_validation[valid-module-system]
-- tests/test_validate.py::test_node_yaml_validation[extra-fields]
-- tests/test_validate.py::test_node_yaml_validation[missing-context]
-- tests/test_validate.py::test_node_yaml_validation[valid-node-yaml]
 - tests/test_volume_spool_consistency.py::test_deploy_modules_knows_all_spools
 - tests/test_volume_spool_consistency.py::test_ensure_spool_dirs_is_verify_only
 - tests/test_volume_spool_consistency.py::test_no_orphan_volumes
 - tests/test_volume_spool_consistency.py::test_spool_dir_has_volume_mount
-- tests/test_vps_readiness.py::test_vps_readiness_empty_node
-- tests/test_vps_readiness.py::test_vps_readiness_json_mode
-- tests/test_vps_readiness.py::test_vps_readiness_no_host_map
-- tests/test_vps_readiness.py::test_vps_readiness_source_ok
+- tests/test_vps_readiness.py::test_ping_check_uses_pong
+- tests/test_yaml_query.py::test_dotted_get_missing_key
+- tests/test_yaml_query.py::test_file_not_found
+- tests/test_yaml_query.py::test_json_get
+- tests/test_yaml_query.py::test_malformed_yaml
+- tests/test_yaml_query.py::test_yaml_get_list_index
+- tests/test_yaml_query.py::test_yaml_get_missing_key_no_default
+- tests/test_yaml_query.py::test_yaml_get_nested
+- tests/test_yaml_query.py::test_yaml_get_returns_int
+- tests/test_yaml_query.py::test_yaml_get_top_level_key
+- tests/test_yaml_query.py::test_yaml_get_with_default
+- tests/test_yaml_query.py::test_yaml_get_with_default_none
+- tests/test_yaml_query.py::test_yaml_query_bad_list
+- tests/test_yaml_query.py::test_yaml_query_dotted
+- tests/test_yaml_query.py::test_yaml_query_list_iteration
 - tests/unit/test_deploy_snapshot.py::test_finalize_failure_preserves_snapshot
 - tests/unit/test_deploy_snapshot.py::test_finalize_success_writes_result
 - tests/unit/test_deploy_snapshot.py::test_rollback_restores_from_snapshot

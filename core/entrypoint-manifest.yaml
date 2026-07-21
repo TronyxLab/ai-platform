@@ -238,6 +238,34 @@ module_hooks:
     description: "Nginx config validation and reload after project deploy — called via module.yaml hooks.on_project_deploy"
 
 # ---------------------------------------------------------------------------
+# Lib — sourced library scripts (Wave 2: W2-E1, W2-E3)
+# These are NOT make targets — they are sourced by entrypoints and internal scripts.
+# type: sourced means the file is `source`'d, not executed directly.
+# Pattern: type: sourced, consumers: [<list of scripts that source this file>]
+# Consumed by CI gates for cross-layer validation and no-unregistered-entrypoint.
+# ---------------------------------------------------------------------------
+lib:
+  - script: ssh.sh
+    path: core/lib/ssh.sh
+    type: sourced
+    consumers:
+      - core/internal/bootstrap/scp-deliver.sh
+      - core/internal/bootstrap/remote-cmd.sh
+      - core/internal/scaffold/remove-project.sh
+      - core/internal/scaffold/project-list.sh
+      - core/lib/vps-readiness.sh
+      - core/internal/deploy/reconcile-projects.sh
+    description: "SSH facade with timeout wrapper — single source of truth for all remote operations (W2-E1)"
+  - script: audit_logging.sh
+    path: core/lib/audit_logging.sh
+    type: sourced
+    consumers:
+      - core/internal/deploy/deploy-project.sh
+      # W2-E3: context-promote.sh, remove-project.sh, provision-environment.sh,
+      #        build.sh, decrypt-secrets.sh, node-lifecycle.sh (update-mode)
+    description: "Audit logging + audit_step wrapper — dual-write audit trail for state-modifying entrypoints (W2-E3)"
+
+# ---------------------------------------------------------------------------
 # Module lifecycle — targets from core/templates/module.mk (Docker modules)
 # These are NOT in the canonical verb dictionary (not in AGENTS.md table)
 # but are valid targets for module Makefiles. Consumed by CI gates

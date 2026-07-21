@@ -77,8 +77,12 @@ jobs:
     environment:
       name: staging
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Setup platform
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: ''
+          install-gitleaks: 'false'
+          run-provisioner: 'false'
 
       - name: Read ai-platform.yaml
         id: project
@@ -131,8 +135,12 @@ jobs:
       name: production
       # GitHub environment protection rules: required reviewer = owner
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Setup platform
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: ''
+          install-gitleaks: 'false'
+          run-provisioner: 'false'
 
       - name: Set Docker Hub env
         run: |
@@ -157,8 +165,12 @@ jobs:
     needs: deploy-production
     if: inputs.environment == 'production'
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Setup platform
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: ''
+          install-gitleaks: 'false'
+          run-provisioner: 'false'
       - name: Smoke test — health endpoint
         run: curl --fail --retry 3 --retry-delay 5 --max-time 10 '${{ secrets.E2E_BASE_URL }}/health'
       - name: Smoke test — Grafana

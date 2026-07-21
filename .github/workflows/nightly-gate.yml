@@ -39,19 +39,16 @@ jobs:
       INTEGRATION_MODE: live
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup gitleaks (composite action)
-        uses: ./.github/actions/setup-gitleaks
+      - name: Setup platform (composite — checkout + python + gitleaks + provisioner)
+        uses: ./.github/actions/setup-platform
+        with:
+          install-pre-commit: 'true'
+          install-gitleaks: 'true'
+          run-provisioner: 'true'
+          provisioner-scope: 'all'
 
       - name: Fetch origin/main for inventory baseline
         run: git fetch origin main:refs/remotes/origin/main --depth=1 || true
-
-      - name: Setup Python venv
-        uses: ./.github/actions/setup-python-venv
-        with:
-          install-pre-commit: 'true'
 
       # ── Stage 1: Pre-commit hooks (all files) ─────────────────────────
       - name: Run pre-commit hooks (all files)

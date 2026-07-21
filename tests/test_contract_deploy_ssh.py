@@ -883,6 +883,10 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
 
     preamble = textwrap.dedent("""\
         SSH_OPTS=()
+        ssh_exec() {
+            echo "[IMP:9][mock-ssh-exec] $*" >&2
+            return 0
+        }
         ssh() {
             echo "[IMP:9][mock-ssh] $*" >&2
             return 0
@@ -918,8 +922,8 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
     assert GOLDEN_SCP_LOG_CORE_DONE in stdout
 
     # Mock calls go to stderr
-    mock_ssh_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-ssh]" in line]
-    assert len(mock_ssh_lines) == 1, f"Expected 1 ssh mock call, got {len(mock_ssh_lines)}"
+    mock_ssh_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-ssh-exec]" in line]
+    assert len(mock_ssh_lines) == 1, f"Expected 1 ssh_exec mock call, got {len(mock_ssh_lines)}"
 
     mock_rsync_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line]
     # With platform-env.yaml present: core, platform-env, Makefile, node-configs, secrets = 5 rsync calls
@@ -964,6 +968,10 @@ def test_scp_to_server_no_secrets(caplog, tmp_path) -> None:
 
     preamble = textwrap.dedent("""\
         SSH_OPTS=()
+        ssh_exec() {
+            echo "[IMP:9][mock-ssh-exec] $*" >&2
+            return 0
+        }
         ssh() {
             echo "[IMP:9][mock-ssh] $*" >&2
             return 0
@@ -1025,9 +1033,13 @@ def test_scp_to_server_ssh_failure(caplog, tmp_path) -> None:
 
     preamble = textwrap.dedent("""\
         SSH_OPTS=()
-        ssh() {
-            echo "[IMP:9][mock-ssh] SSH FAILURE (simulated)" >&2
+        ssh_exec() {
+            echo "[IMP:9][mock-ssh-exec] SSH FAILURE (simulated)" >&2
             return 1
+        }
+        ssh() {
+            echo "[IMP:9][mock-ssh] $*" >&2
+            return 0
         }
         rsync() {
             echo "[IMP:9][mock-rsync] $*" >&2
@@ -1088,6 +1100,10 @@ def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
         call_count[0] = 0
 
         ssh_code = textwrap.dedent("""\
+            ssh_exec() {
+                echo "[IMP:9][mock-ssh-exec] $*" >&2
+                return 0
+            }
             ssh() {
                 echo "[IMP:9][mock-ssh] $*" >&2
                 return 0

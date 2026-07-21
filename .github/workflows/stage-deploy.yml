@@ -88,6 +88,13 @@ jobs:
     name: Deploy → staging
     runs-on: ubuntu-latest
     steps:
+      - name: Setup platform (composite — checkout only)
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: ''
+          install-gitleaks: 'false'
+          run-provisioner: 'false'
+
       # [IMP:9][stage-deploy][staging-env] Inform platform-deploy.sh that this is a staging deploy
       - name: Set STAGING env var
         run: echo "STAGING=true" >> $GITHUB_ENV

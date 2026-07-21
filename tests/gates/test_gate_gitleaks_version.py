@@ -64,7 +64,8 @@ def _get_expected_gitleaks_version() -> str:
 _INLINE_GITLEAKS_INSTALL_PATTERN: re.Pattern = re.compile(r"gitleaks.*releases/download")
 
 # Pattern to detect composite action usage
-_COMPOSITE_ACTION_PATTERN: re.Pattern = re.compile(r"uses:\s*\./\.github/actions/setup-gitleaks")
+# Wave 2 (W2-E2): accept either direct setup-gitleaks OR setup-platform (which includes setup-gitleaks internally)
+_COMPOSITE_ACTION_PATTERN: re.Pattern = re.compile(r"uses:\s*\./\.github/actions/(setup-gitleaks|setup-platform)(\b|@)")
 
 # Pattern to detect version references
 _VERSION_REF_PATTERN: re.Pattern = re.compile(r"gitleaks[_-]?(\d+\.\d+\.\d+)")

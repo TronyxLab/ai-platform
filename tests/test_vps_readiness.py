@@ -48,13 +48,14 @@ def test_ping_check_uses_pong(caplog, vps_readiness_script: Path) -> None:
     script_text = vps_readiness_script.read_text()
 
     # The SSH command in check 2 must use "ping" verb (not "platform-deliver --ping")
-    # Look for the SSH call pattern: ssh ... "ping" 2>&1
+    # W2-E1: vps-readiness.sh now calls ssh_read() from lib/ssh.sh instead of inline ssh.
+    # Look for the ssh_read call pattern: ssh_read ... "ping" ...
     # The string "platform-deliver --ping" may still appear in remediation/messages
     # (error messages tell the user what command was attempted), so only assert on
     # the SSH command pattern itself.
-    assert '"ping" 2>&1' in script_text, (
-        "TASK-4.2 not implemented: SSH command should use 'ping' verb, not 'platform-deliver --ping'\n"
-        'Expected pattern: ssh ... "ping" 2>&1'
+    assert 'ssh_read "${ssh_host}" "ci-deploy" "ping"' in script_text, (
+        "TASK-4.2 not implemented: SSH command should use 'ping' verb via ssh_read, not 'platform-deliver --ping'\n"
+        'Expected pattern: ssh_read ... "ping"'
     )
 
     # Verify grep expects exact "pong" (was case-insensitive multi-pattern grep -qi "pong|PONG|ready")

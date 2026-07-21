@@ -382,6 +382,7 @@ def test_rsync_command_generation(caplog) -> None:
         logger.info("[IMP:9][test_rsync][setup] Testing rsync with secrets dir + root-level files")
 
         tc = (
+            'ssh_exec() { echo "[IMP:8][mock-ssh-exec] $*" >&2; return 0; }\n'
             'ssh() { echo "[IMP:8][mock-ssh] $*" >&2; return 0; }\n'
             'ssh-keygen() { echo "[IMP:8][mock-ssh-keygen] $*" >&2; return 0; }\n'
             'rsync() { echo "[IMP:9][mock-rsync] $*" >&2; }\n'
@@ -433,6 +434,7 @@ def test_rsync_command_generation(caplog) -> None:
         # No platform-env.yaml, no Makefile, no secrets/ — 1b, 1c, 3 skipped
 
         tc2 = (
+            'ssh_exec() { echo "[IMP:8][mock-ssh-exec] $*" >&2; return 0; }\n'
             'ssh() { echo "[IMP:8][mock-ssh] $*" >&2; return 0; }\n'
             'ssh-keygen() { echo "[IMP:8][mock-ssh-keygen] $*" >&2; return 0; }\n'
             'rsync() { echo "[IMP:9][mock-rsync] $*" >&2; }\n'

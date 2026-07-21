@@ -47,8 +47,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Setup platform (composite — checkout only)
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: ''
+          install-gitleaks: 'false'
+          run-provisioner: 'false'
 
       - name: Resolve target node
         id: node-resolution
