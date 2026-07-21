@@ -33,6 +33,7 @@ TEMPLATES_DIR="${PLATFORM_ROOT}/templates"
 
 __LOG_PREFIX="adopt-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
+source "${PLATFORM_ROOT}/core/lib/args.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBALS
@@ -44,31 +45,21 @@ PROJECT_NODE=""
 PROJECT_DOMAIN=""
 FORCE=0
 
-# ──────────────────────────────────────────────────────────────────
-# region FUNC_usage
-## @purpose  Print usage guide
-## @io       stdout: usage text
-usage() {
-    cat <<'HELP'
-USAGE: adopt-project.sh --dir <project_dir> [OPTIONS]
+USAGE_SCRIPT="adopt-project.sh"
+USAGE_DESC="Adopt an existing project into the ai-platform lifecycle."
+USAGE_OPTIONS=(
+    "--dir <dir>        Path to existing project directory"
+    "--name <name>      Project name (auto-detected from directory basename)"
+    "--org <org>        Organization name (from ai-platform.yaml or auto-detected)"
+    "--node <node>      Target node name (from ai-platform.yaml or default)"
+    "--domain <domain>  Custom domain"
+    "--force            Regenerate Makefile/AGENTS.md even if they exist"
+)
 
-Adopt an existing project into the ai-platform lifecycle.
-
-REQUIRED:
-  --dir <dir>       Path to existing project directory
-
-OPTIONS:
-  --name <name>     Project name (auto-detected from directory basename)
-  --org <org>       Organization name (from ai-platform.yaml or auto-detected)
-  --node <node>     Target node name (from ai-platform.yaml or default)
-  --domain <domain> Custom domain (e.g. sexydancerostov.ru for O11)
-  --force           Regenerate Makefile/AGENTS.md even if they exist
-  --help            Show this help
-
-NOTE: Does NOT modify src/, Dockerfile, or application code.
-HELP
-}
-# endregion FUNC_usage
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · adopt-project.sh keeps local parse_args (env auto-detection)
+# · Rejected: full parse_args adoption (auto-detection logic too complex)
+# · Reason: minimal W1 scope, complex arg defaults + path auto-detection
+# · Rev: Wave 4 — full migration when parse_args supports defaults
 
 # ──────────────────────────────────────────────────────────────────
 # region FUNC_parse_args
@@ -84,15 +75,15 @@ parse_args() {
             --node)   shift; PROJECT_NODE="$1" ;;
             --domain) shift; PROJECT_DOMAIN="$1" ;;
             --force)  FORCE=1 ;;
-            --help|-h) usage; exit 0 ;;
-            *) log_imp 9 "-" "Unknown arg: $1"; usage >&2; exit 1 ;;
+            --help|-h) usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}"; exit 0 ;;
+            *) log_imp 9 "-" "Unknown arg: $1"; usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" >&2; exit 1 ;;
         esac
         shift
     done
 
     if [[ -z "$PROJECT_DIR" ]]; then
         log_imp 10 "-" "FAIL-FAST: --dir is required"
-        usage >&2
+        usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" >&2
         exit 1
     fi
 

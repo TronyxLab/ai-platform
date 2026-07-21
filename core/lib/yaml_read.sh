@@ -46,6 +46,10 @@
 
 set -euo pipefail
 
+# Resolve core directory from script path for yaml_query.py calls
+YAML_READ_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+YAML_READ_CORE_DIR="${CORE_DIR:-"$(dirname "$YAML_READ_SCRIPT_DIR")"}"
+
 echo "[IMP:7][yaml_read][lib] Loading YAML read library" >&2
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -68,28 +72,8 @@ yaml_get_field() {
     local yaml_path="$1"
     local dotted_key="$2"
 
-    python3 -c "
-import yaml, sys, json
-try:
-    with open('${yaml_path}') as _f:
-        _data = yaml.safe_load(_f)
-    _keys = '${dotted_key}'.split('.')
-    _val = _data
-    for _k in _keys:
-        _val = _val[_k]
-    if isinstance(_val, (dict, list)):
-        print(json.dumps(_val))
-    else:
-        print(_val)
-except KeyError:
-    sys.exit(1)  # field not found → empty stdout, return 1
-except (TypeError, AttributeError) as _e:
-    sys.stderr.write('yaml_get_field: parse error: {}\n'.format(_e))
-    sys.exit(2)  # parse error → stderr, return 2
-except FileNotFoundError as _e:
-    sys.stderr.write('yaml_get_field: file not found: {}\n'.format(_e))
-    sys.exit(1)  # file not found → empty stdout, return 1
-" 2>/dev/null || return $?
+    python3 "${YAML_READ_CORE_DIR}/internal/scripts/yaml_query.py" \
+        --file "$yaml_path" --get "$dotted_key" 2>/dev/null || return $?
 }
 # endregion yaml_get_field
 
@@ -115,32 +99,8 @@ yaml_get_list() {
     local yaml_path="$1"
     local dotted_key="$2"
 
-    python3 -c "
-import yaml, sys, json
-try:
-    with open('${yaml_path}') as _f:
-        _data = yaml.safe_load(_f)
-    _keys = '${dotted_key}'.split('.')
-    _val = _data
-    for _k in _keys:
-        _val = _val[_k]
-    if not isinstance(_val, list):
-        sys.stderr.write('yaml_get_list: key is not a list, got {}'.format(type(_val).__name__))
-        sys.exit(2)
-    for _item in _val:
-        if isinstance(_item, (dict, list)):
-            print(json.dumps(_item))
-        else:
-            print(_item)
-except KeyError:
-    sys.exit(1)  # field not found → empty stdout, return 1
-except TypeError as _e:
-    sys.stderr.write('yaml_get_list: type error: {}\n'.format(_e))
-    sys.exit(2)  # type error → stderr, return 2
-except FileNotFoundError as _e:
-    sys.stderr.write('yaml_get_list: file not found: {}\n'.format(_e))
-    sys.exit(1)  # file not found → empty stdout, return 1
-" 2>/dev/null || return $?
+    python3 "${YAML_READ_CORE_DIR}/internal/scripts/yaml_query.py" \
+        --file "$yaml_path" --get "$dotted_key" --items 2>/dev/null || return $?
 }
 # endregion yaml_get_list
 

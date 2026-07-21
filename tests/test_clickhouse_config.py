@@ -14,15 +14,14 @@
 # endregion MODULE_CONTRACT
 
 import logging
-from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_BASE_YML = _PROJECT_ROOT / "core" / "modules" / "clickhouse" / "docker-compose.base.yml"
-_USERS_D_DIR = _PROJECT_ROOT / "core" / "modules" / "clickhouse" / "config" / "users.d"
+_BASE_YML = repo_root() / "core" / "modules" / "clickhouse" / "docker-compose.base.yml"
+_USERS_D_DIR = repo_root() / "core" / "modules" / "clickhouse" / "config" / "users.d"
 
 
 @pytest.mark.static_audit

@@ -32,21 +32,21 @@ import pathlib
 import re
 
 import pytest
-import yaml
+
+from tests.helpers.gate_helpers import load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-PLATFORM_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
-MANIFEST_PATH: pathlib.Path = PLATFORM_ROOT / "core" / "secrets-manifest.yaml"
+MANIFEST_PATH: pathlib.Path = repo_root() / "core" / "secrets-manifest.yaml"
 
 # Compose files under test for POSTGRES_PASSWORD_ENCODED scan
-POSTGRES_COMPOSE: pathlib.Path = PLATFORM_ROOT / "core" / "modules" / "postgres" / "docker-compose.base.yml"
-LANGFUSE_COMPOSE: pathlib.Path = PLATFORM_ROOT / "core" / "modules" / "langfuse" / "docker-compose.base.yml"
-LITELLM_COMPOSE: pathlib.Path = PLATFORM_ROOT / "core" / "modules" / "litellm" / "docker-compose.base.yml"
-INFRA_METRICS_COMPOSE: pathlib.Path = PLATFORM_ROOT / "core" / "modules" / "infra-metrics" / "docker-compose.base.yml"
-HERMES_COMPOSE: pathlib.Path = PLATFORM_ROOT / "core" / "modules" / "hermes-agent" / "docker-compose.base.yml"
+POSTGRES_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "postgres" / "docker-compose.base.yml"
+LANGFUSE_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "langfuse" / "docker-compose.base.yml"
+LITELLM_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "litellm" / "docker-compose.base.yml"
+INFRA_METRICS_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "infra-metrics" / "docker-compose.base.yml"
+HERMES_COMPOSE: pathlib.Path = repo_root() / "core" / "modules" / "hermes-agent" / "docker-compose.base.yml"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -68,15 +68,7 @@ CHARSET_PATTERN: re.Pattern = re.compile(EXPECTED_CHARSET)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _load_yaml(path: pathlib.Path) -> dict:
-    """Load and parse a YAML file.
 
-    ## @purpose  Safe YAML loading with explicit file path.
-    ## @io        ⇥ path: pathlib.Path → ⎋ dict: parsed YAML content
-    ## @complexity O(F) where F = file size
-    """
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def _read_file(path: pathlib.Path) -> str:
@@ -87,7 +79,7 @@ def _read_file(path: pathlib.Path) -> str:
     ## @complexity O(F) where F = file size in bytes
     """
     content = path.read_text(encoding="utf-8")
-    logger.info("[IMP:8][_read_file] Read %s (%d bytes)", path.relative_to(PLATFORM_ROOT), len(content))
+    logger.info("[IMP:8][_read_file] Read %s (%d bytes)", path.relative_to(repo_root()), len(content))
     return content
 
 
@@ -118,7 +110,7 @@ def test_secrets_manifest_charset_defined_for_url_passwords(caplog) -> None:
         logger.error("[IMP:10][test_manifest_charset] %s", msg)
         pytest.fail(msg)
 
-    data = _load_yaml(MANIFEST_PATH)
+    data = load_yaml(MANIFEST_PATH)
     secrets_list = data.get("secrets", [])
 
     if not secrets_list:
@@ -352,7 +344,7 @@ def test_hermes_compose_has_no_fallback(caplog) -> None:
     if fallback_pattern in content:
         msg = (
             "HERMES_COMPOSE_FALLBACK_FOUND: "
-            f"'{fallback_pattern}' detected in {HERMES_COMPOSE.relative_to(PLATFORM_ROOT)}. "
+            f"'{fallback_pattern}' detected in {HERMES_COMPOSE.relative_to(repo_root())}. "
             "Fallback chain must be removed per Wave 014 Tx2."
         )
         logger.error("[IMP:10][test_hermes_fallback] %s", msg)
@@ -365,7 +357,7 @@ def test_hermes_compose_has_no_fallback(caplog) -> None:
     if var_pattern not in content:
         msg = (
             "HERMES_COMPOSE_MISSING_VAR: "
-            f"'${{HERMES_DASHBOARD_PASSWORD}}' not found in {HERMES_COMPOSE.relative_to(PLATFORM_ROOT)}. "
+            f"'${{HERMES_DASHBOARD_PASSWORD}}' not found in {HERMES_COMPOSE.relative_to(repo_root())}. "
             "Expected direct variable reference."
         )
         logger.error("[IMP:10][test_hermes_fallback] %s", msg)

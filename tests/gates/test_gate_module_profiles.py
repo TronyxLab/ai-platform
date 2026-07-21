@@ -24,11 +24,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+MODULES_DIR = repo_root() / "core" / "modules"
 
 
 def _discover_base_ymls() -> list[Path]:

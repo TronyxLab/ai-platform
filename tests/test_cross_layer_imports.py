@@ -35,14 +35,14 @@ import re
 from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
 from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
 # ─── CONSTANTS ──────────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CORE_DIR = PROJECT_ROOT / "core"
+CORE_DIR = repo_root() / "core"
 
 # Layer classification: path prefixes to layer names
 _LAYER_PREFIXES: dict[str, str] = {
@@ -255,7 +255,7 @@ def _resolve_platform_root(source_file: Path, source_layer: str) -> Path:
     if source_layer == "internal":
         path_str = source_file.as_posix()
         if "/internal/scaffold/" in path_str or "/internal/build/" in path_str:
-            return PROJECT_ROOT
+            return repo_root()
         return CORE_DIR
     return CORE_DIR
 

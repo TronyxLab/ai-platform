@@ -24,12 +24,12 @@
 
 import logging
 import pathlib
-import shutil
 import subprocess
 import time
 import uuid
 
 import pytest
+from _conftest.honesty import require_docker_or_fail
 from conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -146,9 +146,7 @@ def _docker_skip_if_unavailable() -> None:
     ## @io — ⎛ None (side-effect: pytest.skip if docker not found)
     ## @complexity — O(1)
     """
-    if not shutil.which("docker"):
-        logger.warning("[IMP:7][_docker_skip_if_unavailable] Docker CLI not found — skip")
-        pytest.skip("Docker CLI not available")
+    require_docker_or_fail(reason="hermes-init tests require Docker daemon")
 
 
 def _run_container_detached(

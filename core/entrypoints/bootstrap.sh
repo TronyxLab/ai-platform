@@ -33,18 +33,22 @@ CORE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${CORE_DIR}/lib/paths.sh"
 source "${CORE_DIR}/internal/bootstrap/scp-deliver.sh"
 source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"
+source "${CORE_DIR}/lib/args.sh"
 NODE_LIFECYCLE="${PATHS_INTERNAL_DIR}/bootstrap/node-lifecycle.sh"
 
-## @purpose  Print usage and exit 0
-usage() { cat <<'EOF'
-Usage: bootstrap.sh --node <name> --resolve [--dry-run] [--force]
-Entry-point for idempotent node bootstrap. Resolves node.yaml, detects SSH
-host, SCPs core+node-configs to remote, delegates to node-lifecycle.sh --mode init remotely
-or locally. Modes: --resolve (extract owner_key+host), --dry-run (print only),
---help. Without --resolve: pass args to node-lifecycle.sh --mode init.
-Examples: make bootstrap-node NODE=tronyx-vps  |  bootstrap.sh --resolve
-EOF
-exit 0; }
+USAGE_SCRIPT="bootstrap.sh"
+USAGE_DESC="Entry-point for idempotent node bootstrap. Resolves node.yaml, detects SSH host, SCPs core+node-configs, delegates to node-lifecycle.sh."
+USAGE_OPTIONS=(
+    "--node <name>       Node name to bootstrap"
+    "--resolve           Extract owner_key and host from node.yaml"
+    "--dry-run           Print SCP+SSH commands without executing"
+    "--auto-reconcile    Passthrough to node-lifecycle.sh --reconcile"
+)
+
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · bootstrap.sh passthrough arg pattern
+# · Rejected: full parse_args adoption (passthrough pattern incompatible)
+# · Reason: minimal W1 scope, bootstrap.sh forwards unknown args via PASSTHROUGH_ARGS
+# · Rev: Wave 4 — redesign passthrough into parse_args spec
 
 ## @purpose  Detect AGE_SECRET_KEY from env chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE
 detect_age_key() {
@@ -91,7 +95,7 @@ NODE_NAME=""; RESOLVE_MODE=false; DRY_RUN=false; PASSTHROUGH_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --node|--node-name) NODE_NAME="$2"; shift 2 ;;
-        --help|-h) usage ;;
+        --help|-h) usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" ;;
         --resolve) RESOLVE_MODE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --auto-reconcile) PASSTHROUGH_ARGS+=("--auto-reconcile"); shift ;;

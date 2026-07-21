@@ -33,11 +33,12 @@ import re
 import pytest
 import yaml
 
+from tests.helpers.gate_helpers import load_yaml, repo_root
+
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
-_WORKFLOW_DIR: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows"
-_MAKEFILE_PATH: pathlib.Path = _PROJECT_ROOT / "Makefile"
+_WORKFLOW_DIR: pathlib.Path = repo_root() / ".github" / "workflows"
+_MAKEFILE_PATH: pathlib.Path = repo_root() / "Makefile"
 
 # Expected workflow files after Plan 2 consolidation (7 workflows)
 _EXPECTED_WORKFLOWS: set[str] = {
@@ -71,7 +72,7 @@ _PROVISIONER_PATTERN: re.Pattern = re.compile(r"provision-environment\.sh")
 _INLINE_NETWORK_CREATE_PATTERN: re.Pattern = re.compile(r"docker network create ")
 
 # Modules referenced in workflow pre-pull/cleanup lists for consistency checking
-_MODULES_DIR: pathlib.Path = _PROJECT_ROOT / "core" / "modules"
+_MODULES_DIR: pathlib.Path = repo_root() / "core" / "modules"
 
 
 def _get_actual_modules() -> set[str]:
@@ -111,12 +112,6 @@ _RAW_INTERNAL_ALLOWLIST: list[tuple[re.Pattern, re.Pattern, str]] = [
 ]
 
 
-def _load_yaml(path: pathlib.Path) -> dict:
-    """Load and parse a YAML file, returning dict."""
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
 def _get_on_section(workflow: dict) -> dict:
     """Get the 'on' trigger section from a workflow, handling PyYAML 'on'→True conversion."""
     return workflow.get("on") or workflow.get(True) or {}
@@ -147,7 +142,7 @@ def _load_makefile_targets() -> set[str]:
 
 def _load_entrypoint_manifest_allowed_verbs() -> set[str]:
     """Load allowed verbs from entrypoint-manifest.yaml."""
-    manifest_path = _PROJECT_ROOT / "core" / "entrypoint-manifest.yaml"
+    manifest_path = repo_root() / "core" / "entrypoint-manifest.yaml"
     with open(manifest_path) as f:
         data = yaml.safe_load(f)
     allowed = set(data.get("allowed_verbs", []))
@@ -157,7 +152,7 @@ def _load_entrypoint_manifest_allowed_verbs() -> set[str]:
 
 def _load_entrypoint_manifest_gate_make_targets() -> set[str]:
     """Extract make targets referenced in manifest gates section."""
-    manifest_path = _PROJECT_ROOT / "core" / "entrypoint-manifest.yaml"
+    manifest_path = repo_root() / "core" / "entrypoint-manifest.yaml"
     with open(manifest_path) as f:
         data = yaml.safe_load(f)
     targets: set[str] = set()
@@ -215,7 +210,7 @@ def test_workflow_count_is_correct():
 def test_platform_test_has_single_job():
     """Verify platform-test.yml contains exactly 1 job."""
     workflow_path = _WORKFLOW_DIR / "platform-test.yml"
-    data = _load_yaml(workflow_path)
+    data = load_yaml(workflow_path)
 
     jobs = data.get("jobs", {})
     job_count = len(jobs)
@@ -235,12 +230,12 @@ def test_platform_test_has_single_job():
 def test_basedpyright_tests_removed():
     """Verify basedpyright-tests job is absent from all workflows (comments may still mention it)."""
     for wf_file in _WORKFLOW_DIR.glob("*.yml"):
-        data = _load_yaml(wf_file)
+        data = load_yaml(wf_file)
         jobs = data.get("jobs", {})
         # Check for basedpyright as a job name (not in comments/docs)
         assert "basedpyright-tests" not in jobs, f"{wf_file.name} still contains basedpyright-tests job"
     # Additionally verify platform-test.yml has no basedpyright step
-    platform_test = _load_yaml(_WORKFLOW_DIR / "platform-test.yml")
+    platform_test = load_yaml(_WORKFLOW_DIR / "platform-test.yml")
     steps = platform_test.get("jobs", {}).get("platform-test", {}).get("steps", [])
     for step in steps:
         step_name = (step.get("name") or "").lower()
@@ -267,7 +262,7 @@ def test_deploy_triggers_on_platform_test():
     """Verify deploy workflows (core-deploy, build-platform, mirror) trigger on platform-test."""
     for wf_name in _DEPLOY_WORKFLOWS:
         wf_path = _WORKFLOW_DIR / wf_name
-        data = _load_yaml(wf_path)
+        data = load_yaml(wf_path)
 
         # Check workflow_run trigger
         on_section = _get_on_section(data)
@@ -285,7 +280,7 @@ def test_deploy_has_push_filter():
     """Verify deploy workflows filter workflow_run.event == 'push'."""
     for wf_name in _DEPLOY_WORKFLOWS:
         wf_path = _WORKFLOW_DIR / wf_name
-        data = _load_yaml(wf_path)
+        data = load_yaml(wf_path)
 
         jobs = data.get("jobs", {})
         for job_name, job_data in jobs.items():
@@ -330,7 +325,7 @@ def test_core_deploy_auto_detects_node():
     logger.info("[IMP:9][test] core-deploy.yml calls make node-update without NODE= argument")
 
     # ── bootstrap.sh has auto_detect_node_name() function ─────────
-    bootstrap_path = _PROJECT_ROOT / "core/entrypoints/bootstrap.sh"
+    bootstrap_path = repo_root() / "core/entrypoints/bootstrap.sh"
     bootstrap_content = bootstrap_path.read_text()
     assert "auto_detect_node_name" in bootstrap_content, (
         "bootstrap.sh must define auto_detect_node_name() for auto-detection"
@@ -447,8 +442,8 @@ def test_no_raw_internal_calls_in_workflows(caplog):
     findings: list[tuple[str, int, str]] = []
 
     # Scan all .yml files in .github/workflows and .github/actions
-    for yml_file in sorted(_PROJECT_ROOT.glob(".github/**/*.yml")):
-        rel_path = str(yml_file.relative_to(_PROJECT_ROOT))
+    for yml_file in sorted(repo_root().glob(".github/**/*.yml")):
+        rel_path = str(yml_file.relative_to(repo_root()))
         content = yml_file.read_text()
         lines = content.split("\n")
 

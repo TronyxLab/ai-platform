@@ -15,14 +15,13 @@
 # endregion MODULE_CONTRACT
 
 import logging
-from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_HEALTHCHECK_SH = _PROJECT_ROOT / "core" / "internal" / "healthcheck" / "modules-healthcheck.sh"
+_HEALTHCHECK_SH = repo_root() / "core" / "internal" / "healthcheck" / "modules-healthcheck.sh"
 
 
 @pytest.mark.static_audit

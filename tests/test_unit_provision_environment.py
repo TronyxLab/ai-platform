@@ -14,15 +14,14 @@
 
 import os
 import subprocess
-from pathlib import Path
 
 import pytest
 import yaml
+from tests.helpers.gate_helpers import repo_root
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PROVISIONER_PATH = PROJECT_ROOT / "core" / "internal" / "provision-environment.sh"
-PLATFORM_ENV_PATH = PROJECT_ROOT / "platform-env.yaml"
+PROVISIONER_PATH = repo_root() / "core" / "internal" / "provision-environment.sh"
+PLATFORM_ENV_PATH = repo_root() / "platform-env.yaml"
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -140,7 +139,7 @@ class TestYamlParsing:
 
     def test_profiles_match_modules_dir(self, env_data: dict) -> None:
         """Every profile name must correspond to an existing core/modules/ directory."""
-        modules_dir = PROJECT_ROOT / "core" / "modules"
+        modules_dir = repo_root() / "core" / "modules"
         existing_modules = {d.name for d in modules_dir.iterdir() if d.is_dir() and d.name != "platform-secrets"}
         profiles = set(env_data.get("profiles", []))
         # All profiles should be in existing_modules (or existing_modules should contain profiles)

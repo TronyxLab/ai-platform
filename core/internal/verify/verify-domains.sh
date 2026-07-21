@@ -18,25 +18,17 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════
+# Source logging from lib (replaces local log_imp)
+# ═══════════════════════════════════════════════════════════════════
+__VERIFY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+__CORE_DIR="$(cd "${__VERIFY_DIR}/../.." && pwd)"
+source "${__CORE_DIR}/lib/logging.sh"
+
+# ═══════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
 __LOG_PREFIX="${__LOG_PREFIX:-verify}"
-
-# ═══════════════════════════════════════════════════════════════════
-# HELPER: log_imp
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_log_imp
-## @purpose  Inline LDD logger — avoids sourcing logging.sh for standalone use
-## @param $1  IMP level (1-10)
-## @param $2  Block name (blank for auto)
-## @param $3  Message
-log_imp() {
-    local imp="$1" block="$2" msg="$3"
-    [[ -z "$block" ]] && block="verify"
-    echo "[IMP:${imp}][${__LOG_PREFIX}][${block}] ${msg}" >&2
-}
-# endregion FUNC_log_imp
 
 # ═══════════════════════════════════════════════════════════════════
 # FUNC: resolve_yaml — 3-path search for node.yaml

@@ -28,12 +28,12 @@ import re
 
 import pytest
 import yaml
+from tests.helpers.gate_helpers import repo_root
 
 from tests._conftest.ldd import ldd_trajectory
 
-_PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_PROJECTS_DIR = os.path.join(_PROJECT_ROOT, "projects")
-_PLATFORM_ENV_YAML = os.path.join(_PROJECT_ROOT, "platform-env.yaml")
+_PROJECTS_DIR = os.path.join(repo_root(), "projects")
+_PLATFORM_ENV_YAML = os.path.join(repo_root(), "platform-env.yaml")
 
 _logger = logging.getLogger(__name__)
 

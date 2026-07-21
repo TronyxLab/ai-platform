@@ -47,40 +47,26 @@ REGISTER=false
 
 __LOG_PREFIX="add-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
+source "${PLATFORM_ROOT}/core/lib/args.sh"
 
-# region USAGE
-usage() {
-    cat <<'HELP'
-USAGE: add-project.sh --name <name> --template <type> [OPTIONS]
+USAGE_SCRIPT="add-project.sh"
+USAGE_DESC="Create a new project from a template in the organization directory."
+USAGE_OPTIONS=(
+    "--name <name>        Project name (alphanumeric, hyphens, underscores)"
+    "--template <type>    Template: frontend | backend | fullstack"
+    "--org <org>          Organization name (default: \$PLATFORM_ORG)"
+    "--node <node>        Target node name (default: \$PLATFORM_DEFAULT_NODE)"
+    "--domain <fqdn>      Domain for nginx vhost (auto: \$NAME.\$PLATFORM_DOMAIN if omitted)"
+    "--database <name>    Database name for backend/fullstack projects"
+    "--dry-run            Show plan without creating files"
+    "--mode <mode>        dev mode: enables staging"
+    "--register           Register project in node.yaml"
+)
 
-REQUIRED:
-  --name <name>        Project name (alphanumeric, hyphens, underscores)
-  --template <type>    Template: frontend | backend | fullstack
-
-OPTIONAL:
-  --org <org>          Organization name (default: $PLATFORM_ORG)
-  --node <node>        Target node name (default: $PLATFORM_DEFAULT_NODE)
-  --domain <fqdn>      Domain for nginx vhost (auto: $NAME.$PLATFORM_DOMAIN if omitted)
-  --database <name>    Database name for backend/fullstack projects
-  --dry-run            Show plan without creating files
-  --mode <mode>        dev mode: enables staging
-  --register           Register project in node.yaml
-
-ENVIRONMENT:
-  PLATFORM_ROOT        Path to ai-platform/ (auto-detected)
-  PROJECTS_ROOT        Path to organizations dir (auto-detected)
-  PLATFORM_ORG         Default org name (used if --org omitted)
-  PLATFORM_DEFAULT_NODE Default node name (used if --node omitted)
-  PLATFORM_DOMAIN      Platform domain for auto-domain generation
-  CI_MODE=1            Skip confirmation prompts
-
-EXAMPLES:
-  add-project.sh --name myapp --template frontend
-  add-project.sh --name myapp --template fullstack --org myorg --node tronyx-vps --domain myapp.com
-HELP
-    exit 1
-}
-# endregion USAGE
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · add-project.sh keeps local parse_args (env auto-detection)
+# · Rejected: full parse_args adoption (complex arg defaults + env vars)
+# · Reason: minimal W1 scope, parse_args has complex default logic
+# · Rev: Wave 4 — full migration when parse_args supports env defaults
 
 # region PARSE_ARGS
 parse_args() {
@@ -95,8 +81,8 @@ parse_args() {
             --dry-run)  DRY_RUN=true; shift ;;
             --mode)     MODE="$2"; shift 2 ;;
             --register) REGISTER=true; shift ;;
-            --help|-h)  usage ;;
-            *)          log_crit "Unknown argument: $1"; usage ;;
+            --help|-h)  usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" ;;
+            *)          log_crit "Unknown argument: $1"; usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" ;;
         esac
     done
 
@@ -106,7 +92,7 @@ parse_args() {
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_crit "Missing required arguments: ${missing[*]}"
-        usage
+        usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}"
     fi
 
     # Apply defaults from env for optional args

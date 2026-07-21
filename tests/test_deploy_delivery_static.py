@@ -14,15 +14,14 @@
 # endregion MODULE_CONTRACT
 
 import logging
-from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_SCP_DELIVER_SH = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "scp-deliver.sh"
-_CORE_DEPLOY_YML = _PROJECT_ROOT / ".github" / "workflows" / "core-deploy.yml"
+_SCP_DELIVER_SH = repo_root() / "core" / "internal" / "bootstrap" / "scp-deliver.sh"
+_CORE_DEPLOY_YML = repo_root() / ".github" / "workflows" / "core-deploy.yml"
 
 
 @pytest.mark.static_audit

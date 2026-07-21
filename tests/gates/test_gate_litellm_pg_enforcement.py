@@ -76,6 +76,25 @@ def _find_postgres_urls_in_yaml(compose_path: Path) -> list[str]:
     return urls
 
 
+def _check_sqlite_in_config_file(config_path: Path) -> list[str]:
+    """Check a single config file for SQLite database_url references.
+
+    Returns list of violation messages (empty = no violations).
+    Used by _negative companion test to verify SQLite detection.
+    """
+    violations: list[str] = []
+    if not config_path.exists():
+        return violations
+    try:
+        content = config_path.read_text()
+        for i, line in enumerate(content.splitlines(), 1):
+            if "sqlite" in line.lower() and ":///" in line:
+                violations.append(f"{config_path.name}:{i}: {line.strip()}")
+    except (OSError, UnicodeDecodeError):
+        pass
+    return violations
+
+
 @pytest.mark.gate
 
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts

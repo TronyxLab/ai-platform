@@ -26,16 +26,16 @@ import pathlib
 import re
 
 import pytest
-import yaml
+
+from tests.helpers.gate_helpers import load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
-_MANIFEST_PATH: pathlib.Path = _PROJECT_ROOT / "core" / "secrets-manifest.yaml"
-_MODULES_DIR: pathlib.Path = _PROJECT_ROOT / "core" / "modules"
-_WORKFLOW_DIR: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows"
-_ENV_EXAMPLE_PATH: pathlib.Path = _PROJECT_ROOT / ".env.example"
-_CORE_DIR: pathlib.Path = _PROJECT_ROOT / "core"
+_MANIFEST_PATH: pathlib.Path = repo_root() / "core" / "secrets-manifest.yaml"
+_MODULES_DIR: pathlib.Path = repo_root() / "core" / "modules"
+_WORKFLOW_DIR: pathlib.Path = repo_root() / ".github" / "workflows"
+_ENV_EXAMPLE_PATH: pathlib.Path = repo_root() / ".env.example"
+_CORE_DIR: pathlib.Path = repo_root() / "core"
 
 # Паттерн для обнаружения хардкоженных креденшалов (тот же, что в test_gate_ci_env_vars.py)
 _HARDCODED_SECRET_PATTERN: re.Pattern = re.compile(
@@ -73,19 +73,13 @@ _ENV_EXAMPLE_SECRET_PATTERN: re.Pattern = re.compile(
 )
 
 
-def _load_yaml(path: pathlib.Path) -> dict:
-    """Load and parse a YAML file."""
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
 def _get_manifest_secrets() -> dict[str, dict]:
     """Load secrets-manifest.yaml and return a dict of {name: entry}."""
     if not _MANIFEST_PATH.exists():
         logger.warning("[IMP:8][_get_manifest_secrets] Manifest not found at %s", _MANIFEST_PATH)
         return {}
 
-    data = _load_yaml(_MANIFEST_PATH)
+    data = load_yaml(_MANIFEST_PATH)
     secrets_list = data.get("secrets", [])
     result: dict[str, dict] = {}
     for entry in secrets_list:
@@ -106,7 +100,7 @@ def _collect_module_env_requires() -> dict[str, set[str]]:
 
     for mf in module_yamls:
         module_name = mf.parent.name
-        data = _load_yaml(mf)
+        data = load_yaml(mf)
         env_list = data.get("env_requires", []) or []
         names = {e for e in env_list if isinstance(e, str)}
         if names:
@@ -372,7 +366,7 @@ def test_no_hardcoded_secrets_in_core(caplog):
                 real_violations.append(match_val)
 
         if real_violations:
-            rel_path = sh_file.relative_to(_PROJECT_ROOT)
+            rel_path = sh_file.relative_to(repo_root())
             violations.append(f"{rel_path}: {real_violations}")
             logger.error("[IMP:10][no_hardcoded] Hardcoded credential in %s: %s", rel_path, real_violations)
 

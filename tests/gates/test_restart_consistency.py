@@ -16,13 +16,11 @@
 
 import logging
 import re
-from pathlib import Path
 
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 # region FUNC_extract_make_target
@@ -56,7 +54,7 @@ def extract_make_target(content: str, target: str) -> str | None:
 # region FUNC_test_root_makefile_restart_is_soft
 ## @purpose  Verify root Makefile restart target uses soft restart (stop + start)
 ## @io
-##   @input  None (reads Makefile from PROJECT_ROOT)
+##   @input  None (reads Makefile from repo_root())
 ##   @output None (asserts)
 ## @complexity O(n) on Makefile
 @ldd_trajectory
@@ -66,7 +64,7 @@ def test_root_makefile_restart_is_soft(caplog):
     # · Scenario: root Makefile restart target
     # · Last fail: N/A (D4→A converged semantics)
     # · Remove if: restart semantics changes to require hard restart
-    makefile = PROJECT_ROOT / "Makefile"
+    makefile = repo_root() / "Makefile"
     content = makefile.read_text()
 
     # Find the restart target section
@@ -97,7 +95,7 @@ def test_root_makefile_restart_is_soft(caplog):
 ## @purpose  Verify module.mk has restart-hard target (hard restart with --force-recreate);
 ##           regular restart is inherited soft from Makefile.common
 ## @io
-##   @input  None (reads module.mk from PROJECT_ROOT/core/templates/)
+##   @input  None (reads module.mk from repo_root()/core/templates/)
 ##   @output None (asserts)
 ## @complexity O(n) on module.mk
 @ldd_trajectory
@@ -107,7 +105,7 @@ def test_module_mk_restart_hard_exists(caplog):
     # · Scenario: core/templates/module.mk restart-hard target
     # · Last fail: N/A (D4→A renamed hard restart to restart-hard)
     # · Remove if: module template restart-hard semantics changes
-    module_mk = PROJECT_ROOT / "core" / "templates" / "module.mk"
+    module_mk = repo_root() / "core" / "templates" / "module.mk"
     content = module_mk.read_text()
 
     # Regular restart should NOT be overridden in module.mk (inherited soft from Makefile.common)
@@ -145,7 +143,7 @@ def test_no_soft_restart_in_docker_makefiles(caplog):
     # · Scenario: all core/modules/*/Makefile restart targets
     # · Last fail: N/A (new test)
     # · Remove if: any module legitimately needs soft restart
-    makefiles = list(PROJECT_ROOT.glob("core/modules/*/Makefile"))
+    makefiles = list(repo_root().glob("core/modules/*/Makefile"))
     # Exclude platform-secrets (uses systemd, not Docker)
     makefiles = [m for m in makefiles if "platform-secrets" not in str(m)]
 
@@ -160,9 +158,9 @@ def test_no_soft_restart_in_docker_makefiles(caplog):
                 has_soft = bool(re.search(r"\$\{?COMPOSE_CMD\}?\s+restart\b", restart_sec))
                 has_soft = has_soft or bool(re.search(r"docker\s+compose\s+restart\b", restart_sec))
                 if has_soft:
-                    violations.append(str(mf.relative_to(PROJECT_ROOT)))
+                    violations.append(str(mf.relative_to(repo_root())))
                     # Also show context for debugging
-                    print(f"  SOFT restart in {mf.relative_to(PROJECT_ROOT)}: {restart_sec[:150]}")
+                    print(f"  SOFT restart in {mf.relative_to(repo_root())}: {restart_sec[:150]}")
 
     checked = len(makefiles)
     logger.info("[IMP:9][gate][restart] Checked %d Docker module Makefiles for soft restart", checked)
@@ -186,7 +184,7 @@ def test_manifest_restart_is_soft(caplog):
     # · Scenario: entrypoint-manifest.yaml lifecycle.restart delegates_to
     # · Last fail: N/A (D4→A converged to soft)
     # · Remove if: manifest restart mechanism intentionally reverts to hard
-    manifest_path = PROJECT_ROOT / "core" / "entrypoint-manifest.yaml"
+    manifest_path = repo_root() / "core" / "entrypoint-manifest.yaml"
     content = manifest_path.read_text()
 
     import yaml
@@ -231,7 +229,7 @@ def test_platform_secrets_excluded(caplog):
     # · Last fail: N/A (new test)
     # · Remove if: platform-secrets migrates to Docker compose restart
     # · Updated 2026-07-18: now includes module-system.mk instead of module.mk + overrides
-    ps_makefile = PROJECT_ROOT / "core" / "modules" / "platform-secrets" / "Makefile"
+    ps_makefile = repo_root() / "core" / "modules" / "platform-secrets" / "Makefile"
     if ps_makefile.exists():
         content = ps_makefile.read_text()
         # Verify file includes module-system.mk (provides systemd restart via template)

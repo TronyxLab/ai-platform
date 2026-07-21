@@ -18,17 +18,16 @@ import logging
 import os
 import re
 import subprocess
-from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
 from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROMETHEUS_TMPL = PROJECT_ROOT / "core" / "modules" / "monitoring" / "config" / "prometheus.yml.tmpl"
-PROMETHEUS_YML = PROJECT_ROOT / "core" / "modules" / "monitoring" / "config" / "prometheus.yml"
+PROMETHEUS_TMPL = repo_root() / "core" / "modules" / "monitoring" / "config" / "prometheus.yml.tmpl"
+PROMETHEUS_YML = repo_root() / "core" / "modules" / "monitoring" / "config" / "prometheus.yml"
 
 
 @pytest.mark.gate

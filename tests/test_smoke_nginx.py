@@ -23,15 +23,14 @@ import logging
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_NGINX_MODULE = _PROJECT_ROOT / "core" / "modules" / "nginx"
+_NGINX_MODULE = repo_root() / "core" / "modules" / "nginx"
 _COMPOSE_BASE = _NGINX_MODULE / "docker-compose.base.yml"
 _COMPOSE_TEST = _NGINX_MODULE / "docker-compose.test.yml"
 

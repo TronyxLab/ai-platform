@@ -51,6 +51,7 @@ import subprocess
 import time
 
 import pytest
+from _conftest.honesty import require_docker_or_fail
 
 logger = logging.getLogger(__name__)
 
@@ -117,14 +118,7 @@ def _docker_guard() -> None:
         pytest.skip("Production host detected — skip postgres smoke tests")
 
     # ── Docker daemon guard ─────────────────────────────────────────────
-    result = subprocess.run(
-        ["docker", "info"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        pytest.skip("Docker daemon not available — skip postgres smoke tests")
+    require_docker_or_fail(reason="postgres smoke tests require Docker daemon")
     logger.info("[IMP:9][_docker_guard] Docker daemon available, host is not production")
 
     # ── Foreign container guard ─────────────────────────────────────────

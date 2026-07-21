@@ -18,13 +18,13 @@ import pathlib
 import re
 
 import pytest
-import yaml
+
+from tests.helpers.gate_helpers import load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
-_WORKFLOW_DIR: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows"
-_PLATFORM_ENV_PATH: pathlib.Path = _PROJECT_ROOT / "platform-env.yaml"
+_WORKFLOW_DIR: pathlib.Path = repo_root() / ".github" / "workflows"
+_PLATFORM_ENV_PATH: pathlib.Path = repo_root() / "platform-env.yaml"
 
 # Pattern to detect potential hardcoded secrets
 _HARDCODED_SECRET_PATTERN: re.Pattern = re.compile(
@@ -36,10 +36,7 @@ _HARDCODED_SECRET_PATTERN: re.Pattern = re.compile(
 # registered in platform-env.yaml (single source of truth). No exceptions.
 
 
-def _load_yaml(path: pathlib.Path) -> dict:
-    """Load and parse a YAML file."""
-    with open(path) as f:
-        return yaml.safe_load(f)
+
 
 
 def _extract_platform_env_defaults() -> dict[str, str]:
@@ -47,7 +44,7 @@ def _extract_platform_env_defaults() -> dict[str, str]:
     if not _PLATFORM_ENV_PATH.exists():
         logger.warning("[IMP:8][test] platform-env.yaml not found — skipping platform-env validation")
         return {}
-    data = _load_yaml(_PLATFORM_ENV_PATH)
+    data = load_yaml(_PLATFORM_ENV_PATH)
     env_defaults = data.get("env_defaults", {})
     logger.info("[IMP:8][test] platform-env.yaml env_defaults: %d vars", len(env_defaults))
     return env_defaults

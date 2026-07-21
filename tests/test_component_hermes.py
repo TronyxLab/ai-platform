@@ -36,7 +36,6 @@ def _module_contract():
 
 import logging
 import os
-from pathlib import Path
 import platform
 import subprocess
 import time

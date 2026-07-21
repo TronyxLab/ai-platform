@@ -59,6 +59,8 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/modules/*/watchdog/*.sh",
     "core/bootstrap/systemd/*.sh",
     "core/internal/healthcheck/*.sh",
+    # pre-commit hooks — invoked by pre-commit, not Makefile/CI (DevPlan 028 W1-E7)
+    "core/internal/hooks/*.sh",
     "core/modules/hermes-agent/build/scripts/*.sh",
     "core/modules/hermes-agent/context/scripts/*.sh",
     # backward-compat thin wrapper — delegates to install-acme.sh + issue-cert.sh

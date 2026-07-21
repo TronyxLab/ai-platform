@@ -16,19 +16,18 @@
 
 import logging
 import re
-from pathlib import Path
 
 import pytest
 import yaml
 
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
 # Path resolution
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-PLATFORM_ENV_PATH = PROJECT_ROOT / "platform-env.yaml"
-MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+PLATFORM_ENV_PATH = repo_root() / "platform-env.yaml"
+MODULES_DIR = repo_root() / "core" / "modules"
 
 from tests._conftest.audit import discover_docker_modules
 

@@ -34,8 +34,9 @@ from pathlib import Path
 import pytest
 import yaml as _yaml
 
+from _conftest.honesty import require_docker_or_fail
 from _conftest.ldd import _ensure_volume_dirs
-from _conftest.networks import TEST_NETWORKS, docker_available, ensure_external_networks, is_production_host
+from _conftest.networks import TEST_NETWORKS, ensure_external_networks, is_production_host
 
 # region SMOKE_PLATFORM_FIXTURES
 ## @purpose — Session-scoped fixtures and helpers for smoke platform tests.
@@ -633,8 +634,7 @@ def platform_services(
     if is_production_host():
         pytest.skip("Production host detected — skip smoke suite to prevent container overwrite")
 
-    if not docker_available():
-        pytest.skip("Docker daemon not available — skip smoke suite")
+    require_docker_or_fail(reason="smoke suite requires Docker daemon")
 
     # ── Conditional activation (T2.2 pattern) ────────────────────────────────
     items = request.session.items

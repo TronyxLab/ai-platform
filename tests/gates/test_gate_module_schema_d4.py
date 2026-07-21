@@ -18,14 +18,14 @@ from pathlib import Path
 import jsonschema
 import pytest
 import yaml
+from tests.helpers.gate_helpers import repo_root
 
 from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = PROJECT_ROOT / "core" / "schemas" / "module.schema.json"
-MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+SCHEMA_PATH = repo_root() / "core" / "schemas" / "module.schema.json"
+MODULES_DIR = repo_root() / "core" / "modules"
 
 
 def _load_schema() -> dict:
@@ -40,6 +40,26 @@ def _discover_module_yamls() -> list[Path]:
 def _load_module_yaml(path: Path) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def _validate_module_yaml_d4(module_yaml_path: Path) -> list[str]:
+    """Validate a single module.yaml against the D4 JSON Schema.
+
+    Returns list of error messages (empty = valid).
+    Used by _negative companion test to verify detection of missing fields.
+    """
+    errors: list[str] = []
+    schema = _load_schema()
+    try:
+        module_data = _load_module_yaml(module_yaml_path)
+        jsonschema.validate(module_data, schema)
+    except yaml.YAMLError as e:
+        errors.append(f"YAML parse error: {e}")
+    except jsonschema.ValidationError as e:
+        errors.append(f"Validation error: {e.message} (path: {list(e.absolute_path)})")
+    except Exception as e:
+        errors.append(f"Unexpected error: {e}")
+    return errors
 
 
 MODULE_YAMLS = _discover_module_yamls()
@@ -58,15 +78,8 @@ class TestModuleSchemaD4:
         errors: list[str] = []
         for mod_path in MODULE_YAMLS:
             mod_name = mod_path.parent.name
-            try:
-                module_data = _load_module_yaml(mod_path)
-                jsonschema.validate(module_data, SCHEMA)
-            except yaml.YAMLError as e:
-                errors.append(f"{mod_name}: YAML parse error: {e}")
-            except jsonschema.ValidationError as e:
-                errors.append(f"{mod_name}: Validation error: {e.message} (path: {list(e.absolute_path)})")
-            except Exception as e:
-                errors.append(f"{mod_name}: Unexpected error: {e}")
+            mod_errors = _validate_module_yaml_d4(mod_path)
+            errors.extend(f"{mod_name}: {err}" for err in mod_errors)
 
         total = len(MODULE_YAMLS)
         failed = len(errors)

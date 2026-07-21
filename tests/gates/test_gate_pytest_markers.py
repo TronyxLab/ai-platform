@@ -14,9 +14,10 @@
 import configparser
 import logging
 import re
-from pathlib import Path
 
 import pytest
+
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,8 @@ except ModuleNotFoundError:
     # · Fix: fallback to regex-based minimal parser in _load_ini_options() below
     tomllib = None  # type: ignore[assignment]
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PYTEST_INI = PROJECT_ROOT / "pytest.ini"
-PYPROJECT_TOML = PROJECT_ROOT / "pyproject.toml"
+PYTEST_INI = repo_root() / "pytest.ini"
+PYPROJECT_TOML = repo_root() / "pyproject.toml"
 
 
 # region HELPER_load_ini_options
@@ -159,7 +159,7 @@ class TestPytestMarkers:
             capture_output=True,
             text=True,
             timeout=120,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(repo_root()),
         )
 
         # Parse collected markers from output — look for markers: lines
@@ -175,7 +175,7 @@ class TestPytestMarkers:
             capture_output=True,
             text=True,
             timeout=30,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(repo_root()),
         )
 
         # Parse markers output: each marker starts with '@pytest.mark.<name>:'
@@ -199,7 +199,7 @@ class TestPytestMarkers:
             capture_output=True,
             text=True,
             timeout=120,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(repo_root()),
         )
 
         # Parse marker usage from collector output (--co is not standard)
@@ -207,7 +207,7 @@ class TestPytestMarkers:
         import re as _re
 
         _all_tests_markers: set[str] = set()
-        tests_dir = PROJECT_ROOT / "tests"
+        tests_dir = repo_root() / "tests"
         for pyfile in tests_dir.rglob("test_*.py"):
             try:
                 text = pyfile.read_text()

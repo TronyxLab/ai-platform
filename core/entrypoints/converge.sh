@@ -24,43 +24,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${CORE_DIR}/lib/paths.sh"
 source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"
+source "${CORE_DIR}/lib/args.sh"
 
 NODE_NAME=""
 DRY_RUN=false
 PASSTHROUGH_ARGS=()
 
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_usage
-## @purpose  Print usage instructions and exit 0
-usage() {
-    cat <<'EOF'
-Usage: converge.sh --node <name> [--dry-run] [--report-only] [--reconcile]
+USAGE_SCRIPT="converge.sh"
+USAGE_DESC="Idempotent desired-state reconciler for platform VPS."
+USAGE_OPTIONS=(
+    "--node <name>              Node name to reconcile (or auto-detect)"
+    "--dry-run                  Print planned mutations without executing"
+    "--report-only              Check-only JSON drift report (passthrough)"
+    "--reconcile                After converge, reconcile stub projects"
+)
 
-Idempotent desired-state reconciler for platform VPS.
-
-Required:
-  --node <name>              Node name to reconcile (or auto-detect)
-
-Optional:
-  --dry-run                  Print planned mutations without executing
-  --report-only              Check-only JSON drift report (passthrough)
-  --reconcile                After converge, reconcile stub projects (deploy if GHCR image exists)
-  --help, -h                 Print this help
-
-Exit codes:
-  0 — fully converged (no drifts, no warnings)
-  1 — warnings (non-critical drift detected)
-  2 — one or more R-units failed (critical)
-
-Examples:
-  converge.sh --node tronyx-vps
-  converge.sh --node tronyx-vps --dry-run
-  converge.sh --node tronyx-vps --report-only
-  converge.sh --node tronyx-vps --reconcile
-EOF
-    exit 0
-}
-# endregion FUNC_usage
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · converge.sh passthrough arg pattern
+# · Rejected: full parse_args adoption (passthrough pattern incompatible)
+# · Reason: minimal W1 scope, forwards unknown args via PASSTHROUGH_ARGS
+# · Rev: Wave 4 — redesign passthrough into parse_args spec
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_auto_detect_node_name
@@ -104,7 +86,7 @@ main() {
             --node|--node-name) NODE_NAME="$2"; shift 2 ;;
             --dry-run) DRY_RUN=true; shift ;;
             --reconcile) PASSTHROUGH_ARGS+=("--reconcile"); shift ;;
-            --help|-h) usage ;;
+            --help|-h) usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" ;;
             *) PASSTHROUGH_ARGS+=("$1"); shift ;;
         esac
     done

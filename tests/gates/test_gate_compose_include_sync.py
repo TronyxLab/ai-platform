@@ -20,15 +20,15 @@
 
 import importlib.util
 import shutil
-from pathlib import Path
 
 import pytest
 import yaml
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = PROJECT_ROOT / "core" / "modules"
-COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
-DISCOVER_MODULES_PATH = PROJECT_ROOT / "core" / "internal" / "bootstrap" / "discover_modules.py"
+from tests.helpers.gate_helpers import repo_root
+
+MODULES_DIR = repo_root() / "core" / "modules"
+COMPOSE_FILE = repo_root() / "docker-compose.yml"
+DISCOVER_MODULES_PATH = repo_root() / "core" / "internal" / "bootstrap" / "discover_modules.py"
 
 
 def _import_discover_modules():

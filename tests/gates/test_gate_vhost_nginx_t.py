@@ -24,7 +24,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import assert_ldd_stderr, docker_available, source_and_run
+from _conftest.honesty import require_docker_or_fail
+from conftest import assert_ldd_stderr, source_and_run
 
 # ─── Constants ───────────────────────────────────────────────────────
 SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "scaffold" / "add-vhost.sh"
@@ -136,8 +137,7 @@ def _patch_cert_paths(vhost_content: str) -> str:
 def test_gate_vhost_nginx_t(tmp_path: Path) -> None:
     """Validate generated nginx vhosts pass nginx -t in Docker."""
     # ── Pre-check: Docker availability ──
-    if not docker_available():
-        pytest.skip("Docker CLI not available — skipping nginx -t validation gate")
+    require_docker_or_fail(reason="nginx -t validation gate requires Docker CLI")
 
     # ── Arrange: create node.yaml and directory structure ──
     node_configs_dir = tmp_path / "node-configs"

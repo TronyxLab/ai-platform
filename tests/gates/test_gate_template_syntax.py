@@ -17,8 +17,9 @@ import re
 
 import pytest
 from conftest import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
-PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 
 # Compose runtime vars that are ALLOWED (Docker Compose runtime substitution)
 # These are NOT template placeholders — they are resolved at compose up time
@@ -46,7 +47,7 @@ def test_all_templates_use_strict_grammar(caplog):
 
     logger = logging.getLogger(__name__)
 
-    manifest_path = os.path.join(PROJECT_ROOT, "core", "templates", "template-manifest.yaml")
+    manifest_path = os.path.join(repo_root(), "core", "templates", "template-manifest.yaml")
     if not os.path.exists(manifest_path):
         logger.critical("[IMP:9][gate][template-syntax] Manifest not found: %s", manifest_path)
         pytest.fail(f"template-manifest.yaml not found at {manifest_path}")

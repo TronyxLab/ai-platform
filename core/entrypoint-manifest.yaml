@@ -460,10 +460,26 @@ gates:
     test_file: test_gate_project_context.py
     markers: gate
   - id: project-env-platform
-    description: D3 gate — validates .env.platform presence and provides ⊆ profiles consistency for all registered projects
+    description: "D3 gate — validates .env.platform presence and provides ⊆ profiles consistency for all registered projects"
     test_file: test_gate_project_env.py
     markers: gate
 
+  # W1-E3: R5 anti-survivorship negative pairs (DevPlan 028 Подволна C)
+  - id: gate-litellm-pg-enforcement-negative
+    description: "R5 companion: detect SQLite config in LiteLLM (anti-survivorship)"
+    test_file: test_gate_litellm_pg_enforcement_negative.py
+    issue: "028-wave1-immediate"
+  - id: gate-module-schema-d4-negative
+    description: "R5 companion: detect module.yaml missing required D4 fields"
+    test_file: test_gate_module_schema_d4_negative.py
+    issue: "028-wave1-immediate"
+  - id: gate-env-shared-consistency-negative
+    description: "R5 companion: detect divergent env_shared declarations between modules"
+    test_file: test_gate_env_shared_consistency_negative.py
+    issue: "028-wave1-immediate"
+
+# ---------------------------------------------------------------------------
+# Forbidden directories — directories that MUST NOT contain executable scripts
 # ---------------------------------------------------------------------------
 # Forbidden directories — directories that MUST NOT contain executable scripts
 # ---------------------------------------------------------------------------

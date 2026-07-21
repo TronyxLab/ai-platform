@@ -39,11 +39,11 @@ from pathlib import Path
 
 import pytest
 from conftest import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DEPLOY_MODULES_SH = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "deploy-modules.sh"
+_DEPLOY_MODULES_SH = repo_root() / "core" / "internal" / "bootstrap" / "deploy-modules.sh"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

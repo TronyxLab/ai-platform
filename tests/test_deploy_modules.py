@@ -32,13 +32,13 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DEPLOY_MODULES_SH = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "deploy-modules.sh"
-_NODE_LIFECYCLE_SH = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
-_BOOTSTRAP_DIR = _PROJECT_ROOT / "core" / "internal" / "bootstrap"
+_DEPLOY_MODULES_SH = repo_root() / "core" / "internal" / "bootstrap" / "deploy-modules.sh"
+_NODE_LIFECYCLE_SH = repo_root() / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
+_BOOTSTRAP_DIR = repo_root() / "core" / "internal" / "bootstrap"
 
 # Add bootstrap dir to sys.path for _topo_sort import
 if str(_BOOTSTRAP_DIR) not in sys.path:
@@ -638,7 +638,7 @@ def test_rsync_consolidation(caplog) -> None:
     # ◇ read core-deploy.yml → ⚡ grep for 'Rsync core + config' and count rsync commands → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    core_deploy_yml = _PROJECT_ROOT / ".github" / "workflows" / "core-deploy.yml"
+    core_deploy_yml = repo_root() / ".github" / "workflows" / "core-deploy.yml"
     logger.info("[IMP:7][test_rsync_consolidation] Reading core-deploy.yml ...")
     content = core_deploy_yml.read_text()
 
@@ -692,7 +692,7 @@ def test_yaml_read_domain_config(caplog, tmp_path) -> None:
     # ▶ tmp_path → ⚡ write mock node.yaml → ⚡ source yaml_read.sh → call yaml_read_domain_config() → ◇ verify field extraction → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    yaml_read_sh = _PROJECT_ROOT / "core" / "lib" / "yaml_read.sh"
+    yaml_read_sh = repo_root() / "core" / "lib" / "yaml_read.sh"
     logger.info("[IMP:7][test_yaml_read_domain_config] Reading yaml_read.sh ...")
     content = yaml_read_sh.read_text()
 
@@ -751,7 +751,7 @@ projects:
     )
     logger.info("[IMP:9][test_yaml_read_domain_config] node-lifecycle.sh uses yaml_read_domain_config OK")
 
-    issue_cert_content = (_PROJECT_ROOT / "core" / "internal" / "bootstrap" / "issue-cert.sh").read_text()
+    issue_cert_content = (repo_root() / "core" / "internal" / "bootstrap" / "issue-cert.sh").read_text()
     assert "yaml_read_domain_config" in issue_cert_content, (
         "S7 violation: issue-cert.sh does not use yaml_read_domain_config"
     )

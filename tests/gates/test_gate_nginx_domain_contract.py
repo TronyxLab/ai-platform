@@ -17,17 +17,16 @@
 
 import logging
 import re
-from pathlib import Path
 
 import pytest
 import yaml
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_NGINX_CONFIG_DIR = _PROJECT_ROOT / "core" / "modules" / "nginx" / "config"
-_BASE_YML = _PROJECT_ROOT / "core" / "modules" / "nginx" / "docker-compose.base.yml"
+_NGINX_CONFIG_DIR = repo_root() / "core" / "modules" / "nginx" / "config"
+_BASE_YML = repo_root() / "core" / "modules" / "nginx" / "docker-compose.base.yml"
 
 # Files that must use templates (9 files, excludes nginx.conf + includes/security-headers.conf)
 _TEMPLATE_CONF_FILES = {

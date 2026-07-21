@@ -12,12 +12,11 @@
 ## @rationale Стандартизация healthcheck контракта (DevPlan 04 DD5, DD6)
 # endregion MODULE_CONTRACT
 
-from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+MODULES_DIR = repo_root() / "core" / "modules"
 
 HEALTHCHECK_FILES = {
     "backup-cron": MODULES_DIR / "backup-cron" / "healthcheck.sh",

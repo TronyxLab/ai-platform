@@ -36,6 +36,7 @@ PROJECTS_ROOT="${PROJECTS_ROOT:-$(dirname "$PLATFORM_ROOT")}"
 
 __LOG_PREFIX="remove-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
+source "${PLATFORM_ROOT}/core/lib/args.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBALS
@@ -50,60 +51,43 @@ PROJECT_NODE_HOST=""
 PROJECT_ORG=""
 NODE_CONFIGS_DIR=""
 
-# ──────────────────────────────────────────────────────────────────
-# region FUNC_usage
-## @purpose  Print usage guide
-## @io       stdout: usage text
-usage() {
-    cat <<'HELP'
-USAGE: remove-project.sh --name <name> [--node <node>] [OPTIONS]
-
-Remove a project from the platform lifecycle (SAFE — no data loss).
-
-REQUIRED:
-  --name <name>     Project name to remove
-
-OPTIONS:
-  --node <node>     Target node name (searched in all node-configs if omitted)
-  --force           Skip confirmation prompt
-  --help            Show this help
-
-NOTE: This is a SAFE remove (O7/DD10) — volumes, databases, images, and GitHub
-repos are NEVER deleted automatically. Use caution: remove = disconnect.
-
-Edge cases:
-  - Project not found in node.yaml → SKIP, exit 0 (idempotent)
-  - VPS unavailable → unregister + vhost removal run; SSH step gets SKIPPED + instructions
-HELP
-}
-# endregion FUNC_usage
+USAGE_SCRIPT="remove-project.sh"
+USAGE_DESC="Remove a project from the platform lifecycle (SAFE — no data loss). Volumes, databases, images, and GitHub repos are NEVER deleted automatically."
+USAGE_OPTIONS=(
+    "--name <name>     Project name to remove"
+    "--node <node>     Target node name (searched in all node-configs if omitted)"
+    "--force           Skip confirmation prompt"
+)
 
 # ──────────────────────────────────────────────────────────────────
-# region FUNC_parse_args
-## @purpose  Parse CLI arguments
+# region FUNC_parse_cli_args
+## @purpose  Parse CLI arguments via lib/args.sh (wrapper avoids name collision)
 ## @io       Sets PROJECT_NAME, NODE_NAME, FORCE globals
 ## @complexity O(n) where n = number of args
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --name)  shift; PROJECT_NAME="$1" ;;
-            --node)  shift; NODE_NAME="$1" ;;
-            --force) FORCE=1 ;;
-            --help|-h) usage; exit 0 ;;
-            *) log_imp 9 "-" "Unknown arg: $1"; usage >&2; exit 1 ;;
-        esac
-        shift
-    done
+parse_cli_args() {
+    declare -A ARG_SPEC=(
+        [--name]="value"
+        [--node]="value"
+        [--force]="flag"
+    )
+    declare -A ARG_RESULT
+
+    # Call lib function (not local — different function name avoids recursion)
+    parse_args ARG_SPEC ARG_RESULT -- "$@" || exit 1
+
+    PROJECT_NAME="${ARG_RESULT[--name]:-}"
+    NODE_NAME="${ARG_RESULT[--node]:-}"
+    FORCE=$([[ -n "${ARG_RESULT[--force]:-}" ]] && echo 1 || echo 0)
 
     if [[ -z "$PROJECT_NAME" ]]; then
         log_imp 10 "-" "FAIL-FAST: --name is required"
-        usage >&2
+        usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" >&2
         exit 1
     fi
 
     log_imp 7 "-" "Args: name=${PROJECT_NAME} node=${NODE_NAME:-<auto>} force=${FORCE}"
 }
-# endregion FUNC_parse_args
+# endregion FUNC_parse_cli_args
 
 # ──────────────────────────────────────────────────────────────────
 # region FUNC_find_node_yaml
@@ -418,7 +402,7 @@ print_report() {
 main() {
     log_imp 6 "-" "Starting remove-project.sh (T10 full implementation)"
 
-    parse_args "$@"
+    parse_cli_args "$@"
 
     # ── Find project in node.yaml ──
     if ! find_node_yaml "$PROJECT_NAME" "$NODE_NAME"; then

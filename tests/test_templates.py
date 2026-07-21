@@ -30,11 +30,11 @@ from jsonschema import ValidationError, validate
 
 logger = logging.getLogger(__name__)
 
+from tests.helpers.gate_helpers import repo_root
+
 # --- [IMP:7] Поиск всех шаблонов через glob — без хардкода
-_TEST_DIR = pathlib.Path(__file__).resolve().parent
-_PROJECT_ROOT = _TEST_DIR.parent
-TEMPLATE_PATHS = sorted(str(p) for p in _PROJECT_ROOT.glob("templates/*/ai-platform.yaml"))
-SCHEMA_PATH = str(_PROJECT_ROOT / "core/schemas/ai-platform.schema.json")
+TEMPLATE_PATHS = sorted(str(p) for p in repo_root().glob("templates/*/ai-platform.yaml"))
+SCHEMA_PATH = str(repo_root() / "core/schemas/ai-platform.schema.json")
 
 # Плейсхолдеры, используемые в шаблонах — заменяются add-project.sh
 _PLACEHOLDER_RE = re.compile(r"^\$[A-Z_]+$")

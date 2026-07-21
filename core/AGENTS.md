@@ -217,3 +217,4 @@ core/
 | [`modules/AGENTS.md`](modules/AGENTS.md) | Шаблон модуля, контракты |
 | [`entrypoint-manifest.yaml`](entrypoint-manifest.yaml) | Машиночитаемый YAML-реестр |
 | [`templates/`](templates/) | Параметризованные шаблоны |
+- [Root AGENTS.md — языковая политика](../AGENTS.md#языковая-политика) — Python-only new code, двухуровневый Strangler-триггер

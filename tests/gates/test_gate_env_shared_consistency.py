@@ -22,6 +22,7 @@
 
 import logging
 import os
+import pathlib
 
 import pytest
 import yaml
@@ -101,6 +102,41 @@ def _load_file_lines(filepath: str) -> list[str] | None:
         return None
     with open(filepath) as f:
         return f.readlines()
+
+
+def _check_env_shared_consistency(module_yaml_paths: list[pathlib.Path]) -> list[str]:
+    """Check for divergent env_shared declarations between modules.
+
+    Takes a list of Path objects to module.yaml files.
+    Returns list of divergence messages (empty = consistent).
+    Used by _negative companion test to verify detection of divergent env_shared.
+    """
+    divergences: list[str] = []
+    all_vars: dict[str, dict[str, str]] = {}
+
+    for yaml_path in module_yaml_paths:
+        module_name = yaml_path.parent.name
+        try:
+            with open(yaml_path) as f:
+                data = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        env_shared = data.get("env_shared", {}) or {}
+        for key, value in env_shared.items():
+            if key not in all_vars:
+                all_vars[key] = {}
+            all_vars[key][module_name] = str(value)
+
+    for key, modules_dict in all_vars.items():
+        if len(modules_dict) > 1:
+            values = set(modules_dict.values())
+            if len(values) > 1:
+                details = "; ".join(f"{m}={v}" for m, v in modules_dict.items())
+                divergences.append(f"SHARED_VAR '{key}' diverges across modules: {details}")
+
+    return divergences
 
 
 # endregion LOADERS

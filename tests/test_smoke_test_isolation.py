@@ -13,10 +13,10 @@
 # endregion MODULE_CONTRACT
 
 import logging
-from pathlib import Path
 
 import pytest
 import yaml
+from tests.helpers.gate_helpers import repo_root
 
 from tests._conftest.ldd import ldd_trajectory
 
@@ -34,8 +34,7 @@ def _yaml_override_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> list
 
 yaml.add_constructor("!override", _yaml_override_constructor, Loader=yaml.SafeLoader)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MODULES_DIR = PROJECT_ROOT / "core" / "modules"
+MODULES_DIR = repo_root() / "core" / "modules"
 
 # DevPlan 017 — network isolation: prod → test network mapping
 PROD_TO_TEST_NET_MAP: dict[str, str] = {

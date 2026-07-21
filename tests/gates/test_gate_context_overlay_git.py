@@ -24,24 +24,23 @@ from pathlib import Path
 import pytest
 
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
 # Delivery scripts to scan for git calls
 _DELIVERY_GIT_SCRIPTS = [
-    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "deploy-modules.sh",
+    repo_root() / "core" / "internal" / "bootstrap" / "deploy-modules.sh",
 ]
 
 # Delivery scripts to scan for rsync --exclude '.git/'
 _DELIVERY_RSYNC_SCRIPTS = [
-    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "scp-deliver.sh",
+    repo_root() / "core" / "internal" / "bootstrap" / "scp-deliver.sh",
 ]
 
 # CI workflow files for rsync verification
 _DELIVERY_CI_WORKFLOWS = [
-    _PROJECT_ROOT / ".github" / "workflows" / "core-deploy.yml",
+    repo_root() / ".github" / "workflows" / "core-deploy.yml",
 ]
 
 # Git command patterns — look for git clone, git pull, git fetch
@@ -352,7 +351,7 @@ def test_git_only_in_ensure_context_repo(caplog):
             total_violations += len(git_calls)
 
     # Also scan for git calls in other bootstrap scripts (informational)
-    bootstrap_dir = _PROJECT_ROOT / "core" / "internal" / "bootstrap"
+    bootstrap_dir = repo_root() / "core" / "internal" / "bootstrap"
     if bootstrap_dir.exists():
         for script_file in sorted(bootstrap_dir.glob("*.sh")):
             if script_file.name in {s.name for s in _DELIVERY_GIT_SCRIPTS}:

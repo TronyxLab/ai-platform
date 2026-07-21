@@ -49,6 +49,7 @@ import subprocess
 import time
 
 import pytest
+from _conftest.honesty import require_docker_or_fail
 from conftest import (
     SMOKE_ENV,
     ldd_trajectory,
@@ -177,21 +178,11 @@ def test_docker_daemon_available(caplog: pytest.LogCaptureFixture) -> None:
     # endregion
 
     # region BLOCK_Exec
-    result = subprocess.run(
-        ["docker", "info", "--format", "{{.ServerVersion}}"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    require_docker_or_fail(reason="Docker daemon must be available for smoke tests")
     # endregion
 
     # region BLOCK_Assert
-    if result.returncode != 0:
-        logger.warning("[IMP:7][test_docker_daemon_available] Docker daemon not available:\n%s", result.stderr)
-        pytest.skip("Docker daemon not available")
-    logger.info(
-        "[IMP:9][test_docker_daemon_available] Docker daemon available, server version: %s", result.stdout.strip()
-    )
+    logger.info("[IMP:9][test_docker_daemon_available] Docker daemon available")
     # endregion
 
 

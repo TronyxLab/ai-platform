@@ -64,6 +64,7 @@ import subprocess
 import time
 
 import pytest
+from _conftest.honesty import require_docker_or_fail
 from conftest import _ensure_volume_dirs, ensure_external_networks, is_production_host, ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -150,14 +151,7 @@ def _docker_guard() -> None:
     if is_production_host():
         pytest.skip("Production host detected — skip pgbouncer component tests")
 
-    result = subprocess.run(
-        ["docker", "info"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        pytest.skip("Docker daemon not available — skip pgbouncer component tests")
+    require_docker_or_fail(reason="pgbouncer component tests require Docker daemon")
     logger.info("[IMP:9][_docker_guard] Docker daemon available, host is not production")
 
 
@@ -648,7 +642,7 @@ def test_pgbouncer_container_env_has_listen_port(caplog: pytest.LogCaptureFixtur
     except subprocess.TimeoutExpired:
         pytest.fail("docker inspect timed out after 15s")
     except FileNotFoundError:
-        pytest.skip("docker command not found — Docker CLI not installed")
+        require_docker_or_fail(reason="Docker CLI not found in environment")
 
     assert result.returncode == 0, f"docker inspect failed (rc={result.returncode}). stderr: {result.stderr.strip()}"
 

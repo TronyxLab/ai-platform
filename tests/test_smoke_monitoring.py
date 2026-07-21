@@ -22,17 +22,16 @@
 
 import logging
 import subprocess
-from pathlib import Path
 
 import pytest
 import requests
 from _conftest.ldd import _print_ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_MONITORING_MODULE = _PROJECT_ROOT / "core" / "modules" / "monitoring"
+_MONITORING_MODULE = repo_root() / "core" / "modules" / "monitoring"
 _COMPOSE_BASE = _MONITORING_MODULE / "docker-compose.base.yml"
 _COMPOSE_TEST = _MONITORING_MODULE / "docker-compose.test.yml"
 

@@ -23,16 +23,15 @@
 import json
 import logging
 import subprocess
-from pathlib import Path
 
 import pytest
 from _conftest.ldd import _print_ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_REDIS_MODULE = _PROJECT_ROOT / "core" / "modules" / "redis"
+_REDIS_MODULE = repo_root() / "core" / "modules" / "redis"
 _COMPOSE_BASE = _REDIS_MODULE / "docker-compose.base.yml"
 _COMPOSE_TEST = _REDIS_MODULE / "docker-compose.test.yml"
 

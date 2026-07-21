@@ -53,9 +53,9 @@ import subprocess
 
 import pytest
 import requests
+from _conftest.honesty import require_docker_or_fail
 from conftest import (
     _handle_e2e_error,
-    docker_available,
     ensure_external_networks,
     is_production_host,
     ldd_trajectory,
@@ -161,8 +161,7 @@ def clickhouse_up(modules_dir: str) -> dict:
         pytest.skip(f"ClickHouse test compose file not found: {compose_test}")
 
     # ── Check Docker availability ─────────────────────────────────────────
-    if not docker_available():
-        pytest.skip("Docker daemon is not available — cannot start containers")
+    require_docker_or_fail(reason="ClickHouse component tests require Docker daemon")
 
     # ── Production host guard ────────────────────────────────────────────
     if is_production_host():

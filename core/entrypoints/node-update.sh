@@ -21,35 +21,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${CORE_DIR}/lib/paths.sh"
 source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"
+source "${CORE_DIR}/lib/args.sh"
 
 NODE_NAME=""
 DRY_RUN=false
 PASSTHROUGH_ARGS=()
 
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_usage
-## @purpose  Print usage instructions and exit 0
-usage() {
-    cat <<'EOF'
-Usage: node-update.sh --node <name> [--dry-run] [--age-secret-key-file <file>]
+USAGE_SCRIPT="node-update.sh"
+USAGE_DESC="Update an already-provisioned node (regular CI lifecycle, not INIT)."
+USAGE_OPTIONS=(
+    "--node <name>              Node name to update"
+    "--dry-run                  Show SSH command or local args without executing"
+    "--age-secret-key-file <f>  Path to AGE secret key file"
+)
 
-Update an already-provisioned node (regular CI lifecycle, not INIT).
-
-Required:
-  --node <name>              Node name to update
-
-Optional:
-  --dry-run                  Show SSH command or local args without executing
-  --age-secret-key-file <f>  Path to AGE secret key file
-  --help, -h                 Print this help
-
-Examples:
-  node-update.sh --node tronyx-vps
-  node-update.sh --node tronyx-vps --dry-run
-EOF
-    exit 0
-}
-# endregion FUNC_usage
+# 🧐 TRAP[DECISION] · 2026-07-21 · — · node-update.sh passthrough arg pattern
+# · Rejected: full parse_args adoption (passthrough pattern incompatible)
+# · Reason: minimal W1 scope, forwards unknown args via PASSTHROUGH_ARGS
+# · Rev: Wave 4 — redesign passthrough into parse_args spec
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_detect_age_key
@@ -88,7 +77,7 @@ main() {
             --reconcile) PASSTHROUGH_ARGS+=("--reconcile"); shift ;;
             --age-secret-key-file)
                 AGE_SECRET_KEY_FILE="$2"; export AGE_SECRET_KEY_FILE; shift 2 ;;
-            --help|-h) usage ;;
+            --help|-h) usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" ;;
             *) PASSTHROUGH_ARGS+=("$1"); shift ;;
         esac
     done

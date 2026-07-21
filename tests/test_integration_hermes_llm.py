@@ -40,7 +40,8 @@ import uuid
 
 import pytest
 import requests
-from conftest import _ensure_volume_dirs, docker_available, ldd_trajectory
+from _conftest.honesty import require_docker_or_fail
+from conftest import _ensure_volume_dirs, ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -550,8 +551,7 @@ def integration_env(modules_dir: str, platform_ports: dict[str, int]) -> dict[st
     }
 
     # ── Docker guard ──────────────────────────────────────────────────────
-    if not docker_available():
-        pytest.skip("Docker daemon not available — cannot start containers")
+    require_docker_or_fail(reason="hermes-llm integration tests require Docker daemon")
 
     # ── Context image availability check ────────────────────────────────────
     # Integration test requires the L2 context overlay image

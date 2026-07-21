@@ -20,10 +20,10 @@
 
 import logging
 import os
-import subprocess
 
 import pytest
 import requests
+from _conftest.honesty import require_docker_or_fail
 
 logger = logging.getLogger(__name__)
 
@@ -31,24 +31,7 @@ from conftest import _handle_e2e_error, ldd_trajectory
 
 # region MODULE_SKIP_DOCKER
 
-
-def _docker_available() -> bool:
-    ## @purpose — Check if Docker daemon is available via `docker info`
-    ## @io — ⇥ nothing → ⎋ bool (True if Docker reachable)
-    ## @complexity — O(1)
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return False
-
-
-if not _docker_available():
-    pytest.skip("Docker daemon not available — skipping all local auth tests", allow_module_level=True)
+require_docker_or_fail(reason="local auth tests require Docker daemon")
 
 # endregion MODULE_SKIP_DOCKER
 

@@ -20,15 +20,14 @@
 import logging
 import os
 import subprocess
-from pathlib import Path
 
 import pytest
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_INFRA_METRICS_MODULE = _PROJECT_ROOT / "core" / "modules" / "infra-metrics"
+_INFRA_METRICS_MODULE = repo_root() / "core" / "modules" / "infra-metrics"
 _COMPOSE_BASE = _INFRA_METRICS_MODULE / "docker-compose.base.yml"
 _COMPOSE_TEST = _INFRA_METRICS_MODULE / "docker-compose.test.yml"
 _HEALTHCHECK_SH = _INFRA_METRICS_MODULE / "healthcheck.sh"

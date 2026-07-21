@@ -19,13 +19,13 @@ import pathlib
 import re
 
 import pytest
-import yaml
+
+from tests.helpers.gate_helpers import load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
-_WORKFLOW_DIR: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows"
-_SETUP_GITLEAKS_ACTION_DIR: pathlib.Path = _PROJECT_ROOT / ".github" / "actions" / "setup-gitleaks"
+_WORKFLOW_DIR: pathlib.Path = repo_root() / ".github" / "workflows"
+_SETUP_GITLEAKS_ACTION_DIR: pathlib.Path = repo_root() / ".github" / "actions" / "setup-gitleaks"
 
 # Workflows that should use setup-gitleaks composite action
 _GITLEAKS_CONSUMER_WORKFLOWS: set[str] = {
@@ -51,7 +51,7 @@ def _get_expected_gitleaks_version() -> str:
         logger.warning("[IMP:8][test] setup-gitleaks action.yml not found — falling back to 8.30.1")
         return "8.30.1"
     try:
-        data = _load_yaml(action_file)
+        data = load_yaml(action_file)
         version = data.get("inputs", {}).get("version", {}).get("default", "8.30.1")
         logger.info("[IMP:8][test] Gitleaks version read from action.yml: %s", version)
         return version
@@ -70,10 +70,7 @@ _COMPOSITE_ACTION_PATTERN: re.Pattern = re.compile(r"uses:\s*\./\.github/actions
 _VERSION_REF_PATTERN: re.Pattern = re.compile(r"gitleaks[_-]?(\d+\.\d+\.\d+)")
 
 
-def _load_yaml(path: pathlib.Path) -> dict:
-    """Load and parse a YAML file."""
-    with open(path) as f:
-        return yaml.safe_load(f)
+
 
 
 @pytest.mark.gate

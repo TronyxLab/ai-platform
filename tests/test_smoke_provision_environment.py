@@ -17,22 +17,15 @@
 import logging
 import os
 import subprocess
-from pathlib import Path
 
 import pytest
 
-# 📋 TRAP[DRIFT] · 2026-07-15 · BLOCKER · PROJECT_ROOT resolves to tests/ instead of project root
-# · Drift type: PATH
-# · Files: test_smoke_provision_environment.py:24
-# · Expected: PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# · Actual:   PROJECT_ROOT = Path(__file__).resolve().parent (tests/ directory)
-# · Fix:      Change .parent to .parent.parent
-# · Detected during: QA audit DevPlan 001 — bootstrap-test-ci-unification
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PLATFORM_ENV_PATH = PROJECT_ROOT / "platform-env.yaml"
-PROVISIONER_PATH = PROJECT_ROOT / "core" / "internal" / "provision-environment.sh"
-COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
-COMPOSE_DEV_FILE = PROJECT_ROOT / "docker-compose.platform-dev.yml"
+from tests.helpers.gate_helpers import repo_root
+
+PLATFORM_ENV_PATH = repo_root() / "platform-env.yaml"
+PROVISIONER_PATH = repo_root() / "core" / "internal" / "provision-environment.sh"
+COMPOSE_FILE = repo_root() / "docker-compose.yml"
+COMPOSE_DEV_FILE = repo_root() / "docker-compose.platform-dev.yml"
 
 
 @pytest.mark.requires_docker
