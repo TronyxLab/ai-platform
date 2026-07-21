@@ -96,13 +96,11 @@ def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
 
     # ── 4. "Local build failed" present ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking 'Local build failed' error path ...")
-    assert "Local build failed" in content, (
-        "W4 violation: 'Local build failed' error path not found"
-    )
+    assert "Local build failed" in content, "W4 violation: 'Local build failed' error path not found"
 
     # ── 5. No "FAIL" for image-not-found (should be WARN) — but only the one from compose config ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Verifying old FAIL-for-image is gone ...")
-    old_fail_pattern = r'FAIL.*hermes-agent image not found'
+    old_fail_pattern = r"FAIL.*hermes-agent image not found"
     assert not re.search(old_fail_pattern, content), (
         "W4 violation: old FAIL-for-image pattern still present (should be WARN)"
     )
@@ -157,7 +155,9 @@ def test_hermes_pull_success(caplog: pytest.LogCaptureFixture) -> None:
     try:
         result = subprocess.run(
             ["docker", "manifest", "inspect", image_ref],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
     except FileNotFoundError:
         logger.warning("[IMP:9][test_hermes_pull_success] docker CLI vanished — skipping")
@@ -173,7 +173,8 @@ def test_hermes_pull_success(caplog: pytest.LogCaptureFixture) -> None:
         logger.warning(
             "[IMP:9][test_hermes_pull_success] ⚠️ Image not found: %s — %s "
             "(may be transient network issue, not a test failure)",
-            image_ref, stderr_msg,
+            image_ref,
+            stderr_msg,
         )
         # In CI, alpine:latest must exist. In dev, network may be unavailable.
         # This is informational — not a hard assertion if the image is well-known.
@@ -221,14 +222,17 @@ def test_hermes_pull_404_build(
 
     # ── 1. Create a minimal Dockerfile ──
     dockerfile = tmp_path / "Dockerfile"
-    dockerfile.write_text(textwrap.dedent("""\
+    dockerfile.write_text(
+        textwrap.dedent("""\
         FROM alpine:latest
         CMD ["echo", "hermes-agent-fallback-test"]
-    """))
+    """)
+    )
 
     # ── 2. Create docker-compose.yml with build-only (no pre-pushed image) ──
     compose_yml = tmp_path / "docker-compose.yml"
-    compose_yml.write_text(textwrap.dedent("""\
+    compose_yml.write_text(
+        textwrap.dedent("""\
         version: "3.8"
         services:
           hermes-agent-test:
@@ -237,7 +241,8 @@ def test_hermes_pull_404_build(
               dockerfile: Dockerfile
             image: hermes-agent-fallback-test:latest
             profiles: ["hermes-agent"]
-    """))
+    """)
+    )
     logger.info("[IMP:8][test_hermes_pull_404_build] Created compose file and Dockerfile")
 
     # ── 3. Resolve images from compose config (same as deploy-modules.sh) ──
@@ -245,7 +250,9 @@ def test_hermes_pull_404_build(
     try:
         config_result = subprocess.run(
             ["docker", "compose", "-f", str(compose_yml), "--profile", "hermes-agent", "config", "--images"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except FileNotFoundError:
         logger.warning("[IMP:9][test_hermes_pull_404_build] docker CLI vanished — skipping")
@@ -256,9 +263,7 @@ def test_hermes_pull_404_build(
     images = [img.strip() for img in config_result.stdout.splitlines() if img.strip()]
     logger.info("[IMP:8][test_hermes_pull_404_build] Resolved images: %s", images)
 
-    assert len(images) > 0, (
-        "No images resolved from compose config (profile mismatch or empty compose)"
-    )
+    assert len(images) > 0, "No images resolved from compose config (profile mismatch or empty compose)"
     assert "hermes-agent-fallback-test:latest" in images, (
         f"Expected image hermes-agent-fallback-test:latest not found in {images}"
     )
@@ -267,7 +272,9 @@ def test_hermes_pull_404_build(
     logger.info("[IMP:8][test_hermes_pull_404_build] Verifying image NOT in registry ...")
     manifest_result = subprocess.run(
         ["docker", "manifest", "inspect", "hermes-agent-fallback-test:latest"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert manifest_result.returncode != 0, (
         "Pre-condition failed: image should NOT exist in registry but manifest inspect succeeded"
@@ -279,7 +286,9 @@ def test_hermes_pull_404_build(
     try:
         build_result = subprocess.run(
             ["docker", "compose", "-f", str(compose_yml), "--profile", "hermes-agent", "build"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
     except subprocess.TimeoutExpired:
         pytest.fail("docker compose build timed out (>120s)")
@@ -298,7 +307,9 @@ def test_hermes_pull_404_build(
     logger.info("[IMP:8][test_hermes_pull_404_build] Cleaning up built image ...")
     subprocess.run(
         ["docker", "rmi", "hermes-agent-fallback-test:latest"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     logger.info("[IMP:9][test_hermes_pull_404_build] ✅ 404→build scenario fully validated")
 
@@ -340,14 +351,17 @@ def test_hermes_build_fallback_fail(
 
     # ── 1. Create a Dockerfile that will fail to build ──
     dockerfile = tmp_path / "Dockerfile"
-    dockerfile.write_text(textwrap.dedent("""\
+    dockerfile.write_text(
+        textwrap.dedent("""\
         FROM nonexistent-registry.example.com/hermes-agent-does-not-exist:broken
         RUN exit 1
-    """))
+    """)
+    )
 
     # ── 2. Create docker-compose.yml ──
     compose_yml = tmp_path / "docker-compose.yml"
-    compose_yml.write_text(textwrap.dedent("""\
+    compose_yml.write_text(
+        textwrap.dedent("""\
         version: "3.8"
         services:
           hermes-broken:
@@ -356,7 +370,8 @@ def test_hermes_build_fallback_fail(
               dockerfile: Dockerfile
             image: hermes-broken-test:latest
             profiles: ["hermes-agent"]
-    """))
+    """)
+    )
     logger.info("[IMP:8][test_hermes_build_fallback_fail] Created broken Dockerfile and compose file")
 
     # ── 3. Run docker compose build (expected to FAIL) ──
@@ -364,7 +379,9 @@ def test_hermes_build_fallback_fail(
     try:
         build_result = subprocess.run(
             ["docker", "compose", "-f", str(compose_yml), "--profile", "hermes-agent", "build"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
     except subprocess.TimeoutExpired:
         logger.info("[IMP:9][test_hermes_build_fallback_fail] Build timed out (>60s) — expected failure path, test OK")
@@ -380,7 +397,9 @@ def test_hermes_build_fallback_fail(
         # Cleanup
         subprocess.run(
             ["docker", "rmi", "hermes-broken-test:latest"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         pytest.fail("docker compose build succeeded when it should have failed (broken Dockerfile)")
 
@@ -428,21 +447,27 @@ def test_hermes_no_images_resolved(
 
     # ── 1. Create compose file with service on "other" profile ──
     compose_yml = tmp_path / "docker-compose.yml"
-    compose_yml.write_text(textwrap.dedent("""\
+    compose_yml.write_text(
+        textwrap.dedent("""\
         version: "3.8"
         services:
           other-service:
             image: alpine:latest
             profiles: ["other"]
-    """))
+    """)
+    )
     logger.info("[IMP:8][test_hermes_no_images_resolved] Created compose file with profile 'other'")
 
     # ── 2. Run docker compose config --images with --profile hermes-agent ──
-    logger.info("[IMP:8][test_hermes_no_images_resolved] Running docker compose config --images (profile=hermes-agent) ...")
+    logger.info(
+        "[IMP:8][test_hermes_no_images_resolved] Running docker compose config --images (profile=hermes-agent) ..."
+    )
     try:
         config_result = subprocess.run(
             ["docker", "compose", "-f", str(compose_yml), "--profile", "hermes-agent", "config", "--images"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except FileNotFoundError:
         logger.warning("[IMP:9][test_hermes_no_images_resolved] docker CLI vanished — skipping")
@@ -454,11 +479,11 @@ def test_hermes_no_images_resolved(
     images = [img.strip() for img in config_result.stdout.splitlines() if img.strip()]
     logger.info("[IMP:8][test_hermes_no_images_resolved] Resolved images: %s", images)
 
-    assert len(images) == 0, (
-        f"Expected zero images resolved (profile mismatch), got: {images}"
-    )
+    assert len(images) == 0, f"Expected zero images resolved (profile mismatch), got: {images}"
 
-    logger.info("[IMP:9][test_hermes_no_images_resolved] ✅ No images resolved (profile mismatch) — precondition failure path validated")
+    logger.info(
+        "[IMP:9][test_hermes_no_images_resolved] ✅ No images resolved (profile mismatch) — precondition failure path validated"
+    )
 
     # ── 4. Verify that config result still succeeds (compose file is valid) ──
     # The deploy-modules.sh catches the empty case BEFORE checking images

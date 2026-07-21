@@ -317,16 +317,16 @@ reconcile_projects() {
     local node_name="$1"
     local node_yaml="$2"
     local dry_run="${3:-false}"
-    
+
     # ── Extract projects from node.yaml ──
     local projects_json
     projects_json="$(python3 - "$node_yaml" <<'PYEOF' ...)"
-    
+
     # ── For each project ──
     while IFS= read -r proj_name; do
         local proj_dir="/opt/projects/${proj_name}"
         local ai_yaml="${proj_dir}/ai-platform.yaml"
-        
+
         # ── Check if stub ──
         if [[ -f "$ai_yaml" ]]; then
             if ! head -1 "$ai_yaml" | grep -q "GENERATED-STUB"; then
@@ -337,17 +337,17 @@ reconcile_projects() {
             echo "[IMP:7][reconcile][${proj_name}] SKIP: no ai-platform.yaml (project dir may not exist)" >&2
             continue
         fi
-        
+
         echo "[IMP:9][reconcile][${proj_name}] Stub detected — checking GHCR for Docker image..." >&2
-        
+
         # ── Check GHCR ──
         # Extract context from project path (projects/<org>/<name>/) or node.yaml
         local context="${ORG:-tronyx-lab}"
         local ghcr_image="ghcr.io/${context}/${proj_name}:latest"
-        
+
         if docker manifest inspect "${ghcr_image}" &>/dev/null 2>&1; then
             echo "[IMP:9][reconcile][${proj_name}] Image found: ${ghcr_image} — deploying" >&2
-            
+
             if [[ "$dry_run" != "true" ]]; then
                 # ── Deliver + deploy (same mechanism as deploy-project.sh) ──
                 # Use platform-deliver forced-command to write real ai-platform.yaml
@@ -404,7 +404,7 @@ fi
 ```bash
 step_15_converge() {
     # ... существующий converge ...
-    
+
     # ── Optional: reconcile stub projects ──
     if [[ "${AUTO_RECONCILE:-false}" == "true" ]]; then
         step_start "reconcile-projects" "Auto-reconciling stub projects after converge"

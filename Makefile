@@ -34,7 +34,7 @@ venv: $(VENV)
 # test infrastructure (volume dirs, Docker networks) is managed by tests/conftest.py
 # test_infra fixture — autouse session-scoped, replaces former test-infra-up/down targets.
 
-.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy deploy-project bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts
+.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy deploy-project bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts scripts-audit
 
 ## templates-check: Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic at unresolved
 templates-check:
@@ -314,12 +314,6 @@ pre-commit-run:
 ##   MODE=fast — validate → lint → gates → static → predeploy (no Docker)
 ##   MODE=ci-docker — contract → static → predeploy → smoke → component → skip-enforcement (Docker-dependent only, no pre-commit/validate/lint)
 ##   PROJECT=<name> — filter predeploy tests to a specific project (used in CI deploy workflow)
-# 📝 TRAP[DEBT] · 2026-07-16 · HI · make gate MODE=fast проглатывает падения шагов lint/gates/static
-# · Observed: gate напечатал «ALL PASS (MODE=fast)» при report-static.xml failures=10 и 3 FAILED в шаге gates
-# · Suspected: shell-цепочка `pytest gates && echo …; pytest static && echo …; pytest predeploy || exit 1` —
-#   `;` разрывает &&-цепочку, проверяется только результат predeploy; у lint (`validate.sh --lint;`) нет `||`-обработчика
-# · Impact: красные gates/static молча проходят локальный production gate — Anti-Illusion violation, дрейф уезжает в CI
-# · When: QA-верификация DevPlan 016 (proxy-isolation), 2026-07-16 — вне scope 016, Makefile не менялся (pre-existing)
 gate:
 	@echo "[IMP:7][make][gate] Running gate with MODE=$(or $(MODE),full)..."
 	$(eval MODE := $(or $(MODE),full))
@@ -708,6 +702,12 @@ converge:
 		$(if $(DRY_RUN),--dry-run,) \
 		$(if $(filter 1,$(RECONCILE)),--reconcile)
 	@echo "[IMP:9][make][converge] Node reconciliation complete"
+
+## scripts-audit: Проверить регистрацию всех shebang-скриптов в manifest или exceptions
+.PHONY: scripts-audit
+scripts-audit:
+	@echo "[IMP:7][make][scripts-audit] Auditing shebang script registration..."
+	@bash $(_platform_root)/core/internal/scripts-audit.sh
 
 ## render-vhosts: Regenerate Nginx vhost configs from node.yaml
 ##   Usage: make render-vhosts NODE=<name>

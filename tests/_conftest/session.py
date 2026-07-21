@@ -19,13 +19,79 @@
 # endregion MODULE_CONTRACT
 
 import importlib.util
+import json
 import os
+import pathlib
 import sys
 
+import jsonschema
 import pytest
+import yaml
 
 from _conftest.checklist import _print_checklist, _print_escalation, _print_external_help, _print_reflection
 from _conftest.counter import _read_counter, _write_counter
+
+# region FIXTURE_SCHEMA_VALIDATION
+
+
+# Mapping: test_data fixture filename → schema file (relative to project root)
+_FIXTURE_SCHEMA_MAP = {
+    "node.yaml": "core/schemas/node.schema.json",
+    # Future fixtures — add entries here
+}
+
+
+def _validate_test_fixtures() -> None:
+    """Validate all test fixtures against their schemas at session start.
+
+    Fails fast with readable message BEFORE any test runs.
+    Called from pytest_sessionstart in this module.
+
+    Design decisions:
+    - Uses jsonschema.validate (not Draft7Validator) for version-agnostic validation
+    - Missing fixture file → skip (optional fixtures)
+    - Missing schema file → pytest.exit (configuration error)
+    - yaml.safe_load (not FullLoader) for security
+    """
+    # Resolve paths relative to tests/_conftest/session.py
+    # session.py → tests/_conftest/ → tests/ → project root
+    conftest_dir = pathlib.Path(__file__).resolve().parent  # tests/_conftest/
+    test_data_dir = conftest_dir.parent / "test_data"  # tests/test_data/
+    project_root = conftest_dir.parent.parent  # project root
+
+    errors: list[str] = []
+    for fixture_name, schema_relpath in _FIXTURE_SCHEMA_MAP.items():
+        fixture_path = test_data_dir / fixture_name
+        schema_path = project_root / schema_relpath
+
+        if not fixture_path.exists():
+            continue  # Optional fixture — skip silently
+
+        if not schema_path.exists():
+            pytest.exit(
+                f"\n[IMP:10][sessionstart] Schema file not found: {schema_path}\n"
+                f"Check _FIXTURE_SCHEMA_MAP in tests/_conftest/session.py\n"
+            )
+
+        with open(fixture_path) as f:
+            data = yaml.safe_load(f)
+        with open(schema_path) as f:
+            schema = json.load(f)
+
+        try:
+            jsonschema.validate(data, schema)
+        except jsonschema.ValidationError as e:
+            errors.append(f"  {fixture_path}: {e.message}")
+
+    if errors:
+        pytest.exit(
+            "\n[IMP:10][sessionstart] Test fixture schema validation FAILED:\n"
+            + "\n".join(errors)
+            + "\n\nUpdate test fixtures to match current schemas.\n"
+        )
+
+
+# endregion FIXTURE_SCHEMA_VALIDATION
 
 # region ESCALATION_DISPATCH
 
@@ -50,12 +116,15 @@ def _handle_escalation(attempts: int) -> None:
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     """
-    Session start hook: increment attempt counter + conditional import for retention module.
+    Session start hook: validate fixtures, increment attempt counter + conditional import.
 
     Read .test_counter.json, increment attempts, write back.
     Import retention.py ONLY when backup or test_retention marker is active —
     fail-fast: if retention.py is broken, it's discovered only when needed.
     """
+    # ── FAIL-FAST: validate test fixtures BEFORE any test runs ──
+    _validate_test_fixtures()
+
     # Conditional import: only for backup/retention tests
     _marker_option = session.config.getoption("-m", "")
     _is_backup_test = "backup" in _marker_option or "test_retention" in _marker_option

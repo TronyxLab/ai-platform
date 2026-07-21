@@ -45,7 +45,7 @@ def _module_contract():
 
 # endregion MODULE_CONTRACT
 
-import json
+import contextlib
 import logging
 import os
 import re
@@ -294,10 +294,8 @@ def _parse_compose_ports(compose_file: str) -> list[int]:
                     # long syntax: {"published": 8080, "target": 80}
                     published = entry.get("published")
                     if published is not None:
-                        try:
+                        with contextlib.suppress(ValueError, TypeError):
                             host_ports.append(int(published))
-                        except (ValueError, TypeError):
-                            pass
         logger.info(
             "[IMP:8][_parse_compose_ports] [%s] Parsed %d host port(s) from %s",
             svc_name,
@@ -323,7 +321,9 @@ def _parse_ai_platform_yaml(file_path: str) -> dict | None:
         logger.warning("[IMP:4][_parse_ai_platform_yaml] Failed to parse %s: %s", file_path, exc)
         return None
     if not isinstance(data, dict):
-        logger.warning("[IMP:4][_parse_ai_platform_yaml] %s: root is not a dict (type=%s)", file_path, type(data).__name__)
+        logger.warning(
+            "[IMP:4][_parse_ai_platform_yaml] %s: root is not a dict (type=%s)", file_path, type(data).__name__
+        )
         return None
     return data
 
@@ -817,12 +817,15 @@ def test_project_compose_configs_valid(
                 )
         except FileNotFoundError:
             # Docker CLI not available despite shutil.which check (edge: race condition)
-            logger.warning("[IMP:9][test_project_compose_configs_valid] docker compose CLI vanished — skipping (not a failure)")
+            logger.warning(
+                "[IMP:9][test_project_compose_configs_valid] docker compose CLI vanished — skipping (not a failure)"
+            )
             return
         except subprocess.TimeoutExpired:
             errors.append(f"[{compose_path.parent.name}] docker compose config timed out (>30s)")
             logger.error(
-                "[IMP:4][test_project_compose_configs_valid] TIMEOUT: %s (>30s)", compose_path,
+                "[IMP:4][test_project_compose_configs_valid] TIMEOUT: %s (>30s)",
+                compose_path,
             )
         except OSError as exc:
             errors.append(f"[{compose_path.parent.name}] OSError: {exc}")
@@ -831,9 +834,7 @@ def test_project_compose_configs_valid(
 
     # region BLOCK_Assert
     if errors:
-        pytest.fail(
-            "Project compose config validation failed:\n" + "\n".join(errors)
-        )
+        pytest.fail("Project compose config validation failed:\n" + "\n".join(errors))
 
     logger.info(
         "[IMP:9][test_project_compose_configs_valid] ✅ All %d project compose file(s) valid",
@@ -926,9 +927,7 @@ def test_project_ports_no_conflict(
 
     # region BLOCK_Assert
     if conflicts:
-        conflict_lines = [
-            f"  [{p}] port {pt} → platform: {s}" for p, pt, s in conflicts
-        ]
+        conflict_lines = [f"  [{p}] port {pt} → platform: {s}" for p, pt, s in conflicts]
         pytest.fail(
             f"Found {len(conflicts)} port conflict(s) between project(s) and platform:\n"
             + "\n".join(conflict_lines)
@@ -985,7 +984,9 @@ def test_project_external_networks_exist(
 
     platform_nets: set[str] = set(platform_networks_list)
     if not platform_nets:
-        logger.info("[IMP:9][test_project_external_networks_exist] No platform networks declared — skipping (not a failure)")
+        logger.info(
+            "[IMP:9][test_project_external_networks_exist] No platform networks declared — skipping (not a failure)"
+        )
         return
     # endregion
 
@@ -1026,7 +1027,9 @@ def test_project_external_networks_exist(
             + "\nAdd missing networks to platform-env.yaml#networks or update project compose files."
         )
 
-    logger.info("[IMP:9][test_project_external_networks_exist] ✅ All project external networks declared in platform-env.yaml")
+    logger.info(
+        "[IMP:9][test_project_external_networks_exist] ✅ All project external networks declared in platform-env.yaml"
+    )
     # endregion
 
 
@@ -1085,7 +1088,8 @@ def test_project_requires_proxy_net(
             )
         else:
             logger.info(
-                "[IMP:8][test_project_requires_proxy_net] ✅ [%s] has proxy-net", project_name,
+                "[IMP:8][test_project_requires_proxy_net] ✅ [%s] has proxy-net",
+                project_name,
             )
     # endregion
 
@@ -1178,15 +1182,13 @@ def test_ai_platform_yaml_schema(
             logger.info(
                 "[IMP:9][test_ai_platform_yaml_schema] ✅ [%s] schema valid: %s",
                 project_name,
-                dict((f, data.get(f)) for f in REQUIRED_FIELDS),
+                {f: data.get(f) for f in REQUIRED_FIELDS},
             )
     # endregion
 
     # region BLOCK_Assert
     if errors:
-        pytest.fail(
-            "ai-platform.yaml schema validation failed:\n" + "\n".join(errors)
-        )
+        pytest.fail("ai-platform.yaml schema validation failed:\n" + "\n".join(errors))
 
     logger.info(
         "[IMP:9][test_ai_platform_yaml_schema] ✅ All %d ai-platform.yaml file(s) pass schema validation",

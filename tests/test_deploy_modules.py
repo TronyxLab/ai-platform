@@ -44,8 +44,7 @@ _BOOTSTRAP_DIR = _PROJECT_ROOT / "core" / "internal" / "bootstrap"
 if str(_BOOTSTRAP_DIR) not in sys.path:
     sys.path.insert(0, str(_BOOTSTRAP_DIR))
 
-import _topo_sort  # noqa: E402
-
+import _topo_sort
 
 # ══════════════════════════════════════════════════════════════════════════════
 # S1: --skip-provision flag
@@ -73,29 +72,21 @@ def test_skip_provision_flag(caplog) -> None:
 
     # ── 1. Flag parsing in while/case block ──
     logger.info("[IMP:8][test_skip_provision_flag] Checking --skip-provision parsing ...")
-    assert "--skip-provision)" in content, (
-        "S1 violation: --skip-provision not parsed in deploy-modules.sh main()"
-    )
-    assert "SKIP_PROVISION=true" in content, (
-        "S1 violation: SKIP_PROVISION=true not set in deploy-modules.sh"
-    )
+    assert "--skip-provision)" in content, "S1 violation: --skip-provision not parsed in deploy-modules.sh main()"
+    assert "SKIP_PROVISION=true" in content, "S1 violation: SKIP_PROVISION=true not set in deploy-modules.sh"
     logger.info("[IMP:9][test_skip_provision_flag] --skip-provision parsing OK")
 
     # ── 2. Provisioner block guard ──
     logger.info("[IMP:8][test_skip_provision_flag] Checking SKIP_PROVISION provisioner guard ...")
     guard_pattern = 'if [[ "${SKIP_PROVISION:-false}" != "true" ]]; then'
-    assert guard_pattern in content, (
-        "S1 violation: provisioner block not guarded by SKIP_PROVISION check"
-    )
+    assert guard_pattern in content, "S1 violation: provisioner block not guarded by SKIP_PROVISION check"
     assert "Provisioner skipped" in content and "--skip-provision flag set" in content, (
         "S1 violation: no else branch log for --skip-provision skip"
     )
 
     # ── 3. Verify guard count ──
     guard_count = content.count('"${SKIP_PROVISION:-false}" != "true"')
-    assert guard_count >= 1, (
-        f"S1 violation: expected at least 1 SKIP_PROVISION guard, found {guard_count}"
-    )
+    assert guard_count >= 1, f"S1 violation: expected at least 1 SKIP_PROVISION guard, found {guard_count}"
     logger.info("[IMP:9][test_skip_provision_flag] SKIP_PROVISION guard(s) found: %d", guard_count)
 
 
@@ -133,9 +124,7 @@ def test_merge_deploy_steps(caplog) -> None:
     assert "update_step_4_deploy_docker" not in content, (
         "S2 violation: update_step_4_deploy_docker still exists — must be renamed to update_step_4_deploy_modules"
     )
-    assert "update_step_4_deploy_modules" in content, (
-        "S2 violation: update_step_4_deploy_modules not found"
-    )
+    assert "update_step_4_deploy_modules" in content, "S2 violation: update_step_4_deploy_modules not found"
     logger.info("[IMP:9][test_merge_deploy_steps] Step function renamed: deploy_docker → deploy_modules OK")
 
     # ── 2. update_step_5_deploy_system must be REMOVED ──
@@ -151,18 +140,12 @@ def test_merge_deploy_steps(caplog) -> None:
     logger.info("[IMP:9][test_merge_deploy_steps] --skip-provision flag in node-lifecycle.sh OK")
 
     # ── 4. Single checkpoint_step "deploy-modules" ──
-    deploy_modules_checkpoints = len(re.findall(
-        r'checkpoint_step\s+"deploy-modules"', content
-    ))
+    deploy_modules_checkpoints = len(re.findall(r'checkpoint_step\s+"deploy-modules"', content))
     assert deploy_modules_checkpoints >= 1, (
         f"S2 violation: expected checkpoint_step 'deploy-modules', found {deploy_modules_checkpoints}"
     )
-    deploy_docker_checkpoints = len(re.findall(
-        r'checkpoint_step\s+"deploy-docker"', content
-    ))
-    deploy_system_checkpoints = len(re.findall(
-        r'checkpoint_step\s+"deploy-system"', content
-    ))
+    deploy_docker_checkpoints = len(re.findall(r'checkpoint_step\s+"deploy-docker"', content))
+    deploy_system_checkpoints = len(re.findall(r'checkpoint_step\s+"deploy-system"', content))
     assert deploy_docker_checkpoints == 0 and deploy_system_checkpoints == 0, (
         f"S2 violation: stale checkpoint steps remain (deploy-docker={deploy_docker_checkpoints}, "
         f"deploy-system={deploy_system_checkpoints})"
@@ -176,9 +159,7 @@ def test_merge_deploy_steps(caplog) -> None:
     assert "deploy-docker → deploy-system" not in content, (
         "S2 violation: dry-run output still shows old 'deploy-docker → deploy-system'"
     )
-    assert "deploy-modules" in content, (
-        "S2 violation: 'deploy-modules' not in dry-run output"
-    )
+    assert "deploy-modules" in content, "S2 violation: 'deploy-modules' not in dry-run output"
     logger.info("[IMP:9][test_merge_deploy_steps] Dry-run output updated OK")
 
 
@@ -188,6 +169,7 @@ def test_merge_deploy_steps(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 # S10: Enriched _topo_sort.py output
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 # region FUNC__setup_module_yaml
 ## @purpose  Helper: write a module.yaml file under tmp_path/<name>/module.yaml
@@ -220,6 +202,8 @@ def _setup_module_yaml(
         yaml.dump(data, f, default_flow_style=False)
 
     return yaml_path
+
+
 # endregion FUNC__setup_module_yaml
 
 
@@ -239,9 +223,9 @@ def _assert_ldd_trajectory(caplog) -> None:
             if imp_level >= 9:
                 found_imp9 = True
     print("--- END LDD TRAJECTORY ---")
-    assert found_imp9, (
-        "Critical LDD Error: No IMP:9 business logic log found in test trajectory"
-    )
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found in test trajectory"
+
+
 # endregion FUNC__assert_ldd_trajectory
 
 
@@ -275,21 +259,15 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
 
     logger.info("[IMP:8][test_topo_sort_enriched_output] Loading module yamls ...")
     all_modules = _topo_sort.load_module_yamls(str(tmp_path))
-    assert len(all_modules) == 4, (
-        f"Expected 4 modules loaded, got {len(all_modules)}"
-    )
+    assert len(all_modules) == 4, f"Expected 4 modules loaded, got {len(all_modules)}"
 
     logger.info("[IMP:8][test_topo_sort_enriched_output] Filtering docker modules ...")
     docker_modules = _topo_sort.filter_docker_modules(all_modules)
-    assert len(docker_modules) == 3, (
-        f"Expected 3 docker modules, got {len(docker_modules)}"
-    )
+    assert len(docker_modules) == 3, f"Expected 3 docker modules, got {len(docker_modules)}"
 
     logger.info("[IMP:8][test_topo_sort_enriched_output] Building DAG ...")
     dag = _topo_sort.build_dag(docker_modules)
-    assert len(dag) == 3, (
-        f"Expected 3 DAG nodes, got {len(dag)}"
-    )
+    assert len(dag) == 3, f"Expected 3 DAG nodes, got {len(dag)}"
 
     logger.info("[IMP:8][test_topo_sort_enriched_output] Running Kahn's algorithm ...")
     groups = _topo_sort.kahn_topological_sort(dag)
@@ -314,28 +292,18 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     parsed = json.loads(result_json)
 
     # groups key must be present (backward compat)
-    assert "groups" in parsed, (
-        "S10 violation: 'groups' key missing from enriched output"
-    )
-    assert isinstance(parsed["groups"], list), (
-        "S10 violation: 'groups' must be a list"
-    )
+    assert "groups" in parsed, "S10 violation: 'groups' key missing from enriched output"
+    assert isinstance(parsed["groups"], list), "S10 violation: 'groups' must be a list"
     logger.info("[IMP:9][test_topo_sort_enriched_output] 'groups' key present OK (backward compat)")
 
     # modules key must be present (new enrichment)
-    assert "modules" in parsed, (
-        "S10 violation: 'modules' key missing from enriched output"
-    )
-    assert isinstance(parsed["modules"], dict), (
-        "S10 violation: 'modules' must be a dict"
-    )
+    assert "modules" in parsed, "S10 violation: 'modules' key missing from enriched output"
+    assert isinstance(parsed["modules"], dict), "S10 violation: 'modules' must be a dict"
     logger.info("[IMP:9][test_topo_sort_enriched_output] 'modules' key present OK (enrichment)")
 
     # Verify specific module metadata
     modules = parsed["modules"]
-    assert "postgres" in modules, (
-        "S10 violation: postgres not in modules dict"
-    )
+    assert "postgres" in modules, "S10 violation: postgres not in modules dict"
     assert modules["postgres"]["install_type"] == "docker", (
         f"S10 violation: postgres install_type expected 'docker', got '{modules['postgres']['install_type']}'"
     )
@@ -345,9 +313,7 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     logger.info("[IMP:9][test_topo_sort_enriched_output] postgres metadata OK: install_type=docker, severity=critical")
 
     # System module must be in modules but NOT in groups
-    assert "nginx" in modules, (
-        "S10 violation: nginx (system module) missing from modules dict"
-    )
+    assert "nginx" in modules, "S10 violation: nginx (system module) missing from modules dict"
     assert modules["nginx"]["install_type"] == "system", (
         f"S10 violation: nginx install_type expected 'system', got '{modules['nginx']['install_type']}'"
     )
@@ -356,9 +322,7 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     )
     logger.info("[IMP:9][test_topo_sort_enriched_output] nginx metadata OK: install_type=system, severity=critical")
 
-    assert "hermes-agent" in modules, (
-        "S10 violation: hermes-agent not in modules dict"
-    )
+    assert "hermes-agent" in modules, "S10 violation: hermes-agent not in modules dict"
     assert modules["hermes-agent"]["install_type"] == "docker", (
         f"S10 violation: hermes-agent install_type expected 'docker', got '{modules['hermes-agent']['install_type']}'"
     )
@@ -378,13 +342,9 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
 
     # ── Verify backward compat: groups structure unchanged from pre-S10 ──
     # New enriched output should still produce valid deploy groups
-    assert len(parsed["groups"]) > 0, (
-        "S10 violation: empty groups in enriched output"
-    )
+    assert len(parsed["groups"]) > 0, "S10 violation: empty groups in enriched output"
     for group in parsed["groups"]:
-        assert isinstance(group, list), (
-            "S10 violation: each group must be a list of module names"
-        )
+        assert isinstance(group, list), "S10 violation: each group must be a list of module names"
     logger.info("[IMP:9][test_topo_sort_enriched_output] All group entries are valid lists")
 
     # ── LDD trajectory ──
@@ -431,24 +391,16 @@ def test_batch_module_metadata(caplog) -> None:
     logger.info("[IMP:9][test_batch_module_metadata] Python output format OK (name:itype:sev)")
 
     # ── 3. Batch metadata fallback must be called in main() ──
-    assert "S3: Batch metadata fallback" in content, (
-        "S3 violation: batch metadata fallback comment missing in main()"
-    )
-    assert "_batch_module_metadata" in content, (
-        "S3 violation: _batch_module_metadata not called anywhere"
-    )
+    assert "S3: Batch metadata fallback" in content, "S3 violation: batch metadata fallback comment missing in main()"
+    assert "_batch_module_metadata" in content, "S3 violation: _batch_module_metadata not called anywhere"
     logger.info("[IMP:9][test_batch_module_metadata] _batch_module_metadata called in main() OK")
 
     # ── 4. Per-module fallback calls removed (detect_install_type, _get_module_severity as fallback) ──
     # S3 replaces per-module fallback with direct array lookup
-    fallback_install = content.count("install_type=\"$(detect_install_type")
-    fallback_severity = content.count("sev=\"$(_get_module_severity")
-    assert fallback_install == 0, (
-        f"S3 violation: detect_install_type fallback still used {fallback_install} times"
-    )
-    assert fallback_severity == 0, (
-        f"S3 violation: _get_module_severity fallback still used {fallback_severity} times"
-    )
+    fallback_install = content.count('install_type="$(detect_install_type')
+    fallback_severity = content.count('sev="$(_get_module_severity')
+    assert fallback_install == 0, f"S3 violation: detect_install_type fallback still used {fallback_install} times"
+    assert fallback_severity == 0, f"S3 violation: _get_module_severity fallback still used {fallback_severity} times"
     logger.info("[IMP:9][test_batch_module_metadata] Per-module fallbacks removed: install=0, severity=0 OK")
 
     # ── LDD trajectory ──
@@ -489,14 +441,15 @@ def test_parallel_healthcheck(caplog) -> None:
     logger.info("[IMP:9][test_parallel_healthcheck] Parallel healthcheck arrays declared OK")
 
     # ── 2. Background healthcheck pattern must exist ──
-    assert "run_healthcheck \"$_hc_name\" \"docker\"" in content or "run_healthcheck \"$_hc_name\" \"docker\" && exit 0 || exit 1" in content, (
-        "S4 violation: background healthcheck call not found"
-    )
+    assert (
+        'run_healthcheck "$_hc_name" "docker"' in content
+        or 'run_healthcheck "$_hc_name" "docker" && exit 0 || exit 1' in content
+    ), "S4 violation: background healthcheck call not found"
     logger.info("[IMP:9][test_parallel_healthcheck] Background healthcheck invocation OK")
 
     # ── 3. Old sequential healthchecks must be removed from slot waiter and drain loop ──
     # The slot waiter (while ${#pids[@]} >= parallel_limit) should NOT have run_healthcheck
-    slot_waiter_healthchecks = content.count("run_healthcheck \"${names[$i]}\" \"docker\"")
+    slot_waiter_healthchecks = content.count('run_healthcheck "${names[$i]}" "docker"')
     assert slot_waiter_healthchecks == 0, (
         f"S4 violation: {slot_waiter_healthchecks} sequential run_healthcheck calls remain in deploy_docker_group"
     )
@@ -534,21 +487,15 @@ def test_batch_sudoers(caplog) -> None:
     content = _DEPLOY_MODULES_SH.read_text()
 
     # ── 1. _render_sudoers_rules helper must exist ──
-    assert "_render_sudoers_rules() {" in content, (
-        "S6 violation: _render_sudoers_rules() helper not found"
-    )
+    assert "_render_sudoers_rules() {" in content, "S6 violation: _render_sudoers_rules() helper not found"
     logger.info("[IMP:9][test_batch_sudoers] _render_sudoers_rules() function declared OK")
 
     # ── 2. _batch_generate_sudoers function must exist ──
-    assert "_batch_generate_sudoers() {" in content, (
-        "S6 violation: _batch_generate_sudoers() not found"
-    )
+    assert "_batch_generate_sudoers() {" in content, "S6 violation: _batch_generate_sudoers() not found"
     logger.info("[IMP:9][test_batch_sudoers] _batch_generate_sudoers() function declared OK")
 
     # ── 3. _batch_generate_sudoers must be called in main() ──
-    assert "_batch_generate_sudoers" in content, (
-        "S6 violation: _batch_generate_sudoers not called in main()"
-    )
+    assert "_batch_generate_sudoers" in content, "S6 violation: _batch_generate_sudoers not called in main()"
     logger.info("[IMP:9][test_batch_sudoers] _batch_generate_sudoers call in main() OK")
 
     # ── 4. Per-module sudoers calls must be removed from deploy loops ──
@@ -556,15 +503,9 @@ def test_batch_sudoers(caplog) -> None:
     call_pattern1 = 'generate_module_sudoers "${names[$i]}" || true'
     call_pattern2 = 'generate_module_sudoers "$mod_name" || true'
     call_pattern3 = 'generate_module_sudoers "$m" || true'
-    assert call_pattern1 not in content, (
-        f"S6 violation: per-module call '{call_pattern1}' remains"
-    )
-    assert call_pattern2 not in content, (
-        f"S6 violation: per-module call '{call_pattern2}' remains"
-    )
-    assert call_pattern3 not in content, (
-        f"S6 violation: per-module call '{call_pattern3}' remains"
-    )
+    assert call_pattern1 not in content, f"S6 violation: per-module call '{call_pattern1}' remains"
+    assert call_pattern2 not in content, f"S6 violation: per-module call '{call_pattern2}' remains"
+    assert call_pattern3 not in content, f"S6 violation: per-module call '{call_pattern3}' remains"
     logger.info("[IMP:9][test_batch_sudoers] Per-module sudoers calls removed OK")
 
     # ── LDD trajectory ──
@@ -605,15 +546,16 @@ def test_batch_orphan(caplog) -> None:
     logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation() function declared OK")
 
     # ── 2. Must use docker ps -a and compose config --format json ──
-    assert "docker ps -a" in content[content.find("_batch_orphan_reconciliation()"):content.find("} # endregion BATCH_ORPHAN_RECONCILIATION")], (
-        "S8 violation: _batch_orphan_reconciliation must call docker ps -a"
-    )
+    assert (
+        "docker ps -a"
+        in content[
+            content.find("_batch_orphan_reconciliation()") : content.find("} # endregion BATCH_ORPHAN_RECONCILIATION")
+        ]
+    ), "S8 violation: _batch_orphan_reconciliation must call docker ps -a"
     logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation calls docker ps -a OK")
 
     # ── 3. Must be called in main() ──
-    assert "_batch_orphan_reconciliation" in content, (
-        "S8 violation: _batch_orphan_reconciliation not called in main()"
-    )
+    assert "_batch_orphan_reconciliation" in content, "S8 violation: _batch_orphan_reconciliation not called in main()"
     logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation call in main() OK")
 
     # ── LDD trajectory ──
@@ -654,27 +596,19 @@ def test_git_pull_caching(caplog) -> None:
     logger.info("[IMP:9][test_git_pull_caching] last_pull_file path found OK")
 
     # ── 2. Must use date +%s for timestamp ──
-    assert "date +%s" in content, (
-        "S9 violation: 'date +%s' not found for timestamp"
-    )
+    assert "date +%s" in content, "S9 violation: 'date +%s' not found for timestamp"
     logger.info("[IMP:9][test_git_pull_caching] date +%s used for timestamp OK")
 
     # ── 3. Must have 300 second threshold (5 min cache) ──
-    assert "-lt 300" in content, (
-        "S9 violation: 300 second threshold not found"
-    )
+    assert "-lt 300" in content, "S9 violation: 300 second threshold not found"
     logger.info("[IMP:9][test_git_pull_caching] 300s cache threshold OK")
 
     # ── 4. Must have cache skip log message ──
-    assert "Pulled recently" in content, (
-        "S9 violation: 'Pulled recently' skip message not found"
-    )
+    assert "Pulled recently" in content, "S9 violation: 'Pulled recently' skip message not found"
     logger.info("[IMP:9][test_git_pull_caching] Cache skip message OK")
 
     # ── 5. Timestamp must be written after git pull ──
-    assert "echo \"$now\" > \"$last_pull_file\"" in content, (
-        "S9 violation: timestamp write after git pull not found"
-    )
+    assert 'echo "$now" > "$last_pull_file"' in content, "S9 violation: timestamp write after git pull not found"
     logger.info("[IMP:9][test_git_pull_caching] Timestamp write after pull OK")
 
     # ── LDD trajectory ──
@@ -726,21 +660,13 @@ def test_rsync_consolidation(caplog) -> None:
     # ── 3. Must have both rsync calls (core/ with --delete, config files without) ──
     rsync_core_delete = "rsync -avz --delete" in content
     rsync_config = "rsync -avz" in content
-    assert rsync_core_delete, (
-        "S5 violation: rsync for core/ with --delete not found"
-    )
-    assert rsync_config, (
-        "S5 violation: rsync for config files not found"
-    )
+    assert rsync_core_delete, "S5 violation: rsync for core/ with --delete not found"
+    assert rsync_config, "S5 violation: rsync for config files not found"
     logger.info("[IMP:9][test_rsync_consolidation] Both rsync calls (core+config) found OK")
 
     # ── 4. Must have platform-env.yaml and Makefile in consolidated rsync ──
-    assert "platform-env.yaml" in content, (
-        "S5 violation: platform-env.yaml reference not found"
-    )
-    assert "Makefile" in content, (
-        "S5 violation: Makefile reference not found"
-    )
+    assert "platform-env.yaml" in content, "S5 violation: platform-env.yaml reference not found"
+    assert "Makefile" in content, "S5 violation: Makefile reference not found"
     logger.info("[IMP:9][test_rsync_consolidation] platform-env.yaml + Makefile in rsync OK")
 
     # ── LDD trajectory ──
@@ -771,21 +697,13 @@ def test_yaml_read_domain_config(caplog, tmp_path) -> None:
     content = yaml_read_sh.read_text()
 
     # ── 1. yaml_read_domain_config function must exist in yaml_read.sh ──
-    assert "yaml_read_domain_config() {" in content, (
-        "S7 violation: yaml_read_domain_config() not found in yaml_read.sh"
-    )
+    assert "yaml_read_domain_config() {" in content, "S7 violation: yaml_read_domain_config() not found in yaml_read.sh"
     logger.info("[IMP:8][test_yaml_read_domain_config] Function declared OK")
 
     # ── 2. Must contain python3 heredoc with domain extraction fields ──
-    assert "platform_domain:" in content, (
-        "S7 violation: platform_domain output not found in yaml_read_domain_config"
-    )
-    assert "project_domains:" in content, (
-        "S7 violation: project_domains output not found in yaml_read_domain_config"
-    )
-    assert "acme_dns_plugin:" in content, (
-        "S7 violation: acme_dns_plugin output not found"
-    )
+    assert "platform_domain:" in content, "S7 violation: platform_domain output not found in yaml_read_domain_config"
+    assert "project_domains:" in content, "S7 violation: project_domains output not found in yaml_read_domain_config"
+    assert "acme_dns_plugin:" in content, "S7 violation: acme_dns_plugin output not found"
     logger.info("[IMP:9][test_yaml_read_domain_config] All domain fields present in function OK")
 
     # ── 3. Write a mock node.yaml and test extraction via subprocess ──
@@ -801,9 +719,12 @@ projects:
 """)
     logger.info("[IMP:8][test_yaml_read_domain_config] Running bash subprocess to test extraction ...")
     import subprocess
+
     result = subprocess.run(
         ["bash", "-c", f"source {yaml_read_sh} && yaml_read_domain_config {mock_node_yaml}"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert result.returncode == 0, (
         f"S7 violation: yaml_read_domain_config exited with {result.returncode}: {result.stderr}"
@@ -837,9 +758,7 @@ projects:
     logger.info("[IMP:9][test_yaml_read_domain_config] issue-cert.sh uses yaml_read_domain_config OK")
 
     # ── 5. Check that old inline python3 blocks are removed ──
-    # The old block had 'import yaml, sys' followed by 'with open(sys.argv[1])' 
-    # Count occurrences — should be 0 in node-lifecycle.sh for this specific pattern
-    old_pattern = "import yaml, sys\\n\\nwith open(sys.argv\\[1\\]) as f:\\n    data = yaml.safe_load(f)\\ndomain = data.get('domain', '')"
+    # The old block had 'import yaml, sys' followed by 'with open(sys.argv[1])'
     # We can't do multiline regex easily, so just check for absence of the function-less pattern
     # in the areas that should be migrated
     logger.info("[IMP:8][test_yaml_read_domain_config] Checking for migrated calls in node-lifecycle.sh ...")

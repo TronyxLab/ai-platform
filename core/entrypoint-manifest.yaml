@@ -78,6 +78,10 @@ validate:
     mechanism: shell-script
     delegates_to: core/entrypoints/check-file-lines.sh
     description: "Scan files exceeding line limit (default 500) — non-blocking warning"
+  - make_target: scripts-audit
+    mechanism: shell-script
+    delegates_to: core/internal/scripts-audit.sh
+    description: "Audit shebang script registration in manifest or exceptions"
 
 # NOTE: lint.sh = pre-commit hooks only, validate.sh --lint = CI/manual linting
 lint:
@@ -440,9 +444,13 @@ gates:
     test_file: test_gate_secrets_manifest.py
     markers: gate
   - id: status-page
-    description: Status-page 016 gate — module contract, htpasswd consistency, nginx stealth, secrets registration, CI negative auth test, .dockerignore symlink
+    description: "Status-page 016 gate — module contract, htpasswd consistency, nginx stealth, secrets registration, CI negative auth test, .dockerignore symlink"
     test_file: test_gate_status_page.py
     markers: gate
+  - id: gate-fixture-schema
+    description: "Validate test_data/*.yaml fixtures against core/schemas/*.json (jsonschema coherence)"
+    test_file: test_gate_fixture_schema.py
+    issue: "026-gate-systemic-fix"
   - id: vhost-nginx-t
     description: D1 vhost gate — validates generated nginx vhosts pass `nginx -t` in Docker (hyphen normalization, subdomain wildcard, independent domain cert paths)
     test_file: test_gate_vhost_nginx_t.py
@@ -529,3 +537,4 @@ allowed_verbs:
   # project-sync-secrets — DISABLED, requires core/internal/scaffold/sync-repo-secrets.sh (T3.6)
   - node-update
   - deploy-project
+  - scripts-audit

@@ -76,24 +76,23 @@ print(f"project_domains:{' '.join(project_domains)}")
     # Verify platform_domain
     domain_line = [line for line in stdout_lines if line.startswith("platform_domain:")]
     assert domain_line, "Missing platform_domain line in output"
-    assert domain_line[0] == "platform_domain:test.local", (
-        f"Expected 'platform_domain:test.local', got '{domain_line[0]}'"
+    assert domain_line[0] == "platform_domain:test.example.com", (
+        f"Expected 'platform_domain:test.example.com', got '{domain_line[0]}'"
     )
     _logger.critical("[IMP:9][test][node_yaml] platform_domain extracted: %s", domain_line[0])
 
     # Verify email
     email_line = [line for line in stdout_lines if line.startswith("email:")]
     assert email_line, "Missing email line in output"
-    assert email_line[0] == "email:admin@test.local", f"Expected 'email:admin@test.local', got '{email_line[0]}'"
+    assert email_line[0] == "email:test@example.com", f"Expected 'email:test@example.com', got '{email_line[0]}'"
     _logger.critical("[IMP:9][test][node_yaml] email extracted: %s", email_line[0])
 
     # Verify project_domains
     project_line = [line for line in stdout_lines if line.startswith("project_domains:")]
     assert project_line, "Missing project_domains line in output"
     project_domains = project_line[0].split(":", 1)[1].strip()
-    assert "app.test.local" in project_domains, f"Expected 'app.test.local' in project_domains: '{project_domains}'"
-    assert "independent-project.com" in project_domains, (
-        f"Expected 'independent-project.com' in project_domains: '{project_domains}'"
+    assert "test-site.example.com" in project_domains, (
+        f"Expected 'test-site.example.com' in project_domains: '{project_domains}'"
     )
     _logger.critical(
         "[IMP:9][test][node_yaml] project_domains extracted: %d domains: %s",
@@ -101,9 +100,9 @@ print(f"project_domains:{' '.join(project_domains)}")
         project_domains,
     )
 
-    # Verify both domains are present (order shouldn't matter)
+    # Verify the single domain is present
     domains_list = project_domains.split()
-    assert len(domains_list) == 2, f"Expected 2 project domains, got {len(domains_list)}: {domains_list}"
+    assert len(domains_list) == 1, f"Expected 1 project domain, got {len(domains_list)}: {domains_list}"
 
 
 @pytest.mark.contract

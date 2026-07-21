@@ -57,6 +57,14 @@ from _conftest.networks import (  # noqa: F401
     is_production_host,
 )
 
+# ── predeploy ───────────────────────────────────────────────────────────
+from _conftest.predeploy import (  # noqa: F401
+    node_yaml_projects,
+    platform_networks_list,
+    platform_port_mappings_dict,
+    project_compose_files,
+)
+
 # ── secrets ───────────────────────────────────────────────────────────
 from _conftest.secrets import (  # noqa: F401
     scan_directory_for_secrets,
@@ -73,14 +81,6 @@ from _conftest.shellcheck import (  # noqa: F401
     _check_shellcheck_available,
     _parse_shellcheck_sc2154,
     get_shellcheck_bash_calls,
-)
-
-# ── predeploy ───────────────────────────────────────────────────────────
-from _conftest.predeploy import (  # noqa: F401
-    node_yaml_projects,
-    platform_networks_list,
-    platform_port_mappings_dict,
-    project_compose_files,
 )
 
 # ── skip_gate ─────────────────────────────────────────────────────────

@@ -39,7 +39,7 @@ from botocore.config import Config as BotoConfig
 
 # Import shared config from same directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from backup_config import S3Config, BackupConfig, get_s3_config, get_backup_config  # pyright: ignore[reportImplicitRelativeImport]
+from backup_config import S3Config, get_backup_config, get_s3_config  # pyright: ignore[reportImplicitRelativeImport]
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(

@@ -204,7 +204,7 @@ extract_node_host "{NODE_YAML_PATH}"
     stdout, stderr, rc = _bash(script, env={"__LOG_PREFIX": "test"})
     found_imp9 = _print_ldd(stderr)
     assert rc == 0, f"extract_node_host failed: {stderr}"
-    assert stdout == "192.168.1.100", f"Expected '192.168.1.100', got '{stdout}'"
+    assert stdout == "127.0.0.1", f"Expected '127.0.0.1', got '{stdout}'"
     logger.info("[IMP:9][test_extract_node_host][assert] Host resolved: %s", stdout)
 
     # Test missing file -> expected failure

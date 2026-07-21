@@ -83,6 +83,8 @@ EOF
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -136,6 +138,8 @@ EOF
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -180,6 +184,8 @@ def test_is_stub_missing_file(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -241,4 +247,6 @@ EOF
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion

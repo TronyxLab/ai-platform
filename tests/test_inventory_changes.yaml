@@ -102,3 +102,9 @@ removed:
     reason: "D4→A renamed to test_manifest_restart_is_soft — manifest now describes soft restart"
     issue: "011-drift-arch-decisions T4"
     approved_by: "@tronyx"
+
+  # ── DevPlan 026 (gate-systemic-fix) — удалён test_gate_zero_new_entrypoints ──
+  - nodeid: "tests/gates/test_gate_sequencing.py::test_gate_zero_new_entrypoints"
+    reason: "Removed — duplicate of test_all_shebang_files_in_manifest which covers zero-new-entrypoint invariant. Gate sequencing test suite consolidated in DevPlan 025, this test was kept in STRUCTURE comment but never implemented as a function."
+    issue: "026-gate-systemic-fix"
+    approved_by: "@tronyx"

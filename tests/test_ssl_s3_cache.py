@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 #   env var manipulation, not S3 client mocking. The config tests are pure data flow tests.
 # · Rev: if backup_config.py adds network-dependent operations, revisit mock strategy
 
+
 def _make_s3_config_dict(**overrides: str) -> dict:
     """Create a standard S3Config dict (5 fields), no backup-specific prefix."""
     config: dict = {
@@ -55,11 +56,13 @@ def _make_s3_config_dict(**overrides: str) -> dict:
 def _make_backup_config_dict(**overrides: str) -> dict:
     """Create a standard BackupConfig dict (8 fields)."""
     config = _make_s3_config_dict()
-    config.update({
-        "prefix": "platform/backups",
-        "context": "personal",
-        "node_name": "test-node",
-    })
+    config.update(
+        {
+            "prefix": "platform/backups",
+            "context": "personal",
+            "node_name": "test-node",
+        }
+    )
     config.update(overrides)
     return config
 
@@ -68,6 +71,7 @@ def _make_backup_config_dict(**overrides: str) -> dict:
 
 
 # region TEST_S3_CONFIG_BASE
+
 
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: S3Config(5 fields) ✓ BackupConfig(8 = S3Config+3) ✓
@@ -78,7 +82,7 @@ def test_s3_config_type_structure():
 
     Validates the refactored type hierarchy from backup_config.py.
     """
-    from backup_config import S3Config, BackupConfig
+    from backup_config import BackupConfig, S3Config
 
     # S3Config must have the 5 base S3 fields
     s3_keys = set(S3Config.__annotations__.keys())
@@ -176,11 +180,10 @@ def test_get_s3_config_uses_fallback_endpoint():
         config = get_s3_config()
 
         logger.info("[IMP:7][test_fallback] Endpoint: %s", config["endpoint_url"])
-        assert "s3.timeweb.cloud" in config["endpoint_url"], \
-            f"Expected default endpoint, got {config['endpoint_url']}"
+        assert "s3.timeweb.cloud" in config["endpoint_url"], f"Expected default endpoint, got {config['endpoint_url']}"
         logger.critical("[IMP:9][test_fallback] ASSERT: fallback endpoint = s3.timeweb.cloud")
     finally:
-        for k, v in env_vars.items():
+        for k in env_vars:
             if original_env[k]:
                 os.environ[k] = original_env[k]
             else:
@@ -251,6 +254,7 @@ def test_get_s3_config_default_region():
 
 # region TEST_UPLOAD_CONFIG_SOURCE
 
+
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: --config-source ssl-cache → get_s3_config() called, get_backup_config() not
 # · Last fail: argparse error (fixed via sys.argv mock) · Remove if: upload.py config-source logic replaced
@@ -259,6 +263,7 @@ def test_upload_config_source_ssl_cache_uses_s3_config():
     The s3_key is used as-is (no prefix prepended). Tests by calling main with explicit argv.
     """
     from unittest.mock import patch as mock_patch
+
     from upload import main as upload_main
 
     # Set up env vars for get_s3_config
@@ -281,6 +286,7 @@ def test_upload_config_source_ssl_cache_uses_s3_config():
 
         # Create a fake file for upload
         import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".pem", delete=False, mode="w") as f:
             f.write("fake-cert-content")
             local_file = f.name
@@ -291,22 +297,25 @@ def test_upload_config_source_ssl_cache_uses_s3_config():
             # We need to mock argv to pass --config-source ssl-cache.
             test_argv = [
                 "upload.py",
-                "--config-source", "ssl-cache",
+                "--config-source",
+                "ssl-cache",
                 local_file,
                 "platform/ssl-certs/test.domain/fullchain.pem",
             ]
 
-            with mock_patch("upload.get_s3_config", return_value=s3_config) as mock_s3, \
-                 mock_patch("upload.get_backup_config") as mock_backup, \
-                 mock_patch("upload.compute_sha256", return_value="fake-sha256"), \
-                 mock_patch("upload.sys.argv", test_argv):
-
+            with (
+                mock_patch("upload.get_s3_config", return_value=s3_config) as mock_s3,
+                mock_patch("upload.get_backup_config") as mock_backup,
+                mock_patch("upload.compute_sha256", return_value="fake-sha256"),
+                mock_patch("upload.sys.argv", test_argv),
+            ):
                 # Patch _init_client and _upload_and_verify to avoid boto3
                 fake_client = object()
-                with mock_patch("upload._init_client", return_value=fake_client), \
-                     mock_patch("upload._upload_and_verify", return_value=True), \
-                     mock_patch("upload._generate_report"):
-
+                with (
+                    mock_patch("upload._init_client", return_value=fake_client),
+                    mock_patch("upload._upload_and_verify", return_value=True),
+                    mock_patch("upload._generate_report"),
+                ):
                     upload_main()
 
                     # Verify get_s3_config was called (not get_backup_config)
@@ -331,7 +340,6 @@ def test_upload_config_source_ssl_cache_uses_s3_config():
 # · Last fail: None (first run) · Remove if: arg parsing of --config-source changes
 def test_upload_config_source_backup_uses_backup_config():
     """upload.py --config-source backup (default) uses get_backup_config() with prefix."""
-    from unittest.mock import patch as mock_patch
 
     # We'll test at the arg parsing level — _parse_args with --config-source
     from upload import _parse_args
@@ -356,6 +364,7 @@ def test_upload_config_source_backup_uses_backup_config():
 
 # region TEST_S3_SCRIPT_EXISTS
 
+
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: s3-ssl-cache.sh has upload/download/check + boto3 + openssl
 # · Last fail: case pattern assertion (fixed to check _s3_* functions) · Remove if: s3-ssl-cache.sh restructured
@@ -368,8 +377,9 @@ def test_s3_cache_script_has_upload_download_check():
         content = f.read()
 
     # Check main dispatcher handles all 3 commands (case patterns without quotes: upload)
-    assert "\nupload)" in content or "\tupload)" in content or "upload)\n" in content or "upload)" in content, \
+    assert "\nupload)" in content or "\tupload)" in content or "upload)\n" in content or "upload)" in content, (
         "s3-ssl-cache.sh must handle upload command"
+    )
     assert "download)" in content, "s3-ssl-cache.sh must handle download command"
     assert "check)" not in content or "check)" in content, "check command"
     # More robust: check for the case statement patterns
@@ -402,11 +412,11 @@ def test_s3_cache_script_graceful_degradation():
 
     # Must log WARN on failure (not exit 1)
     assert '"WARN"' in content, "s3-ssl-cache.sh must use WARN logs on failure"
-    assert '"FAIL"' not in content.split('main')[0], "Main section should not have hard FAIL"
+    assert '"FAIL"' not in content.split("main")[0], "Main section should not have hard FAIL"
     assert "graceful" in content.lower(), "s3-ssl-cache.sh must mention graceful degradation"
 
     # Must validate S3 env vars non-fatally
-    assert 'S3_ACCESS_KEY' in content and 'S3_SECRET_KEY' in content and 'S3_BUCKET' in content
+    assert "S3_ACCESS_KEY" in content and "S3_SECRET_KEY" in content and "S3_BUCKET" in content
 
     logger.critical("[IMP:9][test_graceful] ASSERT: s3-ssl-cache.sh has graceful degradation pattern")
 
@@ -431,6 +441,7 @@ def test_s3_cache_script_uses_openssl_validation():
 
 
 # region TEST_INTEGRATION_ISSUE_CERT
+
 
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: issue-cert.sh calls s3-ssl-cache.sh upload after success
@@ -470,8 +481,7 @@ def test_issue_cert_saves_to_s3_after_success():
     assert cert_save_section, "issue-cert.sh must call s3-ssl-cache.sh upload after issue_tls_cert success"
 
     logger.critical(
-        "[IMP:9][test_issue_cert_s3] ASSERT: issue-cert.sh calls s3-ssl-cache.sh upload "
-        "after successful cert issuance"
+        "[IMP:9][test_issue_cert_s3] ASSERT: issue-cert.sh calls s3-ssl-cache.sh upload after successful cert issuance"
     )
 
 
@@ -479,6 +489,7 @@ def test_issue_cert_saves_to_s3_after_success():
 
 
 # region TEST_INTEGRATION_NODE_LIFECYCLE
+
 
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: node-lifecycle checks S3 cache before issue-cert.sh
@@ -508,10 +519,11 @@ def test_node_lifecycle_checks_s3_before_issue():
     assert "return 0" in content, "Must skip issue-cert.sh if S3 restore succeeded"
 
     # Must fallback to issue-cert.sh if S3 cache miss
-    assert "issue-cert.sh" in content.split("s3-ssl-cache.sh")[-1] or \
-        any("issue-cert.sh" in line and "s3-ssl-cache.sh" not in line
-            for line in content.split("\n") if "issue-cert.sh" in line), \
-        "Must fallback to issue-cert.sh on S3 cache miss"
+    assert "issue-cert.sh" in content.split("s3-ssl-cache.sh")[-1] or any(
+        "issue-cert.sh" in line and "s3-ssl-cache.sh" not in line
+        for line in content.split("\n")
+        if "issue-cert.sh" in line
+    ), "Must fallback to issue-cert.sh on S3 cache miss"
 
     # Check the ordering in ssl-provision section
     lines = content.split("\n")
@@ -522,7 +534,7 @@ def test_node_lifecycle_checks_s3_before_issue():
             break
 
     if ssl_provision_start >= 0:
-        section = "\n".join(lines[ssl_provision_start:ssl_provision_start + 100])
+        section = "\n".join(lines[ssl_provision_start : ssl_provision_start + 100])
         # The section must have S3 cache check before the issue-cert.sh fallback call.
         # The variable `ssl_script` is DECLARED early (before S3 check). We need the
         # INVOCATION of issue-cert.sh (the fallback `bash "$ssl_script"`), which is
@@ -544,7 +556,11 @@ def test_node_lifecycle_checks_s3_before_issue():
         logger.info(
             "[IMP:7][test_node_lifecycle] s3_cache_idx=%d first_script=%d "
             "second_script=%d issuing_line=%d bash_call=%d",
-            s3_cache_idx, first_script, second_script, issuing_line, bash_call,
+            s3_cache_idx,
+            first_script,
+            second_script,
+            issuing_line,
+            bash_call,
         )
 
         # S3 cache check must exist and come before the issue-cert.sh invocation
@@ -553,11 +569,9 @@ def test_node_lifecycle_checks_s3_before_issue():
         # The fallback to issue-cert.sh must exist (after S3 cache miss)
         # Use the bash "$ssl_script" invocation after "Issuing SSL certificate"
         if second_script >= 0:
-            assert s3_cache_idx < second_script, \
-                "S3 cache check must happen before issue-cert.sh invocation"
+            assert s3_cache_idx < second_script, "S3 cache check must happen before issue-cert.sh invocation"
         elif bash_call >= 0:
-            assert s3_cache_idx < bash_call, \
-                "S3 cache check must happen before issue-cert.sh fallback"
+            assert s3_cache_idx < bash_call, "S3 cache check must happen before issue-cert.sh fallback"
         else:
             # At minimum verify there's an issue-cert.sh fallback
             assert '"$ssl_script"' in section, "issue-cert.sh fallback must exist in ssl-provision"
@@ -576,6 +590,7 @@ def test_node_lifecycle_checks_s3_before_issue():
 
 
 # region TEST_BACKWARD_COMPAT
+
 
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: get_backup_config() backward compatible after refactoring
@@ -634,19 +649,18 @@ def test_s3_config_type_compatibility():
     via __mro__ or __bases__ at runtime in Python 3.14.
     """
     import ast
+
     import backup_config as bc
 
     # 1. Annotation-based verification: all S3Config keys in BackupConfig
     s3_keys = set(bc.S3Config.__annotations__.keys())
     bc_keys = set(bc.BackupConfig.__annotations__.keys())
     missing = s3_keys - bc_keys
-    assert not missing, \
-        f"BackupConfig is missing S3Config keys: {missing}"
+    assert not missing, f"BackupConfig is missing S3Config keys: {missing}"
 
     # BackupConfig adds 3 additional keys
     extra = bc_keys - s3_keys
-    assert extra == {"prefix", "context", "node_name"}, \
-        f"BackupConfig should add exactly 3 keys, got extra: {extra}"
+    assert extra == {"prefix", "context", "node_name"}, f"BackupConfig should add exactly 3 keys, got extra: {extra}"
 
     # 2. Source-code verification: class BackupConfig(S3Config) syntax
     source_path = bc.__file__
@@ -665,8 +679,7 @@ def test_s3_config_type_compatibility():
             )
             break
 
-    assert found_inheritance, \
-        "class BackupConfig(S3Config): must be defined in source with S3Config as base"
+    assert found_inheritance, "class BackupConfig(S3Config): must be defined in source with S3Config as base"
 
     # 3. Runtime verification: a BackupConfig dict is structurally compatible with S3Config
     config = bc.BackupConfig(
@@ -684,7 +697,7 @@ def test_s3_config_type_compatibility():
 
     logger.critical(
         "[IMP:9][test_type_compat] ASSERT: BackupConfig inherits S3Config — "
-        "annotations={} extra={} source=S3Config bases runtime=compat".format(s3_keys, extra)
+        f"annotations={s3_keys} extra={extra} source=S3Config bases runtime=compat"
     )
 
 

@@ -23,13 +23,11 @@
 ## @changes 2026-07-21 | Initial test suite (DevPlan 025 W1-W6)
 # endregion MODULE_CONTRACT
 
+import os
 import subprocess
 import textwrap
 
 import pytest
-
-
-import os
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -59,9 +57,9 @@ def _run_bash_test(script: str, tmp_path) -> subprocess.CompletedProcess:
 def test_gate_converge_exit_semantics(tmp_path):
     """Gate: converge.sh must define CONVERGE_HAS_ERRORS and CONVERGE_HAS_WARNINGS globals."""
     converge_path = "core/internal/bootstrap/converge.sh"
-    script = """
+    script = f"""
     set -euo pipefail
-    CONVERGE="$PROJECT_ROOT/{path}"
+    CONVERGE="$PROJECT_ROOT/{converge_path}"
     if [[ ! -f "$CONVERGE" ]]; then
         echo "[IMP:10][gate] FATAL: converge.sh not found at $CONVERGE" >&2
         exit 1
@@ -85,7 +83,7 @@ def test_gate_converge_exit_semantics(tmp_path):
         echo "[IMP:10][gate] FAIL: main() does not use CONVERGE_HAS_ERRORS for exit" >&2
         exit 1
     fi
-    """.format(path=converge_path)
+    """
     result = _run_bash_test(script, tmp_path)
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     imp_found = False
@@ -97,6 +95,8 @@ def test_gate_converge_exit_semantics(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Gate failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -111,16 +111,16 @@ def test_gate_converge_exit_semantics(tmp_path):
 def test_gate_converge_reconcile_flag(tmp_path):
     """Gate: converge.sh must accept --reconcile flag."""
     converge_path = "core/internal/bootstrap/converge.sh"
-    script = """
+    script = f"""
     set -euo pipefail
-    CONVERGE="$PROJECT_ROOT/{path}"
+    CONVERGE="$PROJECT_ROOT/{converge_path}"
     if grep -q -- '--reconcile' "$CONVERGE"; then
         echo "[IMP:9][gate] OK: converge.sh --reconcile flag defined" >&2
     else
         echo "[IMP:10][gate] FAIL: --reconcile flag not found in converge.sh" >&2
         exit 1
     fi
-    """.format(path=converge_path)
+    """
     result = _run_bash_test(script, tmp_path)
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     imp_found = False
@@ -132,6 +132,8 @@ def test_gate_converge_reconcile_flag(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Gate failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -146,9 +148,9 @@ def test_gate_converge_reconcile_flag(tmp_path):
 def test_gate_reconcile_not_entrypoint(tmp_path):
     """Gate: reconcile-projects.sh must exit 1 when run directly (internal-only)."""
     reconcile_path = "core/internal/deploy/reconcile-projects.sh"
-    script = """
+    script = f"""
     set -euo pipefail
-    RECONCILE="$PROJECT_ROOT/{path}"
+    RECONCILE="$PROJECT_ROOT/{reconcile_path}"
     if [[ ! -f "$RECONCILE" ]]; then
         echo "[IMP:10][gate] FATAL: reconcile-projects.sh not found" >&2
         exit 1
@@ -160,7 +162,7 @@ def test_gate_reconcile_not_entrypoint(tmp_path):
     else
         echo "[IMP:9][gate] OK: reconcile-projects.sh is not an entrypoint (exit non-zero)" >&2
     fi
-    """.format(path=reconcile_path)
+    """
     result = _run_bash_test(script, tmp_path)
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     imp_found = False
@@ -172,6 +174,8 @@ def test_gate_reconcile_not_entrypoint(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Gate failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -211,6 +215,8 @@ def test_gate_vps_readiness_sourceable(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Gate failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -225,9 +231,9 @@ def test_gate_vps_readiness_sourceable(tmp_path):
 def test_gate_makefile_deploy_node_flag(tmp_path):
     """Gate: Makefile deploy target must support NODE flag for pre-flight."""
     makefile_path = "Makefile"
-    script = """
+    script = f"""
     set -euo pipefail
-    MF="$PROJECT_ROOT/{path}"
+    MF="$PROJECT_ROOT/{makefile_path}"
     if [[ ! -f "$MF" ]]; then
         echo "[IMP:10][gate] FATAL: Makefile not found" >&2
         exit 1
@@ -248,7 +254,7 @@ def test_gate_makefile_deploy_node_flag(tmp_path):
         echo "[IMP:10][gate] FAIL: deploy target does not support LAUNCH flag" >&2
         exit 1
     fi
-    """.format(path=makefile_path)
+    """
     result = _run_bash_test(script, tmp_path)
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     imp_found = False
@@ -260,4 +266,6 @@ def test_gate_makefile_deploy_node_flag(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Gate failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion

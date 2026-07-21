@@ -75,6 +75,8 @@ def test_deploy_preflight_trigger(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -111,6 +113,8 @@ def test_deploy_preflight_skip_no_node(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -150,6 +154,8 @@ def test_deploy_launch_requires_node(tmp_path):
     assert result.returncode == 1, "Expected exit 1 for LAUNCH=1 without NODE"
     # This test expects IMP:10 log (fatal error), not IMP:9
     assert imp_found or "[IMP:10]" in result.stderr, "IMP:10 log not found for fatal error"
+
+
 # endregion
 
 
@@ -191,4 +197,6 @@ def test_deploy_launch_with_node(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion

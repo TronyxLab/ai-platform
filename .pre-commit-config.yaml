@@ -252,3 +252,12 @@ repos:
         files: ^(core/entrypoint-manifest\.yaml|core/AGENTS\.md|Makefile|core/modules/.*/Makefile)$
         pass_filenames: false
         stages: [pre-commit]
+
+      - id: scripts-audit
+        name: Audit script registration
+        entry: make scripts-audit
+        language: system
+        files: '^core/.*\.sh$'
+        pass_filenames: false
+        always_run: false
+        stages: [pre-commit]

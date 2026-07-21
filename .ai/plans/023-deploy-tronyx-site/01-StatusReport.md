@@ -107,11 +107,11 @@ Deploy SUCCESS: tronyx-site → 9e45334...
                               ↓
 2026-07-21 04:15 UTC  Bootstrap re-run:
                        - Step 3:  tor-proxy WARN
-                       - Step 13: secrets-init WARN  
+                       - Step 13: secrets-init WARN
                        - Step 14: read-node-yaml WARN
                        - Step 18: node-update had failures
                        - Step 19: converge FAILED (exit 1)
-                       
+
                        converge.sh reconcile_projects():
                        - ai-platform.yaml отсутствовал → создан GENERATED-STUB (04:15)
                        - .env.platform отсутствовал → создан пустой (04:15)
@@ -132,7 +132,7 @@ Deploy SUCCESS: tronyx-site → 9e45334...
 # 🧐 TRAP[DECISION] · 2026-07-21 · — · CI workflow использует platform-deploy (старый глагол), не platform-deliver
 # · Rejected: platform-deliver (доставка docker-compose.yml + ai-platform.yaml через stdin tar.gz)
 # · Reason: CI workflow был написан до появления D2-глагола platform-deliver (T2, 2026-07-17)
-# · Rev: после миграции CI на platform-deliver, docker-compose.yml будет доставляться при каждом деплое — 
+# · Rev: после миграции CI на platform-deliver, docker-compose.yml будет доставляться при каждом деплое —
 #   проблема «потерянного docker-compose.yml» исчезнет
 ```
 

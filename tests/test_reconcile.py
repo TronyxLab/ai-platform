@@ -14,11 +14,9 @@
 ## @changes 2026-07-21 | Initial test suite (DevPlan 025 W4)
 # endregion MODULE_CONTRACT
 
+import os
 import subprocess
 import textwrap
-
-
-import os
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -77,6 +75,8 @@ def test_reconcile_direct_invocation_guard(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -91,11 +91,13 @@ def test_reconcile_empty_projects(tmp_path):
     """Test that reconcile_projects handles empty project list gracefully."""
     # Create a minimal node.yaml with no projects
     node_yaml = tmp_path / "node.yaml"
-    node_yaml.write_text(textwrap.dedent("""\
+    node_yaml.write_text(
+        textwrap.dedent("""\
         node:
           name: test-node
         modules: {}
-    """))
+    """)
+    )
 
     node_yaml_path = str(node_yaml)
     script = f"""
@@ -127,6 +129,8 @@ def test_reconcile_empty_projects(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -180,4 +184,6 @@ EOF
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion

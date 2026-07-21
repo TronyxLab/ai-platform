@@ -74,6 +74,8 @@ def test_converge_has_warnings_exit_1(tmp_path):
 
     assert result.returncode == 1, f"Expected exit 1, got {result.returncode}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -119,6 +121,8 @@ def test_converge_has_errors_exit_2(tmp_path):
 
     assert result.returncode == 2, f"Expected exit 2, got {result.returncode}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -163,6 +167,8 @@ def test_converge_clean_exit_0(tmp_path):
 
     assert result.returncode == 0, f"Expected exit 0, got {result.returncode}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -213,6 +219,8 @@ def test_node_lifecycle_step15_exit_1_nonblocking(tmp_path):
 
     assert result.returncode == 0, f"Expected exit 0 (non-blocking), got {result.returncode}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -262,4 +270,6 @@ def test_node_lifecycle_step15_exit_2_update_nonblocking(tmp_path):
 
     assert result.returncode == 0, f"Expected exit 0 (non-blocking in update mode), got {result.returncode}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion

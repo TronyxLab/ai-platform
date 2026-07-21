@@ -113,7 +113,7 @@ bash "${CORE_DIR}/internal/bootstrap/deploy-modules.sh" --skip-provision 2>&1
    # Было: два вызова
    # update_step_4_deploy_docker → deploy-modules.sh
    # update_step_5_deploy_system → deploy-modules.sh --system
-   
+
    # Стало: один вызов с объединённым флагом
    update_step_4_deploy_modules() {
        step_start "deploy-modules" "Deploying all modules (docker + system)"
@@ -290,14 +290,14 @@ step_6b_create_projects_base() {
 ```
 
 **Converge.sh R3 — улучшения для генерации .env.platform:**
-- Текущий R3 создаёт пустой `.env.platform` (touch). 
+- Текущий R3 создаёт пустой `.env.platform` (touch).
 - Новый R3 вызывает `gen-env-platform.sh` для генерации реального `.env.platform` из `platform-env.yaml`.
 
 ### Связанные фиксы (не в этом брифе, но блокируют деплой)
 
 Эти фиксы необходимы для успешного первого деплоя проектов:
 
-1. **Nginx Docker DNS resolver**: vhost-конфиги уже используют `resolver 127.0.0.11 valid=30s` + variable-based `proxy_pass` (проверено в node-configs/tronyx-vps/overlays/nginx/*.conf). `/etc/hosts` хардкоды не требуются. 
+1. **Nginx Docker DNS resolver**: vhost-конфиги уже используют `resolver 127.0.0.11 valid=30s` + variable-based `proxy_pass` (проверено в node-configs/tronyx-vps/overlays/nginx/*.conf). `/etc/hosts` хардкоды не требуются.
 2. **Убрать мёртвый `conf.d/tronyx.ru.conf`**: deprecated listen-директивы.
 3. **Обновить TRAP[DECISION] в nginx overlay**: старый TRAP описывает system nginx, а nginx давно в Docker.
 

@@ -43,6 +43,7 @@
 | `make lint` | shellcheck + yamllint + pytest-lint | `make lint` | `core/entrypoints/validate.sh --lint` |
 | `make audit` | Системный аудит платформы | `make audit [NODE=...]` | `core/entrypoints/audit.sh` |
 | `make check-file-lines` | Проверка длины файлов | `make check-file-lines [MAX_LINES=500]` | `core/entrypoints/check-file-lines.sh` |
+| `make scripts-audit` | Аудит регистрации shebang-скриптов в manifest или exceptions | `make scripts-audit` | `core/internal/scripts-audit.sh` |
 | `make dev-certs` | Генерация dev SSL-сертификатов (idempotent, hybrid mkcert→openssl) | `make dev-certs [CERT_BACKEND=auto|mkcert|openssl]` | `core/modules/nginx/generate-dev-certs.sh` |
 | `make provision` | Provision окружения | `make provision [SCOPE=all|networks|volumes|env]` | `core/internal/provision-environment.sh` |
 | `make discover-modules` | Авто-обнаружение модулей и обновление docker-compose.yml | `make discover-modules` | `core/internal/bootstrap/discover_modules.py` |

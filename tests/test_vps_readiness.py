@@ -15,11 +15,9 @@
 ## @changes 2026-07-21 | Initial test suite (DevPlan 025 W1)
 # endregion MODULE_CONTRACT
 
+import os
 import subprocess
 import textwrap
-
-
-import os
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -88,6 +86,8 @@ def test_vps_readiness_source_ok(tmp_path):
 
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -126,6 +126,8 @@ def test_vps_readiness_empty_node(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -166,6 +168,8 @@ def test_vps_readiness_no_host_map(tmp_path):
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion
 
 
@@ -221,4 +225,6 @@ else:
     print("--- END LDD TRAJECTORY ---")
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert imp_found, "IMP:9 log not found"
+
+
 # endregion

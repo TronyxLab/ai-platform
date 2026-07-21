@@ -35,15 +35,9 @@ logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
-_CONVERGE_SCRIPT: pathlib.Path = (
-    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "converge.sh"
-)
-_GEN_ENV_SCRIPT: pathlib.Path = (
-    _PROJECT_ROOT / "core" / "internal" / "scaffold" / "gen-env-platform.sh"
-)
-_NODE_LIFECYCLE_SCRIPT: pathlib.Path = (
-    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
-)
+_CONVERGE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "converge.sh"
+_GEN_ENV_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "gen-env-platform.sh"
+_NODE_LIFECYCLE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
 
 # converge.sh resolves node.yaml via resolve_node_yaml which searches:
 #   1. PLATFORM_ROOT/node-configs/<node>/node.yaml  (PLATFORM_ROOT hardcoded to /opt/platform)
@@ -129,7 +123,8 @@ def _projects_writable() -> bool:
         if shutil.which("sudo"):
             result = subprocess.run(
                 ["sudo", "chown", os.environ.get("USER", ""), "/opt/projects"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             return result.returncode == 0
         return False
@@ -145,13 +140,15 @@ def _projects_writable() -> bool:
     if shutil.which("sudo"):
         result = subprocess.run(
             ["sudo", "mkdir", "-p", "/opt/projects"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             # Chown to current user so we can clean up
             subprocess.run(
                 ["sudo", "chown", os.environ.get("USER", ""), "/opt/projects"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             return True
     return False
@@ -249,8 +246,7 @@ def test_converge_r3_dry_run(
     # Verify WOULD statements for project operations
     would_create_count = result.stderr.count("WOULD create")
     assert would_create_count >= 2, (
-        f"Expected ≥2 WOULD-create lines overall, got {would_create_count}\n"
-        f"stderr:\n{result.stderr[:3000]}"
+        f"Expected ≥2 WOULD-create lines overall, got {would_create_count}\nstderr:\n{result.stderr[:3000]}"
     )
 
     # R3 should report planned mutations (WOULD or mutated)
@@ -259,9 +255,7 @@ def test_converge_r3_dry_run(
     )
 
     # Converge should not have run R1 (filtered by --units R3)
-    assert "R1" not in result.stderr or "filtered" in result.stderr, (
-        "R1 should be filtered out with --units R3"
-    )
+    assert "R1" not in result.stderr or "filtered" in result.stderr, "R1 should be filtered out with --units R3"
 
     # LDD trajectory assertion (handled by @ldd_trajectory decorator)
     logger.critical("[IMP:9][test][dry-run] Converge R3 dry-run completed — planned operations match expectations")
@@ -290,9 +284,7 @@ def test_converge_r3_scaffold(
 
     # ── If projects dir is not writable, test error behavior ──
     if not _projects_writable():
-        logger.warning(
-            "[IMP:7][test][scaffold] /opt/projects not writable — testing error behavior"
-        )
+        logger.warning("[IMP:7][test][scaffold] /opt/projects not writable — testing error behavior")
         result = _run_converge()
 
         print("--- CONVERGE STDERR (no /opt write access) ---")
@@ -379,9 +371,7 @@ def test_converge_r3_idempotent(
 
     # ── If projects dir is not writable, test idempotent planning (dry-run) ──
     if not _projects_writable():
-        logger.warning(
-            "[IMP:7][test][idempotent] /opt/projects not writable — testing idempotent dry-run instead"
-        )
+        logger.warning("[IMP:7][test][idempotent] /opt/projects not writable — testing idempotent dry-run instead")
 
         # Run dry-run twice to verify consistent planning
         result1 = _run_converge(dry_run=True)
@@ -397,9 +387,7 @@ def test_converge_r3_idempotent(
         assert result1.returncode == result2.returncode, (
             f"Both dry-runs should return same exit code: {result1.returncode} vs {result2.returncode}"
         )
-        assert "testapp" in result1.stderr and "testapp" in result2.stderr, (
-            "Both dry-runs should process testapp"
-        )
+        assert "testapp" in result1.stderr and "testapp" in result2.stderr, "Both dry-runs should process testapp"
 
         logger.critical(
             "[IMP:9][test][idempotent] Converge R3 idempotent dry-run verified — consistent planning across two runs"
@@ -413,9 +401,7 @@ def test_converge_r3_idempotent(
     print("--- END STDERR ---")
 
     # First run should report mutations (exit 1) or already converged (exit 0)
-    assert result1.returncode in (0, 1), (
-        f"First converge exit {result1.returncode}: {result1.stderr[:2000]}"
-    )
+    assert result1.returncode in (0, 1), f"First converge exit {result1.returncode}: {result1.stderr[:2000]}"
 
     # ── Second run: should be no-op ──
     result2 = _run_converge()
@@ -438,18 +424,14 @@ def test_converge_r3_idempotent(
             skip_env_count += 1
 
     assert skip_stub_count >= 1, (
-        f"Expected ≥1 SKIP for existing ai-platform.yaml, got {skip_stub_count}\n"
-        f"stderr:\n{result2.stderr[:3000]}"
+        f"Expected ≥1 SKIP for existing ai-platform.yaml, got {skip_stub_count}\nstderr:\n{result2.stderr[:3000]}"
     )
     assert skip_env_count >= 1, (
-        f"Expected ≥1 SKIP for existing .env.platform, got {skip_env_count}\n"
-        f"stderr:\n{result2.stderr[:3000]}"
+        f"Expected ≥1 SKIP for existing .env.platform, got {skip_env_count}\nstderr:\n{result2.stderr[:3000]}"
     )
 
     # Verify existing files were NOT overwritten (content preserved)
-    assert "already exists" in result2.stderr, (
-        "Second run should report already-exists, not regenerated"
-    )
+    assert "already exists" in result2.stderr, "Second run should report already-exists, not regenerated"
 
     logger.critical(
         "[IMP:9][test][idempotent] Converge R3 idempotent — second run exit=0 with SKIP for all existing items"
@@ -488,35 +470,23 @@ def test_step_6b_calls_converge(
         if "converge_script" in line and "--units R3" in line:
             converge_call_pattern = True
             print(f"[IMP:7][test][step_6b] Found converge R3 call: {line.strip()}")
-        if (
-            "converge.sh" in line
-            and "R3" in line
-            and "units" in line
-        ):
+        if "converge.sh" in line and "R3" in line and "units" in line:
             converge_call_pattern = True
             print(f"[IMP:7][test][step_6b] Found converge R3 reference: {line.strip()}")
 
     assert converge_call_pattern, (
         f"step_6b_create_projects_base() must call converge.sh with --units R3\n"
         f"Look for 'converge --units R3' pattern in {_NODE_LIFECYCLE_SCRIPT}\n"
-        f"Converge-related lines:\n" +
-        "\n".join(
-            line
-            for line in source_text.splitlines()
-            if "converge" in line.lower()
-        )[:3000]
+        f"Converge-related lines:\n"
+        + "\n".join(line for line in source_text.splitlines() if "converge" in line.lower())[:3000]
     )
 
     # Verify converge.sh has the --units flag in usage
     converge_source = _CONVERGE_SCRIPT.read_text()
-    assert "--units" in converge_source, (
-        "converge.sh must support the --units flag in its argument parsing"
-    )
+    assert "--units" in converge_source, "converge.sh must support the --units flag in its argument parsing"
     print("[IMP:7][test][step_6b] converge.sh --units flag confirmed in source")
 
-    logger.critical(
-        "[IMP:9][test][step_6b] Verified step_6b_create_projects_base() calls converge --units R3"
-    )
+    logger.critical("[IMP:9][test][step_6b] Verified step_6b_create_projects_base() calls converge --units R3")
 
 
 # 🧪 TRAP[TEST] · 2026-07-21
@@ -586,9 +556,7 @@ def test_gen_env_platform_interface(
     print(result.stderr)
     print("--- END ---")
 
-    assert result.returncode == 0, (
-        f"gen-env-platform.sh should exit 0, got {result.returncode}: {result.stderr}"
-    )
+    assert result.returncode == 0, f"gen-env-platform.sh should exit 0, got {result.returncode}: {result.stderr}"
 
     # Verify output file exists
     assert output_file.is_file(), f"Output file {output_file} should exist"
@@ -599,17 +567,11 @@ def test_gen_env_platform_interface(
     assert "PLATFORM_POSTGRES_HOST" in content or "PLATFORM_REDIS_HOST" in content, (
         "Should contain at least one PLATFORM_* service variable"
     )
-    assert "# GENERATED by ai-platform" in content, (
-        "Should start with GENERATED marker"
-    )
+    assert "# GENERATED by ai-platform" in content, "Should start with GENERATED marker"
 
     # Verify DSN substitution: testapp should appear in DSN
     if "PLATFORM_POSTGRES_DSN" in content:
-        dsn_line = [l for l in content.splitlines() if "PLATFORM_POSTGRES_DSN" in l][0]
-        assert "testapp" in dsn_line, (
-            f"DSN should contain project name 'testapp': {dsn_line}"
-        )
+        dsn_line = next(line for line in content.splitlines() if "PLATFORM_POSTGRES_DSN" in line)
+        assert "testapp" in dsn_line, f"DSN should contain project name 'testapp': {dsn_line}"
 
-    logger.critical(
-        "[IMP:9][test][gen-env-interface] gen-env-platform.sh --name testapp --output works correctly"
-    )
+    logger.critical("[IMP:9][test][gen-env-interface] gen-env-platform.sh --name testapp --output works correctly")
