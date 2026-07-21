@@ -76,6 +76,17 @@ parse_verb() {
         exit 1
     fi
 
+    # ── Ping verb — pre-flight connectivity check ──
+    if [[ "$cleaned" == "ping" ]]; then
+        echo "pong"
+        exit 0
+    fi
+
+    # ── Exit verb — SSH connectivity test (no-op success) ──
+    if [[ "$cleaned" == "exit" ]]; then
+        exit 0
+    fi
+
     local first_token="${cleaned%% *}"
 
     case "$first_token" in

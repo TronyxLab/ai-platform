@@ -73,6 +73,13 @@ for mod_name in "${MODULES[@]}"; do
         continue
     fi
 
+    # Skip modules with local build (no registry image — pull would fail)
+    if grep -q '^\s\+build:' "$compose_file" 2>/dev/null; then
+        log "SKIP" "Local build module '${mod_name}' — skipping pull"
+        PULL_SUCCESS=$(( PULL_SUCCESS + 1 ))
+        continue
+    fi
+
     log "PULL" "Pulling images for ${mod_name} (${compose_file})"
     # --profile required: all module compose files use profiles: [module-name]
     if docker compose -f "$compose_file" --profile "$mod_name" pull 2>&1 | tee -a "$LOG_FILE"; then

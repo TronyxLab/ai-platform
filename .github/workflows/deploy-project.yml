@@ -86,10 +86,18 @@ jobs:
           CI_DEPLOY_KEY: ${{ secrets.CI_DEPLOY_KEY }}
         run: |
           set -euo pipefail
-          echo "[IMP:9][preflight] Checking VPS readiness for ${{ env.ssh_host }}..."
-          ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-            ci-deploy@${{ env.ssh_host }} "test -d /opt/projects && echo 'VPS ready' || (echo 'VPS not bootstrapped: /opt/projects missing' && exit 1)"
-          echo "[IMP:9][preflight] VPS readiness check passed"
+          echo "[IMP:9][preflight] Checking VPS readiness via forced-command status verb..."
+          STATUS_JSON=$(ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            ci-deploy@${{ env.ssh_host }} "status ${{ inputs.project_name }}" 2>&1) || true
+          echo "[IMP:8][preflight] Status response: ${STATUS_JSON}"
+          echo "${STATUS_JSON}" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          status = d.get('status', '')
+          if status not in ('found', 'stub'):
+              sys.exit(1)
+          "
+          echo "[IMP:9][preflight] VPS readiness check passed (status: $(echo "${STATUS_JSON}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status'))"))"
         shell: bash
 
       - name: Deliver project payload
@@ -115,12 +123,19 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
-          echo "[IMP:9][verify-deliver] Verifying compose file on VPS after deliver..."
-          ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new \
-            ci-deploy@${{ env.ssh_host }} \
-            "test -f /opt/projects/${{ inputs.project_name }}/docker-compose.yml || test -f /opt/projects/${{ inputs.project_name }}/compose.yaml" \
-            || { echo "[IMP:10][verify-deliver] FATAL: compose file missing on VPS — deliver may have failed"; exit 1; }
-          echo "[IMP:9][verify-deliver] Compose file verified on VPS"
+          echo "[IMP:9][verify-deliver] Verifying deliver via forced-command status verb..."
+          STATUS_JSON=$(ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new \
+            ci-deploy@${{ env.ssh_host }} "status ${{ inputs.project_name }}" 2>&1) || true
+          echo "${STATUS_JSON}" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          status = d.get('status', '')
+          if status in ('found', 'stub'):
+              print(f'[IMP:9][verify-deliver] Compose file verified on VPS (status: {status})')
+          else:
+              print(f'[IMP:10][verify-deliver] FATAL: project not found on VPS (status: {status})')
+              sys.exit(1)
+          "
         shell: bash
 
       - name: SSH deploy

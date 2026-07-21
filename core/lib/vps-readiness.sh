@@ -93,9 +93,9 @@ check_vps_ready() {
         echo "[IMP:8][vps-readiness] Check 2/4: Forced-command ping (core delivered?)" >&2
         local ping_result
         ping_result="$(ssh -i "${ci_key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=10 "ci-deploy@${ssh_host}" "platform-deliver --ping" 2>&1)" || true
-        if echo "${ping_result}" | grep -qi "pong\|PONG\|ready"; then
-            echo "[IMP:9][vps-readiness] Forced-command OK: platform-deliver --ping responds" >&2
+            -o ConnectTimeout=10 "ci-deploy@${ssh_host}" "ping" 2>&1)" || true
+        if echo "${ping_result}" | grep -q "pong"; then
+            echo "[IMP:9][vps-readiness] Forced-command OK: ping responds with pong" >&2
         else
             all_ok=false
             diag_messages+=("Forced-command 'platform-deliver --ping' did not respond with pong")

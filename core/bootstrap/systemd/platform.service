@@ -37,10 +37,13 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+WorkingDirectory=/opt/platform
+EnvironmentFile=-/opt/platform/.env
 ExecStart=/opt/platform/core/internal/bootstrap/deploy-modules.sh
 ExecStop=/bin/bash -c 'for f in /opt/platform/core/modules/*/docker-compose.base.yml; do [ -f "$$f" ] && docker compose -f "$$f" down; done'
 Restart=on-failure
 RestartSec=30s
+TimeoutStartSec=600
 User=root
 StandardOutput=journal
 StandardError=journal

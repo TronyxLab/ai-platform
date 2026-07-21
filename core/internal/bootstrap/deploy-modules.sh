@@ -419,9 +419,13 @@ deploy_docker_module() {
     log_step "docker:${module_name}" "START" "Deploying docker module: ${module_name}"
 
     local env_file="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
+    local platform_env="${PLATFORM_ROOT:-/opt/platform}/.env"
     local compose_args=("-f" "$compose_file")
     if [[ -f "$env_file" ]]; then
         compose_args+=("--env-file" "$env_file")
+    fi
+    if [[ -f "$platform_env" ]]; then
+        compose_args+=("--env-file" "$platform_env")
     fi
     if [[ -n "$overlay_dir" ]] && [[ -f "${overlay_dir}/compose.override.yaml" ]]; then
         compose_args+=("-f" "${overlay_dir}/compose.override.yaml")
@@ -464,6 +468,18 @@ deploy_docker_module() {
             fi
         done
         if ! $_all_found; then
+            # Ensure L1 base image exists locally (required for L1→L2 build)
+            if ! docker image inspect hermes-agent-base:latest &>/dev/null 2>&1; then
+                log_step "docker:${module_name}" "WARN" "L1 base image not found locally — attempting pull from GHCR"
+                if ! docker pull ghcr.io/tronyx161/hermes-agent-base:latest 2>/dev/null; then
+                    log_step "docker:${module_name}" "BUILD" "L1 pull failed — building L1 from source"
+                    if ! docker compose "${compose_args[@]}" --profile "$module_name" -f "${module_dir}/docker-compose.base.yml" build \
+                        --build-arg CONTEXT="${CONTEXT:-personal}" 2>&1; then
+                        log_step "docker:${module_name}" "FAIL" "L1 build failed"
+                        return 1
+                    fi
+                fi
+            fi
             log_step "docker:${module_name}" "BUILD" "Building hermes-agent L1→L2 locally (fallback)"
             docker compose "${compose_args[@]}" --profile "$module_name" build 2>&1 || {
                 log_step "docker:${module_name}" "FAIL" "Local build failed"
@@ -1028,10 +1044,18 @@ _pre_pull_images() {
                 exit 0
             fi
 
+            # Skip modules with local build (no registry image — pull would fail)
+            if grep -q '^\s\+build:' "$compose_file" 2>/dev/null; then
+                log_step "pre-pull:${mod_name}" "SKIP" "Local build detected (has build: section) — skipping pull"
+                exit 0
+            fi
+
             local -a pull_args=("-f" "$compose_file")
 
             local env_file="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
+            local platform_env="${PLATFORM_ROOT:-/opt/platform}/.env"
             [[ -f "$env_file" ]] && pull_args+=("--env-file" "$env_file")
+            [[ -f "$platform_env" ]] && pull_args+=("--env-file" "$platform_env")
 
             if [[ -n "$mod_overlay" ]] && [[ -f "${mod_overlay}/compose.override.yaml" ]]; then
                 pull_args+=("-f" "${mod_overlay}/compose.override.yaml")

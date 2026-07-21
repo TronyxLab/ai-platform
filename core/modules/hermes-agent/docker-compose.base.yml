@@ -48,7 +48,10 @@ services:
     # ·   L2 (ghcr.io/tronyxlab/hermes-agent-context:latest, context overlay with Telegram + skills).
     # ·   L1 built by build-hermes-images.sh build-platform from build/Dockerfile.
     # ·   L2 built by tronyx-lab/platform CI from modules/hermes-agent/Dockerfile.
-    # ·   No build section — context overlay pre-built in tronyx-lab CI, never built locally.
+    # ·   ⚠️ 2026-07-21: Added build: section for fallback when GHCR image unavailable.
+    # ·   Previously: "No build section — context overlay pre-built in tronyx-lab CI, never built locally."
+    # ·   Revision: VPS must be able to rebuild hermes-agent from source when GHCR image
+    # ·   is absent (VPS recreation, registry outage, disaster recovery).
     # 🧐 TRAP[DECISION] · 2026-07-07 · — · Layer naming: L0/L1/L2 matching AGENTS.md canonical notation
     # · AGENTS.md: L0 (upstream), L1 (platform base), L2 (context overlay)
     # · Previously this file used "Layer 1/2/3" which was off-by-one vs AGENTS.md
@@ -72,6 +75,19 @@ services:
     # · Rejected: multi-arch build (buildx) — overkill; QEMU emulation is sufficient
     # ·   for local dev smoke tests. CI always runs on x86_64 native.
     platform: linux/amd64
+    # ⚠️ TRAP[DECISION] · 2026-07-21 · — · build: section for fallback when GHCR image unavailable
+    # · Previously: "No build section — context overlay pre-built in tronyx-lab CI, never built locally"
+    # · Revision: VPS must be able to rebuild hermes-agent from source when GHCR image is absent
+    # ·   (e.g., after VPS recreation, registry outage, or disaster recovery).
+    # · build: section uses L1 base image (hermes-agent-base:latest) — must exist locally
+    # ·   (deploy-modules.sh ensures L1 via pull from GHCR or local build before compose build).
+    # · context: ${PLATFORM_ROOT:-/opt/platform} — full platform source tree for L2 Dockerfile
+    # · Rev: if build-from-source becomes unreliable on low-resource VPS, revert to registry-only
+    build:
+      context: ${PLATFORM_ROOT:-/opt/platform}
+      dockerfile: core/modules/hermes-agent/context/Dockerfile
+      args:
+        CONTEXT: ${CONTEXT:-personal}
     container_name: hermes-agent
     profiles: [hermes-agent]
     restart: unless-stopped
