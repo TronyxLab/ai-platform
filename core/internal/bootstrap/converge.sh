@@ -429,7 +429,7 @@ reconcile_audit_log() {
         local current_owner
         current_owner="$(stat -c '%u:%g' "${audit_log}" 2>/dev/null || echo "0:0")"
 
-        if [[ "${current_mode}" != "0664" ]] || [[ "${current_owner}" != "0:4" ]]; then
+        if [[ "${current_mode}" != "664" ]] || [[ "${current_owner}" != "0:4" ]]; then
             if [[ "${report_only}" == "true" ]] || [[ "${dry_run}" == "true" ]]; then
                 echo "[IMP:9][converge][${unit}] WOULD fix: ${audit_log} mode=${current_mode} owner=${current_owner}" >&2
                 report_add "${unit}" "mutated" "audit.log permissions would be fixed"

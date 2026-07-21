@@ -523,12 +523,12 @@ EXCEPTIONS=(
 UNREGISTERED=()
 while IFS= read -r -d '' file; do
     rel="${file#$PROJECT_ROOT/}"
-    
+
     # Check: has shebang?
     if ! head -1 "$file" 2>/dev/null | grep -q '^#!/'; then
         continue  # Not a shebang file
     fi
-    
+
     # Check exceptions (suffix match for directory patterns)
     is_exception=false
     for pattern in "${EXCEPTIONS[@]}"; do
@@ -538,12 +538,12 @@ while IFS= read -r -d '' file; do
         fi
     done
     $is_exception && continue
-    
+
     # Check manifest registration
     if grep -qF "$rel" "$MANIFEST" 2>/dev/null; then
         continue
     fi
-    
+
     UNREGISTERED+=("$rel")
 done < <(find "$CORE_DIR" -name "*.sh" \
     -not -path "*/.backup/*" \

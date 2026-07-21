@@ -88,6 +88,7 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --tor-bridges-file)   export TOR_BRIDGES_FILE="$2"; shift 2 ;;
         --skip-tor-verify)    export SKIP_TOR_VERIFY="true"; shift ;;
+        --auto-reconcile)     export AUTO_RECONCILE="true"; shift ;;
         --) shift; break ;;
         -*) echo "[IMP:10][node-lifecycle][args] ERROR: Unknown argument: $1" >&2; exit 1 ;;
         *) break ;;

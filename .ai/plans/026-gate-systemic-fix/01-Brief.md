@@ -73,7 +73,7 @@ core/internal/deploy/reconcile-projects.sh → mode 100644 (должен быт�
 
 #### F2: `test_no_test_removed_without_changelog` [тривиальный]
 ```
-test_gate_zero_new_entrypoints удалён из test_gate_sequencing.py 
+test_gate_zero_new_entrypoints удалён из test_gate_sequencing.py
 без записи в test_inventory_changes.yaml
 ```
 **Причина:** тест удалён (вероятно, дублировал проверку, которая теперь в других gate-тестах), но changelog не обновлён.
@@ -99,7 +99,7 @@ Got:      'platform_domain:test.example.com', 'email:test@example.com', ...
 ```
 Valid node.yaml failed schema: [
   "'modules' is a required property",
-  "'context' is a required property", 
+  "'context' is a required property",
   "'owner_key' is a required property",
   "'type' is a required property",
   "Additional properties are not allowed ('branch' was unexpected)"
@@ -291,25 +291,25 @@ def _validate_test_fixtures():
     """
     test_data_dir = pathlib.Path(__file__).resolve().parent / "test_data"
     project_root = test_data_dir.parent.parent
-    
+
     errors = []
     for fixture_name, schema_relpath in _FIXTURE_SCHEMA_MAP.items():
         fixture_path = test_data_dir / fixture_name
         schema_path = project_root / schema_relpath
-        
+
         if not fixture_path.exists():
             continue  # Optional fixture — skip
-        
+
         with open(fixture_path) as f:
             data = yaml.safe_load(f)
         with open(schema_path) as f:
             schema = json.load(f)
-        
+
         try:
             jsonschema.validate(data, schema)
         except jsonschema.ValidationError as e:
             errors.append(f"  {fixture_path}: {e.message}")
-    
+
     if errors:
         pytest.exit(
             f"\n[IMP:10][sessionstart] Test fixture schema validation FAILED:\n"
@@ -422,7 +422,7 @@ EXCEPTIONS=(
 UNREGISTERED=()
 while IFS= read -r -d '' file; do
     rel="${file#$PROJECT_ROOT/}"
-    
+
     # Check exceptions
     is_exception=false
     for pattern in "${EXCEPTIONS[@]}"; do
@@ -433,12 +433,12 @@ while IFS= read -r -d '' file; do
         fi
     done
     $is_exception && continue
-    
+
     # Check manifest registration (delegates_to or hooks)
     if grep -q "$rel" "$MANIFEST" 2>/dev/null; then
         continue
     fi
-    
+
     UNREGISTERED+=("$rel")
 done < <(find "$CORE_DIR" -name "*.sh" \
     -not -path "*/.backup/*" \
