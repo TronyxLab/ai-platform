@@ -49,12 +49,19 @@ def _langfuse_credentials() -> tuple[str, str]:
 
 
 def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
-    import socket
+    """Check if langfuse HTTP endpoint responds (not just TCP port open).
 
+    ## @purpose — Docker Desktop port forwarding accepts TCP connections before the
+    ##            app inside the container has bound the port. A TCP-only check (socket
+    ##            connect) returns True even when the Node.js server hasn't started yet,
+    ##            causing RemoteDisconnected or ReadTimeout in subsequent requests.
+    ##            This version does an actual HTTP HEAD to verify the app is serving.
+    ## @io — ⎋ bool: True if HTTP endpoint responds (any status), False otherwise
+    """
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except (TimeoutError, ConnectionRefusedError, OSError):
+        resp = requests.get(f"http://{host}:{port}/api/public/health", timeout=timeout)
+        return True
+    except (requests.ConnectionError, requests.Timeout, ValueError):
         return False
 
 
