@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: pre-commit, inline-python3, block-new, language-policy, enforcement
+# STRUCTURE: ┌git diff --cached┐ → ◇ whitelist check → ◇ scan added lines for python3 -c/heredoc → ⎋ exit 0/1
 # region MODULE_CONTRACT
 ## @purpose  Pre-commit hook: блокирует добавление НОВЫХ inline-Python / heredoc в shell-файлах под core/.
 ##           Не трогает существующие (консолидация через Strangler-триггер).

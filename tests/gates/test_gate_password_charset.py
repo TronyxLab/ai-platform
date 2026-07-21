@@ -68,9 +68,6 @@ CHARSET_PATTERN: re.Pattern = re.compile(EXPECTED_CHARSET)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-
-
-
 def _read_file(path: pathlib.Path) -> str:
     """Read file content as text.
 

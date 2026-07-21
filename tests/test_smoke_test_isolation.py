@@ -16,9 +16,9 @@ import logging
 
 import pytest
 import yaml
-from tests.helpers.gate_helpers import repo_root
 
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 

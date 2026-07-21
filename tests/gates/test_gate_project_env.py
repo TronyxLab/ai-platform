@@ -28,9 +28,9 @@ import re
 
 import pytest
 import yaml
-from tests.helpers.gate_helpers import repo_root
 
 from tests._conftest.ldd import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 _PROJECTS_DIR = os.path.join(repo_root(), "projects")
 _PLATFORM_ENV_YAML = os.path.join(repo_root(), "platform-env.yaml")

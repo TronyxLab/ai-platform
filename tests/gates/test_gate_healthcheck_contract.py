@@ -14,6 +14,7 @@
 
 
 import pytest
+
 from tests.helpers.gate_helpers import repo_root
 
 MODULES_DIR = repo_root() / "core" / "modules"

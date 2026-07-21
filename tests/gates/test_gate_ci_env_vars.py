@@ -36,9 +36,6 @@ _HARDCODED_SECRET_PATTERN: re.Pattern = re.compile(
 # registered in platform-env.yaml (single source of truth). No exceptions.
 
 
-
-
-
 def _extract_platform_env_defaults() -> dict[str, str]:
     """Extract env_defaults from platform-env.yaml."""
     if not _PLATFORM_ENV_PATH.exists():

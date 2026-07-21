@@ -137,6 +137,17 @@ check_md_sh_refs() {
             continue
         fi
 
+        # 🧐 TRAP[BUG-FIX] · 2026-07-21 · Handle `lib/<name>.sh` references in prose
+        # · Reason: AGENTS.md / core/AGENTS.md reference libs as `lib/ssh.sh`, `lib/logging.sh`.
+        # ·   Validator above tries `core/lib/lib/ssh.sh` (wrong). Strip leading `lib/` prefix
+        # ·   and retry against core/lib/ to match the actual filesystem layout.
+        if [[ "$ref" == lib/* ]]; then
+            local stripped="${ref#lib/}"
+            if [ -f "core/lib/$stripped" ]; then
+                continue
+            fi
+        fi
+
         # Recursive search in core/internal/ (scripts can be at any depth)
         # 🧐 TRAP[BUG] · 2026-07-11 · SIGPIPE fix · обёртка в subshell с +o pipefail
         # · Reason: `set -o pipefail` + `grep -q` может вызвать SIGPIPE (141) —

@@ -70,9 +70,6 @@ _COMPOSITE_ACTION_PATTERN: re.Pattern = re.compile(r"uses:\s*\./\.github/actions
 _VERSION_REF_PATTERN: re.Pattern = re.compile(r"gitleaks[_-]?(\d+\.\d+\.\d+)")
 
 
-
-
-
 @pytest.mark.gate
 
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts

@@ -35,9 +35,9 @@ import re
 from pathlib import Path
 
 import pytest
-from tests.helpers.gate_helpers import repo_root
 
 from tests.conftest import ldd_trajectory
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 

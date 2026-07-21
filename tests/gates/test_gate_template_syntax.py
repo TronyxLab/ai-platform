@@ -17,9 +17,8 @@ import re
 
 import pytest
 from conftest import ldd_trajectory
+
 from tests.helpers.gate_helpers import repo_root
-
-
 
 # Compose runtime vars that are ALLOWED (Docker Compose runtime substitution)
 # These are NOT template placeholders — they are resolved at compose up time
