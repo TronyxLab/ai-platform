@@ -167,9 +167,7 @@ def test_deploy_project_validation_no_ai_platform_yaml(caplog, tmp_path: Path) -
         "ai-platform.yaml" in result.stderr,
     )
     assert result.returncode != 0, "Expected non-zero exit code for missing ai-platform.yaml"
-    assert "ai-platform.yaml" in result.stderr, (
-        f"stderr should mention 'ai-platform.yaml', got: {result.stderr}"
-    )
+    assert "ai-platform.yaml" in result.stderr, f"stderr should mention 'ai-platform.yaml', got: {result.stderr}"
 
     # ── LDD trajectory ─────────────────────────────────────────────────────
     found_imp9 = False
@@ -220,9 +218,7 @@ def test_deploy_project_validation_no_compose(caplog, tmp_path: Path) -> None:
         "[IMP:9][test_validate_no_compose] exit_code=%d",
         result.returncode,
     )
-    assert result.returncode != 0, (
-        "Expected non-zero exit code for missing compose file"
-    )
+    assert result.returncode != 0, "Expected non-zero exit code for missing compose file"
 
     found_imp9 = False
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -325,8 +321,8 @@ def test_extract_org_from_path(caplog, tmp_path: Path) -> None:
     logger.critical("[IMP:9][test_extract_org] stdout: %s", result.stdout.strip())
     assert result.returncode == 0, f"Script failed: {result.stderr}"
 
-    org_line = [l for l in result.stdout.splitlines() if l.startswith("ORG=")]
-    name_line = [l for l in result.stdout.splitlines() if l.startswith("PROJECT_NAME=")]
+    org_line = [line for line in result.stdout.splitlines() if line.startswith("ORG=")]
+    name_line = [line for line in result.stdout.splitlines() if line.startswith("PROJECT_NAME=")]
     assert len(org_line) == 1, f"Cannot find ORG= in output: {result.stdout}"
     assert len(name_line) == 1, f"Cannot find PROJECT_NAME= in output: {result.stdout}"
 
@@ -385,8 +381,8 @@ def test_extract_org_deep_path(caplog, tmp_path: Path) -> None:
     logger.critical("[IMP:9][test_extract_org_deep] stdout: %s", result.stdout.strip())
     assert result.returncode == 0, f"Script failed: {result.stderr}"
 
-    org_line = [l for l in result.stdout.splitlines() if l.startswith("ORG=")]
-    name_line = [l for l in result.stdout.splitlines() if l.startswith("PROJECT_NAME=")]
+    org_line = [line for line in result.stdout.splitlines() if line.startswith("ORG=")]
+    name_line = [line for line in result.stdout.splitlines() if line.startswith("PROJECT_NAME=")]
     assert len(org_line) == 1, f"Cannot find ORG= in output: {result.stdout}"
     assert len(name_line) == 1, f"Cannot find PROJECT_NAME= in output: {result.stdout}"
 
@@ -395,9 +391,7 @@ def test_extract_org_deep_path(caplog, tmp_path: Path) -> None:
 
     logger.critical("[IMP:9][test_extract_org_deep] ORG='%s' PROJECT_NAME='%s'", org, name)
     assert org == "myorg", f"Expected org=myorg (first segment after projects/), got '{org}'"
-    assert name == "subgroup", (
-        f"Expected PROJECT_NAME=subgroup (second segment after projects/), got '{name}'"
-    )
+    assert name == "subgroup", f"Expected PROJECT_NAME=subgroup (second segment after projects/), got '{name}'"
 
     found_imp9 = False
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -433,9 +427,7 @@ def test_deliver_org_project(caplog) -> None:
     #   Remove if: platform-deliver dispatch signature changes
     caplog.set_level(logging.WARNING)
 
-    logger.info(
-        "[IMP:7][test_deliver_org] Testing platform-deliver myorg myproject"
-    )
+    logger.info("[IMP:7][test_deliver_org] Testing platform-deliver myorg myproject")
 
     result = subprocess.run(
         [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "myorg", "myproject"],
@@ -493,9 +485,7 @@ def test_deliver_project_only(caplog) -> None:
     #   Remove if: 1-arg platform-deliver format removed
     caplog.set_level(logging.WARNING)
 
-    logger.info(
-        "[IMP:7][test_deliver_legacy] Testing platform-deliver myproject (backward compat)"
-    )
+    logger.info("[IMP:7][test_deliver_legacy] Testing platform-deliver myproject (backward compat)")
 
     result = subprocess.run(
         [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "myproject"],
@@ -552,9 +542,7 @@ def test_deliver_org_validation(caplog) -> None:
     #   Remove if: org '/' validation removed from parse_ssh_command
     caplog.set_level(logging.WARNING)
 
-    logger.info(
-        "[IMP:7][test_deliver_validation] Testing platform-deliver my/org myproject (invalid org)"
-    )
+    logger.info("[IMP:7][test_deliver_validation] Testing platform-deliver my/org myproject (invalid org)")
 
     result = subprocess.run(
         [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "my/org", "myproject"],
@@ -568,9 +556,7 @@ def test_deliver_org_validation(caplog) -> None:
         result.returncode,
         result.stderr.strip(),
     )
-    assert result.returncode != 0, (
-        "Expected non-zero exit code for org containing '/'"
-    )
+    assert result.returncode != 0, "Expected non-zero exit code for org containing '/'"
     assert "/" in result.stderr or "invalid" in result.stderr.lower(), (
         f"stderr should mention org validation error, got: {result.stderr}"
     )

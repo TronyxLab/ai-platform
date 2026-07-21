@@ -394,12 +394,12 @@ TASK-T2 ──────────────────────┘   
 3. **deploy-project.yml:76-83** — обновить deliver step:
    - Добавить `org` в `inputs:` (необязательный, default: "")
    - `tar czf - $FILES | ssh ... "platform-deliver ${{ inputs.org }} ${{ inputs.project_name }}"`
-   - Если org пустой → `platform-deliver  dance-site` (два пробела подряд). 
+   - Если org пустой → `platform-deliver  dance-site` (два пробела подряд).
      **Важно:** обработка двойного пробела: `xargs` в parse_ssh_command схлопнет двойной пробел в одиночный → старый формат корректно распознается.
    - Альтернативно: conditional `${{ inputs.org && format('{0} {1}', inputs.org, inputs.project_name) || inputs.project_name }}`
 
 4. **node-lifecycle.sh:340-363 `step_6b_create_projects_base()`** — проверить:
-   - Текущая реализация создаёт `/opt/projects` и chown ci-deploy. 
+   - Текущая реализация создаёт `/opt/projects` и chown ci-deploy.
    - Org-поддиректории создаются динамически в `handle_deliver()` через `mkdir -p`.
    - **Изменение:** добавить документацию в comment что org-директории создаются при первом platform-deliver.
    - Без логических изменений (существующий `mkdir -p /opt/projects` + `chown ci-deploy:ci-deploy` достаточен).

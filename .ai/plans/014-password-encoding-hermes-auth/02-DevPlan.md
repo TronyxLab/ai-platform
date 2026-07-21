@@ -37,9 +37,9 @@
 
 # DevPlan — Wave 014: Password Charset Constraint & Unified Auth Credential Propagation
 
-**Plan:** 02-DevPlan.md  
-**Parent:** 01-Brief.md  
-**Created:** 2026-07-21  
+**Plan:** 02-DevPlan.md
+**Parent:** 01-Brief.md
+**Created:** 2026-07-21
 **Task size:** STANDARD (11 files, business logic, no new architectural decisions)
 
 ---
@@ -165,9 +165,9 @@
 ## 3. $TASKS
 
 ### TASK-1: secrets-manifest.yaml — charset field
-**Priority:** HIGH  
-**Dependencies:** None  
-**Complexity:** 3  
+**Priority:** HIGH
+**Dependencies:** None
+**Complexity:** 3
 **Output:** `core/secrets-manifest.yaml` — все password-секреты получают поле `charset`
 
 **Acceptance Criteria:**
@@ -184,9 +184,9 @@
 ---
 
 ### TASK-2: deploy-modules.sh — charset validation
-**Priority:** HIGH  
-**Dependencies:** TASK-1 (manifest должен иметь charset поля)  
-**Complexity:** 5  
+**Priority:** HIGH
+**Dependencies:** TASK-1 (manifest должен иметь charset поля)
+**Complexity:** 5
 **Output:** `core/internal/bootstrap/deploy-modules.sh` — новая функция `_validate_secret_charsets()`
 
 **Acceptance Criteria:**
@@ -204,9 +204,9 @@
 ---
 
 ### TASK-3: .env.example — CONSTRAINT comments
-**Priority:** MEDIUM  
-**Dependencies:** None  
-**Complexity:** 2  
+**Priority:** MEDIUM
+**Dependencies:** None
+**Complexity:** 2
 **Output:** `.env.example` — унифицированные CONSTRAINT-комментарии
 
 **Acceptance Criteria:**
@@ -223,9 +223,9 @@
 ---
 
 ### TASK-4: hermes-agent compose — remove fallback
-**Priority:** HIGH  
-**Dependencies:** None  
-**Complexity:** 1  
+**Priority:** HIGH
+**Dependencies:** None
+**Complexity:** 1
 **Output:** `core/modules/hermes-agent/docker-compose.base.yml` — строка 110 без fallback
 
 **Acceptance Criteria:**
@@ -239,9 +239,9 @@
 ---
 
 ### TASK-5: secrets-init.sh — new file
-**Priority:** HIGH  
-**Dependencies:** None  
-**Complexity:** 4  
+**Priority:** HIGH
+**Dependencies:** None
+**Complexity:** 4
 **Output:** `core/internal/bootstrap/secrets-init.sh` — новый файл
 
 **Acceptance Criteria:**
@@ -260,9 +260,9 @@
 ---
 
 ### TASK-6: node-lifecycle.sh — integrate secrets-init.sh
-**Priority:** HIGH  
-**Dependencies:** TASK-5 (secrets-init.sh должен существовать)  
-**Complexity:** 2  
+**Priority:** HIGH
+**Dependencies:** TASK-5 (secrets-init.sh должен существовать)
+**Complexity:** 2
 **Output:** `core/internal/bootstrap/node-lifecycle.sh` — вызов secrets-init.sh после ensure-secrets
 
 **Acceptance Criteria:**
@@ -277,9 +277,9 @@
 ---
 
 ### TASK-7: context-init.sh — TRAP note
-**Priority:** LOW  
-**Dependencies:** None  
-**Complexity:** 1  
+**Priority:** LOW
+**Dependencies:** None
+**Complexity:** 1
 **Output:** `core/internal/scaffold/context-init.sh` — TRAP-комментарий о secrets-init
 
 **Acceptance Criteria:**
@@ -294,9 +294,9 @@
 ---
 
 ### TASK-8: test_gate_password_charset.py — new gate test
-**Priority:** HIGH  
-**Dependencies:** TASK-1 (manifest charset), TASK-4 (compose без fallback)  
-**Complexity:** 5  
+**Priority:** HIGH
+**Dependencies:** TASK-1 (manifest charset), TASK-4 (compose без fallback)
+**Complexity:** 5
 **Output:** `tests/gates/test_gate_password_charset.py` — 4 тестовые функции
 
 **Acceptance Criteria:**
@@ -324,9 +324,9 @@
 ---
 
 ### TASK-9: test_pgbouncer_static.py — charset constraint awareness
-**Priority:** MEDIUM  
-**Dependencies:** TASK-4 (compose changes)  
-**Complexity:** 2  
+**Priority:** MEDIUM
+**Dependencies:** TASK-4 (compose changes)
+**Complexity:** 2
 **Output:** `tests/test_pgbouncer_static.py` — новый тест
 
 **Acceptance Criteria:**
@@ -342,9 +342,9 @@
 ---
 
 ### TASK-10: entrypoint-manifest.yaml — register gate test
-**Priority:** HIGH  
-**Dependencies:** TASK-8 (gate test file must exist)  
-**Complexity:** 1  
+**Priority:** HIGH
+**Dependencies:** TASK-8 (gate test file must exist)
+**Complexity:** 1
 **Output:** `core/entrypoint-manifest.yaml` — запись в секции `gates`
 
 **Acceptance Criteria:**

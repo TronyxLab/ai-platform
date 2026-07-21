@@ -51,14 +51,16 @@ HERMES_COMPOSE: pathlib.Path = PLATFORM_ROOT / "core" / "modules" / "hermes-agen
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 # The 6 URL-password secrets that must have charset constraint in manifest
-URL_PASSWORD_NAMES: frozenset[str] = frozenset({
-    "POSTGRES_PASSWORD",
-    "CLICKHOUSE_PASSWORD",
-    "MINIO_ROOT_USER",
-    "MINIO_ROOT_PASSWORD",
-    "S3_ACCESS_KEY",
-    "S3_SECRET_KEY",
-})
+URL_PASSWORD_NAMES: frozenset[str] = frozenset(
+    {
+        "POSTGRES_PASSWORD",
+        "CLICKHOUSE_PASSWORD",
+        "MINIO_ROOT_USER",
+        "MINIO_ROOT_PASSWORD",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+    }
+)
 
 EXPECTED_CHARSET: str = r"^[A-Za-z0-9._-]+$"
 CHARSET_PATTERN: re.Pattern = re.compile(EXPECTED_CHARSET)
@@ -143,9 +145,7 @@ def test_secrets_manifest_charset_defined_for_url_passwords(caplog) -> None:
         charset = entry.get("charset", "")
 
         if charset != EXPECTED_CHARSET:
-            violations.append(
-                f"Secret '{secret_name}' has charset='{charset}' (expected '{EXPECTED_CHARSET}')"
-            )
+            violations.append(f"Secret '{secret_name}' has charset='{charset}' (expected '{EXPECTED_CHARSET}')")
             logger.error(
                 "[IMP:10][test_manifest_charset] '%s' charset mismatch: got '%s', expected '%s'",
                 secret_name,
@@ -179,15 +179,18 @@ def test_secrets_manifest_charset_defined_for_url_passwords(caplog) -> None:
 
 # region test_password_charset_validation
 @pytest.mark.gate
-@pytest.mark.parametrize("special_password,should_fail", [
-    ("SkyNet!!%)", True),          # original problematic password
-    ("pass#hash", True),           # # in password
-    ("pwd with space", True),      # space
-    ("pass/with/slash", True),     # slash
-    ("valid-pass_123.abc", False), # valid: alphanumeric + . _ -
-    ("openssl_rand_hex_32", False),# typical hex (letters + underscore)
-    ("simple", False),             # letters only
-])
+@pytest.mark.parametrize(
+    "special_password,should_fail",
+    [
+        ("SkyNet!!%)", True),  # original problematic password
+        ("pass#hash", True),  # # in password
+        ("pwd with space", True),  # space
+        ("pass/with/slash", True),  # slash
+        ("valid-pass_123.abc", False),  # valid: alphanumeric + . _ -
+        ("openssl_rand_hex_32", False),  # typical hex (letters + underscore)
+        ("simple", False),  # letters only
+    ],
+)
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Charset regex must reject special
 #     characters (!#%) and accept safe characters (alphanumeric, dot, underscore, hyphen)
 # · Last fail: "SkyNet!!%)" was the original production-bug password that broke pgbouncer
@@ -300,8 +303,7 @@ def test_no_db_url_contains_raw_postgres_password_without_encoded(caplog) -> Non
             f"POSTGRES_PASSWORD_ENCODED_FOUND: {len(found_violations)} occurrence(s) "
             "of POSTGRES_PASSWORD_ENCODED in compose files:"
         ]
-        for v in found_violations:
-            msg_lines.append(f"  • {v}")
+        msg_lines.extend(f"  • {v}" for v in found_violations)
         msg = "\n".join(msg_lines)
         logger.error("[IMP:10][test_no_encoded] %s", msg)
         pytest.fail(msg)
@@ -356,9 +358,7 @@ def test_hermes_compose_has_no_fallback(caplog) -> None:
         logger.error("[IMP:10][test_hermes_fallback] %s", msg)
         pytest.fail(msg)
 
-    logger.info(
-        "[IMP:9][test_hermes_fallback] ✓ No fallback ':-${PLATFORM_MASTER_PASSWORD}' found in compose"
-    )
+    logger.info("[IMP:9][test_hermes_fallback] ✓ No fallback ':-${PLATFORM_MASTER_PASSWORD}' found in compose")
 
     # Check 2: ${HERMES_DASHBOARD_PASSWORD} variable IS present
     var_pattern = "${HERMES_DASHBOARD_PASSWORD}"
@@ -371,9 +371,7 @@ def test_hermes_compose_has_no_fallback(caplog) -> None:
         logger.error("[IMP:10][test_hermes_fallback] %s", msg)
         pytest.fail(msg)
 
-    logger.info(
-        "[IMP:9][test_hermes_fallback] ✓ '${HERMES_DASHBOARD_PASSWORD}' variable present in compose"
-    )
+    logger.info("[IMP:9][test_hermes_fallback] ✓ '${HERMES_DASHBOARD_PASSWORD}' variable present in compose")
 
     logger.info("[IMP:9][test_hermes_fallback] PASS — hermes-agent compose has no fallback chain")
 

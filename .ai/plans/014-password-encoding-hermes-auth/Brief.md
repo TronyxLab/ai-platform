@@ -49,10 +49,10 @@
 
 # Brief — Password Charset Constraint & Unified Auth Credential Propagation
 
-**Wave:** 014  
-**Status:** Draft  
-**Created:** 2026-07-21  
-**Updated:** 2026-07-21 (Option A collapse + explicit assignment decision)  
+**Wave:** 014
+**Status:** Draft
+**Created:** 2026-07-21
+**Updated:** 2026-07-21 (Option A collapse + explicit assignment decision)
 **Source:** STRESS_TEST_REPORT.md (2026-07-20, tronyx-vps)
 
 ---
