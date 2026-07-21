@@ -30,7 +30,7 @@ def deploy_script() -> Path:
 
 
 # region FUNC_test_ping_verb_returns_pong
-@pytest.mark.static
+@pytest.mark.static_audit
 def test_ping_verb_returns_pong(caplog, deploy_script: Path) -> None:
     """Verify parse_verb "ping" returns "pong" and exits 0.
 
@@ -53,13 +53,19 @@ def test_ping_verb_returns_pong(caplog, deploy_script: Path) -> None:
     assert script_path.exists(), f"deploy.sh not found at {script_path}"
 
     result = subprocess.run(
-        ["bash", "-c", f"""
+        [
+            "bash",
+            "-c",
+            f"""
 set -euo pipefail
 SSH_ORIGINAL_COMMAND="ping" \
 PATHS_INTERNAL_DIR=/tmp \
 source "{script_path}" 2>&1
-"""],
-        capture_output=True, text=True, timeout=10,
+""",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
 
     stdout = result.stdout
@@ -69,16 +75,11 @@ source "{script_path}" 2>&1
     if stderr:
         print(f"[IMP:8][test] ping stderr: {stderr.strip()}")
 
-    assert "pong" in stdout, (
-        f"parse_verb did not return 'pong' for ping verb\n"
-        f"stdout: {stdout}\n"
-        f"stderr: {stderr}"
-    )
+    assert "pong" in stdout, f"parse_verb did not return 'pong' for ping verb\nstdout: {stdout}\nstderr: {stderr}"
 
     # Exit code 0 — parse_verb calls exit 0 after printing "pong"
     assert result.returncode == 0, (
-        f"parse_verb exit code for ping was {result.returncode}, expected 0\n"
-        f"stdout: {stdout}"
+        f"parse_verb exit code for ping was {result.returncode}, expected 0\nstdout: {stdout}"
     )
 
     print("[IMP:9][test] ping verb: OK — returned 'pong' with exit 0")
@@ -88,11 +89,13 @@ source "{script_path}" 2>&1
         if "[IMP:" in record.message:
             print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+
 # endregion FUNC_test_ping_verb_returns_pong
 
 
 # region FUNC_test_exit_verb_returns_zero
-@pytest.mark.static
+@pytest.mark.static_audit
 def test_exit_verb_returns_zero(caplog, deploy_script: Path) -> None:
     """Verify parse_verb "exit" exits 0 (no-op success).
 
@@ -115,13 +118,19 @@ def test_exit_verb_returns_zero(caplog, deploy_script: Path) -> None:
     assert script_path.exists(), f"deploy.sh not found at {script_path}"
 
     result = subprocess.run(
-        ["bash", "-c", f"""
+        [
+            "bash",
+            "-c",
+            f"""
 set -euo pipefail
 SSH_ORIGINAL_COMMAND="exit" \
 PATHS_INTERNAL_DIR=/tmp \
 source "{script_path}" 2>&1
-"""],
-        capture_output=True, text=True, timeout=10,
+""",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
 
     stdout = result.stdout
@@ -133,8 +142,7 @@ source "{script_path}" 2>&1
 
     # Exit code 0 — parse_verb calls exit 0 (no-op success, no stdout)
     assert result.returncode == 0, (
-        f"parse_verb exit code for 'exit' was {result.returncode}, expected 0\n"
-        f"stdout: {stdout}"
+        f"parse_verb exit code for 'exit' was {result.returncode}, expected 0\nstdout: {stdout}"
     )
 
     print("[IMP:9][test] exit verb: OK — exit code 0")
@@ -144,4 +152,6 @@ source "{script_path}" 2>&1
         if "[IMP:" in record.message:
             print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+
 # endregion FUNC_test_exit_verb_returns_zero

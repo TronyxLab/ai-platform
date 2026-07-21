@@ -90,7 +90,7 @@ repos:
         files: '\.(py|yaml|yml|sh|md)$'
         # exclude: test_data/ are test fixtures, not source docs — adding doc headers
         # would break tests that parse these files for exact content match.
-        exclude: ^\.kilo/|^\.ai/|^\.pytest_cache/|^tests/test_data/
+        exclude: ^\.kilo/|^\.ai/|^\.pytest_cache/|^tests/test_data/|^reports/
         stages: [pre-commit]
 
       - id: name-linter

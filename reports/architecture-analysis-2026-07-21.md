@@ -1,3 +1,5 @@
+# GREP_SUMMARY: architecture-analysis, ai-platform, bash-python-makefile, modules, tests, CI/CD, deploy, drift
+# STRUCTURE: ┌analysis headers┐ → ◇ methodology → ◇ findings (baseline, drift, P-catalog, recommendations) → ⊕ appendix
 # ARCHITECTURE ANALYSIS REPORT — ai-platform v1.0.0
 
 **Дата анализа:** 2026-07-21
@@ -150,8 +152,8 @@ Trade-offs: +Минимальные риски. −Техдолг растёт (
 Best when: Команда близка к выгоранию / критичен time-to-market.
 
 ### Option D: "Bash Cleanup + new lib layer" [score: 5/10]
-Approach: Не мигрировать. Извлечь бойлерплейт в `lib/args.sh`, `lib/ssh.sh`,
-  `lib/yaml.sh`, ввести shellcheck-strict, типизировать через comments.
+Approach: Не мигрировать. Извлечь бойлерплейт в lib/args.sh, lib/ssh.sh,
+  lib/yaml.sh, ввести shellcheck-strict, типизировать через comments.
 Trade-offs: +Минимальные изменения. −Не решает embedded-Python, −Bash-ceiling
   остаётся. −Сложность топ-3 скриптов не падает существенно.
 Best when: Решение «остаться на bash навсегда» принято сознательно.
@@ -328,9 +330,9 @@ Rationale: P02 (CRITICAL) — 1 день работы, бесконечный RO
 
 | # | Что | Где (файл) | Почему ценно | Усилие |
 |---|-----|------------|--------------|--------|
-| **E1** | `lib/ssh.sh` — единый SSH-фасад с `timeout`-обёрткой и `SSH_OPTS` константой | `core/lib/ssh.sh` (новый) | Закрывает P02 (SSH timeout) + P10 (SSH-opts duplication: scp-deliver.sh ×2, remove-project.sh ×2, project-list.sh) + P14 (verify-domains log_imp clone) | ~80 строк, 1 день |
+| **E1** | lib/ssh.sh — единый SSH-фасад с `timeout`-обёрткой и `SSH_OPTS` константой | core/lib/ssh.sh (новый) | Закрывает P02 (SSH timeout) + P10 (SSH-opts duplication: scp-deliver.sh ×2, remove-project.sh ×2, project-list.sh) + P14 (verify-domains log_imp clone) | ~80 строк, 1 день |
 | **E2** | `tests/helpers/gate_helpers.py` — `load_yaml()`, `repo_root()`, `module_yaml_paths()`, `assert_ldd_imp9()` | `tests/helpers/gate_helpers.py` (новый) | Закрывает 25-30% boilerplate в gates (53 `PROJECT_ROOT` объявлений, 5 копий `_load_yaml`), унифицирует `ldd_trajectory` import-style | ~120 строк, 2 дня |
-| **E3** | `lib/args.sh` — стандартизированный `parse_args` + `usage`-хелпер | `core/lib/args.sh` (новый) | Закрывает P10: 14 копий `usage()`, 8 копий `parse_args`, 15+ скриптов с `while [[ $# -gt 0 ]]`. Шаблон: `parse_args "u:username:,p:port:" "$@"` | ~100 строк, 2 дня |
+| **E3** | lib/args.sh — стандартизированный `parse_args` + `usage`-хелпер | core/lib/args.sh (новый) | Закрывает P10: 14 копий `usage()`, 8 копий `parse_args`, 15+ скриптов с `while [[ $# -gt 0 ]]`. Шаблон: `parse_args "u:username:,p:port:" "$@"` | ~100 строк, 2 дня |
 | **E4** | CI composite `setup-platform` — объедини `checkout` + `setup-python-venv` + `setup-gitleaks` + `provisioner-call` | `.github/actions/setup-platform/action.yml` (новый) | Закрывает P15: 10 вхождений `checkout`, 3× `setup-python-venv`, 3× `setup-gitleaks`, 4× `provisioner-call`. CI setup −30s на каждый workflow | ~50 строк, 1 день |
 | **E5** | R4-fix script: `_conftest/honesty.py` с `require_docker_or_fail()` фикстурой | `tests/_conftest/honesty.py` (новый) | Закрывает P01 (R4) для всех 16-18 нарушений. Заменяет `pytest.skip("Docker not available")` → `pytest.fail(...)` через единый helper | ~60 строк, 1 день |
 | **E6** | D5-validator script: `core/internal/scripts/validate_module_yaml.py` | `core/internal/scripts/validate_module_yaml.py` (новый, jsonschema уже в deps) | Закрывает P06 (AGE_SECRET_KEY), P07 (${VAR:?}=0), restart-drift (postgres). Валидирует все module.yaml на CI | ~180 строк, 3 дня |
@@ -417,8 +419,8 @@ Rationale: P02 (CRITICAL) — 1 день работы, бесконечный RO
 
 | Фаза | Что | Усилия | Выигрыш | Зависимости |
 |------|-----|--------|---------|-------------|
-| **Q1 2026 (Foundation)** | E1 (`lib/ssh.sh`) + E4 (`setup-platform` composite) + E5 (`honesty.py`) + E7 (audit_log wrapper) + P02 (SSH timeouts) + P11 (audit-trail) | ~3 недели | Закрывает P01, P02, P10 (частично), P11, P15. ROI: CI hangs устранены, false-green → real-fail | Нет |
-| **Q1-Q2 2026 (Honesty Wave)** | E2 (`gate_helpers.py`) + R4-fix (16-18 тестов) + R5-fix (3 `_negative` пары) + E3 (`lib/args.sh`) | ~4 недели | Закрывает P01 (полностью), P04, P10 (полностью). −400 строк бойлерплейта | Q1 Foundation |
+| **Q1 2026 (Foundation)** | E1 (lib/ssh.sh) + E4 (`setup-platform` composite) + E5 (`honesty.py`) + E7 (audit_log wrapper) + P02 (SSH timeouts) + P11 (audit-trail) | ~3 недели | Закрывает P01, P02, P10 (частично), P11, P15. ROI: CI hangs устранены, false-green → real-fail | Нет |
+| **Q1-Q2 2026 (Honesty Wave)** | E2 (`gate_helpers.py`) + R4-fix (16-18 тестов) + R5-fix (3 `_negative` пары) + E3 (lib/args.sh) | ~4 недели | Закрывает P01 (полностью), P04, P10 (полностью). −400 строк бойлерплейта | Q1 Foundation |
 | **Q2-Q3 2026 (Contract Strengthening)** | E6 (`D5-validator`) + P06 (AGE_SECRET_KEY в .env.example) + P07 (`${VAR:?}` для критичных vars) + P08 (`restart: no` в test compose) | ~5 недель | Закрывает P06, P07, P08. Module contract D4 → D5 | Q1-Q2 Honesty |
 | **Q3-Q4 2026 (Strangler Wave 1)** | P12 (извлечение embedded-Python из deploy-modules.sh + converge.sh) + P03 (декомпозиция deploy-modules.sh по 5 ответственностям) + Option A (Makefile include-split) | ~8 недель | Закрывает P03 (частично), P09, P12. −270 строк embedded-Python → тестируемые модули | Q2-Q3 Contract |
 | **Q1-Q2 2027 (Strangler Wave 2)** | P05 (transactional deploy_docker_group) + P13 (converge → K8s-parity 7/10) + Q3-Q4 2026 evaluation по top-3 скриптам | ~10 недель | Закрывает P05, P13. Decision point для дальнейшей миграции | Q3-Q4 Strangler 1 |
@@ -431,7 +433,7 @@ Rationale: P02 (CRITICAL) — 1 день работы, бесконечный RO
 
 | ID | Риск Proposed Change | Likelihood | Impact | Mitigation |
 |----|---------------------|------------|--------|------------|
-| **R-RISK-1** | E1 (`lib/ssh.sh`) ломает существующие SSH-вызовы в remote-CMD | M | H | Ввести в `_test_ssh.sh` unit-test, прогнать на staging-ноде перед merge |
+| **R-RISK-1** | E1 (lib/ssh.sh) ломает существующие SSH-вызовы в remote-CMD | M | H | Ввести в _test_ssh.sh unit-test, прогнать на staging-ноде перед merge |
 | **R-RISK-2** | R4-fix (skip → fail) временно ломает CI на staging (отсутствие Docker) | H | M | Поэтапно: сначала `pytest.mark.requires_docker` → потом `xfail(strict=False)` → потом `fail` |
 | **R-RISK-3** | D5-validator (E6) находит 10+ новых нарушений в существующих module.yaml | H | L (это хорошо!) | Зафиксировать как technical-debt-tracking, не блокирующий merge валидатора |
 | **R-RISK-4** | Makefile include-split ломает tab-sensitive parsing | M | H | CI gate на `make -n <target>` для каждого `.PHONY` до/после split |

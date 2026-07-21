@@ -36,6 +36,7 @@ def _module_contract():
 
 import logging
 import os
+from pathlib import Path
 import platform
 import subprocess
 import time
@@ -55,6 +56,10 @@ ENV = {
 }
 
 # Hermes env — separate project name to avoid orphan conflicts
+# @rationale PLATFORM_ROOT points to project root so Docker build context resolves correctly
+#   even when /opt/platform does not exist locally (dev environment).
+_PLATFORM_ROOT: str = os.environ.get("PLATFORM_ROOT", "/Users/tronyx/projects/ai-platform")
+
 ENV_HERMES = {
     "PLATFORM_DOMAIN": "test.local",
     "COMPOSE_PROJECT_NAME": COMPOSE_PROJECT_HERMES,
@@ -63,6 +68,7 @@ ENV_HERMES = {
     "OPENAI_API_KEY": "sk-test-not-for-production",
     "CONTEXT_IMAGE": os.environ.get("CONTEXT_IMAGE", "ghcr.io/tronyxlab/hermes-agent-context:latest"),
     "HERMES_DASHBOARD_PASSWORD": "testpass",
+    "PLATFORM_ROOT": _PLATFORM_ROOT,
 }
 
 # Volume bind-mount directories that must exist before compose up

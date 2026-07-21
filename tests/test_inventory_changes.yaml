@@ -25,6 +25,24 @@
 
 removed:
 
+  # ── DevPlan 001 (TASK-4.2): vps-readiness tests consolidated into single test ──
+  - nodeid: "tests/test_vps_readiness.py::test_vps_readiness_empty_node"
+    reason: "TASK-4.2: vps-readiness.sh rewritten — 4 old tests replaced by single test_ping_check_uses_pong. The old tests tested removed API (empty_node, json_mode, no_host_map, source_ok)."
+    issue: "001-deploy-pipeline-hardening TASK-4.2"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_vps_readiness.py::test_vps_readiness_json_mode"
+    reason: "Same as above — consolidated into test_ping_check_uses_pong."
+    issue: "001-deploy-pipeline-hardening TASK-4.2"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_vps_readiness.py::test_vps_readiness_no_host_map"
+    reason: "Same as above — consolidated into test_ping_check_uses_pong."
+    issue: "001-deploy-pipeline-hardening TASK-4.2"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_vps_readiness.py::test_vps_readiness_source_ok"
+    reason: "Same as above — consolidated into test_ping_check_uses_pong."
+    issue: "001-deploy-pipeline-hardening TASK-4.2"
+    approved_by: "@tronyx"
+
   # ── DevPlan 021 (TASK-T1/T3): deploy.sh excluded from entrypoint testing ──
   - nodeid: "tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_deploy]"
     reason: "021-deploy-direct-hotfix T1/T3: deploy.sh is SSH forced-command entrypoint on VPS — not called from Makefile directly. Registered as shebang exception, not a canonical entrypoint."

@@ -14,7 +14,6 @@
 ## @changes 2026-07-21 | Initial implementation (DevPlan 001)
 # endregion MODULE_CONTRACT
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -27,7 +26,7 @@ def vps_readiness_script() -> Path:
 
 
 # region FUNC_test_ping_check_uses_pong
-@pytest.mark.static
+@pytest.mark.static_audit
 def test_ping_check_uses_pong(caplog, vps_readiness_script: Path) -> None:
     """Verify vps-readiness check 2 uses "ping" command and expects "pong".
 
@@ -55,18 +54,17 @@ def test_ping_check_uses_pong(caplog, vps_readiness_script: Path) -> None:
     # the SSH command pattern itself.
     assert '"ping" 2>&1' in script_text, (
         "TASK-4.2 not implemented: SSH command should use 'ping' verb, not 'platform-deliver --ping'\n"
-        "Expected pattern: ssh ... \"ping\" 2>&1"
+        'Expected pattern: ssh ... "ping" 2>&1'
     )
 
     # Verify grep expects exact "pong" (was case-insensitive multi-pattern grep -qi "pong|PONG|ready")
     assert 'grep -q "pong"' in script_text, (
-        "TASK-4.2 not implemented: grep pattern should be exact 'pong' match\n"
-        "Expected: grep -q \"pong\""
+        "TASK-4.2 not implemented: grep pattern should be exact 'pong' match\nExpected: grep -q \"pong\""
     )
 
     # The old grep pattern must NOT be present in the check 2 section
     # (grep -qi with multi-pattern was replaced with grep -q "pong")
-    assert 'grep -qi' not in script_text, (
+    assert "grep -qi" not in script_text, (
         "TASK-4.2 not fully implemented: old case-insensitive grep pattern 'grep -qi' still present"
     )
 
@@ -77,4 +75,6 @@ def test_ping_check_uses_pong(caplog, vps_readiness_script: Path) -> None:
         if "[IMP:" in record.message:
             print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+
 # endregion FUNC_test_ping_check_uses_pong

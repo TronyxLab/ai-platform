@@ -30,7 +30,7 @@ def deploy_modules_script() -> Path:
 
 
 # region FUNC_test_compose_args_has_platform_env
-@pytest.mark.static
+@pytest.mark.static_audit
 def test_compose_args_has_platform_env(caplog, deploy_modules_script: Path) -> None:
     """Verify deploy_docker_module passes --env-file for platform .env.
 
@@ -72,9 +72,7 @@ def test_compose_args_has_platform_env(caplog, deploy_modules_script: Path) -> N
     )
 
     # Verify PLATFORM_ROOT fallback
-    assert 'PLATFORM_ROOT:-/opt/platform' in script_text, (
-        "Missing PLATFORM_ROOT fallback for platform .env path"
-    )
+    assert "PLATFORM_ROOT:-/opt/platform" in script_text, "Missing PLATFORM_ROOT fallback for platform .env path"
 
     print(f"[IMP:9][test] compose_args has platform_env: OK — --env-file found at byte offset {platform_idx}")
 
@@ -83,11 +81,13 @@ def test_compose_args_has_platform_env(caplog, deploy_modules_script: Path) -> N
         if "[IMP:" in record.message:
             print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+
 # endregion FUNC_test_compose_args_has_platform_env
 
 
 # region FUNC_test_prepull_skips_local_build
-@pytest.mark.static
+@pytest.mark.static_audit
 def test_prepull_skips_local_build(caplog, deploy_modules_script: Path, tmp_path: Path) -> None:
     """Verify _pre_pull_images skips modules with build: section in compose file.
 
@@ -109,9 +109,7 @@ def test_prepull_skips_local_build(caplog, deploy_modules_script: Path, tmp_path
     script_text = deploy_modules_script.read_text()
 
     # Check '^\s\+build:' grep pattern exists in _pre_pull_images region
-    assert "build:" in script_text, (
-        "Missing build: check in _pre_pull_images — TASK-1.2 not implemented"
-    )
+    assert "build:" in script_text, "Missing build: check in _pre_pull_images — TASK-1.2 not implemented"
 
     # Verify the skip pattern is present
     assert "grep -q" in script_text, "Missing grep -q pattern for build: detection"
@@ -128,8 +126,14 @@ def test_prepull_skips_local_build(caplog, deploy_modules_script: Path, tmp_path
 
     # Test the grep pattern against the mock compose file
     result = subprocess.run(
-        ["bash", "-c", f'if grep -q \'^[[:space:]]\\+build:\' "{mock_compose}" 2>/dev/null; then echo "BUILD_FOUND"; else echo "BUILD_NOT_FOUND"; fi'],
-        capture_output=True, text=True, timeout=10,
+        [
+            "bash",
+            "-c",
+            f'if grep -q \'^[[:space:]]\\+build:\' "{mock_compose}" 2>/dev/null; then echo "BUILD_FOUND"; else echo "BUILD_NOT_FOUND"; fi',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert "BUILD_FOUND" in result.stdout, (
         f"Grep pattern '^\\\\s\\\\+build:' failed to detect build: in mock compose\n"
@@ -145,12 +149,17 @@ def test_prepull_skips_local_build(caplog, deploy_modules_script: Path, tmp_path
 """)
 
     result_neg = subprocess.run(
-        ["bash", "-c", f'if grep -q \'^[[:space:]]\\+build:\' "{mock_no_build}" 2>/dev/null; then echo "BUILD_FOUND"; else echo "BUILD_NOT_FOUND"; fi'],
-        capture_output=True, text=True, timeout=10,
+        [
+            "bash",
+            "-c",
+            f'if grep -q \'^[[:space:]]\\+build:\' "{mock_no_build}" 2>/dev/null; then echo "BUILD_FOUND"; else echo "BUILD_NOT_FOUND"; fi',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert "BUILD_NOT_FOUND" in result_neg.stdout, (
-        f"Grep pattern falsely matched file without build: section\n"
-        f"stdout: {result_neg.stdout}"
+        f"Grep pattern falsely matched file without build: section\nstdout: {result_neg.stdout}"
     )
 
     print("[IMP:9][test] pre-pull skip for local build: OK — grep pattern correctly detects build: section")
@@ -161,4 +170,6 @@ def test_prepull_skips_local_build(caplog, deploy_modules_script: Path, tmp_path
         if "[IMP:" in record.message:
             print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+
 # endregion FUNC_test_prepull_skips_local_build

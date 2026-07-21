@@ -28,6 +28,10 @@ source "${SCRIPT_DIR}/../../lib/paths.sh"
 source "${SCRIPT_DIR}/../../internal/audit/audit.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../../lib/docker.sh"
 
+# ── L1 base image constants (DR backup via GHCR, see hermes-push-l1 in Makefile) ──
+readonly L1_BASE_IMAGE="hermes-agent-base"
+readonly GHCR_ORG="ghcr.io/tronyx161"
+
 # 🧐 TRAP[DECISION] · 2026-07-09 · — · Staging via separate compose project, not --with-staging flag
 # · Rejected: --with-staging flag in deploy-modules.sh · Reason: staging uses separate compose project
 #   (staging-<name>) with +10000 port offset, separate networks — architectural decision, not script flag
@@ -469,9 +473,9 @@ deploy_docker_module() {
         done
         if ! $_all_found; then
             # Ensure L1 base image exists locally (required for L1→L2 build)
-            if ! docker image inspect hermes-agent-base:latest &>/dev/null 2>&1; then
+            if ! docker image inspect "${L1_BASE_IMAGE}:latest" &>/dev/null 2>&1; then
                 log_step "docker:${module_name}" "WARN" "L1 base image not found locally — attempting pull from GHCR"
-                if ! docker pull ghcr.io/tronyx161/hermes-agent-base:latest 2>/dev/null; then
+                if ! docker pull "${GHCR_ORG}/${L1_BASE_IMAGE}:latest" 2>/dev/null; then
                     log_step "docker:${module_name}" "BUILD" "L1 pull failed — building L1 from source"
                     if ! docker compose "${compose_args[@]}" --profile "$module_name" -f "${module_dir}/docker-compose.base.yml" build \
                         --build-arg CONTEXT="${CONTEXT:-personal}" 2>&1; then
