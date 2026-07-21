@@ -383,6 +383,8 @@ validate_compose_networks() {
     # Method 1: docker compose config (resolves anchors, aliases, extends)
     if command -v docker &>/dev/null; then
         local docker_result
+        # COMPOSE_PROFILES — required for ${VAR:?error} enforcement (DevPlan 033 W3-E3 Option A).
+        export COMPOSE_PROFILES="${COMPOSE_PROFILES:-postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page}"
         docker_result="$(docker compose -f "$compose_path" config 2>/dev/null)" || true
         if [[ -n "$docker_result" ]]; then
             resolved_content="$docker_result"

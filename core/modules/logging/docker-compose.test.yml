@@ -18,13 +18,13 @@ services:
       - test-observability-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый loki биндит 3100 (F-7) · Fix: !override
       - "127.0.0.1:13100:3100"
-    restart: unless-stopped
+    restart: "no"
 
   promtail:
     container_name: promtail-test
     networks: !override  # DevPlan 017 W2.5 — test network isolation
       - test-observability-net
-    restart: unless-stopped
+    restart: "no"
 
 networks:
   test-observability-net:

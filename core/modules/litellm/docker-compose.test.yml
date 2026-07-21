@@ -21,7 +21,7 @@ services:
       - test-hermes-agent-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый litellm биндит 4000 (F-7) · Fix: !override
       - "127.0.0.1:14000:4000"
-    restart: unless-stopped
+    restart: "no"
     healthcheck:
       # ⚠️ TRAP[BUG] · 2026-07-21 · MED · curl не установлен в litellm образе (ghcr.io/berriai/litellm)
       # · Root: healthcheck использовал curl, но образ на базе python3 не содержит curl.

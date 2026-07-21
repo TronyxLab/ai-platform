@@ -492,6 +492,9 @@ deploy_docker_module() {
         fi
     fi
 
+    # COMPOSE_PROFILES — required for ${VAR:?error} enforcement (DevPlan 033 W3-E3 Option A).
+    # Line 501 below calls docker compose config --services without --profile — needs COMPOSE_PROFILES.
+    export COMPOSE_PROFILES="${COMPOSE_PROFILES:-postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page}"
     if [[ "$module_name" == "observability" ]]; then
         # 🧐 TRAP[DECISION] · 2026-07-17 · — · Dynamic service list via docker compose config --services
         # · Rejected: hardcoded list (drift vector when services are added/removed in docker-compose.base.yml)

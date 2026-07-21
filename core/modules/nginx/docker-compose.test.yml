@@ -22,7 +22,7 @@ services:
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-16 · HIGH · compose merge склеивает ports base+test → тестовый nginx биндил 80/443 (F-7) · Fix: !override
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
-    restart: unless-stopped
+    restart: "no"
 
 networks:
   test-proxy-net:

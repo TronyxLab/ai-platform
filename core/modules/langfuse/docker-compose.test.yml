@@ -22,13 +22,13 @@ services:
       - test-observability-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый langfuse биндит 3001 (F-7) · Fix: !override
       - "127.0.0.1:13000:3000"
-    restart: unless-stopped
+    restart: "no"
 
   langfuse-redis:
     container_name: langfuse-redis-test
     networks: !override  # DevPlan 017 W3.1 — test network isolation (shared-db-net → test-shared-db-net)
       - test-shared-db-net
-    restart: unless-stopped
+    restart: "no"
 
 networks:
   test-shared-db-net:

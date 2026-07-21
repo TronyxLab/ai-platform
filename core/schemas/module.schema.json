@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://ai-platform.tronyx.ru/schemas/module.schema.json",
-  "title": "Module Descriptor (D4)",
-  "description": "D4-формат module.yaml — Source of Truth: core/modules/AGENTS.md §module.yaml D4 контракт",
+  "title": "Module Descriptor (D5)",
+  "description": "D5-формат module.yaml — Source of Truth: core/modules/AGENTS.md §module.yaml D5 контракт. D5 расширяет D4: typed env_requires (string OR object{type,required}), optional restart field для cross-check с docker-compose.base.yml. Backward-compat: bare-string env_requires валиден как {type: secret, required: true}.",
   "type": "object",
   "required": ["name", "install_type", "description"],
   "properties": {
@@ -62,8 +62,61 @@
     },
     "env_requires": {
       "type": "array",
+      "description": "Обязательные ключи в .env/secrets для работы модуля. D5: каждый item — bare-string (backward-compat, treated as {type: secret, required: true}) OR object {name, type, required}.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "description": "D4 backward-compat: bare env var name. Treated by validator as {type: secret, required: true}."
+          },
+          {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Имя переменной окружения"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["string", "secret", "int", "bool"],
+                "description": "Тип переменной: string (free-form), secret (sensitive — presence checked in secrets-manifest.yaml), int (numeric), bool (true/false). Default if omitted: secret."
+              },
+              "required": {
+                "type": "boolean",
+                "description": "Обязательность. Default if omitted: true."
+              }
+            },
+            "additionalProperties": false,
+            "description": "D5 typed env_requires entry."
+          }
+        ]
+      }
+    },
+    "restart": {
+      "type": "string",
+      "enum": ["always", "unless-stopped", "no", "on-failure"],
+      "description": "D5: модуль-уровневая restart-политика. Для cross-check с docker-compose.base.yml per-service restart (drift detection). Module.yaml restart — атрибут основного production-сервиса; multi-service исключения документируются в комментарии и проверяются валидатором как carve-out (severity: critical → always OK)."
+    },
+    "interfaces": {
+      "type": "array",
       "items": {"type": "string"},
-      "description": "Обязательные ключи в .env/secrets для работы модуля"
+      "description": "Typed contract для cross-layer вызовов из internal/ через invoke_module_interface()"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "normal"],
+      "description": "Severity модуля: critical — deploy failure блокирует node-update (exit 2). Используется валидатором restart-drift как carve-out (severity:critical → restart: always OK even if compose говорит unless-stopped)."
+    },
+    "hooks": {
+      "type": "object",
+      "description": "Lifecycle hooks (on_project_deploy, on_project_remove) — paths относительно module-dir"
+    },
+    "systemd": {
+      "type": "object",
+      "description": "System-модуль специфичные поля: unit, required_by (для install_type: system)"
     }
   },
   "additionalProperties": true

@@ -46,7 +46,7 @@ services:
 
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
       # 📝 TRAP[DEBT] · 2026-07-17 · MED · POSTGRES_PASSWORD rotation risk
       # · Observed: POSTGRES_PASSWORD is consumed at initdb time and stored in data dir.
       # ·   Changing the env var does NOT rotate the password in the running DB.
@@ -84,9 +84,9 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/platform,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/litellm,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/langfuse"
+      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/platform,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/litellm,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/langfuse"
       DB_USER: "${POSTGRES_USER:-postgres}"
-      DB_PASSWORD: "${POSTGRES_PASSWORD}"
+      DB_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
       LISTEN_PORT: "6432"
       POOL_MODE: transaction
       MAX_CLIENT_CONN: "50"

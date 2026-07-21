@@ -715,6 +715,8 @@ prune_old_images() {
     log_imp 8 "prune" "Pruning old images for service '${SERVICE_NAME}' (keep ${KEEP_IMAGES})"
 
     local config_output image_pattern
+    # COMPOSE_PROFILES — required for ${VAR:?error} enforcement (DevPlan 033 W3-E3 Option A).
+    export COMPOSE_PROFILES="${COMPOSE_PROFILES:-postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page}"
     config_output="$(docker compose config 2>/dev/null)" || {
         log_imp 8 "prune" "WARNING: docker compose config failed — using project name as fallback"
         image_pattern="${PROJECT}"

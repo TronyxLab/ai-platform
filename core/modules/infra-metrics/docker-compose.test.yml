@@ -26,7 +26,7 @@ services:
     # · Prevention: coordinate test-overlay port assignments across modules.
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый cadvisor биндит 8080 (F-7) · Fix: !override
       - "127.0.0.1:18081:8080"
-    restart: unless-stopped
+    restart: "no"
 
   node-exporter:
     container_name: node-exporter-test
@@ -34,7 +34,7 @@ services:
       - test-observability-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый node-exporter биндит 9100 (F-7) · Fix: !override
       - "127.0.0.1:19100:9100"
-    restart: unless-stopped
+    restart: "no"
 
   nginx-prometheus-exporter:
     container_name: nginx-prometheus-exporter-test
@@ -42,21 +42,21 @@ services:
       - test-observability-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый nginx-exporter биндит 9113 (F-7) · Fix: !override
       - "127.0.0.1:19113:9113"
-    restart: unless-stopped
+    restart: "no"
 
   redis-exporter:
     container_name: redis-exporter-test
     networks: !override  # DevPlan 017 W2.6 — test network isolation (dual: cache for collect, observability for metrics exposure)
       - test-shared-cache-net
       - test-observability-net
-    restart: unless-stopped
+    restart: "no"
 
   postgres-exporter:
     container_name: postgres-exporter-test
     networks: !override  # DevPlan 017 W2.6 — test network isolation (dual: db for collect, observability for metrics exposure)
       - test-shared-db-net
       - test-observability-net
-    restart: unless-stopped
+    restart: "no"
     # Override healthcheck to always pass — no postgres dependency in smoke tests
     # ⚠️ Binary at /bin/postgres_exporter (not /postgres_exporter)
     healthcheck:

@@ -18,15 +18,22 @@
 ## @changes — 2026-07-18 | Added test_system_module_contract (T3/D3, DevPlan 011 T7)
 # endregion MODULE_CONTRACT
 
+import json
 import logging
 import os
 import re
+from pathlib import Path
 
 import pytest
 import yaml
 
 from tests._conftest.audit import discover_docker_modules
 from tests.conftest import ldd_trajectory
+
+# D5 paths relative to repo root
+_VALIDATOR_PATH = Path(__file__).resolve().parents[2] / "core" / "internal" / "scripts" / "validate_module_yaml.py"
+_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "core" / "schemas" / "module.schema.json"
+_MODULES_DIR_D5 = Path(__file__).resolve().parents[2] / "core" / "modules"
 
 logger = logging.getLogger(__name__)
 

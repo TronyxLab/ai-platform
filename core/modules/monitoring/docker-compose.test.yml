@@ -19,7 +19,7 @@ services:
       - test-observability-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый prometheus биндит 9090 (F-7) · Fix: !override
       - "127.0.0.1:19090:9090"
-    restart: unless-stopped
+    restart: "no"
 
   grafana:
     container_name: grafana-test
@@ -28,7 +28,7 @@ services:
       - test-proxy-net
     ports: !override  # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · compose merge склеивает ports base+test → тестовый grafana биндит 3000 (F-7) · Fix: !override
       - "127.0.0.1:13030:3000"
-    restart: unless-stopped
+    restart: "no"
 
   prometheus-config-init:
     container_name: prometheus-config-init-test

@@ -12,7 +12,7 @@
 ##   - Docker-модули: .dockerignore → symlink ../../templates/.dockerignore
 ##   - Docker-модули: docker-compose.base.yml: profiles: [module-name] на каждом сервисе, x-logging: &default-logging
 ##   - System-модули: lifecycle через systemctl/journalctl, таргеты: install/status/restart/logs
-## @rationale Стандартизированный контракт обеспечивает pluggability через profiles, единый healthcheck и zero-touch деплой; DD1/DD3 — архитектурные стандарты (см. core/AGENTS.md §Pluggability). System-контракт добавлен для модулей вне Docker (D3).
+## @rationale Стандартизированный контракт обеспечивает pluggability через profiles, единый healthcheck и zero-touch деплой; DD1/DD3 — архитектурные стандарты (см. core/AGENTS.md §Pluggability). DD3 superseded 2026-07-21 (DevPlan 033 Option A). System-контракт добавлен для модулей вне Docker (D3).
 # endregion MODULE_CONTRACT
 
 # AGENTS.md — core/modules/
@@ -49,13 +49,14 @@ core/modules/{module}/
 
 ---
 
-## module.yaml — D4 контракт
+## module.yaml — D5 контракт
 
 ```yaml
 name: postgres                    # без -shared суффикса
 install_type: docker              # docker | system
 description: "..."
 depends_on: [redis]               # для _topo_sort.py
+severity: normal                  # D5: critical | normal (critical — deploy failure blocks node-update)
 interfaces:                       # массив строк — typed contract для cross-layer вызовов
   - healthcheck                  # из internal/bootstrap (healthcheck liveness/readiness)
   - install                      # из internal/bootstrap (system-модули)
@@ -72,13 +73,30 @@ env_shared:                       # shared env vars injected into module contain
   # ONLY hermes-agent may declare proxy vars (HTTP_PROXY/HTTPS_PROXY/NO_PROXY)
   # See §Proxy opt-in rule below
   SHARED_EXAMPLE: "${SHARED_EXAMPLE}"
-env_requires:                     # обязательные в .env/secrets
-  - VAR_NAME
+env_requires:                     # D5: typed env_requires — bare string (D4 compat) OR object {name, type, required}
+  - VAR_NAME                      # bare string = {type: secret, required: true} (D4 backward-compat)
+  - name: SECRET_VAR              # D5 typed: type=secret (default), required=true (default)
+    type: secret
+    required: true
+  - name: OPTIONAL_STRING         # D5 typed: type=string, required=false
+    type: string
+    required: false
+restart: unless-stopped           # D5: модуль-уровневая restart-политика для cross-check с base.yml
+                                  # enum: [always, unless-stopped, no, on-failure]
+                                  # severity:critical + restart: always/unstop-stopped = carve-out (принимается)
 ```
+
 
 **Удалены из D4:** `version` (моно-версия), `config.network`, `config.readiness_endpoint`, `config.liveness_endpoint`, `config.stop_grace_period`, `ports`. Docker-specific поля — в `docker-compose.base.yml`.
 
 **Добавлено в D4:** `interfaces` (2026-07-18) — typed contract для cross-layer вызовов из `internal/` в `modules/`. См. `core/lib/module-interface.sh` и `core/AGENTS.md` cross-layer правила.
+
+**Добавлено в D5 (DevPlan 033 Wave 3, 2026-07-21):**
+- `env_requires`: typed entries — bare string (D4 compat, treated as `{type: secret, required: true}`) OR object `{name, type: string|secret|int|bool, required: bool}`. Валидатор: `core/internal/scripts/validate_module_yaml.py --all`.
+- `restart`: модуль-уровневая restart-политика (`always|unless-stopped|no|on-failure`) — cross-check с per-service restart в `docker-compose.base.yml` (drift detection). Carve-out: `severity: critical` + `restart: always` в module.yaml принимается даже если compose говорит `unless-stopped` (W3-R7).
+- `severity`: enum `critical|normal` — critical модули блокируют node-update при ошибке деплоя (exit 2). Carve-out для restart-drift.
+- Schema: `core/schemas/module.schema.json` расширена до D5 (backward-compat через `oneOf`).
+- CI enforcement: gate `test_gate_module_yaml_contract.py` + `make validate-modules` (W3-E5).
 
 **Proxy opt-in rule:** Прокси-переменные (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) декларирует в `env_shared` ТОЛЬКО модуль `hermes-agent` — единственный реальный потребитель прокси-канала (Telegram → Tor → Privoxy). Любой другой модуль, которому требуется прокси, должен: (1) добавить переменные в свой `env_shared`, (2) добавить имя модуля в `platform-env.yaml proxy.consumers`. Гейт T8.5 валидирует opt-in контракт — добавление без обоих шагов = красный гейт.
 
@@ -164,7 +182,15 @@ make up                        → все модули (profiles не фильт
 ```
 
 **DD1:** `x-logging: &default-logging` дублируется в каждом `base.yml` — YAML anchors из root compose недоступны в include'd файлах.
-**DD3:** Все `${VAR:?error}` заменены на `${VAR:-}` — `docker compose config` валидирует все include'd файлы, даже неактивные profiles.
+**DD3 (SUPERSEDED 2026-07-21):** `${VAR:?error}` теперь РАЗРЕШЁН в `docker-compose.base.yml` (DevPlan 033 Option A). Для совместимости CI вызовы `docker compose config` используют `COMPOSE_PROFILES=<all-profiles>`. См. TRAP[DECISION] ниже.
+# ⚠️ TRAP[DECISION] · 2026-07-21 · HI · DD3 reversed — `${VAR:?error}` now enforced in base.yml (DevPlan 033 W3-E3)
+# · Rejected: static-validator-only (Option B, score 8/10) — operator chose runtime-fail-fast per W3-E3 brief letter
+# · Reason: P07 closed by compose-runtime enforcement, not CI-gate-only. Acceptable ripple-cost: CI invocation update.
+# · Implementation: 4 critical secrets use ${VAR:?...} in 7 base.yml files;
+#   CI exports COMPOSE_PROFILES="<all-profiles>" before every `docker compose config` call.
+#   ⚠️ --skip-check-profiles does NOT exist in Docker Compose (verified v5.3.0).
+# · Revert-path: git revert <merge-commit> + restore raw ${VAR} + restore запрет #6.
+# · Rev: if CI compose-v2 incompatibility discovered → fall back to Option B (static validator).
 
 ---
 
@@ -184,7 +210,7 @@ make up                        → все модули (profiles не фильт
 | 3 | Свои `build`/`deploy` таргеты | Только корневой Makefile |
 | 4 | `.dockerignore` не symlink | Дедупликация через шаблон |
 | 5 | Healthcheck-логика в Makefile | Только `healthcheck.sh` |
-| 6 | `${VAR:?error}` в `docker-compose.base.yml` | Блокирует валидацию неактивных profiles (DD3) |
+| ~~6~~ | ~~`${VAR:?error}` в `docker-compose.base.yml`~~ | **REVERSED 2026-07-21 (TRAP[DECISION])** — Option A collapse Wave 3 DevPlan 033; COMPOSE_PROFILES export in CI workflows |
 | 7 | Инлайн-сервисы в root `docker-compose.yml` | Только `include:` модулей |
 | 8 | Docker-таргеты (build/up/backup/down) в system-модулях | System-модули используют module-system.mk, не module.mk |
 

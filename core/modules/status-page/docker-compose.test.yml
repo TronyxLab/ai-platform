@@ -18,6 +18,7 @@
 services:
   status-page:
     container_name: status-page-test
+    restart: "no"
     networks: !override
       - test-proxy-net
     ports: !override

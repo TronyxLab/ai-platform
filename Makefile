@@ -34,7 +34,7 @@ venv: $(VENV)
 # test infrastructure (volume dirs, Docker networks) is managed by tests/conftest.py
 # test_infra fixture — autouse session-scoped, replaces former test-infra-up/down targets.
 
-.PHONY: venv up down healthcheck restart status backup restore test gate validate pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy deploy-project bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts scripts-audit
+.PHONY: venv up down healthcheck restart status backup restore test gate validate validate-modules pre-commit-install pre-commit-run help lint check-file-lines discover-modules dev-certs test-inventory-sync templates-check templates-render hermes-build-platform hermes-build-context hermes-push-l1 deploy deploy-project bootstrap-node context-promote new-project new-context project-sync-env remove-project adopt-project project-list project-status audit secrets-unlock provision node-update verify converge render-vhosts scripts-audit _get_all_profiles
 
 ## templates-check: Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic at unresolved
 templates-check:
@@ -280,6 +280,22 @@ validate:
 	@echo "[IMP:9][make][validate] Running schema validation..."
 	@bash $(_platform_root)/core/entrypoints/validate.sh
 	@echo "[IMP:9][make][validate] Schema validation complete"
+
+
+# COMPOSE_PROFILES source of truth: all 13 Docker modules with profiles.
+# Used by CI and production scripts for ${VAR:?error} compatibility (DevPlan 033 Option A).
+_get_all_profiles:
+	@echo "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
+
+# Export COMPOSE_PROFILES globally — covers gate, test, and all docker compose invocations.
+# Uses ?= so existing env takes precedence.
+export COMPOSE_PROFILES ?= postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page
+## validate-modules: Run D5 module.yaml contract validator (Wave 3 W3-E5).
+##   Invoked from CI after lint step. Calls validate_module_yaml.py --all.
+validate-modules:
+	@echo "[IMP:7][make][validate-modules] Running D5 module.yaml contract validator..."
+	@python3 $(_platform_root)/core/internal/scripts/validate_module_yaml.py --all
+	@echo "[IMP:9][make][validate-modules] D5 module contract validation complete"
 
 ## lint: Run shellcheck + yamllint + pytest (best-effort, warn+skip on missing tools)
 lint:

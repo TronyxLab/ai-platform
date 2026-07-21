@@ -85,43 +85,43 @@ $END_ARTIFACT_CONTRACT
 ## SUPERPOSITION: DD3 ↔ W3-E3 conflict resolution
 
 ### Option A: "Полная отмена DD3 — `${VAR:?}` в base.yml" [оценка ниже]
-Approach: Заменить все raw `${CRITICAL_SECRET}` → `${CRITICAL_SECRET:?error message}` в 
-  docker-compose.base.yml. Снять запрет #6 в AGENTS.md. Изменить CI-вызовы `docker compose 
-  config` → экспорт `COMPOSE_PROFILES` (флаг `--skip-check-profiles` НЕ СУЩЕСТВУЕТ) 
-  (если доступно в установленной версии compose v2.x). Обосновать в TRAP[DECISION] 
+Approach: Заменить все raw `${CRITICAL_SECRET}` → `${CRITICAL_SECRET:?error message}` в
+  docker-compose.base.yml. Снять запрет #6 в AGENTS.md. Изменить CI-вызовы `docker compose
+  config` → экспорт `COMPOSE_PROFILES` (флаг `--skip-check-profiles` НЕ СУЩЕСТВУЕТ)
+  (если доступно в установленной версии compose v2.x). Обосновать в TRAP[DECISION]
   в core/modules/AGENTS.md изменение инварианта.
-Trade-offs: +Fail-fast при отсутствии секрета (P07 закрыт полностью, как в брифе). 
-  −Требует изменение compose-invocation по всему CI + Makefile (ripple effect). 
-  −Возможна несовместимость со старыми compose v1. −Нарушает действующий запрет #6 — 
-  требует обоснования reversal. −R-RISK: CI ломается для модулей, чьи секреты 
+Trade-offs: +Fail-fast при отсутствии секрета (P07 закрыт полностью, как в брифе).
+  −Требует изменение compose-invocation по всему CI + Makefile (ripple effect).
+  −Возможна несовместимость со старыми compose v1. −Нарушает действующий запрет #6 —
+  требует обоснования reversal. −R-RISK: CI ломается для модулей, чьи секреты
   осознанно не заданы в dev/CI окружении (например, LITELLM_LICENSE).
 Best when: Оператор готов принять ripple-cost и явный reversal запрета #6.
 
 ### Option B: "Static validator вместо compose-syntax" [score: 8/10] ★
-Approach: НЕ трогать compose-синтаксис (остаётся `${VAR:-}` per DD3). Валидатор 
-  validate_module_yaml.py делает static-cross-check: для каждого env_requires{type:secret, 
-  required:true} в module.yaml → проверяет (а) наличие в `.env.example`, (б) наличие 
-  в `secrets-manifest.yaml`, (в) non-empty default в `.env.example`. Соответствие 
-  compose↔module.yaml проверяется grep'ом `${VAR` без `:-` (детект raw-reference = 
+Approach: НЕ трогать compose-синтаксис (остаётся `${VAR:-}` per DD3). Валидатор
+  validate_module_yaml.py делает static-cross-check: для каждого env_requires{type:secret,
+  required:true} в module.yaml → проверяет (а) наличие в `.env.example`, (б) наличие
+  в `secrets-manifest.yaml`, (в) non-empty default в `.env.example`. Соответствие
+  compose↔module.yaml проверяется grep'ом `${VAR` без `:-` (детект raw-reference =
   warning, не error). Запрет #6 сохраняется, DD3 остаётся в силе.
-Trade-offs: +Zero изменения compose/CI/Makefile — нет ripple. +D5-контракт enforced 
-  через валидатор (не через runtime compose-fail). +Сохраняет существующую семантику 
-  compose-config validation. −Fail происходит на CI-gate, а не на `docker compose up` 
-  (мягче, чем `${VAR:?}`). −Не буквально букве брифа W3-E3, но достигает цели P07 
-  (mandatory-arg guard). +Принцип 6 (Small Simple Blocks — статический анализ вместо 
-  runtime-side-effect). +Принцип 8 (расширение существующего валидатора вместо нового 
+Trade-offs: +Zero изменения compose/CI/Makefile — нет ripple. +D5-контракт enforced
+  через валидатор (не через runtime compose-fail). +Сохраняет существующую семантику
+  compose-config validation. −Fail происходит на CI-gate, а не на `docker compose up`
+  (мягче, чем `${VAR:?}`). −Не буквально букве брифа W3-E3, но достигает цели P07
+  (mandatory-arg guard). +Принцип 6 (Small Simple Blocks — статический анализ вместо
+  runtime-side-effect). +Принцип 8 (расширение существующего валидатора вместо нового
   контракта).
 Best when: Хочется закрыть P07 без reversal запрета #6 и без ripple-cost. ★ РЕКОМЕНДУЕТСЯ.
 
 ### Option C: "Dual-overlay — `${VAR:?}` только в test-compose" [score: 6/10]
-Approach: base-overlay остаётся `${VAR:-}` (DD3 сохраняется). Test-overlay 
-  (docker-compose.test.yml) использует `${VAR:?error}` для критичных секретов — 
-  test-compose активируется только с явным profile, поэтому compose-config не 
-  валидирует неактивные. Запрет #6 уточняется: «`${VAR:?error}` запрещён в base.yml, 
+Approach: base-overlay остаётся `${VAR:-}` (DD3 сохраняется). Test-overlay
+  (docker-compose.test.yml) использует `${VAR:?error}` для критичных секретов —
+  test-compose активируется только с явным profile, поэтому compose-config не
+  валидирует неактивные. Запрет #6 уточняется: «`${VAR:?error}` запрещён в base.yml,
   разрешён в test.yml».
-Trade-offs: +Закрывает P08 (test-compose детектирует отсутствующие секреты на CI). 
-  −Не закрывает P07 для production-runtime (base-overlay остаётся мягким). 
-  −Двойной стандарт (base vs test) увеличивает поверхность дрейфа. 
+Trade-offs: +Закрывает P08 (test-compose детектирует отсутствующие секреты на CI).
+  −Не закрывает P07 для production-runtime (base-overlay остаётся мягким).
+  −Двойной стандарт (base vs test) увеличивает поверхность дрейфа.
   −Test-compose может не содержать всех критичных секретов, которые есть в base.
 Best when: Если приоритет — fail-fast в CI, но не на production-VPS.
 ```
@@ -397,7 +397,7 @@ Best when: Если приоритет — fail-fast в CI, но не на produ
      # ⚠️ TRAP[DECISION] · 2026-07-21 · HI · DD3 reversed — `${VAR:?error}` now enforced in base.yml
      # · Rejected: static-validator-only (Option B, score 8/10) — operator chose runtime-fail-fast per W3-E3 brief letter
      # · Reason: P07 closed by compose-runtime enforcement, not CI-gate-only. Acceptable ripple-cost: CI invocation update.
-     # · Implementation: 4 critical secrets use ${VAR:?...} in 7 base.yml files; 
+     # · Implementation: 4 critical secrets use ${VAR:?...} in 7 base.yml files;
      #   CI exports COMPOSE_PROFILES="<all-profiles>" before every `docker compose config` call.
 #   ⚠️ --skip-check-profiles does NOT exist in Docker Compose (verified v5.3.0).
      # · Revert-path: git revert <merge-commit> + restore raw ${VAR} + restore запрет #6.

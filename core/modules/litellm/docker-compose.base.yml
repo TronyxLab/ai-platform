@@ -79,11 +79,11 @@ services:
       # · Prisma Wolfi incompatibility that affected v1.55+ is resolved in v1.90+
       # · This enables LiteLLM UI (dashboard), API key management, spend_logs persistence
       # · Rev: if Prisma Wolfi breaks in a future upgrade, remove DATABASE_URL and switch to SQLite
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@pgbouncer:6432/litellm?sslmode=disable"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@pgbouncer:6432/litellm?sslmode=disable"
 
       # Master key — required for LiteLLM proxy admin operations
       # ⚠️ No fallback — must be set in secrets.env or env file
-      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}"
 
       # ⚠️ TRAP[BUG] · 2026-07-07 · P1 · LiteLLM requires LITELLM_LICENSE even in v1.55
       # · Symptom: litellm container crashes: "You must be a LiteLLM Enterprise user"

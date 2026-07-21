@@ -38,6 +38,7 @@
 services:
   postgres:
     container_name: postgres-test
+    restart: "no"
     networks: !override  # DevPlan 017 W2.1 — test network isolation
       - test-shared-db-net
     environment:
@@ -57,6 +58,7 @@ services:
 
   pgbouncer:
     container_name: pgbouncer-test
+    restart: "no"
     networks: !override  # DevPlan 017 W2.1 — test network isolation
       - test-shared-db-net
     environment:

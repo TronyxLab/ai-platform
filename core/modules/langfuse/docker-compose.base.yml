@@ -48,7 +48,7 @@ services:
       HOSTNAME: "0.0.0.0"
 
       # Database — shared PostgreSQL
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@pgbouncer:6432/langfuse?sslmode=disable"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@pgbouncer:6432/langfuse?sslmode=disable"
 
       # Auth — must be set in .env
       NEXTAUTH_SECRET: "${NEXTAUTH_SECRET}"
@@ -67,9 +67,9 @@ services:
 
       # ClickHouse
       CLICKHOUSE_URL: "${CLICKHOUSE_URL:-http://clickhouse:8123}"
-      CLICKHOUSE_MIGRATION_URL: "clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD}@clickhouse:9000"
+      CLICKHOUSE_MIGRATION_URL: "clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:?CH_PASSWORD_REQUIRED}@clickhouse:9000"
       CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"
-      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CH_PASSWORD_REQUIRED}"
       CLICKHOUSE_CLUSTER_ENABLED: "false"
 
       # S3 event upload — Local MinIO for dev, override via SOPS for production

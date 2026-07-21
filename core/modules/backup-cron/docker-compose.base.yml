@@ -58,7 +58,7 @@ services:
     environment:
       POSTGRES_HOST: "pgbouncer"
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
       POSTGRES_DB: "${POSTGRES_DB:-platform}"
       BACKUP_SPOOL_DIR: "/var/lib/platform/backup-spool"
       # S3 config — Timeweb S3 (AR8: only provider, no fallback)

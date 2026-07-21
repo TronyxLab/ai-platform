@@ -68,6 +68,7 @@ jobs:
     env:
       INTEGRATION_MODE: live
       HERMES_DASHBOARD_PASSWORD: ${{ secrets.HERMES_DASHBOARD_PASSWORD }}
+      COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
 
     permissions:
       contents: read

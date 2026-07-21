@@ -251,7 +251,7 @@ services:
     logging: *default-logging
 
     environment:
-      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform}?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}@postgres:5432/${POSTGRES_DB:-platform}?sslmode=disable"
 
     networks:
       observability-net:

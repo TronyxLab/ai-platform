@@ -39,6 +39,7 @@
 | `make project-status` | Статус проектов на target node (SSH) | `make project-status NAME=<name> [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/project-list.sh --status` |
 | `make templates-check` | Dry-run проверка разрешимости всех шаблонов | `make templates-check` | `core/internal/template-engine.sh check --verbose` |
 | `make templates-render` | Рендер всех шаблонов по манифесту | `make templates-render` | `core/internal/template-engine.sh render-all` |
+| `make validate-modules` | D5 module.yaml contract validator (Wave 3) | `make validate-modules` | `core/internal/scripts/validate_module_yaml.py --all` |
 | `make validate` | Schema-валидация | `make validate [FILES=...]` | `core/entrypoints/validate.sh` |
 | `make lint` | shellcheck + yamllint + pytest-lint | `make lint` | `core/entrypoints/validate.sh --lint` |
 | `make audit` | Системный аудит платформы | `make audit [NODE=...]` | `core/entrypoints/audit.sh` |
@@ -57,6 +58,7 @@
 | `make up` / `make down` | Локальный compose-lifecycle | `make up [PROJECT=...]` | docker compose |
 | `make status` | Статус compose-стека | `make status [PROJECT=...]` | docker compose ps |
 | `make restart` | Мягкий перезапуск compose-стека | `make restart [PROJECT=...]` | docker compose stop && docker compose start |
+| `make _get_all_profiles` | Вывод COMPOSE_PROFILES (все 13 Docker-модулей) | `make _get_all_profiles` | Встроенный `@echo` (private helper, используется скриптами) |
 | `make backup` | Резервное копирование стека | `make backup [NODE=...]` | Модульные healthcheck.sh + snapshot |
 | `make restore` | Восстановление из бэкапа | `make restore NODE=<n> DUMP_FILE=<f>` | Модульные restore-скрипты |
 | `make build` | Сборка Docker-образа модуля | `make build (в модуле)` | docker compose build |

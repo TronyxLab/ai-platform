@@ -62,6 +62,10 @@ validate:
     mechanism: python-script
     delegates_to: core/internal/template-engine.sh render-all
     description: "Render all templates from manifest to output paths"
+  - make_target: validate-modules
+    mechanism: python-script
+    delegates_to: core/internal/scripts/validate_module_yaml.py --all
+    description: "D5 module.yaml contract validator (typed env_requires, restart-drift, secret-presence)"
   - make_target: validate
     mechanism: shell-script
     delegates_to: core/entrypoints/validate.sh → core/internal/validate/validate.sh
@@ -226,6 +230,10 @@ dev:
     mechanism: shell-script
     delegates_to: core/modules/nginx/generate-dev-certs.sh
     description: "Idempotent generation of self-signed dev SSL certificates for nginx (hybrid mkcert→openssl)"
+  - make_target: _get_all_profiles
+    mechanism: makefile-echo
+    delegates_to: "echo"
+    description: "Private helper — echo COMPOSE_PROFILES string (all 13 Docker modules with profiles). Used by CI and production scripts."
 
 # ---------------------------------------------------------------------------
 # Module hooks — hook scripts called from module.yaml hooks system
@@ -387,8 +395,14 @@ gates:
     description: Linter configuration parity between shell and Python (lint.sh ↔ Python linter logic)
     test_file: test_gate_lint_quality.py
   - id: module-yaml-contract
-    description: module.yaml D4 contract validation (required fields, naming conventions)
+    description: module.yaml D5 contract validation (required fields, typed env_requires, naming conventions)
     test_file: test_gate_module_yaml_contract.py
+  - id: module-yaml-contract-d5-negative
+    description: "R5 companion: detect D5 violations (missing type, wrong type, restart-drift)"
+    test_file: test_gate_module_yaml_contract_d5_negative.py
+  - id: compose-restart-consistency
+    description: "Test-compose restart: 'no' enforcement + base-compose restart ∈ {always, unless-stopped} (P08)"
+    test_file: test_gate_compose_restart_consistency.py
   - id: no-simulators
     description: No simulator classes in test suite (prevents fake-backend patterns)
     test_file: test_gate_no_simulators.py
@@ -556,6 +570,7 @@ allowed_verbs:
   - hermes-build-platform
   - hermes-build-context
   - hermes-push-l1
+  - validate-modules
   - validate
   - lint
   - audit
@@ -586,3 +601,5 @@ allowed_verbs:
   - node-update
   - deploy-project
   - scripts-audit
+  # Private helper targets (underscore prefix)
+  - _get_all_profiles

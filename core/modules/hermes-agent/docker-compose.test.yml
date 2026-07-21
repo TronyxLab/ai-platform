@@ -20,6 +20,7 @@
 services:
   hermes-agent:
     container_name: hermes-agent-test
+    restart: "no"
     networks: !override  # DevPlan 017 W3.3 + fixed — test network isolation (proxy for nginx, hermes for litellm, observability for scraping, shared-db for postgres, shared-cache for redis)
       # ⚠️ TRAP[BUG] · 2026-07-20 · P1 · Hermes-agent cannot reach pgbouncer/redis in CI after !override networks
       # · Symptom: ConnectionResetError on http://localhost:19119/ in CI; tests pass locally on macOS
