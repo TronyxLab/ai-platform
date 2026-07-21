@@ -35,6 +35,7 @@
 ## @changes 2026-07-17 · T6 — Added verb contract K1 (--remove, --status), _trigger_remove_hooks(), TRAP[BUSINESS]
 ##           2026-07-17 · T2 — Added verb platform-deliver (handle_deliver, _validate_project_name), TRAP[DECISION]
 ##           2026-07-18 · T3.1/B1 — DEPLOY_STATUS=success сразу после health-gate; trap - ERR; нефатальная финализация; TRAP[BUG] B1
+##           2026-07-21 · W3: handle_status — stub-aware detection (STUB_AWARE_STATUS flag)
 # endregion MODULE_CONTRACT
 
 # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Deploy reports 'failed' despite success (B1)
@@ -951,6 +952,23 @@ handle_status() {
         exit 0
     fi
 
+    # ── Stub-aware detection (W3) ──
+    local ai_yaml="${PROJECT_DIR}/ai-platform.yaml"
+    if [[ "${STUB_AWARE_STATUS:-false}" == "true" ]] && [[ -f "${ai_yaml}" ]]; then
+        if head -1 "${ai_yaml}" 2>/dev/null | grep -q "GENERATED-STUB"; then
+            echo "{
+  \"project\": \"${PROJECT}\",
+  \"node\": \"${NODE_NAME}\",
+  \"status\": \"stub\",
+  \"containers\": [],
+  \"last_deploy\": null,
+  \"message\": \"Project directory exists but ai-platform.yaml is a GENERATED-STUB — awaiting CI deploy\"
+}"
+            log_imp 9 "status" "Project ${PROJECT}: stub (awaiting CI deploy)"
+            exit 0
+        fi
+    fi
+
     # Docker compose ps
     local ps_json="[]"
     if cd "$PROJECT_DIR" 2>/dev/null; then
@@ -987,10 +1005,18 @@ main() {
                 handle_remove "${2:-}"
                 exit 0
                 ;;
-            --status)
-                handle_status "${2:-}"
-                exit 0
-                ;;
+                --status)
+                    local project_arg="${2:-}"
+                    local stub_aware=false
+                    if [[ "$*" == *"--stub-aware"* ]]; then
+                        stub_aware=true
+                    fi
+                    if $stub_aware; then
+                        STUB_AWARE_STATUS=true
+                    fi
+                    handle_status "${project_arg}"
+                    exit 0
+                    ;;
             --help|-h)
                 echo "Usage: deploy-project.sh [--remove <project>|--status <project>|<project> <ref> [env]]"
                 exit 0

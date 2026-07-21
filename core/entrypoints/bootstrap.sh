@@ -9,15 +9,22 @@
 ##           Delegates scp_to_server + prepare_ssh_opts → scp-deliver.sh, build_ssh_cmd → remote-cmd.sh.
 ## @invariants
 ##   - 4 functions max: usage, detect_age_key, auto_detect_node_name, main
+##   - --auto-reconcile: passed through to node-lifecycle.sh → converge --reconcile (DevPlan 025 W4)
 ##   - NODE=<name> is OPTIONAL in --resolve mode (auto-detection from /opt/node-configs/)
 ##   - AGE_SECRET_KEY detection chain: env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE
 ##   - Missing AGE key = WARN (not fatal)
 ##   - --dry-run prints SCP + SSH commands without executing
+## 🧐 TRAP[DECISION] · 2026-07-21 · — · Encrypted secrets path
+## · Context secrets лежат в <node-configs-dir>/secrets/<NODE>.enc.yaml
+## · bootstrap ищет node-configs/secrets/ — скопировать файл перед bootstrap если нет
+## · Rejected: symlink или fallback search (overhead > benefit)
+## · Rev: если CI научится auto-deploy, пересмотреть доставку secrets через core
 ##   - --resume always passed to node-lifecycle.sh --mode init for idempotency
 ##   - Without --resolve: passes all args through to node-lifecycle.sh --mode init (manual mode)
 ## @rationale Thin-wrapper per DevPlan 020 T4+T15. Auto-SSH + SCP eliminates manual rsync + SSH steps.
 ## @changes 2026-07-17 | T15 — Layer re-homing: scp_to_server+prepare_ssh_opts→scp-deliver.sh, build_ssh_cmd→remote-cmd.sh
 ##           2026-07-17 | Lifecycle refactoring: ORCHESTRATOR→NODE_LIFECYCLE, --mode init passthrough
+##           2026-07-21 | W4: +--auto-reconcile flag passthrough (DevPlan 025)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -87,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --help|-h) usage ;;
         --resolve) RESOLVE_MODE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --auto-reconcile) PASSTHROUGH_ARGS+=("--auto-reconcile"); shift ;;
         *) PASSTHROUGH_ARGS+=("$1"); shift ;;
     esac
 done

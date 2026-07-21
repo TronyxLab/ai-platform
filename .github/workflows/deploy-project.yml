@@ -16,6 +16,8 @@
 ##            centralizes node resolution, and keeps CI/CD thin (DD1, DD4).
 ##            Org-agnostic = context-safe: private workflows are org-scoped by default.
 ## @usecases  project deploy -> git push -> CI -> reusable workflow -> SSH forced-command
+## @changes 2026-07-21 | W1: Added Check VPS readiness step before deliver
+##           2026-07-21 | W5: Added Verify deliver step + command_timeout: 10m + set -euo pipefail on all run steps
 # endregion MODULE_CONTRACT
 
 name: Deploy Project (Reusable)
@@ -53,6 +55,7 @@ jobs:
         env:
           NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
         run: |
+          set -euo pipefail
           # Use inputs.node if provided, otherwise resolve from ai-platform.yaml
           TARGET_NODE="${{ inputs.node }}"
           if [ -z "${TARGET_NODE}" ]; then
@@ -69,6 +72,25 @@ jobs:
           SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 -c "import json,sys; m=json.load(sys.stdin); n='${TARGET_NODE}'; h=m.get(n,''); print(h if h else (print(f'K5: node {n} not found in NODE_HOST_MAP',file=sys.stderr) or exit(1)))")
           echo "[IMP:9][node-resolve] ssh_host=${SSH_HOST}"
           echo "ssh_host=${SSH_HOST}" >> "${GITHUB_ENV}"
+
+      - name: Validate project payload
+        run: |
+          set -euo pipefail
+          echo "[IMP:7][validate] Validating project payload for ${{ inputs.project_name }}..."
+          make gate MODE=fast PROJECT=${{ inputs.project_name }}
+          echo "[IMP:9][validate] Project payload validation passed"
+
+      - name: Check VPS readiness
+        env:
+          NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
+          CI_DEPLOY_KEY: ${{ secrets.CI_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          echo "[IMP:9][preflight] Checking VPS readiness for ${{ env.ssh_host }}..."
+          ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            ci-deploy@${{ env.ssh_host }} "test -d /opt/projects && echo 'VPS ready' || (echo 'VPS not bootstrapped: /opt/projects missing' && exit 1)"
+          echo "[IMP:9][preflight] VPS readiness check passed"
+        shell: bash
 
       - name: Deliver project payload
         run: |
@@ -89,6 +111,18 @@ jobs:
           echo "[IMP:9][deliver] Delivery complete"
         shell: bash
 
+      - name: Verify deliver
+        if: success()
+        run: |
+          set -euo pipefail
+          echo "[IMP:9][verify-deliver] Verifying compose file on VPS after deliver..."
+          ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new \
+            ci-deploy@${{ env.ssh_host }} \
+            "test -f /opt/projects/${{ inputs.project_name }}/docker-compose.yml || test -f /opt/projects/${{ inputs.project_name }}/compose.yaml" \
+            || { echo "[IMP:10][verify-deliver] FATAL: compose file missing on VPS — deliver may have failed"; exit 1; }
+          echo "[IMP:9][verify-deliver] Compose file verified on VPS"
+        shell: bash
+
       - name: SSH deploy
         uses: appleboy/ssh-action@v1.2.5
         with:
@@ -96,6 +130,7 @@ jobs:
           username: ci-deploy
           key: ${{ secrets.CI_DEPLOY_KEY }}
           script: /opt/platform/core/entrypoints/deploy.sh ${{ inputs.project_name }} ${{ github.sha }} production
+          command_timeout: 10m
 
       - name: Post-deploy verify
         # ⚠️ TRAP[BUG] · 2026-07-20 · ci-deploy forced-command blocks arbitrary scripts.

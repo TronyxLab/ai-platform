@@ -12,6 +12,9 @@
 ##   - Docker network creation must precede docker compose up (TASK-07)
 ## @rationale  Centralized Makefile eliminates scattered scripts (RC-6). AGENTS.md invariant #1
 ##             mandates Makefile as single entry point. Split pre-commit/Makefile lint roles (M7).
+## @changes 2026-07-21 | W1: deploy +NODE pre-flight check via vps-readiness.sh
+##           2026-07-21 | W4: bootstrap-node +AUTO_RECONCILE, converge +RECONCILE, node-update +RECONCILE
+##           2026-07-21 | W6: deploy +LAUNCH=1 (CI wait + verify + URL)
 # endregion MODULE_CONTRACT
 
 SHELL := /bin/bash
@@ -306,10 +309,11 @@ pre-commit-run:
 	}
 	@echo "[IMP:9][make][pre-commit-run] All pre-commit hooks passed"
 
-## gate: Production Gate. Usage: make gate [MODE=fast|full|ci-docker]
+## gate: Production Gate. Usage: make gate [MODE=fast|full|ci-docker] [PROJECT=<name>]
 ##   MODE=full (default) — validate → lint → gates → contract → static → predeploy → smoke → component
 ##   MODE=fast — validate → lint → gates → static → predeploy (no Docker)
 ##   MODE=ci-docker — contract → static → predeploy → smoke → component → skip-enforcement (Docker-dependent only, no pre-commit/validate/lint)
+##   PROJECT=<name> — filter predeploy tests to a specific project (used in CI deploy workflow)
 # 📝 TRAP[DEBT] · 2026-07-16 · HI · make gate MODE=fast проглатывает падения шагов lint/gates/static
 # · Observed: gate напечатал «ALL PASS (MODE=fast)» при report-static.xml failures=10 и 3 FAILED в шаге gates
 # · Suspected: shell-цепочка `pytest gates && echo …; pytest static && echo …; pytest predeploy || exit 1` —
@@ -339,8 +343,9 @@ gate:
 			-m "static_audit or (not e2e and not component and not smoke and not integration and not local_auth and not requires_docker)" \
 			-v --tb=short \
 			--junitxml=tests/report-static.xml || { echo "[IMP:9][make][gate] FAIL: static"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 6/6: predeploy tests..."; \
+		echo "[IMP:7][make][gate] Step 6/6: predeploy tests (PROJECT=$(or $(PROJECT),all))..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy" -v --tb=short -rs \
+			$(if $(PROJECT),-k "$(PROJECT)",) \
 			--junitxml=tests/report-predeploy.xml || { echo "[IMP:9][make][gate] FAIL: predeploy"; exit 1; }; \
 	elif [ "$(MODE)" = "full" ]; then \
 		echo "[IMP:7][make][gate] MODE=full — running complete gate pipeline (canonical order)..."; \
@@ -431,7 +436,9 @@ _platform_root := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 # ═══════════════════════════════════════════════════════════════════
 
 ## deploy: Deploy project via git push → CI pipeline
-##   Usage: make deploy PROJECT=<dir>
+##   Usage: make deploy PROJECT=<dir> [NODE=<node>] [LAUNCH=1]
+##   NODE=<node>: run VPS pre-flight check before git push (W1)
+##   LAUNCH=1: after git push, wait for CI + verify + print URL (W6)
 ##   Pushes main branch to origin, triggering CI workflow
 deploy:
 	@echo "[IMP:7][make][deploy] Deploying PROJECT=$(PROJECT)..."
@@ -447,8 +454,31 @@ deploy:
 		echo "[IMP:9][make][deploy] ERROR: No git remote 'origin' in $(PROJECT)" >&2; \
 		exit 1; \
 	fi
+	@# ── W1: Pre-flight VPS readiness check ──
+	@if [ -n "$(NODE)" ]; then \
+		echo "[IMP:7][make][deploy] Pre-flight: checking VPS readiness for NODE=$(NODE)..." >&2; \
+		source $(_platform_root)/core/lib/vps-readiness.sh && \
+		check_vps_ready "$(NODE)" || { \
+			echo "[IMP:10][make][deploy] FATAL: VPS not ready. Run: make bootstrap-node NODE=$(NODE) first" >&2; \
+			exit 1; \
+		}; \
+		echo "[IMP:9][make][deploy] VPS ready — proceeding with git push" >&2; \
+	fi
+	@# ── Git push ──
 	@cd "$(PROJECT)" && git push origin main
 	@echo "[IMP:9][make][deploy] Git push complete — CI pipeline triggered"
+	@# ── W6: LAUNCH=1 mode — deploy-project + verify ──
+	@if [ "$(filter 1,$(LAUNCH))" = "1" ]; then \
+		echo "[IMP:7][make][deploy] LAUNCH mode: waiting for CI and verifying..." >&2; \
+		if [ -z "$(NODE)" ]; then \
+			echo "[IMP:10][make][deploy] FATAL: LAUNCH=1 requires NODE=<node>" >&2; \
+			exit 1; \
+		fi; \
+		bash $(_platform_root)/core/entrypoints/deploy-project.sh \
+			--project "$(PROJECT)" \
+			--node "$(NODE)" \
+			--launch; \
+	fi
 
 ## deploy-project: Direct project deploy bypassing CI (emergency fallback)
 ##   Usage: make deploy-project PROJECT=<dir> NODE=<node> [SKIP_VERIFY=1] [DRY_RUN=1]
@@ -469,12 +499,13 @@ deploy-project:
 	@echo "[IMP:9][make][deploy-project] Direct deploy complete"
 
 ## bootstrap-node: Idempotent node bootstrap
-##   Usage: make bootstrap-node [NODE=<name>] [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]
+##   Usage: make bootstrap-node [NODE=<name>] [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [AUTO_RECONCILE=1]
 ##   Variables:
 ##     NODE               (optional) Node name to bootstrap; auto-detected from
 ##                        /opt/node-configs/ if not specified (on VPS)
 ##     AGE_SECRET_KEY_FILE (optional) Path to AGE secret key file
 ##     DRY_RUN            (optional) Set to 1 for dry-run mode (no SCP/SSH)
+##     AUTO_RECONCILE     (optional) Set to 1 for auto-recovery of stub projects after bootstrap (W4)
 ##   Delegates to core/entrypoints/bootstrap.sh → internal bootstrap orchestrator
 bootstrap-node:
 	@echo "[IMP:9][make][bootstrap-node] Bootstrapping node NODE=$(NODE)..."
@@ -482,12 +513,14 @@ bootstrap-node:
 		$(if $(NODE),--node '$(NODE)') \
 		--resolve \
 		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file '$(AGE_SECRET_KEY_FILE)') \
+		$(if $(filter 1,$(AUTO_RECONCILE)),--auto-reconcile) \
 		$(if $(filter 1,$(DRY_RUN)),--dry-run)
 	@echo "[IMP:9][make][bootstrap-node] Bootstrap complete"
 
 
 ## node-update: Update an already-provisioned node (CI regular update)
-##   Usage: make node-update NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]
+##   Usage: make node-update NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [RECONCILE=1]
+##   RECONCILE=1: after update + converge, reconcile stub projects (W4)
 ##   Delegates to core/entrypoints/node-update.sh → internal/bootstrap/node-lifecycle.sh --mode update
 ##     5-step flow: verify_core → provision --scope networks --scope volumes → deploy docker modules
 ##     → deploy system modules → healthcheck
@@ -495,15 +528,17 @@ bootstrap-node:
 ##     NODE               Node name to update (required)
 ##     AGE_SECRET_KEY_FILE (optional) Path to AGE secret key file
 ##     DRY_RUN            (optional) Set to 1 for dry-run mode (print SSH command only)
+##     RECONCILE          (optional) Set to 1 for stub project reconciliation after update (W4)
 node-update:
 	@echo "[IMP:9][make][node-update] Updating node NODE=$(NODE)..."
 	@if [[ -z "$(NODE)" ]]; then \
-		echo "[IMP:9][make][node-update] ERROR: NODE not set — usage: make node-update NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1]" >&2; \
+		echo "[IMP:9][make][node-update] ERROR: NODE not set — usage: make node-update NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [RECONCILE=1]" >&2; \
 		exit 1; \
 	fi
 	@PLATFORM_ROOT="$(_platform_root)" $(_platform_root)/core/entrypoints/node-update.sh \
 		--node "$(NODE)" \
 		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file '$(AGE_SECRET_KEY_FILE)') \
+		$(if $(filter 1,$(RECONCILE)),--reconcile) \
 		$(if $(filter 1,$(DRY_RUN)),--dry-run)
 	@echo "[IMP:9][make][node-update] Node update complete"
 
@@ -664,11 +699,14 @@ check-file-lines:
 	@echo "[IMP:9][make][check-file-lines] Check complete"
 
 ## converge: Idempotent reconcile — конвергирует ноду с desired state из node.yaml
-##   Usage: make converge NODE=<name> [DRY_RUN=1]
+##   Usage: make converge NODE=<name> [DRY_RUN=1] [RECONCILE=1]
+##   RECONCILE=1: after converge, reconcile stub projects (deploy if GHCR image exists) (W4)
 ##   Delegates to core/entrypoints/converge.sh
 converge:
 	@echo "[IMP:7][make][converge] Running node reconciliation..."
-	@bash core/entrypoints/converge.sh --node $(NODE) $(if $(DRY_RUN),--dry-run,)
+	@bash core/entrypoints/converge.sh --node $(NODE) \
+		$(if $(DRY_RUN),--dry-run,) \
+		$(if $(filter 1,$(RECONCILE)),--reconcile)
 	@echo "[IMP:9][make][converge] Node reconciliation complete"
 
 ## render-vhosts: Regenerate Nginx vhost configs from node.yaml

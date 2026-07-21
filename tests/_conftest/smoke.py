@@ -26,6 +26,7 @@ import logging
 import os
 import platform as _platform
 import subprocess
+import textwrap
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -647,6 +648,29 @@ def platform_services(
 
     # ── Ensure volume bind-mount directories ─────────────────────────────────
     _ensure_volume_dirs(_SMOKE_VOLUME_BIND_DIRS)
+
+    # ── Generate test data files for status-page bind-mount ─────────────────
+    # status-page docker-compose.test.yml mounts /tmp/test-node-configs/test-node/node.yaml
+    # and /tmp/run/platform/docker-health.json into the container. These files
+    # must exist on the host (macOS Docker Desktop requires /tmp paths).
+    _test_node_yaml = Path("/tmp/test-node-configs/test-node/node.yaml")
+    _test_docker_health = Path("/tmp/run/platform/docker-health.json")
+
+    _test_node_yaml.parent.mkdir(parents=True, exist_ok=True)
+    _test_node_yaml.write_text(
+        textwrap.dedent("""\
+            node:
+              name: test-node
+              platform_domain: test.local
+            projects: []
+            modules: {}
+    """)
+    )
+
+    _test_docker_health.parent.mkdir(parents=True, exist_ok=True)
+    _test_docker_health.write_text("{}")
+
+    _logger.info("[IMP:8][conftest][platform_services] Test data files created for status-page bind-mount")
 
     # ── Pre-create external networks ─────────────────────────────────────────
     _logger.info("[IMP:8][conftest][platform_services] Collecting external networks")

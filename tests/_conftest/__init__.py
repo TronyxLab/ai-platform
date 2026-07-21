@@ -75,6 +75,14 @@ from _conftest.shellcheck import (  # noqa: F401
     get_shellcheck_bash_calls,
 )
 
+# ── predeploy ───────────────────────────────────────────────────────────
+from _conftest.predeploy import (  # noqa: F401
+    node_yaml_projects,
+    platform_networks_list,
+    platform_port_mappings_dict,
+    project_compose_files,
+)
+
 # ── skip_gate ─────────────────────────────────────────────────────────
 from _conftest.skip_gate import (  # noqa: F401
     automatic_skip_gate,

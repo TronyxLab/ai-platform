@@ -8,8 +8,8 @@ S3 upload script for backup-cron — uploads local spool files to Timeweb S3 buc
 @purpose  Upload a local backup file to S3 with 3 retries (30 min intervals).
           On permanent failure, file remains in spool (no data loss).
 @scope    Called by upload-s3.sh (thin wrapper) from backup-postgres.sh and backup-app-data.sh.
-@input    CLI args: <local_file_path> <s3_key>; env: S3_ENDPOINT_URL, S3_ACCESS_KEY,
-          S3_SECRET_KEY, S3_BUCKET, S3_REGION, S3_PREFIX.
+@input    CLI args: <local_file_path> <s3_key> [--config-source backup|ssl-cache]
+          env: S3_ENDPOINT_URL, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET, S3_REGION, S3_PREFIX.
 @output   Exit 0 on success (upload OK), exit 1 on failure (file in spool).
 @invariants
   - 3 retry attempts with ~30 min sleep between (03 §7)
@@ -17,9 +17,13 @@ S3 upload script for backup-cron — uploads local spool files to Timeweb S3 buc
   - File NEVER deleted from spool until confirmed S3 upload
   - IMP:9 logs for success and failure
   - All S3 credentials from env, never hardcoded
+  - --config-source backup (default): uses BackupConfig (includes prefix)
+  - --config-source ssl-cache: uses S3Config (no prefix — absolute S3 keys)
 @rationale Python/boto3 chosen over aws-cli shell: boto3 provides typed API, botocore
           retries, and code reuse with retention.py and backup_monitor.py. The ~80MB
           image size increase is acceptable for a backup container.
+          --config-source ssl-cache extends the same upload infrastructure for SSL
+          certificate caching (DevPlan 024 Wave 1) without duplicating S3 logic.
 """
 
 import argparse
@@ -35,7 +39,7 @@ from botocore.config import Config as BotoConfig
 
 # Import shared config from same directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from backup_config import BackupConfig, get_backup_config  # pyright: ignore[reportImplicitRelativeImport]
+from backup_config import S3Config, BackupConfig, get_s3_config, get_backup_config  # pyright: ignore[reportImplicitRelativeImport]
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -106,7 +110,7 @@ def compute_sha256(filepath: str) -> str:
 # @purpose  Create boto3 S3 client with endpoint override for Timeweb S3.
 # @io       Dict[str, str] → Any (boto3 S3 client)
 # @complexity 2
-def create_s3_client(config: BackupConfig) -> Any:  # boto3 S3 client (factory, not type)
+def create_s3_client(config: S3Config) -> Any:  # boto3 S3 client (factory, not type)
     """
     Create a boto3 S3 client configured for Timeweb S3 endpoint.
 
@@ -388,11 +392,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     Parse CLI arguments. argv=None uses sys.argv.
 
     Returns:
-        argparse.Namespace with fields: local_file, s3_key, retries, interval.
+        argparse.Namespace with fields: local_file, s3_key, config_source, retries, interval.
     """
-    parser = argparse.ArgumentParser(description="Upload backup file to Timeweb S3 with retry logic.")
-    parser.add_argument("local_file", help="Path to local backup file")
-    parser.add_argument("s3_key", help="S3 object key (path within bucket/prefix)")
+    parser = argparse.ArgumentParser(description="Upload file to Timeweb S3 with retry logic.")
+    parser.add_argument("local_file", help="Path to local file")
+    parser.add_argument("s3_key", help="S3 object key (path within bucket)")
+    parser.add_argument(
+        "--config-source",
+        choices=["backup", "ssl-cache"],
+        default="backup",
+        help="Config source: 'backup' uses backup prefix (default), 'ssl-cache' uses raw S3 keys",
+    )
     parser.add_argument(
         "--retries",
         type=int,
@@ -426,12 +436,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 # @purpose  Create S3 client from backup config, with error handling
 # @io       BackupConfig → boto3 S3 client
 # @complexity 1
-def _init_client(config: BackupConfig) -> Any:
+def _init_client(config: S3Config) -> Any:
     """
     Create boto3 S3 client from config. Exits with code 2 on failure.
 
     Args:
-        config: Backup configuration dict from get_backup_config().
+        config: S3 configuration dict from get_s3_config() or get_backup_config().
 
     Returns:
         boto3 S3 client instance.
@@ -624,6 +634,7 @@ def main() -> None:
     CLI entry point for upload.py.
 
     Usage: upload.py <local_file> <s3_key>
+           upload.py --config-source ssl-cache <local_file> <s3_key>
 
     Exit codes:
         0 — upload successful
@@ -631,9 +642,25 @@ def main() -> None:
         2 — invalid arguments or config error
     """
     args = _parse_args()
-    config = get_backup_config()
+
+    # Select config source based on --config-source flag
+    # backup: uses BackupConfig (includes prefix for backup paths)
+    # ssl-cache: uses S3Config (no prefix — absolute S3 keys)
+    if args.config_source == "ssl-cache":
+        config = get_s3_config()
+        full_key = args.s3_key  # ssl-cache uses absolute S3 keys, no prefix
+        logger.info(
+            "[IMP:7][upload][main] Config source: ssl-cache (no prefix) — S3 key used as-is",
+        )
+    else:
+        config = get_backup_config()
+        full_key = f"{config['prefix']}/{args.s3_key}".replace("//", "/")
+        logger.info(
+            "[IMP:7][upload][main] Config source: backup (prefix=%s)",
+            config["prefix"],
+        )
+
     client = _init_client(config)
-    full_key = f"{config['prefix']}/{args.s3_key}".replace("//", "/")
     local_sha256 = compute_sha256(args.local_file)
 
     logger.info(

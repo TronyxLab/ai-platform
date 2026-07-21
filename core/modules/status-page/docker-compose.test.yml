@@ -21,6 +21,10 @@ services:
       - test-proxy-net
     ports: !override
       - "18080:8080"
+    volumes: !override
+      - ./app.py:/app/app.py:ro
+      - /tmp/test-node-configs/test-node/node.yaml:/opt/node-configs/test-node/node.yaml:ro
+      - /tmp/run/platform/docker-health.json:/run/platform/docker-health.json:ro
 
 networks:
   test-proxy-net:

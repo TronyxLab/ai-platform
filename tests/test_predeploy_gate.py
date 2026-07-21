@@ -45,10 +45,13 @@ def _module_contract():
 
 # endregion MODULE_CONTRACT
 
+import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -235,6 +238,142 @@ def _parse_external_networks(compose_file: str) -> set[str]:
 
 
 # endregion HELPERS
+
+
+# region T1_T5_HELPERS
+
+
+def _parse_compose_ports(compose_file: str) -> list[int]:
+    """Extract host port numbers from a compose file's services.*.ports sections.
+
+    ## @purpose — Parse YAML ports declarations and return only HOST ports
+    ##            (the left side of the colon). Used for port conflict detection (T2).
+    ## @io — ⇥ compose_file: str → ⎋ list[int] (host port numbers, unsorted)
+    ## @complexity — O(S * P) where S = services, P = ports per service
+    ## @invariants
+    ##   - Handles string format "8080:80", numeric format 8080:80, and
+    ##     long syntax {"published": 8080, "target": 80}
+    ##   - Handles host-IP prefix: "127.0.0.1:8080:80" → 8080
+    ##   - Ignores ports without host binding (CONTAINER-only: "80")
+    ##   - Returns empty list on parse error
+    """
+    host_ports: list[int] = []
+    try:
+        with open(compose_file) as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError) as exc:
+        logger.warning("[IMP:4][_parse_compose_ports] Cannot parse %s: %s", compose_file, exc)
+        return host_ports
+    if not isinstance(data, dict):
+        return host_ports
+    services = data.get("services", {})
+    if not isinstance(services, dict):
+        return host_ports
+
+    for svc_name, svc_config in services.items():
+        if not isinstance(svc_config, dict):
+            continue
+        ports = svc_config.get("ports")
+        if ports is None:
+            continue
+        if isinstance(ports, list):
+            for entry in ports:
+                if isinstance(entry, str):
+                    # "8080:80" or "127.0.0.1:8080:80"
+                    parts = entry.split(":")
+                    if len(parts) >= 2:
+                        try:
+                            host_port = int(parts[-2])
+                            host_ports.append(host_port)
+                        except ValueError:
+                            pass
+                elif isinstance(entry, (int, float)):
+                    # bare port number (container-only, no host binding) — skip
+                    pass
+                elif isinstance(entry, dict):
+                    # long syntax: {"published": 8080, "target": 80}
+                    published = entry.get("published")
+                    if published is not None:
+                        try:
+                            host_ports.append(int(published))
+                        except (ValueError, TypeError):
+                            pass
+        logger.info(
+            "[IMP:8][_parse_compose_ports] [%s] Parsed %d host port(s) from %s",
+            svc_name,
+            len(host_ports),
+            compose_file,
+        )
+
+    logger.info("[IMP:8][_parse_compose_ports] Total %d host port(s) in %s", len(host_ports), compose_file)
+    return host_ports
+
+
+def _parse_ai_platform_yaml(file_path: str) -> dict | None:
+    """Parse and validate an ai-platform.yaml file.
+
+    ## @purpose — Safe YAML loading of ai-platform.yaml for schema validation (T5).
+    ## @io — ⇥ file_path: str → ⎋ dict | None (None on parse error)
+    ## @complexity — O(Y) where Y = YAML parse size
+    """
+    try:
+        with open(file_path) as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError) as exc:
+        logger.warning("[IMP:4][_parse_ai_platform_yaml] Failed to parse %s: %s", file_path, exc)
+        return None
+    if not isinstance(data, dict):
+        logger.warning("[IMP:4][_parse_ai_platform_yaml] %s: root is not a dict (type=%s)", file_path, type(data).__name__)
+        return None
+    return data
+
+
+def _find_project_ai_platform_yamls(node_yaml_projects: list[dict]) -> list[tuple[str, str]]:
+    """Find ai-platform.yaml files for all projects from node.yaml.
+
+    ## @purpose — Locate ai-platform.yaml files in project directories for T5 schema validation.
+    ## @io — ⇥ node_yaml_projects: list[dict] → ⎋ list[tuple[str, str]] (project_name, file_path)
+    ## @complexity — O(N) where N = number of projects
+    ## @invariants
+    ##   - PROJECTS_DIR env var overrides default /opt/projects/
+    ##   - Also checks tests/test_data/projects/<name>/ for local dev
+    ##   - Only returns paths that actually exist
+    """
+    projects_dir = os.environ.get("PROJECTS_DIR", "/opt/projects")
+    test_data_dir = os.environ.get(
+        "TEST_PROJECTS_DIR",
+        os.path.join(
+            os.environ.get(
+                "PLATFORM_ROOT",
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
+            ),
+            "tests",
+            "test_data",
+            "projects",
+        ),
+    )
+
+    results: list[tuple[str, str]] = []
+    for proj in node_yaml_projects:
+        name = proj.get("name", "")
+        if not name:
+            continue
+
+        # Primary: PROJECTS_DIR/<name>/ai-platform.yaml
+        primary = os.path.join(projects_dir, name, "ai-platform.yaml")
+        if os.path.isfile(primary):
+            results.append((name, primary))
+            continue
+
+        # Fallback: tests/test_data/projects/<name>/ai-platform.yaml
+        fallback = os.path.join(test_data_dir, name, "ai-platform.yaml")
+        if os.path.isfile(fallback):
+            results.append((name, fallback))
+
+    return results
+
+
+# endregion T1_T5_HELPERS
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -599,6 +738,464 @@ def test_docker_networks_precreated(
 
 
 # endregion FUNC_test_docker_networks_precreated
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Wave 3: Predeploy gate extension — T1 through T5
+# ═══════════════════════════════════════════════════════════════════════
+
+
+# ── T1: Compose configs valid via docker compose config --dry-run ─────
+
+# region FUNC_test_project_compose_configs_valid
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Project compose must pass `docker compose config --dry-run`
+## @purpose — Validate project docker-compose.yml files by running
+##            `docker compose -f <path> config --dry-run`. Catches invalid
+##            compose syntax, missing env vars, and unresolvable references.
+##            DevPlan W3-T1.
+## @io — ⇥ caplog, project_compose_files → ⎋ None (pytest.fail if compose invalid)
+## @complexity — O(F * C) where F = compose files, C = docker compose config runtime
+## @invariants
+##   - Requires Docker daemon (skipif when docker CLI absent)
+##   - Uses docker compose (not docker-compose) — v2 API
+##   - Runs `config --dry-run` which validates WITHOUT starting containers
+##   - Skips cleanly if no project compose files found
+
+
+@pytest.mark.predeploy
+@pytest.mark.requires_docker
+@pytest.mark.skipif(
+    not shutil.which("docker"),
+    reason="Docker CLI not available — cannot run docker compose config --dry-run",
+)
+@ldd_trajectory
+def test_project_compose_configs_valid(
+    caplog: pytest.LogCaptureFixture,
+    project_compose_files: list[Path],
+) -> None:
+    """
+    # ◇ project_compose_files → ∋ each compose → ⚡ docker compose -f <path> config --dry-run
+    # → ◇ exit code 0? → ⎋ pass | fail (with compose diagnostics)
+    """
+    # region BLOCK_Setup
+
+    logger.info(
+        "[IMP:7][test_project_compose_configs_valid] Validating %d project compose file(s) ...",
+        len(project_compose_files),
+    )
+
+    if not project_compose_files:
+        logger.info("[IMP:9][test_project_compose_configs_valid] No project compose files — skipping (not a failure)")
+        return
+
+    # endregion
+
+    # region BLOCK_Validate
+    errors: list[str] = []
+    for compose_path in project_compose_files:
+        logger.info("[IMP:8][test_project_compose_configs_valid] Validating: %s", compose_path)
+        try:
+            result = subprocess.run(
+                ["docker", "compose", "-f", str(compose_path), "config", "--dry-run"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                err_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+                errors.append(f"[{compose_path.parent.name}] {compose_path.name}: {err_msg}")
+                logger.error(
+                    "[IMP:4][test_project_compose_configs_valid] FAIL: %s — exit %d: %s",
+                    compose_path,
+                    result.returncode,
+                    err_msg,
+                )
+            else:
+                logger.info(
+                    "[IMP:9][test_project_compose_configs_valid] ✅ %s: valid compose config",
+                    compose_path,
+                )
+        except FileNotFoundError:
+            # Docker CLI not available despite shutil.which check (edge: race condition)
+            logger.warning("[IMP:9][test_project_compose_configs_valid] docker compose CLI vanished — skipping (not a failure)")
+            return
+        except subprocess.TimeoutExpired:
+            errors.append(f"[{compose_path.parent.name}] docker compose config timed out (>30s)")
+            logger.error(
+                "[IMP:4][test_project_compose_configs_valid] TIMEOUT: %s (>30s)", compose_path,
+            )
+        except OSError as exc:
+            errors.append(f"[{compose_path.parent.name}] OSError: {exc}")
+            logger.error("[IMP:4][test_project_compose_configs_valid] OSError: %s — %s", compose_path, exc)
+    # endregion
+
+    # region BLOCK_Assert
+    if errors:
+        pytest.fail(
+            "Project compose config validation failed:\n" + "\n".join(errors)
+        )
+
+    logger.info(
+        "[IMP:9][test_project_compose_configs_valid] ✅ All %d project compose file(s) valid",
+        len(project_compose_files),
+    )
+    # endregion
+
+
+# endregion FUNC_test_project_compose_configs_valid
+
+
+# ── T2: Ports no conflict with platform ───────────────────────────────
+
+# region FUNC_test_project_ports_no_conflict
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Project ports must not overlap with platform port_mappings
+## @purpose — Verify that ports used by project compose files do not conflict
+##            with platform ports defined in platform-env.yaml port_mappings.
+##            Catches accidental port overlaps before deployment.
+##            DevPlan W3-T2.
+## @io — ⇥ caplog, project_compose_files, platform_port_mappings_dict → ⎋ None
+## @complexity — O(F * P + M) where F = compose files, P = ports per file, M = mappings
+## @invariants
+##   - Reads port_mappings from platform-env.yaml (single source of truth)
+##   - Parses host ports from compose services.*.ports
+##   - Conflicts produce FAIL, not warning
+##   - Skips cleanly if no project compose files found
+
+
+@pytest.mark.predeploy
+@ldd_trajectory
+def test_project_ports_no_conflict(
+    caplog: pytest.LogCaptureFixture,
+    project_compose_files: list[Path],
+    platform_port_mappings_dict: dict[str, int],
+) -> None:
+    """
+    # ◇ project_compose_files → ∋ each compose → ⚡ _parse_compose_ports()
+    # → ⊕ all_project_ports → ◇ intersection with platform_port_mappings_dict
+    # → ⎋ empty intersection → pass | fail with conflict detail
+    """
+    # region BLOCK_Setup
+
+    logger.info(
+        "[IMP:7][test_project_ports_no_conflict] Checking project ports against %d platform port(s) ...",
+        len(platform_port_mappings_dict),
+    )
+
+    if not project_compose_files:
+        logger.info("[IMP:9][test_project_ports_no_conflict] No project compose files — skipping (not a failure)")
+        return
+
+    platform_ports: set[int] = set(platform_port_mappings_dict.values())
+    if not platform_ports:
+        logger.info("[IMP:9][test_project_ports_no_conflict] No platform port mappings — skipping (not a failure)")
+        return
+    # endregion
+
+    # region BLOCK_CollectProjectPorts
+    project_host_ports: list[tuple[str, int]] = []  # (project_name, port)
+    for compose_path in project_compose_files:
+        project_name = compose_path.parent.name
+        ports = _parse_compose_ports(str(compose_path))
+        for p in ports:
+            project_host_ports.append((project_name, p))
+            logger.info(
+                "[IMP:8][test_project_ports_no_conflict] [%s] uses host port: %d",
+                project_name,
+                p,
+            )
+    # endregion
+
+    # region BLOCK_FindConflicts
+    conflicts: list[tuple[str, int, str]] = []  # (project_name, port, platform_service)
+    for proj_name, port in project_host_ports:
+        if port in platform_ports:
+            # Find the platform service name for this port
+            platform_service = next(
+                (k for k, v in platform_port_mappings_dict.items() if v == port),
+                "unknown",
+            )
+            conflicts.append((proj_name, port, platform_service))
+            logger.error(
+                "[IMP:9][test_project_ports_no_conflict] CONFLICT: [%s] port %d clashes with platform %s",
+                proj_name,
+                port,
+                platform_service,
+            )
+
+    # endregion
+
+    # region BLOCK_Assert
+    if conflicts:
+        conflict_lines = [
+            f"  [{p}] port {pt} → platform: {s}" for p, pt, s in conflicts
+        ]
+        pytest.fail(
+            f"Found {len(conflicts)} port conflict(s) between project(s) and platform:\n"
+            + "\n".join(conflict_lines)
+            + "\nChange project port assignments or update platform-env.yaml port_mappings."
+        )
+
+    logger.info("[IMP:9][test_project_ports_no_conflict] ✅ No port conflicts with platform")
+    # endregion
+
+
+# endregion FUNC_test_project_ports_no_conflict
+
+
+# ── T3: External networks declared in platform-env.yaml ───────────────
+
+# region FUNC_test_project_external_networks_exist
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · External project networks must be declared in platform-env.yaml
+## @purpose — Verify that all external:true networks used in project compose
+##            files are declared in platform-env.yaml networks section.
+##            Prevents deployment of projects requiring networks that don't exist.
+##            DevPlan W3-T3.
+## @io — ⇥ caplog, project_compose_files, platform_networks_list → ⎋ None
+## @complexity — O(F * N + P) where F = compose files, N = networks per file,
+##               P = platform networks
+## @invariants
+##   - Reads platform networks from platform-env.yaml (single source of truth)
+##   - Only checks networks with external: true flag
+##   - Missing networks produce FAIL (platform must be updated first)
+
+
+@pytest.mark.predeploy
+@ldd_trajectory
+def test_project_external_networks_exist(
+    caplog: pytest.LogCaptureFixture,
+    project_compose_files: list[Path],
+    platform_networks_list: list[str],
+) -> None:
+    """
+    # ◇ project_compose_files → ∋ each compose → ⚡ _parse_external_networks()
+    # → ⊕ all_external_nets → ◇ subset of platform_networks_list?
+    # → ⎋ pass | fail (undocumented networks)
+    """
+    # region BLOCK_Setup
+
+    logger.info(
+        "[IMP:7][test_project_external_networks_exist] Checking %d project compose file(s) against %d platform network(s) ...",
+        len(project_compose_files),
+        len(platform_networks_list),
+    )
+
+    if not project_compose_files:
+        logger.info("[IMP:9][test_project_external_networks_exist] No project compose files — skipping (not a failure)")
+        return
+
+    platform_nets: set[str] = set(platform_networks_list)
+    if not platform_nets:
+        logger.info("[IMP:9][test_project_external_networks_exist] No platform networks declared — skipping (not a failure)")
+        return
+    # endregion
+
+    # region BLOCK_CollectExternalNetworks
+    required_nets: dict[str, set[str]] = {}  # compose_file_path -> set[network_name]
+    for compose_path in project_compose_files:
+        nets = _parse_external_networks(str(compose_path))
+        if nets:
+            required_nets[str(compose_path)] = nets
+            logger.info(
+                "[IMP:8][test_project_external_networks_exist] [%s] external networks: %s",
+                compose_path.parent.name,
+                sorted(nets),
+            )
+    # endregion
+
+    # region BLOCK_CheckMissing
+    missing: list[tuple[str, str]] = []  # (project_name, network_name)
+    for compose_path_str, net_set in required_nets.items():
+        project_name = Path(compose_path_str).parent.name
+        for net_name in sorted(net_set):
+            if net_name not in platform_nets:
+                missing.append((project_name, net_name))
+                logger.error(
+                    "[IMP:9][test_project_external_networks_exist] MISSING: [%s] uses network '%s' not in platform-env.yaml",
+                    project_name,
+                    net_name,
+                )
+    # endregion
+
+    # region BLOCK_Assert
+    if missing:
+        missing_lines = [f"  [{p}] {n}" for p, n in missing]
+        pytest.fail(
+            f"Found {len(missing)} external network(s) used by project(s) "
+            f"but not declared in platform-env.yaml networks:\n"
+            + "\n".join(missing_lines)
+            + "\nAdd missing networks to platform-env.yaml#networks or update project compose files."
+        )
+
+    logger.info("[IMP:9][test_project_external_networks_exist] ✅ All project external networks declared in platform-env.yaml")
+    # endregion
+
+
+# endregion FUNC_test_project_external_networks_exist
+
+
+# ── T4: Every project compose requires proxy-net ─────────────────────
+
+# region FUNC_test_project_requires_proxy_net
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Every project compose must declare proxy-net (external: true)
+## @purpose — Verify every project docker-compose.yml has proxy-net declared
+##            as an external network. Nginx proxy routes external traffic through
+##            this network, so every project must be attached.
+##            DevPlan W3-T4.
+## @io — ⇥ caplog, project_compose_files → ⎋ None
+## @complexity — O(F * N) where F = compose files, N = networks per file
+## @invariants
+##   - Checks networks section for `proxy-net: {external: true}`
+##   - Missing proxy-net produces FAIL
+##   - Skips cleanly if no project compose files found
+
+
+@pytest.mark.predeploy
+@ldd_trajectory
+def test_project_requires_proxy_net(
+    caplog: pytest.LogCaptureFixture,
+    project_compose_files: list[Path],
+) -> None:
+    """
+    # ◇ project_compose_files → ∋ each compose → ⚡ _parse_external_networks()
+    # → ◇ 'proxy-net' in external_nets? → ⎋ pass | fail (missing proxy-net)
+    """
+    # region BLOCK_Setup
+
+    logger.info(
+        "[IMP:7][test_project_requires_proxy_net] Checking %d project compose file(s) for proxy-net ...",
+        len(project_compose_files),
+    )
+
+    if not project_compose_files:
+        logger.info("[IMP:9][test_project_requires_proxy_net] No project compose files — skipping (not a failure)")
+        return
+    # endregion
+
+    # region BLOCK_CheckProxyNet
+    missing_proxy: list[str] = []  # project names
+    for compose_path in project_compose_files:
+        project_name = compose_path.parent.name
+        nets = _parse_external_networks(str(compose_path))
+        if "proxy-net" not in nets:
+            missing_proxy.append(project_name)
+            logger.error(
+                "[IMP:9][test_project_requires_proxy_net] MISSING proxy-net: [%s] — compose file %s",
+                project_name,
+                compose_path.name,
+            )
+        else:
+            logger.info(
+                "[IMP:8][test_project_requires_proxy_net] ✅ [%s] has proxy-net", project_name,
+            )
+    # endregion
+
+    # region BLOCK_Assert
+    if missing_proxy:
+        pytest.fail(
+            f"Found {len(missing_proxy)} project compose file(s) without proxy-net (external: true):\n"
+            + "\n".join(f"  [{p}]" for p in missing_proxy)
+            + "\nAdd 'proxy-net: {external: true}' to each project's networks section."
+        )
+
+    logger.info("[IMP:9][test_project_requires_proxy_net] ✅ All project compose files have proxy-net")
+    # endregion
+
+
+# endregion FUNC_test_project_requires_proxy_net
+
+
+# ── T5: ai-platform.yaml schema validation ────────────────────────────
+
+# region FUNC_test_ai_platform_yaml_schema
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · ai-platform.yaml must contain name, domain, target_node
+## @purpose — Validate ai-platform.yaml schema: required fields 'name', 'domain',
+##            and 'target_node' must be present and non-empty in every project's
+##            ai-platform.yaml. Catches incomplete or malformed project configs
+##            before deployment. DevPlan W3-T5.
+## @io — ⇥ caplog, node_yaml_projects → ⎋ None
+## @complexity — O(N * Y) where N = projects, Y = YAML parse per file
+## @invariants
+##   - Required fields: name (str, non-empty), domain (str, non-empty), target_node (str, non-empty)
+##   - Unknown required fields produce FAIL
+##   - Extra fields are allowed (no strict-mode)
+##   - Skips cleanly if no project ai-platform.yaml files found
+
+
+@pytest.mark.predeploy
+@ldd_trajectory
+def test_ai_platform_yaml_schema(
+    caplog: pytest.LogCaptureFixture,
+    node_yaml_projects: list[dict],
+) -> None:
+    """
+    # ⚡ node_yaml_projects → ◇ _find_project_ai_platform_yamls() → ∋ each yaml
+    # → ⚡ _parse_ai_platform_yaml() → ◇ required fields present?
+    # → ◇ missing? → ⎋ fail | pass
+    """
+    # region BLOCK_Setup
+
+    logger.info(
+        "[IMP:7][test_ai_platform_yaml_schema] Validating ai-platform.yaml schema for %d project(s) ...",
+        len(node_yaml_projects),
+    )
+
+    if not node_yaml_projects:
+        logger.info("[IMP:9][test_ai_platform_yaml_schema] No projects in node.yaml — skipping (not a failure)")
+        return
+
+    yamls = _find_project_ai_platform_yamls(node_yaml_projects)
+    if not yamls:
+        logger.info("[IMP:9][test_ai_platform_yaml_schema] No ai-platform.yaml files found — skipping (not a failure)")
+        return
+    # endregion
+
+    # region BLOCK_Validate
+    REQUIRED_FIELDS: frozenset = frozenset({"name", "domain", "target_node"})
+    errors: list[str] = []
+
+    for project_name, yaml_path in sorted(yamls):
+        data = _parse_ai_platform_yaml(yaml_path)
+        if data is None:
+            errors.append(f"[{project_name}] {yaml_path}: failed to parse as YAML dict")
+            continue
+
+        missing_fields: list[str] = []
+        for field in sorted(REQUIRED_FIELDS):
+            value = data.get(field)
+            if not value or (isinstance(value, str) and not value.strip()):
+                missing_fields.append(field)
+
+        if missing_fields:
+            errors.append(
+                f"[{project_name}] {yaml_path}: missing or empty required field(s): {', '.join(missing_fields)}"
+            )
+            logger.error(
+                "[IMP:9][test_ai_platform_yaml_schema] FAIL: [%s] missing: %s",
+                project_name,
+                missing_fields,
+            )
+        else:
+            logger.info(
+                "[IMP:9][test_ai_platform_yaml_schema] ✅ [%s] schema valid: %s",
+                project_name,
+                dict((f, data.get(f)) for f in REQUIRED_FIELDS),
+            )
+    # endregion
+
+    # region BLOCK_Assert
+    if errors:
+        pytest.fail(
+            "ai-platform.yaml schema validation failed:\n" + "\n".join(errors)
+        )
+
+    logger.info(
+        "[IMP:9][test_ai_platform_yaml_schema] ✅ All %d ai-platform.yaml file(s) pass schema validation",
+        len(yamls),
+    )
+    # endregion
+
+
+# endregion FUNC_test_ai_platform_yaml_schema
 
 
 # endregion TESTS

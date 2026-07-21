@@ -15,6 +15,8 @@
 ##   for VPS-side operations. This entrypoint runs on dev machine (or CI) and orchestrates
 ##   tar+ssh. Different responsibility, different environment.
 ## @changes 2026-07-21 · T3 — Initial implementation (Direct deploy entrypoint)
+##           2026-07-21 · W1: Added pre-flight VPS readiness check before deliver_payload (vps-readiness.sh)
+##           2026-07-21 · W6: Added --launch mode: post-deploy URL display
 # endregion MODULE_CONTRACT
 
 # 🧐 TRAP[DECISION] · 2026-07-21 · — · Direct deploy uses same ci-deploy key, not separate key
@@ -49,6 +51,7 @@ PROJECT_DIR=""
 NODE=""
 SKIP_VERIFY=0
 DRY_RUN=0
+LAUNCH_MODE=0
 ORG=""
 PROJECT_NAME=""
 SSH_HOST=""
@@ -87,9 +90,13 @@ parse_args() {
                 DRY_RUN=1
                 shift
                 ;;
+            --launch)
+                LAUNCH_MODE=1
+                shift
+                ;;
             *)
                 log_imp 10 "args" "FATAL: Unknown argument: $1"
-                echo "Usage: $0 --project <dir> --node <name> [--skip-verify] [--dry-run]" >&2
+                echo "Usage: $0 --project <dir> --node <name> [--skip-verify] [--dry-run] [--launch]" >&2
                 exit 1
                 ;;
         esac
@@ -326,9 +333,54 @@ main() {
     validate_project
     extract_org
     resolve_node_host
+
+    # ── W1: Pre-flight VPS readiness check ──
+    if [[ "${SKIP_VERIFY}" -ne 1 ]]; then
+        # Source vps-readiness.sh if available
+        local vps_script="${SCRIPT_DIR}/../lib/vps-readiness.sh"
+        if [[ -f "${vps_script}" ]]; then
+            # shellcheck source=../lib/vps-readiness.sh
+            source "${vps_script}"
+            echo "[IMP:8][deploy-project][preflight] Checking VPS readiness for NODE=${NODE} (SSH_HOST=${SSH_HOST})" >&2
+            # Set NODE_HOST_MAP env for check_vps_ready
+            export NODE_HOST_MAP="${NODE_HOST_MAP:-{\"${NODE}\":\"${SSH_HOST}\"}}"
+            if ! check_vps_ready "${NODE}" --quick; then
+                log_imp 10 "preflight" "FATAL: VPS readiness check failed for ${NODE}@${SSH_HOST}"
+                echo "Run: make bootstrap-node NODE=${NODE} first" >&2
+                exit 2
+            fi
+            echo "[IMP:9][deploy-project][preflight] VPS readiness check passed" >&2
+        else
+            echo "[IMP:7][deploy-project][preflight] vps-readiness.sh not found at ${vps_script} — skipping pre-flight" >&2
+        fi
+    fi
+
     deliver_payload
     ssh_deploy
     verify_deploy
+
+    # ── W6: --launch mode — post-deploy verification ──
+    if [[ "${LAUNCH_MODE}" -eq 1 ]]; then
+        echo "[IMP:9][deploy-project][launch] LAUNCH mode: verifying deployment..." >&2
+        local verify_url=""
+        if [[ -n "${ORG:-}" ]]; then
+            verify_url="https://${PROJECT_NAME}.${ORG}.example.com"
+        else
+            verify_url="https://${SSH_HOST}/${PROJECT_NAME}"
+        fi
+        # Try to get URL from ai-platform.yaml
+        local ai_yaml="${PROJECT_DIR}/ai-platform.yaml"
+        if [[ -f "${ai_yaml}" ]]; then
+            local domain
+            domain="$(grep -E '^domain:' "${ai_yaml}" 2>/dev/null | awk '{print $2}' | head -1 || true)"
+            if [[ -n "${domain}" ]]; then
+                verify_url="https://${domain}"
+            fi
+        fi
+        echo "[IMP:9][deploy-project][launch] PROJECT=${PROJECT_NAME} deployed"
+        echo "[IMP:9][deploy-project][launch] URL: ${verify_url}"
+        echo "[IMP:9][deploy-project][launch] NODE: ${SSH_HOST}"
+    fi
 
     log_imp 9 "main" "=== DIRECT DEPLOY COMPLETE ==="
     echo "[IMP:9][deploy-project][main] Direct deploy complete: ${PROJECT_NAME} → ${SSH_HOST} (org=${ORG:-none})" >&2

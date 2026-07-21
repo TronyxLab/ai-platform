@@ -27,6 +27,10 @@
 ##            duplicated boilerplate (arg parsing, logging, checkpoint, sourcing). Merging
 ##            eliminates duplication, reduces cognitive load, and ensures consistent
 ##            checkpoint/hash behavior across both modes.
+## @changes 2026-07-21 | W2: step_15_converge: fixed exit handling — exit 2=ERROR blocked only in init mode,
+##            exit 1=WARNINGS always non-blocking step_done. Removed dead `$?` code.
+##           2026-07-21 | W4: step_15_converge: +AUTO_RECONCILE passthrough → --reconcile to converge.sh,
+##            +reconcile-projects.sh call after converge
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -125,6 +129,7 @@ step_warn()  { log_step "$1" "WARN"  "${2:-}"; STEP_ERRORS+=("Step ${STEP}: $1 �
 source "${CORE_DIR}/lib/checkpoint.sh"
 source "${CORE_DIR}/internal/bootstrap/content-hash.sh"
 source "${CORE_DIR}/lib/secrets.sh"
+source "${CORE_DIR}/lib/yaml_read.sh"
 
 # ─── Content hash helper (T20) ──────────────────────────
 # Computes per-step content hash for checkpoint invalidation.
@@ -342,15 +347,22 @@ step_6_create_ci_deploy_user() {
 ##           This directory is the root for all project payloads delivered via
 ##           forced-command platform-deliver verb (D2). Idempotent: mkdir -p + chown
 ##           are safe to rerun; checkpoint ensures no-op on subsequent boots.
+##           After base dir + ownership, calls converge --units R3 for per-project
+##           scaffold (directories, ai-platform.yaml stub, .env.platform via gen-env).
 ## @invariants
 ##   - Runs AFTER step_6 (ci-deploy user must exist for chown to succeed)
 ##   - mkdir -p is idempotent; chown ci-deploy:ci-deploy is safe to repeat
 ##   - Projects base is a single fixed path (/opt/projects) shared with deploy-project.sh
+##   - Converge R3 is called only if converge.sh exists AND NODE_NAME is set
+##   - Converge R3 failure is non-fatal (WARN, not abort)
 ## @rationale Per DevPlan 008 Contract 2 (DD2): bootstrap creates base directory ownership;
 ##            platform-deliver verb guarantees PROJECT_DIR even on nodes bootstrapped
 ##            before this fix (defense in depth).
+## @rationale Per DevPlan 024 Wave 2: converge --units R3 creates per-project stubs
+##            during bootstrap step 6b, before CI deliver tries to deploy. This ensures
+##            project directories exist for the first forced-command delivery.
 step_6b_create_projects_base() {
-    step_start "projects-base" "Ensuring /opt/projects base directory"
+    step_start "projects-base" "Ensuring /opt/projects base directory + project scaffold"
     if [[ -d "/opt/projects" ]]; then
         step_skip "projects-base" "/opt/projects already exists"
     else
@@ -362,6 +374,28 @@ step_6b_create_projects_base() {
     # Org subdirectories are created dynamically by handle_deliver() in
     # deploy-project.sh on first platform-deliver call. No static creation needed.
     echo "[IMP:9][bootstrap][projects-base] /opt/projects ownership set to ci-deploy:ci-deploy" >&2
+
+    # ── Call converge R3 for project scaffold (per-project dirs + stubs) ──
+    local converge_script="${CORE_DIR}/internal/bootstrap/converge.sh"
+    if [[ -f "${converge_script}" ]] && [[ -n "${NODE_NAME:-}" ]]; then
+        echo "[IMP:8][bootstrap][projects-base] Calling converge R3 for project scaffold (node=${NODE_NAME})" >&2
+        if bash "${converge_script}" --node "${NODE_NAME}" --units R3 2>&1; then
+            log_step "projects-base" "INFO" "Converge R3 completed (exit 0)"
+        else
+            local converge_rc=$?
+            if [[ $converge_rc -eq 1 ]]; then
+                log_step "projects-base" "INFO" "Converge R3 completed with warnings (exit 1) — non-critical drift"
+            elif [[ $converge_rc -eq 2 ]]; then
+                log_step "projects-base" "WARN" "Converge R3 CRITICAL errors (exit 2) — projects may need manual creation"
+            else
+                log_step "projects-base" "WARN" "Converge R3 failed (exit ${converge_rc}) — projects may need manual creation"
+            fi
+        fi
+    elif [[ -z "${NODE_NAME:-}" ]]; then
+        echo "[IMP:7][bootstrap][projects-base] SKIP: NODE_NAME not set — cannot call converge R3" >&2
+    else
+        echo "[IMP:7][bootstrap][projects-base] SKIP: converge.sh not found at ${converge_script}" >&2
+    fi
 }
 
 # ─── STEP 7: Firewall (ufw declarative) ──────────────────
@@ -551,35 +585,23 @@ step_14_node_update() {
         export GHCR_PULL_TOKEN
     fi
 
-    # Extract domain and project domain config from node.yaml for nginx/letsencrypt
+    # S7: Extract domain config from node.yaml via yaml_read_domain_config() (replaces inline python3)
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
         local domain_info
-        domain_info="$(python3 - "$NODE_YAML" <<'PYEOF'
-import yaml, sys
-with open(sys.argv[1]) as f:
-    data = yaml.safe_load(f)
-domain = data.get('domain', '')
-email = data.get('email', '')
-acme_dns_plugin = data.get('acme_dns_plugin', '')
-projects = data.get('projects', [])
-project_domains = [p.get('domain', '') for p in projects if isinstance(p, dict) and p.get('domain')]
-print(f"platform_domain:{domain}")
-print(f"email:{email}")
-print(f"acme_dns_plugin:{acme_dns_plugin}")
-print(f"project_domains:{' '.join(project_domains)}")
-PYEOF
-)"
-        local yaml_domain yaml_email yaml_project_domains yaml_acme_dns
-        yaml_domain="$(echo "$domain_info" | grep '^platform_domain:' | cut -d: -f2-)"
-        yaml_email="$(echo "$domain_info" | grep '^email:' | cut -d: -f2-)"
-        yaml_project_domains="$(echo "$domain_info" | grep '^project_domains:' | cut -d: -f2-)"
-        yaml_acme_dns="$(echo "$domain_info" | grep '^acme_dns_plugin:' | cut -d: -f2-)"
+        domain_info="$(yaml_read_domain_config "$NODE_YAML")" || true
+        if [[ -n "${domain_info:-}" ]]; then
+            local yaml_domain yaml_email yaml_project_domains yaml_acme_dns
+            yaml_domain="$(echo "$domain_info" | grep '^platform_domain:' | cut -d: -f2-)"
+            yaml_email="$(echo "$domain_info" | grep '^email:' | cut -d: -f2-)"
+            yaml_project_domains="$(echo "$domain_info" | grep '^project_domains:' | cut -d: -f2-)"
+            yaml_acme_dns="$(echo "$domain_info" | grep '^acme_dns_plugin:' | cut -d: -f2-)"
 
-        # Export with fallback: node.yaml value takes priority, then existing env, then empty
-        export PLATFORM_DOMAIN="${yaml_domain:-${PLATFORM_DOMAIN:-}}"
-        export PLATFORM_EMAIL="${yaml_email:-${PLATFORM_EMAIL:-}}"
-        export PLATFORM_PROJECT_DOMAINS="${yaml_project_domains:-${PLATFORM_PROJECT_DOMAINS:-}}"
-        export PLATFORM_ACME_DNS_PLUGIN="${yaml_acme_dns:-${PLATFORM_ACME_DNS_PLUGIN:-}}"
+            # Export with fallback: node.yaml value takes priority, then existing env, then empty
+            export PLATFORM_DOMAIN="${yaml_domain:-${PLATFORM_DOMAIN:-}}"
+            export PLATFORM_EMAIL="${yaml_email:-${PLATFORM_EMAIL:-}}"
+            export PLATFORM_PROJECT_DOMAINS="${yaml_project_domains:-${PLATFORM_PROJECT_DOMAINS:-}}"
+            export PLATFORM_ACME_DNS_PLUGIN="${yaml_acme_dns:-${PLATFORM_ACME_DNS_PLUGIN:-}}"
+        fi
     fi
 
     echo "[IMP:9][bootstrap][step-14] INVOKING: node-lifecycle.sh --mode update (post-init update)"
@@ -615,23 +637,38 @@ step_15_converge() {
     if [[ "${DRY_RUN_MODE:-}" == "true" ]]; then
         converge_args+=("--dry-run")
     fi
+    if [[ "${AUTO_RECONCILE:-false}" == "true" ]]; then
+        converge_args+=("--reconcile")
+    fi
 
     echo "[IMP:9][bootstrap][step-15] INVOKING: ${converge_script} ${converge_args[*]}" >&2
     if bash "${converge_script}" "${converge_args[@]}" 2>&1; then
-        local converge_rc=$?
-        if [[ $converge_rc -eq 0 ]]; then
-            step_done "converge" "Fully converged — no drifts"
-        elif [[ $converge_rc -eq 1 ]]; then
-            step_done "converge" "Mutations applied — node reconciled"
-        else
-            step_warn "converge" "Converge returned exit ${converge_rc} — some R-units failed"
-        fi
+        step_done "converge" "Converge complete — no errors"
     else
         local converge_rc=$?
-        if [[ "${MODE}" == "init" ]]; then
-            step_warn "converge" "Converge failed (exit ${converge_rc}) — bootstrap continues but node may have drifts"
+        if [[ $converge_rc -eq 2 ]]; then
+            # ERROR — блокирует только в init-режиме
+            if [[ "${MODE}" == "init" ]]; then
+                step_warn "converge" "Converge CRITICAL errors (exit 2) — bootstrap continues but node is DEGRADED"
+            else
+                step_warn "converge" "Converge CRITICAL errors (exit 2) — node may be DEGRADED"
+            fi
+        elif [[ $converge_rc -eq 1 ]]; then
+            # WARNINGS — не блокирует
+            step_done "converge" "Converge complete with warnings (exit 1) — non-critical drift"
+        fi
+    fi
+
+    # ── Optional: reconcile stub projects (W4) ──
+    if [[ "${AUTO_RECONCILE:-false}" == "true" ]]; then
+        step_start "reconcile-projects" "Auto-reconciling stub projects after converge"
+        local reconcile_script="${CORE_DIR}/internal/deploy/reconcile-projects.sh"
+        if [[ -f "$reconcile_script" ]]; then
+            source "$reconcile_script"
+            reconcile_projects "${NODE_NAME}" "${NODE_YAML}"
+            step_done "reconcile-projects" "Stub reconciliation complete"
         else
-            step_warn "converge" "Converge failed (exit ${converge_rc}) — node may have drifts"
+            step_warn "reconcile-projects" "reconcile-projects.sh not found"
         fi
     fi
 }
@@ -699,7 +736,7 @@ install_logrotate() {
 # endregion INSTALL_LOGROTATE
 
 # ══════════════════════════════════════════════════════════════════
-# UPDATE MODE — Incremental node update (6 steps)
+# UPDATE MODE — Incremental node update (5 steps: verify → provision → ssl → deploy-modules → healthcheck → converge)
 # ══════════════════════════════════════════════════════════════════
 
 # region FUNC_update_step_1_verify_core
@@ -812,28 +849,16 @@ update_step_3_ssl_provision() {
         return 0
     fi
 
-    # Export domain config from node.yaml (same pattern as step_14 in init mode)
+    # S7: Export domain config from node.yaml via yaml_read_domain_config() (replaces inline python3)
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
         local domain_info
-        domain_info="$(python3 - "$NODE_YAML" <<'PYEOF'
-import yaml, sys
-with open(sys.argv[1]) as f:
-    data = yaml.safe_load(f)
-domain = data.get('domain', '')
-email = data.get('email', '')
-acme_dns_plugin = data.get('acme_dns_plugin', '')
-projects = data.get('projects', [])
-project_domains = [p.get('domain', '') for p in projects if isinstance(p, dict) and p.get('domain')]
-print(f"platform_domain:{domain}")
-print(f"email:{email}")
-print(f"acme_dns_plugin:{acme_dns_plugin}")
-print(f"project_domains:{' '.join(project_domains)}")
-PYEOF
-)"
-        export PLATFORM_DOMAIN="$(echo "$domain_info" | grep '^platform_domain:' | cut -d: -f2-)"
-        export PLATFORM_EMAIL="$(echo "$domain_info" | grep '^email:' | cut -d: -f2-)"
-        export PLATFORM_ACME_DNS_PLUGIN="$(echo "$domain_info" | grep '^acme_dns_plugin:' | cut -d: -f2-)"
-        export PLATFORM_PROJECT_DOMAINS="$(echo "$domain_info" | grep '^project_domains:' | cut -d: -f2-)"
+        domain_info="$(yaml_read_domain_config "$NODE_YAML")" || true
+        if [[ -n "${domain_info:-}" ]]; then
+            export PLATFORM_DOMAIN="$(echo "$domain_info" | grep '^platform_domain:' | cut -d: -f2-)"
+            export PLATFORM_EMAIL="$(echo "$domain_info" | grep '^email:' | cut -d: -f2-)"
+            export PLATFORM_ACME_DNS_PLUGIN="$(echo "$domain_info" | grep '^acme_dns_plugin:' | cut -d: -f2-)"
+            export PLATFORM_PROJECT_DOMAINS="$(echo "$domain_info" | grep '^project_domains:' | cut -d: -f2-)"
+        fi
     fi
 
     if [[ -z "${PLATFORM_DOMAIN:-}" ]]; then
@@ -865,6 +890,41 @@ PYEOF
         echo "[IMP:8][node-lifecycle][ssl-provision] WARN: ${secrets_env} missing — cert renewal may fail if cert expires" >&2
     fi
 
+    # ── Step 3a: Check S3 cache before issue (Wave 1 optimization) ────
+    # [IMP:9][node-lifecycle][ssl-provision] BUSINESS INVARIANT: check S3 cache first
+    # If valid cert exists in S3, restore it and skip acme.sh issue entirely.
+    # This saves ~30s+ per bootstrap (no DNS-01 challenge) for domains that
+    # have been previously provisioned.
+    local s3_cache="${CORE_DIR}/internal/bootstrap/s3-ssl-cache.sh"
+    local ssl_restored=false
+    if [[ -f "$s3_cache" ]]; then
+        log_step "ssl-provision" "INFO" "Checking S3 cert cache for ${PLATFORM_DOMAIN}"
+        echo "[IMP:8][node-lifecycle][ssl-provision] Checking S3 cache at ${s3_cache}" >&2
+        if bash "$s3_cache" check "${PLATFORM_DOMAIN}" 2>&1; then
+            log_step "ssl-provision" "INFO" "Valid cert found in S3 cache — restoring"
+            echo "[IMP:9][node-lifecycle][ssl-provision] Restoring SSL cert from S3 cache" >&2
+            if bash "$s3_cache" download "${PLATFORM_DOMAIN}" 2>&1; then
+                echo "[IMP:9][node-lifecycle][ssl-provision] Cert restored from S3 cache — verifying" >&2
+                ssl_restored=true
+            else
+                log_step "ssl-provision" "WARN" "S3 cert restore failed — falling back to acme.sh issue"
+                echo "[IMP:8][node-lifecycle][ssl-provision] S3 restore returned non-zero — falling back" >&2
+            fi
+        else
+            log_step "ssl-provision" "INFO" "No valid cert in S3 cache — proceeding with acme.sh issue"
+            echo "[IMP:8][node-lifecycle][ssl-provision] S3 check returned 1 — cache miss" >&2
+        fi
+    else
+        echo "[IMP:7][node-lifecycle][ssl-provision] s3-ssl-cache.sh not found at ${s3_cache} — skipping S3 check" >&2
+    fi
+
+    if [[ "$ssl_restored" == "true" ]] && [[ -f "/etc/letsencrypt/live/${PLATFORM_DOMAIN}/fullchain.pem" ]]; then
+        # Cert restored from S3 — skip issue-cert.sh entirely
+        log_step "ssl-provision" "DONE" "SSL certificate restored from S3 cache for ${PLATFORM_DOMAIN}"
+        echo "[IMP:9][node-lifecycle][ssl-provision] SSL cert restored from S3 cache — skipping acme.sh issue" >&2
+        return 0
+    fi
+
     echo "[IMP:9][node-lifecycle][ssl-provision] Issuing SSL certificate for ${PLATFORM_DOMAIN}"
     if bash "$ssl_script" 2>&1; then
         step_done "ssl-provision" "SSL certificate provisioned for ${PLATFORM_DOMAIN}"
@@ -874,37 +934,26 @@ PYEOF
 }
 # endregion FUNC_update_step_3_ssl_provision
 
-# region FUNC_update_step_4_deploy_docker
-## @purpose  Deploy docker modules via deploy-modules.sh
-##           (renumbered from step 3 to 4 after SSL provision insertion).
-##           Deploys all modules defined in node.yaml with docker compose.
-update_step_4_deploy_docker() {
-    step_start "deploy-docker" "Deploying docker modules"
+# region FUNC_update_step_4_deploy_modules
+## @purpose  S2: Deploy ALL modules (docker + system) in a single deploy-modules.sh call.
+##           Previously split into step_4 (docker) + step_5 (system) — merged per
+##           DevPlan 024 S2. Uses --skip-provision to avoid redundant provisioner call
+##           (provisioner already ran at step 2 — eliminates ~4 duplicate invocations).
+## @rationale deploy-modules.sh handles both types in one pass. Merging avoids a
+##           second full main() invocation: _validate_secret_charsets, docker_login,
+##           ghcr_login, ensure_context_repo, parse_modules — all repeated twice.
+update_step_4_deploy_modules() {
+    step_start "deploy-modules" "Deploying all modules (docker + system)"
 
     export NODE_YAML
-    if bash "${CORE_DIR}/internal/bootstrap/deploy-modules.sh" 2>&1; then
-        step_done "deploy-docker" "Docker module deployment complete"
+    if bash "${CORE_DIR}/internal/bootstrap/deploy-modules.sh" --skip-provision 2>&1; then
+        step_done "deploy-modules" "Module deployment complete"
     else
-        log_step "deploy-docker" "FAIL" "Docker module deployment failed"
+        log_step "deploy-modules" "FAIL" "Module deployment failed"
         exit 1
     fi
 }
-# endregion FUNC_update_step_4_deploy_docker
-
-# region FUNC_update_step_5_deploy_system
-## @purpose  Deploy/update system modules (non-docker) via deploy-modules.sh.
-update_step_5_deploy_system() {
-    step_start "deploy-system" "Updating system modules"
-
-    export NODE_YAML
-    if bash "${CORE_DIR}/internal/bootstrap/deploy-modules.sh" --system 2>&1; then
-        step_done "deploy-system" "System module update complete"
-    else
-        log_step "deploy-system" "FAIL" "System module update failed"
-        exit 1
-    fi
-}
-# endregion FUNC_update_step_5_deploy_system
+# endregion FUNC_update_step_4_deploy_modules
 
 # region FUNC_update_step_6_healthcheck
 ## @purpose  Run healthchecks on all deployed modules. Failure is non-fatal
@@ -1181,7 +1230,7 @@ except Exception as e:
             echo "[IMP:9][node-lifecycle][dry-run] ===== DRY RUN: update mode ====="
             echo "[IMP:9][node-lifecycle][dry-run] NODE_NAME: ${NODE_NAME}"
             echo "[IMP:9][node-lifecycle][dry-run] NODE_YAML: ${NODE_YAML}"
-            echo "[IMP:9][node-lifecycle][dry-run] Steps: verify-core → provision → ssl-provision → deploy-docker → deploy-system → healthcheck → converge"
+            echo "[IMP:9][node-lifecycle][dry-run] Steps: verify-core → provision → ssl-provision → deploy-modules → healthcheck → converge"
             echo "[IMP:9][node-lifecycle][dry-run] Node update DRY RUN — no mutations performed, exit 0"
             exit 0
         fi
@@ -1214,15 +1263,13 @@ except Exception as e:
             "${CORE_DIR}/internal/bootstrap/issue-cert.sh")" \
             checkpoint_step "ssl-provision" update_step_3_ssl_provision
 
-        # ── Step 4: Deploy docker modules ─────────────────────────────
-        CHECKPOINT_STEP_HASH="$(_step_hash "deploy-docker" \
+        # ── Step 4: Deploy all modules (docker + system) — S2 merged ──
+        # S2: Previously separate deploy-docker + deploy-system steps. Merged
+        # into a single deploy-modules call with --skip-provision, eliminating
+        # the second full main() invocation (~30% of update cycle time).
+        CHECKPOINT_STEP_HASH="$(_step_hash "deploy-modules" \
             "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
-            checkpoint_step "deploy-docker" update_step_4_deploy_docker
-
-        # ── Step 5: Deploy system modules ─────────────────────────────
-        CHECKPOINT_STEP_HASH="$(_step_hash "deploy-system" \
-            "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
-            checkpoint_step "deploy-system" update_step_5_deploy_system
+            checkpoint_step "deploy-modules" update_step_4_deploy_modules
 
         # ── Step 6: Healthcheck ───────────────────────────────────────
         CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")" \

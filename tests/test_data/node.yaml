@@ -1,43 +1,18 @@
-# GREP_SUMMARY: node-config test-data firewall secrets modules
-# STRUCTURE: ▶ node(host, keys, timezone) → ◇ firewall(extra_ports) → ◇ secrets(enc_file) → ◇ modules(nginx, postgres, backup) → ⎋ complete node config
-# region MODULE_CONTRACT
-## @purpose  Test node configuration for node-resolver and firewall tests
-## @scope    Used by tests for node resolution, firewall config, and module deployment
-## @rationale Full node definition with firewall, secrets, and module declarations.
-# endregion MODULE_CONTRACT
+# @purpose Test node.yaml fixture for predeploy gate local testing — mirrors production node.yaml with a test project
+# Test node.yaml for predeploy gate local testing
+# Mirrors real node.yaml structure but with a test project
+# Used by tests/_conftest/predeploy.py fixture when no production node.yaml is available
 
-context: production
 node:
-  name: node-01
-  host: 192.168.1.100
-  owner_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOwnerKey owner@example.com"
-  ci_deploy_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestCiKey ci-deploy@example.com"
-  timezone: Europe/Moscow
+  name: test-node
+  host: 127.0.0.1
+  timezone: UTC
 
-firewall:
-  extra_ports:
-    - 8080
+domain: test.example.com
+email: test@example.com
 
-secrets:
-  enc_file: secrets/node-01.enc.yaml
-
-modules:
-  - name: nginx
-    enabled: true
-    config_overlay: overlays/node-01/nginx
-  - name: postgres
-    enabled: true
-  - name: backup-cron
-    enabled: true
-
-domain: test.local
-email: admin@test.local
 projects:
-  - name: test-frontend
-    repo: test-org/test-frontend
-    type: frontend
-    domain: app.test.local
-  - name: test-landing
-    repo: test-org/test-landing
-    type: landing
-    domain: independent-project.com
+  - name: test-site
+    domain: test-site.example.com
+    repo: https://github.com/example/test-site.git
+    branch: main

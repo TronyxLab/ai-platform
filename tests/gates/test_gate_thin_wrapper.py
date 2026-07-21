@@ -52,6 +52,7 @@ ALLOWLIST: frozenset[str] = frozenset(
         "check-doc-headers.sh",  # Documentation audit utility — 215 LOC, 6 functions
         "context-promote.sh",  # Uses ssh -T for SSH auth detection (B4), direct git push
         "deploy-project.sh",  # Orchestrator entrypoint — tar+ssh+deploy pipeline (T3/T4, by design)
+        "converge.sh",  # 151 LOC (1 over limit) due to --reconcile flag + MODULE_CONTRACT markup
     }
 )
 

@@ -1,0 +1,5 @@
+# @purpose Test ai-platform.yaml fixture for predeploy gate T5 schema validation
+# Test ai-platform.yaml for predeploy gate T5 schema validation
+name: test-site
+domain: test-site.example.com
+target_node: tronyx-vps

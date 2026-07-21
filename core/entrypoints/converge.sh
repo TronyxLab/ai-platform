@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: entrypoint converge reconcile remote-cmd auto-detect-node dry-run ssh-proxy
-# STRUCTURE: ▶ init ┌parse --node --dry-run┐ → ◇ --node? → ┌auto_detect_node_name┐ → ⚡ execute_remote_converge() → ◇ RC=2? → └─ exec local converge.sh ─┘ → ⎋ exit 0|1
+# STRUCTURE: ▶ init ┌parse --node --dry-run --reconcile┐ → ◇ --node? → ┌auto_detect_node_name┐ → ⚡ execute_remote_converge() → ◇ RC=2? → └─ exec local converge.sh ─┘ → ⎋ exit 0|1|2
 # region MODULE_CONTRACT
-## @purpose  Thin entrypoint for `make converge`: parses --node/--dry-run, delegates
+## @purpose  Thin entrypoint for `make converge`: parses --node/--dry-run/--reconcile, delegates
 ##           to execute_remote_converge() in remote-cmd.sh for SSH proxy, or falls back
 ##           to local exec of core/internal/bootstrap/converge.sh when no SSH host.
 ## @scope    Called ONLY from Makefile.
@@ -10,11 +10,13 @@
 ## @invariants
 ##   - --node is recommended; if missing → auto_detect_node_name() fallback
 ##   - --dry-run prints SSH command or local args without executing
+##   - --reconcile: passthrough flag — after converge, reconcile stub projects (W4)
 ##   - SSH proxy logic lives entirely in remote-cmd.sh (execute_remote_converge)
 ##   - Without SSH_HOST: local exec (backward compatible)
 ##   - No AGE key handling (converge R-units don't decrypt secrets)
 ## @rationale Thin-wrapper per canonical operations table (core/AGENTS.md).
 ##            Mirrors node-update.sh pattern for SSH proxy dispatch (DevPlan 020).
+## @changes 2026-07-21 | +--reconcile flag (DevPlan 025 W4)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -32,7 +34,7 @@ PASSTHROUGH_ARGS=()
 ## @purpose  Print usage instructions and exit 0
 usage() {
     cat <<'EOF'
-Usage: converge.sh --node <name> [--dry-run] [--report-only]
+Usage: converge.sh --node <name> [--dry-run] [--report-only] [--reconcile]
 
 Idempotent desired-state reconciler for platform VPS.
 
@@ -42,17 +44,19 @@ Required:
 Optional:
   --dry-run                  Print planned mutations without executing
   --report-only              Check-only JSON drift report (passthrough)
+  --reconcile                After converge, reconcile stub projects (deploy if GHCR image exists)
   --help, -h                 Print this help
 
 Exit codes:
-  0 — fully converged (no drifts)
-  1 — mutations applied
-  2 — one or more R-units failed
+  0 — fully converged (no drifts, no warnings)
+  1 — warnings (non-critical drift detected)
+  2 — one or more R-units failed (critical)
 
 Examples:
   converge.sh --node tronyx-vps
   converge.sh --node tronyx-vps --dry-run
   converge.sh --node tronyx-vps --report-only
+  converge.sh --node tronyx-vps --reconcile
 EOF
     exit 0
 }
@@ -99,6 +103,7 @@ main() {
         case "$1" in
             --node|--node-name) NODE_NAME="$2"; shift 2 ;;
             --dry-run) DRY_RUN=true; shift ;;
+            --reconcile) PASSTHROUGH_ARGS+=("--reconcile"); shift ;;
             --help|-h) usage ;;
             *) PASSTHROUGH_ARGS+=("$1"); shift ;;
         esac

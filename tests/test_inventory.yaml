@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-20 | regenerated (977 tests)
+## @changes — 2026-07-21 | regenerated (1106 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -105,6 +105,7 @@ test_nodeids:
 - tests/gates/test_gate_module_hooks.py::test_hook_contract_validation[platform-secrets]
 - tests/gates/test_gate_module_hooks.py::test_hook_contract_validation[postgres]
 - tests/gates/test_gate_module_hooks.py::test_hook_contract_validation[redis]
+- tests/gates/test_gate_module_hooks.py::test_hook_contract_validation[status-page]
 - tests/gates/test_gate_module_profiles.py::test_all_base_yml_have_profiles
 - tests/gates/test_gate_module_profiles.py::test_no_stale_profiles
 - tests/gates/test_gate_module_profiles.py::test_profile_matches_module_name
@@ -125,6 +126,16 @@ test_nodeids:
 - tests/gates/test_gate_no_unregistered_entrypoint.py::test_all_makefile_targets_in_allowed_verbs
 - tests/gates/test_gate_no_unregistered_entrypoint.py::test_all_shebang_files_in_manifest
 - tests/gates/test_gate_no_unregistered_entrypoint.py::test_forbidden_scripts_absent
+- tests/gates/test_gate_password_charset.py::test_hermes_compose_has_no_fallback
+- tests/gates/test_gate_password_charset.py::test_no_db_url_contains_raw_postgres_password_without_encoded
+- tests/gates/test_gate_password_charset.py::test_password_charset_validation[SkyNet!!%)-True]
+- tests/gates/test_gate_password_charset.py::test_password_charset_validation[openssl_rand_hex_32-False]
+- tests/gates/test_gate_password_charset.py::test_password_charset_validation[pass#hash-True]
+- tests/gates/test_gate_password_charset.py::test_password_charset_validation[pass/with/slash-True]
+- tests/gates/test_gate_password_charset.py::test_password_charset_validation[pwd with space-True]
+- tests/gates/test_gate_password_charset.py::test_password_charset_validation[simple-False]
+- tests/gates/test_gate_password_charset.py::test_password_charset_validation[valid-pass_123.abc-False]
+- tests/gates/test_gate_password_charset.py::test_secrets_manifest_charset_defined_for_url_passwords
 - tests/gates/test_gate_path_consistency.py::test_gate_path_consistency_negative_original_form
 - tests/gates/test_gate_path_consistency.py::test_no_opt_core_references
 - tests/gates/test_gate_platform_env_schema.py::test_env_defaults_do_not_contain_dot_env_keys
@@ -155,6 +166,8 @@ test_nodeids:
 - tests/gates/test_gate_project_compose.py::test_proxy_net_with_alias
 - tests/gates/test_gate_project_compose.py::test_templates_declare_proxy_net
 - tests/gates/test_gate_project_compose.py::test_valid_project_passes
+- tests/gates/test_gate_project_context.py::test_project_context_consistency
+- tests/gates/test_gate_project_env.py::test_project_env_platform
 - tests/gates/test_gate_pytest_markers.py::test_no_dead_markers
 - tests/gates/test_gate_pytest_markers.py::test_pyproject_toml_has_all_markers
 - tests/gates/test_gate_pytest_markers.py::test_pytest_ini_has_no_markers
@@ -166,7 +179,31 @@ test_nodeids:
 - tests/gates/test_gate_security_config.py::test_clickhouse_access_management_not_1
 - tests/gates/test_gate_security_config.py::test_clickhouse_no_literal_passwords
 - tests/gates/test_gate_security_config.py::test_clickhouse_no_open_networks
+- tests/gates/test_gate_sequencing.py::test_gate_converge_exit_semantics
+- tests/gates/test_gate_sequencing.py::test_gate_converge_reconcile_flag
+- tests/gates/test_gate_sequencing.py::test_gate_makefile_deploy_node_flag
+- tests/gates/test_gate_sequencing.py::test_gate_reconcile_not_entrypoint
+- tests/gates/test_gate_sequencing.py::test_gate_vps_readiness_sourceable
+- tests/gates/test_gate_sequencing.py::test_gate_zero_new_entrypoints
 - tests/gates/test_gate_skip_enforcement.py::test_executed_tests_greater_than_zero
+- tests/gates/test_gate_status_page.py::test_compose_base_has_profiles_and_healthcheck
+- tests/gates/test_gate_status_page.py::test_default_catch_all_no_status_page
+- tests/gates/test_gate_status_page.py::test_dockerignore_is_symlink
+- tests/gates/test_gate_status_page.py::test_dockerignore_points_to_template
+- tests/gates/test_gate_status_page.py::test_env_example_has_master_creds
+- tests/gates/test_gate_status_page.py::test_htpasswd_platform_in_prometheus_loki
+- tests/gates/test_gate_status_page.py::test_makefile_exists
+- tests/gates/test_gate_status_page.py::test_master_email_registered
+- tests/gates/test_gate_status_page.py::test_master_password_registered
+- tests/gates/test_gate_status_page.py::test_module_yaml_exists
+- tests/gates/test_gate_status_page.py::test_module_yaml_required_fields
+- tests/gates/test_gate_status_page.py::test_nginx_htpasswd_mount
+- tests/gates/test_gate_status_page.py::test_no_htpasswd_monitoring_in_nginx_configs
+- tests/gates/test_gate_status_page.py::test_platform_default_catch_all_return_444
+- tests/gates/test_gate_status_page.py::test_platform_vhost_exists_and_has_auth
+- tests/gates/test_gate_status_page.py::test_platform_vhost_health_location
+- tests/gates/test_gate_status_page.py::test_platform_vhost_proxies_to_status_page
+- tests/gates/test_gate_status_page.py::test_platform_vhost_requires_auth
 - tests/gates/test_gate_template_drift.py::test_all_templates_resolvable
 - tests/gates/test_gate_template_metrics.py::test_templates_metrics_endpoint_in_main
 - tests/gates/test_gate_template_metrics.py::test_templates_metrics_port_consistency
@@ -182,6 +219,7 @@ test_nodeids:
 - tests/gates/test_gate_thin_wrapper.py::test_entrypoint_no_direct_binary_calls
 - tests/gates/test_gate_topology.py::test_deploy_order_respects_topology
 - tests/gates/test_gate_topology.py::test_no_cyclic_dependencies
+- tests/gates/test_gate_vhost_nginx_t.py::test_gate_vhost_nginx_t
 - tests/gates/test_gate_workflow_consistency.py::test_all_workflow_files_exist
 - tests/gates/test_gate_workflow_consistency.py::test_basedpyright_tests_removed
 - tests/gates/test_gate_workflow_consistency.py::test_build_platform_uses_provisioner
@@ -206,9 +244,12 @@ test_nodeids:
 - tests/gates/test_restart_consistency.py::test_root_makefile_restart_is_soft
 - tests/test_add_vhost.py::test_add_vhost_cert_path
 - tests/test_add_vhost.py::test_add_vhost_cert_path_independent
+- tests/test_add_vhost.py::test_add_vhost_hyphen_normalization
+- tests/test_add_vhost.py::test_add_vhost_stale_cleanup_on_rerender
+- tests/test_add_vhost.py::test_add_vhost_wildcard_cert_resolution
 - tests/test_add_vhost.py::test_fqdn_check_delegates_to_validate
 - tests/test_add_vhost.py::test_vhost_template_http2_directive
-- tests/test_adopt_project_org_validation.py::test_adopt_fails_without_org
+- tests/test_adopt_project_org_validation.py::test_adopt_derives_org_from_path
 - tests/test_adopt_project_org_validation.py::test_context_mismatch_detected
 - tests/test_adopt_project_org_validation.py::test_ghcr_path_lowercased
 - tests/test_adopt_project_org_validation.py::test_uses_preserves_exact_case
@@ -303,6 +344,7 @@ test_nodeids:
 - tests/test_compose_contract.py::test_images_pinned_tag_digest[nginx]
 - tests/test_compose_contract.py::test_images_pinned_tag_digest[postgres]
 - tests/test_compose_contract.py::test_images_pinned_tag_digest[redis]
+- tests/test_compose_contract.py::test_images_pinned_tag_digest[status-page]
 - tests/test_config_merge.py::test_l1_defaults_exist
 - tests/test_config_merge.py::test_l2_overrides_l1
 - tests/test_config_merge.py::test_l3_overrides_l2
@@ -375,6 +417,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_context-promote]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_deploy-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_lint]
@@ -393,6 +436,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_node-lifecycle]
+- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_secrets-init]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_setup-node]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_catalog_generate-catalog]
@@ -419,6 +463,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_context-promote]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_deploy-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_lint]
@@ -437,6 +482,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_node-lifecycle]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_secrets-init]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_setup-node]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_catalog_generate-catalog]
@@ -463,6 +509,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_context-promote]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_deploy-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_lint]
@@ -481,6 +528,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_node-lifecycle]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_secrets-init]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_setup-node]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_build_hermes-images]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_catalog_generate-catalog]
@@ -507,6 +555,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_check-file-lines]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_context-promote]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_deploy-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_healthcheck]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_lint]
@@ -519,6 +568,11 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_manifest_covers_all_entrypoints
 - tests/test_contract_entrypoints.py::test_manifest_parses
 - tests/test_contract_entrypoints.py::test_node_update_has_ssh_proxy
+- tests/test_converge_exit.py::test_converge_clean_exit_0
+- tests/test_converge_exit.py::test_converge_has_errors_exit_2
+- tests/test_converge_exit.py::test_converge_has_warnings_exit_1
+- tests/test_converge_exit.py::test_node_lifecycle_step15_exit_1_nonblocking
+- tests/test_converge_exit.py::test_node_lifecycle_step15_exit_2_update_nonblocking
 - tests/test_cross_layer_imports.py::test_all_call_sites_use_invoke
 - tests/test_cross_layer_imports.py::test_assignment_without_path
 - tests/test_cross_layer_imports.py::test_bare_variable
@@ -575,6 +629,15 @@ test_nodeids:
 - tests/test_dedup_contract.py::test_sudo_whitelist_symlinks_point_to_template
 - tests/test_dedup_contract.py::test_sudo_whitelist_template_exists_and_valid
 - tests/test_deploy_delivery_static.py::test_rsync_excludes_runtime_artifacts
+- tests/test_deploy_direct.py::test_deliver_org_project
+- tests/test_deploy_direct.py::test_deliver_org_validation
+- tests/test_deploy_direct.py::test_deliver_project_only
+- tests/test_deploy_direct.py::test_deploy_project_invalid_node
+- tests/test_deploy_direct.py::test_deploy_project_validation_no_ai_platform_yaml
+- tests/test_deploy_direct.py::test_deploy_project_validation_no_compose
+- tests/test_deploy_direct.py::test_deploy_project_validation_success
+- tests/test_deploy_direct.py::test_extract_org_deep_path
+- tests/test_deploy_direct.py::test_extract_org_from_path
 - tests/test_deploy_finalization.py::test_deploy_health_fails_exit_1
 - tests/test_deploy_finalization.py::test_deploy_success_audit_unavailable
 - tests/test_deploy_finalization.py::test_deploy_success_notify_missing
@@ -582,6 +645,16 @@ test_nodeids:
 - tests/test_deploy_gates_static.py::test_env_requires_gate_present
 - tests/test_deploy_gates_static.py::test_minio_env_requires_documented
 - tests/test_deploy_gates_static.py::test_no_hardcoded_hermes_images
+- tests/test_deploy_modules.py::test_batch_module_metadata
+- tests/test_deploy_modules.py::test_batch_orphan
+- tests/test_deploy_modules.py::test_batch_sudoers
+- tests/test_deploy_modules.py::test_git_pull_caching
+- tests/test_deploy_modules.py::test_merge_deploy_steps
+- tests/test_deploy_modules.py::test_parallel_healthcheck
+- tests/test_deploy_modules.py::test_rsync_consolidation
+- tests/test_deploy_modules.py::test_skip_provision_flag
+- tests/test_deploy_modules.py::test_topo_sort_enriched_output
+- tests/test_deploy_modules.py::test_yaml_read_domain_config
 - tests/test_e2e_grafana_api.py::test_grafana_admin_login
 - tests/test_e2e_grafana_api.py::test_grafana_dashboard_search
 - tests/test_e2e_grafana_api.py::test_grafana_datasources
@@ -614,6 +687,11 @@ test_nodeids:
 - tests/test_hermes_init.py::test_l1_without_context_ok
 - tests/test_hermes_init.py::test_l2_with_context_ok
 - tests/test_hermes_init.py::test_l2_without_context_exit1
+- tests/test_hermes_l2_fallback.py::test_hermes_build_fallback_fail
+- tests/test_hermes_l2_fallback.py::test_hermes_fallback_code_present
+- tests/test_hermes_l2_fallback.py::test_hermes_no_images_resolved
+- tests/test_hermes_l2_fallback.py::test_hermes_pull_404_build
+- tests/test_hermes_l2_fallback.py::test_hermes_pull_success
 - tests/test_hermes_version.py::test_context_image_default
 - tests/test_hermes_version.py::test_platform_base_image_name
 - tests/test_infra_metrics_static.py::test_cadvisor_image
@@ -738,6 +816,7 @@ test_nodeids:
 - tests/test_pgbouncer_static.py::test_pgbouncer_databases_match_clients
 - tests/test_pgbouncer_static.py::test_pgbouncer_healthcheck_port_6432
 - tests/test_pgbouncer_static.py::test_pgbouncer_no_proxy_includes
+- tests/test_pgbouncer_static.py::test_pgbouncer_password_charset_constraint
 - tests/test_pgbouncer_static.py::test_pgbouncer_pool_mode_in_env
 - tests/test_pgbouncer_static.py::test_pgbouncer_section_in_compose
 - tests/test_pgbouncer_static.py::test_required_databases_present
@@ -768,9 +847,14 @@ test_nodeids:
 - tests/test_postgres.py::test_ready_check_sh_exists_and_separate
 - tests/test_postgres.py::test_ready_check_sh_has_two_stage_check
 - tests/test_postgres.py::test_sudo_whitelist_agent_cannot_stop_or_restore
+- tests/test_predeploy_gate.py::test_ai_platform_yaml_schema
 - tests/test_predeploy_gate.py::test_all_compose_configs_valid
 - tests/test_predeploy_gate.py::test_docker_image_tags_pinned
 - tests/test_predeploy_gate.py::test_docker_networks_precreated
+- tests/test_predeploy_gate.py::test_project_compose_configs_valid
+- tests/test_predeploy_gate.py::test_project_external_networks_exist
+- tests/test_predeploy_gate.py::test_project_ports_no_conflict
+- tests/test_predeploy_gate.py::test_project_requires_proxy_net
 - tests/test_predeploy_gate.py::test_required_env_vars_present
 - tests/test_predeploy_hermes_invariants.py::test_all_invariants_valid
 - tests/test_predeploy_hermes_invariants.py::test_invariant_violation[dashboard_insecure-context_data0-platform.dashboard.insecure]
@@ -793,6 +877,11 @@ test_nodeids:
 - tests/test_project_lifecycle.py::test_remove_is_safe_no_data_deletion
 - tests/test_project_lifecycle.py::test_unregister_idempotent
 - tests/test_project_lifecycle.py::test_unregister_removes_project_entry
+- tests/test_project_scaffold.py::test_converge_r3_dry_run
+- tests/test_project_scaffold.py::test_converge_r3_idempotent
+- tests/test_project_scaffold.py::test_converge_r3_scaffold
+- tests/test_project_scaffold.py::test_gen_env_platform_interface
+- tests/test_project_scaffold.py::test_step_6b_calls_converge
 - tests/test_project_schema.py::test_expose_true_requires_domain_string
 - tests/test_project_schema.py::test_fqdn_conflict_blocks_deploy
 - tests/test_project_schema.py::test_fqdn_same_project_no_conflict
@@ -804,6 +893,9 @@ test_nodeids:
 - tests/test_project_schema.py::test_valid_project_yaml[valid_project_yaml0]
 - tests/test_project_schema.py::test_valid_project_yaml[valid_project_yaml1]
 - tests/test_project_schema.py::test_version_latest_rejected_by_schema
+- tests/test_reconcile.py::test_reconcile_already_deployed_skip
+- tests/test_reconcile.py::test_reconcile_direct_invocation_guard
+- tests/test_reconcile.py::test_reconcile_empty_projects
 - tests/test_redis_static.py::test_infra_metrics_redis_exporter
 - tests/test_redis_static.py::test_prometheus_redis_exporter_job
 - tests/test_redis_static.py::test_redis_cache_only_command
@@ -834,6 +926,10 @@ test_nodeids:
 - tests/test_secrets_validation.py::test_password_var_name_not_mismatched
 - tests/test_secrets_validation.py::test_required_secrets_not_empty
 - tests/test_secrets_validation.py::test_secrets_env_file_exists
+- tests/test_sequencing.py::test_deploy_launch_requires_node
+- tests/test_sequencing.py::test_deploy_launch_with_node
+- tests/test_sequencing.py::test_deploy_preflight_skip_no_node
+- tests/test_sequencing.py::test_deploy_preflight_trigger
 - tests/test_smoke_hermes.py::test_hermes_api_completions
 - tests/test_smoke_hermes.py::test_hermes_auth_login
 - tests/test_smoke_hermes.py::test_hermes_dashboard_health
@@ -876,6 +972,35 @@ test_nodeids:
 - tests/test_smoke_test_isolation.py::test_no_container_name_collision
 - tests/test_smoke_test_isolation.py::test_no_prod_network_in_test_overlay
 - tests/test_smoke_test_isolation.py::test_test_network_consistency
+- tests/test_ssl_s3_cache.py::test_get_backup_config_still_works
+- tests/test_ssl_s3_cache.py::test_get_s3_config_default_region
+- tests/test_ssl_s3_cache.py::test_get_s3_config_missing_credentials
+- tests/test_ssl_s3_cache.py::test_get_s3_config_returns_5_fields
+- tests/test_ssl_s3_cache.py::test_get_s3_config_uses_fallback_endpoint
+- tests/test_ssl_s3_cache.py::test_issue_cert_saves_to_s3_after_success
+- tests/test_ssl_s3_cache.py::test_node_lifecycle_checks_s3_before_issue
+- tests/test_ssl_s3_cache.py::test_s3_cache_script_graceful_degradation
+- tests/test_ssl_s3_cache.py::test_s3_cache_script_has_upload_download_check
+- tests/test_ssl_s3_cache.py::test_s3_cache_script_uses_openssl_validation
+- tests/test_ssl_s3_cache.py::test_s3_config_type_compatibility
+- tests/test_ssl_s3_cache.py::test_s3_config_type_structure
+- tests/test_ssl_s3_cache.py::test_upload_config_source_backup_uses_backup_config
+- tests/test_ssl_s3_cache.py::test_upload_config_source_ssl_cache_uses_s3_config
+- tests/test_status_page.py::test_anti_recursion
+- tests/test_status_page.py::test_health_fail
+- tests/test_status_page.py::test_health_pass
+- tests/test_status_page.py::test_html_contains_vhosts
+- tests/test_status_page.py::test_html_structure
+- tests/test_status_page.py::test_htpasswd_generation_creates_valid_file
+- tests/test_status_page.py::test_htpasswd_generation_idempotent
+- tests/test_status_page.py::test_master_creds_fallback_resolution
+- tests/test_status_page.py::test_status_json_schema
+- tests/test_status_page.py::test_timeout_per_check
+- tests/test_status_page.py::test_x_headers_present
+- tests/test_stub_detection.py::test_converge_r3_stub_reporting
+- tests/test_stub_detection.py::test_is_stub_detects_real
+- tests/test_stub_detection.py::test_is_stub_detects_stub
+- tests/test_stub_detection.py::test_is_stub_missing_file
 - tests/test_template_engine.py::test_atomic_write_output
 - tests/test_template_engine.py::test_binary_template
 - tests/test_template_engine.py::test_check_all_empty_manifest
@@ -980,6 +1105,10 @@ test_nodeids:
 - tests/test_volume_spool_consistency.py::test_ensure_spool_dirs_is_verify_only
 - tests/test_volume_spool_consistency.py::test_no_orphan_volumes
 - tests/test_volume_spool_consistency.py::test_spool_dir_has_volume_mount
+- tests/test_vps_readiness.py::test_vps_readiness_empty_node
+- tests/test_vps_readiness.py::test_vps_readiness_json_mode
+- tests/test_vps_readiness.py::test_vps_readiness_no_host_map
+- tests/test_vps_readiness.py::test_vps_readiness_source_ok
 - tests/unit/test_deploy_snapshot.py::test_finalize_failure_preserves_snapshot
 - tests/unit/test_deploy_snapshot.py::test_finalize_success_writes_result
 - tests/unit/test_deploy_snapshot.py::test_rollback_restores_from_snapshot

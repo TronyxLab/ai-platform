@@ -8,14 +8,15 @@ PROJECT_BRIEF          = "AI-Instructions Framework — semantic markup document
 OUTPUT_DIRECTORY       = .doxygen/
 
 # ── Input ────────────────────────────────────────────────
-INPUT                  = tests/
+INPUT                  = core/ tests/
 FILE_PATTERNS          = *.py *.xml *.yaml *.md
 RECURSIVE              = YES
-EXCLUDE                = tests/ .kilo/ __pycache__/ .git/
-EXCLUDE_PATTERNS       = *.pyc
+EXCLUDE                = .kilo/ __pycache__/ .git/ .doxygen/ build/ node-configs/
+EXCLUDE_PATTERNS       = *.pyc *.egg-info
 
 # ── Mode ─────────────────────────────────────────────────
-OPTIMIZE_OUTPUT_JAVA   = YES
+OPTIMIZE_OUTPUT_JAVA   = NO
+EXTENSION_MAPPING      = py=Python
 EXTRACT_ALL            = YES
 EXTRACT_PRIVATE        = YES
 EXTRACT_STATIC         = YES
@@ -47,22 +48,31 @@ XML_OUTPUT             = .docs/xml/
 GENERATE_MAN           = NO
 
 # ── Aliases — AI-Instructions Semantic Markup Tags ───────
-# These map ## @tag python comments to Doxygen special commands
-ALIASES                = purpose="## @purpose" \
-                         scope="## @scope" \
-                         invariants="## @invariants" \
-                         rationale="## @rationale" \
-                         input="## @input" \
-                         output="## @output" \
-                         io="## @io" \
-                         uses="## @uses" \
-                         complexity="## @complexity" \
-                         links="## @links" \
-                         links_to_spec="## @links_to_spec" \
-                         changes="## @changes" \
-                         modulemap="## @modulemap" \
-                         usecases="## @usecases" \
-                         modulecontract="## @modulecontract"
+# Map ## @tag python comments to Doxygen \par \b TagName: formatting
+ALIASES                = purpose="\b Purpose:" \
+                         scope="\b Scope:" \
+                         invariants="\b Invariants:" \
+                         rationale="\b Rationale:" \
+                         input="\b Input:" \
+                         output="\b Output:" \
+                         io="\b I/O:" \
+                         uses="\b Uses:" \
+                         complexity="\b Complexity:" \
+                         links="\b Links:" \
+                         links_to_spec="\b Links to spec:" \
+                         changes="\b Changes:" \
+                         modulemap="\b Module map:" \
+                         usecases="\b Use cases:" \
+                         modulecontract="\b Module contract:" \
+                         pytest="\b Pytest:" \
+                         scenario="\b Scenario:" \
+                         ldd_trajectory="\b LDD Trajectory:" \
+                         regression="\b Regression:" \
+                         acceptance="\b Acceptance:" \
+                         renamed_from="\b Renamed from:" \
+                         staticmethod="\b Static:" \
+                         host="\b Host:" \
+                         digest="\b Digest:"
 
 # ── Preprocessing ────────────────────────────────────────
 ENABLE_PREPROCESSING   = YES

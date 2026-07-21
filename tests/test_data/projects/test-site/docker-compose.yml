@@ -1,0 +1,18 @@
+# @purpose Test docker-compose.yml fixture for predeploy gate T1-T4 validation — proxy-net with external port
+# Test compose file for predeploy gate T1-T4 validation
+# Contains proxy-net (external: true) and exposes port 8080 (non-platform)
+version: "3.8"
+
+services:
+  web:
+    image: nginx:stable-alpine
+    ports:
+      - "8082:80"
+    networks:
+      - proxy-net
+    environment:
+      - SITE_DOMAIN=test-site.example.com
+
+networks:
+  proxy-net:
+    external: true

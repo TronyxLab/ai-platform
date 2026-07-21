@@ -362,6 +362,9 @@ gates:
   - id: security-config
     description: Security configuration audit (secrets, permissions, network policies)
     test_file: test_gate_security_config.py
+  - id: sequencing-reliability
+    description: Deploy sequencing & reliability gate — converge exit semantics, reconcile flag, stub detection, vps-readiness, deploy NODE/LAUNCH flags, S7 constraint (0 new targets)
+    test_file: test_gate_sequencing.py
   - id: template-syntax
     description: All template files use unified {{UPPER_SNAKE}} syntax, no legacy __VAR__ or ${VAR} placeholders (except compose runtime vars)
     test_file: test_gate_template_syntax.py

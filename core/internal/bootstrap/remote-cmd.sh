@@ -24,6 +24,7 @@
 ##            for strict error handling.
 ## @changes 2026-07-17 | T15 — Extracted from bootstrap.sh (pure extraction, identical logic)
 ##           2026-07-17 | T2  — Added build_update_ssh_cmd() for node-update SSH proxy
+##           2026-07-21 | W4 — Added execute_remote_reconcile() + execute_remote_reconcile_entrypoint()
 # endregion MODULE_CONTRACT
 
 # ── source paths.sh for PLATFORM_ROOT ──────────────────────────────
@@ -479,3 +480,93 @@ deliver_vhost_overlays() {
     echo "[IMP:9][node-update][overlays] Overlay delivery complete" >&2
 }
 # endregion FUNC_deliver_vhost_overlays
+
+# ═══════════════════════════════════════════════════════════════════
+# EXECUTE REMOTE RECONCILE VIA SSH
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_execute_remote_reconcile
+## @purpose  Resolve node.yaml → detect SSH host → prepare SSH opts → build remote
+##           converge --reconcile command → exec ssh on the remote VPS.
+##           Returns 2 if no SSH host (caller handles local exec).
+## @param $1  Node name
+## @param @2+  Passthrough args for converge.sh --reconcile
+## @exit 0   — DRY_RUN complete (printed command, script exits)
+## @exit 1   — Fatal error (node.yaml not resolvable)
+## @return 2 — No SSH host; caller should execute locally
+## @invariants
+##   - Sources node-resolver.sh and scp-deliver.sh (function definition libs, idempotent)
+##   - build_converge_ssh_cmd is reused for the remote command
+##   - Adds --reconcile flag to the converge command
+##   - Returns 2 for local fallback (no SSH host); always returns 1 on fatal error
+##   - On DRY_RUN: exit 0 (prints SSH command, stops script)
+##   - DRY_RUN global variable controls dry-run mode (set by entrypoint)
+execute_remote_reconcile() {
+    local node_name="$1"
+    shift 1
+    local passthrough_args=("$@")
+
+    # ── Source dependencies (function-only libs, idempotent) ────────
+    local _err_dir
+    _err_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=../../lib/node-resolver.sh
+    source "${_err_dir}/../../lib/node-resolver.sh"
+    # shellcheck source=./scp-deliver.sh
+    source "${_err_dir}/scp-deliver.sh"
+
+    # ── Resolve node.yaml ──────────────────────────────────────────
+    local node_yaml
+    node_yaml="$(resolve_node_yaml "${node_name}" "${PLATFORM_ROOT}" "${HOME}/projects")" || {
+        echo "[IMP:10][reconcile][remote] FATAL: Cannot resolve node.yaml for node=${node_name}" >&2
+        return 1
+    }
+    echo "[IMP:9][reconcile][remote] Resolved node.yaml: ${node_yaml}" >&2
+
+    # ── Extract SSH host ───────────────────────────────────────────
+    local ssh_host
+    ssh_host="$(extract_node_host "${node_yaml}")" || {
+        echo "[IMP:8][reconcile][remote] WARN: No SSH host in node.yaml — local mode" >&2
+        ssh_host=""
+    }
+
+    if [[ -z "${ssh_host}" ]]; then
+        echo "[IMP:9][reconcile][remote] No SSH host — returning for local fallback" >&2
+        return 2
+    fi
+
+    echo "[IMP:9][reconcile][remote] SSH host: ${ssh_host} — REMOTE reconcile via SSH" >&2
+
+    # ── Prepare SSH opts (mode=update — same host-key pattern) ──
+    prepare_ssh_opts "${ssh_host}" "update"
+
+    # ── Build remote command: converge --reconcile ─────────────────
+    local remote_cmd
+    remote_cmd="$(build_converge_ssh_cmd "${node_name}" "--reconcile" "${passthrough_args[@]}")"
+
+    # ── DRY_RUN mode ───────────────────────────────────────────────
+    if ${DRY_RUN:-false}; then
+        echo "[IMP:8][reconcile][dry-run] DRY-RUN: ssh ${SSH_OPTS[*]} root@${ssh_host} ${remote_cmd}" >&2
+        echo "[IMP:9][reconcile][dry-run] DRY-RUN complete" >&2
+        exit 0
+    fi
+
+    # ── Execute SSH ────────────────────────────────────────────────
+    echo "[IMP:9][reconcile][remote] Executing converge --reconcile on root@${ssh_host}" >&2
+    # shellcheck disable=SC2086,SC2048  # SSH_OPTS intentionally word-split from array
+    exec ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" "${remote_cmd}"
+}
+# endregion FUNC_execute_remote_reconcile
+
+# ═══════════════════════════════════════════════════════════════════
+# EXECUTE REMOTE RECONCILE (ALTERNATE) — via converge.sh entrypoint
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_execute_remote_reconcile_entrypoint
+## @purpose  Higher-level wrapper — calls converge.sh entrypoint with --reconcile
+##           on the remote VPS. Uses execute_remote_reconcile internally.
+## @param $1  Node name
+## @param @2+  Passthrough args for converge.sh
+execute_remote_reconcile_entrypoint() {
+    local node_name="$1"
+    shift 1
+    execute_remote_reconcile "${node_name}" "$@"
+}
+# endregion FUNC_execute_remote_reconcile_entrypoint

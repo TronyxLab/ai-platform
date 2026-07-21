@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: converge reconciler reconcile-perms reconcile-audit-log reconcile-projects reconcile-networks detect-hosts-drift verify-vhosts idempotent drift-detection desired-state
-# STRUCTURE: ▶ argparse ┌--node --dry-run --report-only┐ → ⚡ flock /var/lock/platform-converge.lock → ▶ R1 reconcile_perms ⚡ [IMP:9] chmod ug+x → ▶ R2 reconcile_audit_log ⚡ [IMP:9] 0664 root:adm → ▶ R3 reconcile_projects ⚡ [IMP:9] mkdir + stub → ▶ R4 reconcile_networks ⚡ [IMP:9] proxy-net → ▶ R5 detect_hosts_drift ⚡ [IMP:9] WARN /etc/hosts → ▶ R6 verify_vhosts ⚡ [IMP:9] nginx -t + content-hash → ⊕ aggregate exit_code → ⎋ JSON report (--report-only)
+# GREP_SUMMARY: converge reconciler reconcile-perms reconcile-audit-log reconcile-projects reconcile-networks detect-hosts-drift verify-vhosts unit-filter gen-env-platform idempotent drift-detection desired-state
+# STRUCTURE: ▶ argparse ┌--node --dry-run --report-only --units┐ → ⚡ flock /var/lock/platform-converge.lock → ▶ _unit_enabled filter → ▶ R1 reconcile_perms ⚡ [IMP:9] chmod ug+x → ▶ R2 reconcile_audit_log ⚡ [IMP:9] 0664 root:adm → ▶ R3 reconcile_projects ⚡ [IMP:9] mkdir + stub + gen-env → ▶ R4 reconcile_networks ⚡ [IMP:9] proxy-net → ▶ R5 detect_hosts_drift ⚡ [IMP:9] WARN /etc/hosts → ▶ R6 verify_vhosts ⚡ [IMP:9] nginx -t + content-hash → ⊕ aggregate exit_code → ⎋ JSON report (--report-only)
 # region MODULE_CONTRACT
 ## @purpose  Idempotent desired-state reconciler for platform VPS — reads node.yaml as desired
 ##           state and converges 6 dimensions (R1-R6) to match. No-op on repeat run
@@ -15,9 +15,11 @@
 ## @location core/internal/bootstrap/converge.sh
 ## @invariants
 ##   - R-units are independent — one unit failure does NOT abort others
-##   - Exit code: 0=converged (no drifts), 1=mutations applied, 2=unit(s) failed
+##   - Exit code: 0=converged (no drifts), 1=warnings (non-critical drift), 2=errors (critical failures)
 ##   - --report-only: no mutations, exit 0, JSON drift report on stdout
+##   - --reconcile: after R-units, call reconcile-projects.sh for stub→deployed recovery (W4)
 ##   - --dry-run: prints plan without mutations, exit 0
+##   - --units R1,R3,...: filter which R-units run; empty = all units (default)
 ##   - node.yaml must be present or FATAL exit 2
 ##   - Concurrent execution blocked by flock /var/lock/platform-converge.lock
 ##   - Never modifies project data (volumes, DB, images — invariant O7)
@@ -27,6 +29,16 @@
 ##            R-units are lightweight idempotent checks — fast (seconds) on repeat run.
 ##            Design chosen over per-mutation lifecycle checkpoints for atomic drift
 ##            detection + standalone usability.
+## @rationale --units filter added for DevPlan 024 Wave 2: step_6b_create_projects_base in
+##            node-lifecycle.sh calls converge.sh --units R3 for early project scaffold,
+##            before step_15 full converge.
+## @changes 2026-07-21 | W2: Added CONVERGE_HAS_ERRORS/CONVERGE_HAS_WARNINGS flags, final exit uses flags
+##           2026-07-21 | W2: Exit codes now: 0=fully converged, 1=warnings, 2=errors
+##           2026-07-21 | W3: Added _is_stub() helper, R3 distinguishes stub vs deployed in report
+##           2026-07-21 | W4: Added --reconcile flag, calls reconcile-projects.sh after R-units
+## @rationale R3 .env.platform generation: replaced `touch` with gen-env-platform.sh call
+##            to produce real .env.platform content from platform-env.yaml. Fallback to
+##            empty file if gen-env-platform.sh unavailable.
 ## @rationale Location: core/internal/bootstrap/ (not lib/) because converge is an executable
 ##            operation (shebang + main), not a sourced library. Calls lib/ functions.
 ## ⚠️ TRAP[DECISION] · 2026-07-18 · HI · D⊕B synthesis: R6 verify-only (not render)
@@ -45,18 +57,48 @@ set -euo pipefail
 CONVERGE_NODE=""
 CONVERGE_DRY_RUN=false
 CONVERGE_REPORT_ONLY=false
+CONVERGE_UNITS=""          # empty = all R-units; comma-separated like "R1,R3" or "R3"
 CONVERGE_JSON_REPORT="{}"
-CONVERGE_EXIT_CODE=0  # 0=converged, 1=mutations, 2=errors
+CONVERGE_EXIT_CODE=0       # 0=converged, 1=mutations/warnings, 2=errors
+CONVERGE_HAS_ERRORS=false  # separate flag for CRITICAL failures
+CONVERGE_HAS_WARNINGS=false
 LOCK_FILE="/var/lock/platform-converge.lock"
 CORE_DIR=""
 NODE_YAML_PATH=""
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_unit_enabled
+## @purpose  Check if a given R-unit should be executed based on --units filter.
+##           If CONVERGE_UNITS is empty (default), all units are enabled.
+##           Otherwise, checks if the unit name (e.g., "R3") is in the comma-separated list.
+## @param $1  Unit name (e.g., "R1", "R3")
+## @return   0 if unit is enabled, 1 if filtered out
+## @complexity O(n) where n = number of units in filter
+_unit_enabled() {
+    local unit_name="$1"
+    if [[ -z "${CONVERGE_UNITS}" ]]; then
+        return 0  # no filter → all enabled
+    fi
+    # Convert comma-separated list to array and check membership
+    local -a unit_list
+    IFS=',' read -ra unit_list <<< "${CONVERGE_UNITS}"
+    for u in "${unit_list[@]}"; do
+        # Trim whitespace
+        u="$(echo "${u}" | xargs)"
+        if [[ "${u}" == "${unit_name}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+# endregion FUNC_unit_enabled
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_usage
 ## @purpose  Print usage instructions and exit
 usage() {
     cat <<'EOF'
-Usage: converge.sh --node <name> [--dry-run] [--report-only]
+Usage: converge.sh --node <name> [--dry-run] [--report-only] [--reconcile] [--units <R1,R2,...>]
 
 Idempotent desired-state reconciler for platform VPS.
 
@@ -66,17 +108,23 @@ Required:
 Optional:
   --dry-run                  Print planned mutations without executing
   --report-only              Check-only: print JSON drift report to stdout, exit 0
+  --reconcile                After converge, reconcile stub projects (deploy if GHCR image exists)
+  --units <R1,R2,...>        Comma-separated R-unit filter (default: all R1-R6).
+                              Example: --units R3 runs only reconcile_projects.
   --help, -h                 Print this help
 
 Exit codes:
-  0 — fully converged (no drifts)
-  1 — mutations applied (normal after first run)
-  2 — one or more R-units failed (errors during reconciliation)
+  0 — fully converged (no drifts, no warnings)
+  1 — warnings (non-critical drift detected — repeat run = no-op)
+  2 — one or more R-units failed (critical errors during reconciliation)
 
 Examples:
   converge.sh --node tronyx-vps
   converge.sh --node tronyx-vps --dry-run
   converge.sh --node tronyx-vps --report-only
+  converge.sh --node tronyx-vps --reconcile
+  converge.sh --node tronyx-vps --units R3          # project scaffold only
+  converge.sh --node tronyx-vps --units R1,R3,R6    # selective reconciliation
 EOF
     exit 0
 }
@@ -129,6 +177,17 @@ setup_environment() {
 acquire_lock() {
     if [[ "${CONVERGE_DRY_RUN}" == "true" ]] || [[ "${CONVERGE_REPORT_ONLY}" == "true" ]]; then
         echo "[IMP:7][converge][lock] SKIP: flock not needed in dry-run/report-only mode" >&2
+        return 0
+    fi
+
+    # ⚠️ TRAP[DECISION] · 2026-07-21 · — · flock not available on macOS
+    # · Rejected: requiring util-linux on dev machines
+    # · Reason: flock is from util-linux (Linux). Not available on macOS.
+    #   On macOS: skip locking with a WARN. On Linux: use flock as intended.
+    # · Rev: if concurrent converge calls become a problem on macOS in CI,
+    #   install util-linux via Homebrew.
+    if ! command -v flock &>/dev/null; then
+        echo "[IMP:7][converge][lock] WARN: flock not available — skipping lock acquisition (non-Linux platform)" >&2
         return 0
     fi
 
@@ -240,7 +299,7 @@ reconcile_perms() {
         echo "[IMP:9][converge][${unit}] WOULD fix ${fix_count} file(s):" >&2
         echo "${file_list}" >&2
         report_add "${unit}" "mutated" "${fix_count} files would get ug+x"
-        CONVERGE_EXIT_CODE=1
+        CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         return 0
     fi
 
@@ -264,7 +323,7 @@ reconcile_perms() {
     else
         echo "[IMP:9][converge][${unit}] DONE: Fixed ${fix_count} file(s) — chmod ug+x applied" >&2
         report_add "${unit}" "mutated" "${fix_count} files fixed with ug+x"
-        CONVERGE_EXIT_CODE=1
+        CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
     fi
 }
 # endregion FUNC_reconcile_perms
@@ -295,13 +354,13 @@ reconcile_audit_log() {
     if [[ -L "${log_dir}" ]]; then
         echo "[IMP:10][converge][${unit}] FATAL: ${log_dir} is a symlink — possible symlink attack, aborting unit" >&2
         report_add "${unit}" "fail" "Symlink detected: ${log_dir} — possible attack"
-        CONVERGE_EXIT_CODE=2
+        CONVERGE_EXIT_CODE=2; CONVERGE_HAS_ERRORS=true
         return 1
     fi
     if [[ -L "${audit_log}" ]]; then
         echo "[IMP:10][converge][${unit}] FATAL: ${audit_log} is a symlink — possible symlink attack, aborting unit" >&2
         report_add "${unit}" "fail" "Symlink detected: ${audit_log} — possible attack"
-        CONVERGE_EXIT_CODE=2
+        CONVERGE_EXIT_CODE=2; CONVERGE_HAS_ERRORS=true
         return 1
     fi
 
@@ -313,16 +372,17 @@ reconcile_audit_log() {
             if [[ "${report_only}" == "true" ]] || [[ "${dry_run}" == "true" ]]; then
                 echo "[IMP:9][converge][${unit}] WOULD fix: ci-deploy not in adm group — usermod -aG adm" >&2
                 report_add "${unit}" "mutated" "ci-deploy would be added to adm group"
-                CONVERGE_EXIT_CODE=1
+                CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
             else
                 echo "[IMP:9][converge][${unit}] Adding ci-deploy to adm group" >&2
                 if usermod -aG adm ci-deploy 2>/dev/null; then
                     echo "[IMP:9][converge][${unit}] DONE: ci-deploy added to adm group" >&2
                     report_add "${unit}" "mutated" "ci-deploy added to adm group"
-                    CONVERGE_EXIT_CODE=1
+                    CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
                 else
                     echo "[IMP:8][converge][${unit}] WARN: usermod failed — ci-deploy may not have write access to audit.log" >&2
                     report_add "${unit}" "warn" "usermod failed for ci-deploy → adm group"
+                    CONVERGE_HAS_WARNINGS=true
                 fi
             fi
         fi
@@ -335,7 +395,7 @@ reconcile_audit_log() {
         if [[ "${report_only}" == "true" ]] || [[ "${dry_run}" == "true" ]]; then
             echo "[IMP:9][converge][${unit}] WOULD create: ${log_dir} 0750 root:adm" >&2
             report_add "${unit}" "mutated" "Directory ${log_dir} would be created"
-            CONVERGE_EXIT_CODE=1
+            CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         else
             echo "[IMP:8][converge][${unit}] Creating ${log_dir} 0750 root:adm" >&2
             mkdir -p "${log_dir}"
@@ -343,7 +403,7 @@ reconcile_audit_log() {
             chown root:adm "${log_dir}" 2>/dev/null || chown root:root "${log_dir}"
             echo "[IMP:9][converge][${unit}] DONE: ${log_dir} created 0750 root:adm" >&2
             report_add "${unit}" "mutated" "Directory ${log_dir} created"
-            CONVERGE_EXIT_CODE=1
+            CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         fi
     fi
 
@@ -352,7 +412,7 @@ reconcile_audit_log() {
         if [[ "${report_only}" == "true" ]] || [[ "${dry_run}" == "true" ]]; then
             echo "[IMP:9][converge][${unit}] WOULD create: ${audit_log} 0664 root:adm" >&2
             report_add "${unit}" "mutated" "File ${audit_log} would be created"
-            CONVERGE_EXIT_CODE=1
+            CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         else
             echo "[IMP:8][converge][${unit}] Creating ${audit_log} 0664 root:adm" >&2
             touch "${audit_log}"
@@ -360,7 +420,7 @@ reconcile_audit_log() {
             chown root:adm "${audit_log}" 2>/dev/null || true
             echo "[IMP:9][converge][${unit}] DONE: ${audit_log} created 0664 root:adm" >&2
             report_add "${unit}" "mutated" "File ${audit_log} created"
-            CONVERGE_EXIT_CODE=1
+            CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         fi
     else
         # File exists — verify and fix permissions
@@ -373,14 +433,14 @@ reconcile_audit_log() {
             if [[ "${report_only}" == "true" ]] || [[ "${dry_run}" == "true" ]]; then
                 echo "[IMP:9][converge][${unit}] WOULD fix: ${audit_log} mode=${current_mode} owner=${current_owner}" >&2
                 report_add "${unit}" "mutated" "audit.log permissions would be fixed"
-                CONVERGE_EXIT_CODE=1
+                CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
             else
                 echo "[IMP:8][converge][${unit}] Fixing permissions: ${audit_log} mode=${current_mode} owner=${current_owner}" >&2
                 chmod 0664 "${audit_log}" 2>/dev/null || true
                 chown root:adm "${audit_log}" 2>/dev/null || true
                 echo "[IMP:9][converge][${unit}] DONE: ${audit_log} permissions corrected" >&2
                 report_add "${unit}" "mutated" "audit.log permissions corrected to 0664 root:adm"
-                CONVERGE_EXIT_CODE=1
+                CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
             fi
         else
             echo "[IMP:9][converge][${unit}] SKIP: ${audit_log} already 0664 root:adm (converged)" >&2
@@ -402,7 +462,7 @@ reconcile_audit_log() {
 # region FUNC_reconcile_projects
 ## @purpose  Read node.yaml#projects and ensure per-project directories,
 ##           ownership ci-deploy:ci-deploy, stub ai-platform.yaml, and
-##           empty .env.platform (if-missing).
+##           .env.platform via gen-env-platform.sh (if-missing).
 ## @io       stdout/stderr: LDD logs [IMP:7-10]
 ##           side-effect: mkdir -p, chown, touch
 ## @edge-cases
@@ -479,7 +539,7 @@ PYEOF
         if ! _validate_project_name "${proj_name}"; then
             errors=$((errors + 1))
             report_add "${unit}" "fail" "Invalid project name: ${proj_name}"
-            CONVERGE_EXIT_CODE=2
+            CONVERGE_EXIT_CODE=2; CONVERGE_HAS_ERRORS=true
             continue
         fi
 
@@ -495,6 +555,7 @@ PYEOF
                 mkdir -p "${proj_dir}" || {
                     echo "[IMP:10][converge][${unit}] FAIL: mkdir -p ${proj_dir} failed" >&2
                     errors=$((errors + 1))
+                    CONVERGE_EXIT_CODE=2; CONVERGE_HAS_ERRORS=true
                     continue
                 }
                 echo "[IMP:9][converge][${unit}] DONE: ${proj_dir} created" >&2
@@ -529,21 +590,44 @@ STUBEOF
                 mutated=$((mutated + 1))
             fi
         else
-            echo "[IMP:7][converge][${unit}] SKIP: ${stub_file} already exists (not overwritten)" >&2
+            if head -1 "${stub_file}" 2>/dev/null | grep -q "GENERATED-STUB"; then
+                echo "[IMP:7][converge][${unit}] STUB: ${stub_file} is a GENERATED-STUB (awaiting deploy)" >&2
+                report_add "${unit}" "awaiting_deploy" "Project ${proj_name}: stub present, awaiting CI deploy"
+            else
+                echo "[IMP:7][converge][${unit}] SKIP: ${stub_file} already exists (real config — deployed)" >&2
+                report_add "${unit}" "converged" "Project ${proj_name}: deployed"
+            fi
         fi
 
-        # ── empty .env.platform (if-missing) 0640 ci-deploy ──
+        # ── .env.platform via gen-env-platform.sh (if-missing) 0640 ci-deploy ──
         local env_file="${proj_dir}/.env.platform"
         if [[ ! -f "${env_file}" ]]; then
             if [[ "${report_only}" == "true" ]] || [[ "${dry_run}" == "true" ]]; then
-                echo "[IMP:9][converge][${unit}] WOULD create: ${env_file} 0640 ci-deploy" >&2
+                echo "[IMP:9][converge][${unit}] WOULD create: ${env_file} via gen-env-platform.sh" >&2
                 mutated=$((mutated + 1))
             else
-                echo "[IMP:8][converge][${unit}] Creating empty: ${env_file} 0640 ci-deploy" >&2
-                touch "${env_file}"
-                chmod 0640 "${env_file}" 2>/dev/null || true
-                chown ci-deploy:ci-deploy "${env_file}" 2>/dev/null || true
-                echo "[IMP:9][converge][${unit}] DONE: ${env_file} created" >&2
+                echo "[IMP:8][converge][${unit}] Creating .env.platform via gen-env-platform.sh for ${proj_name}" >&2
+                # Try gen-env-platform.sh first; fall back to touch if unavailable
+                local gen_env_script="${CORE_DIR}/internal/scaffold/gen-env-platform.sh"
+                if [[ -f "${gen_env_script}" ]]; then
+                    if bash "${gen_env_script}" --name "${proj_name}" --output "${env_file}" 2>&1; then
+                        chmod 0640 "${env_file}" 2>/dev/null || true
+                        chown ci-deploy:ci-deploy "${env_file}" 2>/dev/null || true
+                        echo "[IMP:9][converge][${unit}] DONE: ${env_file} generated via gen-env-platform.sh" >&2
+                    else
+                        echo "[IMP:9][converge][${unit}] WARN: gen-env-platform.sh failed for ${proj_name} — creating empty .env.platform" >&2
+                        touch "${env_file}"
+                        chmod 0640 "${env_file}" 2>/dev/null || true
+                        chown ci-deploy:ci-deploy "${env_file}" 2>/dev/null || true
+                        echo "[IMP:9][converge][${unit}] DONE: ${env_file} created (fallback: empty)" >&2
+                    fi
+                else
+                    echo "[IMP:8][converge][${unit}] WARN: gen-env-platform.sh not found at ${gen_env_script} — creating empty .env.platform" >&2
+                    touch "${env_file}"
+                    chmod 0640 "${env_file}" 2>/dev/null || true
+                    chown ci-deploy:ci-deploy "${env_file}" 2>/dev/null || true
+                    echo "[IMP:9][converge][${unit}] DONE: ${env_file} created (fallback: empty)" >&2
+                fi
                 mutated=$((mutated + 1))
             fi
         else
@@ -553,7 +637,7 @@ STUBEOF
 
     if [[ "${mutated}" -gt 0 ]]; then
         report_add "${unit}" "mutated" "${mutated} project item(s) created/fixed"
-        CONVERGE_EXIT_CODE=1
+        CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
     elif [[ "${errors}" -gt 0 ]]; then
         report_add "${unit}" "fail" "${errors} project(s) had errors"
     else
@@ -563,6 +647,20 @@ STUBEOF
     echo "[IMP:9][converge][${unit}] DONE: projects reconciled (mutated=${mutated} errors=${errors})" >&2
 }
 # endregion FUNC_reconcile_projects
+
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC__is_stub
+## @purpose  Check if ai-platform.yaml is a GENERATED-STUB (not real config)
+## @return 0 if stub, 1 if real file or missing
+_is_stub() {
+    local ai_platform_yaml="$1"
+    if [[ -f "$ai_platform_yaml" ]]; then
+        head -1 "$ai_platform_yaml" 2>/dev/null | grep -q "GENERATED-STUB"
+    else
+        return 1  # file missing = not a stub (no file at all)
+    fi
+}
+# endregion FUNC__is_stub
 
 # ═══════════════════════════════════════════════════════════════════
 # R4 — reconcile_networks (M4)
@@ -593,7 +691,7 @@ reconcile_networks() {
     source "${CORE_DIR}/lib/docker.sh" 2>/dev/null || {
         echo "[IMP:10][converge][${unit}] FATAL: Cannot source lib/docker.sh" >&2
         report_add "${unit}" "fail" "Cannot source lib/docker.sh"
-        CONVERGE_EXIT_CODE=2
+        CONVERGE_EXIT_CODE=2; CONVERGE_HAS_ERRORS=true
         return 1
     }
 
@@ -601,7 +699,7 @@ reconcile_networks() {
     if ! docker info &>/dev/null 2>&1; then
         echo "[IMP:10][converge][${unit}] FAIL: Docker daemon not available — skipping network reconciliation" >&2
         report_add "${unit}" "fail" "Docker daemon unavailable"
-        CONVERGE_EXIT_CODE=2
+        CONVERGE_EXIT_CODE=2; CONVERGE_HAS_ERRORS=true
         return 1
     fi
 
@@ -610,14 +708,14 @@ reconcile_networks() {
         if [[ "${report_only}" == "true" ]] || [[ "${dry_run}" == "true" ]]; then
             echo "[IMP:9][converge][${unit}] WOULD create: proxy-net (bridge)" >&2
             report_add "${unit}" "mutated" "proxy-net would be created"
-            CONVERGE_EXIT_CODE=1
+            CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         else
             echo "[IMP:8][converge][${unit}] Creating proxy-net (runtime fallback)" >&2
             # ensure_docker_network is defined in lib/docker.sh
             ensure_docker_network "proxy-net" "bridge"
             echo "[IMP:9][converge][${unit}] DONE: proxy-net created" >&2
             report_add "${unit}" "mutated" "proxy-net created"
-            CONVERGE_EXIT_CODE=1
+            CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         fi
     else
         # Check driver
@@ -626,6 +724,7 @@ reconcile_networks() {
         if [[ "${current_driver}" != "bridge" ]]; then
             echo "[IMP:9][converge][${unit}] WARN: proxy-net exists but driver=${current_driver} (expected=bridge)" >&2
             report_add "${unit}" "warn" "proxy-net driver=${current_driver} (expected=bridge)"
+            CONVERGE_HAS_WARNINGS=true
         else
             echo "[IMP:9][converge][${unit}] SKIP: proxy-net already exists (driver=bridge, converged)" >&2
         fi
@@ -664,6 +763,7 @@ PYEOF
                 if [[ ! " ${networks} " =~ \ proxy-net\  ]]; then
                     echo "[IMP:9][converge][${unit}] WARN: Container ${cname} (project ${pname}) NOT connected to proxy-net — compose project should declare proxy-net external" >&2
                     report_add "${unit}" "warn" "Container ${cname} not connected to proxy-net"
+                    CONVERGE_HAS_WARNINGS=true
                 else
                     echo "[IMP:7][converge][${unit}] OK: Container ${cname} connected to proxy-net" >&2
                 fi
@@ -733,7 +833,7 @@ PYEOF
             echo "[IMP:9][converge][${unit}]   Runbook: remove manually per OperatorChecklist §11 (G5 resolution)" >&2
             report_add "${unit}" "warn" "Stale /etc/hosts entry for ${pname}"
             drift_found=$((drift_found + 1))
-            CONVERGE_EXIT_CODE=1
+            CONVERGE_EXIT_CODE=1; CONVERGE_HAS_WARNINGS=true
         fi
     done <<< "${project_names}"
 
@@ -901,10 +1001,10 @@ for d in data:
         if docker exec nginx nginx -t 2>&1; then
             echo "[IMP:9][converge][${unit}] OK: nginx -t passed" >&2
         else
-            echo "[IMP:10][converge][${unit}] FAIL: nginx -t failed — nginx reload blocked" >&2
+                echo "[IMP:10][converge][${unit}] FAIL: nginx -t failed — nginx reload blocked" >&2
             report_add "${unit}" "fail" "nginx -t failed — reload blocked"
             vhost_errors=$((vhost_errors + 1))
-            CONVERGE_EXIT_CODE=2
+            CONVERGE_EXIT_CODE=2; CONVERGE_HAS_ERRORS=true
         fi
     else
         echo "[IMP:8][converge][${unit}] WARN: nginx container not running — skipping nginx -t (syntax already verified at operator)" >&2
@@ -929,11 +1029,14 @@ for d in data:
 ##           aggregate exit code, emit JSON report if --report-only
 main() {
     # ── Parse CLI args ──
+    CONVERGE_RECONCILE=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --node) CONVERGE_NODE="$2"; shift 2 ;;
             --dry-run) CONVERGE_DRY_RUN=true; shift ;;
             --report-only) CONVERGE_REPORT_ONLY=true; shift ;;
+            --units) CONVERGE_UNITS="$2"; shift 2 ;;
+            --reconcile) CONVERGE_RECONCILE=true; shift ;;
             --help|-h) usage ;;
             *) echo "[IMP:10][converge][args] ERROR: Unknown argument: $1" >&2; usage ;;
         esac
@@ -961,22 +1064,68 @@ main() {
     echo "[IMP:9][converge][main] node.yaml: ${NODE_YAML_PATH}" >&2
     echo "[IMP:9][converge][main] ==============================" >&2
 
-    # ── Dispatch R-units (each returns independently) ──
-    reconcile_perms       || true
-    reconcile_audit_log   || true
-    reconcile_projects    || true
-    reconcile_networks    || true
-    detect_hosts_drift    || true
-    verify_vhosts         || true
+    # ── Dispatch R-units with --units filter ──
+    if _unit_enabled "R1"; then
+        reconcile_perms       || true
+    else
+        echo "[IMP:7][converge][main] SKIP: R1 filtered out by --units=${CONVERGE_UNITS}" >&2
+    fi
+
+    if _unit_enabled "R2"; then
+        reconcile_audit_log   || true
+    else
+        echo "[IMP:7][converge][main] SKIP: R2 filtered out by --units=${CONVERGE_UNITS}" >&2
+    fi
+
+    if _unit_enabled "R3"; then
+        reconcile_projects    || true
+    else
+        echo "[IMP:7][converge][main] SKIP: R3 filtered out by --units=${CONVERGE_UNITS}" >&2
+    fi
+
+    if _unit_enabled "R4"; then
+        reconcile_networks    || true
+    else
+        echo "[IMP:7][converge][main] SKIP: R4 filtered out by --units=${CONVERGE_UNITS}" >&2
+    fi
+
+    if _unit_enabled "R5"; then
+        detect_hosts_drift    || true
+    else
+        echo "[IMP:7][converge][main] SKIP: R5 filtered out by --units=${CONVERGE_UNITS}" >&2
+    fi
+
+    if _unit_enabled "R6"; then
+        verify_vhosts         || true
+    else
+        echo "[IMP:7][converge][main] SKIP: R6 filtered out by --units=${CONVERGE_UNITS}" >&2
+    fi
+
+    # ── Optional: reconcile stub projects (W4) ──
+    if [[ "${CONVERGE_RECONCILE}" == "true" ]]; then
+        echo "[IMP:9][converge][main] --reconcile flag detected — reconciling stub projects" >&2
+        local reconcile_script="${CORE_DIR}/internal/deploy/reconcile-projects.sh"
+        if [[ -f "$reconcile_script" ]]; then
+            # shellcheck source=../../internal/deploy/reconcile-projects.sh
+            source "$reconcile_script"
+            reconcile_projects "${CONVERGE_NODE}" "${NODE_YAML_PATH}" "${CONVERGE_DRY_RUN}" || {
+                echo "[IMP:10][converge][main] Reconcile step failed" >&2
+                CONVERGE_HAS_ERRORS=true
+            }
+            echo "[IMP:9][converge][main] Reconcile complete" >&2
+        else
+            echo "[IMP:8][converge][main] WARN: reconcile-projects.sh not found at ${reconcile_script}" >&2
+        fi
+    fi
 
     # ── Final summary ──
     echo "[IMP:9][converge][main] ==============================" >&2
-    if [[ "${CONVERGE_EXIT_CODE}" -eq 0 ]]; then
-        echo "[IMP:9][converge][main] FULLY CONVERGED — all R-units converged (idempotent)" >&2
-    elif [[ "${CONVERGE_EXIT_CODE}" -eq 1 ]]; then
-        echo "[IMP:9][converge][main] MUTATIONS APPLIED — drift corrected (repeat run = no-op)" >&2
+    if $CONVERGE_HAS_ERRORS; then
+        echo "[IMP:9][converge][main] ERRORS DETECTED — some R-units failed (exit 2)" >&2
+    elif $CONVERGE_HAS_WARNINGS; then
+        echo "[IMP:9][converge][main] WARNINGS DETECTED — non-critical drift (exit 1)" >&2
     else
-        echo "[IMP:9][converge][main] ERRORS DETECTED — some R-units failed (exit code ${CONVERGE_EXIT_CODE})" >&2
+        echo "[IMP:9][converge][main] FULLY CONVERGED — all R-units converged (exit 0)" >&2
     fi
     echo "[IMP:9][converge][main] ==============================" >&2
 
@@ -986,7 +1135,14 @@ main() {
         exit 0
     fi
 
-    exit "${CONVERGE_EXIT_CODE}"
+    # ── Final exit code ──
+    if $CONVERGE_HAS_ERRORS; then
+        exit 2
+    elif $CONVERGE_HAS_WARNINGS; then
+        exit 1
+    else
+        exit 0
+    fi
 }
 # endregion FUNC_main
 

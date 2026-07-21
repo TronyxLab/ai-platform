@@ -111,8 +111,8 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ─── Step 5: Rsync core/ to VPS (3m) ──────────────────────────────
-      - name: Rsync core/ to VPS
+      # ─── Step 5: Rsync core + config to VPS (S5 consolidated — 3 steps → 2 rsync calls) ───
+      - name: Rsync core + config to VPS
         if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
@@ -121,6 +121,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
           ssh ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
+          # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
           rsync -avz --delete \
             --exclude '.git/' \
             --exclude '__pycache__/' \
@@ -128,32 +129,11 @@ jobs:
             --exclude 'default-user.xml' \
             --exclude '.env' \
             ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
-          echo "[IMP:9][deploy][rsync] core/ rsync complete — SHA $SHA"
-
-      # 📝 TRAP[DEBT] · 2026-07-16 · HI · platform-env.yaml rsync отсутствовал (drift vector D7)
-      # · Observed: CI core-deploy синхронизировал только ./core/; platform-env.yaml
-      # ·   доставлялся ТОЛЬКО через make bootstrap-node (Phase 1b).
-      # · Impact: изменения platform-env.yaml (новые networks/volumes/profiles) НЕ
-      # ·   попадали на VPS через CI. После CI-деплоя VPS использовал stale platform-env.yaml.
-      # · Fix: добавлен отдельный rsync шаг для platform-env.yaml (повторяет структуру bootstrap.sh Phase 1b)
-      # · Rev: если появятся другие root-level файлы — реализовать manifest-based sync подход
-      # ─── Step 5b: Rsync platform-env.yaml to VPS ──────────────────────
-      - name: Rsync platform-env.yaml to VPS
-        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
-        run: |
-          SHA="${{ steps.sha.outputs.sha }}"
+          # Rsync root-level config files (no --delete, single-file sync)
           rsync -avz \
-            ./platform-env.yaml ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/platform-env.yaml
-          echo "[IMP:9][deploy][rsync] platform-env.yaml rsync complete — SHA $SHA"
-
-      # ─── Step 5c: Rsync Makefile to VPS ──────────────────────────────
-      - name: Rsync Makefile to VPS
-        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
-        run: |
-          SHA="${{ steps.sha.outputs.sha }}"
-          rsync -avz \
-            ./Makefile ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/Makefile
-          echo "[IMP:9][deploy][rsync] Makefile rsync complete — SHA $SHA"
+            ./platform-env.yaml ./Makefile \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
+          echo "[IMP:9][deploy][rsync] Core + config rsync complete — SHA $SHA"
 
       # ─── Step 6: Provision environment on VPS (networks + volumes) ────
       # ✅ TRAP[DRIFT] · 2026-07-15 · RESOLVED · FIX-1: multi-scope парсер исправлен

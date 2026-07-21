@@ -24,6 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/paths.sh"
 __LOG_PREFIX="issue-cert"
 source "${SCRIPT_DIR}/../../lib/logging.sh"
+source "${SCRIPT_DIR}/../../lib/yaml_read.sh"
 
 # NOTE: All functions extracted from ssl-provision.sh. Original TRAP comments preserved.
 # The install_acme() function lives in install-acme.sh — this script handles cert issuance only.
@@ -397,26 +398,11 @@ issue_tls_cert() {
 ##   - NODE_YAML env var points to node.yaml with domain/email/acme_dns_plugin fields
 ##   - PLATFORM_* env vars override node.yaml values (backward compat with existing CI)
 main() {
-    # ── Parse NODE_YAML to extract platform config ──────────────────
-    # Uses the same python3/yaml pattern as node-lifecycle.sh step_14 (lines 470-498)
+    # ── S7: Parse NODE_YAML via yaml_read_domain_config() (replaces inline python3) ──
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
         local yaml_info
-        yaml_info="$(python3 - "$NODE_YAML" <<'PYEOF' 2>/dev/null
-import yaml, sys
-with open(sys.argv[1]) as f:
-    data = yaml.safe_load(f)
-domain = data.get('domain', '')
-email = data.get('email', '')
-acme_dns_plugin = data.get('acme_dns_plugin', '')
-projects = data.get('projects', [])
-project_domains = [p.get('domain', '') for p in projects if isinstance(p, dict) and p.get('domain')]
-print(f"platform_domain:{domain}")
-print(f"email:{email}")
-print(f"acme_dns_plugin:{acme_dns_plugin}")
-print(f"project_domains:{' '.join(project_domains)}")
-PYEOF
-)" || {
-            log_warn "Failed to parse NODE_YAML via python3 — falling back to env vars"
+        yaml_info="$(yaml_read_domain_config "$NODE_YAML" 2>/dev/null)" || {
+            log_warn "Failed to parse NODE_YAML via yaml_read_domain_config — falling back to env vars"
         }
         if [[ -n "${yaml_info:-}" ]]; then
             local yaml_domain yaml_email yaml_acme_dns yaml_project_domains
@@ -490,6 +476,28 @@ PYEOF
         # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cron must be installed when TLS cert exists
         if [[ -f "$cert_path" ]]; then
             _acme_install_cron || log_warn "acme.sh cron install failed — cert still valid, renew manually"
+        fi
+
+        # ── Step 2b: Save certificate to S3 cache (Wave 1 optimization) ──
+        # [IMP:9][issue-cert][main] BUSINESS INVARIANT: save cert to S3 after successful issue
+        # This enables fast restore on subsequent boots (no acme.sh API call needed).
+        # Non-fatal: S3 unavailability does NOT block cert issuance.
+        # 🧐 TRAP[DECISION] · 2026-07-21 · — · S3 save after issue
+        # · Rejected: save before issue (defensive — prevent re-issue on failure)
+        # · Reason: we save AFTER successful issue because we need local cert files
+        #   to exist. Saves bandwidth (no re-upload after restore) and reduces complexity.
+        # · Rev: if acme.sh issue becomes unreliable, we could save previous valid cert
+        #   before a renewal attempt
+        local s3_cache="${SCRIPT_DIR}/s3-ssl-cache.sh"
+        if [[ -f "$s3_cache" ]]; then
+            log_step "main" "INFO" "Saving certificate to S3 cache for ${domain}"
+            if bash "$s3_cache" upload "$domain" 2>&1; then
+                log_step "main" "DONE" "Certificate saved to S3 cache for ${domain}"
+            else
+                log_step "main" "WARN" "Failed to save certificate to S3 cache (non-fatal)"
+            fi
+        else
+            log_step "main" "INFO" "s3-ssl-cache.sh not found at ${s3_cache} — skipping S3 cache save"
         fi
 
         # ── Step 3: Verify certificate expiry >30 days ─────────────────

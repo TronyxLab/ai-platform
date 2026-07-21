@@ -48,9 +48,9 @@ node-lifecycle.sh --mode update
 ├── 1. verify-core         # Content hash verification of delivered core
 ├── 2. provision            # Environment provision (networks + volumes)
 ├── 3. ssl-provision        # SSL certificate issuance via issue-cert.sh (acme.sh DNS-01)
-├── 4. deploy docker        # Docker modules via deploy-modules.sh
-├── 5. deploy system        # System modules via deploy-modules.sh
-└── 6. healthcheck          # Per-module healthcheck after deploy
+├── 4. deploy-modules       # ALL modules (docker + system) — single call with --skip-provision
+├── 5. healthcheck          # Per-module healthcheck after deploy
+└── 6. converge             # Desired-state reconciler
 ```
 
 **Вызов:** Только через `node-lifecycle.sh --mode init` или `node-lifecycle.sh --mode update`. Никогда напрямую.
@@ -67,7 +67,7 @@ node-lifecycle.sh --mode update
 
 ### `--mode update` — инкрементальный update
 
-Выполняет 6 шагов на уже забутстрапленной ноде: verify-core (content-hash) → provision (networks + volumes) → issue-cert.sh (acme.sh DNS-01 wildcard cert) → deploy docker modules → deploy system modules → healthcheck. Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из step-14 init-режима (post-init update).
+Выполняет 5 шагов на уже забутстрапленной ноде: verify-core (content-hash) → provision (networks + volumes) → issue-cert.sh (acme.sh DNS-01 wildcard cert) → deploy-modules (docker + system одним вызовом с --skip-provision) → healthcheck. S2 DevPlan 024: шаги deploy docker + deploy system объединены в один вызов deploy-modules.sh, устранён повторный полный проход main(). Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из step-14 init-режима (post-init update).
 
 ---
 

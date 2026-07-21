@@ -255,6 +255,16 @@ def _find_source_calls(script_abs_path: str, script_rel: str) -> list[str]:
         if resolved:
             results.add(resolved)
 
+    # Pattern 4: ${VAR}/path/script.sh references (variable-based source paths).
+    # Catches patterns like "${CORE_DIR}/internal/deploy/reconcile-projects.sh"
+    # assigned to a local variable and later sourced via $local_var.
+    # The caller script is the owner of the assignment — BFS will find the callee.
+    for match in _VAR_SOURCE_RE.finditer(content):
+        raw_path = match.group(0)
+        resolved = _resolve_source_path(raw_path, script_dir, script_rel)
+        if resolved:
+            results.add(resolved)
+
     return sorted(results)
 
 

@@ -17,6 +17,7 @@
 ##   - "remove" never contains --purge or volume destruction (O7)
 ## @rationale Single entrypoint for all deploy verbs — no second SSH user (DD12)
 ## @changes 2026-07-17 · T6 — Added verb contract K1 (remove/status dispatch)
+##           2026-07-21 · W3: status verb passes --stub-aware to deploy-project.sh for improved stub detection
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -88,7 +89,8 @@ parse_verb() {
             local project_name="${cleaned#status }"
             project_name="$(echo "$project_name" | xargs)"
             log_imp 9 "entrypoint" "Verb: status project=${project_name}"
-            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --status "$project_name"
+            # Pass --stub-aware flag for improved stub detection in status output
+            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --status "$project_name" --stub-aware
             ;;
         verify)
             # ⚠️ verb contract: "verify <node>" — runs verify.sh for post-deploy health validation

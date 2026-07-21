@@ -7,7 +7,7 @@
 ## @scope    Reads all core/modules/*/module.yaml, filters to docker modules, builds dependency DAG,
 ##           applies Kahn's algorithm, outputs JSON groups for deploy-modules.sh to consume
 ## @input    --modules-dir path (required), --filter-names list (optional)
-## @output   JSON: {"groups": [["a","b"], ["c"], ["d"]]}
+## @output    JSON: {"groups": [["a","b"], ["c"], ["d"]], "modules": {"name": {"install_type": "...", "severity": "..."}}}
 ## @links    USED_BY(core/internal/bootstrap/deploy-modules.sh), READS_DATA_FROM(core/modules/*/module.yaml)
 ## @invariants
 ##   - Only modules with install_type: docker are included in the DAG
@@ -264,7 +264,24 @@ def main() -> int:
         return 0
 
     groups = kahn_topological_sort(dag)
-    result = {"groups": groups}
+
+    # ── S10: Build enriched modules dict from ALL loaded modules ──
+    # Includes install_type and severity so deploy-modules.sh can avoid
+    # separate detect_install_type() / _get_module_severity() calls.
+    modules_info: dict[str, dict[str, str]] = {}
+    for m in all_modules:
+        name = m.get("name", "")
+        if name:
+            modules_info[name] = {
+                "install_type": m.get("install_type", "unknown"),
+                "severity": m.get("severity", "warn"),
+            }
+    logger.info(
+        "[IMP:9][main][enriched] Enriched modules dict built: %d modules",
+        len(modules_info),
+    )
+
+    result = {"groups": groups, "modules": modules_info}
     print(json.dumps(result))
 
     logger.info("[IMP:9][main][done] Output: %s", json.dumps(result))

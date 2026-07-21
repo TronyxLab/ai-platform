@@ -8,10 +8,12 @@
 ## @invariants
 ##   - --node is REQUIRED; missing → usage error, exit 1
 ##   - --dry-run prints command without executing
+##   - --reconcile: passthrough flag — after converge, reconcile stub projects (DevPlan 025 W4)
 ##   - SSH proxy logic lives entirely in remote-cmd.sh (execute_remote_update, deliver_vhost_overlays)
 ##   - Without SSH_HOST: local exec (backward compatible)
 ##   - S2 (DevPlan 019): generated vhost overlays are delivered via remote-cmd.sh
 ## @rationale Thin-wrapper per DevPlan 020. SSH proxy extracted to remote-cmd.sh.
+## @changes 2026-07-21 | +--reconcile passthrough (DevPlan 025 W4)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -83,6 +85,7 @@ main() {
         case "$1" in
             --node|--node-name) NODE_NAME="$2"; shift 2 ;;
             --dry-run) DRY_RUN=true; shift ;;
+            --reconcile) PASSTHROUGH_ARGS+=("--reconcile"); shift ;;
             --age-secret-key-file)
                 AGE_SECRET_KEY_FILE="$2"; export AGE_SECRET_KEY_FILE; shift 2 ;;
             --help|-h) usage ;;
