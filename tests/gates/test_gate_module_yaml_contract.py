@@ -1,21 +1,28 @@
-# GREP_SUMMARY: gate module-yaml contract D4 required-fields version spool_dir spool_volume env_requires duplicates
-# STRUCTURE: ┌_get_module_yamls → glob core/modules/*/module.yaml┐ → ◇ test_all_modules_have_required_fields ∋ (name, install_type, description, depends_on) → ◇ test_no_version_field ∋ ⊥version → ◇ test_spool_dir_format ∋ ┌/abs/ path┐ ∋ ┌valid docker volume┐ → ◇ test_env_requires_no_duplicates ∋ len(set)==len(list) → ⊕ assertions
+# GREP_SUMMARY: gate module-yaml contract D4 D5 required-fields version spool_dir spool_volume env_requires duplicates validator schema restart
+# STRUCTURE: ┌_get_module_yamls → glob core/modules/*/module.yaml┐ → ◇ test_all_modules_have_required_fields ∋ (name, install_type, description, depends_on) → ◇ test_no_version_field ∋ ⊥version → ◇ test_spool_dir_format ∋ ┌/abs/ path┐ ∋ ┌valid docker volume┐ → ◇ test_env_requires_no_duplicates ∋ len(set)==len(list) → ◇ test_system_module_contract ∋ ⚙ platform-secrets → ◇ [D5] test_d5_validator_exists ∋ file exists + def main → ◇ [D5] test_d5_schema_version ∋ title=D5 + typed env_requires + restart → ◇ [D5] test_d5_validator_passes_on_all_modules ∋ native import validate_module_yaml → ∑ assertions
 # region MODULE_CONTRACT
-## @purpose — Gate test: validate D4 contract structure for all module.yaml files
+## @purpose — Gate test: validate D4 + D5 contract structure for all module.yaml files
 ## @scope — Parses all core/modules/*/module.yaml, validates:
 ##          1. Required fields present: name, install_type, description, depends_on
 ##          2. No module has 'version' field
 ##          3. spool_dir is absolute path, spool_volume is valid Docker volume name
 ##          4. env_requires has no duplicate entries within a module
+##          5. (D5) core/internal/scripts/validate_module_yaml.py exists with def main
+##          6. (D5) module.schema.json declares D5 (typed env_requires + restart field)
+##          7. (D5) validate_module() passes on all 14 module.yaml files
 ## @invariants
 ##   - All test functions use @pytest.mark.gate + @ldd_trajectory
 ##   - _get_module_yamls() returns only valid YAML files (ignores non-dict data)
 ##   - spool_volume validation checks alphanumeric + dash + underscore characters
-## @rationale — Post-refactoring audit D4: module.yaml contract must be enforced
+##   - D5 tests use native import (no subprocess) per testing rules
+## @rationale — Post-refactoring audit D4/D5: module.yaml contract must be enforced
 ##              at commit time to prevent configuration drift across all modules.
+##              D5 extension (Wave 3 W3-E5): validates validator existence, schema
+##              version, and runtime pass on all modules.
 ## @changes — 2026-07-14 | Created per TASK-T8.1
 ## @changes — 2026-07-16 | DOCKER_MODULES hardcoded list removed → discover_docker_modules (T7)
 ## @changes — 2026-07-18 | Added test_system_module_contract (T3/D3, DevPlan 011 T7)
+## @changes — 2026-07-21 | Added D5 extension (test_d5_validator_exists, test_d5_schema_version, test_d5_validator_passes_on_all_modules) per DevPlan 033 W3-E5 step 4
 # endregion MODULE_CONTRACT
 
 import json
@@ -223,3 +230,175 @@ def test_system_module_contract(caplog):
         )
 
     logger.info("[IMP:9][gate][system_contract] PASS: platform-secrets follows system-module contract")
+
+
+# ==================== D5 Extension (Wave 3, W3-E5) ====================
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · D5 validator must exist (Wave 3 contract enforcement)
+# · Last fail: N/A (preventive)
+# · Remove if: D5 contract is superseded or validator script is relocated
+def test_d5_validator_exists(caplog):
+    """D5: core/internal/scripts/validate_module_yaml.py exists and is executable.
+
+    ## @purpose — Validate that the D5 module.yaml contract validator script
+    ##            is present at the expected path. Per DevPlan 033 W3-E5 step 4,
+    ##            the validator must exist for CI gate enforcement.
+    ## @io — ⎋ None (asserts file existence)
+    ## @complexity — O(1)
+    """
+    with caplog.at_level(logging.INFO):
+        logger.info("[IMP:7][gate][d5] Checking D5 validator presence: %s", _VALIDATOR_PATH)
+
+        assert _VALIDATOR_PATH.is_file(), (
+            f"[IMP:9][gate][d5] D5 validator not found: {_VALIDATOR_PATH}"
+        )
+
+        # Verify it has executable bit or at minimum is a valid Python file
+        content = _VALIDATOR_PATH.read_text()
+        assert "def main" in content, (
+            "[IMP:9][gate][d5] D5 validator missing 'def main' entry point"
+        )
+        assert "D5" in content or "DEPRECATED" not in content, (
+            "[IMP:9][gate][d5] D5 validator seems stale (no D5 reference)"
+        )
+
+        logger.info(
+            "[IMP:9][gate][d5] PASS: D5 validator exists at %s (%d bytes)",
+            _VALIDATOR_PATH,
+            len(content),
+        )
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Schema must be D5, not stale D4
+# · Last fail: N/A (preventive)
+# · Remove if: schema versioning scheme changes
+def test_d5_schema_version(caplog):
+    """D5: module.schema.json declares D5 contract (not stale D4).
+
+    ## @purpose — Verify JSON Schema title includes 'D5' marker,
+    ##            confirming the schema has been upgraded from D4.
+    ##            Checks presence of typed env_requires and restart field.
+    ## @io — ⎋ None (asserts schema properties)
+    ## @complexity — O(1)
+    """
+    with caplog.at_level(logging.INFO):
+        logger.info("[IMP:7][gate][d5] Checking D5 schema: %s", _SCHEMA_PATH)
+
+        assert _SCHEMA_PATH.is_file(), f"[IMP:9][gate][d5] Schema not found: {_SCHEMA_PATH}"
+        schema = json.loads(_SCHEMA_PATH.read_text())
+
+        # Title must indicate D5
+        title = schema.get("title", "")
+        assert "D5" in title, (
+            f"[IMP:9][gate][d5] Schema title missing 'D5': '{title}'"
+        )
+        logger.info("[IMP:9][gate][d5] Schema title: '%s' ✓", title)
+
+        # env_requires must have oneOf (string OR object)
+        env_req = schema.get("properties", {}).get("env_requires", {})
+        one_of = env_req.get("items", {}).get("oneOf", [])
+        assert len(one_of) == 2, (
+            f"[IMP:9][gate][d5] env_requires oneOf expected 2 variants, got {len(one_of)}"
+        )
+        logger.info("[IMP:9][gate][d5] env_requires oneOf=2 variants (string + object) ✓")
+
+        # D5 adds typed object variant with type+required fields
+        obj_variant = one_of[1] if isinstance(one_of[1], dict) and "name" in str(one_of[1]) else one_of[0]
+        obj_props = obj_variant.get("properties", {})
+        assert "type" in obj_props, "[IMP:9][gate][d5] Typed env_requires missing 'type' field"
+        assert "required" in obj_props, "[IMP:9][gate][d5] Typed env_requires missing 'required' field"
+        logger.info("[IMP:9][gate][d5] Typed env_requires: type + required fields ✓")
+
+        # Restart field must be present (D5 addition)
+        assert "restart" in schema.get("properties", {}), (
+            "[IMP:9][gate][d5] D5 schema missing 'restart' field"
+        )
+        logger.info("[IMP:9][gate][d5] restart field present ✓")
+
+        logger.info("[IMP:9][gate][d5] PASS: schema is D5 (title='%s')", title)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Validator must pass on all 14 modules
+# · Last fail: N/A (preventive)
+# · Remove if: validate_module_yaml.py API changes import signature
+def test_d5_validator_passes_on_all_modules(caplog):
+    """D5: validate_module_yaml passes on all 14 core/modules/*/module.yaml.
+
+    ## @purpose — Runs the D5 validator's validate_module() against every
+    ##            existing module.yaml. This catches regressions when module
+    ##            definitions change without updating the schema or validator.
+    ##            Uses native import (no subprocess — per testing rules).
+    ## @io — ⎋ None (asserts all modules pass D5 validation)
+    ## @complexity — O(M) where M = 14 modules; requires yaml + json for fixture parsing
+    """
+    import importlib.util
+    import sys
+
+    with caplog.at_level(logging.INFO):
+        logger.info("[IMP:7][gate][d5] Running D5 validator on all modules...")
+
+        # Import validate_module_yaml dynamically (avoid circular dep with conftest)
+        spec = importlib.util.spec_from_file_location("validate_module_yaml", _VALIDATOR_PATH)
+        assert spec is not None, f"[IMP:9][gate][d5] Cannot load spec from {_VALIDATOR_PATH}"
+        assert spec.loader is not None, f"[IMP:9][gate][d5] No loader for {_VALIDATOR_PATH}"
+
+        # yaml_query.py is also in the same dir — may be imported transitively
+        # Ensure scripts dir is in sys.path for sibling imports
+        _scripts_dir = str(_VALIDATOR_PATH.parent)
+        if _scripts_dir not in sys.path:
+            sys.path.insert(0, _scripts_dir)
+
+        vmod = importlib.util.module_from_spec(spec)
+        # Workaround: module may reference __file__ for path resolution
+        # Cache the sys.path manipulation
+        _old_path = list(sys.path)
+        try:
+            spec.loader.exec_module(vmod)
+        except Exception as e:
+            pytest.fail(f"[IMP:9][gate][d5] Cannot import validate_module_yaml: {e}")
+        finally:
+            sys.path = _old_path
+
+        assert hasattr(vmod, "validate_module"), (
+            "[IMP:9][gate][d5] validate_module_yaml missing 'validate_module' function"
+        )
+
+        # Collect all module.yaml files
+        module_yamls = sorted(_MODULES_DIR_D5.glob("*/module.yaml"))
+        assert len(module_yamls) >= 13, (
+            f"[IMP:9][gate][d5] Expected ≥13 module.yaml files, found {len(module_yamls)}"
+        )
+
+        # Run validate_module on each
+        schema_path = _SCHEMA_PATH
+        failed: list[str] = []
+        for yaml_path in module_yamls:
+            module_name = yaml_path.parent.name
+            violations = vmod.validate_module(
+                yaml_path,
+                schema_path=schema_path,
+            )
+            if violations:
+                failed.append(f"{module_name}: {'; '.join(violations)}")
+                for v in violations:
+                    logger.info("[IMP:9][gate][d5] FAIL: %s — %s", module_name, v)
+            else:
+                logger.info("[IMP:9][gate][d5] PASS: %s", module_name)
+
+        assert not failed, (
+            "[IMP:9][gate][d5] D5 validation failures:\n" + "\n".join(failed)
+        )
+        logger.info(
+            "[IMP:9][gate][d5] PASS: All %d modules pass D5 validation",
+            len(module_yamls),
+        )

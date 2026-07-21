@@ -62,6 +62,20 @@ services:
     networks: !override  # DevPlan 017 W2.1 — test network isolation
       - test-shared-db-net
     environment:
+      # 🔧 B3 fix (DevPlan 034): Docker Compose override replaces environment mappings,
+      # not deep-merges. base.yml DATABASE_URLS/DB_USER/DB_PASSWORD were lost in test.yml.
+      # See DevPlan 034 §Root Cause Analysis for details.
+      DATABASE_URLS: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-test-pg-pwd}@postgres:5432/platform,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-test-pg-pwd}@postgres:5432/litellm,postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-test-pg-pwd}@postgres:5432/langfuse"
+      DB_USER: "${POSTGRES_USER:-postgres}"
+      # ⚠️ Uses :-test-pg-pwd instead of :?PG_PASSWORD_REQUIRED from base.yml.
+      # In test environment POSTGRES_HOST_AUTH_METHOD=trust — password is not required,
+      # but DATABASE_URLS must be parsable. The `:-` fallback avoids fail-fast.
+      # 🧐 TRAP[DECISION] · 2026-07-21 · — · :-test-pg-pwd vs :?PG_PASSWORD_REQUIRED
+      # · Rejected: :? (fail-fast) — would kill pgbouncer in trust-auth test env
+      # · Reason: test.yml uses trust auth, password variable may be unset.
+      # ·   :? will crash pgbouncer container. :- provides safe default.
+      # · Rev: if test auth switches to SCRAM — restore :? for PIN entry.
+      DB_PASSWORD: "${POSTGRES_PASSWORD:-test-pg-pwd}"
       # 🧐 TRAP[DECISION] · 2026-07-03 · — · AUTH_TYPE=trust для тестов
       # · Rejected: scram-sha-256 (production) / md5 (не работает с PGPASSWORD)
       # · Reason: psql + PGPASSWORD отправляет пароль открытым текстом, pgbouncer

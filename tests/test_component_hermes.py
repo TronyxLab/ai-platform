@@ -78,11 +78,16 @@ _VOLUME_BIND_DIRS = [
 ]
 
 # External Docker networks required by compose files
+# 🔧 B4 fix (DevPlan 034): docker-compose.test.yml for postgres requires
+# test-shared-db-net (external: true) — the test overlay uses test-* prefix
+# for network isolation. Previously only production networks were created,
+# causing 13 fixture setup errors (Docker Compose could not find test-shared-db-net).
 _EXTERNAL_NETWORKS = [
     "shared-db-net",
     "proxy-net",
     "hermes-agent-net",
     "observability-net",
+    "test-shared-db-net",
 ]
 
 

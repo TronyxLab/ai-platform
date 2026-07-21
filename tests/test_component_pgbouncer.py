@@ -77,7 +77,12 @@ CONTAINER_NAME_PGBOUNCER = "pgbouncer-test"
 # · Symptom: compose up "no service selected" → pytest.skip → тесты «зелёные» не выполняясь
 # · Root: profiles добавлены в base.yml без обновления тестовых фикстур; skip маскировал отказ
 # · Fix: COMPOSE_PROFILES=postgres в ENV + fail вместо skip при провале compose up
-_DB_NET_NAME = "pgbouncer-component-db-net"
+# 🔧 B4 fix (DevPlan 034): docker-compose.test.yml hardcodes
+# test-shared-db-net (networks: test-shared-db-net: external: true).
+# The old name pgbouncer-component-db-net was never created by compose
+# — test.yml requires test-shared-db-net. Replaced to match compose overlay.
+# See DevPlan 034 §Root Cause Analysis (B4) for drift mechanism.
+_DB_NET_NAME = "test-shared-db-net"
 
 ENV: dict[str, str] = {
     "PLATFORM_DOMAIN": "test.local",
