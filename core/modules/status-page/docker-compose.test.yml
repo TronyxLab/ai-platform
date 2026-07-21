@@ -1,17 +1,18 @@
-# GREP_SUMMARY: status-page test overlay shifted-ports 18080 container_name status-page-test
-# STRUCTURE: ▶ status-page-test [profiles:status-page] → port 18080:8080 → ┐
+# GREP_SUMMARY: status-page test overlay shifted-ports 18082 container_name status-page-test
+# STRUCTURE: ▶ status-page-test [profiles:status-page] → port 18082:8080 → ┐
 # region MODULE_CONTRACT
-## @purpose  Test overlay for status-page — shifts port to 18080 for CI isolation,
+## @purpose  Test overlay for status-page — shifts port to 18082 for CI isolation,
 ##           overrides container_name to status-page-test
 ## @scope    Included in docker-compose.test.yml via include
 ## @invariants
 ##   - container_name: status-page-test (prevents collision with base status-page container)
-##   - Port: 18080:8080 (shifted from base 8080 for test isolation)
+##   - Port: 18082:8080 (shifted from base 8080 for test isolation; 18080 conflicts with nginx-test, 18081 with cadvisor-test)
 ##   - profiles: [status-page] (consistent with base)
 ##   - !override tag on overridden keys per test overlay convention (F-7)
 ## @rationale Test overlay pattern from F-7: shifted ports prevent port conflicts in CI;
 ##            unique container_name prevents collision with base compose services
 ##            when both test and base compose files are loaded.
+## @changes — 2026-07-21 | 18080→18082: collided with nginx-test port (wave1-gate-full)
 # endregion MODULE_CONTRACT
 
 services:
@@ -20,7 +21,7 @@ services:
     networks: !override
       - test-proxy-net
     ports: !override
-      - "18080:8080"
+      - "18082:8080"
     volumes: !override
       - ./app.py:/app/app.py:ro
       - /tmp/test-node-configs/test-node/node.yaml:/opt/node-configs/test-node/node.yaml:ro

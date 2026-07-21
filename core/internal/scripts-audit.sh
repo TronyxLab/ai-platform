@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: scripts-audit, shebang-registration, pre-commit, gate-exceptions, manifest
+# STRUCTURE: ▶ find shebang .sh files under core/ → ◇ exception pattern match → ◇ grep manifest registration → ⊕ report unregistered → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Audit: every shebang file under core/ must be registered in
 ##           entrypoint-manifest.yaml (delegates_to or module_hooks) OR
