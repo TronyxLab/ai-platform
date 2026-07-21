@@ -5,7 +5,7 @@
 ##            Imported via `from tests.conftest.e2e import *` in conftest.py or directly.
 ## @scope — Session-scoped fixtures shared across all E2E test files.
 ## @invariants
-##   - GRAFANA_URL defaults to "https://grafana.tronyx.ru" (E2E_GRAFANA_URL)
+##   - GRAFANA_URL defaults to "http://127.0.0.1:3000" (E2E_GRAFANA_URL), production only in CI
 ##   - PROMETHEUS_PROXY_URL defaults to "https://grafana.tronyx.ru/api/datasources/proxy/1" (E2E_PROMETHEUS_PROXY_URL)
 ##   - LOKI_PROXY_URL defaults to "https://grafana.tronyx.ru/api/datasources/proxy/2" (E2E_LOKI_PROXY_URL)
 ##   - grafana_credentials reads from core/modules/hermes-agent/.env via python-dotenv (graceful fallback)
@@ -156,7 +156,12 @@ def GRAFANA_URL() -> str:
     ## @io — ⎋ str: Grafana URL
     ## @complexity — O(1)
     """
-    url = os.environ.get("E2E_GRAFANA_URL", "https://grafana.tronyx.ru")
+    url = os.environ.get("E2E_GRAFANA_URL", "http://127.0.0.1:3000")
+    # ⚠️ TRAP[LOCAL] · 2026-07-21 · — · Production Grafana tests only run in CI
+    # ·   Default URL is localhost; production domain requires explicit E2E_GRAFANA_URL or CI=true.
+    # ·   This prevents accidental production traffic from local dev machines.
+    if "tronyx.ru" in url and not os.environ.get("CI"):
+        pytest.skip("Production Grafana tests only run in CI. Set CI=true or E2E_GRAFANA_URL for local override.")
     # [IMP:7][conftest][GRAFANA_URL] Grafana URL resolved
     print(f"[IMP:7][conftest][GRAFANA_URL] Grafana URL = {url}", file=sys.stderr)
     return url

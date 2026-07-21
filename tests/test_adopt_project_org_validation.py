@@ -268,7 +268,7 @@ echo "[IMP:9][test] PROJECT_ORG=${{PROJECT_ORG}}"
 """
     stdout, stderr, rc = _test_func(
         ADOPT_SCRIPT_PATH,
-        ["parse_args", "usage"],
+        ["parse_args"],
         test_call,
         env={"__LOG_PREFIX": "test"},
         preamble=LOG_STUBS,
@@ -434,7 +434,7 @@ echo "FINAL_ORG=${{PROJECT_ORG}}"
 """
     stdout, stderr, rc = _test_func(
         ADOPT_SCRIPT_PATH,
-        ["parse_args", "usage", "validate_org_against_node_yaml"],
+        ["parse_args", "validate_org_against_node_yaml"],
         test_call,
         env={"__LOG_PREFIX": "test", "PLATFORM_ROOT": PLATFORM_ROOT, "PROJECTS_ROOT": str(tmp_path)},
         preamble=LOG_STUBS,

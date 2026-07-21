@@ -16,6 +16,10 @@
 ##   - L2 image (hermes-agent-context) has CONTEXT guard in init-context.sh
 ##   - s6-overlay does NOT propagate cont-init.d exit codes to container exit code
 ##     (container exits 0 even if cont-init.d script fails)
+## @requires
+##   - Docker Desktop: ≥4GB RAM allocated (Settings → Resources → Memory).
+##     macOS Apple Silicon: amd64 image runs under QEMU (+30-50% memory overhead).
+##     Test containers are limited to 1G each via --memory flag (matches production limit).
 ## @rationale — Validates the L1/L2 init script behavior per Brief_2.md §4 Phase 0, step 0.5.
 ##              Ensures the CONTEXT guard prevents silent misconfiguration of L2 containers.
 ##              Acceptance criteria AC-0.7: Unit tests init-скриптов проходят (3 passed).
@@ -153,14 +157,18 @@ def _run_container_detached(
     image_tag: str,
     env_vars: dict[str, str] | None = None,
     name: str | None = None,
+    mem_limit: str = "1g",
 ) -> str:
     """Run a Docker container in detached mode and return the container name.
 
     ## @purpose — Start a container, verify creation, return its name for lifecycle mgmt.
-    ## @io — ⇥ image_tag, env_vars, name → ⎋ str: container name
+    ## @io — ⇥ image_tag, env_vars, name, mem_limit → ⎋ str: container name
     ## @complexity — O(1) — single docker run call
+    ## @rationale — mem_limit=1g matches production limit (module.yaml deploy.resources.limits.memory).
+    ##              Prevents OOM kill on resource-constrained environments (macOS Docker Desktop default ~2GB)
+    ##              while providing enough memory for s6-overlay init + QEMU emulation overhead.
     """
-    cmd = ["docker", "run", "-d"]
+    cmd = ["docker", "run", "-d", "--memory", mem_limit]
     if name:
         cmd.extend(["--name", name])
     if env_vars:
@@ -174,17 +182,19 @@ def _run_container_detached(
 
 
 def _stop_and_verify(container_name: str) -> int:
-    """Stop a container, inspect its exit code, and return it.
+    """Stop a container, inspect its exit code and OOM status, return exit code.
 
-    ## @purpose — Clean shutdown + exit code verification for lifecycle management.
+    ## @purpose — Clean shutdown + exit code verification + OOMKilled diagnostics.
     ## @io — ⇥ container_name → ⎋ int: exit code
-    ## @complexity — O(1) — two docker calls
+    ## @complexity — O(1) — three docker calls (stop, inspect exit code, inspect OOMKilled)
+    ## @rationale — OOMKilled check provides actionable diagnostics for exit code 137 (SIGKILL).
+    ##              Without it, SIGKILL from OOM is indistinguishable from other kill signals.
     """
     subprocess.run(
-        ["docker", "stop", "--time", "10", container_name],
+        ["docker", "stop", "--time", "30", container_name],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
     inspect_result = subprocess.run(
         ["docker", "inspect", container_name, "--format", "{{.State.ExitCode}}"],
@@ -192,7 +202,26 @@ def _stop_and_verify(container_name: str) -> int:
         text=True,
         timeout=15,
     )
-    return int(inspect_result.stdout.strip())
+    exit_code = int(inspect_result.stdout.strip())
+
+    # region BLOCK_OOMKilledDiagnostics
+    oom_result = subprocess.run(
+        ["docker", "inspect", container_name, "--format", "{{.State.OOMKilled}}"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    oom_killed = oom_result.stdout.strip() == "true"
+    if oom_killed:
+        logger.error(
+            "[IMP:10][_stop_and_verify] OOMKilled=true — container %s was killed by "
+            "the OOM killer. Docker Desktop memory is insufficient. "
+            "Recommended fix: Docker Desktop → Settings → Resources → Memory ≥ 4GB.",
+            container_name,
+        )
+    # endregion BLOCK_OOMKilledDiagnostics
+
+    return exit_code
 
 
 # endregion HELPERS
@@ -264,7 +293,10 @@ def test_l1_without_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathl
     # region BLOCK_StopAndAssert
     exit_code = _stop_and_verify(container_name)
     logger.info("[IMP:9][test_l1_without_context_ok] Container exit code: %d", exit_code)
-    assert exit_code == 0, f"Expected exit code 0, got {exit_code}"
+    assert exit_code == 0, (
+        f"Expected exit code 0, got {exit_code}"
+        f"{' (137 = SIGKILL — likely OOM. Check _stop_and_verify IMP:10 log)' if exit_code == 137 else ''}"
+    )
     # endregion
 
     # region BLOCK_Cleanup
@@ -331,10 +363,10 @@ def test_l2_without_context_exit1(caplog: pytest.LogCaptureFixture, tmp_path: pa
     # so we verify the guard FATAL message appears in stdout instead.
     logger.info("[IMP:7][test_l2_without_context_exit1] Running L2 container with empty CONTEXT...")
     run_result = subprocess.run(
-        ["docker", "run", "--rm", "-e", "CONTEXT=", _L2_TAG],
+        ["docker", "run", "--rm", "--memory", "1g", "-e", "CONTEXT=", _L2_TAG],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
     _print_docker_imp_logs(run_result.stdout)
     _print_docker_imp_logs(run_result.stderr)
@@ -425,7 +457,10 @@ def test_l2_with_context_ok(caplog: pytest.LogCaptureFixture, tmp_path: pathlib.
     # region BLOCK_StopAndAssert
     exit_code = _stop_and_verify(container_name)
     logger.info("[IMP:9][test_l2_with_context_ok] Container exit code: %d", exit_code)
-    assert exit_code == 0, f"Expected exit code 0, got {exit_code}"
+    assert exit_code == 0, (
+        f"Expected exit code 0, got {exit_code}"
+        f"{' (137 = SIGKILL — likely OOM. Check _stop_and_verify IMP:10 log)' if exit_code == 137 else ''}"
+    )
     # endregion
 
     # region BLOCK_Cleanup

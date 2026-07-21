@@ -40,7 +40,12 @@ def service_urls(GRAFANA_URL: str) -> dict:
     ## @io — ⇥ GRAFANA_URL, E2E_LANGFUSE_URL env → ⎋ dict[str, str]
     ## @complexity — O(1)
     """
-    langfuse_url = os.environ.get("E2E_LANGFUSE_URL", "https://langfuse.tronyx.ru")
+    langfuse_url = os.environ.get("E2E_LANGFUSE_URL", "http://127.0.0.1:3000")
+    # ⚠️ TRAP[LOCAL] · 2026-07-21 · — · Production Langfuse tests only run in CI
+    if "tronyx.ru" in langfuse_url and not os.environ.get("CI"):
+        pytest.skip(
+            "Production Langfuse health tests only run in CI. Set CI=true or E2E_LANGFUSE_URL for local override."
+        )
     return {
         "grafana": GRAFANA_URL,
         "langfuse": langfuse_url,
@@ -105,7 +110,7 @@ def test_service_health(
             )
 
         logger.info(
-            "[IMP:7][test_service_health][pass] %s \u2192 %d in %.3fs",
+            "[IMP:9][test_service_health][pass] %s \u2192 %d in %.3fs",
             service,
             resp.status_code,
             elapsed,

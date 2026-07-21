@@ -26,9 +26,14 @@ services:
       # ⚠️ TRAP[BUG] · 2026-07-21 · MED · curl не установлен в litellm образе (ghcr.io/berriai/litellm)
       # · Root: healthcheck использовал curl, но образ на базе python3 не содержит curl.
       # · Fix: заменён на python3 — доступен во всех образах litellm.
+      # 🧐 TRAP[DECISION] · 2026-07-21 · — · start_period=45s for test env
+      # · Rejected: start_period=30s (original — borderline during Prisma migrate)
+      # · Reason: test env faster (fewer models), but Prisma migrate still 20-30s
+      # ·   start_period=45s gives 15s buffer beyond typical test startup
+      # · Rev: if test Prisma migrate drops below 10s, revert to start_period=30s
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
       interval: 10s
-      start_period: 30s
+      start_period: 45s  # 30→45s: test env faster, but Prisma migrate still needs headroom
       retries: 6
     environment:
       # PostgreSQL DSN — pgbouncer:6432 на test-shared-db-net (постгрес запускается тестовой фикстурой)

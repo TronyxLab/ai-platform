@@ -149,7 +149,9 @@ scp_to_server() {
     echo "[IMP:9][bootstrap][scp] Phase 1/4: Rsyncing core/ → ${ssh_host}:${remote_platform_base}/core/"
     local core_src="${core_dir}/"
     local core_dst="${remote_user}@${ssh_host}:${remote_platform_base}/core/"
+    # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
     if ! rsync -avz --delete \
+        -e "ssh ${SSH_OPTS_COMMON[*]}" \
         --exclude=.git \
         --exclude=__pycache__ \
         --exclude=.pytest_cache \
@@ -171,7 +173,8 @@ scp_to_server() {
     if [[ -f "$platform_env_src" ]]; then
         echo "[IMP:9][bootstrap][scp] Phase 1b/4: Rsyncing platform-env.yaml → ${ssh_host}:${remote_platform_base}/"
         local env_dst="${remote_user}@${ssh_host}:${remote_platform_base}/platform-env.yaml"
-        if ! rsync -avz "${platform_env_src}" "${env_dst}"; then
+        # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
+        if ! rsync -avz -e "ssh ${SSH_OPTS_COMMON[*]}" "${platform_env_src}" "${env_dst}"; then
             echo "[IMP:10][bootstrap][scp] FATAL: rsync platform-env.yaml failed for ${ssh_host}" >&2
             return 1
         fi
@@ -189,7 +192,8 @@ scp_to_server() {
     if [[ -f "$makefile_src" ]]; then
         echo "[IMP:9][bootstrap][scp] Phase 1c/4: Rsyncing Makefile → ${ssh_host}:${remote_platform_base}/"
         local makefile_dst="${remote_user}@${ssh_host}:${remote_platform_base}/Makefile"
-        if ! rsync -avz "${makefile_src}" "${makefile_dst}"; then
+        # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
+        if ! rsync -avz -e "ssh ${SSH_OPTS_COMMON[*]}" "${makefile_src}" "${makefile_dst}"; then
             echo "[IMP:10][bootstrap][scp] FATAL: rsync Makefile failed for ${ssh_host}" >&2
             return 1
         fi
@@ -202,7 +206,9 @@ scp_to_server() {
     echo "[IMP:9][bootstrap][scp] Phase 2/4: Rsyncing node-configs/${node_name}/ → ${ssh_host}:${remote_node_configs_base}/${node_name}/"
     local node_src="${node_configs_dir}/${node_name}/"
     local node_dst="${remote_user}@${ssh_host}:${remote_node_configs_base}/${node_name}/"
+    # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
     if ! rsync -avz --delete \
+        -e "ssh ${SSH_OPTS_COMMON[*]}" \
         --exclude=.git \
         --exclude=__pycache__ \
         --exclude=.pytest_cache \
@@ -218,7 +224,9 @@ scp_to_server() {
         echo "[IMP:9][bootstrap][scp] Phase 3/4: Rsyncing node-configs/secrets/ → ${ssh_host}:${remote_node_configs_base}/secrets/"
         local secrets_src="${node_configs_dir}/secrets/"
         local secrets_dst="${remote_user}@${ssh_host}:${remote_node_configs_base}/secrets/"
+        # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
         if ! rsync -avz --delete \
+            -e "ssh ${SSH_OPTS_COMMON[*]}" \
             --exclude=.git \
             "${secrets_src}" \
             "${secrets_dst}"; then

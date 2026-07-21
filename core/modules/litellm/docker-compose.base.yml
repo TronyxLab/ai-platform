@@ -135,12 +135,18 @@ services:
     # · Fix: /health/readiness returns 200 when proxy process + DB are available
     # ·   Does NOT require model_list or Authorization — reliable for all configs
     # · Rev: If LiteLLM adds a dedicated liveness endpoint, prefer that over /health/readiness
+    # 🧐 TRAP[DECISION] · 2026-07-21 · — · start_period=120s / retries=5 for Prisma migrate headroom
+    # · Rejected: start_period=60s / retries=3 (original — flapping during Prisma migrate 40-60s)
+    # · Reason: Prisma migrate takes 40-60s, model cost map fetch 5-10s, Python init 5-10s
+    # ·   start_period=120s covers total startup (70-80s) + 40s buffer
+    # ·   retries=5 covers 2-3 GC cycles after startup (5 × 15s = 75s grace)
+    # · Rev: if Prisma migrate latency drops below 20s, revert to start_period=60s / retries=3
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=5)"]
       interval: 15s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5          # 3→5: covers flap x5 instead of x3 (Prisma migrate headroom)
+      start_period: 120s  # 60→120s: buffer for Prisma migrate + model cost fetch
   # endregion service:litellm
 
 networks:

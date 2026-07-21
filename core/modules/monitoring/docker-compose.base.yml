@@ -176,6 +176,10 @@ services:
       TELEGRAM_CHAT_ID_WARNING: "${TELEGRAM_CHAT_ID_WARNING:-}"
 
     volumes:
+      # 🧐 TRAP[DECISION] · 2026-07-21 · — · project-template.json НЕ монтируется сюда (template, а не dashboard)
+      # · Rejected: прямой mount в provisioning path (Grafana пытается импортировать UID с $PROJECT → $ illegal в UID regex)
+      # · Reason: template рендерится только через on-project-deploy.sh → /opt/grafana/provisioning/dashboards/
+      # · Rev: если появится другой template с UID без спецсимволов — можно пересмотреть
       - grafana-data:/var/lib/grafana
       - ./config/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
       - ./config/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
@@ -184,7 +188,6 @@ services:
       - ./config/dashboards/llm-usage-breakdown.json:/etc/grafana/provisioning/dashboards/llm-usage-breakdown.json:ro
       - ./config/dashboards/logs-incident-inspector.json:/etc/grafana/provisioning/dashboards/logs-incident-inspector.json:ro
       - ./config/dashboards/dora-ci-cd.json:/etc/grafana/provisioning/dashboards/dora-ci-cd.json:ro
-      - ./config/dashboards/project-template.json:/etc/grafana/provisioning/dashboards/project-template.json:ro
       - ./config/alerting:/etc/grafana/provisioning/alerting:ro
 
     networks:

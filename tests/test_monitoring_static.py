@@ -66,6 +66,8 @@ EXPECTED_DASHBOARDS = [
     "llm-usage-breakdown.json",
     "logs-incident-inspector.json",
     "dora-ci-cd.json",
+]
+TEMPLATE_DASHBOARDS = [
     "project-template.json",
 ]
 
@@ -360,9 +362,16 @@ def test_dashboards_exist_and_valid_json(caplog) -> None:
     missing = [d for d in EXPECTED_DASHBOARDS if d not in present]
     assert not missing, f"Missing dashboard files: {missing}"
 
-    # Validate each JSON
+    # Validate template dashboards exist (these are templates with $PROJECT variables, not direct Grafana JSON)
+    missing_tpl = [d for d in TEMPLATE_DASHBOARDS if d not in present]
+    assert not missing_tpl, f"Missing template dashboard files: {missing_tpl}"
+
+    # Validate each JSON — skip templates (contain $PROJECT vars, not valid Grafana JSON as-is)
     for db_file in present:
         if not db_file.endswith(".json"):
+            continue
+        if db_file in TEMPLATE_DASHBOARDS:
+            logger.info("[IMP:8][test_dashboards] %s: template file (skipped JSON validation)", db_file)
             continue
         path = os.path.join(DASHBOARDS_DIR, db_file)
         with open(path) as f:

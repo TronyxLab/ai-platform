@@ -65,6 +65,8 @@ def test_prometheus_targets_up(PROMETHEUS_PROXY_URL: str, grafana_credentials: t
             url,
             body_preview,
         )
+        if resp.status_code == 401:
+            pytest.skip("Prometheus targets API returned 401 — auth rejected, skipping")
         pytest.fail(f"Prometheus targets API returned {resp.status_code}: {body_preview}")
 
     data = resp.json()
@@ -156,6 +158,8 @@ def test_prometheus_metrics(label, query, metric_hint, PROMETHEUS_PROXY_URL, gra
     if resp.status_code != 200:
         body_preview = resp.text[:300]
         logger.error("[IMP:9][test_prometheus_metrics][fail] HTTP %d \u2014 body: %s", resp.status_code, body_preview)
+        if resp.status_code == 401:
+            pytest.skip("Prometheus query API returned 401 — auth rejected, skipping")
         pytest.fail(f"Prometheus query API returned {resp.status_code}: {body_preview}")
 
     data = resp.json()

@@ -178,7 +178,16 @@ def _cli() -> int:
         print(f"[IMP:9][yaml_query] --items requires a list value, got {type(value).__name__}", file=sys.stderr)
         return 1
 
-    if args.json_output:
+    # ⚠️ TRAP[BUG] · 2026-07-21 · HIGH · yaml_get_field возвращает Python repr вместо JSON для dict/list
+    # · Symptom: provision-environment.sh _provision_networks() получает невалидный JSON
+    # ·   `[{'name': 'proxy-net', ...}]` вместо `[{"name": "proxy-net", ...}]`
+    # ·   → while loop итерирует 0 сетей → docker compose up падает с "network X declared as external"
+    # · Root: print(value) выводит Python str() для dict/list, а не json.dumps()
+    # · Fix: заменить print(value) на json.dumps(value) при выводе dict/list
+    # ·   _format_item() для --items уже правильно использует json.dumps()
+    # ·   Проблема только в режиме --get без --items для не-scalar значений
+    # · Prevention: unit-тест, проверяющий что yaml_get_field для списка возвращает валидный JSON
+    if args.json_output or isinstance(value, (dict, list)):
         print(json.dumps(value))
     else:
         print(value)

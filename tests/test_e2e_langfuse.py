@@ -36,7 +36,10 @@ def test_langfuse_health(caplog) -> None:
     ## @complexity — O(1) — single HTTP request
     """
 
-    langfuse_url = os.environ.get("E2E_LANGFUSE_URL", "https://langfuse.tronyx.ru")
+    langfuse_url = os.environ.get("E2E_LANGFUSE_URL", "http://127.0.0.1:3000")
+    # ⚠️ TRAP[LOCAL] · 2026-07-21 · — · Production Langfuse tests only run in CI
+    if "tronyx.ru" in langfuse_url and not os.environ.get("CI"):
+        pytest.skip("Production Langfuse tests only run in CI. Set CI=true or E2E_LANGFUSE_URL for local override.")
 
     logger.info("[IMP:7][test_langfuse_health][start] Checking Langfuse health")
 
@@ -86,7 +89,7 @@ def test_langfuse_health(caplog) -> None:
     print("=== END HEALTH ===")
 
     logger.info(
-        "[IMP:7][test_langfuse_health][pass] Langfuse healthy (status=ok) in %.3fs",
+        "[IMP:9][test_langfuse_health][pass] Langfuse healthy (status=ok) in %.3fs",
         elapsed,
     )
 
