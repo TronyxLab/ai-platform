@@ -20,7 +20,12 @@
 ##            Makefile, entrypoints, and CI workflows (DevPlan 025 W1).
 ##            Single source of truth for VPS readiness definition.
 ## @changes 2026-07-21 | Initial implementation (DevPlan 025 W1)
+##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, 4 inline ssh -i → ssh_read(timeout=30)
 # endregion MODULE_CONTRACT
+
+# ── Source lib/ssh.sh for SSH_OPTS_COMMON, ssh_read ────────────────
+# shellcheck source=./ssh.sh
+source "${PATHS_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/ssh.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_check_vps_ready
@@ -77,13 +82,12 @@ check_vps_ready() {
     # ── Check 1: SSH accessibility ─────────────────────────────
     if $all_ok; then
         local ci_key="${CI_DEPLOY_KEY:-${PLATFORM_CI_DEPLOY_KEY_FILE:-${HOME}/.ssh/ci_deploy_key}}"
-        echo "[IMP:8][vps-readiness] Check 1/4: SSH connectivity to ci-deploy@${ssh_host} (timeout=10s)" >&2
-        if ssh -i "${ci_key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-               -o ConnectTimeout=10 -q "ci-deploy@${ssh_host}" "exit" 2>/dev/null; then
+        echo "[IMP:8][vps-readiness] Check 1/4: SSH connectivity to ci-deploy@${ssh_host} (timeout=30s via ssh_read)" >&2
+        if ssh_read "${ssh_host}" "ci-deploy" "exit" 30 2>/dev/null; then
             echo "[IMP:9][vps-readiness] SSH OK: ci-deploy@${ssh_host}" >&2
         else
             all_ok=false
-            diag_messages+=("SSH to ci-deploy@${ssh_host} failed (timeout=10s)")
+            diag_messages+=("SSH to ci-deploy@${ssh_host} failed (timeout=30s)")
             remediation_hints+=("VPS unreachable. Check: ssh ci-deploy@${ssh_host} — verify network, SSH key, and ci-deploy user existence")
         fi
     fi
@@ -92,8 +96,7 @@ check_vps_ready() {
     if $all_ok; then
         echo "[IMP:8][vps-readiness] Check 2/4: Forced-command ping (core delivered?)" >&2
         local ping_result
-        ping_result="$(ssh -i "${ci_key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=10 "ci-deploy@${ssh_host}" "ping" 2>&1)" || true
+        ping_result="$(ssh_read "${ssh_host}" "ci-deploy" "ping" 30 2>&1)" || true
         if echo "${ping_result}" | grep -q "pong"; then
             echo "[IMP:9][vps-readiness] Forced-command OK: ping responds with pong" >&2
         else
@@ -107,9 +110,8 @@ check_vps_ready() {
     if $all_ok; then
         echo "[IMP:8][vps-readiness] Check 3/4: /opt/projects/ exists and writable" >&2
         local projects_check
-        projects_check="$(ssh -i "${ci_key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=10 "ci-deploy@${ssh_host}" \
-            "test -d /opt/projects && test -w /opt/projects && echo 'OK' || echo 'FAIL'" 2>&1)" || true
+        projects_check="$(ssh_read "${ssh_host}" "ci-deploy" \
+            "test -d /opt/projects && test -w /opt/projects && echo 'OK' || echo 'FAIL'" 30 2>&1)" || true
         if echo "${projects_check}" | grep -q "OK"; then
             echo "[IMP:9][vps-readiness] /opt/projects/ OK: exists and writable" >&2
         else
@@ -123,9 +125,8 @@ check_vps_ready() {
     if $all_ok && ! $quick_mode; then
         echo "[IMP:8][vps-readiness] Check 4/4: Docker daemon responsiveness" >&2
         local docker_check
-        docker_check="$(ssh -i "${ci_key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=10 "ci-deploy@${ssh_host}" \
-            "docker info --format '{{.ServerVersion}}' 2>/dev/null || echo 'FAIL'" 2>&1)" || true
+        docker_check="$(ssh_read "${ssh_host}" "ci-deploy" \
+            "docker info --format '{{.ServerVersion}}' 2>/dev/null || echo 'FAIL'" 30 2>&1)" || true
         if echo "${docker_check}" | grep -qv "FAIL"; then
             echo "[IMP:9][vps-readiness] Docker OK: version ${docker_check}" >&2
         else

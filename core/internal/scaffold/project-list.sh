@@ -19,6 +19,7 @@
 ##           READS: node.yaml files under PROJECTS_ROOT
 ##           CALLS: SSH forced-command status verb (K1)
 ## @changes  2026-07-17 · T12 — full implementation
+##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, inline ssh in get_status_via_ssh → ssh_read
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -30,6 +31,7 @@ PROJECTS_ROOT="${PROJECTS_ROOT:-$(dirname "$PLATFORM_ROOT")}"
 
 __LOG_PREFIX="project-list"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
+source "${PLATFORM_ROOT}/core/lib/ssh.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBALS
@@ -291,11 +293,12 @@ get_status_via_ssh() {
             try_target="${host}"
         fi
 
-        log_imp 6 "-" "  Trying SSH as: ${try_target}"
-        if ssh_output="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
-            "$try_target" \
-            "cd /opt/projects/${project} 2>/dev/null && docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>&1 || docker compose -p ${project} ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>&1" 2>&1)"; then
-            ssh_target="$try_target"
+        local effective_user="${try_user:-${USER:-$(whoami)}}"
+        log_imp 6 "-" "  Trying SSH as: ${effective_user}@${host}"
+        # Capture stdout from ssh_read (read-only probe via lib/ssh.sh)
+        if ssh_output="$(ssh_read "${host}" "${effective_user}" \
+            "cd /opt/projects/${project} 2>/dev/null && docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>&1 || docker compose -p ${project} ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}' 2>&1" 60 2>&1)"; then
+            ssh_target="${effective_user}@${host}"
             ssh_rc=0
             break
         else

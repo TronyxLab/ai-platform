@@ -23,6 +23,7 @@
 ##           CALLS: yq for node.yaml manipulation, SSH for remote compose down
 ##           CONTRACTS: O7/DD10 — remove = disconnect, not destroy
 ## @changes  2026-07-17 · T10 — full implementation
+##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, 2 inline ssh → ssh_read/ssh_exec
 # 💼 TRAP[BUSINESS] · 2026-07-17 · HI · remove = disconnect, данные не удаляются автоматически
 # · Source: owner
 # · Risk: авто-очистка = невосстановимая потеря БД проекта
@@ -37,6 +38,7 @@ PROJECTS_ROOT="${PROJECTS_ROOT:-$(dirname "$PLATFORM_ROOT")}"
 __LOG_PREFIX="remove-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
 source "${PLATFORM_ROOT}/core/lib/args.sh"
+source "${PLATFORM_ROOT}/core/lib/ssh.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBALS
@@ -301,19 +303,12 @@ ssh_compose_down() {
     local ssh_ok=false
 
     for try_user in "ci-deploy" ""; do
-        local ssh_target
-        if [[ -n "$try_user" ]]; then
-            ssh_target="${try_user}@${host}"
-        else
-            ssh_target="${host}"
-        fi
+        local effective_user="${try_user:-${USER:-$(whoami)}}"
+        log_imp 6 "-" "  Attempting SSH as: ${effective_user}@${host}"
 
-        log_imp 6 "-" "  Attempting SSH as: ${ssh_target}"
-
-        # Test SSH connection with timeout
-        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
-            "$ssh_target" "echo OK" 2>/dev/null | grep -q "OK"; then
-            ssh_user="$try_user"
+        # Test SSH connection via ssh_read (W2-E1: lib/ssh.sh facade)
+        if ssh_read "${host}" "${effective_user}" "echo OK" 10 2>/dev/null | grep -q "OK"; then
+            ssh_user="${try_user}"
             ssh_ok=true
             break
         fi
@@ -334,15 +329,15 @@ ssh_compose_down() {
 
     log_imp 7 "-" "Running docker compose down (NO -v) for '${project}' on ${ssh_target}"
 
-    # Run docker compose down — WITHOUT -v per O7/DD10
+    # Run docker compose down via ssh_exec (W2-E1: lib/ssh.sh facade) — WITHOUT -v per O7/DD10
+    local ssh_user="${ssh_user:-ci-deploy}"
     local ssh_output
-    ssh_output="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
-        "$ssh_target" \
-        "cd /opt/projects/${project} 2>/dev/null && docker compose down --timeout 30 2>&1 || docker compose -p ${project} down --timeout 30 2>&1" 2>&1)" || {
+    ssh_output="$(ssh_exec "${host}" "${ssh_user}" \
+        "cd /opt/projects/${project} 2>/dev/null && docker compose down --timeout 30 2>&1 || docker compose -p ${project} down --timeout 30 2>&1" 120 2>&1)" || {
         local rc=$?
         log_imp 8 "-" "SSH command returned exit code ${rc}"
         log_imp 8 "-" "Output: ${ssh_output}"
-        log_imp 8 "-" "  Manual step if containers remain: ssh ${ssh_target} 'docker compose -p ${project} down'"
+        log_imp 8 "-" "  Manual step if containers remain: ssh ${ssh_user}@${host} 'docker compose -p ${project} down'"
         return 1
     }
 

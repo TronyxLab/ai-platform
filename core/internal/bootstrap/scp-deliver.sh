@@ -17,6 +17,8 @@
 ##            scp_to_server carries Makefile rsync (Phase 1c, T6 from DevPlan 020).
 ## @changes 2026-07-17 | T15 — Extracted from bootstrap.sh (pure extraction, identical logic)
 ##           ｜           Multi-line SSH_OPTS spanning removed, SSH_OPTS init moved to this file
+##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, prepare_ssh_opts deprecated,
+##                       inline ssh → ssh_exec, rsync uses SSH_OPTS_COMMON[*]
 ## @rationale Q: Why 3 separate rsync calls for root-level files (platform-env.yaml, Makefile) instead of one?
 ##            A: Different remote destinations — platform-env.yaml → /opt/platform/, Makefile → /opt/platform/.
 ##            Same destination = two separate rsync calls (conservative pattern from original bootstrap.sh).
@@ -42,8 +44,13 @@ if [[ -z "${PATHS_LIB_DIR:-}" ]]; then
     unset _SCP_DIR
 fi
 
+# ── Source lib/ssh.sh for SSH_OPTS_COMMON, ssh_exec, ssh_read ─────
+# shellcheck source=../../lib/ssh.sh
+source "${PATHS_LIB_DIR}/ssh.sh"
+
 # ── SSH_OPTS global array ──────────────────────────────────────────
-# Must be declared BEFORE prepare_ssh_opts and scp_to_server use it.
+# Legacy: retained for backward-compat fallback branches (${SSH_OPTS[*]:-...}).
+# prepare_ssh_opts() now aliases SSH_OPTS_COMMON to SSH_OPTS.
 # Guard against re-sourcing (second source doesn't reset)
 if [[ "$(declare -p SSH_OPTS 2>/dev/null || true)" != "declare -a SSH_OPTS="* ]]; then
     SSH_OPTS=()
@@ -68,12 +75,15 @@ fi
 ## · Reason: per G4 resolution, ssh-keygen -R only in init mode. Update/deploy
 ##   trust the saved key (honest TOFU). This is the user-chosen security trade-off.
 ## · Rev: if reinstall-detection is needed in CI, add a separate mechanism
+## @deprecated W2-E1: use SSH_OPTS_COMMON from lib/ssh.sh directly.
+##             Retained as backward-compat alias for 1 release cycle.
+##             Removed in Wave 3.
 prepare_ssh_opts() {
     local ssh_host="$1"
     local mode="${2:-init}"
+    echo "[IMP:8][bootstrap][ssh] DEPRECATED: prepare_ssh_opts() — use SSH_OPTS_COMMON from lib/ssh.sh" >&2
 
-    # Remove old host key ONLY in init mode (bootstrap)
-    # In update/deploy mode, preserve known_hosts for honest TOFU
+    # Keep host-key management for backward compat (ssh_exec doesn't manage known_hosts)
     if [[ "${mode}" == "init" ]]; then
         echo "[IMP:8][bootstrap][ssh] Cleaning SSH host key for ${ssh_host} (mode=init)"
         ssh-keygen -R "${ssh_host}" 2>/dev/null || true
@@ -81,8 +91,9 @@ prepare_ssh_opts() {
         echo "[IMP:8][bootstrap][ssh] Preserving known_hosts for ${ssh_host} (mode=${mode})"
     fi
 
-    # Populate global SSH_OPTS array
-    SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=10)
+    # Delegate SSH options to SSH_OPTS_COMMON (lib/ssh.sh)
+    SSH_OPTS=("${SSH_OPTS_COMMON[@]}")
+    echo "[IMP:7][bootstrap][ssh] SSH_OPTS populated from SSH_OPTS_COMMON" >&2
 }
 # endregion FUNC_prepare_ssh_opts
 
@@ -126,10 +137,9 @@ scp_to_server() {
     # ·   Каждый bootstrap начинается с создания иерархии — bare metal safe.
     # · Rev: если появятся новые target-директории — добавить их сюда.
     echo "[IMP:8][bootstrap][scp] Ensuring remote directories exist on ${ssh_host}"
-    # Use SSH_OPTS for StrictHostKeyChecking and timeouts — populated by prepare_ssh_opts
-    # shellcheck disable=SC2086  # SSH_OPTS is intentionally word-split from array
-    ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "${remote_user}@${ssh_host}" \
-        "mkdir -p ${remote_platform_base}/core ${remote_node_configs_base}/${node_name} ${remote_node_configs_base}/secrets" || {
+    # Use ssh_exec from lib/ssh.sh (timeout=30 for mkdir operation)
+    ssh_exec "${ssh_host}" "${remote_user}" \
+        "mkdir -p ${remote_platform_base}/core ${remote_node_configs_base}/${node_name} ${remote_node_configs_base}/secrets" 30 || {
         echo "[IMP:10][bootstrap][scp] FATAL: ssh mkdir -p failed for ${ssh_host}" >&2
         return 1
     }

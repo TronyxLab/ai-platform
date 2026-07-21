@@ -21,6 +21,7 @@
 ##            Called through existing entrypoints with --reconcile/--auto-reconcile flags.
 ##            Lives in internal/deploy/ alongside deploy-project.sh — same layer, same concern.
 ## @changes 2026-07-21 | Initial implementation (DevPlan 025 W4)
+##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, 2 inline ssh -i → ssh_read
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -59,6 +60,8 @@ reconcile_projects() {
     __LOG_PREFIX="reconcile"
     # shellcheck source=../../lib/logging.sh
     source "${core_dir}/lib/logging.sh" 2>/dev/null || true
+    # shellcheck source=../../lib/ssh.sh
+    source "${core_dir}/lib/ssh.sh" 2>/dev/null || true
 
     # ── Validate inputs ────────────────────────────────────────────
     if [[ ! -f "${node_yaml}" ]]; then
@@ -212,11 +215,10 @@ PYEOF
                     continue
                 fi
 
-                # Deliver payload
+                # Deliver payload via ssh_read (W2-E1: lib/ssh.sh facade)
                 echo "[IMP:8][reconcile][${proj_name}] Delivering payload to ${ssh_host}..." >&2
                 (cd "${tmp_dir}" && tar czf - ai-platform.yaml docker-compose.yml 2>/dev/null) | \
-                    ssh -i "${ci_key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-                        -o ConnectTimeout=10 "ci-deploy@${ssh_host}" "${deliver_verb}" 2>&1 || {
+                    ssh_read "${ssh_host}" "ci-deploy" "${deliver_verb}" 30 2>&1 || {
                     echo "[IMP:10][reconcile][${proj_name}] FAIL: Payload delivery failed" >&2
                     rm -rf "${tmp_dir}"
                     fail_count=$((fail_count + 1))
@@ -225,11 +227,10 @@ PYEOF
 
                 rm -rf "${tmp_dir}"
 
-                # ── Docker compose pull and up -d ──
+                # ── Docker compose pull and up -d via ssh_exec (W2-E1: lib/ssh.sh facade) ──
                 echo "[IMP:9][reconcile][${proj_name}] Deploying via docker compose..." >&2
-                ssh -i "${ci_key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-                    -o ConnectTimeout=10 "ci-deploy@${ssh_host}" \
-                    "cd ${proj_dir} && docker compose pull && docker compose up -d" 2>&1 || {
+                ssh_exec "${ssh_host}" "ci-deploy" \
+                    "cd ${proj_dir} && docker compose pull && docker compose up -d" 600 "deploy" 2>&1 || {
                     echo "[IMP:10][reconcile][${proj_name}] FAIL: docker compose up failed" >&2
                     fail_count=$((fail_count + 1))
                     continue

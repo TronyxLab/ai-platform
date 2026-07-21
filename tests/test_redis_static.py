@@ -27,13 +27,14 @@ import os
 import shutil
 
 import pytest
-import yaml
 from _conftest.ldd import ldd_trajectory
+
+from tests.helpers.gate_helpers import load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
+PROJECT_ROOT = repo_root()
 REDIS_MODULE_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "redis")
 INFRA_METRICS_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "infra-metrics")
 MONITORING_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "monitoring")
@@ -112,20 +113,7 @@ def dashboards_dir_path(tmp_path_factory):
 # endregion FIXTURES
 
 
-# region HELPERS
-## @purpose — Shared helpers for YAML loading.
 
-
-def _load_yaml(path: str) -> dict:
-    """Load and return parsed YAML content."""
-    assert os.path.isfile(path), f"File not found: {path}"
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    assert isinstance(data, dict), f"YAML root must be dict, got {type(data).__name__}"
-    return data
-
-
-# endregion HELPERS
 
 
 # region REDIS_CACHE_ONLY_CONTRACT_TESTS
@@ -147,7 +135,7 @@ def _load_yaml(path: str) -> dict:
 @ldd_trajectory
 def test_redis_cache_only_command(redis_compose_base_path, caplog):
     """Redis command must contain --appendonly no, --save "", --maxmemory-policy allkeys-lfu."""
-    data = _load_yaml(redis_compose_base_path)
+    data = load_yaml(redis_compose_base_path)
     services = data.get("services", {})
     redis_svc = services.get("redis", {})
     command = redis_svc.get("command", "")
@@ -186,7 +174,7 @@ def test_redis_cache_only_command(redis_compose_base_path, caplog):
 @ldd_trajectory
 def test_redis_no_volumes(redis_compose_base_path, caplog):
     """Redis service must NOT have volumes key (no persistence volume)."""
-    data = _load_yaml(redis_compose_base_path)
+    data = load_yaml(redis_compose_base_path)
     services = data.get("services", {})
     redis_svc = services.get("redis", {})
 
@@ -207,7 +195,7 @@ def test_redis_no_volumes(redis_compose_base_path, caplog):
 @ldd_trajectory
 def test_redis_top_level_no_volumes(redis_compose_base_path, caplog):
     """Top-level volumes block must be absent (no redis-data bind mount)."""
-    data = _load_yaml(redis_compose_base_path)
+    data = load_yaml(redis_compose_base_path)
 
     has_top_volumes = "volumes" in data
     logger.critical(
@@ -226,7 +214,7 @@ def test_redis_top_level_no_volumes(redis_compose_base_path, caplog):
 @ldd_trajectory
 def test_redis_no_ports(redis_compose_base_path, caplog):
     """Redis service must NOT have ports exposed to host."""
-    data = _load_yaml(redis_compose_base_path)
+    data = load_yaml(redis_compose_base_path)
     services = data.get("services", {})
     redis_svc = services.get("redis", {})
 
@@ -245,7 +233,7 @@ def test_redis_no_ports(redis_compose_base_path, caplog):
 @ldd_trajectory
 def test_redis_network_shared_cache_only(redis_compose_base_path, caplog):
     """Redis must be on shared-cache-net only."""
-    data = _load_yaml(redis_compose_base_path)
+    data = load_yaml(redis_compose_base_path)
     services = data.get("services", {})
     redis_svc = services.get("redis", {})
     networks = redis_svc.get("networks", {})
@@ -265,7 +253,7 @@ def test_redis_network_shared_cache_only(redis_compose_base_path, caplog):
 @ldd_trajectory
 def test_redis_image(redis_compose_base_path, caplog):
     """Redis image must be redis:7.4-alpine."""
-    data = _load_yaml(redis_compose_base_path)
+    data = load_yaml(redis_compose_base_path)
     services = data.get("services", {})
     redis_svc = services.get("redis", {})
     image = redis_svc.get("image", "")
@@ -284,7 +272,7 @@ def test_redis_image(redis_compose_base_path, caplog):
 @ldd_trajectory
 def test_redis_module_yaml_no_spool_dir(redis_module_yaml_path, caplog):
     """redis module.yaml must have spool_dir: none (cache-only, stateless)."""
-    data = _load_yaml(redis_module_yaml_path)
+    data = load_yaml(redis_module_yaml_path)
 
     spool_dir = data.get("spool_dir")
     spool_volume = data.get("spool_volume")
@@ -309,7 +297,7 @@ def test_redis_module_yaml_no_spool_dir(redis_module_yaml_path, caplog):
 @ldd_trajectory
 def test_redis_module_yaml_env_requires(redis_module_yaml_path, caplog):
     """redis module.yaml env_requires must be empty list."""
-    data = _load_yaml(redis_module_yaml_path)
+    data = load_yaml(redis_module_yaml_path)
 
     env_requires = data.get("env_requires", None)
     logger.critical(
@@ -326,7 +314,7 @@ def test_redis_module_yaml_env_requires(redis_module_yaml_path, caplog):
 @ldd_trajectory
 def test_prometheus_redis_exporter_job(prometheus_yml_path, caplog):
     """prometheus.yml must have scrape job 'redis-exporter' targeting redis-exporter:9121."""
-    data = _load_yaml(prometheus_yml_path)
+    data = load_yaml(prometheus_yml_path)
 
     scrape_configs = data.get("scrape_configs", [])
     redis_job = None
@@ -361,7 +349,7 @@ def test_prometheus_redis_exporter_job(prometheus_yml_path, caplog):
 @ldd_trajectory
 def test_infra_metrics_redis_exporter(infra_metrics_compose_path, caplog):
     """infra-metrics docker-compose.base.yml must have redis-exporter service."""
-    data = _load_yaml(infra_metrics_compose_path)
+    data = load_yaml(infra_metrics_compose_path)
     services = data.get("services", {})
 
     has_redis_exporter = "redis-exporter" in services

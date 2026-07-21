@@ -25,6 +25,8 @@
 ## @changes 2026-07-17 | T15 — Extracted from bootstrap.sh (pure extraction, identical logic)
 ##           2026-07-17 | T2  — Added build_update_ssh_cmd() for node-update SSH proxy
 ##           2026-07-21 | W4 — Added execute_remote_reconcile() + execute_remote_reconcile_entrypoint()
+##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, 4 inline ssh/exec → ssh_exec,
+##                       dry-run blocks preserved for AGE-key masking
 # endregion MODULE_CONTRACT
 
 # ── source paths.sh for PLATFORM_ROOT ──────────────────────────────
@@ -36,6 +38,10 @@ if [[ -z "${PATHS_LIB_DIR:-}" ]]; then
     source "${_CMD_DIR}/../../lib/paths.sh"
     unset _CMD_DIR
 fi
+
+# ── Source lib/ssh.sh for SSH_OPTS_COMMON, ssh_exec, ssh_read ─────
+# shellcheck source=../../lib/ssh.sh
+source "${PATHS_LIB_DIR}/ssh.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # BUILD REMOTE SSH COMMAND
@@ -268,10 +274,9 @@ execute_remote_update() {
         exit 0
     fi
 
-    # ── Execute SSH ────────────────────────────────────────────────
+    # ── Execute SSH via ssh_exec (W2-E1: lib/ssh.sh facade) ────────
     echo "[IMP:9][node-update][remote] Executing node-lifecycle.sh --mode update on root@${ssh_host}" >&2
-    # shellcheck disable=SC2086,SC2048  # SSH_OPTS intentionally word-split from array
-    exec ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" "${remote_cmd}"
+    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy"
 }
 # endregion FUNC_execute_remote_update
 
@@ -385,10 +390,9 @@ execute_remote_converge() {
         exit 0
     fi
 
-    # ── Execute SSH ────────────────────────────────────────────────
+    # ── Execute SSH via ssh_exec (W2-E1: lib/ssh.sh facade) ────────
     echo "[IMP:9][converge][remote] Executing converge.sh on root@${ssh_host}" >&2
-    # shellcheck disable=SC2086,SC2048  # SSH_OPTS intentionally word-split from array
-    exec ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" "${remote_cmd}"
+    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy"
 }
 # endregion FUNC_execute_remote_converge
 
@@ -459,10 +463,9 @@ deliver_vhost_overlays() {
     # ── Prepare SSH opts ───────────────────────────────────────────
     prepare_ssh_opts "${ssh_host}" "update"
 
-    # ── Create remote dir ──────────────────────────────────────────
-    # shellcheck disable=SC2086  # SSH_OPTS intentionally word-split
-    ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" \
-        "mkdir -p /opt/node-configs/${node_name}/overlays/nginx" || {
+    # ── Create remote dir via ssh_exec (W2-E1: lib/ssh.sh facade) ──
+    ssh_exec "${ssh_host}" "root" \
+        "mkdir -p /opt/node-configs/${node_name}/overlays/nginx" "" "deploy" || {
         echo "[IMP:10][node-update][overlays] FATAL: Cannot create remote overlay dir on ${ssh_host}" >&2
         return 1
     }
@@ -549,10 +552,9 @@ execute_remote_reconcile() {
         exit 0
     fi
 
-    # ── Execute SSH ────────────────────────────────────────────────
+    # ── Execute SSH via ssh_exec (W2-E1: lib/ssh.sh facade) ────────
     echo "[IMP:9][reconcile][remote] Executing converge --reconcile on root@${ssh_host}" >&2
-    # shellcheck disable=SC2086,SC2048  # SSH_OPTS intentionally word-split from array
-    exec ssh ${SSH_OPTS[*]:--o StrictHostKeyChecking=accept-new -o ConnectTimeout=30} "root@${ssh_host}" "${remote_cmd}"
+    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy"
 }
 # endregion FUNC_execute_remote_reconcile
 
