@@ -116,6 +116,21 @@ def postgres_up(modules_dir):
     # ── Ensure external Docker networks ────────────────────────────────────
     ensure_external_networks(_EXTERNAL_NETWORKS)
 
+    # ── Pre-flight cleanup: remove leftover containers from previous runs ──
+    # [IMP:8] Container name conflict ("already in use") occurs when smoke
+    #          teardown didn't fully complete before component test starts.
+    #          Explicit compose down ensures clean state before up, consistent
+    #          with hermes_up/pgbouncer_up/clickhouse_up pre-flight cleanup.
+    logger.info("[IMP:7][postgres_up] Pre-flight: cleaning up leftover containers ...")
+    subprocess.run(
+        ["docker", "compose", "-f", compose_file, "--project-name", COMPOSE_PROJECT, "down", "--timeout", "5"],
+        env={**os.environ, **ENV},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    logger.info("[IMP:9][postgres_up] Pre-flight cleanup complete")
+
     logger.info("[IMP:7][postgres_up] Starting postgres from %s ...", compose_file)
     compose_args = [
         "docker",

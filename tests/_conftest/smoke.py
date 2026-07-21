@@ -717,6 +717,7 @@ def platform_services(
         "prometheus-test",
         "grafana-test",
         "hermes-agent-test",
+        "postgres-test",
         "langfuse-redis-test",
         "prometheus-config-init-test",
     ]

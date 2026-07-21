@@ -109,20 +109,23 @@ def redis_compose():
     except subprocess.TimeoutExpired:
         _logger.warning("[IMP:8][redis_compose][setup] wave-redis down timed out — continuing")
 
-    # ── Step 2: Ensure shared-cache-net exists ────────────────────────────────
+    # ── Step 2: Ensure test-shared-cache-net exists ────────────────────────────
+    # ⚠️ TRAP[BUG] · 2026-07-21 · MED · Test compose (test.yml) overrides base network
+    # to test-shared-cache-net — the test MUST create the test-prefixed network, not
+    # the base shared-cache-net, or compose fails with "network not found".
     created_by_us = False
-    _logger.info("[IMP:7][redis_compose][setup] Checking shared-cache-net")
+    _logger.info("[IMP:7][redis_compose][setup] Checking test-shared-cache-net")
     try:
         inspect_result = subprocess.run(
-            ["docker", "network", "inspect", "shared-cache-net"],
+            ["docker", "network", "inspect", "test-shared-cache-net"],
             capture_output=True,
             text=True,
             timeout=_NETWORK_CREATE_TIMEOUT,
         )
         if inspect_result.returncode != 0:
-            _logger.info("[IMP:8][redis_compose][setup] Creating shared-cache-net")
+            _logger.info("[IMP:8][redis_compose][setup] Creating test-shared-cache-net")
             subprocess.run(
-                ["docker", "network", "create", "shared-cache-net"],
+                ["docker", "network", "create", "test-shared-cache-net"],
                 capture_output=True,
                 text=True,
                 timeout=_NETWORK_CREATE_TIMEOUT,
@@ -254,19 +257,19 @@ def redis_compose():
     except subprocess.TimeoutExpired:
         _logger.warning("[IMP:8][redis_compose][teardown] compose down timed out — continuing")
 
-    # ── Remove shared-cache-net only if we created it ─────────────────────────
+    # ── Remove test-shared-cache-net only if we created it ─────────────────────
     if created_by_us:
-        _logger.info("[IMP:7][redis_compose][teardown] Removing shared-cache-net (created by fixture)")
+        _logger.info("[IMP:7][redis_compose][teardown] Removing test-shared-cache-net (created by fixture)")
         try:
             subprocess.run(
-                ["docker", "network", "rm", "shared-cache-net"],
+                ["docker", "network", "rm", "test-shared-cache-net"],
                 capture_output=True,
                 text=True,
                 timeout=_NETWORK_CREATE_TIMEOUT,
             )
-            _logger.info("[IMP:9][redis_compose][teardown] shared-cache-net removed")
+            _logger.info("[IMP:9][redis_compose][teardown] test-shared-cache-net removed")
         except subprocess.TimeoutExpired:
-            _logger.warning("[IMP:8][redis_compose][teardown] Failed to remove shared-cache-net")
+            _logger.warning("[IMP:8][redis_compose][teardown] Failed to remove test-shared-cache-net")
 
     _logger.info("[IMP:9][redis_compose][teardown] Fixture teardown complete")
 

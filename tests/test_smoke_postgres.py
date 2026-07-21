@@ -62,7 +62,11 @@ CONTAINER_POSTGRES = "postgres-test"
 CONTAINER_PGBOUNCER = "pgbouncer-test"
 COMPOSE_DIR = os.path.join(os.path.dirname(__file__), "..", "core", "modules", "postgres")
 
-_DB_NET_NAME = "smoke-postgres-db-net"
+# ⚠️ TRAP[BUG] · 2026-07-21 · MED · Test compose (test.yml) overrides the base network
+# to test-shared-db-net. The smoke test must pre-create this network so Docker Compose
+# can attach to it as external: true. Previously created smoke-postgres-db-net which
+# was never referenced by any compose after the !override was added.
+_DB_NET_NAME = "test-shared-db-net"
 
 # Environment for postgres + pgbouncer compose
 # COMPOSE_PROFILES=postgres required because docker-compose.base.yml has profiles: [postgres]
