@@ -59,7 +59,7 @@ def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
     ## @io — ⎋ bool: True if HTTP endpoint responds (any status), False otherwise
     """
     try:
-        resp = requests.get(f"http://{host}:{port}/api/public/health", timeout=timeout)
+        requests.get(f"http://{host}:{port}/api/public/health", timeout=timeout)
         return True
     except (requests.ConnectionError, requests.Timeout, ValueError):
         return False
