@@ -261,8 +261,12 @@ lib:
     type: sourced
     consumers:
       - core/internal/deploy/deploy-project.sh
-      # W2-E3: context-promote.sh, remove-project.sh, provision-environment.sh,
-      #        build.sh, decrypt-secrets.sh, node-lifecycle.sh (update-mode)
+      - core/entrypoints/context-promote.sh
+      - core/internal/scaffold/remove-project.sh
+      - core/internal/provision-environment.sh
+      - core/entrypoints/build.sh
+      - core/internal/secrets/decrypt-secrets.sh
+      - core/internal/bootstrap/node-lifecycle.sh (update-mode)
     description: "Audit logging + audit_step wrapper — dual-write audit trail for state-modifying entrypoints (W2-E3)"
 
 # ---------------------------------------------------------------------------

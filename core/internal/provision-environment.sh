@@ -17,6 +17,7 @@
 ##   - Exit codes: 0=success, 1=parse error, 2=docker unavailable
 ## @rationale  Eliminates 4 independent sources of env config (Makefile, infra.py,
 ##             CI workflows, deploy-modules.sh). Single idempotent entry point.
+## @changes 2026-07-21 | W2-E3 — Added audit_step wrapper for provision dispatch (source audit_logging.sh)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -35,6 +36,7 @@ __PROVISION_PLATFORM_ROOT="$(cd "${__PROVISION_SCRIPT_DIR}/../.." && pwd)"
 # · Fix: single absolute path via __PROVISION_SCRIPT_DIR/../
 # ·   Path `${ROOT}/lib/yaml_read.sh` (without core/) never existed in any layout
 source "${__PROVISION_SCRIPT_DIR}/../lib/yaml_read.sh"
+source "${__PROVISION_SCRIPT_DIR}/../lib/audit_logging.sh"
 __PROVISION_DEFAULT_PLATFORM_ENV="${__PROVISION_PLATFORM_ROOT}/platform-env.yaml"
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -414,15 +416,25 @@ main() {
     fi
     __provision_log "8" "Parsed: ${net_count} networks, ${vol_count} volumes, ${env_count} env vars, ${prof_count} profiles"
 
-    # ── Dispatch (iterate expanded scopes) ────────────────────────────────
-    for _s in "${expanded_scopes[@]}"; do
-        case "$_s" in
-            networks)   _provision_networks "$platform_env" "$dry_run" ;;
-            volumes)    _provision_volumes "$platform_env" "$dry_run" ;;
-            env)        _provision_env "$platform_env" "$dry_run" ;;
-            profiles)   _provision_profiles "$platform_env" ;;
-        esac
-    done
+    # ── Dispatch (iterate expanded scopes) — wrapped in audit_step ──
+    _do_provision() {
+        local platform_env="$1"
+        local dry_run="${2:-false}"
+        shift 2
+        local -a expanded=("$@")
+
+        for _s in "${expanded[@]}"; do
+            case "$_s" in
+                networks)   _provision_networks "$platform_env" "$dry_run" ;;
+                volumes)    _provision_volumes "$platform_env" "$dry_run" ;;
+                env)        _provision_env "$platform_env" "$dry_run" ;;
+                profiles)   _provision_profiles "$platform_env" ;;
+            esac
+        done
+    }
+
+    audit_step "provision:${_scope_label}" \
+        _do_provision "$platform_env" "$dry_run" "${expanded_scopes[@]}"
 
     __provision_log "9" "Provision complete (scope=${_scope_label})"
 }

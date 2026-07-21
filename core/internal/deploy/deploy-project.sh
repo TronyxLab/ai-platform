@@ -36,6 +36,7 @@
 ##           2026-07-17 · T2 — Added verb platform-deliver (handle_deliver, _validate_project_name), TRAP[DECISION]
 ##           2026-07-18 · T3.1/B1 — DEPLOY_STATUS=success сразу после health-gate; trap - ERR; нефатальная финализация; TRAP[BUG] B1
 ##           2026-07-21 · W3: handle_status — stub-aware detection (STUB_AWARE_STATUS flag)
+##           2026-07-21 | W2-E3 — Added audit_step wrapper for core-deploy path (_do_deploy function with return/exit propagation)
 # endregion MODULE_CONTRACT
 
 # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Deploy reports 'failed' despite success (B1)
@@ -1058,89 +1059,97 @@ main() {
     local deploy_tag="${PLATFORM_DEPLOY_DIRECT:+DEPLOY-DIRECT:}platform-deploy:${PROJECT}"
     audit_log "${deploy_tag}" "START" "Deploy ${PROJECT}/${SERVICE_NAME} → ${REF} [source: ${PLATFORM_DEPLOY_DIRECT:+direct}${PLATFORM_DEPLOY_DIRECT:-CI}]"
 
-    save_previous_image
-    capture_deploy_snapshot
+    # Wrap deploy operations in audit_step (W2-E3: coarse-grained START/DONE/FAIL for core-deploy path)
+    # Inner audit_log calls provide finer granularity for post-mortem analysis
+    _do_deploy() {
+        save_previous_image
+        capture_deploy_snapshot
 
-    local validate_script="${SCRIPT_DIR}/../../internal/validate/validate.sh"
-    if [[ -x "$validate_script" ]]; then
-        log_imp 8 "fqdn" "Checking FQDN uniqueness for ${PROJECT}..."
-        local fqdn_output fqdn_rc=0
-        fqdn_output="$("$validate_script" --check-fqdn "$PROJECT_DIR" 2>&1)" || fqdn_rc=$?
-        while IFS= read -r line; do
-            log_imp 7 "fqdn" "${line}"
-        done <<< "$fqdn_output"
-        if [[ "$fqdn_rc" -ne 0 ]]; then
-            log_imp 10 "fqdn" "FATAL: FQDN conflict detected — deploy blocked (E1)"
-            audit_log "platform-deploy:${PROJECT}" "FAIL" "FQDN conflict blocked deploy for ${SERVICE_NAME}:${REF}"
-            notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+        local validate_script="${SCRIPT_DIR}/../../internal/validate/validate.sh"
+        if [[ -x "$validate_script" ]]; then
+            log_imp 8 "fqdn" "Checking FQDN uniqueness for ${PROJECT}..."
+            local fqdn_output fqdn_rc=0
+            fqdn_output="$("$validate_script" --check-fqdn "$PROJECT_DIR" 2>&1)" || fqdn_rc=$?
+            while IFS= read -r line; do
+                log_imp 7 "fqdn" "${line}"
+            done <<< "$fqdn_output"
+            if [[ "$fqdn_rc" -ne 0 ]]; then
+                log_imp 10 "fqdn" "FATAL: FQDN conflict detected — deploy blocked (E1)"
+                audit_log "platform-deploy:${PROJECT}" "FAIL" "FQDN conflict blocked deploy for ${SERVICE_NAME}:${REF}"
+                notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
 - FQDN conflict blocked deploy: ${PROJECT}/${SERVICE_NAME}:${REF}"
-            exit 1
-        fi
-    else
-        log_imp 6 "fqdn" "validate.sh not found at ${validate_script} — skipping FQDN check"
-    fi
-
-    docker_login
-    pull_image_with_retry
-
-    local host_port
-    host_port="$(yaml_get_field "${PROJECT_DIR}/ai-platform.yaml" "monitoring.host_port" 2>/dev/null || echo "0")"
-    if [[ "$host_port" -gt 0 ]]; then
-        log_imp 8 "ports" "Checking port ${host_port} for ${PROJECT}..."
-        if ss -tlnp 2>/dev/null | grep -q ":${host_port} "; then
-            log_imp 10 "ports" "FATAL: Port ${host_port} already in use — deploy blocked"
-            audit_log "platform-deploy:${PROJECT}" "FAIL" "Port ${host_port} conflict — deploy blocked"
-            notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
-- Port conflict: ${PROJECT}/${SERVICE_NAME} — port ${host_port} already in use"
-            exit 1
-        fi
-        log_imp 8 "ports" "Port ${host_port} available"
-    fi
-
-    if ! atomic_up; then
-        log_imp 10 "main" "atomic_up returned non-zero"
-        if [[ "${FIRST_DEPLOY:-0}" -eq 1 ]]; then
-            handle_first_deploy
+                return 1
+            fi
         else
+            log_imp 6 "fqdn" "validate.sh not found at ${validate_script} — skipping FQDN check"
+        fi
+
+        docker_login
+        pull_image_with_retry
+
+        local host_port
+        host_port="$(yaml_get_field "${PROJECT_DIR}/ai-platform.yaml" "monitoring.host_port" 2>/dev/null || echo "0")"
+        if [[ "$host_port" -gt 0 ]]; then
+            log_imp 8 "ports" "Checking port ${host_port} for ${PROJECT}..."
+            if ss -tlnp 2>/dev/null | grep -q ":${host_port} "; then
+                log_imp 10 "ports" "FATAL: Port ${host_port} already in use — deploy blocked"
+                audit_log "platform-deploy:${PROJECT}" "FAIL" "Port ${host_port} conflict — deploy blocked"
+                notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён c ⚠️ Warnings:
+- Port conflict: ${PROJECT}/${SERVICE_NAME} — port ${host_port} already in use"
+                return 1
+            fi
+            log_imp 8 "ports" "Port ${host_port} available"
+        fi
+
+        if ! atomic_up; then
+            log_imp 10 "main" "atomic_up returned non-zero"
+            if [[ "${FIRST_DEPLOY:-0}" -eq 1 ]]; then
+                handle_first_deploy
+            else
+                perform_rollback
+            fi
+            return 1
+        fi
+
+        if poll_until_healthy "${SERVICE_NAME}" "_check_deploy_health" "$MAX_WAIT_SEC" 2; then
+            log_imp 9 "main" "Deploy SUCCESS: ${SERVICE_NAME} → ${REF}"
+
+            # ═══════════════════════════════════════════════════════════════
+            # B1 fix: DEPLOY_STATUS and trap - ERR сразу после health-gate.
+            # Все шаги ниже — нефатальная housekeeping: ни один не должен
+            # ронять success (см. TRAP[BUG] B1 в MODULE_CONTRACT).
+            # ═══════════════════════════════════════════════════════════════
+            DEPLOY_STATUS="success"
+            trap - ERR
+
+            tag_current || log_imp 8 "main" "tag_current skipped (non-fatal)"
+            prune_old_images || log_imp 8 "main" "prune skipped (non-fatal)"
+            _trigger_deploy_hooks || log_imp 8 "main" "hooks skipped (non-fatal)"
+
+            audit_log "${deploy_tag}" "DONE" \
+                "Deploy success: ${SERVICE_NAME} → ${REF} (prev=${PREVIOUS_IMAGE_ID:-none})" || log_imp 6 "main" "audit unavailable"
+            notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён ✅
+    ${PROJECT}/${SERVICE_NAME} → ${REF}"
+
+            log_imp 9 "main" "=== platform-deploy DONE (success) ==="
+            return 0
+        else
+            log_imp 10 "main" "Healthcheck FAILED for ${SERVICE_NAME}:${REF}"
+
+            if [[ "${FIRST_DEPLOY:-0}" -eq 1 ]]; then
+                handle_first_deploy
+            fi
+
+            # B1 fix: set DEPLOY_STATUS before notify_hook inside perform_rollback
+            DEPLOY_STATUS="degraded"
             perform_rollback
+            return 1
         fi
-        exit 1
-    fi
+    }
 
-    if poll_until_healthy "${SERVICE_NAME}" "_check_deploy_health" "$MAX_WAIT_SEC" 2; then
-        log_imp 9 "main" "Deploy SUCCESS: ${SERVICE_NAME} → ${REF}"
-
-        # ═══════════════════════════════════════════════════════════════
-        # B1 fix: DEPLOY_STATUS and trap - ERR сразу после health-gate.
-        # Все шаги ниже — нефатальная housekeeping: ни один не должен
-        # ронять success (см. TRAP[BUG] B1 в MODULE_CONTRACT).
-        # ═══════════════════════════════════════════════════════════════
-        DEPLOY_STATUS="success"
-        trap - ERR
-
-        tag_current || log_imp 8 "main" "tag_current skipped (non-fatal)"
-        prune_old_images || log_imp 8 "main" "prune skipped (non-fatal)"
-        _trigger_deploy_hooks || log_imp 8 "main" "hooks skipped (non-fatal)"
-
-        audit_log "${deploy_tag}" "DONE" \
-            "Deploy success: ${SERVICE_NAME} → ${REF} (prev=${PREVIOUS_IMAGE_ID:-none})" || log_imp 6 "main" "audit unavailable"
-        notify_hook "🚀 [node: ${NODE_NAME}] Узел обновлён ✅
-${PROJECT}/${SERVICE_NAME} → ${REF}"
-
-        log_imp 9 "main" "=== platform-deploy DONE (success) ==="
-        exit 0
-    else
-        log_imp 10 "main" "Healthcheck FAILED for ${SERVICE_NAME}:${REF}"
-
-        if [[ "${FIRST_DEPLOY:-0}" -eq 1 ]]; then
-            handle_first_deploy
-        fi
-
-        # B1 fix: set DEPLOY_STATUS before notify_hook inside perform_rollback
-        DEPLOY_STATUS="degraded"
-        perform_rollback
-        exit 1
-    fi
+    audit_step "core-deploy:${NODE_NAME}" _do_deploy
+    _deploy_rc=$?
+    exit ${_deploy_rc}
 }
 # endregion MAIN
 

@@ -8,11 +8,13 @@
 ##   - Delegates to internal/build/hermes-images.sh with action arg
 ##   - action: build-platform (L1) or build-context (L2)
 ## @rationale Thin wrapper — all build logic in internal/build/hermes-images.sh
+## @changes 2026-07-21 | W2-E3 — Added audit_step wrapper (replaced exec, source audit_logging.sh)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 echo "[IMP:7][build][main] Starting build entrypoint" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
+source "${_EP_DIR}/../lib/audit_logging.sh"
 
 ACTION="${1:-}"
 if [[ -z "$ACTION" ]]; then
@@ -27,4 +29,5 @@ if [[ -z "$ACTION" ]]; then
 fi
 
 echo "[IMP:8][build][main] Delegating to hermes-images.sh action=${ACTION}" >&2
-exec "${PATHS_INTERNAL_DIR}/build/hermes-images.sh" "$ACTION"
+audit_step "hermes-build:${ACTION}:${CONTEXT:-none}" "${PATHS_INTERNAL_DIR}/build/hermes-images.sh" "$ACTION"
+exit $?

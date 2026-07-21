@@ -24,6 +24,7 @@
 ##           CONTRACTS: O7/DD10 — remove = disconnect, not destroy
 ## @changes  2026-07-17 · T10 — full implementation
 ##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, 2 inline ssh → ssh_read/ssh_exec
+##           2026-07-21 | W2-E3 — Added audit_step wrapper for cleanup operations (source audit_logging.sh)
 # 💼 TRAP[BUSINESS] · 2026-07-17 · HI · remove = disconnect, данные не удаляются автоматически
 # · Source: owner
 # · Risk: авто-очистка = невосстановимая потеря БД проекта
@@ -39,6 +40,7 @@ __LOG_PREFIX="remove-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
 source "${PLATFORM_ROOT}/core/lib/args.sh"
 source "${PLATFORM_ROOT}/core/lib/ssh.sh"
+source "${PLATFORM_ROOT}/core/lib/audit_logging.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBALS
@@ -422,39 +424,50 @@ main() {
         esac
     fi
 
-    # ── Step 1: Unregister from node.yaml ──
-    log_imp 7 "-" "Step 1/4: Unregister from node.yaml"
-    if unregister_from_node_yaml "$FOUND_NODE_YAML" "$PROJECT_NAME"; then
-        log_imp 9 "-" "Step 1 complete: unregistered"
-    else
-        log_imp 8 "-" "Step 1: unregistration had warnings — continuing"
-    fi
+    # ── Steps 1-4: Wrap cleanup operations in audit_step ──
+    _do_cleanup() {
+        local name="$1"
+        local node_yaml="$2"
+        local node_host="$3"
+        local domain="$4"
 
-    # ── Step 2: Remove nginx vhost ──
-    log_imp 7 "-" "Step 2/4: Remove nginx vhost"
-    local vhost_removed=false
-    if [[ -n "$PROJECT_DOMAIN" && "$PROJECT_DOMAIN" != "null" ]]; then
-        remove_vhost "$PROJECT_DOMAIN"
-        vhost_removed=true
-    else
-        log_imp 6 "-" "No domain configured — skipping vhost removal"
-    fi
+        # Step 1: Unregister from node.yaml
+        log_imp 7 "-" "Step 1/4: Unregister from node.yaml"
+        if unregister_from_node_yaml "$node_yaml" "$name"; then
+            log_imp 9 "-" "Step 1 complete: unregistered"
+        else
+            log_imp 8 "-" "Step 1: unregistration had warnings — continuing"
+        fi
 
-    # ── Step 3: SSH compose down on target node ──
-    log_imp 7 "-" "Step 3/4: Stop containers on target node"
-    local ssh_done=false
-    if ssh_compose_down "$PROJECT_NODE_HOST" "$PROJECT_NAME"; then
-        ssh_done=true
-        log_imp 9 "-" "Step 3 complete: containers stopped"
-    else
-        log_imp 8 "-" "Step 3: SSH step did not complete — containers may still be running"
-    fi
+        # Step 2: Remove nginx vhost
+        log_imp 7 "-" "Step 2/4: Remove nginx vhost"
+        local vhost_removed=false
+        if [[ -n "$domain" && "$domain" != "null" ]]; then
+            remove_vhost "$domain"
+            vhost_removed=true
+        else
+            log_imp 6 "-" "No domain configured — skipping vhost removal"
+        fi
 
-    # ── Step 4: Print report ──
-    log_imp 7 "-" "Step 4/4: Print safe-remove report"
-    print_report "$PROJECT_NAME" "$vhost_removed" "$ssh_done"
+        # Step 3: SSH compose down on target node
+        log_imp 7 "-" "Step 3/4: Stop containers on target node"
+        local ssh_done=false
+        if ssh_compose_down "$node_host" "$name"; then
+            ssh_done=true
+            log_imp 9 "-" "Step 3 complete: containers stopped"
+        else
+            log_imp 8 "-" "Step 3: SSH step did not complete — containers may still be running"
+        fi
 
-    log_imp 9 "-" "remove-project DONE: ${PROJECT_NAME}"
+        # Step 4: Print report
+        log_imp 7 "-" "Step 4/4: Print safe-remove report"
+        print_report "$name" "$vhost_removed" "$ssh_done"
+
+        log_imp 9 "-" "remove-project DONE: ${name}"
+    }
+
+    audit_step "remove-project:${PROJECT_NAME}:node=${NODE_NAME:-$(basename "$NODE_CONFIGS_DIR" 2>/dev/null || echo 'unknown')}" \
+        _do_cleanup "$PROJECT_NAME" "$FOUND_NODE_YAML" "$PROJECT_NODE_HOST" "$PROJECT_DOMAIN"
 }
 # endregion FUNC_main
 

@@ -12,6 +12,7 @@
 ##   - Decryption failure causes immediate exit 1 (fail-fast)
 ##   - No secret values appear in audit log or stdout
 ## @rationale Key on disk = permanent compromise; transient env/tmpfile eliminates exposure. Fallback paths enable bootstrap without pre-configured env vars.
+## @changes 2026-07-21 | W2-E3 — Added audit_step wrapper for decrypt+export (source audit_logging.sh, extracted _do_decrypt_and_export)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -19,15 +20,17 @@ set -euo pipefail
 echo "[IMP:7][decrypt-secrets][main] Starting secrets decryption" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../internal/audit/audit.sh" 2>/dev/null || true
+PREF_RESOLVED_PLATFORM_ROOT="$(
+    cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd \
+    || echo "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
+)"
 if [[ -z "${PLATFORM_ROOT:-}" ]]; then
-    PLATFORM_ROOT="$(
-        cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd \
-        || echo "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
-    )"
+    PLATFORM_ROOT="$PREF_RESOLVED_PLATFORM_ROOT"
 fi
 
 __LOG_PREFIX="decrypt"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
+source "${PLATFORM_ROOT}/core/lib/audit_logging.sh"
 
 # region RESOLVE_SECRETS_FILE
 ## @purpose  Search /opt/node-configs/secrets/*.enc.yaml as fallback when SECRETS_FILE is unset or missing
@@ -189,27 +192,32 @@ main() {
     echo "[IMP:8][decrypt-secrets][main] Validating environment" >&2
     validate_env
 
-    local tmp_key output_file
-    tmp_key="$(write_temp_key)"
-    output_file="$(mktemp /tmp/platform-secrets-plain.XXXXXX)"
-    chmod 0600 "$output_file"
+    # Wrapped in audit_step: decrypt + export (state-modifying core)
+    _do_decrypt_and_export() {
+        local tmp_key output_file
+        tmp_key="$(write_temp_key)"
+        output_file="$(mktemp /tmp/platform-secrets-plain.XXXXXX)"
+        chmod 0600 "$output_file"
 
-    # Single trap — NEVER overwritten inside main()
-    trap 'cleanup_all "${tmp_key}" "${output_file}"' EXIT INT TERM
+        # Single trap — NEVER overwritten inside main()
+        trap 'cleanup_all "${tmp_key}" "${output_file}"' EXIT INT TERM
 
-    decrypt_secrets "$tmp_key" "$output_file"
+        decrypt_secrets "$tmp_key" "$output_file"
 
-    # Explicit wipe after decrypt, before export (trap still covers export failure)
-    wipe_temp_key "$tmp_key"
+        # Explicit wipe after decrypt, before export (trap still covers export failure)
+        wipe_temp_key "$tmp_key"
 
-    local env_file
-    env_file="$(export_secrets_to_env "$output_file" "${SECRETS_ENV_FILE:-/run/platform/secrets.env}")"
+        local env_file
+        env_file="$(export_secrets_to_env "$output_file" "${SECRETS_ENV_FILE:-/run/platform/secrets.env}")"
 
-    rm -f "$output_file"
-    trap - EXIT INT TERM
+        rm -f "$output_file"
+        trap - EXIT INT TERM
 
-    log_step "main" "DONE" "Secrets ready at: ${env_file} (key and plaintext wiped)"
-    echo "[IMP:9][decrypt-secrets][main] Secrets ready: ${env_file}" >&2
+        log_step "main" "DONE" "Secrets ready at: ${env_file} (key and plaintext wiped)"
+        echo "[IMP:9][decrypt-secrets][main] Secrets ready: ${env_file}" >&2
+    }
+
+    audit_step "secrets-unlock:${NODE_NAME:-local}" _do_decrypt_and_export
 }
 
 main "$@"

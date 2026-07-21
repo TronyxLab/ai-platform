@@ -31,6 +31,7 @@
 ##            exit 1=WARNINGS always non-blocking step_done. Removed dead `$?` code.
 ##           2026-07-21 | W4: step_15_converge: +AUTO_RECONCILE passthrough → --reconcile to converge.sh,
 ##            +reconcile-projects.sh call after converge
+##           2026-07-21 | W2-E3 — Added audit_step wrapper for update mode (source audit_logging.sh, _do_update_steps, removed old audit_log at line 1289)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -106,6 +107,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../lib/paths.sh"
 CORE_DIR="${PATHS_CORE_DIR}"
 
 source "${CORE_DIR}/internal/audit/audit.sh"
+source "${CORE_DIR}/lib/audit_logging.sh" 2>/dev/null || true
 
 STEP=0
 STEP_ERRORS=()
@@ -1243,51 +1245,52 @@ except Exception as e:
 
         mkdir -p "$CHECKPOINT_DIR"
 
-        # ── Step 1: Verify core (content hash tracked) ────────────────
-        CHECKPOINT_STEP_HASH="$(_step_hash "verify-core" \
-            "${CORE_DIR}/lib/checkpoint.sh" \
-            "${CORE_DIR}/internal/bootstrap/content-hash.sh")" \
-            checkpoint_step "verify-core" update_step_1_verify_core
+        # ── Wrap update steps in audit_step (DRIFT-11: replaces old audit_log "node-update:complete") ──
+        _do_update_steps() {
+            # Step 1: Verify core (content hash tracked)
+            CHECKPOINT_STEP_HASH="$(_step_hash "verify-core" \
+                "${CORE_DIR}/lib/checkpoint.sh" \
+                "${CORE_DIR}/internal/bootstrap/content-hash.sh")" \
+                checkpoint_step "verify-core" update_step_1_verify_core
 
-        # ── Step 2: Provision environment ─────────────────────────────
-        CHECKPOINT_STEP_HASH="$(_step_hash "provision" \
-            "${CORE_DIR}/internal/provision-environment.sh")" \
-            checkpoint_step "provision" update_step_2_provision
+            # Step 2: Provision environment
+            CHECKPOINT_STEP_HASH="$(_step_hash "provision" \
+                "${CORE_DIR}/internal/provision-environment.sh")" \
+                checkpoint_step "provision" update_step_2_provision
 
-        # ── Step 2.5: Deliver vhost overlays (S2 DevPlan 019) ──────────
-        CHECKPOINT_STEP_HASH="$(_step_hash "deliver-overlays" \
-            "${CORE_DIR}/internal/scaffold/add-vhost.sh")" \
-            checkpoint_step "deliver-overlays" update_step_2_5_deliver_overlays
+            # Step 2.5: Deliver vhost overlays (S2 DevPlan 019)
+            CHECKPOINT_STEP_HASH="$(_step_hash "deliver-overlays" \
+                "${CORE_DIR}/internal/scaffold/add-vhost.sh")" \
+                checkpoint_step "deliver-overlays" update_step_2_5_deliver_overlays
 
-        # ── Step 3: SSL certificate provisioning ──────────────────────
-        CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision" \
-            "${CORE_DIR}/internal/bootstrap/issue-cert.sh")" \
-            checkpoint_step "ssl-provision" update_step_3_ssl_provision
+            # Step 3: SSL certificate provisioning
+            CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision" \
+                "${CORE_DIR}/internal/bootstrap/issue-cert.sh")" \
+                checkpoint_step "ssl-provision" update_step_3_ssl_provision
 
-        # ── Step 4: Deploy all modules (docker + system) — S2 merged ──
-        # S2: Previously separate deploy-docker + deploy-system steps. Merged
-        # into a single deploy-modules call with --skip-provision, eliminating
-        # the second full main() invocation (~30% of update cycle time).
-        CHECKPOINT_STEP_HASH="$(_step_hash "deploy-modules" \
-            "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
-            checkpoint_step "deploy-modules" update_step_4_deploy_modules
+            # Step 4: Deploy all modules (docker + system) — S2 merged
+            # S2: Previously separate deploy-docker + deploy-system steps. Merged
+            # into a single deploy-modules call with --skip-provision, eliminating
+            # the second full main() invocation (~30% of update cycle time).
+            CHECKPOINT_STEP_HASH="$(_step_hash "deploy-modules" \
+                "${CORE_DIR}/internal/bootstrap/deploy-modules.sh")" \
+                checkpoint_step "deploy-modules" update_step_4_deploy_modules
 
-        # ── Step 6: Healthcheck ───────────────────────────────────────
-        CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")" \
-            checkpoint_step "healthcheck-all" update_step_6_healthcheck
+            # Step 6: Healthcheck
+            CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")" \
+                checkpoint_step "healthcheck-all" update_step_6_healthcheck
 
-        # ── Step 7: Converge (desired-state reconciler) ───────────────
-        # Runs after healthchecks. In update mode, converge failures are
-        # logged as warnings — node continues operating with reported drifts.
-        CHECKPOINT_STEP_HASH="$(_step_hash "converge" \
-            "${CORE_DIR}/internal/bootstrap/converge.sh")" \
-            checkpoint_step "converge" step_15_converge
+            # Step 7: Converge (desired-state reconciler)
+            # Runs after healthchecks. In update mode, converge failures are
+            # logged as warnings — node continues operating with reported drifts.
+            CHECKPOINT_STEP_HASH="$(_step_hash "converge" \
+                "${CORE_DIR}/internal/bootstrap/converge.sh")" \
+                checkpoint_step "converge" step_15_converge
 
-        CHECKPOINT_STEP_HASH=""
+            CHECKPOINT_STEP_HASH=""
+        }
 
-        # ── Audit log ─────────────────────────────────────────────────
-        audit_log "node-update:complete" "DONE" \
-            "Node update finished | node=${NODE_NAME:-<unset>} | warnings=${#STEP_ERRORS[@]}"
+        audit_step "node-update:${NODE_NAME:-<unset>}" _do_update_steps
 
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
         echo "[IMP:9][node-lifecycle][main] Node Update COMPLETE — exit 0" >&2
