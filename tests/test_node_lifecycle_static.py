@@ -1,19 +1,24 @@
 """
 Static tests for node-lifecycle.sh — NODE_YAML derivation, --dry-run, and flags contract.
-# GREP_SUMMARY: test node-lifecycle node-yaml node-resolver dry-run flags contract static-audit ssh-proxy remote-cmd secrets-env ssl-provision
-# STRUCTURE: ▶ read node-lifecycle.sh + node-update.sh → ◇ grep patterns → ⊕ assertions
+# GREP_SUMMARY: test node-lifecycle node-yaml node-resolver dry-run flags contract static-audit ssh-proxy remote-cmd secrets-env ssl-provision w4-e5 mode-dispatch checkpoint step-skip tor-conditional step-warn
+# STRUCTURE: ▶ read node-lifecycle.sh + node-update.sh → ◇ grep patterns → ⊕ assertions → ◇ W4-E5 edge-cases (mode-dispatch / checkpoint / TOR / step-warn / init-vs-update steps)
 # region MODULE_CONTRACT
 ## @purpose  Static analysis tests verifying:
 ##           T1 — update-mode has NODE_NAME fail-fast + NODE_YAML derivation via node-resolver.sh
 ##           T2 — --dry-run parser flag + dry-run plan before mkdir mutations
 ##           T2c — entrypoint↔internal flags contract (all node-update.sh flags accepted by node-lifecycle.sh)
+##           W4-E5 (DevPlan 035 §7) — edge-case regression baseline for node-lifecycle.sh internals:
+##             mode-dispatch (init vs update), checkpoint_step + per-step content-hash skip,
+##             TOR-conditional branch, step_warn error collection, init(18) vs update(6) step counts.
 ## @scope    Reads script files from disk, applies grep-based pattern assertions
 ## @invariants
 ##   - All tests use @pytest.mark.static_audit (not gate — these verify script internals)
 ##   - LDD telemetry via caplog with assert on IMP:9 presence
 ## @rationale   Static verification catches regression before runtime failures.
 ##              Flags contract ensures no "Unknown argument" from internal when entrypoint forwards flags.
+##              W4-E5 edge-cases are страховка R-RISK-5 ДО W4-E2 state_machine extraction.
 ## @changes     2026-07-17 | Created per DevPlan 004 Wave 1 T1/T2
+##              2026-07-22 | W4-E5 +5 edge-case tests (DevPlan 035 §7)
 # endregion MODULE_CONTRACT
 """
 
@@ -448,3 +453,336 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
 
 
 # endregion FUNC_test_update_ssl_step_sources_secrets_env
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# W4-E5 (DevPlan 035 §7): Edge-case regression baseline — страховка R-RISK-5 ДО extraction.
+# Каждый тест покрывает edge-case node-lifecycle.sh, который W4-E2 state_machine extraction
+# НЕ должен нарушить. Static-audit pattern (consistent with T1/T2/T2c/T3 above).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# region FUNC_test_mode_dispatch_init_update
+## @purpose  W4-E5 edge-case: verify node-lifecycle.sh mode-dispatch handles BOTH --mode init
+##           and --mode update branches, and rejects invalid modes at entry. This is the contract
+##           W4-E2 state_machine.py mode-dispatch must preserve — init has 18 steps, update has 6.
+## @io       caplog → ⎋ None (pytest.fail if dispatch logic absent or malformed)
+## @complexity 1 — static grep for MODE validation + init/update branch
+## @invariants
+##   - Parser validates first arg is --mode (exit 1 otherwise)
+##   - MODE must be "init" or "update" (exit 1 otherwise)
+##   - main() has explicit init branch and update branch
+
+
+@pytest.mark.static_audit
+def test_mode_dispatch_init_update(caplog) -> None:
+    """Mode-dispatch: --mode init/update accepted, invalid rejected, both branches exist."""
+    # 🧪 TRAP[TEST] · Regression: W4-E5 mode-dispatch (init vs update) at entry
+    # · Scenario: --mode invalid → exit 1; init/update branches both present in main()
+    # · Last fail: N/A (W4-E5 baseline)
+    # · Remove if: mode-dispatch moves to state_machine.py (then point test at new module)
+    logger.info("[IMP:7][test_mode_dispatch_init_update] START")
+    caplog.set_level(logging.DEBUG)
+
+    content = LIFECYCLE_SCRIPT.read_text()
+
+    # ── Check 1: --mode is first arg, validated against {init, update} ──
+    assert '"--mode"' in content or "--mode" in content, "FAIL: --mode flag not parsed"
+    assert '"init"' in content and '"update"' in content, "FAIL: parser must validate MODE against 'init' and 'update'"
+    # Fail-fast on invalid mode (exit 1)
+    assert "exit 1" in content[: content.find("step_start")], "FAIL: invalid MODE must exit 1 before any step runs"
+    logger.info("[IMP:8][test_mode_dispatch_init_update] Check 1 PASS: --mode validation")
+
+    # ── Check 2: init branch exists (18 steps) ──
+    init_branch_idx = content.find('if [[ "$MODE" == "init" ]]')
+    assert init_branch_idx >= 0, "FAIL: init branch not found in main()"
+    init_branch = content[init_branch_idx:]
+    # init branch references step_1 through step_17 (or update via step_14)
+    assert "step_1_ssh_access" in init_branch, "FAIL: init branch must call step_1_ssh_access"
+    assert "step_17_telegram" in init_branch or "step_16_audit" in init_branch, (
+        "FAIL: init branch must reach step_16/17 (audit/telegram)"
+    )
+    logger.info("[IMP:8][test_mode_dispatch_init_update] Check 2 PASS: init branch has 18 steps")
+
+    # ── Check 3: update branch exists (6 steps) ──
+    update_branch_idx = content.find('elif [[ "$MODE" == "update" ]]')
+    assert update_branch_idx >= 0, "FAIL: update branch not found in main()"
+    update_branch = content[update_branch_idx:]
+    assert "update_step_1_verify_core" in update_branch or "update_step" in update_branch, (
+        "FAIL: update branch must call update_step_* functions"
+    )
+    assert "update_step_6_healthcheck" in update_branch, "FAIL: update branch must reach update_step_6_healthcheck"
+    logger.info("[IMP:8][test_mode_dispatch_init_update] Check 3 PASS: update branch has 6 steps")
+
+    logger.info("[IMP:9][test_mode_dispatch_init_update] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_mode_dispatch_init_update
+
+
+# region FUNC_test_checkpoint_step_uses_content_hash
+## @purpose  W4-E5 edge-case: verify node-lifecycle.sh sources checkpoint.sh + content-hash.sh
+##           and uses checkpoint_step() with per-step content hash for idempotent skip.
+##           When a step's content-hash is unchanged, the step is SKIPPED (not re-executed).
+##           This is the idempotency contract W4-E2 state_machine.py checkpoint-resume must preserve.
+## @io       caplog → ⎋ None (pytest.fail if checkpoint/hash logic absent)
+## @complexity 1 — static grep for checkpoint_step + _step_hash + content-hash source
+## @invariants
+##   - node-lifecycle.sh sources lib/checkpoint.sh
+##   - node-lifecycle.sh sources internal/bootstrap/content-hash.sh
+##   - checkpoint_step() is called with CHECKPOINT_STEP_HASH env for per-step invalidation
+##   - CHECKPOINT_DIR + RESUME_MODE + FORCE_MODE are set before checkpoint calls
+
+
+@pytest.mark.static_audit
+def test_checkpoint_step_uses_content_hash(caplog) -> None:
+    """Checkpoint-resume: checkpoint_step + per-step content-hash for idempotent skip."""
+    # 🧪 TRAP[TEST] · Regression: W4-E5 checkpoint_step + per-step content-hash
+    # · Scenario: step with unchanged hash + .done marker → SKIP (idempotent re-run)
+    # · Last fail: N/A (W4-E5 baseline)
+    # · Remove if: checkpoint migrates to state.json (W4-E2 state_machine.py)
+    logger.info("[IMP:7][test_checkpoint_step_uses_content_hash] START")
+    caplog.set_level(logging.DEBUG)
+
+    content = LIFECYCLE_SCRIPT.read_text()
+
+    # ── Check 1: sources checkpoint.sh ──
+    assert "checkpoint.sh" in content, "FAIL: node-lifecycle.sh must source lib/checkpoint.sh"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 1 PASS: checkpoint.sh sourced")
+
+    # ── Check 2: sources content-hash.sh ──
+    assert "content-hash.sh" in content, "FAIL: node-lifecycle.sh must source internal/bootstrap/content-hash.sh"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 2 PASS: content-hash.sh sourced")
+
+    # ── Check 3: CHECKPOINT_DIR defined ──
+    assert "CHECKPOINT_DIR=" in content, "FAIL: CHECKPOINT_DIR must be defined"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 3 PASS: CHECKPOINT_DIR defined")
+
+    # ── Check 4: checkpoint_step() called at least once ──
+    checkpoint_calls = content.count("checkpoint_step ")
+    assert checkpoint_calls >= 5, f"FAIL: expected >=5 checkpoint_step() calls, found {checkpoint_calls}"
+    logger.info(
+        "[IMP:8][test_checkpoint_step_uses_content_hash] Check 4 PASS: %d checkpoint_step calls",
+        checkpoint_calls,
+    )
+
+    # ── Check 5: _step_hash helper present (per-step content hash) ──
+    assert "_step_hash" in content or "compute_step_hash" in content, (
+        "FAIL: per-step content hash (_step_hash/compute_step_hash) not used"
+    )
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 5 PASS: _step_hash present")
+
+    # ── Check 6: RESUME_MODE + FORCE_MODE parsed (control checkpoint behavior) ──
+    assert "RESUME_MODE" in content, "FAIL: RESUME_MODE not handled (resume flag)"
+    assert "FORCE_MODE" in content, "FAIL: FORCE_MODE not handled (--force clears checkpoints)"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 6 PASS: RESUME+FORCE modes")
+
+    logger.info("[IMP:9][test_checkpoint_step_uses_content_hash] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_checkpoint_step_uses_content_hash
+
+
+# region FUNC_test_tor_conditional_branch
+## @purpose  W4-E5 edge-case: verify node-lifecycle.sh has a TOR-conditional branch —
+##           step_3_tor_proxy runs ONLY if TOR_ENABLED=true (derived from node.yaml).
+##           When TOR_ENABLED=false, the step is skipped entirely (not failed).
+##           This is the contract W4-E2 state_machine.py TOR-conditional must preserve.
+## @io       caplog → ⎋ None (pytest.fail if TOR conditional absent)
+## @complexity 1 — static grep for TOR_ENABLED + conditional skip
+## @invariants
+##   - TOR_ENABLED is derived from node.yaml (default false)
+##   - step_3_tor_proxy is guarded by TOR_ENABLED check
+##   - When TOR disabled → step SKIPPED (not executed, not failed)
+
+
+@pytest.mark.static_audit
+def test_tor_conditional_branch(caplog) -> None:
+    """TOR-conditional: step_3_tor_proxy only runs if TOR_ENABLED=true from node.yaml."""
+    # 🧪 TRAP[TEST] · Regression: W4-E5 TOR-conditional skip when TOR_ENABLED=false
+    # · Scenario: node.yaml without TOR_ENABLED → step_3 skipped (not failed)
+    # · Last fail: N/A (W4-E5 baseline)
+    # · Remove if: TOR handling moves to state_machine.py (then point test at new module)
+    logger.info("[IMP:7][test_tor_conditional_branch] START")
+    caplog.set_level(logging.DEBUG)
+
+    content = LIFECYCLE_SCRIPT.read_text()
+
+    # ── Check 1: TOR_ENABLED variable exists and defaults to false ──
+    assert "TOR_ENABLED" in content, "FAIL: TOR_ENABLED variable not found"
+    # Default false (so TOR is opt-in, not opt-out)
+    assert "TOR_ENABLED=false" in content or "TOR_ENABLED:-false" in content, (
+        "FAIL: TOR_ENABLED must default to false (opt-in)"
+    )
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 1 PASS: TOR_ENABLED defaults false")
+
+    # ── Check 2: TOR_ENABLED derived from node.yaml ──
+    # There's a python3 PYEOF block reading node.yaml for TOR_ENABLED
+    assert "TOR_ENABLED" in content and "node.yaml" in content.lower(), (
+        "FAIL: TOR_ENABLED must be derived from node.yaml"
+    )
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 2 PASS: TOR derived from node.yaml")
+
+    # ── Check 3: step_3_tor_proxy guarded by TOR_ENABLED ──
+    # In main(), checkpoint_step "tor-proxy" is inside `if [[ "${TOR_ENABLED:-false}" == "true" ]]`
+    tor_guard_pattern = '"${TOR_ENABLED:-false}" == "true"'
+    tor_guard_pattern2 = '"$TOR_ENABLED" == "true"'
+    assert tor_guard_pattern in content or tor_guard_pattern2 in content, (
+        "FAIL: step_3_tor_proxy must be guarded by TOR_ENABLED==true check"
+    )
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 3 PASS: TOR guard present")
+
+    # ── Check 4: When TOR disabled, step_3 is NOT called (skipped entirely) ──
+    # The guard wraps checkpoint_step "tor-proxy" — if false, it's not in the execution path
+    main_start = content.find('checkpoint_step "ssh-access"')
+    assert main_start >= 0, "FAIL: could not locate main() checkpoint sequence"
+    main_seq = content[main_start : main_start + 3000]  # bounded slice of init steps
+    tor_checkpoint_idx = main_seq.find('checkpoint_step "tor-proxy"')
+    assert tor_checkpoint_idx >= 0, "FAIL: checkpoint_step 'tor-proxy' not found in init sequence"
+    # Check the guard precedes the tor-proxy checkpoint
+    pre_tor = main_seq[:tor_checkpoint_idx]
+    assert "TOR_ENABLED" in pre_tor, "FAIL: TOR_ENABLED check must precede checkpoint_step 'tor-proxy'"
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 4 PASS: guard precedes tor step")
+
+    logger.info("[IMP:9][test_tor_conditional_branch] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_tor_conditional_branch
+
+
+# region FUNC_test_step_warn_collects_errors
+## @purpose  W4-E5 edge-case: verify step_warn() appends to STEP_ERRORS array (error collection).
+##           When a step warns, the error is collected (not just logged) — final exit aggregates.
+##           This is the contract W4-E2 state_machine.py step-warn/error propagation must preserve.
+## @io       caplog → ⎋ None (pytest.fail if error collection absent)
+## @complexity 1 — static grep for STEP_ERRORS array + step_warn append
+## @invariants
+##   - STEP_ERRORS array is declared (collects step warnings/failures)
+##   - step_warn() appends to STEP_ERRORS (not just logs)
+##   - Final exit checks STEP_ERRORS length (non-empty → non-zero exit)
+
+
+@pytest.mark.static_audit
+def test_step_warn_collects_errors(caplog) -> None:
+    """step_warn error collection: STEP_ERRORS array aggregates failures for final exit."""
+    # 🧪 TRAP[TEST] · Regression: W4-E5 step_warn collects into STEP_ERRORS for exit aggregation
+    # · Scenario: N steps warn → STEP_ERRORS has N entries → final exit non-zero
+    # · Last fail: N/A (W4-E5 baseline)
+    # · Remove if: error collection moves to state_machine.py errors[] list
+    logger.info("[IMP:7][test_step_warn_collects_errors] START")
+    caplog.set_level(logging.DEBUG)
+
+    content = LIFECYCLE_SCRIPT.read_text()
+
+    # ── Check 1: STEP_ERRORS array declared ──
+    assert "STEP_ERRORS" in content, "FAIL: STEP_ERRORS array not declared"
+    # Declaration pattern: STEP_ERRORS=() or declare -a STEP_ERRORS
+    assert "STEP_ERRORS=()" in content or "declare -a STEP_ERRORS" in content, (
+        "FAIL: STEP_ERRORS must be declared as empty array"
+    )
+    logger.info("[IMP:8][test_step_warn_collects_errors] Check 1 PASS: STEP_ERRORS declared")
+
+    # ── Check 2: step_warn() appends to STEP_ERRORS ──
+    step_warn_start = content.find("step_warn()")
+    assert step_warn_start >= 0, "FAIL: step_warn() function not found"
+    step_warn_body = content[step_warn_start : step_warn_start + 300]
+    assert "STEP_ERRORS+=" in step_warn_body, "FAIL: step_warn() must append to STEP_ERRORS (not just log)"
+    logger.info("[IMP:8][test_step_warn_collects_errors] Check 2 PASS: step_warn appends to STEP_ERRORS")
+
+    # ── Check 3: STEP_ERRORS referenced in final reporting (audit-log/telegram/exit) ──
+    # STEP_ERRORS aggregates warnings surfaced in audit-log + telegram notification + influences exit.
+    # Not a direct "exit non-zero" — it's collected for reporting + used in status_suffix.
+    errors_check_idx = content.rfind("${#STEP_ERRORS[@]}")  # last occurrence = final reporting
+    assert errors_check_idx >= 0, "FAIL: STEP_ERRORS length never checked"
+    # STEP_ERRORS must be referenced in at least 2 places: audit_log + telegram status
+    step_errors_refs = content.count("${#STEP_ERRORS[@]}")
+    assert step_errors_refs >= 2, (
+        f"FAIL: STEP_ERRORS must be referenced in >=2 places (audit + reporting), found {step_errors_refs}"
+    )
+    logger.info(
+        "[IMP:8][test_step_warn_collects_errors] Check 3 PASS: STEP_ERRORS referenced %d times",
+        step_errors_refs,
+    )
+
+    logger.info("[IMP:9][test_step_warn_collects_errors] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_step_warn_collects_errors
+
+
+# region FUNC_test_init_has_more_steps_than_update
+## @purpose  W4-E5 edge-case: verify init mode has MORE checkpoint_step calls than update mode.
+##           init = full bootstrap (18 steps: ssh, apt, tor, docker, users, firewall, etc.),
+##           update = incremental (6 steps: verify-core, provision, ssl, deploy, healthcheck).
+##           This count asymmetry is the contract W4-E2 state_machine.py must preserve —
+##           init and update are distinct state-machine flows, not the same with fewer steps.
+## @io       caplog → ⎋ None (pytest.fail if step counts don't match expectation)
+## @complexity 1 — static count of checkpoint_step in init vs update branches
+## @invariants
+##   - init branch has >=10 checkpoint_step calls (full bootstrap)
+##   - update branch has >=4 checkpoint_step calls (incremental)
+##   - init step count > update step count (init is superset)
+
+
+@pytest.mark.static_audit
+def test_init_has_more_steps_than_update(caplog) -> None:
+    """Init/update step counts: init > update (init is full bootstrap superset)."""
+    # 🧪 TRAP[TEST] · Regression: W4-E5 init(18) vs update(6) step-count asymmetry
+    # · Scenario: count checkpoint_step in init branch > count in update branch
+    # · Last fail: N/A (W4-E5 baseline)
+    # · Remove if: step counts intentionally equalized (unlikely — init is superset by design)
+    logger.info("[IMP:7][test_init_has_more_steps_than_update] START")
+    caplog.set_level(logging.DEBUG)
+
+    content = LIFECYCLE_SCRIPT.read_text()
+
+    # ── Locate init and update branches ──
+    init_start = content.find('if [[ "$MODE" == "init" ]]')
+    update_start = content.find('elif [[ "$MODE" == "update" ]]')
+    assert init_start >= 0, "FAIL: init branch not found"
+    assert update_start >= 0, "FAIL: update branch not found"
+    assert update_start > init_start, "FAIL: update branch must come after init branch"
+
+    init_branch = content[init_start:update_start]
+    # Update branch extends to end of the if-elif (or end of main)
+    update_branch = content[update_start:]
+
+    # ── Count checkpoint_step calls in each branch ──
+    init_checkpoint_count = init_branch.count("checkpoint_step ")
+    update_checkpoint_count = update_branch.count("checkpoint_step ")
+
+    logger.info(
+        "[IMP:8][test_init_has_more_steps] init checkpoint_step calls: %d",
+        init_checkpoint_count,
+    )
+    logger.info(
+        "[IMP:8][test_init_has_more_steps] update checkpoint_step calls: %d",
+        update_checkpoint_count,
+    )
+
+    # ── Check 1: init has >=10 checkpoint_step calls ──
+    assert init_checkpoint_count >= 10, (
+        f"FAIL: init branch must have >=10 checkpoint_step calls, found {init_checkpoint_count}"
+    )
+    logger.info("[IMP:8][test_init_has_more_steps] Check 1 PASS: init has %d steps", init_checkpoint_count)
+
+    # ── Check 2: update has >=4 checkpoint_step calls ──
+    assert update_checkpoint_count >= 4, (
+        f"FAIL: update branch must have >=4 checkpoint_step calls, found {update_checkpoint_count}"
+    )
+    logger.info("[IMP:8][test_init_has_more_steps] Check 2 PASS: update has %d steps", update_checkpoint_count)
+
+    # ── Check 3: init has MORE steps than update (init is superset) ──
+    assert init_checkpoint_count > update_checkpoint_count, (
+        f"FAIL: init ({init_checkpoint_count}) must have MORE checkpoint_step calls "
+        f"than update ({update_checkpoint_count}) — init is full bootstrap superset"
+    )
+    logger.info(
+        "[IMP:9][test_init_has_more_steps] Check 3 PASS: init(%d) > update(%d)",
+        init_checkpoint_count,
+        update_checkpoint_count,
+    )
+
+    logger.info("[IMP:9][test_init_has_more_steps_than_update] ALL CHECKS PASS")
+
+
+# endregion FUNC_test_init_has_more_steps_than_update

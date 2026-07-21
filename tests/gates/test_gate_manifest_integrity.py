@@ -118,11 +118,14 @@ def _load_makefile_targets() -> set[str]:
     """Extract phony target names from ALL Makefile `.PHONY:` lines.
 
     ## @purpose — Get authoritative list of registered make targets.
+    ##            Reads root Makefile AND all makefiles/*.mk (post include-split).
     ## @io — ⎋ set[str]: all target names across all .PHONY declarations
-    ## @complexity — O(N), N = lines in Makefile
+    ## @complexity — O(N*F), N = lines per file, F = number of files
     """
     targets: set[str] = set()
     phony_count: int = 0
+
+    # Read root Makefile
     with open(_MAKEFILE_PATH) as f:
         for line in f:
             if line.startswith(".PHONY:"):
@@ -130,6 +133,20 @@ def _load_makefile_targets() -> set[str]:
                 tokens = line.split()
                 if len(tokens) > 1:
                     targets.update(tokens[1:])
+
+    # Read included makefiles/*.mk
+    makefiles_dir = os.path.join(os.path.dirname(_MAKEFILE_PATH), "makefiles")
+    if os.path.isdir(makefiles_dir):
+        for mk_file in sorted(os.listdir(makefiles_dir)):
+            if mk_file.endswith(".mk"):
+                with open(os.path.join(makefiles_dir, mk_file)) as f:
+                    for line in f:
+                        if line.startswith(".PHONY:"):
+                            phony_count += 1
+                            tokens = line.split()
+                            if len(tokens) > 1:
+                                targets.update(tokens[1:])
+
     logger.info(
         "[IMP:9][_load_makefile_targets] Found %d phony targets across %d .PHONY line(s)",
         len(targets),
@@ -246,6 +263,8 @@ def _resolve_module_targets(makefile_path: str) -> set[str]:
             match = re.match(r"^([a-zA-Z0-9_.\-]+)\s*:", stripped)
             if match:
                 target = match.group(1)
+                if target.startswith("."):
+                    continue  # Skip special make variables like .DEFAULT_GOAL, .PHONY, etc.
                 if not target.startswith("$") and target != ".PHONY":
                     result.add(target)
         return result
@@ -314,6 +333,8 @@ def _extract_explicit_targets(text: str) -> set[str]:
         match = re.match(r"^([a-zA-Z0-9_.\-]+)\s*:", stripped)
         if match:
             target = match.group(1)
+            if target.startswith("."):
+                continue  # Skip special make variables like .DEFAULT_GOAL, .PHONY, etc.
             if not target.startswith("$") and target != ".PHONY":
                 targets.add(target)
     return targets

@@ -66,10 +66,14 @@ def test_root_makefile_restart_is_soft(caplog):
     # · Remove if: restart semantics changes to require hard restart
     makefile = repo_root() / "Makefile"
     content = makefile.read_text()
+    # restart target is now in makefiles/modules.mk after include-split
+    modules_mk = repo_root() / "makefiles" / "modules.mk"
+    if modules_mk.is_file():
+        content += "\n" + modules_mk.read_text()
 
     # Find the restart target section
     restart_section = extract_make_target(content, "restart:")
-    assert restart_section is not None, "restart target not found in root Makefile"
+    assert restart_section is not None, "restart target not found in Makefile/makefiles/modules.mk"
     print(f"  Root Makefile restart section:\n{restart_section[:300]}")
 
     # Must contain stop && start for soft restart

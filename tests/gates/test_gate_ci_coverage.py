@@ -31,6 +31,16 @@ _CI_WORKFLOW_PATH: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows" / "pla
 _CI_WORKFLOW_DIR: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows"
 _MAKEFILE_PATH: pathlib.Path = _PROJECT_ROOT / "Makefile"
 _CHECK_DOC_HEADERS_PATH: pathlib.Path = _PROJECT_ROOT / "core" / "entrypoints" / "check-doc-headers.sh"
+
+
+def _read_makefile_with_includes() -> str:
+    """Read root Makefile + all makefiles/*.mk as combined content."""
+    parts = [_MAKEFILE_PATH.read_text()]
+    makefiles_dir = _PROJECT_ROOT / "makefiles"
+    if makefiles_dir.is_dir():
+        for mk_file in sorted(makefiles_dir.glob("*.mk")):
+            parts.append(mk_file.read_text())
+    return "\n".join(parts)
 _PRE_COMMIT_CONFIG_PATH: pathlib.Path = _PROJECT_ROOT / ".pre-commit-config.yaml"
 _MAIN_FULL_GATE_PATH: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows" / "main-full-gate.yml"
 
@@ -391,8 +401,7 @@ def test_mode_fast_excludes_requires_docker(caplog) -> None:
 
     logger.info("[IMP:8][test_mode_fast_excludes_requires_docker] Checking MODE=fast expression...")
 
-    with open(_MAKEFILE_PATH) as f:
-        makefile_content = f.read()
+    makefile_content = _read_makefile_with_includes()
 
     # Find the MODE=fast section — look for the -m expression line
     # The expression is on line ~202: -m "static_audit ... not requires_docker)"
@@ -686,8 +695,7 @@ def test_marker_all_includes_contract(caplog) -> None:
 
     logger.info("[IMP:8][test_marker_all_includes_contract] Checking MARKER=all includes contract...")
 
-    with open(_MAKEFILE_PATH) as f:
-        content = f.read()
+    content = _read_makefile_with_includes()
 
     # Find the MARKER=all branch
     all_section = re.search(

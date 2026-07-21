@@ -234,21 +234,29 @@ def test_gate_makefile_deploy_node_flag(tmp_path):
     script = f"""
     set -euo pipefail
     MF="$PROJECT_ROOT/{makefile_path}"
+    DEPLOY_MK="$PROJECT_ROOT/makefiles/deploy.mk"
     if [[ ! -f "$MF" ]]; then
         echo "[IMP:10][gate] FATAL: Makefile not found" >&2
         exit 1
     fi
-    # Check that deploy target references NODE for pre-flight
-    if grep -q 'if \[ -n "\$(NODE)" \]' "$MF" 2>/dev/null; then
+
+    # Check NODE flag in either file
+    found_node=0
+    if grep -q 'if \\[ -n "\\$(NODE)" \\]' "$MF" 2>/dev/null; then found_node=1; fi
+    if [[ -f "$DEPLOY_MK" ]] && grep -q 'if \\[ -n "\\$(NODE)" \\]' "$DEPLOY_MK" 2>/dev/null; then found_node=1; fi
+    if [[ $found_node -eq 1 ]]; then
         echo "[IMP:9][gate] OK: deploy target supports NODE flag" >&2
     else
         echo "[IMP:10][gate] FAIL: deploy target does not check NODE flag in expected pattern" >&2
-        # Debug: show matching lines
-        grep -n 'NODE' "$MF" 2>/dev/null | head -5 >&2
+        grep -n 'NODE' "$MF" "$DEPLOY_MK" 2>/dev/null | head -5 >&2
         exit 1
     fi
-    # Check LAUNCH flag
-    if grep -q "LAUNCH" "$MF" 2>/dev/null; then
+
+    # Check LAUNCH flag in either file
+    found_launch=0
+    if grep -q "LAUNCH" "$MF" 2>/dev/null; then found_launch=1; fi
+    if [[ -f "$DEPLOY_MK" ]] && grep -q "LAUNCH" "$DEPLOY_MK" 2>/dev/null; then found_launch=1; fi
+    if [[ $found_launch -eq 1 ]]; then
         echo "[IMP:9][gate] OK: deploy target supports LAUNCH flag" >&2
     else
         echo "[IMP:10][gate] FAIL: deploy target does not support LAUNCH flag" >&2

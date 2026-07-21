@@ -71,8 +71,12 @@ def test_contract_target_exists(caplog) -> None:
     if not _MAKEFILE_PATH.is_file():
         pytest.fail(f"[IMP:9][test_contract_target_exists] Root Makefile not found: {_MAKEFILE_PATH}")
     makefile_lines = _MAKEFILE_PATH.read_text().splitlines()
+    ci_mk = _PROJECT_ROOT / "makefiles" / "ci.mk"
+    if ci_mk.is_file():
+        makefile_lines.extend(ci_mk.read_text().splitlines())
     _logger.info(
-        "[IMP:7][test_contract_target_exists][BLOCK_ReadMakefile] Read %d lines from Makefile", len(makefile_lines)
+        "[IMP:7][test_contract_target_exists][BLOCK_ReadMakefile] Read %d lines from Makefile (+ ci.mk)",
+        len(makefile_lines),
     )
     # endregion
 

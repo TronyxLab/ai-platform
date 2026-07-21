@@ -335,6 +335,9 @@ def test_core_deploy_auto_detects_node():
 
     # ── Makefile allows bootstrap-node without NODE= ──────────────
     makefile_content = _MAKEFILE_PATH.read_text()
+    bootstrap_mk = repo_root() / "makefiles" / "bootstrap.mk"
+    if bootstrap_mk.is_file():
+        makefile_content += "\n" + bootstrap_mk.read_text()
     assert "$(if $(NODE),--node" in makefile_content, (
         "Makefile must conditionally pass --node only if NODE is set for bootstrap-node"
     )

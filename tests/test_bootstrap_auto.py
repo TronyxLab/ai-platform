@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: bootstrap auto-flow test task-7 node-resolver extract-host age-key detect ssh rsync orchestrator platform-secrets idempotent fallback decrypt
-# STRUCTURE: ▶ _bash(_extract_func) → ○ 8 test functions → ◇ assert contract → ⊕ LDD trajectory → ⎋ IMP:9 assertion
+# GREP_SUMMARY: bootstrap auto-flow test task-7 node-resolver extract-host age-key detect ssh rsync orchestrator platform-secrets idempotent fallback decrypt w4-e5 resolve-node-yaml multi-path
+# STRUCTURE: ▶ _bash(_extract_func) → ○ 8 test functions → ◇ assert contract → ⊕ LDD trajectory → ⎋ IMP:9 assertion → ◇ W4-E5 edge-cases (resolve_node_yaml paths, fail-fast, age-key file)
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for the new bootstrap flow (TASK-7): node-resolver extract, age-key detection,
 ##           SSH command construction, rsync generation, orchestrator arg parsing, platform-secrets
 ##           idempotency, and decrypt-secrets fallback path resolution.
+##           W4-E5 (DevPlan 035 §7): +3 edge-case regression tests for node-resolver multi-path
+##           search, empty-node-name fail-fast, and age-key-from-file path — страховка R-RISK-5.
 ## @scope    Tests bash functions from: core/lib/node-resolver.sh, core/entrypoints/bootstrap.sh,
 ##           core/internal/bootstrap/node-lifecycle.sh, core/modules/platform-secrets/install.sh,
 ##           core/internal/secrets/decrypt-secrets.sh.
@@ -869,6 +871,138 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
     assert "export AGE_SECRET_KEY=" not in cmd2
     logger.info("[IMP:9][test_build_ssh_cmd_empty][assert] Both keys empty: all optional flags omitted")
 
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# W4-E5 (DevPlan 035 §7): Edge-case regression baseline — страховка R-RISK-5 ДО extraction.
+# 3 edge-case теста node-resolver.sh и age-key detection, которые W4-E2 lifecycle extraction
+# НЕ должен нарушить. Bash-subprocess pattern (consistent with existing test_bootstrap_auto).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# region TEST_test_resolve_node_yaml_multi_path_search
+# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 resolve_node_yaml 3-candidate-path search
+# · Regression: node.yaml must be discoverable across platform-local → org-repos → VPS fallback
+# · Scenario: node.yaml only in VPS-fallback path (/opt/node-configs/<node>/node.yaml) → still resolved
+# · Last fail: N/A (W4-E5 baseline)
+# · Remove if: resolve_node_yaml moves to Python (then point test at new module)
+
+
+def test_resolve_node_yaml_multi_path_search(caplog, tmp_path) -> None:
+    """Verify resolve_node_yaml() finds node.yaml in org-repos path (2nd candidate)."""
+    caplog.set_level(logging.DEBUG)
+
+    # Create node.yaml in the org-repos location: projects_dir/<org>/node-configs/<node>/node.yaml
+    # Path 1 (platform-local) is empty → must fall through to path 2 (org-repos).
+    # Path 3 (VPS-fallback /opt/node-configs) is hardcoded and not writable in tests.
+    projects_dir = tmp_path / "projects"
+    org_configs = projects_dir / "myorg" / "node-configs" / "test-multi"
+    org_configs.mkdir(parents=True)
+    node_yaml = org_configs / "node.yaml"
+    node_yaml.write_text("node:\n  name: test-multi\n  host: 10.0.0.5\n")
+
+    # Empty platform_root (no candidates in path 1)
+    empty_platform = tmp_path / "empty-platform"
+    empty_platform.mkdir()
+
+    logger.info("[IMP:9][test_resolve_multi_path] Testing org-repos path resolution")
+
+    script = f"""set -euo pipefail
+source "{NODE_RESOLVER_SH}"
+result="$(resolve_node_yaml "test-multi" "{empty_platform}" "{projects_dir}")"
+echo "[IMP:9][test_resolve_multi_path] RESOLVED: $result"
+"""
+    stdout, stderr, rc = _bash(script, env={"__LOG_PREFIX": "test"})
+    found_imp9 = _print_ldd(stderr, stdout)
+
+    assert rc == 0, f"resolve_node_yaml failed (rc={rc}): {stderr}"
+    assert str(node_yaml) in stdout, f"Expected org-repos path {node_yaml} in output, got: {stdout}"
+    logger.info("[IMP:9][test_resolve_multi_path][assert] org-repos path resolved correctly")
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
+# region TEST_test_resolve_node_yaml_empty_name_fails_fast
+# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 resolve_node_yaml empty node_name fail-fast
+# · Regression: empty node_name must return 1 immediately (not search with empty glob)
+# · Scenario: resolve_node_yaml "" → exit 1 with IMP:10 "Missing required argument"
+# · Last fail: N/A (W4-E5 baseline)
+# · Remove if: resolve_node_yaml moves to Python (then point test at new module)
+
+
+def test_resolve_node_yaml_empty_name_fails_fast(caplog) -> None:
+    """Verify resolve_node_yaml() fails fast (exit 1) when node_name is empty."""
+    caplog.set_level(logging.DEBUG)
+
+    logger.info("[IMP:9][test_resolve_empty_name] Testing empty node_name fail-fast")
+
+    script = f"""set -euo pipefail
+source "{NODE_RESOLVER_SH}"
+if resolve_node_yaml "" 2>/dev/null; then
+    echo "UNEXPECTED_SUCCESS"
+else
+    echo "[IMP:9][test_resolve_empty_name] EXPECTED_FAILURE: empty node_name rejected"
+fi
+"""
+    stdout, stderr, rc = _bash(script, env={"__LOG_PREFIX": "test"})
+    found_imp9 = _print_ldd(stderr, stdout)
+
+    assert rc == 0, f"Bash script crashed (rc={rc}): {stderr}"
+    assert "EXPECTED_FAILURE" in stdout, f"Empty node_name should fail-fast, got: {stdout}"
+    assert "UNEXPECTED_SUCCESS" not in stdout, f"Empty node_name must NOT succeed, got: {stdout}"
+    logger.info("[IMP:9][test_resolve_empty_name][assert] empty node_name rejected with exit 1")
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
+# region TEST_test_detect_age_key_from_file_fallback
+# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 detect_age_key AGE_SECRET_KEY_FILE fallback
+# · Regression: age key from --age-secret-key-file must be detected when AGE_SECRET_KEY env unset
+# · Scenario: AGE_SECRET_KEY_FILE points to tmp file with key → detect_age_key returns it
+# · Last fail: N/A (W4-E5 baseline)
+# · Remove if: detect_age_key moves to Python (then point test at new module)
+
+
+def test_detect_age_key_from_file_fallback(caplog, tmp_path) -> None:
+    """Verify detect_age_key() reads from AGE_SECRET_KEY_FILE when env var is unset."""
+    caplog.set_level(logging.DEBUG)
+
+    # Create a file with the age key
+    key_file = tmp_path / "age-key.txt"
+    test_key = "AGE-SECRET-KEY-file-fallback-test-67890"
+    key_file.write_text(test_key + "\n")
+    key_file.chmod(0o600)
+
+    logger.info("[IMP:9][test_age_key_file] Testing AGE_SECRET_KEY_FILE fallback")
+
+    # detect_age_key: env AGE_SECRET_KEY empty → falls back to AGE_SECRET_KEY_FILE
+    test_call = f"""AGE_SECRET_KEY=""
+AGE_SECRET_KEY_FILE="{key_file}"
+detected="$(detect_age_key 2>/dev/null)" || true
+echo "[IMP:9][test_age_key_file] DETECTED_LEN=${{#detected}}"
+echo "[IMP:9][test_age_key_file] MATCH=$([[ "$detected" == "{test_key}" ]] && echo yes || echo no)"
+"""
+    stdout, stderr, rc = _test_func(
+        BOOTSTRAP_SH,
+        ["detect_age_key"],
+        test_call,
+        env={"__LOG_PREFIX": "test", "AGE_SECRET_KEY": "", "AGE_SECRET_KEY_FILE": str(key_file)},
+    )
+
+    found_imp9 = _print_ldd(stderr, stdout)
+    assert rc == 0, f"detect_age_key with file fallback failed: {stderr}"
+
+    # Key must be detected from file (non-empty, matches test_key)
+    assert f"DETECTED_LEN={len(test_key)}" in stdout, f"Expected key length {len(test_key)}, got: {stdout}"
+    assert "MATCH=yes" in stdout, f"Detected key must match file content, got: {stdout}"
+    logger.info("[IMP:9][test_age_key_file][assert] age key read from AGE_SECRET_KEY_FILE OK")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
