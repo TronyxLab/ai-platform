@@ -121,7 +121,7 @@ def _curl_vhost(domain: str, timeout: int = PER_CHECK_TIMEOUT) -> dict:
     start = time.monotonic()
     try:
         result = subprocess.run(
-            ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", str(timeout), f"https://{domain}"],
+            ["curl", "-sSk", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", str(timeout), f"https://{domain}"],
             capture_output=True,
             text=True,
             timeout=timeout + 2,

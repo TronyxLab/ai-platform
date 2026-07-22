@@ -14,7 +14,7 @@
 
 FROM python:3.12-alpine
 
-RUN pip install --no-cache-dir pyyaml==6.0.2
+RUN apk add --no-cache curl && pip install --no-cache-dir pyyaml==6.0.2
 
 COPY app.py /app/app.py
 
