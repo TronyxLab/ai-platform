@@ -370,7 +370,7 @@ def _source_secrets_env(secrets_env_path: str) -> None:
             [
                 "bash",
                 "-c",
-                f"set -a; source '{secrets_env_path}'; set +a; env",
+                f"set -a; source '{secrets_env_path}'; set +a; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy; env",
             ],
             capture_output=True,
             text=True,
@@ -383,6 +383,9 @@ def _source_secrets_env(secrets_env_path: str) -> None:
                     key, _, value = line.partition("=")
                     if key.startswith(("WEBNAMES", "S3_", "PLATFORM_")):
                         os.environ[key] = value
+            # Defence-in-depth: strip proxy vars that leaked from secrets.env
+            for proxy_var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"):
+                os.environ.pop(proxy_var, None)
             logger.info("[IMP:9][cert_orchestrator] Secrets loaded from %s", secrets_env_path)
         else:
             logger.warning("[IMP:7][cert_orchestrator] Failed to source %s", secrets_env_path)

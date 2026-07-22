@@ -213,19 +213,19 @@ def test_s3_check_does_not_use_upload_py():
     script_path = "core/internal/bootstrap/s3-ssl-cache.sh"
     with open(script_path) as f:
         content = f.read()
-    
+
     # Extract _s3_check() function body
     import re
     match = re.search(r'_s3_check\(\)\s*\{(.*?)\n\}', content, re.DOTALL)
     assert match, "_s3_check() function not found"
     check_body = match.group(1)
-    
+
     # upload.py must NOT appear in _s3_check()
     assert "upload.py" not in check_body, (
         "CRITICAL: _s3_check() contains upload.py call — this overwrites S3 certs with empty files. "
         "See TRAP[BUG] 2026-07-22 in s3-ssl-cache.sh:314"
     )
-    
+
     # But _s3_download_file must be present (correct download path)
     assert "_s3_download_file" in check_body, (
         "_s3_check() must use _s3_download_file() for download"
@@ -238,14 +238,14 @@ def test_s3_check_does_not_use_upload_py():
 def test_s3_config_ignores_https_proxy(monkeypatch):
     """S3Config/S3 client must not use HTTPS_PROXY from secrets.env context."""
     from core.modules.backup_cron.scripts.upload import get_s3_config, _parse_args
-    
+
     monkeypatch.setenv("HTTPS_PROXY", "http://host.docker.internal:8118")
     monkeypatch.setenv("HTTP_PROXY", "http://host.docker.internal:8118")
     monkeypatch.setenv("S3_ACCESS_KEY", "test-key")
     monkeypatch.setenv("S3_SECRET_KEY", "test-secret")
     monkeypatch.setenv("S3_BUCKET", "test-bucket")
     monkeypatch.setenv("S3_ENDPOINT_URL", "https://s3.example.com")
-    
+
     # get_s3_config should succeed (not throw ProxyConnectionError)
     config = get_s3_config()
     assert config["aws_access_key_id"] == "test-key"

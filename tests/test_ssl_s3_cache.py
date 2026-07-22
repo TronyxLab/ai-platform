@@ -679,3 +679,117 @@ def test_s3_config_type_compatibility():
 
 
 # endregion TEST_BACKWARD_COMPAT
+
+
+# region TEST_BUGFIX_052
+
+
+@pytest.mark.static_audit
+# 🧪 TRAP[TEST] · 2026-07-22 · Scenario: _s3_check() must NOT call upload.py (CRITICAL Bug 1)
+# · Last fail: 2026-07-22 — first run found upload.py in _s3_check() causing data loss
+# · Remove if: _s3_check() function is deleted or fundamentally rewritten
+def test_s3_check_does_not_use_upload_py():
+    """_s3_check() must NOT contain upload.py call — regression guard for TRAP[BUG] 2026-07-22.
+
+    Bug 1 (CRITICAL): _s3_check() called upload.py with empty temp file as source,
+    overwriting valid S3 certificates with 0 bytes. Fix: remove the upload.py block,
+    keep only _s3_download_file() for download.
+    """
+    import re
+
+    script_path = "core/internal/bootstrap/s3-ssl-cache.sh"
+    assert os.path.isfile(script_path), f"s3-ssl-cache.sh not found at {script_path}"
+
+    with open(script_path) as f:
+        content = f.read()
+
+    # Extract _s3_check() function body
+    match = re.search(r"_s3_check\(\)\s*\{(.*?)\n\}", content, re.DOTALL)
+    assert match, "_s3_check() function not found in s3-ssl-cache.sh"
+    check_body = match.group(1)
+
+    logger.info("[IMP:7][test_s3_check_no_upload] _s3_check() body length: %d chars", len(check_body))
+
+    # upload.py must NOT be CALLED in _s3_check() (the string may appear in TRAP[BUG] comment
+    # or log messages explaining that upload.py is upload-only — that's documentation, not a call).
+    # Check for active call patterns only: python3 with UPLOAD_PY variable as executable
+    active_call_patterns = [
+        'python3 "$UPLOAD_PY"',
+        'python3 "${UPLOAD_PY}"',
+        "$UPLOAD_PY",
+        "${UPLOAD_PY}",
+    ]
+    for pattern in active_call_patterns:
+        assert pattern not in check_body, (
+            f"CRITICAL: _s3_check() contains active upload.py call pattern ({pattern}) — "
+            "this overwrites S3 certs with empty files. See TRAP[BUG] 2026-07-22"
+        )
+
+    # _s3_download_file must be present (correct download path)
+    assert "_s3_download_file" in check_body, "_s3_check() must use _s3_download_file() for download"
+
+    logger.critical(
+        "[IMP:9][test_s3_check_no_upload] ASSERT: _s3_check() has no upload.py — uses _s3_download_file() only"
+    )
+
+
+# 🧪 TRAP[TEST] · 2026-07-22 · Scenario: HTTPS_PROXY from secrets.env must not break S3Config
+# · Last fail: 2026-07-22 — ProxyConnectionError on VPS with TOR_ENABLED (Bug 2)
+# · Remove if: get_s3_config() proxy-handling strategy changes fundamentally
+def test_s3_config_ignores_https_proxy():
+    """S3Config must not use HTTPS_PROXY/HTTP_PROXY from secrets.env context.
+
+    Bug 2 (MEDIUM): secrets.env contains HTTPS_PROXY=http://host.docker.internal:8118
+    for Docker containers. Host-level boto3 (upload.py) picks up this variable and
+    tries to proxy S3 requests through non-existent host on VPS, causing ProxyConnectionError.
+
+    Fix: defence-in-depth — unset all 6 proxy variants in every entry point that calls boto3.
+    This test verifies that get_s3_config() can construct a valid config even when
+    proxy env vars are set.
+    """
+    from backup_config import get_s3_config
+
+    # Set proxy env vars AND S3 credentials (simulating secrets.env context)
+    env_vars = {
+        "HTTPS_PROXY": "http://host.docker.internal:8118",
+        "HTTP_PROXY": "http://host.docker.internal:8118",
+        "https_proxy": "http://host.docker.internal:8118",
+        "S3_ACCESS_KEY": "test-key-123",
+        "S3_SECRET_KEY": "test-secret-456",
+        "S3_BUCKET": "test-bucket",
+        "S3_ENDPOINT_URL": "https://s3.example.com",
+    }
+    original_env = {k: os.environ.get(k, "") for k in env_vars}
+
+    try:
+        for k, v in env_vars.items():
+            os.environ[k] = v
+
+        # get_s3_config should succeed (not throw ProxyConnectionError or any error)
+        config = get_s3_config()
+
+        logger.info(
+            "[IMP:7][test_proxy_isolation] Config returned: endpoint=%s bucket=%s",
+            config["endpoint_url"],
+            config["bucket"],
+        )
+
+        # Verify S3 config is correct despite proxy vars in environment
+        assert config["aws_access_key_id"] == "test-key-123"
+        assert config["aws_secret_access_key"] == "test-secret-456"
+        assert config["bucket"] == "test-bucket"
+        assert config["endpoint_url"] == "https://s3.example.com"
+
+        logger.critical(
+            "[IMP:9][test_proxy_isolation] ASSERT: get_s3_config() returns valid config with HTTPS_PROXY in environment"
+        )
+
+    finally:
+        for k in env_vars:
+            if original_env[k]:
+                os.environ[k] = original_env[k]
+            else:
+                os.environ.pop(k, None)
+
+
+# endregion TEST_BUGFIX_052

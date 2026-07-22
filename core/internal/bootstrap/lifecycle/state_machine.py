@@ -1693,7 +1693,7 @@ def _ssl_provision(core_dir: str, node_yaml: str) -> None:
             [
                 "bash",
                 "-c",
-                f"set -a; source '{secrets_env}'; set +a; unset HTTP_PROXY HTTPS_PROXY; echo WEBNAMES_API_KEY=${{WEBNAMES_API_KEY:-unset}}",
+                f"set -a; source '{secrets_env}'; set +a; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy; echo WEBNAMES_API_KEY=${{WEBNAMES_API_KEY:-unset}}",
             ],
             "source_secrets_env",
             non_fatal=True,

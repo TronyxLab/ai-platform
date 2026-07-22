@@ -158,6 +158,11 @@ import boto3, os, sys
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
+# Defence-in-depth: strip proxy vars that leaked from secrets.env
+# HTTPS_PROXY=http://host.docker.internal:8118 causes ProxyConnectionError on VPS
+for proxy_var in ('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy'):
+    os.environ.pop(proxy_var, None)
+
 endpoint = os.environ.get('S3_ENDPOINT_URL', os.environ.get('S3_ENDPOINT', 'https://s3.timeweb.cloud'))
 akid = os.environ.get('S3_ACCESS_KEY', os.environ.get('AWS_ACCESS_KEY_ID', ''))
 sak = os.environ.get('S3_SECRET_KEY', os.environ.get('AWS_SECRET_ACCESS_KEY', ''))
@@ -323,21 +328,9 @@ _s3_check() {
     # · Impact: 2026-07-22 session — all 4 domain certs in S3 were corrupted to 0 bytes after check.
     #   Re-uploaded manually. No production impact (S3 cache is DR, certs on VPS were untouched).
     # · When: testing S3 SSL cache flow (first-ever run of s3-ssl-cache.sh upload+check).
-    # ⚠️ FIX PENDING: remove this upload block, keep only _s3_download_file() below.
+    # ⚠️ FIXED in DevPlan 052: upload block removed, _s3_download_file() is the only download path.
     local tmp_cert
     tmp_cert="$(mktemp /tmp/s3-check-XXXXXX.pem)"
-
-    # Try to download fullchain.pem from S3 (single retry, minimal wait)
-    log_imp 8 "-" "Downloading fullchain.pem from S3 to check validity"
-    if ! python3 "$UPLOAD_PY" \
-        --config-source ssl-cache \
-        --retries 1 \
-        "$tmp_cert" \
-        "${s3_base}/fullchain.pem" 2>&1; then
-        log_step "check" "INFO" "No cert in S3 cache for ${domain} — cache miss (not an error)"
-        rm -f "$tmp_cert"
-        return 1
-    fi
 
     # upload.py is upload-only (calls client.upload_file). For download we use
     # the shared _s3_download_file helper with inline boto3.
@@ -535,6 +528,10 @@ main() {
         log_step "main" "FAIL" "upload.py not found at ${UPLOAD_PY}"
         return 1
     fi
+
+    # Defence-in-depth: strip proxy vars that leaked from secrets.env (Bug 2, DevPlan 052)
+    # upload.py/inline boto3 must not see HTTPS_PROXY=http://host.docker.internal:8118
+    unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy
 
     case "$command" in
         upload)

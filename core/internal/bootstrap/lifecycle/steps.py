@@ -723,7 +723,7 @@ def _ssl_cert_provision(core_dir: str, node_yaml: str) -> bool:
                 [
                     "bash",
                     "-c",
-                    f"set -a; source '{secrets_env}'; set +a; env | grep -E '^(WEBNAMES_API_KEY|HTTP_PROXY)'",
+                    f"set -a; source '{secrets_env}'; set +a; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy; env | grep -E '^(WEBNAMES_API_KEY)'",
                 ],
                 capture_output=True,
                 text=True,
