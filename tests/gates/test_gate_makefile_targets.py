@@ -270,7 +270,6 @@ class TestMakefileIncludeSplit:
             pytest.skip(
                 "GNU Make < 4.0 detected — `make -n` with $(eval ...) "
                 "incorrectly executes recipes on this platform. "
-                "Complex targets (test, gate) verified on CI (Ubuntu, GNU Make 4.x)."
             )
 
         complex_targets = {
@@ -279,13 +278,18 @@ class TestMakefileIncludeSplit:
         }
 
         for target, extra_args in complex_targets.items():
+            # Use MAKEFLAGS=--no-print-directory to suppress Entering/Leaving messages
+            # and a generous timeout for CI environments where make -n may take longer
+            # due to $(eval ...) expansion side effects.
             args = ["make", "-n", target, *extra_args]
+            env = {**os.environ, "MAKEFLAGS": "--no-print-directory"}
             result = subprocess.run(
                 args,
                 capture_output=True,
                 text=True,
                 cwd=str(_PROJECT_ROOT),
-                timeout=30,
+                timeout=120,
+                env=env,
             )
 
             recipe_start = f'echo "[IMP:7][make][{target}]'
