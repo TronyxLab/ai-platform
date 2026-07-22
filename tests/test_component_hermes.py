@@ -41,8 +41,9 @@ import subprocess
 import time
 
 import pytest
+from _conftest.networks import get_network_manager
 from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
-from conftest import _ensure_volume_dirs, ensure_external_networks, ldd_trajectory
+from conftest import _ensure_volume_dirs, ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +146,10 @@ def postgres_up(platform_services: dict[str, list[str]], modules_dir) -> None:
     # ── Ensure volume bind-mount directories exist ────────────────────────
     _ensure_volume_dirs(_VOLUME_BIND_DIRS)
 
-    # ── Ensure external Docker networks ────────────────────────────────────
-    ensure_external_networks(_EXTERNAL_NETWORKS)
+    # ── Ensure external Docker networks via NetworkLeaseManager ────────────
+    _nm = get_network_manager()
+    for net in _EXTERNAL_NETWORKS:
+        _nm.acquire(net)
 
     # ── Pre-flight cleanup: remove leftover containers from previous runs ──
     # [IMP:8] Container name conflict ("already in use") occurs when smoke
@@ -260,6 +263,9 @@ def postgres_up(platform_services: dict[str, list[str]], modules_dir) -> None:
         capture_output=True,
         text=True,
     )
+    # Release external networks via NetworkLeaseManager
+    for net in _EXTERNAL_NETWORKS:
+        _nm.release(net)
     logger.info("[IMP:9][postgres_up] postgres torn down")
 
 

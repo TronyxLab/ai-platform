@@ -162,6 +162,12 @@
 · DRIFT-note: macOS dev-machine не имеет GNU `timeout` — локальная проверка `ssh_read` падает с `command not found`. CI/runner/VPS = Linux, где `timeout` доступен. Если нужно локальное тестирование — `brew install coreutils && gtimeout` alias.
 · Rev: если CI-deploy стабильно < 300s → снизить deploy-default timeout с 600s до 400s (TRAP в lib/ssh.sh).
 
+⚠️ TRAP[DECISION] · 2026-07-22 · HI · Decision Gate: Python-First strategy VALIDATED — continue Strangler-Fig
+· Metrics: 4114→395 shell LOC (−90%), 0 inline python3 в топ-3, 7/10 K8s-parity converge, 204/210 tests pass
+· Verdict: Все 15 Problem Matrix закрыты. Change-cost снижен >80%. Incident rate = 0.
+· Recommendation: продолжить Strangler-Fig на legacy-скрипты, завершить test adaptation (042), docker optimization (040)
+· Rev: 2026-10-22 — переоценка метрик после ≥2 недель на production-ноде
+
 ---
 
 ## Правило

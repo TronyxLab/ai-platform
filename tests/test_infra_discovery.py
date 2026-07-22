@@ -141,12 +141,12 @@ def test_discover_test_infra_parses_container_names(synthetic_test_compose: Path
     assert len(result) == 2, f"Expected 2 modules, got {len(result)}"
 
     # Postgres module
-    postgres = [m for m in result if m["module"] == "postgres"][0]
+    postgres = next(m for m in result if m["module"] == "postgres")
     assert postgres["container_names"] == ["pgbouncer-test", "postgres-test"]
     assert postgres["networks"] == ["test-shared-db-net"]
 
     # Redis module
-    redis = [m for m in result if m["module"] == "redis"][0]
+    redis = next(m for m in result if m["module"] == "redis")
     assert redis["container_names"] == ["redis-test"]
     assert redis["networks"] == ["test-shared-cache-net"]
 
@@ -156,11 +156,11 @@ def test_discover_test_infra_parses_ports(synthetic_test_compose: Path) -> None:
     modules_dir = synthetic_test_compose / "core" / "modules"
     result = _discover_test_infra_from_path(modules_dir)
 
-    postgres = [m for m in result if m["module"] == "postgres"][0]
+    postgres = next(m for m in result if m["module"] == "postgres")
     assert postgres["ports"]["postgres"] == [{"internal": 5432, "external": 15432}]
     assert postgres["ports"]["pgbouncer"] == [{"internal": 6432, "external": 6432}]
 
-    redis = [m for m in result if m["module"] == "redis"][0]
+    redis = next(m for m in result if m["module"] == "redis")
     assert redis["ports"]["redis"] == [{"internal": 6379, "external": 16379}]
 
 

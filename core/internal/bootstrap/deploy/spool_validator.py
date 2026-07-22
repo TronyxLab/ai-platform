@@ -96,7 +96,7 @@ WAL_ARCHIVE = "/var/lib/platform/wal-archive"
 ##   - missing list contains {"path": str, "module": str|None, "context": str}
 ##   - stateless list contains module names with spool_dir: none
 ##   - ok list contains {"path": str, "module": str|None, "context": str}
-def verify_spool_dirs(modules_dir: str) -> dict:  # noqa: C901 — shell port: linear scan of 5 sections
+def verify_spool_dirs(modules_dir: str) -> dict:
     """Verify all spool directories exist. Verify-only — never creates dirs.
 
     Args:
@@ -120,11 +120,13 @@ def verify_spool_dirs(modules_dir: str) -> dict:  # noqa: C901 — shell port: l
     if not mods.is_dir():
         logger.error("[IMP:10][verify_spool_dirs][error] modules_dir not found: %s", modules_dir)
         result["status"] = "error"
-        result["missing"].append({
-            "path": modules_dir,
-            "module": None,
-            "context": "modules_dir not found",
-        })
+        result["missing"].append(
+            {
+                "path": modules_dir,
+                "module": None,
+                "context": "modules_dir not found",
+            }
+        )
         return result
 
     # ── Section 1: Platform dirs ──
@@ -179,11 +181,13 @@ def verify_spool_dirs(modules_dir: str) -> dict:  # noqa: C901 — shell port: l
             spool_found += 1
 
             if os.path.isdir(spool_path):
-                result["ok"].append({
-                    "path": spool_path,
-                    "module": module_name,
-                    "context": "module spool_dir",
-                })
+                result["ok"].append(
+                    {
+                        "path": spool_path,
+                        "module": module_name,
+                        "context": "module spool_dir",
+                    }
+                )
                 result["checked"] += 1
                 logger.info(
                     "[IMP:7][verify_spool_dirs][ok] %s: %s exists",
@@ -191,11 +195,13 @@ def verify_spool_dirs(modules_dir: str) -> dict:  # noqa: C901 — shell port: l
                     spool_path,
                 )
             else:
-                result["missing"].append({
-                    "path": spool_path,
-                    "module": module_name,
-                    "context": "module spool_dir",
-                })
+                result["missing"].append(
+                    {
+                        "path": spool_path,
+                        "module": module_name,
+                        "context": "module spool_dir",
+                    }
+                )
                 logger.warning(
                     "[IMP:8][verify_spool_dirs][warn] %s spool %s not found — run make provision",
                     module_name,
@@ -281,19 +287,23 @@ def _verify_dirs(dirs: list[str], context_label: str, result: dict) -> None:
 def _verify_single_dir(dirpath: str, context_label: str, result: dict) -> None:
     """Verify a single directory exists, mutating result dict in place."""
     if os.path.isdir(dirpath):
-        result["ok"].append({
-            "path": dirpath,
-            "module": None,
-            "context": context_label,
-        })
+        result["ok"].append(
+            {
+                "path": dirpath,
+                "module": None,
+                "context": context_label,
+            }
+        )
         result["checked"] += 1
         logger.info("[IMP:7][verify_single_dir][ok] %s %s exists", context_label, dirpath)
     else:
-        result["missing"].append({
-            "path": dirpath,
-            "module": None,
-            "context": context_label,
-        })
+        result["missing"].append(
+            {
+                "path": dirpath,
+                "module": None,
+                "context": context_label,
+            }
+        )
         logger.warning(
             "[IMP:8][verify_single_dir][warn] %s %s not found — run make provision",
             context_label,

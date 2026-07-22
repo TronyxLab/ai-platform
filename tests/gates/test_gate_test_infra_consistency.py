@@ -35,21 +35,21 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # The gate catches only test files that HARDCODE the project name instead of
 # using a unique project name — which is the actual regression pattern from
 # TRAP[BUG] 2026-07-22.
-_AC6E_TEST_FILE_PATTERN = re.compile(r'test_\w+\.py$')
+_AC6E_TEST_FILE_PATTERN = re.compile(r"test_\w+\.py$")
 _AC6E_WHITELIST_FILES = {
-    "test_smoke_platform.py",            # Legitimate use — platform_services project
+    "test_smoke_platform.py",  # Legitimate use — platform_services project
     "test_gate_test_infra_consistency.py",  # Self-referencing test (this file)
 }
 _AC6E_WHITELIST_PATTERNS = [
-    r'SMOKE_ENV\s*=',
-    r'platform_services',
-    r'TRAP\[BUG\]',                       # Historical bug documentation — not a regression
-    r'TRAP\[DECISION\]',
-    r'# STRUCTURE:',                      # STRUCTURE line references — not code
-    r'## @purpose',                       # Docstring references — legitimate
-    r'## @scenario',
-    r'"""AC-6e:',                         # Docstring
-    r'##   - AC-6e',                     # AC-6e documentation
+    r"SMOKE_ENV\s*=",
+    r"platform_services",
+    r"TRAP\[BUG\]",  # Historical bug documentation — not a regression
+    r"TRAP\[DECISION\]",
+    r"# STRUCTURE:",  # STRUCTURE line references — not code
+    r"## @purpose",  # Docstring references — legitimate
+    r"## @scenario",
+    r'"""AC-6e:',  # Docstring
+    r"##   - AC-6e",  # AC-6e documentation
 ]
 
 
@@ -181,7 +181,7 @@ def test_test_ports_match_compose_ports():
             compose_ports = infra_data[module_name].get("ports", {})
             # Flatten: collect all external port values from compose data
             compose_port_values: set[int] = set()
-            for svc, port_list in compose_ports.items():
+            for port_list in compose_ports.values():
                 for p in port_list:
                     compose_port_values.add(p["external"])
 
@@ -289,7 +289,7 @@ def test_networks_registered_in_lease_manager():
     nm = get_network_manager()
 
     all_networks: set[str] = set()
-    for mod_name, mod_data in infra_data.items():
+    for mod_data in infra_data.values():
         all_networks.update(mod_data.get("networks", []))
 
     print(f"[IMP:8][AC-6d] Found {len(all_networks)} unique test network(s): {sorted(all_networks)}")
@@ -363,8 +363,8 @@ def test_no_hardcoded_ai_platform_test_own_project():
     assert not violations, (
         f"TRAP[BUG] REGRESSION: hardcoded 'ai-platform-test' project name "
         f"found in {len(violations)} location(s):\n"
-        + "\n".join(f"  {f}: {l}" for f, l in violations)
-        + "\nUse check_foreign_containers_adapter() or unique project name. "
+        + "\n".join(f"  {fpath}: {line_content}" for fpath, line_content in violations)
+        + "\nUse check_foreign_containers() or unique project name. "
         "See DevPlan 041 W6 for whitelist rules."
     )
     print("[IMP:9][AC-6e] ✅ No hardcoded 'ai-platform-test' project names outside whitelist")

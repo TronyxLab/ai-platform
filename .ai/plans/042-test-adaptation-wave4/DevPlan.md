@@ -29,10 +29,10 @@ $START
 
 ## Overview
 
-**Status:** Planned  
-**Wave:** 042  
-**Superposition decision:** Option D — Structural Contract (score 9/10)  
-**Session:** 2026-07-22  
+**Status:** Planned
+**Wave:** 042
+**Superposition decision:** Option D — Structural Contract (score 9/10)
+**Session:** 2026-07-22
 
 ### Problem
 

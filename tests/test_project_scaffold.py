@@ -459,10 +459,7 @@ def test_step_6b_calls_converge(
     # After W4-E2 strangler-fig refactoring, step_6b delegates to state_machine.py
     # which calls converge.sh --units R3 from _ensure_projects_base().
     # Check state_machine.py for the converge R3 call pattern.
-    _SM_SCRIPT = (
-        pathlib.Path(__file__).resolve().parent.parent
-        / "core/internal/bootstrap/lifecycle/state_machine.py"
-    )
+    _SM_SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "core/internal/bootstrap/lifecycle/state_machine.py"
     sm_source = _SM_SCRIPT.read_text()
 
     # Verify _ensure_projects_base() calls converge.sh with --units R3
@@ -490,9 +487,7 @@ def test_step_6b_calls_converge(
         "step_6b_create_projects_base() must exist in node-lifecycle.sh"
     )
 
-    logger.critical(
-        "[IMP:9][test][step_6b] Verified converge --units R3 called from state_machine.py"
-    )
+    logger.critical("[IMP:9][test][step_6b] Verified converge --units R3 called from state_machine.py")
 
 
 # 🧪 TRAP[TEST] · 2026-07-21

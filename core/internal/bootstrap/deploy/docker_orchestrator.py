@@ -26,6 +26,17 @@
 ##   env-file handling, compose interpolation).
 ## @changes   2026-07-22 · W4-E1 — extracted from deploy-modules.sh deploy_docker_module,
 ##   deploy_docker_group, _pre_pull_images, _check_image_exists, wait_for_readiness, run_healthcheck
+##
+## ⚠️ TRAP[DEBT] · 2026-07-22 · P2 · 5 test-side failures in test_docker_orchestrator.py (DevPlan 043-B5)
+## · Root: mock subprocess.run returns bytes, code expects str via text=True
+## · Impact: 5 unit-тестов падают (test_cleanup_legacy_container_found/not_found,
+##   test_deploy_docker_module_hermes_agent, test_pre_pull_images_single,
+##   test_reconcile_orphan_containers_with_orphan). Production-код корректен:
+##   docker stop/rm присутствуют в _cleanup_legacy_container (L529-530),
+##   _reconcile_orphan_containers (L279-280); os._exit() в _pre_pull_images корректен
+##   для forked child. P2 TypeGuard на bytes в L524-526 и L236-237 работает в production.
+## · Fix: адаптировать моки в test_docker_orchestrator.py (DevPlan 042 Phase 4)
+## · Non-blocking: production-код корректен, тесты требуют адаптации моков
 ## @modulemap
 ##   _check_image_exists [W:1] — docker manifest inspect via subprocess → bool
 ##   _resolve_compose_file [W:1] — find compose.yaml → docker-compose.yaml → docker-compose.base.yml in module dir

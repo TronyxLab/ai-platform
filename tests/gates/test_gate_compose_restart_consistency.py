@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests.helpers.gate_helpers import repo_root
+from tests.helpers.gate_helpers import load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -33,27 +33,12 @@ EXPECTED_TEST_RESTART = "no"
 EXPECTED_BASE_RESTART = {"always", "unless-stopped"}
 
 
-def _load_yaml(path: pathlib.Path) -> dict[str, Any] | None:
-    """Load YAML file or return None on error. Handles !override tag (compose merge)."""
-    import io
-
-    # Read raw text and strip !override tags before parsing
-    # (yaml.safe_load cannot handle custom tags)
+def _load_compose(path: pathlib.Path) -> dict[str, Any] | None:
+    """Load compose YAML or return None on error. Delegates to gate_helpers.load_yaml."""
     try:
-        raw = path.read_text()
-    except FileNotFoundError:
-        return None
-
-    # Replace `!override` with empty string (the tag literal in YAML)
-    # Pattern: `: !override` at the end of a key: value line, or `: !override\n`
-    import re
-
-    raw = re.sub(r":\s*!override\b", ":", raw)
-
-    try:
-        data = yaml.safe_load(io.StringIO(raw))
+        data = load_yaml(path)
         return data if isinstance(data, dict) else None
-    except yaml.YAMLError:
+    except (FileNotFoundError, yaml.YAMLError):
         return None
 
 
@@ -88,7 +73,7 @@ class TestComposeRestartConsistency:
 
         for test_path in test_files:
             module_name = test_path.parent.name
-            compose = _load_yaml(test_path)
+            compose = _load_compose(test_path)
             if compose is None:
                 violations.append(f"{module_name}: cannot parse test-compose")
                 continue
@@ -133,7 +118,7 @@ class TestComposeRestartConsistency:
 
         for base_path in base_files:
             module_name = base_path.parent.name
-            compose = _load_yaml(base_path)
+            compose = _load_compose(base_path)
             if compose is None:
                 violations.append(f"{module_name}: cannot parse base-compose")
                 continue

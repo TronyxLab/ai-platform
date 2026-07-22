@@ -100,30 +100,6 @@ def check_foreign_containers(container_names: list[str], own_project: str) -> di
     return foreign
 
 
-def check_foreign_containers_adapter(module_name: str) -> dict[str, str]:
-    """Auto-derive container names and own_project from compose files.
-
-    ## @purpose — Convenience adapter that replaces manual check_foreign_containers calls
-    ##             with auto-derived container names and compose project name.
-    ##             Derives container names from infra auto-discovery.
-    ## @io — ⇥ module_name: str (e.g., "postgres") →
-    ##       ⎋ dict[str, str] — {container_name: compose_project} for foreign containers
-    ## @complexity — O(1) delegation to check_foreign_containers
-    ## @invariants
-    ##   - Container names derived from infra.get_container_names(module_name)
-    ##   - own_project convention: "ai-platform-test-{module}" for component tests
-    ##   - For special cases (platform_services), caller must specify own_project explicitly
-    ## @rationale Eliminates hardcoded container-name + project-name pairs in 6 test files.
-    ##            Follows DevPlan 041 derive-from-compose principle.
-    ## @changes CREATED: 2026-07-22 | DevPlan 041 W5: Foreign container guard adapter
-    """
-    from _conftest.infra import infra
-
-    container_names = infra.get_container_names(module_name)
-    own_project = f"ai-platform-test-{module_name}"
-    return check_foreign_containers(container_names, own_project)
-
-
 def wait_for_containers_healthy(
     container_names: list[str],
     max_retries: int = 20,

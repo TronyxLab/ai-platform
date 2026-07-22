@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-22 | regenerated (1418 tests)
+## @changes — 2026-07-22 | regenerated (1430 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -206,7 +206,6 @@ test_nodeids:
 - tests/gates/test_gate_sequencing.py::test_gate_makefile_deploy_node_flag
 - tests/gates/test_gate_sequencing.py::test_gate_reconcile_not_entrypoint
 - tests/gates/test_gate_sequencing.py::test_gate_vps_readiness_sourceable
-- tests/gates/test_gate_skip_enforcement.py::test_executed_tests_greater_than_zero
 - tests/gates/test_gate_status_page.py::test_compose_base_has_profiles_and_healthcheck
 - tests/gates/test_gate_status_page.py::test_default_catch_all_no_status_page
 - tests/gates/test_gate_status_page.py::test_dockerignore_is_symlink
@@ -230,6 +229,11 @@ test_nodeids:
 - tests/gates/test_gate_template_metrics.py::test_templates_metrics_port_consistency
 - tests/gates/test_gate_template_metrics.py::test_templates_metrics_port_present
 - tests/gates/test_gate_template_syntax.py::test_all_templates_use_strict_grammar
+- tests/gates/test_gate_test_infra_consistency.py::test_compose_projects_are_unique
+- tests/gates/test_gate_test_infra_consistency.py::test_networks_registered_in_lease_manager
+- tests/gates/test_gate_test_infra_consistency.py::test_no_hardcoded_ai_platform_test_own_project
+- tests/gates/test_gate_test_infra_consistency.py::test_stale_container_names_equals_compose_container_names
+- tests/gates/test_gate_test_infra_consistency.py::test_test_ports_match_compose_ports
 - tests/gates/test_gate_test_inventory.py::test_all_tests_have_registered_marker
 - tests/gates/test_gate_test_inventory.py::test_inventory_header_count_matches_entries
 - tests/gates/test_gate_test_inventory.py::test_no_test_removed_without_changelog
@@ -354,12 +358,6 @@ test_nodeids:
 - tests/test_component_hermes.py::test_hermes_gateway_listens
 - tests/test_component_hermes.py::test_no_restart_loop
 - tests/test_component_hermes.py::test_ready_endpoint_returns_valid_json
-- tests/test_component_pgbouncer.py::test_pgbouncer_container_env_has_listen_port
-- tests/test_component_pgbouncer.py::test_pgbouncer_container_healthy
-- tests/test_component_pgbouncer.py::test_pgbouncer_databases_mapped
-- tests/test_component_pgbouncer.py::test_pgbouncer_pool_mode_active
-- tests/test_component_pgbouncer.py::test_pgbouncer_port_responds
-- tests/test_component_pgbouncer.py::test_pgbouncer_select_works
 - tests/test_compose_contract.py::test_backup_cron_from_pinned
 - tests/test_compose_contract.py::test_images_pinned_tag_digest[backup-cron]
 - tests/test_compose_contract.py::test_images_pinned_tag_digest[clickhouse]
@@ -742,6 +740,22 @@ test_nodeids:
 - tests/test_hermes_l2_fallback.py::test_hermes_pull_success
 - tests/test_hermes_version.py::test_context_image_default
 - tests/test_hermes_version.py::test_platform_base_image_name
+- tests/test_infra_discovery.py::test_discover_test_infra_parses_container_names
+- tests/test_infra_discovery.py::test_discover_test_infra_parses_ports
+- tests/test_infra_discovery.py::test_discover_test_infra_skips_modules_without_test_compose
+- tests/test_infra_discovery.py::test_infra_all_modules_property
+- tests/test_infra_discovery.py::test_infra_get_compose_file
+- tests/test_infra_discovery.py::test_infra_get_container_name
+- tests/test_infra_discovery.py::test_infra_get_test_port
+- tests/test_infra_discovery.py::test_infra_module_not_found_raises_keyerror
+- tests/test_infra_discovery.py::test_infra_stale_container_names_property
+- tests/test_infra_discovery.py::test_network_lease_manager_acquire_creates_network
+- tests/test_infra_discovery.py::test_network_lease_manager_multi_fixture_scenario
+- tests/test_infra_discovery.py::test_network_lease_manager_release_all
+- tests/test_infra_discovery.py::test_network_lease_manager_release_removes_at_zero
+- tests/test_infra_discovery.py::test_network_lease_manager_release_unknown_network
+- tests/test_infra_discovery.py::test_network_lease_manager_second_acquire_does_not_create
+- tests/test_infra_discovery.py::test_platform_env_test_ports_exists
 - tests/test_infra_metrics_static.py::test_cadvisor_image
 - tests/test_infra_metrics_static.py::test_compose_healthcheck
 - tests/test_infra_metrics_static.py::test_compose_profiles
@@ -1017,8 +1031,6 @@ test_nodeids:
 - tests/test_smoke_platform.py::test_no_restart_loops
 - tests/test_smoke_platform.py::test_platform_cleanup
 - tests/test_smoke_platform.py::test_platform_starts_all_containers
-- tests/test_smoke_postgres.py::test_smoke_pgbouncer_pg_isready_6432
-- tests/test_smoke_postgres.py::test_smoke_postgres_containers_healthy
 - tests/test_smoke_provision_environment.py::test_provision_and_compose_up
 - tests/test_smoke_provision_environment.py::test_provisioner_env_defaults_export
 - tests/test_smoke_redis.py::test_redis_config_appendonly

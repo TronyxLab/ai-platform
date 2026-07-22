@@ -551,9 +551,7 @@ def test_node_lifecycle_checks_s3_before_issue():
         # S3 cache check must exist and come before issue-cert.sh invocation
         assert s3_cache_idx >= 0, "s3-ssl-cache.sh must be referenced in _ssl_provision()"
         assert ssl_issue_idx >= 0, "ssl_issue subprocess must exist in _ssl_provision()"
-        assert s3_cache_idx < ssl_issue_idx, (
-            "S3 cache check must happen before issue-cert.sh invocation"
-        )
+        assert s3_cache_idx < ssl_issue_idx, "S3 cache check must happen before issue-cert.sh invocation"
 
         logger.critical(
             "[IMP:9][test_node_lifecycle_s3] ASSERT: S3 cache check precedes issue-cert.sh "
@@ -562,9 +560,7 @@ def test_node_lifecycle_checks_s3_before_issue():
     else:
         logger.warning("[IMP:7][test_node_lifecycle_s3] _ssl_provision() not found by name")
 
-    logger.critical(
-        "[IMP:9][test_node_lifecycle_s3] ASSERT: state_machine.py checks S3 cache before issue"
-    )
+    logger.critical("[IMP:9][test_node_lifecycle_s3] ASSERT: state_machine.py checks S3 cache before issue")
 
 
 # endregion TEST_INTEGRATION_NODE_LIFECYCLE

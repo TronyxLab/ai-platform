@@ -306,7 +306,7 @@ Wave 5 не затрагивает .env, docker-compose, CI workflows. AGENTS.md
 ```
 Phase 0: COMMIT (сейчас)
     └─► Commit uncommitted changes: W5-E1 + W5-E6 + fixes
-    
+
 Phase 1: FINAL GATE
     ├─► make gate MODE=fast
     └─► Если green → Phase 2
@@ -318,7 +318,7 @@ Phase 2: STAGING-TEST (AC-8)
 
 Phase 3: MERGE
     └─► Explicit merge-commit → main (audit-trail per R-RISK-1)
-    
+
 Phase 4: POST-MERGE
     ├─► K8s-parity score замер
     └─► Pre-existing failures remediation (отдельный PR)

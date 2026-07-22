@@ -252,7 +252,7 @@ def test_verify_only_no_mkdir(tmp_path, caplog) -> None:
     # The missing_dir should NOT exist on disk (verify-only!)
     import os as _os
 
-    assert not _os.path.exists(missing_dir), "verify_spool_dirs() must NOT create directories! Found: %s" % missing_dir
+    assert not _os.path.exists(missing_dir), f"verify_spool_dirs() must NOT create directories! Found: {missing_dir}"
 
     print("[IMP:9][test_verify_only_no_mkdir] PASS: verify_spool_dirs() did not create any directories")
 

@@ -57,13 +57,12 @@ export -f id 2>/dev/null || true
 """)
         wrapper.chmod(wrapper.stat().st_mode | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
 
-        result = subprocess.run(
+        return subprocess.run(
             [str(wrapper)],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        return result
     finally:
         if wrapper.exists():
             wrapper.unlink()

@@ -186,7 +186,7 @@ platform-env.yaml ────────┤         ▼
 
 def discover_test_infra() -> list[dict]:
     """Scan core/modules/*/docker-compose.test.yml, extract container_name, networks, ports.
-    
+
     Returns sorted list of module test info dicts:
     [
         {
@@ -208,12 +208,12 @@ def discover_test_infra() -> list[dict]:
             continue
         module_yaml = mod_dir / "module.yaml"
         mod_name = mod_dir.name
-        
+
         compose_data = yaml.safe_load(test_compose.read_text())
         container_names = []
         networks = set()
         ports = {}
-        
+
         for svc_name, svc in compose_data.get("services", {}).items():
             if "container_name" in svc:
                 container_names.append(svc["container_name"])
@@ -229,7 +229,7 @@ def discover_test_infra() -> list[dict]:
                     external = int(parts[-2]) if len(parts) > 2 else int(parts[0])
                     internal = int(parts[-1])
                     ports[svc_name] = {"internal": internal, "external": external}
-        
+
         modules.append({
             "module": mod_name,
             "container_names": sorted(container_names),
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("--test-infra", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    
+
     if args.test_infra:
         result = discover_test_infra()
         if args.json:
@@ -314,11 +314,11 @@ def get_container_names(module_name: str) -> list[str]:
 
 def get_test_port(module_name: str, service: str = None) -> int | dict:
     """Return external test port(s) for a module.
-    
+
     Args:
         module_name: e.g., 'pgbouncer' → 6432
         service: if module has multiple services, specify which one
-    
+
     Returns:
         int if service specified, dict[str, int] if not.
     """
@@ -344,7 +344,7 @@ def get_networks_for_module(module_name: str) -> list[str]:
 @property
 def STALE_CONTAINER_NAMES() -> list[str]:
     """All test container names from ALL docker-compose.test.yml files.
-    
+
     Always in sync with compose files — derived at import time.
     Replaces the hardcoded list in tests/_conftest/smoke.py.
     """
@@ -369,24 +369,24 @@ def ALL_TEST_NETWORKS() -> set[str]:
 class _TestInfra:
     """Module-level singleton for cached test infrastructure data."""
     _instance = None
-    
+
     def __init__(self):
         self._data = _load_test_infra()
-    
+
     @property
     def stale_container_names(self) -> list[str]:
         names = []
         for mod in self._data:
             names.extend(mod["container_names"])
         return sorted(names)
-    
+
     @property
     def all_test_networks(self) -> set[str]:
         networks = set()
         for mod in self._data:
             networks.update(mod["networks"])
         return networks
-    
+
     def get_container_name(self, module_name: str) -> str: ...
     def get_test_port(self, module_name: str, service: str = None) -> int | dict: ...
     def get_compose_file(self, module_name: str) -> tuple[Path, Path]: ...
@@ -434,49 +434,49 @@ _logger = logging.getLogger(__name__)
 
 class NetworkLeaseManager:
     """Thread-safe reference counting for Docker test networks."""
-    
+
     def __init__(self):
         self._leases: dict[str, int] = {}  # network_name → refcount
-    
+
     def acquire(self, network_name: str) -> bool:
         """Acquire a network lease. Creates network if first acquisition.
-        
+
         Returns True if network was newly created.
         """
         if network_name not in self._leases:
             self._leases[network_name] = 0
-        
+
         if self._leases[network_name] == 0:
             self._create_network(network_name)
             _logger.info("[IMP:8][NetworkLeaseManager] Created network '%s'", network_name)
-        
+
         self._leases[network_name] += 1
         _logger.debug("[IMP:7][NetworkLeaseManager] Acquired '%s' (refcount=%d)",
                       network_name, self._leases[network_name])
         return self._leases[network_name] == 1
-    
+
     def release(self, network_name: str) -> bool:
         """Release a network lease. Removes network when refcount reaches 0.
-        
+
         Returns True if network was removed.
         """
         if network_name not in self._leases:
             _logger.warning("[IMP:7][NetworkLeaseManager] Release called for unknown network '%s'",
                             network_name)
             return False
-        
+
         self._leases[network_name] -= 1
-        
+
         if self._leases[network_name] <= 0:
             self._remove_network(network_name)
             del self._leases[network_name]
             _logger.info("[IMP:8][NetworkLeaseManager] Removed network '%s'", network_name)
             return True
-        
+
         _logger.debug("[IMP:7][NetworkLeaseManager] Released '%s' (refcount=%d)",
                       network_name, self._leases[network_name])
         return False
-    
+
     def _create_network(self, name: str) -> None:
         """Create Docker network if it doesn't exist."""
         subprocess.run(
@@ -484,14 +484,14 @@ class NetworkLeaseManager:
             capture_output=True, text=True, check=False,
         )
         # Ignore "already exists" errors — idempotent
-    
+
     def _remove_network(self, name: str) -> None:
         """Remove Docker network. Best-effort — ignore errors."""
         subprocess.run(
             ["docker", "network", "rm", name],
             capture_output=True, text=True, check=False,
         )
-    
+
     def release_all(self) -> None:
         """Force-release all remaining leases. Called from pytest_sessionfinish."""
         for name in list(self._leases.keys()):
@@ -499,7 +499,7 @@ class NetworkLeaseManager:
             _logger.info("[IMP:9][NetworkLeaseManager] Force-released network '%s' (session finish)",
                          name)
         self._leases.clear()
-    
+
     @property
     def active_leases(self) -> dict[str, int]:
         """Return current lease state (for diagnostics)."""
@@ -610,7 +610,7 @@ _TEST_PORT = infra.get_test_port("pgbouncer", "listen")  # → 6432
 # tests/_conftest/reuse.py — новый адаптер
 def check_foreign_containers_adapter(module_name: str) -> dict[str, str]:
     """Auto-derive container names and own_project from compose files.
-    
+
     Replaces: check_foreign_containers(["postgres-test", "pgbouncer-test"], "ai-platform-smoke-postgres")
     With:     check_foreign_containers_adapter("postgres")
     """
@@ -631,13 +631,13 @@ def check_foreign_containers_adapter(module_name: str) -> dict[str, str]:
 def test_stale_container_names_equals_compose_container_names():
     """AC-6a: _STALE_CONTAINER_NAMES == all container_name from docker-compose.test.yml."""
     from tests._conftest.infra import infra
-    
+
     stale = infra.stale_container_names
     all_compose_names = []
     for mod in infra._data:
         all_compose_names.extend(mod["container_names"])
     all_compose_names = sorted(all_compose_names)
-    
+
     assert stale == all_compose_names, (
         f"STALE_CONTAINER_NAMES drift detected.\n"
         f"Stale ({len(stale)}): {stale}\n"
@@ -653,17 +653,17 @@ def test_test_ports_match_compose_ports():
     import yaml
     from tests._conftest.infra import infra
     from pathlib import Path
-    
+
     platform_env = yaml.safe_load(Path("platform-env.yaml").read_text())
     test_ports = platform_env.get("test_ports", {})
-    
+
     for module_name, ports in test_ports.items():
         try:
             compose_ports = infra.get_test_port(module_name)
         except KeyError:
             pytest.fail(f"Module '{module_name}' has test_ports in platform-env.yaml "
                         f"but no docker-compose.test.yml found")
-        
+
         for port_name, port_value in ports.items():
             actual = compose_ports.get(port_name)
             assert actual == port_value, (
@@ -678,10 +678,10 @@ def test_compose_projects_are_unique():
     # Проверяем отсутствие дубликатов
     import ast
     from pathlib import Path
-    
+
     projects = {}
     tests_dir = Path("tests")
-    
+
     for test_file in sorted(tests_dir.glob("test_*.py")):
         for line in test_file.read_text().splitlines():
             # Ищем паттерны: COMPOSE_PROJECT = "...", --project-name ..., -p ...
@@ -695,7 +695,7 @@ def test_networks_registered_in_lease_manager():
     """AC-6d: All test networks from compose files are managed by NetworkLeaseManager."""
     from tests._conftest.infra import infra
     from tests._conftest.networks import get_network_manager
-    
+
     nm = get_network_manager()
     # Проверяем, что все сети из compose-файлов могут быть захвачены
     for network in infra.all_test_networks:
@@ -705,20 +705,20 @@ def test_networks_registered_in_lease_manager():
 
 def test_no_hardcoded_ai_platform_test_own_project():
     """AC-6e: No "ai-platform-test" as project name in test files.
-    
+
     Anti-regression for TRAP[BUG] 2026-07-22.
     Scans ALL occurrences of "ai-platform-test" as a hardcoded project name:
     - check_foreign_containers(..., "ai-platform-test")
     - COMPOSE_PROJECT = "ai-platform-test", COMPOSE_PROJECT_NAME = "ai-platform-test"
     - "-p", "ai-platform-test" or --project-name "ai-platform-test" in subprocess calls
     - Any string literal "ai-platform-test" in test files
-    
+
     Exceptions (whitelist): SMOKE_ENV / platform_services in smoke.py
     where "ai-platform-test" is the legitimate shared compose project.
     """
     import re
     from pathlib import Path
-    
+
     # Whitelist: files/lines where "ai-platform-test" is legitimately used
     # as the shared compose project for platform_services
     WHITELIST_FILES = {"smoke.py"}
@@ -726,11 +726,11 @@ def test_no_hardcoded_ai_platform_test_own_project():
         r'SMOKE_ENV\s*=',
         r'platform_services',
     ]
-    
+
     tests_dir = Path("tests")
     # Match "ai-platform-test" as a delimited string literal
     pattern = re.compile(r'"ai-platform-test"')
-    
+
     violations = []
     for test_file in sorted(tests_dir.rglob("*.py")):
         if test_file.name in WHITELIST_FILES:
@@ -738,7 +738,7 @@ def test_no_hardcoded_ai_platform_test_own_project():
         content = test_file.read_text()
         if pattern.search(content):
             violations.append(str(test_file.relative_to(tests_dir)))
-    
+
     assert not violations, (
         f"TRAP[BUG] REGRESSION: hardcoded 'ai-platform-test' project name "
         f"found in: {violations}. "

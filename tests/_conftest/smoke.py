@@ -612,6 +612,19 @@ def platform_env() -> dict[str, str]:
     _logger.info("[IMP:7][conftest][platform_env] Environment restored")
 
 
+# ⚠️ TRAP[DRIFT] · 2026-07-22 · P2 · platform_ports fixture removed in DevPlan 041 rename
+# · Root: platform_port_mappings_dict replaced platform_ports, but platform_services fixture
+#   still expects platform_ports parameter → fixture not found errors in test_smoke_postgres,
+#   test_component_pgbouncer, test_component_clickhouse
+# · Fix: backward-compatible alias delegating to platform_port_mappings_dict
+# · Rev: next DevPlan — update platform_services and _start_single_module to use
+#   platform_port_mappings_dict directly, then remove this alias
+@pytest.fixture(scope="session")
+def platform_ports(platform_port_mappings_dict: dict[str, int]) -> dict[str, int]:
+    """Backward-compatible alias for platform_port_mappings_dict (DevPlan 041 rename)."""
+    return platform_port_mappings_dict
+
+
 @pytest.fixture(scope="session")
 def platform_services(
     request: pytest.FixtureRequest,

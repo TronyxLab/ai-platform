@@ -138,6 +138,7 @@ test_ports:
     metrics: 19363            # base: 9363, test: 1{9363}
   hermes-agent:
     dashboard: 19119          # base: 9119, test: 1{9119}
+    desktop: 18642            # base: 8642, test: 1{8642}
   monitoring:
     prometheus: 19090         # base: 9090, test: 1{9090}
     grafana: 13030            # base: 3030, test: 1{3030}

@@ -17,7 +17,9 @@
 # endregion MODULE_CONTRACT
 
 import functools
+import io
 import pathlib
+import re
 from typing import Any
 
 import yaml
@@ -38,12 +40,17 @@ def repo_root() -> pathlib.Path:
 
 
 def load_yaml(path: pathlib.Path | str) -> Any:
-    """Load YAML file. Uses yaml.safe_load for security."""
+    """Load YAML file. Uses yaml.safe_load for security.
+
+    Handles !override compose tags by stripping them before parsing.
+    """
     p = pathlib.Path(path)
     if not p.exists():
         raise FileNotFoundError(f"[gate_helpers] YAML file not found: {p}")
-    with open(p) as f:
-        return yaml.safe_load(f)
+    raw = p.read_text()
+    # Strip !override tags (compose merge marker, not valid YAML)
+    raw = re.sub(r":\s*!override\b", ":", raw)
+    return yaml.safe_load(io.StringIO(raw))
 
 
 def module_yaml_paths() -> list[pathlib.Path]:

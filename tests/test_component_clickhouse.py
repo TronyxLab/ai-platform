@@ -56,10 +56,10 @@ import pytest
 import requests
 from _conftest.honesty import require_docker_or_fail
 from _conftest.infra import infra as _infra
+from _conftest.networks import get_network_manager
 from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 from conftest import (
     _handle_e2e_error,
-    ensure_external_networks,
     is_production_host,
     ldd_trajectory,
 )
@@ -194,8 +194,10 @@ def clickhouse_up(platform_services: dict[str, list[str]], modules_dir: str) -> 
         }
         return
 
-    # ── Ensure external networks ──────────────────────────────────────────
-    ensure_external_networks(_EXTERNAL_NETWORKS)
+    # ── Ensure external networks via NetworkLeaseManager ────────────────
+    _nm = get_network_manager()
+    for net in _EXTERNAL_NETWORKS:
+        _nm.acquire(net)
 
     # ── Environment for docker compose ────────────────────────────────────
     env = os.environ.copy()
@@ -298,8 +300,9 @@ def clickhouse_up(platform_services: dict[str, list[str]], modules_dir: str) -> 
     except subprocess.CalledProcessError as exc:
         logger.warning("[IMP:9][clickhouse_up] docker compose down non-zero exit: %s", exc.stderr[:500])
 
-    # Remove external networks (best-effort)
-    _remove_networks()
+    # Release external networks via NetworkLeaseManager
+    for net in _EXTERNAL_NETWORKS:
+        _nm.release(net)
 
 
 # endregion FIXTURES

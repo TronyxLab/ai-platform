@@ -273,6 +273,7 @@ class _TestInfra:
 # · If discover_modules.py becomes slow (>500ms), add file-based cache with mtime check.
 infra = _TestInfra()
 
+
 # Mutable flag for dynamic detection of requires_docker marker presence.
 # Used by test_conftest_isolation.py to verify static tests don't trigger Docker infra.
 # Set to True after pytest_collection_modifyitems if any collected test has requires_docker marker.

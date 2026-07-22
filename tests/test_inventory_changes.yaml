@@ -208,3 +208,17 @@ removed:
     reason: "Same as above — dead code, pgbouncer reference in module-level import prevents collection."
     issue: "034-component-test-network-fix"
     approved_by: "@tronyx"
+
+  # ── DevPlan 043 (pre-bootstrap-finalize) — B3: физически удалены 3 dead test files ──
+  - nodeid: "tests/gates/test_gate_skip_enforcement.py::*"
+    reason: "Dead file physically deleted (DevPlan 043 Phase 2). Test cases already documented in 023-debt-cleanup A7 (lines 96-108) but file never removed from disk."
+    issue: "043-pre-bootstrap-finalize B3"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_component_pgbouncer.py::*"
+    reason: "Dead file physically deleted (DevPlan 043 Phase 2). Module pgbouncer removed from _conftest/infra.py — entire file uncollectable (KeyError at import). Test cases already documented in 034-component-test-network-fix."
+    issue: "043-pre-bootstrap-finalize B3"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_smoke_postgres.py::*"
+    reason: "Dead file physically deleted (DevPlan 043 Phase 2). Module-level CONTAINER_PGBOUNCER import from infra.py raises KeyError — entire file uncollectable. Test cases already documented in 034-component-test-network-fix."
+    issue: "043-pre-bootstrap-finalize B3"
+    approved_by: "@tronyx"
