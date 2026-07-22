@@ -48,7 +48,11 @@ fi
 ## @purpose Check if SSH key for github.com is available in ssh-agent
 ## Uses `ssh -T git@github.com` with 10s timeout. Exit code 0 means SSH is usable.
 SSH_AVAILABLE=0
-if ssh -T -o ConnectTimeout=10 -o BatchMode=yes git@github.com 2>&1 | grep -q "successfully authenticated\|Hi.*"; then
+# Capture SSH output separately to avoid pipefail interaction:
+# ssh -T to github.com always exits 1 (no shell access) → pipefail propagates it.
+# We check stderr/stdout content instead of exit code.
+_ssh_output=$(ssh -T -o ConnectTimeout=10 -o BatchMode=yes git@github.com 2>&1) || true
+if echo "${_ssh_output}" | grep -q "successfully authenticated\|Hi.*"; then
     SSH_AVAILABLE=1
     echo "[IMP:8][context-promote] SSH key for github.com available — will use SSH primary channel"
 else
