@@ -134,7 +134,7 @@ node-lifecycle.sh --mode update
 | `sudoers_generator.py` | 648 | Sudoers generation via template-engine.sh, visudo validation, atomic write |
 | `context_overlay.py` | 369 | Git clone/pull context overlay repo с S9-кэшированием (300s) |
 | `secrets_validator.py` | 589 | Secrets validation, charset check, module metadata, transitive deps BFS |
-| `orphan_reconciler.py` | 465 | Batch orphan container detection (один docker ps -a для всех модулей) |
+| `orphan_reconciler.py` | 555 | Batch orphan container detection + self-heal (--self-heal flag for docker rm/prune) |
 
 **Shell-фасад:** `deploy-modules.sh` (91 LOC) — arg parsing → provision → secrets validate → Python per-module deploy → sudoers + orphans → severity exit.
 
@@ -142,7 +142,7 @@ node-lifecycle.sh --mode update
 
 | Модуль | LOC | Назначение |
 |--------|-----|------------|
-| `reconciler.py` | 1367 | 6 R-units (R1-R6): perms, audit_log, projects, networks, hosts_drift, vhosts. JSON report, --dry-run, --units filter. |
+| `reconciler.py` | 2136 | 9 R-units (R1-R9): perms, audit_log, projects, networks, hosts_drift, vhosts, volumes, sudoers, runtime. JSON report, --dry-run, --units filter. |
 
 **Shell-фасад:** `converge.sh` (137 LOC) — setup → lock → `python3 reconciler.py` → --reconcile → exit 0/1/2.
 
@@ -150,10 +150,54 @@ node-lifecycle.sh --mode update
 
 | Модуль | LOC | Назначение |
 |--------|-----|------------|
-| `state_machine.py` | 1599 | State machine: 17 init + 7 update steps, checkpoint-resume, content-hash, TOR-conditional |
+| `state_machine.py` | 1599 | State machine: 17 init + 7 update steps, retry-policy (exponential backoff), formal pre/post-conditions |
 | `steps.py` | 729 | Step implementation functions (acme, secrets, apt, docker, users, ssh-keys, firewall, sudoers, converge, telegram) |
 
 **Shell-фасад:** `node-lifecycle.sh` (164 LOC) — arg parsing → NODE_YAML resolution → `python3 state_machine.py` → checkpoint_step wrappers.
+
+### Lifecycle State Machine (W5-E6)
+
+```mermaid
+stateDiagram-v2
+    [*] --> ssh_access
+    ssh_access --> apt_deps
+    apt_deps --> tor_proxy
+    tor_proxy --> install_docker
+    install_docker --> create_platform_user
+    create_platform_user --> create_ci_deploy_user
+    create_ci_deploy_user --> create_projects_base
+    create_projects_base --> firewall
+    firewall --> verify_core
+    verify_core --> verify_node_configs
+    verify_node_configs --> decrypt_secrets
+    decrypt_secrets --> ensure_secrets
+    ensure_secrets --> secrets_init
+    secrets_init --> read_node_yaml
+    read_node_yaml --> ghcr_auth
+    ghcr_auth --> sudoers
+    sudoers --> install_acme
+    install_acme --> node_update
+    node_update --> converge
+    converge --> audit_log
+    audit_log --> telegram
+    telegram --> [*]
+
+    state node_update {
+        [*] --> verify_core_update
+        verify_core_update --> provision
+        provision --> deliver_overlays
+        deliver_overlays --> ssl_provision
+        ssl_provision --> deploy_modules
+        deploy_modules --> healthcheck
+        healthcheck --> converge_update
+        converge_update --> [*]
+    }
+
+    note right of tor_proxy
+        Conditional: TOR_ENABLED
+        Retry: 3x, backoff 2s/4s/8s
+    end note
+```
 
 ### Shell-фасады: сводка
 

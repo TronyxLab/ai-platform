@@ -170,7 +170,7 @@ lifecycle:
   - make_target: converge
     mechanism: ssh+script
     delegates_to: core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh
-    description: "Idempotent reconcile — конвергирует ноду с desired state из node.yaml; standalone или из node-lifecycle"
+    description: "Idempotent reconcile with 9 R-units (R1-R9) and --units filter — конвергирует ноду с desired state из node.yaml; standalone или из node-lifecycle"
   - make_target: healthcheck
     mechanism: shell-script
     delegates_to: core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh

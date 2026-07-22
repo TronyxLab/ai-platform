@@ -1284,6 +1284,7 @@ def _extract_named_volumes(compose_json: dict) -> list[str]:
 ##           to find docker modules, inspects compose config for named volumes,
 ##           and verifies they exist via `docker volume inspect`. NEVER creates
 ##           volumes — only reports missing ones.
+## @complexity O(N×M×V) — N=modules, M=volumes per module, V=volume inspect
 ## @io       stdout/stderr: LDD logs [IMP:7-10]
 ##           side-effect: subprocess calls to docker compose config + volume inspect
 ## @param node_yaml_path  Path to node.yaml
@@ -1532,6 +1533,7 @@ def _safe_cleanup_tmp(tmp_path: str) -> None:
 ## @purpose  Reconcile sudoers.d files for all enabled modules. Generates desired
 ##           content via sudoers_generator (template-engine.sh render), compares
 ##           with actual files at SUDOERS_DIR, and self-heals via atomic write.
+## @complexity O(N×M) — N=modules, M=sudoers files per module
 ## @io       stdout/stderr: LDD logs [IMP:7-10]
 ##           side-effect: temp file write, visudo -c, os.replace of sudoers files
 ## @param node_yaml_path  Path to node.yaml
@@ -1764,6 +1766,7 @@ def _save_cooldown(data: dict) -> None:
 ##           inspect container state. If state is bad (exited, restarting, dead,
 ##           unhealthy, paused), self-heal via `docker compose up -d`. Cooldown
 ##           tracking prevents repeated self-heal of flapping containers.
+## @complexity O(N×C) — N=modules, C=containers per module
 ## @io       stdout/stderr: LDD logs [IMP:7-10]
 ##           side-effect: docker compose up -d (self-heal), cooldown file update
 ## @param node_yaml_path  Path to node.yaml

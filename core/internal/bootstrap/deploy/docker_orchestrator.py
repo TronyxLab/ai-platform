@@ -732,7 +732,10 @@ def _pre_pull_images(
 ## @io       ⇥ entries: list[str] ("module:overlay" format),
 ##           modules_dir: str, secrets_env_file: str | None, platform_root: str | None,
 ##           parallel_limit: int
-##           ⎋ tuple[int, int, list[str]] — (deployed_count, failed_count, failed_names)
+##           ⎋ tuple[int, int, list[str], list[str]] — (deployed, failed, failed_names, rolled_back)
+## @usecases (W5-E1) Atomic rollback: if any module fails, ALL modules in the group are shut down
+##           via docker compose down. Rolled_back list contains names of modules that were
+##           successfully shut down. Healthcheck still runs after rollback to verify recovery.
 ## @complexity 4 — parallel deploy with fork-based slot limiting + parallel healthcheck
 ## @invariants
 ##   - parallel_limit controls max concurrent deploy operations (default 4)
@@ -748,7 +751,7 @@ def deploy_docker_group(
     secrets_env_file: str | None = None,
     platform_root: str | None = None,
     parallel_limit: int = DEFAULT_PARALLEL_LIMIT,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, list[str], list[str]]:
     logger.info(
         "[IMP:7][deploy_docker_group][start] Deploying %d modules in parallel (limit: %d)",
         len(entries),
@@ -807,6 +810,37 @@ def deploy_docker_group(
         len(all_names),
     )
 
+    # ── Atomic rollback on failure (W5-E1) — shut down ALL modules in the group ──
+    rolled_back: list[str] = []
+    if group_failed > 0:
+        logger.info(
+            "[IMP:8][deploy_docker_group][rollback] %d module(s) failed — initiating atomic rollback of all %d module(s)",
+            group_failed,
+            len(all_names),
+        )
+        for entry in entries:
+            mod_name, _, _ = entry.partition(":")
+            compose_file = _resolve_compose_file(os.path.join(modules_dir, mod_name))
+            if compose_file:
+                try:
+                    subprocess.run(
+                        ["docker", "compose", "-f", str(compose_file), "--profile", mod_name, "down"],
+                        capture_output=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    rolled_back.append(mod_name)
+                    logger.info("[IMP:8][deploy_docker_group][rollback] Module shut down: %s", mod_name)
+                except (subprocess.TimeoutExpired, OSError) as exc:
+                    logger.warning(
+                        "[IMP:5][deploy_docker_group][rollback] Failed to shut down %s: %s", mod_name, exc
+                    )
+        logger.info(
+            "[IMP:9][deploy_docker_group][rollback] Atomic rollback: %d modules rolled back: %s",
+            len(rolled_back),
+            rolled_back,
+        )
+
     # ── Parallel healthcheck (S4 pattern) — run on ALL deployed+failed modules ──
     hc_pids: list[int] = []
     for mod_name in all_names:
@@ -825,12 +859,13 @@ def deploy_docker_group(
             os.waitpid(pid, 0)
 
     logger.info(
-        "[IMP:9][deploy_docker_group][done] Group complete: deployed=%d failed=%d names=%s",
+        "[IMP:9][deploy_docker_group][done] Group complete: deployed=%d failed=%d names=%s rolled_back=%d",
         group_deployed,
         group_failed,
         failed_names,
+        len(rolled_back),
     )
-    return (group_deployed, group_failed, failed_names)
+    return (group_deployed, group_failed, failed_names, rolled_back)
 
 
 # endregion FUNC_deploy_docker_group

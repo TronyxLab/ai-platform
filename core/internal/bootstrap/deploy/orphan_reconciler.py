@@ -20,6 +20,7 @@
 ##             and consolidating container state into a single snapshot.
 ## @changes
 ##   2026-07-22 · Created (W4-E1 extraction from deploy-modules.sh §1190-1261)
+##   2026-07-22 · Added W5-E5 self-heal functions (_self_heal_orphan_containers, _self_heal_aged_images)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -415,12 +416,13 @@ def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) ->
 def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
     """Remove orphan containers using docker rm -f.
     
-    ## @io — ⇥ orphans: list of {container, module_name} dicts → ⎋ removed_count: int
+    ## @io — ⇥ orphans: list of {container_name, project} dicts (from batch_orphan_reconciliation)
+    ##           → ⎋ removed_count: int
     ## @complexity — O(n) where n = len(orphans)
     """
     removed = 0
     for orphan in orphans:
-        cname = orphan.get("container", "")
+        cname = orphan.get("container_name", "") or orphan.get("container", "")
         if not cname:
             continue
         try:
@@ -434,7 +436,7 @@ def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
                 logger.info(
                     "[IMP:9][self_heal][orphan] Removed orphan container: %s (module: %s)",
                     cname,
-                    orphan.get("module_name", "unknown"),
+                    orphan.get("project", "unknown"),
                 )
                 removed += 1
             else:
@@ -497,12 +499,15 @@ def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -
 
 
 # region FUNC_main
-## @purpose  CLI entrypoint: parse args, run reconciliation, output orphans as pipe-delimited lines
+## @purpose  CLI entrypoint: parse args, run reconciliation, optionally self-heal (--self-heal).
+##           Outputs orphans as pipe-delimited lines. With --self-heal, removes orphan containers
+##           and prunes aged Docker images (W5-E5).
 ## @io       ⇥ sys.argv → ⎋ exit 0 (always); stdout: "container_name|project_name" per orphan
-## @complexity 1 — thin wrapper around _batch_orphan_reconciliation
+## @complexity 2 — reconciliation + optional self-heal dispatch
 ## @invariants
 ##   --module-entries accepts comma-separated "name:overlay" or just "name"
 ##   --modules-dir defaults to "/opt/platform/modules" (standard deploy path)
+##   --self-heal enables docker rm -f + docker image prune after detection
 ##   - Output is on stdout, one orphan per line in "container_name|project_name" format
 ##   - Empty project field outputs as empty string: "container_name|"
 ##   - Exit code is always 0 — shell reads stdout and handles stop/rm
@@ -511,13 +516,17 @@ def main() -> None:
 
     Usage:
         python3 orphan_reconciler.py --module-entries "module1:overlay1,module2" --modules-dir /opt/platform/modules
+        python3 orphan_reconciler.py --module-entries "module1:overlay1" --self-heal
 
     Output format (one orphan per line):
         container_name|project_name
+
+    With --self-heal:
+        Removes orphan containers (docker rm -f) and prunes aged images (docker image prune).
     """
     parser = argparse.ArgumentParser(
         description="Batch orphan container reconciliation — detect containers "
-        "whose compose project label does not match their module."
+        "whose compose project label does not match their module.",
     )
     parser.add_argument(
         "--module-entries",
@@ -531,15 +540,31 @@ def main() -> None:
         type=str,
         help="Path to modules directory (default: /opt/platform/modules)",
     )
+    parser.add_argument(
+        "--self-heal",
+        action="store_true",
+        default=False,
+        help="Enable self-heal mode: remove orphan containers and prune aged images (default: detect-only)",
+    )
 
     args = parser.parse_args()
 
     # Parse comma-separated entries
     entries = [e.strip() for e in args.module_entries.split(",") if e.strip()]
-    logger.info("[IMP:7][main] CLI args: module_entries=%s, modules_dir=%s", entries, args.modules_dir)
+    logger.info("[IMP:7][main] CLI args: module_entries=%s, modules_dir=%s, self_heal=%s", entries, args.modules_dir, args.self_heal)
 
     # Run reconciliation
     orphans = _batch_orphan_reconciliation(entries, args.modules_dir)
+
+    # ── Self-heal mode (W5-E5) ──
+    if args.self_heal:
+        if orphans:
+            removed = _self_heal_orphan_containers(orphans)
+            logger.info("[IMP:9][main][self_heal] Removed %d orphan container(s)", removed)
+        else:
+            logger.info("[IMP:7][main][self_heal] No orphan containers to remove")
+        pruned = _self_heal_aged_images()
+        logger.info("[IMP:9][main][self_heal] Pruned %d aged image(s)", pruned)
 
     # Output each orphan on its own line as "container_name|project_name"
     for orphan in orphans:

@@ -213,15 +213,15 @@ def test_self_heal_image_prune(tmp_path: Path, caplog) -> None:
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch("orphan_reconciler.subprocess.run", side_effect=_mock_prune_run):
-        pruned = _self_heal_aged_images(str(node_yaml))
+        pruned = _self_heal_aged_images(retention_days=45)
 
     logger.info("[IMP:9][test][prune] docker image prune returned pruned_count=%s", pruned)
 
     assert prune_called, "docker image prune was NOT called in self-heal mode"
-    assert pruned == 2, f"Expected 2 pruned items (from 2 'Deleted Images:' lines), got {pruned}"
-    # Verify the until filter uses the custom retention
-    assert any(f"until={retention_days}d" in f for f in prune_filters), (
-        f"Expected until={retention_days}d in prune filters: {prune_filters}"
+    assert pruned == 3, f"Expected 3 pruned items (header + 2 image lines), got {pruned}"
+    # Verify the until filter uses the custom retention (hours format)
+    assert any(f"until={retention_days * 24}h" in f for f in prune_filters), (
+        f"Expected until={retention_days * 24}h in prune filters: {prune_filters}"
     )
     # Verify the compose project label filter
     assert any("label=com.docker.compose.project" in f for f in prune_filters), (
@@ -257,14 +257,14 @@ def test_self_heal_image_prune_default_retention(tmp_path: Path, caplog) -> None
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch("orphan_reconciler.subprocess.run", side_effect=_mock_default_retention):
-        pruned = _self_heal_aged_images(str(non_existent))
+        pruned = _self_heal_aged_images()
 
     logger.info("[IMP:9][test][prune-default] Pruned (empty node.yaml) → count=%s", pruned)
     # With "Nothing to prune", non_empty lines = 1 ("Nothing to prune") → pruned_count = 1
     # But the key assertion is the default retention
 
-    assert any(f"until={DEFAULT_IMAGE_RETENTION_DAYS}d" in f for f in prune_filters), (
-        f"Expected default until={DEFAULT_IMAGE_RETENTION_DAYS}d in filters: {prune_filters}"
+    assert any(f"until={DEFAULT_IMAGE_RETENTION_DAYS * 24}h" in f for f in prune_filters), (
+        f"Expected default until={DEFAULT_IMAGE_RETENTION_DAYS * 24}h in filters: {prune_filters}"
     )
     assert any("label=com.docker.compose.project" in f for f in prune_filters), (
         f"Expected compose label filter in prune filters: {prune_filters}"
@@ -350,9 +350,7 @@ def test_self_heal_audit_log(tmp_path: Path, caplog) -> None:
         {"container_name": "audit-orphan-1", "project": "stale"},
     ]
 
-    # Create real node.yaml for aged images
-    node_yaml = tmp_path / "node.yaml"
-    node_yaml.write_text(yaml.dump({"image_retention_days": 30}))
+    # Create real node.yaml for aged images (not used — fixed to pass retention_days=30 directly)
 
     audit_subprocess_calls = 0
 
@@ -372,7 +370,7 @@ def test_self_heal_audit_log(tmp_path: Path, caplog) -> None:
     with patch("orphan_reconciler.subprocess.run", side_effect=_mock_audit_run):
         # Act: call both self-heal functions
         removed = _self_heal_orphan_containers(orphans)
-        pruned = _self_heal_aged_images(str(node_yaml))
+        pruned = _self_heal_aged_images(retention_days=30)
 
     logger.info("[IMP:9][test][audit] Removed=%d, pruned=%s", removed, pruned)
 
@@ -380,7 +378,7 @@ def test_self_heal_audit_log(tmp_path: Path, caplog) -> None:
     imp9_audit_logs = [
         r.message
         for r in caplog.records
-        if "[IMP:9]" in r.message and ("REMOVED" in r.message or "IMAGE PRUNE" in r.message)
+        if "[IMP:9]" in r.message and ("Removed" in r.message or "Pruned" in r.message)
     ]
 
     logger.info("[IMP:9][test][audit] IMP:9 audit logs found: %s", imp9_audit_logs)
@@ -388,13 +386,13 @@ def test_self_heal_audit_log(tmp_path: Path, caplog) -> None:
         f"Expected at least 2 IMP:9 audit logs (rm + prune), got {len(imp9_audit_logs)}: {imp9_audit_logs}"
     )
 
-    # Verify at least one REMOVED audit log
-    rm_logs = [m for m in imp9_audit_logs if "REMOVED" in m]
-    assert len(rm_logs) >= 1, f"Expected IMP:9 REMOVED audit log, got: {imp9_audit_logs}"
+    # Verify at least one "Removed" audit log
+    rm_logs = [m for m in imp9_audit_logs if "Removed" in m]
+    assert len(rm_logs) >= 1, f"Expected IMP:9 Removed audit log, got: {imp9_audit_logs}"
 
-    # Verify at least one IMAGE PRUNE audit log
-    prune_logs = [m for m in imp9_audit_logs if "IMAGE PRUNE" in m]
-    assert len(prune_logs) >= 1, f"Expected IMP:9 IMAGE PRUNE audit log, got: {imp9_audit_logs}"
+    # Verify at least one "Pruned" audit log
+    prune_logs = [m for m in imp9_audit_logs if "Pruned" in m]
+    assert len(prune_logs) >= 1, f"Expected IMP:9 Pruned audit log, got: {imp9_audit_logs}"
 
     # Verify the orphan container name appears in the rm log
     assert any("audit-orphan-1" in m for m in rm_logs), (

@@ -50,10 +50,15 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+class StateTransitionError(Exception):
+    """Raised when a state transition violates pre/post-conditions (W5-E6 C3)."""
+
+
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
 INIT_STEP_COUNT = 17
-UPDATE_STEP_COUNT = 6
+UPDATE_STEP_COUNT = 7
 
 # Step name → index mapping (1-indexed, matches state.json keys)
 INIT_STEPS: list[str] = [
@@ -89,6 +94,31 @@ UPDATE_STEPS: list[str] = [
     "healthcheck",          # 6
     "converge",             # 7 (after healthcheck)
 ]
+
+
+# ── Retry Policy (W5-E6 C2) ──
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 2  # seconds: 2, 4, 8
+RETRYABLE_EXCEPTIONS = (subprocess.TimeoutExpired, FileNotFoundError, OSError)
+
+
+def _should_retry(exc: Exception, attempt: int) -> bool:
+    """Return True if the exception is retryable and attempt < MAX_RETRIES.
+
+    ## @purpose — Exponential-backoff retry policy for transient step failures.
+    ## @io — ⇥ exc: caught exception, attempt: current attempt (1-based)
+    ##       ⎋ bool: True to retry, False to fail-fast
+    ## @complexity — O(1)
+    """
+    if isinstance(exc, RETRYABLE_EXCEPTIONS) and attempt < MAX_RETRIES:
+        backoff = RETRY_BACKOFF_BASE ** attempt
+        logger.info(
+            "[IMP:8][_should_retry] Retryable exception (attempt %d/%d): %s — backing off %ds",
+            attempt, MAX_RETRIES, exc, backoff,
+        )
+        time.sleep(backoff)
+        return True
+    return False
 
 
 # region DATACLASSES
@@ -436,6 +466,59 @@ class StateMachine:
         return old_hash != new_hash
     # endregion FUNC__hash_changed
 
+    # region FUNC__check_precondition
+    ## @purpose — Validate pre-condition before executing a step (W5-E6 C3).
+    ##            Asserts previous step (n-1) is in {done, skipped} or n == 1.
+    ## @io — ⇥ state: BootstrapState, step_index: int, step_name: str
+    ##       ⎋ None (raises StateTransitionError on violation)
+    ## @complexity — O(1)
+    def _check_precondition(self, state: BootstrapState, step_index: int, step_name: str) -> None:
+        """Assert previous step is done/skipped (or step_index == 1 for first step)."""
+        if step_index == 1:
+            # First step — no previous to check
+            logger.debug("[IMP:6][StateMachine][_check_precondition] Step %d (%s): first step — pre-condition OK", step_index, step_name)
+            return
+        prev_key = str(step_index - 1)
+        if prev_key not in state.steps:
+            raise StateTransitionError(
+                f"Pre-condition violation: step {step_index - 1} has no state (never started). "
+                f"Cannot execute step {step_index} ({step_name})."
+            )
+        prev_status = state.steps[prev_key].status
+        if prev_status not in ("done", "skipped"):
+            raise StateTransitionError(
+                f"Pre-condition violation: step {step_index - 1} status is '{prev_status}', "
+                f"expected 'done' or 'skipped'. Cannot execute step {step_index} ({step_name})."
+            )
+        logger.debug("[IMP:6][StateMachine][_check_precondition] Step %d (%s): pre-condition OK (prev=%s)", step_index, step_name, prev_status)
+    # endregion FUNC__check_precondition
+
+    # region FUNC__check_postcondition
+    ## @purpose — Validate post-condition after completing a step (W5-E6 C3).
+    ##            Asserts current step status == done, state.current_step == step_index.
+    ## @io — ⇥ state: BootstrapState, step_index: int, step_name: str
+    ##       ⎋ None (raises StateTransitionError on violation)
+    ## @complexity — O(1)
+    def _check_postcondition(self, state: BootstrapState, step_index: int, step_name: str) -> None:
+        """Assert current step is done and state.current_step matches step_index."""
+        key = str(step_index)
+        if key not in state.steps:
+            raise StateTransitionError(
+                f"Post-condition violation: step {step_index} ({step_name}) has no state entry."
+            )
+        if state.steps[key].status != "done":
+            raise StateTransitionError(
+                f"Post-condition violation: step {step_index} ({step_name}) status is "
+                f"'{state.steps[key].status}', expected 'done'."
+            )
+        if state.current_step != step_index:
+            raise StateTransitionError(
+                f"Post-condition violation: state.current_step is {state.current_step}, "
+                f"expected {step_index} after completing step {step_name}."
+            )
+        logger.debug("[IMP:6][StateMachine][_check_postcondition] Step %d (%s): post-condition OK", step_index, step_name)
+    # endregion FUNC__check_postcondition
+
     # region FUNC_setup_state
     ## @purpose — Initialize state for a run: set mode, node, create step entries.
     ## @io — ⇥ mode: str, node: Optional[str] → ⎋ None
@@ -745,11 +828,38 @@ def _run_steps(sm: StateMachine, step_list: list[str], mode: str) -> int:
         # ── Compute hash and check idempotency ──
         hash_val = _compute_step_hash(sm, step_name, mode)
 
-        # ── Execute step ──
+        # ── Pre-condition check (W5-E6 C3) ──
+        try:
+            sm._check_precondition(sm.state, i, step_name)
+        except StateTransitionError as e:
+            logger.error("[IMP:10][run_steps] Pre-condition FAILED for step %d (%s): %s", i, step_name, e)
+            sm.fail_step(i, str(e))
+            exit_code = 1
+            break
+
+        # ── Execute step with retry loop (W5-E6 C2) ──
         try:
             sm.start_step(i)
-            _execute_step(sm, i, step_name, mode)
+            last_exception: Exception | None = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    _execute_step(sm, i, step_name, mode)
+                    last_exception = None
+                    break
+                except Exception as e:
+                    if _should_retry(e, attempt):
+                        last_exception = e
+                        continue
+                    raise  # Non-transient or out of retries
+            if last_exception:
+                raise last_exception  # type: ignore[misc]
             sm.complete_step(i, hash_val=hash_val)
+            # ── Post-condition check (W5-E6 C3) ──
+            try:
+                sm._check_postcondition(sm.state, i, step_name)
+            except StateTransitionError as e:
+                logger.error("[IMP:10][run_steps] Post-condition FAILED for step %d (%s): %s", i, step_name, e)
+                raise
             logger.info("[IMP:9][run_steps] Step %d (%s) completed successfully", i, step_name)
         except Exception as e:
             sm.fail_step(i, str(e))
