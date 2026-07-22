@@ -39,7 +39,10 @@ jobs:
       INTEGRATION_MODE: live
 
     steps:
-      - name: Setup platform (composite — checkout + python + gitleaks + provisioner)
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup platform (composite — python + gitleaks + provisioner)
         uses: ./.github/actions/setup-platform
         with:
           install-pre-commit: 'true'

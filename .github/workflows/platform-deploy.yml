@@ -77,6 +77,9 @@ jobs:
     environment:
       name: staging
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Setup platform
         uses: ./.github/actions/setup-platform
         with:
@@ -135,6 +138,9 @@ jobs:
       name: production
       # GitHub environment protection rules: required reviewer = owner
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Setup platform
         uses: ./.github/actions/setup-platform
         with:
@@ -165,6 +171,9 @@ jobs:
     needs: deploy-production
     if: inputs.environment == 'production'
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Setup platform
         uses: ./.github/actions/setup-platform
         with:

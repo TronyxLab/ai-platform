@@ -47,7 +47,10 @@ jobs:
       COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
 
     steps:
-      - name: Setup platform (composite — checkout + python + gitleaks + provisioner)
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup platform (composite — python + gitleaks + provisioner)
         uses: ./.github/actions/setup-platform
         with:
           install-pre-commit: 'true'

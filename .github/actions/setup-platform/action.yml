@@ -1,9 +1,11 @@
-# GREP_SUMMARY: setup-platform composite-action checkout python-venv gitleaks provisioner reusable unified-ci
-# STRUCTURE: ▶ checkout@v7 → ◇ [optional] setup-python-venv → ◇ [optional] setup-gitleaks → ◇ [optional] provisioner-call → ⎋ unified CI setup
+# GREP_SUMMARY: setup-platform composite-action python-venv gitleaks provisioner reusable unified-ci
+# STRUCTURE: ◇ [optional] setup-python-venv → ◇ [optional] setup-gitleaks → ◇ [optional] provisioner-call → ⎋ unified CI setup
 # region MODULE_CONTRACT
-## @purpose  Unified CI setup composite action: replaces 4-step boilerplate (checkout + python + gitleaks + provisioner)
+## @purpose  Unified CI setup composite action: replaces 3-step boilerplate (python + gitleaks + provisioner)
 ##           with a single reusable action. Inherits cache key from setup-python-venv (R-RISK-10 mitigation).
 ##           DevPlan 029 W2-E2 — CI Composite Action.
+##           NOTE: checkout must be called as a separate step BEFORE this action (local composite actions
+##           need repo checked out first — cannot include actions/checkout internally).
 ## @scope    All .github/workflows/*.yml — 7+ workflow consumers targeted in W2-E2
 ## @invariants
 ##   - Cache key: venv-${{ runner.os }}-${{ hashFiles('Makefile') }} (inherited from setup-python-venv, no invalidation)
@@ -11,21 +13,18 @@
 ##   - Gitleaks installation is optional — controlled by install-gitleaks boolean
 ##   - Provisioner-call is optional — controlled by run-provisioner + provisioner-scope
 ##   - Boolean inputs are strings in composite actions: use 'true'/'false'
-##   - checkout-ref input enables custom ref (e.g. pull_request_target head.sha); empty = default
+##   - checkout-ref REMOVED 2026-07-22 — checkout is a separate step before this action
 ## @rationale  Consolidate 7+ CI setup sequences into single composite action.
 ##             Reduces CI setup overhead by ~30s per python workflow (3→1 composite steps),
 ##             eliminates DRIFT-risk from duplicated setup logic, preserves cache-key continuity.
 ## @changes    2026-07-21 | Created per DevPlan 029 W2-E2
+## @changes    2026-07-22 | Removed checkout step — must be called separately before this action (local composite actions need repo checked out first)
 # endregion MODULE_CONTRACT
 
 name: 'Setup Platform'
-description: 'Composite action: checkout + optional Python venv + optional gitleaks + optional provisioner'
+description: 'Composite action: optional Python venv + optional gitleaks + optional provisioner (checkout must be called separately before this action)'
 
 inputs:
-  checkout-ref:
-    description: 'Ref/branch/tag/SHA to checkout (optional). Empty = default branch behavior.'
-    required: false
-    default: ''
   python-version:
     description: 'Python version for setup-python-venv. Empty string skips Python setup entirely.'
     required: false
@@ -50,13 +49,7 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    # ─── Step 1: Checkout ───────────────────────────────────────────────
-    - name: Checkout repository
-      uses: actions/checkout@v7
-      with:
-        ref: ${{ inputs.checkout-ref }}
-
-    # ─── Step 2: Python venv (optional — skip if python-version is empty) ─
+    # ─── Step 1: Python venv (optional — skip if python-version is empty) ─
     - name: Setup Python venv
       if: ${{ inputs.python-version != '' }}
       uses: ./.github/actions/setup-python-venv
@@ -64,12 +57,12 @@ runs:
         python-version: ${{ inputs.python-version }}
         install-pre-commit: ${{ inputs.install-pre-commit }}
 
-    # ─── Step 3: Gitleaks (optional) ─────────────────────────────────────
+    # ─── Step 2: Gitleaks (optional) ─────────────────────────────────────
     - name: Setup gitleaks
       if: ${{ inputs.install-gitleaks == 'true' }}
       uses: ./.github/actions/setup-gitleaks
 
-    # ─── Step 4: Provisioner (optional) ──────────────────────────────────
+    # ─── Step 3: Provisioner (optional) ──────────────────────────────────
     - name: Provision environment
       if: ${{ inputs.run-provisioner == 'true' }}
       uses: ./.github/actions/provisioner-call

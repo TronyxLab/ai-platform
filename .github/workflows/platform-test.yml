@@ -76,10 +76,14 @@ jobs:
 
     steps:
       # ─── Stage 1: Setup (fast gate — no Docker needed) ──────────────
-      - name: Setup platform (composite — checkout + python + gitleaks)
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup platform (composite — python + gitleaks)
         uses: ./.github/actions/setup-platform
         with:
-          checkout-ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
           install-pre-commit: 'true'
           install-gitleaks: 'true'
           run-provisioner: 'false'

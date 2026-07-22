@@ -47,7 +47,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup platform (composite — checkout only)
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup platform (composite — python only)
         uses: ./.github/actions/setup-platform
         with:
           python-version: ''
