@@ -271,7 +271,10 @@ ssh_deploy() {
         log_imp 8 "deploy" "Not a git repository or no commits — SHA=unknown"
     fi
 
-    local deploy_cmd="PLATFORM_DEPLOY_DIRECT=1 /opt/platform/core/entrypoints/deploy.sh ${PROJECT_NAME} ${GIT_SHA} ${ENV}"
+    # Build project path with org prefix (consistent with deliver_payload path)
+    local full_project_name="${ORG:+${ORG}/}${PROJECT_NAME}"
+
+    local deploy_cmd="PLATFORM_DEPLOY_DIRECT=1 /opt/platform/core/entrypoints/deploy.sh ${full_project_name} ${GIT_SHA} ${ENV}"
     local ssh_cmd="ssh ${SSH_OPTS} ci-deploy@${SSH_HOST} \"${deploy_cmd}\""
 
     log_imp 7 "deploy" "Deploying ${PROJECT_NAME}@${GIT_SHA} on ${SSH_HOST}..."

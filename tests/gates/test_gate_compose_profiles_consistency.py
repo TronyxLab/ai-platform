@@ -54,9 +54,7 @@ def _get_canonical_profiles() -> str:
     profile_lines = [
         line
         for line in lines
-        if not line.startswith("make[")
-        and "Entering directory" not in line
-        and "Leaving directory" not in line
+        if not line.startswith("make[") and "Entering directory" not in line and "Leaving directory" not in line
     ]
     return "".join(profile_lines).strip()
 
