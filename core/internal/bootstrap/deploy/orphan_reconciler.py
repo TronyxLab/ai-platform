@@ -32,6 +32,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # ── Constants ──
+DEFAULT_IMAGE_RETENTION_DAYS: int = 30
+DOCKER_RM_TIMEOUT: int = 30
+
 COMPOSE_FILE_CANDIDATES: list[str] = [
     "compose.yaml",
     "docker-compose.yaml",
@@ -404,6 +407,93 @@ def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) ->
 
 
 # endregion FUNC__batch_orphan_reconciliation
+
+
+# region FUNC__self_heal_orphan_containers
+## @purpose  Remove orphan containers detected by _batch_orphan_reconciliation.
+##           Only active when --self-heal flag is set (W5-E5).
+def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
+    """Remove orphan containers using docker rm -f.
+    
+    ## @io — ⇥ orphans: list of {container, module_name} dicts → ⎋ removed_count: int
+    ## @complexity — O(n) where n = len(orphans)
+    """
+    removed = 0
+    for orphan in orphans:
+        cname = orphan.get("container", "")
+        if not cname:
+            continue
+        try:
+            result = subprocess.run(
+                ["docker", "rm", "-f", cname],
+                capture_output=True,
+                timeout=DOCKER_RM_TIMEOUT,
+                check=False,
+            )
+            if result.returncode == 0:
+                logger.info(
+                    "[IMP:9][self_heal][orphan] Removed orphan container: %s (module: %s)",
+                    cname,
+                    orphan.get("module_name", "unknown"),
+                )
+                removed += 1
+            else:
+                logger.warning(
+                    "[IMP:8][self_heal][orphan] Failed to remove orphan %s: %s",
+                    cname,
+                    result.stderr.strip()[:200],
+                )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.warning("[IMP:5][self_heal][orphan] Error removing %s: %s", cname, exc)
+    return removed
+# endregion FUNC__self_heal_orphan_containers
+
+
+# region FUNC__self_heal_aged_images
+## @purpose  Prune aged Docker images to free disk space (W5-E5).
+##           Only active when --self-heal flag is set.
+def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -> int:
+    """Prune Docker images older than retention_days.
+    
+    ## @io — ⇥ retention_days: int (default 30) → ⎋ pruned_count: int
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Filters by label=com.docker.compose.project (NOT dangling-only)
+    ##   - Default retention = 30d (overridable via node.yaml image_retention_days)
+    """
+    try:
+        result = subprocess.run(
+            [
+                "docker", "image", "prune", "-f",
+                "--filter", f"until={retention_days * 24}h",
+                "--filter", "label=com.docker.compose.project",
+            ],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        # Parse prune output for count (docker image prune reports "Total reclaimed space")
+        stdout = result.stdout if isinstance(result.stdout, str) else result.stdout.decode()
+        # Count lines that look like deleted images (they contain the image tag/id)
+        lines = [l for l in stdout.splitlines() if l.strip() and not l.startswith("Total")]
+        pruned = len(lines)
+
+        if pruned > 0:
+            logger.info(
+                "[IMP:9][self_heal][prune] Pruned %d aged images (retention: %d days)",
+                pruned,
+                retention_days,
+            )
+        else:
+            logger.info(
+                "[IMP:7][self_heal][prune] No aged images to prune (retention: %d days)",
+                retention_days,
+            )
+        return pruned
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("[IMP:5][self_heal][prune] Image prune failed: %s", exc)
+        return 0
+# endregion FUNC__self_heal_aged_images
 
 
 # region FUNC_main

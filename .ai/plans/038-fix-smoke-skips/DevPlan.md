@@ -115,14 +115,14 @@ if not _check_port_forwarded(port, "/api/public/health"):
     # Diagnostic: collect container status and port info
     import subprocess as _sp
     _diag_parts = [f"Langfuse port {port} is not accessible."]
-    
+
     # Check if langfuse-test container exists
     _ps = _sp.run(
         ["docker", "ps", "-a", "--filter", "name=langfuse-test", "--format", "{{.Names}} {{.Status}}"],
         capture_output=True, text=True, timeout=10,
     )
     _diag_parts.append(f"Container status: {_ps.stdout.strip() or 'container not found'}")
-    
+
     # Check what's actually listening on localhost ports in the 13xxx range
     _lsof = _sp.run(
         ["lsof", "-iTCP", "-sTCP:LISTEN", "-P", "-n"],
@@ -133,7 +133,7 @@ if not _check_port_forwarded(port, "/api/public/health"):
         _diag_parts.append(f"Listening ports:\n" + "\n".join(_port_lines))
     else:
         _diag_parts.append("No relevant ports listening")
-    
+
     pytest.fail("\n".join(_diag_parts))
 ```
 

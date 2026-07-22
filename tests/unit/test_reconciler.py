@@ -434,6 +434,7 @@ def test_reconcile_audit_log_ci_deploy_group(tmp_path, monkeypatch, caplog):
 def test_is_stub_true(tmp_path, caplog):
     """_is_stub: file with GENERATED-STUB → returns True."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] _is_stub positive detection')
     stub_file = tmp_path / "ai-platform.yaml"
     stub_file.write_text("# GENERATED-STUB by converge\nproject: myapp\nservice: myapp\n")
     assert reconciler._is_stub(str(stub_file)) is True
@@ -451,6 +452,7 @@ def test_is_stub_true(tmp_path, caplog):
 def test_is_stub_false(tmp_path, caplog):
     """_is_stub: file without GENERATED-STUB → returns False."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] _is_stub negative detection')
     real_file = tmp_path / "ai-platform.yaml"
     real_file.write_text("project: myapp\nservice: myapp\ndomain: myapp.example.com\n")
     assert reconciler._is_stub(str(real_file)) is False
@@ -468,6 +470,7 @@ def test_is_stub_false(tmp_path, caplog):
 def test_is_stub_missing(tmp_path, caplog):
     """_is_stub: missing file → returns False."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] _is_stub missing-file')
     missing = str(tmp_path / "nonexistent.yaml")
     assert reconciler._is_stub(missing) is False
 
@@ -740,6 +743,7 @@ def test_reconcile_networks_exists(tmp_path, caplog):
 def test_detect_hosts_drift_unreadable(tmp_path, caplog, monkeypatch):
     """R5: /etc/hosts not readable → status=warn."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] R5 unreadable hosts — warn-path')
 
     # Monkeypatch HOSTS_FILE to a nonexistent path
     reconciler.HOSTS_FILE = str(tmp_path / "nonexistent_hosts")
@@ -865,6 +869,7 @@ projects:
             core_dir=str(tmp_path),
             dry_run=False,
             report_only=False,
+            overlay_base=str(tmp_path / "opt"),
         )
 
     assert entry["unit"] == "R6"
@@ -918,6 +923,7 @@ projects:
             core_dir=str(tmp_path),
             dry_run=False,
             report_only=False,
+            overlay_base=str(tmp_path / "opt"),
         )
 
     assert entry["unit"] == "R6"
@@ -974,6 +980,7 @@ projects:
             core_dir=str(tmp_path),
             dry_run=False,
             report_only=False,
+            overlay_base=str(tmp_path / "opt"),
         )
 
     assert entry["unit"] == "R6"
@@ -998,6 +1005,7 @@ projects:
 def test_unit_enabled_filter(caplog):
     """_unit_enabled: filters correctly with comma-separated units."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] _unit_enabled filter semantics')
 
     # Empty filter → all enabled
     assert reconciler._unit_enabled("", "R1") is True
@@ -1034,6 +1042,7 @@ def test_unit_enabled_filter(caplog):
 def test_parse_projects_yaml(tmp_path, caplog):
     """_parse_projects_yaml: parses dict and string project entries."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] _parse_projects_yaml parsing')
 
     yaml_path = tmp_path / "node.yaml"
     yaml_content = """
@@ -1077,6 +1086,7 @@ projects:
 def test_exit_code_0(caplog):
     """Exit code: no errors, no warnings → exit_code=0."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] exit-code 0')
     reconciler._reset_state()
     assert reconciler._exit_code == 0
     assert not reconciler._has_warnings
@@ -1095,6 +1105,7 @@ def test_exit_code_0(caplog):
 def test_exit_code_1(caplog):
     """Exit code: warnings set → exit_code=1."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] exit-code 1')
     reconciler._reset_state()
     reconciler._set_exit(1)
     assert reconciler._exit_code == 1
@@ -1114,6 +1125,7 @@ def test_exit_code_1(caplog):
 def test_exit_code_2(caplog):
     """Exit code: errors set → exit_code=2."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] exit-code 2')
     reconciler._reset_state()
     reconciler._set_exit(2)
     assert reconciler._exit_code == 2
@@ -1133,6 +1145,7 @@ def test_exit_code_2(caplog):
 def test_exit_code_2_overrides_1(caplog):
     """Exit code: warning then error → exit_code=2 (errors take precedence)."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] exit-code precedence')
     reconciler._reset_state()
     reconciler._set_exit(1)  # warning
     reconciler._set_exit(2)  # error → overrides
@@ -1158,6 +1171,7 @@ def test_exit_code_2_overrides_1(caplog):
 def test_report_emit_format(caplog):
     """report_emit: produces valid JSON with correct schema."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] report_emit schema')
     reconciler._reset_state()
     reconciler._node_name = "test-node"
 
@@ -1192,6 +1206,7 @@ def test_report_emit_format(caplog):
 def test_report_emit_errors_status(caplog):
     """report_emit: errors set → status='errors'."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] report_emit errors status')
     reconciler._reset_state()
     reconciler._node_name = "test-node"
     reconciler._set_exit(2)
@@ -1214,6 +1229,7 @@ def test_report_emit_errors_status(caplog):
 def test_report_emit_warnings_status(caplog):
     """report_emit: warnings set → status='mutations_applied'."""
     caplog.set_level(logging.INFO)
+    logger.info('[IMP:9][test] report_emit warnings status')
     reconciler._reset_state()
     reconciler._node_name = "test-node"
     reconciler._set_exit(1)
