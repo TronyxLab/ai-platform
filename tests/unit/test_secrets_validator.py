@@ -330,6 +330,7 @@ def test_check_env_requires_secrets_env_file(secrets_manifest_file, caplog, monk
 def test_check_env_requires_generated_tier(secrets_manifest_file, caplog, monkeypatch):
     """Generated-tier secret should be checked like required."""
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-test")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "pg-test-password")
 
     missing = _check_env_requires("litellm", str(secrets_manifest_file))
 
