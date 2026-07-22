@@ -1554,8 +1554,18 @@ def _validate_sudoers() -> None:
         logger.info("[IMP:7][sudoers] %s not found — skipping validation", sudoers_d)
         return
 
+    try:
+        entries = list(Path(sudoers_d).iterdir())
+    except PermissionError:
+        logger.warning(
+            "[IMP:7][sudoers] Permission denied reading %s — "
+            "skipping validation (non-root or restricted permissions)",
+            sudoers_d,
+        )
+        return
+
     errors = 0
-    for entry in Path(sudoers_d).iterdir():
+    for entry in entries:
         if not entry.is_file():
             continue
         if entry.name == "README":
