@@ -68,6 +68,7 @@ S3_CERT_PREFIX = "platform/ssl-certs"
 
 # ─── Helper: read script content ──────────────────────────────────────────────
 
+
 def _read_script(path: str) -> str:
     """Read a script file, assert it exists."""
     assert os.path.isfile(path), f"Script not found: {path}"
@@ -77,22 +78,19 @@ def _read_script(path: str) -> str:
 
 # ─── Helper: assert S3 cert file reference ────────────────────────────────────
 
+
 def _check_s3_cert_line(content: str, s3_key_suffix: str) -> bool:
     """Check if the script content references the specific S3 cert key."""
-    expected_key = f"{S3_CERT_PREFIX}/${{domain}}/{s3_key_suffix}"
-    # Try both patterns: variable expansion and literal
+    # Try both shell variable expansion patterns: ${domain} and $domain
     patterns = [
         f"{S3_CERT_PREFIX}/${{domain}}/{s3_key_suffix}",
-        f"{S3_CERT_PREFIX}/${domain}/{s3_key_suffix}",
+        f"{S3_CERT_PREFIX}/$domain/{s3_key_suffix}",
         f"ssl-certs/${{domain}}/{s3_key_suffix}",
-        f"ssl-certs/${{domain}}/{s3_key_suffix}",
+        f"ssl-certs/$domain/{s3_key_suffix}",
         # Also match any reference containing the suffix
         f"/{s3_key_suffix}",
     ]
-    for pattern in patterns:
-        if pattern in content:
-            return True
-    return False
+    return any(pattern in content for pattern in patterns)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -113,9 +111,7 @@ def test_s3_cache_upload_all_4_cert_files():
     content = _read_script(CERT_SCRIPTS["s3_cache"])
 
     # Check that the S3 cert prefix constant is defined
-    assert S3_CERT_PREFIX in content, (
-        f"s3-ssl-cache.sh must define S3_SSL_CERT_PREFIX={S3_CERT_PREFIX!r}"
-    )
+    assert S3_CERT_PREFIX in content, f"s3-ssl-cache.sh must define S3_SSL_CERT_PREFIX={S3_CERT_PREFIX!r}"
     logger.info("[IMP:7][test_4_files] S3 cert prefix found: %s", S3_CERT_PREFIX)
 
     # Check upload of fullchain.pem
@@ -126,9 +122,8 @@ def test_s3_cache_upload_all_4_cert_files():
 
     # Verify S3 key prefix usage per file upload call
     lines = content.split("\n")
-    upload_section = False
     s3_keys_found = []
-    for i, line in enumerate(lines):
+    for _i, line in enumerate(lines):
         if "UPLOAD_PY" in line or "upload.py" in line or "ssl-certs" in line:
             s3_keys_found.append(line.strip())
 
@@ -161,9 +156,7 @@ def test_ssl_cache_prefix_distinct_from_backup():
     """
     # s3-ssl-cache.sh uses its own prefix
     s3_content = _read_script(CERT_SCRIPTS["s3_cache"])
-    assert S3_CERT_PREFIX in s3_content, (
-        f"s3-ssl-cache.sh must define prefix {S3_CERT_PREFIX}"
-    )
+    assert S3_CERT_PREFIX in s3_content, f"s3-ssl-cache.sh must define prefix {S3_CERT_PREFIX}"
 
     # Verify backup scripts do NOT reference ssl-certs
     for name, path in BACKUP_SCRIPTS.items():
@@ -176,8 +169,7 @@ def test_ssl_cache_prefix_distinct_from_backup():
             )
 
     logger.critical(
-        "[IMP:9][test_prefix_gap] ASSERT: ssl-cache prefix (%s) is "
-        "independent from backup pipeline", S3_CERT_PREFIX
+        "[IMP:9][test_prefix_gap] ASSERT: ssl-cache prefix (%s) is independent from backup pipeline", S3_CERT_PREFIX
     )
 
 
@@ -206,7 +198,8 @@ def test_backup_postgres_scope_postgres_only():
         if ref in content:
             logger.warning(
                 "[IMP:7][test_postgres_scope] backup-postgres.sh references %s — "
-                "SSL cert backup would be mixed with Postgres backup", ref
+                "SSL cert backup would be mixed with Postgres backup",
+                ref,
             )
 
     logger.critical("[IMP:9][test_postgres_scope] ASSERT: backup-postgres.sh is PostgreSQL-only")
@@ -244,10 +237,11 @@ def test_make_backup_coverage_ssl_cert_gap_documented():
     for script_path in backup_scripts:
         with open(script_path) as f:
             content = f.read()
-        for ssl_ref in ["fullchain", "privkey", "letsencrypt", "acme.sh",
-                         "s3-ssl-cache", "ssl-certs", "issue-cert"]:
-            if ssl_ref in content:
-                ssl_mentions.append((script_path, ssl_ref))
+        ssl_mentions.extend(
+            (script_path, ssl_ref)
+            for ssl_ref in ["fullchain", "privkey", "letsencrypt", "acme.sh", "s3-ssl-cache", "ssl-certs", "issue-cert"]
+            if ssl_ref in content
+        )
 
     if ssl_mentions:
         logger.warning(
@@ -255,10 +249,7 @@ def test_make_backup_coverage_ssl_cert_gap_documented():
             ssl_mentions,
         )
     else:
-        logger.info(
-            "[IMP:7][test_coverage] No SSL references in any backup-cron script — "
-            "clean separation confirmed"
-        )
+        logger.info("[IMP:7][test_coverage] No SSL references in any backup-cron script — clean separation confirmed")
 
     # Verify make backup delegates only to backup-cron module
     makefile_path = "makefiles/modules.mk"
@@ -273,12 +264,11 @@ def test_make_backup_coverage_ssl_cert_gap_documented():
     # backup target should NOT reference s3-ssl-cache or issue-cert
     backup_section_start = mk_content.find("\nbackup:")
     if backup_section_start >= 0:
-        backup_section = mk_content[backup_section_start:backup_section_start + 500]
+        backup_section = mk_content[backup_section_start : backup_section_start + 500]
         for cert_ref in ["s3-ssl-cache", "issue-cert", "letsencrypt"]:
             if cert_ref in backup_section:
                 logger.warning(
-                    "[IMP:7][test_coverage] make backup references %s — "
-                    "SSL certs would be double-backed up", cert_ref
+                    "[IMP:7][test_coverage] make backup references %s — SSL certs would be double-backed up", cert_ref
                 )
 
     logger.critical(
@@ -301,26 +291,20 @@ def test_backup_app_data_stub_no_cert_scope_creep():
     content = _read_script(BACKUP_SCRIPTS["app_data"])
 
     # Must be a stub
-    assert "stub" in content.lower() or "STUB" in content, (
-        "backup-app-data.sh must be a stub in Phase 02"
-    )
+    assert "stub" in content.lower() or "STUB" in content, "backup-app-data.sh must be a stub in Phase 02"
     assert "phase 02" in content.lower() or "phase-02" in content.lower() or "phase_02" in content.lower(), (
         "Must reference Phase 02"
     )
 
     # Must NOT reference SSL certs
-    for ref in ["fullchain", "privkey", "letsencrypt", "acme.sh",
-                 "s3-ssl-cache", "issue-cert"]:
+    for ref in ["fullchain", "privkey", "letsencrypt", "acme.sh", "s3-ssl-cache", "issue-cert"]:
         if ref in content:
             logger.warning(
-                "[IMP:7][test_app_data_stub] backup-app-data.sh references %s — "
-                "possible scope overlap with SSL cache", ref
+                "[IMP:7][test_app_data_stub] backup-app-data.sh references %s — possible scope overlap with SSL cache",
+                ref,
             )
 
-    logger.critical(
-        "[IMP:9][test_app_data_stub] ASSERT: backup-app-data.sh = Phase 02 stub, "
-        "no SSL cert scope"
-    )
+    logger.critical("[IMP:9][test_app_data_stub] ASSERT: backup-app-data.sh = Phase 02 stub, no SSL cert scope")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -364,13 +348,12 @@ def test_issue_cert_saves_all_4_files_to_s3():
 
     if issue_line >= 0 and upload_line >= 0:
         assert upload_line > issue_line, (
-            f"S3 upload (line {upload_line}) must happen AFTER "
-            f"issue_tls_cert success (line {issue_line})"
+            f"S3 upload (line {upload_line}) must happen AFTER issue_tls_cert success (line {issue_line})"
         )
         logger.info(
-            "[IMP:8][test_issue_flow] issue_tls_cert at line %d → "
-            "s3-ssl-cache.sh upload at line %d — ordering OK",
-            issue_line, upload_line,
+            "[IMP:8][test_issue_flow] issue_tls_cert at line %d → s3-ssl-cache.sh upload at line %d — ordering OK",
+            issue_line,
+            upload_line,
         )
     else:
         logger.info(
@@ -379,23 +362,18 @@ def test_issue_cert_saves_all_4_files_to_s3():
         )
 
     # The upload must be non-fatal (WARN on failure, not FAIL)
-    assert "WARN" in content, (
-        "S3 save failure must be non-fatal (WARN, not FAIL)"
-    )
+    assert "WARN" in content, "S3 save failure must be non-fatal (WARN, not FAIL)"
 
     # The S3 cache upload happens in main() after issue_tls_cert
     # Look for the section that has both issue_tls_cert and s3_cache
     issue_section = content.find("if ! issue_tls_cert")
     if issue_section >= 0:
         # Check that upload follows within 40 lines
-        after_issue = content[issue_section:issue_section + 2000]
+        after_issue = content[issue_section : issue_section + 2000]
         assert "s3-ssl-cache.sh" in after_issue, (
-            "s3-ssl-cache.sh upload must be called in main() after "
-            "issue_tls_cert success (within 40 lines)"
+            "s3-ssl-cache.sh upload must be called in main() after issue_tls_cert success (within 40 lines)"
         )
-        assert "upload" in after_issue, (
-            "s3-ssl-cache.sh upload must be called after issue_tls_cert"
-        )
+        assert "upload" in after_issue, "s3-ssl-cache.sh upload must be called after issue_tls_cert"
 
     logger.critical(
         "[IMP:9][test_issue_flow] ASSERT: issue-cert.sh calls "
@@ -421,37 +399,25 @@ def test_state_machine_full_bootstrap_restore_flow():
     content = _read_script(CERT_SCRIPTS["state_machine"])
 
     # Must have _ssl_provision function
-    assert "def _ssl_provision" in content, (
-        "state_machine.py must have _ssl_provision() function"
-    )
+    assert "def _ssl_provision" in content, "state_machine.py must have _ssl_provision() function"
 
     # Must reference s3-ssl-cache.sh
-    assert "s3-ssl-cache.sh" in content, (
-        "_ssl_provision() must reference s3-ssl-cache.sh"
-    )
+    assert "s3-ssl-cache.sh" in content, "_ssl_provision() must reference s3-ssl-cache.sh"
 
     # Must check S3 cache first
-    assert "s3_cache_check" in content, (
-        "_ssl_provision() must call s3-ssl-cache.sh check (s3_cache_check)"
-    )
+    assert "s3_cache_check" in content, "_ssl_provision() must call s3-ssl-cache.sh check (s3_cache_check)"
 
     # Must attempt download on cache hit
-    assert "s3_cache_download" in content, (
-        "_ssl_provision() must call s3-ssl-cache.sh download (s3_cache_download)"
-    )
+    assert "s3_cache_download" in content, "_ssl_provision() must call s3-ssl-cache.sh download (s3_cache_download)"
 
     # Must have the return statement to skip issue-cert.sh on successful restore
-    assert "cert_path" in content, (
-        "_ssl_provision() must check cert_path after download"
-    )
+    assert "cert_path" in content, "_ssl_provision() must check cert_path after download"
     assert "return" in content.split("download")[-1] if "download" in content else True, (
         "_ssl_provision() must return early on successful S3 restore (skip issue)"
     )
 
     # Must fallback to issue-cert.sh
-    assert "ssl_issue" in content, (
-        "_ssl_provision() must call issue-cert.sh (ssl_issue) on cache miss"
-    )
+    assert "ssl_issue" in content, "_ssl_provision() must call issue-cert.sh (ssl_issue) on cache miss"
 
     # Verify ordering: S3 check before issue
     lines = content.split("\n")
@@ -463,15 +429,16 @@ def test_state_machine_full_bootstrap_restore_flow():
 
     assert ssl_section_start >= 0, "Could not find _ssl_provision() definition"
 
-    section = "\n".join(lines[ssl_section_start:ssl_section_start + 80])
+    section = "\n".join(lines[ssl_section_start : ssl_section_start + 80])
     s3_check_idx = section.find("s3_cache_check")
     s3_dl_idx = section.find("s3_cache_download")
     ssl_issue_idx = section.find("ssl_issue")
 
     logger.info(
-        "[IMP:7][test_restore_flow] _ssl_provision() positions: "
-        "s3_cache_check=%d s3_cache_download=%d ssl_issue=%d",
-        s3_check_idx, s3_dl_idx, ssl_issue_idx,
+        "[IMP:7][test_restore_flow] _ssl_provision() positions: s3_cache_check=%d s3_cache_download=%d ssl_issue=%d",
+        s3_check_idx,
+        s3_dl_idx,
+        ssl_issue_idx,
     )
 
     # S3 check must exist
@@ -488,13 +455,14 @@ def test_state_machine_full_bootstrap_restore_flow():
         logger.warning(
             "[IMP:7][test_restore_flow] S3 check (%d) is AFTER issue (%d) — "
             "optimization opportunity: S3 cache should be checked before acme.sh",
-            s3_check_idx, ssl_issue_idx,
+            s3_check_idx,
+            ssl_issue_idx,
         )
     else:
         logger.info(
-            "[IMP:7][test_restore_flow] S3 cache check (%d) precedes "
-            "issue-cert.sh (%d) — correct ordering",
-            s3_check_idx, ssl_issue_idx,
+            "[IMP:7][test_restore_flow] S3 cache check (%d) precedes issue-cert.sh (%d) — correct ordering",
+            s3_check_idx,
+            ssl_issue_idx,
         )
 
     logger.critical(
@@ -534,9 +502,7 @@ def test_s3_restore_validates_cert_after_download():
         )
 
     # _s3_check must use openssl -checkend for expiry validation
-    assert "checkend" in s3_content, (
-        "s3-ssl-cache.sh must use openssl -checkend for cert expiry validation"
-    )
+    assert "checkend" in s3_content, "s3-ssl-cache.sh must use openssl -checkend for cert expiry validation"
 
     logger.critical(
         "[IMP:9][test_restore_validate] ASSERT: S3 restore validates cert "
@@ -563,9 +529,7 @@ def test_s3_unavailable_does_not_block_cert_issue():
 
     # The s3-ssl-cache.sh call must be non-fatal
     # Look for WARN log around the s3-ssl-cache.sh upload call
-    assert "WARN" in content, (
-        "issue-cert.sh must log WARN (not FAIL) if S3 upload fails"
-    )
+    assert "WARN" in content, "issue-cert.sh must log WARN (not FAIL) if S3 upload fails"
 
     # The cert is saved to /etc/letsencrypt/live/ BEFORE the S3 upload attempt
     # Verify the cert installation happens before S3 call
@@ -580,20 +544,18 @@ def test_s3_unavailable_does_not_block_cert_issue():
 
     if cert_install_line >= 0 and s3_upload_line >= 0:
         assert cert_install_line < s3_upload_line, (
-            f"Cert installation (line {cert_install_line}) must happen "
-            f"BEFORE S3 upload (line {s3_upload_line})"
+            f"Cert installation (line {cert_install_line}) must happen BEFORE S3 upload (line {s3_upload_line})"
         )
         logger.info(
             "[IMP:8][test_s3_nonfatal] Cert install at line %d → "
             "S3 upload at line %d — cert exists locally even if S3 fails",
-            cert_install_line, s3_upload_line,
+            cert_install_line,
+            s3_upload_line,
         )
 
     # Also check: s3-ssl-cache.sh should validate S3 credentials and degrade gracefully
     s3_content = _read_script(CERT_SCRIPTS["s3_cache"])
-    assert "WARN" in s3_content, (
-        "s3-ssl-cache.sh must log WARN on S3 failure (not FAIL)"
-    )
+    assert "WARN" in s3_content, "s3-ssl-cache.sh must log WARN on S3 failure (not FAIL)"
 
     logger.critical(
         "[IMP:9][test_s3_nonfatal] ASSERT: S3 unavailability does NOT block "
@@ -620,25 +582,18 @@ def test_dev_certs_not_backed_up_gap():
     with open(gitignore_path) as f:
         gitignore_content = f.read()
 
-    assert "dev-certs" in gitignore_content, (
-        "dev-certs must be in .gitignore"
-    )
+    assert "dev-certs" in gitignore_content, "dev-certs must be in .gitignore"
     logger.info("[IMP:7][test_dev_certs] dev-certs is gitignored — confirmed")
 
     # Verify make backup does NOT reference dev-certs
     for name, path in BACKUP_SCRIPTS.items():
         script_content = _read_script(path)
         if "dev-certs" in script_content or "dev_certs" in script_content:
-            logger.warning(
-                "[IMP:7][test_dev_certs] %s references dev-certs — "
-                "dev certs would be in backup", name
-            )
+            logger.warning("[IMP:7][test_dev_certs] %s references dev-certs — dev certs would be in backup", name)
 
     # Verify S3 cache does NOT reference dev-certs
     s3_content = _read_script(CERT_SCRIPTS["s3_cache"])
-    assert "dev-certs" not in s3_content, (
-        "S3 SSL cache must not reference dev-certs — they are LE-only"
-    )
+    assert "dev-certs" not in s3_content, "S3 SSL cache must not reference dev-certs — they are LE-only"
 
     logger.critical(
         "[IMP:9][test_dev_certs] ASSERT: dev-certs are gitignored, "
@@ -666,33 +621,32 @@ def test_node_lifecycle_update_step_calls_ssl_provision():
     content = _read_script(CERT_SCRIPTS["state_machine"])
 
     # Must reference ssl_provision step
-    assert "ssl_provision" in content, (
-        "state_machine.py must have ssl_provision step"
-    )
+    assert "ssl_provision" in content, "state_machine.py must have ssl_provision step"
 
     # Must have the step in the init step list
     # In state_machine.py the steps are typically in an ordered list or dict
     # Look for "ssl_provision" in the step definitions
     lines = content.split("\n")
     step_def_lines = []
-    for i, line in enumerate(lines):
+    for _i, line in enumerate(lines):
         # Look for step lists — various formats
-        if "ssl_provision" in line and ("step" in line.lower() or "init" in line.lower()
-                                        or "update" in line.lower() or '"' in line
-                                        or "'" in line or "ssl_provision" in line):
+        if "ssl_provision" in line and (
+            "step" in line.lower()
+            or "init" in line.lower()
+            or "update" in line.lower()
+            or '"' in line
+            or "'" in line
+            or "ssl_provision" in line
+        ):
             step_def_lines.append(line.strip())
 
-    assert step_def_lines, (
-        "ssl_provision must appear in a step definition (init or update steps)"
-    )
+    assert step_def_lines, "ssl_provision must appear in a step definition (init or update steps)"
     for line in step_def_lines:
         logger.info("[IMP:8][test_step_list] %s", line)
 
     # Verify the step has a handler mapping
     # Look for something like: "ssl_provision": handler_function
-    assert "_ssl_provision" in content, (
-        "There must be a handler function _ssl_provision() for the ssl_provision step"
-    )
+    assert "_ssl_provision" in content, "There must be a handler function _ssl_provision() for the ssl_provision step"
 
     logger.critical(
         "[IMP:9][test_step_list] ASSERT: node-lifecycle update step 3 calls "

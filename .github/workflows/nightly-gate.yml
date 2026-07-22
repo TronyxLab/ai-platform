@@ -102,11 +102,10 @@ jobs:
 
       # ── Stage 4b: Generate module list ──────────────────────────────────
       # Single Source of Truth: module list generated from core/modules/*/module.yaml
+      # StatusReport 046 T2 (CICD-01a): inline python3 → composite action discover-modules
       - name: Generate module list
         id: module_list
-        run: |
-          python3 -c "import json; from pathlib import Path; modules=[]; [modules.append('core/modules/'+m.parent.name+'/docker-compose.base.yml') for m in sorted(Path('core/modules').glob('*/module.yaml')) if 'install_type: system' not in m.read_text()]; print(json.dumps(modules))" > /tmp/module_list.json
-          echo "[IMP:8][module-list] Generated module list"
+        uses: ./.github/actions/discover-modules
 
       # ── Stage 5: Cleanup Docker resources ──────────────────────────
       - name: Cleanup Docker resources
@@ -119,7 +118,7 @@ jobs:
                 docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
                 docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
               fi
-            done < <(python3 -c "import json; [print(f) for f in json.load(open('/tmp/module_list.json'))]")
+            done < <(python3 core/internal/scripts/module_discovery.py --format lines)
           else
             echo "[cleanup] Module list not found — skipping cleanup"
           fi

@@ -263,11 +263,11 @@ repos:
         stages: [pre-commit]
 
       - id: no-new-inline-python3
-        name: Block new inline python3 in shell scripts
-        description: "Language policy enforcement: blocks adding new python3 -c / heredoc under core/. See AGENTS.md §Языковая политика"
+        name: Block new inline python3 in shell and CI workflow files
+        description: "Language policy enforcement: blocks adding new python3 -c / heredoc under core/ and .github/*.yml. See AGENTS.md §Языковая политика"
         entry: bash core/internal/hooks/check-no-new-inline-python3.sh
         language: system
-        files: '^core/.*\.sh$'
+        files: '^(core/.*\.sh|\.github/.*\.ya?ml)$'
         pass_filenames: false
         always_run: false
         stages: [pre-commit]

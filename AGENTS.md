@@ -27,6 +27,12 @@
 ## · Rejected: Big-bang rewrite (risk: 4114 LOC top-3 монолиты → один PR — слишком высокий риск регрессии)
 ## · Reason: Strangler-Fig (пошаговая декомпозиция бизнес-логики в Python + unit-тесты + shell-фасад) выбран как canonical pattern на основе Wave 4 (035-wave4-strangler-top3). Каждый из топ-3 скриптов (deploy-modules, converge, node-lifecycle) разбит независимо: Python-модуль получает бизнес-логику, shell остаётся тонким фасадом (<100-200 LOC). Результат: 4114→392 LOC shell (90% сокращение), 0 inline python3 блоков, 7 новых unit-тестов.
 ## · Rev: если новый shell-скрипт достигает >500 LOC с inline python3 → применять Strangler-Fig немедленно, без утверждения архитектором.
+## ⚠️ TRAP[DECISION] · 2026-07-22 · HI · Bootstrap pipeline redesign — deploy-context as step 18 (index 23)
+## · Rejected: Option A (full rewrite of state machine, risk: regression after Decision Gate HARD STOP)
+## · Reason: Option B (evolutionary extension) preserves invariants, adds 4 components: preflight.py gate, docker_registry_auth.py step (index 5), cert_orchestrator.py, context_deployer.py step (index 23). Solves StatusReport 045 problems (projects not deployed, certs missing, Docker Hub rate-limit).
+## · Constraint: 1 node = 1 context (CONTEXT extracted from node.yaml context field). No multi-context ambiguity.
+## · ⚠️ Shell facade step functions renumbered (indices 5→6 through 21→22) — see TRAP[INDEX] in DevPlan 047.
+## · Rev: if deploy-context step adds >5min to bootstrap → make it async (background job + telegram notify)
 # endregion MODULE_CONTRACT
 
 # AGENTS.md — ai-platform
@@ -86,6 +92,7 @@
 |--------|--------|----------|
 | ✅ | `deploy` | Деплой проекта (git push → CI → forced-command) |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды (LIFE CYCLE/INIT) |
+| ✅ | `deploy-context` | Деплой всех проектов контекста на ноде (post-bootstrap, standalone) |
 | ✅ | `dev-certs` | Генерация dev SSL-сертификатов (make dev-certs → generate-dev-certs.sh) |
 | ✅ | `context-promote` | Промоут платформы в контекстную org |
 | ✅ | `discover-modules` | Авто-обнаружение модулей и обновление docker-compose.yml include-секции (make discover-modules → discover_modules.py) |

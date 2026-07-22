@@ -1,20 +1,24 @@
-# GREP_SUMMARY: sha-resolve composite-action sha-verification platform-test workflow_run workflow_dispatch
-# STRUCTURE: inputs:verify(default:true) → ○ resolve SHA from event context → ◇ verify platform-test:SHA succeeds → ⎋ sha output
+# GREP_SUMMARY: sha-resolve composite-action sha-verification platform-test workflow_run workflow_dispatch skip-output
+# STRUCTURE: inputs:verify(default:true) → ○ resolve SHA from event context → ◇ verify platform-test:SHA succeeds → ⊕ skip output → ⎋ sha+skip outputs
 # region MODULE_CONTRACT
 ## @purpose  Canonical SHA resolution + platform-test verification in one composite action.
 ##           Eliminates 3× duplicate SHA resolution blocks across workflows (build-platform,
-##           mirror) with a single Source of Truth for SHA-aware aggregator pattern.
-## @scope    Used by build-platform.yml, mirror.yml and similar workflows that need to
-##           resolve SHA from workflow_run or workflow_dispatch event and verify that
+##           mirror, core-deploy) with a single Source of Truth for SHA-aware aggregator pattern.
+## @scope    Used by build-platform.yml, mirror.yml, core-deploy.yml and similar workflows that need
+##           to resolve SHA from workflow_run or workflow_dispatch event and verify that
 ##           platform-test succeeded for that commit.
 ## @invariants
 ##   - Resolves SHA from workflow_run.head_sha or github.sha depending on event
 ##   - When verify=true (default): calls GitHub API to verify platform-test success for SHA
 ##   - When verify=false: only resolves SHA without API call (for workflows without gating)
 ##   - Requires GH_TOKEN env when verify=true (set at action level)
-## @rationale  SHA-aware aggregator (D4) pattern was duplicated across build-platform.yml
-##             and mirror.yml with identical 15-line blocks. Consolidation reduces drift risk.
+##   - skip output: 'true' if verification failed (downstream should skip), 'false' otherwise.
+##     Only meaningful when verify=true. Document in downstream: `if: steps.<id>.outputs.skip != 'true'`
+## @rationale SHA-aware aggregator (D4) pattern was duplicated across build-platform.yml, mirror.yml
+##            and core-deploy.yml with identical blocks. Consolidation reduces drift risk.
+##            StatusReport 046 T7 (CICD-03): added `skip` output to absorb core-deploy.yml inline logic.
 ## @changes — 2026-07-16 | Extracted from build-platform.yml + mirror.yml per DevPlan 017 T12
+##           — 2026-07-22 | Added `skip` output for core-deploy.yml migration (StatusReport 046 T7 — CICD-03)
 # endregion MODULE_CONTRACT
 
 name: 'Resolve SHA'
@@ -30,6 +34,9 @@ outputs:
   sha:
     description: 'Resolved commit SHA'
     value: ${{ steps.resolve.outputs.sha }}
+  skip:
+    description: 'Whether downstream steps should be skipped (true if verification failed). Only meaningful when verify=true.'
+    value: ${{ steps.verify.outputs.skip }}
 
 runs:
   using: 'composite'
@@ -52,8 +59,14 @@ runs:
         echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
     # ─── Step 2: Verify platform-test success (optional) ─────────────────
+    # StatusReport 046 T7 (CICD-03): added skip output for core-deploy.yml migration.
+    # ⚠️ TRAP[DESIGN] · 2026-07-22 · MED · `skip` output — leaky abstraction
+    # · sha-resolve изначально stateless SHA resolver. `skip` делает его осведомлённым о downstream flow.
+    # · Mitigation: skip существует только когда verify=true. Semantically transparent:
+    # ·   `if: steps.sha.outputs.skip != 'true'` reads naturally.
     - name: Verify platform-test succeeded for SHA
       if: inputs.verify == 'true'
+      id: verify
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -67,7 +80,9 @@ runs:
 
         if [ "$COUNT" -eq 0 ]; then
           echo "[IMP:10][sha-resolve][verify] ERROR: platform-test has no successful run for SHA $SHA"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
         echo "[IMP:9][sha-resolve][verify] platform-test succeeded for SHA $SHA"
+        echo "skip=false" >> "$GITHUB_OUTPUT"

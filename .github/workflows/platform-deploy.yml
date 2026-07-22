@@ -90,14 +90,14 @@ jobs:
       - name: Read ai-platform.yaml
         id: project
         run: |
-          # [IMP:8][deploy][read-yaml] Parse ai-platform.yaml for target_node and staging flag
-          STAGING=$(python3 -c "
-          import yaml, sys
-          with open('${{ inputs.project_yaml_path }}') as f:
-              d = yaml.safe_load(f)
-          envs = d.get('environments', {})
-          print('true' if envs.get('staging', False) else 'false')
-          " 2>/dev/null || echo "false")
+          # [IMP:8][deploy][read-yaml] Parse ai-platform.yaml for staging flag
+          # StatusReport 046 T4 (CICD-01c): inline python3 → yaml_query.py
+          # --json-output ensures lowercase bool (true/false) for shell comparison
+          STAGING=$(python3 core/internal/scripts/yaml_query.py \
+            --file "${{ inputs.project_yaml_path }}" \
+            --get environments.staging \
+            --default false \
+            --json-output 2>/dev/null || echo "false")
           echo "staging=${STAGING}" >> "$GITHUB_OUTPUT"
 
       - name: Set Docker Hub env

@@ -483,6 +483,44 @@ def test_init_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monk
     logger.critical("[IMP:9][test] Init flow completed all 21 steps — OK")
 
 
+# 🧪 TRAP[TEST] · Regression · INIT_STEPS has 23 entries (DevPlan 047: +docker_auth, +deploy_context)
+# · Scenario: Check len(INIT_STEPS) == 23 after DevPlan 047 extension
+# · Last fail: N/A (new test — DevPlan 047)
+# · Remove if: INIT_STEPS count changes after another pipeline extension
+@ldd_trajectory
+def test_init_steps_count_devplan_047(caplog):
+    """INIT_STEPS should have 23 entries after DevPlan 047 extension."""
+    assert len(sm.INIT_STEPS) == 23, f"Expected 23 init steps, got {len(sm.INIT_STEPS)}"
+    assert sm.INIT_STEPS[4] == "docker_auth", f"Expected docker_auth at index 5, got {sm.INIT_STEPS[4]}"
+    assert sm.INIT_STEPS[22] == "deploy_context", f"Expected deploy_context at index 23, got {sm.INIT_STEPS[22]}"
+    logger.critical("[IMP:9][test] INIT_STEPS count=23 (DevPlan 047) — docker_auth + deploy_context present")
+
+
+# 🧪 TRAP[TEST] · Regression · UPDATE_STEPS has 8 entries (DevPlan 047: +deploy_context)
+# · Scenario: Check len(UPDATE_STEPS) == 8 after DevPlan 047 extension
+# · Last fail: N/A (new test — DevPlan 047)
+# · Remove if: UPDATE_STEPS count changes
+@ldd_trajectory
+def test_update_steps_count_devplan_047(caplog):
+    """UPDATE_STEPS should have 8 entries after DevPlan 047 extension."""
+    assert len(sm.UPDATE_STEPS) == 8, f"Expected 8 update steps, got {len(sm.UPDATE_STEPS)}"
+    assert sm.UPDATE_STEPS[7] == "deploy_context", f"Expected deploy_context at index 8, got {sm.UPDATE_STEPS[7]}"
+    logger.critical("[IMP:9][test] UPDATE_STEPS count=8 (DevPlan 047) — deploy_context present")
+
+
+# 🧪 TRAP[TEST] · Regression · --context CLI arg sets CONTEXT env var (DevPlan 047)
+# · Scenario: Parse --context test-ctx → CONTEXT env var should be settable
+# · Last fail: N/A (new test — DevPlan 047)
+# · Remove if: --context arg removed
+@ldd_trajectory
+def test_cli_context_arg(caplog):
+    """CLI should parse --context correctly (DevPlan 047)."""
+    parser = sm.build_parser()
+    args = parser.parse_args(["--mode", "init", "--context", "test-ctx"])
+    assert args.context == "test-ctx"
+    logger.critical("[IMP:9][test] CLI --context parsed (DevPlan 047) — OK")
+
+
 # 🧪 TRAP[TEST] · Regression · ssh_access step fails without root
 # · Scenario: os.geteuid() returns non-zero → _execute_init_step raises RuntimeError
 # · Last fail: N/A (new test)

@@ -71,42 +71,47 @@ def _safe_update_hash(hasher: hashlib._Hash, path: str) -> None:
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
-INIT_STEP_COUNT = 17
-UPDATE_STEP_COUNT = 7
+# DevPlan 047: INIT_STEP_COUNT 17→23 (added docker_auth at index 5, deploy_context at index 23)
+INIT_STEP_COUNT = 23
+UPDATE_STEP_COUNT = 8
 
 # Step name → index mapping (1-indexed, matches state.json keys)
+# DevPlan 047: docker_auth inserted at position 5 (shifts 5→6...21→22), deploy_context at 23
 INIT_STEPS: list[str] = [
     "ssh_access",  # 1
     "apt_deps",  # 2
     "tor_proxy",  # 3 (conditional — TOR_ENABLED)
     "install_docker",  # 4
-    "create_platform_user",  # 5
-    "create_ci_deploy_user",  # 6
-    "create_projects_base",  # 6b
-    "firewall",  # 7
-    "verify_core",  # 8
-    "verify_node_configs",  # 9
-    "decrypt_secrets",  # 10
-    "ensure_secrets",  # 12b
-    "secrets_init",  # secrets-init (between 12b and 11)
-    "read_node_yaml",  # 11 (after secrets so schema validation can use secrets)
-    "ghcr_auth",  # 12
-    "sudoers",  # 13
-    "install_acme",  # 13b
-    "node_update",  # 14
-    "converge",  # 15
-    "audit_log",  # 16
-    "telegram",  # 17
+    "docker_auth",  # 5 ← NEW (DevPlan 047): Docker Hub auth + registry-mirror
+    "create_platform_user",  # 6 (was 5)
+    "create_ci_deploy_user",  # 7 (was 6)
+    "create_projects_base",  # 8 (was 6b/7)
+    "firewall",  # 9 (was 7/8)
+    "verify_core",  # 10 (was 8/9)
+    "verify_node_configs",  # 11 (was 9/10)
+    "decrypt_secrets",  # 12 (was 10/11)
+    "ensure_secrets",  # 13 (was 12b)
+    "secrets_init",  # 14 (was secrets-init)
+    "read_node_yaml",  # 15 (was 11/14)
+    "ghcr_auth",  # 16 (was 12/15)
+    "sudoers",  # 17 (was 13/16)
+    "install_acme",  # 18 (was 13b/17)
+    "node_update",  # 19 (was 14/18)
+    "converge",  # 20 (was 15/19)
+    "audit_log",  # 21 (was 16/20)
+    "telegram",  # 22 (was 17/21)
+    "deploy_context",  # 23 ← NEW (DevPlan 047): bulk cert restore + context projects + verify
 ]
 
 UPDATE_STEPS: list[str] = [
     "verify_core",  # 1
     "provision",  # 2
-    "deliver_overlays",  # 2.5
-    "ssl_provision",  # 3
-    "deploy_modules",  # 4
+    "deliver_overlays",  # 2.5/3
+    "ssl_provision",  # 3/4
+    "deploy_modules",  # 4/5
     "healthcheck",  # 6
     "converge",  # 7 (after healthcheck)
+    "deploy_context",  # 8 ← NEW (DevPlan 047): incremental project deploy + cert check
 ]
 
 
@@ -705,6 +710,7 @@ Examples:
     parser.add_argument("--chat-id", help="Telegram chat ID")
     parser.add_argument("--proxy-url", default="http://127.0.0.1:8118", help="Telegram proxy URL")
     parser.add_argument("--auto-reconcile", action="store_true", help="Auto-reconcile after converge")
+    parser.add_argument("--context", help="Deployment context name (CONTEXT — DevPlan 047)")
     return parser
 
 
@@ -757,6 +763,9 @@ def main() -> int:
         os.environ.setdefault("FIREWALL_EXTRA_PORTS", args.extra_ports)
     if args.auto_reconcile:
         os.environ["AUTO_RECONCILE"] = "true"
+    # DevPlan 047: --context CLI arg → CONTEXT env var
+    if args.context:
+        os.environ.setdefault("CONTEXT", args.context)
 
     # Create state machine
     sm = StateMachine(state_file_path=args.state_file)
@@ -1010,6 +1019,23 @@ def _execute_init_step(
         install_script = os.path.join(core_dir, "internal", "bootstrap", "install-docker.sh")
         _subprocess_run(["bash", install_script], "install_docker")
 
+    elif step_name == "docker_auth":
+        # DevPlan 047: Docker Hub auth + registry-mirror (step index 5)
+        bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
+        auth_script = os.path.join(bootstrap_dir, "docker_registry_auth.py")
+        username = os.environ.get("DOCKER_HUB_USERNAME", "")
+        token = os.environ.get("DOCKER_HUB_TOKEN", "")
+        if not username or not token:
+            logger.warning("[IMP:7][init][docker_auth] Docker Hub creds not set — rate-limit may apply")
+        elif os.path.isfile(auth_script):
+            _subprocess_run(
+                ["python3", auth_script],
+                "docker_auth",
+                non_fatal=True,
+            )
+        else:
+            logger.warning("[IMP:7][init][docker_auth] docker_registry_auth.py not found — skipping")
+
     elif step_name == "create_platform_user":
         _create_user("platform", ["docker"])
         owner_key = os.environ.get("PLATFORM_OWNER_KEY", "")
@@ -1091,6 +1117,14 @@ def _execute_init_step(
     elif step_name == "telegram":
         _send_telegram(sm)
 
+    elif step_name == "deploy_context":
+        # DevPlan 047: deploy_context step (init index 23, update index 8)
+        # Delegates to steps._step_deploy_context for cert orchestration + project deploy + verify
+        if _steps and hasattr(_steps, "_step_deploy_context"):
+            _steps._step_deploy_context(core_dir, node_name, node_yaml)
+        else:
+            _step_deploy_context_inline(core_dir, node_name, node_yaml)
+
 
 # endregion EXECUTE_INIT_STEP
 
@@ -1156,6 +1190,13 @@ def _execute_update_step(
                 converge_args.append("--reconcile")
             _subprocess_run(converge_args, "converge", non_fatal=True)
 
+    elif step_name == "deploy_context":
+        # DevPlan 047: incremental project deploy + cert check (update step 8)
+        if _steps and hasattr(_steps, "_step_deploy_context"):
+            _steps._step_deploy_context(core_dir, node_name, node_yaml)
+        else:
+            _step_deploy_context_inline(core_dir, node_name, node_yaml)
+
 
 # endregion EXECUTE_UPDATE_STEP
 
@@ -1189,6 +1230,14 @@ def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
         "deliver_overlays": [os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")],
         "ssl_provision": [os.path.join(core_dir, "internal", "bootstrap", "issue-cert.sh")],
         "deploy_modules": [os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")],
+        # DevPlan 047: new step paths
+        "docker_auth": [os.path.join(core_dir, "internal", "bootstrap", "docker_registry_auth.py")],
+        "deploy_context": [
+            os.path.join(core_dir, "internal", "bootstrap", "deploy", "context_deployer.py"),
+            os.path.join(core_dir, "internal", "bootstrap", "cert_orchestrator.py"),
+            os.path.join(core_dir, "internal", "verify", "verify-domains.sh"),
+            os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh"),
+        ],
         "verify_core": [
             os.path.join(core_dir, "lib", "checkpoint.sh"),
             os.path.join(core_dir, "internal", "bootstrap", "content-hash.sh"),
@@ -1829,6 +1878,177 @@ def _send_telegram(sm: StateMachine) -> None:
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
     except Exception as e:
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
+
+
+# region FUNC_step_deploy_context_inline
+## @purpose — Inline fallback for deploy_context step when steps.py is unavailable.
+##            Orchestrates cert restore + project deploy + vhost render + verify.
+##            DevPlan 047 Phase 5.
+## @io — ⇥ core_dir: str, node_name: str, node_yaml: str → ⎋ None (non-fatal)
+## @complexity — O(D * P) where D = domains, P = projects
+## @invariants
+##   - Extracts CONTEXT from env or node.yaml
+##   - Calls cert_orchestrator.orchestrate_certs for all domains
+##   - Calls context_deployer.deploy_context_projects for context projects
+##   - Renders vhosts via add-vhost.sh
+##   - Runs verify-domains.sh (non-fatal)
+def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -> None:
+    """Deploy context: certs + projects + vhosts + verify (inline fallback)."""
+    bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
+
+    # Extract context
+    context = os.environ.get("CONTEXT", "")
+    if not context and node_yaml and os.path.isfile(node_yaml):
+        context = _extract_context_from_node_yaml(node_yaml)
+    if not context:
+        logger.error(
+            "[IMP:10][deploy_context] CONTEXT not set and cannot be extracted from node.yaml — skipping deploy_context"
+        )
+        return
+
+    logger.info("[IMP:9][deploy_context] Starting deploy_context (context=%s, node=%s)", context, node_name)
+
+    # ── 18.2 + 18.3: Cert orchestration ──
+    domains = _extract_domains(node_yaml, context)
+    s3_cache_script = os.path.join(bootstrap_dir, "s3-ssl-cache.sh")
+    issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
+    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+
+    if domains:
+        try:
+            # Import cert_orchestrator from bootstrap package
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location(
+                "cert_orchestrator",
+                os.path.join(bootstrap_dir, "cert_orchestrator.py"),
+            )
+            if spec and spec.loader:
+                cert_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cert_mod)
+                cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
+            else:
+                logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py — skipping cert orchestration")
+        except Exception as e:
+            logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s", e)
+    else:
+        logger.info("[IMP:7][deploy_context] No domains to orchestrate certs for")
+
+    # ── 18.4: Deploy context projects ──
+    try:
+        import importlib.util
+
+        deployer_path = os.path.join(bootstrap_dir, "deploy", "context_deployer.py")
+        spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
+        if spec and spec.loader:
+            deployer_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(deployer_mod)
+            deployer_mod.deploy_context_projects(node_yaml, context)
+        else:
+            logger.warning("[IMP:7][deploy_context] Cannot load context_deployer.py — skipping project deploy")
+    except Exception as e:
+        logger.warning("[IMP:7][deploy_context] Project deploy failed (non-fatal): %s", e)
+
+    # ── 18.5: Render vhosts ──
+    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
+    if os.path.isfile(vhost_script):
+        _subprocess_run(
+            ["bash", vhost_script, "--render-all", "--node", node_name],
+            "render_vhosts",
+            non_fatal=True,
+        )
+    # Reload nginx if running
+    _subprocess_run(["docker", "exec", "nginx", "nginx", "-s", "reload"], "nginx_reload", non_fatal=True)
+
+    # ── 18.6: Final verify ──
+    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
+    if os.path.isfile(verify_script):
+        _subprocess_run(["bash", verify_script, node_name], "final_verify", non_fatal=True)
+
+    logger.info("[IMP:9][deploy_context] deploy_context complete")
+
+
+# endregion FUNC_step_deploy_context_inline
+
+
+# region FUNC_extract_context_from_node_yaml
+## @purpose — Extract context name from node.yaml. One node = one context.
+##            Reads context (string) or contexts[0].name (array, first element).
+## @io — ⇥ node_yaml_path: str → ⎋ str (empty if not found)
+## @complexity — O(N) for YAML parse
+def _extract_context_from_node_yaml(node_yaml_path: str) -> str:
+    """Extract context name from node.yaml."""
+    try:
+        import yaml
+
+        with open(node_yaml_path) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            return ""
+        ctx = data.get("context", "")
+        if ctx and isinstance(ctx, str):
+            logger.info("[IMP:8][context] Context from node.yaml context field: %s", ctx)
+            return ctx
+        contexts = data.get("contexts", [])
+        if contexts and isinstance(contexts, list) and len(contexts) > 0:
+            first = contexts[0]
+            if isinstance(first, dict):
+                ctx = first.get("name", "")
+            elif isinstance(first, str):
+                ctx = first
+            if ctx:
+                logger.info("[IMP:8][context] Context from node.yaml contexts[0].name: %s", ctx)
+                return ctx
+    except Exception as e:
+        logger.warning("[IMP:7][context] Failed to parse %s: %s", node_yaml_path, e)
+    return ""
+
+
+# endregion FUNC_extract_context_from_node_yaml
+
+
+# region FUNC_extract_domains
+## @purpose — Extract all domains from node.yaml for cert orchestration.
+##            Combines platform domain + project domains (filtered by context).
+## @io — ⇥ node_yaml_path: str, context: str → ⎋ list[str]
+## @complexity — O(N) for YAML parse
+def _extract_domains(node_yaml_path: str, context: str) -> list[str]:
+    """Extract all domains from node.yaml for cert orchestration."""
+    domains: list[str] = []
+    try:
+        import yaml
+
+        with open(node_yaml_path) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            return domains
+        # Platform domain
+        domain = data.get("domain", "")
+        if not domain:
+            node_info = data.get("node", {})
+            if isinstance(node_info, dict):
+                domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
+        if domain:
+            domains.append(domain)
+        # Project domains (filtered by context)
+        projects = data.get("projects", [])
+        if isinstance(projects, list):
+            for p in projects:
+                if not isinstance(p, dict):
+                    continue
+                proj_context = p.get("context", "")
+                # Include if context matches or project has no context field
+                if context and proj_context and proj_context != context:
+                    continue
+                pd = p.get("domain", "")
+                if pd and pd not in domains:
+                    domains.append(pd)
+    except Exception as e:
+        logger.warning("[IMP:7][deploy_context] Failed to extract domains from %s: %s", node_yaml_path, e)
+    return domains
+
+
+# endregion FUNC_extract_domains
 
 
 # endregion HELPER_FUNCTIONS

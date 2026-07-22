@@ -1,0 +1,38 @@
+# GREP_SUMMARY: discover-modules composite-action module-list json CI-helper zero-inline-python3
+# STRUCTURE: runs:composite → ○ python3 module_discovery.py --format json → ⊕ /tmp/module_list.json + count output → ⎋ done
+# region MODULE_CONTRACT
+## @purpose  Composite action: генерирует /tmp/module_list.json из core/modules/*/module.yaml.
+##           Заменяет inline python3 блоки в platform-test.yml и nightly-gate.yml.
+## @scope    Вызывается из CI workflow steps. Делегирует в core/internal/scripts/module_discovery.py.
+## @invariants
+##   - Выходной файл: /tmp/module_list.json (JSON array of compose-file path strings)
+##   - System-модули (install_type: system) исключены
+##   - Outputs: module-list-json (path), module-count (int)
+## @rationale StatusReport 046 T2 (CICD-01a): устраняет 4× дублирование inline python3.
+## @changes
+##   LAST_CHANGE: 2026-07-22 | Created (StatusReport 046 T2 — CICD-01a)
+# endregion MODULE_CONTRACT
+
+name: 'Discover Docker Modules'
+description: 'Generate module_list.json from core/modules/*/module.yaml, excluding system modules'
+
+outputs:
+  module-list-json:
+    description: 'Path to generated /tmp/module_list.json'
+    value: '/tmp/module_list.json'
+  module-count:
+    description: 'Number of discovered modules'
+    value: ${{ steps.discover.outputs.count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Discover modules
+      id: discover
+      shell: bash
+      run: |
+        # [IMP:8][discover-modules] Generate module list from core/modules/*/module.yaml
+        python3 core/internal/scripts/module_discovery.py --format json > /tmp/module_list.json
+        COUNT=$(python3 core/internal/scripts/module_discovery.py --format json | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+        echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+        echo "[IMP:9][discover-modules] Discovered $COUNT modules → /tmp/module_list.json"

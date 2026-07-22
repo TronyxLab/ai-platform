@@ -52,65 +52,32 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # 📝 TRAP[DEBT] · 2026-07-16 · MED · Inline SHA verification instead of shared sha-resolve composite
-      # · Observed: core-deploy.yml uses inline gh API call for SHA verification (Step 1+2).
-      # ·   build-platform.yml and mirror.yml use the shared ./.github/actions/sha-resolve composite action.
-      # · Suspected: legacy from pre-composite-action era; downstream if: chain (skip outputs)
-      # ·   would require non-trivial restructuring to adopt sha-resolve.
-      # · Impact: 3-way SHA verification duplication — drift risk when updating verification logic.
-      # · When: T9 CI/CD audit — deferred, if: chain restructure too risky without CI test
-      # ─── Step 1: Determine SHA ─────────────────────────────────────────
-      - name: Determine SHA for deployment
+      # StatusReport 046 T7 (CICD-03): inline SHA verification → sha-resolve composite action.
+      # Removed TRAP[DEBT] (resolved): core-deploy now uses shared sha-resolve with skip output.
+      # ─── Step 1: Resolve SHA + verify platform-test (composite) ────────
+      - name: Resolve SHA and verify platform-test
         id: sha
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
-            echo "ref=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
-          fi
+        uses: ./.github/actions/sha-resolve
+        with:
+          verify: 'true'
 
-      # ─── Step 2: SHA-aware verification ────────────────────────────────
-      - name: Verify platform-test also succeeded for this SHA
-        id: verify
-        run: |
-          SHA="${{ steps.sha.outputs.sha }}"
-          echo "[IMP:9][deploy][verify] Verifying SHA: $SHA"
-
-          # Check platform-test workflow status for this SHA
-          PLATFORM_STATUS=$(gh api \
-            "/repos/${{ github.repository }}/actions/workflows/platform-test.yml/runs?head_sha=$SHA&status=success&per_page=1" \
-            --jq '.total_count')
-
-          if [ "$PLATFORM_STATUS" -eq 0 ]; then
-            echo "[IMP:10][deploy][verify] ERROR: platform-test has no successful run for SHA $SHA"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          echo "[IMP:9][deploy][verify] All upstream workflows succeeded for SHA $SHA"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      # ─── Step 3: Checkout repository for rsync ─────────────────────────
+      # ─── Step 2: Checkout repository for rsync ─────────────────────────
       - name: Checkout repository
-        if: steps.verify.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true'
         uses: actions/checkout@v7
 
       - name: Setup platform (composite — python only)
-        if: steps.verify.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true'
         uses: ./.github/actions/setup-platform
         with:
           python-version: ''
           install-gitleaks: 'false'
           run-provisioner: 'false'
 
-      # ─── Step 4: Guard — check required secrets ────────────────────────
+      # ─── Step 3: Guard — check required secrets ────────────────────────
       - name: Check required secrets
         id: secrets-check
-        if: steps.verify.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true'
         run: |
           if [ -z "${{ secrets.VPS_HOST }}" ] || [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
             echo "::warning::[IMP:8][deploy][skip] Required secrets VPS_HOST and/or VPS_SSH_KEY are not set — skipping deploy"
@@ -119,9 +86,9 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ─── Step 5: Rsync core + config to VPS (S5 consolidated — 3 steps → 2 rsync calls) ───
+      # ─── Step 4: Rsync core + config to VPS (S5 consolidated — 3 steps → 2 rsync calls) ───
       - name: Rsync core + config to VPS
-        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           mkdir -p ~/.ssh
@@ -143,7 +110,7 @@ jobs:
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
           echo "[IMP:9][deploy][rsync] Core + config rsync complete — SHA $SHA"
 
-      # ─── Step 6: Provision environment on VPS (networks + volumes) ────
+      # ─── Step 5: Provision environment on VPS (networks + volumes) ────
       # ✅ TRAP[DRIFT] · 2026-07-15 · RESOLVED · FIX-1: multi-scope парсер исправлен
       # · Resolution: provision-environment.sh теперь поддерживает --scope networks --scope volumes
       # · Workaround: используется --scope all (эквивалент, идемпотентно на VPS)
@@ -155,7 +122,7 @@ jobs:
 # · Текущий статус: инвариант 1 (Makefile-фасад) восстановлен — все provision-операции через make.
 # Step 6: Provision networks + volumes on VPS via make provision (Invariant 1).
       - name: Provision environment on VPS (networks + volumes)
-        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
         run: |
           ssh -o StrictHostKeyChecking=accept-new \
             -o ConnectTimeout=10 \
@@ -167,7 +134,7 @@ jobs:
       # bootstrap-node сохранён как manual fallback (INIT-only) через
       # make bootstrap-node NODE=<name> — недоступен через CI, только shell.
       - name: Node update on VPS (native SSH)
-        if: steps.verify.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           ssh -o StrictHostKeyChecking=accept-new \

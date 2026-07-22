@@ -1,15 +1,17 @@
-# GREP_SUMMARY: bootstrap.mk, bootstrap-node, node-update, converge, render-vhosts
-# STRUCTURE: ┌variables┐ → ◇ bootstrap-node → ◇ node-update → ◇ converge → ◇ render-vhosts
+# GREP_SUMMARY: bootstrap.mk, bootstrap-node, node-update, converge, render-vhosts, deploy-context
+# STRUCTURE: ┌variables┐ → ◇ bootstrap-node → ◇ node-update → ◇ converge → ◇ render-vhosts → ◇ deploy-context
 # region MODULE_CONTRACT
-## @purpose  Bootstrap and node lifecycle targets — bootstrap-node, node-update, converge, render-vhosts
+## @purpose  Bootstrap and node lifecycle targets — bootstrap-node, node-update, converge, render-vhosts, deploy-context
 ## @scope    Included from root Makefile; delegates to core/entrypoints/
 ## @invariants
 ##   - bootstrap-node must be idempotent (AGENTS.md Invariant 6)
 ##   - converge preserves exit-code semantics (0=clean, 1=warnings, 2=errors)
-## @rationale Makefile include-split W4-E4: bootstrap targets isolated from CI/scaffold
+##   - deploy-context is idempotent (skips healthy projects)
+## @rationale Makefile include-split W4-E4: bootstrap targets isolated from CI/scaffold.
+##            DevPlan 047: added deploy-context target for standalone context project deploy.
 # endregion MODULE_CONTRACT
 
-.PHONY: bootstrap-node node-update converge render-vhosts
+.PHONY: bootstrap-node node-update converge render-vhosts deploy-context
 
 ## bootstrap-node: Idempotent node bootstrap
 ##   Usage: make bootstrap-node [NODE=<name>] [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [AUTO_RECONCILE=1]
@@ -72,3 +74,20 @@ render-vhosts:
 	@echo "[IMP:7][make][render-vhosts] Generating vhost configs from node.yaml..."
 	@bash core/internal/scaffold/add-vhost.sh --render-all --node $(NODE) --node-configs-dir $(NODE_CONFIGS_DIR)
 	@echo "[IMP:9][make][render-vhosts] Vhost generation complete"
+
+## deploy-context: Deploy all projects of a context on a bootstrapped node (DevPlan 047)
+##   Usage: make deploy-context NODE=<name> [CONTEXT=<context>]
+##   Standalone invocation of the deploy_context phase from bootstrap pipeline.
+##   Deploys all projects from node.yaml where context matches, using ghcr.io pull
+##   primary with build-on-node fallback. Idempotent: skips healthy projects.
+##   Delegates to core/entrypoints/deploy-context.sh → context_deployer.py
+deploy-context:
+	@echo "[IMP:9][make][deploy-context] Deploying context projects NODE=$(NODE) CONTEXT=$(CONTEXT)..."
+	@if [[ -z "$(NODE)" ]]; then \
+		echo "[IMP:10][make][deploy-context] ERROR: NODE not set — usage: make deploy-context NODE=<name> [CONTEXT=<ctx>]" >&2; \
+		exit 1; \
+	fi
+	@PLATFORM_ROOT="$(_platform_root)" $(_platform_root)/core/entrypoints/deploy-context.sh \
+		--node "$(NODE)" \
+		$(if $(CONTEXT),--context "$(CONTEXT)")
+	@echo "[IMP:9][make][deploy-context] Context deploy complete"

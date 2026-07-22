@@ -200,3 +200,107 @@ networks:
 
 
 # endregion CLI_OUTPUT_FORMAT_TESTS
+
+
+# region STDIN_TESTS
+
+
+def _run_cli(args: list, stdin: str = "") -> subprocess.CompletedProcess:
+    """Run yaml_query.py with given args and optional stdin.
+
+    ## @purpose  CLI wrapper for stdin-mode tests (StatusReport 046 T5 — CICD-01d)
+    """
+    return subprocess.run(
+        ["python3", str(YAML_QUERY_PATH), *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def test_stdin_json_get_returns_value() -> None:
+    """--stdin --get reads JSON from stdin and returns value.
+
+    ## @purpose — StatusReport 046 T5: stdin mode for deploy-project.yml NODE_HOST_MAP
+    # 🧪 TRAP[TEST] · Scenario · stdin --get · Last fail: N/A
+    # · Remove if: --stdin flag removed
+    """
+    stdin = json.dumps({"tronyx-vps": "203.0.113.5", "other": "198.51.100.1"})
+
+    result = _run_cli(["--stdin", "--get", "tronyx-vps"], stdin=stdin)
+
+    assert result.returncode == 0, f"stderr={result.stderr}"
+    assert result.stdout.strip() == "203.0.113.5"
+
+
+def test_stdin_json_get_missing_key_returns_default() -> None:
+    """--stdin --get with missing key returns default.
+
+    ## @purpose — StatusReport 046 T5: default value for missing node
+    # 🧪 TRAP[TEST] · Scenario · stdin missing key default · Last fail: N/A
+    # · Remove if: --stdin flag removed
+    """
+    stdin = json.dumps({"other-node": "198.51.100.1"})
+
+    result = _run_cli(["--stdin", "--get", "missing-node", "--default", ""], stdin=stdin)
+
+    assert result.returncode == 0, f"stderr={result.stderr}"
+    assert result.stdout.strip() == ""
+
+
+def test_stdin_empty_returns_exit_two() -> None:
+    """--stdin with empty input exits 2.
+
+    ## @purpose — Error path: empty stdin
+    # 🧪 TRAP[TEST] · Scenario · stdin empty · Last fail: N/A
+    # · Remove if: empty stdin exit code changes
+    """
+    result = _run_cli(["--stdin", "--get", "key"], stdin="")
+
+    assert result.returncode == 2
+    assert "empty stdin" in result.stderr.lower()
+
+
+def test_stdin_invalid_json_returns_exit_three() -> None:
+    """--stdin with invalid JSON exits 3.
+
+    ## @purpose — Error path: malformed JSON from stdin
+    # 🧪 TRAP[TEST] · Scenario · stdin malformed · Last fail: N/A
+    # · Remove if: invalid JSON exit code changes
+    """
+    result = _run_cli(["--stdin", "--get", "key"], stdin="{not json")
+
+    assert result.returncode == 3
+    assert "invalid json" in result.stderr.lower()
+
+
+def test_stdin_and_file_mutually_exclusive(tmp_path: pathlib.Path) -> None:
+    """--stdin and --file cannot be used together.
+
+    ## @purpose — R-046-4: mutual exclusion contract
+    # 🧪 TRAP[TEST] · Scenario · mutex --stdin --file · Last fail: N/A
+    # · Remove if: mutually_exclusive_group removed
+    """
+    yaml_file = tmp_path / "test.yaml"
+    yaml_file.write_text("key: value\n")
+
+    result = _run_cli(["--stdin", "--file", str(yaml_file), "--get", "key"], stdin="{}")
+
+    # argparse exits 2 on mutually exclusive group violation
+    assert result.returncode == 2
+
+
+def test_stdin_neither_file_nor_stdin_errors() -> None:
+    """Neither --stdin nor --file is an error (mutually exclusive required group).
+
+    ## @purpose — Contract: must specify one source
+    # 🧪 TRAP[TEST] · Scenario · no source · Last fail: N/A
+    # · Remove if: required=True removed from source group
+    """
+    result = _run_cli(["--get", "key"], stdin="")
+
+    assert result.returncode == 2  # argparse error
+
+
+# endregion STDIN_TESTS

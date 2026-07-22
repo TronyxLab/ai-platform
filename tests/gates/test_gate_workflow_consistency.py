@@ -86,8 +86,13 @@ def _extract_module_list_from_content(content: str) -> set[str]:
     Matches hardcoded patterns like: core/modules/<module>/docker-compose.base.yml
     OR detects dynamic generation pattern and returns actual modules from filesystem.
     """
-    # First check for dynamic generation pattern (python3 << 'PYEOF' discovery block)
-    if "Generate module list" in content and "Path('core/modules').glob" in content:
+    # Dynamic generation patterns (StatusReport 046 T2: module_discovery.py + legacy inline)
+    # - module_discovery.py call (new, T2): core/internal/scripts/module_discovery.py
+    # - legacy inline python3: Path('core/modules').glob (replaced in T2, kept for compat)
+    # - composite action discover-modules: uses: ./.github/actions/discover-modules
+    uses_module_discovery = "module_discovery.py" in content or "discover-modules" in content
+    has_legacy_inline = "Path('core/modules').glob" in content
+    if "Generate module list" in content and (uses_module_discovery or has_legacy_inline):
         # Dynamic generation — return actual modules from filesystem
         return {p.parent.name for p in _MODULES_DIR.glob("*/docker-compose.base.yml")}
     # Fall back to hardcoded pattern for legacy workflows

@@ -22,7 +22,8 @@
 |---|---|---|---|
 | `make deploy` | Деплой проекта через git push → CI | `make deploy PROJECT=<dir>` | git push → CI → `core/internal/deploy/deploy-project.sh` |
 | `make deploy-project` | Прямой деплой минуя CI (emergency) | `make deploy-project PROJECT=<dir> NODE=<node>` | `core/entrypoints/deploy-project.sh` → SSH platform-deliver + deploy.sh |
-| `make bootstrap-node` | Идемпотентный bootstrap ноды | `make bootstrap-node NODE=<name>` | `core/entrypoints/bootstrap.sh` → `core/internal/bootstrap/node-lifecycle.sh --mode init` |
+| `make bootstrap-node` | Идемпотентный bootstrap ноды | `make bootstrap-node NODE=<name>` | `core/entrypoints/bootstrap.sh` → `core/internal/bootstrap/preflight.py` → `core/internal/bootstrap/node-lifecycle.sh --mode init` |
+| `make deploy-context` | Деплой всех проектов контекста на ноде | `make deploy-context NODE=<n> [CONTEXT=<ctx>]` | `core/entrypoints/deploy-context.sh` → `core/internal/bootstrap/deploy/context_deployer.py` |
 | `make context-promote` | Промоут платформы в контекст | `make context-promote CONTEXT=<context>` | `core/entrypoints/context-promote.sh` → копирование кода в `<context>/ai-platform` |
 | `make hermes-build-platform` | Сборка L1 локально | `make hermes-build-platform` | `core/entrypoints/build.sh` → `core/internal/build/hermes-images.sh build-platform` |
 | `make hermes-build-context` | Сборка L1→L2, опционально push | `make hermes-build-context CONTEXT=<context>` | `core/entrypoints/build.sh` → `core/internal/build/hermes-images.sh build-context` |

@@ -32,6 +32,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
     --tor-bridges-file) export TOR_BRIDGES_FILE="$2"; shift 2 ;;
     --skip-tor-verify) export SKIP_TOR_VERIFY="true"; shift ;;
     --auto-reconcile) export AUTO_RECONCILE="true"; shift ;;
+    --context) export CONTEXT="$2"; shift 2 ;;
     --) shift; break ;;
     -*) echo "[IMP:10][node-lifecycle][args] ERROR: Unknown argument: $1" >&2; exit 1 ;;
     *) break ;;
@@ -51,24 +52,27 @@ _step_hash() { local s="$1"; shift; compute_step_hash "$s" "${SCRIPT_DIR}/node-l
 _delegate() { python3 "${SM_SCRIPT}" "$@"; }
 
 # Step functions (thin wrappers → state_machine.py)
+# DevPlan 047: indices shifted +1 after docker_auth insertion at index 5
 step_1_ssh_access(){ _delegate --mode "${MODE}" --run-step 1; }
 step_2_apt_deps(){ _delegate --mode "${MODE}" --run-step 2; }
 step_3_tor_proxy(){ _delegate --mode "${MODE}" --run-step 3; }
 step_4_install_docker(){ _delegate --mode "${MODE}" --run-step 4; }
-step_5_create_platform_user(){ _delegate --mode "${MODE}" --run-step 5; }
-step_6_create_ci_deploy_user(){ _delegate --mode "${MODE}" --run-step 6; }
-step_6b_create_projects_base(){ _delegate --mode "${MODE}" --run-step 7; }
-step_7_firewall(){ _delegate --mode "${MODE}" --run-step 8; }
-step_8_verify_core(){ _delegate --mode "${MODE}" --run-step 9; }
-step_9_verify_node_configs(){ _delegate --mode "${MODE}" --run-step 10; }
-step_10_decrypt_secrets(){ _delegate --mode "${MODE}" --run-step 11; }
-step_11_read_node_yaml(){ _delegate --mode "${MODE}" --run-step 14; }
-step_12_ghcr_auth(){ _delegate --mode "${MODE}" --run-step 15; }
-step_13_sudoers(){ _delegate --mode "${MODE}" --run-step 16; }
-step_14_node_update(){ _delegate --mode "${MODE}" --run-step 18; }
-step_15_converge(){ _delegate --mode "${MODE}" --run-step 19; }
-step_16_audit_log(){ _delegate --mode "${MODE}" --run-step 20; }
-step_17_telegram(){ _delegate --mode "${MODE}" --run-step 21; }
+step_4_5_docker_auth(){ _delegate --mode "${MODE}" --run-step 5; }       # NEW (DevPlan 047)
+step_5_create_platform_user(){ _delegate --mode "${MODE}" --run-step 6; }      # was 5→6
+step_6_create_ci_deploy_user(){ _delegate --mode "${MODE}" --run-step 7; }     # was 6→7
+step_6b_create_projects_base(){ _delegate --mode "${MODE}" --run-step 8; }     # was 7→8
+step_7_firewall(){ _delegate --mode "${MODE}" --run-step 9; }                  # was 8→9
+step_8_verify_core(){ _delegate --mode "${MODE}" --run-step 10; }              # was 9→10
+step_9_verify_node_configs(){ _delegate --mode "${MODE}" --run-step 11; }      # was 10→11
+step_10_decrypt_secrets(){ _delegate --mode "${MODE}" --run-step 12; }         # was 11→12
+step_11_read_node_yaml(){ _delegate --mode "${MODE}" --run-step 15; }          # was 14→15
+step_12_ghcr_auth(){ _delegate --mode "${MODE}" --run-step 16; }               # was 15→16
+step_13_sudoers(){ _delegate --mode "${MODE}" --run-step 17; }                 # was 16→17
+step_14_node_update(){ _delegate --mode "${MODE}" --run-step 19; }             # was 18→19
+step_15_converge(){ _delegate --mode "${MODE}" --run-step 20; }                # was 19→20
+step_16_audit_log(){ _delegate --mode "${MODE}" --run-step 21; }               # was 20→21
+step_17_telegram(){ _delegate --mode "${MODE}" --run-step 22; }                # was 21→22
+step_18_deploy_context(){ _delegate --mode "${MODE}" --run-step 23; }          # NEW (DevPlan 047)
 update_step_1_verify_core(){ _delegate --mode "${MODE}" --run-step 1; }
 update_step_2_provision(){ _delegate --mode "${MODE}" --run-step 2; }
 update_step_2_5_deliver_overlays(){ _delegate --mode "${MODE}" --run-step 3; }
@@ -80,6 +84,7 @@ update_step_3_ssl_provision(){
     python3 "$ssl_script" --mode "${MODE}" --run-step 4; }
 update_step_4_deploy_modules(){ _delegate --mode "${MODE}" --run-step 5; }
 update_step_6_healthcheck(){ _delegate --mode "${MODE}" --run-step 6; }
+update_step_8_deploy_context(){ _delegate --mode "${MODE}" --run-step 8; }       # NEW (DevPlan 047)
 
 # TOR_ENABLED detected from node.yaml (tor.enabled key, default false)
 detect_tor_enabled(){
@@ -104,11 +109,42 @@ main() {
         fi
         [[ "$FORCE_MODE" == "true" ]] && rm -rf "$CHECKPOINT_DIR"
         mkdir -p "$CHECKPOINT_DIR"; detect_tor_enabled; export TOR_ENABLED
+
+        # ── Pre-flight gate (DevPlan 047) ──
+        # Runs preflight.py before state machine to probe SSH/disk/S3/ghcr/Docker Hub/DNS
+        # FATAL checks (ssh, disk) → exit 1; WARN checks → logged, continue
+        if [[ -z "${SKIP_PREFLIGHT:-}" ]]; then
+            local preflight_script="${SCRIPT_DIR}/preflight.py"
+            if [[ -f "$preflight_script" ]]; then
+                echo "[IMP:8][node-lifecycle][preflight] Running pre-flight checks" >&2
+                PREFLIGHT_RESULT="$(python3 "$preflight_script" \
+                    --node-yaml "${NODE_YAML}" \
+                    --context "${CONTEXT:-}" \
+                    --node-name "${NODE_NAME}" 2>&1)" || {
+                    echo "[IMP:10][node-lifecycle][preflight] FATAL: Pre-flight checks failed" >&2
+                    echo "$PREFLIGHT_RESULT" >&2
+                    exit 1
+                }
+                echo "$PREFLIGHT_RESULT" | python3 -c "
+import sys, json
+try:
+    result = json.load(sys.stdin)
+    warnings = [k for k,v in result.items() if v.get('status') == 'warn']
+    if warnings:
+        print(f'[IMP:7][node-lifecycle][preflight] Warnings (non-fatal): {warnings}', flush=True)
+except Exception:
+    pass
+" >&2 || true
+            fi
+        fi
+
         CHECKPOINT_STEP_HASH="$(_step_hash "ssh-access")"           checkpoint_step "ssh-access" step_1_ssh_access
         CHECKPOINT_STEP_HASH="$(_step_hash "apt-deps")"             checkpoint_step "apt-deps" step_2_apt_deps
         if [[ "${TOR_ENABLED:-false}" == "true" ]]; then CHECKPOINT_STEP_HASH="$(_step_hash "tor-proxy")" checkpoint_step "tor-proxy" step_3_tor_proxy
         else echo "[IMP:8][node-lifecycle][main] Tor disabled — skipping tor-proxy" >&2; fi
         CHECKPOINT_STEP_HASH="$(_step_hash "install-docker")"       checkpoint_step "install-docker" step_4_install_docker
+        # DevPlan 047: docker-auth checkpoint (new step 4.5)
+        CHECKPOINT_STEP_HASH="$(_step_hash "docker-auth")"          checkpoint_step "docker-auth" step_4_5_docker_auth
         CHECKPOINT_STEP_HASH="$(_step_hash "user-platform")"        checkpoint_step "user-platform" step_5_create_platform_user
         CHECKPOINT_STEP_HASH="$(_step_hash "user-ci-deploy")"       checkpoint_step "user-ci-deploy" step_6_create_ci_deploy_user
         CHECKPOINT_STEP_HASH="$(_step_hash "projects-base")"        checkpoint_step "projects-base" step_6b_create_projects_base
@@ -123,6 +159,7 @@ main() {
         _delegate --mode init --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
             ${PLATFORM_OWNER_KEY:+--owner-key "$PLATFORM_OWNER_KEY"} \
             ${PLATFORM_CI_DEPLOY_KEY:+--ci-deploy-key "$PLATFORM_CI_DEPLOY_KEY"} \
+            ${CONTEXT:+--context "$CONTEXT"} \
             ${FORCE_MODE:+--force}
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
         echo "[IMP:9][node-lifecycle][main] Bootstrap COMPLETE (warnings: ${#STEP_ERRORS[@]})" >&2
@@ -153,7 +190,9 @@ main() {
             CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision")"    checkpoint_step "ssl-provision" update_step_3_ssl_provision
             CHECKPOINT_STEP_HASH="$(_step_hash "deploy-modules")"   checkpoint_step "deploy-modules" update_step_4_deploy_modules
             CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")"  checkpoint_step "healthcheck-all" update_step_6_healthcheck
-            _delegate --mode update --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" ${FORCE_MODE:+--force}
+            _delegate --mode update --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
+                ${CONTEXT:+--context "$CONTEXT"} \
+                ${FORCE_MODE:+--force}
         }
         audit_step "node-update:${NODE_NAME:-<unset>}" _do_update_steps
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2

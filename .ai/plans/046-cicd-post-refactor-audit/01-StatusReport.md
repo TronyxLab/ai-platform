@@ -35,7 +35,7 @@ $END_ARTIFACT_CONTRACT
 | Workflow files | 9 `.yml` в `.github/workflows/` |
 | Composite actions | 6 `.github/actions/*/action.yml` |
 | Gate tests | ~30+ registered in entrypoint-manifest.yaml |
-| Last gate pass rate | 204/210 (97.1%) — 6 pre-existing failures |
+| Last gate pass rate | 671/672 (99.85%) — 1 конфигурационный failure (langfuse 401) |
 
 ### Issues Summary
 
@@ -44,7 +44,7 @@ $END_ARTIFACT_CONTRACT
 | CICD-01 | 🔴 HIGH | Language Policy Violation | 13 inline `python3 -c` вызовов в `.github/workflows/*.yml` — нарушение языковой политики AGENTS.md |
 | CICD-02 | 🟠 MED | Drift | `entrypoint-manifest.yaml` gate `ci-coverage` description: "Workflow count=8" — актуально 9 |
 | CICD-03 | 🟠 MED | Duplication | `core-deploy.yml` использует inline SHA verification вместо shared `sha-resolve` action (TRAP[DEBT] уже есть) |
-| CICD-04 | 🟡 LOW | Incomplete Migration | 6 pre-existing test failures (204/210) — зафиксированы в Decision Gate, не исправлены |
+| CICD-04 | 🟡 LOW | Incomplete Migration | 1 pre-existing конфигурационный failure (671/672, 99.85%) — langfuse 401 Unauthorized, не связан с CI/CD |
 | CICD-05 | 🟡 LOW | Missing Measurement | CI gate execution time post-Wave 5 не замерен (Baseline W1-E8 есть, post нет) |
 | CICD-06 | 🟢 INFO | Active CI/CD Churn | 5 fix-коммитов сегодня (22 Jul) — CI/CD в активной доработке |
 
@@ -105,14 +105,14 @@ $END_ARTIFACT_CONTRACT
 
 ---
 
-### CICD-04: 🟡 LOW — 6 pre-existing test failures
+### CICD-04: 🟡 LOW — 1 pre-existing конфигурационный failure
 
-**Источник:** Decision Gate 043, VerificationReport 039-W5
-**Pass rate:** 204/210 (97.1%)
+**Источник:** Decision Gate 043, VerificationReport 039-W5, VerificationReport 046 (runtime: 671/672, 99.85%)
+**Pass rate:** 671/672 (99.85%) — 5 из 6 ранее зафиксированных failures исправлены коммитами CICD-06 (22 Jul)
 
-**Root cause:** P2 str/bytes type safety issues в моках `subprocess.run`. Production-код корректен (docker stop/rm присутствуют). Проблема только в тестовых моках.
+**Root cause (единственный оставшийся failure):** `test_e2e_health.py::test_service_health[langfuse-/api/public/health-False]` — langfuse возвращает 401 Unauthorized. Конфигурационная проблема (требуется аутентификация), не связана с CI/CD.
 
-**Риск:** Снижает доверие к gate — false red на CI. Разработчик привыкает игнорировать красный gate.
+**Риск:** Минимальный — 1 failure из 672, не блокирует CI/CD изменения.
 
 ---
 
@@ -217,7 +217,7 @@ CI/CD был существенно улучшен в Waves 2-4, но гигие
 | T6 | CICD-01e | Extend pre-commit hook to cover `.github/**/*.yml` | 0.5h | T1-T5 | HIGH |
 | T7 | CICD-03 | Migrate `core-deploy.yml` SHA verification to `sha-resolve` + `skip` output | 1.5h | — | MED |
 | T8 | CICD-05 | Post-Wave 5 CI gate timing measurement | 0.2h | T1-T7 | LOW |
-| T9 | CICD-04 | Fix 6 pre-existing test failures (type safety in mocks) | — | — | DEFERRED→042 |
+| T9 | CICD-04 | Fix 1 pre-existing конфигурационный failure (langfuse 401) | — | — | DEFERRED→042 |
 
 ---
 
@@ -377,6 +377,25 @@ runs:
 
 **Верификация:** `rg 'python3 -c.*module_list\|python3 -c.*json.load.*module_list' .github/workflows/` → 0 matches.
 
+**Relationship to existing `core/internal/bootstrap/discover_modules.py`:**
+
+> **DRIFT-046-1 (VerificationReport) · Вариант B — отдельный легковесный CI-модуль**
+>
+> Существует `core/internal/bootstrap/discover_modules.py` (234 LOC, зарегистрирован как `make discover-modules` в entrypoint-manifest.yaml). Он решает схожую задачу — поиск docker-модулей через `yaml.safe_load()` с фильтрацией `install_type: system`. Однако:
+>
+> 1. **PyYAML-зависимость:** `discover_modules.py` требует `import yaml` (PyYAML). CI-раннер может не иметь PyYAML. Новый `module_discovery.py` использует текстовый поиск `'install_type: system' not in content` — zero dependencies.
+> 2. **Разные подсистемы:** `discover_modules.py` — часть bootstrap-подсистемы (`core/internal/bootstrap/`), отвечает за обновление `docker-compose.yml` include-секции и test infra discovery. Новый `module_discovery.py` — легковесный CI-хелпер (`core/internal/scripts/`), только возвращает список compose-файлов.
+> 3. **Разные контракты:** bootstrap-версия мутирует файлы (`update_compose_include`), CI-версия — read-only (stdout). Добавление CI-режима в bootstrap-модуль нарушило бы SRP и добавило бы complexity в критичный bootstrap-код.
+>
+> **## @rationale** Отдельный модуль выбран потому что:
+> - CI не должен зависеть от PyYAML для операции «найти compose-файлы»
+> - Bootstrap-модуль решает более широкую задачу (include-генерация, test infra, YAML-толерантность к `!override`)
+> - Изоляция: баг в CI-модуле не сломает `make discover-modules` (bootstrap critical path)
+>
+> **## @see** `core/internal/bootstrap/discover_modules.py` — полный аналог для bootstrap-окружения (YAML-based).
+> **Rejected strategy (Variant A):** Extend `discover_modules.py` с флагом `--ci-list --text-fallback`. Отклонено: добавляет conditional complexity (YAML vs text fallback) в критичный bootstrap-модуль. Предпочтена изоляция CI-логики.
+> **Rejected strategy (Variant C):** Установить PyYAML в CI. Отклонено: добавляет зависимость в CI-раннер для тривиальной текстовой операции.
+
 ---
 
 #### T3 — CICD-01b: Extract DORA dashboard validator (0.5h)
@@ -492,6 +511,14 @@ if __name__ == "__main__":
 
 **Итого:** 2 из 13 inline python3 заменены на `yaml_query.py`.
 
+> **⚠️ TRAP[DESIGN] · 2026-07-22 · LOW · DRIFT-046-5: Замена синтаксическая — yaml_query.py тоже требует PyYAML**
+> - `deploy-project.yml:69` и `platform-deploy.yml:94` используют `import yaml` — оба inline зависят от PyYAML.
+> - `yaml_query.py` (Wave 1 W1-E7, 201 LOC) также требует PyYAML (`import yaml`).
+> - Замена **синтаксическая**: вместо inline `python3 -c "import yaml..."` → вызов typed CLI `yaml_query.py --file ... --get ...`.
+> - Архитектурно проблема не меняется: PyYAML должен быть доступен в CI-раннере для этих шагов.
+> - Это улучшение читаемости, grep-ability и тестируемости, но не устранение зависимости от PyYAML в CI.
+> - Rev: если PyYAML станет проблемой в CI → рассмотреть текстовый fallback.
+
 ---
 
 #### T5 — CICD-01d: Extract JSON-from-stdin validators (1.0h)
@@ -573,6 +600,38 @@ if __name__ == "__main__":
     main()
 ```
 
+**Дополнительно — `--output-status-only` флаг (DRIFT-046-3):**
+
+> **⚠️ DRIFT-046-3 (VerificationReport):** `vps_status_check.py` только валидирует статус (exit 0/1/2/3),
+> но не возвращает голое значение статуса для subshell-подстановки.
+> `deploy-project.yml:107` использует inline `python3 -c "print(json.load(sys.stdin).get('status'))"`
+> внутри `$(...)` — для ПЕЧАТИ статуса в лог-сообщении, а не для валидации.
+
+Добавить в `vps_status_check.py` аргумент `--output-status-only`:
+```python
+parser.add_argument("--output-status-only", action="store_true",
+                    help="Print only the status value (for subshell use)")
+```
+
+В `main()`:
+```python
+if args.output_status_only:
+    data = json.load(sys.stdin)
+    print(data.get("status", ""))
+    sys.exit(0)
+```
+
+**Замена в `deploy-project.yml:107` (print-only use-case):**
+```yaml
+# Было:
+echo "[IMP:9][preflight] VPS readiness check passed (status: $(echo "${STATUS_JSON}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status'))"))"
+
+# Стало:
+echo "[IMP:9][preflight] VPS readiness check passed (status: $(echo "${STATUS_JSON}" | python3 core/internal/scripts/vps_status_check.py --output-status-only))"
+```
+
+**Итого T5 c дополнением:** 5 inline python3 устранены (строки 79, 100, 107 [print], 107 [validate], 136).
+
 **Замена в `deploy-project.yml:100` (preflight check):**
 ```yaml
 # Было:
@@ -599,26 +658,43 @@ if __name__ == "__main__":
           echo "${STATUS_JSON}" | python3 core/internal/scripts/vps_status_check.py
 ```
 
-**Итого T5:** 4 inline python3 устранены (строки 79, 100, 107, 136).
+**Итого T5 c дополнением:** 5 inline python3 устранены (строки 79, 100, 107 [print + validate — 2 вызова], 136).
 
 ---
 
 #### T6 — CICD-01e: Extend pre-commit hook to `.github/**/*.yml` (0.5h)
 
-**Текущее состояние:** `no-new-inline-python3` hook настроен на `files: '^core/.*\.sh$'` — не защищает CI workflow-файлы.
+**Текущее состояние:** `no-new-inline-python3` hook настроен на `files: '^core/.*\\.sh$'` — не защищает CI workflow-файлы.
 
-**Изменение `.pre-commit-config.yaml:270`:**
+**Изменение 1 — `.pre-commit-config.yaml:270` (pre-commit `files:` фильтр):**
 ```yaml
 # Было:
-        files: '^core/.*\.sh$'
+        files: '^core/.*\\.sh$'
 
 # Стало:
-        files: '^(core/.*\.sh|\.github/.*\.yml)$'
+        files: '^(core/.*\\.sh|\\.github/.*\\.yml)$'
 ```
 
-**Дополнительно — расширить hook-скрипт `core/internal/hooks/check-no-new-inline-python3.sh`:**
+**Изменение 2 — `core/internal/hooks/check-no-new-inline-python3.sh:22` (hook script `git diff` glob):**
 
-Добавить поддержку `.yml` файлов (сейчас hook читает `git diff --cached` и ищет строки с `+` — это работает для любых файлов, проблема только в `files:` фильтре pre-commit).
+> **⚠️ DRIFT-046-2 (VerificationReport):** Изменение только `files:` в `.pre-commit-config.yaml` недостаточно.
+> Pre-commit ВЫЗОВЕТ hook для `.github/**/*.yml`, но hook script на строке 22 фильтрует
+> `git diff --cached --name-only --diff-filter=ACM -- 'core/*.sh'` — вернёт пустой список для yml-файлов,
+> hook завершится с exit 0 (нет staged .sh файлов) = НИЧЕГО НЕ ПРОВЕРИТ.
+
+Строка 22 — заменить glob:
+```bash
+# Было (строка 22):
+staged_files=$(git diff --cached --name-only --diff-filter=ACM -- 'core/*.sh' || true)
+
+# Стало:
+staged_files=$(git diff --cached --name-only --diff-filter=ACM -- 'core/*.sh' '.github/workflows/*.yml' '.github/actions/*/action.yml' || true)
+```
+
+**Почему три glob-а:**
+- `'core/*.sh'` — существующее покрытие (shell-скрипты)
+- `'.github/workflows/*.yml'` — CI workflow-файлы (основная цель расширения)
+- `'.github/actions/*/action.yml'` — composite action definitions (могут содержать inline python3 в `run:` блоках)
 
 **⚠️ TRAP[DESIGN] · 2026-07-22 · MED · Whitelist для легитимного inline в CI**
 - Некоторые CI-шаги могут требовать inline python3 для простых операций (например, `python3 -c "print('hello')"`)
@@ -632,6 +708,18 @@ if __name__ == "__main__":
 echo 'python3 -c "import json; print(1)"' >> .github/workflows/test.yml
 git add .github/workflows/test.yml && git commit -m "test"  # должен быть заблокирован
 git reset HEAD .github/workflows/test.yml && git checkout .github/workflows/test.yml
+
+# Проверка, что hook script читает yml-файлы (chain test):
+# 1. Создать .github/workflows/test-inline.yml с python3 -c "import json"
+# 2. git add → git commit
+# 3. Убедиться что hook выдал VIOLATION (а не молча exit 0)
+# 4. git reset + удалить test файл
+```
+
+**DRIFT-046-2 prevention:** После реализации T6 убедиться что hook script строка 22 содержит `'.github/workflows/*.yml'` и `'.github/actions/*/action.yml'`:
+```bash
+rg "git diff.*cached.*name-only" core/internal/hooks/check-no-new-inline-python3.sh
+# Должно содержать: '.github/workflows/*.yml' '.github/actions/*/action.yml'
 ```
 
 ---
@@ -743,11 +831,11 @@ run, wall_clock_sec, date, git_sha
 
 ---
 
-#### T9 — CICD-04: 6 pre-existing test failures (DEFERRED)
+#### T9 — CICD-04: 1 pre-existing конфигурационный failure (DEFERRED)
 
-**Статус:** DEFERRED → DevPlan 042 (test-adaptation-wave4). Зафиксированы в Decision Gate 043 §DG-3.
+**Статус:** DEFERRED → DevPlan 042 (test-adaptation-wave4). Зафиксирован в Decision Gate 043 §DG-3.
 
-**Root cause:** P2 str/bytes type safety в моках `subprocess.run`. Production-код корректен.
+**Текущее состояние:** 5 из 6 ранее зафиксированных failures исправлены коммитами CICD-06 (22 Jul 2026). Единственный оставшийся failure — `test_e2e_health.py::test_service_health[langfuse-/api/public/health-False]` (401 Unauthorized, конфигурационный).
 
 **Не входит в scope настоящего DevPlan.** CICD-04 оставлен в tracking для visibility.
 
@@ -759,7 +847,7 @@ run, wall_clock_sec, date, git_sha
 
 | # | File | T | Purpose |
 |---|------|---|---------|
-| 1 | `core/internal/scripts/module_discovery.py` | T2 | Typed Docker module discovery (замена 4× inline в CI) |
+| 1 | `core/internal/scripts/module_discovery.py` | T2 | Typed Docker module discovery (замена 4× inline в CI). **@see** `core/internal/bootstrap/discover_modules.py` — bootstrap-аналог (YAML-based) |
 | 2 | `core/internal/scripts/validate_dora_dashboard.py` | T3 | DORA dashboard JSON validator |
 | 3 | `core/internal/scripts/vps_status_check.py` | T5 | VPS project status validator (stdin JSON) |
 | 4 | `.github/actions/discover-modules/action.yml` | T2 | Composite action wrapper для module_discovery.py |
@@ -783,6 +871,7 @@ run, wall_clock_sec, date, git_sha
 | 9 | `core/internal/hooks/check-no-new-inline-python3.sh` | T6 | Добавлен whitelist для однострочников без `import` |
 | 10 | `core/internal/scripts/yaml_query.py` | T5 | Добавлен `--stdin` flag для JSON-from-stdin |
 | 11 | `core/entrypoint-manifest.yaml` (gates section) | T1, T8 | Обновлён ci-coverage description |
+| 12 | `tests/gates/test_gate_workflow_consistency.py` | T1 | Файл затронут верификацией T1 (manifest count=8→9). **DRIFT-046-6** — добавлен для контекста |
 
 ---
 
@@ -823,7 +912,7 @@ ruff format . && ruff check --fix .          # все новые Python-файл
 | ID | Risk | Severity | Mitigation |
 |----|------|----------|-----------|
 | R-046-1 | `sha-resolve` + `skip` output ломает `build-platform.yml`/`mirror.yml` (backward compat) | MED | `sha-resolve` уже используется ими без `skip`. Новый output игнорируется если не используется в `if:`. Протестировать на fork до merge. |
-| R-046-2 | `module_discovery.py` возвращает другой порядок/набор модулей чем inline-версия | LOW | Логика идентична: `glob */module.yaml`, сортировка, фильтр `install_type: system`. Unit-тест сравнивает вывод с текущим inline. |
+| R-046-2 | `module_discovery.py` возвращает другой порядок/набор модулей чем inline-версия | LOW | Логика идентична: `glob */module.yaml`, сортировка, фильтр `install_type: system`. Unit-тест сравнивает вывод с текущим inline. **DRIFT-046-1 resolved:** Добавлен cross-reference на существующий `discover_modules.py` (bootstrap), выбран Variant B (отдельный легковесный CI-модуль). |
 | R-046-3 | Pre-commit hook на `.github/**/*.yml` даёт false-positive на легитимных однострочниках | LOW | Whitelist: `python3 -c` без `import` разрешён. CI workflow редко используют python3 -c без import. |
 | R-046-4 | `--stdin` в `yaml_query.py` конфликтует с `--file` (mutual exclusion) | LOW | Добавить `mutually_exclusive_group`. При ошибке — понятное сообщение. |
 
@@ -837,7 +926,7 @@ ruff format . && ruff check --fix .          # все новые Python-файл
 | T2 (module_list) | 1.5h | HIGH | 6 | 6/13 |
 | T3 (DORA) | 0.5h | MED | 1 | 7/13 |
 | T4 (yaml_query) | 0.3h | MED | 2 | 9/13 |
-| T5 (stdin JSON) | 1.0h | HIGH | 4 | 13/13 |
+| T5 (stdin JSON) | 1.0h | HIGH | 5 | 13/13 |
 | T6 (pre-commit) | 0.5h | HIGH | — | 13/13 |
 | T7 (SHA migrate) | 1.5h | MED | — | 13/13 |
 | T8 (timing) | 0.2h | LOW | — | 13/13 |
@@ -860,7 +949,7 @@ ruff format . && ruff check --fix .          # все новые Python-файл
 | SHA verification pattern | 2 composite + 1 inline | 3 composite |
 | Pre-commit coverage | `core/.*\.sh` only | `core/.*\.sh` + `.github/.*\.yml` |
 | CI gate time | baseline ~3-5 min | measured (T8) |
-| Test pass rate | 204/210 (97.1%) | 204/210 (CICD-04 deferred) |
+| Test pass rate | 671/672 (99.85%) | 671/672 (99.85%) (CICD-04 deferred до 042) |
 
 ---
 

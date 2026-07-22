@@ -13,6 +13,8 @@
 ##   - malformed YAML -> exit 3 / raise yaml.YAMLError
 ##   - file not found -> exit 2 / raise FileNotFoundError
 ##   - --items flag: output list items one per line (backward compat for yaml_get_list)
+##   - --stdin flag: read JSON from stdin instead of --file (mutually exclusive with --file).
+##     YAML from stdin is NOT supported — only JSON. Empty stdin -> exit 2. Invalid JSON -> exit 3.
 ## @rationale 40+ inline Python one-liners (import yaml; yaml.safe_load...) в shell-скриптах сигнализируют о Bash-ceiling.
 ##            Централизация в typed-модуль: тестируемость (unit-тесты), grep-ability, единая обработка ошибок,
 ##            consistent CLI exit codes. Wave 1 — консолидация yaml_read.sh; Wave 4 — остальные в ходе декомпозиции.
@@ -132,7 +134,14 @@ def _cli() -> int:
         prog="yaml_query.py",
         description="Typed YAML/JSON query — replacement for inline Python one-liners in shell scripts",
     )
-    parser.add_argument("--file", required=True, type=pathlib.Path, help="YAML or JSON file path")
+    # --stdin and --file are mutually exclusive (DRIFT-046 R-046-4)
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--file", type=pathlib.Path, help="YAML or JSON file path")
+    source_group.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read JSON from stdin instead of --file (StatusReport 046 T5 — CICD-01d)",
+    )
     parser.add_argument("--get", metavar="KEY", help="Dotted-key path (e.g. node.host)")
     parser.add_argument("--query", metavar="JQ_FILTER", help="Simplified jq-like filter")
     parser.add_argument("--default", default=None, help="Default value if key not found")
@@ -145,7 +154,31 @@ def _cli() -> int:
     args = parser.parse_args()
 
     try:
-        if args.get:
+        # ⚠️ TRAP[DESIGN] · 2026-07-22 · MED · --stdin добавляет второй режим ввода в yaml_query.py
+        # · Risk: нарушение SRP — yaml_query.py становится "YAML file reader" + "stdin JSON reader"
+        # · Mitigation: --stdin автоматически определяет формат как JSON (stdin всегда text/plain).
+        # ·   YAML из stdin НЕ поддерживается — только JSON. mutually_exclusive_group с --file.
+        # · Reason: deploy-project.yml:79 читает NODE_HOST_MAP (JSON) из stdin через `echo "$MAP" | ...`.
+        # ·   Отдельный json_query_stdin.py отклонён — overhead двух CLI-модулей для одной задачи.
+        # · Rev: если потребуется YAML из stdin → выделить stdin_query.py.
+        if args.stdin:
+            raw = sys.stdin.read().strip()
+            if not raw:
+                print("[IMP:10][yaml_query] ERROR: empty stdin", file=sys.stderr)
+                return 2
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as e:
+                print(f"[IMP:10][yaml_query] ERROR: invalid JSON from stdin: {e}", file=sys.stderr)
+                return 3
+            if args.get:
+                value = _dotted_get(data, args.get, args.default)
+            elif args.query:
+                value = _jq_eval(data, args.query)
+            else:
+                parser.error("either --get or --query required")
+                return 1  # unreachable
+        elif args.get:
             value = yaml_get(args.file, args.get, args.default)
         elif args.query:
             value = yaml_query(args.file, args.query)

@@ -47,12 +47,13 @@ S3_SSL_CERT_PREFIX="platform/ssl-certs"
 
 # ─── Usage ─────────────────────────────────────────────────
 _usage() {
-    echo "Usage: s3-ssl-cache.sh upload|download|check <domain>"
+    echo "Usage: s3-ssl-cache.sh upload|download|check|bulk-restore <domain|--node-yaml PATH>"
     echo ""
     echo "Commands:"
-    echo "  upload   <domain>  Save TLS cert files to S3 cache after successful issue"
-    echo "  download <domain>  Restore cert files from S3 cache (before issue)"
-    echo "  check    <domain>  Check if valid cert exists in S3 cache (exit 0=valid)"
+    echo "  upload       <domain>            Save TLS cert files to S3 cache after successful issue"
+    echo "  download     <domain>            Restore cert files from S3 cache (before issue)"
+    echo "  check        <domain>            Check if valid cert exists in S3 cache (exit 0=valid)"
+    echo "  bulk-restore --node-yaml <path>  Restore all domains from node.yaml (DevPlan 047)"
     exit 1
 }
 
@@ -382,19 +383,131 @@ _s3_check() {
 }
 
 
+# ─── Bulk restore certs from S3 (DevPlan 047) ────────────
+# @purpose  Restore SSL certs for ALL domains in node.yaml from S3 cache.
+#           Parses node.yaml → extracts domain + projects[].domain → restores each.
+#           Called from cert_orchestrator.py (deploy_context step 18.2).
+# @param    $1  node_yaml_path  Path to node.yaml
+# @io       stdout: JSON {domain: {status: restored|miss|error}, ...}
+# @complexity 3
+# @invariants
+#   - Parses node.yaml via inline python3 (yaml_read not available in all contexts)
+#   - For each domain: calls _s3_check → if valid, _s3_download
+#   - Non-fatal: S3 miss for one domain does not block others
+#   - Output: JSON to stdout for Python consumption
+_s3_bulk_restore() {
+    local node_yaml_path="$1"
+
+    if [[ -z "$node_yaml_path" || ! -f "$node_yaml_path" ]]; then
+        log_step "bulk-restore" "FAIL" "node.yaml not found: ${node_yaml_path}"
+        echo '{}'
+        return 1
+    fi
+
+    log_step "bulk-restore" "START" "Bulk restoring certs from S3 for node.yaml: ${node_yaml_path}"
+
+    # Parse node.yaml → extract all domains (platform domain + project domains)
+    local domains_json
+    domains_json="$(python3 -c "
+import yaml, json, sys
+with open('$node_yaml_path') as f:
+    data = yaml.safe_load(f) or {}
+domains = []
+# Platform domain
+domain = data.get('domain', '')
+if not domain:
+    node_info = data.get('node', {})
+    if isinstance(node_info, dict):
+        domain = node_info.get('platform_domain', '') or node_info.get('domain', '')
+if domain:
+    domains.append(domain)
+# Project domains
+projects = data.get('projects', [])
+if isinstance(projects, list):
+    for p in projects:
+        if isinstance(p, dict):
+            pd = p.get('domain', '')
+            if pd and pd not in domains:
+                domains.append(pd)
+print(json.dumps(domains))
+" 2>/dev/null)" || domains_json="[]"
+
+    local domains
+    domains="$(echo "$domains_json" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin)))" 2>/dev/null)"
+
+    if [[ -z "$domains" ]]; then
+        log_step "bulk-restore" "INFO" "No domains found in node.yaml — nothing to restore"
+        echo '{}'
+        return 0
+    fi
+
+    log_step "bulk-restore" "INFO" "Domains to restore: ${domains}"
+
+    # Process each domain
+    local result='{}'
+    for domain in $domains; do
+        [[ -z "$domain" ]] && continue
+        local status="miss"
+        if _s3_check "$domain" 2>/dev/null; then
+            if _s3_download "$domain" 2>/dev/null; then
+                status="restored"
+                log_step "bulk-restore" "DONE" "Restored: ${domain}"
+            else
+                status="error"
+                log_step "bulk-restore" "WARN" "Download failed: ${domain}"
+            fi
+        else
+            log_step "bulk-restore" "INFO" "Cache miss: ${domain}"
+        fi
+        result="$(python3 -c "
+import json
+d = json.loads('''$result''')
+d['$domain'] = {'status': '$status'}
+print(json.dumps(d))
+" 2>/dev/null)" || result='{}'
+    done
+
+    echo "$result"
+    log_step "bulk-restore" "DONE" "Bulk restore complete"
+    return 0
+}
+
+
 # region FUNC_main
-# @purpose  CLI entry point: dispatch to upload|download|check
-# @param    $1  command  upload|download|check
-# @param    $2  domain   Domain name
+# @purpose  CLI entry point: dispatch to upload|download|check|bulk-restore
+# @param    $1  command  upload|download|check|bulk-restore
+# @param    $2  domain   Domain name (or --node-yaml for bulk-restore)
 # @io       stdout/stderr → LDD telemetry
 # @complexity 1
 main() {
-    if [[ $# -lt 2 ]]; then
+    local command="${1:-}"
+    shift || true
+
+    # bulk-restore has different argument signature (--node-yaml PATH)
+    if [[ "$command" == "bulk-restore" ]]; then
+        local node_yaml_path=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --node-yaml) node_yaml_path="$2"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        # Validate S3 env vars (non-fatal)
+        if [[ -z "${S3_ACCESS_KEY:-}" ]] || [[ -z "${S3_SECRET_KEY:-}" ]] || [[ -z "${S3_BUCKET:-}" ]]; then
+            log_step "main" "WARN" "S3 credentials not configured — bulk-restore unavailable"
+            echo '{}'
+            return 1
+        fi
+        export S3_BUCKET
+        _s3_bulk_restore "$node_yaml_path"
+        return $?
+    fi
+
+    if [[ $# -lt 1 ]]; then
         _usage
     fi
 
-    local command="$1"
-    local domain="$2"
+    local domain="$1"
 
     # Validate S3 env vars (non-fatal — graceful degradation)
     if [[ -z "${S3_ACCESS_KEY:-}" ]] || [[ -z "${S3_SECRET_KEY:-}" ]] || [[ -z "${S3_BUCKET:-}" ]]; then

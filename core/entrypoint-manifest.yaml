@@ -22,8 +22,12 @@
 bootstrap:
   - make_target: bootstrap-node
     mechanism: ssh+rsync
-    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/secrets-init.sh + core/internal/bootstrap/deploy-modules.sh
-    description: "Idempotent bootstrap of a new node (LIFE CYCLE/INIT, not DEPLOY)"
+    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/secrets-init.sh + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py + core/internal/bootstrap/deploy/context_deployer.py
+    description: "Idempotent bootstrap of a new node to FULL readiness (infra + context projects + certs + Docker Hub auth) (DevPlan 047)"
+  - make_target: deploy-context
+    mechanism: ssh+python
+    delegates_to: core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py
+    description: "Deploy all projects of a context on a bootstrapped node (standalone or post-bootstrap). Idempotent: ghcr.io pull primary, build-on-node fallback (DevPlan 047)"
 
 deploy:
   - make_target: deploy
@@ -431,7 +435,7 @@ gates:
     description: Module dependency topology validation (module.yaml depends_on field)
     test_file: test_gate_topology.py
   - id: workflow-consistency
-    description: Workflow count=8, main-full-gate deleted, platform-test single job, no observability refs, deploy triggers, push filter, NODE=, provisioner usage
+    description: Workflow count=9, main-full-gate deleted, platform-test single job, no observability refs, deploy triggers, push filter, NODE=, provisioner usage
     test_file: test_gate_workflow_consistency.py
   - id: container-name-consistency
     description: Container_name consistency across compose files and module.yaml depends_on / env_requires references
@@ -609,6 +613,7 @@ allowed_verbs:
   - status
   - converge
   - render-vhosts
+  - deploy-context
   # project-sync-secrets — DISABLED, requires core/internal/scaffold/sync-repo-secrets.sh (T3.6)
   - node-update
   - deploy-project

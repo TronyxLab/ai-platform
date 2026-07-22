@@ -64,9 +64,10 @@ jobs:
         run: |
           set -euo pipefail
           # Use inputs.node if provided, otherwise resolve from ai-platform.yaml
+          # StatusReport 046 T4 (CICD-01c): inline python3 → yaml_query.py
           TARGET_NODE="${{ inputs.node }}"
           if [ -z "${TARGET_NODE}" ]; then
-            TARGET_NODE=$(python3 -c "import yaml; d=yaml.safe_load(open('ai-platform.yaml')); print(d.get('target_node','tronyx-vps'))" 2>/dev/null || echo "tronyx-vps")
+            TARGET_NODE=$(python3 core/internal/scripts/yaml_query.py --file ai-platform.yaml --get target_node --default tronyx-vps 2>/dev/null || echo "tronyx-vps")
           fi
           echo "[IMP:9][node-resolve] target_node=${TARGET_NODE}"
           echo "target_node=${TARGET_NODE}" >> "${GITHUB_ENV}"
@@ -76,7 +77,12 @@ jobs:
             exit 1
           fi
 
-          SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 -c "import json,sys; m=json.load(sys.stdin); n='${TARGET_NODE}'; h=m.get(n,''); print(h if h else (print(f'K5: node {n} not found in NODE_HOST_MAP',file=sys.stderr) or exit(1)))")
+          # StatusReport 046 T5 (CICD-01d): inline python3 → yaml_query.py --stdin
+          SSH_HOST=$(echo "${NODE_HOST_MAP}" | python3 core/internal/scripts/yaml_query.py --stdin --get "${TARGET_NODE}" --default "" 2>/dev/null) || true
+          if [ -z "${SSH_HOST}" ]; then
+            echo "[IMP:10][node-resolve] FATAL: node ${TARGET_NODE} not found in NODE_HOST_MAP (K5)"
+            exit 1
+          fi
           echo "[IMP:9][node-resolve] ssh_host=${SSH_HOST}"
           echo "ssh_host=${SSH_HOST}" >> "${GITHUB_ENV}"
 
@@ -97,14 +103,9 @@ jobs:
           STATUS_JSON=$(ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             ci-deploy@${{ env.ssh_host }} "status ${{ inputs.project_name }}" 2>&1) || true
           echo "[IMP:8][preflight] Status response: ${STATUS_JSON}"
-          echo "${STATUS_JSON}" | python3 -c "
-          import json, sys
-          d = json.load(sys.stdin)
-          status = d.get('status', '')
-          if status not in ('found', 'stub'):
-              sys.exit(1)
-          "
-          echo "[IMP:9][preflight] VPS readiness check passed (status: $(echo "${STATUS_JSON}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status'))"))"
+          # StatusReport 046 T5 (CICD-01d): inline python3 → vps_status_check.py
+          echo "${STATUS_JSON}" | python3 core/internal/scripts/vps_status_check.py
+          echo "[IMP:9][preflight] VPS readiness check passed (status: $(echo "${STATUS_JSON}" | python3 core/internal/scripts/vps_status_check.py --output-status-only))"
         shell: bash
 
       - name: Deliver project payload
@@ -133,16 +134,15 @@ jobs:
           echo "[IMP:9][verify-deliver] Verifying deliver via forced-command status verb..."
           STATUS_JSON=$(ssh -i ~/.ssh/ci_deploy_key -o StrictHostKeyChecking=accept-new \
             ci-deploy@${{ env.ssh_host }} "status ${{ inputs.project_name }}" 2>&1) || true
-          echo "${STATUS_JSON}" | python3 -c "
-          import json, sys
-          d = json.load(sys.stdin)
-          status = d.get('status', '')
-          if status in ('found', 'stub'):
-              print(f'[IMP:9][verify-deliver] Compose file verified on VPS (status: {status})')
-          else:
-              print(f'[IMP:10][verify-deliver] FATAL: project not found on VPS (status: {status})')
-              sys.exit(1)
-          "
+          # StatusReport 046 T5 (CICD-01d): inline python3 → vps_status_check.py
+          # verify-deliver uses richer semantics (prints success/fatal + exit) — inline check kept minimal
+          STATUS=$(echo "${STATUS_JSON}" | python3 core/internal/scripts/vps_status_check.py --output-status-only 2>/dev/null || echo "")
+          if [ "${STATUS}" = "found" ] || [ "${STATUS}" = "stub" ]; then
+            echo "[IMP:9][verify-deliver] Compose file verified on VPS (status: ${STATUS})"
+          else
+            echo "[IMP:10][verify-deliver] FATAL: project not found on VPS (status: ${STATUS})"
+            exit 1
+          fi
         shell: bash
 
       - name: SSH deploy

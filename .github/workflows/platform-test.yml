@@ -104,22 +104,11 @@ jobs:
 
       # shellcheck — delegated to pre-commit hooks (single SoT)
       # D1 fix: observability → monitoring (DORA dashboard path)
+      # StatusReport 046 T3 (CICD-01b): inline python3 → validate_dora_dashboard.py
       - name: Validate DORA dashboard JSON
         run: |
           echo "::group::DORA dashboard JSON validation"
-          python3 -c "
-          import json
-          path = 'core/modules/monitoring/config/dashboards/dora-ci-cd.json'
-          with open(path) as f:
-              data = json.load(f)
-          assert data.get('uid') == 'dora-ci-cd', 'Wrong UID'
-          panels = data.get('panels', [])
-          required = {'Deploy Frequency', 'Lead Time for Changes', 'Mean Time to Recovery (MTTR)', 'Change Failure Rate (CFR)'}
-          found = {p.get('title', '') for p in panels}
-          missing = required - found
-          assert not missing, f'Missing panels: {missing}'
-          print(f'DORA dashboard OK: {len(panels)} panels, {len(required)} required present')
-          "
+          python3 core/internal/scripts/validate_dora_dashboard.py
 
       # Fast gate before Docker setup — fail-fast on syntax/static issues
       # Включает: py_compile syntax check, JSON validation, anti-drift gates, static tests, predeploy
@@ -159,22 +148,19 @@ jobs:
         with:
           scope: all
 
-      # ── Generate dynamic module list from discover_modules.py ──────────
+      # ── Generate dynamic module list from module_discovery.py ──────────
       # Single Source of Truth: module list generated from core/modules/*/module.yaml
+      # StatusReport 046 T2 (CICD-01a): inline python3 → composite action discover-modules
       - name: Generate module list
         id: module_list
-        run: |
-          python3 -c "import json; from pathlib import Path; modules=[]; [modules.append('core/modules/'+m.parent.name+'/docker-compose.base.yml') for m in sorted(Path('core/modules').glob('*/module.yaml')) if 'install_type: system' not in m.read_text()]; print(json.dumps(modules))" > /tmp/module_list.json
-          count=$(python3 -c "import json; print(len(json.load(open('/tmp/module_list.json'))))")
-          echo "[IMP:8][module-list] Generated list of $count modules"
-          echo "count=$count" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/discover-modules
 
       # D1 fix: observability → monitoring + logging in pre-pull
       - name: Pre-pull Docker images (parallel)
         continue-on-error: true
         run: |
           echo "::group::Pre-pulling Docker images (parallel)"
-          for compose_file in $(python3 -c "import json; [print(f) for f in json.load(open('/tmp/module_list.json'))]"); do
+          for compose_file in $(python3 core/internal/scripts/module_discovery.py --format lines); do
             module=$(basename "$(dirname "$compose_file")")
             (echo "[pull:$module] Starting..." && docker compose -f "$compose_file" pull --ignore-buildable 2>&1 | sed "s/^/[pull:$module] /" || echo "[pull:$module] WARNING: some images failed") &
           done
@@ -364,7 +350,7 @@ jobs:
                 docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
                 docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
               fi
-            done < <(python3 -c "import json; [print(f) for f in json.load(open('/tmp/module_list.json'))]")
+            done < <(python3 core/internal/scripts/module_discovery.py --format lines)
           else
             echo "[cleanup] Module list not found — skipping cleanup"
           fi
