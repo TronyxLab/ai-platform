@@ -110,10 +110,3 @@ class TestContainerNameConsistency:
                 len(list(MODULES_DIR.glob("*/docker-compose.base.yml"))),
             )
         assert not errors, "Unresolved depends_on references:\n" + "\n".join(errors)
-
-    # 🧐 TRAP[ARCHIVED] · 2026-07-15 · — · test_env_requires_hosts_exist (removed)
-    # · Reason: superseded by test_p20_container_coupling.py::test_env_hostnames_resolvable
-    # · The env_requires/module.yaml approach was a dead end — module.yaml contains only
-    #   variable names, not hostname values. Real hostname references live in compose env values.
-    # · test_env_hostnames_resolvable extracts hostnames from compose env and validates
-    #   they are in aliases ∪ container_names ∪ service_names — a strict superset.

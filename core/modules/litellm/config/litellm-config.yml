@@ -29,12 +29,7 @@ general_settings:
   json_logs: true
   debug: false
   num_retries: 3
-  # ✅ TRAP[INCIDENT] · 2026-06-29 · P0 · /health returned 401 despite DISABLE_AUTH_FOR_HEALTH_CHECK=true · RESOLVED 2026-07-07
-  # · Symptom: curl http://127.0.0.1:4000/health → 401 "No api key passed in"
-  # · Root: LiteLLM env var LITELLM_DISABLE_AUTH_FOR_HEALTH_CHECK ignored in newer versions;
-  # ·   config-level setting general_settings.disable_auth_for_health_check is authoritative.
-  # · Fix: Added disable_auth_for_health_check: true to general_settings in litellm-config.yml.
-  # · Prevention: Always set BOTH env var and config-level for auth bypass settings in LiteLLM.
+  # Both env var AND config-level set for auth bypass in LiteLLM
   disable_auth_for_health_check: true
 
 model_list:

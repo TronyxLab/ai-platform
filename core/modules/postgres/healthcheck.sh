@@ -17,9 +17,6 @@
 # · Suspected: нет параметризации через env (CONTAINER_SUFFIX или аргумент)
 # · Impact: smoke-тесты не могут переиспользовать healthcheck.sh, дублируют его логику
 # · When: during wave-postgres T5.2 — smoke test forced to replicate deep checks
-# 📝 TRAP[RESOLVED] · 2026-07-16 · T7 · Deep mode больше не дублирует compose pg_isready
-# · Change: docker exec pg_isready удалён из deep-mode, заменён на State.Running
-# · Compose HEALTHCHECK уже проверяет pg_isready для postgres и pgbouncer
 # endregion MODULE_CONTRACT
 
 set -euo pipefail

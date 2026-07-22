@@ -23,12 +23,7 @@ source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
 CONTAINER="hermes-agent"
 AGENT_URL="http://127.0.0.1:9119"
-# ✅ TRAP[INCIDENT] · 2026-07-10 · P1 · Healthcheck port 8080 → 9119 fix
-# · Symptom: Module healthcheck always fails via docker exec — curl http://localhost:8080/health → Connection refused
-# · Root: The TRAP[INCIDENT] from 2026-07-03 misidentified the port. Inside the hermes-agent container,
-# ·   the Hermes Agent listens on port 9119 (dashboard port), NOT 8080. Port 8080 is not used by the agent.
-# ·   Docker compose healthcheck correctly uses 127.0.0.1:9119/ (dashboard root).
-# · Fix: Use 127.0.0.1:9119 (internal dashboard port) — matches docker-compose and L1 Dockerfile healthcheck.
+# Port 9119 — internal dashboard port (agent listens here, not 8080)
 MODE="${1:-}"
 
 # ── Deep check: multi-mode healthcheck (liveness, readiness, deps) ──

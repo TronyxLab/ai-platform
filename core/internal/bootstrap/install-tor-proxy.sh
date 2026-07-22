@@ -354,10 +354,6 @@ CRON
 ## @invariants
 ##   - Idempotent: skips existing rules (iptables -C guard)
 ##   - Uses 172.16.0.0/12 (RFC 1918) to cover ALL Docker bridge subnets (172.16-31.x.x)
-##   - ✅ TRAP[INCIDENT] · 2026-06-27 · P0 · Per-interface rules missed new Docker networks · RESOLVED 2026-07-07 — iptables catch-all on line 285
-##     Root: Docker networks created AFTER install-tor-proxy.sh (e.g., hermes-agent_default 172.23.0.0/16)
-##     were not covered by per-interface iptables rules added at install time
-##     Fix: Single catch-all rule for 172.16.0.0/12 → all Docker bridges permanently covered
 ## @rationale  Q: why 172.16.0.0/12 vs per-interface? A: Docker creates networks dynamically;
 ##             per-interface rules miss new networks. 172.16.0.0/12 covers all RFC 1918
 ##             Docker default bridge subnets in one rule. Privoxy permit-access provides

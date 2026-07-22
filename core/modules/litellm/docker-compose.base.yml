@@ -53,20 +53,12 @@ services:
         limits:
           cpus: "2.0"
     logging: *default-logging
-    # ⚠️ TRAP[DECISION] · 2026-06-29 · Memory limit removed for LiteLLM — OOM-killed at 256M and 512M.
-    # · Reason: LiteLLM startup (prisma migrate + model cost map fetch + Python deps load)
-    # ·   exceeds even 512MB temporarily. Container runs at ~700MB before GC stabilizes.
-    # · Rejected: Set 1GB limit — VPS has only 8GB total; let Docker manage naturally.
-    # · Rev: Monitor with cadvisor; re-add limit if runaway memory occurs.
+    # No memory limit — LiteLLM runs at ~700MB before GC. Monitored via cAdvisor.
 
     ports:
       - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
 
-    # ⚠️ TRAP[BUG] · 2026-06-28 · LiteLLM must be invoked with --config to load model list.
-    # · Symptom: /health returns 500 "Model list not initialized" — model_list in config file ignored.
-    # · Root: LiteLLM proxy starts with `litellm --port 4000` by default (no config).
-    # ·   CONFIG_FILE env var is set but not read without --config CLI flag.
-    # · Fix: Explicit --config flag pointing to mounted config file.
+    # --config flag required to load model list from mounted config file
     command:
       - "--port"
       - "4000"
@@ -129,12 +121,7 @@ services:
         aliases:
           - litellm
 
-    # ✅ TRAP[BUG] · 2026-07-12 · P1 · /health → /health/readiness (no auth, no model_list required)
-    # · Symptom: /health returns 500 "Model list not initialized" when test config has no model_list
-    # ·   With production config, /health requires both auth AND initialized model list
-    # · Fix: /health/readiness returns 200 when proxy process + DB are available
-    # ·   Does NOT require model_list or Authorization — reliable for all configs
-    # · Rev: If LiteLLM adds a dedicated liveness endpoint, prefer that over /health/readiness
+    # /health/readiness — reliable liveness check for all configs (no auth, no model_list)
     # 🧐 TRAP[DECISION] · 2026-07-21 · — · start_period=120s / retries=5 for Prisma migrate headroom
     # · Rejected: start_period=60s / retries=3 (original — flapping during Prisma migrate 40-60s)
     # · Reason: Prisma migrate takes 40-60s, model cost map fetch 5-10s, Python init 5-10s

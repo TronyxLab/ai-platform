@@ -83,10 +83,7 @@ def test_missing_required_var(missing_var: str, error_match: str, monkeypatch, c
         monkeypatch.setenv("S3_SECRET_KEY", "sk-test")
         monkeypatch.setenv("S3_BUCKET", "my-bucket")
         monkeypatch.delenv(missing_var, raising=False)
-        # Also delete AWS_ prefixed fallbacks
-        aws_map = {"S3_ACCESS_KEY": "AWS_ACCESS_KEY_ID", "S3_SECRET_KEY": "AWS_SECRET_ACCESS_KEY"}
-        if missing_var in aws_map:
-            monkeypatch.delenv(aws_map[missing_var], raising=False)
+        # AWS_* fallbacks removed (DevPlan 049 DRIFT-2 fix) — no secondary env vars needed
 
         from backup_config import get_backup_config
 

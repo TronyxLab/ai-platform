@@ -171,6 +171,10 @@ test/gate:
     description: "Blocking pre-push gate that runs make gate MODE=fast"
 
 lifecycle:
+  - make_target: compose-safe-up
+    mechanism: compose-wrapper+preflight
+    delegates_to: core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up
+    description: "Safe docker compose up with preflight secret validation — blocks if required secrets missing (DevPlan 049)"
   - make_target: converge
     mechanism: ssh+script
     delegates_to: core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh
@@ -614,6 +618,7 @@ allowed_verbs:
   - converge
   - render-vhosts
   - deploy-context
+  - compose-safe-up
   # project-sync-secrets — DISABLED, requires core/internal/scaffold/sync-repo-secrets.sh (T3.6)
   - node-update
   - deploy-project

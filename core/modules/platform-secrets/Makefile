@@ -16,7 +16,7 @@
 ## @changes
 ##   2026-07-18 · Switched from module.mk → module-system.mk per D3 (system-module contract)
 ##              · Removed docker target overrides (now in module-system.mk template)
-##              · TRAP[DECISION] Rev met: module-system.mk created, Rev condition resolved
+##              · module-system.mk created, old include+override pattern resolved
 ## @see ../../templates/module-system.mk
 # endregion MODULE_CONTRACT
 

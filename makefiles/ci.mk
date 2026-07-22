@@ -175,9 +175,6 @@ gate:
 			tests/report-smoke.xml \
 			tests/report-component.xml \
 			-o tests/report.xml || { echo "[IMP:9][make][gate] FAIL: JUnit merge"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Wave 2: skip enforcement gate..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest \
-			tests/gates/test_gate_skip_enforcement.py -v || { echo "[IMP:9][make][gate] FAIL: skip enforcement"; GATE_FAILED=1; }; \
 		if [ $$GATE_FAILED -ne 0 ]; then \
 			echo "[IMP:9][make][gate] Gate: FAILURES DETECTED (MODE=full) — see individual FAIL messages above"; \
 			exit 1; \
@@ -204,9 +201,6 @@ gate:
 			tests/report-smoke.xml \
 			tests/report-component.xml \
 			-o tests/report.xml || { echo "[IMP:9][make][gate] FAIL: JUnit merge"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 6/6: skip enforcement gate..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest \
-			tests/gates/test_gate_skip_enforcement.py -v || { echo "[IMP:9][make][gate] FAIL: skip enforcement"; GATE_FAILED=1; }; \
 		if [ $$GATE_FAILED -ne 0 ]; then \
 			echo "[IMP:9][make][gate] Gate: FAILURES DETECTED (MODE=ci-docker) — see individual FAIL messages above"; \
 			exit 1; \

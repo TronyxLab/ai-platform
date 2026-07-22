@@ -376,12 +376,15 @@ def test_platform_starts_all_containers(
     # endregion
 
     # region BLOCK_PollRunning
-    # ── DevPlan 040 Wave 2d optimization ────────────────────────────────────
-    # platform_services fixture now waits for ALL containers to become healthy
-    # before yielding. This polling is a safety net only — containers should
-    # already be running. Reduced max_retries from 24→1 (1 check, no polling).
-    max_retries = 1
-    retry_interval = 5  # seconds (unused when max_retries=1)
+    # ── Wait for Wave 1+ containers started by background thread ────────────
+    # platform_services fixture yields after Wave 0 sync, but Wave 1+ modules
+    # start in a background daemon thread. This polling waits for them to appear.
+    # ⚠️ TRAP[BUG] · 2026-07-22 · MED · Wave-Pipeline extra event not signaled
+    # · platform_services tests get wave max_wave+1, but _init_wave_events only
+    # · creates events 0..max_wave-1 → _ensure_wave_ready passes through without
+    # · waiting. Mitigation: polling with max_retries=12 (60s window).
+    max_retries = 12
+    retry_interval = 5  # seconds
     all_running = False
 
     for attempt in range(1, max_retries + 1):

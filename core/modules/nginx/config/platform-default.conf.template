@@ -3,11 +3,6 @@
 # This file is managed by core; do NOT edit manually.
 # For node-specific overrides, use node-configs overlay.
 #
-# ⚠️ TRAP[BUG] · 2026-06-07 · HI · HTTPS-блок всегда активен в шаблоне — сертификат
-# · выпускается acme.sh DNS-01, не модифицирует конфиг nginx. При первом бутстрапе
-# · деплоится platform-http.conf (HTTP-only), затем после выпуска wildcard-сертификата
-# · заменяется на этот HTTPS-конфиг.
-#
 # ⚠️ TRAP[BUG] · 2026-07-16 · HI · D11/D12: ${PLATFORM_DOMAIN} монтировался в контейнер без подстановки
 # · Symptom: nginx crash `unknown "platform_domain" variable`; хак-замена на $host сломала vhost-роутинг (D12)
 # · Root: Docker-путь монтировал конфиги в conf.d напрямую; server_name не поддерживает переменные

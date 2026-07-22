@@ -93,8 +93,8 @@ def get_backup_config() -> BackupConfig:
     logger.info("[IMP:7][backup_config][get] Loading backup configuration from environment")
 
     endpoint_url = os.environ.get("S3_ENDPOINT_URL", os.environ.get("S3_ENDPOINT", f"https://{_DEFAULT_S3_ENDPOINT}"))
-    aws_access_key_id = os.environ.get("S3_ACCESS_KEY", os.environ.get("AWS_ACCESS_KEY_ID", ""))
-    aws_secret_access_key = os.environ.get("S3_SECRET_KEY", os.environ.get("AWS_SECRET_ACCESS_KEY", ""))
+    aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
+    aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")
     region = os.environ.get("S3_REGION", _DEFAULT_S3_REGION)
     prefix = os.environ.get("S3_PREFIX", _DEFAULT_S3_PREFIX)
@@ -167,8 +167,8 @@ def get_s3_config() -> S3Config:
     logger.info("[IMP:7][s3_config][get] Loading S3 configuration from environment")
 
     endpoint_url = os.environ.get("S3_ENDPOINT_URL", os.environ.get("S3_ENDPOINT", f"https://{_DEFAULT_S3_ENDPOINT}"))
-    aws_access_key_id = os.environ.get("S3_ACCESS_KEY", os.environ.get("AWS_ACCESS_KEY_ID", ""))
-    aws_secret_access_key = os.environ.get("S3_SECRET_KEY", os.environ.get("AWS_SECRET_ACCESS_KEY", ""))
+    aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
+    aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")
     region = os.environ.get("S3_REGION", _DEFAULT_S3_REGION)
 

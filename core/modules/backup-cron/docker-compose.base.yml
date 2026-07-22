@@ -61,15 +61,12 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
       POSTGRES_DB: "${POSTGRES_DB:-platform}"
       BACKUP_SPOOL_DIR: "/var/lib/platform/backup-spool"
-      # S3 config — Timeweb S3 (AR8: only provider, no fallback)
-      # upload.py (boto3) uses S3_ACCESS_KEY / S3_SECRET_KEY / S3_ENDPOINT_URL
-      # upload-s3.sh falls back to AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / S3_ENDPOINT
+      # S3 config — Timeweb S3 (AR8: only provider)
+      # All scripts use canonical S3_* variables (no AWS_* cross-chain fallback)
       S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-${S3_ENDPOINT:-https://s3.timeweb.cloud}}"
       S3_ENDPOINT: "${S3_ENDPOINT:-${S3_ENDPOINT_URL:-https://s3.timeweb.cloud}}"
-      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-${AWS_ACCESS_KEY_ID}}"
-      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-${S3_ACCESS_KEY}}"
-      S3_SECRET_KEY: "${S3_SECRET_KEY:-${AWS_SECRET_ACCESS_KEY}}"
-      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-${S3_SECRET_KEY}}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:?S3_SECRET_KEY is required}"
       S3_BUCKET: "${S3_BUCKET}"
       S3_REGION: "${S3_REGION:-ru-1}"
       S3_PREFIX: "${S3_PREFIX:-platform/backups}"

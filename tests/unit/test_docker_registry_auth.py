@@ -168,3 +168,6 @@ def test_configure_docker_auth_success(caplog, tmp_path, monkeypatch):
     assert ok is True
     assert os.path.isfile(daemon_path)
     logger.critical("[IMP:9][test] configure_docker_auth success — full flow OK")
+
+
+# endregion

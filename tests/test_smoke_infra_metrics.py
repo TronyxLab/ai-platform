@@ -23,6 +23,7 @@ import subprocess
 
 import pytest
 
+from _conftest.networks import get_network_manager
 from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
@@ -41,8 +42,8 @@ _SMOKE_PROJECT = "wave-infra-metrics-smoke"  # isolated smoke test project
 _CADVISOR_CONTAINER = "cadvisor-test"
 _NODE_EXPORTER_CONTAINER = "node-exporter-test"
 
-# External Docker networks
-_EXTERNAL_NETWORKS = {"test-observability-net"}
+# External Docker networks (must match all networks in docker-compose.test.yml)
+_EXTERNAL_NETWORKS = {"test-observability-net", "test-shared-cache-net", "test-shared-db-net"}
 
 # Timeouts
 _COMPOSE_UP_TIMEOUT = 90
@@ -153,32 +154,16 @@ def infra_metrics_compose():
     ]
     _run_docker(clean_args, timeout=20, check=False)
 
-    # ── Step 3: Create external networks if absent ────────────────────────────
-    created_nets: set[str] = set()
+    # ── Step 3: Create external networks via NetworkLeaseManager ──────────────
+    # Acquire networks through the canonical lease manager to coordinate with
+    # platform_services and other fixtures. Replaces direct docker network create
+    # which silently fails when networks are held by another fixture.
+    _nm = get_network_manager()
     for net_name in sorted(_EXTERNAL_NETWORKS):
-        result = subprocess.run(
-            ["docker", "network", "inspect", net_name],
-            capture_output=True,
-            text=True,
-            timeout=_NETWORK_CREATE_TIMEOUT,
-        )
-        if result.returncode != 0:
-            _logger.info("[IMP:8][infra_metrics_compose][setup] Creating network: %s", net_name)
-            subprocess.run(
-                ["docker", "network", "create", net_name],
-                capture_output=True,
-                text=True,
-                timeout=_NETWORK_CREATE_TIMEOUT,
-            )
-            created_nets.add(net_name)
-            _logger.info("[IMP:8][infra_metrics_compose][setup] Created network: %s", net_name)
-        else:
-            _logger.info("[IMP:8][infra_metrics_compose][setup] Network already exists: %s", net_name)
-
+        _nm.acquire(net_name)
     _logger.info(
-        "[IMP:9][infra_metrics_compose][setup] External networks ready: %d existing, %d created",
-        len(_EXTERNAL_NETWORKS) - len(created_nets),
-        len(created_nets),
+        "[IMP:9][infra_metrics_compose][setup] External networks acquired via NetworkLeaseManager: %s",
+        sorted(_EXTERNAL_NETWORKS),
     )
 
     # ── Step 4: Remove stale containers from shared stack ─────────────────────
@@ -258,15 +243,9 @@ def infra_metrics_compose():
     _logger.info("[IMP:7][infra_metrics_compose][teardown] Stopping infra-metrics stack")
     _run_docker(clean_args, timeout=_COMPOSE_DOWN_TIMEOUT, check=False)
 
-    # Only remove networks that we created
-    for net_name in sorted(created_nets):
-        _logger.info("[IMP:8][infra_metrics_compose][teardown] Removing created network: %s", net_name)
-        subprocess.run(
-            ["docker", "network", "rm", net_name],
-            capture_output=True,
-            text=True,
-            timeout=_NETWORK_CREATE_TIMEOUT,
-        )
+    # Release networks via canonical NetworkLeaseManager
+    for net_name in sorted(_EXTERNAL_NETWORKS, reverse=True):
+        _nm.release(net_name)
 
     _logger.info("[IMP:9][infra_metrics_compose][teardown] infra-metrics stack stopped")
 

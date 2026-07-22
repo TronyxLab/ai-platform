@@ -57,6 +57,7 @@
 | `~~make project-sync-secrets~~` | ~~Раскатка repo-secrets~~ (DISABLED — требуется T3.6) | `~~make project-sync-secrets NAME=<name>~~` | `~~core/internal/scaffold/sync-repo-secrets.sh~~` |
 | `make verify` | Пост-деплойная HTTPS-верификация | `make verify NODE=<node>` | `core/entrypoints/verify.sh` → `core/internal/verify/verify-domains.sh` |
 | `make up` / `make down` | Локальный compose-lifecycle | `make up [PROJECT=...]` | docker compose |
+| `make compose-safe-up` | Безопасный compose up с preflight валидацией секретов | `make compose-safe-up [MODULES=postgres,...]` | `core/entrypoints/compose-wrapper.sh` → `core/internal/bootstrap/deploy/compose_preflight.py` → docker compose |
 | `make status` | Статус compose-стека | `make status [PROJECT=...]` | docker compose ps |
 | `make restart` | Мягкий перезапуск compose-стека | `make restart [PROJECT=...]` | docker compose stop && docker compose start |
 | `make _get_all_profiles` | Вывод COMPOSE_PROFILES (все 13 Docker-модулей) | `make _get_all_profiles` | Встроенный `@echo` (private helper, используется скриптами) |

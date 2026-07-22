@@ -410,11 +410,11 @@ Score = 100
 Рекомендуется передать этот отчёт **Архитектору** для внесения правок в DevPlan перед стартом имплементации:
 
 ```
-task(subagent_type="Architect", 
+task(subagent_type="Architect",
      description="Fix DevPlan 047 drifts",
-     prompt="Review VerificationReport at .ai/plans/047-bootstrap-context-deploy/02-VerificationReport.md. 
-             Fix all CRITICAL (DRIFT-INDEX) and HIGH (DRIFT-CONTEXT, DRIFT-SHELL-FACADE, DRIFT-MANIFEST, DRIFT-IMPACTS) 
-             issues in DevPlan.md. Update DevPlan with explicit step renumbering table, CONTEXT flow, 
+     prompt="Review VerificationReport at .ai/plans/047-bootstrap-context-deploy/02-VerificationReport.md.
+             Fix all CRITICAL (DRIFT-INDEX) and HIGH (DRIFT-CONTEXT, DRIFT-SHELL-FACADE, DRIFT-MANIFEST, DRIFT-IMPACTS)
+             issues in DevPlan.md. Update DevPlan with explicit step renumbering table, CONTEXT flow,
              Makefile changes, and cert_orchestrator.py in IMPACTS.")
 ```
 

@@ -23,13 +23,6 @@
 ##   definitions, and business logic guards without requiring system-level dependencies.
 # endregion MODULE_CONTRACT
 
-# 💼 TRAP[ARCHIVED] · 2026-07-09→2026-07-10 · — · AcmeSimulator removed per Epic 2 T2.1
-# · Originally: TRAP[DECISION] 2026-07-09 — AcmeSimulator сохранялся как валидный simulation test
-# · Replaced by: Backlog.md Epic 2 / T2.1 — переопределено бэклогом (2026-07-10)
-# · Reason: AcmeSimulator создавал ложное чувство покрытия. Реальная acme.sh-логика
-# ·   проверяется через subprocess-контрактные тесты с source_and_run().
-# · See: .ai/plans/030-epic2-test-strategy/DevPlan.md §T2.1
-
 import logging
 import os
 import pathlib

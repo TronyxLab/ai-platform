@@ -110,17 +110,7 @@ jobs:
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
           echo "[IMP:9][deploy][rsync] Core + config rsync complete — SHA $SHA"
 
-      # ─── Step 5: Provision environment on VPS (networks + volumes) ────
-      # ✅ TRAP[DRIFT] · 2026-07-15 · RESOLVED · FIX-1: multi-scope парсер исправлен
-      # · Resolution: provision-environment.sh теперь поддерживает --scope networks --scope volumes
-      # · Workaround: используется --scope all (эквивалент, идемпотентно на VPS)
-      # · Fix applied: provision-environment.sh L285 → массив scopes=() вместо скаляра
-      # · Detected during: QA audit DevPlan 001 — bootstrap-test-ci-unification
-      # ✅ TRAP[DECISION] · 2026-07-16 → 2026-07-18 · ARCHIVED · Rev выполнен: Makefile в rsync-манифесте, Step 5c:150
-# · Resolution: T1 (Wave 2) заменил raw вызов provision-environment.sh на make provision SCOPE=networks,volumes.
-# · Makefile теперь поддерживает comma-separated SCOPE → повторяемые --scope флаги.
-# · Текущий статус: инвариант 1 (Makefile-фасад) восстановлен — все provision-операции через make.
-# Step 6: Provision networks + volumes on VPS via make provision (Invariant 1).
+      # Step 6: Provision networks + volumes on VPS via make provision (Invariant 1).
       - name: Provision environment on VPS (networks + volumes)
         if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
         run: |

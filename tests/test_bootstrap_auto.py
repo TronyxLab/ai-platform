@@ -359,11 +359,6 @@ echo "[IMP:9][build_ssh_cmd] SSH command constructed"
 # region TEST_test_rsync_command_generation
 
 
-# ✅ TRAP[DEBT] · 2026-07-17 · MED · RESOLVED — T6: добавлен mock SSH + ожидание 5/4 rsync фаз
-# · Root: mock ssh отсутствовал → ssh mkdir -p падал → 0 rsync вызовов
-# · Fix: mock ssh() → 0 (всегда успешно) + 2 новые фазы (Phase 1b platform-env.yaml, Phase 1c Makefile)
-# ·   Assertions: с secrets → 5 фаз, без secrets + без platform-env.yaml + без Makefile → 2 фазы
-# · Rev: если добавятся новые root-level файлы — обновить ожидания
 def test_rsync_command_generation(caplog) -> None:
     """Verify scp_to_server() constructs correct rsync commands for all 5 phases (core, platform-env, Makefile, node-configs, secrets)."""
     caplog.set_level(logging.DEBUG)

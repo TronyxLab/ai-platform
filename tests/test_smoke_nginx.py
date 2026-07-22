@@ -23,6 +23,7 @@
 import logging
 import os
 import subprocess
+import sys
 
 import pytest
 from _conftest.infra import infra as _infra
@@ -509,6 +510,11 @@ def test_nginx_vhost_routing(nginx_compose, caplog) -> None:
 # region FUNC_test_nginx_error_page
 @pytest.mark.smoke
 @pytest.mark.requires_docker
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="macOS Docker Desktop bind-mount has different file permission semantics than Linux "
+    "(DevPlan §macOS smoke skip). CI runs the same test on ubuntu-latest runner.",
+)
 def test_nginx_error_page(nginx_compose, caplog) -> None:
     """Verify nginx serves styled error pages (404.html) from mounted error-pages dir.
 

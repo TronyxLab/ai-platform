@@ -440,12 +440,6 @@ _verify_wildcard_san() {
 # · Rejected: cp + reload · Reason: mv атомарен на одном FS — nginx либо видит старый файл, либо новый;
 #   cp создаёт окно, где файл существует частично (nginx читает половину)
 # · Rev: если конфиги переедут на отдельный раздел, mv не атомарен → нужен symlink swap
-# ⚠️ TRAP[BUG] · 2026-06-07 · HI · nginx -t тестировал СТАРЫЙ конфиг — .testcopy не включался
-# · Старый подход копировал новый конфиг в «dst.testcopy» и запускал nginx -t.
-# · Но nginx включает только *.conf (include /etc/nginx/conf.d/*.conf),
-# · поэтому .testcopy игнорировался, и тестировался СТАРЫЙ (сломанный) конфиг.
-# · Результат: конфиг с ошибкой atomically replace'ился, nginx падал при reload.
-# · Новый подход: backup → replace → nginx -t → rollback при ошибке.
 write_config_atomic() {
     local src="$1"
     local dst="$2"
@@ -499,16 +493,6 @@ write_config_atomic() {
 ##         otherwise → HTTP-only config (platform-http.conf, safe to load without cert).
 ##         This avoids nginx startup failure when cert files are missing (chicken-and-egg).
 # region REMOVE_UBUNTU_DEFAULT_SITE
-# ⚠️ TRAP[BUG] · 2026-06-25 · HI · Duplicate default_server conflict with Ubuntu default site
-# · Symptom: nginx -t FAILS with "a duplicate default server for 0.0.0.0:80 in
-# ·   /etc/nginx/sites-enabled/default:22" when our platform-http.conf also has
-# ·   "listen 80 default_server"
-# · Root: Ubuntu's nginx package creates /etc/nginx/sites-enabled/default with
-# ·   a default_server directive. Our nginx.conf does NOT include sites-enabled/,
-# ·   but the OLD Ubuntu nginx.conf does — and nginx -t tests ALL included files
-# ·   during write_config_atomic, when our nginx.conf hasn't been deployed yet.
-# · Fix: Remove Ubuntu default site symlink before deploying our vhost config.
-# ·   Idempotent — skipped if file doesn't exist (already removed on prior run).
 _remove_ubuntu_default_site() {
     local default_site="/etc/nginx/sites-enabled/default"
     if [[ -f "$default_site" ]]; then
@@ -552,13 +536,7 @@ deploy_nginx_config() {
     # Ensure conf.d directory exists
     mkdir -p /etc/nginx/conf.d
 
-    # ⚠️ TRAP[BUG] · 2026-06-07 · HI · Vhost MUST be deployed BEFORE nginx.conf
-    # · write_config_atomic runs nginx -t (which tests ALL included files).
-    # · If the old vhost is broken (from a prior failed deploy), nginx -t fails
-    # · and the atomic write rolls back. Deploying the new valid vhost first
-    # · ensures nginx -t passes when nginx.conf is deployed next.
-
-    # ── Phase A: Deploy vhost first (replaces potentially broken old vhost) ──
+    # Phase A: deploy vhost first (replaces potentially broken old vhost)
     local vhost_dst
     if [[ -n "$domain" ]]; then
         vhost_dst="/etc/nginx/conf.d/${domain}.conf"
@@ -567,11 +545,7 @@ deploy_nginx_config() {
     fi
 
     local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
-    # 🧐 TRAP[DECISION] · 2026-06-11 · — · Chicken-and-egg vhost deploy: HTTP first, then HTTPS
-    # · Rejected: deploy HTTPS config immediately · Reason: acme.sh DNS-01 needs cert first;
-    # ·   nginx не запустится с SSL-директивой, если сертификата ещё нет;
-    # ·   двухфазный деплой (HTTP → cert → HTTPS) гарантирует атомарность
-    # · Rev: если перейти на DNS-01 challenge (acme.sh), HTTP-фаза не нужна
+    # Two-phase: HTTP-only until cert issued → full HTTPS after acme.sh DNS-01
     if [[ -n "$domain" ]] && [[ -f "$cert_path" ]]; then
         log_step "deploy-config" "INFO" "TLS cert found — deploying full HTTPS vhost"
         # 🧐 TRAP[DECISION] · 2026-06-28 · — · Vhost deploy failure is non-fatal for nginx install
@@ -992,15 +966,10 @@ main() {
     local overlay_dir="${PLATFORM_CONFIG_OVERLAY:-}"
 
     install_packages
-    # ⚠️ TRAP[BUG] · 2026-07-08 · HI · acme.sh нужен ДО issue_tls_cert
-    # · acme.sh — единственный ACME-клиент для DNS-провайдеров (webnames и др.).
-    # · Нефатально: если acme.sh не установился — wildcard-сертификат не будет
-    # · выпущен. acme.sh DNS-01 обязателен для wildcard.
+    # acme.sh DNS-01 required for wildcard cert; non-fatal if install fails
     install_acme || true
 
-    # ⚠️ TRAP[BUG] · 2026-06-07 · HI · Двухфазный деплой решает проблему курицы-яйца
-    # · фаза 1 — HTTP-only конфиг (безопасен без сертификата) → старт nginx →
-    # · фаза 2 — выпуск сертификата → фаза 3 — полный HTTPS-конфиг + reload.
+    # Two-phase deploy: HTTP-only → cert issue → full HTTPS + reload
 
     # Phase 1: Deploy nginx config (HTTP-only if no cert yet, full HTTPS if cert exists)
     deploy_nginx_config "$domain" "$overlay_dir"
@@ -1121,19 +1090,11 @@ main() {
     # · Existing configs that are already up-to-date (idempotency skip) retain
     # · their old permissions (e.g., 600 from initial deploy before the fix).
     # · This fallback fixes those without re-deploying unchanged configs.
-    # 🧐 TRAP[DECISION] · 2026-07-01 · — · Explicit chmod 644 on all conf.d
-    # · Rejected: rely only on write_config_atomic · Reason: idempotency gates
-    # ·   prevent write_config_atomic from running on unchanged files.
-    # · Rev: if all future deploys go through write_config_atomic, this may be removed.
+    # Idempotency gates skip write_config_atomic — chmod fallback ensures 644
     # [IMP:9][nginx-install][main] BUSINESS INVARIANT: all conf.d must be 644
     chmod 644 /etc/nginx/conf.d/*.conf 2>/dev/null || true
 
-    # 🧐 TRAP[DECISION] · 2026-06-29 · — · Final unconditional nginx reload after all phases
-    # · Rejected: rely only on per-phase reloads · Reason: per-phase reloads may be skipped
-    # ·   when idempotency guards falsely detect "no changes" (e.g., config file was
-    # ·   deployed outside this script flow via rsync/manual copy). A final reload ensures
-    # ·   nginx always picks up any config changes regardless of per-phase SKIP decisions.
-    # · Rev: if per-phase idempotency becomes fully reliable, this safety net may be removed.
+    # Final unconditional reload as safety net for externally-deployed configs
     if systemctl reload nginx 2>/dev/null; then
         log_step "main" "INFO" "Final nginx reload OK"
     else

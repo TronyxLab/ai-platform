@@ -203,7 +203,7 @@ def test_get_s3_config_missing_credentials():
 
     # Remove all S3-related env vars
     saved = {}
-    for var in ("S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_BUCKET", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+    for var in ("S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_BUCKET"):
         saved[var] = os.environ.pop(var, "")
 
     try:

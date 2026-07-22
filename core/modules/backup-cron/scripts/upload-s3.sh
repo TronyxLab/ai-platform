@@ -9,7 +9,7 @@
 ##   - Arguments: $1=local_file $2=s3_key
 ##   - Preserves backward compatibility with backup-postgres.sh call pattern
 ##   - Exit code: 0 on success, 1 on failure (file in spool), 2 on config error
-##   - S3 credentials from environment (S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET, etc.)
+##   - S3 credentials from environment (S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET, etc.) — canonical S3_* only (no AWS_* cross-chain fallback, DevPlan 049 DRIFT-2)
 ## @rationale Separate wrapper preserves the contract from backup-postgres.sh;
 ##          upload.py handles the actual boto3 logic for testability and code reuse.
 # endregion MODULE_CONTRACT
@@ -34,9 +34,9 @@ if [[ ! -f "${LOCAL_FILE}" ]]; then
     exit 2
 fi
 
-# Validate S3 credentials are available (support both naming conventions)
-S3_ACCESS_KEY="${S3_ACCESS_KEY:-${AWS_ACCESS_KEY_ID:-}}"
-S3_SECRET_KEY="${S3_SECRET_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+# Validate S3 credentials are available (canonical S3_* only — no AWS_* cross-chain fallback, DevPlan 049 DRIFT-2)
+S3_ACCESS_KEY="${S3_ACCESS_KEY:-}"
+S3_SECRET_KEY="${S3_SECRET_KEY:-}"
 S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-${S3_ENDPOINT:-https://s3.twcstorage.ru}}"
 
 if [[ -z "${S3_BUCKET:-}" ]]; then
@@ -45,12 +45,12 @@ if [[ -z "${S3_BUCKET:-}" ]]; then
 fi
 
 if [[ -z "${S3_ACCESS_KEY:-}" ]]; then
-    echo "[IMP:9][upload-s3] ERROR: S3_ACCESS_KEY/AWS_ACCESS_KEY_ID not set — cannot upload" >&2
+    echo "[IMP:9][upload-s3] ERROR: S3_ACCESS_KEY not set — cannot upload" >&2
     exit 2
 fi
 
 if [[ -z "${S3_SECRET_KEY:-}" ]]; then
-    echo "[IMP:9][upload-s3] ERROR: S3_SECRET_KEY/AWS_SECRET_ACCESS_KEY not set — cannot upload" >&2
+    echo "[IMP:9][upload-s3] ERROR: S3_SECRET_KEY not set — cannot upload" >&2
     exit 2
 fi
 

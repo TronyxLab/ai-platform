@@ -10,7 +10,14 @@
 ## @rationale Makefile include-split W4-E4: module targets isolated from bootstrap/CI
 # endregion MODULE_CONTRACT
 
-.PHONY: up down restart status healthcheck backup restore discover-modules validate-modules
+.PHONY: compose-safe-up up down restart status healthcheck backup restore discover-modules validate-modules
+
+## compose-safe-up: Start platform stack with preflight secret validation
+##   Delegates to core/entrypoints/compose-wrapper.sh which runs compose_preflight.py
+##   before docker compose up — blocks if required secrets are missing (DevPlan 049)
+compose-safe-up:
+	@echo "[IMP:7][make][compose-safe-up] Running preflight and starting stack..."
+	@COMPOSE_PROFILES="$(MODULES)" core/entrypoints/compose-wrapper.sh up -d
 
 ## up: Start platform stack (docker compose up -d) — supports MODULES filter
 up: discover-modules dev-certs

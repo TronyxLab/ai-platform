@@ -80,14 +80,8 @@ services:
   # endregion service:cadvisor
 
   # ── Node Exporter (Host Metrics) ─────────────────────────────────────────
-  # ⚠️ TRAP[DECISION] · 2026-06-28 · Switched from network_mode: host to observability-net.
-  # · network_mode: host prevents joining Docker networks; Prometheus on
-  # ·   observability-net couldn't reach node-exporter through cross-bridge routing.
-  # ·   Node-exporter reads host /proc and /sys via bind mounts (/host:ro)
-  # ·   and --path.rootfs=/host — host networking not required for core metrics.
-  # ·   Rev: if Docker Desktop adds native network_mode: host support, revert to host mode
-  # ·   Port 9100 exposed only on localhost for security.
-  # · [2026-07-11] rslave removed from /host volume — macOS Docker Desktop compatibility.
+  # observability-net (not host): node-exporter reads /proc via /host:ro bind mounts.
+  # Port 9100 exposed only on localhost for security.
   # region service:node-exporter
   node-exporter:
     # 🧐 TRAP[DECISION] · 2026-07-12 · — · Node Exporter upgraded v1.10.2 → v1.12.0 (BulkV0)

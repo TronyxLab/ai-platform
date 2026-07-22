@@ -207,3 +207,6 @@ def test_run_preflight_fatal_detection(caplog, monkeypatch):
     assert result.has_fatals()
     assert "ssh_connectivity" in result.fatals
     logger.critical("[IMP:9][test] run_preflight detected FATAL ssh check")
+
+
+# endregion
