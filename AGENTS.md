@@ -1,7 +1,7 @@
 <!-- GREP_SUMMARY: AGENTS.md, ai-platform, invariants, deploy-model, verb-glossary, architecture -->
 
 # GREP_SUMMARY: AGENTS.md, ai-platform, invariants, deploy-model, verb-glossary, architecture
-# STRUCTURE: ┌make targets┐ → ◇ invariants (10 rules) → ◇ deploy-model (local→CI→context) → ⊕ verb glossary → ⎋ navigation
+# STRUCTURE: ┌make targets┐ → ◇ invariants (11 rules) → ◇ deploy-model (local→CI→context) → ⊕ verb glossary → ⎋ navigation
 # region MODULE_CONTRACT
 ## @purpose  Root architecture documentation for ai-platform — defines invariants, deploy model, verb glossary
 ## @scope    Project-wide architectural rules, deployment model, canonical make targets, navigation
@@ -17,6 +17,7 @@
 ##   8. LiteLLM — PostgreSQL во всех окружениях (никакого SQLite).
 ##   9. Тестовый сервер может быть пересоздан заново — обратная совместимость не требуется.
 ##   10. Сборка образов hermes: `make hermes-build-platform` (L1, локально + push в ghcr.io как backup), `make hermes-push-l1` (L1 push в ghcr.io как disaster recovery) и `make hermes-build-context CONTEXT=<context>` (L1→L2, контекстная разработка и production).
+##   11. Manifest Generation Contract — authoritative sources (module.yaml, secret-definitions.yaml, platform-infra.yaml, Makefile .PHONY, @pytest.mark.gate) порождают generated files (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py, entrypoint-manifest.yaml#allowed_verbs/gates, core/AGENTS.md generated-секции). Generated files коммитятся, но НЕ редактируются вручную. CI gate `make check-manifests` блокирует divergence.
 ## @rationale Single source of truth for platform architecture consumed by autonomous agents and developers
 ## @rationale (D2) Invariant 4 обновлён по результатам drift-аудита: 3 канонических + 2 вспомогательных (core/internal/bootstrap/, tests/gates/) в §Навигация root AGENTS.md; templates/template-*/ — payload `make new-project`/`make new-context`, вне скоупа инварианта (не являются архитектурной документацией платформы)
 ## ⚠️ TRAP[DECISION] · 2026-07-15 · HI · L1 pushed to ghcr.io as backup, never used directly by contexts

@@ -217,9 +217,8 @@ def check_secrets(target_modules: set[str], secrets_list: list[dict], env_file_m
             continue
 
         # Check if this secret is consumed by any target module
-        if target_modules:
-            if not any(m in consumers for m in target_modules):
-                continue
+        if target_modules and not any(m in consumers for m in target_modules):
+            continue
 
         # Check availability: os.environ first, then env_file_map
         env_val = os.environ.get(name, "")
@@ -308,9 +307,7 @@ def validate_charsets(secrets_list: list[dict], env_file_map: dict[str, str]) ->
 ##   - Only checks when subcommand is "up" or None (down/stop/config bypass)
 ##   - --skip-preflight disables the check entirely
 def main(test_args: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Docker compose preflight — validates secrets before compose up"
-    )
+    parser = argparse.ArgumentParser(description="Docker compose preflight — validates secrets before compose up")
     parser.add_argument(
         "--skip-preflight",
         action="store_true",

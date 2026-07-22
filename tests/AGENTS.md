@@ -1,6 +1,5 @@
-<![CDATA[<!-- GREP_SUMMARY: AGENTS.md, tests, invariants, decisions, T1-T21, skip-gate, reuse, wave-pipeline, auto-discovery, import-contract, anti-tamper -->
-<!-- STRUCTURE: ┌invariants + decision-tree┐ → ◇ T1-T15 non-obvious decisions → ◇ T16-T21 infrastructure internals → ⊕ cross-refs -->
-
+# GREP_SUMMARY: AGENTS.md, tests, invariants, decisions, T1-T21, skip-gate, reuse, wave-pipeline, auto-discovery, import-contract, anti-tamper
+# STRUCTURE: ┌invariants + decision-tree┐ → ◇ T1-T15 non-obvious decisions → ◇ T16-T21 infrastructure internals → ⊕ cross-refs
 # AGENTS.md — tests/
 
 # region MODULE_CONTRACT

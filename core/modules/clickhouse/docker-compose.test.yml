@@ -33,7 +33,12 @@ services:
     container_name: clickhouse-test
     restart: "no"
     networks: !override  # DevPlan 017 W2.2 — test network isolation
-      - test-observability-net
+      # ⚠️ TRAP[FIX] · 2026-07-22 · Mapping format preserves 'clickhouse' alias for langfuse DNS resolution.
+      # · List format (was: `- test-observability-net`) would strip the alias from base.yml,
+      # · causing langfuse-test CLICKHOUSE_URL=http://clickhouse:8123 to fail DNS resolution.
+      test-observability-net:
+        aliases:
+          - clickhouse
     # ── Test-specific host ports (non-standard — avoid production conflicts) ──
     ports:
       - "127.0.0.1:18123:8123"     # HTTP interface

@@ -1,7 +1,8 @@
+# core/entrypoint-manifest.yaml
 # GREP_SUMMARY: entrypoint-manifest, yaml, canonical-targets, operations-registry, forbidden
 # STRUCTURE: ┌Makefile targets┐ → ◇ map target→script→delegation → ⊕ CI gates verify parity with AGENTS.md triad
 # region MODULE_CONTRACT
-## @purpose  Canonical operations registry consumed by CI gates (no-unregistered-entrypoint, manifest-integrity). Each entry defines a make target, its mechanism, delegation path, and description.
+## @purpose  Canonical operations registry consumed by CI gates (no-unregistered-entrypoint, manifest-integrity).
 ## @scope    Lists all canonical make targets, CI gates, forbidden scripts/directories/verbs, and allowed_verbs dictionary
 ## @invariants
 ##   - Every Makefile .PHONY target must have a corresponding entry in this manifest
@@ -9,619 +10,1113 @@
 ##   - allowed_verbs list must match Makefile canonical targets
 ##   - Forbidden lists are explicit deny — no additions without Architect approval
 ## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad
-##            automatically. Manual sync validation replaced by automated parity checks (Phase 5).
-##            YAML chosen over JSON for inline comments and readability in code review.
 # endregion MODULE_CONTRACT
-# =============================================================================
-# core/entrypoint-manifest.yaml
-# =============================================================================
-# SYNCHRONIZED WITH: core/AGENTS.md (table of canonical operations)
-# USED BY: CI gates (no-unregistered-entrypoint, manifest-integrity)
-# =============================================================================
 
 bootstrap:
-  - make_target: bootstrap-node
-    mechanism: ssh+rsync
-    delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/secrets-init.sh + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py + core/internal/bootstrap/deploy/context_deployer.py
-    description: "Idempotent bootstrap of a new node to FULL readiness (infra + context projects + certs + Docker Hub auth) (DevPlan 047)"
-  - make_target: deploy-context
-    mechanism: ssh+python
-    delegates_to: core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py
-    description: "Deploy all projects of a context on a bootstrapped node (standalone or post-bootstrap). Idempotent: ghcr.io pull primary, build-on-node fallback (DevPlan 047)"
-
+- make_target: bootstrap-node
+  mechanism: ssh+rsync
+  delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py
+    → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py
+    + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh
+    + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh
+    + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/secrets-init.sh
+    + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py
+    + core/internal/bootstrap/deploy/context_deployer.py
+  signature: make bootstrap-node NODE=<name>
+  operation_ru: Идемпотентный bootstrap ноды
+  description: Idempotent bootstrap of a new node to FULL readiness (infra + context
+    projects + certs + Docker Hub auth) (DevPlan 047)
+- make_target: deploy-context
+  mechanism: ssh+python
+  delegates_to: core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py
+  signature: make deploy-context NODE=<n> [CONTEXT=<ctx>]
+  operation_ru: Деплой проектов контекста на ноде
+  description: 'Deploy all projects of a context on a bootstrapped node (standalone
+    or post-bootstrap). Idempotent: ghcr.io pull primary, build-on-node fallback (DevPlan
+    047)'
 deploy:
-  - make_target: deploy
-    mechanism: git-push
-    delegates_to: git push → CI → core/entrypoints/deploy.sh (VPS forced-command) → core/internal/deploy/deploy-project.sh → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh
-    description: "Deploy a project via git push → CI → SSH forced-command on VPS"
-  - make_target: deploy-project
-    mechanism: ssh+tar
-    delegates_to: core/entrypoints/deploy-project.sh → ssh platform-deliver + ssh deploy.sh → core/internal/deploy/deploy-project.sh
-    description: "Direct project deploy bypassing CI (emergency fallback) — tar+ssh deliver, deploy with DEPLOY-DIRECT audit, optional post-deploy verify"
-  - make_target: context-promote
-    mechanism: git-push-context
-    delegates_to: core/entrypoints/context-promote.sh → copy to <context>/ai-platform → CI
-    description: "Promote platform to a context org (copy + CI + auto-deploy)"
-
+- make_target: deploy
+  mechanism: git-push
+  delegates_to: git push → CI → core/entrypoints/deploy.sh (VPS forced-command) →
+    core/internal/deploy/deploy-project.sh → core/internal/notify/notify-hook.sh +
+    core/internal/catalog/generate-catalog.sh
+  signature: make deploy PROJECT=<dir>
+  operation_ru: Деплой проекта
+  description: Deploy a project via git push → CI → SSH forced-command on VPS
+- make_target: deploy-project
+  mechanism: ssh+tar
+  delegates_to: core/entrypoints/deploy-project.sh → ssh platform-deliver + ssh deploy.sh
+    → core/internal/deploy/deploy-project.sh
+  signature: make deploy-project PROJECT=<dir> NODE=<node>
+  operation_ru: Прямой деплой минуя CI
+  description: Direct project deploy bypassing CI (emergency fallback) — tar+ssh deliver,
+    deploy with DEPLOY-DIRECT audit, optional post-deploy verify
+- make_target: context-promote
+  mechanism: git-push-context
+  delegates_to: core/entrypoints/context-promote.sh → copy to <context>/ai-platform
+    → CI
+  signature: make context-promote CONTEXT=<context>
+  operation_ru: Промоут платформы в контекст
+  description: Promote platform to a context org (copy + CI + auto-deploy)
 build:
-  - make_target: hermes-build-platform
-    mechanism: docker-build
-    delegates_to: core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-platform
-    description: "Build L1 (hermes-agent-base) locally + push to ghcr.io as backup"
-  - make_target: hermes-build-context
-    mechanism: docker-build
-    delegates_to: core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context
-    description: "Build L1→L2 (hermes-agent-context), optionally push to GHCR"
-  - make_target: hermes-push-l1
-    mechanism: docker-push
-    delegates_to: "docker tag + docker push to ghcr.io"
-    description: "Push L1 (hermes-agent-base) to ghcr.io as disaster recovery backup"
-
+- make_target: hermes-build-platform
+  mechanism: docker-build
+  delegates_to: core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-platform
+  signature: make hermes-build-platform
+  operation_ru: Сборка L1 образа
+  description: Build L1 (hermes-agent-base) locally + push to ghcr.io as backup
+- make_target: hermes-build-context
+  mechanism: docker-build
+  delegates_to: core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context
+  signature: make hermes-build-context CONTEXT=<context>
+  operation_ru: Сборка L1→L2 образа
+  description: Build L1→L2 (hermes-agent-context), optionally push to GHCR
+- make_target: hermes-push-l1
+  mechanism: docker-push
+  delegates_to: docker tag + docker push to ghcr.io
+  signature: make hermes-push-l1
+  operation_ru: Push L1 в ghcr.io
+  description: Push L1 (hermes-agent-base) to ghcr.io as disaster recovery backup
 validate:
-  - make_target: templates-check
-    mechanism: python-script
-    delegates_to: core/internal/template-engine.sh check --verbose
-    description: "Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic"
-  - make_target: templates-render
-    mechanism: python-script
-    delegates_to: core/internal/template-engine.sh render-all
-    description: "Render all templates from manifest to output paths"
-  - make_target: validate-modules
-    mechanism: python-script
-    delegates_to: core/internal/scripts/validate_module_yaml.py --all
-    description: "D5 module.yaml contract validator (typed env_requires, restart-drift, secret-presence)"
-  - make_target: validate
-    mechanism: shell-script
-    delegates_to: core/entrypoints/validate.sh → core/internal/validate/validate.sh
-    description: "Schema validation of project files"
-  - make_target: lint
-    mechanism: shell-script
-    delegates_to: core/entrypoints/validate.sh --lint → core/internal/validate/validate.sh
-    description: "shellcheck + yamllint + pytest-lint"
-  - make_target: audit
-    mechanism: shell-script
-    delegates_to: core/entrypoints/audit.sh → core/internal/audit/audit.sh
-    description: "System audit of platform (local or remote node)"
-  - make_target: check-file-lines
-    mechanism: shell-script
-    delegates_to: core/entrypoints/check-file-lines.sh
-    description: "Scan files exceeding line limit (default 500) — non-blocking warning"
-  - make_target: scripts-audit
-    mechanism: shell-script
-    delegates_to: core/internal/scripts-audit.sh
-    description: "Audit shebang script registration in manifest or exceptions"
-
-# NOTE: lint.sh = pre-commit hooks only, validate.sh --lint = CI/manual linting
+- make_target: templates-check
+  mechanism: python-script
+  delegates_to: core/internal/template-engine.sh check --verbose
+  signature: make templates-check
+  operation_ru: Dry-run проверка шаблонов
+  description: Dry-run render all templates from manifest — exit 0 if all resolvable,
+    1 with diagnostic
+- make_target: templates-render
+  mechanism: python-script
+  delegates_to: core/internal/template-engine.sh render-all
+  signature: make templates-render
+  operation_ru: Рендер шаблонов
+  description: Render all templates from manifest to output paths
+- make_target: validate-modules
+  mechanism: python-script
+  delegates_to: core/internal/scripts/validate_module_yaml.py --all
+  signature: make validate-modules
+  operation_ru: Валидация module.yaml
+  description: D5 module.yaml contract validator (typed env_requires, restart-drift,
+    secret-presence)
+- make_target: validate
+  mechanism: shell-script
+  delegates_to: core/entrypoints/validate.sh → core/internal/validate/validate.sh
+  signature: make validate [FILES=...]
+  operation_ru: Schema-валидация
+  description: Schema validation of project files
+- make_target: lint
+  mechanism: shell-script
+  delegates_to: core/entrypoints/validate.sh --lint → core/internal/validate/validate.sh
+  signature: make lint
+  operation_ru: Линтинг
+  description: shellcheck + yamllint + pytest-lint
+- make_target: audit
+  mechanism: shell-script
+  delegates_to: core/entrypoints/audit.sh → core/internal/audit/audit.sh
+  signature: make audit [NODE=...]
+  operation_ru: Системный аудит
+  description: System audit of platform (local or remote node)
+- make_target: check-file-lines
+  mechanism: shell-script
+  delegates_to: core/entrypoints/check-file-lines.sh
+  signature: make check-file-lines [MAX_LINES=500]
+  operation_ru: Проверка длины файлов
+  description: Scan files exceeding line limit (default 500) — non-blocking warning
+- make_target: scripts-audit
+  mechanism: shell-script
+  delegates_to: core/internal/scripts-audit.sh
+  signature: make scripts-audit
+  operation_ru: Аудит регистрации скриптов
+  description: Audit shebang script registration in manifest or exceptions
 lint:
-  - script: lint.sh
-    mechanism: pre-commit-hook
-    delegates_to: core/entrypoints/lint.sh
-    description: "Pre-commit hook runner for GREP_SUMMARY validation + target name check"
-  - script: check-doc-headers.sh
-    mechanism: pre-commit-hook
-    delegates_to: core/entrypoints/check-doc-headers.sh
-    description: "Validates GREP_SUMMARY, MODULE_CONTRACT, STRUCTURE, regions in source files"
-  - script: check-commit-msg.sh
-    mechanism: commit-msg-hook
-    delegates_to: core/entrypoints/check-commit-msg.sh
-    description: "Conventional Commits message validation (commit-msg hook)"
-
+- script: lint.sh
+  mechanism: pre-commit-hook
+  delegates_to: core/entrypoints/lint.sh
+  signature: (pre-commit hook)
+  operation_ru: Pre-commit hook — линтинг
+  description: Pre-commit hook runner for GREP_SUMMARY validation + target name check
+- script: check-doc-headers.sh
+  mechanism: pre-commit-hook
+  delegates_to: core/entrypoints/check-doc-headers.sh
+  signature: (pre-commit hook)
+  operation_ru: Pre-commit hook — проверка документ-хедеров
+  description: Validates GREP_SUMMARY, MODULE_CONTRACT, STRUCTURE, regions in source
+    files
+- script: check-commit-msg.sh
+  mechanism: commit-msg-hook
+  delegates_to: core/entrypoints/check-commit-msg.sh
+  signature: (commit-msg hook)
+  operation_ru: Commit-msg hook — проверка коммит-сообщений
+  description: Conventional Commits message validation (commit-msg hook)
 test:
-  - make_target: test
-    mechanism: pytest
-    delegates_to: "make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]"
-    description: "Run tests with MARKER filter. MARKER=all (default) runs full suite."
-  - make_target: test-inventory-sync
-    mechanism: pytest-collect
-    delegates_to: tests/tools/sync_inventory.py
-    description: "Regenerate tests/test_inventory.yaml from pytest --collect-only"
-
+- make_target: test
+  mechanism: pytest
+  delegates_to: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
+  signature: make test [MARKER=...]
+  operation_ru: Запуск тестов
+  description: Run tests with MARKER filter. MARKER=all (default) runs full suite.
+- make_target: test-inventory-sync
+  mechanism: pytest-collect
+  delegates_to: tests/tools/sync_inventory.py
+  signature: make test-inventory-sync
+  operation_ru: Синхронизация test inventory
+  description: Regenerate tests/test_inventory.yaml from pytest --collect-only
 scaffold:
-  - make_target: new-project
-    mechanism: shell-script
-    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh
-    description: "Create a new project from template"
-  - make_target: new-context
-    mechanism: shell-script
-    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh
-    description: "Create a new deployment context (GitHub org + repos)"
-  - make_target: project-sync-env
-    mechanism: shell-script
-    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/gen-env-platform.sh
-    description: "Sync .env.platform from platform-env.yaml"
-  - make_target: remove-project
-    mechanism: shell-script
-    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh
-    description: "Remove project from lifecycle (safe — compose down without -v, vhost off)"
-  - make_target: adopt-project
-    mechanism: shell-script
-    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen-env-platform.sh
-    description: "Adopt existing project into platform lifecycle"
-  - make_target: project-list
-    mechanism: shell-script
-    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh
-    description: "List registered projects from local node.yaml (offline)"
-  - make_target: project-status
-    mechanism: shell-script
-    delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status
-    description: "Query live status of project(s) on target node via SSH"
-  - make_target: render-vhosts
-    mechanism: shell-script
-    delegates_to: core/internal/scaffold/add-vhost.sh --render-all --node <n>
-    description: "Regenerate Nginx vhost configs from node.yaml#projects with domain (GENERATED, S1)"
-  # - make_target: project-sync-secrets
-  #   mechanism: shell-script
-  #   delegates_to: core/internal/scaffold/sync-repo-secrets.sh
-  #   description: "Sync project repo-secrets from SOPS enc-file via gh CLI (DISABLED — requires sync-repo-secrets.sh, T3.6 conditional)"
-
+- make_target: new-project
+  mechanism: shell-script
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh
+    → core/internal/scaffold/add-vhost.sh
+  signature: make new-project NAME=<n> TEMPLATE=<t>
+  operation_ru: Создание проекта из шаблона
+  description: Create a new project from template
+- make_target: new-context
+  mechanism: shell-script
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh
+  signature: make new-context NODE=<n>
+  operation_ru: Создание контекста деплоя
+  description: Create a new deployment context (GitHub org + repos)
+- make_target: project-sync-env
+  mechanism: shell-script
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/gen-env-platform.sh
+  signature: make project-sync-env [NAME=<name>]
+  operation_ru: Синхронизация .env.platform
+  description: Sync .env.platform from platform-env.yaml
+- make_target: remove-project
+  mechanism: shell-script
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh
+  signature: make remove-project NAME=<name>
+  operation_ru: Удаление проекта из lifecycle
+  description: Remove project from lifecycle (safe — compose down without -v, vhost
+    off)
+- make_target: adopt-project
+  mechanism: shell-script
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh
+    → core/internal/scaffold/gen-env-platform.sh
+  signature: make adopt-project DIR=<dir>
+  operation_ru: Адаптация существующего проекта
+  description: Adopt existing project into platform lifecycle
+- make_target: project-list
+  mechanism: shell-script
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh
+  signature: make project-list [NODE=<node>]
+  operation_ru: Список проектов
+  description: List registered projects from local node.yaml (offline)
+- make_target: project-status
+  mechanism: shell-script
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh
+    --status
+  signature: make project-status NAME=<name>
+  operation_ru: Статус проекта
+  description: Query live status of project(s) on target node via SSH
+- make_target: render-vhosts
+  mechanism: shell-script
+  delegates_to: core/internal/scaffold/add-vhost.sh --render-all --node <n>
+  signature: make render-vhosts NODE=<name>
+  operation_ru: Генерация vhost конфигов
+  description: Regenerate Nginx vhost configs from node.yaml#projects with domain
+    (GENERATED, S1)
 secrets:
-  - make_target: secrets-unlock
-    mechanism: shell-script
-    delegates_to: core/entrypoints/secrets.sh → core/internal/secrets/decrypt-secrets.sh
-    description: "Decrypt SOPS/age secrets (local or remote node)"
-
+- make_target: secrets-unlock
+  mechanism: shell-script
+  delegates_to: core/entrypoints/secrets.sh → core/internal/secrets/decrypt-secrets.sh
+  signature: make secrets-unlock [NODE=...]
+  operation_ru: Расшифровка секретов
+  description: Decrypt SOPS/age secrets (local or remote node)
 test/gate:
-  - make_target: gate
-    mechanism: pytest+lint
-    delegates_to: "make gate [MODE=fast|full]"
-    description: "Production gate. MODE=full (default): lint+validate+gates+static+predeploy+smoke+component. MODE=fast: syntax+JSON+gates+static+predeploy (no Docker)."
-  - script: pre-push-gate.sh
-    mechanism: pre-push-hook
-    delegates_to: core/entrypoints/pre-push-gate.sh
-    description: "Blocking pre-push gate that runs make gate MODE=fast"
-
+- make_target: gate
+  mechanism: pytest+lint
+  delegates_to: make gate [MODE=fast|full]
+  signature: make gate [MODE=fast|full]
+  operation_ru: Production gate
+  description: 'Production gate. MODE=full (default): lint+validate+gates+static+predeploy+smoke+component.
+    MODE=fast: syntax+JSON+gates+static+predeploy (no Docker).'
+- make_target: check-manifests
+  mechanism: git-diff
+  delegates_to: git diff --exit-code
+  signature: make check-manifests
+  operation_ru: Проверка актуальности сгенерированных манифестов
+  description: Freshness gate — all generated manifests are in sync with authoritative
+    sources.
+- make_target: generate-manifests
+  mechanism: python-script
+  delegates_to: make generate-manifests
+  signature: make generate-manifests
+  operation_ru: Генерация всех манифестов
+  description: Generate secrets-manifest.yaml, platform-env.yaml, entrypoint-manifest.yaml,
+    smoke_env_generated.py, env_defaults_generated.py.
+- script: pre-push-gate.sh
+  mechanism: pre-push-hook
+  delegates_to: core/entrypoints/pre-push-gate.sh
+  signature: (pre-push hook)
+  operation_ru: Pre-push gate
+  description: Blocking pre-push gate that runs make gate MODE=fast
 lifecycle:
-  - make_target: compose-safe-up
-    mechanism: compose-wrapper+preflight
-    delegates_to: core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up
-    description: "Safe docker compose up with preflight secret validation — blocks if required secrets missing (DevPlan 049)"
-  - make_target: converge
-    mechanism: ssh+script
-    delegates_to: core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh
-    description: "Idempotent reconcile with 9 R-units (R1-R9) and --units filter — конвергирует ноду с desired state из node.yaml; standalone или из node-lifecycle"
-  - make_target: healthcheck
-    mechanism: shell-script
-    delegates_to: core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh
-    description: "Health check of platform (local compose or remote node via SSH)"
-  - make_target: up
-    mechanism: provisioner + docker-compose
-    delegates_to: core/internal/provision-environment.sh → docker compose up
-    description: "Provision environment (networks, volumes, CI env) from platform-env.yaml, then start local compose lifecycle"
-  - make_target: down
-    mechanism: docker-compose
-    delegates_to: "docker compose down"
-    description: "Stop local compose lifecycle"
-  - make_target: restart
-    mechanism: docker-compose
-    delegates_to: "docker compose stop && docker compose start"
-    description: "Soft restart local compose services (stop + start)"
-  - make_target: status
-    mechanism: docker-compose
-    delegates_to: "docker compose ps"
-    description: "Show status of local compose services"
-  - make_target: backup
-    mechanism: shell-script
-    delegates_to: "Module backup scripts"
-    description: "Run backup for platform services"
-  - make_target: restore
-    mechanism: shell-script
-    delegates_to: "Module restore scripts"
-    description: "Restore from backup"
-  - make_target: node-update
-    mechanism: ssh+rsync
-    delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules + healthcheck
-    description: "Regular CI update of an already-provisioned node (not INIT)"
-  - make_target: verify
-    mechanism: shell-script
-    delegates_to: core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh
-    description: "Post-deploy HTTPS verification — curl all expose:true domains from node.yaml, exit 0 if all HTTP 200"
-
-# ---------------------------------------------------------------------------
-# Provision — environment provisioning (P5: Single Source of Truth)
-# Consumed by Makefile up, CI workflows, and deploy-modules.sh
-# ---------------------------------------------------------------------------
+- make_target: compose-safe-up
+  mechanism: compose-wrapper+preflight
+  delegates_to: core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py
+    → docker compose up
+  signature: make compose-safe-up [MODULES=...]
+  operation_ru: Безопасный compose up
+  description: Safe docker compose up with preflight secret validation — blocks if
+    required secrets missing (DevPlan 049)
+- make_target: converge
+  mechanism: ssh+script
+  delegates_to: core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh
+  signature: make converge NODE=<name>
+  operation_ru: Реконсиляция ноды
+  description: Idempotent reconcile with 9 R-units (R1-R9) and --units filter — конвергирует
+    ноду с desired state из node.yaml; standalone или из node-lifecycle
+- make_target: healthcheck
+  mechanism: shell-script
+  delegates_to: core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts +
+    core/internal/healthcheck/tor-proxy-healthcheck.sh
+  signature: make healthcheck [NODE=...]
+  operation_ru: Проверка здоровья
+  description: Health check of platform (local compose or remote node via SSH)
+- make_target: up
+  mechanism: provisioner + docker-compose
+  delegates_to: core/internal/provision-environment.sh → docker compose up
+  signature: make up [PROJECT=...]
+  operation_ru: Запуск compose-стека
+  description: Provision environment (networks, volumes, CI env) from platform-env.yaml,
+    then start local compose lifecycle
+- make_target: down
+  mechanism: docker-compose
+  delegates_to: docker compose down
+  signature: make down
+  operation_ru: Остановка compose-стека
+  description: Stop local compose lifecycle
+- make_target: restart
+  mechanism: docker-compose
+  delegates_to: docker compose stop && docker compose start
+  signature: make restart
+  operation_ru: Мягкий перезапуск compose-стека
+  description: Soft restart local compose services (stop + start)
+- make_target: status
+  mechanism: docker-compose
+  delegates_to: docker compose ps
+  signature: make status
+  operation_ru: Статус compose-стека
+  description: Show status of local compose services
+- make_target: backup
+  mechanism: shell-script
+  delegates_to: Module backup scripts
+  signature: make backup [NODE=...]
+  operation_ru: Резервное копирование
+  description: Run backup for platform services
+- make_target: restore
+  mechanism: shell-script
+  delegates_to: Module restore scripts
+  signature: make restore NODE=<n>
+  operation_ru: Восстановление из бэкапа
+  description: Restore from backup
+- make_target: node-update
+  mechanism: ssh+rsync
+  delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh
+    --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules
+    + healthcheck
+  signature: make node-update NODE=<name>
+  operation_ru: Обновление provisioned ноды
+  description: Regular CI update of an already-provisioned node (not INIT)
+- make_target: verify
+  mechanism: shell-script
+  delegates_to: core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh
+  signature: make verify NODE=<node>
+  operation_ru: HTTPS-верификация
+  description: Post-deploy HTTPS verification — curl all expose:true domains from
+    node.yaml, exit 0 if all HTTP 200
 provision:
-  - make_target: provision
-    mechanism: shell-script
-    delegates_to: core/internal/provision-environment.sh
-    description: "Idempotent environment provisioner — reads platform-env.yaml and creates Docker networks, volume directories, and CI env vars"
-
-# ---------------------------------------------------------------------------
-# Dev — local development operations
-# ---------------------------------------------------------------------------
+- make_target: provision
+  mechanism: shell-script
+  delegates_to: core/internal/provision-environment.sh
+  signature: make provision [SCOPE=...]
+  operation_ru: Provision окружения
+  description: Idempotent environment provisioner — reads platform-env.yaml and creates
+    Docker networks, volume directories, and CI env vars
 dev:
-  - make_target: discover-modules
-    mechanism: python-script
-    delegates_to: core/internal/bootstrap/discover_modules.py
-    description: "Auto-discover modules and regenerate docker-compose.yml include section"
-  - make_target: dev-certs
-    mechanism: shell-script
-    delegates_to: core/modules/nginx/generate-dev-certs.sh
-    description: "Idempotent generation of self-signed dev SSL certificates for nginx (hybrid mkcert→openssl)"
-  - make_target: _get_all_profiles
-    mechanism: makefile-echo
-    delegates_to: "echo"
-    description: "Private helper — echo COMPOSE_PROFILES string (all 13 Docker modules with profiles). Used by CI and production scripts."
-
-# ---------------------------------------------------------------------------
-# Module hooks — hook scripts called from module.yaml hooks system
-# These are NOT make targets — they are lifecycle hooks triggered by deploy flow
-# Consumed by CI gates (test_gate_module_hooks.py).
-# ---------------------------------------------------------------------------
+- make_target: discover-modules
+  mechanism: python-script
+  delegates_to: core/internal/bootstrap/discover_modules.py
+  signature: make discover-modules
+  operation_ru: Авто-обнаружение модулей
+  description: Auto-discover modules and regenerate docker-compose.yml include section
+- make_target: dev-certs
+  mechanism: shell-script
+  delegates_to: core/modules/nginx/generate-dev-certs.sh
+  signature: make dev-certs [CERT_BACKEND=...]
+  operation_ru: Генерация dev SSL-сертификатов
+  description: Idempotent generation of self-signed dev SSL certificates for nginx
+    (hybrid mkcert→openssl)
+- make_target: _get_all_profiles
+  mechanism: makefile-echo
+  delegates_to: echo
+  signature: make _get_all_profiles
+  operation_ru: Вывод COMPOSE_PROFILES
+  description: Private helper — echo COMPOSE_PROFILES string (all 13 Docker modules
+    with profiles). Used by CI and production scripts.
 module_hooks:
-  - script: nginx_reload_hook.sh
-    path: core/modules/nginx/nginx_reload_hook.sh
-    description: "Nginx config validation and reload after project deploy — called via module.yaml hooks.on_project_deploy"
-
-# ---------------------------------------------------------------------------
-# Lib — sourced library scripts (Wave 2: W2-E1, W2-E3)
-# These are NOT make targets — they are sourced by entrypoints and internal scripts.
-# type: sourced means the file is `source`'d, not executed directly.
-# Pattern: type: sourced, consumers: [<list of scripts that source this file>]
-# Consumed by CI gates for cross-layer validation and no-unregistered-entrypoint.
-# ---------------------------------------------------------------------------
+- script: nginx_reload_hook.sh
+  path: core/modules/nginx/nginx_reload_hook.sh
+  signature: (module hook)
+  operation_ru: Reload nginx после деплоя
+  description: Nginx config validation and reload after project deploy — called via
+    module.yaml hooks.on_project_deploy
 lib:
-  - script: ssh.sh
-    path: core/lib/ssh.sh
-    type: sourced
-    consumers:
-      - core/internal/bootstrap/scp-deliver.sh
-      - core/internal/bootstrap/remote-cmd.sh
-      - core/internal/scaffold/remove-project.sh
-      - core/internal/scaffold/project-list.sh
-      - core/lib/vps-readiness.sh
-      - core/internal/deploy/reconcile-projects.sh
-    description: "SSH facade with timeout wrapper — single source of truth for all remote operations (W2-E1)"
-  - script: audit_logging.sh
-    path: core/lib/audit_logging.sh
-    type: sourced
-    consumers:
-      - core/internal/deploy/deploy-project.sh
-      - core/entrypoints/context-promote.sh
-      - core/internal/scaffold/remove-project.sh
-      - core/internal/provision-environment.sh
-      - core/entrypoints/build.sh
-      - core/internal/secrets/decrypt-secrets.sh
-      - core/internal/bootstrap/node-lifecycle.sh (update-mode)
-    description: "Audit logging + audit_step wrapper — dual-write audit trail for state-modifying entrypoints (W2-E3)"
-
-# ---------------------------------------------------------------------------
-# Module lifecycle — targets from core/templates/module.mk (Docker modules)
-# These are NOT in the canonical verb dictionary (not in AGENTS.md table)
-# but are valid targets for module Makefiles. Consumed by CI gates
-# (no-unregistered-entrypoint, name-linter) as the single source of truth.
-# ---------------------------------------------------------------------------
+- script: ssh.sh
+  path: core/lib/ssh.sh
+  signature: (sourced library)
+  operation_ru: SSH facade with timeout
+  type: sourced
+  consumers:
+  - core/internal/bootstrap/scp-deliver.sh
+  - core/internal/bootstrap/remote-cmd.sh
+  - core/internal/scaffold/remove-project.sh
+  - core/internal/scaffold/project-list.sh
+  - core/lib/vps-readiness.sh
+  - core/internal/deploy/reconcile-projects.sh
+  description: SSH facade with timeout wrapper — single source of truth for all remote
+    operations (W2-E1)
+- script: audit_logging.sh
+  path: core/lib/audit_logging.sh
+  signature: (sourced library)
+  operation_ru: Audit logging library
+  type: sourced
+  consumers:
+  - core/internal/deploy/deploy-project.sh
+  - core/entrypoints/context-promote.sh
+  - core/internal/scaffold/remove-project.sh
+  - core/internal/provision-environment.sh
+  - core/entrypoints/build.sh
+  - core/internal/secrets/decrypt-secrets.sh
+  - core/internal/bootstrap/node-lifecycle.sh (update-mode)
+  description: Audit logging + audit_step wrapper — dual-write audit trail for state-modifying
+    entrypoints (W2-E3)
 module_lifecycle:
-  - start
-  - stop
-  # restart uses soft restart semantics (stop + start) from Makefile.common
-  - restart
-  # restart-hard: hard restart with --force-recreate (module.mk override)
-  - restart-hard
-  - status
-  - logs
-  - build
-  - up
-  # down: discoverability alias for stop
-  - down
-  - backup
-  - restore
-
-# ---------------------------------------------------------------------------
-# System module lifecycle — targets from core/templates/module-system.mk
-# For install_type: system modules (e.g. platform-secrets). Different contract
-# from Docker modules — systemd-native operations only, no docker compose.
-# ---------------------------------------------------------------------------
+- start
+- stop
+- restart
+- restart-hard
+- status
+- logs
+- build
+- up
+- down
+- backup
+- restore
 system_module_lifecycle:
-  - module: platform-secrets
-    type: system
-    targets:
-      install: core/modules/platform-secrets/Makefile
-      status: core/modules/platform-secrets/Makefile
-      restart: core/modules/platform-secrets/Makefile
-      logs: core/modules/platform-secrets/Makefile
-
-# ---------------------------------------------------------------------------
-# Name linter configuration — rules for make target name validation
-# Consumed by bash (lint.sh namelint). Python linter logic migrated to
-# test_gate_manifest_integrity.py internal helper (name_linter.py deleted).
-# MODULE_DICTIONARY is defined as: module_lifecycle ∪ {"backup", "help"}
-# (backup is in lifecycle, help is a system exception).
-# ---------------------------------------------------------------------------
+- module: platform-secrets
+  type: system
+  targets:
+    install: core/modules/platform-secrets/Makefile
+    status: core/modules/platform-secrets/Makefile
+    restart: core/modules/platform-secrets/Makefile
+    logs: core/modules/platform-secrets/Makefile
 name_linter:
   system_exceptions:
-    - help
-    - venv
-    - pre-commit-install
-    - pre-commit-run
+  - help
+  - venv
+  - pre-commit-install
+  - pre-commit-run
   system_prefixes:
-    - test-
-    - gate-
-    - pre-commit-
+  - test-
+  - gate-
+  - pre-commit-
   namespace_collision_names:
-    - deploy
-
-# ---------------------------------------------------------------------------
-# CI gates — anti-drift validation (Phase 5)
-# Every gate is a pytest test in tests/gates/ with marker @pytest.mark.gate
-# ---------------------------------------------------------------------------
-gates:
-  # AUTO-DISCOVERED: all test_gate_*.py files in tests/gates/. Keep this list
-  # in sync with the actual files. CI gate checks validate bidirectional coverage.
-  - id: no-unregistered-entrypoint
-    description: Every shebang file and Makefile target is registered in this manifest
-    test_file: test_gate_no_unregistered_entrypoint.py
-  - id: manifest-integrity
-    description: Manifest bidirectional integrity — delegates_to paths, allowed_verbs ↔ Makefile ↔ AGENTS.md, forbidden structures, forbidden verbs, module targets, entrypoint registration
-    test_file: test_gate_manifest_integrity.py
-  - id: ci-coverage
-    description: CI skip documentation, SHA-aware aggregator, MODE=fast exclusions, check-doc-headers, main-full-gate trigger, origin/main fetch, MARKER=all contract
-    test_file: test_gate_ci_coverage.py
-  - id: ci-env-vars
-    description: CI environment variables match platform-env.yaml defaults, no hardcoded secrets in workflows
-    test_file: test_gate_ci_env_vars.py
-  - id: compose-base-contract
-    description: docker-compose.base.yml contract enforcement (profiles, logging, healthcheck)
-    test_file: test_gate_compose_base_contract.py
-  - id: compose-files-no-base-image
-    description: hermes-agent-base (L1) not used in production compose files
-    test_file: test_gate_compose_no_base_image.py
-  - id: compose-include-sync
-    description: Include section in root docker-compose.yml matches discovered modules; regeneration is noop on committed state
-    test_file: test_gate_compose_include_sync.py
-  - id: contract-test-gate
-    description: make test MARKER=contract passes (contract tests validate entrypoint scripts)
-    test_file: test_gate_contract.py
-  - id: cross-layer
-    description: Cross-layer typed contract enforcement — internal→modules only via invoke_module_interface with registered interfaces + Extended Registry + ShellCheck data-flow analysis
-    test_file: test_gate_cross_layer.py
-  - id: dead-code-gate
-    description: All entrypoints and internal scripts have a live caller in the call graph
-    test_file: test_gate_dead_code.py
-  - id: dockerignore-symlink
-    description: .dockerignore symlink integrity (must symlink to templates/.dockerignore)
-    test_file: test_gate_dockerignore_symlink.py
-  - id: env-hostname-drift
-    description: Hostname drift detection between .env and docker-compose service names
-    test_file: test_gate_env_hostname_drift.py
-  - id: env-example-sync
-    description: Bidirectional key sync between .env.example and .env — mirror structure enforcement, no duplicate keys
-    test_file: test_gate_env_example_sync.py
-  - id: env-shared-consistency
-    description: env_shared declare→inject contract + proxy opt-in (T8.5)
-    test_file: test_gate_env_shared_consistency.py
-  - id: exception-audit
-    description: No hardcoded target sets in gates (dynamic discovery via entrypoint-manifest)
-    test_file: test_gate_exception_audit.py
-  - id: gitleaks-version
-    description: Single gitleaks version (8.30.1) across all workflows, composite action usage enforcement
-    test_file: test_gate_gitleaks_version.py
-  - id: grep-summary-linter
-    description: All .sh and .py files in core/ and tests/ have GREP_SUMMARY header
-    test_file: test_gate_grep_summary.py
-  - id: lint-quality
-    description: Linter configuration parity between shell and Python (lint.sh ↔ Python linter logic)
-    test_file: test_gate_lint_quality.py
-  - id: module-yaml-contract
-    description: module.yaml D5 contract validation (required fields, typed env_requires, naming conventions)
-    test_file: test_gate_module_yaml_contract.py
-  - id: module-yaml-contract-d5-negative
-    description: "R5 companion: detect D5 violations (missing type, wrong type, restart-drift)"
-    test_file: test_gate_module_yaml_contract_d5_negative.py
-  - id: compose-restart-consistency
-    description: "Test-compose restart: 'no' enforcement + base-compose restart ∈ {always, unless-stopped} (P08)"
-    test_file: test_gate_compose_restart_consistency.py
-  - id: no-simulators
-    description: No simulator classes in test suite (prevents fake-backend patterns)
-    test_file: test_gate_no_simulators.py
-  - id: platform-env-schema
-    description: platform-env.yaml schema validation (networks, volumes, profiles)
-    test_file: test_gate_platform_env_schema.py
-  - id: security-config
-    description: Security configuration audit (secrets, permissions, network policies)
-    test_file: test_gate_security_config.py
-  - id: sequencing-reliability
-    description: Deploy sequencing & reliability gate — converge exit semantics, reconcile flag, stub detection, vps-readiness, deploy NODE/LAUNCH flags, S7 constraint (0 new targets)
-    test_file: test_gate_sequencing.py
-  - id: template-syntax
-    description: All template files use unified {{UPPER_SNAKE}} syntax, no legacy __VAR__ or ${VAR} placeholders (except compose runtime vars)
-    test_file: test_gate_template_syntax.py
-  - id: template-drift
-    description: All templates in template-manifest.yaml render without unresolved placeholders; dry-run check passes
-    test_file: test_gate_template_drift.py
-  - id: template-metrics
-    description: Template metrics and structure validation
-    test_file: test_gate_template_metrics.py
-  - id: test-inventory
-    description: Bi-directional inventory match, registered markers, no removal without changelog
-    test_file: test_gate_test_inventory.py
-  - id: topology
-    description: Module dependency topology validation (module.yaml depends_on field)
-    test_file: test_gate_topology.py
-  - id: workflow-consistency
-    description: Workflow count=9, main-full-gate deleted, platform-test single job, no observability refs, deploy triggers, push filter, NODE=, provisioner usage
-    test_file: test_gate_workflow_consistency.py
-  - id: container-name-consistency
-    description: Container_name consistency across compose files and module.yaml depends_on / env_requires references
-    test_file: test_gate_container_name_consistency.py
-  - id: project-compose
-    description: Project docker-compose.yml validation — no ports, proxy-net alias, env_file .env.platform
-    test_file: test_gate_project_compose.py
-  - id: healthcheck-contract
-    description: Healthcheck.sh contracts (deep-mode early exit, check_http, 127.0.0.1, postgres deep includes pgbouncer, logging deep includes promtail)
-    test_file: test_gate_healthcheck_contract.py
-  - id: module-schema-d4
-    description: All module.yaml files validated against D4 JSON Schema (module.schema.json)
-    test_file: test_gate_module_schema_d4.py
-  - id: litellm-pg-enforcement
-    description: LiteLLM PostgreSQL enforcement — DATABASE_URL must be postgres://, never sqlite:///
-    test_file: test_gate_litellm_pg_enforcement.py
-  - id: module-profiles
-    description: Docker Compose profiles pluggability validation — profiles on each service, profile matches module name
-    test_file: test_gate_module_profiles.py
-  - id: nginx-domain-contract
-    description: Nginx server_name uses PLATFORM_DOMAIN placeholder, base.yml mounts templates
-    test_file: test_gate_nginx_domain_contract.py
-  - id: p20-container-coupling
-    description: Container coupling validation — referenced container names have alias, env hostnames resolvable, prometheus targets resolvable
-    test_file: test_p20_container_coupling.py
-  - id: password-charset
-    description: "Password charset constraint validation — all URL-embedded passwords must match ^[A-Za-z0-9._-]+$"
-    test_file: test_gate_password_charset.py
-    markers: gate
-  - id: restart-consistency
-    description: Restart consistency validation across compose files
-    test_file: test_restart_consistency.py
-  - id: thin-wrapper
-    description: All entrypoints ≤150 LOC, ≤4 functions, no direct binary calls
-    test_file: test_gate_thin_wrapper.py
-  - id: module-hooks
-    description: Module hook scripts exist, are executable, have GREP_SUMMARY + MODULE_CONTRACT
-    test_file: test_gate_module_hooks.py
-  - id: pytest-markers
-    description: Pytest markers in pyproject.toml only (not pytest.ini); strict markers enabled
-    test_file: test_gate_pytest_markers.py
-  - id: local-stack
-    description: docker-compose.yml full stack resolution (Inv 7, static check) — compose config resolves all includes, modules in sync with discover_modules
-    test_file: test_gate_local_stack.py
-  - id: context-overlay-git
-    description: git commands only in ensure_context_repo(); rsync excludes .git/ (D1/D2/D3 delivery invariants)
-    test_file: test_gate_context_overlay_git.py
-  - id: env-chain
-    description: prometheus config after envsubst has no literal ${...} placeholders (D5b env chain)
-    test_file: test_gate_env_chain.py
-  - id: path-consistency
-    description: No orphan /opt/core/ references — canonical PLATFORM_ROOT is /opt/platform/
-    test_file: test_gate_path_consistency.py
-  - id: secrets-manifest-consistency
-    description: Bidirectional consistency between secrets-manifest.yaml ↔ module.yaml env_requires ↔ workflow secrets ↔ .env.example CI section; no hardcoded credentials in core/**/*.sh
-    test_file: test_gate_secrets_manifest.py
-    markers: gate
-  - id: status-page
-    description: "Status-page 016 gate — module contract, htpasswd consistency, nginx stealth, secrets registration, CI negative auth test, .dockerignore symlink"
-    test_file: test_gate_status_page.py
-    markers: gate
-  - id: gate-fixture-schema
-    description: "Validate test_data/*.yaml fixtures against core/schemas/*.json (jsonschema coherence)"
-    test_file: test_gate_fixture_schema.py
-    issue: "026-gate-systemic-fix"
-  - id: vhost-nginx-t
-    description: D1 vhost gate — validates generated nginx vhosts pass `nginx -t` in Docker (hyphen normalization, subdomain wildcard, independent domain cert paths)
-    test_file: test_gate_vhost_nginx_t.py
-    markers: gate
-  - id: project-context
-    description: D2 gate — validates context is derived from path (projects/<org>/<project>/), no legacy context field in ai-platform.yaml
-    test_file: test_gate_project_context.py
-    markers: gate
-  - id: project-env-platform
-    description: "D3 gate — validates .env.platform presence and provides ⊆ profiles consistency for all registered projects"
-    test_file: test_gate_project_env.py
-    markers: gate
-  - id: makefile-targets
-    description: "W4-E4 gate — validates make -n for all .PHONY targets and recipe TAB enforcement after Makefile include-split"
-    test_file: test_gate_makefile_targets.py
-    markers: gate
-  - id: compose-profiles-consistency
-    description: "MISMATCH-1 gate — verifies COMPOSE_PROFILES 13-module list is identical across all 7 callsites (Makefile, shell scripts, CI YAML, Python, helpers.mk). Catches drift when Docker modules are added/removed."
-    test_file: test_gate_compose_profiles_consistency.py
-    markers: gate
-  - id: test-infra-consistency
-    description: "DevPlan 041 W6 — validates container_name, ports, compose projects, networks, and anti-regression for hardcoded project names. Runs 5 checks (AC-6a to AC-6e) without Docker daemon."
-    test_file: test_gate_test_infra_consistency.py
-    markers: gate
-
-  # W1-E3: R5 anti-survivorship negative pairs (DevPlan 028 Подволна C)
-  - id: gate-litellm-pg-enforcement-negative
-    description: "R5 companion: detect SQLite config in LiteLLM (anti-survivorship)"
-    test_file: test_gate_litellm_pg_enforcement_negative.py
-    issue: "028-wave1-immediate"
-  - id: gate-module-schema-d4-negative
-    description: "R5 companion: detect module.yaml missing required D4 fields"
-    test_file: test_gate_module_schema_d4_negative.py
-    issue: "028-wave1-immediate"
-  - id: gate-env-shared-consistency-negative
-    description: "R5 companion: detect divergent env_shared declarations between modules"
-    test_file: test_gate_env_shared_consistency_negative.py
-    issue: "028-wave1-immediate"
-
-# ---------------------------------------------------------------------------
-# Forbidden directories — directories that MUST NOT contain executable scripts
-# ---------------------------------------------------------------------------
-# Forbidden directories — directories that MUST NOT contain executable scripts
-# ---------------------------------------------------------------------------
-forbidden_directories:
-  - core/scripts/e2e
-  - core/scripts
-
-# ---------------------------------------------------------------------------
-# Forbidden scripts — script names that are deprecated / forbidden
-# ---------------------------------------------------------------------------
-forbidden_scripts:
-  - dev.sh
-  - platform-push.sh
-  - apply.sh
-  - bare-metal-reset.sh
-  - prepare-bare-server.sh
-  - stage-manager.sh
-  - image-prewarm.sh
-
-# ---------------------------------------------------------------------------
-# Forbidden verbs — verb names that MUST NOT be used as make targets
-# ---------------------------------------------------------------------------
-forbidden_verbs:
-  - push-core
-  - deploy-node
-  - build-local
-  - bootstrap-core
-  - hermes-deploy-vps
-
-# ---------------------------------------------------------------------------
-# Allowed verbs — canonical verb dictionary (from RefactoringBrief.md §3.3)
-# Every make target must use one of these verbs.
-# ---------------------------------------------------------------------------
-allowed_verbs:
-  - templates-check
-  - templates-render
   - deploy
-  - bootstrap-node
-  - context-promote
-  - discover-modules
-  - dev-certs
-  - hermes-build-platform
-  - hermes-build-context
-  - hermes-push-l1
-  - validate-modules
-  - validate
-  - lint
-  - audit
-  - test
-  - gate
-  - check-file-lines
-  - test-inventory-sync
-  - new-project
-  - new-context
-  - project-sync-env
-  - remove-project
-  - adopt-project
-  - project-list
-  - project-status
-  - secrets-unlock
-  - provision
-  - backup
-  - restore
-  - healthcheck
-  - verify
-  - up
-  - down
-  - restart
-  - status
-  - converge
-  - render-vhosts
-  - deploy-context
-  - compose-safe-up
-  # project-sync-secrets — DISABLED, requires core/internal/scaffold/sync-repo-secrets.sh (T3.6)
-  - node-update
-  - deploy-project
-  - scripts-audit
-  # Private helper targets (underscore prefix)
-  - _get_all_profiles
+gates:
+- id: test_check_doc_headers_equivalent
+  test_file: test_gate_ci_coverage.py
+  description: 'Auto-discovered gate: test_check_doc_headers_equivalent'
+- id: test_deploy_workflows_use_sha_aware_aggregator
+  test_file: test_gate_ci_coverage.py
+  description: 'Auto-discovered gate: test_deploy_workflows_use_sha_aware_aggregator'
+- id: test_integration_steps_have_structured_logging
+  test_file: test_gate_ci_coverage.py
+  description: 'Auto-discovered gate: test_integration_steps_have_structured_logging'
+- id: test_marker_all_includes_contract
+  test_file: test_gate_ci_coverage.py
+  description: 'Auto-discovered gate: test_marker_all_includes_contract'
+- id: test_mode_fast_excludes_requires_docker
+  test_file: test_gate_ci_coverage.py
+  description: 'Auto-discovered gate: test_mode_fast_excludes_requires_docker'
+- id: test_platform_test_has_push_trigger
+  test_file: test_gate_ci_coverage.py
+  description: 'Auto-discovered gate: test_platform_test_has_push_trigger'
+- id: test_ci_env_vars_match_platform_env
+  test_file: test_gate_ci_env_vars.py
+  description: 'Auto-discovered gate: test_ci_env_vars_match_platform_env'
+- id: test_no_hardcoded_ci_secrets
+  test_file: test_gate_ci_env_vars.py
+  description: 'Auto-discovered gate: test_no_hardcoded_ci_secrets'
+- id: test_all_base_yml_have_x_logging
+  test_file: test_gate_compose_base_contract.py
+  description: 'Auto-discovered gate: test_all_base_yml_have_x_logging'
+- id: test_container_name_matches_module_name
+  test_file: test_gate_compose_base_contract.py
+  description: 'Auto-discovered gate: test_container_name_matches_module_name'
+- id: test_healthcheck_present
+  test_file: test_gate_compose_base_contract.py
+  description: 'Auto-discovered gate: test_healthcheck_present'
+- id: test_include_matches_discovered_modules
+  test_file: test_gate_compose_include_sync.py
+  description: 'Auto-discovered gate: test_include_matches_discovered_modules'
+- id: test_regeneration_is_noop_on_committed
+  test_file: test_gate_compose_include_sync.py
+  description: 'Auto-discovered gate: test_regeneration_is_noop_on_committed'
+- id: test_root_compose_uses_include
+  test_file: test_gate_compose_include_sync.py
+  description: 'Auto-discovered gate: test_root_compose_uses_include'
+- id: test_no_base_image_in_production_compose
+  test_file: test_gate_compose_no_base_image.py
+  description: 'Auto-discovered gate: test_no_base_image_in_production_compose'
+- id: test_platform_dev_has_l1_image
+  test_file: test_gate_compose_no_base_image.py
+  description: 'Auto-discovered gate: test_platform_dev_has_l1_image'
+- id: test_root_compose_uses_context_image_var
+  test_file: test_gate_compose_no_base_image.py
+  description: 'Auto-discovered gate: test_root_compose_uses_context_image_var'
+- id: test_compose_profiles_consistency
+  test_file: test_gate_compose_profiles_consistency.py
+  description: 'Auto-discovered gate: test_compose_profiles_consistency'
+- id: test_base_compose_restart_production
+  test_file: test_gate_compose_restart_consistency.py
+  description: 'Auto-discovered gate: test_base_compose_restart_production'
+- id: test_test_compose_restart_no
+  test_file: test_gate_compose_restart_consistency.py
+  description: 'Auto-discovered gate: test_test_compose_restart_no'
+- id: test_all_container_names_extracted
+  test_file: test_gate_container_name_consistency.py
+  description: 'Auto-discovered gate: test_all_container_names_extracted'
+- id: test_depends_on_references_exist
+  test_file: test_gate_container_name_consistency.py
+  description: 'Auto-discovered gate: test_depends_on_references_exist'
+- id: test_core_rsync_excludes_git
+  test_file: test_gate_context_overlay_git.py
+  description: 'Auto-discovered gate: test_core_rsync_excludes_git'
+- id: test_git_only_in_ensure_context_repo
+  test_file: test_gate_context_overlay_git.py
+  description: 'Auto-discovered gate: test_git_only_in_ensure_context_repo'
+- id: test_contract_target_exists
+  test_file: test_gate_contract.py
+  description: 'Auto-discovered gate: test_contract_target_exists'
+- id: test_contract_test_files_exist
+  test_file: test_gate_contract.py
+  description: 'Auto-discovered gate: test_contract_test_files_exist'
+- id: cross_layer
+  test_file: test_gate_cross_layer.py
+  description: 'Auto-discovered gate: cross_layer'
+- id: test_all_entrypoints_have_live_caller
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_all_entrypoints_have_live_caller'
+- id: test_all_internal_scripts_reachable
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_all_internal_scripts_reachable'
+- id: test_all_docker_modules_have_dockerignore_symlink
+  test_file: test_gate_dockerignore_symlink.py
+  description: 'Auto-discovered gate: test_all_docker_modules_have_dockerignore_symlink'
+- id: test_prometheus_config_no_unexpanded_vars
+  test_file: test_gate_env_chain.py
+  description: 'Auto-discovered gate: test_prometheus_config_no_unexpanded_vars'
+- id: test_env_example_key_order_matches_dotenv
+  test_file: test_gate_env_example_sync.py
+  description: 'Auto-discovered gate: test_env_example_key_order_matches_dotenv'
+- id: test_env_example_well_formed
+  test_file: test_gate_env_example_sync.py
+  description: 'Auto-discovered gate: test_env_example_well_formed'
+- id: test_env_mirrors_example_keys
+  test_file: test_gate_env_example_sync.py
+  description: 'Auto-discovered gate: test_env_mirrors_example_keys'
+- id: test_env_noproxy_subset
+  test_file: test_gate_env_example_sync.py
+  description: 'Auto-discovered gate: test_env_noproxy_subset'
+- id: test_hermes_agent_env_example_well_formed
+  test_file: test_gate_env_example_sync.py
+  description: 'Auto-discovered gate: test_hermes_agent_env_example_well_formed'
+- id: test_env_example_hostnames_match_containers
+  test_file: test_gate_env_hostname_drift.py
+  description: 'Auto-discovered gate: test_env_example_hostnames_match_containers'
+- id: test_hermes_agent_env_matches_containers
+  test_file: test_gate_env_hostname_drift.py
+  description: 'Auto-discovered gate: test_hermes_agent_env_matches_containers'
+- id: test_env_noproxy_covers_internal_services
+  test_file: test_gate_env_shared_consistency.py
+  description: 'Auto-discovered gate: test_env_noproxy_covers_internal_services'
+- id: test_env_shared_vars_injected_in_compose
+  test_file: test_gate_env_shared_consistency.py
+  description: 'Auto-discovered gate: test_env_shared_vars_injected_in_compose'
+- id: test_no_hardcoded_noproxy_in_base_yml
+  test_file: test_gate_env_shared_consistency.py
+  description: 'Auto-discovered gate: test_no_hardcoded_noproxy_in_base_yml'
+- id: test_proxy_vars_are_opt_in
+  test_file: test_gate_env_shared_consistency.py
+  description: 'Auto-discovered gate: test_proxy_vars_are_opt_in'
+- id: test_env_shared_divergence_detected
+  test_file: test_gate_env_shared_consistency_negative.py
+  description: 'Auto-discovered gate: test_env_shared_divergence_detected'
+- id: test_no_hardcoded_target_sets_in_gates
+  test_file: test_gate_exception_audit.py
+  description: 'Auto-discovered gate: test_no_hardcoded_target_sets_in_gates'
+- id: test_all_test_fixtures_match_schemas
+  test_file: test_gate_fixture_schema.py
+  description: 'Auto-discovered gate: test_all_test_fixtures_match_schemas'
+- id: test_gitleaks_composite_action_used
+  test_file: test_gate_gitleaks_version.py
+  description: 'Auto-discovered gate: test_gitleaks_composite_action_used'
+- id: test_single_gitleaks_version
+  test_file: test_gate_gitleaks_version.py
+  description: 'Auto-discovered gate: test_single_gitleaks_version'
+- id: test_all_py_files_have_grep_summary
+  test_file: test_gate_grep_summary.py
+  description: 'Auto-discovered gate: test_all_py_files_have_grep_summary'
+- id: test_all_sh_files_have_grep_summary
+  test_file: test_gate_grep_summary.py
+  description: 'Auto-discovered gate: test_all_sh_files_have_grep_summary'
+- id: test_deep_mode_has_early_exit
+  test_file: test_gate_healthcheck_contract.py
+  description: 'Auto-discovered gate: test_deep_mode_has_early_exit'
+- id: test_langfuse_uses_127_0_0_1
+  test_file: test_gate_healthcheck_contract.py
+  description: 'Auto-discovered gate: test_langfuse_uses_127_0_0_1'
+- id: test_litellm_uses_check_http
+  test_file: test_gate_healthcheck_contract.py
+  description: 'Auto-discovered gate: test_litellm_uses_check_http'
+- id: test_logging_deep_includes_promtail
+  test_file: test_gate_healthcheck_contract.py
+  description: 'Auto-discovered gate: test_logging_deep_includes_promtail'
+- id: test_postgres_deep_includes_pgbouncer
+  test_file: test_gate_healthcheck_contract.py
+  description: 'Auto-discovered gate: test_postgres_deep_includes_pgbouncer'
+- id: test_linter_parity
+  test_file: test_gate_lint_quality.py
+  description: 'Auto-discovered gate: test_linter_parity'
+- id: test_litellm_compose_test_database_url_is_postgres
+  test_file: test_gate_litellm_pg_enforcement.py
+  description: 'Auto-discovered gate: test_litellm_compose_test_database_url_is_postgres'
+- id: test_litellm_env_database_url_is_postgres
+  test_file: test_gate_litellm_pg_enforcement.py
+  description: 'Auto-discovered gate: test_litellm_env_database_url_is_postgres'
+- id: test_no_sqlite_in_litellm_config
+  test_file: test_gate_litellm_pg_enforcement.py
+  description: 'Auto-discovered gate: test_no_sqlite_in_litellm_config'
+- id: test_litellm_sqlite_config_detected
+  test_file: test_gate_litellm_pg_enforcement_negative.py
+  description: 'Auto-discovered gate: test_litellm_sqlite_config_detected'
+- id: test_all_modules_included
+  test_file: test_gate_local_stack.py
+  description: 'Auto-discovered gate: test_all_modules_included'
+- id: test_compose_config_resolves_full_stack
+  test_file: test_gate_local_stack.py
+  description: 'Auto-discovered gate: test_compose_config_resolves_full_stack'
+- id: test_all_phony_targets_discovered
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_all_phony_targets_discovered'
+- id: test_dot_default_goal_is_help
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_dot_default_goal_is_help'
+- id: test_include_directives_in_root
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_include_directives_in_root'
+- id: test_make_n_for_complex_targets
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_make_n_for_complex_targets'
+- id: test_make_n_for_simple_targets
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_make_n_for_simple_targets'
+- id: test_makefiles_directory_exists
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_makefiles_directory_exists'
+- id: test_recipe_lines_use_tabs
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_recipe_lines_use_tabs'
+- id: test_root_makefile_line_limit
+  test_file: test_gate_makefile_targets.py
+  description: 'Auto-discovered gate: test_root_makefile_line_limit'
+- id: test_agents_md_synced_with_manifest
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_agents_md_synced_with_manifest'
+- id: test_delegates_to_paths_exist
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_delegates_to_paths_exist'
+- id: test_entrypoint_names_match_manifest
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_entrypoint_names_match_manifest'
+- id: test_forbidden_directories_absent
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_forbidden_directories_absent'
+- id: test_module_makefiles_no_deprecated_module_deploy
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_module_makefiles_no_deprecated_module_deploy'
+- id: test_module_targets_in_manifest
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_module_targets_in_manifest'
+- id: test_module_targets_use_canonical_names
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_module_targets_use_canonical_names'
+- id: test_no_forbidden_verbs_in_makefiles
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_no_forbidden_verbs_in_makefiles'
+- id: test_no_module_prefix
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_no_module_prefix'
+- id: test_manifests_up_to_date
+  test_file: test_gate_manifests_up_to_date.py
+  description: 'Auto-discovered gate: test_manifests_up_to_date'
+- id: test_all_hooks_are_specified_as_strings
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_all_hooks_are_specified_as_strings'
+- id: test_hook_contract_validation[backup-cron]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[backup-cron]'
+- id: test_hook_contract_validation[clickhouse]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[clickhouse]'
+- id: test_hook_contract_validation[hermes-agent]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[hermes-agent]'
+- id: test_hook_contract_validation[infra-metrics]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[infra-metrics]'
+- id: test_hook_contract_validation[langfuse]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[langfuse]'
+- id: test_hook_contract_validation[litellm]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[litellm]'
+- id: test_hook_contract_validation[logging]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[logging]'
+- id: test_hook_contract_validation[minio]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[minio]'
+- id: test_hook_contract_validation[monitoring]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[monitoring]'
+- id: test_hook_contract_validation[nginx]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[nginx]'
+- id: test_hook_contract_validation[platform-secrets]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[platform-secrets]'
+- id: test_hook_contract_validation[postgres]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[postgres]'
+- id: test_hook_contract_validation[redis]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[redis]'
+- id: test_hook_contract_validation[status-page]
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_hook_contract_validation[status-page]'
+- id: test_all_base_yml_have_profiles
+  test_file: test_gate_module_profiles.py
+  description: 'Auto-discovered gate: test_all_base_yml_have_profiles'
+- id: test_no_stale_profiles
+  test_file: test_gate_module_profiles.py
+  description: 'Auto-discovered gate: test_no_stale_profiles'
+- id: test_profile_matches_module_name
+  test_file: test_gate_module_profiles.py
+  description: 'Auto-discovered gate: test_profile_matches_module_name'
+- id: test_all_modules_valid_against_d4_schema
+  test_file: test_gate_module_schema_d4.py
+  description: 'Auto-discovered gate: test_all_modules_valid_against_d4_schema'
+- id: test_no_version_field_in_schema
+  test_file: test_gate_module_schema_d4.py
+  description: 'Auto-discovered gate: test_no_version_field_in_schema'
+- id: test_schema_allows_additional_properties
+  test_file: test_gate_module_schema_d4.py
+  description: 'Auto-discovered gate: test_schema_allows_additional_properties'
+- id: test_schema_required_fields
+  test_file: test_gate_module_schema_d4.py
+  description: 'Auto-discovered gate: test_schema_required_fields'
+- id: test_version_not_in_required
+  test_file: test_gate_module_schema_d4.py
+  description: 'Auto-discovered gate: test_version_not_in_required'
+- id: test_module_yaml_missing_required_fields
+  test_file: test_gate_module_schema_d4_negative.py
+  description: 'Auto-discovered gate: test_module_yaml_missing_required_fields'
+- id: test_all_modules_have_required_fields
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_all_modules_have_required_fields'
+- id: test_d5_schema_version
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_d5_schema_version'
+- id: test_d5_validator_exists
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_d5_validator_exists'
+- id: test_d5_validator_passes_on_all_modules
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_d5_validator_passes_on_all_modules'
+- id: test_env_requires_no_duplicates
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_env_requires_no_duplicates'
+- id: test_no_version_field
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_no_version_field'
+- id: test_spool_dir_format
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_spool_dir_format'
+- id: test_system_module_contract
+  test_file: test_gate_module_yaml_contract.py
+  description: 'Auto-discovered gate: test_system_module_contract'
+- id: test_d4_bare_string_still_valid
+  test_file: test_gate_module_yaml_contract_d5_negative.py
+  description: 'Auto-discovered gate: test_d4_bare_string_still_valid'
+- id: test_missing_required_env_var
+  test_file: test_gate_module_yaml_contract_d5_negative.py
+  description: 'Auto-discovered gate: test_missing_required_env_var'
+- id: test_restart_drift
+  test_file: test_gate_module_yaml_contract_d5_negative.py
+  description: 'Auto-discovered gate: test_restart_drift'
+- id: test_wrong_env_requires_type
+  test_file: test_gate_module_yaml_contract_d5_negative.py
+  description: 'Auto-discovered gate: test_wrong_env_requires_type'
+- id: test_base_yml_mounts_templates
+  test_file: test_gate_nginx_domain_contract.py
+  description: 'Auto-discovered gate: test_base_yml_mounts_templates'
+- id: test_no_host_variable_in_server_name
+  test_file: test_gate_nginx_domain_contract.py
+  description: 'Auto-discovered gate: test_no_host_variable_in_server_name'
+- id: test_platform_domain_placeholder_present
+  test_file: test_gate_nginx_domain_contract.py
+  description: 'Auto-discovered gate: test_platform_domain_placeholder_present'
+- id: test_no_simulator_classes_in_test_suite
+  test_file: test_gate_no_simulators.py
+  description: 'Auto-discovered gate: test_no_simulator_classes_in_test_suite'
+- id: test_all_makefile_targets_in_allowed_verbs
+  test_file: test_gate_no_unregistered_entrypoint.py
+  description: 'Auto-discovered gate: test_all_makefile_targets_in_allowed_verbs'
+- id: test_all_shebang_files_in_manifest
+  test_file: test_gate_no_unregistered_entrypoint.py
+  description: 'Auto-discovered gate: test_all_shebang_files_in_manifest'
+- id: test_forbidden_scripts_absent
+  test_file: test_gate_no_unregistered_entrypoint.py
+  description: 'Auto-discovered gate: test_forbidden_scripts_absent'
+- id: test_hermes_compose_has_no_fallback
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_hermes_compose_has_no_fallback'
+- id: test_no_db_url_contains_raw_postgres_password_without_encoded
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_no_db_url_contains_raw_postgres_password_without_encoded'
+- id: test_password_charset_validation[SkyNet!!%)-True]
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_password_charset_validation[SkyNet!!%)-True]'
+- id: test_password_charset_validation[openssl_rand_hex_32-False]
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_password_charset_validation[openssl_rand_hex_32-False]'
+- id: test_password_charset_validation[pass#hash-True]
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_password_charset_validation[pass#hash-True]'
+- id: test_password_charset_validation[pass/with/slash-True]
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_password_charset_validation[pass/with/slash-True]'
+- id: test_password_charset_validation[simple-False]
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_password_charset_validation[simple-False]'
+- id: test_password_charset_validation[valid-pass_123.abc-False]
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_password_charset_validation[valid-pass_123.abc-False]'
+- id: test_secrets_manifest_charset_defined_for_url_passwords
+  test_file: test_gate_password_charset.py
+  description: 'Auto-discovered gate: test_secrets_manifest_charset_defined_for_url_passwords'
+- id: path_consistency_negative_original_form
+  test_file: test_gate_path_consistency.py
+  description: 'Auto-discovered gate: path_consistency_negative_original_form'
+- id: test_no_opt_core_references
+  test_file: test_gate_path_consistency.py
+  description: 'Auto-discovered gate: test_no_opt_core_references'
+- id: test_env_file_platform_present
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_env_file_platform_present'
+- id: test_negative_compose_without_proxy_net
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_negative_compose_without_proxy_net'
+- id: test_no_ports_published
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_no_ports_published'
+- id: test_proxy_net_external_declared
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_proxy_net_external_declared'
+- id: test_proxy_net_is_external
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_proxy_net_is_external'
+- id: test_proxy_net_with_alias
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_proxy_net_with_alias'
+- id: test_templates_declare_proxy_net
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_templates_declare_proxy_net'
+- id: test_valid_project_passes
+  test_file: test_gate_project_compose.py
+  description: 'Auto-discovered gate: test_valid_project_passes'
+- id: test_project_context_consistency
+  test_file: test_gate_project_context.py
+  description: 'Auto-discovered gate: test_project_context_consistency'
+- id: test_project_env_platform
+  test_file: test_gate_project_env.py
+  description: 'Auto-discovered gate: test_project_env_platform'
+- id: test_no_dead_markers
+  test_file: test_gate_pytest_markers.py
+  description: 'Auto-discovered gate: test_no_dead_markers'
+- id: test_pyproject_toml_has_all_markers
+  test_file: test_gate_pytest_markers.py
+  description: 'Auto-discovered gate: test_pyproject_toml_has_all_markers'
+- id: test_pytest_ini_has_no_markers
+  test_file: test_gate_pytest_markers.py
+  description: 'Auto-discovered gate: test_pytest_ini_has_no_markers'
+- id: test_strict_markers_in_pyproject_toml
+  test_file: test_gate_pytest_markers.py
+  description: 'Auto-discovered gate: test_strict_markers_in_pyproject_toml'
+- id: test_clickhouse_access_management_not_1
+  test_file: test_gate_security_config.py
+  description: 'Auto-discovered gate: test_clickhouse_access_management_not_1'
+- id: test_clickhouse_no_literal_passwords
+  test_file: test_gate_security_config.py
+  description: 'Auto-discovered gate: test_clickhouse_no_literal_passwords'
+- id: test_clickhouse_no_open_networks
+  test_file: test_gate_security_config.py
+  description: 'Auto-discovered gate: test_clickhouse_no_open_networks'
+- id: converge_exit_semantics
+  test_file: test_gate_sequencing.py
+  description: 'Auto-discovered gate: converge_exit_semantics'
+- id: converge_reconcile_flag
+  test_file: test_gate_sequencing.py
+  description: 'Auto-discovered gate: converge_reconcile_flag'
+- id: makefile_deploy_node_flag
+  test_file: test_gate_sequencing.py
+  description: 'Auto-discovered gate: makefile_deploy_node_flag'
+- id: reconcile_not_entrypoint
+  test_file: test_gate_sequencing.py
+  description: 'Auto-discovered gate: reconcile_not_entrypoint'
+- id: vps_readiness_sourceable
+  test_file: test_gate_sequencing.py
+  description: 'Auto-discovered gate: vps_readiness_sourceable'
+- id: test_default_catch_all_no_status_page
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_default_catch_all_no_status_page'
+- id: test_platform_vhost_proxies_to_status_page
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_platform_vhost_proxies_to_status_page'
+- id: test_platform_vhost_requires_auth
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_platform_vhost_requires_auth'
+- id: test_dockerignore_is_symlink
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_dockerignore_is_symlink'
+- id: test_dockerignore_points_to_template
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_dockerignore_points_to_template'
+- id: test_htpasswd_platform_in_prometheus_loki
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_htpasswd_platform_in_prometheus_loki'
+- id: test_no_htpasswd_monitoring_in_nginx_configs
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_no_htpasswd_monitoring_in_nginx_configs'
+- id: test_compose_base_has_profiles_and_healthcheck
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_compose_base_has_profiles_and_healthcheck'
+- id: test_makefile_exists
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_makefile_exists'
+- id: test_module_yaml_exists
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_module_yaml_exists'
+- id: test_module_yaml_required_fields
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_module_yaml_required_fields'
+- id: test_nginx_htpasswd_mount
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_nginx_htpasswd_mount'
+- id: test_platform_default_catch_all_return_444
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_platform_default_catch_all_return_444'
+- id: test_platform_vhost_exists_and_has_auth
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_platform_vhost_exists_and_has_auth'
+- id: test_platform_vhost_health_location
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_platform_vhost_health_location'
+- id: test_env_example_has_master_creds
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_env_example_has_master_creds'
+- id: test_master_email_registered
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_master_email_registered'
+- id: test_master_password_registered
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_master_password_registered'
+- id: test_all_templates_resolvable
+  test_file: test_gate_template_drift.py
+  description: 'Auto-discovered gate: test_all_templates_resolvable'
+- id: test_templates_metrics_endpoint_in_main
+  test_file: test_gate_template_metrics.py
+  description: 'Auto-discovered gate: test_templates_metrics_endpoint_in_main'
+- id: test_templates_metrics_port_consistency
+  test_file: test_gate_template_metrics.py
+  description: 'Auto-discovered gate: test_templates_metrics_port_consistency'
+- id: test_templates_metrics_port_present
+  test_file: test_gate_template_metrics.py
+  description: 'Auto-discovered gate: test_templates_metrics_port_present'
+- id: test_all_templates_use_strict_grammar
+  test_file: test_gate_template_syntax.py
+  description: 'Auto-discovered gate: test_all_templates_use_strict_grammar'
+- id: test_compose_projects_are_unique
+  test_file: test_gate_test_infra_consistency.py
+  description: 'Auto-discovered gate: test_compose_projects_are_unique'
+- id: test_networks_registered_in_lease_manager
+  test_file: test_gate_test_infra_consistency.py
+  description: 'Auto-discovered gate: test_networks_registered_in_lease_manager'
+- id: test_no_hardcoded_ai_platform_test_own_project
+  test_file: test_gate_test_infra_consistency.py
+  description: 'Auto-discovered gate: test_no_hardcoded_ai_platform_test_own_project'
+- id: test_stale_container_names_equals_compose_container_names
+  test_file: test_gate_test_infra_consistency.py
+  description: 'Auto-discovered gate: test_stale_container_names_equals_compose_container_names'
+- id: test_test_ports_match_compose_ports
+  test_file: test_gate_test_infra_consistency.py
+  description: 'Auto-discovered gate: test_test_ports_match_compose_ports'
+- id: test_all_tests_have_registered_marker
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_all_tests_have_registered_marker'
+- id: test_inventory_header_count_matches_entries
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_inventory_header_count_matches_entries'
+- id: test_no_test_removed_without_changelog
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_no_test_removed_without_changelog'
+- id: test_test_inventory_matches_collected
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_test_inventory_matches_collected'
+- id: test_discovery
+  test_file: test_gate_thin_wrapper.py
+  description: 'Auto-discovered gate: test_discovery'
+- id: test_entrypoint_function_count
+  test_file: test_gate_thin_wrapper.py
+  description: 'Auto-discovered gate: test_entrypoint_function_count'
+- id: test_entrypoint_loc
+  test_file: test_gate_thin_wrapper.py
+  description: 'Auto-discovered gate: test_entrypoint_loc'
+- id: test_entrypoint_no_direct_binary_calls
+  test_file: test_gate_thin_wrapper.py
+  description: 'Auto-discovered gate: test_entrypoint_no_direct_binary_calls'
+- id: test_deploy_order_respects_topology
+  test_file: test_gate_topology.py
+  description: 'Auto-discovered gate: test_deploy_order_respects_topology'
+- id: test_no_cyclic_dependencies
+  test_file: test_gate_topology.py
+  description: 'Auto-discovered gate: test_no_cyclic_dependencies'
+- id: vhost_nginx_t
+  test_file: test_gate_vhost_nginx_t.py
+  description: 'Auto-discovered gate: vhost_nginx_t'
+- id: test_all_workflow_files_exist
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_all_workflow_files_exist'
+- id: test_basedpyright_tests_removed
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_basedpyright_tests_removed'
+- id: test_build_platform_uses_provisioner
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_build_platform_uses_provisioner'
+- id: test_core_deploy_auto_detects_node
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_core_deploy_auto_detects_node'
+- id: test_deploy_has_push_filter
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_deploy_has_push_filter'
+- id: test_deploy_triggers_on_platform_test
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_deploy_triggers_on_platform_test'
+- id: test_main_full_gate_deleted
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_main_full_gate_deleted'
+- id: test_make_targets_exist
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_make_targets_exist'
+- id: test_no_observability_references
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_no_observability_references'
+- id: test_no_raw_internal_calls_in_workflows
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_no_raw_internal_calls_in_workflows'
+- id: test_platform_test_has_single_job
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_platform_test_has_single_job'
+- id: test_push_gate_uses_provisioner
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_push_gate_uses_provisioner'
+- id: test_workflow_count_is_correct
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_workflow_count_is_correct'
+- id: test_workflow_module_lists_match_filesystem
+  test_file: test_gate_workflow_consistency.py
+  description: 'Auto-discovered gate: test_workflow_module_lists_match_filesystem'
+- id: test_env_hostnames_resolvable
+  test_file: test_p20_container_coupling.py
+  description: 'Auto-discovered gate: test_env_hostnames_resolvable'
+- id: test_prometheus_targets_resolvable
+  test_file: test_p20_container_coupling.py
+  description: 'Auto-discovered gate: test_prometheus_targets_resolvable'
+- id: test_referenced_container_names_have_alias
+  test_file: test_p20_container_coupling.py
+  description: 'Auto-discovered gate: test_referenced_container_names_have_alias'
+forbidden_directories:
+- core/scripts/e2e
+- core/scripts
+forbidden_scripts:
+- dev.sh
+- platform-push.sh
+- apply.sh
+- bare-metal-reset.sh
+- prepare-bare-server.sh
+- stage-manager.sh
+- image-prewarm.sh
+forbidden_verbs:
+- push-core
+- deploy-node
+- build-local
+- bootstrap-core
+- hermes-deploy-vps
+allowed_verbs:
+- _get_all_profiles
+- adopt-project
+- audit
+- backup
+- bootstrap-node
+- check-file-lines
+- check-manifests
+- compose-safe-up
+- context-promote
+- converge
+- deploy
+- deploy-context
+- deploy-project
+- dev-certs
+- discover-modules
+- down
+- gate
+- generate-manifests
+- healthcheck
+- hermes-build-context
+- hermes-build-platform
+- hermes-push-l1
+- lint
+- new-context
+- new-project
+- node-update
+- project-list
+- project-status
+- project-sync-env
+- provision
+- remove-project
+- render-vhosts
+- restart
+- restore
+- scripts-audit
+- secrets-unlock
+- status
+- templates-check
+- templates-render
+- test
+- test-inventory-sync
+- up
+- validate
+- validate-modules
+- verify

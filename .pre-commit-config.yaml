@@ -262,6 +262,15 @@ repos:
         always_run: false
         stages: [pre-commit]
 
+      - id: check-manifests
+        name: Check generated manifests up to date
+        description: "Verify generated manifests (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py) are in sync with authoritative sources"
+        entry: make check-manifests
+        language: system
+        files: ^(core/secret-definitions\.yaml|core/platform-infra\.yaml|core/modules/.*/module\.yaml|core/modules/.*/docker-compose\.(base|test)\.yml|core/entrypoint-manifest\.yaml|Makefile|tests/gates/.*\.py)$
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: no-new-inline-python3
         name: Block new inline python3 in shell and CI workflow files
         description: "Language policy enforcement: blocks adding new python3 -c / heredoc under core/ and .github/*.yml. See AGENTS.md §Языковая политика"

@@ -312,6 +312,18 @@ _s3_check() {
     log_step "check" "INFO" "Checking S3 cache for valid cert: ${domain}"
 
     # [IMP:9][s3-ssl-cache][check] BUSINESS INVARIANT: download + validate cert
+    # ⚠️ TRAP[BUG] · 2026-07-22 · CRITICAL · _s3_check: upload.py OVERWRITES S3 cert with empty temp file
+    # · Observed: _s3_check() called upload.py with empty $tmp_cert as local file and s3_key as destination.
+    #   upload.py is UPLOAD-only — it writes $tmp_cert (0 bytes) to S3, CORRUPTING the valid fullchain.pem.
+    # · Root: copy-paste from _s3_upload() — upload.py first arg is LOCAL, second is S3_KEY. Comment said
+    #   "Downloading" but the code UPLOADS. _s3_download_file() below (line ~340) does the actual download,
+    #   but by then S3 is already corrupted.
+    # · Fix: remove this upload.py call block entirely. _s3_download_file() handles cache miss (exit 2)
+    #   and download errors correctly. The upload.py was never needed here — it was dead code with data-loss side effect.
+    # · Impact: 2026-07-22 session — all 4 domain certs in S3 were corrupted to 0 bytes after check.
+    #   Re-uploaded manually. No production impact (S3 cache is DR, certs on VPS were untouched).
+    # · When: testing S3 SSL cache flow (first-ever run of s3-ssl-cache.sh upload+check).
+    # ⚠️ FIX PENDING: remove this upload block, keep only _s3_download_file() below.
     local tmp_cert
     tmp_cert="$(mktemp /tmp/s3-check-XXXXXX.pem)"
 

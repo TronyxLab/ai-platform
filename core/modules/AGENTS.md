@@ -45,6 +45,8 @@ core/modules/{module}/
 
 **System-модули НЕ содержат:** `docker-compose.base.yml`, `healthcheck.sh`, `.dockerignore`.
 
+**Исключение:** модули с `install_type: system` (например, `platform-secrets`) — systemd-сервисы, не Docker-контейнеры — не требуют `docker-compose.base.yml`.
+
 Шаблоны: [`core/templates/`](../templates/) — `module.mk` (Docker), `module-system.mk` (systemd), `.dockerignore`, `docker-compose.test.template`.
 
 ---

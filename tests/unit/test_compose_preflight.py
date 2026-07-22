@@ -14,10 +14,8 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import os
 import sys
 from pathlib import Path
-from typing import Generator
 
 import pytest
 
@@ -118,7 +116,11 @@ class TestParseComposeArgs:
         ],
     )
     def test_parse_compose_args(
-        self, caplog: pytest.LogCaptureFixture, args: list[str], expected_profiles: set[str], expected_subcommand: str | None
+        self,
+        caplog: pytest.LogCaptureFixture,
+        args: list[str],
+        expected_profiles: set[str],
+        expected_subcommand: str | None,
     ) -> None:
         """Verify parse_compose_args extracts profiles and subcommand correctly."""
         caplog.set_level(logging.INFO)
@@ -250,7 +252,9 @@ class TestLoadManifest:
 # · Last fail: N/A (new module)
 # · Remove if: secret checking logic changes
 class TestCheckSecrets:
-    def test_all_secrets_present(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_all_secrets_present(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """When all secrets are present, missing list is empty."""
         caplog.set_level(logging.INFO)
         monkeypatch.setenv("POSTGRES_PASSWORD", "abc")
@@ -263,7 +267,9 @@ class TestCheckSecrets:
         missing = check_secrets({"postgres", "litellm", "hermes-agent", "monitoring"}, secrets, env_map)  # type: ignore[arg-type]
         assert missing == []
 
-    def test_missing_required(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_required(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Missing required secrets are reported."""
         caplog.set_level(logging.INFO)
         monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
@@ -286,7 +292,9 @@ class TestCheckSecrets:
         assert "DEEPSEEK_API_KEY" not in missing  # optional — skipped
         assert "API_SERVER_KEY" not in missing  # optional — skipped
 
-    def test_env_file_fallback(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, sample_secrets_env: Path) -> None:
+    def test_env_file_fallback(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, sample_secrets_env: Path
+    ) -> None:
         """Secrets from env file are used when not in os.environ."""
         caplog.set_level(logging.INFO)
         env_map = load_env_map(str(sample_secrets_env))
@@ -297,7 +305,9 @@ class TestCheckSecrets:
         assert "TELEGRAM_BOT_TOKEN" not in missing
         assert "LITELLM_MASTER_KEY" not in missing
 
-    def test_module_filtering(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_module_filtering(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Secrets for non-target modules are not checked."""
         caplog.set_level(logging.INFO)
         monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
@@ -321,7 +331,13 @@ class TestCheckSecrets:
 # · Last fail: N/A (new module)
 # · Remove if: charset validation logic changes
 class TestValidateCharsets:
-    def test_all_charsets_pass(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, sample_secrets_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_all_charsets_pass(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        sample_manifest: Path,
+        sample_secrets_env: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Secrets matching their charset regex produce no errors."""
         caplog.set_level(logging.INFO)
         # Clear env vars that might override file values
@@ -333,7 +349,9 @@ class TestValidateCharsets:
         errors = validate_charsets(secrets, env_map)  # type: ignore[arg-type]
         assert errors == []
 
-    def test_charset_violation(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_charset_violation(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A secret violating its charset produces an error."""
         caplog.set_level(logging.INFO)
         monkeypatch.setenv("POSTGRES_PASSWORD", "invalid@charset!!!")  # contains @ and !
@@ -345,7 +363,9 @@ class TestValidateCharsets:
         errors = validate_charsets(secrets, env_map)  # type: ignore[arg-type]
         assert any("POSTGRES_PASSWORD" in e for e in errors)
 
-    def test_skip_empty_values(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_skip_empty_values(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Secrets with empty values are skipped (caught by check_secrets)."""
         caplog.set_level(logging.INFO)
         # Clear env vars that might be set in native environment
@@ -358,7 +378,9 @@ class TestValidateCharsets:
         # POSTGRES_PASSWORD has charset but empty value — skip
         assert errors == []
 
-    def test_skip_missing_charset(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_skip_missing_charset(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Secrets without charset field are skipped."""
         caplog.set_level(logging.INFO)
         monkeypatch.setenv("LITELLM_MASTER_KEY", "any-value-ok")
@@ -398,7 +420,13 @@ class TestMainCLI:
         exit_code = main(["config"])
         assert exit_code == 0
 
-    def test_passes_with_env(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, sample_secrets_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_passes_with_env(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        sample_manifest: Path,
+        sample_secrets_env: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """If all secrets are present, preflight passes."""
         caplog.set_level(logging.INFO)
         # Clear env vars that might interfere with file-based values
@@ -423,7 +451,9 @@ class TestMainCLI:
         )
         assert exit_code == 0
 
-    def test_blocks_with_missing_secret(self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_blocks_with_missing_secret(
+        self, caplog: pytest.LogCaptureFixture, sample_manifest: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Missing secrets block the compose up."""
         caplog.set_level(logging.INFO)
         monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)

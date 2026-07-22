@@ -39,6 +39,7 @@ from _conftest.honesty import require_docker_or_fail
 from _conftest.infra import infra as _infra
 from _conftest.ldd import _ensure_volume_dirs
 from _conftest.networks import TEST_NETWORKS, get_network_manager, is_production_host
+from _conftest.smoke_env_generated import SMOKE_ENV_GENERATED
 from _conftest.wave_pipeline import _init_wave_events, signal_wave_ready
 
 # region SMOKE_PLATFORM_FIXTURES
@@ -90,50 +91,31 @@ _DOCKER_LOG_TIMEOUT = 30  # timeout for docker compose logs
 _STDERR_TAIL_LINES = 300  # tail lines for stderr truncation
 _COMPOSE_EXTRA_TIMEOUT = 30  # extra timeout added to PLATFORM_COMPOSE_TIMEOUT
 
-SMOKE_ENV: dict[str, str] = {
+_STATIC_SMOKE_ENV: dict[str, str] = {
     "PLATFORM_DOMAIN": "test.local",
     "COMPOSE_PROJECT_NAME": "ai-platform-test",
     "PLATFORM_DIR": "/tmp/ai-platform-test",
     "POSTGRES_USER": "postgres",
-    "POSTGRES_PASSWORD": "testpass",
     "POSTGRES_DB": "platform",
     "HERMES_DASHBOARD_USERNAME": "admin",
-    "HERMES_DASHBOARD_PASSWORD": "testpass",
-    "API_SERVER_KEY": "sk-test-api-server-key",
-    "LITELLM_MASTER_KEY": "sk-test-key",
-    "OPENAI_API_KEY": "sk-test-openai-key",
-    "NEXTAUTH_SECRET": "sk-test-nextauth-secret",
-    "SALT": "sk-test-salt",
-    "LANGFUSE_SECRET_KEY": "sk-test-langfuse-secret",
-    "LANGFUSE_PUBLIC_KEY": "pk-test-langfuse-public",
-    "LANGFUSE_INIT_ORG_ID": "test-org",
-    "LANGFUSE_INIT_PROJECT_ID": "test-project",
-    "LANGFUSE_INIT_USER_PASSWORD": "testpass",
     "GF_SECURITY_ADMIN_USER": "admin",
-    "GF_SECURITY_ADMIN_PASSWORD": "testpass",
     "S3_BUCKET": "test-bucket",
     "S3_ENDPOINT_URL": "https://s3.timeweb.cloud",
-    "MINIO_ROOT_USER": "minioadmin",
-    "MINIO_ROOT_PASSWORD": "minioadmin",
-    "S3_ACCESS_KEY": "test-access-key",
-    "S3_SECRET_KEY": "test-secret-key",
-    "TELEGRAM_BOT_TOKEN": "",
-    "TELEGRAM_ALLOWED_USERS": "",
     "PROMETHEUS_TARGETS_DIR": "/tmp/prometheus-targets",
     "PROMETHEUS_RULES_DIR": "/tmp/prometheus-rules",
     "NGINX_CONF_DIR": "./dev-config",
     "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
-    # Test port overrides — shifted ports (1XXXX) for test overlay coexistence with production
+    "NODE_NAME": "test-node",
+    "NODE_CONFIGS_DIR": "/tmp/test-node-configs",
     "LITELLM_TEST_PORT": "14000",
     "HERMES_DASHBOARD_TEST_PORT": "19119",
     "HERMES_DESKTOP_TEST_PORT": "18642",
     "LANGFUSE_TEST_PORT": "13000",
     "PROMETHEUS_TEST_PORT": "19090",
     "GRAFANA_TEST_PORT": "13030",
-    # Node config paths for modules that mount node.yaml and docker-health.json (status-page, etc.)
-    "NODE_NAME": "test-node",
-    "NODE_CONFIGS_DIR": "/tmp/test-node-configs",
 }
+
+SMOKE_ENV: dict[str, str] = {**_STATIC_SMOKE_ENV, **SMOKE_ENV_GENERATED}
 
 _SMOKE_VOLUME_BIND_DIRS: list[str] = [
     "/var/lib/platform/postgres-data",

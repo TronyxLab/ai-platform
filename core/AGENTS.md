@@ -18,57 +18,53 @@
 
 ## Канонические операции
 
-| Канонический таргет | Операция | Сигнатура | Делегирует в (internal) |
-|---|---|---|---|
-| `make deploy` | Деплой проекта через git push → CI | `make deploy PROJECT=<dir>` | git push → CI → `core/internal/deploy/deploy-project.sh` |
-| `make deploy-project` | Прямой деплой минуя CI (emergency) | `make deploy-project PROJECT=<dir> NODE=<node>` | `core/entrypoints/deploy-project.sh` → SSH platform-deliver + deploy.sh |
-| `make bootstrap-node` | Идемпотентный bootstrap ноды | `make bootstrap-node NODE=<name>` | `core/entrypoints/bootstrap.sh` → `core/internal/bootstrap/preflight.py` → `core/internal/bootstrap/node-lifecycle.sh --mode init` |
-| `make deploy-context` | Деплой всех проектов контекста на ноде | `make deploy-context NODE=<n> [CONTEXT=<ctx>]` | `core/entrypoints/deploy-context.sh` → `core/internal/bootstrap/deploy/context_deployer.py` |
-| `make context-promote` | Промоут платформы в контекст | `make context-promote CONTEXT=<context>` | `core/entrypoints/context-promote.sh` → копирование кода в `<context>/ai-platform` |
-| `make hermes-build-platform` | Сборка L1 локально | `make hermes-build-platform` | `core/entrypoints/build.sh` → `core/internal/build/hermes-images.sh build-platform` |
-| `make hermes-build-context` | Сборка L1→L2, опционально push | `make hermes-build-context CONTEXT=<context>` | `core/entrypoints/build.sh` → `core/internal/build/hermes-images.sh build-context` |
-| `make hermes-push-l1` | Push L1 в ghcr.io (backup) | `make hermes-push-l1` | docker tag + docker push |
-| `make test` | Тесты с MARKER-фильтром. MARKER=all (default): validate→lint→gates→contract→static→predeploy→smoke→component→integration | `make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]` | pytest с MARKER-диспетчеризацией + validate.sh + lint |
-| `make test-inventory-sync` | Регенерация test_inventory.yaml из pytest --collect-only | `make test-inventory-sync` | `tests/tools/sync_inventory.py` |
-| `make gate` | Production gate (MODE=fast/full). MODE=full: validate→lint→gates→contract→static→predeploy→smoke→component. MODE=fast: validate→lint→gates→static→predeploy. | `make gate [MODE=fast|full]` | validate.sh + линтеры + pytest + MODE-диспетчеризация |
-| `make new-project` | Создать проект из шаблона | `make new-project NAME=<n> TEMPLATE=<t>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/add-project.sh` |
-| `make new-context` | Создать контекст деплоя | `make new-context NODE=<n>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/context-init.sh` |
-| `make project-sync-env` | Синхронизация .env.platform из platform-env.yaml | `make project-sync-env [NAME=<name>] [DOMAIN=<domain>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/gen-env-platform.sh` |
-| `make remove-project` | Удаление проекта из lifecycle (safe — без потери данных) | `make remove-project NAME=<name> [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/remove-project.sh` |
-| `make adopt-project` | Адаптация существующего проекта в lifecycle | `make adopt-project DIR=<dir> [NAME=<name>] [DOMAIN=<domain>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/adopt-project.sh` |
-| `make project-list` | Список зарегистрированных проектов (offline) | `make project-list [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/project-list.sh` |
-| `make project-status` | Статус проектов на target node (SSH) | `make project-status NAME=<name> [NODE=<node>]` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/project-list.sh --status` |
-| `make templates-check` | Dry-run проверка разрешимости всех шаблонов | `make templates-check` | `core/internal/template-engine.sh check --verbose` |
-| `make templates-render` | Рендер всех шаблонов по манифесту | `make templates-render` | `core/internal/template-engine.sh render-all` |
-| `make validate-modules` | D5 module.yaml contract validator (Wave 3) | `make validate-modules` | `core/internal/scripts/validate_module_yaml.py --all` |
-| `make validate` | Schema-валидация | `make validate [FILES=...]` | `core/entrypoints/validate.sh` |
-| `make lint` | shellcheck + yamllint + pytest-lint | `make lint` | `core/entrypoints/validate.sh --lint` |
-| `make audit` | Системный аудит платформы | `make audit [NODE=...]` | `core/entrypoints/audit.sh` |
-| `make check-file-lines` | Проверка длины файлов | `make check-file-lines [MAX_LINES=500]` | `core/entrypoints/check-file-lines.sh` |
-| `make scripts-audit` | Аудит регистрации shebang-скриптов в manifest или exceptions | `make scripts-audit` | `core/internal/scripts-audit.sh` |
-| `make dev-certs` | Генерация dev SSL-сертификатов (idempotent, hybrid mkcert→openssl) | `make dev-certs [CERT_BACKEND=auto|mkcert|openssl]` | `core/modules/nginx/generate-dev-certs.sh` |
-| `make provision` | Provision окружения | `make provision [SCOPE=all|networks|volumes|env]` | `core/internal/provision-environment.sh` |
-| `make discover-modules` | Авто-обнаружение модулей и обновление docker-compose.yml | `make discover-modules` | `core/internal/bootstrap/discover_modules.py` |
-| `make secrets-unlock` | Расшифровка SOPS/age секретов | `make secrets-unlock [NODE=...]` | `core/entrypoints/secrets.sh` → `core/internal/secrets/decrypt-secrets.sh` |
-| `make healthcheck` | Проверка здоровья платформы | `make healthcheck [NODE=...]` | `core/entrypoints/healthcheck.sh` → `core/internal/healthcheck/modules-healthcheck.sh` |
-| `make node-update` | Update provisioned node | `make node-update NODE=<name>` | `core/entrypoints/node-update.sh` → `core/internal/bootstrap/node-lifecycle.sh --mode update` |
-| `make converge` | Реконсиляция ноды с desired state | `make converge NODE=<name>` | `core/entrypoints/converge.sh` → `core/internal/bootstrap/converge.sh` |
-| `make render-vhosts` | Генерация vhost конфигов из node.yaml | `make render-vhosts NODE=<name>` | `core/entrypoints/scaffold.sh` → `core/internal/scaffold/add-vhost.sh --render-all` |
-| `~~make project-sync-secrets~~` | ~~Раскатка repo-secrets~~ (DISABLED — требуется T3.6) | `~~make project-sync-secrets NAME=<name>~~` | `~~core/internal/scaffold/sync-repo-secrets.sh~~` |
-| `make verify` | Пост-деплойная HTTPS-верификация | `make verify NODE=<node>` | `core/entrypoints/verify.sh` → `core/internal/verify/verify-domains.sh` |
-| `make up` / `make down` | Локальный compose-lifecycle | `make up [PROJECT=...]` | docker compose |
-| `make compose-safe-up` | Безопасный compose up с preflight валидацией секретов | `make compose-safe-up [MODULES=postgres,...]` | `core/entrypoints/compose-wrapper.sh` → `core/internal/bootstrap/deploy/compose_preflight.py` → docker compose |
-| `make status` | Статус compose-стека | `make status [PROJECT=...]` | docker compose ps |
-| `make restart` | Мягкий перезапуск compose-стека | `make restart [PROJECT=...]` | docker compose stop && docker compose start |
-| `make _get_all_profiles` | Вывод COMPOSE_PROFILES (все 13 Docker-модулей) | `make _get_all_profiles` | Встроенный `@echo` (private helper, используется скриптами) |
-| `make backup` | Резервное копирование стека | `make backup [NODE=...]` | Модульные healthcheck.sh + snapshot |
-| `make restore` | Восстановление из бэкапа | `make restore NODE=<n> DUMP_FILE=<f>` | Модульные restore-скрипты |
-| `make build` | Сборка Docker-образа модуля | `make build (в модуле)` | docker compose build |
-| `make logs` | Логи модуля | `make logs (в модуле)` | docker compose logs -f |
-| `make start` | Старт модуля | `make start (в модуле)` | docker compose up -d |
-| `make stop` | Стоп модуля | `make stop (в модуле)` | docker compose down |
-
-**По умолчанию:** `make healthcheck` и `make audit` без NODE проверяют локальный docker compose. С NODE — удалённую ноду через SSH.
+<!-- GENERATED:START:canon_table -->
+| `make bootstrap-node` | Идемпотентный bootstrap ноды | make bootstrap-node NODE=<name> | core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/secrets-init.sh + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py + core/internal/bootstrap/deploy/context_deployer.py |
+| `make deploy-context` | Деплой проектов контекста на ноде | make deploy-context NODE=<n> [CONTEXT=<ctx>] | core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py |
+| `make deploy` | Деплой проекта | make deploy PROJECT=<dir> | git push → CI → core/entrypoints/deploy.sh (VPS forced-command) → core/internal/deploy/deploy-project.sh → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh |
+| `make deploy-project` | Прямой деплой минуя CI | make deploy-project PROJECT=<dir> NODE=<node> | core/entrypoints/deploy-project.sh → ssh platform-deliver + ssh deploy.sh → core/internal/deploy/deploy-project.sh |
+| `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=<context> | core/entrypoints/context-promote.sh → copy to <context>/ai-platform → CI |
+| `make hermes-build-platform` | Сборка L1 образа | make hermes-build-platform | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-platform |
+| `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=<context> | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context |
+| `make hermes-push-l1` | Push L1 в ghcr.io | make hermes-push-l1 | docker tag + docker push to ghcr.io |
+| `make templates-check` | Dry-run проверка шаблонов | make templates-check | core/internal/template-engine.sh check --verbose |
+| `make templates-render` | Рендер шаблонов | make templates-render | core/internal/template-engine.sh render-all |
+| `make validate-modules` | Валидация module.yaml | make validate-modules | core/internal/scripts/validate_module_yaml.py --all |
+| `make validate` | Schema-валидация | make validate [FILES=...] | core/entrypoints/validate.sh → core/internal/validate/validate.sh |
+| `make lint` | Линтинг | make lint | core/entrypoints/validate.sh --lint → core/internal/validate/validate.sh |
+| `make audit` | Системный аудит | make audit [NODE=...] | core/entrypoints/audit.sh → core/internal/audit/audit.sh |
+| `make check-file-lines` | Проверка длины файлов | make check-file-lines [MAX_LINES=500] | core/entrypoints/check-file-lines.sh |
+| `make scripts-audit` | Аудит регистрации скриптов | make scripts-audit | core/internal/scripts-audit.sh |
+| `make test` | Запуск тестов | make test [MARKER=...] | make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all] |
+| `make test-inventory-sync` | Синхронизация test inventory | make test-inventory-sync | tests/tools/sync_inventory.py |
+| `make gate` | Production gate | make gate [MODE=fast|full] | make gate [MODE=fast|full] |
+| `make check-manifests` | Проверка актуальности сгенерированных манифестов | make check-manifests | git diff --exit-code |
+| `make generate-manifests` | Генерация всех манифестов | make generate-manifests | make generate-manifests |
+| `make new-project` | Создание проекта из шаблона | make new-project NAME=<n> TEMPLATE=<t> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |
+| `make new-context` | Создание контекста деплоя | make new-context NODE=<n> | core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh |
+| `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=<name>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen-env-platform.sh |
+| `make remove-project` | Удаление проекта из lifecycle | make remove-project NAME=<name> | core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh |
+| `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=<dir> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen-env-platform.sh |
+| `make project-list` | Список проектов | make project-list [NODE=<node>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |
+| `make project-status` | Статус проекта | make project-status NAME=<name> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
+| `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=<name> | core/internal/scaffold/add-vhost.sh --render-all --node <n> |
+| `make secrets-unlock` | Расшифровка секретов | make secrets-unlock [NODE=...] | core/entrypoints/secrets.sh → core/internal/secrets/decrypt-secrets.sh |
+| `make compose-safe-up` | Безопасный compose up | make compose-safe-up [MODULES=...] | core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up |
+| `make converge` | Реконсиляция ноды | make converge NODE=<name> | core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh |
+| `make healthcheck` | Проверка здоровья | make healthcheck [NODE=...] | core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh |
+| `make up` | Запуск compose-стека | make up [PROJECT=...] | core/internal/provision-environment.sh → docker compose up |
+| `make down` | Остановка compose-стека | make down | docker compose down |
+| `make restart` | Мягкий перезапуск compose-стека | make restart | docker compose stop && docker compose start |
+| `make status` | Статус compose-стека | make status | docker compose ps |
+| `make backup` | Резервное копирование | make backup [NODE=...] | Module backup scripts |
+| `make restore` | Восстановление из бэкапа | make restore NODE=<n> | Module restore scripts |
+| `make node-update` | Обновление provisioned ноды | make node-update NODE=<name> | core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules + healthcheck |
+| `make verify` | HTTPS-верификация | make verify NODE=<node> | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
+| `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh |
+| `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |
+| `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/generate-dev-certs.sh |
+| `make _get_all_profiles` | Вывод COMPOSE_PROFILES | make _get_all_profiles | echo |
+<!-- GENERATED:END:canon_table -->
 
 ---
 
@@ -149,33 +145,13 @@ core/
 
 ---
 
-## Удалённые / устаревшие скрипты
-
-Следующие скрипты удалены из проекта или помечены к удалению в Фазе 2:
-
-| Файл | Статус | Причина |
-|------|--------|---------|
-| dev.sh | 💀 УДАЛЁН | Функционал — в Makefile |
-| bare-metal-reset.sh | 💀 УДАЛЁН | Сирота, 0 живых вызывателей |
-| prepare-bare-server.sh | 💀 УДАЛЁН | Сирота, самоссылающийся кластер |
-| stage-manager.sh | 💀 УДАЛЁН | Сирота |
-| image-prewarm.sh | 💀 УДАЛЁН | Сирота |
-| e2e/setup-vps.sh | 💀 УДАЛЁН | Сирота |
-| platform-push.sh | 💀 УДАЛЁН | Rsync-логика → CI-воркфлоу core-deploy.yml |
-| apply.sh | 💀 УДАЛЁН | Деплой → make deploy / make context-promote |
-| `docker-healthcheck.sh` | ✅ LIVE: core/internal/healthcheck/docker-healthcheck.sh — вызывается crontab'ом каждую минуту |
-| `gate-loop SKILL.md` | 💀 УДАЛЁН | Заменён на make gate → make context-promote |
-
----
-
-## Forbidden
-
+<!-- GENERATED:START:canon_table-forbidden -->
 ### Запрещённые директории
 
 Директории, в которых **НЕ ДОЛЖНЫ** находиться исполняемые скрипты:
 
-- `core/scripts/e2e/` — удалена
-- `core/scripts/` — legacy, заменена на `core/entrypoints/` + `core/internal/`
+- `core/scripts/e2e`
+- `core/scripts`
 
 ### Запрещённые скрипты (имена)
 
@@ -183,11 +159,11 @@ core/
 
 - dev.sh
 - platform-push.sh
+- apply.sh
 - bare-metal-reset.sh
 - prepare-bare-server.sh
 - stage-manager.sh
 - image-prewarm.sh
-- apply.sh
 
 ### Запрещённые глаголы (make-таргеты)
 
@@ -198,6 +174,7 @@ core/
 - `build-local`
 - `bootstrap-core`
 - `hermes-deploy-vps`
+<!-- GENERATED:END:canon_table-forbidden -->
 
 ### Разрешённые глаголы
 
@@ -207,7 +184,7 @@ core/
 
 ## Архитектурные инварианты
 
-10 архитектурных инвариантов платформы определены **только** в [`AGENTS.md`](../AGENTS.md#region-MODULE_CONTRACT) (root). Настоящий файл не дублирует их — все расхождения между копиями устранены в пользу root как единственного Source of Truth.
+11 архитектурных инвариантов платформы определены **только** в [`AGENTS.md`](../AGENTS.md#region-MODULE_CONTRACT) (root). Настоящий файл не дублирует их — все расхождения между копиями устранены в пользу root как единственного Source of Truth.
 
 **Правило:** если новый инвариант затрагивает общую архитектуру платформы — добавляй в root AGENTS.md. В core/AGENTS.md описываются только core-специфичные контракты (операции, структура, forbidden-списки).
 

@@ -22,8 +22,8 @@ import os
 import subprocess
 
 import pytest
-
 from _conftest.networks import get_network_manager
+
 from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)

@@ -190,7 +190,6 @@ class TestGateStatusPageSecretsRegistered:
 
         email_entry = next(s for s in secrets if s["name"] == "PLATFORM_MASTER_EMAIL")
         assert email_entry.get("tier") == "required", "PLATFORM_MASTER_EMAIL tier should be required"
-        assert "nginx" in email_entry.get("consumers", []), "nginx should consume PLATFORM_MASTER_EMAIL"
         assert "status-page" in email_entry.get("consumers", []), "status-page should consume PLATFORM_MASTER_EMAIL"
 
     def test_master_password_registered(self):

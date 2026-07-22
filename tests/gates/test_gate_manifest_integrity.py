@@ -1,30 +1,32 @@
-# GREP_SUMMARY: manifest-integrity entrypoint-manifest allowed-verbs forbidden-verbs delegates-to AGENTS.md makefile module-targets name-linter module-dictionary
-# STRUCTURE: ▶ manifest(session-scoped) → _extract_delegate_paths ∥ _load_makefile_targets ∥ _extract_agents_verbs ∥ _extract_module_verbs ∥ _get_module_makefiles ∥ _resolve_module_targets ∥ _extract_phony_targets ∥ _extract_explicit_targets ∥ _read_included_contents ∥ _get_all_targets ∥ _get_entrypoint_scripts ∥ _load_module_dictionary ∥ _load_name_linter_config → ○ 11 tests
+# GREP_SUMMARY: manifest-integrity entrypoint-manifest allowed-verbs forbidden-verbs delegates-to AGENTS.md module-targets name-linter module-dictionary
+# STRUCTURE: ▶ manifest(session-scoped) → _extract_delegate_paths ∥ _extract_agents_verbs ∥ _extract_module_verbs ∥ _get_module_makefiles ∥ _resolve_module_targets ∥ _extract_phony_targets ∥ _extract_explicit_targets ∥ _read_included_contents ∥ _get_all_targets ∥ _get_entrypoint_scripts ∥ _load_module_dictionary ∥ _load_name_linter_config → ○ 10 tests
 # region MODULE_CONTRACT
-## @purpose — Merge gate: manifest ↔ Makefile ↔ AGENTS.md ↔ module targets bidirectional integrity.
-##            Replaces test_gate_manifest_parity.py + test_gate_name_linter.py + test_gate_module_targets_manifest.py.
+## @purpose — Merge gate: structural validation of manifest ↔ AGENTS.md ↔ module targets.
+##            Freshness (manifest ↔ Makefile) delegated to `make check-manifests`.
 ## @scope
 ##   Direction A (manifest → reality):
 ##     1. Every delegates_to shell-script path exists on disk
-##     2. Every allowed_verbs has a corresponding Makefile phony target
-##     3. Every forbidden_scripts name is NOT found in core/ tree
-##     4. Every forbidden_directories does NOT exist on disk
+##     2. Every forbidden_scripts name is NOT found in core/ tree
+##     3. Every forbidden_directories does NOT exist on disk
 ##   Direction B (reality → manifest):
-##     5. core/AGENTS.md table matched against manifest allowed_verbs
-##     6. core/modules/AGENTS.md module targets checked against forbidden_verbs
+##     4. core/AGENTS.md table matched against manifest allowed_verbs
+##     5. core/modules/AGENTS.md module targets checked against forbidden_verbs
 ##   Naming convention (name-linter):
-##     7. No Makefile target uses a forbidden verb or unregistered verb
-##     8. Module Makefile targets use canonical names from module dictionary
-##     9. Every entrypoint script is referenced in manifest delegates_to
+##     6. No Makefile target uses a forbidden verb
+##     7. Module Makefile targets use canonical names from module dictionary
+##     8. Every entrypoint script is referenced in manifest delegates_to
 ##   Module lifecycle (module-targets-manifest):
-##     10. Module lifecycle targets registered in manifest module_lifecycle
-##     11. No module- prefix in Makefile.common / module.mk
-## @input — core/entrypoint-manifest.yaml, Makefile, core/AGENTS.md, core/modules/AGENTS.md,
+##     9. Module lifecycle targets registered in manifest module_lifecycle
+##     10. No module- prefix in Makefile.common / module.mk
+## @input — core/entrypoint-manifest.yaml, core/AGENTS.md, core/modules/AGENTS.md,
 ##          core/modules/*/Makefile, core/Makefile.common, core/templates/module.mk, core/entrypoints/
 ## @output — pytest assert failures with structured error codes
 ## @invariants — All test functions are marked @pytest.mark.gate
 ## @rationale — Merge of 3 gate files into 1 reduces test startup overhead, eliminates duplicate
-##              manifest loads via session-scoped fixture.
+##              manifest loads via session-scoped fixture. Freshness checks removed per DevPlan 051:
+##              `make check-manifests` covers manifest ↔ Makefile sync; this file covers structural
+##              invariants that cannot be auto-generated (delegate paths, forbidden structures,
+##              documentation sync, naming conventions).
 # endregion MODULE_CONTRACT
 
 import logging
@@ -53,7 +55,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-_CONVENIENCE_TARGETS: set[str] = {"venv", "help", "pre-commit-install", "pre-commit-run"}
 _MODULE_SCOPED_VERBS: set[str] = {"build", "logs", "start", "stop"}
 
 
@@ -111,51 +112,6 @@ def _extract_delegate_paths(delegates_to: str) -> list[str]:
 
 
 # endregion HELPER_extract_delegate_paths
-
-
-# region HELPER_load_makefile_targets
-def _load_makefile_targets() -> set[str]:
-    """Extract phony target names from ALL Makefile `.PHONY:` lines.
-
-    ## @purpose — Get authoritative list of registered make targets.
-    ##            Reads root Makefile AND all makefiles/*.mk (post include-split).
-    ## @io — ⎋ set[str]: all target names across all .PHONY declarations
-    ## @complexity — O(N*F), N = lines per file, F = number of files
-    """
-    targets: set[str] = set()
-    phony_count: int = 0
-
-    # Read root Makefile
-    with open(_MAKEFILE_PATH) as f:
-        for line in f:
-            if line.startswith(".PHONY:"):
-                phony_count += 1
-                tokens = line.split()
-                if len(tokens) > 1:
-                    targets.update(tokens[1:])
-
-    # Read included makefiles/*.mk
-    makefiles_dir = os.path.join(os.path.dirname(_MAKEFILE_PATH), "makefiles")
-    if os.path.isdir(makefiles_dir):
-        for mk_file in sorted(os.listdir(makefiles_dir)):
-            if mk_file.endswith(".mk"):
-                with open(os.path.join(makefiles_dir, mk_file)) as f:
-                    for line in f:
-                        if line.startswith(".PHONY:"):
-                            phony_count += 1
-                            tokens = line.split()
-                            if len(tokens) > 1:
-                                targets.update(tokens[1:])
-
-    logger.info(
-        "[IMP:9][_load_makefile_targets] Found %d phony targets across %d .PHONY line(s)",
-        len(targets),
-        phony_count,
-    )
-    return targets
-
-
-# endregion HELPER_load_makefile_targets
 
 
 # region HELPER_extract_agents_verbs
@@ -493,7 +449,7 @@ def manifest():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TESTS — Manifest → Reality (from manifest_parity)
+# TESTS — Manifest → Reality
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -507,7 +463,7 @@ def manifest():
 # · Last fail: N/A (preventive)
 # · Remove if: entire gate category is superseded by a newer mechanism
 def test_delegates_to_paths_exist(caplog) -> None:
-    """Direction A.1-A.2: manifest → delegates_to files exist."""
+    """Direction A.1: manifest → delegates_to files exist."""
     # 🧪 TRAP[TEST] · 2026-07-09 · gate/manifest-parity · delegates_to path existence check
     # · Regression: if a delegate script is deleted without updating manifest
     # · Remove if: delegate scripts are verified by another mechanism (e.g. CI pipeline)
@@ -551,84 +507,11 @@ def test_delegates_to_paths_exist(caplog) -> None:
 
 @pytest.mark.gate
 @ldd_trajectory
-# region FUNC_test_allowed_verbs_match_makefile
-## @purpose — Verify every manifest allowed_verbs entry matches a Makefile phony target.
-##            FAIL codes: MANIFEST_INCOMPLETE, MANIFEST_STALE
-def test_allowed_verbs_match_makefile(caplog) -> None:
-    """Direction A.3: manifest allowed_verbs → Makefile phony targets."""
-    # 🧪 TRAP[TEST] · 2026-07-10 · gate/manifest-parity · allowed_verbs vs Makefile
-    # · Regression: adding a Makefile target without registering in manifest (or vice versa)
-    # · Remove if: Makefile is auto-generated from manifest
-
-    logger.info("[IMP:8][test_allowed_verbs_match_makefile] === Direction A.3: manifest → Makefile ===")
-
-    manifest = _load_manifest()
-    allowed_verbs: set[str] = set(manifest.get("allowed_verbs", []))
-    makefile_targets: set[str] = _load_makefile_targets()
-
-    operational_targets: set[str] = makefile_targets - _CONVENIENCE_TARGETS
-    root_allowed_verbs: set[str] = allowed_verbs - _MODULE_SCOPED_VERBS
-
-    manifest_not_in_makefile: set[str] = root_allowed_verbs - operational_targets
-    makefile_not_in_manifest: set[str] = operational_targets - root_allowed_verbs
-
-    logger.info(
-        "[IMP:8][allowed_verbs] %d in manifest (%d root after -module-scoped), %d operational in Makefile",
-        len(allowed_verbs),
-        len(root_allowed_verbs),
-        len(operational_targets),
-    )
-
-    if manifest_not_in_makefile:
-        logger.warning(
-            "[IMP:7][allowed_verbs][MISSING_IN_MAKEFILE] %d verb(s): %s",
-            len(manifest_not_in_makefile),
-            sorted(manifest_not_in_makefile),
-        )
-    else:
-        logger.info("[IMP:9][allowed_verbs][MAKEFILE_OK] All manifest verbs have Makefile targets")
-
-    if makefile_not_in_manifest:
-        logger.warning(
-            "[IMP:7][allowed_verbs][MISSING_IN_MANIFEST] %d target(s): %s",
-            len(makefile_not_in_manifest),
-            sorted(makefile_not_in_manifest),
-        )
-    else:
-        logger.info("[IMP:9][allowed_verbs][MANIFEST_OK] All Makefile targets registered in manifest")
-
-    errors: list[str] = []
-    if manifest_not_in_makefile:
-        errors.append(
-            f"MANIFEST_INCOMPLETE: {len(manifest_not_in_makefile)} verb(s) in manifest "
-            f"allowed_verbs but missing from Makefile .PHONY:\n"
-            + "\n".join(f"  {v}" for v in sorted(manifest_not_in_makefile))
-        )
-    if makefile_not_in_manifest:
-        errors.append(
-            f"MANIFEST_STALE: {len(makefile_not_in_manifest)} Operational Makefile target(s) registered "
-            f"in .PHONY but missing from manifest allowed_verbs (convenience targets excluded):\n"
-            + "\n".join(f"  {t}" for t in sorted(makefile_not_in_manifest))
-        )
-
-    assert not errors, "\n\n".join(errors)
-    logger.info(
-        "[IMP:9][test_allowed_verbs_match_makefile] %d root allowed verbs ↔ %d targets: SYNC OK",
-        len(root_allowed_verbs),
-        len(operational_targets),
-    )
-
-
-# endregion FUNC_test_allowed_verbs_match_makefile
-
-
-@pytest.mark.gate
-@ldd_trajectory
 # region FUNC_test_agents_md_synced_with_manifest
 ## @purpose — Verify core/AGENTS.md ↔ manifest allowed_verbs and modules/AGENTS.md ↔ forbidden_verbs.
 ##            FAIL code: DOC_MISMATCH
 def test_agents_md_synced_with_manifest(caplog) -> None:
-    """Direction B.5-B.6: AGENTS.md tables ↔ manifest."""
+    """Direction B.4-B.5: AGENTS.md tables ↔ manifest."""
     # 🧪 TRAP[TEST] · 2026-07-09 · gate/manifest-parity · AGENTS.md ↔ manifest sync
     # · Regression: AGENTS.md table edited without updating manifest (phantom verbs)
     # · Remove if: AGENTS.md is auto-generated from manifest
@@ -706,7 +589,7 @@ def test_agents_md_synced_with_manifest(caplog) -> None:
 ## @purpose — Verify forbidden directories do NOT exist and forbidden scripts are NOT present.
 ##            FAIL code: MANIFEST_STALE
 def test_forbidden_directories_absent(caplog) -> None:
-    """Direction A.4 + B.7: forbidden directories and scripts must not exist."""
+    """Direction A.2-A.3: forbidden directories and scripts must not exist."""
     # 🧪 TRAP[TEST] · 2026-07-09 · gate/manifest-parity · forbidden structures absence
     # · Regression: a forbidden script gets re-introduced; forbidden directory re-created
     # · Remove if: forbidden lists are removed from manifest
@@ -767,7 +650,7 @@ def test_forbidden_directories_absent(caplog) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Module verb parity (from manifest_parity)
+# Module verb parity
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -888,21 +771,19 @@ def test_module_makefiles_have_required_module_targets(caplog) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TESTS — Name linter (from name_linter)
+# TESTS — Name linter
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.gate
 @ldd_trajectory
-# 🧪 TRAP[TEST] · 2026-07-09 · gate/name-linter · forbidden verbs + unregistered verbs in root & module Makefiles
+# 🧪 TRAP[TEST] · 2026-07-09 · gate/name-linter · forbidden verbs in root & module Makefiles
 def test_no_forbidden_verbs_in_makefiles(caplog) -> None:
-    """Validate that no Makefile target uses a forbidden verb or an unregistered verb."""
+    """Validate that no Makefile target uses a verb from forbidden_verbs."""
     manifest = _load_manifest()
-    allowed_verbs: set[str] = set(manifest.get("allowed_verbs", []))
     forbidden_verbs: set[str] = set(manifest.get("forbidden_verbs", []))
     logger.info(
-        "[IMP:8][test_no_forbidden_verbs_in_makefiles] Manifest loaded: %d allowed, %d forbidden",
-        len(allowed_verbs),
+        "[IMP:8][test_no_forbidden_verbs_in_makefiles] Manifest loaded: %d forbidden verbs",
         len(forbidden_verbs),
     )
 
@@ -913,14 +794,6 @@ def test_no_forbidden_verbs_in_makefiles(caplog) -> None:
     for target in sorted(root_targets):
         if target in forbidden_verbs:
             msg = f"FORBIDDEN_VERB: Root Makefile target '{target}' is in forbidden_verbs {sorted(forbidden_verbs)}"
-            errors.append(msg)
-            logger.error("[IMP:9][test_no_forbidden_verbs_in_makefiles] %s", msg)
-        if target not in allowed_verbs and not _is_system_exception(target):
-            msg = (
-                f"UNKNOWN_VERB: Root Makefile target '{target}' "
-                f"is not in allowed_verbs and not a system exception "
-                f"(test-*, gate-*, pre-commit-*, help, venv)"
-            )
             errors.append(msg)
             logger.error("[IMP:9][test_no_forbidden_verbs_in_makefiles] %s", msg)
 
@@ -939,7 +812,7 @@ def test_no_forbidden_verbs_in_makefiles(caplog) -> None:
         logger.error("[IMP:9][test_no_forbidden_verbs_in_makefiles] %d violation(s) found", len(errors))
         pytest.fail("\n".join(errors))
 
-    logger.info("[IMP:9][test_no_forbidden_verbs_in_makefiles] ALL PASS — no forbidden verbs, all targets registered")
+    logger.info("[IMP:9][test_no_forbidden_verbs_in_makefiles] ALL PASS — no forbidden verbs in any Makefile")
 
 
 @pytest.mark.gate

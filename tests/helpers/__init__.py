@@ -26,9 +26,10 @@ from pathlib import Path
 # so parent.parent.parent is tests/. Adjust accordingly.
 SCHEMAS_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "schemas"
 
-# ⚠️ Test-only password — NOT for production use. Centralised here to avoid
-# hardcoded duplication across test files (W1 fix).
-_CLICKHOUSE_PASSWORD = "test-clickhouse-pwd-not-for-prod"
+# Test password constants imported from generated module (helpers.env_defaults_generated).
+# Additional test passwords (ClickHouse, Postgres, etc.) can be added to
+# helpers/env_defaults_generated.py and imported here to avoid hardcoded values.
+from helpers.env_defaults_generated import _CLICKHOUSE_PASSWORD  # noqa: F401
 
 
 def load_schema(schema_name: str) -> dict:

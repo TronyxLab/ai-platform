@@ -240,7 +240,9 @@ def test_cli_exit_code(caplog, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert result_valid.returncode == 0, f"Expected exit 0, got {result_valid.returncode}. stderr: {result_valid.stderr}"
+    assert result_valid.returncode == 0, (
+        f"Expected exit 0, got {result_valid.returncode}. stderr: {result_valid.stderr}"
+    )
 
     # Invalid → exit 1
     result_invalid = subprocess.run(
@@ -248,7 +250,9 @@ def test_cli_exit_code(caplog, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert result_invalid.returncode == 1, f"Expected exit 1, got {result_invalid.returncode}. stderr: {result_invalid.stderr}"
+    assert result_invalid.returncode == 1, (
+        f"Expected exit 1, got {result_invalid.returncode}. stderr: {result_invalid.stderr}"
+    )
 
     logger.critical("[IMP:9][test] test_cli_exit_code — CLI exit codes correct (0=valid, 1=invalid)")
 

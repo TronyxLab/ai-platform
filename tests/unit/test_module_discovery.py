@@ -31,10 +31,10 @@ _SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal
 sys.path.insert(0, str(_SCRIPT_DIR))
 import module_discovery as md
 
-
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: discover_docker_modules API
 # ═══════════════════════════════════════════════════════════════════
+
 
 # 🧪 TRAP[TEST] · Regression · discover_docker_modules returns all non-system modules with compose file
 # · Scenario: 3 mock module dirs with module.yaml + docker-compose.base.yml → 3 compose paths returned
@@ -134,6 +134,7 @@ def test_empty_modules_dir(caplog, tmp_path):
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: CLI main() - subprocess
 # ═══════════════════════════════════════════════════════════════════
+
 
 # 🧪 TRAP[TEST] · Regression · CLI --format json produces valid JSON array
 # · Scenario: 3 mock modules → CLI prints JSON array of 3 strings → parseable + correct length

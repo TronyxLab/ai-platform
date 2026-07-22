@@ -37,5 +37,44 @@ include makefiles/modules.mk
 include makefiles/ci.mk
 include makefiles/helpers.mk
 
+# === Manifest generation targets ===
+.PHONY: generate-manifests check-manifests
+
+generate-manifests:
+	@echo "[IMP:7][generate-manifests] Generating secrets-manifest.yaml..."
+	@python3 core/internal/scripts/generate_secrets_manifest.py \
+		--secret-defs core/secret-definitions.yaml \
+		--modules-dir core/modules \
+		--output core/secrets-manifest.yaml
+	@echo "[IMP:7][generate-manifests] Generating platform-env.yaml + smoke_env_generated.py + env_defaults_generated.py..."
+	@python3 core/internal/scripts/generate_platform_env.py \
+		--infra core/platform-infra.yaml \
+		--modules-dir core/modules \
+		--secret-defs core/secret-definitions.yaml \
+		--output platform-env.yaml \
+		--smoke-env-output tests/_conftest/smoke_env_generated.py \
+		--helpers-output tests/helpers/env_defaults_generated.py
+	@echo "[IMP:7][generate-manifests] Generating entrypoint-manifest.yaml allowed_verbs + gates..."
+	@python3 core/internal/scripts/generate_entrypoint_manifest.py \
+		--makefile-dir . \
+		--gmake-path $(shell which gmake 2>/dev/null || which make 2>/dev/null || echo make) \
+		--existing-manifest core/entrypoint-manifest.yaml \
+		--tests-dir tests/gates \
+		--output core/entrypoint-manifest.yaml
+	@echo "[IMP:7][generate-manifests] Generating core/AGENTS.md canonical table + forbidden lists..."
+	@python3 core/internal/scripts/generate_agents_md.py \
+		--manifest core/entrypoint-manifest.yaml \
+		--agents-md core/AGENTS.md \
+		--marker canon_table
+	@echo "[IMP:9][generate-manifests] All manifests generated."
+
+check-manifests:
+	@echo "[IMP:7][check-manifests] Checking generated manifests are up to date..."
+	@git diff --exit-code -- core/secrets-manifest.yaml platform-env.yaml \
+		tests/_conftest/smoke_env_generated.py tests/helpers/env_defaults_generated.py \
+		core/entrypoint-manifest.yaml core/AGENTS.md || \
+		(echo "[IMP:9][check-manifests] ERROR: Generated files out of date. Run: make generate-manifests" && exit 1)
+	@echo "[IMP:9][check-manifests] All generated manifests are up to date."
+
 # === Default target ===
 .DEFAULT_GOAL := help

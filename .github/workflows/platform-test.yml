@@ -115,6 +115,10 @@ jobs:
       - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
         run: make gate MODE=fast
 
+      # Manifest generation contract — блокирует push если generated files diverged
+      - name: Check generated manifests up to date
+        run: make check-manifests
+
       # ─── Stage 2: Docker setup + provisioning ───────────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

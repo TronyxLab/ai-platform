@@ -99,17 +99,17 @@ check_namelint() {
         return
     fi
 
-    # Parse allowed_verbs from manifest YAML (list after `allowed_verbs:` key, lines starting with "  - ")
+    # Parse allowed_verbs from manifest YAML (list after `allowed_verbs:` key, lines starting with "  - " or "- ")
     local allowed
-    allowed=$(awk '/^allowed_verbs:/{found=1; next} found && /^  - /{gsub(/^  - /,""); print; next} found && /^[^ ]/ && !/^  - /{found=0}' "$manifest")
+    allowed=$(awk '/^allowed_verbs:/{found=1; next} found && /^  - /{gsub(/^  - /,""); print; next} found && /^- /{gsub(/^- /,""); print; next} found && /^[^ ]/ && !/^  - / && !/^- /{found=0}' "$manifest")
 
     # Parse module_lifecycle from manifest YAML (G1.3 — module targets like start, stop, etc.)
     local module_lifecycle
-    module_lifecycle=$(awk '/^module_lifecycle:/{found=1; next} found && /^  - /{gsub(/^  - /,""); print; next} found && /^[^ ]/ && !/^  - /{found=0}' "$manifest")
+    module_lifecycle=$(awk '/^module_lifecycle:/{found=1; next} found && /^  - /{gsub(/^  - /,""); print; next} found && /^- /{gsub(/^- /,""); print; next} found && /^[^ ]/ && !/^  - / && !/^- /{found=0}' "$manifest")
 
     # Parse forbidden_verbs from manifest YAML
     local forbidden
-    forbidden=$(awk '/^forbidden_verbs:/{found=1; next} found && /^  - /{gsub(/^  - /,""); print; next} found && /^[^ ]/ && !/^  - /{found=0}' "$manifest")
+    forbidden=$(awk '/^forbidden_verbs:/{found=1; next} found && /^  - /{gsub(/^  - /,""); print; next} found && /^- /{gsub(/^- /,""); print; next} found && /^[^ ]/ && !/^  - / && !/^- /{found=0}' "$manifest")
 
     # Parse .PHONY targets from root Makefile AND makefiles/*.mk (W4-E4 include-split)
     ## @rationale After W4-E4 include-split, .PHONY: declarations moved from root Makefile

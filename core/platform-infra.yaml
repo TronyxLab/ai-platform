@@ -1,0 +1,137 @@
+# core/platform-infra.yaml
+# GREP_SUMMARY: platform-infra, infrastructure-descriptor, networks, volumes, proxy, provides
+# STRUCTURE: ┌networks (12)┐ → ┌volumes (16)┐ → ┌proxy┐ → ┌provides (8)┐
+# region MODULE_CONTRACT
+## @purpose  Canonical infrastructure descriptor — single source of truth for Docker networks,
+##           volume directories, proxy configuration, and service provides (host/port/URL templates).
+##           Generated sections (profiles, port_mappings, test_ports, env_defaults) are produced
+##           dynamically by generate_platform_env.py.
+## @scope    Consumed by generate_platform_env.py, provision-environment.sh, tests/_conftest/infra.py,
+##           deploy-modules.sh, CI workflows.
+## @invariants
+##   - This is the ONLY place where networks, volumes, proxy config, and provides are defined
+##   - Consumers MUST read this file, never hardcode
+##   - profiles, port_mappings, test_ports, env_defaults are GENERATED — not stored here
+##   - provides entries are 1:1 with core/modules/ directory names (Docker modules with host:port)
+## @rationale Splitting infra (static) from generated sections (dynamic) eliminates drift between
+##            platform-env.yaml and actual module state. Static infra rarely changes; generated
+##            sections auto-sync with modules directory + docker-compose files.
+## @changes  Plan 041 — platform-infra split: created from platform-env.yaml, kept only
+##            networks, volumes, proxy, provides sections; removed profiles, port_mappings,
+##            test_ports, env_defaults.
+# endregion MODULE_CONTRACT
+
+networks:
+  - name: proxy-net
+    driver: bridge
+  - name: shared-db-net
+    driver: bridge
+  - name: shared-cache-net
+    driver: bridge
+  - name: hermes-agent-net
+    driver: bridge
+  - name: observability-net
+    driver: bridge
+  - name: backup-net
+    driver: bridge
+  # Staging networks (production VPS only — created idempotently, no-op elsewhere)
+  - name: staging-proxy-net
+    driver: bridge
+  - name: staging-shared-db-net
+    driver: bridge
+  # Test networks (test-only external networks for DNS-alias isolation — DevPlan 017 Option B)
+  - name: test-shared-db-net
+    driver: bridge
+  - name: test-shared-cache-net
+    driver: bridge
+  - name: test-observability-net
+    driver: bridge
+  - name: test-proxy-net
+    driver: bridge
+  - name: test-hermes-agent-net
+    driver: bridge
+
+volumes:
+  # Prometheus config directories (bind-mount for dynamic targets/rules)
+  - path: /opt/platform/prometheus-rules
+  - path: /opt/platform/prometheus-targets
+  # Backup
+  - path: /var/lib/platform/backup-spool
+  - path: /var/lib/platform/backup-spool/app-data
+  - path: /var/lib/platform/backup-spool/postgres
+  # Clickhouse
+  - path: /var/lib/platform/clickhouse-data
+  # Observability (monitoring + logging)
+  - path: /var/lib/platform/grafana-data
+  - path: /var/lib/platform/hermes-agent/data
+  # Infra metrics
+  - path: /var/lib/platform/infra-metrics-data
+  # Langfuse + LiteLLM
+  - path: /var/lib/platform/langfuse-data
+  - path: /var/lib/platform/litellm-data
+  # Loki
+  - path: /var/lib/platform/loki-data
+  # Minio
+  - path: /var/lib/platform/minio-data
+  # Postgres
+  - path: /var/lib/platform/postgres-data
+  - path: /var/lib/platform/prometheus-data
+  # Logs
+  - path: /var/lib/platform/wal-archive
+  - path: /var/log/platform/backup
+
+proxy:
+  # Opt-in контракт: прокси-переменные (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) декларируют
+  # только модули из consumers — единственные реальные потребители прокси-канала
+  # hermes-agent: Telegram → Tor → Privoxy. Все остальные модули — внутренний трафик без прокси.
+  # ⚠️ Добавление модуля сюда БЕЗ env_shared в module.yaml = красный гейт T8.5 (opt-in reverse)
+  consumers:
+    - hermes-agent
+  # Канонический список внутренних NO_PROXY-исключений (SoT).
+  # .env/.env.example/fallback в hermes-agent docker-compose ⊇ этого списка
+  no_proxy_internal: "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse"
+
+provides:
+  postgres:
+    host: pgbouncer
+    port: 6432
+    dsn_template: "postgresql://${NAME}_user:***@pgbouncer:6432/${NAME}_db"
+    networks:
+      - shared-db-net
+  redis:
+    host: redis
+    port: 6379
+    url_template: "redis://redis:6379/0"
+    networks:
+      - shared-cache-net
+  nginx:
+    host: nginx-proxy
+    port: 443
+    url_template: "https://${DOMAIN}"
+    networks:
+      - proxy-net
+  litellm:
+    host: litellm
+    port: 4000
+    url_template: "http://litellm:4000"
+    networks:
+      - hermes-agent-net
+  langfuse:
+    host: langfuse
+    port: 3001
+    url_template: "http://langfuse:3001"
+    networks:
+      - hermes-agent-net
+  minio:
+    host: minio
+    port: 9000
+    url_template: "http://minio:9000"
+    networks:
+      - hermes-agent-net
+  clickhouse:
+    host: clickhouse
+    port: 8123
+    url_template: "http://clickhouse:8123"
+    dsn_template: "clickhouse://clickhouse:8123/${NAME}"
+    networks:
+      - hermes-agent-net

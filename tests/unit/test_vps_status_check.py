@@ -109,6 +109,7 @@ def test_parse_malformed_json(caplog):
         vsc.parse_status_json("not json")
     logger.critical("[IMP:9][test] parse_status_json malformed JSON — json.JSONDecodeError raised")
 
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
@@ -200,5 +201,6 @@ def test_cli_output_status_only(caplog):
     assert result.returncode == 0
     assert result.stdout.strip() == "found"
     logger.critical("[IMP:9][test] CLI --output-status-only — stdout='found', exit 0")
+
 
 # endregion
