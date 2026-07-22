@@ -23,6 +23,10 @@
 ## · Rejected: local-only L1 (risk: loss of build machine → rebuild from scratch)
 ## · Reason: L1 contains no secrets (only Python dependencies). Push = disaster recovery, not delivery model change.
 ## · Rev: if L1 starts carrying context-specific data → revert to local-only.
+## ⚠️ TRAP[DECISION] · 2026-07-22 · MED · Strangler-Fig decomposition — canonical pattern для shell→Python миграции
+## · Rejected: Big-bang rewrite (risk: 4114 LOC top-3 монолиты → один PR — слишком высокий риск регрессии)
+## · Reason: Strangler-Fig (пошаговая декомпозиция бизнес-логики в Python + unit-тесты + shell-фасад) выбран как canonical pattern на основе Wave 4 (035-wave4-strangler-top3). Каждый из топ-3 скриптов (deploy-modules, converge, node-lifecycle) разбит независимо: Python-модуль получает бизнес-логику, shell остаётся тонким фасадом (<100-200 LOC). Результат: 4114→392 LOC shell (90% сокращение), 0 inline python3 блоков, 7 новых unit-тестов.
+## · Rev: если новый shell-скрипт достигает >500 LOC с inline python3 → применять Strangler-Fig немедленно, без утверждения архитектором.
 # endregion MODULE_CONTRACT
 
 # AGENTS.md — ai-platform

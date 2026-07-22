@@ -440,14 +440,16 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
 
     func_body = content[func_start:]
     source_pos = func_body.find("secrets_env")
-    ssl_call_pos = func_body.find('bash "$ssl_script"')
+    ssl_call_pos = func_body.find('python3 "$ssl_script"')
     assert source_pos >= 0 and ssl_call_pos >= 0, (
-        "[IMP:9][test] FAIL: Could not locate source and ssl_script call in function"
+        "FAIL: Could not locate source and ssl_script call in function (now python3 delegation)"
     )
     assert source_pos < ssl_call_pos, (
         f"[IMP:9][test] FAIL: secrets_env source ({source_pos}) must precede ssl_script call ({ssl_call_pos})"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: source before ssl-provision.sh call")
+    logger.info(
+        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: source before ssl-provision.sh call (python3)"
+    )
 
     logger.info("[IMP:9][test_update_ssl_step_sources_secrets_env] ALL CHECKS PASS")
 

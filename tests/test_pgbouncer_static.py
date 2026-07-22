@@ -38,6 +38,7 @@ def _module_contract():
 
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -606,7 +607,9 @@ def test_pgbouncer_password_charset_constraint(postgres_fixtures, caplog) -> Non
 
         compose_text = Path(compose_path).read_text()
 
-        has_direct_usage = "${POSTGRES_PASSWORD}" in compose_text
+        # Match ${POSTGRES_PASSWORD} (simple) or ${POSTGRES_PASSWORD:?...} / ${POSTGRES_PASSWORD:-...} (fail-fast/default)
+        # Charset constraint ^[A-Za-z0-9._-]+$ guarantees URL safety regardless of expansion syntax.
+        has_direct_usage = bool(re.search(r"\$\{POSTGRES_PASSWORD[\}:]", compose_text))
         has_encoded = "POSTGRES_PASSWORD_ENCODED" in compose_text
 
         logger.critical(

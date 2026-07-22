@@ -253,15 +253,11 @@ def test_d5_validator_exists(caplog):
     with caplog.at_level(logging.INFO):
         logger.info("[IMP:7][gate][d5] Checking D5 validator presence: %s", _VALIDATOR_PATH)
 
-        assert _VALIDATOR_PATH.is_file(), (
-            f"[IMP:9][gate][d5] D5 validator not found: {_VALIDATOR_PATH}"
-        )
+        assert _VALIDATOR_PATH.is_file(), f"[IMP:9][gate][d5] D5 validator not found: {_VALIDATOR_PATH}"
 
         # Verify it has executable bit or at minimum is a valid Python file
         content = _VALIDATOR_PATH.read_text()
-        assert "def main" in content, (
-            "[IMP:9][gate][d5] D5 validator missing 'def main' entry point"
-        )
+        assert "def main" in content, "[IMP:9][gate][d5] D5 validator missing 'def main' entry point"
         assert "D5" in content or "DEPRECATED" not in content, (
             "[IMP:9][gate][d5] D5 validator seems stale (no D5 reference)"
         )
@@ -296,17 +292,13 @@ def test_d5_schema_version(caplog):
 
         # Title must indicate D5
         title = schema.get("title", "")
-        assert "D5" in title, (
-            f"[IMP:9][gate][d5] Schema title missing 'D5': '{title}'"
-        )
+        assert "D5" in title, f"[IMP:9][gate][d5] Schema title missing 'D5': '{title}'"
         logger.info("[IMP:9][gate][d5] Schema title: '%s' ✓", title)
 
         # env_requires must have oneOf (string OR object)
         env_req = schema.get("properties", {}).get("env_requires", {})
         one_of = env_req.get("items", {}).get("oneOf", [])
-        assert len(one_of) == 2, (
-            f"[IMP:9][gate][d5] env_requires oneOf expected 2 variants, got {len(one_of)}"
-        )
+        assert len(one_of) == 2, f"[IMP:9][gate][d5] env_requires oneOf expected 2 variants, got {len(one_of)}"
         logger.info("[IMP:9][gate][d5] env_requires oneOf=2 variants (string + object) ✓")
 
         # D5 adds typed object variant with type+required fields
@@ -317,9 +309,7 @@ def test_d5_schema_version(caplog):
         logger.info("[IMP:9][gate][d5] Typed env_requires: type + required fields ✓")
 
         # Restart field must be present (D5 addition)
-        assert "restart" in schema.get("properties", {}), (
-            "[IMP:9][gate][d5] D5 schema missing 'restart' field"
-        )
+        assert "restart" in schema.get("properties", {}), "[IMP:9][gate][d5] D5 schema missing 'restart' field"
         logger.info("[IMP:9][gate][d5] restart field present ✓")
 
         logger.info("[IMP:9][gate][d5] PASS: schema is D5 (title='%s')", title)
@@ -375,9 +365,7 @@ def test_d5_validator_passes_on_all_modules(caplog):
 
         # Collect all module.yaml files
         module_yamls = sorted(_MODULES_DIR_D5.glob("*/module.yaml"))
-        assert len(module_yamls) >= 13, (
-            f"[IMP:9][gate][d5] Expected ≥13 module.yaml files, found {len(module_yamls)}"
-        )
+        assert len(module_yamls) >= 13, f"[IMP:9][gate][d5] Expected ≥13 module.yaml files, found {len(module_yamls)}"
 
         # Run validate_module on each
         schema_path = _SCHEMA_PATH
@@ -395,9 +383,7 @@ def test_d5_validator_passes_on_all_modules(caplog):
             else:
                 logger.info("[IMP:9][gate][d5] PASS: %s", module_name)
 
-        assert not failed, (
-            "[IMP:9][gate][d5] D5 validation failures:\n" + "\n".join(failed)
-        )
+        assert not failed, "[IMP:9][gate][d5] D5 validation failures:\n" + "\n".join(failed)
         logger.info(
             "[IMP:9][gate][d5] PASS: All %d modules pass D5 validation",
             len(module_yamls),

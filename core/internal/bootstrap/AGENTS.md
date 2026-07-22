@@ -120,6 +120,66 @@ node-lifecycle.sh --mode update
 
 ---
 
+---
+
+## Python-модули декомпозиции (Wave 4 — Strangler-Fig)
+
+После W4-E1/E2/E3 бизнес-логика трёх shell-монолитов (4114 строк) мигрирована в типизированные Python-модули. Shell-фасады (<100-200 LOC каждый) выполняют arg parsing, env setup, и делегирование.
+
+### deploy/ — W4-E1 (5 модулей, ~2220 LOC)
+
+| Модуль | LOC | Назначение |
+|--------|-----|------------|
+| `docker_orchestrator.py` | 1155 | Docker compose deploy, pre-pull, healthcheck, orphan reconcile |
+| `sudoers_generator.py` | 648 | Sudoers generation via template-engine.sh, visudo validation, atomic write |
+| `context_overlay.py` | 369 | Git clone/pull context overlay repo с S9-кэшированием (300s) |
+| `secrets_validator.py` | 589 | Secrets validation, charset check, module metadata, transitive deps BFS |
+| `orphan_reconciler.py` | 465 | Batch orphan container detection (один docker ps -a для всех модулей) |
+
+**Shell-фасад:** `deploy-modules.sh` (91 LOC) — arg parsing → provision → secrets validate → Python per-module deploy → sudoers + orphans → severity exit.
+
+### converge/ — W4-E3 (1 модуль, 1367 LOC)
+
+| Модуль | LOC | Назначение |
+|--------|-----|------------|
+| `reconciler.py` | 1367 | 6 R-units (R1-R6): perms, audit_log, projects, networks, hosts_drift, vhosts. JSON report, --dry-run, --units filter. |
+
+**Shell-фасад:** `converge.sh` (137 LOC) — setup → lock → `python3 reconciler.py` → --reconcile → exit 0/1/2.
+
+### lifecycle/ — W4-E2 (2 модуля, 2330 LOC)
+
+| Модуль | LOC | Назначение |
+|--------|-----|------------|
+| `state_machine.py` | 1599 | State machine: 17 init + 7 update steps, checkpoint-resume, content-hash, TOR-conditional |
+| `steps.py` | 729 | Step implementation functions (acme, secrets, apt, docker, users, ssh-keys, firewall, sudoers, converge, telegram) |
+
+**Shell-фасад:** `node-lifecycle.sh` (164 LOC) — arg parsing → NODE_YAML resolution → `python3 state_machine.py` → checkpoint_step wrappers.
+
+### Shell-фасады: сводка
+
+| Скрипт | До (LOC) | После (LOC) | Сокращение |
+|--------|----------|-------------|------------|
+| `deploy-modules.sh` | 1664 | 91 | 95% |
+| `converge.sh` | 1149 | 137 | 88% |
+| `node-lifecycle.sh` | 1301 | 164 | 87% |
+| **Итого** | **4114** | **392** | **90%** |
+
+Inline `python3 -c` / `<<PYEOF` в фасадах: 0 (было 31 в топ-3). Все inline-блоки мигрированы в Python-функции с unit-тестами.
+
+### Unit-тесты
+
+Все модули имеют unit-тесты в `tests/unit/`:
+
+- `tests/unit/test_docker_orchestrator.py`
+- `tests/unit/test_sudoers_generator.py`
+- `tests/unit/test_context_overlay.py`
+- `tests/unit/test_secrets_validator.py`
+- `tests/unit/test_orphan_reconciler.py`
+- `tests/unit/test_reconciler.py`
+- `tests/unit/test_state_machine.py`
+
+---
+
 ## Cross-references
 
 | Файл | Назначение |

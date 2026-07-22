@@ -96,6 +96,15 @@ _EXCEPTION_PATHS: tuple[str, ...] = (
     # backward-compat thin wrapper — delegates to install-acme.sh + issue-cert.sh;
     # no direct callers remain after T3 split (all migrated to issue-cert.sh/install-acme.sh)
     "core/internal/bootstrap/ssl-provision.sh",
+    # W4 state-machine delegation — scripts called from Python
+    # (state_machine.py / steps.py via subprocess.run), not from shell source/exec.
+    # Static bash call-graph analyzer cannot trace Python subprocess calls.
+    "core/internal/bootstrap/deploy-modules.sh",
+    "core/internal/bootstrap/install-acme.sh",
+    "core/internal/bootstrap/install-docker.sh",
+    "core/internal/bootstrap/install-tor-proxy.sh",
+    "core/internal/bootstrap/secrets-init.sh",
+    "core/internal/bootstrap/setup-node.sh",
 )
 
 

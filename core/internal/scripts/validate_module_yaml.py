@@ -267,14 +267,12 @@ def load_module(path: Path) -> dict[str, Any]:
     if env_req is None:
         env_req = []
     if not isinstance(env_req, list):
-        raise ValueError(
-            f"[load_module] env_requires must be a list, got {type(env_req).__name__}: {path}"
-        )
+        raise ValueError(f"[load_module] env_requires must be a list, got {type(env_req).__name__}: {path}")
     normalized = []
     for entry in env_req:
         try:
             normalized.append(_normalize_env_requires_entry(entry))
-        except ValueError as e:
+        except ValueError as e:  # noqa: PERF203
             raise ValueError(f"[load_module] {path}: {e}") from e
     module["env_requires"] = normalized
     logger.info("[IMP:7][load_module] Normalized %d env_requires entries for %s", len(normalized), path)
@@ -357,18 +355,14 @@ def check_env_requires_presence(
         # (a) presence + non-empty in .env.example
         present, value = _env_var_in_dotenv(env_example_path, name)
         if not present:
-            violations.append(
-                f"{module_name}: required env var '{name}' missing from {env_example_path}"
-            )
+            violations.append(f"{module_name}: required env var '{name}' missing from {env_example_path}")
             logger.info(
                 "[IMP:9][check_env_requires_presence] FAIL: %s — '%s' missing in .env.example",
                 module_name,
                 name,
             )
         elif not value:
-            violations.append(
-                f"{module_name}: required env var '{name}' declared but EMPTY in {env_example_path}"
-            )
+            violations.append(f"{module_name}: required env var '{name}' declared but EMPTY in {env_example_path}")
             logger.info(
                 "[IMP:9][check_env_requires_presence] FAIL: %s — '%s' empty value in .env.example",
                 module_name,
@@ -376,17 +370,15 @@ def check_env_requires_presence(
             )
 
         # (b) secrets-manifest registration for type=secret
-        if req_type == "secret":
-            if not _env_var_in_secrets_manifest(secrets_manifest_path, name):
-                violations.append(
-                    f"{module_name}: secret env var '{name}' not registered in {secrets_manifest_path} "
-                    f"(tier != removed)"
-                )
-                logger.info(
-                    "[IMP:9][check_env_requires_presence] FAIL: %s — '%s' not in secrets-manifest",
-                    module_name,
-                    name,
-                )
+        if req_type == "secret" and not _env_var_in_secrets_manifest(secrets_manifest_path, name):
+            violations.append(
+                f"{module_name}: secret env var '{name}' not registered in {secrets_manifest_path} (tier != removed)"
+            )
+            logger.info(
+                "[IMP:9][check_env_requires_presence] FAIL: %s — '%s' not in secrets-manifest",
+                module_name,
+                name,
+            )
 
     if not violations:
         logger.info(
@@ -417,17 +409,13 @@ def check_restart_drift(module: dict[str, Any], compose_base_path: Path) -> list
     ##     other services with different restart → warning, not violation (documented carve-out)
     """
     if not compose_base_path.exists():
-        logger.info(
-            "[IMP:7][check_restart_drift] compose base not found: %s — skipped", compose_base_path
-        )
+        logger.info("[IMP:7][check_restart_drift] compose base not found: %s — skipped", compose_base_path)
         return []
 
     declared_restart = module.get("restart")
     if not declared_restart:
         # D4 module.yaml without restart field — no drift check possible
-        logger.info(
-            "[IMP:7][check_restart_drift] module has no 'restart' field — drift check skipped"
-        )
+        logger.info("[IMP:7][check_restart_drift] module has no 'restart' field — drift check skipped")
         return []
 
     module_name = module.get("name", "<unknown>")
@@ -460,11 +448,7 @@ def check_restart_drift(module: dict[str, Any], compose_base_path: Path) -> list
             continue
 
         # Carve-out: severity:critical + compose restart in {always, unless-stopped} + declared in {always, unless-stopped}
-        if (
-            severity == "critical"
-            and svc_restart in BASE_ALLOWED_RESTART
-            and declared_restart in BASE_ALLOWED_RESTART
-        ):
+        if severity == "critical" and svc_restart in BASE_ALLOWED_RESTART and declared_restart in BASE_ALLOWED_RESTART:
             logger.info(
                 "[IMP:9][check_restart_drift] %s/%s: critical carve-out — %s vs %s accepted",
                 module_name,
@@ -487,9 +471,7 @@ def check_restart_drift(module: dict[str, Any], compose_base_path: Path) -> list
         )
 
     if not violations:
-        logger.info(
-            "[IMP:9][check_restart_drift] PASS: %s — restart drift check clean", module_name
-        )
+        logger.info("[IMP:9][check_restart_drift] PASS: %s — restart drift check clean", module_name)
     return violations
 
 
@@ -537,9 +519,7 @@ def validate_module(
         # Docker modules should have base.yml — flag missing in strict mode
         install_type = module.get("install_type", "")
         if install_type == "docker":
-            violations.append(
-                f"{module.get('name', '?')}: install_type=docker but docker-compose.base.yml missing"
-            )
+            violations.append(f"{module.get('name', '?')}: install_type=docker but docker-compose.base.yml missing")
 
     return violations
 
@@ -571,15 +551,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--all", action="store_true", help="Validate all core/modules/*/module.yaml")
     mode.add_argument("--module", metavar="NAME", help="Validate single module by name")
     parser.add_argument("--schema-strict", action="store_true", help="Strict mode (extra checks)")
-    parser.add_argument(
-        "--schema-path", type=Path, default=DEFAULT_SCHEMA_PATH, help="Path to module.schema.json"
-    )
-    parser.add_argument(
-        "--modules-dir", type=Path, default=DEFAULT_MODULES_DIR, help="Path to core/modules/"
-    )
-    parser.add_argument(
-        "--env-example", type=Path, default=None, help="Path to .env.example (default: auto-detect)"
-    )
+    parser.add_argument("--schema-path", type=Path, default=DEFAULT_SCHEMA_PATH, help="Path to module.schema.json")
+    parser.add_argument("--modules-dir", type=Path, default=DEFAULT_MODULES_DIR, help="Path to core/modules/")
+    parser.add_argument("--env-example", type=Path, default=None, help="Path to .env.example (default: auto-detect)")
     parser.add_argument(
         "--secrets-manifest",
         type=Path,

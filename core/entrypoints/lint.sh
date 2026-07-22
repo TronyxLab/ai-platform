@@ -111,12 +111,22 @@ check_namelint() {
     local forbidden
     forbidden=$(awk '/^forbidden_verbs:/{found=1; next} found && /^  - /{gsub(/^  - /,""); print; next} found && /^[^ ]/ && !/^  - /{found=0}' "$manifest")
 
-    # Parse .PHONY targets from root Makefile (one or more .PHONY: lines)
-    local targets
-    targets=$(grep '^.PHONY:' "$makefile" 2>/dev/null | sed 's/^.PHONY: *//' | tr ' ' '\n' | sed '/^$/d')
+    # Parse .PHONY targets from root Makefile AND makefiles/*.mk (W4-E4 include-split)
+    ## @rationale After W4-E4 include-split, .PHONY: declarations moved from root Makefile
+    ##            to makefiles/*.mk. Scan both to catch all targets.
+    ## @invariants Use || true to handle grep exit 1 (no match) with set -euo pipefail.
+    local targets makefiles_dir
+    targets=$(grep '^.PHONY:' "$makefile" 2>/dev/null | sed 's/^.PHONY: *//' | tr ' ' '\n' | sed '/^$/d' || true)
+    makefiles_dir="$(dirname "$makefile")/makefiles"
+    if [ -d "$makefiles_dir" ]; then
+        for mk in "$makefiles_dir"/*.mk; do
+            [ -f "$mk" ] || continue
+            targets="$targets"$'\n'"$(grep '^.PHONY:' "$mk" 2>/dev/null | sed 's/^.PHONY: *//' | tr ' ' '\n' | sed '/^$/d' || true)"
+        done
+    fi
 
     if [ -z "$targets" ]; then
-        red "[FAIL] No .PHONY targets found in root Makefile"
+        red "[FAIL] No .PHONY targets found in root Makefile or makefiles/*.mk"
         ERRORS=$((ERRORS + 1))
         return
     fi

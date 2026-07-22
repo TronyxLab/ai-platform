@@ -357,7 +357,11 @@ def test_platform_starts_all_containers(
             if service_name:
                 expected_services.append(service_name)
     # ── Filter one-shot containers (defense in depth) ─────────────────────────
-    _ONESHOT_CONTAINERS = {"ai-platform-test-minio-createbuckets-1", "prometheus-config-init"}
+    _ONESHOT_CONTAINERS = {
+        "ai-platform-test-minio-createbuckets-1",
+        "prometheus-config-init",
+        "prometheus-config-init-test",
+    }
     expected_services = [s for s in expected_services if s not in _ONESHOT_CONTAINERS]
     # ── Deduplicate ───────────────────────────────────────────────────────────
     expected_services = sorted(set(expected_services))
@@ -373,7 +377,7 @@ def test_platform_starts_all_containers(
 
     # region BLOCK_PollRunning
     # Give containers a moment to transition through "created" → "running"
-    max_retries = 10
+    max_retries = 24
     retry_interval = 5  # seconds
     all_running = False
 

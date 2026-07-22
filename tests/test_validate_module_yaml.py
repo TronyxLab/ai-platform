@@ -29,9 +29,9 @@ from core.internal.scripts.validate_module_yaml import (
     check_env_requires_presence,
     check_restart_drift,
     load_module,
+    main,
     validate_module,
     validate_schema,
-    main,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,10 +40,7 @@ VALIDATOR_LOG = "core.internal.scripts.validate_module_yaml"
 
 def _ldd_ok(caplog) -> bool:
     """Check caplog has IMP:9 log. Returns True if found."""
-    return any(
-        "[IMP:" in r.message and int(r.message.split("[IMP:")[1].split("]")[0]) >= 9
-        for r in caplog.records
-    )
+    return any("[IMP:" in r.message and int(r.message.split("[IMP:")[1].split("]")[0]) >= 9 for r in caplog.records)
 
 
 # region FIXTURES
@@ -186,6 +183,7 @@ def _create_module(tmp: pathlib.Path, data: dict) -> pathlib.Path:
 
 # region UNIT_TEST_LOAD_MODULE
 
+
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · load_module — YAML loading + env_requires normalization
 # · Last fail: N/A (new test)
 # · Remove if: load_module функция удалена
@@ -205,7 +203,9 @@ class TestLoadModule:
     # 🧪 TRAP[TEST] · 2026-07-21 · UNIT · load_module — typed env_requires objects pass through
     def test_typed_objects_passthrough(self, tmp_path, caplog):
         data = {
-            "name": "typed-mod", "install_type": "docker", "description": "test",
+            "name": "typed-mod",
+            "install_type": "docker",
+            "description": "test",
             "env_requires": [
                 {"name": "VAR_STRING", "type": "string", "required": True},
                 {"name": "VAR_INT", "type": "int", "required": False},
@@ -236,12 +236,15 @@ class TestLoadModule:
 
 # region UNIT_TEST_VALIDATE_SCHEMA
 
+
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · validate_schema — valid module + negative cases
 class TestValidateSchema:
     def test_all_env_var_types_valid(self, tmp_path, tmp_schema, caplog):
         """string, secret, int, bool — all accepted by D5 schema."""
         data = {
-            "name": "test", "install_type": "docker", "description": "test",
+            "name": "test",
+            "install_type": "docker",
+            "description": "test",
             "env_requires": [
                 {"name": "S", "type": "string", "required": True},
                 {"name": "K", "type": "secret", "required": True},
@@ -275,7 +278,9 @@ class TestValidateSchema:
     def test_wrong_type_rejected(self, tmp_path, tmp_schema, caplog):
         """Invalid env_requires type → schema violation."""
         data = {
-            "name": "test", "install_type": "docker", "description": "test",
+            "name": "test",
+            "install_type": "docker",
+            "description": "test",
             "env_requires": [{"name": "X", "type": "invalid_type"}],
         }
         module = load_module(_create_module(tmp_path, data))
@@ -299,14 +304,22 @@ class TestValidateSchema:
 
 # region UNIT_TEST_ENV_REQUIRES_PRESENCE
 
+
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · check_env_requires_presence — required/missing/empty/optional/marker/secret-manifest
 class TestEnvRequiresPresence:
     def test_required_secret_present(self, tmp_dotenv, tmp_secrets_manifest, caplog):
         """Required+secret var present in both .env.example and secrets-manifest → clean."""
-        module = load_module(_create_module(tmp_dotenv.parent, {
-            "name": "test", "install_type": "docker", "description": "t",
-            "env_requires": [{"name": "TEST_SECRET", "type": "secret", "required": True}],
-        }))
+        module = load_module(
+            _create_module(
+                tmp_dotenv.parent,
+                {
+                    "name": "test",
+                    "install_type": "docker",
+                    "description": "t",
+                    "env_requires": [{"name": "TEST_SECRET", "type": "secret", "required": True}],
+                },
+            )
+        )
         violations = check_env_requires_presence(module, tmp_dotenv, tmp_secrets_manifest)
         logger.info("[IMP:9][test] presence OK: violations=%s", violations)
         assert not violations
@@ -318,10 +331,17 @@ class TestEnvRequiresPresence:
         dotenv.write_text("OTHER=value\n")
         manifest = tmp_path / "secrets.yaml"
         manifest.write_text("version: 1\nsecrets: []\n")
-        module = load_module(_create_module(tmp_path, {
-            "name": "test", "install_type": "docker", "description": "t",
-            "env_requires": [{"name": "MISSING_VAR", "type": "string", "required": True}],
-        }))
+        module = load_module(
+            _create_module(
+                tmp_path,
+                {
+                    "name": "test",
+                    "install_type": "docker",
+                    "description": "t",
+                    "env_requires": [{"name": "MISSING_VAR", "type": "string", "required": True}],
+                },
+            )
+        )
         violations = check_env_requires_presence(module, dotenv, manifest)
         logger.info("[IMP:9][test] missing detected: %s", violations)
         assert len(violations) >= 1
@@ -330,10 +350,17 @@ class TestEnvRequiresPresence:
 
     def test_empty_var_violation(self, tmp_dotenv, tmp_secrets_manifest, caplog):
         """Required var declared but EMPTY (no marker) → violation."""
-        module = load_module(_create_module(tmp_dotenv.parent, {
-            "name": "test", "install_type": "docker", "description": "t",
-            "env_requires": [{"name": "EMPTY_VAR", "type": "string", "required": True}],
-        }))
+        module = load_module(
+            _create_module(
+                tmp_dotenv.parent,
+                {
+                    "name": "test",
+                    "install_type": "docker",
+                    "description": "t",
+                    "env_requires": [{"name": "EMPTY_VAR", "type": "string", "required": True}],
+                },
+            )
+        )
         violations = check_env_requires_presence(module, tmp_dotenv, tmp_secrets_manifest)
         logger.info("[IMP:9][test] empty violation: %s", violations)
         assert len(violations) >= 1
@@ -344,14 +371,21 @@ class TestEnvRequiresPresence:
         """Empty var with '# NOT for production — generated via SOPS' → no EMPTY violation."""
         manifest = tmp_dotenv.parent / "secrets.yaml"
         manifest.write_text("version: 1\nsecrets: []\n")
-        module = load_module(_create_module(tmp_dotenv.parent, {
-            "name": "test", "install_type": "docker", "description": "t",
-            "env_requires": [{"name": "GENERATED_VAR", "type": "secret", "required": True}],
-        }))
+        module = load_module(
+            _create_module(
+                tmp_dotenv.parent,
+                {
+                    "name": "test",
+                    "install_type": "docker",
+                    "description": "t",
+                    "env_requires": [{"name": "GENERATED_VAR", "type": "secret", "required": True}],
+                },
+            )
+        )
         violations = check_env_requires_presence(module, tmp_dotenv, manifest)
         logger.info("[IMP:9][test] marker bypass violations=%s", violations)
         generated_empty = [v for v in violations if "EMPTY" in v and "GENERATED_VAR" in v]
-        assert not generated_empty, f"GENERATED_VAR should bypass empty-check via marker"
+        assert not generated_empty, "GENERATED_VAR should bypass empty-check via marker"
         assert _ldd_ok(caplog)
 
     def test_optional_var_skipped(self, tmp_path, caplog):
@@ -360,10 +394,17 @@ class TestEnvRequiresPresence:
         dotenv.write_text("OTHER=value\n")
         manifest = tmp_path / "secrets.yaml"
         manifest.write_text("version: 1\nsecrets: []\n")
-        module = load_module(_create_module(tmp_path, {
-            "name": "test", "install_type": "docker", "description": "t",
-            "env_requires": [{"name": "OPTIONAL_VAR", "type": "string", "required": False}],
-        }))
+        module = load_module(
+            _create_module(
+                tmp_path,
+                {
+                    "name": "test",
+                    "install_type": "docker",
+                    "description": "t",
+                    "env_requires": [{"name": "OPTIONAL_VAR", "type": "string", "required": False}],
+                },
+            )
+        )
         violations = check_env_requires_presence(module, dotenv, manifest)
         logger.info("[IMP:9][test] optional skipped: violations=%s", violations)
         assert not violations
@@ -373,10 +414,17 @@ class TestEnvRequiresPresence:
         """Secret var in .env.example but NOT in secrets-manifest → violation."""
         manifest = tmp_dotenv.parent / "secrets.yaml"
         manifest.write_text("version: 1\nsecrets: []\n")
-        module = load_module(_create_module(tmp_dotenv.parent, {
-            "name": "test", "install_type": "docker", "description": "t",
-            "env_requires": [{"name": "TEST_SECRET", "type": "secret", "required": True}],
-        }))
+        module = load_module(
+            _create_module(
+                tmp_dotenv.parent,
+                {
+                    "name": "test",
+                    "install_type": "docker",
+                    "description": "t",
+                    "env_requires": [{"name": "TEST_SECRET", "type": "secret", "required": True}],
+                },
+            )
+        )
         violations = check_env_requires_presence(module, tmp_dotenv, manifest)
         logger.info("[IMP:9][test] missing from manifest: %s", violations)
         assert len(violations) >= 1
@@ -388,6 +436,7 @@ class TestEnvRequiresPresence:
 
 
 # region UNIT_TEST_RESTART_DRIFT
+
 
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · check_restart_drift — match/mismatch/init-skip/carve-out/no-field
 class TestRestartDrift:
@@ -411,7 +460,7 @@ class TestRestartDrift:
     def test_init_service_skipped(self, tmp_path, caplog):
         """init-service with restart: 'no' → skipped (not drift)."""
         compose = tmp_path / "docker-compose.base.yml"
-        compose.write_text("services:\n  main-svc:\n    restart: unless-stopped\n  init-svc:\n    restart: \"no\"\n")
+        compose.write_text('services:\n  main-svc:\n    restart: unless-stopped\n  init-svc:\n    restart: "no"\n')
         module = {"name": "test-module", "restart": "unless-stopped"}
         violations = check_restart_drift(module, compose)
         logger.info("[IMP:9][test] init skipped: violations=%s", violations)
@@ -440,11 +489,17 @@ class TestRestartDrift:
 
 # region UNIT_TEST_BACKWARD_COMPAT_D4
 
+
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · D4 backward-compat — full pipeline
 class TestBackwardCompatD4:
     def test_d4_module_passes_full_pipeline(self, tmp_path, tmp_schema, tmp_dotenv, tmp_secrets_manifest, caplog):
         """Full D4 module.yaml → validate_module returns empty violations."""
-        data = {"name": "d4-mod", "install_type": "docker", "description": "D4 compat", "env_requires": ["TEST_SECRET", "POSTGRES_PASSWORD"]}
+        data = {
+            "name": "d4-mod",
+            "install_type": "docker",
+            "description": "D4 compat",
+            "env_requires": ["TEST_SECRET", "POSTGRES_PASSWORD"],
+        }
         path = _create_module(tmp_path, data)
         compose = tmp_path / "docker-compose.base.yml"
         compose.write_text("services:\n  d4-mod:\n    restart: unless-stopped\n")
@@ -474,6 +529,7 @@ class TestBackwardCompatD4:
 
 
 # region UNIT_TEST_HELPER_FUNCTIONS
+
 
 # 🧪 TRAP[TEST] · 2026-07-21 · UNIT · _normalize_env_requires_entry — all branches
 class TestNormalizeHelper:
@@ -562,7 +618,9 @@ class TestEnvVarInSecretsManifest:
 
     def test_removed_tier_skipped(self, tmp_path, caplog):
         path = tmp_path / "secrets.yaml"
-        path.write_text("version: 1\nsecrets:\n  - name: OLD_VAR\n    tier: removed\n    consumers: []\n    source: sops\n")
+        path.write_text(
+            "version: 1\nsecrets:\n  - name: OLD_VAR\n    tier: removed\n    consumers: []\n    source: sops\n"
+        )
         result = _env_var_in_secrets_manifest(path, "OLD_VAR")
         logger.info("[IMP:9][test] removed tier skipped: result=%s", result)
         assert result is False
@@ -589,6 +647,7 @@ class TestExtractPerServiceRestart:
 
 # region UNIT_TEST_MAIN_CLI
 
+
 # 🧪 TRAP[TEST] · 2026-07-21 · UNIT · main() — CLI exit codes
 class TestMainCLI:
     def test_all_passes_on_valid(self, tmp_path, tmp_schema, tmp_dotenv, tmp_secrets_manifest, caplog, monkeypatch):
@@ -598,11 +657,16 @@ class TestMainCLI:
         for mod_name in ["test-a", "test-b"]:
             mod_dir = modules_dir / mod_name
             mod_dir.mkdir()
-            _write_module_yaml(mod_dir / "module.yaml", {
-                "name": mod_name, "install_type": "docker", "description": f"Mod {mod_name}",
-                "env_requires": ["TEST_SECRET"],
-            })
-            svc_line = "services:\n  {}:\n    restart: unless-stopped\n".format(mod_name)
+            _write_module_yaml(
+                mod_dir / "module.yaml",
+                {
+                    "name": mod_name,
+                    "install_type": "docker",
+                    "description": f"Mod {mod_name}",
+                    "env_requires": ["TEST_SECRET"],
+                },
+            )
+            svc_line = f"services:\n  {mod_name}:\n    restart: unless-stopped\n"
             (mod_dir / "docker-compose.base.yml").write_text(svc_line)
 
         monkeypatch.setattr("core.internal.scripts.validate_module_yaml.DEFAULT_SCHEMA_PATH", tmp_schema)
@@ -618,16 +682,28 @@ class TestMainCLI:
         """--schema-strict on module without compose → exit 1."""
         modules_dir = tmp_path / "core" / "modules" / "broken-mod"
         modules_dir.mkdir(parents=True)
-        _write_module_yaml(modules_dir / "module.yaml", {
-            "name": "broken-mod", "install_type": "docker", "description": "Broken", "env_requires": [],
-        })
-        rc = main([
-            "--module", "broken-mod",
-            "--schema-strict",
-            "--env-example", str(tmp_dotenv),
-            "--secrets-manifest", str(tmp_secrets_manifest),
-            "--modules-dir", str(modules_dir.parent),
-        ])
+        _write_module_yaml(
+            modules_dir / "module.yaml",
+            {
+                "name": "broken-mod",
+                "install_type": "docker",
+                "description": "Broken",
+                "env_requires": [],
+            },
+        )
+        rc = main(
+            [
+                "--module",
+                "broken-mod",
+                "--schema-strict",
+                "--env-example",
+                str(tmp_dotenv),
+                "--secrets-manifest",
+                str(tmp_secrets_manifest),
+                "--modules-dir",
+                str(modules_dir.parent),
+            ]
+        )
         logger.info("[IMP:9][test] strict mode exit code: %d", rc)
         assert rc == 1
         assert _ldd_ok(caplog)

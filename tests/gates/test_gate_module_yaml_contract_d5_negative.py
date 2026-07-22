@@ -24,10 +24,9 @@ import pathlib
 import pytest
 
 from core.internal.scripts.validate_module_yaml import (
-    load_module,
     validate_module,
 )
-from tests.helpers.gate_helpers import repo_root, module_yaml_paths
+from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 VALIDATOR_LOG = "core.internal.scripts.validate_module_yaml"
@@ -40,6 +39,7 @@ REAL_SCHEMA = repo_root() / "core" / "schemas" / "module.schema.json"
 def _setup_logger(caplog):
     """Auto-configure caplog + validator logger."""
     import logging as lg
+
     caplog.set_level(lg.DEBUG)
     lg.getLogger(VALIDATOR_LOG).setLevel(lg.DEBUG)
     lg.getLogger(VALIDATOR_LOG).propagate = True
@@ -47,6 +47,7 @@ def _setup_logger(caplog):
 
 def _write_module_yaml(path: pathlib.Path, content: dict) -> pathlib.Path:
     import yaml
+
     with open(path, "w") as f:
         yaml.dump(content, f)
     return path
@@ -66,7 +67,9 @@ class TestD5NegativeValidateModule:
     def test_wrong_env_requires_type(self, tmp_path, caplog):
         """env_requires type 'float' → schema violation."""
         data = {
-            "name": "neg-test", "install_type": "docker", "description": "neg",
+            "name": "neg-test",
+            "install_type": "docker",
+            "description": "neg",
             "env_requires": [{"name": "X", "type": "float"}],  # invalid type
         }
         path = _write_module_yaml(tmp_path / "module.yaml", data)
@@ -78,7 +81,7 @@ class TestD5NegativeValidateModule:
         violations = validate_module(path, REAL_SCHEMA)
         logger.info("[IMP:9][gate][d5_negative] wrong type violations: %s", violations)
         assert _has_violations(violations, "Schema") or len(violations) > 0, (
-            f"Expected violations for invalid env_requires type, got empty list"
+            "Expected violations for invalid env_requires type, got empty list"
         )
 
     # 🧪 TRAP[TEST] · 2026-07-21 · NEGATIVE · validate_module detects missing required env var
@@ -86,13 +89,17 @@ class TestD5NegativeValidateModule:
     def test_missing_required_env_var(self, tmp_path, caplog):
         """Required env var NOT in .env.example → violation."""
         data = {
-            "name": "neg-test", "install_type": "docker", "description": "neg",
+            "name": "neg-test",
+            "install_type": "docker",
+            "description": "neg",
             "env_requires": [{"name": "REQUIRED_SECRET", "type": "secret", "required": True}],
         }
         path = _write_module_yaml(tmp_path / "module.yaml", data)
         (tmp_path / "docker-compose.base.yml").write_text("services:\n  neg-test:\n    restart: unless-stopped\n")
         (tmp_path / ".env.example").write_text("OTHER=val\n")  # REQUIRED_SECRET missing
-        (tmp_path / "secrets-manifest.yaml").write_text("version: 1\nsecrets:\n  - name: REQUIRED_SECRET\n    tier: required\n    consumers: []\n    source: sops\n")
+        (tmp_path / "secrets-manifest.yaml").write_text(
+            "version: 1\nsecrets:\n  - name: REQUIRED_SECRET\n    tier: required\n    consumers: []\n    source: sops\n"
+        )
 
         violations = validate_module(path, REAL_SCHEMA)
         logger.info("[IMP:9][gate][d5_negative] missing env violations: %s", violations)
@@ -105,7 +112,9 @@ class TestD5NegativeValidateModule:
     def test_restart_drift(self, tmp_path, caplog):
         """module.yaml restart: always vs compose unless-stopped → drift."""
         data = {
-            "name": "neg-test", "install_type": "docker", "description": "neg",
+            "name": "neg-test",
+            "install_type": "docker",
+            "description": "neg",
             "restart": "always",  # declares always
         }
         path = _write_module_yaml(tmp_path / "module.yaml", data)
@@ -117,16 +126,16 @@ class TestD5NegativeValidateModule:
 
         violations = validate_module(path, REAL_SCHEMA)
         logger.info("[IMP:9][gate][d5_negative] restart drift violations: %s", violations)
-        assert _has_violations(violations, "drift"), (
-            f"Expected drift violation, got: {violations}"
-        )
+        assert _has_violations(violations, "drift"), f"Expected drift violation, got: {violations}"
 
     # 🧪 TRAP[TEST] · 2026-07-21 · POSITIVE · D4 bare-string env_requires still valid
     # · Scenario: bare-string env_requires (D4 backward-compat) → no violations
     def test_d4_bare_string_still_valid(self, tmp_path, caplog):
         """D4 bare-string env_requires still passes D5 validator (backward-compat)."""
         data = {
-            "name": "d4-valid", "install_type": "docker", "description": "D4 compat",
+            "name": "d4-valid",
+            "install_type": "docker",
+            "description": "D4 compat",
             "env_requires": ["TEST_VAR"],
         }
         path = _write_module_yaml(tmp_path / "module.yaml", data)
@@ -134,7 +143,9 @@ class TestD5NegativeValidateModule:
         dotenv = tmp_path / ".env.example"
         dotenv.write_text("TEST_VAR=val\n")
         manifest = tmp_path / "secrets-manifest.yaml"
-        manifest.write_text("version: 1\nsecrets:\n  - name: TEST_VAR\n    tier: required\n    consumers: []\n    source: sops\n")
+        manifest.write_text(
+            "version: 1\nsecrets:\n  - name: TEST_VAR\n    tier: required\n    consumers: []\n    source: sops\n"
+        )
 
         violations = validate_module(path, REAL_SCHEMA, dotenv, manifest)
         logger.info("[IMP:9][gate][d5_negative] D4 compat violations: %s", violations)

@@ -68,21 +68,21 @@ file,line,snippet,call_type,consolidation_wave
 "core/internal/provision-environment.sh",413,"        env_count=$(echo ""$_env_json"" | python3 -c ""import json,sys; print(len(json.load(sys.stdin)))"" 2>/dev/null) || env_count=0",python3 -c,W5
 "core/internal/hooks/check-no-new-inline-python3.sh",4,"## @purpose  Pre-commit hook: блокирует добавление НОВЫХ `python3 -c` / heredoc в shell-файлах под core/.",python3 -c,W5
 "core/internal/hooks/check-no-new-inline-python3.sh",35,"        if echo ""$content"" | grep -qE 'python3 -c|python3 - <<|python3 <<EOF|python3 <<PYEOF'; then",heredoc,W5
-"core/internal/bootstrap/deploy-modules.sh",48,"    python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",250,"    context_repo_url=$(python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",530,"    _orphan_lines=$(python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",648,"    python3 - <<PYEOF",heredoc,W4
-"core/internal/bootstrap/deploy-modules.sh",684,"    python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",704,"    python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",720,"    python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",760,"    _missing=$(python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",818,"    python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",859,"    python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",1201,"    _batch_orphans=$(python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",1359,"        _domain=$(python3 -c ""import yaml; print(yaml.safe_load(open('$NODE_YAML')).get('domain',''))"" 2>/dev/null)",python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",1410,"        done < <(echo ""$_topo_result"" | python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",1573,"            _group_json=$(echo ""$_topo_result"" | python3 -c """,python3 -c,W4
-"core/internal/bootstrap/deploy-modules.sh",1592,"            done < <(echo ""$_group_json"" | python3 -c """,python3 -c,W4
+"core/internal/bootstrap/deploy-modules.sh",48,"    python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",250,"    context_repo_url=$(python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",530,"    _orphan_lines=$(python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",648,"    python3 - <<PYEOF",heredoc,W4-done
+"core/internal/bootstrap/deploy-modules.sh",684,"    python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",704,"    python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",720,"    python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",760,"    _missing=$(python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",818,"    python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",859,"    python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",1201,"    _batch_orphans=$(python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",1359,"        _domain=$(python3 -c ""import yaml; print(yaml.safe_load(open('$NODE_YAML')).get('domain',''))"" 2>/dev/null)",python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",1410,"        done < <(echo ""$_topo_result"" | python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",1573,"            _group_json=$(echo ""$_topo_result"" | python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/deploy-modules.sh",1592,"            done < <(echo ""$_group_json"" | python3 -c """,python3 -c,W4-done
 "core/internal/scripts/yaml_query.py",6,"## @purpose  Typed Python API + CLI для YAML/JSON-запросов. Заменяет inline `python3 -c` однострочники.",python3 -c,W5
 "core/internal/scripts/yaml_query.py",16,"## @rationale 40+ inline `python3 -c ""import yaml,sys; ...""` в shell-скриптах сигнализируют о Bash-ceiling.",python3 -c,W5
 "core/internal/scripts/yaml_query.py",134,"        description=""Typed YAML/JSON query — replacement for inline python3 -c"",",python3 -c,W5
@@ -92,18 +92,18 @@ file,line,snippet,call_type,consolidation_wave
 "core/internal/healthcheck/docker-healthcheck.sh",63,"        echo ""[IMP:7][docker-healthcheck][export] Container health status written to ${HEALTH_JSON} ($(echo ""$containers_json"" | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get(""containers"",[])))') containers)""",python3 -c,W5
 "core/internal/bootstrap/install-docker.sh",116,"        python3 -c """,python3 -c,W5
 "core/internal/bootstrap/s3-ssl-cache.sh",155,"    python3 -c """,python3 -c,W5
-"core/internal/bootstrap/node-lifecycle.sh",1067,"            if ! python3 -c """,python3 -c,W4
-"core/internal/bootstrap/node-lifecycle.sh",1215,"            if ! python3 -c """,python3 -c,W4
+"core/internal/bootstrap/node-lifecycle.sh",1067,"            if ! python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/node-lifecycle.sh",1215,"            if ! python3 -c """,python3 -c,W4-done
 "core/lib/yaml_read.sh",10,"##           `python3 -c ""import yaml; ...""` patterns across the codebase.",python3 -c,W1
 "core/lib/yaml_read.sh",28,"##           — CONSOLIDATES: 13+ inline `python3 -c ""import yaml""` calls",python3 -c,W1
 "core/lib/yaml_read.sh",30,"##   - Requires python3 with PyYAML installed (python3 -c ""import yaml"")",python3 -c,W1
 "core/lib/yaml_read.sh",38,"##   A: 13 inline `python3 -c ""import yaml""` calls across 5+ files create",python3 -c,W1
-"core/internal/bootstrap/converge.sh",223,"    CONVERGE_REPORT_DRIFTS+=(""$(python3 -c """,python3 -c,W4
-"core/internal/bootstrap/converge.sh",241,"    python3 -c """,python3 -c,W4
-"core/internal/bootstrap/converge.sh",521,"    project_list=""$(echo ""${projects_json}"" | python3 -c ""import json,sys; [print(p['name']) for p in json.load(sys.stdin) if p.get('name')]"" 2>/dev/null || true)""",python3 -c,W4
-"core/internal/bootstrap/converge.sh",932,"            pname=""$(echo ""${entry}"" | python3 -c ""import json,sys; print(json.load(sys.stdin)['name'])"" 2>/dev/null || true)""",python3 -c,W4
-"core/internal/bootstrap/converge.sh",934,"            domain=""$(echo ""${entry}"" | python3 -c ""import json,sys; print(json.load(sys.stdin)['domain'])"" 2>/dev/null || true)""",python3 -c,W4
-"core/internal/bootstrap/converge.sh",962,"        done <<< ""$(echo ""${projects_with_domains}"" | python3 -c """,python3 -c,W4
+"core/internal/bootstrap/converge.sh",223,"    CONVERGE_REPORT_DRIFTS+=(""$(python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/converge.sh",241,"    python3 -c """,python3 -c,W4-done
+"core/internal/bootstrap/converge.sh",521,"    project_list=""$(echo ""${projects_json}"" | python3 -c ""import json,sys; [print(p['name']) for p in json.load(sys.stdin) if p.get('name')]"" 2>/dev/null || true)""",python3 -c,W4-done
+"core/internal/bootstrap/converge.sh",932,"            pname=""$(echo ""${entry}"" | python3 -c ""import json,sys; print(json.load(sys.stdin)['name'])"" 2>/dev/null || true)""",python3 -c,W4-done
+"core/internal/bootstrap/converge.sh",934,"            domain=""$(echo ""${entry}"" | python3 -c ""import json,sys; print(json.load(sys.stdin)['domain'])"" 2>/dev/null || true)""",python3 -c,W4-done
+"core/internal/bootstrap/converge.sh",962,"        done <<< ""$(echo ""${projects_with_domains}"" | python3 -c """,python3 -c,W4-done
 "core/lib/node-resolver.sh",255,"    host=""$(python3 -c """,python3 -c,W5
 "core/lib/node-resolver.sh",302,"    # Uses python3 -c with inline script. The yaml_path is interpolated",python3 -c,W5
 "core/lib/node-resolver.sh",306,"    host=""$(python3 -c """,python3 -c,W5

@@ -49,25 +49,35 @@ _SYSTEM_EXCEPTIONS = {
 
 
 def _parse_phony_targets(makefile_path: pathlib.Path) -> set[str]:
-    """Parse Makefile and extract all .PHONY target names.
+    """Parse Makefile and all makefiles/*.mk and extract all .PHONY target names.
 
-    ## @purpose — Read Makefile and collect every target declared after .PHONY:
-    ## @io — ⇥ makefile_path → ⎋ set[str] of target names
-    ## @complexity — O(L) where L = number of .PHONY lines in Makefile
+    ## @purpose — Read root Makefile + makefiles/*.mk and collect every target
+    ##            declared after .PHONY:. After W4-E4 include-split, .PHONY:
+    ##            declarations live in makefiles/*.mk files (not root Makefile).
+    ## @io — ⇥ makefile_path (root) → ⎋ set[str] of target names from all makefiles
+    ## @complexity — O(F * L) where F = 7 files, L = max lines per file
     ## @invariants
-    ##   - Handles multiple .PHONY: declarations
-    ##   - Handles line continuation (backslash)
+    ##   - Reads root Makefile AND all makefiles/*.mk
+    ##   - Handles multiple .PHONY: declarations across files
     ##   - Targets are whitespace-separated
     """
-    text = makefile_path.read_text()
     targets: set[str] = set()
+    makefiles_dir = makefile_path.parent / "makefiles"
 
-    # Match lines starting with .PHONY: and collect all targets
-    for match in re.finditer(r"^\.PHONY:\s*(.+)$", text, re.MULTILINE):
-        line = match.group(1).strip()
-        targets.update(line.split())
+    # Collect all files to scan: root Makefile + makefiles/*.mk
+    files_to_scan: list[pathlib.Path] = [makefile_path]
+    if makefiles_dir.is_dir():
+        files_to_scan.extend(sorted(makefiles_dir.glob("*.mk")))
 
-    logger.info("[IMP:7][_parse_phony_targets] Found %d .PHONY target(s)", len(targets))
+    for mk_file in files_to_scan:
+        text = mk_file.read_text()
+        for match in re.finditer(r"^\.PHONY:\s*(.+)$", text, re.MULTILINE):
+            line = match.group(1).strip()
+            targets.update(line.split())
+
+    logger.info(
+        "[IMP:7][_parse_phony_targets] Found %d .PHONY target(s) across %d file(s)", len(targets), len(files_to_scan)
+    )
     return targets
 
 

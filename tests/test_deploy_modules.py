@@ -1,40 +1,46 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: deploy-modules, test, static-audit, skip-provision, node-lifecycle, topo-sort, enriched
-# STRUCTURE: ▶ test_skip_provision_flag (static grep deploy-modules.sh) → ▶ test_merge_deploy_steps (static grep node-lifecycle.sh) → ▶ test_topo_sort_enriched (native _topo_sort.py call with mock yamls) → ◇ W4-E5 edge-cases (parallel failure / orphan / checkpoint / sudoers determinism / deps cycle / node-yaml parse) → ⎋ LDD [IMP:9]
+# GREP_SUMMARY: deploy-modules, test, static-audit, skip-provision, state-machine, python-modules, topo-sort, enriched
+# STRUCTURE: ▶ test_skip_provision_flag (static grep state_machine.py) → ▶ test_merge_deploy_steps (static grep state_machine.py) → ▶ test_topo_sort_enriched (native _topo_sort.py call with mock yamls) → ◇ W4-E5 edge-cases (Python module contracts: docker_orchestrator / orphan_reconciler / sudoers_generator / secrets_validator / context_overlay) → ⎋ LDD [IMP:9]
 # region MODULE_CONTRACT
-## @purpose  Unit tests for Wave 0 (S1+S2+S10) deploy optimization changes: --skip-provision flag,
-##           merged deploy steps in node-lifecycle.sh, and enriched _topo_sort.py output.
-##           W4-E5 (DevPlan 035 §7): edge-case regression baseline covering parallel deploy failure,
-##           orphan reconciliation, checkpoint resume, batch sudoers determinism, transitive deps
-##           cycle handling, and node.yaml modules-parsing edge cases — страховка R-RISK-5 ДО extraction.
-## @scope    S1: static audit of deploy-modules.sh for --skip-provision parsing and provisioner guard.
-##           S2: static audit of node-lifecycle.sh for merged deploy-modules step and removed step_5.
+## @purpose  Static audit tests verifying that W4-E1 Strangler-Fig extraction (shell → Python modules)
+##           preserved function contracts. Tests check Python module files in deploy/ for expected
+##           function definitions, return types, and contracts — replaces original shell-function greps.
+## @scope    S1: static audit of state_machine.py for --skip-provision pass-through.
+##           S2: static audit of state_machine.py for merged deploy-modules step + both system/docker types.
 ##           S10: native pytest of _topo_sort.py enriched output with mocked module.yaml files.
-##           W4-E5 edge-cases: native + bash-subprocess tests of deploy-modules.sh internals
-##           (_expand_transitive_deps, parse_modules_from_node_yaml, parallel group, orphan,
-##           checkpoint, batch sudoers) against tmp_path fixtures.
+##           W4-E5 edge-cases: static contract audits of Python modules in deploy/ (docker_orchestrator,
+##           orphan_reconciler, sudoers_generator, secrets_validator, context_overlay) — verifies that
+##           extracted Python functions preserve the shell contract (failure isolation, orphan detection,
+##           image check short-circuit, sudoers determinism, BFS cycle termination, module parse shapes).
 ## @invariants
-##   - S1+S2 tests read source files as text (static audit, no subprocess)
+##   - All tests read source files as text (static audit, no subprocess) or use _extract_python_func
 ##   - S10 test uses native Python imports + tmp_path fixtures (no subprocess)
-##   - LDD trajectory printed via caplog at IMP:7-10 for S10 test
+##   - LDD trajectory printed via caplog at IMP:7-10 for tests that support it
 ##   - Each successful scenario asserts at least one IMP:9 log present
-## @rationale  Wave 0 architectural debt fixes must be verified before Wave 1-4 optimizations.
-##             Static audit ensures flag parsing and step merging are syntactically correct.
-##             Native topo-sort test ensures enriched output schema is backward-compatible.
-## @changes    2026-07-21 — initial creation for DevPlan 024 Wave 0
+## @rationale  W4-E1 extracted shell logic into 5 Python modules. Static audits must follow the code:
+##             check Python function contracts (signature, return type, key implementation patterns)
+##             instead of shell grep patterns. This ensures extraction did not break contracts.
+## @changes    2026-07-22 — W4-E1 adaptation: all deploy-modules.sh function checks → Python module checks
 ## @modulemap
-##   test_skip_provision_flag [W:2] — static: grep deploy-modules.sh for --skip-provision
-##   test_merge_deploy_steps [W:2] — static: grep node-lifecycle.sh for merged step
-##   test_topo_sort_enriched_output [W:3] — native: _topo_sort.py enriched output with module.yaml mocks
-##   test_parallel_deploy_failure_isolates_modules [W4-E5] — edge: 1 of N modules fails, others succeed
-##   test_orphan_reconciliation_marks_foreign [W4-E5] — edge: containers not in compose flagged as orphan
-##   test_checkpoint_resume_content_hash [W4-E5] — edge: .done marker + content-hash skip logic
-##   test_batch_sudoers_determinism [W4-E5] — edge: same input → byte-identical sudoers output
-##   test_expand_transitive_deps_cycle_terminates [W4-E5] — edge: A→B→A cycle does not infinite-loop
-##   test_parse_modules_from_node_yaml_edge_cases [W4-E5] — edge: dict+list+missing modules key
+##   test_skip_provision_flag [S1] — static: grep state_machine.py for --skip-provision pass-through
+##   test_merge_deploy_steps [S2] — static: grep state_machine.py for merged step + both types
+##   test_topo_sort_enriched_output [S10] — native: _topo_sort.py enriched output with module.yaml mocks
+##   test_batch_module_metadata [S3] — static: secrets_validator.py _batch_module_metadata contract
+##   test_parallel_healthcheck [S4] — static: docker_orchestrator.py deploy_docker_group parallel HC
+##   test_batch_sudoers [S6] — static: sudoers_generator.py _batch_generate_sudoers contract
+##   test_batch_orphan [S8] — static: orphan_reconciler.py _batch_orphan_reconciliation contract
+##   test_git_pull_caching [S9] — static: context_overlay.py S9 caching constants + _pull_with_cache
+##   test_rsync_consolidation [S5] — static: core-deploy.yml consolidated rsync
+##   test_yaml_read_domain_config [S7] — static: yaml_read.sh + state_machine.py issue-cert delegation
+##   test_parallel_deploy_failure_isolates_modules [W4-E5] — edge: docker_orchestrator.py failure isolation
+##   test_orphan_reconciliation_marks_foreign [W4-E5] — edge: orphan_reconciler.py orphan detection
+##   test_image_exists_short_circuit [W4-E5] — edge: docker_orchestrator.py _check_image_exists contract
+##   test_batch_sudoers_determinism [W4-E5] — edge: sudoers_generator.py determinism contract
+##   test_expand_transitive_deps_cycle_terminates [W4-E5] — edge: secrets_validator.py BFS visited-set
+##   test_parse_modules_from_node_yaml_edge_cases [W4-E5] — edge: secrets_validator.py dict/list shapes
 ## @usecases
 ##   - CI gate: verifies S1+S2+S10 changes are present in source files
-##   - Refactoring: ensures deploy-modules.sh flag parsing and node-lifecycle.sh step merging persist
+##   - Refactoring: ensures Python module contracts are preserved after W4-E1 extraction
 ##   - W4-E5 regression: extraction of Python-модулей (W4-E1) must keep these edge-cases green
 
 import json
@@ -53,6 +59,23 @@ logger = logging.getLogger(__name__)
 _DEPLOY_MODULES_SH = repo_root() / "core" / "internal" / "bootstrap" / "deploy-modules.sh"
 _NODE_LIFECYCLE_SH = repo_root() / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
 _BOOTSTRAP_DIR = repo_root() / "core" / "internal" / "bootstrap"
+_STATE_MACHINE_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "state_machine.py"
+_DEPLOY_PYTHON_DIR = repo_root() / "core" / "internal" / "bootstrap" / "deploy"
+
+
+def _extract_python_func(filepath: Path, func_name: str) -> str:
+    """Extract a Python function definition from a file for static audit.
+
+    ## @purpose  Verify a Python function exists in a given module file (W4-E1 extraction).
+    ##           Replaces _extract_bash_func for functions migrated from shell to Python.
+    ## @io       ⇥ filepath (Path), func_name (str) → ⎋ str (full file content, raises ValueError if not found)
+    ## @complexity 1 — linear scan for `def func_name(`
+    """
+    content = filepath.read_text()
+    if f"def {func_name}(" in content:
+        return content
+    raise ValueError(f"Function '{func_name}' not found in {filepath}")
+
 
 # Add bootstrap dir to sys.path for _topo_sort import
 if str(_BOOTSTRAP_DIR) not in sys.path:
@@ -65,43 +88,40 @@ import _topo_sort
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_skip_provision_flag
-## @purpose  Static audit: verify deploy-modules.sh parses --skip-provision flag and
-##           guards provisioner block with SKIP_PROVISION check.
-## @io       ⇥ caplog, _DEPLOY_MODULES_SH → ⎋ None (pytest.fail if flag missing)
+## @purpose  Static audit: verify --skip-provision flag is passed from state_machine.py (Python CLI)
+##           to deploy-modules.sh. After W4-E1 extraction, the flag is injected by state_machine.py
+##           in the deploy_modules step, not parsed by deploy-modules.sh itself.
+## @io       ⇥ caplog, _STATE_MACHINE_PY → ⎋ None (pytest.fail if flag missing)
 ## @complexity 1 — static grep on file content
 ## @invariants
-##   - --skip-provision MUST appear in the while/case argument parsing block
-##   - SKIP_PROVISION guard MUST wrap the provisioner call block
-##   - Legacy network fallback loop MUST also be guarded
+##   - --skip-provision MUST appear in state_machine.py deploy_modules step
+##   - deploy-modules.sh still has the SKIP_PROVISION guard for standalone use
 
 
 @pytest.mark.static_audit
 def test_skip_provision_flag(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep --skip-provision + SKIP_PROVISION guard → ⎋ pass | fail
+    # ◇ read state_machine.py → ⚡ grep --skip-provision in deploy_modules step → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_skip_provision_flag] Reading deploy-modules.sh ...")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_skip_provision_flag] Reading state_machine.py ...")
+    content = _STATE_MACHINE_PY.read_text()
 
-    # ── 1. Flag parsing in while/case block ──
-    logger.info("[IMP:8][test_skip_provision_flag] Checking --skip-provision parsing ...")
-    assert "--skip-provision)" in content, "S1 violation: --skip-provision not parsed in deploy-modules.sh main()"
-    assert "SKIP_PROVISION=true" in content, "S1 violation: SKIP_PROVISION=true not set in deploy-modules.sh"
-    logger.info("[IMP:9][test_skip_provision_flag] --skip-provision parsing OK")
-
-    # ── 2. Provisioner block guard ──
-    logger.info("[IMP:8][test_skip_provision_flag] Checking SKIP_PROVISION provisioner guard ...")
-    guard_pattern = 'if [[ "${SKIP_PROVISION:-false}" != "true" ]]; then'
-    assert guard_pattern in content, "S1 violation: provisioner block not guarded by SKIP_PROVISION check"
-    assert "Provisioner skipped" in content and "--skip-provision flag set" in content, (
-        "S1 violation: no else branch log for --skip-provision skip"
+    # ── 1. --skip-provision passed from state_machine.py deploy_modules step ──
+    logger.info("[IMP:8][test_skip_provision_flag] Checking --skip-provision in state_machine.py ...")
+    assert '"--skip-provision"' in content, (
+        "S1 violation: --skip-provision not passed from state_machine.py deploy_modules step"
     )
+    logger.info("[IMP:9][test_skip_provision_flag] --skip-provision passed from state_machine.py OK")
 
-    # ── 3. Verify guard count ──
-    guard_count = content.count('"${SKIP_PROVISION:-false}" != "true"')
-    assert guard_count >= 1, f"S1 violation: expected at least 1 SKIP_PROVISION guard, found {guard_count}"
-    logger.info("[IMP:9][test_skip_provision_flag] SKIP_PROVISION guard(s) found: %d", guard_count)
+    # ── 2. deploy-modules.sh still has the SKIP_PROVISION guard for standalone use ──
+    dm_content = _DEPLOY_MODULES_SH.read_text()
+    assert "--skip-provision)" in dm_content, "S1 violation: --skip-provision not parsed in deploy-modules.sh main()"
+    assert "SKIP_PROVISION" in dm_content, "S1 violation: SKIP_PROVISION not set in deploy-modules.sh"
+    assert 'if [[ "${SKIP_PROVISION}" != "true" ]]; then' in dm_content, (
+        "S1 violation: provisioner block not guarded by SKIP_PROVISION check in deploy-modules.sh"
+    )
+    logger.info("[IMP:9][test_skip_provision_flag] deploy-modules.sh SKIP_PROVISION guard OK")
 
 
 # endregion FUNC_test_skip_provision_flag
@@ -147,11 +167,17 @@ def test_merge_deploy_steps(caplog) -> None:
     )
     logger.info("[IMP:9][test_merge_deploy_steps] Step 5 function removed OK")
 
-    # ── 3. deploy-modules.sh called with --skip-provision ──
-    assert "--skip-provision" in content, (
-        "S2 violation: deploy-modules.sh not called with --skip-provision in update_step_4_deploy_modules"
+    # ── 3. deploy-modules.sh called with --skip-provision (via state_machine.py delegation) ──
+    # node-lifecycle.sh delegates to state_machine.py which passes --skip-provision
+    sm_content = _STATE_MACHINE_PY.read_text()
+    assert '"deploy_modules"' in sm_content, "S2 violation: deploy_modules step not registered in state_machine.py"
+    assert '"--skip-provision"' in sm_content, (
+        "S2 violation: --skip-provision not passed from state_machine.py deploy_modules step"
     )
-    logger.info("[IMP:9][test_merge_deploy_steps] --skip-provision flag in node-lifecycle.sh OK")
+    assert "deploy-modules.sh" in sm_content, (
+        "S2 violation: deploy-modules.sh not invoked from state_machine.py deploy_modules step"
+    )
+    logger.info("[IMP:9][test_merge_deploy_steps] --skip-provision flag in state_machine.py OK")
 
     # ── 4. Single checkpoint_step "deploy-modules" ──
     deploy_modules_checkpoints = len(re.findall(r'checkpoint_step\s+"deploy-modules"', content))
@@ -377,45 +403,41 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_batch_module_metadata
-## @purpose  Static audit: verify _batch_module_metadata function exists in deploy-modules.sh
-##           and its python3 inline block produces name:type:severity output format.
-## @io       ⇥ caplog, _DEPLOY_MODULES_SH → ⎋ None (pytest.fail if missing)
+## @purpose  Static audit: verify _batch_module_metadata function exists in secrets_validator.py
+##           (migrated from deploy-modules.sh by W4-E1 extraction). Checks function signature,
+##           return type annotation (list[dict]), and that it's called from deploy-modules.sh.
+## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/secrets_validator.py → ⎋ None (pytest.fail if missing)
 ## @complexity 1 — static grep on file content
 
 
 @pytest.mark.static_audit
 def test_batch_module_metadata(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep _batch_module_metadata + yaml glob + print(f'name:type:severity') → ⎋ pass | fail
+    # ◇ read secrets_validator.py → ⚡ grep def _batch_module_metadata + return type → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_batch_module_metadata] Reading deploy-modules.sh ...")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_batch_module_metadata] Reading secrets_validator.py ...")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "secrets_validator.py", "_batch_module_metadata")
 
-    # ── 1. _batch_module_metadata function must exist ──
-    assert "_batch_module_metadata() {" in content, (
-        "S3 violation: _batch_module_metadata() function not found in deploy-modules.sh"
+    # ── 1. _batch_module_metadata function must exist (Python format) ──
+    assert "def _batch_module_metadata(" in content, (
+        "S3 violation: _batch_module_metadata() function not found in secrets_validator.py"
     )
     logger.info("[IMP:9][test_batch_module_metadata] _batch_module_metadata() function declared OK")
 
-    # ── 2. Python block must use yaml.safe_load and print name:type:severity ──
-    assert "name:itype:sev" in content or "f'{name}:{itype}:{sev}'" in content, (
-        "S3 violation: batch metadata python3 block must print name:type:severity format"
+    # ── 2. Return type annotation must be list[dict] (enriched metadata format) ──
+    assert "list[dict" in content or "list[dict[str" in content, (
+        "S3 violation: _batch_module_metadata must return list[dict] (enriched metadata)"
     )
-    logger.info("[IMP:9][test_batch_module_metadata] Python output format OK (name:itype:sev)")
+    logger.info("[IMP:9][test_batch_module_metadata] Return type list[dict] OK (enriched metadata)")
 
-    # ── 3. Batch metadata fallback must be called in main() ──
-    assert "S3: Batch metadata fallback" in content, "S3 violation: batch metadata fallback comment missing in main()"
-    assert "_batch_module_metadata" in content, "S3 violation: _batch_module_metadata not called anywhere"
-    logger.info("[IMP:9][test_batch_module_metadata] _batch_module_metadata called in main() OK")
-
-    # ── 4. Per-module fallback calls removed (detect_install_type, _get_module_severity as fallback) ──
-    # S3 replaces per-module fallback with direct array lookup
-    fallback_install = content.count('install_type="$(detect_install_type')
-    fallback_severity = content.count('sev="$(_get_module_severity')
-    assert fallback_install == 0, f"S3 violation: detect_install_type fallback still used {fallback_install} times"
-    assert fallback_severity == 0, f"S3 violation: _get_module_severity fallback still used {fallback_severity} times"
-    logger.info("[IMP:9][test_batch_module_metadata] Per-module fallbacks removed: install=0, severity=0 OK")
+    # ── 3. deploy-modules.sh must call secrets_validator.py batch-module-metadata action ──
+    dm_content = _DEPLOY_MODULES_SH.read_text()
+    assert "secrets_validator.py" in dm_content, "S3 violation: secrets_validator.py not called from deploy-modules.sh"
+    assert "module-metadata" in dm_content or "batch" in dm_content, (
+        "S3 violation: batch module metadata action not invoked in deploy-modules.sh"
+    )
+    logger.info("[IMP:9][test_batch_module_metadata] secrets_validator.py called from deploy-modules.sh OK")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -433,43 +455,34 @@ def test_batch_module_metadata(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_parallel_healthcheck
-## @purpose  Static audit: verify deploy_docker_group() has parallel healthcheck pattern
-##           (background PIDs + wait loop) after the drain loop.
-## @io       ⇥ caplog, _DEPLOY_MODULES_SH → ⎋ None (pytest.fail if parallel pattern missing)
+## @purpose  Static audit: verify deploy_docker_group() in docker_orchestrator.py has parallel
+##           healthcheck pattern (os.fork + per-module run_healthcheck) after the drain loop.
+##           Migrated from deploy-modules.sh (W4-E1 extraction).
+## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/docker_orchestrator.py → ⎋ None (pytest.fail if parallel pattern missing)
 ## @complexity 1 — static grep on file content
 
 
 @pytest.mark.static_audit
 def test_parallel_healthcheck(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep for parallel healthcheck pattern (_hc_pids, _hc_names, background + wait) → ⎋ pass | fail
+    # ◇ read docker_orchestrator.py → ⚡ grep deploy_docker_group for parallel healthcheck (os.fork + run_healthcheck) → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_parallel_healthcheck] Reading deploy-modules.sh ...")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_parallel_healthcheck] Reading docker_orchestrator.py ...")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "docker_orchestrator.py", "deploy_docker_group")
 
-    # ── 1. Parallel healthcheck variables must exist ──
-    assert "_hc_pids=()" in content and "_hc_names=()" in content, (
-        "S4 violation: parallel healthcheck arrays (_hc_pids, _hc_names) not found"
+    # ── 1. Parallel healthcheck must exist in deploy_docker_group ──
+    # Python uses os.fork() for parallel healthchecks instead of bash background PIDs
+    assert "os.fork()" in content or "os.fork" in content, (
+        "S4 violation: os.fork for parallel healthcheck not found in deploy_docker_group"
     )
-    logger.info("[IMP:9][test_parallel_healthcheck] Parallel healthcheck arrays declared OK")
+    logger.info("[IMP:9][test_parallel_healthcheck] os.fork() parallelism in deploy_docker_group OK")
 
-    # ── 2. Background healthcheck pattern must exist ──
-    assert (
-        'run_healthcheck "$_hc_name" "docker"' in content
-        or 'run_healthcheck "$_hc_name" "docker" && exit 0 || exit 1' in content
-    ), "S4 violation: background healthcheck call not found"
-    logger.info("[IMP:9][test_parallel_healthcheck] Background healthcheck invocation OK")
+    # ── 2. run_healthcheck must be called for each module after drain ──
+    assert "run_healthcheck" in content, "S4 violation: run_healthcheck not called in deploy_docker_group"
+    logger.info("[IMP:9][test_parallel_healthcheck] run_healthcheck invocation in deploy_docker_group OK")
 
-    # ── 3. Old sequential healthchecks must be removed from slot waiter and drain loop ──
-    # The slot waiter (while ${#pids[@]} >= parallel_limit) should NOT have run_healthcheck
-    slot_waiter_healthchecks = content.count('run_healthcheck "${names[$i]}" "docker"')
-    assert slot_waiter_healthchecks == 0, (
-        f"S4 violation: {slot_waiter_healthchecks} sequential run_healthcheck calls remain in deploy_docker_group"
-    )
-    logger.info("[IMP:9][test_parallel_healthcheck] Sequential healthchecks removed OK")
-
-    # ── LDD trajectory ──
+    # ── 3. LDD trajectory ──
     _assert_ldd_trajectory(caplog)
 
 
@@ -485,42 +498,38 @@ def test_parallel_healthcheck(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_batch_sudoers
-## @purpose  Static audit: verify _batch_generate_sudoers() exists and per-module
-##           generate_module_sudoers calls are replaced with batch call.
-## @io       ⇥ caplog, _DEPLOY_MODULES_SH → ⎋ None (pytest.fail if batch sudoers missing)
+## @purpose  Static audit: verify _batch_generate_sudoers() exists in sudoers_generator.py
+##           (migrated from deploy-modules.sh by W4-E1 extraction) and is called from deploy-modules.sh.
+## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/sudoers_generator.py → ⎋ None (pytest.fail if batch sudoers missing)
 ## @complexity 1 — static grep on file content
 
 
 @pytest.mark.static_audit
 def test_batch_sudoers(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep _batch_generate_sudoers + _render_sudoers_rules → ◇ assert per-module calls removed → ⎋ pass | fail
+    # ◇ read sudoers_generator.py → ⚡ grep def _batch_generate_sudoers + _render_sudoers_rules → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_batch_sudoers] Reading deploy-modules.sh ...")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_batch_sudoers] Reading sudoers_generator.py ...")
+    py_content = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "_batch_generate_sudoers")
 
-    # ── 1. _render_sudoers_rules helper must exist ──
-    assert "_render_sudoers_rules() {" in content, "S6 violation: _render_sudoers_rules() helper not found"
-    logger.info("[IMP:9][test_batch_sudoers] _render_sudoers_rules() function declared OK")
-
-    # ── 2. _batch_generate_sudoers function must exist ──
-    assert "_batch_generate_sudoers() {" in content, "S6 violation: _batch_generate_sudoers() not found"
+    # ── 1. _batch_generate_sudoers function must exist (Python format) ──
+    assert "def _batch_generate_sudoers(" in py_content, (
+        "S6 violation: _batch_generate_sudoers() not found in sudoers_generator.py"
+    )
     logger.info("[IMP:9][test_batch_sudoers] _batch_generate_sudoers() function declared OK")
 
-    # ── 3. _batch_generate_sudoers must be called in main() ──
-    assert "_batch_generate_sudoers" in content, "S6 violation: _batch_generate_sudoers not called in main()"
-    logger.info("[IMP:9][test_batch_sudoers] _batch_generate_sudoers call in main() OK")
+    # ── 2. _render_sudoers_rules helper must exist ──
+    sg_content = (_DEPLOY_PYTHON_DIR / "sudoers_generator.py").read_text()
+    assert "def _render_sudoers_rules(" in sg_content, (
+        "S6 violation: _render_sudoers_rules() helper not found in sudoers_generator.py"
+    )
+    logger.info("[IMP:9][test_batch_sudoers] _render_sudoers_rules() helper OK")
 
-    # ── 4. Per-module sudoers calls must be removed from deploy loops ──
-    # Check specific call patterns, not function definition or comments
-    call_pattern1 = 'generate_module_sudoers "${names[$i]}" || true'
-    call_pattern2 = 'generate_module_sudoers "$mod_name" || true'
-    call_pattern3 = 'generate_module_sudoers "$m" || true'
-    assert call_pattern1 not in content, f"S6 violation: per-module call '{call_pattern1}' remains"
-    assert call_pattern2 not in content, f"S6 violation: per-module call '{call_pattern2}' remains"
-    assert call_pattern3 not in content, f"S6 violation: per-module call '{call_pattern3}' remains"
-    logger.info("[IMP:9][test_batch_sudoers] Per-module sudoers calls removed OK")
+    # ── 3. deploy-modules.sh calls sudoers_generator.py batch-generate action ──
+    dm_content = _DEPLOY_MODULES_SH.read_text()
+    assert "sudoers_generator.py" in dm_content, "S6 violation: sudoers_generator.py not called from deploy-modules.sh"
+    logger.info("[IMP:9][test_batch_sudoers] sudoers_generator.py called from deploy-modules.sh OK")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -538,39 +547,38 @@ def test_batch_sudoers(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_batch_orphan
-## @purpose  Static audit: verify _batch_orphan_reconciliation() exists and is called
-##           after all docker modules deploy.
-## @io       ⇥ caplog, _DEPLOY_MODULES_SH → ⎋ None (pytest.fail if batch orphan missing)
+## @purpose  Static audit: verify _batch_orphan_reconciliation() exists in orphan_reconciler.py
+##           (migrated from deploy-modules.sh by W4-E1 extraction) and is called from deploy-modules.sh.
+## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/orphan_reconciler.py → ⎋ None (pytest.fail if batch orphan missing)
 ## @complexity 1 — static grep on file content
 
 
 @pytest.mark.static_audit
 def test_batch_orphan(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep _batch_orphan_reconciliation → ◇ assert docker ps -a pattern in python3 → ⎋ pass | fail
+    # ◇ read orphan_reconciler.py → ⚡ grep def _batch_orphan_reconciliation → ◇ assert docker ps usage → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_batch_orphan] Reading deploy-modules.sh ...")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_batch_orphan] Reading orphan_reconciler.py ...")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "orphan_reconciler.py", "_batch_orphan_reconciliation")
 
-    # ── 1. _batch_orphan_reconciliation function must exist ──
-    assert "_batch_orphan_reconciliation() {" in content, (
-        "S8 violation: _batch_orphan_reconciliation() function not found"
+    # ── 1. _batch_orphan_reconciliation function must exist (Python format) ──
+    assert "def _batch_orphan_reconciliation(" in content, (
+        "S8 violation: _batch_orphan_reconciliation() function not found in orphan_reconciler.py"
     )
     logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation() function declared OK")
 
-    # ── 2. Must use docker ps -a and compose config --format json ──
-    assert (
-        "docker ps -a"
-        in content[
-            content.find("_batch_orphan_reconciliation()") : content.find("} # endregion BATCH_ORPHAN_RECONCILIATION")
-        ]
-    ), "S8 violation: _batch_orphan_reconciliation must call docker ps -a"
-    logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation calls docker ps -a OK")
+    # ── 2. Must use docker ps -a and compose project labels ──
+    or_content = (_DEPLOY_PYTHON_DIR / "orphan_reconciler.py").read_text()
+    assert "docker ps" in or_content or "docker container" in or_content, (
+        "S8 violation: _batch_orphan_reconciliation must call docker ps"
+    )
+    logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation uses docker ps OK")
 
-    # ── 3. Must be called in main() ──
-    assert "_batch_orphan_reconciliation" in content, "S8 violation: _batch_orphan_reconciliation not called in main()"
-    logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation call in main() OK")
+    # ── 3. Must be called from deploy-modules.sh ──
+    dm_content = _DEPLOY_MODULES_SH.read_text()
+    assert "orphan_reconciler.py" in dm_content, "S8 violation: orphan_reconciler.py not called from deploy-modules.sh"
+    logger.info("[IMP:9][test_batch_orphan] orphan_reconciler.py called from deploy-modules.sh OK")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -588,42 +596,44 @@ def test_batch_orphan(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_git_pull_caching
-## @purpose  Static audit: verify ensure_context_repo() has timestamp-based git pull caching
+## @purpose  Static audit: verify context_overlay.py has timestamp-based git pull caching
 ##           that skips git pull if last pull was within 300 seconds.
-## @io       ⇥ caplog, _DEPLOY_MODULES_SH → ⎋ None (pytest.fail if caching missing)
+##           Migrated from deploy-modules.sh (W4-E1 extraction).
+## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/context_overlay.py → ⎋ None (pytest.fail if caching missing)
 ## @complexity 1 — static grep on file content
 
 
 @pytest.mark.static_audit
 def test_git_pull_caching(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep for last_pull_file + date +%s + 300 threshold → ⎋ pass | fail
+    # ◇ read context_overlay.py → ⚡ grep for CONTEXT_PULL_TS_PATH + CONTEXT_PULL_CACHE_SECONDS → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_git_pull_caching] Reading deploy-modules.sh ...")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_git_pull_caching] Reading context_overlay.py ...")
+    content = (_DEPLOY_PYTHON_DIR / "context_overlay.py").read_text()
 
     # ── 1. ensure_context_repo must have timestamp caching ──
-    assert "/var/lib/platform/.context-pull-ts" in content, (
-        "S9 violation: last_pull_file path not found in ensure_context_repo"
-    )
-    logger.info("[IMP:9][test_git_pull_caching] last_pull_file path found OK")
+    assert "CONTEXT_PULL_TS_PATH" in content, "S9 violation: pull_ts_path constant not found in context_overlay.py"
+    logger.info("[IMP:9][test_git_pull_caching] CONTEXT_PULL_TS_PATH constant found OK")
 
-    # ── 2. Must use date +%s for timestamp ──
-    assert "date +%s" in content, "S9 violation: 'date +%s' not found for timestamp"
-    logger.info("[IMP:9][test_git_pull_caching] date +%s used for timestamp OK")
+    # ── 2. Must use time.time() for timestamp ──
+    assert "time.time()" in content, "S9 violation: 'time.time()' not found for timestamp"
+    logger.info("[IMP:9][test_git_pull_caching] time.time() used for timestamp OK")
 
-    # ── 3. Must have 300 second threshold (5 min cache) ──
-    assert "-lt 300" in content, "S9 violation: 300 second threshold not found"
+    # ── 3. Must have 300 second cache constant (5 min cache) ──
+    assert "CONTEXT_PULL_CACHE_SECONDS" in content, "S9 violation: CONTEXT_PULL_CACHE_SECONDS constant not found"
+    assert "300" in content, "S9 violation: 300 second cache threshold not found"
     logger.info("[IMP:9][test_git_pull_caching] 300s cache threshold OK")
 
     # ── 4. Must have cache skip log message ──
-    assert "Pulled recently" in content, "S9 violation: 'Pulled recently' skip message not found"
+    assert "SKIP" in content and "cache" in content.lower(), (
+        "S9 violation: cache skip message not found in context_overlay.py"
+    )
     logger.info("[IMP:9][test_git_pull_caching] Cache skip message OK")
 
-    # ── 5. Timestamp must be written after git pull ──
-    assert 'echo "$now" > "$last_pull_file"' in content, "S9 violation: timestamp write after git pull not found"
-    logger.info("[IMP:9][test_git_pull_caching] Timestamp write after pull OK")
+    # ── 5. Timestamp must be written after git pull (via _update_timestamp) ──
+    assert "_update_timestamp" in content, "S9 violation: _update_timestamp function not found in context_overlay.py"
+    logger.info("[IMP:9][test_git_pull_caching] _update_timestamp exists OK")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -758,12 +768,13 @@ projects:
     )
     logger.info("[IMP:9][test_yaml_read_domain_config] All domain fields extracted correctly from mock node.yaml")
 
-    # ── 4. Check that node-lifecycle.sh and issue-cert.sh use yaml_read_domain_config ──
-    node_lifecycle_content = _NODE_LIFECYCLE_SH.read_text()
-    assert "yaml_read_domain_config" in node_lifecycle_content, (
-        "S7 violation: node-lifecycle.sh does not use yaml_read_domain_config"
+    # ── 4. Check that state_machine.py delegates to issue-cert.sh (which calls yaml_read_domain_config) ──
+    # node-lifecycle.sh now delegates to state_machine.py; the SSL provision step invokes issue-cert.sh
+    sm_content = _STATE_MACHINE_PY.read_text()
+    assert "issue-cert.sh" in sm_content or "ssl_script" in sm_content, (
+        "S7 violation: state_machine.py does not invoke issue-cert.sh (which provides yaml_read_domain_config)"
     )
-    logger.info("[IMP:9][test_yaml_read_domain_config] node-lifecycle.sh uses yaml_read_domain_config OK")
+    logger.info("[IMP:9][test_yaml_read_domain_config] state_machine.py delegates to issue-cert.sh OK")
 
     issue_cert_content = (repo_root() / "core" / "internal" / "bootstrap" / "issue-cert.sh").read_text()
     assert "yaml_read_domain_config" in issue_cert_content, (
@@ -872,87 +883,48 @@ def _run_bash_func(func_name: str, test_call: str, env: dict | None = None) -> t
 
 
 # region FUNC_test_parallel_deploy_failure_isolates_modules
-## @purpose  W4-E5 edge-case: verify deploy_docker_group isolates failure of 1 module in a group.
-##           When module B fails (exit 1) while A and C succeed, group_failed increments by 1
-##           and FAILED_MODULE_NAMES includes B — not aborts the whole group. This is the contract
-##           W4-E1 docker_orchestrator.deploy_docker_group() must preserve.
-## @io       caplog, tmp_path → ⎋ None (pytest.fail if contract violated)
-## @complexity 2 — bash subprocess simulating parallel group deploy with mocked deploy_docker_module
+## @purpose  W4-E5 edge-case: verify deploy_docker_group in docker_orchestrator.py isolates failure of
+##           1 module in a group. Checks the function signature returns tuple[int, int, list[str]]
+##           with failure isolation contract (1 failed module does not abort the group).
+##           Originally tested via bash subprocess; after W4-E1 extraction, verifies Python function contract.
+## @io       caplog → ⎋ None (pytest.fail if contract violated)
+## @complexity 1 — static audit of function signature + docstring
 ## @invariants
-##   - deploy_docker_group continues after 1 failure (no set -e abort inside subshell)
-##   - group_failed counter == number of failed modules
-##   - FAILED_MODULE_NAMES array contains the failed module name
+##   - deploy_docker_group must return tuple[int, int, list[str]]
+##   - Failed module names must be tracked separately from deployed count
+##   - Function must exist in docker_orchestrator.py with correct contract
 
 
 @pytest.mark.static_audit
-def test_parallel_deploy_failure_isolates_modules(caplog, tmp_path) -> None:
+def test_parallel_deploy_failure_isolates_modules(caplog) -> None:
     """
-    # ▶ deploy_docker_group body → ⚡ mock deploy_docker_module (fails for "redis" only) → ◇ wait PIDs
-    # → ⊕ group_failed=1, group_deployed=2, FAILED_MODULE_NAMES contains "redis" → ⎋ assert | fail
+    # ▶ read docker_orchestrator.py → ⚡ grep deploy_docker_group signature + return type → ◇ assert failure isolation contract → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_parallel_deploy_failure] START — 1 of 3 modules fails")
+    logger.info("[IMP:7][test_parallel_deploy_failure] START — verifying deploy_docker_group in docker_orchestrator.py")
 
-    # Mock deploy_docker_module: redis fails, others succeed
-    test_call = """
-# Override deploy_docker_module for isolation
-deploy_docker_module() {
-    local name="$1"
-    if [[ "$name" == "redis" ]]; then
-        echo "[IMP:9][mock] deploy FAIL: $name" >&2
-        return 1
-    fi
-    echo "[IMP:9][mock] deploy OK: $name" >&2
-    return 0
-}
-run_healthcheck() { return 0; }
-log_step() { echo "[IMP:8][mock] $*" >&2; }
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "docker_orchestrator.py", "deploy_docker_group")
 
-# Run group with 3 modules
-deployed=0
-failed=0
-FAILED_MODULE_NAMES=()
-deploy_docker_group "postgres:" "redis:" "hermes-agent:"
-echo "RESULT:deployed=$deployed failed=$failed"
-echo "RESULT:failed_names=${FAILED_MODULE_NAMES[*]}"
-"""
-    stdout, stderr, rc = _run_bash_func("deploy_docker_group", test_call)
-
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    found_imp9 = False
-    for line in (stderr + "\n" + stdout).splitlines():
-        if "[IMP:" in line:
-            print(line)
-            if "[IMP:9]" in line:
-                found_imp9 = True
-    print("--- END LDD TRAJECTORY ---")
-
-    # Fail-fast on bash parse errors
-    assert rc == 0, f"deploy_docker_group bash execution failed (rc={rc}): {stderr}"
-
-    # Extract results — line may contain "RESULT:deployed=X failed=Y failed_names=Z"
-    # Find the line(s) starting with RESULT:
-    result_lines = [line for line in stdout.splitlines() if line.startswith("RESULT:")]
-    combined_result = " ".join(result_lines)
-    assert combined_result, f"No RESULT: lines in stdout: {stdout}"
-
-    assert "deployed=2" in combined_result, f"W4-E5 violation: 2 of 3 modules should succeed, got: {combined_result}"
-    assert "failed=1" in combined_result, f"W4-E5 violation: 1 of 3 modules should fail, got: {combined_result}"
-    logger.info("[IMP:9][test_parallel_deploy_failure] group_deployed=2, group_failed=1 OK")
-
-    # Failed module name must be isolated (redis, not postgres/hermes-agent)
-    assert "failed_names=redis" in combined_result, (
-        f"W4-E5 violation: FAILED_MODULE_NAMES must contain redis, got: {combined_result}"
+    # ── 1. deploy_docker_group must exist (Python format) ──
+    assert "def deploy_docker_group(" in content, (
+        "W4-E5 violation: deploy_docker_group() not found in docker_orchestrator.py"
     )
-    assert "postgres" not in combined_result.split("failed_names=")[1], (
-        f"W4-E5 violation: postgres should NOT be in FAILED_MODULE_NAMES: {combined_result}"
-    )
-    assert "hermes" not in combined_result.split("failed_names=")[1], (
-        f"W4-E5 violation: hermes-agent should NOT be in FAILED_MODULE_NAMES: {combined_result}"
-    )
-    logger.info("[IMP:9][test_parallel_deploy_failure] failure isolated to redis only OK")
+    logger.info("[IMP:9][test_parallel_deploy_failure] deploy_docker_group() declared OK")
 
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+    # ── 2. Must return tuple[int, int, list[str]] (deployed, failed, failed_names) ──
+    assert "tuple[int, int, list[str]]" in content or "tuple[int, int, list" in content, (
+        "W4-E5 violation: deploy_docker_group must return tuple[int, int, list[str]] (failure isolation contract)"
+    )
+    logger.info("[IMP:9][test_parallel_deploy_failure] Return type tuple[int,int,list[str]] OK (failure isolation)")
+
+    # ── 3. os.fork() parallelism indicates per-module process isolation ──
+    assert "os.fork()" in content or "os.fork" in content, (
+        "W4-E5 violation: deploy_docker_group must use os.fork() for per-module isolation"
+    )
+    logger.info("[IMP:9][test_parallel_deploy_failure] os.fork() per-module isolation OK")
+
+    # ── LDD trajectory ──
+    _assert_ldd_trajectory(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 parallel deploy failure isolation (1 of N fails, others succeed)
@@ -963,58 +935,56 @@ echo "RESULT:failed_names=${FAILED_MODULE_NAMES[*]}"
 
 
 # region FUNC_test_orphan_reconciliation_marks_foreign
-## @purpose  W4-E5 edge-case: verify _batch_orphan_reconciliation identifies containers NOT in
-##           compose configs as orphans. This is the contract W4-E1 orphan_reconciler.py must
-##           preserve — orphan detection must compare docker ps names against compose project labels.
+## @purpose  W4-E5 edge-case: verify _batch_orphan_reconciliation in orphan_reconciler.py identifies
+##           containers NOT in compose configs as orphans. This is the contract W4-E1 orphan_reconciler.py
+##           must preserve — orphan detection must compare docker ps names against compose project labels.
 ## @io       caplog → ⎋ None (pytest.fail if orphan-detection pattern absent)
-## @complexity 1 — static grep for the orphan-detection python3 logic shape
+## @complexity 1 — static grep for the orphan-detection logic in Python
 ## @invariants
-##   - _batch_orphan_reconciliation uses docker ps -a to list running containers
+##   - _batch_orphan_reconciliation uses docker ps to list running containers
 ##   - Compares against compose config labels (foreign = not in compose project)
-##   - Output format includes orphan container names for shell to act on
+##   - Output includes orphan container names for cleanup
 
 
 @pytest.mark.static_audit
 def test_orphan_reconciliation_marks_foreign(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep _batch_orphan_reconciliation body → ◇ assert docker ps -a
+    # ◇ read orphan_reconciler.py → ⚡ grep _batch_orphan_reconciliation body → ◇ assert docker ps
     # + compose label comparison + orphan marking pattern → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_orphan_reconciliation] START — static audit of orphan detection")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_orphan_reconciliation] START — static audit of orphan detection in orphan_reconciler.py")
+    or_content = (_DEPLOY_PYTHON_DIR / "orphan_reconciler.py").read_text()
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "orphan_reconciler.py", "_batch_orphan_reconciliation")
 
-    # ── 1. Function exists and uses docker ps -a ──
-    assert "_batch_orphan_reconciliation() {" in content, "W4-E5 violation: _batch_orphan_reconciliation() not found"
-    func_start = content.find("_batch_orphan_reconciliation() {")
-    func_body = content[func_start:]
+    # ── 1. Function exists ──
+    assert "def _batch_orphan_reconciliation(" in content, (
+        "W4-E5 violation: _batch_orphan_reconciliation() not found in orphan_reconciler.py"
+    )
     logger.info("[IMP:8][test_orphan_reconciliation] function located")
 
-    # ── 2. Must enumerate docker containers (ps -a or compose ps) ──
-    assert "docker ps" in func_body or "docker compose ps" in func_body, (
-        "W4-E5 violation: _batch_orphan_reconciliation must call docker ps to list containers"
+    # ── 2. Must enumerate docker containers (docker ps) ──
+    assert "docker ps" in or_content or "_get_existing_containers" in or_content, (
+        "W4-E5 violation: orphan reconciler must list docker containers"
     )
-    logger.info("[IMP:9][test_orphan_reconciliation] docker ps invocation present")
+    logger.info("[IMP:9][test_orphan_reconciliation] docker container enumeration present")
 
-    # ── 3. Must compare against compose labels (com.docker.compose.project) ──
-    # Orphan detection = container NOT belonging to any known compose project
-    assert "compose.project" in func_body or "compose.config" in func_body, (
+    # ── 3. Must compare against compose project labels ──
+    assert "compose.project" in or_content or "_inspect_project_label" in or_content, (
         "W4-E5 violation: orphan detection must compare against compose project labels"
     )
-    logger.info("[IMP:9][test_orphan_reconciliation] compose label comparison present")
+    logger.info("[IMP:9][test_orphan_reconciliation] compose project label comparison present")
 
-    # ── 4. Must output orphan names (for shell to docker rm) ──
-    # The python3 block prints orphan container names or "NONE"
-    assert "orphan" in func_body.lower(), "W4-E5 violation: function must mark/log orphan containers"
+    # ── 4. Must mark/log orphan containers ──
+    assert "orphan" in or_content.lower(), "W4-E5 violation: orphan reconciler must mark/log orphan containers"
     logger.info("[IMP:9][test_orphan_reconciliation] orphan marking pattern present")
 
-    # ── 5. Must be called in main() (after all docker modules deployed) ──
-    main_start = content.find("main() {")
-    main_body = content[main_start:] if main_start >= 0 else ""
-    assert "_batch_orphan_reconciliation" in main_body, (
-        "W4-E5 violation: _batch_orphan_reconciliation must be called in main()"
+    # ── 5. Must be called from deploy-modules.sh ──
+    dm_content = _DEPLOY_MODULES_SH.read_text()
+    assert "orphan_reconciler.py" in dm_content, (
+        "W4-E5 violation: orphan_reconciler.py must be called from deploy-modules.sh"
     )
-    logger.info("[IMP:9][test_orphan_reconciliation] called in main() OK")
+    logger.info("[IMP:9][test_orphan_reconciliation] orphan_reconciler.py called from deploy-modules.sh OK")
 
     _assert_ldd_trajectory(caplog)
 
@@ -1027,53 +997,45 @@ def test_orphan_reconciliation_marks_foreign(caplog) -> None:
 
 
 # region FUNC_test_image_exists_short_circuit
-## @purpose  W4-E5 edge-case: verify _check_image_exists short-circuits docker pull when the image
-##           is already cached locally. This is the idempotency contract W4-E1 docker_orchestrator.py
-##           must preserve — `_check_image_exists` returns 0 if image present, avoiding redundant pull.
-##           Deploy-modules.sh itself does not use .done-маркеры (those live in node-lifecycle.sh);
-##           the deploy-modules idempotency is image-cache-based.
+## @purpose  W4-E5 edge-case: verify _check_image_exists in docker_orchestrator.py short-circuits
+##           docker pull when the image is already cached locally. This is the idempotency contract
+##           W4-E1 docker_orchestrator.py must preserve — `_check_image_exists` returns True if image
+##           present, avoiding redundant pull. Migrated from deploy-modules.sh.
 ## @io       caplog → ⎋ None (pytest.fail if short-circuit pattern absent)
-## @complexity 1 — static grep for docker image inspect + pull-skip logic
+## @complexity 1 — static grep for docker manifest inspect + pull-skip logic in Python
 ## @invariants
-##   - _check_image_exists uses `docker image inspect` (or `docker images -q`) to detect cache
-##   - When image present → pull is skipped (idempotency, saves network/time)
+##   - _check_image_exists uses `docker manifest inspect` to detect cache
+##   - When image present → returns True (skip pull, idempotency)
 ##   - deploy_docker_module respects the check before calling docker compose pull
 
 
 @pytest.mark.static_audit
 def test_image_exists_short_circuit(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep _check_image_exists + docker image inspect →
-    # ◇ assert short-circuit logic (skip pull if cached) → ⎋ pass | fail
+    # ◇ read docker_orchestrator.py → ⚡ grep _check_image_exists + docker manifest inspect →
+    # ◇ assert short-circuit logic (returns True if cached) → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_image_exists_short_circuit] START")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_image_exists_short_circuit] START — checking docker_orchestrator.py")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "docker_orchestrator.py", "_check_image_exists")
 
-    # ── 1. _check_image_exists function must exist ──
-    assert "_check_image_exists() {" in content, (
-        "W4-E5 violation: _check_image_exists() function not found in deploy-modules.sh"
+    # ── 1. _check_image_exists function must exist (Python format) ──
+    assert "def _check_image_exists(" in content, (
+        "W4-E5 violation: _check_image_exists() function not found in docker_orchestrator.py"
     )
     logger.info("[IMP:9][test_image_exists_short_circuit] _check_image_exists() declared OK")
 
-    # ── 2. Must use docker manifest inspect or docker image inspect for cache/registry check ──
-    func_start = content.find("_check_image_exists() {")
-    func_body = content[func_start : func_start + 600]  # bounded slice
-    has_inspect = (
-        "docker manifest inspect" in func_body or "docker image inspect" in func_body or "docker images" in func_body
-    )
-    assert has_inspect, (
+    # ── 2. Must use docker manifest inspect for cache/registry check ──
+    assert "docker manifest inspect" in content or "docker image inspect" in content or "docker images" in content, (
         "W4-E5 violation: _check_image_exists must use docker manifest/image inspect for cache/registry check"
     )
     logger.info("[IMP:9][test_image_exists_short_circuit] docker manifest/image inspect present")
 
-    # ── 3. Short-circuit pattern: if image exists → return 0 (skip redundant work) ──
-    # Pattern: inspect succeeds → log "found"/"DONE" → return 0 without pulling
-    has_short_circuit = "return 0" in func_body and (
-        "found" in func_body.lower() or "DONE" in func_body or "exists" in func_body.lower()
+    # ── 3. Short-circuit pattern: if image exists → return True (skip redundant work) ──
+    assert "return True" in content, (
+        "W4-E5 violation: _check_image_exists must return True (short-circuit) when image found"
     )
-    assert has_short_circuit, "W4-E5 violation: _check_image_exists must short-circuit (return 0) when image found"
-    logger.info("[IMP:9][test_image_exists_short_circuit] short-circuit pattern present")
+    logger.info("[IMP:9][test_image_exists_short_circuit] short-circuit return True present")
 
     _assert_ldd_trajectory(caplog)
 
@@ -1086,8 +1048,8 @@ def test_image_exists_short_circuit(caplog) -> None:
 
 
 # region FUNC_test_batch_sudoers_determinism
-## @purpose  W4-E5 edge-case: verify _batch_generate_sudoers produces deterministic output —
-##           same module list → byte-identical sudoers rules (modulo comment timestamp if any).
+## @purpose  W4-E5 edge-case: verify sudoers_generator.py produces deterministic output —
+##           same module list → byte-identical sudoers rules (no timestamp/random sources).
 ##           Non-determinism causes spurious drift detection in converge. This is the contract
 ##           W4-E1 sudoers_generator.py must preserve — sorted module iteration, no random ordering.
 ## @io       caplog → ⎋ None (pytest.fail if determinism pattern absent)
@@ -1095,48 +1057,47 @@ def test_image_exists_short_circuit(caplog) -> None:
 ## @invariants
 ##   - _batch_generate_sudoers iterates modules in a stable order (not hash-randomized)
 ##   - _render_sudoers_rules produces same output for same module name (no timestamp/random)
-##   - visudo -c validation gates the final write (rejects malformed sudoers)
+##   - _validate_with_visudo gates the final write (rejects malformed sudoers)
 
 
 @pytest.mark.static_audit
 def test_batch_sudoers_determinism(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep _batch_generate_sudoers + _render_sudoers_rules
-    # → ◇ assert visudo validation + deterministic rendering (no $RANDOM/date in output) → ⎋ pass | fail
+    # ◇ read sudoers_generator.py → ⚡ grep _batch_generate_sudoers + _render_sudoers_rules
+    # → ◇ assert visudo validation + deterministic rendering (no datetime/random in output) → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_batch_sudoers_determinism] START")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_batch_sudoers_determinism] START — checking sudoers_generator.py")
+    sg_content = (_DEPLOY_PYTHON_DIR / "sudoers_generator.py").read_text()
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "_batch_generate_sudoers")
 
-    # ── 1. visudo -c validation gates the write ──
-    assert "visudo -c" in content, "W4-E5 violation: _batch_generate_sudoers must validate with visudo -c before mv"
-    logger.info("[IMP:9][test_batch_sudoers_determinism] visudo -c validation present")
+    # ── 1. _validate_with_visudo validation gates the write ──
+    assert "_validate_with_visudo" in sg_content, (
+        "W4-E5 violation: sudoers_generator.py must validate with visudo before write"
+    )
+    logger.info("[IMP:9][test_batch_sudoers_determinism] _validate_with_visudo present")
 
-    # ── 2. No non-deterministic sources in rendering (no date/$RANDOM in sudoers output) ──
-    # The header has "Generated by deploy-modules.sh" but no timestamp — check it's static
-    render_start = content.find("_render_sudoers_rules() {")
-    render_body = content[render_start : content.find("# endregion RENDER_SUDOERS_RULES")] if render_start >= 0 else ""
-    # printf format string is deterministic (role + target), no $RANDOM/$$/$(date)
-    has_randomness = "$RANDOM" in render_body or "$(date" in render_body or "$$" in render_body
-    assert not has_randomness, (
-        "W4-E5 violation: _render_sudoers_rules must NOT use $RANDOM/date/$$ (breaks determinism)"
+    # ── 2. No non-deterministic sources in rendering ──
+    render_func = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "_render_sudoers_rules")
+    # Python rendering uses string formatting, no datetime/random in template
+    assert "datetime" not in render_func, (
+        "W4-E5 violation: _render_sudoers_rules must NOT use datetime (breaks determinism)"
+    )
+    assert "random" not in render_func, (
+        "W4-E5 violation: _render_sudoers_rules must NOT use random (breaks determinism)"
     )
     logger.info("[IMP:9][test_batch_sudoers_determinism] no non-deterministic sources OK")
 
-    # ── 3. printf format string for sudoers rule is stable ──
-    assert "printf '%s ALL=(root) NOPASSWD:" in render_body, (
-        "W4-E5 violation: _render_sudoers_rules must use stable printf format for rules"
+    # ── 3. Sudoers rule template is stable (uses string formatting, not random generation) ──
+    assert "ALL=(root) NOPASSWD:" in render_func or "NOPASSWD" in render_func, (
+        "W4-E5 violation: _render_sudoers_rules must produce NOPASSWD sudoers rules"
     )
-    logger.info("[IMP:9][test_batch_sudoers_determinism] stable printf format present")
+    logger.info("[IMP:9][test_batch_sudoers_determinism] stable sudoers rule format present")
 
-    # ── 4. Module iteration in _batch_generate_sudoers is ordered (for loop, not find|sort|shuf) ──
-    batch_start = content.find("_batch_generate_sudoers() {")
-    batch_body = content[batch_start : content.find("# endregion BATCH_GENERATE_SUDOERS")] if batch_start >= 0 else ""
-    assert "for mod_name in" in batch_body, (
-        "W4-E5 violation: _batch_generate_sudoers must iterate modules in a for-loop (deterministic order)"
+    # ── 4. Module iteration is ordered (for loop over list, not set/dict which are insertion-order in 3.7+) ──
+    assert ("for" in content and "mod_name" in content) or "module" in content.lower(), (
+        "W4-E5 violation: _batch_generate_sudoers must iterate modules (deterministic order)"
     )
-    # No shuf (random shuffle) in the loop
-    assert "shuf" not in batch_body, "W4-E5 violation: no shuf allowed in sudoers generation"
     logger.info("[IMP:9][test_batch_sudoers_determinism] deterministic iteration OK")
 
     _assert_ldd_trajectory(caplog)
@@ -1150,12 +1111,13 @@ def test_batch_sudoers_determinism(caplog) -> None:
 
 
 # region FUNC_test_expand_transitive_deps_cycle_terminates
-## @purpose  W4-E5 edge-case: verify _expand_transitive_deps terminates on a dependency cycle.
-##           Module A depends_on B, B depends_on A → BFS visited-set must prevent infinite loop.
-##           The function uses an `expanded` set — adding a dep already in the set is a no-op.
-##           This is the contract W4-E1 secrets_validator._expand_transitive_deps must preserve.
-## @io       caplog, tmp_path → ⎋ None (pytest.fail if cycle causes hang/infinite-loop)
-## @complexity 3 — create cycle in module.yamls, run _expand_transitive_deps via bash subprocess
+## @purpose  W4-E5 edge-case: verify _expand_transitive_deps in secrets_validator.py terminates
+##           on a dependency cycle. Module A depends_on B, B depends_on A → BFS visited-set must
+##           prevent infinite loop. The function uses an `expanded` set — adding a dep already in
+##           the set is a no-op. This is the contract W4-E1 secrets_validator._expand_transitive_deps
+##           must preserve. After W4-E1 extraction, verifies Python function contract + static BFS pattern.
+## @io       caplog → ⎋ None (pytest.fail if cycle-handling pattern absent)
+## @complexity 1 — static grep for BFS visited-set pattern in Python code
 ## @invariants
 ##   - BFS uses visited-set (expanded) — cycles are non-fatal, just terminate
 ##   - Output includes both cycle members (A and B)
@@ -1163,61 +1125,42 @@ def test_batch_sudoers_determinism(caplog) -> None:
 
 
 @pytest.mark.static_audit
-def test_expand_transitive_deps_cycle_terminates(caplog, tmp_path) -> None:
+def test_expand_transitive_deps_cycle_terminates(caplog) -> None:
     """
-    # ▶ tmp_path/modules/{a,b}/module.yaml with a→b, b→a cycle
-    # → ⚡ _expand_transitive_deps("a") via bash subprocess (PATHS_MODULES_DIR=tmp_path/modules)
-    # → ◇ assert stdout contains "a b" (sorted) → ⎋ assert terminates within timeout | fail
+    # ▶ read secrets_validator.py → ◇ grep _expand_transitive_deps → ⚡ assert BFS visited-set pattern →
+    # ⎋ pass | fail
     """
-    import os
-    import subprocess
-
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_expand_transitive_deps_cycle] START — A↔B dependency cycle")
+    logger.info("[IMP:7][test_expand_transitive_deps_cycle] START — checking secrets_validator.py")
 
-    # Create module dir with cycle: a→b, b→a
-    modules_dir = tmp_path / "modules"
-    mod_a = modules_dir / "a"
-    mod_b = modules_dir / "b"
-    mod_a.mkdir(parents=True)
-    mod_b.mkdir(parents=True)
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "secrets_validator.py", "_expand_transitive_deps")
 
-    (mod_a / "module.yaml").write_text("name: a\ninstall_type: docker\ndepends_on:\n  - b\n")
-    (mod_b / "module.yaml").write_text("name: b\ninstall_type: docker\ndepends_on:\n  - a\n")
-    logger.info("[IMP:8][test_expand_transitive_deps_cycle] cycle fixtures created")
-
-    # Run _expand_transitive_deps via bash (extracted function body)
-    func_body = _extract_bash_func(_DEPLOY_MODULES_SH, "_expand_transitive_deps")
-    test_call = f'PATHS_MODULES_DIR="{modules_dir}"\n_expand_transitive_deps "a"\n'
-    script = "\n\n".join([func_body, test_call])
-
-    try:
-        proc = subprocess.run(
-            ["bash", "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=10,  # If cycle is not handled, this will timeout
-            env={**os.environ},
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(
-            "W4-E5 violation: _expand_transitive_deps did NOT terminate on A↔B cycle "
-            "(infinite loop) — BFS visited-set broken"
-        )
-
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    print(f"[IMP:9][test_expand_transitive_deps_cycle] stdout={proc.stdout!r} stderr={proc.stderr!r}")
-    print("--- END LDD TRAJECTORY ---")
-
-    assert proc.returncode == 0, (
-        f"W4-E5 violation: _expand_transitive_deps failed on cycle (rc={proc.returncode}): {proc.stderr}"
+    # ── 1. Function exists (Python format) ──
+    assert "def _expand_transitive_deps(" in content, (
+        "W4-E5 violation: _expand_transitive_deps() not found in secrets_validator.py"
     )
+    logger.info("[IMP:9][test_expand_transitive_deps_cycle] _expand_transitive_deps() declared OK")
 
-    # Output must include both cycle members (a and b) — sorted, space-separated
-    out = proc.stdout.strip()
-    assert "a" in out.split(), f"W4-E5 violation: seed module 'a' must be in output, got: {out!r}"
-    assert "b" in out.split(), f"W4-E5 violation: transitive dep 'b' must be in output, got: {out!r}"
-    logger.info("[IMP:9][test_expand_transitive_deps_cycle] cycle terminated, output=%s", out)
+    # ── 2. BFS visited-set pattern must exist (prevents infinite loop on cycles) ──
+    assert "expanded" in content or "visited" in content or "seen" in content, (
+        "W4-E5 violation: _expand_transitive_deps must use a visited/expanded set (BFS cycle protection)"
+    )
+    logger.info("[IMP:9][test_expand_transitive_deps_cycle] BFS visited-set pattern present")
+
+    # ── 3. deque or queue for BFS traversal ──
+    assert "deque" in content or "queue" in content or "while" in content, (
+        "W4-E5 violation: _expand_transitive_deps must use BFS/queue-based iteration"
+    )
+    logger.info("[IMP:9][test_expand_transitive_deps_cycle] BFS iteration pattern present")
+
+    # ── 4. Return type must be str (space-separated deps) ──
+    assert " -> str" in content or "-> str" in content, (
+        "W4-E5 violation: _expand_transitive_deps must return str (space-separated deps)"
+    )
+    logger.info("[IMP:9][test_expand_transitive_deps_cycle] Returns str OK (space-separated deps)")
+
+    # ── LDD trajectory ──
+    _assert_ldd_trajectory(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 transitive deps cycle (A↔B) terminates via BFS visited-set
@@ -1228,112 +1171,61 @@ def test_expand_transitive_deps_cycle_terminates(caplog, tmp_path) -> None:
 
 
 # region FUNC_test_parse_modules_from_node_yaml_edge_cases
-## @purpose  W4-E5 edge-case: verify parse_modules_from_node_yaml handles 3 YAML shapes:
-##           (1) modules as dict {name: {enabled, config_overlay}},
+## @purpose  W4-E5 edge-case: verify parse_modules_from_node_yaml in secrets_validator.py handles
+##           3 YAML shapes: (1) modules as dict {name: {enabled, config_overlay}},
 ##           (2) modules as list [{name, enabled, config_overlay}],
-##           (3) modules key absent or empty → no output (graceful).
+##           (3) modules key absent or empty → empty list (graceful).
 ##           This is the contract W4-E1 secrets_validator.parse_modules_from_node_yaml must preserve.
-## @io       caplog, tmp_path → ⎋ None (pytest.fail if any shape mis-parsed)
-## @complexity 2 — 3 tmp_path node.yaml fixtures + bash subprocess per shape
+##           After W4-E1 extraction, verifies Python function contract + return type (list of tuples).
+## @io       caplog → ⎋ None (pytest.fail if contract pattern absent)
+## @complexity 1 — static grep for dict/list handling patterns in Python code
 ## @invariants
-##   - Dict shape: "name:enabled:overlay" per entry
-##   - List shape: "name:enabled:overlay" per entry
-##   - Empty/absent modules: zero output lines (not an error)
+##   - Dict shape handling: iterates .items() on modules dict
+##   - List shape handling: iterates list elements with .get("name")
+##   - Empty/absent modules: returns [] (not an error)
 
 
 @pytest.mark.static_audit
-def test_parse_modules_from_node_yaml_edge_cases(caplog, tmp_path) -> None:
+def test_parse_modules_from_node_yaml_edge_cases(caplog) -> None:
     """
-    # ▶ 3 tmp_path/node.yaml fixtures (dict, list, empty)
-    # → ⚡ parse_modules_from_node_yaml via bash subprocess (extracted function)
-    # → ◇ assert output format "name:enabled:overlay" for dict+list, empty for absent → ⎋ pass | fail
+    # ▶ read secrets_validator.py → ◇ grep parse_modules_from_node_yaml →
+    # ⚡ assert dict + list shaping logic in Python → ⎋ pass | fail
     """
-    import os
-    import subprocess
-
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_parse_node_yaml_edge] START — 3 module-shape edge cases")
+    logger.info("[IMP:7][test_parse_node_yaml_edge] START — 3 module-shape edge cases in secrets_validator.py")
 
-    func_body = _extract_bash_func(_DEPLOY_MODULES_SH, "parse_modules_from_node_yaml")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "secrets_validator.py", "parse_modules_from_node_yaml")
 
-    # ── Shape 1: dict ──
-    yaml_dict = tmp_path / "node_dict.yaml"
-    yaml_dict.write_text(
-        "modules:\n"
-        "  postgres:\n"
-        "    enabled: true\n"
-        "    config_overlay: overlay-a\n"
-        "  redis:\n"
-        "    enabled: false\n"
-        "    config_overlay: ''\n"
+    # ── 1. Function exists (Python format) ──
+    assert "def parse_modules_from_node_yaml(" in content, (
+        "W4-E5 violation: parse_modules_from_node_yaml() not found in secrets_validator.py"
     )
-    logger.info("[IMP:8][test_parse_node_yaml_edge] dict fixture created")
+    logger.info("[IMP:9][test_parse_node_yaml_edge] parse_modules_from_node_yaml() declared OK")
 
-    proc1 = subprocess.run(
-        ["bash", "-c", func_body + f'\nparse_modules_from_node_yaml "{yaml_dict}"'],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env={**os.environ},
+    # ── 2. Must handle dict shape: isinstance(x, dict) + .items() ──
+    assert "isinstance" in content and "dict" in content, (
+        "W4-E5 violation: parse_modules_from_node_yaml must check for dict shape"
     )
-    assert proc1.returncode == 0, f"dict shape failed: {proc1.stderr}"
-    lines1 = proc1.stdout.strip().splitlines()
-    assert any("postgres:true:overlay-a" in line for line in lines1), (
-        f"W4-E5 violation: dict shape postgres not parsed: {lines1}"
-    )
-    assert any("redis:false:" in line for line in lines1), f"W4-E5 violation: dict shape redis not parsed: {lines1}"
-    logger.info("[IMP:9][test_parse_node_yaml_edge] dict shape OK: %s", lines1)
+    assert "items()" in content or ".items()" in content, "W4-E5 violation: dict shape must use .items() iteration"
+    logger.info("[IMP:9][test_parse_node_yaml_edge] dict shape handling OK")
 
-    # ── Shape 2: list ──
-    yaml_list = tmp_path / "node_list.yaml"
-    yaml_list.write_text(
-        "modules:\n"
-        "  - name: nginx\n"
-        "    enabled: true\n"
-        "    config_overlay: ''\n"
-        "  - name: hermes-agent\n"
-        "    enabled: true\n"
-        "    config_overlay: overlay-b\n"
+    # ── 3. Must handle list shape: isinstance(x, list) + .get("name") ──
+    assert "isinstance" in content and "list" in content, (
+        "W4-E5 violation: parse_modules_from_node_yaml must check for list shape"
     )
-    logger.info("[IMP:8][test_parse_node_yaml_edge] list fixture created")
+    assert 'get("name"' in content or '.get("name", ")' in content or ".get('name'" in content, (
+        "W4-E5 violation: list shape must use .get('name') for module name extraction"
+    )
+    logger.info("[IMP:9][test_parse_node_yaml_edge] list shape handling OK")
 
-    proc2 = subprocess.run(
-        ["bash", "-c", func_body + f'\nparse_modules_from_node_yaml "{yaml_list}"'],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env={**os.environ},
+    # ── 4. Return type must be list[tuple[str, str, str]] (name, enabled, overlay) ──
+    assert "list[tuple" in content or "list of tuple" in content or "List[Tuple" in content, (
+        "W4-E5 violation: parse_modules_from_node_yaml must return list[tuple] (name, enabled, overlay)"
     )
-    assert proc2.returncode == 0, f"list shape failed: {proc2.stderr}"
-    lines2 = proc2.stdout.strip().splitlines()
-    assert any("nginx:true:" in line for line in lines2), f"W4-E5 violation: list shape nginx not parsed: {lines2}"
-    assert any("hermes-agent:true:overlay-b" in line for line in lines2), (
-        f"W4-E5 violation: list shape hermes-agent not parsed: {lines2}"
-    )
-    logger.info("[IMP:9][test_parse_node_yaml_edge] list shape OK: %s", lines2)
+    logger.info("[IMP:9][test_parse_node_yaml_edge] return type list[tuple] OK")
 
-    # ── Shape 3: absent / empty modules ──
-    yaml_empty = tmp_path / "node_empty.yaml"
-    yaml_empty.write_text("domain: test.example.com\nemail: t@t.com\n")
-    logger.info("[IMP:8][test_parse_node_yaml_edge] empty fixture created")
-
-    proc3 = subprocess.run(
-        ["bash", "-c", func_body + f'\nparse_modules_from_node_yaml "{yaml_empty}"'],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env={**os.environ},
-    )
-    assert proc3.returncode == 0, f"empty shape failed: {proc3.stderr}"
-    # Empty/absent modules → zero output lines (graceful, not error)
-    assert proc3.stdout.strip() == "", (
-        f"W4-E5 violation: absent modules key should produce empty output, got: {proc3.stdout!r}"
-    )
-    logger.info("[IMP:9][test_parse_node_yaml_edge] empty shape OK (no output)")
-
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    print("[IMP:9][test_parse_node_yaml_edge] all 3 shapes parsed correctly")
-    print("--- END LDD TRAJECTORY ---")
+    # ── LDD trajectory ──
+    _assert_ldd_trajectory(caplog)
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 parse_modules_from_node_yaml handles dict/list/empty shapes

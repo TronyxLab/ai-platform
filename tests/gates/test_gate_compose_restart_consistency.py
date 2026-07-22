@@ -47,6 +47,7 @@ def _load_yaml(path: pathlib.Path) -> dict[str, Any] | None:
     # Replace `!override` with empty string (the tag literal in YAML)
     # Pattern: `: !override` at the end of a key: value line, or `: !override\n`
     import re
+
     raw = re.sub(r":\s*!override\b", ":", raw)
 
     try:
@@ -115,8 +116,7 @@ class TestComposeRestartConsistency:
             len(violations),
         )
         assert not violations, (
-            f"[restart_consistency] Test-compose restart violations ({len(violations)}):\n"
-            + "\n".join(violations)
+            f"[restart_consistency] Test-compose restart violations ({len(violations)}):\n" + "\n".join(violations)
         )
 
     # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · All base-compose services must have restart in {unless-stopped, always}
@@ -171,6 +171,5 @@ class TestComposeRestartConsistency:
             len(violations),
         )
         assert not violations, (
-            f"[restart_consistency] Base-compose restart violations ({len(violations)}):\n"
-            + "\n".join(violations)
+            f"[restart_consistency] Base-compose restart violations ({len(violations)}):\n" + "\n".join(violations)
         )

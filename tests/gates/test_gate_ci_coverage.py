@@ -38,9 +38,10 @@ def _read_makefile_with_includes() -> str:
     parts = [_MAKEFILE_PATH.read_text()]
     makefiles_dir = _PROJECT_ROOT / "makefiles"
     if makefiles_dir.is_dir():
-        for mk_file in sorted(makefiles_dir.glob("*.mk")):
-            parts.append(mk_file.read_text())
+        parts.extend(mk_file.read_text() for mk_file in sorted(makefiles_dir.glob("*.mk")))
     return "\n".join(parts)
+
+
 _PRE_COMMIT_CONFIG_PATH: pathlib.Path = _PROJECT_ROOT / ".pre-commit-config.yaml"
 _MAIN_FULL_GATE_PATH: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows" / "main-full-gate.yml"
 

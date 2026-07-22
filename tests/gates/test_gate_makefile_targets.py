@@ -15,16 +15,11 @@
 ##       from strict `-n` exit code check on this platform.
 # endregion MODULE_CONTRACT
 
-import os
 import pathlib
-import re
 import subprocess
-import sys
-from typing import List, Set, Tuple
-
-import yaml
 
 import pytest
+import yaml
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 _MAKEFILES_DIR = _PROJECT_ROOT / "makefiles"
@@ -34,7 +29,8 @@ _MAKEFILES_DIR = _PROJECT_ROOT / "makefiles"
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _extract_phony_targets(filepath: pathlib.Path) -> List[str]:
+
+def _extract_phony_targets(filepath: pathlib.Path) -> list[str]:
     """Extract .PHONY target names from a Makefile or .mk file.
 
     @purpose  Parse .PHONY: declarations and return deduplicated target names
@@ -42,25 +38,25 @@ def _extract_phony_targets(filepath: pathlib.Path) -> List[str]:
     @output   list of target name strings
     @complexity O(N) on file lines
     """
-    targets: List[str] = []
+    targets: list[str] = []
     content = filepath.read_text(encoding="utf-8")
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith(".PHONY:"):
             # Extract targets after .PHONY:
-            names = stripped[len(".PHONY:"):].split()
+            names = stripped[len(".PHONY:") :].split()
             targets.extend(names)
     return list(dict.fromkeys(targets))  # deduplicate, preserve order
 
 
-def _collect_all_phony_targets() -> Set[str]:
+def _collect_all_phony_targets() -> set[str]:
     """Collect all .PHONY targets from root Makefile and makefiles/*.mk.
 
     @purpose  Build complete set of .PHONY targets for the platform
     @output   set of unique target names
     @complexity O(F * L) where F=number of makefiles, L=max lines per file
     """
-    all_targets: Set[str] = set()
+    all_targets: set[str] = set()
 
     # Root Makefile
     root_mk = _PROJECT_ROOT / "Makefile"
@@ -75,7 +71,7 @@ def _collect_all_phony_targets() -> Set[str]:
     return all_targets
 
 
-def _check_recipe_tabs(filepath: pathlib.Path) -> List[Tuple[int, str]]:
+def _check_recipe_tabs(filepath: pathlib.Path) -> list[tuple[int, str]]:
     """Verify every recipe line in a makefile starts with TAB (not spaces).
 
     @purpose  Detect space-indented recipes that break make's tab-sensitive parsing
@@ -83,7 +79,7 @@ def _check_recipe_tabs(filepath: pathlib.Path) -> List[Tuple[int, str]]:
     @output   list of (line_number, first_20_chars) violations
     @complexity O(N) on file lines
     """
-    violations: List[Tuple[int, str]] = []
+    violations: list[tuple[int, str]] = []
     content = filepath.read_text(encoding="utf-8")
     in_target = False
 
@@ -101,10 +97,15 @@ def _check_recipe_tabs(filepath: pathlib.Path) -> List[Tuple[int, str]]:
             continue
 
         # Inside a target, check for recipe-like lines
-        if in_target and stripped and not stripped.startswith("#"):
+        if (
+            in_target
+            and stripped
+            and not stripped.startswith("#")
+            and line.startswith(" ")
+            and not line.startswith("\t")
+        ):
             # Recipe lines must start with TAB, not spaces
-            if line.startswith(" ") and not line.startswith("\t"):
-                violations.append((lineno, line[:80]))
+            violations.append((lineno, line[:80]))
 
     return violations
 
@@ -128,12 +129,15 @@ def _is_legacy_make() -> bool:
     try:
         result = subprocess.run(
             ["make", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         import re as _re
+
         m = _re.search(r"GNU Make (\d+)\.(\d+)", result.stdout)
         if m:
-            major, minor = int(m.group(1)), int(m.group(2))
+            major, _minor = int(m.group(1)), int(m.group(2))
             return major < 4
     except Exception:
         pass
@@ -147,6 +151,7 @@ _LEGACY_MAKE = _is_legacy_make()
 # Tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @pytest.mark.gate
 class TestMakefileIncludeSplit:
     """W4-E4: Makefile include-split validation."""
@@ -158,8 +163,7 @@ class TestMakefileIncludeSplit:
         content = root_mk.read_text(encoding="utf-8")
         line_count = len(content.splitlines())
         assert line_count < 150, (
-            f"Root Makefile is {line_count} lines — must be < 150 (AC-5b). "
-            f"Targets belong in makefiles/*.mk"
+            f"Root Makefile is {line_count} lines — must be < 150 (AC-5b). Targets belong in makefiles/*.mk"
         )
 
     def test_makefiles_directory_exists(self):
@@ -171,8 +175,12 @@ class TestMakefileIncludeSplit:
         mk_names = {f.name for f in mk_files}
 
         expected = {
-            "bootstrap.mk", "deploy.mk", "scaffold.mk",
-            "modules.mk", "ci.mk", "helpers.mk",
+            "bootstrap.mk",
+            "deploy.mk",
+            "scaffold.mk",
+            "modules.mk",
+            "ci.mk",
+            "helpers.mk",
         }
         missing = expected - mk_names
         assert not missing, f"Missing .mk files: {missing}"
@@ -209,8 +217,8 @@ class TestMakefileIncludeSplit:
         due to known GNU Make 3.81 issues on macOS.
         """
         targets = _collect_all_phony_targets()
-        failed: List[str] = []
-        skipped_complex: List[str] = []
+        failed: list[str] = []
+        skipped_complex: list[str] = []
 
         for target in sorted(targets):
             if _is_complex_target(target):
@@ -237,7 +245,8 @@ class TestMakefileIncludeSplit:
 
             result = subprocess.run(
                 args,
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 cwd=str(_PROJECT_ROOT),
                 timeout=10,
             )
@@ -247,10 +256,7 @@ class TestMakefileIncludeSplit:
         if skipped_complex:
             print(f"\n  Skipped complex targets (GNU Make 3.81 -n issue): {skipped_complex}")
 
-        assert not failed, (
-            f"make -n failed for {len(failed)} target(s):\n  " +
-            "\n  ".join(failed)
-        )
+        assert not failed, f"make -n failed for {len(failed)} target(s):\n  " + "\n  ".join(failed)
 
     def test_make_n_for_complex_targets(self):
         """make -n for test/gate targets with explicit MARKER/MODE.
@@ -262,9 +268,9 @@ class TestMakefileIncludeSplit:
         """
         if _LEGACY_MAKE:
             pytest.skip(
-                f"GNU Make < 4.0 detected — `make -n` with $(eval ...) "
-                f"incorrectly executes recipes on this platform. "
-                f"Complex targets (test, gate) verified on CI (Ubuntu, GNU Make 4.x)."
+                "GNU Make < 4.0 detected — `make -n` with $(eval ...) "
+                "incorrectly executes recipes on this platform. "
+                "Complex targets (test, gate) verified on CI (Ubuntu, GNU Make 4.x)."
             )
 
         complex_targets = {
@@ -273,10 +279,11 @@ class TestMakefileIncludeSplit:
         }
 
         for target, extra_args in complex_targets.items():
-            args = ["make", "-n", target] + extra_args
+            args = ["make", "-n", target, *extra_args]
             result = subprocess.run(
                 args,
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 cwd=str(_PROJECT_ROOT),
                 timeout=30,
             )
@@ -287,13 +294,11 @@ class TestMakefileIncludeSplit:
                 f"stdout: {result.stdout[:500]}\n"
                 f"stderr: {result.stderr[:500]}"
             )
-            assert recipe_start in result.stdout, (
-                f"make -n {target} recipe start not found in output"
-            )
+            assert recipe_start in result.stdout, f"make -n {target} recipe start not found in output"
 
     def test_recipe_lines_use_tabs(self):
         """AC-5d: All recipe lines in makefiles/*.mk must start with TAB."""
-        all_violations: List[str] = []
+        all_violations: list[str] = []
 
         # Check root Makefile
         root_mk = _PROJECT_ROOT / "Makefile"
@@ -328,14 +333,10 @@ class TestMakefileIncludeSplit:
         ]
 
         for inc in expected_includes:
-            assert f"include {inc}" in content, (
-                f"Root Makefile missing: include {inc}"
-            )
+            assert f"include {inc}" in content, f"Root Makefile missing: include {inc}"
 
     def test_dot_default_goal_is_help(self):
         """Root Makefile must set .DEFAULT_GOAL := help."""
         root_mk = _PROJECT_ROOT / "Makefile"
         content = root_mk.read_text(encoding="utf-8")
-        assert ".DEFAULT_GOAL := help" in content, (
-            "Root Makefile must set .DEFAULT_GOAL := help"
-        )
+        assert ".DEFAULT_GOAL := help" in content, "Root Makefile must set .DEFAULT_GOAL := help"

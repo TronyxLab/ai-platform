@@ -5,7 +5,7 @@
 ## @scope    Only used in test fixtures. Never used in production.
 ## @invariants
 ##   - container_name: loki-test, promtail-test
-##   - restart: unless-stopped для всех контейнеров (--wait совместимость)
+##   - restart: "no" для всех контейнеров (тестовые контейнеры не auto-рестартуются)
 ##   - Loki port: 127.0.0.1:13100:3100
 ##   - Promtail no ports exposed (internal collector)
 ## @rationale Стандартный test-overlay контракт (DevPlan 04 DD2).

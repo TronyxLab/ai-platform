@@ -55,7 +55,15 @@ def _run_bash_test(script: str, tmp_path) -> subprocess.CompletedProcess:
 ##   · Remove if: converge.sh exit logic is fundamentally rewritten
 @pytest.mark.gate
 def test_gate_converge_exit_semantics(tmp_path):
-    """Gate: converge.sh must define CONVERGE_HAS_ERRORS and CONVERGE_HAS_WARNINGS globals."""
+    """Gate: converge.sh must delegate to reconciler.py and use $recon_rc for exit decisions.
+
+    ## @purpose  After W4-E3 refactoring, converge.sh became a thin shell facade that
+    ##            delegates all convergence logic to reconciler.py. The old CONVERGE_HAS_ERRORS
+    ##            and CONVERGE_HAS_WARNINGS globals were removed — exit codes now come from
+    ##            reconciler.py via $recon_rc variable.
+    ## @rationale Test updated to match W4-E3 converge.sh structure. See MODULE_CONTRACT in
+    ##            converge.sh for the full refactoring rationale.
+    """
     converge_path = "core/internal/bootstrap/converge.sh"
     script = f"""
     set -euo pipefail
@@ -64,23 +72,24 @@ def test_gate_converge_exit_semantics(tmp_path):
         echo "[IMP:10][gate] FATAL: converge.sh not found at $CONVERGE" >&2
         exit 1
     fi
-    if grep -q "CONVERGE_HAS_ERRORS=false" "$CONVERGE"; then
-        echo "[IMP:9][gate] OK: CONVERGE_HAS_ERRORS flag defined" >&2
+    # W4-E3: converge.sh delegates to reconciler.py — verify the recon_rc pattern
+    if grep -q "recon_rc=0" "$CONVERGE"; then
+        echo "[IMP:9][gate] OK: recon_rc initialized" >&2
     else
-        echo "[IMP:10][gate] FAIL: CONVERGE_HAS_ERRORS flag not found in converge.sh" >&2
+        echo "[IMP:10][gate] FAIL: recon_rc initialization not found in converge.sh" >&2
         exit 1
     fi
-    if grep -q "CONVERGE_HAS_WARNINGS=false" "$CONVERGE"; then
-        echo "[IMP:9][gate] OK: CONVERGE_HAS_WARNINGS flag defined" >&2
+    if grep -q "reconciler.py" "$CONVERGE"; then
+        echo "[IMP:9][gate] OK: converge.sh dispatches to reconciler.py" >&2
     else
-        echo "[IMP:10][gate] FAIL: CONVERGE_HAS_WARNINGS flag not found in converge.sh" >&2
+        echo "[IMP:10][gate] FAIL: reconciler.py dispatch not found in converge.sh" >&2
         exit 1
     fi
-    # Verify the final main() uses the new flags for exit
-    if grep -q '$CONVERGE_HAS_ERRORS; then' "$CONVERGE"; then
-        echo "[IMP:9][gate] OK: main() uses CONVERGE_HAS_ERRORS for exit decision" >&2
+    # Verify the final main() uses recon_rc for exit
+    if grep -q 'exit $recon_rc' "$CONVERGE"; then
+        echo "[IMP:9][gate] OK: main() uses \\$recon_rc for exit decision" >&2
     else
-        echo "[IMP:10][gate] FAIL: main() does not use CONVERGE_HAS_ERRORS for exit" >&2
+        echo "[IMP:10][gate] FAIL: main() does not use \\$recon_rc for exit" >&2
         exit 1
     fi
     """

@@ -29,6 +29,26 @@ from _conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
+# region YAML_LOADER_OVERRIDE
+# ⚠️ TRAP[DECISION] · 2026-07-22 · LOW · Register !override tag for Compose YAML parsing
+# · Rejected: docker compose config (requires Docker daemon, breaks static-only invariant)
+# · Reason: !override is compose-extension for merge-override; treating value as-is
+#   preserves semantics for static analysis purposes.
+# · Rev: if compose introduces new tags → extend constructor
+## @purpose — Custom SafeLoader for docker-compose files using !override merge-override tags
+_ComposeLoader = type("_ComposeLoader", (yaml.SafeLoader,), {})
+
+
+def _compose_override_constructor(loader: yaml.Loader, node: yaml.Node) -> object:
+    """Construct !override tagged value — compose merge-override, treat as-is."""
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return loader.construct_sequence(node)
+
+
+_ComposeLoader.add_constructor("!override", _compose_override_constructor)
+# endregion YAML_LOADER_OVERRIDE
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
 LOGGING_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "logging")
@@ -327,7 +347,7 @@ def test_docker_compose_test_overlay(caplog) -> None:
     assert os.path.exists(COMPOSE_TEST), f"compose test overlay not found: {COMPOSE_TEST}"
 
     with open(COMPOSE_TEST) as f:
-        data = yaml.safe_load(f)
+        data = yaml.load(f, Loader=_ComposeLoader)
 
     services = data.get("services", {})
 
@@ -337,9 +357,7 @@ def test_docker_compose_test_overlay(caplog) -> None:
     assert loki_svc.get("container_name") == "loki-test", (
         f"loki container_name={loki_svc.get('container_name')}, expected loki-test"
     )
-    assert loki_svc.get("restart") == "unless-stopped", (
-        f"loki restart={loki_svc.get('restart')}, expected 'unless-stopped'"
-    )
+    assert loki_svc.get("restart") == "no", f"loki restart={loki_svc.get('restart')}, expected 'no'"
     ports = loki_svc.get("ports", [])
     assert "127.0.0.1:13100:3100" in ports, f"loki ports={ports}, expected to contain 127.0.0.1:13100:3100"
 
@@ -349,9 +367,7 @@ def test_docker_compose_test_overlay(caplog) -> None:
     assert promtail_svc.get("container_name") == "promtail-test", (
         f"promtail container_name={promtail_svc.get('container_name')}, expected promtail-test"
     )
-    assert promtail_svc.get("restart") == "unless-stopped", (
-        f"promtail restart={promtail_svc.get('restart')}, expected 'unless-stopped'"
-    )
+    assert promtail_svc.get("restart") == "no", f"promtail restart={promtail_svc.get('restart')}, expected 'no'"
 
     logger.info(
         "[IMP:8][test_test_overlay] loki container=%s port=%s restart=%s",
