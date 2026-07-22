@@ -48,7 +48,17 @@ def _get_canonical_profiles() -> str:
     )
     if result.returncode != 0:
         pytest.fail(f"make _get_all_profiles failed (exit {result.returncode}): {result.stderr.strip()}")
-    return result.stdout.strip()
+    # GNU Make ≥4.x outputs make[1]: Entering/Leaving directory messages to stdout.
+    # Strip these to get only the profile string.
+    lines = result.stdout.strip().splitlines()
+    profile_lines = [
+        line
+        for line in lines
+        if not line.startswith("make[")
+        and "Entering directory" not in line
+        and "Leaving directory" not in line
+    ]
+    return "".join(profile_lines).strip()
 
 
 def _extract_makefile_value(filepath: Path) -> str:

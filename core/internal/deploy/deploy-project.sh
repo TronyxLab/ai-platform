@@ -405,6 +405,25 @@ parse_ssh_command() {
     fi
 
     # ═══════════════════════════════════════════════════════════════
+    # Strip leading env var assignments (VAR=value) from SSH_ORIGINAL_COMMAND.
+    # When ssh sends "VAR=value command args", the forced-command captures
+    # the full string including env vars in SSH_ORIGINAL_COMMAND, but does NOT
+    # set them in the environment. We strip them here before further parsing.
+    # ═══════════════════════════════════════════════════════════════
+    # ⚠️ TRAP[BUG] · 2026-07-22 · raw="PLATFORM_DEPLOY_DIRECT=1 /opt/.../deploy.sh tronyx-site sha" → PROJECT=PLATFORM_DEPLOY_DIRECT=1
+    # Root cause: env var assignment prefix not stripped before PROJECT/REF extraction.
+    # Fix: loop strips leading VAR=value tokens; DEPLOY-DIRECT detected from original string.
+    while [[ "$raw" =~ ^[A-Z_][A-Z0-9_]*= ]]; do
+        raw="${raw#* }"
+        raw="$(echo "$raw" | xargs)"
+    done
+    # Detect DEPLOY-DIRECT from original command string (before env var stripping)
+    if [[ "${SSH_ORIGINAL_COMMAND:-}" == *"PLATFORM_DEPLOY_DIRECT=1"* ]]; then
+        PLATFORM_DEPLOY_DIRECT=1
+        log_imp 8 "args" "Detected DEPLOY-DIRECT from SSH_ORIGINAL_COMMAND"
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
     # Strip script path prefix (appleboy/ssh-action sends full path,
     # raw ssh sends just the verb). Both flow through the same forced
     # command → deploy.sh entrypoint → exec deploy-project.sh here,
