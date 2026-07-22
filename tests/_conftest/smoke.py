@@ -96,6 +96,7 @@ SMOKE_ENV: dict[str, str] = {
     "POSTGRES_DB": "platform",
     "HERMES_DASHBOARD_USERNAME": "admin",
     "HERMES_DASHBOARD_PASSWORD": "testpass",
+    "API_SERVER_KEY": "sk-test-api-server-key",
     "LITELLM_MASTER_KEY": "sk-test-key",
     "OPENAI_API_KEY": "sk-test-openai-key",
     "NEXTAUTH_SECRET": "sk-test-nextauth-secret",

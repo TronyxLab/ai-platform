@@ -56,8 +56,6 @@ def _hermes_credentials() -> tuple[str, str]:
     return username, password
 
 
-API_SERVER_KEY = os.environ.get("API_SERVER_KEY")
-
 # Test ports — shifted (1XXXX) for test overlay coexistence with production
 _HERMES_DASHBOARD_TEST_PORT = int(os.environ.get("HERMES_DASHBOARD_TEST_PORT", "19119"))
 _HERMES_DESKTOP_TEST_PORT = int(os.environ.get("HERMES_DESKTOP_TEST_PORT", "18642"))
@@ -175,7 +173,8 @@ def test_hermes_api_completions(caplog, platform_services) -> None:
     if not _module_container_running(platform_services, "hermes-agent", "hermes-agent-test", logger):
         pytest.fail("hermes-agent-test did not start — smoke tests require running containers")
 
-    if not API_SERVER_KEY:
+    api_server_key = os.environ.get("API_SERVER_KEY")
+    if not api_server_key:
         pytest.skip("API_SERVER_KEY not set — cannot authenticate")
 
     api_port = _HERMES_DESKTOP_TEST_PORT
@@ -188,7 +187,7 @@ def test_hermes_api_completions(caplog, platform_services) -> None:
     }
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_SERVER_KEY}",
+        "Authorization": f"Bearer {api_server_key}",
     }
 
     logger.info("[IMP:7][test_hermes_api_completions] Sending chat to %s ...", url)

@@ -22,7 +22,6 @@
 import logging
 import os
 import subprocess
-import sys
 
 import pytest
 
@@ -392,10 +391,6 @@ def test_nginx_https_responds(nginx_compose, caplog) -> None:
 # region FUNC_test_nginx_tls_cert_san
 @pytest.mark.smoke
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="macOS: Linux-parity in CI — cert/bind-mount not supported on Docker Desktop",
-)
 def test_nginx_tls_cert_san(nginx_compose, caplog) -> None:
     """Verify nginx TLS certificate contains expected SAN hostnames (mkcert dev cert).
 
@@ -489,10 +484,6 @@ def test_nginx_vhost_routing(nginx_compose, caplog) -> None:
 # region FUNC_test_nginx_error_page
 @pytest.mark.smoke
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="macOS: Linux-parity in CI — cert/bind-mount not supported on Docker Desktop",
-)
 def test_nginx_error_page(nginx_compose, caplog) -> None:
     """Verify nginx serves styled error pages (404.html) from mounted error-pages dir.
 

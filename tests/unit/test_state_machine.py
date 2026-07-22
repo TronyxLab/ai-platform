@@ -375,8 +375,12 @@ def test_get_current_step_fresh(caplog, machine):
 def test_get_current_step_after_partial_run(caplog, machine):
     """get_current_step should return first pending step."""
     machine.setup_state(mode="init", node="test")
+    # start_step() advances current_step — required for get_current_step() to find next
+    machine.start_step(1)
     machine.complete_step(1, hash_val="a")
+    machine.start_step(2)
     machine.complete_step(2, hash_val="b")
+    machine.start_step(3)
     machine.complete_step(3, hash_val="c")
     next_step = machine.get_current_step()
     assert next_step == 4
@@ -393,6 +397,7 @@ def test_get_current_step_all_done(caplog, machine):
     steps = sm.INIT_STEPS
     machine.setup_state(mode="init", node="test")
     for i in range(1, len(steps) + 1):
+        machine.start_step(i)
         machine.complete_step(i)
     next_step = machine.get_current_step()
     assert next_step is None
@@ -407,9 +412,13 @@ def test_get_current_step_all_done(caplog, machine):
 def test_get_current_step_returns_failed_step(caplog, machine):
     """get_current_step should return failed step for retry."""
     machine.setup_state(mode="init", node="test")
+    machine.start_step(1)
     machine.complete_step(1)
+    machine.start_step(2)
     machine.complete_step(2)
+    machine.start_step(3)
     machine.complete_step(3)
+    machine.start_step(4)
     machine.fail_step(4, "network error")
     next_step = machine.get_current_step()
     assert next_step == 4
@@ -431,9 +440,27 @@ def test_get_current_step_returns_failed_step(caplog, machine):
 @ldd_trajectory
 def test_init_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
     """Init mode should run all steps without error (mocked subprocess)."""
+    # Root check: state machine requires euid=0 for ssh_access step.
+    # Tests run as non-root (macOS dev), so mock root.
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    # Mock os.makedirs — Linux paths (/home, /opt) don't exist on macOS.
+    # State machine tries to create /home/<user>/.ssh and /opt/projects.
+    monkeypatch.setattr(os, "makedirs", lambda *args, **kwargs: None)
+    # Clear SSH key env vars — _add_ssh_key tries to write to /home/<user>/.ssh/authorized_keys
+    # which doesn't exist on macOS. Without keys, _add_ssh_key is skipped.
+    monkeypatch.setenv("PLATFORM_OWNER_KEY", "")
+    monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "")
     # Override TOR_ENABLED for test
     monkeypatch.setenv("TOR_ENABLED", "false")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
+    # verify_core step (step 8) requires node-lifecycle.sh marker to exist.
+    core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
+    core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
+    # verify_node_configs + read_node_yaml steps require node.yaml.
+    node_yaml_path = Path(state_file).parent / "node.yaml"
+    node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
 
     m = sm.StateMachine(state_file_path=str(state_file))
     m.core_dir = str(Path(state_file).parent)
@@ -485,6 +512,11 @@ def test_init_step_ssh_access_no_root(caplog, machine, monkeypatch):
 def test_update_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
     """Update mode should run all steps without error (mocked subprocess)."""
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
+    # verify_core step requires node-lifecycle.sh marker to exist.
+    # Create minimal directory structure for core verification.
+    core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
+    core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
 
     m = sm.StateMachine(state_file_path=str(state_file))
     m.core_dir = str(Path(state_file).parent)
@@ -563,8 +595,11 @@ def test_force_reset(caplog, state_file):
     """reset() should clear state and remove state file."""
     m = sm.StateMachine(state_file_path=str(state_file))
     m.setup_state(mode="init", node="test")
+    m.start_step(1)
     m.complete_step(1)
+    m.start_step(2)
     m.complete_step(2)
+    m.start_step(3)
     m.complete_step(3)
     assert m.state.current_step == 3
 
@@ -711,8 +746,26 @@ def test_tor_conditional_skip(caplog, machine, monkeypatch):
 @ldd_trajectory
 def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
     """tor_proxy step should run when TOR_ENABLED=true."""
+    # Root check: state machine requires euid=0 for ssh_access step.
+    # Tests run as non-root (macOS dev), so mock root.
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    # Mock os.makedirs — Linux paths (/home, /opt) don't exist on macOS.
+    # State machine tries to create /home/<user>/.ssh and /opt/projects.
+    monkeypatch.setattr(os, "makedirs", lambda *args, **kwargs: None)
+    # Clear SSH key env vars — _add_ssh_key tries to write to /home/<user>/.ssh/authorized_keys
+    # which doesn't exist on macOS. Without keys, _add_ssh_key is skipped.
+    monkeypatch.setenv("PLATFORM_OWNER_KEY", "")
+    monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "")
     monkeypatch.setenv("TOR_ENABLED", "true")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
+    # verify_core step (step 8) requires node-lifecycle.sh marker to exist.
+    core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
+    core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
+    # verify_node_configs + read_node_yaml steps require node.yaml.
+    node_yaml_path = Path(state_file).parent / "node.yaml"
+    node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
 
     m = sm.StateMachine(state_file_path=str(state_file))
     m.core_dir = str(Path(state_file).parent)

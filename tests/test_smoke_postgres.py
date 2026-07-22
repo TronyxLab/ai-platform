@@ -63,6 +63,10 @@ CONTAINER_POSTGRES = "postgres-test"
 CONTAINER_PGBOUNCER = "pgbouncer-test"
 COMPOSE_DIR = os.path.join(os.path.dirname(__file__), "..", "core", "modules", "postgres")
 
+# Module-level flag: True if containers from platform_services (ai-platform-test project)
+# are reused instead of starting a new compose stack.
+_REUSE_CONTAINERS = False
+
 # ⚠️ TRAP[BUG] · 2026-07-21 · MED · Test compose (test.yml) overrides the base network
 # to test-shared-db-net. The smoke test must pre-create this network so Docker Compose
 # can attach to it as external: true. Previously created smoke-postgres-db-net which
@@ -140,9 +144,11 @@ def _docker_guard() -> None:
         if inspect_result.returncode == 0:
             project = inspect_result.stdout.strip()
             if project and project != COMPOSE_PROJECT_SMOKE:
-                pytest.skip(
-                    f"Foreign container '{container_name}' belongs to project "
-                    f"'{project}', not '{COMPOSE_PROJECT_SMOKE}' — skip smoke"
+                global _REUSE_CONTAINERS
+                _REUSE_CONTAINERS = True
+                logger.info(
+                    "[IMP:8][_docker_guard] Container '%s' belongs to project '%s' — will reuse from platform_services",
+                    container_name, project,
                 )
     logger.info("[IMP:9][_docker_guard] No foreign containers detected")
 
@@ -173,6 +179,51 @@ def postgres_up() -> None:
 
     # ── Ensure volume bind-mount directories ────────────────────────────
     _ensure_volume_dirs(_VOLUME_BIND_DIRS)
+
+    # ── Reuse containers from platform_services if available ───────────
+    # When platform_services (session-scoped) has already started postgres-test
+    # and pgbouncer-test under project ai-platform-test, reuse them instead
+    # of starting a duplicate compose stack. Ports and container names are
+    # identical — no need for a second stack.
+    if _REUSE_CONTAINERS:
+        logger.info(
+            "[IMP:8][postgres_up] Reusing containers from platform_services — skipping compose lifecycle"
+        )
+        # Health poll parameters (same as normal path below)
+        _max_retries = 20
+        _retry_interval = 3
+        for attempt in range(1, _max_retries + 1):
+            statuses = {}
+            for container_name in (CONTAINER_POSTGRES, CONTAINER_PGBOUNCER):
+                health = subprocess.run(
+                    ["docker", "inspect", "--format", "{{.State.Health.Status}}", container_name],
+                    capture_output=True, text=True, timeout=10,
+                )
+                statuses[container_name] = health.stdout.strip()
+            if all(s == "healthy" for s in statuses.values()):
+                logger.info(
+                    "[IMP:9][postgres_up] Reused containers healthy (attempt %d): %s",
+                    attempt, statuses,
+                )
+                break
+            logger.info(
+                "[IMP:7][postgres_up] Waiting for reused containers (attempt %d/%d): %s",
+                attempt, _max_retries, statuses,
+            )
+            time.sleep(_retry_interval)
+        else:
+            ps_result = subprocess.run(
+                ["docker", "ps", "-a", "--filter", f"name={COMPOSE_PROJECT_SMOKE}",
+                 "--format", "{{.Names}} {{.Status}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            pytest.fail(
+                f"Reused containers NOT healthy after {_max_retries * _retry_interval}s\n"
+                f"{ps_result.stdout.strip()}"
+            )
+        yield
+        # No teardown — containers belong to platform_services (session-scoped)
+        return
 
     # ── Ensure external Docker networks ─────────────────────────────────
     ensure_external_networks(_EXTERNAL_NETWORKS)
