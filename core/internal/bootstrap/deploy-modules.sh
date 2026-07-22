@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: deploy-modules docker system sudoers orphan context-overlay python-delegation thin-facade
-# STRUCTURE: ▶ argparse → ⚡ validate → ◇ provision → ◇ spool_dirs → ▶ deploy/*.py per-module → ⊕ severity exit → ⎋ {0,1,2}
+# STRUCTURE: ▶ argparse → ⚡ validate → ◇ provision → ◇ spool_dirs(verify-only) → ▶ deploy/*.py per-module → ⊕ severity exit → ⎋ {0,1,2}
 # region MODULE_CONTRACT
 ## @purpose  Thin shell facade — delegates all module deploy logic to Python modules in deploy/
 ## @scope    Called from node-lifecycle.sh --mode init/update. Arg parsing + env setup + delegation + exit
 ## @location core/internal/bootstrap/deploy-modules.sh — W4-E1 Strangler-Fig decomposition (1664→<100 LOC)
-## @invariants Python handles: secrets, metadata, docker deploy, sudoers, orphans, context overlay. Shell handles: arg parsing, root check, NODE_YAML validation, provisioner, spool dirs, docker login, system deploy, exit aggregation.
+## @invariants Python handles: secrets, metadata, docker deploy, sudoers, orphans, context overlay, spool validation. Shell handles: arg parsing, root check, NODE_YAML validation, provisioner, docker login, system deploy, exit aggregation.
 ## @rationale W4-E1 extraction. Each Python module has unit tests in tests/unit/.
 # endregion MODULE_CONTRACT
 
@@ -39,6 +39,9 @@ fi
 # ── Docker login, context overlay ──
 docker_login; ghcr_login
 python3 "${SCRIPT_DIR}/deploy/context_overlay.py" --action ensure --node-yaml "$NODE_YAML" || true
+
+# ── Spool dirs verify (verify-only runtime check — restored from W4-E1 extraction) ──
+python3 "${SCRIPT_DIR}/deploy/spool_validator.py" --action verify --modules-dir "${PATHS_MODULES_DIR}" || true
 
 # ── Validate secrets ──
 python3 "${SCRIPT_DIR}/deploy/secrets_validator.py" --action validate-charsets \

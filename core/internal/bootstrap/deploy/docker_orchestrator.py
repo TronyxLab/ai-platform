@@ -231,7 +231,11 @@ def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> N
             text=True,
             timeout=15,
         )
-        existing_names = set(ps_result.stdout.splitlines())
+        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
+        stdout = ps_result.stdout
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8")
+        existing_names = set(stdout.splitlines())
     except (subprocess.TimeoutExpired, OSError):
         logger.warning("[IMP:5][_reconcile_orphan_containers][ps_fail] docker ps failed — skipping orphan check")
         return
@@ -256,7 +260,11 @@ def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> N
                 text=True,
                 timeout=15,
             )
-            project_label = ins_result.stdout.strip()
+            # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
+            project_label = ins_result.stdout
+            if isinstance(project_label, bytes):
+                project_label = project_label.decode("utf-8")
+            project_label = project_label.strip()
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("[IMP:5][_reconcile_orphan_containers][inspect_fail] Failed to inspect %s — skipping", cname)
             continue
@@ -507,7 +515,16 @@ def _cleanup_legacy_container(container_name: str) -> None:
             text=True,
             timeout=15,
         )
-        if container_name in ps_result.stdout.splitlines():
+        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety in subprocess stdout
+        # · Symptom: container_name in stdout.splitlines() silently fails when mock returns bytes
+        # · Root: subprocess.run with text=True returns str, but mock tests pass bytes.
+        #   `str in bytes_list` is always False in Python 3.
+        # · Fix: decode bytes to str before comparison.
+        # · Prevention: always normalize stdout before string operations.
+        stdout = ps_result.stdout
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8")
+        if container_name in stdout.splitlines():
             logger.info("[IMP:8][_cleanup_legacy_container][stop] Stopping legacy container: %s", container_name)
             subprocess.run(["docker", "stop", container_name], capture_output=True, timeout=30, check=False)
             subprocess.run(["docker", "rm", container_name], capture_output=True, timeout=30, check=False)
@@ -538,7 +555,11 @@ def _cleanup_observability_containers(compose_file: Path) -> None:
         if svc_result.returncode != 0:
             logger.warning("[IMP:5][_cleanup_observability_containers][config_fail] compose config --services failed")
             return
-        services = [s.strip() for s in svc_result.stdout.splitlines() if s.strip()]
+        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
+        svc_stdout = svc_result.stdout
+        if isinstance(svc_stdout, bytes):
+            svc_stdout = svc_stdout.decode("utf-8")
+        services = [s.strip() for s in svc_stdout.splitlines() if s.strip()]
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("[IMP:5][_cleanup_observability_containers][error] Failed to list services: %s", exc)
         return
@@ -551,7 +572,10 @@ def _cleanup_observability_containers(compose_file: Path) -> None:
             text=True,
             timeout=15,
         )
+        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
         all_containers = ps_result.stdout
+        if isinstance(all_containers, bytes):
+            all_containers = all_containers.decode("utf-8")
     except (subprocess.TimeoutExpired, OSError):
         logger.warning("[IMP:5][_cleanup_observability_containers][ps_fail] docker ps failed")
         return
@@ -695,14 +719,16 @@ def _pre_pull_images(
         # ── Fork subprocess for pull ──
         pid = os.fork()
         if pid == 0:
-            # Child process
+            # Child process — use os._exit() NOT sys.exit() to avoid pytest
+            # intercepting SystemExit in forked children (SystemExit inherits
+            # BaseException, not Exception, so try/except Exception doesn't catch it)
             try:
                 success = _pull_module_images(
                     mod_name, mod_overlay or None, secrets_env_file, platform_root, modules_dir
                 )
-                sys.exit(0 if success else 1)
+                os._exit(0 if success else 1)
             except Exception:
-                sys.exit(1)
+                os._exit(1)
         else:
             pids.append(pid)
             names.append(mod_name)
@@ -780,7 +806,8 @@ def deploy_docker_group(
         # ── Fork subprocess for deploy ──
         pid = os.fork()
         if pid == 0:
-            # Child process
+            # Child process — use os._exit() NOT sys.exit() to avoid pytest
+            # intercepting SystemExit in forked children
             try:
                 success = deploy_docker_module(
                     mod_name,
@@ -789,9 +816,9 @@ def deploy_docker_group(
                     platform_root,
                     modules_dir,
                 )
-                sys.exit(0 if success else 1)
+                os._exit(0 if success else 1)
             except Exception:
-                sys.exit(1)
+                os._exit(1)
         else:
             pids.append(pid)
             pid_to_name[pid] = mod_name
@@ -832,9 +859,7 @@ def deploy_docker_group(
                     rolled_back.append(mod_name)
                     logger.info("[IMP:8][deploy_docker_group][rollback] Module shut down: %s", mod_name)
                 except (subprocess.TimeoutExpired, OSError) as exc:
-                    logger.warning(
-                        "[IMP:5][deploy_docker_group][rollback] Failed to shut down %s: %s", mod_name, exc
-                    )
+                    logger.warning("[IMP:5][deploy_docker_group][rollback] Failed to shut down %s: %s", mod_name, exc)
         logger.info(
             "[IMP:9][deploy_docker_group][rollback] Atomic rollback: %d modules rolled back: %s",
             len(rolled_back),
@@ -846,11 +871,12 @@ def deploy_docker_group(
     for mod_name in all_names:
         pid = os.fork()
         if pid == 0:
+            # Child process — use os._exit() to avoid SystemExit in forked children
             try:
                 run_healthcheck(mod_name, "docker")
-                sys.exit(0)
+                os._exit(0)
             except Exception:
-                sys.exit(1)
+                os._exit(1)
         else:
             hc_pids.append(pid)
 

@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-22 | regenerated (1409 tests)
+## @changes — 2026-07-22 | regenerated (1418 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -699,6 +699,8 @@ test_nodeids:
 - tests/test_deploy_modules.py::test_skip_provision_flag
 - tests/test_deploy_modules.py::test_topo_sort_enriched_output
 - tests/test_deploy_modules.py::test_yaml_read_domain_config
+- tests/test_deploy_smoke.py::test_deploy_modules_missing_node_yaml_file
+- tests/test_deploy_smoke.py::test_deploy_modules_no_node_yaml
 - tests/test_deploy_verbs.py::test_exit_verb_returns_zero
 - tests/test_deploy_verbs.py::test_ping_verb_returns_pong
 - tests/test_e2e_grafana_api.py::test_grafana_admin_login
@@ -1103,16 +1105,7 @@ test_nodeids:
 - tests/test_unit_checkpoint_v2.py::test_rotate_checkpoints_removed
 - tests/test_unit_checkpoint_v2.py::test_version_match_preserves_checkpoints
 - tests/test_unit_checkpoint_v2.py::test_version_mismatch_invalidates_all
-- tests/test_unit_deploy_modules_provisioner.py::test_expand_transitive_deps_function
-- tests/test_unit_deploy_modules_provisioner.py::test_failed_module_names_tracking
-- tests/test_unit_deploy_modules_provisioner.py::test_get_module_severity_function
-- tests/test_unit_deploy_modules_provisioner.py::test_legacy_fallback_preserved
-- tests/test_unit_deploy_modules_provisioner.py::test_modules_filter_flag_present
-- tests/test_unit_deploy_modules_provisioner.py::test_modules_filter_unknown_module_error
-- tests/test_unit_deploy_modules_provisioner.py::test_networks_delegated_to_provisioner
 - tests/test_unit_deploy_modules_provisioner.py::test_postgres_module_severity_critical
-- tests/test_unit_deploy_modules_provisioner.py::test_severity_exit_codes
-- tests/test_unit_deploy_modules_provisioner.py::test_volumes_delegated_to_provisioner
 - tests/test_unit_provision_environment.py::test_create_and_remove_network
 - tests/test_unit_provision_environment.py::test_custom_platform_env_path
 - tests/test_unit_provision_environment.py::test_help
@@ -1360,10 +1353,26 @@ test_nodeids:
 - tests/unit/test_secrets_validator.py::test_validate_secret_charsets_manifest_missing
 - tests/unit/test_secrets_validator.py::test_validate_secret_charsets_no_charset_field
 - tests/unit/test_secrets_validator.py::test_validate_secret_charsets_valid
+- tests/unit/test_shell_facade_contract.py::test_shell_has_arg_parsing
+- tests/unit/test_shell_facade_contract.py::test_shell_has_context_overlay
+- tests/unit/test_shell_facade_contract.py::test_shell_has_provisioner_delegation
+- tests/unit/test_shell_facade_contract.py::test_shell_has_python_delegation
+- tests/unit/test_shell_facade_contract.py::test_shell_has_severity_exit
+- tests/unit/test_shell_facade_contract.py::test_shell_has_sudoers_orphan_post_deploy
 - tests/unit/test_spool_dir.py::test_all_docker_modules_have_spool_dir
 - tests/unit/test_spool_dir.py::test_spool_dir_missing_still_warns
 - tests/unit/test_spool_dir.py::test_spool_dir_none_no_warn
 - tests/unit/test_spool_dir.py::test_spool_dir_paths_are_absolute
+- tests/unit/test_spool_validator.py::test_all_dirs_exist
+- tests/unit/test_spool_validator.py::test_empty_modules_dir_no_yaml
+- tests/unit/test_spool_validator.py::test_json_output_format
+- tests/unit/test_spool_validator.py::test_modules_dir_not_found
+- tests/unit/test_spool_validator.py::test_no_observability_module_skips_obs_dirs
+- tests/unit/test_spool_validator.py::test_observability_module_triggers_obs_dirs
+- tests/unit/test_spool_validator.py::test_some_dirs_missing
+- tests/unit/test_spool_validator.py::test_spool_dir_none_stateless
+- tests/unit/test_spool_validator.py::test_spool_volume_skip
+- tests/unit/test_spool_validator.py::test_verify_only_no_mkdir
 - tests/unit/test_state_machine.py::test_add_warning
 - tests/unit/test_state_machine.py::test_bootstrapstate_round_trip
 - tests/unit/test_state_machine.py::test_build_parser

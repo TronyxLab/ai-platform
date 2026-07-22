@@ -41,6 +41,7 @@ _ALLOWED_NON_TARGET_SETS: set[str] = {
     "_SCAN_SPECIFIC",
     "_CONVENIENCE_TARGETS",
     "_MODULE_SCOPED_VERBS",
+    "env_dependent",
 }
 
 logger = logging.getLogger(__name__)

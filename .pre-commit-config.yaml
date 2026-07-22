@@ -229,7 +229,7 @@ repos:
         additional_dependencies: ["bandit==1.9.4"]
         types: [python]
         stages: [pre-commit]
-        args: ["--skip", "B101"]
+        args: ["--skip", "B101", "--severity-level", "medium"]
         exclude: ^tests/|^.venv/|^templates/|^core/modules/status-page/app\.py$
 
       - id: commit-msg

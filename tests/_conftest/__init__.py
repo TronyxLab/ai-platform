@@ -38,11 +38,9 @@ from _conftest.e2e import (  # noqa: F401
 )
 
 # ── infra ─────────────────────────────────────────────────────────────
-from _conftest.infra import (  # noqa: F401
-    platform_ports,
-    test_infra,
-)
-
+# DevPlan 041 W2: new _conftest/infra.py replaces hardcoded container names/ports.
+# No public (non-underscore) re-exports currently needed — infra singleton
+# is imported directly as: from _conftest.infra import infra
 # ── ldd ───────────────────────────────────────────────────────────────
 from _conftest.ldd import (  # noqa: F401
     ldd_trajectory,
@@ -63,6 +61,12 @@ from _conftest.predeploy import (  # noqa: F401
     platform_networks_list,
     platform_port_mappings_dict,
     project_compose_files,
+)
+
+# ── reuse ─────────────────────────────────────────────────────────────
+from _conftest.reuse import (  # noqa: F401
+    check_foreign_containers,
+    wait_for_containers_healthy,
 )
 
 # ── secrets ───────────────────────────────────────────────────────────
@@ -96,8 +100,18 @@ from _conftest.smoke import (  # noqa: F401
     platform_services,
 )
 
+# ── state_reset ───────────────────────────────────────────────────────
+from _conftest.state_reset import (  # noqa: F401
+    restart_service,
+)
+
 # ── utilities ─────────────────────────────────────────────────────────
 from _conftest.utilities import (  # noqa: F401
     assert_ldd_stderr,
     source_and_run,
+)
+
+# ── wave_pipeline ─────────────────────────────────────────────────────
+from _conftest.wave_pipeline import (  # noqa: F401
+    signal_wave_ready,
 )

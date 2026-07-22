@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -54,14 +55,17 @@ def _step_install_acme(core_dir: str) -> bool:
     try:
         result = subprocess.run(
             ["bash", install_script],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][step:install_acme] acme.sh installed successfully")
             return True
         logger.warning(
             "[IMP:7][step:install_acme] acme.sh install failed (exit=%d): %s",
-            result.returncode, result.stderr.strip()[:200],
+            result.returncode,
+            result.stderr.strip()[:200],
         )
         return False
     except subprocess.TimeoutExpired:
@@ -70,6 +74,8 @@ def _step_install_acme(core_dir: str) -> bool:
     except FileNotFoundError as e:
         logger.warning("[IMP:7][step:install_acme] Command not found: %s", e)
         return False
+
+
 # endregion FUNC__step_install_acme
 
 
@@ -96,15 +102,17 @@ def _step_secrets_init(core_dir: str) -> bool:
     try:
         result = subprocess.run(
             ["bash", init_script],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][step:secrets_init] Service passwords initialized")
             return True
         logger.warning(
-            "[IMP:7][step:secrets_init] secrets-init.sh failed (exit=%d): %s — "
-            "passwords may already be set in SOPS",
-            result.returncode, result.stderr.strip()[:200],
+            "[IMP:7][step:secrets_init] secrets-init.sh failed (exit=%d): %s — passwords may already be set in SOPS",
+            result.returncode,
+            result.stderr.strip()[:200],
         )
         return False
     except subprocess.TimeoutExpired:
@@ -113,6 +121,8 @@ def _step_secrets_init(core_dir: str) -> bool:
     except FileNotFoundError as e:
         logger.warning("[IMP:7][step:secrets_init] Command not found: %s", e)
         return False
+
+
 # endregion FUNC__step_secrets_init
 
 
@@ -121,6 +131,27 @@ def _step_secrets_init(core_dir: str) -> bool:
 ##            Supports TOR-conditional packages (tor, privoxy, obfs4proxy).
 ## @io — ⇥ packages: list of package names, tor_enabled: bool → ⎋ None
 ## @complexity — O(N * dpkg) + O(apt-get)
+
+
+# region FUNC__is_pkg_installed
+## @purpose  Check if a single dpkg package is installed, handling subprocess errors gracefully
+def _is_pkg_installed(pkg: str) -> bool:
+    """Check dpkg status for a package. Returns True if installed, False on error."""
+    try:
+        result = subprocess.run(
+            ["dpkg", "-s", pkg],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+# endregion FUNC__is_pkg_installed
+
+
 def _install_apt_packages(packages: list[str], tor_enabled: bool = False) -> None:
     """Install apt packages idempotently. Raises RuntimeError on critical failure."""
     all_packages = list(packages)
@@ -130,17 +161,7 @@ def _install_apt_packages(packages: list[str], tor_enabled: bool = False) -> Non
     else:
         logger.info("[IMP:7][apt] Tor disabled — skipping tor/privoxy/obfs4proxy packages")
 
-    to_install: list[str] = []
-    for pkg in all_packages:
-        try:
-            check = subprocess.run(
-                ["dpkg", "-s", pkg],
-                capture_output=True, text=True, timeout=30,
-            )
-            if check.returncode != 0:
-                to_install.append(pkg)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            to_install.append(pkg)
+    to_install: list[str] = [pkg for pkg in all_packages if not _is_pkg_installed(pkg)]
 
     if not to_install:
         logger.info("[IMP:7][apt] All packages already installed — skipping")
@@ -150,18 +171,20 @@ def _install_apt_packages(packages: list[str], tor_enabled: bool = False) -> Non
     try:
         subprocess.run(["apt-get", "update", "-qq"], capture_output=True, text=True, timeout=120, check=True)
         install_result = subprocess.run(
-            ["apt-get", "install", "-y", "-qq"] + to_install,
-            capture_output=True, text=True, timeout=300,
+            ["apt-get", "install", "-y", "-qq", *to_install],
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         if install_result.returncode != 0:
-            raise RuntimeError(
-                f"apt-get install failed: {install_result.stderr.strip()}"
-            )
+            raise RuntimeError(f"apt-get install failed: {install_result.stderr.strip()}")
         logger.info("[IMP:9][apt] Packages installed successfully")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("apt-get update/install timed out")
+        raise RuntimeError("apt-get update/install timed out") from None
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"apt-get failed: {e}")
+        raise RuntimeError(f"apt-get failed: {e}") from e
+
+
 # endregion FUNC__install_apt_packages
 
 
@@ -187,7 +210,9 @@ def _ensure_sops() -> None:
     try:
         arch_result = subprocess.run(
             ["dpkg", "--print-architecture"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         arch = arch_result.stdout.strip() if arch_result.returncode == 0 else "amd64"
         if arch not in ("amd64", "arm64"):
@@ -196,7 +221,9 @@ def _ensure_sops() -> None:
         url = f"https://github.com/getsops/sops/releases/download/v3.9.4/sops-v3.9.4.linux.{arch}"
         download = subprocess.run(
             ["curl", "-sSL", "-o", "/usr/local/bin/sops", url],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if download.returncode != 0:
             logger.warning("[IMP:7][sops] Download failed: %s", download.stderr.strip())
@@ -208,6 +235,8 @@ def _ensure_sops() -> None:
         logger.warning("[IMP:7][sops] sops installation timed out")
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         logger.warning("[IMP:7][sops] sops installation failed: %s", e)
+
+
 # endregion FUNC__ensure_sops
 
 
@@ -226,14 +255,18 @@ def _install_docker(core_dir: str) -> bool:
     try:
         result = subprocess.run(
             ["bash", install_script],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][docker] Docker installed successfully")
             return True
         raise RuntimeError(f"Docker installation failed: {result.stderr.strip()[:500]}")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Docker installation timed out (300s)")
+        raise RuntimeError("Docker installation timed out (300s)") from None
+
+
 # endregion FUNC__install_docker
 
 
@@ -256,8 +289,13 @@ def _create_system_user(username: str, groups: list[str] | None = None, home_dir
         home_dir = f"/home/{username}"
 
     cmd = [
-        "useradd", "--system", "--shell", "/bin/bash",
-        "--create-home", "--home-dir", home_dir,
+        "useradd",
+        "--system",
+        "--shell",
+        "/bin/bash",
+        "--create-home",
+        "--home-dir",
+        home_dir,
     ]
     if groups:
         cmd.extend(["--groups", ",".join(groups)])
@@ -270,7 +308,9 @@ def _create_system_user(username: str, groups: list[str] | None = None, home_dir
             raise RuntimeError(f"useradd for '{username}' failed: {result.stderr.strip()}")
         logger.info("[IMP:9][user] User '%s' created successfully", username)
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"useradd for '{username}' timed out")
+        raise RuntimeError(f"useradd for '{username}' timed out") from None
+
+
 # endregion FUNC__create_system_user
 
 
@@ -290,13 +330,13 @@ def _add_ssh_key(username: str, key: str, forced_command_prefix: str | None = No
     auth_keys = ssh_dir / "authorized_keys"
 
     ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    try:
+    with contextlib.suppress(FileNotFoundError):
         subprocess.run(
             ["chown", f"{username}:{username}", str(ssh_dir)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
-    except FileNotFoundError:
-        pass
 
     # Check if key already present
     if auth_keys.exists():
@@ -311,15 +351,17 @@ def _add_ssh_key(username: str, key: str, forced_command_prefix: str | None = No
 
     auth_keys.write_text(entry + "\n")
     auth_keys.chmod(0o600)
-    try:
+    with contextlib.suppress(FileNotFoundError):
         subprocess.run(
             ["chown", f"{username}:{username}", str(auth_keys)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
-    except FileNotFoundError:
-        pass
 
     logger.info("[IMP:9][ssh_key] SSH key added to %s/.ssh/authorized_keys", username)
+
+
 # endregion FUNC__add_ssh_key
 
 
@@ -346,7 +388,9 @@ def _apply_firewall(core_dir: str, extra_ports: list[str] | None = None) -> bool
             return True
         raise RuntimeError(f"Firewall setup failed: {result.stderr.strip()[:500]}")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Firewall setup timed out")
+        raise RuntimeError("Firewall setup timed out") from None
+
+
 # endregion FUNC__apply_firewall
 
 
@@ -379,7 +423,10 @@ def _validate_node_yaml(node_yaml: str, schema_file: str) -> bool:
             logger.info("[IMP:7][validate] jsonschema not importable — using subprocess python3")
             try:
                 result = subprocess.run(
-                    ["python3", "-c", f"""
+                    [
+                        "python3",
+                        "-c",
+                        f"""
 import json, yaml, jsonschema, sys
 with open('{node_yaml}') as f:
     instance = yaml.safe_load(f)
@@ -387,8 +434,11 @@ with open('{schema_file}') as f:
     schema = json.load(f)
 jsonschema.validate(instance, schema)
 print('VALID')
-"""],
-                    capture_output=True, text=True, timeout=60,
+""",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
                 )
                 if result.returncode == 0 and "VALID" in result.stdout:
                     logger.info("[IMP:9][validate] node.yaml valid against schema (subprocess)")
@@ -417,6 +467,8 @@ print('VALID')
     except Exception as e:
         logger.warning("[IMP:7][validate] Validation error: %s", e)
         return False
+
+
 # endregion FUNC__validate_node_yaml
 
 
@@ -436,8 +488,14 @@ def _ghcr_docker_login(token: str) -> bool:
     logger.info("[IMP:9][ghcr] Authenticating ci-deploy to ghcr.io")
     try:
         result = subprocess.run(
-            ["bash", "-c", f"echo '{token}' | sudo -u ci-deploy docker login ghcr.io -u x-access-token --password-stdin"],
-            capture_output=True, text=True, timeout=60,
+            [
+                "bash",
+                "-c",
+                f"echo '{token}' | sudo -u ci-deploy docker login ghcr.io -u x-access-token --password-stdin",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][ghcr] ci-deploy authenticated to ghcr.io")
@@ -450,6 +508,8 @@ def _ghcr_docker_login(token: str) -> bool:
     except FileNotFoundError as e:
         logger.warning("[IMP:7][ghcr] Command not found: %s", e)
         return False
+
+
 # endregion FUNC__ghcr_docker_login
 
 
@@ -497,6 +557,8 @@ def _validate_sudoers_files(sudoers_d: str = "/etc/sudoers.d") -> bool:
         )
     logger.info("[IMP:9][sudoers] All sudoers files validated: owner=root:root, mode≤0440")
     return True
+
+
 # endregion FUNC__validate_sudoers_files
 
 
@@ -525,6 +587,8 @@ def _write_bootstrap_audit(
         logger.info("[IMP:9][audit] Audit log updated: %s", audit_file)
     except OSError as e:
         logger.warning("[IMP:7][audit] Failed to write audit log: %s", e)
+
+
 # endregion FUNC__write_bootstrap_audit
 
 
@@ -551,10 +615,7 @@ def _send_telegram_notification(
 
     ts = time.strftime("%d.%m.%Y %H:%M:%S")
 
-    if errors or warnings:
-        status_suffix = "⚠️ Warnings/Errors:"
-    else:
-        status_suffix = "✅"
+    status_suffix = "⚠️ Warnings/Errors:" if errors or warnings else "✅"
 
     msg = f"🚀 [node: {node}] Узел обновлён {status_suffix}\nВремя: {ts}"
     for w in warnings:
@@ -568,16 +629,21 @@ def _send_telegram_notification(
         import urllib.parse
         import urllib.request
 
-        params = urllib.parse.urlencode({
-            "chat_id": chat_id,
-            "text": msg,
-        }, quote_via=urllib.parse.quote)
+        params = urllib.parse.urlencode(
+            {
+                "chat_id": chat_id,
+                "text": msg,
+            },
+            quote_via=urllib.parse.quote,
+        )
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage?{params}"
 
-        proxy_handler = urllib.request.ProxyHandler({
-            "http": proxy_url,
-            "https": proxy_url,
-        })
+        proxy_handler = urllib.request.ProxyHandler(
+            {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+        )
         opener = urllib.request.build_opener(proxy_handler)
         opener.open(url, timeout=30)
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
@@ -585,6 +651,8 @@ def _send_telegram_notification(
     except Exception as e:
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
         return False
+
+
 # endregion FUNC__send_telegram_notification
 
 
@@ -621,6 +689,8 @@ def _tor_provision(core_dir: str, bridges_file: str = "", skip_verify: bool = Fa
     except subprocess.TimeoutExpired:
         logger.warning("[IMP:7][tor] Tor installation timed out")
         return False
+
+
 # endregion FUNC__tor_provision
 
 
@@ -648,26 +718,34 @@ def _ssl_cert_provision(core_dir: str, node_yaml: str) -> bool:
     secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
     if os.path.isfile(secrets_env):
         logger.info("[IMP:8][ssl] Sourcing secrets.env for WEBNAMES_API_KEY")
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError):
             subprocess.run(
-                ["bash", "-c", f"set -a; source '{secrets_env}'; set +a; env | grep -E '^(WEBNAMES_API_KEY|HTTP_PROXY)'"],
-                capture_output=True, text=True, timeout=10,
+                [
+                    "bash",
+                    "-c",
+                    f"set -a; source '{secrets_env}'; set +a; env | grep -E '^(WEBNAMES_API_KEY|HTTP_PROXY)'",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
 
     s3_cache = os.path.join(core_dir, "internal", "bootstrap", "s3-ssl-cache.sh")
     if os.path.isfile(s3_cache):
         try:
             check = subprocess.run(
                 ["bash", s3_cache, "check", platform_domain],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             if check.returncode == 0:
                 logger.info("[IMP:8][ssl] Valid cert in S3 cache — restoring")
                 dl = subprocess.run(
                     ["bash", s3_cache, "download", platform_domain],
-                    capture_output=True, text=True, timeout=120,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
                 )
                 cert_path = f"/etc/letsencrypt/live/{platform_domain}/fullchain.pem"
                 if dl.returncode == 0 and os.path.isfile(cert_path):
@@ -681,7 +759,9 @@ def _ssl_cert_provision(core_dir: str, node_yaml: str) -> bool:
     try:
         result = subprocess.run(
             ["bash", ssl_script],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][ssl] SSL certificate provisioned for %s", platform_domain)
@@ -694,6 +774,8 @@ def _ssl_cert_provision(core_dir: str, node_yaml: str) -> bool:
     except subprocess.TimeoutExpired:
         logger.warning("[IMP:7][ssl] SSL provisioning timed out")
         return False
+
+
 # endregion FUNC__ssl_cert_provision
 
 
@@ -726,4 +808,6 @@ def _run_converge(core_dir: str, node_name: str, extra_args: list[str] | None = 
     except subprocess.TimeoutExpired:
         logger.warning("[IMP:7][converge] converge.sh timed out")
         return -1
+
+
 # endregion FUNC__run_converge

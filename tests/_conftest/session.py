@@ -22,6 +22,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import subprocess
 import sys
 
 import jsonschema
@@ -156,13 +157,85 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     )
 
 
+def _final_compose_cleanup() -> None:
+    """Final cleanup: remove all containers with the test project label.
+
+    ## @purpose — DevPlan 040 Wave 3: platform_services teardown uses `compose stop`
+    ##            (not down) to save ~50s. This function runs once in pytest_sessionfinish
+    ##            to remove all stopped containers with the ai-platform-test project label.
+    ##            Uses `docker rm -f` on all containers matching the project label,
+    ##            which is simpler than discovering compose files.
+    ## @io — ⎋ None (side-effect: Docker containers removed)
+    ## @complexity — O(N) where N = containers with matching label
+    ## @rationale — `compose down` needs compose file paths, which are not available
+    ##              in session.py. `docker rm -f` by project label is file-path-agnostic.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                "label=com.docker.compose.project=ai-platform-test",
+                "--format",
+                "{{.ID}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        container_ids = [cid.strip() for cid in result.stdout.strip().splitlines() if cid.strip()]
+        if container_ids:
+            subprocess.run(
+                ["docker", "rm", "-f", *container_ids],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            print(
+                f"[IMP:7][conftest][sessionfinish] Final cleanup: removed {len(container_ids)} container(s)",
+                file=sys.stderr,
+            )
+        else:
+            print("[IMP:8][conftest][sessionfinish] Final cleanup: no containers to remove", file=sys.stderr)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        print(f"[IMP:8][conftest][sessionfinish] Final cleanup error: {exc}", file=sys.stderr)
+
+
+def _force_release_test_networks() -> None:
+    """Force-release all test networks via NetworkLeaseManager session cleanup.
+
+    ## @purpose — DevPlan 041 W3: ensures no test Docker networks remain after session.
+    ##            Called unconditionally from pytest_sessionfinish for safety.
+    ##            Best-effort — does not fail if Docker unavailable or networks absent.
+    ## @io — ⎋ None (side-effect: Docker networks removed)
+    ## @complexity — O(N) where N = active leases
+    """
+    try:
+        from _conftest.networks import get_network_manager
+
+        nm = get_network_manager()
+        nm.release_all()
+        print("[IMP:9][conftest][sessionfinish] NetworkLeaseManager: all leases released", file=sys.stderr)
+    except Exception as exc:
+        print(f"[IMP:7][conftest][sessionfinish] NetworkLeaseManager cleanup (best-effort): {exc}", file=sys.stderr)
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
     Session finish hook: reset counter on 100% PASS, else increment escalation.
+    Also runs final Docker compose cleanup (DevPlan 040 Wave 3) + NetworkLeaseManager cleanup.
 
     - exitstatus == 0 → all passed → reset counter to 0
     - exitstatus != 0 → failures → keep incremented counter, print escalation
     """
+    # ── Final compose cleanup (DevPlan 040 Wave 3) ──────────────────────────
+    _final_compose_cleanup()
+
+    # ── NetworkLeaseManager cleanup (DevPlan 041 W3) ─────────────────────────
+    _force_release_test_networks()
+
     counter = _read_counter()
     attempts = counter.get("attempts", 1)
 

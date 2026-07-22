@@ -415,7 +415,7 @@ def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) ->
 ##           Only active when --self-heal flag is set (W5-E5).
 def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
     """Remove orphan containers using docker rm -f.
-    
+
     ## @io — ⇥ orphans: list of {container_name, project} dicts (from batch_orphan_reconciliation)
     ##           → ⎋ removed_count: int
     ## @complexity — O(n) where n = len(orphans)
@@ -448,6 +448,8 @@ def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("[IMP:5][self_heal][orphan] Error removing %s: %s", cname, exc)
     return removed
+
+
 # endregion FUNC__self_heal_orphan_containers
 
 
@@ -456,7 +458,7 @@ def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
 ##           Only active when --self-heal flag is set.
 def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -> int:
     """Prune Docker images older than retention_days.
-    
+
     ## @io — ⇥ retention_days: int (default 30) → ⎋ pruned_count: int
     ## @complexity — O(1)
     ## @invariants
@@ -466,9 +468,14 @@ def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -
     try:
         result = subprocess.run(
             [
-                "docker", "image", "prune", "-f",
-                "--filter", f"until={retention_days * 24}h",
-                "--filter", "label=com.docker.compose.project",
+                "docker",
+                "image",
+                "prune",
+                "-f",
+                "--filter",
+                f"until={retention_days * 24}h",
+                "--filter",
+                "label=com.docker.compose.project",
             ],
             capture_output=True,
             timeout=60,
@@ -477,7 +484,7 @@ def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -
         # Parse prune output for count (docker image prune reports "Total reclaimed space")
         stdout = result.stdout if isinstance(result.stdout, str) else result.stdout.decode()
         # Count lines that look like deleted images (they contain the image tag/id)
-        lines = [l for l in stdout.splitlines() if l.strip() and not l.startswith("Total")]
+        lines = [line for line in stdout.splitlines() if line.strip() and not line.startswith("Total")]
         pruned = len(lines)
 
         if pruned > 0:
@@ -495,6 +502,8 @@ def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("[IMP:5][self_heal][prune] Image prune failed: %s", exc)
         return 0
+
+
 # endregion FUNC__self_heal_aged_images
 
 
@@ -551,7 +560,12 @@ def main() -> None:
 
     # Parse comma-separated entries
     entries = [e.strip() for e in args.module_entries.split(",") if e.strip()]
-    logger.info("[IMP:7][main] CLI args: module_entries=%s, modules_dir=%s, self_heal=%s", entries, args.modules_dir, args.self_heal)
+    logger.info(
+        "[IMP:7][main] CLI args: module_entries=%s, modules_dir=%s, self_heal=%s",
+        entries,
+        args.modules_dir,
+        args.self_heal,
+    )
 
     # Run reconciliation
     orphans = _batch_orphan_reconciliation(entries, args.modules_dir)

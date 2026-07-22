@@ -122,6 +122,30 @@ env_defaults:
   POSTGRES_PASSWORD: "test-pg-pwd"
   PROMETHEUS_RULES_DIR: "/opt/platform/prometheus-rules"
 
+test_ports:
+  # Canonical test ports. Convention: test port = 1{base_port} where applicable.
+  # Each entry: module_name: { port_name: port_number }
+  # Source of truth: docker-compose.test.yml port mappings.
+  # NOTE: postgres and redis have no host port mappings in docker-compose.test.yml
+  # (internal services only). Their test ports are not verifiable via AC-6b.
+  litellm:
+    litellm: 14000            # base: 4000, test: 1{4000}
+  nginx:
+    http: 18080               # base: 80, test: 18080
+    https: 18443              # base: 443, test: 18443
+  clickhouse:
+    http: 18123               # base: 8123, test: 1{8123}
+    metrics: 19363            # base: 9363, test: 1{9363}
+  hermes-agent:
+    dashboard: 19119          # base: 9119, test: 1{9119}
+  monitoring:
+    prometheus: 19090         # base: 9090, test: 1{9090}
+    grafana: 13030            # base: 3030, test: 1{3030}
+  langfuse:
+    langfuse: 13000           # base: 3000, test: 1{3000}
+  logging:
+    loki: 13100               # base: 3100, test: 1{3100}
+
 provides:
   postgres:
     host: pgbouncer

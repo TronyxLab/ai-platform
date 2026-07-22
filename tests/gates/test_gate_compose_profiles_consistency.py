@@ -57,7 +57,7 @@ def _extract_makefile_value(filepath: Path) -> str:
     ⚡ regex: export COMPOSE_PROFILES \\?= (.+) → ⎋ value
     """
     content = filepath.read_text()
-    m = re.search(r'export COMPOSE_PROFILES \?= (.+)', content)
+    m = re.search(r"export COMPOSE_PROFILES \?= (.+)", content)
     if not m:
         raise ValueError(f"No COMPOSE_PROFILES export found in {filepath}")
     return m.group(1).strip()

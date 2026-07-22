@@ -55,6 +55,20 @@ class StateTransitionError(Exception):
     """Raised when a state transition violates pre/post-conditions (W5-E6 C3)."""
 
 
+# region FUNC__safe_update_hash
+## @purpose  Safely update a hasher with file contents, handling OSError/FileNotFoundError internally
+def _safe_update_hash(hasher: hashlib._Hash, path: str) -> None:
+    """Update hasher with file contents. Silently skips unreadable files."""
+    try:
+        with open(path, "rb") as f:
+            hasher.update(f.read())
+    except (OSError, FileNotFoundError) as e:
+        logger.warning("[IMP:7][_safe_update_hash] Cannot read %s: %s", path, e)
+
+
+# endregion FUNC__safe_update_hash
+
+
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
 INIT_STEP_COUNT = 17
@@ -62,37 +76,37 @@ UPDATE_STEP_COUNT = 7
 
 # Step name → index mapping (1-indexed, matches state.json keys)
 INIT_STEPS: list[str] = [
-    "ssh_access",           # 1
-    "apt_deps",             # 2
-    "tor_proxy",            # 3 (conditional — TOR_ENABLED)
-    "install_docker",       # 4
+    "ssh_access",  # 1
+    "apt_deps",  # 2
+    "tor_proxy",  # 3 (conditional — TOR_ENABLED)
+    "install_docker",  # 4
     "create_platform_user",  # 5
-    "create_ci_deploy_user", # 6
-    "create_projects_base", # 6b
-    "firewall",             # 7
-    "verify_core",          # 8
+    "create_ci_deploy_user",  # 6
+    "create_projects_base",  # 6b
+    "firewall",  # 7
+    "verify_core",  # 8
     "verify_node_configs",  # 9
-    "decrypt_secrets",      # 10
-    "ensure_secrets",       # 12b
-    "secrets_init",         # secrets-init (between 12b and 11)
-    "read_node_yaml",       # 11 (after secrets so schema validation can use secrets)
-    "ghcr_auth",            # 12
-    "sudoers",              # 13
-    "install_acme",         # 13b
-    "node_update",          # 14
-    "converge",             # 15
-    "audit_log",            # 16
-    "telegram",             # 17
+    "decrypt_secrets",  # 10
+    "ensure_secrets",  # 12b
+    "secrets_init",  # secrets-init (between 12b and 11)
+    "read_node_yaml",  # 11 (after secrets so schema validation can use secrets)
+    "ghcr_auth",  # 12
+    "sudoers",  # 13
+    "install_acme",  # 13b
+    "node_update",  # 14
+    "converge",  # 15
+    "audit_log",  # 16
+    "telegram",  # 17
 ]
 
 UPDATE_STEPS: list[str] = [
-    "verify_core",          # 1
-    "provision",            # 2
-    "deliver_overlays",     # 2.5
-    "ssl_provision",        # 3
-    "deploy_modules",       # 4
-    "healthcheck",          # 6
-    "converge",             # 7 (after healthcheck)
+    "verify_core",  # 1
+    "provision",  # 2
+    "deliver_overlays",  # 2.5
+    "ssl_provision",  # 3
+    "deploy_modules",  # 4
+    "healthcheck",  # 6
+    "converge",  # 7 (after healthcheck)
 ]
 
 
@@ -111,10 +125,13 @@ def _should_retry(exc: Exception, attempt: int) -> bool:
     ## @complexity — O(1)
     """
     if isinstance(exc, RETRYABLE_EXCEPTIONS) and attempt < MAX_RETRIES:
-        backoff = RETRY_BACKOFF_BASE ** attempt
+        backoff = RETRY_BACKOFF_BASE**attempt
         logger.info(
             "[IMP:8][_should_retry] Retryable exception (attempt %d/%d): %s — backing off %ds",
-            attempt, MAX_RETRIES, exc, backoff,
+            attempt,
+            MAX_RETRIES,
+            exc,
+            backoff,
         )
         time.sleep(backoff)
         return True
@@ -122,6 +139,7 @@ def _should_retry(exc: Exception, attempt: int) -> bool:
 
 
 # region DATACLASSES
+
 
 @dataclass
 class StepState:
@@ -131,12 +149,13 @@ class StepState:
     ## @io — ⇥ constructor params → ⎋ StepState instance with serializable fields
     ## @complexity — O(1)
     """
+
     name: str
-    status: str = "pending"          # pending | running | done | skipped | failed
-    hash: str | None = None       # content hash for idempotency check
-    started_at: str | None = None # ISO timestamp
-    error: str | None = None      # error message if failed
-    reason: str | None = None     # skip reason (TOR_DISABLED, content_unchanged)
+    status: str = "pending"  # pending | running | done | skipped | failed
+    hash: str | None = None  # content hash for idempotency check
+    started_at: str | None = None  # ISO timestamp
+    error: str | None = None  # error message if failed
+    reason: str | None = None  # skip reason (TOR_DISABLED, content_unchanged)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON state file."""
@@ -172,9 +191,10 @@ class BootstrapState:
     ## @io — ⇥ constructor params → ⎋ BootstrapState with steps dict
     ## @complexity — O(N) where N = number of steps
     """
-    mode: str = "init"                     # init | update
-    node: str | None = None             # node name
-    current_step: int = 0                  # 0 = not started
+
+    mode: str = "init"  # init | update
+    node: str | None = None  # node name
+    current_step: int = 0  # 0 = not started
     steps: dict[str, StepState] = field(default_factory=dict)  # str step index → StepState
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -205,10 +225,12 @@ class BootstrapState:
             warnings=data.get("warnings", []),
         )
 
+
 # endregion DATACLASSES
 
 
 # region STATEMACHINE
+
 
 class StateMachine:
     """State machine for bootstrap/update lifecycle steps.
@@ -242,14 +264,19 @@ class StateMachine:
                 self.state = BootstrapState.from_dict(data)
                 logger.info(
                     "[IMP:8][StateMachine][init] State loaded: mode=%s node=%s current_step=%d",
-                    self.state.mode, self.state.node, self.state.current_step,
+                    self.state.mode,
+                    self.state.node,
+                    self.state.current_step,
                 )
             except (json.JSONDecodeError, KeyError, ValueError) as e:
-                logger.warning("[IMP:7][StateMachine][init] Corrupt state file %s: %s — creating fresh", self.state_file, e)
+                logger.warning(
+                    "[IMP:7][StateMachine][init] Corrupt state file %s: %s — creating fresh", self.state_file, e
+                )
                 self.state = BootstrapState()
         else:
             logger.info("[IMP:7][StateMachine][init] No state file at %s — creating fresh", self.state_file)
             self.state = BootstrapState()
+
     # endregion FUNC___init__
 
     # region FUNC_save
@@ -268,6 +295,7 @@ class StateMachine:
         except OSError as e:
             logger.error("[IMP:10][StateMachine][save] Failed to save state: %s", e)
             raise
+
     # endregion FUNC_save
 
     # region FUNC_start_step
@@ -283,6 +311,7 @@ class StateMachine:
         self.state.current_step = n
         logger.info("[IMP:9][StateMachine][start_step] Step %d (%s) START", n, step_name)
         self.save()
+
     # endregion FUNC_start_step
 
     # region FUNC_complete_step
@@ -300,6 +329,7 @@ class StateMachine:
             self.state.steps[key].hash = hash_val
         logger.info("[IMP:9][StateMachine][complete_step] Step %d (%s) DONE", n, self.state.steps[key].name)
         self.save()
+
     # endregion FUNC_complete_step
 
     # region FUNC_skip_step
@@ -315,6 +345,7 @@ class StateMachine:
         self.state.steps[key].reason = reason or "content_unchanged"
         logger.info("[IMP:9][StateMachine][skip_step] Step %d (%s) SKIPPED: %s", n, self.state.steps[key].name, reason)
         self.save()
+
     # endregion FUNC_skip_step
 
     # region FUNC_fail_step
@@ -331,6 +362,7 @@ class StateMachine:
         self.state.errors.append(f"Step {n} ({self.state.steps[key].name}): {error}")
         logger.error("[IMP:10][StateMachine][fail_step] Step %d (%s) FAILED: %s", n, self.state.steps[key].name, error)
         self.save()
+
     # endregion FUNC_fail_step
 
     # region FUNC_get_current_step
@@ -361,6 +393,7 @@ class StateMachine:
                 return i  # re-run hanging steps
 
         return None
+
     # endregion FUNC_get_current_step
 
     # region FUNC__step_hash
@@ -372,16 +405,15 @@ class StateMachine:
         """Compute SHA256 content hash of node-lifecycle.sh + extra paths."""
         hasher = hashlib.sha256()
         # Always include the current file (node-lifecycle.sh equivalent)
-        paths_to_hash = [os.path.abspath(__file__)] + list(extra_paths)
+        paths_to_hash = [os.path.abspath(__file__), *list(extra_paths)]
         for path in paths_to_hash:
-            try:
-                with open(path, "rb") as f:
-                    hasher.update(f.read())
-            except (OSError, FileNotFoundError) as e:
-                logger.warning("[IMP:7][StateMachine][_step_hash] Cannot read %s: %s", path, e)
+            _safe_update_hash(hasher, path)
         digest = hasher.hexdigest()
-        logger.debug("[IMP:6][StateMachine][_step_hash] Hash for %s: %s (files: %s)", step_name, digest[:12], paths_to_hash)
+        logger.debug(
+            "[IMP:6][StateMachine][_step_hash] Hash for %s: %s (files: %s)", step_name, digest[:12], paths_to_hash
+        )
         return digest
+
     # endregion FUNC__step_hash
 
     # region FUNC_validate_bootstrap_env
@@ -407,6 +439,7 @@ class StateMachine:
             return False
         logger.info("[IMP:9][StateMachine][validate_bootstrap_env] All required env vars present")
         return True
+
     # endregion FUNC_validate_bootstrap_env
 
     # region FUNC_add_warning
@@ -417,6 +450,7 @@ class StateMachine:
         """Add warning to state warnings list."""
         self.state.warnings.append(warning)
         logger.warning("[IMP:7][StateMachine][add_warning] %s", warning)
+
     # endregion FUNC_add_warning
 
     # ── Internal helpers ──────────────────────────────────────────────────
@@ -427,6 +461,7 @@ class StateMachine:
         if self.state.mode == "init":
             return INIT_STEPS
         return UPDATE_STEPS
+
     # endregion FUNC__step_list
 
     # region FUNC__step_name
@@ -436,6 +471,7 @@ class StateMachine:
         if 1 <= n <= len(steps):
             return steps[n - 1]
         return f"unknown_step_{n}"
+
     # endregion FUNC__step_name
 
     # region FUNC__is_step_done
@@ -445,6 +481,7 @@ class StateMachine:
         if key not in self.state.steps:
             return False
         return self.state.steps[key].status == "done"
+
     # endregion FUNC__is_step_done
 
     # region FUNC__is_step_skipped
@@ -454,6 +491,7 @@ class StateMachine:
         if key not in self.state.steps:
             return False
         return self.state.steps[key].status == "skipped"
+
     # endregion FUNC__is_step_skipped
 
     # region FUNC__hash_changed
@@ -464,6 +502,7 @@ class StateMachine:
             return True
         old_hash = self.state.steps[key].hash
         return old_hash != new_hash
+
     # endregion FUNC__hash_changed
 
     # region FUNC__check_precondition
@@ -476,7 +515,11 @@ class StateMachine:
         """Assert previous step is done/skipped (or step_index == 1 for first step)."""
         if step_index == 1:
             # First step — no previous to check
-            logger.debug("[IMP:6][StateMachine][_check_precondition] Step %d (%s): first step — pre-condition OK", step_index, step_name)
+            logger.debug(
+                "[IMP:6][StateMachine][_check_precondition] Step %d (%s): first step — pre-condition OK",
+                step_index,
+                step_name,
+            )
             return
         prev_key = str(step_index - 1)
         if prev_key not in state.steps:
@@ -490,7 +533,13 @@ class StateMachine:
                 f"Pre-condition violation: step {step_index - 1} status is '{prev_status}', "
                 f"expected 'done' or 'skipped'. Cannot execute step {step_index} ({step_name})."
             )
-        logger.debug("[IMP:6][StateMachine][_check_precondition] Step %d (%s): pre-condition OK (prev=%s)", step_index, step_name, prev_status)
+        logger.debug(
+            "[IMP:6][StateMachine][_check_precondition] Step %d (%s): pre-condition OK (prev=%s)",
+            step_index,
+            step_name,
+            prev_status,
+        )
+
     # endregion FUNC__check_precondition
 
     # region FUNC__check_postcondition
@@ -503,9 +552,7 @@ class StateMachine:
         """Assert current step is done and state.current_step matches step_index."""
         key = str(step_index)
         if key not in state.steps:
-            raise StateTransitionError(
-                f"Post-condition violation: step {step_index} ({step_name}) has no state entry."
-            )
+            raise StateTransitionError(f"Post-condition violation: step {step_index} ({step_name}) has no state entry.")
         if state.steps[key].status != "done":
             raise StateTransitionError(
                 f"Post-condition violation: step {step_index} ({step_name}) status is "
@@ -516,7 +563,10 @@ class StateMachine:
                 f"Post-condition violation: state.current_step is {state.current_step}, "
                 f"expected {step_index} after completing step {step_name}."
             )
-        logger.debug("[IMP:6][StateMachine][_check_postcondition] Step %d (%s): post-condition OK", step_index, step_name)
+        logger.debug(
+            "[IMP:6][StateMachine][_check_postcondition] Step %d (%s): post-condition OK", step_index, step_name
+        )
+
     # endregion FUNC__check_postcondition
 
     # region FUNC_setup_state
@@ -534,9 +584,12 @@ class StateMachine:
                 self.state.steps[key] = StepState(name=name, status="pending")
         logger.info(
             "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s steps=%d",
-            mode, node, len(step_list),
+            mode,
+            node,
+            len(step_list),
         )
         self.save()
+
     # endregion FUNC_setup_state
 
     # region FUNC_reset
@@ -549,6 +602,7 @@ class StateMachine:
         if self.state_file.exists():
             self.state_file.unlink()
         logger.info("[IMP:9][StateMachine][reset] State cleared (force mode)")
+
     # endregion FUNC_reset
 
     # region FUNC_report
@@ -558,6 +612,7 @@ class StateMachine:
     def report(self) -> str:
         """Print JSON summary of current state to stdout."""
         return json.dumps(self.state.to_dict(), indent=2, ensure_ascii=False)
+
     # endregion FUNC_report
 
     # region FUNC_dry_run_plan
@@ -583,12 +638,15 @@ class StateMachine:
         else:
             lines.append("Node update DRY RUN — no mutations performed, exit 0")
         return "\n".join(lines)
+
     # endregion FUNC_dry_run_plan
+
 
 # endregion STATEMACHINE
 
 
 # region CLI
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser.
@@ -648,6 +706,8 @@ Examples:
     parser.add_argument("--proxy-url", default="http://127.0.0.1:8118", help="Telegram proxy URL")
     parser.add_argument("--auto-reconcile", action="store_true", help="Auto-reconcile after converge")
     return parser
+
+
 # endregion CLI
 
 
@@ -741,6 +801,8 @@ def main() -> int:
     if args.mode == "init":
         return _run_init_mode(sm)
     return _run_update_mode(sm)
+
+
 # endregion MAIN
 
 
@@ -752,10 +814,7 @@ def _run_single_step(sm: StateMachine, mode: str, step_n: int) -> int:
     ## @io — ⇥ sm: StateMachine, mode: str, step_n: int → ⎋ int exit code
     ## @complexity — O(1) for dispatch, O(M) for step execution
     """
-    if mode == "init":
-        steps = INIT_STEPS
-    else:
-        steps = UPDATE_STEPS
+    steps = INIT_STEPS if mode == "init" else UPDATE_STEPS
 
     if step_n < 1 or step_n > len(steps):
         logger.error("[IMP:10][run_step] Invalid step number %d. Mode %s has %d steps.", step_n, mode, len(steps))
@@ -773,6 +832,8 @@ def _run_single_step(sm: StateMachine, mode: str, step_n: int) -> int:
         return 1
 
     return 0
+
+
 # endregion RUN_SINGLE_STEP
 
 
@@ -785,6 +846,8 @@ def _run_init_mode(sm: StateMachine) -> int:
     ## @complexity — O(N * M) where N = 17 steps, M = per-step operations
     """
     return _run_steps(sm, INIT_STEPS, "init")
+
+
 # endregion RUN_INIT_MODE
 
 
@@ -797,6 +860,8 @@ def _run_update_mode(sm: StateMachine) -> int:
     ## @complexity — O(N * M) where N = 6 steps, M = per-step operations
     """
     return _run_steps(sm, UPDATE_STEPS, "update")
+
+
 # endregion RUN_UPDATE_MODE
 
 
@@ -871,6 +936,8 @@ def _run_steps(sm: StateMachine, step_list: list[str], mode: str) -> int:
                 break
 
     return exit_code
+
+
 # endregion RUN_STEPS
 
 
@@ -890,6 +957,8 @@ def _execute_step(sm: StateMachine, step_n: int, step_name: str, mode: str) -> N
         _execute_init_step(sm, step_n, step_name, core_dir, node_name, node_yaml)
     else:
         _execute_update_step(sm, step_n, step_name, core_dir, node_name, node_yaml)
+
+
 # endregion EXECUTE_STEP
 
 
@@ -951,7 +1020,7 @@ def _execute_init_step(
         _create_user("ci-deploy", ["docker"])
         ci_deploy_key = os.environ.get("PLATFORM_CI_DEPLOY_KEY", "")
         if ci_deploy_key:
-            forced_command = f"command=\"{core_dir}/internal/deploy/deploy-project.sh {node_name}\",restrict"
+            forced_command = f'command="{core_dir}/internal/deploy/deploy-project.sh {node_name}",restrict'
             _add_ssh_key("ci-deploy", ci_deploy_key, forced_command_prefix=forced_command)
 
     elif step_name == "create_projects_base":
@@ -1021,6 +1090,8 @@ def _execute_init_step(
 
     elif step_name == "telegram":
         _send_telegram(sm)
+
+
 # endregion EXECUTE_INIT_STEP
 
 
@@ -1084,10 +1155,13 @@ def _execute_update_step(
             if os.environ.get("AUTO_RECONCILE", "false").lower() == "true":
                 converge_args.append("--reconcile")
             _subprocess_run(converge_args, "converge", non_fatal=True)
+
+
 # endregion EXECUTE_UPDATE_STEP
 
 
 # region HELPER_FUNCTIONS
+
 
 def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
     """Compute content hash for a step, including step-specific scripts.
@@ -1115,7 +1189,10 @@ def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
         "deliver_overlays": [os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")],
         "ssl_provision": [os.path.join(core_dir, "internal", "bootstrap", "issue-cert.sh")],
         "deploy_modules": [os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")],
-        "verify_core": [os.path.join(core_dir, "lib", "checkpoint.sh"), os.path.join(core_dir, "internal", "bootstrap", "content-hash.sh")],
+        "verify_core": [
+            os.path.join(core_dir, "lib", "checkpoint.sh"),
+            os.path.join(core_dir, "internal", "bootstrap", "content-hash.sh"),
+        ],
     }
 
     extra_paths.extend(path_map.get(step_name, []))
@@ -1151,7 +1228,12 @@ def _subprocess_run(
             elif check_required:
                 raise RuntimeError(err_msg)
             else:
-                logger.info("[IMP:7][subprocess][%s] Non-critical command returned %d: %s", step_name, result.returncode, result.stderr[:200])
+                logger.info(
+                    "[IMP:7][subprocess][%s] Non-critical command returned %d: %s",
+                    step_name,
+                    result.returncode,
+                    result.stderr[:200],
+                )
         else:
             logger.info("[IMP:9][subprocess][%s] Command succeeded (exit=0)", step_name)
         return result
@@ -1160,13 +1242,32 @@ def _subprocess_run(
         if non_fatal:
             logger.warning("[IMP:7][subprocess][%s] %s", step_name, msg)
             return subprocess.CompletedProcess(cmd, -1, "", msg)
-        raise RuntimeError(msg)
+        raise RuntimeError(msg) from None
     except FileNotFoundError:
         msg = f"Command not found: {cmd[0]}"
         if non_fatal:
             logger.warning("[IMP:7][subprocess][%s] %s", step_name, msg)
             return subprocess.CompletedProcess(cmd, -1, "", msg)
-        raise RuntimeError(msg)
+        raise RuntimeError(msg) from None
+
+
+# region FUNC__is_pkg_installed
+## @purpose  Check if a single dpkg package is installed, handling errors gracefully
+def _is_pkg_installed(pkg: str) -> bool:
+    """Check dpkg status for a package. Returns True if installed, False on error."""
+    try:
+        result = subprocess.run(
+            ["dpkg", "-s", pkg],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+# endregion FUNC__is_pkg_installed
 
 
 def _install_apt_packages(packages: list[str]) -> None:
@@ -1176,22 +1277,12 @@ def _install_apt_packages(packages: list[str]) -> None:
     ## @io — ⇥ packages: list[str] → ⎋ None
     ## @complexity — O(N) where N = packages
     """
-    to_install: list[str] = []
-    for pkg in packages:
-        try:
-            result = subprocess.run(
-                ["dpkg", "-s", pkg],
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode != 0:
-                to_install.append(pkg)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            to_install.append(pkg)
+    to_install: list[str] = [pkg for pkg in packages if not _is_pkg_installed(pkg)]
 
     if to_install:
         logger.info("[IMP:9][apt] Installing %d packages: %s", len(to_install), " ".join(to_install))
         _subprocess_run(["apt-get", "update", "-qq"], "apt_update")
-        _subprocess_run(["apt-get", "install", "-y", "-qq"] + to_install, "apt_install")
+        _subprocess_run(["apt-get", "install", "-y", "-qq", *to_install], "apt_install")
         for pkg in to_install:
             _subprocess_run(["dpkg", "-s", pkg], f"verify_{pkg}", check_required=True)
     else:
@@ -1218,7 +1309,9 @@ def _ensure_sops() -> None:
         # Detect architecture
         arch_result = subprocess.run(
             ["dpkg", "--print-architecture"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         arch = arch_result.stdout.strip() if arch_result.returncode == 0 else "amd64"
         if arch not in ("amd64", "arm64"):
@@ -1250,8 +1343,13 @@ def _create_user(username: str, groups: list[str] | None = None) -> None:
 
     groups_str = ",".join(groups) if groups else ""
     cmd = [
-        "useradd", "--system", "--shell", "/bin/bash",
-        "--create-home", "--home-dir", f"/home/{username}",
+        "useradd",
+        "--system",
+        "--shell",
+        "/bin/bash",
+        "--create-home",
+        "--home-dir",
+        f"/home/{username}",
     ]
     if groups_str:
         cmd.extend(["--groups", groups_str])
@@ -1331,8 +1429,7 @@ def _verify_core_files(core_dir: str) -> None:
     marker = os.path.join(core_dir, "internal", "bootstrap", "node-lifecycle.sh")
     if not os.path.isfile(marker):
         raise RuntimeError(
-            f"Core bootstrap not found at {marker}. Deploy first:\n"
-            f"  rsync -avz core/ root@<server>:{core_dir}/"
+            f"Core bootstrap not found at {marker}. Deploy first:\n  rsync -avz core/ root@<server>:{core_dir}/"
         )
     ver_file = os.path.join(core_dir, "VERSION")
     if os.path.isfile(ver_file):
@@ -1392,6 +1489,7 @@ def _validate_node_yaml(node_yaml: str, core_dir: str) -> None:
     try:
         import jsonschema
         import yaml
+
         with open(schema_file) as f:
             schema = json.load(f)
         with open(node_yaml) as f:
@@ -1402,14 +1500,18 @@ def _validate_node_yaml(node_yaml: str, core_dir: str) -> None:
         logger.warning("[IMP:7][validate_node_yaml] yaml/jsonschema not available — skipping Python validation")
         # Fall back to subprocess python3
         _subprocess_run(
-            ["python3", "-c", f"""
+            [
+                "python3",
+                "-c",
+                f"""
 import json, yaml, jsonschema, sys
 with open('{node_yaml}') as f:
     instance = yaml.safe_load(f)
 with open('{schema_file}') as f:
     schema = json.load(f)
 jsonschema.validate(instance, schema)
-"""],
+""",
+            ],
             "validate_node_yaml",
             non_fatal=True,
         )
@@ -1525,7 +1627,11 @@ def _ssl_provision(core_dir: str, node_yaml: str) -> None:
     if os.path.isfile(secrets_env):
         # Source it for env vars
         _subprocess_run(
-            ["bash", "-c", f"set -a; source '{secrets_env}'; set +a; unset HTTP_PROXY HTTPS_PROXY; echo WEBNAMES_API_KEY=${{WEBNAMES_API_KEY:-unset}}"],
+            [
+                "bash",
+                "-c",
+                f"set -a; source '{secrets_env}'; set +a; unset HTTP_PROXY HTTPS_PROXY; echo WEBNAMES_API_KEY=${{WEBNAMES_API_KEY:-unset}}",
+            ],
             "source_secrets_env",
             non_fatal=True,
         )
@@ -1573,6 +1679,7 @@ def _run_healthchecks(node_yaml: str) -> None:
 
     try:
         import yaml
+
         with open(node_yaml) as f:
             data = yaml.safe_load(f)
         modules = data.get("modules", {})
@@ -1598,10 +1705,17 @@ def _run_healthchecks(node_yaml: str) -> None:
                 try:
                     hc_result = subprocess.run(
                         ["invoke_module_interface", mod_name, "healthcheck", "liveness"],
-                        capture_output=True, text=True, timeout=30,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
                     )
                     if hc_result.returncode == 0:
-                        logger.info("[IMP:9][healthcheck:%s] Healthcheck PASS (attempt %d/%d)", mod_name, attempt, hc_max_retries)
+                        logger.info(
+                            "[IMP:9][healthcheck:%s] Healthcheck PASS (attempt %d/%d)",
+                            mod_name,
+                            attempt,
+                            hc_max_retries,
+                        )
                         passed = True
                         break
                 except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -1669,10 +1783,7 @@ def _send_telegram(sm: StateMachine) -> None:
     warnings_count = len(sm.state.warnings)
     errors_count = len(sm.state.errors)
 
-    if errors_count > 0 or warnings_count > 0:
-        status_suffix = "⚠️ Warnings/Errors:"
-    else:
-        status_suffix = "✅"
+    status_suffix = "⚠️ Warnings/Errors:" if errors_count > 0 or warnings_count > 0 else "✅"
 
     msg = f"🚀 [node: {node}] Узел обновлён {status_suffix}\nВремя: {ts}"
     if warnings_count > 0:
@@ -1687,10 +1798,13 @@ def _send_telegram(sm: StateMachine) -> None:
         import urllib.parse
         import urllib.request
 
-        params = urllib.parse.urlencode({
-            "chat_id": chat_id,
-            "text": msg,
-        }, quote_via=urllib.parse.quote)
+        params = urllib.parse.urlencode(
+            {
+                "chat_id": chat_id,
+                "text": msg,
+            },
+            quote_via=urllib.parse.quote,
+        )
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage?{params}"
         req = urllib.request.Request(url)
 
@@ -1701,6 +1815,7 @@ def _send_telegram(sm: StateMachine) -> None:
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
     except Exception as e:
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
+
 
 # endregion HELPER_FUNCTIONS
 

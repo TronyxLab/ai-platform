@@ -232,23 +232,30 @@ def test_langfuse_health_endpoint(caplog, platform_services) -> None:
     # Check if port is actually forwarded from a Docker container
     if not _check_port_forwarded(port, "/api/public/health"):
         import subprocess as _sp
+
         _diag_parts = [f"Langfuse port {port} is not accessible via _check_port_forwarded."]
 
         # Check if langfuse-test container exists
         _ps = _sp.run(
             ["docker", "ps", "-a", "--filter", "name=langfuse-test", "--format", "{{.Names}} {{.Status}}"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         _diag_parts.append(f"Container status: {_ps.stdout.strip() or 'container not found'}")
 
         # Check listening ports in relevant test range
         _lsof = _sp.run(
             ["lsof", "-iTCP", "-sTCP:LISTEN", "-P", "-n"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-        _port_lines = [line for line in _lsof.stdout.splitlines() if any(
-            p in line for p in ("13000", "13030", "19090", "19119", "14000", "18642")
-        )]
+        _port_lines = [
+            line
+            for line in _lsof.stdout.splitlines()
+            if any(p in line for p in ("13000", "13030", "19090", "19119", "14000", "18642"))
+        ]
         if _port_lines:
             _diag_parts.append("Listening ports in test range:\n" + "\n".join(_port_lines))
         else:

@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test-smoke-postgres smoke docker-compose healthcheck pg_isready postgres-test pgbouncer-test containers-healthy
-# STRUCTURE: ▶ fixture(_docker_guard + foreign_guard) → fixture(postgres_up) → test_smoke_postgres_containers_healthy(◇ docker inspect health) → test_smoke_pgbouncer_pg_isready_6432(◇ docker exec) → ∑ IMP:9 logs
+# STRUCTURE: ▶ _docker_guard(production+daemon) → postgres_up(◇ check_foreign_containers → ◇ reuse ? wait_for_containers_healthy : compose lifecycle) → test_containers_healthy(◇ docker inspect health) → test_pgbouncer_pg_isready(◇ docker exec) → ∑ IMP:9 logs
 # region MODULE_CONTRACT
 ## @purpose  Smoke tests for postgres+pgbouncer compose stack — verifies container health
 ##           and TCP connectivity using real Docker containers.
@@ -14,8 +14,8 @@
 ##   - pgbouncer-test container reports healthy via Docker healthcheck
 ##   - pg_isready on port 6432 in pgbouncer-test responds with "accepting connections"
 ##   - DB_NET_NAME=smoke-postgres-db-net — isolated external network (B6 T5.2)
-##   - Foreign container guard: skip if postgres-test or pgbouncer-test belongs to
-##     a different compose project (prevents cross-session conflicts)
+##   - Foreign container guard: postgres_up checks check_foreign_containers from reuse.py
+##     (prevents cross-session conflicts by detecting platform_services containers)
 ##   - Safety guard: skip if hostname matches known production patterns
 ##   - Docker guard: skip if Docker daemon is unavailable
 ##   - At least one IMP:9 log per test per §TESTING LDD requirement
@@ -39,6 +39,7 @@
 ## @changes — CREATED: 2026-07-15 | T5.2: smoke tests for postgres module
 ##            UPDATED: 2026-07-15 | B5: COMPOSE_PROFILES=postgres + skip→fail (T5.2)
 ##            UPDATED: 2026-07-15 | B6: DB_NET_NAME изоляция сети + teardown rm (T5.2)
+##            UPDATED: 2026-07-22 | DevPlan 040 Wave 1-2: reuse.py foreign guard + scope=session
 def _module_contract():
     pass
 
@@ -52,20 +53,22 @@ import time
 
 import pytest
 from _conftest.honesty import require_docker_or_fail
+from _conftest.infra import infra as _infra
+from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 
 logger = logging.getLogger(__name__)
 
 from conftest import _ensure_volume_dirs, ensure_external_networks, is_production_host, ldd_trajectory
 
 # ── Constants ─────────────────────────────────────────────────────────────────
+# ⚠️ TRAP[DECISION] · 2026-07-22 · — · Container names derived from infra auto-discovery
+# · Rejected: hardcoded "postgres-test", "pgbouncer-test" (risk: drift from compose files)
+# · Reason: Deriving from infra.py ensures always-in-sync container names.
+# · Rev: if infra._load_test_infra() becomes a bottleneck, add file-based cache with mtime check.
 COMPOSE_PROJECT_SMOKE = "ai-platform-smoke-postgres"
-CONTAINER_POSTGRES = "postgres-test"
-CONTAINER_PGBOUNCER = "pgbouncer-test"
+CONTAINER_POSTGRES = _infra.get_container_name("postgres", service="postgres")
+CONTAINER_PGBOUNCER = _infra.get_container_name("postgres", service="pgbouncer")
 COMPOSE_DIR = os.path.join(os.path.dirname(__file__), "..", "core", "modules", "postgres")
-
-# Module-level flag: True if containers from platform_services (ai-platform-test project)
-# are reused instead of starting a new compose stack.
-_REUSE_CONTAINERS = False
 
 # ⚠️ TRAP[BUG] · 2026-07-21 · MED · Test compose (test.yml) overrides the base network
 # to test-shared-db-net. The smoke test must pre-create this network so Docker Compose
@@ -115,7 +118,6 @@ def _docker_guard() -> None:
     ## @invariants
     ##   - Skip if production host
     ##   - Skip if Docker daemon unavailable
-    ##   - Skip if postgres-test or pgbouncer-test exists under a different compose project
     """
     # ── Production guard ────────────────────────────────────────────────
     if is_production_host():
@@ -125,41 +127,15 @@ def _docker_guard() -> None:
     require_docker_or_fail(reason="postgres smoke tests require Docker daemon")
     logger.info("[IMP:9][_docker_guard] Docker daemon available, host is not production")
 
-    # ── Foreign container guard ─────────────────────────────────────────
-    # If a container with -test suffix exists under a DIFFERENT compose project,
-    # skip to avoid "container name already in use" errors.
-    for container_name in (CONTAINER_POSTGRES, CONTAINER_PGBOUNCER):
-        inspect_result = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                container_name,
-                "--format",
-                '{{index .Config.Labels "com.docker.compose.project"}}',
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if inspect_result.returncode == 0:
-            project = inspect_result.stdout.strip()
-            if project and project != COMPOSE_PROJECT_SMOKE:
-                global _REUSE_CONTAINERS
-                _REUSE_CONTAINERS = True
-                logger.info(
-                    "[IMP:8][_docker_guard] Container '%s' belongs to project '%s' — will reuse from platform_services",
-                    container_name, project,
-                )
-    logger.info("[IMP:9][_docker_guard] No foreign containers detected")
 
-
-@pytest.fixture(scope="module")
-def postgres_up() -> None:
+@pytest.fixture(scope="session")
+def postgres_up(platform_services: dict[str, list[str]]) -> None:
     """Start postgres + pgbouncer compose stack for smoke testing.
 
-    ## @purpose — Module-scoped lifecycle fixture. Creates networks, starts
+    ## @purpose — Session-scoped lifecycle fixture. Creates networks, starts
     ##            compose, waits for both containers to be healthy.
-    ##            Teardown: docker compose down -v.
+    ##            Supports reuse mode: if foreign containers detected from
+    ##            platform_services, skips compose lifecycle.
     ## @io — ⎋ None (side-effect: Docker containers)
     ## @complexity — O(1) — single compose up + poll loops
     ## @invariants
@@ -180,49 +156,39 @@ def postgres_up() -> None:
     # ── Ensure volume bind-mount directories ────────────────────────────
     _ensure_volume_dirs(_VOLUME_BIND_DIRS)
 
+    # ── Foreign container guard (reuse from platform_services) ────────────
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was "ai-platform-test" instead of COMPOSE_PROJECT_SMOKE
+    # · Symptom: check_foreign_containers treated platform_services containers as "own" (same project),
+    # ·   returned empty → fixture tried to create own containers → "container name already in use"
+    # · Fix: use COMPOSE_PROJECT_SMOKE ("ai-platform-smoke-postgres") so platform_services
+    # ·   containers (ai-platform-test) are correctly detected as foreign.
+    foreign = check_foreign_containers(
+        [CONTAINER_POSTGRES, CONTAINER_PGBOUNCER],
+        COMPOSE_PROJECT_SMOKE,
+    )
+    reuse = bool(foreign)
+
     # ── Reuse containers from platform_services if available ───────────
-    # When platform_services (session-scoped) has already started postgres-test
-    # and pgbouncer-test under project ai-platform-test, reuse them instead
-    # of starting a duplicate compose stack. Ports and container names are
-    # identical — no need for a second stack.
-    if _REUSE_CONTAINERS:
-        logger.info(
-            "[IMP:8][postgres_up] Reusing containers from platform_services — skipping compose lifecycle"
-        )
-        # Health poll parameters (same as normal path below)
-        _max_retries = 20
-        _retry_interval = 3
-        for attempt in range(1, _max_retries + 1):
-            statuses = {}
-            for container_name in (CONTAINER_POSTGRES, CONTAINER_PGBOUNCER):
-                health = subprocess.run(
-                    ["docker", "inspect", "--format", "{{.State.Health.Status}}", container_name],
-                    capture_output=True, text=True, timeout=10,
-                )
-                statuses[container_name] = health.stdout.strip()
-            if all(s == "healthy" for s in statuses.values()):
-                logger.info(
-                    "[IMP:9][postgres_up] Reused containers healthy (attempt %d): %s",
-                    attempt, statuses,
-                )
-                break
-            logger.info(
-                "[IMP:7][postgres_up] Waiting for reused containers (attempt %d/%d): %s",
-                attempt, _max_retries, statuses,
-            )
-            time.sleep(_retry_interval)
-        else:
+    if reuse:
+        logger.info("[IMP:8][postgres_up] Reusing containers from platform_services — skipping compose lifecycle")
+        statuses = wait_for_containers_healthy([CONTAINER_POSTGRES, CONTAINER_PGBOUNCER])
+        if not all(s == "healthy" for s in statuses.values()):
             ps_result = subprocess.run(
-                ["docker", "ps", "-a", "--filter", f"name={COMPOSE_PROJECT_SMOKE}",
-                 "--format", "{{.Names}} {{.Status}}"],
-                capture_output=True, text=True, timeout=10,
+                [
+                    "docker",
+                    "ps",
+                    "-a",
+                    "--filter",
+                    f"name={COMPOSE_PROJECT_SMOKE}",
+                    "--format",
+                    "{{.Names}} {{.Status}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
-            pytest.fail(
-                f"Reused containers NOT healthy after {_max_retries * _retry_interval}s\n"
-                f"{ps_result.stdout.strip()}"
-            )
+            pytest.fail(f"Reused containers NOT healthy after poll\n{ps_result.stdout.strip()}")
         yield
-        # No teardown — containers belong to platform_services (session-scoped)
         return
 
     # ── Ensure external Docker networks ─────────────────────────────────
@@ -390,6 +356,7 @@ def postgres_up() -> None:
 
 
 # region FUNC_test_smoke_postgres_containers_healthy
+# 🧪 TRAP[TEST] · Regression: containers unhealthy after startup · Scenario: normal compose lifecycle + reuse from platform_services · Last fail: never · Remove if: healthcheck.sh gets parametrized container names
 ## @purpose — Verify both postgres-test and pgbouncer-test containers report
 ##            "healthy" via Docker healthcheck.
 ## @io — ⇥ caplog, postgres_up → ⎋ None (asserts health status contains "healthy")
@@ -444,6 +411,7 @@ def test_smoke_postgres_containers_healthy(caplog, postgres_up) -> None:
 
 
 # region FUNC_test_smoke_pgbouncer_pg_isready_6432
+# 🧪 TRAP[TEST] · Regression: pgbouncer not accepting connections · Scenario: pg_isready through pgbouncer on port 6432 · Last fail: never · Remove if: healthcheck.sh gets parametrized container names
 ## @purpose — Verify pgbouncer accepts TCP connections on port 6432 via
 ##            docker exec pg_isready — replicates healthcheck.sh deep check
 ##            with correct -test container name.

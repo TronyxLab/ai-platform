@@ -224,7 +224,9 @@ class TestPytestMarkers:
         # Compare: registered vs actually used
         dead_markers = registered_names - _all_tests_markers
         # Whitelist env-dependent markers that don't need test presence
-        env_dependent = {"skip_enforcement", "e2e", "backup"}
+        # Also whitelist dynamic markers applied via pytest_collection_modifyitems
+        # (not via @pytest.mark.* decorator — not found by static regex scan)
+        env_dependent = {"skip_enforcement", "e2e", "backup", "wave", "requires_fresh_state"}
         dead_markers -= env_dependent
 
         assert not dead_markers, (

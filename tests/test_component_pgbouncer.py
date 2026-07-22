@@ -5,8 +5,8 @@
 #           Verifies compose lifecycle, container health, TCP connectivity,
 #           data flow (SELECT 1), pool mode configuration, and database mapping
 #           using real Docker containers.
-# @scope    Requires Docker daemon. Uses module-scoped fixture that starts
-#           postgres + pgbouncer from a single compose file.
+# @scope    Requires Docker daemon. Uses session-scoped fixture that starts
+#           postgres + pgbouncer from a single compose file (with foreign container reuse).
 #           All tests are marked @pytest.mark.component.
 # @invariants
 #   - pgbouncer container reports healthy via Docker healthcheck
@@ -27,7 +27,8 @@
 ##           Verifies container lifecycle, health, connectivity, pool mode configuration,
 ##           and database mapping using real Docker containers.
 ## @scope    Requires Docker daemon and the postgres docker-compose.base.yml file.
-##           Module-scoped fixture manages the full lifecycle (start → test → teardown).
+##           Session-scoped fixture manages the full lifecycle (start → test → teardown)
+##           with foreign container reuse support.
 ##           All tests are marked @pytest.mark.component and can be filtered via -m component.
 ## @invariants
 ##   - pgbouncer and postgres are started as a single compose stack
@@ -38,6 +39,7 @@
 ##   - Test databases (litellm, langfuse, platform) are created post-start in postgres
 ##   - PgBouncer databases are registered via admin console post-start
 ##   - Fixture teardown runs docker compose down -v removing all containers + volumes
+##   - If foreign containers detected (from platform_services), fixture reuses them
 ##   - Safety guard: skip if hostname matches known production patterns
 ##   - Docker guard: skip if Docker daemon is unavailable
 ## @rationale Q: Why component test instead of integration test? A: Integration tests
@@ -65,12 +67,14 @@ import time
 
 import pytest
 from _conftest.honesty import require_docker_or_fail
+from _conftest.infra import infra as _infra
+from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 from conftest import _ensure_volume_dirs, ensure_external_networks, is_production_host, ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
 COMPOSE_PROJECT_PGBOUNCER = "ai-platform-test-pgbouncer"
-CONTAINER_NAME_PGBOUNCER = "pgbouncer-test"
+CONTAINER_NAME_PGBOUNCER = _infra.get_container_name("postgres", service="pgbouncer")
 
 # Environment for postgres + pgbouncer compose
 # ⚠️ TRAP[BUG] · 2026-07-15 · HI · Component-тесты молча скипались: нет COMPOSE_PROFILES при profiles: [postgres] в base.yml
@@ -160,16 +164,18 @@ def _docker_guard() -> None:
     logger.info("[IMP:9][_docker_guard] Docker daemon available, host is not production")
 
 
-@pytest.fixture(scope="module")
-def pgbouncer_up(modules_dir: str) -> None:
+@pytest.fixture(scope="session")
+def pgbouncer_up(platform_services: dict[str, list[str]], modules_dir: str) -> None:
     """
     Start postgres + pgbouncer compose stack as a single unit.
 
-    ## @purpose — Module-scoped lifecycle fixture. Creates networks, starts
+    ## @purpose — Session-scoped lifecycle fixture. Creates networks, starts
     ##            compose, waits for both containers to be healthy, creates
     ##            test databases, and registers them in pgbouncer.
+    ##            If foreign containers exist (from platform_services), reuses them.
     ##            Teardown: docker compose down -v.
-    ## @io — ⇥ modules_dir: str from conftest → ⎋ None (side-effect: Docker containers)
+    ## @io — ⇥ platform_services: dict[str,list[str]] — started modules from platform_services
+    ##       ⇥ modules_dir: str from conftest → ⎋ None (side-effect: Docker containers)
     ## @complexity — O(1) — single compose up + exec commands for DB setup
     ## @invariants
     ##   - Volume bind-mount dirs are created before compose up
@@ -184,6 +190,28 @@ def pgbouncer_up(modules_dir: str) -> None:
 
     # ── Ensure volume bind-mount directories ────────────────────────────
     _ensure_volume_dirs(_VOLUME_BIND_DIRS)
+
+    # ── Foreign container guard (reuse from platform_services) ────────────
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was "ai-platform-test" instead of COMPOSE_PROJECT_PGBOUNCER
+    # · Same bug as test_smoke_postgres.py: check_foreign_containers treated platform_services
+    # · containers as "own" (same project), returned empty → fixture tried to start own containers.
+    foreign = check_foreign_containers(
+        ["pgbouncer-test", "postgres-test"],
+        COMPOSE_PROJECT_PGBOUNCER,
+    )
+    if foreign:
+        logger.info("[IMP:8][pgbouncer_up] Reusing postgres/pgbouncer from platform_services")
+        statuses = wait_for_containers_healthy(["pgbouncer-test"])
+        if not all(s == "healthy" for s in statuses.values()):
+            ps_result = subprocess.run(
+                ["docker", "ps", "-a", "--filter", "name=pgbouncer-test", "--format", "{{.Names}} {{.Status}}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            pytest.fail(f"Reused containers not healthy\n{ps_result.stdout.strip()}")
+        yield
+        return
 
     # ── Ensure external Docker networks ──────────────────────────────────
     ensure_external_networks(_EXTERNAL_NETWORKS)

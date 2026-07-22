@@ -1,4 +1,5 @@
 # GREP_SUMMARY: context-overlay, ensure_context_repo, git-clone, git-pull, s9-cache, deploy-modules, strangler
+# STRUCTURE: ┌ensure_context_repo()┐ → ◇ node.yaml read → ◇ clone/pull с s9-cache → ⊕ return exit_code
 """
 # region MODULE_CONTRACT
 ## @purpose  Git context-overlay git repo clone/pull with S9 caching. Extracted from deploy-modules.sh (W4-E1).

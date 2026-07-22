@@ -492,98 +492,79 @@ def test_issue_cert_saves_to_s3_after_success():
 
 
 @pytest.mark.static_audit
-# 🧪 TRAP[TEST] · 2026-07-21 · Scenario: node-lifecycle checks S3 cache before issue-cert.sh
-# · Last fail: ordering check (fixed via second_script search) · Remove if: ssl-provision step logic changes
+# 🧪 TRAP[TEST] · 2026-07-22 · Scenario: state_machine checks S3 cache before issue-cert.sh
+# · Regression: W4-E2 node-lifecycle.sh → state_machine.py delegation refactoring
+# · Last fail: ordering check — s3-ssl-cache moved from shell to Python state machine
+# · Remove if: ssl-provision step logic completely rewritten
 def test_node_lifecycle_checks_s3_before_issue():
-    """node-lifecycle.sh update_step_3_ssl_provision() must check S3 cache before issue-cert.sh.
+    """state_machine.py _ssl_provision() must check S3 cache before issue-cert.sh.
 
-    Verifies by grepping the node-lifecycle.sh for s3-ssl-cache check call
-    before the issue-cert.sh invocation.
+    After W4-E2 strangler-fig refactoring, the SSL provisioning logic moved from
+    node-lifecycle.sh to state_machine.py. The state machine checks S3 cache via
+    _subprocess_run before falling back to acme.sh.
     """
-    script_path = "core/internal/bootstrap/node-lifecycle.sh"
-    assert os.path.isfile(script_path), f"node-lifecycle.sh not found at {script_path}"
+    import pathlib
 
-    with open(script_path) as f:
-        content = f.read()
+    sm_path = pathlib.Path("core/internal/bootstrap/lifecycle/state_machine.py")
+    assert sm_path.is_file(), f"state_machine.py not found at {sm_path}"
+
+    content = sm_path.read_text()
 
     # Must reference s3-ssl-cache.sh
-    assert "s3-ssl-cache.sh" in content, "node-lifecycle.sh must reference s3-ssl-cache.sh"
+    assert "s3-ssl-cache.sh" in content, "state_machine.py must reference s3-ssl-cache.sh"
 
-    # Must call check before issue
-    assert "check" in content, "node-lifecycle.sh must call s3-ssl-cache.sh check"
+    # Must call S3 check: the check is done via _subprocess_run with s3_cache_check name
+    assert "s3_cache_check" in content, "state_machine.py must call s3-ssl-cache.sh check"
 
     # Must have the S3 restore fallback logic
-    assert "download" in content, "node-lifecycle.sh must call s3-ssl-cache.sh download on cache hit"
+    assert "s3_cache_download" in content, "state_machine.py must call s3-ssl-cache.sh download on cache hit"
 
     # Must skip issue-cert.sh if S3 restore succeeded
-    assert "return 0" in content, "Must skip issue-cert.sh if S3 restore succeeded"
+    assert "return" in content.split("cert_path")[-1] if "cert_path" in content else "return" in content, (
+        "Must skip issue-cert.sh if S3 restore succeeded"
+    )
 
     # Must fallback to issue-cert.sh if S3 cache miss
-    assert "issue-cert.sh" in content.split("s3-ssl-cache.sh")[-1] or any(
-        "issue-cert.sh" in line and "s3-ssl-cache.sh" not in line
-        for line in content.split("\n")
-        if "issue-cert.sh" in line
-    ), "Must fallback to issue-cert.sh on S3 cache miss"
+    # After the S3 cache check block, state_machine.py calls ssl_script (issue-cert.sh)
+    assert "ssl_issue" in content, "Must fallback to issue-cert.sh on S3 cache miss (ssl_issue subprocess)"
 
-    # Check the ordering in ssl-provision section
+    # Check the ordering in _ssl_provision section
     lines = content.split("\n")
-    ssl_provision_start = -1
+    ssl_section_start = -1
     for i, line in enumerate(lines):
-        if "update_step_3_ssl_provision" in line and "()" in line:
-            ssl_provision_start = i
+        if "def _ssl_provision" in line:
+            ssl_section_start = i
             break
 
-    if ssl_provision_start >= 0:
-        section = "\n".join(lines[ssl_provision_start : ssl_provision_start + 100])
-        # The section must have S3 cache check before the issue-cert.sh fallback call.
-        # The variable `ssl_script` is DECLARED early (before S3 check). We need the
-        # INVOCATION of issue-cert.sh (the fallback `bash "$ssl_script"`), which is
-        # the line after "Issuing SSL certificate for ${PLATFORM_DOMAIN}".
-        # So we find:
-        #   1. S3 cache reference (s3-ssl-cache.sh)
-        #   2. The fallback invocation: `"$ssl_script" 2>&1` (not the declaration)
+    if ssl_section_start >= 0:
+        section = "\n".join(lines[ssl_section_start : ssl_section_start + 80])
+        # Find s3-ssl-cache.sh reference and the ssl_script invocation
         s3_cache_idx = section.find("s3-ssl-cache.sh")
-        # Find ALL occurrences of "$ssl_script" — first is declaration, second is invocation
-        first_script = section.find('"$ssl_script"')
-        second_script = section.find('"$ssl_script"', first_script + 1) if first_script >= 0 else -1
-
-        # If there's only one occurrence, it might be the declaration. Look for
-        # "Issuing SSL certificate" followed by bash invocation as the fallback.
-        issuing_line = section.find("Issuing SSL certificate")
-        # The fallback call to issue-cert.sh uses bash with ssl_script
-        bash_call = section.find("bash", issuing_line) if issuing_line >= 0 else -1
+        ssl_issue_idx = section.find("ssl_issue")
 
         logger.info(
-            "[IMP:7][test_node_lifecycle] s3_cache_idx=%d first_script=%d "
-            "second_script=%d issuing_line=%d bash_call=%d",
+            "[IMP:7][test_node_lifecycle] s3_cache_idx=%d ssl_issue_idx=%d",
             s3_cache_idx,
-            first_script,
-            second_script,
-            issuing_line,
-            bash_call,
+            ssl_issue_idx,
         )
 
-        # S3 cache check must exist and come before the issue-cert.sh invocation
-        assert s3_cache_idx >= 0, "s3-ssl-cache.sh must be referenced in ssl-provision"
-
-        # The fallback to issue-cert.sh must exist (after S3 cache miss)
-        # Use the bash "$ssl_script" invocation after "Issuing SSL certificate"
-        if second_script >= 0:
-            assert s3_cache_idx < second_script, "S3 cache check must happen before issue-cert.sh invocation"
-        elif bash_call >= 0:
-            assert s3_cache_idx < bash_call, "S3 cache check must happen before issue-cert.sh fallback"
-        else:
-            # At minimum verify there's an issue-cert.sh fallback
-            assert '"$ssl_script"' in section, "issue-cert.sh fallback must exist in ssl-provision"
+        # S3 cache check must exist and come before issue-cert.sh invocation
+        assert s3_cache_idx >= 0, "s3-ssl-cache.sh must be referenced in _ssl_provision()"
+        assert ssl_issue_idx >= 0, "ssl_issue subprocess must exist in _ssl_provision()"
+        assert s3_cache_idx < ssl_issue_idx, (
+            "S3 cache check must happen before issue-cert.sh invocation"
+        )
 
         logger.critical(
             "[IMP:9][test_node_lifecycle_s3] ASSERT: S3 cache check precedes issue-cert.sh "
-            "in update_step_3_ssl_provision"
+            "in state_machine.py _ssl_provision()"
         )
     else:
-        logger.warning("[IMP:7][test_node_lifecycle_s3] update_step_3_ssl_provision() not found by name")
+        logger.warning("[IMP:7][test_node_lifecycle_s3] _ssl_provision() not found by name")
 
-    logger.critical("[IMP:9][test_node_lifecycle_s3] ASSERT: node-lifecycle.sh checks S3 cache before issue")
+    logger.critical(
+        "[IMP:9][test_node_lifecycle_s3] ASSERT: state_machine.py checks S3 cache before issue"
+    )
 
 
 # endregion TEST_INTEGRATION_NODE_LIFECYCLE

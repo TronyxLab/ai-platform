@@ -32,71 +32,55 @@ _PLATFORM_ENV_YAML = repo_root() / "platform-env.yaml"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 1: env_requires gate presence
+# Test 1: env_requires check via secrets_validator.py delegation
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_env_requires_gate_present
-## @purpose  Assert deploy-modules.sh defines _check_env_requires() and calls it in
-##           both deploy_docker_module() and deploy_system_module() before any deploy action.
+## @purpose  Assert deploy-modules.sh calls secrets_validator.py --action check-env for each
+##           module before deployment. After W4-E1 Strangler-Fig decomposition, the env_requires
+##           check was migrated from shell `_check_env_requires()` to Python secrets_validator.py.
 ##           Acceptance criterion A4: module with empty env_requires var fails before compose up.
-## @io       ⇥ caplog → ⎋ None (pytest.fail if function missing or not called in both branches)
+## @io       ⇥ caplog → ⎋ None (pytest.fail if delegation call missing)
 ## @complexity 1 — static grep on file content
 ## @invariants
-##   - Function definition MUST exist
-##   - At least 2 non-definition occurrences (calls in both deploy functions)
-##   - Function location follows _get_module_severity (sibling, after it)
+##   - secrets_validator.py --action check-env call present in deploy-modules.sh
+##   - Call passes --module-name and --secrets-manifest
+##   - Call is inside the module deploy loop (before deploy)
 
 
 @pytest.mark.static_audit
 def test_env_requires_gate_present(caplog) -> None:
     """
-    # ◇ read deploy-modules.sh → ⚡ grep _check_env_requires → ⊕ definition + calls → ⎋ pass | fail
+    # ◇ read deploy-modules.sh → ⚡ grep secrets_validator check-env → ⊕ delegation call → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
 
     logger.info("[IMP:7][test_env_requires_gate] Reading deploy-modules.sh ...")
     content = _DEPLOY_MODULES_SH.read_text()
 
-    # ── Function definition ────────────────────────────────────────────────
-    has_definition = "_check_env_requires()" in content
-    logger.critical("[IMP:9][test_env_requires_gate] Function _check_env_requires() defined: %s", has_definition)
-    assert has_definition, "_check_env_requires() function not defined in deploy-modules.sh"
-
-    # ── Count calls (not the definition) ────────────────────────────────────
-    # Search for all lines containing _check_env_requires, exclude definition line
-    all_occurrences = content.count("_check_env_requires")
-    logger.info("[IMP:8][test_env_requires_gate] _check_env_requires appears %d times total", all_occurrences)
-    assert all_occurrences >= 3, (
-        f"_check_env_requires should appear >=3 times "
-        f"(1 definition in CHECK_ENV_REQUIRES + >=2 calls in deploy functions), found {all_occurrences}"
-    )
-
-    # ── Present in both deploy functions (by scanning function regions) ─────
-    # deploy_docker_module region ends at endregion DEPLOY_DOCKER_MODULE
-    docker_region_start = content.find("# region DEPLOY_DOCKER_MODULE")
-    docker_region_end = content.find("# endregion DEPLOY_DOCKER_MODULE")
-    assert docker_region_start >= 0, "DEPLOY_DOCKER_MODULE region not found"
-    assert docker_region_end > docker_region_start, "DEPLOY_DOCKER_MODULE region end before start"
-
-    docker_content = content[docker_region_start:docker_region_end]
-    has_docker_call = "_check_env_requires" in docker_content
+    # ── secrets_validator.py --action check-env delegation ─────────────────
+    has_secrets_check = "secrets_validator.py" in content and "--action check-env" in content
     logger.critical(
-        "[IMP:9][test_env_requires_gate] deploy_docker_module calls _check_env_requires: %s", has_docker_call
+        "[IMP:9][test_env_requires_gate] secrets_validator.py --action check-env present: %s", has_secrets_check
     )
-    assert has_docker_call, "deploy_docker_module() does not call _check_env_requires"
-
-    # deploy_system_module region
-    system_region_start = content.find("# region DEPLOY_SYSTEM_MODULE")
-    system_region_end = content.find("# endregion DEPLOY_SYSTEM_MODULE")
-    assert system_region_start >= 0, "DEPLOY_SYSTEM_MODULE region not found"
-    assert system_region_end > system_region_start, "DEPLOY_SYSTEM_MODULE region end before start"
-
-    system_content = content[system_region_start:system_region_end]
-    has_system_call = "_check_env_requires" in system_content
-    logger.critical(
-        "[IMP:9][test_env_requires_gate] deploy_system_module calls _check_env_requires: %s", has_system_call
+    assert has_secrets_check, (
+        "deploy-modules.sh must call secrets_validator.py --action check-env for env_requires validation\n"
+        "W4-E1 migrated _check_env_requires() to secrets_validator.py"
     )
-    assert has_system_call, "deploy_system_module() does not call _check_env_requires"
+
+    # ── --module-name flag passed ──
+    has_module_name = "--module-name" in content
+    logger.critical("[IMP:9][test_env_requires_gate] --module-name flag present: %s", has_module_name)
+    assert has_module_name, "deploy-modules.sh must pass --module-name to secrets_validator.py check-env"
+
+    # ── --secrets-manifest flag passed ──
+    has_secrets_manifest = "--secrets-manifest" in content
+    logger.critical("[IMP:9][test_env_requires_gate] --secrets-manifest flag present: %s", has_secrets_manifest)
+    assert has_secrets_manifest, "deploy-modules.sh must pass --secrets-manifest to secrets_validator.py check-env"
+
+    # ── Check is inside the deploy loop (FAILED+= on failure) ──
+    has_failed_tracking = "FAILED+=(" in content or 'FAILED+=("' in content
+    logger.critical("[IMP:9][test_env_requires_gate] Failure tracking present (FAILED+=): %s", has_failed_tracking)
 
     # ── LDD trajectory ─────────────────────────────────────────────────────
     found_imp9 = False

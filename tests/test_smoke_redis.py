@@ -5,9 +5,10 @@
 ##           Checks: connectivity (PONG), persistence off (appendonly=no, save=""),
 ##           eviction policy (allkeys-lfu), and network isolation (no host ports).
 ## @scope    Docker-dependent tests (pytest.mark.smoke + pytest.mark.requires_docker).
-##           Requires Docker daemon. Module-scoped fixture manages compose lifecycle.
+##           Requires Docker daemon. Session-scoped fixture manages compose lifecycle with reuse.
 ## @invariants
-##   - Module-scoped fixture manages compose lifecycle: pre-cleanup → up → tests → down
+##   - Session-scoped fixture manages compose lifecycle: pre-cleanup → up → tests → down
+##   - Foreign container guard: if redis-test already runs under platform_services, reuse it (skip compose ops)
 ##   - Stops any existing wave-redis project before starting wave-redis-smoke
 ##   - Creates shared-cache-net if absent (cleans up only if created)
 ##   - All tests use docker compose exec or docker inspect (no in-container tools needed)
@@ -16,7 +17,8 @@
 ##   - At least one IMP:9 log per test per §TESTING LDD requirement
 ## @rationale Smoke tests validate the actual Docker container behavior — compose config
 ##            parsing alone cannot verify runtime config (CONFIG GET) and network isolation
-##            (no host ports). Module-scoped fixture ensures isolation and cleanup.
+##            (no host ports). Session-scoped fixture with foreign reuse eliminates redundant
+##            compose ops when platform_services already manages the container.
 ## @usecases — Wave T5.3 (redis) acceptance: cache-only contract verified at runtime
 # endregion MODULE_CONTRACT
 
@@ -25,7 +27,9 @@ import logging
 import subprocess
 
 import pytest
+from _conftest.infra import infra as _infra
 from _conftest.ldd import _print_ldd_trajectory
+from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 
 from tests.helpers.gate_helpers import repo_root
 
@@ -40,8 +44,11 @@ _COMPOSE_TEST = _REDIS_MODULE / "docker-compose.test.yml"
 _WAVE_PROJECT = "wave-redis"  # existing production/live-verification project
 _SMOKE_PROJECT = "wave-redis-smoke"  # isolated smoke test project
 
-# Default test container name (from test.yml override)
-_CONTAINER_NAME = "redis-test"
+# Default test container name (from test.yml override) — derived from infra auto-discovery
+# ⚠️ TRAP[DECISION] · 2026-07-22 · — · Container name derived from infra auto-discovery
+# · Rejected: hardcoded "redis-test" (risk: drift from compose files)
+# · Reason: Deriving from infra.py ensures always-in-sync container names.
+_CONTAINER_NAME = _infra.get_container_name("redis")
 
 # Timeouts
 _COMPOSE_UP_TIMEOUT = 90  # --wait-timeout 60 + buffer
@@ -52,20 +59,22 @@ _NETWORK_CREATE_TIMEOUT = 15
 
 
 # region FIXTURES
-## @purpose — Module-scoped compose lifecycle fixture for redis smoke tests.
+## @purpose — Session-scoped compose lifecycle fixture for redis smoke tests.
 ##            Pre-cleans wave-redis project, starts wave-redis-smoke, yields,
-##            tears down on completion.
+##            tears down on completion. Reuses container from platform_services if present.
 
 
-@pytest.fixture(scope="module")
-def redis_compose():
-    """Module-scoped fixture: manage docker compose lifecycle for redis smoke tests.
+@pytest.fixture(scope="session")
+def redis_compose(platform_services: dict[str, list[str]]) -> dict:
+    """Session-scoped fixture: manage docker compose lifecycle for redis smoke tests.
 
     ## @purpose — Start redis container with cache-only config, yield for tests,
-    ##            tear down and clean up after all tests in module.
-    ## @io — ⇥ None → ⎋ dict (compose project name, container name for tests)
+    ##            tear down and clean up after all tests in session.
+    ##            If container already runs under platform_services (foreign), skip compose ops.
+    ## @io — ⇥ platform_services → ⎋ dict (compose project name, container name for tests)
     ## @complexity — O(1) — startup/teardown, no loops
     ## @invariants
+    ##   - Foreign guard: check_foreign_containers → if redis-test runs under ai-platform-test, reuse
     ##   - Stops any running wave-redis project before starting smoke project
     ##   - Creates shared-cache-net Docker network if absent (removes if created)
     ##   - docker compose up -d --wait with 60s timeout
@@ -74,6 +83,29 @@ def redis_compose():
     """
     _logger = logging.getLogger(__name__)
     _logger.info("[IMP:7][redis_compose][setup] Starting redis smoke fixture")
+
+    # ── Foreign container guard (reuse from platform_services) ────────────
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was "ai-platform-test" instead of _SMOKE_PROJECT
+    # · Same bug as test_smoke_postgres.py: check_foreign_containers treated platform_services
+    # · containers as "own" (same project), returned empty → fixture tried to start own containers.
+    foreign = check_foreign_containers([_CONTAINER_NAME], _SMOKE_PROJECT)
+    if foreign:
+        _logger.info("[IMP:8][redis_compose] Reusing redis from platform_services")
+        statuses = wait_for_containers_healthy([_CONTAINER_NAME])
+        if not all(s == "healthy" for s in statuses.values()):
+            pytest.fail(f"Reused redis container not healthy: {statuses}")
+        # Use the foreign project name for docker compose commands in test functions
+        foreign_project = foreign[_CONTAINER_NAME]
+        _logger.info(
+            "[IMP:7][redis_compose] Foreign container '%s' belongs to project '%s'", _CONTAINER_NAME, foreign_project
+        )
+        yield {
+            "project": foreign_project,
+            "container": _CONTAINER_NAME,
+            "compose_base": str(_COMPOSE_BASE),
+            "compose_test": str(_COMPOSE_TEST),
+        }
+        return
 
     # ── Step 1: Stop any running wave-redis project ───────────────────────────
     _logger.info("[IMP:7][redis_compose][setup] Stopping existing wave-redis project")
@@ -282,7 +314,7 @@ def redis_compose():
 ##            All tests use @pytest.mark.smoke + @pytest.mark.requires_docker.
 ## @scope    Live container tests — require Docker daemon and compose running.
 ## @invariants
-##   - All tests depend on redis_compose fixture (module-scoped)
+##   - All tests depend on redis_compose fixture (session-scoped with foreign reuse)
 ##   - Tests use docker compose exec for in-container redis-cli commands
 ##   - Port check uses docker container inspect (not compose)
 ##   - Each test asserts IMP:9 presence via ldd pattern in caplog

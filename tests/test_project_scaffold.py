@@ -456,29 +456,27 @@ def test_step_6b_calls_converge(
     ## @acceptance — DevPlan 024 Wave 2: step_6b calls converge --units R3 for
     ##               project scaffold during bootstrap.
     """
-    # Read node-lifecycle.sh source
-    source_text = _NODE_LIFECYCLE_SCRIPT.read_text()
-
-    # Verify step_6b function exists
-    assert "step_6b_create_projects_base" in source_text, (
-        "step_6b_create_projects_base() must exist in node-lifecycle.sh"
+    # After W4-E2 strangler-fig refactoring, step_6b delegates to state_machine.py
+    # which calls converge.sh --units R3 from _ensure_projects_base().
+    # Check state_machine.py for the converge R3 call pattern.
+    _SM_SCRIPT = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "core/internal/bootstrap/lifecycle/state_machine.py"
     )
+    sm_source = _SM_SCRIPT.read_text()
 
-    # Verify the function calls converge.sh with --units R3
+    # Verify _ensure_projects_base() calls converge.sh with --units R3
     converge_call_pattern = False
-    for line in source_text.splitlines():
-        if "converge_script" in line and "--units R3" in line:
+    for line in sm_source.splitlines():
+        if "--units" in line and "R3" in line and "converge" in line.lower():
             converge_call_pattern = True
-            print(f"[IMP:7][test][step_6b] Found converge R3 call: {line.strip()}")
-        if "converge.sh" in line and "R3" in line and "units" in line:
-            converge_call_pattern = True
-            print(f"[IMP:7][test][step_6b] Found converge R3 reference: {line.strip()}")
+            print(f"[IMP:7][test][step_6b] Found converge R3 call in state_machine.py: {line.strip()}")
 
     assert converge_call_pattern, (
-        f"step_6b_create_projects_base() must call converge.sh with --units R3\n"
-        f"Look for 'converge --units R3' pattern in {_NODE_LIFECYCLE_SCRIPT}\n"
+        f"_ensure_projects_base() in state_machine.py must call converge.sh with --units R3\n"
+        f"Look for '--units R3' pattern in {_SM_SCRIPT}\n"
         f"Converge-related lines:\n"
-        + "\n".join(line for line in source_text.splitlines() if "converge" in line.lower())[:3000]
+        + "\n".join(line for line in sm_source.splitlines() if "converge" in line.lower())[:3000]
     )
 
     # Verify converge.sh has the --units flag in usage
@@ -486,7 +484,15 @@ def test_step_6b_calls_converge(
     assert "--units" in converge_source, "converge.sh must support the --units flag in its argument parsing"
     print("[IMP:7][test][step_6b] converge.sh --units flag confirmed in source")
 
-    logger.critical("[IMP:9][test][step_6b] Verified step_6b_create_projects_base() calls converge --units R3")
+    # Verify step_6b function still exists in node-lifecycle.sh
+    node_source = _NODE_LIFECYCLE_SCRIPT.read_text()
+    assert "step_6b_create_projects_base" in node_source, (
+        "step_6b_create_projects_base() must exist in node-lifecycle.sh"
+    )
+
+    logger.critical(
+        "[IMP:9][test][step_6b] Verified converge --units R3 called from state_machine.py"
+    )
 
 
 # 🧪 TRAP[TEST] · 2026-07-21

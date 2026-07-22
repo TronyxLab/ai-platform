@@ -39,11 +39,11 @@
 # endregion MODULE_CONTRACT
 
 import argparse
+import contextlib
 import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -94,6 +94,8 @@ def _reset_state() -> None:
     _has_errors = False
     _has_warnings = False
     logger.info("[IMP:7][_reset_state] Module state reset")
+
+
 # endregion FUNC__reset_state
 
 
@@ -115,6 +117,8 @@ def _unit_enabled(units_filter: str, unit_name: str) -> bool:
         return True
     tokens = [t.strip() for t in units_filter.split(",") if t.strip()]
     return unit_name in tokens
+
+
 # endregion FUNC__unit_enabled
 
 
@@ -122,6 +126,7 @@ def _unit_enabled(units_filter: str, unit_name: str) -> bool:
 # region FUNC_report_init / report_add / report_emit
 ## @purpose  JSON report helpers for --report-only mode. Mirrors shell:
 ##           report_init() → report_add() × N → report_emit() → exit
+
 
 def report_init() -> None:
     """Initialize drift report — reset drift list."""
@@ -167,6 +172,8 @@ def report_emit() -> str:
     report_json = json.dumps(report, indent=2)
     logger.info("[IMP:8][report_emit] Report: %s", report_json)
     return report_json
+
+
 # endregion
 
 
@@ -188,6 +195,8 @@ def _set_exit(severity: int) -> None:
             _exit_code = 1
         _has_warnings = True
     # severity 0 = no-op
+
+
 # endregion FUNC__set_exit
 
 
@@ -206,20 +215,36 @@ def _run_subprocess(
     - If check=False, returns a failed CompletedProcess with returncode != 0
     """
     try:
-        result = subprocess.run(
+        return subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
         )
-        return result
     except FileNotFoundError:
         logger.warning("[IMP:8][_run_subprocess] Binary not found: %s", cmd[0])
         return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr=f"{cmd[0]}: not found")
     except subprocess.TimeoutExpired:
         logger.warning("[IMP:8][_run_subprocess] Timeout after %ds: %s", timeout, " ".join(cmd))
         return subprocess.CompletedProcess(args=cmd, returncode=124, stdout="", stderr="timeout")
+
+
 # endregion FUNC__run_subprocess
+
+
+# region FUNC__try_chmod
+## @purpose  Attempt chmod with OSError handling, returns success bool
+def _try_chmod(path: str, unit: str) -> bool:
+    """Try to chmod a file, returning True on success. Handles OSError internally."""
+    try:
+        os.chmod(path, os.stat(path).st_mode | 0o110)  # ug+x
+        return True
+    except OSError as exc:
+        logger.warning("[IMP:8][converge][%s] chmod failed for %s: %s", unit, path, exc)
+        return False
+
+
+# endregion FUNC__try_chmod
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -293,13 +318,9 @@ def reconcile_perms(
     # ── Actual mutation ──
     fixed = 0
     for f in non_exec_files:
-        try:
-            os.chmod(str(f), os.stat(str(f)).st_mode | 0o110)  # ug+x
+        if _try_chmod(str(f), unit):
             fixed += 1
             logger.info("[IMP:7][converge][%s] Fixed: %s", unit, f)
-        except OSError as exc:
-            logger.warning("[IMP:8][converge][%s] chmod failed for %s: %s", unit, f, exc)
-            continue
 
     if fixed == 0:
         logger.info("[IMP:9][converge][%s] SKIP: No files could be fixed", unit)
@@ -312,6 +333,8 @@ def reconcile_perms(
         _set_exit(1)
 
     return entry
+
+
 # endregion FUNC_reconcile_perms
 
 
@@ -427,14 +450,20 @@ def reconcile_audit_log(
             if dry_run or report_only:
                 logger.info(
                     "[IMP:9][converge][%s] WOULD fix: %s mode=%s owner=%s",
-                    unit, AUDIT_LOG_FILE, current_mode, current_owner,
+                    unit,
+                    AUDIT_LOG_FILE,
+                    current_mode,
+                    current_owner,
                 )
                 report_add(unit, "mutated", "audit.log permissions would be fixed")
                 _set_exit(1)
             else:
                 logger.info(
                     "[IMP:8][converge][%s] Fixing permissions: %s mode=%s owner=%s",
-                    unit, AUDIT_LOG_FILE, current_mode, current_owner,
+                    unit,
+                    AUDIT_LOG_FILE,
+                    current_mode,
+                    current_owner,
                 )
                 _run_subprocess(["chmod", "0664", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
                 _run_subprocess(["chown", "root:adm", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
@@ -447,6 +476,8 @@ def reconcile_audit_log(
 
     logger.info("[IMP:9][converge][%s] DONE: audit log reconciled", unit)
     return {"unit": unit, "status": "converged" if not _has_errors else "warn", "detail": "audit log reconciled"}
+
+
 # endregion FUNC_reconcile_audit_log
 
 
@@ -487,6 +518,8 @@ def _reconcile_ci_deploy_group(unit: str, dry_run: bool, report_only: bool) -> N
                 usermod_r.stderr.strip(),
             )
             report_add(unit, "warn", "usermod failed for ci-deploy → adm group")
+
+
 # endregion FUNC__reconcile_ci_deploy_group
 
 
@@ -624,7 +657,13 @@ def reconcile_projects(
         report_add(unit, "converged", "All project directories and stubs present")
 
     logger.info("[IMP:9][converge][%s] DONE: projects reconciled (mutated=%d errors=%d)", unit, mutated, errors)
-    return {"unit": unit, "status": "converged" if not errors else "fail", "detail": f"mutated={mutated} errors={errors}"}
+    return {
+        "unit": unit,
+        "status": "converged" if not errors else "fail",
+        "detail": f"mutated={mutated} errors={errors}",
+    }
+
+
 # endregion FUNC_reconcile_projects
 
 
@@ -638,6 +677,7 @@ def _parse_projects_yaml(node_yaml_path: str) -> list[dict]:
     """
     try:
         import yaml
+
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
         projects_raw = data.get("projects", []) if data else []
@@ -651,6 +691,8 @@ def _parse_projects_yaml(node_yaml_path: str) -> list[dict]:
     except Exception as exc:
         logger.warning("[IMP:8][_parse_projects_yaml] Failed to parse projects from %s: %s", node_yaml_path, exc)
         return []
+
+
 # endregion FUNC__parse_projects_yaml
 
 
@@ -668,9 +710,13 @@ def _validate_project_name(name: str) -> bool:
         logger.warning("[IMP:10][_validate_project_name] FAIL: Invalid project name '%s' — contains / or ..", name)
         return False
     if not re.match(r"^[a-zA-Z0-9_-]+$", name):
-        logger.warning("[IMP:10][_validate_project_name] FAIL: Invalid project name '%s' — only [a-zA-Z0-9_-] allowed", name)
+        logger.warning(
+            "[IMP:10][_validate_project_name] FAIL: Invalid project name '%s' — only [a-zA-Z0-9_-] allowed", name
+        )
         return False
     return True
+
+
 # endregion FUNC__validate_project_name
 
 
@@ -747,6 +793,8 @@ def _reconcile_env_platform(
 
     report_add(unit, "mutated", f".env.platform created for {proj_name}")
     _set_exit(1)
+
+
 # endregion FUNC__reconcile_env_platform
 
 
@@ -770,6 +818,8 @@ def _is_stub(ai_platform_yaml_path: str) -> bool:
         return "GENERATED-STUB" in first_line
     except (OSError, IndexError):
         return False
+
+
 # endregion FUNC__is_stub
 
 
@@ -834,7 +884,11 @@ def reconcile_networks(
                 report_add(unit, "mutated", "proxy-net created")
                 _set_exit(1)
             else:
-                logger.error("[IMP:10][converge][%s] FAIL: docker network create proxy-net failed: %s", unit, create_r.stderr.strip())
+                logger.error(
+                    "[IMP:10][converge][%s] FAIL: docker network create proxy-net failed: %s",
+                    unit,
+                    create_r.stderr.strip(),
+                )
                 report_add(unit, "fail", "proxy-net creation failed")
                 _set_exit(2)
                 return {"unit": unit, "status": "fail", "detail": "proxy-net creation failed"}
@@ -861,6 +915,8 @@ def reconcile_networks(
 
     logger.info("[IMP:9][converge][%s] DONE: networks reconciled", unit)
     return {"unit": unit, "status": "converged", "detail": "networks reconciled"}
+
+
 # endregion FUNC_reconcile_networks
 
 
@@ -885,9 +941,12 @@ def _check_proxy_connectivity(node_yaml_path: str, unit: str) -> None:
         # Find running containers for this project
         ps_r = _run_subprocess(
             [
-                "docker", "ps",
-                "--filter", f"label=com.docker.compose.project={pname}",
-                "--format", "{{.Names}}",
+                "docker",
+                "ps",
+                "--filter",
+                f"label=com.docker.compose.project={pname}",
+                "--format",
+                "{{.Names}}",
             ],
             timeout=DOCKER_TIMEOUT,
         )
@@ -900,8 +959,11 @@ def _check_proxy_connectivity(node_yaml_path: str, unit: str) -> None:
         for cname in containers:
             inspect_r = _run_subprocess(
                 [
-                    "docker", "inspect", cname,
-                    "--format", "{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}",
+                    "docker",
+                    "inspect",
+                    cname,
+                    "--format",
+                    "{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}",
                 ],
                 timeout=DOCKER_TIMEOUT,
             )
@@ -916,6 +978,8 @@ def _check_proxy_connectivity(node_yaml_path: str, unit: str) -> None:
                 report_add(unit, "warn", f"Container {cname} not connected to proxy-net")
             else:
                 logger.info("[IMP:7][converge][%s] OK: Container %s connected to proxy-net", unit, cname)
+
+
 # endregion FUNC__check_proxy_connectivity
 
 
@@ -991,6 +1055,8 @@ def detect_hosts_drift(node_yaml_path: str) -> dict:
         "status": "warn" if drift_found > 0 else "converged",
         "detail": f"{drift_found} stale entries found" if drift_found > 0 else "No stale entries",
     }
+
+
 # endregion FUNC_detect_hosts_drift
 
 
@@ -1042,7 +1108,9 @@ def verify_vhosts(
     projects_with_domains = [p for p in projects if p.get("name") and p.get("domain")]
 
     # ── Determine nginx overlay directory ──
-    overlay_dir = _resolve_nginx_overlay(str(node_yaml), converge_node, base_dir=overlay_base if overlay_base else "/opt")
+    overlay_dir = _resolve_nginx_overlay(
+        str(node_yaml), converge_node, base_dir=overlay_base if overlay_base else "/opt"
+    )
 
     if not overlay_dir or not Path(overlay_dir).is_dir():
         logger.warning(
@@ -1083,7 +1151,9 @@ def verify_vhosts(
                 vhost_errors += 1
                 _set_exit(2)
         else:
-            logger.error("[IMP:9][converge][%s] FAIL: Vhost overlay directory not resolved — cannot verify %s.conf", unit, domain)
+            logger.error(
+                "[IMP:9][converge][%s] FAIL: Vhost overlay directory not resolved — cannot verify %s.conf", unit, domain
+            )
             report_add(unit, "fail", f"overlay dir not resolved for {domain}.conf")
             vhost_errors += 1
             _set_exit(2)
@@ -1111,6 +1181,8 @@ def verify_vhosts(
         status = "fail"
 
     return {"unit": unit, "status": status, "detail": f"{len(projects_with_domains)} vhost(s), {vhost_errors} error(s)"}
+
+
 # endregion FUNC_verify_vhosts
 
 
@@ -1120,6 +1192,7 @@ def _resolve_nginx_overlay(node_yaml_path: str, converge_node: str, base_dir: st
     """Resolve nginx vhost directory from node.yaml context or node fallback."""
     try:
         import yaml
+
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
         context_name = data.get("context", "") if data else ""
@@ -1144,6 +1217,8 @@ def _resolve_nginx_overlay(node_yaml_path: str, converge_node: str, base_dir: st
 
     logger.warning("[IMP:8][_resolve_nginx_overlay] No nginx overlay found for node=%s", converge_node)
     return None
+
+
 # endregion FUNC__resolve_nginx_overlay
 
 
@@ -1169,6 +1244,8 @@ def _detect_orphan_vhosts(overlay_dir: str, expected_domains: list[str], unit: s
                 fname,
             )
             report_add(unit, "warn", f"Orphan vhost: {fname}")
+
+
 # endregion FUNC__detect_orphan_vhosts
 
 
@@ -1210,6 +1287,8 @@ def _run_nginx_test(unit: str) -> None:
         )
         report_add(unit, "fail", "nginx -t failed — reload blocked")
         _set_exit(2)
+
+
 # endregion FUNC__run_nginx_test
 
 
@@ -1229,22 +1308,27 @@ def _parse_node_modules_yaml(node_yaml_path: str) -> list[dict]:
     """
     try:
         import yaml
+
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
         modules_raw = data.get("modules", []) if data else []
         out: list[dict] = []
         for m in modules_raw:
             if isinstance(m, dict):
-                out.append({
-                    "name": m.get("name", ""),
-                    "enabled": m.get("enabled", True),
-                })
+                out.append(
+                    {
+                        "name": m.get("name", ""),
+                        "enabled": m.get("enabled", True),
+                    }
+                )
             elif isinstance(m, str):
                 out.append({"name": m, "enabled": True})
         return out
     except Exception as exc:
         logger.warning("[IMP:8][_parse_node_modules_yaml] Failed to parse modules from %s: %s", node_yaml_path, exc)
         return []
+
+
 # endregion FUNC__parse_node_modules_yaml
 
 
@@ -1263,7 +1347,7 @@ def _extract_named_volumes(compose_json: dict) -> list[str]:
     volumes_set: set[str] = set()
     services = compose_json.get("services", {})
 
-    for svc_name, svc_config in services.items():
+    for svc_config in services.values():
         vol_entries = svc_config.get("volumes", [])
         if not isinstance(vol_entries, list):
             continue
@@ -1276,6 +1360,8 @@ def _extract_named_volumes(compose_json: dict) -> list[str]:
                 volumes_set.add(vol_source)
 
     return list(volumes_set)
+
+
 # endregion FUNC__extract_named_volumes
 
 
@@ -1355,16 +1441,23 @@ def reconcile_volumes(
 
         # Run docker compose config to get resolved JSON
         cmd = [
-            "docker", "compose",
-            "-f", str(compose_file),
-            "--profile", mod_name,
-            "config", "--format", "json",
+            "docker",
+            "compose",
+            "-f",
+            str(compose_file),
+            "--profile",
+            mod_name,
+            "config",
+            "--format",
+            "json",
         ]
         result = _run_subprocess(cmd, timeout=DOCKER_TIMEOUT)
         if result.returncode != 0:
             logger.warning(
                 "[IMP:8][converge][%s] docker compose config failed for %s: %s",
-                unit, mod_name, result.stderr.strip(),
+                unit,
+                mod_name,
+                result.stderr.strip(),
             )
             continue
 
@@ -1389,7 +1482,9 @@ def reconcile_volumes(
             if inspect_r.returncode != 0:
                 logger.warning(
                     "[IMP:9][converge][%s] VOLUME MISSING: %s (module: %s) — detect-only, NOT creating (O7)",
-                    unit, vol_name, mod_name,
+                    unit,
+                    vol_name,
+                    mod_name,
                 )
                 missing_volumes.append(vol_name)
             else:
@@ -1404,7 +1499,9 @@ def reconcile_volumes(
     if missing_volumes:
         logger.warning(
             "[IMP:9][converge][%s] DONE: %d named volume(s) missing (detect-only — O7) — %s",
-            unit, len(missing_volumes), missing_volumes,
+            unit,
+            len(missing_volumes),
+            missing_volumes,
         )
         report_add(unit, "warn", f"{len(missing_volumes)} named volume(s) missing: {missing_volumes}")
         _set_exit(1)
@@ -1417,6 +1514,8 @@ def reconcile_volumes(
     logger.info("[IMP:9][converge][%s] DONE: All named volumes exist (converged)", unit)
     report_add(unit, "converged", "All named volumes exist")
     return {"unit": unit, "status": "converged", "detail": "All named volumes exist"}
+
+
 # endregion FUNC_reconcile_volumes
 
 
@@ -1427,6 +1526,7 @@ def reconcile_volumes(
 ## @purpose  Lazy-import the sudoers_generator module. Adds the deploy/
 ##           directory to sys.path for cross-module imports.
 _sudoers_generator_imported = False
+
 
 def _import_sudoers_generator() -> None:
     """Import sudoers_generator module (lazy, one-time)."""
@@ -1439,8 +1539,11 @@ def _import_sudoers_generator() -> None:
     if str(deploy_dir) not in sys.path:
         sys.path.insert(0, str(deploy_dir))
     global sudoers_generator
-    import sudoers_generator  # noqa: F811  (intentional re-import)
+    import sudoers_generator
+
     _sudoers_generator_imported = True
+
+
 # endregion FUNC__import_sudoers_generator
 
 
@@ -1460,6 +1563,8 @@ def _build_sudoers_content(module_name: str, rules: list[str]) -> str:
     lines.extend(rules)
     lines.append("")
     return "\n".join(lines)
+
+
 # endregion FUNC__build_sudoers_content
 
 
@@ -1495,7 +1600,8 @@ def _atomic_write_sudoers(target_path: Path, content: str, module_name: str) -> 
         if validate_r.returncode != 0:
             logger.error(
                 "[IMP:10][_atomic_write_sudoers] visudo -c FAILED for %s — original untouched: %s",
-                target_path, validate_r.stderr.strip(),
+                target_path,
+                validate_r.stderr.strip(),
             )
             _safe_cleanup_tmp(tmp_path)
             return False
@@ -1514,6 +1620,8 @@ def _atomic_write_sudoers(target_path: Path, content: str, module_name: str) -> 
         logger.error("[IMP:9][_atomic_write_sudoers] Unexpected error writing %s: %s", target_path, exc)
         _safe_cleanup_tmp(tmp_path)
         return False
+
+
 # endregion FUNC__atomic_write_sudoers
 
 
@@ -1522,10 +1630,10 @@ def _atomic_write_sudoers(target_path: Path, content: str, module_name: str) -> 
 def _safe_cleanup_tmp(tmp_path: str) -> None:
     """Remove a temp file if it exists (best-effort cleanup)."""
     if tmp_path and os.path.exists(tmp_path):
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
+
+
 # endregion FUNC__safe_cleanup_tmp
 
 
@@ -1645,7 +1753,8 @@ def reconcile_sudoers(
         else:
             logger.warning(
                 "[IMP:9][converge][%s] WARN: visudo validation failed for %s — original untouched",
-                unit, sudoers_file,
+                unit,
+                sudoers_file,
             )
             report_add(unit, "warn", f"{sudoers_file.name}: visudo validation failed")
             warnings += 1
@@ -1665,9 +1774,18 @@ def reconcile_sudoers(
         status = "converged"
         detail = "All sudoers files match desired state"
 
-    logger.info("[IMP:9][converge][%s] DONE: mutated=%d errors=%d warnings=%d skipped=%d", unit, mutated, errors, warnings, skipped)
+    logger.info(
+        "[IMP:9][converge][%s] DONE: mutated=%d errors=%d warnings=%d skipped=%d",
+        unit,
+        mutated,
+        errors,
+        warnings,
+        skipped,
+    )
     report_add(unit, status, detail)
     return {"unit": unit, "status": status, "detail": detail}
+
+
 # endregion FUNC_reconcile_sudoers
 
 
@@ -1689,9 +1807,12 @@ def _resolve_container_name(module_name: str) -> list[str]:
     """
     ps_r = _run_subprocess(
         [
-            "docker", "ps",
-            "--filter", f"name={module_name}",
-            "--format", "{{.Names}}",
+            "docker",
+            "ps",
+            "--filter",
+            f"name={module_name}",
+            "--format",
+            "{{.Names}}",
         ],
         timeout=DOCKER_TIMEOUT,
     )
@@ -1701,6 +1822,8 @@ def _resolve_container_name(module_name: str) -> list[str]:
     containers = [c.strip() for c in ps_r.stdout.splitlines() if c.strip()]
     logger.info("[IMP:7][_resolve_container_name] Module %s → containers: %s", module_name, containers)
     return containers
+
+
 # endregion FUNC__resolve_container_name
 
 
@@ -1712,8 +1835,11 @@ def _get_container_state(container_name: str) -> str:
     """Get container state via docker inspect --format '{{.State.Status}}'."""
     inspect_r = _run_subprocess(
         [
-            "docker", "inspect", container_name,
-            "--format", "{{.State.Status}}",
+            "docker",
+            "inspect",
+            container_name,
+            "--format",
+            "{{.State.Status}}",
         ],
         timeout=DOCKER_TIMEOUT,
     )
@@ -1723,6 +1849,8 @@ def _get_container_state(container_name: str) -> str:
     state = inspect_r.stdout.strip()
     logger.info("[IMP:7][_get_container_state] Container %s → state=%s", container_name, state)
     return state
+
+
 # endregion FUNC__get_container_state
 
 
@@ -1743,6 +1871,8 @@ def _load_cooldown() -> dict:
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("[IMP:8][_load_cooldown] Failed to read cooldown file: %s", exc)
     return {"run": 0, "containers": {}}
+
+
 # endregion FUNC__load_cooldown
 
 
@@ -1758,6 +1888,8 @@ def _save_cooldown(data: dict) -> None:
         logger.info("[IMP:8][_save_cooldown] Cooldown saved to %s", COOLDOWN_FILE)
     except OSError as exc:
         logger.warning("[IMP:8][_save_cooldown] Failed to save cooldown: %s", exc)
+
+
 # endregion FUNC__save_cooldown
 
 
@@ -1823,19 +1955,24 @@ def reconcile_runtime_state(
             global_cooldown = True
             logger.info(
                 "[IMP:7][converge][%s] Global cooldown active — %s healed at run %d (diff=%d < 3)",
-                unit, cname, last_healed, current_run - last_healed,
+                unit,
+                cname,
+                last_healed,
+                current_run - last_healed,
             )
             break
 
     if global_cooldown:
-        logger.info("[IMP:9][converge][%s] COOLDOWN: Previously healed containers still in cooldown — skipping all healing", unit)
+        logger.info(
+            "[IMP:9][converge][%s] COOLDOWN: Previously healed containers still in cooldown — skipping all healing",
+            unit,
+        )
         report_add(unit, "converged", "In cooldown — previously healed containers")
         return {"unit": unit, "status": "converged", "detail": "Cooldown active, no healing"}
 
     modules_dir_path = Path(modules_dir)
     healed = 0
     errors = 0
-    all_ok = True
 
     for mod in modules:
         mod_name = mod.get("name", "")
@@ -1869,7 +2006,9 @@ def reconcile_runtime_state(
             if state in BAD_DOCKER_STATES:
                 logger.warning(
                     "[IMP:9][converge][%s] Container %s state=%s — needs self-heal",
-                    unit, cname, state,
+                    unit,
+                    cname,
+                    state,
                 )
                 needs_heal = True
             elif state == "running":
@@ -1890,9 +2029,12 @@ def reconcile_runtime_state(
         logger.info("[IMP:8][converge][%s] Self-healing module %s via docker compose up -d", unit, mod_name)
         heal_r = _run_subprocess(
             [
-                "docker", "compose",
-                "-f", str(compose_file),
-                "up", "-d",
+                "docker",
+                "compose",
+                "-f",
+                str(compose_file),
+                "up",
+                "-d",
             ],
             timeout=DOCKER_TIMEOUT,
         )
@@ -1907,7 +2049,9 @@ def reconcile_runtime_state(
         else:
             logger.error(
                 "[IMP:10][converge][%s] Failed to heal module %s: %s",
-                unit, mod_name, heal_r.stderr.strip(),
+                unit,
+                mod_name,
+                heal_r.stderr.strip(),
             )
             report_add(unit, "fail", f"{mod_name}: compose up -d failed")
             errors += 1
@@ -1929,6 +2073,8 @@ def reconcile_runtime_state(
 
     logger.info("[IMP:9][converge][%s] DONE: healed=%d errors=%d", unit, healed, errors)
     return {"unit": unit, "status": status, "detail": detail}
+
+
 # endregion FUNC_reconcile_runtime_state
 
 
@@ -2023,11 +2169,8 @@ def main() -> None:
     _report_only = args.report_only
 
     # Resolve core_dir: argument → auto-detect from __file__
-    if args.core_dir:
-        _core_dir = args.core_dir
-    else:
-        # Auto-detect: go up from .../bootstrap/converge/ to core/
-        _core_dir = str(Path(__file__).resolve().parents[3])
+    # Auto-detect: go up from .../bootstrap/converge/ to core/
+    _core_dir = args.core_dir or str(Path(__file__).resolve().parents[3])
 
     # Resolve templates_dir and modules_dir from args or core_dir
     _templates_dir = args.templates_dir if args.templates_dir else str(Path(_core_dir) / "templates")
@@ -2127,6 +2270,8 @@ def main() -> None:
         sys.exit(1)
     else:
         sys.exit(0)
+
+
 # endregion FUNC_main
 
 

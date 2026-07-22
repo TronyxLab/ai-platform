@@ -129,3 +129,176 @@ def ensure_external_networks(names: list[str], docker_available: bool | None = N
 
 
 # endregion SHARED_NETWORK_UTILITIES
+
+
+# region CLASS_NetworkLeaseManager
+## @purpose  Thread-safe reference-counted Docker test network lifecycle manager.
+##           Eliminates race conditions when multiple test fixtures create/destroy
+##           the same Docker network (observability-net, proxy-net, etc.).
+##           Replaces direct `docker network create/rm` calls in test fixtures.
+## @scope    Used by platform_services fixture and all module-scoped test fixtures.
+## @invariants
+##   - acquire() creates network on first acquisition (refcount 0→1)
+##   - release() removes network when refcount reaches 0
+##   - release_all() force-releases all remaining leases (call from pytest_sessionfinish)
+##   - Idempotent: multiple acquire() calls for same network do NOT create multiple networks
+##   - Thread-safe for concurrent fixture setup in ThreadPoolExecutor
+## @rationale 6+ test fixtures independently create/remove the same Docker networks (observability-net,
+##            test-shared-db-net, etc.) without coordination — causing race conditions where one
+##            fixture removes a network another still needs. Refcounting eliminates the race.
+## @changes CREATED: 2026-07-22 | DevPlan 041 W3: NetworkLeaseManager — refcounting for test networks
+
+import logging
+
+_logger = logging.getLogger(__name__)
+
+
+class NetworkLeaseManager:
+    """Reference-counted Docker network lifecycle manager.
+
+    ## @purpose — Coordinate Docker network creation/removal across multiple test fixtures.
+    ##             First caller to acquire() creates the network; last caller to release() removes it.
+    ## @io — acquire(network_name) → bool (True if created); release(network_name) → bool (True if removed)
+    ## @complexity — O(1) for acquire/release; O(N) for release_all
+    ## @invariants
+    ##   - acquire: idempotent — subsequent calls do not re-create the network
+    ##   - release: raises warning on unknown network (not error — best-effort cleanup)
+    ##   - release_all: called unconditionally from pytest_sessionfinish for safety
+    """
+
+    def __init__(self):
+        self._leases: dict[str, int] = {}  # network_name → refcount
+
+    # region FUNC_acquire
+    ## @purpose  Acquire a network lease. Creates Docker network if first acquisition.
+    ## @io       ⇥ network_name: str → ⎋ bool: True if network was newly created
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - First call with a given name creates the network (refcount 0→1)
+    ##   - Subsequent calls only increment refcount
+    ##   - Docker network create is best-effort (ignores "already exists" errors)
+    def acquire(self, network_name: str) -> bool:
+        """Acquire a network lease. Creates network if first acquisition.
+
+        Returns True if network was newly created.
+        """
+        if network_name not in self._leases:
+            self._leases[network_name] = 0
+
+        if self._leases[network_name] == 0:
+            _logger.info("[IMP:8][NetworkLeaseManager] Acquiring network '%s' — creating", network_name)
+            self._create_network(network_name)
+
+        self._leases[network_name] += 1
+        _logger.debug(
+            "[IMP:7][NetworkLeaseManager] Acquired '%s' (refcount=%d)", network_name, self._leases[network_name]
+        )
+        return self._leases[network_name] == 1
+
+    # endregion
+
+    # region FUNC_release
+    ## @purpose  Release a network lease. Removes Docker network when refcount reaches 0.
+    ## @io       ⇥ network_name: str → ⎋ bool: True if network was removed (refcount reached 0)
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Calling release for an unknown network logs warning and returns False
+    ##   - Network removal is best-effort (ignores "in use" errors)
+    def release(self, network_name: str) -> bool:
+        """Release a network lease. Removes network when refcount reaches 0.
+
+        Returns True if network was removed.
+        """
+        if network_name not in self._leases:
+            _logger.warning("[IMP:7][NetworkLeaseManager] Release called for unknown network '%s'", network_name)
+            return False
+
+        self._leases[network_name] -= 1
+
+        if self._leases[network_name] <= 0:
+            _logger.info("[IMP:8][NetworkLeaseManager] Releasing network '%s' — removing (refcount=0)", network_name)
+            self._remove_network(network_name)
+            del self._leases[network_name]
+            return True
+
+        _logger.debug(
+            "[IMP:7][NetworkLeaseManager] Released '%s' (refcount=%d)", network_name, self._leases[network_name]
+        )
+        return False
+
+    # endregion
+
+    # region FUNC_release_all
+    ## @purpose  Force-release all remaining leases. Called from pytest_sessionfinish.
+    ## @io       ⇥ (self) → ⎋ None (side-effect: Docker networks removed)
+    ## @complexity — O(N) where N = active leases
+    def release_all(self) -> None:
+        """Force-release all remaining leases. Called from pytest_sessionfinish for safety."""
+        for name in list(self._leases.keys()):
+            _logger.info("[IMP:9][NetworkLeaseManager] Force-releasing network '%s' (session finish)", name)
+            self._remove_network(name)
+        self._leases.clear()
+
+    # endregion
+
+    # region FUNC_create_network
+    ## @purpose  Create Docker network via subprocess. Best-effort — ignores "already exists".
+    ## @io       ⇥ name: str → ⎋ None
+    ## @complexity — O(1)
+    def _create_network(self, name: str) -> None:
+        """Create Docker network. Best-effort — ignore "already exists" errors."""
+        subprocess.run(
+            ["docker", "network", "create", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+
+    # endregion
+
+    # region FUNC_remove_network
+    ## @purpose  Remove Docker network via subprocess. Best-effort — ignores "in use" errors.
+    ## @io       ⇥ name: str → ⎋ None
+    ## @complexity — O(1)
+    def _remove_network(self, name: str) -> None:
+        """Remove Docker network. Best-effort — ignore errors."""
+        subprocess.run(
+            ["docker", "network", "rm", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+
+    # endregion
+
+    # region PROPERTY_active_leases
+    ## @purpose  Return current lease state for diagnostics.
+    ## @io       ⇥ (self) → ⎋ dict[str, int]
+    ## @complexity — O(1)
+    @property
+    def active_leases(self) -> dict[str, int]:
+        """Return current lease state (for diagnostics)."""
+        return dict(self._leases)
+
+    # endregion
+
+
+# endregion CLASS_NetworkLeaseManager
+
+
+# Singleton instance for the test session
+_network_manager = NetworkLeaseManager()
+
+
+def get_network_manager() -> NetworkLeaseManager:
+    """Get the session-level NetworkLeaseManager singleton.
+
+    ## @purpose — Returns the singleton NetworkLeaseManager instance.
+    ##             All test fixtures should use this function to get the manager,
+    ##             never instantiate NetworkLeaseManager directly.
+    ## @io — ⎋ NetworkLeaseManager
+    ## @complexity — O(1)
+    """
+    return _network_manager

@@ -376,9 +376,12 @@ def test_platform_starts_all_containers(
     # endregion
 
     # region BLOCK_PollRunning
-    # Give containers a moment to transition through "created" → "running"
-    max_retries = 24
-    retry_interval = 5  # seconds
+    # ── DevPlan 040 Wave 2d optimization ────────────────────────────────────
+    # platform_services fixture now waits for ALL containers to become healthy
+    # before yielding. This polling is a safety net only — containers should
+    # already be running. Reduced max_retries from 24→1 (1 check, no polling).
+    max_retries = 1
+    retry_interval = 5  # seconds (unused when max_retries=1)
     all_running = False
 
     for attempt in range(1, max_retries + 1):

@@ -27,6 +27,7 @@ import os
 import platform as _platform
 import subprocess
 import textwrap
+import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -35,8 +36,10 @@ import pytest
 import yaml as _yaml
 
 from _conftest.honesty import require_docker_or_fail
+from _conftest.infra import infra as _infra
 from _conftest.ldd import _ensure_volume_dirs
-from _conftest.networks import TEST_NETWORKS, ensure_external_networks, is_production_host
+from _conftest.networks import TEST_NETWORKS, get_network_manager, is_production_host
+from _conftest.wave_pipeline import _init_wave_events, signal_wave_ready
 
 # region SMOKE_PLATFORM_FIXTURES
 ## @purpose — Session-scoped fixtures and helpers for smoke platform tests.
@@ -673,21 +676,14 @@ def platform_services(
 
     _logger.info("[IMP:8][conftest][platform_services] Test data files created for status-page bind-mount")
 
-    # ── Pre-create external networks ─────────────────────────────────────────
-    _logger.info("[IMP:8][conftest][platform_services] Collecting external networks")
-    external_nets = _collect_external_networks()
-    for net_name in sorted(external_nets):
-        ensure_external_networks([net_name])
+    # ── Acquire external + test networks via NetworkLeaseManager ──────────────
+    _logger.info("[IMP:8][conftest][platform_services] Acquiring external and test networks via NetworkLeaseManager")
+    _nm = get_network_manager()
+    _all_nets = sorted(_collect_external_networks() | TEST_NETWORKS)
+    for net_name in _all_nets:
+        _nm.acquire(net_name)
     _logger.info(
-        "[IMP:9][conftest][platform_services] External networks ready: %d external network(s)", len(external_nets)
-    )
-
-    # ── Pre-create test-only external networks (DevPlan 017 Option B) ─────────
-    _logger.info("[IMP:8][conftest][platform_services] Pre-creating %d test network(s)", len(TEST_NETWORKS))
-    for net_name in sorted(TEST_NETWORKS):
-        ensure_external_networks([net_name])
-    _logger.info(
-        "[IMP:9][conftest][platform_services] Test networks ready: %d test external network(s)", len(TEST_NETWORKS)
+        "[IMP:9][conftest][platform_services] All %d networks acquired via NetworkLeaseManager", len(_all_nets)
     )
 
     # ── Global pre-cleanup: down ALL compose files before starting ─────────
@@ -713,15 +709,21 @@ def platform_services(
     # · OOM) containers remain and block container names ("already in use").
     # · Safety net: docker rm -f by known test container names — unconditional,
     # · idempotent.
-    _STALE_CONTAINER_NAMES = [
-        "nginx-test",
-        "prometheus-test",
-        "grafana-test",
-        "hermes-agent-test",
-        "postgres-test",
-        "langfuse-redis-test",
-        "prometheus-config-init-test",
-    ]
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · Stale test containers block compose up after crash
+    # · Root: docker compose down does not remove containers from crashed runs (different
+    # ·   compose-file set = different project labels). After OOM/Ctrl+C, containers
+    # ·   with -test suffix remain and cause "container already in use" errors.
+    # · Fix: exhaustively list ALL test containers from core/modules/*/docker-compose.test.yml.
+    # ·   pgbouncer-test was the most impactful omission — it blocked postgres module startup.
+    # ·   All other missing entries (13 total) are added for defence-in-depth.
+    # · Rev: if new module adds a test compose file — update this list within same PR.
+    # ⚠️ TRAP[DECISION] · 2026-07-22 · — · _STALE_CONTAINER_NAMES derived from infra auto-discovery
+    # · Rejected: hardcoded list (risk: manual sync failure on module add/remove)
+    # · Reason: infra.py derives container names from docker-compose.test.yml via
+    # ·   discover_modules.py --test-infra. List is always in sync with compose files.
+    # · Rev: if infra._load_test_infra() becomes a performance bottleneck (>500ms),
+    # ·   add file-based cache with mtime check.
+    _STALE_CONTAINER_NAMES = _infra.stale_container_names
     for _cname in _STALE_CONTAINER_NAMES:
         subprocess.run(
             ["docker", "rm", "-f", _cname],
@@ -741,21 +743,28 @@ def platform_services(
         len(module_graph),
     )
 
-    for wave_idx, wave_modules in enumerate(waves):
+    # ── Wave-Pipeline: Wave 0 sync → Wave 1+ background ──────────────────────
+    # DevPlan 040 Wave 4: Wave 0 starts synchronously (critical path for fixture
+    # setup), then remaining waves start in a background daemon thread. Tests
+    # run as soon as their wave's containers are ready (wave_ready events).
+    _init_wave_events(len(waves))
+    bg_thread: threading.Thread | None = None
+
+    if waves:
+        # Wave 0 — synchronous (blocking fixture setup)
+        wave_0_modules = waves[0]
         _logger.info(
-            "[IMP:8][conftest][platform_services] Wave %d: starting %d module(s) in parallel",
-            wave_idx,
-            len(wave_modules),
+            "[IMP:8][conftest][platform_services] Wave 0 (sync): starting %d module(s) in parallel",
+            len(wave_0_modules),
         )
 
-        with ThreadPoolExecutor(max_workers=len(wave_modules)) as executor:
+        with ThreadPoolExecutor(max_workers=len(wave_0_modules)) as executor:
             futures = {}
-            for _wm_module_name in wave_modules:
+            for _wm_module_name in wave_0_modules:
                 _wm_compose_path = all_compose_files.get(_wm_module_name)
                 if _wm_compose_path is None:
                     _logger.warning(
-                        "[IMP:8][conftest][platform_services] Wave %d: no compose path for '%s' — skipping",
-                        wave_idx,
+                        "[IMP:8][conftest][platform_services] Wave 0: no compose path for '%s' — skipping",
                         _wm_module_name,
                     )
                     continue
@@ -785,60 +794,118 @@ def platform_services(
                         failed.append(_wm_module_name)
                 except Exception as exc:
                     _logger.error(
-                        "[IMP:9][conftest][platform_services] Wave %d module '%s' raised: %s",
-                        wave_idx,
+                        "[IMP:9][conftest][platform_services] Wave 0 module '%s' raised: %s",
                         _wm_module_name,
                         exc,
                     )
                     failed.append(_wm_module_name)
 
+        _logger.info(
+            "[IMP:9][conftest][platform_services] Wave 0 complete: %d started, %d failed",
+            len(started),
+            len(failed),
+        )
+        signal_wave_ready(0)
+
+        # Wave 1+ — background thread (overlaps container start with test execution)
+        def _start_remaining(wave_list, started_list, failed_list):
+            """Start remaining waves in background thread.
+            Each wave signals readiness after completion, unblocking tests."""
+            for wave_idx in range(1, len(wave_list)):
+                wave_modules = wave_list[wave_idx]
+                _logger.info(
+                    "[IMP:8][conftest][platform_services] Wave %d (background): starting %d module(s)",
+                    wave_idx,
+                    len(wave_modules),
+                )
+
+                with ThreadPoolExecutor(max_workers=len(wave_modules)) as executor:
+                    futures = {}
+                    for _wm_module_name in wave_modules:
+                        _wm_compose_path = all_compose_files.get(_wm_module_name)
+                        if _wm_compose_path is None:
+                            continue
+                        future = executor.submit(
+                            _start_single_module,
+                            _wm_module_name,
+                            _wm_compose_path,
+                            all_compose_files,
+                            module_graph,
+                            platform_ports,
+                            PLATFORM_COMPOSE_TIMEOUT,
+                            _COMPOSE_EXTRA_TIMEOUT,
+                            _COMPOSE_DOWN_TIMEOUT,
+                            _DOCKER_LOG_TIMEOUT,
+                            _STDERR_TAIL_LINES,
+                            PLATFORM_LOKI_TIMEOUT,
+                        )
+                        futures[future] = _wm_module_name
+
+                    for future in as_completed(futures):
+                        _wm_module_name = futures[future]
+                        try:
+                            _wm_result = future.result()
+                            if isinstance(_wm_result, dict) and _wm_result.get("success"):
+                                started_list.append(_wm_module_name)
+                            else:
+                                failed_list.append(_wm_module_name)
+                        except Exception:
+                            failed_list.append(_wm_module_name)
+
+                _logger.info(
+                    "[IMP:9][conftest][platform_services] Wave %d (background) complete: %d started, %d failed",
+                    wave_idx,
+                    len([m for m in wave_modules if m in started_list]),
+                    len([m for m in wave_modules if m in failed_list]),
+                )
+                signal_wave_ready(wave_idx)
+
+        bg_thread = threading.Thread(
+            target=_start_remaining,
+            args=(waves, started, failed),
+            daemon=True,
+        )
+        bg_thread.start()
+
     _logger.info("[IMP:9][conftest][platform_services] Result: %d started, %d failed", len(started), len(failed))
     yield {"started": started, "failed": failed}
 
-    # ── Teardown: docker compose down for each module (reverse order) ────────
+    # ── Wait for background thread (if any) before teardown ─────────────────
+    if bg_thread is not None:
+        bg_thread.join(timeout=600)
+
+    # ── Teardown: compose stop (not down) — faster, preserves volumes ────────
+    # DevPlan 040 Wave 3: compose down → compose stop saves ~50s.
+    # Final compose down happens in pytest_sessionfinish (session.py).
     all_modules = list(reversed(started + [m for m in failed if m not in started]))
-    _logger.info("[IMP:7][conftest][platform_services] Tearing down %d module(s)", len(all_modules))
+    _logger.info(
+        "[IMP:7][conftest][platform_services] Stopping %d module(s) (compose stop, not down)", len(all_modules)
+    )
     for module_name in all_modules:
         compose_path = all_compose_files.get(module_name)
         if compose_path is None:
             continue
-        down_args = ["docker", "compose", "-f", compose_path]
+        stop_args = ["docker", "compose", "-f", compose_path]
         test_override = os.path.join(os.path.dirname(compose_path), "docker-compose.test.yml")
         if os.path.exists(test_override):
-            down_args.extend(["-f", test_override])
+            stop_args.extend(["-f", test_override])
         macos_override = os.path.join(os.path.dirname(compose_path), "docker-compose.macos.yml")
         if _platform.system() == "Darwin" and os.path.exists(macos_override):
-            down_args.extend(["-f", macos_override])
-        down_args.extend(
-            ["-p", "ai-platform-test", "down", "--timeout", str(_COMPOSE_DOWN_TIMEOUT), "--remove-orphans"]
-        )
+            stop_args.extend(["-f", macos_override])
+        stop_args.extend(["-p", "ai-platform-test", "stop", "--timeout", str(_COMPOSE_DOWN_TIMEOUT)])
 
-        down_result = _run_docker_smoke(down_args, timeout=20)
-        if down_result.returncode != 0:
+        stop_result = _run_docker_smoke(stop_args, timeout=20)
+        if stop_result.returncode != 0:
             _logger.error(
-                "[IMP:9][conftest][platform_services] Cleanup failed for '%s': %s",
+                "[IMP:9][conftest][platform_services] Stop failed for '%s': %s",
                 module_name,
-                down_result.stderr.strip()[-200:],
+                stop_result.stderr.strip()[-200:],
             )
 
-    # ── Remove pre-created networks ──────────────────────────────────────────
-    for net_name in sorted(external_nets):
-        subprocess.run(
-            ["docker", "network", "rm", net_name],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-    # ── Remove pre-created test networks (DevPlan 017 Option B) ──────────────
-    _logger.info("[IMP:8][conftest][platform_services] Removing %d test network(s)", len(TEST_NETWORKS))
-    for net_name in sorted(TEST_NETWORKS):
-        subprocess.run(
-            ["docker", "network", "rm", net_name],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+    # ── Release networks via NetworkLeaseManager ──────────────────────────────
+    _logger.info("[IMP:8][conftest][platform_services] Releasing %d network(s) via NetworkLeaseManager", len(_all_nets))
+    for net_name in reversed(_all_nets):
+        _nm.release(net_name)
 
     _logger.info("[IMP:9][conftest][platform_services] Cleanup complete")
 

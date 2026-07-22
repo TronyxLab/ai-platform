@@ -1,20 +1,22 @@
-# GREP_SUMMARY: volume spool spool_dir spool_volume docker-compose named-volume module-yaml deploy-modules ensure-spool-dirs static-audit
-# STRUCTURE: ┌all_module_yamls + all_compose_files + deploy-modules.sh┐ → ◇ spool→volume match →
+# GREP_SUMMARY: volume spool spool_dir spool_volume docker-compose named-volume module-yaml spool-validator ensure-spool-dirs static-audit
+# STRUCTURE: ┌all_module_yamls + all_compose_files + spool_validator.py┐ → ◇ spool→volume match →
 # region MODULE_CONTRACT
 # @file test_volume_spool_consistency.py
 # @purpose  Validate that spool directories declared in module.yaml (spool_dir/spool_volume)
 #           have corresponding volume mounts in docker-compose, every named volume is declared
-#           in module.yaml or known-host-dirs, deploy-modules.sh knows all spool paths, and
+#           in module.yaml or known-host-dirs, spool_validator.py processes all spool paths, and
 #           there are no orphan volumes without documented reason.
-# @scope    All Docker modules with compose files; deploy-modules.sh ensure_spool_dirs() logic
+# @scope    All Docker modules with compose files; spool_validator.py verify_spool_dirs() logic
 # @invariants
 #   - spool_dir/spool_volume in module.yaml → must have a matching named volume in compose
 #   - Every named volume in compose must be declared in module.yaml or as a known host dir
-#   - deploy-modules.sh ensure_spool_dirs() must process ALL spool paths from module.yaml
+#   - spool_validator.py must process ALL spool paths from module.yaml
 #   - No orphan named volumes without a documented reason
 # @rationale  If a volume is added to compose but not declared in module.yaml as spool_dir/
-#             spool_volume, deploy-modules.sh won't create the directory before compose up,
+#             spool_volume, spool_validator won't check the directory before deploy,
 #             causing bind-mount failure. This test catches that drift.
+# @changes
+#   2026-07-22 · Updated for W4-E1 spool_validator.py reimplementation (was deploy-modules.sh ensure_spool_dirs)
 # endregion MODULE_CONTRACT
 #
 #            ◇ volume→spool declaration → ⊕ deploy_modules_coverage → ∑ orphan_volume_check
@@ -109,7 +111,8 @@ def _is_module_spool_handled_via_phase2(module_yaml: dict, script_content: str) 
 # endregion PHASE2_DETECT
 
 # region KNOWN_HOST_DIRS
-# These are directories created by deploy-modules.sh ensure_spool_dirs() Phase 3
+# These directories are checked by spool_validator.py verify_spool_dirs()
+# — platform dirs, wal-archive, observability dirs, and fallback dirs
 # for modules that don't declare spool_dir/spool_volume in module.yaml.
 _KNOWN_HOST_DIRS: set[str] = {
     # observability (Phase 3b) — spool_dir points to grafana-data only, but prometheus/loki
@@ -197,32 +200,35 @@ def test_spool_dir_has_volume_mount(all_module_yamls, all_compose_files, modules
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_deploy_modules_knows_all_spools(platform_root, all_module_yamls, caplog) -> None:
-    # · Scenario: new module has spool_dir in module.yaml but the path is not in deploy-modules.sh ensure_spool_dirs() → script doesn't create the directory, first deploy fails on bind mount
+    # · Scenario: new module has spool_dir in module.yaml but the path is not in spool_validator.py → validator doesn't check the directory, first deploy fails on bind mount
     # · Last fail: never — guard test
-    # · Remove if: ensure_spool_dirs() removed from deploy-modules.sh
-    """Verify deploy-modules.sh ensure_spool_dirs() processes all spool paths from module.yaml.
+    # · Remove if: spool_validator.py removed (ensure_spool_dirs permanently deleted)
+    """Verify spool_validator.py verify_spool_dirs() processes all spool paths from module.yaml.
 
-    ## @purpose — Read deploy-modules.sh and check that every spool_dir/spool_volume
-    ##            from module.yaml is handled in ensure_spool_dirs().
+    ## @purpose — Read spool_validator.py and check that every spool_dir/spool_volume
+    ##            from module.yaml is handled in verify_spool_dirs().
     ## @io — ⇥ platform_root, all_module_yamls → ⎋ None (assert)
-    ## @complexity — O(N + S) where N=modules, S=script lines searched
+    ## @complexity — O(N + S) where N=modules, S=module lines searched
     """
 
-    logger.info("[IMP:7][test_deploy_modules_knows_all_spools] Checking deploy-modules.sh spool coverage")
+    logger.info("[IMP:7][test_deploy_modules_knows_all_spools] Checking spool_validator.py spool coverage")
 
-    # Read deploy-modules.sh
-    deploy_script = os.path.join(platform_root, "core", "internal", "bootstrap", "deploy-modules.sh")
-    assert os.path.isfile(deploy_script), f"deploy-modules.sh not found at {deploy_script}"
+    # Read spool_validator.py (replaces old shell ensure_spool_dirs)
+    spool_validator = os.path.join(platform_root, "core", "internal", "bootstrap", "deploy", "spool_validator.py")
+    assert os.path.isfile(spool_validator), f"spool_validator.py not found at {spool_validator}"
 
-    with open(deploy_script) as f:
-        script_content = f.read()
+    with open(spool_validator) as f:
+        module_content = f.read()
 
-    # Phase 2 dynamically reads spool_dir from every module.yaml via grep
-    # If present, modules with spool_dir in module.yaml are handled automatically
-    has_phase2 = _has_phase2_dynamic_parsing(script_content)
-    if has_phase2:
+    # verify_spool_dirs() dynamically reads spool_dir from every module.yaml at runtime
+    # through yaml.safe_load in the per-module loop — all spool paths are auto-covered.
+    # No hardcoded per-module paths needed (Phase 2 behavior ported to Python).
+    has_yaml_scan = (
+        "yaml.safe_load" in module_content and "spool_dir" in module_content and "spool_volume" in module_content
+    )
+    if has_yaml_scan:
         logger.info(
-            "[IMP:8][test_deploy_modules_knows_all_spools] Phase 2 dynamic parsing detected — module.yaml spool dirs auto-covered"
+            "[IMP:8][test_deploy_modules_knows_all_spools] Dynamic module.yaml scanning detected — all spool dirs auto-covered"
         )
 
     missing_paths = []
@@ -234,34 +240,34 @@ def test_deploy_modules_knows_all_spools(platform_root, all_module_yamls, caplog
 
         spool_path = spool_path.rstrip("/")
 
-        # Check 1: hardcoded path in script (Phase 3/4)
-        path_in_script = spool_path in script_content
-        # Check 2: handled via Phase 2 dynamic parsing (spool_dir from module.yaml)
-        handled_via_phase2 = has_phase2 and _find_spool_value(module_yaml) is not None
+        # Check 1: hardcoded path in spool_validator.py (platform/fallback dirs)
+        path_in_validator = spool_path in module_content
+        # Check 2: handled via dynamic module.yaml scanning (spool_dir from module.yaml)
+        handled_via_yaml_scan = has_yaml_scan and _find_spool_value(module_yaml) is not None
 
-        if path_in_script:
+        if path_in_validator:
             logger.info(
-                "[IMP:8][test_deploy_modules_knows_all_spools] %s spool %s → hardcoded in deploy-modules.sh",
+                "[IMP:8][test_deploy_modules_knows_all_spools] %s spool %s → hardcoded in spool_validator.py",
                 mod_name,
                 spool_path,
             )
-        elif handled_via_phase2:
+        elif handled_via_yaml_scan:
             logger.info(
-                "[IMP:8][test_deploy_modules_knows_all_spools] %s spool %s → Phase 2 dynamic (grep spool_dir from module.yaml)",
+                "[IMP:8][test_deploy_modules_knows_all_spools] %s spool %s → dynamic scan (yaml.safe_load from module.yaml)",
                 mod_name,
                 spool_path,
             )
         else:
             missing_paths.append(f"{mod_name}: {spool_path}")
             logger.warning(
-                "[IMP:9][test_deploy_modules_knows_all_spools] %s spool %s NOT handled in deploy-modules.sh!",
+                "[IMP:9][test_deploy_modules_knows_all_spools] %s spool %s NOT handled in spool_validator.py!",
                 mod_name,
                 spool_path,
             )
 
     if not missing_paths:
-        logger.info("[IMP:9][test_deploy_modules_knows_all_spools] All spool paths are handled in deploy-modules.sh")
-    assert len(missing_paths) == 0, f"Spool paths missing from deploy-modules.sh: {missing_paths}"
+        logger.info("[IMP:9][test_deploy_modules_knows_all_spools] All spool paths are handled in spool_validator.py")
+    assert len(missing_paths) == 0, f"Spool paths missing from spool_validator.py: {missing_paths}"
 
 
 @pytest.mark.static_audit
@@ -323,69 +329,82 @@ def test_no_orphan_volumes(all_module_yamls, all_compose_files, modules_dir, cap
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_ensure_spool_dirs_is_verify_only(platform_root, caplog) -> None:
-    # · Scenario: ensure_spool_dirs() in deploy-modules.sh uses mkdir -p instead of verify-only
+    # · Scenario: verify_spool_dirs() in spool_validator.py uses os.makedirs/mkdir instead of verify-only
     # ·   — drift: silently creates dirs instead of warning user to run make provision.
     # ·   This test ensures the function only verifies existence and emits WARN on missing dirs.
     # · Last fail: never — guard test for V11 spool_dirs consolidation
-    # · Remove if: ensure_spool_dirs() removed from deploy-modules.sh
-    """Verify ensure_spool_dirs() is verify-only: NO mkdir -p, uses test -d + WARN.
+    # · Remove if: verify_spool_dirs() removed from spool_validator.py
+    """Verify verify_spool_dirs() is verify-only: NO os.makedirs/mkdir, uses os.path.isdir + WARN.
 
     ## @purpose — After V11 consolidation, spool dirs are created by provision-environment.sh
-    ##            (make provision). ensure_spool_dirs() must only verify existence and emit
-    ##            WARN if directories are missing. Any mkdir -p is a regression.
+    ##            (make provision). verify_spool_dirs() must only verify existence and emit
+    ##            WARN if directories are missing. Any os.makedirs/mkdir is a regression.
+    ##            Updated: 2026-07-22 — targets spool_validator.py instead of shell deploy-modules.sh.
     ## @io — ⇥ platform_root → ⎋ None (assert)
-    ## @complexity — O(S) where S = function lines searched
+    ## @complexity — O(S) where S = module lines searched
     """
 
-    logger.info("[IMP:7][test_ensure_spool_dirs_is_verify_only] Checking ensure_spool_dirs() is verify-only")
+    logger.info("[IMP:7][test_ensure_spool_dirs_is_verify_only] Checking verify_spool_dirs() is verify-only")
 
-    deploy_script = os.path.join(platform_root, "core", "internal", "bootstrap", "deploy-modules.sh")
-    assert os.path.isfile(deploy_script), f"deploy-modules.sh not found at {deploy_script}"
+    spool_validator = os.path.join(platform_root, "core", "internal", "bootstrap", "deploy", "spool_validator.py")
+    assert os.path.isfile(spool_validator), f"spool_validator.py not found at {spool_validator}"
 
-    with open(deploy_script) as f:
-        script_content = f.read()
+    with open(spool_validator) as f:
+        module_content = f.read()
 
-    # Extract ensure_spool_dirs() function body: from '# region ENSURE_SPOOL_DIRS' to '# endregion ENSURE_SPOOL_DIRS'
-    func_start = script_content.find("# region ENSURE_SPOOL_DIRS")
-    func_end = script_content.find("# endregion ENSURE_SPOOL_DIRS")
-    assert func_start != -1, "ENSURE_SPOOL_DIRS region start not found"
-    assert func_end != -1, "ENSURE_SPOOL_DIRS region end not found"
-    func_body = script_content[func_start : func_end + len("# endregion ENSURE_SPOOL_DIRS")]
+    # Extract verify_spool_dirs() function body: from 'def verify_spool_dirs' to next top-level def or end
+    func_start = module_content.find("def verify_spool_dirs")
+    assert func_start != -1, "verify_spool_dirs function not found in spool_validator.py"
+    # Find end of function: next top-level def/class or __name__ guard
+    func_body = module_content[func_start:]
+    next_def = func_body.find("\ndef ", 1)  # skip the first 'def verify_spool_dirs'
+    if next_def != -1:
+        func_body = func_body[:next_def]
 
     logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] Extracted function body (%d chars)", len(func_body))
 
-    # Strip comment lines for mkdir -p check (TRAP comments may mention mkdir -p in rationale)
-    non_comment_lines = [line for line in func_body.split("\n") if not line.strip().startswith("#")]
+    # Strip comment-only lines (docstrings and comments may mention mkdir in rationale)
+    non_comment_lines = [
+        line
+        for line in func_body.split("\n")
+        if not line.strip().startswith("#") and not line.strip().startswith('"""') and '"""' not in line
+    ]
     non_comment_body = "\n".join(non_comment_lines)
 
-    # Check 1: NO mkdir -p in non-comment code inside ensure_spool_dirs()
-    assert "mkdir -p" not in non_comment_body, (
-        "ensure_spool_dirs() contains 'mkdir -p' in code — should be verify-only!\n"
-        "Remove mkdir -p calls, replace with test -d || log_step ... WARN"
+    # Check 1: NO os.makedirs or mkdir in non-comment code inside verify_spool_dirs()
+    assert "os.makedirs" not in non_comment_body, (
+        "verify_spool_dirs() contains 'os.makedirs' in code — should be verify-only!\n"
+        "Remove os.makedirs calls, replace with os.path.isdir check + WARN"
     )
-    logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 1 PASS: No mkdir -p in ensure_spool_dirs() code")
+    assert "mkdir" not in non_comment_body, (
+        "verify_spool_dirs() contains 'mkdir' in code — should be verify-only!\n"
+        "Remove mkdir calls, replace with os.path.isdir check + WARN"
+    )
+    logger.info(
+        "[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 1 PASS: No os.makedirs/mkdir in verify_spool_dirs() code"
+    )
 
-    # Check 2: Contains test -d or [[ -d (verify-only pattern, non-comment code)
-    assert "test -d" in non_comment_body or "[[ -d " in non_comment_body, (
-        "ensure_spool_dirs() missing 'test -d' or '[[ -d ' — verify-only requires directory existence check"
+    # Check 2: Contains os.path.isdir (verify-only pattern)
+    assert "os.path.isdir" in non_comment_body, (
+        "verify_spool_dirs() missing 'os.path.isdir' — verify-only requires directory existence check"
     )
-    logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 2 PASS: test -d/[[ -d  present in code")
+    logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 2 PASS: os.path.isdir present in code")
 
-    # Check 3: Contains WARN log for missing dirs
-    assert "WARN" in non_comment_body, (
-        "ensure_spool_dirs() missing 'WARN' log — verify-only must emit WARN for missing dirs"
+    # Check 3: Contains logger.warning for missing dirs (Python equivalent of shell WARN)
+    assert "logger.warning" in non_comment_body, (
+        "verify_spool_dirs() missing 'logger.warning' — verify-only must emit warning for missing dirs"
     )
-    logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 3 PASS: WARN log present in code")
+    logger.info("[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 3 PASS: logger.warning present in code")
 
     # Check 4: Contains 'make provision' recommendation
     assert "make provision" in non_comment_body, (
-        "ensure_spool_dirs() missing 'make provision' recommendation — must tell user how to create missing dirs"
+        "verify_spool_dirs() missing 'make provision' recommendation — must tell user how to create missing dirs"
     )
     logger.info(
         "[IMP:8][test_ensure_spool_dirs_is_verify_only] CHECK 4 PASS: 'make provision' recommendation present in code"
     )
 
-    logger.info("[IMP:9][test_ensure_spool_dirs_is_verify_only] ensure_spool_dirs() is verify-only: ALL CHECKS PASS")
+    logger.info("[IMP:9][test_ensure_spool_dirs_is_verify_only] verify_spool_dirs() is verify-only: ALL CHECKS PASS")
 
 
 # endregion

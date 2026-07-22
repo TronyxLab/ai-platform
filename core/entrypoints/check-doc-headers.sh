@@ -44,7 +44,12 @@ check_grep_summary() {
     local file="$1"
 
     # Check presence
-    if ! head -5 "$file" | grep -qE '# GREP_SUMMARY:'; then
+    # 🧐 TRAP[BUG] · 2026-07-22 · pipefail + head|grep -qE race
+    # · Reason: `set -euo pipefail` + `head -5 | grep -qE` — timing-dependent:
+    # ·   head exits 0 before grep finds match → pipefail=0 → ! 0 = 1 → false [FAIL]
+    # ·   (grep -q closes stdin on match; head may get SIGPIPE 141 or exit 0 first)
+    # · Fix: `grep -cE || true` — same pattern as check_regions_balanced()
+    if [ "$(head -5 "$file" | grep -cE '# GREP_SUMMARY:' || true)" -eq 0 ]; then
         echo "[FAIL] $file: Missing '# GREP_SUMMARY:' in first 5 lines"
         return 1
     fi
@@ -88,7 +93,9 @@ check_module_contract() {
 # ─── Check STRUCTURE line present ───
 check_structure() {
     local file="$1"
-    if ! head -5 "$file" | grep -qE '# STRUCTURE:'; then
+    # 🧐 TRAP[BUG] · 2026-07-22 · pipefail + head|grep -qE race (same bug as check_grep_summary)
+    # · Fix: `grep -cE || true` — pipefail-safe, same pattern as check_regions_balanced()
+    if [ "$(head -5 "$file" | grep -cE '# STRUCTURE:' || true)" -eq 0 ]; then
         echo "[FAIL] $file: Missing '# STRUCTURE:' in first 5 lines"
         return 1
     fi

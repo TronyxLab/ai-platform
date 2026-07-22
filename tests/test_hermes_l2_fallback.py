@@ -44,6 +44,8 @@ from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
+_DOCKER_ORCHESTRATOR_PY = repo_root() / "core" / "internal" / "bootstrap" / "deploy" / "docker_orchestrator.py"
+# Also keep deploy-modules.sh reference for the static contract check
 _DEPLOY_MODULES_SH = repo_root() / "core" / "internal" / "bootstrap" / "deploy-modules.sh"
 
 
@@ -70,40 +72,42 @@ _DEPLOY_MODULES_SH = repo_root() / "core" / "internal" / "bootstrap" / "deploy-m
 @ldd_trajectory
 def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
     """
-    # ◇ read deploy-modules.sh → ∋ grep patterns: WARN ✓, BUILD ✓, TRAP[DECISION] ✓ → ⎋ pass | fail
+    # ◇ read docker_orchestrator.py → ∋ grep patterns: WARN ✓, BUILD ✓, fallback path ✓ → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_hermes_fallback_code_present] Reading deploy-modules.sh ...")
-    content = _DEPLOY_MODULES_SH.read_text()
+    logger.info("[IMP:7][test_hermes_fallback_code_present] Reading docker_orchestrator.py ...")
+    content = _DOCKER_ORCHESTRATOR_PY.read_text()
 
-    # ── 1. WARN instead of FAIL for image-not-found ──
-    logger.info("[IMP:8][test_hermes_fallback_code_present] Checking WARN (fallback) pattern ...")
-    assert "WARN" in content and "Pre-built image not found" in content, (
-        "W4 violation: hermes-agent block does not contain WARN fallback for missing image"
+    # ── 1. Pre-built image not found → will build locally (WARN/INFO instead of FAIL) ──
+    logger.info("[IMP:8][test_hermes_fallback_code_present] Checking WARN fallback pattern ...")
+    assert "Pre-built image not found" in content and "will build locally" in content, (
+        "W4 violation: hermes-agent _handle_hermes_agent must WARN on missing image with local build fallback"
     )
 
-    # ── 2. docker compose ... build command present ──
+    # ── 2. docker compose ... build command present (Python subprocess call) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking BUILD command ...")
-    assert re.search(
-        r"docker\s+compose.*--profile.*build",
-        content,
-    ), "W4 violation: docker compose build command not found in hermes-agent block"
-
-    # ── 3. TRAP[DECISION] documenting the fallback decision ──
-    logger.info("[IMP:8][test_hermes_fallback_code_present] Checking TRAP[DECISION] ...")
-    assert "TRAP[DECISION]" in content and "Replace FAIL with fallback build" in content, (
-        "W4 violation: TRAP[DECISION] for FAIL→build decision not found"
+    # In Python, the build command is: ["docker", "compose", *compose_args, "build"]
+    assert '"docker", "compose"' in content and '"build"' in content and "build_cmd" in content, (
+        "W4 violation: docker compose build subprocess call not found in _handle_hermes_agent"
     )
 
-    # ── 4. "Local build failed" present ──
-    logger.info("[IMP:8][test_hermes_fallback_code_present] Checking 'Local build failed' error path ...")
-    assert "Local build failed" in content, "W4 violation: 'Local build failed' error path not found"
+    # ── 3. TRAP[BUG] documenting the fallback decision (was TRAP[DECISION] in shell) ──
+    logger.info("[IMP:8][test_hermes_fallback_code_present] Checking TRAP documentation ...")
+    assert "TRAP[BUG]" in content, (
+        "W4 violation: TRAP[BUG] for hermes image drift fix not found in docker_orchestrator.py"
+    )
 
-    # ── 5. No "FAIL" for image-not-found (should be WARN) — but only the one from compose config ──
+    # ── 4. "Local L1→L2 build failed" present ──
+    logger.info("[IMP:8][test_hermes_fallback_code_present] Checking build failure error path ...")
+    assert "build_fail" in content and "Local L1" in content, (
+        "W4 violation: 'Local L1→L2 build failed' error path not found in _handle_hermes_agent"
+    )
+
+    # ── 5. Old FAIL-for-image pattern is gone ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Verifying old FAIL-for-image is gone ...")
-    old_fail_pattern = r"FAIL.*hermes-agent image not found"
+    old_fail_pattern = r"FAIL.*hermes.*image.*not found"
     assert not re.search(old_fail_pattern, content), (
-        "W4 violation: old FAIL-for-image pattern still present (should be WARN)"
+        "W4 violation: old FAIL-for-image pattern still present (should be fallback build)"
     )
 
     # ── 6. No "Build required:" echo ──

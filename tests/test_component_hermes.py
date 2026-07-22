@@ -5,7 +5,7 @@
 ##           Verifies compose lifecycle, container startup, healthcheck status,
 ##           and restart-loop detection using real Docker containers.
 ## @scope    Requires Docker daemon and postgres module to be available.
-##           Tests use module-scoped fixtures (start once per module, teardown after).
+##           Tests use session-scoped fixtures (start once per session, teardown after all tests).
 ##           Docker compose operations use subprocess.run with --wait --wait-timeout 120.
 ## @invariants
 ##   - postgres must be started BEFORE hermes-agent (depends_on chain in fixtures)
@@ -13,7 +13,7 @@
 ##   - Tests assume docker daemon is available and functional
 ##   - Compose files must exist at core/modules/{postgres,hermes-agent}/docker-compose.base.yml
 ##   - At least one IMP:9 log per test per §TESTING LDD requirement
-##   - Fixtures are module-scoped: postgres_up → hermes_up → all 6 tests → teardown hermes → teardown postgres
+##   - Fixtures are session-scoped: postgres_up → hermes_up → all 6 tests → teardown hermes → teardown postgres
 ## @rationale Q: Why component tests instead of unit tests? A: Hermes-agent is a Docker container with no
 ##            Python entry points exposed — the only way to verify its runtime behaviour is via Docker API.
 ##            Q: Why chain postgres? A: Hermes-agent depends on postgres per module.yaml
@@ -41,11 +41,16 @@ import subprocess
 import time
 
 import pytest
+from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 from conftest import _ensure_volume_dirs, ensure_external_networks, ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-COMPOSE_PROJECT = "ai-platform-test"
+# ⚠️ TRAP[BUG] · 2026-07-22 · HI · COMPOSE_PROJECT was "ai-platform-test" — same as platform_services
+# · Symptom: check_foreign_containers treated platform_services containers as "own" (same project),
+# ·   returned empty → pre-flight compose down KILLED platform_services containers → cascade failures.
+# · Fix: unique project name "ai-platform-test-hermes-pg" prevents cross-fixture container management.
+COMPOSE_PROJECT = "ai-platform-test-hermes-pg"
 COMPOSE_PROJECT_HERMES = "ai-platform-test-hermes"
 ENV = {
     "PLATFORM_DOMAIN": "test.local",
@@ -92,10 +97,10 @@ _EXTERNAL_NETWORKS = [
 
 
 # region FIXTURES
-## @purpose — Module-scoped fixtures for docker compose lifecycle management.
+## @purpose — Session-scoped fixtures for docker compose lifecycle management.
 ##            postgres_up creates the shared-db-net + postgres container;
 ##            hermes_up depends on postgres_up and starts hermes-agent.
-## @scope — Both fixtures are module-scoped: containers survive across all 4 tests in this file.
+## @scope — Both fixtures are session-scoped: containers survive across all tests in this file.
 ## @invariants
 ##   - postgres_up runs before hermes_up (explicit fixture dependency)
 ##   - both fixtures teardown in reverse order (hermes first, then postgres, via yield ordering)
@@ -103,19 +108,36 @@ _EXTERNAL_NETWORKS = [
 ##   - compose files resolved via modules_dir fixture from conftest
 
 
-@pytest.fixture(scope="module")
-def postgres_up(modules_dir):
+@pytest.fixture(scope="session")
+def postgres_up(platform_services: dict[str, list[str]], modules_dir) -> None:
     """
     Start postgres before hermes-agent.
 
     ## @purpose — Ensure shared-db-net and postgres container are running.
     ##            Creates external network implicitly via compose up.
-    ## @io — ⇥ modules_dir: str from conftest → ⎋ None (side-effect: docker compose up -d)
+    ## @io — ⇥ platform_services: dict with foreign container info from _conftest.reuse
+    ##        ⇥ modules_dir: str from conftest → ⎋ None (side-effect: docker compose up -d)
     ## @complexity — O(1) — single subprocess call with --wait
     ## @rationale — postgres must be healthy before hermes-agent starts;
     ##              compose built-in --wait solves this without explicit sleep.
     ##              --wait-timeout 60 (TASK-5: reduced from 180 for faster CI).
+    ##              Foreign container guard allows reusing postgres/pgbouncer
+    ##              from platform_services when already running externally.
     """
+    # ── Foreign container guard ──────────────────────────────────────
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was hardcoded "ai-platform-test"
+    # · Same bug as other fixtures — now uses COMPOSE_PROJECT ("ai-platform-test-hermes-pg").
+    foreign = check_foreign_containers(["postgres-test", "pgbouncer-test"], COMPOSE_PROJECT)
+    if foreign:
+        logger.info(
+            "[IMP:8][postgres_up] Reusing postgres/pgbouncer from platform_services — skipping compose lifecycle"
+        )
+        statuses = wait_for_containers_healthy(["postgres-test", "pgbouncer-test"])
+        if not all(s == "healthy" for s in statuses.values()):
+            pytest.fail(f"Reused containers not healthy: {statuses}")
+        yield
+        return
+
     compose_file = os.path.join(modules_dir, "postgres", "docker-compose.base.yml")
     if not os.path.exists(compose_file):
         pytest.skip(f"postgres docker-compose.base.yml not found: {compose_file}")
@@ -241,13 +263,14 @@ def postgres_up(modules_dir):
     logger.info("[IMP:9][postgres_up] postgres torn down")
 
 
-@pytest.fixture(scope="module")
-def hermes_up(postgres_up, modules_dir):
+@pytest.fixture(scope="session")
+def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir) -> None:
     """
     Start hermes-agent after postgres is up.
 
     ## @purpose — Start hermes-agent container with all dependencies ready.
-    ## @io — ⇥ postgres_up (dependency), modules_dir → ⎋ str: path to compose file
+    ## @io — ⇥ platform_services: dict with foreign container info from _conftest.reuse
+    ##        ⇥ postgres_up (dependency), modules_dir → ⎋ str: path to compose file
     ## @complexity — O(1) — single subprocess call with --wait
     ## @invariants
     ##   - postgres_up fixture has run before this fixture executes
@@ -255,8 +278,21 @@ def hermes_up(postgres_up, modules_dir):
     ##   - Compose project name is ai-platform-test for isolation
     ##   - --wait-timeout: 90s Linux CI, 120s macOS (QEMU emulation + Docker Desktop resource contention)
     ##   - HERMES_WAIT_TIMEOUT env var overrides platform default
+    ##   - Foreign container guard allows reusing hermes-agent from platform_services
     """
     compose_file = os.path.join(modules_dir, "hermes-agent", "docker-compose.base.yml")
+
+    # ── Foreign container guard ──────────────────────────────────────
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was hardcoded "ai-platform-test"
+    # · Same bug — now uses COMPOSE_PROJECT_HERMES.
+    foreign = check_foreign_containers(["hermes-agent-test"], COMPOSE_PROJECT_HERMES)
+    if foreign:
+        logger.info("[IMP:8][hermes_up] Reusing hermes-agent from platform_services — skipping compose lifecycle")
+        statuses = wait_for_containers_healthy(["hermes-agent-test"])
+        if not all(s == "healthy" for s in statuses.values()):
+            pytest.fail(f"Reused containers not healthy: {statuses}")
+        yield compose_file
+        return
     if not os.path.exists(compose_file):
         pytest.skip(f"hermes-agent docker-compose.base.yml not found: {compose_file}")
 

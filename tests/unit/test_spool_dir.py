@@ -108,15 +108,15 @@ def test_spool_dir_paths_are_absolute():
 
 # region FUNC_test_spool_dir_none_no_warn
 ## @purpose  Verify modules with spool_dir: none are properly declared (stateless) and
-##           deploy-modules.sh ensure_spool_dirs() handles "none" → INFO, not WARN.
-## @io       _load_module_yamls + read deploy-modules.sh → assert conditions
-## @complexity 2 — iterates modules + grep script
+##           spool_validator.py verify_spool_dirs() handles "none" → stateless, not missing.
+## @io       _load_module_yamls + read spool_validator.py → assert conditions
+## @complexity 2 — iterates modules + reads Python module
 # 🧪 TRAP[TEST] · Regression: T4 — spool_dir: none stateless declaration
-# · Scenario: module.yaml with spool_dir: none → ensure_spool_dirs logs INFO not WARN
+# · Scenario: module.yaml with spool_dir: none → spool_validator logs stateless (no WARN)
 # · Last fail: WARN for nginx/redis/platform-secrets (no spool decl, always WARN)
-# · Remove if: ensure_spool_dirs "none" check removed from deploy-modules.sh
+# · Remove if: spool_validator "none" check removed from Python module
 def test_spool_dir_none_no_warn() -> None:
-    """Modules with spool_dir: none must be declared and handled as stateless (INFO, not WARN)."""
+    """Modules with spool_dir: none must be declared and handled as stateless (no WARN)."""
     modules = _load_module_yamls()
 
     # Check 1: specific modules must have spool_dir: none
@@ -133,20 +133,18 @@ def test_spool_dir_none_no_warn() -> None:
         has_spool = "spool_dir" in cfg or "spool_volume" in cfg
         assert has_spool, f"[IMP:9][test] {name} has spool_dir: none but it's missing from module.yaml dict"
 
-    # Check 3: deploy-modules.sh ensure_spool_dirs has "none" handling
-    deploy_script = MODULES_DIR.parent / "internal" / "bootstrap" / "deploy-modules.sh"
-    content = deploy_script.read_text()
-    assert '"none"' in content or "== 'none'" in content or 'spool_path == "none"' in content, (
-        "[IMP:9][test] FAIL: deploy-modules.sh ensure_spool_dirs must check for 'none' value"
+    # Check 3: spool_validator.py verify_spool_dirs() has "none" handling (Python module)
+    spool_validator = MODULES_DIR.parent / "internal" / "bootstrap" / "deploy" / "spool_validator.py"
+    assert spool_validator.is_file(), (
+        "[IMP:9][test] FAIL: spool_validator.py not found — ensure_spool_dirs reimplementation missing"
     )
-    # The "none" check should log INFO (not WARN)
-    none_check_context = (
-        content[content.find('spool_path == "none"') :][:500] if 'spool_path == "none"' in content else ""
+    content = spool_validator.read_text()
+    assert 'spool_path == "none"' in content, "[IMP:9][test] FAIL: spool_validator.py must check for 'none' value"
+    # The "none" check should mark as stateless (not WARN)
+    none_check_context = content[content.find('spool_path == "none"') : content.find('spool_path == "none"') + 500]
+    assert "stateless" in none_check_context or "spool_dir: none" in content, (
+        "[IMP:9][test] FAIL: spool_dir: none must be marked stateless, not WARN"
     )
-    if none_check_context:
-        assert "INFO" in none_check_context or "Stateless" in none_check_context, (
-            "[IMP:9][test] FAIL: spool_dir: none must produce INFO log, not WARN"
-        )
 
     print("[IMP:9][test_spool_dir_none_no_warn] PASS: spool_dir: none declared and handled")
 
@@ -155,19 +153,19 @@ def test_spool_dir_none_no_warn() -> None:
 
 
 # region FUNC_test_spool_dir_missing_still_warns
-## @purpose  Verify ensure_spool_dirs() still emits WARN for modules without spool_dir/spool_volume
+## @purpose  Verify spool_validator.py still emits WARN for modules without spool_dir/spool_volume
 ##           (drift detection preserved for new modules that forget to declare).
-## @io       Read deploy-modules.sh ensure_spool_dirs region → assert WARN present for missing decl
-## @complexity 1 — grep function body
+## @io       Read spool_validator.py verify_spool_dirs region → assert WARN present for missing decl
+## @complexity 1 — read Python module
 # 🧪 TRAP[TEST] · Regression: T4 — spool_dir omission still triggers WARN
-# · Scenario: a new module.yaml without spool_dir/spool_volume → ensure_spool_dirs must WARN
+# · Scenario: a new module.yaml without spool_dir/spool_volume → verify_spool_dirs must WARN
 # · Last fail: n/a (new test)
 # · Remove if: all modules always declare spool_dir (even stateless ones)
 def test_spool_dir_missing_still_warns() -> None:
     """Modules without spool_dir/spool_volume (and not in JUSTIFIED_EXCLUSIONS) must still trigger WARN."""
     modules = _load_module_yamls()
 
-    # Simulate what ensure_spool_dirs does: collect modules without spool_dir/spool_volume
+    # Simulate what verify_spool_dirs does: collect modules without spool_dir/spool_volume
     # that would get the WARN log
     would_warn = []
     for name, cfg in modules.items():
@@ -185,18 +183,19 @@ def test_spool_dir_missing_still_warns() -> None:
         f"[IMP:9][test] These modules would trigger WARN (no spool_dir/spool_volume, not excluded): {would_warn}"
     )
 
-    # Verify deploy-modules.sh still has the WARN path for missing declarations
-    deploy_script = MODULES_DIR.parent / "internal" / "bootstrap" / "deploy-modules.sh"
-    content = deploy_script.read_text()
-    func_start = content.find("# region ENSURE_SPOOL_DIRS")
-    func_end = content.find("# endregion ENSURE_SPOOL_DIRS")
-    assert func_start != -1 and func_end != -1, "ENSURE_SPOOL_DIRS region not found"
-    func_body = content[func_start:func_end]
-    non_comment = "\n".join(line for line in func_body.split("\n") if not line.strip().startswith("#"))
+    # Verify spool_validator.py has the WARN path for missing declarations
+    spool_validator = MODULES_DIR.parent / "internal" / "bootstrap" / "deploy" / "spool_validator.py"
+    assert spool_validator.is_file(), (
+        "[IMP:9][test] FAIL: spool_validator.py not found — ensure_spool_dirs reimplementation missing"
+    )
+    content = spool_validator.read_text()
+    func_start = content.find("def verify_spool_dirs")
+    assert func_start != -1, "verify_spool_dirs function not found in spool_validator.py"
+    func_body = content[func_start:]
 
     # Must have WARN for modules without spool_dir/spool_volume
-    assert "WARN" in non_comment and "No spool_dir" in func_body, (
-        "[IMP:9][test] FAIL: ensure_spool_dirs must emit WARN for modules without spool_dir"
+    assert "WARN" in func_body and "no spool_dir" in func_body.lower(), (
+        "[IMP:9][test] FAIL: verify_spool_dirs must emit WARN for modules without spool_dir"
     )
 
     print("[IMP:9][test_spool_dir_missing_still_warns] PASS: missing spool decl still triggers WARN")

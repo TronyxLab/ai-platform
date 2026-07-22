@@ -9,7 +9,7 @@
 #           Not suitable for CI without Docker socket access.
 # @invariants
 #   - All tests use @pytest.mark.component marker
-#   - clickhouse_up fixture is module-scoped: one start/teardown per module
+#   - clickhouse_up fixture is session-scoped: one start/teardown per session
 #   - External Docker network (observability-net) created automatically in fixture if missing
 #   - Each test has a 10-second HTTP timeout
 #   - LDD trajectory (IMP:7-10) printed before every assert
@@ -19,9 +19,10 @@
 #            A: ClickHouse /ping, /metrics, and SQL query require the actual server.
 #            Mocking HTTP endpoints would not validate the compose configuration,
 #            healthcheck definition, config.d/*.xml merging, or users.d security.
-#            Q: Why module-scoped fixture instead of session-scoped?
-#            A: Module scope isolates ClickHouse tests from other component tests.
-#            Session scope risks port conflicts if other tests also start containers.
+#            Q: Why session-scoped fixture instead of module-scoped?
+#            A: Session scope enables reuse with platform_services session fixture.
+#            Foreign container guard (check_foreign_containers) prevents port conflicts:
+#            if the container is already running under platform_services, it's reused.
 
 # region MODULE_CONTRACT
 ## @purpose  Component tests for ClickHouse Docker container:
@@ -29,9 +30,9 @@
 ##           a real container via docker compose.
 ## @scope    Component tests requiring Docker daemon; not suitable for
 ##           CI without Docker socket access. Tests are sequential
-##           (module-scoped fixture ensures single start/teardown).
+##           (session-scoped fixture ensures single start/teardown).
 ## @invariants
-##   - clickhouse_up fixture is module-scoped
+##   - clickhouse_up fixture is session-scoped
 ##   - observability-net Docker network created automatically if missing
 ##   - HTTP timeout: 10 seconds
 ##   - All tests use @pytest.mark.component
@@ -54,6 +55,8 @@ import subprocess
 import pytest
 import requests
 from _conftest.honesty import require_docker_or_fail
+from _conftest.infra import infra as _infra
+from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 from conftest import (
     _handle_e2e_error,
     ensure_external_networks,
@@ -79,7 +82,8 @@ _COMPOSE_TEST = "docker-compose.test.yml"
 _CLICKHOUSE_HOST = "127.0.0.1"
 _CLICKHOUSE_HTTP_PORT = 18123
 _CLICKHOUSE_METRICS_PORT = 19363
-_CLICKHOUSE_CONTAINER = "clickhouse-test"
+# Container name derived from infra auto-discovery
+_CLICKHOUSE_CONTAINER = _infra.get_container_name("clickhouse")
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -133,22 +137,26 @@ def _docker_exec_wget(url: str, timeout: int = 5) -> tuple[int, str]:
 # region FIXTURES
 
 
-@pytest.fixture(scope="module")
-def clickhouse_up(modules_dir: str) -> dict:
-    """Start the ClickHouse Docker compose stack and tear it down after the module.
+@pytest.fixture(scope="session")
+def clickhouse_up(platform_services: dict[str, list[str]], modules_dir: str) -> dict:
+    """Start the ClickHouse Docker compose stack and tear it down after the session.
 
     ## @purpose  — One-time setup: resolve compose path, ensure external network
     ##             (observability-net), run `docker compose up -d --wait` with
     ##             base + test override files, yield compose config for tests,
     ##             then teardown with `docker compose down -v`.
-    ## @io        — ⇥ modules_dir: str from conftest → ⚡ side-effects: Docker container
+    ##             If the container is already running under platform_services
+    ##             (foreign container guard), reuse it — skip compose lifecycle.
+    ## @io        — ⇥ platform_services: dict (session-scoped platform fixture)
+    ##             ⇥ modules_dir: str from conftest → ⚡ side-effects: Docker container
     ##             → ⎋ dict: {http_url, metrics_url, password, container} (yielded to tests)
     ## @complexity — O(1) compose lifecycle, O(N) for network creation
     ## @invariants
     ##   - compose base + test override files must exist
     ##   - docker daemon must be available (else skip)
     ##   - --wait-timeout: 120s (single container, fast startup)
-    ##   - teardown runs unconditionally
+    ##   - teardown runs unconditionally (unless foreign container reused)
+    ##   - Foreign container guard reuses clickhouse from platform_services if present
     """
     # ── Resolve compose path ──────────────────────────────────────────────
     compose_dir = os.path.join(modules_dir, "clickhouse")
@@ -166,6 +174,25 @@ def clickhouse_up(modules_dir: str) -> dict:
     # ── Production host guard ────────────────────────────────────────────
     if is_production_host():
         pytest.skip("Production host detected — skip ClickHouse component tests")
+
+    # ── Foreign container guard (reuse from platform_services) ────────────
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was "ai-platform-test" instead of compose project name
+    # · Same bug as test_smoke_postgres.py: check_foreign_containers treated platform_services
+    # · containers as "own" (same project), returned empty → fixture tried to start own containers.
+    foreign = check_foreign_containers([_CLICKHOUSE_CONTAINER], "ai-platform-test-ch")
+    if foreign:
+        logger.info("[IMP:8][clickhouse_up] Reusing clickhouse from platform_services")
+        statuses = wait_for_containers_healthy([_CLICKHOUSE_CONTAINER])
+        if not all(s == "healthy" for s in statuses.values()):
+            pytest.fail(f"Reused clickhouse container not healthy: {statuses}")
+        yield {
+            "http_url": f"http://{_CLICKHOUSE_HOST}:{_CLICKHOUSE_HTTP_PORT}",
+            "metrics_url": f"http://{_CLICKHOUSE_HOST}:{_CLICKHOUSE_METRICS_PORT}",
+            "password": _CLICKHOUSE_PASSWORD,
+            "container": _CLICKHOUSE_CONTAINER,
+            "compose_dir": os.path.join(modules_dir, "clickhouse"),
+        }
+        return
 
     # ── Ensure external networks ──────────────────────────────────────────
     ensure_external_networks(_EXTERNAL_NETWORKS)
@@ -292,6 +319,8 @@ def test_clickhouse_ping(clickhouse_up: dict, caplog) -> None:
     ##       ⚡ HTTP GET {http_url}/ping → ⎋ None (asserts 200 + "Ok.")
     ## @complexity — O(1)
     ## @scenario — AC-6: ClickHouse /ping returns 200 Ok
+    # 🧪 TRAP[TEST] · 2026-07-22 · Regression: N/A · Scenario: AC-6 ClickHouse /ping returns 200 Ok
+    # · Last fail: N/A · Remove if: ClickHouse removes /ping endpoint
     """
     http_url = clickhouse_up["http_url"]
     url = f"{http_url}/ping"
@@ -325,6 +354,8 @@ def test_clickhouse_prometheus_metrics(clickhouse_up: dict, caplog) -> None:
     ##       ⚡ HTTP GET {metrics_url}/metrics → ⎋ None (asserts 200 + Prometheus format)
     ## @complexity — O(1)
     ## @scenario — AC-7: ClickHouse Prometheus metrics endpoint is functional
+    # 🧪 TRAP[TEST] · 2026-07-22 · Regression: N/A · Scenario: AC-7 ClickHouse Prometheus /metrics
+    # · Last fail: N/A · Remove if: ClickHouse removes Prometheus endpoint
     """
     metrics_url = clickhouse_up["metrics_url"]
     url = f"{metrics_url}/metrics"
@@ -381,6 +412,8 @@ def test_clickhouse_basic_query(clickhouse_up: dict, caplog) -> None:
     ##       ⎋ None (asserts HTTP 200 + response contains "1")
     ## @complexity — O(1)
     ## @scenario — AC-8: ClickHouse can execute simple SQL query
+    # 🧪 TRAP[TEST] · 2026-07-22 · Regression: N/A · Scenario: AC-8 ClickHouse SELECT 1
+    # · Last fail: N/A · Remove if: ClickHouse query interface changes
     """
     http_url = clickhouse_up["http_url"]
     password = clickhouse_up["password"]

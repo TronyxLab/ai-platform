@@ -358,9 +358,17 @@ def test_deploy_docker_module_hermes_agent(mock_subprocess, module_dir):
 
     assert result is True
 
-    # Verify legacy container was stopped and removed
-    stop_calls = [c for c in mock_subprocess.call_args_list if "stop" in str(c) and "hermes-base-agent" in str(c)]
-    rm_calls = [c for c in mock_subprocess.call_args_list if "rm" in str(c) and "hermes-base-agent" in str(c)]
+    # Verify legacy container was stopped and removed — use precise arg matching
+    stop_calls = [
+        c
+        for c in mock_subprocess.call_args_list
+        if isinstance(c.args[0], list) and c.args[0][:2] == ["docker", "stop"] and "hermes-base-agent" in c.args[0]
+    ]
+    rm_calls = [
+        c
+        for c in mock_subprocess.call_args_list
+        if isinstance(c.args[0], list) and c.args[0][:2] == ["docker", "rm"] and "hermes-base-agent" in c.args[0]
+    ]
     assert len(stop_calls) == 1
     assert len(rm_calls) == 1
 
@@ -695,8 +703,13 @@ def test_cleanup_legacy_container_found(mock_subprocess):
 
     dorch._cleanup_legacy_container("hermes-base-agent")
 
-    stop_calls = [c for c in mock_subprocess.call_args_list if "stop" in str(c)]
-    rm_calls = [c for c in mock_subprocess.call_args_list if "rm" in str(c)]
+    # Use precise arg matching — "stop" or "rm" substring matches --format arg and container names
+    stop_calls = [
+        c for c in mock_subprocess.call_args_list if isinstance(c.args[0], list) and c.args[0][:2] == ["docker", "stop"]
+    ]
+    rm_calls = [
+        c for c in mock_subprocess.call_args_list if isinstance(c.args[0], list) and c.args[0][:2] == ["docker", "rm"]
+    ]
     assert len(stop_calls) == 1
     assert len(rm_calls) == 1
 
@@ -710,8 +723,12 @@ def test_cleanup_legacy_container_not_found(mock_subprocess):
 
     dorch._cleanup_legacy_container("hermes-base-agent")
 
-    # stop/rm should not be called
-    stop_rm_calls = [c for c in mock_subprocess.call_args_list if ("stop" in str(c) or "rm" in str(c))]
+    # stop/rm should not be called — use precise arg matching to avoid --format and name false positives
+    stop_rm_calls = [
+        c
+        for c in mock_subprocess.call_args_list
+        if isinstance(c.args[0], list) and len(c.args[0]) >= 2 and c.args[0][1] in ("stop", "rm")
+    ]
     assert len(stop_rm_calls) == 0
 
 

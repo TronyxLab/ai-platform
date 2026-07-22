@@ -4,9 +4,10 @@
 ## @purpose  Smoke tests for nginx module — validates HTTP/HTTPS, TLS cert, vhost routing, error pages.
 ##           Created as part of wave-nginx reset (DevPlan 008 T5.7).
 ## @scope    Docker-dependent tests (pytest.mark.smoke + pytest.mark.requires_docker).
-##           Requires Docker daemon. Module-scoped fixture manages compose lifecycle.
+##           Requires Docker daemon. Session-scoped fixture manages compose lifecycle.
 ## @invariants
-##   - Module-scoped fixture manages compose lifecycle: pre-cleanup → up → tests → down
+##   - Session-scoped fixture manages compose lifecycle: pre-cleanup → up → tests → down
+##   - platform_services required — foreign container guard reuses nginx from shared stack
 ##   - Stops any existing ai-platform-test project before starting smoke project
 ##   - Ensures proxy-net and observability-net exist (external networks)
 ##   - Uses NGINX_CONF_DIR=dev-config with self-signed mkcert certs for TLS
@@ -24,6 +25,8 @@ import os
 import subprocess
 
 import pytest
+from _conftest.infra import infra as _infra
+from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 
 from tests.helpers.gate_helpers import repo_root
 
@@ -38,8 +41,11 @@ _COMPOSE_TEST = _NGINX_MODULE / "docker-compose.test.yml"
 _EXISTING_PROJECT = "ai-platform-existing"  # existing production/live-verification project — NOT "ai-platform-test" to avoid destroying the platform_services session stack
 _SMOKE_PROJECT = "wave-nginx-smoke"  # isolated smoke test project
 
-# Default test container name (from test.yml override)
-_CONTAINER_NAME = "nginx-test"
+# Default test container name (from test.yml override) — derived from infra auto-discovery
+# ⚠️ TRAP[DECISION] · 2026-07-22 · — · Container name derived from infra auto-discovery
+# · Rejected: hardcoded "nginx-test" (risk: drift from compose files)
+# · Reason: Deriving from infra.py ensures always-in-sync container names.
+_CONTAINER_NAME = _infra.get_container_name("nginx")
 
 # External Docker networks
 _EXTERNAL_NETWORKS = {"proxy-net", "observability-net"}
@@ -100,15 +106,16 @@ def _run_docker(
         raise
 
 
-@pytest.fixture(scope="module")
-def nginx_compose():
-    """Module-scoped fixture: manage docker compose lifecycle for nginx smoke tests.
+@pytest.fixture(scope="session")
+def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
+    """Session-scoped fixture: manage docker compose lifecycle for nginx smoke tests.
 
     ## @purpose — Start nginx container with dev-config (HTTP + HTTPS), yield
-    ##            config info for tests, tear down after all tests in module.
-    ## @io — ⇥ None → ⎋ dict (compose project, container name, ports)
+    ##            config info for tests, tear down after all tests in session.
+    ## @io — ⇥ platform_services → ⎋ dict (compose project, container name, ports)
     ## @complexity — O(1) — startup/teardown with network creation
     ## @invariants
+    ##   - Session-scoped; foreign container guard reuses nginx from platform_services
     ##   - Stops any running ai-platform-test project before starting smoke project
     ##   - Creates proxy-net and observability-net if absent (cleans up if created)
     ##   - Uses dev-config for self-signed mkcert TLS certs
@@ -118,6 +125,24 @@ def nginx_compose():
     """
     _logger = logging.getLogger(__name__)
     _logger.info("[IMP:7][nginx_compose][setup] Starting nginx smoke fixture")
+
+    # ── Foreign container guard (reuse from platform_services) ────────────
+    # ⚠️ TRAP[BUG] · 2026-07-22 · HI · own_project was "ai-platform-test" instead of _SMOKE_PROJECT
+    # · Same bug as test_smoke_postgres.py: check_foreign_containers treated platform_services
+    # · containers as "own" (same project), returned empty → fixture tried to start own containers.
+    foreign = check_foreign_containers([_CONTAINER_NAME], _SMOKE_PROJECT)
+    if foreign:
+        _logger.info("[IMP:8][nginx_compose] Reusing nginx from platform_services")
+        statuses = wait_for_containers_healthy([_CONTAINER_NAME])
+        if not all(s == "healthy" for s in statuses.values()):
+            pytest.fail(f"Reused nginx container not healthy: {statuses}")
+        yield {
+            "project": _SMOKE_PROJECT,
+            "container": _CONTAINER_NAME,
+            "http_port": _HTTP_PORT,
+            "https_port": _HTTPS_PORT,
+        }
+        return
 
     # ── Step 1: Stop any running existing project ─────────────────────────────
     _logger.info("[IMP:7][nginx_compose][setup] Stopping existing %s project", _EXISTING_PROJECT)
