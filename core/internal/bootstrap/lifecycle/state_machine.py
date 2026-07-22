@@ -1926,7 +1926,8 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
             if spec and spec.loader:
                 cert_mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(cert_mod)
-                cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
+                cert_result = cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
+                logger.info("[IMP:9][deploy_context] Cert orchestration complete: %s", cert_result.to_dict())
             else:
                 logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py — skipping cert orchestration")
         except Exception as e:
@@ -1943,7 +1944,8 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
         if spec and spec.loader:
             deployer_mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(deployer_mod)
-            deployer_mod.deploy_context_projects(node_yaml, context)
+            results = deployer_mod.deploy_context_projects(node_yaml, context) or []
+            logger.info("[IMP:9][deploy_context] Project deploy complete: %d projects", len(results))
         else:
             logger.warning("[IMP:7][deploy_context] Cannot load context_deployer.py — skipping project deploy")
     except Exception as e:
@@ -1952,8 +1954,9 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
     # ── 18.5: Render vhosts ──
     vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
     if os.path.isfile(vhost_script):
+        node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
         _subprocess_run(
-            ["bash", vhost_script, "--render-all", "--node", node_name],
+            ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
             "render_vhosts",
             non_fatal=True,
         )
@@ -1963,7 +1966,8 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
     # ── 18.6: Final verify ──
     verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
     if os.path.isfile(verify_script):
-        _subprocess_run(["bash", verify_script, node_name], "final_verify", non_fatal=True)
+        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        _subprocess_run(["bash", verify_script, node_name, platform_root], "final_verify", non_fatal=True)
 
     logger.info("[IMP:9][deploy_context] deploy_context complete")
 

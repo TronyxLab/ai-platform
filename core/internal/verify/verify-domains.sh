@@ -245,7 +245,7 @@ for d in doms:
 ## @param $2  Platform root (from PLATFORM_ROOT or /opt/platform)
 ## @exitcode 0 all pass, 1 any fail
 main() {
-    local node_name="$1" platform_root="$2"
+    local node_name="${1:-}" platform_root="${2:-${PLATFORM_ROOT:-/opt/platform}}"
 
     log_imp 7 "main" "Starting post-deploy verification for node=${node_name}"
 

@@ -29,6 +29,33 @@ source "${SCRIPT_DIR}/../../lib/yaml_read.sh"
 # NOTE: All functions extracted from ssl-provision.sh. Original TRAP comments preserved.
 # The install_acme() function lives in install-acme.sh — this script handles cert issuance only.
 
+# region _IS_LE_CERT
+## @purpose  Check if a certificate file is from Let's Encrypt (not mkcert/self-signed).
+##           Prevents mkcert/dev certs from being treated as valid LE certs.
+## @param    $1  cert_path  Path to certificate file
+## @return   0 if cert is from Let's Encrypt, 1 otherwise
+## @invariants
+##   - Returns 1 if cert file missing, unreadable, or issuer doesn't contain "Let's Encrypt"
+##   - Uses openssl x509 -issuer — reliable way to check CA
+## ⚠️ TRAP[BUG] · 2026-07-22 · P0 · mkcert certs survived bootstrap — no issuer check
+## · Symptom: mkcert/dev certs at /etc/letsencrypt/live/ survived bootstrap,
+##   nginx served untrusted certs, curl SSL verify failed on all domains
+## · Root: idempotency checks (issue_tls_cert + main) checked only file existence,
+##   not issuer. mkcert cert from macOS passed as "valid".
+## · Fix: added _is_le_cert() — rejects certs not issued by Let's Encrypt.
+## · Prevention: any cert at /etc/letsencrypt/live/ must pass issuer check
+##   before being treated as valid for idempotency skip.
+_is_le_cert() {
+    local cert_path="${1:-}"
+    if [[ ! -f "$cert_path" ]]; then
+        return 1
+    fi
+    local issuer
+    issuer="$(openssl x509 -in "$cert_path" -issuer -noout 2>/dev/null)" || return 1
+    [[ "$issuer" == *"Let's Encrypt"* ]]
+}
+# endregion _IS_LE_CERT
+
 # region ACME_ISSUE
 ## @purpose  Issue a Let's Encrypt TLS certificate via acme.sh DNS-01 challenge
 ## @param $1  domain        Domain name (e.g., tronyx.ru)
@@ -359,11 +386,16 @@ issue_tls_cert() {
         return 0
     fi
 
-    # [IMP:9][issue-cert][acme.sh] Idempotency: do NOT re-issue existing valid certificate
+    # [IMP:9][issue-cert][acme.sh] Idempotency: do NOT re-issue existing valid LE certificate
+    # ⚠️ TRAP[BUG] · 2026-07-22 · P0 · Was: -f check only → mkcert certs passed as valid
+    # · Fix: _is_le_cert() also verifies issuer is Let's Encrypt
     local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
-    if [[ -f "$cert_path" ]]; then
-        log_step "acme.sh" "SKIP" "Certificate already exists: ${cert_path}"
+    if _is_le_cert "$cert_path"; then
+        log_step "acme.sh" "SKIP" "Valid LE certificate already exists: ${cert_path}"
         return 0
+    fi
+    if [[ -f "$cert_path" ]]; then
+        log_step "acme.sh" "WARN" "Certificate exists but NOT from Let's Encrypt (mkcert/self-signed?) — re-issuing"
     fi
 
     # [IMP:9][issue-cert][acme.sh] BUSINESS INVARIANT: DNS plugin required for wildcard cert
@@ -424,7 +456,7 @@ main() {
     local dns_plugin="${PLATFORM_ACME_DNS_PLUGIN:-}"
     local project_domains="${PLATFORM_PROJECT_DOMAINS:-}"
 
-    # ── Idempotency: skip main cert if already exists ──────────────
+    # ── Idempotency: skip main cert if already exists AND is from Let's Encrypt ──
     # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Early exit blocked project domains
     # · Symptom: project domains skipped on subsequent node-update runs because early
     #   `exit 0` on main cert exists check happened BEFORE _issue_project_certs
@@ -435,12 +467,16 @@ main() {
     # · Rejected: keeping exit (breaks source-ability and causes early termination)
     # · Reason: return is semantically correct for functions; caller (main "$@") handles exit
     # · Rev: if main() needs to truly terminate parent process, use exit selectively
+    # ⚠️ TRAP[BUG] · 2026-07-22 · P0 · Was: -f check only → mkcert certs passed as valid
+    # · Fix: _is_le_cert() also verifies issuer is Let's Encrypt
     local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
     local main_cert_exists=false
-    if [[ -n "$domain" ]] && [[ -f "$cert_path" ]]; then
-        log_step "main" "SKIP" "Certificate already exists: ${cert_path} (idempotent)"
+    if [[ -n "$domain" ]] && _is_le_cert "$cert_path"; then
+        log_step "main" "SKIP" "Valid LE certificate already exists: ${cert_path} (idempotent)"
         log_imp 9 "-" "BUSINESS INVARIANT: main cert exists — skip main, continue project domains"
         main_cert_exists=true
+    elif [[ -n "$domain" ]] && [[ -f "$cert_path" ]]; then
+        log_step "main" "WARN" "Certificate exists but NOT from Let's Encrypt (mkcert/self-signed?) — re-issuing"
     fi
 
     if ! $main_cert_exists; then

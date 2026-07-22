@@ -36,13 +36,13 @@ services:
     volumes:
       - ./app.py:/app/app.py:ro
       # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
-      - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-test-node}/node.yaml:/opt/node-configs/${NODE_NAME:-test-node}/node.yaml:ro
+      - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-unknown}/node.yaml:/opt/node-configs/${NODE_NAME:-unknown}/node.yaml:ro
       # docker-health.json — container statuses (cron-exported every 1m)
       - /run/platform/docker-health.json:/run/platform/docker-health.json:ro
 
     environment:
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}
-      NODE_NAME: ${NODE_NAME:-test-node}
+      NODE_NAME: ${NODE_NAME:-unknown}
       NODE_CONFIGS_DIR: ${NODE_CONFIGS_DIR:-/opt/node-configs}
 
     networks:

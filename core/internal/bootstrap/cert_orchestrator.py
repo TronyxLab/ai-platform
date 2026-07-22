@@ -145,7 +145,8 @@ def orchestrate_certs(
         if not domain:
             continue
         domain_result = _process_single_domain(domain, s3_cache_script, issue_cert_script)
-        result.add(domain_result)
+        if domain_result is not None:
+            result.add(domain_result)
 
     logger.info(
         "[IMP:9][cert_orchestrator] Done: restored=%d issued=%d skipped=%d failed=%d",
@@ -209,33 +210,80 @@ def _process_single_domain(
 
 
 # region FUNC_is_cert_valid
-## @purpose — Check if a certificate on disk is valid (>30 days remaining).
-##            Uses openssl x509 -checkend.
-## @io — ⇥ domain: str, cert_path: str → ⎋ bool (True = valid >30 days)
+## @purpose — Check if a certificate on disk is valid (>30 days remaining)
+##            AND issued by a trusted CA (Let's Encrypt).
+##            Uses openssl x509 -checkend + -issuer.
+## @io — ⇥ domain: str, cert_path: str → ⎋ bool (True = valid LE cert >30 days)
 ## @complexity — O(1) + openssl subprocess
 ## @invariants
 ##   - Returns False if cert file missing or unparseable
 ##   - Uses openssl x509 -checkend 2592000 (30 days in seconds)
+##   - ⚠️ TRAP[BUG] · 2026-07-22 · P0 · mkcert certs passed as "valid" — no issuer check
+##   - · Symptom: mkcert/dev certs at /etc/letsencrypt/live/ survived bootstrap
+##   - · Root: _is_cert_valid() checked only expiry, not issuer trustworthiness
+##   - · Fix: added _is_le_issuer() check — rejects non-LE certs (mkcert, self-signed)
+##   - · Prevention: any cert at /etc/letsencrypt/live/ must have LE issuer to be considered valid
 def _is_cert_valid(domain: str, cert_path: str) -> bool:
-    """Check if cert at cert_path is valid (>30 days)."""
+    """Check if cert at cert_path is valid (>30 days) AND from Let's Encrypt."""
     try:
+        # Check 1: Cert not expired (>30 days remaining)
         result = subprocess.run(
             ["openssl", "x509", "-in", cert_path, "-checkend", "2592000", "-noout"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        if result.returncode == 0:
-            logger.info("[IMP:9][cert_orchestrator] %s — cert valid >30 days", domain)
-            return True
-        logger.info("[IMP:7][cert_orchestrator] %s — cert expires within 30 days", domain)
-        return False
+        if result.returncode != 0:
+            logger.info("[IMP:7][cert_orchestrator] %s — cert expires within 30 days or unparseable", domain)
+            return False
+
+        # Check 2: Issuer must be Let's Encrypt (reject mkcert, self-signed, etc.)
+        if not _is_le_issuer(cert_path):
+            logger.warning(
+                "[IMP:9][cert_orchestrator] %s — cert on disk is NOT from Let's Encrypt (mkcert/self-signed?), re-issuing",
+                domain,
+            )
+            return False
+
+        logger.info("[IMP:9][cert_orchestrator] %s — valid LE cert >30 days", domain)
+        return True
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — openssl check failed: %s", domain, e)
         return False
 
 
 # endregion FUNC_is_cert_valid
+
+
+# region FUNC_is_le_issuer
+## @purpose — Check if a certificate was issued by Let's Encrypt.
+##            Uses openssl x509 -issuer to extract the issuer field.
+## @io — ⇥ cert_path: str → ⎋ bool (True = LE issuer)
+## @complexity — O(1) + openssl subprocess
+## @invariants
+##   - Returns False if cert missing, unparseable, or issuer doesn't contain "Let's Encrypt"
+##   - Case-insensitive match on issuer string
+def _is_le_issuer(cert_path: str) -> bool:
+    """Check if cert at cert_path has Let's Encrypt issuer."""
+    try:
+        result = subprocess.run(
+            ["openssl", "x509", "-in", cert_path, "-issuer", "-noout"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return False
+        issuer = result.stdout.strip()
+        is_le = "Let's Encrypt" in issuer
+        if not is_le:
+            logger.info("[IMP:7][cert_orchestrator] Cert issuer: %s", issuer[:120])
+        return is_le
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+# endregion FUNC_is_le_issuer
 
 
 # region FUNC_try_s3_restore

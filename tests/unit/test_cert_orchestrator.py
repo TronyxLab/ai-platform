@@ -203,3 +203,96 @@ def test_idempotent_skip_valid(caplog, tmp_path, monkeypatch):
 
 
 # endregion
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _is_le_issuer — P0 fix: reject non-LE certs
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · _is_le_issuer accepts Let's Encrypt certs
+# · Scenario: openssl x509 -issuer returns "Let's Encrypt" → True
+# · Last fail: N/A (new test for P0 fix)
+# · Remove if: issuer check logic changes
+@ldd_trajectory
+def test_is_le_issuer_accepts_le_cert(caplog):
+    """_is_le_issuer should return True for Let's Encrypt issuer."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="issuer=C = US, O = Let's Encrypt, CN = R11\n",
+            stderr="",
+        )
+        result = cert._is_le_issuer("/fake/path/fullchain.pem")
+    assert result is True
+    logger.critical("[IMP:9][test] _is_le_issuer accepts LE cert")
+
+
+# 🧪 TRAP[TEST] · Regression · _is_le_issuer rejects mkcert certs
+# · Scenario: openssl x509 -issuer returns "mkcert development CA" → False
+# · Last fail: 2026-07-22 — P0 mkcert certs survived bootstrap
+# · Remove if: NEVER — this is the regression test for the P0 fix
+@ldd_trajectory
+def test_is_le_issuer_rejects_mkcert_cert(caplog):
+    """_is_le_issuer should return False for mkcert/self-signed certs."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=(
+                "issuer=O = mkcert development CA, "
+                "OU = tronyx@MacBook-Pro-Vladimir-2.local, "
+                "CN = mkcert tronyx@MacBook-Pro-Vladimir-2.local\n"
+            ),
+            stderr="",
+        )
+        result = cert._is_le_issuer("/fake/path/fullchain.pem")
+    assert result is False
+    logger.critical("[IMP:9][test] _is_le_issuer rejects mkcert cert")
+
+
+# 🧪 TRAP[TEST] · Regression · _is_le_issuer handles openssl failure
+# · Scenario: openssl returns non-zero → return False
+# · Last fail: N/A (new test)
+@ldd_trajectory
+def test_is_le_issuer_handles_openssl_failure(caplog):
+    """_is_le_issuer should return False when openssl fails."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+        result = cert._is_le_issuer("/nonexistent.pem")
+    assert result is False
+    logger.critical("[IMP:9][test] _is_le_issuer handles openssl failure gracefully")
+
+
+# 🧪 TRAP[TEST] · Regression · _is_cert_valid rejects mkcert even if not expired
+# · Scenario: cert not expired but issuer is mkcert → _is_cert_valid returns False
+# · Last fail: 2026-07-22 — P0: mkcert cert passed as "valid" because only expiry checked
+# · Remove if: NEVER — this is the regression test for the P0 fix
+@ldd_trajectory
+def test_is_cert_valid_rejects_mkcert_even_if_not_expired(caplog, monkeypatch):
+    """_is_cert_valid should return False for non-LE certs regardless of expiry."""
+    # Mock openssl -checkend to pass (cert not expired)
+    # but _is_le_issuer to return False (mkcert cert)
+    checkend_result = MagicMock(returncode=0, stdout="", stderr="")
+    issuer_result = MagicMock(
+        returncode=0,
+        stdout="issuer=O = mkcert development CA\n",
+        stderr="",
+    )
+    call_count = [0]
+
+    def mock_run(cmd, **kwargs):
+        call_count[0] += 1
+        if "-checkend" in str(cmd):
+            return checkend_result
+        if "-issuer" in str(cmd):
+            return issuer_result
+        return MagicMock(returncode=1, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run):
+        result = cert._is_cert_valid("tronyx.ru", "/fake/path/fullchain.pem")
+
+    assert result is False, "mkcert cert should NOT pass _is_cert_valid regardless of expiry"
+    assert call_count[0] == 2, "Should have called both -checkend and -issuer"
+    logger.critical("[IMP:9][test] _is_cert_valid rejects mkcert cert — P0 regression test")
+
+
+# endregion
