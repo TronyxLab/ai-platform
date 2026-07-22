@@ -15,6 +15,7 @@
 ##       from strict `-n` exit code check on this platform.
 # endregion MODULE_CONTRACT
 
+import os
 import pathlib
 import subprocess
 
@@ -268,8 +269,7 @@ class TestMakefileIncludeSplit:
         """
         if _LEGACY_MAKE:
             pytest.skip(
-                "GNU Make < 4.0 detected — `make -n` with $(eval ...) "
-                "incorrectly executes recipes on this platform. "
+                "GNU Make < 4.0 detected — `make -n` with $(eval ...) incorrectly executes recipes on this platform. "
             )
 
         complex_targets = {
