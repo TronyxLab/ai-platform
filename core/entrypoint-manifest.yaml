@@ -513,6 +513,10 @@ gates:
     description: "W4-E4 gate — validates make -n for all .PHONY targets and recipe TAB enforcement after Makefile include-split"
     test_file: test_gate_makefile_targets.py
     markers: gate
+  - id: compose-profiles-consistency
+    description: "MISMATCH-1 gate — verifies COMPOSE_PROFILES 13-module list is identical across all 7 callsites (Makefile, shell scripts, CI YAML, Python, helpers.mk). Catches drift when Docker modules are added/removed."
+    test_file: test_gate_compose_profiles_consistency.py
+    markers: gate
 
   # W1-E3: R5 anti-survivorship negative pairs (DevPlan 028 Подволна C)
   - id: gate-litellm-pg-enforcement-negative

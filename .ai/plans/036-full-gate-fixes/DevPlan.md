@@ -197,7 +197,7 @@ Best when: Never — технически невозможно.
 
 **Recommended fix:** Use regex `r'\$\{POSTGRES_PASSWORD[\}:]'` — matches `${POSTGRES_PASSWORD}` followed by either `}` (simple reference) or `:` (fail-fast/default variant). This recognizes all valid compose variable references to POSTGRES_PASSWORD.
 
-**Also considered:** 
+**Also considered:**
 - Escape-curly approach `${POSTGRES_PASSWORD:?...}` — rejected (still fragile, hardcodes fallback message).
 - Read from docker compose config — rejected (need Docker, overkill for static test).
 - Check `"${POSTGRES_PASSWORD"` only — rejected (matches substrings like `${POSTGRES_PASSWORD_ENCODED}` if it existed, less precise). Wait — actually `"${POSTGRES_PASSWORD"` would ALSO match `${POSTGRES_PASSWORD_ENCODED}` which the test explicitly rejects. So regex is safer.

@@ -800,6 +800,7 @@ def test_project_compose_configs_valid(
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env={**os.environ},
             )
             if result.returncode != 0:
                 err_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
