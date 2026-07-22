@@ -1558,8 +1558,7 @@ def _validate_sudoers() -> None:
         entries = list(Path(sudoers_d).iterdir())
     except PermissionError:
         logger.warning(
-            "[IMP:7][sudoers] Permission denied reading %s — "
-            "skipping validation (non-root or restricted permissions)",
+            "[IMP:7][sudoers] Permission denied reading %s — skipping validation (non-root or restricted permissions)",
             sudoers_d,
         )
         return
