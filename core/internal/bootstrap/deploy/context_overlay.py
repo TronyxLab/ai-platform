@@ -9,7 +9,7 @@
 ##   - No context: field in node.yaml → SKIP (return 0)
 ##   - Context path exists + cached (<300s) → SKIP pull
 ##   - Context path exists + cache expired → git pull --ff-only (non-fatal if fails)
-##   - Context path absent + repos.platform URL → git clone (return 1 if fails)
+##   - Context path absent + repos.core URL → git clone (return 1 if fails)
 ##   - Context path absent + no URL → WARN (return 0)
 ## @rationale Replaces shell ensure_context_repo() function (lines 219-269) from deploy-modules.sh 1664-line monolith.
 ##            Uses yaml library directly instead of inline python3 -c for node.yaml parsing.
@@ -26,7 +26,7 @@ with typed Python: yaml-based node.yaml parsing, subprocess git operations, S9 p
 #                    ┌path exists?┐                                  │
 #                    │ yes        │ no                               │
 #                    ▼            ▼                                  │
-#              ◇ cache <300s?  read repos.platform                  │
+#              ◇ cache <300s?  read repos.core                  │
 #              │ yes→SKIP┐     ┌─url? no→WARN───────────────────────┤
 #              │ no      │     │ yes                                │
 #              ▼         │     ▼                                    │
@@ -69,7 +69,7 @@ CONTEXT_PULL_TS_PATH: str = "/var/lib/platform/.context-pull-ts"
 ## @invariants
 ##   - If node.yaml has no `context:` field → SKIP immediately (return 0)
 ##   - If context path already exists → pull with S9 cache check
-##   - If context path does NOT exist → clone from repos.platform URL
+##   - If context path does NOT exist → clone from repos.core URL
 ##   - Git pull failure is non-fatal (return 0, log WARN)
 ##   - Git clone failure returns 1 (log WARN)
 ## @rationale Extracted directly from deploy-modules.sh (lines 219-269).
@@ -211,16 +211,16 @@ def _pull_with_cache(context_path: str) -> int:
 
 
 # region FUNC__clone_context_repo
-## @purpose  Clone context overlay git repo from repos.platform URL in node.yaml.
+## @purpose  Clone context overlay git repo from repos.core URL in node.yaml.
 ## @io       ⇥ node_yaml_path: str, context_path: str
 ##           ⎋ int: 0 = success / no URL (skip), 1 = clone failed
 ## @complexity  O(1) + git clone subprocess
 ## @invariants
-##   - If repos.platform is absent/empty → log WARN, return 0 (no-op)
+##   - If repos.core is absent/empty → log WARN, return 0 (no-op)
 ##   - git clone failure → log WARN with remediation instructions, return 1
 ##   - Clone timeout = 120s (typically larger repos)
 def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
-    """Clone context overlay repo from repos.platform URL.
+    """Clone context overlay repo from repos.core URL.
 
     If repo URL is missing from node.yaml, logs a WARN and returns 0.
     If clone fails, logs WARN with remediation and returns 1.
@@ -228,9 +228,9 @@ def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
     repo_url = _read_repo_url(node_yaml_path)
 
     if not repo_url:
-        logger.warning("[IMP:7][_clone_context_repo][warn] No repos.platform in node.yaml")
+        logger.warning("[IMP:7][_clone_context_repo][warn] No repos.core in node.yaml")
         logger.warning(
-            "[IMP:7][_clone_context_repo][warn] Create %s manually or add repos.platform to node.yaml",
+            "[IMP:7][_clone_context_repo][warn] Create %s manually or add repos.core to node.yaml",
             context_path,
         )
         return 0
@@ -257,7 +257,7 @@ def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
             result.stderr.strip(),
         )
         logger.warning(
-            "[IMP:7][_clone_context_repo][warn] Create %s manually or add repos.platform to node.yaml",
+            "[IMP:7][_clone_context_repo][warn] Create %s manually or add repos.core to node.yaml",
             context_path,
         )
         return 1
@@ -270,11 +270,11 @@ def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
 
 
 # region FUNC__read_repo_url
-## @purpose  Extract repos.platform URL from node.yaml using yaml library.
+## @purpose  Extract repos.core URL from node.yaml using yaml library.
 ## @io       ⇥ node_yaml_path: str → ⎋ str (repo URL, empty if absent)
 ## @complexity  O(1) — nested dict lookup
 def _read_repo_url(node_yaml_path: str) -> str:
-    """Read the `repos.platform` field from node.yaml.
+    """Read the `repos.core` field from node.yaml.
 
     Uses yaml library directly (replaces inline python3 -c pattern from original
     deploy-modules.sh line 250-256).
@@ -288,11 +288,11 @@ def _read_repo_url(node_yaml_path: str) -> str:
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
         repos = (data or {}).get("repos", {}) or {}
-        url = repos.get("platform", "") or ""
-        logger.info("[IMP:8][_read_repo_url] repos.platform='%s' (from %s)", url, node_yaml_path)
+        url = repos.get("core", "") or ""
+        logger.info("[IMP:8][_read_repo_url] repos.core='%s' (from %s)", url, node_yaml_path)
         return url
     except Exception as exc:
-        logger.warning("[IMP:7][_read_repo_url][error] Failed to read repos.platform: %s", exc)
+        logger.warning("[IMP:7][_read_repo_url][error] Failed to read repos.core: %s", exc)
         return ""
 
 

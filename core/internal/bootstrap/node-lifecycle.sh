@@ -41,7 +41,7 @@ esac; done
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../lib/paths.sh"; CORE_DIR="${PATHS_CORE_DIR}"
 source "${CORE_DIR}/lib/logging.sh"; source "${CORE_DIR}/lib/checkpoint.sh"; source "${CORE_DIR}/internal/bootstrap/content-hash.sh"
-source "${CORE_DIR}/lib/secrets.sh"; source "${CORE_DIR}/lib/yaml_read.sh"
+source "${CORE_DIR}/lib/secrets.sh"; source "${CORE_DIR}/lib/yaml_read.sh"; source "${CORE_DIR}/lib/audit_logging.sh"
 STEP=0; STEP_ERRORS=(); __LOG_PREFIX="${MODE/init/bootstrap}"; __LOG_PREFIX="${__LOG_PREFIX/update/node-update}"
 step_start() { STEP=$((STEP+1)); log_step "$1" "START" "${2:-}"; }
 step_done() { log_step "$1" "DONE" "${2:-}"; }

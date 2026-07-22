@@ -89,11 +89,11 @@ _VOLUME_BIND_DIRS = [
 # for network isolation. Previously only production networks were created,
 # causing 13 fixture setup errors (Docker Compose could not find test-shared-db-net).
 _EXTERNAL_NETWORKS = [
-    "shared-db-net",
-    "proxy-net",
-    "hermes-agent-net",
-    "observability-net",
     "test-shared-db-net",
+    "test-proxy-net",
+    "test-hermes-agent-net",
+    "test-observability-net",
+    "test-shared-cache-net",
 ]
 
 

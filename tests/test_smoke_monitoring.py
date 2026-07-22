@@ -56,7 +56,7 @@ _HTTP_TIMEOUT = 10
 _NETWORK_CREATE_TIMEOUT = 15
 
 # Required external networks
-_EXTERNAL_NETWORKS = ["observability-net", "proxy-net"]
+_EXTERNAL_NETWORKS = ["test-observability-net", "test-proxy-net"]
 
 
 # region FIXTURES

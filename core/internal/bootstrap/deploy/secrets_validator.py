@@ -537,8 +537,11 @@ def main() -> int:
 
     if action == "module-metadata":
         if not args.module_yaml:
-            print("ERROR: --module-yaml required for module-metadata", file=sys.stderr)
-            return 1
+            if args.module_name and args.modules_dir:
+                args.module_yaml = os.path.join(args.modules_dir, args.module_name, "module.yaml")
+            else:
+                print("ERROR: --module-yaml required for module-metadata", file=sys.stderr)
+                return 1
         sev = _get_module_severity(args.module_yaml)
         print(sev)
         return 0
@@ -574,8 +577,11 @@ def main() -> int:
 
     if action == "detect-type":
         if not args.module_yaml:
-            print("ERROR: --module-yaml required for detect-type", file=sys.stderr)
-            return 1
+            if args.module_name and args.modules_dir:
+                args.module_yaml = os.path.join(args.modules_dir, args.module_name, "module.yaml")
+            else:
+                print("ERROR: --module-yaml required for detect-type", file=sys.stderr)
+                return 1
         itype = detect_install_type(args.module_yaml)
         print(itype)
         return 0

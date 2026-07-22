@@ -42,7 +42,7 @@ _CADVISOR_CONTAINER = "cadvisor-test"
 _NODE_EXPORTER_CONTAINER = "node-exporter-test"
 
 # External Docker networks
-_EXTERNAL_NETWORKS = {"observability-net", "shared-cache-net"}
+_EXTERNAL_NETWORKS = {"test-observability-net"}
 
 # Timeouts
 _COMPOSE_UP_TIMEOUT = 90

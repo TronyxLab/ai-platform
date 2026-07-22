@@ -39,20 +39,20 @@ sys.path.insert(
 from context_overlay import ensure_context_repo
 
 # region FIXTURES
-## @purpose  Fixtures: node.yaml variants with/without context and repos.platform
+## @purpose  Fixtures: node.yaml variants with/without context and repos.core
 
 
 @pytest.fixture
 def node_yaml_with_context(tmp_path):
-    """Create node.yaml with `context:` and `repos.platform:`. (clone-branch fixture)"""
+    """Create node.yaml with `context:` and `repos.core:`. (clone-branch fixture)"""
     path = tmp_path / "node.yaml"
-    path.write_text("context: testctx\nrepos:\n  platform: https://github.com/org/test-context.git\n")
+    path.write_text("context: testctx\nrepos:\n  core: https://github.com/org/test-context.git\n")
     return str(path)
 
 
 @pytest.fixture
 def node_yaml_with_context_no_repo(tmp_path):
-    """Create node.yaml with `context:` but NO `repos.platform:`. (no-clone-branch fixture)"""
+    """Create node.yaml with `context:` but NO `repos.core:`. (no-clone-branch fixture)"""
     path = tmp_path / "node.yaml"
     path.write_text("context: testctx\nrepos: {}\n")
     return str(path)
@@ -221,7 +221,7 @@ def test_ensure_context_clone(
 
 
 # region FUNC_test_ensure_context_no_repo_url
-## @purpose  Context path absent + no repos.platform → WARN (return 0)
+## @purpose  Context path absent + no repos.core → WARN (return 0)
 ## @io       node_yaml_with_context_no_repo + mocks → assert 0 + WARN log
 ## @complexity 1
 # 🧪 TRAP[TEST] · Regression · Scenario: Context absent + no repo URL → WARN · Last fail: N/A · Remove if: _clone_context_repo missing-repo handling changed
@@ -234,14 +234,14 @@ def test_ensure_context_no_repo_url(
     node_yaml_with_context_no_repo,
     caplog,
 ):
-    """Context path absent, no repos.platform: should WARN and return 0 without cloning."""
+    """Context path absent, no repos.core: should WARN and return 0 without cloning."""
     mock_isdir.return_value = False
 
     result = ensure_context_repo(node_yaml_with_context_no_repo)
 
     assert result == 0, "Expected 0 when repo URL is missing (no-op warning)"
     mock_run.assert_not_called(), "git clone should NOT be called without repo URL"
-    assert "No repos.platform" in caplog.text, "Expected WARN about missing repos.platform"
+    assert "No repos.core" in caplog.text, "Expected WARN about missing repos.core"
     logger.info(
         "[IMP:9][test][no_repo] ensure_context_repo returned %d — verified WARN + no clone",
         result,

@@ -97,6 +97,7 @@ from _conftest.skip_gate import (  # noqa: F401
 from _conftest.smoke import (  # noqa: F401
     SMOKE_ENV,
     platform_env,
+    platform_ports,
     platform_services,
 )
 

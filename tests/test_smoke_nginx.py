@@ -48,7 +48,7 @@ _SMOKE_PROJECT = "wave-nginx-smoke"  # isolated smoke test project
 _CONTAINER_NAME = _infra.get_container_name("nginx")
 
 # External Docker networks
-_EXTERNAL_NETWORKS = {"proxy-net", "observability-net"}
+_EXTERNAL_NETWORKS = {"test-proxy-net"}
 
 # Timeouts
 _COMPOSE_UP_TIMEOUT = 90  # --wait-timeout 60 + buffer

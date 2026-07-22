@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 
 # External networks that must exist before ClickHouse compose starts
 _EXTERNAL_NETWORKS = [
-    "observability-net",
+    "test-observability-net",
 ]
 
 # Compose file names

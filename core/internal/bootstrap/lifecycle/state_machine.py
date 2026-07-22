@@ -1223,6 +1223,11 @@ def _subprocess_run(
             err_msg = f"Command {' '.join(cmd)} failed (exit={result.returncode}): {result.stderr.strip()}"
             if result.stdout:
                 logger.debug("[IMP:6][subprocess][%s] stdout: %s", step_name, result.stdout[:500])
+            if result.returncode == 127:
+                # ⚠️ TRAP[BUG] · 2026-07-22 · P1 · 043-staging-fix B3
+                # · exit=127 (command not found) is always fatal — indicates missing dependency/binary
+                # · non_fatal flag does NOT apply to 127 — it's a configuration error, not a runtime error
+                raise RuntimeError(f"Command not found (exit=127): {err_msg}")
             if non_fatal:
                 logger.warning("[IMP:7][subprocess][%s] %s", step_name, err_msg)
             elif check_required:
