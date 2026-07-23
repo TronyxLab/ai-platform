@@ -35,7 +35,7 @@ on:
   workflow_dispatch:
 
 env:
-  VPS_USER: ci-deploy
+  VPS_USER: root
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.sha }}

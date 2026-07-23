@@ -507,16 +507,21 @@ def deploy_docker_module(
     # · Symptom: https://platform.tronyx.ru/ shows stale page after successful core-deploy
     # · Root: docker compose up -d no-op — bind-mounted app.py updated on disk but
     #   Python process already loaded old code; templates/ only in image (COPY, no bind
-    #   mount) — image never rebuilt. Container never restarted.
-    # · Fix: docker compose build before up -d for modules with build: section.
-    #   Docker Compose detects image ID change → recreates container.
+    #   mount) — image never rebuilt. Docker Compose local image tag doesn't change
+    #   → config hash unchanged → container never recreated.
+    # · Fix 1: docker compose build before up -d for modules with build: section.
+    # · Fix 2: --force-recreate after build — Docker Compose does NOT detect local
+    #   image ID change for same-tag images (status-page:latest rebuilt → same tag,
+    #   different ID, but compose uses tag, not ID, for change detection).
     # · Rev: if build time exceeds 60s for status-page → consider content-hash-based skip.
+    has_local_build = False
     if module_name != "hermes-agent":
         try:
             compose_content = compose_file.read_text()
         except OSError:
             compose_content = ""
         if "build:" in compose_content:
+            has_local_build = True
             logger.info("[IMP:7][deploy_docker_module][build] Rebuilding image for %s (build: detected)", module_name)
             try:
                 build_cmd = ["docker", "compose", *compose_args, "build"]
@@ -544,11 +549,21 @@ def deploy_docker_module(
                 )
                 return False
 
-    # ── docker compose up -d --remove-orphans ──
-    logger.info("[IMP:8][deploy_docker_module][up] Running docker compose up -d --remove-orphans for %s", module_name)
+    # ── docker compose up -d --remove-orphans [--force-recreate] ──
+    # · --force-recreate added for build:-modules to bypass Docker Compose's
+    #   local-image-same-tag no-op (build creates new image under same tag,
+    #   compose doesn't detect the change → container not recreated).
+    force_flag = "--force-recreate" if has_local_build else ""
+    up_cmd_parts = ["docker", "compose", *compose_args, "up", "-d", "--remove-orphans"]
+    if force_flag:
+        up_cmd_parts.append(force_flag)
+    logger.info(
+        "[IMP:8][deploy_docker_module][up] Running %s for %s",
+        " ".join(up_cmd_parts[-4:]),
+        module_name,
+    )
     try:
-        up_cmd = ["docker", "compose", *compose_args, "up", "-d", "--remove-orphans"]
-        up_result = subprocess.run(up_cmd, capture_output=True, timeout=180)
+        up_result = subprocess.run(up_cmd_parts, capture_output=True, timeout=180)
         if up_result.returncode == 0:
             logger.info("[IMP:9][deploy_docker_module][done] Module deployed: %s", module_name)
             time.sleep(1)
