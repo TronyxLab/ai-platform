@@ -32,7 +32,7 @@ tor:
   enabled: true
 projects:
 - name: tronyx-site
-  domain: www.tronyx.ru
+  domain: tronyx.ru
   repo: https://github.com/tronyx161/tronyx-site.git
   branch: main
   expose: true
