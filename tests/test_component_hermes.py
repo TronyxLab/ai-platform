@@ -329,37 +329,65 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
     # [IMP:8] docker compose up does NOT auto-build on pull failure.
     #          build: is now in compose file; explicit build ensures image
     #          exists before up, avoiding 'denied' on GHCR cross-repo pull.
-    logger.info("[IMP:7][hermes_up] Building hermes-agent image ...")
-    hermes_test_override = os.path.join(os.path.dirname(compose_file), "docker-compose.test.yml")
-    build_args = ["docker", "compose", "-f", compose_file]
-    if os.path.exists(hermes_test_override):
-        build_args.extend(["-f", hermes_test_override])
-    build_args.extend(["--project-name", COMPOSE_PROJECT_HERMES, "build"])
-    try:
-        subprocess.run(
-            build_args,
-            env={**os.environ, **ENV_HERMES},
-            check=True,
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · docker compose build fails when CONTEXT_IMAGE
+    # ·   is pre-built locally (e.g., hermes-agent-base:latest in CI).
+    # ·   Root: docker compose build triggers L2 context Dockerfile which
+    # ·   requires FROM hermes-agent-base:latest, but buildx load:true may
+    # ·   not propagate the image to the compose builder's image store.
+    # ·   Fix: check if CONTEXT_IMAGE already exists locally — skip build.
+    # ·   Prevention: this check + CI diagnostic step verifying image presence.
+    _context_image = ENV_HERMES.get("CONTEXT_IMAGE", "")
+    _image_exists = False
+    if _context_image:
+        _inspect = subprocess.run(
+            ["docker", "image", "inspect", _context_image.split("@")[0]],
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=10,
         )
-        logger.info("[IMP:9][hermes_up] hermes-agent image built")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as build_exc:
-        (getattr(build_exc, "stderr", str(build_exc))[-500:] if hasattr(build_exc, "stderr") else str(build_exc)[-500:])
-        logger.error("[IMP:9][hermes_up] docker compose build failed: %s", build_exc)
-        _build_stderr = (
-            getattr(build_exc, "stderr", str(build_exc))[-500:]
-            if hasattr(build_exc, "stderr")
-            else str(build_exc)[-500:]
-        )
-        logger.error("[IMP:9][hermes_up] Build stderr:\n%s", _build_stderr)
-        pytest.fail(
-            f"hermes-agent compose build failed. Docker is available but build failed. "
-            f"Error: {_build_stderr}. "
-            f"Diagnosis: Check Dockerfile syntax, pull access to FROM image, "
-            f"and build context. Run: docker compose -f {compose_file} build"
-        )
+        if _inspect.returncode == 0:
+            _image_exists = True
+            logger.info(
+                "[IMP:9][hermes_up] CONTEXT_IMAGE '%s' already exists locally — skipping build",
+                _context_image,
+            )
+
+    if not _image_exists:
+        logger.info("[IMP:7][hermes_up] Building hermes-agent image ...")
+        hermes_test_override = os.path.join(os.path.dirname(compose_file), "docker-compose.test.yml")
+        build_args = ["docker", "compose", "-f", compose_file]
+        if os.path.exists(hermes_test_override):
+            build_args.extend(["-f", hermes_test_override])
+        build_args.extend(["--project-name", COMPOSE_PROJECT_HERMES, "build"])
+        try:
+            subprocess.run(
+                build_args,
+                env={**os.environ, **ENV_HERMES},
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            logger.info("[IMP:9][hermes_up] hermes-agent image built")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as build_exc:
+            (
+                getattr(build_exc, "stderr", str(build_exc))[-500:]
+                if hasattr(build_exc, "stderr")
+                else str(build_exc)[-500:]
+            )
+            logger.error("[IMP:9][hermes_up] docker compose build failed: %s", build_exc)
+            _build_stderr = (
+                getattr(build_exc, "stderr", str(build_exc))[-500:]
+                if hasattr(build_exc, "stderr")
+                else str(build_exc)[-500:]
+            )
+            logger.error("[IMP:9][hermes_up] Build stderr:\n%s", _build_stderr)
+            pytest.fail(
+                f"hermes-agent compose build failed. Docker is available but build failed. "
+                f"Error: {_build_stderr}. "
+                f"Diagnosis: Check Dockerfile syntax, pull access to FROM image, "
+                f"and build context. Run: docker compose -f {compose_file} build"
+            )
 
     logger.info("[IMP:7][hermes_up] Starting hermes-agent from %s ...", compose_file)
     # ⚠️ macOS Docker Desktop: Hermes under QEMU emulation starts slower (30-60s).
