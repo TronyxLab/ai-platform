@@ -26,6 +26,8 @@
 ##   env-file handling, compose interpolation).
 ## @changes   2026-07-22 · W4-E1 — extracted from deploy-modules.sh deploy_docker_module,
 ##   deploy_docker_group, _pre_pull_images, _check_image_exists, wait_for_readiness, run_healthcheck
+##   2026-07-23 · P0 fix — docker compose build before up -d for modules with build: section
+##   (status-page served stale container after core-deploy rsync)
 ##
 ## ⚠️ TRAP[DEBT] · 2026-07-22 · P2 · 5 test-side failures in test_docker_orchestrator.py (DevPlan 043-B5)
 ## · Root: mock subprocess.run returns bytes, code expects str via text=True
@@ -43,7 +45,7 @@
 ##   _build_compose_args [W:2] — build docker compose arg list from env-files, overlay, --profile
 ##   _reconcile_orphan_containers [W:3] — pre-deploy orphan container cleanup per module
 ##   _handle_hermes_agent [W:3] — hermes-agent L1 pull/build fallback, image existence check
-##   deploy_docker_module [W:4] — deploy single docker module via compose up -d
+##   deploy_docker_module [W:5] — deploy single docker module: build (if build:) + compose up -d
 ##   _pull_module_images [W:2] — pull images for one module (used by _pre_pull_images)
 ##   _pre_pull_images [W:3] — parallel pre-pull for all docker modules with slot limit
 ##   deploy_docker_group [W:4] — parallel deploy with slot limit + parallel healthcheck
@@ -414,21 +416,30 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
 
 
 # region FUNC_deploy_docker_module
-## @purpose  Deploy a single Docker module via docker compose up -d --remove-orphans.
+## @purpose  Deploy a single Docker module via docker compose build (if build: section) + up -d --remove-orphans.
 ##           Handles compose file resolution, env files, hermes-agent special case,
-##           orphan container reconciliation, and observability cleanup.
+##           orphan container reconciliation, image rebuild for local-build modules, and observability cleanup.
 ## @io       ⇥ module_name: str, overlay_dir: str | None, secrets_env_file: str | None,
 ##           platform_root: str | None, modules_dir: str | None
 ##           ⎋ bool: True if deploy succeeded
-## @complexity 4 — multi-step: compose resolve → args build → hermes check → orphan reconcile → compose up
+## @complexity 5 — multi-step: compose resolve → args build → hermes check → orphan reconcile → image rebuild → compose up
 ## @invariants
 ##   - Returns False (not exception) on failure — caller decides abort vs continue
 ##   - Hermes-agent legacy container cleanup runs before hermes-agent pre-deploy checks
 ##   - Observability module gets per-service container cleanup before compose up
 ##   - COMPOSE_PROFILES env var is set to full profile list for config --services calls
+##   - Modules with build: section (except hermes-agent) get `docker compose build` before up -d
+##     to pick up source changes from core-deploy rsync (docker compose up -d is no-op for
+##     already-running containers with unchanged config)
 ## @rationale Q: Why not raise exceptions? A: deploy_docker_group calls this in parallel —
 ##   exceptions in one subprocess would not propagate to the parent. Return code is the
 ##   only reliable signal across process boundaries.
+##   Q: Why build for build:-modules? A: core-deploy rsyncs updated source files to VPS,
+##   but docker compose up -d is a no-op for running containers with unchanged compose config.
+##   Modules with build: (status-page, backup-cron) have no registry images — source changes
+##   require local rebuild. Without explicit build, stale container serves indefinitely.
+## @changes   2026-07-23 · Added docker compose build step for modules with build: section
+##             (P0 bug: status-page showing old container after core-deploy)
 def deploy_docker_module(
     module_name: str,
     overlay_dir: str | None = None,
@@ -485,6 +496,53 @@ def deploy_docker_module(
     if module_name == "nginx" and overlay_dir:
         os.environ["NGINX_OVERLAY_DIR"] = overlay_dir
         logger.info("[IMP:8][deploy_docker_module][nginx] Set NGINX_OVERLAY_DIR=%s", overlay_dir)
+
+    # ── Rebuild image for modules with build: section ──
+    # · Rationale: docker compose up -d is a no-op for already-running containers
+    #   with unchanged config. Modules with build: (status-page, backup-cron) need
+    #   explicit rebuild to pick up source changes from core-deploy rsync.
+    # · Hermes-agent excluded — has its own image workflow via _handle_hermes_agent
+    #   (GHCR pull + local build fallback).
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · status-page showing old container after deploy
+    # · Symptom: https://platform.tronyx.ru/ shows stale page after successful core-deploy
+    # · Root: docker compose up -d no-op — bind-mounted app.py updated on disk but
+    #   Python process already loaded old code; templates/ only in image (COPY, no bind
+    #   mount) — image never rebuilt. Container never restarted.
+    # · Fix: docker compose build before up -d for modules with build: section.
+    #   Docker Compose detects image ID change → recreates container.
+    # · Rev: if build time exceeds 60s for status-page → consider content-hash-based skip.
+    if module_name != "hermes-agent":
+        try:
+            compose_content = compose_file.read_text()
+        except OSError:
+            compose_content = ""
+        if "build:" in compose_content:
+            logger.info("[IMP:7][deploy_docker_module][build] Rebuilding image for %s (build: detected)", module_name)
+            try:
+                build_cmd = ["docker", "compose", *compose_args, "build"]
+                build_result = subprocess.run(build_cmd, capture_output=True, timeout=120)
+                if build_result.returncode != 0:
+                    logger.error(
+                        "[IMP:10][deploy_docker_module][build_fail] docker compose build failed for %s: %s",
+                        module_name,
+                        build_result.stderr.decode(errors="replace").strip()[:300]
+                        if build_result.stderr
+                        else "unknown",
+                    )
+                    return False
+                logger.info("[IMP:9][deploy_docker_module][build] Image rebuilt for %s", module_name)
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    "[IMP:10][deploy_docker_module][build_timeout] docker compose build timed out for %s", module_name
+                )
+                return False
+            except OSError as exc:
+                logger.error(
+                    "[IMP:10][deploy_docker_module][build_error] docker compose build error for %s: %s",
+                    module_name,
+                    exc,
+                )
+                return False
 
     # ── docker compose up -d --remove-orphans ──
     logger.info("[IMP:8][deploy_docker_module][up] Running docker compose up -d --remove-orphans for %s", module_name)
