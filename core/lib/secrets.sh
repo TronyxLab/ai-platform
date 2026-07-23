@@ -108,6 +108,19 @@ unset_platform_proxy() {
 ##             - unset_platform_proxy() called before processing sourced vars
 ##             - sed -i.bak used for portable in-place editing (macOS/Linux)
 ## @rationale Pure extraction from orchestrator.sh — behavior preserved exactly.
+
+# ⚠️ TRAP[BUG] · 2026-07-23 · P0 · step_start/done/skip undefined when sourced standalone
+# · Symptom: state_machine.py _decrypt_secrets runs bash -c "source secrets.sh && step_10_decrypt_secrets"
+#   without node-lifecycle.sh context → step_start/step_done/step_skip are undefined.
+# · Fix: define fallback wrappers (no-ops) when not already defined.
+#   When sourced from node-lifecycle.sh, the real definitions take precedence.
+# · Rev: if more orchestrator-specific functions are needed, extract to shared lib.
+if ! declare -f step_start >/dev/null 2>&1; then
+    step_start() { log_step "$1" "START" "${2:-}"; }
+    step_done()  { log_step "$1" "DONE"  "${2:-}"; }
+    step_skip()  { log_step "$1" "SKIP"  "${2:-}"; }
+fi
+
 step_10_decrypt_secrets() {
     step_start "decrypt-secrets" "Decrypting SOPS/age secrets"
 
