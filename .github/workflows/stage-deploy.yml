@@ -98,22 +98,25 @@ jobs:
           install-gitleaks: 'false'
           run-provisioner: 'false'
 
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 065 P1+P3+P5: setup-ssh composite action — единый source of truth
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Setup SSH for staging
+        uses: ./.github/actions/setup-ssh
+        with:
+          ssh-key: ${{ secrets.CI_DEPLOY_KEY }}
+          ssh-host: ${{ inputs.ssh_host }}
+          ssh-user: ci-deploy
+
       # [IMP:9][stage-deploy][staging-env] Inform platform-deploy.sh that this is a staging deploy
       - name: Set STAGING env var
         run: echo "STAGING=true" >> $GITHUB_ENV
 
       # [IMP:9][stage-deploy][ssh] SSH forced-command: authorized_keys runs platform-deploy.sh regardless of script content
       - name: Deploy via SSH to staging
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ inputs.ssh_host }}
-          username: ci-deploy
-          key: ${{ secrets.CI_DEPLOY_KEY }}
-          # [IMP:10][stage-deploy][forced-command] Script params: <project> <image_tag> <environment=staging>
-          # authorized_keys on node forces: /opt/platform/core/internal/deploy/deploy-project.sh <project> <ref> <environment>
-          # The SSH server runs deploy-project.sh regardless of what we send — these are positional args.
-          script: ${{ inputs.project_name }} ${{ inputs.image_tag }} staging
-          envs: DOCKER_HUB_USERNAME,DOCKER_HUB_TOKEN,STAGING
+        run: |
+          ssh -o ConnectTimeout=10 ci-deploy@${{ inputs.ssh_host }} \
+            "${{ inputs.project_name }} ${{ inputs.image_tag }} staging"
 
   # ─── Job: Smoke test — verify staging health endpoint ─────────────────────
   smoke-staging:

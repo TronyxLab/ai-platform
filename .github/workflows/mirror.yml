@@ -149,6 +149,18 @@ jobs:
       - name: Checkout resolved SHA
         run: git checkout ${{ steps.sha.outputs.sha }}
 
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 065 P1+P3+P5: setup-ssh composite action — единый source of truth
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Setup SSH for mirror
+        id: setup-ssh-mirror
+        uses: ./.github/actions/setup-ssh
+        with:
+          ssh-key: ${{ secrets.MIRROR_SSH_KEY }}
+          ssh-host: github.com
+          ssh-user: git
+          ssh-port: '22'
+
       # region STEP_PushToMirror
       ## @purpose: Push all commits on main to TronyxLab/ai-platform mirror via SSH
       ## @io:      Local main branch → TronyxLab/ai-platform main branch
@@ -156,32 +168,17 @@ jobs:
       ## @changes:  2026-07-23 · HTTPS+GIT_ASKPASS → SSH (MIRROR_SSH_KEY).
       ##             Resolves TRAP[DECISION] mirror.yml:62-70 (SSH deploy key transition).
       ##             Key: ~/.ssh/github_actions (user SSH key, pub in .github/mirror-deploy-key.pub).
+      ## @changes:  2026-07-24 · DevPlan 065 — inline SSH setup migrated to setup-ssh composite action
       - name: Push to TronyxLab/ai-platform
-        env:
-          MIRROR_SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
         run: |
           # ──────────────────────────────────────────────────────────
-          # [IMP:9][PUSH][SSH] Set up SSH key for mirror push
-          # · SSH key from MIRROR_SSH_KEY secret (user SSH key: github-actions)
-          # · Public key documented at .github/mirror-deploy-key.pub
+          # [IMP:9][PUSH][SSH] Push to mirror via SSH
+          # · SSH key configured by setup-ssh composite action
+          # · GIT_SSH_COMMAND uses ~/.ssh/id_rsa (path from setup-ssh)
           # ──────────────────────────────────────────────────────────
           set -euo pipefail
 
-          # Cleanup handler — удаляет SSH key при любом завершении шага
-          cleanup() { rm -f ~/.ssh/mirror_key 2>/dev/null || true; }
-          trap cleanup EXIT
-
-          # Setup SSH directory and key
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "${MIRROR_SSH_KEY}" > ~/.ssh/mirror_key
-          chmod 600 ~/.ssh/mirror_key
-
-          # Add github.com to known_hosts (prevents TOFU prompt)
-          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-
-          # SSH command: use mirror_key with IdentitiesOnly (don't try agent/other keys)
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
           # ──────────────────────────────────────────────────────────
           # [IMP:8][PUSH][EXECUTE] Push main to mirror via SSH

@@ -79,22 +79,45 @@ jobs:
           install-gitleaks: 'false'
           run-provisioner: 'false'
 
-      # ─── Step 3: Rsync core + config to VPS (S5 consolidated — 3 steps → 2 rsync calls) ───
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 065 P1+P3+P5: setup-ssh composite action — единый source of truth
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Setup SSH for VPS
+        if: steps.sha.outputs.skip != 'true'
+        id: setup-ssh
+        uses: ./.github/actions/setup-ssh
+        with:
+          ssh-key: ${{ secrets.VPS_SSH_KEY }}
+          ssh-host: ${{ secrets.VPS_HOST }}
+          ssh-user: ${{ env.VPS_USER }}
+
+      # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 065 P2: SSH pre-flight check — fail-fast before deploy
+      # ═══════════════════════════════════════════════════════════════════
+      - name: SSH pre-flight check
+        if: steps.sha.outputs.skip != 'true'
+        run: |
+          if ssh -o ConnectTimeout=10 \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "echo OK" 2>&1; then
+            echo "[IMP:9][preflight] SSH connectivity to ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} verified"
+          else
+            echo "::error::[IMP:10][preflight] SSH pre-flight FAILED — check key format, host, and connectivity"
+            exit 1
+          fi
+
+      # ─── Step 4: Rsync core + config to VPS (S5 consolidated) ─────────
       # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · secrets-check gate removed
       # · Symptom: secrets were set but $GITHUB_OUTPUT skip=true was ignored,
       #   OR SSH key format issue. Either way, the gate added a silent-skip
       #   surface — better to fail fast on SSH error.
       # · Fix: removed intermediate secrets-check step. Fail-fast if SSH fails.
       # · SSH key: stored base64-encoded to preserve exact format across gh secret set.
+      # · 2026-07-24: inline SSH setup moved to setup-ssh composite action (DevPlan 065)
       - name: Rsync core + config to VPS
         if: steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
-          mkdir -p ~/.ssh
-          printf '%s' "${{ secrets.VPS_SSH_KEY }}" | base64 -d > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o ConnectTimeout=10 \
+          ssh -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
           # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
           rsync -avz --delete \
@@ -123,28 +146,27 @@ jobs:
             ./node-configs/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/
           echo "[IMP:9][deploy][rsync] Core + config + makefiles + node-configs rsync complete — SHA $SHA"
 
-      # ─── Step 4: Provision networks + volumes on VPS via make provision (Invariant 1) ───
+      # ─── Step 5: Provision networks + volumes on VPS via make provision (Invariant 1) ───
       - name: Provision environment on VPS (networks + volumes)
         if: steps.sha.outputs.skip != 'true'
         run: |
-          ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=10 \
+          ssh -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "cd /opt/platform && make provision SCOPE=networks,volumes"
 
-      # ─── Step 5: Node update on VPS (5m) ──────────────────────────────
+      # ─── Step 6: Node update on VPS (5m) ──────────────────────────────
       # T18: заменён make bootstrap-node → make node-update.
       # bootstrap-node сохранён как manual fallback (INIT-only) через
       # make bootstrap-node NODE=<name> — недоступен через CI, только shell.
-      - name: Node update on VPS (native SSH)
+      # 2026-07-24: SSH опции (-i, -o IdentitiesOnly, -o StrictHostKeyChecking)
+      # обеспечены setup-ssh composite action (DevPlan 065).
+      - name: Node update on VPS
         if: steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           # Auto-detect NODE name from /opt/node-configs/ (same logic as converge.sh)
           # Excludes 'scripts' and 'secrets' subdirectories; expects exactly 1 node
-          NODE=$(ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+          NODE=$(ssh -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             'for d in /opt/node-configs/*/; do b=$(basename "$d"); [[ "$b" == "scripts" || "$b" == "secrets" ]] && continue; echo "$b"; done | head -1')
           if [ -z "$NODE" ]; then
@@ -153,9 +175,7 @@ jobs:
             exit 1
           fi
           echo "[IMP:8][deploy][node-detect] Auto-detected NODE=${NODE}"
-          ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=10 \
+          ssh -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "cd /opt/platform && GITHUB_SHA=$SHA make node-update NODE=$NODE"
 

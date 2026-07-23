@@ -286,7 +286,14 @@ execute_remote_update() {
 
     # ── Execute SSH via ssh_exec (W2-E1: lib/ssh.sh facade) ────────
     echo "[IMP:9][node-update][remote] Executing node-lifecycle.sh --mode update on root@${ssh_host}" >&2
-    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy"
+    # ⚠️ TRAP[BUG] · 2026-07-24 · P4 · DevPlan 065: bare ssh_exec may silently fail under set -e
+    # · Symptom: under set -e, ssh_exec non-zero exit causes immediate function exit without error logging
+    # · Fix: added || { local rc=$?; log_imp 1 ...; return $rc; } for explicit error logging
+    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy" || {
+        local rc=$?
+        log_imp 1 "execute_remote_update" "SSH exec failed on ${ssh_host} — exit=${rc}"
+        return "${rc}"
+    }
 }
 # endregion FUNC_execute_remote_update
 
@@ -402,7 +409,12 @@ execute_remote_converge() {
 
     # ── Execute SSH via ssh_exec (W2-E1: lib/ssh.sh facade) ────────
     echo "[IMP:9][converge][remote] Executing converge.sh on root@${ssh_host}" >&2
-    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy"
+    # ⚠️ TRAP[BUG] · 2026-07-24 · P4 · DevPlan 065: bare ssh_exec may silently fail under set -e
+    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy" || {
+        local rc=$?
+        log_imp 1 "execute_remote_converge" "SSH exec failed on ${ssh_host} — exit=${rc}"
+        return "${rc}"
+    }
 }
 # endregion FUNC_execute_remote_converge
 
@@ -564,7 +576,12 @@ execute_remote_reconcile() {
 
     # ── Execute SSH via ssh_exec (W2-E1: lib/ssh.sh facade) ────────
     echo "[IMP:9][reconcile][remote] Executing converge --reconcile on root@${ssh_host}" >&2
-    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy"
+    # ⚠️ TRAP[BUG] · 2026-07-24 · P4 · DevPlan 065: bare ssh_exec may silently fail under set -e
+    ssh_exec "${ssh_host}" "root" "${remote_cmd}" "" "deploy" || {
+        local rc=$?
+        log_imp 1 "execute_remote_reconcile" "SSH exec failed on ${ssh_host} — exit=${rc}"
+        return "${rc}"
+    }
 }
 # endregion FUNC_execute_remote_reconcile
 

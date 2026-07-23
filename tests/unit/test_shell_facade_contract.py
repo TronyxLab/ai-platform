@@ -221,20 +221,26 @@ def test_shell_has_python_delegation(caplog) -> None:
 
 
 # region FUNC_test_shell_has_severity_exit
-# 🧪 TRAP[TEST] · Structural · S4: severity exit · Last fail: N/A · Remove if: severity-based exit is replaced by Python aggregation
+# 🧐 TRAP[DECISION] · 2026-07-24 · — · WARN non-blocking: exit 0, not exit 1
+# · Rejected: exit 1 for WARN (blocked node-update on 4 non-critical warnings)
+# · Reason: deploy-modules.sh changed in 33aaaeb — WARN>0 logs warning but exits 0.
+#           Non-critical warnings (hermes-agent ghcr auth, litellm/langfuse secrets)
+#           should not block node-update. Only CRITICAL failures cause exit 2.
+# · Rev: if severity aggregation moves to Python, re-evaluate exit contract.
+# 🧪 TRAP[TEST] · Structural · S4: severity exit · Last fail: 2026-07-24 · Remove if: severity-based exit is replaced by Python aggregation
 @pytest.mark.static_audit
 def test_shell_has_severity_exit(caplog) -> None:
-    """deploy-modules.sh must aggregate FAILED array and exit 2/1/0 based on severity.
+    """deploy-modules.sh must aggregate FAILED array and exit 2/0 based on severity.
 
     ## @purpose  Verify shell facade has FAILED array, severity loop with module-metadata,
-    ##           exit 2 (critical), exit 1 (warn), exit 0 (all ok).
+    ##           exit 2 (critical), exit 0 (warn logged non-blocking, all ok).
     ## @scenario S4: structural contract for severity exit
     ## @invariants
     ##   - FAILED array initialized
     ##   - Severity loop reads module-metadata for each failed module
-    ##   - exit 2 for CRITICAL failures
-    ##   - exit 1 for WARN failures
-    ##   - exit 0 on success
+    ##   - exit 2 for CRITICAL failures (blocks deploy)
+    ##   - WARN logged but exit 0 (non-blocking — 33aaaeb)
+    ##   - exit 0 on clean success
     """
     caplog.set_level(logging.DEBUG)
     content = _read_deploy_modules_shell()
@@ -250,19 +256,21 @@ def test_shell_has_severity_exit(caplog) -> None:
     assert has_severity_loop, "deploy-modules.sh must query module-metadata for failed module severity"
 
     # ── Exit codes ──
-    has_exit2 = content.strip().endswith("exit 2") or "exit 2" in content.split("\n")[-5:]
-    # Look for exit 2 and exit 1 near the end of the file
+    # After 33aaaeb: WARN > 0 logs but exits 0 (non-blocking). Only CRITICAL triggers exit 2.
     lines = content.split("\n")
     tail_lines = "\n".join(lines[-20:])
     has_exit2 = "exit 2" in tail_lines
     has_exit1 = "exit 1" in tail_lines
     has_exit0 = "exit 0" in tail_lines
+    has_warn_block = "WARN" in tail_lines and "non-critical" in tail_lines
     logger.critical("[IMP:9][S4][severity] exit 2 (critical): %s", has_exit2)
-    logger.critical("[IMP:9][S4][severity] exit 1 (warn): %s", has_exit1)
+    logger.critical("[IMP:9][S4][severity] exit 1 (warn, legacy): %s", has_exit1)
     logger.critical("[IMP:9][S4][severity] exit 0 (ok): %s", has_exit0)
+    logger.critical("[IMP:9][S4][severity] WARN non-critical block: %s", has_warn_block)
     assert has_exit2, "deploy-modules.sh must exit 2 for CRITICAL failures"
-    assert has_exit1, "deploy-modules.sh must exit 1 for WARN failures"
+    assert not has_exit1, "deploy-modules.sh must NOT exit 1 for WARN (non-blocking since 33aaaeb)"
     assert has_exit0, "deploy-modules.sh must exit 0 on success"
+    assert has_warn_block, "deploy-modules.sh must have non-critical warning log block"
 
     _assert_ldd_imp9(caplog)
 
