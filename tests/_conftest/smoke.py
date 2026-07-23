@@ -530,8 +530,25 @@ def _module_container_running(
     ##       → ⎋ bool (True if running)
     ## @complexity — O(1) — single docker inspect call
     """
-    if module_name not in platform_services_result.get("failed", []):
-        return True  # module started fine
+    # ⚠️ TRAP[BUG] · 2026-07-23 · MED · False-positive when started=[] AND failed=[]
+    # · Symptom: _module_container_running returns True for module that was never started
+    # ·   because platform_services was a no-op (missing @requires_docker marker).
+    # ·   Returns True when module_name is not in failed list, but also not in started list.
+    # · Fix: check both lists — module must be in started (or recovered via docker inspect
+    # ·   if in failed). Neither → container was never started → return False.
+    started = platform_services_result.get("started", [])
+    failed = platform_services_result.get("failed", [])
+    if module_name in started:
+        return True  # module started successfully
+    if module_name not in failed:
+        # Module was never started — not in started, not in failed
+        logger.error(
+            "[IMP:9][R4][%s] Module '%s' was never started by platform_services "
+            "(missing @pytest.mark.requires_docker on test?)",
+            module_name,
+            module_name,
+        )
+        return False
 
     # Module in failed list — check if container actually recovered
     import subprocess as _sp
@@ -782,7 +799,8 @@ def platform_services(
     # DevPlan 040 Wave 4: Wave 0 starts synchronously (critical path for fixture
     # setup), then remaining waves start in a background daemon thread. Tests
     # run as soon as their wave's containers are ready (wave_ready events).
-    _init_wave_events(len(waves))
+    # +1 for the platform_services wave (max_wave + 1 = "all waves done")
+    _init_wave_events(len(waves) + 1)
     bg_thread: threading.Thread | None = None
 
     if waves:
@@ -894,6 +912,15 @@ def platform_services(
                     len([m for m in wave_modules if m in failed_list]),
                 )
                 signal_wave_ready(wave_idx)
+
+            # ⚠️ TRAP[BUG] · 2026-07-23 · Signal "all waves done" for platform_services tests
+            # · Symptom: tests using platform_services fixture (wave = max_wave + 1) ran before
+            # ·   background thread completed. _ensure_wave_ready found no event for that wave
+            # ·   and passed through immediately. _module_container_running then reported
+            # ·   container was "never started" (started=[] — container not in Wave 0).
+            # · Fix: signal wave = len(wave_list) after ALL background waves complete.
+            # ·   _init_wave_events creates len(waves)+1 events (0..len(waves) for max_wave+1).
+            signal_wave_ready(len(wave_list))
 
         bg_thread = threading.Thread(
             target=_start_remaining,

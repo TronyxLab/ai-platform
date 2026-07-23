@@ -23,7 +23,6 @@
 import logging
 import os
 import subprocess
-import sys
 
 import pytest
 from _conftest.infra import infra as _infra
@@ -510,37 +509,35 @@ def test_nginx_vhost_routing(nginx_compose, caplog) -> None:
 # region FUNC_test_nginx_error_page
 @pytest.mark.smoke
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="macOS Docker Desktop bind-mount has different file permission semantics than Linux "
-    "(DevPlan §macOS smoke skip). CI runs the same test on ubuntu-latest runner.",
-)
 def test_nginx_error_page(nginx_compose, caplog) -> None:
-    """Verify nginx serves styled error pages (404.html) from mounted error-pages dir.
+    """Verify nginx serves styled error pages via error_page directive.
 
-    ## @purpose — Static content: error-pages directory is mounted into the container.
-    ##            The 404.html must return a styled HTML page (not default nginx 404).
-    ## @io — ⇥ nginx_compose → ⚡ curl /404.html → ⎋ None (asserts styled HTML content)
+    ## @purpose — Request a non-existent URI; nginx should return a styled 404 page
+    ##            from the mounted error-pages directory (not default nginx 404).
+    ## @io — ⇥ nginx_compose → ⚡ curl /nonexistent-test-page → ⎋ None (asserts styled HTML content)
     ## @complexity — O(1)
-    ## @rationale — Skipped on macOS because Docker Desktop bind-mount has different
-    ##              file permission semantics than Linux, causing the mounted
-    ##              error-pages directory to behave differently (DevPlan §macOS smoke skip).
-    ##              CI runs the same test on Linux (ubuntu-latest runner, platform-test.yml).
-    ##              Root cause: platform limitation (Docker Desktop bind-mount),
-    ##              not code defect.
     """
     import requests as req
 
-    url = f"http://127.0.0.1:{_HTTP_PORT}/404.html"
+    url = f"http://127.0.0.1:{_HTTP_PORT}/nonexistent-test-page"
     logger.info("[IMP:7][test_nginx_error] Checking error page %s ...", url)
 
     try:
         r = req.get(url, timeout=_CURL_TIMEOUT)
-        logger.info("[IMP:8][test_nginx_error] 404.html returned HTTP %s (%d bytes)", r.status_code, len(r.text))
+        logger.info(
+            "[IMP:8][test_nginx_error] /nonexistent-test-page returned HTTP %s (%d bytes)", r.status_code, len(r.text)
+        )
 
-        assert r.status_code == 404, f"404.html returned {r.status_code}, expected 404"
-        assert "Page Not Found" in r.text, "404.html does not contain 'Page Not Found' (expected styled content)"
-        assert "nginx" not in r.text[:100], "404.html contains default nginx text (not styled)"
+        assert r.status_code == 404, f"Expected 404, got {r.status_code}"
+
+        if "Page Not Found" not in r.text:
+            logger.warning(
+                "[IMP:7][test_nginx_error] Custom 404.html not served — got default nginx page. "
+                "Response (first 500 chars): %s",
+                r.text[:500],
+            )
+        assert "Page Not Found" in r.text, "error_page did not serve custom 404.html (expected styled content)"
+        assert "nginx" not in r.text[:100], "error page contains default nginx text (not styled)"
 
         logger.info("[IMP:9][test_nginx_error] ✅ Styled 404 page served correctly (%d bytes)", len(r.text))
     except Exception as exc:

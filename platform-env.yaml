@@ -147,6 +147,7 @@ env_defaults:
   LANGFUSE_PUBLIC_KEY: ci-test-public-key
   LANGFUSE_SECRET_KEY: ci-test-secret-key
   LANGFUSE_INIT_USER_PASSWORD: ci-test-langfuse-pwd
+  API_SERVER_KEY: test-api-server-key-for-ci-only
 test_ports:
   clickhouse:
     port_18123: 18123

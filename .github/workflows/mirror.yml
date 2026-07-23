@@ -129,6 +129,16 @@ jobs:
       contents: write
 
     steps:
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout — local action not found
+      # · Same fix as core-deploy.yml (F2): checkout before local actions.
+      # · Mirror needs full history + resolved SHA for exact commit push.
+
+      # ─── Step 1: Checkout (full history for mirror) ───────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       # region STEP_ResolveSHA
       ## @purpose: Resolve SHA + verify platform-test via canonical composite action
       ## @io:      Event context → SHA output for subsequent steps
@@ -139,16 +149,9 @@ jobs:
           verify: 'true'
       # endregion STEP_ResolveSHA
 
-      # region STEP_Checkout
-      ## @purpose: Full checkout with complete git history for accurate mirror push
-      ## @io:      Source: Tronyx161/ai-platform@main → Local: full clone
-      ## @complexity: O(1) — fixed step
-      - name: Checkout full repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ steps.sha.outputs.sha }}
-      # endregion STEP_Checkout
+      # ─── Step 3: Checkout resolved SHA ────────────────────────────────
+      - name: Checkout resolved SHA
+        run: git checkout ${{ steps.sha.outputs.sha }}
 
       # region STEP_PushToMirror
       ## @purpose: Push all commits on main to TronyxLab/ai-platform mirror

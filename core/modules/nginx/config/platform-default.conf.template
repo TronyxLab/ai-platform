@@ -96,17 +96,14 @@ server {
 
     location = /404.html {
         root /var/www/platform-default/error-pages;
-        internal;
     }
 
     location = /50x.html {
         root /var/www/platform-default/error-pages;
-        internal;
     }
 
     location = /maintenance.html {
         root /var/www/platform-default/error-pages;
-        internal;
     }
 
     # ── Default catch-all: close connection for unregistered subdomains ─

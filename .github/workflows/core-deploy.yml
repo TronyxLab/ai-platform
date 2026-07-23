@@ -52,19 +52,23 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout broke core-deploy
+      # · Symptom: "Can't find 'action.yml' under .../.github/actions/sha-resolve"
+      # · Root: local composite action requires checkout first (same fix as e8ad2a9 for setup-platform)
+      # · Fix: checkout before any local action; sha-resolve skip still gates subsequent steps
+      # · Prevention: G2 gate test (test_gate_workflow_checkout_order.py)
+
+      # ─── Step 1: Checkout repository ───────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: Resolve SHA + verify platform-test (composite) ────────
       # StatusReport 046 T7 (CICD-03): inline SHA verification → sha-resolve composite action.
-      # Removed TRAP[DEBT] (resolved): core-deploy now uses shared sha-resolve with skip output.
-      # ─── Step 1: Resolve SHA + verify platform-test (composite) ────────
       - name: Resolve SHA and verify platform-test
         id: sha
         uses: ./.github/actions/sha-resolve
         with:
           verify: 'true'
-
-      # ─── Step 2: Checkout repository for rsync ─────────────────────────
-      - name: Checkout repository
-        if: steps.sha.outputs.skip != 'true'
-        uses: actions/checkout@v7
 
       - name: Setup platform (composite — python only)
         if: steps.sha.outputs.skip != 'true'

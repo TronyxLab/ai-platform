@@ -26,6 +26,7 @@
 import argparse
 import json
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -545,9 +546,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--modules-dir",
-        default="/opt/platform/modules",
+        default=os.path.join(os.environ.get("PLATFORM_ROOT", "/opt/platform"), "modules"),
         type=str,
-        help="Path to modules directory (default: /opt/platform/modules)",
+        help="Path to modules directory (default: PLATFORM_ROOT/modules)",
     )
     parser.add_argument(
         "--self-heal",

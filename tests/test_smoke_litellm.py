@@ -28,6 +28,7 @@ def _module_contract():
 
 import logging
 import os
+import time
 
 import pytest
 import requests
@@ -79,16 +80,38 @@ def test_litellm_readiness(caplog, platform_services) -> None:
     url = _build_litellm_url(_LITELLM_TEST_PORT, "/health/readiness")
     logger.info("[IMP:7][test_litellm_readiness] Checking LiteLLM %s ...", url)
 
-    try:
-        r = requests.get(url, timeout=10)
-        logger.info("[IMP:8][test_litellm_readiness] LiteLLM returned HTTP %s", r.status_code)
-        assert r.status_code == 200, (
-            f"LiteLLM readiness endpoint returned HTTP {r.status_code}, expected 200. Response: {r.text[:300]}"
-        )
-        logger.info("[IMP:9][test_litellm_readiness] ✅ LiteLLM readiness OK: HTTP %s", r.status_code)
-    except requests.RequestException as exc:
-        _handle_e2e_error(exc, url, caplog, logger)
-        return
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · LiteLLM crash-restart cycle on CI
+    # · Symptom: ConnectionResetError(104) on first request — container restarts after crash
+    # · Root: LiteLLM can crash on Application startup (httpx.ConnectError to model),
+    # ·   then restart: unless-stopped restores it. First request hits the restart window.
+    # · Fix: retry with backoff (1s/2s/4s) — gives container time to stabilize after restart.
+    # · Prevention: if retry count >1 in >50% CI runs → investigate root cause (Dep 017 DNS-alias).
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=10)
+            logger.info(
+                "[IMP:8][test_litellm_readiness] LiteLLM returned HTTP %s (attempt %d)",
+                r.status_code,
+                attempt + 1,
+            )
+            assert r.status_code == 200, (
+                f"LiteLLM readiness endpoint returned HTTP {r.status_code}, expected 200. Response: {r.text[:300]}"
+            )
+            logger.info("[IMP:9][test_litellm_readiness] ✅ LiteLLM readiness OK: HTTP %s", r.status_code)
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt  # 1s, 2s backoff
+                logger.warning(
+                    "[IMP:7][test_litellm_readiness] Attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                _handle_e2e_error(exc, url, caplog, logger)
+                return
     # endregion FUNC_test_litellm_readiness
 
 

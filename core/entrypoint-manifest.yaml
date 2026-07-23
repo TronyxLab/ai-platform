@@ -862,6 +862,9 @@ gates:
 - id: test_platform_domain_placeholder_present
   test_file: test_gate_nginx_domain_contract.py
   description: 'Auto-discovered gate: test_platform_domain_placeholder_present'
+- id: test_no_hardcoded_local_paths
+  test_file: test_gate_no_hardcoded_local_paths.py
+  description: 'Auto-discovered gate: test_no_hardcoded_local_paths'
 - id: test_no_simulator_classes_in_test_suite
   test_file: test_gate_no_simulators.py
   description: 'Auto-discovered gate: test_no_simulator_classes_in_test_suite'
@@ -1090,6 +1093,9 @@ gates:
 - id: vhost_nginx_t
   test_file: test_gate_vhost_nginx_t.py
   description: 'Auto-discovered gate: vhost_nginx_t'
+- id: test_local_actions_after_checkout
+  test_file: test_gate_workflow_checkout_order.py
+  description: 'Auto-discovered gate: test_local_actions_after_checkout'
 - id: test_all_workflow_files_exist
   test_file: test_gate_workflow_consistency.py
   description: 'Auto-discovered gate: test_all_workflow_files_exist'

@@ -48,16 +48,19 @@ jobs:
       packages: write
 
     steps:
-      # ─── Step 1: SHA resolution + verification (canonical composite) ──
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout — local action not found
+      # · Same fix as core-deploy.yml (F2): checkout must precede any ./.github/actions/* usage
+
+      # ─── Step 1: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: SHA resolution + verification (canonical composite) ──
       - name: Resolve SHA + verify platform-test
         id: sha
         uses: ./.github/actions/sha-resolve
         with:
           verify: 'true'
-
-      # ─── Step 2: Checkout ─────────────────────────────────────────────
-      - name: Checkout repository
-        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 _AGE_SECRET_KEY: str = "AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_API_SERVER_KEY: str = "test-api-server-key-for-ci-only"
 _CLICKHOUSE_PASSWORD: str = "test-clickhouse-pwd-not-for-prod"
 _GF_SECURITY_ADMIN_PASSWORD: str = "testpass"
 _GHCR_PULL_TOKEN: str = "ghp_test-token-for-ci-only"
@@ -41,6 +42,7 @@ _WEBNAMES_API_KEY: str = "*test-webnames-api-key"
 
 __all__ = [
     "_AGE_SECRET_KEY",
+    "_API_SERVER_KEY",
     "_CLICKHOUSE_PASSWORD",
     "_GF_SECURITY_ADMIN_PASSWORD",
     "_GHCR_PULL_TOKEN",

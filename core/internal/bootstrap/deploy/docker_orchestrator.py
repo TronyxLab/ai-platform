@@ -75,7 +75,7 @@ logger = logging.getLogger("docker_orchestrator")
 
 # ── Constants ──
 L1_BASE_IMAGE = "hermes-agent-base"
-GHCR_ORG = "ghcr.io/tronyx161"
+GHCR_ORG = os.environ.get("GHCR_ORG", "ghcr.io/tronyx161")
 COMPOSE_FILENAMES = ("compose.yaml", "docker-compose.yaml", "docker-compose.base.yml")
 DEFAULT_PARALLEL_LIMIT = 4
 DEFAULT_READINESS_MAX_ATTEMPTS = 15

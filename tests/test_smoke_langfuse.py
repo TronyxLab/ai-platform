@@ -4,7 +4,7 @@
 ## @purpose  Smoke tests for langfuse module — health, ingestion, and login
 ## @scope    Local langfuse instance (127.0.0.1:3001); requires compose stack running
 ## @invariants
-##   - All tests use @pytest.mark.smoke marker
+##   - All tests use @pytest.mark.smoke and @pytest.mark.requires_docker markers
 ##   - Health endpoint is unauthenticated
 ##   - Ingestion test authenticates with Basic auth (public_key:secret_key)
 ##   - Login test uses CSRF + credentials flow
@@ -66,6 +66,7 @@ def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
 
 
 @pytest.mark.smoke
+@pytest.mark.requires_docker
 def test_langfuse_health(caplog, platform_services):
     # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
     if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
@@ -81,6 +82,7 @@ def test_langfuse_health(caplog, platform_services):
 
 
 @pytest.mark.smoke
+@pytest.mark.requires_docker
 def test_langfuse_ingestion(caplog, platform_services):
     # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
     if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
@@ -111,6 +113,7 @@ def test_langfuse_ingestion(caplog, platform_services):
 
 
 @pytest.mark.smoke
+@pytest.mark.requires_docker
 def test_langfuse_login(caplog, platform_services):
     # ⚠️ TRAP[BUG] · 2026-07-18 · R4 Fail-fast: live container check (не sticky failed list)
     if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):

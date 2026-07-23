@@ -45,6 +45,8 @@ from _conftest.networks import get_network_manager
 from _conftest.reuse import check_foreign_containers, wait_for_containers_healthy
 from conftest import _ensure_volume_dirs, ldd_trajectory
 
+from tests.helpers.gate_helpers import repo_root
+
 logger = logging.getLogger(__name__)
 
 # ⚠️ TRAP[BUG] · 2026-07-22 · HI · COMPOSE_PROJECT was "ai-platform-test" — same as platform_services
@@ -63,7 +65,12 @@ ENV = {
 # Hermes env — separate project name to avoid orphan conflicts
 # @rationale PLATFORM_ROOT points to project root so Docker build context resolves correctly
 #   even when /opt/platform does not exist locally (dev environment).
-_PLATFORM_ROOT: str = os.environ.get("PLATFORM_ROOT", "/Users/tronyx/projects/ai-platform")
+# ⚠️ TRAP[BUG] · 2026-07-23 · P0 · Hardcoded macOS path broke CI (Linux runner)
+# · Symptom: 'unable to prepare context: path "/Users/tronyx/projects/ai-platform" not found'
+# · Root: default was macOS-specific absolute path, non-existent on Linux CI
+# · Fix: auto-detect project root from file location — same pattern as _conftest/predeploy.py:224
+# · Prevention: G1 gate test (test_gate_no_hardcoded_local_paths.py)
+_PLATFORM_ROOT: str = os.environ.get("PLATFORM_ROOT", str(repo_root()))
 
 ENV_HERMES = {
     "PLATFORM_DOMAIN": "test.local",
@@ -71,7 +78,9 @@ ENV_HERMES = {
     "POSTGRES_PASSWORD": "test-pg-pwd",
     "COMPOSE_PROFILES": "hermes-agent",
     "OPENAI_API_KEY": "sk-test-not-for-production",
-    "CONTEXT_IMAGE": os.environ.get("CONTEXT_IMAGE", "ghcr.io/tronyxlab/hermes-agent-context:latest"),
+    "CONTEXT_IMAGE": os.environ.get(
+        "CONTEXT_IMAGE", f"ghcr.io/{os.environ.get('GHCR_ORG', 'tronyxlab')}/hermes-agent-context:latest"
+    ),
     "HERMES_DASHBOARD_PASSWORD": "testpass",
     "PLATFORM_ROOT": _PLATFORM_ROOT,
 }

@@ -344,9 +344,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--modules-dir",
-        default="/opt/platform/core/modules",
+        default=os.path.join(os.environ.get("PLATFORM_ROOT", "/opt/platform"), "core/modules"),
         type=str,
-        help="Path to modules directory (default: /opt/platform/core/modules)",
+        help="Path to modules directory (default: PLATFORM_ROOT/core/modules)",
     )
 
     args = parser.parse_args()

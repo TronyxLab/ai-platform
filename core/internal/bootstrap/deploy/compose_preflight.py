@@ -42,7 +42,10 @@ logger = logging.getLogger("compose_preflight")
 _SECRETS_ENV_DEFAULT = "/run/platform/secrets.env"
 
 # Default path for secrets-manifest.yaml (relative to platform root)
-_MANIFEST_DEFAULT = "/opt/platform/core/secrets-manifest.yaml"
+_MANIFEST_DEFAULT = os.path.join(
+    os.environ.get("PLATFORM_ROOT", "/opt/platform"),
+    "core/secrets-manifest.yaml",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # region FUNC_load_env_map
