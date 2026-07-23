@@ -37,7 +37,7 @@ _S3_BUCKET: str = "test-bucket"
 _S3_SECRET_KEY: str = "test-secret-key"
 _SALT: str = "ci-test-salt-value"
 _TELEGRAM_BOT_TOKEN: str = "1234567890:test-telegram-bot-token-for-ci"
-_WEBNAMES_API_KEY: str = "test-webnames-api-key"
+_WEBNAMES_API_KEY: str = "*test-webnames-api-key"
 
 __all__ = [
     "_AGE_SECRET_KEY",

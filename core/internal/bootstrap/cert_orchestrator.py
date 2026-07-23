@@ -19,6 +19,7 @@
 ##           instant cert restoration for previously-bootstrapped nodes, reducing
 ##           bootstrap time from minutes to seconds for cert phase.
 ## @changes  2026-07-22 | DevPlan 047 Phase 3 — Created cert orchestrator
+## @changes  2026-07-23 | DevPlan 058 — ACME_CHALLENGE_MODE env var passthrough, DomainCertResult.challenge field
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ class DomainCertResult:
     domain: str
     status: str = "pending"  # restored | issued | skipped | failed
     source: str = ""  # s3 | acme | skip | none
+    challenge: str = ""  # dns | http — which challenge type was used for issuance
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -359,10 +361,12 @@ def _try_s3_restore(domain: str, s3_cache_script: str) -> DomainCertResult:
 ##   - Non-fatal: failure returns status="failed"
 def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
     """Issue cert via issue-cert.sh. Returns issued or failed result."""
-    logger.info("[IMP:9][cert_orchestrator] %s — issuing via acme.sh", domain)
-    # Set env for issue-cert.sh (it reads PLATFORM_DOMAIN)
+    challenge_mode = os.environ.get("ACME_CHALLENGE_MODE", "dns")
+    logger.info("[IMP:9][cert_orchestrator] %s — issuing via acme.sh (challenge=%s)", domain, challenge_mode)
+    # Set env for issue-cert.sh (it reads PLATFORM_DOMAIN + ACME_CHALLENGE_MODE)
     env = os.environ.copy()
     env["PLATFORM_DOMAIN"] = domain
+    env["ACME_CHALLENGE_MODE"] = challenge_mode
     try:
         result = subprocess.run(
             ["bash", issue_cert_script],
@@ -372,8 +376,13 @@ def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
             env=env,
         )
         if result.returncode == 0:
-            logger.info("[IMP:9][cert_orchestrator] %s — cert issued successfully", domain)
-            return DomainCertResult(domain=domain, status="issued", source="acme")
+            logger.info("[IMP:9][cert_orchestrator] %s — cert issued successfully (challenge=%s)", domain, challenge_mode)
+            return DomainCertResult(
+                domain=domain,
+                status="issued",
+                source="acme",
+                challenge=challenge_mode,
+            )
         logger.warning(
             "[IMP:7][cert_orchestrator] %s — issue-cert.sh failed (exit=%d): %s",
             domain,
@@ -384,14 +393,15 @@ def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
             domain=domain,
             status="failed",
             source="acme",
+            challenge=challenge_mode,
             error=result.stderr.strip()[:200] if result.stderr else f"exit={result.returncode}",
         )
     except subprocess.TimeoutExpired:
         logger.warning("[IMP:7][cert_orchestrator] %s — issue-cert.sh timed out", domain)
-        return DomainCertResult(domain=domain, status="failed", source="acme", error="timeout")
+        return DomainCertResult(domain=domain, status="failed", source="acme", challenge=challenge_mode, error="timeout")
     except FileNotFoundError as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — issue-cert.sh error: %s", domain, e)
-        return DomainCertResult(domain=domain, status="failed", source="acme", error=str(e))
+        return DomainCertResult(domain=domain, status="failed", source="acme", challenge=challenge_mode, error=str(e))
 
 
 # endregion FUNC_issue_cert
@@ -435,6 +445,14 @@ def _source_secrets_env(secrets_env_path: str) -> None:
             for proxy_var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"):
                 os.environ.pop(proxy_var, None)
             logger.info("[IMP:9][cert_orchestrator] Secrets loaded from %s", secrets_env_path)
+            # Validate WEBNAMES_API_KEY format — must include leading asterisk
+            webnames_key = os.environ.get("WEBNAMES_API_KEY", "")
+            if webnames_key and not webnames_key.startswith("*"):
+                logger.warning(
+                    "[IMP:9][cert_orchestrator] WEBNAMES_API_KEY missing leading '*' — "
+                    "webnames.ru API may return zone_manager_unavailable. "
+                    "The key shown in webnames control panel includes the asterisk prefix."
+                )
         else:
             logger.warning("[IMP:7][cert_orchestrator] Failed to source %s", secrets_env_path)
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:

@@ -296,3 +296,93 @@ def test_is_cert_valid_rejects_mkcert_even_if_not_expired(caplog, monkeypatch):
 
 
 # endregion
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: ACME_CHALLENGE_MODE passthrough — DevPlan 058
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · _issue_cert passes ACME_CHALLENGE_MODE env var
+# · Scenario: ACME_CHALLENGE_MODE set in os.environ → passed to issue-cert.sh subprocess
+# · Last fail: N/A (new test for DevPlan 058)
+# · Remove if: env var passthrough logic changes
+@ldd_trajectory
+def test_orchestrate_passes_challenge_mode(caplog, tmp_path, monkeypatch):
+    """_issue_cert should pass ACME_CHALLENGE_MODE env var to issue-cert.sh subprocess.
+
+    ## @purpose  Verify the env var passthrough: cert_orchestrator reads ACME_CHALLENGE_MODE
+    ##           from os.environ and passes it to the subprocess running issue-cert.sh.
+    ## @scenario  Set ACME_CHALLENGE_MODE=http in os.environ → call _issue_cert
+    ##           → subprocess.run receives env with ACME_CHALLENGE_MODE=http
+    """
+    issue_script = str(tmp_path / "issue-cert.sh")
+    Path(issue_script).write_text("#!/bin/bash\nexit 0\n")
+    Path(issue_script).chmod(0o755)
+
+    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+
+    captured_env = {}
+
+    def mock_run(cmd, **kwargs):
+        if "bash" in str(cmd):
+            captured_env.update(kwargs.get("env", {}))
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run):
+        monkeypatch.setattr(os, "environ", {**os.environ, "ACME_CHALLENGE_MODE": "http"})
+        result = cert._issue_cert("example.com", issue_script)
+
+    logger.critical("[IMP:9][test_orchestrate_passes_challenge_mode] ASSERT: ACME_CHALLENGE_MODE=http passed to subprocess")
+    print("--- captured env ---")
+    print(captured_env)
+    print("--- end ---")
+
+    assert result.status == "issued", f"Expected issued status, got {result.status}"
+    assert result.challenge == "http", f"Expected challenge=http, got {result.challenge}"
+    assert captured_env.get("ACME_CHALLENGE_MODE") == "http", (
+        f"ACME_CHALLENGE_MODE not passed to subprocess env: {captured_env}"
+    )
+
+    logger.critical("[IMP:9][test_orchestrate_passes_challenge_mode] PASS: ACME_CHALLENGE_MODE passed to subprocess")
+
+
+# 🧪 TRAP[TEST] · Regression · DomainCertResult contains challenge field
+# · Scenario: _issue_cert returns DomainCertResult with challenge="dns" (default)
+# · Last fail: N/A (new test for DevPlan 058)
+# · Remove if: DomainCertResult.challenge field removed or renamed
+@ldd_trajectory
+def test_domain_cert_result_includes_challenge_field(caplog, tmp_path, monkeypatch):
+    """_issue_cert should return DomainCertResult with challenge field set.
+
+    ## @purpose  Verify the new challenge field is populated in DomainCertResult.
+    ## @scenario  Default ACME_CHALLENGE_MODE (unset → "dns") → _issue_cert
+    ##           → DomainCertResult.challenge == "dns"
+    """
+    issue_script = str(tmp_path / "issue-cert.sh")
+    Path(issue_script).write_text("#!/bin/bash\nexit 0\n")
+    Path(issue_script).chmod(0o755)
+
+    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+
+    def mock_run(cmd, **kwargs):
+        if "bash" in str(cmd):
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run):
+        result = cert._issue_cert("example.com", issue_script)
+
+    logger.critical("[IMP:9][test_domain_cert_result_includes_challenge_field] ASSERT: challenge=dns in result")
+    print("--- result ---")
+    print(result.to_dict())
+    print("--- end ---")
+
+    assert result.status == "issued", f"Expected issued, got {result.status}"
+    assert result.challenge == "dns", f"Expected challenge='dns' (default), got '{result.challenge}'"
+    assert "challenge" in result.to_dict(), f"challenge field missing from to_dict(): {result.to_dict()}"
+
+    logger.critical("[IMP:9][test_domain_cert_result_includes_challenge_field] PASS: challenge field in DomainCertResult")
+
+
+# endregion

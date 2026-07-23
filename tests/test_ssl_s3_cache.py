@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test ssl-s3-cache backup_config S3Config get_s3_config upload pysource ssl-cache issue-cert node-lifecycle integration
-# STRUCTURE: ▶ fixtures(fake_s3, tmp_path) → test_backup_config_s3_config(◇ S3Config ↔ BackupConfig = S3Config subset) → test_get_s3_config(⊕ env mock → assert 5 fields, no prefix) → test_get_s3_config_missing(⊕ missing → RuntimeError) → test_upload_config_source_ssl_cache(⊕ FakeS3Client → upload with ssl-cache prefix) → test_upload_config_source_backup(⊕ FakeS3Client → upload with backup prefix) → test_s3_cache_script_exists(⊕ assert s3-ssl-cache.sh has upload/download/check) → test_issue_cert_s3_integration(⊕ grep issue-cert.sh for s3-ssl-cache upload call) → test_node_lifecycle_s3_integration(⊕ grep node-lifecycle.sh for s3-ssl-cache check call) → ⎋
+# STRUCTURE: ▶ fixtures(fake_s3, tmp_path) → test_backup_config_s3_config(◇ S3Config ↔ BackupConfig = S3Config subset) → test_get_s3_config(⊕ env mock → assert 5 fields, no prefix) → test_get_s3_config_missing(⊕ missing → RuntimeError) → test_upload_config_source_ssl_cache(⊕ FakeS3Client → upload with ssl-cache prefix) → test_upload_config_source_backup(⊕ FakeS3Client → upload with backup prefix) → test_s3_cache_script_exists(⊕ assert s3-ssl-cache.sh has upload/download/check) → test_issue_cert_s3_integration(⊕ grep issue-cert.sh for s3-ssl-cache upload call) → test_node_lifecycle_s3_integration(⊕ grep node-lifecycle.sh for s3-ssl-cache check call) → test_upload_without_chain_pem_succeeds(⊕ G2: chain.pem NOT required) → test_upload_with_account_ecc_path(⊕ G3: <domain>_ecc/ path) → test_download_rejects_non_le_issuer(⊕ LE issuer reject) → test_download_accepts_le_cert(⊕ LE accept + restore) → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Tests for Wave 1 SSL S3 cache — S3Config base TypedDict, --config-source ssl-cache,
 ##           s3-ssl-cache.sh wrapper, and integration with issue-cert.sh / node-lifecycle.sh.
@@ -13,6 +13,11 @@
 ## @rationale  DevPlan 024 Wave 1: SSL certificate caching on S3. S3Config extraction enables
 ##   reuse of upload.py for both backup and ssl-cache operations without duplicating S3 logic.
 ## @changes  CREATED: 2026-07-21 · Wave 1 SSL S3 cache (DevPlan 024)
+##            MODIFIED: 2026-07-23 · Wave 1 cert-wildcard-fix (DevPlan 058):
+##              - test_upload_without_chain_pem_succeeds — G2: chain.pem not required
+##              - test_upload_with_account_ecc_path — G3: <domain>_ecc/ path + fallback
+##              - test_download_rejects_non_le_issuer — LE issuer validation
+##              - test_download_accepts_le_cert — full restore path intact
 # endregion MODULE_CONTRACT
 
 import logging
@@ -793,3 +798,269 @@ def test_s3_config_ignores_https_proxy():
 
 
 # endregion TEST_BUGFIX_052
+
+
+# region TEST_WAVE1_G2_G3
+
+import re as _re
+
+
+@pytest.mark.static_audit
+# 🧪 TRAP[TEST] · 2026-07-23 · Scenario: upload without chain.pem succeeds (G2 fix)
+# · Regression: G2 — chain.pem was required but acme.sh --install-cert doesn't generate it
+# · Last fail: None (first run) · Remove if: _s3_upload() required_files logic changes
+def test_upload_without_chain_pem_succeeds():
+    """_s3_upload() must NOT require chain.pem — G2 fix (DevPlan 058 TASK-1.1).
+
+    chain.pem is optional best-effort upload. fullchain.pem + privkey.pem are required.
+    Verify by extracting the required_files array from _s3_upload() function body.
+    """
+    script_path = "core/internal/bootstrap/s3-ssl-cache.sh"
+    assert os.path.isfile(script_path), f"s3-ssl-cache.sh not found at {script_path}"
+
+    with open(script_path) as f:
+        content = f.read()
+
+    # Extract _s3_upload() function body
+    match = _re.search(r"_s3_upload\(\)\s*\{(.*?)\n\}", content, _re.DOTALL)
+    assert match, "_s3_upload() function not found"
+    upload_body = match.group(1)
+
+    logger.info("[IMP:7][test_no_chain_required] _s3_upload() body length: %d chars", len(upload_body))
+
+    # 1. required_files must NOT contain chain.pem
+    # Find the required_files array
+    rf_match = _re.search(r"required_files=\s*\((.*?)\)", upload_body, _re.DOTALL)
+    assert rf_match, "required_files array not found in _s3_upload()"
+    rf_content = rf_match.group(1)
+
+    assert "fullchain.pem" in rf_content, "fullchain.pem must be in required_files"
+    assert "privkey.pem" in rf_content, "privkey.pem must be in required_files"
+    # Verify chain.pem is NOT a standalone entry in required_files
+    # Use full path pattern to avoid matching fullchain.pem substring
+    has_chain_entry = False
+    for line in rf_content.split("\n"):
+        stripped = line.strip().strip('"')
+        if stripped.endswith("/chain.pem") or stripped == "${cert_dir}/chain.pem":
+            has_chain_entry = True
+            break
+    assert not has_chain_entry, (
+        "chain.pem must NOT be a standalone entry in required_files (G2 fix)"
+    )
+
+    logger.critical(
+        "[IMP:9][test_no_chain_required] ASSERT: required_files = [fullchain.pem, privkey.pem] — chain.pem NOT required"
+    )
+
+    # 2. chain.pem must be handled as best-effort upload (not required)
+    assert 'chain.pem"' in upload_body, "chain.pem must still be referenced in _s3_upload()"
+    assert "best-effort" in upload_body.lower() or "best_effort" in upload_body.lower() or "skipping optional" in upload_body.lower(), (
+        "chain.pem upload must be documented as best-effort"
+    )
+
+    logger.critical(
+        "[IMP:9][test_no_chain_required] ASSERT: chain.pem referenced as best-effort upload — G2 fixed"
+    )
+
+
+@pytest.mark.static_audit
+# 🧪 TRAP[TEST] · 2026-07-23 · Scenario: account path uses <domain>_ecc/ with data/<domain>/ fallback (G3 fix)
+# · Regression: G3 — account data path was hardcoded to data/<domain>/ which doesn't exist
+# · Last fail: None (first run) · Remove if: _s3_upload() account path logic changes
+def test_upload_with_account_ecc_path():
+    """_s3_upload() must use <domain>_ecc/ as primary account path with data/<domain>/ fallback.
+
+    G3 fix: acme.sh stores account data in <domain>_ecc/ directory, not data/<domain>/.
+    """
+    script_path = "core/internal/bootstrap/s3-ssl-cache.sh"
+    assert os.path.isfile(script_path), f"s3-ssl-cache.sh not found at {script_path}"
+
+    with open(script_path) as f:
+        content = f.read()
+
+    # Extract _s3_upload() function body
+    match = _re.search(r"_s3_upload\(\)\s*\{(.*?)\n\}", content, _re.DOTALL)
+    assert match, "_s3_upload() function not found"
+    upload_body = match.group(1)
+
+    logger.info("[IMP:7][test_account_ecc] _s3_upload() body length: %d chars", len(upload_body))
+
+    # 1. Primary path must be _ecc — data/<domain> is only acceptable as fallback (elif)
+    active_lines = [line for line in upload_body.split('\n') if not line.strip().startswith('#')]
+    # Find lines with data/<domain> path assignment and verify they're in elif/else context
+    data_primary_found = False
+    for i, line in enumerate(active_lines):
+        if 'acme_domain_dir="${ACME_HOME}/data/${domain}"' in line:
+            # Check if this assignment is in an elif block (fallback) or if block (primary)
+            if i > 0 and 'elif' in active_lines[i-1]:
+                continue  # elif = fallback, acceptable
+            data_primary_found = True
+    assert not data_primary_found, (
+        "Active code must not use data/<domain> as primary (if) path — only as elif fallback"
+    )
+
+    # 2. Active code must reference _ecc path
+    assert any('_ecc' in line for line in active_lines), (
+        "Active code must reference <domain>_ecc directory"
+    )
+
+    logger.critical(
+        "[IMP:9][test_account_ecc] ASSERT: _s3_upload() uses <domain>_ecc/ path — old data/<domain>/ removed"
+    )
+
+    # 3. Verify the fallback logic: _ecc first, then data/<domain> as fallback
+    has_ecc = any("${domain}_ecc" in line for line in active_lines)
+    has_data = any('data/${domain}' in line for line in active_lines)
+    assert has_ecc, "Active code must check _ecc path"
+    assert has_data, "Must have legacy data/<domain>/ fallback for backward compatibility"
+
+    # 4. Verify _ecc appears before data/<domain> in active code
+    ecc_before_data = False
+    for line in active_lines:
+        if '${domain}_ecc' in line:
+            ecc_before_data = True
+            break
+        if 'data/${domain}' in line:
+            ecc_before_data = False
+            break
+    assert ecc_before_data, (
+        "_ecc path must be checked before data/<domain> fallback"
+    )
+
+    logger.critical(
+        "[IMP:9][test_account_ecc] ASSERT: Account path fallback detected — _ecc primary, data/<domain> secondary"
+    )
+
+    # 4. Verify download function also uses correct extract path
+    dl_match = _re.search(r"_s3_download\(\)\s*\{(.*?)\n\}", content, _re.DOTALL)
+    assert dl_match, "_s3_download() function not found"
+    download_body = dl_match.group(1)
+
+    old_dl_pattern = 'acme_domain_dir="${ACME_HOME}/data"'
+    assert old_dl_pattern not in download_body, (
+        f"Old download extract path found: {old_dl_pattern} — must extract to ACME_HOME/"
+    )
+
+    assert '-C "${ACME_HOME}"' in download_body or '-C "${ACME_HOME}/"' in download_body or '-C "${ACME_HOME}"' in download_body, (
+        "Download must extract account.tar.gz to ACME_HOME/ (not ACME_HOME/data)"
+    )
+
+    logger.critical(
+        "[IMP:9][test_account_ecc] ASSERT: _s3_download() extracts account.tar.gz to ACME_HOME/ — G3 fixed"
+    )
+
+
+@pytest.mark.static_audit
+# 🧪 TRAP[TEST] · 2026-07-23 · Scenario: download rejects non-LE cert (issuer validation)
+# · Regression: pre-fix — any valid x509 cert in S3 was accepted, including mkcert/self-signed
+# · Last fail: None (first run) · Remove if: _s3_download() issuer validation logic changes
+def test_download_rejects_non_le_issuer():
+    """_s3_download() must validate issuer as Let's Encrypt — reject mkcert/self-signed.
+
+    After openssl x509 -noout validation, check that issuer contains "Let's Encrypt".
+    """
+    script_path = "core/internal/bootstrap/s3-ssl-cache.sh"
+    assert os.path.isfile(script_path), f"s3-ssl-cache.sh not found at {script_path}"
+
+    with open(script_path) as f:
+        content = f.read()
+
+    # Extract _s3_download() function body
+    match = _re.search(r"_s3_download\(\)\s*\{(.*?)\n\}", content, _re.DOTALL)
+    assert match, "_s3_download() function not found"
+    download_body = match.group(1)
+
+    logger.info("[IMP:7][test_reject_non_le] _s3_download() body length: %d chars", len(download_body))
+
+    # 1. Must have issuer check after x509 validation
+    assert "issuer" in download_body, (
+        "_s3_download() must check cert issuer"
+    )
+    assert "Let's Encrypt" in download_body, (
+        "_s3_download() must check for 'Let's Encrypt' issuer"
+    )
+
+    logger.critical(
+        "[IMP:9][test_reject_non_le] ASSERT: _s3_download() validates issuer = Let's Encrypt"
+    )
+
+    # 2. Must reject (return 1) on non-LE issuer
+    # Find the last occurrence of "Let's Encrypt" (the one in active code, not TRAP comment)
+    le_indices = [i for i, line in enumerate(download_body.split('\n')) if 'Let\'s Encrypt' in line]
+    assert len(le_indices) >= 1, "Must have at least one reference to 'Let's Encrypt'"
+    # The last occurrence should be the active code check (TRAP comment comes first)
+    last_le_line_idx = le_indices[-1]
+    lines = download_body.split('\n')
+    # Check that within 3 lines after the last LE reference there's a return 1
+    subsequent_lines = lines[last_le_line_idx:last_le_line_idx + 5]
+    assert any('return 1' in line for line in subsequent_lines), (
+        f"_s3_download() must return 1 within 3 lines of issuer check — found lines: {subsequent_lines}"
+    )
+
+    logger.critical(
+        "[IMP:9][test_reject_non_le] ASSERT: non-LE issuer triggers return 1 — rejection confirmed"
+    )
+
+    # 3. Must log WARN on rejection
+    assert any('WARN' in line for line in subsequent_lines[:3]), (
+        "Must log WARN when rejecting non-LE cert"
+    )
+
+    logger.critical(
+        "[IMP:9][test_reject_non_le] ASSERT: WARN logged on non-LE rejection"
+    )
+
+
+@pytest.mark.static_audit
+# 🧪 TRAP[TEST] · 2026-07-23 · Scenario: download accepts LE cert and restores it
+# · Regression: pre-fix — issuer validation was missing entirely
+# · Last fail: None (first run) · Remove if: _s3_download() restore logic changes
+def test_download_accepts_le_cert():
+    """_s3_download() must accept LE cert, restore all 3 files + account data.
+
+    Validates that the full download-and-restore path still works after issuer check addition.
+    """
+    script_path = "core/internal/bootstrap/s3-ssl-cache.sh"
+    assert os.path.isfile(script_path), f"s3-ssl-cache.sh not found at {script_path}"
+
+    with open(script_path) as f:
+        content = f.read()
+
+    # Extract _s3_download() function body
+    match = _re.search(r"_s3_download\(\)\s*\{(.*?)\n\}", content, _re.DOTALL)
+    assert match, "_s3_download() function not found"
+    download_body = match.group(1)
+
+    logger.info("[IMP:7][test_accept_le] _s3_download() body length: %d chars", len(download_body))
+
+    # 1. Openssl validation must still be present
+    assert "openssl x509 -in" in download_body, "openssl x509 validation must be present"
+    assert "Let's Encrypt" in download_body, (
+        "_s3_download() must have Let's Encrypt issuer check"
+    )
+
+    # 2. fullchain.pem restore path must still work
+    assert "fullchain.pem" in download_body, "fullchain.pem restore must be present"
+    # Verify cp command exists in lines that also contain fullchain.pem
+    dl_lines = download_body.split('\n')
+    cp_restore_found = any('cp' in line and 'fullchain.pem' in line for line in dl_lines)
+    assert cp_restore_found, "Must have cp command that copies fullchain.pem to cert_dir"
+
+    # 3. privkey.pem restore must be present
+    assert "privkey.pem" in download_body, "privkey.pem restore must be present"
+
+    # 4. chain.pem restore must still work (optional but supported)
+    assert "chain.pem" in download_body, "chain.pem restore must be present (optional)"
+
+    # 5. account.tar.gz restore must still work
+    assert "account.tar.gz" in download_body, "account.tar.gz restore must be present"
+
+    # 6. Must return 0 on success (DONE log)
+    assert 'return 0' in download_body, "_s3_download() must return 0 on success"
+
+    logger.critical(
+        "[IMP:9][test_accept_le] ASSERT: _s3_download() restores fullchain + privkey + chain + account — all paths intact"
+    )
+
+
+# endregion TEST_WAVE1_G2_G3

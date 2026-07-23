@@ -38,5 +38,5 @@ SMOKE_ENV_GENERATED: dict[str, str] = {
     "S3_SECRET_KEY": "test-secret-key",
     "SALT": "ci-test-salt-value",
     "TELEGRAM_BOT_TOKEN": "1234567890:test-telegram-bot-token-for-ci",
-    "WEBNAMES_API_KEY": "test-webnames-api-key",
+    "WEBNAMES_API_KEY": "*test-webnames-api-key",
 }

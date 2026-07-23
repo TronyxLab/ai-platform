@@ -9,13 +9,20 @@
 ##           Requires acme.sh already installed (via install-acme.sh at bootstrap/init).
 ## @invariants
 ##   - Idempotent: if /etc/letsencrypt/live/$domain/fullchain.pem exists → SKIP, exit 0
-##   - DNS-01 only — HTTP-01 NOT supported
+##   - DNS-01 primary (wildcard support), HTTP-01 fallback via ACME_CHALLENGE_MODE=auto
+##   - HTTP-01 standalone mode requires port 80 free (called BEFORE docker compose up)
+##   - HTTP-01 issues individual domain certs ONLY (no wildcard — LE requires DNS-01 for wildcard)
 ##   - Requires PLATFORM_ACME_DNS_PLUGIN; webnames plugin needs WEBNAMES_API_KEY (shredded after use)
 ##   - acme.sh cron installed AFTER cert issuance; cert expiry via openssl x509 (read-only)
 ##   - LETSENCRYPT_DIR env override supported (for testing)
 ## @rationale Split from ssl-provision.sh per D3: issue-cert.sh called at each update/renew,
 ##   install-acme.sh only once at init. Decoupling reduces update latency.
 ## @changes   CREATED: 2026-07-17 · T3 — Extract from ssl-provision.sh (DevPlan 005)
+## @changes   2026-07-23 | DevPlan 058 — HTTP-01 fallback (ACME_CHALLENGE_MODE, _issue_http01_cert)
+## ⚠️ TRAP[DECISION] · 2026-07-23 · D1 — DNS-01 primary, HTTP-01 graceful degradation
+## · Rejected: HTTP-01 only (no wildcard certs)
+## · Reason: DNS-01 preferred (wildcard), HTTP-01 fallback when DNS-01 unavailable
+## · Rev: when webnames.ru API recovers → revert to DNS-01 only
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -97,6 +104,10 @@ _issue_acme_cert() {
         fi
 
         local api_key="${WEBNAMES_API_KEY:-}"
+        # Validate webnames API key format — must include leading asterisk
+        if [[ -n "$api_key" && "$api_key" != "*"* ]]; then
+            log_step "acme" "WARN" "WEBNAMES_API_KEY missing leading '*' — webnames.ru API may return zone_manager_unavailable. The key shown in webnames control panel includes the asterisk prefix."
+        fi
         if [[ -z "$api_key" ]]; then
             log_step "acme" "FAIL" "WEBNAMES_API_KEY not set in secrets — cannot authenticate to webnames.ru API"
             return 1
@@ -196,6 +207,71 @@ _issue_acme_cert() {
     log_step "acme" "DONE" "TLS certificate installed via acme.sh: ${cert_dir}/fullchain.pem"
 }
 # endregion ACME_ISSUE
+
+# region ACME_HTTP01_ISSUE
+## @purpose  Issue a Let's Encrypt TLS certificate via acme.sh HTTP-01 (standalone mode).
+##           Fallback when DNS-01 is unavailable. Does NOT support wildcard certs.
+## @param $1  domain        Domain name (e.g., tronyx.ru)
+## @param $2  email         Email for Let's Encrypt registration
+## @invariants
+##   - Port 80 must be free (nginx not running) — acme.sh starts a temporary HTTP server
+##   - Issues SINGLE domain cert (no wildcard — Let's Encrypt requires DNS-01 for wildcard)
+##   - Installs cert to LETSENCRYPT_DIR/live/$domain/ (same as DNS-01)
+##   - Non-fatal: logs WARN on failure, returns 1
+## @rationale HTTP-01 is not preferred (no wildcard) but is the ONLY fallback when DNS-01 is unavailable.
+##   Per DevPlan 058 D1: DNS-01 primary, HTTP-01 graceful degradation.
+## ⚠️ TRAP[DECISION] · 2026-07-23 · — · HTTP-01 fallback — DNS-01 primary, HTTP-01 graceful degradation
+## · Rejected: HTTP-01 only (no wildcard certs)
+## · Reason: DNS-01 preferred (wildcard), HTTP-01 fallback when DNS-01 unavailable
+## · Rev: when webnames.ru API recovers → revert to DNS-01 only
+_issue_http01_cert() {
+    local domain="$1"
+    local email="$2"
+
+    local acme_home="${ACME_HOME:-/opt/acme.sh}"
+    local acme_sh="${acme_home}/acme.sh"
+
+    if [[ ! -x "$acme_sh" ]]; then
+        log_step "acme-http" "FAIL" "acme.sh not found at ${acme_sh}"
+        return 1
+    fi
+
+    log_step "acme-http" "START" "Issuing TLS certificate via HTTP-01 (standalone) for ${domain}"
+
+    # Check if port 80 is available
+    if ss -tlnp 2>/dev/null | grep -q ':80\s' || netstat -tlnp 2>/dev/null | grep -q ':80\s'; then
+        log_step "acme-http" "FAIL" "Port 80 is in use — cannot use HTTP-01 standalone mode. Stop nginx first."
+        return 1
+    fi
+
+    "$acme_sh" --issue \
+        --home "$acme_home" \
+        --standalone \
+        --server letsencrypt \
+        --email "$email" \
+        -d "$domain" \
+        --keylength ec-256
+
+    local acme_ret=$?
+    if [[ $acme_ret -ne 0 ]]; then
+        log_step "acme-http" "FAIL" "acme.sh --issue --standalone exited with ${acme_ret}"
+        return 1
+    fi
+
+    # Install cert to same location as DNS-01
+    local cert_root="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
+    local cert_dir="${cert_root}/live/${domain}"
+    mkdir -p "$cert_dir"
+
+    "$acme_sh" --install-cert -d "$domain" \
+        --home "$acme_home" \
+        --key-file "${cert_dir}/privkey.pem" \
+        --fullchain-file "${cert_dir}/fullchain.pem" \
+        --reloadcmd "systemctl reload nginx"
+
+    log_step "acme-http" "DONE" "TLS certificate installed via HTTP-01: ${cert_dir}/fullchain.pem"
+}
+# endregion ACME_HTTP01_ISSUE
 
 # region ACME_INSTALL_CRON
 ## @purpose  Install acme.sh cronjob for automatic daily certificate renewal
@@ -366,20 +442,23 @@ _issue_project_certs() {
 ## @param $2  email         Email for Let's Encrypt registration
 ## @param $3  dns_plugin    DNS plugin name (e.g., webnames, cf, dp)
 ## @param $4  wildcard      "true" (default) for wildcard *.domain, "false" for single-domain
+## @env      ACME_CHALLENGE_MODE  "dns" (default, DNS-01 only), "auto" (DNS-01 → HTTP-01 fallback),
+##                                "http" (HTTP-01 only, no DNS-01)
 ## @invariants
 ##   - Domain may be empty → SKIP (not an error — main() handles this case) — RETURN 0
 ##   - Idempotent: checks /etc/letsencrypt/live/$domain/fullchain.pem — returns 0 if exists
-##   - DNS plugin required for wildcard cert issuance — FAIL if empty
-##   - webnames plugin requires WEBNAMES_API_KEY env var — FAIL if empty
-## 💼 TRAP[BUSINESS] · 2026-07-04 · HI · Wildcard TLS mandatory for all subdomains
-## · Source: platform architecture — все сервисы на поддоменах *.domain
-## · Risk: HTTP-01 cert без wildcard ломает все поддомены. Платформа неработоспособна.
-## · Protection: HTTP-01 ветка удалена; post-issue openssl verify; gate test проверяет конфиги.
+##   - DNS plugin required for wildcard cert issuance — FAIL if empty (applies to dns/auto modes)
+##   - webnames plugin requires WEBNAMES_API_KEY env var — FAIL if empty (applies to dns/auto modes)
+##   - ACME_CHALLENGE_MODE=http: bypasses DNS-01 entirely, uses HTTP-01 standalone
+##   - ACME_CHALLENGE_MODE=auto: tries DNS-01, falls back to HTTP-01 on DNS-01 failure
+##   - HTTP-01 does NOT support wildcard — logs IMP:9 warning when wildcard=true but HTTP-01 used
+## @changes  2026-07-23 | DevPlan 058 — ACME_CHALLENGE_MODE support
 issue_tls_cert() {
     local domain="$1"
     local email="$2"
     local dns_plugin="${3:-}"
     local wildcard="${4:-true}"
+    local challenge_mode="${ACME_CHALLENGE_MODE:-dns}"
 
     if [[ -z "$domain" ]]; then
         log_step "acme.sh" "SKIP" "No domain specified — skipping TLS certificate"
@@ -398,6 +477,17 @@ issue_tls_cert() {
         log_step "acme.sh" "WARN" "Certificate exists but NOT from Let's Encrypt (mkcert/self-signed?) — re-issuing"
     fi
 
+    # ── HTTP-01 only mode: bypass DNS-01 entirely ──
+    if [[ "$challenge_mode" == "http" ]]; then
+        log_step "acme.sh" "INFO" "ACME_CHALLENGE_MODE=http — using HTTP-01 standalone (no DNS-01)"
+        if [[ "$wildcard" == "true" ]]; then
+            log_imp 9 "acme.sh" "WARN: wildcard=true with HTTP-01 — LE requires DNS-01 for wildcard. Issuing individual domain cert."
+        fi
+        _issue_http01_cert "$domain" "$email"
+        return $?
+    fi
+
+    # ── DNS-01 or AUTO mode: DNS plugin required ──
     # [IMP:9][issue-cert][acme.sh] BUSINESS INVARIANT: DNS plugin required for wildcard cert
     if [[ -z "$dns_plugin" ]]; then
         log_step "tls" "FAIL" "TLS certificate requires DNS plugin (set PLATFORM_ACME_DNS_PLUGIN in env)"
@@ -412,7 +502,20 @@ issue_tls_cert() {
 
     log_step "acme.sh" "START" "Issuing TLS certificate for ${domain} (email: ${email}) via acme.sh DNS-01 (${dns_plugin})"
 
-    _issue_acme_cert "$domain" "$email" "$dns_plugin" "$wildcard"
+    local acme_ret=0
+    _issue_acme_cert "$domain" "$email" "$dns_plugin" "$wildcard" || acme_ret=$?
+
+    # ── AUTO mode: fallback to HTTP-01 on DNS-01 failure ──
+    if [[ $acme_ret -ne 0 ]] && [[ "$challenge_mode" == "auto" ]]; then
+        log_imp 9 "acme.sh" "DNS-01 failed for ${domain} — falling back to HTTP-01 (no wildcard cert)"
+        if [[ "$wildcard" == "true" ]]; then
+            log_imp 9 "acme.sh" "HTTP-01 does NOT support wildcard — issuing individual domain cert for ${domain} instead of *.${domain}"
+        fi
+        _issue_http01_cert "$domain" "$email"
+        return $?
+    fi
+
+    return $acme_ret
 }
 # endregion ACME_TLS
 
@@ -422,13 +525,18 @@ issue_tls_cert() {
 ##   ▶ python3 parse node.yaml → env vars
 ##   → ○ /etc/letsencrypt/live/<domain>/fullchain.pem exists? → SKIP, exit 0
 ##   → ○ validate PLATFORM_DOMAIN, PLATFORM_EMAIL, PLATFORM_ACME_DNS_PLUGIN, WEBNAMES_API_KEY
-##   → install_acme → issue_tls_cert → _acme_install_cron → _acme_verify_cert
+##   → install_acme → issue_tls_cert (dns/http/auto per ACME_CHALLENGE_MODE)
+##   → _acme_install_cron → _acme_verify_cert
+##   → [if http/auto] issue individual subdomain certs (platform.domain)
 ##   → [optional] _issue_project_certs for PLATFORM_PROJECT_DOMAINS
 ##   → exit 0 (success) | exit 1 (failure)
 ## @invariants
 ##   - Root required (acme.sh needs filesystem access, apt install git)
 ##   - NODE_YAML env var points to node.yaml with domain/email/acme_dns_plugin fields
 ##   - PLATFORM_* env vars override node.yaml values (backward compat with existing CI)
+##   - ACME_CHALLENGE_MODE: dns (default), http (HTTP-01 only), auto (DNS-01 → HTTP-01 fallback)
+##   - When challenge mode is http or auto, issues individual subdomain certs for platform.domain
+## @changes  2026-07-23 | DevPlan 058 — ACME_CHALLENGE_MODE, HTTP-01 fallback, subdomain certs
 main() {
     # ── S7: Parse NODE_YAML via yaml_read_domain_config() (replaces inline python3) ──
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
@@ -455,6 +563,7 @@ main() {
     local email="${PLATFORM_EMAIL:-}"
     local dns_plugin="${PLATFORM_ACME_DNS_PLUGIN:-}"
     local project_domains="${PLATFORM_PROJECT_DOMAINS:-}"
+    local challenge_mode="${ACME_CHALLENGE_MODE:-dns}"
 
     # ── Idempotency: skip main cert if already exists AND is from Let's Encrypt ──
     # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Early exit blocked project domains
@@ -491,21 +600,38 @@ main() {
             return 1
         fi
 
-        if [[ -z "$dns_plugin" ]]; then
-            log_fail "PLATFORM_ACME_DNS_PLUGIN not set — required for DNS-01 challenge"
-            return 1
+        # DNS plugin guard: only required for dns/auto modes, not for http-only mode
+        if [[ "$challenge_mode" != "http" ]]; then
+            if [[ -z "$dns_plugin" ]]; then
+                log_fail "PLATFORM_ACME_DNS_PLUGIN not set — required for DNS-01 challenge"
+                return 1
+            fi
+
+            if [[ "$dns_plugin" == "webnames" ]] && [[ -z "${WEBNAMES_API_KEY:-}" ]]; then
+                log_fail "WEBNAMES_API_KEY not set — required for webnames DNS-01 TLS"
+                return 1
+            fi
+        else
+            log_step "main" "INFO" "ACME_CHALLENGE_MODE=http — DNS plugin not required, using HTTP-01 standalone"
         fi
 
-        if [[ "$dns_plugin" == "webnames" ]] && [[ -z "${WEBNAMES_API_KEY:-}" ]]; then
-            log_fail "WEBNAMES_API_KEY not set — required for webnames DNS-01 TLS"
-            return 1
-        fi
-
-        # ── Step 1: Issue wildcard TLS certificate ─────────────────────
-        log_step "main" "START" "SSL provisioning for ${domain} via acme.sh (${dns_plugin})"
+        # ── Step 1: Issue TLS certificate ─────────────────────
+        log_step "main" "START" "SSL provisioning for ${domain} via acme.sh (${dns_plugin:-http-01})"
         if ! issue_tls_cert "$domain" "$email" "$dns_plugin" "true"; then
             log_fail "TLS certificate issuance failed for ${domain}"
             return 1
+        fi
+
+        # ── Step 1b: Issue individual subdomain certs when HTTP-01 fallback in use ──
+        # [IMP:9][issue-cert][main] When ACME_CHALLENGE_MODE is auto or http, the main cert
+        # is individual (not wildcard). Known subdomains need their own individual certs.
+        if [[ "$challenge_mode" == "http" ]] || [[ "$challenge_mode" == "auto" ]]; then
+            local subdomain_cert_path="/etc/letsencrypt/live/platform.${domain}/fullchain.pem"
+            if [[ -n "$domain" ]] && ! _is_le_cert "$subdomain_cert_path"; then
+                log_step "main" "INFO" "Issuing individual cert for platform.${domain} (HTTP-01 fallback — no wildcard)"
+                issue_tls_cert "platform.${domain}" "$email" "$dns_plugin" "false" || \
+                    log_warn "Failed to issue individual cert for platform.${domain} — continuing"
+            fi
         fi
 
         # ── Step 2: Install acme.sh cron for daily renewal ─────────────
