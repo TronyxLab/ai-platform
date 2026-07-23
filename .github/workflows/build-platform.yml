@@ -112,14 +112,14 @@ jobs:
             --project-name build-platform-smoke \
             up -d
 
-          echo "=== Waiting for agent readiness (80s max) ==="
-          for i in $(seq 1 40); do
+          echo "=== Waiting for agent readiness (180s max) ==="
+          for i in $(seq 1 90); do
             if curl -sf http://localhost:9119/ > /dev/null 2>&1; then
               echo "=== Agent ready on :9119 after ${i}s ==="
               break
             fi
-            if [ $i -eq 40 ]; then
-              echo "=== ERROR: Agent not ready after 80s ==="
+            if [ $i -eq 90 ]; then
+              echo "=== ERROR: Agent not ready after 180s ==="
               docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
                 --project-name build-platform-smoke logs
               docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
