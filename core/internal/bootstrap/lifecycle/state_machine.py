@@ -1178,7 +1178,7 @@ def _execute_update_step(
 
     elif step_name == "deploy_modules":
         deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
-        _subprocess_run(["bash", deploy_script, "--skip-provision"], "deploy_modules")
+        _subprocess_run(["bash", deploy_script, "--skip-provision"], "deploy_modules", timeout=300)
 
     elif step_name == "healthcheck":
         _run_healthchecks(node_yaml)
@@ -1254,11 +1254,12 @@ def _subprocess_run(
     step_name: str,
     non_fatal: bool = False,
     check_required: bool = True,
+    timeout: int = 120,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess command with timeout and error handling.
 
     ## @purpose — Safe subprocess wrapper with logging, timeout, and error handling.
-    ## @io — ⇥ cmd, step_name, non_fatal, check_required → ⎋ subprocess.CompletedProcess
+    ## @io — ⇥ cmd, step_name, non_fatal, check_required, timeout → ⎋ subprocess.CompletedProcess
     ## @complexity — O(1) orchestration, O(M) for command execution
     """
     logger.info("[IMP:8][subprocess][%s] Running: %s", step_name, " ".join(cmd))
@@ -1267,7 +1268,7 @@ def _subprocess_run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         if result.returncode != 0:
             err_msg = f"Command {' '.join(cmd)} failed (exit={result.returncode}): {result.stderr.strip()}"
@@ -1293,7 +1294,7 @@ def _subprocess_run(
             logger.info("[IMP:9][subprocess][%s] Command succeeded (exit=0)", step_name)
         return result
     except subprocess.TimeoutExpired:
-        msg = f"Command {' '.join(cmd)} timed out after 120s"
+        msg = f"Command {' '.join(cmd)} timed out after {timeout}s"
         if non_fatal:
             logger.warning("[IMP:7][subprocess][%s] %s", step_name, msg)
             return subprocess.CompletedProcess(cmd, -1, "", msg)
