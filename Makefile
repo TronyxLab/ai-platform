@@ -36,6 +36,7 @@ include makefiles/scaffold.mk
 include makefiles/modules.mk
 include makefiles/ci.mk
 include makefiles/helpers.mk
+include makefiles/repair.mk
 
 # === Manifest generation targets ===
 .PHONY: generate-manifests check-manifests
@@ -73,7 +74,10 @@ check-manifests:
 	@git diff --exit-code -- core/secrets-manifest.yaml platform-env.yaml \
 		tests/_conftest/smoke_env_generated.py tests/helpers/env_defaults_generated.py \
 		core/entrypoint-manifest.yaml core/AGENTS.md || \
-		(echo "[IMP:9][check-manifests] ERROR: Generated files out of date. Run: make generate-manifests" && exit 1)
+		(echo "[GATE:FAIL][id:check-manifests][class:L1]" && \
+		 echo ">>> REPAIR_RECIPE_START >>>" && \
+		 echo "make fix-gate && git add -u && make gate MODE=fast" && \
+		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
 	@echo "[IMP:9][check-manifests] All generated manifests are up to date."
 
 # === Default target ===

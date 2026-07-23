@@ -250,6 +250,29 @@ test/gate:
   signature: (pre-push hook)
   operation_ru: Pre-push gate
   description: Blocking pre-push gate that runs make gate MODE=fast
+repair:
+- make_target: fix-executable-bit
+  mechanism: git-update-index
+  delegates_to: git add --chmod=+x + git update-index --chmod=+x
+  signature: make fix-executable-bit [DRY_RUN=1]
+  operation_ru: Исправление executable bit на .sh файлах
+  description: 'Sets +x on staged/tracked .sh files outside core/lib/. Two-pass: staged
+    via git add --chmod=+x, tracked via git update-index --chmod=+x (xargs -0). Safe,
+    idempotent, DRY_RUN=1.'
+- make_target: fix-ruff
+  mechanism: ruff
+  delegates_to: ruff check --fix + ruff format
+  signature: make fix-ruff [SCOPE=diff|staged|all] [DRY_RUN=1]
+  operation_ru: Форматирование Python файлов через ruff
+  description: 'Ruff check --fix + format for changed Python files. SCOPE=diff (default):
+    staged + unstaged. Safe, idempotent, DRY_RUN=1.'
+- make_target: fix-gate
+  mechanism: composite
+  delegates_to: fix-executable-bit + fix-ruff + generate-manifests
+  signature: make fix-gate [DRY_RUN=1]
+  operation_ru: Композитное исправление gate-ошибок
+  description: Composite target — runs fix-executable-bit + fix-ruff + generate-manifests.
+    ONLY gate-blocking L1 errors. Not expandable without review.
 lifecycle:
 - make_target: compose-safe-up
   mechanism: compose-wrapper+preflight
@@ -658,6 +681,9 @@ gates:
 - id: test_no_module_prefix
   test_file: test_gate_manifest_integrity.py
   description: 'Auto-discovered gate: test_no_module_prefix'
+- id: test_repair_contract_integrity
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_repair_contract_integrity'
 - id: test_manifests_up_to_date
   test_file: test_gate_manifests_up_to_date.py
   description: 'Auto-discovered gate: test_manifests_up_to_date'
@@ -1091,6 +1117,9 @@ allowed_verbs:
 - dev-certs
 - discover-modules
 - down
+- fix-executable-bit
+- fix-gate
+- fix-ruff
 - gate
 - generate-manifests
 - healthcheck

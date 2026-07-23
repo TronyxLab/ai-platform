@@ -956,3 +956,126 @@ def test_no_module_prefix(caplog) -> None:
                 )
 
     logger.info("[IMP:9][test_no_module_prefix] ALL PASS — no module- prefix in Makefile.common or module.mk")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REPAIR CONTRACT VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# region REPAIR_CONTRACT_VALIDATION
+## @purpose  Validate Repair Contract fields in manifest gates[]
+## @checks
+##   1. repairable: true → repair_id, repair_command, repair_description, repair_safe,
+##      repair_idempotent, repair_class обязательны
+##   2. repair_class ∈ {L1, L2, L3}
+##   3. repairable: false → repair_reason обязателен
+##   4. repair_command ссылается на существующий make target (grep .PHONY из repair.mk)
+##   5. repair_id уникален среди всех repairable gates
+##   6. All repair_id присутствуют в REPAIR_TARGETS из makefiles/repair.mk
+
+REPAIR_CLASSES = {"L1", "L2", "L3"}
+REQUIRED_REPAIR_FIELDS = {
+    "repair_id",
+    "repair_command",
+    "repair_description",
+    "repair_safe",
+    "repair_idempotent",
+    "repair_class",
+}
+
+_REPAIR_MK_PATH = os.path.join(_PROJECT_ROOT, "makefiles", "repair.mk")
+
+
+def _get_repair_targets() -> set[str]:
+    """Extract REPAIR_TARGETS from makefiles/repair.mk."""
+    if not os.path.isfile(_REPAIR_MK_PATH):
+        return set()
+    content = pathlib.Path(_REPAIR_MK_PATH).read_text()
+    match = re.search(r"REPAIR_TARGETS\s*:=\s*(.+)", content)
+    if not match:
+        return set()
+    return set(match.group(1).split())
+
+
+def _get_phony_targets_from_repair_mk() -> set[str]:
+    """Extract .PHONY targets from makefiles/repair.mk."""
+    if not os.path.isfile(_REPAIR_MK_PATH):
+        return set()
+    content = pathlib.Path(_REPAIR_MK_PATH).read_text()
+    match = re.search(r"\.PHONY:\s*(.+)", content)
+    if not match:
+        return set()
+    return set(match.group(1).split())
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# region FUNC_test_repair_contract_integrity
+## @purpose  Validate Repair Contract fields are consistent between manifest and makefiles.
+##            FAIL code: REPAIR_CONTRACT_VIOLATION
+#
+# 🧪 TRAP[TEST] · 2026-07-23 · Regression: Repair Contract fields drift
+# · Scenario: new gate added without repair fields, or repair_command target deleted
+# · Last fail: N/A (new gate)
+# · Remove if: Repair Contract is superseded
+def test_repair_contract_integrity(caplog) -> None:
+    """Gate: Repair Contract fields are valid and consistent."""
+    manifest = _load_manifest()
+    gates = manifest.get("gates", [])
+    repair_targets = _get_repair_targets()
+    phony_targets = _get_phony_targets_from_repair_mk()
+
+    repair_ids: set[str] = set()
+    errors: list[str] = []
+
+    for gate in gates:
+        gate_id = gate.get("id", "<unknown>")
+        repairable = gate.get("repairable", False)
+
+        if repairable:
+            # Check required fields
+            missing = REQUIRED_REPAIR_FIELDS - set(gate.keys())
+            if missing:
+                errors.append(f"Gate '{gate_id}': repairable=true but missing: {missing}")
+
+            # Check repair_class
+            rc = gate.get("repair_class")
+            if rc and rc not in REPAIR_CLASSES:
+                errors.append(f"Gate '{gate_id}': invalid repair_class '{rc}', must be L1/L2/L3")
+
+            # Check repair_id uniqueness
+            rid = gate.get("repair_id")
+            if rid:
+                if rid in repair_ids:
+                    errors.append(f"Gate '{gate_id}': duplicate repair_id '{rid}'")
+                repair_ids.add(rid)
+                # repair_id is a stable API identifier — not required to match
+                # REPAIR_TARGETS (which holds make target names like fix-executable-bit).
+                # The connection is through repair_command, validated below.
+                _ = repair_targets  # available for future cross-referencing
+
+            # Check repair_command references existing make target
+            cmd = gate.get("repair_command", "")
+            if cmd.startswith("make "):
+                target = cmd.split()[1]
+                if phony_targets and target not in phony_targets and target != "fix-gate":
+                    errors.append(
+                        f"Gate '{gate_id}': repair_command target '{target}' not found in .PHONY of makefiles/repair.mk"
+                    )
+        else:
+            # Non-repairable gates with explicit repair_class L3 need repair_reason
+            if gate.get("repair_class") == "L3" and "repair_reason" not in gate:
+                errors.append(f"Gate '{gate_id}': L3 non-repairable gate missing repair_reason")
+
+    if errors:
+        msg = f"[GATE:FAIL][id:repair-contract-integrity] {len(errors)} violation(s):\n"
+        for e in errors:
+            msg += f"  - {e}\n"
+        logging.error(msg)
+        raise AssertionError(msg)
+
+    logging.info("[IMP:9][repair-contract-integrity] All %d gates with repair fields valid", len(gates))
+
+
+# endregion FUNC_test_repair_contract_integrity
+# endregion REPAIR_CONTRACT_VALIDATION

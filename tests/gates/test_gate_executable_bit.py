@@ -87,7 +87,12 @@ def test_executable_bit_outside_lib(caplog):
         msg = f"[IMP:10][test][FAIL] {len(violations)} file(s) outside core/lib/ have 100644 mode:\n"
         for v in violations:
             msg += f"  - {v}\n"
-        msg += "Fix: git update-index --chmod=+x <file>"
+        msg += (
+            "[GATE:FAIL][id:executable-bit][class:L1]\n"
+            ">>> REPAIR_RECIPE_START >>>\n"
+            "make fix-gate && git add -u && make gate MODE=fast\n"
+            "<<< REPAIR_RECIPE_END <<<"
+        )
         logging.error(msg)
         # 🧪 TRAP[TEST] · 2026-07-18 · Regression guard
         raise AssertionError(msg)

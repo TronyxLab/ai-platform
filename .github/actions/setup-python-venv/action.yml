@@ -40,7 +40,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: .venv
-        key: venv-${{ runner.os }}-${{ hashFiles('Makefile') }}
+        key: venv-${{ runner.os }}-${{ hashFiles('Makefile', 'pyproject.toml') }}
         restore-keys: |
           venv-${{ runner.os }}-
 
@@ -49,13 +49,13 @@ runs:
       run: |
         if [ ! -d .venv/bin ]; then
           python -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          DEPS="pytest pyyaml jsonschema requests python-dotenv boto3 botocore"
-          if [ "${{ inputs.install-pre-commit }}" = "true" ]; then
-            DEPS="$DEPS pre-commit"
-          fi
-          .venv/bin/pip install $DEPS
         fi
+        .venv/bin/pip install --upgrade pip
+        DEPS="pytest pyyaml jsonschema requests python-dotenv boto3 botocore cryptography jinja2"
+        if [ "${{ inputs.install-pre-commit }}" = "true" ]; then
+          DEPS="$DEPS pre-commit"
+        fi
+        .venv/bin/pip install $DEPS
 
     - name: Setup .venv symlink for make targets
       shell: bash

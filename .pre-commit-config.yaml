@@ -83,6 +83,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: fix-executable-bit
+        name: "Auto-fix executable bit (staged .sh only)"
+        description: "Sets +x on staged .sh files outside core/lib/ via git add --chmod=+x. Safe, idempotent, deterministic."
+        entry: bash -c 'for f in "$@"; do case "$f" in core/lib/*) continue ;; esac; [ -f "$f" ] || continue; git add --chmod=+x -- "$f" && echo "  +x (auto) $f"; done' --
+        language: system
+        files: '\.sh$'
+        stages: [pre-commit]
+
       - id: check-doc-headers
         name: Doc headers (GREP_SUMMARY + MODULE_CONTRACT + STRUCTURE + regions + YAML @purpose)
         entry: core/entrypoints/check-doc-headers.sh

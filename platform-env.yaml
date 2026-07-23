@@ -136,7 +136,7 @@ env_defaults:
   AGE_SECRET_KEY: AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ
   GHCR_PULL_TOKEN: ghp_test-token-for-ci-only
   TELEGRAM_BOT_TOKEN: 1234567890:test-telegram-bot-token-for-ci
-  WEBNAMES_API_KEY: "*test-webnames-api-key"
+  WEBNAMES_API_KEY: '*test-webnames-api-key'
   PLATFORM_MASTER_EMAIL: admin@test.local
   PLATFORM_MASTER_PASSWORD: test-master-password
   LITELLM_MASTER_KEY: sk-ci-test-master-key
