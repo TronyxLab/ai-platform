@@ -1,5 +1,5 @@
 # GREP_SUMMARY: composite-action setup-python-venv pip-cache symlink reusable
-# STRUCTURE: ▶ actions/setup-python → ◇ cache .venv → ◇ pip install → ◇ symlink → ⎋ GITHUB_PATH
+# STRUCTURE: ▶ actions/setup-python → ◇ cache .venv → ◇ symlink (BEFORE pip install) → ◇ pip install → ⎋ GITHUB_PATH
 # region MODULE_CONTRACT
 ## @purpose  Reusable composite action: Python venv setup with pip cache, dependency install, and symlink.
 ##           Eliminates 6× duplicate boilerplate across CI workflows.
@@ -44,6 +44,22 @@ runs:
         restore-keys: |
           venv-${{ runner.os }}-
 
+    # TRAP[BUG] 2026-07-23: symlink must be set BEFORE pip install.
+    # Cached .venv/bin symlinks may point to old Python version (e.g. 3.10.19).
+    # If pip install runs with old symlink, packages go to wrong site-packages.
+    # Then symlink overwrite points to new Python — tests fail with ModuleNotFoundError.
+    - name: Setup .venv symlink for make targets
+      shell: bash
+      run: |
+        mkdir -p .venv/bin
+        # Remove stale symlinks from cache (may point to old Python)
+        rm -f .venv/bin/python .venv/bin/pip .venv/bin/python3 .venv/bin/pip3
+        ln -sf "$(which python3)" .venv/bin/python
+        ln -sf "$(which python3)" .venv/bin/python3
+        ln -sf "$(which pip3)" .venv/bin/pip
+        ln -sf "$(which pip3)" .venv/bin/pip3
+        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
     - name: Install test dependencies
       shell: bash
       run: |
@@ -56,11 +72,3 @@ runs:
           DEPS="$DEPS pre-commit"
         fi
         .venv/bin/pip install $DEPS
-
-    - name: Setup .venv symlink for make targets
-      shell: bash
-      run: |
-        mkdir -p .venv/bin
-        ln -sf "$(which python3)" .venv/bin/python
-        ln -sf "$(which pip3)" .venv/bin/pip
-        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
