@@ -298,8 +298,7 @@ repair:
     repair_safe: true
     repair_idempotent: true
     repair_class: L1
-- make_target: null
-  mechanism: null
+- mechanism: null
   delegates_to: null
   signature: null
   operation_ru: Неисправимые gate (L3)
