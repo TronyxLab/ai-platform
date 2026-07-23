@@ -90,69 +90,6 @@ _INVOKE_MODULE_INTERFACE_SH = str(Path(__file__).resolve().parent.parent.parent 
 _PATHS_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "paths.sh")
 
 
-# region FUNC__load_secrets_into_env
-## @purpose  Load variables from secrets.env file into os.environ so they are available
-##           to docker compose for ${VAR:?error} interpolation in environment: sections.
-##           This is a defense-in-depth fallback — --env-file in compose_args should work,
-##           but Docker Compose version-specific behavior can cause variables from
-##           --env-file to not be available for interpolation in some configurations.
-## @io       ⇥ env_file: str | None (path to secrets.env)
-##           ⎋ int: number of variables loaded into os.environ
-## @complexity 1 — linear file read with simple parsing
-## @invariants
-##   - Only sets variables NOT already in os.environ (no overwrite of existing values)
-##   - Strips surrounding quotes (single and double)
-##   - Skips empty lines, comments (#)
-##   - Returns count of newly loaded variables
-## ⚠️ TRAP[BUG] · 2026-07-23 · P1 · backup-cron not starting after force-recreate
-## · Symptom: POSTGRES_PASSWORD from /run/platform/secrets.env not available to compose
-## · Root: Docker Compose --env-file variable interpolation is version-dependent;
-##   some versions don't properly expose --env-file vars to ${VAR:?error} in environment:
-##   sections of compose files. Manual `source secrets.env` works because it exports
-##   vars to the shell process environment, which Compose reliably inherits.
-## · Fix: Load secrets.env into os.environ BEFORE every docker compose invocation
-##   (build, up, pull, config) — dual-path: --env-file + os.environ export.
-## · Prevention: this is a permanent defense layer — Compose behavior differs across
-##   versions (v2.24+ changed env resolution order), os.environ is the reliable path.
-def _load_secrets_into_env(env_file: str | None) -> int:
-    """Load variables from secrets.env into os.environ. Returns count of loaded vars."""
-    if not env_file or not os.path.isfile(env_file):
-        logger.debug("[IMP:5][_load_secrets_into_env][skip] No secrets file: %s", env_file or "None")
-        return 0
-
-    loaded = 0
-    try:
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                if not key:
-                    continue
-                # Strip surrounding quotes
-                value = value.strip()
-                if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
-                    value = value[1:-1]
-                # Only set if not already in environment (don't override explicit env vars)
-                if key not in os.environ:
-                    os.environ[key] = value
-                    loaded += 1
-    except OSError as exc:
-        logger.warning("[IMP:5][_load_secrets_into_env][error] Failed to read %s: %s", env_file, exc)
-        return 0
-
-    if loaded > 0:
-        logger.info("[IMP:8][_load_secrets_into_env][loaded] Loaded %d vars from %s into environment", loaded, env_file)
-    return loaded
-
-
-# endregion FUNC__load_secrets_into_env
-
-
 # region FUNC__check_image_exists
 ## @purpose  Check if a Docker image exists in registry via docker manifest inspect.
 ##           Returns True if image is found, False otherwise.
@@ -532,12 +469,6 @@ def deploy_docker_module(
         module_name=module_name,
     )
 
-    # ── Load secrets.env into os.environ (defense-in-depth for compose interpolation) ──
-    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · backup-cron not starting — POSTGRES_PASSWORD missing
-    # · Root: Docker Compose --env-file variable interpolation is version-dependent;
-    #   os.environ export is the reliable dual-path mechanism.
-    _load_secrets_into_env(secrets_env_file or "/run/platform/secrets.env")
-
     # ── Hermes-agent: legacy container cleanup ──
     if module_name == "hermes-agent":
         _cleanup_legacy_container("hermes-base-agent")
@@ -787,8 +718,6 @@ def _pull_module_images(
         overlay_dir=overlay_dir,
         module_name=mod_name,
     )
-    # ── Load secrets.env into os.environ (defense-in-depth for compose interpolation) ──
-    _load_secrets_into_env(secrets_env_file or "/run/platform/secrets.env")
     pull_cmd = ["docker", "compose", *pull_args, "pull"]
     logger.info("[IMP:7][_pull_module_images][pull] Pulling images for %s", mod_name)
     try:

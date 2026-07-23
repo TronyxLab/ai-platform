@@ -538,20 +538,22 @@ class TestHostCollector:
         caplog.set_level(0)
 
         # Create fake /proc files
-        uptime_file = tmp_path / "uptime"
+        proc_dir = tmp_path / "proc"
+        proc_dir.mkdir()
+
+        uptime_file = proc_dir / "uptime"
         uptime_file.write_text("12345.67 67890.12\n")
 
-        loadavg_file = tmp_path / "loadavg"
+        loadavg_file = proc_dir / "loadavg"
         loadavg_file.write_text("0.50 0.30 0.10 1/234 56789\n")
 
         # Monkeypatch open() to serve fake files when /proc/uptime or /proc/loadavg is read
-        original_open = __builtins__["open"] if isinstance(__builtins__, dict) else __builtins__.open
+        original_open = open
 
         def _mock_open(path, *args, **kwargs):
-            path_str = str(path)
-            if path_str.endswith("/proc/uptime") or path_str == "/proc/uptime":
+            if path == "/proc/uptime":
                 return original_open(str(uptime_file), *args, **kwargs)
-            if path_str.endswith("/proc/loadavg") or path_str == "/proc/loadavg":
+            if path == "/proc/loadavg":
                 return original_open(str(loadavg_file), *args, **kwargs)
             return original_open(path, *args, **kwargs)
 
@@ -612,115 +614,6 @@ class TestHostCollector:
         assert result["load_1m"] is None
         assert result["load_5m"] is None
         assert result["load_15m"] is None
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TESTS: backup_collector
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TestBackupCollector:
-    """Tests for backup_collector.py."""
-
-    # 🧪 TRAP[TEST] · TASK-14 · Regression: backup status OK
-    # · Scenario: Log file present with recent mtime → status "ok"
-    # · Remove if: get_backup_status removed from backup_collector
-    def test_backup_collector_ok(self, tmp_path, caplog, monkeypatch):
-        """get_backup_status returns ok when log file is fresh."""
-        caplog.set_level(0)
-
-        # Create a recent log file
-        log_dir = tmp_path / "backup"
-        log_dir.mkdir(parents=True)
-        log_file = log_dir / "postgres.log"
-        log_file.write_text("Backup completed successfully\n")
-        # Set mtime to now (small offset to ensure it's recent)
-        now = time.time()
-        os.utime(str(log_file), (now - 10, now - 10))
-
-        monkeypatch.setenv("BACKUP_POSTGRES_LOG", str(log_file))
-        # Point app-data to a non-existent path so it's skipped
-        monkeypatch.setenv("BACKUP_APP_DATA_LOG", str(tmp_path / "backup" / "app-data-nonexistent.log"))
-
-        from core.internal.healthcheck.metrics.backup_collector import get_backup_status
-
-        result = get_backup_status()
-
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
-
-        assert result["status"] == "ok", f"Expected 'ok', got '{result['status']}'"
-        assert result["last_postgres_at"] is not None, "Expected postgres timestamp"
-        assert "T" in result["last_postgres_at"], f"Expected ISO timestamp, got {result['last_postgres_at']}"
-
-    # 🧪 TRAP[TEST] · TASK-14 · Regression: backup status STALE
-    # · Scenario: Log file older than 25h → status "stale"
-    # · Remove if: get_backup_status removed
-    def test_backup_collector_stale(self, tmp_path, caplog, monkeypatch):
-        """get_backup_status returns stale when log file is older than 25h."""
-        caplog.set_level(0)
-
-        log_dir = tmp_path / "backup-stale"
-        log_dir.mkdir(parents=True)
-        log_file = log_dir / "postgres.log"
-        log_file.write_text("Old backup log\n")
-        # Set mtime to 26 hours ago
-        old_time = time.time() - 26 * 3600
-        os.utime(str(log_file), (old_time, old_time))
-
-        monkeypatch.setenv("BACKUP_POSTGRES_LOG", str(log_file))
-        monkeypatch.setenv("BACKUP_APP_DATA_LOG", str(tmp_path / "backup-stale" / "app-data-nonexistent.log"))
-
-        from core.internal.healthcheck.metrics.backup_collector import get_backup_status
-
-        result = get_backup_status()
-
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
-
-        assert result["status"] == "stale", f"Expected 'stale', got '{result['status']}'"
-        assert result["last_postgres_at"] is not None
-
-    # 🧪 TRAP[TEST] · TASK-14 · Regression: backup status UNKNOWN
-    # · Scenario: No log files at all → status "unknown"
-    # · Remove if: get_backup_status removed
-    def test_backup_collector_unknown(self, caplog, monkeypatch):
-        """get_backup_status returns unknown when no log files exist."""
-        caplog.set_level(0)
-
-        monkeypatch.setenv("BACKUP_POSTGRES_LOG", "/nonexistent/postgres.log")
-        monkeypatch.setenv("BACKUP_APP_DATA_LOG", "/nonexistent/app-data.log")
-
-        from core.internal.healthcheck.metrics.backup_collector import get_backup_status
-
-        result = get_backup_status()
-
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for record in caplog.records:
-            for attr in ["message", "msg"]:
-                msg = getattr(record, attr, "")
-                if "[IMP:" in str(msg):
-                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                    if imp_level >= 7:
-                        print(msg)
-        print("--- END LDD TRAJECTORY ---")
-
-        assert result["status"] == "unknown", f"Expected 'unknown', got '{result['status']}'"
-        assert result["last_postgres_at"] is None
 
 
 # ═══════════════════════════════════════════════════════════════════

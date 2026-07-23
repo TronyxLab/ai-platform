@@ -98,15 +98,6 @@ while [[ $# -gt 0 ]]; do
         --help|-h) usage "$USAGE_SCRIPT" "${USAGE_DESC:-}" "${USAGE_OPTIONS[@]:-}" ;;
         --resolve) RESOLVE_MODE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
-        --age-secret-key-file)
-            # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · --age-secret-key-file leaking to VPS via PASSTHROUGH_ARGS
-            # · Symptom: flag fell into *) catch-all → PASSTHROUGH_ARGS → SSH → node-lifecycle.sh on VPS
-            #   tried to open local file from dev machine → exit 1
-            # · Root: bootstrap.sh arg parser had no case for --age-secret-key-file
-            # · Fix: export AGE_SECRET_KEY_FILE for detect_age_key() (called later), do NOT pass through
-            export AGE_SECRET_KEY_FILE="$2"
-            echo "[IMP:8][bootstrap][args] AGE_SECRET_KEY_FILE set from CLI: $2" >&2
-            shift 2 ;;
         --auto-reconcile) PASSTHROUGH_ARGS+=("--auto-reconcile"); shift ;;
         *) PASSTHROUGH_ARGS+=("$1"); shift ;;
     esac

@@ -260,10 +260,7 @@ class TestStatusPageHealth:
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        # Mock platform service checks (D067 W3) — they fail in test env without Docker DNS
-        with mock.patch.object(app, "_curl_platform_service") as mock_platform:
-            mock_platform.return_value = {"target": "grafana", "type": "platform_service", "status": "PASS", "error": None}
-            data = app.get_all_checks()
+        data = app.get_all_checks()
 
         # ── LDD TRAJECTORY ──
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -676,11 +673,7 @@ class TestStatusPageNewFeatures:
         )
 
         app = _setup_app_env(str(node_yaml), str(metrics_file))
-
-        # Mock platform service checks (D067 W3)
-        with mock.patch.object(app, "_curl_platform_service") as mock_platform:
-            mock_platform.return_value = {"target": "grafana", "type": "platform_service", "status": "PASS", "error": None}
-            data = app.get_all_checks()
+        data = app.get_all_checks()
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
