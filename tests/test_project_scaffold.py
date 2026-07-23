@@ -25,6 +25,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -184,10 +185,17 @@ def _run_converge(
         " ".join(str(a) for a in args),
     )
 
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · converge.sh calls 'python3' which may not be in
+    # ·   PATH of subprocess on some CI runners. Pass CONVERGE_PYTHON=sys.executable
+    # ·   to ensure the correct Python interpreter is used for reconciler.py.
+    env = os.environ.copy()
+    env.setdefault("CONVERGE_PYTHON", sys.executable)
+
     result = subprocess.run(
         args,
         capture_output=True,
         text=True,
+        env=env,
     )
 
     logger.info(

@@ -105,7 +105,7 @@ main() {
     local script_dir recon_rc=0
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     echo "[IMP:9][converge][main] Dispatching to reconciler.py..." >&2
-    local -a recon_cmd=("python3" "${script_dir}/converge/reconciler.py" "--node-yaml" "${NODE_YAML_PATH}" "--node-name" "${CONVERGE_NODE}" "--core-dir" "${CORE_DIR}")
+    local -a recon_cmd=("${CONVERGE_PYTHON:-python3}" "${script_dir}/converge/reconciler.py" "--node-yaml" "${NODE_YAML_PATH}" "--node-name" "${CONVERGE_NODE}" "--core-dir" "${CORE_DIR}")
     [[ "${CONVERGE_DRY_RUN}" == "true" ]] && recon_cmd+=("--dry-run")
     [[ "${CONVERGE_REPORT_ONLY}" == "true" ]] && recon_cmd+=("--report-only")
     [[ -n "${CONVERGE_UNITS}" ]] && recon_cmd+=("--units" "${CONVERGE_UNITS}")
