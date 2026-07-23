@@ -1177,6 +1177,9 @@ forbidden_verbs:
 - bootstrap-core
 - hermes-deploy-vps
 allowed_verbs:
+- __gate_original
+- __pre-commit-run_original
+- __test_original
 - _get_all_profiles
 - adopt-project
 - audit

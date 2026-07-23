@@ -24,10 +24,12 @@
 ##   Delegates to core/entrypoints/bootstrap.sh → internal bootstrap orchestrator
 bootstrap-node:
 	@echo "[IMP:9][make][bootstrap-node] Bootstrapping node NODE=$(NODE)..."
-	@PLATFORM_ROOT="$(_platform_root)" $(_platform_root)/core/entrypoints/bootstrap.sh \
+	@PLATFORM_ROOT="$(_platform_root)" \
+	$(if $(AGE_SECRET_KEY_FILE),export _RESOLVED_KEY_FILE="$$(echo $(AGE_SECRET_KEY_FILE))";) \
+	$(_platform_root)/core/entrypoints/bootstrap.sh \
 		$(if $(NODE),--node '$(NODE)') \
 		--resolve \
-		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file '$(AGE_SECRET_KEY_FILE)') \
+		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file "$${_RESOLVED_KEY_FILE}") \
 		$(if $(filter 1,$(AUTO_RECONCILE)),--auto-reconcile) \
 		$(if $(filter 1,$(DRY_RUN)),--dry-run)
 	@echo "[IMP:9][make][bootstrap-node] Bootstrap complete"
