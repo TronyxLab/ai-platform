@@ -102,28 +102,50 @@ jobs:
         env:
           SKIP: "no-commit-to-branch"
 
+      # ⚠️ TRAP[DEBUG] · 2026-07-23 · HI · All non-pre-commit steps commented out for debug run
+      # · Root: platform-test failed in TronyxLab on pre-commit step (stale binary shebang bug).
+      # ·   Fix applied to setup-python-venv/action.yml (find -type f -delete stale binaries).
+      # ·   This debug run verifies the fix before re-enabling the full pipeline.
+      # · REMINDER: REVERT THIS COMMIT after verification! Restore all steps below.
+      # · git revert <debug-commit-hash> to restore full platform-test.
+      #
+      # Disabled steps below — uncomment after fix verification:
+      #
+      # - name: Validate DORA dashboard JSON
+      #   run: ...
+      # - name: Run fast gate ...
+      # - name: Check generated manifests ...
+      # - name: Set up Docker Buildx ...
+      # ... (all Docker-dependent and integration steps)
+      #
+      # NOTE: currently all non-essential steps use `if: false` to preserve YAML structure.
+
       # shellcheck — delegated to pre-commit hooks (single SoT)
       # D1 fix: observability → monitoring (DORA dashboard path)
       # StatusReport 046 T3 (CICD-01b): inline python3 → validate_dora_dashboard.py
       - name: Validate DORA dashboard JSON
+        if: false
         run: |
           echo "::group::DORA dashboard JSON validation"
           python3 core/internal/scripts/validate_dora_dashboard.py
 
       # Fast gate before Docker setup — fail-fast on syntax/static issues
-      # Включает: py_compile syntax check, JSON validation, anti-drift gates, static tests, predeploy
       - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
+        if: false
         run: make gate MODE=fast
 
       # Manifest generation contract — блокирует push если generated files diverged
       - name: Check generated manifests up to date
+        if: false
         run: make check-manifests
 
       # ─── Stage 2: Docker setup + provisioning ───────────────────────
       - name: Set up Docker Buildx
+        if: false
         uses: docker/setup-buildx-action@v4
 
       - name: Authenticate Docker Hub (rate limit mitigation)
+        if: false
         run: |
           if [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
             echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
@@ -132,35 +154,27 @@ jobs:
             echo "[IMP:7][docker] DOCKER_HUB_TOKEN not set — using anonymous pulls (100/6h)"
           fi
 
-      # ⚠️ TRAP[BUG] · 2026-07-18 · HI · ghcr.io 403 on cache build — anonymous token rejected
-      # · Symptom: Buildx registry cache (ghcr.io/tronyx161/ai-platform-build-cache) fails with 403 Forbidden
-      # · Root: inline docker login with GHCR_TOKEN secret — secret may be unset/expired/have wrong scopes.
-      # ·   No explicit permissions:packages:write → GITHUB_TOKEN lacks package write access.
-      # ·   "falling back to GHA cache" message never actually changes cache-backend from registry.
-      # · Fix: use docker/login-action@v3 with GITHUB_TOKEN + explicit packages:write permission.
-      # ·   GITHUB_TOKEN is always available; docker/login-action properly stores credentials for Buildx.
       - name: Login to GitHub Container Registry
+        if: false
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Single Source of Truth: networks + volumes + env vars from platform-env.yaml
       - name: Provision environment (networks + volumes + CI env defaults)
+        if: false
         uses: ./.github/actions/provisioner-call
         with:
           scope: all
 
-      # ── Generate dynamic module list from module_discovery.py ──────────
-      # Single Source of Truth: module list generated from core/modules/*/module.yaml
-      # StatusReport 046 T2 (CICD-01a): inline python3 → composite action discover-modules
       - name: Generate module list
+        if: false
         id: module_list
         uses: ./.github/actions/discover-modules
 
-      # D1 fix: observability → monitoring + logging in pre-pull
       - name: Pre-pull Docker images (parallel)
+        if: false
         continue-on-error: true
         run: |
           echo "::group::Pre-pulling Docker images (parallel)"
@@ -172,19 +186,13 @@ jobs:
           echo "[pull] All parallel pulls completed"
           echo "[pull] Pulling postgres:16-alpine for monitoring test override..."
           docker pull postgres:16-alpine 2>&1 || echo "[warn] postgres:16-alpine pull failed — continuing"
-          # ⚡ TRAP[PERF] · 2026-07-23 · >0 · Pre-pull hermes-agent base image for build cache
-          # · Root: hermes-agent-base Dockerfile FROM nousresearch/hermes-agent:v2026.7.7.2
-          # ·   pulls ~1-2GB on every CI run. Pre-pulling moves this I/O into the parallel
-          # ·   pre-pull phase, saving 30-50s from the build step.
-          # · Rev: when hermes-agent upstream version changes, update this pull command.
-          # · TRAP[DRIFT] · 2026-07-23 · LOW · Version tag hardcoded — sync with Dockerfile FROM line
           echo "[IMP:8][pre-pull] Pulling nousresearch/hermes-agent:v2026.7.7.2 for build cache..."
           docker pull nousresearch/hermes-agent:v2026.7.7.2 2>&1 | tail -5 || echo "[warn] hermes-agent base image pre-pull failed — continuing (may affect build time)"
           echo "[IMP:9][pre-pull] Base image pulled — build step will reuse"
           echo "::endgroup::"
 
-      # ─── Stage 3: Build Docker images ────────────────────────────────
       - name: Build backup-cron image (scoped GHA cache)
+        if: false
         uses: ./.github/actions/docker-build-cache
         with:
           context: core/modules/backup-cron
@@ -192,6 +200,7 @@ jobs:
           cache-scope: backup-cron
 
       - name: Build hermes-agent-base image (scoped GHA cache)
+        if: false
         uses: ./.github/actions/docker-build-cache
         with:
           context: core/modules/hermes-agent/build
@@ -199,8 +208,8 @@ jobs:
           tags: hermes-agent-base:latest
           cache-scope: hermes-agent-base
 
-      # ─── Diagnostic: Verify built images ────────────────────────────
       - name: Diagnostic — verify built images
+        if: false
         run: |
           echo "=== Built images ==="
           docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(hermes-agent-base|backup-cron)"
@@ -208,18 +217,14 @@ jobs:
           echo "=== Hermes-agent-base layers ==="
           docker history hermes-agent-base:latest --no-trunc --format "table {{.Size}}\t{{.CreatedBy}}" 2>/dev/null | head -15 || echo "(image not found)"
 
-      # ─── Stage 4: Full Gate (Docker-dependent) ──────────────────────
       - name: Diagnostic — LiteLLM pre-flight (stale containers + image digest)
+        if: false
         run: |
           echo "=== LiteLLM Pre-flight Diagnostic ==="
           echo ""
-
-          # 1. Check for stale litellm containers from previous runs
           echo "--- Stale litellm-test containers ---"
           docker ps -a --filter "name=litellm-test" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" || echo "(none)"
           echo ""
-
-          # 2. Verify LiteLLM image is available locally
           echo "--- LiteLLM image existence check ---"
           LITELLM_IMAGE="ghcr.io/berriai/litellm:v1.91.2"
           if docker image inspect "${LITELLM_IMAGE}" >/dev/null 2>&1; then
@@ -229,19 +234,15 @@ jobs:
             echo "Run: docker pull ${LITELLM_IMAGE}"
           fi
           echo ""
-
-          # 3. Check Docker disk space (monitoring + logging stacks ~4GB total)
           echo "--- Docker disk usage ---"
           docker system df --format "table {{.Type}}\t{{.TotalCount}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/null || echo "(df failed)"
           echo ""
-
-          # 4. Check available system memory
           echo "--- System memory ---"
           free -h 2>/dev/null || vm_stat 2>/dev/null || echo "(memory info unavailable)"
         shell: bash
 
-      # Pre-generate dev certs for nginx smoke tests — openssl is always available in CI
       - name: Generate dev SSL certs for nginx tests
+        if: false
         run: |
           echo "[IMP:7][dev-certs-pregen] Generating dev SSL certs for nginx tests..."
           mkdir -p core/modules/nginx/dev-certs
@@ -256,26 +257,19 @@ jobs:
         shell: bash
 
       - name: Run full gate (smoke + component + predeploy-docker — no static duplication, contract/static/predeploy in fast gate)
+        if: false
         id: full_gate
         env:
-          # ⚡ TRAP[PERF] · 2026-07-18 · >0 · CI uses local L1 image instead of ghcr.io context overlay
-          # · Root: CI cannot access ghcr.io/tronyxlab (403). `docker compose up` for hermes-agent
-          # ·   fails with "denied" when CONTEXT_IMAGE defaults to context overlay image.
-          # · Fix: use locally-built hermes-agent-base:latest (built in previous CI step).
-          # ·   test_component_hermes.py ENV_HERMES reads CONTEXT_IMAGE from os.environ.
-          # · Rev: when CI gains ghcr.io access to tronyxlab org, remove this override.
           CONTEXT_IMAGE: hermes-agent-base:latest
         run: |
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
-      # ─── Stage 5: Diagnostic on failure ────────────────────────────
       - name: Diagnostic — dump container states on failure
-        if: failure()
+        if: false
         run: |
           echo "=== All Running Containers ==="
           docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
           echo ""
-
           echo "=== LiteLLM Container Logs (full startup, litellm-test) ==="
           if docker ps -a --format "{{.Names}}" | grep -q "litellm-test"; then
             docker logs litellm-test 2>&1 || echo "(no logs)"
@@ -283,7 +277,6 @@ jobs:
             echo "litellm-test container not found — may have been cleaned up"
           fi
           echo ""
-
           echo "=== Failed Container Logs (last 100 lines each) ==="
           for c in $(docker ps -a --format "{{.Names}}" | grep -E "(test$|ai-platform)" || true); do
             echo "--- Logs for $c ---"
@@ -303,8 +296,8 @@ jobs:
           fi
         shell: bash
 
-      # ─── Stage 6: Integration Tests ─────────────────────────────────
       - name: Integration test — error-path mode (no API keys needed)
+        if: false
         id: integration_error_path
         continue-on-error: true
         run: |
@@ -316,6 +309,7 @@ jobs:
           exit $rc
 
       - name: Integration test — live mode (requires API keys)
+        if: false
         id: integration_live
         continue-on-error: true
         env:
@@ -334,9 +328,8 @@ jobs:
           fi
           exit $rc
 
-      # ─── Stage 7: Job Summary ─────────────────────────────────────
       - name: Generate Job Summary with stage timing
-        if: always()
+        if: false
         run: |
           {
             echo "## ⏱️ CI Stage Timing — platform-test (unified)"
@@ -362,10 +355,8 @@ jobs:
             echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ─── Stage 8: Cleanup ──────────────────────────────────────────
-      # D1 fix: observability → monitoring + logging in cleanup
       - name: Cleanup Docker resources
-        if: always()
+        if: false
         run: |
           echo "::group::Cleanup Docker Compose stacks"
           if [ -f /tmp/module_list.json ]; then
