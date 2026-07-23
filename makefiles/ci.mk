@@ -9,7 +9,7 @@
 ## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
 # endregion MODULE_CONTRACT
 
-.PHONY: test gate __test_original __gate_original validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock
+.PHONY: test gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
