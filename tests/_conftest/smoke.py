@@ -106,7 +106,6 @@ _STATIC_SMOKE_ENV: dict[str, str] = {
     "NGINX_CONF_DIR": "./dev-config",
     "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
     "NODE_NAME": "test-node",
-    "NODE_CONFIGS_DIR": "/tmp/test-node-configs",
     "LITELLM_TEST_PORT": "14000",
     "HERMES_DASHBOARD_TEST_PORT": "19119",
     "HERMES_DESKTOP_TEST_PORT": "18642",
@@ -740,6 +739,34 @@ def platform_services(
             timeout=10,
         )
     _logger.info("[IMP:8][conftest][platform_services] Safety net: stale containers removed")
+
+    # ── Pre-build images for modules with build: directive ──────────────────
+    # ⚠️ TRAP[BUG] · 2026-07-23 · MED · status-page cold-cache build timeouts smoke test
+    # · status-page uses build: (not pre-built image) — docker compose up -d --wait
+    # · may timeout on first gate run when Docker layer cache is cold (image pull +
+    # · pip install + app copy). Pre-build ensures image exists before --wait timer starts.
+    # · Rev: if more build-based modules added, add them here or switch to auto-detection.
+    _logger.info("[IMP:8][conftest][platform_services] Pre-building images for build-based modules")
+    _PRE_BUILD_MODULES = ["status-page"]  # modules with build: that are started in smoke tests
+    for _pb_module in _PRE_BUILD_MODULES:
+        _pb_compose = all_compose_files.get(_pb_module)
+        if _pb_compose is None:
+            continue
+        _pb_build_args = ["docker", "compose", "-f", _pb_compose]
+        _pb_test_override = os.path.join(os.path.dirname(_pb_compose), "docker-compose.test.yml")
+        if os.path.exists(_pb_test_override):
+            _pb_build_args.extend(["-f", _pb_test_override])
+        _pb_build_args.extend(["-p", "ai-platform-test", "build", "--no-cache"])
+        _pb_result = _run_docker_smoke(_pb_build_args, timeout=180, env_override={"COMPOSE_PROFILES": _pb_module})
+        if _pb_result.returncode != 0:
+            _logger.warning(
+                "[IMP:8][conftest][platform_services] Pre-build failed for '%s' (returncode=%d) — "
+                "compose up will attempt build anyway",
+                _pb_module,
+                _pb_result.returncode,
+            )
+        else:
+            _logger.info("[IMP:8][conftest][platform_services] Pre-build complete for '%s'", _pb_module)
 
     # ── Start compose files in wave-parallel order ──────────────────────────
     started: list[str] = []
