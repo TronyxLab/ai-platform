@@ -141,16 +141,26 @@ checkpoint_step() {
         fi
     fi
 
-    "$step_func" "$@"
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · checkpoint created despite step failure
+    # · Symptom: step_func exited non-zero but .done marker was unconditionally
+    #   created → next --resume skipped the failing step forever.
+    # · Fix: check exit code; only create checkpoint on success (exit 0).
+    # · On failure: log error, return the exit code, do NOT create checkpoint.
+    #   Next bootstrap --resume will re-run the step.
+    if "$step_func" "$@"; then
+        mkdir -p "$CHECKPOINT_DIR"
+        touch "${CHECKPOINT_DIR}/.bootstrap-step-${step_name}.done"
+        echo "[IMP:8][bootstrap][checkpoint] DONE: Checkpoint '${step_name}' saved" >&2
 
-    mkdir -p "$CHECKPOINT_DIR"
-    touch "${CHECKPOINT_DIR}/.bootstrap-step-${step_name}.done"
-    echo "[IMP:8][bootstrap][checkpoint] DONE: Checkpoint '${step_name}' saved" >&2
-
-    # ── Save content hash after step completion (T20) ────────────
-    if [[ -n "${CHECKPOINT_STEP_HASH:-}" ]]; then
-        echo "$CHECKPOINT_STEP_HASH" > "${CHECKPOINT_DIR}/.bootstrap-step-${step_name}.hash"
-        echo "[IMP:8][bootstrap][checkpoint] HASH: Content hash saved for '${step_name}'" >&2
+        # ── Save content hash after step completion (T20) ────────────
+        if [[ -n "${CHECKPOINT_STEP_HASH:-}" ]]; then
+            echo "$CHECKPOINT_STEP_HASH" > "${CHECKPOINT_DIR}/.bootstrap-step-${step_name}.hash"
+            echo "[IMP:8][bootstrap][checkpoint] HASH: Content hash saved for '${step_name}'" >&2
+        fi
+    else
+        local _rc=$?
+        echo "[IMP:9][bootstrap][checkpoint] FAIL: Step '${step_name}' exited with code ${_rc} — checkpoint NOT saved (will retry on next --resume)" >&2
+        return $_rc
     fi
 }
 # endregion FUNC_checkpoint_step

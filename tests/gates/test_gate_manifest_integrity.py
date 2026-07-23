@@ -873,7 +873,7 @@ def test_entrypoint_names_match_manifest(caplog) -> None:
     for group_val in manifest.values():
         if isinstance(group_val, list):
             for entry in group_val:
-                if isinstance(entry, dict) and "delegates_to" in entry:
+                if isinstance(entry, dict) and "delegates_to" in entry and entry["delegates_to"] is not None:
                     delegates_to_values.add(entry["delegates_to"])
 
     logger.info(
@@ -886,7 +886,7 @@ def test_entrypoint_names_match_manifest(caplog) -> None:
     errors: list[str] = []
     for script_path in scripts:
         script_name = os.path.basename(script_path)
-        referenced = any(script_name in dt for dt in delegates_to_values)
+        referenced = any(script_name in dt for dt in delegates_to_values if dt is not None)
         if not referenced:
             msg = (
                 f"UNREGISTERED_ENTRYPOINT: '{script_name}' exists at core/entrypoints/"

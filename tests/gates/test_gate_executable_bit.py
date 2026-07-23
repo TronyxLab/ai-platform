@@ -21,6 +21,8 @@ import logging
 import subprocess
 from pathlib import Path
 
+import pytest  # noqa: F401
+
 # 🧪 TRAP[TEST] · 2026-07-18 · Regression: M1 executable-bit drift
 # Scenario: git updates preserve 100755 for all non-lib .sh files
 # Last fail: 2026-07-18 (33 files had 100644 in index pre-fix)
@@ -61,6 +63,7 @@ def _has_shebang(path: Path) -> bool:
         return False
 
 
+@pytest.mark.gate
 def test_executable_bit_outside_lib(caplog):
     """Gate: all *.sh outside core/lib/ must be 100755.
 
@@ -104,6 +107,7 @@ def test_executable_bit_outside_lib(caplog):
     assert imp9_found, "[IMP:9] LDD log not found — check logging setup"
 
 
+@pytest.mark.gate
 def test_negative_detects_644_outside_lib(caplog):
     """Negative test (R5): simulate a 100644 file outside core/lib/ → gate must fail.
 

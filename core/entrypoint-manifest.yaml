@@ -259,6 +259,14 @@ repair:
   description: 'Sets +x on staged/tracked .sh files outside core/lib/. Two-pass: staged
     via git add --chmod=+x, tracked via git update-index --chmod=+x (xargs -0). Safe,
     idempotent, DRY_RUN=1.'
+  repairs_gates:
+  - gate_id: test_executable_bit_outside_lib
+    repair_id: executable-bit
+    repair_command: make fix-gate
+    repair_description: Sets executable bit (+x) on all .sh files outside core/lib/
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
 - make_target: fix-ruff
   mechanism: ruff
   delegates_to: ruff check --fix + ruff format
@@ -266,6 +274,14 @@ repair:
   operation_ru: Форматирование Python файлов через ruff
   description: 'Ruff check --fix + format for changed Python files. SCOPE=diff (default):
     staged + unstaged. Safe, idempotent, DRY_RUN=1.'
+  repairs_gates:
+  - gate_id: ruff-format
+    repair_id: ruff-format
+    repair_command: make fix-ruff
+    repair_description: Formats changed Python files with ruff (check --fix + format)
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
 - make_target: fix-gate
   mechanism: composite
   delegates_to: fix-executable-bit + fix-ruff + generate-manifests
@@ -273,6 +289,30 @@ repair:
   operation_ru: Композитное исправление gate-ошибок
   description: Composite target — runs fix-executable-bit + fix-ruff + generate-manifests.
     ONLY gate-blocking L1 errors. Not expandable without review.
+  repairs_gates:
+  - gate_id: check-manifests
+    repair_id: manifest-sync
+    repair_command: make fix-gate
+    repair_description: Regenerates all derived manifests (secrets-manifest.yaml,
+      platform-env.yaml, etc.)
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
+- make_target: null
+  mechanism: null
+  delegates_to: null
+  signature: null
+  operation_ru: Неисправимые gate (L3)
+  description: Non-repairable L3 gates — require manual intervention
+  repairs_gates:
+  - gate_id: test_single_gitleaks_version
+    repairable: false
+    repair_class: L3
+    repair_reason: Security gate — requires manual audit
+  - gate_id: test_gitleaks_composite_action_used
+    repairable: false
+    repair_class: L3
+    repair_reason: Security gate — requires manual audit
 lifecycle:
 - make_target: compose-safe-up
   mechanism: compose-wrapper+preflight
@@ -579,15 +619,34 @@ gates:
 - id: test_no_hardcoded_target_sets_in_gates
   test_file: test_gate_exception_audit.py
   description: 'Auto-discovered gate: test_no_hardcoded_target_sets_in_gates'
+- id: test_executable_bit_outside_lib
+  test_file: test_gate_executable_bit.py
+  description: 'Auto-discovered gate: test_executable_bit_outside_lib'
+  repair_id: executable-bit
+  repair_command: make fix-gate
+  repair_description: Sets executable bit (+x) on all .sh files outside core/lib/
+  repair_safe: true
+  repair_idempotent: true
+  repair_class: L1
+  repairable: true
+- id: test_negative_detects_644_outside_lib
+  test_file: test_gate_executable_bit.py
+  description: 'Auto-discovered gate: test_negative_detects_644_outside_lib'
 - id: test_all_test_fixtures_match_schemas
   test_file: test_gate_fixture_schema.py
   description: 'Auto-discovered gate: test_all_test_fixtures_match_schemas'
 - id: test_gitleaks_composite_action_used
   test_file: test_gate_gitleaks_version.py
   description: 'Auto-discovered gate: test_gitleaks_composite_action_used'
+  repairable: false
+  repair_class: L3
+  repair_reason: Security gate — requires manual audit
 - id: test_single_gitleaks_version
   test_file: test_gate_gitleaks_version.py
   description: 'Auto-discovered gate: test_single_gitleaks_version'
+  repairable: false
+  repair_class: L3
+  repair_reason: Security gate — requires manual audit
 - id: test_all_py_files_have_grep_summary
   test_file: test_gate_grep_summary.py
   description: 'Auto-discovered gate: test_all_py_files_have_grep_summary'

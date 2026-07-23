@@ -265,22 +265,74 @@ def load_existing_manifest(path: str) -> dict:
     return data
 
 
+def _collect_repair_mappings(existing: dict) -> dict[str, dict]:
+    """Collect repair field mappings from repair: section for injection into gates[].
+
+    ## @purpose  Read repair: section, extract repairs_gates mappings keyed by gate_id.
+    ##           Supports both repairable (L1/L2) and non-repairable (L3) gates.
+    ## @io       ⇥ existing: dict — existing manifest content
+    ##           → ⎋ dict[str, dict]: gate_id → repair fields (including repairable flag)
+    ## @complexity O(R * G) where R=repair entries, G=gates per entry
+    ## @invariants
+    ##   - gate_id is the lookup key matching gates[] entries
+    ##   - repair_id is injected as a stable API identifier
+    ##   - Non-repairable gates get repairable: false + repair_reason
+    ## @see       DevPlan 060 — Repair Contract Infrastructure
+    """
+    repair_section = existing.get("repair", [])
+    if not repair_section:
+        return {}
+
+    mappings: dict[str, dict] = {}
+    for repair_entry in repair_section:
+        for gate_repair in repair_entry.get("repairs_gates", []):
+            gate_id = gate_repair.get("gate_id")
+            if not gate_id:
+                continue
+
+            # Build repair fields dict (exclude gate_id — it's the lookup key, not a field)
+            fields: dict[str, object] = {}
+            for k, v in gate_repair.items():
+                if k == "gate_id":
+                    continue
+                fields[k] = v
+
+            # If repairable not explicitly set, default to true (has repair_command)
+            if "repairable" not in fields:
+                fields["repairable"] = True
+
+            mappings[gate_id] = fields
+
+    if mappings:
+        print(
+            f"[IMP:8][merge] Collected {len(mappings)} repair mappings from repair: section",
+            file=sys.stderr,
+        )
+    return mappings
+
+
 def merge(allowed_verbs: list[str], gates: list[dict], existing: dict) -> dict:
     """Merge: replace allowed_verbs and gates[], preserve everything else.
+
+    Also injects repair fields from the repair: section into matching gates[]
+    entries (DevPlan 060 — Repair Contract Infrastructure).
 
     ## @purpose  Merge extracted targets and gate tests into existing manifest.
     ##            Replaces allowed_verbs and gates[] entirely.
     ##            Preserves all other sections verbatim.
+    ##            Injects repair fields from repair: → repairs_gates into gates[].
     ## @io       ⇥ allowed_verbs: list[str] — extracted .PHONY targets
     ##           ⇥ gates: list[dict] — collected gate test entries
     ##           ⇥ existing: dict — existing manifest content
     ##           → ⎋ dict: merged manifest ready for YAML output
-    ## @complexity O(1) — dict merge operation
+    ## @complexity O(G + R*G) where G=gates, R=repair entries
     ## @invariants
     ##   - allowed_verbs in output always from extracted targets, not existing
     ##   - gates[] in output always from collected tests, not existing
+    ##   - Repair fields injected from repair: section into matching gates
     ##   - All other sections from existing preserved unchanged
     ##   - Result dict maintains YAML-compatible structure (list, not None)
+    ## @changes  2026-07-23 | DevPlan 060: repair fields injection from repair: section
     """
     print(
         f"[IMP:7][merge] Merging {len(allowed_verbs)} verbs + {len(gates)} gates into existing manifest",
@@ -293,8 +345,30 @@ def merge(allowed_verbs: list[str], gates: list[dict], existing: dict) -> dict:
     # Replace allowed_verbs entirely
     result["allowed_verbs"] = list(allowed_verbs)
 
-    # Replace gates[] entirely
+    # Collect repair mappings from repair: section BEFORE replacing gates[]
+    repair_mappings = _collect_repair_mappings(existing)
+
+    # Inject repair fields into matching gates
+    injected_count = 0
+    for gate in gates:
+        gate_id = gate.get("id", "")
+        if gate_id in repair_mappings:
+            gate.update(repair_mappings[gate_id])
+            injected_count += 1
+            print(
+                f"[IMP:8][merge] Injected repair fields into gate '{gate_id}' "
+                f"(repairable={gate.get('repairable')}, class={gate.get('repair_class')})",
+                file=sys.stderr,
+            )
+
+    # Replace gates[] entirely (now with injected repair fields)
     result["gates"] = list(gates)
+
+    if injected_count > 0:
+        print(
+            f"[IMP:9][merge] Injected repair fields into {injected_count}/{len(gates)} gates",
+            file=sys.stderr,
+        )
 
     # Ensure forbidden sections are preserved (if present in existing)
     for key in (

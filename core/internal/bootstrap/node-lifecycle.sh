@@ -151,7 +151,10 @@ except Exception:
         CHECKPOINT_STEP_HASH="$(_step_hash "firewall")"             checkpoint_step "firewall" step_7_firewall
         CHECKPOINT_STEP_HASH="$(_step_hash "verify-core")"          checkpoint_step "verify-core" step_8_verify_core
         CHECKPOINT_STEP_HASH="$(_step_hash "verify-node-configs")"  checkpoint_step "verify-node-configs" step_9_verify_node_configs
-        CHECKPOINT_STEP_HASH="$(_step_hash "decrypt-secrets")"      checkpoint_step "decrypt-secrets" step_10_decrypt_secrets
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · verify_func prevents stale checkpoint skip
+        # · _verify_secrets_loaded checks: secrets.env exists + key vars loaded.
+        # · If checkpoint .done exists but secrets NOT loaded → re-execute decrypt.
+        CHECKPOINT_STEP_HASH="$(_step_hash "decrypt-secrets")"      checkpoint_step "decrypt-secrets" step_10_decrypt_secrets _verify_secrets_loaded
         CHECKPOINT_STEP_HASH="$(_step_hash "read-node-yaml")"       checkpoint_step "read-node-yaml" step_11_read_node_yaml
         CHECKPOINT_STEP_HASH="$(_step_hash "ghcr-auth")"            checkpoint_step "ghcr-auth" step_12_ghcr_auth
         CHECKPOINT_STEP_HASH="$(_step_hash "sudoers")"              checkpoint_step "sudoers" step_13_sudoers

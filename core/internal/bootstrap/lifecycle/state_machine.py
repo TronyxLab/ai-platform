@@ -1498,8 +1498,18 @@ def _decrypt_secrets(core_dir: str) -> None:
     """Decrypt AGE-encrypted secrets. Delegates to lib/secrets.sh.
 
     ## @purpose — Decrypt secrets via secrets.sh workflow (sourced from lib).
-    ## @io — ⇥ core_dir → ⎋ None
+    ## @io — ⇥ core_dir → ⎋ None (raises RuntimeError on decryption failure)
     ## @complexity — O(1)
+    ## @invariants
+    ##   - Decryption failure is FATAL — secrets are critical infrastructure, continuing
+    ##     with CI defaults would silently deploy placeholder credentials (S3, DB passwords).
+    ##   - step_10_decrypt_secrets handles "no encrypted file" as graceful skip (exit 0).
+    ##     Missing AGE_SECRET_KEY with encrypted file present → exit 1 → RuntimeError.
+    ## ⚠️ TRAP[BUG] · 2026-07-23 · P0 · non_fatal=True swallowed decrypt failures
+    ## · Symptom: bootstrap continued with ci_default placeholders (test-access-key),
+    ##   checkpoint .done created despite failure → --resume skipped decrypt forever.
+    ## · Fix: removed non_fatal=True — decrypt failure is now FATAL (RuntimeError).
+    ## · Test: unit/contract tests verify decrypt exit 1 → RuntimeError propagation.
     """
     secrets_lib = os.path.join(core_dir, "lib", "secrets.sh")
     if os.path.isfile(secrets_lib):
@@ -1507,7 +1517,6 @@ def _decrypt_secrets(core_dir: str) -> None:
         _subprocess_run(
             ["bash", "-c", f"source {secrets_lib} && step_10_decrypt_secrets"],
             "decrypt_secrets",
-            non_fatal=True,
         )
 
 
