@@ -105,8 +105,13 @@ jobs:
             --exclude '.env' \
             ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
           # Rsync root-level config files + makefiles (required by Makefile include-split W4-E4)
+          # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · makefiles/ trailing slash copies CONTENTS not directory
+          # · Symptom: make: *** No rule to make target 'makefiles/repair.mk'.  Stop.
+          # · Root: rsync ./makefiles/ → copies *.mk to /opt/platform/, but
+          #   Makefile does `include makefiles/bootstrap.mk` (expects subdirectory)
+          # · Fix: rsync ./makefiles (no trailing slash) copies directory itself → /opt/platform/makefiles/
           rsync -avz \
-            ./platform-env.yaml ./Makefile ./makefiles/ \
+            ./platform-env.yaml ./Makefile ./makefiles \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
           echo "[IMP:9][deploy][rsync] Core + config + makefiles rsync complete — SHA $SHA"
 
