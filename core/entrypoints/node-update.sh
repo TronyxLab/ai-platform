@@ -98,8 +98,12 @@ main() {
         }
     fi
     # ── SSH proxy (preferred) ──
-    execute_remote_update "${NODE_NAME}" "${detected_age_key}" "${PASSTHROUGH_ARGS[@]}"
-    local remote_rc=$?
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · set -e kills script on return 2 (local fallback signal)
+    # · Symptom: execute_remote_update returns 2 (local VPS detected) → set -e exits
+    #   before local remote_rc=$? can capture the code → node-lifecycle.sh never runs
+    # · Fix: || remote_rc=$? pattern — captures non-zero exit without triggering set -e
+    local remote_rc=0
+    execute_remote_update "${NODE_NAME}" "${detected_age_key}" "${PASSTHROUGH_ARGS[@]}" || remote_rc=$?
     # ── Local exec fallback (no SSH host) ──
     if [[ $remote_rc -eq 2 ]]; then
         echo "[IMP:9][node-update][entrypoint] No SSH host — executing node-lifecycle.sh --mode update LOCALLY" >&2
