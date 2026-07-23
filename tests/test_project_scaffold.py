@@ -232,6 +232,14 @@ def test_converge_r3_dry_run(
     # Setup
     _create_test_node_yaml()
 
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · test_converge_r3_scaffold creates project dirs
+    # ·   before this test, so reconciler sees STUBs instead of WOULD-create.
+    # ·   Fix: clean up pre-existing project directories so dry-run plans fresh creation.
+    for _proj_name in ("testapp", "demoapp"):
+        _proj_dir = pathlib.Path("/opt/projects") / _proj_name
+        if _proj_dir.exists():
+            shutil.rmtree(_proj_dir, ignore_errors=True)
+
     # Run converge --units R3 --dry-run
     result = _run_converge(dry_run=True)
 
