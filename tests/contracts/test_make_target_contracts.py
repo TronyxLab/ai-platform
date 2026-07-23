@@ -102,7 +102,7 @@ def _parse_manifest_targets(manifest_path: pathlib.Path) -> set[str]:
         if not isinstance(entries, list):
             continue
         for entry in entries:
-            if isinstance(entry, dict) and "make_target" in entry:
+            if isinstance(entry, dict) and "make_target" in entry and entry["make_target"] is not None:
                 targets.add(entry["make_target"])
 
     logger.info("[IMP:7][_parse_manifest_targets] Found %d make_target(s) in manifest", len(targets))
