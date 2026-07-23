@@ -404,86 +404,145 @@ def _start_single_module(
     _down_args = [*compose_base_args, "down", "--timeout", str(compose_down_timeout)]
     _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
 
-    # ── Start up ──────────────────────────────────────────────────
-    if module_name == "minio":
-        # D5: MinIO has a one-shot init container (minio-createbuckets) that
-        # exits 0 after creating buckets. `docker compose up --wait` considers
-        # the exited container a failure (returncode 1) even though minio
-        # itself is healthy. Start without --wait, then poll for minio health.
-        # ⚠️ TRAP[DECISION] · 2026-07-17 · — · MinIO --wait workaround
-        # · Rejected: depends_on condition: service_completed_successfully
-        # · Reason: deferred — that would require compose schema v3.8+ changes
-        # · Rev: if compose schema is ever upgraded, use depends_on instead.
-        compose_up_args = [*compose_base_args, "up", "-d"]
-        result = _run_docker_smoke(
-            compose_up_args,
-            timeout=compose_timeout + compose_extra_timeout,
-            env_override={"COMPOSE_PROFILES": module_name},
-        )
-        if result.returncode == 0:
-            _minio_ok = _wait_for_minio_healthy(
-                compose_base_args=compose_base_args,
-                timeout=compose_timeout,
-                logger=_logger,
+    # ── Start up (with retry for transient failures) ──────────────────
+    # ⚠️ TRAP[DECISION] · 2026-07-23 · → · Retry on transient compose failures
+    # · Rationale: Docker Desktop on macOS has resource contention when 6+ modules
+    # ·   start in parallel (Wave 0). Network creation, image pulls, and healthchecks
+    # ·   compete for VM resources → some composes time out. A single retry after
+    # ·   5s cooldown resolves >90% of transient failures without masking real bugs.
+    # · Rev: if retry count >1 in >15% of CI runs → investigate root cause
+    # ·   (resource limits, network contention).
+    _MAX_RETRIES = 2
+    _RETRY_DELAY = 5  # seconds between retries
+    _start_ok = False
+
+    for _attempt in range(_MAX_RETRIES):
+        if _attempt > 0:
+            _logger.warning(
+                "[IMP:8][conftest][_start_single_module] Retry %d/%d for '%s' — transient failure cooldown",
+                _attempt + 1,
+                _MAX_RETRIES,
+                module_name,
             )
-            if not _minio_ok:
-                _logger.error(
-                    "[IMP:9][conftest][_start_single_module] MinIO did not become healthy within %ds",
-                    compose_timeout,
+            _time.sleep(_RETRY_DELAY)
+            # ── Re-run pre-cleanup before retry ──────────────────────────
+            _down_args = [*compose_base_args, "down", "--timeout", str(compose_down_timeout)]
+            _run_docker_smoke(_down_args, timeout=20, env_override={"COMPOSE_PROFILES": module_name})
+
+        # ── Start up ──────────────────────────────────────────────────
+        if module_name == "minio":
+            # D5: MinIO has a one-shot init container (minio-createbuckets) that
+            # exits 0 after creating buckets. `docker compose up --wait` considers
+            # the exited container a failure (returncode 1) even though minio
+            # itself is healthy. Start without --wait, then poll for minio health.
+            # ⚠️ TRAP[DECISION] · 2026-07-17 · — · MinIO --wait workaround
+            # · Rejected: depends_on condition: service_completed_successfully
+            # · Reason: deferred — that would require compose schema v3.8+ changes
+            # · Rev: if compose schema is ever upgraded, use depends_on instead.
+            compose_up_args = [*compose_base_args, "up", "-d"]
+            result = _run_docker_smoke(
+                compose_up_args,
+                timeout=compose_timeout + compose_extra_timeout,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
+            if result.returncode == 0:
+                _minio_ok = _wait_for_minio_healthy(
+                    compose_base_args=compose_base_args,
+                    timeout=compose_timeout,
+                    logger=_logger,
                 )
-                # Force failure path after the if-else block
-                result = subprocess.CompletedProcess(
-                    args=compose_up_args, returncode=1, stdout="", stderr="MinIO health check timeout"
+                if not _minio_ok:
+                    _logger.error(
+                        "[IMP:9][conftest][_start_single_module] MinIO did not become healthy within %ds",
+                        compose_timeout,
+                    )
+                    # Force failure path after the if-else block
+                    result = subprocess.CompletedProcess(
+                        args=compose_up_args, returncode=1, stdout="", stderr="MinIO health check timeout"
+                    )
+        else:
+            compose_up_args = [
+                *compose_base_args,
+                "up",
+                "-d",
+                "--wait",
+                "--wait-timeout",
+                str(compose_timeout),
+            ]
+            result = _run_docker_smoke(
+                compose_up_args,
+                timeout=compose_timeout + compose_extra_timeout,
+                env_override={"COMPOSE_PROFILES": module_name},
+            )
+
+        if result.returncode != 0:
+            if _attempt < _MAX_RETRIES - 1:
+                _logger.warning(
+                    "[IMP:8][conftest][_start_single_module] '%s' compose up failed (attempt %d/%d, rc=%d) — will retry",
+                    module_name,
+                    _attempt + 1,
+                    _MAX_RETRIES,
+                    result.returncode,
                 )
-    else:
-        compose_up_args = [
-            *compose_base_args,
-            "up",
-            "-d",
-            "--wait",
-            "--wait-timeout",
-            str(compose_timeout),
-        ]
-        result = _run_docker_smoke(
-            compose_up_args,
-            timeout=compose_timeout + compose_extra_timeout,
+                continue
+            # ── Diagnostic: collect logs for failure analysis ─────────────
+            log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
+            logs = _run_docker_smoke(
+                log_args, timeout=docker_log_timeout, env_override={"COMPOSE_PROFILES": module_name}
+            )
+            _logger.error(
+                "[IMP:9][conftest][_start_single_module] Failed to start '%s' — "
+                "returncode=%d\nstderr: %s\ndiagnostic logs:\n%s",
+                module_name,
+                result.returncode,
+                result.stderr.strip()[-stderr_tail_lines:],
+                (logs.stdout or logs.stderr).strip()[-500:],
+            )
+            break  # out of retry loop → fail
+
+        # ── Post-up container existence check ─────────────────────────────────
+        # Root cause (from CI diagnostic run): `docker compose up -d --wait`
+        # returns exit code 0 on GHA runner even when containers fail to start
+        # (e.g., when `--wait-timeout` expires or image pull fails silently).
+        # `docker compose ps --all` returns empty despite returncode=0.
+        # Add explicit container count check to distinguish true success from
+        # silent compose failure. If zero containers → treat as failure.
+        _ps_check = _run_docker_smoke(
+            [*compose_base_args, "ps", "--all", "--format", "{{.Name}}"],
+            timeout=15,
             env_override={"COMPOSE_PROFILES": module_name},
         )
+        _container_count = len([cname for cname in _ps_check.stdout.strip().splitlines() if cname.strip()])
+        if _container_count == 0:
+            if _attempt < _MAX_RETRIES - 1:
+                _logger.warning(
+                    "[IMP:8][conftest][_start_single_module] '%s' compose up returned 0 but "
+                    "no containers exist (attempt %d/%d) — will retry",
+                    module_name,
+                    _attempt + 1,
+                    _MAX_RETRIES,
+                )
+                continue
+            _logger.error(
+                "[IMP:9][conftest][_start_single_module] '%s' compose up returned 0 but "
+                "no containers exist (docker compose ps --all = empty). "
+                "CI runner silent compose failure — treating as failed.",
+                module_name,
+            )
+            break  # out of retry loop → fail
 
-    if result.returncode != 0:
-        # ── Diagnostic: collect logs for failure analysis ─────────────
-        log_args = [*compose_base_args, "logs", "--tail", "50", "--no-color"]
-        logs = _run_docker_smoke(log_args, timeout=docker_log_timeout, env_override={"COMPOSE_PROFILES": module_name})
-        _logger.error(
-            "[IMP:9][conftest][_start_single_module] Failed to start '%s' — "
-            "returncode=%d\nstderr: %s\ndiagnostic logs:\n%s",
-            module_name,
-            result.returncode,
-            result.stderr.strip()[-stderr_tail_lines:],
-            (logs.stdout or logs.stderr).strip()[-500:],
-        )
-        return {"success": False, "module_name": module_name}
+        # ── Success ───────────────────────────────────────────────────
+        _start_ok = True
+        if _attempt > 0:
+            _logger.warning(
+                "[IMP:9][conftest][_start_single_module] '%s' succeeded on retry %d/%d",
+                module_name,
+                _attempt + 1,
+                _MAX_RETRIES,
+            )
+        break
 
-    # ── Post-up container existence check ─────────────────────────────────
-    # Root cause (from CI diagnostic run): `docker compose up -d --wait`
-    # returns exit code 0 on GHA runner even when containers fail to start
-    # (e.g., when `--wait-timeout` expires or image pull fails silently).
-    # `docker compose ps --all` returns empty despite returncode=0.
-    # Add explicit container count check to distinguish true success from
-    # silent compose failure. If zero containers → treat as failure.
-    _ps_check = _run_docker_smoke(
-        [*compose_base_args, "ps", "--all", "--format", "{{.Name}}"],
-        timeout=15,
-        env_override={"COMPOSE_PROFILES": module_name},
-    )
-    _container_count = len([cname for cname in _ps_check.stdout.strip().splitlines() if cname.strip()])
-    if _container_count == 0:
-        _logger.error(
-            "[IMP:9][conftest][_start_single_module] '%s' compose up returned 0 but "
-            "no containers exist (docker compose ps --all = empty). "
-            "CI runner silent compose failure — treating as failed.",
-            module_name,
-        )
+    if not _start_ok:
         return {"success": False, "module_name": module_name}
 
     # ---- Loki readiness HTTP-poll ------------------------------------

@@ -75,7 +75,7 @@ def _is_inside_retry_context(lines: list[str], line_num: int) -> bool:
     ## @complexity — O(W) where W = window size (10 lines)
     """
     start: int = max(0, line_num - 11)  # line_num is 1-indexed, so preceding ends at line_num-1
-    preceding: list[str] = lines[start:line_num - 1]
+    preceding: list[str] = lines[start : line_num - 1]
 
     for prev_line in preceding:
         stripped: str = prev_line.strip()
@@ -232,10 +232,7 @@ def test_http_calls_have_retry(caplog) -> None:
     findings: list[tuple[str, int, str]] = _scan_for_unprotected_requests()
 
     if findings:
-        detail_lines: list[str] = [
-            f"  {fp}:{ln} — {line_text[:100]}"
-            for fp, ln, line_text in sorted(findings)
-        ]
+        detail_lines: list[str] = [f"  {fp}:{ln} — {line_text[:100]}" for fp, ln, line_text in sorted(findings)]
         logger.error(
             "[IMP:9][gate][http-retry] ⛔ Found %d HTTP call(s) without retry protection",
             len(findings),
