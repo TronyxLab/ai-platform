@@ -68,7 +68,7 @@ jobs:
       - name: Run pre-commit hooks (gitleaks + code quality)
         run: make pre-commit-run
 
-      - name: Run fast gate (syntax/JSON check + gates + static + predeploy)
+      - name: Run fast gate (syntax/JSON check + gates + contract + static + predeploy)
         run: make gate MODE=fast
 
       - name: Cleanup Docker networks

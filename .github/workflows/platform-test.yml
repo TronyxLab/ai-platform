@@ -172,6 +172,15 @@ jobs:
           echo "[pull] All parallel pulls completed"
           echo "[pull] Pulling postgres:16-alpine for monitoring test override..."
           docker pull postgres:16-alpine 2>&1 || echo "[warn] postgres:16-alpine pull failed — continuing"
+          # ⚡ TRAP[PERF] · 2026-07-23 · >0 · Pre-pull hermes-agent base image for build cache
+          # · Root: hermes-agent-base Dockerfile FROM nousresearch/hermes-agent:v2026.7.7.2
+          # ·   pulls ~1-2GB on every CI run. Pre-pulling moves this I/O into the parallel
+          # ·   pre-pull phase, saving 30-50s from the build step.
+          # · Rev: when hermes-agent upstream version changes, update this pull command.
+          # · TRAP[DRIFT] · 2026-07-23 · LOW · Version tag hardcoded — sync with Dockerfile FROM line
+          echo "[IMP:8][pre-pull] Pulling nousresearch/hermes-agent:v2026.7.7.2 for build cache..."
+          docker pull nousresearch/hermes-agent:v2026.7.7.2 2>&1 | tail -5 || echo "[warn] hermes-agent base image pre-pull failed — continuing (may affect build time)"
+          echo "[IMP:9][pre-pull] Base image pulled — build step will reuse"
           echo "::endgroup::"
 
       # ─── Stage 3: Build Docker images ────────────────────────────────
@@ -189,6 +198,15 @@ jobs:
           file: core/modules/hermes-agent/build/Dockerfile
           tags: hermes-agent-base:latest
           cache-scope: hermes-agent-base
+
+      # ─── Diagnostic: Verify built images ────────────────────────────
+      - name: Diagnostic — verify built images
+        run: |
+          echo "=== Built images ==="
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(hermes-agent-base|backup-cron)"
+          echo ""
+          echo "=== Hermes-agent-base layers ==="
+          docker history hermes-agent-base:latest --no-trunc --format "table {{.Size}}\t{{.CreatedBy}}" 2>/dev/null | head -15 || echo "(image not found)"
 
       # ─── Stage 4: Full Gate (Docker-dependent) ──────────────────────
       - name: Diagnostic — LiteLLM pre-flight (stale containers + image digest)
@@ -237,7 +255,7 @@ jobs:
           echo "[IMP:9][dev-certs-pregen] ✅ Dev SSL certs generated in core/modules/nginx/dev-certs/"
         shell: bash
 
-      - name: Run full gate (contract + static + predeploy + smoke + component — Docker-dependent, no pre-commit/validate/lint)
+      - name: Run full gate (smoke + component + predeploy-docker — no static duplication, contract/static/predeploy in fast gate)
         id: full_gate
         env:
           # ⚡ TRAP[PERF] · 2026-07-18 · >0 · CI uses local L1 image instead of ghcr.io context overlay
@@ -336,8 +354,8 @@ jobs:
             echo "_Timing details available in individual step logs._"
             echo ""
             echo "### Gate Strategy"
-            echo "- Fast gate: static_audit + gates + predeploy (no Docker, <3 min)"
-            echo "- Full gate: contract + static + predeploy + smoke + component (Docker-dependent only, SKIP_PRECOMMIT=1 in CI)"
+            echo "- Fast gate: gates + contract + static + predeploy (no Docker, <3 min)"
+            echo "- Full gate: smoke + component + predeploy-docker (Docker stack, no static duplication)"
             echo "- Integration: error-path (no tokens) + live (real API call)"
             echo ""
             echo "### Links"

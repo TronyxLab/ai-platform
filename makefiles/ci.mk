@@ -108,34 +108,36 @@ test:
 
 ## gate: Production Gate. Usage: make gate [MODE=fast|full|ci-docker] [PROJECT=<name>]
 ##   MODE=full (default) — validate → lint → gates → contract → static → predeploy → smoke → component
-##   MODE=fast — validate → lint → gates → static → predeploy (no Docker)
-##   MODE=ci-docker — contract → static → predeploy → smoke → component → skip-enforcement (Docker-dependent only, no pre-commit/validate/lint)
+##   MODE=fast — validate → lint → gates → contract → static → predeploy (no Docker)
+##   MODE=ci-docker — predeploy-docker → smoke → component (Docker stack, no static duplication)
 ##   PROJECT=<name> — filter predeploy tests to a specific project (used in CI deploy workflow)
 gate:
 	@echo "[IMP:7][make][gate] Running gate with MODE=$(or $(MODE),full)..."
 	$(eval MODE := $(or $(MODE),full))
 	@if [ "$(MODE)" = "fast" ]; then \
-		echo "[IMP:7][make][gate] MODE=fast — 6 steps: pre-commit, validate, lint, gates, static, predeploy..."; \
+		echo "[IMP:7][make][gate] MODE=fast — 7 steps: pre-commit, validate, lint, gates, contract, static, predeploy..."; \
 		rm -f tests/report.xml tests/report*.xml && \
 		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
-			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run..."; \
+			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run..."; \
 			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; exit 1; }; \
 		else \
-			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
+			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
 		fi; \
-		echo "[IMP:7][make][gate] Step 2/6: validate..."; \
+		echo "[IMP:7][make][gate] Step 2/7: validate..."; \
 		bash $(_platform_root)/core/entrypoints/validate.sh || { echo "[IMP:9][make][gate] FAIL: validate"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 3/6: lint..."; \
+		echo "[IMP:7][make][gate] Step 3/7: lint..."; \
 		bash $(_platform_root)/core/entrypoints/validate.sh --lint || { echo "[IMP:9][make][gate] FAIL: lint"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 4/6: anti-drift CI gates..."; \
+		echo "[IMP:7][make][gate] Step 4/7: anti-drift CI gates..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m gate -v || { echo "[IMP:9][make][gate] FAIL: gates"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 5/6: static tests (no Docker)..."; \
+		echo "[IMP:7][make][gate] Step 5/7: contract tests..."; \
+		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; exit 1; }; \
+		echo "[IMP:7][make][gate] Step 6/7: static tests (no Docker)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ \
 			-m "static_audit or (not e2e and not component and not smoke and not integration and not local_auth and not requires_docker)" \
 			-v --tb=short \
 			--junitxml=tests/report-static.xml || { echo "[IMP:9][make][gate] FAIL: static"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 6/6: predeploy tests (PROJECT=$(or $(PROJECT),all))..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy" -v --tb=short -rs \
+		echo "[IMP:7][make][gate] Step 7/7: predeploy tests (PROJECT=$(or $(PROJECT),all))..."; \
+		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy and not requires_docker" -v --tb=short -rs \
 			$(if $(PROJECT),-k "$(PROJECT)",) \
 			--junitxml=tests/report-predeploy.xml || { echo "[IMP:9][make][gate] FAIL: predeploy"; exit 1; }; \
 	elif [ "$(MODE)" = "full" ]; then \
@@ -180,23 +182,18 @@ gate:
 			exit 1; \
 		fi; \
 	elif [ "$(MODE)" = "ci-docker" ]; then \
-		echo "[IMP:7][make][gate] MODE=ci-docker — running Docker-dependent gate pipeline (no pre-commit/validate/lint)..."; \
+		echo "[IMP:7][make][gate] MODE=ci-docker — running Docker-dependent gate pipeline (smoke + component, no static duplication)..."; \
 		GATE_FAILED=0; \
 		rm -f tests/report.xml tests/report*.xml; \
-		echo "[IMP:7][make][gate] Step 1/6: contract tests..."; \
-		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 2/6: static tests..."; \
-		$(MAKE) test MARKER=static_audit || { echo "[IMP:9][make][gate] FAIL: static"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 3/6: predeploy tests..."; \
-		$(MAKE) test MARKER=predeploy || { echo "[IMP:9][make][gate] FAIL: predeploy"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 4/6: smoke tests..."; \
+		echo "[IMP:7][make][gate] Step 1/3: predeploy tests (Docker-dependent only)..."; \
+		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy and requires_docker" -v --tb=short -rs \
+			--junitxml=tests/report-predeploy.xml || { echo "[IMP:9][make][gate] FAIL: predeploy-docker"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 2/3: smoke tests..."; \
 		$(MAKE) test MARKER=smoke || { echo "[IMP:9][make][gate] FAIL: smoke"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 5/6: component tests..."; \
+		echo "[IMP:7][make][gate] Step 3/3: component tests..."; \
 		$(MAKE) test MARKER=component || { echo "[IMP:9][make][gate] FAIL: component"; GATE_FAILED=1; }; \
 		echo "[IMP:7][make][gate] Merging JUnit XML reports..."; \
 		$(PYTHON) tests/merge_junit.py \
-			tests/report-contract.xml \
-			tests/report-static.xml \
 			tests/report-predeploy.xml \
 			tests/report-smoke.xml \
 			tests/report-component.xml \

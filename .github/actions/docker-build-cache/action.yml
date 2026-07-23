@@ -70,3 +70,8 @@ runs:
         cache-to: ${{ steps.cache_params.outputs.cache-to }}
         provenance: false
         sbom: false
+
+    - name: Report cache status (${{ inputs.cache-scope }})
+      shell: bash
+      run: |
+        echo "[IMP:8][cache] ${{ inputs.cache-scope }} — cache backend: ${{ inputs.cache-backend }}"
