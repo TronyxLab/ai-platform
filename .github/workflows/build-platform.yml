@@ -103,6 +103,10 @@ jobs:
         run: |
           echo "=== Smoke test: Starting hermes-agent with built image ==="
           SHA="${{ steps.sha.outputs.sha }}"
+
+          # Ensure bind-mount source directory exists (volume: hermes-data → /var/lib/platform/hermes-agent/data)
+          sudo mkdir -p /var/lib/platform/hermes-agent/data
+
           CONTEXT_IMAGE="hermes-agent-base:latest" \
           docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
             --project-name build-platform-smoke \
