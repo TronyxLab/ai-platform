@@ -198,7 +198,7 @@ jobs:
           # ──────────────────────────────────────────────────────────
           # [IMP:8][MIRROR][VERIFY] Post-push verification via SSH
           # ──────────────────────────────────────────────────────────
-          MIRROR_HEAD=$(git ls-remote mirror HEAD | awk '{print $1}')
+          MIRROR_HEAD=$(git ls-remote mirror refs/heads/main | awk '{print $1}')
           SOURCE_HEAD=$(git rev-parse HEAD)
           echo "[IMP:8][MIRROR][VERIFY] Source HEAD: ${SOURCE_HEAD}"
           echo "[IMP:8][MIRROR][VERIFY] Mirror HEAD: ${MIRROR_HEAD}"

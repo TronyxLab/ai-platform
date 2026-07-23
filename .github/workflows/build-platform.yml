@@ -91,11 +91,15 @@ jobs:
 
       # ─── Step 5: Smoke test ───────────────────────────────────────────
       - name: Pull dependency images
+        env:
+          COMPOSE_PROFILES: hermes-agent
         run: |
           echo "=== Pulling images from compose file ==="
           docker compose -f core/modules/hermes-agent/docker-compose.base.yml pull --ignore-buildable 2>/dev/null || true
 
       - name: Smoke test — compose up and healthcheck
+        env:
+          COMPOSE_PROFILES: hermes-agent
         run: |
           echo "=== Smoke test: Starting hermes-agent with built image ==="
           SHA="${{ steps.sha.outputs.sha }}"
@@ -126,6 +130,8 @@ jobs:
 
       - name: Cleanup
         if: always()
+        env:
+          COMPOSE_PROFILES: hermes-agent
         run: |
           docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
             --project-name build-platform-smoke down -v 2>/dev/null || true
