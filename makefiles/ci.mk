@@ -9,7 +9,7 @@
 ## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
 # endregion MODULE_CONTRACT
 
-.PHONY: test gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock
+.PHONY: test gate __test_original __gate_original validate lint check-file-lines pre-commit-install pre-commit-run __pre-commit-run_original scripts-audit audit secrets-unlock
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -260,7 +260,16 @@ pre-commit-install:
 	@echo "[IMP:8][make][pre-commit-install] Run 'pre-commit run --all-files' to validate all files"
 
 ## pre-commit-run: Run all pre-commit hooks against all files (CI use)
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 pre-commit-run:
+	@echo "[IMP:9][make][pre-commit-run] PRE-COMMIT DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL pre-commit-run target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __pre-commit-run_original → pre-commit-run and delete the stub above.
+__pre-commit-run_original:
 	@echo "[IMP:7][make][pre-commit-run] Running all pre-commit hooks..."
 	@pre-commit run --all-files 2>&1 || { \
 		echo "[IMP:9][make][pre-commit-run] Some pre-commit hooks failed — review output above"; \

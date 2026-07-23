@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: status-page app.py live-status http.server node.yaml status-metrics.json jinja2 html json health refresh
+# GREP_SUMMARY: status-page app.py live-status http.server node.yaml status-metrics.json jinja2 html json health refresh platform-services enrich-containers uptime
 # STRUCTURE: ▶ StatusPageHandler(do_GET|do_POST) → ◇ path=/: Jinja2 render → ◇ path=/health: render_health
 #            → ◇ path=/status.json: render_json → ◇ path=/refresh: POST placeholder
 #            → ▷ _load_status_metrics(): read + schema check + staleness
-#            → ▷ _get_checks(): read node.yaml + status-metrics.json + live-curl vhosts
-#            → ▷ _curl_vhost(): subprocess.run curl → ⎋ response
+#            → ▷ _get_checks(): read node.yaml + status-metrics.json + live-curl vhosts + live-curl platform services
+#            → ▷ _curl_vhost(): subprocess.run curl --resolve → ⎋ response
+#            → ▷ _curl_platform_service(): curl via Docker DNS → ⎋ response
+#            → ▷ _enrich_containers(containers, projects): ⊕ domains, uptime_human, restart_policy → ⎋ enriched
 # region MODULE_CONTRACT
 ## @purpose  Live status-page HTTP server — aggregates node health (certs + containers + host),
 ##           renders Jinja2 HTML with 3 tables, exposes /health for CI post-deploy gate.
@@ -32,6 +34,9 @@
 ##   2026-07-23 | META Δ8 | container_name → name
 ##   2026-07-23 | META Δ12 | Jinja2 autoescape
 ##   2026-07-23 | META Δ19 | FileSystemLoader with absolute path
+##   2026-07-24 | D067 W1 | _enrich_containers(containers, projects) — domain mapping, uptime_human, exit_code_human
+##   2026-07-24 | D067 W1 | _render_html — SSL Summary Banner, Platform Services Table, new host fields
+##   2026-07-24 | D067 W3 | _curl_platform_service() + platform service checks in get_all_checks()
 # endregion MODULE_CONTRACT
 
 import http.server
@@ -70,6 +75,23 @@ _jinja_env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent / "templates")),
     autoescape=select_autoescape(["html"]),
 )
+
+# ═══════════════════════════════════════════════════════════════════
+# PLATFORM SERVICES (static list — Contract C2)
+# ═══════════════════════════════════════════════════════════════════
+
+# Static list of platform services for the Platform Services Table.
+# Each entry: name (display), url (external link), internal (Docker DNS), health_path (curl path).
+# LiteLLM has no external URL (no nginx vhost) — displayed as "internal only".
+PLATFORM_SERVICES = [
+    {"name": "Grafana",    "url": f"https://grafana.{PLATFORM_DOMAIN}",    "internal": "grafana:3000",     "health_path": "/api/health"},
+    {"name": "Prometheus", "url": f"https://prometheus.{PLATFORM_DOMAIN}", "internal": "prometheus:9090",  "health_path": "/-/healthy"},
+    {"name": "Loki",       "url": f"https://loki.{PLATFORM_DOMAIN}",       "internal": "loki:3100",        "health_path": "/ready"},
+    {"name": "Hermes",     "url": f"https://hermes.{PLATFORM_DOMAIN}",     "internal": "hermes-agent:9119","health_path": "/"},
+    {"name": "Langfuse",   "url": f"https://langfuse.{PLATFORM_DOMAIN}",   "internal": "langfuse:3000",    "health_path": "/api/public/health"},
+    {"name": "LiteLLM",    "url": None,                                     "internal": "litellm:4000",     "health_path": "/health/readiness"},
+]
+
 
 # ═══════════════════════════════════════════════════════════════════
 # DATA LAYER
@@ -246,6 +268,89 @@ def _curl_vhost(domain: str, timeout: int = PER_CHECK_TIMEOUT) -> dict:
 # endregion FUNC_curl_vhost
 
 
+# region FUNC_curl_platform_service
+def _curl_platform_service(internal_url: str, health_path: str, timeout: int = PER_CHECK_TIMEOUT) -> dict:
+    """Live-curl a platform service via Docker internal DNS.
+
+    # ▶ ┌internal_url (e.g. "grafana:3000") + health_path ("/api/health")┐
+    #    → subprocess.run curl (без --resolve, через Docker DNS)
+    #    → ⎋ check result dict: {target, type, status, duration_ms, error}
+
+    Unlike _curl_vhost, this does NOT use --resolve — Docker DNS resolves
+    internal service names directly (grafana:3000 → container IP).
+    Timeout: 5s per check.
+    """
+    start = time.monotonic()
+    url = f"http://{internal_url}{health_path}"
+    try:
+        result = subprocess.run(
+            [
+                "curl",
+                "-sSk",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                str(timeout),
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 2,
+        )
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        http_code = result.stdout.strip()
+        # Extract hostname for the target field
+        target_host = internal_url.split(":")[0]
+
+        if result.returncode == 0 and http_code.isdigit():
+            code = int(http_code)
+            # Accept 200-399 as PASS (some services return 302, 301, etc.)
+            status = "PASS" if 200 <= code < 400 else "WARN"
+            return {
+                "target": target_host,
+                "type": "platform_service",
+                "status": status,
+                "http_code": code,
+                "duration_ms": elapsed_ms,
+                "error": None,
+            }
+        return {
+            "target": target_host,
+            "type": "platform_service",
+            "status": "FAIL",
+            "http_code": int(http_code) if http_code.isdigit() else 0,
+            "duration_ms": elapsed_ms,
+            "error": f"curl exit {result.returncode}: {result.stderr.strip()[:100]}",
+        }
+    except subprocess.TimeoutExpired:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        target_host = internal_url.split(":")[0]
+        return {
+            "target": target_host,
+            "type": "platform_service",
+            "status": "FAIL",
+            "http_code": 0,
+            "duration_ms": elapsed_ms,
+            "error": f"timeout after {timeout}s",
+        }
+    except Exception as e:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        target_host = internal_url.split(":")[0]
+        return {
+            "target": target_host,
+            "type": "platform_service",
+            "status": "FAIL",
+            "http_code": 0,
+            "duration_ms": elapsed_ms,
+            "error": str(e),
+        }
+
+
+# endregion FUNC_curl_platform_service
+
+
 # region FUNC_check_container
 def _check_container(container: dict) -> dict:
     """Check a single container from status-metrics.json data. Returns check result.
@@ -374,24 +479,58 @@ def _enrich_projects(projects: list[dict], certs: list[dict]) -> list[dict]:
 
 
 # region FUNC_enrich_containers
-def _enrich_containers(containers: list[dict]) -> list[dict]:
+def _enrich_containers(containers: list[dict], projects: list[dict] | None = None) -> list[dict]:
     """Enrich container data for template rendering.
 
-    # ▶ ┌containers[]┐ → ⊕ domains, status, memory_used/memory_limit formatted, image_size_gb
-    #    → ⎋ enriched list
+    # ▶ ┌containers[] + projects[]┐ → ⊕ domain_map (container.name → project.domain heuristic)
+    #    → ⊕ uptime_human (from started_at) → ⊕ restart_policy, exit_code_human → ⎋ enriched list
+
+    Domain mapping is best-effort heuristic (Contract C3): container name matched against
+    project name (exact or prefix). Infrastructure containers (nginx, postgres) have no domain — expected.
     """
+    # Build domain map: container_name → domain (best-effort heuristic)
+    domain_map: dict[str, str] = {}
+    if projects:
+        for p in projects:
+            pname = p.get("name", "")
+            pdomain = p.get("domain", "")
+            if pname and pdomain:
+                domain_map[pname] = pdomain
+
     enriched = []
     for c in containers:
+        cname = c.get("name", "")
         mem_used = c.get("memory_usage_bytes", 0)
         mem_limit = c.get("memory_limit_bytes", 0)
         mem_used_pct = round(mem_used / mem_limit * 100, 1) if mem_limit > 0 else 0
 
+        # Container → Domain mapping (heuristic)
+        container_domains: list[str] = []
+        for pname, pdomain in domain_map.items():
+            if cname == pname or cname.startswith(f"{pname}-"):
+                container_domains.append(pdomain)
+                break  # First match wins
+
+        # Uptime human-readable (from started_at ISO timestamp)
+        started_at = c.get("started_at")
+        uptime_human = _compute_uptime_human(started_at)
+
+        # Exit code human-readable for exited containers
+        exit_code = c.get("exit_code")
+        exit_code_human = None
+        if exit_code is not None and not c.get("running", True):
+            exit_code_human = f"Exited ({exit_code})"
+
         enriched.append(
             {
-                "name": c.get("name", ""),
-                "domains": [],  # Filled from project data if available
+                "name": cname,
+                "domains": container_domains,
                 "status": "running" if c.get("running") else "exited",
                 "status_line": c.get("status_line", ""),
+                "uptime_human": uptime_human,
+                "restart_policy": c.get("restart_policy", ""),
+                "exit_code": exit_code,
+                "exit_code_human": exit_code_human,
                 "cpu_percent": c.get("cpu_percent", 0.0),
                 "memory_used": _bytes_to_gb_str(mem_used),
                 "memory_limit": _bytes_to_gb_str(mem_limit),
@@ -405,6 +544,50 @@ def _enrich_containers(containers: list[dict]) -> list[dict]:
 
 
 # endregion FUNC_enrich_containers
+
+
+# region FUNC_compute_uptime_human
+def _compute_uptime_human(started_at: str | None) -> str:
+    """Convert ISO 8601 started_at timestamp to human-readable uptime string.
+
+    # ▶ ┌started_at ISO string┐ → ◇ None? → ⎋ "—"
+    #                           → ◇ parse → ⊕ timedelta → format → ⎋ "3h 15m" or "< 1m"
+
+    Returns human-readable duration like "3h 15m", "45m", "< 1m".
+    Returns "—" if started_at is None or unparseable.
+    """
+    if not started_at:
+        return "\u2014"
+
+    try:
+        # Handle Z suffix
+        if started_at.endswith("Z"):
+            started_at_clean = started_at[:-1] + "+00:00"
+        else:
+            started_at_clean = started_at
+
+        started = datetime.fromisoformat(started_at_clean)
+        now = datetime.now(timezone.utc)
+        delta = now - started
+        total_seconds = delta.total_seconds()
+
+        if total_seconds < 0:
+            return "\u2014"
+        if total_seconds < 60:
+            return "< 1m"
+
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        else:
+            return f"{minutes}m"
+    except (ValueError, TypeError):
+        return "\u2014"
+
+
+# endregion FUNC_compute_uptime_human
 
 
 # region FUNC__bytes_to_gb
@@ -469,6 +652,30 @@ def get_all_checks() -> dict:
                         }
                     )
 
+    # ── Platform service checks (live curl via Docker DNS, parallel fan-out) ──
+    if PLATFORM_SERVICES:
+        with ThreadPoolExecutor(max_workers=min(len(PLATFORM_SERVICES), 10)) as executor:
+            futures = {
+                executor.submit(_curl_platform_service, svc["internal"], svc["health_path"]): svc
+                for svc in PLATFORM_SERVICES
+            }
+            for future in as_completed(futures):
+                try:
+                    result = future.result(timeout=TOTAL_TIMEOUT)
+                    checks.append(result)
+                except Exception as e:  # noqa: PERF203
+                    svc = futures[future]
+                    checks.append(
+                        {
+                            "target": svc["internal"].split(":")[0],
+                            "type": "platform_service",
+                            "status": "FAIL",
+                            "http_code": 0,
+                            "duration_ms": 0,
+                            "error": f"future timeout: {e}",
+                        }
+                    )
+
     # ── Compute aggregate status ──
     all_pass = all(c["status"] == "PASS" for c in checks)
     duration_ms = int((time.monotonic() - start) * 1000)
@@ -502,7 +709,8 @@ def get_all_checks() -> dict:
 def _render_html(data: dict) -> str:
     """Render status page using Jinja2 template.
 
-    # ▶ ┌data dict┐ → extract/enrich sections → Jinja2 render → ⎋ HTML string
+    # ▶ ┌data dict┐ → extract/enrich sections → ⊕ ssl_min_days, platform_services, host_extra
+    #    → Jinja2 render → ⎋ HTML string
     """
     metrics = data.get("metrics", {})
 
@@ -512,8 +720,11 @@ def _render_html(data: dict) -> str:
         metrics.get("certs", []),
     )
 
-    # Enrich containers
-    containers = _enrich_containers(metrics.get("containers", []))
+    # Enrich containers (with project domain mapping)
+    containers = _enrich_containers(
+        metrics.get("containers", []),
+        metrics.get("projects", []),
+    )
 
     # Host data
     host = metrics.get("host", {})
@@ -524,16 +735,51 @@ def _render_html(data: dict) -> str:
     # Errors from metrics export
     metric_errors = metrics.get("errors", [])
 
+    # SSL Summary Banner — min days_remaining across all projects
+    ssl_min_days = None
+    for p in projects:
+        dr = p.get("days_remaining")
+        if dr is not None:
+            if ssl_min_days is None or dr < ssl_min_days:
+                ssl_min_days = dr
+
+    # Backup status
+    backup = metrics.get("backup", {})
+
+    # Platform services (static list from module config)
+    platform_services = PLATFORM_SERVICES
+
+    # Enrich platform services with live-check results (from checks)
+    platform_check_results: dict[str, str] = {}
+    for check in data.get("checks", []):
+        if check.get("type") == "platform_service":
+            platform_check_results[check["target"]] = check
+
+    for svc in platform_services:
+        internal_name = svc["internal"].split(":")[0]  # e.g. "grafana" from "grafana:3000"
+        check_data = platform_check_results.get(internal_name, {})
+        svc["live_status"] = check_data.get("status", "UNKNOWN")
+        svc["live_error"] = check_data.get("error")
+        svc["live_duration_ms"] = check_data.get("duration_ms")
+
     context = {
         "node_name": NODE_NAME,
         "overall_status": overall_status,
+        "ssl_min_days": ssl_min_days,
         "projects": projects,
         "containers": containers,
+        "platform_services": platform_services,
         "host": {
             "disk_total_gb": host.get("disk_total_gb", 0),
             "disk_free_gb": host.get("disk_free_gb", 0),
             "disk_used_percent": host.get("disk_used_percent", 0.0),
+            "uptime_seconds": host.get("uptime_seconds"),
+            "load_1m": host.get("load_1m"),
+            "load_5m": host.get("load_5m"),
+            "load_15m": host.get("load_15m"),
+            "docker_images_size_gb": host.get("docker_images_size_gb", 0.0),
         },
+        "backup": backup,
         "errors": metric_errors,
         "staleness": data.get("staleness"),
         "generated_at": data.get("metrics_freshness") or "unknown",

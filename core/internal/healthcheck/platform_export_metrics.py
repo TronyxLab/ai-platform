@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: platform-export-metrics coordinator metrics-collector atomic-write cron status-metrics.json
+# GREP_SUMMARY: platform-export-metrics coordinator metrics-collector atomic-write cron status-metrics.json host-uptime backup docker-images-size
 # STRUCTURE: ▶ main() → load node.yaml → docker_collector → cert_collector → project_collector → host_collector
-#            → merge + errors[] → json_writer.atomic_write(/run/platform/status-metrics.json) → ⎋ exit 0
+#            → host_uptime → backup_collector → docker_images_size_gb → merge + errors[] + backup + platform_services
+#            → json_writer.atomic_write(/run/platform/status-metrics.json) → ⎋ exit 0
 # region MODULE_CONTRACT
 ## @purpose  Metrics export coordinator — collects data from all collectors, applies TTL cache,
 ##           merges, writes atomically to status-metrics.json
@@ -157,7 +158,41 @@ def main() -> int:
         _logger.warning("[IMP:8][coordinator][main] Host disk collection failed: %s", exc)
         errors.append(f"host: {exc}")
 
-    # ── 7. Build final data ──
+    # ── 6b. Host uptime & load average (always fresh) ──
+    try:
+        from core.internal.healthcheck.metrics.host_collector import get_host_uptime
+
+        host_uptime = get_host_uptime()
+        host.update(host_uptime)
+        _logger.info("[IMP:9][coordinator][main] Host uptime & load collected")
+    except Exception as exc:
+        _logger.warning("[IMP:8][coordinator][main] Host uptime collection failed: %s", exc)
+        errors.append(f"host_uptime: {exc}")
+
+    # ── 6c. Docker images total size (from image_sizes dict, zero-cost) ──
+    try:
+        if image_sizes:
+            total_bytes = sum(image_sizes.values())
+            host["docker_images_size_gb"] = round(total_bytes / (1024**3), 2)
+            _logger.info("[IMP:9][coordinator][main] Docker images total size: %.2f GB", host["docker_images_size_gb"])
+        else:
+            host["docker_images_size_gb"] = 0.0
+    except Exception as exc:
+        _logger.warning("[IMP:8][coordinator][main] Docker images size calc failed: %s", exc)
+        errors.append(f"docker_images_size: {exc}")
+
+    # ── 7. Backup status ──
+    backup: dict = {}
+    try:
+        from core.internal.healthcheck.metrics.backup_collector import get_backup_status
+
+        backup = get_backup_status()
+        _logger.info("[IMP:9][coordinator][main] Backup status collected: %s", backup.get("status", "unknown"))
+    except Exception as exc:
+        _logger.warning("[IMP:8][coordinator][main] Backup collection failed: %s", exc)
+        errors.append(f"backup: {exc}")
+
+    # ── 8. Build final data ──
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data = {
         "schema_version": 2,  # will be overwritten by json_writer.atomic_write
@@ -167,6 +202,8 @@ def main() -> int:
         "certs": certs,
         "projects": projects,
         "host": host,
+        "backup": backup,
+        "platform_services": [],  # placeholder — filled in W3 by app.py live checks
         "errors": errors,
     }
 

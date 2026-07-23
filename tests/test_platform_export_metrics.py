@@ -228,6 +228,111 @@ class TestDockerCollector:
 
             assert containers == []
 
+    # 🧪 TRAP[TEST] · TASK-13 · Regression: docker_collector started_at field
+    # · Scenario: Container with State.StartedAt ISO timestamp
+    # · Last fail: never (new feature)
+    # · Remove if: started_at field removed from docker_collector
+    def test_docker_collector_started_at(self, caplog):
+        """get_containers includes started_at ISO timestamp from docker inspect State.StartedAt."""
+        caplog.set_level(0)
+
+        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                # Call 1: docker ps -aq
+                mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
+                # Call 2: docker inspect
+                mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps([
+                        {
+                            "Id": "sha256:abc123",
+                            "Name": "/nginx",
+                            "State": {
+                                "Running": True,
+                                "ExitCode": 0,
+                                "Status": "Up 2 hours",
+                                "StartedAt": "2026-07-24T00:00:00.000000000Z",
+                                "Health": {"Status": "healthy"},
+                            },
+                            "Config": {"Image": "nginx:latest"},
+                            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+                        }
+                    ]),
+                    stderr="",
+                ),
+                # Call 3: docker stats
+                mock.Mock(returncode=0, stdout="", stderr=""),
+            ]
+
+            from core.internal.healthcheck.metrics.docker_collector import get_containers
+
+            containers = get_containers()
+
+            print("--- LDD TRAJECTORY (IMP:7-10) ---")
+            for record in caplog.records:
+                for attr in ["message", "msg"]:
+                    msg = getattr(record, attr, "")
+                    if "[IMP:" in str(msg):
+                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                        if imp_level >= 7:
+                            print(msg)
+            print("--- END LDD TRAJECTORY ---")
+
+            assert len(containers) == 1
+            assert containers[0]["started_at"] == "2026-07-24T00:00:00.000000000Z", (
+                f"Expected ISO timestamp, got {containers[0].get('started_at')}"
+            )
+
+    # 🧪 TRAP[TEST] · TASK-13 · Regression: docker_collector started_at None
+    # · Scenario: Container without State.StartedAt → started_at: None
+    # · Remove if: started_at field removed
+    def test_docker_collector_started_at_missing(self, caplog):
+        """get_containers returns started_at=None when State.StartedAt is absent."""
+        caplog.set_level(0)
+
+        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
+                mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps([
+                        {
+                            "Id": "sha256:abc123",
+                            "Name": "/redis",
+                            "State": {
+                                "Running": False,
+                                "ExitCode": 0,
+                                "Status": "Exited (0)",
+                                # No StartedAt field
+                            },
+                            "Config": {"Image": "redis:alpine"},
+                            "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                        }
+                    ]),
+                    stderr="",
+                ),
+                mock.Mock(returncode=0, stdout="", stderr=""),
+            ]
+
+            from core.internal.healthcheck.metrics.docker_collector import get_containers
+
+            containers = get_containers()
+
+            print("--- LDD TRAJECTORY (IMP:7-10) ---")
+            for record in caplog.records:
+                for attr in ["message", "msg"]:
+                    msg = getattr(record, attr, "")
+                    if "[IMP:" in str(msg):
+                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                        if imp_level >= 7:
+                            print(msg)
+            print("--- END LDD TRAJECTORY ---")
+
+            assert len(containers) == 1
+            assert containers[0]["started_at"] is None, (
+                f"Expected started_at=None when State.StartedAt absent, got {containers[0].get('started_at')}"
+            )
+
 
 class TestDockerImageSizes:
     """Tests for get_image_sizes."""

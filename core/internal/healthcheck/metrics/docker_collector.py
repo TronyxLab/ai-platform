@@ -150,12 +150,18 @@ def get_containers() -> list[dict]:
         # Get runtime stats from stats_map
         stats = stats_map.get(name, {})
 
+        started_at_raw = state.get("StartedAt", "")
+        # StartedAt format from docker API: "2026-07-24T00:00:00.000000000Z"
+        # Pass through directly; consumer (app.py _enrich_containers) converts to human-readable
+        started_at = started_at_raw if started_at_raw else None
+
         container = {
             "name": name,
             "running": state.get("Running", False),
             "healthy": _get_health_status(state),
             "exit_code": state.get("ExitCode"),
             "status_line": state.get("Status", ""),
+            "started_at": started_at,
             "image": image,
             "image_id": c.get("Image", ""),
             "memory_usage_bytes": stats.get("memory_usage_bytes", 0),

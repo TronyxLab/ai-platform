@@ -1,4 +1,4 @@
-<!-- GREP_SUMMARY: status-page jinja2 template domains containers host color-indication auto-refresh -->
+<!-- GREP_SUMMARY: status-page jinja2 template domains containers host platform-services ssl-banner uptime backup color-indication auto-refresh -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15,12 +15,15 @@
     .overall.fail{background:#e74c3c}
     .overall .icon{font-size:2em;margin-right:.5em}
     .staleness-banner{background:#f39c12;color:#fff;padding:.8em;border-radius:8px;margin-bottom:1em;text-align:center;font-weight:600}
+    .ssl-summary-banner{background:#e67e22;color:#fff;padding:.8em;border-radius:8px;margin-bottom:1em;text-align:center;font-weight:600}
+    .ssl-summary-banner.ok{background:#27ae60}
     table{width:100%;border-collapse:collapse;margin-bottom:2em;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)}
     th,td{padding:10px 16px;text-align:left;border-bottom:1px solid #eee}
     th{background:#fafafa;font-weight:600;font-size:.85em;text-transform:uppercase;color:#666}
     .PASS{color:#27ae60;font-weight:600}
     .FAIL{color:#e74c3c;font-weight:600}
     .WARN{color:#f39c12;font-weight:600}
+    .UNKNOWN{color:#999;font-weight:600}
     .expiry-critical{color:#e74c3c;font-weight:600}
     .expiry-warning{color:#f39c12;font-weight:600}
     .expiry-ok{color:#27ae60}
@@ -28,6 +31,9 @@
     .mem-ok{color:#27ae60}
     .disk-critical{color:#e74c3c;font-weight:600}
     .disk-warning{color:#f39c12;font-weight:600}
+    .backup-ok{color:#27ae60;font-weight:600}
+    .backup-stale{color:#e74c3c;font-weight:600}
+    .backup-unknown{color:#999}
     a{color:#3498db;text-decoration:none}
     a:hover{text-decoration:underline}
     .footer{font-size:.8em;color:#999;margin-top:3em;text-align:center}
@@ -35,6 +41,12 @@
     button:hover{background:#2980b9}
     .errors-banner{background:#e74c3c;color:#fff;padding:.8em;border-radius:8px;margin-bottom:1em}
     .tooltip{position:relative;cursor:help;border-bottom:1px dotted #999}
+    .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.8em;font-weight:600}
+    .badge-pass{background:#27ae60;color:#fff}
+    .badge-fail{background:#e74c3c;color:#fff}
+    .badge-warn{background:#f39c12;color:#fff}
+    .badge-unknown{background:#999;color:#fff}
+    .internal-only{font-size:.8em;color:#999;font-style:italic}
   </style>
 </head>
 <body>
@@ -54,6 +66,57 @@
   <span class="icon">{{ '✓' if overall_status == 'PASS' else '✗' }}</span>
   <strong>Overall: {{ overall_status }}</strong> — {{ projects|length }} project(s), {{ containers|length }} container(s)
 </div>
+
+{% if ssl_min_days is not none and ssl_min_days < 30 %}
+<div class="ssl-summary-banner {% if ssl_min_days >= 7 %}ok{% endif %}">
+  ⚠ Earliest cert expires in <strong>{{ ssl_min_days }} day{% if ssl_min_days != 1 %}s{% endif %}</strong>
+</div>
+{% endif %}
+
+{% if platform_services %}
+<h2>Platform Services</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Service</th>
+      <th>URL</th>
+      <th>Status</th>
+      <th>Response</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for svc in platform_services %}
+    <tr>
+      <td>{{ svc.name }}</td>
+      <td>
+        {% if svc.url %}
+          <a href="{{ svc.url }}" target="_blank" rel="noopener">{{ svc.url }}</a>
+        {% else %}
+          <span class="internal-only">internal only</span>
+        {% endif %}
+      </td>
+      <td>
+        {% set ls = svc.get('live_status', 'UNKNOWN') %}
+        <span class="badge badge-{% if ls == 'PASS' %}pass{% elif ls == 'FAIL' %}fail{% elif ls == 'WARN' %}warn{% else %}unknown{% endif %}">
+          {{ ls }}
+        </span>
+      </td>
+      <td>
+        {% if ls == 'PASS' %}
+          <span class="PASS">{{ svc.get('live_duration_ms', '—') }}ms</span>
+        {% elif ls == 'FAIL' and svc.get('live_error') %}
+          <span class="FAIL" title="{{ svc.live_error }}">{{ svc.live_error[:60] }}{% if svc.live_error|length > 60 %}…{% endif %}</span>
+        {% elif ls == 'UNKNOWN' %}
+          <span class="UNKNOWN">pending</span>
+        {% else %}
+          <span class="WARN">{{ svc.get('live_duration_ms', '—') }}ms</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 
 {% if projects %}
 <h2>Domains / Projects</h2>
@@ -99,6 +162,8 @@
       <th>Name</th>
       <th>Domain(s)</th>
       <th>Status</th>
+      <th>Uptime</th>
+      <th>Restart</th>
       <th>CPU%</th>
       <th>Memory</th>
       <th>Image</th>
@@ -109,10 +174,16 @@
   {% for c in containers %}
     <tr>
       <td>{{ c.name }}</td>
-      <td>{{ c.domains | join(', ') }}</td>
+      <td>{{ c.domains | join(', ') if c.domains else '—' }}</td>
       <td class="{% if c.status == 'running' %}PASS{% elif c.status == 'exited' %}FAIL{% else %}WARN{% endif %}">
-        {{ c.status_line }}
+        {% if c.exit_code_human %}
+          {{ c.exit_code_human }}
+        {% else %}
+          {{ c.status_line }}
+        {% endif %}
       </td>
+      <td>{{ c.uptime_human if c.uptime_human else '—' }}</td>
+      <td>{{ c.restart_policy if c.restart_policy else '—' }}</td>
       <td>{{ c.cpu_percent }}%</td>
       <td class="{% if c.memory_used_pct is not none and c.memory_used_pct > 90 %}mem-warning{% else %}mem-ok{% endif %}">
         {{ c.memory_used }} / {{ c.memory_limit }}
@@ -149,6 +220,48 @@
         {{ host.disk_used_percent }}%
       </td>
     </tr>
+    {% if host.load_1m is not none %}
+    <tr>
+      <td>Load Average</td>
+      <td>{{ host.load_1m }} / {{ host.load_5m }} / {{ host.load_15m }} (1m / 5m / 15m)</td>
+    </tr>
+    {% endif %}
+    {% if host.uptime_seconds is not none %}
+    <tr>
+      <td>System Uptime</td>
+      <td>
+        {% set days = (host.uptime_seconds // 86400) | int %}
+        {% set hours = ((host.uptime_seconds % 86400) // 3600) | int %}
+        {% if days > 0 %}{{ days }}d {% endif %}{{ hours }}h
+      </td>
+    </tr>
+    {% endif %}
+    {% if host.docker_images_size_gb is not none and host.docker_images_size_gb > 0 %}
+    <tr>
+      <td>Docker Images Size</td>
+      <td>{{ host.docker_images_size_gb }} GB</td>
+    </tr>
+    {% endif %}
+    {% if backup %}
+    <tr>
+      <td>Backup (Postgres)</td>
+      <td class="{% if backup.status == 'ok' %}backup-ok{% elif backup.status == 'stale' %}backup-stale{% else %}backup-unknown{% endif %}">
+        {% if backup.last_postgres_at %}
+          {{ backup.last_postgres_at }}
+          {% if backup.status == 'ok' %}
+            <span class="badge badge-pass">OK</span>
+          {% elif backup.status == 'stale' %}
+            <span class="badge badge-fail">STALE</span>
+          {% endif %}
+        {% else %}
+          No recent backup
+          {% if backup.status == 'unknown' %}
+            <span class="badge badge-unknown">UNKNOWN</span>
+          {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% endif %}
   </tbody>
 </table>
 {% endif %}
