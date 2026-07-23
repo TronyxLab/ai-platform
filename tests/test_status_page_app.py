@@ -8,6 +8,7 @@
 #   - All tests use tmp_path fixture (Zero Hardcode Rule)
 #   - LDD trajectory (IMP:7-10) printed before every assert
 #   - All mocks use unittest.mock — no external dependencies
+#   - Module loaded via importlib.util.spec_from_file_location (status-page dir has hyphen, not a valid Python package name)
 # @rationale  Testing business logic (enrichment, rendering, healthcheck) directly avoids Docker dependency
 #             while validating core behavior. Tests exercise _render_html with mock data.
 # region MODULE_CONTRACT
@@ -17,17 +18,53 @@
 ##   - tmp_path fixture for all file operations
 ##   - caplog for LDD trajectory capture
 ##   - No HTTP server launched — functions called directly
+##   - Module loaded via SourceFileLoader (hyphen in dir name prevents normal import)
 ## @changes 2026-07-24 | CREATED | D067 — new test suite for status-page enhancements
 # endregion MODULE_CONTRACT
 
+import importlib.util
 import json
 import os
-import sys
-import time
 from pathlib import Path
 from unittest import mock
 
 import pytest
+
+# ═══════════════════════════════════════════════════════════════════
+# MODULE LOADER — status-page dir has hyphen, not a valid Python package
+# ═══════════════════════════════════════════════════════════════════
+
+_STATUS_PAGE_MODULE = None
+
+
+def _get_status_page_module():
+    """Load core.modules.status-page.app via SourceFileLoader (hyphen in dir name)."""
+    global _STATUS_PAGE_MODULE
+    if _STATUS_PAGE_MODULE is not None:
+        return _STATUS_PAGE_MODULE
+
+    module_path = os.path.join(os.path.dirname(__file__), "..", "core", "modules", "status-page", "app.py")
+    module_path = os.path.abspath(module_path)
+    spec = importlib.util.spec_from_file_location("status_page_app", module_path, submodule_search_locations=[])
+    mod = importlib.util.module_from_spec(spec)
+    # We need to mock the module-global env-dependent variables BEFORE module exec
+    # PLATFORM_DOMAIN is read at module level
+    old_platform_domain = os.environ.get("PLATFORM_DOMAIN")
+    if "PLATFORM_DOMAIN" not in os.environ:
+        os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
+
+    spec.loader.exec_module(mod)
+
+    if old_platform_domain is None:
+        del os.environ["PLATFORM_DOMAIN"]
+
+    _STATUS_PAGE_MODULE = mod
+    return _STATUS_PAGE_MODULE
+
+
+# ═══════════════════════════════════════════════════════════════════
+# FIXTURES
+# ═══════════════════════════════════════════════════════════════════
 
 
 @pytest.fixture
@@ -136,9 +173,24 @@ def mock_status_metrics(tmp_path: Path) -> str:
             },
         ],
         "projects": [
-            {"name": "test-app", "domain": "test-app.example.com", "code_size_bytes": 52428800, "docker_image_size_bytes": 150000000},
-            {"name": "internal-app", "domain": "internal.example.com", "code_size_bytes": 10485760, "docker_image_size_bytes": 45000000},
-            {"name": "other-app", "domain": "other-app.example.com", "code_size_bytes": 26214400, "docker_image_size_bytes": 80000000},
+            {
+                "name": "test-app",
+                "domain": "test-app.example.com",
+                "code_size_bytes": 52428800,
+                "docker_image_size_bytes": 150000000,
+            },
+            {
+                "name": "internal-app",
+                "domain": "internal.example.com",
+                "code_size_bytes": 10485760,
+                "docker_image_size_bytes": 45000000,
+            },
+            {
+                "name": "other-app",
+                "domain": "other-app.example.com",
+                "code_size_bytes": 26214400,
+                "docker_image_size_bytes": 80000000,
+            },
         ],
         "host": {
             "disk_total_gb": 100.0,
@@ -172,6 +224,18 @@ def mock_status_metrics(tmp_path: Path) -> str:
 class TestTemplateRendering:
     """Tests for _render_html template rendering with enhanced data."""
 
+    def _build_data(self, metrics_data: dict, platform_service_checks: list | None = None) -> dict:
+        """Build a data dict as get_all_checks would produce."""
+        return {
+            "status": "PASS",
+            "generated_at": "2026-07-24T00:00:00Z",
+            "duration_ms": 1234,
+            "metrics_freshness": "2026-07-24T00:00:00Z",
+            "staleness": None,
+            "checks": platform_service_checks or [],
+            "metrics": metrics_data,
+        }
+
     # 🧪 TRAP[TEST] · TASK-15 · Regression: SSL Summary Banner
     # · Scenario: Project with cert expiring in 5 days → banner shows "Earliest cert expires in 5 days"
     # · Last fail: never (new feature)
@@ -179,38 +243,15 @@ class TestTemplateRendering:
     def test_ssl_summary_banner(self, mock_status_metrics, caplog):
         """_render_html includes SSL Summary Banner when cert expires in <30 days."""
         caplog.set_level(0)
-
-        os.environ["NODE_NAME"] = "test-node"
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
-        # Reimport to pick up env
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
+        app = _get_status_page_module()
+        _render_html = app._render_html
 
-        # We need to mock the metrics JSON loading to use our fixture
-        # Strategy: patch _load_status_metrics to return our fixture data
-        from core.modules.status_page.app import _render_html
-
-        # Build the data dict as get_all_checks would
         with open(mock_status_metrics) as f:
             metrics_data = json.load(f)
 
-        data = {
-            "status": "PASS",
-            "generated_at": "2026-07-24T00:00:00Z",
-            "duration_ms": 1234,
-            "metrics_freshness": "2026-07-24T00:00:00Z",
-            "staleness": None,
-            "checks": [
-                {"target": "nginx", "type": "container", "status": "PASS", "error": None},
-                {"target": "postgres", "type": "container", "status": "PASS", "error": None},
-                {"target": "redis", "type": "container", "status": "WARN", "error": "status: Up 1 hour (health: starting)"},
-                {"target": "test-app", "type": "container", "status": "FAIL", "error": "status: Exited (137) 2 hours ago"},
-            ],
-            "metrics": metrics_data,
-        }
-
+        data = self._build_data(metrics_data)
         html = _render_html(data)
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -224,7 +265,9 @@ class TestTemplateRendering:
         print("--- END LDD TRAJECTORY ---")
 
         # SSL Summary Banner should be present
-        assert 'class="ssl-summary-banner"' in html, "SSL Summary Banner should be in HTML"
+        # Note: trailing space in class due to Jinja2 conditional ({% if ssl_min_days >= 7 %}ok{% endif %})
+        # Check for the HTML element specifically (not just CSS class in <style>)
+        assert '<div class="ssl-summary-banner ' in html, "SSL Summary Banner HTML element should be in HTML"
         assert "Earliest cert expires in" in html or "5 day" in html, (
             "SSL Summary Banner should mention earliest cert expiry"
         )
@@ -235,29 +278,15 @@ class TestTemplateRendering:
     def test_platform_services_table(self, mock_status_metrics, caplog):
         """_render_html includes Platform Services Table with all service entries."""
         caplog.set_level(0)
-
-        os.environ["NODE_NAME"] = "test-node"
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
-
-        from core.modules.status_page.app import _render_html
+        app = _get_status_page_module()
+        _render_html = app._render_html
 
         with open(mock_status_metrics) as f:
             metrics_data = json.load(f)
 
-        data = {
-            "status": "PASS",
-            "generated_at": "2026-07-24T00:00:00Z",
-            "duration_ms": 1234,
-            "metrics_freshness": "2026-07-24T00:00:00Z",
-            "staleness": None,
-            "checks": [],
-            "metrics": metrics_data,
-        }
-
+        data = self._build_data(metrics_data)
         html = _render_html(data)
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -272,14 +301,12 @@ class TestTemplateRendering:
 
         # Platform Services Table should be present
         assert "Platform Services" in html, "Platform Services heading should be in HTML"
-        # Check for known services
         assert "Grafana" in html
         assert "Prometheus" in html
         assert "Loki" in html
         assert "Hermes" in html
         assert "Langfuse" in html
         assert "LiteLLM" in html
-        # LiteLLM has no external URL
         assert "internal only" in html
 
     # 🧪 TRAP[TEST] · TASK-15 · Regression: Containers table columns
@@ -288,29 +315,15 @@ class TestTemplateRendering:
     def test_containers_table_new_columns(self, mock_status_metrics, caplog):
         """_render_html includes Uptime and Restart columns in Containers table."""
         caplog.set_level(0)
-
-        os.environ["NODE_NAME"] = "test-node"
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
-
-        from core.modules.status_page.app import _render_html
+        app = _get_status_page_module()
+        _render_html = app._render_html
 
         with open(mock_status_metrics) as f:
             metrics_data = json.load(f)
 
-        data = {
-            "status": "PASS",
-            "generated_at": "2026-07-24T00:00:00Z",
-            "duration_ms": 1234,
-            "metrics_freshness": "2026-07-24T00:00:00Z",
-            "staleness": None,
-            "checks": [],
-            "metrics": metrics_data,
-        }
-
+        data = self._build_data(metrics_data)
         html = _render_html(data)
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -327,9 +340,6 @@ class TestTemplateRendering:
         assert "<th>Uptime</th>" in html, "Uptime column header should be present"
         assert "<th>Restart</th>" in html, "Restart column header should be present"
         assert "<th>Domain(s)</th>" in html, "Domain(s) column header should be present"
-        # Check container uptime values
-        # nginx started at 2026-07-24T00:00:00Z — relative to now, test env-dependent
-        # At minimum check the HTML structure renders
 
     # 🧪 TRAP[TEST] · TASK-15 · Regression: Host Resources — Load Average & System Uptime
     # · Scenario: Template includes Load Average and System Uptime rows
@@ -337,29 +347,15 @@ class TestTemplateRendering:
     def test_host_resources_new_rows(self, mock_status_metrics, caplog):
         """_render_html includes Load Average and System Uptime in Host Resources."""
         caplog.set_level(0)
-
-        os.environ["NODE_NAME"] = "test-node"
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
-
-        from core.modules.status_page.app import _render_html
+        app = _get_status_page_module()
+        _render_html = app._render_html
 
         with open(mock_status_metrics) as f:
             metrics_data = json.load(f)
 
-        data = {
-            "status": "PASS",
-            "generated_at": "2026-07-24T00:00:00Z",
-            "duration_ms": 1234,
-            "metrics_freshness": "2026-07-24T00:00:00Z",
-            "staleness": None,
-            "checks": [],
-            "metrics": metrics_data,
-        }
-
+        data = self._build_data(metrics_data)
         html = _render_html(data)
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -376,25 +372,19 @@ class TestTemplateRendering:
         assert "Load Average" in html, "Load Average row should be present"
         assert "System Uptime" in html, "System Uptime row should be present"
         # Check backup status row
-        assert "Backup" in html or "backup" in html, "Backup status row should be present"
+        assert "Backup" in html, "Backup status row should be present"
 
     # 🧪 TRAP[TEST] · TASK-15 · Regression: SSL banner NOT shown when all certs fresh
     # · Scenario: All certs have >30 days remaining → no SSL banner
     # · Remove if: SSL banner logic changed
-    def test_ssl_banner_not_shown_when_fresh(self, tmp_path, caplog):
+    def test_ssl_banner_not_shown_when_fresh(self, caplog):
         """_render_html does NOT show SSL banner when all certs have >30 days remaining."""
         caplog.set_level(0)
-
-        os.environ["NODE_NAME"] = "test-node"
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
+        app = _get_status_page_module()
+        _render_html = app._render_html
 
-        from core.modules.status_page.app import _render_html
-
-        # Build metrics with all certs fresh (>30 days)
         metrics_data = {
             "generated_at": "2026-07-24T00:00:00Z",
             "containers": [],
@@ -415,16 +405,7 @@ class TestTemplateRendering:
             "errors": [],
         }
 
-        data = {
-            "status": "PASS",
-            "generated_at": "2026-07-24T00:00:00Z",
-            "duration_ms": 100,
-            "metrics_freshness": "2026-07-24T00:00:00Z",
-            "staleness": None,
-            "checks": [],
-            "metrics": metrics_data,
-        }
-
+        data = self._build_data(metrics_data)
         html = _render_html(data)
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -437,8 +418,11 @@ class TestTemplateRendering:
                         print(msg)
         print("--- END LDD TRAJECTORY ---")
 
-        assert 'class="ssl-summary-banner"' not in html, (
-            "SSL Summary Banner should NOT be present when all certs are fresh"
+        # Check that no SSL banner div is present in body (CSS class in <style> is expected)
+        assert '</style>' in html, "Style tag should be present"  # sanity
+        body = html.split('</style>', 1)[1] if '</style>' in html else html
+        assert 'ssl-summary-banner' not in body, (
+            "SSL Summary Banner element should NOT be in HTML body when all certs are fresh"
         )
 
 
@@ -456,21 +440,19 @@ class TestPlatformServiceHealthchecks:
     def test_curl_platform_service_pass(self, caplog):
         """_curl_platform_service returns PASS when curl returns HTTP 200."""
         caplog.set_level(0)
-
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
+        app = _get_status_page_module()
+        _curl_platform_service = app._curl_platform_service
 
-        from core.modules.status_page.app import _curl_platform_service
-
-        with mock.patch("core.modules.status_page.app.subprocess.run") as mock_run:
+        with mock.patch.object(app, "subprocess") as mock_subprocess:
+            mock_run = mock.Mock()
             mock_run.return_value = mock.Mock(
                 returncode=0,
                 stdout="200",
                 stderr="",
             )
+            mock_subprocess.run = mock_run
 
             result = _curl_platform_service("grafana:3000", "/api/health")
 
@@ -496,21 +478,19 @@ class TestPlatformServiceHealthchecks:
     def test_curl_platform_service_fail(self, caplog):
         """_curl_platform_service returns FAIL when curl returns non-zero exit code."""
         caplog.set_level(0)
-
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
 
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
+        app = _get_status_page_module()
+        _curl_platform_service = app._curl_platform_service
 
-        from core.modules.status_page.app import _curl_platform_service
-
-        with mock.patch("core.modules.status_page.app.subprocess.run") as mock_run:
+        with mock.patch.object(app, "subprocess") as mock_subprocess:
+            mock_run = mock.Mock()
             mock_run.return_value = mock.Mock(
                 returncode=7,
                 stdout="",
                 stderr="Failed to connect to host",
             )
+            mock_subprocess.run = mock_run
 
             result = _curl_platform_service("grafana:3000", "/api/health")
 
@@ -526,7 +506,9 @@ class TestPlatformServiceHealthchecks:
 
             assert result["status"] == "FAIL", f"Expected FAIL, got {result['status']}"
             assert result["type"] == "platform_service"
-            assert "curl exit 7" in result.get("error", ""), f"Expected 'curl exit 7' in error, got '{result.get('error')}'"
+            assert "curl exit 7" in result.get("error", ""), (
+                f"Expected 'curl exit 7' in error, got '{result.get('error')}'"
+            )
 
     # 🧪 TRAP[TEST] · TASK-16 · Regression: get_all_checks includes platform services
     # · Scenario: mock get_all_checks — platform service checks included in results
@@ -534,29 +516,38 @@ class TestPlatformServiceHealthchecks:
     def test_get_all_checks_includes_platform_services(self, caplog):
         """get_all_checks includes platform service checks when PLATFORM_SERVICES is populated."""
         caplog.set_level(0)
-
         os.environ["NODE_NAME"] = "test-node"
         os.environ["PLATFORM_DOMAIN"] = "ai-platform.local"
         os.environ["STATUS_METRICS_JSON"] = "/nonexistent/metrics.json"
 
-        for key in list(sys.modules.keys()):
-            if "status_page" in key or "status-page" in key:
-                del sys.modules[key]
+        app = _get_status_page_module()
+        get_all_checks = app.get_all_checks
 
         # Mock dependencies: node.yaml load, metrics load, curl_vhost, curl_platform_service
         with (
-            mock.patch("core.modules.status_page.app.load_node_yaml", return_value={"projects": [], "modules": []}),
-            mock.patch("core.modules.status_page.app._load_status_metrics", return_value={
-                "generated_at": None, "containers": [], "certs": [],
-                "projects": [], "host": {}, "errors": [],
-            }),
-            mock.patch("core.modules.status_page.app._curl_vhost") as mock_curl_vhost,
-            mock.patch("core.modules.status_page.app._curl_platform_service") as mock_curl_platform,
+            mock.patch.object(app, "load_node_yaml", return_value={"projects": [], "modules": []}),
+            mock.patch.object(
+                app,
+                "_load_status_metrics",
+                return_value={
+                    "generated_at": None,
+                    "containers": [],
+                    "certs": [],
+                    "projects": [],
+                    "host": {},
+                    "errors": [],
+                },
+            ),
+            mock.patch.object(app, "_curl_vhost") as mock_curl_vhost,
+            mock.patch.object(app, "_curl_platform_service") as mock_curl_platform,
         ):
             mock_curl_vhost.return_value = {"target": "test", "type": "vhost", "status": "PASS", "error": None}
-            mock_curl_platform.return_value = {"target": "grafana", "type": "platform_service", "status": "PASS", "error": None}
-
-            from core.modules.status_page.app import get_all_checks
+            mock_curl_platform.return_value = {
+                "target": "grafana",
+                "type": "platform_service",
+                "status": "PASS",
+                "error": None,
+            }
 
             result = get_all_checks()
 

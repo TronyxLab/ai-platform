@@ -51,9 +51,11 @@ node-update:
 		echo "[IMP:9][make][node-update] ERROR: NODE not set — usage: make node-update NODE=<name> [AGE_SECRET_KEY_FILE=<file>] [DRY_RUN=1] [RECONCILE=1]" >&2; \
 		exit 1; \
 	fi
-	@PLATFORM_ROOT="$(_platform_root)" $(_platform_root)/core/entrypoints/node-update.sh \
+	@PLATFORM_ROOT="$(_platform_root)" \
+	$(if $(AGE_SECRET_KEY_FILE),export _RESOLVED_KEY_FILE="$$(echo $(AGE_SECRET_KEY_FILE))";) \
+	$(_platform_root)/core/entrypoints/node-update.sh \
 		--node "$(NODE)" \
-		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file '$(AGE_SECRET_KEY_FILE)') \
+		$(if $(AGE_SECRET_KEY_FILE),--age-secret-key-file "$${_RESOLVED_KEY_FILE}") \
 		$(if $(filter 1,$(RECONCILE)),--reconcile) \
 		$(if $(filter 1,$(DRY_RUN)),--dry-run)
 	@echo "[IMP:9][make][node-update] Node update complete"
