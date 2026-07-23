@@ -127,6 +127,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
 
     steps:
       # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout — local action not found

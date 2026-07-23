@@ -46,6 +46,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read
 
     steps:
       # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · sha-resolve before checkout — local action not found
