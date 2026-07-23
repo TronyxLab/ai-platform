@@ -650,10 +650,10 @@ def platform_services(
 
     # ── Generate test data files for status-page bind-mount ─────────────────
     # status-page docker-compose.test.yml mounts /tmp/test-node-configs/test-node/node.yaml
-    # and /tmp/run/platform/docker-health.json into the container. These files
+    # and /tmp/run/platform/status-metrics.json into the container. These files
     # must exist on the host (macOS Docker Desktop requires /tmp paths).
     _test_node_yaml = Path("/tmp/test-node-configs/test-node/node.yaml")
-    _test_docker_health = Path("/tmp/run/platform/docker-health.json")
+    _test_status_metrics = Path("/tmp/run/platform/status-metrics.json")
 
     _test_node_yaml.parent.mkdir(parents=True, exist_ok=True)
     _test_node_yaml.write_text(
@@ -666,8 +666,21 @@ def platform_services(
     """)
     )
 
-    _test_docker_health.parent.mkdir(parents=True, exist_ok=True)
-    _test_docker_health.write_text("{}")
+    _test_status_metrics.parent.mkdir(parents=True, exist_ok=True)
+    _test_status_metrics.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+                "node": "test-node",
+                "containers": [],
+                "certs": [],
+                "projects": [],
+                "host": {"disk_total_gb": 100.0, "disk_free_gb": 50.0, "disk_used_percent": 50.0},
+                "errors": [],
+            }
+        )
+    )
 
     _logger.info("[IMP:8][conftest][platform_services] Test data files created for status-page bind-mount")
 

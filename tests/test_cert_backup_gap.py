@@ -368,8 +368,8 @@ def test_issue_cert_saves_all_4_files_to_s3():
     # Look for the section that has both issue_tls_cert and s3_cache
     issue_section = content.find("if ! issue_tls_cert")
     if issue_section >= 0:
-        # Check that upload follows within 40 lines
-        after_issue = content[issue_section : issue_section + 2000]
+        # Check that upload follows within 40 lines (~3000 chars with extensive TRAP comments)
+        after_issue = content[issue_section : issue_section + 3000]
         assert "s3-ssl-cache.sh" in after_issue, (
             "s3-ssl-cache.sh upload must be called in main() after issue_tls_cert success (within 40 lines)"
         )

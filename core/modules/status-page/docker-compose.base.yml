@@ -1,6 +1,6 @@
 # @purpose  Base compose definition for status-page Docker module — container_name:status-page, profiles, proxy-net, volumes
-# GREP_SUMMARY: status-page docker-compose proxy-net profiles volumes healthcheck node.yaml docker-health.json
-# STRUCTURE: ▶ status-page:python-3.12-alpine [profiles:status-page] → proxy-net → volumes (app, node.yaml ro, docker-health.json ro) → healthcheck → ┐
+# GREP_SUMMARY: status-page docker-compose proxy-net profiles volumes healthcheck node.yaml status-metrics.json
+# STRUCTURE: ▶ status-page:python-3.12-alpine [profiles:status-page] → proxy-net → volumes (app, node.yaml ro, status-metrics.json ro) → healthcheck → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for status-page Docker module — live node status aggregation
 ## @scope    Merged with root docker-compose.yml via include:
@@ -10,11 +10,13 @@
 ##   - restart: unless-stopped — Docker policy
 ##   - proxy-net — required for nginx proxy_pass to status-page:8080
 ##   - node.yaml: mounted ro from host /opt/node-configs/<node>/node.yaml
-##   - docker-health.json: mounted ro from host /run/platform/docker-health.json (tmpfs, cron-refreshed)
+##   - status-metrics.json: mounted ro from host /run/platform/status-metrics.json (tmpfs, cron-exported every 1m) — META Δ
 ##   - healthcheck: curl localhost:8080/health — verifies status-page is responding
 ## @rationale   Profiles enable selective startup via `make up MODULES=status-page`.
 ##              No external ports — all access via nginx Basic Auth proxy.
-##              Docker socket NOT mounted — reads pre-exported health JSON from cron.
+##              Docker socket NOT mounted — reads pre-exported metrics JSON from cron.
+## @changes
+##   2026-07-23 | docker-health.json → status-metrics.json | META Δ
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -37,8 +39,8 @@ services:
       - ./app.py:/app/app.py:ro
       # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
       - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-unknown}/node.yaml:/opt/node-configs/${NODE_NAME:-unknown}/node.yaml:ro
-      # docker-health.json — container statuses (cron-exported every 1m)
-      - /run/platform/docker-health.json:/run/platform/docker-health.json:ro
+      # status-metrics.json — container/cert/project/host metrics (cron-exported every 1m)
+      - /run/platform/status-metrics.json:/run/platform/status-metrics.json:ro
 
     environment:
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}

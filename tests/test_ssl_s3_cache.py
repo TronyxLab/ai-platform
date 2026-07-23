@@ -478,8 +478,9 @@ def test_issue_cert_saves_to_s3_after_success():
     cert_save_section = False
     for i, line in enumerate(lines):
         if "issue_tls_cert" in line and "true" in line:
-            # The upload call should be within the next ~30 lines
-            for j in range(i, min(i + 30, len(lines))):
+            # The upload call should be within the next ~50 lines (increased from 30
+            # to accommodate HTTP-01 subdomain cert issuance block — DevPlan 058 Wave 2)
+            for j in range(i, min(i + 50, len(lines))):
                 if "s3-ssl-cache.sh" in lines[j]:
                     cert_save_section = True
                     break
@@ -844,9 +845,7 @@ def test_upload_without_chain_pem_succeeds():
         if stripped.endswith("/chain.pem") or stripped == "${cert_dir}/chain.pem":
             has_chain_entry = True
             break
-    assert not has_chain_entry, (
-        "chain.pem must NOT be a standalone entry in required_files (G2 fix)"
-    )
+    assert not has_chain_entry, "chain.pem must NOT be a standalone entry in required_files (G2 fix)"
 
     logger.critical(
         "[IMP:9][test_no_chain_required] ASSERT: required_files = [fullchain.pem, privkey.pem] — chain.pem NOT required"
@@ -854,13 +853,13 @@ def test_upload_without_chain_pem_succeeds():
 
     # 2. chain.pem must be handled as best-effort upload (not required)
     assert 'chain.pem"' in upload_body, "chain.pem must still be referenced in _s3_upload()"
-    assert "best-effort" in upload_body.lower() or "best_effort" in upload_body.lower() or "skipping optional" in upload_body.lower(), (
-        "chain.pem upload must be documented as best-effort"
-    )
+    assert (
+        "best-effort" in upload_body.lower()
+        or "best_effort" in upload_body.lower()
+        or "skipping optional" in upload_body.lower()
+    ), "chain.pem upload must be documented as best-effort"
 
-    logger.critical(
-        "[IMP:9][test_no_chain_required] ASSERT: chain.pem referenced as best-effort upload — G2 fixed"
-    )
+    logger.critical("[IMP:9][test_no_chain_required] ASSERT: chain.pem referenced as best-effort upload — G2 fixed")
 
 
 @pytest.mark.static_audit
@@ -886,23 +885,19 @@ def test_upload_with_account_ecc_path():
     logger.info("[IMP:7][test_account_ecc] _s3_upload() body length: %d chars", len(upload_body))
 
     # 1. Primary path must be _ecc — data/<domain> is only acceptable as fallback (elif)
-    active_lines = [line for line in upload_body.split('\n') if not line.strip().startswith('#')]
+    active_lines = [line for line in upload_body.split("\n") if not line.strip().startswith("#")]
     # Find lines with data/<domain> path assignment and verify they're in elif/else context
     data_primary_found = False
     for i, line in enumerate(active_lines):
         if 'acme_domain_dir="${ACME_HOME}/data/${domain}"' in line:
             # Check if this assignment is in an elif block (fallback) or if block (primary)
-            if i > 0 and 'elif' in active_lines[i-1]:
+            if i > 0 and "elif" in active_lines[i - 1]:
                 continue  # elif = fallback, acceptable
             data_primary_found = True
-    assert not data_primary_found, (
-        "Active code must not use data/<domain> as primary (if) path — only as elif fallback"
-    )
+    assert not data_primary_found, "Active code must not use data/<domain> as primary (if) path — only as elif fallback"
 
     # 2. Active code must reference _ecc path
-    assert any('_ecc' in line for line in active_lines), (
-        "Active code must reference <domain>_ecc directory"
-    )
+    assert any("_ecc" in line for line in active_lines), "Active code must reference <domain>_ecc directory"
 
     logger.critical(
         "[IMP:9][test_account_ecc] ASSERT: _s3_upload() uses <domain>_ecc/ path — old data/<domain>/ removed"
@@ -910,22 +905,20 @@ def test_upload_with_account_ecc_path():
 
     # 3. Verify the fallback logic: _ecc first, then data/<domain> as fallback
     has_ecc = any("${domain}_ecc" in line for line in active_lines)
-    has_data = any('data/${domain}' in line for line in active_lines)
+    has_data = any("data/${domain}" in line for line in active_lines)
     assert has_ecc, "Active code must check _ecc path"
     assert has_data, "Must have legacy data/<domain>/ fallback for backward compatibility"
 
     # 4. Verify _ecc appears before data/<domain> in active code
     ecc_before_data = False
     for line in active_lines:
-        if '${domain}_ecc' in line:
+        if "${domain}_ecc" in line:
             ecc_before_data = True
             break
-        if 'data/${domain}' in line:
+        if "data/${domain}" in line:
             ecc_before_data = False
             break
-    assert ecc_before_data, (
-        "_ecc path must be checked before data/<domain> fallback"
-    )
+    assert ecc_before_data, "_ecc path must be checked before data/<domain> fallback"
 
     logger.critical(
         "[IMP:9][test_account_ecc] ASSERT: Account path fallback detected — _ecc primary, data/<domain> secondary"
@@ -941,13 +934,13 @@ def test_upload_with_account_ecc_path():
         f"Old download extract path found: {old_dl_pattern} — must extract to ACME_HOME/"
     )
 
-    assert '-C "${ACME_HOME}"' in download_body or '-C "${ACME_HOME}/"' in download_body or '-C "${ACME_HOME}"' in download_body, (
-        "Download must extract account.tar.gz to ACME_HOME/ (not ACME_HOME/data)"
-    )
+    assert (
+        '-C "${ACME_HOME}"' in download_body
+        or '-C "${ACME_HOME}/"' in download_body
+        or '-C "${ACME_HOME}"' in download_body
+    ), "Download must extract account.tar.gz to ACME_HOME/ (not ACME_HOME/data)"
 
-    logger.critical(
-        "[IMP:9][test_account_ecc] ASSERT: _s3_download() extracts account.tar.gz to ACME_HOME/ — G3 fixed"
-    )
+    logger.critical("[IMP:9][test_account_ecc] ASSERT: _s3_download() extracts account.tar.gz to ACME_HOME/ — G3 fixed")
 
 
 @pytest.mark.static_audit
@@ -973,42 +966,30 @@ def test_download_rejects_non_le_issuer():
     logger.info("[IMP:7][test_reject_non_le] _s3_download() body length: %d chars", len(download_body))
 
     # 1. Must have issuer check after x509 validation
-    assert "issuer" in download_body, (
-        "_s3_download() must check cert issuer"
-    )
-    assert "Let's Encrypt" in download_body, (
-        "_s3_download() must check for 'Let's Encrypt' issuer"
-    )
+    assert "issuer" in download_body, "_s3_download() must check cert issuer"
+    assert "Let's Encrypt" in download_body, "_s3_download() must check for 'Let's Encrypt' issuer"
 
-    logger.critical(
-        "[IMP:9][test_reject_non_le] ASSERT: _s3_download() validates issuer = Let's Encrypt"
-    )
+    logger.critical("[IMP:9][test_reject_non_le] ASSERT: _s3_download() validates issuer = Let's Encrypt")
 
     # 2. Must reject (return 1) on non-LE issuer
     # Find the last occurrence of "Let's Encrypt" (the one in active code, not TRAP comment)
-    le_indices = [i for i, line in enumerate(download_body.split('\n')) if 'Let\'s Encrypt' in line]
+    le_indices = [i for i, line in enumerate(download_body.split("\n")) if "Let's Encrypt" in line]
     assert len(le_indices) >= 1, "Must have at least one reference to 'Let's Encrypt'"
     # The last occurrence should be the active code check (TRAP comment comes first)
     last_le_line_idx = le_indices[-1]
-    lines = download_body.split('\n')
+    lines = download_body.split("\n")
     # Check that within 3 lines after the last LE reference there's a return 1
-    subsequent_lines = lines[last_le_line_idx:last_le_line_idx + 5]
-    assert any('return 1' in line for line in subsequent_lines), (
+    subsequent_lines = lines[last_le_line_idx : last_le_line_idx + 5]
+    assert any("return 1" in line for line in subsequent_lines), (
         f"_s3_download() must return 1 within 3 lines of issuer check — found lines: {subsequent_lines}"
     )
 
-    logger.critical(
-        "[IMP:9][test_reject_non_le] ASSERT: non-LE issuer triggers return 1 — rejection confirmed"
-    )
+    logger.critical("[IMP:9][test_reject_non_le] ASSERT: non-LE issuer triggers return 1 — rejection confirmed")
 
     # 3. Must log WARN on rejection
-    assert any('WARN' in line for line in subsequent_lines[:3]), (
-        "Must log WARN when rejecting non-LE cert"
-    )
+    assert any("WARN" in line for line in subsequent_lines[:3]), "Must log WARN when rejecting non-LE cert"
 
-    logger.critical(
-        "[IMP:9][test_reject_non_le] ASSERT: WARN logged on non-LE rejection"
-    )
+    logger.critical("[IMP:9][test_reject_non_le] ASSERT: WARN logged on non-LE rejection")
 
 
 @pytest.mark.static_audit
@@ -1035,15 +1016,13 @@ def test_download_accepts_le_cert():
 
     # 1. Openssl validation must still be present
     assert "openssl x509 -in" in download_body, "openssl x509 validation must be present"
-    assert "Let's Encrypt" in download_body, (
-        "_s3_download() must have Let's Encrypt issuer check"
-    )
+    assert "Let's Encrypt" in download_body, "_s3_download() must have Let's Encrypt issuer check"
 
     # 2. fullchain.pem restore path must still work
     assert "fullchain.pem" in download_body, "fullchain.pem restore must be present"
     # Verify cp command exists in lines that also contain fullchain.pem
-    dl_lines = download_body.split('\n')
-    cp_restore_found = any('cp' in line and 'fullchain.pem' in line for line in dl_lines)
+    dl_lines = download_body.split("\n")
+    cp_restore_found = any("cp" in line and "fullchain.pem" in line for line in dl_lines)
     assert cp_restore_found, "Must have cp command that copies fullchain.pem to cert_dir"
 
     # 3. privkey.pem restore must be present
@@ -1056,7 +1035,7 @@ def test_download_accepts_le_cert():
     assert "account.tar.gz" in download_body, "account.tar.gz restore must be present"
 
     # 6. Must return 0 on success (DONE log)
-    assert 'return 0' in download_body, "_s3_download() must return 0 on success"
+    assert "return 0" in download_body, "_s3_download() must return 0 on success"
 
     logger.critical(
         "[IMP:9][test_accept_le] ASSERT: _s3_download() restores fullchain + privkey + chain + account — all paths intact"

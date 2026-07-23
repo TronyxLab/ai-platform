@@ -376,7 +376,9 @@ def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
             env=env,
         )
         if result.returncode == 0:
-            logger.info("[IMP:9][cert_orchestrator] %s — cert issued successfully (challenge=%s)", domain, challenge_mode)
+            logger.info(
+                "[IMP:9][cert_orchestrator] %s — cert issued successfully (challenge=%s)", domain, challenge_mode
+            )
             return DomainCertResult(
                 domain=domain,
                 status="issued",
@@ -398,7 +400,9 @@ def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
         )
     except subprocess.TimeoutExpired:
         logger.warning("[IMP:7][cert_orchestrator] %s — issue-cert.sh timed out", domain)
-        return DomainCertResult(domain=domain, status="failed", source="acme", challenge=challenge_mode, error="timeout")
+        return DomainCertResult(
+            domain=domain, status="failed", source="acme", challenge=challenge_mode, error="timeout"
+        )
     except FileNotFoundError as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — issue-cert.sh error: %s", domain, e)
         return DomainCertResult(domain=domain, status="failed", source="acme", challenge=challenge_mode, error=str(e))
@@ -446,11 +450,21 @@ def _source_secrets_env(secrets_env_path: str) -> None:
                 os.environ.pop(proxy_var, None)
             logger.info("[IMP:9][cert_orchestrator] Secrets loaded from %s", secrets_env_path)
             # Validate WEBNAMES_API_KEY format — must include leading asterisk
+            # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · FALSE DIAGNOSIS: zone_manager_unavailable ≠ DNS-01 broken
+            # · Symptom: webnames.ru API returns {"result":"ERROR","details":"zone_manager_unavailable"}
+            #   for `domains_list` action only. TXT record add/delete work correctly.
+            # · Reality: DNS-01 via webnames.ru WORKS for certificate issuance.
+            #   Verified 2026-07-23: wildcard *.tronyx.ru issued via LE staging.
+            # · Root cause of prior failure: LE rate-limit (50 certs/domain/week), not DNS API.
+            # · Prevention: DO NOT treat zone_manager_unavailable as DNS-01 failure.
+            #   Test add/delete before concluding DNS API is broken.
+            # · Rev: if add/delete also fail → DNS-01 truly broken, HTTP-01 fallback needed.
             webnames_key = os.environ.get("WEBNAMES_API_KEY", "")
             if webnames_key and not webnames_key.startswith("*"):
                 logger.warning(
                     "[IMP:9][cert_orchestrator] WEBNAMES_API_KEY missing leading '*' — "
-                    "webnames.ru API may return zone_manager_unavailable. "
+                    "webnames.ru API may return zone_manager_unavailable for domains_list "
+                    "(listing only, add/delete TXT records still work). "
                     "The key shown in webnames control panel includes the asterisk prefix."
                 )
         else:

@@ -105,6 +105,22 @@ _issue_acme_cert() {
 
         local api_key="${WEBNAMES_API_KEY:-}"
         # Validate webnames API key format — must include leading asterisk
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · FALSE DIAGNOSIS: zone_manager_unavailable ≠ DNS-01 broken
+        # · Symptom: webnames.ru API returns {"result":"ERROR","details":"zone_manager_unavailable"}
+        #   for `domains_list` action, leading to conclusion that DNS-01 is completely broken.
+        # · Reality: `zone_manager_unavailable` affects ONLY the `domains_list` (listing) endpoint.
+        #   TXT record add/delete operations WORK CORRECTLY:
+        #   - add:    {"result":"OK","details":1}
+        #   - delete: {"result":"OK","details":1}
+        # · Proof: Wildcard cert *.tronyx.ru successfully issued via LE staging 2026-07-23
+        #   using `acme.sh --dns dns_webnames --server letsencrypt_test`.
+        # · Root cause of previous failure: Let's Encrypt rate-limit (50 certs/domain/week),
+        #   NOT DNS API failure. Rate-limit expired 2026-07-23 23:19 UTC.
+        # · Prevention: DO NOT disable DNS-01 or switch to HTTP-01 based on
+        #   `zone_manager_unavailable` from `domains_list`. Verify with actual add/delete
+        #   before concluding DNS-01 is broken. Test command:
+        #   curl "https://www.webnames.ru/scripts/json_domain_zone_manager.pl?apikey=$KEY&domain=$DOM&type=TXT&record=_acme-challenge.test:test123&action=add"
+        # · Rev: if add/delete also return zone_manager_unavailable → DNS-01 truly broken.
         if [[ -n "$api_key" && "$api_key" != "*"* ]]; then
             log_step "acme" "WARN" "WEBNAMES_API_KEY missing leading '*' — webnames.ru API may return zone_manager_unavailable. The key shown in webnames control panel includes the asterisk prefix."
         fi

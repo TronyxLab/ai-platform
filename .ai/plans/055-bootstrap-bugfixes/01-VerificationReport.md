@@ -21,8 +21,8 @@ $START_VERIFICATION_REPORT
 
 ## 🔒 SHA Anchor
 
-**SHA:** `789545c932a6aed748c5b73d1532d54e6586731b`  
-**Branch:** main (ahead of origin/main by 2 commits)  
+**SHA:** `789545c932a6aed748c5b73d1532d54e6586731b`
+**Branch:** main (ahead of origin/main by 2 commits)
 **Uncommitted changes:** 7 files modified, 1 untracked (test_deploy_context_integration.py)
 
 ⚠️ [INFO] Uncommitted changes present — verification is against working tree, not committed state.
@@ -156,7 +156,7 @@ Task is STANDARD (5 files + 1 new test). Invariant verification per AGENTS.md §
 
 [WARNING] DevPlan AC-5 lists `test_status_page_node_name_fallback` — no standalone test for status-page NODE_NAME fallback. The `unknown` fallback is a compose-level default with no runtime test coverage. This is acceptable for a STANDARD task (compose defaults are self-documenting), but should be noted.
 
-**Test Quality Score:** 95/100  
+**Test Quality Score:** 95/100
 **Summary:** PASS — minor test name deviations, one missing standalone test.
 
 ---

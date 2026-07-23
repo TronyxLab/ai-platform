@@ -1,4 +1,4 @@
-# GREP_SUMMARY: status-page test overlay shifted-ports 18082 container_name status-page-test
+# GREP_SUMMARY: status-page test overlay shifted-ports 18082 container_name status-page-test status-metrics-json
 # STRUCTURE: ▶ status-page-test [profiles:status-page] → port 18082:8080 → ┐
 # region MODULE_CONTRACT
 ## @purpose  Test overlay for status-page — shifts port to 18082 for CI isolation,
@@ -9,10 +9,13 @@
 ##   - Port: 18082:8080 (shifted from base 8080 for test isolation; 18080 conflicts with nginx-test, 18081 with cadvisor-test)
 ##   - profiles: [status-page] (consistent with base)
 ##   - !override tag on overridden keys per test overlay convention (F-7)
+##   - status-metrics.json: mounted from /tmp/run/platform/status-metrics.json (test fixture)
 ## @rationale Test overlay pattern from F-7: shifted ports prevent port conflicts in CI;
 ##            unique container_name prevents collision with base compose services
 ##            when both test and base compose files are loaded.
-## @changes — 2026-07-21 | 18080→18082: collided with nginx-test port (wave1-gate-full)
+## @changes
+##   2026-07-21 | 18080→18082: collided with nginx-test port (wave1-gate-full)
+##   2026-07-23 | docker-health.json → status-metrics.json | META Δ
 # endregion MODULE_CONTRACT
 
 services:
@@ -26,7 +29,7 @@ services:
     volumes: !override
       - ./app.py:/app/app.py:ro
       - /tmp/test-node-configs/test-node/node.yaml:/opt/node-configs/test-node/node.yaml:ro
-      - /tmp/run/platform/docker-health.json:/run/platform/docker-health.json:ro
+      - /tmp/run/platform/status-metrics.json:/run/platform/status-metrics.json:ro
 
 networks:
   test-proxy-net:

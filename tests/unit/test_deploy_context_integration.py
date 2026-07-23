@@ -141,9 +141,9 @@ def test_verify_domains_passes_platform_root(caplog, tmp_path, monkeypatch):
     verify_calls = [c for c in calls if "verify-domains.sh" in str(c)]
     assert len(verify_calls) > 0, "verify-domains.sh was not called"
     # First arg is bash, second is script path, third is node_name, fourth is platform_root
-    assert (
-        len(verify_calls[0]) >= 4
-    ), f"verify-domains.sh got only {len(verify_calls[0])} args, expected ≥4: {verify_calls[0]}"
+    assert len(verify_calls[0]) >= 4, (
+        f"verify-domains.sh got only {len(verify_calls[0])} args, expected ≥4: {verify_calls[0]}"
+    )
     logger.critical("[IMP:9][test] verify-domains.sh receives platform_root argument")
 
 

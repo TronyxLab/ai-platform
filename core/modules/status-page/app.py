@@ -1,22 +1,37 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: status-page app.py live-status http.server node.yaml docker-health.json html json health
-# STRUCTURE: ▶ StatusPageHandler(do_GET) → ◇ path=/: render_html → ◇ path=/health: render_health → ◇ path=/status.json: render_json → ▷ _get_checks(): read node.yaml + docker-health.json + live-curl vhosts → ▷ _curl_vhost(): subprocess.run curl → ⎋ response
+# GREP_SUMMARY: status-page app.py live-status http.server node.yaml status-metrics.json jinja2 html json health refresh
+# STRUCTURE: ▶ StatusPageHandler(do_GET|do_POST) → ◇ path=/: Jinja2 render → ◇ path=/health: render_health
+#            → ◇ path=/status.json: render_json → ◇ path=/refresh: POST placeholder
+#            → ▷ _load_status_metrics(): read + schema check + staleness
+#            → ▷ _get_checks(): read node.yaml + status-metrics.json + live-curl vhosts
+#            → ▷ _curl_vhost(): subprocess.run curl → ⎋ response
 # region MODULE_CONTRACT
-## @purpose  Live status-page HTTP server — aggregates node health (vhosts + containers),
-##           renders HTML table with clickable links, exposes /health for CI post-deploy gate.
+## @purpose  Live status-page HTTP server — aggregates node health (certs + containers + host),
+##           renders Jinja2 HTML with 3 tables, exposes /health for CI post-deploy gate.
 ## @scope    Runs inside status-page Docker container on port 8080, internal-only (no external ports).
 ##           Accessed via nginx proxy_pass with Basic Auth (auth handled by nginx, not here).
 ## @invariants
-##   - Python 3.10+ stdlib only (http.server, json, subprocess, yaml)
+##   - Jinja2 autoescape=select_autoescape(['html']) — XSS protection (Δ12, AC14-M)
+##   - FileSystemLoader with absolute path (Path(__file__).parent / "templates") — Δ19
+##   - Environment created ONCE at module level, not per request
 ##   - Total check timeout ≤30s (per-check timeout ≤5s)
 ##   - Anti-recursion: excludes status-page container from self-checks
-##   - Reads node.yaml ro, docker-health.json ro
+##   - Reads status-metrics.json (ro, mounted from host tmpfs), checks schema_version ≥ 2
+##   - Staleness check: generated_at > 5 min → warning banner on HTML + WARN in /health
 ##   - All responses include: X-Robots-Tag, Referrer-Policy, X-Data-Freshness headers
-##   - /health returns 200 "PASS" or 503 "FAIL"
-##   - /status.json returns full aggregate with status, generated_at, duration_ms, checks[]
-## @rationale python3-stdlib chosen over frameworks to minimize image size and dependencies.
-##            Live-curl vhosts approach gives real-time verification for post-deploy gate.
-##            Docker-health.json read avoids docker.sock access (security).
+##   - /health returns 200 "PASS" or 503 "FAIL" (unchanged contract AC3-M)
+##   - /status.json returns full aggregate with certs, projects, host, schema_version: 2 (AC4-M)
+##   - container_name → name: contract broken consciously (Δ8, AC12-M)
+## @rationale Jinja2 replaces inline HTML for maintainability. Autoescape prevents XSS.
+##            FileSystemLoader with Path(__file__).parent prevents deployment path breakage.
+##            Staleness check alerts operator when cron export is stalled.
+## @changes
+##   2026-07-23 | META Δ2 | Atomic write → readers never see partial JSON
+##   2026-07-23 | META Δ4 | schema_version check at read time
+##   2026-07-23 | META Δ5 | Modular collectors (docker/cert/project/host)
+##   2026-07-23 | META Δ8 | container_name → name
+##   2026-07-23 | META Δ12 | Jinja2 autoescape
+##   2026-07-23 | META Δ19 | FileSystemLoader with absolute path
 # endregion MODULE_CONTRACT
 
 import http.server
@@ -27,6 +42,10 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 # ═══════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -37,11 +56,20 @@ LISTEN_HOST = os.environ.get("STATUS_PAGE_HOST", "0.0.0.0")
 NODE_NAME = os.environ.get("NODE_NAME", "test-node")
 NODE_CONFIGS_DIR = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
 PLATFORM_DOMAIN = os.environ.get("PLATFORM_DOMAIN", "ai-platform.local")
-DOCKER_HEALTH_JSON = os.environ.get("DOCKER_HEALTH_JSON", "/run/platform/docker-health.json")
+STATUS_METRICS_JSON = os.environ.get("STATUS_METRICS_JSON", "/run/platform/status-metrics.json")
 PER_CHECK_TIMEOUT = int(os.environ.get("PER_CHECK_TIMEOUT", "5"))
 TOTAL_TIMEOUT = int(os.environ.get("TOTAL_TIMEOUT", "30"))
 
 NODE_YAML_PATH = os.path.join(NODE_CONFIGS_DIR, NODE_NAME, "node.yaml")
+
+# ═══════════════════════════════════════════════════════════════════
+# JINJA2 ENVIRONMENT (initialized once at module level)
+# ═══════════════════════════════════════════════════════════════════
+
+_jinja_env = Environment(
+    loader=FileSystemLoader(str(Path(__file__).parent / "templates")),
+    autoescape=select_autoescape(["html"]),
+)
 
 # ═══════════════════════════════════════════════════════════════════
 # DATA LAYER
@@ -65,18 +93,40 @@ def load_node_yaml(path: str) -> dict:
 # endregion FUNC_load_node_yaml
 
 
-# region FUNC_load_docker_health
-def load_docker_health(path: str) -> dict:
-    """Load docker-health.json from cron export. Returns empty containers list on failure."""
+# region FUNC_load_status_metrics
+def _load_status_metrics(path: str) -> dict:
+    """Load status-metrics.json with schema_version check.
+
+    # ▶ ┌path┐ → open JSON → ◇ schema_version >= 2? → return data
+    #                                          └→ log warning, return empty
+    # On failure → return empty containers/certs/projects/host with errors[]
+
+    Returns full data dict as-is from file, or fallback structure on failure.
+    """
     try:
         with open(path) as f:
-            return json.load(f)
+            data = json.load(f)
+
+        # Schema version check
+        sv = data.get("schema_version", 0)
+        if sv < 2:
+            print(f"[IMP:8][status-page][load-metrics] WARNING: schema_version={sv}, expected >=2", file=sys.stderr)
+            # Still return data — older schema is partially compatible
+
+        return data
     except Exception as e:
-        print(f"[IMP:8][status-page][load-health] Failed to load docker-health.json: {e}", file=sys.stderr)
-        return {"generated_at": None, "containers": []}
+        print(f"[IMP:8][status-page][load-metrics] Failed to load status-metrics.json: {e}", file=sys.stderr)
+        return {
+            "generated_at": None,
+            "containers": [],
+            "certs": [],
+            "projects": [],
+            "host": {},
+            "errors": ["Failed to load status-metrics.json"],
+        }
 
 
-# endregion FUNC_load_docker_health
+# endregion FUNC_load_status_metrics
 
 
 # region FUNC_get_vhosts
@@ -173,7 +223,7 @@ def _curl_vhost(domain: str, timeout: int = PER_CHECK_TIMEOUT) -> dict:
 
 # region FUNC_check_container
 def _check_container(container: dict) -> dict:
-    """Check a single container from docker-health.json data. Returns check result.
+    """Check a single container from status-metrics.json data. Returns check result.
 
     Status logic:
     - Running & healthy → PASS
@@ -182,7 +232,7 @@ def _check_container(container: dict) -> dict:
     - Not running, exit_code>0 OR status_line contains "Exited (non-zero)" → FAIL
     - Other non-running → FAIL
     """
-    name = container.get("container_name", "unknown")
+    name = container.get("name", "unknown")  # Δ8: container_name → name
     running = container.get("running", False)
     healthy = container.get("healthy", False)
     exit_code = container.get("exit_code")
@@ -199,7 +249,6 @@ def _check_container(container: dict) -> dict:
     elif not running:
         # Determine exit code: prefer explicit field, fall back to parsing status_line
         if exit_code is None:
-            # Parse "Exited (N)" from status_line
             m = re.search(r"Exited\s*\((\d+)\)", status_line)
             exit_code = int(m.group(1)) if m else None
         # Oneshot/init container that completed successfully → PASS, otherwise FAIL
@@ -222,18 +271,152 @@ def _check_container(container: dict) -> dict:
 # endregion FUNC_check_container
 
 
+# region FUNC_compute_staleness
+def _compute_staleness(generated_at: str | None) -> str | None:
+    """Compute staleness of metrics data. Returns None if fresh, string description if stale.
+
+    # ▶ ┌generated_at (ISO 8601)┐ → ◇ None? → ⎋ None
+    #                               → ◇ age > 5 min? → ⎋ "Xm Ys" description
+    #                               → ⎋ None (fresh)
+    """
+    if not generated_at:
+        return None
+
+    try:
+        if generated_at.endswith("Z"):
+            generated_at = generated_at[:-1] + "+00:00"
+        gen_time = datetime.fromisoformat(generated_at)
+        now = datetime.now(timezone.utc)
+        delta = now - gen_time
+        if delta.total_seconds() > 300:  # 5 minutes
+            minutes = int(delta.total_seconds() // 60)
+            seconds = int(delta.total_seconds() % 60)
+            return f"{minutes}m {seconds}s"
+    except (ValueError, TypeError):
+        pass
+
+    return None
+
+
+# endregion FUNC_compute_staleness
+
+
+# region FUNC_enrich_projects
+def _enrich_projects(projects: list[dict], certs: list[dict]) -> list[dict]:
+    """Enrich project data with cert info for template rendering.
+
+    # ▶ ┌projects[] + certs[]┐ → match cert by domain → ⊕ cert_issuer, cert_expiry, days_remaining, san fields
+    #    → format code_size_bytes → GB → ⎋ enriched list
+
+    Returns projects enriched with: cert_issuer, cert_expiry, days_remaining,
+    san_full (all SANs), san_truncated (first 5), code_size_gb, image_size_gb.
+    """
+    # Build cert index: domain → cert info
+    cert_index: dict[str, dict] = {}
+    for cert in certs:
+        for domain in cert.get("domains", []):
+            cert_index[domain] = cert
+
+    enriched = []
+    for p in projects:
+        domain = p.get("domain", "")
+        cert = cert_index.get(domain, {})
+
+        san_list = cert.get("san", [])
+        san_full = ", ".join(san_list)
+        san_truncated = ", ".join(san_list[:5])
+        if len(san_list) > 5:
+            san_truncated += " ..."
+
+        enriched.append(
+            {
+                "name": p.get("name", ""),
+                "domain": domain,
+                "cert_issuer": cert.get("issuer", ""),
+                "cert_expiry": cert.get("not_after_iso", ""),
+                "days_remaining": cert.get("days_remaining"),
+                "san_full": san_full,
+                "san_truncated": san_truncated,
+                "code_size_gb": _bytes_to_gb(p.get("code_size_bytes", 0)),
+                "image_size_gb": _bytes_to_gb(p.get("docker_image_size_bytes", 0)),
+            }
+        )
+
+    return enriched
+
+
+# endregion FUNC_enrich_projects
+
+
+# region FUNC_enrich_containers
+def _enrich_containers(containers: list[dict]) -> list[dict]:
+    """Enrich container data for template rendering.
+
+    # ▶ ┌containers[]┐ → ⊕ domains, status, memory_used/memory_limit formatted, image_size_gb
+    #    → ⎋ enriched list
+    """
+    enriched = []
+    for c in containers:
+        mem_used = c.get("memory_usage_bytes", 0)
+        mem_limit = c.get("memory_limit_bytes", 0)
+        mem_used_pct = round(mem_used / mem_limit * 100, 1) if mem_limit > 0 else 0
+
+        enriched.append(
+            {
+                "name": c.get("name", ""),
+                "domains": [],  # Filled from project data if available
+                "status": "running" if c.get("running") else "exited",
+                "status_line": c.get("status_line", ""),
+                "cpu_percent": c.get("cpu_percent", 0.0),
+                "memory_used": _bytes_to_gb_str(mem_used),
+                "memory_limit": _bytes_to_gb_str(mem_limit),
+                "memory_used_pct": mem_used_pct,
+                "image": c.get("image", ""),
+                "image_size_gb": _bytes_to_gb(c.get("image_size_bytes", 0)),
+            }
+        )
+
+    return enriched
+
+
+# endregion FUNC_enrich_containers
+
+
+# region FUNC__bytes_to_gb
+def _bytes_to_gb(bytes_val: int) -> str:
+    """Convert bytes to GB string with 2 decimal places."""
+    if not bytes_val:
+        return "0.00"
+    return f"{bytes_val / (1024**3):.2f}"
+
+
+# endregion FUNC__bytes_to_gb
+
+
+# region FUNC__bytes_to_gb_str
+def _bytes_to_gb_str(bytes_val: int) -> str:
+    """Convert bytes to human-readable GB string."""
+    if not bytes_val:
+        return "0 GB"
+    gb = bytes_val / (1024**3)
+    return f"{gb:.1f} GB"
+
+
+# endregion FUNC__bytes_to_gb_str
+
+
 # region FUNC_get_all_checks
 def get_all_checks() -> dict:
-    """Run all checks (vhosts + containers) with parallel fan-out. Returns aggregate dict."""
+    """Run all checks (vhosts + containers from metrics) with parallel fan-out. Returns aggregate dict."""
     start = time.monotonic()
     checks = []
 
     node_data = load_node_yaml(NODE_YAML_PATH)
-    docker_health = load_docker_health(DOCKER_HEALTH_JSON)
-    freshness = docker_health.get("generated_at")
+    metrics = _load_status_metrics(STATUS_METRICS_JSON)
+    freshness = metrics.get("generated_at")
 
-    # ── Container checks (from docker-health.json) ──
-    containers = docker_health.get("containers", [])
+    # ── Container checks (from status-metrics.json containers) ──
+    containers = metrics.get("containers", [])
     for c in containers:
         result = _check_container(c)
         if result is not None:
@@ -265,16 +448,77 @@ def get_all_checks() -> dict:
     all_pass = all(c["status"] == "PASS" for c in checks)
     duration_ms = int((time.monotonic() - start) * 1000)
 
+    # Check staleness
+    staleness = _compute_staleness(freshness)
+    # If stale, overall status is still WARN (not FAIL) — data exists but may be old
+    overall = "PASS" if all_pass else "FAIL"
+
     return {
-        "status": "PASS" if all_pass else "FAIL",
+        "status": overall,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "duration_ms": duration_ms,
-        "docker_health_freshness": freshness,
+        "metrics_freshness": freshness,
+        "staleness": staleness,
         "checks": checks,
+        # Full metrics data for HTML template
+        "metrics": metrics,
     }
 
 
 # endregion FUNC_get_all_checks
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RENDER LAYER
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_render_html
+def _render_html(data: dict) -> str:
+    """Render status page using Jinja2 template.
+
+    # ▶ ┌data dict┐ → extract/enrich sections → Jinja2 render → ⎋ HTML string
+    """
+    metrics = data.get("metrics", {})
+
+    # Enrich projects with cert info
+    projects = _enrich_projects(
+        metrics.get("projects", []),
+        metrics.get("certs", []),
+    )
+
+    # Enrich containers
+    containers = _enrich_containers(metrics.get("containers", []))
+
+    # Host data
+    host = metrics.get("host", {})
+
+    # Overall status from checks
+    overall_status = data.get("status", "FAIL")
+
+    # Errors from metrics export
+    metric_errors = metrics.get("errors", [])
+
+    context = {
+        "node_name": NODE_NAME,
+        "overall_status": overall_status,
+        "projects": projects,
+        "containers": containers,
+        "host": {
+            "disk_total_gb": host.get("disk_total_gb", 0),
+            "disk_free_gb": host.get("disk_free_gb", 0),
+            "disk_used_percent": host.get("disk_used_percent", 0.0),
+        },
+        "errors": metric_errors,
+        "staleness": data.get("staleness"),
+        "generated_at": data.get("metrics_freshness") or "unknown",
+    }
+
+    template = _jinja_env.get_template("status.html")
+    return template.render(**context)
+
+
+# endregion FUNC_render_html
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -297,7 +541,7 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
     def _send_json(self, data: dict, status_code: int = 200):
         """Send JSON response."""
         body = json.dumps(data, indent=2).encode("utf-8")
-        freshness = data.get("docker_health_freshness")
+        freshness = data.get("metrics_freshness")
         self.send_response(status_code)
         self._send_common_headers("application/json", freshness)
         self.send_header("Content-Length", str(len(body)))
@@ -329,116 +573,84 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status":"ERROR","error":"internal server error"}')
 
+    def do_POST(self):
+        """Route POST requests — /refresh placeholder."""
+        try:
+            path = self.path.rstrip("/") or "/"
+            if path == "/refresh":
+                self._handle_refresh()
+            else:
+                self.send_response(405)
+                self.end_headers()
+                self.wfile.write(b"Method Not Allowed")
+        except Exception as e:
+            print(f"[IMP:8][status-page][handler] POST error: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ERROR"}')
+
     def _handle_health(self):
         """Handle /health — binary verdict: 200 PASS or 503 FAIL."""
         data = get_all_checks()
-        if data["status"] == "PASS":
+        if data["status"] == "PASS" and not data.get("staleness"):
             self._send_json({"status": "PASS", "checks_count": len(data["checks"]), "duration_ms": data["duration_ms"]})
         else:
             failed = [c for c in data["checks"] if c["status"] != "PASS"]
-            self._send_json(
-                {
-                    "status": "FAIL",
-                    "checks_count": len(data["checks"]),
-                    "failed_count": len(failed),
-                    "duration_ms": data["duration_ms"],
-                    "failed": [{"target": f["target"], "status": f["status"], "error": f.get("error")} for f in failed],
-                },
-                status_code=503,
-            )
+            response = {
+                "status": "FAIL",
+                "checks_count": len(data["checks"]),
+                "failed_count": len(failed),
+                "duration_ms": data["duration_ms"],
+                "failed": [{"target": f["target"], "status": f["status"], "error": f.get("error")} for f in failed],
+            }
+            if data.get("staleness"):
+                response["staleness"] = data["staleness"]
+            self._send_json(response, status_code=503)
 
     def _handle_status_json(self):
-        """Handle /status.json — full machine-readable aggregate."""
+        """Handle /status.json — full machine-readable aggregate with metrics."""
         data = get_all_checks()
+        # Include full metrics data
+        metrics = data.get("metrics", {})
+        full_data = {
+            "status": data["status"],
+            "generated_at": data["generated_at"],
+            "duration_ms": data["duration_ms"],
+            "metrics_freshness": data["metrics_freshness"],
+            "staleness": data.get("staleness"),
+            "checks": data["checks"],
+            # Extended fields (AC4-M)
+            "schema_version": metrics.get("schema_version", 0),
+            "node": metrics.get("node", NODE_NAME),
+            "containers": metrics.get("containers", []),
+            "certs": metrics.get("certs", []),
+            "projects": metrics.get("projects", []),
+            "host": metrics.get("host", {}),
+            "errors": metrics.get("errors", []),
+        }
         status_code = 200 if data["status"] == "PASS" else 503
-        self._send_json(data, status_code=status_code)
+        self._send_json(full_data, status_code=status_code)
 
     def _handle_html(self):
-        """Handle / — HTML table with vhosts and services, clickable links."""
+        """Handle / — HTML page with Jinja2 template."""
+        print("[IMP:7][status-page][html] Rendering status page", file=sys.stderr)
         data = get_all_checks()
-        freshness = data.get("docker_health_freshness", "unknown")
-        vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
-        container_checks = [c for c in data["checks"] if c["type"] == "container"]
+        freshness = data.get("metrics_freshness", "unknown")
 
-        # ── Build HTML ──
-        overall = data["status"]
-        status_color = "#27ae60" if overall == "PASS" else "#e74c3c"
-        status_icon = "✓" if overall == "PASS" else "✗"
+        html = _render_html(data)
+        self._send_html(html, freshness)
 
-        html_parts = [
-            "<!DOCTYPE html>",
-            '<html lang="en">',
-            "<head>",
-            '<meta charset="utf-8">',
-            '<meta name="viewport" content="width=device-width, initial-scale=1">',
-            f"<title>Node Status — {NODE_NAME}</title>",
-            "<style>",
-            "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:960px;margin:2em auto;padding:0 1em;background:#f5f5f5;color:#333}",
-            "h1{font-size:1.5em;margin-bottom:.5em}",
-            ".overall{padding:1em;border-radius:8px;margin-bottom:2em;color:#fff;background:" + status_color + "}",
-            ".overall .icon{font-size:2em;margin-right:.5em}",
-            "table{width:100%;border-collapse:collapse;margin-bottom:2em;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)}",
-            "th,td{padding:10px 16px;text-align:left;border-bottom:1px solid #eee}",
-            "th{background:#fafafa;font-weight:600;font-size:.85em;text-transform:uppercase;color:#666}",
-            ".PASS{color:#27ae60;font-weight:600}",
-            ".FAIL{color:#e74c3c;font-weight:600}",
-            ".WARN{color:#f39c12;font-weight:600}",
-            "a{color:#3498db;text-decoration:none}",
-            "a:hover{text-decoration:underline}",
-            ".footer{font-size:.8em;color:#999;margin-top:3em;text-align:center}",
-            "</style>",
-            "</head>",
-            "<body>",
-            f"<h1>Node Status: {NODE_NAME}</h1>",
-            '<div class="overall">',
-            f'<span class="icon">{status_icon}</span>',
-            "<strong>Overall: {status}</strong> — {count} checks in {ms}ms".format(
-                status=overall, count=len(data["checks"]), ms=data["duration_ms"]
-            ),
-            "</div>",
-        ]
+    def _handle_refresh(self):
+        """Handle /refresh — placeholder for manual metric refresh.
 
-        # ── Vhosts table ──
-        if vhost_checks:
-            html_parts.append("<h2>VHosts</h2>")
-            html_parts.append(
-                "<table><thead><tr><th>Domain</th><th>Status</th><th>HTTP</th><th>Time</th></tr></thead><tbody>"
-            )
-            for c in vhost_checks:
-                cls = c["status"]
-                domain = c["target"]
-                http_code = c.get("http_code", "-")
-                duration = c.get("duration_ms", "-")
-                html_parts.append(
-                    f'<tr><td><a href="https://{domain}" target="_blank" rel="noopener">{domain}</a></td>'
-                    f'<td class="{cls}">{cls}</td>'
-                    f"<td>{http_code}</td>"
-                    f"<td>{duration}ms</td></tr>"
-                )
-            html_parts.append("</tbody></table>")
-
-        # ── Containers table ──
-        if container_checks:
-            html_parts.append("<h2>Services / Containers</h2>")
-            html_parts.append("<table><thead><tr><th>Container</th><th>Status</th><th>Info</th></tr></thead><tbody>")
-            for c in container_checks:
-                cls = c["status"]
-                name = c["target"]
-                info = c.get("status_line", "")
-                html_parts.append(f'<tr><td>{name}</td><td class="{cls}">{cls}</td><td>{info}</td></tr>')
-            html_parts.append("</tbody></table>")
-
-        # ── Footer ──
-        html_parts.append('<div class="footer">')
-        html_parts.append(
-            "Generated: {ts} · Freshness: {fresh} · Platform: {domain}".format(
-                ts=data["generated_at"], fresh=freshness, domain=PLATFORM_DOMAIN
-            )
-        )
-        html_parts.append("</div>")
-        html_parts.append("</body></html>")
-
-        self._send_html("\n".join(html_parts), freshness)
+        # ▶ POST /refresh → redirect to / with temp message
+        # Future: trigger cron export on host via SSH or signal
+        """
+        print("[IMP:7][status-page][refresh] Manual refresh requested", file=sys.stderr)
+        # Placeholder: redirect to /
+        self.send_response(302)
+        self.send_header("Location", "/")
+        self.end_headers()
 
     def log_message(self, format, *args):
         """Override to use LDD logging format."""
@@ -455,7 +667,7 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print(f"[IMP:9][status-page][main] Starting status-page on {LISTEN_HOST}:{LISTEN_PORT}", file=sys.stderr)
     print(f"[IMP:7][status-page][main] node.yaml: {NODE_YAML_PATH}", file=sys.stderr)
-    print(f"[IMP:7][status-page][main] docker-health.json: {DOCKER_HEALTH_JSON}", file=sys.stderr)
+    print(f"[IMP:7][status-page][main] status-metrics.json: {STATUS_METRICS_JSON}", file=sys.stderr)
 
     server = http.server.HTTPServer((LISTEN_HOST, LISTEN_PORT), StatusPageHandler)
     try:

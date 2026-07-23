@@ -53,6 +53,17 @@ node-lifecycle.sh --mode update
 └── 6. converge             # Desired-state reconciler
 ```
 
+⚠️ TRAP[BUG] · 2026-07-23 · P0 · FALSE DIAGNOSIS: webnames.ru zone_manager_unavailable ≠ DNS-01 broken
+· Symptom: webnames.ru API returns `{"result":"ERROR","details":"zone_manager_unavailable"}` for `domains_list`.
+· Reality: TXT record add/delete WORK. `zone_manager_unavailable` affects ONLY the listing endpoint.
+  - add:    `{"result":"OK","details":1}`
+  - delete: `{"result":"OK","details":1}`
+· Proof: Wildcard cert `*.tronyx.ru` issued via LE staging 2026-07-23 with `acme.sh --dns dns_webnames`.
+· Root cause of prior failure: Let's Encrypt rate-limit (50 certs/domain/week), NOT DNS API.
+· Prevention: DO NOT disable DNS-01 or switch to HTTP-01 based on `domains_list` error. Verify add/delete first.
+· Test: `curl "https://www.webnames.ru/scripts/json_domain_zone_manager.pl?apikey=$KEY&domain=$DOM&type=TXT&record=_acme-challenge.test:test123&action=add"`
+· Rev: if add/delete also return zone_manager_unavailable → DNS-01 truly broken, HTTP-01 fallback applies.
+
 **Вызов:** Только через `node-lifecycle.sh --mode init` или `node-lifecycle.sh --mode update`. Никогда напрямую.
 
 ---

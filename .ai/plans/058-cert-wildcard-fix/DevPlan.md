@@ -2,8 +2,8 @@
 
 $ARTIFACT_CONTRACT
 PURPOSE: Исправить выпуск wildcard-сертификатов и процесс бекапа/восстановления через S3 при бутстрапе.
-DESCRIPTION: DNS-01 через webnames.ru API сломан (zone_manager_unavailable). S3 SSL cache имеет 3 критических бага (G1: age key, G2: chain.pem, G3: account path). Код поддерживает только DNS-01 без fallback на HTTP-01. Двойная установка acme.sh (legacy /root/.acme.sh vs managed /opt/acme.sh).
-RATIONALE: Без wildcard-сертификата каждый поддомен требует отдельного сертификата. Без работающего S3-cache каждое пересоздание ноды требует заново выпускать сертификаты (и попадать под LE rate-limit). DNS-01 — единственный метод для wildcard, но он сломан на стороне провайдера.
+DESCRIPTION: ⚠️ REEVALUATED 2026-07-23: DNS-01 через webnames.ru API РАБОТАЕТ для add/delete TXT-записей. `zone_manager_unavailable` возвращается только для `domains_list` (listing), но управление записями функционально. Wildcard-сертификат `*.tronyx.ru` успешно выпущен через LE staging. Предыдущая неудача — LE rate-limit (expired Jul 23 23:19 UTC). S3 SSL cache имеет 3 бага (G1: age key, G2: chain.pem, G3: account path). HTTP-01 fallback добавлен как safety net для случаев реальной недоступности DNS API.
+RATIONALE: DNS-01 работает — wildcard доступен. S3-cache fix + HTTP-01 fallback обеспечивают多层ную защиту: (1) S3 restore при rebootstrap, (2) DNS-01 wildcard при первой установке, (3) HTTP-01 fallback при отказе DNS API. Двойная установка acme.sh (legacy /root/.acme.sh vs managed /opt/acme.sh) требует консолидации.
 ACCEPTANCE_CRITERIA:
   AC-1: s3-ssl-cache.sh upload НЕ требует chain.pem (G2 fix)
   AC-2: s3-ssl-cache.sh корректно архивирует/восстанавливает acme.sh account data из <domain>_ecc/ (G3 fix)
@@ -27,16 +27,25 @@ REQUIRES: webnames.ru API status check (external), S3 credentials availability (
 
 ## Problem Analysis
 
-### DNS-01: корень проблемы
+### DNS-01: ЛОЖНЫЙ ДИАГНОЗ (пересмотрено 2026-07-23)
 
 ```
-webnames.ru API → zone_manager_unavailable (любой запрос, не только DNS)
-Причина: на стороне провайдера. Не в нашем коде.
-Следствие: acme.sh --dns dns_webnames → FAIL для любого домена
-Wildcard (*.tronyx.ru): только DNS-01 → недоступен
+webnames.ru API:
+  domains_list         → {"result":"ERROR","details":"zone_manager_unavailable"} ← FALSE ALARM
+  add TXT record       → {"result":"OK","details":1}                            ← WORKS
+  delete TXT record    → {"result":"OK","details":1}                            ← WORKS
+  get_config_acmesh    → returns dns_webnames.sh with API key                   ← WORKS
 ```
 
-**Текущий обходной путь (предыдущая сессия):** HTTP-01 individual certs:
+**Реальная причина прошлой неудачи:** Let's Encrypt rate-limit (50 сертификатов на домен в неделю). Лимит истёк 23 июля 2026 23:19 UTC.
+
+**Доказательство:** Wildcard `*.tronyx.ru` успешно выпущен через LE staging 2026-07-23 08:52 MSK:
+```
+acme.sh --issue --dns dns_webnames --server letsencrypt_test -d "*.tronyx.ru" -d tronyx.ru
+→ Cert success. CN=*.tronyx.ru
+```
+
+**Текущее состояние на VPS (предыдущая сессия):** HTTP-01 individual certs:
 ```
 /etc/letsencrypt/live/
 ├── tronyx.ru/          ← LE cert: tronyx.ru + www.tronyx.ru (HTTP-01, legacy acme.sh)
@@ -45,7 +54,7 @@ Wildcard (*.tronyx.ru): только DNS-01 → недоступен
 └── sexydancerostov.ru/ ← LE cert: sexydancerostov.ru (HTTP-01)
 ```
 
-**Проблема кода:** `issue-cert.sh` поддерживает ТОЛЬКО DNS-01. Никакого HTTP-01 fallback. При сбое DNS-01 — FAIL, сертификат не выпускается.
+**План:** Заменить HTTP-01 individual certs на DNS-01 wildcard `*.tronyx.ru` покрывающий все поддомены.
 
 ### S3 SSL Cache: 3 критических бага (StatusReport 057)
 
@@ -99,7 +108,7 @@ No separate chain.pem is generated.
 
 Fix: _s3_upload() — remove chain.pem from required_files[].
      _s3_download() — chain.pem already optional.
-     
+
 Fullchain.pem = cert + chain (concatenated).
 Nginx config: ssl_certificate fullchain.pem (includes chain).
 Separate chain.pem is NOT needed for nginx operation.

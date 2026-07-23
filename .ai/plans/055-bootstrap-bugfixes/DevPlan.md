@@ -35,11 +35,11 @@ $START_DEVPLAN
 
 ## Overview
 
-**Status:** Draft → Architect review  
-**DevPlan:** 055  
-**Session:** 2026-07-22  
-**Priority:** HIGH — блокирует deploy_context step 23  
-**Size:** STANDARD  
+**Status:** Draft → Architect review
+**DevPlan:** 055
+**Session:** 2026-07-22
+**Priority:** HIGH — блокирует deploy_context step 23
+**Size:** STANDARD
 
 ### Problem Statement
 
@@ -61,7 +61,7 @@ $START_DEVPLAN
 
 ### TASK-1: Fix add-vhost.sh + verify-domains.sh вызовы (CRITICAL + HIGH)
 
-**Приоритет:** 🔴 HIGH  
+**Приоритет:** 🔴 HIGH
 **Файлы:** `state_machine.py`, `steps.py`, `verify-domains.sh`
 
 **Корень:** Оба вызывающих места передают недостаточные аргументы shell-скриптам.
@@ -183,7 +183,7 @@ local node_name="${1:-}" platform_root="${2:-${PLATFORM_ROOT:-/opt/platform}}"
 
 ### TASK-2: Fix cert_orchestrator.py None-guard (HIGH)
 
-**Приоритет:** 🟡 MEDIUM  
+**Приоритет:** 🟡 MEDIUM
 **Файл:** `core/internal/bootstrap/cert_orchestrator.py`
 
 **Корень:** `result.add(domain_result)` может получить None.
@@ -203,7 +203,7 @@ if domain_result is not None:
 
 ### TASK-3: Fix status-page NODE_NAME fallback (MEDIUM)
 
-**Приоритет:** 🟢 LOW  
+**Приоритет:** 🟢 LOW
 **Файл:** `core/modules/status-page/docker-compose.base.yml`
 
 **Корень:** `test-node` fallback скрывает проблему отсутствия NODE_NAME.

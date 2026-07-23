@@ -45,7 +45,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # · Root: path written before PLATFORM_ROOT canonicalization (core/lib/paths.sh → PLATFORM_ROOT=/opt/platform)
 # · Fix: replaced /opt/core/ → /opt/platform/core/ per paths.sh canonical root
 # · Prevention: gate test_gate_path_consistency scans repo for orphan /opt/core/ references
-# [IMP:8][crontab] * * * * * — Docker daemon healthcheck (TASK-11)
-* * * * *   root /opt/platform/core/internal/healthcheck/docker-healthcheck.sh >> /var/log/platform/backup/docker-healthcheck.log 2>&1
+# [IMP:8][crontab] * * * * * — Platform metrics export (status page data, replaces docker-healthcheck.sh)
+* * * * *   root flock -n /run/lock/platform-metrics.lock timeout 50s /opt/platform/core/internal/healthcheck/platform-export-metrics.sh >> /var/log/platform/backup/metrics-export.log 2>&1
 # [IMP:8][crontab] 0 * * * * — Disk space monitor + docker prune (TASK-12)
 0   *   *   *   *   root /opt/platform/core/modules/backup-cron/scripts/disk-monitor.sh >> /var/log/platform/backup/disk-monitor.log 2>&1

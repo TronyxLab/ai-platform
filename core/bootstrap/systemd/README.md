@@ -171,53 +171,12 @@ until `systemctl stop` is called.
 | Port conflict on restart | Old containers not fully stopped | Run `systemctl stop platform.service` before start |
 
 
+## Docker Healthcheck
 
-## Docker Healthcheck (`docker-healthcheck.sh`)
-
-### Overview
-
-The `docker-healthcheck.sh` script monitors Docker daemon health by running `docker info`
-every minute (via cron). If the daemon fails 3 consecutive checks, it:
-1. Restarts Docker via `systemctl restart docker`
-2. Sends a Telegram alert (if credentials configured in `/run/platform/secrets.env`)
-3. Resets the failure counter
-
-### Installation
-
-```bash
-# Copy the script
-sudo cp core/internal/healthcheck/docker-healthcheck.sh /opt/core/internal/healthcheck/
-
-# Make executable (already set)
-sudo chmod +x /opt/core/internal/healthcheck/docker-healthcheck.sh
-
-# Create failure counter directory
-sudo mkdir -p /var/lib/platform
-
-# Install cron entry (added to crontab automatically)
-# See: core/modules/backup-cron/scripts/crontab
-```
-
-### How It Works
-
-1. **Every minute** (cron): Runs `docker info`
-2. **On success**: Writes `0` to failure counter → exits 0
-3. **On failure**: Increments counter → if ≥3 consecutive → restarts Docker + Telegram alert
-4. **Telegram alert**: Reads `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USERS` from `/run/platform/secrets.env`
-
-### Failure Recovery
-
-| State | Action |
-|-------|--------|
-| 1 failure | Increment counter, log warning |
-| 2 failures | Increment counter, log warning |
-| 3+ failures | **Restart Docker**, send Telegram alert, reset counter |
-
-### Integration
-
-- **Install**: `make bootstrap-node` deploys this script automatically
-- **Dependencies**: Requires systemd (for daemon-reload and service restart)
-- **Logs**: `/var/log/platform/backup/docker-healthcheck.log`
+Docker daemon health monitoring is handled via `docker info` cron job defined in
+`core/modules/backup-cron/scripts/crontab`. The script uses Docker's built-in health
+checking with 3-consecutive-failure threshold, Telegram alerting, and automatic
+restart recovery.
 
 
 ## Integration with make bootstrap-node

@@ -333,7 +333,9 @@ def test_orchestrate_passes_challenge_mode(caplog, tmp_path, monkeypatch):
         monkeypatch.setattr(os, "environ", {**os.environ, "ACME_CHALLENGE_MODE": "http"})
         result = cert._issue_cert("example.com", issue_script)
 
-    logger.critical("[IMP:9][test_orchestrate_passes_challenge_mode] ASSERT: ACME_CHALLENGE_MODE=http passed to subprocess")
+    logger.critical(
+        "[IMP:9][test_orchestrate_passes_challenge_mode] ASSERT: ACME_CHALLENGE_MODE=http passed to subprocess"
+    )
     print("--- captured env ---")
     print(captured_env)
     print("--- end ---")
@@ -382,7 +384,9 @@ def test_domain_cert_result_includes_challenge_field(caplog, tmp_path, monkeypat
     assert result.challenge == "dns", f"Expected challenge='dns' (default), got '{result.challenge}'"
     assert "challenge" in result.to_dict(), f"challenge field missing from to_dict(): {result.to_dict()}"
 
-    logger.critical("[IMP:9][test_domain_cert_result_includes_challenge_field] PASS: challenge field in DomainCertResult")
+    logger.critical(
+        "[IMP:9][test_domain_cert_result_includes_challenge_field] PASS: challenge field in DomainCertResult"
+    )
 
 
 # endregion

@@ -46,7 +46,7 @@ REQUIRES: none
 
 **API Call 1 — domains_list:**
 ```
-curl -s "https://www.webnames.ru/scripts/json_domain_zone_manager.pl?action=domains_list&apikey=..." 
+curl -s "https://www.webnames.ru/scripts/json_domain_zone_manager.pl?action=domains_list&apikey=..."
 → {"details":"zone_manager_unavailable","result":"ERROR"}
 ```
 **Verdict:** CONFIRMED BROKEN. Zone manager is DOWN on webnames.ru side. All TXT record operations (add/delete) will fail. DNS-01 challenge impossible.
@@ -141,7 +141,7 @@ current state on VPS (from server-state.json):
     S3_ACCESS_KEY=platform-s3-access-key    ← PLACEHOLDER
     S3_SECRET_KEY=(placeholder)
     S3_BUCKET=(placeholder)
-  
+
   Root cause: AGE_SECRET_KEY missing on VPS → sops decryption fails → secrets.env
   populated with placeholder defaults instead of real encrypted values.
 ```

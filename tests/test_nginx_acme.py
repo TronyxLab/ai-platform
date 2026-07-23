@@ -46,9 +46,7 @@ _SCRIPT_PATH: pathlib.Path = (
 _SCRIPT_DIR: str = str(_SCRIPT_PATH.parent)
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
 # Path to issue-cert.sh (separate from nginx/install.sh — tested independently)
-_ISSUE_CERT_PATH: pathlib.Path = (
-    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "issue-cert.sh"
-)
+_ISSUE_CERT_PATH: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "issue-cert.sh"
 _ISSUE_CERT_DIR: str = str(_ISSUE_CERT_PATH.parent)
 
 
@@ -183,36 +181,36 @@ def _create_mock_acme_for_issue_cert(
     # Build mock acme.sh dynamically based on failure flags
     # Only tag ISSUE calls with challenge mode markers.
     # --install-cert calls log [MOCK-ACME] but do NOT add challenge markers.
-    lines = ['#!/bin/bash', 'echo "[MOCK-ACME] $@" >&2']
+    lines = ["#!/bin/bash", 'echo "[MOCK-ACME] $@" >&2']
     if dns01_fail and http01_fail:
         # Both modes fail
         lines.append('echo "[MOCK-ACME-ALL-FAIL]" >&2')
-        lines.append('exit 1')
+        lines.append("exit 1")
     elif dns01_fail:
         # Only fail DNS-01 --issue calls; HTTP-01 works; --install-cert always succeeds
         lines.append('if [[ "$*" == *"--issue"* ]] && [[ "$*" != *"--standalone"* ]]; then')
         lines.append('    echo "[MOCK-ACME-DNS-FAIL]" >&2')
-        lines.append('    exit 1')
-        lines.append('fi')
+        lines.append("    exit 1")
+        lines.append("fi")
         lines.append('if [[ "$*" == *"--issue"* ]] && [[ "$*" == *"--standalone"* ]]; then')
         lines.append('    echo "[MOCK-ACME-HTTP]" >&2')
-        lines.append('fi')
+        lines.append("fi")
     elif http01_fail:
         lines.append('if [[ "$*" == *"--standalone"* ]]; then')
         lines.append('    echo "[MOCK-ACME-HTTP-FAIL]" >&2')
-        lines.append('    exit 1')
-        lines.append('fi')
+        lines.append("    exit 1")
+        lines.append("fi")
         lines.append('if [[ "$*" == *"--dns"* ]]; then')
         lines.append('    echo "[MOCK-ACME-DNS]" >&2')
-        lines.append('fi')
+        lines.append("fi")
     else:
         lines.append('if [[ "$*" == *"--standalone"* ]]; then')
         lines.append('    echo "[MOCK-ACME-HTTP]" >&2')
         lines.append('elif [[ "$*" == *"--dns"* ]]; then')
         lines.append('    echo "[MOCK-ACME-DNS]" >&2')
-        lines.append('fi')
-    lines.append('exit 0')
-    acme_sh_content = '\n'.join(lines) + '\n'
+        lines.append("fi")
+    lines.append("exit 0")
+    acme_sh_content = "\n".join(lines) + "\n"
 
     acme_sh = acme_home / "acme.sh"
     acme_sh.write_text(acme_sh_content)
@@ -944,12 +942,8 @@ def test_dns01_success_wildcard(caplog, tmp_path) -> None:
 
     assert result.returncode == 0, f"Function failed: {result.stderr}"
     assert "[MOCK-ACME]" in result.stderr, "Mock acme.sh was not called"
-    assert "[MOCK-ACME-DNS]" in result.stderr, (
-        f"Expected DNS-01 mode, got:\n{result.stderr}"
-    )
-    assert "*.test.example.com" in result.stderr, (
-        f"Expected wildcard -d *.domain in DNS-01 mode:\n{result.stderr}"
-    )
+    assert "[MOCK-ACME-DNS]" in result.stderr, f"Expected DNS-01 mode, got:\n{result.stderr}"
+    assert "*.test.example.com" in result.stderr, f"Expected wildcard -d *.domain in DNS-01 mode:\n{result.stderr}"
 
     logger.critical("[IMP:9][test_dns01_success_wildcard] PASS: DNS-01 success issues wildcard cert")
 
@@ -989,13 +983,9 @@ def test_dns01_fail_http01_fallback(caplog, tmp_path) -> None:
     # Should still succeed (HTTP-01 fallback works)
     assert result.returncode == 0, f"HTTP-01 fallback should succeed: {result.stderr}"
     # Should show HTTP-01 was called
-    assert "[MOCK-ACME-HTTP]" in result.stderr, (
-        f"Expected HTTP-01 fallback, DNS-01 didn't fail:\n{result.stderr}"
-    )
+    assert "[MOCK-ACME-HTTP]" in result.stderr, f"Expected HTTP-01 fallback, DNS-01 didn't fail:\n{result.stderr}"
     # DNS-01 path should have been attempted first
-    assert "[MOCK-ACME-DNS-FAIL]" in result.stderr, (
-        f"Expected DNS-01 to be attempted first:\n{result.stderr}"
-    )
+    assert "[MOCK-ACME-DNS-FAIL]" in result.stderr, f"Expected DNS-01 to be attempted first:\n{result.stderr}"
 
     logger.critical("[IMP:9][test_dns01_fail_http01_fallback] PASS: HTTP-01 fallback on DNS-01 failure")
 
@@ -1031,15 +1021,9 @@ def test_challenge_mode_http_bypasses_dns(caplog, tmp_path) -> None:
     print(result.stderr)
     print("--- END STDERR ---")
 
-    assert result.returncode == 0, (
-        f"HTTP-01 mode should succeed without DNS plugin or API key:\n{result.stderr}"
-    )
-    assert "[MOCK-ACME-HTTP]" in result.stderr, (
-        f"Expected HTTP-01 mode (--standalone), got:\n{result.stderr}"
-    )
-    assert "[MOCK-ACME-DNS]" not in result.stderr, (
-        "HTTP-01 mode should NOT call DNS-01"
-    )
+    assert result.returncode == 0, f"HTTP-01 mode should succeed without DNS plugin or API key:\n{result.stderr}"
+    assert "[MOCK-ACME-HTTP]" in result.stderr, f"Expected HTTP-01 mode (--standalone), got:\n{result.stderr}"
+    assert "[MOCK-ACME-DNS]" not in result.stderr, "HTTP-01 mode should NOT call DNS-01"
 
     logger.critical("[IMP:9][test_challenge_mode_http_bypasses_dns] PASS: HTTP-01 mode bypasses DNS-01")
 
@@ -1080,9 +1064,7 @@ def test_challenge_mode_auto_fallback_logs_warning(caplog, tmp_path) -> None:
     assert "falling back to HTTP-01" in result.stderr, (
         f"Expected 'falling back to HTTP-01' warning in stderr:\n{result.stderr}"
     )
-    assert "does NOT support wildcard" in result.stderr, (
-        f"Expected wildcard limitation warning:\n{result.stderr}"
-    )
+    assert "does NOT support wildcard" in result.stderr, f"Expected wildcard limitation warning:\n{result.stderr}"
 
     logger.critical("[IMP:9][test_challenge_mode_auto_fallback_logs_warning] PASS: fallback warning logged")
 
@@ -1119,16 +1101,12 @@ def test_http01_issues_individual_not_wildcard(caplog, tmp_path) -> None:
     print("--- END STDERR ---")
 
     assert result.returncode == 0, f"HTTP-01 should succeed: {result.stderr}"
-    assert "[MOCK-ACME-HTTP]" in result.stderr, (
-        f"Expected HTTP-01 mode:\n{result.stderr}"
-    )
+    assert "[MOCK-ACME-HTTP]" in result.stderr, f"Expected HTTP-01 mode:\n{result.stderr}"
     # Should have -d "test.example.com"
     assert "-d" in result.stderr, "Expected -d domain flag"
     assert "-d" in result.stderr
     # Should NOT have *.domain (wildcard)
-    assert "*.test.example.com" not in result.stderr, (
-        f"HTTP-01 should NOT issue wildcard cert:\n{result.stderr}"
-    )
+    assert "*.test.example.com" not in result.stderr, f"HTTP-01 should NOT issue wildcard cert:\n{result.stderr}"
 
     logger.critical("[IMP:9][test_http01_issues_individual_not_wildcard] PASS: HTTP-01 issues individual cert only")
 

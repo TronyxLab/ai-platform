@@ -1,9 +1,10 @@
-# GREP_SUMMARY: status-page module docker live-status health endpoint basic-auth ci-gate
-# STRUCTURE: ▶ module:status-page → proxy-net → /health + /status.json → depends_on:nginx → ┐
+# GREP_SUMMARY: status-page module docker live-status health endpoint basic-auth ci-gate status-metrics-json templates
+# STRUCTURE: ▶ module:status-page → proxy-net → /health + /status.json + Jinja2 → depends_on:nginx → ┐
 # region MODULE_CONTRACT
-## @purpose  Live status-page service — aggregates node health (vhosts + containers), renders HTML table,
-##           exposes /health for CI post-deploy gate. Protected by nginx Basic Auth with stealth 444.
-## @scope    Docker module, runs on proxy-net, reads node.yaml + docker-health.json, live-curls vhosts
+## @purpose  Live status-page service — aggregates node health (certs + containers + host disk),
+##           renders Jinja2 HTML with 3 tables, exposes /health for CI post-deploy gate.
+##           Protected by nginx Basic Auth with stealth 444.
+## @scope    Docker module, runs on proxy-net, reads node.yaml + status-metrics.json, live-curls vhosts
 ## @invariants
 ##   - install_type: docker — managed by compose
 ##   - profiles: [status-page] — pluggable via COMPOSE_PROFILES
@@ -13,16 +14,20 @@
 ##   - NO ports — accessed via nginx proxy_pass only
 ##   - Anti-recursion: excludes status-page container from self-checks
 ##   - Timeout budget: total ≤30s, per-check ≤5s
-##   - Reads /run/platform/docker-health.json (tmpfs, cron-refreshed every 1m)
+##   - Reads /run/platform/status-metrics.json (tmpfs, cron-exported every 1m)
 ##   - Reads node.yaml ro from /opt/node-configs/<node>/node.yaml
-## @rationale Live-агрегатор статуса ноды: оператору — HTML со ссылками, CI — /health как финальный gate.
-##            docker-healthcheck.sh-гибрид (cron → JSON-файл) вместо docker.sock для безопасности.
-##            python3-stdlib (http.server) для минимального образа без зависимостей.
+##   - Jinja2 templates at /app/templates/status.html
+##   - Jinja2 autoescape enabled (XSS protection)
+## @rationale Live-агрегатор статуса ноды: оператору — HTML с 3 таблицами, CI — /health как финальный gate.
+##            platform-export-metrics.py (cron → JSON) вместо docker.sock для безопасности.
+##            Jinja2 для шаблонов, cryptography для парсинга сертификатов.
+## @changes
+##   2026-07-23 | docker-health.json → status-metrics.json; +Jinja2 templates | META Δ
 # endregion MODULE_CONTRACT
 
 name: status-page
 install_type: docker
-description: "Live status-page service — node health aggregation (vhosts + containers), HTML table with links, /health CI-gate endpoint. Protected by nginx Basic Auth."
+description: "Live status-page service — node health aggregation (certs + containers + host disk), Jinja2 HTML with 3 tables, /health CI-gate endpoint. Status metrics exported via platform-export-metrics.py cron. Protected by nginx Basic Auth."
 
 depends_on:
   - nginx
