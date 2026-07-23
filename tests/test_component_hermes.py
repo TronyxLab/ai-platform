@@ -831,7 +831,7 @@ def test_hermes_dashboard_auth(hermes_up, caplog) -> None:
     ##             without credentials (302 redirect). Real Hermes uses redirect-based
     ##             auth where all unauthenticated requests go to /login.
     ## @io — ⇥ hermes_up (compose file path), caplog → ⎋ None (side-effect: assertions)
-    ## @complexity — O(1) — single HTTP request to :9119
+    ## @complexity — O(3) — up to 3 HTTP requests with retry + exponential backoff
     ## @acceptance — AC-1: no auth → 302 redirect to /login
     ## @rationale — Real Hermes dashboard uses SPA-based auth flow:
     ##              GET / → 302 Location: /login?next=%2F.
@@ -853,16 +853,52 @@ def test_hermes_dashboard_auth(hermes_up, caplog) -> None:
     with caplog.at_level(logging.DEBUG):
         # Step 1: GET / without auth → 302 redirect to /login
         logger.info("[IMP:7][test_hermes_dashboard_auth] STEP 1: GET %s without auth (no redirect) ...", dashboard_url)
-        resp_noauth = requests.get(dashboard_url, timeout=10, allow_redirects=False)
-        assert resp_noauth.status_code == 302, (
-            f"Expected 302 redirect without auth, got {resp_noauth.status_code}. Headers: {dict(resp_noauth.headers)}"
-        )
-        redirect_target = resp_noauth.headers.get("Location", "")
-        assert "/login" in redirect_target, f"Expected Location containing '/login', got: {redirect_target}"
-        logger.critical(
-            "[IMP:9][test_hermes_dashboard_auth] ASSERT: step1_redirect status=302 target=%s",
-            redirect_target,
-        )
+
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Unprotected requests.get() — transient ConnectionError on CI
+        # · Symptom: ConnectionError(104) on first request — container may still be stabilizing
+        # ·        after healthcheck (race condition between healthcheck passing and HTTP listener ready)
+        # · Root: hermes-agent container may not be ready to serve HTTP immediately after Docker
+        # ·        healthcheck transitions to healthy — there's a window between healthcheck and
+        # ·        actual HTTP listener readiness.
+        # · Fix: retry with exponential backoff (1s/2s/4s pattern) — gives container time to stabilize.
+        # · Prevention: if retry count >1 in >50% CI runs → investigate healthcheck probe or
+        # ·        increase start_period in docker-compose.base.yml
+        for attempt in range(3):
+            try:
+                resp_noauth = requests.get(dashboard_url, timeout=10, allow_redirects=False)
+                logger.info(
+                    "[IMP:8][test_hermes_dashboard_auth] Dashboard returned HTTP %s (attempt %d)",
+                    resp_noauth.status_code,
+                    attempt + 1,
+                )
+                assert resp_noauth.status_code == 302, (
+                    f"Expected 302 redirect without auth, got {resp_noauth.status_code}. "
+                    f"Headers: {dict(resp_noauth.headers)}"
+                )
+                redirect_target = resp_noauth.headers.get("Location", "")
+                assert "/login" in redirect_target, f"Expected Location containing '/login', got: {redirect_target}"
+                logger.critical(
+                    "[IMP:9][test_hermes_dashboard_auth] ASSERT: step1_redirect status=302 target=%s",
+                    redirect_target,
+                )
+                break
+            except requests.RequestException as exc:
+                if attempt < 2:
+                    wait_s = 2**attempt  # 1s, 2s backoff
+                    logger.warning(
+                        "[IMP:7][test_hermes_dashboard_auth] Attempt %d failed (%s), retrying in %ds...",
+                        attempt + 1,
+                        exc,
+                        wait_s,
+                    )
+                    time.sleep(wait_s)
+                else:
+                    logger.error(
+                        "[IMP:4][test_hermes_dashboard_auth] All 3 attempts failed for GET %s: %s",
+                        dashboard_url,
+                        exc,
+                    )
+                    raise
 
 
 # endregion TEST_HERMES_DASHBOARD_AUTH

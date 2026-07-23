@@ -52,6 +52,11 @@ services:
         aliases:
           - status-page
 
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
     logging: *default-logging
 
     healthcheck:

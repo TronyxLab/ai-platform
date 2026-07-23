@@ -19,7 +19,7 @@ import time
 
 import pytest
 import requests
-from conftest import _module_container_running
+from conftest import _handle_e2e_error, _module_container_running
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,24 @@ def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
     ##            causing RemoteDisconnected or ReadTimeout in subsequent requests.
     ##            This version does an actual HTTP HEAD to verify the app is serving.
     ## @io — ⎋ bool: True if HTTP endpoint responds (any status), False otherwise
+    ## ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
+    ## · Symptom: first http request to langfuse may hit the container startup window
+    ## ·            (Docker Desktop accepts TCP before Node.js binds the port)
+    ## · Root: langfuse Node.js process may not have bound the HTTP port yet even though
+    ## ·        Docker Desktop reports the container as healthy (TCP port forwarding race)
+    ## · Fix: retry with exponential backoff (1s/2s/4s) — gives the server a chance to bind
+    ## · Prevention: if retry count >1 in >50% CI runs → investigate langfuse startup time
     """
-    try:
-        requests.get(f"http://{host}:{port}/api/public/health", timeout=timeout)
-        return True
-    except (requests.ConnectionError, requests.Timeout, ValueError):
-        return False
+    for attempt in range(3):
+        try:
+            requests.get(f"http://{host}:{port}/api/public/health", timeout=timeout)
+            return True
+        except (requests.ConnectionError, requests.Timeout, ValueError):
+            if attempt < 2:
+                time.sleep(2**attempt)
+            else:
+                return False
+    return False  # unreachable — satisfies RET503 linter contract
 
 
 @pytest.mark.smoke
@@ -74,11 +86,41 @@ def test_langfuse_health(caplog, platform_services):
     caplog.set_level(logging.INFO)
     if not _port_reachable():
         pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
-    resp = requests.get(LANGFUSE_HEALTH_URL, timeout=10)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body.get("status") == "OK"
-    logger.info("[IMP:9][test_langfuse_health][pass] Langfuse healthy")
+
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
+    # · Symptom: requests.get to langfuse health endpoint may raise ConnectionError
+    # ·            if the container is still restarting (crash-restart loop on first start)
+    # · Root: langfuse can crash on Application startup (httpx.ConnectError to model),
+    # ·        then restart: unless-stopped restores it. The first test request hits
+    # ·        the restart window. Same root cause as LiteLLM P0-5.
+    # · Fix: retry with exponential backoff (1s/2s/4s) — gives container time to stabilize
+    # ·        after restart. On last attempt → _handle_e2e_error for proper routing.
+    for attempt in range(3):
+        try:
+            resp = requests.get(LANGFUSE_HEALTH_URL, timeout=10)
+            logger.info(
+                "[IMP:8][test_langfuse_health] Langfuse returned HTTP %s (attempt %d)",
+                resp.status_code,
+                attempt + 1,
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body.get("status") == "OK"
+            logger.info("[IMP:9][test_langfuse_health][pass] Langfuse healthy")
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt
+                logger.warning(
+                    "[IMP:7][test_langfuse_health] Attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                _handle_e2e_error(exc, LANGFUSE_HEALTH_URL, caplog, logger)
+                return
 
 
 @pytest.mark.smoke
@@ -93,23 +135,49 @@ def test_langfuse_ingestion(caplog, platform_services):
     langfuse_pk, langfuse_sk = _langfuse_credentials()
     now = time.time()
     _basic = base64.b64encode(f"{langfuse_pk}:{langfuse_sk}".encode()).decode()
-    resp = requests.post(
-        LANGFUSE_INGESTION_URL,
-        json={
-            "batch": [
-                {
-                    "id": f"test-{int(now * 1000)}",
-                    "timestamp": datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc).isoformat(),
-                    "type": "trace-create",
-                    "body": {"name": "smoke-test-trace"},
-                }
-            ]
-        },
-        headers={"Authorization": f"Basic {_basic}"},
-        timeout=15,
-    )
-    assert resp.status_code in (200, 207), f"Ingestion returned HTTP {resp.status_code}: {resp.text[:200]}"
-    logger.info("[IMP:9][test_langfuse_ingestion][pass] Ingestion accepted (HTTP %d)", resp.status_code)
+
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
+    # · Symptom: requests.post to ingestion endpoint may raise ConnectionError
+    # ·            during langfuse startup window (same root cause as health test)
+    # · Fix: retry with exponential backoff (1s/2s/4s)
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                LANGFUSE_INGESTION_URL,
+                json={
+                    "batch": [
+                        {
+                            "id": f"test-{int(now * 1000)}",
+                            "timestamp": datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc).isoformat(),
+                            "type": "trace-create",
+                            "body": {"name": "smoke-test-trace"},
+                        }
+                    ]
+                },
+                headers={"Authorization": f"Basic {_basic}"},
+                timeout=15,
+            )
+            logger.info(
+                "[IMP:8][test_langfuse_ingestion] Ingestion returned HTTP %s (attempt %d)",
+                resp.status_code,
+                attempt + 1,
+            )
+            assert resp.status_code in (200, 207), f"Ingestion returned HTTP {resp.status_code}: {resp.text[:200]}"
+            logger.info("[IMP:9][test_langfuse_ingestion][pass] Ingestion accepted (HTTP %d)", resp.status_code)
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt
+                logger.warning(
+                    "[IMP:7][test_langfuse_ingestion] Attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                _handle_e2e_error(exc, LANGFUSE_INGESTION_URL, caplog, logger)
+                return
 
 
 @pytest.mark.smoke
@@ -121,13 +189,63 @@ def test_langfuse_login(caplog, platform_services):
     caplog.set_level(logging.INFO)
     if not _port_reachable():
         pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
-    csrf = requests.get(LANGFUSE_CSRF_URL, timeout=10).json()
-    assert csrf.get("csrfToken"), f"No CSRF token: {csrf}"
-    login = requests.post(
-        LANGFUSE_LOGIN_URL,
-        data={"csrfToken": csrf["csrfToken"], "email": LANGFUSE_EMAIL, "password": LANGFUSE_PASS},
-        allow_redirects=False,
-        timeout=10,
-    )
-    assert login.status_code in (200, 302), f"Login failed: HTTP {login.status_code}"
-    logger.info("[IMP:9][test_langfuse_login][pass] Langfuse login OK")
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
+    # · Symptom: requests.get to CSRF endpoint may raise ConnectionError
+    # ·            during langfuse startup window (same root cause as health test)
+    # · Fix: retry with exponential backoff (1s/2s/4s)
+    for attempt in range(3):
+        try:
+            csrf = requests.get(LANGFUSE_CSRF_URL, timeout=10).json()
+            logger.info(
+                "[IMP:8][test_langfuse_login] CSRF token obtained (attempt %d)",
+                attempt + 1,
+            )
+            assert csrf.get("csrfToken"), f"No CSRF token: {csrf}"
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt
+                logger.warning(
+                    "[IMP:7][test_langfuse_login] CSRF attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                _handle_e2e_error(exc, LANGFUSE_CSRF_URL, caplog, logger)
+                return
+
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
+    # · Symptom: requests.post to login endpoint may raise ConnectionError
+    # ·            during langfuse startup window (same root cause as health test)
+    # · Fix: retry with exponential backoff (1s/2s/4s)
+    for attempt in range(3):
+        try:
+            login = requests.post(
+                LANGFUSE_LOGIN_URL,
+                data={"csrfToken": csrf["csrfToken"], "email": LANGFUSE_EMAIL, "password": LANGFUSE_PASS},
+                allow_redirects=False,
+                timeout=10,
+            )
+            logger.info(
+                "[IMP:8][test_langfuse_login] Login returned HTTP %s (attempt %d)",
+                login.status_code,
+                attempt + 1,
+            )
+            assert login.status_code in (200, 302), f"Login failed: HTTP {login.status_code}"
+            logger.info("[IMP:9][test_langfuse_login][pass] Langfuse login OK")
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt
+                logger.warning(
+                    "[IMP:7][test_langfuse_login] Login attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                _handle_e2e_error(exc, LANGFUSE_LOGIN_URL, caplog, logger)
+                return

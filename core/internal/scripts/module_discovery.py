@@ -1,6 +1,6 @@
 # GREP_SUMMARY: module_discovery, docker-module-list, compose-discovery, CI-helper, zero-deps
 # STRUCTURE: ▶ discover_docker_modules(modules_dir) → ◇ glob */module.yaml → ⊕ filter install_type:system → ⎋ List[Path]
-#            ▶ main() → ◇ argparse(--format json|lines) → ⊕ discover_docker_modules → ⎋ print(json|lines)
+#            ▶ main() → ◇ argparse(--format json|lines|--count) → ⊕ discover_docker_modules → ◇ --count? ⊕ print(len) : print(json|lines)
 # region MODULE_CONTRACT
 ## @purpose  Typed API + CLI для поиска docker-compose модулей. Заменяет inline `python3 -c` блоки
 ##           в platform-test.yml и nightly-gate.yml (дублирование ×4). Zero-dependency (text search).
@@ -9,7 +9,7 @@
 ## @invariants
 ##   - Модули с `install_type: system` исключаются из результата (text-search, не YAML parse)
 ##   - Только модули с docker-compose.base.yml рядом с module.yaml включаются
-##   - CLI: `--format json` (JSON array of strings) / `--format lines` (one file per line)
+##   - CLI: `--format json` (JSON array of strings) / `--format lines` (one file per line) / `--count` (int)
 ##   - API: возвращает list[pathlib.Path], отсортированный по имени модуля
 ##   - Сортировка стабильна: alphabetical по имени директории модуля
 ## @rationale Тот же inline-блок `python3 -c "import json; from pathlib..."` дублирован в 3 workflow-файлах
@@ -93,6 +93,11 @@ def main() -> int:
         help="Output format: json array or one file per line (default: lines)",
     )
     parser.add_argument(
+        "--count",
+        action="store_true",
+        help="Print only the integer count of discovered modules (e.g. 13)",
+    )
+    parser.add_argument(
         "--modules-dir",
         default=str(MODULES_DIR),
         help=f"Path to modules directory (default: {MODULES_DIR})",
@@ -101,7 +106,9 @@ def main() -> int:
 
     modules = discover_docker_modules(pathlib.Path(args.modules_dir))
 
-    if args.format == "json":
+    if args.count:
+        print(len(modules))
+    elif args.format == "json":
         print(json.dumps([str(m) for m in modules]))
     else:
         for m in modules:

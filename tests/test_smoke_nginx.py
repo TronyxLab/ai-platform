@@ -23,6 +23,7 @@
 import logging
 import os
 import subprocess
+import time
 
 import pytest
 from _conftest.infra import infra as _infra
@@ -356,18 +357,39 @@ def test_nginx_http_responds(nginx_compose, caplog) -> None:
     url = f"http://127.0.0.1:{_HTTP_PORT}/"
     logger.info("[IMP:7][test_nginx_http] Checking HTTP %s ...", url)
 
-    try:
-        r = requests.get(url, timeout=_CURL_TIMEOUT)
-        logger.info("[IMP:8][test_nginx_http] HTTP returned %s", r.status_code)
-        # nginx returns 200 (dev-mode default index), 403 (no index), or 502/404 — any response proves nginx is serving
-        assert r.status_code in (200, 403, 502, 404), (
-            f"nginx HTTP returned {r.status_code}, expected 2xx/4xx/5xx (dev mode)"
-        )
-        assert "nginx" in r.headers.get("Server", ""), "Response is not from nginx"
-        logger.info("[IMP:9][test_nginx_http] ✅ nginx HTTP OK: %s (server: nginx)", r.status_code)
-    except Exception as exc:
-        logger.error("[IMP:9][test_nginx_http] ❌ HTTP FAIL: %s", exc)
-        raise
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Unprotected requests.get() — transient failure on CI
+    # · Symptom: ConnectionResetError on requests.get() to nginx container during restart window
+    # · Root: nginx container may restart between compose up and first request; no retry → crash
+    # · Fix: 3-attempt retry with exponential backoff (1s/2s/4s), same pattern as test_smoke_litellm.py
+    # · Prevention: gate G3 (test_gate_http_retry_policy.py) blocks new unprotected HTTP calls
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=_CURL_TIMEOUT)
+            logger.info(
+                "[IMP:8][test_nginx_http] HTTP returned %s (attempt %d)",
+                r.status_code,
+                attempt + 1,
+            )
+            # nginx returns 200 (dev-mode default index), 403 (no index), or 502/404 — any response proves nginx is serving
+            assert r.status_code in (200, 403, 502, 404), (
+                f"nginx HTTP returned {r.status_code}, expected 2xx/4xx/5xx (dev mode)"
+            )
+            assert "nginx" in r.headers.get("Server", ""), "Response is not from nginx"
+            logger.info("[IMP:9][test_nginx_http] ✅ nginx HTTP OK: %s (server: nginx)", r.status_code)
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt
+                logger.warning(
+                    "[IMP:7][test_nginx_http] Attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                logger.error("[IMP:9][test_nginx_http] ❌ HTTP FAIL after 3 attempts: %s", exc)
+                raise
 
 
 # endregion FUNC_test_nginx_http_responds

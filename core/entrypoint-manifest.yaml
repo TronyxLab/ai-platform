@@ -667,6 +667,9 @@ gates:
 - id: test_postgres_deep_includes_pgbouncer
   test_file: test_gate_healthcheck_contract.py
   description: 'Auto-discovered gate: test_postgres_deep_includes_pgbouncer'
+- id: test_http_calls_have_retry
+  test_file: test_gate_http_retry_policy.py
+  description: 'Auto-discovered gate: test_http_calls_have_retry'
 - id: test_linter_parity
   test_file: test_gate_lint_quality.py
   description: 'Auto-discovered gate: test_linter_parity'

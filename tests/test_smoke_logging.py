@@ -22,6 +22,7 @@
 
 import logging
 import subprocess
+import time
 
 import pytest
 import requests
@@ -302,11 +303,27 @@ def test_loki_ready(caplog, logging_compose) -> None:
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_loki_ready] Checking %s", _LOKI_READY_URL)
 
-        try:
-            r = requests.get(_LOKI_READY_URL, timeout=_HTTP_TIMEOUT)
-        except requests.RequestException as exc:
-            logger.error("[IMP:9][test_loki_ready] Request failed: %s", exc)
-            pytest.fail(f"Loki ready endpoint unreachable: {exc}")
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Unprotected requests.get() — retry with backoff
+        # · Symptom: transient ConnectionError when Loki container is still starting up
+        # · Root: no retry logic — single attempt fails on any transient failure
+        # · Fix: exponential backoff retry (3 attempts, 1s/2s/4s)
+        for attempt in range(3):
+            try:
+                r = requests.get(_LOKI_READY_URL, timeout=_HTTP_TIMEOUT)
+                break
+            except requests.RequestException as exc:
+                if attempt < 2:
+                    wait_s = 2**attempt
+                    logger.warning(
+                        "[IMP:7][test_loki_ready] Attempt %d failed (%s), retrying in %ds...",
+                        attempt + 1,
+                        exc,
+                        wait_s,
+                    )
+                    time.sleep(wait_s)
+                else:
+                    logger.error("[IMP:9][test_loki_ready] All 3 attempts failed: %s", exc)
+                    pytest.fail(f"Loki ready endpoint unreachable after 3 retries: {exc}")
 
         logger.info("[IMP:8][test_loki_ready] HTTP %d: %s", r.status_code, r.text.strip()[:100])
 
@@ -339,11 +356,27 @@ def test_loki_buildinfo(caplog, logging_compose) -> None:
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_loki_buildinfo] Checking %s", _LOKI_BUILDINFO_URL)
 
-        try:
-            r = requests.get(_LOKI_BUILDINFO_URL, timeout=_HTTP_TIMEOUT)
-        except requests.RequestException as exc:
-            logger.error("[IMP:9][test_loki_buildinfo] Request failed: %s", exc)
-            pytest.fail(f"Loki buildinfo endpoint unreachable: {exc}")
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Unprotected requests.get() — retry with backoff
+        # · Symptom: transient ConnectionError when Loki container is still starting up
+        # · Root: no retry logic — single attempt fails on any transient failure
+        # · Fix: exponential backoff retry (3 attempts, 1s/2s/4s)
+        for attempt in range(3):
+            try:
+                r = requests.get(_LOKI_BUILDINFO_URL, timeout=_HTTP_TIMEOUT)
+                break
+            except requests.RequestException as exc:
+                if attempt < 2:
+                    wait_s = 2**attempt
+                    logger.warning(
+                        "[IMP:7][test_loki_buildinfo] Attempt %d failed (%s), retrying in %ds...",
+                        attempt + 1,
+                        exc,
+                        wait_s,
+                    )
+                    time.sleep(wait_s)
+                else:
+                    logger.error("[IMP:9][test_loki_buildinfo] All 3 attempts failed: %s", exc)
+                    pytest.fail(f"Loki buildinfo endpoint unreachable after 3 retries: {exc}")
 
         logger.info("[IMP:8][test_loki_buildinfo] HTTP %d", r.status_code)
 

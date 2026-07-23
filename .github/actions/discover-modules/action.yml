@@ -1,4 +1,4 @@
-# GREP_SUMMARY: discover-modules composite-action module-list json CI-helper zero-inline-python3
+# GREP_SUMMARY: discover-modules composite-action module-list json CI-helper inline-python3-eliminated
 # STRUCTURE: runs:composite → ○ python3 module_discovery.py --format json → ⊕ /tmp/module_list.json + count output → ⎋ done
 # region MODULE_CONTRACT
 ## @purpose  Composite action: генерирует /tmp/module_list.json из core/modules/*/module.yaml.
@@ -33,6 +33,6 @@ runs:
       run: |
         # [IMP:8][discover-modules] Generate module list from core/modules/*/module.yaml
         python3 core/internal/scripts/module_discovery.py --format json > /tmp/module_list.json
-        COUNT=$(python3 core/internal/scripts/module_discovery.py --format json | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+        COUNT=$(python3 core/internal/scripts/module_discovery.py --count)
         echo "count=$COUNT" >> "$GITHUB_OUTPUT"
         echo "[IMP:9][discover-modules] Discovered $COUNT modules → /tmp/module_list.json"

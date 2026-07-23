@@ -89,6 +89,11 @@ services:
         aliases:
           - nginx
 
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
     logging: *default-logging
 
     healthcheck:

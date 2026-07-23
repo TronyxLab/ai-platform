@@ -22,6 +22,7 @@
 
 import logging
 import subprocess
+import time
 
 import pytest
 import requests
@@ -329,6 +330,15 @@ def monitoring_compose():
 ##   - Each test asserts IMP:9 presence via ldd pattern in caplog
 
 
+# ⚠️ TRAP[BUG] · 2026-07-23 · P1 · No retry on transient HTTP failures in monitoring smoke tests
+# · Symptom: CI flakiness — monitoring smoke tests fail on transient ConnectionError
+# ·   or timeout from containers still initializing after compose healthcheck.
+# · Root: requests.get() called once without retry — any transient network glitch
+# ·   caused immediate pytest.fail().
+# · Fix: Added 3-attempt retry loop with exponential backoff (1s/2s/4s).
+# ·   Only pytest.fail() on last attempt. Logs each retry attempt at [IMP:8].
+# · Prevention: All HTTP test calls should use retry pattern to tolerate transient failures.
+
 # ── Test 1: Prometheus /-/healthy ─────────────────────────────────────────────
 
 
@@ -344,11 +354,31 @@ def test_prometheus_health(caplog, monitoring_compose) -> None:
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_prometheus_health] Checking %s", _PROMETHEUS_HEALTH_URL)
 
-        try:
-            r = requests.get(_PROMETHEUS_HEALTH_URL, timeout=_HTTP_TIMEOUT)
-        except requests.RequestException as exc:
-            logger.error("[IMP:9][test_prometheus_health] Request failed: %s", exc)
-            pytest.fail(f"Prometheus health endpoint unreachable: {exc}")
+        r = None
+        for _attempt in range(3):
+            try:
+                r = requests.get(_PROMETHEUS_HEALTH_URL, timeout=_HTTP_TIMEOUT)
+                logger.info(
+                    "[IMP:8][test_prometheus_health] Attempt %d/3 succeeded",
+                    _attempt + 1,
+                )
+                break
+            except requests.RequestException as exc:
+                if _attempt < 2:
+                    _backoff = 2**_attempt
+                    logger.warning(
+                        "[IMP:8][test_prometheus_health] Attempt %d/3 failed, retrying in %ds: %s",
+                        _attempt + 1,
+                        _backoff,
+                        exc,
+                    )
+                    time.sleep(_backoff)
+                else:
+                    logger.error(
+                        "[IMP:9][test_prometheus_health] All 3 attempts failed: %s",
+                        exc,
+                    )
+                    pytest.fail(f"Prometheus health endpoint unreachable after 3 attempts: {exc}")
 
         logger.info("[IMP:8][test_prometheus_health] HTTP %d: %s", r.status_code, r.text.strip()[:100])
 
@@ -381,11 +411,31 @@ def test_grafana_health(caplog, monitoring_compose) -> None:
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_grafana_health] Checking %s", _GRAFANA_HEALTH_URL)
 
-        try:
-            r = requests.get(_GRAFANA_HEALTH_URL, timeout=_HTTP_TIMEOUT)
-        except requests.RequestException as exc:
-            logger.error("[IMP:9][test_grafana_health] Request failed: %s", exc)
-            pytest.fail(f"Grafana health endpoint unreachable: {exc}")
+        r = None
+        for _attempt in range(3):
+            try:
+                r = requests.get(_GRAFANA_HEALTH_URL, timeout=_HTTP_TIMEOUT)
+                logger.info(
+                    "[IMP:8][test_grafana_health] Attempt %d/3 succeeded",
+                    _attempt + 1,
+                )
+                break
+            except requests.RequestException as exc:
+                if _attempt < 2:
+                    _backoff = 2**_attempt
+                    logger.warning(
+                        "[IMP:8][test_grafana_health] Attempt %d/3 failed, retrying in %ds: %s",
+                        _attempt + 1,
+                        _backoff,
+                        exc,
+                    )
+                    time.sleep(_backoff)
+                else:
+                    logger.error(
+                        "[IMP:9][test_grafana_health] All 3 attempts failed: %s",
+                        exc,
+                    )
+                    pytest.fail(f"Grafana health endpoint unreachable after 3 attempts: {exc}")
 
         logger.info("[IMP:8][test_grafana_health] HTTP %d: %s", r.status_code, r.text.strip()[:100])
 
@@ -419,11 +469,31 @@ def test_prometheus_targets_api(caplog, monitoring_compose) -> None:
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_prometheus_targets] Checking %s", _PROMETHEUS_TARGETS_URL)
 
-        try:
-            r = requests.get(_PROMETHEUS_TARGETS_URL, timeout=_HTTP_TIMEOUT)
-        except requests.RequestException as exc:
-            logger.error("[IMP:9][test_prometheus_targets] Request failed: %s", exc)
-            pytest.fail(f"Prometheus targets endpoint unreachable: {exc}")
+        r = None
+        for _attempt in range(3):
+            try:
+                r = requests.get(_PROMETHEUS_TARGETS_URL, timeout=_HTTP_TIMEOUT)
+                logger.info(
+                    "[IMP:8][test_prometheus_targets] Attempt %d/3 succeeded",
+                    _attempt + 1,
+                )
+                break
+            except requests.RequestException as exc:
+                if _attempt < 2:
+                    _backoff = 2**_attempt
+                    logger.warning(
+                        "[IMP:8][test_prometheus_targets] Attempt %d/3 failed, retrying in %ds: %s",
+                        _attempt + 1,
+                        _backoff,
+                        exc,
+                    )
+                    time.sleep(_backoff)
+                else:
+                    logger.error(
+                        "[IMP:9][test_prometheus_targets] All 3 attempts failed: %s",
+                        exc,
+                    )
+                    pytest.fail(f"Prometheus targets endpoint unreachable after 3 attempts: {exc}")
 
         logger.info("[IMP:8][test_prometheus_targets] HTTP %d", r.status_code)
 

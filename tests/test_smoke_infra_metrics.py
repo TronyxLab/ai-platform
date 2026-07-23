@@ -20,6 +20,7 @@
 import logging
 import os
 import subprocess
+import time
 
 import pytest
 from _conftest.networks import get_network_manager
@@ -275,14 +276,44 @@ def test_cadvisor_healthz(caplog, infra_metrics_compose) -> None:
     url = f"http://127.0.0.1:{port}/healthz"
     logger.info("[IMP:7][smoke][cadvisor] Checking %s", url)
 
-    r = requests.get(url, timeout=_CURL_TIMEOUT)
-    logger.info("[IMP:8][smoke][cadvisor] /healthz returned HTTP %s: %s", r.status_code, r.text.strip())
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · requests.get without retry in test_cadvisor_healthz
+    # · Symptom: transient network error (ConnectionError, Timeout) on container startup → test crash
+    # · Root: cAdvisor container may still be starting when HTTP request arrives
+    # · Fix: retry with backoff (1s/2s/4s) — gives container time to stabilize after restart
+    # · Prevention: UF10 gate (test_gate_http_retry_policy) will catch similar cases in future
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=_CURL_TIMEOUT)
+            logger.info(
+                "[IMP:8][smoke][cadvisor] /healthz returned HTTP %s (attempt %d): %s",
+                r.status_code,
+                attempt + 1,
+                r.text.strip(),
+            )
 
-    assert r.status_code == 200, (
-        f"cAdvisor /healthz returned HTTP {r.status_code}, expected 200. Response: {r.text[:300]}"
-    )
-    assert r.text.strip() == "ok", f"cAdvisor /healthz body '{r.text.strip()}', expected 'ok'"
-    logger.info("[IMP:9][smoke][cadvisor] ✅ cAdvisor /healthz OK: HTTP 200")
+            assert r.status_code == 200, (
+                f"cAdvisor /healthz returned HTTP {r.status_code}, expected 200. Response: {r.text[:300]}"
+            )
+            assert r.text.strip() == "ok", f"cAdvisor /healthz body '{r.text.strip()}', expected 'ok'"
+            logger.info("[IMP:9][smoke][cadvisor] ✅ cAdvisor /healthz OK: HTTP 200")
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt  # 1s, 2s backoff
+                logger.warning(
+                    "[IMP:7][smoke][cadvisor] Attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                logger.error(
+                    "[IMP:9][smoke][cadvisor] All 3 attempts failed for %s: %s",
+                    url,
+                    exc,
+                )
+                raise
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -305,23 +336,52 @@ def test_node_exporter_metrics(caplog, infra_metrics_compose) -> None:
     url = f"http://127.0.0.1:{port}/metrics"
     logger.info("[IMP:7][smoke][node-exporter] Checking %s", url)
 
-    r = requests.get(url, timeout=_CURL_TIMEOUT)
-    logger.info(
-        "[IMP:8][smoke][node-exporter] /metrics returned HTTP %s (%d bytes)",
-        r.status_code,
-        len(r.content),
-    )
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · requests.get without retry in test_node_exporter_metrics
+    # · Symptom: transient network error (ConnectionError, Timeout) on container startup → test crash
+    # · Root: Node Exporter container may still be starting when HTTP request arrives
+    # · Fix: retry with backoff (1s/2s/4s) — gives container time to stabilize after restart
+    # · Prevention: UF10 gate (test_gate_http_retry_policy) will catch similar cases in future
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=_CURL_TIMEOUT)
+            logger.info(
+                "[IMP:8][smoke][node-exporter] /metrics returned HTTP %s (%d bytes, attempt %d)",
+                r.status_code,
+                len(r.content),
+                attempt + 1,
+            )
 
-    assert r.status_code == 200, (
-        f"Node Exporter /metrics returned HTTP {r.status_code}, expected 200. Response: {r.text[:300]}"
-    )
-    # Verify the response contains Prometheus metrics (starts with # HELP)
-    assert "# HELP" in r.text, f"Node Exporter /metrics response does not contain Prometheus format: {r.text[:200]}"
-    assert "node_" in r.text, f"Node Exporter /metrics missing 'node_' prefixed metrics: {r.text[:200]}"
-    logger.info(
-        "[IMP:9][smoke][node-exporter] ✅ Node Exporter /metrics OK: HTTP 200, %d bytes",
-        len(r.content),
-    )
+            assert r.status_code == 200, (
+                f"Node Exporter /metrics returned HTTP {r.status_code}, expected 200. Response: {r.text[:300]}"
+            )
+            # Verify the response contains Prometheus metrics (starts with # HELP)
+            assert "# HELP" in r.text, (
+                f"Node Exporter /metrics response does not contain Prometheus format: {r.text[:200]}"
+            )
+            assert "node_" in r.text, f"Node Exporter /metrics missing 'node_' prefixed metrics: {r.text[:200]}"
+            logger.info(
+                "[IMP:9][smoke][node-exporter] ✅ Node Exporter /metrics OK: HTTP 200, %d bytes, attempt %d",
+                len(r.content),
+                attempt + 1,
+            )
+            break
+        except requests.RequestException as exc:
+            if attempt < 2:
+                wait_s = 2**attempt  # 1s, 2s backoff
+                logger.warning(
+                    "[IMP:7][smoke][node-exporter] Attempt %d failed (%s), retrying in %ds...",
+                    attempt + 1,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+            else:
+                logger.error(
+                    "[IMP:9][smoke][node-exporter] All 3 attempts failed for %s: %s",
+                    url,
+                    exc,
+                )
+                raise
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -43,6 +43,10 @@ services:
     profiles: [monitoring]
     container_name: prometheus-config-init
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     entrypoint: ["/bin/sh", "-ceu"]
     command:
       - |

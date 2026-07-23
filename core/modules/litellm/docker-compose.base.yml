@@ -52,8 +52,8 @@ services:
       resources:
         limits:
           cpus: "2.0"
+          memory: 2G
     logging: *default-logging
-    # No memory limit — LiteLLM runs at ~700MB before GC. Monitored via cAdvisor.
 
     ports:
       - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
