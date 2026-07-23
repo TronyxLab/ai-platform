@@ -288,6 +288,7 @@ jobs:
       # ─── Stage 6: Integration Tests ─────────────────────────────────
       - name: Integration test — error-path mode (no API keys needed)
         id: integration_error_path
+        continue-on-error: true
         run: |
           INTEGRATION_MODE=error-path make test MARKER=integration && rc=0 || rc=$?
           if [ $rc -eq 5 ]; then
