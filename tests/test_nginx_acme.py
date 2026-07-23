@@ -341,8 +341,14 @@ def test_acme_api_key_shredded_contract(caplog) -> None:
     ## @regression  API key not set — cert issuance without auth
     """
 
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · WEBNAMES_API_KEY leaked from CI env
+    # ·   Root: CI now sets WEBNAMES_API_KEY=*test-webnames-api-key in platform-env.yaml.
+    # ·   The test must unset it, otherwise the API key guard is bypassed and
+    # ·   issue_tls_cert proceeds to acme.sh check → wrong error message.
+    # ·   Fix: pass env with WEBNAMES_API_KEY unset.
     result = _source_and_run_no_main(
         'issue_tls_cert "test.example.com" "admin@test.com" "webnames"',
+        env={"WEBNAMES_API_KEY": ""},
     )
 
     logger.critical(
@@ -435,7 +441,9 @@ def test_issue_tls_cert_guards(scenario, domain, email, dns_plugin, expected_msg
     """
 
     func_call = f'issue_tls_cert "{domain}" "{email}" "{dns_plugin}"'
-    result = _source_and_run_no_main(func_call)
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · WEBNAMES_API_KEY leaked from CI env
+    # ·   Same root cause as test_acme_api_key_shredded_contract above.
+    result = _source_and_run_no_main(func_call, env={"WEBNAMES_API_KEY": ""})
 
     logger.critical(
         "[IMP:9][test_issue_tls_cert_guards][%s] ASSERT: exit=%d (expected non-zero), msg check",

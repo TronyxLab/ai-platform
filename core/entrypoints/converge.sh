@@ -119,11 +119,11 @@ main() {
         local args=("--node" "${NODE_NAME}")
         $DRY_RUN && args+=("--dry-run")
         args+=("${PASSTHROUGH_ARGS[@]}")
-        if $DRY_RUN; then
-            echo "[IMP:8][converge][dry-run] DRY-RUN: bash ${internal} ${args[*]}" >&2
-            echo "[IMP:9][converge][dry-run] DRY-RUN complete" >&2
-            exit 0
-        fi
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · converge.sh --dry-run exited before delegating
+        # ·   Root: refactoring added early exit (exit 0) on dry-run instead of delegating
+        # ·   to internal/bootstrap/converge.sh. Tests expect WOULD-create output from
+        # ·   the actual converge logic, not just a command preview.
+        # ·   Fix: always delegate to internal script; it handles --dry-run itself.
         echo "[IMP:8][converge][entrypoint] Delegating to ${internal}" >&2
         exec bash "${internal}" "${args[@]}"
     fi
