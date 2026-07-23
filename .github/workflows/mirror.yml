@@ -10,10 +10,10 @@
 ##   - Also supports workflow_dispatch for manual mirror
 ##   - Blocking SHA verification for workflow_dispatch (API check)
 ##   - Never triggers on push from mirror (recursion guard)
-##   - GIT_MIRROR_TOKEN is optional HTTPS fallback (SSH primary is the target)
+##   - SSH push via MIRROR_SSH_KEY (user SSH key github-actions, pub in .github/mirror-deploy-key.pub)
+##   - GIT_MIRROR_TOKEN removed — replaced by SSH (2026-07-23, TRAP[DECISION] resolved)
 ##   - context-promote.sh already uses SSH primary (Plan 015 T3.4)
 ##   - Mirror stays up-to-date without force push
-##   - SSH deploy key transition deferred — see TRAP[DECISION] below
 ## @rationale SHA-aware aggregator (D4) ensures only tested code is mirrored.
 ##            Plan 2 consolidation: main-full-gate removed, trigger on platform-test.
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
@@ -53,21 +53,16 @@
 ##   · Rev: если появится N контекстов и ручное promote станет узким горлом —
 ##     добавить `make context-promote-all` с batch-логикой, но не авто-триггер.
 ##
-## ⚡ TOKEN NOTE (Plan 018 — secrets consolidation):
-##   GIT_MIRROR_TOKEN используется только mirror.yml (автоматический CI)
-##   и опциональный HTTPS-fallback context-promote.sh (если SSH недоступен).
-##   context-promote.sh использует SSH primary (ssh-agent оператора) —
-##   для ручного promote токен не нужен. См. Plan 018 Brief.
+## ⚡ TOKEN NOTE (2026-07-23 — SSH transition complete):
+##   mirror.yml uses MIRROR_SSH_KEY (SSH) for push — GIT_MIRROR_TOKEN no longer needed.
+##   context-promote.sh still uses GIT_MIRROR_TOKEN as optional HTTPS fallback.
+##   Public key: .github/mirror-deploy-key.pub. Private key: ~/.ssh/github_actions.
 ##
-## 🧐 TRAP[DECISION] · 2026-07-20 · — · mirror.yml SSH deploy key transition deferred
-## · Rejected: SSH deploy key — generate key pair, add public key as deploy key on
-##   TronyxLab/ai-platform, add private key as repo secret, rewrite push step (GIT_ASKPASS→SSH)
-## · Reason: deferred — requires GitHub-side configuration (separate operational task).
-##   GIT_MIRROR_TOKEN (HTTPS+GIT_ASKPASS) continues as current implementation.
-##   context-promote.sh уже использует SSH primary (Plan 015 T3.4) — для ручного promote
-##   SSH deploy key не нужен, используется ssh-agent оператора.
-## · Rev: когда GIT_MIRROR_TOKEN станет недоступен или SSH setup будет сделан —
-##   переписать push step на `git push git@github.com:TronyxLab/ai-platform.git HEAD:main`
+## ✅ TRAP[DECISION] · 2026-07-20 → RESOLVED 2026-07-23 · mirror.yml SSH transition complete
+## · Implemented: user SSH key (github-actions, ~/.ssh/github_actions) as MIRROR_SSH_KEY secret.
+## · Push step rewritten: HTTPS+GIT_ASKPASS → SSH with GIT_SSH_COMMAND.
+## · Key is a user SSH key (not deploy key) — has push access via Tronyx161 admin rights.
+## · Public key documented at .github/mirror-deploy-key.pub for recovery.
 ##
 # endregion MODULE_CONTRACT
 # ═══════════════════════════════════════════════════════════════════
@@ -81,7 +76,7 @@
 #                - Also supports workflow_dispatch for manual mirror
 #                - Blocking SHA verification for workflow_dispatch (API check)
 #                - Never triggers on push from mirror (recursion guard)
-#                - GIT_MIRROR_TOKEN must have Contents:Write on TronyxLab/ai-platform
+#                - MIRROR_SSH_KEY (SSH) replaces GIT_MIRROR_TOKEN (HTTPS) for push
 #                - Mirror stays up-to-date without force push
 # ## @rationale:  SHA-aware aggregator (D4) ensures only tested code is mirrored.
 #                Mirror in TronyxLab is read-only, used by TronyxLab CI.
@@ -126,7 +121,7 @@ jobs:
       && github.repository_owner == 'Tronyx161'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       actions: read
 
     steps:
@@ -155,41 +150,44 @@ jobs:
         run: git checkout ${{ steps.sha.outputs.sha }}
 
       # region STEP_PushToMirror
-      ## @purpose: Push all commits on main to TronyxLab/ai-platform mirror
+      ## @purpose: Push all commits on main to TronyxLab/ai-platform mirror via SSH
       ## @io:      Local main branch → TronyxLab/ai-platform main branch
       ## @complexity: O(n) — proportional to commit count since last sync
+      ## @changes:  2026-07-23 · HTTPS+GIT_ASKPASS → SSH (MIRROR_SSH_KEY).
+      ##             Resolves TRAP[DECISION] mirror.yml:62-70 (SSH deploy key transition).
+      ##             Key: ~/.ssh/github_actions (user SSH key, pub in .github/mirror-deploy-key.pub).
       - name: Push to TronyxLab/ai-platform
         env:
-          GIT_MIRROR_TOKEN: ${{ secrets.GIT_MIRROR_TOKEN }}
+          MIRROR_SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
         run: |
           # ──────────────────────────────────────────────────────────
-          # [IMP:9][PUSH][CONFIG] Set up mirror remote with GIT_ASKPASS
-          # ⚠️ TRAP[BUG] · 2026-07-16 · HI · token-in-URL → GIT_ASKPASS
-          # · Symptom: токен в remote URL (виден в git remote -v, конфиге и процесс-листе)
-          # · Root: gate сканировал только core/**/*.sh, не .github/**/*.yml
-          # · Fix: GIT_ASKPASS — временный скрипт в $RUNNER_TEMP, URL без креденшалов
-          # · Prevention: TASK-4 расширяет скоуп credential-gate на .github/**/*.yml
+          # [IMP:9][PUSH][SSH] Set up SSH key for mirror push
+          # · SSH key from MIRROR_SSH_KEY secret (user SSH key: github-actions)
+          # · Public key documented at .github/mirror-deploy-key.pub
           # ──────────────────────────────────────────────────────────
+          set -euo pipefail
 
-          # Cleanup handler — удаляет GIT_ASKPASS при любом завершении шага
-          cleanup() { rm -f "${RUNNER_TEMP}/git-askpass.sh" 2>/dev/null || true; }
+          # Cleanup handler — удаляет SSH key при любом завершении шага
+          cleanup() { rm -f ~/.ssh/mirror_key 2>/dev/null || true; }
           trap cleanup EXIT
 
-          # Создаём временный GIT_ASKPASS-скрипт
-          export GIT_ASKPASS="${RUNNER_TEMP}/git-askpass.sh"
-          cat > "${GIT_ASKPASS}" <<-'ASKPASS_EOF'
-          #!/usr/bin/env bash
-          echo "${GIT_MIRROR_TOKEN}"
-          ASKPASS_EOF
-          chmod 700 "${GIT_ASKPASS}"
+          # Setup SSH directory and key
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${MIRROR_SSH_KEY}" > ~/.ssh/mirror_key
+          chmod 600 ~/.ssh/mirror_key
 
-          # Remote URL без креденшалов — GIT_ASKPASS передаёт токен на запрос
-          git remote add mirror \
-            https://github.com/TronyxLab/ai-platform.git
+          # Add github.com to known_hosts (prevents TOFU prompt)
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          # SSH command: use mirror_key with IdentitiesOnly (don't try agent/other keys)
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
           # ──────────────────────────────────────────────────────────
-          # [IMP:8][PUSH][EXECUTE] Push main to mirror with GPG signing disabled
+          # [IMP:8][PUSH][EXECUTE] Push main to mirror via SSH
           # ──────────────────────────────────────────────────────────
+          git remote add mirror git@github.com:TronyxLab/ai-platform.git
+
           if git -c commit.gpgsign=false push mirror HEAD:main 2>&1; then
             echo "[IMP:9][MIRROR][PUSH] Push to TronyxLab/ai-platform successful"
           else
@@ -198,7 +196,7 @@ jobs:
           fi
 
           # ──────────────────────────────────────────────────────────
-          # [IMP:8][MIRROR][VERIFY] Post-push verification
+          # [IMP:8][MIRROR][VERIFY] Post-push verification via SSH
           # ──────────────────────────────────────────────────────────
           MIRROR_HEAD=$(git ls-remote mirror HEAD | awk '{print $1}')
           SOURCE_HEAD=$(git rev-parse HEAD)
@@ -213,8 +211,8 @@ jobs:
 
       # 💼 TRAP[DEBT] · 2026-07-07 · LOW · Manual force-sync may be needed
       # · If mirror.yml push fails due to non-fast-forward, manual force-sync:
-      # ·   git remote add mirror https://github.com/TronyxLab/ai-platform.git
-      # ·   git push -f mirror HEAD:main
+      # ·   git remote add mirror git@github.com:TronyxLab/ai-platform.git
+      # ·   GIT_SSH_COMMAND="ssh -i ~/.ssh/github_actions" git push -f mirror HEAD:main
       # · Prevention: never force-push to Tronyx161/ai-platform main branch.
       # ·
       # · ⚠️ DO NOT EDIT code in TronyxLab/ai-platform — changes will be overwritten.
