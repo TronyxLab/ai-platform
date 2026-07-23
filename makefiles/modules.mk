@@ -25,52 +25,35 @@ up: discover-modules dev-certs
 	# provision — канонический таргет (make provision SCOPE=...), up вызывает напрямую для двух scope
 	@bash $(_platform_root)/core/internal/provision-environment.sh --scope networks --scope volumes \
 		--platform-env $(_platform_root)/platform-env.yaml
-	@_compose_files="-f docker-compose.yml -f docker-compose.platform-dev.yml"; \
-	if [ "$$(uname)" = "Darwin" ] && [ -f docker-compose.macos.yml ]; then \
-		_compose_files="$$_compose_files -f docker-compose.macos.yml"; \
-		echo "[IMP:7][make][up] macOS detected — including docker-compose.macos.yml"; \
-	fi; \
-	if [ -n "$(MODULES)" ]; then \
+	@if [ -n "$(MODULES)" ]; then \
 		_profiles=""; \
 		IFS=',' read -ra _mods <<< "$(MODULES)"; \
 		for _m in "$${_mods[@]}"; do \
 			_profiles="$$_profiles --profile $$_m"; \
 		done; \
 		echo "[IMP:7][make][up] Using profiles: $(MODULES)"; \
-		docker compose $$_compose_files $$_profiles up -d; \
+		docker compose $(COMPOSE_BASE_FILES) $$_profiles up -d; \
 	else \
-		docker compose $$_compose_files up -d; \
+		docker compose $(COMPOSE_BASE_FILES) up -d; \
 	fi
 	@echo "[IMP:9][make][up] Platform stack started"
 
 ## down: Stop platform stack and remove volumes
 down:
 	@echo "[IMP:7][make][down] Stopping platform stack..."
-	@_compose_files="-f docker-compose.yml -f docker-compose.platform-dev.yml"; \
-	if [ "$$(uname)" = "Darwin" ] && [ -f docker-compose.macos.yml ]; then \
-		_compose_files="$$_compose_files -f docker-compose.macos.yml"; \
-	fi; \
-	docker compose $$_compose_files down -v
+	@docker compose $(COMPOSE_BASE_FILES) down -v
 	@echo "[IMP:9][make][down] Platform stack stopped"
 
 ## restart: Soft restart all Docker compose services (stop + start)
 restart:
 	@echo "[IMP:7][make][restart] Soft restarting all services..."
-	@_compose_files="-f docker-compose.yml -f docker-compose.platform-dev.yml"; \
-	if [ "$$(uname)" = "Darwin" ] && [ -f docker-compose.macos.yml ]; then \
-		_compose_files="$$_compose_files -f docker-compose.macos.yml"; \
-	fi; \
-	docker compose $$_compose_files stop && docker compose $$_compose_files start
+	@docker compose $(COMPOSE_BASE_FILES) stop && docker compose $(COMPOSE_BASE_FILES) start
 	@echo "[IMP:9][make][restart] All services soft restarted"
 
 ## status: Show running Docker compose services status
 status:
 	@echo "[IMP:7][make][status] Displaying running services..."
-	@_compose_files="-f docker-compose.yml -f docker-compose.platform-dev.yml"; \
-	if [ "$$(uname)" = "Darwin" ] && [ -f docker-compose.macos.yml ]; then \
-		_compose_files="$$_compose_files -f docker-compose.macos.yml"; \
-	fi; \
-	docker compose $$_compose_files ps
+	@docker compose $(COMPOSE_BASE_FILES) ps
 	@echo "[IMP:9][make][status] Status displayed"
 
 ## healthcheck: Run all module healthcheck.sh scripts via entrypoint — exit 0 only if all pass

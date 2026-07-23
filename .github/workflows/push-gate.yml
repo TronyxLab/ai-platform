@@ -38,13 +38,9 @@ jobs:
     permissions:
       contents: read
 
-    # COMPOSE_PROFILES — required for ${VAR:?error} enforcement (DevPlan 033 W3-E3 Option A).
-    # Without this, `docker compose config` validates inactive profiles that reference
-    # critical secrets with ${VAR:?...} syntax (even though .env.example has test values,
-    # this is a safety net for future secrets without test defaults).
-    # Source of truth: platform-env.yaml profiles section.
-    env:
-      COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
+    # COMPOSE_PROFILES — exported by compose-profiles composite action (DevPlan 064 S1).
+    # Reads from platform-env.yaml (authoritative source). Replaces hardcoded string.
+    # Required for ${VAR:?error} enforcement (DevPlan 033 W3-E3 Option A).
 
     steps:
       - name: Checkout repository
@@ -59,6 +55,9 @@ jobs:
           provisioner-scope: 'networks'
 
       # Pre-commit cache — separate from .venv cache (different key: .pre-commit-config.yaml)
+      - name: Export COMPOSE_PROFILES from platform-env.yaml
+        uses: ./.github/actions/compose-profiles
+
       - name: Cache pre-commit venv
         uses: actions/cache@v6
         with:

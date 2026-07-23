@@ -537,6 +537,9 @@ gates:
 - id: test_root_compose_uses_context_image_var
   test_file: test_gate_compose_no_base_image.py
   description: 'Auto-discovered gate: test_root_compose_uses_context_image_var'
+- id: test_ci_workflows_use_compose_profiles_composite
+  test_file: test_gate_compose_profiles_consistency.py
+  description: 'Auto-discovered gate: test_ci_workflows_use_compose_profiles_composite'
 - id: test_compose_profiles_consistency
   test_file: test_gate_compose_profiles_consistency.py
   description: 'Auto-discovered gate: test_compose_profiles_consistency'

@@ -133,39 +133,6 @@ node-lifecycle.sh --mode update
 
 ---
 
-## Python-модули декомпозиции (Wave 4 — Strangler-Fig)
-
-После W4-E1/E2/E3 бизнес-логика трёх shell-монолитов (4114 строк) мигрирована в типизированные Python-модули. Shell-фасады (<100-200 LOC каждый) выполняют arg parsing, env setup, и делегирование.
-
-### deploy/ — W4-E1 (5 модулей, ~2220 LOC)
-
-| Модуль | LOC | Назначение |
-|--------|-----|------------|
-| `docker_orchestrator.py` | 1155 | Docker compose deploy, pre-pull, healthcheck, orphan reconcile |
-| `sudoers_generator.py` | 648 | Sudoers generation via template-engine.sh, visudo validation, atomic write |
-| `context_overlay.py` | 369 | Git clone/pull context overlay repo с S9-кэшированием (300s) |
-| `secrets_validator.py` | 589 | Secrets validation, charset check, module metadata, transitive deps BFS |
-| `orphan_reconciler.py` | 555 | Batch orphan container detection + self-heal (--self-heal flag for docker rm/prune) |
-
-**Shell-фасад:** `deploy-modules.sh` (91 LOC) — arg parsing → provision → secrets validate → Python per-module deploy → sudoers + orphans → severity exit.
-
-### converge/ — W4-E3 (1 модуль, 1367 LOC)
-
-| Модуль | LOC | Назначение |
-|--------|-----|------------|
-| `reconciler.py` | 2136 | 9 R-units (R1-R9): perms, audit_log, projects, networks, hosts_drift, vhosts, volumes, sudoers, runtime. JSON report, --dry-run, --units filter. |
-
-**Shell-фасад:** `converge.sh` (137 LOC) — setup → lock → `python3 reconciler.py` → --reconcile → exit 0/1/2.
-
-### lifecycle/ — W4-E2 (2 модуля, 2330 LOC)
-
-| Модуль | LOC | Назначение |
-|--------|-----|------------|
-| `state_machine.py` | 1599 | State machine: 17 init + 7 update steps, retry-policy (exponential backoff), formal pre/post-conditions |
-| `steps.py` | 729 | Step implementation functions (acme, secrets, apt, docker, users, ssh-keys, firewall, sudoers, converge, telegram) |
-
-**Shell-фасад:** `node-lifecycle.sh` (164 LOC) — arg parsing → NODE_YAML resolution → `python3 state_machine.py` → checkpoint_step wrappers.
-
 ### Lifecycle State Machine (W5-E6)
 
 ```mermaid

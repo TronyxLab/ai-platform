@@ -68,8 +68,6 @@ jobs:
     env:
       INTEGRATION_MODE: live
       HERMES_DASHBOARD_PASSWORD: ${{ secrets.HERMES_DASHBOARD_PASSWORD }}
-      COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
-
     permissions:
       contents: read
       packages: write
@@ -101,6 +99,9 @@ jobs:
         run: make pre-commit-run
         env:
           SKIP: "no-commit-to-branch"
+
+      - name: Export COMPOSE_PROFILES from platform-env.yaml
+        uses: ./.github/actions/compose-profiles
 
       # ⚠️ TRAP[DEBUG] · 2026-07-23 · HI · All non-pre-commit steps commented out for debug run
       # · Root: platform-test failed in TronyxLab on pre-commit step (stale binary shebang bug).
@@ -357,16 +358,4 @@ jobs:
 
       - name: Cleanup Docker resources
         if: false
-        run: |
-          echo "::group::Cleanup Docker Compose stacks"
-          if [ -f /tmp/module_list.json ]; then
-            while IFS= read -r compose_file; do
-              if [ -f "$compose_file" ]; then
-                docker compose -f "$compose_file" -p ai-platform-test down --timeout 5 --remove-orphans 2>/dev/null || true
-                docker compose -f "$compose_file" -p ai-platform-integration-test down --timeout 5 --remove-orphans 2>/dev/null || true
-              fi
-            done < <(python3 core/internal/scripts/module_discovery.py --format lines)
-          else
-            echo "[cleanup] Module list not found — skipping cleanup"
-          fi
-          echo "::endgroup::"
+        uses: ./.github/actions/cleanup-docker

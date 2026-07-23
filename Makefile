@@ -29,6 +29,14 @@ _platform_root := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 # Uses ?= so existing env takes precedence.
 export COMPOSE_PROFILES ?= postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page
 
+# === Docker Compose shared files (resolved at parse time, used by modules.mk) ===
+COMPOSE_BASE_FILES := -f docker-compose.yml -f docker-compose.platform-dev.yml
+ifeq ($(shell uname -s),Darwin)
+    ifneq ($(wildcard docker-compose.macos.yml),)
+        COMPOSE_BASE_FILES += -f docker-compose.macos.yml
+    endif
+endif
+
 # === Includes — all targets defined in makefiles/ ===
 include makefiles/bootstrap.mk
 include makefiles/deploy.mk
