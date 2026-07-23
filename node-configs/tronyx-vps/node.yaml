@@ -1,4 +1,17 @@
-# @purpose Node configuration for tronyx-vps — context=tronyx-lab, modules, projects, DNS, SSL
+# GREP_SUMMARY: node.yaml, tronyx-vps, context, modules, projects, domain, SSL, DNS, acme
+# STRUCTURE: ┌context+repos┐ → ◇ node(host,keys,domain,email,acme,secrets,tor) → ◇ projects → ◇ modules(enabled/disabled)
+# region MODULE_CONTRACT
+## @purpose  Node configuration for tronyx-vps — context=tronyx-lab, modules, projects, DNS, SSL
+## @scope    Single-node configuration consumed by bootstrap, node-update, deploy-modules, cert-orchestrator
+## @invariants
+##   - context: tronyx-lab — org определяет пути /opt/<context>/platform/
+##   - node.host: 103.88.243.151 — IP VPS
+##   - repos.core: TronyxLab/ai-platform.git — context-overlay git-репозиторий
+##   - projects[].expose: true → генерируется nginx vhost + SSL-сертификат
+##   - modules[].enabled: true → deploy-modules.sh обрабатывает модуль
+## @rationale  Единственный source of truth конфигурации ноды для всех bootstrap- и lifecycle-операций.
+##   Вынесен из core/ в node-configs/ для разделения платформенного кода и per-node конфигурации.
+# endregion MODULE_CONTRACT
 context: tronyx-lab
 repos:
   core: https://github.com/TronyxLab/ai-platform.git
