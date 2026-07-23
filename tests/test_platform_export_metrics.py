@@ -530,6 +530,89 @@ class TestHostCollector:
             assert result["disk_free_gb"] == 30.0
             assert result["disk_used_percent"] == 70.0
 
+    # 🧪 TRAP[TEST] · TASK-13 · Regression: host_collector uptime & load
+    # · Scenario: /proc/uptime and /proc/loadavg present → parsed correctly
+    # · Remove if: get_host_uptime removed from host_collector
+    def test_host_collector_uptime(self, tmp_path, caplog, monkeypatch):
+        """get_host_uptime returns uptime and load avg from /proc files."""
+        caplog.set_level(0)
+
+        # Create fake /proc files
+        uptime_file = tmp_path / "uptime"
+        uptime_file.write_text("12345.67 67890.12\n")
+
+        loadavg_file = tmp_path / "loadavg"
+        loadavg_file.write_text("0.50 0.30 0.10 1/234 56789\n")
+
+        # Monkeypatch open() to serve fake files when /proc/uptime or /proc/loadavg is read
+        original_open = __builtins__["open"] if isinstance(__builtins__, dict) else __builtins__.open
+
+        def _mock_open(path, *args, **kwargs):
+            path_str = str(path)
+            if path_str.endswith("/proc/uptime") or path_str == "/proc/uptime":
+                return original_open(str(uptime_file), *args, **kwargs)
+            if path_str.endswith("/proc/loadavg") or path_str == "/proc/loadavg":
+                return original_open(str(loadavg_file), *args, **kwargs)
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", _mock_open)
+
+        from core.internal.healthcheck.metrics.host_collector import get_host_uptime
+
+        result = get_host_uptime()
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+        assert result["uptime_seconds"] == 12345.67, f"Expected 12345.67, got {result['uptime_seconds']}"
+        assert result["load_1m"] == 0.5, f"Expected 0.5, got {result['load_1m']}"
+        assert result["load_5m"] == 0.3, f"Expected 0.3, got {result['load_5m']}"
+        assert result["load_15m"] == 0.1, f"Expected 0.1, got {result['load_15m']}"
+
+    # 🧪 TRAP[TEST] · TASK-13 · Regression: host_collector uptime graceful degradation
+    # · Scenario: /proc files missing → all null
+    # · Remove if: get_host_uptime removed
+    def test_host_collector_uptime_missing_files(self, caplog, monkeypatch):
+        """get_host_uptime returns all nulls when /proc files are missing."""
+        caplog.set_level(0)
+
+        # Mock open to raise FileNotFoundError for /proc paths
+        original_open = __builtins__["open"] if isinstance(__builtins__, dict) else __builtins__.open
+
+        def _mock_open(path, *args, **kwargs):
+            path_str = str(path)
+            if "/proc/uptime" in path_str or "/proc/loadavg" in path_str:
+                raise FileNotFoundError(f"No such file: {path_str}")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", _mock_open)
+
+        from core.internal.healthcheck.metrics.host_collector import get_host_uptime
+
+        result = get_host_uptime()
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+        assert result["uptime_seconds"] is None
+        assert result["load_1m"] is None
+        assert result["load_5m"] is None
+        assert result["load_15m"] is None
+
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: json_writer
