@@ -21,7 +21,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-import pytest  # noqa: F401
+import pytest
 
 # 🧪 TRAP[TEST] · 2026-07-18 · Regression: M1 executable-bit drift
 # Scenario: git updates preserve 100755 for all non-lib .sh files
