@@ -37,7 +37,6 @@ sys.path.insert(0, str(_CORE_DIR))
 
 from internal.healthcheck.metrics.cert_collector import _load_cert, _san_match
 
-
 # ═══════════════════════════════════════════════════════════════════
 # FIXTURES
 # ═══════════════════════════════════════════════════════════════════
@@ -103,7 +102,6 @@ class TestCertCollectorTimezone:
             mock_cert.subject.rfc4514_string.return_value = "CN=test.example.com"
 
             # Mock SAN extension
-            from cryptography.x509 import SubjectAlternativeName
 
             san_ext = mock.MagicMock()
             san_ext.value.get_values_for_type.return_value = ["test.example.com"]
@@ -149,8 +147,6 @@ class TestCertCollectorTimezone:
             mock_cert.issuer.rfc4514_string.return_value = "CN=Test CA"
             mock_cert.subject.rfc4514_string.return_value = "CN=test.example.com"
 
-            from cryptography.x509 import SubjectAlternativeName
-
             san_ext = mock.MagicMock()
             san_ext.value.get_values_for_type.return_value = ["test.example.com"]
             mock_cert.extensions.get_extension_for_class.return_value = san_ext
@@ -186,8 +182,6 @@ class TestCertCollectorTimezone:
             mock_cert.not_valid_after_utc = utc_expiry
             mock_cert.issuer.rfc4514_string.return_value = "CN=Test CA"
             mock_cert.subject.rfc4514_string.return_value = "CN=test.example.com"
-
-            from cryptography.x509 import SubjectAlternativeName
 
             san_ext = mock.MagicMock()
             san_ext.value.get_values_for_type.return_value = ["test.example.com"]

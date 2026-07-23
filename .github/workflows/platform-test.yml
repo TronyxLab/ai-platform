@@ -103,50 +103,27 @@ jobs:
       - name: Export COMPOSE_PROFILES from platform-env.yaml
         uses: ./.github/actions/compose-profiles
 
-      # ⚠️ TRAP[DEBUG] · 2026-07-23 · HI · All non-pre-commit steps commented out for debug run
-      # · Root: platform-test failed in TronyxLab on pre-commit step (stale binary shebang bug).
-      # ·   Fix applied to setup-python-venv/action.yml (find -type f -delete stale binaries).
-      # ·   This debug run verifies the fix before re-enabling the full pipeline.
-      # · REMINDER: REVERT THIS COMMIT after verification! Restore all steps below.
-      # · git revert <debug-commit-hash> to restore full platform-test.
-      #
-      # Disabled steps below — uncomment after fix verification:
-      #
-      # - name: Validate DORA dashboard JSON
-      #   run: ...
-      # - name: Run fast gate ...
-      # - name: Check generated manifests ...
-      # - name: Set up Docker Buildx ...
-      # ... (all Docker-dependent and integration steps)
-      #
-      # NOTE: currently all non-essential steps use `if: false` to preserve YAML structure.
-
       # shellcheck — delegated to pre-commit hooks (single SoT)
       # D1 fix: observability → monitoring (DORA dashboard path)
       # StatusReport 046 T3 (CICD-01b): inline python3 → validate_dora_dashboard.py
       - name: Validate DORA dashboard JSON
-        if: false
         run: |
           echo "::group::DORA dashboard JSON validation"
           python3 core/internal/scripts/validate_dora_dashboard.py
 
       # Fast gate before Docker setup — fail-fast on syntax/static issues
       - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
-        if: false
         run: make gate MODE=fast
 
       # Manifest generation contract — блокирует push если generated files diverged
       - name: Check generated manifests up to date
-        if: false
         run: make check-manifests
 
       # ─── Stage 2: Docker setup + provisioning ───────────────────────
       - name: Set up Docker Buildx
-        if: false
         uses: docker/setup-buildx-action@v4
 
       - name: Authenticate Docker Hub (rate limit mitigation)
-        if: false
         run: |
           if [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
             echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
@@ -156,7 +133,6 @@ jobs:
           fi
 
       - name: Login to GitHub Container Registry
-        if: false
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -164,18 +140,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Provision environment (networks + volumes + CI env defaults)
-        if: false
         uses: ./.github/actions/provisioner-call
         with:
           scope: all
 
       - name: Generate module list
-        if: false
         id: module_list
         uses: ./.github/actions/discover-modules
 
       - name: Pre-pull Docker images (parallel)
-        if: false
         continue-on-error: true
         run: |
           echo "::group::Pre-pulling Docker images (parallel)"
@@ -193,7 +166,6 @@ jobs:
           echo "::endgroup::"
 
       - name: Build backup-cron image (scoped GHA cache)
-        if: false
         uses: ./.github/actions/docker-build-cache
         with:
           context: core/modules/backup-cron
@@ -201,7 +173,6 @@ jobs:
           cache-scope: backup-cron
 
       - name: Build hermes-agent-base image (scoped GHA cache)
-        if: false
         uses: ./.github/actions/docker-build-cache
         with:
           context: core/modules/hermes-agent/build
@@ -210,7 +181,6 @@ jobs:
           cache-scope: hermes-agent-base
 
       - name: Diagnostic — verify built images
-        if: false
         run: |
           echo "=== Built images ==="
           docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(hermes-agent-base|backup-cron)"
@@ -219,7 +189,6 @@ jobs:
           docker history hermes-agent-base:latest --no-trunc --format "table {{.Size}}\t{{.CreatedBy}}" 2>/dev/null | head -15 || echo "(image not found)"
 
       - name: Diagnostic — LiteLLM pre-flight (stale containers + image digest)
-        if: false
         run: |
           echo "=== LiteLLM Pre-flight Diagnostic ==="
           echo ""
@@ -243,7 +212,6 @@ jobs:
         shell: bash
 
       - name: Generate dev SSL certs for nginx tests
-        if: false
         run: |
           echo "[IMP:7][dev-certs-pregen] Generating dev SSL certs for nginx tests..."
           mkdir -p core/modules/nginx/dev-certs
@@ -258,7 +226,6 @@ jobs:
         shell: bash
 
       - name: Run full gate (smoke + component + predeploy-docker — no static duplication, contract/static/predeploy in fast gate)
-        if: false
         id: full_gate
         env:
           CONTEXT_IMAGE: hermes-agent-base:latest
@@ -266,7 +233,6 @@ jobs:
           make gate MODE=ci-docker SKIP_PRECOMMIT=1
 
       - name: Diagnostic — dump container states on failure
-        if: false
         run: |
           echo "=== All Running Containers ==="
           docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
@@ -298,7 +264,6 @@ jobs:
         shell: bash
 
       - name: Integration test — error-path mode (no API keys needed)
-        if: false
         id: integration_error_path
         continue-on-error: true
         run: |
@@ -310,7 +275,6 @@ jobs:
           exit $rc
 
       - name: Integration test — live mode (requires API keys)
-        if: false
         id: integration_live
         continue-on-error: true
         env:
@@ -330,7 +294,6 @@ jobs:
           exit $rc
 
       - name: Generate Job Summary with stage timing
-        if: false
         run: |
           {
             echo "## ⏱️ CI Stage Timing — platform-test (unified)"
@@ -357,5 +320,4 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cleanup Docker resources
-        if: false
         uses: ./.github/actions/cleanup-docker
