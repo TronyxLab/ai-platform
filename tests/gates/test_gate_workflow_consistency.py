@@ -320,20 +320,42 @@ def test_make_targets_exist():
 
 @pytest.mark.gate
 def test_core_deploy_auto_detects_node():
-    """Verify core-deploy.yml uses auto-detection (Option A): NODE not passed, bootstrap.sh resolves."""
-    # ── core-deploy.yml calls make bootstrap-node without NODE= ───
+    """Verify core-deploy.yml auto-detects NODE on VPS before calling make node-update.
+
+    ⚠️ TRAP[BUG] · 2026-07-23 · P0 · Previous assertion required make node-update WITHOUT NODE=
+    · Root: auto_detect_node_name() existed in bootstrap.sh/converge.sh but NOT in
+    ·   node-update.sh or makefiles/bootstrap.mk node-update target.
+    ·   makefiles/bootstrap.mk:48-51 REQUIRES NODE= with hard error on empty.
+    ·   Result: CI green but make node-update failed silently on VPS — containers never restarted.
+    · Fix: CI auto-detects NODE via SSH from /opt/node-configs/ BEFORE calling make node-update
+    ·   (same logic as converge.sh auto_detect_node_name). NODE is explicitly passed to make.
+    """
     core_deploy_path = _WORKFLOW_DIR / "core-deploy.yml"
     content = core_deploy_path.read_text()
-    # Verify the exact SSH command bootsraps without NODE argument (auto-detection on VPS)
-    update_cmd = '"cd /opt/platform && GITHUB_SHA=$SHA make node-update"'
-    assert update_cmd in content, f"core-deploy.yml node-update step must contain: {update_cmd} (no NODE= argument)"
-    logger.info("[IMP:9][test] core-deploy.yml calls make node-update without NODE= argument")
+
+    # ── core-deploy.yml auto-detects NODE from /opt/node-configs/ on VPS ──
+    assert "Auto-detect NODE name from /opt/node-configs/" in content, (
+        "core-deploy.yml must auto-detect NODE from /opt/node-configs/ before calling make node-update"
+    )
+    assert "/opt/node-configs" in content, "core-deploy.yml must reference /opt/node-configs/ for NODE auto-detection"
+
+    # ── core-deploy.yml calls make node-update WITH NODE=$NODE ──
+    assert "make node-update NODE=$NODE" in content, (
+        "core-deploy.yml must pass NODE=$NODE to make node-update (auto-detected above)"
+    )
+    logger.info("[IMP:9][test] core-deploy.yml auto-detects NODE and passes NODE=$NODE to make node-update")
+
+    # ── core-deploy.yml rsyncs makefiles/ for Makefile include-split W4-E4 ──
+    assert "./makefiles/" in content, (
+        "core-deploy.yml must rsync makefiles/ to VPS (required by Makefile include-split W4-E4)"
+    )
+    logger.info("[IMP:9][test] core-deploy.yml rsyncs makefiles/ to VPS")
 
     # ── bootstrap.sh has auto_detect_node_name() function ─────────
     bootstrap_path = repo_root() / "core/entrypoints/bootstrap.sh"
     bootstrap_content = bootstrap_path.read_text()
     assert "auto_detect_node_name" in bootstrap_content, (
-        "bootstrap.sh must define auto_detect_node_name() for auto-detection"
+        "bootstrap.sh must define auto_detect_node_name() for bootstrap-node auto-detection"
     )
     assert "/opt/node-configs" in bootstrap_content, "auto_detect_node_name() must search /opt/node-configs/"
     logger.info("[IMP:9][test] bootstrap.sh has auto_detect_node_name() function")

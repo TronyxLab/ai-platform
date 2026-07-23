@@ -109,11 +109,11 @@ jobs:
             --exclude 'default-user.xml' \
             --exclude '.env' \
             ./core/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/core/
-          # Rsync root-level config files (no --delete, single-file sync)
+          # Rsync root-level config files + makefiles (required by Makefile include-split W4-E4)
           rsync -avz \
-            ./platform-env.yaml ./Makefile \
+            ./platform-env.yaml ./Makefile ./makefiles/ \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
-          echo "[IMP:9][deploy][rsync] Core + config rsync complete — SHA $SHA"
+          echo "[IMP:9][deploy][rsync] Core + config + makefiles rsync complete — SHA $SHA"
 
       # Step 6: Provision networks + volumes on VPS via make provision (Invariant 1).
       - name: Provision environment on VPS (networks + volumes)
@@ -128,14 +128,31 @@ jobs:
       # T18: заменён make bootstrap-node → make node-update.
       # bootstrap-node сохранён как manual fallback (INIT-only) через
       # make bootstrap-node NODE=<name> — недоступен через CI, только shell.
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · make node-update without NODE= + makefiles/ not rsynced
+      # · Symptom: CI green but containers never restart after push
+      # · Root 1: make node-update called without NODE= argument — Makefile target exits error
+      # · Root 2: makefiles/ not rsynced to VPS — Makefile include makefiles/*.mk fails
+      # · Fix: auto-detect NODE from /opt/node-configs/ (same as converge.sh auto_detect_node_name)
+      # ·       + rsync makefiles/ in Step 4 above
       - name: Node update on VPS (native SSH)
         if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
+          # Auto-detect NODE name from /opt/node-configs/ (same logic as converge.sh)
+          # Excludes 'scripts' and 'secrets' subdirectories; expects exactly 1 node
+          NODE=$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            'for d in /opt/node-configs/*/; do b=$(basename "$d"); [[ "$b" == "scripts" || "$b" == "secrets" ]] && continue; echo "$b"; done | head -1')
+          if [ -z "$NODE" ]; then
+            echo "::error::[IMP:10][deploy] Cannot auto-detect NODE — no node directories in /opt/node-configs/"
+            echo "::error::Action required: run make bootstrap-node NODE=<name> first, or check VPS state"
+            exit 1
+          fi
+          echo "[IMP:8][deploy][node-detect] Auto-detected NODE=${NODE}"
           ssh -o StrictHostKeyChecking=accept-new \
             -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            "cd /opt/platform && GITHUB_SHA=$SHA make node-update"
+            "cd /opt/platform && GITHUB_SHA=$SHA make node-update NODE=$NODE"
 
       # ─── Step 8: Audit trail ──────────────────────────────────────────
       - name: Log deployment audit trail
