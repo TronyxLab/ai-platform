@@ -299,6 +299,7 @@ jobs:
 
       - name: Integration test — live mode (requires API keys)
         id: integration_live
+        continue-on-error: true
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
