@@ -219,10 +219,17 @@ scp_to_server() {
     fi
     echo "[IMP:9][bootstrap][scp] Phase 2/4: node-configs/${node_name}/ rsync complete"
 
-    # ── SCP 3: node-configs/secrets/ → /opt/node-configs/secrets/ ──
-    if [[ -d "${node_configs_dir}/secrets" ]]; then
-        echo "[IMP:9][bootstrap][scp] Phase 3/4: Rsyncing node-configs/secrets/ → ${ssh_host}:${remote_node_configs_base}/secrets/"
-        local secrets_src="${node_configs_dir}/secrets/"
+    # ── SCP 3: node-configs/<node>/secrets/ → /opt/node-configs/secrets/ ──
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · Phase 3 искал secrets в node-configs/secrets/ (top-level),
+    #   но структура была изменена на per-node: node-configs/<node>/secrets/.
+    #   Результат: Phase 3 всегда SKIP, encrypted secrets не доставлялись на VPS,
+    #   decrypt-secrets падал с «No encrypted secrets file».
+    # · Fix: искать secrets в per-node директории (node-configs/<node>/secrets/),
+    #   доставлять в /opt/node-configs/secrets/ (куда смотрят decrypt-скрипты).
+    local per_node_secrets="${node_configs_dir}/${node_name}/secrets"
+    if [[ -d "${per_node_secrets}" ]]; then
+        echo "[IMP:9][bootstrap][scp] Phase 3/4: Rsyncing ${per_node_secrets}/ → ${ssh_host}:${remote_node_configs_base}/secrets/"
+        local secrets_src="${per_node_secrets}/"
         local secrets_dst="${remote_user}@${ssh_host}:${remote_node_configs_base}/secrets/"
         # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
         if ! rsync -avz --delete \
@@ -230,12 +237,12 @@ scp_to_server() {
             --exclude=.git \
             "${secrets_src}" \
             "${secrets_dst}"; then
-            echo "[IMP:10][bootstrap][scp] FATAL: rsync node-configs/secrets/ failed for ${ssh_host}" >&2
+            echo "[IMP:10][bootstrap][scp] FATAL: rsync secrets/ failed for ${ssh_host}" >&2
             return 1
         fi
-        echo "[IMP:9][bootstrap][scp] Phase 3/4: node-configs/secrets/ rsync complete"
+        echo "[IMP:9][bootstrap][scp] Phase 3/4: secrets/ rsync complete"
     else
-        echo "[IMP:8][bootstrap][scp] Phase 3/4: SKIP — no secrets/ directory at ${node_configs_dir}/secrets"
+        echo "[IMP:8][bootstrap][scp] Phase 3/4: SKIP — no secrets/ directory at ${per_node_secrets}"
     fi
 
     return 0

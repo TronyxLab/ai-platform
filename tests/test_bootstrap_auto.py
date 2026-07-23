@@ -369,7 +369,7 @@ def test_rsync_command_generation(caplog) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         ncd = os.path.join(tmpdir, "node-configs")
         os.makedirs(os.path.join(ncd, node), exist_ok=True)
-        os.makedirs(os.path.join(ncd, "secrets"), exist_ok=True)
+        os.makedirs(os.path.join(ncd, node, "secrets"), exist_ok=True)
         cd = os.path.join(tmpdir, "core")
         os.makedirs(cd, exist_ok=True)
         # Create platform-env.yaml and Makefile so Phase 1b + 1c execute

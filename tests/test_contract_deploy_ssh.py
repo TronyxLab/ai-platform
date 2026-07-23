@@ -873,7 +873,7 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
 
     ncd = tmp_path / "node-configs"
     (ncd / node).mkdir(parents=True)
-    (ncd / "secrets").mkdir(parents=True)
+    (ncd / node / "secrets").mkdir(parents=True)
     cd = tmp_path / "core"
     cd.mkdir(parents=True)
 
