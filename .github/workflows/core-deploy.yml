@@ -79,28 +79,22 @@ jobs:
           install-gitleaks: 'false'
           run-provisioner: 'false'
 
-      # ─── Step 3: Guard — check required secrets ────────────────────────
-      - name: Check required secrets
-        id: secrets-check
-        if: steps.sha.outputs.skip != 'true'
-        run: |
-          if [ -z "${{ secrets.VPS_HOST }}" ] || [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
-            echo "::warning::[IMP:8][deploy][skip] Required secrets VPS_HOST and/or VPS_SSH_KEY are not set — skipping deploy"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ─── Step 4: Rsync core + config to VPS (S5 consolidated — 3 steps → 2 rsync calls) ───
+      # ─── Step 3: Rsync core + config to VPS (S5 consolidated — 3 steps → 2 rsync calls) ───
+      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · secrets-check gate removed
+      # · Symptom: secrets were set but $GITHUB_OUTPUT skip=true was ignored,
+      #   OR SSH key format issue. Either way, the gate added a silent-skip
+      #   surface — better to fail fast on SSH error.
+      # · Fix: removed intermediate secrets-check step. Fail-fast if SSH fails.
+      # · SSH key: stored base64-encoded to preserve exact format across gh secret set.
       - name: Rsync core + config to VPS
-        if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
-          ssh ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
+          ssh -o ConnectTimeout=10 ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
           # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
           rsync -avz --delete \
             --exclude '.git/' \
@@ -115,27 +109,21 @@ jobs:
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
           echo "[IMP:9][deploy][rsync] Core + config + makefiles rsync complete — SHA $SHA"
 
-      # Step 6: Provision networks + volumes on VPS via make provision (Invariant 1).
+      # ─── Step 4: Provision networks + volumes on VPS via make provision (Invariant 1) ───
       - name: Provision environment on VPS (networks + volumes)
-        if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true'
         run: |
           ssh -o StrictHostKeyChecking=accept-new \
             -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "cd /opt/platform && make provision SCOPE=networks,volumes"
 
-      # ─── Step 7: Node update on VPS (5m) ──────────────────────────────
+      # ─── Step 5: Node update on VPS (5m) ──────────────────────────────
       # T18: заменён make bootstrap-node → make node-update.
       # bootstrap-node сохранён как manual fallback (INIT-only) через
       # make bootstrap-node NODE=<name> — недоступен через CI, только shell.
-      # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · make node-update without NODE= + makefiles/ not rsynced
-      # · Symptom: CI green but containers never restart after push
-      # · Root 1: make node-update called without NODE= argument — Makefile target exits error
-      # · Root 2: makefiles/ not rsynced to VPS — Makefile include makefiles/*.mk fails
-      # · Fix: auto-detect NODE from /opt/node-configs/ (same as converge.sh auto_detect_node_name)
-      # ·       + rsync makefiles/ in Step 4 above
       - name: Node update on VPS (native SSH)
-        if: steps.sha.outputs.skip != 'true' && steps.secrets-check.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           # Auto-detect NODE name from /opt/node-configs/ (same logic as converge.sh)
@@ -154,22 +142,22 @@ jobs:
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "cd /opt/platform && GITHUB_SHA=$SHA make node-update NODE=$NODE"
 
-      # ─── Step 8: Audit trail ──────────────────────────────────────────
+      # ─── Step 6: Audit trail ──────────────────────────────────────────
       - name: Log deployment audit trail
-        if: steps.secrets-check.outputs.skip != 'true'
+        if: steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           echo "[DEPLOY] core SHA $SHA → ${{ secrets.VPS_HOST }}:/opt/platform/core/"
 
-      # ─── Step 9: Failure notification ─────────────────────────────────
+      # ─── Step 7: Failure notification ─────────────────────────────────
       - name: Notify on failure
-        if: failure() && steps.secrets-check.outputs.skip != 'true'
+        if: failure() && steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
           echo "::error::core-deploy FAILED for SHA $SHA on ${{ secrets.VPS_HOST }}"
           echo "::error::Action required: investigate and rollback if needed"
 
-      # ─── Step 10: Cleanup SSH key ─────────────────────────────────────
+      # ─── Step 8: Cleanup SSH key ─────────────────────────────────────
       - name: Cleanup SSH key
         if: always()
         run: |
