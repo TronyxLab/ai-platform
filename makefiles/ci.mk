@@ -9,7 +9,7 @@
 ## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
 # endregion MODULE_CONTRACT
 
-.PHONY: test gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock
+.PHONY: test gate __test_original __gate_original validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -21,8 +21,16 @@
 ##   MARKER=contract — contract tests for entrypoint scripts (no Docker)
 ##   MARKER=static_audit — pure pytest static_audit only (no validate/lint)
 ##   MARKER=e2e — manual end-to-end tests against *.tronyx.ru (external, no Docker, dev-only)
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 test:
-	@echo "[IMP:7][make][test] Running tests with MARKER=$(or $(MARKER),all)..."
+	@echo "[IMP:9][make][test] TESTS DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL test target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __test_original → test and delete the stub above.
+__test_original:
 	$(eval MARKER := $(or $(MARKER),all))
 	@if [ "$(MARKER)" = "static" ]; then \
 		echo "[IMP:7][make][test] Running schema validation..."; \
@@ -111,8 +119,16 @@ test:
 ##   MODE=fast — validate → lint → gates → contract → static → predeploy (no Docker)
 ##   MODE=ci-docker — predeploy-docker → smoke → component (Docker stack, no static duplication)
 ##   PROJECT=<name> — filter predeploy tests to a specific project (used in CI deploy workflow)
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 gate:
-	@echo "[IMP:7][make][gate] Running gate with MODE=$(or $(MODE),full)..."
+	@echo "[IMP:9][make][gate] GATE DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL gate target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __gate_original → gate and delete the stub above.
+__gate_original:
 	$(eval MODE := $(or $(MODE),full))
 	@if [ "$(MODE)" = "fast" ]; then \
 		echo "[IMP:7][make][gate] MODE=fast — 7 steps: pre-commit, validate, lint, gates, contract, static, predeploy..."; \

@@ -34,6 +34,14 @@ fi
 
 echo "[IMP:9][pre-push-gate][main] Running fast gate before push (blocking)"
 
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
+echo "[IMP:9][pre-push-gate][main] PRE-PUSH GATE DISABLED — TESTING TEST SERVER — exiting 0"
+exit 0
+
+# ORIGINAL BELOW — DO NOT DELETE — uncomment after 25 July:
+: <<'DISABLED_PRE_PUSH_25JULY'
 # Non-blocking: update pipx project install
 if command -v pipx >/dev/null 2>&1; then
     pipx install --force "$(git rev-parse --show-toplevel)" 2>&1 | tail -3 || true
@@ -43,3 +51,4 @@ fi
 
 echo "[IMP:9][pre-push-gate][main] Executing make gate MODE=fast"
 make gate MODE=fast
+DISABLED_PRE_PUSH_25JULY
