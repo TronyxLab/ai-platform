@@ -133,7 +133,9 @@ def _get_code_size_cached(code_path: str, name: str, cache_mgr, _logger: logging
         cache_key = f"project_size_{name}"
         cached = cache_mgr.get(cache_key, ttl_seconds=3600, source_mtime=current_mtime)
         if cached is not None:
-            _logger.info("[IMP:8][project_collector][_get_code_size] Cache HIT for %s (size=%d)", name, cached.get("size", 0))
+            _logger.info(
+                "[IMP:8][project_collector][_get_code_size] Cache HIT for %s (size=%d)", name, cached.get("size", 0)
+            )
             return cached.get("size", 0)
 
     # Cache miss — run du -sb

@@ -34,6 +34,7 @@
 ##   - Covers: docker_collector, cert_collector, project_collector, host_collector, json_writer, cache, coordinator
 # endregion MODULE_CONTRACT
 
+import contextlib
 import json
 import os
 import sys
@@ -112,22 +113,34 @@ class TestDockerCollector:
                 # Call 2: docker inspect abc123 def456
                 mock.Mock(
                     returncode=0,
-                    stdout=json.dumps([
-                        {
-                            "Id": "sha256:abc123",
-                            "Name": "/nginx",
-                            "State": {"Running": True, "ExitCode": 0, "Status": "Up 2 hours (healthy)", "Health": {"Status": "healthy"}},
-                            "Config": {"Image": "nginx:latest"},
-                            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
-                        },
-                        {
-                            "Id": "sha256:def456",
-                            "Name": "/redis",
-                            "State": {"Running": False, "ExitCode": 137, "Status": "Exited (137) 1 hour ago", "Health": {"Status": "unhealthy"}},
-                            "Config": {"Image": "redis:alpine"},
-                            "HostConfig": {"RestartPolicy": {"Name": "always"}},
-                        },
-                    ]),
+                    stdout=json.dumps(
+                        [
+                            {
+                                "Id": "sha256:abc123",
+                                "Name": "/nginx",
+                                "State": {
+                                    "Running": True,
+                                    "ExitCode": 0,
+                                    "Status": "Up 2 hours (healthy)",
+                                    "Health": {"Status": "healthy"},
+                                },
+                                "Config": {"Image": "nginx:latest"},
+                                "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+                            },
+                            {
+                                "Id": "sha256:def456",
+                                "Name": "/redis",
+                                "State": {
+                                    "Running": False,
+                                    "ExitCode": 137,
+                                    "Status": "Exited (137) 1 hour ago",
+                                    "Health": {"Status": "unhealthy"},
+                                },
+                                "Config": {"Image": "redis:alpine"},
+                                "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                            },
+                        ]
+                    ),
                     stderr="",
                 ),
                 # Call 3: docker stats --no-stream
@@ -313,11 +326,12 @@ class TestCertCollector:
         caplog.set_level(0)
 
         # Create a self-signed cert using cryptography
+        import datetime
+
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
-        import datetime
 
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test.example.com")])
@@ -453,7 +467,7 @@ class TestJsonWriter:
         target = tmp_path / "metrics.json"
         data = {"node": "test"}
 
-        from core.internal.healthcheck.metrics.json_writer import atomic_write, SCHEMA_VERSION
+        from core.internal.healthcheck.metrics.json_writer import SCHEMA_VERSION, atomic_write
 
         atomic_write(data, str(target))
 
@@ -482,10 +496,8 @@ class TestJsonWriter:
 
         from core.internal.healthcheck.metrics.json_writer import atomic_write
 
-        try:
+        with contextlib.suppress(TypeError, RuntimeError, OSError):
             atomic_write(data, str(target))
-        except (TypeError, RuntimeError, OSError):
-            pass
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
@@ -614,10 +626,11 @@ class TestProjectCollector:
         cache = CacheManager(mock_cache_dir)
 
         # First call: cache MISS, runs du -sb
-        with mock.patch("core.internal.healthcheck.metrics.project_collector.subprocess.run") as mock_run, \
-             mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.isdir", return_value=True), \
-             mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.getmtime", return_value=1000.0):
-
+        with (
+            mock.patch("core.internal.healthcheck.metrics.project_collector.subprocess.run") as mock_run,
+            mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.isdir", return_value=True),
+            mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.getmtime", return_value=1000.0),
+        ):
             mock_run.return_value = mock.Mock(returncode=0, stdout=f"12345\t{proj_dir}\n", stderr="")
 
             projects1 = get_projects(mock_node_yaml, image_cache={}, cache_mgr=cache)
@@ -636,10 +649,11 @@ class TestProjectCollector:
             assert mock_run.called, "du should have been called on first call"
 
         # Second call: mtime unchanged → cache HIT, NO du call
-        with mock.patch("core.internal.healthcheck.metrics.project_collector.subprocess.run") as mock_run2, \
-             mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.isdir", return_value=True), \
-             mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.getmtime", return_value=1000.0):
-
+        with (
+            mock.patch("core.internal.healthcheck.metrics.project_collector.subprocess.run") as mock_run2,
+            mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.isdir", return_value=True),
+            mock.patch("core.internal.healthcheck.metrics.project_collector.os.path.getmtime", return_value=1000.0),
+        ):
             projects2 = get_projects(mock_node_yaml, image_cache={}, cache_mgr=cache)
 
             print("--- LDD TRAJECTORY — SECOND CALL ---")
@@ -751,13 +765,22 @@ class TestCoordinator:
                 # docker inspect
                 mock.Mock(
                     returncode=0,
-                    stdout=json.dumps([{
-                        "Id": "sha256:abc123",
-                        "Name": "/nginx",
-                        "State": {"Running": True, "ExitCode": 0, "Status": "Up 2 hours (healthy)", "Health": {"Status": "healthy"}},
-                        "Config": {"Image": "nginx:latest"},
-                        "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
-                    }]),
+                    stdout=json.dumps(
+                        [
+                            {
+                                "Id": "sha256:abc123",
+                                "Name": "/nginx",
+                                "State": {
+                                    "Running": True,
+                                    "ExitCode": 0,
+                                    "Status": "Up 2 hours (healthy)",
+                                    "Health": {"Status": "healthy"},
+                                },
+                                "Config": {"Image": "nginx:latest"},
+                                "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+                            }
+                        ]
+                    ),
                     stderr="",
                 ),
                 # docker stats

@@ -228,7 +228,11 @@ def get_certs(node_yaml_path: str) -> list[dict]:
         else:
             _logger.warning("[IMP:8][cert_collector][get_certs] No cert found for domain %s", domain)
 
-    _logger.info("[IMP:9][cert_collector][get_certs] Collected %d unique certificate(s) for %d domain(s)", len(cert_map), len(domains))
+    _logger.info(
+        "[IMP:9][cert_collector][get_certs] Collected %d unique certificate(s) for %d domain(s)",
+        len(cert_map),
+        len(domains),
+    )
     return list(cert_map.values())
 
 
@@ -249,7 +253,9 @@ def _search_wildcard_cert(domain: str) -> dict | None:
     _logger = logging.getLogger(__name__)
 
     if not os.path.isdir(_LETSENCRYPT_LIVE):
-        _logger.warning("[IMP:8][cert_collector][_search_wildcard] Let's Encrypt live dir not found: %s", _LETSENCRYPT_LIVE)
+        _logger.warning(
+            "[IMP:8][cert_collector][_search_wildcard] Let's Encrypt live dir not found: %s", _LETSENCRYPT_LIVE
+        )
         return None
 
     candidates: list[dict] = []
@@ -294,4 +300,6 @@ if __name__ == "__main__":
     certs = get_certs(test_path)
     print(f"Certs found: {len(certs)}")
     for c in certs:
-        print(f"  {c['cert_id']}: domains={c['domains']} issuer={c['issuer']} expires={c['not_after_iso']} days={c['days_remaining']}")
+        print(
+            f"  {c['cert_id']}: domains={c['domains']} issuer={c['issuer']} expires={c['not_after_iso']} days={c['days_remaining']}"
+        )

@@ -74,7 +74,9 @@ def atomic_write(data: dict, target_path: str, dir_mode: int = 0o755) -> None:
             tmp.flush()
             os.fsync(tmp.fileno())
 
-        _logger.info("[IMP:9][json_writer][atomic_write] JSON written to temp, size=%d bytes", os.path.getsize(tmp_path))
+        _logger.info(
+            "[IMP:9][json_writer][atomic_write] JSON written to temp, size=%d bytes", os.path.getsize(tmp_path)
+        )
 
         # Step 6: Atomic rename
         os.replace(tmp_path, target_path)

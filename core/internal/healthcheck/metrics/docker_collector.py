@@ -54,12 +54,16 @@ def get_containers() -> list[dict]:
             check=False,
         )
         if ps_result.returncode != 0:
-            _logger.warning("[IMP:8][docker_collector][get_containers] docker ps -aq failed: %s", ps_result.stderr.strip())
+            _logger.warning(
+                "[IMP:8][docker_collector][get_containers] docker ps -aq failed: %s", ps_result.stderr.strip()
+            )
             return []
         all_ids = [cid.strip() for cid in ps_result.stdout.strip().splitlines() if cid.strip()]
         _logger.info("[IMP:8][docker_collector][get_containers] Found %d container(s) via docker ps -aq", len(all_ids))
     except subprocess.TimeoutExpired:
-        _logger.warning("[IMP:8][docker_collector][get_containers] docker ps -aq timed out after %ds", _SUBPROCESS_TIMEOUT)
+        _logger.warning(
+            "[IMP:8][docker_collector][get_containers] docker ps -aq timed out after %ds", _SUBPROCESS_TIMEOUT
+        )
         return []
     except OSError as exc:
         _logger.warning("[IMP:8][docker_collector][get_containers] docker CLI not available: %s", exc)
@@ -79,12 +83,19 @@ def get_containers() -> list[dict]:
             check=False,
         )
         if inspect_result.returncode != 0:
-            _logger.warning("[IMP:8][docker_collector][get_containers] docker inspect batch failed: %s", inspect_result.stderr.strip())
+            _logger.warning(
+                "[IMP:8][docker_collector][get_containers] docker inspect batch failed: %s",
+                inspect_result.stderr.strip(),
+            )
             return []
         inspect_data = json.loads(inspect_result.stdout)
-        _logger.info("[IMP:9][docker_collector][get_containers] Batch docker inspect completed for %d container(s)", len(all_ids))
+        _logger.info(
+            "[IMP:9][docker_collector][get_containers] Batch docker inspect completed for %d container(s)", len(all_ids)
+        )
     except subprocess.TimeoutExpired:
-        _logger.warning("[IMP:8][docker_collector][get_containers] docker inspect timed out after %ds", _SUBPROCESS_TIMEOUT)
+        _logger.warning(
+            "[IMP:8][docker_collector][get_containers] docker inspect timed out after %ds", _SUBPROCESS_TIMEOUT
+        )
         return []
     except (json.JSONDecodeError, OSError) as exc:
         _logger.warning("[IMP:8][docker_collector][get_containers] docker inspect parse error: %s", exc)
@@ -115,7 +126,9 @@ def get_containers() -> list[dict]:
                     }
                 except (json.JSONDecodeError, KeyError):
                     continue
-        _logger.info("[IMP:9][docker_collector][get_containers] docker stats completed for %d container(s)", len(stats_map))
+        _logger.info(
+            "[IMP:9][docker_collector][get_containers] docker stats completed for %d container(s)", len(stats_map)
+        )
     except (subprocess.TimeoutExpired, OSError) as exc:
         _logger.warning("[IMP:8][docker_collector][get_containers] docker stats failed (graceful): %s", exc)
 
@@ -189,7 +202,10 @@ def get_image_sizes(image_ids: set[str]) -> dict[str, int]:
             check=False,
         )
         if result.returncode != 0:
-            _logger.warning("[IMP:8][docker_collector][get_image_sizes] docker image inspect failed: %s", result.stderr.strip()[:200])
+            _logger.warning(
+                "[IMP:8][docker_collector][get_image_sizes] docker image inspect failed: %s",
+                result.stderr.strip()[:200],
+            )
             return {}
 
         sizes: dict[str, int] = {}
