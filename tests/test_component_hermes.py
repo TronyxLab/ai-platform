@@ -352,9 +352,9 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
                 _context_image,
             )
 
+    hermes_test_override = os.path.join(os.path.dirname(compose_file), "docker-compose.test.yml")
     if not _image_exists:
         logger.info("[IMP:7][hermes_up] Building hermes-agent image ...")
-        hermes_test_override = os.path.join(os.path.dirname(compose_file), "docker-compose.test.yml")
         build_args = ["docker", "compose", "-f", compose_file]
         if os.path.exists(hermes_test_override):
             build_args.extend(["-f", hermes_test_override])
