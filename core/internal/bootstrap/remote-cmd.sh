@@ -250,6 +250,16 @@ execute_remote_update() {
         return 2
     fi
 
+    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · VPS self-SSH loop: node-update SSH-proxy tries to SSH to itself
+    # · Symptom: CI SSHes to VPS → make node-update → node-update.sh finds host in node.yaml →
+    #   execute_remote_update → tries SSH from VPS to itself → fails (no SSH key on VPS for self)
+    # · Fix: detect local execution — if /opt/platform/ exists, we're on the VPS, skip SSH proxy
+    # · Detection: /opt/platform/core/internal/bootstrap/node-lifecycle.sh exists → local exec
+    if [[ -f "/opt/platform/core/internal/bootstrap/node-lifecycle.sh" ]]; then
+        echo "[IMP:9][node-update][remote] Local VPS detected (/opt/platform/ exists) — skipping SSH proxy, local exec" >&2
+        return 2
+    fi
+
     echo "[IMP:9][node-update][remote] SSH host: ${ssh_host} — REMOTE update via SSH" >&2
 
     # ── Prepare SSH opts (mode=update — preserve known_hosts, honest TOFU) ──
