@@ -154,7 +154,7 @@ services:
 
     environment:
       # Admin credentials — unified with platform auth (same user as Hermes Dashboard)
-      GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:-${HERMES_DASHBOARD_USERNAME:-admin}}"
+      GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:-${HERMES_DASHBOARD_USERNAME:-admin@${PLATFORM_DOMAIN:-ai-platform.local}}}"
       GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:-}"
 
       # Provisioning paths

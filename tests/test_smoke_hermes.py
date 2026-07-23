@@ -51,7 +51,7 @@ def _hermes_credentials() -> tuple[str, str]:
     ##            at call time ensures consistency with container env vars.
     ## @io — ⎋ (username: str, password: str)
     """
-    username = os.environ.get("HERMES_DASHBOARD_USERNAME", "tronyx")
+    username = os.environ.get("HERMES_DASHBOARD_USERNAME", "admin@ai-platform.local")
     password = os.environ.get("HERMES_DASHBOARD_PASSWORD")
     return username, password
 

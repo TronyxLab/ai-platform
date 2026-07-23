@@ -110,6 +110,10 @@ def _load_cert(path: str) -> dict | None:
     # Not After (ISO 8601)
     not_after = cert.not_valid_after_utc if hasattr(cert, "not_valid_after_utc") else cert.not_valid_after
     if isinstance(not_after, datetime):
+        # Normalise offset-naive → offset-aware UTC
+        # cryptography < 41.0.0 returns naive datetime (always UTC, just without tzinfo)
+        if not_after.tzinfo is None:
+            not_after = not_after.replace(tzinfo=timezone.utc)
         not_after_iso = not_after.strftime("%Y-%m-%dT%H:%M:%SZ")
         days_remaining = (not_after - datetime.now(timezone.utc)).days
     else:

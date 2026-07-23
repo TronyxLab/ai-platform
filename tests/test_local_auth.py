@@ -42,12 +42,12 @@ GRAFANA_USER_URL = "http://127.0.0.1:3000/api/user"
 LANGFUSE_CSRF_URL = "http://127.0.0.1:3001/api/auth/csrf"
 LANGFUSE_LOGIN_URL = "http://127.0.0.1:3001/api/auth/callback/credentials"
 
-HERMES_USER = os.environ.get("HERMES_DASHBOARD_USERNAME", "Tronyx")
+HERMES_USER = os.environ.get("HERMES_DASHBOARD_USERNAME", "admin@ai-platform.local")
 HERMES_PASS = os.environ.get("HERMES_DASHBOARD_PASSWORD")
 
 GRAFANA_USER = os.environ.get(
     "GF_SECURITY_ADMIN_USER",
-    os.environ.get("HERMES_DASHBOARD_USERNAME", "Tronyx"),
+    os.environ.get("HERMES_DASHBOARD_USERNAME", "admin@ai-platform.local"),
 )
 GRAFANA_PASS = os.environ.get(
     "GF_SECURITY_ADMIN_PASSWORD",

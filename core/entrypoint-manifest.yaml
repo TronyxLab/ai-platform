@@ -991,6 +991,12 @@ gates:
 - id: test_platform_vhost_requires_auth
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_platform_vhost_requires_auth'
+- id: test_no_metrics_every_minute_cron_in_backup_cron
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_no_metrics_every_minute_cron_in_backup_cron'
+- id: test_no_metrics_export_in_backup_cron_crontab
+  test_file: test_gate_status_page.py
+  description: 'Auto-discovered gate: test_no_metrics_export_in_backup_cron_crontab'
 - id: test_dockerignore_is_symlink
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_dockerignore_is_symlink'

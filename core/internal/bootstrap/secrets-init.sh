@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: secrets-init context-generation master-password unified-auth service-passwords explicit-assignment idempotent TRAP-POLICY
-# STRUCTURE: ▶ detect call mode → ⚡ MASTER_PWD set? → ┌SERVICE_PASSWORDS[3]┐ → ○ pw_var loop: ─◇─ set? → export/keep → ∑ summary
+# GREP_SUMMARY: secrets-init context-generation master-password unified-auth service-passwords service-users explicit-assignment idempotent TRAP-POLICY
+# STRUCTURE: ▶ detect call mode → ⚡ MASTER_PWD/EMAIL set? → ┌SERVICE_PASSWORDS[3]┐+┌SERVICE_USERS[3]┐ → ○ pw_var loop → ○ user_var loop → ∑ summary
 # region MODULE_CONTRACT
-## @purpose  Initialize all service-passwords from PLATFORM_MASTER_PASSWORD — unified auth policy for the platform.
-##            Ensures every service that needs a password gets the master password by default, eliminating
-##            compose-fallback chains and providing a single point of credential management (secrets.env).
+## @purpose  Initialize all service-passwords from PLATFORM_MASTER_PASSWORD and all service-users
+##            (username/email) from PLATFORM_MASTER_EMAIL — unified auth policy for the platform.
 ## @scope    Called from node-lifecycle.sh --mode init (after step_12b_ensure_secrets) and from make bootstrap-node.
 ##            Can be sourced directly for in-script use OR called as a standalone script.
 ## @invariants
 ##   - Все сервис-пароли (HERMES_DASHBOARD_PASSWORD, GF_SECURITY_ADMIN_PASSWORD, LANGFUSE_INIT_USER_PASSWORD)
 ##     инициализируются значением PLATFORM_MASTER_PASSWORD при первом bootstrap
-##   - Если сервис-пароль уже задан в окружении (operator-defined) — не перезаписывается (idempotent)
+##   - Все сервис-пользователи (HERMES_DASHBOARD_USERNAME, GF_SECURITY_ADMIN_USER, LANGFUSE_INIT_USER_EMAIL)
+##     инициализируются значением PLATFORM_MASTER_EMAIL при первом bootstrap
+##   - Если переменная уже задана в окружении (operator-defined) — не перезаписывается (idempotent)
 ##   - Если PLATFORM_MASTER_PASSWORD не задан — скрипт завершается с ошибкой (FAIL-fast)
+##   - Если PLATFORM_MASTER_EMAIL не задан — user-поля не инициализируются, только предупреждение
 ##   - Compose-файлы НЕ используют fallback-цепочки — строго ${VAR_NAME}
 ##   - При source-вызове используется return вместо exit (не завершает вызывающий shell)
-## @rationale Явное присвоение всех паролей в одном файле (secrets.env) — одна точка управления кредами;
+## @rationale Явное присвоение всех кредов в одном файле (secrets.env) — одна точка управления;
 ##            compose-файлы не используют fallback-цепочек, исключая silent misconfiguration.
 ##            Idempotent-логика защищает operator-defined значения при повторных bootstrap.
 ## @changes  2026-07-21 — Initial implementation (Wave 014, TASK-5)
+##            2026-07-24 — Added SERVICE_USERS auto-generation from PLATFORM_MASTER_EMAIL
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -54,7 +57,7 @@ SERVICE_PASSWORDS=(
     "LANGFUSE_INIT_USER_PASSWORD"
 )
 
-# ── Инициализация ──────────────────────────────────────────────────────────
+# ── Инициализация паролей ──────────────────────────────────────────────────
 INIT_COUNT=0
 KEPT_COUNT=0
 
@@ -70,6 +73,36 @@ for pw_var in "${SERVICE_PASSWORDS[@]}"; do
 done
 
 echo "[IMP:9][secrets-init] Service passwords initialized: ${INIT_COUNT} set, ${KEPT_COUNT} kept (from ${#SERVICE_PASSWORDS[@]} total)"
+
+# ── SERVICE_USERS — инициализируемые из PLATFORM_MASTER_EMAIL ──────────────
+# При добавлении нового сервис-пользователя в платформу: добавить имя переменной в массив.
+# Правило: имя/email пользователя по умолчанию = admin@PLATFORM_DOMAIN = PLATFORM_MASTER_EMAIL.
+# Скрипт idempotent: если переменная уже задана — operator-defined значение сохраняется.
+# Если PLATFORM_MASTER_EMAIL не задан — user-поля не инициализируются (только warning).
+SERVICE_USERS=(
+    "HERMES_DASHBOARD_USERNAME"
+    "GF_SECURITY_ADMIN_USER"
+    "LANGFUSE_INIT_USER_EMAIL"
+)
+
+USER_INIT_COUNT=0
+USER_KEPT_COUNT=0
+
+if [[ -n "${PLATFORM_MASTER_EMAIL:-}" ]]; then
+    for user_var in "${SERVICE_USERS[@]}"; do
+        if [[ -z "${!user_var:-}" ]]; then
+            export "${user_var}=${PLATFORM_MASTER_EMAIL}"
+            echo "[IMP:8][secrets-init] ${user_var} ← ${PLATFORM_MASTER_EMAIL} (initialized)"
+            ((USER_INIT_COUNT++))
+        else
+            echo "[IMP:8][secrets-init] ${user_var} already set — keeping operator-defined value"
+            ((USER_KEPT_COUNT++))
+        fi
+    done
+    echo "[IMP:9][secrets-init] Service users initialized: ${USER_INIT_COUNT} set, ${USER_KEPT_COUNT} kept (from ${#SERVICE_USERS[@]} total)"
+else
+    echo "[IMP:7][secrets-init] PLATFORM_MASTER_EMAIL not set — skipping service user initialization"
+fi
 
 # ── При source-вызове — не выходим из shell ───────────────────────────────
 if [[ "${SHALL_EXIT}" == "exit" ]]; then

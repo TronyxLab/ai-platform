@@ -845,3 +845,57 @@ class TestCoordinator:
             assert exit_code == 0, "Should still exit 0 with partial data"
             data = json.loads(metrics_file.read_text())
             assert len(data.get("errors", [])) >= 0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: NODE_NAME auto-detection (P2 fix — DevPlan 066 Wave 2)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestNodeNameAutoDetection:
+    """P2 fix: NODE_NAME auto-detection from /opt/node-configs/ or env."""
+
+    def test_auto_detect_node_name_from_env(self):
+        """_get_node_name returns NODE_NAME from environment variable."""
+        with mock.patch.dict(os.environ, {"NODE_NAME": "my-production-node"}):
+            from core.internal.healthcheck.platform_export_metrics import _get_node_name
+
+            result = _get_node_name()
+            assert result == "my-production-node", f"Expected 'my-production-node', got '{result}'"
+
+    def test_auto_detect_node_name_default(self):
+        """_get_node_name returns 'unknown' when NODE_NAME env is not set."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            # Need to reimport to pick up new env
+            import importlib
+
+            import core.internal.healthcheck.platform_export_metrics as pem
+
+            importlib.reload(pem)
+
+            result = pem._get_node_name()
+            assert result == "unknown", f"Expected 'unknown' fallback, got '{result}'"
+
+    def test_auto_detect_node_yaml_path_default(self):
+        """_get_node_yaml_path falls back to /opt/node-configs/<NODE_NAME>/node.yaml."""
+        with mock.patch.dict(os.environ, {"NODE_NAME": "test-node"}, clear=True):
+            import importlib
+
+            import core.internal.healthcheck.platform_export_metrics as pem
+
+            importlib.reload(pem)
+
+            from core.internal.healthcheck.platform_export_metrics import _get_node_yaml_path
+
+            result = _get_node_yaml_path()
+            assert result.endswith("/opt/node-configs/test-node/node.yaml"), (
+                f"Expected path ending with /opt/node-configs/test-node/node.yaml, got '{result}'"
+            )
+
+    def test_auto_detect_node_yaml_path_from_env(self):
+        """_get_node_yaml_path uses NODE_YAML_PATH env var when set."""
+        with mock.patch.dict(os.environ, {"NODE_YAML_PATH": "/custom/path/node.yaml"}):
+            from core.internal.healthcheck.platform_export_metrics import _get_node_yaml_path
+
+            result = _get_node_yaml_path()
+            assert result == "/custom/path/node.yaml", f"Expected custom path, got '{result}'"

@@ -43,6 +43,15 @@ python3 "${SCRIPT_DIR}/deploy/context_overlay.py" --action ensure --node-yaml "$
 # ── Spool dirs verify (verify-only runtime check — restored from W4-E1 extraction) ──
 python3 "${SCRIPT_DIR}/deploy/spool_validator.py" --action verify --modules-dir "${PATHS_MODULES_DIR}" || true
 
+# ── Pre-create status-metrics.json as empty valid JSON file (P1 fix) ──
+# Prevents Docker from creating it as a directory during bind mount
+if [ ! -f /run/platform/status-metrics.json ]; then
+    mkdir -p /run/platform
+    echo '{"schema_version":2,"generated_at":null,"containers":[],"certs":[],"projects":[],"host":{}}' \
+        > /run/platform/status-metrics.json
+    echo "[IMP:8][deploy-modules][pre-create] Created /run/platform/status-metrics.json placeholder" >&2
+fi
+
 # ── Validate secrets ──
 python3 "${SCRIPT_DIR}/deploy/secrets_validator.py" --action validate-charsets \
     --secrets-manifest "${PATHS_CORE_DIR}/secrets-manifest.yaml" || {

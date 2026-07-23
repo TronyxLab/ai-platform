@@ -137,7 +137,7 @@ def grafana_credentials() -> tuple[str, str]:
 
     username = os.environ.get(
         "GF_SECURITY_ADMIN_USER",
-        os.environ.get("HERMES_DASHBOARD_USERNAME", "admin"),
+        os.environ.get("HERMES_DASHBOARD_USERNAME", "admin@ai-platform.local"),
     )
     password = os.environ.get("GF_SECURITY_ADMIN_PASSWORD")
 

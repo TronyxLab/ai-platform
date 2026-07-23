@@ -103,6 +103,18 @@ def _load_status_metrics(path: str) -> dict:
 
     Returns full data dict as-is from file, or fallback structure on failure.
     """
+    # Protective: Docker bind mount может создать path как директорию (P1)
+    if not os.path.isfile(path):
+        print(f"[IMP:8][status-page][load-metrics] Path is not a file: {path}", file=sys.stderr)
+        return {
+            "generated_at": None,
+            "containers": [],
+            "certs": [],
+            "projects": [],
+            "host": {},
+            "errors": [f"status-metrics.json not found or is a directory at {path}"],
+        }
+
     try:
         with open(path) as f:
             data = json.load(f)
@@ -170,8 +182,21 @@ def _curl_vhost(domain: str, timeout: int = PER_CHECK_TIMEOUT) -> dict:
     """Live-curl a vhost domain. Returns check result dict."""
     start = time.monotonic()
     try:
+        # --resolve bypasses Docker embedded DNS (127.0.0.11) which resolves *.tronyx.ru → localhost (P4)
         result = subprocess.run(
-            ["curl", "-sSk", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", str(timeout), f"https://{domain}"],
+            [
+                "curl",
+                "-sSk",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                str(timeout),
+                "--resolve",
+                f"{domain}:443:nginx",
+                f"https://{domain}",
+            ],
             capture_output=True,
             text=True,
             timeout=timeout + 2,

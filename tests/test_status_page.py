@@ -605,6 +605,51 @@ class TestStatusPageXHeaders:
 class TestStatusPageNewFeatures:
     """Tests for new features: schema_version check, staleness warning, Jinja2 autoescape."""
 
+    def test_load_metrics_directory_at_path(self, tmp_path, caplog):
+        """_load_status_metrics returns empty data when path is a directory (P1 fix).
+
+        Docker bind mount creates a directory when source file doesn't exist.
+        _load_status_metrics must detect this and return empty data instead of crashing.
+        """
+        caplog.set_level(0)
+
+        # Create node.yaml
+        node_dir = tmp_path / "test-node"
+        node_dir.mkdir(parents=True, exist_ok=True)
+        node_yaml = node_dir / "node.yaml"
+        node_yaml.write_text("projects: []\nmodules: []\n")
+
+        # Create a DIRECTORY at the metrics path (simulates Docker bind mount race condition)
+        metrics_dir = tmp_path / "status-metrics-dir"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        # Create a subdirectory inside to make it clearly a directory
+        (metrics_dir / "subdir").mkdir(exist_ok=True)
+
+        app = _setup_app_env(str(node_yaml), str(metrics_dir))
+
+        # Call _load_status_metrics directly
+        result = app._load_status_metrics(str(metrics_dir))
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+        # Should return fallback structure, not crash
+        assert "errors" in result, "Should have errors[] key"
+        assert len(result["errors"]) > 0, "Should have at least one error message"
+        assert "directory" in str(result["errors"][0]).lower() or "not a file" in str(result["errors"][0]).lower(), (
+            f"Error should mention directory/path issue, got: {result['errors']}"
+        )
+        assert result.get("containers", []) == [], "Containers should be empty list"
+        assert result.get("certs", []) == [], "Certs should be empty list"
+        assert result.get("projects", []) == [], "Projects should be empty list"
+
     def test_status_page_schema_version_check(self, tmp_path, caplog):
         """status-page warns on old schema_version (<2) but continues (AC13-M)."""
         caplog.set_level(0)

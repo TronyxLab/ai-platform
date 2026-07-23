@@ -261,8 +261,41 @@ class TestGateStatusPageCiNegative:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TEST: .dockerignore symlink
+# TEST: crontab contract — no metrics export in backup-cron (DevPlan 066 P2 fix)
 # ═══════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.gate
+class TestGateStatusPageCrontabContract:
+    """Gate: backup-cron crontab does NOT contain metrics export line (moved to host cron)."""
+
+    def test_no_metrics_export_in_backup_cron_crontab(self):
+        """backup-cron crontab must NOT have platform-export-metrics line.
+
+        Metrics export now runs via host cron (installed by node-lifecycle.sh bootstrap),
+        not through the backup-cron container.
+        """
+        crontab_path = PROJECT_ROOT / "core" / "modules" / "backup-cron" / "scripts" / "crontab"
+        content = _read_file(crontab_path)
+
+        assert content, "crontab file is empty or missing"
+        assert "platform-export-metrics" not in content, (
+            "platform-export-metrics line must NOT be in backup-cron crontab "
+            "(metrics export runs via host cron, not container cron)"
+        )
+
+    def test_no_metrics_every_minute_cron_in_backup_cron(self):
+        """backup-cron crontab must NOT have every-minute cron pattern for metrics."""
+        crontab_path = PROJECT_ROOT / "core" / "modules" / "backup-cron" / "scripts" / "crontab"
+        content = _read_file(crontab_path)
+
+        # Check that no line has both '* * * * *' and 'platform-export-metrics'
+        lines = content.split("\n")
+        for line in lines:
+            if "* * * * *" in line:
+                assert "platform-export-metrics" not in line, (
+                    f"Found every-minute metrics cron line in backup-cron crontab: '{line.strip()}'"
+                )
 
 
 @pytest.mark.gate

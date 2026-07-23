@@ -94,6 +94,22 @@ detect_tor_enabled(){
     echo "[IMP:8][node-lifecycle][tor] TOR_ENABLED=${TOR_ENABLED} from node.yaml" >&2
 }
 
+# region FUNC__install_metrics_cron
+## @purpose  Install metrics export cron on HOST (not in container) — P2 fix
+## @scope    Called during bootstrap init mode as checkpoint step
+_install_metrics_cron() {
+    step_start "metrics-cron" "Installing host cron for metrics export"
+    local metrics_cron_line='* * * * * flock -n /run/lock/platform-metrics.lock timeout 50s /opt/platform/core/internal/healthcheck/platform-export-metrics.sh >> /var/log/platform/backup/metrics-export.log 2>&1'
+    if crontab -l 2>/dev/null | grep -q 'platform-export-metrics'; then
+        step_skip "metrics-cron" "Cron already installed"
+        return 0
+    fi
+    (crontab -l 2>/dev/null; echo "$metrics_cron_line") | crontab -
+    echo "[IMP:9][node-lifecycle][metrics-cron] Host cron installed for metrics export" >&2
+    step_done "metrics-cron" "Cron installed"
+}
+# endregion FUNC__install_metrics_cron
+
 main() {
     if [[ "$MODE" == "init" ]]; then
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
@@ -158,6 +174,9 @@ except Exception:
         CHECKPOINT_STEP_HASH="$(_step_hash "read-node-yaml")"       checkpoint_step "read-node-yaml" step_11_read_node_yaml
         CHECKPOINT_STEP_HASH="$(_step_hash "ghcr-auth")"            checkpoint_step "ghcr-auth" step_12_ghcr_auth
         CHECKPOINT_STEP_HASH="$(_step_hash "sudoers")"              checkpoint_step "sudoers" step_13_sudoers
+        # ── Install host cron for metrics export (P2 fix) ──
+        # Runs on HOST (not in container), ensures status-metrics.json is updated every minute
+        CHECKPOINT_STEP_HASH="$(_step_hash "metrics-cron")"       checkpoint_step "metrics-cron" _install_metrics_cron
         # Full init: remaining steps via state_machine.py (step_14_node_update through step_17_telegram)
         _delegate --mode init --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
             ${PLATFORM_OWNER_KEY:+--owner-key "$PLATFORM_OWNER_KEY"} \
