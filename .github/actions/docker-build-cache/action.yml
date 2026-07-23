@@ -9,7 +9,7 @@
 ## @invariants
 ##   - Always uses docker/build-push-action@v7
 ##   - load: true — images available locally after build
-##   - cache-backend=registry → type=registry,mode=max,ref=ghcr.io/tronyx161/ai-platform-build-cache:<scope>
+##   - cache-backend=registry → type=registry,mode=max,ref=ghcr.io/<repo_owner>/ai-platform-build-cache:<scope>
 ##   - cache-backend=gha → type=gha,mode=max,scope=<scope>
 ##   - provenance: false, sbom: false — no attestations for local builds
 ## @rationale  DevPlan 017 T12: consolidate 3× duplicate docker build configs.
@@ -50,9 +50,9 @@ runs:
       shell: bash
       run: |
         if [ "${{ inputs.cache-backend }}" = "registry" ]; then
-          echo "cache-from=type=registry,ref=ghcr.io/tronyx161/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
-          echo "cache-to=type=registry,mode=max,ref=ghcr.io/tronyx161/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
-          echo "[IMP:8][docker] cache-backend=registry — ref=ghcr.io/tronyx161/ai-platform-build-cache:${{ inputs.cache-scope }}"
+          echo "cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          echo "cache-to=type=registry,mode=max,ref=ghcr.io/${{ github.repository_owner }}/ai-platform-build-cache:${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
+          echo "[IMP:8][docker] cache-backend=registry — ref=ghcr.io/${{ github.repository_owner }}/ai-platform-build-cache:${{ inputs.cache-scope }}"
         else
           echo "cache-from=type=gha,scope=${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
           echo "cache-to=type=gha,mode=max,scope=${{ inputs.cache-scope }}" >> "$GITHUB_OUTPUT"
