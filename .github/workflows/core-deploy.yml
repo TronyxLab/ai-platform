@@ -113,7 +113,15 @@ jobs:
           rsync -avz \
             ./platform-env.yaml ./Makefile ./makefiles \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/platform/
-          echo "[IMP:9][deploy][rsync] Core + config + makefiles rsync complete — SHA $SHA"
+          # Rsync node-configs (per-node config + encrypted secrets)
+          # · Excludes .git, __pycache__
+          # · Destination: /opt/node-configs/ on VPS
+          rsync -avz \
+            --exclude '.git/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            ./node-configs/ ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/node-configs/
+          echo "[IMP:9][deploy][rsync] Core + config + makefiles + node-configs rsync complete — SHA $SHA"
 
       # ─── Step 4: Provision networks + volumes on VPS via make provision (Invariant 1) ───
       - name: Provision environment on VPS (networks + volumes)

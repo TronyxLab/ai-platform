@@ -91,6 +91,8 @@ for fm in "${FAILED[@]}"; do
     [ "$sev" = "critical" ] && CRIT=$((CRIT+1)) || WARN=$((WARN+1))
 done
 [ "$CRIT" -gt 0 ] && { log_step "main" "FAIL" "Critical:${CRIT} Warn:${WARN}"; exit 2; }
-[ "$WARN" -gt 0 ] && { log_step "main" "WARN" "Warn:${WARN}"; exit 1; }
-log_step "main" "DONE" "Deploy complete: ${DEPLOYED} modules"
+if [ "$WARN" -gt 0 ]; then
+    log_step "main" "WARN" "Warn:${WARN} (non-critical — continuing)"
+fi
+log_step "main" "DONE" "Deploy complete: ${DEPLOYED} modules (warnings: ${WARN})"
 exit 0
