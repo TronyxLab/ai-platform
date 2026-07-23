@@ -68,7 +68,7 @@ jobs:
 
       # ⚠️ TRAP[BUG] · 2026-07-18 · HI · same fix as platform-test.yml — ghcr.io 403 on cache
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}

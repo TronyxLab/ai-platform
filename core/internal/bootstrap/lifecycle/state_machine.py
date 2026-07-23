@@ -35,6 +35,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -1513,9 +1514,23 @@ def _decrypt_secrets(core_dir: str) -> None:
     """
     secrets_lib = os.path.join(core_dir, "lib", "secrets.sh")
     if os.path.isfile(secrets_lib):
-        # lib/secrets.sh provides step_10_decrypt_secrets which sources secrets.sh
+        # lib/secrets.sh requires CORE_DIR, logging.sh (log_step), checkpoint.sh (step_start/done/skip)
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · source secrets.sh без зависимостей
+        # · Symptom: step_start/log_step: command not found, CORE_DIR/internal/... : No such file
+        # · Root: bash -c "source secrets.sh" не имел CORE_DIR и не подгружал checkpoint/logging libs
+        # · Fix: export CORE_DIR, source logging.sh + checkpoint.sh перед secrets.sh
+        logging_lib = os.path.join(core_dir, "lib", "logging.sh")
+        checkpoint_lib = os.path.join(core_dir, "lib", "checkpoint.sh")
         _subprocess_run(
-            ["bash", "-c", f"source {secrets_lib} && step_10_decrypt_secrets"],
+            [
+                "bash",
+                "-c",
+                f"export CORE_DIR={shlex.quote(core_dir)}"
+                f" && source {shlex.quote(logging_lib)}"
+                f" && source {shlex.quote(checkpoint_lib)}"
+                f" && source {shlex.quote(secrets_lib)}"
+                f" && step_10_decrypt_secrets",
+            ],
             "decrypt_secrets",
         )
 
