@@ -1,4 +1,4 @@
-# GREP_SUMMARY: pre-commit gitleaks ruff yamllint check-jsonschema shellcheck check-yaml trailing-whitespace end-of-file-fixer check-merge-conflict detect-private-key check-added-large-files mixed-line-ending check-toml check-json basedpyright bandit check-manifest-parity check-doc-headers name-linter commit-msg pre-push-gate
+# GREP_SUMMARY: pre-commit gitleaks ruff yamllint check-jsonschema shellcheck check-yaml trailing-whitespace end-of-file-fixer check-merge-conflict detect-private-key check-added-large-files mixed-line-ending check-toml check-json basedpyright bandit check-manifest-parity check-doc-headers name-linter commit-msg pre-push-gate fix-executable-bit
 # STRUCTURE: repos → gitleaks(v8.30.1) → ruff(v0.15) → yamllint(v1.38) → local(check-doc-headers + name-linter) → shellcheck(v0.11) → check-jsonschema(0.37) → pre-commit-hooks(v6.0 + check-merge-conflict + detect-private-key + check-added-large-files + mixed-line-ending + check-toml + check-json) → local(basedpyright + bandit + commit-msg + pre-push-gate + check-manifest-parity)
 # region MODULE_CONTRACT
 ## @purpose  Unified pre-commit hooks via pre-commit framework (per DevPlan 001):
@@ -83,10 +83,15 @@ repos:
 
   - repo: local
     hooks:
+      # ⚠️ TRAP[DECISION] · 2026-07-23 · — · chmod +x not git add --chmod=+x in pre-commit hook
+      # · Rejected: git add --chmod=+x (fails with index.lock when pre-commit holds lock)
+      # · Reason: pre-commit run --all-files holds the git index lock. `git add` can't acquire it.
+      #            `chmod +x` modifies filesystem — pre-commit detects and includes the change.
+      # · Rev: if pre-commit changes index locking behavior, revert to git add --chmod=+x
       - id: fix-executable-bit
         name: "Auto-fix executable bit (staged .sh only)"
-        description: "Sets +x on staged .sh files outside core/lib/ via git add --chmod=+x. Safe, idempotent, deterministic."
-        entry: bash -c 'for f in "$@"; do case "$f" in core/lib/*) continue ;; esac; [ -f "$f" ] || continue; git add --chmod=+x -- "$f" && echo "  +x (auto) $f"; done' --
+        description: "Sets +x on staged .sh files outside core/lib/ via chmod +x. Safe, idempotent, deterministic."
+        entry: bash -c 'for f in "$@"; do case "$f" in core/lib/*) continue ;; esac; [ -f "$f" ] || continue; chmod +x "$f" && echo "  +x (auto) $f"; done' --
         language: system
         files: '\.sh$'
         stages: [pre-commit]
