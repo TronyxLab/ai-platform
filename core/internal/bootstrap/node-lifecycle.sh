@@ -138,7 +138,11 @@ _ensure_python_deps() {
     if [[ -f "$req_file" ]]; then
         # ⚠️ PEP 668: Ubuntu Noble blocks system-wide pip installs.
         # --break-system-packages required since platform scripts run as system python3.
-        if pip3 install --no-cache-dir --break-system-packages -r "$req_file"; then
+        # ⚠️ Debian package conflict: typing_extensions installed via apt → pip can't
+        # uninstall it. First upgrade typing_extensions with --ignore-installed,
+        # then install remaining deps normally.
+        if pip3 install --no-cache-dir --break-system-packages --ignore-installed typing_extensions \
+            && pip3 install --no-cache-dir --break-system-packages -r "$req_file"; then
             echo "[IMP:9][node-lifecycle][python-deps] Python dependencies installed successfully" >&2
         else
             echo "[IMP:8][node-lifecycle][python-deps] WARN: pip install failed; continuing without LLM key provisioning" >&2
