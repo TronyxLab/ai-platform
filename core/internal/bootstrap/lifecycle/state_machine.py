@@ -580,14 +580,21 @@ class StateMachine:
     ## @io — ⇥ mode: str, node: Optional[str] → ⎋ None
     ## @complexity — O(N) where N = number of steps
     def setup_state(self, mode: str, node: str | None = None) -> None:
-        """Initialize state for a new run. Sets mode and node name."""
+        """Initialize state for a new run. Sets mode, node, resets step entries.
+
+        ## ⚠️ TRAP[BUG] · 2026-07-24 · P0 · setup_state не сбрасывал current_step и статусы шагов
+        ## · Symptom: при смене mode init→update current_step оставался 23, статусы старых шагов
+        ##   сохранялись. _run_steps пытался выполнить шаги с невалидными пред-условиями.
+        ## · Fix: сброс current_step=0 + принудительный reset всех шагов в pending.
+        """
         self.state.mode = mode
         self.state.node = node
+        self.state.current_step = 0
         step_list = self._step_list()
+        # Always reset all step entries to pending (not just add missing ones)
         for i, name in enumerate(step_list, 1):
             key = str(i)
-            if key not in self.state.steps:
-                self.state.steps[key] = StepState(name=name, status="pending")
+            self.state.steps[key] = StepState(name=name, status="pending")
         logger.info(
             "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s steps=%d",
             mode,
@@ -836,6 +843,8 @@ def _run_single_step(sm: StateMachine, mode: str, step_n: int) -> int:
     try:
         sm.start_step(step_n)
         _execute_step(sm, step_n, step_name, mode)
+        sm.complete_step(step_n)
+        logger.info("[IMP:9][run_step] Step %d (%s) completed successfully", step_n, step_name)
     except Exception as e:
         sm.fail_step(step_n, str(e))
         logger.error("[IMP:10][run_step] Step %d failed: %s", step_n, e)

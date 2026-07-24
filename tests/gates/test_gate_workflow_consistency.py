@@ -1,4 +1,4 @@
-# GREP_SUMMARY: gate workflow-consistency workflow-count-8 main-full-gate-deleted platform-test-single-job no-observability deploy-triggers push-filter make-targets core-deploy-auto-detect basedpyright-removed provisioner module-list-consistency raw-internal-allowlist
+# GREP_SUMMARY: gate workflow-consistency workflow-count-8 main-full-gate-deleted platform-test-single-job no-observability deploy-triggers push-filter make-targets core-deploy-auto-detect basedpyright-removed provisioner module-list-consistency raw-internal-allowlist nightly-gate-removed
 # STRUCTURE: ▶ parse workflow YAMLs → ◇ assert invariants (count, jobs, triggers, refs, module-lists, raw-internal) → ⎋ 14 tests (2 new: module-lists, raw-internal-allowlist)
 # region MODULE_CONTRACT
 ## @purpose — Gate test suite for CI workflow structural consistency (Plans 2 + 19).
@@ -9,7 +9,7 @@
 ## @scope — Parses .github/workflows/*.yml and .github/actions/*.yml files to verify structural
 ##          invariants defined in DevPlan 002 CI Unification §TEST_SPEC and DevPlan 019 Gate Scope Closure.
 ## @invariants
-##   - Exactly 7 workflow files in .github/workflows/
+##   - Exactly 8 workflow files in .github/workflows/
 ##   - main-full-gate.yml does not exist
 ##   - platform-test.yml has exactly 1 job (unified, no separate static-gate/basedpyright/platform-integration)
 ##   - No workflow references core/modules/observability/ (D1 fix)
@@ -20,7 +20,7 @@
 ##   - basedpyright-tests job removed from platform-test.yml
 ##   - push-gate.yml uses provision-environment.sh (not inline docker network create)
 ##   - build-platform.yml uses provision-environment.sh (not inline docker network create)
-##   - Module lists in platform-test.yml and nightly-gate.yml match core/modules/ filesystem
+##   - Module lists in platform-test.yml match core/modules/ filesystem
 ##   - Raw core/internal/*.sh calls in .github YAML only via explicit allowlist (make-facade invariant)
 ## @rationale — Automated validation of Plan 2 + Plan 19 acceptance criteria. Prevents regression
 ##              of CI unification and gate scope closure. 14 critical invariants.
@@ -46,7 +46,6 @@ _EXPECTED_WORKFLOWS: set[str] = {
     "core-deploy.yml",
     "deploy-project.yml",
     "mirror.yml",
-    "nightly-gate.yml",
     "platform-deploy.yml",
     "platform-test.yml",
     "push-gate.yml",
@@ -55,7 +54,7 @@ _EXPECTED_WORKFLOWS: set[str] = {
 
 # Expected count after main-full-gate.yml deletion and deploy-project.yml addition
 # (9→8 main-full-gate removed, 8→9 deploy-project.yml added)
-_EXPECTED_WORKFLOW_COUNT: int = 9
+_EXPECTED_WORKFLOW_COUNT: int = 8
 
 # Deploy workflows that should trigger on platform-test (workflow_run)
 _DEPLOY_WORKFLOWS: set[str] = {
@@ -406,9 +405,9 @@ def test_build_platform_uses_provisioner():
 
 @pytest.mark.gate
 def test_workflow_module_lists_match_filesystem(caplog):
-    """Verify module lists in platform-test.yml and nightly-gate.yml match filesystem.
+    """Verify module lists in platform-test.yml match filesystem.
 
-    Both pre-pull and cleanup module lists must be kept in sync with
+    Pre-pull and cleanup module lists must be kept in sync with
     actual modules available in core/modules/.
     """
     caplog.set_level(logging.INFO)
@@ -417,7 +416,7 @@ def test_workflow_module_lists_match_filesystem(caplog):
     logger.info("[IMP:9][test] Actual modules on disk: %d modules", len(actual_modules))
     logger.info("[IMP:8][test] Modules: %s", sorted(actual_modules))
 
-    workflows_to_check = ["platform-test.yml", "nightly-gate.yml"]
+    workflows_to_check = ["platform-test.yml"]
     all_failures: list[str] = []
 
     for wf_name in workflows_to_check:
@@ -450,7 +449,7 @@ def test_workflow_module_lists_match_filesystem(caplog):
         logger.error("[IMP:9][test] ⛔ Module list drift detected")
         pytest.fail(
             f"Module list drift: workflows and filesystem are out of sync.\n"
-            f"Action: update pre-pull/cleanup lists in platform-test.yml and nightly-gate.yml.\n"
+            f"Action: update pre-pull/cleanup lists in platform-test.yml.\n"
             f"To see current modules: ls core/modules/\n{detail}"
         )
 

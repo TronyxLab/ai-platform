@@ -3,7 +3,7 @@
 #            ▶ main() → ◇ argparse(--format json|lines|--count) → ⊕ discover_docker_modules → ◇ --count? ⊕ print(len) : print(json|lines)
 # region MODULE_CONTRACT
 ## @purpose  Typed API + CLI для поиска docker-compose модулей. Заменяет inline `python3 -c` блоки
-##           в platform-test.yml и nightly-gate.yml (дублирование ×4). Zero-dependency (text search).
+##           в platform-test.yml (дублирование ×3). Zero-dependency (text search).
 ## @scope    Чтение core/modules/*/module.yaml, фильтрация system-модулей, возврат списка compose-файлов.
 ##           Read-only — не мутирует файлы.
 ## @invariants
@@ -12,8 +12,8 @@
 ##   - CLI: `--format json` (JSON array of strings) / `--format lines` (one file per line) / `--count` (int)
 ##   - API: возвращает list[pathlib.Path], отсортированный по имени модуля
 ##   - Сортировка стабильна: alphabetical по имени директории модуля
-## @rationale Тот же inline-блок `python3 -c "import json; from pathlib..."` дублирован в 3 workflow-файлах
-##           (platform-test.yml ×3, nightly-gate.yml ×2). Экстракция в typed-модуль даёт тестируемость,
+## @rationale Тот же inline-блок `python3 -c "import json; from pathlib..."` дублирован в 1 workflow-файле
+##           (platform-test.yml ×3). Экстракция в typed-модуль даёт тестируемость,
 ##           единую валидацию, устранение дублирования. Zero-dependency: text search `'install_type: system'
 ##           not in content` вместо PyYAML — CI-раннер не требует PyYAML.
 ## @see      core/internal/bootstrap/discover_modules.py — полный аналог для bootstrap-окружения (YAML-based,

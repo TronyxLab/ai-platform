@@ -2,7 +2,7 @@
 # STRUCTURE: runs:composite → ○ python3 module_discovery.py --format json → ⊕ /tmp/module_list.json + count output → ⎋ done
 # region MODULE_CONTRACT
 ## @purpose  Composite action: генерирует /tmp/module_list.json из core/modules/*/module.yaml.
-##           Заменяет inline python3 блоки в platform-test.yml и nightly-gate.yml.
+##           Заменяет inline python3 блоки в platform-test.yml.
 ## @scope    Вызывается из CI workflow steps. Делегирует в core/internal/scripts/module_discovery.py.
 ## @invariants
 ##   - Выходной файл: /tmp/module_list.json (JSON array of compose-file path strings)

@@ -160,7 +160,7 @@ permission:
           .env → .env.example → docker-compose.yml → docker-compose.base.yml →
           CI workflow files → tests/conftest.py (SMOKE_ENV)
           → For each variable in .env: trace through chain, flag break points.
-          → CHAIN "HERMES_DASHBOARD_PASSWORD: .env ✓ → .env.example ✓ → compose ✓ → CI ✗ (missing in nightly-gate.yml)"
+          → CHAIN "HERMES_DASHBOARD_PASSWORD: .env ✓ → .env.example ✓ → compose ✓ → CI ✗ (missing in platform-test.yml)"
 
        b. **Compose override consistency:**
           base.yml → test.yml → macos.yml → platform-dev.yml
@@ -336,7 +336,7 @@ permission:
     | If scope contains... | Also include... |
     |---------------------|-----------------|
     | Any `docker-compose*.yml` | ALL `docker-compose*.yml` files in project (root + modules) |
-    | `.env` or `.env.example` | All CI workflow yml files (`platform-test.yml`, `main-full-gate.yml`, `nightly-gate.yml`, etc.) + `tests/conftest.py` (SMOKE_ENV section) |
+    | `.env` or `.env.example` | All CI workflow yml files (`platform-test.yml`, `push-gate.yml`, etc.) + `tests/conftest.py` (SMOKE_ENV section) |
     | Any file in `core/modules/{name}/` | `module.yaml` + ALL files in that module directory |
     | Any `healthcheck.sh` | Docker HEALTHCHECK directives in compose files for the same service |
     | `Makefile` or `entrypoint-manifest.yaml` | Both files + all `core/modules/*/Makefile` + `core/templates/module.mk` |

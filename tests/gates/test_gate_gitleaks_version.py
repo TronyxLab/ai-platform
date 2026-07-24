@@ -8,9 +8,9 @@
 ## @scope — Parses .github/workflows/*.yml to verify gitleaks version invariants.
 ## @invariants
 ##   - All gitleaks version references in workflows point to version 8.30.1
-##   - push-gate, platform-test, nightly-gate use setup-gitleaks composite action
+##   - push-gate, platform-test use setup-gitleaks composite action
 ##   - No workflow contains inline gitleaks install (curl + tar)
-## @rationale — Prevents gitleaks version drift across 3+ workflow consumers (P5).
+## @rationale — Prevents gitleaks version drift across 2 workflow consumers (P5).
 ##              Composite action setup-gitleaks is the single source of truth.
 # endregion MODULE_CONTRACT
 
@@ -31,7 +31,6 @@ _SETUP_GITLEAKS_ACTION_DIR: pathlib.Path = repo_root() / ".github" / "actions" /
 _GITLEAKS_CONSUMER_WORKFLOWS: set[str] = {
     "push-gate.yml",
     "platform-test.yml",
-    "nightly-gate.yml",
 }
 
 

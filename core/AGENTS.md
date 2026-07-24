@@ -88,7 +88,7 @@ core/
 │   ├── healthcheck.sh
 │   ├── check-file-lines.sh
 │   ├── lint.sh
-│   ├── check-commit-msg.sh
+│   ├── check_commit_msg.py
 │   ├── check-doc-headers.sh
 │   └── pre-push-gate.sh
 ├── internal/                   # Внутренние скрипты — не вызывать напрямую

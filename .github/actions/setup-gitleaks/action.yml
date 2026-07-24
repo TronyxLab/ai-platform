@@ -10,7 +10,7 @@
 ##   - Download: conditional on cache miss
 ##   - Architecture: linux_x64 only (GitHub Actions ubuntu-latest)
 ## @rationale  DevPlan 002 — TASK-1: Composite action standardizes gitleaks setup across
-##             3 workflow consumers (push-gate, platform-test, nightly-gate).
+##             2 workflow consumers (push-gate, platform-test).
 ##             Single source of truth for gitleaks version eliminates version drift (P5).
 # endregion MODULE_CONTRACT
 

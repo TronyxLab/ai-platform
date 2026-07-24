@@ -2,7 +2,7 @@
 # STRUCTURE: inputs:project-names → runs:composite → ○ module_discovery --format lines → ⚡ docker compose down per project → ⎋ done
 # region MODULE_CONTRACT
 ## @purpose  Composite action: останавливает и удаляет Docker Compose стеки для всех модулей.
-##           Заменяет дублирующуюся cleanup-логику в platform-test.yml и nightly-gate.yml.
+##           Заменяет дублирующуюся cleanup-логику в platform-test.yml.
 ## @scope    Вызывается из CI workflow steps. Делегирует в core/internal/scripts/module_discovery.py.
 ## @invariants
 ##   - Итерирует все docker-модули через module_discovery.py --format lines

@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: contract-test entrypoint-manifest yaml shebang bash-n syntax smoke subprocess node-update ssh-proxy age-secret-key-file detect-age-key
-# STRUCTURE: ▶ manifest path → parse YAML → extract .sh paths → parametrized tests (exists|shebang|syntax|help-smoke)
+# GREP_SUMMARY: contract-test entrypoint-manifest yaml shebang syntax smoke subprocess node-update ssh-proxy age-secret-key-file detect-age-key python-entrypoint
+# STRUCTURE: ▶ manifest path → parse YAML → extract .sh/.py paths → parametrized tests (exists|shebang|syntax|help-smoke)
 # region MODULE_CONTRACT
-## @purpose  Mass contract tests for ALL entrypoint scripts declared in entrypoint-manifest.yaml.
+## @purpose  Mass contract tests for ALL entrypoint scripts (.sh and .py) declared in entrypoint-manifest.yaml.
 ##           Parses the manifest, extracts all delegate script paths, and validates each:
-##           exists, has shebang, bash -n syntax, --help smoke (for entrypoints).
+##           exists, has shebang, syntax check (bash -n for .sh, compile() for .py), --help smoke (for entrypoints).
 ##           Adding a new entrypoint to manifest = automatic contract test.
-## @scope    Tests operate on the real manifest + real bash scripts in the project tree.
+## @scope    Tests operate on the real manifest + real scripts (.sh/.py) in the project tree.
 ##           No mocking, no simulation. Docker not required.
 ## @invariants
 ##   - Manifest is at core/entrypoint-manifest.yaml relative to platform root
-##   - Each delegates_to field is parsed for script paths (.sh files)
+##   - Each delegates_to field is parsed for script paths (.sh and .py files)
 ##   - Paths with args (e.g. "validate.sh --lint") strip args for file checks
-##   - Entrypoint scripts (core/entrypoints/*.sh) get extra --help smoke test
+##   - Entrypoint scripts (core/entrypoints/*.sh/.py) get extra --help smoke test
 ##   - Syntax regression in any script = FAIL
+##   - Python scripts: syntax checked via compile(), not subprocess
 ## @rationale  Manifest is the canonical registry. Adding a new entrypoint requires
 ##             updating the manifest. This test ensures every registered script is
 ##             present and valid — no silent drift between manifest and filesystem.
-## @changes — CREATED: 2026-07-09 | TASK-4.1: mass contract tests for all entrypoints
+## @changes — 2026-07-24 | Python entrypoint support: .py regex, compile() syntax check, python3 --help
+##           — 2026-07-09 | TASK-4.1: mass contract tests for all entrypoints
 # endregion MODULE_CONTRACT
 
 import logging
@@ -37,12 +39,13 @@ PLATFORM_ROOT: str = str(pathlib.Path(__file__).resolve().parent.parent)
 MANIFEST_REL: str = os.path.join("core", "entrypoint-manifest.yaml")
 MANIFEST_PATH: str = os.path.join(PLATFORM_ROOT, MANIFEST_REL)
 
-# ── Regex: extract .sh script paths from delegates_to strings ──────────────
+# ── Regex: extract script paths from delegates_to strings ──────────────────
 # Matches paths like:
 #   core/entrypoints/bootstrap.sh
+#   core/entrypoints/check-commit-msg.py
 #   core/entrypoints/deploy.sh → git push → CI → core/internal/deploy/deploy-project.sh
 #   core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh
-_SCRIPT_PATH_RE: re.Pattern = re.compile(r"(?:^|\s+)(core/(?:entrypoints|internal)/[\w./-]+\.sh)")
+_SCRIPT_PATH_RE: re.Pattern = re.compile(r"(?:^|\s+)(core/(?:entrypoints|internal)/[\w./-]+\.(?:sh|py))")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -50,9 +53,9 @@ _SCRIPT_PATH_RE: re.Pattern = re.compile(r"(?:^|\s+)(core/(?:entrypoints|interna
 
 # region FUNC_extract_script_paths
 def extract_script_paths(manifest_path: str) -> list[str]:
-    """Parse entrypoint-manifest.yaml and extract all .sh script paths.
+    """Parse entrypoint-manifest.yaml and extract all script paths (.sh and .py).
 
-    ## @purpose  Read the YAML manifest and collect every shell script path
+    ## @purpose  Read the YAML manifest and collect every script path
     ##           referenced in delegates_to fields. Deduplicates paths.
     ## @io       ⇥ manifest_path: str → ⎋ list[str] of unique relative script paths
     ## @complexity  O(N) where N = total delegates_to entries
@@ -60,6 +63,7 @@ def extract_script_paths(manifest_path: str) -> list[str]:
     ##   - Returns unique paths only (set dedup)
     ##   - Filters out non-script entries like "pytest", "pre-commit", etc.
     ##   - Strips trailing arguments (e.g. "validate.sh --lint" → "validate.sh")
+    ##   - Matches both .sh and .py scripts
     """
     logger.info("[IMP:7][extract_script_paths] Parsing manifest: %s", manifest_path)
 
@@ -118,9 +122,10 @@ def _resolve_script_path(script_rel: str) -> str:
 
     ## @purpose  Convert manifest-relative path to absolute filesystem path.
     ##           Handles paths with extra arguments (e.g. "validate.sh --lint").
+    ##           Supports both .sh and .py scripts.
     ## @io       ⇥ script_rel: str → ⎋ str: absolute path
     """
-    # Strip any trailing arguments after the .sh path
+    # Strip any trailing arguments after the .sh/.py path
     base = script_rel.split()[0]
     return os.path.join(PLATFORM_ROOT, base)
 
@@ -161,7 +166,7 @@ def test_manifest_parses() -> None:
 @pytest.mark.contract
 @pytest.mark.parametrize(
     "script_rel",
-    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "")) for s in extract_script_paths(MANIFEST_PATH)],
+    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in extract_script_paths(MANIFEST_PATH)],
 )
 def test_entrypoint_exists(script_rel: str) -> None:
     """Verify a manifest-registered script exists on disk.
@@ -186,7 +191,7 @@ def test_entrypoint_exists(script_rel: str) -> None:
 @pytest.mark.contract
 @pytest.mark.parametrize(
     "script_rel",
-    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "")) for s in extract_script_paths(MANIFEST_PATH)],
+    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in extract_script_paths(MANIFEST_PATH)],
 )
 def test_entrypoint_has_shebang(script_rel: str) -> None:
     """Verify a manifest-registered script has a valid shebang (starts with #!).
@@ -210,44 +215,64 @@ def test_entrypoint_has_shebang(script_rel: str) -> None:
 # endregion FUNC_test_entrypoint_has_shebang
 
 
-# region FUNC_test_entrypoint_bash_syntax
+# region FUNC_test_entrypoint_syntax
 
 
 @pytest.mark.contract
 @pytest.mark.parametrize(
     "script_rel",
-    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "")) for s in extract_script_paths(MANIFEST_PATH)],
+    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in extract_script_paths(MANIFEST_PATH)],
 )
-def test_entrypoint_bash_syntax(script_rel: str) -> None:
-    """Verify a manifest-registered script has valid bash syntax via `bash -n`.
+def test_entrypoint_syntax(script_rel: str) -> None:
+    """Verify a manifest-registered script has valid syntax.
 
-    # ▶ script_rel → ⚡ subprocess.run(["bash", "-n", script_path]) → ◇ returncode == 0? → ⎋ pass | fail
+    Bash: `bash -n` check. Python: `python3 -c "compile(...)"` check.
+
+    # ▶ script_rel → ⚡ bash -n (sh) or compile() (py) → ◇ returncode == 0? → ⎋ pass | fail
     """
     script_path = _resolve_script_path(script_rel)
     if not os.path.isfile(script_path):
         pytest.skip(f"Script not found: {script_path}")
 
-    logger.info("[IMP:7][test_entrypoint_bash_syntax] Running bash -n on: %s", script_rel)
-    result: subprocess.CompletedProcess = subprocess.run(
-        ["bash", "-n", script_path],
-        capture_output=True,
-        text=True,
-    )
+    is_python = script_rel.endswith(".py")
+
+    logger.info("[IMP:7][test_entrypoint_syntax] Checking syntax: %s (python=%s)", script_rel, is_python)
+
+    if is_python:
+        # Python syntax check via compile()
+        with open(script_path) as f:
+            source = f.read()
+        try:
+            compile(source, script_path, "exec")
+            result_code = 0
+            stderr = ""
+        except SyntaxError as exc:
+            result_code = 1
+            stderr = str(exc)
+    else:
+        # Bash syntax check via bash -n
+        result: subprocess.CompletedProcess = subprocess.run(
+            ["bash", "-n", script_path],
+            capture_output=True,
+            text=True,
+        )
+        result_code = result.returncode
+        stderr = result.stderr
 
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    print(f"[IMP:7][test_entrypoint_bash_syntax] bash -n {script_rel} → exit={result.returncode}")
-    if result.stderr:
-        for line in result.stderr.splitlines():
-            print(f"[IMP:7][bash-n/stderr] {line}")
+    print(f"[IMP:7][test_entrypoint_syntax] {script_rel} → exit={result_code}")
+    if stderr:
+        for line in (stderr if isinstance(stderr, str) else stderr.splitlines()):
+            print(f"[IMP:7][syntax] {line}")
     print("--- END LDD TRAJECTORY ---")
 
-    assert result.returncode == 0, (
-        f"[IMP:9][test_entrypoint_bash_syntax] FAIL: bash syntax error in {script_rel}\nstderr: {result.stderr}"
+    assert result_code == 0, (
+        f"[IMP:9][test_entrypoint_syntax] FAIL: syntax error in {script_rel}\nstderr: {stderr}"
     )
-    logger.info("[IMP:9][test_entrypoint_bash_syntax] PASS: %s is syntactically valid", script_rel)
+    logger.info("[IMP:9][test_entrypoint_syntax] PASS: %s is syntactically valid", script_rel)
 
 
-# endregion FUNC_test_entrypoint_bash_syntax
+# endregion FUNC_test_entrypoint_syntax
 
 
 # ── --help smoke for entrypoints only (core/entrypoints/*.sh) ──────────────
@@ -260,12 +285,12 @@ _entrypoint_rel_paths: list[str] = [s for s in extract_script_paths(MANIFEST_PAT
 
 @pytest.mark.contract
 @pytest.mark.parametrize(
-    "script_rel", [pytest.param(s, id=s.replace("/", "_").replace(".sh", "")) for s in _entrypoint_rel_paths]
+    "script_rel", [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in _entrypoint_rel_paths]
 )
 def test_entrypoint_help_smoke(script_rel: str) -> None:
     """Verify entrypoint script handles --help gracefully (exit 0 or usage in stderr).
 
-    # ▶ script_rel → ⚡ subprocess.run(["bash", script_path, "--help"])
+    # ▶ script_rel → ⚡ python3 script.py --help (py) or bash script.sh --help (sh)
     #   → ◇ returncode == 0 or stderr has usage? → ⎋ pass | fail
     ## @complexity O(1) per parametrized invocation — single subprocess call
     """
@@ -273,9 +298,17 @@ def test_entrypoint_help_smoke(script_rel: str) -> None:
     if not os.path.isfile(script_path):
         pytest.skip(f"Script not found: {script_path}")
 
-    logger.info("[IMP:7][test_entrypoint_help_smoke] Running %s --help", script_rel)
+    is_python = script_rel.endswith(".py")
+
+    logger.info("[IMP:7][test_entrypoint_help_smoke] Running %s --help (python=%s)", script_rel, is_python)
+
+    if is_python:
+        run_args = ["python3", script_path, "--help"]
+    else:
+        run_args = ["bash", script_path, "--help"]
+
     result: subprocess.CompletedProcess = subprocess.run(
-        ["bash", script_path, "--help"],
+        run_args,
         capture_output=True,
         text=True,
     )
@@ -330,10 +363,10 @@ def test_entrypoint_help_smoke(script_rel: str) -> None:
 
 @pytest.mark.contract
 def test_manifest_covers_all_entrypoints() -> None:
-    """Verify that every .sh file in core/entrypoints/ is registered in the manifest.
+    """Verify that every script file in core/entrypoints/ is registered in the manifest.
 
-    # ▶ listdir(core/entrypoints) → ∋ .sh files → ◇ each in manifest scripts? → ⎋ pass | fail
-    ## @complexity O(N + M) where N = .sh files on disk, M = manifest script count
+    # ▶ listdir(core/entrypoints) → ∋ .sh/.py files → ◇ each in manifest scripts? → ⎋ pass | fail
+    ## @complexity O(N + M) where N = script files on disk, M = manifest script count
     """
     entrypoints_dir = os.path.join(PLATFORM_ROOT, "core", "entrypoints")
     if not os.path.isdir(entrypoints_dir):
@@ -341,7 +374,7 @@ def test_manifest_covers_all_entrypoints() -> None:
 
     on_disk: set[str] = set()
     for fname in os.listdir(entrypoints_dir):
-        if fname.endswith(".sh"):
+        if fname.endswith((".sh", ".py")):
             rel = os.path.join("core", "entrypoints", fname)
             on_disk.add(rel)
 

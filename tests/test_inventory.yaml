@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-22 | regenerated (1430 tests)
+## @changes — 2026-07-24 | regenerated (1743 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -40,6 +40,7 @@ test_nodeids:
 - tests/gates/test_gate_compose_no_base_image.py::test_no_base_image_in_production_compose
 - tests/gates/test_gate_compose_no_base_image.py::test_platform_dev_has_l1_image
 - tests/gates/test_gate_compose_no_base_image.py::test_root_compose_uses_context_image_var
+- tests/gates/test_gate_compose_profiles_consistency.py::test_ci_workflows_use_compose_profiles_composite
 - tests/gates/test_gate_compose_profiles_consistency.py::test_compose_profiles_consistency
 - tests/gates/test_gate_compose_restart_consistency.py::test_base_compose_restart_production
 - tests/gates/test_gate_compose_restart_consistency.py::test_test_compose_restart_no
@@ -79,6 +80,7 @@ test_nodeids:
 - tests/gates/test_gate_healthcheck_contract.py::test_litellm_uses_check_http
 - tests/gates/test_gate_healthcheck_contract.py::test_logging_deep_includes_promtail
 - tests/gates/test_gate_healthcheck_contract.py::test_postgres_deep_includes_pgbouncer
+- tests/gates/test_gate_http_retry_policy.py::test_http_calls_have_retry
 - tests/gates/test_gate_lint_quality.py::test_linter_parity
 - tests/gates/test_gate_litellm_pg_enforcement.py::test_litellm_compose_test_database_url_is_postgres
 - tests/gates/test_gate_litellm_pg_enforcement.py::test_litellm_env_database_url_is_postgres
@@ -95,7 +97,6 @@ test_nodeids:
 - tests/gates/test_gate_makefile_targets.py::test_recipe_lines_use_tabs
 - tests/gates/test_gate_makefile_targets.py::test_root_makefile_line_limit
 - tests/gates/test_gate_manifest_integrity.py::test_agents_md_synced_with_manifest
-- tests/gates/test_gate_manifest_integrity.py::test_allowed_verbs_match_makefile
 - tests/gates/test_gate_manifest_integrity.py::test_delegates_to_paths_exist
 - tests/gates/test_gate_manifest_integrity.py::test_entrypoint_names_match_manifest
 - tests/gates/test_gate_manifest_integrity.py::test_forbidden_directories_absent
@@ -105,6 +106,8 @@ test_nodeids:
 - tests/gates/test_gate_manifest_integrity.py::test_module_targets_use_canonical_names
 - tests/gates/test_gate_manifest_integrity.py::test_no_forbidden_verbs_in_makefiles
 - tests/gates/test_gate_manifest_integrity.py::test_no_module_prefix
+- tests/gates/test_gate_manifest_integrity.py::test_repair_contract_integrity
+- tests/gates/test_gate_manifests_up_to_date.py::test_manifests_up_to_date
 - tests/gates/test_gate_module_hooks.py::test_all_hooks_are_specified_as_strings
 - tests/gates/test_gate_module_hooks.py::test_hook_contract_validation[backup-cron]
 - tests/gates/test_gate_module_hooks.py::test_hook_contract_validation[clickhouse]
@@ -144,6 +147,7 @@ test_nodeids:
 - tests/gates/test_gate_nginx_domain_contract.py::test_base_yml_mounts_templates
 - tests/gates/test_gate_nginx_domain_contract.py::test_no_host_variable_in_server_name
 - tests/gates/test_gate_nginx_domain_contract.py::test_platform_domain_placeholder_present
+- tests/gates/test_gate_no_hardcoded_local_paths.py::test_no_hardcoded_local_paths
 - tests/gates/test_gate_no_simulators.py::test_no_simulator_classes_in_test_suite
 - tests/gates/test_gate_no_unregistered_entrypoint.py::test_all_makefile_targets_in_allowed_verbs
 - tests/gates/test_gate_no_unregistered_entrypoint.py::test_all_shebang_files_in_manifest
@@ -194,10 +198,6 @@ test_nodeids:
 - tests/gates/test_gate_pytest_markers.py::test_pyproject_toml_has_all_markers
 - tests/gates/test_gate_pytest_markers.py::test_pytest_ini_has_no_markers
 - tests/gates/test_gate_pytest_markers.py::test_strict_markers_in_pyproject_toml
-- tests/gates/test_gate_secrets_manifest.py::test_manifest_vs_env_example
-- tests/gates/test_gate_secrets_manifest.py::test_manifest_vs_module_yaml
-- tests/gates/test_gate_secrets_manifest.py::test_manifest_vs_workflows
-- tests/gates/test_gate_secrets_manifest.py::test_no_hardcoded_secrets_in_core
 - tests/gates/test_gate_security_config.py::test_clickhouse_access_management_not_1
 - tests/gates/test_gate_security_config.py::test_clickhouse_no_literal_passwords
 - tests/gates/test_gate_security_config.py::test_clickhouse_no_open_networks
@@ -219,6 +219,8 @@ test_nodeids:
 - tests/gates/test_gate_status_page.py::test_module_yaml_required_fields
 - tests/gates/test_gate_status_page.py::test_nginx_htpasswd_mount
 - tests/gates/test_gate_status_page.py::test_no_htpasswd_monitoring_in_nginx_configs
+- tests/gates/test_gate_status_page.py::test_no_metrics_every_minute_cron_in_backup_cron
+- tests/gates/test_gate_status_page.py::test_no_metrics_export_in_backup_cron_crontab
 - tests/gates/test_gate_status_page.py::test_platform_default_catch_all_return_444
 - tests/gates/test_gate_status_page.py::test_platform_vhost_exists_and_has_auth
 - tests/gates/test_gate_status_page.py::test_platform_vhost_health_location
@@ -245,6 +247,7 @@ test_nodeids:
 - tests/gates/test_gate_topology.py::test_deploy_order_respects_topology
 - tests/gates/test_gate_topology.py::test_no_cyclic_dependencies
 - tests/gates/test_gate_vhost_nginx_t.py::test_gate_vhost_nginx_t
+- tests/gates/test_gate_workflow_checkout_order.py::test_local_actions_after_checkout
 - tests/gates/test_gate_workflow_consistency.py::test_all_workflow_files_exist
 - tests/gates/test_gate_workflow_consistency.py::test_basedpyright_tests_removed
 - tests/gates/test_gate_workflow_consistency.py::test_build_platform_uses_provisioner
@@ -335,6 +338,30 @@ test_nodeids:
 - tests/test_bootstrap_auto.py::test_rsync_command_generation
 - tests/test_bootstrap_auto.py::test_secrets_fallback_path
 - tests/test_bootstrap_auto.py::test_ssh_command_construction
+- tests/test_cert_backup_gap.py::test_backup_app_data_stub_no_cert_scope_creep
+- tests/test_cert_backup_gap.py::test_backup_postgres_scope_postgres_only
+- tests/test_cert_backup_gap.py::test_dev_certs_not_backed_up_gap
+- tests/test_cert_backup_gap.py::test_issue_cert_saves_all_4_files_to_s3
+- tests/test_cert_backup_gap.py::test_make_backup_coverage_ssl_cert_gap_documented
+- tests/test_cert_backup_gap.py::test_node_lifecycle_update_step_calls_ssl_provision
+- tests/test_cert_backup_gap.py::test_s3_cache_upload_all_4_cert_files
+- tests/test_cert_backup_gap.py::test_s3_restore_validates_cert_after_download
+- tests/test_cert_backup_gap.py::test_s3_unavailable_does_not_block_cert_issue
+- tests/test_cert_backup_gap.py::test_ssl_cache_prefix_distinct_from_backup
+- tests/test_cert_backup_gap.py::test_state_machine_full_bootstrap_restore_flow
+- tests/test_cert_collector.py::test_empty_san
+- tests/test_cert_collector.py::test_exact_match
+- tests/test_cert_collector.py::test_exact_match_case_insensitive
+- tests/test_cert_collector.py::test_file_not_found
+- tests/test_cert_collector.py::test_invalid_pem
+- tests/test_cert_collector.py::test_no_match
+- tests/test_cert_collector.py::test_not_valid_after_aware_datetime
+- tests/test_cert_collector.py::test_not_valid_after_naive_datetime
+- tests/test_cert_collector.py::test_not_valid_after_utc_attribute
+- tests/test_cert_collector.py::test_trailing_dot
+- tests/test_cert_collector.py::test_wildcard_match
+- tests/test_cert_collector.py::test_wildcard_no_match_deep
+- tests/test_cert_collector.py::test_wildcard_no_match_root
 - tests/test_char_deploy_parse_save.py::test_parse_ssh_command_empty
 - tests/test_char_deploy_parse_save.py::test_parse_ssh_command_node_name_mismatch
 - tests/test_char_deploy_parse_save.py::test_parse_ssh_command_valid_forced_command
@@ -436,61 +463,16 @@ test_nodeids:
 - tests/test_contract_deploy_ssh.py::test_scp_to_server_no_secrets
 - tests/test_contract_deploy_ssh.py::test_scp_to_server_rsync_core_failure
 - tests/test_contract_deploy_ssh.py::test_scp_to_server_ssh_failure
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_audit]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_bootstrap]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_build]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_check-commit-msg]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_check-doc-headers]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_check-file-lines]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_context-promote]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_converge]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_deploy-project]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_deploy]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_healthcheck]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_lint]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_node-update]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_pre-push-gate]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_scaffold]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_secrets]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_validate]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_entrypoints_verify]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_audit_audit]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_converge]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_deploy-modules]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_firewall]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_install-acme]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_install-docker]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_install-tor-proxy]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_issue-cert]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_node-lifecycle]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_secrets-init]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_bootstrap_setup-node]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_build_hermes-images]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_catalog_generate-catalog]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_deploy_deploy-project]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_healthcheck_tor-proxy-healthcheck]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_notify_notify-hook]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_provision-environment]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_add-project]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_add-vhost]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_adopt-project]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_context-init]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_gen-env-platform]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_project-list]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scaffold_remove-project]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_scripts-audit]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_secrets_decrypt-secrets]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_template-engine]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_validate_validate]
-- tests/test_contract_entrypoints.py::test_entrypoint_bash_syntax[core_internal_verify_verify-domains]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_audit]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_bootstrap]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_build]
-- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_check-commit-msg]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_check-doc-headers]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_check-file-lines]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_check_commit_msg]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_compose-wrapper]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_context-promote]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_deploy-context]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_deploy-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_healthcheck]
@@ -502,14 +484,20 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_entrypoints_verify]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_audit_audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_cert_orchestrator]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_deploy-modules]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_deploy_compose_preflight]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_deploy_context_deployer]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_discover_modules]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_docker_registry_auth]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_firewall]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_install-acme]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_install-docker]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_node-lifecycle]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_preflight]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_secrets-init]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_bootstrap_setup-node]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_build_hermes-images]
@@ -526,6 +514,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_project-list]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scaffold_remove-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scripts-audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_scripts_validate_module_yaml]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_template-engine]
 - tests/test_contract_entrypoints.py::test_entrypoint_exists[core_internal_validate_validate]
@@ -533,11 +522,13 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_audit]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_bootstrap]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_build]
-- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_check-commit-msg]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_check-doc-headers]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_check-file-lines]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_check_commit_msg]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_compose-wrapper]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_context-promote]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_deploy-context]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_deploy-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_healthcheck]
@@ -549,14 +540,20 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_entrypoints_verify]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_audit_audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_cert_orchestrator]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_converge]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_deploy-modules]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_deploy_compose_preflight]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_deploy_context_deployer]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_discover_modules]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_docker_registry_auth]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_firewall]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_install-acme]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_install-docker]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_install-tor-proxy]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_issue-cert]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_node-lifecycle]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_preflight]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_secrets-init]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_bootstrap_setup-node]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_build_hermes-images]
@@ -573,6 +570,7 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_project-list]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scaffold_remove-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scripts-audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_scripts_validate_module_yaml]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_secrets_decrypt-secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_template-engine]
 - tests/test_contract_entrypoints.py::test_entrypoint_has_shebang[core_internal_validate_validate]
@@ -580,11 +578,13 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_audit]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_bootstrap]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_build]
-- tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_check-commit-msg]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_check-doc-headers]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_check-file-lines]
+- tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_check_commit_msg]
+- tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_compose-wrapper]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_context-promote]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_deploy-context]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_deploy-project]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_deploy]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_healthcheck]
@@ -595,6 +595,62 @@ test_nodeids:
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_secrets]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_validate]
 - tests/test_contract_entrypoints.py::test_entrypoint_help_smoke[core_entrypoints_verify]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_bootstrap]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_build]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_check-doc-headers]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_check-file-lines]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_check_commit_msg]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_compose-wrapper]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_context-promote]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_deploy-context]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_deploy-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_deploy]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_healthcheck]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_lint]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_node-update]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_pre-push-gate]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_scaffold]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_secrets]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_validate]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_entrypoints_verify]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_audit_audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_cert_orchestrator]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_converge]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_deploy-modules]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_deploy_compose_preflight]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_deploy_context_deployer]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_discover_modules]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_docker_registry_auth]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_firewall]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_install-acme]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_install-docker]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_install-tor-proxy]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_issue-cert]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_node-lifecycle]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_preflight]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_secrets-init]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_bootstrap_setup-node]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_build_hermes-images]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_catalog_generate-catalog]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_deploy_deploy-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_healthcheck_tor-proxy-healthcheck]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_notify_notify-hook]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_provision-environment]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scaffold_add-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scaffold_add-vhost]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scaffold_adopt-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scaffold_context-init]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scaffold_gen-env-platform]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scaffold_project-list]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scaffold_remove-project]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scripts-audit]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_scripts_validate_module_yaml]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_secrets_decrypt-secrets]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_template-engine]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_validate_validate]
+- tests/test_contract_entrypoints.py::test_entrypoint_syntax[core_internal_verify_verify-domains]
 - tests/test_contract_entrypoints.py::test_manifest_covers_all_entrypoints
 - tests/test_contract_entrypoints.py::test_manifest_parses
 - tests/test_contract_entrypoints.py::test_node_update_has_ssh_proxy
@@ -846,6 +902,11 @@ test_nodeids:
 - tests/test_nginx_acme.py::test_acme_cron_contract
 - tests/test_nginx_acme.py::test_acme_webnames_basename_contract
 - tests/test_nginx_acme.py::test_acme_wildcard_cert_contract
+- tests/test_nginx_acme.py::test_challenge_mode_auto_fallback_logs_warning
+- tests/test_nginx_acme.py::test_challenge_mode_http_bypasses_dns
+- tests/test_nginx_acme.py::test_dns01_fail_http01_fallback
+- tests/test_nginx_acme.py::test_dns01_success_wildcard
+- tests/test_nginx_acme.py::test_http01_issues_individual_not_wildcard
 - tests/test_nginx_acme.py::test_is_subdomain_edge_similar_tld
 - tests/test_nginx_acme.py::test_is_subdomain_empty_args
 - tests/test_nginx_acme.py::test_is_subdomain_exact_match
@@ -898,6 +959,36 @@ test_nodeids:
 - tests/test_platform_endpoints.py::test_hermes_dashboard_endpoint
 - tests/test_platform_endpoints.py::test_langfuse_health_endpoint
 - tests/test_platform_endpoints.py::test_prometheus_healthy_endpoint
+- tests/test_platform_export_metrics.py::test_auto_detect_node_name_default
+- tests/test_platform_export_metrics.py::test_auto_detect_node_name_from_env
+- tests/test_platform_export_metrics.py::test_auto_detect_node_yaml_path_default
+- tests/test_platform_export_metrics.py::test_auto_detect_node_yaml_path_from_env
+- tests/test_platform_export_metrics.py::test_cache_mtime_invalidation
+- tests/test_platform_export_metrics.py::test_cache_ttl_hit
+- tests/test_platform_export_metrics.py::test_cache_ttl_miss
+- tests/test_platform_export_metrics.py::test_cert_collector_expiry_dates
+- tests/test_platform_export_metrics.py::test_cert_collector_file_missing
+- tests/test_platform_export_metrics.py::test_coordinator_empty_state
+- tests/test_platform_export_metrics.py::test_coordinator_invalid_yaml
+- tests/test_platform_export_metrics.py::test_coordinator_partial_failure
+- tests/test_platform_export_metrics.py::test_docker_collector_cli_missing
+- tests/test_platform_export_metrics.py::test_docker_collector_containers
+- tests/test_platform_export_metrics.py::test_docker_collector_empty
+- tests/test_platform_export_metrics.py::test_docker_collector_started_at
+- tests/test_platform_export_metrics.py::test_docker_collector_started_at_missing
+- tests/test_platform_export_metrics.py::test_docker_image_sizes
+- tests/test_platform_export_metrics.py::test_docker_image_sizes_empty
+- tests/test_platform_export_metrics.py::test_host_collector
+- tests/test_platform_export_metrics.py::test_host_collector_uptime
+- tests/test_platform_export_metrics.py::test_host_collector_uptime_missing_files
+- tests/test_platform_export_metrics.py::test_json_writer_atomic
+- tests/test_platform_export_metrics.py::test_json_writer_schema_version
+- tests/test_platform_export_metrics.py::test_json_writer_tmp_cleanup_on_failure
+- tests/test_platform_export_metrics.py::test_project_collector_empty_node
+- tests/test_platform_export_metrics.py::test_project_collector_mtime_cache
+- tests/test_platform_export_metrics.py::test_san_match_exact
+- tests/test_platform_export_metrics.py::test_san_match_no_match
+- tests/test_platform_export_metrics.py::test_san_match_wildcard
 - tests/test_platform_secrets_static.py::test_agekey_environmentfile_format_contract
 - tests/test_platform_secrets_static.py::test_healthcheck_sources_lib
 - tests/test_platform_secrets_static.py::test_module_files_present
@@ -1044,6 +1135,8 @@ test_nodeids:
 - tests/test_smoke_test_isolation.py::test_no_container_name_collision
 - tests/test_smoke_test_isolation.py::test_no_prod_network_in_test_overlay
 - tests/test_smoke_test_isolation.py::test_test_network_consistency
+- tests/test_ssl_s3_cache.py::test_download_accepts_le_cert
+- tests/test_ssl_s3_cache.py::test_download_rejects_non_le_issuer
 - tests/test_ssl_s3_cache.py::test_get_backup_config_still_works
 - tests/test_ssl_s3_cache.py::test_get_s3_config_default_region
 - tests/test_ssl_s3_cache.py::test_get_s3_config_missing_credentials
@@ -1054,10 +1147,14 @@ test_nodeids:
 - tests/test_ssl_s3_cache.py::test_s3_cache_script_graceful_degradation
 - tests/test_ssl_s3_cache.py::test_s3_cache_script_has_upload_download_check
 - tests/test_ssl_s3_cache.py::test_s3_cache_script_uses_openssl_validation
+- tests/test_ssl_s3_cache.py::test_s3_check_does_not_use_upload_py
+- tests/test_ssl_s3_cache.py::test_s3_config_ignores_https_proxy
 - tests/test_ssl_s3_cache.py::test_s3_config_type_compatibility
 - tests/test_ssl_s3_cache.py::test_s3_config_type_structure
 - tests/test_ssl_s3_cache.py::test_upload_config_source_backup_uses_backup_config
 - tests/test_ssl_s3_cache.py::test_upload_config_source_ssl_cache_uses_s3_config
+- tests/test_ssl_s3_cache.py::test_upload_with_account_ecc_path
+- tests/test_ssl_s3_cache.py::test_upload_without_chain_pem_succeeds
 - tests/test_status_page.py::test_anti_recursion
 - tests/test_status_page.py::test_health_fail
 - tests/test_status_page.py::test_health_pass
@@ -1065,9 +1162,21 @@ test_nodeids:
 - tests/test_status_page.py::test_html_structure
 - tests/test_status_page.py::test_htpasswd_generation_creates_valid_file
 - tests/test_status_page.py::test_htpasswd_generation_idempotent
+- tests/test_status_page.py::test_load_metrics_directory_at_path
 - tests/test_status_page.py::test_master_creds_fallback_resolution
+- tests/test_status_page.py::test_platform_service_401_is_pass
+- tests/test_status_page.py::test_platform_service_403_is_pass
+- tests/test_status_page.py::test_status_json_contains_extended_fields
 - tests/test_status_page.py::test_status_json_schema
+- tests/test_status_page.py::test_status_json_schema_version_warning
+- tests/test_status_page.py::test_status_page_schema_version_check
+- tests/test_status_page.py::test_status_page_staleness_fresh
+- tests/test_status_page.py::test_status_page_staleness_warning
 - tests/test_status_page.py::test_timeout_per_check
+- tests/test_status_page.py::test_vhost_401_is_pass
+- tests/test_status_page.py::test_vhost_403_is_pass
+- tests/test_status_page.py::test_vhost_404_is_warn
+- tests/test_status_page.py::test_vhost_500_is_warn
 - tests/test_status_page.py::test_x_headers_present
 - tests/test_stub_detection.py::test_converge_r3_stub_reporting
 - tests/test_stub_detection.py::test_is_stub_detects_real
@@ -1118,6 +1227,14 @@ test_nodeids:
 - tests/test_unit_checkpoint_v2.py::test_version_match_preserves_checkpoints
 - tests/test_unit_checkpoint_v2.py::test_version_mismatch_invalidates_all
 - tests/test_unit_deploy_modules_provisioner.py::test_postgres_module_severity_critical
+- tests/test_unit_module_discovery.py::test_cli_empty_dir_json_outputs_empty_array
+- tests/test_unit_module_discovery.py::test_cli_json_format
+- tests/test_unit_module_discovery.py::test_cli_lines_format
+- tests/test_unit_module_discovery.py::test_discovers_non_system_modules
+- tests/test_unit_module_discovery.py::test_empty_modules_dir_returns_empty
+- tests/test_unit_module_discovery.py::test_excludes_modules_without_compose
+- tests/test_unit_module_discovery.py::test_filters_system_modules
+- tests/test_unit_module_discovery.py::test_sorted_alphabetically
 - tests/test_unit_provision_environment.py::test_create_and_remove_network
 - tests/test_unit_provision_environment.py::test_custom_platform_env_path
 - tests/test_unit_provision_environment.py::test_help
@@ -1146,6 +1263,37 @@ test_nodeids:
 - tests/test_unit_provision_environment.py::test_scope_profiles_dry_run
 - tests/test_unit_provision_environment.py::test_scope_volumes_dry_run
 - tests/test_unit_provision_environment.py::test_volume_path_is_required
+- tests/test_unit_validate_dora_dashboard.py::test_cli_default_path_works
+- tests/test_unit_validate_dora_dashboard.py::test_cli_invalid_dashboard_exits_nonzero
+- tests/test_unit_validate_dora_dashboard.py::test_cli_valid_dashboard_exits_zero
+- tests/test_unit_validate_dora_dashboard.py::test_extra_panels_allowed
+- tests/test_unit_validate_dora_dashboard.py::test_malformed_json_returns_false
+- tests/test_unit_validate_dora_dashboard.py::test_missing_file_returns_false
+- tests/test_unit_validate_dora_dashboard.py::test_missing_panel_returns_false
+- tests/test_unit_validate_dora_dashboard.py::test_non_object_root_returns_false
+- tests/test_unit_validate_dora_dashboard.py::test_valid_dashboard_returns_true
+- tests/test_unit_validate_dora_dashboard.py::test_wrong_uid_returns_false
+- tests/test_unit_vps_status_check.py::test_cli_empty_stdin_exits_three
+- tests/test_unit_vps_status_check.py::test_cli_invalid_status_exits_one
+- tests/test_unit_vps_status_check.py::test_cli_malformed_json_exits_two
+- tests/test_unit_vps_status_check.py::test_cli_missing_status_key_exits_one
+- tests/test_unit_vps_status_check.py::test_cli_non_object_root_exits_two
+- tests/test_unit_vps_status_check.py::test_cli_output_status_only_found
+- tests/test_unit_vps_status_check.py::test_cli_output_status_only_invalid_status_still_zero
+- tests/test_unit_vps_status_check.py::test_cli_output_status_only_missing_key_prints_empty
+- tests/test_unit_vps_status_check.py::test_cli_output_status_only_with_extra_fields
+- tests/test_unit_vps_status_check.py::test_cli_valid_status_found_exits_zero
+- tests/test_unit_vps_status_check.py::test_cli_valid_status_stub_exits_zero
+- tests/test_unit_vps_status_check.py::test_cli_whitespace_stdin_exits_three
+- tests/test_unit_vps_status_check.py::test_parse_status_json_empty_raises
+- tests/test_unit_vps_status_check.py::test_parse_status_json_malformed_raises
+- tests/test_unit_vps_status_check.py::test_parse_status_json_valid
+- tests/test_unit_yaml_query.py::test_stdin_and_file_mutually_exclusive
+- tests/test_unit_yaml_query.py::test_stdin_empty_returns_exit_two
+- tests/test_unit_yaml_query.py::test_stdin_invalid_json_returns_exit_three
+- tests/test_unit_yaml_query.py::test_stdin_json_get_missing_key_returns_default
+- tests/test_unit_yaml_query.py::test_stdin_json_get_returns_value
+- tests/test_unit_yaml_query.py::test_stdin_neither_file_nor_stdin_errors
 - tests/test_unit_yaml_query.py::test_yaml_get_dict_returns_valid_json
 - tests/test_unit_yaml_query.py::test_yaml_get_list_no_python_repr_single_quotes
 - tests/test_unit_yaml_query.py::test_yaml_get_list_returns_valid_json
@@ -1224,6 +1372,101 @@ test_nodeids:
 - tests/test_yaml_query.py::test_yaml_query_bad_list
 - tests/test_yaml_query.py::test_yaml_query_dotted
 - tests/test_yaml_query.py::test_yaml_query_list_iteration
+- tests/unit/test_cert_orchestrator.py::test_bulk_restore_all_from_s3
+- tests/unit/test_cert_orchestrator.py::test_domain_cert_result_includes_challenge_field
+- tests/unit/test_cert_orchestrator.py::test_idempotent_skip_valid
+- tests/unit/test_cert_orchestrator.py::test_is_cert_valid_rejects_mkcert_even_if_not_expired
+- tests/unit/test_cert_orchestrator.py::test_is_le_issuer_accepts_le_cert
+- tests/unit/test_cert_orchestrator.py::test_is_le_issuer_handles_openssl_failure
+- tests/unit/test_cert_orchestrator.py::test_is_le_issuer_rejects_mkcert_cert
+- tests/unit/test_cert_orchestrator.py::test_orchestrate_passes_challenge_mode
+- tests/unit/test_cert_orchestrator.py::test_partial_restore_then_issue
+- tests/unit/test_cert_orchestrator.py::test_s3_unavailable_graceful
+- tests/unit/test_check_commit_msg.py::test_empty_message
+- tests/unit/test_check_commit_msg.py::test_error_contains_first_line
+- tests/unit/test_check_commit_msg.py::test_error_contains_format_guide
+- tests/unit/test_check_commit_msg.py::test_invalid_commit_exits_one
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[: missing type]
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[FEAT: uppercase type]
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[feat : space before colon]
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[feat(): empty scope]
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[feat(scope):]
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[feat(scope)]
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[feat:no space after colon]
+- tests/unit/test_check_commit_msg.py::test_invalid_formats[invalid message without type]
+- tests/unit/test_check_commit_msg.py::test_merge_commit_exits_zero
+- tests/unit/test_check_commit_msg.py::test_merge_revert_skip[Merge branch 'feature/x' into main]
+- tests/unit/test_check_commit_msg.py::test_merge_revert_skip[Merge pull request #42 from user/branch]
+- tests/unit/test_check_commit_msg.py::test_merge_revert_skip[Revert 'feat: add feature']
+- tests/unit/test_check_commit_msg.py::test_merge_revert_skip[Revert previous commit]
+- tests/unit/test_check_commit_msg.py::test_missing_argument_exits_one
+- tests/unit/test_check_commit_msg.py::test_missing_file_exits_zero
+- tests/unit/test_check_commit_msg.py::test_multiline_message_first_line_valid
+- tests/unit/test_check_commit_msg.py::test_newline_only_message
+- tests/unit/test_check_commit_msg.py::test_scoped_message_exits_zero
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[build: bump version-build]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[chore: update deps-chore]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[ci: update pipeline-ci]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[docs: update readme-docs]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[feat: add new feature-feat]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[fix: resolve bug-fix]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[perf: optimize query-perf]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[refactor: simplify logic-refactor]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[revert: rollback change-revert]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[style: format code-style]
+- tests/unit/test_check_commit_msg.py::test_valid_basic_types[test: add unit tests-test]
+- tests/unit/test_check_commit_msg.py::test_valid_commit_exits_zero
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[chore(deps): update all packages]
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[docs(rules): add Config-Living-Doc section]
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[feat(api/v2): add new endpoint]
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[feat(scanner): add doc-coverage metrics output]
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[fix(core.lib): resolve import cycle]
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[fix(detector): handle missing file references gracefully]
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[refactor(cli): simplify argument parsing]
+- tests/unit/test_check_commit_msg.py::test_valid_with_scope[test(compiler): add merge_sections dedup test]
+- tests/unit/test_check_commit_msg.py::test_whitespace_only_message
+- tests/unit/test_compose_preflight.py::test_all_charsets_pass
+- tests/unit/test_compose_preflight.py::test_all_secrets_present
+- tests/unit/test_compose_preflight.py::test_blocks_with_missing_secret
+- tests/unit/test_compose_preflight.py::test_charset_violation
+- tests/unit/test_compose_preflight.py::test_config_subcommand_bypass
+- tests/unit/test_compose_preflight.py::test_down_subcommand_bypass
+- tests/unit/test_compose_preflight.py::test_empty_env_profiles
+- tests/unit/test_compose_preflight.py::test_empty_file
+- tests/unit/test_compose_preflight.py::test_empty_manifest
+- tests/unit/test_compose_preflight.py::test_env_file_fallback
+- tests/unit/test_compose_preflight.py::test_load_existing_file
+- tests/unit/test_compose_preflight.py::test_load_valid_manifest
+- tests/unit/test_compose_preflight.py::test_missing_file
+- tests/unit/test_compose_preflight.py::test_missing_manifest
+- tests/unit/test_compose_preflight.py::test_missing_manifest_graceful
+- tests/unit/test_compose_preflight.py::test_missing_required
+- tests/unit/test_compose_preflight.py::test_module_filtering
+- tests/unit/test_compose_preflight.py::test_no_profiles
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args0-expected_profiles0-up]
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args1-expected_profiles1-up]
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args2-expected_profiles2-up]
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args3-expected_profiles3-up]
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args4-expected_profiles4-down]
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args5-expected_profiles5-config]
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args6-expected_profiles6-up]
+- tests/unit/test_compose_preflight.py::test_parse_compose_args[args7-expected_profiles7-None]
+- tests/unit/test_compose_preflight.py::test_passes_with_env
+- tests/unit/test_compose_preflight.py::test_skip_empty_values
+- tests/unit/test_compose_preflight.py::test_skip_missing_charset
+- tests/unit/test_compose_preflight.py::test_skip_preflight
+- tests/unit/test_compose_preflight.py::test_skips_optional
+- tests/unit/test_compose_preflight.py::test_with_blank_lines
+- tests/unit/test_compose_preflight.py::test_with_env_profiles
+- tests/unit/test_compose_preflight.py::test_with_profiles
+- tests/unit/test_context_deployer.py::test_extract_context_string
+- tests/unit/test_context_deployer.py::test_filter_projects_by_context
+- tests/unit/test_context_deployer.py::test_filter_projects_no_match
+- tests/unit/test_context_deployer.py::test_ghcr_fails_fallback_build
+- tests/unit/test_context_deployer.py::test_ghcr_pull_success
+- tests/unit/test_context_deployer.py::test_health_gate_timeout
+- tests/unit/test_context_deployer.py::test_idempotent_skip_healthy
+- tests/unit/test_context_deployer.py::test_non_fatal_continues_on_failure
 - tests/unit/test_context_overlay.py::test_ensure_context_clone
 - tests/unit/test_context_overlay.py::test_ensure_context_clone_fail
 - tests/unit/test_context_overlay.py::test_ensure_context_no_repo_url
@@ -1232,6 +1475,10 @@ test_nodeids:
 - tests/unit/test_context_overlay.py::test_ensure_context_pull_fail_nonfatal
 - tests/unit/test_context_overlay.py::test_ensure_context_pull_timestamp_update
 - tests/unit/test_context_overlay.py::test_ensure_no_context
+- tests/unit/test_deploy_context_integration.py::test_add_vhost_passes_config_dir
+- tests/unit/test_deploy_context_integration.py::test_cert_orchestrator_none_guard
+- tests/unit/test_deploy_context_integration.py::test_context_deployer_result_not_none
+- tests/unit/test_deploy_context_integration.py::test_verify_domains_passes_platform_root
 - tests/unit/test_deploy_snapshot.py::test_finalize_failure_preserves_snapshot
 - tests/unit/test_deploy_snapshot.py::test_finalize_success_writes_result
 - tests/unit/test_deploy_snapshot.py::test_rollback_restores_from_snapshot
@@ -1277,6 +1524,44 @@ test_nodeids:
 - tests/unit/test_docker_orchestrator_rollback.py::test_no_rollback_on_success
 - tests/unit/test_docker_orchestrator_rollback.py::test_rollback_audit_log
 - tests/unit/test_docker_orchestrator_rollback.py::test_rollback_on_failure
+- tests/unit/test_docker_registry_auth.py::test_configure_docker_auth_success
+- tests/unit/test_docker_registry_auth.py::test_daemon_json_idempotent
+- tests/unit/test_docker_registry_auth.py::test_daemon_json_merges_mirrors
+- tests/unit/test_docker_registry_auth.py::test_docker_login_fail
+- tests/unit/test_docker_registry_auth.py::test_docker_login_success
+- tests/unit/test_docker_registry_auth.py::test_missing_creds_warn
+- tests/unit/test_generate_agents_md.py::test_generate_canon_table
+- tests/unit/test_generate_agents_md.py::test_generate_canon_table_empty
+- tests/unit/test_generate_agents_md.py::test_generate_forbidden_lists
+- tests/unit/test_generate_agents_md.py::test_generate_forbidden_lists_empty
+- tests/unit/test_generate_agents_md.py::test_inject_into_md_appends_when_no_markers
+- tests/unit/test_generate_agents_md.py::test_inject_into_md_missing_file
+- tests/unit/test_generate_agents_md.py::test_inject_into_md_replaces_content
+- tests/unit/test_generate_entrypoint_manifest.py::test_extract_phony_targets_grep_fallback
+- tests/unit/test_generate_entrypoint_manifest.py::test_load_existing_manifest
+- tests/unit/test_generate_entrypoint_manifest.py::test_load_existing_manifest_missing
+- tests/unit/test_generate_entrypoint_manifest.py::test_merge_preserves_sections
+- tests/unit/test_generate_entrypoint_manifest.py::test_merge_replaces_allowed_verbs_empty
+- tests/unit/test_generate_entrypoint_manifest.py::test_merge_replaces_gates_empty
+- tests/unit/test_generate_platform_env.py::test_discover_profiles
+- tests/unit/test_generate_platform_env.py::test_discover_profiles_empty
+- tests/unit/test_generate_platform_env.py::test_discover_profiles_excludes_system
+- tests/unit/test_generate_platform_env.py::test_generate_smoke_env_py
+- tests/unit/test_generate_platform_env.py::test_load_ci_defaults
+- tests/unit/test_generate_platform_env.py::test_load_ci_defaults_missing_file
+- tests/unit/test_generate_secrets_manifest.py::test_compute_consumers
+- tests/unit/test_generate_secrets_manifest.py::test_empty_env_requires
+- tests/unit/test_generate_secrets_manifest.py::test_generate_output_structure
+- tests/unit/test_generate_secrets_manifest.py::test_load_secret_definitions
+- tests/unit/test_generate_secrets_manifest.py::test_load_secret_definitions_missing_file
+- tests/unit/test_generate_secrets_manifest.py::test_missing_env_requires_key
+- tests/unit/test_generate_secrets_manifest.py::test_no_matching_secret
+- tests/unit/test_module_discovery.py::test_cli_json_output
+- tests/unit/test_module_discovery.py::test_cli_lines_output
+- tests/unit/test_module_discovery.py::test_discover_all_non_system_modules
+- tests/unit/test_module_discovery.py::test_empty_modules_dir
+- tests/unit/test_module_discovery.py::test_exclude_no_compose_file
+- tests/unit/test_module_discovery.py::test_exclude_system_modules
 - tests/unit/test_no_backward_compat_markers.py::test_no_backward_compat_shims
 - tests/unit/test_orphan_reconciler.py::test_docker_compose_config_fails
 - tests/unit/test_orphan_reconciler.py::test_docker_unavailable
@@ -1291,6 +1576,14 @@ test_nodeids:
 - tests/unit/test_orphan_reconciler_selfheal.py::test_self_heal_image_prune
 - tests/unit/test_orphan_reconciler_selfheal.py::test_self_heal_image_prune_default_retention
 - tests/unit/test_orphan_reconciler_selfheal.py::test_self_heal_orphan_containers_removed
+- tests/unit/test_preflight.py::test_disk_space_below_threshold_fatal
+- tests/unit/test_preflight.py::test_disk_space_threshold
+- tests/unit/test_preflight.py::test_ghcr_unavailable_warn
+- tests/unit/test_preflight.py::test_parallel_execution
+- tests/unit/test_preflight.py::test_run_preflight_fatal_detection
+- tests/unit/test_preflight.py::test_s3_graceful_degradation
+- tests/unit/test_preflight.py::test_ssh_connectivity_fail_fatal
+- tests/unit/test_preflight.py::test_ssh_connectivity_ok
 - tests/unit/test_reconciler.py::test_detect_hosts_drift_clean
 - tests/unit/test_reconciler.py::test_detect_hosts_drift_found
 - tests/unit/test_reconciler.py::test_detect_hosts_drift_unreadable
@@ -1388,6 +1681,7 @@ test_nodeids:
 - tests/unit/test_state_machine.py::test_add_warning
 - tests/unit/test_state_machine.py::test_bootstrapstate_round_trip
 - tests/unit/test_state_machine.py::test_build_parser
+- tests/unit/test_state_machine.py::test_cli_context_arg
 - tests/unit/test_state_machine.py::test_cli_run_step
 - tests/unit/test_state_machine.py::test_complete_step
 - tests/unit/test_state_machine.py::test_complete_step_without_start
@@ -1403,6 +1697,7 @@ test_nodeids:
 - tests/unit/test_state_machine.py::test_init_flow_all_steps
 - tests/unit/test_state_machine.py::test_init_fresh_state
 - tests/unit/test_state_machine.py::test_init_step_ssh_access_no_root
+- tests/unit/test_state_machine.py::test_init_steps_count_devplan_047
 - tests/unit/test_state_machine.py::test_load_corrupt_state
 - tests/unit/test_state_machine.py::test_load_existing_state
 - tests/unit/test_state_machine.py::test_report_format
@@ -1419,6 +1714,7 @@ test_nodeids:
 - tests/unit/test_state_machine.py::test_tor_conditional_skip
 - tests/unit/test_state_machine.py::test_transition_persists_to_file
 - tests/unit/test_state_machine.py::test_update_flow_all_steps
+- tests/unit/test_state_machine.py::test_update_steps_count_devplan_047
 - tests/unit/test_state_machine.py::test_validate_bootstrap_env_custom_vars
 - tests/unit/test_state_machine.py::test_validate_bootstrap_env_missing
 - tests/unit/test_state_machine.py::test_validate_bootstrap_env_ok
@@ -1450,3 +1746,20 @@ test_nodeids:
 - tests/unit/test_sudoers_generator.py::test_write_sudoers_file_visudo_fail
 - tests/unit/test_sync_inventory.py::test_sync_output_matches_collect
 - tests/unit/test_sync_inventory.py::test_sync_yaml_format_roundtrip
+- tests/unit/test_validate_dora_dashboard.py::test_cli_exit_code
+- tests/unit/test_validate_dora_dashboard.py::test_file_not_found
+- tests/unit/test_validate_dora_dashboard.py::test_invalid_json
+- tests/unit/test_validate_dora_dashboard.py::test_missing_panel
+- tests/unit/test_validate_dora_dashboard.py::test_missing_uid
+- tests/unit/test_validate_dora_dashboard.py::test_non_dict_root
+- tests/unit/test_validate_dora_dashboard.py::test_valid_dashboard_all_panels
+- tests/unit/test_vps_status_check.py::test_cli_empty_stdin
+- tests/unit/test_vps_status_check.py::test_cli_invalid_status
+- tests/unit/test_vps_status_check.py::test_cli_malformed_json
+- tests/unit/test_vps_status_check.py::test_cli_output_status_only
+- tests/unit/test_vps_status_check.py::test_cli_valid_status
+- tests/unit/test_vps_status_check.py::test_parse_empty_stdin
+- tests/unit/test_vps_status_check.py::test_parse_malformed_json
+- tests/unit/test_vps_status_check.py::test_parse_valid_status_found
+- tests/unit/test_vps_status_check.py::test_parse_valid_status_stub
+- tests/unit/test_vps_status_check.py::test_parse_whitespace_stdin

@@ -265,6 +265,49 @@ execute_remote_update() {
     # ── Prepare SSH opts (mode=update — preserve known_hosts, honest TOFU) ──
     prepare_ssh_opts "${ssh_host}" "update"
 
+    # ⚠️ TRAP[BUG] · 2026-07-24 · P0 · node-update не доставлял core/ на VPS
+    # · Symptom: stale state_machine.py/steps.py/converge.sh на VPS → баги из локальных
+    #   исправлений не доезжают до продакшена. Bootstrap доставляет core/ через scp_to_server,
+    #   но node-update — нет. Результат: node-update исполняет старый код.
+    # · Fix: rsync core/ + node.yaml перед remote exec (только код, без secrets/Makefile).
+    # ── Rsync core/ to VPS (incremental delivery, not full scp_to_server) ──
+    if ${DRY_RUN:-false}; then
+        echo "[IMP:8][node-update][dry-run] DRY-RUN: rsync core/ → root@${ssh_host}:/opt/platform/core/" >&2
+        echo "[IMP:8][node-update][dry-run] DRY-RUN: rsync ${node_configs_dir}/${node_name}/node.yaml → root@${ssh_host}:/opt/node-configs/${node_name}/" >&2
+    else
+        local core_src="${CORE_DIR:-$(cd "${_eru_dir}/../.." && pwd)}"
+        echo "[IMP:9][node-update][remote] Rsyncing core/ → ${ssh_host}:/opt/platform/core/" >&2
+        # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
+        if ! rsync -avz --delete \
+            -e "ssh ${SSH_OPTS_COMMON[*]}" \
+            --exclude=.git \
+            --exclude=__pycache__ \
+            --exclude=.pytest_cache \
+            --exclude='default-user.xml' \
+            --exclude='.env' \
+            "${core_src}/" \
+            "root@${ssh_host}:/opt/platform/core/"; then
+            echo "[IMP:10][node-update][remote] FATAL: rsync core/ failed for ${ssh_host}" >&2
+            return 1
+        fi
+        echo "[IMP:9][node-update][remote] core/ rsync complete" >&2
+
+        # Rsync node.yaml for freshness
+        local node_configs_dir
+        node_configs_dir="$(dirname "$(dirname "${node_yaml}")")"
+        if [[ -f "${node_yaml}" ]]; then
+            echo "[IMP:9][node-update][remote] Rsyncing node.yaml → ${ssh_host}:/opt/node-configs/${node_name}/" >&2
+            # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
+            if ! rsync -avz -e "ssh ${SSH_OPTS_COMMON[*]}" \
+                "${node_yaml}" \
+                "root@${ssh_host}:/opt/node-configs/${node_name}/node.yaml"; then
+                echo "[IMP:10][node-update][remote] FATAL: rsync node.yaml failed for ${ssh_host}" >&2
+                return 1
+            fi
+            echo "[IMP:9][node-update][remote] node.yaml rsync complete" >&2
+        fi
+    fi
+
     # ── Build remote command ───────────────────────────────────────
     local remote_cmd
     remote_cmd="$(build_update_ssh_cmd "${node_name}" "${detected_age_key}" "${passthrough_args[@]}")"

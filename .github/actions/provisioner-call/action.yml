@@ -4,8 +4,8 @@
 ## @purpose  Canonical provisioner invocation: thin wrapper over
 ##           core/internal/provision-environment.sh. Standardizes provisioning
 ##           calls across all CI workflows with a simple input interface.
-## @scope    Used by platform-test.yml, build-platform.yml, nightly-gate.yml,
-##           push-gate.yml — replaces 5× raw shell calls to provision-environment.sh.
+## @scope    Used by platform-test.yml, build-platform.yml, push-gate.yml —
+##           replaces 4× raw shell calls to provision-environment.sh.
 ## @invariants
 ##   - scope: comma-separated (networks,volumes,env,all), default: all
 ##   - Delegates to core/internal/provision-environment.sh (Single Source of Truth)

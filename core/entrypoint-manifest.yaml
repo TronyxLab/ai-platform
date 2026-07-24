@@ -142,9 +142,9 @@ lint:
   operation_ru: Pre-commit hook — проверка документ-хедеров
   description: Validates GREP_SUMMARY, MODULE_CONTRACT, STRUCTURE, regions in source
     files
-- script: check-commit-msg.sh
+- script: check_commit_msg.py
   mechanism: commit-msg-hook
-  delegates_to: core/entrypoints/check-commit-msg.sh
+  delegates_to: core/entrypoints/check_commit_msg.py
   signature: (commit-msg hook)
   operation_ru: Commit-msg hook — проверка коммит-сообщений
   description: Conventional Commits message validation (commit-msg hook)
