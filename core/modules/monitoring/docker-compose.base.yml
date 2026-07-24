@@ -22,10 +22,10 @@ x-logging: &default-logging
 
 services:
 
-  # ⚠️ TRAP[BUG] · 2026-07-18 · P2 · LITELLM_METRICS_TOKEN envsubst — init-контейнер
+  # ⚠️ TRAP[BUG] · 2026-07-18 · P2 · LITELLM_MASTER_KEY envsubst — init-контейнер
   # · Symptom: после `docker compose up` трекаемый файл config/prometheus.yml обнуляется (0 байт).
   # ·   Лог init-контейнера: «sed: no previous regexp», при этом печатает «generated» (ошибка проглочена).
-  # · Root (compose-interpolation): sed-паттерн 's/${LITELLM_METRICS_TOKEN}/...' НЕ экранирован
+  # · Root (compose-interpolation): sed-паттерн 's/${LITELLM_MASTER_KEY}/...' НЕ экранирован
   # ·   для compose-интерполяции — compose подставляет пустое значение → s//.../ → «no previous regexp».
   # ·   Нужен $$ для literal-паттерна. Также нет `set -eu` — sed падает, redirect уже обнулил файл,
   # ·   контейнер выходит с 0. Архитектурный дефект: init пишет в bind-mount ./config:rw ПОВЕРХ
@@ -36,6 +36,7 @@ services:
   # ·   3. Генерация в Docker named volume (prometheus-config-gen), а НЕ в ./config
   # ·   4. mount ./config:/config:ro (read-only, не перезаписывает трекаемый файл)
   # ·   5. Prometheus читает сгенерированный конфиг из named volume
+  # · Fix v3 (2026-07-24): LITELLM_METRICS_TOKEN → LITELLM_MASTER_KEY — единый токен для Prometheus→LiteLLM /metrics auth
   # · Prevention: gate-тест test_prometheus_config_no_unexpanded_vars проверяет отсутствие literal placeholder'ов
   # ── Prometheus Config Init (envsubst) ──────────────────────────────────────
   prometheus-config-init:
@@ -51,11 +52,11 @@ services:
     command:
       - |
         echo "[IMP:7][prometheus-config-init] Generating prometheus.yml from template..."
-        sed 's/$${LITELLM_METRICS_TOKEN}/'"${LITELLM_METRICS_TOKEN}"'/g' \
+        sed 's/$${LITELLM_MASTER_KEY}/'"${LITELLM_MASTER_KEY}"'/g' \
           /config/prometheus.yml.tmpl > /generated/prometheus.yml
         echo "[IMP:9][prometheus-config-init] prometheus.yml generated"
     environment:
-      LITELLM_METRICS_TOKEN: "${LITELLM_METRICS_TOKEN:-}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-}"
     volumes:
       - ./config:/config:ro
       - prometheus-config-gen:/generated:rw

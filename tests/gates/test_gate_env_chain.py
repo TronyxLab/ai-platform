@@ -9,7 +9,7 @@
 ##   - prometheus.yml.tmpl contains only expected ${VAR} patterns (known env vars)
 ##   - prometheus.yml (generated) must NOT contain literal ${...} if envsubst was applied
 ##   - Known template variables are documented in .env.example or secrets.env
-## @rationale  D5b: LITELLM_METRICS_TOKEN is resolved via envsubst (init container).
+## @rationale  D5b: LITELLM_MASTER_KEY is resolved via envsubst (init container).
 ##             The final config must have no unresolved placeholders.
 ## @changes — 2026-07-18 | Created per DevPlan 011 T7
 # endregion MODULE_CONTRACT
@@ -59,7 +59,7 @@ def test_prometheus_config_no_unexpanded_vars(caplog):
     # Known variables that should be resolved by envsubst at deploy time
     # These are documented in .env.example or secrets.env
     known_vars = {
-        "LITELLM_METRICS_TOKEN",  # From secrets.env, used for Prometheus bearer_token
+        "LITELLM_MASTER_KEY",  # Prometheus bearer_token for LiteLLM /metrics auth
     }
 
     unresolved = template_vars - known_vars

@@ -10,7 +10,7 @@
 ##   - cAdvisor scraped on observability-net (cadvisor:8080)
 ##   - LiteLLM scraped on observability-net (litellm:4000)
 ##   - Self-scrape: prometheus:9090
-##   - LiteLLM metrics require bearer_token auth (LITELLM_METRICS_TOKEN from secrets.env)
+##   - LiteLLM metrics require bearer_token auth (LITELLM_MASTER_KEY — same as litellm master key)
 ##   - Postgres Exporter scraped on observability-net (postgres-exporter:9187) via shared-db-net
 ## @rationale 30s interval balances metric granularity with storage/CPU cost on 4-core 8GB VPS.
 # endregion MODULE_CONTRACT
@@ -56,7 +56,7 @@ scrape_configs:
     scrape_interval: 30s
     metrics_path: /metrics
     scheme: http
-    bearer_token: "${LITELLM_METRICS_TOKEN}"
+    bearer_token: "${LITELLM_MASTER_KEY}"
     static_configs:
       - targets:
           - "litellm:4000"

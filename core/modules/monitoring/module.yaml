@@ -37,3 +37,4 @@ resources:
 
 env_requires:
   - GF_SECURITY_ADMIN_PASSWORD
+  - LITELLM_MASTER_KEY

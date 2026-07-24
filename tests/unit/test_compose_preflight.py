@@ -54,7 +54,7 @@ secrets:
     charset: "^[A-Za-z0-9._-]+$"
   - name: LITELLM_MASTER_KEY
     tier: generated
-    consumers: [litellm]
+    consumers: [litellm, monitoring]
     source: autogen
   - name: TELEGRAM_BOT_TOKEN
     tier: required
@@ -69,10 +69,6 @@ secrets:
     tier: optional
     consumers: [hermes-agent]
     source: autogen
-  - name: LITELLM_METRICS_TOKEN
-    tier: required
-    consumers: [monitoring]
-    source: sops
 """
     )
     return manifest
@@ -225,7 +221,7 @@ class TestLoadManifest:
         caplog.set_level(logging.INFO)
         secrets = load_manifest(str(sample_manifest))
         assert secrets is not None
-        assert len(secrets) == 6
+        assert len(secrets) == 5
         logger.info("[IMP:9][test_load_manifest][pass] loaded %d secrets", len(secrets))
 
     def test_missing_manifest(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -260,7 +256,6 @@ class TestCheckSecrets:
         monkeypatch.setenv("POSTGRES_PASSWORD", "abc")
         monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-key")
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
-        monkeypatch.setenv("LITELLM_METRICS_TOKEN", "metrics-token")
 
         secrets = load_manifest(str(sample_manifest))
         env_map: dict[str, str] = {}
@@ -317,9 +312,9 @@ class TestCheckSecrets:
         # Only checking litellm — POSTGRES_PASSWORD is consumed by postgres+litellm
         missing = check_secrets({"litellm"}, secrets, env_map)  # type: ignore[arg-type]
         # POSTGRES_PASSWORD is consumed by litellm too, so it should be in the missing list
-        # But LITELLM_METRICS_TOKEN is consumed by monitoring, not litellm
+        # But TELEGRAM_BOT_TOKEN is consumed by hermes-agent, not litellm
         assert "POSTGRES_PASSWORD" in missing
-        assert "LITELLM_METRICS_TOKEN" not in missing  # different module
+        assert "TELEGRAM_BOT_TOKEN" not in missing  # different module
 
 
 # =============================================================================
