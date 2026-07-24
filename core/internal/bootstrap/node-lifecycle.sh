@@ -136,7 +136,9 @@ _ensure_python_deps() {
     # Установка зависимостей из requirements.txt
     local req_file="${CORE_DIR}/requirements.txt"
     if [[ -f "$req_file" ]]; then
-        if pip3 install --no-cache-dir -r "$req_file"; then
+        # ⚠️ PEP 668: Ubuntu Noble blocks system-wide pip installs.
+        # --break-system-packages required since platform scripts run as system python3.
+        if pip3 install --no-cache-dir --break-system-packages -r "$req_file"; then
             echo "[IMP:9][node-lifecycle][python-deps] Python dependencies installed successfully" >&2
         else
             echo "[IMP:8][node-lifecycle][python-deps] WARN: pip install failed; continuing without LLM key provisioning" >&2
