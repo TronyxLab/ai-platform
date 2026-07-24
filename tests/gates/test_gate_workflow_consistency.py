@@ -33,7 +33,7 @@ import re
 import pytest
 import yaml
 
-from tests.helpers.gate_helpers import load_yaml, repo_root
+from tests.helpers.gate_helpers import get_on_section, load_yaml, repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +114,6 @@ _RAW_INTERNAL_ALLOWLIST: list[tuple[re.Pattern, re.Pattern, str]] = [
         "provisioner-call/action.yml: composite action, официальный фасад для provision через actions",
     ),
 ]
-
-
-def _get_on_section(workflow: dict) -> dict:
-    """Get the 'on' trigger section from a workflow, handling PyYAML 'on'→True conversion."""
-    return workflow.get("on") or workflow.get(True) or {}
 
 
 def _load_makefile_targets() -> set[str]:
@@ -269,7 +264,7 @@ def test_deploy_triggers_on_platform_test():
         data = load_yaml(wf_path)
 
         # Check workflow_run trigger
-        on_section = _get_on_section(data)
+        on_section = get_on_section(data)
         workflow_run = on_section.get("workflow_run", {})
         workflows = workflow_run.get("workflows", [])
         assert "platform-test" in workflows, f"{wf_name} must trigger on platform-test workflow_run, found: {workflows}"

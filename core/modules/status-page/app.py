@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: status-page app.py live-status http.server node.yaml status-metrics.json jinja2 html json health refresh platform-services enrich-containers uptime
+# GREP_SUMMARY: status-page app.py live-status http.server node.yaml status-metrics.json jinja2 html json health refresh platform-services enrich-containers uptime format-bytes memory swap os backup
 # STRUCTURE: ▶ StatusPageHandler(do_GET|do_POST) → ◇ path=/: Jinja2 render → ◇ path=/health: render_health
 #            → ◇ path=/status.json: render_json → ◇ path=/refresh: POST placeholder
 #            → ▷ _load_status_metrics(): read + schema check + staleness
@@ -37,6 +37,9 @@
 ##   2026-07-24 | D067 W1 | _enrich_containers(containers, projects) — domain mapping, uptime_human, exit_code_human
 ##   2026-07-24 | D067 W1 | _render_html — SSL Summary Banner, Platform Services Table, new host fields
 ##   2026-07-24 | D067 W3 | _curl_platform_service() + platform service checks in get_all_checks()
+##   2026-07-24 | 047 W1  | _format_bytes() replaces _bytes_to_gb()/_bytes_to_gb_str() — auto-unit B/KB/MB/GB/TB
+##   2026-07-24 | 047 W1  | _enrich_projects/_enrich_containers use _format_bytes() instead of _bytes_to_gb*
+##   2026-07-24 | 047 W2  | _render_html() — host context extended with memory_*, swap_*, os_* fields
 # endregion MODULE_CONTRACT
 
 import http.server
@@ -456,10 +459,10 @@ def _enrich_projects(projects: list[dict], certs: list[dict]) -> list[dict]:
     """Enrich project data with cert info for template rendering.
 
     # ▶ ┌projects[] + certs[]┐ → match cert by domain → ⊕ cert_issuer, cert_expiry, days_remaining, san fields
-    #    → format code_size_bytes → GB → ⎋ enriched list
+    #    → format code_size_bytes + image_size_bytes via _format_bytes → ⎋ enriched list
 
     Returns projects enriched with: cert_issuer, cert_expiry, days_remaining,
-    san_full (all SANs), san_truncated (first 5), code_size_gb, image_size_gb.
+    san_full (all SANs), san_truncated (first 5), code_size_gb, image_size_gb (auto-formatted B/KB/MB/GB/TB).
     """
     # Build cert index: domain → cert info
     cert_index: dict[str, dict] = {}
@@ -487,8 +490,8 @@ def _enrich_projects(projects: list[dict], certs: list[dict]) -> list[dict]:
                 "days_remaining": cert.get("days_remaining"),
                 "san_full": san_full,
                 "san_truncated": san_truncated,
-                "code_size_gb": _bytes_to_gb(p.get("code_size_bytes", 0)),
-                "image_size_gb": _bytes_to_gb(p.get("docker_image_size_bytes", 0)),
+                "code_size_gb": _format_bytes(p.get("code_size_bytes", 0)),
+                "image_size_gb": _format_bytes(p.get("docker_image_size_bytes", 0)),
             }
         )
 
@@ -552,11 +555,11 @@ def _enrich_containers(containers: list[dict], projects: list[dict] | None = Non
                 "exit_code": exit_code,
                 "exit_code_human": exit_code_human,
                 "cpu_percent": c.get("cpu_percent", 0.0),
-                "memory_used": _bytes_to_gb_str(mem_used),
-                "memory_limit": _bytes_to_gb_str(mem_limit),
+                "memory_used": _format_bytes(mem_used),
+                "memory_limit": _format_bytes(mem_limit),
                 "memory_used_pct": mem_used_pct,
                 "image": c.get("image", ""),
-                "image_size_gb": _bytes_to_gb(c.get("image_size_bytes", 0)),
+                "image_size_gb": _format_bytes(c.get("image_size_bytes", 0)),
             }
         )
 
@@ -609,27 +612,35 @@ def _compute_uptime_human(started_at: str | None) -> str:
 # endregion FUNC_compute_uptime_human
 
 
-# region FUNC__bytes_to_gb
-def _bytes_to_gb(bytes_val: int) -> str:
-    """Convert bytes to GB string with 2 decimal places."""
-    if not bytes_val:
-        return "0.00"
-    return f"{bytes_val / (1024**3):.2f}"
+# region FUNC_format_bytes
+## @purpose  Format bytes to human-readable string with auto unit selection (B/KB/MB/GB/TB)
+## @io       ⇥ bytes_val: int, precision: int = 1 → ⎋ str
+## @complexity  O(1) — <5 comparisons
+def _format_bytes(bytes_val: int, precision: int = 1) -> str:
+    """Format bytes to human-readable string with auto unit selection.
+
+    # ▶ ┌bytes_val┐ → ◇ < 1024 → "N B"
+    #                  → ◇ < 1024² → "N.M KB"
+    #                  → ◇ < 1024³ → "N.M MB"
+    #                  → ◇ < 1024⁴ → "N.M GB"
+    #                  → ⎋ "N.M TB"
+
+    Returns "0 B" for zero/None/negative values.
+    """
+    if not bytes_val or bytes_val <= 0:
+        return "0 B"
+    if bytes_val < 1024:
+        return f"{bytes_val} B"
+    if bytes_val < 1024**2:
+        return f"{bytes_val / 1024:.{precision}f} KB"
+    if bytes_val < 1024**3:
+        return f"{bytes_val / (1024**2):.{precision}f} MB"
+    if bytes_val < 1024**4:
+        return f"{bytes_val / (1024**3):.{precision}f} GB"
+    return f"{bytes_val / (1024**4):.{precision}f} TB"
 
 
-# endregion FUNC__bytes_to_gb
-
-
-# region FUNC__bytes_to_gb_str
-def _bytes_to_gb_str(bytes_val: int) -> str:
-    """Convert bytes to human-readable GB string."""
-    if not bytes_val:
-        return "0 GB"
-    gb = bytes_val / (1024**3)
-    return f"{gb:.1f} GB"
-
-
-# endregion FUNC__bytes_to_gb_str
+# endregion FUNC_format_bytes
 
 
 # region FUNC_get_all_checks
@@ -797,6 +808,16 @@ def _render_html(data: dict) -> str:
             "load_5m": host.get("load_5m"),
             "load_15m": host.get("load_15m"),
             "docker_images_size_gb": host.get("docker_images_size_gb", 0.0),
+            # NEW 047: Memory, swap, OS
+            "memory_total_gb": host.get("memory_total_gb", 0),
+            "memory_available_gb": host.get("memory_available_gb", 0),
+            "memory_used_percent": host.get("memory_used_percent", 0.0),
+            "swap_total_gb": host.get("swap_total_gb", 0),
+            "swap_free_gb": host.get("swap_free_gb", 0),
+            "swap_used_percent": host.get("swap_used_percent", 0.0),
+            "os_name": host.get("os_name"),
+            "kernel_version": host.get("kernel_version"),
+            "arch": host.get("arch"),
         },
         "backup": backup,
         "errors": metric_errors,

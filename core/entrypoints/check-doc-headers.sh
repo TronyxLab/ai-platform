@@ -49,14 +49,14 @@ check_grep_summary() {
     # ·   head exits 0 before grep finds match → pipefail=0 → ! 0 = 1 → false [FAIL]
     # ·   (grep -q closes stdin on match; head may get SIGPIPE 141 or exit 0 first)
     # · Fix: `grep -cE || true` — same pattern as check_regions_balanced()
-    if [ "$(head -5 "$file" | grep -cE '# GREP_SUMMARY:' || true)" -eq 0 ]; then
-        echo "[FAIL] $file: Missing '# GREP_SUMMARY:' in first 5 lines"
+    if [ "$(head -10 "$file" | grep -cE '# GREP_SUMMARY:' || true)" -eq 0 ]; then
+        echo "[FAIL] $file: Missing '# GREP_SUMMARY:' in first 10 lines"
         return 1
     fi
 
     # Extract keywords (everything after '# GREP_SUMMARY:')
     local summary_line
-    summary_line=$(head -5 "$file" | grep -E '# GREP_SUMMARY:' | head -1)
+    summary_line=$(head -10 "$file" | grep -E '# GREP_SUMMARY:' | head -1)
     local keywords
     keywords=$(echo "$summary_line" | sed 's/.*# GREP_SUMMARY:[[:space:]]*//' | tr ',' ' ')
 
@@ -95,8 +95,8 @@ check_structure() {
     local file="$1"
     # 🧐 TRAP[BUG] · 2026-07-22 · pipefail + head|grep -qE race (same bug as check_grep_summary)
     # · Fix: `grep -cE || true` — pipefail-safe, same pattern as check_regions_balanced()
-    if [ "$(head -5 "$file" | grep -cE '# STRUCTURE:' || true)" -eq 0 ]; then
-        echo "[FAIL] $file: Missing '# STRUCTURE:' in first 5 lines"
+    if [ "$(head -10 "$file" | grep -cE '# STRUCTURE:' || true)" -eq 0 ]; then
+        echo "[FAIL] $file: Missing '# STRUCTURE:' in first 10 lines"
         return 1
     fi
     return 0

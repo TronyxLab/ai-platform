@@ -624,13 +624,6 @@ gates:
 - id: test_executable_bit_outside_lib
   test_file: test_gate_executable_bit.py
   description: 'Auto-discovered gate: test_executable_bit_outside_lib'
-  repair_id: executable-bit
-  repair_command: make fix-gate
-  repair_description: Sets executable bit (+x) on all .sh files outside core/lib/
-  repair_safe: true
-  repair_idempotent: true
-  repair_class: L1
-  repairable: true
 - id: test_negative_detects_644_outside_lib
   test_file: test_gate_executable_bit.py
   description: 'Auto-discovered gate: test_negative_detects_644_outside_lib'
@@ -640,15 +633,9 @@ gates:
 - id: test_gitleaks_composite_action_used
   test_file: test_gate_gitleaks_version.py
   description: 'Auto-discovered gate: test_gitleaks_composite_action_used'
-  repairable: false
-  repair_class: L3
-  repair_reason: Security gate — requires manual audit
 - id: test_single_gitleaks_version
   test_file: test_gate_gitleaks_version.py
   description: 'Auto-discovered gate: test_single_gitleaks_version'
-  repairable: false
-  repair_class: L3
-  repair_reason: Security gate — requires manual audit
 - id: test_all_py_files_have_grep_summary
   test_file: test_gate_grep_summary.py
   description: 'Auto-discovered gate: test_all_py_files_have_grep_summary'

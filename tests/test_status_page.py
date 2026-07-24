@@ -1,4 +1,4 @@
-# GREP_SUMMARY: test-status-page app.py health html json anti-recursion headers timeout staleness schema-version jinja2
+# GREP_SUMMARY: test-status-page app.py health html json anti-recursion headers timeout staleness schema-version jinja2 format-bytes memory swap os backup quick-nav progress-bar
 # STRUCTURE: ▶ test_status_page_app_health_pass → ◇ mock node.yaml + status-metrics.json → ○ get_all_checks → assert PASS
 #            ▶ test_status_page_app_health_fail → ◇ mock unhealthy container → assert FAIL
 #            ▶ test_status_page_app_html_contains_vhosts → ◇ mock → assert HTML contains domain
@@ -10,6 +10,8 @@
 #            ▶ test_status_page_staleness_warning → ◇ old generated_at → assert staleness
 #            ▶ test_status_page_jinja2_autoescape → ◇ XSS payload → assert escaped
 #            ▶ test_htpasswd_generation tests (unchanged)
+#            ▶ 047: test_format_bytes_autoscale + _format_bytes unit → assert correct unit
+#            ▶ 047: test_html_structure_has_memory/os/progress/nav/backup/no-cicd → assert new HTML fields
 # @file test_status_page.py
 # @purpose  Module-level tests for status-page app.py and htpasswd generation in secrets.sh
 # @scope    Unit-level: tests call app.py functions directly with mocked node.yaml + status-metrics.json.
@@ -141,7 +143,25 @@ def mock_status_metrics_json_all_pass(tmp_path: Path) -> Path:
                 "docker_image_size_bytes": 150000000,
             },
         ],
-        "host": {"disk_total_gb": 100.0, "disk_free_gb": 30.0, "disk_used_percent": 70.0},
+        "host": {
+            "disk_total_gb": 100.0,
+            "disk_free_gb": 30.0,
+            "disk_used_percent": 70.0,
+            "memory_total_gb": 15.5,
+            "memory_available_gb": 7.9,
+            "memory_used_percent": 49.3,
+            "swap_total_gb": 4.0,
+            "swap_free_gb": 3.7,
+            "swap_used_percent": 7.0,
+            "os_name": "Linux",
+            "kernel_version": "6.1.0",
+            "arch": "x86_64",
+        },
+        "backup": {
+            "status": "ok",
+            "last_postgres_at": "2026-07-24T10:00:00Z",
+            "last_app_data_at": "2026-07-24T10:00:00Z",
+        },
         "errors": [],
     }
     path = tmp_path / "status-metrics.json"
@@ -363,6 +383,238 @@ class TestStatusPageHtml:
         assert "duration_ms" in data
         assert freshness is not None, "metrics_freshness should be present"
         assert isinstance(data["checks"], list)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: app.py — _format_bytes()
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestFormatBytes:
+    """Tests for _format_bytes() auto-unit selection."""
+
+    def test_format_bytes_autoscale(self, tmp_path):
+        """_format_bytes() selects correct unit automatically."""
+        # Create minimal files to allow app module import
+        node_dir = tmp_path / "test-node"
+        node_dir.mkdir(parents=True, exist_ok=True)
+        node_yaml = node_dir / "node.yaml"
+        node_yaml.write_text("projects: []\nmodules: []\n")
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text('{"schema_version":2,"containers":[]}')
+
+        app = _setup_app_env(str(node_yaml), str(metrics_file))
+
+        # ── Values ──
+        assert app._format_bytes(0) == "0 B"
+        assert app._format_bytes(-1) == "0 B"
+        assert app._format_bytes(500) == "500 B"
+        assert app._format_bytes(1024) == "1.0 KB"
+        assert app._format_bytes(1536000) == "1.5 MB"  # 1500 KB
+        assert app._format_bytes(1073741824) == "1.0 GB"
+        assert app._format_bytes(1099511627776) == "1.0 TB"
+
+    def test_format_bytes_precision(self, tmp_path):
+        """_format_bytes() respects precision parameter."""
+        node_dir = tmp_path / "test-node"
+        node_dir.mkdir(parents=True, exist_ok=True)
+        node_yaml = node_dir / "node.yaml"
+        node_yaml.write_text("projects: []\nmodules: []\n")
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text('{"schema_version":2,"containers":[]}')
+
+        app = _setup_app_env(str(node_yaml), str(metrics_file))
+
+        assert app._format_bytes(1536000, precision=0) == "1 MB"
+        assert app._format_bytes(1536000, precision=2) == "1.46 MB"
+        assert app._format_bytes(1073741824, precision=3) == "1.000 GB"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: app.py — HTML structure (new 047 fields)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestStatusPageHtml047:
+    """Tests for 047 enhancements: memory, swap, OS, backup, quick-nav, progress bars, no CI/CD badges."""
+
+    def test_html_structure_has_memory_fields(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog
+    ):
+        """HTML contains RAM Total, RAM Available, Swap Total."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        from unittest import mock as _mock
+
+        with _mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
+
+        html = app._render_html(data)
+
+        assert "RAM Total" in html, "HTML missing 'RAM Total'"
+        assert "RAM Available" in html, "HTML missing 'RAM Available'"
+        assert "Swap Total" in html, "HTML missing 'Swap Total'"
+
+        # ── LDD TRAJECTORY ──
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+    def test_html_structure_has_os_fields(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+        """HTML contains OS / Kernel row."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        from unittest import mock as _mock
+
+        with _mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
+
+        html = app._render_html(data)
+
+        assert "OS / Kernel" in html, "HTML missing 'OS / Kernel'"
+        assert "kernel_version" not in html, "raw kernel_version should not appear (displayed as formatted)"
+
+        # ── LDD TRAJECTORY ──
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+    def test_html_structure_no_cicd_badges(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+        """HTML does NOT contain CI/CD Pipeline Verified badges."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        from unittest import mock as _mock
+
+        with _mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
+
+        html = app._render_html(data)
+
+        assert "CI/CD Pipeline Verified" not in html, "CI/CD badges should be removed from footer"
+        assert "Pipeline Verified" not in html, "Pipeline verified badge should be removed"
+
+        # ── LDD TRAJECTORY ──
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+    def test_html_structure_has_quick_nav(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+        """HTML contains quick-nav navbar with section anchors."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        from unittest import mock as _mock
+
+        with _mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
+
+        html = app._render_html(data)
+
+        assert '<nav class="quick-nav">' in html, "HTML missing quick-nav navbar"
+        assert "#services" in html, "HTML missing #services anchor"
+        assert "#projects" in html, "HTML missing #projects anchor"
+        assert "#containers" in html, "HTML missing #containers anchor"
+        assert "#host" in html, "HTML missing #host anchor"
+
+        # ── LDD TRAJECTORY ──
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+    def test_html_structure_has_progress_bars(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog
+    ):
+        """HTML contains progress-bar elements for disk usage."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        from unittest import mock as _mock
+
+        with _mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
+
+        html = app._render_html(data)
+
+        assert '<div class="progress-bar">' in html, "HTML missing progress-bar element"
+        assert 'class="progress-fill' in html, "HTML missing progress-fill element"
+
+        # ── LDD TRAJECTORY ──
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+    def test_html_structure_has_app_data_backup(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog
+    ):
+        """HTML contains App-Data Backup when backup.last_app_data_at is set."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        from unittest import mock as _mock
+
+        with _mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
+
+        html = app._render_html(data)
+
+        assert "App-Data Backup" in html, "HTML missing 'App-Data Backup' when backup.last_app_data_at is set"
+        assert "last_app_data_at" not in html, "raw last_app_data_at should not appear in HTML (use formatted value)"
+
+        # ── LDD TRAJECTORY ──
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
 
 # ═══════════════════════════════════════════════════════════════════

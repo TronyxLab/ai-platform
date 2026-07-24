@@ -131,28 +131,28 @@ gate:
 __gate_original:
 	$(eval MODE := $(or $(MODE),full))
 	@if [ "$(MODE)" = "fast" ]; then \
-		echo "[IMP:7][make][gate] MODE=fast — 7 steps: pre-commit, validate, lint, gates, contract, static, predeploy..."; \
+		echo "[IMP:7][make][gate] MODE=fast — 6 steps: pre-commit, validate, gates, contract, static, predeploy..."; \
 		rm -f tests/report.xml tests/report*.xml && \
 		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
-			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run..."; \
+			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run..."; \
 			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; exit 1; }; \
 		else \
-			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
+			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
 		fi; \
-		echo "[IMP:7][make][gate] Step 2/7: validate..."; \
+		echo "[IMP:7][make][gate] Step 2/6: validate..."; \
 		bash $(_platform_root)/core/entrypoints/validate.sh || { echo "[IMP:9][make][gate] FAIL: validate"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 3/7: lint..."; \
-		bash $(_platform_root)/core/entrypoints/validate.sh --lint || { echo "[IMP:9][make][gate] FAIL: lint"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 4/7: anti-drift CI gates..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m gate -v || { echo "[IMP:9][make][gate] FAIL: gates"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 5/7: contract tests..."; \
+		echo "[IMP:7][make][gate] Step 3a/6: anti-drift CI gates (static, parallel)..."; \
+		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v || { echo "[IMP:9][make][gate] FAIL: gates (static)"; exit 1; }; \
+		echo "[IMP:7][make][gate] Step 3b/6: anti-drift CI gates (Docker, sequential)..."; \
+		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and requires_docker" -v || { echo "[IMP:9][make][gate] FAIL: gates (Docker)"; exit 1; }; \
+		echo "[IMP:7][make][gate] Step 4/6: contract tests..."; \
 		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 6/7: static tests (no Docker)..."; \
+		echo "[IMP:7][make][gate] Step 5/6: static tests (no Docker)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ \
 			-m "static_audit or (not e2e and not component and not smoke and not integration and not local_auth and not requires_docker)" \
 			-v --tb=short \
 			--junitxml=tests/report-static.xml || { echo "[IMP:9][make][gate] FAIL: static"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 7/7: predeploy tests (PROJECT=$(or $(PROJECT),all))..."; \
+		echo "[IMP:7][make][gate] Step 6/6: predeploy tests (PROJECT=$(or $(PROJECT),all))..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy and not requires_docker" -v --tb=short -rs \
 			$(if $(PROJECT),-k "$(PROJECT)",) \
 			--junitxml=tests/report-predeploy.xml || { echo "[IMP:9][make][gate] FAIL: predeploy"; exit 1; }; \

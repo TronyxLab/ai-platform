@@ -39,7 +39,6 @@ import shlex
 import subprocess
 import sys
 import time
-import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1191,7 +1190,7 @@ def _execute_update_step(
         _subprocess_run(["bash", deploy_script, "--skip-provision"], "deploy_modules", timeout=300)
 
     elif step_name == "healthcheck":
-        _run_healthchecks(core_dir, node_yaml)
+        _run_healthchecks(node_yaml)
 
     elif step_name == "converge":
         converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
@@ -1760,52 +1759,74 @@ def _ssl_provision(core_dir: str, node_yaml: str) -> None:
     _subprocess_run(["bash", ssl_script], "ssl_issue", non_fatal=True)
 
 
-def _run_healthchecks(core_dir: str, node_yaml: str) -> None:
+def _run_healthchecks(node_yaml: str) -> None:
     """Run healthchecks on all deployed modules.
 
-    ## @purpose — Run all module healthchecks via modules-healthcheck.sh (P0 fix:
-    ##            was calling bash function `invoke_module_interface` as executable,
-    ##            causing FileNotFoundError silently caught).
-    ## @io — ⇥ core_dir: str, node_yaml → ⎋ None (non-fatal)
-    ## @complexity — O(1) script call
+    ## @purpose — Iterate over modules in node.yaml and run liveness healthchecks.
+    ## @io — ⇥ node_yaml → ⎋ None (non-fatal)
+    ## @complexity — O(M * R) where M = modules, R = retries
     """
-    hc_fail = 0
-
     if not node_yaml or not os.path.isfile(node_yaml):
         logger.warning("[IMP:7][healthcheck] NODE_YAML not set or not found — skipping healthchecks")
         return
 
-    # region FUNC__run_healthchecks (fix P0)
-    ## @purpose  Run all module healthchecks via modules-healthcheck.sh.
-    ##           Fixes P0 bug: was calling bash function `invoke_module_interface`
-    ##           as executable (FileNotFoundError silently caught).
-    ## @io       stdout/stderr: healthcheck LDD logs, exit code from script
-    hc_script = os.path.join(core_dir, "internal", "healthcheck", "modules-healthcheck.sh")
-    if not os.path.isfile(hc_script):
-        logger.warning("[IMP:7][healthcheck] modules-healthcheck.sh not found at %s", hc_script)
-        hc_fail += 1
-    else:
-        try:
-            hc_result = subprocess.run(
-                ["bash", hc_script],
-                capture_output=True, text=True, timeout=120,
-            )
-            if hc_result.stdout:
-                logger.info("[IMP:7][healthcheck] %s", hc_result.stdout.strip())
-            if hc_result.stderr:
-                logger.info("[IMP:7][healthcheck] %s", hc_result.stderr.strip())
-            if hc_result.returncode != 0:
-                logger.warning("[IMP:7][healthcheck] modules-healthcheck.sh exit=%d", hc_result.returncode)
-                hc_fail += 1
+    hc_max_retries = 4
+    hc_retry_interval = 3
+    hc_fail = 0
+
+    try:
+        import yaml
+
+        with open(node_yaml) as f:
+            data = yaml.safe_load(f)
+        modules = data.get("modules", {})
+        if isinstance(modules, dict):
+            module_items = modules.items()
+        elif isinstance(modules, list):
+            module_items = [(m.get("name", ""), m) for m in modules]
+        else:
+            module_items = []
+
+        for mod_name, mod_value in module_items:
+            if not mod_name:
+                continue
+            if isinstance(mod_value, dict):
+                enabled = str(mod_value.get("enabled", True)).lower()
             else:
-                logger.info("[IMP:9][healthcheck] All modules healthy")
-        except subprocess.TimeoutExpired:
-            logger.error("[IMP:10][healthcheck] modules-healthcheck.sh timed out after 120s")
-            hc_fail += 1
-        except FileNotFoundError:
-            logger.error("[IMP:10][healthcheck] bash not found — platform integrity error")
-            hc_fail += 1
-    # endregion FUNC__run_healthchecks
+                enabled = str(mod_value).lower()
+            if enabled != "true":
+                continue
+
+            passed = False
+            for attempt in range(1, hc_max_retries + 1):
+                try:
+                    hc_result = subprocess.run(
+                        ["invoke_module_interface", mod_name, "healthcheck", "liveness"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if hc_result.returncode == 0:
+                        logger.info(
+                            "[IMP:9][healthcheck:%s] Healthcheck PASS (attempt %d/%d)",
+                            mod_name,
+                            attempt,
+                            hc_max_retries,
+                        )
+                        passed = True
+                        break
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass
+                if attempt < hc_max_retries:
+                    time.sleep(hc_retry_interval)
+
+            if not passed:
+                logger.warning("[IMP:7][healthcheck:%s] Healthcheck FAILED after %d attempts", mod_name, hc_max_retries)
+                hc_fail += 1
+    except ImportError:
+        logger.warning("[IMP:7][healthcheck] yaml library not available — skipping inline healthchecks")
+    except yaml.YAMLError as e:
+        logger.warning("[IMP:7][healthcheck] Failed to parse node.yaml: %s", e)
 
     if hc_fail > 0:
         logger.warning("[IMP:7][healthcheck] %d healthcheck(s) failed — node partially ready", hc_fail)
@@ -1938,15 +1959,13 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
             )
             if spec and spec.loader:
                 cert_mod = importlib.util.module_from_spec(spec)
-                sys.modules["cert_orchestrator"] = cert_mod
                 spec.loader.exec_module(cert_mod)
                 cert_result = cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
                 logger.info("[IMP:9][deploy_context] Cert orchestration complete: %s", cert_result.to_dict())
             else:
                 logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py — skipping cert orchestration")
         except Exception as e:
-            tb = traceback.format_exc()
-            logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s\n%s", e, tb)
+            logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s", e)
     else:
         logger.info("[IMP:7][deploy_context] No domains to orchestrate certs for")
 
@@ -1958,15 +1977,13 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
         spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
         if spec and spec.loader:
             deployer_mod = importlib.util.module_from_spec(spec)
-            sys.modules["context_deployer"] = deployer_mod
             spec.loader.exec_module(deployer_mod)
             results = deployer_mod.deploy_context_projects(node_yaml, context) or []
             logger.info("[IMP:9][deploy_context] Project deploy complete: %d projects", len(results))
         else:
             logger.warning("[IMP:7][deploy_context] Cannot load context_deployer.py — skipping project deploy")
     except Exception as e:
-        tb = traceback.format_exc()
-        logger.warning("[IMP:7][deploy_context] Project deploy failed (non-fatal): %s\n%s", e, tb)
+        logger.warning("[IMP:7][deploy_context] Project deploy failed (non-fatal): %s", e)
 
     # ── 18.5: Render vhosts ──
     vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")

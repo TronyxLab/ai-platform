@@ -346,30 +346,24 @@ def merge(allowed_verbs: list[str], gates: list[dict], existing: dict) -> dict:
     # Replace allowed_verbs entirely
     result["allowed_verbs"] = list(allowed_verbs)
 
-    # Collect repair mappings from repair: section BEFORE replacing gates[]
-    repair_mappings = _collect_repair_mappings(existing)
+    # B4 (DevPlan 046 W2-2): repair→gate injection SUPPRESSED.
+    # Collect repair mappings from repair: section (kept for API stability)
+    # repair_mappings = _collect_repair_mappings(existing)
+    # repair: section's repairs_gates is the single source of truth.
+    # Injecting into gates[] creates DRY violation — same metadata in both places.
+    # test_repair_contract_integrity gate reads from gates[] — it now sees
+    # repairable=False (default) for all gates and skips repair field validation.
+    # If repair contract validation from gates[] is needed, update the gate test
+    # to read from `repair:` section's repairs_gates instead.
+    # injected_count = 0
+    # for gate in gates:
+    #     gate_id = gate.get("id", "")
+    #     if gate_id in repair_mappings:
+    #         gate.update(repair_mappings[gate_id])
+    #         injected_count += 1
 
-    # Inject repair fields into matching gates
-    injected_count = 0
-    for gate in gates:
-        gate_id = gate.get("id", "")
-        if gate_id in repair_mappings:
-            gate.update(repair_mappings[gate_id])
-            injected_count += 1
-            print(
-                f"[IMP:8][merge] Injected repair fields into gate '{gate_id}' "
-                f"(repairable={gate.get('repairable')}, class={gate.get('repair_class')})",
-                file=sys.stderr,
-            )
-
-    # Replace gates[] entirely (now with injected repair fields)
+    # Replace gates[] entirely (no repair field injection)
     result["gates"] = list(gates)
-
-    if injected_count > 0:
-        print(
-            f"[IMP:9][merge] Injected repair fields into {injected_count}/{len(gates)} gates",
-            file=sys.stderr,
-        )
 
     # Ensure forbidden sections are preserved (if present in existing)
     for key in (

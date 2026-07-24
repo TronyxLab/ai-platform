@@ -23,15 +23,9 @@ $DOCUMENT_PLAN
 - USE_CASE Разработчик делает git push в main → CI запускает make gate MODE=full → SCENARIO_CI_FULL
 - USE_CASE Разработчик локально запускает make gate MODE=fast перед push → SCENARIO_LOCAL_GATE
 - USE_CASE CI-раннер запускает pytest-xdist на static gate-тестах → SCENARIO_XDIST_STATIC
-$END_DOCUMENT_PLAN
+$START_DEVPLAN
 
----
-
-# DevPlan: CI De-Duplication & Optimization
-
-**Дата:** 2026-07-24 — обновлён 2026-07-24 (аудит: 4 крит. исправления)
-
----
+$ARTIFACT_CONTRACT
 
 ## Корректировка исходного аудита
 
@@ -77,10 +71,9 @@ $END_DOCUMENT_PLAN
 1. **`make gate MODE=fast`** (локально / CI push):
    - Step 1: `pre-commit-run` → ruff check + format (O5) + non-ruff hooks
    - Step 2: `validate` → validate.sh (no changes)
-   - Step 3: ~~`lint`~~ → **УДАЛЁН** (W1-3: таргет + manifest-запись удалены)
-   - Step 4: `pytest tests/gates/ -m "gate and not requires_docker" -n auto` (O2: xdist только static)
-   - Step 5: `pytest tests/gates/ -m "gate and requires_docker"` (sequential, без xdist)
-   - Step 6-7: contract, static, predeploy (no changes)
+   - Step 3a: `pytest tests/gates/ -m "gate and not requires_docker" -n auto` (O2: xdist только static)
+   - Step 3b: `pytest tests/gates/ -m "gate and requires_docker"` (sequential, без xdist)
+   - Step 4-6: contract, static, predeploy (no changes)
    - **Exit:** все шаги pass → gate green
 
 2. **`make scripts-audit`** (W1.1):

@@ -18,11 +18,14 @@
 
 import functools
 import io
+import logging
 import pathlib
 import re
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 # region REPO_ROOT
 
@@ -83,3 +86,35 @@ def assert_ldd_imp9(caplog, min_count: int = 1) -> None:
 
 
 # endregion LDD_ASSERTIONS
+
+
+# region WORKFLOW_HELPERS
+
+
+def load_workflow(workflow_name: str) -> dict:
+    """Load a workflow YAML file from .github/workflows/.
+
+    ## @purpose — Parse a CI workflow YAML for structural validation tests.
+    ## @io — workflow_name → ⎋ dict (parsed YAML)
+    ## @complexity — O(1)
+    """
+    path = repo_root() / ".github" / "workflows" / workflow_name
+    logger.info("[IMP:8][load_workflow] Loading workflow: %s", path)
+    return load_yaml(path)
+
+
+def get_on_section(workflow: dict) -> dict:
+    """Get the 'on' trigger section from a workflow, handling PyYAML 'on'→True conversion.
+
+    ## @purpose — YAML parses 'on:' as boolean key True. This helper normalizes
+    ##            access by trying both 'on' (string) and True (boolean) keys.
+    ## @io — workflow → ⎋ dict (on section)
+    ## @complexity — O(1)
+    """
+    on_section = workflow.get("on") or workflow.get(True) or {}
+    if not isinstance(on_section, dict):
+        return {}
+    return on_section
+
+
+# endregion WORKFLOW_HELPERS

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: platform-export-metrics coordinator metrics-collector atomic-write cron status-metrics.json host-uptime backup docker-images-size
+# GREP_SUMMARY: platform-export-metrics coordinator metrics-collector atomic-write cron status-metrics.json host-uptime backup docker-images-size memory swap uname os
 # STRUCTURE: ▶ main() → load node.yaml → docker_collector → cert_collector → project_collector → host_collector
-#            → host_uptime → backup_collector → docker_images_size_gb → merge + errors[] + backup + platform_services
+#            → host_uptime → docker_images_size_gb → host_memory → host_uname → backup_collector
+#            → merge + errors[] + backup + platform_services
 #            → json_writer.atomic_write(/run/platform/status-metrics.json) → ⎋ exit 0
 # region MODULE_CONTRACT
 ## @purpose  Metrics export coordinator — collects data from all collectors, applies TTL cache,
@@ -180,6 +181,26 @@ def main() -> int:
     except Exception as exc:
         _logger.warning("[IMP:8][coordinator][main] Docker images size calc failed: %s", exc)
         errors.append(f"docker_images_size: {exc}")
+
+    # ── 6d. Host memory & swap (always fresh) ──
+    try:
+        from core.internal.healthcheck.metrics.host_collector import get_host_memory
+
+        host.update(get_host_memory())
+        _logger.info("[IMP:9][coordinator][main] Host memory & swap collected")
+    except Exception as exc:
+        _logger.warning("[IMP:8][coordinator][main] Host memory collection failed: %s", exc)
+        errors.append(f"host_memory: {exc}")
+
+    # ── 6e. Host OS/kernel (always fresh) ──
+    try:
+        from core.internal.healthcheck.metrics.host_collector import get_host_uname
+
+        host.update(get_host_uname())
+        _logger.info("[IMP:9][coordinator][main] Host OS/kernel collected")
+    except Exception as exc:
+        _logger.warning("[IMP:8][coordinator][main] Host OS collection failed: %s", exc)
+        errors.append(f"host_os: {exc}")
 
     # ── 7. Backup status ──
     backup: dict = {}

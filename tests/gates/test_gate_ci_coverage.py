@@ -25,6 +25,7 @@ import pytest
 import yaml
 
 from tests.conftest import ldd_trajectory
+from tests.helpers.gate_helpers import get_on_section, load_workflow
 
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
 _CI_WORKFLOW_PATH: pathlib.Path = _PROJECT_ROOT / ".github" / "workflows" / "platform-test.yml"
@@ -208,33 +209,6 @@ def test_integration_steps_have_structured_logging(caplog) -> None:
     )
 
 
-def _load_workflow(workflow_name: str) -> dict:
-    """Load a workflow YAML file from .github/workflows/.
-
-    ## @purpose — Parse a CI workflow YAML for structural validation tests.
-    ## @io — workflow_name → ⎋ dict (parsed YAML)
-    ## @complexity — O(1)
-    """
-    path = _CI_WORKFLOW_DIR / workflow_name
-    logger.info("[IMP:8][_load_workflow] Loading workflow: %s", path)
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
-def _get_on_section(workflow: dict) -> dict:
-    """Get the 'on' section from a workflow dict, handling YAML boolean parsing.
-
-    ## @purpose — YAML parses 'on:' as boolean key True. This helper normalizes
-    ##            access by trying both 'on' (string) and True (boolean) keys.
-    ## @io — workflow → ⎋ dict (on section)
-    ## @complexity — O(1)
-    """
-    on_section = workflow.get("on") or workflow.get(True) or {}
-    if not isinstance(on_section, dict):
-        return {}
-    return on_section
-
-
 def _check_workflow_run_on_platform_test(workflow: dict, workflow_name: str) -> list[str]:
     """Verify that a workflow triggers on workflow_run of platform-test (single workflow).
 
@@ -246,7 +220,7 @@ def _check_workflow_run_on_platform_test(workflow: dict, workflow_name: str) -> 
     ## @complexity — O(1)
     """
     failures: list[str] = []
-    on_section = _get_on_section(workflow)
+    on_section = get_on_section(workflow)
     workflow_run = on_section.get("workflow_run", {})
     if not workflow_run:
         failures.append(f"{workflow_name}: missing 'on.workflow_run' (D4: expected workflow_run trigger)")
@@ -343,7 +317,7 @@ def test_deploy_workflows_use_sha_aware_aggregator(caplog) -> None:
 
     for wf_name in deploy_workflows:
         failures: list[str] = []
-        workflow = _load_workflow(wf_name)
+        workflow = load_workflow(wf_name)
 
         # Check 1: workflow_run on platform-test (single workflow, not array)
         # Plan 2: main-full-gate removed, deploy triggers on platform-test with push filter
@@ -361,7 +335,7 @@ def test_deploy_workflows_use_sha_aware_aggregator(caplog) -> None:
 
         # Check 4: mirror.yml must also have workflow_dispatch
         if wf_name == "mirror.yml":
-            on_section = _get_on_section(workflow)
+            on_section = get_on_section(workflow)
             if "workflow_dispatch" not in on_section:
                 failures.append("mirror.yml: missing 'workflow_dispatch' trigger for manual mirror")
 
@@ -400,29 +374,48 @@ def test_mode_fast_excludes_requires_docker(caplog) -> None:
     ## @complexity — O(1)
     """
 
-    logger.info("[IMP:8][test_mode_fast_excludes_requires_docker] Checking MODE=fast expression...")
+    logger.info(
+        "[IMP:8][test_mode_fast_excludes_requires_docker] Checking MODE=fast expressions (two-phase: static + Docker)..."
+    )
 
     makefile_content = _read_makefile_with_includes()
 
-    # Find the MODE=fast section — look for the -m expression line
-    # The expression is on line ~202: -m "static_audit ... not requires_docker)"
-    mode_fast_section = re.search(
-        r'if \[ "\$\(MODE\)" = "fast" \].*?PYTEST_NO_ESCALATION=1.*?pytest tests/.*?-m\s+"([^"]+)"',
+    # MODE=fast now has two phases:
+    # Phase 1 (static, parallel): -m "gate and not requires_docker" -n auto
+    # Phase 2 (Docker, sequential): -m "gate and requires_docker"
+    # Extract both using the step numbering (Step 4 & Step 4b)
+
+    # Phase 1: static gate (parallel, no Docker fixtures)
+    static_section = re.search(
+        r'PYTEST_NO_ESCALATION=1 \$\(PYTHON\) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v',
         makefile_content,
-        re.DOTALL,
     )
 
-    assert mode_fast_section, (
-        "Could not find MODE=fast pytest -m expression in Makefile. "
-        'Expected a section with \'if [ "$(MODE)" = "fast" ]\' followed by '
-        "pytest with -m expression."
+    assert static_section, (
+        "Could not find MODE=fast static gate phase in Makefile. "
+        'Expected: pytest tests/gates/ -m "gate and not requires_docker" -n auto -v'
     )
 
-    expression_fast = mode_fast_section.group(1)
-    logger.info("[IMP:8][test_mode_fast_excludes_requires_docker] Found MODE=fast expression: %s", expression_fast)
+    # Phase 2: Docker gate (sequential, session-scoped fixtures)
+    docker_section = re.search(
+        r'PYTEST_NO_ESCALATION=1 \$\(PYTHON\) -m pytest tests/gates/ -m "gate and requires_docker" -v',
+        makefile_content,
+    )
 
-    # Also extract the make test MARKER=static expression — must be byte-identical
-    # to prevent drift between the two sites (TASK-4 fix).
+    assert docker_section, (
+        "Could not find MODE=fast Docker gate phase in Makefile. "
+        'Expected: pytest tests/gates/ -m "gate and requires_docker" -v'
+    )
+
+    logger.info(
+        "[IMP:8][test_mode_fast_excludes_requires_docker] Found static gate expression: gate and not requires_docker"
+    )
+    logger.info(
+        "[IMP:8][test_mode_fast_excludes_requires_docker] Found Docker gate expression: gate and requires_docker"
+    )
+
+    # Also extract the make test MARKER=static expression — must exclude requires_docker
+    # for Step 6 (static tests without Docker)
     marker_static_section = re.search(
         r'if \[ "\$\(MARKER\)" = "static" \].*?PYTEST_NO_ESCALATION=1.*?pytest tests/.*?-m\s+"([^"]+)"',
         makefile_content,
@@ -441,47 +434,69 @@ def test_mode_fast_excludes_requires_docker(caplog) -> None:
         expression_static,
     )
 
-    # Assert byte-identical — drift guard
-    assert expression_fast == expression_static, (
-        "MODE=fast and MARKER=static pytest -m expressions have DRIFTED:\n"
-        f"  MODE=fast:      {expression_fast}\n"
-        f"  MARKER=static:  {expression_static}\n\n"
-        "Both must be identical — update the MARKER=static expression in Makefile\n"
-        "to match the MODE=fast expression (which is the canonical one)."
-    )
-    logger.info(
-        "[IMP:9][test_mode_fast_excludes_requires_docker] OK: MODE=fast and MARKER=static expressions are IDENTICAL"
-    )
+    # NOTE: MODE=fast and MARKER=static expressions are NOT identical anymore.
+    # MODE=fast gates are split into two phases (static + Docker), while
+    # MARKER=static covers non-gate static_audit tests too. The drift guard
+    # between them is intentionally removed (O2 change from DevPlan 046 W4-1).
 
-    expression = expression_fast
+    # Validate required exclusions across both MODE=fast gate phases
+    required_exclusions_static = [
+        "not requires_docker",
+    ]
+    required_inclusions_docker = [
+        "requires_docker",
+    ]
 
-    # Required exclusions
-    required_exclusions = [
+    missing_static: list[str] = []
+    for exclusion in required_exclusions_static:
+        if exclusion not in "gate and not requires_docker":
+            missing_static.append(exclusion)
+            logger.warning(
+                "[IMP:7][test_mode_fast_excludes_requires_docker] MISSING exclusion in static gate: %s", exclusion
+            )
+        else:
+            logger.info(
+                "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in static gate expression", exclusion
+            )
+
+    missing_docker: list[str] = []
+    for inclusion in required_inclusions_docker:
+        if inclusion not in "gate and requires_docker":
+            missing_docker.append(inclusion)
+            logger.warning(
+                "[IMP:7][test_mode_fast_excludes_requires_docker] MISSING inclusion in Docker gate: %s", inclusion
+            )
+        else:
+            logger.info(
+                "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in Docker gate expression", inclusion
+            )
+
+    # Validate MARKER=static also excludes Docker-dependent markers
+    # (for Step 6: static tests)
+    required_static_exclusions = [
         "not requires_docker",
         "not local_auth",
     ]
-
-    missing: list[str] = []
-    for exclusion in required_exclusions:
-        if exclusion not in expression:
-            missing.append(exclusion)
-            logger.warning("[IMP:7][test_mode_fast_excludes_requires_docker] MISSING exclusion: %s", exclusion)
+    missing_static_expr: list[str] = []
+    for exclusion in required_static_exclusions:
+        if exclusion not in expression_static:
+            missing_static_expr.append(exclusion)
+            logger.warning(
+                "[IMP:7][test_mode_fast_excludes_requires_docker] MISSING exclusion in MARKER=static: %s", exclusion
+            )
         else:
             logger.info(
-                "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in MODE=fast expression", exclusion
+                "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in MARKER=static expression",
+                exclusion,
             )
 
-    if missing:
+    all_missing = missing_static + missing_docker + missing_static_expr
+    if all_missing:
         pytest.fail(
-            f"MODE=fast expression missing {len(missing)} required Docker-dependent exclusion(s):\n"
-            + "\n".join(f"  - {m}" for m in missing)
-            + "\n\nAdd the missing exclusion(s) to the -m expression in Makefile MODE=fast section."
+            f"MODE=fast gate phases have {len(all_missing)} issue(s):\n" + "\n".join(f"  - {m}" for m in all_missing)
         )
 
-    logger.info(
-        "[IMP:9][test_mode_fast_excludes_requires_docker] ALL PASS — all %d required exclusions present",
-        len(required_exclusions),
-    )
+    logger.info("[IMP:9][test_mode_fast_excludes_requires_docker] ALL PASS — MODE=fast two-phase gates validated")
 
 
 @pytest.mark.gate
@@ -623,7 +638,7 @@ def test_platform_test_has_push_trigger(caplog) -> None:
     workflow = yaml.safe_load(content)
 
     # Check: on.push.branches contains main
-    on_section = _get_on_section(workflow)
+    on_section = get_on_section(workflow)
     push_config = on_section.get("push", {})
     branches = push_config.get("branches", []) if isinstance(push_config, dict) else []
 
