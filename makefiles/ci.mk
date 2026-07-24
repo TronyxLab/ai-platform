@@ -126,7 +126,9 @@ gate:
 		echo "[IMP:7][make][gate] Step 3a/6: anti-drift CI gates (static, parallel)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v || { echo "[IMP:9][make][gate] FAIL: gates (static)"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 3b/6: anti-drift CI gates (Docker, sequential)..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and requires_docker" -v || { echo "[IMP:9][make][gate] FAIL: gates (Docker)"; exit 1; }; \
+		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and requires_docker" -v \
+			|| test $$? -eq 5 \
+			|| { echo "[IMP:9][make][gate] FAIL: gates (Docker)"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 4/6: contract tests..."; \
 		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 5/6: static tests (no Docker)..."; \

@@ -63,7 +63,7 @@ services:
     # · Root: context overlay image has no versioned tag in ghcr.io; tag@digest pinned
     # ·   below. Update digest when CI pushes new overlay image.
     # · Rev: when CI pipeline pushes versioned tags (e.g. v2026.7.2), switch to tag@digest.
-    image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:0c342adc54544e946724263194a682d5f2f78e98be96434056f69ac0fed34123}
+    image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:dd36a803acf0ae2871b697d4d478e528c9083f5945d1bf6bd560ea208b59aa5a}
     # 🧐 TRAP[DECISION] · 2026-07-11 · — · Platform pin: linux/amd64 for cross-platform compatibility
     # · Hermes-agent upstream image (nousresearch/hermes-agent:v2026.7.1) and context overlay
     # · (ghcr.io/tronyxlab/hermes-agent-context:latest) are built for x86_64 only.
@@ -126,13 +126,8 @@ services:
       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${HERMES_DASHBOARD_PASSWORD}"
 
       # LLM API Keys — virtual key for LiteLLM access (provisioned at runtime by key_provisioner.py)
-      # ⚠️ DEEPSEEK_API_KEY: LiteLLM virtual key for authentication (not the real DeepSeek key)
-      # ⚠️ DEEPSEEK_BASE_URL: must include /v1 path suffix — deepseek provider appends /chat/completions
-      # ⚠️ DEEPSEEK_API_KEY uses LITELLM_API_KEY explicitly (not the .env DEEPSEEK_API_KEY which is
-      #     the real DeepSeek key used by LiteLLM for backend calls)
       OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://litellm:4000}"
-      DEEPSEEK_BASE_URL: "${DEEPSEEK_BASE_URL:-http://litellm:4000/v1}"
-      DEEPSEEK_API_KEY: "${LITELLM_API_KEY:?LITELLM_API_KEY required for Hermes DeepSeek provider}"
+      LITELLM_API_KEY: "${LITELLM_API_KEY:-}"
 
       # API Server — OpenAI-compatible HTTP API on port 8642
       API_SERVER_ENABLED: "${API_SERVER_ENABLED:-true}"

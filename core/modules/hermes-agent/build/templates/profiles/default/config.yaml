@@ -18,6 +18,7 @@ profile:
 model:
   temperature: 0.7
   max_tokens: 4096
+  model: chat
 
 telemetry:
   log_level: INFO

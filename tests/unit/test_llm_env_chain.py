@@ -145,21 +145,23 @@ def test_key_to_env_chain(minimal_policy, mock_client, tmp_path, caplog):
             "key": "sk-integration-test-key-1234567890abcdef1234567890abcdef",
         }
 
-        with patch.object(kp, "LiteLLMAdminClient", return_value=mock_client):
-            with patch.object(kp, "discover_projects") as mock_disc:
-                mock_disc.return_value = [
-                    {"name": "test-backend", "llm": {"enabled": True}},
-                ]
-                with patch.object(kp, "get_platform_consumers") as mock_plat:
-                    mock_plat.return_value = []
+        with (
+            patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+            patch.object(kp, "discover_projects") as mock_disc,
+            patch.object(kp, "get_platform_consumers") as mock_plat,
+        ):
+            mock_disc.return_value = [
+                {"name": "test-backend", "llm": {"enabled": True}},
+            ]
+            mock_plat.return_value = []
 
-                    logger.info("[IMP:7][test_key_to_env_chain] Starting provision...")
-                    result = kp.provision_all(
-                        master_key="test-mk",
-                        base_url="http://test:4000",
-                        policy_path=minimal_policy,
-                        persist_path=persist_path,
-                    )
+            logger.info("[IMP:7][test_key_to_env_chain] Starting provision...")
+            result = kp.provision_all(
+                master_key="test-mk",
+                base_url="http://test:4000",
+                policy_path=minimal_policy,
+                persist_path=persist_path,
+            )
 
         logger.critical(
             "[IMP:9][test_key_to_env_chain] Provision result: %s",
@@ -216,24 +218,26 @@ def test_key_format(minimal_policy, mock_client, tmp_path, caplog):
             {"key": "sk-hermes-003-cdef1234567890abcdef123456789012"},
         ]
 
-        with patch.object(kp, "LiteLLMAdminClient", return_value=mock_client):
-            with patch.object(kp, "discover_projects") as mock_disc:
-                mock_disc.return_value = [
-                    {"name": "test-backend", "llm": {"enabled": True}},
-                    {"name": "test-priority", "llm": {"enabled": True, "profile": "premium"}},
-                ]
-                with patch.object(kp, "get_platform_consumers") as mock_plat:
-                    mock_plat.return_value = [
-                        {"name": "hermes-agent", "llm": {"enabled": True}},
-                    ]
+        with (
+            patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+            patch.object(kp, "discover_projects") as mock_disc,
+            patch.object(kp, "get_platform_consumers") as mock_plat,
+        ):
+            mock_disc.return_value = [
+                {"name": "test-backend", "llm": {"enabled": True}},
+                {"name": "test-priority", "llm": {"enabled": True, "profile": "premium"}},
+            ]
+            mock_plat.return_value = [
+                {"name": "hermes-agent", "llm": {"enabled": True}},
+            ]
 
-                    logger.info("[IMP:7][test_key_format] Starting provision...")
-                    result = kp.provision_all(
-                        master_key="test-mk",
-                        base_url="http://test:4000",
-                        policy_path=minimal_policy,
-                        persist_path=persist_path,
-                    )
+            logger.info("[IMP:7][test_key_format] Starting provision...")
+            result = kp.provision_all(
+                master_key="test-mk",
+                base_url="http://test:4000",
+                policy_path=minimal_policy,
+                persist_path=persist_path,
+            )
 
         logger.critical("[IMP:9][test_key_format] Provisioned %d keys", len(result))
 

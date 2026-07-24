@@ -159,27 +159,27 @@ def _run_provision(
     """
     import core.internal.llm.key_provisioner as kp
 
-    # Patch admin client creation
-    with patch.object(kp, "LiteLLMAdminClient", return_value=mock_client):
-        # Patch discovery functions to return controlled test data
-        with patch.object(kp, "discover_projects") as mock_disc:
-            mock_disc.return_value = [
-                {"name": "test-backend", "llm": {"enabled": True}},
-                {"name": "test-priority", "llm": {"enabled": True, "profile": "premium"}},
-                {"name": "test-legacy", "llm": {"enabled": False}},
-            ]
-            with patch.object(kp, "get_platform_consumers") as mock_plat:
-                mock_plat.return_value = [
-                    {"name": "hermes-agent", "llm": {"enabled": True}},
-                ]
+    # Patch admin client creation and discovery functions
+    with (
+        patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+        patch.object(kp, "discover_projects") as mock_disc,
+        patch.object(kp, "get_platform_consumers") as mock_plat,
+    ):
+        mock_disc.return_value = [
+            {"name": "test-backend", "llm": {"enabled": True}},
+            {"name": "test-priority", "llm": {"enabled": True, "profile": "premium"}},
+            {"name": "test-legacy", "llm": {"enabled": False}},
+        ]
+        mock_plat.return_value = [
+            {"name": "hermes-agent", "llm": {"enabled": True}},
+        ]
 
-                result = kp.provision_all(
-                    master_key="test-master-key",
-                    base_url="http://test:4000",
-                    policy_path=policy_path,
-                    persist_path=persist_path,
-                )
-    return result
+        return kp.provision_all(
+            master_key="test-master-key",
+            base_url="http://test:4000",
+            policy_path=policy_path,
+            persist_path=persist_path,
+        )
 
 
 # ── TESTS ────────────────────────────────────────────────────────────────────
@@ -443,30 +443,32 @@ def test_overrides_merge(policy_yaml, mock_client, tmp_path, caplog):
         # Override discover_projects to include an override consumer
         import core.internal.llm.key_provisioner as kp
 
-        with patch.object(kp, "LiteLLMAdminClient", return_value=mock_client):
-            with patch.object(kp, "discover_projects") as mock_disc:
-                mock_disc.return_value = [
-                    {
-                        "name": "test-override",
-                        "llm": {
-                            "enabled": True,
-                            "overrides": {
-                                "budget": {"daily": 25.0},
-                                "rpm_limit": 50,
-                            },
+        with (
+            patch.object(kp, "LiteLLMAdminClient", return_value=mock_client),
+            patch.object(kp, "discover_projects") as mock_disc,
+            patch.object(kp, "get_platform_consumers") as mock_plat,
+        ):
+            mock_disc.return_value = [
+                {
+                    "name": "test-override",
+                    "llm": {
+                        "enabled": True,
+                        "overrides": {
+                            "budget": {"daily": 25.0},
+                            "rpm_limit": 50,
                         },
                     },
-                ]
-                with patch.object(kp, "get_platform_consumers") as mock_plat:
-                    mock_plat.return_value = []
+                },
+            ]
+            mock_plat.return_value = []
 
-                    logger.info("[IMP:7][test_overrides_merge] Running provision with overrides...")
-                    result = kp.provision_all(
-                        master_key="test-mk",
-                        base_url="http://test:4000",
-                        policy_path=policy_yaml,
-                        persist_path=persist_path,
-                    )
+            logger.info("[IMP:7][test_overrides_merge] Running provision with overrides...")
+            result = kp.provision_all(
+                master_key="test-mk",
+                base_url="http://test:4000",
+                policy_path=policy_yaml,
+                persist_path=persist_path,
+            )
 
         logger.critical("[IMP:9][test_overrides_merge] Provisioned: %s", list(result.keys()))
 

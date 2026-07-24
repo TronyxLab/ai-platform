@@ -164,7 +164,7 @@ def compute_source_hash(module_dir: str) -> str:
         module_dir,
     )
 
-    for filepath in files_to_hash:
+    def _hash_file(filepath: str) -> None:
         try:
             rel = os.path.relpath(filepath, module_dir)
             with open(filepath, "rb") as f:
@@ -173,6 +173,9 @@ def compute_source_hash(module_dir: str) -> str:
             hasher.update(content)
         except OSError as exc:
             logger.warning("[IMP:5][compute_source_hash][skip] Skipping %s: %s", filepath, exc)
+
+    for filepath in files_to_hash:
+        _hash_file(filepath)
 
     result = hasher.hexdigest()
     logger.info(

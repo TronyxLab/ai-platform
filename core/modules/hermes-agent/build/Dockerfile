@@ -34,6 +34,7 @@ COPY config/ /tmp/config/
 COPY templates/ /tmp/templates/
 COPY skills/ /tmp/skills/
 COPY scripts/ /tmp/scripts/
+COPY plugins/ /tmp/plugins/
 
 # Validate scripts syntax
 RUN shellcheck /tmp/scripts/*.sh || true
@@ -87,6 +88,7 @@ COPY --from=validate /tmp/templates/ /opt/hermes/templates/
 COPY --from=validate /tmp/skills/ /opt/hermes/skills/
 COPY --from=validate /tmp/scripts/init.sh /etc/cont-init.d/02-platform-init
 COPY --from=validate /tmp/scripts/register-profiles.sh /etc/cont-init.d/03-register-profiles
+COPY --from=validate /tmp/plugins/ /opt/hermes/plugins/
 
 # [IMP:8] Apply config defaults: ensure directory structure
 RUN mkdir -p /opt/hermes/context && chmod 755 /opt/hermes/context
