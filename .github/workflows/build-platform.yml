@@ -107,7 +107,14 @@ jobs:
           # Ensure bind-mount source directory exists (volume: hermes-data → /var/lib/platform/hermes-agent/data)
           sudo mkdir -p /var/lib/platform/hermes-agent/data
 
+          # ⚠️ TRAP[DECISION] · 2026-07-24 · HI · HERMES_DASHBOARD_HOST=127.0.0.1 for CI smoke test
+          # · hermes-agent v2026.7+ refuses to bind dashboard to 0.0.0.0 without auth providers.
+          # · In production, HERMES_DASHBOARD_PASSWORD is set via secrets.env — auth is configured.
+          # · In CI smoke test, no secrets are available → bind to 127.0.0.1 (loopback) to bypass auth gate.
+          # · Port mapping is already 127.0.0.1:9119:9119 — no public exposure.
+          # · Rev: if smoke test needs to validate auth → add HERMES_DASHBOARD_PASSWORD from CI secrets.
           CONTEXT_IMAGE="hermes-agent-base:latest" \
+          HERMES_DASHBOARD_HOST="127.0.0.1" \
           docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
             --project-name build-platform-smoke \
             up -d
