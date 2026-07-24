@@ -324,6 +324,9 @@ step_12b_ensure_secrets() {
                 return 1
             }
             export "${var_name}=${new_val}"
+            # Persist to secrets.env so generated secrets survive container restarts
+            echo "${var_name}=${new_val}" >> "$secrets_file" 2>/dev/null || \
+                log_step "ensure-secrets" "WARN" "Cannot write $var_name to $secrets_file"
             generated+=("$var_name")
             missing+=("$var_name")
             log_step "ensure-secrets" "WARN" "Auto-generated $var_name (MUST be added to SOPS for production)"
