@@ -1938,6 +1938,7 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
             )
             if spec and spec.loader:
                 cert_mod = importlib.util.module_from_spec(spec)
+                sys.modules["cert_orchestrator"] = cert_mod
                 spec.loader.exec_module(cert_mod)
                 cert_result = cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
                 logger.info("[IMP:9][deploy_context] Cert orchestration complete: %s", cert_result.to_dict())
@@ -1957,6 +1958,7 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
         spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
         if spec and spec.loader:
             deployer_mod = importlib.util.module_from_spec(spec)
+            sys.modules["context_deployer"] = deployer_mod
             spec.loader.exec_module(deployer_mod)
             results = deployer_mod.deploy_context_projects(node_yaml, context) or []
             logger.info("[IMP:9][deploy_context] Project deploy complete: %d projects", len(results))
