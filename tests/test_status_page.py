@@ -260,7 +260,9 @@ class TestStatusPageHealth:
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        data = app.get_all_checks()
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
 
         # ── LDD TRAJECTORY ──
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -598,6 +600,201 @@ class TestStatusPageXHeaders:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: app.py — HTTP auth handling (401/403 → PASS)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestStatusPageAuthHandling:
+    """Tests for HTTP auth handling: 401/403 treated as PASS (service alive, auth required)."""
+
+    def test_vhost_401_is_pass(self, mock_node_yaml, tmp_path, caplog):
+        """Vhost returning 401 (auth required) → PASS — service is alive and responding."""
+        caplog.set_level(0)
+
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "containers": [],
+                }
+            )
+        )
+
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
+            data = app.get_all_checks()
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+        vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
+        assert len(vhost_checks) > 0, "Should have vhost checks"
+        for vc in vhost_checks:
+            assert vc["status"] == "PASS", (
+                f"Expected PASS for 401 (auth required = service alive), got {vc['status']} for {vc['target']}"
+            )
+            assert vc["http_code"] == 401
+
+    def test_vhost_403_is_pass(self, mock_node_yaml, tmp_path, caplog):
+        """Vhost returning 403 (forbidden) → PASS — service is alive and responding."""
+        caplog.set_level(0)
+
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "containers": [],
+                }
+            )
+        )
+
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
+            data = app.get_all_checks()
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+        vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
+        assert len(vhost_checks) > 0, "Should have vhost checks"
+        for vc in vhost_checks:
+            assert vc["status"] == "PASS", (
+                f"Expected PASS for 403 (access denied = service alive), got {vc['status']} for {vc['target']}"
+            )
+            assert vc["http_code"] == 403
+
+    def test_vhost_404_is_warn(self, mock_node_yaml, tmp_path, caplog):
+        """Vhost returning 404 → WARN — service is reachable but path not found."""
+        caplog.set_level(0)
+
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "containers": [],
+                }
+            )
+        )
+
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="404", stderr="")
+            data = app.get_all_checks()
+
+        vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
+        assert len(vhost_checks) > 0, "Should have vhost checks"
+        for vc in vhost_checks:
+            assert vc["status"] == "WARN", f"Expected WARN for 404 (not found), got {vc['status']} for {vc['target']}"
+            assert vc["http_code"] == 404
+
+    def test_vhost_500_is_warn(self, mock_node_yaml, tmp_path, caplog):
+        """Vhost returning 500 → WARN — service is reachable but internal error."""
+        caplog.set_level(0)
+
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "containers": [],
+                }
+            )
+        )
+
+        app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="500", stderr="")
+            data = app.get_all_checks()
+
+        vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
+        assert len(vhost_checks) > 0, "Should have vhost checks"
+        for vc in vhost_checks:
+            assert vc["status"] == "WARN", (
+                f"Expected WARN for 500 (internal error), got {vc['status']} for {vc['target']}"
+            )
+            assert vc["http_code"] == 500
+
+    def test_platform_service_401_is_pass(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+        """Platform service returning 401 → PASS — service is alive, auth required."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
+            data = app.get_all_checks()
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+        platform_checks = [c for c in data["checks"] if c["type"] == "platform_service"]
+        assert len(platform_checks) > 0, "Should have platform service checks"
+        for pc in platform_checks:
+            assert pc["status"] == "PASS", (
+                f"Expected PASS for 401 (auth required = service alive), got {pc['status']} for {pc['target']}"
+            )
+            assert pc["http_code"] == 401
+
+    def test_platform_service_403_is_pass(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+        """Platform service returning 403 → PASS — service is alive, access denied."""
+        caplog.set_level(0)
+
+        app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
+            data = app.get_all_checks()
+
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
+
+        platform_checks = [c for c in data["checks"] if c["type"] == "platform_service"]
+        assert len(platform_checks) > 0, "Should have platform service checks"
+        for pc in platform_checks:
+            assert pc["status"] == "PASS", (
+                f"Expected PASS for 403 (access denied = service alive), got {pc['status']} for {pc['target']}"
+            )
+            assert pc["http_code"] == 403
+
+
+# ═══════════════════════════════════════════════════════════════════
 # NEW TESTS: schema_version, staleness, autoescape (AC13-M, AC14-M)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -673,7 +870,9 @@ class TestStatusPageNewFeatures:
         )
 
         app = _setup_app_env(str(node_yaml), str(metrics_file))
-        data = app.get_all_checks()
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+            data = app.get_all_checks()
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:

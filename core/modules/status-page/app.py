@@ -242,10 +242,13 @@ def _curl_vhost(domain: str, timeout: int = PER_CHECK_TIMEOUT) -> dict:
         http_code = result.stdout.strip()
         if result.returncode == 0 and http_code.isdigit():
             code = int(http_code)
+            # HTTP 200 = explicit success
+            # HTTP 401/403 = auth required — service IS alive and responding,
+            #   just needs credentials. Treat as PASS (not WARN/FAIL).
             return {
                 "target": domain,
                 "type": "vhost",
-                "status": "PASS" if code == 200 else "WARN",
+                "status": "PASS" if (code == 200 or code in (401, 403)) else "WARN",
                 "http_code": code,
                 "duration_ms": elapsed_ms,
                 "error": None,
@@ -322,7 +325,9 @@ def _curl_platform_service(internal_url: str, health_path: str, timeout: int = P
         if result.returncode == 0 and http_code.isdigit():
             code = int(http_code)
             # Accept 200-399 as PASS (some services return 302, 301, etc.)
-            status = "PASS" if 200 <= code < 400 else "WARN"
+            # HTTP 401/403 = auth required — service IS alive and responding,
+            #   just needs credentials. Treat as PASS (not WARN/FAIL).
+            status = "PASS" if (200 <= code < 400 or code in (401, 403)) else "WARN"
             return {
                 "target": target_host,
                 "type": "platform_service",
