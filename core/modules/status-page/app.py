@@ -84,12 +84,27 @@ _jinja_env = Environment(
 # Each entry: name (display), url (external link), internal (Docker DNS), health_path (curl path).
 # LiteLLM has no external URL (no nginx vhost) — displayed as "internal only".
 PLATFORM_SERVICES = [
-    {"name": "Grafana",    "url": f"https://grafana.{PLATFORM_DOMAIN}",    "internal": "grafana:3000",     "health_path": "/api/health"},
-    {"name": "Prometheus", "url": f"https://prometheus.{PLATFORM_DOMAIN}", "internal": "prometheus:9090",  "health_path": "/-/healthy"},
-    {"name": "Loki",       "url": f"https://loki.{PLATFORM_DOMAIN}",       "internal": "loki:3100",        "health_path": "/ready"},
-    {"name": "Hermes",     "url": f"https://hermes.{PLATFORM_DOMAIN}",     "internal": "hermes-agent:9119","health_path": "/"},
-    {"name": "Langfuse",   "url": f"https://langfuse.{PLATFORM_DOMAIN}",   "internal": "langfuse:3000",    "health_path": "/api/public/health"},
-    {"name": "LiteLLM",    "url": None,                                     "internal": "litellm:4000",     "health_path": "/health/readiness"},
+    {
+        "name": "Grafana",
+        "url": f"https://grafana.{PLATFORM_DOMAIN}",
+        "internal": "grafana:3000",
+        "health_path": "/api/health",
+    },
+    {
+        "name": "Prometheus",
+        "url": f"https://prometheus.{PLATFORM_DOMAIN}",
+        "internal": "prometheus:9090",
+        "health_path": "/-/healthy",
+    },
+    {"name": "Loki", "url": f"https://loki.{PLATFORM_DOMAIN}", "internal": "loki:3100", "health_path": "/ready"},
+    {"name": "Hermes", "url": f"https://hermes.{PLATFORM_DOMAIN}", "internal": "hermes-agent:9119", "health_path": "/"},
+    {
+        "name": "Langfuse",
+        "url": f"https://langfuse.{PLATFORM_DOMAIN}",
+        "internal": "langfuse:3000",
+        "health_path": "/api/public/health",
+    },
+    {"name": "LiteLLM", "url": None, "internal": "litellm:4000", "health_path": "/health/readiness"},
 ]
 
 
@@ -581,8 +596,7 @@ def _compute_uptime_human(started_at: str | None) -> str:
 
         if hours > 0:
             return f"{hours}h {minutes}m"
-        else:
-            return f"{minutes}m"
+        return f"{minutes}m"
     except (ValueError, TypeError):
         return "\u2014"
 
@@ -897,6 +911,7 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
             "certs": metrics.get("certs", []),
             "projects": metrics.get("projects", []),
             "host": metrics.get("host", {}),
+            "backup": metrics.get("backup", {}),
             "errors": metrics.get("errors", []),
         }
         status_code = 200 if data["status"] == "PASS" else 503
