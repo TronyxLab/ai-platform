@@ -193,7 +193,16 @@ def sync_inventory(
             # Found the test_nodeids key — replace everything from here
             test_nodeids_found = True
             new_lines.append("test_nodeids:\n")
-            new_lines.extend(f"- {nid}\n" for nid in nodeids)
+            # Quote nodeids to prevent YAML 1.1 PyYAML from misinterpreting
+            # parametrized test IDs with [key: value] in brackets as flow mappings.
+            # Example: test_invalid_formats[feat: add feature] → parsed as dict by PyYAML.
+            # Strategy: single-quote by default; double-quote if nodeid contains '
+            for nid in nodeids:
+                if "'" in nid:
+                    escaped = nid.replace('"', '\\"')
+                    new_lines.append(f'- "{escaped}"\n')
+                else:
+                    new_lines.append(f"- '{nid}'\n")
             # Skip remaining old lines (the old list)
             break
 
@@ -215,7 +224,12 @@ def sync_inventory(
         if new_lines and not new_lines[-1].endswith("\n"):
             new_lines.append("\n")
         new_lines.append("test_nodeids:\n")
-        new_lines.extend(f"- {nid}\n" for nid in nodeids)
+        for nid in nodeids:
+            if "'" in nid:
+                escaped = nid.replace('"', '\\"')
+                new_lines.append(f'- "{escaped}"\n')
+            else:
+                new_lines.append(f"- '{nid}'\n")
 
     # If no @changes count line was found and replaced, insert one before # endregion
     if not changes_replaced:

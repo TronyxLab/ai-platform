@@ -584,10 +584,7 @@ def _compute_uptime_human(started_at: str | None) -> str:
 
     try:
         # Handle Z suffix
-        if started_at.endswith("Z"):
-            started_at_clean = started_at[:-1] + "+00:00"
-        else:
-            started_at_clean = started_at
+        started_at_clean = started_at[:-1] + "+00:00" if started_at.endswith("Z") else started_at
 
         started = datetime.fromisoformat(started_at_clean)
         now = datetime.now(timezone.utc)
@@ -769,9 +766,8 @@ def _render_html(data: dict) -> str:
     ssl_min_days = None
     for p in projects:
         dr = p.get("days_remaining")
-        if dr is not None:
-            if ssl_min_days is None or dr < ssl_min_days:
-                ssl_min_days = dr
+        if dr is not None and (ssl_min_days is None or dr < ssl_min_days):
+            ssl_min_days = dr
 
     # Backup status
     backup = metrics.get("backup", {})

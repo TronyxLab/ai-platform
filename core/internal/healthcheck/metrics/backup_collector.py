@@ -55,11 +55,15 @@ def get_backup_status() -> dict:
             if os.path.isfile(log_path):
                 mtime = os.path.getmtime(log_path)
                 ts = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                _logger.info("[IMP:9][backup_collector][get_backup_status] Log %s mtime: %s (age: %.1fh)", log_path, ts, (now - mtime) / 3600)
+                _logger.info(
+                    "[IMP:9][backup_collector][get_backup_status] Log %s mtime: %s (age: %.1fh)",
+                    log_path,
+                    ts,
+                    (now - mtime) / 3600,
+                )
                 return ts
-            else:
-                _logger.info("[IMP:8][backup_collector][get_backup_status] Log not found: %s", log_path)
-                return None
+            _logger.info("[IMP:8][backup_collector][get_backup_status] Log not found: %s", log_path)
+            return None
         except (OSError, PermissionError) as exc:
             _logger.warning("[IMP:8][backup_collector][get_backup_status] Error reading %s: %s", log_path, exc)
             return None

@@ -45,9 +45,7 @@ _PATTERN: re.Pattern = re.compile(
 # Auto-generated commits to skip
 _SKIP_PREFIXES: tuple[str, ...] = ("Merge ", "Revert ")
 
-_ALLOWED_TYPES: str = (
-    "feat, fix, docs, style, refactor, test, chore, perf, ci, build, revert"
-)
+_ALLOWED_TYPES: str = "feat, fix, docs, style, refactor, test, chore, perf, ci, build, revert"
 
 _FORMAT_GUIDE: str = (
     "\n"

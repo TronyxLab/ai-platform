@@ -166,7 +166,10 @@ def test_manifest_parses() -> None:
 @pytest.mark.contract
 @pytest.mark.parametrize(
     "script_rel",
-    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in extract_script_paths(MANIFEST_PATH)],
+    [
+        pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", ""))
+        for s in extract_script_paths(MANIFEST_PATH)
+    ],
 )
 def test_entrypoint_exists(script_rel: str) -> None:
     """Verify a manifest-registered script exists on disk.
@@ -191,7 +194,10 @@ def test_entrypoint_exists(script_rel: str) -> None:
 @pytest.mark.contract
 @pytest.mark.parametrize(
     "script_rel",
-    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in extract_script_paths(MANIFEST_PATH)],
+    [
+        pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", ""))
+        for s in extract_script_paths(MANIFEST_PATH)
+    ],
 )
 def test_entrypoint_has_shebang(script_rel: str) -> None:
     """Verify a manifest-registered script has a valid shebang (starts with #!).
@@ -221,7 +227,10 @@ def test_entrypoint_has_shebang(script_rel: str) -> None:
 @pytest.mark.contract
 @pytest.mark.parametrize(
     "script_rel",
-    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in extract_script_paths(MANIFEST_PATH)],
+    [
+        pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", ""))
+        for s in extract_script_paths(MANIFEST_PATH)
+    ],
 )
 def test_entrypoint_syntax(script_rel: str) -> None:
     """Verify a manifest-registered script has valid syntax.
@@ -262,13 +271,11 @@ def test_entrypoint_syntax(script_rel: str) -> None:
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     print(f"[IMP:7][test_entrypoint_syntax] {script_rel} → exit={result_code}")
     if stderr:
-        for line in (stderr if isinstance(stderr, str) else stderr.splitlines()):
+        for line in stderr if isinstance(stderr, str) else stderr.splitlines():
             print(f"[IMP:7][syntax] {line}")
     print("--- END LDD TRAJECTORY ---")
 
-    assert result_code == 0, (
-        f"[IMP:9][test_entrypoint_syntax] FAIL: syntax error in {script_rel}\nstderr: {stderr}"
-    )
+    assert result_code == 0, f"[IMP:9][test_entrypoint_syntax] FAIL: syntax error in {script_rel}\nstderr: {stderr}"
     logger.info("[IMP:9][test_entrypoint_syntax] PASS: %s is syntactically valid", script_rel)
 
 
@@ -285,7 +292,8 @@ _entrypoint_rel_paths: list[str] = [s for s in extract_script_paths(MANIFEST_PAT
 
 @pytest.mark.contract
 @pytest.mark.parametrize(
-    "script_rel", [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in _entrypoint_rel_paths]
+    "script_rel",
+    [pytest.param(s, id=s.replace("/", "_").replace(".sh", "").replace(".py", "")) for s in _entrypoint_rel_paths],
 )
 def test_entrypoint_help_smoke(script_rel: str) -> None:
     """Verify entrypoint script handles --help gracefully (exit 0 or usage in stderr).

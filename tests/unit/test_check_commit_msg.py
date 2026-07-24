@@ -23,7 +23,8 @@ import pytest
 
 # Import the module under test
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "core" / "entrypoints"))
-from check_commit_msg import validate_commit_message, main as check_main
+from check_commit_msg import main as check_main
+from check_commit_msg import validate_commit_message
 
 logger = logging.getLogger(__name__)
 

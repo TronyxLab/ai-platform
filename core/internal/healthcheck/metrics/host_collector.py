@@ -14,6 +14,7 @@
 ##   2026-07-24 | 047 W1 | Added get_host_memory(), get_host_uname()
 # endregion MODULE_CONTRACT
 
+import contextlib
 import logging
 import os
 import shutil
@@ -151,10 +152,8 @@ def get_host_memory() -> dict:
                 if len(parts) == 2:
                     key = parts[0].strip()
                     val_str = parts[1].strip().split()[0]  # "16234500 kB" → "16234500"
-                    try:
+                    with contextlib.suppress(ValueError):
                         meminfo[key] = int(val_str)
-                    except ValueError:
-                        pass
 
         mem_total = meminfo.get("MemTotal", 0)
         mem_available = meminfo.get("MemAvailable", 0)

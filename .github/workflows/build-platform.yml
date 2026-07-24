@@ -113,8 +113,8 @@ jobs:
           # · CI credentials come from platform-env.yaml env_defaults (not production secrets).
           # · OPENAI_API_KEY set to CI default to avoid compose warning.
           CONTEXT_IMAGE="hermes-agent-base:latest" \
-          HERMES_DASHBOARD_PASSWORD="test-db-pwd" \
-          OPENAI_API_KEY="sk-ci-test-master-key" \
+          HERMES_DASHBOARD_PASSWORD="${{ secrets.HERMES_DASHBOARD_PASSWORD }}" \
+          OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
           API_SERVER_ENABLED="false" \
           docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
             --project-name build-platform-smoke \
@@ -122,7 +122,7 @@ jobs:
 
           echo "=== Waiting for agent readiness (60s max) ==="
           for i in $(seq 1 30); do
-            if curl -sf -u "admin@ai-platform.local:test-db-pwd" http://localhost:9119/ > /dev/null 2>&1; then
+            if curl -sf -u "admin@ai-platform.local:${HERMES_DASHBOARD_PASSWORD}" http://localhost:9119/ > /dev/null 2>&1; then
               echo "=== Agent ready on :9119 after ${i}s ==="
               break
             fi
@@ -137,7 +137,7 @@ jobs:
             sleep 2
           done
 
-          echo "=== Dashboard endpoint: $(curl -s -o /dev/null -w '%{http_code}' -u 'admin@ai-platform.local:test-db-pwd' http://localhost:9119/) ==="
+          echo "=== Dashboard endpoint: $(curl -s -o /dev/null -w '%{http_code}' -u 'admin@ai-platform.local:${HERMES_DASHBOARD_PASSWORD}' http://localhost:9119/) ==="
           echo "=== Smoke test PASSED ==="
 
       - name: Cleanup

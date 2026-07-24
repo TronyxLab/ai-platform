@@ -116,7 +116,19 @@ def _is_complex_target(target: str) -> bool:
     Targets with $(eval ...) or $(MAKE) in their recipe may not work with -n
     on macOS's ancient GNU Make 3.81.
     """
-    return target in {"test", "gate"}
+    return target in {
+        "test",
+        "gate",
+        "__test_original",
+        "__gate_original",
+        "__validate_original",
+        "__lint_original",
+        "__check_file_lines_original",
+        "__pre-commit-run_original",
+        "__scripts_audit_original",
+        "__audit_original",
+        "__check_manifests_original",
+    }
 
 
 def _is_legacy_make() -> bool:

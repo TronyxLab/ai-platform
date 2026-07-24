@@ -270,12 +270,16 @@ execute_remote_update() {
     #   исправлений не доезжают до продакшена. Bootstrap доставляет core/ через scp_to_server,
     #   но node-update — нет. Результат: node-update исполняет старый код.
     # · Fix: rsync core/ + node.yaml перед remote exec (только код, без secrets/Makefile).
+    # ── Compute paths BEFORE dry-run check (both branches need them) ──
+    local core_src="${CORE_DIR:-$(cd "${_eru_dir}/../.." && pwd)}"
+    local node_configs_dir
+    node_configs_dir="$(dirname "$(dirname "${node_yaml}")")"
+
     # ── Rsync core/ to VPS (incremental delivery, not full scp_to_server) ──
     if ${DRY_RUN:-false}; then
-        echo "[IMP:8][node-update][dry-run] DRY-RUN: rsync core/ → root@${ssh_host}:/opt/platform/core/" >&2
-        echo "[IMP:8][node-update][dry-run] DRY-RUN: rsync ${node_configs_dir}/${node_name}/node.yaml → root@${ssh_host}:/opt/node-configs/${node_name}/" >&2
+        echo "[IMP:8][node-update][dry-run] DRY-RUN: rsync ${core_src}/ → root@${ssh_host}:/opt/platform/core/" >&2
+        echo "[IMP:8][node-update][dry-run] DRY-RUN: rsync ${node_yaml} → root@${ssh_host}:/opt/node-configs/${node_name}/node.yaml" >&2
     else
-        local core_src="${CORE_DIR:-$(cd "${_eru_dir}/../.." && pwd)}"
         echo "[IMP:9][node-update][remote] Rsyncing core/ → ${ssh_host}:/opt/platform/core/" >&2
         # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
         if ! rsync -avz --delete \
@@ -293,8 +297,6 @@ execute_remote_update() {
         echo "[IMP:9][node-update][remote] core/ rsync complete" >&2
 
         # Rsync node.yaml for freshness
-        local node_configs_dir
-        node_configs_dir="$(dirname "$(dirname "${node_yaml}")")"
         if [[ -f "${node_yaml}" ]]; then
             echo "[IMP:9][node-update][remote] Rsyncing node.yaml → ${ssh_host}:/opt/node-configs/${node_name}/" >&2
             # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e

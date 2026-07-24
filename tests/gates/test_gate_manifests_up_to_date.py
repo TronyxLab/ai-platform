@@ -54,7 +54,7 @@ def test_manifests_up_to_date(caplog):
         len(_GENERATED_FILES),
     )
 
-    cmd = ["git", "diff", "--exit-code", "--"] + _GENERATED_FILES
+    cmd = ["git", "diff", "--exit-code", "--", *_GENERATED_FILES]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
     if result.returncode != 0:

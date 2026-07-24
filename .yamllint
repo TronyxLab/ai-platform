@@ -18,6 +18,7 @@ ignore: |
   .venv/
   .kilo/
   .vscode/
+  node-configs/**/*.enc.yaml
 
 rules:
   # ── Length ──

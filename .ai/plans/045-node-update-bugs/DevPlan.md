@@ -378,7 +378,7 @@ make converge NODE=tronyx-vps && make node-update NODE=tronyx-vps
 
 После получения полного traceback:
 - Если ошибка в `dataclasses.asdict()` → добавить защиту: `try: d = asdict(self); except TypeError: d = {"domain": self.domain, ...}`
-- Если ошибка в `importlib.util.exec_module` → проверить версию Python на VPS, возможно, перейти на `runpy.run_path()` 
+- Если ошибка в `importlib.util.exec_module` → проверить версию Python на VPS, возможно, перейти на `runpy.run_path()`
 - Если ошибка в версии Python < 3.10 → обновить Python на VPS или добавить compatibility shim
 
 ⚠️ TRAP[DECISION] · 2026-07-24 · P1 · Deploy_context fix будет уточнён после traceback-диагностики

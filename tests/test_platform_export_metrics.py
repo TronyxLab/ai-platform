@@ -243,21 +243,23 @@ class TestDockerCollector:
                 # Call 2: docker inspect
                 mock.Mock(
                     returncode=0,
-                    stdout=json.dumps([
-                        {
-                            "Id": "sha256:abc123",
-                            "Name": "/nginx",
-                            "State": {
-                                "Running": True,
-                                "ExitCode": 0,
-                                "Status": "Up 2 hours",
-                                "StartedAt": "2026-07-24T00:00:00.000000000Z",
-                                "Health": {"Status": "healthy"},
-                            },
-                            "Config": {"Image": "nginx:latest"},
-                            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
-                        }
-                    ]),
+                    stdout=json.dumps(
+                        [
+                            {
+                                "Id": "sha256:abc123",
+                                "Name": "/nginx",
+                                "State": {
+                                    "Running": True,
+                                    "ExitCode": 0,
+                                    "Status": "Up 2 hours",
+                                    "StartedAt": "2026-07-24T00:00:00.000000000Z",
+                                    "Health": {"Status": "healthy"},
+                                },
+                                "Config": {"Image": "nginx:latest"},
+                                "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+                            }
+                        ]
+                    ),
                     stderr="",
                 ),
                 # Call 3: docker stats
@@ -295,20 +297,22 @@ class TestDockerCollector:
                 mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
                 mock.Mock(
                     returncode=0,
-                    stdout=json.dumps([
-                        {
-                            "Id": "sha256:abc123",
-                            "Name": "/redis",
-                            "State": {
-                                "Running": False,
-                                "ExitCode": 0,
-                                "Status": "Exited (0)",
-                                # No StartedAt field
-                            },
-                            "Config": {"Image": "redis:alpine"},
-                            "HostConfig": {"RestartPolicy": {"Name": "always"}},
-                        }
-                    ]),
+                    stdout=json.dumps(
+                        [
+                            {
+                                "Id": "sha256:abc123",
+                                "Name": "/redis",
+                                "State": {
+                                    "Running": False,
+                                    "ExitCode": 0,
+                                    "Status": "Exited (0)",
+                                    # No StartedAt field
+                                },
+                                "Config": {"Image": "redis:alpine"},
+                                "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                            }
+                        ]
+                    ),
                     stderr="",
                 ),
                 mock.Mock(returncode=0, stdout="", stderr=""),
