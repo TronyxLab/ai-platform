@@ -8,4 +8,4 @@
 # ·   Rejected: semver per module (module.yaml has version field but it is informational)
 # ·   Rev: if platform grows beyond 20 modules or needs independent module lifecycle,
 # ·   implement per-module semver with compatibility matrix
-1.0.0
+1.0.0-rc2
