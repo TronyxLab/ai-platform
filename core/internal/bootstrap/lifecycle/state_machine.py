@@ -12,8 +12,7 @@
 ##           Shell-фасад (node-lifecycle.sh) handles orchestration (flock, env exports, lib sourcing).
 ## @invariants
 ##   1. State file is at /var/lib/platform/.bootstrap/state.json (configurable via --state-file)
-##   2. All subprocess.run calls use capture_output=True, text=True, timeout=120 (default);
-##      exceptions: deploy_modules=300s, node_update=600s (see per-step overrides)
+##   2. All subprocess.run calls use capture_output=True, text=True, timeout=120
 ##   3. Non-fatal failures log WARN and continue — errors list collected for final audit
 ##   4. Content hash uses hashlib.sha256 of step script paths (always includes node-lifecycle.sh)
 ##   5. --dry-run prints plan and exits 0 BEFORE any mutations
@@ -1110,11 +1109,9 @@ def _execute_init_step(
 
     elif step_name == "node_update":
         # Delegate to update mode (self-invocation)
-        # timeout=600: deploy_modules (14 modules) needs ~300s internally;
-        # 600s gives headroom for provision + ssl + healthcheck + converge
         lifecycle_script = os.path.join(core_dir, "internal", "bootstrap", "node-lifecycle.sh")
         if os.path.exists(lifecycle_script):
-            _subprocess_run(["bash", lifecycle_script, "--mode", "update"], "node_update", non_fatal=True, timeout=600)
+            _subprocess_run(["bash", lifecycle_script, "--mode", "update"], "node_update", non_fatal=True)
         else:
             logger.warning("[IMP:7][init][node_update] node-lifecycle.sh not found — skipping post-init update")
 

@@ -40,11 +40,15 @@ model_list:
       mode: {{ model.mode }}
 {% endif %}
     model_info:
-      access_groups:
-        - {{ model.access_group }}
       supported_environments:
         - production
         - development
+{% if model.access_groups %}
+      access_groups:
+{% for group in model.access_groups %}
+        - {{ group }}
+{% endfor %}
+{% endif %}
 {% endfor %}
 
 litellm_settings:

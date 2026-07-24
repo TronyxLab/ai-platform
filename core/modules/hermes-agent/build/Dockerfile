@@ -52,25 +52,24 @@ FROM nousresearch/hermes-agent:v2026.7.7.2
 
 # ═══════════════════════════════════════════════════════════════════════
 # 🐛 TRAP[UPSTREAM] · 2026-07-08 · CRITICAL · #55985 BasicAuthProvider NotImplementedError
-# · Symptom: GET /health with Basic Auth → 302 → /auth/login?provider=basic → 500
-# · Root: dashboard_auth/routes.py:197 unconditionally calls p.start_login()
+# · Symptom: GET / → 302 → /auth/login?provider=basic → 500 (NotImplementedError)
+# · Root: dashboard_auth/routes.py:196 unconditionally calls p.start_login()
 # ·   but BasicAuthProvider.start_login() raises NotImplementedError
 # ·   (password-only provider has no OAuth redirect flow).
 # · Fix: catch NotImplementedError from start_login() and gracefully set
 # ·   ls=None. The password-only provider falls through to password login page.
-# ·   Note: hasattr+callable guard doesn't work because BasicAuthProvider
-# ·   inherits start_login() from base class (it exists, just raises error).
+# ·   APPLIED: 2026-07-24 — monkey-patch in RUN step below.
 # · Upstream: https://github.com/NousResearch/hermes-agent/issues/55985
-# · Rev: remove this patch when upstream releases fix (v2026.7.2+)
-# · ✅ CHECK: v2026.7.7.2 — verify if #55985 is fixed. If fixed, remove this patch.
+# · Upstream PR: https://github.com/NousResearch/hermes-agent/pull/60978
+# · Rev: when upstream releases fix (v2026.7.8+) → remove RUN patch step below,
+# ·   keep this TRAP comment for audit trail.
 # ═══════════════════════════════════════════════════════════════════════
 
-# ⚠️ Без патча: /auth/login?provider=basic → 500 (см. TRAP[UPSTREAM] выше).
-#   Upstream PR: https://github.com/NousResearch/hermes-agent/pull/60978
-#   Пока upstream не выпустит фикс, тесты обходят эту проблему (принимают 302).
-#   v2026.7.7.2 — проверьте, исправлен ли #55985 в этом релизе.
+# Apply monkey-patch for #55985: catch NotImplementedError from BasicAuthProvider.start_login()
+COPY --from=validate /tmp/scripts/patch-basic-auth-provider.py /tmp/patch-basic-auth-provider.py
+RUN python3 /tmp/patch-basic-auth-provider.py && rm /tmp/patch-basic-auth-provider.py
 
-LABEL org.tronyxlab.patches="known-issues:#55985-basic-auth-provider-check-v2026.7.7.2"
+LABEL org.tronyxlab.patches="known-issues:#55985-basic-auth-provider-patched-2026-07-24"
 LABEL org.tronyxlab.version="${PLATFORM_VERSION:-dev}"
 
 LABEL org.opencontainers.image.source="https://github.com/Tronyx161/ai-platform"

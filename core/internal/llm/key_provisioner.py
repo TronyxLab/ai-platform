@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # GREP_SUMMARY: key_provisioner, idempotent, virtual-keys, LiteLLM, provision_all, CLI, persist, profile-rules
 # STRUCTURE: ▶ parse_args() → ◇ provision_all(master_key, base_url, policy_path) →
 #            ◇ load policy.yaml → ◇ discover consumers (projects + platform) → ○ for each consumer:

@@ -108,7 +108,7 @@ def _build_model_list(policy: LLMPolicy) -> list[dict]:
                     "name": alias_name,
                     "litellm_model": f"{provider_name}/{deployments.primary.model}",
                     "api_key": api_key,
-                    "access_group": alias_name,
+                    "access_groups": [alias_name],
                     "mode": mode,
                 }
                 model_list.append(entry)
@@ -136,7 +136,7 @@ def _build_model_list(policy: LLMPolicy) -> list[dict]:
                     "name": f"{alias_name}-fallback",
                     "litellm_model": f"{provider_name}/{deployments.fallback.model}",
                     "api_key": api_key,
-                    "access_group": alias_name,
+                    "access_groups": [alias_name],
                     "mode": mode,
                 }
                 model_list.append(entry)

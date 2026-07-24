@@ -1,4 +1,4 @@
-# GREP_SUMMARY: deploy.mk, deploy, deploy-project, context-promote, hermes-build-platform, hermes-build-context, hermes-push-l1, verify
+# GREP_SUMMARY: deploy.mk, deploy, deploy-project, context-promote, hermes-build-platform, hermes-build-context, hermes-push-l1, hermes-push-l2, verify
 # STRUCTURE: ┌variables┐ → ◇ deploy → ◇ deploy-project → ◇ context-promote → ◇ hermes-build-* → ◇ verify
 # region MODULE_CONTRACT
 ## @purpose  Deployment targets — deploy, deploy-project, context-promote, hermes builds, verify
@@ -10,7 +10,7 @@
 ## @rationale Makefile include-split W4-E4: deployment targets isolated from bootstrap/CI
 # endregion MODULE_CONTRACT
 
-.PHONY: deploy deploy-project context-promote hermes-build-platform hermes-build-context hermes-push-l1 verify
+.PHONY: deploy deploy-project context-promote hermes-build-platform hermes-build-context hermes-push-l1 hermes-push-l2 verify
 
 ## deploy: Deploy project via git push → CI pipeline
 ##   Usage: make deploy PROJECT=<dir> [NODE=<node>] [LAUNCH=1]
@@ -104,6 +104,29 @@ hermes-push-l1:
 	@docker tag hermes-agent-base:latest "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || true
 	-docker push "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || echo "[IMP:7][make][hermes-push-l1] Push skipped — permission denied or registry unavailable (DR backup)"
 	@echo "[IMP:9][make][hermes-push-l1] L1 push complete (or skipped)"
+
+## hermes-push-l2: Push L2 hermes-agent-context to ghcr.io
+##   Usage: make hermes-push-l2 CONTEXT=<org> [GHCR_PUSH_TOKEN=<token>]
+##   Requires GHCR_PUSH_TOKEN env var (fine-grained PAT with write:packages scope for target org)
+##   Falls back to GHCR_PULL_TOKEN if GHCR_PUSH_TOKEN is unset (read-only — will fail on push)
+hermes-push-l2:
+	@if [[ -z "$(CONTEXT)" ]]; then \
+		echo "[IMP:10][make][hermes-push-l2] ERROR: CONTEXT not set — usage: make hermes-push-l2 CONTEXT=<org>" >&2; \
+		exit 1; \
+	fi
+	@echo "[IMP:7][make][hermes-push-l2] Pushing L2 hermes-agent-context to ghcr.io/$(CONTEXT)..."
+	@# ── Authenticate ──
+	@if [ -n "$(GHCR_PUSH_TOKEN)" ]; then \
+		echo "$(GHCR_PUSH_TOKEN)" | docker login ghcr.io -u x-access-token --password-stdin 2>/dev/null || \
+		echo "[IMP:7][make][hermes-push-l2] WARNING: GHCR_PUSH_TOKEN login failed" >&2; \
+	elif [ -n "$(GHCR_PULL_TOKEN)" ]; then \
+		echo "[IMP:7][make][hermes-push-l2] GHCR_PUSH_TOKEN not set — trying GHCR_PULL_TOKEN (read-only)" >&2; \
+		echo "$(GHCR_PULL_TOKEN)" | docker login ghcr.io -u x-access-token --password-stdin 2>/dev/null || true; \
+	fi
+	@# ── Tag and push ──
+	@docker tag hermes-agent-context:latest "ghcr.io/$(CONTEXT)/hermes-agent-context:latest" 2>/dev/null || true
+	-docker push "ghcr.io/$(CONTEXT)/hermes-agent-context:latest"
+	@echo "[IMP:9][make][hermes-push-l2] L2 push complete for CONTEXT=$(CONTEXT)"
 
 ## hermes-build-context: Build L1→L2 hermes images for CONTEXT
 ##   Usage: make hermes-build-context CONTEXT=<name>
