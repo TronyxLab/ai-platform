@@ -115,10 +115,23 @@ _install_metrics_cron() {
 ## @rationale P1: pydantic is declared in pyproject.toml but pip3 is not installed on VPS
 ## @changes  2026-07-24 · Created — DevPlan 051 P1
 _ensure_python_deps() {
-    # Guard: если pip3 уже установлен и pydantic доступен — пропускаем
-    if command -v pip3 &>/dev/null && python3 -m pip show pydantic &>/dev/null; then
-        echo "[IMP:8][node-lifecycle][python-deps] pip3 + pydantic already installed — skipping" >&2
-        return 0
+    # Guard: проверяем content-hash requirements.txt.
+    # Если хэш совпадает с сохранённым — pip зависимости не менялись, пропускаем.
+    local req_file="${CORE_DIR}/requirements.txt"
+    local hash_file="/var/lib/platform/.bootstrap/python-deps.hash"
+
+    if [[ -f "$req_file" ]]; then
+        local current_hash
+        current_hash="$(sha256sum "$req_file" | cut -d' ' -f1)"
+        if command -v pip3 &>/dev/null && [[ -f "$hash_file" ]]; then
+            local stored_hash
+            stored_hash="$(cat "$hash_file")"
+            if [[ "$current_hash" == "$stored_hash" ]]; then
+                echo "[IMP:8][node-lifecycle][python-deps] Requirements unchanged (${current_hash:0:12}...) — skipping" >&2
+                return 0
+            fi
+            echo "[IMP:8][node-lifecycle][python-deps] Requirements changed (stored=${stored_hash:0:12}... current=${current_hash:0:12}...) — reinstalling" >&2
+        fi
     fi
 
     echo "[IMP:9][node-lifecycle][python-deps] Installing pip3 + Python dependencies..." >&2
@@ -134,7 +147,6 @@ _ensure_python_deps() {
     fi
 
     # Установка зависимостей из requirements.txt
-    local req_file="${CORE_DIR}/requirements.txt"
     if [[ -f "$req_file" ]]; then
         # ⚠️ PEP 668: Ubuntu Noble blocks system-wide pip installs.
         # --break-system-packages required since platform scripts run as system python3.
@@ -144,6 +156,9 @@ _ensure_python_deps() {
         if pip3 install --no-cache-dir --break-system-packages --ignore-installed typing_extensions \
             && pip3 install --no-cache-dir --break-system-packages -r "$req_file"; then
             echo "[IMP:9][node-lifecycle][python-deps] Python dependencies installed successfully" >&2
+            # Save content-hash for idempotency guard
+            mkdir -p "$(dirname "$hash_file")"
+            sha256sum "$req_file" | cut -d' ' -f1 > "$hash_file"
         else
             echo "[IMP:8][node-lifecycle][python-deps] WARN: pip install failed; continuing without LLM key provisioning" >&2
             return 0  # fail-soft
