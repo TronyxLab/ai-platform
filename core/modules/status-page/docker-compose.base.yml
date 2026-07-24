@@ -1,6 +1,6 @@
-# @purpose  Base compose definition for status-page Docker module — container_name:status-page, profiles, proxy-net, volumes
-# GREP_SUMMARY: status-page docker-compose proxy-net profiles volumes healthcheck node.yaml status-metrics.json
-# STRUCTURE: ▶ status-page:python-3.12-alpine [profiles:status-page] → proxy-net → volumes (app, node.yaml ro, status-metrics.json ro) → healthcheck → ┐
+# @purpose  Base compose definition for status-page Docker module — container_name:status-page, profiles, proxy-net+observability-net, volumes
+# GREP_SUMMARY: status-page docker-compose proxy-net observability-net profiles volumes healthcheck node.yaml status-metrics.json
+# STRUCTURE: ▶ status-page:python-3.12-alpine [profiles:status-page] → proxy-net+observability-net → volumes (app, node.yaml ro, status-metrics.json ro) → healthcheck → ┐
 # region MODULE_CONTRACT
 ## @purpose  Base compose definition for status-page Docker module — live node status aggregation
 ## @scope    Merged with root docker-compose.yml via include:
@@ -9,6 +9,7 @@
 ##   - Port: NO external ports — accessed via nginx proxy_pass on proxy-net
 ##   - restart: unless-stopped — Docker policy
 ##   - proxy-net — required for nginx proxy_pass to status-page:8080
+##   - observability-net — required for Docker DNS resolution to prometheus/loki/langfuse/litellm (platform service healthchecks)
 ##   - node.yaml: mounted ro from host /opt/node-configs/<node>/node.yaml
 ##   - status-metrics.json: mounted ro from host /run/platform/status-metrics.json (tmpfs, cron-exported every 1m) — META Δ
 ##   - healthcheck: curl localhost:8080/health — verifies status-page is responding
@@ -16,6 +17,7 @@
 ##              No external ports — all access via nginx Basic Auth proxy.
 ##              Docker socket NOT mounted — reads pre-exported metrics JSON from cron.
 ## @changes
+##   2026-07-24 | Added observability-net — status-page was failing to resolve prometheus/loki/langfuse/litellm (DNS on proxy-net only) | P4 fix
 ##   2026-07-23 | docker-health.json → status-metrics.json | META Δ
 # endregion MODULE_CONTRACT
 
@@ -53,6 +55,7 @@ services:
       proxy-net:
         aliases:
           - status-page
+      observability-net:
 
     deploy:
       resources:
@@ -74,4 +77,6 @@ services:
 
 networks:
   proxy-net:
+    external: true
+  observability-net:
     external: true
