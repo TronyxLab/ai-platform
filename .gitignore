@@ -69,6 +69,9 @@ core/modules/clickhouse/config/users.d/default-user.xml
 # ─── Docker Compose per-project overrides ──────────────────────────────
 docker-compose.override.yml
 
+# ─── Backup files (temporary stubs) ──────────────────────────────────
+*.bak
+
 # ─── Test reports ────────────────────────────────────────────────────
 tests/report*.xml
 tests/.test_counter.json

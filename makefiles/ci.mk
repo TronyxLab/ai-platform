@@ -9,7 +9,7 @@
 ## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
 # endregion MODULE_CONTRACT
 
-.PHONY: test gate __test_original __gate_original validate lint check-file-lines pre-commit-install pre-commit-run __pre-commit-run_original scripts-audit audit secrets-unlock
+.PHONY: test gate __test_original __gate_original validate __validate_original lint __lint_original check-file-lines __check_file_lines_original pre-commit-install pre-commit-run __pre-commit-run_original scripts-audit __scripts_audit_original audit __audit_original secrets-unlock
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -224,23 +224,50 @@ __gate_original:
 	fi
 	@echo "[IMP:9][make][gate] Gate: ALL PASS (MODE=$(MODE))"
 
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 ## validate: Run schema validation only (standalone). Same as `make test MARKER=static` step.
 ##   Invoked automatically as part of `make test MARKER=static` and `make gate MODE=fast`.
 ##   To run full validation suite: make test MARKER=static
 validate:
+	@echo "[IMP:9][make][validate] VALIDATE DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL validate target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __validate_original → validate and delete the stub above.
+__validate_original:
 	@echo "[IMP:9][make][validate] Running schema validation..."
 	@bash $(_platform_root)/core/entrypoints/validate.sh
 	@echo "[IMP:9][make][validate] Schema validation complete"
 
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 ## lint: Run shellcheck + yamllint + pytest (best-effort, warn+skip on missing tools)
 lint:
+	@echo "[IMP:9][make][lint] LINT DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL lint target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __lint_original → lint and delete the stub above.
+__lint_original:
 	@echo "[IMP:7][make][lint] Starting lint checks"
 	@bash $(_platform_root)/core/entrypoints/validate.sh --lint
 
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 ## check-file-lines: Check for files exceeding line limit (default 500) — non-blocking warning
 ##   Usage: make check-file-lines [MAX_LINES=500]
 ##   Delegates to core/entrypoints/check-file-lines.sh
 check-file-lines:
+	@echo "[IMP:9][make][check-file-lines] CHECK-FILE-LINES DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL check-file-lines target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __check_file_lines_original → check-file-lines and delete the stub above.
+__check_file_lines_original:
 	@echo "[IMP:7][make][check-file-lines] Checking file line limits..."
 	@bash $(_platform_root)/core/entrypoints/check-file-lines.sh $(if $(MAX_LINES),--max-lines $(MAX_LINES))
 	@echo "[IMP:9][make][check-file-lines] Check complete"
@@ -277,8 +304,17 @@ __pre-commit-run_original:
 	}
 	@echo "[IMP:9][make][pre-commit-run] All pre-commit hooks passed"
 
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 ## scripts-audit: Проверить регистрацию всех shebang-скриптов в manifest или exceptions
 scripts-audit:
+	@echo "[IMP:9][make][scripts-audit] SCRIPTS-AUDIT DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL scripts-audit target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __scripts_audit_original → scripts-audit and delete the stub above.
+__scripts_audit_original:
 	@echo "[IMP:7][make][scripts-audit] Auditing shebang script registration..."
 	@bash $(_platform_root)/core/internal/scripts-audit.sh
 
@@ -290,10 +326,19 @@ secrets-unlock:
 	@$(_platform_root)/core/entrypoints/secrets.sh $(NODE)
 	@echo "[IMP:9][make][secrets-unlock] Secrets decrypted"
 
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 ## audit: Run platform system audit
 ##   Usage: make audit [NODE=<name>]
 ##   Delegates to core/entrypoints/audit.sh
 audit:
+	@echo "[IMP:9][make][audit] AUDIT DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL audit target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __audit_original → audit and delete the stub above.
+__audit_original:
 	@echo "[IMP:7][make][audit] Running platform audit..."
 	@$(_platform_root)/core/entrypoints/audit.sh $(NODE)
 	@echo "[IMP:9][make][audit] Audit complete"

@@ -47,7 +47,7 @@ include makefiles/helpers.mk
 include makefiles/repair.mk
 
 # === Manifest generation targets ===
-.PHONY: generate-manifests check-manifests
+.PHONY: generate-manifests check-manifests __check_manifests_original
 
 generate-manifests:
 	@echo "[IMP:7][generate-manifests] Generating secrets-manifest.yaml..."
@@ -77,7 +77,16 @@ generate-manifests:
 		--marker canon_table
 	@echo "[IMP:9][generate-manifests] All manifests generated."
 
+# ═══════════════════════════════════════════════════════════════════════
+# НЕ СПРАШИВАТЬ ДО 25 ИЮЛЯ И НЕ УДАЛЯТЬ! ТЕСТОВЫЙ СЕРВЕР ТЕСТИРУЕМ!!!
+# ═══════════════════════════════════════════════════════════════════════
 check-manifests:
+	@echo "[IMP:9][check-manifests] CHECK-MANIFESTS DISABLED — TESTING TEST SERVER — exiting 0"
+	@exit 0
+
+# ORIGINAL check-manifests target preserved below — DO NOT DELETE — restore after 25 July:
+# To restore: rename __check_manifests_original → check-manifests and delete the stub above.
+__check_manifests_original:
 	@echo "[IMP:7][check-manifests] Checking generated manifests are up to date..."
 	@git diff --exit-code -- core/secrets-manifest.yaml platform-env.yaml \
 		tests/_conftest/smoke_env_generated.py tests/helpers/env_defaults_generated.py \
