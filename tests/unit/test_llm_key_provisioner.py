@@ -23,7 +23,7 @@
 import json
 import logging
 import pathlib
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -230,7 +230,7 @@ def test_idempotent_same_key_on_second_call(policy_yaml, mock_client, tmp_path, 
             project_name = metadata_filters.get("project", "")
             if project_name == "test-backend":
                 return existing_key_info
-            elif project_name == "test-priority":
+            if project_name == "test-priority":
                 return {
                     "key": "sk-priority-key-xxx",
                     "models": ["reasoning", "chat"],
@@ -238,7 +238,7 @@ def test_idempotent_same_key_on_second_call(policy_yaml, mock_client, tmp_path, 
                     "rpm_limit": 60,
                     "metadata": {"project": "test-priority", "tier": "premium"},
                 }
-            elif project_name == "hermes-agent":
+            if project_name == "hermes-agent":
                 return {
                     "key": "sk-hermes-key-xxx",
                     "models": ["reasoning", "chat"],
@@ -298,9 +298,7 @@ def test_different_config_updates_key(policy_yaml, mock_client, tmp_path, caplog
         logger.info("[IMP:7][test_different_config] Running provision with mismatched config...")
         result = _run_provision(mock_client, policy_yaml, persist_path)
 
-        logger.critical(
-            "[IMP:9][test_different_config] Result keys: %s", list(result.keys())
-        )
+        logger.critical("[IMP:9][test_different_config] Result keys: %s", list(result.keys()))
 
         # update_key should have been called for test-backend (models differ)
         assert mock_client.update_key.called, "update_key should be called when config differs"
@@ -330,9 +328,7 @@ def test_skip_disabled_project(policy_yaml, mock_client, tmp_path, caplog):
         logger.info("[IMP:7][test_skip_disabled] Running provision...")
         result = _run_provision(mock_client, policy_yaml, persist_path)
 
-        logger.critical(
-            "[IMP:9][test_skip_disabled] Provisioned keys: %s", list(result.keys())
-        )
+        logger.critical("[IMP:9][test_skip_disabled] Provisioned keys: %s", list(result.keys()))
 
         assert "test-legacy" not in result, "test-legacy should be skipped (llm.enabled: false)"
         assert "test-backend" in result, "test-backend should be provisioned"
@@ -368,9 +364,7 @@ def test_profile_rule_match(policy_yaml, mock_client, tmp_path, caplog):
         logger.info("[IMP:7][test_profile_rule] Running provision...")
         result = _run_provision(mock_client, policy_yaml, persist_path)
 
-        logger.critical(
-            "[IMP:9][test_profile_rule] Provisioned keys: %s", list(result.keys())
-        )
+        logger.critical("[IMP:9][test_profile_rule] Provisioned keys: %s", list(result.keys()))
 
         # Verify hermes-agent got the right profile
         assert "hermes-agent" in result
@@ -474,9 +468,7 @@ def test_overrides_merge(policy_yaml, mock_client, tmp_path, caplog):
                         persist_path=persist_path,
                     )
 
-        logger.critical(
-            "[IMP:9][test_overrides_merge] Provisioned: %s", list(result.keys())
-        )
+        logger.critical("[IMP:9][test_overrides_merge] Provisioned: %s", list(result.keys()))
 
         override_call = generated_keys.get("test-override", {})
         logger.critical(
@@ -510,7 +502,7 @@ def test_no_duplicate_keys(policy_yaml, mock_client, tmp_path, caplog):
         def _get_key_by_metadata(**filters):
             project = filters.get("project", "")
             call_count[project] = call_count.get(project, 0) + 1
-            return None  # always return None so generate_key is always called
+            return  # always return None so generate_key is always called
 
         mock_client.get_key_by_metadata.side_effect = _get_key_by_metadata
 

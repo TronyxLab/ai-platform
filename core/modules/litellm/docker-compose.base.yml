@@ -97,6 +97,12 @@ services:
       # DEEPSEEK_API_KEY — единственный реальный AI-провайдер ключ
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:?required}"
 
+      # ⚠️ TRAP[DECISION] · 2026-07-24 · — · LITELLM_ENVIRONMENT required for supported_environments
+      # · Without this, models with supported_environments are filtered out at startup
+      # · DevPlan 049: all models have supported_environments: [production, local]
+      # · Rev: if multi-environment deployment needed, make this configurable per context
+      LITELLM_ENVIRONMENT: "development"
+
       # Disable auth for health/metrics (public endpoints)
       LITELLM_REQUIRE_AUTH_FOR_METRICS: "true"
       LITELLM_DISABLE_AUTH_FOR_HEALTH_CHECK: "true"

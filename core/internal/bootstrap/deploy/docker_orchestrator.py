@@ -534,7 +534,9 @@ def deploy_docker_module(
             has_local_build = True
 
             # ── W3.T3.3: Content-hash skip — rebuild only if source changed ──
-            build_needed = check_build_needed(module_dir)
+            # ⚠️ TRAP[BUG] · 2026-07-24 · P2 · check_build_needed receives modules root, not specific module
+            # · Fix: use os.path.join(module_dir, module_name) to target the specific module subdirectory
+            build_needed = check_build_needed(os.path.join(module_dir, module_name))
             if not build_needed:
                 logger.info(
                     "[IMP:9][deploy_docker_module][build_skip] Build skipped for %s — source unchanged (content-hash match)",
@@ -598,10 +600,12 @@ def deploy_docker_module(
                     return False
                 logger.info("[IMP:9][deploy_docker_module][build] Image rebuilt for %s", module_name)
                 # Save hash after successful build (W3.T3.3)
+                # ⚠️ TRAP[BUG] · 2026-07-24 · P2 · compute_source_hash/save_build_hash receives modules root
+                # · Fix: use os.path.join(module_dir, module_name) for specific module subdirectory
                 try:
-                    new_hash = compute_source_hash(module_dir)
+                    new_hash = compute_source_hash(os.path.join(module_dir, module_name))
                     if new_hash:
-                        save_build_hash(module_dir, new_hash)
+                        save_build_hash(os.path.join(module_dir, module_name), new_hash)
                 except Exception as exc:
                     logger.warning(
                         "[IMP:5][deploy_docker_module][hash_save] Failed to save build hash for %s: %s — non-fatal",

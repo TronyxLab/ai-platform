@@ -193,6 +193,8 @@ services:
       - ./config/dashboards/llm-usage-breakdown.json:/etc/grafana/provisioning/dashboards/llm-usage-breakdown.json:ro
       - ./config/dashboards/logs-incident-inspector.json:/etc/grafana/provisioning/dashboards/logs-incident-inspector.json:ro
       - ./config/dashboards/dora-ci-cd.json:/etc/grafana/provisioning/dashboards/dora-ci-cd.json:ro
+      - ./config/dashboards/clickhouse.json:/etc/grafana/provisioning/dashboards/clickhouse.json:ro
+      - ./config/dashboards/redis.json:/etc/grafana/provisioning/dashboards/redis.json:ro
       - ./config/alerting:/etc/grafana/provisioning/alerting:ro
 
     networks:

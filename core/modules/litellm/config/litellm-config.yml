@@ -25,7 +25,7 @@ model_list:
         - reasoning
       supported_environments:
         - production
-        - local
+        - development
   - model_name: reasoning-fallback
     litellm_params:
       model: deepseek/deepseek-v4-flash
@@ -36,7 +36,7 @@ model_list:
         - reasoning
       supported_environments:
         - production
-        - local
+        - development
   - model_name: chat
     litellm_params:
       model: deepseek/deepseek-v4-flash
@@ -47,7 +47,29 @@ model_list:
         - chat
       supported_environments:
         - production
-        - local
+        - development
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+      mode: chat
+    model_info:
+      access_groups:
+        - deepseek-chat
+      supported_environments:
+        - production
+        - development
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
+      mode: reasoning
+    model_info:
+      access_groups:
+        - deepseek-reasoner
+      supported_environments:
+        - production
+        - development
 
 litellm_settings:
   num_retries: 3

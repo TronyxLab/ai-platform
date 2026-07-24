@@ -42,7 +42,7 @@ _config_version: 32                      # Hermes config schema version (v2026.7
 # · Rev: if LiteLLM becomes unavailable, revert to direct provider config
 
 model:
-  provider: litellm                        # Provider changed to litellm (DevPlan 049). Model names are semantic aliases from policy.yaml.
+  provider: deepseek                        # Provider: deepseek (recognized upstream), routed through LiteLLM via DEEPSEEK_BASE_URL
   model: reasoning                         # Semantic alias — LiteLLM resolves to deepseek/deepseek-v4-pro
   api_timeout: 300                        # 5 min — достаточн для multi-turn reasoning DeepSeek
   stream_timeouts:
@@ -50,7 +50,7 @@ model:
     connect: 30
 
 fallback_model:
-  provider: litellm
+  provider: deepseek
   model: chat                            # Semantic alias — LiteLLM resolves fallback to chat model
   api_timeout: 600                       # 10 min — fallback may be slower for first request
 
@@ -135,10 +135,10 @@ display:
 
 auxiliary:
   vision:
-    provider: litellm
+    provider: deepseek
     model: chat                            # Semantic alias — through LiteLLM
   compression:
-    provider: litellm
+    provider: deepseek
     model: chat                            # Semantic alias — through LiteLLM
 
 # 🧐 TRAP[DECISION] · 2026-07-24 · — · Fallback disabled — LiteLLM manages routing

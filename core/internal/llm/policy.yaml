@@ -46,6 +46,27 @@ aliases:
         provider: deepseek
         model: deepseek-v4-flash
 
+  # Hermes-upstream model aliases — the upstream Hermes agent resolves
+  # deepseek provider models as 'deepseek-chat' and 'deepseek-reasoner'.
+  # These aliases ensure Hermes → LiteLLM → DeepSeek works end-to-end.
+  deepseek-chat:
+    label: "DeepSeek Chat (via LiteLLM)"
+    context_window: 128000
+    features: [chat]
+    deployments:
+      primary:
+        provider: deepseek
+        model: deepseek-v4-flash
+
+  deepseek-reasoner:
+    label: "DeepSeek Reasoner (via LiteLLM)"
+    context_window: 128000
+    features: [reasoning, structured_output]
+    deployments:
+      primary:
+        provider: deepseek
+        model: deepseek-v4-pro
+
   coding:
     label: "Code generation"
     context_window: 200000
@@ -81,7 +102,7 @@ profiles:
 
   unlimited:
     label: "Unlimited (all active models)"
-    models: [reasoning, chat]
+    models: [reasoning, chat, deepseek-chat, deepseek-reasoner]
     budget: {daily: 50.0}
     rpm_limit: 120
     metadata: {tier: unlimited}

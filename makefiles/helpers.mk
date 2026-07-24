@@ -44,9 +44,12 @@ dev-certs:
 
 ## provision-llm: Provision LiteLLM virtual keys for all LLM consumers
 ##   Delegates to core/entrypoints/provision-llm.sh → key_provisioner.py
+##   Exports LITELLM_MASTER_KEY from .env if not already set
+##   Uses 127.0.0.1:4000 when called from host (Docker DNS name litellm not resolvable outside Docker)
 provision-llm:
 	@echo "[IMP:7][make][provision-llm] Provisioning LiteLLM virtual keys..."
-	@$(_platform_root)/core/entrypoints/provision-llm.sh
+	@export LITELLM_MASTER_KEY="$${LITELLM_MASTER_KEY:-$$(grep -E '^LITELLM_MASTER_KEY=' "$(_platform_root)/.env" 2>/dev/null | tail -n1 | cut -d= -f2-)}"; \
+	$(_platform_root)/core/entrypoints/provision-llm.sh --base-url http://127.0.0.1:4000
 	@echo "[IMP:9][make][provision-llm] Virtual key provisioning complete"
 
 ## provision: Provision environment (networks, volumes, CI env) from platform-env.yaml

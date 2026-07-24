@@ -34,9 +34,7 @@ _PROJECT_ROOT = _TEST_DIR.parent.parent
 _REAL_POLICY_PATH = _PROJECT_ROOT / "core" / "internal" / "llm" / "policy.yaml"
 
 # Real Jinja2 template path
-_REAL_TEMPLATE_PATH = (
-    _PROJECT_ROOT / "core" / "modules" / "litellm" / "config" / "litellm-config.yml.j2"
-)
+_REAL_TEMPLATE_PATH = _PROJECT_ROOT / "core" / "modules" / "litellm" / "config" / "litellm-config.yml.j2"
 
 
 def _print_ldd_trajectory(caplog, test_name: str) -> bool:
@@ -85,8 +83,7 @@ def template_path() -> pathlib.Path:
     """
     if not _REAL_TEMPLATE_PATH.exists():
         raise FileNotFoundError(
-            f"Real Jinja2 template not found at: {_REAL_TEMPLATE_PATH} — "
-            f"cannot run integration test without template"
+            f"Real Jinja2 template not found at: {_REAL_TEMPLATE_PATH} — cannot run integration test without template"
         )
     return _REAL_TEMPLATE_PATH
 
@@ -109,37 +106,25 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
     with caplog.at_level(logging.DEBUG):
         from core.internal.llm.config_renderer import render_litellm_config
 
-        logger.info(
-            "[IMP:7][test_full_cycle] Loading REAL policy from: %s", real_policy_path
-        )
-        logger.info(
-            "[IMP:7][test_full_cycle] Using template: %s", template_path
-        )
+        logger.info("[IMP:7][test_full_cycle] Loading REAL policy from: %s", real_policy_path)
+        logger.info("[IMP:7][test_full_cycle] Using template: %s", template_path)
 
         # Render the real policy to temp (no file written)
         rendered = render_litellm_config(real_policy_path, template_path)
 
         # Parse output YAML
         parsed = yaml.safe_load(rendered)
-        logger.critical(
-            "[IMP:9][test_full_cycle] ASSERT: rendered YAML is parseable"
-        )
+        logger.critical("[IMP:9][test_full_cycle] ASSERT: rendered YAML is parseable")
         assert isinstance(parsed, dict), "Rendered output must be a valid YAML mapping"
 
         # ── Verify model_list ─────────────────────────────────────────────────
         model_list = parsed.get("model_list", [])
-        logger.critical(
-            "[IMP:9][test_full_cycle] model_list has %d entries", len(model_list)
-        )
-        assert len(model_list) >= 2, (
-            f"Expected at least 2 model_list entries, got {len(model_list)}"
-        )
+        logger.critical("[IMP:9][test_full_cycle] model_list has %d entries", len(model_list))
+        assert len(model_list) >= 2, f"Expected at least 2 model_list entries, got {len(model_list)}"
 
         # Extract all model names
         model_names = [entry["model_name"] for entry in model_list]
-        logger.critical(
-            "[IMP:9][test_full_cycle] model_list names: %s", model_names
-        )
+        logger.critical("[IMP:9][test_full_cycle] model_list names: %s", model_names)
 
         # ── Verify aliases present ───────────────────────────────────────────
         assert "reasoning" in model_names, "reasoning alias must be in model_list"
@@ -147,9 +132,7 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
 
         # ── Verify reserved aliases NOT present ──────────────────────────────
         for reserved in ("coding", "vision", "embedding"):
-            assert reserved not in model_names, (
-                f"Reserved alias '{reserved}' must NOT be in model_list"
-            )
+            assert reserved not in model_names, f"Reserved alias '{reserved}' must NOT be in model_list"
 
         # ── Verify access_groups ─────────────────────────────────────────────
         for entry in model_list:
@@ -157,11 +140,10 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
             access_groups = model_info.get("access_groups", [])
             logger.critical(
                 "[IMP:9][test_full_cycle] model_name='%s' access_groups=%s",
-                entry["model_name"], access_groups,
+                entry["model_name"],
+                access_groups,
             )
-            assert len(access_groups) >= 1, (
-                f"model_name '{entry['model_name']}' must have at least 1 access_group"
-            )
+            assert len(access_groups) >= 1, f"model_name '{entry['model_name']}' must have at least 1 access_group"
 
         # ── Verify api_key references DEEPSEEK_API_KEY ───────────────────────
         for entry in model_list:
@@ -169,12 +151,12 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
             api_key = litellm_params.get("api_key", "")
             logger.critical(
                 "[IMP:9][test_full_cycle] model_name='%s' api_key='%s'",
-                entry["model_name"], api_key,
+                entry["model_name"],
+                api_key,
             )
             # All providers in the real policy use DEEPSEEK_API_KEY
             assert "DEEPSEEK_API_KEY" in api_key, (
-                f"api_key for '{entry['model_name']}' must reference DEEPSEEK_API_KEY, "
-                f"got '{api_key}'"
+                f"api_key for '{entry['model_name']}' must reference DEEPSEEK_API_KEY, got '{api_key}'"
             )
 
         # ── Verify litellm_settings ──────────────────────────────────────────
@@ -196,7 +178,8 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
         failure_cb = litellm_settings.get("failure_callback", [])
         logger.critical(
             "[IMP:9][test_full_cycle] success_callback=%s, failure_callback=%s",
-            success_cb, failure_cb,
+            success_cb,
+            failure_cb,
         )
         assert "prometheus" in success_cb, "success_callback must include prometheus"
         assert "proxy" not in success_cb, "success_callback should include langfuse or prometheus"
@@ -213,31 +196,26 @@ def test_full_cycle_from_real_policy(real_policy_path, template_path, tmp_path, 
         # ── Verify fallbacks (if present) ────────────────────────────────────
         if "fallbacks" in parsed:
             fallbacks = parsed["fallbacks"]
-            logger.critical(
-                "[IMP:9][test_full_cycle] fallbacks: %s", fallbacks
-            )
+            logger.critical("[IMP:9][test_full_cycle] fallbacks: %s", fallbacks)
             # At least reasoning → reasoning-fallback should exist
             found_fallback = any(
-                isinstance(fb, dict) and fb.get("reasoning", "").endswith("-fallback")
-                for fb in fallbacks
+                isinstance(fb, dict) and fb.get("reasoning", "").endswith("-fallback") for fb in fallbacks
             )
             # YAML format: - reasoning: reasoning-fallback
-            found_fallback = any(
-                isinstance(fb, dict) and "-fallback" in str(fb.get(next(iter(fb.keys()), ""), ""))
-                for fb in fallbacks
-            ) if fallbacks else False
-            if found_fallback:
-                logger.critical(
-                    "[IMP:9][test_full_cycle] Fallback chain detected in output"
+            found_fallback = (
+                any(
+                    isinstance(fb, dict) and "-fallback" in str(fb.get(next(iter(fb.keys()), ""), ""))
+                    for fb in fallbacks
                 )
-        else:
-            logger.critical(
-                "[IMP:8][test_full_cycle] No fallbacks section — policy may not have fallback deployments"
+                if fallbacks
+                else False
             )
+            if found_fallback:
+                logger.critical("[IMP:9][test_full_cycle] Fallback chain detected in output")
+        else:
+            logger.critical("[IMP:8][test_full_cycle] No fallbacks section — policy may not have fallback deployments")
 
-        logger.critical(
-            "[IMP:9][test_full_cycle] ASSERT: All integration assertions passed"
-        )
+        logger.critical("[IMP:9][test_full_cycle] ASSERT: All integration assertions passed")
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_full_cycle_from_real_policy")
         assert found_imp9, "LDD Error: No IMP:9 log for test_full_cycle_from_real_policy"

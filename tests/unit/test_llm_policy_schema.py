@@ -17,9 +17,7 @@
 
 import json
 import logging
-import os
 import pathlib
-from unittest.mock import patch
 
 import jsonschema
 import pytest
@@ -132,8 +130,7 @@ def test_policy_from_yaml(test_name, path_fixture, expect_success, caplog, reque
         if expect_success:
             policy = LLMPolicy.from_yaml(path)
             logger.critical(
-                "[IMP:9][test_policy_from_yaml][%s] ASSERT: policy loaded OK, "
-                "aliases=%d, providers=%d, profiles=%d",
+                "[IMP:9][test_policy_from_yaml][%s] ASSERT: policy loaded OK, aliases=%d, providers=%d, profiles=%d",
                 test_name,
                 len(policy.aliases),
                 len(policy.providers),
@@ -154,8 +151,7 @@ def test_policy_from_yaml(test_name, path_fixture, expect_success, caplog, reque
 
         found_imp9 = _print_ldd_trajectory(caplog, f"test_policy_from_yaml_{test_name}")
         assert found_imp9, (
-            f"LDD Error: No IMP:9 log for test_policy_from_yaml/{test_name} — "
-            f"business logic assertions not logged"
+            f"LDD Error: No IMP:9 log for test_policy_from_yaml/{test_name} — business logic assertions not logged"
         )
 
 
@@ -166,7 +162,7 @@ def test_valid_policy_aliases_content(valid_policy_path, caplog):
     ##           reasoning has primary+fallback, chat has primary, others are reserved.
     """
     with caplog.at_level(logging.DEBUG):
-        from core.internal.llm.policy_schema import LLMPolicy, DeploymentList
+        from core.internal.llm.policy_schema import DeploymentList, LLMPolicy
 
         logger.info("[IMP:7][test_valid_policy_aliases_content] Loading valid policy...")
         policy = LLMPolicy.from_yaml(valid_policy_path)
@@ -196,12 +192,8 @@ def test_valid_policy_aliases_content(valid_policy_path, caplog):
         # Reserved aliases (empty deployments list)
         for reserved_name in ("coding", "vision", "embedding"):
             alias = policy.aliases[reserved_name]
-            assert isinstance(alias.deployments, list), (
-                f"Alias '{reserved_name}' should have empty list deployments"
-            )
-            assert len(alias.deployments) == 0, (
-                f"Alias '{reserved_name}' deployments list should be empty"
-            )
+            assert isinstance(alias.deployments, list), f"Alias '{reserved_name}' should have empty list deployments"
+            assert len(alias.deployments) == 0, f"Alias '{reserved_name}' deployments list should be empty"
 
         logger.critical(
             "[IMP:9][test_valid_policy_aliases_content] ASSERT: all 5 aliases verified — "
@@ -267,9 +259,7 @@ def test_invalid_policy_missing_aliases_rejected(invalid_policy_path, caplog):
     with caplog.at_level(logging.DEBUG):
         from core.internal.llm.policy_schema import LLMPolicy
 
-        logger.info(
-            "[IMP:7][test_invalid_missing_aliases] Loading policy WITHOUT aliases section..."
-        )
+        logger.info("[IMP:7][test_invalid_missing_aliases] Loading policy WITHOUT aliases section...")
 
         with pytest.raises(Exception) as exc_info:
             LLMPolicy.from_yaml(invalid_policy_path)
@@ -381,17 +371,13 @@ def test_invalid_policy_bad_default_profile(caplog, tmp_path):
         with open(p, "w") as f:
             yaml.dump(invalid, f)
 
-        logger.info(
-            "[IMP:7][test_invalid_bad_default_profile] Loading policy with "
-            "non-existent default_profile..."
-        )
+        logger.info("[IMP:7][test_invalid_bad_default_profile] Loading policy with non-existent default_profile...")
 
         with pytest.raises(ValueError, match="nonexistent_profile"):
             LLMPolicy.from_yaml(p)
 
         logger.critical(
-            "[IMP:9][test_invalid_bad_default_profile] ASSERT: ValueError raised for "
-            "non-existent default_profile"
+            "[IMP:9][test_invalid_bad_default_profile] ASSERT: ValueError raised for non-existent default_profile"
         )
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_invalid_bad_default_profile")
@@ -442,17 +428,13 @@ def test_invalid_policy_bad_provider_ref(caplog, tmp_path):
         with open(p, "w") as f:
             yaml.dump(invalid, f)
 
-        logger.info(
-            "[IMP:7][test_invalid_bad_provider_ref] Loading policy with "
-            "non-existent provider in deployment..."
-        )
+        logger.info("[IMP:7][test_invalid_bad_provider_ref] Loading policy with non-existent provider in deployment...")
 
         with pytest.raises(ValueError, match="nonexistent_provider"):
             LLMPolicy.from_yaml(p)
 
         logger.critical(
-            "[IMP:9][test_invalid_bad_provider_ref] ASSERT: ValueError raised for "
-            "non-existent provider reference"
+            "[IMP:9][test_invalid_bad_provider_ref] ASSERT: ValueError raised for non-existent provider reference"
         )
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_invalid_bad_provider_ref")
@@ -469,9 +451,7 @@ def test_valid_policy_jsonschema_pass(valid_policy_path, llm_policy_schema, capl
     ##           to verify the schema independently.
     """
     with caplog.at_level(logging.DEBUG):
-        logger.info(
-            "[IMP:7][test_valid_policy_jsonschema] Validating valid policy against JSON Schema..."
-        )
+        logger.info("[IMP:7][test_valid_policy_jsonschema] Validating valid policy against JSON Schema...")
 
         with open(valid_policy_path) as f:
             data = yaml.safe_load(f)
@@ -483,9 +463,7 @@ def test_valid_policy_jsonschema_pass(valid_policy_path, llm_policy_schema, capl
             "[IMP:9][test_valid_policy_jsonschema] ASSERT: JSON Schema errors=%d (expected 0)",
             len(errors),
         )
-        assert errors == [], (
-            f"Valid policy failed JSON Schema: {[e.message for e in errors]}"
-        )
+        assert errors == [], f"Valid policy failed JSON Schema: {[e.message for e in errors]}"
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_valid_policy_jsonschema")
         assert found_imp9, "LDD Error: No IMP:9 log for test_valid_policy_jsonschema"
@@ -497,9 +475,7 @@ def test_invalid_policy_jsonschema_fails(invalid_policy_path, llm_policy_schema,
     ## @purpose  Verify JSON Schema catches missing required fields.
     """
     with caplog.at_level(logging.DEBUG):
-        logger.info(
-            "[IMP:7][test_invalid_policy_jsonschema] Validating INVALID policy against JSON Schema..."
-        )
+        logger.info("[IMP:7][test_invalid_policy_jsonschema] Validating INVALID policy against JSON Schema...")
 
         with open(invalid_policy_path) as f:
             data = yaml.safe_load(f)

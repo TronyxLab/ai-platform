@@ -44,8 +44,15 @@ logger = logging.getLogger("content_hash")
 
 # ── Patterns always excluded from build context hashing ──
 _ALWAYS_EXCLUDE = {
-    ".git", ".gitignore", ".DS_Store", "__pycache__", "*.pyc", "*.md",
-    ".env", ".gitattributes", ".gitmodules",
+    ".git",
+    ".gitignore",
+    ".DS_Store",
+    "__pycache__",
+    "*.pyc",
+    "*.md",
+    ".env",
+    ".gitattributes",
+    ".gitmodules",
 }
 
 
@@ -60,18 +67,21 @@ def _load_dockerignore(module_dir: str) -> set[str]:
     patterns: set[str] = set()
     if os.path.isfile(dockerignore_path):
         try:
-            with open(dockerignore_path, "r") as f:
+            with open(dockerignore_path) as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#"):
                         patterns.add(line)
             logger.info(
                 "[IMP:8][_load_dockerignore][loaded] Loaded %d patterns from .dockerignore for %s",
-                len(patterns), module_dir,
+                len(patterns),
+                module_dir,
             )
         except OSError as exc:
             logger.warning("[IMP:5][_load_dockerignore][error] Failed to read .dockerignore: %s", exc)
     return patterns
+
+
 # endregion FUNC__load_dockerignore
 
 
@@ -88,17 +98,23 @@ def _should_include(rel_path: str, ignore_patterns: set[str]) -> bool:
         if fnmatch.fnmatch(rel_path, pattern):
             return False
         # Directory prefix match (pattern ending with /)
-        if pattern.endswith("/") and (rel_path == pattern.rstrip("/") or rel_path.startswith(pattern.rstrip("/") + "/")):
+        if pattern.endswith("/") and (
+            rel_path == pattern.rstrip("/") or rel_path.startswith(pattern.rstrip("/") + "/")
+        ):
             return False
 
     # User-defined .dockerignore patterns
     for pattern in ignore_patterns:
         if fnmatch.fnmatch(rel_path, pattern):
             return False
-        if pattern.endswith("/") and (rel_path == pattern.rstrip("/") or rel_path.startswith(pattern.rstrip("/") + "/")):
+        if pattern.endswith("/") and (
+            rel_path == pattern.rstrip("/") or rel_path.startswith(pattern.rstrip("/") + "/")
+        ):
             return False
 
     return True
+
+
 # endregion FUNC__should_include
 
 
@@ -118,7 +134,9 @@ def compute_source_hash(module_dir: str) -> str:
 
     dockerfile = os.path.join(module_dir, "Dockerfile")
     if not os.path.isfile(dockerfile):
-        logger.warning("[IMP:5][compute_source_hash][no_dockerfile] No Dockerfile in %s — returning empty hash", module_dir)
+        logger.warning(
+            "[IMP:5][compute_source_hash][no_dockerfile] No Dockerfile in %s — returning empty hash", module_dir
+        )
         return ""
 
     ignore_patterns = _load_dockerignore(module_dir)
@@ -132,10 +150,7 @@ def compute_source_hash(module_dir: str) -> str:
             rel_root = ""
 
         # Filter directories in-place so os.walk skips them
-        dirs[:] = [
-            d for d in dirs
-            if _should_include(os.path.join(rel_root, d) if rel_root else d, ignore_patterns)
-        ]
+        dirs[:] = [d for d in dirs if _should_include(os.path.join(rel_root, d) if rel_root else d, ignore_patterns)]
 
         for fname in fnames:
             rel_path = os.path.join(rel_root, fname) if rel_root else fname
@@ -145,7 +160,8 @@ def compute_source_hash(module_dir: str) -> str:
     files_to_hash.sort()
     logger.info(
         "[IMP:8][compute_source_hash][files] Hashing %d files in %s",
-        len(files_to_hash), module_dir,
+        len(files_to_hash),
+        module_dir,
     )
 
     for filepath in files_to_hash:
@@ -161,9 +177,13 @@ def compute_source_hash(module_dir: str) -> str:
     result = hasher.hexdigest()
     logger.info(
         "[IMP:9][compute_source_hash][done] Hash=%s files=%d for %s",
-        result[:16], len(files_to_hash), module_dir,
+        result[:16],
+        len(files_to_hash),
+        module_dir,
     )
     return result
+
+
 # endregion FUNC_compute_source_hash
 
 
@@ -192,17 +212,20 @@ def check_build_needed(module_dir: str, cache_dir: str = "/var/lib/platform/.bui
     cache_file = os.path.join(cache_dir, f"{module_name}.hash")
     try:
         if os.path.isfile(cache_file):
-            with open(cache_file, "r") as f:
+            with open(cache_file) as f:
                 cached_hash = f.read().strip()
             if cached_hash == current_hash:
                 logger.info(
                     "[IMP:9][check_build_needed][skip] Build skipped for %s — source unchanged (hash=%s)",
-                    module_name, current_hash[:16],
+                    module_name,
+                    current_hash[:16],
                 )
                 return False
             logger.info(
                 "[IMP:8][check_build_needed][changed] Hash changed for %s — rebuilding (old=%s new=%s)",
-                module_name, cached_hash[:16], current_hash[:16],
+                module_name,
+                cached_hash[:16],
+                current_hash[:16],
             )
         else:
             logger.info(
@@ -212,10 +235,13 @@ def check_build_needed(module_dir: str, cache_dir: str = "/var/lib/platform/.bui
     except OSError as exc:
         logger.warning(
             "[IMP:5][check_build_needed][cache_error] Failed to read cache for %s: %s — building",
-            module_name, exc,
+            module_name,
+            exc,
         )
 
     return True
+
+
 # endregion FUNC_check_build_needed
 
 
@@ -237,11 +263,15 @@ def save_build_hash(module_dir: str, hash_value: str, cache_dir: str = "/var/lib
             f.write(hash_value + "\n")
         logger.info(
             "[IMP:9][save_build_hash][saved] Saved build hash for %s: %s",
-            module_name, hash_value[:16],
+            module_name,
+            hash_value[:16],
         )
     except OSError as exc:
         logger.warning(
             "[IMP:5][save_build_hash][error] Failed to save hash for %s: %s — non-fatal",
-            module_name, exc,
+            module_name,
+            exc,
         )
+
+
 # endregion FUNC_save_build_hash

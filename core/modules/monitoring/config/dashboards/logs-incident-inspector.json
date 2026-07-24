@@ -25,7 +25,7 @@
         "refresh": 2,
         "includeAll": true,
         "multi": true,
-        "allValue": ".*",
+        "allValue": ".+",
         "current": { "selected": true, "text": "All", "value": "$__all" }
       }
     ]
@@ -38,7 +38,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "sum by(container) (count_over_time({container=~\"$container\"}[$__auto_interval]))",
+          "expr": "sum by(container) (count_over_time({container=~\"$container\"}[$__interval]))",
           "legendFormat": "{{container}}",
           "refId": "A"
         }

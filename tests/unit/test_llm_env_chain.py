@@ -235,9 +235,7 @@ def test_key_format(minimal_policy, mock_client, tmp_path, caplog):
                         persist_path=persist_path,
                     )
 
-        logger.critical(
-            "[IMP:9][test_key_format] Provisioned %d keys", len(result)
-        )
+        logger.critical("[IMP:9][test_key_format] Provisioned %d keys", len(result))
 
         # Validate key format for ALL keys
         key_pattern = re.compile(r"^sk-[a-zA-Z0-9-]{16,}$")
@@ -247,20 +245,14 @@ def test_key_format(minimal_policy, mock_client, tmp_path, caplog):
                 consumer_name,
                 key[:20],
             )
-            assert key_pattern.match(key), (
-                f"Key for '{consumer_name}' does not match sk- format: {key[:30]}..."
-            )
-            assert len(key) >= 20, (
-                f"Key for '{consumer_name}' too short: {len(key)} chars"
-            )
+            assert key_pattern.match(key), f"Key for '{consumer_name}' does not match sk- format: {key[:30]}..."
+            assert len(key) >= 20, f"Key for '{consumer_name}' too short: {len(key)} chars"
 
         # Verify persist file has all keys
         with open(persist_path) as f:
             store = json.load(f)
 
-        logger.critical(
-            "[IMP:9][test_key_format] Persist store has %d entries", len(store)
-        )
+        logger.critical("[IMP:9][test_key_format] Persist store has %d entries", len(store))
         assert len(store) == 3, "Should have 3 entries in persist store"
         assert store.keys() == {"test-backend", "test-priority", "hermes-agent"}
 

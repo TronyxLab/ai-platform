@@ -177,7 +177,7 @@ jobs:
           echo "[IMP:8][deploy][node-detect] Auto-detected NODE=${NODE}"
           ssh -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            "cd /opt/platform && GITHUB_SHA=$SHA make node-update NODE=$NODE"
+            "cd /opt/platform && DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
 
       # ─── Step 6: Audit trail ──────────────────────────────────────────
       - name: Log deployment audit trail

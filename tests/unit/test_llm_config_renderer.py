@@ -214,9 +214,7 @@ def test_model_list_contains_active_aliases(minimal_policy_path, template_path, 
         parsed = yaml.safe_load(rendered)
 
         model_names = [entry["model_name"] for entry in parsed["model_list"]]
-        logger.critical(
-            "[IMP:9][test_model_list_contains_active_aliases] model_list names: %s", model_names
-        )
+        logger.critical("[IMP:9][test_model_list_contains_active_aliases] model_list names: %s", model_names)
 
         # reasoning primary + fallback
         assert "reasoning" in model_names, "reasoning must be in model_list"
@@ -246,14 +244,10 @@ def test_reserved_aliases_not_in_model_list(minimal_policy_path, template_path, 
         parsed = yaml.safe_load(rendered)
 
         model_names = [entry["model_name"] for entry in parsed["model_list"]]
-        logger.critical(
-            "[IMP:9][test_reserved_aliases_not_in_model_list] model_list names: %s", model_names
-        )
+        logger.critical("[IMP:9][test_reserved_aliases_not_in_model_list] model_list names: %s", model_names)
 
         for reserved in ("coding", "vision", "embedding"):
-            assert reserved not in model_names, (
-                f"Reserved alias '{reserved}' must NOT be in model_list"
-            )
+            assert reserved not in model_names, f"Reserved alias '{reserved}' must NOT be in model_list"
             assert f"{reserved}-fallback" not in model_names, (
                 f"Reserved alias '{reserved}-fallback' must NOT be in model_list"
             )
@@ -300,18 +294,12 @@ def test_fallback_chain_in_output(minimal_policy_path, template_path, caplog):
         # Let's check: - reasoning: reasoning-fallback → yaml parses as [{"reasoning": "reasoning-fallback"}]
 
         found_reasoning_fb = any(
-            isinstance(fb, dict) and fb.get("reasoning") == "reasoning-fallback"
-            for fb in fallbacks
+            isinstance(fb, dict) and fb.get("reasoning") == "reasoning-fallback" for fb in fallbacks
         )
-        assert found_reasoning_fb, (
-            f"Fallback chain 'reasoning -> reasoning-fallback' not found in {fallbacks}"
-        )
+        assert found_reasoning_fb, f"Fallback chain 'reasoning -> reasoning-fallback' not found in {fallbacks}"
 
         # chat has no fallback — should not be in fallbacks
-        chat_fb = any(
-            isinstance(fb, dict) and "chat" in fb
-            for fb in fallbacks
-        )
+        chat_fb = any(isinstance(fb, dict) and "chat" in fb for fb in fallbacks)
         assert not chat_fb, "chat (no fallback) should not appear in fallbacks"
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_fallback_chain_in_output")
@@ -335,7 +323,8 @@ def test_api_key_from_provider(minimal_policy_path, template_path, caplog):
             api_key = entry["litellm_params"]["api_key"]
             logger.critical(
                 "[IMP:9][test_api_key_from_provider] model_name='%s' api_key='%s'",
-                entry["model_name"], api_key,
+                entry["model_name"],
+                api_key,
             )
             assert api_key == "os.environ/DEEPSEEK_API_KEY", (
                 f"Expected 'os.environ/DEEPSEEK_API_KEY', got '{api_key}' for {entry['model_name']}"
@@ -360,6 +349,7 @@ def test_check_mode_stale(minimal_policy_data, tmp_path, template_path, caplog):
 
         # Render fresh output
         from core.internal.llm.config_renderer import render_to_file
+
         render_to_file(policy_path, output_path, template_path)
         logger.info("[IMP:7][test_check_mode_stale] Fresh initial render written")
 
@@ -370,9 +360,7 @@ def test_check_mode_stale(minimal_policy_data, tmp_path, template_path, caplog):
 
         # Run --check (main returns int, does not call sys.exit)
         exit_code = main(["--policy", str(policy_path), "--output", str(output_path), "--check"])
-        logger.critical(
-            "[IMP:9][test_check_mode_stale] ASSERT: --check exit code=%d (expected 1)", exit_code
-        )
+        logger.critical("[IMP:9][test_check_mode_stale] ASSERT: --check exit code=%d (expected 1)", exit_code)
         assert exit_code == 1, f"--check on stale output should exit 1, got {exit_code}"
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_check_mode_stale")
@@ -397,9 +385,7 @@ def test_check_mode_fresh(minimal_policy_data, tmp_path, template_path, caplog):
 
         # Run --check immediately (should be fresh, main returns int)
         exit_code = main(["--policy", str(policy_path), "--output", str(output_path), "--check"])
-        logger.critical(
-            "[IMP:9][test_check_mode_fresh] ASSERT: --check exit code=%d (expected 0)", exit_code
-        )
+        logger.critical("[IMP:9][test_check_mode_fresh] ASSERT: --check exit code=%d (expected 0)", exit_code)
         assert exit_code == 0, f"--check on fresh output should exit 0, got {exit_code}"
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_check_mode_fresh")
@@ -422,9 +408,7 @@ def test_drop_params_enabled(minimal_policy_path, template_path, caplog):
         litellm_settings = parsed.get("litellm_settings", {})
         drop_params = litellm_settings.get("drop_params")
 
-        logger.critical(
-            "[IMP:9][test_drop_params_enabled] drop_params=%s (expected True)", drop_params
-        )
+        logger.critical("[IMP:9][test_drop_params_enabled] drop_params=%s (expected True)", drop_params)
         assert drop_params is True, f"Expected drop_params=True, got {drop_params}"
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_drop_params_enabled")
