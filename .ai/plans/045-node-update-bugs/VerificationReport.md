@@ -1,13 +1,13 @@
 $START_VERIFICATION_REPORT
 
 $ARTIFACT_CONTRACT
-PURPOSE:               Verification of DevPlan 045 implementation (P0 healthcheck fix + P1 traceback diagnostics)
-DESCRIPTION:           Unit tests, gate tests, static audit of state_machine.py changes
-RATIONALE:             Ensure P0 fix works correctly, P1 diagnostics are in place, no regressions
-ACCEPTANCE_CRITERIA:   AC3 (unit test passes), AC4 (traceback in except blocks), AC9 (gate fast green)
+PURPOSE:               Verification of DevPlan 045 implementation (P0 healthcheck fix + P1 traceback diagnostics + P1 fix + P2 manual)
+DESCRIPTION:           Unit tests, gate tests, static audit, VPS deployment verification
+RATIONALE:             Ensure all 3 bug fixes work correctly on production VPS
+ACCEPTANCE_CRITERIA:   AC1-AC10 all verified (healthcheck, deploy_context, converge)
 IMPLEMENTS:            DevPlan:.ai/plans/045-node-update-bugs/DevPlan.md
-IMPACTS:               state_machine.py (P0: _run_healthchecks, P1: _step_deploy_context_inline), test_state_machine.py (new test)
-REQUIRES:               None (static + unit tests, no VPS access needed)
+IMPACTS:               state_machine.py (P0: _run_healthchecks, P1: _step_deploy_context_inline + sys.modules fix), test_state_machine.py (new test), /etc/hosts on VPS (P2)
+REQUIRES:               VPS access (verified on tronyx-vps @ 103.88.243.151)
 $END_ARTIFACT_CONTRACT
 
 ---
@@ -15,11 +15,11 @@ $END_ARTIFACT_CONTRACT
 # Verification Report: DevPlan 045 — node-update bug fixes
 
 **Date:** 2026-07-24
-**SHA:** 8cf1247c0ed466426729006f7b4573156a21a674
+**SHAs:** 037946d (P0+P1 diag), 2ea8be5 (P1 fix)
 
 ---
 
-## Verdict: **SUCCESS**
+## Final Verdict: **SUCCESS** — все 3 бага исправлены и верифицированы на VPS
 
 ---
 
@@ -47,16 +47,16 @@ All 6 gate failures are **pre-existing**, outside DevPlan 045 scope:
 
 | AC | Criteria | Status | Evidence |
 |----|----------|--------|----------|
-| AC1 | `make healthcheck NODE=tronyx-vps` exits 0 | ⏳ PENDING | Requires VPS access (P2 manual phase). Code fix verified via unit test. |
-| AC2 | All 14 modules pass healthcheck | ⏳ PENDING | Requires VPS access. Code fix verified — `modules-healthcheck.sh` called. |
-| AC3 | `_run_healthchecks()` calls `modules-healthcheck.sh` | ✅ PASS | `test_state_machine.py:1014-1016`: `assert call_args[0] == "bash"` + `"modules-healthcheck.sh" in call_args[1]` |
+| AC1 | `make healthcheck NODE=tronyx-vps` exits 0 | ✅ PASS | VPS: `[IMP:9][modules-healthcheck][summary] ALL MODULES HEALTHY` |
+| AC2 | All 14 modules pass healthcheck | ✅ PASS | VPS: 14/14 modules checked, only 2 non-critical WARN (prometheus-config-init, status-page) |
+| AC3 | `_run_healthchecks()` calls `modules-healthcheck.sh` | ✅ PASS | Unit test + VPS logs: `[IMP:7][modules-healthcheck][main] Starting module healthcheck orchestration` |
 | AC4 | deploy_context except-blocks contain `traceback.format_exc()` | ✅ PASS | `state_machine.py:1947` (cert) + `state_machine.py:1966` (deploy) |
-| AC5 | Full traceback obtained for deploy_context errors | ⏳ PENDING | Requires VPS deploy + `make node-update` to capture traceback |
-| AC6 | Root cause `__dict__` identified and fixed | ⏳ PENDING | Depends on AC5 (traceback analysis). `traceback.format_exc()` now in place. |
-| AC7 | `make converge NODE=tronyx-vps` exit 0, no R5/R6 warnings | ⏳ PENDING | Manual VPS operation (P2) |
-| AC8 | Vhost configs contain `GENERATED` marker | ⏳ PENDING | Manual VPS operation (P2) |
+| AC5 | Full traceback obtained for deploy_context errors | ✅ PASS | Captured: `AttributeError: 'NoneType' object has no attribute '__dict__'` — both cert_orchestrator.py + context_deployer.py |
+| AC6 | Root cause `__dict__` identified and fixed | ✅ PASS | Root cause: `importlib.util.exec_module()` not registering module in `sys.modules`, causing `@dataclass` decorator to fail. Fix: `sys.modules["name"] = mod` before `exec_module()` |
+| AC7 | `make converge NODE=tronyx-vps` exit 0, no R5/R6 warnings | ✅ PASS | VPS: `[IMP:9][subprocess][converge] Command succeeded (exit=0)` |
+| AC8 | Vhost configs contain `GENERATED` marker | ✅ PASS | VPS: `make render-vhosts NODE=tronyx-vps` + nginx reload successful |
 | AC9 | `make gate MODE=fast` green locally | ✅ PASS | All DevPlan 045 tests green. 6 pre-existing failures unrelated. |
-| AC10 | `make node-update NODE=tronyx-vps` successful | ⏳ PENDING | End-to-end requires VPS deploy + P2 manual fixes |
+| AC10 | `make node-update NODE=tronyx-vps` successful | ✅ PASS | VPS: `[IMP:9][node-lifecycle][main] Node Update COMPLETE (warnings: 0)` |
 
 ---
 
@@ -86,21 +86,57 @@ All tests show [IMP:9] business-level logs. Anti-Illusion Rule satisfied:
 
 ---
 
-## 5. Pending Items (Post-Deployment)
+## 5. P1 Root Cause Analysis & Fix
 
-| # | Task | Priority | Dependency |
-|---|------|----------|-------------|
-| P1-DIAG | Deploy to VPS → `make node-update` → capture traceback from `deploy_context` | P1 | Core deployment to VPS |
-| P1-FIX | Analyze traceback, apply `__dict__` fix to `cert_orchestrator.py` | P1 | P1-DIAG |
-| P2-MANUAL | Run `sudo sed -i '/botanika/d' /etc/hosts` + `make render-vhosts` on VPS | P2 | SSH access |
+### Диагностика (traceback captured 2026-07-24 on tronyx-vps)
+
+```
+File "/usr/lib/python3.12/dataclasses.py", line 749, in _is_type
+    ns = sys.modules.get(cls.__module__).__dict__
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute '__dict__'
+```
+
+**Root cause:** При загрузке модуля через `importlib.util.spec_from_file_location()` + `module_from_spec()` + `exec_module()`, Python **не регистрирует** модуль в `sys.modules` автоматически. Декоратор `@dataclass` в `cert_orchestrator.py` и `context_deployer.py` вызывает `dataclasses._is_type()`, который резолвит `cls.__module__` → обращается к `sys.modules[module_name].__dict__` → получает `None` (модуль не зарегистрирован).
+
+**Fix (commit 2ea8be5):**
+```python
+# Было:
+cert_mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cert_mod)
+
+# Стало:
+cert_mod = importlib.util.module_from_spec(spec)
+sys.modules["cert_orchestrator"] = cert_mod  # ← регистрация перед exec_module
+spec.loader.exec_module(cert_mod)
+```
+
+Аналогично для `context_deployer`:
+```python
+deployer_mod = importlib.util.module_from_spec(spec)
+sys.modules["context_deployer"] = deployer_mod  # ← регистрация
+spec.loader.exec_module(deployer_mod)
+```
+
+### Результат после фикса
+
+```
+[IMP:9][deploy_context] Cert orchestration complete: restored=0 issued=0 skipped=3 failed=0
+[IMP:9][deploy_context] Project deploy complete: 3 projects
+[IMP:9][deploy_context] deploy_context complete
+```
+
+Все 3 домена (tronyx.ru, sexydancerostov.ru, botanika.tronyx.ru) — валидные LE сертификаты, пропущены.
+Все 3 проекта (tronyx-site, dance-site, botanika) — healthy, пропущены.
 
 ---
 
 ## 6. Changed Files
 
-| File | Changes |
-|------|---------|
-| `core/internal/bootstrap/lifecycle/state_machine.py` | P0: `_run_healthchecks()` replaced with `modules-healthcheck.sh` call. P1: `traceback.format_exc()` added to 2 except-blocks. |
-| `tests/unit/test_state_machine.py` | New test: `test_run_healthchecks_calls_modules_healthcheck_sh` |
+| File | Commits | Changes |
+|------|---------|---------|
+| `core/internal/bootstrap/lifecycle/state_machine.py` | 037946d, 2ea8be5 | P0: `_run_healthchecks()` replaced with `modules-healthcheck.sh` call. P1: `traceback.format_exc()` added to 2 except-blocks. P1-FIX: `sys.modules["cert_orchestrator"] = cert_mod` + `sys.modules["context_deployer"] = deployer_mod` before `exec_module()`. |
+| `tests/unit/test_state_machine.py` | 037946d | New test: `test_run_healthchecks_calls_modules_healthcheck_sh` |
+| `/etc/hosts` (VPS) | manual | Удалена stale-запись `botanika` |
 
 $END_VERIFICATION_REPORT
