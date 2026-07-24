@@ -107,27 +107,25 @@ jobs:
           # Ensure bind-mount source directory exists (volume: hermes-data → /var/lib/platform/hermes-agent/data)
           sudo mkdir -p /var/lib/platform/hermes-agent/data
 
-          # ⚠️ TRAP[DECISION] · 2026-07-24 · HI · Loopback bind + test password for CI smoke test
-          # · hermes-agent v2026.7+ refuses to bind dashboard + API server to 0.0.0.0 without auth.
-          # · In production, HERMES_DASHBOARD_PASSWORD + API_SERVER_KEY are set via secrets.env.
+          # ⚠️ TRAP[DECISION] · 2026-07-24 · HI · CI smoke test — loopback bind + no auth
+          # · hermes-agent v2026.7+ refuses to bind dashboard + API server to non-loopback without auth.
           # · In CI smoke test, no secrets are available:
-          # ·   - HERMES_DASHBOARD_HOST=127.0.0.1 → loopback bind, bypasses dashboard auth gate
-          # ·   - API_SERVER_HOST=127.0.0.1 → loopback bind, bypasses API server auth gate
-          # ·   - HERMES_DASHBOARD_PASSWORD=test-smoke-password → curl uses Basic Auth
+          # ·   - HERMES_DASHBOARD_HOST=127.0.0.1 → loopback bind, bypasses auth gate
+          # ·   - HERMES_DASHBOARD_USERNAME="" + HERMES_DASHBOARD_PASSWORD="" → disable Basic Auth
+          # ·   - API_SERVER_ENABLED=false → disable API server (requires API_SERVER_KEY even on loopback)
           # · Port mapping is already 127.0.0.1:9119:9119 — no public exposure.
-          # · Rev: if smoke test needs to validate auth → add HERMES_DASHBOARD_PASSWORD from CI secrets.
-          SMOKE_PASSWORD="test-smoke-password"
           CONTEXT_IMAGE="hermes-agent-base:latest" \
           HERMES_DASHBOARD_HOST="127.0.0.1" \
-          API_SERVER_HOST="127.0.0.1" \
-          HERMES_DASHBOARD_PASSWORD="${SMOKE_PASSWORD}" \
+          HERMES_DASHBOARD_USERNAME="" \
+          HERMES_DASHBOARD_PASSWORD="" \
+          API_SERVER_ENABLED="false" \
           docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
             --project-name build-platform-smoke \
             up -d
 
           echo "=== Waiting for agent readiness (180s max) ==="
           for i in $(seq 1 90); do
-            if curl -sf -u "admin@ai-platform.local:${SMOKE_PASSWORD}" http://localhost:9119/ > /dev/null 2>&1; then
+            if curl -sf http://localhost:9119/ > /dev/null 2>&1; then
               echo "=== Agent ready on :9119 after ${i}s ==="
               break
             fi
@@ -142,7 +140,7 @@ jobs:
             sleep 2
           done
 
-          echo "=== Dashboard endpoint: $(curl -s -o /dev/null -w '%{http_code}' -u "admin@ai-platform.local:${SMOKE_PASSWORD}" http://localhost:9119/) ==="
+          echo "=== Dashboard endpoint: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:9119/) ==="
           echo "=== Smoke test PASSED ==="
 
       - name: Cleanup
