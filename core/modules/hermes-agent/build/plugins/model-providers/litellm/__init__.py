@@ -1,5 +1,11 @@
 # GREP_SUMMARY: litellm provider, hermes-agent, plugin, model-provider, gateway
 # STRUCTURE: ◇ ProviderProfile(litellm) → ⊕ register_provider
+# region MODULE_CONTRACT
+## @purpose  LiteLLM Gateway provider profile for hermes-agent — routes all LLM requests through LiteLLM proxy
+## @scope    Provider registration for litellm gateway in hermes-agent model-provider plugin system
+## @invariants Uses LITELLM_API_KEY env var, base_url configurable via LITELLM_BASE_URL or OPENAI_BASE_URL
+## @rationale LiteLLM handles model routing, fallbacks, and API key management centrally
+# endregion MODULE_CONTRACT
 
 """LiteLLM Gateway provider profile.
 

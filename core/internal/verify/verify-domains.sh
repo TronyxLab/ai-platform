@@ -14,6 +14,7 @@
 ## @rationale Extracted from verify.sh (TASK-6) to satisfy thin-wrapper contract (≤150 LOC).
 ##            Separates YAML parsing + curl logic from arg parsing/delegation.
 ## @changes  CREATED: 2026-07-18 · I-4 fix · Extracted from core/entrypoints/verify.sh
+## @changes  2026-07-24 · DevPlan 051 P2 — fixed status-page URL: apex → platform subdomain
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -189,7 +190,12 @@ for d in doms:
     fi
 
     # ── Status-page health check (016) — CI post-deploy gate ──
-    # Checks /health endpoint on the main domain with Basic Auth.
+    # Checks /health endpoint on platform.<domain> subdomain with Basic Auth.
+    # ⚠️ TRAP[BUG] · 2026-07-24 · P2 · status-page URL mismatch
+    # · Symptom: curl https://tronyx.ru/health → nginx overlay proxied to tronyx-site project → 500
+    # · Root: status-page lives on platform.tronyx.ru (platform-vhost.conf), not apex domain
+    # · Fix: use platform.${PLATFORM_DOMAIN}/health instead of ${PLATFORM_DOMAIN}/health
+    # @see DevPlan 051 P2
     # Verifies the status-page service is operational and all internal checks pass.
     local status_page_ok=true
     local main_domain="${PLATFORM_DOMAIN:-}"
@@ -197,13 +203,14 @@ for d in doms:
     local master_password="${PLATFORM_MASTER_PASSWORD:-}"
 
     if [[ -n "$main_domain" && -n "$master_email" && -n "$master_password" ]]; then
-        log_imp 7 "status-page" "Checking status-page /health on https://${main_domain}/health"
+        local status_page_url="https://platform.${main_domain}/health"
+        log_imp 7 "status-page" "Checking status-page /health on ${status_page_url}"
         local health_http_code=""
         set +e
         health_http_code="$(curl -sS -o /dev/null -w '%{http_code}' \
             --max-time 30 \
             -u "${master_email}:${master_password}" \
-            "https://${main_domain}/health" 2>/dev/null)"
+            "${status_page_url}" 2>/dev/null)"
         local health_exit=$?
         set -e
 

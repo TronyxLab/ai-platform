@@ -77,6 +77,12 @@ build:
   signature: make hermes-push-l1
   operation_ru: Push L1 в ghcr.io
   description: Push L1 (hermes-agent-base) to ghcr.io as disaster recovery backup
+- make_target: hermes-push-l2
+  mechanism: docker-push
+  delegates_to: docker tag + docker push to ghcr.io
+  signature: make hermes-push-l2 CONTEXT=<org>
+  operation_ru: Push L2 в ghcr.io
+  description: Push L2 (hermes-agent-context) to ghcr.io for a specific context/org
 validate:
 - make_target: templates-check
   mechanism: python-script
@@ -1240,6 +1246,7 @@ allowed_verbs:
 - hermes-build-context
 - hermes-build-platform
 - hermes-push-l1
+- hermes-push-l2
 - lint
 - new-context
 - new-project

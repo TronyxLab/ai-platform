@@ -110,6 +110,44 @@ _install_metrics_cron() {
 }
 # endregion FUNC__install_metrics_cron
 
+# region FUNC__ensure_python_deps
+## @purpose  Idempotent install of pip3 + platform Python dependencies on VPS
+## @rationale P1: pydantic is declared in pyproject.toml but pip3 is not installed on VPS
+## @changes  2026-07-24 · Created — DevPlan 051 P1
+_ensure_python_deps() {
+    # Guard: если pip3 уже установлен и pydantic доступен — пропускаем
+    if command -v pip3 &>/dev/null && python3 -m pip show pydantic &>/dev/null; then
+        echo "[IMP:8][node-lifecycle][python-deps] pip3 + pydantic already installed — skipping" >&2
+        return 0
+    fi
+
+    echo "[IMP:9][node-lifecycle][python-deps] Installing pip3 + Python dependencies..." >&2
+
+    # Установка pip3 через apt (только если отсутствует)
+    if ! command -v pip3 &>/dev/null; then
+        if apt-get update -qq && apt-get install -y -qq python3-pip python3-venv; then
+            echo "[IMP:9][node-lifecycle][python-deps] pip3 installed via apt" >&2
+        else
+            echo "[IMP:8][node-lifecycle][python-deps] WARN: apt-get install python3-pip failed (no internet?); continuing without LLM key provisioning" >&2
+            return 0  # fail-soft: не блокируем node-update
+        fi
+    fi
+
+    # Установка зависимостей из requirements.txt
+    local req_file="${CORE_DIR}/requirements.txt"
+    if [[ -f "$req_file" ]]; then
+        if pip3 install --no-cache-dir -r "$req_file"; then
+            echo "[IMP:9][node-lifecycle][python-deps] Python dependencies installed successfully" >&2
+        else
+            echo "[IMP:8][node-lifecycle][python-deps] WARN: pip install failed; continuing without LLM key provisioning" >&2
+            return 0  # fail-soft
+        fi
+    else
+        echo "[IMP:8][node-lifecycle][python-deps] WARN: ${req_file} not found — skipping pip install" >&2
+    fi
+}
+# endregion FUNC__ensure_python_deps
+
 main() {
     if [[ "$MODE" == "init" ]]; then
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
@@ -177,6 +215,8 @@ except Exception:
         # ── Install host cron for metrics export (P2 fix) ──
         # Runs on HOST (not in container), ensures status-metrics.json is updated every minute
         CHECKPOINT_STEP_HASH="$(_step_hash "metrics-cron")"       checkpoint_step "metrics-cron" _install_metrics_cron
+        # ── Install Python dependencies for platform scripts (DevPlan 051 P1) ──
+        _ensure_python_deps
         # Full init: remaining steps via state_machine.py (step_14_node_update through step_17_telegram)
         _delegate --mode init --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
             ${PLATFORM_OWNER_KEY:+--owner-key "$PLATFORM_OWNER_KEY"} \
@@ -216,6 +256,8 @@ except Exception:
                 ${CONTEXT:+--context "$CONTEXT"} \
                 ${FORCE_MODE:+--force}
         }
+        # ── Ensure Python dependencies for LLM key provisioning (DevPlan 051 P1) ──
+        _ensure_python_deps
         audit_step "node-update:${NODE_NAME:-<unset>}" _do_update_steps
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
         echo "[IMP:9][node-lifecycle][main] Node Update COMPLETE (warnings: ${#STEP_ERRORS[@]})" >&2
