@@ -10,7 +10,7 @@
 ##   - volumes: clickhouse-data-test Docker-managed volume (no bind-mount — cross-platform, macOS compatible)
 ##   - Host ports: 127.0.0.1:18123:8123 (HTTP) + 127.0.0.1:19363:9363 (Prometheus metrics)
 ##     — non-standard ports to avoid conflicts with production on same Docker host
-##   - Healthcheck preserved from base.yml (wget --spider /ping, 15s interval, 20s start_period)
+##   - Healthcheck: accelerated for CI (10s interval, 10s start_period) per module contract
 ##   - Config bind-mounts (config.d/*.xml, users.d/*.xml) preserved intact from base.yml
 ##   - test-observability-net (external network required for Prometheus scraping, DevPlan 017 W2.2)
 ## @rationale
@@ -31,7 +31,7 @@
 services:
   clickhouse:
     container_name: clickhouse-test
-    restart: "no"
+    restart: unless-stopped  # ⚠️ TRAP[FIX] · 2026-07-24 · ClickHouse crashes on macOS Docker Desktop under multi-container load; needs restart to survive until langfuse connects
     networks: !override  # DevPlan 017 W2.2 — test network isolation
       # ⚠️ TRAP[FIX] · 2026-07-22 · Mapping format preserves 'clickhouse' alias for langfuse DNS resolution.
       # · List format (was: `- test-observability-net`) would strip the alias from base.yml,
@@ -44,7 +44,7 @@ services:
       - "127.0.0.1:18123:8123"     # HTTP interface
       - "127.0.0.1:19363:9363"     # Prometheus metrics endpoint
     # ── Docker-managed volume (cross-platform, no bind-mount) ──
-    volumes:
+    volumes: !override  # ⚠️ TRAP[FIX] · 2026-07-24 · Prevent duplicate mount points from base.yml merge
       - clickhouse-data-test:/var/lib/clickhouse
       - ./config/config.d:/etc/clickhouse-server/config.d:ro
       - ./config/users.d/10-users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro

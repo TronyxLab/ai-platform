@@ -132,6 +132,14 @@ def orchestrate_certs(
     ▶ ┌domains┐ → ○ for each: s3 check → download → (miss?) issue → ⊕ CertResult → ⎋
     """
     result = CertResult()
+
+    # T0.3 (048.P3): Fallback — try PLATFORM_DOMAIN env var if no domains provided
+    if not domains:
+        pd = os.environ.get("PLATFORM_DOMAIN", "").strip()
+        if pd:
+            domains = [pd]
+            logger.info("[IMP:7][cert_orchestrator] Using PLATFORM_DOMAIN from env: %s", pd)
+
     if not domains:
         logger.info("[IMP:7][cert_orchestrator] No domains to orchestrate — skipping")
         return result

@@ -7,7 +7,7 @@
 ##           wait for readiness, and run healthchecks — extracted from deploy-modules.sh.
 ## @scope    Called by deploy-modules.sh (shell façade) and directly via CLI. Covers all Docker
 ##           orchestration responsibilities previously in deploy-modules.sh (1664→<100 LOC after extraction).
-## @input    CLI: --action {deploy,pre-pull,wait,healthcheck,check-image} with module paths
+## @input    CLI: --action {deploy,pre-pull,deploy-group,wait,healthcheck,check-image} with module paths
 ## @output   stdout: LDD logs, healthcheck output; exit code 0/1
 ## @invariants
 ##   - All docker CLI calls go through subprocess.run — no direct socket/API calls
@@ -28,6 +28,11 @@
 ##   deploy_docker_group, _pre_pull_images, _check_image_exists, wait_for_readiness, run_healthcheck
 ##   2026-07-23 · P0 fix — docker compose build before up -d for modules with build: section
 ##   (status-page served stale container after core-deploy rsync)
+##   2026-07-24 · W2.T2.1 — added --action deploy-group CLI dispatch + handler in main()
+##   2026-07-24 · W2.T2.4 — integrated content_hash (check_build_needed / save_build_hash)
+##             into deploy_docker_module() build section for modules with build: section
+##   2026-07-24 · W5.T5.1 — enhanced HC fork cycle in deploy_docker_group() with per-module
+##             pass/fail tracking, IMP:9 logs per module, and summary log with failure names
 ##
 ## ⚠️ TRAP[DEBT] · 2026-07-22 · P2 · 5 test-side failures in test_docker_orchestrator.py (DevPlan 043-B5)
 ## · Root: mock subprocess.run returns bytes, code expects str via text=True
@@ -55,6 +60,7 @@
 ## @usecases
 ##   - deploy-modules.sh → docker_orchestrator.py --action deploy --module-name postgres ...
 ##   - deploy-modules.sh → docker_orchestrator.py --action pre-pull --module-entries ...
+##   - deploy-modules.sh → docker_orchestrator.py --action deploy-group --module-entries "mod1 mod2" ...
 ##   - deploy-modules.sh → docker_orchestrator.py --action wait --module-name postgres
 ##   - deploy-modules.sh → docker_orchestrator.py --action healthcheck --module-name postgres
 ##   - deploy-modules.sh → docker_orchestrator.py --action check-image --image-ref ghcr.io/...
@@ -63,7 +69,6 @@
 # endregion MODULE_CONTRACT
 
 import argparse
-import contextlib
 import json
 import logging
 import os
@@ -72,6 +77,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+# ── Local imports (content_hash.py lives in same deploy/ directory) ──
+_THIS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_THIS_DIR))
+from content_hash import check_build_needed, compute_source_hash, save_build_hash
 
 logger = logging.getLogger("docker_orchestrator")
 
@@ -82,8 +92,8 @@ COMPOSE_FILENAMES = ("compose.yaml", "docker-compose.yaml", "docker-compose.base
 DEFAULT_PARALLEL_LIMIT = 4
 DEFAULT_READINESS_MAX_ATTEMPTS = 15
 DEFAULT_READINESS_INTERVAL_SEC = 2
-DEFAULT_HEALTHCHECK_MAX_RETRIES = 4
-DEFAULT_HEALTHCHECK_RETRY_INTERVAL = 3
+DEFAULT_HEALTHCHECK_MAX_RETRIES = 10
+DEFAULT_HEALTHCHECK_RETRY_INTERVAL = 10
 
 # Path to invoke_module_interface shell function — used for readiness and healthcheck
 _INVOKE_MODULE_INTERFACE_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "module-interface.sh")
@@ -522,6 +532,57 @@ def deploy_docker_module(
             compose_content = ""
         if "build:" in compose_content:
             has_local_build = True
+
+            # ── W3.T3.3: Content-hash skip — rebuild only if source changed ──
+            build_needed = check_build_needed(module_dir)
+            if not build_needed:
+                logger.info(
+                    "[IMP:9][deploy_docker_module][build_skip] Build skipped for %s — source unchanged (content-hash match)",
+                    module_name,
+                )
+                # Source unchanged — skip build, still need --force-recreate in
+                # case compose config changed (env files, compose override, etc.)
+                try:
+                    up_cmd_parts = [
+                        "docker",
+                        "compose",
+                        *compose_args,
+                        "up",
+                        "-d",
+                        "--remove-orphans",
+                        "--force-recreate",
+                    ]
+                    logger.info(
+                        "[IMP:8][deploy_docker_module][up_skip_build] Running compose up --force-recreate for %s (build skipped)",
+                        module_name,
+                    )
+                    up_result = subprocess.run(up_cmd_parts, capture_output=True, timeout=180)
+                    if up_result.returncode == 0:
+                        logger.info(
+                            "[IMP:9][deploy_docker_module][done] Module deployed (build-skipped): %s", module_name
+                        )
+                        time.sleep(1)
+                        return True
+                    logger.error(
+                        "[IMP:10][deploy_docker_module][up_fail_skip_build] docker compose up failed for %s: %s",
+                        module_name,
+                        up_result.stderr.decode(errors="replace").strip() if up_result.stderr else "unknown",
+                    )
+                    return False
+                except subprocess.TimeoutExpired:
+                    logger.error(
+                        "[IMP:10][deploy_docker_module][timeout_skip_build] docker compose up timed out for %s",
+                        module_name,
+                    )
+                    return False
+                except OSError as exc:
+                    logger.error(
+                        "[IMP:10][deploy_docker_module][error_skip_build] docker compose up error for %s: %s",
+                        module_name,
+                        exc,
+                    )
+                    return False
+
             logger.info("[IMP:7][deploy_docker_module][build] Rebuilding image for %s (build: detected)", module_name)
             try:
                 build_cmd = ["docker", "compose", *compose_args, "build"]
@@ -536,6 +597,17 @@ def deploy_docker_module(
                     )
                     return False
                 logger.info("[IMP:9][deploy_docker_module][build] Image rebuilt for %s", module_name)
+                # Save hash after successful build (W3.T3.3)
+                try:
+                    new_hash = compute_source_hash(module_dir)
+                    if new_hash:
+                        save_build_hash(module_dir, new_hash)
+                except Exception as exc:
+                    logger.warning(
+                        "[IMP:5][deploy_docker_module][hash_save] Failed to save build hash for %s: %s — non-fatal",
+                        module_name,
+                        exc,
+                    )
             except subprocess.TimeoutExpired:
                 logger.error(
                     "[IMP:10][deploy_docker_module][build_timeout] docker compose build timed out for %s", module_name
@@ -950,30 +1022,67 @@ def deploy_docker_group(
             rolled_back,
         )
 
-    # ── Parallel healthcheck (S4 pattern) — run on ALL deployed+failed modules ──
+    # ── Parallel healthcheck (T5.1) — fork-per-module after deploy drain ──
+    # Runs healthcheck on ALL modules in the group (both deployed and failed)
+    # using the same fork pattern as the deploy phase. Failures are collected
+    # (not blocking) for post-deploy summary.
     hc_pids: list[int] = []
+    hc_names: list[str] = []
+    hc_pass_count = 0
+    hc_fail_count = 0
+    hc_fail_names: list[str] = []
+
+    logger.info("[IMP:7][deploy_docker_group][hc_start] Running healthchecks for %d modules", len(all_names))
     for mod_name in all_names:
         pid = os.fork()
         if pid == 0:
             # Child process — use os._exit() to avoid SystemExit in forked children
             try:
-                run_healthcheck(mod_name, "docker")
-                os._exit(0)
+                success = run_healthcheck(mod_name, "docker")
+                os._exit(0 if success else 1)
             except Exception:
                 os._exit(1)
         else:
             hc_pids.append(pid)
+            hc_names.append(mod_name)
 
-    for pid in hc_pids:
-        with contextlib.suppress(ChildProcessError):
-            os.waitpid(pid, 0)
+    # Drain HC children and track per-module results
+    for i in range(len(hc_pids) - 1, -1, -1):
+        try:
+            _wpid, status = os.waitpid(hc_pids[i], 0)
+            mod_name = hc_names[i]
+            if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
+                hc_pass_count += 1
+                logger.info("[IMP:9][deploy_docker_group][hc_pass] Healthcheck PASS for %s", mod_name)
+            else:
+                hc_fail_count += 1
+                hc_fail_names.append(mod_name)
+                logger.warning("[IMP:5][deploy_docker_group][hc_fail] Healthcheck FAIL for %s", mod_name)
+        except ChildProcessError:  # noqa: PERF203
+            hc_fail_count += 1
+            hc_fail_names.append(hc_names[i])
+            logger.warning("[IMP:5][deploy_docker_group][hc_error] Healthcheck error for %s", hc_names[i])
+
+    if hc_fail_count > 0:
+        logger.warning(
+            "[IMP:5][deploy_docker_group][hc_summary] Healthcheck: %d passed, %d failed: %s",
+            hc_pass_count,
+            hc_fail_count,
+            hc_fail_names,
+        )
+    else:
+        logger.info(
+            "[IMP:9][deploy_docker_group][hc_summary] Healthcheck: ALL %d modules PASSED",
+            hc_pass_count,
+        )
 
     logger.info(
-        "[IMP:9][deploy_docker_group][done] Group complete: deployed=%d failed=%d names=%s rolled_back=%d",
+        "[IMP:9][deploy_docker_group][done] Group complete: deployed=%d failed=%d names=%s rolled_back=%d hc_fail=%d",
         group_deployed,
         group_failed,
         failed_names,
         len(rolled_back),
+        hc_fail_count,
     )
     return (group_deployed, group_failed, failed_names, rolled_back)
 
@@ -1206,12 +1315,12 @@ def _invoke_healthcheck_full(module_name: str, check_type: str) -> tuple[bool, s
 ## @complexity 2 — argparse dispatch with per-action argument validation
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Docker orchestration: deploy, pre-pull, wait, healthcheck, check-image"
+        description="Docker orchestration: deploy, pre-pull, deploy-group, wait, healthcheck, check-image"
     )
     parser.add_argument(
         "--action",
         required=True,
-        choices=["deploy", "pre-pull", "wait", "healthcheck", "check-image"],
+        choices=["deploy", "pre-pull", "deploy-group", "wait", "healthcheck", "check-image"],
         help="Action to perform",
     )
     parser.add_argument("--module-name", help="Module name (for deploy, wait, healthcheck)")
@@ -1219,7 +1328,7 @@ def main() -> int:
         "--module-entries",
         nargs="*",
         default=[],
-        help="Module entries in module:overlay format (for pre-pull)",
+        help="Module entries in module:overlay format (for pre-pull, deploy-group)",
     )
     parser.add_argument("--node-yaml", help="Path to node.yaml (unused in docker_orchestrator)")
     parser.add_argument("--modules-dir", help="Path to modules directory")
@@ -1289,6 +1398,26 @@ def main() -> int:
         )
         logger.info("[IMP:9][main][result] Pre-pull: success=%d failed=%d", ok, fail)
         return 0
+
+    if args.action == "deploy-group":
+        if not args.module_entries:
+            logger.error("[IMP:10][main][error] --module-entries required for deploy-group action")
+            return 1
+        deployed, failed, failed_names, rolled_back = deploy_docker_group(
+            entries=list(args.module_entries),
+            modules_dir=args.modules_dir or str(Path(__file__).resolve().parent.parent.parent / "modules"),
+            secrets_env_file=args.secrets_env_file,
+            platform_root=args.platform_root,
+            parallel_limit=args.parallel_limit,
+        )
+        logger.info(
+            "[IMP:9][main][result] Deploy group: deployed=%d failed=%d rolled_back=%d names=%s",
+            deployed,
+            failed,
+            len(rolled_back),
+            failed_names,
+        )
+        return 0 if failed == 0 else 1
 
     if args.action == "wait":
         if not args.module_name:

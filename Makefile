@@ -75,13 +75,18 @@ generate-manifests:
 		--manifest core/entrypoint-manifest.yaml \
 		--agents-md core/AGENTS.md \
 		--marker canon_table
+	@echo "[IMP:7][generate-manifests] Generating litellm-config.yml..."
+	@python3 core/internal/llm/config_renderer.py \
+		--policy core/internal/llm/policy.yaml \
+		--output core/modules/litellm/config/litellm-config.yml
 	@echo "[IMP:9][generate-manifests] All manifests generated."
 
 check-manifests:
 	@echo "[IMP:7][check-manifests] Checking generated manifests are up to date..."
 	@git diff --exit-code -- core/secrets-manifest.yaml platform-env.yaml \
 		tests/_conftest/smoke_env_generated.py tests/helpers/env_defaults_generated.py \
-		core/entrypoint-manifest.yaml core/AGENTS.md || \
+		core/entrypoint-manifest.yaml core/AGENTS.md \
+		core/modules/litellm/config/litellm-config.yml || \
 		(echo "[GATE:FAIL][id:check-manifests][class:L1]" && \
 		 echo ">>> REPAIR_RECIPE_START >>>" && \
 		 echo "make fix-gate && git add -u && make gate MODE=fast" && \

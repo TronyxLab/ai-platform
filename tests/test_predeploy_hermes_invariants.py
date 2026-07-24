@@ -1,26 +1,31 @@
-# GREP_SUMMARY: hermes invariants predeploy config validation context overlay security
-# STRUCTURE: INVARIANTS → check_invariant → test_all_invariants_valid → test_invariant_violation(param×4)
+# GREP_SUMMARY: hermes invariants predeploy config validation context overlay security litellm
+# STRUCTURE: INVARIANTS → check_invariant → test_all_invariants_valid → test_invariant_violation(param×9)
 # region MODULE_CONTRACT
 ## @purpose — Pre-deploy gate tests for Hermes config invariant validation.
-##           Validates 4 security invariants directly via pure Python functions
+##           Validates 4 security + 5 litellm invariants directly via pure Python functions
 ##           (no subprocess, no shell, no yq dependency).
-## @scope — 5 atomic test cases covering all 4 Hermes invariants plus a valid pass case.
+## @scope — 5 atomic test cases covering all 9 Hermes invariants plus a valid pass case.
 ## @invariants
 ##   - No subprocess.run — all validation is pure Python dict traversal
 ##   - No filesystem I/O — tests work with Python dict, not temp YAML files
 ##   - No yq dependency — YAML parsing is not needed (tests provide dicts)
-##   - INVARIANTS is a single source of truth for all 4 security invariants
+##   - INVARIANTS is a single source of truth for all 9 invariants
 ##   - Tests are independent and atomic — no shared mutable state
 ## @rationale — Context overlays can override base config values. Security-sensitive values
-##   must never be weakened by overlays. These tests verify the invariant checker rejects
-##   dangerous combinations before they reach production. Pure Python eliminates ~282 lines
-##   of shell, subprocess overhead, and yq dependency.
+##   and provider routing must never be weakened by overlays. These tests verify the invariant
+##   checker rejects dangerous combinations before they reach production. Pure Python eliminates
+##   ~282 lines of shell, subprocess overhead, and yq dependency.
 ## @usecases
-##   1. Valid context with no security overrides → all invariants PASS
-##   2. platform.dashboard.insecure: true → FAIL
-##   3. security.redact_secrets: false → FAIL
-##   4. tool_loop_guardrails.hard_stop_enabled: false → FAIL
-##   5. terminal.backend: local → FAIL
+##   1. Valid context with no overrides → all invariants PASS
+##   2. model.provider: deepseek (not litellm) → FAIL (DevPlan 049)
+##   3. model.model: deepseek-v4-pro (not reasoning) → FAIL (DevPlan 049)
+##   4. fallback_model.provider: zai (not litellm) → FAIL
+##   5. auxiliary.vision.provider: deepseek (not litellm) → FAIL
+##   6. auxiliary.compression.provider: deepseek (not litellm) → FAIL
+##   7. platform.dashboard.insecure: true → FAIL
+##   8. security.redact_secrets: false → FAIL
+##   9. tool_loop_guardrails.hard_stop_enabled: false → FAIL
+##   10. terminal.backend: local → FAIL
 # endregion MODULE_CONTRACT
 
 import logging
@@ -32,10 +37,17 @@ from conftest import ldd_trajectory
 # ── Invariants table ───────────────────────────────────────────────────────────────
 # (description, yaml_path, expected_value)
 INVARIANTS: list[tuple[str, str, Any]] = [
+    # Security invariants (must never be weakened)
     ("insecure dashboard", "platform.dashboard.insecure", False),
     ("redact secrets", "security.redact_secrets", True),
     ("hard stop enabled", "tool_loop_guardrails.hard_stop_enabled", True),
     ("terminal backend", "terminal.backend", "docker"),
+    # Provider invariants (DevPlan 049 — all models through LiteLLM)
+    ("model provider", "model.provider", "litellm"),
+    ("model model", "model.model", "reasoning"),
+    ("fallback_model provider", "fallback_model.provider", "litellm"),
+    ("auxiliary vision provider", "auxiliary.vision.provider", "litellm"),
+    ("auxiliary compression provider", "auxiliary.compression.provider", "litellm"),
 ]
 
 
@@ -73,17 +85,24 @@ def _check_invariant(context_data: dict, yaml_path: str, expected: Any) -> tuple
 
 
 # region FUNC_test_all_invariants_valid
-## @purpose — Valid context (no security overrides) → all 4 invariants PASS.
-## @rationale — Default context with only model.provider set should pass all 4 invariants.
+## @purpose — Valid context (no security overrides) → all 9 invariants PASS.
+## @rationale — Default context with litellm provider values should pass all 9 invariants.
 ## @usecases — UC-1: context without dangerous keys → all [PASS]
 @pytest.mark.predeploy
 @ldd_trajectory
 def test_all_invariants_valid(caplog) -> None:
-    """Context without dangerous keys should pass all 4 invariants."""
+    """Context with litellm values should pass all 9 invariants."""
     logger = logging.getLogger(__name__)
-    logger.info("[IMP:7][test_all_invariants_valid] Creating valid context (no security overrides)...")
+    logger.info("[IMP:7][test_all_invariants_valid] Creating valid context (litellm provider)...")
 
-    context_data: dict[str, Any] = {"model": {"provider": "deepseek"}}
+    context_data: dict[str, Any] = {
+        "model": {"provider": "litellm", "model": "reasoning"},
+        "fallback_model": {"provider": "litellm"},
+        "auxiliary": {
+            "vision": {"provider": "litellm"},
+            "compression": {"provider": "litellm"},
+        },
+    }
 
     all_pass = True
     for desc, path, expected in INVARIANTS:
@@ -100,17 +119,18 @@ def test_all_invariants_valid(caplog) -> None:
 
 
 # region PARAMETRIZED_INVARIANT_VIOLATIONS
-## @purpose — Parametrized tests for all 4 Hermes invariant violations.
-##            Each variant creates a context dict with a dangerous security key
+## @purpose — Parametrized tests for all 9 Hermes invariant violations.
+##            Each variant creates a context dict with a dangerous key
 ##            and asserts the corresponding invariant FAILs while others PASS.
-## @rationale — All 4 violation tests share identical structure. Parametrization
+## @rationale — All 9 violation tests share identical structure. Parametrization
 ##              eliminates 80% code duplication.
-## @usecases — UC-2 through UC-5: all invariant violation scenarios
+## @usecases — UC-2 through UC-10: all invariant violation scenarios
 @pytest.mark.predeploy
 @ldd_trajectory
 @pytest.mark.parametrize(
     "name,context_data,expected_fail_path",
     [
+        # Security invariants (DevPlan 049 — maintained from earlier phases)
         ("dashboard_insecure", {"platform": {"dashboard": {"insecure": True}}}, "platform.dashboard.insecure"),
         ("redact_secrets", {"security": {"redact_secrets": False}}, "security.redact_secrets"),
         (
@@ -119,6 +139,20 @@ def test_all_invariants_valid(caplog) -> None:
             "tool_loop_guardrails.hard_stop_enabled",
         ),
         ("terminal_backend_local", {"terminal": {"backend": "local"}}, "terminal.backend"),
+        # Provider invariants (DevPlan 049 Phase 6 — Hermes migration to LiteLLM)
+        ("model_provider_deepseek", {"model": {"provider": "deepseek"}}, "model.provider"),
+        ("model_model_raw", {"model": {"model": "deepseek-v4-pro"}}, "model.model"),
+        ("fallback_provider_zai", {"fallback_model": {"provider": "zai"}}, "fallback_model.provider"),
+        (
+            "auxiliary_vision_provider_deepseek",
+            {"auxiliary": {"vision": {"provider": "deepseek"}}},
+            "auxiliary.vision.provider",
+        ),
+        (
+            "auxiliary_compression_provider_deepseek",
+            {"auxiliary": {"compression": {"provider": "deepseek"}}},
+            "auxiliary.compression.provider",
+        ),
     ],
 )
 def test_invariant_violation(name, context_data, expected_fail_path, caplog) -> None:

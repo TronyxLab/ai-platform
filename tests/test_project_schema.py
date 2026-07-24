@@ -1,5 +1,5 @@
-# GREP_SUMMARY: test-project-schema ai-platform.yaml FQDN-conflict version-pinning type-enum target_node yml-extension pytest LDD IMP caplog
-# STRUCTURE: fixtures → test_valid_project_yaml[2 params] → test_project_type_enum[3 params] → test_fqdn_* → test_version_latest → test_expose_domain_invariant → test_missing_target_node → test_project_yml_extension_rejected
+# GREP_SUMMARY: test-project-schema ai-platform.yaml FQDN-conflict version-pinning type-enum target_node yml-extension llm-field pytest LDD IMP caplog
+# STRUCTURE: fixtures → test_valid_project_yaml[2 params] → test_project_type_enum[3 params] → test_fqdn_* → test_version_latest → test_expose_domain_invariant → test_missing_target_node → test_llm_*[4 params]
 
 # region MODULE_CONTRACT
 ## @purpose  Verify ai-platform.yaml schema: FQDN conflict (E1), version pinning (E2),
@@ -71,7 +71,6 @@ def project_schema() -> dict:
                 "cache": False,
                 "storage": False,
                 "expose": True,
-                "llm": False,
             },
             "stop_grace_period": "30s",
         },
@@ -87,7 +86,6 @@ def project_schema() -> dict:
                 "cache": False,
                 "storage": False,
                 "expose": True,
-                "llm": False,
             },
             "stop_grace_period": "30s",
         },
@@ -380,6 +378,121 @@ def test_project_missing_target_node(project_schema, caplog) -> None:
         assert len(errors) > 0, "Missing target_node must fail schema validation"
         error_msgs = " ".join(e.message for e in errors)
         assert "target_node" in error_msgs, f"Expected 'target_node' in error messages: {error_msgs}"
+
+
+# ── LLM field tests (DevPlan 049 Phase 2) ────────────────────────────────────
+
+
+@ldd_trajectory
+def test_llm_enabled_true(project_schema, caplog) -> None:
+    """Minimal config with llm: {enabled: true} must pass schema validation.
+
+    ## @purpose  Verify progressive disclosure: most projects only need
+    ##           llm.enabled: true to get default chat access.
+    """
+    with caplog.at_level(logging.DEBUG):
+        logger.info("[IMP:7][test_llm_enabled_true] START: testing llm: {enabled: true}")
+
+        data = {
+            "name": "test-llm-project",
+            "type": "backend",
+            "target_node": "mercury",
+            "llm": {"enabled": True},
+        }
+
+        validator = jsonschema.Draft7Validator(project_schema)
+        errors = list(validator.iter_errors(data))
+
+        logger.critical(
+            "[IMP:9][test_llm_enabled_true] ASSERT: llm enabled errors=%d (expected 0)",
+            len(errors),
+        )
+        assert errors == [], f"llm: {{enabled: true}} should pass validation: {[e.message for e in errors]}"
+
+
+@ldd_trajectory
+def test_llm_with_profile(project_schema, caplog) -> None:
+    """Config with llm.enabled and explicit profile must pass.
+
+    ## @purpose  Verify profile enum validation: default, premium, unlimited are valid.
+    """
+    with caplog.at_level(logging.DEBUG):
+        logger.info("[IMP:7][test_llm_with_profile] START: testing llm: {enabled: true, profile: premium}")
+
+        data = {
+            "name": "test-llm-premium",
+            "type": "backend",
+            "target_node": "mercury",
+            "llm": {"enabled": True, "profile": "premium"},
+        }
+
+        validator = jsonschema.Draft7Validator(project_schema)
+        errors = list(validator.iter_errors(data))
+
+        logger.critical(
+            "[IMP:9][test_llm_with_profile] ASSERT: llm with profile errors=%d (expected 0)",
+            len(errors),
+        )
+        assert errors == [], f"llm: {{enabled: true, profile: premium}} should pass: {[e.message for e in errors]}"
+
+
+@ldd_trajectory
+def test_llm_with_overrides(project_schema, caplog) -> None:
+    """Config with llm overrides (budget, rpm_limit) must pass.
+
+    ## @purpose  Verify overrides.budget.daily and other nested fields validate.
+    """
+    with caplog.at_level(logging.DEBUG):
+        logger.info("[IMP:7][test_llm_with_overrides] START: testing llm overrides")
+
+        data = {
+            "name": "test-llm-overrides",
+            "type": "backend",
+            "target_node": "mercury",
+            "llm": {
+                "enabled": True,
+                "profile": "default",
+                "overrides": {
+                    "budget": {"daily": 5.0},
+                    "rpm_limit": 100,
+                },
+            },
+        }
+
+        validator = jsonschema.Draft7Validator(project_schema)
+        errors = list(validator.iter_errors(data))
+
+        logger.critical(
+            "[IMP:9][test_llm_with_overrides] ASSERT: llm overrides errors=%d (expected 0)",
+            len(errors),
+        )
+        assert errors == [], f"llm with overrides should pass validation: {[e.message for e in errors]}"
+
+
+@ldd_trajectory
+def test_llm_invalid_profile(project_schema, caplog) -> None:
+    """Config with invalid profile must be rejected by schema.
+
+    ## @purpose  Verify enum enforcement: only 'default', 'premium', 'unlimited' are valid.
+    """
+    with caplog.at_level(logging.DEBUG):
+        logger.info("[IMP:7][test_llm_invalid_profile] START: testing invalid profile")
+
+        data = {
+            "name": "test-llm-bad-profile",
+            "type": "backend",
+            "target_node": "mercury",
+            "llm": {"enabled": True, "profile": "nonexistent"},
+        }
+
+        validator = jsonschema.Draft7Validator(project_schema)
+        errors = list(validator.iter_errors(data))
+
+        logger.critical(
+            "[IMP:9][test_llm_invalid_profile] ASSERT: invalid profile errors=%d (expected >0)",
+            len(errors),
+        )
+        assert len(errors) > 0, "Invalid profile 'nonexistent' must be rejected by schema"
 
 
 # endregion TESTS

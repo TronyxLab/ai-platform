@@ -94,10 +94,8 @@ services:
       CONFIG_FILE: "/app/config/litellm-config.yml"
 
       # LLM API Keys (passthrough from secrets.env)
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
-      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      # DEEPSEEK_API_KEY — единственный реальный AI-провайдер ключ
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:?required}"
 
       # Disable auth for health/metrics (public endpoints)
       LITELLM_REQUIRE_AUTH_FOR_METRICS: "true"

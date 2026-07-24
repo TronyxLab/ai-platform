@@ -1,11 +1,14 @@
 # GREP_SUMMARY: config.yaml blank-slate base-agent platform hermes guardrails checkpoints approvals compression session security
-# STRUCTURE: ▶ model:deepseek → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
+# STRUCTURE: ▶ model:litellm → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
 # @purpose — Base platform Hermes agent configuration — Blank Slate foundation
 # region MODULE_CONTRACT
 ## @purpose     Base platform Hermes agent configuration — Blank Slate foundation
 ## @scope       Minimal infrastructure layer; profiles add personality, tools, and task-specific settings
 ## @invariants
-##   - model.provider: deepseek (primary), zai/GLM (fallback)
+##   - model.provider: litellm (primary), model.model: reasoning (semantic alias from policy.yaml)
+##   - fallback_model.provider: litellm, model: chat (all models through LiteLLM)
+##   - auxiliary.*.provider: litellm — vision and compression through LiteLLM
+##   - fallback.enabled: false — LiteLLM manages fallback routing
 ##   - platform.dashboard.insecure: false — MANDATORY, never true
 ##   - terminal.backend: docker — production mode
 ##   - approvals.mode: smart — auxiliary LLM auto-approves low-risk commands
@@ -20,7 +23,7 @@
 _config_version: 32                      # Hermes config schema version (v2026.7.1)
 
 # GREP_SUMMARY: config.yaml blank-slate base-agent platform hermes guardrails checkpoints approvals compression session security
-# STRUCTURE: ▶ model:deepseek → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
+# STRUCTURE: ▶ model:litellm → terminal:docker → browser → stt → agent → compression → session → security → guardrails → checkpoints → approvals → ⎋
 # DOCREF: Hermes Agent documentation references
 #   - GitHub:          https://github.com/NousResearch/hermes-agent
 #   - Releases:        https://github.com/NousResearch/hermes-agent/releases
@@ -32,23 +35,24 @@ _config_version: 32                      # Hermes config schema version (v2026.7
 
 # 💼 TRAP[BUSINESS] · 2026-06-28 · HI · Blank Slate base config.
 #   Source: user-request · Risk: profiles must carry their own temperature/max_tokens now
-# 🧐 TRAP[DECISION] · 2026-07-06 · — · Z.AI as fallback, not primary
-# · Rejected: z.ai as primary provider · Reason: DeepSeek primary (lower cost, better RU availability),
-# ·   z.ai reserved as fallback for when DeepSeek is unavailable or rate-limited
-# · Rev: if DeepSeek becomes unreliable, swap primary↔fallback
+# 🧐 TRAP[DECISION] · 2026-07-24 · — · LiteLLM as sole provider (DevPlan 049)
+# · Rejected: direct DeepSeek provider + z.ai fallback (old model) · Reason: LiteLLM manages provider
+# ·   routing, fallbacks, and aliases centrally. Hermes-agent sends semantic aliases (reasoning, chat).
+# ·   Direct provider config preserved as git history if rollback needed.
+# · Rev: if LiteLLM becomes unavailable, revert to direct provider config
 
 model:
-  provider: deepseek
-  fallback_provider: zai
+  provider: litellm                        # Provider changed to litellm (DevPlan 049). Model names are semantic aliases from policy.yaml.
+  model: reasoning                         # Semantic alias — LiteLLM resolves to deepseek/deepseek-v4-pro
   api_timeout: 300                        # 5 min — достаточн для multi-turn reasoning DeepSeek
   stream_timeouts:
     read: 120
     connect: 30
 
 fallback_model:
-  provider: zai
-  model: glm-4-plus
-  api_timeout: 600                       # 10 min — z.ai may be slower for first request
+  provider: litellm
+  model: chat                            # Semantic alias — LiteLLM resolves fallback to chat model
+  api_timeout: 600                       # 10 min — fallback may be slower for first request
 
 platform:
   telegram:
@@ -131,19 +135,19 @@ display:
 
 auxiliary:
   vision:
-    provider: deepseek
-    model: deepseek-chat
+    provider: litellm
+    model: chat                            # Semantic alias — through LiteLLM
   compression:
-    provider: deepseek
-    model: deepseek-chat
+    provider: litellm
+    model: chat                            # Semantic alias — through LiteLLM
 
-# 🧐 TRAP[DECISION] · 2026-07-06 · — · Fallback configuration
-# · cooldown_minutes: 5 prevents runaway retry loops burning tokens
-# · notify_on_fallback: true ensures operator knows about provider degradation
-# · Rev: if fallback provider changes or new providers added, review cooldown/retry values
+# 🧐 TRAP[DECISION] · 2026-07-24 · — · Fallback disabled — LiteLLM manages routing
+# · Rejected: direct fallback via config (old model) · Reason: LiteLLM handles provider fallback
+# ·   routing centrally via policy.yaml. Hermes-agent disabled fallback to avoid double fallback.
+# · Rev: if LiteLLM fallback chain fails, re-enable hermes-agent fallback as safety net
 fallback:
-  enabled: true
-  max_retries: 2
+  enabled: false                           # LiteLLM manages fallback routing centrally
+  max_retries: 0
   cooldown_minutes: 5
   notify_on_fallback: true
 

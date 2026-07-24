@@ -125,32 +125,9 @@ services:
       HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${HERMES_DASHBOARD_USERNAME:-admin@${PLATFORM_DOMAIN:-ai-platform.local}}"
       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${HERMES_DASHBOARD_PASSWORD}"
 
-      # LLM API Keys (passthrough from secrets.env)
-      # ⚠️ TRAP[DECISION] · 2026-06-28 · — · LiteLLM Proxy as LLM gateway
-      # · OPENAI_BASE_URL: routes ALL OpenAI-compatible calls through LiteLLM
-      # ·   Hermes Agent uses OpenAI client — setting base URL to litellm:4000
-      # ·   Rev: if Hermes Agent adds native multi-provider support, LiteLLM may become optional
-      # ·   transparently proxies all LLM requests through LiteLLM (SC-4).
-      # ·   LiteLLM handles: metrics (/metrics for Prometheus), logging (spend_logs
-      # ·   in PostgreSQL + stdout → Loki), tracing (Langfuse callback).
-      # · Fallback: If a model is unavailable in LiteLLM, Hermes falls back to
-      # ·   direct API call using the original API key (direct env var passthrough).
+      # LLM API Keys — virtual key for LiteLLM access (provisioned at runtime by key_provisioner.py)
       OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://litellm:4000}"
-      # ✅ TRAP[INCIDENT] · 2026-06-29 · P0 · Hermes не мог аутентифицироваться в LiteLLM · RESOLVED 2026-07-07
-      # · Symptom: Hermes calls DeepSeek API directly (bypassing LiteLLM) with model name
-      # ·   anthropic/claude-opus-4.6 → HTTP 400 from api.deepseek.com
-      # · Root: OPENAI_API_KEY was empty "" → Hermes couldn't pass Bearer token to LiteLLM;
-      # ·   DEEPSEEK_API_KEY was set → Hermes routed DeepSeek-calls directly, bypassing LiteLLM.
-      # · Fix: Set default OPENAI_API_KEY to LiteLLM master key so Hermes authenticates with LiteLLM.
-      # ·   LiteLLM then routes to DeepSeek with its own DEEPSEEK_API_KEY from litellm-config.yml.
-      # · Prevention: OPENAI_API_KEY should always match LITELLM_MASTER_KEY in production secrets.env.
-      # ⚠️ No fallback — must match LITELLM_MASTER_KEY in production secrets.env
-      OPENAI_API_KEY: "${OPENAI_API_KEY}"
-      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
-      # GLM API Key for Z.AI fallback provider
-      GLM_API_KEY: "${GLM_API_KEY:-}"
+      LITELLM_API_KEY: "${LITELLM_API_KEY:-}"
 
       # API Server — OpenAI-compatible HTTP API on port 8642
       API_SERVER_ENABLED: "${API_SERVER_ENABLED:-true}"

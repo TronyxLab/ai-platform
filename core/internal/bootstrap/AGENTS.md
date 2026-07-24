@@ -95,9 +95,17 @@ node-lifecycle.sh --mode update
 
 ### docker-модули
 - Развёртываются через Docker Compose
-- Пайплайн: `_topo_sort.py` (сортировка по depends_on) → `docker compose pull` → `docker compose up -d`
+- **Два режима** (feature flag `DEPLOY_PARALLEL`, default=false):
+  - **Последовательный** (`DEPLOY_PARALLEL=false`, обратная совместимость):
+    `_topo_sort.py` (сортировка по depends_on) → `docker compose pull` → `docker compose up -d`
+  - **Параллельный** (`DEPLOY_PARALLEL=true`, DevPlan 050):
+    `_topo_sort.py` → batch-metadata + batch-check-env → pre-pull (parallel_limit=4) → итерация по topo-группам →
+    `deploy_docker_group()` (os.fork per module, content-hash skip для build-модулей) →
+    parallel healthcheck внутри группы → severity-based exit
 - Healthcheck: `docker inspect` → `State.Health.Status` (liveness) или `healthcheck.sh MODE=deep`
-- Примеры: postgres, redis, litellm, langfuse, hermes-agent
+- При параллельном режиме healthcheck выполняется внутри `deploy_docker_group()`, маркер `/var/lib/platform/.bootstrap/.hc_done_in_deploy` предотвращает дублирование в node-lifecycle
+- Content-hash skip (status-page, backup-cron): `content_hash.py` кэширует SHA256 исходников → пропускает `docker compose build` при совпадении
+- Примеры: postgres, redis, litellm, langfuse, hermes-agent, status-page, backup-cron
 
 ### Фильтрация --modules
 - `deploy-modules.sh --modules postgres,redis` → развернуть только указанные

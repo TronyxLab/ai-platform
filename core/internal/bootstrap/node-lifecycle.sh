@@ -8,7 +8,7 @@
 ## @rationale 1301→<200 LOC extraction. Shell retains orchestration; Python owns step execution.
 ## @changes 2026-07-22 | W4-E2: All step logic → state_machine.py
 # endregion MODULE_CONTRACT
-set -euo pipefail; MODE=""; RESUME_MODE=false; FORCE_MODE=false; DRY_RUN_MODE=false
+set -euo pipefail; MODE=""; RESUME_MODE=false; FORCE_MODE=""; DRY_RUN_MODE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; SM_SCRIPT="${SCRIPT_DIR}/lifecycle/state_machine.py"
 [[ "${1:-}" == "--mode" ]] && { shift; MODE="${1:-}"; shift || true; }
 [[ "$MODE" == @(init|update) ]] || { echo "[IMP:10][node-lifecycle][args] ERROR: --mode init|update required" >&2; exit 1; }

@@ -1,5 +1,5 @@
-# GREP_SUMMARY: modules.mk, up, down, restart, status, healthcheck, backup, restore, discover-modules, validate-modules
-# STRUCTURE: ┌compose helpers┐ → ◇ up → ◇ down → ◇ restart → ◇ status → ◇ healthcheck → ◇ backup → ◇ restore → ◇ discover-modules → ◇ validate-modules
+# GREP_SUMMARY: modules.mk, up, up-safe, down, restart, status, healthcheck, backup, restore, discover-modules, validate-modules
+# STRUCTURE: ┌compose helpers┐ → ◇ up-safe → ◇ up → ◇ down → ◇ restart → ◇ status → ◇ healthcheck → ◇ backup → ◇ restore → ◇ discover-modules → ◇ validate-modules
 # region MODULE_CONTRACT
 ## @purpose  Module lifecycle targets — compose up/down/restart/status, healthcheck, backup/restore, discover-modules, validate-modules
 ## @scope    Included from root Makefile; operates on local docker compose stack
@@ -10,14 +10,17 @@
 ## @rationale Makefile include-split W4-E4: module targets isolated from bootstrap/CI
 # endregion MODULE_CONTRACT
 
-.PHONY: compose-safe-up up down restart status healthcheck backup restore discover-modules validate-modules
+.PHONY: up-safe compose-safe-up up down restart status healthcheck backup restore discover-modules validate-modules
 
-## compose-safe-up: Start platform stack with preflight secret validation
+## up-safe: Start platform stack with preflight secret validation
 ##   Delegates to core/entrypoints/compose-wrapper.sh which runs compose_preflight.py
 ##   before docker compose up — blocks if required secrets are missing (DevPlan 049)
-compose-safe-up:
-	@echo "[IMP:7][make][compose-safe-up] Running preflight and starting stack..."
+up-safe:
+	@echo "[IMP:7][make][up-safe] Running preflight and starting stack..."
 	@COMPOSE_PROFILES="$(MODULES)" core/entrypoints/compose-wrapper.sh up -d
+
+## compose-safe-up: Deprecated alias for up-safe (backward compatibility)
+compose-safe-up: up-safe
 
 ## up: Start platform stack (docker compose up -d) — supports MODULES filter
 up: discover-modules dev-certs

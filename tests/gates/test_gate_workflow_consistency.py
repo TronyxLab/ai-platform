@@ -1,15 +1,15 @@
-# GREP_SUMMARY: gate workflow-consistency workflow-count-8 main-full-gate-deleted platform-test-single-job no-observability deploy-triggers push-filter make-targets core-deploy-auto-detect basedpyright-removed provisioner module-list-consistency raw-internal-allowlist nightly-gate-removed
+# GREP_SUMMARY: gate workflow-consistency workflow-count-9 main-full-gate-deleted platform-test-single-job no-observability deploy-triggers push-filter make-targets core-deploy-auto-detect basedpyright-removed provisioner module-list-consistency raw-internal-allowlist nightly-gate-removed build-hermes
 # STRUCTURE: ▶ parse workflow YAMLs → ◇ assert invariants (count, jobs, triggers, refs, module-lists, raw-internal) → ⎋ 14 tests (2 new: module-lists, raw-internal-allowlist)
 # region MODULE_CONTRACT
 ## @purpose — Gate test suite for CI workflow structural consistency (Plans 2 + 19).
-##            Validates: workflow count=8, main-full-gate deleted, platform-test single job,
+##            Validates: workflow count=9, main-full-gate deleted, platform-test single job,
 ##            no observability references, deploy triggers on platform-test, push event filter,
 ##            make target existence, core-deploy NODE= arg, basedpyright removed, provisioner usage,
 ##            module-list consistency between workflows and filesystem, raw internal call allowlist.
 ## @scope — Parses .github/workflows/*.yml and .github/actions/*.yml files to verify structural
 ##          invariants defined in DevPlan 002 CI Unification §TEST_SPEC and DevPlan 019 Gate Scope Closure.
 ## @invariants
-##   - Exactly 8 workflow files in .github/workflows/
+##   - Exactly 9 workflow files in .github/workflows/
 ##   - main-full-gate.yml does not exist
 ##   - platform-test.yml has exactly 1 job (unified, no separate static-gate/basedpyright/platform-integration)
 ##   - No workflow references core/modules/observability/ (D1 fix)
@@ -40,8 +40,9 @@ logger = logging.getLogger(__name__)
 _WORKFLOW_DIR: pathlib.Path = repo_root() / ".github" / "workflows"
 _MAKEFILE_PATH: pathlib.Path = repo_root() / "Makefile"
 
-# Expected workflow files after Plan 2 consolidation (7 workflows)
+# Expected workflow files after Plan 2 consolidation + DevPlan 050 build-hermes
 _EXPECTED_WORKFLOWS: set[str] = {
+    "build-hermes.yml",
     "build-platform.yml",
     "core-deploy.yml",
     "deploy-project.yml",
@@ -52,9 +53,8 @@ _EXPECTED_WORKFLOWS: set[str] = {
     "stage-deploy.yml",
 }
 
-# Expected count after main-full-gate.yml deletion and deploy-project.yml addition
-# (9→8 main-full-gate removed, 8→9 deploy-project.yml added)
-_EXPECTED_WORKFLOW_COUNT: int = 8
+# Expected count: 8 pre-existing + 1 (build-hermes.yml, DevPlan 050)
+_EXPECTED_WORKFLOW_COUNT: int = 9
 
 # Deploy workflows that should trigger on platform-test (workflow_run)
 _DEPLOY_WORKFLOWS: set[str] = {
@@ -195,14 +195,14 @@ def test_main_full_gate_deleted():
 
 @pytest.mark.gate
 def test_workflow_count_is_correct():
-    """Verify workflow count is 8 after main-full-gate.yml deletion (9→8 files)."""
+    """Verify workflow count is 9 (8 pre-existing + 1 build-hermes.yml, DevPlan 050)."""
     yml_files = sorted(f for f in _WORKFLOW_DIR.glob("*.yml"))
     workflow_count = len(yml_files)
     logger.info("[IMP:9][test] Workflow count: %d", workflow_count)
     assert workflow_count == _EXPECTED_WORKFLOW_COUNT, (
         f"Expected {_EXPECTED_WORKFLOW_COUNT} workflow files, found {workflow_count}: {[f.name for f in yml_files]}"
     )
-    logger.info("[IMP:9][test] Workflow count correct: %d (main-full-gate.yml deleted)", workflow_count)
+    logger.info("[IMP:9][test] Workflow count correct: %d (8 pre-existing + build-hermes.yml)", workflow_count)
 
 
 @pytest.mark.gate

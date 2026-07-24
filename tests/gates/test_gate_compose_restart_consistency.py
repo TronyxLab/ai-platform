@@ -32,6 +32,17 @@ MODULES_DIR = repo_root() / "core" / "modules"
 EXPECTED_TEST_RESTART = "no"
 EXPECTED_BASE_RESTART = {"always", "unless-stopped"}
 
+# ⚠️ TRAP[CARVE-OUT] · 2026-07-24 · clickhouse test-compose uses unless-stopped
+# · Root: macOS Docker Desktop resource pressure crashes ClickHouse after healthy start.
+# ·   Without restart, langfuse fails DNS resolution (clickhouse alias disappears on stop).
+# ·   restart: unless-stopped = pragmatic workaround for platform-limited Docker Desktop.
+# ·   Linux CI / production VPS not affected — resource pressure only on macOS dev machines.
+# · Rev: if ClickHouse stability improves on macOS (native ARM image, Docker Desktop upgrade),
+# ·   remove this carve-out and restore restart: "no".
+TEST_RESTART_CARVE_OUT: dict[str, set[str]] = {
+    "clickhouse": {"unless-stopped"},  # macOS Docker Desktop instability
+}
+
 
 def _load_compose(path: pathlib.Path) -> dict[str, Any] | None:
     """Load compose YAML or return None on error. Delegates to gate_helpers.load_yaml."""
@@ -82,7 +93,9 @@ class TestComposeRestartConsistency:
             for svc_name, svc_def in services.items():
                 restart = _get_service_restart(svc_def)
                 checked_services += 1
-                if restart != EXPECTED_TEST_RESTART:
+                # Check carve-out: module may have a non-"no" restart with documented reason
+                module_carve_out = TEST_RESTART_CARVE_OUT.get(module_name, set())
+                if restart != EXPECTED_TEST_RESTART and restart not in module_carve_out:
                     violations.append(
                         f"{module_name}/{svc_name}: test-compose has restart: "
                         f"'{restart or '<missing>'}' — expected 'no'"
@@ -92,6 +105,13 @@ class TestComposeRestartConsistency:
                         module_name,
                         svc_name,
                         restart or "<missing>",
+                    )
+                elif restart != EXPECTED_TEST_RESTART and restart in module_carve_out:
+                    logger.info(
+                        "[IMP:9][restart_consistency] CARVE-OUT: %s/%s test-compose restart=%s (allowed)",
+                        module_name,
+                        svc_name,
+                        restart,
                     )
 
         logger.info(

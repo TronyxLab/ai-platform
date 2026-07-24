@@ -25,8 +25,10 @@ COPY templates/ /app/templates/
 
 WORKDIR /app
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=5s \
-    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+# /healthz — lightweight readiness probe (~50ms): checks status-metrics.json exists, readable, fresh.
+# Unlike /health (full system checks), this is fast enough for Docker HEALTHCHECK timeout (5s).
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=5s \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')" || exit 1
 
 EXPOSE 8080
 

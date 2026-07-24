@@ -298,29 +298,21 @@ repair:
     repair_safe: true
     repair_idempotent: true
     repair_class: L1
-- mechanism: null
-  delegates_to: null
-  signature: null
-  operation_ru: Неисправимые gate (L3)
-  description: Non-repairable L3 gates — require manual intervention
-  repairs_gates:
-  - gate_id: test_single_gitleaks_version
-    repairable: false
-    repair_class: L3
-    repair_reason: Security gate — requires manual audit
-  - gate_id: test_gitleaks_composite_action_used
-    repairable: false
-    repair_class: L3
-    repair_reason: Security gate — requires manual audit
 lifecycle:
-- make_target: compose-safe-up
+- make_target: up-safe
   mechanism: compose-wrapper+preflight
   delegates_to: core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py
     → docker compose up
-  signature: make compose-safe-up [MODULES=...]
+  signature: make up-safe [MODULES=...]
   operation_ru: Безопасный compose up
   description: Safe docker compose up with preflight secret validation — blocks if
     required secrets missing (DevPlan 049)
+- make_target: compose-safe-up
+  mechanism: alias
+  delegates_to: up-safe (deprecated alias)
+  signature: make compose-safe-up (deprecated — use up-safe)
+  operation_ru: Deprecated alias for up-safe
+  description: Deprecated alias for up-safe. Migrate to `make up-safe`.
 - make_target: converge
   mechanism: ssh+script
   delegates_to: core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh
@@ -395,6 +387,14 @@ provision:
   operation_ru: Provision окружения
   description: Idempotent environment provisioner — reads platform-env.yaml and creates
     Docker networks, volume directories, and CI env vars
+- make_target: provision-llm
+  mechanism: shell-facade
+  delegates_to: core/entrypoints/provision-llm.sh → core/internal/llm/key_provisioner.py
+  signature: make provision-llm
+  operation_ru: Provision LiteLLM virtual keys
+  description: 'Provision LiteLLM virtual keys for all LLM consumers (projects + platform
+    services) from policy.yaml profiles. Idempotent: existing keys with matching config
+    are skipped.'
 dev:
 - make_target: discover-modules
   mechanism: python-script
@@ -675,6 +675,27 @@ gates:
 - id: test_litellm_sqlite_config_detected
   test_file: test_gate_litellm_pg_enforcement_negative.py
   description: 'Auto-discovered gate: test_litellm_sqlite_config_detected'
+- id: all_active_aliases_have_models
+  test_file: test_gate_llm_aliases.py
+  description: 'Auto-discovered gate: all_active_aliases_have_models'
+- id: all_model_list_have_access_group
+  test_file: test_gate_llm_aliases.py
+  description: 'Auto-discovered gate: all_model_list_have_access_group'
+- id: deepseek_key_in_all_entries
+  test_file: test_gate_llm_aliases.py
+  description: 'Auto-discovered gate: deepseek_key_in_all_entries'
+- id: fallback_chain_complete
+  test_file: test_gate_llm_aliases.py
+  description: 'Auto-discovered gate: fallback_chain_complete'
+- id: no_circular_fallbacks
+  test_file: test_gate_llm_aliases.py
+  description: 'Auto-discovered gate: no_circular_fallbacks'
+- id: provisioner_idempotent
+  test_file: test_gate_llm_provisioner.py
+  description: 'Auto-discovered gate: provisioner_idempotent'
+- id: provisioner_no_orphans
+  test_file: test_gate_llm_provisioner.py
+  description: 'Auto-discovered gate: provisioner_no_orphans'
 - id: test_all_modules_included
   test_file: test_gate_local_stack.py
   description: 'Auto-discovered gate: test_all_modules_included'
@@ -945,6 +966,27 @@ gates:
 - id: test_strict_markers_in_pyproject_toml
   test_file: test_gate_pytest_markers.py
   description: 'Auto-discovered gate: test_strict_markers_in_pyproject_toml'
+- id: deepseek_required_in_module_yaml
+  test_file: test_gate_secrets_llm_cleanup.py
+  description: 'Auto-discovered gate: deepseek_required_in_module_yaml'
+- id: litellm_project_keys_exists
+  test_file: test_gate_secrets_llm_cleanup.py
+  description: 'Auto-discovered gate: litellm_project_keys_exists'
+- id: no_anthropic_in_compose
+  test_file: test_gate_secrets_llm_cleanup.py
+  description: 'Auto-discovered gate: no_anthropic_in_compose'
+- id: no_glm_in_compose
+  test_file: test_gate_secrets_llm_cleanup.py
+  description: 'Auto-discovered gate: no_glm_in_compose'
+- id: no_openai_as_provider_key
+  test_file: test_gate_secrets_llm_cleanup.py
+  description: 'Auto-discovered gate: no_openai_as_provider_key'
+- id: no_openrouter_in_compose
+  test_file: test_gate_secrets_llm_cleanup.py
+  description: 'Auto-discovered gate: no_openrouter_in_compose'
+- id: removed_keys_in_secret_definitions
+  test_file: test_gate_secrets_llm_cleanup.py
+  description: 'Auto-discovered gate: removed_keys_in_secret_definitions'
 - id: test_clickhouse_access_management_not_1
   test_file: test_gate_security_config.py
   description: 'Auto-discovered gate: test_clickhouse_access_management_not_1'
@@ -1146,6 +1188,15 @@ gates:
 - id: test_referenced_container_names_have_alias
   test_file: test_p20_container_coupling.py
   description: 'Auto-discovered gate: test_referenced_container_names_have_alias'
+non_repairable_gates:
+- gate_id: test_single_gitleaks_version
+  repairable: false
+  repair_class: L3
+  repair_reason: Security gate — requires manual audit
+- gate_id: test_gitleaks_composite_action_used
+  repairable: false
+  repair_class: L3
+  repair_reason: Security gate — requires manual audit
 forbidden_directories:
 - core/scripts/e2e
 - core/scripts
@@ -1197,6 +1248,7 @@ allowed_verbs:
 - project-status
 - project-sync-env
 - provision
+- provision-llm
 - remove-project
 - render-vhosts
 - restart
@@ -1209,6 +1261,7 @@ allowed_verbs:
 - test
 - test-inventory-sync
 - up
+- up-safe
 - validate
 - validate-modules
 - verify

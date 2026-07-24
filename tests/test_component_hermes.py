@@ -316,8 +316,14 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
     #          test run was interrupted or teardown failed. Explicit down
     #          ensures clean state before compose up.
     logger.info("[IMP:7][hermes_up] Pre-flight: cleaning up leftover containers ...")
+    hermes_test_override = os.path.join(os.path.dirname(compose_file), "docker-compose.test.yml")
+    # ⚠️ TRAP[FIX] · 2026-07-24 · Include test.yml in down for consistency with up
+    _down_cleanup_args = ["docker", "compose", "-f", compose_file]
+    if os.path.exists(hermes_test_override):
+        _down_cleanup_args.extend(["-f", hermes_test_override])
+    _down_cleanup_args.extend(["--project-name", COMPOSE_PROJECT_HERMES, "down", "--timeout", "5"])
     subprocess.run(
-        ["docker", "compose", "-f", compose_file, "--project-name", COMPOSE_PROJECT_HERMES, "down", "--timeout", "5"],
+        _down_cleanup_args,
         env={**os.environ, **ENV_HERMES},
         capture_output=True,
         text=True,
@@ -352,7 +358,6 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
                 _context_image,
             )
 
-    hermes_test_override = os.path.join(os.path.dirname(compose_file), "docker-compose.test.yml")
     if not _image_exists:
         logger.info("[IMP:7][hermes_up] Building hermes-agent image ...")
         build_args = ["docker", "compose", "-f", compose_file]
@@ -432,8 +437,12 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
         getattr(exc, "stderr", str(exc))[-500:] if hasattr(exc, "stderr") else str(exc)[-500:]
         logger.error("[IMP:9][hermes_up] docker compose up failed: %s", exc)
         # Collect docker compose logs for diagnostic
+        _h_logs_args = ["docker", "compose", "-f", compose_file]
+        if os.path.exists(hermes_test_override):
+            _h_logs_args.extend(["-f", hermes_test_override])
+        _h_logs_args.extend(["--project-name", COMPOSE_PROJECT_HERMES, "logs", "--tail", "50"])
         _hermes_diag = subprocess.run(
-            ["docker", "compose", "-f", compose_file, "--project-name", COMPOSE_PROJECT_HERMES, "logs", "--tail", "50"],
+            _h_logs_args,
             env={**os.environ, **ENV_HERMES},
             capture_output=True,
             text=True,
@@ -457,15 +466,23 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
     if "Up" not in container_running.stdout:
         logger.error("[IMP:9][hermes_up] Container not running: %s", container_running.stdout)
         # Diagnostic: get compose ps and logs
+        _h_ps_args = ["docker", "compose", "-f", compose_file]
+        if os.path.exists(hermes_test_override):
+            _h_ps_args.extend(["-f", hermes_test_override])
+        _h_ps_args.extend(["--project-name", COMPOSE_PROJECT_HERMES, "ps"])
         _h_ps = subprocess.run(
-            ["docker", "compose", "-f", compose_file, "--project-name", COMPOSE_PROJECT_HERMES, "ps"],
+            _h_ps_args,
             env={**os.environ, **ENV_HERMES},
             capture_output=True,
             text=True,
             timeout=30,
         )
+        _h_logs_args = ["docker", "compose", "-f", compose_file]
+        if os.path.exists(hermes_test_override):
+            _h_logs_args.extend(["-f", hermes_test_override])
+        _h_logs_args.extend(["--project-name", COMPOSE_PROJECT_HERMES, "logs", "--tail", "50"])
         _h_logs = subprocess.run(
-            ["docker", "compose", "-f", compose_file, "--project-name", COMPOSE_PROJECT_HERMES, "logs", "--tail", "50"],
+            _h_logs_args,
             env={**os.environ, **ENV_HERMES},
             capture_output=True,
             text=True,
@@ -506,33 +523,33 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
 def test_hermes_compose_up(hermes_up, caplog) -> None:
     """Verify hermes-agent containers are running after compose up.
 
-    ## @purpose — Assert that docker compose ps shows hermes-agent container as running.
+    ## @purpose — Assert that hermes-agent-test container is running via docker ps.
     ## @io — ⇥ hermes_up (compose file path), caplog → ⎋ None (side-effect: assertions)
     ## @complexity — O(1) — single subprocess call
-    ## @acceptance — hermes-agent container must appear in docker compose ps JSON output
+    ## @acceptance — hermes-agent-test container must appear in docker ps output as 'Up'
+
+    ⚠️ TRAP[FIX] · 2026-07-24 · Use `docker ps` instead of `docker compose ps`
+    · docker compose ps returns empty when platform_services background wave
+    ·   recreates hermes-agent-test under ai-platform-test project, taking
+    ·   ownership away from ai-platform-test-hermes. docker ps checks the
+    ·   actual container state regardless of compose project ownership.
     """
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_hermes_compose_up] Verifying hermes-agent containers are running ...")
 
+        # Use docker ps (daemon-level) not compose ps (project-scoped)
         result = subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                hermes_up,
-                "--project-name",
-                COMPOSE_PROJECT_HERMES,
-                "ps",
-            ],
-            env={**os.environ, **ENV_HERMES},
+            ["docker", "ps", "--filter", "name=hermes-agent-test", "--format", "{{.Names}} {{.Status}}"],
             capture_output=True,
             text=True,
             check=True,
+            timeout=10,
         )
 
-        assert "hermes-agent" in result.stdout, (
-            f"hermes-agent container not found in compose ps output: {result.stdout[:500]}"
+        assert "hermes-agent-test" in result.stdout, (
+            f"hermes-agent container not found in docker ps output: {result.stdout[:500]}"
         )
+        assert "Up" in result.stdout, f"hermes-agent container found but not running: {result.stdout[:500]}"
         logger.info("[IMP:9][test_hermes_compose_up] hermes-agent container is running")
 
 

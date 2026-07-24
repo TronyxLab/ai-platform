@@ -1,0 +1,34 @@
+# GREP_SUMMARY: policy.invalid.yaml, fixture, invalid, missing-aliases, negative-test
+# STRUCTURE: ┌providers┐ → ┌aliases(MISSING)┐ → ┌profiles(incomplete)┐ → ┌auto_provision(bad-ref)┐ → ⚡ expect exception
+# region MODULE_CONTRACT
+## @purpose  Invalid LLM policy fixture — missing aliases section.
+##           Used by test_llm_policy_schema.py for negative testing.
+## @scope    Test fixture — must fail both JSON Schema and Pydantic validation
+##           because 'aliases' is a required field per both schemas.
+## @invariants
+##   - Intentionally missing 'aliases' key
+##   - Providers and profiles are present but incomplete
+##   - auto_provision.default_profile references 'default' but no default profile exists
+## @changes — 2026-07-24 | Created (DevPlan 049 Phase 1)
+# endregion MODULE_CONTRACT
+
+providers:
+  deepseek:
+    key_env: DEEPSEEK_API_KEY
+
+# Intentionally missing 'aliases' section — should fail validation
+# aliases:
+
+profiles:
+  premium:
+    label: "Premium (reasoning + chat)"
+    models: [reasoning, chat]
+    budget: {daily: 10.0}
+    rpm_limit: 60
+    metadata: {tier: premium}
+
+auto_provision:
+  default_profile: default
+  profile_rules:
+    - match: {name: hermes-agent}
+      profile: unlimited

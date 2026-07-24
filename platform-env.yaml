@@ -127,7 +127,6 @@ env_defaults:
   CLICKHOUSE_PASSWORD: test-clickhouse-pwd-not-for-prod
   MINIO_ROOT_USER: minioadmin
   MINIO_ROOT_PASSWORD: minioadmin
-  OPENAI_API_KEY: sk-ci-test-master-key
   HERMES_DASHBOARD_PASSWORD: test-db-pwd
   GF_SECURITY_ADMIN_PASSWORD: testpass
   S3_BUCKET: test-bucket

@@ -26,6 +26,9 @@
 ##             state_machine.py — чистая state-machine с transitions; steps.py — step реализация;
 ##             shell-фасад — orchestration (flock, env exports).
 ## @changes  2026-07-22 | W4-E2 — Created from node-lifecycle.sh decomposition
+##           2026-07-24 | W5.T5.3 — Added HC_DONE_MARKER check in healthcheck step:
+##           when /var/lib/platform/.bootstrap/.hc_done_in_deploy exists, skips the
+##           standalone healthcheck (already done inside deploy_docker_group)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -110,9 +113,10 @@ UPDATE_STEPS: list[str] = [
     "deliver_overlays",  # 2.5/3
     "ssl_provision",  # 3/4
     "deploy_modules",  # 4/5
-    "healthcheck",  # 6
-    "converge",  # 7 (after healthcheck)
-    "deploy_context",  # 8 ← NEW (DevPlan 047): incremental project deploy + cert check
+    "provision_llm_keys",  # 6 ← NEW (DevPlan 049): render litellm config + provision virtual keys
+    "healthcheck",  # 7
+    "converge",  # 8 (after healthcheck)
+    "deploy_context",  # 9 ← NEW (DevPlan 047): incremental project deploy + cert check
 ]
 
 
@@ -1189,7 +1193,38 @@ def _execute_update_step(
         deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
         _subprocess_run(["bash", deploy_script, "--skip-provision"], "deploy_modules", timeout=300)
 
+    elif step_name == "provision_llm_keys":
+        # DevPlan 049 Phase 7: render litellm-config.yml from policy.yaml, then provision virtual keys
+        llm_dir = os.path.join(core_dir, "internal", "llm")
+        renderer_script = os.path.join(llm_dir, "config_renderer.py")
+        config_output = os.path.join(core_dir, "modules", "litellm", "config", "litellm-config.yml")
+        if os.path.isfile(renderer_script):
+            _subprocess_run(
+                ["python3", renderer_script, "--output", config_output],
+                "render_litellm_config",
+                non_fatal=True,
+            )
+        provision_entrypoint = os.path.join(core_dir, "entrypoints", "provision-llm.sh")
+        if os.path.isfile(provision_entrypoint):
+            _subprocess_run(
+                ["bash", provision_entrypoint],
+                "provision_llm_keys",
+                non_fatal=True,
+            )
+
     elif step_name == "healthcheck":
+        # T5.3: Skip standalone healthcheck if already done during parallel deploy
+        hc_done_marker = "/var/lib/platform/.bootstrap/.hc_done_in_deploy"
+        if os.path.isfile(hc_done_marker):
+            logger.info(
+                "[IMP:9][update][healthcheck] Healthcheck already done during deploy "
+                "(DEPLOY_PARALLEL) — skipping standalone healthcheck step"
+            )
+            import contextlib
+
+            with contextlib.suppress(OSError):
+                os.unlink(hc_done_marker)
+            return
         _run_healthchecks(node_yaml)
 
     elif step_name == "converge":
@@ -1240,6 +1275,10 @@ def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
         "deliver_overlays": [os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")],
         "ssl_provision": [os.path.join(core_dir, "internal", "bootstrap", "issue-cert.sh")],
         "deploy_modules": [os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")],
+        "provision_llm_keys": [
+            os.path.join(core_dir, "internal", "llm", "config_renderer.py"),
+            os.path.join(core_dir, "entrypoints", "provision-llm.sh"),
+        ],
         # DevPlan 047: new step paths
         "docker_auth": [os.path.join(core_dir, "internal", "bootstrap", "docker_registry_auth.py")],
         "deploy_context": [
@@ -1715,6 +1754,19 @@ def _ssl_provision(core_dir: str, node_yaml: str) -> None:
         return
 
     platform_domain = os.environ.get("PLATFORM_DOMAIN", "")
+    # Fallback: extract domain from node.yaml (SSH env doesn't carry PLATFORM_DOMAIN)
+    if not platform_domain and node_yaml and os.path.isfile(node_yaml):
+        try:
+            import yaml
+
+            with open(node_yaml) as f:
+                node_data = yaml.safe_load(f)
+            if isinstance(node_data, dict):
+                platform_domain = node_data.get("domain", "") or ""
+                if platform_domain:
+                    logger.info("[IMP:7][ssl] PLATFORM_DOMAIN resolved from node.yaml: %s", platform_domain)
+        except Exception:
+            pass
     if not platform_domain:
         logger.warning("[IMP:7][ssl] PLATFORM_DOMAIN not set — skipping SSL provisioning")
         return
@@ -1770,8 +1822,8 @@ def _run_healthchecks(node_yaml: str) -> None:
         logger.warning("[IMP:7][healthcheck] NODE_YAML not set or not found — skipping healthchecks")
         return
 
-    hc_max_retries = 4
-    hc_retry_interval = 3
+    hc_max_retries = 10
+    hc_retry_interval = 10
     hc_fail = 0
 
     try:
@@ -1798,10 +1850,19 @@ def _run_healthchecks(node_yaml: str) -> None:
                 continue
 
             passed = False
+            # ⚠️ TRAP[BUG] · 2026-07-24 · P0 · invoke_module_interface is a bash function, not an executable
+            # · Symptom: subprocess.run(["invoke_module_interface", ...]) → FileNotFoundError
+            # · Root: invoke_module_interface is sourced from module-interface.sh (via paths.sh)
+            # · Fix: wrap in bash -c with proper sourcing
+            platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
             for attempt in range(1, hc_max_retries + 1):
                 try:
+                    hc_cmd = (
+                        f"source {shlex.quote(platform_root + '/core/lib/paths.sh')} && "
+                        f"invoke_module_interface {shlex.quote(mod_name)} healthcheck liveness"
+                    )
                     hc_result = subprocess.run(
-                        ["invoke_module_interface", mod_name, "healthcheck", "liveness"],
+                        ["bash", "-c", hc_cmd],
                         capture_output=True,
                         text=True,
                         timeout=30,
@@ -1815,8 +1876,18 @@ def _run_healthchecks(node_yaml: str) -> None:
                         )
                         passed = True
                         break
-                except (subprocess.TimeoutExpired, FileNotFoundError):
-                    pass
+                    if attempt == 1:
+                        logger.warning(
+                            "[IMP:7][healthcheck:%s] stderr: %s",
+                            mod_name,
+                            hc_result.stderr.strip()[-200:] if hc_result.stderr else "(empty)",
+                        )
+                except subprocess.TimeoutExpired:
+                    logger.warning("[IMP:7][healthcheck:%s] Timeout (attempt %d/%d)", mod_name, attempt, hc_max_retries)
+                except FileNotFoundError:
+                    logger.warning(
+                        "[IMP:7][healthcheck:%s] bash not found (attempt %d/%d)", mod_name, attempt, hc_max_retries
+                    )
                 if attempt < hc_max_retries:
                     time.sleep(hc_retry_interval)
 
@@ -1948,6 +2019,22 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
     issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
     secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
 
+    # T0.3 (048.P3): Ensure PLATFORM_DOMAIN is set from node.yaml if not in env
+    platform_domain = os.environ.get("PLATFORM_DOMAIN", "").strip()
+    if not platform_domain and node_yaml and os.path.isfile(node_yaml):
+        try:
+            import yaml
+
+            with open(node_yaml) as f:
+                node_data = yaml.safe_load(f)
+            if isinstance(node_data, dict):
+                domain_val = node_data.get("domain", "") or ""
+                if domain_val:
+                    os.environ["PLATFORM_DOMAIN"] = domain_val
+                    logger.info("[IMP:7][deploy_context] PLATFORM_DOMAIN set from node.yaml: %s", domain_val)
+        except Exception:
+            pass
+
     if domains:
         try:
             # Import cert_orchestrator from bootstrap package
@@ -1959,6 +2046,9 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
             )
             if spec and spec.loader:
                 cert_mod = importlib.util.module_from_spec(spec)
+                sys.modules["cert_orchestrator"] = (
+                    cert_mod  # P0: register before exec_module (@dataclass requires sys.modules)
+                )
                 spec.loader.exec_module(cert_mod)
                 cert_result = cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
                 logger.info("[IMP:9][deploy_context] Cert orchestration complete: %s", cert_result.to_dict())
@@ -1977,6 +2067,9 @@ def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -
         spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
         if spec and spec.loader:
             deployer_mod = importlib.util.module_from_spec(spec)
+            sys.modules["context_deployer"] = (
+                deployer_mod  # P0: register before exec_module (@dataclass requires sys.modules)
+            )
             spec.loader.exec_module(deployer_mod)
             results = deployer_mod.deploy_context_projects(node_yaml, context) or []
             logger.info("[IMP:9][deploy_context] Project deploy complete: %d projects", len(results))

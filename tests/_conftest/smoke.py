@@ -100,7 +100,7 @@ _STATIC_SMOKE_ENV: dict[str, str] = {
     "HERMES_DASHBOARD_USERNAME": "admin@ai-platform.local",
     "GF_SECURITY_ADMIN_USER": "admin@ai-platform.local",
     "S3_BUCKET": "test-bucket",
-    "S3_ENDPOINT_URL": "https://s3.timeweb.cloud",
+    "S3_ENDPOINT_URL": "",  # ⚠️ TRAP[FIX] · 2026-07-24 · Empty — skip S3 in test; production endpoint unreachable in CI
     "PROMETHEUS_TARGETS_DIR": "/tmp/prometheus-targets",
     "PROMETHEUS_RULES_DIR": "/tmp/prometheus-rules",
     "NGINX_CONF_DIR": "./dev-config",

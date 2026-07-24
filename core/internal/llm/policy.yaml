@@ -1,0 +1,94 @@
+# GREP_SUMMARY: policy.yaml, SSoT, aliases, profiles, providers, auto_provision, deepseek
+# STRUCTURE: ┌providers(deekseek)┐ → ┌aliases(reasoning,chat,coding,vision,embedding)┐ → ┌profiles(default,premium,unlimited)┐ → ┌auto_provision(default_profile,profile_rules)┐
+# region MODULE_CONTRACT
+## @purpose  Единственный Source of Truth (SSoT) для LLM Gateway конфигурации.
+##           Определяет провайдеров, семантические алиасы моделей, профили доступа
+##           и правила авто-провижининга virtual keys.
+## @scope    Все проекты платформы используют этот файл для определения LLM-доступа.
+##           Ни один проект не имеет своего policy.yaml — только ссылается на профили.
+## @invariants
+##   - providers: только DeepSeek (единственный провайдер на 2026-07-24)
+##   - aliases с пустыми deployments ([]) — зарезервированы, но не активны
+##   - profiles определяют budgets в USD/day
+##   - auto_provision.default_profile применяется, если проект не указал profile
+##   - profile_rules переопределяют профиль для конкретных проектов/сервисов
+## @rationale Единый SSoT исключает дублирование конфигурации по проектам.
+##            При появлении разных провайдеров на разных контекстах — добавляется
+##            секция contexts: с per-context overrides.
+## @changes — 2026-07-24 | Created (DevPlan 049 Phase 1)
+# endregion MODULE_CONTRACT
+
+# ── Providers ──────────────────────────────────────────────────────────────
+providers:
+  deepseek:
+    key_env: DEEPSEEK_API_KEY
+
+# ── Semantic Aliases ──────────────────────────────────────────────────────
+aliases:
+  reasoning:
+    label: "Complex reasoning"
+    context_window: 128000
+    features: [reasoning, structured_output]
+    deployments:
+      primary:
+        provider: deepseek
+        model: deepseek-v4-pro
+      fallback:
+        provider: deepseek
+        model: deepseek-v4-flash
+
+  chat:
+    label: "Fast chat"
+    context_window: 128000
+    features: [chat]
+    deployments:
+      primary:
+        provider: deepseek
+        model: deepseek-v4-flash
+
+  coding:
+    label: "Code generation"
+    context_window: 200000
+    features: [code, structured_output]
+    deployments: []
+
+  vision:
+    label: "Image analysis"
+    context_window: 128000
+    features: [vision, multimodal]
+    deployments: []
+
+  embedding:
+    label: "Text embeddings"
+    features: [embedding]
+    deployments: []
+
+# ── Access Profiles ───────────────────────────────────────────────────────
+profiles:
+  default:
+    label: "Default (chat only)"
+    models: [chat]
+    budget: {daily: 1.0}
+    rpm_limit: 10
+    metadata: {tier: default}
+
+  premium:
+    label: "Premium (reasoning + chat)"
+    models: [reasoning, chat]
+    budget: {daily: 10.0}
+    rpm_limit: 60
+    metadata: {tier: premium}
+
+  unlimited:
+    label: "Unlimited (all active models)"
+    models: [reasoning, chat]
+    budget: {daily: 50.0}
+    rpm_limit: 120
+    metadata: {tier: unlimited}
+
+# ── Auto-Provision ────────────────────────────────────────────────────────
+auto_provision:
+  default_profile: default
+  profile_rules:
+    - match: {name: hermes-agent}
+      profile: unlimited

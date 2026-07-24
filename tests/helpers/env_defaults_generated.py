@@ -28,7 +28,6 @@ _LITELLM_MASTER_KEY: str = "sk-ci-test-master-key"
 _MINIO_ROOT_PASSWORD: str = "minioadmin"
 _MINIO_ROOT_USER: str = "minioadmin"
 _NEXTAUTH_SECRET: str = "ci-test-nextauth-secret-32-chars-min!!"
-_OPENAI_API_KEY: str = "sk-ci-test-master-key"
 _PLATFORM_MASTER_EMAIL: str = "admin@test.local"
 _PLATFORM_MASTER_PASSWORD: str = "test-master-password"
 _POSTGRES_PASSWORD: str = "test-pg-pwd"
@@ -56,7 +55,6 @@ __all__ = [
     "_MINIO_ROOT_PASSWORD",
     "_MINIO_ROOT_USER",
     "_NEXTAUTH_SECRET",
-    "_OPENAI_API_KEY",
     "_PLATFORM_MASTER_EMAIL",
     "_PLATFORM_MASTER_PASSWORD",
     "_POSTGRES_PASSWORD",

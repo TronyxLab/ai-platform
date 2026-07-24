@@ -15,7 +15,7 @@ $(VENV):
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
 
-.PHONY: venv templates-check templates-render dev-certs provision test-inventory-sync help _get_all_profiles
+.PHONY: venv templates-check templates-render dev-certs provision provision-llm test-inventory-sync help _get_all_profiles
 
 venv: $(VENV)
 
@@ -41,6 +41,13 @@ dev-certs:
 	PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$${_env_pd:-ai-platform.local}}" \
 	bash $(_platform_root)/core/modules/nginx/generate-dev-certs.sh
 	@echo "[IMP:9][make][dev-certs] Dev certificates check complete"
+
+## provision-llm: Provision LiteLLM virtual keys for all LLM consumers
+##   Delegates to core/entrypoints/provision-llm.sh → key_provisioner.py
+provision-llm:
+	@echo "[IMP:7][make][provision-llm] Provisioning LiteLLM virtual keys..."
+	@$(_platform_root)/core/entrypoints/provision-llm.sh
+	@echo "[IMP:9][make][provision-llm] Virtual key provisioning complete"
 
 ## provision: Provision environment (networks, volumes, CI env) from platform-env.yaml
 ##   Usage: make provision [SCOPE=all|networks,volumes]

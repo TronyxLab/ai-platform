@@ -284,10 +284,9 @@ jobs:
         continue-on-error: true
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
         run: |
-          if [ -z "${{ secrets.DEEPSEEK_API_KEY }}" ] || [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+          if [ -z "${{ secrets.DEEPSEEK_API_KEY }}" ] || [ -z "${{ secrets.LITELLM_MASTER_KEY }}" ]; then
             echo "[IMP:9][integration-live] Required API keys not available — skipping live integration (fork PR path)"
             exit 0
           fi

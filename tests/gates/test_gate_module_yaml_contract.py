@@ -51,6 +51,31 @@ MODULES_DIR = os.path.join(
 REQUIRED_FIELDS = ["name", "install_type", "description", "depends_on"]
 
 
+def _normalize_env_req_entry(entry: str | dict) -> str:
+    """Normalize a single env_requires entry to its canonical name.
+
+    ## @purpose — Dict entries cannot be used as set elements (TypeError).
+    ##            Extract the 'name' field from dict entries, pass strings through.
+    ## @io — ⇥ str or dict → ⎋ str (canonical name)
+    ## @complexity — O(1)
+    """
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict):
+        return entry.get("name", "")
+    return str(entry)
+
+
+def _normalize_env_req_list(env_req: list) -> list[str]:
+    """Normalize a list of env_requires entries to canonical names.
+
+    ## @purpose — Transform mixed str/dict list to list[str] for duplicate detection.
+    ## @io — ⇥ list[str|dict] → ⎋ list[str]
+    ## @complexity — O(N)
+    """
+    return [_normalize_env_req_entry(e) for e in env_req]
+
+
 def _get_module_yamls():
     """Return list of (module_name, module_yaml_path, parsed_dict) for all valid modules."""
     results = []
@@ -139,10 +164,16 @@ def test_env_requires_no_duplicates(caplog):
         env_req = data.get("env_requires", [])
         if not isinstance(env_req, list):
             continue
-        if len(env_req) != len(set(env_req)):
-            duplicates = [v for v in env_req if env_req.count(v) > 1]
-            failed.append(f"{module_name}: duplicate env_requires: {set(duplicates)}")
-            logger.info("[IMP:9][gate] FAIL: %s has duplicate env_requires", module_name)
+        normalized = _normalize_env_req_list(env_req)
+        seen = set()
+        dups = set()
+        for item in normalized:
+            if item in seen:
+                dups.add(item)
+            seen.add(item)
+        if len(normalized) != len(seen):
+            failed.append(f"{module_name}: duplicate env_requires names: {sorted(dups)}")
+            logger.info("[IMP:9][gate] FAIL: %s has duplicate env_requires: %s", module_name, sorted(dups))
 
     assert not failed, "[IMP:9][gate] env_requires violations:\n" + "\n".join(failed)
     logger.info("[IMP:9][gate] PASS: No duplicate env_requires")

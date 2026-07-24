@@ -16,7 +16,7 @@
 # 🧐 TRAP[DECISION] · 2026-07-15 · — · Контекстные LLM-конфиги: декларативный llm-policy.yaml (aliases + fallbacks + virtual_keys) в context-overlay (/opt/<context>/platform/modules/litellm/), рендерер base+policy → litellm-config.yml, идемпотентный key-провижнер (/key/info → /key/generate, значения → SOPS), gate: каждый alias обязан иметь fallback-цепочку
 # · Rejected: полная замена конфига через overlay (drift boilerplate с core), DB-driven через LiteLLM UI (нарушает config-as-code + инвариант #9 о пересоздаваемом сервере), env-параметризация (aliases/fallbacks/keys — структурные списки, не скаляры)
 # · Reason: суперпозиция коллапсирована владельцем в Option B (сессия wave-litellm, 2026-07-15) · реализация — отдельная будущая задача
-# · Rev: при старте задачи «context LLM configs» — новый DevPlan; схема: aliases{smart|fast|cheap|vision|coding-model}, fallbacks{alias: [providers]}, virtual_keys{service: models+budget+rpm}
+# · Rev: при старте задачи «context LLM configs» — новый DevPlan; схема: aliases{smart|fast|cheap|vision|coding-model}, fallbacks{alias: [providers]}, virtual_keys{service: models+budget+rpm}. See DevPlan 049 (2026-07-24) for implementation.
 
 name: litellm
 install_type: docker
@@ -45,4 +45,6 @@ env_requires:
   # ## @rationale env_requires gate (deploy-modules.sh) treats empty as missing → would
   # false-fail litellm deploy on every node without an enterprise license (2026-07-17).
   - POSTGRES_PASSWORD
-  - OPENAI_API_KEY
+  - name: DEEPSEEK_API_KEY
+    type: secret
+    required: true

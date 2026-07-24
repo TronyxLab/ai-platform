@@ -16,6 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || true)}"
+export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
 
 L1_IMAGE="hermes-agent-base"
 L2_IMAGE="hermes-agent-context"
@@ -27,7 +28,11 @@ build_L1() {
     # · which cannot run the x86_64-only upstream base image (nousresearch/hermes-agent).
     # · --platform linux/amd64 forces x86_64 build via QEMU emulation on ARM64 hosts.
     # · On Linux x86_64, this flag is native (no-op) — no emulation overhead.
+    mkdir -p /tmp/.hermes-build-cache
+    echo "[IMP:9][build-hermes][L1] BuildKit cache directory ready"
     docker build --platform linux/amd64 -t "${L1_IMAGE}" \
+        --cache-from type=local,src=/tmp/.hermes-build-cache \
+        --cache-to type=local,dest=/tmp/.hermes-build-cache,mode=max \
         -f "${PLATFORM_ROOT}/core/modules/hermes-agent/build/Dockerfile" \
         "${PLATFORM_ROOT}/core/modules/hermes-agent/build/"
     echo "[IMP:9][build-hermes][L1] === L1 build complete: ${L1_IMAGE} ==="
@@ -40,8 +45,12 @@ build_L2() {
         exit 1
     fi
     echo "[IMP:9][build-hermes][L2] === Building L2: ${L2_IMAGE} (context=${context}) ==="
+    mkdir -p /tmp/.hermes-build-cache
+    echo "[IMP:9][build-hermes][L2] BuildKit cache directory ready"
     docker build --platform linux/amd64 -t "${L2_IMAGE}" \
         --build-arg "CONTEXT=${context}" \
+        --cache-from type=local,src=/tmp/.hermes-build-cache \
+        --cache-to type=local,dest=/tmp/.hermes-build-cache,mode=max \
         -f "${PLATFORM_ROOT}/core/modules/hermes-agent/context/Dockerfile" \
         "${PLATFORM_ROOT}"
     echo "[IMP:9][build-hermes][L2] === L2 build complete: ${L2_IMAGE} ==="

@@ -332,7 +332,7 @@ def main() -> None:
             "##           Consumed by CI gates, deploy-modules.sh, secrets-init.sh.\n"
             "## @invariants\n"
             "##   tier ∈ {required, generated, optional, removed}\n"
-            "##   source ∈ {sops, autogen, ci-secret}\n"
+            "##   source ∈ {sops, autogen, ci-secret, provisioner}\n"
             "##   generated-секреты всегда имеют gen_command\n"
             "##   ci-secret секреты имеют consumers: [] (CI-side, не модули)\n"
             "##   removed-секреты имеют tier=removed (историческая запись)\n"

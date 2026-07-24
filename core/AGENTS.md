@@ -49,7 +49,8 @@
 | `make project-status` | Статус проекта | make project-status NAME=<name> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
 | `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=<name> | core/internal/scaffold/add-vhost.sh --render-all --node <n> |
 | `make secrets-unlock` | Расшифровка секретов | make secrets-unlock [NODE=...] | core/entrypoints/secrets.sh → core/internal/secrets/decrypt-secrets.sh |
-| `make compose-safe-up` | Безопасный compose up | make compose-safe-up [MODULES=...] | core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up |
+| `make up-safe` | Безопасный compose up | make up-safe [MODULES=...] | core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up |
+| `make compose-safe-up` | Deprecated alias for up-safe | make compose-safe-up (deprecated — use up-safe) | up-safe (deprecated alias) |
 | `make converge` | Реконсиляция ноды | make converge NODE=<name> | core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh |
 | `make healthcheck` | Проверка здоровья | make healthcheck [NODE=...] | core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh |
 | `make up` | Запуск compose-стека | make up [PROJECT=...] | core/internal/provision-environment.sh → docker compose up |
@@ -61,6 +62,7 @@
 | `make node-update` | Обновление provisioned ноды | make node-update NODE=<name> | core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules + healthcheck |
 | `make verify` | HTTPS-верификация | make verify NODE=<node> | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
 | `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh |
+| `make provision-llm` | Provision LiteLLM virtual keys | make provision-llm | core/entrypoints/provision-llm.sh → core/internal/llm/key_provisioner.py |
 | `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |
 | `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/generate-dev-certs.sh |
 | `make _get_all_profiles` | Вывод COMPOSE_PROFILES | make _get_all_profiles | echo |

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://core/schemas/ai-platform.schema.json",
-  "$comment": "GREP_SUMMARY: ai-platform schema validation project-manifest needs domain platform_domain expose FQDN\nSTRUCTURE: root(properties) → needs(expose,domain,database,cache,storage,llm) → monitoring(metrics,logs,alerts) → if/then(conditional validation)\n💼 TRAP[BUSINESS] · 2026-07-01 · HI · Структура ~/projects/ — разделение контекстов. Source: platform owner. Risk: AI-агенты путают репозитории разных контекстов. ~/projects/ai-platform/ — платформа (общий инструмент). ~/projects/hermes-agent/ — базовый образ агента. ~/projects/<org>/hermes-agent/ — контекстный оверлей агента. ~/projects/<org>/node-configs/ — конфигурация узлов контекста. ~/projects/<org>/<project>/ — проекты контекста. Контексты изолированы, связь только через node-configs внутри контекста.",
+  "$comment": "GREP_SUMMARY: ai-platform schema validation project-manifest needs domain platform_domain expose FQDN\nSTRUCTURE: root(properties) → needs(expose,domain,database,cache,storage) → llm(enabled,profile,overrides) → monitoring(metrics,logs,alerts) → if/then(conditional validation)\n💼 TRAP[BUSINESS] · 2026-07-01 · HI · Структура ~/projects/ — разделение контекстов. Source: platform owner. Risk: AI-агенты путают репозитории разных контекстов. ~/projects/ai-platform/ — платформа (общий инструмент). ~/projects/hermes-agent/ — базовый образ агента. ~/projects/<org>/hermes-agent/ — контекстный оверлей агента. ~/projects/<org>/node-configs/ — конфигурация узлов контекста. ~/projects/<org>/<project>/ — проекты контекста. Контексты изолированы, связь только через node-configs внутри контекста.",
   "title": "AI-Platform Declaration",
   "description": "Schema for ai-platform.yaml — единый манифест проекта AI Platform (деплой + мониторинг). ЕДИНСТВЕННЫЙ формат манифеста — AD-2.",
   "type": "object",
@@ -105,16 +105,60 @@
         "expose": {
           "type": "boolean",
           "description": "Public HTTP(S) exposure via nginx-proxy"
-        },
-        "llm": {
-          "oneOf": [
-            {"type": "string", "enum": ["local", "remote"]},
-            {"type": "boolean", "enum": [false]}
-          ],
-          "description": "LLM access: local | remote | false"
         }
       },
       "additionalProperties": false
+    },
+    "llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "LLM (LiteLLM) gateway configuration — progressive disclosure: enabled → profile → overrides",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable LLM access via LiteLLM gateway"
+        },
+        "profile": {
+          "type": "string",
+          "enum": ["default", "premium", "unlimited"],
+          "description": "Access profile from LLM policy — defines models, budget, rate limits"
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Per-project overrides on top of the assigned profile",
+          "properties": {
+            "models": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Override model alias list"
+            },
+            "budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Override budget limits in USD",
+              "properties": {
+                "daily": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Daily budget in USD"
+                },
+                "monthly": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Monthly budget in USD"
+                }
+              }
+            },
+            "rpm_limit": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Override requests per minute limit"
+            }
+          }
+        }
+      }
     },
     "stop_grace_period": {
       "type": "string",
@@ -159,7 +203,7 @@
         "ai_retention": {
           "type": "string",
           "pattern": "^\\d+(h|d)|forever$",
-          "description": "Langfuse trace retention (only active if needs.llm is set)"
+          "description": "Langfuse trace retention (active when project uses LiteLLM gateway)"
         },
         "alerting": {
           "type": "boolean",

@@ -870,6 +870,8 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
             path = self.path.rstrip("/") or "/"
             if path == "/health":
                 self._handle_health()
+            elif path == "/healthz":
+                self._handle_healthz()
             elif path == "/status.json":
                 self._handle_status_json()
             else:
@@ -913,6 +915,87 @@ class StatusPageHandler(http.server.BaseHTTPRequestHandler):
             if data.get("staleness"):
                 response["staleness"] = data["staleness"]
             self._send_json(response, status_code=503)
+
+    # region FUNC_handle_healthz
+    def _handle_healthz(self):
+        """Handle /healthz — lightweight readiness probe for Docker HEALTHCHECK.
+
+        # ▶ GET /healthz → ◇ check status-metrics.json exists + readable
+        #                   → ◇ check staleness (generated_at ≤ 5 min ago)
+        #                   → ◇ 200 "PASS" | 503 "FAIL"
+        #
+        # Unlike /health (full system checks: vhosts, containers, platform services),
+        # this is a fast (~50ms) readiness probe that verifies the data pipeline
+        # is functional — status-page is useless without fresh metrics data.
+        #
+        # Used by: Docker HEALTHCHECK (docker-compose.base.yml + Dockerfile)
+        """
+        import time as _time
+
+        start = _time.monotonic()
+        path = STATUS_METRICS_JSON
+
+        # Check 1: file exists and is a regular file (not dir, not symlink-to-nothing)
+        if not os.path.isfile(path):
+            duration_ms = int((_time.monotonic() - start) * 1000)
+            self._send_json(
+                {
+                    "status": "FAIL",
+                    "reason": "metrics_file_missing",
+                    "message": f"{path} not found or not a regular file",
+                    "duration_ms": duration_ms,
+                },
+                status_code=503,
+            )
+            return
+
+        # Check 2: file is readable (can open and parse JSON)
+        try:
+            with open(path) as f:
+                metrics = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            duration_ms = int((_time.monotonic() - start) * 1000)
+            self._send_json(
+                {
+                    "status": "FAIL",
+                    "reason": "metrics_file_unreadable",
+                    "message": f"Cannot read {path}: {e}",
+                    "duration_ms": duration_ms,
+                },
+                status_code=503,
+            )
+            return
+
+        # Check 3: freshness — data must not be older than 5 minutes
+        generated_at = metrics.get("generated_at")
+        staleness = _compute_staleness(generated_at)
+
+        duration_ms = int((_time.monotonic() - start) * 1000)
+
+        if staleness:
+            # Stale data → WARN but still PASS (service is alive, data pipeline might be slow)
+            self._send_json(
+                {
+                    "status": "PASS",
+                    "warning": "stale_data",
+                    "staleness": staleness,
+                    "schema_version": metrics.get("schema_version", 0),
+                    "duration_ms": duration_ms,
+                },
+                status_code=200,
+            )
+        else:
+            self._send_json(
+                {
+                    "status": "PASS",
+                    "schema_version": metrics.get("schema_version", 0),
+                    "generated_at": generated_at,
+                    "duration_ms": duration_ms,
+                },
+                status_code=200,
+            )
+
+    # endregion FUNC_handle_healthz
 
     def _handle_status_json(self):
         """Handle /status.json — full machine-readable aggregate with metrics."""

@@ -6,7 +6,7 @@
 ## @purpose  Extract secrets validation, module metadata, and DAG expansion from deploy-modules.sh into typed Python
 ## @scope    Reads secrets-manifest.yaml, module.yaml files, node.yaml; provides env validation, charset validation,
 ##           severity/metadata batch extraction, transitive dependency expansion via BFS, and node-yaml module parsing.
-## @input    CLI: --action {check-env,validate-charsets,module-metadata,batch-metadata,expand-deps,parse-node-yaml,detect-type}
+## @input    CLI: --action {check-env,validate-charsets,module-metadata,batch-metadata,batch-check-env,expand-deps,parse-node-yaml,detect-type}
 ##           with --module-name, --modules-dir, --node-yaml, --secrets-manifest, --modules-filter
 ## @output   Varies per action: JSON, comma-separated strings, space-separated strings, colon-separated lines
 ## @links    REPLACES_FROM(core/internal/bootstrap/deploy-modules.sh:754-905)
@@ -470,6 +470,52 @@ def detect_install_type(module_yaml_path: str) -> str:
 # endregion FUNC_detect_install_type
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# region FUNC__batch_check_env
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+## @purpose  Validate secrets for ALL modules in one call (replaces N per-module check-env calls).
+##           Iterates over all modules and calls _check_env_requires per module.
+## @io       modules_dir (str), secrets_manifest_path (str) → list[dict]: [{name, status}, ...]
+## @output   name:status lines (status = ok/error) for each module
+## @complexity 2 — glob + N env checks, O(M) where M = module count
+## @invariants
+##   - Uses existing _check_env_requires logic per module
+##   - Always returns 0 exit code (status is in output lines — shell parses individual results)
+##   - Empty/missing module.yaml files are skipped with WARN
+## @rationale S4 optimization: single python3 call replaces M per-module check-env spawns
+def _batch_check_env(modules_dir: str, secrets_manifest_path: str) -> list[dict[str, str]]:
+    logger.info("[IMP:7][_batch_check_env][start] modules_dir=%s", modules_dir)
+
+    modules_path = Path(modules_dir)
+    yaml_files = sorted(modules_path.glob("*/module.yaml"))
+
+    if not yaml_files:
+        logger.warning("[IMP:5][_batch_check_env][scan] No module.yaml files found in %s", modules_dir)
+        return []
+
+    results: list[dict[str, str]] = []
+    for yf in yaml_files:
+        with open(yf) as f:
+            data = yaml.safe_load(f)
+
+        if data is None:
+            logger.warning("[IMP:5][_batch_check_env][skip] Empty YAML in %s, skipping", yf)
+            continue
+
+        name: str = data.get("name", yf.parent.name)
+        missing = _check_env_requires(name, secrets_manifest_path)
+        status = "error" if missing else "ok"
+        results.append({"name": name, "status": status})
+        logger.info("[IMP:8][_batch_check_env][entry] %s → status=%s", name, status)
+
+    logger.info("[IMP:9][_batch_check_env][count] Batch env check completed for %d modules", len(results))
+    return results
+
+
+# endregion FUNC__batch_check_env
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # region FUNC_main
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -489,6 +535,7 @@ def main() -> int:
             "validate-charsets",
             "module-metadata",
             "batch-metadata",
+            "batch-check-env",
             "expand-deps",
             "parse-node-yaml",
             "detect-type",
@@ -496,10 +543,14 @@ def main() -> int:
         help="Action to perform",
     )
     parser.add_argument("--module-name", default=None, help="Module name (check-env, module-metadata, detect-type)")
-    parser.add_argument("--modules-dir", default=None, help="Path to modules directory (batch-metadata, expand-deps)")
+    parser.add_argument(
+        "--modules-dir", default=None, help="Path to modules directory (batch-metadata, batch-check-env, expand-deps)"
+    )
     parser.add_argument("--node-yaml", default=None, help="Path to node.yaml (parse-node-yaml)")
     parser.add_argument(
-        "--secrets-manifest", default=None, help="Path to secrets-manifest.yaml (check-env, validate-charsets)"
+        "--secrets-manifest",
+        default=None,
+        help="Path to secrets-manifest.yaml (check-env, validate-charsets, batch-check-env)",
     )
     parser.add_argument(
         "--modules-filter",
@@ -553,6 +604,15 @@ def main() -> int:
         metadata = _batch_module_metadata(args.modules_dir)
         for entry in metadata:
             print(f"{entry['name']}:{entry['install_type']}:{entry['severity']}")
+        return 0
+
+    if action == "batch-check-env":
+        if not args.modules_dir or not args.secrets_manifest:
+            print("ERROR: --modules-dir and --secrets-manifest required for batch-check-env", file=sys.stderr)
+            return 1
+        results = _batch_check_env(args.modules_dir, args.secrets_manifest)
+        for entry in results:
+            print(f"{entry['name']}:{entry['status']}")
         return 0
 
     if action == "expand-deps":
