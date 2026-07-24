@@ -98,11 +98,12 @@ hermes-build-platform:
 	@echo "  L1: hermes-agent-base:latest (local build — push via hermes-push-l1)"
 
 ## hermes-push-l1: Push L1 hermes-agent image to ghcr.io (disaster recovery backup)
+GHCR_OWNER ?= $(shell echo "${GITHUB_REPOSITORY_OWNER:-tronyx161}" | tr '[:upper:]' '[:lower:]')
 hermes-push-l1:
-	@echo "[IMP:7][make][hermes-push-l1] Pushing L1 hermes-agent-base to ghcr.io..."
-	@docker tag hermes-agent-base:latest ghcr.io/tronyx161/hermes-agent-base:latest
-	@docker push ghcr.io/tronyx161/hermes-agent-base:latest
-	@echo "[IMP:9][make][hermes-push-l1] L1 pushed to ghcr.io"
+	@echo "[IMP:7][make][hermes-push-l1] Pushing L1 hermes-agent-base to ghcr.io/${GHCR_OWNER} (non-fatal)..."
+	@docker tag hermes-agent-base:latest "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || true
+	-docker push "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || echo "[IMP:7][make][hermes-push-l1] Push skipped — permission denied or registry unavailable (DR backup)"
+	@echo "[IMP:9][make][hermes-push-l1] L1 push complete (or skipped)"
 
 ## hermes-build-context: Build L1→L2 hermes images for CONTEXT
 ##   Usage: make hermes-build-context CONTEXT=<name>
