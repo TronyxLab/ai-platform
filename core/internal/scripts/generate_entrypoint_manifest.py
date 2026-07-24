@@ -54,6 +54,7 @@ SYSTEM_PREFIXES: tuple[str, ...] = (
     "pre-commit-",
     "test-",
     "gate-",
+    "__",
 )
 
 logger = logging.getLogger(__name__)

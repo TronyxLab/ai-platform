@@ -37,6 +37,8 @@ services:
 
     volumes:
       - ./app.py:/app/app.py:ro
+      # templates/ — Jinja2 templates for HTML rendering (bind-mount for live updates)
+      - ./templates/:/app/templates/:ro
       # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
       - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-unknown}/node.yaml:/opt/node-configs/${NODE_NAME:-unknown}/node.yaml:ro
       # status-metrics.json — container/cert/project/host metrics (cron-exported every 1m)
