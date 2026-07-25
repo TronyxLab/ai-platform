@@ -15,12 +15,9 @@
 
 import hashlib
 import logging
-import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from tests._conftest.ldd import ldd_trajectory
 
@@ -30,7 +27,6 @@ logger = logging.getLogger(__name__)
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap"
 sys.path.insert(0, str(_MODULE_DIR))
 import python_deps
-
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_test_python_deps_content_hash_skip
@@ -105,8 +101,10 @@ def test_python_deps_content_hash_changed(caplog, tmp_path, monkeypatch):
     (hash_dir / "python-deps.hash").write_text("a" * 64 + "\n")
 
     # ── Mock subprocess-heavy functions ──
-    with patch.object(python_deps, "_install_pip3", return_value=True) as mock_pip3, \
-         patch.object(python_deps, "_install_requirements", return_value=True) as mock_reqs:
+    with (
+        patch.object(python_deps, "_install_pip3", return_value=True) as mock_pip3,
+        patch.object(python_deps, "_install_requirements", return_value=True) as mock_reqs,
+    ):
         result = python_deps.ensure_python_deps(str(core_dir))
 
     # ── Assert ──

@@ -69,7 +69,7 @@ def extract_yaml_field(file_path: str, *field_path: str) -> str:
     imp_level = 8
     logger.info(f"[IMP:{imp_level}][{func}][parse] opening {file_path}")
     try:
-        with open(file_path, "r") as fh:
+        with open(file_path) as fh:
             data: Any = yaml.safe_load(fh)
     except FileNotFoundError:
         logger.warning(f"[IMP:{imp_level}][{func}][parse] file not found: {file_path}")
@@ -103,9 +103,7 @@ def extract_yaml_field(file_path: str, *field_path: str) -> str:
         # If we hit a list, take the first element
         if isinstance(current, list):
             if len(current) == 0:
-                logger.info(
-                    f"[IMP:{imp_level}][{func}][traverse] empty list at path part {idx} ('{key}')"
-                )
+                logger.info(f"[IMP:{imp_level}][{func}][traverse] empty list at path part {idx} ('{key}')")
                 return ""
             current = current[0]
 
@@ -130,8 +128,7 @@ def extract_yaml_field(file_path: str, *field_path: str) -> str:
     imp_level = 10
     result: str = str(current)
     logger.info(
-        f"[IMP:{imp_level}][{func}][result] path={'.'.join(path_parts)} "
-        f"type={type(current).__name__} len={len(result)}"
+        f"[IMP:{imp_level}][{func}][result] path={'.'.join(path_parts)} type={type(current).__name__} len={len(result)}"
     )
     return result
 
@@ -153,10 +150,7 @@ if __name__ == "__main__":
     field_path_arg: str = sys.argv[2]
     field_parts = field_path_arg.split(".")
 
-    logger.info(
-        f"[IMP:{imp_level}][CLI][extract] file={file_path_arg} path={field_path_arg} "
-        f"parts={field_parts}"
-    )
+    logger.info(f"[IMP:{imp_level}][CLI][extract] file={file_path_arg} path={field_path_arg} parts={field_parts}")
 
     value = extract_yaml_field(file_path_arg, *field_parts)
     print(value)

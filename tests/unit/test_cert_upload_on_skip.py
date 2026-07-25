@@ -31,7 +31,6 @@ _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal
 sys.path.insert(0, str(_MODULE_DIR))
 import cert_orchestrator as cert
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # region Tests: upload-on-skip
 # ═════════════════════════════════════════════════════════════════════════════

@@ -288,7 +288,10 @@ def test_bootstrap_compose_generation(caplog, tmp_path):
     assert "healthcheck:" in content, "Should have healthcheck section"
     assert "restart: unless-stopped" in content, "Should have restart policy"
     assert "GENERATED-STUB" in content, "Should indicate it's a generated stub"
-    logger.critical("[IMP:9][test] Bootstrap compose generated for %s — image=nginx:alpine, label=ai-platform.bootstrap=true, healthcheck present", project.name)
+    logger.critical(
+        "[IMP:9][test] Bootstrap compose generated for %s — image=nginx:alpine, label=ai-platform.bootstrap=true, healthcheck present",
+        project.name,
+    )
 
 
 # 🧪 TRAP[TEST] · Regression · _ensure_bootstrap_compose does NOT overwrite existing docker-compose.yml

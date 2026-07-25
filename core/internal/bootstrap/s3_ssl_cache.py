@@ -37,7 +37,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from typing import Any
 
 import boto3
 import yaml
@@ -86,15 +85,9 @@ def _get_s3_client() -> boto3.client:
     ):
         os.environ.pop(proxy_var, None)
 
-    endpoint = (
-        os.environ.get("S3_ENDPOINT_URL")
-        or os.environ.get("S3_ENDPOINT")
-        or DEFAULT_S3_ENDPOINT
-    )
+    endpoint = os.environ.get("S3_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT") or DEFAULT_S3_ENDPOINT
     akid = os.environ.get("S3_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID") or ""
-    sak = (
-        os.environ.get("S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
-    )
+    sak = os.environ.get("S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
     region = os.environ.get("S3_REGION", DEFAULT_S3_REGION)
 
     return boto3.client(
@@ -138,9 +131,7 @@ def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True) -> bo
             timeout=OPENSSL_TIMEOUT,
         )
         if result.returncode != 0:
-            logger.info(
-                "[IMP:8][s3_ssl_cache] Cert not parseable: %s", cert_path
-            )
+            logger.info("[IMP:8][s3_ssl_cache] Cert not parseable: %s", cert_path)
             return False
 
         # Step 2: Verify Let's Encrypt issuer
@@ -215,9 +206,7 @@ def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True) -> bo
         return True
 
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning(
-            "[IMP:7][s3_ssl_cache] Cert validation error for %s: %s", domain, e
-        )
+        logger.warning("[IMP:7][s3_ssl_cache] Cert validation error for %s: %s", domain, e)
         return False
 
 
@@ -251,9 +240,7 @@ def _download_s3_file(s3_key: str, local_dst: str) -> bool:
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code", "Unknown")
         if code in ("NoSuchKey", "404"):
-            logger.info(
-                "[IMP:8][s3_ssl_cache] S3 key not found (cache miss): %s", s3_key
-            )
+            logger.info("[IMP:8][s3_ssl_cache] S3 key not found (cache miss): %s", s3_key)
         else:
             logger.warning(
                 "[IMP:7][s3_ssl_cache] S3 ClientError (code=%s) for key %s: %s",
@@ -263,9 +250,7 @@ def _download_s3_file(s3_key: str, local_dst: str) -> bool:
             )
         return False
     except Exception as e:
-        logger.warning(
-            "[IMP:7][s3_ssl_cache] S3 download failed for key %s: %s", s3_key, e
-        )
+        logger.warning("[IMP:7][s3_ssl_cache] S3 download failed for key %s: %s", s3_key, e)
         return False
 
 
@@ -338,10 +323,7 @@ def _extract_domains_from_yaml(node_yaml_path: str) -> list[str]:
     if not domain:
         node_info = data.get("node", {})
         if isinstance(node_info, dict):
-            domain = (
-                node_info.get("platform_domain", "")
-                or node_info.get("domain", "")
-            )
+            domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
     if domain:
         domains.append(domain)
 
@@ -454,9 +436,7 @@ def upload_cert(
     acct_dir = _find_acme_account_dir(domain, acme_home)
     if acct_dir:
         try:
-            with tempfile.NamedTemporaryFile(
-                suffix=".tar.gz", delete=False
-            ) as tmp_tar:
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_tar:
                 tar_path = tmp_tar.name
             with tarfile.open(tar_path, "w:gz") as tar:
                 tar.add(acct_dir, arcname=os.path.basename(acct_dir))

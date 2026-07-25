@@ -1,22 +1,18 @@
 # GREP_SUMMARY: platform-agent-watchdog systemd oneshot unit hermes-agent self-update monitor readiness rollback external-controller
-# STRUCTURE: ▶ timer triggers → ▶ ExecStart script → ▶ poll /ready → ⊕ success | ◇ rollback → ⎋ exit
-#
+# STRUCTURE: ▶ timer triggers → ▶ ExecStart python3 agent_watchdog.py → ▶ poll /ready → ⊕ success | ◇ rollback → ⎋ exit
 # region MODULE_CONTRACT [DOMAIN(DevOps): Agent self-update watchdog; CONCEPT(Watchdog): external controller for agent; TECH(Systemd): oneshot unit]
-## @purpose  Systemd oneshot unit that executes platform-agent-watchdog.sh to monitor agent self-update readiness.
+## @purpose  Systemd oneshot unit that executes agent_watchdog.py (Python daemon) to monitor agent self-update readiness.
 ## @scope    Phase 04: external watchdog for hermes-agent self-update; triggered by platform-agent-watchdog.timer.
 ## @invariants
 ##   - Type: oneshot — runs once per activation, exits after completion
 ##   - RemainAfterExit: no — unit is inactive between timer ticks
 ##   - After: docker.service — ensures Docker daemon is running before script executes
 ##   - WantedBy: multi-user.target — starts at normal system boot
-##   - Watchdog is external to agent process — survives agent crash/restart (07 §6)
-##   - sudo privileges only for docker compose commands on hermes-agent module (sudo-whitelist.conf)
-## @rationale
-##   Q: Why oneshot, not simple/forking?
-##   A: Watchdog runs a single check-and-decide cycle per timer tick; no persistent daemon needed.
-##   Q: Why external systemd watchdog, not internal agent self-check?
-##   A: If agent fails to start during self-update, no agent process exists to roll back — external controller required (05 §5, 07 §6).
-## @links_to_spec  plans/BRIEF/05-service-update.md §5 (steps 1-7)
+##   - Watchdog is external to agent process — survives agent crash/restart
+##   - WatchdogTimeoutSec=0 — managed internally by Python daemon timeout
+## @rationale ExecStart updated from bash script to Python daemon per DevPlan 075.
+##            Python daemon handles all business logic; shell is thin launcher only.
+## @changes 2026-07-25 | ExecStart changed from /usr/local/bin/platform-agent-watchdog.sh to Python daemon
 # endregion MODULE_CONTRACT
 
 [Unit]
@@ -25,8 +21,9 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/platform-agent-watchdog.sh
+ExecStart=/usr/bin/python3 /opt/platform/core/modules/hermes-agent/watchdog/agent_watchdog.py
 RemainAfterExit=no
+WatchdogSec=0
 
 [Install]
 WantedBy=multi-user.target

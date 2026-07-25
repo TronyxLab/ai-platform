@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 HASH_DIR = "/var/lib/platform/.bootstrap"
 HASH_FILE = os.path.join(HASH_DIR, "python-deps.hash")
 
+
 # region FUNC__load_saved_hash
 ## @purpose  Read previously saved content hash from disk
 ## @io       path → str | None
@@ -35,7 +36,7 @@ HASH_FILE = os.path.join(HASH_DIR, "python-deps.hash")
 def _load_saved_hash() -> str | None:
     # endregion FUNC__load_saved_hash
     try:
-        with open(HASH_FILE, "r") as f:
+        with open(HASH_FILE) as f:
             return f.read().strip()
     except FileNotFoundError:
         return None
@@ -185,7 +186,8 @@ def _install_requirements(core_dir: str) -> bool:
     # Step 1: typing_extensions with --ignore-installed (Debian conflict workaround)
     logger.info("[IMP:9][_install_requirements] Installing typing_extensions (--ignore-installed)")
     pip_typing = [
-        "pip3", "install",
+        "pip3",
+        "install",
         "typing_extensions",
         "--ignore-installed",
         "--break-system-packages",
@@ -196,8 +198,10 @@ def _install_requirements(core_dir: str) -> bool:
     # Step 2: full requirements.txt
     logger.info("[IMP:9][_install_requirements] Installing -r requirements.txt")
     pip_reqs = [
-        "pip3", "install",
-        "-r", req_path,
+        "pip3",
+        "install",
+        "-r",
+        req_path,
         "--break-system-packages",
     ]
     if not _run(pip_reqs, label="pip3 -r requirements.txt"):
@@ -254,7 +258,6 @@ def ensure_python_deps(core_dir: str) -> bool:
     if not _save_content_hash(current_hash):
         logger.warning("[IMP:7][ensure_python_deps] Failed to persist content hash")
         # Not fatal — deps are installed, hash is a cache optimization
-        pass
 
     logger.info("[IMP:9][ensure_python_deps] Complete — Python dependencies installed")
     return True
@@ -269,9 +272,7 @@ if __name__ == "__main__":
         format="%(levelname)s %(message)s",
     )
 
-    parser = argparse.ArgumentParser(
-        description="Idempotent Python dependency installer for platform VPS"
-    )
+    parser = argparse.ArgumentParser(description="Idempotent Python dependency installer for platform VPS")
     parser.add_argument("action", choices=["ensure"])
     parser.add_argument("--core-dir", required=True)
     args = parser.parse_args()

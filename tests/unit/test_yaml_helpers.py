@@ -79,9 +79,7 @@ def test_yaml_helpers_extract_simple(caplog, tmp_path):
 def test_yaml_helpers_extract_nested(caplog, tmp_path):
     """extract_yaml_field should traverse nested keys using *field_path."""
     yml_path = tmp_path / "node.yaml"
-    yml_path.write_text(
-        yaml.dump({"node": {"owner_key": "ssh-ed25519 AAAAB3...", "fqdn": "node1.example.com"}})
-    )
+    yml_path.write_text(yaml.dump({"node": {"owner_key": "ssh-ed25519 AAAAB3...", "fqdn": "node1.example.com"}}))
 
     result = yaml_helpers.extract_yaml_field(str(yml_path), "node", "owner_key")
 
@@ -188,9 +186,7 @@ def test_yaml_helpers_invalid_yaml(caplog, tmp_path):
     result = yaml_helpers.extract_yaml_field(str(yml_path), "owner_key")
 
     assert result == "", f"Expected empty string, got '{result}'"
-    assert "YAML parse error" in caplog.text or "parse error" in caplog.text.lower(), (
-        "Expected YAML parse error log"
-    )
+    assert "YAML parse error" in caplog.text or "parse error" in caplog.text.lower(), "Expected YAML parse error log"
     logger.critical("[IMP:9][test][invalid_yaml] Invalid YAML returned '' — verified graceful handling")
 
 

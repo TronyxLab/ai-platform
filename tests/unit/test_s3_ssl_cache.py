@@ -15,7 +15,6 @@
 # endregion MODULE_CONTRACT
 """
 
-import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -30,7 +29,6 @@ logger = pytest.importorskip("logging").getLogger(__name__)
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap"
 sys.path.insert(0, str(_MODULE_DIR))
 import s3_ssl_cache
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # region Tests: upload_cert
@@ -117,8 +115,10 @@ def test_download_cert_success(caplog, tmp_path, monkeypatch):
     mock_client = MagicMock()
 
     # Mock _validate_cert to return True (skip openssl)
-    with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client), \
-         patch.object(s3_ssl_cache, "_validate_cert", return_value=True):
+    with (
+        patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client),
+        patch.object(s3_ssl_cache, "_validate_cert", return_value=True),
+    ):
         result = s3_ssl_cache.download_cert(
             domain,
             cert_dir=str(tmp_path / "live"),
@@ -159,8 +159,10 @@ def test_check_cert_hit(caplog, tmp_path, monkeypatch):
             f.write("fake pem content")
         return True
 
-    with patch.object(s3_ssl_cache, "_download_s3_file", side_effect=mock_download), \
-         patch.object(s3_ssl_cache, "_validate_cert", return_value=True):
+    with (
+        patch.object(s3_ssl_cache, "_download_s3_file", side_effect=mock_download),
+        patch.object(s3_ssl_cache, "_validate_cert", return_value=True),
+    ):
         result = s3_ssl_cache.check_cert(domain, s3_bucket="test-bucket")
 
     assert result is True, "check_cert should return True when valid cert in S3"
@@ -211,8 +213,10 @@ projects:
     monkeypatch.setenv("S3_BUCKET", "test-bucket")
 
     # Mock check_cert → True, download_cert → True for all
-    with patch.object(s3_ssl_cache, "check_cert", return_value=True), \
-         patch.object(s3_ssl_cache, "download_cert", return_value=True):
+    with (
+        patch.object(s3_ssl_cache, "check_cert", return_value=True),
+        patch.object(s3_ssl_cache, "download_cert", return_value=True),
+    ):
         result = s3_ssl_cache.bulk_restore(str(node_yaml), s3_bucket="test-bucket")
 
     assert len(result) == 3, f"Expected 3 domains, got {len(result)}"
@@ -244,10 +248,8 @@ def test_cli_upload_command(caplog, monkeypatch):
     import inspect
 
     source = inspect.getsource(s3_ssl_cache)
-    assert '"upload"' in source or "'upload'" in source, (
-        "s3_ssl_cache.py must handle 'upload' CLI command"
-    )
-    assert 'upload_cert(domain' in source or 'upload_cert(' in source, (
+    assert '"upload"' in source or "'upload'" in source, "s3_ssl_cache.py must handle 'upload' CLI command"
+    assert "upload_cert(domain" in source or "upload_cert(" in source, (
         "s3_ssl_cache.py CLI must call upload_cert() for upload command"
     )
     logger.critical("[IMP:9][test] CLI upload command — upload handler present in source")
