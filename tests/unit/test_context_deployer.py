@@ -14,6 +14,7 @@
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -248,6 +249,80 @@ def test_non_fatal_continues_on_failure(caplog, node_yaml_file, monkeypatch, tmp
     statuses = [r.status for r in results]
     assert "failed" in statuses  # At least one failed
     logger.critical("[IMP:9][test] Non-fatal — second project processed despite first failure")
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _ensure_bootstrap_compose
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · _ensure_bootstrap_compose creates minimal docker-compose.yml
+# · Scenario: project_dir with no docker-compose.yml → creates nginx:alpine compose with ai-platform.bootstrap label
+# · Last fail: N/A (new test)
+# · Remove if: bootstrap compose generation logic changes
+@ldd_trajectory
+def test_bootstrap_compose_generation(caplog, tmp_path):
+    """_ensure_bootstrap_compose should create docker-compose.yml with nginx:alpine, correct labels, and healthcheck."""
+    project = cd.ProjectInfo(
+        name="test-webapp",
+        repo="https://github.com/test/webapp",
+        type="backend",
+        domain="webapp.test.example.com",
+        context="test-ctx",
+    )
+    project_dir = str(tmp_path / "projects" / "test-webapp")
+
+    result = cd._ensure_bootstrap_compose(project_dir, project)
+
+    assert result is True, "_ensure_bootstrap_compose should return True on success"
+    compose_file = tmp_path / "projects" / "test-webapp" / "docker-compose.yml"
+    assert compose_file.is_file(), "docker-compose.yml should be created"
+
+    content = compose_file.read_text()
+    assert "image: nginx:alpine" in content, "Should use nginx:alpine image"
+    assert "ai-platform.bootstrap=true" in content, "Should have ai-platform.bootstrap label"
+    assert "ai-platform.project=test-webapp" in content, "Should have ai-platform.project label"
+    assert "healthcheck:" in content, "Should have healthcheck section"
+    assert "restart: unless-stopped" in content, "Should have restart policy"
+    assert "GENERATED-STUB" in content, "Should indicate it's a generated stub"
+    logger.critical("[IMP:9][test] Bootstrap compose generated for %s — image=nginx:alpine, label=ai-platform.bootstrap=true, healthcheck present", project.name)
+
+
+# 🧪 TRAP[TEST] · Regression · _ensure_bootstrap_compose does NOT overwrite existing docker-compose.yml
+# · Scenario: docker-compose.yml already exists → returns True, does NOT modify file
+# · Last fail: N/A (new test)
+# · Remove if: idempotent skip logic changes
+@ldd_trajectory
+def test_bootstrap_compose_idempotent(caplog, tmp_path):
+    """_ensure_bootstrap_compose should NOT overwrite an existing docker-compose.yml."""
+    project = cd.ProjectInfo(
+        name="test-webapp",
+        repo="https://github.com/test/webapp",
+        type="backend",
+        domain="webapp.test.example.com",
+        context="test-ctx",
+    )
+    project_dir = str(tmp_path / "projects" / "test-webapp")
+    os.makedirs(project_dir, exist_ok=True)
+
+    # Create a pre-existing docker-compose.yml with different content
+    existing_content = "# REAL DELIVERY — this should NOT be overwritten\nversion: '3.8'\nservices:\n  webapp:\n    image: custom:latest\n"
+    compose_file = os.path.join(project_dir, "docker-compose.yml")
+    with open(compose_file, "w") as f:
+        f.write(existing_content)
+
+    result = cd._ensure_bootstrap_compose(project_dir, project)
+
+    assert result is True, "_ensure_bootstrap_compose should return True (skip) when compose exists"
+    # Verify the file was NOT overwritten
+    content = Path(compose_file).read_text()
+    assert content == existing_content, "Existing docker-compose.yml should NOT be overwritten"
+    assert "REAL DELIVERY" in content, "Original content should be preserved intact"
+    assert "nginx:alpine" not in content, "New content should NOT appear"
+    logger.critical("[IMP:9][test] Bootstrap compose idempotent — existing file preserved unchanged")
 
 
 # endregion

@@ -179,7 +179,7 @@ def ensure_secrets(
     persist_to_sops: bool = True,
 ) -> list[str]:
     """Read secrets-manifest.yaml, generate missing tier=generated secrets.
-    
+
     ## @purpose — Port of secrets.sh:step_12b_ensure_secrets().
     ##            Reads manifest, for each tier=generated secret with gen_command:
     ##            checks if exists in os.environ, if not → executes gen_command →
@@ -217,12 +217,12 @@ def _ensure_secrets_exist() -> None:
 def _ensure_secrets_exist(core_dir: str) -> None:
     """Ensure secrets.env exists AND all autogen secrets are generated."""
     secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-    
+
     # Step 1: Check file exists (after decrypt)
     if not os.path.isfile(secrets_env):
         logger.error("[IMP:9][ensure_secrets] %s not found after decrypt — cannot generate secrets", secrets_env)
         raise RuntimeError(f"secrets.env not found: {secrets_env}")
-    
+
     # Step 2: Source secrets.env into os.environ
     try:
         from .secrets_manager import source_secrets_env
@@ -233,7 +233,7 @@ def _ensure_secrets_exist(core_dir: str) -> None:
         logger.info("[IMP:9][ensure_secrets] Sourced %d vars from %s", len(env_vars), secrets_env)
     except Exception as e:
         logger.warning("[IMP:7][ensure_secrets] Failed to source secrets.env: %s", e)
-    
+
     # Step 3: Generate missing autogen secrets
     manifest_path = os.path.join(core_dir, "secrets-manifest.yaml")
     try:
@@ -272,7 +272,7 @@ def _step_secrets_init(core_dir: str) -> None:
             logger.info("[IMP:9][secrets_init] Sourced %d vars for secrets-init.sh", len(env_vars))
         except Exception as e:
             logger.warning("[IMP:7][secrets_init] Failed to source secrets.env: %s", e)
-    
+
     init_script = os.path.join(core_dir, "internal", "bootstrap", "secrets-init.sh")
     if os.path.isfile(init_script):
         _subprocess_run(["bash", init_script], "secrets_init", non_fatal=True)
@@ -327,20 +327,20 @@ fi
 ```python
 def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
     """Generate minimal docker-compose.yml for first bootstrap (no CI delivery yet).
-    
+
     Creates a minimal nginx:alpine reverse proxy that will be replaced
     by the real docker-compose.yml via CI (platform-deliver) on next deploy.
     """
     compose_file = os.path.join(project_dir, "docker-compose.yml")
     if os.path.isfile(compose_file):
         return True  # Already exists (real delivery or previous bootstrap)
-    
+
     if not os.path.isdir(project_dir):
         os.makedirs(project_dir, exist_ok=True)
-    
+
     port = getattr(project, 'port', None) or "3000"
     domain = getattr(project, 'domain', None) or project.name
-    
+
     compose_content = f"""# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI platform-deliver.
 version: '3.8'
 services:
@@ -410,14 +410,14 @@ make test MARKER=static,unit
 ```python
 def source_secrets_env(secrets_env: str) -> dict[str, str]:
     """Parse secrets.env key=value file into dict.
-    
+
     Handles: comments (#), empty lines, quoted values, inline export prefix.
     Returns dict of VAR→VALUE. Never raises.
     """
     result: dict[str, str] = {}
     if not os.path.isfile(secrets_env):
         return result
-    
+
     try:
         with open(secrets_env) as f:
             for line in f:
@@ -437,7 +437,7 @@ def source_secrets_env(secrets_env: str) -> dict[str, str]:
                         result[key] = value
     except OSError as e:
         logger.warning("[IMP:7][secrets_manager] Failed to read %s: %s", secrets_env, e)
-    
+
     return result
 ```
 
@@ -471,7 +471,7 @@ step_12b_ensure_secrets() {
 
 def ensure_python_deps(core_dir: str) -> bool:
     """Idempotent install of pip3 + platform Python dependencies on VPS.
-    
+
     ## @purpose — Port of node-lifecycle.sh:_ensure_python_deps().
     ##            Checks content-hash of requirements.txt; if unchanged, skips.
     ##            Installs pip3 via apt if missing. Installs requirements via pip.
@@ -565,7 +565,7 @@ _steps._step_install_acme(core_dir)
 ```python
 def _step_secrets_init(core_dir: str) -> None:
     """Initialize service passwords from PLATFORM_MASTER_PASSWORD.
-    
+
     Sources secrets.env first (F3 fix), then calls secrets-init.sh.
     """
     # Source secrets.env into os.environ (F3 fix)
@@ -580,7 +580,7 @@ def _step_secrets_init(core_dir: str) -> None:
             logger.info("[IMP:9][secrets_init] Sourced %d vars for secrets-init.sh", len(env_vars))
         except Exception as e:
             logger.warning("[IMP:7][secrets_init] Failed to source secrets.env: %s", e)
-    
+
     _steps._step_secrets_init(core_dir)
 ```
 
@@ -607,7 +607,7 @@ import yaml
 
 def extract_yaml_field(file_path: str, *field_path: str) -> str:
     """Extract a field from YAML file using dotted path.
-    
+
     ## @purpose — Replace inline python3 -c blocks in bootstrap.sh.
     ## @io — ⇥ file_path, field_path → ⎋ str (empty if not found)
     ## @example extract_yaml_field('node.yaml', 'node', 'owner_key') → 'ssh-ed25519 AAAA...'
@@ -617,7 +617,7 @@ def extract_yaml_field(file_path: str, *field_path: str) -> str:
             data = yaml.safe_load(f)
     except Exception:
         return ""
-    
+
     current = data
     for key in field_path:
         if isinstance(current, dict):
@@ -626,7 +626,7 @@ def extract_yaml_field(file_path: str, *field_path: str) -> str:
             current = current[0].get(key, "") if isinstance(current[0], dict) else ""
         else:
             return ""
-    
+
     return str(current) if current else ""
 
 if __name__ == "__main__":
@@ -670,28 +670,28 @@ make gate MODE=fast
 ```python
 def _generate_self_signed(domain: str) -> DomainCertResult:
     """Generate self-signed certificate as last-resort fallback.
-    
+
     Called when BOTH S3 restore and acme.sh issue fail (e.g., DNS API down,
     no credentials). Self-signed cert allows nginx to start (avoids crash-loop),
     but browsers will show security warning. Valid 90 days.
-    
+
     ## @purpose — Disaster recovery: keep nginx running when cert issuance fails.
     ## @io — ⇥ domain → ⎋ DomainCertResult
     ## @returns DomainCertResult with status="issued", source="self_signed"
     """
     cert_dir = os.path.join(CERT_VALIDITY_PATH, domain)
     os.makedirs(cert_dir, exist_ok=True)
-    
+
     key_path = os.path.join(cert_dir, "privkey.pem")
     cert_path = os.path.join(cert_dir, "fullchain.pem")
-    
+
     try:
         subprocess.run(
             ["openssl", "genrsa", "-out", key_path, "2048"],
             capture_output=True, timeout=30, check=True,
         )
         os.chmod(key_path, 0o600)
-        
+
         subprocess.run(
             ["openssl", "req", "-new", "-x509",
              "-key", key_path, "-out", cert_path,
@@ -699,7 +699,7 @@ def _generate_self_signed(domain: str) -> DomainCertResult:
             capture_output=True, timeout=30, check=True,
         )
         os.chmod(cert_path, 0o644)
-        
+
         logger.warning(
             "[IMP:7][cert_orchestrator] %s — SELF-SIGNED cert generated (browsers will warn). "
             "Fix: ensure DNS-01 credentials in secrets.env or wait for acme.sh retry.",
@@ -1019,7 +1019,7 @@ def ensure_secrets(
     persist_to_sops: bool = True,
 ) -> list[str]:
     """Read secrets-manifest.yaml, generate missing tier=generated secrets.
-    
+
     ## @purpose — Port of secrets.sh:step_12b_ensure_secrets() (lines 298-411).
     ##            Eliminates inline python3 heredoc (Tier-1 Strangler trigger).
     ## @io — ⇥ manifest_path, secrets_env, persist_to_sops → ⎋ list[str]

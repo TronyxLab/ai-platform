@@ -266,7 +266,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(
         level=logging.INFO,
-        format="%(levelname)s [IMP:%(imp)d] %(message)s",
+        format="%(levelname)s %(message)s",
     )
 
     parser = argparse.ArgumentParser(

@@ -111,21 +111,31 @@ jobs:
         if: steps.project.outputs.staging == 'true'
         run: echo "STAGING=true" >> $GITHUB_ENV
 
+      - name: Setup SSH
+        if: steps.project.outputs.staging == 'true'
+        uses: ./.github/actions/setup-ssh
+        with:
+          ssh-key: ${{ secrets.SSH_KEY }}
+          ssh-host: ${{ secrets.SSH_HOST }}
+          ssh-user: ci-deploy
+
       - name: Deploy to staging via SSH
         if: steps.project.outputs.staging == 'true'
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ci-deploy
-          key: ${{ secrets.SSH_KEY }}
-          # [IMP:10][deploy][ssh] SINGLE whitelisted command — no shell, restrict enforced by authorized_keys (00 §4)
-          # authorized_keys on node: command="/opt/platform/core/internal/deploy/deploy-project.sh",restrict,...
-          # The SSH server runs deploy-project.sh regardless of what we send as command.
-          # We pass project + ref + environment as the forced command arguments via SSH command field.
-          script: ${{ inputs.project_name }} ${{ github.sha }} ${{ inputs.environment }}
-          envs: DOCKER_HUB_USERNAME,DOCKER_HUB_TOKEN,STAGING
-          # Note: ci-deploy authorized_keys ignores the script and runs deploy-project.sh <project> <sha> <environment>
-          # because command="..." in authorized_keys overrides any client-provided command.
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME || '' }}
+          DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN || '' }}
+          STAGING: "true"
+        run: |
+          set -euo pipefail
+          # [IMP:10][deploy][ssh] Forced-command: authorized_keys runs deploy-project.sh
+          # regardless of what we send. Pass project + ref + environment as arguments.
+          # Environment is relayed via SendEnv in ssh_config (DOCKER_HUB_*, STAGING).
+          ssh -o IdentitiesOnly=yes \
+              -o SendEnv=DOCKER_HUB_USERNAME \
+              -o SendEnv=DOCKER_HUB_TOKEN \
+              -o SendEnv=STAGING \
+              ci-deploy@${{ secrets.SSH_HOST }} \
+              "${{ inputs.project_name }} ${{ github.sha }} ${{ inputs.environment }}"
 
   # ─── Deploy to production (environment input = production) ───────────────────
   deploy-production:
@@ -154,15 +164,25 @@ jobs:
           echo "DOCKER_HUB_USERNAME=${{ secrets.DOCKER_HUB_USERNAME || '' }}" >> $GITHUB_ENV
           echo "DOCKER_HUB_TOKEN=${{ secrets.DOCKER_HUB_TOKEN || '' }}" >> $GITHUB_ENV
 
-      - name: Deploy to production via SSH
-        uses: appleboy/ssh-action@v1.2.5
+      - name: Setup SSH
+        uses: ./.github/actions/setup-ssh
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ci-deploy
-          key: ${{ secrets.SSH_KEY }}
-          # [IMP:10][deploy][ssh] Pass project + sha + environment (production) to platform-deploy.sh
-          script: ${{ inputs.project_name }} ${{ github.sha }} ${{ inputs.environment }}
-          envs: DOCKER_HUB_USERNAME,DOCKER_HUB_TOKEN
+          ssh-key: ${{ secrets.SSH_KEY }}
+          ssh-host: ${{ secrets.SSH_HOST }}
+          ssh-user: ci-deploy
+
+      - name: Deploy to production via SSH
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME || '' }}
+          DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          # [IMP:10][deploy][ssh] Forced-command passes project + sha + environment to deploy-project.sh
+          ssh -o IdentitiesOnly=yes \
+              -o SendEnv=DOCKER_HUB_USERNAME \
+              -o SendEnv=DOCKER_HUB_TOKEN \
+              ci-deploy@${{ secrets.SSH_HOST }} \
+              "${{ inputs.project_name }} ${{ github.sha }} ${{ inputs.environment }}"
 
   # ─── E2E smoke tests after production deploy (Wave 4) ────────────────────────
   e2e-smoke:

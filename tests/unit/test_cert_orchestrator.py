@@ -142,8 +142,22 @@ def test_s3_unavailable_graceful(caplog, tmp_path, monkeypatch):
     Path(issue_script).touch()
 
     monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+    # Redirect CERT_VALIDITY_PATH to tmp_path for self-signed fallback (DevPlan 053 F6)
+    monkeypatch.setattr(cert, "CERT_VALIDITY_PATH", str(tmp_path / "live"))
 
     def mock_run(cmd, **kwargs):
+        # Create output files for openssl commands (self-signed fallback F6)
+        if cmd and isinstance(cmd, list) and "openssl" in str(cmd):
+            if "genrsa" in cmd:
+                out_idx = cmd.index("-out") + 1 if "-out" in cmd else -1
+                if out_idx > 0 and out_idx < len(cmd):
+                    Path(cmd[out_idx]).parent.mkdir(parents=True, exist_ok=True)
+                    Path(cmd[out_idx]).write_text("mock-key")
+            if "-x509" in cmd or "req" in cmd:
+                out_idx = cmd.index("-out") + 1 if "-out" in cmd else -1
+                if out_idx > 0 and out_idx < len(cmd):
+                    Path(cmd[out_idx]).parent.mkdir(parents=True, exist_ok=True)
+                    Path(cmd[out_idx]).write_text("mock-cert")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     with patch("subprocess.run", side_effect=mock_run):
@@ -155,7 +169,14 @@ def test_s3_unavailable_graceful(caplog, tmp_path, monkeypatch):
 
     # Should not crash — either issued or failed gracefully
     assert len(result.domains) == 1
-    logger.critical("[IMP:9][test] S3 unavailable — graceful fallback to issue")
+    # With F6 self-signed fallback, status should be "issued" (self_signed)
+    assert result.domains["example.com"].status == "issued", (
+        f"Expected self-signed issued, got '{result.domains['example.com'].status}'"
+    )
+    assert result.domains["example.com"].source == "self_signed", (
+        f"Expected self_signed fallback, got '{result.domains['example.com'].source}'"
+    )
+    logger.critical("[IMP:9][test] S3 unavailable — graceful fallback to self-signed (F6)")
 
 
 # 🧪 TRAP[TEST] · Regression · orchestrate_certs skips already-valid certs (idempotent)
