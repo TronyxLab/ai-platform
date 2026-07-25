@@ -710,49 +710,15 @@ register_in_node_yaml() {
             return 0
         fi
 
-        REG_NAME="$name" \
-        REG_REPO="${org}/${name}" \
-        REG_TYPE="$ptype" \
-        REG_DOMAIN="$domain" \
-        REG_DATABASE="$database" \
-        REG_NODE_YAML="$node_yaml" \
-        python3 <<'PYEOF' || log_warn "Python registration failed — register manually"
-import os, yaml, sys
-
-name = os.environ.get('REG_NAME', '')
-repo = os.environ.get('REG_REPO', '')
-ptype = os.environ.get('REG_TYPE', '')
-domain = os.environ.get('REG_DOMAIN', '')
-database = os.environ.get('REG_DATABASE', '')
-node_yaml_path = os.environ.get('REG_NODE_YAML', '')
-
-if not name or not repo or not node_yaml_path:
-    sys.exit(0)
-
-with open(node_yaml_path) as f:
-    data = yaml.safe_load(f)
-
-if 'projects' in data:
-    for p in data['projects']:
-        if p.get('name') == name or p.get('repo') == repo:
-            print(f"[IMP:9][add-project][register] Idempotent SKIP — {name} already in node.yaml", file=sys.stderr)
-            sys.exit(0)
-
-entry = {'name': name, 'repo': repo, 'type': ptype}
-if domain:
-    entry['domain'] = domain
-if database:
-    entry['database'] = database
-
-if 'projects' not in data:
-    data['projects'] = []
-data['projects'].append(entry)
-
-with open(node_yaml_path, 'w') as f:
-    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-print(f"[IMP:9][add-project][register] Registered {name} → {node_yaml_path}", file=sys.stderr)
-PYEOF
+        python3 "${SCRIPT_DIR}/../shared/project_registry.py" register \
+            --name "$name" \
+            --repo "${org}/${name}" \
+            --type "$ptype" \
+            ${domain:+--domain "$domain"} \
+            ${database:+--database "$database"} \
+            --node-yaml "$node_yaml" \
+            --log-prefix "add-project" \
+            || log_warn "Python registration failed — register manually"
     else
         log_warn "Neither yq nor Python3+yaml available — cannot auto-register in node.yaml"
         log_warn "Manually add to ${node_yaml}:"

@@ -209,29 +209,10 @@ unregister_from_node_yaml() {
     elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
         log_imp 7 "-" "yq not available — using python3+yaml fallback"
         local py_rc=0
-        UNREG_NAME="$name" UNREG_YAML="$node_yaml" python3 <<'PYEOF'
-import os, yaml, sys
-
-name = os.environ.get('UNREG_NAME', '')
-yaml_path = os.environ.get('UNREG_YAML', '')
-if not name or not yaml_path:
-    sys.exit(0)
-
-with open(yaml_path) as f:
-    data = yaml.safe_load(f)
-
-if 'projects' not in data:
-    sys.exit(0)
-
-orig_count = len(data['projects'])
-data['projects'] = [p for p in data['projects'] if p.get('name') != name]
-removed = orig_count - len(data['projects'])
-
-with open(yaml_path, 'w') as f:
-    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-print(f"[IMP:9][remove-project][unregister] Removed '{name}' from {yaml_path} ({removed} entries removed)", file=sys.stderr)
-PYEOF
+        python3 "${SCRIPT_DIR}/../shared/project_registry.py" deregister \
+            --name "$name" \
+            --node-yaml "$node_yaml" \
+            --log-prefix "remove-project"
         py_rc=$?
         if [[ $py_rc -ne 0 ]]; then
             log_imp 8 "-" "Python unregistration failed (exit=${py_rc})"

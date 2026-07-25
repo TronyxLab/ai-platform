@@ -93,18 +93,18 @@ class ProjectMonitoringConfig:
     project_dir: Path
     node_name: str
     platform_root: Path
-    
+
     # Flags extracted from merged config
     metrics_enabled: bool = False
     metrics_port: int = 3000
     dashboard_enabled: bool = False
     alerting_enabled: bool = False
     needs_llm: bool = False
-    
+
     # Retention settings
     logs_retention: str = "7d"
     ai_retention_days: int = 30
-    
+
     # Full merged dict (for future extensibility)
     merged_config: dict = field(default_factory=dict)
 
@@ -126,16 +126,16 @@ class RenderResult:
 def deep_merge(base: dict, override: dict) -> dict:
     """
     Recursively merge override dict into base dict.
-    
-    Merge rules (matching current shell behavior — shallow top-level, 
+
+    Merge rules (matching current shell behavior — shallow top-level,
     last-writer-wins for scalar values):
     - For each key in override: if both values are dicts, recursively merge
     - Otherwise: override value replaces base value
     - Keys only in base are preserved
-    
+
     This is a SHALLOW merge at the top level with DEEP merge for nested dicts
     (up to 3 levels: L1 defaults → L2 overrides → L3 project config).
-    
+
     Complexity: O(n) where n = total keys across both dicts.
     """
 
@@ -143,10 +143,10 @@ def deep_merge(base: dict, override: dict) -> dict:
 def load_yaml_config(yaml_path: Path) -> dict:
     """
     Load and parse a YAML file. Returns empty dict on file-not-found.
-    
+
     Non-fatal: missing file → log IMP:6 warning + return {}.
     This matches shell behavior: all config sources are optional.
-    
+
     Raises:
         yaml.YAMLError: on malformed YAML
     """
@@ -155,14 +155,14 @@ def load_yaml_config(yaml_path: Path) -> dict:
 def load_l1_defaults(defaults_path: Path, project_type: str) -> dict:
     """
     Load L1 monitoring defaults from defaults.yaml.
-    
+
     Steps:
     1. Load defaults.yaml
     2. Extract `monitoring` global section
     3. Extract `type-defaults.<project_type>` section
     4. Merge: global base → type-specific overrides on top
     5. Return merged dict
-    
+
     If defaults.yaml doesn't exist: return empty dict (log IMP:6).
     """
 
@@ -170,7 +170,7 @@ def load_l1_defaults(defaults_path: Path, project_type: str) -> dict:
 def load_l2_overrides(override_path: Path) -> dict:
     """
     Load L2 context overrides from node-configs/<node>/projects/<project>.yaml.
-    
+
     Extracts only the `monitoring` section. Returns empty dict if file
     doesn't exist or monitoring section absent.
     """
@@ -179,7 +179,7 @@ def load_l2_overrides(override_path: Path) -> dict:
 def load_l3_project_config(project_yaml: dict) -> dict:
     """
     Extract L3 monitoring section from ai-platform.yaml (already parsed).
-    
+
     Returns `data.get('monitoring', {})` — empty dict if no monitoring section.
     """
 
@@ -191,14 +191,14 @@ def build_merged_config(
     platform_root: Path,
 ) -> ProjectMonitoringConfig:
     """
-    Full pipeline: load ai-platform.yaml → extract project type → 
+    Full pipeline: load ai-platform.yaml → extract project type →
     load L1 defaults → load L2 overrides → extract L3 config →
     merge L1←L2←L3 → extract flags → return typed config.
-    
+
     Returns None if ai-platform.yaml doesn't exist or has no monitoring section
     (backward compat — monitoring is optional for projects).
-    
-    This replaces lines 42-134 of the original shell script (the entire 
+
+    This replaces lines 42-134 of the original shell script (the entire
     _load_project_config function).
     """
 
@@ -211,7 +211,7 @@ def generate_prometheus_target(
 ) -> RenderResult:
     """
     Generate Prometheus file-based service discovery target JSON.
-    
+
     Output file: <output_dir>/<project_name>.json
     JSON schema:
     {
@@ -223,10 +223,10 @@ def generate_prometheus_target(
             "service": "<project>"
         }
     }
-    
+
     Skips if metrics_enabled is False (returns status="noop").
     Creates output directory if it doesn't exist.
-    
+
     Replaces: lines 138-183 (_generate_prometheus_targets)
     """
 
@@ -238,15 +238,15 @@ def generate_grafana_dashboard(
 ) -> RenderResult:
     """
     Generate Grafana dashboard JSON from template.
-    
+
     Uses core/internal/template-engine.sh via subprocess:
       template-engine.sh render <template> <output> PROJECT=<name> TYPE=<type> NODE=<node>
-    
+
     Falls back to sed-based substitution if template-engine.sh is unavailable.
     Creates output directory if it doesn't exist.
     Skips if dashboard_enabled is False.
     Skips if template file doesn't exist (log IMP:6).
-    
+
     Replaces: lines 186-226 (_generate_grafana_dashboards)
     """
 
@@ -257,7 +257,7 @@ def update_loki_retention(
 ) -> RenderResult:
     """
     Update Loki runtime config YAML with project retention stream.
-    
+
     Steps:
     1. Parse logs_retention string (e.g., "7d", "336h", "forever") → hours
     2. Load existing runtime config YAML (or empty dict if file missing)
@@ -268,13 +268,13 @@ def update_loki_retention(
     6. If not exists → insert new rule BEFORE any catch-all rules
        (rules with 'compose_project=~' selector pattern)
     7. Write back YAML with yaml.dump (default_flow_style=False, allow_unicode=True, sort_keys=False)
-    
+
     Retention calculation (matching shell lines 241-246):
     - "forever" → period_h = 0
     - "Nd" → period_h = N * 24
     - "Nh" → period_h = N
     - default → 168 (7 days)
-    
+
     Replaces: lines 229-293 (_update_loki_retention)
     """
 
@@ -284,19 +284,19 @@ def create_langfuse_project(
 ) -> RenderResult:
     """
     Create Langfuse project via HTTP API.
-    
+
     Endpoint: POST http://langfuse:3000/api/public/projects
     Headers: Authorization: Bearer ${LANGFUSE_SECRET_KEY}
     Body: {"name": "<project>", "retention": <ai_retention_days>}
-    
+
     Status mapping:
     - 200/201 → "created"
     - 409 / "already exists" → "skipped"
     - HTTP error / network failure → "failed" (non-fatal, logged)
-    
+
     Skips if needs_llm is False (status="noop").
     Reads LANGFUSE_SECRET_KEY from environment.
-    
+
     Replaces: lines 296-324 (_create_langfuse_project)
     """
 
@@ -308,14 +308,14 @@ def generate_alert_rules(
 ) -> RenderResult:
     """
     Generate Prometheus alert rules YAML from template.
-    
+
     Uses core/internal/template-engine.sh via subprocess:
       template-engine.sh render <template> <output> PROJECT=<name>
-    
+
     Falls back to sed-based substitution if template-engine.sh is unavailable.
     Skips if alerting_enabled is False.
     Skips if template file doesn't exist.
-    
+
     Replaces: lines 355-388 (_generate_alert_rules)
     """
 
@@ -323,11 +323,11 @@ def generate_alert_rules(
 def refresh_catalog(platform_root: Path) -> RenderResult:
     """
     Invoke catalog generation script.
-    
+
     Runs: <platform_root>/core/internal/catalog/generate-catalog.sh
     Non-fatal: failure logged at IMP:6, status="failed".
     Script not found: status="noop".
-    
+
     Replaces: lines 327-337 (_refresh_catalog)
     """
 
@@ -335,12 +335,12 @@ def refresh_catalog(platform_root: Path) -> RenderResult:
 def reload_monitoring_services() -> list[RenderResult]:
     """
     HTTP POST reload Prometheus and Loki.
-    
+
     - Prometheus: POST http://prometheus:9090/-/reload
     - Loki: POST http://loki:3100/reload
-    
+
     Each call is non-fatal — failures logged, continue to next.
-    
+
     Replaces: lines 340-352 (_reload_services)
     """
 
@@ -351,7 +351,7 @@ def main() -> int:
     """
     CLI: python3 monitoring_config_renderer.py \
          --project-dir <dir> --project <name> --node <name>
-    
+
     Orchestrates full monitoring reconfiguration pipeline:
     1. Load + merge configs → ProjectMonitoringConfig
     2. If no monitoring section → exit 0 (backward compat)
@@ -362,9 +362,9 @@ def main() -> int:
     7. Reload monitoring services
     8. Create Langfuse project (if LLM needed)
     9. Refresh catalog
-    
+
     Matches execution order of original main() (lines 392-413).
-    
+
     Exit codes: 0 = success, 1 = config parse error
     """
 ```
@@ -637,7 +637,7 @@ limits_config:
 The original shell script has a sed-based fallback (lines 219-224, 384-386) when `template-engine.sh` is unavailable. The Python module preserves this fallback:
 
 ```python
-def _render_template(template_path: Path, output_path: Path, variables: dict[str, str], 
+def _render_template(template_path: Path, output_path: Path, variables: dict[str, str],
                      platform_root: Path) -> None:
     """Render template via template-engine.sh, with sed fallback."""
     engine_path = platform_root / "core/internal/template-engine.sh"

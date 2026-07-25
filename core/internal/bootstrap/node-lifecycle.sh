@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: node-lifecycle bootstrap init update orchestrator idempotent sequential-steps checkpoint-resume docker ufw nginx sops users sudoers audit telegram scp-deploy no-git deploy-modules healthcheck per-step-content-hash state-machine delegation
-# STRUCTURE: ▶ --mode {init|update} → ┌arg parser┐ → ○ resolve NODE_YAML + TOR_ENABLED → ┌python3 state_machine.py --mode $MODE ...┐ → ⎋ exit 0|1; checkpoint_step preserves .done
+# STRUCTURE: ▶ --mode {init|update} → ┌arg parser┐ → ○ resolve NODE_YAML + TOR_ENABLED → ┌python3 state_machine.py --mode $MODE ...┐ → ⎋ exit 0|1; checkpoint_step delegates to checkpoint_migration.py → state.json (name-based keys)
 # region MODULE_CONTRACT
 ## @purpose  Thin shell facade (W4-E2) delegating all step logic to lifecycle/state_machine.py
 ## @scope    Called from bootstrap.sh (--mode init) or node-update.sh (--mode update)
@@ -132,14 +132,17 @@ main() {
         echo "[IMP:9][node-lifecycle][main] ==============================" >&2
         for var in NODE_NAME NODE_YAML PLATFORM_OWNER_KEY; do [[ -z "${!var:-}" ]] && { echo "[IMP:10][bootstrap][validate] FAIL: Missing ${var}" >&2; exit 1; }; done
         log_step "validate-env" "OK" "All required env vars present"
-        CHECKPOINT_DIR="/var/lib/platform/.bootstrap-checkpoints"
+        CHECKPOINT_STATE_FILE="/var/lib/platform/.bootstrap/state.json"
+        CHECKPOINT_DIR="/var/lib/platform/.bootstrap-checkpoints"  # kept for legacy migration only
         if [[ "${DRY_RUN_MODE:-}" == "true" ]]; then
             echo "[IMP:9][node-lifecycle][dry-run] ===== DRY RUN: init mode =====" >&2
             echo "[IMP:9][node-lifecycle][dry-run] Bootstrap DRY RUN — no mutations, exit 0" >&2
             _delegate --mode init --dry-run --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}"; exit 0
         fi
-        [[ "$FORCE_MODE" == "true" ]] && rm -rf "$CHECKPOINT_DIR"
-        mkdir -p "$CHECKPOINT_DIR"; detect_tor_enabled; export TOR_ENABLED
+        [[ "$FORCE_MODE" == "true" ]] && checkpoint_reset_all
+        # Migrate legacy .done files ONCE (idempotent — after migration, legacy dir is empty)
+        checkpoint_migrate_legacy
+        detect_tor_enabled; export TOR_ENABLED
 
         # ── Pre-flight gate (DevPlan 047) ──
         # Runs preflight.py before state machine to probe SSH/disk/S3/ghcr/Docker Hub/DNS
@@ -210,9 +213,10 @@ main() {
             echo "[IMP:9][node-lifecycle][dry-run] Steps: verify-core → provision → ssl → deploy-modules → healthcheck → converge" >&2
             echo "[IMP:9][node-lifecycle][dry-run] Node update DRY RUN — no mutations, exit 0" >&2; exit 0
         fi
+        CHECKPOINT_STATE_FILE="/var/lib/platform/.bootstrap/state.json"
         CHECKPOINT_DIR="/var/lib/platform/.bootstrap-checkpoints"
-        [[ "$FORCE_MODE" == "true" ]] && rm -rf "$CHECKPOINT_DIR"
-        mkdir -p "$CHECKPOINT_DIR"
+        [[ "$FORCE_MODE" == "true" ]] && checkpoint_reset_all
+        checkpoint_migrate_legacy
         _do_update_steps() {
             CHECKPOINT_STEP_HASH="$(_step_hash "verify-core")"           checkpoint_step "verify-core" update_step_1_verify_core
             CHECKPOINT_STEP_HASH="$(_step_hash "provision")"             checkpoint_step "provision" update_step_2_provision

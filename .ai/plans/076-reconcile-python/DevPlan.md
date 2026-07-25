@@ -294,7 +294,7 @@ class ReconcileSummary:
     warnings: int = 0
     failures: int = 0
     results: list[ReconcileResult] = field(default_factory=list)
-    
+
     def is_success(self) -> bool:
         """Returns True if no failures occurred."""
         return self.failures == 0
@@ -307,32 +307,32 @@ class ReconcileSummary:
 # region FUNC_parse_node_yaml_projects
 def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
     """Extract project list from node.yaml.
-    
+
     Supports both dict entries (with name/org/domain keys) and string entries.
     Returns empty list on parse error or missing section.
-    
+
     Args:
         node_yaml_path: Absolute path to node.yaml.
-    
+
     Returns:
         List of ProjectSpec. Empty list if no projects or parse error.
     """
     try:
         import yaml
-        
+
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
     except Exception as exc:
         logger.warning("[IMP:8][parse_node_yaml] Failed to parse %s: %s", node_yaml_path, exc)
         return []
-    
+
     if not data:
         return []
-    
+
     projects_raw = data.get("projects", [])
     if not isinstance(projects_raw, list):
         return []
-    
+
     out: list[ProjectSpec] = []
     for p in projects_raw:
         if isinstance(p, dict):
@@ -343,7 +343,7 @@ def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
             ))
         elif isinstance(p, str):
             out.append(ProjectSpec(name=p))
-    
+
     return out
 # endregion
 
@@ -354,13 +354,13 @@ def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
 # region FUNC_is_stub_project
 def is_stub_project(project_dir: str) -> bool:
     """Check if ai-platform.yaml in project_dir is a GENERATED-STUB.
-    
+
     Reads the first line of ai-platform.yaml. Returns True if it contains
     "GENERATED-STUB". Returns False if file missing, empty, or has real config.
-    
+
     Args:
         project_dir: Path to project directory containing ai-platform.yaml.
-    
+
     Returns:
         True if the ai-platform.yaml is a stub, False otherwise.
     """
@@ -381,20 +381,20 @@ def is_stub_project(project_dir: str) -> bool:
 # region FUNC_check_ghcr_image
 def check_ghcr_image(org: str, project_name: str) -> bool:
     """Check if a Docker image exists in GitHub Container Registry.
-    
+
     Runs `docker manifest inspect ghcr.io/{org}/{name}:latest`.
     Default org is "tronyx-lab" if empty.
-    
+
     Args:
         org: GitHub organization (or username). Defaults to "tronyx-lab" if empty.
         project_name: Project/repository name.
-    
+
     Returns:
         True if image manifest is accessible, False otherwise.
     """
     context = org if org else "tronyx-lab"
     image_ref = f"ghcr.io/{context}/{project_name}:latest"
-    
+
     try:
         result = subprocess.run(
             ["docker", "manifest", "inspect", image_ref],
@@ -418,15 +418,15 @@ def resolve_ssh_host(
     node_host_map: str = "",
 ) -> Optional[str]:
     """Resolve SSH host for a node.
-    
+
     Checks NODE_HOST_MAP JSON first (if provided), then falls back
     to node.yaml → node.host.
-    
+
     Args:
         node_name: Node name to resolve.
         node_yaml_path: Path to node.yaml (fallback source).
         node_host_map: Optional JSON string of {node_name: host} mapping.
-    
+
     Returns:
         SSH host string or None if cannot resolve.
     """
@@ -441,7 +441,7 @@ def resolve_ssh_host(
                 return host
         except (json.JSONDecodeError, TypeError):
             logger.warning("[IMP:8][resolve_host] Failed to parse NODE_HOST_MAP JSON")
-    
+
     # Fallback: node.yaml → node.host
     try:
         import yaml
@@ -454,7 +454,7 @@ def resolve_ssh_host(
             return host
     except Exception as exc:
         logger.warning("[IMP:8][resolve_host] Failed to parse node.yaml for host: %s", exc)
-    
+
     return None
 # endregion
 
@@ -470,15 +470,15 @@ def _ssh_run(
     timeout: int = 600,
 ) -> subprocess.CompletedProcess:
     """Execute a command over SSH.
-    
+
     Uses the ci-deploy key for authentication. Returns CompletedProcess.
-    
+
     Args:
         ssh_host: SSH host (user@host or just host).
         ssh_user: SSH user for key path construction.
         command: Command to execute on remote host.
         timeout: Timeout in seconds (default 600 = 10min for deploys).
-    
+
     Returns:
         subprocess.CompletedProcess with returncode, stdout, stderr.
     """
@@ -486,7 +486,7 @@ def _ssh_run(
         "CI_DEPLOY_KEY",
         os.environ.get("PLATFORM_CI_DEPLOY_KEY_FILE", os.path.expanduser("~/.ssh/ci_deploy_key")),
     )
-    
+
     cmd = [
         "ssh",
         "-i", ci_key,
@@ -495,7 +495,7 @@ def _ssh_run(
         f"{ssh_user}@{ssh_host}" if "@" not in ssh_host else ssh_host,
         command,
     ]
-    
+
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -519,17 +519,17 @@ def deliver_payload(
     dry_run: bool = False,
 ) -> bool:
     """Build and deliver ai-platform.yaml + docker-compose.yml via SSH forced-command.
-    
+
     Creates a temporary directory with real ai-platform.yaml (not stub) and
     docker-compose.yml, then delivers via tar+ssh platform-deliver forced-command.
-    
+
     Args:
         ssh_host: SSH host for delivery.
         project_dir: Existing project directory on remote (source of compose file).
         spec: ProjectSpec with name, org, domain.
         node_name: Target node name.
         dry_run: If True, skip actual delivery.
-    
+
     Returns:
         True if delivery succeeded, False otherwise.
     """
@@ -539,10 +539,10 @@ def deliver_payload(
             spec.name, ssh_host,
         )
         return True
-    
+
     tmp_dir = tempfile.mkdtemp(prefix=f"reconcile-{spec.name}-")
     tmp_path = Path(tmp_dir)
-    
+
     try:
         # Write real ai-platform.yaml
         ai_yaml_content = f"project: {spec.name}\nservice: {spec.name}\ntarget_node: {node_name}\n"
@@ -551,7 +551,7 @@ def deliver_payload(
         if spec.org:
             ai_yaml_content += f"org: {spec.org}\n"
         (tmp_path / "ai-platform.yaml").write_text(ai_yaml_content)
-        
+
         # Copy docker-compose.yml (or create minimal)
         proj_path = Path(project_dir)
         compose_src = None
@@ -560,7 +560,7 @@ def deliver_payload(
             if candidate.is_file():
                 compose_src = candidate
                 break
-        
+
         if compose_src:
             shutil.copy2(str(compose_src), str(tmp_path / "docker-compose.yml"))
         else:
@@ -573,27 +573,27 @@ def deliver_payload(
                 f"    restart: unless-stopped\n"
             )
             (tmp_path / "docker-compose.yml").write_text(compose_content)
-        
+
         # Build deliver verb
         deliver_prefix = f"{spec.org} " if spec.org else ""
         deliver_verb = f"platform-deliver {deliver_prefix}{spec.name}"
-        
+
         # Deliver via SSH: tar czf - ai-platform.yaml docker-compose.yml | ssh ...
         # We use ssh with stdin pipe
         ci_key = os.environ.get(
             "CI_DEPLOY_KEY",
             os.environ.get("PLATFORM_CI_DEPLOY_KEY_FILE", os.path.expanduser("~/.ssh/ci_deploy_key")),
         )
-        
+
         logger.info("[IMP:8][deliver][%s] Delivering payload to %s...", spec.name, ssh_host)
-        
+
         # Create tar and pipe to SSH
         tar_proc = subprocess.Popen(
             ["tar", "czf", "-", "-C", str(tmp_path), "ai-platform.yaml", "docker-compose.yml"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        
+
         ssh_cmd = [
             "ssh",
             "-i", ci_key,
@@ -602,7 +602,7 @@ def deliver_payload(
             f"{SSH_USER}@{ssh_host}" if "@" not in ssh_host else ssh_host,
             deliver_verb,
         ]
-        
+
         ssh_proc = subprocess.Popen(
             ssh_cmd,
             stdin=tar_proc.stdout,
@@ -610,23 +610,23 @@ def deliver_payload(
             stderr=subprocess.PIPE,
             text=True,
         )
-        
+
         if tar_proc.stdout:
             tar_proc.stdout.close()
-        
+
         tar_proc.wait(timeout=30)
         ssh_stdout, ssh_stderr = ssh_proc.communicate(timeout=30)
-        
+
         if ssh_proc.returncode != 0:
             logger.error(
                 "[IMP:10][deliver][%s] FAIL: Payload delivery failed: %s",
                 spec.name, ssh_stderr.strip(),
             )
             return False
-        
+
         logger.info("[IMP:9][deliver][%s] Payload delivered successfully", spec.name)
         return True
-        
+
     except Exception as exc:
         logger.error("[IMP:10][deliver][%s] FAIL: %s", spec.name, exc)
         return False
@@ -646,32 +646,32 @@ def deploy_project(
     dry_run: bool = False,
 ) -> bool:
     """Deploy project via docker compose pull && up -d over SSH.
-    
+
     Args:
         ssh_host: SSH host.
         project_dir: Project directory on remote host.
         dry_run: If True, skip actual deployment.
-    
+
     Returns:
         True if deployment succeeded, False otherwise.
     """
     if dry_run:
         logger.info("[IMP:8][deploy] DRY-RUN: would deploy in %s", project_dir)
         return True
-    
+
     logger.info("[IMP:9][deploy] Deploying via docker compose in %s...", project_dir)
-    
+
     result = _ssh_run(
         ssh_host,
         SSH_USER,
         f"cd {project_dir} && docker compose pull && docker compose up -d",
         timeout=600,
     )
-    
+
     if result.returncode == 0:
         logger.info("[IMP:9][deploy] Deploy succeeded in %s", project_dir)
         return True
-    
+
     logger.error(
         "[IMP:10][deploy] FAIL: docker compose up failed in %s: %s",
         project_dir, result.stderr.strip(),
@@ -691,28 +691,28 @@ def reconcile_projects(
     node_host_map: str = "",
 ) -> ReconcileSummary:
     """Reconcile all stub projects from node.yaml — deploy if GHCR image exists.
-    
+
     Main entry point. For each project in node.yaml#projects:
     1. Check if directory exists and ai-platform.yaml is GENERATED-STUB
     2. Check GHCR for Docker image
     3. If image found: deliver payload + docker compose up -d via SSH
     4. If no image: WARN "awaiting first CI deploy"
-    
+
     Args:
         node_name: Node name for SSH host resolution and ai-platform.yaml.
         node_yaml_path: Path to node.yaml.
         dry_run: If True, print planned actions without executing.
         node_host_map: Optional JSON string {node_name: ssh_host} mapping.
-    
+
     Returns:
         ReconcileSummary with counts and per-project results.
     """
     summary = ReconcileSummary(node=node_name)
-    
+
     logger.info("[IMP:8][reconcile][main] START: Reconcile stub projects for node=%s", node_name)
     logger.info("[IMP:8][reconcile][main] node.yaml: %s", node_yaml_path)
     logger.info("[IMP:8][reconcile][main] dry_run: %s", dry_run)
-    
+
     # Validate node.yaml exists
     if not Path(node_yaml_path).is_file():
         logger.error(
@@ -721,26 +721,26 @@ def reconcile_projects(
         )
         summary.failures += 1
         return summary
-    
+
     # Parse projects
     projects = parse_node_yaml_projects(node_yaml_path)
     if not projects:
         logger.info("[IMP:9][reconcile][main] SKIP: No projects defined in node.yaml")
         return summary
-    
+
     logger.info("[IMP:8][reconcile][main] Found %d project(s) in node.yaml", len(projects))
-    
+
     # Process each project
     for spec in projects:
         if not spec.name:
             continue
-        
+
         logger.info("[IMP:7][reconcile][%s] Processing...", spec.name)
-        
+
         # Build project directory path
         org_prefix = f"{spec.org}/" if spec.org else ""
         proj_dir = f"/opt/projects/{org_prefix}{spec.name}"
-        
+
         # Check directory exists
         if not Path(proj_dir).is_dir():
             logger.info(
@@ -750,7 +750,7 @@ def reconcile_projects(
             summary.skipped += 1
             summary.results.append(ReconcileResult(spec.name, "skipped", "Directory not found"))
             continue
-        
+
         # Check if stub
         if not is_stub_project(proj_dir):
             # Could be real config or missing ai-platform.yaml
@@ -768,9 +768,9 @@ def reconcile_projects(
             summary.skipped += 1
             summary.results.append(ReconcileResult(spec.name, "skipped", "Not a stub"))
             continue
-        
+
         logger.info("[IMP:9][reconcile][%s] Stub detected — checking GHCR for Docker image...", spec.name)
-        
+
         # Check GHCR
         if not check_ghcr_image(spec.org, spec.name):
             logger.info(
@@ -780,9 +780,9 @@ def reconcile_projects(
             summary.warnings += 1
             summary.results.append(ReconcileResult(spec.name, "warn", "No GHCR image"))
             continue
-        
+
         logger.info("[IMP:9][reconcile][%s] Image found — deploying", spec.name)
-        
+
         if dry_run:
             logger.info(
                 "[IMP:8][reconcile][%s] DRY-RUN: would deliver payload and deploy",
@@ -791,7 +791,7 @@ def reconcile_projects(
             summary.deployed += 1
             summary.results.append(ReconcileResult(spec.name, "deployed", "Would deploy (dry-run)"))
             continue
-        
+
         # Resolve SSH host
         ssh_host = resolve_ssh_host(node_name, node_yaml_path, node_host_map)
         if not ssh_host:
@@ -802,23 +802,23 @@ def reconcile_projects(
             summary.failures += 1
             summary.results.append(ReconcileResult(spec.name, "failed", "Cannot resolve SSH host"))
             continue
-        
+
         # Deliver payload
         if not deliver_payload(ssh_host, proj_dir, spec, node_name, dry_run=False):
             summary.failures += 1
             summary.results.append(ReconcileResult(spec.name, "failed", "Payload delivery failed"))
             continue
-        
+
         # Deploy via docker compose
         if not deploy_project(ssh_host, proj_dir, dry_run=False):
             summary.failures += 1
             summary.results.append(ReconcileResult(spec.name, "failed", "Deploy failed"))
             continue
-        
+
         logger.info("[IMP:9][reconcile][%s] DONE: stub → deployed", spec.name)
         summary.deployed += 1
         summary.results.append(ReconcileResult(spec.name, "deployed", "Successfully deployed"))
-    
+
     # Summary
     logger.info("[IMP:9][reconcile][main] ==============================")
     logger.info("[IMP:9][reconcile][main] Reconcile complete for node=%s", node_name)
@@ -827,7 +827,7 @@ def reconcile_projects(
     logger.info("[IMP:9][reconcile][main]   warnings: %d", summary.warnings)
     logger.info("[IMP:9][reconcile][main]   failures: %d", summary.failures)
     logger.info("[IMP:9][reconcile][main] ==============================")
-    
+
     return summary
 # endregion
 
@@ -838,10 +838,10 @@ def reconcile_projects(
 # region FUNC_main
 def main() -> None:
     """CLI entry point for reconciler_projects.py.
-    
+
     Usage:
         python3 reconciler_projects.py --node <name> --node-yaml <path> [--dry-run] [--node-host-map '<json>']
-    
+
     Exit codes:
         0 — all projects reconciled or skipped
         1 — one or more deployments failed
@@ -865,16 +865,16 @@ def main() -> None:
         "--node-host-map", default="", type=str,
         help="JSON string of {node_name: ssh_host} mapping",
     )
-    
+
     args = parser.parse_args()
-    
+
     summary = reconcile_projects(
         node_name=args.node,
         node_yaml_path=args.node_yaml,
         dry_run=args.dry_run,
         node_host_map=args.node_host_map,
     )
-    
+
     if summary.is_success():
         sys.exit(0)
     else:

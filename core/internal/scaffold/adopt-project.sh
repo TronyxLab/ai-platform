@@ -667,42 +667,14 @@ register_in_node_yaml() {
         log_imp 9 "-" "Project registered in node.yaml: ${PROJECT_NAME}"
     elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
         log_imp 7 "-" "yq not available — using python3+yaml fallback"
-        ADOPT_NAME="$PROJECT_NAME" \
-        ADOPT_REPO="${PROJECT_ORG}/${PROJECT_NAME}" \
-        ADOPT_DOMAIN="$PROJECT_DOMAIN" \
-        ADOPT_YAML="$node_yaml" \
-        python3 <<'PYEOF' || log_imp 8 "-" "Python registration failed — register manually"
-import os, yaml, sys
-
-name = os.environ.get('ADOPT_NAME', '')
-repo = os.environ.get('ADOPT_REPO', '')
-domain = os.environ.get('ADOPT_DOMAIN', '')
-yaml_path = os.environ.get('ADOPT_YAML', '')
-
-if not name or not repo or not yaml_path:
-    sys.exit(0)
-
-with open(yaml_path) as f:
-    data = yaml.safe_load(f)
-
-if 'projects' in data:
-    for p in data['projects']:
-        if p.get('name') == name or p.get('repo') == repo:
-            print(f"[IMP:9][adopt][register] Idempotent SKIP — {name} already in node.yaml", file=sys.stderr)
-            sys.exit(0)
-
-entry = {'name': name, 'repo': repo, 'type': 'adopted'}
-if domain:
-    entry['domain'] = domain
-
-if 'projects' not in data:
-    data['projects'] = []
-data['projects'].append(entry)
-
-with open(yaml_path, 'w') as f:
-    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-print(f"[IMP:9][adopt][register] Registered {name} → {yaml_path}", file=sys.stderr)
-PYEOF
+        python3 "${SCRIPT_DIR}/../shared/project_registry.py" register \
+            --name "$PROJECT_NAME" \
+            --repo "${PROJECT_ORG}/${PROJECT_NAME}" \
+            --type "adopted" \
+            ${PROJECT_DOMAIN:+--domain "$PROJECT_DOMAIN"} \
+            --node-yaml "$node_yaml" \
+            --log-prefix "adopt" \
+            || log_imp 8 "-" "Python registration failed — register manually"
     else
         log_imp 8 "-" "Neither yq nor python3+yaml available — cannot auto-register"
     fi

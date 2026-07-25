@@ -106,10 +106,10 @@ compute_step_hash() {
 step_hash_changed() {
     local step_label="$1"
     local current_hash="$2"
-    local hash_file="${CHECKPOINT_DIR}/.bootstrap-step-${step_label}.hash"
+    local hash_file="${CHECKPOINT_DIR:-/var/lib/platform/.bootstrap-checkpoints}/.bootstrap-step-${step_label}.hash"
 
     if [[ ! -f "$hash_file" ]]; then
-        echo "[IMP:8][content-hash][${step_label}] No stored hash found — treating as changed (backward compat)" >&2
+        echo "[IMP:8][content-hash][${step_label}] No stored hash found — treating as changed (backward compat or post-migration)" >&2
         return 1
     fi
 

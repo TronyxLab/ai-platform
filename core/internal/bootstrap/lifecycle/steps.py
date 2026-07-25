@@ -33,6 +33,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Shared library import (DevPlan 070 — DRIFT-B5 elimination)
+import sys as _sys
+
+_SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "shared")
+if _SHARED_DIR not in _sys.path:
+    _sys.path.insert(0, _SHARED_DIR)
+from node_yaml import extract_context_from_node_yaml
+
 
 # region FUNC__step_install_acme
 ## @purpose — Install acme.sh and DNS API extensions for SSL provisioning.
@@ -832,7 +840,7 @@ def _step_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
     # CONTEXT: одна нода = один контекст
     context = os.environ.get("CONTEXT", "")
     if not context and node_yaml and os.path.isfile(node_yaml):
-        context = _extract_context_from_node_yaml(node_yaml)
+        context = extract_context_from_node_yaml(node_yaml, log_tag="step:context")
     if not context:
         logger.error(
             "[IMP:10][deploy_context] CONTEXT not set — pass via --context or ensure node.yaml has context/contexts[0]"
@@ -916,41 +924,6 @@ def _step_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
 
 
 # endregion FUNC__step_deploy_context
-
-
-# region FUNC__extract_context_from_node_yaml
-## @purpose — Extract context name from node.yaml. One node = one context.
-## @io — ⇥ node_yaml_path: str → ⎋ str (empty if not found)
-## @complexity — O(N) for YAML parse
-def _extract_context_from_node_yaml(node_yaml_path: str) -> str:
-    """Extract context name from node.yaml."""
-    try:
-        import yaml
-
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            return ""
-        ctx = data.get("context", "")
-        if ctx and isinstance(ctx, str):
-            logger.info("[IMP:8][step:context] Context from node.yaml context field: %s", ctx)
-            return ctx
-        contexts = data.get("contexts", [])
-        if contexts and isinstance(contexts, list) and len(contexts) > 0:
-            first = contexts[0]
-            if isinstance(first, dict):
-                ctx = first.get("name", "")
-            elif isinstance(first, str):
-                ctx = first
-            if ctx:
-                logger.info("[IMP:8][step:context] Context from node.yaml contexts[0].name: %s", ctx)
-                return ctx
-    except Exception as e:
-        logger.warning("[IMP:7][step:context] Failed to parse %s: %s", node_yaml_path, e)
-    return ""
-
-
-# endregion FUNC__extract_context_from_node_yaml
 
 
 # region FUNC__extract_domains_for_context

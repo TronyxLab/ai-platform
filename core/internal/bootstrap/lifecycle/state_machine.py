@@ -31,6 +31,10 @@
 ##           2026-07-24 | W5.T5.3 — Added HC_DONE_MARKER check in healthcheck step:
 ##           when /var/lib/platform/.bootstrap/.hc_done_in_deploy exists, skips the
 ##           standalone healthcheck (already done inside deploy_docker_group)
+##           2026-07-25 | DevPlan 071 Rev 2 — Refactored state.json keys from numeric
+##           indices (str(n)) to Python step NAMES (self._step_name(n)). Eliminates
+##           step-name/key misalignment (F1 fix). Added backward-compat migration
+##           in BootstrapState.from_dict() for old numeric-key state.json files.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -225,10 +229,28 @@ class BootstrapState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> BootstrapState:
-        """Deserialize from dict."""
+    def from_dict(cls, data: dict[str, Any], step_list: list[str] | None = None) -> BootstrapState:
+        """Deserialize from dict. Supports backward-compat numeric-key migration.
+
+        When step_list is provided and a dict key is a digit string, it is
+        migrated to the corresponding step name: key "13" → index 13 → "ensure_secrets".
+        This ensures old state.json files (with numeric keys) are compatible
+        with the new name-based key lookup.
+
+        ## @rationale DevPlan 071 Rev 2: Numeric keys caused F1 misalignment
+        ##   (shell wrote read-node-yaml at key 13, Python expected ensure_secrets).
+        ##   Name-based keys eliminate this. Auto-migration ensures existing state.json
+        ##   files from pre-migration boots are readable.
+        """
+        step_list_local = step_list or []
         steps = {}
         for k, v in data.get("steps", {}).items():
+            # Detect old numeric-key format: keys like "1", "2", ...
+            if k.isdigit() and step_list_local:
+                idx = int(k)
+                if 1 <= idx <= len(step_list_local):
+                    k = step_list_local[idx - 1]  # Migrate to name-based key
+                    logger.info("[IMP:8][StateMachine][from_dict] Migrated numeric key %d → %s", idx, k)
             steps[k] = StepState.from_dict(v)
         return cls(
             mode=data.get("mode", "init"),
@@ -275,7 +297,9 @@ class StateMachine:
             try:
                 with open(self.state_file) as f:
                     data = json.load(f)
-                self.state = BootstrapState.from_dict(data)
+                loaded_mode = data.get("mode", "init")
+                step_list = INIT_STEPS if loaded_mode == "init" else UPDATE_STEPS
+                self.state = BootstrapState.from_dict(data, step_list=step_list)
                 logger.info(
                     "[IMP:8][StateMachine][init] State loaded: mode=%s node=%s current_step=%d",
                     self.state.mode,
@@ -317,11 +341,11 @@ class StateMachine:
     ## @io — ⇥ n: step index (1-based) → ⎋ None
     ## @complexity — O(1)
     def start_step(self, n: int) -> None:
-        """Validate preconditions and mark step N as running."""
+        """Validate preconditions and mark step N as running (name-based key)."""
         step_name = self._step_name(n)
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         step = StepState(name=step_name, status="running", started_at=now)
-        self.state.steps[str(n)] = step
+        self.state.steps[step_name] = step
         self.state.current_step = n
         logger.info("[IMP:9][StateMachine][start_step] Step %d (%s) START", n, step_name)
         self.save()
@@ -329,19 +353,23 @@ class StateMachine:
     # endregion FUNC_start_step
 
     # region FUNC_complete_step
-    ## @purpose — Mark a step as done with optional content hash.
+    ## @purpose — Mark a step as done with optional content hash (name-based key).
     ## @io — ⇥ n: step index, hash_val: optional content hash → ⎋ None
     ## @complexity — O(1)
     def complete_step(self, n: int, hash_val: str | None = None) -> None:
-        """Mark step N as completed successfully."""
-        key = str(n)
-        if key not in self.state.steps:
+        """Mark step N as completed successfully (name-based key)."""
+        step_name = self._step_name(n)
+        if step_name not in self.state.steps:
             logger.warning("[IMP:7][StateMachine][complete_step] Step %d not started — creating", n)
-            self.state.steps[key] = StepState(name=self._step_name(n))
-        self.state.steps[key].status = "done"
+            self.state.steps[step_name] = StepState(name=step_name)
+        self.state.steps[step_name].status = "done"
         if hash_val:
-            self.state.steps[key].hash = hash_val
-        logger.info("[IMP:9][StateMachine][complete_step] Step %d (%s) DONE", n, self.state.steps[key].name)
+            self.state.steps[step_name].hash = hash_val
+        logger.info(
+            "[IMP:9][StateMachine][complete_step] Step %d (%s) DONE",
+            n,
+            self.state.steps[step_name].name,
+        )
         self.save()
 
     # endregion FUNC_complete_step
@@ -351,13 +379,18 @@ class StateMachine:
     ## @io — ⇥ n: step index, reason: skip reason → ⎋ None
     ## @complexity — O(1)
     def skip_step(self, n: int, reason: str = "") -> None:
-        """Mark step N as skipped (not failed, not run)."""
-        key = str(n)
-        if key not in self.state.steps:
-            self.state.steps[key] = StepState(name=self._step_name(n))
-        self.state.steps[key].status = "skipped"
-        self.state.steps[key].reason = reason or "content_unchanged"
-        logger.info("[IMP:9][StateMachine][skip_step] Step %d (%s) SKIPPED: %s", n, self.state.steps[key].name, reason)
+        """Mark step N as skipped (not failed, not run) — name-based key."""
+        step_name = self._step_name(n)
+        if step_name not in self.state.steps:
+            self.state.steps[step_name] = StepState(name=step_name)
+        self.state.steps[step_name].status = "skipped"
+        self.state.steps[step_name].reason = reason or "content_unchanged"
+        logger.info(
+            "[IMP:9][StateMachine][skip_step] Step %d (%s) SKIPPED: %s",
+            n,
+            self.state.steps[step_name].name,
+            reason,
+        )
         self.save()
 
     # endregion FUNC_skip_step
@@ -367,14 +400,19 @@ class StateMachine:
     ## @io — ⇥ n: step index, error: error description → ⎋ None
     ## @complexity — O(1)
     def fail_step(self, n: int, error: str) -> None:
-        """Mark step N as failed."""
-        key = str(n)
-        if key not in self.state.steps:
-            self.state.steps[key] = StepState(name=self._step_name(n))
-        self.state.steps[key].status = "failed"
-        self.state.steps[key].error = error
-        self.state.errors.append(f"Step {n} ({self.state.steps[key].name}): {error}")
-        logger.error("[IMP:10][StateMachine][fail_step] Step %d (%s) FAILED: %s", n, self.state.steps[key].name, error)
+        """Mark step N as failed (name-based key)."""
+        step_name = self._step_name(n)
+        if step_name not in self.state.steps:
+            self.state.steps[step_name] = StepState(name=step_name)
+        self.state.steps[step_name].status = "failed"
+        self.state.steps[step_name].error = error
+        self.state.errors.append(f"Step {n} ({step_name}): {error}")
+        logger.error(
+            "[IMP:10][StateMachine][fail_step] Step %d (%s) FAILED: %s",
+            n,
+            step_name,
+            error,
+        )
         self.save()
 
     # endregion FUNC_fail_step
@@ -395,15 +433,15 @@ class StateMachine:
         if self.state.current_step == 0:
             return 1
 
-        # Find first step that is pending or failed
+        # Find first step that is pending or failed (name-based key lookup)
         for i in range(1, len(step_list) + 1):
-            key = str(i)
-            if key not in self.state.steps:
+            step_name = self._step_name(i)
+            step = self.state.steps.get(step_name)
+            if step is None:
                 return i
-            status = self.state.steps[key].status
-            if status in ("pending", "failed"):
+            if step.status in ("pending", "failed"):
                 return i
-            if status == "running":
+            if step.status == "running":
                 return i  # re-run hanging steps
 
         return None
@@ -490,32 +528,30 @@ class StateMachine:
 
     # region FUNC__is_step_done
     def _is_step_done(self, n: int) -> bool:
-        """Check if step N is already completed."""
-        key = str(n)
-        if key not in self.state.steps:
-            return False
-        return self.state.steps[key].status == "done"
+        """Check if step N is already completed (name-based key lookup)."""
+        step_name = self._step_name(n)
+        step = self.state.steps.get(step_name)
+        return step is not None and step.status == "done"
 
     # endregion FUNC__is_step_done
 
     # region FUNC__is_step_skipped
     def _is_step_skipped(self, n: int) -> bool:
-        """Check if step N is skipped."""
-        key = str(n)
-        if key not in self.state.steps:
-            return False
-        return self.state.steps[key].status == "skipped"
+        """Check if step N is skipped (name-based key lookup)."""
+        step_name = self._step_name(n)
+        step = self.state.steps.get(step_name)
+        return step is not None and step.status == "skipped"
 
     # endregion FUNC__is_step_skipped
 
     # region FUNC__hash_changed
     def _hash_changed(self, n: int, new_hash: str) -> bool:
-        """Check if step hash changed since last run. True = hash changed (needs re-run)."""
-        key = str(n)
-        if key not in self.state.steps:
+        """Check if step hash changed since last run (name-based key lookup)."""
+        step_name = self._step_name(n)
+        step = self.state.steps.get(step_name)
+        if step is None:
             return True
-        old_hash = self.state.steps[key].hash
-        return old_hash != new_hash
+        return step.hash != new_hash
 
     # endregion FUNC__hash_changed
 
@@ -526,7 +562,9 @@ class StateMachine:
     ##       ⎋ None (raises StateTransitionError on violation)
     ## @complexity — O(1)
     def _check_precondition(self, state: BootstrapState, step_index: int, step_name: str) -> None:
-        """Assert previous step is done/skipped (or step_index == 1 for first step)."""
+        """Assert previous step is done/skipped (or step_index == 1 for first step).
+        Uses name-based key lookup for step state.
+        """
         if step_index == 1:
             # First step — no previous to check
             logger.debug(
@@ -535,23 +573,23 @@ class StateMachine:
                 step_name,
             )
             return
-        prev_key = str(step_index - 1)
-        if prev_key not in state.steps:
+        prev_name = self._step_name(step_index - 1)
+        prev_step = state.steps.get(prev_name)
+        if prev_step is None:
             raise StateTransitionError(
-                f"Pre-condition violation: step {step_index - 1} has no state (never started). "
+                f"Pre-condition violation: step {step_index - 1} ({prev_name}) has no state (never started). "
                 f"Cannot execute step {step_index} ({step_name})."
             )
-        prev_status = state.steps[prev_key].status
-        if prev_status not in ("done", "skipped"):
+        if prev_step.status not in ("done", "skipped"):
             raise StateTransitionError(
-                f"Pre-condition violation: step {step_index - 1} status is '{prev_status}', "
+                f"Pre-condition violation: step {step_index - 1} status is '{prev_step.status}', "
                 f"expected 'done' or 'skipped'. Cannot execute step {step_index} ({step_name})."
             )
         logger.debug(
             "[IMP:6][StateMachine][_check_precondition] Step %d (%s): pre-condition OK (prev=%s)",
             step_index,
             step_name,
-            prev_status,
+            prev_step.status,
         )
 
     # endregion FUNC__check_precondition
@@ -563,14 +601,15 @@ class StateMachine:
     ##       ⎋ None (raises StateTransitionError on violation)
     ## @complexity — O(1)
     def _check_postcondition(self, state: BootstrapState, step_index: int, step_name: str) -> None:
-        """Assert current step is done and state.current_step matches step_index."""
-        key = str(step_index)
-        if key not in state.steps:
+        """Assert current step is done and state.current_step matches step_index.
+        Uses name-based key lookup for step state.
+        """
+        step = state.steps.get(step_name)
+        if step is None:
             raise StateTransitionError(f"Post-condition violation: step {step_index} ({step_name}) has no state entry.")
-        if state.steps[key].status != "done":
+        if step.status != "done":
             raise StateTransitionError(
-                f"Post-condition violation: step {step_index} ({step_name}) status is "
-                f"'{state.steps[key].status}', expected 'done'."
+                f"Post-condition violation: step {step_index} ({step_name}) status is '{step.status}', expected 'done'."
             )
         if state.current_step != step_index:
             raise StateTransitionError(
@@ -601,8 +640,8 @@ class StateMachine:
         step_list = self._step_list()
         # Always reset all step entries to pending (not just add missing ones)
         for i, name in enumerate(step_list, 1):
-            key = str(i)
-            self.state.steps[key] = StepState(name=name, status="pending")
+            step_name = self._step_name(i)
+            self.state.steps[step_name] = StepState(name=name, status="pending")
         logger.info(
             "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s steps=%d",
             mode,
@@ -648,9 +687,10 @@ class StateMachine:
         lines.append(f"NODE: {self.state.node or '<unset>'}")
         lines.append("Steps:")
         for i, name in enumerate(step_list, 1):
-            key = str(i)
-            if key in self.state.steps:
-                status = self.state.steps[key].status
+            step_name = self._step_name(i)
+            step = self.state.steps.get(step_name)
+            if step is not None:
+                status = step.status
                 lines.append(f"  {i}. {name} [{status}]")
             else:
                 lines.append(f"  {i}. {name} [pending]")
@@ -1992,42 +2032,6 @@ def _send_telegram(sm: StateMachine) -> None:
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
     except Exception as e:
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
-
-
-# region FUNC_extract_context_from_node_yaml
-## @purpose — Extract context name from node.yaml. One node = one context.
-##            Reads context (string) or contexts[0].name (array, first element).
-## @io — ⇥ node_yaml_path: str → ⎋ str (empty if not found)
-## @complexity — O(N) for YAML parse
-def _extract_context_from_node_yaml(node_yaml_path: str) -> str:
-    """Extract context name from node.yaml."""
-    try:
-        import yaml
-
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            return ""
-        ctx = data.get("context", "")
-        if ctx and isinstance(ctx, str):
-            logger.info("[IMP:8][context] Context from node.yaml context field: %s", ctx)
-            return ctx
-        contexts = data.get("contexts", [])
-        if contexts and isinstance(contexts, list) and len(contexts) > 0:
-            first = contexts[0]
-            if isinstance(first, dict):
-                ctx = first.get("name", "")
-            elif isinstance(first, str):
-                ctx = first
-            if ctx:
-                logger.info("[IMP:8][context] Context from node.yaml contexts[0].name: %s", ctx)
-                return ctx
-    except Exception as e:
-        logger.warning("[IMP:7][context] Failed to parse %s: %s", node_yaml_path, e)
-    return ""
-
-
-# endregion FUNC_extract_context_from_node_yaml
 
 
 # region FUNC_extract_domains

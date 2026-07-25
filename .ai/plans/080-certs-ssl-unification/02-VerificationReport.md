@@ -185,7 +185,7 @@ Current state (pre-implementation):
   node-lifecycle.sh → state_machine.py --run-step 4 → _ssl_provision_via_orchestrator()
     → cert_orchestrator.orchestrate_certs(ALL domains)
     → direct s3_ssl_cache import (no subshell — credential propagation is FIXED)
-  
+
   steps.py deploy_context → cert_orchestrator.orchestrate_certs(context domains)
     → second idempotent call
 

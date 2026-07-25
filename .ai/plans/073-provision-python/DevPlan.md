@@ -118,10 +118,10 @@ class ProvisionResult:
 def load_platform_env(yaml_path: Path) -> PlatformEnv:
     """
     Parse platform-env.yaml into typed PlatformEnv.
-    
-    Reads YAML via PyYAML. Extracts 4 sections: networks, volumes, 
+
+    Reads YAML via PyYAML. Extracts 4 sections: networks, volumes,
     env_defaults, profiles. Handles missing sections gracefully (empty lists/dicts).
-    
+
     Raises:
         FileNotFoundError: yaml_path does not exist
         yaml.YAMLError: malformed YAML
@@ -134,10 +134,10 @@ def provision_networks(
 ) -> ProvisionResult:
     """
     Create Docker networks from platform-env.networks.
-    
+
     IDEMPOTENT: docker network inspect → exists → skip, else docker network create.
     Reports created/skipped counts. Uses subprocess.run for docker commands.
-    
+
     Returns ProvisionResult with scope="networks", created/skipped counts.
     If dry_run=True, prints planned actions without executing.
     """
@@ -149,10 +149,10 @@ def provision_volumes(
 ) -> ProvisionResult:
     """
     Create volume directories from platform-env.volumes.
-    
+
     IDEMPOTENT: os.path.isdir → exists → skip, else mkdir -p.
     On permission error: log warning, add to skipped count (non-fatal).
-    
+
     Returns ProvisionResult with scope="volumes", created/skipped counts.
     """
 
@@ -164,11 +164,11 @@ def provision_env(
 ) -> ProvisionResult:
     """
     Export CI environment variables.
-    
+
     - If github_env is set (GITHUB_ENV file path): write KEY=VALUE lines to file
     - If github_env is None and not dry_run: print to stderr (local mode)
     - If dry_run: print "DRY-RUN: Would export KEY=VALUE" to stdout
-    
+
     Returns ProvisionResult with scope="env", count of exported vars.
     """
 
@@ -179,7 +179,7 @@ def provision_profiles(
     """
     Report available profiles count.
     Logs profile names at IMP:8.
-    
+
     Returns ProvisionResult with scope="profiles", count of profiles.
     """
 ```
@@ -190,17 +190,17 @@ def provision_profiles(
 def main() -> int:
     """
     CLI entry point: python3 provisioner.py --scope <scope> --platform-env <path> [--dry-run]
-    
+
     Args:
         --scope: networks|volumes|env|profiles (one per invocation)
         --platform-env: path to platform-env.yaml
         --dry-run: print actions without executing (optional flag)
-    
+
     Exit codes:
         0 — success (all resources created or already exist)
         1 — parse error (YAML invalid, file not found, unknown scope)
         2 — docker unavailable (for --scope networks)
-    
+
     Uses argparse. Shell wrapper iterates scopes; Python handles single scope.
     """
 ```
@@ -363,10 +363,10 @@ The two existing test files test the provisioner through the **shell wrapper int
 **Key design decision — why retain both layers:**
 
 > `## @rationale` The existing tests are **subprocess-level integration tests** that validate the full `bash provision-environment.sh → python3 provisioner.py` delegation chain. The new `tests/unit/test_provisioner.py` tests are **native Python unit tests** that validate internal functions via direct import. These are complementary, not redundant:
-> 
+>
 > - Unit tests (new): fast, no subprocess overhead, test edge cases exhaustively via monkeypatch
 > - Integration tests (retained): validate the shell wrapper contract that 4 consumers depend on (`helpers.mk`, `modules.mk`, `deploy-modules.sh`, `state_machine.py`)
-> 
+>
 > Removing existing tests would lose coverage of the `audit_step` wrapper integration and subprocess exit-code propagation — behaviors the new unit tests don't cover.
 
 ### 5.3 New Unit Tests: `tests/unit/test_provisioner.py`
@@ -545,7 +545,7 @@ echo "[IMP:9][provision] Provision complete (scope=$SCOPE)"
 
 ### TASK-5: Verify existing tests + gate
 - **Output:** All 48 tests green (18 new + 28 existing unit + 2 existing smoke), gate green
-- **Deliverables:** 
+- **Deliverables:**
   - `python -m pytest tests/unit/test_provisioner.py tests/test_unit_provision_environment.py tests/test_smoke_provision_environment.py -v` — all pass
   - `make fix-gate && make gate MODE=fast` — green
 - **Dependencies:** TASK-1 through TASK-4

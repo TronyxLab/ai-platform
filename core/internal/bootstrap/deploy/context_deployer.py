@@ -35,6 +35,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Shared library import (DevPlan 070 — DRIFT-B5 elimination)
+import sys as _sys
+
+_SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "shared")
+if _SHARED_DIR not in _sys.path:
+    _sys.path.insert(0, _SHARED_DIR)
+from node_yaml import extract_context_from_node_yaml
+
 # ── Constants ──────────────────────────────────────────────────────────────
 HEALTH_GATE_TIMEOUT = 60  # seconds per project
 HEALTH_POLL_INTERVAL = 3  # seconds between healthcheck retries
@@ -200,48 +208,6 @@ def resolve_context_projects(node_yaml: str, context: str) -> list[ProjectInfo]:
 
 
 # endregion FUNC_resolve_context_projects
-
-
-# region FUNC_extract_context_from_node_yaml
-## @purpose — Extract context name from node.yaml. One node = one context.
-##            Reads context (string) or contexts[0].name (array, first element).
-## @io — ⇥ node_yaml_path: str → ⎋ str (empty if not found)
-## @complexity — O(N) for YAML parse
-## @invariants
-##   - Primary: top-level context field (string)
-##   - Fallback: contexts[0].name (array, first element)
-##   - Returns empty string on parse error
-def extract_context_from_node_yaml(node_yaml_path: str) -> str:
-    """Extract context name from node.yaml."""
-    try:
-        import yaml
-
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            return ""
-        # Primary: context field (string)
-        ctx = data.get("context", "")
-        if ctx and isinstance(ctx, str):
-            logger.info("[IMP:8][context_deployer] Context from node.yaml context field: %s", ctx)
-            return ctx
-        # Fallback: contexts array (first element)
-        contexts = data.get("contexts", [])
-        if contexts and isinstance(contexts, list) and len(contexts) > 0:
-            first = contexts[0]
-            if isinstance(first, dict):
-                ctx = first.get("name", "")
-            elif isinstance(first, str):
-                ctx = first
-            if ctx:
-                logger.info("[IMP:8][context_deployer] Context from node.yaml contexts[0].name: %s", ctx)
-                return ctx
-    except Exception as e:
-        logger.warning("[IMP:7][context_deployer] Failed to parse %s: %s", node_yaml_path, e)
-    return ""
-
-
-# endregion FUNC_extract_context_from_node_yaml
 
 
 # endregion PROJECT_RESOLUTION
@@ -736,7 +702,7 @@ def main() -> int:
     # Extract context if not provided
     context = args.context
     if not context:
-        context = extract_context_from_node_yaml(args.node_yaml)
+        context = extract_context_from_node_yaml(args.node_yaml, log_tag="context_deployer")
     if not context:
         # Try env var
         context = os.environ.get("CONTEXT", "")

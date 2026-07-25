@@ -181,13 +181,15 @@ def test_ensure_secrets_from_manifest(caplog, secrets_env, mock_subprocess_run, 
     if secrets_env_path.exists():
         secrets_env_path.unlink()
 
-    with patch.object(sm, "_read_manifest", return_value=manifest_secrets):
-        with patch.object(sm, "_ensure_htpasswd", return_value=False):
-            generated = sm.ensure_secrets(
-                manifest_path="/fake/manifest.yaml",
-                secrets_env=secrets_env,
-                persist_to_sops=False,
-            )
+    with (
+        patch.object(sm, "_read_manifest", return_value=manifest_secrets),
+        patch.object(sm, "_ensure_htpasswd", return_value=False),
+    ):
+        generated = sm.ensure_secrets(
+            manifest_path="/fake/manifest.yaml",
+            secrets_env=secrets_env,
+            persist_to_sops=False,
+        )
 
     # Verify both secrets were generated
     assert "LITELLM_MASTER_KEY" in generated
@@ -241,9 +243,7 @@ def test_ensure_secrets_fallback_hardcoded(caplog, secrets_env, mock_subprocess_
 
     # Should have generated all 7 hardcoded fallback secrets
     expected_count = len(sm._FALLBACK_SECRETS)
-    assert len(generated) == expected_count, (
-        f"Expected {expected_count} fallback secrets, got {len(generated)}"
-    )
+    assert len(generated) == expected_count, f"Expected {expected_count} fallback secrets, got {len(generated)}"
 
     # LITELLM_MASTER_KEY is first in fallback list
     assert "LITELLM_MASTER_KEY" in generated
@@ -289,13 +289,15 @@ def test_ensure_secrets_skips_existing(caplog, secrets_env, mock_subprocess_run,
     if secrets_env_path.exists():
         secrets_env_path.unlink()
 
-    with patch.object(sm, "_read_manifest", return_value=manifest_secrets):
-        with patch.object(sm, "_ensure_htpasswd", return_value=False):
-            generated = sm.ensure_secrets(
-                manifest_path="/fake/manifest.yaml",
-                secrets_env=secrets_env,
-                persist_to_sops=False,
-            )
+    with (
+        patch.object(sm, "_read_manifest", return_value=manifest_secrets),
+        patch.object(sm, "_ensure_htpasswd", return_value=False),
+    ):
+        generated = sm.ensure_secrets(
+            manifest_path="/fake/manifest.yaml",
+            secrets_env=secrets_env,
+            persist_to_sops=False,
+        )
 
     # LITELLM_MASTER_KEY should NOT be in generated list (already existed)
     assert "LITELLM_MASTER_KEY" not in generated, "Existing secret was regenerated"
@@ -304,9 +306,7 @@ def test_ensure_secrets_skips_existing(caplog, secrets_env, mock_subprocess_run,
     assert "NEXTAUTH_SECRET" in generated
 
     # Existing value should NOT be overwritten
-    assert os.environ.get("LITELLM_MASTER_KEY") == "existing-pre-set-value", (
-        "Existing secret was overwritten"
-    )
+    assert os.environ.get("LITELLM_MASTER_KEY") == "existing-pre-set-value", "Existing secret was overwritten"
 
     # Generated value should be set
     assert os.environ.get("NEXTAUTH_SECRET") == "generated_value_abc123"
@@ -325,3 +325,170 @@ def test_ensure_secrets_skips_existing(caplog, secrets_env, mock_subprocess_run,
 
 
 # endregion Tests: ensure_secrets
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: ensure_secrets — atomic overwrite (DevPlan 072)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · ensure_secrets is idempotent on repeated calls
+# · Scenario: Call ensure_secrets 3 times with same manifest → file unchanged after first call,
+# ·   no duplicate lines, all non-generated secrets preserved
+# · Last fail: N/A (new test — validates DevPlan 072 atomic write fix)
+# · Remove if: ensure_secrets overwrite logic changes fundamentally
+@ldd_trajectory
+def test_ensure_secrets_idempotent(caplog, secrets_env, mock_subprocess_run, monkeypatch):
+    """ensure_secrets should be idempotent — repeated calls produce identical secrets.env.
+
+    ## @purpose  Verify that calling ensure_secrets multiple times does NOT
+    ##           append duplicate lines. After the first call, subsequent calls
+    ##           with the same manifest should leave secrets.env unchanged.
+    ##           This validates the atomic overwrite fix (DevPlan 072).
+    """
+    manifest_secrets = [
+        {"name": "LITELLM_MASTER_KEY", "gen_command": "echo sk-test", "tier": "generated"},
+        {"name": "NEXTAUTH_SECRET", "gen_command": "echo hex-test", "tier": "generated"},
+    ]
+
+    # Ensure env vars are NOT set before test
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+    secrets_env_path = Path(secrets_env)
+    if secrets_env_path.exists():
+        secrets_env_path.unlink()
+
+    with (
+        patch.object(sm, "_read_manifest", return_value=manifest_secrets),
+        patch.object(sm, "_ensure_htpasswd", return_value=False),
+    ):
+        # First call — should generate and write
+        generated1 = sm.ensure_secrets(
+            manifest_path="/fake/manifest.yaml",
+            secrets_env=secrets_env,
+            persist_to_sops=False,
+        )
+
+    assert len(generated1) == 2
+    first_content = secrets_env_path.read_text()
+    first_lines = [line for line in first_content.split("\n") if line.strip() and not line.startswith("#")]
+    assert len(first_lines) == 2, f"Expected 2 lines, got {len(first_lines)}: {first_lines}"
+
+    # Verify no duplicate keys
+    keys_in_file = [line.split("=", 1)[0] for line in first_lines]
+    assert len(keys_in_file) == len(set(keys_in_file)), f"Duplicate keys found: {keys_in_file}"
+
+    # Clean env for second call
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+    with (
+        patch.object(sm, "_read_manifest", return_value=manifest_secrets),
+        patch.object(sm, "_ensure_htpasswd", return_value=False),
+    ):
+        # Second call — should skip (env vars loaded from file in Step 1)
+        generated2 = sm.ensure_secrets(
+            manifest_path="/fake/manifest.yaml",
+            secrets_env=secrets_env,
+            persist_to_sops=False,
+        )
+
+    # Second call should generate nothing
+    assert len(generated2) == 0, f"Expected 0 generated on second call, got {len(generated2)}"
+    second_content = secrets_env_path.read_text()
+    assert second_content == first_content, (
+        f"File changed on second call!\nFirst:\n{first_content}\nSecond:\n{second_content}"
+    )
+
+    # Third call — force-mode simulation (clear os.environ, file still exists)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+    with (
+        patch.object(sm, "_read_manifest", return_value=manifest_secrets),
+        patch.object(sm, "_ensure_htpasswd", return_value=False),
+    ):
+        generated3 = sm.ensure_secrets(
+            manifest_path="/fake/manifest.yaml",
+            secrets_env=secrets_env,
+            persist_to_sops=False,
+        )
+
+    # Third call: env vars empty, but source_secrets_env reloads from file
+    # (Step 1: lines 262-265) → those values go into os.environ → skip generation
+    assert len(generated3) == 0, (
+        f"Expected 0 generated (values reloaded from file), got {len(generated3)}. "
+        f"File content: {secrets_env_path.read_text()}"
+    )
+    third_content = secrets_env_path.read_text()
+    assert third_content == first_content, "File changed on third call!"
+
+    # Clean up
+    for g in generated1:
+        monkeypatch.delenv(g, raising=False)
+
+    logger.critical("[IMP:9][test] ensure_secrets idempotent after 3 calls — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · ensure_secrets preserves non-generated secrets on overwrite
+# · Scenario: secrets.env has SOPS-decrypted secrets (WEBNAMES_API_KEY) →
+#   ensure_secrets generates only tier=generated → non-generated entries unchanged in output
+# · Last fail: N/A (new test — validates DevPlan 072 merge logic)
+# · Remove if: merge logic changes
+@ldd_trajectory
+def test_ensure_secrets_preserves_nongenerated(caplog, secrets_env, mock_subprocess_run, monkeypatch):
+    """ensure_secrets should preserve non-generated secrets (from SOPS) on overwrite.
+
+    ## @purpose  Verify that when secrets.env contains non-generated secrets
+    ##           (e.g., WEBNAMES_API_KEY from SOPS decryption), the atomic
+    ##           overwrite preserves them while still generating missing ones.
+    ##           This is the key invariant: overwrite mode must NOT delete
+    ##           secrets that ensure_secrets doesn't manage.
+    """
+    # Pre-populate secrets.env with non-generated secrets (simulating SOPS decrypt)
+    secrets_env_path = Path(secrets_env)
+    secrets_env_path.write_text(
+        "WEBNAMES_API_KEY=real-api-key-from-sops\nPOSTGRES_PASSWORD=real-pg-pwd\n# This is a comment\n\n"
+    )
+
+    manifest_secrets = [
+        {"name": "LITELLM_MASTER_KEY", "gen_command": "echo sk-test", "tier": "generated"},
+    ]
+
+    # Ensure generated secret is NOT in os.environ
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+
+    with (
+        patch.object(sm, "_read_manifest", return_value=manifest_secrets),
+        patch.object(sm, "_ensure_htpasswd", return_value=False),
+    ):
+        generated = sm.ensure_secrets(
+            manifest_path="/fake/manifest.yaml",
+            secrets_env=secrets_env,
+            persist_to_sops=False,
+        )
+
+    assert len(generated) == 1
+    assert "LITELLM_MASTER_KEY" in generated
+
+    # Verify file content
+    content = secrets_env_path.read_text()
+    assert "WEBNAMES_API_KEY=real-api-key-from-sops" in content, (
+        f"Non-generated secret was DELETED!\nContent:\n{content}"
+    )
+    assert "POSTGRES_PASSWORD=real-pg-pwd" in content, "POSTGRES_PASSWORD was DELETED!"
+    assert "LITELLM_MASTER_KEY=generated_value_abc123" in content, "Generated secret missing!"
+
+    # Verify no duplicate lines
+    file_lines = [line for line in content.split("\n") if line.strip() and not line.startswith("#")]
+    keys = [line.split("=", 1)[0] for line in file_lines]
+    assert len(keys) == len(set(keys)), f"Duplicate keys: {keys}"
+
+    # Clean up
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+
+    logger.critical("[IMP:9][test] Non-generated secrets preserved on atomic overwrite — OK")
+
+
+# endregion Tests: ensure_secrets — atomic overwrite (DevPlan 072)

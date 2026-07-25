@@ -68,7 +68,7 @@ def source_secrets_env(secrets_env: str) -> dict[str, str]:
                     continue
                 # Strip leading 'export ' prefix
                 if line.startswith("export "):
-                    line = line[len("export "):].strip()
+                    line = line[len("export ") :].strip()
                 # Split on first '='
                 if "=" not in line:
                     continue
@@ -281,7 +281,18 @@ def ensure_secrets(
             len(secrets_to_process),
         )
 
+    # ⚠️ TRAP[BUG] · 2026-07-25 · P1 · Append-mode → duplicate secrets on repeated --force runs
+    # · Symptom: secrets.env grew with duplicate lines (same VAR=value appended on each run).
+    # ·   `source secrets.env` reads the LAST occurrence → first bootstrap's key lost.
+    # · Root: `open(secrets_env, "a")` in per-secret loop (line 312, old code). Each generated
+    # ·   secret was appended individually. On --force re-run, os.environ was empty → all 7
+    # ·   secrets regenerated → appended AGAIN. After 3 runs: 21 lines, 3 values per key.
+    # · Fix (DevPlan 072): collect all generated values → merge with existing env_vars →
+    # ·   atomic write (tmp + rename). Single `open(..., "w")`, not per-secret append.
+    # · Prevention: test_ensure_secrets_idempotent verifies file unchanged after 3 calls.
     # ── Step 3: For each secret, check if present; if not, generate ──
+    # 💼 TRAP[BUSINESS] · 2026-07-25 · HI · Secrets overwrite MUST preserve non-generated entries
+    generated_vars: dict[str, str] = {}
     for secret in secrets_to_process:
         var_name: str = secret["name"]
         gen_command: str = secret.get("gen_command", "")
@@ -304,26 +315,50 @@ def ensure_secrets(
         # Set in os.environ
         os.environ[var_name] = value
         generated.append(var_name)
-
-        # Persist to secrets.env file
-        try:
-            secrets_path = Path(secrets_env)
-            secrets_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(secrets_env, "a") as f:
-                f.write(f"{var_name}={value}\n")
-            logger.info("[IMP:8][secrets_manager] Persisted %s to %s", var_name, secrets_env)
-        except OSError as e:
-            logger.warning(
-                "[IMP:7][secrets_manager] Cannot write %s to %s: %s",
-                var_name,
-                secrets_env,
-                e,
-            )
+        generated_vars[var_name] = value
 
         logger.info(
             "[IMP:9][secrets_manager] Auto-generated %s (MUST be added to SOPS for production)",
             var_name,
         )
+
+    # ── Step 3.5: Atomic overwrite — merge existing + generated → write once ──
+    if generated_vars:
+        try:
+            secrets_path = Path(secrets_env)
+            secrets_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Build the complete env file content: existing + newly generated
+            # env_vars from Step 1 already contains ALL existing entries
+            merged: dict[str, str] = dict(env_vars)  # copy existing (non-generated + previously generated)
+            merged.update(generated_vars)  # add/overwrite newly generated
+
+            # Atomic write: write to tmp, then rename
+            tmp_path = secrets_path.with_suffix(".env.tmp")
+            with open(tmp_path, "w") as f:
+                for key, val in merged.items():
+                    f.write(f"{key}={val}\n")
+
+            # Preserve file permissions if file exists
+            if secrets_path.exists():
+                existing_mode = secrets_path.stat().st_mode
+                tmp_path.chmod(existing_mode)
+            else:
+                tmp_path.chmod(0o600)
+
+            tmp_path.replace(secrets_path)
+            logger.info(
+                "[IMP:9][secrets_manager] Atomic write: %d entries → %s (%d new)",
+                len(merged),
+                secrets_env,
+                len(generated_vars),
+            )
+        except OSError as e:
+            logger.warning(
+                "[IMP:7][secrets_manager] Cannot write secrets.env: %s — "
+                "secrets are in os.environ but NOT persisted to file",
+                e,
+            )
 
     # ── Step 4: sops --set persistence (optional, non-fatal) ──
     if persist_to_sops and generated:

@@ -567,7 +567,7 @@ Add 3 new tests:
 def test_name_key_misalignment_prevented(caplog, state_file):
     """Regression guard for F1: ensure_secrets is NOT incorrectly skipped
     when shell wrote read-node-yaml at numeric key 13.
-    
+
     This test reproduces the EXACT scenario from the VerificationReport
     that would cause ensure_secrets + secrets_init to be skipped on resume.
     """

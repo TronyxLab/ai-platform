@@ -14,8 +14,8 @@ $END_ARTIFACT_CONTRACT
 
 # Verification Report: DevPlan 084 — Dead Code Sweep
 
-**Date:** 2026-07-25  
-**SHA:** `d37326afc64e505bb69f230465e83f9f5bef0d8a`  
+**Date:** 2026-07-25
+**SHA:** `d37326afc64e505bb69f230465e83f9f5bef0d8a`
 **Verifier:** QA (Kilo)
 
 ---

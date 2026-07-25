@@ -114,18 +114,20 @@ node-lifecycle.sh --mode update
 
 ---
 
-## Идемпотентность (.done + content-hash)
+## Идемпотентность (state.json + name-based keys)
 
-**Механизм:** `content-hash.sh` + `.done`-файлы в `/var/lib/platform/.bootstrap/`
+**Механизм:** `checkpoint_migration.py` + `state.json` в `/var/lib/platform/.bootstrap/state.json`
 
 | Механизм | Где | Что делает |
 |----------|-----|------------|
-| `.done`-маркер | `/var/lib/platform/.bootstrap/<step>.done` | Сигнализирует что шаг выполнен. Второй вызов = no-op |
-| content-hash | `content-hash.sh` | Хеширует содержимое скрипта/конфига. Если хеш не изменился — шаг не перезапускается |
+| `state.json` (name-based keys) | `/var/lib/platform/.bootstrap/state.json` | Единый source of truth для checkpoint'ов. Ключи — имена шагов Python (underscores). Shell маппит свои hyphen-имена через `checkpoint_migration.py::SHELL_TO_PYTHON_STEP`. (DevPlan 071 Rev 2) |
+| content-hash | `content-hash.sh` (shell) / `state_machine._step_hash()` (Python) | Хеширует содержимое скриптов для idempotency. Shell hash пишется в state.json через `checkpoint_migration.py`, Python проверяет через `_hash_changed()`. |
 
-**Пример:** `install-docker.sh` создаёт `/var/lib/platform/.bootstrap/install-docker.done`. Повторный вызов видит маркер → no-op.
+**Пример:** `checkpoint_step "ssh-access" step_1_ssh_access` → `checkpoint_migration.py mark-done` пишет `{"ssh_access": {"status": "done"}}` в state.json. Повторный запуск с `--resume` видит `ssh_access.done` → no-op.
 
-**Сброс:** `rm -rf /var/lib/platform/.bootstrap/` → следующий bootstrap будет полным.
+**Миграция:** При первом запуске после обновления `checkpoint_migrate_legacy()` импортирует старые `.done`-файлы из `/var/lib/platform/.bootstrap-checkpoints/` в name-based state.json. После миграции `.done`-файлы удаляются. (DevPlan 071 Rev 2)
+
+**Сброс:** `python3 core/internal/checkpoint_migration.py reset /var/lib/platform/.bootstrap/state.json` или `make bootstrap-node ... --force` → следующий bootstrap будет полным.
 
 ---
 
