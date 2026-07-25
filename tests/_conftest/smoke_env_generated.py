@@ -19,6 +19,7 @@ SMOKE_ENV_GENERATED: dict[str, str] = {
     "CLICKHOUSE_PASSWORD": "test-clickhouse-pwd-not-for-prod",
     "GF_SECURITY_ADMIN_PASSWORD": "testpass",
     "GHCR_PULL_TOKEN": "ghp_test-token-for-ci-only",
+    "GHCR_PUSH_TOKEN": "ci-ghcr-push-token",
     "HERMES_DASHBOARD_PASSWORD": "test-db-pwd",
     "LANGFUSE_INIT_ORG_ID": "ci-test-org",
     "LANGFUSE_INIT_PROJECT_ID": "ci-test-project",

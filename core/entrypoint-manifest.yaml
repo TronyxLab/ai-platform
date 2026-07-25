@@ -588,6 +588,9 @@ gates:
 - id: test_prometheus_config_no_unexpanded_vars
   test_file: test_gate_env_chain.py
   description: 'Auto-discovered gate: test_prometheus_config_no_unexpanded_vars'
+- id: test_env_defaults_consistency
+  test_file: test_gate_env_defaults_consistency.py
+  description: 'Auto-discovered gate: test_env_defaults_consistency'
 - id: test_env_example_key_order_matches_dotenv
   test_file: test_gate_env_example_sync.py
   description: 'Auto-discovered gate: test_env_example_key_order_matches_dotenv'
@@ -633,6 +636,9 @@ gates:
 - id: test_negative_detects_644_outside_lib
   test_file: test_gate_executable_bit.py
   description: 'Auto-discovered gate: test_negative_detects_644_outside_lib'
+- id: test_fallback_secrets_match_definitions
+  test_file: test_gate_fallback_secrets_sync.py
+  description: 'Auto-discovered gate: test_fallback_secrets_match_definitions'
 - id: test_all_test_fixtures_match_schemas
   test_file: test_gate_fixture_schema.py
   description: 'Auto-discovered gate: test_all_test_fixtures_match_schemas'

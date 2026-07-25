@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -398,17 +399,24 @@ def ensure_secrets(
 
 # region FUNC__ensure_htpasswd
 ## @purpose — Generate /run/platform/.htpasswd-platform from PLATFORM_MASTER_EMAIL and
-##            PLATFORM_MASTER_PASSWORD. Idempotent: checks existing file hash matches current credentials.
-##            Uses openssl passwd -apr1 for htpasswd-compatible format.
-##            Exports HTPASSWD_FILE env var.
+##            PLATFORM_MASTER_PASSWORD. Uses shared/crypto.py for APR1 hashing (DevPlan 078 T4).
+##            Idempotent: checks existing file hash matches current credentials.
 ## @io — ⇥ secrets_env: str (for sourcing PLATFORM_MASTER_* if not in os.environ) → ⎋ bool
-## @complexity — O(1) + subprocess
+## @complexity — O(1) + hash_apr1 from shared.crypto
 ## @invariants
 ##   - Non-fatal: returns False on failure, never raises
 ##   - Idempotent: if existing htpasswd entry matches current credentials, skip
 ##   - Requires both PLATFORM_MASTER_EMAIL and PLATFORM_MASTER_PASSWORD to be set
 def _ensure_htpasswd(secrets_env: str = "/run/platform/secrets.env") -> bool:
     """Generate .htpasswd-platform from platform master credentials. Returns True on success."""
+    # Import shared crypto — sys.path insert for module-level availability
+    _shared_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "shared"
+    )
+    if _shared_dir not in sys.path:
+        sys.path.insert(0, _shared_dir)
+    from crypto import generate_htpasswd_entry  # type: ignore[import-untyped]
+
     # Source secrets.env into os.environ if not already set
     if not os.environ.get("PLATFORM_MASTER_PASSWORD") or not os.environ.get("PLATFORM_MASTER_EMAIL"):
         env_vars = source_secrets_env(secrets_env)
@@ -429,22 +437,11 @@ def _ensure_htpasswd(secrets_env: str = "/run/platform/secrets.env") -> bool:
     htpasswd_file = "/run/platform/.htpasswd-platform"
 
     try:
-        # Generate password hash
-        hash_result = subprocess.run(
-            ["openssl", "passwd", "-apr1", password],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if hash_result.returncode != 0:
-            logger.warning(
-                "[IMP:7][secrets_manager] openssl passwd failed: %s",
-                hash_result.stderr.strip()[:200],
-            )
+        # Generate htpasswd entry via shared crypto (DevPlan 078 T4)
+        expected_entry = generate_htpasswd_entry(email, password)
+        if expected_entry is None:
+            logger.warning("[IMP:7][secrets_manager] shared crypto generate_htpasswd_entry failed")
             return False
-
-        password_hash = hash_result.stdout.strip()
-        expected_entry = f"{email}:{password_hash}"
 
         # Check idempotency: compare with existing file content
         htpasswd_path = Path(htpasswd_file)
@@ -473,12 +470,6 @@ def _ensure_htpasswd(secrets_env: str = "/run/platform/secrets.env") -> bool:
         )
         return True
 
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][secrets_manager] openssl passwd timed out")
-        return False
-    except FileNotFoundError:
-        logger.warning("[IMP:7][secrets_manager] openssl not found — cannot generate htpasswd")
-        return False
     except OSError as e:
         logger.warning("[IMP:7][secrets_manager] htpasswd OS error: %s", e)
         return False

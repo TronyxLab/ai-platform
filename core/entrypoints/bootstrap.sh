@@ -50,28 +50,21 @@ USAGE_OPTIONS=(
 # · Reason: minimal W1 scope, bootstrap.sh forwards unknown args via PASSTHROUGH_ARGS
 # · Rev: Wave 4 — redesign passthrough into parse_args spec
 
-## @purpose  Detect AGE_SECRET_KEY from env chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE
+## @purpose  Detect AGE_SECRET_KEY from env chain via shared/age_key.py (DevPlan 078 T2)
+##           Delegates to Python single-source-of-truth replacing duplicate shell logic.
+##           Returns: key to stdout + exit 0 (found) / exit 1 (not found).
 detect_age_key() {
+    local age_key_script="${CORE_DIR}/internal/shared/age_key.py"
+    if [[ -f "$age_key_script" ]]; then
+        python3 "$age_key_script" 2>/dev/null && return 0 || return 1
+    fi
+    # Fallback: direct env check if Python module unavailable
     if [[ -n "${AGE_SECRET_KEY:-}" ]]; then
-        local m; m="$(echo "${AGE_SECRET_KEY}" | cut -c1-8)"
-        echo "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY found in environment (${m}...)" >&2
         echo "${AGE_SECRET_KEY}"; return 0
     fi
     if [[ -n "${SOPS_AGE_KEY:-}" ]]; then
-        local m; m="$(echo "${SOPS_AGE_KEY}" | cut -c1-8)"
-        echo "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY set from SOPS_AGE_KEY (${m}...)" >&2
         echo "${SOPS_AGE_KEY}"; return 0
     fi
-    if [[ -n "${AGE_SECRET_KEY_FILE:-}" ]] && [[ -f "${AGE_SECRET_KEY_FILE}" ]]; then
-        local key; key="$(head -1 "${AGE_SECRET_KEY_FILE}")"
-        if [[ -n "${key}" ]]; then
-            local m; m="$(echo "${key}" | cut -c1-8)"
-            echo "[IMP:8][bootstrap][age-key] AGE_SECRET_KEY read from file ${AGE_SECRET_KEY_FILE} (${m}...)" >&2
-            echo "${key}"; return 0
-        fi
-        echo "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY_FILE=${AGE_SECRET_KEY_FILE} is empty" >&2
-    fi
-    echo "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy" >&2
     return 1
 }
 ## @purpose  Auto-detect node name from /opt/node-configs/ directories

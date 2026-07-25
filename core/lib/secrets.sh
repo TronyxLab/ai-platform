@@ -173,73 +173,57 @@ step_10_decrypt_secrets() {
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC__ensure_htpasswd_generated
 ## @purpose  Generate /run/platform/.htpasswd-platform from PLATFORM_MASTER_EMAIL
-##           and PLATFORM_MASTER_PASSWORD. Idempotent — checks existing file and
-##           verifies hash matches current credentials before regeneration.
-##           Exports HTPASSWD_FILE path for nginx container mount.
+##           and PLATFORM_MASTER_PASSWORD. Delegates APR1 hashing to shared/crypto.py
+##           (DevPlan 078 T5). Idempotent — checks existing file before writing.
 ## @param    (none — depends on env vars)
-## @io       in:  PLATFORM_MASTER_EMAIL (env)
-##            in:  PLATFORM_MASTER_PASSWORD (env)
+## @io       in:  PLATFORM_MASTER_EMAIL (env), PLATFORM_MASTER_PASSWORD (env)
+##            in:  CORE_DIR (env, for crypto.py path)
 ##            out: HTPASSWD_FILE exported
 ##            effect: creates/updates /run/platform/.htpasswd-platform
-##            return: 0 on success, 1 if credentials missing or openssl fails
-## @complexity O(1)
-## @dependencies — openssl (for APR1 password hash generation)
-## @invariants — Requires both PLATFORM_MASTER_EMAIL and PLATFORM_MASTER_PASSWORD
-##             - Runs idempotently: if file exists and hash matches, no-op
-##             - Exports HTPASSWD_FILE variable for consumer scripts
-##             - File permissions: 644, owner: current user
-## @rationale Master credentials unlock all platform services (status-page, Prometheus, Loki,
-##            Grafana, Langfuse, Hermes). A single htpasswd file generated from these creds
-##            is mounted into nginx for all vhost auth_basic blocks.
+##            return: 0 on success, 1 if credentials missing or crypto.py fails
+## @complexity O(1) + python3 subprocess
+## @dependencies — python3 (for shared/crypto.py APR1 hashing)
+## @invariants — See FUNC__ensure_htpasswd_generated
+## @rationale DevPlan 078 T5: delegate openssl passwd -apr1 to shared/crypto.py,
+##            eliminating duplicate APR1 hashing logic across shell and Python.
 _ensure_htpasswd_generated() {
     local email="${PLATFORM_MASTER_EMAIL:-}"
     local password="${PLATFORM_MASTER_PASSWORD:-}"
     local htpasswd_file="${HTPASSWD_FILE:-/run/platform/.htpasswd-platform}"
+    local crypto_script="${CORE_DIR:-/opt/platform/core}/internal/shared/crypto.py"
 
     if [[ -z "$email" ]]; then
         log_step "htpasswd" "WARN" "PLATFORM_MASTER_EMAIL not set — skipping htpasswd generation"
         return 1
     fi
-
     if [[ -z "$password" ]]; then
         log_step "htpasswd" "WARN" "PLATFORM_MASTER_PASSWORD not set — skipping htpasswd generation"
         return 1
     fi
 
-    # ── Ensure output directory exists ──
+    # ── Generate htpasswd entry via shared/crypto.py ──
+    local entry
+    entry=$(python3 "$crypto_script" entry "$email" "$password" 2>/dev/null) || {
+        log_step "htpasswd" "FAIL" "shared/crypto.py entry failed — cannot generate htpasswd"
+        return 1
+    }
+
     mkdir -p "$(dirname "$htpasswd_file")" 2>/dev/null || true
 
     # ── Idempotency: check existing file ──
     if [[ -f "$htpasswd_file" ]]; then
-        # Verify hash matches current credentials using openssl passwd verification
-        local existing_hash
-        existing_hash=$(grep "^${email}:" "$htpasswd_file" 2>/dev/null | cut -d: -f2)
-        if [[ -n "$existing_hash" ]]; then
-            # Verify by generating a fresh hash with the same password and comparing format
-            # APR1 hashes contain the same salt each time — we verify by checking we can re-generate
-            local salt
-            salt=$(echo "$existing_hash" | cut -d'$' -f3)
-            if [[ -n "$salt" ]]; then
-                local verify_hash
-                verify_hash=$(openssl passwd -apr1 -salt "$salt" "$password" 2>/dev/null)
-                if [[ "$verify_hash" == "$existing_hash" ]]; then
-                    export HTPASSWD_FILE="$htpasswd_file"
-                    log_step "htpasswd" "INFO" "htpasswd file exists and matches credentials — no-op"
-                    return 0
-                fi
-            fi
+        local existing
+        existing=$(cat "$htpasswd_file" 2>/dev/null)
+        if [[ "$existing" == "$entry" ]]; then
+            export HTPASSWD_FILE="$htpasswd_file"
+            log_step "htpasswd" "INFO" "htpasswd file exists and matches credentials — no-op"
+            return 0
         fi
         log_step "htpasswd" "INFO" "htpasswd file exists but credentials changed — regenerating"
     fi
 
-    # ── Generate htpasswd entry ──
-    local apr1_hash
-    apr1_hash=$(openssl passwd -apr1 "$password" 2>/dev/null) || {
-        log_step "htpasswd" "FAIL" "openssl passwd -apr1 failed — cannot generate htpasswd"
-        return 1
-    }
-
-    echo "${email}:${apr1_hash}" > "$htpasswd_file"
+    # ── Write htpasswd file ──
+    echo "$entry" > "$htpasswd_file"
     chmod 644 "$htpasswd_file" 2>/dev/null || true
 
     export HTPASSWD_FILE="$htpasswd_file"

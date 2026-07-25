@@ -18,6 +18,7 @@ _API_SERVER_KEY: str = "test-api-server-key-for-ci-only"
 _CLICKHOUSE_PASSWORD: str = "test-clickhouse-pwd-not-for-prod"
 _GF_SECURITY_ADMIN_PASSWORD: str = "testpass"
 _GHCR_PULL_TOKEN: str = "ghp_test-token-for-ci-only"
+_GHCR_PUSH_TOKEN: str = "ci-ghcr-push-token"
 _HERMES_DASHBOARD_PASSWORD: str = "test-db-pwd"
 _LANGFUSE_INIT_ORG_ID: str = "ci-test-org"
 _LANGFUSE_INIT_PROJECT_ID: str = "ci-test-project"
@@ -45,6 +46,7 @@ __all__ = [
     "_CLICKHOUSE_PASSWORD",
     "_GF_SECURITY_ADMIN_PASSWORD",
     "_GHCR_PULL_TOKEN",
+    "_GHCR_PUSH_TOKEN",
     "_HERMES_DASHBOARD_PASSWORD",
     "_LANGFUSE_INIT_ORG_ID",
     "_LANGFUSE_INIT_PROJECT_ID",
