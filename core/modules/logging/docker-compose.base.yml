@@ -7,7 +7,7 @@
 ## @invariants
 ##   - profiles: [logging] — pluggability: only included when COMPOSE_PROFILES contains logging
 ##   - Loki: scratch image (no shell/wget/curl), liveness via /usr/bin/loki -version
-##   - Promtail: depends on loki (same module), Docker socket + nginx log scraping
+##   - Promtail: depends on loki (same module), Docker socket only (nginx logs via stdout → docker_sd match stage)
 ##   - Networks declared as external: true — pre-created by deploy-modules.sh
 ##   - All TRAP comments from root compose preserved
 ## @rationale Profiles enable selective startup via `make up MODULES=logging`
@@ -108,7 +108,7 @@ services:
     volumes:
       - ./config/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/log/nginx:/var/log/nginx:ro
+      # /var/log/nginx mount REMOVED (2026-07-25) — nginx logs captured via docker_sd stdout, not file scrape
 
     networks:
       - observability-net

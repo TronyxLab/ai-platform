@@ -1,19 +1,19 @@
-# GREP_SUMMARY: promtail config docker_sd_config static_config file_target structured_metadata
-# STRUCTURE: ▶ 2-scrape-configs ┌ docker_sd:container-logs → json→labels→structured_metadata ┐ ┌ static_config:nginx-logs → json ┐ → loki:3100 → ┘
+# GREP_SUMMARY: promtail config docker_sd_config structured_metadata nginx_match
+# STRUCTURE: ▶ 1-scrape-config ┌ docker_sd:container-logs → json→match(nginx:status/host)→labels→structured_metadata ┐ → loki:3100 → ┘
 # region MODULE_CONTRACT
-## @purpose  Promtail configuration: Docker container log scraping + Nginx file log scraping
+## @purpose  Promtail configuration: Docker container log scraping (single docker_sd scrape)
 ## @scope    Mounted as /etc/promtail/promtail-config.yml in promtail container
 ## @invariants
 ##   - Docker socket scrape: docker_sd_config — auto-discovers all local containers
-##   - Nginx file scrape: static_config — /var/log/nginx/access.log (JSON format)
-##   - pipeline_stages: json → labels → structured_metadata (D7: session_id/user_id)
+##   - Nginx logs captured via Docker stdout (official image symlinks access.log → /dev/stdout)
+##   - Nginx-specific JSON fields (status, request_method, host) extracted via match stage
+##   - pipeline_stages: json → match(nginx,litellm,langfuse) → labels → structured_metadata
 ##   - session_id/user_id → structured_metadata (NOT labels — high cardinality, D7)
-##   - Container labels preserved: service, project, agent (low cardinality labels)
-##   - Single promtail instance — two scrape configs (D5: one agent is enough)
+##   - Container labels preserved: container, compose_service, compose_project
+##   - Single promtail instance — one docker_sd scrape config (simpler, no file scrape)
 ##   - All logs sent to loki:3100 on observability-net
 ## @rationale D7: structured_metadata avoids TSDB index explosion from high-cardinality
 ##           fields while still enabling LogQL filtering without full JSON scan.
-##           D5: Single Promtail with multiple configs is simpler than two instances.
 # endregion MODULE_CONTRACT
 
 server:
@@ -77,6 +77,29 @@ scrape_configs:
                 source: level
                 expression: "(?i)debug|trace"
 
+      # Extract nginx access log fields from json_combined format (Docker stdout)
+      # · nginx official image: /var/log/nginx/access.log → /dev/stdout symlink
+      # · Docker json-file driver captures stdout → promtail reads via docker_sd
+      # · json_combined log_format → all fields are valid JSON
+      # · status/request_method/host → low-cardinality stream labels (~10 values each)
+      # · request_time/upstream_addr/upstream_status → parsed but NOT promoted to labels
+      # ·   (available as structured data for LogQL | json parser at query time)
+      - match:
+          selector: '{compose_service="nginx"}'
+          stages:
+            - json:
+                expressions:
+                  status: status
+                  request_method: request_method
+                  host: host
+                  request_time: request_time
+                  upstream_addr: upstream_addr
+                  upstream_status: upstream_status
+            - labels:
+                status: ""
+                request_method: ""
+                host: ""
+
       # Stage 2: Extract low-cardinality fields as stream labels
       - labels:
           level: ""
@@ -103,34 +126,10 @@ scrape_configs:
         regex: "(.+)"
         target_label: "compose_project"
 
-  # ── Nginx Access Logs (file scrape) ──────────────────────────────────────
-  - job_name: nginx
-    static_configs:
-      - targets: ["localhost"]
-        labels:
-          job: "nginx"
-          service: "nginx"
-          __path__: /var/log/nginx/access.log
-
-    pipeline_stages:
-      # Stage 1: Parse JSON — nginx.conf uses json_combined log_format
-      - json:
-          expressions:
-            remote_addr: remote_addr
-            remote_user: remote_user
-            request: request
-            status: status
-            body_bytes_sent: body_bytes_sent
-            request_time: request_time
-            http_referer: http_referer
-            http_user_agent: http_user_agent
-            upstream_addr: upstream_addr
-            upstream_status: upstream_status
-            host: host
-            request_method: request_method
-
-      # Stage 2: Extract low-cardinality labels
-      - labels:
-          status: ""
-          request_method: ""
-          host: ""
+  # ── Nginx access logs — REMOVED (2026-07-25) ──────────────────────────
+  # · Was: static_config file scrape of /var/log/nginx/access.log from host
+  # · Removed because: nginx official image symlinks access.log → /dev/stdout;
+  # ·   Docker json-file driver captures stdout; promtail docker_sd scrape
+  # ·   (job_name: docker above) handles nginx logs with compose_service="nginx"
+  # ·   match stage extracting status/request_method/host as stream labels.
+  # ·   No host-level log files needed — all through Docker logging pipeline.

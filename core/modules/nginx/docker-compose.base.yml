@@ -81,20 +81,6 @@ services:
       # Used by platform-default.conf.template (+ prometheus/loki vhosts) for Basic Auth
       - /run/platform/.htpasswd-platform:/etc/nginx/conf.d/.htpasswd-platform:ro
 
-      # ⚠️ TRAP[LOG] · 2026-07-24 · HI · Nginx access/error logs — bind-mounted to host for Promtail file scrape
-      # · Purpose: Promtail static_config {job="nginx"} scrape reads /var/log/nginx/access.log from HOST
-      # ·   (logging/docker-compose.base.yml mounts /var/log/nginx:/var/log/nginx:ro).
-      # ·   Without this mount, nginx writes to container-internal /var/log/nginx/ (symlinked to stdout),
-      # ·   host path stays empty → Promtail {job="nginx"} stream has NO data → dashboard shows nothing.
-      # · Format: nginx.conf uses json_combined log_format → JSON → compatible with promtail-config.yml json pipeline.
-      # · Permissions: nginx user in Alpine is UID 101. Directory /var/log/nginx must exist on host
-      # ·   and be writable by UID 101. Docker auto-creates missing host dirs with root:root.
-      # ·   Setup: sudo mkdir -p /var/log/nginx && sudo chown 101:101 /var/log/nginx
-      # · Side-effect: nginx error.log will go to host file instead of Docker stderr (container logs
-      # ·   lose error log, but Promtail gains it via file scrape).
-      # · Rev: if nginx_log_retention exceeds Docker json-file rotation limits → add logrotate on host
-      - /var/log/nginx:/var/log/nginx
-
     networks:
       proxy-net:
         aliases:

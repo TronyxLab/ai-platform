@@ -106,27 +106,30 @@ hermes-push-l1:
 	@echo "[IMP:9][make][hermes-push-l1] L1 push complete (or skipped)"
 
 ## hermes-push-l2: Push L2 hermes-agent-context to ghcr.io
-##   Usage: make hermes-push-l2 CONTEXT=<org> [GHCR_PUSH_TOKEN=<token>]
-##   Requires GHCR_PUSH_TOKEN env var (fine-grained PAT with write:packages scope for target org)
-##   Falls back to GHCR_PULL_TOKEN if GHCR_PUSH_TOKEN is unset (read-only — will fail on push)
+##   Usage: make hermes-push-l2 [CONTEXT=<org>] [GHCR_PUSH_TOKEN=<token>]
+##   CONTEXT defaults to $(GHCR_OWNER) (source org, e.g. tronyx161).
+##   CONTEXT is normalized: hyphens/stripped → ghcr.io org name (e.g. CONTEXT=tronyx-lab → tronyxlab).
+##   Requires GHCR_PUSH_TOKEN env var (classic PAT with write:packages scope).
+##   Falls back to GHCR_PULL_TOKEN if GHCR_PUSH_TOKEN is unset (read-only — will fail on push).
 hermes-push-l2:
-	@if [[ -z "$(CONTEXT)" ]]; then \
-		echo "[IMP:10][make][hermes-push-l2] ERROR: CONTEXT not set — usage: make hermes-push-l2 CONTEXT=<org>" >&2; \
+	@GHCR_OWNER="$(GHCR_OWNER)"; \
+	L2_ORG="$${CONTEXT:-$$GHCR_OWNER}"; \
+	L2_ORG="$$(echo "$$L2_ORG" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"; \
+	if [[ -z "$$L2_ORG" ]]; then \
+		echo "[IMP:10][make][hermes-push-l2] ERROR: set CONTEXT=<org> or GHCR_OWNER=<org>" >&2; \
 		exit 1; \
-	fi
-	@echo "[IMP:7][make][hermes-push-l2] Pushing L2 hermes-agent-context to ghcr.io/$(CONTEXT)..."
-	@# ── Authenticate ──
-	@if [ -n "$(GHCR_PUSH_TOKEN)" ]; then \
+	fi; \
+	echo "[IMP:7][make][hermes-push-l2] Pushing L2 hermes-agent-context to ghcr.io/$${L2_ORG}..."; \
+	if [ -n "$(GHCR_PUSH_TOKEN)" ]; then \
 		echo "$(GHCR_PUSH_TOKEN)" | docker login ghcr.io -u x-access-token --password-stdin 2>/dev/null || \
 		echo "[IMP:7][make][hermes-push-l2] WARNING: GHCR_PUSH_TOKEN login failed" >&2; \
 	elif [ -n "$(GHCR_PULL_TOKEN)" ]; then \
 		echo "[IMP:7][make][hermes-push-l2] GHCR_PUSH_TOKEN not set — trying GHCR_PULL_TOKEN (read-only)" >&2; \
 		echo "$(GHCR_PULL_TOKEN)" | docker login ghcr.io -u x-access-token --password-stdin 2>/dev/null || true; \
-	fi
-	@# ── Tag and push ──
-	@docker tag hermes-agent-context:latest "ghcr.io/$(CONTEXT)/hermes-agent-context:latest" 2>/dev/null || true
-	-docker push "ghcr.io/$(CONTEXT)/hermes-agent-context:latest"
-	@echo "[IMP:9][make][hermes-push-l2] L2 push complete for CONTEXT=$(CONTEXT)"
+	fi; \
+	docker tag hermes-agent-context:latest "ghcr.io/$${L2_ORG}/hermes-agent-context:latest" 2>/dev/null || true; \
+	docker push "ghcr.io/$${L2_ORG}/hermes-agent-context:latest"; \
+	echo "[IMP:9][make][hermes-push-l2] L2 push complete: ghcr.io/$${L2_ORG}/hermes-agent-context:latest"
 
 ## hermes-build-context: Build L1→L2 hermes images for CONTEXT
 ##   Usage: make hermes-build-context CONTEXT=<name>
