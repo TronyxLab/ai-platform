@@ -453,6 +453,12 @@ def test_init_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monk
     # Override TOR_ENABLED for test
     monkeypatch.setenv("TOR_ENABLED", "false")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
+    # Set CONTEXT env var for deploy_context step (DevPlan 053 F4/F8)
+    monkeypatch.setenv("CONTEXT", "test-context")
+    # Create secrets.env for ensure_secrets step (DevPlan 053 F2)
+    secrets_env = Path(state_file).parent / "secrets.env"
+    secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
     # verify_core step (step 8) requires node-lifecycle.sh marker to exist.
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
@@ -496,16 +502,16 @@ def test_init_steps_count_devplan_047(caplog):
     logger.critical("[IMP:9][test] INIT_STEPS count=23 (DevPlan 047) — docker_auth + deploy_context present")
 
 
-# 🧪 TRAP[TEST] · Regression · UPDATE_STEPS has 8 entries (DevPlan 047: +deploy_context)
-# · Scenario: Check len(UPDATE_STEPS) == 8 after DevPlan 047 extension
-# · Last fail: N/A (new test — DevPlan 047)
+# 🧪 TRAP[TEST] · Regression · UPDATE_STEPS has 9 entries (DevPlan 053: +provision_llm_keys)
+# · Scenario: Check len(UPDATE_STEPS) == 9 after DevPlan 053 extension
+# · Last fail: N/A (DevPlan 053 — UPDATE_STEPS grew by 1)
 # · Remove if: UPDATE_STEPS count changes
 @ldd_trajectory
 def test_update_steps_count_devplan_047(caplog):
-    """UPDATE_STEPS should have 8 entries after DevPlan 047 extension."""
-    assert len(sm.UPDATE_STEPS) == 8, f"Expected 8 update steps, got {len(sm.UPDATE_STEPS)}"
-    assert sm.UPDATE_STEPS[7] == "deploy_context", f"Expected deploy_context at index 8, got {sm.UPDATE_STEPS[7]}"
-    logger.critical("[IMP:9][test] UPDATE_STEPS count=8 (DevPlan 047) — deploy_context present")
+    """UPDATE_STEPS should have 9 entries after DevPlan 053 extension."""
+    assert len(sm.UPDATE_STEPS) == 9, f"Expected 9 update steps, got {len(sm.UPDATE_STEPS)}"
+    assert sm.UPDATE_STEPS[8] == "deploy_context", f"Expected deploy_context at index 9, got {sm.UPDATE_STEPS[8]}"
+    logger.critical("[IMP:9][test] UPDATE_STEPS count=9 (DevPlan 053) — deploy_context present")
 
 
 # 🧪 TRAP[TEST] · Regression · --context CLI arg sets CONTEXT env var (DevPlan 047)
@@ -550,6 +556,12 @@ def test_init_step_ssh_access_no_root(caplog, machine, monkeypatch):
 def test_update_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
     """Update mode should run all steps without error (mocked subprocess)."""
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
+    # Set CONTEXT env var for deploy_context step (DevPlan 053 F4/F8)
+    monkeypatch.setenv("CONTEXT", "test-context")
+    # Create secrets.env for ensure_secrets source
+    secrets_env = Path(state_file).parent / "secrets.env"
+    secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\n")
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
     # verify_core step requires node-lifecycle.sh marker to exist.
     # Create minimal directory structure for core verification.
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
@@ -569,7 +581,7 @@ def test_update_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, mo
         assert key in m.state.steps, f"Update step {i} ({step_name}) not in state"
         assert m.state.steps[key].status == "done", f"Update step {i} ({step_name}) status: {m.state.steps[key].status}"
 
-    logger.critical("[IMP:9][test] Update flow completed all 7 steps — OK")
+    logger.critical("[IMP:9][test] Update flow completed all 9 steps — OK")
 
 
 # endregion
@@ -796,6 +808,11 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
     monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "")
     monkeypatch.setenv("TOR_ENABLED", "true")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
+    monkeypatch.setenv("CONTEXT", "test-context")
+    # Create secrets.env for ensure_secrets step (DevPlan 053 F2)
+    secrets_env = Path(state_file).parent / "secrets.env"
+    secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
     # verify_core step (step 8) requires node-lifecycle.sh marker to exist.
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)

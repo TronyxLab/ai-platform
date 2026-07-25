@@ -32,6 +32,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# ── Direct import of s3_ssl_cache (DevPlan 052 Phase 1) ──
+# Replaces subprocess calls to s3-ssl-cache.sh with direct Python calls.
+# Eliminates subshell credential propagation bug — S3_* env vars are read
+# directly by s3_ssl_cache functions from os.environ (no subshell).
+try:
+    import s3_ssl_cache
+except ImportError:
+    s3_ssl_cache = None  # type: ignore[assignment]
+    logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not available — S3 operations disabled")
+
 # ── Constants ──────────────────────────────────────────────────────────────
 S3_TIMEOUT = 120  # seconds for s3-ssl-cache.sh operations
 ISSUE_TIMEOUT = 300  # seconds for issue-cert.sh
@@ -113,7 +123,7 @@ class CertResult:
 # region FUNC_orchestrate_certs
 ## @purpose — Orchestrate cert restoration + issuance for a list of domains.
 ##            Restore-first: try S3 cache, then fall back to acme.sh issue.
-## @io — ⇥ domains: list[str], s3_cache_script: str, issue_cert_script: str,
+## @io — ⇥ domains: list[str], issue_cert_script: str,
 ##       secrets_env: str → ⎋ CertResult
 ## @complexity — O(D * T) where D = domains, T = timeout per operation
 ## @invariants
@@ -123,7 +133,6 @@ class CertResult:
 ##   - All subprocess calls have timeout
 def orchestrate_certs(
     domains: list[str],
-    s3_cache_script: str,
     issue_cert_script: str,
     secrets_env: str = "",
 ) -> CertResult:
@@ -154,7 +163,7 @@ def orchestrate_certs(
     for domain in domains:
         if not domain:
             continue
-        domain_result = _process_single_domain(domain, s3_cache_script, issue_cert_script)
+        domain_result = _process_single_domain(domain, issue_cert_script)
         if domain_result is not None:
             result.add(domain_result)
 
@@ -173,16 +182,17 @@ def orchestrate_certs(
 
 # region FUNC_process_single_domain
 ## @purpose — Process a single domain: check validity, restore from S3, or issue via acme.sh.
-## @io — ⇥ domain: str, s3_cache_script: str, issue_cert_script: str → ⎋ DomainCertResult
+##            Calls _upload_to_s3() on skip (disk present) and after successful issue.
+## @io — ⇥ domain: str, issue_cert_script: str → ⎋ DomainCertResult
 ## @complexity — O(T) where T = timeout per operation
 ## @invariants
-##   - Step 1: Check if valid cert already exists on disk (skip if present)
-##   - Step 2: Try S3 restore (check + download)
+##   - Step 1: Check if valid cert already exists on disk (skip + upload to S3)
+##   - Step 2: Try S3 restore (check + download via direct import)
 ##   - Step 3: Fall back to issue-cert.sh if S3 miss/unavailable
+##   - After successful issue, upload to S3
 ##   - Non-fatal: any failure returns DomainCertResult(status="failed")
 def _process_single_domain(
     domain: str,
-    s3_cache_script: str,
     issue_cert_script: str,
 ) -> DomainCertResult:
     """Process a single domain through restore → issue pipeline."""
@@ -191,29 +201,37 @@ def _process_single_domain(
     # ── Step 1: Check if cert already valid on disk ──
     cert_path = os.path.join(CERT_VALIDITY_PATH, domain, "fullchain.pem")
     if os.path.isfile(cert_path) and _is_cert_valid(domain, cert_path):
-        logger.info("[IMP:9][cert_orchestrator] %s — valid cert on disk, skipping", domain)
-        return DomainCertResult(domain=domain, status="skipped", source="disk")
+        logger.info("[IMP:9][cert_orchestrator] %s — valid cert on disk, uploading to S3", domain)
+        _upload_to_s3(domain)  # Always sync to S3 (DevPlan 052 §4.5)
+        return DomainCertResult(domain=domain, status="skipped", source="disk_synced")
 
-    # ── Step 2: Try S3 restore ──
-    if os.path.isfile(s3_cache_script):
-        s3_result = _try_s3_restore(domain, s3_cache_script)
+    # ── Step 2: Try S3 restore via direct import (no subprocess) ──
+    if s3_ssl_cache is not None:
+        s3_result = _try_s3_restore(domain)
         if s3_result.status == "restored":
             return s3_result
         logger.info("[IMP:7][cert_orchestrator] %s — S3 miss/unavailable, falling back to issue", domain)
     else:
-        logger.warning("[IMP:7][cert_orchestrator] s3-ssl-cache.sh not found: %s", s3_cache_script)
+        logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not loaded — S3 restore unavailable")
 
     # ── Step 3: Fall back to issue-cert.sh ──
     if os.path.isfile(issue_cert_script):
-        return _issue_cert(domain, issue_cert_script)
+        result = _issue_cert(domain, issue_cert_script)
+        if result.status == "issued":
+            _upload_to_s3(domain)  # Upload after successful issue (DevPlan 052 §4.5)
+            return result
+        # issue failed — fall through to self-signed
+        logger.warning("[IMP:8][cert_orchestrator] %s — issue-cert.sh failed, trying self-signed fallback", domain)
+    else:
+        logger.warning("[IMP:8][cert_orchestrator] %s — no issue-cert.sh, trying self-signed fallback", domain)
 
-    logger.error("[IMP:10][cert_orchestrator] %s — no issue-cert.sh available", domain)
-    return DomainCertResult(
-        domain=domain,
-        status="failed",
-        source="none",
-        error=f"Neither S3 cache nor issue-cert.sh available for {domain}",
+    # ── Step 4: Self-signed as last resort (DevPlan 053 F6) ──
+    # Both S3 restore and acme.sh issue failed — generate self-signed
+    # to prevent nginx crash-loop. Monitoring should alert on self_signed source.
+    logger.warning(
+        "[IMP:8][cert_orchestrator] %s — all issuance methods failed, generating self-signed fallback", domain
     )
+    return _generate_self_signed(domain)
 
 
 # endregion FUNC_process_single_domain
@@ -297,41 +315,47 @@ def _is_le_issuer(cert_path: str) -> bool:
 
 
 # region FUNC_try_s3_restore
-## @purpose — Try to restore a cert from S3 cache (check + download).
-## @io — ⇥ domain: str, s3_cache_script: str → ⎋ DomainCertResult
-## @complexity — O(T) where T = S3 timeout
+## @purpose — Try to restore a cert from S3 via s3_ssl_cache (direct import, no subprocess).
+##            Replaces subprocess calls to s3-ssl-cache.sh (DevPlan 052 Phase 1).
+##            Eliminates subshell credential propagation bug.
+## @io — ⇥ domain: str → ⎋ DomainCertResult
+## @complexity — O(T) where T = S3 round-trip time
 ## @invariants
-##   - Step 1: s3-ssl-cache.sh check <domain> (exit 0 = valid cert in S3)
-##   - Step 2: s3-ssl-cache.sh download <domain> (exit 0 = restored)
+##   - Step 1: s3_ssl_cache.check_cert(domain, s3_bucket) → bool
+##   - Step 2: s3_ssl_cache.download_cert(domain, ...) → bool
 ##   - Returns status="restored" on success, status="pending" on miss
-def _try_s3_restore(domain: str, s3_cache_script: str) -> DomainCertResult:
-    """Try S3 check + download. Returns restored result or pending."""
+def _try_s3_restore(domain: str) -> DomainCertResult:
+    """Try S3 check + download via s3_ssl_cache (direct import, no subprocess).
+
+    ## @rationale DevPlan 052 Phase 1: Replace subprocess.run calls with direct
+    ##            s3_ssl_cache function calls. S3_* env vars are read directly
+    ##            from os.environ by s3_ssl_cache — no subshell credential loss.
+    """
+    if s3_ssl_cache is None:
+        logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not available — S3 restore disabled")
+        return DomainCertResult(domain=domain, status="pending", source="s3")
+
+    s3_bucket = os.environ.get("S3_BUCKET", "")
+    if not s3_bucket:
+        logger.warning("[IMP:7][cert_orchestrator] S3_BUCKET not set — S3 restore unavailable")
+        return DomainCertResult(domain=domain, status="pending", source="s3")
+
     try:
-        # Check S3 cache
-        check = subprocess.run(
-            ["bash", s3_cache_script, "check", domain],
-            capture_output=True,
-            text=True,
-            timeout=S3_TIMEOUT,
-        )
-        if check.returncode != 0:
+        # Step 1: Check S3 cache via direct import
+        if not s3_ssl_cache.check_cert(domain, s3_bucket):
             logger.info("[IMP:7][cert_orchestrator] %s — S3 cache miss", domain)
             return DomainCertResult(domain=domain, status="pending", source="s3")
 
-        # Download from S3
-        download = subprocess.run(
-            ["bash", s3_cache_script, "download", domain],
-            capture_output=True,
-            text=True,
-            timeout=S3_TIMEOUT,
-        )
-        if download.returncode != 0:
+        # Step 2: Download from S3 via direct import
+        cert_dir = "/etc/letsencrypt/live"
+        acme_home = "/opt/acme.sh"
+        if not s3_ssl_cache.download_cert(domain, cert_dir, acme_home, s3_bucket):
             logger.warning("[IMP:7][cert_orchestrator] %s — S3 download failed", domain)
             return DomainCertResult(
                 domain=domain,
                 status="pending",
                 source="s3",
-                error=download.stderr.strip()[:200] if download.stderr else "download failed",
+                error="download failed",
             )
 
         # Verify cert exists on disk after download
@@ -347,15 +371,39 @@ def _try_s3_restore(domain: str, s3_cache_script: str) -> DomainCertResult:
             source="s3",
             error="download succeeded but cert file missing",
         )
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][cert_orchestrator] %s — S3 operation timed out", domain)
-        return DomainCertResult(domain=domain, status="pending", source="s3", error="timeout")
-    except FileNotFoundError as e:
-        logger.warning("[IMP:7][cert_orchestrator] %s — S3 script error: %s", domain, e)
+    except Exception as e:
+        logger.warning("[IMP:7][cert_orchestrator] %s — S3 operation failed: %s", domain, e)
         return DomainCertResult(domain=domain, status="pending", source="s3", error=str(e))
 
 
 # endregion FUNC_try_s3_restore
+
+
+# region FUNC_upload_to_s3
+## @purpose — Upload cert files to S3 via s3_ssl_cache (direct import, no subprocess).
+##            Called on skip (cert on disk) and after successful acme.sh issue.
+##            Non-fatal: returns False on failure, never raises.
+## @io — ⇥ domain: str → ⎋ bool (True = upload succeeded)
+## @complexity — O(N) where N = files to upload (~4)
+## @invariants
+##   - Returns False if S3_BUCKET not set (S3 not configured)
+##   - Non-fatal: failure logs WARN, returns False
+##   - Uses s3_ssl_cache.upload_cert() directly (same process, no subshell)
+## @rationale DevPlan 052 §4.4: Guaranteed S3 upload on every cert path
+##           (skip, restore, issue) prevents cert loss for platform domain.
+def _upload_to_s3(domain: str) -> bool:
+    """Upload cert to S3 via s3_ssl_cache (direct import)."""
+    s3_bucket = os.environ.get("S3_BUCKET", "")
+    if not s3_bucket:
+        return False
+    try:
+        return s3_ssl_cache.upload_cert(domain, CERT_VALIDITY_PATH, "/opt/acme.sh", s3_bucket)
+    except Exception as e:
+        logger.warning("[IMP:7][cert_orchestrator] %s — S3 upload failed: %s", domain, e)
+        return False
+
+
+# endregion FUNC_upload_to_s3
 
 
 # region FUNC_issue_cert
@@ -417,6 +465,77 @@ def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
 
 
 # endregion FUNC_issue_cert
+
+
+# region FUNC_generate_self_signed
+## @purpose — Generate self-signed certificate as last-resort fallback (F6).
+##            Called when BOTH S3 restore and acme.sh issue fail (e.g., DNS API down,
+##            no credentials). Self-signed cert allows nginx to start (avoids crash-loop),
+##            but browsers will show security warning. Valid 90 days.
+## @io — ⇥ domain: str → ⎋ DomainCertResult
+## @complexity — O(1) + openssl subprocess
+## @invariants
+##   - Generates 2048-bit RSA key + self-signed x509 cert valid 90 days
+##   - Non-fatal: returns failed result on error
+##   - Logs WARN on success (must be replaced with real cert)
+##   - Sets proper file permissions (key=0600, cert=0644)
+def _generate_self_signed(domain: str) -> DomainCertResult:
+    """Generate self-signed certificate as last-resort fallback.
+
+    ## @purpose — Disaster recovery: keep nginx running when cert issuance fails.
+    ## @rationale F6: self-signed cert allows nginx to start (avoids crash-loop),
+    ##            but monitoring should alert on self_signed source.
+    """
+    cert_dir = os.path.join(CERT_VALIDITY_PATH, domain)
+    os.makedirs(cert_dir, exist_ok=True)
+
+    key_path = os.path.join(cert_dir, "privkey.pem")
+    cert_path = os.path.join(cert_dir, "fullchain.pem")
+
+    try:
+        # Generate RSA private key
+        subprocess.run(
+            ["openssl", "genrsa", "-out", key_path, "2048"],
+            capture_output=True,
+            timeout=30,
+            check=True,
+        )
+        os.chmod(key_path, 0o600)
+
+        # Generate self-signed x509 certificate
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-new",
+                "-x509",
+                "-key",
+                key_path,
+                "-out",
+                cert_path,
+                "-days",
+                "90",
+                "-subj",
+                f"/CN={domain}",
+            ],
+            capture_output=True,
+            timeout=30,
+            check=True,
+        )
+        os.chmod(cert_path, 0o644)
+
+        logger.warning(
+            "[IMP:7][cert_orchestrator] %s — SELF-SIGNED cert generated (browsers will warn). "
+            "Fix: ensure DNS-01 credentials in secrets.env or wait for acme.sh retry.",
+            domain,
+        )
+        return DomainCertResult(domain=domain, status="issued", source="self_signed")
+    except Exception as e:
+        logger.warning("[IMP:7][cert_orchestrator] %s — self-signed generation failed: %s", domain, e)
+        return DomainCertResult(domain=domain, status="failed", source="none", error=str(e))
+
+
+# endregion FUNC_generate_self_signed
 
 
 # endregion ORCHESTRATION

@@ -39,7 +39,11 @@ import cert_orchestrator as cert
 # · Remove if: orchestrate_certs logic changes
 @ldd_trajectory
 def test_bulk_restore_all_from_s3(caplog, tmp_path, monkeypatch):
-    """orchestrate_certs should restore all domains from S3 when available."""
+    """orchestrate_certs should restore all domains from S3 when available.
+
+    DevPlan 052 Phase 1: now uses direct s3_ssl_cache import instead of subprocess.
+    Mocks s3_ssl_cache module functions directly.
+    """
     s3_script = str(tmp_path / "s3-ssl-cache.sh")
     issue_script = str(tmp_path / "issue-cert.sh")
     Path(s3_script).touch()
@@ -48,53 +52,39 @@ def test_bulk_restore_all_from_s3(caplog, tmp_path, monkeypatch):
     # Mock _is_cert_valid to return False (no valid cert on disk)
     monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
 
+    # Set S3_BUCKET for s3_ssl_cache (required by _try_s3_restore)
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+
+    # Mock s3_ssl_cache module functions (DevPlan 052: direct import replaces subprocess)
+    mock_s3 = MagicMock()
+    mock_s3.check_cert.return_value = True
+    mock_s3.download_cert.return_value = True
+    monkeypatch.setattr(cert, "s3_ssl_cache", mock_s3)
+
     # Mock os.path.isfile for cert path check (avoid /etc/letsencrypt access)
     real_isfile = os.path.isfile
 
-    def mock_isfile(path):
-        if "fullchain.pem" in str(path) and "/etc/letsencrypt" in str(path):
-            return False  # Pretend cert doesn't exist on disk
+    def mock_isfile_after_download(path):
+        """Return True for cert paths that were 'downloaded' by mock."""
+        if "/etc/letsencrypt/live/" in str(path) and "fullchain.pem" in str(path):
+            return True  # Pretend cert exists after S3 download
         return real_isfile(path)
 
-    monkeypatch.setattr(os.path, "isfile", mock_isfile)
+    monkeypatch.setattr(os.path, "isfile", mock_isfile_after_download)
 
-    # Track downloaded domains to simulate cert file creation
-    downloaded_domains: set[str] = set()
-
-    # Mock S3 check → return 0 (valid in cache)
-    def mock_s3_run(cmd, **kwargs):
-        if isinstance(cmd, list):
-            cmd_str = " ".join(cmd)
-        else:
-            cmd_str = str(cmd)
-        if "check" in cmd_str:
-            return MagicMock(returncode=0, stdout="", stderr="")
-        if "download" in cmd_str:
-            domain = cmd[-1]
-            downloaded_domains.add(domain)
-            return MagicMock(returncode=0, stdout="", stderr="")
-        return MagicMock(returncode=0, stdout="", stderr="")
-
-    # After download, _process_single_domain checks os.path.isfile(cert_path).
-    # Override isfile to return True for downloaded domains.
-    def mock_isfile_downloaded(path):
-        if "fullchain.pem" in str(path):
-            return any(d in str(path) for d in downloaded_domains)
-        return real_isfile(path)
-
-    with patch("subprocess.run", side_effect=mock_s3_run):
-        # Swap isfile mock to track downloads
-        monkeypatch.setattr(os.path, "isfile", mock_isfile_downloaded)
-        result = cert.orchestrate_certs(
-            ["example.com", "test.com"],
-            s3_script,
-            issue_script,
-        )
+    result = cert.orchestrate_certs(
+        ["example.com", "test.com"],
+        s3_script,
+        issue_script,
+    )
 
     assert result.restored == 2
     assert result.issued == 0
     assert result.failed == 0
-    logger.critical("[IMP:9][test] Bulk restore from S3 — all domains restored")
+    # Verify s3_ssl_cache was called
+    assert mock_s3.check_cert.call_count == 2
+    assert mock_s3.download_cert.call_count == 2
+    logger.critical("[IMP:9][test] Bulk restore from S3 — all domains restored via direct import")
 
 
 # 🧪 TRAP[TEST] · Regression · orchestrate_certs issues certs when S3 miss
@@ -174,32 +164,35 @@ def test_s3_unavailable_graceful(caplog, tmp_path, monkeypatch):
 # · Remove if: idempotency skip logic changes
 @ldd_trajectory
 def test_idempotent_skip_valid(caplog, tmp_path, monkeypatch):
-    """orchestrate_certs should skip domains with valid certs on disk."""
-    s3_script = str(tmp_path / "s3-ssl-cache.sh")
+    """orchestrate_certs should skip domains with valid certs on disk
+    and upload to S3 (source="disk_synced")."""
     issue_script = str(tmp_path / "issue-cert.sh")
-    Path(s3_script).touch()
     Path(issue_script).touch()
 
     # Mock _is_cert_valid to return True (cert already valid)
     monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: True)
 
-    # Also need cert_path to exist
+    # Mock cert_path to exist (non-recursive — use a closure with the real isfile)
+    real_isfile = os.path.isfile
+
     def mock_isfile(path):
         if "fullchain.pem" in str(path):
             return True
-        return os.path.isfile(path)
+        return real_isfile(path)
 
     monkeypatch.setattr(os.path, "isfile", mock_isfile)
 
     result = cert.orchestrate_certs(
         ["example.com"],
-        s3_script,
         issue_script,
     )
 
     assert result.skipped == 1
     assert result.domains["example.com"].status == "skipped"
-    logger.critical("[IMP:9][test] Idempotent skip — valid cert on disk")
+    assert result.domains["example.com"].source == "disk_synced", (
+        f"Expected source='disk_synced', got '{result.domains['example.com'].source}'"
+    )
+    logger.critical("[IMP:9][test] Idempotent skip — valid cert on disk, source=disk_synced")
 
 
 # endregion

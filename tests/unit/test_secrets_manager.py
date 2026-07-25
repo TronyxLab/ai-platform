@@ -1,0 +1,327 @@
+"""
+# GREP_SUMMARY: test_secrets_manager, secrets-manager, autogen-secrets, manifest, ensure-secrets, source-secrets-env, fallback-hardcoded, skip-existing
+# STRUCTURE: ▶ tmp_path + monkeypatch + mock subprocess → ◇ source_secrets_env: basic/export-prefix (2x) → ◇ ensure_secrets: manifest/fallback/skip-existing (3x) → ⎋ LDD trajectory IMP:7-10 assertions
+# region MODULE_CONTRACT
+## @purpose  Unit tests for secrets_manager.py — source_secrets_env() parsing and ensure_secrets() generation logic
+## @scope    Tests source_secrets_env and ensure_secrets functions with tmp_path fixtures,
+##           monkeypatch for env vars, and mock subprocess.run for system commands.
+## @invariants
+##   - All subprocess-dependent tests mock subprocess.run to avoid real system calls
+##   - File operations use tmp_path exclusively — never /run/platform
+##   - Each test validates IMP:9 business logic log presence via @ldd_trajectory
+##   - os.environ modifications made by ensure_secrets are cleaned up after each test
+## @changes
+##   2026-07-25 · Created
+# endregion MODULE_CONTRACT
+"""
+
+import logging
+import os
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+# Load the LDD trajectory decorator
+from tests._conftest.ldd import ldd_trajectory
+
+logger = logging.getLogger(__name__)
+
+# ── Import the module under test ──
+_MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "lifecycle"
+sys.path.insert(0, str(_MODULE_DIR))
+import secrets_manager as sm
+
+# Re-export for fixture cleanups
+MODULE = sm
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Fixtures
+# ═══════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def secrets_env(tmp_path):
+    """Provide a temporary secrets.env path for each test."""
+    return str(tmp_path / "secrets.env")
+
+
+@pytest.fixture
+def mock_subprocess_run():
+    """Mock subprocess.run to return successful results by default.
+
+    Patches subprocess.run globally so both _generate_secret and
+    _ensure_htpasswd use the mock. Returns stdout="generated_value_abc123"
+    which _generate_secret treats as a successfully generated secret.
+    """
+    with patch("subprocess.run") as mock:
+        mock.return_value.returncode = 0
+        mock.return_value.stdout = "generated_value_abc123\n"
+        mock.return_value.stderr = ""
+        yield mock
+
+
+# endregion Fixtures
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: source_secrets_env
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · source_secrets_env parses key=value file
+# · Scenario: Write secrets.env with key=value pairs, comments, blank lines, quoted values
+#   → source_secrets_env returns dict with only the valid key=value entries
+# · Last fail: N/A (new test)
+# · Remove if: source_secrets_env parsing logic changes
+@ldd_trajectory
+def test_source_secrets_env(caplog, tmp_path):
+    """source_secrets_env should parse key=value file into dict.
+
+    ## @purpose  Verify that a standard secrets.env file with comments,
+    ##           blank lines, and quoted values is parsed correctly.
+    ##           Comments (#) and blank lines are skipped. Surrounding
+    ##           quotes are stripped from values.
+    """
+    env_file = tmp_path / "secrets.env"
+    env_file.write_text(
+        "LITELLM_MASTER_KEY=sk-generated\n"
+        "LANGFUSE_INIT_ORG_ID=org_test\n"
+        "# This is a comment — should be skipped\n"
+        "\n"
+        "NEXTAUTH_SECRET=supersecret\n"
+        "SALT='quoted-value'\n"
+        'DOUBLE_QUOTED="double-quoted-value"\n'
+        "MALFORMED_LINE_NO_EQUALS\n"
+        "   EMPTY_VALUE=\n"
+    )
+
+    result = sm.source_secrets_env(str(env_file))
+
+    assert result["LITELLM_MASTER_KEY"] == "sk-generated"
+    assert result["LANGFUSE_INIT_ORG_ID"] == "org_test"
+    assert result["NEXTAUTH_SECRET"] == "supersecret"
+    assert result["SALT"] == "quoted-value"
+    assert result["DOUBLE_QUOTED"] == "double-quoted-value"
+    assert "MALFORMED_LINE_NO_EQUALS" not in result
+    assert result.get("EMPTY_VALUE", "") == ""
+    assert len(result) == 6
+
+    logger.critical("[IMP:9][test] source_secrets_env parsed key=value file with 6 entries — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · source_secrets_env handles export prefix
+# · Scenario: Lines starting with 'export ' are parsed stripping the prefix
+# · Last fail: N/A (new test)
+# · Remove if: export prefix handling changes
+@ldd_trajectory
+def test_source_secrets_export_prefix(caplog, tmp_path):
+    """source_secrets_env should strip 'export ' prefix from lines.
+
+    ## @purpose  Verify that lines with the `export VAR=VALUE` shell format
+    ##           are correctly parsed, stripping the `export ` prefix while
+    ##           preserving plain VAR=VALUE lines.
+    """
+    env_file = tmp_path / "secrets.env"
+    env_file.write_text(
+        "export LITELLM_MASTER_KEY=sk-exported\n"
+        "export NEXTAUTH_SECRET=hexsecret\n"
+        "PLAIN_VAR=plain\n"
+        "  export   SPACED_EXPORT=spaced\n"
+    )
+
+    result = sm.source_secrets_env(str(env_file))
+
+    assert result["LITELLM_MASTER_KEY"] == "sk-exported"
+    assert result["NEXTAUTH_SECRET"] == "hexsecret"
+    assert result["PLAIN_VAR"] == "plain"
+    assert result["SPACED_EXPORT"] == "spaced"
+    assert len(result) == 4
+
+    logger.critical("[IMP:9][test] source_secrets_env parsed export-prefixed lines — OK")
+
+
+# endregion Tests: source_secrets_env
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: ensure_secrets
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · ensure_secrets reads manifest, generates missing secrets
+# · Scenario: _read_manifest returns valid tier=generated secrets list →
+#   ensure_secrets generates values via mock subprocess, sets os.environ,
+#   appends to secrets.env, and returns list of generated names
+# · Last fail: N/A (new test)
+# · Remove if: ensure_secrets manifest processing logic changes
+@ldd_trajectory
+def test_ensure_secrets_from_manifest(caplog, secrets_env, mock_subprocess_run, monkeypatch):
+    """ensure_secrets should read manifest and generate missing secrets via gen_command.
+
+    ## @purpose  Verify end-to-end flow: manifest provides tier=generated secrets
+    ##           list → ensure_secrets detects missing env vars → calls
+    ##           _generate_secret for each → sets os.environ → persists to file
+    ##           → returns generated names. _ensure_htpasswd is mocked out to
+    ##           avoid openssl subprocess calls.
+    """
+    manifest_secrets = [
+        {"name": "LITELLM_MASTER_KEY", "gen_command": "echo sk-manifest", "tier": "generated"},
+        {"name": "NEXTAUTH_SECRET", "gen_command": "echo hex-manifest", "tier": "generated"},
+    ]
+
+    # Ensure these env vars are NOT set before the test
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+    # Ensure secrets.env file does not pre-exist (fresh tmp_path)
+    secrets_env_path = Path(secrets_env)
+    if secrets_env_path.exists():
+        secrets_env_path.unlink()
+
+    with patch.object(sm, "_read_manifest", return_value=manifest_secrets):
+        with patch.object(sm, "_ensure_htpasswd", return_value=False):
+            generated = sm.ensure_secrets(
+                manifest_path="/fake/manifest.yaml",
+                secrets_env=secrets_env,
+                persist_to_sops=False,
+            )
+
+    # Verify both secrets were generated
+    assert "LITELLM_MASTER_KEY" in generated
+    assert "NEXTAUTH_SECRET" in generated
+    assert len(generated) == 2
+
+    # Verify they were set in os.environ
+    assert os.environ.get("LITELLM_MASTER_KEY") == "generated_value_abc123"
+    assert os.environ.get("NEXTAUTH_SECRET") == "generated_value_abc123"
+
+    # Verify secrets.env was created with generated values
+    assert secrets_env_path.exists()
+    env_content = secrets_env_path.read_text()
+    assert "LITELLM_MASTER_KEY=generated_value_abc123" in env_content
+    assert "NEXTAUTH_SECRET=generated_value_abc123" in env_content
+
+    # Clean up leaked env vars
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+    logger.critical("[IMP:9][test] ensure_secrets generated %d secrets from manifest — OK", len(generated))
+
+
+# 🧪 TRAP[TEST] · Regression · ensure_secrets falls back to hardcoded when no manifest
+# · Scenario: manifest_path="" → _read_manifest returns [] → ensure_secrets uses _FALLBACK_SECRETS
+# · Last fail: N/A (new test)
+# · Remove if: fallback logic changes
+@ldd_trajectory
+def test_ensure_secrets_fallback_hardcoded(caplog, secrets_env, mock_subprocess_run, monkeypatch):
+    """ensure_secrets should use hardcoded fallback when manifest is empty or unavailable.
+
+    ## @purpose  Verify that when manifest returns no generated secrets,
+    ##           ensure_secrets falls back to the _FALLBACK_SECRETS list
+    ##           (LITELLM_MASTER_KEY, LANGFUSE_INIT_ORG_ID, etc.).
+    ##           All 7 hardcoded fallback secrets should be generated.
+    """
+    # Ensure fallback secrets are NOT set in os.environ before the test
+    for fb_name in [s["name"] for s in sm._FALLBACK_SECRETS]:
+        monkeypatch.delenv(fb_name, raising=False)
+
+    secrets_env_path = Path(secrets_env)
+    if secrets_env_path.exists():
+        secrets_env_path.unlink()
+
+    with patch.object(sm, "_ensure_htpasswd", return_value=False):
+        generated = sm.ensure_secrets(
+            manifest_path="",
+            secrets_env=secrets_env,
+            persist_to_sops=False,
+        )
+
+    # Should have generated all 7 hardcoded fallback secrets
+    expected_count = len(sm._FALLBACK_SECRETS)
+    assert len(generated) == expected_count, (
+        f"Expected {expected_count} fallback secrets, got {len(generated)}"
+    )
+
+    # LITELLM_MASTER_KEY is first in fallback list
+    assert "LITELLM_MASTER_KEY" in generated
+    assert os.environ.get("LITELLM_MASTER_KEY") == "generated_value_abc123"
+
+    # Verify env var was set in the file
+    assert secrets_env_path.exists()
+    env_content = secrets_env_path.read_text()
+    assert "LITELLM_MASTER_KEY=generated_value_abc123" in env_content
+
+    # Clean up leaked env vars
+    for g in generated:
+        monkeypatch.delenv(g, raising=False)
+
+    logger.critical("[IMP:9][test] ensure_secrets fallback generated %d secrets — OK", len(generated))
+
+
+# 🧪 TRAP[TEST] · Regression · ensure_secrets does NOT overwrite existing secrets
+# · Scenario: LITELLM_MASTER_KEY already set in os.environ → skipped (not generated)
+# · Last fail: N/A (new test)
+# · Remove if: skip-existing logic changes
+@ldd_trajectory
+def test_ensure_secrets_skips_existing(caplog, secrets_env, mock_subprocess_run, monkeypatch):
+    """ensure_secrets should NOT overwrite existing secrets in os.environ.
+
+    ## @purpose  Verify invariant: existing secrets (already present in
+    ##           os.environ) are NOT overwritten or regenerated. Only
+    ##           genuinely missing secrets are generated. The existing
+    ##           value must be preserved exactly.
+    """
+    # Set an env var before calling ensure_secrets
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "existing-pre-set-value")
+
+    # Ensure NEXTAUTH_SECRET is NOT set (should be generated)
+    monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+    manifest_secrets = [
+        {"name": "LITELLM_MASTER_KEY", "gen_command": "echo sk-new", "tier": "generated"},
+        {"name": "NEXTAUTH_SECRET", "gen_command": "echo hex-new", "tier": "generated"},
+    ]
+
+    secrets_env_path = Path(secrets_env)
+    if secrets_env_path.exists():
+        secrets_env_path.unlink()
+
+    with patch.object(sm, "_read_manifest", return_value=manifest_secrets):
+        with patch.object(sm, "_ensure_htpasswd", return_value=False):
+            generated = sm.ensure_secrets(
+                manifest_path="/fake/manifest.yaml",
+                secrets_env=secrets_env,
+                persist_to_sops=False,
+            )
+
+    # LITELLM_MASTER_KEY should NOT be in generated list (already existed)
+    assert "LITELLM_MASTER_KEY" not in generated, "Existing secret was regenerated"
+
+    # NEXTAUTH_SECRET should be generated (was missing)
+    assert "NEXTAUTH_SECRET" in generated
+
+    # Existing value should NOT be overwritten
+    assert os.environ.get("LITELLM_MASTER_KEY") == "existing-pre-set-value", (
+        "Existing secret was overwritten"
+    )
+
+    # Generated value should be set
+    assert os.environ.get("NEXTAUTH_SECRET") == "generated_value_abc123"
+
+    # Verify secrets.env only contains the generated secret, not the existing one
+    assert secrets_env_path.exists()
+    env_content = secrets_env_path.read_text()
+    assert "NEXTAUTH_SECRET=generated_value_abc123" in env_content
+    # LITELLM_MASTER_KEY should NOT be in secrets.env (it was already set, not generated)
+    assert "LITELLM_MASTER_KEY" not in env_content
+
+    # Clean up leaked env vars
+    monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+    logger.critical("[IMP:9][test] ensure_secrets skipped existing secret — OK")
+
+
+# endregion Tests: ensure_secrets

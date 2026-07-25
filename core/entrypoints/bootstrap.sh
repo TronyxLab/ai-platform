@@ -123,7 +123,7 @@ main() {
     }
 
     echo "[IMP:8][bootstrap][entrypoint] Extracting owner_key"
-    OWNER_KEY=$(python3 -c "import yaml; f=open('${NODE_YAML}'); d=yaml.safe_load(f); print(d.get('node',{}).get('owner_key',''))" 2>/dev/null) || true
+    OWNER_KEY=$(python3 "${CORE_DIR}/internal/bootstrap/yaml_helpers.py" "${NODE_YAML}" "node.owner_key" 2>/dev/null) || true
     [[ -n "$OWNER_KEY" ]] || { echo "[IMP:10][bootstrap][entrypoint] FATAL: owner_key not found" >&2; exit 1; }
     echo "[IMP:9][bootstrap][entrypoint] Resolved: node=${NODE_NAME}"
 
@@ -141,7 +141,7 @@ main() {
     #   by bootstrap.sh and passed to step_*.
     # · Source: .ai/plans/007-dance-site-launch/02-Debt.md D1
     echo "[IMP:8][bootstrap][entrypoint] Extracting ci_deploy_key"
-    CI_DEPLOY_KEY=$(python3 -c "import yaml; f=open('${NODE_YAML}'); d=yaml.safe_load(f); print(d.get('node',{}).get('ci_deploy_key',''))" 2>/dev/null) || true
+    CI_DEPLOY_KEY=$(python3 "${CORE_DIR}/internal/bootstrap/yaml_helpers.py" "${NODE_YAML}" "node.ci_deploy_key" 2>/dev/null) || true
     # Env override: explicit PLATFORM_CI_DEPLOY_KEY takes priority over node.yaml
     if [[ -n "${PLATFORM_CI_DEPLOY_KEY:-}" ]]; then
         CI_DEPLOY_KEY="$PLATFORM_CI_DEPLOY_KEY"
@@ -153,6 +153,16 @@ main() {
         echo "[IMP:8][bootstrap][entrypoint] ci_deploy_key not set — ci-deploy restricted key setup will be skipped"
     fi
 
+    # ── Extract PLATFORM_DOMAIN + CONTEXT from node.yaml (F4) ──
+    echo "[IMP:8][bootstrap][entrypoint] Extracting PLATFORM_DOMAIN and CONTEXT"
+    PLATFORM_DOMAIN=$(python3 "${CORE_DIR}/internal/bootstrap/yaml_helpers.py" "${NODE_YAML}" "domain" 2>/dev/null) || true
+    CONTEXT=$(python3 "${CORE_DIR}/internal/bootstrap/yaml_helpers.py" "${NODE_YAML}" "context" 2>/dev/null) || true
+    if [[ -z "$CONTEXT" ]]; then
+        CONTEXT=$(python3 "${CORE_DIR}/internal/bootstrap/yaml_helpers.py" "${NODE_YAML}" "contexts.0.name" 2>/dev/null) || true
+    fi
+    [[ -n "$PLATFORM_DOMAIN" ]] && echo "[IMP:9][bootstrap][entrypoint] PLATFORM_DOMAIN=${PLATFORM_DOMAIN}"
+    [[ -n "$CONTEXT" ]] && echo "[IMP:9][bootstrap][entrypoint] CONTEXT=${CONTEXT}"
+
     SSH_HOST="$(extract_node_host "${NODE_YAML}")" || { echo "[IMP:8][bootstrap][entrypoint] WARN: No SSH host — local mode" >&2; SSH_HOST=""; }
     DETECTED_AGE_KEY="$(detect_age_key)" || DETECTED_AGE_KEY=""
 
@@ -162,6 +172,8 @@ main() {
         local a=(--node-name "$NODE_NAME" --node-yaml "$NODE_YAML" --owner-key "$OWNER_KEY" --resume)
         [[ -n "${DETECTED_AGE_KEY}" ]] && a+=(--age-secret-key "${DETECTED_AGE_KEY}")
         [[ -n "${CI_DEPLOY_KEY}" ]] && a+=(--ci-deploy-key "${CI_DEPLOY_KEY}")
+        [[ -n "${PLATFORM_DOMAIN:-}" ]] && a+=(--platform-domain "${PLATFORM_DOMAIN}")
+        [[ -n "${CONTEXT:-}" ]] && a+=(--context "${CONTEXT}")
         a+=("${PASSTHROUGH_ARGS[@]}")
         $DRY_RUN && { echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ${NODE_LIFECYCLE} ${a[*]}" >&2; exit 0; }
         exec "${NODE_LIFECYCLE}" "--mode" "init" "${a[@]}"

@@ -10,6 +10,8 @@
 # endregion MODULE_CONTRACT
 set -euo pipefail; MODE=""; RESUME_MODE=false; FORCE_MODE=""; DRY_RUN_MODE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; SM_SCRIPT="${SCRIPT_DIR}/lifecycle/state_machine.py"
+# P3: Ensure lifecycle/ is on PYTHONPATH so 'from . import steps' works
+export PYTHONPATH="${SCRIPT_DIR}/lifecycle:${PYTHONPATH:-}"
 [[ "${1:-}" == "--mode" ]] && { shift; MODE="${1:-}"; shift || true; }
 [[ "$MODE" == @(init|update) ]] || { echo "[IMP:10][node-lifecycle][args] ERROR: --mode init|update required" >&2; exit 1; }
 
@@ -33,6 +35,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
     --skip-tor-verify) export SKIP_TOR_VERIFY="true"; shift ;;
     --auto-reconcile) export AUTO_RECONCILE="true"; shift ;;
     --context) export CONTEXT="$2"; shift 2 ;;
+    --platform-domain) export PLATFORM_DOMAIN="$2"; shift 2 ;;
     --) shift; break ;;
     -*) echo "[IMP:10][node-lifecycle][args] ERROR: Unknown argument: $1" >&2; exit 1 ;;
     *) break ;;
@@ -83,8 +86,10 @@ update_step_3_ssl_provision(){
         log_step "ssl-provision" "WARN" "${secrets_env} missing — cert renewal may fail"
     python3 "$ssl_script" --mode "${MODE}" --run-step 4; }
 update_step_4_deploy_modules(){ _delegate --mode "${MODE}" --run-step 5; }
-update_step_6_healthcheck(){ _delegate --mode "${MODE}" --run-step 6; }
-update_step_8_deploy_context(){ _delegate --mode "${MODE}" --run-step 8; }       # NEW (DevPlan 047)
+update_step_6_provision_llm_keys(){ _delegate --mode "${MODE}" --run-step 6; }   # was healthcheck (misnamed)
+update_step_7_healthcheck(){ _delegate --mode "${MODE}" --run-step 7; }          # NEW — was missing
+update_step_8_converge(){ _delegate --mode "${MODE}" --run-step 8; }             # was deploy_context (misnamed)
+update_step_9_deploy_context(){ _delegate --mode "${MODE}" --run-step 9; }       # NEW — was missing
 
 # TOR_ENABLED detected from node.yaml (tor.enabled key, default false)
 detect_tor_enabled(){
@@ -110,64 +115,15 @@ _install_metrics_cron() {
 }
 # endregion FUNC__install_metrics_cron
 
-# region FUNC__ensure_python_deps
-## @purpose  Idempotent install of pip3 + platform Python dependencies on VPS
-## @rationale P1: pydantic is declared in pyproject.toml but pip3 is not installed on VPS
-## @changes  2026-07-24 · Created — DevPlan 051 P1
+# P2: Ported to python_deps.py — thin shell facade
 _ensure_python_deps() {
-    # Guard: проверяем content-hash requirements.txt.
-    # Если хэш совпадает с сохранённым — pip зависимости не менялись, пропускаем.
-    local req_file="${CORE_DIR}/requirements.txt"
-    local hash_file="/var/lib/platform/.bootstrap/python-deps.hash"
-
-    if [[ -f "$req_file" ]]; then
-        local current_hash
-        current_hash="$(sha256sum "$req_file" | cut -d' ' -f1)"
-        if command -v pip3 &>/dev/null && [[ -f "$hash_file" ]]; then
-            local stored_hash
-            stored_hash="$(cat "$hash_file")"
-            if [[ "$current_hash" == "$stored_hash" ]]; then
-                echo "[IMP:8][node-lifecycle][python-deps] Requirements unchanged (${current_hash:0:12}...) — skipping" >&2
-                return 0
-            fi
-            echo "[IMP:8][node-lifecycle][python-deps] Requirements changed (stored=${stored_hash:0:12}... current=${current_hash:0:12}...) — reinstalling" >&2
-        fi
-    fi
-
-    echo "[IMP:9][node-lifecycle][python-deps] Installing pip3 + Python dependencies..." >&2
-
-    # Установка pip3 через apt (только если отсутствует)
-    if ! command -v pip3 &>/dev/null; then
-        if apt-get update -qq && apt-get install -y -qq python3-pip python3-venv; then
-            echo "[IMP:9][node-lifecycle][python-deps] pip3 installed via apt" >&2
-        else
-            echo "[IMP:8][node-lifecycle][python-deps] WARN: apt-get install python3-pip failed (no internet?); continuing without LLM key provisioning" >&2
-            return 0  # fail-soft: не блокируем node-update
-        fi
-    fi
-
-    # Установка зависимостей из requirements.txt
-    if [[ -f "$req_file" ]]; then
-        # ⚠️ PEP 668: Ubuntu Noble blocks system-wide pip installs.
-        # --break-system-packages required since platform scripts run as system python3.
-        # ⚠️ Debian package conflict: typing_extensions installed via apt → pip can't
-        # uninstall it. First upgrade typing_extensions with --ignore-installed,
-        # then install remaining deps normally.
-        if pip3 install --no-cache-dir --break-system-packages --ignore-installed typing_extensions \
-            && pip3 install --no-cache-dir --break-system-packages -r "$req_file"; then
-            echo "[IMP:9][node-lifecycle][python-deps] Python dependencies installed successfully" >&2
-            # Save content-hash for idempotency guard
-            mkdir -p "$(dirname "$hash_file")"
-            sha256sum "$req_file" | cut -d' ' -f1 > "$hash_file"
-        else
-            echo "[IMP:8][node-lifecycle][python-deps] WARN: pip install failed; continuing without LLM key provisioning" >&2
-            return 0  # fail-soft
-        fi
+    local deps_script="${SCRIPT_DIR}/python_deps.py"
+    if [[ -f "$deps_script" ]]; then
+        python3 "$deps_script" ensure --core-dir "$CORE_DIR" || true
     else
-        echo "[IMP:8][node-lifecycle][python-deps] WARN: ${req_file} not found — skipping pip install" >&2
+        echo "[IMP:8][node-lifecycle][python-deps] python_deps.py not found — skipping" >&2
     fi
 }
-# endregion FUNC__ensure_python_deps
 
 main() {
     if [[ "$MODE" == "init" ]]; then
@@ -200,16 +156,7 @@ main() {
                     echo "$PREFLIGHT_RESULT" >&2
                     exit 1
                 }
-                echo "$PREFLIGHT_RESULT" | python3 -c "
-import sys, json
-try:
-    result = json.load(sys.stdin)
-    warnings = [k for k,v in result.items() if v.get('status') == 'warn']
-    if warnings:
-        print(f'[IMP:7][node-lifecycle][preflight] Warnings (non-fatal): {warnings}', flush=True)
-except Exception:
-    pass
-" >&2 || true
+                echo "$PREFLIGHT_RESULT" | python3 "$preflight_script" --parse-warnings 2>&1 || true
             fi
         fi
 
@@ -267,12 +214,14 @@ except Exception:
         [[ "$FORCE_MODE" == "true" ]] && rm -rf "$CHECKPOINT_DIR"
         mkdir -p "$CHECKPOINT_DIR"
         _do_update_steps() {
-            CHECKPOINT_STEP_HASH="$(_step_hash "verify-core")"      checkpoint_step "verify-core" update_step_1_verify_core
-            CHECKPOINT_STEP_HASH="$(_step_hash "provision")"        checkpoint_step "provision" update_step_2_provision
-            CHECKPOINT_STEP_HASH="$(_step_hash "deliver-overlays")" checkpoint_step "deliver-overlays" update_step_2_5_deliver_overlays
-            CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision")"    checkpoint_step "ssl-provision" update_step_3_ssl_provision
-            CHECKPOINT_STEP_HASH="$(_step_hash "deploy-modules")"   checkpoint_step "deploy-modules" update_step_4_deploy_modules
-            CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")"  checkpoint_step "healthcheck-all" update_step_6_healthcheck
+            CHECKPOINT_STEP_HASH="$(_step_hash "verify-core")"           checkpoint_step "verify-core" update_step_1_verify_core
+            CHECKPOINT_STEP_HASH="$(_step_hash "provision")"             checkpoint_step "provision" update_step_2_provision
+            CHECKPOINT_STEP_HASH="$(_step_hash "deliver-overlays")"      checkpoint_step "deliver-overlays" update_step_2_5_deliver_overlays
+            CHECKPOINT_STEP_HASH="$(_step_hash "ssl-provision")"         checkpoint_step "ssl-provision" update_step_3_ssl_provision
+            CHECKPOINT_STEP_HASH="$(_step_hash "deploy-modules")"        checkpoint_step "deploy-modules" update_step_4_deploy_modules
+            # F8 fix: правильные имена для шагов 6-9
+            CHECKPOINT_STEP_HASH="$(_step_hash "provision-llm-keys")"    checkpoint_step "provision-llm-keys" update_step_6_provision_llm_keys
+            CHECKPOINT_STEP_HASH="$(_step_hash "healthcheck-all")"       checkpoint_step "healthcheck-all" update_step_7_healthcheck
             _delegate --mode update --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
                 ${CONTEXT:+--context "$CONTEXT"} \
                 ${FORCE_MODE:+--force}

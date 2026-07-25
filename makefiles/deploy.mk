@@ -105,20 +105,26 @@ hermes-push-l1:
 	-docker push "ghcr.io/${GHCR_OWNER}/hermes-agent-base:latest" 2>/dev/null || echo "[IMP:7][make][hermes-push-l1] Push skipped — permission denied or registry unavailable (DR backup)"
 	@echo "[IMP:9][make][hermes-push-l1] L1 push complete (or skipped)"
 
-## hermes-push-l2: Push L2 hermes-agent-context to ghcr.io
-##   Usage: make hermes-push-l2 [CONTEXT=<org>] [GHCR_PUSH_TOKEN=<token>]
-##   CONTEXT defaults to $(GHCR_OWNER) (source org, e.g. tronyx161).
-##   CONTEXT is normalized: hyphens/stripped → ghcr.io org name (e.g. CONTEXT=tronyx-lab → tronyxlab).
-##   Requires GHCR_PUSH_TOKEN env var (classic PAT with write:packages scope).
-##   Falls back to GHCR_PULL_TOKEN if GHCR_PUSH_TOKEN is unset (read-only — will fail on push).
+## 🧐 TRAP[DECISION] · 2026-07-25 · — · L2 НИКОГДА не пушится в базовый репозиторий (tronyx161)
+## · Context-специфичный L2 образ хранится ТОЛЬКО в org контекста, например ghcr.io/tronyxlab/.
+## · Push L2 в tronyx161 запрещён — только контекстный org (context-overlay, per-node).
+## · CI пушит L2 в tronyx161 с CONTEXT=ci — это отдельный CI-образ, не context-specific.
+## · Rejected: fallback to GHCR_OWNER (tronyx161) — риск загрязнения базового репозитория L2-образами.
+## · Reason: L2 — это контекстный overlay, его место в org контекста, не в source org.
+## · Rev: если CI начнёт билдить context-specific L2, CONTEXT станет workflow_dispatch input.
+
+## hermes-push-l2: Push L2 hermes-agent-context в ghcr.io контекста
+##   Usage: make hermes-push-l2 CONTEXT=<org> [GHCR_PUSH_TOKEN=<token>]
+##   CONTEXT обязателен — нормализуется: hyphens stripped (tronyx-lab → tronyxlab).
+##   L2 НИКОГДА не пушится в базовый репозиторий — только в org контекста.
+##   Требует GHCR_PUSH_TOKEN (classic PAT с write:packages).
 hermes-push-l2:
-	@GHCR_OWNER="$(GHCR_OWNER)"; \
-	L2_ORG="$${CONTEXT:-$$GHCR_OWNER}"; \
-	L2_ORG="$$(echo "$$L2_ORG" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"; \
-	if [[ -z "$$L2_ORG" ]]; then \
-		echo "[IMP:10][make][hermes-push-l2] ERROR: set CONTEXT=<org> or GHCR_OWNER=<org>" >&2; \
+	@L2_RAW="$(CONTEXT)"; \
+	if [[ -z "$$L2_RAW" ]]; then \
+		echo "[IMP:10][make][hermes-push-l2] ERROR: CONTEXT is required — usage: make hermes-push-l2 CONTEXT=<org>" >&2; \
 		exit 1; \
 	fi; \
+	L2_ORG="$$(echo "$$L2_RAW" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"; \
 	echo "[IMP:7][make][hermes-push-l2] Pushing L2 hermes-agent-context to ghcr.io/$${L2_ORG}..."; \
 	if [ -n "$(GHCR_PUSH_TOKEN)" ]; then \
 		echo "$(GHCR_PUSH_TOKEN)" | docker login ghcr.io -u x-access-token --password-stdin 2>/dev/null || \

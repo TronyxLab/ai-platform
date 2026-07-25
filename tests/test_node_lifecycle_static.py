@@ -381,16 +381,18 @@ def test_remote_cmd_has_update_mode(caplog) -> None:
 
 
 # region FUNC_test_update_ssl_step_sources_secrets_env
-## @purpose  Verify update_step_3_ssl_provision() sources /run/platform/secrets.env
-##           before calling ssl-provision.sh. Uses SECRETS_ENV_FILE from lib/secrets.sh
-##           with fallback to /run/platform/secrets.env.
+## @purpose  Verify update_step_3_ssl_provision() sources secrets.env and delegates
+##           to state_machine.py which calls cert_orchestrator (unified entrypoint).
+##           DevPlan 052: secrets sourced locally for WEBNAMES_API_KEY, but cert
+##           orchestration (restore, issue, S3 upload) handled by cert_orchestrator.
 ## @io       Script content → grep → assert patterns present in function
 ## @complexity O(S)
-## @invariants — source secrets.env before ssl-provision; WEBNAMES_API_KEY loaded log;
-##               WARN if file missing; NOT fail (ssl-provision skips if cert exists)
+## @invariants — source secrets.env before ssl_script; cert_orchestrator reference in
+##               state_machine.py; WEBNAMES_API_KEY loaded log; WARN if file missing
 @pytest.mark.static_audit
 def test_update_ssl_step_sources_secrets_env(caplog) -> None:
-    """update_step_3_ssl_provision: sources secrets.env before ssl-provision.sh."""
+    """update_step_3_ssl_provision: sources secrets.env, delegates to cert_orchestrator
+    via state_machine.py (unified entrypoint)."""
     # 🧪 TRAP[TEST] · Regression: T3 — WEBNAMES_API_KEY not set in update mode
     # · Scenario: SSL cert renewal fails because secrets.env not sourced
     # · Last fail: Wave 1 production (WARN "WEBNAMES_API_KEY not set")
@@ -412,17 +414,35 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     )
     logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 2 PASS: SECRETS_ENV_FILE used")
 
-    # ── Check 3: Uses set -a / source / set +a for export ──
-    assert "set -a" in content and "set +a" in content, (
-        "[IMP:9][test] FAIL: must use set -a/+a around source for var export"
+    # ── Check 3: Delegates to state_machine.py which calls cert_orchestrator ──
+    # DevPlan 052: shell function delegates to state_machine.py (via SM_SCRIPT).
+    # state_machine.py _execute_update_step calls _ssl_provision_via_orchestrator()
+    # which delegates to cert_orchestrator.orchestrate_certs().
+    # The state_machine.py resides at lifecycle/state_machine.py — verify the reference.
+    assert "state_machine.py" in content or "SM_SCRIPT" in content, (
+        "[IMP:9][test] FAIL: update step must reference state_machine.py (SM_SCRIPT)"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: set -a/+a export")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: delegates to state_machine.py")
 
-    # ── Check 4: WEBNAMES_API_KEY log exists ──
+    # ── Check 4: Cert orchestration goes through cert_orchestrator ──
+    # Verify the state_machine.py has _ssl_provision_via_orchestrator which calls
+    # cert_orchestrator.orchestrate_certs() (DevPlan 052 Phase 2 unification).
+    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
+    sm_content = sm_path.read_text()
+    assert "_ssl_provision_via_orchestrator" in sm_content, (
+        "[IMP:9][test] FAIL: state_machine.py must have _ssl_provision_via_orchestrator()"
+    )
+    assert "cert_orchestrator" in sm_content, (
+        "[IMP:9][test] FAIL: _ssl_provision_via_orchestrator must reference cert_orchestrator"
+    )
+    assert "orchestrate_certs" in sm_content, "[IMP:9][test] FAIL: must call orchestrate_certs()"
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: cert_orchestrator unified entrypoint")
+
+    # ── Check 5: WEBNAMES_API_KEY log exists ──
     assert "WEBNAMES_API_KEY" in content, "[IMP:9][test] FAIL: must log WEBNAMES_API_KEY status after source"
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: WEBNAMES_API_KEY log")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: WEBNAMES_API_KEY log")
 
-    # ── Check 5: WARN log for missing secrets.env ──
+    # ── Check 6: WARN log for missing secrets.env ──
     # The log message uses bash variable: "${secrets_env} missing — cert renewal may fail if cert expires"
     # where secrets_env resolves to /run/platform/secrets.env. Check for "secrets_env.*missing" pattern.
     import re
@@ -431,9 +451,9 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     assert re.search(warn_missing_pattern, content, re.IGNORECASE), (
         "[IMP:9][test] FAIL: must have WARN log for missing secrets.env (expected pattern: secrets_env.*missing)"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: WARN for missing file")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: WARN for missing file")
 
-    # ── Check 6: Source before ssl-provision.sh call ──
+    # ── Check 7: Source before ssl_script call ──
     # Find the function body and verify order: source before ssl_script invocation
     func_start = content.find("update_step_3_ssl_provision()")
     assert func_start >= 0, "[IMP:9][test] FAIL: update_step_3_ssl_provision function not found"
@@ -442,13 +462,14 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     source_pos = func_body.find("secrets_env")
     ssl_call_pos = func_body.find('python3 "$ssl_script"')
     assert source_pos >= 0 and ssl_call_pos >= 0, (
-        "FAIL: Could not locate source and ssl_script call in function (now python3 delegation)"
+        "FAIL: Could not locate source and ssl_script call in function (now python3 delegation to state_machine)"
     )
     assert source_pos < ssl_call_pos, (
         f"[IMP:9][test] FAIL: secrets_env source ({source_pos}) must precede ssl_script call ({ssl_call_pos})"
     )
     logger.info(
-        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: source before ssl-provision.sh call (python3)"
+        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 7 PASS: source before ssl_script call "
+        "(state_machine.py → cert_orchestrator)"
     )
 
     logger.info("[IMP:9][test_update_ssl_step_sources_secrets_env] ALL CHECKS PASS")

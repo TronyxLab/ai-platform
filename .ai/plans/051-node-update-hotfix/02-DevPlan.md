@@ -106,9 +106,9 @@ _ensure_python_deps() {
         log_imp 8 "python-deps" "pip3 + pydantic already installed — skipping"
         return 0
     fi
-    
+
     log_imp 9 "python-deps" "Installing pip3 + Python dependencies..."
-    
+
     # Установка pip3 (только если отсутствует)
     if ! command -v pip3 &>/dev/null; then
         apt-get update -qq && apt-get install -y -qq python3-pip python3-venv || {
@@ -116,7 +116,7 @@ _ensure_python_deps() {
             return 0  # fail-soft: не блокируем node-update
         }
     fi
-    
+
     # Установка зависимостей из requirements.txt
     if [[ -f "${PLATFORM_ROOT}/core/requirements.txt" ]]; then
         pip3 install --no-cache-dir -r "${PLATFORM_ROOT}/core/requirements.txt" || {
@@ -124,7 +124,7 @@ _ensure_python_deps() {
             return 0  # fail-soft
         }
     fi
-    
+
     log_imp 9 "python-deps" "Python dependencies installed successfully"
 }
 ```

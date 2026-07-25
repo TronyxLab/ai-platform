@@ -843,7 +843,6 @@ def _step_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
 
     # ── 18.2 + 18.3: Cert orchestration ──
     domains = _extract_domains_for_context(node_yaml, context)
-    s3_cache_script = os.path.join(bootstrap_dir, "s3-ssl-cache.sh")
     issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
     secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
 
@@ -858,7 +857,7 @@ def _step_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
             if spec and spec.loader:
                 cert_mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(cert_mod)
-                cert_result = cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
+                cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
                 logger.info("[IMP:9][step:deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
             else:
                 logger.warning("[IMP:7][step:deploy_context] Cannot load cert_orchestrator.py")

@@ -218,7 +218,7 @@ _issue_acme_cert() {
         --home "$acme_home" \
         --key-file "${cert_dir}/privkey.pem" \
         --fullchain-file "${cert_dir}/fullchain.pem" \
-        --reloadcmd "systemctl reload nginx"
+        --reloadcmd "systemctl reload nginx && if [ -f '${SCRIPT_DIR}/s3_ssl_cache.py' ]; then python3 '${SCRIPT_DIR}/s3_ssl_cache.py' upload '${domain}'; fi"
 
     log_step "acme" "DONE" "TLS certificate installed via acme.sh: ${cert_dir}/fullchain.pem"
 }
@@ -283,7 +283,7 @@ _issue_http01_cert() {
         --home "$acme_home" \
         --key-file "${cert_dir}/privkey.pem" \
         --fullchain-file "${cert_dir}/fullchain.pem" \
-        --reloadcmd "systemctl reload nginx"
+        --reloadcmd "systemctl reload nginx && if [ -f '${SCRIPT_DIR}/s3_ssl_cache.py' ]; then python3 '${SCRIPT_DIR}/s3_ssl_cache.py' upload '${domain}'; fi"
 
     log_step "acme-http" "DONE" "TLS certificate installed via HTTP-01: ${cert_dir}/fullchain.pem"
 }
@@ -330,6 +330,23 @@ _acme_install_cron() {
     else
         log_step "acme-cron" "FAIL" "Cronjob not found after acme.sh --install-cronjob — check crontab manually"
         return 1
+    fi
+
+    # ── Install --renew-hook for S3 backup after cron renewal (DevPlan 052 §5.3) ──
+    # After each acme.sh cron renewal, upload cert to S3 via s3_ssl_cache.py.
+    # This guarantees S3 is always in sync, even if --reloadcmd was set before
+    # s3_ssl_cache.py existed (e.g., upgraded from older version).
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local renew_hook_script="${SCRIPT_DIR}/s3_ssl_cache.py"
+    if [[ -f "$renew_hook_script" ]]; then
+        # Use separate acme.sh call to set renew-hook (avoids quoting complexity
+        # of inline --renew-hook in --install-cronjob). The \$Le_Domain is escaped
+        # so acme.sh evaluates it at renewal time, not at install time.
+        "$acme_sh" --renew-hook "python3 '${renew_hook_script}' upload \"\$Le_Domain\"" \
+            --home "$acme_home" 2>&1 || log_step "acme-cron" "WARN" "renew-hook failed (non-fatal)"
+        log_step "acme-cron" "DONE" "acme.sh renew-hook installed — S3 upload on renewal"
+    else
+        log_step "acme-cron" "INFO" "s3_ssl_cache.py not found — renew-hook skipped"
     fi
 }
 # endregion ACME_INSTALL_CRON

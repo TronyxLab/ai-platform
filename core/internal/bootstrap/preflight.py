@@ -498,6 +498,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--node-yaml", help="Path to node.yaml")
     parser.add_argument("--context", default="", help="Deployment context name")
     parser.add_argument("--node-name", default="", help="Node name")
+    parser.add_argument("--parse-warnings", action="store_true", help="Read JSON from stdin, output warnings to stderr")
     return parser
 
 
@@ -512,6 +513,10 @@ def main() -> int:
     """Run pre-flight checks and output JSON to stdout. Exit 1 on FATAL."""
     parser = build_parser()
     args = parser.parse_args()
+
+    # --parse-warnings mode: read JSON from stdin, print warnings, exit
+    if hasattr(args, "parse_warnings") and args.parse_warnings:
+        return _parse_warnings_cli()
 
     logging.basicConfig(
         level=logging.INFO,
@@ -542,6 +547,28 @@ def main() -> int:
 
 
 # endregion CLI
+
+
+# region FUNC_parse_warnings_cli
+## @purpose — Parse JSON preflight result from stdin and output warnings to stderr.
+##            Used by node-lifecycle.sh to extract warnings from preflight JSON output.
+## @io — ⇥ stdin: JSON preflight result → ⎋ None (side-effect: prints warnings to stderr)
+## @complexity — O(N) where N = checks
+def _parse_warnings_cli() -> int:
+    """Read JSON from stdin, output warnings to stderr. Exit 0."""
+    import json
+
+    try:
+        result = json.load(sys.stdin)
+        warnings = [k for k, v in result.items() if v.get("status") == "warn"]
+        if warnings:
+            print(f"[IMP:7][preflight] Warnings (non-fatal): {warnings}", file=sys.stderr)
+    except (json.JSONDecodeError, EOFError):
+        pass
+    return 0
+
+
+# endregion FUNC_parse_warnings_cli
 
 
 if __name__ == "__main__":

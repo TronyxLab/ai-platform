@@ -185,6 +185,42 @@ stateDiagram-v2
     end note
 ```
 
+### SSL Cert Lifecycle Unification (DevPlan 052)
+
+**Мотивация:** Bug-репорт 2026-07-25: сертификаты выпускались и сайты работали, но при повторном bootstrap не восстанавливались из S3. Корневая причина: (а) `_ssl_provision()` не прокидывала S3_* креды в subprocess — s3-ssl-cache.sh upload/download молча падали; (б) cert_orchestrator пропускал platform domain (cert на диске) — upload в S3 не вызывался.
+
+**Архитектура (DevPlan 052 Phase 1-3):**
+
+| Компонент | Назначение | Взаимодействие |
+|-----------|-----------|----------------|
+| `s3_ssl_cache.py` (NEW) | Python-порт s3-ssl-cache.sh — upload/download/check/bulk-restore через boto3 | Прямой импорт в cert_orchestrator.py (без subprocess). os.environ доступ решает проблему credential propagation. |
+| `s3-ssl-cache.sh` (REDUCED) | CLI-фасад ~30 строк | Парсинг аргументов + вызов python3 s3_ssl_cache.py. Только для обратной совместимости (issue-cert.sh --reloadcmd). |
+| `cert_orchestrator.py` (MODIFIED) | Unified SSL entrypoint | Прямой импорт s3_ssl_cache, upload-on-skip (cert на диске → upload в S3), upload после успешного issue. |
+| `state_machine.py` (MODIFIED) | `_ssl_provision_via_orchestrator()` | Вызывает cert_orchestrator.orchestrate_certs() для ALL domains (platform + projects). |
+
+**Ключевые изменения:**
+
+1. **Restore-first:** `_process_single_domain()` → check disk → check S3 → issue-cert.sh. Восстановление из S3 без acme.sh API вызова.
+2. **Upload-on-skip:** При существующем сертификате на диске — upload в S3 (платформенный домен теперь всегда в кеше).
+3. **acme.sh --reloadcmd:** Добавлен вызов `python3 s3_ssl_cache.py upload $domain` после reload nginx — S3 синхронизация при каждом cron renewal.
+4. **acme.sh --renew-hook:** `_acme_install_cron()` устанавливает `--renew-hook` с вызовом s3_ssl_cache.py upload — гарантирует S3 backup после автоматического обновления.
+
+**Pipeline flow (after DevPlan 052):**
+
+```
+UPDATE mode:
+  → ssl_provision: cert_orchestrator.orchestrate_certs(ALL domains)
+      ├── disk check → upload (synced) / S3 check → download restore / issue-cert → upload
+      └── Все домены обработаны restore-first в Python-процессе
+  → deploy_context: cert_orchestrator.orchestrate_certs(ALL domains)
+      ├── disk check → upload (synced) — второй вызов idempotent
+      └── S3 синхронизирован для всех доменов
+
+CRON:
+  acme.sh --cron → renew cert → --reloadcmd (nginx reload + s3_ssl_cache upload)
+  → --renew-hook (s3_ssl_cache upload с $Le_Domain) — двойная страховка
+```
+
 ### Shell-фасады: сводка
 
 | Скрипт | До (LOC) | После (LOC) | Сокращение |
@@ -207,6 +243,8 @@ Inline `python3 -c` / `<<PYEOF` в фасадах: 0 (было 31 в топ-3). 
 - `tests/unit/test_orphan_reconciler.py`
 - `tests/unit/test_reconciler.py`
 - `tests/unit/test_state_machine.py`
+- `tests/unit/test_s3_ssl_cache.py` (NEW — DevPlan 052 Phase 3)
+- `tests/unit/test_cert_upload_on_skip.py` (NEW — DevPlan 052 Phase 3)
 
 ---
 

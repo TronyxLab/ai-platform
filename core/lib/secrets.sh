@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: secrets library decrypt-secrets ensure-secrets sops age secrets.env auto-generate litellm langfuse nextauth
 # STRUCTURE: ┌NODE_CONFIGS_DIR/secrets/*.enc.yaml┐ → step_10_decrypt_secrets → ◇ ┌age key┐ → ⊕ bash decrypt-secrets.sh → ☰ source secrets.env → ◇ ┌TOR_ENABLED?┐ → ⊕ sed proxy vars → ⎋ step_done
-#            └ step_12b_ensure_secrets → ◇ ┌secrets_file?┐ → ☰ source → ○ _ensure_secret (7 patterns) → ⎋ step_done
+#            └ step_12b_ensure_secrets → ◇ ┌manifest + secrets_env┐ → ⚡ python3 secrets_manager.py ensure → ⎋ step_done
 # ═══════════════════════════════════════════════════════════════════
 # MODULE_CONTRACT — Secrets Library
 # ═══════════════════════════════════════════════════════════════════
@@ -13,8 +13,8 @@
 ##           validate required vars → generate missing.
 ## @scope    — step_10_decrypt_secrets(): decrypt SOPS/age-encrypted secrets
 ##             file, source secrets.env into environment, handle proxy vars
-##           — step_12b_ensure_secrets(): validate that all required secrets
-##             are present, auto-generate ephemeral defaults for missing ones
+##           — step_12b_ensure_secrets(): CLI facade — delegates to
+##             secrets_manager.py ensure (DevPlan 053 Wave 2 P1)
 ##           — unset_platform_proxy(): private helper — unset host-level proxy vars
 ##             before sourcing platform secrets (prevent proxy pollution)
 ## @input    — NODE_CONFIGS_DIR (env, default: /opt/node-configs)
@@ -27,14 +27,14 @@
 ##           — step_start / step_done / step_skip / log_step — from consumer's shell
 ##             (defined in orchestrator.sh or equivalent bootstrap script)
 ## @output   — SECRETS_FILE exported to env; secrets.env sourced into shell
-##           — Missing secrets auto-generated and exported as env vars
+##           — step_12b delegates to secrets_manager.py ensure (DevPlan 053)
 ##           — LDD log lines to stderr: [IMP:5-10][bootstrap][...] ...
 ##           — On missing AGE_SECRET_KEY: exit 1 (critical)
 ## @links    — USED_BY: core/internal/bootstrap/node-lifecycle.sh
 ##           — EXTRACTED_FROM: same file, lines 340-445
 ##           — CALLS: bash CORE_DIR/internal/secrets/decrypt-secrets.sh
 ##           — CALLS: sed (proxy var cleanup from secrets.env)
-##           — CALLS: openssl rand (secret generation in step_12b)
+##           — CALLS: python3 secrets_manager.py ensure (step_12b facade, DevPlan 053)
 ## @invariants — Functions assume step_start/done/skip/log_step are defined
 ##               in the sourcing script (orchestrator.sh or node-update)
 ##             - unset_platform_proxy is a private helper (name prefixed with
@@ -43,25 +43,24 @@
 ##             - step_10_decrypt_secrets calls exit 1 if AGE_SECRET_KEY missing
 ##               and a secrets file exists (critical — bootstrap cannot continue
 ##               without decrypting real secrets)
-##             - step_12b_ensure_secrets is reusable for node-update:
-##               run after decrypt-secrets to guarantee all platform secrets
-##               are available before deploying modules. Generates ephemeral
-##               defaults for LANGFUSE_*, LITELLM_MASTER_KEY, NEXTAUTH_SECRET, SALT
+##             - step_12b_ensure_secrets is a CLI facade — delegates all
+##               business logic to secrets_manager.py ensure (DevPlan 053)
 ## @rationale Q: Why a separate library instead of staying in orchestrator.sh?
 ##            A: Pure extraction for modularity — secrets logic is self-contained
 ##            and reusable across multiple bootstrap scripts (orchestrator, node-update).
 ##            Keeping the functions identical ensures zero behavioral regressions.
-## @changes   LAST_CHANGE: 2026-07-17 · T12 — Pure extraction from orchestrator.sh
-## @modulemap — unset_platform_proxy     [W:3]  Private helper — unset host proxy vars
-##             — step_10_decrypt_secrets [W:46] Decrypt + source SOPS/age secrets
-##             — step_12b_ensure_secrets [W:52] Validate + generate missing secrets
+## @changes   LAST_CHANGE: 2026-07-25 · P1 (DevPlan 053) — Reduced step_12b_ensure_secrets
+##             to CLI facade calling secrets_manager.py ensure
+## @modulemap — unset_platform_proxy     [W:3]   Private helper — unset host proxy vars
+##             — step_10_decrypt_secrets [W:46]  Decrypt + source SOPS/age secrets
+##             — step_12b_ensure_secrets [W:~10] CLI facade → secrets_manager.py ensure
 ## @usecases  — node-lifecycle.sh sources this file for step_10 and step_12b in main()
 ##             — node-update.sh can source this file to ensure secrets before deploy
 # endregion MODULE_CONTRACT
 # GREP_SUMMARY: secrets, decrypt, sops, age, encrypt, secrets.env, ensure, validate, litellm, langfuse, nextauth, salt, auto-generate
 # STRUCTURE: ▶ ┌unset_platform_proxy → unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy┐
 #            ▶ ┌step_10_decrypt_secrets → ◇ ┌enc_file?┐ → ◇ ┌AGE_SECRET_KEY? + SOPS_AGE_KEY fallback?┐ → ⊕ bash decrypt-secrets.sh → ☰ source secrets.env → ◇ ┌TOR_ENABLED?┐ → ⊕ sed HTTP_PROXY/HTTPS_PROXY┐ → ⎋ step_done
-#            ▶ ┌step_12b_ensure_secrets → ◇ ┌secrets_file?┐ → ☰ source → ○ _ensure_secret loop (7 vars) → ∑ generated→WARN → ⎋ step_done
+#            ▶ ┌step_12b_ensure_secrets → ◇ ┌manifest + secrets_env┐ → ⚡ python3 secrets_manager.py ensure → ⎋ step_done
 
 # ═══════════════════════════════════════════════════════════════════
 # PRIVATE HELPER: Unset host-level proxy vars
@@ -250,163 +249,40 @@ _ensure_htpasswd_generated() {
 # endregion FUNC__ensure_htpasswd_generated
 
 # ═══════════════════════════════════════════════════════════════════
-# STEP 12b: Ensure required secrets (post-decrypt, pre-deploy)
+# STEP 12b: CLI facade — ensure required secrets (post-decrypt, pre-deploy)
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_step_12b_ensure_secrets
-## @purpose  Validate that all required platform secrets are present after
-##           decryption. Auto-generates ephemeral defaults for missing
-##           generated-секреты using openssl rand. Persists generated secrets
-##           to encrypted SOPS file via sops --set if the file exists.
-##           Reads generated-секреты from secrets-manifest.yaml (SSoT).
-##           Falls back to hardcoded list if manifest is unavailable.
+## @purpose  CLI facade — delegates to secrets_manager.py ensure for validating
+##           and generating required platform secrets. All business logic
+##           ported to Python per DevPlan 053 Wave 2 P1.
 ##
 ##           Reusable pattern for node-update:
 ##             source lib/secrets.sh
 ##             step_12b_ensure_secrets
-##           This ensures LITELLM_MASTER_KEY, LANGFUSE_* keys,
-##           NEXTAUTH_SECRET, and SALT are always set, even if the SOPS
-##           file hasn't been updated with production values yet.
 ##
 ## @param    (none — depends on env vars)
-## @io       in:  SECRETS_FILE (env, default: /run/platform/secrets.env)
-##            in:  PATHS_CORE_DIR (env, set via paths.sh — for manifest path)
-##            in:  NODE_CONFIGS_DIR (env, default: /opt/node-configs)
-##            in:  NODE_NAME (env — for encrypted file path)
-##            out: exports LITELLM_MASTER_KEY, LANGFUSE_INIT_ORG_ID,
-##                 LANGFUSE_INIT_PROJECT_ID, LANGFUSE_PUBLIC_KEY,
-##                 LANGFUSE_SECRET_KEY, NEXTAUTH_SECRET, SALT
+## @io       in:  PATHS_CORE_DIR (env, set via paths.sh — for manifest/secrets_manager path)
+##            in:  SECRETS_ENV_FILE (env, default: /run/platform/secrets.env)
+##            out: delegated to secrets_manager.py ensure
 ##            return: 0 (always — non-critical warnings only)
-## @complexity O(n) where n = number of generated secrets in manifest
-## @dependencies — openssl rand (for secret generation)
-##               — python3 + PyYAML (for manifest parsing)
-##               — sops (optional, for sops --set persistence)
+## @complexity O(1) — delegation only
+## @dependencies — python3 (for secrets_manager.py)
+##               — core/internal/bootstrap/lifecycle/secrets_manager.py
 ##               — step_start/step_done/log_step from consumer
-## @invariants — If secrets.env does not exist → generate ALL secrets in-memory
-##             - Nested _ensure_secret() is defined inside the function (bash local scope)
-##             - Auto-generated secrets get a WARN log — MUST be encrypted in SOPS
-##             - Secrets are exported to the shell but are EPHEMERAL (lost on shell exit)
-##             - If encrypted file exists: sops --set writes generated values back
-##             - If encrypted file missing: WARN, secret exported to env only
-##             - If sops --set fails: ERROR, bootstrap continues (secret in env)
-##             - If manifest unavailable: fallback to hardcoded list of 7 secrets
-##             - Always returns 0 — missing secrets are non-fatal (generated on the fly)
-## @rationale Manifest-driven generation replaces hardcoded list for SSoT consistency.
-##            sops --set persistence ensures generated secrets survive bootstrap restarts.
-##            The _ensure_secret closure pattern (function defined inside function)
-##            is preserved as-is from the original orchestrator.sh to avoid
-##            any behavioral regression in bash variable scoping.
+## @invariants — Delegates all secret validation/generation to secrets_manager.py
+##             - Falls back to WARN log if secrets_manager.py is missing or fails
+##             - Always returns 0 — non-critical warnings only
+## @rationale DevPlan 053 Wave 2 P1 — reduce ~100 LOC shell logic to thin CLI facade.
+##            Business logic ported to Python for testability and maintainability.
+# P1: Reduced to CLI facade — logic ported to secrets_manager.py (DevPlan 053)
 step_12b_ensure_secrets() {
     step_start "ensure-secrets" "Validating and generating required secrets"
-
-    local secrets_file="${SECRETS_FILE:-/run/platform/secrets.env}"
-    if [[ ! -f "$secrets_file" ]]; then
-        log_step "ensure-secrets" "WARN" "Secrets file not found: $secrets_file — generating all secrets in-memory"
-    else
-        # shellcheck source=/dev/null
-        source "$secrets_file" 2>/dev/null || true
-    fi
-
-    local generated=()
-    local missing=()
-
-    # ═══════════════════════════════════════════════════
-    # _ensure_secret — bash closure defined inside function
-    # ═══════════════════════════════════════════════════
-    # Preserved without changes per TASK-4 requirement.
-    _ensure_secret() {
-        local var_name="$1"
-        local pattern="$2"
-        local current="${!var_name:-}"
-        if [[ -z "$current" ]]; then
-            local new_val
-            new_val=$(eval "$pattern") || {
-                log_step "ensure-secrets" "FAIL" "Cannot generate $var_name"
-                return 1
-            }
-            export "${var_name}=${new_val}"
-            # Persist to secrets.env so generated secrets survive container restarts
-            echo "${var_name}=${new_val}" >> "$secrets_file" 2>/dev/null || \
-                log_step "ensure-secrets" "WARN" "Cannot write $var_name to $secrets_file"
-            generated+=("$var_name")
-            missing+=("$var_name")
-            log_step "ensure-secrets" "WARN" "Auto-generated $var_name (MUST be added to SOPS for production)"
-        fi
-    }
-    # ═══════════════════════════════════════════════════
-
     local manifest="${PATHS_CORE_DIR:-/opt/platform/core}/secrets-manifest.yaml"
-    local manifest_loaded=false
-
-    if [[ -f "$manifest" ]] && command -v python3 &>/dev/null; then
-        # Read generated secrets from manifest (tier=generated)
-        local _gen_spec
-        _gen_spec=$(python3 -c "
-import yaml, sys
-with open('${manifest}') as f:
-    data = yaml.safe_load(f)
-for s in data.get('secrets', []):
-    if s.get('tier') == 'generated':
-        print(f\"{s['name']}|{s.get('gen_command', '')}\")
-" 2>/dev/null) || _gen_spec=""
-
-        if [[ -n "$_gen_spec" ]]; then
-            manifest_loaded=true
-            log_step "ensure-secrets" "INFO" "Reading generated secrets from manifest: ${manifest}"
-            while IFS='|' read -r _var _cmd; do
-                [[ -z "$_var" || -z "$_cmd" ]] && continue
-                _ensure_secret "$_var" "$_cmd"
-            done <<< "$_gen_spec"
-        else
-            log_step "ensure-secrets" "WARN" "Manifest has no generated secrets — fallback to hardcoded list"
-        fi
-    else
-        log_step "ensure-secrets" "INFO" "Manifest not found at ${manifest} — fallback to hardcoded list"
-    fi
-
-    # ── Fallback: hardcoded list if manifest not available ──
-    if ! $manifest_loaded; then
-        _ensure_secret "LITELLM_MASTER_KEY" 'echo "sk-$(openssl rand -hex 32)"'
-        _ensure_secret "LANGFUSE_INIT_ORG_ID" 'echo "org_$(openssl rand -hex 4)"'
-        _ensure_secret "LANGFUSE_INIT_PROJECT_ID" 'echo "proj_$(openssl rand -hex 4)"'
-        _ensure_secret "LANGFUSE_PUBLIC_KEY" 'echo "pk-lf_$(openssl rand -hex 16)"'
-        _ensure_secret "LANGFUSE_SECRET_KEY" 'echo "sk-lf_$(openssl rand -hex 16)"'
-        _ensure_secret "NEXTAUTH_SECRET" 'openssl rand -hex 32'
-        _ensure_secret "SALT" 'openssl rand -hex 16'
-    fi
-
-    # ── sops --set persistence for all generated secrets ──
-    if [[ ${#generated[@]} -gt 0 ]]; then
-        local configs_dir="${NODE_CONFIGS_DIR:-/opt/node-configs}"
-        local enc_file="${configs_dir}/secrets/${NODE_NAME}.enc.yaml"
-
-        if [[ -f "$enc_file" ]] && command -v sops &>/dev/null; then
-            for _gvar in "${generated[@]}"; do
-                local _gval="${!_gvar:-}"
-                if [[ -n "$_gval" ]]; then
-                    sops --set '["'"$_gvar"'"] "'"$_gval"'"' "$enc_file" 2>/dev/null || {
-                        log_step "ensure-secrets" "ERROR" "sops --set failed for $_gvar — value in env but NOT persisted"
-                    }
-                fi
-            done
-        elif [[ ! -f "$enc_file" ]]; then
-            log_step "ensure-secrets" "WARN" "Encrypted file not found at ${enc_file} — generated secrets NOT persisted"
-        fi
-    fi
-
-    if [[ ${#generated[@]} -gt 0 ]]; then
-        log_step "ensure-secrets" "WARN" "Generated ${#generated[@]} secrets: ${generated[*]}"
-        log_step "ensure-secrets" "WARN" "These are EPHEMERAL — re-encrypt SOPS with real values for production"
-    fi
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        log_step "ensure-secrets" "INFO" "Missing secrets (auto-generated): ${missing[*]}"
-    else
-        log_step "ensure-secrets" "INFO" "All required secrets present"
-    fi
-
-    # ── Generate platform htpasswd from master credentials ──
-    _ensure_htpasswd_generated || log_step "ensure-secrets" "WARN" "htpasswd generation failed — status-page auth will be unavailable"
-
+    local secrets_env="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
+    python3 "${PATHS_CORE_DIR:-/opt/platform/core}/internal/bootstrap/lifecycle/secrets_manager.py" \
+        ensure --manifest "$manifest" --secrets-env "$secrets_env" 2>&1 || {
+        log_step "ensure-secrets" "WARN" "secrets_manager.py failed"
+    }
     step_done "ensure-secrets" "Secrets validation complete"
 }
 # endregion FUNC_step_12b_ensure_secrets

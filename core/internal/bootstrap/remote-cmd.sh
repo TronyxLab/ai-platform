@@ -105,6 +105,19 @@ build_ssh_cmd() {
         cmd+=" && export PLATFORM_CI_DEPLOY_KEY=${quoted_ci_key}"
     fi
 
+    # Export PLATFORM_DOMAIN on remote (F4 — nginx needs it for vhost paths)
+    if [[ -n "${PLATFORM_DOMAIN:-}" ]]; then
+        local quoted_domain
+        quoted_domain="$(printf '%q' "${PLATFORM_DOMAIN}")"
+        cmd+=" && export PLATFORM_DOMAIN=${quoted_domain}"
+    fi
+    # Export CONTEXT on remote (F4 — deploy_context needs it for project filtering)
+    if [[ -n "${CONTEXT:-}" ]]; then
+        local quoted_context
+        quoted_context="$(printf '%q' "${CONTEXT}")"
+        cmd+=" && export CONTEXT=${quoted_context}"
+    fi
+
     cmd+=" && bash $(printf '%q' "${remote_orchestrator}")"
     cmd+=" $(printf '%q' '--mode') $(printf '%q' 'init')"
     cmd+=" $(printf '%q' '--node-name') $(printf '%q' "${node_name}")"
@@ -172,6 +185,19 @@ build_update_ssh_cmd() {
         local quoted_age_key
         quoted_age_key="$(printf '%q' "${age_key}")"
         cmd+=" && export AGE_SECRET_KEY=${quoted_age_key}"
+    fi
+
+    # Export PLATFORM_DOMAIN on remote (F4 — nginx needs it for vhost paths)
+    if [[ -n "${PLATFORM_DOMAIN:-}" ]]; then
+        local quoted_domain
+        quoted_domain="$(printf '%q' "${PLATFORM_DOMAIN}")"
+        cmd+=" && export PLATFORM_DOMAIN=${quoted_domain}"
+    fi
+    # Export CONTEXT on remote (F4 — deploy_context needs it for project filtering)
+    if [[ -n "${CONTEXT:-}" ]]; then
+        local quoted_context
+        quoted_context="$(printf '%q' "${CONTEXT}")"
+        cmd+=" && export CONTEXT=${quoted_context}"
     fi
 
     cmd+=" && bash $(printf '%q' "${remote_orchestrator}")"

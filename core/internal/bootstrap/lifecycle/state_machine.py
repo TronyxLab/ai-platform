@@ -12,7 +12,9 @@
 ##           Shell-фасад (node-lifecycle.sh) handles orchestration (flock, env exports, lib sourcing).
 ## @invariants
 ##   1. State file is at /var/lib/platform/.bootstrap/state.json (configurable via --state-file)
-##   2. All subprocess.run calls use capture_output=True, text=True, timeout=120
+##   2. All subprocess.run calls use capture_output=True, text=True, timeout=120;
+##      exception: node_update=600s (self-invocation wraps entire update pipeline:
+##      deploy 14 modules ~300s + provision + ssl + healthcheck + converge)
 ##   3. Non-fatal failures log WARN and continue — errors list collected for final audit
 ##   4. Content hash uses hashlib.sha256 of step script paths (always includes node-lifecycle.sh)
 ##   5. --dry-run prints plan and exits 0 BEFORE any mutations
@@ -46,11 +48,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Optional: import steps module for step implementations
+# Import steps module for step implementations
+# PYTHONPATH must include lifecycle/ directory (set by node-lifecycle.sh).
+# Handle standalone execution (e.g., tests) by falling back to direct import.
 try:
-    from . import steps as _steps
+    from . import steps as _steps  # type: ignore[import]
 except ImportError:
-    _steps = None
+    import steps as _steps  # type: ignore[import]  # standalone fallback
 
 logger = logging.getLogger(__name__)
 
@@ -1082,13 +1086,12 @@ def _execute_init_step(
         _decrypt_secrets(core_dir)
 
     elif step_name == "ensure_secrets":
-        _ensure_secrets_exist()
+        # F2: Now generates missing autogen secrets via secrets_manager
+        _ensure_secrets_exist(core_dir)
 
     elif step_name == "secrets_init":
-        if _steps and hasattr(_steps, "_step_secrets_init"):
-            _steps._step_secrets_init(core_dir)
-        else:
-            _step_secrets_init_inline(core_dir)
+        # F3: Sources secrets.env first for PLATFORM_MASTER_PASSWORD
+        _step_secrets_init(core_dir)
 
     elif step_name == "read_node_yaml":
         _validate_node_yaml(node_yaml, core_dir)
@@ -1102,16 +1105,15 @@ def _execute_init_step(
         _validate_sudoers()
 
     elif step_name == "install_acme":
-        if _steps and hasattr(_steps, "_step_install_acme"):
-            _steps._step_install_acme(core_dir)
-        else:
-            _step_install_acme_inline(core_dir)
+        _steps._step_install_acme(core_dir)
 
     elif step_name == "node_update":
         # Delegate to update mode (self-invocation)
+        # F1: timeout=600s because node_update wraps entire update pipeline:
+        # deploy 14 modules ~300s + provision + ssl + healthcheck + converge
         lifecycle_script = os.path.join(core_dir, "internal", "bootstrap", "node-lifecycle.sh")
         if os.path.exists(lifecycle_script):
-            _subprocess_run(["bash", lifecycle_script, "--mode", "update"], "node_update", non_fatal=True)
+            _subprocess_run(["bash", lifecycle_script, "--mode", "update"], "node_update", non_fatal=True, timeout=600)
         else:
             logger.warning("[IMP:7][init][node_update] node-lifecycle.sh not found — skipping post-init update")
 
@@ -1134,10 +1136,7 @@ def _execute_init_step(
     elif step_name == "deploy_context":
         # DevPlan 047: deploy_context step (init index 23, update index 8)
         # Delegates to steps._step_deploy_context for cert orchestration + project deploy + verify
-        if _steps and hasattr(_steps, "_step_deploy_context"):
-            _steps._step_deploy_context(core_dir, node_name, node_yaml)
-        else:
-            _step_deploy_context_inline(core_dir, node_name, node_yaml)
+        _steps._step_deploy_context(core_dir, node_name, node_yaml)
 
 
 # endregion EXECUTE_INIT_STEP
@@ -1187,7 +1186,7 @@ def _execute_update_step(
             logger.info("[IMP:7][update][deliver_overlays] No overlay directory at %s — skipping", overlay_dir)
 
     elif step_name == "ssl_provision":
-        _ssl_provision(core_dir, node_yaml)
+        _ssl_provision_via_orchestrator(core_dir, node_yaml)
 
     elif step_name == "deploy_modules":
         deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
@@ -1237,10 +1236,7 @@ def _execute_update_step(
 
     elif step_name == "deploy_context":
         # DevPlan 047: incremental project deploy + cert check (update step 8)
-        if _steps and hasattr(_steps, "_step_deploy_context"):
-            _steps._step_deploy_context(core_dir, node_name, node_yaml)
-        else:
-            _step_deploy_context_inline(core_dir, node_name, node_yaml)
+        _steps._step_deploy_context(core_dir, node_name, node_yaml)
 
 
 # endregion EXECUTE_UPDATE_STEP
@@ -1273,7 +1269,10 @@ def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
         "converge": [os.path.join(core_dir, "internal", "bootstrap", "converge.sh")],
         "provision": [os.path.join(core_dir, "internal", "provision-environment.sh")],
         "deliver_overlays": [os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")],
-        "ssl_provision": [os.path.join(core_dir, "internal", "bootstrap", "issue-cert.sh")],
+        "ssl_provision": [
+            os.path.join(core_dir, "internal", "bootstrap", "cert_orchestrator.py"),
+            os.path.join(core_dir, "internal", "bootstrap", "s3_ssl_cache.py"),
+        ],
         "deploy_modules": [os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")],
         "provision_llm_keys": [
             os.path.join(core_dir, "internal", "llm", "config_renderer.py"),
@@ -1584,18 +1583,43 @@ def _decrypt_secrets(core_dir: str) -> None:
         )
 
 
-def _ensure_secrets_exist() -> None:
-    """Ensure secrets.env exists from decrypted files.
+def _ensure_secrets_exist(core_dir: str) -> None:
+    """Ensure secrets.env exists AND all autogen secrets are generated.
 
-    ## @purpose — Verify that secrets.env is present after decryption.
-    ## @io — ⇥ None → ⎋ None (raises RuntimeError if missing)
-    ## @complexity — O(1)
+    ## @purpose — F2 fix: Read secrets.env, source into os.environ,
+    ##            then generate missing autogen secrets via secrets_manager.
+    ## @io — ⇥ core_dir: str → ⎋ None (raises RuntimeError if secrets.env missing)
+    ## @complexity — O(N) where N = secrets in manifest
     """
     secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+
+    # Step 1: Check file exists (after decrypt)
     if not os.path.isfile(secrets_env):
-        logger.warning("[IMP:7][ensure_secrets] %s not found — secrets may not be available", secrets_env)
-    else:
-        logger.info("[IMP:9][ensure_secrets] Secrets env present: %s", secrets_env)
+        logger.error("[IMP:9][ensure_secrets] %s not found after decrypt — cannot generate secrets", secrets_env)
+        raise RuntimeError(f"secrets.env not found: {secrets_env}")
+
+    # Step 2: Source secrets.env into os.environ
+    try:
+        from .secrets_manager import source_secrets_env  # type: ignore[import]
+
+        env_vars = source_secrets_env(secrets_env)
+        for k, v in env_vars.items():
+            if k not in os.environ:
+                os.environ[k] = v
+        logger.info("[IMP:9][ensure_secrets] Sourced %d vars from %s", len(env_vars), secrets_env)
+    except Exception as e:
+        logger.warning("[IMP:7][ensure_secrets] Failed to source secrets.env: %s", e)
+
+    # Step 3: Generate missing autogen secrets
+    manifest_path = os.path.join(core_dir, "secrets-manifest.yaml")
+    try:
+        from .secrets_manager import ensure_secrets as do_ensure  # type: ignore[import]
+
+        generated = do_ensure(manifest_path, secrets_env)
+        if generated:
+            logger.info("[IMP:9][ensure_secrets] Generated %d secrets: %s", len(generated), generated)
+    except Exception as e:
+        logger.warning("[IMP:7][ensure_secrets] Autogen failed: %s", e)
 
 
 def _validate_node_yaml(node_yaml: str, core_dir: str) -> None:
@@ -1713,27 +1737,32 @@ def _validate_sudoers() -> None:
     logger.info("[IMP:9][sudoers] All sudoers files validated: owner=root:root, mode≤0440")
 
 
-def _step_install_acme_inline(core_dir: str) -> None:
-    """Install acme.sh for SSL provisioning (init only, inline fallback).
+def _step_secrets_init(core_dir: str) -> None:
+    """Initialize service passwords. Sources secrets.env first for PLATFORM_MASTER_PASSWORD.
 
-    ## @purpose — Install acme.sh and DNS API extensions for SSL certificate issuance.
+    ## @purpose — F3 fix: Source secrets.env into os.environ BEFORE calling secrets-init.sh
+    ##            because secrets-init.sh requires PLATFORM_MASTER_PASSWORD in environment.
     ## @io — ⇥ core_dir → ⎋ None (non-fatal)
     ## @complexity — O(1)
+    ## @invariants
+    ##   - Sources secrets.env first (defence-in-depth, secrets already sourced in ensure_secrets)
+    ##   - Non-fatal: if source fails, still attempts secrets-init.sh
     """
-    install_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
-    if os.path.isfile(install_script):
-        _subprocess_run(["bash", install_script], "install_acme", non_fatal=True)
-    else:
-        logger.warning("[IMP:7][install_acme] %s not found — skipping acme.sh installation", install_script)
+    # Source secrets.env into os.environ BEFORE calling secrets-init.sh
+    # Bug F3: secrets-init.sh requires PLATFORM_MASTER_PASSWORD in env
+    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+    if os.path.isfile(secrets_env):
+        try:
+            from .secrets_manager import source_secrets_env  # type: ignore[import]
 
+            env_vars = source_secrets_env(secrets_env)
+            for k, v in env_vars.items():
+                if k not in os.environ:
+                    os.environ[k] = v
+            logger.info("[IMP:9][secrets_init] Sourced %d vars for secrets-init.sh", len(env_vars))
+        except Exception as e:
+            logger.warning("[IMP:7][secrets_init] Failed to source secrets.env: %s", e)
 
-def _step_secrets_init_inline(core_dir: str) -> None:
-    """Initialize service passwords from PLATFORM_MASTER_PASSWORD (init only, inline fallback).
-
-    ## @purpose — Initialize service passwords (HERMES_DASHBOARD_PASSWORD, etc.).
-    ## @io — ⇥ core_dir → ⎋ None (non-fatal)
-    ## @complexity — O(1)
-    """
     init_script = os.path.join(core_dir, "internal", "bootstrap", "secrets-init.sh")
     if os.path.isfile(init_script):
         _subprocess_run(["bash", init_script], "secrets_init", non_fatal=True)
@@ -1741,74 +1770,54 @@ def _step_secrets_init_inline(core_dir: str) -> None:
         logger.warning("[IMP:7][secrets_init] %s not found — skipping secrets initialization", init_script)
 
 
-def _ssl_provision(core_dir: str, node_yaml: str) -> None:
-    """Provision SSL/TLS certificates via acme.sh DNS-01.
+def _ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> None:
+    """Provision SSL certs via cert_orchestrator (unified entrypoint).
 
-    ## @purpose — SSL certificate issuance for the platform domain.
-    ## @io — ⇥ core_dir, node_yaml → ⎋ None (non-fatal if domain not configured)
-    ## @complexity — O(1) + subprocess
+    Replaces the old _ssl_provision() which had broken S3 credential propagation
+    and only handled platform domain. Now delegates to cert_orchestrator for
+    ALL domains (platform + projects). Uses direct s3_ssl_cache import (no subshell).
+
+    ## @purpose — Unified cert orchestration via cert_orchestrator.orchestrate_certs().
+    ##            Extracts ALL domains from node.yaml (platform + all projects),
+    ##            calls cert_orchestrator with direct s3_ssl_cache import.
+    ## @io — ⇥ core_dir: str, node_yaml: str → ⎋ None
+    ## @complexity — O(D * T) where D = domains, T = timeout per operation
+    ## @rationale DevPlan 052 §4.1: Replace _ssl_provision() with cert_orchestrator
+    ##           to fix subshell credential loss and handle all domains (not just platform).
+    ## @invariants
+    ##   - _source_secrets_env() is called inside cert_orchestrator for WEBNAMES_API_KEY
+    ##   - S3 credentials are read directly by s3_ssl_cache from os.environ — no subshell
+    ##   - context="" means ALL domains (no filtering)
+    ##   - Dynamic import allows cert_orchestrator to be updated independently
     """
-    ssl_script = os.path.join(core_dir, "internal", "bootstrap", "issue-cert.sh")
-    if not os.path.isfile(ssl_script):
-        logger.warning("[IMP:7][ssl] issue-cert.sh not found at %s — skipping SSL provisioning", ssl_script)
+    bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
+
+    # Extract ALL domains (platform + all projects, no context filter)
+    context = ""  # empty = no filtering, all domains
+    domains = _extract_domains(node_yaml, context)
+
+    if not domains:
+        logger.warning("[IMP:7][ssl_provision] No domains found in node.yaml — skipping")
         return
 
-    platform_domain = os.environ.get("PLATFORM_DOMAIN", "")
-    # Fallback: extract domain from node.yaml (SSH env doesn't carry PLATFORM_DOMAIN)
-    if not platform_domain and node_yaml and os.path.isfile(node_yaml):
-        try:
-            import yaml
-
-            with open(node_yaml) as f:
-                node_data = yaml.safe_load(f)
-            if isinstance(node_data, dict):
-                platform_domain = node_data.get("domain", "") or ""
-                if platform_domain:
-                    logger.info("[IMP:7][ssl] PLATFORM_DOMAIN resolved from node.yaml: %s", platform_domain)
-        except Exception:
-            pass
-    if not platform_domain:
-        logger.warning("[IMP:7][ssl] PLATFORM_DOMAIN not set — skipping SSL provisioning")
-        return
-
-    # Source secrets.env for WEBNAMES_API_KEY
+    issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
     secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-    if os.path.isfile(secrets_env):
-        # Source it for env vars
-        _subprocess_run(
-            [
-                "bash",
-                "-c",
-                f"set -a; source '{secrets_env}'; set +a; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy; echo WEBNAMES_API_KEY=${{WEBNAMES_API_KEY:-unset}}",
-            ],
-            "source_secrets_env",
-            non_fatal=True,
-        )
 
-    # Check S3 cache
-    s3_cache = os.path.join(core_dir, "internal", "bootstrap", "s3-ssl-cache.sh")
-    if os.path.isfile(s3_cache):
-        check_result = _subprocess_run(
-            ["bash", s3_cache, "check", platform_domain],
-            "s3_cache_check",
-            non_fatal=True,
-            check_required=False,
-        )
-        if check_result and check_result.returncode == 0:
-            # Restore from S3 cache
-            _subprocess_run(
-                ["bash", s3_cache, "download", platform_domain],
-                "s3_cache_download",
-                non_fatal=True,
-                check_required=False,
-            )
-            cert_path = f"/etc/letsencrypt/live/{platform_domain}/fullchain.pem"
-            if os.path.isfile(cert_path):
-                logger.info("[IMP:9][ssl] SSL certificate restored from S3 cache for %s", platform_domain)
-                return
+    # Dynamic import of cert_orchestrator
+    import importlib.util
 
-    # Issue via acme.sh
-    _subprocess_run(["bash", ssl_script], "ssl_issue", non_fatal=True)
+    spec = importlib.util.spec_from_file_location(
+        "cert_orchestrator",
+        os.path.join(bootstrap_dir, "cert_orchestrator.py"),
+    )
+    if spec and spec.loader:
+        cert_mod = importlib.util.module_from_spec(spec)
+        sys.modules["cert_orchestrator"] = cert_mod
+        spec.loader.exec_module(cert_mod)
+        cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
+        logger.info("[IMP:9][ssl_provision] Cert orchestration complete: %s", cert_result.to_dict())
+    else:
+        logger.warning("[IMP:7][ssl_provision] Cannot load cert_orchestrator.py")
 
 
 def _run_healthchecks(node_yaml: str) -> None:
@@ -1983,123 +1992,6 @@ def _send_telegram(sm: StateMachine) -> None:
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
     except Exception as e:
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
-
-
-# region FUNC_step_deploy_context_inline
-## @purpose — Inline fallback for deploy_context step when steps.py is unavailable.
-##            Orchestrates cert restore + project deploy + vhost render + verify.
-##            DevPlan 047 Phase 5.
-## @io — ⇥ core_dir: str, node_name: str, node_yaml: str → ⎋ None (non-fatal)
-## @complexity — O(D * P) where D = domains, P = projects
-## @invariants
-##   - Extracts CONTEXT from env or node.yaml
-##   - Calls cert_orchestrator.orchestrate_certs for all domains
-##   - Calls context_deployer.deploy_context_projects for context projects
-##   - Renders vhosts via add-vhost.sh
-##   - Runs verify-domains.sh (non-fatal)
-def _step_deploy_context_inline(core_dir: str, node_name: str, node_yaml: str) -> None:
-    """Deploy context: certs + projects + vhosts + verify (inline fallback)."""
-    bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
-
-    # Extract context
-    context = os.environ.get("CONTEXT", "")
-    if not context and node_yaml and os.path.isfile(node_yaml):
-        context = _extract_context_from_node_yaml(node_yaml)
-    if not context:
-        logger.error(
-            "[IMP:10][deploy_context] CONTEXT not set and cannot be extracted from node.yaml — skipping deploy_context"
-        )
-        return
-
-    logger.info("[IMP:9][deploy_context] Starting deploy_context (context=%s, node=%s)", context, node_name)
-
-    # ── 18.2 + 18.3: Cert orchestration ──
-    domains = _extract_domains(node_yaml, context)
-    s3_cache_script = os.path.join(bootstrap_dir, "s3-ssl-cache.sh")
-    issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
-    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-
-    # T0.3 (048.P3): Ensure PLATFORM_DOMAIN is set from node.yaml if not in env
-    platform_domain = os.environ.get("PLATFORM_DOMAIN", "").strip()
-    if not platform_domain and node_yaml and os.path.isfile(node_yaml):
-        try:
-            import yaml
-
-            with open(node_yaml) as f:
-                node_data = yaml.safe_load(f)
-            if isinstance(node_data, dict):
-                domain_val = node_data.get("domain", "") or ""
-                if domain_val:
-                    os.environ["PLATFORM_DOMAIN"] = domain_val
-                    logger.info("[IMP:7][deploy_context] PLATFORM_DOMAIN set from node.yaml: %s", domain_val)
-        except Exception:
-            pass
-
-    if domains:
-        try:
-            # Import cert_orchestrator from bootstrap package
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "cert_orchestrator",
-                os.path.join(bootstrap_dir, "cert_orchestrator.py"),
-            )
-            if spec and spec.loader:
-                cert_mod = importlib.util.module_from_spec(spec)
-                sys.modules["cert_orchestrator"] = (
-                    cert_mod  # P0: register before exec_module (@dataclass requires sys.modules)
-                )
-                spec.loader.exec_module(cert_mod)
-                cert_result = cert_mod.orchestrate_certs(domains, s3_cache_script, issue_cert_script, secrets_env)
-                logger.info("[IMP:9][deploy_context] Cert orchestration complete: %s", cert_result.to_dict())
-            else:
-                logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py — skipping cert orchestration")
-        except Exception as e:
-            logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s", e)
-    else:
-        logger.info("[IMP:7][deploy_context] No domains to orchestrate certs for")
-
-    # ── 18.4: Deploy context projects ──
-    try:
-        import importlib.util
-
-        deployer_path = os.path.join(bootstrap_dir, "deploy", "context_deployer.py")
-        spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
-        if spec and spec.loader:
-            deployer_mod = importlib.util.module_from_spec(spec)
-            sys.modules["context_deployer"] = (
-                deployer_mod  # P0: register before exec_module (@dataclass requires sys.modules)
-            )
-            spec.loader.exec_module(deployer_mod)
-            results = deployer_mod.deploy_context_projects(node_yaml, context) or []
-            logger.info("[IMP:9][deploy_context] Project deploy complete: %d projects", len(results))
-        else:
-            logger.warning("[IMP:7][deploy_context] Cannot load context_deployer.py — skipping project deploy")
-    except Exception as e:
-        logger.warning("[IMP:7][deploy_context] Project deploy failed (non-fatal): %s", e)
-
-    # ── 18.5: Render vhosts ──
-    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
-    if os.path.isfile(vhost_script):
-        node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
-        _subprocess_run(
-            ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
-            "render_vhosts",
-            non_fatal=True,
-        )
-    # Reload nginx if running
-    _subprocess_run(["docker", "exec", "nginx", "nginx", "-s", "reload"], "nginx_reload", non_fatal=True)
-
-    # ── 18.6: Final verify ──
-    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
-    if os.path.isfile(verify_script):
-        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
-        _subprocess_run(["bash", verify_script, node_name, platform_root], "final_verify", non_fatal=True)
-
-    logger.info("[IMP:9][deploy_context] deploy_context complete")
-
-
-# endregion FUNC_step_deploy_context_inline
 
 
 # region FUNC_extract_context_from_node_yaml

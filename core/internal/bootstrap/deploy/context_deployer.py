@@ -301,6 +301,68 @@ def deploy_context_projects(
 # endregion FUNC_deploy_context_projects
 
 
+# region FUNC_ensure_bootstrap_compose
+## @purpose — Generate minimal docker-compose.yml for first bootstrap (no CI delivery yet).
+##            Creates a minimal nginx:alpine reverse proxy that will be replaced
+##            by the real docker-compose.yml via CI (platform-deliver) on next deploy.
+## @io — ⇥ project_dir: str, project: ProjectInfo → ⎋ bool (True = success)
+## @complexity — O(1)
+## @invariants
+##   - Non-fatal: returns False on failure
+##   - Does NOT overwrite existing docker-compose.yml
+##   - Generated compose has label ai-platform.bootstrap=true
+##   - Will be replaced by real CI delivery on next deploy
+def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
+    """Generate minimal docker-compose.yml for first bootstrap (no CI delivery yet).
+
+    ▶ ┌project_dir + project┐ → ◇ compose file exists? → ⎋ True
+    │                                      ↓ Nonexistent
+    │                      ┌content: nginx:alpine + ai-platform.bootstrap label┐
+    │                      → ✎ docker-compose.yml → ⎋ bool
+    """
+    compose_file = os.path.join(project_dir, "docker-compose.yml")
+    if os.path.isfile(compose_file):
+        return True  # Already exists (real delivery or previous bootstrap)
+
+    if not os.path.isdir(project_dir):
+        os.makedirs(project_dir, exist_ok=True)
+
+    port = getattr(project, "port", None) or "3000"
+    domain = getattr(project, "domain", None) or project.name
+
+    compose_content = f"""# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI platform-deliver.
+version: '3.8'
+services:
+  {project.name}-proxy:
+    image: nginx:alpine
+    labels:
+      - "ai-platform.bootstrap=true"
+      - "ai-platform.project={project.name}"
+    ports:
+      - "{port}:{port}"
+    volumes:
+      - /etc/letsencrypt/live/{domain}/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
+      - /etc/letsencrypt/live/{domain}/privkey.pem:/etc/nginx/certs/privkey.pem:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{port}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+"""
+    try:
+        with open(compose_file, "w") as f:
+            f.write(compose_content)
+        logger.info("[IMP:9][context_deployer] Generated bootstrap compose for %s", project.name)
+        return True
+    except OSError as e:
+        logger.warning("[IMP:7][context_deployer] Failed to write bootstrap compose for %s: %s", project.name, e)
+        return False
+
+
+# endregion FUNC_ensure_bootstrap_compose
+
+
 # region FUNC_deploy_single_project
 ## @purpose — Deploy a single project: healthcheck skip → ghcr pull → build fallback → up → health-gate.
 ## @io — ⇥ project: ProjectInfo, projects_base: str, ghcr_fallback_build: bool → ⎋ ProjectDeployResult
@@ -330,6 +392,17 @@ def _deploy_single_project(
         )
 
     project_dir = os.path.join(projects_base, project.name)
+
+    # Bootstrap guard: if project dir has no docker-compose.yml, generate minimal one
+    if not os.path.isfile(os.path.join(project_dir, "docker-compose.yml")):
+        if not _ensure_bootstrap_compose(project_dir, project):
+            return ProjectDeployResult(
+                name=project.name,
+                status="failed",
+                channel="none",
+                health="unhealthy",
+                error="bootstrap compose generation failed",
+            )
 
     # Step 2: Try ghcr.io pull (primary channel)
     channel = "ghcr"
