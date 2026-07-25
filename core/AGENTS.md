@@ -62,7 +62,7 @@
 | `make restore` | Восстановление из бэкапа | make restore NODE=<n> | Module restore scripts |
 | `make node-update` | Обновление provisioned ноды | make node-update NODE=<name> | core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules + healthcheck |
 | `make verify` | HTTPS-верификация | make verify NODE=<node> | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
-| `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh |
+| `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh → core/internal/provisioner.py |
 | `make provision-llm` | Provision LiteLLM virtual keys | make provision-llm | core/entrypoints/provision-llm.sh → core/internal/llm/key_provisioner.py |
 | `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |
 | `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/generate-dev-certs.sh |

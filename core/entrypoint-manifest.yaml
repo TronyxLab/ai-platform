@@ -388,7 +388,7 @@ lifecycle:
 provision:
 - make_target: provision
   mechanism: shell-script
-  delegates_to: core/internal/provision-environment.sh
+  delegates_to: core/internal/provision-environment.sh → core/internal/provisioner.py
   signature: make provision [SCOPE=...]
   operation_ru: Provision окружения
   description: Idempotent environment provisioner — reads platform-env.yaml and creates
