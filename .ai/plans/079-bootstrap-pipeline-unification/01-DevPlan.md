@@ -2,8 +2,8 @@ $START_DEVPLAN
 
 $ARTIFACT_CONTRACT
 PURPOSE:               Унификация трёх дублирующих подсистем bootstrap pipeline: (1) 4 entrypoint'а для deploy context → один, (2) 3 реализации content hash → одна, (3) 2 независимые реализации docker compose orchestration → одна shared library.
-DESCRIPTION:           Закрывает DRIFT-B3, DRIFT-B4, DRIFT-B6 из Brief 077. Создаёт shared Python-модули в core/internal/shared/ для content hash и docker compose. Рефакторит context_deployer.py для включения полного deploy_context() с cert orchestration + vhost render + verify. Заменяет shell content-hash.sh на Python-реализацию.
-RATIONALE:             Каждая точка дрейфа — независимая реализация одной бизнес-логики. DRIFT-B3: 4 пути делают одно и то же с вариациями. DRIFT-B4: разные хеши на разных файлах → рассинхронизация idempotency. DRIFT-B6: context_deployer.py не имеет retry/rollback/image-check → production риск. Унификация устраняет дублирование и добавляет отсутствующие features.
+DESCRIPTION:           Закрывает DRIFT-B3, DRIFT-B4, DRIFT-B6 из Brief 077. Создаёт shared Python-модули в core/internal/shared/ для content hash и docker compose. Рефакторит context_deployer.py для включения полного deploy_context() с cert orchestration + vhost render + verify. Заменяет shell content-hash.sh на Python-реализацию. Устраняет 3 копии `_extract_context_from_node_yaml()` (context_deployer, steps, state_machine) и 3 копии `_extract_domains()` (state_machine, steps, + мигрируемая в context_deployer). Четвёртая копия в s3_ssl_cache.py:318 — DRIFT-B5, вне скоупа.
+RATIONALE:             Каждая точка дрейфа — независимая реализация одной бизнес-логики. DRIFT-B3: 4 пути делают одно и то же с вариациями. DRIFT-B4: разные хеши на разных файлах → рассинхронизация idempotency. DRIFT-B6: context_deployer.py не имеет retry/rollback/image-check → production риск. Унификация устраняет дублирование и добавляет отсутствующие features. VerificationReport 01-VerificationReport.md обнаружил 3 (не 2) копии `_extract_context_from_node_yaml` и 3 (не 2) копии `_extract_domains` — план обновлён для устранения всех копий.
 ACCEPTANCE_CRITERIA:
   - AC1: `core/internal/shared/content_hash.py` содержит `compute_content_hash(files: list[str]) -> str`
   - AC2: `core/internal/shared/docker_compose.py` содержит pull, build, up, healthcheck_poll, retry_pull, check_image_exists
@@ -28,6 +28,25 @@ IMPACTS:
   - NEW: tests/unit/test_shared_content_hash.py
   - NEW: tests/unit/test_shared_docker_compose.py
 REQUIRES:              DevPlan 070 (shared/ directory exists). Shared библиотеки создаются в core/internal/shared/.
+
+---
+
+## Prerequisites & Preconditions
+
+### P0: shared/ directory must exist (required for Wave 1)
+**Check:** `[ -d core/internal/shared/ ] && [ -f core/internal/shared/__init__.py ]`
+**Blocked tasks:** TASK-1, TASK-6 (Wave 1 — создают новые файлы в shared/)
+**Resolution path:**
+- **(A) Implement DevPlan 070 first** — создаёт `core/internal/shared/` с `__init__.py`, модульными конвенциями, test-инфраструктурой.
+- **(B) Bootstrap shared/ inline** — добавить создание `__init__.py` в TASK-1/TASK-6, убрать зависимость от DevPlan 070.
+- Рекомендация VerificationReport: вариант (B) — shared/ содержит всего 2 модуля, отдельный DevPlan 070 — over-engineering.
+**Если выбран вариант (B):** обновить REQUIRES (удалить упоминание DevPlan 070), добавить AC в TASK-1/TASK-6: «создать `__init__.py` если отсутствует».
+
+### P1: Wave 2+ не требует DevPlan 070
+Wave 1 (TASK-1 + TASK-6) — единственная волна, строго требующая существования `core/internal/shared/`. Как только shared/ создан, все остальные волны (TASK-2–TASK-11) могут выполняться независимо от наличия DevPlan 070.
+
+### P2: Все исходные файлы существуют (проверено VerificationReport)
+10/10 файлов из File Manifest верифицированы на диске. Все ссылки на строки актуальны.
 
 ---
 
@@ -241,9 +260,9 @@ A: content_hash.py в deploy/ специализирован для build-contex
 **Dependencies:** TASK-6
 **Complexity:** 2
 
-### TASK-10: Рефакторить context_deployer.py — объединить deploy_context()
+### TASK-10: Рефакторить context_deployer.py — объединить deploy_context() + устранить ВСЕ дубликаты extract-функций
 **Owner:** Coder
-**Output:** `core/internal/bootstrap/deploy/context_deployer.py` + `steps.py` (изменено ~150 LOC)
+**Output:** `context_deployer.py` + `steps.py` + `state_machine.py` (изменено ~220 LOC)
 **Acceptance Criteria:**
 - Новая публичная функция `deploy_context(core_dir: str, node_name: str, node_yaml: str, context: str = "") -> DeployResult` в context_deployer.py
 - Включает полный flow: extract context → cert orchestration → project deploy → vhost render → nginx reload → verify
@@ -253,10 +272,25 @@ A: content_hash.py в deploy/ специализирован для build-contex
 - `main()` обновлён: вызывает `deploy_context()` вместо `deploy_context_projects()`
 - `steps.py._step_deploy_context()` (строка 828-916) удалён — заменён на вызов `deploy_context()` из context_deployer.py
 - `state_machine.py` (строка 1136-1139 и 1237-1239): вместо `_steps._step_deploy_context(...)` → importlib вызов `deploy_context()` из context_deployer
-- `steps.py._extract_context_from_node_yaml()` (строка 925-950) — удалён (дубликат context_deployer.extract_context_from_node_yaml)
-- `steps.py._extract_domains_for_context()` (строка 960-990) — перенесён в context_deployer.py
+
+**Устранение 3 копий `_extract_context_from_node_yaml()` → 1 каноническая:**
+- ✅ `context_deployer.py:214` — каноническая (public), сохраняется
+- ❌ `steps.py:925-953` — удалить (дубликат)
+- ❌ `state_machine.py:2002-2030` — удалить (DEAD CODE: grep подтверждает — ни одного caller'а в state_machine.py; функция не импортируется извне)
+
+**Устранение 3 копий `_extract_domains()` → 1 каноническая:**
+- ✅ `context_deployer.py` — принять мигрированную `_extract_domains_for_context(node_yaml_path, context)` из steps.py (перенести как есть)
+- ❌ `steps.py:960-993` — удалить после миграции в context_deployer.py
+- ❌ `state_machine.py:2038-2074` — удалить; заменить вызов на L1797:
+  ```
+  # Было:  domains = _extract_domains(node_yaml, context)
+  # Стало: domains = context_deployer._extract_domains_for_context(node_yaml, context)
+  ```
+  Использовать importlib (state_machine уже использует importlib для context_deployer/cert_orchestrator). Функция `_extract_domains()` в state_machine идентична `_extract_domains_for_context()` — обе принимают `(node_yaml_path, context)`, одинаковая логика platform domain + project domains.
+- ⚠️ `s3_ssl_cache.py:318` `_extract_domains_from_yaml()` — **НЕ ТРОГАТЬ**. Это DRIFT-B5 (другая ответственность: извлечение доменов для S3 SSL cache restore). Отличается сигнатурой (принимает только `node_yaml_path`, без `context`), используется в `s3_ssl_cache.py:709`. Будет устранена отдельным планом DRIFT-B5.
+
 **Dependencies:** TASK-6, TASK-8
-**Complexity:** 5
+**Complexity:** 6 (было 5, +1 за state_machine dead-code cleanup + importlib refactoring)
 
 ### TASK-11: Gate + интеграционная верификация
 **Owner:** Coder
@@ -320,9 +354,9 @@ A: content_hash.py в deploy/ специализирован для build-contex
 | `tests/unit/test_shared_content_hash.py` | NEW | +80 |
 | `tests/unit/test_shared_docker_compose.py` | NEW | +120 |
 | `core/internal/bootstrap/content-hash.sh` | MODIFY | -87 (127→40) |
-| `core/internal/bootstrap/lifecycle/state_machine.py` | MODIFY | ~20 lines changed |
-| `core/internal/bootstrap/lifecycle/steps.py` | MODIFY | -160 (удаление _step_deploy_context + _extract_context) |
-| `core/internal/bootstrap/deploy/context_deployer.py` | MODIFY | ~250 lines changed (удаление локальных docker-функций, добавление deploy_context) |
+| `core/internal/bootstrap/lifecycle/state_machine.py` | MODIFY | ~60 lines changed (было ~20; +40 за удаление dead code L2002-2030 + замена L1797 вызова + удаление L2038-2074) |
+| `core/internal/bootstrap/lifecycle/steps.py` | MODIFY | -200 (удаление _step_deploy_context + _extract_context + _extract_domains_for_context; было -160) |
+| `core/internal/bootstrap/deploy/context_deployer.py` | MODIFY | ~290 lines changed (было ~250; +40 за добавление _extract_domains_for_context из steps.py) |
 | `core/internal/bootstrap/deploy/docker_orchestrator.py` | MODIFY | ~30 lines changed |
 | `core/internal/scaffold/add-vhost.sh` | MODIFY | ~30 lines changed |
 
@@ -374,12 +408,19 @@ make fix-gate && git add -u && make gate MODE=fast
 
 ## Next Steps
 
-### Wave 1
+### Prerequisite check (before Wave 1)
+```bash
+# Verify shared/ directory exists. If not, bootstrap it:
+[ -d core/internal/shared/ ] || mkdir -p core/internal/shared/
+[ -f core/internal/shared/__init__.py ] || touch core/internal/shared/__init__.py
+```
+
+### Wave 1 (требует shared/ — единственная волна с жёсткой зависимостью)
 ```
 coder Read .ai/plans/079-bootstrap-pipeline-unification/01-DevPlan.md, implement Wave 1: TASK-1 (shared/content_hash.py), TASK-6 (shared/docker_compose.py)
 ```
 
-### Wave 2
+### Wave 2 (может выполняться сразу после Wave 1, не требует DevPlan 070)
 ```
 coder Read .ai/plans/079-bootstrap-pipeline-unification/01-DevPlan.md, implement Wave 2: TASK-2, TASK-3, TASK-4, TASK-5, TASK-7
 ```

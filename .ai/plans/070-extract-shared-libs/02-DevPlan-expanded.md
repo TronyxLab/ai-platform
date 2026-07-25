@@ -4,7 +4,7 @@ $ARTIFACT_CONTRACT
 PURPOSE:               Eliminate 3-way copy-paste of `_extract_context_from_node_yaml()` and 3-way duplicate Python heredoc blocks for project registration. Create single-source-of-truth shared modules.
 DESCRIPTION:           Two independent extractions:
   (1) `_extract_context_from_node_yaml()` — 3 copies (state_machine.py:2002, steps.py:925, context_deployer.py:214) → 1 canonical in `core/internal/shared/node_yaml.py`
-  (2) Python heredoc blocks for project registration (add-project.sh:719, adopt-project.sh:674, remove-project.sh:212) → 1 canonical in `core/internal/shared/project_registry.py`
+  (2) Python heredoc blocks for project registration (add-project.sh:719, adopt-project.sh:674, remove-project.sh:212) → 1 canonical in `core/internal/shared/project_registry.py` with 3 public functions: `register_project()`, `deregister_project()`, `list_projects()`
 RATIONALE:             Identical logic (29 LOC × 3 = 87 LOC duplicate). Bug fix in one = NOT applied to others → perpetual drift (DRIFT-B5, Brief 077).
 ACCEPTANCE_CRITERIA:
   1. `core/internal/shared/__init__.py` exists (empty)
@@ -12,13 +12,14 @@ ACCEPTANCE_CRITERIA:
   3. state_machine.py:2002 — removed local copy, imports from shared
   4. steps.py:925 — removed local copy, imports from shared
   5. context_deployer.py:214 — removed local copy, imports from shared
-  6. `core/internal/shared/project_registry.py` exists with `register_project()` and `deregister_project()`
-  7. add-project.sh:719 heredoc → `python3 project_registry.py register`
-  8. adopt-project.sh:674 heredoc → `python3 project_registry.py register`
-  9. remove-project.sh:212 heredoc → `python3 project_registry.py deregister`
-  10. Unit tests: `tests/unit/test_node_yaml.py`, `tests/unit/test_project_registry.py`
-  11. `make gate MODE=fast` — green
-  12. `python3 -m pytest tests/unit/test_node_yaml.py tests/unit/test_project_registry.py -v` — all pass
+   6. `core/internal/shared/project_registry.py` exists with `register_project()`, `deregister_project()`, `list_projects()`
+   7. add-project.sh:719 heredoc → `python3 project_registry.py register`
+   8. adopt-project.sh:674 heredoc → `python3 project_registry.py register`
+   9. remove-project.sh:212 heredoc → `python3 project_registry.py deregister`
+   10. `list_projects()` outputs space-separated `name repo type domain` per line to stdout, exits 0
+   11. Unit tests: `tests/unit/test_node_yaml.py`, `tests/unit/test_project_registry.py`
+   12. `make gate MODE=fast` — green
+   13. `python3 -m pytest tests/unit/test_node_yaml.py tests/unit/test_project_registry.py -v` — all pass
 IMPLEMENTS:            Wave 6A — core unification P0, DRIFT-B5
 IMPACTS:
   - core/internal/shared/ (NEW: __init__.py, node_yaml.py, project_registry.py)
@@ -369,14 +370,64 @@ def deregister_project(
 # endregion FUNC_deregister_project
 
 
+# region FUNC_list_projects
+## @purpose — List all projects registered in node.yaml. Outputs one line per project to stdout,
+##            space-separated: name repo type domain. Empty fields output as "-".
+## @io — ⇥ node_yaml_path: str → ⎋ None (writes to stdout, exits via sys.exit)
+## @complexity — O(N) where N = len(projects)
+## @invariants
+##   - Outputs to stdout (designed for shell `grep` / `while read` consumers)
+##   - Empty projects list → exits 0, no stdout output
+##   - Missing projects key → exits 0, no stdout output
+##   - Errors (missing file, invalid YAML) → exits 1 with message to stderr
+## @rationale Extracted from duplicate project-existence checks in adopt-project.sh:687 and
+##            add-project.sh:725 heredocs (DRIFT-B5 elimination, Brief 077).
+def list_projects(
+    node_yaml_path: str = "",
+    log_prefix: str = "list-projects",
+) -> None:
+    """List all projects. Outputs 'name repo type domain' per line to stdout."""
+    try:
+        import yaml
+    except ImportError:
+        print(f"[IMP:10][{log_prefix}][list] PyYAML not available", file=sys.stderr)
+        sys.exit(1)
+
+    if not node_yaml_path:
+        print(f"[IMP:7][{log_prefix}][list] Missing node_yaml_path", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        with open(node_yaml_path) as f:
+            data = yaml.safe_load(f)
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        print(f"[IMP:8][{log_prefix}][list] Failed to read {node_yaml_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    projects = data.get("projects", []) if isinstance(data, dict) else []
+    for p in projects:
+        name = p.get("name", "-") or "-"
+        repo = p.get("repo", "-") or "-"
+        ptype = p.get("type", "-") or "-"
+        domain = p.get("domain", "-") or "-"
+        print(f"{name} {repo} {ptype} {domain}")
+
+    print(f"[IMP:9][{log_prefix}][list] Listed {len(projects)} project(s) from {node_yaml_path}", file=sys.stderr)
+    sys.exit(0)
+
+
+# endregion FUNC_list_projects
+
+
 # region FUNC_CLI
 ## @purpose — CLI entrypoint. Usage:
 ##   python3 project_registry.py register --name X --repo Y --type Z --node-yaml N [--domain D] [--database DB] [--log-prefix P]
 ##   python3 project_registry.py deregister --name X --node-yaml N [--log-prefix P]
+##   python3 project_registry.py list --node-yaml N [--log-prefix P]
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Project Registry — register/deregister projects in node.yaml")
+    parser = argparse.ArgumentParser(description="Project Registry — register/deregister/list projects in node.yaml")
     sub = parser.add_subparsers(dest="action", required=True)
 
     reg = sub.add_parser("register", help="Register a project")
@@ -392,6 +443,10 @@ if __name__ == "__main__":
     dereg.add_argument("--name", required=True)
     dereg.add_argument("--node-yaml", required=True)
     dereg.add_argument("--log-prefix", default="remove-project")
+
+    lst = sub.add_parser("list", help="List all projects")
+    lst.add_argument("--node-yaml", required=True)
+    lst.add_argument("--log-prefix", default="list-projects")
 
     args = parser.parse_args()
 
@@ -411,6 +466,11 @@ if __name__ == "__main__":
             node_yaml_path=getattr(args, "node_yaml", ""),
             log_prefix=args.log_prefix,
         )
+    elif args.action == "list":
+        list_projects(
+            node_yaml_path=getattr(args, "node_yaml", ""),
+            log_prefix=args.log_prefix,
+        )
 
 
 # endregion FUNC_CLI
@@ -427,6 +487,79 @@ if __name__ == "__main__":
 | `test_deregister_existing` | Remove existing project | node.yaml with 3 projects, remove middle | 2 remain, `removed=1` |
 | `test_deregister_nonexistent` | Remove non-existing | name not in list | sys.exit(0), `removed=0` |
 | `test_deregister_empty_projects` | node.yaml has no `projects` key | deregister any | sys.exit(0), no error |
+| `test_list_projects_empty` | No projects in node.yaml | node.yaml with no `projects` key | exit 0, no stdout |
+| `test_list_projects_multiple` | Multiple projects | node.yaml with 3 projects | 3 lines to stdout, `name repo type domain` format |
+| `test_list_projects_missing_file` | File not found | path to nonexistent file | exit 1, error to stderr |
+
+---
+
+## CLI Interface Specification — `core/internal/shared/project_registry.py`
+
+### Public API Contract
+
+| Function | Signature | Returns | Exit Code | Side Effects |
+|----------|-----------|---------|-----------|-------------|
+| `register_project` | `(name: str, repo: str, project_type: str = "", node_yaml_path: str = "", domain: str = "", database: str = "", log_prefix: str = "add-project") -> None` | `None` (exits) | 0 on success/skip, 1 on ImportError | Writes node.yaml |
+| `deregister_project` | `(name: str = "", node_yaml_path: str = "", log_prefix: str = "remove-project") -> None` | `None` (exits) | 0 on success/not-found, 1 on ImportError | Writes node.yaml |
+| `list_projects` | `(node_yaml_path: str = "", log_prefix: str = "list-projects") -> None` | `None` (exits) | 0 on success/empty-list, 1 on error | Writes to stdout |
+
+### Error Handling Contract
+
+| Scenario | Function(s) | Exit Code | Stderr | Stdout |
+|----------|------------|-----------|--------|--------|
+| PyYAML not installed | all | 1 | `[IMP:10]` message | — |
+| Missing required param (name, repo, or node_yaml_path) | `register` | 0 (skip) | `[IMP:7]` warning | — |
+| Missing required param (name or node_yaml_path) | `deregister` | 0 (skip) | `[IMP:7]` warning | — |
+| Missing required param (node_yaml_path) | `list` | 1 | `[IMP:7]` error | — |
+| FileNotFoundError / YAMLError | `list` | 1 | `[IMP:8]` error | — |
+| Name/repo already exists (idempotent) | `register` | 0 (skip) | `[IMP:9]` SKIP | — |
+| Name not found (idempotent) | `deregister` | 0 | `[IMP:9]` removed=0 | — |
+| No `projects` key in YAML | `deregister`, `list` | 0 | `[IMP:8]` / `[IMP:9]` | empty (list) |
+| YAML parse error (register/deregister) | `register`, `deregister` | falls through to exit(0) from missing-param guard | — | — |
+| Successful registration | `register` | 0 | `[IMP:9]` Registered | — |
+| Successful deregistration | `deregister` | 0 | `[IMP:9]` Removed | — |
+| Successful list | `list` | 0 | `[IMP:9]` count | `name repo type domain` lines |
+
+### CLI Invocation Examples
+
+```bash
+# Register a new project
+python3 core/internal/shared/project_registry.py register \
+    --name "myproject" \
+    --repo "myorg/myproject" \
+    --type "backend" \
+    --node-yaml "/path/to/node.yaml" \
+    --domain "example.com" \
+    --database "postgres" \
+    --log-prefix "add-project"
+
+# Deregister a project
+python3 core/internal/shared/project_registry.py deregister \
+    --name "myproject" \
+    --node-yaml "/path/to/node.yaml" \
+    --log-prefix "remove-project"
+
+# List all projects (shell-consumable output)
+python3 core/internal/shared/project_registry.py list \
+    --node-yaml "/path/to/node.yaml"
+# Output:
+# myproject myorg/myproject backend example.com
+# otherproject myorg/other frontend other.com
+
+# Shell usage: check if project exists
+if python3 core/internal/shared/project_registry.py list \
+    --node-yaml "$node_yaml" | grep -q "^$PROJECT_NAME "; then
+    echo "Project already registered"
+fi
+```
+
+### ## @rationale (list_projects)
+Q: Why add `list_projects()` when the heredoc blocks don't use it?
+A: Both `add-project.sh:725` and `adopt-project.sh:687` iterate over `data['projects']` to perform idempotency checks — this is the list operation inlined. Extracting it as a public function enables shell scripts to `grep` stdout for existence checks, eliminates the last remaining duplicate iteration pattern across scaffold scripts. This is forward-looking: DevPlans 079/080 will need project listing for drift detection.
+
+### ## @rationale (CLI Contract Formalization)
+Q: Why define a formal CLI contract when the Python function signatures already exist?
+A: The VerificationReport (F2) identified that the CLI interface was not explicitly specified — function signatures were embedded in code blocks but not extracted as a standalone contract. Shell wrappers depend on exit codes, stderr format, and stdout format. A formal contract prevents implementation drift between the Python module and shell consumers. This is per DevPlan Step 1.9 (CONTRACT_FORMALIZATION).
 
 ---
 
@@ -558,6 +691,18 @@ A: The original heredoc blocks use `sys.exit(0)` for skip and success. The shell
 Q: Why `sys.path.insert` instead of proper package imports?
 A: The existing test files (`test_state_machine.py`, `test_secrets_manager.py`) use this pattern. The shared module lives at `core/internal/shared/` while consumers are at `core/internal/bootstrap/lifecycle/` and `core/internal/bootstrap/deploy/`. Relative imports across these paths are fragile. The `sys.path.insert` pattern is consistent with the existing codebase.
 
+### ## @rationale (deregister vs unregister naming)
+Q: Why `deregister_project()` instead of `unregister_project()`?
+A: `deregister` was chosen in the original DevPlan. The original shell script uses `unregister_from_node_yaml`, but `deregister` is symmetric with `register` (both 8 chars, same prefix length) and is the more common term in REST/resource APIs. The shell wrappers map `deregister` subcommand → `deregister_project()` call. Both terms are unambiguous; consistency with the existing DevPlan takes precedence.
+
+### ## @rationale (list_projects)
+Q: Why add `list_projects()` when the heredoc blocks inline the iteration?
+A: Both `add-project.sh:725` and `adopt-project.sh:687` iterate over `data['projects']` inside heredocs to perform idempotency checks — this is the list operation inlined. Extracting it as a public function enables shell scripts to `grep` stdout for existence checks, eliminates the last remaining duplicate iteration pattern. Forward-looking: DevPlans 079/080 need project listing for drift detection.
+
+### ## @rationale (CLI Contract Formalization)
+Q: Why a formal CLI specification section when signatures are in code blocks?
+A: VerificationReport F2 identified the gap: function signatures were embedded in code but not extracted as a standalone contract. Shell wrappers depend on exit codes, stderr format, and stdout format. A formal contract prevents implementation drift between Python module and shell consumers — per DevPlan Step 1.9 (CONTRACT_FORMALIZATION).
+
 ---
 
 ## File Manifest
@@ -566,7 +711,7 @@ A: The existing test files (`test_state_machine.py`, `test_secrets_manager.py`) 
 |------|--------|---------------|
 | `core/internal/shared/__init__.py` | CREATE | ~10 |
 | `core/internal/shared/node_yaml.py` | CREATE | ~50 |
-| `core/internal/shared/project_registry.py` | CREATE | ~185 |
+| `core/internal/shared/project_registry.py` | CREATE | ~250 |
 | `core/internal/bootstrap/lifecycle/state_machine.py` | REMOVE 1997–2030, ADD import | -34 +7 |
 | `core/internal/bootstrap/lifecycle/steps.py` | REMOVE 921–953, ADD import | -33 +7 |
 | `core/internal/bootstrap/deploy/context_deployer.py` | REMOVE 205–244, ADD import | -40 +7 |
@@ -598,6 +743,20 @@ A: The existing test files (`test_state_machine.py`, `test_secrets_manager.py`) 
 | `tests/unit/test_project_registry.py` | `test_deregister_existing` | Remove middle of 3 projects | `project_registry.deregister_project` |
 | `tests/unit/test_project_registry.py` | `test_deregister_nonexistent` | Remove non-existing name | `project_registry.deregister_project` |
 | `tests/unit/test_project_registry.py` | `test_deregister_empty_projects` | No `projects` key in YAML | `project_registry.deregister_project` |
+| `tests/unit/test_project_registry.py` | `test_list_projects_empty` | No projects in node.yaml | `project_registry.list_projects` |
+| `tests/unit/test_project_registry.py` | `test_list_projects_multiple` | 3 projects → 3 stdout lines | `project_registry.list_projects` |
+| `tests/unit/test_project_registry.py` | `test_list_projects_missing_file` | Nonexistent file path | `project_registry.list_projects` |
+
+---
+
+## Status: **READY FOR IMPLEMENTATION**
+
+All 3 VerificationReport findings addressed:
+- **F1:** DevPlan restored from git. This is the ROOT dependency — no blockers.
+- **F2:** CLI Interface Specification added with formal contract (function signatures, return types, exit codes, error handling). `list_projects()` function added.
+- **F3:** This expanded document (02-DevPlan-expanded.md) is authoritative. 01-DevPlan.md retains the short form for quick reference.
+
+Blockers: **NONE.** Shared directory does not exist yet — this plan creates it. All 3 duplicate copies verified at exact line numbers (VerificationReport §2). 16 related tests pass (green baseline). Dependency graph: 078, 079, 080, 081 unblocked after 070 implementation.
 
 ---
 

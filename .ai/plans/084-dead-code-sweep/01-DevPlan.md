@@ -23,7 +23,7 @@ $START_DEVPLAN
 | # | File | LOC | Status | Callers |
 |---|------|-----|--------|---------|
 | 1 | `core/modules/nginx/install.sh` | 1107 | DEPRECATED (L25) | 0 direct callers in code; nginx is now docker-type module; deploy-modules.sh calls install.sh only for system modules |
-| 2 | `core/internal/bootstrap/ssl-provision.sh` | 40 | Backward-compat wrapper | Referenced in: `node-lifecycle.sh` L85-86 (WEBNAMES_API_KEY load + checkpoint_step), `scripts-audit.sh` L43 (whitelist), `test_gate_no_unregistered_entrypoint.py` L67 (whitelist exception), `test_gate_dead_code.py` L98 (known dead code) |
+| 2 | `core/internal/bootstrap/ssl-provision.sh` | 40 | 0 file-level callers (verified 2026-07-25) | WEBNAMES_API_KEY loading ALREADY migrated to `$secrets_env` (node-lifecycle.sh L84). Remaining refs: whitelist + test exceptions + comment mentions. |
 | 3 | `LITELLM_METRICS_TOKEN` | 1 line | Defined in `.env.example` L129 as empty string | 0 consumers — `core/modules/monitoring/docker-compose.base.yml` L39 references it in a comment noting migration to `LITELLM_MASTER_KEY` |
 | 4 | `.done` checkpoint files | — | Deprecated by 071 (state_machine.py state.json) | `node-lifecycle.sh` line 178 references `.done` in a backup mechanism |
 
@@ -53,13 +53,13 @@ $START_DEVPLAN
 │  └─ DECISION: DELETE ✓                                       │
 │                                                              │
 │  ssl-provision.sh (40 LOC, backward-compat wrapper)          │
-│  ├─ grep callers → node-lifecycle.sh (WEBNAMES_API_KEY)      │
-│  │   └─ ssl-provision.sh is SOURCED for WEBNAMES_API_KEY     │
-│  │      load, NOT executed. If we move key loading to        │
-│  │      install-acme.sh or issue-cert.sh → safe to delete.   │
+│  ├─ grep callers → 0 file-level callers (verified 2026-07-25)│
+│  │   └─ WEBNAMES_API_KEY loading ALREADY migrated:           │
+│  │      update_step_3_ssl_provision() sources $secrets_env   │
+│  │      directly (L84). No code sources ssl-provision.sh.    │
 │  ├─ scripts-audit.sh → whitelist entry (remove)              │
 │  ├─ test exceptions → 2 test files (remove exceptions)       │
-│  └─ DECISION: DELETE after moving WEBNAMES_API_KEY load      │
+│  └─ DECISION: DELETE — no migration needed, git rm directly  │
 │                                                              │
 │  LITELLM_METRICS_TOKEN in .env.example                       │
 │  ├─ grep consumers → 0 (monitoring compose uses MASTER_KEY)  │
@@ -90,14 +90,9 @@ $START_DEVPLAN
 │                                                             │
 │  T2: Delete ssl-provision.sh                                │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │ ▶ move WEBNAMES_API_KEY load to issue-cert.sh        │  │
-│  │ ▶ rm ssl-provision.sh                                │  │
-│  │ ▶ update node-lifecycle.sh: remove ssl-provision     │  │
-│  │   references (L85-86, L220)                          │  │
-│  │ ▶ update steps.py: remove ssl_provision step mention │  │
-│  │ ▶ remove from scripts-audit.sh whitelist             │  │
-│  │ ▶ remove from test_gate_dead_code.py known list      │  │
-│  │ ▶ remove from test_gate_no_unregistered_entrypoint   │  │
+│  │ ▶ WEBNAMES_API_KEY ALREADY loaded from $secrets_env │  │
+│  │   (node-lifecycle.sh L84) — NO migration needed     │  │
+│  │ ▶ git rm core/internal/bootstrap/ssl-provision.sh    │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                             │
 │  T3: Remove LITELLM_METRICS_TOKEN                           │
@@ -124,12 +119,17 @@ $START_DEVPLAN
 
 ### 2.3 ssl-provision.sh Dependency Analysis
 
-`ssl-provision.sh` IS referenced by `node-lifecycle.sh` in two places:
+`ssl-provision.sh` has **zero file-level callers** (verified 2026-07-25):
 
-1. **Line 85-86:** `source` for WEBNAMES_API_KEY loading from secrets.env
-2. **Line 220:** `checkpoint_step "ssl-provision"` — state machine checkpoint name
+- `grep -r "ssl-provision\.sh" core/internal/bootstrap/node-lifecycle.sh` → **0 hits**
+- `update_step_3_ssl_provision()` sources `$secrets_env` directly (L84), NOT `ssl-provision.sh`
+- WEBNAMES_API_KEY loading migration was completed in a prior wave — no action needed
 
-Neither requires `ssl-provision.sh` to exist as a file. The checkpoint name is just a string. The WEBNAMES_API_KEY loading logic (load from `${secrets_env}` file) can be moved to `issue-cert.sh` or done inline in `node-lifecycle.sh`.
+Remaining references are all non-execution artifacts:
+- `scripts-audit.sh` L43 — whitelist entry (remove)
+- `test_gate_dead_code.py` L98 — known dead code exception (remove)
+- `test_gate_no_unregistered_entrypoint.py` L67 — exception entry (remove)
+- Comment references in `issue-cert.sh`, `install-acme.sh`, `steps.py`, `test_node_lifecycle_static.py`, `nginx/install.sh` — update/remove as T3 cleanup
 
 The actual `ssl-provision.sh` content (40 lines) is a thin wrapper that:
 - Sources `install-acme.sh` and calls `install_acme()` (for init mode)
@@ -151,9 +151,9 @@ Phase 1: Verify callers
     │   → template-manifest.yaml references install.sh as consumer of templates → clean up
     └── T1-C: git rm core/modules/nginx/install.sh
 
-Phase 2: Migrate WEBNAMES_API_KEY loading
-    ├── Copy key-load logic from ssl-provision.sh to issue-cert.sh (or node-lifecycle.sh inline)
-    ├── Verify: grep "WEBNAMES_API_KEY" core/internal/bootstrap/issue-cert.sh → present and functional
+Phase 2: Delete ssl-provision.sh (NO migration needed)
+    ├── WEBNAMES_API_KEY ALREADY loaded from $secrets_env (node-lifecycle.sh L84)
+    ├── Verify: grep -r "ssl-provision\.sh" core/internal/bootstrap/node-lifecycle.sh → 0
     └── git rm core/internal/bootstrap/ssl-provision.sh
 
 Phase 3: Update references
@@ -182,24 +182,27 @@ Phase 6: Run full gate
 | ID | Task | Files | Complexity | Deps | Acceptance |
 |----|------|-------|------------|------|------------|
 | **T1** | Delete `nginx/install.sh` + clean up template-manifest.yaml reference | 2 | 2 | 080-cert-unification | `git status` shows deleted; `grep -r "nginx/install" core/` returns 0 hits |
-| **T2** | Move WEBNAMES_API_KEY loading from ssl-provision.sh → issue-cert.sh; delete ssl-provision.sh | 1+D | 3 | T1 | `grep -r "ssl-provision.sh" core/internal/bootstrap/node-lifecycle.sh` returns 0 hits; ssl-provision.sh deleted |
-| **T3** | Update all ssl-provision.sh references: node-lifecycle.sh, steps.py, scripts-audit.sh, test files | 5 | 3 | T2 | All references updated; `grep -r "ssl-provision.sh" --include="*.sh" --include="*.py" --include="*.yaml" .` returns 0 (except .ai/ plans) |
+| **T2** | Delete `ssl-provision.sh` (NO migration needed — WEBNAMES_API_KEY already loaded from `$secrets_env` at node-lifecycle.sh L84) | 1 | 1 | 080-cert-unification | `git status` shows deleted; `grep -r "ssl-provision.sh" core/internal/bootstrap/node-lifecycle.sh` returns 0 hits |
+| **T3** | Update all ssl-provision.sh references: steps.py, scripts-audit.sh, test files, comment references in issue-cert.sh + install-acme.sh | 6 | 3 | T2 | All references updated; `grep -r "ssl-provision.sh" --include="*.sh" --include="*.py" --include="*.yaml" .` returns 0 (except .ai/ plans) |
 | **T4** | Remove `LITELLM_METRICS_TOKEN=` from `.env.example` | 1 | 1 | None | `grep LITELLM_METRICS_TOKEN .env.example` returns 0 |
 | **T5** | Create `core/entrypoints/check-dead-code.sh` — CI gate that detects DEPRECATED markers > 30 days | 1 | 3 | None | `make check-dead-code` exits 0 on clean state, 1 on stale DEPRECATED |
 | **T6** | Add `make check-dead-code` to Makefile + CI gate workflow | 2 | 2 | T5 | `make check-dead-code` is a valid target; gate includes it |
-| **T7** | Verify remaining DEPRECATED markers: `scp-deliver.sh` — update or remove marker | 1 | 2 | None | Zero DEPRECATED markers in project .sh/.py (excluding .venv, .git, .ai) |
+| **T7** | Fix `scp-deliver.sh` L84: remove misleading "DEPRECATED" from echo log (function `prepare_ssh_opts()` has 8 active callers — NOT dead code). Rename echo to "BACKWARD-COMPAT" and update @deprecated tag at L78-80. | 1 | 1 | None | `grep "DEPRECATED" core/internal/bootstrap/scp-deliver.sh` returns 0; `@deprecated` tag updated to reflect actual status |
 | **T8** | Run full gate: `make fix-gate && make gate MODE=fast` | — | 2 | T1-T7 | All gates green |
 
 ### Critical Path
 
 ```
-T4 (independent) ──────────────────────────────┐
-                                                ├──> T8
-T1 → T2 → T3 ──────────────────────────────────┤
-                                                │
-T5 → T6 ───────────────────────────────────────┤
-                                                │
-T7 ────────────────────────────────────────────┘
+T2 (independent) ──┐
+T4 (independent) ──┤
+                    ├──> T8
+T1 (independent) ──┤
+                    │
+T3 ────────────────┤
+                    │
+T5 → T6 ───────────┤
+                    │
+T7 ────────────────┘
 ```
 
 ---
@@ -211,9 +214,9 @@ T7 ─────────────────────────�
 - No file intersections. T1 touches nginx/ + template-manifest.yaml; T4 touches .env.example; T5 creates new file; T7 touches scp-deliver.sh.
 - Command: `coder Read DevPlan.md, implement Wave 1: T1, T4, T5, T7`
 
-### Wave 2: ssl-provision.sh Cascade (depends on T1 for template-manifest, T2 depends on nothing else)
+### Wave 2: ssl-provision.sh Deletion (dependency-free — T2 is just git rm)
 - Tasks: **T2**
-- Dependency: T1 (template-manifest.yaml already cleaned)
+- Changed: NO dependency on T1 (ssl-provision.sh has no file-level callers; WEBNAMES_API_KEY loading already migrated)
 - Command: `coder Read DevPlan.md, implement Wave 2: T2`
 
 ### Wave 3: Reference Updates (depends on T2 — file is deleted)
@@ -254,7 +257,7 @@ T7 ─────────────────────────�
 | # | File | Change |
 |---|------|--------|
 | 3 | `.env.example` | Remove `LITELLM_METRICS_TOKEN=` line |
-| 4 | `core/internal/bootstrap/node-lifecycle.sh` | Remove ssl-provision.sh source + checkpoint references |
+| 4 | `core/internal/bootstrap/node-lifecycle.sh` | Remove checkpoint name strings "ssl-provision" from echo/log_step (L85-86) — no file-level source reference to remove (WEBNAMES_API_KEY already loaded from $secrets_env L84) |
 | 5 | `core/internal/bootstrap/lifecycle/steps.py` | Remove ssl_provision step mention |
 | 6 | `core/internal/scripts-audit.sh` | Remove ssl-provision.sh whitelist entry |
 | 7 | `core/templates/template-manifest.yaml` | Remove nginx/install.sh consumer references |
@@ -282,10 +285,15 @@ T7 ─────────────────────────�
 
 **A:** A DEPRECATED marker is a migration signal: "this will be removed." Consumers need time to migrate. 30 days is one release cycle — enough for other waves to complete their migrations (e.g., wave 080 cert unification). After 30 days, the grace period is over and the marker itself is dead code.
 
-### ## @rationale D3: Why move WEBNAMES_API_KEY load to issue-cert.sh?
-**Q:** ssl-provision.sh is 40 LOC. Why spend effort moving key loading instead of keeping the file?
+### ## @rationale D3: Why delete ssl-provision.sh now?
+**Q:** ssl-provision.sh is only 40 LOC. Why spend effort deleting it?
 
-**A:** The file exists ONLY for backward compatibility. It sources two other scripts and does nothing else. Keeping a 40-line wrapper that delegates to two other scripts is exactly the kind of "thin wrapper that never dies" — it accumulates technical debt indefinitely. Moving the ONE remaining dependency (WEBNAMES_API_KEY load) eliminates the wrapper entirely.
+**A:** The file exists ONLY for backward compatibility. It sources two other scripts and does nothing else. WEBNAMES_API_KEY loading was already migrated in a prior wave — `update_step_3_ssl_provision()` in `node-lifecycle.sh` now sources `$secrets_env` directly (L84), NOT `ssl-provision.sh`. With zero file-level callers, the wrapper is pure dead code. A 40-line wrapper that delegates to two other scripts is exactly the kind of "thin wrapper that never dies" — it accumulates technical debt indefinitely. Deleting it removes a dead file and the exception entries it requires in 3 test/audit files.
+
+### ## @rationale D4: Why rename scp-deliver.sh DEPRECATED echo — not delete the function?
+**Q:** scp-deliver.sh L84 echoes "DEPRECATED: prepare_ssh_opts()". Why not just delete the function?
+
+**A:** `prepare_ssh_opts()` has 8 active callers (bootstrap.sh, remote-cmd.sh x4, scp-deliver.sh x3) and performs host-key management (`ssh-keygen -R` in init mode) that `SSH_OPTS_COMMON` from `lib/ssh.sh` does NOT cover. It delegates SSH options to `SSH_OPTS_COMMON` but adds host-key cleanup — a distinct concern. The word "DEPRECATED" in the echo log is misleading: it makes agents scan the file and conclude "dead code" when the function is actively used. Fix: rename echo from "DEPRECATED" to "BACKWARD-COMPAT" and update the `@deprecated` JSDoc tag at L78-80 to remove the stale "Removed in Wave 3" claim. The function is a backward-compat layer, not dead code.
 
 ---
 
@@ -305,8 +313,8 @@ T7 ─────────────────────────�
 ## 10. TRAP References
 
 - **TRAP[DEBT] · 2026-07-16** in `nginx/install.sh` L34 — legacy system-nginx installer → **RESOLVED**: file deleted
-- **TRAP[DECISION] · 2026-07-17** in `ssl-provision.sh` L23 — backward-compat wrapper → **RESOLVED**: file deleted after dependency migration
-- **DEPRECATED in `scp-deliver.sh`** — verify current status; if truly deprecated and >30 days, remove or migrate
+- **TRAP[DECISION] · 2026-07-17** in `ssl-provision.sh` L23 — backward-compat wrapper → **RESOLVED**: file deleted (no dependency migration needed — already done)
+- **DEPRECATED in `scp-deliver.sh`** — echo message "DEPRECATED" at L84 is misleading; `prepare_ssh_opts()` has 8 active callers and performs host-key management not covered by `SSH_OPTS_COMMON`. Fixed by T7: rename echo to "BACKWARD-COMPAT", update @deprecated tag.
 
 ---
 
@@ -317,7 +325,7 @@ T7 ─────────────────────────�
 coder Read .ai/plans/084-dead-code-sweep/01-DevPlan.md, implement Wave 1: T1, T4, T5, T7
 ```
 
-### Wave 2: ssl-provision Cascade
+### Wave 2: ssl-provision.sh Deletion (direct git rm — no migration)
 ```
 coder Read .ai/plans/084-dead-code-sweep/01-DevPlan.md, implement Wave 2: T2
 ```

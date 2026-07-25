@@ -1,5 +1,10 @@
 # DevPlan 071: Unify Checkpoints — state.json as Single Source of Truth
 
+> **⚠️ SUPERSEDED by [02-DevPlan-expanded.md](02-DevPlan-expanded.md) (AUTHORITATIVE per R1).**
+> Rev 1 had a CRITICAL design flaw (F1): numeric key misalignment between shell (16 steps) and Python (23 steps) causing `ensure_secrets`/`secrets_init` to be incorrectly skipped on resume.
+> Rev 2 (in 02-DevPlan-expanded.md) fixes this with name-based keys + `checkpoint_migration.py` module.
+> This file retained for historical reference only.
+
 $ARTIFACT_CONTRACT
 PURPOSE: Eliminate dual checkpoint system (shell .done files vs Python state.json) that causes state divergence on --resume. Make state.json the ONLY checkpoint mechanism.
 DESCRIPTION: Currently node-lifecycle.sh uses `core/lib/checkpoint.sh` (touch .done files) for steps 1-17, then delegates to state_machine.py which uses `state.json`. These systems are NOT synchronized — when one says "done", the other may say "pending", causing skipped or repeated steps on resume. Fix: checkpoint.sh becomes a thin wrapper that reads/writes state.json.
@@ -20,7 +25,13 @@ IMPACTS:
   - core/internal/bootstrap/AGENTS.md (update checkpoint documentation)
 REQUIRES: None (standalone, but benefits from 070)
 
-## Tasks
+## ⚠️ KNOWN FLAWS (fixed in Rev 2 — see 02-DevPlan-expanded.md)
+
+1. **F1 (CRITICAL):** Claims "checkpoint.sh sources paths.sh → STATE_JSON path from there" — FALSE. `paths.sh` has no `STATE_JSON` variable. Fixed in Rev 2: `CHECKPOINT_STATE_FILE` defined in `node-lifecycle.sh`.
+2. **F1 (CRITICAL):** Asserts numeric keys will align between shell and Python — FALSE due to different step inventories. Fixed in Rev 2: name-based keys.
+3. **F2 (HIGH):** Embeds inline `python3 -c "..."` blocks — violates language policy. Fixed in Rev 2: extracted to `checkpoint_migration.py`.
+
+## Tasks (ORIGINAL Rev 1 — see expanded for Rev 2 tasks)
 
 ### T1: Define unified state.json schema
 - Current state.json format in state_machine.py is already sufficient: {step_name: {status, hash, timestamp}}
@@ -33,7 +44,7 @@ REQUIRES: None (standalone, but benefits from 070)
 - `checkpoint_force(name)` → set status to "pending" in state.json
 - `checkpoint_reset_all()` → truncate state.json
 - Shell functions call `python3 -c "import json..."` through a helper or direct file read with jq/python
-- IMPORTANT: checkpoint.sh sources paths.sh → STATE_JSON path from there
+- IMPORTANT: checkpoint.sh sources paths.sh → STATE_JSON path from there  ← FALSE (F3)
 
 ### T3: Update node-lifecycle.sh
 - Remove .done file references

@@ -258,6 +258,10 @@ from typing import Optional
 
 logger = logging.getLogger("reconcile_projects")
 
+# Platform convention — SSH user for all remote operations (ci-deploy key)
+# 🧐 TRAP[DECISION] · 2026-07-25 · — · SSH_USER as module constant · Rejected: env var per call · Reason: drift risk — two places (deliver_payload, deploy_project) used same hardcoded value; centralizing prevents future divergence · Rev: when ci-deploy key name changes → update single constant
+SSH_USER = "ci-deploy"
+
 # ═══════════════════════════════════════════════════════════════════
 # Dataclasses
 # ═══════════════════════════════════════════════════════════════════
@@ -595,7 +599,7 @@ def deliver_payload(
             "-i", ci_key,
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10",
-            f"ci-deploy@{ssh_host}" if "@" not in ssh_host else ssh_host,
+            f"{SSH_USER}@{ssh_host}" if "@" not in ssh_host else ssh_host,
             deliver_verb,
         ]
         
@@ -659,7 +663,7 @@ def deploy_project(
     
     result = _ssh_run(
         ssh_host,
-        "ci-deploy",
+        SSH_USER,
         f"cd {project_dir} && docker compose pull && docker compose up -d",
         timeout=600,
     )
@@ -893,7 +897,7 @@ if __name__ == "__main__":
 ```bash
 #!/usr/bin/env bash
 # GREP_SUMMARY: reconcile-projects launcher python3 reconciler_projects.py converge bootstrap
-# STRUCTURE: ▶ source guard → ▶ parse args → ▶ exec python3 reconciler_projects.py "$@" → ⎋ exit
+# STRUCTURE: ▶ source guard → ▶ parse args → ▶ python3 reconciler_projects.py "$@" → ⊕ rc → ⎋ return
 # region MODULE_CONTRACT
 ## @purpose  Thin shell wrapper for reconciler_projects.py — preserves backward compatibility
 ##           for sourcing from converge.sh. All business logic in Python.
@@ -912,16 +916,24 @@ set -euo pipefail
 
 # region FUNC_reconcile_projects
 reconcile_projects() {
+    # 💼 TRAP[BUSINESS] · 2026-07-25 · HI · exec NOT used — sourced from converge.sh
+    # · Root: exec replaces the parent process — would kill converge.sh after reconcile
+    # · Fix: python3 + local rc=$?; return $rc — preserves converge.sh execution
+    # · Prevention: Never use exec in a sourced function
     local node_name="$1"
     local node_yaml="$2"
     local dry_run="${3:-false}"
+    local node_host_map="${4:-${NODE_HOST_MAP:-}}"
     local core_dir
     core_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-    exec python3 "${core_dir}/internal/reconciler_projects.py" \
+    python3 "${core_dir}/internal/reconciler_projects.py" \
         --node "${node_name}" \
         --node-yaml "${node_yaml}" \
+        --node-host-map "${node_host_map}" \
         $([[ "${dry_run}" == "true" ]] && echo "--dry-run")
+    local rc=$?
+    return $rc
 }
 # endregion FUNC_reconcile_projects
 
@@ -948,7 +960,8 @@ The converge.sh already sources `reconcile-projects.sh` from `CORE_DIR/internal/
 | CI_DEPLOY_KEY | `$CI_DEPLOY_KEY:-$PLATFORM_CI_DEPLOY_KEY_FILE:-~/.ssh/ci_deploy_key` | `os.environ.get("CI_DEPLOY_KEY", os.environ.get("PLATFORM_CI_DEPLOY_KEY_FILE", "~/.ssh/ci_deploy_key"))` | Environment |
 | GHCR org fallback | `tronyx-lab` | `"tronyx-lab"` | Hardcoded (project-agnostic) |
 | PROJECTS_BASE | `/opt/projects` | `/opt/projects` | Hardcoded (platform convention) |
-| SSH user | `ci-deploy` | `ci-deploy` | Hardcoded (platform convention) |
+| NODE_HOST_MAP | `$NODE_HOST_MAP` (global env) | `--node-host-map` CLI arg (shell forwards env) | Environment → CLI; shell wrapper forwards per VerificationReport #2 |
+| SSH user | `ci-deploy` | `SSH_USER = "ci-deploy"` (module constant) | Hardcoded (platform convention); centralized per VerificationReport #4 |
 
 ## TRAP Annotations
 

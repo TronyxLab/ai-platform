@@ -39,7 +39,32 @@ $END_DOCUMENT_PLAN
 **Created:** 2026-07-25
 **Author:** Kilo (architect agent)
 **Source:** Анализ 287 коммитов за 15 дней + файловый аудит 6 доменов
-**Status:** DRAFT — БРИФ проблем (не решений). DevPlan'ы будут созданы отдельно.
+**Status:** DRIFTED CRITICAL — обновлён по результатам аудита 2026-07-25 всех 14 DevPlan'ов
+
+---
+
+## §AUDIT_UPDATE: 2026-07-25 — Состояние всех 14 DevPlan'ов
+
+Проведён полный аудит всех 14 планов (070-084). Результаты:
+
+| # | План | Вердикт | Имплементация | Ключевая проблема |
+|---|------|---------|---------------|-------------------|
+| 070 | Extract Shared Libs | **STABLE** | 0% | FOUNDATION. Был удалён, восстановлен из git. Без него BLOCKED: 078, 079, 081 |
+| 071 | Unify Checkpoints | **DRIFTED CRITICAL** | 0% | F1: Step-name misalignment (shell:16 keys vs Python:23). Утверждение «numeric keys will align» — FALSE |
+| 072 | Secrets Atomic Write | **STABLE** | 0% | Готов немедленно. Merge before 084 |
+| 073 | Provision Python | **PARTIAL** | 0% | F1: 628 LOC existing tests не учтены. F2: deploy-modules.sh/state_machine.py consumers не упомянуты |
+| 074 | Monitoring Hooks Python | **STABLE** | 0% | Готов. 1 warning (deep_merge doc) |
+| 075 | Watchdog Python | **STABLE** | 0% | Готов. 13 тестов запланированы |
+| 076 | Reconcile Python | **DRIFTED WARNING** | 0% | CRITICAL: `exec python3` в wrapper убьёт converge.sh. NODE_HOST_MAP не forwarded |
+| 078 | Secrets Tokens Unif. | **BLOCKED** (by 070) | 0% | S4 token leak в /proc/cmdline — hotfix candidate |
+| 079 | Bootstrap Pipeline Unif. | **BLOCKED** (by 070) | 0% | 3 копии _extract_context (не 2). TASK-10 покрывает только steps.py |
+| 080 | Certs SSL Unification | **STABLE** | 0% | Готов. 5 env test failures (no Docker nginx locally) |
+| 081 | Deploy Pipeline Unif. | **BLOCKED** (by 079) | 0% | Требует shared/docker_compose.py с retry_pull() от 079 |
+| 082 | Config Env Unification | **PARTIAL + BLOCKED** | 0% | BLOCKED by 078. Scope gaps: 5 Python S3_ENDPOINT files, hermes-agent/.env.example |
+| 083 | Healthcheck Unification | **STABLE** | 0% | F1: litellm start_period contradiction (60s vs 120s TRAP). F7: restart-loop regression |
+| 084 | Dead Code Sweep | **PARTIAL** | 0% | F1: §2.1 factual error — key-loading already migrated, T2 можно упростить |
+
+**Критический вывод:** 0% имплементации по всем 14 планам. Фундамент (070) лежит удалённым. Без него 078, 079, 081 заблокированы. Три плана (071, 073, 076) имеют design flaws, требующие ревизии ДО имплементации.
 
 ---
 

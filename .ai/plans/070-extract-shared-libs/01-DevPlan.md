@@ -1,5 +1,7 @@
 # DevPlan 070: Extract Shared Libraries — Context + Project Registry
 
+> **⚠️ Short form.** The authoritative DevPlan is `02-DevPlan-expanded.md` (779 LOC) — contains full TASK decomposition, code blocks, test specifications, CLI Interface Specification, and PARALLEL_GROUPS. This document is a quick-reference summary.
+
 $ARTIFACT_CONTRACT
 PURPOSE: Eliminate 3-way copy-paste of `_extract_context_from_node_yaml()` and 3-way duplicate Python heredoc blocks for project registration. Create single-source-of-truth shared modules.
 DESCRIPTION: Two independent extractions:
@@ -9,7 +11,7 @@ RATIONALE: Identical logic (29 lines × 3 copies = 87 LOC duplicate) in context 
 ACCEPTANCE_CRITERIA:
   - `core/internal/shared/node_yaml.py` exists with `extract_context_from_node_yaml()` function
   - state_machine.py, steps.py, context_deployer.py import from shared module (no local copies)
-  - `core/internal/shared/project_registry.py` exists with `register_project()`, `deregister_project()` functions
+  - `core/internal/shared/project_registry.py` exists with `register_project()`, `deregister_project()`, `list_projects()` functions
   - add-project.sh:719 heredoc → `python3 project_registry.py register`
   - adopt-project.sh:674 heredoc → `python3 project_registry.py register`
   - remove-project.sh:212 heredoc → `python3 project_registry.py deregister`

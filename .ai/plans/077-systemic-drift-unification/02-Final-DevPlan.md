@@ -1,19 +1,20 @@
 $START_DEVPLAN
 
 $ARTIFACT_CONTRACT
-PURPOSE:               Consolidate all 14 DevPlans (7 existing + 7 new) into a single first-release roadmap. Close all 41 systemic drift points catalogued in Brief 077. Guarantee zero overlap between waves — no file is rewritten twice for the same reason.
+PURPOSE:               Consolidate all 14 DevPlans into a single first-release roadmap. Close all 42 systemic drift points (39 unique + 3 cross-domain duplicates: S6=E1, S7=E3, B4=D2) catalogued in Brief 077. Guarantee zero overlap between waves — no file is rewritten twice for the same reason.
 DESCRIPTION:           Meta-DevPlan that sequences the complete elimination of systemic drift in ai-platform. Covers 6 domains (secrets, bootstrap, certificates, deploy, config, healthcheck) across 8 sequential waves. Each wave is a self-contained DevPlan that can be handed to a coder independently. Every drift point from the Brief is mapped to exactly one DevPlan. File touch matrix ensures no overlapping modifications.
-RATIONALE:             Brief 077 identified 41 drift points across 5 root causes. The 7 pre-existing DevPlans (070-076) only covered 4 drift points (10%). This document defines the complete closure plan, respecting the constraint: "мы готовимся к первому релизу — я хочу чтобы работало все" and "в разных волнах одно и тоже не переписывали".
+RATIONALE:             Brief 077 identified 42 drift points (39 unique, 3 cross-domain dual-named IDs) across 5 root causes. The 14 DevPlans aim for 100% coverage. This document defines the complete closure plan, respecting the constraint: "мы готовимся к первому релизу — я хочу чтобы работало все" and "в разных волнах одно и тоже не переписывали".
 ACCEPTANCE_CRITERIA:
-  1. Every one of the 41 drift IDs from Brief 077 is mapped to exactly one DevPlan
+  1. Every one of the 42 drift IDs from Brief 077 is mapped to exactly one DevPlan (including 3 cross-domain duplicates: S6=E1, S7=E3, B4=D2)
   2. No file is modified by >1 DevPlan for the same business logic (file touch matrix clean)
   3. Wave sequencing respects all dependencies (shared modules before consumers, security fixes first)
   4. Each DevPlan is self-contained: coder can read one DevPlan and implement without cross-referencing others
   5. Gate tests ensure no regression after each wave
   6. Final `make gate MODE=full` passes after all waves complete
-IMPLEMENTS:            Brief 077 (all 5 root causes, all 41 drift points)
+  7. DevPlan 070 (FOUNDATION) is restored in working tree and implemented first — all subsequent waves depend on it
+IMPLEMENTS:            Brief 077 (all 5 root causes, all 42 drift points)
 IMPACTS:               120+ files (see file touch matrix below)
-REQUIRES:              Access to repository, Python >= 3.10, Docker, age-key at ~/.ssh/age-key-personal.txt
+REQUIRES:              Access to repository, Python >= 3.10, Docker, age-key at ~/.ssh/age-key-personal.txt, DevPlan 070 restored to working tree
 $END_ARTIFACT_CONTRACT
 
 ---
@@ -22,26 +23,71 @@ $END_ARTIFACT_CONTRACT
 
 **Severity:** CRITICAL (системный дрейф затрагивает все домены платформы)
 **Created:** 2026-07-25
+**Updated:** 2026-07-25 (audit correction — drift count 41→42, recovery path added)
 **Author:** Kilo (orchestrator agent)
 **Source:** Brief 077 + 14 архитекторских DevPlans
-**Total waves:** 8 (7 унаследованных + 7 новых → 8 последовательных групп)
+**Audited:** 2026-07-25 — VerificationReport 03 (score: 87/100, verdict: DRIFTED CRITICAL)
+**Total waves:** 8 (1 foundation + 7 implementation)
+**Implementation status:** **0% across all 14 DevPlans** (see §0 below)
+
+---
+
+## §0: AUDIT STATUS — 2026-07-25
+
+### 0.1 Implementation Status
+
+Проведён полный аудит всех 14 DevPlans (070-084). **Ни одна волна не реализована.** `core/internal/shared/` не создан. Все 42 drift-точки всё ещё присутствуют в кодовой базе.
+
+| DevPlan | Название | Wave | Код | Тесты | Статус |
+|---------|----------|------|-----|-------|--------|
+| **070** | Extract Shared Libraries | 1 (FOUNDATION) | 0% | 0% | ❌ УДАЛЁН из working tree |
+| **071** | Unify Checkpoints | 1 | 0% | 0% | ⚪ Не начат |
+| **072** | Secrets Atomic Write | 1 | 0% | 0% | ⚪ Не начат |
+| **073** | Provision → Python | 2b | 0% | 0% | ⚪ Не начат |
+| **074** | Monitoring Hooks → Python | 2b | 0% | 0% | ⚪ Не начат |
+| **075** | Watchdog → Python | 2b | 0% | 0% | ⚪ Не начат |
+| **076** | Reconcile → Python | 2b | 0% | 0% | ⚪ Не начат |
+| **078** | Secrets & Tokens Unif. | 2a | 0% | 0% | 🔒 BLOCKED by 070 |
+| **079** | Bootstrap Pipeline Unif. | 3 | 0% | 0% | 🔒 BLOCKED by 070 |
+| **080** | Certs & SSL Unification | 4 | 0% | 0% | 🔒 BLOCKED by 070 |
+| **081** | Deploy Pipeline Unif. | 5 | 0% | 0% | 🔒 BLOCKED by 079 |
+| **082** | Config & Env Unification | 6 | 0% | 0% | 🔒 BLOCKED by 078 |
+| **083** | Healthcheck Unification | 7 | 0% | 0% | ⚪ Не начат (независимый) |
+| **084** | Dead Code Sweep | 7 | 0% | 0% | 🔒 BLOCKED by 080 + 071 |
+
+### 0.2 Critical Blockers
+
+| # | Блокер | Severity | Следствие |
+|---|--------|----------|-----------|
+| 1 | **DevPlan 070 удалён из working tree** | CRITICAL | `core/internal/shared/` не создан. Wave 1 невозможна. Waves 2-5 заблокированы. |
+| 2 | **11 untracked VerificationReports** в директориях 071-084 | HIGH | QA-результаты не закоммичены — риск потери истории аудита |
+| 3 | **3 downstream DevPlans имеют design flaws** (071, 076, 082) | MEDIUM | Требуют ревизии ДО имплементации (см. Brief 077 §AUDIT_UPDATE) |
+
+### 0.3 Drift ID Count: 42 (not 41)
+
+Brief 077 определяет **42** поименованных drift ID: S1-S7 (7), B1-B6 (6), C1-C8 (8), D1-D6 (6), E1-E8 (8), H1-H7 (7) = **42**. Из них 3 являются кросс-доменными дублями:
+- **S6 = E1** (POSTGRES_PASSWORD — 6 default-значений, затрагивает и секреты, и конфигурацию)
+- **S7 = E3** (NEXTAUTH_SECRET — 4 test-значения, затрагивает и секреты, и конфигурацию)
+- **B4 = D2** (Content hash — 3 реализации, затрагивает и bootstrap, и deploy)
+
+Таким образом: **42 поименованных ID = 39 уникальных проблем + 3 кросс-доменных дубля**. Предыдущая версия DevPlan ошибочно указывала 41 — это исправлено.
 
 ---
 
 ## Резюме
 
-Проект ai-platform накопил 41 точку системного дрейфа за 15 дней (287 коммитов). Причина: двойные реализации бизнес-логики (Python + Bash), отсутствие shared-библиотек, фрагментированные default-значения и мёртвый код.
+Проект ai-platform накопил 42 точки системного дрейфа (39 уникальных + 3 кросс-доменных дубля) за 15 дней (287 коммитов). Причина: двойные реализации бизнес-логики (Python + Bash), отсутствие shared-библиотек, фрагментированные default-значения и мёртвый код.
 
 **7 существующих DevPlans** (070-076) покрывают 4 drift-точки полностью/частично + 4 inline-python3 миграции.
-**7 новых DevPlans** (078-084) закрывают оставшиеся 37 drift-точек.
+**7 новых DevPlans** (078-084) закрывают оставшиеся 38 drift-точек.
 
 Этот документ — дорожная карта, определяющая ПОСЛЕДОВАТЕЛЬНОСТЬ волн, зависимости между ними и матрицу покрытия. Передаётся разработчику вместе с конкретным DevPlan-ом для реализации каждой волны.
 
 ---
 
-## Глава 1: Карта покрытия — 41 drift-точка → 14 DevPlans
+## Глава 1: Карта покрытия — 42 drift-точки → 14 DevPlans
 
-### 1.1 Полная матрица покрытия
+### 1.1 Полная матрица покрытия (42 поименованных ID, 3 кросс-доменных дубля)
 
 | Drift ID | Суть | Severity | DevPlan | Статус покрытия |
 |----------|------|----------|---------|-----------------|
@@ -111,74 +157,103 @@ $END_ARTIFACT_CONTRACT
 
 | Метрика | Значение |
 |---------|----------|
-| Всего drift ID в Brief 077 | 41 |
+| Всего поименованных drift ID в Brief 077 | **42** |
+| Из них кросс-доменных дублей (один drift в двух доменах) | 3 (S6=E1, S7=E3, B4=D2) |
+| Уникальных проблем (после дедупликации) | 39 |
+| + Dead-code пункты (ssl-provision.sh, LITELLM_METRICS_TOKEN, .done) | 3 |
+| Итого уникальных точек для закрытия | **42** (39 drift + 3 dead-code) |
 | Покрыто существующими DevPlans (070-076) | 4 (B1, B5-частично, S3-частично, S5-частично) |
 | Покрыто НОВЫМИ DevPlans (078-084) | 38 (включая завершение частичных) |
-| Полностью закрыто после всех волн | **41 из 41** (100%) |
+| Полностью закрыто после всех волн | **42 из 42** (100%) |
 | Унаследованных DevPlans (уже готовы) | 7 |
 | Новых DevPlans (требуют реализации) | 7 |
 | Всего DevPlans | **14** |
-| Логических волн (последовательных групп) | **8** |
+| Логических волн (последовательных групп) | **8** (1 foundation + 7 implementation) |
+| Текущая имплементация (аудит 2026-07-25) | **0%** (ни одна волна не начата) |
 
 ---
 
 ## Глава 2: Последовательность волн — Dependency Graph
 
+### 2.0 Ключевое правило: 070 — ФУНДАМЕНТ ВСЕХ ВОЛН
+
+**DevPlan 070 (Extract Shared Libraries) создаёт директорию `core/internal/shared/` и модули `node_yaml.py`, `project_registry.py`. Без него невозможна ни одна последующая волна.** Все DevPlans 078-081 добавляют модули в `shared/` или импортируют из него. Wave 1 = ТОЛЬКО 070. После успешного merge 070 → Waves 2a/2b/3 могут идти параллельно.
+
 ```
-                        ┌──────────────────────────────────────────┐
-                        │         WAVE 1: FOUNDATION               │
-                        │  070  071  072  073  074  075  076       │
-                        │  (все 7 НЕЗАВИСИМЫ, можно параллельно)    │
-                        └──────────────┬───────────────────────────┘
-                                       │
-                    ┌──────────────────┴──────────────────┐
-                    ▼                                     ▼
-        ┌──────────────────────┐            ┌──────────────────────┐
-        │  WAVE 2: 078        │            │  WAVE 3 (parallel):   │
-        │  Secrets & Tokens   │            │  073 Provision Python │
-        │  Unification        │            │  074 Monitoring Py    │
-        │  (S1-S7)            │            │  075 Watchdog Python  │
-        └──────────┬──────────┘            │  076 Reconcile Python │
-                   │                       └──────────────────────┘
-                   │                                 │
-    ┌──────────────┼──────────────┐                  │ (все 073-076 — независимы от 078,
-    │              │              │                  │  но зависят от 070 для shared/)
-    ▼              ▼              ▼
-┌────────┐  ┌──────────┐  ┌──────────┐
-│ WAVE 4 │  │ WAVE 5   │  │ WAVE 6   │
-│  079   │  │  080     │  │  081     │
-│Bootstrap│  │Certs/SSL │  │ Deploy   │
-│(B3,B4, │  │(B2,C1-C8)│  │ Pipeline │
-│ B6)    │  │          │  │(D1,D3-D6)│
-└───┬────┘  └────┬─────┘  └────┬─────┘
-    │            │             │
-    │  080 and 081 can run      │
-    │  in parallel after 079   │
-    │            │             │
-    ▼            ▼             ▼
-┌────────┐  ┌──────────┐  ┌──────────┐
-│ WAVE 7 │  │ WAVE 8   │  │  (done)  │
-│  082   │  │  083+084 │  │          │
-│Config/ │  │Healthck+ │  │          │
-│Env     │  │Dead Code │  │          │
-│(E1-E8) │  │(H1-H7)   │  │          │
-└────────┘  └──────────┘  └──────────┘
+                         ┌──────────────────────────────────────────┐
+                         │    WAVE 1: FOUNDATION (CRITICAL PATH)    │
+                         │               только 070                  │
+                         │   Создаёт core/internal/shared/           │
+                         │   Удаляет 3 копии _extract_context        │
+                         │   MUST merge first — unblocks ALL waves   │
+                         └──────────────┬───────────────────────────┘
+                                        │
+              ┌─────────────────────────┼─────────────────────────┐
+              │                         │                         │
+              ▼                         ▼                         ▼
+   ┌──────────────────┐    ┌──────────────────────┐    ┌──────────────────┐
+   │  WAVE 2a: 078    │    │  WAVE 2b:            │    │  WAVE 2c: 071-072│
+   │  Secrets & Tokens│    │  073 Provision Py    │    │  Checkpoints +   │
+   │  Unification     │    │  074 Monitoring Py   │    │  Secrets Write   │
+   │  (S1-S7, CRIT)   │    │  075 Watchdog Py     │    │  (внутри Wave 1  │
+   │                  │    │  076 Reconcile Py    │    │   но независимы  │
+   │  Зависит: 070    │    │  Зависят: 070        │    │   от shared/)    │
+   └────────┬─────────┘    └──────────┬───────────┘    └────────┬─────────┘
+            │                         │                          │
+            └─────────────────────────┼──────────────────────────┘
+                                      │ (все три группы параллельны после 070)
+                                      │
+                    ┌─────────────────┴─────────────────┐
+                    ▼                                   ▼
+         ┌──────────────────────┐          ┌──────────────────────┐
+         │  WAVE 3: 079         │          │  WAVE 4: 080         │
+         │  Bootstrap Pipeline  │          │  Certs & SSL         │
+         │  (B3, B4, B6)        │          │  (B2, C1-C8)         │
+         │  + shared/ модули    │          │                      │
+         │  Зависит: 070+071+078│          │  Зависит: 070+078+079│
+         └──────────┬───────────┘          └──────────┬───────────┘
+                    │                                  │
+                    │  080 может стартовать             │
+                    │  параллельно с 081                │
+                    │  после завершения 079             │
+                    │                                  │
+         ┌──────────┴───────────┐          ┌──────────┴───────────┐
+         │  WAVE 5: 081         │          │  WAVE 6: 082         │
+         │  Deploy Pipeline     │          │  Config & Env        │
+         │  (D1, D3-D6)         │          │  (E1-E8)             │
+         │  Зависит: 070+079    │          │  Зависит: 078        │
+         │  (использует         │          │  (может стартовать   │
+         │   docker_compose.py) │          │   после 078,         │
+         └──────────┬───────────┘          │   независимо от      │
+                    │                      │   079-081)            │
+                    │                      └──────────┬───────────┘
+                    │                                  │
+                    └─────────────────┬────────────────┘
+                                      │
+                                      ▼
+                           ┌──────────────────────┐
+                           │  WAVE 7: 083 + 084  │
+                           │  Healthcheck +       │
+                           │  Dead Code Sweep     │
+                           │  083: независимый    │
+                           │  084: зависит от 080 │
+                           │       и 071          │
+                           └──────────────────────┘
 ```
 
 ### 2.1 Детализация каждой волны
 
-#### WAVE 1: Foundation (070, 071, 072) — неделя 1, день 1-2
+#### WAVE 1: FOUNDATION — 070 (неделя 1, день 1)
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
 | **070** | Extract Shared Libraries | +150 / −90 | Создаёт `core/internal/shared/` с `node_yaml.py` + `project_registry.py`. Удаляет 3 копии `_extract_context_from_node_yaml()` и 3 Python heredoc блока. |
-| **071** | Unify Checkpoints | +120 / −80 | `checkpoint.sh` переписан на `state.json`. Старые `.done` файлы мигрированы. Единая система чекпоинтов. |
-| **072** | Secrets Atomic Write | +30 / −15 | `secrets_manager.py`: append → atomic overwrite. `LITELLM_METRICS_TOKEN` удалён из `.env.example`. |
 
-**Зависимости:** Нет. Все три независимы. Можно запускать параллельно разным кодерам.
-**Критичность:** HIGH. 070 создаёт директорию `shared/`, которую используют ВСЕ последующие волны.
+**Зависимости:** Нет. Это абсолютный фундамент.
+**Критичность:** CRITICAL. 070 создаёт директорию `shared/`, которую используют ВСЕ последующие волны (078, 079, 080, 081). DevPlan 070 удалён из working tree — требует `git checkout` перед стартом.
+**❗ BLOCKER:** Файлы DevPlan 070 помечены как ` D` в git status. Необходимо восстановить: `git checkout HEAD -- .ai/plans/070-extract-shared-libs/`
 
-#### WAVE 2: Secrets & Tokens Unification (078) — неделя 1, день 3-4
+#### WAVE 2a: Secrets & Tokens Unification — 078 (неделя 1, день 2-4)
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
@@ -186,8 +261,9 @@ $END_ARTIFACT_CONTRACT
 
 **Зависимости:** 070 (shared/__init__.py), 072 (merge order).
 **Критичность:** CRITICAL. S4 — уязвимость (токен в /proc/cmdline). S1 — 5 копий = 5 баг-векторов.
+**Может идти параллельно с Wave 2b и Wave 2c после завершения 070.**
 
-#### WAVE 3: Shell → Python Migrations (073, 074, 075, 076) — неделя 1-2, параллельно с Wave 2
+#### WAVE 2b: Shell → Python Migrations — 073, 074, 075, 076 (неделя 1-2)
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
@@ -196,53 +272,127 @@ $END_ARTIFACT_CONTRACT
 | **075** | Watchdog → Python Daemon | +500 / −530 | Circuit breaker FSM в Python. systemd unit обновлён. |
 | **076** | Reconcile → Python | +250 / −280 | 6 inline python3 → `reconciler_projects.py`. Shell wrapper сохранён для converge.sh. |
 
-**Зависимости:** 070 (shared/). Могут идти параллельно с 078.
+**Зависимости:** 070 (shared/). Могут идти параллельно с Wave 2a (078) и Wave 2c (071-072).
 **Примечание:** Это языковая политика (Tier 1 inline python3 → Python модули). Не закрывают drift ID напрямую, но устраняют структурную причину дрейфа.
 
-#### WAVE 4: Bootstrap Pipeline Unification (079) — неделя 2, день 1-3
+#### WAVE 2c: Checkpoints + Secrets Atomic Write — 071, 072 (неделя 1, день 1-2)
+
+| DevPlan | Название | LOC изменений | Ключевой результат |
+|---------|----------|---------------|-------------------|
+| **071** | Unify Checkpoints | +120 / −80 | `checkpoint.sh` переписан на `state.json`. Старые `.done` файлы мигрированы. Единая система чекпоинтов. |
+| **072** | Secrets Atomic Write | +30 / −15 | `secrets_manager.py`: append → atomic overwrite. `LITELLM_METRICS_TOKEN` удалён из `.env.example`. |
+
+**Зависимости:** Нет (не зависят от shared/). Могут идти параллельно с Wave 2a и Wave 2b.
+**Критичность:** MEDIUM. Эти два плана не зависят от 070 (не используют shared/), поэтому могут стартовать немедленно, даже до восстановления 070.
+
+#### WAVE 3: Bootstrap Pipeline Unification (079) — неделя 2, день 1-3
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
 | **079** | Bootstrap Pipeline Unification | +300 / −200 | `shared/content_hash.py`, `shared/docker_compose.py`. 4 deploy-context entrypoints → 1. Content hash unified. Docker compose shared library. |
 
 **Зависимости:** 070, 071, 078.
-**Ключевой результат:** `shared/docker_compose.py` с `retry_pull()` — фундамент для Wave 6 (081) DRIFT-D3.
+**Ключевой результат:** `shared/docker_compose.py` с `retry_pull()` — фундамент для Wave 5 (081) DRIFT-D3.
 
-#### WAVE 5: Certificates & SSL Unification (080) — неделя 2, день 2-4
+#### WAVE 4: Certificates & SSL Unification (080) — неделя 2, день 2-4
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
 | **080** | Certificates & SSL Complete Unification | +200 / −1200 | DELETE nginx/install.sh (1107 LOC). `cert_orchestrator.py` — единая точка входа. Все vhost'ы на wildcard. Dev cert имена гармонизированы. |
 
 **Зависимости:** 070, 078, 079.
-**Может идти параллельно с 081 после завершения 079.**
+**Может идти параллельно с Wave 5 (081) после завершения Wave 3 (079).**
 
-#### WAVE 6: Deploy Pipeline Unification (081) — неделя 2, день 3-5
+#### WAVE 5: Deploy Pipeline Unification (081) — неделя 2, день 3-5
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
 | **081** | Deploy Pipeline Unification | +350 / −150 | Deploy Path Registry + gate test. `shared/ssh_command_parser.py`, `shared/platform_deliver.py`, `shared/audit_logger.py`. Retry/rollback в Python deploy путях. |
 
 **Зависимости:** 070, 079 (docker_compose.py).
-**Может идти параллельно с 080 после завершения 079.**
+**Может идти параллельно с Wave 4 (080) после завершения Wave 3 (079).**
 
-#### WAVE 7: Configuration & Env Defaults Unification (082) — неделя 3, день 1-2
+#### WAVE 6: Configuration & Env Defaults Unification (082) — неделя 3, день 1-2
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
 | **082** | Config & Env Defaults Unification | +250 / −100 | Трёхуровневая иерархия SoT: `secret-definitions.yaml` → `platform-env.yaml` → `.env.example`. S3_ENDPOINT циклический fallback убран. PLATFORM_DOMAIN default унифицирован. Variable naming стандартизирован. `.env.example` генерируется, не редактируется вручную. |
 
 **Зависимости:** 078 (секретные дефолты унифицированы).
-**Не зависит от 079-081, может идти параллельно с ними после 078.**
+**Не зависит от 079-081, может стартовать параллельно с Wave 3-5 после завершения Wave 2a (078).**
 
-#### WAVE 8: Healthcheck + Dead Code (083, 084) — неделя 3, день 2-4
+#### WAVE 7: Healthcheck + Dead Code (083, 084) — неделя 3, день 2-4
 
 | DevPlan | Название | LOC изменений | Ключевой результат |
 |---------|----------|---------------|-------------------|
 | **083** | Healthcheck Complete Unification | +100 / −300 | 9 механизмов → 3 примитива. `check_tcp()`, `exec_check()` в lib. start_period стандартизирован. 14 модулей унифицированы. |
 | **084** | Dead Code Sweep | +50 / −1150 | DELETE nginx/install.sh (если не удалён в 080), ssl-provision.sh. `make check-dead-code` gate. |
 
-**Зависимости:** 083 — независимый домен. 084 зависит от 080 (cert unification), 071 (.done migration).
+**Зависимости:** 083 — независимый домен (может стартовать в любой момент). 084 зависит от 080 (cert unification), 071 (.done migration).
+
+---
+
+## Глава 2b: Recovery Path — как запустить после аудита 2026-07-25
+
+### Шаг 1: Восстановить DevPlan 070
+
+```bash
+git checkout HEAD -- .ai/plans/070-extract-shared-libs/
+```
+
+DevPlan 070 удалён из working tree (`git status` показывает ` D`). Это фундамент всех волн. Без восстановления невозможен старт.
+
+### Шаг 2: Закоммитить untracked VerificationReports
+
+```bash
+git add .ai/plans/07*/0*-VerificationReport.md
+git commit -m "audit: commit untracked VerificationReports for DevPlans 071-084"
+```
+
+11 untracked QA-отчётов в директориях 071-084. QA-история должна быть сохранена в репозитории.
+
+### Шаг 3: Ревизия DevPlans с design flaws
+
+Три downstream DevPlans имеют design flaws, выявленные аудитом. Эти правки ДОЛЖНЫ быть сделаны ДО старта соответствующих планов:
+
+| DevPlan | Проблема | Что сделать |
+|---------|----------|-------------|
+| **071** | F1: Step-name misalignment (shell:16 keys vs Python:23). Утверждение «numeric keys will align» — FALSE | Добавить mapping table shell↔Python step names в DevPlan |
+| **076** | CRITICAL: `exec python3` в wrapper убьёт converge.sh; NODE_HOST_MAP не forwarded | Исправить wrapper — использовать прямой import вместо subprocess |
+| **082** | Scope gaps: 5 Python S3_ENDPOINT файлов, hermes-agent/.env.example не упомянуты | Расширить scope до всех 5 Python-файлов + hermes-agent |
+
+Эти правки не блокируют Wave 1 (070), но блокируют соответствующие downstream DevPlans.
+
+### Шаг 4: Запуск Wave 1 — только 070 (FOUNDATION)
+
+```
+Кодер A: DevPlan 070 (Extract Shared Libraries)
+         → создаёт core/internal/shared/
+         → merge + gate MODE=fast
+```
+
+**Gate check после Wave 1:**
+```bash
+python3 -c "from core.internal.shared.node_yaml import extract_context_from_node_yaml; print('shared/ OK')"
+make gate MODE=fast
+```
+
+### Шаг 5: Параллельный запуск Waves 2a, 2b, 2c (после merge 070)
+
+```
+Кодер A: DevPlan 078 (Secrets & Tokens, CRITICAL — S4 security fix first)
+Кодер B: DevPlans 073+074 (Provision + Monitoring → Python)
+Кодер C: DevPlans 071+072 (Checkpoints + Atomic Write, не зависят от shared/)
+```
+
+### Шаг 6: Последовательные Waves 3-7
+
+После завершения Waves 2a+2b+2c:
+- **Wave 3 (079)** — зависит от 070+071+078 → sequential, single coder
+- **Wave 4 (080) и Wave 5 (081)** — могут идти параллельно после Wave 3
+- **Wave 6 (082)** — может стартовать сразу после Wave 2a (078), не ждёт 079-081
+- **Wave 7 (083)** — независимый домен, может стартовать в любой момент
+- **Wave 7 (084)** — ждёт завершения Waves 4 (080) и 2c (071)
 
 ---
 
@@ -284,6 +434,17 @@ $END_ARTIFACT_CONTRACT
 ---
 
 ## Глава 4: Стратегия верификации
+
+### 4.0 VerificationReport Tracking
+
+**Аудит 2026-07-25 обнаружил 11 untracked VerificationReport-файлов** в директориях 071-084. Эти файлы содержат результаты QA-сессий для downstream DevPlans. Они должны быть закоммичены перед стартом любой волны:
+
+```bash
+git add .ai/plans/07*/0*-VerificationReport.md
+git commit -m "audit: commit untracked VerificationReports for DevPlans 071-084"
+```
+
+После каждой реализованной волны — новый VerificationReport в соответствующей директории DevPlan. Все VerificationReports коммитятся в репозиторий.
 
 ### 4.1 Gate tests после каждой волны
 
@@ -337,37 +498,45 @@ make converge NODE=test-node --dry-run
 
 ---
 
-## Глава 5: План выполнения (для руководителя)
+## Глава 5: План выполнения (для руководителя) — обновлён 2026-07-25
+
+### Pre-flight: Восстановление (1 час)
+
+| Действие | Исполнитель | Команда |
+|----------|-------------|---------|
+| Восстановить DevPlan 070 | Любой | `git checkout HEAD -- .ai/plans/070-extract-shared-libs/` |
+| Закоммитить VerificationReports | Любой | `git add .ai/plans/07*/0*-VerificationReport.md && git commit -m "audit: commit untracked QA reports"` |
+| Ревизия DevPlans 071, 076, 082 | Architect | Исправить design flaws (см. Brief §AUDIT_UPDATE) |
 
 ### Неделя 1
 
-| День | Кодер A | Кодер B | Кодер C (опционально) |
-|------|---------|---------|----------------------|
-| Пн | **070** Extract Shared Libs | **071** Unify Checkpoints | **072** Secrets Atomic Write |
-| Вт | 070 + 071 + 072 → merge + gate | — | — |
-| Ср | **078** Secrets & Tokens | **073** Provision → Python | **074** Monitoring → Python |
+| День | Кодер A (CRITICAL) | Кодер B | Кодер C |
+|------|-------------------|---------|---------|
+| Пн | **070** Extract Shared Libs ← FOUNDATION | **071** Unify Checkpoints (не зависит от shared/) | **072** Secrets Atomic Write (не зависит от shared/) |
+| Вт | 070 → merge + gate | 071 продолжение | 072 продолжение |
+| Ср | **078** Secrets & Tokens (S4 CRITICAL) | **073** Provision → Python | **074** Monitoring → Python |
 | Чт | 078 продолжение | **075** Watchdog → Python | **076** Reconcile → Python |
-| Пт | 078 → merge + gate | 073-076 → merge + gate | — |
+| Пт | 078 → merge + gate | 073-076 → merge + gate | 071-072 → merge + gate |
 
 ### Неделя 2
 
 | День | Кодер A | Кодер B |
 |------|---------|---------|
-| Пн | **079** Bootstrap Pipeline | — |
-| Вт | 079 продолжение | **080** Certificates & SSL (после 079 merge) |
-| Ср | **081** Deploy Pipeline (после 079 merge) | 080 продолжение |
-| Чт | 081 продолжение | 080 → merge + gate |
-| Пт | 081 → merge + gate | — |
+| Пн | **079** Bootstrap Pipeline | **082** Config & Env (может стартовать после 078!) |
+| Вт | 079 продолжение | 082 продолжение |
+| Ср | **080** Certificates & SSL | **081** Deploy Pipeline (080 и 081 параллельны!) |
+| Чт | 080 продолжение | 081 продолжение |
+| Пт | 080/081 → merge + gate | 082 → merge + gate |
 
 ### Неделя 3
 
 | День | Кодер A | Кодер B |
 |------|---------|---------|
-| Пн | **082** Config & Env Defaults | **083** Healthcheck |
-| Вт | 082 продолжение | 083 продолжение |
-| Ср | 082 → merge + gate | 083 → merge + gate |
-| Чт | **084** Dead Code Sweep | — |
-| Пт | **Финальный gate MODE=full** | Интеграционное тестирование |
+| Пн | **083** Healthcheck | **084** Dead Code (ждёт 080 и 071) |
+| Вт | 083 продолжение | 084 продолжение |
+| Ср | 083 → merge + gate | 084 → merge + gate |
+| Чт | **Финальный `make gate MODE=full`** | Интеграционное тестирование |
+| Пт | Bug fixes по результатам gate | Подготовка к релизу |
 
 ---
 
@@ -405,10 +574,13 @@ make converge NODE=test-node --dry-run
 
 ## Глава 7: Риски и TRAP'ы
 
-### TRAP[SEQUENCE] · 2026-07-25 · HI · Порядок merge: 070 → 071 → 072 → 078 → 079 → {080,081} → 082 → {083,084}
+### TRAP[SEQUENCE] · 2026-07-25 · HI · Порядок merge: 070 (FOUNDATION) → {071,072,078,073-076 parallel} → 079 → {080,081 parallel} → 082 → {083,084}
+- **Критическое правило:** 070 merge — шлюз для ВСЕХ последующих волн. Без `core/internal/shared/` ни одна downstream волна не компилируется.
 - Если 079 смержен до 071: `content_hash.py` будет использовать устаревший `checkpoint.sh` для сравнения хешей.
 - Если 080 смержен до 079: `cert_orchestrator.py` вызовет `docker_compose.py`, которого ещё нет.
 - **Правило:** каждая волна мержится в main ТОЛЬКО после успешного gate предыдущей волны.
+- **Аудит 2026-07-25:** DevPlan 070 удалён из working tree. Требует `git checkout` перед стартом.
+- **Исключение:** 071+072 не зависят от 070 (не используют shared/) — могут стартовать немедленно, даже до восстановления 070.
 
 ### TRAP[OVERLAP] · 2026-07-25 · MED · nginx/install.sh удаляется в 080 и верифицируется в 084
 - 080 удаляет файл. 084 проверяет что удаление чистое (нет оставшихся reference).
