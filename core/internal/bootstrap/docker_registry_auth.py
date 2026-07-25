@@ -156,7 +156,8 @@ def _docker_login(username: str, token: str) -> bool:
     """Login to Docker Hub via password-stdin. Returns True on success."""
     try:
         result = subprocess.run(
-            ["bash", "-c", f"echo '{token}' | docker login -u '{username}' --password-stdin"],
+            ["docker", "login", "-u", username, "--password-stdin"],
+            input=token,
             capture_output=True,
             text=True,
             timeout=DOCKER_RESTART_TIMEOUT,

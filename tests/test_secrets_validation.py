@@ -59,10 +59,10 @@ REQUIRED_SECRET_KEYS: list[str] = [
     "HERMES_DASHBOARD_PASSWORD",
     "GF_SECURITY_ADMIN_PASSWORD",
     "LANGFUSE_INIT_USER_PASSWORD",
-    "OPENAI_API_KEY",
     "DEEPSEEK_API_KEY",
     "CLICKHOUSE_PASSWORD",
     "POSTGRES_PASSWORD",
+    "LITELLM_MASTER_KEY",
 ]
 
 # Forbidden CONTEXT_IMAGE patterns per Brief §3.5:
@@ -372,72 +372,61 @@ def test_context_image_not_old_name(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 5: OPENAI_API_KEY matches LITELLM_MASTER_KEY
+# Test 5: LITELLM_MASTER_KEY present in REQUIRED_SECRET_KEYS
 # ══════════════════════════════════════════════════════════════════════════════
 
-# region FUNC_test_openai_key_matches_litellm_master_key
-## @purpose — Verify OPENAI_API_KEY matches LITELLM_MASTER_KEY for Hermes→LiteLLM auth.
-##            Migrated from validate-hermes-env.sh::check_openai_key().
-## @io — ⇥ caplog, modules_dir → ⎋ None (pytest.fail if keys differ)
-## @complexity — O(1) — two dict lookups
+# region FUNC_test_litellm_master_key_present
+## @purpose — Verify LITELLM_MASTER_KEY is in REQUIRED_SECRET_KEYS and has a
+##            ci_default in secret-definitions.yaml. Replaces OPENAI_API_KEY
+##            enforcement (removed per DevPlan 078 — OPENAI_API_KEY is tier:removed).
+## @io — ⇥ caplog → ⎋ None (pytest.fail if missing)
+## @complexity — O(N) — one list membership check + one YAML lookup
 ## @invariants
-##   - Reads .env via _parse_dotenv
-##   - Skips if either key is empty or placeholder
-##   - If keys differ → pytest.fail with TRAP[INCIDENT] context
-##   - @pytest.mark.predeploy, skips in CI
+##   - LITELLM_MASTER_KEY must be in REQUIRED_SECRET_KEYS
+##   - secret-definitions.yaml must have ci_default for LITELLM_MASTER_KEY
+##   - @pytest.mark.predeploy, static check — no CI skip needed
 
 
 @pytest.mark.predeploy
-@pytest.mark.skipif(
-    os.environ.get("CI") == "true" or os.environ.get("E2E_MODE") == "ci", reason="CI: production env vars unavailable"
-)
 @ldd_trajectory
-def test_openai_key_matches_litellm_master_key(
+def test_litellm_master_key_present(
     caplog: pytest.LogCaptureFixture,
-    modules_dir: str,
 ) -> None:
-    """OPENAI_API_KEY must match LITELLM_MASTER_KEY for Hermes→LiteLLM auth.
-
-    TRAP[INCIDENT] · 2026-06-29 · P0:
-    Hermes uses OPENAI_API_KEY as Bearer token when calling LiteLLM.
-    If keys differ → Hermes bypasses LiteLLM, calls DeepSeek directly.
-    """
-    # region BLOCK_Setup
-    env_path = _get_env_path(modules_dir)
-    env_vars = _parse_dotenv(env_path)
+    """LITELLM_MASTER_KEY must be in REQUIRED_SECRET_KEYS and have ci_default in definitions."""
+    # region BLOCK_Check_REQUIRED
+    logger.info("[IMP:7][test_litellm_master_key_present] Checking LITELLM_MASTER_KEY in REQUIRED_SECRET_KEYS")
+    assert "LITELLM_MASTER_KEY" in REQUIRED_SECRET_KEYS, (
+        "LITELLM_MASTER_KEY missing from REQUIRED_SECRET_KEYS"
+    )
+    logger.info("[IMP:9][test_litellm_master_key_present] ✅ LITELLM_MASTER_KEY present in REQUIRED_SECRET_KEYS")
     # endregion
 
-    # region BLOCK_Check
-    openai_key = env_vars.get("OPENAI_API_KEY", "")
-    litellm_key = env_vars.get("LITELLM_MASTER_KEY", "")
+    # region BLOCK_Check_definitions
+    import yaml
+    import os as _os
+    _defs_path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "core", "secret-definitions.yaml",
+    )
+    logger.info("[IMP:7][test_litellm_master_key_present] Reading definitions: %s", _defs_path)
+    with open(_defs_path) as _f:
+        _defs = yaml.safe_load(_f)
 
-    if not openai_key or not litellm_key:
-        pytest.skip("OPENAI_API_KEY or LITELLM_MASTER_KEY not set — cannot compare")
+    _found = False
+    for _s in _defs.get("secrets", []):
+        if _s.get("name") == "LITELLM_MASTER_KEY":
+            _ci = _s.get("ci_default", "")
+            logger.info("[IMP:8][test_litellm_master_key_present] LITELLM_MASTER_KEY ci_default=%s", _ci)
+            assert _ci, "LITELLM_MASTER_KEY must have ci_default in secret-definitions.yaml"
+            _found = True
+            break
 
-    # Ignore placeholder values (checked by test_required_secrets_not_empty)
-    if "test" in openai_key.lower() or "placeholder" in openai_key.lower():
-        pytest.skip("OPENAI_API_KEY is placeholder — skip comparison")
-    # endregion
-
-    # region BLOCK_Assert
-    if openai_key != litellm_key:
-        logger.error(
-            "[IMP:9][test_openai_key_matches_litellm_master_key] "
-            "OPENAI_API_KEY != LITELLM_MASTER_KEY — Hermes will fail to auth with LiteLLM"
-        )
-        pytest.fail(
-            "OPENAI_API_KEY differs from LITELLM_MASTER_KEY.\n"
-            "Hermes uses OPENAI_API_KEY for LiteLLM authentication.\n"
-            "Set: OPENAI_API_KEY = LITELLM_MASTER_KEY\n"
-            f"  OPENAI_API_KEY:      {openai_key[:20]}...\n"
-            f"  LITELLM_MASTER_KEY: {litellm_key[:20]}..."
-        )
-
-    logger.info("[IMP:9][test_openai_key_matches_litellm_master_key] ✅ Keys match")
+    assert _found, "LITELLM_MASTER_KEY not found in secret-definitions.yaml"
+    logger.info("[IMP:9][test_litellm_master_key_present] ✅ LITELLM_MASTER_KEY has ci_default in definitions")
     # endregion
 
 
-# endregion FUNC_test_openai_key_matches_litellm_master_key
+# endregion FUNC_test_litellm_master_key_present
 
 
 # ══════════════════════════════════════════════════════════════════════════════
