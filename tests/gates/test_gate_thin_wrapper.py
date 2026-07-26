@@ -62,7 +62,7 @@ ALLOWLIST: frozenset[str] = frozenset(
 
 # Substring patterns for binary calls — matches DevPlan grep pattern:
 #   rsync|ssh|scp|ssh-keygen
-_BINARY_CALL_RE: re.Pattern = re.compile(r"rsync|ssh|scp|ssh-keygen")
+_BINARY_CALL_RE: re.Pattern = re.compile(r"\b(rsync|ssh|scp|ssh-keygen)\b")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Helpers
