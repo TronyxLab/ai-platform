@@ -2,11 +2,12 @@
 # GREP_SUMMARY: issue-cert, acme.sh, letsencrypt, tls, dns-01, webnames, dnsapi, wildcard-cert, idempotent, cron, cert-expiry, project-certs
 # STRUCTURE: ▶ ┌NODE_YAML env┐ → python3 parse → ○ cert exists? → SKIP exit 0 → ◇ validate env → issue_tls_cert → _acme_install_cron → _acme_verify_cert → ◇ _issue_project_certs → ⎋ exit 0|1
 # region MODULE_CONTRACT
-## @purpose  Standalone, idempotent SSL/TLS certificate issuance via acme.sh DNS-01.
-##           Handles only certificate issuance, renewal, cron, verification, and project certs.
-##           Does NOT install acme.sh — that is install-acme.sh's responsibility (called once at bootstrap).
-## @scope    Called from node-lifecycle.sh update step 3, BEFORE docker compose up.
-##           Requires acme.sh already installed (via install-acme.sh at bootstrap/init).
+## @purpose  SSL/TLS certificate issuance via acme.sh DNS-01. Called ONLY by cert_orchestrator.py
+##           subprocess — NOT a standalone entrypoint. All orchestration (domain iteration, S3,
+##           cron, project certs) is handled by cert_orchestrator.py. This script handles only
+##           the acme.sh binary interaction (DNS-01, HTTP-01, cert install). See TRAP[DECISION]
+##           at cert_orchestrator.py for rationale (why shell subprocess, not Python port).
+## @scope    Called from cert_orchestrator.py._issue_cert() via subprocess.run().
 ## @invariants
 ##   - Idempotent: if /etc/letsencrypt/live/$domain/fullchain.pem exists → SKIP, exit 0
 ##   - DNS-01 primary (wildcard support), HTTP-01 fallback via ACME_CHALLENGE_MODE=auto
@@ -553,7 +554,8 @@ issue_tls_cert() {
 # endregion ACME_TLS
 
 # region MAIN
-## @purpose  Entry point — parse NODE_YAML, validate env, run provisioning sequence
+## @purpose  Main cert issuance logic — called by cert_orchestrator.py via subprocess.
+##           NOT a standalone entrypoint (see NOT_CALLED_STANDALONE below).
 ## @workflow
 ##   ▶ python3 parse node.yaml → env vars
 ##   → ○ /etc/letsencrypt/live/<domain>/fullchain.pem exists? → SKIP, exit 0
@@ -569,7 +571,7 @@ issue_tls_cert() {
 ##   - PLATFORM_* env vars override node.yaml values (backward compat with existing CI)
 ##   - ACME_CHALLENGE_MODE: dns (default), http (HTTP-01 only), auto (DNS-01 → HTTP-01 fallback)
 ##   - When challenge mode is http or auto, issues individual subdomain certs for platform.domain
-## @changes  2026-07-23 | DevPlan 058 — ACME_CHALLENGE_MODE, HTTP-01 fallback, subdomain certs
+## @changes  2026-07-26 | DevPlan 080 — main "$@" restored; cron and S3 logic removed (handled by cert_orchestrator.py)
 main() {
     # ── S7: Parse NODE_YAML via yaml_read_domain_config() (replaces inline python3) ──
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
@@ -667,34 +669,6 @@ main() {
             fi
         fi
 
-        # ── Step 2: Install acme.sh cron for daily renewal ─────────────
-        # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cron must be installed when TLS cert exists
-        if [[ -f "$cert_path" ]]; then
-            _acme_install_cron || log_warn "acme.sh cron install failed — cert still valid, renew manually"
-        fi
-
-        # ── Step 2b: Save certificate to S3 cache (Wave 1 optimization) ──
-        # [IMP:9][issue-cert][main] BUSINESS INVARIANT: save cert to S3 after successful issue
-        # This enables fast restore on subsequent boots (no acme.sh API call needed).
-        # Non-fatal: S3 unavailability does NOT block cert issuance.
-        # 🧐 TRAP[DECISION] · 2026-07-21 · — · S3 save after issue
-        # · Rejected: save before issue (defensive — prevent re-issue on failure)
-        # · Reason: we save AFTER successful issue because we need local cert files
-        #   to exist. Saves bandwidth (no re-upload after restore) and reduces complexity.
-        # · Rev: if acme.sh issue becomes unreliable, we could save previous valid cert
-        #   before a renewal attempt
-        local s3_cache="${SCRIPT_DIR}/s3-ssl-cache.sh"
-        if [[ -f "$s3_cache" ]]; then
-            log_step "main" "INFO" "Saving certificate to S3 cache for ${domain}"
-            if bash "$s3_cache" upload "$domain" 2>&1; then
-                log_step "main" "DONE" "Certificate saved to S3 cache for ${domain}"
-            else
-                log_step "main" "WARN" "Failed to save certificate to S3 cache (non-fatal)"
-            fi
-        else
-            log_step "main" "INFO" "s3-ssl-cache.sh not found at ${s3_cache} — skipping S3 cache save"
-        fi
-
         # ── Step 3: Verify certificate expiry >30 days ─────────────────
         # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cert must be valid >30 days
         _acme_verify_cert "$domain" || log_warn "Certificate expires within 30 days — renew soon"
@@ -713,4 +687,7 @@ main() {
 }
 # endregion MAIN
 
+# ⚠️ RESTORED_STANDALONE · 2026-07-26 · DevPlan 080 — main() re-enabled with cron/S3 removed.
+# issue-cert.sh is called via cert_orchestrator.py subprocess.
+# Cron management and S3 sync are handled by cert_orchestrator.py.
 main "$@"

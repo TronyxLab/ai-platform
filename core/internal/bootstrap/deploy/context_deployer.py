@@ -376,15 +376,16 @@ def _deploy_single_project(
     project_dir = os.path.join(projects_base, project.name)
 
     # Bootstrap guard: if project dir has no docker-compose.yml, generate minimal one
-    if not os.path.isfile(os.path.join(project_dir, "docker-compose.yml")):
-        if not _ensure_bootstrap_compose(project_dir, project):
-            return ProjectDeployResult(
-                name=project.name,
-                status="failed",
-                channel="none",
-                health="unhealthy",
-                error="bootstrap compose generation failed",
-            )
+    if not os.path.isfile(os.path.join(project_dir, "docker-compose.yml")) and not _ensure_bootstrap_compose(
+        project_dir, project
+    ):
+        return ProjectDeployResult(
+            name=project.name,
+            status="failed",
+            channel="none",
+            health="unhealthy",
+            error="bootstrap compose generation failed",
+        )
 
     # Step 2: Try ghcr.io pull with retries (primary channel)
     channel = "ghcr"

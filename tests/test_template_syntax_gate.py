@@ -86,7 +86,7 @@ def test_config_templates_use_envsubst_syntax(caplog) -> None:
         content = _read_file(tmpl)
         for i, line in enumerate(content.splitlines(), 1):
             stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("//"):
+            if stripped.startswith(("#", "//")):
                 continue
             if "{{" in stripped:
                 rel = tmpl.relative_to(_PROJECT_ROOT)
@@ -131,7 +131,7 @@ def test_template_templates_use_jinja_syntax(caplog) -> None:
         content = _read_file(tmpl)
         for i, line in enumerate(content.splitlines(), 1):
             stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("//"):
+            if stripped.startswith(("#", "//")):
                 continue
             # Check for ${} but allow nginx built-in variables
             dollar_matches = re.findall(r"\$\{[^}]+\}", stripped)

@@ -20,8 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from core.internal.shared.audit_logger import write_audit_entry, read_audit_log
-
+from core.internal.shared.audit_logger import read_audit_log, write_audit_entry
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 

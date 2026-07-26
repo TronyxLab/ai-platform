@@ -19,13 +19,11 @@
 # endregion MODULE_CONTRACT
 """
 
-import json
 import logging
-import os
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -155,6 +153,7 @@ def _default_subprocess_side_effect(up_returncode: int = 0):
     ##   - docker ps -a returns empty
     ##   - Other commands return returncode=0
     """
+
     def _side_effect(*args, **kwargs):
         cmd = args[0] if args else kwargs.get("args", [])
         cmd_str = " ".join(str(x) for x in cmd) if isinstance(cmd, list) else str(cmd)
@@ -320,9 +319,7 @@ def test_audit_format_is_valid_json_lines(
             assert message, f"Call {i}: message must not be empty"
 
             # Status must be a recognized value
-            assert status in ALLOWED_STATUSES, (
-                f"Call {i}: status '{status}' not in allowed set {ALLOWED_STATUSES}"
-            )
+            assert status in ALLOWED_STATUSES, f"Call {i}: status '{status}' not in allowed set {ALLOWED_STATUSES}"
 
             logger.critical(
                 "[IMP:9][test] Audit call %d valid: tag=%s status=%s msg_len=%d",

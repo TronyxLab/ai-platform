@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: tls-wildcard predeploy-gate nginx-vhost ssl-certificate letsencrypt node-yaml domain server-name hardcoded-domain wildcard-cert contract-test bash-syntax acme-sh tls-scripts subprocess
 # STRUCTURE: ▶ platform_root → ◇ static_validation(vhost_configs,server_names,node_yaml) ∋ ssl_cert_path ⊕ server_name_template ⊕ hermes_vhost → ⊕ contract_test ∋ tls_scripts_exist ⊕ bash_syntax ⊕ acme_sh_available → ⎋ pass|fail
-# region MODULE_CONTRACT
 ## @purpose  Pre-deploy TLS wildcard gate + contract tests. Static analysis of nginx vhost
 ##           configs and node.yaml to ensure all TLS references use the wildcard-ready
 ##           ${PLATFORM_DOMAIN} template, and no hardcoded domain names or non-wildcard
 ##           cert paths are present. PLUS contract tests that call real bash scripts
-##           (nginx/install.sh, acme.sh) to verify they exist and are valid.
+##           (issue-cert.sh, acme.sh) to verify they exist and are valid.
 ##           Replaces the old Simulator-only approach with REAL subprocess contract tests.
 ## @scope    Static file analysis + subprocess contract calls. No network access required.
 ##           Validates: node.yaml domain, nginx vhost SSL cert paths, server_name template,

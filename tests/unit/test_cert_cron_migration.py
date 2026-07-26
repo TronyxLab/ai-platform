@@ -51,10 +51,6 @@ def test_migrate_old_cron_detected(caplog, tmp_path):
     acme_sh.write_text("#!/bin/bash\necho 'mock acme.sh'\n")
     acme_sh.chmod(0o755)
 
-    # Mock s3_ssl_cache.py existence check
-    s3_cache_py = str(Path(__file__).resolve().parent.parent.parent
-                      / "core" / "internal" / "bootstrap" / "s3_ssl_cache.py")
-
     # Old cron: acme.sh --cron, no s3_ssl_cache
     old_cron = f'0 0 * * * "{acme_sh}" --cron --home "{acme_home}" > /dev/null\n'
 
@@ -72,12 +68,14 @@ def test_migrate_old_cron_detected(caplog, tmp_path):
         return MagicMock(returncode=0, stdout="", stderr="")
 
     with patch("os.path.isfile") as mock_isfile:
+
         def isfile_side_effect(path):
             if str(path) == str(acme_sh):
                 return True
             if "s3_ssl_cache.py" in str(path):
                 return True
             return True
+
         mock_isfile.side_effect = isfile_side_effect
 
         with patch("subprocess.run", side_effect=mock_run):
@@ -91,9 +89,7 @@ def test_migrate_old_cron_detected(caplog, tmp_path):
 
     assert result is True, f"Migration should return True, got {result}"
     # Should detect old cron → call --install-cronjob
-    assert any("--install-cronjob" in c for c in call_log), (
-        f"Expected --install-cronjob call, got: {call_log}"
-    )
+    assert any("--install-cronjob" in c for c in call_log), f"Expected --install-cronjob call, got: {call_log}"
 
     logger.critical("[IMP:9][test_migrate_old_cron_detected] PASS: old cron detected and migrated")
 
@@ -118,10 +114,7 @@ def test_migrate_already_s3_aware(caplog, tmp_path):
     acme_sh.chmod(0o755)
 
     # Already S3-aware cron
-    new_cron = (
-        f'0 0 * * * "{acme_sh}" --cron --home "{acme_home}" > /dev/null; '
-        f'python3 s3_ssl_cache.py upload\n'
-    )
+    new_cron = f'0 0 * * * "{acme_sh}" --cron --home "{acme_home}" > /dev/null; python3 s3_ssl_cache.py upload\n'
 
     install_called = []
 
@@ -133,9 +126,8 @@ def test_migrate_already_s3_aware(caplog, tmp_path):
             install_called.append(cmd_str)
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    with patch("os.path.isfile", return_value=True):
-        with patch("subprocess.run", side_effect=mock_run):
-            result = cert.migrate_cron_if_needed(acme_home)
+    with patch("os.path.isfile", return_value=True), patch("subprocess.run", side_effect=mock_run):
+        result = cert.migrate_cron_if_needed(acme_home)
 
     logger.critical("[IMP:9][test_migrate_already_s3_aware] ASSERT: no migration when already S3-aware")
     assert result is True, f"Should return True (no migration needed), got {result}"
@@ -172,9 +164,8 @@ def test_migrate_no_crontab(caplog, tmp_path):
             install_called.append(cmd_str)
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    with patch("os.path.isfile", return_value=True):
-        with patch("subprocess.run", side_effect=mock_run):
-            result = cert.migrate_cron_if_needed(acme_home)
+    with patch("os.path.isfile", return_value=True), patch("subprocess.run", side_effect=mock_run):
+        result = cert.migrate_cron_if_needed(acme_home)
 
     logger.critical("[IMP:9][test_migrate_no_crontab] ASSERT: no crontab handled gracefully")
     assert result is True, f"Should return True (no crontab to migrate), got {result}"

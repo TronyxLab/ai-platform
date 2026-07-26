@@ -69,6 +69,7 @@
 # endregion MODULE_CONTRACT
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -453,14 +454,12 @@ def deploy_docker_module(
     logger.info("[IMP:7][deploy_docker_module][start] Deploying docker module: %s", module_name)
 
     # DevPlan 081 Phase C: audit deploy start (TASK-081C3)
-    try:
+    with contextlib.suppress(Exception):
         _shared_write_audit_entry(
             tag=f"docker_orchestrator:deploy:{module_name}",
             status="START",
             message=f"Deploying docker module {module_name}",
         )
-    except Exception:
-        pass
 
     # ── Resolve compose file ──
     compose_file = _resolve_compose_file(os.path.join(module_dir, module_name))
@@ -470,14 +469,12 @@ def deploy_docker_module(
             module_name,
             os.path.join(module_dir, module_name),
         )
-        try:
+        with contextlib.suppress(Exception):
             _shared_write_audit_entry(
                 tag=f"docker_orchestrator:deploy:{module_name}",
                 status="FAILED",
                 message=f"Compose file not found for {module_name}",
             )
-        except Exception:
-            pass
         return False
 
     # ── Build compose args ──
@@ -653,14 +650,12 @@ def deploy_docker_module(
         if up_result.returncode == 0:
             logger.info("[IMP:9][deploy_docker_module][done] Module deployed: %s", module_name)
             # DevPlan 081 Phase C: audit via shared audit_logger (TASK-081C3)
-            try:
+            with contextlib.suppress(Exception):
                 _shared_write_audit_entry(
                     tag=f"docker_orchestrator:deploy:{module_name}",
                     status="DEPLOYED",
                     message=f"docker compose up succeeded for {module_name}",
                 )
-            except Exception:
-                pass
             time.sleep(1)
             return True
         logger.error(
@@ -669,36 +664,30 @@ def deploy_docker_module(
             up_result.stderr.decode(errors="replace").strip() if up_result.stderr else "unknown",
         )
         # DevPlan 081 Phase C: audit deploy fail (TASK-081C3)
-        try:
+        with contextlib.suppress(Exception):
             _shared_write_audit_entry(
                 tag=f"docker_orchestrator:deploy:{module_name}",
                 status="FAILED",
                 message=f"docker compose up failed: {up_result.stderr.decode(errors='replace').strip()[:200] if up_result.stderr else 'unknown'}",
             )
-        except Exception:
-            pass
         return False
     except subprocess.TimeoutExpired:
         logger.error("[IMP:10][deploy_docker_module][timeout] docker compose up timed out for %s", module_name)
-        try:
+        with contextlib.suppress(Exception):
             _shared_write_audit_entry(
                 tag=f"docker_orchestrator:deploy:{module_name}",
                 status="TIMEOUT",
                 message=f"docker compose up timed out for {module_name}",
             )
-        except Exception:
-            pass
         return False
     except OSError as exc:
         logger.error("[IMP:10][deploy_docker_module][error] docker compose up error for %s: %s", module_name, exc)
-        try:
+        with contextlib.suppress(Exception):
             _shared_write_audit_entry(
                 tag=f"docker_orchestrator:deploy:{module_name}",
                 status="ERROR",
                 message=f"docker compose up error: {exc}",
             )
-        except Exception:
-            pass
         return False
 
 

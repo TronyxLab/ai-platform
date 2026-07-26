@@ -69,13 +69,11 @@ def _strip_prefixes(raw: str) -> str:
         cleaned = cleaned[len("platform-deploy "):]
 
     # Step 4: Strip bare "platform-deploy" (without space)
-    if cleaned == "platform-deploy" or cleaned.startswith("platform-deploy") and not cleaned.startswith("platform-deploy "):
+    if cleaned == "platform-deploy" or (cleaned.startswith("platform-deploy") and not cleaned.startswith("platform-deploy ")):
         cleaned = cleaned[len("platform-deploy"):]
 
     # Step 5: Trim whitespace
-    cleaned = cleaned.strip()
-
-    return cleaned
+    return cleaned.strip()
 
 
 # endregion FUNC__strip_prefixes
@@ -169,11 +167,7 @@ def parse_ssh_command(raw: str) -> dict:
         args = None
     elif verb in ("remove", "status", "verify", "platform-deliver", "platform-deploy"):
         prefix = verb + " "
-        if cleaned.startswith(prefix):
-            args = cleaned[len(prefix):]
-        else:
-            args = None
-        args = args.strip() if args else None
+        args = cleaned[len(prefix):].strip() if cleaned.startswith(prefix) else None
     else:  # deploy (default)
         args = cleaned
 

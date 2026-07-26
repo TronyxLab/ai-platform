@@ -433,22 +433,24 @@ parse_ssh_command() {
     # ⚠️ TRAP[BUG] · 2026-07-20 · raw="deploy.sh dance-site <sha>" → PROJECT=deploy.sh
     # Root cause: path prefix "/opt/platform/core/entrypoints/deploy.sh" not stripped
     # in parse_ssh_command. Fixed by shared ssh_command_parser (Phase B).
-    local verb args cleaned
+    local verb args cleaned json_output
+    json_output=$(python3 -m core.internal.shared.ssh_command_parser parse "$raw") || {
+        log_imp 10 "args" "FATAL: shared ssh_command_parser failed to parse '${raw}'"
+        exit 1
+    }
     {
         read -r verb
         read -r args
         read -r cleaned
     } <<< "$(python3 -c "
-import sys; sys.path.insert(0, '${SCRIPT_DIR}/../../internal/shared')
-from ssh_command_parser import parse_ssh_command
-r = parse_ssh_command(sys.argv[1])
+import json, sys
+r = json.loads(sys.argv[1])
+if 'error' in r:
+    sys.exit(1)
 print(r['verb'])
 print(r.get('args') or '')
 print(r['cleaned'])
-" "$raw")" || {
-        log_imp 10 "args" "FATAL: shared ssh_command_parser failed to parse '${raw}'"
-        exit 1
-    }
+" "$json_output")"
     log_imp 8 "args" "Shared parser: verb=${verb} args=${args} cleaned=${cleaned}"
 
     # ═══════════════════════════════════════════════════════════════
@@ -468,12 +470,17 @@ print(r['cleaned'])
     if [[ "$verb" == "platform-deliver" ]]; then
         local org="" project=""
         if [[ -n "$args" ]]; then
+            # Parse deliver args via python3 -m CLI
+            local parsed_json
+            parsed_json=$(python3 -m core.internal.shared.platform_deliver parse "$args") || {
+                log_imp 10 "args" "FATAL: platform_deliver parse failed for '${args}'"
+                exit 1
+            }
             read -r org project <<< "$(python3 -c "
-import sys; sys.path.insert(0, '${SCRIPT_DIR}/../../internal/shared')
-from platform_deliver import parse_deliver_args
-o, p = parse_deliver_args(sys.argv[1])
-print(o, p)
-" "$args")"
+import json, sys
+r = json.loads(sys.argv[1])
+print(r.get('org', ''), r.get('project', ''))
+" "$parsed_json")"
         else
             log_imp 10 "args" "FATAL: platform-deliver requires project name argument"
             exit 1

@@ -596,6 +596,15 @@ gates:
 - id: test_all_internal_scripts_reachable
   test_file: test_gate_dead_code.py
   description: 'Auto-discovered gate: test_all_internal_scripts_reachable'
+- id: test_canonical_paths_registered
+  test_file: test_gate_deploy_paths.py
+  description: 'Auto-discovered gate: test_canonical_paths_registered'
+- id: test_deprecated_have_removal_plan
+  test_file: test_gate_deploy_paths.py
+  description: 'Auto-discovered gate: test_deprecated_have_removal_plan'
+- id: test_no_unregistered_paths
+  test_file: test_gate_deploy_paths.py
+  description: 'Auto-discovered gate: test_no_unregistered_paths'
 - id: test_all_docker_modules_have_dockerignore_symlink
   test_file: test_gate_dockerignore_symlink.py
   description: 'Auto-discovered gate: test_all_docker_modules_have_dockerignore_symlink'
@@ -1244,6 +1253,11 @@ non_repairable_gates:
   repairable: false
   repair_class: L3
   repair_reason: Security gate — requires manual audit
+- gate_id: template-syntax-contract
+  repairable: false
+  repair_class: L3
+  repair_reason: 'Template syntax contract: config/ uses ${}, templates/ uses {{}},
+    no mixed syntax'
 forbidden_directories:
 - core/scripts/e2e
 - core/scripts

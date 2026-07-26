@@ -119,25 +119,26 @@ parse_verb() {
 
     log_imp 8 "entrypoint" "Raw SSH_ORIGINAL_COMMAND: ${raw}"
 
-    # ── Phase B: shared ssh_command_parser ──
-    # Single python3 invocation: outputs verb, args, cleaned (one per line)
-    # Error handling: parser exits non-zero on ValueError (empty command)
-    local verb args cleaned
+    # ── Phase B: shared ssh_command_parser via python3 -m CLI ──
+    # CLI invocation prints JSON to stdout; thin Python wrapper extracts fields
+    local verb args cleaned json_output
+    json_output=$(python3 -m core.internal.shared.ssh_command_parser parse "$raw") || {
+        log_imp 10 "entrypoint" "FATAL: ssh_command_parser failed to parse command"
+        exit 1
+    }
     {
         read -r verb
         read -r args
         read -r cleaned
     } <<< "$(python3 -c "
-import sys; sys.path.insert(0, '${_EP_DIR}/../internal/shared')
-from ssh_command_parser import parse_ssh_command
-r = parse_ssh_command(sys.argv[1])
+import json, sys
+r = json.loads(sys.argv[1])
+if 'error' in r:
+    sys.exit(1)
 print(r['verb'])
 print(r.get('args') or '')
 print(r['cleaned'])
-" "$raw")" || {
-        log_imp 10 "entrypoint" "FATAL: ssh_command_parser failed to parse command"
-        exit 1
-    }
+" "$json_output")"
 
     log_imp 9 "entrypoint" "Parsed: verb=${verb} args=${args} cleaned=${cleaned}"
 

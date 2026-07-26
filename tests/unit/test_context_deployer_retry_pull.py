@@ -23,7 +23,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -41,7 +40,6 @@ sys.path.insert(0, str(_MODULE_DIR))
 
 import context_deployer as cd
 from context_deployer import ProjectInfo
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # region Fixtures
@@ -75,13 +73,7 @@ def project_dir(tmp_path: Path) -> str:
     d = tmp_path / "projects" / "test-app"
     d.mkdir(parents=True, exist_ok=True)
     compose = d / "docker-compose.yml"
-    compose.write_text(
-        "version: '3.8'\n"
-        "services:\n"
-        "  app:\n"
-        "    image: test:latest\n"
-        "    restart: unless-stopped\n"
-    )
+    compose.write_text("version: '3.8'\nservices:\n  app:\n    image: test:latest\n    restart: unless-stopped\n")
     return str(d)
 
 
@@ -151,6 +143,8 @@ def test_retry_pull_success_first_attempt(
     assert result.error is None, f"Expected no error, got '{result.error}'"
 
     logger.critical("[IMP:9][test] retry_pull success — channel=ghcr, status=deployed, health=healthy")
+
+
 # endregion
 
 
@@ -202,6 +196,8 @@ def test_retry_pull_all_failed_fallback_to_build(
     assert result.error is None, f"Expected no error, got '{result.error}'"
 
     logger.critical("[IMP:9][test] retry_pull all fail → build fallback — channel=build, status=deployed")
+
+
 # endregion
 
 
@@ -242,9 +238,7 @@ def test_retry_pull_backoff_intervals(
     assert call_args[0] == project_dir, f"Expected compose_dir='{project_dir}', got '{call_args[0]}'"
 
     # Keyword args
-    assert call_kwargs.get("max_attempts") == 3, (
-        f"Expected max_attempts=3, got {call_kwargs.get('max_attempts')}"
-    )
+    assert call_kwargs.get("max_attempts") == 3, f"Expected max_attempts=3, got {call_kwargs.get('max_attempts')}"
     assert call_kwargs.get("backoff_seconds") == [5, 10, 20], (
         f"Expected backoff_seconds=[5, 10, 20], got {call_kwargs.get('backoff_seconds')}"
     )
@@ -254,6 +248,8 @@ def test_retry_pull_backoff_intervals(
         call_kwargs.get("max_attempts"),
         call_kwargs.get("backoff_seconds"),
     )
+
+
 # endregion
 
 
@@ -309,21 +305,15 @@ def test_retry_pull_audit_logged(
 
         # Verify status contains DEPLOYED
         status_arg = call_kwargs.get("status") or call_args[1]
-        assert "DEPLOYED" in str(status_arg).upper(), (
-            f"Expected status containing 'DEPLOYED', got '{status_arg}'"
-        )
+        assert "DEPLOYED" in str(status_arg).upper(), f"Expected status containing 'DEPLOYED', got '{status_arg}'"
 
         # Verify tag contains project name
         tag_arg = call_kwargs.get("tag") or call_args[0]
-        assert sample_project.name in str(tag_arg), (
-            f"Expected tag containing '{sample_project.name}', got '{tag_arg}'"
-        )
+        assert sample_project.name in str(tag_arg), f"Expected tag containing '{sample_project.name}', got '{tag_arg}'"
 
         # Verify message contains channel=ghcr
         msg_arg = call_kwargs.get("message") or call_args[2]
-        assert "ghcr" in str(msg_arg).lower(), (
-            f"Expected message containing 'ghcr', got '{msg_arg}'"
-        )
+        assert "ghcr" in str(msg_arg).lower(), f"Expected message containing 'ghcr', got '{msg_arg}'"
 
         logger.critical(
             "[IMP:9][test] Audit entry verified — tag=%s status=%s msg=%s",
@@ -331,6 +321,8 @@ def test_retry_pull_audit_logged(
             status_arg,
             msg_arg,
         )
+
+
 # endregion
 
 
@@ -377,18 +369,12 @@ def test_fallback_build_audit_logged(
 
         # Verify status contains DEPLOYED
         status_arg = call_kwargs.get("status") or call_args[1]
-        assert "DEPLOYED" in str(status_arg).upper(), (
-            f"Expected status containing 'DEPLOYED', got '{status_arg}'"
-        )
+        assert "DEPLOYED" in str(status_arg).upper(), f"Expected status containing 'DEPLOYED', got '{status_arg}'"
 
         # Verify message contains channel=build
         msg_arg = call_kwargs.get("message") or call_args[2]
-        assert "build" in str(msg_arg).lower(), (
-            f"Expected message containing 'build', got '{msg_arg}'"
-        )
-        assert "channel=build" in str(msg_arg).lower(), (
-            f"Expected message containing 'channel=build', got '{msg_arg}'"
-        )
+        assert "build" in str(msg_arg).lower(), f"Expected message containing 'build', got '{msg_arg}'"
+        assert "channel=build" in str(msg_arg).lower(), f"Expected message containing 'channel=build', got '{msg_arg}'"
 
         logger.critical(
             "[IMP:9][test] Fallback build audit verified — tag=%s status=%s msg=%s",
@@ -396,6 +382,8 @@ def test_fallback_build_audit_logged(
             status_arg,
             msg_arg,
         )
+
+
 # endregion
 
 

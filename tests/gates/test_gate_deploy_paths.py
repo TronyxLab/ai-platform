@@ -37,14 +37,12 @@ if _SHARED_DIR not in sys.path:
     sys.path.insert(0, _SHARED_DIR)
 
 from deploy_paths import (
-    CANONICAL_DEPLOY_PATHS,
-    DEPRECATED_DEPLOY_PATHS,
     get_canonical_paths,
     get_deprecated_paths,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _load_entrypoint_manifest() -> dict:
     """Load entrypoint-manifest.yaml, returning empty dict on failure."""
@@ -64,7 +62,7 @@ def _extract_deploy_targets(manifest: dict) -> list[str]:
     Deploy-related = 'deploy' in name OR mechanism includes ssh, rsync, git, tar, or compose.
     """
     deploy_targets: list[str] = []
-    for section_name, entries in manifest.items():
+    for entries in manifest.values():
         if not isinstance(entries, list):
             continue
         for entry in entries:
@@ -75,11 +73,8 @@ def _extract_deploy_targets(manifest: dict) -> list[str]:
                 continue
             mechanism = entry.get("mechanism", "")
             # Heuristic: deploy-related targets
-            if "deploy" in target_name.lower():
-                deploy_targets.append(target_name)
-            elif any(
-                kw in mechanism.lower()
-                for kw in ("ssh", "rsync", "git-push", "tar", "compose")
+            if "deploy" in target_name.lower() or any(
+                kw in mechanism.lower() for kw in ("ssh", "rsync", "git-push", "tar", "compose")
             ):
                 deploy_targets.append(target_name)
     return deploy_targets
@@ -91,6 +86,10 @@ def _extract_deploy_targets(manifest: dict) -> list[str]:
 # region TEST_canonical_paths_registered
 ## @purpose — Verify that deploy-related targets in entrypoint-manifest.yaml
 ##            have a corresponding canonical deploy path defined.
+# ⚠️ TRAP[TEST] · 2026-07-26 · Scenario: canonical_paths_registered
+# · Last fail: never (unregistered)
+# · Remove-if: CANONICAL_DEPLOY_PATHS is removed from deploy_paths.py
+@pytest.mark.gate
 def test_canonical_paths_registered():
     """All deploy-related manifest targets map to a canonical deploy path."""
     manifest = _load_entrypoint_manifest()
@@ -116,6 +115,10 @@ def test_canonical_paths_registered():
 # region TEST_no_unregistered_paths
 ## @purpose — Verify no unregistered deploy mechanisms exist.
 ##            CANONICAL_DEPLOY_PATHS must contain exactly 6 entries.
+# ⚠️ TRAP[TEST] · 2026-07-26 · Scenario: no_unregistered_paths
+# · Last fail: never (unregistered)
+# · Remove-if: CANONICAL_DEPLOY_PATHS changes cardinality or is removed
+@pytest.mark.gate
 def test_no_unregistered_paths():
     """CANONICAL_DEPLOY_PATHS has exactly 6 documented paths."""
     canonical = get_canonical_paths()
@@ -137,6 +140,10 @@ def test_no_unregistered_paths():
 # region TEST_deprecated_have_removal_plan
 ## @purpose — Verify every deprecated deploy path has target_date and removal_mechanism.
 ##            Without these, a deprecated path can persist indefinitely.
+# ⚠️ TRAP[TEST] · 2026-07-26 · Scenario: deprecated_have_removal_plan
+# · Last fail: never (unregistered)
+# · Remove-if: DEPRECATED_DEPLOY_PATHS is removed from deploy_paths.py
+@pytest.mark.gate
 def test_deprecated_have_removal_plan():
     """Every deprecated path has target_date, removal_mechanism, and verification."""
     deprecated = get_deprecated_paths()

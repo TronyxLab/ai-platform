@@ -1894,7 +1894,7 @@ def _ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> None:
         cert_mod = importlib.util.module_from_spec(spec)
         sys.modules["cert_orchestrator"] = cert_mod
         spec.loader.exec_module(cert_mod)
-        cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
+        cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env, migrate_cron=True)
         logger.info("[IMP:9][ssl_provision] Cert orchestration complete: %s", cert_result.to_dict())
     else:
         logger.warning("[IMP:7][ssl_provision] Cannot load cert_orchestrator.py")

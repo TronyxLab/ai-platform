@@ -19,11 +19,14 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 def load_yaml(yaml_path: str) -> dict:
@@ -125,10 +128,13 @@ def generate(data: dict, domain: str, project_name: str = "") -> list[str]:
     if plat_count < 8:
         print(f"WARNING: Only {plat_count} PLATFORM_* variables generated (expected ≥8)", file=sys.stderr)
 
+    logger.info("[IMP:9][gen_env_platform] Generation complete — %d PLATFORM_* variables", plat_count)
     return lines
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s][gen_env_platform] %(message)s", stream=sys.stderr)
+
     parser = argparse.ArgumentParser(description="Generate .env.platform from platform-env.yaml")
     parser.add_argument("--yaml", required=True, type=str, help="Path to platform-env.yaml")
     parser.add_argument("--name", type=str, default="", help="Project name for DSN substitution")
@@ -139,6 +145,8 @@ def main() -> None:
     lines = generate(data, domain=args.domain, project_name=args.name)
     for line in lines:
         print(line)
+
+    logger.info("[IMP:9][gen_env_platform] CLI generation complete — %d lines written", len(lines))
 
 
 if __name__ == "__main__":

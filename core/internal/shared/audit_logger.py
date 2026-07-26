@@ -144,7 +144,7 @@ def read_audit_log(
     entries: list[dict] = []
 
     try:
-        with open(log_file, "r", encoding="utf-8") as f:
+        with open(log_file, encoding="utf-8") as f:
             lines = f.readlines()
     except OSError as e:
         logger.warning("[IMP:7][read_audit_log] Cannot read %s: %s — returning empty list", log_file, e)
@@ -243,7 +243,7 @@ def main() -> int:
         )
         return 0
 
-    elif args.command == "read":
+    if args.command == "read":
         entries = read_audit_log(
             log_file=args.log_file,
             limit=args.limit,
