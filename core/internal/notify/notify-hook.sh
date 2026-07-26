@@ -83,7 +83,7 @@ send_telegram() {
     local text="$1"
 
     local encoded
-    encoded="$(python3 -c "import urllib.parse; print(urllib.parse.quote('''${text}''', safe=''))" 2>/dev/null || echo "${text}")"
+    encoded="$(python3 "$SCRIPT_DIR/url_encoder.py" encode "${text}" 2>/dev/null || echo "${text}")"
 
     local response http_code
     response="$(curl -s -w "\n%{http_code}" -X POST \

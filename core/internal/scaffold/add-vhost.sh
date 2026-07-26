@@ -40,6 +40,7 @@ RENDER_TARGET_DIR=""
 
 __LOG_PREFIX="add-vhost"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
+source "${PLATFORM_ROOT}/core/lib/python_deps.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # USAGE
@@ -266,33 +267,8 @@ read_node_yaml_projects() {
     log_imp 7 "read_node_yaml" "Parsing projects from: ${node_yaml_path}"
 
     # Use python3 yaml parser if available (handles anchors, aliases, edge cases)
-    if command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
-        python3 <<'PYEOF'
-import os, json, sys, yaml
-
-yaml_path = os.environ.get('NODE_YAML_PATH', '')
-if not yaml_path:
-    sys.exit(0)
-
-try:
-    with open(yaml_path) as f:
-        data = yaml.safe_load(f)
-except Exception as e:
-    print(f"[IMP:9][read_node_yaml] ERROR: {e}", file=sys.stderr)
-    sys.exit(1)
-
-projects = data.get('projects', [])
-if not isinstance(projects, list):
-    sys.exit(0)
-
-for p in projects:
-    if not isinstance(p, dict):
-        continue
-    name = p.get('name', '')
-    domain = p.get('domain', '')
-    if name and domain:
-        print(json.dumps({"name": name, "domain": domain}))
-PYEOF
+    if command -v python3 &>/dev/null && require_python_module yaml; then
+        python3 "$SCRIPT_DIR/vhost_yaml_reader.py" read-projects --yaml-path "$node_yaml_path"
     else
         # Fallback: grep-based parser for simple YAML
         log_imp 8 "read_node_yaml" "python3+yaml not available — using grep fallback"

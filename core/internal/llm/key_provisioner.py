@@ -80,7 +80,7 @@ def discover_projects() -> list[dict[str, Any]]:
     ## · Rev: when core/internal/ has discover_projects → remove shim and import real function
     """
     # Attempt real discovery: try importing from platform's project scanner
-    # TODO: replace shim with real ai-platform.yaml scanner
+    # ⚠️ TRAP[DECISION] · 2026-07-26 · LOW · LLM key provisioner shim — replace with real ai-platform.yaml scanner
     _discovery_paths = [
         "core.internal.deploy.project_discovery",
         "core.internal.bootstrap.project_discovery",
@@ -103,7 +103,7 @@ def discover_projects() -> list[dict[str, Any]]:
     logger.log(
         logging.WARNING,
         "[IMP:6][discover_projects] Real discovery not available — using hardcoded shim. "
-        "TODO: replace with ai-platform.yaml scanner.",
+        "⚠️ TRAP[DECISION] · 2026-07-26 · LOW · replace with ai-platform.yaml scanner.",
     )
     return [
         {"name": "test-backend", "llm": {"enabled": True}},

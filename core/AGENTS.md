@@ -4,7 +4,7 @@
 # STRUCTURE: ┌canonical operations table┐ → ◇ core/ dir structure → ◇ cross-layer import rules → ◇ forbidden lists → ⎋ navigation refs
 # region MODULE_CONTRACT
 ## @purpose  Catalog of canonical make targets, core/ directory structure, cross-layer import rules, and forbidden scripts/verbs for the ai-platform core
-## @scope    All operations that pass through Makefile; layer isolation rules; deleted/forbidden script inventory
+## @scope    All operations that pass through Makefile; layer isolation rules; deleted/forbidden script inventory. Source of truth for forbidden scripts: core/entrypoint-manifest.yaml#forbidden_scripts
 ## @invariants
 ##   - Every Makefile .PHONY target maps to a row in the canonical operations table
 ##   - Entrypoints only call internal/ or lib/ — never modules/
@@ -79,63 +79,7 @@
 
 ## Структура core/
 
-```
-core/
-├── entrypoints/                # Internal-обёртки — только из Makefile
-│   ├── deploy.sh
-│   ├── deploy-project.sh
-│   ├── bootstrap.sh
-│   ├── context-promote.sh
-│   ├── build.sh
-│   ├── scaffold.sh
-│   ├── validate.sh
-│   ├── audit.sh
-│   ├── secrets.sh
-│   ├── healthcheck.sh
-│   ├── check-file-lines.sh
-│   ├── lint.sh
-│   ├── check_commit_msg.py
-│   ├── check-doc-headers.sh
-│   └── pre-push-gate.sh
-├── internal/                   # Внутренние скрипты — не вызывать напрямую
-│   ├── deploy/deploy-project.sh
-│   ├── healthcheck/
-│   │   ├── docker-healthcheck.sh
-│   │   ├── modules-healthcheck.sh
-│   │   └── tor-proxy-healthcheck.sh
-│   ├── bootstrap/node-lifecycle.sh        (объединяет orchestrator.sh + node-update.sh, mode dispatch)
-│   ├── bootstrap/deploy-modules.sh
-│   ├── bootstrap/install-tor-proxy.sh
-│   ├── bootstrap/setup-node.sh
-│   ├── bootstrap/install-docker.sh
-│   ├── bootstrap/firewall.sh
-│   ├── build/hermes-images.sh             (бывший build-hermes-images.sh)
-│   ├── template_engine.py                (NEW — Python template engine)
-│   ├── template-engine.sh                (NEW — Bash CLI wrapper)
-│   ├── scaffold/add-project.sh
-│   ├── scaffold/context-init.sh
-│   ├── scaffold/add-vhost.sh
-│   ├── scaffold/gen-env-platform.sh
-│   ├── scaffold/remove-project.sh
-│   ├── scaffold/adopt-project.sh
-│   └── scaffold/project-list.sh
-│   ├── notify/notify-hook.sh
-│   ├── catalog/generate-catalog.sh
-│   ├── provision-environment.sh
-│   ├── secrets/decrypt-secrets.sh
-│   ├── validate/validate.sh
-│   └── audit/audit.sh
-├── lib/                        # Библиотеки (logging, healthcheck, node-resolver, paths)
-├── modules/{module}/           # Docker-сервисы
-│   ├── module.yaml, docker-compose.base.yml
-│   ├── */healthcheck.sh       → source ../../lib/healthcheck.sh
-│   ├── Makefile              → include ../../templates/module.mk
-│   ├── .dockerignore         → symlink ../../templates/.dockerignore
-│   └── {build,context}/      # (только hermes-agent) Dockerfile L1/L2
-├── templates/                  # module.mk, sudo-whitelist.template, template-manifest.yaml, .dockerignore
-├── entrypoint-manifest.yaml
-└── VERSION
-```
+<!-- Directory structure reflects the actual filesystem. See core/ files. -->
 
 ### Cross-layer import rules
 

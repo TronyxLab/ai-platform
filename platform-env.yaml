@@ -235,7 +235,6 @@ test_ports:
 profiles:
 - backup-cron
 - clickhouse
-- gha-runner
 - hermes-agent
 - infra-metrics
 - langfuse

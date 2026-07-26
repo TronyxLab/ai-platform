@@ -48,6 +48,7 @@ REGISTER=false
 __LOG_PREFIX="add-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
 source "${PLATFORM_ROOT}/core/lib/args.sh"
+source "${PLATFORM_ROOT}/core/lib/python_deps.sh"
 
 USAGE_SCRIPT="add-project.sh"
 USAGE_DESC="Create a new project from a template in the organization directory."
@@ -702,7 +703,7 @@ register_in_node_yaml() {
         yq eval -i ".projects += [${yaml_entry}]" "$node_yaml"
         log_imp 9 "-" "Project registered in node.yaml: ${name}"
 
-    elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+    elif command -v python3 &>/dev/null && require_python_module yaml; then
         log_info "yq not found — using Python3+yaml fallback for node.yaml registration"
 
         if [[ "$DRY_RUN" == true ]]; then

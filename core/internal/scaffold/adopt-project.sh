@@ -34,6 +34,7 @@ TEMPLATES_DIR="${PLATFORM_ROOT}/templates"
 __LOG_PREFIX="adopt-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
 source "${PLATFORM_ROOT}/core/lib/args.sh"
+source "${PLATFORM_ROOT}/core/lib/python_deps.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBALS
@@ -394,7 +395,7 @@ validate_compose_networks() {
     fi
 
     # Method 2: python3 yaml fallback
-    if [[ "$parse_ok" == false ]] && command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+    if [[ "$parse_ok" == false ]] && command -v python3 &>/dev/null && require_python_module yaml; then
         resolved_content="$(python3 -c "
 import sys, yaml
 with open('${compose_path}') as f:
@@ -665,7 +666,7 @@ register_in_node_yaml() {
 
         yq eval -i ".projects += [${entry}]" "$node_yaml"
         log_imp 9 "-" "Project registered in node.yaml: ${PROJECT_NAME}"
-    elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+    elif command -v python3 &>/dev/null && require_python_module yaml; then
         log_imp 7 "-" "yq not available — using python3+yaml fallback"
         python3 "${SCRIPT_DIR}/../shared/project_registry.py" register \
             --name "$PROJECT_NAME" \

@@ -16,14 +16,14 @@
   ## 🧐 TRAP[DECISION] · 2026-07-10 · — · redis/Makefile has NO stop/restart/logs targets · Rejected: adding stop/restart/logs targets · Reason: deferred, sudo-whitelist design intentionally blocks agent stop (module.mk:15) · Rev: if sudo-whitelist policy changes for redis
 ##   - backup target: triggers state snapshot via HTTP POST, then docker cp
 ##   - All targets log at IMP:7 minimum, critical paths at IMP:9
-##   - Does NOT include build, deploy, build-local targets (removed in Phase 2)
+##   - Does NOT include build, deploy, build-local targets (removed in DevPlan 020)
 ## @rationale Template pattern prevents Makefile duplication across modules (RC-6).
 ##   Targets match Brief_2 §3.2 canonical lifecycle operations. Agent restricted from stop
 ##   by both sudo-whitelist and convention. Build/deploy targets excluded per Phase 2
 ##   consolidation: only two hermes-build targets exist at root Makefile.
 ## @changes
 ##   2026-07-09 · Created from hermes-agent/Makefile as parameterized template
-##   · Removed build/deploy/build-local targets (moved to root Makefile Phase 2)
+##   · Removed build/deploy/build-local targets (moved to root Makefile)
 ##   · Fixed variable assignment (?=) for module overrides — modules set vars before include
 ##   · Replaced {{MODULE_NAME}} placeholders with $(MODULE_NAME) Make references
 # endregion MODULE_CONTRACT

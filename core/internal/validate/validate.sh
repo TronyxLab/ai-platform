@@ -35,6 +35,7 @@ ERRORS=0
 # === LDD Logging ===
 __LOG_PREFIX="validate"
 source "${SCRIPT_DIR}/../../lib/logging.sh"
+source "${SCRIPT_DIR}/../../lib/python_deps.sh"
 
 # Local adapters for two-arg (block, message) log calls.
 # Library's log_* use one-arg (message) with auto-block — incompatible with existing calls.
@@ -47,7 +48,7 @@ vlog_fail()  { log_imp 9 "$1" "FAIL: $2"; ERRORS=$(( ERRORS + 1 )); }
 detect_validator() {
     if command -v ajv &>/dev/null; then
         echo "ajv"
-    elif command -v python3 &>/dev/null && python3 -c "import jsonschema" &>/dev/null 2>&1; then
+    elif command -v python3 &>/dev/null && require_python_module jsonschema; then
         echo "python"
     else
         echo "[IMP:10][validate][detect] ERROR: No validator found." \

@@ -30,7 +30,7 @@ ingester:
         store: inmemory
       replication_factor: 1
     final_sleep: 0s
-    # ⚠️ TRAP[DECISION] · 2026-07-03 · min_ready_duration: 0s — macOS Docker Desktop
+    # ⚠️ TRAP[DECISION] · 2026-07-26 · LOW · min_ready_duration: 0s — macOS Docker Desktop
     # · Default 15s causes /ready to return 503 during test window.
     # · Single-node deployment — no ring synchronization needed.
     # · Safe for both test and production (single ingester).

@@ -62,7 +62,7 @@ node-update:
 ##   Delegates to core/entrypoints/converge.sh
 converge:
 	@echo "[IMP:7][make][converge] Running node reconciliation..."
-	@bash core/entrypoints/converge.sh --node $(NODE) \
+	@bash $(_platform_root)/core/entrypoints/converge.sh --node $(NODE) \
 		$(if $(DRY_RUN),--dry-run,) \
 		$(if $(filter 1,$(RECONCILE)),--reconcile)
 	@echo "[IMP:9][make][converge] Node reconciliation complete"
@@ -72,7 +72,7 @@ converge:
 ##   Delegates to core/internal/scaffold/add-vhost.sh --render-all --node
 render-vhosts:
 	@echo "[IMP:7][make][render-vhosts] Generating vhost configs from node.yaml..."
-	@bash core/internal/scaffold/add-vhost.sh --render-all --node $(NODE) --node-configs-dir $(NODE_CONFIGS_DIR)
+	@bash $(_platform_root)/core/internal/scaffold/add-vhost.sh --render-all --node $(NODE) --node-configs-dir $(NODE_CONFIGS_DIR)
 	@echo "[IMP:9][make][render-vhosts] Vhost generation complete"
 
 ## deploy-context: Deploy all projects of a context on a bootstrapped node (DevPlan 047)

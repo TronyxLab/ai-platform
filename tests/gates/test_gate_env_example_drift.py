@@ -272,15 +272,7 @@ def test_nextauth_secret_precondition(caplog):
             nextauth_ci = s.get("ci_default", "")
             break
 
-    if not nextauth_ci or nextauth_ci == "ci-test-nextauth-secret-32-chars-min!!":
-        # DevPlan 078 not merged — NEXTAUTH_SECRET validation deferred
-        logger.info(
-            "[IMP:9][gate] SKIP: DevPlan 078 not merged — NEXTAUTH_SECRET validation deferred (ci_default unchanged)"
-        )
-        pytest.skip("DevPlan 078 not merged — NEXTAUTH_SECRET validation deferred")
-        return
-
-    # DevPlan 078 is merged — validate consistency
+    # DevPlan 078 merged — validate NEXTAUTH_SECRET consistency
     with open(ENV_EXAMPLE) as f:
         for line in f:
             if line.startswith("NEXTAUTH_SECRET="):

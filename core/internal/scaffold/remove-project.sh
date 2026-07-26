@@ -41,6 +41,7 @@ source "${PLATFORM_ROOT}/core/lib/logging.sh"
 source "${PLATFORM_ROOT}/core/lib/args.sh"
 source "${PLATFORM_ROOT}/core/lib/ssh.sh"
 source "${PLATFORM_ROOT}/core/lib/audit_logging.sh"
+source "${PLATFORM_ROOT}/core/lib/python_deps.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBALS
@@ -206,7 +207,7 @@ unregister_from_node_yaml() {
         # Remove project by name — yq eval -i with del(..|select)
         yq eval -i "del(.projects[] | select(.name == \"${name}\"))" "$node_yaml"
         log_imp 9 "-" "yq: removed '${name}' from projects[] in ${node_yaml}"
-    elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+    elif command -v python3 &>/dev/null && require_python_module yaml; then
         log_imp 7 "-" "yq not available — using python3+yaml fallback"
         local py_rc=0
         python3 "${SCRIPT_DIR}/../shared/project_registry.py" deregister \

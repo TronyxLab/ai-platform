@@ -272,59 +272,13 @@ _register_in_platform_yaml() {
 
     log_imp 8 "register" "Adding context entry: name=${ctx_name}"
 
-    local python_script
-    python_script=$(cat <<'PYEOF'
-import sys, yaml
-
-yaml_path = sys.argv[1]
-ctx_name = sys.argv[2]
-ctx_desc = sys.argv[3]
-node_cfg_repo = sys.argv[4] if len(sys.argv) > 4 else ""
-hermes_agent_repo = sys.argv[5] if len(sys.argv) > 5 else ""
-
-try:
-    with open(yaml_path, 'r') as f:
-        data = yaml.safe_load(f) or {}
-except Exception as e:
-    print(f"ERROR: Failed to read {yaml_path}: {e}")
-    sys.exit(1)
-
-if 'contexts' not in data or data['contexts'] is None:
-    data['contexts'] = []
-
-for ctx in data['contexts']:
-    if isinstance(ctx, dict) and ctx.get('name') == ctx_name:
-        print("EXISTS")
-        sys.exit(0)
-
-new_entry = {'name': ctx_name}
-if ctx_desc:
-    new_entry['description'] = ctx_desc
-if node_cfg_repo:
-    new_entry['node_configs_repo'] = node_cfg_repo
-if hermes_agent_repo:
-    new_entry['hermes_agent_repo'] = hermes_agent_repo
-
-data['contexts'].append(new_entry)
-
-try:
-    with open(yaml_path, 'w') as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-except Exception as e:
-    print(f"ERROR: Failed to write {yaml_path}: {e}")
-    sys.exit(1)
-
-print("OK")
-PYEOF
-)
-
     local py_output py_rc=0
-    py_output="$(python3 -c "${python_script}" \
-        "${PLATFORM_NODE_YAML}" \
-        "${ctx_name}" \
-        "${ctx_desc}" \
-        "${node_cfg_repo}" \
-        "${hermes_agent_repo}" 2>&1)" || py_rc=$?
+    py_output="$(python3 "$SCRIPT_DIR/context_registry.py" register \
+        --yaml-path "${PLATFORM_NODE_YAML}" \
+        --name "${ctx_name}" \
+        --desc "${ctx_desc}" \
+        --node-cfg-repo "${node_cfg_repo}" \
+        --hermes-agent-repo "${hermes_agent_repo}" 2>&1)" || py_rc=$?
 
     if [[ "$py_rc" -ne 0 ]]; then
         log_imp 10 "register" "FATAL: YAML registration failed (exit=${py_rc})"
