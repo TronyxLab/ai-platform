@@ -580,7 +580,7 @@ def download_cert(
         if _download_s3_file(f"{s3_base}/account.tar.gz", tmp_account_path):
             os.makedirs(acme_home, exist_ok=True)
             with tarfile.open(tmp_account_path, "r:gz") as tar:
-                tar.extractall(path=acme_home)
+                tar.extractall(path=acme_home)  # nosec B202 — extracted from trusted S3 bucket (platform-owned)
             logger.info("[IMP:9][s3_ssl_cache] acme.sh account data restored for %s", domain)
         else:
             logger.info("[IMP:8][s3_ssl_cache] No account data in S3 for %s — skipping", domain)

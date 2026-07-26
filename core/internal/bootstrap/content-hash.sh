@@ -2,13 +2,11 @@
 # GREP_SUMMARY: content-hash thin-wrapper python compute-step-hash step-hash-changed checkpoint bootstrap unified-drift
 # STRUCTURE: ▶ compute_step_hash(step, paths...) → delegate to python3 shared/content_hash.py → ⎋ hash
 #            └ step_hash_changed(step, hash) → stored vs current comparison → 0|1
-# ═══════════════════════════════════════════════════════════════════
-# MODULE_CONTRACT — Thin shell wrapper over Python shared/content_hash.py
-# ═══════════════════════════════════════════════════════════════════
-## @purpose  Thin shell wrapper over core.internal.shared.content_hash
-##           (DevPlan 079 DRIFT-B4 unification). Delegates hash computation to
-##           Python shared module; retains step_hash_changed() in shell for
-##           CHECKPOINT_DIR filesystem access without Python dependency.
+# region MODULE_CONTRACT
+## @purpose  Thin shell wrapper over core.internal.shared.content_hash (DevPlan 079
+##           DRIFT-B4 unification). Delegates hash computation to Python shared module;
+##           retains step_hash_changed() in shell for CHECKPOINT_DIR filesystem access
+##           without Python dependency.
 ## @scope    — compute_step_hash() → python3 -m core.internal.shared.content_hash
 ##           — step_hash_changed()  → compare stored hash vs current (shell only)
 ## @invariants
@@ -16,6 +14,7 @@
 ##   - step_hash_changed remains in shell (requires CHECKPOINT_DIR access)
 ##   - All callers (checkpoint.sh, node-lifecycle.sh) work without changes
 ## @changes  2026-07-25 | DevPlan 079 — Reduced to thin wrapper (~40 LOC, was 127)
+# endregion MODULE_CONTRACT
 
 # ═══════════════════════════════════════════════════════════════════
 # CONTENT HASH FUNCTIONS (thin wrappers)

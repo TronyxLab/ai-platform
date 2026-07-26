@@ -686,7 +686,7 @@ def create_langfuse_project(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 — internal Langfuse API (localhost)
             status_code = resp.status
             if status_code in (200, 201):
                 logger.info("[IMP:9][langfuse] Langfuse project created: %s", config.project_name)
@@ -818,7 +818,7 @@ def reload_monitoring_services() -> list[RenderResult]:
     # Prometheus reload
     try:
         req = urllib.request.Request(PROMETHEUS_RELOAD_URL, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 — internal Prometheus API (localhost)
             logger.info("[IMP:8][reload] Prometheus reload: HTTP %s", resp.status)
             results.append(RenderResult(component="reload", status="created", detail=f"Prometheus HTTP {resp.status}"))
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
@@ -828,7 +828,7 @@ def reload_monitoring_services() -> list[RenderResult]:
     # Loki reload
     try:
         req = urllib.request.Request(LOKI_RELOAD_URL, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 — internal Loki API (localhost)
             logger.info("[IMP:8][reload] Loki reload: HTTP %s", resp.status)
             results.append(RenderResult(component="reload", status="created", detail=f"Loki HTTP {resp.status}"))
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: vhost_yaml_reader.py, read-projects, node.yaml, vhost
 # STRUCTURE: ▶ read_projects() → ⎋ CLI (argparse: read-projects)
-"""
-Read project names and domains from node.yaml for vhost generation.
-
-Usage:
-    python3 vhost_yaml_reader.py read-projects --yaml-path <path>
-
-Outputs JSON lines:
-    {"name": "...", "domain": "..."}
-One line per project with a non-empty 'domain' field.
-Exits with 0 (no output) if no projects with domain found.
-"""
+# region MODULE_CONTRACT
+## @purpose  Read project names and domains from node.yaml for vhost generation.
+## @scope    CLI tool: read-projects with yaml-path. Outputs JSON lines per project.
+## @invariants
+##   - Outputs JSON lines to stdout, one per project with non-empty domain
+##   - Exits 0 with no output if no projects with domain found
+##   - Uses PyYAML safe_load — no arbitrary code execution
+## @rationale Needed for nginx vhost automation — vhost config generation
+##            reads project→domain mapping from node.yaml.
+# endregion MODULE_CONTRACT
 
 import argparse
 import json

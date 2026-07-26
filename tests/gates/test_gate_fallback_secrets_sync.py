@@ -68,11 +68,7 @@ def _get_definition_ci_default_names() -> list[str]:
     with open(SECRET_DEFINITIONS_PATH) as f:
         defs = yaml.safe_load(f)
 
-    return sorted(
-        secret["name"]
-        for secret in defs.get("secrets", [])
-        if secret.get("ci_default")
-    )
+    return sorted(secret["name"] for secret in defs.get("secrets", []) if secret.get("ci_default"))
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────

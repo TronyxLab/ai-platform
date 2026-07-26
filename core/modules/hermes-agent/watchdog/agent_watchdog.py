@@ -507,7 +507,7 @@ class HealthChecker:
         while elapsed < timeout_sec:
             try:
                 req = urllib.request.Request(self._url, method="GET")
-                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # nosec B310 — local Hermes agent health endpoint
                     if resp.status == 200:
                         logger.info(
                             "[IMP:8][watchdog][%s] /ready returned 200 after %ds",
@@ -1026,7 +1026,6 @@ class Watchdog:
 
         # Phase 2: Self-update (only if PENDING_FILE exists)
         return self._run_self_update_phase()
-
 
     # endregion
 

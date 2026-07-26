@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: url_encoder.py, urllib, urlencode, telegram
 # STRUCTURE: ▶ url_encode → ⎋ CLI (argparse: encode)
-"""
-URL-encode text for Telegram bot API.
-
-Usage:
-    python3 url_encoder.py encode <text>
-
-Outputs the URL-encoded text to stdout.
-"""
+# region MODULE_CONTRACT
+## @purpose  URL-encode text for Telegram bot API.
+## @scope    CLI tool: encode with positional text argument.
+## @invariants
+##   - Uses urllib.parse.quote with safe='' for full encoding
+##   - Outputs URL-encoded text to stdout
+## @rationale Needed for Telegram notification hook — message text must be
+##            URL-encoded for bot API calls.
+# endregion MODULE_CONTRACT
 
 import argparse
 import urllib.parse

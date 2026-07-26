@@ -163,7 +163,10 @@ def _install_pip3() -> bool:
     ):
         return False
 
-    return _run(["apt-get", "install", "-y", "-qq", "python3-pip", "python3-venv"], label="apt-get install python3-pip python3-venv")
+    return _run(
+        ["apt-get", "install", "-y", "-qq", "python3-pip", "python3-venv"],
+        label="apt-get install python3-pip python3-venv",
+    )
 
 
 # region FUNC__install_requirements

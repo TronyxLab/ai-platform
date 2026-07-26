@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: patch-basic-auth-provider NotImplementedError monkey-patch routes.py #55985
+# STRUCTURE: ▶ read routes.py → ◇ find start_login() block → ⊕ replace with redirect → ⎋ write routes.py
 # region MODULE_CONTRACT
 ## @purpose  Monkey-patch upstream Hermes Agent #55985: BasicAuthProvider.start_login()
 ##           raises NotImplementedError, causing GET /auth/login?provider=basic → 500.

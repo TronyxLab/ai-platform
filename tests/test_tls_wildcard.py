@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: tls-wildcard predeploy-gate nginx-vhost ssl-certificate letsencrypt node-yaml domain server-name hardcoded-domain wildcard-cert contract-test bash-syntax acme-sh tls-scripts subprocess
 # STRUCTURE: ▶ platform_root → ◇ static_validation(vhost_configs,server_names,node_yaml) ∋ ssl_cert_path ⊕ server_name_template ⊕ hermes_vhost → ⊕ contract_test ∋ tls_scripts_exist ⊕ bash_syntax ⊕ acme_sh_available → ⎋ pass|fail
+# region MODULE_CONTRACT
 ## @purpose  Pre-deploy TLS wildcard gate + contract tests. Static analysis of nginx vhost
 ##           configs and node.yaml to ensure all TLS references use the wildcard-ready
 ##           ${PLATFORM_DOMAIN} template, and no hardcoded domain names or non-wildcard

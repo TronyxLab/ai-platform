@@ -521,11 +521,7 @@ def test_no_ssl_provision_exception(caplog) -> None:
     """
     logger.info("[IMP:8][test_no_ssl_provision_exception] Checking _SHEBANG_EXCEPTION_PATTERNS for ssl-provision.sh...")
 
-    violations = [
-        pattern
-        for pattern in _SHEBANG_EXCEPTION_PATTERNS
-        if "ssl-provision.sh" in pattern
-    ]
+    violations = [pattern for pattern in _SHEBANG_EXCEPTION_PATTERNS if "ssl-provision.sh" in pattern]
 
     if violations:
         logger.error(

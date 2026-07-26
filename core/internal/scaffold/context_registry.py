@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: context_registry.py, register-context, yaml, platform-node-yaml
 # STRUCTURE: ▶ register_context → ⎋ CLI (argparse: register)
-"""
-Register a context entry in platform_node_yaml.
-
-Usage:
-    python3 context_registry.py register --yaml-path <path> --name <name> [--desc <desc>] [--node-cfg-repo <url>] [--hermes-agent-repo <url>]
-
-Outputs:
-    "OK"      — context registered successfully
-    "EXISTS"  — context with given name already exists (exit 0)
-    "ERROR: " — fatal error prefix
-"""
+# region MODULE_CONTRACT
+## @purpose  Register a context entry in platform node.yaml contexts[] list.
+## @scope    CLI tool: register-context with yaml-path, name, desc, repos.
+## @invariants
+##   - Exits with 0 if context already exists ("EXISTS" response)
+##   - Exits with 1 on YAML read/write errors
+##   - Uses PyYAML safe_load — no arbitrary code execution
+## @rationale Needed for scaffold automation — programmatic context registration
+##            without manual node.yaml editing.
+# endregion MODULE_CONTRACT
 
 import argparse
 import sys
