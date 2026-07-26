@@ -40,7 +40,7 @@ EXCEPTIONS=(
     "core/internal/healthcheck/*.sh"    # Internal healthchecks
     "core/modules/hermes-agent/build/scripts/*"  # Hermes build
     "core/modules/hermes-agent/context/scripts/*" # Hermes context
-    "core/internal/bootstrap/ssl-provision.sh"   # SSL provisioning (thin wrapper)
+    # ssl-provision wrapper: deleted (Dead Code Sweep 084) — 0 callers, all deps migrated
     "core/modules/nginx/nginx_reload_hook.sh"    # Nginx hook
     "core/internal/bootstrap/s3-ssl-cache.sh"    # SSL cache (DevPlan 024)
     "core/internal/deploy/reconcile-projects.sh"  # Reconciliation (DevPlan 025)

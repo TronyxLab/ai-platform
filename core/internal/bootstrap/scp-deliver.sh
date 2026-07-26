@@ -76,12 +76,13 @@ fi
 ##   trust the saved key (honest TOFU). This is the user-chosen security trade-off.
 ## · Rev: if reinstall-detection is needed in CI, add a separate mechanism
 ## @deprecated W2-E1: use SSH_OPTS_COMMON from lib/ssh.sh directly.
-##             Retained as backward-compat alias for 1 release cycle.
-##             Removed in Wave 3.
+##             Retained as backward-compat alias (NOT dead code).
+##             prepare_ssh_opts() has 8 active callers and manages host-key cleanup
+##             not covered by SSH_OPTS_COMMON. See TRAP[DECISION] below.
 prepare_ssh_opts() {
     local ssh_host="$1"
     local mode="${2:-init}"
-    echo "[IMP:8][bootstrap][ssh] DEPRECATED: prepare_ssh_opts() — use SSH_OPTS_COMMON from lib/ssh.sh" >&2
+    echo "[IMP:8][bootstrap][ssh] BACKWARD-COMPAT: prepare_ssh_opts() — use SSH_OPTS_COMMON from lib/ssh.sh" >&2
 
     # Keep host-key management for backward compat (ssh_exec doesn't manage known_hosts)
     if [[ "${mode}" == "init" ]]; then

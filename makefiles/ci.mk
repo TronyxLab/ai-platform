@@ -9,7 +9,7 @@
 ## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
 # endregion MODULE_CONTRACT
 
-.PHONY: test gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock
+.PHONY: test gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock check-dead-code
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -113,17 +113,19 @@ test:
 gate:
 	$(eval MODE := $(or $(MODE),full))
 	@if [ "$(MODE)" = "fast" ]; then \
-		echo "[IMP:7][make][gate] MODE=fast — 6 steps: pre-commit, validate, gates, contract, static, predeploy..."; \
+		echo "[IMP:7][make][gate] MODE=fast — 7 steps: pre-commit, validate, check-dead-code, gates, contract, static, predeploy..."; \
 		rm -f tests/report.xml tests/report*.xml && \
 		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
-			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run..."; \
+			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run..."; \
 			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; exit 1; }; \
 		else \
-			echo "[IMP:7][make][gate] Step 1/6: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
+			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
 		fi; \
-		echo "[IMP:7][make][gate] Step 2/6: validate..."; \
+		echo "[IMP:7][make][gate] Step 2/7: validate..."; \
 		bash $(_platform_root)/core/entrypoints/validate.sh || { echo "[IMP:9][make][gate] FAIL: validate"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 3a/6: anti-drift CI gates (static, parallel)..."; \
+		echo "[IMP:7][make][gate] Step 2b/7: check-dead-code..."; \
+		$(MAKE) check-dead-code || { echo "[IMP:9][make][gate] FAIL: check-dead-code"; exit 1; }; \
+		echo "[IMP:7][make][gate] Step 3a/7: anti-drift CI gates (static, parallel)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v || { echo "[IMP:9][make][gate] FAIL: gates (static)"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 3b/6: anti-drift CI gates (Docker, sequential)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and requires_docker" -v \
@@ -145,14 +147,16 @@ gate:
 		GATE_FAILED=0; \
 		rm -f tests/report.xml tests/report*.xml; \
 		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
-			echo "[IMP:7][make][gate] Step 1/10: pre-commit-run..."; \
+			echo "[IMP:7][make][gate] Step 1/11: pre-commit-run..."; \
 			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; GATE_FAILED=1; }; \
 		else \
-			echo "[IMP:7][make][gate] Step 1/10: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
+			echo "[IMP:7][make][gate] Step 1/11: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
 		fi; \
-		echo "[IMP:7][make][gate] Step 2/10: validate..."; \
+		echo "[IMP:7][make][gate] Step 2/11: validate..."; \
 		$(MAKE) validate || { echo "[IMP:9][make][gate] FAIL: validate"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 3/10: lint..."; \
+		echo "[IMP:7][make][gate] Step 2b/11: check-dead-code..."; \
+		$(MAKE) check-dead-code || { echo "[IMP:9][make][gate] FAIL: check-dead-code"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 3/11: lint..."; \
 		$(MAKE) lint || { echo "[IMP:9][make][gate] FAIL: lint"; GATE_FAILED=1; }; \
 		echo "[IMP:7][make][gate] Step 4/10: check-file-lines (non-blocking)..."; \
 		$(MAKE) check-file-lines || true; \
@@ -228,6 +232,13 @@ check-file-lines:
 	@echo "[IMP:7][make][check-file-lines] Checking file line limits..."
 	@bash $(_platform_root)/core/entrypoints/check-file-lines.sh $(if $(MAX_LINES),--max-lines $(MAX_LINES))
 	@echo "[IMP:9][make][check-file-lines] Check complete"
+
+## check-dead-code: CI gate — detect DEPRECATED markers older than 30 days
+##   Scans all .sh and .py files for stale DEPRECATED markers with git-log age check
+check-dead-code:
+	@echo "[IMP:7][make][check-dead-code] Checking for stale DEPRECATED markers..."
+	@bash $(_platform_root)/core/entrypoints/check-dead-code.sh
+	@echo "[IMP:9][make][check-dead-code] All DEPRECATED markers within grace period"
 
 ## pre-commit-install: Install pre-commit hooks (gitleaks + code-quality + check-doc-headers + pre-push + commit-msg)
 pre-commit-install:

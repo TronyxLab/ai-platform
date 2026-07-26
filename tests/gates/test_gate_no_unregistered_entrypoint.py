@@ -63,8 +63,7 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/internal/hooks/*.sh",
     "core/modules/hermes-agent/build/scripts/*.sh",
     "core/modules/hermes-agent/context/scripts/*.sh",
-    # backward-compat thin wrapper — delegates to install-acme.sh + issue-cert.sh
-    "core/internal/bootstrap/ssl-provision.sh",
+    # ssl-provision.sh DELETED (Dead Code Sweep 084) — backward-compat wrapper, no callers
     # module hook scripts — called from deploy-project.sh _trigger_deploy_hooks via module.yaml hooks: section
     "core/modules/nginx/nginx_reload_hook.sh",
     # SSH forced-command entrypoint on VPS — not called from Makefile directly
@@ -502,3 +501,42 @@ def test_forbidden_scripts_absent(caplog) -> None:
 
 
 # endregion TEST_FORBIDDEN_SCRIPTS_ABSENT
+
+
+# region TEST_NO_SSL_PROVISION_EXCEPTION
+## @purpose  Verify ssl-provision.sh is NOT in the exception list (Dead Code Sweep 084).
+## @rationale  After T2 deletion, the file no longer exists — keeping it as an exception
+##             would be dead documentation. This test ensures the exception is removed.
+
+# 🧪 TRAP[TEST] · REGRESSION(084) · SCENARIO(ssl-provision-exception-removed) · LAST_FAIL(N/A) · REMOVE_IF(exception permanently absent)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_no_ssl_provision_exception(caplog) -> None:
+    """Verify ssl-provision.sh is NOT in _SHEBANG_EXCEPTION_PATTERNS (Dead Code Sweep 084).
+
+    # ▶ grep exception patterns for ssl-provision → ◇ not found? → PASS
+    #                                                  └→ FAIL: exception still present
+    """
+    logger.info("[IMP:8][test_no_ssl_provision_exception] Checking _SHEBANG_EXCEPTION_PATTERNS for ssl-provision.sh...")
+
+    violations: list[str] = []
+    for pattern in _SHEBANG_EXCEPTION_PATTERNS:
+        if "ssl-provision.sh" in pattern:
+            violations.append(pattern)
+
+    if violations:
+        logger.error(
+            "[IMP:10][test_no_ssl_provision_exception] FAIL: ssl-provision.sh still in exception patterns: %s",
+            violations,
+        )
+        pytest.fail(
+            f"ssl-provision.sh is still listed in _SHEBANG_EXCEPTION_PATTERNS: {violations}\n"
+            f"The file was deleted in Dead Code Sweep 084 T2 — remove the exception pattern."
+        )
+
+    logger.info("[IMP:9][test_no_ssl_provision_exception] PASS: No ssl-provision.sh exception patterns found")
+
+
+# endregion TEST_NO_SSL_PROVISION_EXCEPTION

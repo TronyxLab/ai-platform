@@ -36,6 +36,7 @@
 | `make audit` | Системный аудит | make audit [NODE=...] | core/entrypoints/audit.sh → core/internal/audit/audit.sh |
 | `make check-file-lines` | Проверка длины файлов | make check-file-lines [MAX_LINES=500] | core/entrypoints/check-file-lines.sh |
 | `make scripts-audit` | Аудит регистрации скриптов | make scripts-audit | core/internal/scripts-audit.sh |
+| `make check-dead-code` | Проверка мёртвого кода | make check-dead-code | core/entrypoints/check-dead-code.sh |
 | `make test` | Запуск тестов | make test [MARKER=...] | make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all] |
 | `make test-inventory-sync` | Синхронизация test inventory | make test-inventory-sync | tests/tools/sync_inventory.py |
 | `make gate` | Production gate | make gate [MODE=fast|full] | make gate [MODE=fast|full] |

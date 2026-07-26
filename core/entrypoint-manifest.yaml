@@ -134,6 +134,13 @@ validate:
   signature: make scripts-audit
   operation_ru: Аудит регистрации скриптов
   description: Audit shebang script registration in manifest or exceptions
+- make_target: check-dead-code
+  mechanism: shell-script
+  delegates_to: core/entrypoints/check-dead-code.sh
+  signature: make check-dead-code
+  operation_ru: Проверка мёртвого кода
+  description: CI gate — detect DEPRECATED markers older than 30 days (Dead Code Sweep
+    084)
 lint:
 - script: lint.sh
   mechanism: pre-commit-hook
@@ -596,6 +603,21 @@ gates:
 - id: test_all_internal_scripts_reachable
   test_file: test_gate_dead_code.py
   description: 'Auto-discovered gate: test_all_internal_scripts_reachable'
+- id: test_litellm_metrics_token_removed
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_litellm_metrics_token_removed'
+- id: test_nginx_install_sh_deleted
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_nginx_install_sh_deleted'
+- id: test_no_deprecated_markers_stale
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_no_deprecated_markers_stale'
+- id: test_no_ssl_provision_references
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_no_ssl_provision_references'
+- id: test_ssl_provision_sh_deleted
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_ssl_provision_sh_deleted'
 - id: test_canonical_paths_registered
   test_file: test_gate_deploy_paths.py
   description: 'Auto-discovered gate: test_canonical_paths_registered'
@@ -962,6 +984,9 @@ gates:
 - id: test_forbidden_scripts_absent
   test_file: test_gate_no_unregistered_entrypoint.py
   description: 'Auto-discovered gate: test_forbidden_scripts_absent'
+- id: test_no_ssl_provision_exception
+  test_file: test_gate_no_unregistered_entrypoint.py
+  description: 'Auto-discovered gate: test_no_ssl_provision_exception'
 - id: test_hermes_compose_has_no_fallback
   test_file: test_gate_password_charset.py
   description: 'Auto-discovered gate: test_hermes_compose_has_no_fallback'
@@ -1296,6 +1321,7 @@ allowed_verbs:
 - audit
 - backup
 - bootstrap-node
+- check-dead-code
 - check-env-defaults
 - check-file-lines
 - check-manifests

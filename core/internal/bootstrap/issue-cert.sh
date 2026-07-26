@@ -16,9 +16,9 @@
 ##   - Requires PLATFORM_ACME_DNS_PLUGIN; webnames plugin needs WEBNAMES_API_KEY (shredded after use)
 ##   - acme.sh cron installed AFTER cert issuance; cert expiry via openssl x509 (read-only)
 ##   - LETSENCRYPT_DIR env override supported (for testing)
-## @rationale Split from ssl-provision.sh per D3: issue-cert.sh called at each update/renew,
+## @rationale Split from original monolithic ssl-provision script per D3: issue-cert.sh called at each update/renew,
 ##   install-acme.sh only once at init. Decoupling reduces update latency.
-## @changes   CREATED: 2026-07-17 · T3 — Extract from ssl-provision.sh (DevPlan 005)
+## @changes   CREATED: 2026-07-17 · T3 — Extract from original monolithic ssl-provision script (DevPlan 005)
 ## @changes   2026-07-23 | DevPlan 058 — HTTP-01 fallback (ACME_CHALLENGE_MODE, _issue_http01_cert)
 ## ⚠️ TRAP[DECISION] · 2026-07-23 · D1 — DNS-01 primary, HTTP-01 graceful degradation
 ## · Rejected: HTTP-01 only (no wildcard certs)
@@ -34,7 +34,7 @@ __LOG_PREFIX="issue-cert"
 source "${SCRIPT_DIR}/../../lib/logging.sh"
 source "${SCRIPT_DIR}/../../lib/yaml_read.sh"
 
-# NOTE: All functions extracted from ssl-provision.sh. Original TRAP comments preserved.
+# NOTE: All functions extracted from original monolithic ssl-provision script. Original TRAP comments preserved.
 # The install_acme() function lives in install-acme.sh — this script handles cert issuance only.
 
 # region _IS_LE_CERT

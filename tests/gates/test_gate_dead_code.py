@@ -93,9 +93,8 @@ _EXCEPTION_PATHS: tuple[str, ...] = (
     # (${CORE_DIR}/internal/catalog/generate-catalog.sh) from node-lifecycle.sh
     # and deploy-project.sh; static call graph builder cannot resolve ${CORE_DIR}
     "core/internal/catalog/generate-catalog.sh",
-    # backward-compat thin wrapper — delegates to install-acme.sh + issue-cert.sh;
-    # no direct callers remain after T3 split (all migrated to issue-cert.sh/install-acme.sh)
-    "core/internal/bootstrap/ssl-provision.sh",
+    # s3-ssl-cache.sh — DevPlan 024, sourced dynamically, not canonical entrypoint
+    "core/internal/bootstrap/s3-ssl-cache.sh",
     # W4 state-machine delegation — scripts called from Python
     # (state_machine.py / steps.py via subprocess.run), not from shell source/exec.
     # Static bash call-graph analyzer cannot trace Python subprocess calls.
@@ -745,3 +744,201 @@ def test_all_entrypoints_have_live_caller(
 
 
 # endregion FUNC_test_all_entrypoints_have_live_caller
+
+
+# ── Dead Code Sweep 084 — verification tests ──────────────────────────
+
+# region FUNC_test_no_deprecated_markers_stale
+## @purpose  Verify all DEPRECATED markers in project code are ≤30 days old.
+##           Delegates to check-dead-code.sh CI gate. This test validates
+##           that the gate script works correctly — it returns exit 0 on
+##           a clean state (all DEPRECATED markers within grace period).
+## @rationale  Preventing stale DEPRECATED marker accumulation (AC5).
+
+# 🧪 TRAP[TEST] · REGRESSION(084) · SCENARIO(stale-deprecated-markers) · LAST_FAIL(N/A) · REMOVE_IF(check-dead-code.sh removed)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_no_deprecated_markers_stale(caplog) -> None:
+    """Verify all DEPRECATED markers in project code are ≤30 days old (via check-dead-code.sh).
+
+    # ▶ run check-dead-code.sh → ◇ exit 0? → PASS
+    #                              └→ FAIL: stale DEPRECATED markers detected
+    """
+    import subprocess
+
+    check_script = os.path.join(PLATFORM_ROOT, "core", "entrypoints", "check-dead-code.sh")
+
+    if not os.path.isfile(check_script):
+        pytest.fail(f"check-dead-code.sh not found at {check_script}")
+
+    logger.info("[IMP:8][test_no_deprecated_markers_stale] Running check-dead-code.sh...")
+    result = subprocess.run(
+        ["bash", check_script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    logger.info("[IMP:9][test_no_deprecated_markers_stale] Exit code: %d", result.returncode)
+    for line in result.stdout.splitlines():
+        logger.info("[IMP:7][check-dead-code] %s", line)
+    for line in result.stderr.splitlines():
+        logger.info("[IMP:7][check-dead-code] %s", line)
+
+    assert result.returncode == 0, (
+        f"[IMP:10][test_no_deprecated_markers_stale] FAIL: "
+        f"check-dead-code.sh exited with code {result.returncode} — "
+        f"stale DEPRECATED markers found:\n{result.stdout}"
+    )
+    logger.info("[IMP:9][test_no_deprecated_markers_stale] PASS: No stale DEPRECATED markers")
+
+
+# endregion FUNC_test_no_deprecated_markers_stale
+
+
+# region FUNC_test_nginx_install_sh_deleted
+## @purpose  Verify nginx/install.sh does not exist on disk (AC1).
+## @rationale  File was 1107 LOC of dead code — cert functions diverged from
+##             cert_orchestrator.py (080). Deleted as part of Dead Code Sweep 084.
+
+# 🧪 TRAP[TEST] · REGRESSION(084) · SCENARIO(nginx-install-deleted) · LAST_FAIL(N/A) · REMOVE_IF(nginx/install.sh reintroduced)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_nginx_install_sh_deleted(caplog) -> None:
+    """Verify nginx/install.sh has been deleted (AC1)."""
+    install_sh = os.path.join(PLATFORM_ROOT, "core", "modules", "nginx", "install.sh")
+
+    logger.info("[IMP:8][test_nginx_install_sh_deleted] Checking %s...", install_sh)
+    exists = os.path.isfile(install_sh)
+
+    if exists:
+        logger.error("[IMP:10][test_nginx_install_sh_deleted] FAIL: nginx/install.sh still exists")
+        pytest.fail(f"nginx/install.sh still exists at {install_sh} — delete it (Dead Code Sweep 084 T1)")
+    else:
+        logger.info("[IMP:9][test_nginx_install_sh_deleted] PASS: nginx/install.sh deleted")
+
+
+# endregion FUNC_test_nginx_install_sh_deleted
+
+
+# region FUNC_test_ssl_provision_sh_deleted
+## @purpose  Verify ssl-provision.sh does not exist on disk (AC2).
+## @rationale  File was 40 LOC backward-compat wrapper with zero file-level callers.
+##             WEBNAMES_API_KEY already loaded from $secrets_env directly.
+
+# 🧪 TRAP[TEST] · REGRESSION(084) · SCENARIO(ssl-provision-deleted) · LAST_FAIL(N/A) · REMOVE_IF(ssl-provision.sh reintroduced)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_ssl_provision_sh_deleted(caplog) -> None:
+    """Verify ssl-provision.sh has been deleted (AC2)."""
+    ssl_sh = os.path.join(PLATFORM_ROOT, "core", "internal", "bootstrap", "ssl-provision.sh")
+
+    logger.info("[IMP:8][test_ssl_provision_sh_deleted] Checking %s...", ssl_sh)
+    exists = os.path.isfile(ssl_sh)
+
+    if exists:
+        logger.error("[IMP:10][test_ssl_provision_sh_deleted] FAIL: ssl-provision.sh still exists")
+        pytest.fail(f"ssl-provision.sh still exists at {ssl_sh} — delete it (Dead Code Sweep 084 T2)")
+    else:
+        logger.info("[IMP:9][test_ssl_provision_sh_deleted] PASS: ssl-provision.sh deleted")
+
+
+# endregion FUNC_test_ssl_provision_sh_deleted
+
+
+# region FUNC_test_litellm_metrics_token_removed
+## @purpose  Verify LITELLM_METRICS_TOKEN is not present in .env.example (AC4).
+## @rationale  Variable has 0 consumers — Prometheus uses LITELLM_MASTER_KEY for /metrics auth.
+
+# 🧪 TRAP[TEST] · REGRESSION(084) · SCENARIO(litellm-metrics-token-removed) · LAST_FAIL(N/A) · REMOVE_IF(LITELLM_METRICS_TOKEN permanently absent)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_litellm_metrics_token_removed(caplog) -> None:
+    """Verify LITELLM_METRICS_TOKEN removed from .env.example (AC4)."""
+    env_example = os.path.join(PLATFORM_ROOT, ".env.example")
+
+    if not os.path.isfile(env_example):
+        pytest.skip(".env.example not found")
+
+    logger.info("[IMP:8][test_litellm_metrics_token_removed] Checking LITELLM_METRICS_TOKEN in .env.example...")
+    with open(env_example) as f:
+        content = f.read()
+
+    if "LITELLM_METRICS_TOKEN" in content:
+        logger.error("[IMP:10][test_litellm_metrics_token_removed] FAIL: LITELLM_METRICS_TOKEN still in .env.example")
+        pytest.fail("LITELLM_METRICS_TOKEN still present in .env.example — remove it (Dead Code Sweep 084 T4)")
+    else:
+        logger.info("[IMP:9][test_litellm_metrics_token_removed] PASS: LITELLM_METRICS_TOKEN removed from .env.example")
+
+
+# endregion FUNC_test_litellm_metrics_token_removed
+
+
+# region FUNC_test_no_ssl_provision_references
+## @purpose  Verify no project code references ssl-provision.sh by path (AC3).
+## @rationale  After file deletion, all path references must be cleaned up.
+
+# 🧪 TRAP[TEST] · REGRESSION(084) · SCENARIO(no-ssl-provision-refs) · LAST_FAIL(N/A) · REMOVE_IF(no ssl-provision.sh refs)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_no_ssl_provision_references(caplog) -> None:
+    """Verify no code references ssl-provision.sh by path (AC3)."""
+    import subprocess
+
+    logger.info("[IMP:8][test_no_ssl_provision_references] Grepping for ssl-provision.sh references...")
+
+    result = subprocess.run(
+        [
+            "grep",
+            "-r",
+            "ssl-provision\\.sh",
+            "--include=*.sh",
+            "--include=*.py",
+            "--include=*.yaml",
+            ".",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=PLATFORM_ROOT,
+    )
+
+    # Filter out .ai/, .venv/, .git/, tests/gates/ (document cleanup), test_inventory_changes.yaml results
+    filtered_lines: list[str] = []
+    for line in result.stdout.splitlines():
+        if ".ai/" in line or ".venv/" in line or ".git/" in line:
+            continue
+        # Test files and changelogs document the cleanup — not stale references
+        if "tests/gates/" in line or "test_inventory_changes.yaml" in line:
+            continue
+        filtered_lines.append(line)
+
+    if filtered_lines:
+        logger.error(
+            "[IMP:10][test_no_ssl_provision_references] FAIL: %d reference(s) to ssl-provision.sh found",
+            len(filtered_lines),
+        )
+        for ref in filtered_lines:
+            print(f"  REF: {ref}")
+        pytest.fail(
+            f"{len(filtered_lines)} reference(s) to ssl-provision.sh remain in project code:\n"
+            + "\n".join(filtered_lines)
+        )
+    else:
+        msg = "PASS: No ssl-provision.sh references in project code"
+        if result.stdout.strip():
+            msg += f" (only .ai/ docs references: {result.stdout.count(chr(10))} line(s))"
+        logger.info("[IMP:9][test_no_ssl_provision_references] %s", msg)
+
+
+# endregion FUNC_test_no_ssl_provision_references

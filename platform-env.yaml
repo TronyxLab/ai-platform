@@ -151,7 +151,6 @@ env_defaults:
   DEEPSEEK_API_KEY: sk-placeholder-key-for-ci
   LITELLM_MASTER_KEY: sk-ci-test-master-key
   LITELLM_LICENSE: ''
-  LITELLM_METRICS_TOKEN: ''
   LITELLM_PORT: '4000'
   LITELLM_HEALTH_URL: http://litellm:4000/health
   OPENAI_BASE_URL: http://litellm:4000
