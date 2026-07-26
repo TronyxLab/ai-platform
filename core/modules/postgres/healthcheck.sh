@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: postgres healthcheck check_docker_health lib/healthcheck
-# STRUCTURE: source lib/healthcheck.sh → check_docker_health postgres/pgbouncer → exit 0 | exit 1
+# GREP_SUMMARY: postgres healthcheck check_docker_health lib/healthcheck exec_check pg_isready
+# STRUCTURE: source lib/healthcheck.sh → liveness: check_docker_health → deep: check_docker_health + exec_check pg_isready → exit 0 | exit 1
 # region MODULE_CONTRACT
 ## @purpose  LIVENESS check — delegates to check_docker_health for postgres and pgbouncer containers
 ## @scope    Called by modules-healthcheck.sh
 ## @invariants
 ##   - Default mode (no args): checks docker container health via check_docker_health (liveness)
-##   - MODE=deep: checks container running state via docker inspect (non-duplicative of compose pg_isready)
+##   - MODE=deep: check_docker_health + exec_check pg_isready (postgres) / pg_isready -p 6432 (pgbouncer)
 ##   - Returns 0 = all healthy; 1 = any unhealthy
-## @rationale Deep mode does NOT duplicate compose HEALTHCHECK (pg_isready). Compose already verifies
-##            pg_isready for both postgres and pgbouncer. Deep mode only checks what compose doesn't —
-##            container process running state.
+## @rationale Unified contract per DevPlan 083: deep mode ALWAYS runs check_docker_health FIRST,
+##            THEN adds service-specific diagnostics via exec_check. This ensures deep is a strict
+##            superset of liveness, not a parallel alternative (DRIFT-H6 fix).
 ## @source ../../lib/healthcheck.sh — shared healthcheck primitives
 # 📝 TRAP[DEBT] · 2026-07-15 · LO · Container names hardcoded — script unusable against -test stack
 # · Observed: POSTGRES_CONTAINER/PGBOUNCER_CONTAINER захардкожены как postgres/pgbouncer
@@ -32,31 +32,16 @@ PGBOUNCER_CONTAINER="pgbouncer"
 MODE="${1:-}"
 
 if [ "$MODE" = "deep" ]; then
-    # Deep check: verify containers are running (compose HEALTHCHECK already handles pg_isready)
-    # Non-duplicative: compose checks pg_isready, deep checks State.Running
-    if ! command -v docker &>/dev/null; then
-        log_imp 9 "deep" "docker not available"
-        exit 1
-    fi
+    # Step 1: Check Docker health status (same as liveness)
+    check_docker_health "$POSTGRES_CONTAINER" || exit 1
+    check_docker_health "$PGBOUNCER_CONTAINER" || exit 1
 
-    # Postgres container running state
-    if docker inspect "$POSTGRES_CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
-        log_imp 8 "deep" "postgres container is running"
-    else
-        log_imp 9 "deep" "postgres container not running"
-        exit 1
-    fi
+    # Step 2: Service-specific diagnostics via exec_check
+    exec_check "$POSTGRES_CONTAINER" "pg_isready" || exit 1
+    exec_check "$PGBOUNCER_CONTAINER" "pg_isready -p 6432" || exit 1
 
-    # PgBouncer container running state
-    if docker inspect "$PGBOUNCER_CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
-        log_imp 8 "deep" "pgbouncer container is running"
-    else
-        log_imp 9 "deep" "pgbouncer container not running"
-        exit 1
-    fi
-
-    log_imp 9 "deep" "All postgres/pgbouncer containers running"
-    echo "[IMP:9][postgres-hc][deep] All containers running" >&2
+    log_imp 9 "deep" "All postgres/pgbouncer deep checks passed"
+    echo "[IMP:9][postgres-hc][deep] All deep checks passed" >&2
     exit 0
 fi
 

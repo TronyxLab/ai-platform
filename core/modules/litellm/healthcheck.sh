@@ -12,6 +12,7 @@
 ##            Compose HEALTHCHECK (python3 urllib → /health/readiness) is the single source of truth
 ##            for HTTP liveness. check_docker_health reads that state — no duplication.
 ##            T7: replaced check_http (parallel curl) with check_docker_health delegation.
+## @changes   2026-07-26 · DevPlan 083 — Verified: already conforms to unified contract (check_docker_health for both modes)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail

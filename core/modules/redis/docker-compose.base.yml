@@ -81,7 +81,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s  # 10→15s: standardized per DevPlan 083 (DB default)
 
     # [IMP:8][redis-compose] Resource limits: 256M — intentional (limits protect host from OOM)
 

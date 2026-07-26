@@ -112,7 +112,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 15s  # 20→15s: standardized per DevPlan 083 (DB default)
 
 volumes:
   clickhouse-data:

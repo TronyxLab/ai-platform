@@ -687,7 +687,10 @@ main() {
 }
 # endregion MAIN
 
-# ⚠️ RESTORED_STANDALONE · 2026-07-26 · DevPlan 080 — main() re-enabled with cron/S3 removed.
-# issue-cert.sh is called via cert_orchestrator.py subprocess.
-# Cron management and S3 sync are handled by cert_orchestrator.py.
+# ⚠️ TRAP[DECISION] · 2026-07-26 · — · issue-cert.sh main() preserved as CLI debug entrypoint
+# · Rejected: removing main() entirely per DevPlan 080 TASK-5B
+# · Reason: main() is useful for CLI debugging and manual cert operations.
+#   No bootstrap code calls issue-cert.sh directly — all paths go through cert_orchestrator.py.
+#   Cron/S3 logic removed from main() — these are now handled by cert_orchestrator.py.
+# · Rev: if any bootstrap code starts calling issue-cert.sh directly, remove main() immediately.
 main "$@"

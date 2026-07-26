@@ -18,7 +18,12 @@ CONTAINER="minio"
 MODE="${1:-}"
 [ "$MODE" = "deep" ] && {
     echo "[IMP:8][minio-hc][deep] Running deep HTTP healthcheck" >&2
+    # Step 1: Check Docker health status (same as liveness)
+    check_docker_health "$CONTAINER" || exit 1
+    # Step 2: Service-specific diagnostics via check_http
     check_http "http://127.0.0.1:9000/minio/health/live" "200" || exit 1
+    log_imp 9 "healthcheck" "minio deep check PASSED"
+    exit 0
 }
 echo "[IMP:8][minio-hc][liveness] Running default liveness check" >&2
 check_docker_health "$CONTAINER" || exit 1

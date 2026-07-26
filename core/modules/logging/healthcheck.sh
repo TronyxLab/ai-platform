@@ -27,13 +27,15 @@ if [ "$MODE" = "deep" ]; then
     # ·   Promtail image is minimal — no wget/curl inside.
     # · Rev: if Promtail image adds wget/curl, restore HTTP check via docker exec.
 
-    # Deep checks: verify Loki HTTP endpoint
-    log_imp 8 "healthcheck" "Deep mode: checking Loki HTTP endpoint"
-    check_http "http://127.0.0.1:3100/ready" "200" || exit 1
+    log_imp 8 "healthcheck" "Deep mode: checking Docker health + HTTP endpoints"
 
-    # Deep checks: verify Promtail health via docker inspect (port 9080 is internal)
-    log_imp 8 "healthcheck" "Deep mode: checking Promtail health"
-    check_docker_health "promtail" || exit 1
+    # Step 1: Check Docker health status for all containers
+    for container in "${CONTAINERS[@]}"; do
+        check_docker_health "$container" || exit 1
+    done
+
+    # Step 2: Service-specific diagnostics via check_http (Loki)
+    check_http "http://127.0.0.1:3100/ready" "200" || exit 1
 
     log_imp 9 "healthcheck" "All logging deep checks passed"
     exit 0

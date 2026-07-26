@@ -713,6 +713,21 @@ gates:
 - id: test_postgres_deep_includes_pgbouncer
   test_file: test_gate_healthcheck_contract.py
   description: 'Auto-discovered gate: test_postgres_deep_includes_pgbouncer'
+- id: test_all_modules_use_check_docker_health
+  test_file: test_gate_healthcheck_unification.py
+  description: 'Auto-discovered gate: test_all_modules_use_check_docker_health'
+- id: test_exec_check_used_in_docker_exec_modules
+  test_file: test_gate_healthcheck_unification.py
+  description: 'Auto-discovered gate: test_exec_check_used_in_docker_exec_modules'
+- id: test_modules_healthcheck_uses_lib
+  test_file: test_gate_healthcheck_unification.py
+  description: 'Auto-discovered gate: test_modules_healthcheck_uses_lib'
+- id: test_no_raw_docker_inspect_in_modules
+  test_file: test_gate_healthcheck_unification.py
+  description: 'Auto-discovered gate: test_no_raw_docker_inspect_in_modules'
+- id: test_start_period_standardized
+  test_file: test_gate_healthcheck_unification.py
+  description: 'Auto-discovered gate: test_start_period_standardized'
 - id: test_http_calls_have_retry
   test_file: test_gate_http_retry_policy.py
   description: 'Auto-discovered gate: test_http_calls_have_retry'

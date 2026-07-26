@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: healthcheck library service-check dependency-check module-health
-# STRUCTURE: ┌module healthcheck┐ → ○ poll_until_healthy → ◇ check_docker_health → ◇ check_http → ⊕ exit 0/1
+# GREP_SUMMARY: healthcheck library service-check dependency-check module-health check_tcp exec_check
+# STRUCTURE: ┌module healthcheck┐ → ○ poll_until_healthy → ◇ check_docker_health → ◇ check_http → ◇ check_tcp → ◇ exec_check → ⊕ exit 0/1
 # ⚠️ Errexit guard: warn if sourced without `set -e` (fail-fast on errors).
 # Uses $- (portable across bash/zsh) instead of [ -o errexit ] (zsh-incompatible).
 case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;; esac
@@ -41,20 +41,25 @@ case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;;
 ## @changes   LAST_CHANGE: 2026-07-07 · T1 — Initial implementation
 ## @modulemap — poll_until_healthy  [W:50] Universal poll loop
 ##             — check_docker_health [W:30] Docker container health check
-##             — check_http          [W:30] HTTP endpoint health check
+##             — check_http          [W:30] HTTP endpoint health check (with timeout)
+##             — check_tcp           [W:20] TCP connectivity check via /dev/tcp
+##             — exec_check          [W:30] docker exec command check
 ## @usecases  — Developer: poll_until_healthy "nginx" "check_http http://localhost:80" 30 2
 ##             — Developer: check_docker_health "my_container"
 ##             — Developer: check_http "http://example.com/health" "200,301,302"
 ## @changes   — 2026-07-09 · TASK-10 — Replaced eval with array-based execution for safety;
 ##             check_command string is split into array via IFS read -ra
-## @verified  — 2026-07-09 · TASK-4.5 — 6/6 existing healthcheck.sh modules source this library
+## @changes   — 2026-07-26 · DevPlan 083 — Added check_tcp(), exec_check(); added timeout param to check_http()
+## @verified  — 2026-07-26 · T1 — check_tcp() + exec_check() + check_http(timeout) added
 ##             (grep -rl "source.*lib/healthcheck.sh" core/modules/*/healthcheck.sh | wc -l → 6;
 ##             platform-secrets has no healthcheck.sh — uses systemd service, not Docker module)
 # endregion MODULE_CONTRACT
 # GREP_SUMMARY: healthcheck, poll, wait_for, docker health, HTTP check, curl, health, liveness, readiness, poll_until_healthy, check_docker_health, check_http
 # STRUCTURE: ▶ ┌SCRIPT_DIR┐ → source logging.sh → ○ poll_until_healthy(name,cmd,timeout,interval) → ┌"${check_cmd[@]}"┐ → ◇ exit 0? → ⎋ 0 | ◇ timeout? → ⎋ 1
 #            └─ ▶ check_docker_health(id) → docker inspect --format ─ ◇ healthy?0 / unhealthy?1 / starting?2 / not-found?3
-#            └─ ▶ check_http(url,codes) → curl -s -o /dev/null -w '%{http_code}' → ◇ code in expected? → ⎋ 0 | ⎋ 1
+#            └─ ▶ check_http(url,codes,timeout) → curl -s -o /dev/null -w '%{http_code}' → ◇ code in expected? → ⎋ 0 | ⎋ 1
+#            └─ ▶ check_tcp(host,port,timeout) → timeout bash -c "echo >/dev/tcp/$host/$port" → ◇ success? → ⎋ 0 | ⎋ 1
+#            └─ ▶ exec_check(container,command) → ◇ docker inspect Running → ◇ docker exec command → ◇ exit 0? → ⎋ 0 | ⎋ 1
 
 # ═══════════════════════════════════════════════════════════════════
 # SETUP
@@ -245,27 +250,29 @@ poll_docker_health() {
 ## @param $1  url: HTTP(S) endpoint to check
 ## @param $2  expected_codes: comma-separated list of acceptable HTTP codes
 ##           (default: "200")
+## @param $3  timeout: max wait in seconds for curl (default: 10)
 ## @io       out: stderr via log_imp — IMP:7 on match, IMP:8 on mismatch/error
 ## @return   0 if response HTTP code is in expected_codes
 ##           1 if code is not in expected_codes or curl fails
-## @complexity O(1) — single curl call with 10s timeout
+## @complexity O(1) — single curl call with configurable timeout
 ## @invariants — Requires curl in PATH
 ##             — Curl follows redirects (use explicit codes if redirect expected)
 ##             — Response body is discarded (-o /dev/null) — only status matters
 check_http() {
     local url="$1"
     local expected_codes="${2:-200}"
+    local timeout="${3:-10}"
 
     if [ -z "${url}" ]; then
         log_imp 10 "check_http" "Invalid arguments: url is empty"
         return 1
     fi
 
-    log_imp 8 "check_http" "Checking '${url}' — expecting codes: ${expected_codes}"
+    log_imp 8 "check_http" "Checking '${url}' — expecting codes: ${expected_codes}, timeout=${timeout}s"
 
-    # Perform curl with 10s timeout, capture HTTP code only
+    # Perform curl with configurable timeout, capture HTTP code only
     local http_code
-    http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${url}" 2>/dev/null) || {
+    http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "${timeout}" "${url}" 2>/dev/null) || {
         log_imp 8 "check_http" "Curl failed for '${url}'"
         return 1
     }
@@ -287,3 +294,95 @@ check_http() {
     return 1
 }
 # endregion FUNC_check_http
+
+# ═══════════════════════════════════════════════════════════════════
+# TCP HEALTH CHECK
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_check_tcp
+## @purpose  Check TCP connectivity to a host:port using bash's /dev/tcp.
+##           Lightweight — no external tooling beyond bash and timeout.
+## @param $1  host: target hostname or IP
+## @param $2  port: target TCP port
+## @param $3  timeout: max wait in seconds (default: 5)
+## @io       out: stderr via log_imp — IMP:7 on success, IMP:8 on failure
+## @return   0 if TCP connection succeeds
+##           1 if connection fails or times out
+## @complexity O(1) — single timeout bash -c call
+## @invariants — Requires bash with /dev/tcp support (compiled with --enable-net-redirections)
+##             — Not available in pure POSIX sh or some restricted shells (e.g., Docker scratch)
+##             — Does NOT require curl, wget, or any external tooling
+check_tcp() {
+    local host="$1"
+    local port="$2"
+    local timeout="${3:-5}"
+
+    if [ -z "${host}" ] || [ -z "${port}" ]; then
+        log_imp 10 "check_tcp" "Invalid arguments: host='${host}' port='${port}'"
+        return 1
+    fi
+
+    log_imp 8 "check_tcp" "Checking TCP ${host}:${port} — timeout=${timeout}s"
+
+    # Use timeout with bash's built-in /dev/tcp redirection
+    if timeout "${timeout}" bash -c "echo >/dev/tcp/${host}/${port}" 2>/dev/null; then
+        log_imp 7 "check_tcp" "TCP ${host}:${port} — connected"
+        return 0
+    else
+        log_imp 8 "check_tcp" "TCP ${host}:${port} — connection failed or timed out"
+        return 1
+    fi
+}
+# endregion FUNC_check_tcp
+
+# ═══════════════════════════════════════════════════════════════════
+# DOCKER EXEC CHECK
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_exec_check
+## @purpose  Execute a command inside a Docker container and check its exit code.
+##           Replaces copy-paste docker exec pattern across 5+ modules.
+## @param $1  container: Docker container name or ID
+## @param $2  command: command to run inside the container (string, split on IFS)
+## @io       out: stderr via log_imp — IMP:7 on success, IMP:8 on container not running,
+##           IMP:9 on command failure
+## @return   0 if container is running and command exits 0
+##           1 if container is not running or command fails
+## @complexity O(1) — single docker inspect + single docker exec call
+## @invariants — Requires docker CLI in PATH
+##             — Container must be in "running" state for exec to succeed
+##             — Command string is NOT eval'd — split into array via IFS (same as poll_until_healthy)
+exec_check() {
+    local container="$1"
+    local command="$2"
+
+    if [ -z "${container}" ] || [ -z "${command}" ]; then
+        log_imp 10 "exec_check" "Invalid arguments: container='${container}' command='${command}'"
+        return 1
+    fi
+
+    # Verify container is running
+    log_imp 8 "exec_check" "Verifying container '${container}' is running"
+    local running
+    running=$(docker inspect "${container}" --format '{{.State.Running}}' 2>/dev/null) || {
+        log_imp 8 "exec_check" "Container '${container}' not found"
+        return 1
+    }
+
+    if [ "${running}" != "true" ]; then
+        log_imp 8 "exec_check" "Container '${container}' is not running (state: ${running})"
+        return 1
+    fi
+
+    # Split command string into array (safe execution, no eval)
+    local cmd_arr=()
+    IFS=' ' read -ra cmd_arr <<< "$command"
+
+    log_imp 8 "exec_check" "Executing in '${container}': ${command}"
+    if docker exec "${container}" "${cmd_arr[@]}"; then
+        log_imp 7 "exec_check" "Container '${container}' — ${command} — OK"
+        return 0
+    else
+        log_imp 9 "exec_check" "Container '${container}' — ${command} — FAILED (exit $?)"
+        return 1
+    fi
+}
+# endregion FUNC_exec_check

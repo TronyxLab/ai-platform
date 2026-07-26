@@ -33,9 +33,15 @@ CADVISOR_PORT="${CADVISOR_PORT:-8080}"
 NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-9100}"
 
 if [ "$MODE" = "deep" ]; then
-    # Deep checks: verify HTTP endpoints on cadvisor and node-exporter
-    log_imp 8 "healthcheck" "Deep mode: checking HTTP endpoints (CADVISOR_PORT=${CADVISOR_PORT}, NODE_EXPORTER_PORT=${NODE_EXPORTER_PORT})"
+    # Deep checks: verify Docker health first, then HTTP endpoints on cadvisor and node-exporter
+    log_imp 8 "healthcheck" "Deep mode: checking Docker health + HTTP endpoints (CADVISOR_PORT=${CADVISOR_PORT}, NODE_EXPORTER_PORT=${NODE_EXPORTER_PORT})"
 
+    # Step 1: Check Docker health status for all containers
+    for container in "${CONTAINERS[@]}"; do
+        check_docker_health "$container" || exit 1
+    done
+
+    # Step 2: Service-specific diagnostics via check_http
     check_http "http://127.0.0.1:${CADVISOR_PORT}/healthz" "200" || exit 1
     check_http "http://127.0.0.1:${NODE_EXPORTER_PORT}/metrics" "200" || exit 1
 
@@ -45,7 +51,7 @@ if [ "$MODE" = "deep" ]; then
     # redis-exporter: scratch image — skip HTTP, rely on docker inspect
     log_imp 8 "healthcheck" "redis-exporter: deep HTTP check unavailable (scratch image)"
 
-    log_imp 9 "healthcheck" "All infra-metrics HTTP endpoints healthy"
+    log_imp 9 "healthcheck" "All infra-metrics deep checks passed"
     exit 0
 fi
 

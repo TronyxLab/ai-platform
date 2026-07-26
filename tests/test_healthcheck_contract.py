@@ -178,7 +178,7 @@ def test_litellm_healthcheck_fallback(caplog: pytest.LogCaptureFixture) -> None:
 def test_nginx_healthcheck_deep_http(caplog: pytest.LogCaptureFixture) -> None:
     """
     Проверяет, что nginx/healthcheck.sh содержит MODE=deep с HTTP-верификацией
-    через docker exec curl (Docker-only модуль, без systemd).
+    через check_http (замена docker exec curl per DevPlan 083 DRIFT-H4).
     """
     content = _read_healthcheck("nginx")
 
@@ -186,21 +186,17 @@ def test_nginx_healthcheck_deep_http(caplog: pytest.LogCaptureFixture) -> None:
     has_deep_mode = "MODE=deep" in content or '"deep"' in content or "'deep'" in content
     logger.info("[IMP:7][healthcheck-nginx-deep] MODE=deep present: %s", has_deep_mode)
 
-    # ── Pattern 2: docker exec curl for HTTP check ──
-    has_docker_exec_curl = "docker exec" in content and "curl" in content
-    logger.info("[IMP:7][healthcheck-nginx-deep] docker exec curl: %s", has_docker_exec_curl)
+    # ── Pattern 2: check_http for HTTP check (was docker exec curl — DRIFT-H4 fix) ──
+    has_check_http = "check_http" in content
+    logger.info("[IMP:7][healthcheck-nginx-deep] check_http present: %s", has_check_http)
 
-    # ── Pattern 3: localhost:80 HTTP port ──
-    has_localhost_80 = "localhost:80" in content
-    logger.info("[IMP:7][healthcheck-nginx-deep] localhost:80 check: %s", has_localhost_80)
+    # ── Pattern 3: localhost:80 or 127.0.0.1:80 HTTP port ──
+    has_port_80 = "localhost:80" in content or "127.0.0.1:80" in content
+    logger.info("[IMP:7][healthcheck-nginx-deep] port 80 check: %s", has_port_80)
 
     # ── Pattern 4: check_docker_health for liveness ──
     has_check_docker = "check_docker_health" in content
     logger.info("[IMP:7][healthcheck-nginx-deep] check_docker_health: %s", has_check_docker)
-
-    # ── Pattern 5: --max-time (non-blocking curl) ──
-    has_max_time = "--max-time" in content
-    logger.info("[IMP:7][healthcheck-nginx-deep] --max-time (non-blocking): %s", has_max_time)
 
     # ── Log relevant lines ──
     for line_num, line in enumerate(content.splitlines(), 1):
@@ -208,11 +204,10 @@ def test_nginx_healthcheck_deep_http(caplog: pytest.LogCaptureFixture) -> None:
             kw in line
             for kw in (
                 "deep",
-                "docker exec",
-                "curl",
+                "check_http",
                 "localhost:80",
+                "127.0.0.1:80",
                 "check_docker_health",
-                "max-time",
             )
         ):
             logger.info("[IMP:8][healthcheck-nginx-deep] L%d: %s", line_num, line.strip())
@@ -222,17 +217,16 @@ def test_nginx_healthcheck_deep_http(caplog: pytest.LogCaptureFixture) -> None:
         "[IMP:9][healthcheck-nginx-deep] FAIL: MODE=deep not found — "
         "nginx healthcheck should support deep HTTP verification"
     )
-    assert has_docker_exec_curl, (
-        "[IMP:9][healthcheck-nginx-deep] FAIL: docker exec curl not found — "
-        "nginx deep check should verify HTTP inside container"
+    assert has_check_http, (
+        "[IMP:9][healthcheck-nginx-deep] FAIL: check_http not found — "
+        "nginx deep check should use check_http (DRIFT-H4 fix replaced docker exec curl)"
     )
-    assert has_localhost_80, (
-        "[IMP:9][healthcheck-nginx-deep] FAIL: localhost:80 check not found — "
-        "nginx HTTP verification on port 80 is missing"
+    assert has_port_80, (
+        "[IMP:9][healthcheck-nginx-deep] FAIL: port 80 check not found — nginx HTTP verification on port 80 is missing"
     )
     assert has_check_docker, (
         "[IMP:9][healthcheck-nginx-deep] FAIL: check_docker_health not found — "
         "nginx liveness check via Docker is missing"
     )
 
-    logger.info("[IMP:9][healthcheck-nginx-deep] PASS: nginx healthcheck has MODE=deep + docker exec curl")
+    logger.info("[IMP:9][healthcheck-nginx-deep] PASS: nginx healthcheck has MODE=deep + check_http")

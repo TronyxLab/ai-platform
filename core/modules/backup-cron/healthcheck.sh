@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: backup-cron healthcheck liveness pgrep cron check_docker_health deep docker-exec
-# STRUCTURE: ▶ source lib/healthcheck.sh → ◇ MODE=deep ? pgrep cron → ⎋ check_docker_health → exit
+# GREP_SUMMARY: backup-cron healthcheck liveness check_docker_health deep exec_check pgrep cron
+# STRUCTURE: ▶ source lib/healthcheck.sh → ◇ MODE=deep ? check_docker_health + exec_check pgrep -x cron → ⎋ liveness: check_docker_health → exit
 # region MODULE_CONTRACT
-## @purpose  Docker healthcheck for backup-cron — uses check_docker_health for liveness, pgrep cron for deep check
-## @scope    Called by Docker HEALTHCHECK (in-container) and modules-healthcheck.sh (host-side)
+## @purpose  Docker healthcheck for backup-cron — uses check_docker_health for liveness, exec_check pgrep for deep check
+## @scope    Called by modules-healthcheck.sh (host-side)
 ## @invariants
-##   - MODE=deep: runs pgrep -x cron to verify cron daemon is running inside the container
+##   - MODE=deep: check_docker_health + exec_check pgrep -x cron (inside container)
 ##   - Default: delegates to check_docker_health for liveness via docker inspect
 ##   - Container name: backup-cron
 ##   - exit 0 = healthy; exit 1 = unhealthy
-## @rationale Unified Docker healthcheck pattern per DevPlan §DD1
+## @rationale Unified contract per DevPlan 083 — deep mode is strict superset of liveness (DRIFT-H6 fix).
+##   exec_check replaces inline docker exec copy-paste (DRIFT-H4 fix).
+##   ⚠️ TRAP[BUG] · 2026-07-08 · HI · Fixed by exec_check: pgrep runs inside container, not on host.
 ## @source ../../lib/healthcheck.sh
-## ⚠️ TRAP[BUG] · 2026-07-08 · HI · pgrep -x cron on host finds host cron process (false positive)
-# · Host-side pgrep matches the host's own cron daemon, giving false positive liveness.
-# · Fix: Use docker exec for host-side calls; in-container Docker healthcheck uses direct call.
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -25,23 +24,12 @@ CONTAINER="backup-cron"
 MODE="${1:-}"
 
 if [ "$MODE" = "deep" ]; then
-    # [IMP:9][backup-cron-healthcheck][deep] Verify cron daemon is running inside container
-    if command -v docker &>/dev/null && docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
-        if docker exec "$CONTAINER" pgrep -x cron > /dev/null 2>&1; then
-            log_imp 8 "deep" "cron daemon is running (docker exec)"
-        else
-            log_imp 9 "deep" "cron process not found in container"
-            exit 1
-        fi
-    else
-        if pgrep -x cron > /dev/null 2>&1; then
-            log_imp 8 "deep" "cron daemon is running (direct)"
-        else
-            log_imp 9 "deep" "cron process not found"
-            exit 1
-        fi
-    fi
-    exit 0  # ранний выход: deep mode = diagnostics only, не fallthrough к liveness
+    # Step 1: Check Docker health status (same as liveness)
+    check_docker_health "$CONTAINER" || exit 1
+    # Step 2: Service-specific diagnostics via exec_check (runs pgrep inside container — no false positive)
+    exec_check "$CONTAINER" "pgrep -x cron" || exit 1
+    log_imp 9 "deep" "backup-cron deep check PASSED"
+    exit 0
 fi
 
 # Default liveness check via docker inspect

@@ -21,12 +21,15 @@ CONTAINER="langfuse"
 MODE="${1:-}"
 
 if [ "$MODE" = "deep" ]; then
-    # Deep checks: verify Langfuse HTTP endpoint via 127.0.0.1 (port mapping)
-    log_imp 8 "healthcheck" "Deep mode: checking Langfuse /api/public/health"
+    # Deep checks: verify Docker health first, then HTTP endpoint
+    log_imp 8 "healthcheck" "Deep mode: checking Docker health + HTTP endpoint"
 
+    # Step 1: Check Docker health status (same as liveness)
+    check_docker_health "$CONTAINER" || exit 1
+    # Step 2: Service-specific diagnostics via check_http
     check_http "http://127.0.0.1:3001/api/public/health" "200" || exit 1
 
-    log_imp 9 "healthcheck" "Langfuse /api/public/health healthy"
+    log_imp 9 "healthcheck" "Langfuse deep check PASSED"
     exit 0
 fi
 

@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: hermes-agent healthcheck liveness readiness http /health /ready curl check_docker_health deep
-# STRUCTURE: ▶ source lib/healthcheck.sh → ◇ MODE=deep ? liveness|readiness|deps → ⎋ check_docker_health → exit
+# GREP_SUMMARY: hermes-agent healthcheck liveness readiness http /health /ready check_http check_docker_health deep
+# STRUCTURE: ▶ source lib/healthcheck.sh → ◇ MODE=deep ? check_docker_health + (liveness|readiness|deps) → ⎋ liveness: check_docker_health → exit
 # region MODULE_CONTRACT
 ## @purpose  Docker healthcheck for hermes-agent — uses check_docker_health for liveness,
 ##           deep mode supports liveness, readiness, and dependency checks
-## @scope    Called by Docker HEALTHCHECK (in-container) and modules-healthcheck.sh (host-side)
+## @scope    Called by modules-healthcheck.sh (host-side)
 ## @invariants
 ##   - MODE=deep with sub-mode: liveness ( /health ), readiness ( /ready ), deps (PG, Redis, LiteLLM)
+##   - MODE=deep ALWAYS runs check_docker_health first, THEN service-specific checks
 ##   - Default: delegates to check_docker_health for liveness via docker inspect
 ##   - Container name: hermes-agent
 ##   - exit 0 = healthy; exit 1 = unhealthy
-## @rationale Unified Docker healthcheck pattern per DevPlan §DD1; deep mode preserves
-##   existing readiness and dependency checking logic
+## @rationale Unified contract per DevPlan 083 — deep mode is strict superset of liveness (DRIFT-H6 fix).
+##   check_http replaces docker exec curl copy-paste for liveness/readiness checks (DRIFT-H4 fix).
+##   deps mode preserved as-is (external dependency checks).
 ## @source ../../lib/healthcheck.sh
 # endregion MODULE_CONTRACT
 
@@ -28,6 +30,9 @@ MODE="${1:-}"
 
 # ── Deep check: multi-mode healthcheck (liveness, readiness, deps) ──
 if [ "$MODE" = "deep" ]; then
+    # Step 1: Check Docker health status (same as liveness)
+    check_docker_health "$CONTAINER" || exit 1
+
     # shellcheck disable=SC2034
     DEEP_MODE="${2:-liveness}"
 
@@ -41,7 +46,7 @@ if [ "$MODE" = "deep" ]; then
             CHECK_TYPE="READINESS"
             ;;
         deps)
-            # Dependency check mode
+            # Dependency check mode (preserved as-is — checks external services)
             log_imp 8 "deps" "Starting dependency checks ..."
 
             PG_HOST="${POSTGRES_HOST:-pgbouncer}"
@@ -112,24 +117,19 @@ if [ "$MODE" = "deep" ]; then
             ;;
     esac
 
-    # ── Host-side check via docker exec ──
-    if command -v docker &>/dev/null && docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
-        if docker exec "$CONTAINER" curl -sf --connect-timeout 5 --max-time 10 "${AGENT_URL}${ENDPOINT}" > /dev/null 2>&1; then
-            log_imp 8 "deep" "${CHECK_TYPE} PASS: ${ENDPOINT} responded 200 (docker exec)"
-            exit 0
-        else
-            log_imp 9 "deep" "${CHECK_TYPE} FAIL: ${ENDPOINT} not reachable via docker exec"
-            exit 1
-        fi
-    # ── In-container check via shared library ──
+    # Step 2: Service-specific HTTP check via check_http (in-container or host-side)
+    # ⚠️ TRAP[DECISION] · 2026-07-26 · — · check_http replaces docker exec curl
+    # · Rejected: docker exec curl (copy-paste pattern, only works when docker CLI available)
+    # · Reason: check_http via lib/healthcheck.sh is unified, works from host and inside container,
+    # ·   respects timeout parameter, is grep-able and testable.
+    # · Rev: if hermes-agent port is not exposed to host, container_name check_docker_health already
+    # ·   verified container is running; check_http to 127.0.0.1:9119 relies on host port mapping.
+    if check_http "${AGENT_URL}${ENDPOINT}" "200" 10; then
+        log_imp 8 "deep" "${CHECK_TYPE} PASS: ${ENDPOINT} responded 200"
+        exit 0
     else
-        if check_http "${AGENT_URL}${ENDPOINT}" "200"; then
-            log_imp 8 "deep" "${CHECK_TYPE} PASS: ${ENDPOINT} responded 200"
-            exit 0
-        else
-            log_imp 9 "deep" "${CHECK_TYPE} FAIL: ${ENDPOINT} not reachable on ${AGENT_URL}${ENDPOINT}"
-            exit 1
-        fi
+        log_imp 9 "deep" "${CHECK_TYPE} FAIL: ${ENDPOINT} not reachable on ${AGENT_URL}${ENDPOINT}"
+        exit 1
     fi
 fi
 

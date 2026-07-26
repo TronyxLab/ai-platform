@@ -423,6 +423,12 @@ def _upload_to_s3(domain: str) -> bool:
 ##   - Sets PLATFORM_DOMAIN env var for the domain being issued
 ##   - issue-cert.sh handles idempotency internally (skips if cert exists)
 ##   - Non-fatal: failure returns status="failed"
+## ⚠️ TRAP[DECISION] · 2026-07-25 · — · issue-cert.sh kept as acme.sh executor (not absorbed into Python)
+## · Rejected: full Python port of acme.sh DNS-01/HTTP-01 interaction
+## · Reason: webnames API key shred protocol + acme.sh edge cases are battle-tested in shell.
+##   Python absorption would require re-testing all LE staging/production edge cases.
+##   Strangler-Fig: Python absorbs orchestration, shell stays as executor.
+## · Rev: when acme.sh interaction stabilizes (no changes for 6+ months), port to Python.
 def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
     """Issue cert via issue-cert.sh. Returns issued or failed result."""
     challenge_mode = os.environ.get("ACME_CHALLENGE_MODE", "dns")

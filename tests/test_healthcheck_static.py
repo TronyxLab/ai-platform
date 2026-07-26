@@ -1,20 +1,19 @@
-# GREP_SUMMARY: test healthcheck modules-healthcheck iterate-all-containers restart-loop detection
-# STRUCTURE: ▶ test_healthcheck_checks_all_containers → grep modules-healthcheck.sh for head -1 → assert absent | ▶ test_healthcheck_detects_restart_loop → grep for State.Restarting + RestartCount → assert present
+# GREP_SUMMARY: test healthcheck modules-healthcheck iterate-all-containers restart-loop detection invoke_module_interface
+# STRUCTURE: ▶ test_healthcheck_checks_all_containers → grep modules-healthcheck.sh for head -1 + mapfile → assert absent/present | ▶ test_healthcheck_detects_restart_loop → grep for State.Restarting + RestartCount → assert present
 # region MODULE_CONTRACT
-## @purpose  Validates modules-healthcheck.sh robustness improvements (T5):
-##           (a) iterates ALL container_name entries from base.yml (no head -1);
-##           (b) detects restart loops via State.Restarting and RestartCount>5 → FAIL.
+## @purpose  Validates modules-healthcheck.sh healthcheck unification (DevPlan 083):
+##           (a) uses invoke_module_interface for primary liveness check (DRIFT-H7);
+##           (b) still detects restart loops via State.Restarting and RestartCount>5 → FAIL (secondary).
 ## @scope    Static audit — reads shell script as text, no Docker required
 ## @invariants
-##   - Script must NOT contain `head -1` in the docker branch container_name resolution
+##   - Script must contain `invoke_module_interface "$MODULE" healthcheck liveness` for docker modules
 ##   - Script must contain State.Restarting and RestartCount inspection leading to FAILED=1
-##   - "not-found" handler stays as SKIP (node.yaml not available in context)
-## @rationale Restart loops (hermes-agent RestartCount=101 P2) must be detected as FAIL,
-##   not WARN. All containers in a module must be checked, not just the first one.
-##   Acceptance criterion A6: container in restart loop → make healthcheck exit 1.
+## @rationale DRIFT-H7 replaced raw docker inspect with invoke_module_interface. Restart loop detection
+##   is preserved as a SECONDARY check — independent of module healthcheck.sh liveness.
 # endregion MODULE_CONTRACT
 
 import logging
+import re
 
 import pytest
 
@@ -36,8 +35,17 @@ def test_healthcheck_checks_all_containers(caplog) -> None:
     assert _HEALTHCHECK_SH.is_file(), f"modules-healthcheck.sh not found: {_HEALTHCHECK_SH}"
     content = _HEALTHCHECK_SH.read_text()
 
-    # ── Check: no head -1 in the docker container_name resolution pipeline ──
-    # Look for `| head -1` in a command pipeline (not in comments describing the fix)
+    # ── Check 1: uses invoke_module_interface for docker liveness (DRIFT-H7) ──
+    has_invoke_module = bool(re.search(r"invoke_module_interface\s+\"\$MODULE\"\s+healthcheck\s+liveness", content))
+    logger.critical(
+        "[IMP:9][test_healthcheck][all] invoke_module_interface healthcheck liveness present: %s",
+        has_invoke_module,
+    )
+    assert has_invoke_module, (
+        "modules-healthcheck.sh must use invoke_module_interface for docker module liveness check (DRIFT-H7 fix)."
+    )
+
+    # ── Check 2: no head -1 in the container_name resolution pipeline ──
     has_pipeline_head = "| head -1" in content or "|head -1" in content
     logger.critical(
         "[IMP:9][test_healthcheck][all] Pipeline `head -1` present: %s",
@@ -45,19 +53,19 @@ def test_healthcheck_checks_all_containers(caplog) -> None:
     )
     assert not has_pipeline_head, (
         "modules-healthcheck.sh uses `head -1` in a command pipeline to limit "
-        "container_name resolution. T5 requires iterating ALL container_name entries."
+        "container_name entries. All containers must be checked."
     )
     logger.info("[IMP:8][test_healthcheck][all] No head -1 in pipeline — all containers checked")
 
-    # ── Check: mapfile or loop over multiple containers ────────────────────
+    # ── Check 3: mapfile for restart loop detection (secondary check) ─────
     has_container_loop = "mapfile -t CONTAINER_NAMES" in content or "for CONTAINER_NAME in" in content
     logger.critical(
-        "[IMP:9][test_healthcheck][all] Container iteration loop present: %s",
+        "[IMP:9][test_healthcheck][all] Container iteration loop present (restart detection): %s",
         has_container_loop,
     )
     assert has_container_loop, (
         "modules-healthcheck.sh must iterate over all container names using mapfile or "
-        "a for loop. No container should be skipped."
+        "a for loop for restart loop detection."
     )
 
     # LDD trajectory

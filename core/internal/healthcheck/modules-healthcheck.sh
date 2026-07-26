@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: internal-healthcheck module-orchestration docker-inspect iterate-modules
-# STRUCTURE: ▶ init → iterate module.yaml → ◇ install_type:docker → docker inspect | ◇ install_type:system → healthcheck.sh liveness → ◇ MODE=deep → healthcheck.sh MODE=deep → ⊕ exit 0 | exit 1
+# GREP_SUMMARY: internal-healthcheck module-orchestration iterate-modules check_docker_health
+# STRUCTURE: ▶ init → iterate module.yaml → ◇ install_type:docker → invoke_module_interface healthcheck liveness | ◇ install_type:system → invoke_module_interface healthcheck liveness → ◇ MODE=deep → invoke_module_interface healthcheck deep → ⊕ exit 0 | exit 1
 # region MODULE_CONTRACT
-## @purpose  Оркестратор healthcheck всех модулей: docker inspect для docker-модулей,
+## @purpose  Оркестратор healthcheck всех модулей: healthcheck.sh liveness для docker-модулей (через invoke_module_interface),
 ##           healthcheck.sh liveness для system-модулей, MODE=deep — глубокая диагностика
 ## @scope    Вызывается ТОЛЬКО из core/entrypoints/healthcheck.sh (make healthcheck)
 ## @invariants
 ##   - Итерирует core/modules/*/module.yaml — единственный source of truth состава модулей
 ##   - exit 0 = все модули healthy; exit 1 = хотя бы один unhealthy
-##   - Module healthcheck.sh вызывается через `bash` (не требует exec-бита)
-## @rationale Единый агрегирующий healthcheck для make healthcheck и CI-gate'ов
+##   - Module healthcheck.sh вызывается через invoke_module_interface (typed contract)
+##   - DRIFT-H7: replaced raw docker inspect with invoke_module_interface → check_docker_health()
+##   - DRIFT-H1: consolidated 9 mechanisms → 3 primitives (check_docker_health, check_http, exec_check)
+## @rationale Единый агрегирующий healthcheck для make healthcheck и CI-gate'ов.
+##            DRIFT-H7 fix: All modules use the same invoke_module_interface pattern — eliminates
+##            raw docker inspect duplication and ensures every module's healthcheck.sh is exercised.
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -30,7 +34,7 @@ if [[ "${1:-}" == "--help" ]]; then
     echo "Usage: $0 [MODE=deep]"
     echo ""
     echo "Iterate all platform module healthcheck scripts and run them."
-    echo "Default: docker inspect for docker modules, healthcheck.sh liveness for system modules."
+    echo "Default: healthcheck.sh liveness (via invoke_module_interface) for all modules."
     echo "MODE=deep: run module-specific healthcheck.sh MODE=deep for all modules."
     echo ""
     echo "Returns 0 if all pass, 1 if any fail."
@@ -64,27 +68,27 @@ for module_yaml in "${PLATFORM_ROOT}"/core/modules/*/module.yaml; do
             FAILED=1
         fi
     elif [ "$INSTALL_TYPE" = "docker" ]; then
-        # Default mode for docker modules: docker inspect
-        # Get ALL container_name entries from base.yml (no head -1 — all containers matter)
-        # Anchored to line start: comment lines (## @purpose ... container_name: ...) must not match
+        # Default mode for docker modules: healthcheck.sh liveness via typed contract
+        # DRIFT-H7 fix: was raw docker inspect for Health.Status, now delegates to
+        # invoke_module_interface which calls module healthcheck.sh → check_docker_health()
+        MODULE_PASSED=true
+        if ! invoke_module_interface "$MODULE" healthcheck liveness 2>/dev/null; then
+            MODULE_PASSED=false
+            FAILED=1
+        fi
+
+        # Restart loop detection: check State.Restarting and RestartCount
+        # This is a SECONDARY check — independent of module healthcheck.sh liveness.
+        # A container in restart loop may show "healthy" briefly between restarts.
         mapfile -t CONTAINER_NAMES < <(grep -E '^[[:space:]]*container_name:' "${PLATFORM_ROOT}/core/modules/${MODULE}/docker-compose.base.yml" 2>/dev/null | awk '{print $2}')
         if [ ${#CONTAINER_NAMES[@]} -eq 0 ]; then
             CONTAINER_NAMES=("$MODULE")
         fi
 
         for CONTAINER_NAME in "${CONTAINER_NAMES[@]}"; do
-            # Inspect health status, restarting state, and restart count
-            HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "not-found")
+            RESTARTING=$(docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME" 2>/dev/null || echo "false")
+            RESTART_COUNT=$(docker inspect --format='{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo "0")
 
-            if [ "$HEALTH_STATUS" != "not-found" ]; then
-                RESTARTING=$(docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME" 2>/dev/null || echo "false")
-                RESTART_COUNT=$(docker inspect --format='{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo "0")
-            else
-                RESTARTING="false"
-                RESTART_COUNT="0"
-            fi
-
-            # Determine FAIL condition: restart loop overrides health status
             IS_RESTART_LOOP=false
             if [ "$RESTARTING" = "true" ]; then
                 IS_RESTART_LOOP=true
@@ -92,35 +96,16 @@ for module_yaml in "${PLATFORM_ROOT}"/core/modules/*/module.yaml; do
                 IS_RESTART_LOOP=true
             fi
 
-            case "$HEALTH_STATUS" in
-                "healthy")
-                    if $IS_RESTART_LOOP; then
-                        log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} restart loop (restarting=${RESTARTING}, restarts=${RESTART_COUNT})"
-                        FAILED=1
-                    else
-                        log_imp 8 "check" "PASS: ${MODULE} → ${CONTAINER_NAME} healthy"
-                    fi
-                    ;;
-                "unhealthy")
-                    log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} unhealthy"
-                    FAILED=1
-                    ;;
-                "starting"|"")
-                    if $IS_RESTART_LOOP; then
-                        log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} restart loop (restarting=${RESTARTING}, restarts=${RESTART_COUNT})"
-                        FAILED=1
-                    else
-                        log_imp 8 "check" "WARN: ${MODULE} → ${CONTAINER_NAME} starting or no healthcheck"
-                    fi
-                    ;;
-                "not-found")
-                    log_imp 8 "check" "SKIP: ${MODULE} → container ${CONTAINER_NAME} not found"
-                    ;;
-                *)
-                    log_imp 8 "check" "WARN: ${MODULE} → ${CONTAINER_NAME} status=${HEALTH_STATUS}"
-                    ;;
-            esac
+            if $IS_RESTART_LOOP; then
+                log_imp 9 "check" "FAIL: ${MODULE} → ${CONTAINER_NAME} restart loop (restarting=${RESTARTING}, restarts=${RESTART_COUNT})"
+                MODULE_PASSED=false
+                FAILED=1
+            fi
         done
+
+        if $MODULE_PASSED; then
+            log_imp 8 "check" "PASS (liveness): ${MODULE}"
+        fi
     else
         # System module: run healthcheck.sh liveness via typed contract
         if invoke_module_interface "$MODULE" healthcheck liveness 2>/dev/null; then

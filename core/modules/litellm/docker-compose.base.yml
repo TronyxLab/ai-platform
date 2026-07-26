@@ -126,18 +126,17 @@ services:
           - litellm
 
     # /health/readiness — reliable liveness check for all configs (no auth, no model_list)
-    # 🧐 TRAP[DECISION] · 2026-07-21 · — · start_period=120s / retries=5 for Prisma migrate headroom
-    # · Rejected: start_period=60s / retries=3 (original — flapping during Prisma migrate 40-60s)
-    # · Reason: Prisma migrate takes 40-60s, model cost map fetch 5-10s, Python init 5-10s
-    # ·   start_period=120s covers total startup (70-80s) + 40s buffer
-    # ·   retries=5 covers 2-3 GC cycles after startup (5 × 15s = 75s grace)
-    # · Rev: if Prisma migrate latency drops below 20s, revert to start_period=60s / retries=3
+    # 🧐 TRAP[DECISION] · 2026-07-26 · — · start_period=60s / retries=3 standard per DevPlan 083
+    # · Rejected: start_period=120s / retries=5 (overly conservative — verified Prisma migrate 45-55s)
+    # · Reason: DevPlan 083 standardized 60s for litellm (40-60s Prisma migrate + 5-10s model cost fetch
+    # ·   + 5-10s Python init = 50-80s total; 60s start_period + 3×15s = 105s grace window)
+    # · Rev: if Prisma migrate latency exceeds 60s on slow storage, revert to start_period=120s
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=5)"]
       interval: 15s
       timeout: 10s
-      retries: 5          # 3→5: covers flap x5 instead of x3 (Prisma migrate headroom)
-      start_period: 120s  # 60→120s: buffer for Prisma migrate + model cost fetch
+      retries: 3          # 5→3: standardized per DevPlan 083 (3 retries × 15s = 45s after start_period)
+      start_period: 60s   # 120→60s: standardized per DevPlan 083
   # endregion service:litellm
 
 networks:

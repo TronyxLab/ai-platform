@@ -104,27 +104,55 @@ restart: unless-stopped           # D5: модуль-уровневая restart-
 
 ---
 
-## Healthcheck-контракт
+## Healthcheck-контракт (Unified per DevPlan 083)
 
-Два режима, один entrypoint — `healthcheck.sh`:
+Два режима, один entrypoint — `healthcheck.sh`. Deep mode ALWAYS runs `check_docker_health` FIRST (same as liveness), THEN adds service-specific diagnostics. This ensures deep is a strict superset of liveness, not a parallel alternative (DRIFT-H6 fix).
+
+### 3 canonical primitives
+
+| Примитив | Функция | Назначение |
+|----------|---------|------------|
+| `check_docker_health` | `core/lib/healthcheck.sh` | Liveness: Docker HEALTHCHECK status via `docker inspect State.Health.Status` |
+| `check_http` | `core/lib/healthcheck.sh` | HTTP endpoint verification via curl (with configurable timeout) |
+| `exec_check` | `core/lib/healthcheck.sh` | Docker exec + service tool (replaces copy-paste `docker exec` pattern) |
 
 | Режим | Механизм | Вызов |
 |-------|----------|-------|
-| **Liveness** (default) | `docker inspect` → `State.Health.Status` | `check_docker_health "$CONTAINER"` |
-| **Deep diagnostics** | Специфичные модулю проверки | `MODE=deep` → `check_http`, `redis-cli ping`, etc. |
+| **Liveness** (default) | `check_docker_health "$CONTAINER"` | `source lib/healthcheck.sh` → `check_docker_health` |
+| **Deep diagnostics** | `check_docker_health` + service check | `MODE=deep` → `check_docker_health` THEN `check_http`/`exec_check` |
+
+### Unified contract template
 
 ```bash
 #!/usr/bin/env bash
+# GREP_SUMMARY: <module> healthcheck liveness deep check_docker_health <tool>
+# STRUCTURE: ▶ source lib/healthcheck.sh → ◇ MODE=deep ? check_docker_health + service-check → ⎋ liveness: check_docker_health → exit 0|1
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
-CONTAINER="module-name"
+
+CONTAINER="<module-name>"
 MODE="${1:-}"
-[ "$MODE" = "deep" ] && { check_http "http://127.0.0.1:8080/health" "200" || exit 1; }
+
+if [ "$MODE" = "deep" ]; then
+    # Step 1: verify Docker health (same as liveness)
+    check_docker_health "$CONTAINER" || exit 1
+    # Step 2: service-specific check via exec_check or check_http
+    exec_check "$CONTAINER" "<tool-command>" || exit 1
+    log_imp 9 "deep" "<module> deep check PASSED"
+    exit 0
+fi
+
+# Default liveness
 check_docker_health "$CONTAINER" || exit 1
+exit 0
 ```
 
 `exit 0` — healthy, `exit 1` — unhealthy (включая недоступность зависимостей).
+
+### Orchestrator contract
+
+`core/internal/healthcheck/modules-healthcheck.sh` uses `invoke_module_interface` for ALL modules (docker + system) in ALL modes (liveness + deep). Raw `docker inspect` eliminated (DRIFT-H7 fix). See DevPlan 083 for complete module-by-module deep check strategy.
 
 ---
 

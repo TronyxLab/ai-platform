@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: nginx healthcheck docker check_docker_health curl deep port-80
-# STRUCTURE: ▶ source lib → ◇ MODE=deep? → docker exec curl :80 → ⎋ | ◇ check_docker_health nginx → ⎋ 0/1
+# GREP_SUMMARY: nginx healthcheck check_docker_health deep check_http port-80
+# STRUCTURE: ▶ source lib → ◇ MODE=deep? → check_docker_health + check_http localhost:80 → ⎋ | ◇ liveness: check_docker_health nginx → ⎋ 0/1
 # region MODULE_CONTRACT
 ## @purpose  Check nginx Docker container health — liveness (docker inspect) + deep (HTTP verification).
 ## @scope    Called via `make healthcheck` (liveness) and `make healthcheck MODE=deep` (diagnostic)
 ## @invariants
 ##   - check_docker_health for liveness (docker inspect State.Health.Status)
-##   - MODE=deep: docker exec curl for HTTP response verification on port 80
+##   - MODE=deep: check_docker_health + check_http for HTTP response verification on port 80
 ##   - No systemd branches — nginx is now a Docker module
-##   - All curl calls: --max-time 5 (never blocks)
-## @rationale Docker healthcheck (nc -z) is liveness; deep check verifies nginx actually serves HTTP.
-##            Two-tier: fast inspect for make healthcheck, full HTTP for MODE=deep.
+## @rationale Unified contract per DevPlan 083 — deep mode is strict superset of liveness (DRIFT-H6 fix).
+##            check_http replaces docker exec curl copy-paste (DRIFT-H4 fix).
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -25,20 +24,16 @@ CONTAINER="nginx"
 MODE="${1:-}"
 
 # ═══════════════════════════════════════════════════════════════════
-# Deep check: verify nginx is serving HTTP inside the container
+# Deep check: verify nginx is serving HTTP
 # ═══════════════════════════════════════════════════════════════════
 if [ "$MODE" = "deep" ]; then
-    if command -v docker &>/dev/null && docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
-        if docker exec "$CONTAINER" curl -sf --max-time 5 http://localhost:80/ > /dev/null 2>&1; then
-            log_imp 8 "deep" "nginx HTTP port 80 OK (docker exec)"
-            echo "[IMP:9][nginx-hc][deep] HTTP port 80 OK" >&2
-            exit 0
-        fi
-        log_imp 9 "deep" "nginx HTTP port 80 FAIL"
-        echo "[IMP:9][nginx-hc][deep] HTTP port 80 FAIL" >&2
-        exit 1
-    fi
-    exit 1
+    # Step 1: Check Docker health status (same as liveness)
+    check_docker_health "$CONTAINER" || exit 1
+    # Step 2: Service-specific diagnostics via check_http
+    check_http "http://127.0.0.1:80/" "200" 5 || exit 1
+    log_imp 9 "deep" "nginx deep check PASSED"
+    echo "[IMP:9][nginx-hc][deep] HTTP port 80 OK" >&2
+    exit 0
 fi
 
 # ═══════════════════════════════════════════════════════════════════

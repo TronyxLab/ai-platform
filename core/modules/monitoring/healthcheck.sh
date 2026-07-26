@@ -21,13 +21,19 @@ CONTAINERS=("prometheus" "grafana")
 MODE="${1:-}"
 
 if [ "$MODE" = "deep" ]; then
-    # Deep checks: verify HTTP endpoints
-    log_imp 8 "healthcheck" "Deep mode: checking HTTP endpoints"
+    # Deep checks: verify Docker health first, then HTTP endpoints
+    log_imp 8 "healthcheck" "Deep mode: checking Docker health + HTTP endpoints"
 
+    # Step 1: Check Docker health status for all containers
+    for container in "${CONTAINERS[@]}"; do
+        check_docker_health "$container" || exit 1
+    done
+
+    # Step 2: Service-specific diagnostics via check_http
     check_http "http://127.0.0.1:9090/-/healthy" "200" || exit 1
     check_http "http://127.0.0.1:3000/api/health" "200" || exit 1
 
-    log_imp 9 "healthcheck" "All monitoring HTTP endpoints healthy"
+    log_imp 9 "healthcheck" "All monitoring deep checks passed"
     exit 0
 fi
 
