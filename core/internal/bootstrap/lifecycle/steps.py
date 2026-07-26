@@ -39,7 +39,6 @@ import sys as _sys
 _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "shared")
 if _SHARED_DIR not in _sys.path:
     _sys.path.insert(0, _SHARED_DIR)
-from node_yaml import extract_context_from_node_yaml
 
 
 # region FUNC__step_install_acme
@@ -702,91 +701,6 @@ def _tor_provision(core_dir: str, bridges_file: str = "", skip_verify: bool = Fa
 # endregion FUNC__tor_provision
 
 
-# region FUNC__ssl_cert_provision
-## @purpose — SSL certificate provisioning via acme.sh DNS-01 with S3 cache fallback.
-##            Checks S3 cache first, falls back to acme.sh issue-cert.sh.
-## @io — ⇥ core_dir: str, node_yaml: str → ⎋ bool
-## @complexity — O(1) + subprocess
-## @invariants
-##   - Non-fatal: failure logs WARN, bootstrap continues (nginx without HTTPS)
-##   - Requires acme.sh installed (install-acme.sh at init)
-def _ssl_cert_provision(core_dir: str, node_yaml: str) -> bool:
-    """Provision SSL certificates. Returns True on success."""
-    ssl_script = os.path.join(core_dir, "internal", "bootstrap", "issue-cert.sh")
-    if not os.path.isfile(ssl_script):
-        logger.warning("[IMP:7][ssl] issue-cert.sh not found — skipping SSL")
-        return False
-
-    platform_domain = os.environ.get("PLATFORM_DOMAIN", "")
-    if not platform_domain:
-        logger.warning("[IMP:7][ssl] PLATFORM_DOMAIN not set — skipping SSL")
-        return False
-
-    # Source secrets.env
-    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-    if os.path.isfile(secrets_env):
-        logger.info("[IMP:8][ssl] Sourcing secrets.env for WEBNAMES_API_KEY")
-        with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError):
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    f"set -a; source '{secrets_env}'; set +a; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy; env | grep -E '^(WEBNAMES_API_KEY)'",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-    s3_cache = os.path.join(core_dir, "internal", "bootstrap", "s3-ssl-cache.sh")
-    if os.path.isfile(s3_cache):
-        try:
-            check = subprocess.run(
-                ["bash", s3_cache, "check", platform_domain],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if check.returncode == 0:
-                logger.info("[IMP:8][ssl] Valid cert in S3 cache — restoring")
-                dl = subprocess.run(
-                    ["bash", s3_cache, "download", platform_domain],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                cert_path = f"/etc/letsencrypt/live/{platform_domain}/fullchain.pem"
-                if dl.returncode == 0 and os.path.isfile(cert_path):
-                    logger.info("[IMP:9][ssl] SSL cert restored from S3 cache for %s", platform_domain)
-                    return True
-                logger.info("[IMP:7][ssl] S3 restore failed — falling back to acme.sh")
-        except subprocess.TimeoutExpired:
-            logger.info("[IMP:7][ssl] S3 cache check timed out — falling back to acme.sh")
-
-    logger.info("[IMP:9][ssl] Issuing SSL certificate for %s", platform_domain)
-    try:
-        result = subprocess.run(
-            ["bash", ssl_script],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][ssl] SSL certificate provisioned for %s", platform_domain)
-            return True
-        logger.warning(
-            "[IMP:7][ssl] SSL provisioning failed — nginx may lack HTTPS: %s",
-            result.stderr.strip()[:200],
-        )
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][ssl] SSL provisioning timed out")
-        return False
-
-
-# endregion FUNC__ssl_cert_provision
-
-
 # region FUNC__run_converge
 ## @purpose — Run converge.sh desired-state reconciler. Non-fatal: returns exit code.
 ## @io — ⇥ core_dir: str, node_name: str, extra_args: list[str] → ⎋ int (exit code: 0/1/2)
@@ -822,145 +736,36 @@ def _run_converge(core_dir: str, node_name: str, extra_args: list[str] | None = 
 
 
 # region FUNC__step_deploy_context
-## @purpose — Deploy context: cert orchestration + project deploy + vhost render + verify.
-##            Called from state_machine.py deploy_context step (init index 23, update index 8).
-##            DevPlan 047 Phase 5.
+## @purpose — Thin facade for deploy_context. Delegates to context_deployer.deploy_context().
+##            DevPlan 079 DRIFT-B3: logic moved to context_deployer.py, steps.py is thin proxy.
 ## @io — ⇥ core_dir: str, node_name: str, node_yaml: str → ⎋ None (non-fatal)
-## @complexity — O(D * P) where D = domains, P = projects
+## @complexity — O(1) delegation
 ## @invariants
-##   - Extracts CONTEXT from env var or node.yaml
-##   - Calls cert_orchestrator.orchestrate_certs for all domains
-##   - Calls context_deployer.deploy_context_projects for context projects
-##   - Renders vhosts via add-vhost.sh
-##   - Runs verify-domains.sh (non-fatal)
+##   - Preserved for backward compatibility (state_machine.py still calls it)
+##   - All logic is in context_deployer.deploy_context()
 def _step_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
-    """Deploy all context projects + restore certs + verify. Idempotent."""
-    bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
-
-    # CONTEXT: одна нода = один контекст
-    context = os.environ.get("CONTEXT", "")
-    if not context and node_yaml and os.path.isfile(node_yaml):
-        context = extract_context_from_node_yaml(node_yaml, log_tag="step:context")
-    if not context:
-        logger.error(
-            "[IMP:10][deploy_context] CONTEXT not set — pass via --context or ensure node.yaml has context/contexts[0]"
-        )
-        raise RuntimeError("CONTEXT not set — pass via --context or ensure node.yaml has context/contexts[0]")
-
-    logger.info("[IMP:9][step:deploy_context] Starting (context=%s, node=%s)", context, node_name)
-
-    # ── 18.2 + 18.3: Cert orchestration ──
-    domains = _extract_domains_for_context(node_yaml, context)
-    issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
-    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-
-    if domains:
-        try:
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "cert_orchestrator",
-                os.path.join(bootstrap_dir, "cert_orchestrator.py"),
-            )
-            if spec and spec.loader:
-                cert_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(cert_mod)
-                cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
-                logger.info("[IMP:9][step:deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
-            else:
-                logger.warning("[IMP:7][step:deploy_context] Cannot load cert_orchestrator.py")
-        except Exception as e:
-            logger.warning("[IMP:7][step:deploy_context] Cert orchestration failed (non-fatal): %s", e)
-
-    # ── 18.4: Deploy context projects ──
+    """Deploy context via context_deployer.deploy_context(). Thin facade."""
+    logger.info("[IMP:8][step:deploy_context] Delegating to context_deployer.deploy_context()")
     try:
         import importlib.util
 
+        bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
         deployer_path = os.path.join(bootstrap_dir, "deploy", "context_deployer.py")
         spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
         if spec and spec.loader:
             deployer_mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(deployer_mod)
-            results = deployer_mod.deploy_context_projects(node_yaml, context) or []
+            result = deployer_mod.deploy_context(core_dir, node_name, node_yaml)
             logger.info(
-                "[IMP:9][step:deploy_context] Project deploy complete: %d projects processed",
-                len(results),
+                "[IMP:9][step:deploy_context] Deploy complete: deployed=%d skipped=%d failed=%d",
+                result.deployed if result else 0,
+                result.skipped if result else 0,
+                result.failed if result else 0,
             )
         else:
             logger.warning("[IMP:7][step:deploy_context] Cannot load context_deployer.py")
     except Exception as e:
-        logger.warning("[IMP:7][step:deploy_context] Project deploy failed (non-fatal): %s", e)
-
-    # ── 18.5: Render vhosts ──
-    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
-    if os.path.isfile(vhost_script):
-        node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
-        subprocess.run(
-            ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    # Reload nginx if running (non-fatal)
-    subprocess.run(
-        ["docker", "exec", "nginx", "nginx", "-s", "reload"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-
-    # ── 18.6: Final verify ──
-    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
-    if os.path.isfile(verify_script):
-        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
-        subprocess.run(
-            ["bash", verify_script, node_name, platform_root],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-
-    logger.info("[IMP:9][step:deploy_context] Complete (context=%s)", context)
+        logger.warning("[IMP:7][step:deploy_context] deploy_context failed (non-fatal): %s", e)
 
 
 # endregion FUNC__step_deploy_context
-
-
-# region FUNC__extract_domains_for_context
-## @purpose — Extract all domains from node.yaml for cert orchestration.
-## @io — ⇥ node_yaml_path: str, context: str → ⎋ list[str]
-## @complexity — O(N) for YAML parse
-def _extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
-    """Extract all domains from node.yaml for cert orchestration."""
-    domains: list[str] = []
-    try:
-        import yaml
-
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            return domains
-        domain = data.get("domain", "")
-        if not domain:
-            node_info = data.get("node", {})
-            if isinstance(node_info, dict):
-                domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
-        if domain:
-            domains.append(domain)
-        projects = data.get("projects", [])
-        if isinstance(projects, list):
-            for p in projects:
-                if not isinstance(p, dict):
-                    continue
-                proj_context = p.get("context", "")
-                if context and proj_context and proj_context != context:
-                    continue
-                pd = p.get("domain", "")
-                if pd and pd not in domains:
-                    domains.append(pd)
-    except Exception as e:
-        logger.warning("[IMP:7][step:deploy_context] Failed to extract domains: %s", e)
-    return domains
-
-
-# endregion FUNC__extract_domains_for_context

@@ -40,7 +40,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -67,19 +66,8 @@ class StateTransitionError(Exception):
     """Raised when a state transition violates pre/post-conditions (W5-E6 C3)."""
 
 
-# region FUNC__safe_update_hash
-## @purpose  Safely update a hasher with file contents, handling OSError/FileNotFoundError internally
-def _safe_update_hash(hasher: hashlib._Hash, path: str) -> None:
-    """Update hasher with file contents. Silently skips unreadable files."""
-    try:
-        with open(path, "rb") as f:
-            hasher.update(f.read())
-    except (OSError, FileNotFoundError) as e:
-        logger.warning("[IMP:7][_safe_update_hash] Cannot read %s: %s", path, e)
-
-
-# endregion FUNC__safe_update_hash
-
+# Import shared content_hash (DevPlan 079 DRIFT-B4 unification)
+from core.internal.shared.content_hash import compute_content_hash as _shared_compute_content_hash
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
@@ -449,18 +437,14 @@ class StateMachine:
     # endregion FUNC_get_current_step
 
     # region FUNC__step_hash
-    ## @purpose — Compute SHA256 content hash of step script paths for idempotency.
-    ##            Always includes node-lifecycle.sh + step-specific extra paths.
+    ## @purpose — Compute SHA256 content hash via shared content_hash module.
+    ##            Delegates to compute_content_hash() from core.internal.shared.content_hash.
     ## @io — ⇥ step_name: str, extra_paths: list of additional script paths → ⎋ str hexdigest
     ## @complexity — O(S) where S = total file bytes hashed
     def _step_hash(self, step_name: str, *extra_paths: str) -> str:
-        """Compute SHA256 content hash of node-lifecycle.sh + extra paths."""
-        hasher = hashlib.sha256()
-        # Always include the current file (node-lifecycle.sh equivalent)
+        """Compute SHA256 content hash via shared content_hash module."""
         paths_to_hash = [os.path.abspath(__file__), *list(extra_paths)]
-        for path in paths_to_hash:
-            _safe_update_hash(hasher, path)
-        digest = hasher.hexdigest()
+        digest = _shared_compute_content_hash(paths_to_hash)
         logger.debug(
             "[IMP:6][StateMachine][_step_hash] Hash for %s: %s (files: %s)", step_name, digest[:12], paths_to_hash
         )
@@ -1175,8 +1159,8 @@ def _execute_init_step(
 
     elif step_name == "deploy_context":
         # DevPlan 047: deploy_context step (init index 23, update index 8)
-        # Delegates to steps._step_deploy_context for cert orchestration + project deploy + verify
-        _steps._step_deploy_context(core_dir, node_name, node_yaml)
+        # DevPlan 079: direct importlib call to context_deployer.deploy_context()
+        _import_deploy_context(core_dir, node_name, node_yaml)
 
 
 # endregion EXECUTE_INIT_STEP
@@ -1276,7 +1260,8 @@ def _execute_update_step(
 
     elif step_name == "deploy_context":
         # DevPlan 047: incremental project deploy + cert check (update step 8)
-        _steps._step_deploy_context(core_dir, node_name, node_yaml)
+        # DevPlan 079: direct importlib call to context_deployer.deploy_context()
+        _import_deploy_context(core_dir, node_name, node_yaml)
 
 
 # endregion EXECUTE_UPDATE_STEP
@@ -1328,12 +1313,67 @@ def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
         ],
         "verify_core": [
             os.path.join(core_dir, "lib", "checkpoint.sh"),
-            os.path.join(core_dir, "internal", "bootstrap", "content-hash.sh"),
+            os.path.join(core_dir, "internal", "shared", "content_hash.py"),  # DevPlan 079: shared module
         ],
     }
 
     extra_paths.extend(path_map.get(step_name, []))
     return sm._step_hash(step_name, *extra_paths)
+
+
+# region FUNC__import_deploy_context
+## @purpose — Import and run context_deployer.deploy_context() via importlib.
+##            DevPlan 079: replaces _steps._step_deploy_context().
+## @io — ⇥ core_dir: str, node_name: str, node_yaml: str → ⎋ None (non-fatal)
+## @complexity — O(D * P) where D = domains, P = projects
+def _import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
+    """Import context_deployer.deploy_context() via importlib and execute."""
+    try:
+        import importlib.util
+
+        deployer_path = os.path.join(core_dir, "internal", "bootstrap", "deploy", "context_deployer.py")
+        spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
+        if spec and spec.loader:
+            deployer_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(deployer_mod)
+            result = deployer_mod.deploy_context(core_dir, node_name, node_yaml)
+            logger.info(
+                "[IMP:9][deploy_context] Complete: deployed=%d skipped=%d failed=%d",
+                result.deployed if result else 0,
+                result.skipped if result else 0,
+                result.failed if result else 0,
+            )
+        else:
+            logger.warning("[IMP:7][deploy_context] Cannot load context_deployer.py")
+    except Exception as e:
+        logger.warning("[IMP:7][deploy_context] deploy_context failed (non-fatal): %s", e)
+
+
+# endregion FUNC__import_deploy_context
+
+
+# region FUNC__import_extract_domains
+## @purpose — Extract domains via context_deployer._extract_domains_for_context.
+##            DevPlan 079: replaces _extract_domains() in state_machine.
+## @io — ⇥ core_dir: str, node_yaml: str, context: str → ⎋ list[str]
+## @complexity — O(N) YAML parse
+def _import_extract_domains(core_dir: str, node_yaml: str, context: str) -> list[str]:
+    """Extract domains via context_deployer._extract_domains_for_context."""
+    try:
+        import importlib.util
+
+        deployer_path = os.path.join(core_dir, "internal", "bootstrap", "deploy", "context_deployer.py")
+        spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
+        if spec and spec.loader:
+            deployer_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(deployer_mod)
+            return deployer_mod._extract_domains_for_context(node_yaml, context)
+    except Exception as e:
+        logger.warning("[IMP:7][ssl_provision] Failed to extract domains: %s", e)
+    return []
+
+
+# endregion FUNC__import_extract_domains
 
 
 def _subprocess_run(
@@ -1832,9 +1872,9 @@ def _ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> None:
     """
     bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
 
-    # Extract ALL domains (platform + all projects, no context filter)
+    # Extract ALL domains (platform + all projects, no context filter) via context_deployer
     context = ""  # empty = no filtering, all domains
-    domains = _extract_domains(node_yaml, context)
+    domains = _import_extract_domains(core_dir, node_yaml, context)
 
     if not domains:
         logger.warning("[IMP:7][ssl_provision] No domains found in node.yaml — skipping")
@@ -2032,50 +2072,6 @@ def _send_telegram(sm: StateMachine) -> None:
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
     except Exception as e:
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
-
-
-# region FUNC_extract_domains
-## @purpose — Extract all domains from node.yaml for cert orchestration.
-##            Combines platform domain + project domains (filtered by context).
-## @io — ⇥ node_yaml_path: str, context: str → ⎋ list[str]
-## @complexity — O(N) for YAML parse
-def _extract_domains(node_yaml_path: str, context: str) -> list[str]:
-    """Extract all domains from node.yaml for cert orchestration."""
-    domains: list[str] = []
-    try:
-        import yaml
-
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            return domains
-        # Platform domain
-        domain = data.get("domain", "")
-        if not domain:
-            node_info = data.get("node", {})
-            if isinstance(node_info, dict):
-                domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
-        if domain:
-            domains.append(domain)
-        # Project domains (filtered by context)
-        projects = data.get("projects", [])
-        if isinstance(projects, list):
-            for p in projects:
-                if not isinstance(p, dict):
-                    continue
-                proj_context = p.get("context", "")
-                # Include if context matches or project has no context field
-                if context and proj_context and proj_context != context:
-                    continue
-                pd = p.get("domain", "")
-                if pd and pd not in domains:
-                    domains.append(pd)
-    except Exception as e:
-        logger.warning("[IMP:7][deploy_context] Failed to extract domains from %s: %s", node_yaml_path, e)
-    return domains
-
-
-# endregion FUNC_extract_domains
 
 
 # endregion HELPER_FUNCTIONS

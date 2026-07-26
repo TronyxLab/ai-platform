@@ -44,7 +44,7 @@
 ##   - None require Docker or any running service
 ##   - Uses conftest platform_root fixture for path resolution
 ## @rationale — AC-T7 from DevPlan: two QA audits independently flagged hardcoded test2026
-##              password in 4 files (platform-test.yml, nginx/install.sh, test_e2e_hermes_auth.py,
+##              password in 4 files (platform-test.yml, issue-cert.sh, test_e2e_hermes_auth.py,
 ##              gate-loop/SKILL.md). This test prevents regression.
 ## @changes   CREATED: 2026-07-09 | Wave 1: TASK-7 security credential scanner
 def _module_contract():

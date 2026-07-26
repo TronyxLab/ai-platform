@@ -424,20 +424,32 @@ parse_ssh_command() {
     fi
 
     # ═══════════════════════════════════════════════════════════════
-    # Strip script path prefix (appleboy/ssh-action sends full path,
-    # raw ssh sends just the verb). Both flow through the same forced
-    # command → deploy.sh entrypoint → exec deploy-project.sh here,
-    # but SSH_ORIGINAL_COMMAND is preserved across exec.
+    # DevPlan 081 Phase B (TASK-081B8): stripping + verb detection
+    # delegated to shared ssh_command_parser. DRIFT-D4 resolved:
+    # both deploy.sh and deploy-project.sh now use a single canonical
+    # parser for SSH_ORIGINAL_COMMAND path prefix stripping,
+    # platform-deploy stripping, and verb classification.
     # ═══════════════════════════════════════════════════════════════
     # ⚠️ TRAP[BUG] · 2026-07-20 · raw="deploy.sh dance-site <sha>" → PROJECT=deploy.sh
     # Root cause: path prefix "/opt/platform/core/entrypoints/deploy.sh" not stripped
-    # in parse_ssh_command. entrypoint deploy.sh does strip it, but SSH_ORIGINAL_COMMAND
-    # is an env var — survives exec unchanged. Fix: strip prefix before parsing.
-    local stripped="${raw#/opt/platform/core/entrypoints/deploy.sh }"
-    if [[ "$stripped" != "$raw" ]]; then
-        raw="$stripped"
-        log_imp 8 "args" "Stripped entrypoint path prefix from SSH_ORIGINAL_COMMAND"
-    fi
+    # in parse_ssh_command. Fixed by shared ssh_command_parser (Phase B).
+    local verb args cleaned
+    {
+        read -r verb
+        read -r args
+        read -r cleaned
+    } <<< "$(python3 -c "
+import sys; sys.path.insert(0, '${SCRIPT_DIR}/../../internal/shared')
+from ssh_command_parser import parse_ssh_command
+r = parse_ssh_command(sys.argv[1])
+print(r['verb'])
+print(r.get('args') or '')
+print(r['cleaned'])
+" "$raw")" || {
+        log_imp 10 "args" "FATAL: shared ssh_command_parser failed to parse '${raw}'"
+        exit 1
+    }
+    log_imp 8 "args" "Shared parser: verb=${verb} args=${args} cleaned=${cleaned}"
 
     # ═══════════════════════════════════════════════════════════════
     # Verb: platform-deliver (D2 — payload delivery via stdin tar.gz)
@@ -453,26 +465,20 @@ parse_ssh_command() {
     # · Reason: 1-arg = old format, 2-arg = new format. Project names validated as [a-zA-Z0-9_-]+
     #   (no spaces) → space-separated detection is unambiguous.
     # · Rev: if project names ever allow spaces → switch to explicit --org flag
-    if [[ "$raw" == "platform-deliver "* ]]; then
-        local args="${raw#platform-deliver }"
-        args="$(echo "$args" | xargs)"
-        local org=""
-        local project=""
-        # Detect format: two tokens = org+project (new), one token = project (old)
-        if [[ "$args" == *" "* ]]; then
-            org="${args%% *}"
-            project="${args#* }"
-            project="$(echo "$project" | xargs)"
-            # Validate org does not contain '/'
-            if [[ "$org" == */* ]]; then
-                log_imp 10 "args" "FATAL: org '${org}' contains '/' — invalid"
-                exit 1
-            fi
-            log_imp 8 "args" "platform-deliver: org=${org} project=${project}"
+    if [[ "$verb" == "platform-deliver" ]]; then
+        local org="" project=""
+        if [[ -n "$args" ]]; then
+            read -r org project <<< "$(python3 -c "
+import sys; sys.path.insert(0, '${SCRIPT_DIR}/../../internal/shared')
+from platform_deliver import parse_deliver_args
+o, p = parse_deliver_args(sys.argv[1])
+print(o, p)
+" "$args")"
         else
-            project="$args"
-            log_imp 8 "args" "platform-deliver (legacy): project=${project}"
+            log_imp 10 "args" "FATAL: platform-deliver requires project name argument"
+            exit 1
         fi
+        log_imp 8 "args" "platform-deliver: org=${org} project=${project} (via shared parser)"
         PROJECT="${project}"
         PROJECT_DIR="${PROJECTS_BASE}/${org:+${org}/}${project}"
         DEPLOY_STATUS="deliver"
@@ -481,21 +487,12 @@ parse_ssh_command() {
     fi
 
     # ═══════════════════════════════════════════════════════════════
-    # Verb: platform-deploy (existing — unchanged)
-    # ═══════════════════════════════════════════════════════════════
-    local cleaned="${raw#platform-deploy }"
-    cleaned="${cleaned#platform-deploy}"
-
-    cleaned="$(echo "$cleaned" | sed '/^export /d' | xargs)"
-
-    # ═══════════════════════════════════════════════════════════════
     # Verb: verify (D4 — post-deploy health validation via verify.sh)
     # Dispatched BEFORE project/ref parsing so standalone verbs don't
     # leak into PROJECT/REF. Uses same verify.sh as 'make verify'.
     # ═══════════════════════════════════════════════════════════════
-    if [[ "$cleaned" == "verify "* ]]; then
-        local node="${cleaned#verify }"
-        node="$(echo "$node" | xargs)"
+    if [[ "$verb" == "verify" ]]; then
+        local node="$args"
         log_imp 9 "args" "Verb: verify node=${node}"
         exec "${PLATFORM_ROOT}/core/entrypoints/verify.sh" "$node"
     fi

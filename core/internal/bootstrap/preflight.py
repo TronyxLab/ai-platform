@@ -421,7 +421,7 @@ def run_preflight(node_yaml: str = "", context: str = "", node_name: str = "") -
         domain = _extract_domain_from_node_yaml(node_yaml)
 
     # Extract S3 credentials from env
-    s3_endpoint = os.environ.get("S3_ENDPOINT_URL", os.environ.get("S3_ENDPOINT", "https://s3.timeweb.cloud"))
+    s3_endpoint = os.environ.get("S3_ENDPOINT_URL", "https://s3.timeweb.cloud")
     s3_bucket = os.environ.get("S3_BUCKET", "")
     s3_access_key = os.environ.get("S3_ACCESS_KEY", "")
     s3_secret_key = os.environ.get("S3_SECRET_KEY", "")

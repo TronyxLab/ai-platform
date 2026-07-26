@@ -20,6 +20,7 @@
 ##   11. Manifest Generation Contract — authoritative sources (module.yaml, secret-definitions.yaml, platform-infra.yaml, Makefile .PHONY, @pytest.mark.gate) порождают generated files (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py, entrypoint-manifest.yaml#allowed_verbs/gates, core/AGENTS.md generated-секции). Generated files коммитятся, но НЕ редактируются вручную. CI gate `make check-manifests` блокирует divergence.
 ## @rationale Single source of truth for platform architecture consumed by autonomous agents and developers
 ## @rationale (D2) Invariant 4 обновлён по результатам drift-аудита: 3 канонических + 2 вспомогательных (core/internal/bootstrap/, tests/gates/) в §Навигация root AGENTS.md; templates/template-*/ — payload `make new-project`/`make new-context`, вне скоупа инварианта (не являются архитектурной документацией платформы)
+## @changes  Plan 082 — added Template Mechanisms section with decision table
 ## ⚠️ TRAP[DECISION] · 2026-07-15 · HI · L1 pushed to ghcr.io as backup, never used directly by contexts
 ## · Rejected: local-only L1 (risk: loss of build machine → rebuild from scratch)
 ## · Reason: L1 contains no secrets (only Python dependencies). Push = disaster recovery, not delivery model change.
@@ -181,6 +182,26 @@
 ## Правило
 
 **Не изобретай новый скрипт** — открой issue и предложи `make`-таргет. Если канонический таргет уже существует — используй его. Shell-скрипты в `core/entrypoints/` вызываются только через Makefile.
+
+---
+
+## Template Mechanisms
+
+Платформа использует 3 механизма шаблонизации для разных доменов:
+
+| Домен | Механизм | Модуль | Причина |
+|-------|----------|--------|---------|
+| nginx vhost конфиги | `{{UPPER_SNAKE}}` strict regex | `core/internal/template_engine.py` | Go/Prometheus-шаблоны (`{{$labels.x}}`, `{{instance}}`) НЕ должны подменяться. Strict regex чувствителен к регистру — только UPPER_SNAKE переменные. |
+| LiteLLM config (model_list, fallbacks) | Jinja2 | `core/internal/bootstrap/deploy/config_renderer.py` | Сложные структуры данных требуют циклов, условий и фильтров Jinja2. |
+| Status-page HTML | Jinja2 | `core/modules/status-page/app.py` | Autoescape + template inheritance для XSS-защиты HTML. |
+| Docker Compose | `${VAR:-default}` | compose engine | Встроенная функция compose. Не требует шаблонизации — compose резолвит env vars при запуске. |
+| `envsubst` | `${VAR}` | systemd units, nginx main config | POSIX-совместимая подстановка env vars для файлов конфигурации. |
+
+**Правило:** шаблонные файлы в одной директории ДОЛЖНЫ использовать один механизм консистентно. Смешивание Jinja2 и `{{UPPER_SNAKE}}` в одной директории — красный гейт.
+
+## @rationale (3 механизма)
+**Q:** Зачем 3 разных механизма шаблонизации?
+**A:** Каждый механизм обслуживает фундаментально разный домен. Консолидация в один механизм либо потеряет функциональность (strict regex не может делать циклы), либо создаст ложные совпадения (Jinja2 матчит Go/Prometheus шаблоны). Цена ложных совпадений (silent config corruption) превышает цену поддержки 3 механизмов.
 
 ---
 

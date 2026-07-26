@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: entrypoint deploy git-push ci forced-command verb-contract remove status lifecycle
-# STRUCTURE: ▶ init → ◇ parse SSH_ORIGINAL_COMMAND → ◇ classify verb(remove|status|deploy) → ⊕ dispatch → ⎋ exec deploy-project.sh
+# GREP_SUMMARY: entrypoint deploy git-push ci forced-command verb-contract remove status lifecycle shared ssh-command-parser
+# STRUCTURE: ▶ init → ◇ python3 ssh_command_parser parse(raw) → ◇ dispatch_verb(verb, args, cleaned) → ⊕ exec deploy-project.sh → ⎋
+#            ▶ parse_verb → ssh_command_parser (DevPlan 081 Phase B — shared module imported)
 # region MODULE_CONTRACT
 ## @purpose  Entry-point for `make deploy` and SSH forced-command on VPS.
-##           Parses SSH_ORIGINAL_COMMAND for verb contract K1:
+##           Parses SSH_ORIGINAL_COMMAND via shared ssh_command_parser (DevPlan 081 Phase B),
+##           dispatches verb contract K1:
 ##           - <project> <sha> <env> → deploy (backward compat)
 ##           - remove <project> → deploy-project.sh --remove
 ##           - status <project> → deploy-project.sh --status
+##           - verify <node> → verify-domains.sh
 ## @scope    Called from:
 ##           1. Makefile (local development)
 ##           2. SSH forced-command on VPS (via authorized_keys command="...")
@@ -15,9 +18,15 @@
 ##   - Backward compatible: legacy <project> <sha> [env] works unchanged (K1)
 ##   - All verbs dispatched to internal/deploy/deploy-project.sh (DD12)
 ##   - "remove" never contains --purge or volume destruction (O7)
+##   - Parsing delegated to core.internal.shared.ssh_command_parser.parse_ssh_command()
 ## @rationale Single entrypoint for all deploy verbs — no second SSH user (DD12)
 ## @changes 2026-07-17 · T6 — Added verb contract K1 (remove/status dispatch)
-##           2026-07-21 · W3: status verb passes --stub-aware to deploy-project.sh for improved stub detection
+##           2026-07-21 · W3: status verb passes --stub-aware to deploy-project.sh
+##           2026-07-26 · DevPlan 081 Phase A — Structural refactoring:
+##             extracted _dispatch_verb()
+##           2026-07-26 · DevPlan 081 Phase B (TASK-081B7) — replaced local
+##             stripping+classification with shared ssh_command_parser module.
+##             DRIFT-D4 resolved: unified SSH_ORIGINAL_COMMAND parser.
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -26,20 +35,75 @@ source "${_EP_DIR}/../lib/paths.sh"
 source "${_EP_DIR}/../lib/logging.sh"
 
 # ═══════════════════════════════════════════════════════════════════
-# FUNCTION — parse_verb (K1 contract)
+# FUNCTION — _dispatch_verb (K1 verb contract)
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_dispatch_verb
+## @purpose  Route a parsed verb+args to the correct handler.
+##           Receives parsed data from shared ssh_command_parser.
+##           Verb dispatch table:
+##           ┌──────────┬──────────────────────────────────────────────────────┐
+##           │ ping     │ Echo "pong" and exit 0 (pre-flight connectivity)     │
+##           │ exit     │ Exit 0 (SSH connectivity test, no-op success)        │
+##           │ remove   │ exec deploy-project.sh --remove <project>            │
+##           │ status   │ exec deploy-project.sh --status <project> --stub-aware│
+##           │ verify   │ exec verify-domains.sh <node>                        │
+##           │ * (other)│ exec deploy-project.sh <project> <sha> [env] (deploy) │
+##           └──────────┴──────────────────────────────────────────────────────┘
+## @param $1 verb string (from shared ssh_command_parser)
+## @param $2 args string (project name or full deploy args, from shared)
+## @param $3 cleaned string (original cleaned command, from shared)
+## @invariants
+##   - Ping/exit are handled in-place (no exec)
+##   - Remove/status/verify/deploy use exec — replaces current process
+##   - Unknown verb falls through to legacy deploy (backward compat)
+_dispatch_verb() {
+    local verb="$1"
+    local args="${2:-}"
+    local cleaned="${3:-}"
+
+    case "$verb" in
+        ping)
+            echo "pong"
+            exit 0
+            ;;
+        exit)
+            exit 0
+            ;;
+        remove)
+            local project_name="$args"
+            log_imp 9 "entrypoint" "Verb: remove project=${project_name}"
+            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --remove "$project_name"
+            ;;
+        status)
+            local project_name="$args"
+            log_imp 9 "entrypoint" "Verb: status project=${project_name}"
+            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --status "$project_name" --stub-aware
+            ;;
+        verify)
+            local node="$args"
+            log_imp 9 "entrypoint" "Verb: verify node=${node}"
+            local platform_root="${PLATFORM_ROOT:-/opt/platform}"
+            exec "${PATHS_INTERNAL_DIR}/verify/verify-domains.sh" "${node}" "${platform_root}"
+            ;;
+        *)
+            # Deploy format (backward compat): <project> <sha> [environment]
+            log_imp 9 "entrypoint" "Verb: deploy (backward compat): ${cleaned}"
+            # shellcheck disable=SC2086
+            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" $cleaned
+            ;;
+    esac
+}
+# endregion FUNC_dispatch_verb
+
+# ═══════════════════════════════════════════════════════════════════
+# FUNCTION — parse_verb (K1 contract orchestrator, Phase B)
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_parse_verb
-## @purpose  Read SSH_ORIGINAL_COMMAND, classify verb (remove|status|deploy),
-##           dispatch to deploy-project.sh with appropriate flags.
-##           Backward compatible: <project> <sha> <env> → deploy.
+## @purpose  Orchestrate SSH_ORIGINAL_COMMAND parsing via shared ssh_command_parser.
+##           Phase B (DevPlan 081 TASK-081B7): strip+classify replaced by:
+##             python3 -m core.internal.shared.ssh_command_parser parse "$raw"
+##           JSON stdout parsed into verb/args/cleaned → dispatched.
 ## @param $@ CLI arguments (fallback if SSH_ORIGINAL_COMMAND not set)
-## @invariants
-##   - SSH_ORIGINAL_COMMAND first token determines verb
-##   - remove → --remove flag (never --purge)
-##   - status → --status flag
-##   - anything else → deploy (positional args: <project> <ref> [env])
-##   - "platform-deploy" prefix handled for legacy compat
-echo "[IMP:7][deploy][main] Starting deploy entrypoint" >&2
 parse_verb() {
     local raw="${SSH_ORIGINAL_COMMAND:-}"
 
@@ -55,71 +119,29 @@ parse_verb() {
 
     log_imp 8 "entrypoint" "Raw SSH_ORIGINAL_COMMAND: ${raw}"
 
-    # Strip script path prefix (appleboy/ssh-action sends full path)
-    local cleaned="${raw#/opt/platform/core/entrypoints/deploy.sh }"
-    # If raw was exactly the script path (no trailing space), strip without trailing
-    if [[ "$cleaned" == "$raw" ]]; then
-        cleaned="${raw#/opt/platform/core/entrypoints/deploy.sh}"
-    fi
-
-    # Strip legacy "platform-deploy " prefix
-    cleaned="${cleaned#platform-deploy }"
-    cleaned="${cleaned#platform-deploy}"
-
-    # Trim whitespace
-    cleaned="$(echo "$cleaned" | xargs)"
-
-    log_imp 9 "entrypoint" "Cleaned command: ${cleaned}"
-
-    if [[ -z "$cleaned" ]]; then
-        log_imp 10 "entrypoint" "FATAL: empty command after stripping prefixes"
+    # ── Phase B: shared ssh_command_parser ──
+    # Single python3 invocation: outputs verb, args, cleaned (one per line)
+    # Error handling: parser exits non-zero on ValueError (empty command)
+    local verb args cleaned
+    {
+        read -r verb
+        read -r args
+        read -r cleaned
+    } <<< "$(python3 -c "
+import sys; sys.path.insert(0, '${_EP_DIR}/../internal/shared')
+from ssh_command_parser import parse_ssh_command
+r = parse_ssh_command(sys.argv[1])
+print(r['verb'])
+print(r.get('args') or '')
+print(r['cleaned'])
+" "$raw")" || {
+        log_imp 10 "entrypoint" "FATAL: ssh_command_parser failed to parse command"
         exit 1
-    fi
+    }
 
-    # ── Ping verb — pre-flight connectivity check ──
-    if [[ "$cleaned" == "ping" ]]; then
-        echo "pong"
-        exit 0
-    fi
+    log_imp 9 "entrypoint" "Parsed: verb=${verb} args=${args} cleaned=${cleaned}"
 
-    # ── Exit verb — SSH connectivity test (no-op success) ──
-    if [[ "$cleaned" == "exit" ]]; then
-        exit 0
-    fi
-
-    local first_token="${cleaned%% *}"
-
-    case "$first_token" in
-        remove)
-            local project_name="${cleaned#remove }"
-            project_name="$(echo "$project_name" | xargs)"
-            log_imp 9 "entrypoint" "Verb: remove project=${project_name}"
-            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --remove "$project_name"
-            ;;
-        status)
-            local project_name="${cleaned#status }"
-            project_name="$(echo "$project_name" | xargs)"
-            log_imp 9 "entrypoint" "Verb: status project=${project_name}"
-            # Pass --stub-aware flag for improved stub detection in status output
-            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --status "$project_name" --stub-aware
-            ;;
-        verify)
-            # ⚠️ verb contract: "verify <node>" — runs verify.sh for post-deploy health validation
-            # Added 2026-07-20 to support CI reusable workflow verification through forced-command
-            local node="${cleaned#verify }"
-            node="$(echo "$node" | xargs)"
-            log_imp 9 "entrypoint" "Verb: verify node=${node}"
-            # Delegate directly to internal/verify/verify-domains.sh (not via entrypoint — cross-layer rule)
-            local platform_root="${PLATFORM_ROOT:-/opt/platform}"
-            exec "${PATHS_INTERNAL_DIR}/verify/verify-domains.sh" "${node}" "${platform_root}"
-            ;;
-        *)
-            # Deploy format (backward compat): <project> <sha> [environment]
-            log_imp 9 "entrypoint" "Verb: deploy (backward compat): ${cleaned}"
-            # shellcheck disable=SC2086
-            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" $cleaned
-            ;;
-    esac
+    _dispatch_verb "$verb" "$args" "$cleaned"
 }
 # endregion FUNC_parse_verb
 

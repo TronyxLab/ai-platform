@@ -5,7 +5,7 @@
 ## @purpose  Idempotent dev certificate generator for nginx — hybrid mkcert→openssl.
 ##           SAN derived from domain scheme: `*.ai-platform.local` (base) + `*.${PLATFORM_DOMAIN}`
 ##           if loaded context differs + localhost + 127.0.0.1.
-## @scope    core/modules/nginx/dev-certs/ — output files _local.pem, _local-key.pem
+## @scope    core/modules/nginx/dev-certs/ — output files fullchain.pem, privkey.pem
 ## @invariants
 ##   - Idempotent: no-op ⟺ (literal SAN set ⊇ required) AND (not expiring in 30 days)
 ##   - NEVER touches system trust store (no `mkcert -install`)
@@ -25,8 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${PLATFORM_DOMAIN:="ai-platform.local"}"
 : "${CERT_BACKEND:="auto"}"
 
-_CERT_FILE="${DEV_CERTS_DIR}/_local.pem"
-_KEY_FILE="${DEV_CERTS_DIR}/_local-key.pem"
+_CERT_FILE="${DEV_CERTS_DIR}/fullchain.pem"
+_KEY_FILE="${DEV_CERTS_DIR}/privkey.pem"
 _EXPIRY_DAYS=825  # ~2.25 years, matches openssl default
 
 # ── Helpers ──────────────────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ cert_is_current() {
 
 # region FUNC_generate_mkcert
 ## @purpose  Generate dev cert using mkcert.
-## @io       ⇥ (DEV_CERTS_DIR, required_sans) → ⚡ mkcert → ⎋ _local.pem + _local-key.pem
+## @io       ⇥ (DEV_CERTS_DIR, required_sans) → ⚡ mkcert → ⎋ fullchain.pem + privkey.pem
 ## @pre      mkcert is in PATH
 generate_mkcert() {
     local sans_list
@@ -159,7 +159,7 @@ generate_mkcert() {
 
 # region FUNC_generate_openssl
 ## @purpose  Generate self-signed dev cert using openssl.
-## @io       ⇥ (DEV_CERTS_DIR, PLATFORM_DOMAIN, EXPIRY_DAYS) → ⚡ openssl req → ⎋ _local.pem + _local-key.pem
+## @io       ⇥ (DEV_CERTS_DIR, PLATFORM_DOMAIN, EXPIRY_DAYS) → ⚡ openssl req → ⎋ fullchain.pem + privkey.pem
 ## @note     Uses RSA 2048, SHA256, subjectAltName from required_sans().
 generate_openssl() {
     local sans_list

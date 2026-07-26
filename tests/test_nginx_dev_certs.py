@@ -137,8 +137,8 @@ def test_generate_certs_openssl_backend(tmp_path: Path, caplog) -> None:
 
     assert result.returncode == 0, f"Script failed: {result.stderr}"
 
-    cert_file = tmp_path / "_local.pem"
-    key_file = tmp_path / "_local-key.pem"
+    cert_file = tmp_path / "fullchain.pem"
+    key_file = tmp_path / "privkey.pem"
     assert cert_file.exists(), f"Cert file not created: {cert_file}"
     assert key_file.exists(), f"Key file not created: {key_file}"
 
@@ -175,7 +175,7 @@ def test_context_domain_in_san(tmp_path: Path, caplog) -> None:
 
     assert result.returncode == 0, f"Script failed: {result.stderr}"
 
-    cert_file = tmp_path / "_local.pem"
+    cert_file = tmp_path / "fullchain.pem"
     sans = _get_cert_sans(cert_file)
 
     # Base SAN must still be present
@@ -207,8 +207,8 @@ def test_second_run_is_noop(tmp_path: Path, caplog) -> None:
     result1 = _run_script(tmp_path)
     assert result1.returncode == 0, f"First run failed: {result1.stderr}"
 
-    cert_file = tmp_path / "_local.pem"
-    key_file = tmp_path / "_local-key.pem"
+    cert_file = tmp_path / "fullchain.pem"
+    key_file = tmp_path / "privkey.pem"
     mtime_cert_1 = cert_file.stat().st_mtime
     mtime_key_1 = key_file.stat().st_mtime
 
@@ -254,8 +254,8 @@ def test_regenerates_on_san_drift(tmp_path: Path, caplog) -> None:
     result1 = _run_script(tmp_path)
     assert result1.returncode == 0, f"Baseline generation failed: {result1.stderr}"
 
-    cert_file = tmp_path / "_local.pem"
-    key_file = tmp_path / "_local-key.pem"
+    cert_file = tmp_path / "fullchain.pem"
+    key_file = tmp_path / "privkey.pem"
     mtime_cert_1 = cert_file.stat().st_mtime
     mtime_key_1 = key_file.stat().st_mtime
 

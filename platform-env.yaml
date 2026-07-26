@@ -64,7 +64,7 @@ volumes:
 proxy:
   consumers:
   - hermes-agent
-  no_proxy_internal: localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse
+  no_proxy_internal: localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus
 provides:
   postgres:
     host: pgbouncer
@@ -122,32 +122,92 @@ port_mappings:
   MONITORING_GRAFANA_PORT: 3000
   NGINX_PORT: 443
 env_defaults:
-  POSTGRES_PASSWORD: test-pg-pwd
+  CONTEXT: test
+  NODE_NAME: test-node
+  PLATFORM_DOMAIN: ai-platform.local
+  CONTEXT_IMAGE: ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1
   POSTGRES_USER: postgres
-  CLICKHOUSE_PASSWORD: test-clickhouse-pwd-not-for-prod
+  POSTGRES_DB: platform
+  POSTGRES_PORT: '6432'
+  POSTGRES_HOST: pgbouncer
+  PGBOUNCER_IMAGE: edoburu/pgbouncer:v1.25.2-p0
+  REDIS_PORT: '6379'
+  REDIS_HOST: redis
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: default
+  CLICKHOUSE_HTTP_PORT: '8123'
+  CLICKHOUSE_NATIVE_PORT: '9000'
+  MINIO_PORT: '9000'
+  MINIO_CONSOLE_PORT: '9001'
   MINIO_ROOT_USER: minioadmin
   MINIO_ROOT_PASSWORD: minioadmin
-  HERMES_DASHBOARD_PASSWORD: test-db-pwd
-  GF_SECURITY_ADMIN_PASSWORD: testpass
+  S3_ENDPOINT_URL: https://s3.timeweb.cloud
+  S3_REGION: ru-1
+  S3_PREFIX: platform/backups
   S3_BUCKET: test-bucket
   S3_ACCESS_KEY: test-access-key
   S3_SECRET_KEY: test-secret-key
-  AGE_SECRET_KEY: AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ
-  GHCR_PULL_TOKEN: ghp_test-token-for-ci-only
-  GHCR_PUSH_TOKEN: ci-ghcr-push-token
-  TELEGRAM_BOT_TOKEN: 1234567890:test-telegram-bot-token-for-ci
-  WEBNAMES_API_KEY: '*test-webnames-api-key'
-  PLATFORM_MASTER_EMAIL: admin@test.local
-  PLATFORM_MASTER_PASSWORD: test-master-password
+  PLATFORM_CONTEXT: personal
+  DEEPSEEK_API_KEY: sk-placeholder-key-for-ci
   LITELLM_MASTER_KEY: sk-ci-test-master-key
+  LITELLM_LICENSE: ''
+  LITELLM_METRICS_TOKEN: ''
+  LITELLM_PORT: '4000'
+  LITELLM_HEALTH_URL: http://litellm:4000/health
+  OPENAI_BASE_URL: http://litellm:4000
+  LITELLM_API_KEY: sk-placeholder-litellm-api-key
   NEXTAUTH_SECRET: ci-test-nextauth-secret-32-chars-min!!
+  NEXTAUTH_URL: http://langfuse:3000
   SALT: ci-test-salt-value
   LANGFUSE_INIT_ORG_ID: ci-test-org
   LANGFUSE_INIT_PROJECT_ID: ci-test-project
+  LANGFUSE_INIT_USER_EMAIL: admin@ai-platform.local
+  LANGFUSE_INIT_USER_PASSWORD: ci-test-langfuse-pwd
   LANGFUSE_PUBLIC_KEY: ci-test-public-key
   LANGFUSE_SECRET_KEY: ci-test-secret-key
-  LANGFUSE_INIT_USER_PASSWORD: ci-test-langfuse-pwd
+  LANGFUSE_PORT: '3001'
+  LANGFUSE_S3_BUCKET: langfuse-events
+  LANGFUSE_S3_FORCE_PATH_STYLE: 'true'
+  HERMES_DASHBOARD: 'false'
+  HERMES_DASHBOARD_USERNAME: admin@ai-platform.local
+  HERMES_DASHBOARD_PASSWORD: test-db-pwd
+  HERMES_DASHBOARD_PORT: '9119'
+  HERMES_DESKTOP_PORT: '8642'
+  API_SERVER_ENABLED: 'false'
   API_SERVER_KEY: test-api-server-key-for-ci-only
+  API_SERVER_HOST: 0.0.0.0
+  TELEGRAM_BOT_TOKEN: 1234567890:test-telegram-bot-token-for-ci
+  TELEGRAM_ALLOWED_USERS: ''
+  TELEGRAM_CHAT_ID_CRITICAL: ''
+  TELEGRAM_CHAT_ID_WARNING: ''
+  NGINX_CONF_DIR: ./dev-config
+  NGINX_CERT_DIR: ./dev-certs
+  NGINX_OVERLAY_DIR: ''
+  NGINX_HTTP_PORT: '80'
+  NGINX_HTTPS_PORT: '443'
+  NGINX_EXPORTER_PORT: '9113'
+  WEBNAMES_API_KEY: '*test-webnames-api-key'
+  HTTP_PROXY: ''
+  HTTPS_PROXY: ''
+  NO_PROXY: localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus
+  GF_SECURITY_ADMIN_USER: admin@ai-platform.local
+  GF_SECURITY_ADMIN_PASSWORD: testpass
+  GRAFANA_PORT: '3000'
+  PROMETHEUS_TARGETS_DIR: /opt/platform/prometheus-targets
+  PROMETHEUS_RULES_DIR: /opt/platform/prometheus-rules
+  PROMETHEUS_PORT: '9090'
+  LOKI_PORT: '3100'
+  CADVISOR_PORT: '8080'
+  NODE_EXPORTER_PORT: '9100'
+  COMPOSE_PROFILES: postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio
+  DEPENDENCY_CHECK_TIMEOUT: '2.0'
+  GHCR_PULL_TOKEN: ghp_test-token-for-ci-only
+  GHCR_PUSH_TOKEN: ci-ghcr-push-token
+  POSTGRES_PASSWORD: test-pg-pwd
+  CLICKHOUSE_PASSWORD: test-clickhouse-pwd-not-for-prod
+  AGE_SECRET_KEY: AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ
+  PLATFORM_MASTER_EMAIL: admin@test.local
+  PLATFORM_MASTER_PASSWORD: test-master-password
 test_ports:
   clickhouse:
     port_18123: 18123

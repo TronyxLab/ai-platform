@@ -41,32 +41,58 @@ logger = logging.getLogger("reconcile_projects")
 # · Rev: when ci-deploy key name changes → update single constant
 SSH_USER = "ci-deploy"
 
+
+# region FUNC__build_deliver_verb
+## @purpose — Build platform-deliver verb string via shared platform_deliver module.
+##            DevPlan 081 Phase B TASK-081B10: replaces inline string construction.
+##            DRIFT-D5 resolved: unified platform-deliver builder.
+## @io — ⇥ org: str, project: str → ⎋ str
+## @complexity — O(1)
+def _build_deliver_verb(org: str, project: str) -> str:
+    """Build platform-deliver verb via shared module."""
+    from core.internal.shared.platform_deliver import build_deliver_command
+
+    return build_deliver_command(org, project)
+
+
+# endregion FUNC__build_deliver_verb
+
 # ═══════════════════════════════════════════════════════════════════
 # Dataclasses
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region DATACLASS__ProjectSpec
 @dataclass
 class ProjectSpec:
     """Parsed project entry from node.yaml#projects."""
+
     name: str
     org: str = ""
     domain: str = ""
+
+
 # endregion
+
 
 # region DATACLASS__ReconcileResult
 @dataclass
 class ReconcileResult:
     """Result of reconciling a single project."""
+
     project: str
     status: str  # "deployed", "skipped", "warn", "failed"
     detail: str = ""
+
+
 # endregion
+
 
 # region DATACLASS__ReconcileSummary
 @dataclass
 class ReconcileSummary:
     """Aggregate result of reconcile_projects()."""
+
     node: str
     deployed: int = 0
     skipped: int = 0
@@ -77,11 +103,14 @@ class ReconcileSummary:
     def is_success(self) -> bool:
         """Returns True if no failures occurred."""
         return self.failures == 0
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Node.yaml parsing
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_parse_node_yaml_projects
 def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
@@ -115,20 +144,25 @@ def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
     out: list[ProjectSpec] = []
     for p in projects_raw:
         if isinstance(p, dict):
-            out.append(ProjectSpec(
-                name=p.get("name", ""),
-                org=p.get("org", ""),
-                domain=p.get("domain", ""),
-            ))
+            out.append(
+                ProjectSpec(
+                    name=p.get("name", ""),
+                    org=p.get("org", ""),
+                    domain=p.get("domain", ""),
+                )
+            )
         elif isinstance(p, str):
             out.append(ProjectSpec(name=p))
 
     return out
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Stub detection
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_is_stub_project
 def is_stub_project(project_dir: str) -> bool:
@@ -151,11 +185,14 @@ def is_stub_project(project_dir: str) -> bool:
         return "GENERATED-STUB" in first_line
     except (OSError, IndexError):
         return False
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # GHCR check
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_check_ghcr_image
 def check_ghcr_image(org: str, project_name: str) -> bool:
@@ -184,11 +221,14 @@ def check_ghcr_image(org: str, project_name: str) -> bool:
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # SSH host resolution
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_resolve_ssh_host
 def resolve_ssh_host(
@@ -213,6 +253,7 @@ def resolve_ssh_host(
     if node_host_map:
         try:
             import json
+
             host_map = json.loads(node_host_map)
             host = host_map.get(node_name, "")
             if host:
@@ -224,6 +265,7 @@ def resolve_ssh_host(
     # Fallback: node.yaml → node.host
     try:
         import yaml
+
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
         node = data.get("node", {}) if data else {}
@@ -235,11 +277,14 @@ def resolve_ssh_host(
         logger.warning("[IMP:8][resolve_host] Failed to parse node.yaml for host: %s", exc)
 
     return None
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # SSH helpers
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC__ssh_run
 def _ssh_run(
@@ -268,9 +313,12 @@ def _ssh_run(
 
     cmd = [
         "ssh",
-        "-i", ci_key,
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "ConnectTimeout=10",
+        "-i",
+        ci_key,
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=10",
         f"{ssh_user}@{ssh_host}" if "@" not in ssh_host else ssh_host,
         command,
     ]
@@ -283,11 +331,14 @@ def _ssh_run(
     except FileNotFoundError:
         logger.error("[IMP:10][ssh] ssh binary not found")
         return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr="ssh: not found")
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Deliver payload
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_deliver_payload
 def deliver_payload(
@@ -315,7 +366,8 @@ def deliver_payload(
     if dry_run:
         logger.info(
             "[IMP:8][deliver][%s] DRY-RUN: would deliver payload to %s",
-            spec.name, ssh_host,
+            spec.name,
+            ssh_host,
         )
         return True
 
@@ -346,16 +398,13 @@ def deliver_payload(
             # Create minimal compose file
             org = spec.org if spec.org else "tronyx-lab"
             compose_content = (
-                f"services:\n"
-                f"  {spec.name}:\n"
-                f"    image: ghcr.io/{org}/{spec.name}:latest\n"
-                f"    restart: unless-stopped\n"
+                f"services:\n  {spec.name}:\n    image: ghcr.io/{org}/{spec.name}:latest\n    restart: unless-stopped\n"
             )
             (tmp_path / "docker-compose.yml").write_text(compose_content)
 
-        # Build deliver verb
-        deliver_prefix = f"{spec.org} " if spec.org else ""
-        deliver_verb = f"platform-deliver {deliver_prefix}{spec.name}"
+        # Build deliver verb via shared platform_deliver (DevPlan 081 Phase B TASK-081B10)
+        # DRIFT-D5 resolved: unified platform-deliver builder
+        deliver_verb = _build_deliver_verb(spec.org or "", spec.name)
 
         # Deliver via SSH: tar czf - ai-platform.yaml docker-compose.yml | ssh ...
         # We use ssh with stdin pipe
@@ -375,9 +424,12 @@ def deliver_payload(
 
         ssh_cmd = [
             "ssh",
-            "-i", ci_key,
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ConnectTimeout=10",
+            "-i",
+            ci_key,
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "ConnectTimeout=10",
             f"{SSH_USER}@{ssh_host}" if "@" not in ssh_host else ssh_host,
             deliver_verb,
         ]
@@ -399,7 +451,8 @@ def deliver_payload(
         if ssh_proc.returncode != 0:
             logger.error(
                 "[IMP:10][deliver][%s] FAIL: Payload delivery failed: %s",
-                spec.name, ssh_stderr.strip(),
+                spec.name,
+                ssh_stderr.strip(),
             )
             return False
 
@@ -412,11 +465,14 @@ def deliver_payload(
     finally:
         # Cleanup tmp dir
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Deploy project
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_deploy_project
 def deploy_project(
@@ -453,14 +509,18 @@ def deploy_project(
 
     logger.error(
         "[IMP:10][deploy] FAIL: docker compose up failed in %s: %s",
-        project_dir, result.stderr.strip(),
+        project_dir,
+        result.stderr.strip(),
     )
     return False
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Main reconciler function
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_reconcile_projects
 def reconcile_projects(
@@ -524,7 +584,8 @@ def reconcile_projects(
         if not Path(proj_dir).is_dir():
             logger.info(
                 "[IMP:7][reconcile][%s] SKIP: Project directory not found at %s",
-                spec.name, proj_dir,
+                spec.name,
+                proj_dir,
             )
             summary.skipped += 1
             summary.results.append(ReconcileResult(spec.name, "skipped", "Directory not found"))
@@ -576,7 +637,8 @@ def reconcile_projects(
         if not ssh_host:
             logger.error(
                 "[IMP:10][reconcile][%s] FAIL: Cannot resolve SSH host for node=%s",
-                spec.name, node_name,
+                spec.name,
+                node_name,
             )
             summary.failures += 1
             summary.results.append(ReconcileResult(spec.name, "failed", "Cannot resolve SSH host"))
@@ -608,11 +670,14 @@ def reconcile_projects(
     logger.info("[IMP:9][reconcile][main] ==============================")
 
     return summary
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # CLI entry point
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_main
 def main() -> None:
@@ -629,19 +694,27 @@ def main() -> None:
         description="Post-bootstrap project reconciler — deploy stub projects from GHCR.",
     )
     parser.add_argument(
-        "--node", required=True, type=str,
+        "--node",
+        required=True,
+        type=str,
         help="Node name (for SSH resolution and ai-platform.yaml)",
     )
     parser.add_argument(
-        "--node-yaml", required=True, type=str,
+        "--node-yaml",
+        required=True,
+        type=str,
         help="Path to node.yaml",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", default=False,
+        "--dry-run",
+        action="store_true",
+        default=False,
         help="Print planned actions without executing",
     )
     parser.add_argument(
-        "--node-host-map", default="", type=str,
+        "--node-host-map",
+        default="",
+        type=str,
         help="JSON string of {node_name: ssh_host} mapping",
     )
 
@@ -658,6 +731,8 @@ def main() -> None:
         sys.exit(0)
     else:
         sys.exit(1)
+
+
 # endregion
 
 if __name__ == "__main__":

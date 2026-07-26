@@ -29,19 +29,35 @@ import os
 import pathlib
 import subprocess
 import sys
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Shared library import (DevPlan 070 — DRIFT-B5 elimination)
+# Shared library imports
 import sys as _sys
 
 _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "shared")
 if _SHARED_DIR not in _sys.path:
     _sys.path.insert(0, _SHARED_DIR)
 from node_yaml import extract_context_from_node_yaml
+
+# DevPlan 079 DRIFT-B6: shared docker compose operations
+from core.internal.shared.docker_compose import (
+    docker_compose_build as _shared_docker_compose_build,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_pull as _shared_docker_compose_pull,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_up as _shared_docker_compose_up,
+)
+from core.internal.shared.docker_compose import (
+    healthcheck_poll as _shared_healthcheck_poll,
+)
+from core.internal.shared.docker_compose import (
+    retry_pull as _shared_retry_pull,
+)
 
 # ── Constants ──────────────────────────────────────────────────────────────
 HEALTH_GATE_TIMEOUT = 60  # seconds per project
@@ -370,9 +386,9 @@ def _deploy_single_project(
                 error="bootstrap compose generation failed",
             )
 
-    # Step 2: Try ghcr.io pull (primary channel)
+    # Step 2: Try ghcr.io pull with retries (primary channel)
     channel = "ghcr"
-    pull_ok = _docker_compose_pull(project_dir)
+    pull_ok = _shared_retry_pull(project_dir, max_attempts=3, backoff_seconds=[5, 10, 20])
     if not pull_ok:
         if not ghcr_fallback_build:
             return ProjectDeployResult(
@@ -427,137 +443,76 @@ def _deploy_single_project(
 
 
 # region FUNC_is_project_healthy
-## @purpose — Check if a project's containers are healthy via docker compose ps.
+## @purpose — Check if a project's containers are healthy via shared healthcheck_poll.
+##            Thin wrapper: delegates to healthcheck_poll() from shared/docker_compose.py.
 ## @io — ⇥ project_name: str → ⎋ bool (True if healthy)
 ## @complexity — O(1) + subprocess
 ## @invariants
-##   - Uses docker inspect for health status
+##   - Uses shared healthcheck_poll for health status
 ##   - Non-fatal: if docker unavailable, returns False
 def _is_project_healthy(project_name: str) -> bool:
-    """Check if project containers are healthy."""
-    try:
-        result = subprocess.run(
-            ["docker", "ps", "--filter", f"name={project_name}", "--format", "{{.Status}}"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return False
-        # If no containers running → not healthy
-        if not result.stdout.strip():
-            return False
-        # Check all lines for "healthy" or "Up"
-        lines = result.stdout.strip().splitlines()
-        if not lines:
-            return False
-        # Consider healthy if all containers are "Up" and none are "unhealthy"
-        return not any("unhealthy" in line.lower() or "restarting" in line.lower() for line in lines)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    """Check if project containers are healthy via shared healthcheck_poll."""
+    return _shared_healthcheck_poll(project_name, timeout=10, interval=1) == "healthy"
 
 
 # endregion FUNC_is_project_healthy
 
 
 # region FUNC_docker_compose_pull
-## @purpose — Run docker compose pull in project directory.
+## @purpose — Run docker compose pull via shared module (DevPlan 079).
 ## @io — ⇥ project_dir: str → ⎋ bool (True = success)
 ## @complexity — O(1) + network
 ## @invariants
-##   - Non-fatal: returns False on failure
+##   - Delegates to shared docker_compose_pull()
 ##   - Timeout: 120s
 def _docker_compose_pull(project_dir: str) -> bool:
-    """Pull images for project via docker compose pull."""
-    if not os.path.isdir(project_dir):
-        return False
-    try:
-        result = subprocess.run(
-            ["docker", "compose", "pull"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=project_dir,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    """Pull images for project via shared docker_compose_pull."""
+    return _shared_docker_compose_pull(project_dir)
 
 
 # endregion FUNC_docker_compose_pull
 
 
 # region FUNC_docker_compose_build
-## @purpose — Run docker compose build in project directory (fallback channel).
+## @purpose — Run docker compose build via shared module (DevPlan 079).
 ## @io — ⇥ project_dir: str → ⎋ bool (True = success)
 ## @complexity — O(1) + build time
 ## @invariants
-##   - Non-fatal: returns False on failure
-##   - Timeout: 300s (builds can be slow)
+##   - Delegates to shared docker_compose_build()
+##   - Timeout: 300s
 def _docker_compose_build(project_dir: str) -> bool:
-    """Build images for project via docker compose build."""
-    if not os.path.isdir(project_dir):
-        return False
-    try:
-        result = subprocess.run(
-            ["docker", "compose", "build"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            cwd=project_dir,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    """Build images for project via shared docker_compose_build."""
+    return _shared_docker_compose_build(project_dir)
 
 
 # endregion FUNC_docker_compose_build
 
 
 # region FUNC_docker_compose_up
-## @purpose — Run docker compose up -d in project directory.
+## @purpose — Run docker compose up -d via shared module (DevPlan 079).
 ## @io — ⇥ project_dir: str → ⎋ bool (True = success)
 ## @complexity — O(1) + startup time
 ## @invariants
-##   - Non-fatal: returns False on failure
+##   - Delegates to shared docker_compose_up()
 ##   - Timeout: 120s
 def _docker_compose_up(project_dir: str) -> bool:
-    """Start project via docker compose up -d."""
-    if not os.path.isdir(project_dir):
-        return False
-    try:
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=project_dir,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    """Start project via shared docker_compose_up."""
+    return _shared_docker_compose_up(project_dir)
 
 
 # endregion FUNC_docker_compose_up
 
 
 # region FUNC_wait_until_healthy
-## @purpose — Poll project health until healthy or timeout.
+## @purpose — Poll project health via shared healthcheck_poll until healthy or timeout.
 ## @io — ⇥ project_name: str, timeout: int → ⎋ str ("healthy" | "unhealthy")
 ## @complexity — O(T/I) where T = timeout, I = poll interval
 ## @invariants
-##   - Polls every HEALTH_POLL_INTERVAL seconds
+##   - Delegates to shared healthcheck_poll()
 ##   - Returns "unhealthy" if timeout reached
 def _wait_until_healthy(project_name: str, timeout: int) -> str:
-    """Wait until project is healthy or timeout."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _is_project_healthy(project_name):
-            logger.info("[IMP:9][context_deployer] %s — healthy", project_name)
-            return "healthy"
-        time.sleep(HEALTH_POLL_INTERVAL)
-    logger.warning("[IMP:7][context_deployer] %s — health-gate timeout (%ds)", project_name, timeout)
-    return "unhealthy"
+    """Wait until project is healthy or timeout via shared healthcheck_poll."""
+    return _shared_healthcheck_poll(project_name, timeout=timeout, interval=HEALTH_POLL_INTERVAL)
 
 
 # endregion FUNC_wait_until_healthy
@@ -570,24 +525,29 @@ def _wait_until_healthy(project_name: str, timeout: int) -> str:
 
 
 # region FUNC_write_audit
-## @purpose — Write audit log entry for project deploy.
+## @purpose — Write audit log entry for project deploy via shared audit_logger.
+##            DevPlan 081 Phase C (TASK-081C3): replaced direct file.write with
+##            write_audit_entry() from shared/audit_logger.py for JSON-lines format.
+##            DRIFT-D6 resolved: unified JSON-lines audit format.
 ## @io — ⇥ project: ProjectInfo, result: ProjectDeployResult → ⎋ None
 ## @complexity — O(1)
 ## @invariants
 ##   - Non-fatal: if audit log write fails, logs WARN
-##   - Appends to /var/log/platform/audit.log
+##   - JSON-lines format via shared audit_logger (audit.jsonl)
+##   - Old audit.log pipe-delimited format UNCHANGED (shell compatibility)
 def _write_audit(project: ProjectInfo, result: ProjectDeployResult) -> None:
-    """Write audit entry for project deploy."""
-    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    """Write audit entry for project deploy via shared audit_logger."""
+    from core.internal.shared.audit_logger import write_audit_entry
+
+    tag = f"context_deploy:{project.name}"
+    msg = f"channel={result.channel} health={result.health}"
+    if result.error:
+        msg += f" error={result.error}"
+
     try:
-        os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
-        with open(AUDIT_LOG, "a") as f:
-            f.write(
-                f"[{ts}] context_deploy:{project.name} "
-                f"status={result.status} channel={result.channel} health={result.health}\n"
-            )
-    except OSError as e:
-        logger.warning("[IMP:7][context_deployer] Failed to write audit log: %s", e)
+        write_audit_entry(tag=tag, status=result.status.upper(), message=msg)
+    except Exception as e:
+        logger.warning("[IMP:7][context_deployer] Failed to write audit log via shared: %s", e)
 
 
 # endregion FUNC_write_audit
@@ -658,6 +618,190 @@ def _render_and_provision_llm() -> None:
 # endregion LLM_INTEGRATION
 
 
+# region EXTRACT_DOMAINS
+
+
+# region FUNC_extract_domains_for_context
+## @purpose — Extract all domains from node.yaml for cert orchestration.
+##            Migrated from steps.py (DevPlan 079 DRIFT-B3 unification).
+## @io — ⇥ node_yaml_path: str, context: str → ⎋ list[str]
+## @complexity — O(N) for YAML parse
+## @invariants
+##   - Combines platform domain + project domains (filtered by context)
+##   - Deduplicates domains
+##   - Non-fatal: returns [] on parse errors
+def _extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
+    """Extract all domains from node.yaml for cert orchestration."""
+    domains: list[str] = []
+    try:
+        import yaml
+
+        with open(node_yaml_path) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            return domains
+        domain = data.get("domain", "")
+        if not domain:
+            node_info = data.get("node", {})
+            if isinstance(node_info, dict):
+                domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
+        if domain:
+            domains.append(domain)
+        projects = data.get("projects", [])
+        if isinstance(projects, list):
+            for p in projects:
+                if not isinstance(p, dict):
+                    continue
+                proj_context = p.get("context", "")
+                if context and proj_context and proj_context != context:
+                    continue
+                pd = p.get("domain", "")
+                if pd and pd not in domains:
+                    domains.append(pd)
+    except Exception as e:
+        logger.warning("[IMP:7][deploy_context] Failed to extract domains: %s", e)
+    return domains
+
+
+# endregion FUNC_extract_domains_for_context
+
+
+# endregion EXTRACT_DOMAINS
+
+
+# region DEPLOY_CONTEXT
+
+
+# region FUNC_deploy_context
+## @purpose — Unified deploy_context entry point: cert orchestration + project deploy + vhost render + verify.
+##            Replaces steps._step_deploy_context and deprecated 4 standalone entrypoints.
+##            DevPlan 079 DRIFT-B3 — single public API for all deploy context paths.
+## @io — ⇥ core_dir: str, node_name: str, node_yaml: str, context: str → ⎋ DeployResult
+## @complexity — O(D * T + P * T) where D = domains, P = projects, T = timeout
+## @invariants
+##   1. CONTEXT extracted from: explicit arg → os.environ → node.yaml
+##   2. Cert orchestration via importlib cert_orchestrator (non-fatal)
+##   3. Project deploy via deploy_context_projects()
+##   4. Vhost render via subprocess add-vhost.sh --render-all (non-fatal)
+##   5. Nginx reload via docker exec (non-fatal)
+##   6. Verify via verify-domains.sh (non-fatal)
+##   7. All sub-steps are non-fatal — failure in one does NOT block others
+def deploy_context(
+    core_dir: str,
+    node_name: str,
+    node_yaml: str,
+    context: str = "",
+) -> DeployResult:
+    """Deploy all context projects + restore certs + render vhosts + verify. Idempotent.
+
+    ▶ ┌core_dir + node + node_yaml┐ → ◇ extract context → ◇ cert orchestration →
+    │  ◇ project deploy → ◇ vhost render → ◇ nginx reload → ◇ verify → ⎋ DeployResult
+    """
+    logger.info("[IMP:9][deploy_context] Starting (node=%s, context=%s)", node_name, context or "auto")
+
+    bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
+
+    # ── Step 1: Extract/confirm CONTEXT ──
+    if not context:
+        context = os.environ.get("CONTEXT", "")
+    if not context and node_yaml and os.path.isfile(node_yaml):
+        context = extract_context_from_node_yaml(node_yaml, log_tag="deploy_context")
+    if not context:
+        logger.error(
+            "[IMP:10][deploy_context] CONTEXT not set — pass via --context or ensure node.yaml has context/contexts[0]"
+        )
+        result = DeployResult()
+        result.failed = 1
+        return result
+
+    logger.info("[IMP:9][deploy_context] Using context=%s, node=%s", context, node_name)
+
+    # ── Step 2: Cert orchestration ──
+    domains = _extract_domains_for_context(node_yaml, context)
+    if domains:
+        try:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location(
+                "cert_orchestrator",
+                os.path.join(bootstrap_dir, "cert_orchestrator.py"),
+            )
+            if spec and spec.loader:
+                cert_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cert_mod)
+                issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
+                secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+                cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
+                logger.info("[IMP:9][deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
+            else:
+                logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py")
+        except Exception as e:
+            logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s", e)
+
+    # ── Step 3: Deploy context projects ──
+    project_results = deploy_context_projects(node_yaml, context) or []
+
+    # ── Step 4: Render vhosts ──
+    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
+    if os.path.isfile(vhost_script):
+        node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
+        try:
+            subprocess.run(
+                ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            logger.info("[IMP:9][deploy_context] Vhosts rendered for node=%s", node_name)
+        except Exception as e:
+            logger.warning("[IMP:7][deploy_context] Vhost render failed (non-fatal): %s", e)
+
+    # ── Step 5: Reload nginx ──
+    try:
+        subprocess.run(
+            ["docker", "exec", "nginx", "nginx", "-s", "reload"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as e:
+        logger.warning("[IMP:7][deploy_context] Nginx reload failed (non-fatal): %s", e)
+
+    # ── Step 6: Final verify ──
+    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
+    if os.path.isfile(verify_script):
+        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        try:
+            subprocess.run(
+                ["bash", verify_script, node_name, platform_root],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            logger.info("[IMP:9][deploy_context] Verify complete for node=%s", node_name)
+        except Exception as e:
+            logger.warning("[IMP:7][deploy_context] Verify failed (non-fatal): %s", e)
+
+    # ── Build result ──
+    result = DeployResult()
+    for r in project_results:
+        result.add(r)
+    logger.info(
+        "[IMP:9][deploy_context] Complete (context=%s): deployed=%d skipped=%d failed=%d",
+        context,
+        result.deployed,
+        result.skipped,
+        result.failed,
+    )
+    return result
+
+
+# endregion FUNC_deploy_context
+
+
+# endregion DEPLOY_CONTEXT
+
+
 # region CLI
 
 
@@ -710,16 +854,13 @@ def main() -> int:
         logger.error("[IMP:10][context_deployer] CONTEXT not set and cannot be extracted from node.yaml")
         return 1
 
-    results = deploy_context_projects(
+    # DevPlan 079: use unified deploy_context() instead of deploy_context_projects()
+    deploy_result = deploy_context(
+        core_dir=os.environ.get("CORE_DIR", f"{PLATFORM_ROOT}/core"),
+        node_name=os.environ.get("NODE_NAME", ""),
         node_yaml=args.node_yaml,
         context=context,
-        projects_base=args.projects_base,
-        ghcr_fallback_build=not args.no_fallback_build,
     )
-
-    deploy_result = DeployResult()
-    for r in results:
-        deploy_result.add(r)
     print(json.dumps(deploy_result.to_dict(), indent=2, ensure_ascii=False))
 
     return 0 if deploy_result.failed == 0 else 1

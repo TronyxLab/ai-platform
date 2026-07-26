@@ -15,6 +15,7 @@
 ## @rationale Единый источник истины для генерации vhost'ов. Каждый сгенерированный vhost должен проходить `nginx -t`. Контракт гарантирует совместимость с Docker nginx:alpine и production nginx на VPS. Без контракта агенты генерируют синтаксически некорректные vhost'ы (дефисы в upstream, статические hostname в proxy_pass).
 ## @rationale Gate-тест `test_gate_vhost_nginx_t.py` валидирует контракт в Docker-харнесе с эталонным node.yaml (проекты с дефисами + поддомены PLATFORM_DOMAIN).
 ## @changes 2026-07-20 · Создан (DevPlan 020 Wave 6 — D3 documentation)
+## @changes 2026-07-26 · DevPlan 080 — Added §6 Template Syntax Contract, deleted nginx/install.sh references
 ## @see tests/gates/test_gate_vhost_nginx_t.py — Docker-harness gate test
 ## @see core/internal/scaffold/add-vhost.sh — генератор vhost'ов
 ## @see core/modules/nginx/config/ — эталонные vhost конфиги
@@ -183,3 +184,22 @@ listen 443 ssl http2;
 - `core/modules/nginx/overlays/` — сгенерированные vhost'ы проектов (через `add-vhost.sh --render-all`)
 
 Каждый эталонный конфиг сам должен следовать VHOST_CONTRACT (GENERATED-маркер не обязателен — это ручные файлы).
+
+---
+
+## 6. Template Syntax Contract (DRIFT-C8)
+
+Два типа `.template` файлов в nginx-модуле:
+
+| Директория | Синтаксис | Рендерер | Когда применяется |
+|-----------|-----------|----------|-------------------|
+| `config/*.conf.template` | `${PLATFORM_DOMAIN}` | nginx Docker entrypoint (container-internal envsubst script) | При старте nginx-контейнера |
+| `templates/*.conf.template` | `{{PLATFORM_DOMAIN}}` | `template_engine.py` | При рендере шаблонов через `make templates-render` |
+
+**Правило:** Никогда не смешивать `${}` и `{{}}` в одном файле.
+Каждая директория использует СТРОГО свой синтаксис.
+
+**CI gate:** `test_template_syntax_gate.py` проверяет, что:
+- Файлы в `config/` НЕ содержат `{{`
+- Файлы в `templates/` НЕ содержат `${`
+- Исключение: nginx-переменные вида `${host}`, `${request_uri}` в `config/` разрешены

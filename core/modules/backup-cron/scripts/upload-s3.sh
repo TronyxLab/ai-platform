@@ -37,7 +37,7 @@ fi
 # Validate S3 credentials are available (canonical S3_* only — no AWS_* cross-chain fallback, DevPlan 049 DRIFT-2)
 S3_ACCESS_KEY="${S3_ACCESS_KEY:-}"
 S3_SECRET_KEY="${S3_SECRET_KEY:-}"
-S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-${S3_ENDPOINT:-https://s3.twcstorage.ru}}"
+S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-https://s3.timeweb.cloud}"
 
 if [[ -z "${S3_BUCKET:-}" ]]; then
     echo "[IMP:9][upload-s3] ERROR: S3_BUCKET not set — cannot upload" >&2

@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CERT_DIR = "/etc/letsencrypt/live"
 DEFAULT_ACME_HOME = "/opt/acme.sh"
 DEFAULT_S3_PREFIX = "platform/ssl-certs"
-DEFAULT_S3_ENDPOINT = "https://s3.timeweb.cloud"
+DEFAULT_S3_ENDPOINT_URL = "https://s3.timeweb.cloud"
 DEFAULT_S3_REGION = "us-east-1"
 OPENSSL_TIMEOUT = 10  # seconds for each openssl subprocess call
 CHECKEND_THRESHOLD = 2592000  # 30 days in seconds
@@ -65,7 +65,7 @@ CHECKEND_THRESHOLD = 2592000  # 30 days in seconds
 ## @complexity — O(1)
 ## @invariants
 ##   - Proxy vars (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) stripped before client creation
-##   - Falls back to S3_ENDPOINT env var if S3_ENDPOINT_URL not set
+##   - Falls back to DEFAULT_S3_ENDPOINT_URL constant if S3_ENDPOINT_URL not set
 ##   - Falls back to AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY if S3_* not set
 ##   - Uses botocore retries: max_attempts=3, mode='standard'
 def _get_s3_client() -> boto3.client:
@@ -85,7 +85,7 @@ def _get_s3_client() -> boto3.client:
     ):
         os.environ.pop(proxy_var, None)
 
-    endpoint = os.environ.get("S3_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT") or DEFAULT_S3_ENDPOINT
+    endpoint = os.environ.get("S3_ENDPOINT_URL") or DEFAULT_S3_ENDPOINT_URL
     akid = os.environ.get("S3_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID") or ""
     sak = os.environ.get("S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
     region = os.environ.get("S3_REGION", DEFAULT_S3_REGION)

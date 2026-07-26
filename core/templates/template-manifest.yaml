@@ -49,7 +49,7 @@ templates:
   - template: ../modules/nginx/config/ssl-params.conf.template
     output: null
     type: single
-    consumer: core/modules/nginx/install.sh:deploy_shared_snippets()
+    consumer: core/modules/nginx/docker-compose.base.yml:nginx_envsubst_entrypoint()
     vars:
       PLATFORM_DOMAIN:
         required: false
@@ -59,7 +59,7 @@ templates:
   - template: ../modules/nginx/config/platform-default.conf.template
     output: null
     type: single
-    consumer: core/modules/nginx/install.sh:_deploy_vhost_full()
+    consumer: core/modules/nginx/docker-compose.base.yml:nginx_envsubst_entrypoint()
     vars:
       PLATFORM_DOMAIN:
         required: false

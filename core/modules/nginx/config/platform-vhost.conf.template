@@ -52,22 +52,13 @@ server {
     server_name platform.${PLATFORM_DOMAIN};
 
     # ── SSL configuration ───────────────────────────────────────────────────
-    # ⚠️ TRAP[BUG] · 2026-07-22 · P0 · platform-vhost used ssl-params.conf → tronyx.ru cert (no platform SAN)
-    # · Symptom: platform.tronyx.ru served tronyx.ru cert → SSL verify failed (no matching SAN)
-    # · Root: ssl-params.conf hardcodes ${PLATFORM_DOMAIN} cert path; platform subdomain needs its own cert
-    # · Fix: platform-vhost has its own cert at /etc/letsencrypt/live/platform.${PLATFORM_DOMAIN}/
-    # ·       issued separately via acme.sh (HTTP-01 standalone or DNS-01 webnames)
-    # ·       cert_orchestrator.py and issue-cert.sh must issue cert for platform.${PLATFORM_DOMAIN}
-    ssl_certificate     /etc/letsencrypt/live/platform.${PLATFORM_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/platform.${PLATFORM_DOMAIN}/privkey.pem;
-
-    ssl_session_cache    shared:le_nginx_SSL:10m;
-    ssl_session_timeout  1d;
-    ssl_session_tickets  off;
-
-    ssl_protocols        TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-    ssl_ciphers          ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    # 🧐 TRAP[DECISION] · 2026-07-26 · — · platform-vhost now uses wildcard cert (same as other vhosts)
+    # · Rejected: keep separate cert for platform.${PLATFORM_DOMAIN}
+    # · Reason: wildcard *.${PLATFORM_DOMAIN} already covers platform subdomain.
+    #   Separate cert was a historical workaround for unreliable DNS-01 (resolved).
+    #   Single cert = simpler failure modes, fewer LE API calls.
+    # · Rev: if wildcard cert is ever revoked or platform needs different TLS policy, revert.
+    include /etc/nginx/conf.d/ssl-params.conf;
 
     # ── Proxy headers ──────────────────────────────────────────────────────
     proxy_set_header Host               $host;

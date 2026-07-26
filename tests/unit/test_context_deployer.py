@@ -158,17 +158,18 @@ def test_idempotent_skip_healthy(caplog, node_yaml_file, monkeypatch):
 
 
 # 🧪 TRAP[TEST] · Regression · ghcr.io pull success path
-# · Scenario: _docker_compose_pull returns True → channel="ghcr", project deployed
+# · Scenario: retry_pull returns True → channel="ghcr", project deployed
 # · Last fail: N/A (new test)
 # · Remove if: ghcr pull path changes
 @ldd_trajectory
 def test_ghcr_pull_success(caplog, node_yaml_file, monkeypatch, tmp_path):
     """deploy_context_projects should use ghcr channel on successful pull."""
     monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    monkeypatch.setattr(cd, "_docker_compose_pull", lambda d: True)
-    monkeypatch.setattr(cd, "_docker_compose_build", lambda d: True)
-    monkeypatch.setattr(cd, "_docker_compose_up", lambda d: True)
-    monkeypatch.setattr(cd, "_wait_until_healthy", lambda n, timeout=60: "healthy")
+    # DevPlan 079: use shared retry_pull instead of _docker_compose_pull
+    monkeypatch.setattr(cd, "_shared_retry_pull", lambda d, **kw: True)
+    monkeypatch.setattr(cd, "_shared_docker_compose_build", lambda d, **kw: True)
+    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
+    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "healthy")
     monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
 
     results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))
@@ -181,17 +182,18 @@ def test_ghcr_pull_success(caplog, node_yaml_file, monkeypatch, tmp_path):
 
 
 # 🧪 TRAP[TEST] · Regression · ghcr.io pull fails → build fallback
-# · Scenario: _docker_compose_pull returns False → _docker_compose_build called → channel="build"
-# · Last fail: N/A (new test)
+# · Scenario: retry_pull returns False → build called → channel="build"
+# · Last fail: 2026-07-25 — mock target changed (_docker_compose_pull → _shared_retry_pull per DevPlan 079)
 # · Remove if: build fallback logic changes
 @ldd_trajectory
 def test_ghcr_fails_fallback_build(caplog, node_yaml_file, monkeypatch, tmp_path):
     """deploy_context_projects should fall back to build when ghcr pull fails."""
     monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    monkeypatch.setattr(cd, "_docker_compose_pull", lambda d: False)  # ghcr fails
-    monkeypatch.setattr(cd, "_docker_compose_build", lambda d: True)  # build succeeds
-    monkeypatch.setattr(cd, "_docker_compose_up", lambda d: True)
-    monkeypatch.setattr(cd, "_wait_until_healthy", lambda n, timeout=60: "healthy")
+    # DevPlan 079: retry_pull fails → fallback to build
+    monkeypatch.setattr(cd, "_shared_retry_pull", lambda d, **kw: False)  # ghcr fails
+    monkeypatch.setattr(cd, "_shared_docker_compose_build", lambda d, **kw: True)  # build succeeds
+    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
+    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "healthy")
     monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
 
     results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))
@@ -203,16 +205,16 @@ def test_ghcr_fails_fallback_build(caplog, node_yaml_file, monkeypatch, tmp_path
 
 
 # 🧪 TRAP[TEST] · Regression · health-gate timeout marks unhealthy
-# · Scenario: _wait_until_healthy returns "unhealthy" → health="unhealthy"
+# · Scenario: healthcheck_poll returns "unhealthy" → health="unhealthy"
 # · Last fail: N/A (new test)
 # · Remove if: health-gate logic changes
 @ldd_trajectory
 def test_health_gate_timeout(caplog, node_yaml_file, monkeypatch, tmp_path):
     """deploy_context_projects should mark unhealthy on health-gate timeout."""
     monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    monkeypatch.setattr(cd, "_docker_compose_pull", lambda d: True)
-    monkeypatch.setattr(cd, "_docker_compose_up", lambda d: True)
-    monkeypatch.setattr(cd, "_wait_until_healthy", lambda n, timeout=60: "unhealthy")  # timeout
+    monkeypatch.setattr(cd, "_shared_retry_pull", lambda d, **kw: True)
+    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
+    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "unhealthy")  # timeout
     monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
 
     results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))
@@ -223,25 +225,25 @@ def test_health_gate_timeout(caplog, node_yaml_file, monkeypatch, tmp_path):
 
 # 🧪 TRAP[TEST] · Regression · one project failure does not block others (non-fatal)
 # · Scenario: First project deploy fails, second succeeds → both processed
-# · Last fail: N/A (new test)
+# · Last fail: 2026-07-25 — mock target changed per DevPlan 079
 # · Remove if: non-fatal continuation logic changes
 @ldd_trajectory
 def test_non_fatal_continues_on_failure(caplog, node_yaml_file, monkeypatch, tmp_path):
     """deploy_context_projects should continue after one project fails."""
-    call_count = {"pull": 0}
+    call_count = {"retry_pull": 0}
 
-    def mock_pull(d):
-        call_count["pull"] += 1
-        return call_count["pull"] != 1  # First project fails, second succeeds
+    def mock_retry_pull(d, **kw):
+        call_count["retry_pull"] += 1
+        return call_count["retry_pull"] != 1  # First project fails, second succeeds
 
-    def mock_build(d):
-        return call_count["pull"] == 1 and False  # First project build also fails
+    def mock_build(d, **kw):
+        return False  # Build also fails for first project
 
     monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    monkeypatch.setattr(cd, "_docker_compose_pull", mock_pull)
-    monkeypatch.setattr(cd, "_docker_compose_build", mock_build)
-    monkeypatch.setattr(cd, "_docker_compose_up", lambda d: True)
-    monkeypatch.setattr(cd, "_wait_until_healthy", lambda n, timeout=60: "healthy")
+    monkeypatch.setattr(cd, "_shared_retry_pull", mock_retry_pull)
+    monkeypatch.setattr(cd, "_shared_docker_compose_build", mock_build)
+    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
+    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "healthy")
     monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
 
     results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))

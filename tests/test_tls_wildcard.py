@@ -95,7 +95,7 @@ EXCLUDED_FILES: frozenset = frozenset(
 # Paths to TLS-related scripts for contract tests
 # Relative from platform root
 TLS_SCRIPT_PATHS: list[str] = [
-    os.path.join("core", "modules", "nginx", "install.sh"),
+    os.path.join("core", "internal", "bootstrap", "issue-cert.sh"),
 ]
 
 # ── Regex Patterns ─────────────────────────────────────────────────────────────
@@ -695,7 +695,7 @@ def test_hermes_vhost_conditionally_deployed(
 
 
 # region FUNC_test_tls_scripts_exist
-## @purpose  Verify TLS-related bash scripts (nginx/install.sh) exist on disk.
+## @purpose  Verify TLS-related bash scripts (issue-cert.sh) exist on disk.
 ##           These scripts handle certificate issuance, renewal, and acme.sh integration.
 ## @io       ⇥ _tls_script_paths → ⎋ None (asserts)
 ## @complexity  O(N) where N = number of script paths
@@ -734,7 +734,7 @@ def test_tls_scripts_exist(_tls_script_paths: list[str]) -> None:
 
 # region FUNC_test_tls_scripts_syntax
 ## @purpose  Verify TLS-related bash scripts are syntactically valid via `bash -n`.
-##           A syntax error in nginx/install.sh would block wildcard certificate
+##           A syntax error in issue-cert.sh would block wildcard certificate
 ##           issuance and renewal, breaking TLS for all platform services.
 ## @io       ⇥ _tls_script_paths → ⎋ None (asserts bash -n returncode == 0 for each)
 ## @complexity  O(N) where N = number of scripts

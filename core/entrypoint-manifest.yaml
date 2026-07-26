@@ -250,6 +250,20 @@ test/gate:
   operation_ru: Генерация всех манифестов
   description: Generate secrets-manifest.yaml, platform-env.yaml, entrypoint-manifest.yaml,
     smoke_env_generated.py, env_defaults_generated.py.
+- make_target: sync-env-defaults
+  mechanism: python-script
+  delegates_to: core/internal/scripts/sync_env_defaults.py → .env.example
+  signature: make sync-env-defaults
+  operation_ru: Генерация .env.example из SoT
+  description: Generate .env.example from platform-env.yaml + secret-definitions.yaml.
+    Single SoT → auto-generated .env.example — never edit manually.
+- make_target: check-env-defaults
+  mechanism: python-script
+  delegates_to: core/internal/scripts/sync_env_defaults.py --check
+  signature: make check-env-defaults
+  operation_ru: Проверка актуальности .env.example
+  description: 'Drift gate — fail if .env.example diverges from SoT. Repair: make
+    sync-env-defaults.'
 - script: pre-push-gate.sh
   mechanism: pre-push-hook
   delegates_to: core/entrypoints/pre-push-gate.sh
@@ -591,6 +605,27 @@ gates:
 - id: test_env_defaults_consistency
   test_file: test_gate_env_defaults_consistency.py
   description: 'Auto-discovered gate: test_env_defaults_consistency'
+- id: test_env_example_fresh
+  test_file: test_gate_env_example_drift.py
+  description: 'Auto-discovered gate: test_env_example_fresh'
+- id: test_nextauth_secret_precondition
+  test_file: test_gate_env_example_drift.py
+  description: 'Auto-discovered gate: test_nextauth_secret_precondition'
+- id: test_no_inline_python3_in_scaffold
+  test_file: test_gate_env_example_drift.py
+  description: 'Auto-discovered gate: test_no_inline_python3_in_scaffold'
+- id: test_no_proxy_superset
+  test_file: test_gate_env_example_drift.py
+  description: 'Auto-discovered gate: test_no_proxy_superset'
+- id: test_platform_domain_default
+  test_file: test_gate_env_example_drift.py
+  description: 'Auto-discovered gate: test_platform_domain_default'
+- id: test_postgres_password_unified
+  test_file: test_gate_env_example_drift.py
+  description: 'Auto-discovered gate: test_postgres_password_unified'
+- id: test_s3_endpoint_removed
+  test_file: test_gate_env_example_drift.py
+  description: 'Auto-discovered gate: test_s3_endpoint_removed'
 - id: test_env_example_key_order_matches_dotenv
   test_file: test_gate_env_example_sync.py
   description: 'Auto-discovered gate: test_env_example_key_order_matches_dotenv'
@@ -1232,6 +1267,7 @@ allowed_verbs:
 - audit
 - backup
 - bootstrap-node
+- check-env-defaults
 - check-file-lines
 - check-manifests
 - compose-safe-up
@@ -1269,6 +1305,7 @@ allowed_verbs:
 - scripts-audit
 - secrets-unlock
 - status
+- sync-env-defaults
 - templates-check
 - templates-render
 - test

@@ -47,7 +47,7 @@ include makefiles/helpers.mk
 include makefiles/repair.mk
 
 # === Manifest generation targets ===
-.PHONY: generate-manifests check-manifests
+.PHONY: generate-manifests check-manifests sync-env-defaults check-env-defaults
 
 generate-manifests:
 	@echo "[IMP:7][generate-manifests] Generating secrets-manifest.yaml..."
@@ -86,12 +86,33 @@ check-manifests:
 	@git diff --exit-code -- core/secrets-manifest.yaml platform-env.yaml \
 		tests/_conftest/smoke_env_generated.py tests/helpers/env_defaults_generated.py \
 		core/entrypoint-manifest.yaml core/AGENTS.md \
-		core/modules/litellm/config/litellm-config.yml || \
+		core/modules/litellm/config/litellm-config.yml .env.example || \
 		(echo "[GATE:FAIL][id:check-manifests][class:L1]" && \
 		 echo ">>> REPAIR_RECIPE_START >>>" && \
 		 echo "make fix-gate && git add -u && make gate MODE=fast" && \
 		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
 	@echo "[IMP:9][check-manifests] All generated manifests are up to date."
+
+sync-env-defaults:
+	@echo "[IMP:7][sync-env-defaults] Generating .env.example from SoT..."
+	@python3 core/internal/scripts/sync_env_defaults.py \
+		--platform-env platform-env.yaml \
+		--secret-defs core/secret-definitions.yaml \
+		--output .env.example
+	@echo "[IMP:9][sync-env-defaults] .env.example regenerated from SoT."
+
+check-env-defaults:
+	@echo "[IMP:7][check-env-defaults] Checking .env.example is up to date..."
+	@python3 core/internal/scripts/sync_env_defaults.py \
+		--platform-env platform-env.yaml \
+		--secret-defs core/secret-definitions.yaml \
+		--output .env.example \
+		--check || \
+		(echo "[GATE:FAIL][id:check-env-defaults][class:L1]" && \
+		 echo ">>> REPAIR_RECIPE_START >>>" && \
+		 echo "make sync-env-defaults && git add .env.example && make check-env-defaults" && \
+		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
+	@echo "[IMP:9][check-env-defaults] .env.example is up to date."
 
 # === Default target ===
 .DEFAULT_GOAL := help

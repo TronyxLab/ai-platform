@@ -88,13 +88,15 @@ HELP
 ##             - Hash includes everything after first blank line + trailing newline
 compute_body_hash() {
     local vhost_file="$1"
-    # Use content-hash.sh if available, otherwise fallback to a simple awk/sha256sum-based hash
-    local content_hash_sh
-    content_hash_sh="$(dirname "${BASH_SOURCE[0]}")/../bootstrap/content-hash.sh"
-    if [[ -f "$content_hash_sh" ]]; then
-        # shellcheck source=../bootstrap/content-hash.sh
-        source "$content_hash_sh"
-        compute_step_hash "$(basename "$vhost_file")" "$vhost_file"
+    # ⚠️ TRAP[DECISION] · 2026-07-25 · — · Delegated to Python shared content_hash
+    # · Rejected: content-hash.sh source (duplicated logic across shell modules)
+    # · Reason: DevPlan 079 DRIFT-B4 unifies all content hash to shared Python module
+    # · Rev: when content_hash.py API changes output format
+    local shared_py
+    shared_py="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bootstrap/../shared" 2>/dev/null && pwd)/content_hash.py"
+    if [[ -f "$shared_py" ]]; then
+        # Delegates to Python shared module (DevPlan 079)
+        python3 -m core.internal.shared.content_hash compute --files "$vhost_file" 2>/dev/null
     else
         # ⚠️ TRAP[BUG] · 2026-07-20 · P1 · `||` chain with pipefail evaluates ALL branches
         # · Symptom: sha256sum AND shasum both output hash → body_hash=hash\nhash (129 chars)

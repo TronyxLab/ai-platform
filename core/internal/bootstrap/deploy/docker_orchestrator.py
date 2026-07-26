@@ -83,6 +83,18 @@ _THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS_DIR))
 from content_hash import check_build_needed, compute_source_hash, save_build_hash
 
+# DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
+# DRIFT-D6 resolved: unified JSON-lines audit format
+from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
+
+# DevPlan 079 DRIFT-B6: shared docker compose operations
+from core.internal.shared.docker_compose import (
+    check_image_exists as _shared_check_image_exists,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_pull as _shared_docker_compose_pull,
+)
+
 logger = logging.getLogger("docker_orchestrator")
 
 # ── Constants ──
@@ -101,35 +113,15 @@ _PATHS_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "paths.s
 
 
 # region FUNC__check_image_exists
-## @purpose  Check if a Docker image exists in registry via docker manifest inspect.
-##           Returns True if image is found, False otherwise.
-## @io       ⇥ image_ref: str (e.g. "ghcr.io/tronyx161/hermes-agent-base:latest")
-##           ⎋ bool: True if image exists
-## @complexity 1 — single subprocess call
+## @purpose  Check if a Docker image exists in registry via shared module (DevPlan 079).
+##           Delegates to check_image_exists() from core.internal.shared.docker_compose.
+## @io       ⇥ image_ref: str → ⎋ bool: True if image exists
+## @complexity 1 — delegates to shared module
 ## @invariants
-##   - Uses `docker manifest inspect` which works without pulling the image
-##   - stderr is suppressed — error on non-existent image is expected
-##   - Non-zero exit code from docker CLI means image not found
+##   - Uses shared check_image_exists which wraps docker manifest inspect
 def _check_image_exists(image_ref: str) -> bool:
-    logger.info("[IMP:7][_check_image_exists][check] Verifying image: %s", image_ref)
-    try:
-        result = subprocess.run(
-            ["docker", "manifest", "inspect", image_ref],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][_check_image_exists][found] Image exists: %s", image_ref)
-            return True
-        logger.warning("[IMP:5][_check_image_exists][not_found] Image NOT found: %s", image_ref)
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:5][_check_image_exists][timeout] docker manifest inspect timed out for %s", image_ref)
-        return False
-    except FileNotFoundError:
-        logger.error("[IMP:10][_check_image_exists][no_docker] docker command not found")
-        return False
+    """Check if a Docker image exists via shared check_image_exists."""
+    return _shared_check_image_exists(image_ref)
 
 
 # endregion FUNC__check_image_exists
@@ -460,6 +452,16 @@ def deploy_docker_module(
     module_dir = modules_dir or str(Path(__file__).resolve().parent.parent.parent / "modules")
     logger.info("[IMP:7][deploy_docker_module][start] Deploying docker module: %s", module_name)
 
+    # DevPlan 081 Phase C: audit deploy start (TASK-081C3)
+    try:
+        _shared_write_audit_entry(
+            tag=f"docker_orchestrator:deploy:{module_name}",
+            status="START",
+            message=f"Deploying docker module {module_name}",
+        )
+    except Exception:
+        pass
+
     # ── Resolve compose file ──
     compose_file = _resolve_compose_file(os.path.join(module_dir, module_name))
     if compose_file is None:
@@ -468,6 +470,14 @@ def deploy_docker_module(
             module_name,
             os.path.join(module_dir, module_name),
         )
+        try:
+            _shared_write_audit_entry(
+                tag=f"docker_orchestrator:deploy:{module_name}",
+                status="FAILED",
+                message=f"Compose file not found for {module_name}",
+            )
+        except Exception:
+            pass
         return False
 
     # ── Build compose args ──
@@ -642,6 +652,15 @@ def deploy_docker_module(
         up_result = subprocess.run(up_cmd_parts, capture_output=True, timeout=180)
         if up_result.returncode == 0:
             logger.info("[IMP:9][deploy_docker_module][done] Module deployed: %s", module_name)
+            # DevPlan 081 Phase C: audit via shared audit_logger (TASK-081C3)
+            try:
+                _shared_write_audit_entry(
+                    tag=f"docker_orchestrator:deploy:{module_name}",
+                    status="DEPLOYED",
+                    message=f"docker compose up succeeded for {module_name}",
+                )
+            except Exception:
+                pass
             time.sleep(1)
             return True
         logger.error(
@@ -649,12 +668,37 @@ def deploy_docker_module(
             module_name,
             up_result.stderr.decode(errors="replace").strip() if up_result.stderr else "unknown",
         )
+        # DevPlan 081 Phase C: audit deploy fail (TASK-081C3)
+        try:
+            _shared_write_audit_entry(
+                tag=f"docker_orchestrator:deploy:{module_name}",
+                status="FAILED",
+                message=f"docker compose up failed: {up_result.stderr.decode(errors='replace').strip()[:200] if up_result.stderr else 'unknown'}",
+            )
+        except Exception:
+            pass
         return False
     except subprocess.TimeoutExpired:
         logger.error("[IMP:10][deploy_docker_module][timeout] docker compose up timed out for %s", module_name)
+        try:
+            _shared_write_audit_entry(
+                tag=f"docker_orchestrator:deploy:{module_name}",
+                status="TIMEOUT",
+                message=f"docker compose up timed out for {module_name}",
+            )
+        except Exception:
+            pass
         return False
     except OSError as exc:
         logger.error("[IMP:10][deploy_docker_module][error] docker compose up error for %s: %s", module_name, exc)
+        try:
+            _shared_write_audit_entry(
+                tag=f"docker_orchestrator:deploy:{module_name}",
+                status="ERROR",
+                message=f"docker compose up error: {exc}",
+            )
+        except Exception:
+            pass
         return False
 
 
@@ -754,16 +798,19 @@ def _cleanup_observability_containers(compose_file: Path) -> None:
 
 
 # region FUNC__pull_module_images
-## @purpose  Pull images for a single docker module via docker compose pull.
+## @purpose  Pull images for a single docker module via shared docker_compose_pull().
 ##           Skips modules that have a local build: section (no registry image).
 ## @io       ⇥ mod_name: str, overlay_dir: str | None, secrets_env_file: str | None,
 ##           platform_root: str | None, modules_dir: str
 ##           ⎋ bool: True if pull succeeded or skipped
-## @complexity 2 — compose file resolution + build: section check + docker compose pull
+## @complexity 2 — compose file resolution + build: section check + shared pull delegate
 ## @invariants
 ##   - Module with `build:` section in compose file is SKIPPED (no registry image)
 ##   - Missing compose file is SKIPPED (logged, returns True)
 ##   - Failure is logged but returns True (non-fatal — compose up retries pull)
+##   - Delegates pull execution to core.internal.shared.docker_compose.docker_compose_pull()
+## @changes 2026-07-26 · DevPlan 079 TASK-9 — Replaced inline subprocess.run with
+##           shared docker_compose_pull(compose_dir, timeout=300, compose_args=pull_args)
 def _pull_module_images(
     mod_name: str,
     overlay_dir: str | None,
@@ -786,7 +833,7 @@ def _pull_module_images(
     except OSError:
         pass
 
-    # ── Build pull args ──
+    # ── Build pull args and delegate to shared docker_compose_pull ──
     pull_args = _build_compose_args(
         compose_file=compose_file,
         secrets_env_file=secrets_env_file,
@@ -794,22 +841,14 @@ def _pull_module_images(
         overlay_dir=overlay_dir,
         module_name=mod_name,
     )
-    pull_cmd = ["docker", "compose", *pull_args, "pull"]
+    compose_dir = os.path.dirname(str(compose_file))
     logger.info("[IMP:7][_pull_module_images][pull] Pulling images for %s", mod_name)
-    try:
-        result = subprocess.run(pull_cmd, capture_output=True, timeout=300)
-        if result.returncode == 0:
-            logger.info("[IMP:9][_pull_module_images][done] Images pulled for %s", mod_name)
-            return True
-        logger.warning(
-            "[IMP:5][_pull_module_images][fail] Pull failed for %s — compose up will retry: %s",
-            mod_name,
-            result.stderr.decode(errors="replace").strip()[:200] if result.stderr else "",
-        )
-        return True  # Non-fatal: up -d retries
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("[IMP:5][_pull_module_images][error] Pull error for %s: %s — non-fatal", mod_name, exc)
-        return True  # Non-fatal
+    success = _shared_docker_compose_pull(compose_dir, timeout=300, compose_args=pull_args)
+    if success:
+        logger.info("[IMP:9][_pull_module_images][done] Images pulled for %s", mod_name)
+    else:
+        logger.warning("[IMP:5][_pull_module_images][fail] Pull failed for %s — compose up will retry", mod_name)
+    return True  # Non-fatal: compose up -d retries pull internally
 
 
 # endregion FUNC__pull_module_images

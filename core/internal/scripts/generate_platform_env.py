@@ -15,11 +15,13 @@
 ##   - port_mappings извлекаются из docker-compose.base.yml port-маппингов
 ##   - test_ports извлекаются из docker-compose.test.yml (паттерн 1XXXX:YYYY)
 ##   - profiles = sorted имена папок в --modules-dir
-##   - env_defaults = ci_default из secret-definitions.yaml
+##   - env_defaults = merged: non-secret from platform-infra.yaml env_defaults + secret ci_default from secret-definitions.yaml (latter takes precedence)
 ##   - generated файлы — валидный Python с корректными импортами
 ## @rationale Автоматическая генерация platform-env.yaml устраняет дрейф между реальной
 ##            конфигурацией модулей и декларацией в platform-env.yaml.
 ## @changes  Plan 041 — created: dynamic generator for platform-env.yaml
+##           Plan 082 — merged env_defaults from platform-infra.yaml (non-secret) with
+##                      ci_defaults from secret-definitions.yaml (secret, takes precedence)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -94,6 +96,7 @@ def load_infra(infra_path: Path) -> dict[str, Any]:
         "volumes": data.get("volumes", []),
         "proxy": data.get("proxy", {}),
         "provides": data.get("provides", {}),
+        "env_defaults": data.get("env_defaults", {}),
     }
 
     if not isinstance(result["networks"], list):
@@ -691,11 +694,18 @@ def main() -> None:
     # ── Load CI defaults ──
     ci_defaults: dict[str, str] = load_ci_defaults(secret_defs_path)
 
+    # ── Merge non-secret env_defaults from infra ──
+    non_secret: dict[str, str] = {k: str(v) for k, v in infra.get("env_defaults", {}).items()}
+    # ci_defaults (secret values) take precedence over non-secret env_defaults
+    merged_env_defaults: dict[str, str] = {**non_secret, **ci_defaults}
+
     logger.info(
-        "[IMP:8][main][SUMMARY] Profiles=%d, Ports=%d, TestPorts=%d, Defaults=%d",
+        "[IMP:8][main][SUMMARY] Profiles=%d, Ports=%d, TestPorts=%d, Defaults=%d (merged: %d non-secret + %d secret)",
         len(profiles),
         len(port_mappings),
         len(test_ports),
+        len(merged_env_defaults),
+        len(non_secret),
         len(ci_defaults),
     )
 
@@ -705,7 +715,7 @@ def main() -> None:
         profiles=profiles,
         port_mappings=port_mappings,
         test_ports=test_ports,
-        env_defaults=ci_defaults,
+        env_defaults=merged_env_defaults,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

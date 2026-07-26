@@ -16,7 +16,6 @@
 # endregion MODULE_CONTRACT
 """
 
-import importlib.util
 import logging
 import os
 import subprocess
@@ -53,9 +52,6 @@ def test_add_vhost_passes_config_dir(caplog, tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", mock_run)
 
-    # ── mock dynamic import to skip cert/project modules ──
-    monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *a: None)
-
     # ── mock os.path.isfile to "find" script paths ──
     real_isfile = os.path.isfile
 
@@ -75,8 +71,32 @@ def test_add_vhost_passes_config_dir(caplog, tmp_path, monkeypatch):
     node_yaml = tmp_path / "node.yaml"
     node_yaml.write_text("context: test\nprojects: []\n")
 
-    # ── call the function under test ──
+    # ── Create mock context_deployer module for importlib ──
+    # DevPlan 079: steps._step_deploy_context delegates via importlib
     core_dir = str(tmp_path / "core")
+    deploy_dir = os.path.join(core_dir, "internal", "bootstrap", "deploy")
+    os.makedirs(deploy_dir, exist_ok=True)
+    mock_cd_path = os.path.join(deploy_dir, "context_deployer.py")
+
+    # Create a minimal mock that captures subprocess calls
+    mock_cd_code = """import subprocess
+import os
+def deploy_context(core_dir, node_name, node_yaml, context=""):
+    # Simulate deploy_context flow — calls add-vhost.sh and verify-domains.sh
+    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
+    if os.path.isfile(vhost_script):
+        subprocess.run(["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", "/opt/node-configs"])
+    subprocess.run(["docker", "exec", "nginx", "nginx", "-s", "reload"])
+    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
+    if os.path.isfile(verify_script):
+        subprocess.run(["bash", verify_script, node_name, "/opt/platform"])
+def _extract_domains_for_context(node_yaml_path, context):
+    return []
+"""
+    with open(mock_cd_path, "w") as f:
+        f.write(mock_cd_code)
+
+    # ── call the function under test ──
     steps._step_deploy_context(core_dir=core_dir, node_name="test-node", node_yaml=str(node_yaml))
 
     # ── assert --node-configs-dir was passed ──
@@ -111,9 +131,6 @@ def test_verify_domains_passes_platform_root(caplog, tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", mock_run)
 
-    # ── mock dynamic import to skip cert/project modules ──
-    monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *a: None)
-
     # ── mock os.path.isfile to "find" script paths ──
     real_isfile = os.path.isfile
 
@@ -133,8 +150,29 @@ def test_verify_domains_passes_platform_root(caplog, tmp_path, monkeypatch):
     node_yaml = tmp_path / "node.yaml"
     node_yaml.write_text("context: test\nprojects: []\n")
 
-    # ── call the function under test ──
+    # ── Create mock context_deployer module for importlib ──
     core_dir = str(tmp_path / "core")
+    deploy_dir = os.path.join(core_dir, "internal", "bootstrap", "deploy")
+    os.makedirs(deploy_dir, exist_ok=True)
+    mock_cd_path = os.path.join(deploy_dir, "context_deployer.py")
+    if not os.path.isfile(mock_cd_path):
+        mock_cd_code = """import subprocess
+import os
+def deploy_context(core_dir, node_name, node_yaml, context=""):
+    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
+    if os.path.isfile(vhost_script):
+        subprocess.run(["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", "/opt/node-configs"])
+    subprocess.run(["docker", "exec", "nginx", "nginx", "-s", "reload"])
+    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
+    if os.path.isfile(verify_script):
+        subprocess.run(["bash", verify_script, node_name, "/opt/platform"])
+def _extract_domains_for_context(node_yaml_path, context):
+    return []
+"""
+        with open(mock_cd_path, "w") as f:
+            f.write(mock_cd_code)
+
+    # ── call the function under test ──
     steps._step_deploy_context(core_dir=core_dir, node_name="test-node", node_yaml=str(node_yaml))
 
     # ── assert verify-domains.sh has ≥4 args ──

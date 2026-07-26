@@ -98,14 +98,13 @@ def test_missing_required_var(missing_var: str, error_match: str, monkeypatch, c
 @ldd_trajectory
 @pytest.mark.static_audit
 @pytest.mark.parametrize(
-    "endpoint_url,endpoint_legacy,expected",
+    "endpoint_url,expected",
     [
-        ("https://primary.endpoint.com", "https://legacy.endpoint.com", "https://primary.endpoint.com"),
-        (None, None, "https://s3.timeweb.cloud"),  # default
-        (None, "https://legacy.s3.com", "https://legacy.s3.com"),  # legacy fallback
+        ("https://primary.endpoint.com", "https://primary.endpoint.com"),
+        (None, "https://s3.timeweb.cloud"),  # default
     ],
 )
-def test_endpoint_resolution(endpoint_url, endpoint_legacy, expected, monkeypatch, caplog) -> None:
+def test_endpoint_resolution(endpoint_url, expected, monkeypatch, caplog) -> None:
     with caplog.at_level(logging.DEBUG):
         monkeypatch.setenv("S3_ACCESS_KEY", "ak")
         monkeypatch.setenv("S3_SECRET_KEY", "sk")
@@ -114,10 +113,6 @@ def test_endpoint_resolution(endpoint_url, endpoint_legacy, expected, monkeypatc
             monkeypatch.setenv("S3_ENDPOINT_URL", endpoint_url)
         else:
             monkeypatch.delenv("S3_ENDPOINT_URL", raising=False)
-        if endpoint_legacy is not None:
-            monkeypatch.setenv("S3_ENDPOINT", endpoint_legacy)
-        else:
-            monkeypatch.delenv("S3_ENDPOINT", raising=False)
 
         from backup_config import get_backup_config
 

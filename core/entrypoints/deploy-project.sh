@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: deploy-project entrypoint direct-deploy emergency bypass-ci audit DEPLOY-DIRECT
-# STRUCTURE: ▶ validate(args) → ◇ resolve NODE→host → ⊕ extract org from path → ◆ tar+ssh deliver → ◆ ssh deploy → ◆ verify → ⎋ audit summary
+# GREP_SUMMARY: deploy-project entrypoint direct-deploy emergency bypass-ci audit DEPLOY-DIRECT build-deliver-verb
+# STRUCTURE: ▶ validate(args) → ◇ resolve NODE→host → ⊕ extract org from path → ◆ build_deliver_verb (→ Phase B: shared/platform_deliver) → ◆ tar+ssh deliver → ◆ ssh deploy → ◆ verify → ⎋ audit summary
 # region MODULE_CONTRACT
 ## @purpose  Direct project deploy bypassing CI (emergency fallback).
 ##           tar + ssh platform-deliver → ssh deploy.sh → audit DEPLOY-DIRECT.
@@ -202,6 +202,25 @@ resolve_node_host() {
 }
 # endregion RESOLVE_NODE_HOST
 
+# ═══════════════════════════════════════════════════════════════════
+# FUNCTION — build_deliver_verb (Phase B: delegates to shared platform_deliver)
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_build_deliver_verb
+## @purpose  Build the platform-deliver verb string via shared platform_deliver module.
+##           DevPlan 081 Phase B (TASK-081B9): replaced local string construction with:
+##             python3 -m core.internal.shared.platform_deliver build --org "$org" --project "$project"
+##           DRIFT-D5 resolved: unified platform-deliver builder.
+## @param $1 org (may be empty)
+## @param $2 project name
+## @stdout  platform-deliver verb string
+build_deliver_verb() {
+    local org="${1:-}"
+    local project="${2:-}"
+    # Phase B (TASK-081B9): shared platform_deliver module
+    python3 -m core.internal.shared.platform_deliver build --org "$org" --project "$project"
+}
+# endregion FUNC_build_deliver_verb
+
 # region DELIVER_PAYLOAD
 ## @purpose  Tar project files and deliver via SSH platform-deliver verb
 ## @io       ⇥ PROJECT_DIR, ORG, PROJECT_NAME → tar + ssh to ci-deploy@SSH_HOST
@@ -227,13 +246,10 @@ deliver_payload() {
         log_imp 9 "deliver" "WARNING: No docker-compose.yml or compose.yaml — deliver payload lacks compose config"
     fi
 
-    # Build platform-deliver verb
-    local deliver_verb="platform-deliver"
-    if [[ -n "$ORG" ]]; then
-        deliver_verb="platform-deliver ${ORG} ${PROJECT_NAME}"
-    else
-        deliver_verb="platform-deliver ${PROJECT_NAME}"
-    fi
+    # Build platform-deliver verb via shared helper
+    # Phase B (TASK-081B9): migrate to python3 -m core.internal.shared.platform_deliver build
+    local deliver_verb
+    deliver_verb="$(build_deliver_verb "$ORG" "$PROJECT_NAME")"
 
     local tar_cmd="tar czf - ${files[*]}"
     local ssh_cmd="ssh ${SSH_OPTS} ci-deploy@${SSH_HOST} \"${deliver_verb}\""

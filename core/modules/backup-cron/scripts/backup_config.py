@@ -11,7 +11,7 @@ Shared configuration module for backup-cron scripts (upload.py, retention.py, ba
           BackupConfig (extends S3Config, 8 fields) for backup-specific operations.
 @scope    core/modules/backup-cron/scripts/; imported by upload.py, retention.py,
           and optionally by ~/.hermes/skills/backup-s3/backup_monitor.py (deployed on node).
-@input    Environment variables: S3_ENDPOINT_URL, S3_ACCESS_KEY, S3_SECRET_KEY,
+@input    Environment variables: S3_ENDPOINT_URL (canonical), S3_ACCESS_KEY, S3_SECRET_KEY,
           S3_BUCKET, S3_REGION, S3_PREFIX, PLATFORM_CONTEXT, NODE_NAME.
 @output   S3Config dict (5 fields: endpoint_url, aws_access_key_id, aws_secret_access_key,
           bucket, region) or BackupConfig dict (extends S3Config with prefix, context, node_name).
@@ -61,7 +61,7 @@ class BackupConfig(S3Config):
 
 # region CONSTANTS
 
-_DEFAULT_S3_ENDPOINT = "s3.timeweb.cloud"
+_DEFAULT_S3_ENDPOINT_URL = "s3.timeweb.cloud"
 _DEFAULT_S3_REGION = "us-east-1"
 _DEFAULT_S3_PREFIX = "platform/backups"
 _DEFAULT_CONTEXT = "personal"
@@ -92,7 +92,7 @@ def get_backup_config() -> BackupConfig:
     """
     logger.info("[IMP:7][backup_config][get] Loading backup configuration from environment")
 
-    endpoint_url = os.environ.get("S3_ENDPOINT_URL", os.environ.get("S3_ENDPOINT", f"https://{_DEFAULT_S3_ENDPOINT}"))
+    endpoint_url = os.environ.get("S3_ENDPOINT_URL", f"https://{_DEFAULT_S3_ENDPOINT_URL}")
     aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
     aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")
@@ -166,7 +166,7 @@ def get_s3_config() -> S3Config:
     """
     logger.info("[IMP:7][s3_config][get] Loading S3 configuration from environment")
 
-    endpoint_url = os.environ.get("S3_ENDPOINT_URL", os.environ.get("S3_ENDPOINT", f"https://{_DEFAULT_S3_ENDPOINT}"))
+    endpoint_url = os.environ.get("S3_ENDPOINT_URL", f"https://{_DEFAULT_S3_ENDPOINT_URL}")
     aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
     aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")

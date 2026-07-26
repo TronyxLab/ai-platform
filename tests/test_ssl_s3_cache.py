@@ -162,7 +162,7 @@ def test_get_s3_config_returns_5_fields():
 # 🧪 TRAP[TEST] · 2026-07-21 · Scenario: S3 endpoint fallback to s3.timeweb.cloud
 # · Last fail: None (first run) · Remove if: endpoint resolution logic changes
 def test_get_s3_config_uses_fallback_endpoint():
-    """get_s3_config() falls back to S3_ENDPOINT and default s3.timeweb.cloud."""
+    """get_s3_config() falls back to default s3.timeweb.cloud when S3_ENDPOINT_URL unset."""
     from backup_config import get_s3_config
 
     env_vars = {
@@ -171,12 +171,11 @@ def test_get_s3_config_uses_fallback_endpoint():
         "S3_BUCKET": "test-bucket",
     }
     original_env = {k: os.environ.get(k, "") for k in env_vars}
-    # Also save S3_ENDPOINT_URL and S3_ENDPOINT
+    # Also save S3_ENDPOINT_URL
     saved_endpoint = os.environ.get("S3_ENDPOINT_URL", "")
-    saved_endpoint2 = os.environ.get("S3_ENDPOINT", "")
     try:
-        # Remove explicit endpoint URLs to test fallback
-        for var in ("S3_ENDPOINT_URL", "S3_ENDPOINT"):
+        # Remove explicit endpoint URL to test fallback
+        for var in ("S3_ENDPOINT_URL",):
             os.environ.pop(var, None)
 
         for k, v in env_vars.items():
@@ -195,8 +194,6 @@ def test_get_s3_config_uses_fallback_endpoint():
                 os.environ.pop(k, None)
         if saved_endpoint:
             os.environ["S3_ENDPOINT_URL"] = saved_endpoint
-        if saved_endpoint2:
-            os.environ["S3_ENDPOINT"] = saved_endpoint2
 
 
 @pytest.mark.static_audit

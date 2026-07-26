@@ -41,6 +41,8 @@
 | `make gate` | Production gate | make gate [MODE=fast|full] | make gate [MODE=fast|full] |
 | `make check-manifests` | Проверка актуальности сгенерированных манифестов | make check-manifests | git diff --exit-code |
 | `make generate-manifests` | Генерация всех манифестов | make generate-manifests | make generate-manifests |
+| `make sync-env-defaults` | Генерация .env.example из SoT | make sync-env-defaults | core/internal/scripts/sync_env_defaults.py → .env.example |
+| `make check-env-defaults` | Проверка актуальности .env.example | make check-env-defaults | core/internal/scripts/sync_env_defaults.py --check |
 | `make new-project` | Создание проекта из шаблона | make new-project NAME=<n> TEMPLATE=<t> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |
 | `make new-context` | Создание контекста деплоя | make new-context NODE=<n> | core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh |
 | `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=<name>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen-env-platform.sh |
