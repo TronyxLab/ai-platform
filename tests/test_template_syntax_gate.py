@@ -201,8 +201,7 @@ def test_no_mixed_syntax_in_single_file(caplog) -> None:
         logger.error("[IMP:9][gate][mixed_syntax] FAIL: files with mixed syntax found")
         pytest.fail(
             f"Found {len(violations)} file(s) with mixed {{{{}}}} and ${{}} syntax.\n"
-            f"Each .template file must use ONLY ONE syntax (Jinja2 OR envsubst), never both.\n"
-            + "\n".join(violations)
+            f"Each .template file must use ONLY ONE syntax (Jinja2 OR envsubst), never both.\n" + "\n".join(violations)
         )
 
     logger.info("[IMP:9][gate][mixed_syntax] PASS: no mixed syntax in %d template files", len(all_templates))

@@ -232,7 +232,7 @@ env_defaults:
   CADVISOR_PORT: 8080
   NODE_EXPORTER_PORT: 9100
   # ── Compose Profiles ──
-  COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio"
+  COMPOSE_PROFILES: "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
   # ── Misc ──
   DEPENDENCY_CHECK_TIMEOUT: "2.0"
   GHCR_PULL_TOKEN: "ghp_test-token-for-ci-only"

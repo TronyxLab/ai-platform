@@ -151,7 +151,6 @@ def test_check_cert_hit(caplog, tmp_path, monkeypatch):
     monkeypatch.setenv("S3_BUCKET", "test-bucket")
 
     # Mock _download_s3_file to write a fake cert to the temp path
-    real_download = s3_ssl_cache._download_s3_file
 
     def mock_download(s3_key, local_dst):
         # Write a fake PEM so the temp file exists

@@ -32,7 +32,7 @@ _SHARED_DIR = os.path.join(
 if _SHARED_DIR not in sys.path:
     sys.path.insert(0, _SHARED_DIR)
 
-from crypto import generate_htpasswd_entry, hash_apr1  # noqa: E402
+from crypto import generate_htpasswd_entry, hash_apr1
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,8 @@ def test_hash_apr1_random_salt(caplog: pytest.LogCaptureFixture) -> None:
     assert hash1 != hash2, "Two calls with random salt should produce different hashes"
     assert hash1.startswith("$apr1$"), f"Expected APR1 hash format, got: {hash1[:20]}..."
     logger.info("[IMP:9][test_crypto] ✅ hash_apr1 with random salt: %s...", hash1[:20])
+
+
 # endregion FUNC_test_hash_apr1_random_salt
 
 
@@ -91,6 +93,8 @@ def test_hash_apr1_fixed_salt(caplog: pytest.LogCaptureFixture) -> None:
     assert hash1 == hash2, "Same salt + same password should produce identical hash"
     assert hash1.startswith(f"$apr1${fixed_salt}"), f"Hash should contain fixed salt: {hash1}"
     logger.info("[IMP:9][test_crypto] ✅ hash_apr1 with fixed salt: %s", hash1[:30])
+
+
 # endregion FUNC_test_hash_apr1_fixed_salt
 
 
@@ -117,6 +121,8 @@ def test_generate_htpasswd_entry(caplog: pytest.LogCaptureFixture) -> None:
     assert username_part == TEST_USERNAME, f"Username mismatch: {username_part}"
     assert hash_part.startswith("$apr1$"), f"Hash should be APR1 format: {hash_part[:20]}..."
     logger.info("[IMP:9][test_crypto] ✅ htpasswd entry: %s:%s...", username_part, hash_part[:20])
+
+
 # endregion FUNC_test_generate_htpasswd_entry
 
 
@@ -144,4 +150,6 @@ def test_generate_htpasswd_idempotent(caplog: pytest.LogCaptureFixture) -> None:
     assert entry2 is not None, "Second entry should not be None"
     assert entry1 == entry2, "Same inputs with fixed salt should produce identical entry"
     logger.info("[IMP:9][test_crypto] ✅ generate_htpasswd_entry idempotent: %s...", entry1[:30])
+
+
 # endregion FUNC_test_generate_htpasswd_idempotent

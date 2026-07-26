@@ -163,13 +163,7 @@ def _install_pip3() -> bool:
     ):
         return False
 
-    if not _run(
-        ["apt-get", "install", "-y", "-qq", "python3-pip", "python3-venv"],
-        label="apt-get install python3-pip python3-venv",
-    ):
-        return False
-
-    return True
+    return _run(["apt-get", "install", "-y", "-qq", "python3-pip", "python3-venv"], label="apt-get install python3-pip python3-venv")
 
 
 # region FUNC__install_requirements
@@ -204,10 +198,7 @@ def _install_requirements(core_dir: str) -> bool:
         req_path,
         "--break-system-packages",
     ]
-    if not _run(pip_reqs, label="pip3 -r requirements.txt"):
-        return False
-
-    return True
+    return _run(pip_reqs, label="pip3 -r requirements.txt")
 
 
 # region FUNC_ensure_python_deps

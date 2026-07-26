@@ -33,7 +33,7 @@ import sys as _sys
 if _SHARED_DIR not in _sys.path:
     _sys.path.insert(0, _SHARED_DIR)
 
-from age_key import detect_age_key  # noqa: E402
+from age_key import detect_age_key
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,8 @@ def test_detect_age_key_from_env(caplog: pytest.LogCaptureFixture, monkeypatch: 
     result = detect_age_key()
     assert result == TEST_AGE_KEY, f"Expected {TEST_AGE_KEY}, got {result}"
     logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned key from AGE_SECRET_KEY env")
+
+
 # endregion FUNC_test_detect_age_key_from_env
 
 
@@ -85,6 +87,8 @@ def test_detect_age_key_from_sops(caplog: pytest.LogCaptureFixture, monkeypatch:
     result = detect_age_key()
     assert result == TEST_AGE_KEY, f"Expected {TEST_AGE_KEY}, got {result}"
     logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned key from SOPS_AGE_KEY fallback")
+
+
 # endregion FUNC_test_detect_age_key_from_sops
 
 
@@ -116,6 +120,8 @@ def test_detect_age_key_from_file(
     result = detect_age_key()
     assert result == TEST_AGE_KEY, f"Expected {TEST_AGE_KEY}, got {result}"
     logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned key from AGE_SECRET_KEY_FILE")
+
+
 # endregion FUNC_test_detect_age_key_from_file
 
 
@@ -147,6 +153,8 @@ def test_detect_age_key_empty_file(
     result = detect_age_key()
     assert result is None, f"Expected None, got {result}"
     logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned None for empty file")
+
+
 # endregion FUNC_test_detect_age_key_empty_file
 
 
@@ -174,6 +182,8 @@ def test_detect_age_key_missing(
     result = detect_age_key()
     assert result is None, f"Expected None, got {result}"
     logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned None when all sources absent")
+
+
 # endregion FUNC_test_detect_age_key_missing
 
 
@@ -208,4 +218,6 @@ def test_detect_age_key_log_tag(
             break
     assert found_log, f"Log should contain masked key '{masked_expected}'"
     logger.info("[IMP:9][test_age_key] ✅ detect_age_key logged masked key '%s...'", masked_expected)
+
+
 # endregion FUNC_test_detect_age_key_log_tag

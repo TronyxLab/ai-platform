@@ -27,7 +27,6 @@ from core.internal.shared.docker_compose import (
     retry_pull,
 )
 
-
 # ── Fixture ─────────────────────────────────────────────────────────────────
 
 
@@ -74,6 +73,8 @@ def test_pull_success(compose_dir: str, caplog: pytest.LogCaptureFixture) -> Non
 
     assert result is True
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -102,6 +103,8 @@ def test_pull_failure(compose_dir: str, caplog: pytest.LogCaptureFixture) -> Non
     print("--- END LDD TRAJECTORY ---")
 
     assert result is False
+
+
 # endregion
 
 
@@ -134,6 +137,8 @@ def test_build_success(compose_dir: str, caplog: pytest.LogCaptureFixture) -> No
 
     assert result is True
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -166,6 +171,8 @@ def test_up_success(compose_dir: str, caplog: pytest.LogCaptureFixture) -> None:
 
     assert result is True
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -202,6 +209,8 @@ def test_healthcheck_poll_healthy(caplog: pytest.LogCaptureFixture) -> None:
 
     assert result == "healthy"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -230,6 +239,8 @@ def test_healthcheck_poll_timeout(caplog: pytest.LogCaptureFixture) -> None:
     print("--- END LDD TRAJECTORY ---")
 
     assert result == "unhealthy"
+
+
 # endregion
 
 
@@ -263,6 +274,8 @@ def test_retry_pull_success_second_attempt(compose_dir: str, caplog: pytest.LogC
     assert result is True
     assert mock_pull.call_count == 2
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -291,6 +304,8 @@ def test_retry_pull_all_fail(compose_dir: str, caplog: pytest.LogCaptureFixture)
 
     assert result is False
     assert mock_pull.call_count == 3
+
+
 # endregion
 
 
@@ -323,6 +338,8 @@ def test_check_image_exists_found(caplog: pytest.LogCaptureFixture) -> None:
 
     assert result is True
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -350,4 +367,6 @@ def test_check_image_exists_not_found(caplog: pytest.LogCaptureFixture) -> None:
     print("--- END LDD TRAJECTORY ---")
 
     assert result is False
+
+
 # endregion

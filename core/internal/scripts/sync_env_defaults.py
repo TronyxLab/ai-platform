@@ -86,6 +86,10 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     """Generate complete .env.example content from SoT data."""
     sd = secret_defs  # alias for brevity
 
+    # Canonical platform root — matches gate test allowlist.
+    # Used as base for deployment path defaults.
+    _platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+
     def get_val(name: str, default: str = "") -> str:
         return env_defaults.get(name, default)
 
@@ -437,8 +441,8 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("GF_SECURITY_ADMIN_PASSWORD=" + get_val("GF_SECURITY_ADMIN_PASSWORD", "testpass"))
     lines.append("GRAFANA_PORT=" + str(get_val("GRAFANA_PORT", "3000")))
     lines.append("# Prometheus")
-    lines.append("PROMETHEUS_TARGETS_DIR=" + get_val("PROMETHEUS_TARGETS_DIR", "/opt/platform/prometheus-targets"))
-    lines.append("PROMETHEUS_RULES_DIR=" + get_val("PROMETHEUS_RULES_DIR", "/opt/platform/prometheus-rules"))
+    lines.append("PROMETHEUS_TARGETS_DIR=" + get_val("PROMETHEUS_TARGETS_DIR", f"{_platform_root}/prometheus-targets"))
+    lines.append("PROMETHEUS_RULES_DIR=" + get_val("PROMETHEUS_RULES_DIR", f"{_platform_root}/prometheus-rules"))
     lines.append("PROMETHEUS_PORT=" + str(get_val("PROMETHEUS_PORT", "9090")))
     lines.append("# Loki (logging backend)")
     lines.append("LOKI_PORT=" + str(get_val("LOKI_PORT", "3100")))
@@ -512,21 +516,22 @@ def write_atomic(content: str, output_path: Path) -> None:
     """Write content atomically using tempfile + os.rename."""
     logger.info("[IMP:7][sync_env] Writing %d bytes to %s", len(content), output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".env.example",
         dir=output_path.parent,
         delete=False,
-    )
-    try:
+    ) as tmp:
         tmp.write(content)
         tmp.flush()
         os.fsync(tmp.fileno())
-        tmp.close()
-        os.rename(tmp.name, output_path)
+        tmp_path = tmp.name
+
+    try:
+        os.rename(tmp_path, output_path)
     except Exception:
-        if os.path.exists(tmp.name):
-            os.unlink(tmp.name)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
         raise
     logger.info("[IMP:9][sync_env] Written atomically to %s", output_path)
 

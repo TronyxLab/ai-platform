@@ -398,7 +398,7 @@ def upload_cert(
 
     # Validate required files exist
     missing = 0
-    for name, path in required_files:
+    for _name, path in required_files:
         if not os.path.isfile(path):
             logger.warning("[IMP:8][s3_ssl_cache] Missing cert file for %s: %s", domain, path)
             missing += 1
@@ -426,9 +426,8 @@ def upload_cert(
 
     # Upload cert.pem if it exists (legacy format, best-effort)
     cert_pem_path = os.path.join(live_dir, "cert.pem")
-    if os.path.isfile(cert_pem_path):
-        if not _upload_s3_file(cert_pem_path, f"{s3_base}/cert.pem"):
-            overall_success = False
+    if os.path.isfile(cert_pem_path) and not _upload_s3_file(cert_pem_path, f"{s3_base}/cert.pem"):
+        overall_success = False
 
     # ⚠️ TRAP[BUG] · 2026-07-23 · G3 · acme.sh account data path uses <domain>_ecc/
     # · Fallback: data/<domain>/ (legacy)
@@ -509,9 +508,8 @@ def download_cert(
     logger.info("[IMP:8][s3_ssl_cache] Downloading cert for %s from S3", domain)
 
     # ── Download fullchain.pem (required) ──
-    tmp_fullchain = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
-    tmp_fullchain_path = tmp_fullchain.name
-    tmp_fullchain.close()
+    with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_fullchain:
+        tmp_fullchain_path = tmp_fullchain.name
 
     try:
         if not _download_s3_file(f"{s3_base}/fullchain.pem", tmp_fullchain_path):
@@ -541,9 +539,8 @@ def download_cert(
         return False
 
     # ── Download privkey.pem ──
-    tmp_privkey = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
-    tmp_privkey_path = tmp_privkey.name
-    tmp_privkey.close()
+    with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_privkey:
+        tmp_privkey_path = tmp_privkey.name
     try:
         if _download_s3_file(f"{s3_base}/privkey.pem", tmp_privkey_path):
             dest_privkey = os.path.join(live_dir, "privkey.pem")
@@ -559,9 +556,8 @@ def download_cert(
             os.unlink(tmp_privkey_path)
 
     # ── Download chain.pem (optional) ──
-    tmp_chain = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
-    tmp_chain_path = tmp_chain.name
-    tmp_chain.close()
+    with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_chain:
+        tmp_chain_path = tmp_chain.name
     try:
         if _download_s3_file(f"{s3_base}/chain.pem", tmp_chain_path):
             dest_chain = os.path.join(live_dir, "chain.pem")
@@ -578,9 +574,8 @@ def download_cert(
 
     # ── Restore acme.sh account data ──
     # ⚠️ TRAP[BUG] · 2026-07-23 · G3 · Extract account.tar.gz to ACME_HOME/ not data/
-    tmp_account = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
-    tmp_account_path = tmp_account.name
-    tmp_account.close()
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_account:
+        tmp_account_path = tmp_account.name
     try:
         if _download_s3_file(f"{s3_base}/account.tar.gz", tmp_account_path):
             os.makedirs(acme_home, exist_ok=True)
@@ -635,9 +630,8 @@ def check_cert(
     logger.info("[IMP:8][s3_ssl_cache] Checking S3 cache for %s", domain)
 
     # Download fullchain.pem to temp
-    tmp_cert = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
-    tmp_cert_path = tmp_cert.name
-    tmp_cert.close()
+    with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp_cert:
+        tmp_cert_path = tmp_cert.name
 
     try:
         s3_key = f"{s3_prefix}/{domain}/fullchain.pem"

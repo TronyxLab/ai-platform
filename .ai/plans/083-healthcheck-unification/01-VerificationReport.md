@@ -20,6 +20,7 @@ $START_VERIFICATION_REPORT
 | **IMPLEMENTS** | DevPlan 083 |
 | **IMPACTS** | VerificationReport.md (this file) |
 | **REQUIRES** | None |
+$END_ARTIFACT_CONTRACT
 
 ---
 

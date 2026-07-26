@@ -56,6 +56,8 @@ def test_write_entry_creates_file(caplog: pytest.LogCaptureFixture, tmp_path: Pa
 
     assert log_file.exists(), "File must be created after first write"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -99,6 +101,8 @@ def test_write_entry_json_valid(caplog: pytest.LogCaptureFixture, tmp_path: Path
     assert record["status"] == "DEPLOYED"
     assert record["msg"] == "Deployment completed"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -136,6 +140,8 @@ def test_read_entries_limit(caplog: pytest.LogCaptureFixture, tmp_path: Path) ->
     # Were they limited correctly (should return entries 1 and 2, not 0 and 1)?
     # read_audit_log returns last N from end → chronological order
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -166,6 +172,8 @@ def test_read_empty_log(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> Non
     print("--- END LDD TRAJECTORY ---")
 
     assert entries == [], "Non-existent file must return empty list"
+
+
 # endregion
 
 
@@ -217,6 +225,8 @@ def test_multiple_entries(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> N
         assert entry["msg"] == expected[i]["msg"], f"Entry {i} msg mismatch"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -256,4 +266,6 @@ def test_entry_timestamp_format(caplog: pytest.LogCaptureFixture, tmp_path: Path
     iso8601_z_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
     assert iso8601_z_re.match(ts), f"Timestamp '{ts}' does not match ISO8601 with Z format"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion

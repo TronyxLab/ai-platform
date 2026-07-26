@@ -438,8 +438,8 @@ def test_infra_metrics_healthcheck(caplog, infra_metrics_compose) -> None:
     )
 
     # healthcheck.sh logs go to stderr (via log_imp in lib/healthcheck.sh)
-    assert "All infra-metrics HTTP endpoints healthy" in result.stderr, (
-        "healthcheck.sh deep did not report all endpoints healthy. "
+    assert "All infra-metrics deep checks passed" in result.stderr, (
+        "healthcheck.sh deep did not report all deep checks passed. "
         f"Stdout: {result.stdout.strip()[:300]}, Stderr: {result.stderr.strip()[:300]}"
     )
     logger.info("[IMP:9][smoke][healthcheck] ✅ healthcheck.sh deep: exit 0, all healthy")

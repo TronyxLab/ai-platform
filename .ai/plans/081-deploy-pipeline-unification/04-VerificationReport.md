@@ -36,6 +36,7 @@ IMPACTS:
   - core/internal/bootstrap/deploy/context_deployer.py (MODIFIED, Phase C)
   - core/internal/bootstrap/deploy/docker_orchestrator.py (MODIFIED, Phase C)
 REQUIRES:   DevPlan 070 (shared/ directory) ✅ · DevPlan 079 (docker_compose.py with retry_pull) ✅
+$END_ARTIFACT_CONTRACT
 
 ---
 

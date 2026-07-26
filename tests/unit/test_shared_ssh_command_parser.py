@@ -67,6 +67,8 @@ def test_parse_ping(caplog: pytest.LogCaptureFixture) -> None:
     assert result["args"] is None
     assert result["raw"] == "ping"
     assert result["cleaned"] == "ping"
+
+
 # endregion FUNC_test_parse_ping
 
 
@@ -87,6 +89,8 @@ def test_parse_remove(caplog: pytest.LogCaptureFixture) -> None:
     assert result["verb"] == "remove"
     assert result["args"] == "myproject"
     assert result["cleaned"] == "remove myproject"
+
+
 # endregion FUNC_test_parse_remove
 
 
@@ -107,6 +111,8 @@ def test_parse_status(caplog: pytest.LogCaptureFixture) -> None:
     assert result["verb"] == "status"
     assert result["args"] == "myproject"
     assert result["cleaned"] == "status myproject"
+
+
 # endregion FUNC_test_parse_status
 
 
@@ -127,6 +133,8 @@ def test_parse_platform_deliver_org(caplog: pytest.LogCaptureFixture) -> None:
     assert result["verb"] == "platform-deliver"
     assert result["args"] == "my-org my-project"
     assert result["cleaned"] == "platform-deliver my-org my-project"
+
+
 # endregion FUNC_test_parse_platform_deliver_org
 
 
@@ -147,6 +155,8 @@ def test_parse_platform_deliver_legacy(caplog: pytest.LogCaptureFixture) -> None
     assert result["verb"] == "platform-deliver"
     assert result["args"] == "my-project"
     assert result["cleaned"] == "platform-deliver my-project"
+
+
 # endregion FUNC_test_parse_platform_deliver_legacy
 
 
@@ -167,6 +177,8 @@ def test_parse_deploy_legacy(caplog: pytest.LogCaptureFixture) -> None:
     assert result["verb"] == "deploy"
     assert result["args"] == "my-project abc123 production"
     assert result["cleaned"] == "my-project abc123 production"
+
+
 # endregion FUNC_test_parse_deploy_legacy
 
 
@@ -193,6 +205,8 @@ def test_strip_path_prefix(caplog: pytest.LogCaptureFixture) -> None:
     assert result["verb"] == "deploy"
     assert result["args"] == "project sha"
     assert result["raw"] == raw
+
+
 # endregion FUNC_test_strip_path_prefix
 
 
@@ -214,6 +228,8 @@ def test_strip_platform_deploy(caplog: pytest.LogCaptureFixture) -> None:
     assert result["cleaned"] == "project sha"
     assert result["verb"] == "deploy"
     assert result["args"] == "project sha"
+
+
 # endregion FUNC_test_strip_platform_deploy
 
 
@@ -230,6 +246,8 @@ def test_empty_command() -> None:
     """Empty raw command raises ValueError."""
     with pytest.raises(ValueError, match="empty command after stripping"):
         parse_ssh_command("")
+
+
 # endregion FUNC_test_empty_command
 
 
@@ -244,6 +262,8 @@ def test_empty_command() -> None:
 def test_classify_verb_ping() -> None:
     """Exact 'ping' maps to ping."""
     assert classify_verb("ping") == "ping"
+
+
 # endregion FUNC_test_classify_verb_ping
 
 
@@ -256,6 +276,8 @@ def test_classify_verb_ping() -> None:
 def test_classify_verb_remove() -> None:
     """'remove myproject' maps to remove."""
     assert classify_verb("remove myproject") == "remove"
+
+
 # endregion FUNC_test_classify_verb_remove
 
 
@@ -268,6 +290,8 @@ def test_classify_verb_remove() -> None:
 def test_classify_verb_verify() -> None:
     """'verify node' maps to verify."""
     assert classify_verb("verify node") == "verify"
+
+
 # endregion FUNC_test_classify_verb_verify
 
 
@@ -280,6 +304,8 @@ def test_classify_verb_verify() -> None:
 def test_classify_verb_platform_deliver() -> None:
     """'platform-deliver org proj' maps to platform-deliver."""
     assert classify_verb("platform-deliver org proj") == "platform-deliver"
+
+
 # endregion FUNC_test_classify_verb_platform_deliver
 
 
@@ -292,4 +318,6 @@ def test_classify_verb_platform_deliver() -> None:
 def test_classify_verb_default_deploy() -> None:
     """Unrecognized command maps to deploy (default)."""
     assert classify_verb("someproject sha") == "deploy"
+
+
 # endregion FUNC_test_classify_verb_default_deploy

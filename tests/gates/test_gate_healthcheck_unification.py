@@ -353,7 +353,7 @@ def test_exec_check_used_in_docker_exec_modules(caplog: pytest.LogCaptureFixture
         has_raw_docker_exec = False
         for line in content.splitlines():
             stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("# ⚠️") or stripped.startswith("# 🧐"):
+            if stripped.startswith(("#", "# ⚠️", "# 🧐")):
                 continue
             if "docker exec" in stripped:
                 has_raw_docker_exec = True

@@ -21,7 +21,6 @@ import pytest
 
 from core.internal.shared.content_hash import compute_content_hash
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
@@ -72,6 +71,8 @@ def test_compute_hash_two_files(sample_files: dict[str, Path], caplog: pytest.Lo
     assert h1 == h2, "Hash must be deterministic for same files"
     assert len(h1) == 64, "SHA-256 hex digest must be 64 chars"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -103,6 +104,8 @@ def test_compute_hash_order_matters(sample_files: dict[str, Path], caplog: pytes
 
     assert h_ab != h_ba, "Hash must change when file order changes"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -136,6 +139,8 @@ def test_compute_hash_missing_file(sample_files: dict[str, Path], caplog: pytest
     assert found_warning, "Missing file should log a WARNING"
     assert len(result) == 64, "Should still produce a valid hash"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -167,6 +172,8 @@ def test_compute_hash_empty_list(caplog: pytest.LogCaptureFixture) -> None:
 
     assert result == expected, f"Empty list should produce sha256(''): {expected}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -197,4 +204,6 @@ def test_cli_compute(sample_files: dict[str, Path]) -> None:
 
     assert result.returncode == 0, f"CLI failed: {result.stderr}"
     assert len(result.stdout.strip()) == 64, "CLI should output 64-char hex hash"
+
+
 # endregion

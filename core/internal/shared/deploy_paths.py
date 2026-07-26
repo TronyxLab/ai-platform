@@ -29,23 +29,18 @@ CANONICAL_DEPLOY_PATHS: list[str] = [
     # 1. CI → platform-deliver + deploy.sh
     #    git push → GitHub CI → tar via SSH forced-command → deploy-project.sh
     "CI → platform-deliver + deploy.sh",
-
     # 2. make deploy-project (direct)
     #    tar + SSH, bypass CI, emergency fallback with DEPLOY-DIRECT audit
     "make deploy-project (direct)",
-
     # 3. context_deployer.py (Python)
     #    ghcr.io pull (primary) + build-on-node fallback, idempotent health-gate
     "context_deployer.py (Python)",
-
     # 4. deploy-modules.sh (system modules)
     #    docker compose up for system modules (install.sh path)
     "deploy-modules.sh (system modules)",
-
     # 5. Core SCP/rsync
     #    CI workflow core-deploy → SCP/rsync core/ to VPS /opt/platform/core/
     "Core SCP/rsync",
-
     # 6. Context-overlay git
     #    git clone/pull via ensure_context_repo() on VPS
     "Context-overlay git",
@@ -62,9 +57,7 @@ DEPRECATED_DEPLOY_PATHS: dict[str, dict[str, str]] = {
             "replaced by first real project deployment via "
             "context_deployer._deploy_single_project()"
         ),
-        "removal_mechanism": (
-            "docker compose up -d на реальный проект заменяет заглушку автоматически"
-        ),
+        "removal_mechanism": ("docker compose up -d на реальный проект заменяет заглушку автоматически"),
         "verification": "docker compose ps --format '{{.Image}}' | grep -c 'nginx:alpine' returns 0",
         "target_date": "2026-08-15",
         "fallback": "docker compose down nginx-stub && docker rm nginx-stub",

@@ -10,6 +10,7 @@ ACCEPTANCE_CRITERIA:   10 AC из DevPlan.md (AC1-AC10) + dedup-верифика
 IMPLEMENTS:            DevPlan 079 — Wave B (Bootstrap Pipeline Unification): DRIFT-B3, DRIFT-B4, DRIFT-B6
 IMPACTS:               Все изменения — только code-level, без schema/contract изменений
 REQUIRES:              DevPlan 079 для контекста; VerificationReport 01 для baseline-сравнения
+$END_ARTIFACT_CONTRACT
 
 🔒 Verified against SHA fd546377076f6ad73ab0043ece4fb50ebd6ac872
 ⚠️  Working tree dirty — 12 files modified/untracked (все относятся к DevPlan 079 + 2 unexpected deletions)

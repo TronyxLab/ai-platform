@@ -13,6 +13,7 @@
 ##             when deploy.sh/deploy-project.sh are migrated to use this parser.
 # endregion MODULE_CONTRACT
 
+import contextlib
 import json
 import logging
 import sys
@@ -25,7 +26,6 @@ from core.internal.shared.ssh_command_parser import (
     classify_verb,
     parse_ssh_command,
 )
-
 
 # ── _strip_prefixes tests ─────────────────────────────────────────────────────
 
@@ -41,6 +41,8 @@ def test_strip_full_path_with_space() -> None:
     raw = "/opt/platform/core/entrypoints/deploy.sh project sha"
     cleaned = _strip_prefixes(raw)
     assert cleaned == "project sha"
+
+
 # endregion
 
 
@@ -55,6 +57,8 @@ def test_strip_full_path_bare() -> None:
     raw = "/opt/platform/core/entrypoints/deploy.shproject sha"
     cleaned = _strip_prefixes(raw)
     assert cleaned == "project sha"
+
+
 # endregion
 
 
@@ -68,6 +72,8 @@ def test_strip_legacy_platform_deploy_with_space() -> None:
     raw = "platform-deploy project sha"
     cleaned = _strip_prefixes(raw)
     assert cleaned == "project sha"
+
+
 # endregion
 
 
@@ -81,6 +87,8 @@ def test_strip_legacy_platform_deploy_bare() -> None:
     raw = "platform-deploy"
     cleaned = _strip_prefixes(raw)
     assert cleaned == ""
+
+
 # endregion
 
 
@@ -98,6 +106,8 @@ def test_strip_whitespace_trim() -> None:
     raw = "/opt/platform/core/entrypoints/deploy.sh   project sha   "
     cleaned = _strip_prefixes(raw)
     assert cleaned == "project sha"
+
+
 # endregion
 
 
@@ -111,6 +121,8 @@ def test_strip_no_prefix() -> None:
     raw = "  my-verb arg1 arg2  "
     cleaned = _strip_prefixes(raw)
     assert cleaned == "my-verb arg1 arg2"
+
+
 # endregion
 
 
@@ -122,6 +134,8 @@ def test_strip_no_prefix() -> None:
 def test_strip_empty_input() -> None:
     """Empty input yields empty string."""
     assert _strip_prefixes("") == ""
+
+
 # endregion
 
 
@@ -136,6 +150,8 @@ def test_strip_empty_input() -> None:
 def test_classify_ping() -> None:
     """Exact 'ping' maps to ping."""
     assert classify_verb("ping") == "ping"
+
+
 # endregion
 
 
@@ -147,6 +163,8 @@ def test_classify_ping() -> None:
 def test_classify_exit() -> None:
     """Exact 'exit' maps to exit."""
     assert classify_verb("exit") == "exit"
+
+
 # endregion
 
 
@@ -158,6 +176,8 @@ def test_classify_exit() -> None:
 def test_classify_remove() -> None:
     """'remove project1' maps to remove."""
     assert classify_verb("remove project1") == "remove"
+
+
 # endregion
 
 
@@ -169,6 +189,8 @@ def test_classify_remove() -> None:
 def test_classify_status() -> None:
     """'status project1' maps to status."""
     assert classify_verb("status project1") == "status"
+
+
 # endregion
 
 
@@ -180,6 +202,8 @@ def test_classify_status() -> None:
 def test_classify_verify() -> None:
     """'verify node1' maps to verify."""
     assert classify_verb("verify node1") == "verify"
+
+
 # endregion
 
 
@@ -191,6 +215,8 @@ def test_classify_verify() -> None:
 def test_classify_platform_deliver() -> None:
     """'platform-deliver org project' maps to platform-deliver."""
     assert classify_verb("platform-deliver org project") == "platform-deliver"
+
+
 # endregion
 
 
@@ -204,6 +230,8 @@ def test_classify_platform_deliver() -> None:
 def test_classify_platform_deploy() -> None:
     """'platform-deploy project sha' maps to platform-deploy."""
     assert classify_verb("platform-deploy project sha") == "platform-deploy"
+
+
 # endregion
 
 
@@ -217,6 +245,8 @@ def test_classify_deploy_default() -> None:
     assert classify_verb("project sha") == "deploy"
     assert classify_verb("") == "deploy"
     assert classify_verb("some random command") == "deploy"
+
+
 # endregion
 
 
@@ -229,6 +259,8 @@ def test_classify_ping_precedence_over_prefix() -> None:
     """Exact 'ping' is not matched as prefix of 'pingpong'."""
     assert classify_verb("ping") == "ping"
     assert classify_verb("ping something") == "deploy"
+
+
 # endregion
 
 
@@ -259,6 +291,8 @@ def test_parse_deploy_default(caplog: pytest.LogCaptureFixture) -> None:
     assert result["raw"] == "/opt/platform/core/entrypoints/deploy.sh my-project abc123"
     assert result["cleaned"] == "my-project abc123"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -285,6 +319,8 @@ def test_parse_ping(caplog: pytest.LogCaptureFixture) -> None:
 
     found_imp9 = any("[IMP:9]" in r.message for r in caplog.records)
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion
 
 
@@ -299,6 +335,8 @@ def test_parse_exit() -> None:
     assert result["verb"] == "exit"
     assert result["args"] is None
     assert result["cleaned"] == "exit"
+
+
 # endregion
 
 
@@ -312,6 +350,8 @@ def test_parse_remove() -> None:
     result = parse_ssh_command("remove my-project")
     assert result["verb"] == "remove"
     assert result["args"] == "my-project"
+
+
 # endregion
 
 
@@ -325,6 +365,8 @@ def test_parse_status() -> None:
     result = parse_ssh_command("status my-project")
     assert result["verb"] == "status"
     assert result["args"] == "my-project"
+
+
 # endregion
 
 
@@ -338,6 +380,8 @@ def test_parse_verify() -> None:
     result = parse_ssh_command("verify node1")
     assert result["verb"] == "verify"
     assert result["args"] == "node1"
+
+
 # endregion
 
 
@@ -352,6 +396,8 @@ def test_parse_platform_deliver() -> None:
     result = parse_ssh_command("platform-deliver my-org my-project")
     assert result["verb"] == "platform-deliver"
     assert result["args"] == "my-org my-project"
+
+
 # endregion
 
 
@@ -371,6 +417,8 @@ def test_parse_platform_deploy_stripped() -> None:
     assert result["verb"] == "deploy"
     assert result["args"] == "my-project abc123"
     assert result["cleaned"] == "my-project abc123"
+
+
 # endregion
 
 
@@ -381,11 +429,11 @@ def test_parse_platform_deploy_stripped() -> None:
 # · Remove if: parse_ssh_command multi-prefix stripping changes
 def test_parse_full_path_platform_deliver() -> None:
     """Full path prefix with platform-deliver parses correctly."""
-    result = parse_ssh_command(
-        "/opt/platform/core/entrypoints/deploy.sh platform-deliver org project"
-    )
+    result = parse_ssh_command("/opt/platform/core/entrypoints/deploy.sh platform-deliver org project")
     assert result["verb"] == "platform-deliver"
     assert result["args"] == "org project"
+
+
 # endregion
 
 
@@ -398,6 +446,8 @@ def test_parse_empty_raw_raises() -> None:
     """Empty raw input raises ValueError."""
     with pytest.raises(ValueError, match="empty command after stripping"):
         parse_ssh_command("")
+
+
 # endregion
 
 
@@ -410,6 +460,8 @@ def test_parse_none_raises() -> None:
     """Empty string (whitespace) raises ValueError."""
     with pytest.raises(ValueError, match="empty command after stripping"):
         parse_ssh_command("   ")
+
+
 # endregion
 
 
@@ -423,6 +475,8 @@ def test_parse_legacy_platform_deploy() -> None:
     result = parse_ssh_command("platform-deploy my-project")
     assert result["verb"] == "deploy"
     assert result["args"] == "my-project"
+
+
 # endregion
 
 
@@ -436,6 +490,8 @@ def test_parse_preserves_raw() -> None:
     raw = "/opt/platform/core/entrypoints/deploy.sh my-project sha"
     result = parse_ssh_command(raw)
     assert result["raw"] == raw
+
+
 # endregion
 
 
@@ -452,11 +508,10 @@ def test_cli_parse() -> None:
     from core.internal.shared.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "parse", "/opt/platform/core/entrypoints/deploy.sh my-project sha"]
-    with patch.object(sys, "argv", test_args), patch("sys.stderr"):
-        try:
-            _cli_main()
-        except SystemExit:
-            pass
+    with patch.object(sys, "argv", test_args), patch("sys.stderr"), contextlib.suppress(SystemExit):
+        _cli_main()
+
+
 # endregion
 
 
@@ -475,13 +530,12 @@ def test_cli_classify() -> None:
     def fake_print(*args: str, **kwargs: object) -> None:
         stdout_lines.extend(str(a) for a in args)
 
-    with patch.object(sys, "argv", test_args), patch("builtins.print", fake_print):
-        try:
-            _cli_main()
-        except SystemExit:
-            pass
+    with patch.object(sys, "argv", test_args), patch("builtins.print", fake_print), contextlib.suppress(SystemExit):
+        _cli_main()
 
     assert stdout_lines == ["remove"], f"Expected ['remove'], got {stdout_lines}"
+
+
 # endregion
 
 
@@ -500,11 +554,8 @@ def test_cli_parse_json_output() -> None:
     def fake_print(*args: str, **kwargs: object) -> None:
         stdout_lines.extend(str(a) for a in args)
 
-    with patch.object(sys, "argv", test_args), patch("builtins.print", fake_print):
-        try:
-            _cli_main()
-        except SystemExit:
-            pass
+    with patch.object(sys, "argv", test_args), patch("builtins.print", fake_print), contextlib.suppress(SystemExit):
+        _cli_main()
 
     assert len(stdout_lines) == 1
     output = json.loads(stdout_lines[0])
@@ -512,6 +563,8 @@ def test_cli_parse_json_output() -> None:
     assert output["args"] is None
     assert output["raw"] == "ping"
     assert output["cleaned"] == "ping"
+
+
 # endregion
 
 
@@ -541,6 +594,8 @@ def test_cli_no_args() -> None:
 
     assert exc_info.value.code == 1
     assert any("Usage" in line for line in captured_stderr)
+
+
 # endregion
 
 
@@ -561,6 +616,122 @@ def test_cli_invalid_mode() -> None:
         _cli_main()
 
     assert exc_info.value.code == 1
+
+
+# endregion
+
+
+# region FUNC_test_cli_parse_format_lines
+## @purpose — CLI parse mode with --format lines outputs verb/args/cleaned on separate lines.
+##            Replaces inline python3 -c in deploy.sh (DevPlan 081 AC7).
+# 🧪 TRAP[TEST] · Regression · Scenario: --format lines produces line-by-line output
+# · Last fail: N/A (new test)
+# · Remove if: --format lines output format changes
+def test_cli_parse_format_lines() -> None:
+    """CLI --format lines parse outputs verb/args/cleaned on separate lines."""
+    from core.internal.shared.ssh_command_parser import _cli_main
+
+    test_args = [
+        "ssh_command_parser.py",
+        "--format",
+        "lines",
+        "parse",
+        "/opt/platform/core/entrypoints/deploy.sh my-project abc123",
+    ]
+    stdout_lines: list[str] = []
+
+    def fake_print(*args: str, **kwargs: object) -> None:
+        stdout_lines.extend(str(a) for a in args)
+
+    with patch.object(sys, "argv", test_args), patch("builtins.print", fake_print), contextlib.suppress(SystemExit):
+        _cli_main()
+
+    assert len(stdout_lines) == 3
+    assert stdout_lines[0] == "deploy"
+    assert stdout_lines[1] == "my-project abc123"
+    assert stdout_lines[2] == "my-project abc123"
+
+
+# endregion
+
+
+# region FUNC_test_cli_parse_format_lines_ping
+## @purpose --format lines parse "ping" — verb=ping, args empty string, cleaned=ping.
+# 🧪 TRAP[TEST] · Regression · Scenario: --format lines ping command
+# · Last fail: N/A (new test)
+# · Remove if: --format lines output format changes
+def test_cli_parse_format_lines_ping() -> None:
+    """CLI --format lines parse ping — args is empty string."""
+    from core.internal.shared.ssh_command_parser import _cli_main
+
+    test_args = ["ssh_command_parser.py", "--format", "lines", "parse", "ping"]
+    stdout_lines: list[str] = []
+
+    def fake_print(*args: str, **kwargs: object) -> None:
+        stdout_lines.extend(str(a) for a in args)
+
+    with patch.object(sys, "argv", test_args), patch("builtins.print", fake_print), contextlib.suppress(SystemExit):
+        _cli_main()
+
+    assert len(stdout_lines) == 3
+    assert stdout_lines[0] == "ping"
+    assert stdout_lines[1] == ""
+    assert stdout_lines[2] == "ping"
+
+
+# endregion
+
+
+# region FUNC_test_cli_parse_format_lines_empty
+## @purpose --format lines parse empty command — exits with code 1.
+# 🧪 TRAP[TEST] · Regression · Scenario: --format lines parse empty → exit 1
+# · Last fail: N/A (new test)
+# · Remove if: --format lines error handling changes
+def test_cli_parse_format_lines_empty() -> None:
+    """CLI --format lines parse empty command exits 1."""
+    from core.internal.shared.ssh_command_parser import _cli_main
+
+    test_args = ["ssh_command_parser.py", "--format", "lines", "parse", ""]
+    stdout_lines: list[str] = []
+
+    def fake_print(*args: str, **kwargs: object) -> None:
+        stdout_lines.extend(str(a) for a in args)
+
+    with (
+        patch.object(sys, "argv", test_args),
+        patch("builtins.print", fake_print),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        _cli_main()
+
+    assert exc_info.value.code == 1
+    assert len(stdout_lines) == 3
+    assert stdout_lines[0] == "error"
+    assert "empty command" in stdout_lines[1]
+
+
+# endregion
+
+
+# region FUNC_test_cli_format_lines_unknown_format
+## @purpose --format with unknown format value exits with code 1.
+# 🧪 TRAP[TEST] · Regression · Scenario: --format unknown → exit 1
+# · Last fail: N/A (new test)
+# · Remove if: --format argument parsing changes
+def test_cli_format_lines_unknown_format() -> None:
+    """CLI --format unknown exits 1."""
+    from core.internal.shared.ssh_command_parser import _cli_main
+
+    test_args = ["ssh_command_parser.py", "--format", "xml", "parse", "ping"]
+    with (
+        patch.object(sys, "argv", test_args),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        _cli_main()
+
+    assert exc_info.value.code == 1
+
+
 # endregion
 
 
@@ -591,4 +762,6 @@ def test_cli_parse_empty() -> None:
     err = json.loads(stdout_lines[0])
     assert "error" in err
     assert "empty command after stripping" in err["error"]
+
+
 # endregion

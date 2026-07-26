@@ -821,7 +821,7 @@ def test_upload_without_chain_pem_succeeds():
         # Find the first ] that closes the required_files list
         list_end = content.find("]", required_section_start)
         if list_end > required_section_start:
-            required_list = content[required_section_start : list_end + 1]
+            content[required_section_start : list_end + 1]
             # Chain.pem may appear in comments AFTER the list, but not in the list items
             # Check if "chain.pem" appears before the closing ] of the list
             list_content = content[required_section_start:list_end]

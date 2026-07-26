@@ -60,7 +60,7 @@ def compute_content_hash(files: list[str]) -> str:
                 hasher.update(f.read())
             processed += 1
             logger.debug("[IMP:6][compute_content_hash] Hashed: %s", fpath)
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: PERF203 — per-file exception handling is required
             logger.warning("[IMP:7][compute_content_hash] File not found, skipping: %s", fpath)
         except OSError as e:
             logger.warning("[IMP:7][compute_content_hash] Cannot read %s: %s", fpath, e)

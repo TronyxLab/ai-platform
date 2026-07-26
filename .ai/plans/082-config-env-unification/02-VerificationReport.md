@@ -16,6 +16,7 @@ $START_VERIFICATION_REPORT
 | **IMPLEMENTS** | DevPlan 082 — Configuration & Env Defaults Unification |
 | **IMPACTS** | Files from File Manifest (25 files) |
 | **REQUIRES** | DevPlan 078 (NEXTAUTH_SECRET — deferred, gate skip active) |
+$END_ARTIFACT_CONTRACT
 
 ---
 

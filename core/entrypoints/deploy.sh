@@ -27,6 +27,9 @@
 ##           2026-07-26 · DevPlan 081 Phase B (TASK-081B7) — replaced local
 ##             stripping+classification with shared ssh_command_parser module.
 ##             DRIFT-D4 resolved: unified SSH_ORIGINAL_COMMAND parser.
+##           2026-07-26 · DevPlan 081 AC7 (H4) — replaced inline python3 -c JSON
+##             parsing with ssh_command_parser --format lines. Eliminates last
+##             inline python3 in deploy.sh facade (Tier 1 Strangler trigger).
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -101,9 +104,16 @@ _dispatch_verb() {
 # region FUNC_parse_verb
 ## @purpose  Orchestrate SSH_ORIGINAL_COMMAND parsing via shared ssh_command_parser.
 ##           Phase B (DevPlan 081 TASK-081B7): strip+classify replaced by:
-##             python3 -m core.internal.shared.ssh_command_parser parse "$raw"
-##           JSON stdout parsed into verb/args/cleaned → dispatched.
+##             python3 -m core.internal.shared.ssh_command_parser --format lines parse "$raw"
+##           --format lines outputs verb/args/cleaned each on own line, eliminating
+##           the need for inline python3 -c JSON parsing.
 ## @param $@ CLI arguments (fallback if SSH_ORIGINAL_COMMAND not set)
+## 🧐 TRAP[DECISION] · 2026-07-26 · — · --format lines vs inline python3 -c
+## · Rejected: keep inline python3 -c to avoid modifying ssh_command_parser
+## · Reason: Tier-1 Strangler trigger — inline python3 in shell facade must be
+##   extracted. --format lines is the canonical extraction path.
+## · Rev: if ssh_command_parser grows additional output modes, keep --format
+##   consistent (json|lines|yaml).
 parse_verb() {
     local raw="${SSH_ORIGINAL_COMMAND:-}"
 
@@ -120,25 +130,18 @@ parse_verb() {
     log_imp 8 "entrypoint" "Raw SSH_ORIGINAL_COMMAND: ${raw}"
 
     # ── Phase B: shared ssh_command_parser via python3 -m CLI ──
-    # CLI invocation prints JSON to stdout; thin Python wrapper extracts fields
-    local verb args cleaned json_output
-    json_output=$(python3 -m core.internal.shared.ssh_command_parser parse "$raw") || {
-        log_imp 10 "entrypoint" "FATAL: ssh_command_parser failed to parse command"
+    # Uses --format lines to output verb/args/cleaned each on own line,
+    # eliminating the need for inline python3 -c JSON parsing (DevPlan 081 AC7).
+    local verb args cleaned lines_output
+    lines_output=$(python3 -m core.internal.shared.ssh_command_parser --format lines parse "$raw") || {
+        log_imp 10 "entrypoint" "FATAL: ssh_command_parser --format lines failed"
         exit 1
     }
     {
         read -r verb
         read -r args
         read -r cleaned
-    } <<< "$(python3 -c "
-import json, sys
-r = json.loads(sys.argv[1])
-if 'error' in r:
-    sys.exit(1)
-print(r['verb'])
-print(r.get('args') or '')
-print(r['cleaned'])
-" "$json_output")"
+    } <<< "$lines_output"
 
     log_imp 9 "entrypoint" "Parsed: verb=${verb} args=${args} cleaned=${cleaned}"
 

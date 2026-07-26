@@ -119,7 +119,9 @@ def test_env_defaults_consistency(
 
     pg_def = _get_definitions_value("POSTGRES_PASSWORD")
     ns_def = _get_definitions_value("NEXTAUTH_SECRET")
-    logger.info("[IMP:8][env_defaults] Definitions ci_default: POSTGRES_PASSWORD='%s', NEXTAUTH_SECRET='%s'", pg_def, ns_def)
+    logger.info(
+        "[IMP:8][env_defaults] Definitions ci_default: POSTGRES_PASSWORD='%s', NEXTAUTH_SECRET='%s'", pg_def, ns_def
+    )
     # endregion
 
     # region BLOCK_Check
@@ -135,7 +137,9 @@ def test_env_defaults_consistency(
             logger.info("[IMP:8][env_defaults] %s POSTGRES_PASSWORD = '%s' ✓", name, UNIFIED_PG_PASSWORD)
 
     if pg_def != UNIFIED_PG_PASSWORD:
-        errors.append(f"[secret-definitions.yaml] POSTGRES_PASSWORD ci_default = '{pg_def}', expected '{UNIFIED_PG_PASSWORD}'")
+        errors.append(
+            f"[secret-definitions.yaml] POSTGRES_PASSWORD ci_default = '{pg_def}', expected '{UNIFIED_PG_PASSWORD}'"
+        )
         logger.warning("[IMP:7][env_defaults] definitions POSTGRES_PASSWORD mismatch")
 
     # NEXTAUTH_SECRET

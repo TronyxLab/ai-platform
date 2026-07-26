@@ -20,7 +20,7 @@ $END_ARTIFACT_CONTRACT
 
 ---
 
-## Final Verdict: **PARTIAL** — Plan is actionable but contains 1 factual inaccuracy in §2.1 dependency analysis
+## Final Verdict: **DRIFTED (WARNING)** — Plan is actionable but contains 1 factual inaccuracy in §2.1 dependency analysis
 
 The DevPlan 084 is well-structured with clear tasks, acceptance criteria, and parallel wave groups. All referenced files exist and the dead code claims are verified. However, **§2.1 claims `ssl-provision.sh` is sourced by `node-lifecycle.sh` for WEBNAMES_API_KEY loading — this migration has already occurred in the current codebase.** The `update_step_3_ssl_provision()` function now sources `$secrets_env` directly (line 84), not `ssl-provision.sh`. This makes T2 (Wave 2) partially redundant — the key-loading migration step can be skipped, simplifying the deletion of `ssl-provision.sh` to a straightforward file removal + reference cleanup.
 

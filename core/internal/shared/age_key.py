@@ -76,10 +76,7 @@ def detect_age_key() -> str | None:
                 e,
             )
 
-    logger.warning(
-        "[IMP:8][age_key] AGE_SECRET_KEY not found — "
-        "Docker modules requiring secrets will fail to deploy"
-    )
+    logger.warning("[IMP:8][age_key] AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy")
     return None
 
 

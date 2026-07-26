@@ -27,14 +27,12 @@ import argparse
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -97,6 +95,7 @@ class ProjectMonitoringConfig:
     ##   - logs_retention defaults to "7d" matching original Default
     ##   - metrics_port defaults to 3000 matching original
     """
+
     project_name: str
     project_type: str
     project_dir: Path
@@ -128,10 +127,11 @@ class RenderResult:
     ##   - status is one of: "created", "skipped", "updated", "failed", "noop"
     ##   - output_path is set only when a file was written
     """
+
     component: str  # prometheus, grafana, loki, langfuse, alerting, catalog, reload
-    status: str     # "created", "skipped", "updated", "failed", "noop"
+    status: str  # "created", "skipped", "updated", "failed", "noop"
     detail: str = ""
-    output_path: Optional[Path] = None
+    output_path: Path | None = None
 
 
 # endregion DATACLASSES
@@ -247,7 +247,7 @@ def build_merged_config(
     project_name: str,
     node_name: str,
     platform_root: Path,
-) -> Optional[ProjectMonitoringConfig]:
+) -> ProjectMonitoringConfig | None:
     """Full pipeline: load ai-platform.yaml → extract project type → load L1 defaults →
     load L2 overrides → extract L3 config → merge L1←L2←L3 → extract flags → return typed config.
 
@@ -362,8 +362,7 @@ def _parse_ai_retention(val) -> int:
 # region TEMPLATE_RENDERING
 
 
-def _render_template(template_path: Path, output_path: Path, variables: dict[str, str],
-                     platform_root: Path) -> None:
+def _render_template(template_path: Path, output_path: Path, variables: dict[str, str], platform_root: Path) -> None:
     """Render template via template-engine.sh, with sed fallback.
 
     ## @purpose  Shared rendering logic for Grafana dashboards and alert rules.
@@ -448,7 +447,7 @@ def _parse_retention_hours(retention_str: str) -> int:
 
 def generate_prometheus_target(
     config: ProjectMonitoringConfig,
-    output_dir: Path = None,
+    output_dir: Path | None = None,
 ) -> RenderResult:
     """Generate Prometheus file-based service discovery target JSON.
 
@@ -466,8 +465,7 @@ def generate_prometheus_target(
     """
     if not config.metrics_enabled:
         logger.info("[IMP:8][prometheus] Metrics disabled for %s — skipping Prometheus target", config.project_name)
-        return RenderResult(component="prometheus", status="noop",
-                            detail="metrics_enabled=False")
+        return RenderResult(component="prometheus", status="noop", detail="metrics_enabled=False")
 
     port = config.metrics_port
     targets_dir = output_dir or (config.platform_root / DEFAULT_PROMETHEUS_TARGETS_DIR)
@@ -487,9 +485,12 @@ def generate_prometheus_target(
     try:
         target_file.write_text(json.dumps(target, indent=2), encoding="utf-8")
         logger.info("[IMP:9][prometheus] Prometheus target file generated: %s (port=%d)", target_file, port)
-        return RenderResult(component="prometheus", status="created",
-                            output_path=target_file,
-                            detail=f"targets=[{config.project_name}:{port}]")
+        return RenderResult(
+            component="prometheus",
+            status="created",
+            output_path=target_file,
+            detail=f"targets=[{config.project_name}:{port}]",
+        )
     except OSError as e:
         logger.info("[IMP:6][prometheus] Failed to write Prometheus target file %s: %s", target_file, e)
         return RenderResult(component="prometheus", status="failed", detail=str(e))
@@ -503,8 +504,8 @@ def generate_prometheus_target(
 
 def generate_grafana_dashboard(
     config: ProjectMonitoringConfig,
-    template_path: Path = None,
-    output_dir: Path = None,
+    template_path: Path | None = None,
+    output_dir: Path | None = None,
 ) -> RenderResult:
     """Generate Grafana dashboard JSON from template.
 
@@ -524,14 +525,12 @@ def generate_grafana_dashboard(
     """
     if not config.dashboard_enabled:
         logger.info("[IMP:8][grafana] Dashboard disabled for %s — skipping", config.project_name)
-        return RenderResult(component="grafana", status="noop",
-                            detail="dashboard_enabled=False")
+        return RenderResult(component="grafana", status="noop", detail="dashboard_enabled=False")
 
     tmpl = template_path or (config.platform_root / DEFAULT_GRAFANA_TEMPLATE)
     if not tmpl.exists():
         logger.info("[IMP:6][grafana] Dashboard template not found: %s — skipping", tmpl)
-        return RenderResult(component="grafana", status="skipped",
-                            detail=f"template not found: {tmpl}")
+        return RenderResult(component="grafana", status="skipped", detail=f"template not found: {tmpl}")
 
     out_dir = output_dir or DEFAULT_GRAFANA_DASHBOARDS_DIR
     dash_file = out_dir / f"{config.project_name}.json"
@@ -562,7 +561,7 @@ def generate_grafana_dashboard(
 
 def update_loki_retention(
     config: ProjectMonitoringConfig,
-    runtime_config_path: Path = None,
+    runtime_config_path: Path | None = None,
 ) -> RenderResult:
     """Update Loki runtime config YAML with project retention stream.
 
@@ -593,15 +592,11 @@ def update_loki_retention(
 
         # Check if selector already exists (idempotent)
         selector = '{compose_project="' + project + '"}'
-        exists = any(
-            isinstance(s, dict) and s.get("selector", "") == selector
-            for s in streams
-        )
+        exists = any(isinstance(s, dict) and s.get("selector", "") == selector for s in streams)
 
         if exists:
             logger.info("[IMP:8][loki] Retention stream already exists for %s — skipping", project)
-            return RenderResult(component="loki", status="skipped",
-                                detail=f"stream for {project} already exists")
+            return RenderResult(component="loki", status="skipped", detail=f"stream for {project} already exists")
 
         # Build new rule
         new_rule = {
@@ -626,10 +621,15 @@ def update_loki_retention(
         with open(config_path, "w") as f:
             yaml.dump(existing, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-        logger.info("[IMP:9][loki] Loki runtime config updated for %s: %s (%dh)",
-                    project, config.logs_retention, retention_hours)
-        return RenderResult(component="loki", status="updated",
-                            detail=f"retention={config.logs_retention} ({retention_hours}h)")
+        logger.info(
+            "[IMP:9][loki] Loki runtime config updated for %s: %s (%dh)",
+            project,
+            config.logs_retention,
+            retention_hours,
+        )
+        return RenderResult(
+            component="loki", status="updated", detail=f"retention={config.logs_retention} ({retention_hours}h)"
+        )
     except (OSError, yaml.YAMLError) as e:
         logger.info("[IMP:6][loki] Failed to update Loki retention for %s: %s", project, e)
         return RenderResult(component="loki", status="failed", detail=str(e))
@@ -661,19 +661,19 @@ def create_langfuse_project(
     """
     if not config.needs_llm:
         logger.info("[IMP:8][langfuse] No LLM needs declared — skipping Langfuse project")
-        return RenderResult(component="langfuse", status="noop",
-                            detail="needs_llm=False")
+        return RenderResult(component="langfuse", status="noop", detail="needs_llm=False")
 
     secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
     if not secret_key:
         logger.info("[IMP:6][langfuse] LANGFUSE_SECRET_KEY not set — skipping Langfuse project creation")
-        return RenderResult(component="langfuse", status="failed",
-                            detail="LANGFUSE_SECRET_KEY not set")
+        return RenderResult(component="langfuse", status="failed", detail="LANGFUSE_SECRET_KEY not set")
 
-    body = json.dumps({
-        "name": config.project_name,
-        "retention": config.ai_retention_days,
-    }).encode("utf-8")
+    body = json.dumps(
+        {
+            "name": config.project_name,
+            "retention": config.ai_retention_days,
+        }
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         LANGFUSE_API_URL,
@@ -690,17 +690,13 @@ def create_langfuse_project(
             status_code = resp.status
             if status_code in (200, 201):
                 logger.info("[IMP:9][langfuse] Langfuse project created: %s", config.project_name)
-                return RenderResult(component="langfuse", status="created",
-                                    detail=f"HTTP {status_code}")
-            else:
-                logger.info("[IMP:6][langfuse] Langfuse API returned HTTP %s for %s", status_code, config.project_name)
-                return RenderResult(component="langfuse", status="failed",
-                                    detail=f"HTTP {status_code}")
+                return RenderResult(component="langfuse", status="created", detail=f"HTTP {status_code}")
+            logger.info("[IMP:6][langfuse] Langfuse API returned HTTP %s for %s", status_code, config.project_name)
+            return RenderResult(component="langfuse", status="failed", detail=f"HTTP {status_code}")
     except urllib.error.HTTPError as e:
         if e.code == 409:
             logger.info("[IMP:8][langfuse] Langfuse project '%s' already exists — skipping", config.project_name)
-            return RenderResult(component="langfuse", status="skipped",
-                                detail="HTTP 409 already exists")
+            return RenderResult(component="langfuse", status="skipped", detail="HTTP 409 already exists")
         logger.info("[IMP:6][langfuse] Langfuse HTTP error %s for %s: %s", e.code, config.project_name, e)
         return RenderResult(component="langfuse", status="failed", detail=f"HTTP {e.code}")
     except (urllib.error.URLError, OSError) as e:
@@ -716,8 +712,8 @@ def create_langfuse_project(
 
 def generate_alert_rules(
     config: ProjectMonitoringConfig,
-    template_path: Path = None,
-    output_dir: Path = None,
+    template_path: Path | None = None,
+    output_dir: Path | None = None,
 ) -> RenderResult:
     """Generate Prometheus alert rules YAML from template.
 
@@ -737,14 +733,12 @@ def generate_alert_rules(
     """
     if not config.alerting_enabled:
         logger.info("[IMP:8][alerting] Alerting disabled for %s — skipping alert rules", config.project_name)
-        return RenderResult(component="alerting", status="noop",
-                            detail="alerting_enabled=False")
+        return RenderResult(component="alerting", status="noop", detail="alerting_enabled=False")
 
     tmpl = template_path or (config.platform_root / DEFAULT_ALERT_RULES_TEMPLATE)
     if not tmpl.exists():
         logger.info("[IMP:6][alerting] Alert rules template not found: %s — skipping", tmpl)
-        return RenderResult(component="alerting", status="skipped",
-                            detail=f"template not found: {tmpl}")
+        return RenderResult(component="alerting", status="skipped", detail=f"template not found: {tmpl}")
 
     out_dir = output_dir or ALERT_RULES_DIR
     output_file = out_dir / f"{config.project_name}-alerts.yml"
@@ -786,8 +780,7 @@ def refresh_catalog(platform_root: Path) -> RenderResult:
     script_path = platform_root / CATALOG_SCRIPT
     if not script_path.is_file():
         logger.info("[IMP:7][catalog] Catalog script not found: %s — skipping", script_path)
-        return RenderResult(component="catalog", status="noop",
-                            detail=f"script not found: {script_path}")
+        return RenderResult(component="catalog", status="noop", detail=f"script not found: {script_path}")
 
     try:
         subprocess.run([str(script_path)], check=True, capture_output=True, text=True, timeout=60)
@@ -827,24 +820,20 @@ def reload_monitoring_services() -> list[RenderResult]:
         req = urllib.request.Request(PROMETHEUS_RELOAD_URL, method="POST")
         with urllib.request.urlopen(req, timeout=10) as resp:
             logger.info("[IMP:8][reload] Prometheus reload: HTTP %s", resp.status)
-            results.append(RenderResult(component="reload", status="created",
-                                        detail=f"Prometheus HTTP {resp.status}"))
+            results.append(RenderResult(component="reload", status="created", detail=f"Prometheus HTTP {resp.status}"))
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         logger.info("[IMP:6][reload] Prometheus reload failed: %s", e)
-        results.append(RenderResult(component="reload", status="failed",
-                                    detail=f"Prometheus: {e}"))
+        results.append(RenderResult(component="reload", status="failed", detail=f"Prometheus: {e}"))
 
     # Loki reload
     try:
         req = urllib.request.Request(LOKI_RELOAD_URL, method="POST")
         with urllib.request.urlopen(req, timeout=10) as resp:
             logger.info("[IMP:8][reload] Loki reload: HTTP %s", resp.status)
-            results.append(RenderResult(component="reload", status="created",
-                                        detail=f"Loki HTTP {resp.status}"))
+            results.append(RenderResult(component="reload", status="created", detail=f"Loki HTTP {resp.status}"))
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         logger.info("[IMP:6][reload] Loki reload failed: %s", e)
-        results.append(RenderResult(component="reload", status="failed",
-                                    detail=f"Loki: {e}"))
+        results.append(RenderResult(component="reload", status="failed", detail=f"Loki: {e}"))
 
     return results
 
@@ -866,15 +855,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         description="Monitoring Config Renderer — post-deploy monitoring reconfiguration",
     )
     parser.add_argument(
-        "--project-dir", required=True,
+        "--project-dir",
+        required=True,
         help="Absolute path to project directory (containing ai-platform.yaml)",
     )
     parser.add_argument(
-        "--project", required=True,
+        "--project",
+        required=True,
         help="Project name (e.g., 'my-backend')",
     )
     parser.add_argument(
-        "--node", default="",
+        "--node",
+        default="",
         help="Node name (e.g., 'tronyx-vps')",
     )
     return parser

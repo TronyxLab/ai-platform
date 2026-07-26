@@ -37,7 +37,6 @@ import yaml
 
 from core.internal.monitoring_config_renderer import (
     ProjectMonitoringConfig,
-    RenderResult,
     _parse_retention_hours,
     _str_to_bool,
     build_merged_config,
@@ -48,7 +47,6 @@ from core.internal.monitoring_config_renderer import (
     load_l1_defaults,
     load_l2_overrides,
     load_l3_project_config,
-    load_yaml_config,
     main,
     update_loki_retention,
 )
@@ -211,7 +209,7 @@ def test_deep_merge_simple(caplog) -> None:
     assert base == {"a": 1, "b": 2}
     assert override == {"b": 3, "c": 4}
 
-    found = _print_ldd_trajectory(caplog, "test_deep_merge_simple")
+    _print_ldd_trajectory(caplog, "test_deep_merge_simple")
     # Pure function — no IMP:9 logs expected; assert at least no errors
     assert True
 
@@ -414,8 +412,7 @@ def test_build_merged_config_full_pipeline(
     # L2 override at platform_root/node-configs/<node>/projects/<project>.yaml
     l2_dir = platform_root / "node-configs" / node_name / "projects"
     l2_dir.mkdir(parents=True, exist_ok=True)
-    _write_yaml({"monitoring": {"metrics_port": 9090, "alerting": True}},
-                l2_dir / f"{project_name}.yaml")
+    _write_yaml({"monitoring": {"metrics_port": 9090, "alerting": True}}, l2_dir / f"{project_name}.yaml")
 
     config = build_merged_config(project_dir, project_name, node_name, platform_root)
 
@@ -423,12 +420,12 @@ def test_build_merged_config_full_pipeline(
     assert config.project_name == "test-project"
     assert config.project_type == "backend"
     assert config.metrics_enabled is True  # L1 type-default overrides global
-    assert config.metrics_port == 9090    # L2 overrides L1
+    assert config.metrics_port == 9090  # L2 overrides L1
     assert config.dashboard_enabled is False  # L1 default
-    assert config.alerting_enabled is True    # L2 overrides
-    assert config.needs_llm is True           # from ai-platform.yaml needs.llm
-    assert config.logs_retention == "14d"     # from ai-platform.yaml
-    assert config.ai_retention_days == 30     # L1 default
+    assert config.alerting_enabled is True  # L2 overrides
+    assert config.needs_llm is True  # from ai-platform.yaml needs.llm
+    assert config.logs_retention == "14d"  # from ai-platform.yaml
+    assert config.ai_retention_days == 30  # L1 default
 
     found = _print_ldd_trajectory(caplog, "test_build_merged_config_full_pipeline")
     assert found, "No IMP:9 log found — LDD violation"
@@ -512,6 +509,7 @@ def test_generate_prometheus_target_json_schema(caplog) -> None:
     result = generate_prometheus_target(config, output_dir=pathlib.Path("/tmp"))
     # Use tmp_path for actual file write
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         out_dir = pathlib.Path(tmpdir)
         result = generate_prometheus_target(config, output_dir=out_dir)
@@ -659,15 +657,19 @@ def test_update_loki_retention_before_catch_all(caplog) -> None:
     caplog.set_level(logging.INFO)
 
     import tempfile
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
-        yaml.dump({
-            "limits_config": {
-                "retention_stream": [
-                    {"selector": '{compose_project="existing"}', "priority": 0, "period": "720h"},
-                    {"selector": '{compose_project=~".+"}', "priority": 0, "period": "168h"},
-                ],
+        yaml.dump(
+            {
+                "limits_config": {
+                    "retention_stream": [
+                        {"selector": '{compose_project="existing"}', "priority": 0, "period": "720h"},
+                        {"selector": '{compose_project=~".+"}', "priority": 0, "period": "168h"},
+                    ],
+                },
             },
-        }, f)
+            f,
+        )
         config_path = pathlib.Path(f.name)
 
     config = ProjectMonitoringConfig(
@@ -727,7 +729,7 @@ def test_update_loki_retention_forever_period(
 
     data = yaml.safe_load(test_loki_runtime_config_yaml.read_text())
     streams = data["limits_config"]["retention_stream"]
-    new_rule = [s for s in streams if s["selector"] == '{compose_project="forever-project"}'][0]
+    new_rule = next(s for s in streams if s["selector"] == '{compose_project="forever-project"}')
     assert new_rule["period"] == "0h"
 
     _print_ldd_trajectory(caplog, "test_update_loki_retention_forever_period")

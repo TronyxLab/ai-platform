@@ -124,7 +124,7 @@ def generate(data: dict, domain: str, project_name: str = "") -> list[str]:
         lines.append(f"PLATFORM_NO_PROXY={no_proxy}")
 
     # Validation
-    plat_count = sum(1 for l in lines if l.startswith("PLATFORM_"))
+    plat_count = sum(1 for line in lines if line.startswith("PLATFORM_"))
     if plat_count < 8:
         print(f"WARNING: Only {plat_count} PLATFORM_* variables generated (expected ≥8)", file=sys.stderr)
 

@@ -293,7 +293,9 @@ def retry_pull(
             compose_dir,
         )
         if docker_compose_pull(compose_dir, timeout=timeout):
-            logger.info("[IMP:9][retry_pull] Pull succeeded on attempt %d/%d for %s", attempt, max_attempts, compose_dir)
+            logger.info(
+                "[IMP:9][retry_pull] Pull succeeded on attempt %d/%d for %s", attempt, max_attempts, compose_dir
+            )
             return True
 
         if attempt < max_attempts:

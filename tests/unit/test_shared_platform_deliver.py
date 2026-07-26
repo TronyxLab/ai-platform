@@ -45,10 +45,10 @@ def test_build_with_org(caplog: pytest.LogCaptureFixture) -> None:
                 found_imp9 = True
     print("--- END LDD TRAJECTORY ---")
 
-    assert result == "platform-deliver myorg myproj", (
-        f"Expected 'platform-deliver myorg myproj', got {result!r}"
-    )
+    assert result == "platform-deliver myorg myproj", f"Expected 'platform-deliver myorg myproj', got {result!r}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion FUNC_test_build_with_org
 
 
@@ -78,10 +78,10 @@ def test_build_without_org(caplog: pytest.LogCaptureFixture) -> None:
                 found_imp9 = True
     print("--- END LDD TRAJECTORY ---")
 
-    assert result == "platform-deliver myproj", (
-        f"Expected 'platform-deliver myproj', got {result!r}"
-    )
+    assert result == "platform-deliver myproj", f"Expected 'platform-deliver myproj', got {result!r}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion FUNC_test_build_without_org
 
 
@@ -111,10 +111,10 @@ def test_build_org_none(caplog: pytest.LogCaptureFixture) -> None:
                 found_imp9 = True
     print("--- END LDD TRAJECTORY ---")
 
-    assert result == "platform-deliver myproj", (
-        f"Expected 'platform-deliver myproj', got {result!r}"
-    )
+    assert result == "platform-deliver myproj", f"Expected 'platform-deliver myproj', got {result!r}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion FUNC_test_build_org_none
 
 
@@ -141,6 +141,8 @@ def test_build_empty_project(caplog: pytest.LogCaptureFixture) -> None:
             if imp_level >= 7:
                 print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+
 # endregion FUNC_test_build_empty_project
 
 
@@ -176,6 +178,8 @@ def test_parse_two_tokens(caplog: pytest.LogCaptureFixture) -> None:
     assert org == "myorg", f"Expected org='myorg', got {org!r}"
     assert project == "myproj", f"Expected project='myproj', got {project!r}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion FUNC_test_parse_two_tokens
 
 
@@ -208,6 +212,8 @@ def test_parse_one_token(caplog: pytest.LogCaptureFixture) -> None:
     assert org == "", f"Expected org='', got {org!r}"
     assert project == "myproj", f"Expected project='myproj', got {project!r}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion FUNC_test_parse_one_token
 
 
@@ -240,6 +246,8 @@ def test_parse_with_spaces(caplog: pytest.LogCaptureFixture) -> None:
     assert org == "myorg", f"Expected org='myorg', got {org!r}"
     assert project == "myproj", f"Expected project='myproj', got {project!r}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
 # endregion FUNC_test_parse_with_spaces
 
 
@@ -266,4 +274,6 @@ def test_parse_empty(caplog: pytest.LogCaptureFixture) -> None:
             if imp_level >= 7:
                 print(record.message)
     print("--- END LDD TRAJECTORY ---")
+
+
 # endregion FUNC_test_parse_empty

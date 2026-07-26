@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -289,10 +290,8 @@ def migrate_legacy(legacy_dir: str, state_file: str) -> int:
         hash_file = done_file.with_suffix(".hash")
         hash_val = ""
         if hash_file.exists():
-            try:
+            with contextlib.suppress(OSError):
                 hash_val = hash_file.read_text().strip()
-            except OSError:
-                pass
 
         # Write to state.json (name-based key)
         entry: dict = {"name": python_name, "status": "done"}

@@ -20,7 +20,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -48,13 +47,19 @@ def test_env_example_fresh(caplog):
     """.env.example is byte-identical to sync_env_defaults.py --check output."""
     result = subprocess.run(
         [
-            sys.executable, str(SYNC_SCRIPT),
-            "--platform-env", str(PLATFORM_ENV),
-            "--secret-defs", str(SECRET_DEFS),
-            "--output", str(ENV_EXAMPLE),
+            sys.executable,
+            str(SYNC_SCRIPT),
+            "--platform-env",
+            str(PLATFORM_ENV),
+            "--secret-defs",
+            str(SECRET_DEFS),
+            "--output",
+            str(ENV_EXAMPLE),
             "--check",
         ],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if result.returncode == 2:
         logger.error("[IMP:10][gate] .env.example diverges from SoT:\n%s", result.stderr[:2000])
@@ -72,7 +77,7 @@ def test_no_proxy_superset(caplog):
     with open(PLATFORM_INFRA) as f:
         infra = yaml.safe_load(f)
     no_proxy_internal = infra.get("proxy", {}).get("no_proxy_internal", "")
-    so_t_entries = set(e.strip() for e in no_proxy_internal.split(",") if e.strip())
+    so_t_entries = {e.strip() for e in no_proxy_internal.split(",") if e.strip()}
 
     env_noproxy = ""
     with open(ENV_EXAMPLE) as f:
@@ -80,7 +85,7 @@ def test_no_proxy_superset(caplog):
             if line.startswith("NO_PROXY="):
                 env_noproxy = line.split("=", 1)[1].strip().strip('"')
                 break
-    env_entries = set(e.strip() for e in env_noproxy.split(",") if e.strip())
+    env_entries = {e.strip() for e in env_noproxy.split(",") if e.strip()}
 
     missing = so_t_entries - env_entries
     if missing:
@@ -89,7 +94,9 @@ def test_no_proxy_superset(caplog):
         logger.error("[IMP:10][gate] .env.example: %s", sorted(env_entries))
         pytest.fail(f".env.example NO_PROXY missing SoT entries: {sorted(missing)}")
 
-    logger.info("[IMP:9][gate] PASS: .env.example NO_PROXY superset (SoT=%d, env=%d)", len(so_t_entries), len(env_entries))
+    logger.info(
+        "[IMP:9][gate] PASS: .env.example NO_PROXY superset (SoT=%d, env=%d)", len(so_t_entries), len(env_entries)
+    )
 
 
 @pytest.mark.gate
@@ -122,7 +129,9 @@ def test_postgres_password_unified(caplog):
             for line in f:
                 if line.startswith("POSTGRES_PASSWORD="):
                     val = line.split("=", 1)[1].strip()
-                    assert val == "test-pg-pwd", f"hermes-agent/.env.example POSTGRES_PASSWORD = {val}, expected test-pg-pwd"
+                    assert val == "test-pg-pwd", (
+                        f"hermes-agent/.env.example POSTGRES_PASSWORD = {val}, expected test-pg-pwd"
+                    )
                     break
 
     # Check hermes-agent .env
@@ -152,7 +161,7 @@ def test_s3_endpoint_removed(caplog):
     # Build grep command — search for S3_ENDPOINT but NOT S3_ENDPOINT_URL
     violations: list[str] = []
     patterns_to_check = [
-        r'S3_ENDPOINT[^_]',  # catches S3_ENDPOINT=, S3_ENDPOINT}, S3_ENDPOINT", etc.
+        r"S3_ENDPOINT[^_]",  # catches S3_ENDPOINT=, S3_ENDPOINT}, S3_ENDPOINT", etc.
     ]
 
     for search_path in search_dirs:
@@ -195,7 +204,9 @@ def test_s3_endpoint_removed(caplog):
         logger.error("[IMP:10][gate] S3_ENDPOINT (without _URL) found in production code:")
         for v in violations:
             logger.error("  %s", v)
-        pytest.fail(f"S3_ENDPOINT found in {len(violations)} location(s) — remove S3_ENDPOINT alias, keep only S3_ENDPOINT_URL")
+        pytest.fail(
+            f"S3_ENDPOINT found in {len(violations)} location(s) — remove S3_ENDPOINT alias, keep only S3_ENDPOINT_URL"
+        )
 
     logger.info("[IMP:9][gate] PASS: S3_ENDPOINT removed from production code (zero references)")
 
@@ -225,14 +236,16 @@ def test_no_inline_python3_in_scaffold(caplog):
     inline_patterns = [
         r'python3\s+-c\s+"',
         r"python3\s+-c\s+'",
-        r'python3\s+<<\s*PYEOF',
+        r"python3\s+<<\s*PYEOF",
         r"python3\s+<<\s*'PYEOF'",
     ]
 
     for pat in inline_patterns:
         if re.search(pat, content):
             logger.error("[IMP:10][gate] Inline python3 found in gen-env-platform.sh matching pattern: %s", pat)
-            pytest.fail("gen-env-platform.sh contains inline python3 — extract to gen_env_platform.py (Tier 1 Strangler)")
+            pytest.fail(
+                "gen-env-platform.sh contains inline python3 — extract to gen_env_platform.py (Tier 1 Strangler)"
+            )
 
     # Verify the thin facade calls the Python module
     assert "gen_env_platform.py" in content, "gen-env-platform.sh must delegate to gen_env_platform.py"
@@ -261,7 +274,9 @@ def test_nextauth_secret_precondition(caplog):
 
     if not nextauth_ci or nextauth_ci == "ci-test-nextauth-secret-32-chars-min!!":
         # DevPlan 078 not merged — NEXTAUTH_SECRET validation deferred
-        logger.info("[IMP:9][gate] SKIP: DevPlan 078 not merged — NEXTAUTH_SECRET validation deferred (ci_default unchanged)")
+        logger.info(
+            "[IMP:9][gate] SKIP: DevPlan 078 not merged — NEXTAUTH_SECRET validation deferred (ci_default unchanged)"
+        )
         pytest.skip("DevPlan 078 not merged — NEXTAUTH_SECRET validation deferred")
         return
 

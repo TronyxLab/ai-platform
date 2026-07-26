@@ -42,6 +42,7 @@ logger = logging.getLogger("watchdog")
 # Configuration dataclasses
 # ═══════════════════════════════════════════════════════════════════
 
+
 # region DATACLASS__CircuitBreakerService
 @dataclass
 class CircuitBreakerService:
@@ -49,9 +50,10 @@ class CircuitBreakerService:
 
     Parsed from the shell format: "service_name:check_cmd:max_failures:window_seconds"
     """
+
     service_name: str
-    check_command: list[str]       # Pre-split command for safe subprocess execution
-    check_command_str: str         # Original string for logging
+    check_command: list[str]  # Pre-split command for safe subprocess execution
+    check_command_str: str  # Original string for logging
     max_failures: int = 5
     window_seconds: int = 300
 
@@ -82,12 +84,16 @@ class CircuitBreakerService:
             max_failures=max_failures,
             window_seconds=window_seconds,
         )
+
+
 # endregion
+
 
 # region DATACLASS__WatchdogConfig
 @dataclass
 class WatchdogConfig:
     """Central configuration — populated from environment variables."""
+
     # Self-update
     health_url: str = "http://localhost:9119/ready"
     watchdog_timeout: int = 90
@@ -95,7 +101,9 @@ class WatchdogConfig:
     secrets_file: str = "/run/platform/secrets.env"
     audit_log: str = "/var/log/platform/watchdog-audit.log"
     keep_images: int = 3
-    module_dir: str = "/opt/platform/core/modules/hermes-agent"
+    # module_dir default is set dynamically in from_env() using PLATFORM_ROOT.
+    # Empty string signals "not set" — from_env() provides the real default.
+    module_dir: str = ""
     compose_file: str = ""
     compose_project: str = "hermes-agent"
     agent_port: int = 9119
@@ -116,7 +124,10 @@ class WatchdogConfig:
     def from_env(cls) -> "WatchdogConfig":
         """Construct config from environment variables with defaults."""
         agent_port = int(os.environ.get("AGENT_PORT", "9119"))
-        module_dir = os.environ.get("MODULE_DIR", "/opt/platform/core/modules/hermes-agent")
+        # Use PLATFORM_ROOT as base for deployment paths — canonical platform pattern.
+        # This matches the gate test allowlist (os.environ.get("PLATFORM_ROOT", "/opt/platform")).
+        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        module_dir = os.environ.get("MODULE_DIR", f"{platform_root}/core/modules/hermes-agent")
 
         # Circuit breaker services: parse from env or use defaults
         cb_services_raw = os.environ.get("CIRCUIT_BREAKER_SERVICES", "")
@@ -128,62 +139,44 @@ class WatchdogConfig:
                     cb_services.append(svc)
         else:
             cb_services = [
-                CircuitBreakerService.from_config_entry(
-                    "postgres:pg_isready -U postgres -h 127.0.0.1 -t 5:5:300"
-                ),
+                CircuitBreakerService.from_config_entry("postgres:pg_isready -U postgres -h 127.0.0.1 -t 5:5:300"),
                 CircuitBreakerService.from_config_entry(
                     "pgbouncer:pg_isready -h 127.0.0.1 -p 6432 -U postgres -t 3:5:300"
                 ),
-                CircuitBreakerService.from_config_entry(
-                    "redis:redis-cli -h 127.0.0.1 ping:5:300"
-                ),
-                CircuitBreakerService.from_config_entry(
-                    "loki:/usr/bin/loki -version:5:300"
-                ),
-                CircuitBreakerService.from_config_entry(
-                    "prometheus:wget -q -O- http://127.0.0.1:9090/-/healthy:5:300"
-                ),
+                CircuitBreakerService.from_config_entry("redis:redis-cli -h 127.0.0.1 ping:5:300"),
+                CircuitBreakerService.from_config_entry("loki:/usr/bin/loki -version:5:300"),
+                CircuitBreakerService.from_config_entry("prometheus:wget -q -O- http://127.0.0.1:9090/-/healthy:5:300"),
             ]
             cb_services = [s for s in cb_services if s is not None]
 
         return cls(
-            health_url=os.environ.get(
-                "AGENT_READY_URL", f"http://localhost:{agent_port}/ready"
-            ),
+            health_url=os.environ.get("AGENT_READY_URL", f"http://localhost:{agent_port}/ready"),
             watchdog_timeout=int(os.environ.get("WATCHDOG_TIMEOUT", "90")),
-            pending_file=os.environ.get(
-                "PENDING_FILE", "/var/lib/platform/agent.update-pending"
-            ),
-            secrets_file=os.environ.get(
-                "SECRETS_FILE", "/run/platform/secrets.env"
-            ),
-            audit_log=os.environ.get(
-                "AUDIT_LOG", "/var/log/platform/watchdog-audit.log"
-            ),
+            pending_file=os.environ.get("PENDING_FILE", "/var/lib/platform/agent.update-pending"),
+            secrets_file=os.environ.get("SECRETS_FILE", "/run/platform/secrets.env"),
+            audit_log=os.environ.get("AUDIT_LOG", "/var/log/platform/watchdog-audit.log"),
             keep_images=int(os.environ.get("KEEP_IMAGES", "3")),
             module_dir=module_dir,
-            compose_file=os.environ.get(
-                "COMPOSE_FILE", f"{module_dir}/docker-compose.base.yml"
-            ),
+            compose_file=os.environ.get("COMPOSE_FILE", f"{module_dir}/docker-compose.base.yml"),
             compose_project=os.environ.get("COMPOSE_PROJECT", "hermes-agent"),
             agent_port=agent_port,
-            cb_state_dir=os.environ.get(
-                "CIRCUIT_BREAKER_STATE_DIR", "/var/lib/platform/watchdog"
-            ),
+            cb_state_dir=os.environ.get("CIRCUIT_BREAKER_STATE_DIR", "/var/lib/platform/watchdog"),
             cb_services=cb_services,
             poll_interval=int(os.environ.get("POLL_INTERVAL", "5")),
             curl_max_time=int(os.environ.get("CURL_MAX_TIME", "3")),
             curl_tg_max_time=int(os.environ.get("CURL_TG_MAX_TIME", "30")),
-            telegram_proxy_url=os.environ.get(
-                "TELEGRAM_PROXY_URL", "http://127.0.0.1:8118"
-            ),
+            telegram_proxy_url=os.environ.get("TELEGRAM_PROXY_URL", "http://127.0.0.1:8118"),
         )
+
+
 # endregion
+
 
 # region DATACLASS__PendingUpdate
 @dataclass
 class PendingUpdate:
     """Represents the agent.update-pending state file."""
+
     new_version: str = ""
     timestamp: str = ""
     state: str = "pending"
@@ -226,21 +219,28 @@ class PendingUpdate:
         if self.failure_time:
             lines.append(f"failure_time={self.failure_time}")
         Path(path).write_text("\n".join(lines) + "\n")
+
+
 # endregion
+
 
 # region DATACLASS__CircuitEvent
 @dataclass
 class CircuitEvent:
     """Result of a single circuit breaker check."""
+
     service: str
     event_type: str  # "passed", "failed", "opened", "reset"
     failure_count: int = 0
     max_failures: int = 0
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # AuditLogger
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region CLASS__AuditLogger
 class AuditLogger:
@@ -266,11 +266,14 @@ class AuditLogger:
                 f.write(line + "\n")
         except OSError:
             pass  # Non-fatal: audit log write failure must not crash watchdog
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Circuit Breaker
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region CLASS__CircuitBreaker
 class CircuitBreaker:
@@ -303,6 +306,7 @@ class CircuitBreaker:
             except (json.JSONDecodeError, OSError):
                 pass
         return {"failures": [], "circuit_open": False}
+
     # endregion
 
     # region FUNC__write_state
@@ -316,6 +320,7 @@ class CircuitBreaker:
         except OSError:
             # Non-fatal: state file write failure — log and continue
             logger.warning("[IMP:8][cb] Failed to write state for %s", service_name)
+
     # endregion
 
     # region FUNC__run_health_check
@@ -331,12 +336,11 @@ class CircuitBreaker:
             return result.returncode == 0
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return False
+
     # endregion
 
     # region FUNC__increment_failures
-    def _increment_failures(
-        self, service_name: str, max_failures: int, window_seconds: int
-    ) -> bool:
+    def _increment_failures(self, service_name: str, max_failures: int, window_seconds: int) -> bool:
         """Record a failure and check if circuit should open.
 
         Returns True if circuit is OPEN (stop restarting),
@@ -362,10 +366,7 @@ class CircuitBreaker:
             return True
 
         # Filter failures within window, append current
-        failures = [
-            f for f in state.get("failures", [])
-            if now - f < window_seconds
-        ]
+        failures = [f for f in state.get("failures", []) if now - f < window_seconds]
         failures.append(now)
         is_open = len(failures) >= max_failures
 
@@ -377,16 +378,22 @@ class CircuitBreaker:
 
         logger.info(
             "[IMP:8][cb:%s] Failure count: %d/%d in %ds window",
-            service_name, len(failures), max_failures, window_seconds,
+            service_name,
+            len(failures),
+            max_failures,
+            window_seconds,
         )
 
         if is_open:
             logger.info(
                 "[IMP:9][cb:%s] CIRCUIT BREAKER OPENED — %d failures in %ds",
-                service_name, len(failures), window_seconds,
+                service_name,
+                len(failures),
+                window_seconds,
             )
 
         return is_open
+
     # endregion
 
     # region FUNC__check_service
@@ -395,11 +402,12 @@ class CircuitBreaker:
         svc: CircuitBreakerService,
         docker_manager: "DockerManager",
         telegram: "TelegramNotifier",
-    ) -> Optional[CircuitEvent]:
+    ) -> CircuitEvent | None:
         """Check one service and return circuit event or None."""
         logger.info(
             "[IMP:8][cb:%s] Checking health via: %s",
-            svc.service_name, svc.check_command_str,
+            svc.service_name,
+            svc.check_command_str,
         )
 
         if self._run_health_check(svc.check_command):
@@ -412,15 +420,14 @@ class CircuitBreaker:
 
         logger.info("[IMP:9][cb:%s] Health check FAILED", svc.service_name)
 
-        circuit_opened = self._increment_failures(
-            svc.service_name, svc.max_failures, svc.window_seconds
-        )
+        circuit_opened = self._increment_failures(svc.service_name, svc.max_failures, svc.window_seconds)
 
         if circuit_opened:
             # Stop the crash-looping container
             logger.info(
                 "[IMP:9][cb:%s] CIRCUIT BREAK: Stopping %s due to repeated health failures",
-                svc.service_name, svc.service_name,
+                svc.service_name,
+                svc.service_name,
             )
             docker_manager.stop_container(svc.service_name)
             context = os.environ.get("CONTEXT", "unknown")
@@ -442,12 +449,11 @@ class CircuitBreaker:
             event_type="failed",
             max_failures=svc.max_failures,
         )
+
     # endregion
 
     # region FUNC_check_all_services
-    def check_all_services(
-        self, docker_manager: "DockerManager", telegram: "TelegramNotifier"
-    ) -> list[CircuitEvent]:
+    def check_all_services(self, docker_manager: "DockerManager", telegram: "TelegramNotifier") -> list[CircuitEvent]:
         """Run one circuit breaker check cycle for all configured services.
 
         Returns list of CircuitEvent results.
@@ -465,12 +471,16 @@ class CircuitBreaker:
 
         logger.info("[IMP:7][cb] Circuit breaker cycle complete")
         return events
+
     # endregion
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # HealthChecker
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region CLASS__HealthChecker
 class HealthChecker:
@@ -488,7 +498,10 @@ class HealthChecker:
         """
         logger.info(
             "[IMP:8][watchdog][%s] Polling %s (timeout=%ds, interval=%ds)",
-            label, self._url, timeout_sec, self._interval,
+            label,
+            self._url,
+            timeout_sec,
+            self._interval,
         )
         elapsed = 0
         while elapsed < timeout_sec:
@@ -498,7 +511,8 @@ class HealthChecker:
                     if resp.status == 200:
                         logger.info(
                             "[IMP:8][watchdog][%s] /ready returned 200 after %ds",
-                            label, elapsed,
+                            label,
+                            elapsed,
                         )
                         return True
             except (urllib.error.URLError, OSError, ValueError):
@@ -509,14 +523,18 @@ class HealthChecker:
 
         logger.info(
             "[IMP:9][watchdog][%s] /ready check timed out after %ds",
-            label, timeout_sec,
+            label,
+            timeout_sec,
         )
         return False
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # TelegramNotifier
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region CLASS__TelegramNotifier
 class TelegramNotifier:
@@ -527,7 +545,7 @@ class TelegramNotifier:
         self._proxy_url = proxy_url
         self._timeout = curl_timeout
 
-    def _load_token(self) -> Optional[tuple[str, str]]:
+    def _load_token(self) -> tuple[str, str] | None:
         """Load TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from secrets file.
 
         Returns (token, chat_id) or None if not found.
@@ -535,8 +553,8 @@ class TelegramNotifier:
         secrets_path = Path(self._secrets_file)
         if not secrets_path.is_file():
             logger.info(
-                "[IMP:9][watchdog][telegram] WARNING: Secrets file not found at %s — "
-                "cannot send Telegram notification", self._secrets_file,
+                "[IMP:9][watchdog][telegram] WARNING: Secrets file not found at %s — cannot send Telegram notification",
+                self._secrets_file,
             )
             return None
 
@@ -551,8 +569,8 @@ class TelegramNotifier:
 
         if not token or not chat_id:
             logger.info(
-                "[IMP:9][watchdog][telegram] WARNING: TELEGRAM_BOT_TOKEN or "
-                "TELEGRAM_CHAT_ID not set in %s", self._secrets_file,
+                "[IMP:9][watchdog][telegram] WARNING: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set in %s",
+                self._secrets_file,
             )
             return None
 
@@ -593,22 +611,25 @@ class TelegramNotifier:
                 if resp.status == 200:
                     logger.info("[IMP:8][watchdog][telegram] Notification sent successfully")
                     return True
-                else:
-                    logger.info(
-                        "[IMP:9][watchdog][telegram] ERROR: Telegram API returned HTTP %d",
-                        resp.status,
-                    )
-                    return False
+                logger.info(
+                    "[IMP:9][watchdog][telegram] ERROR: Telegram API returned HTTP %d",
+                    resp.status,
+                )
+                return False
         except Exception as e:
             logger.info(
-                "[IMP:9][watchdog][telegram] ERROR: Telegram API request failed: %s", e,
+                "[IMP:9][watchdog][telegram] ERROR: Telegram API request failed: %s",
+                e,
             )
             return False
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # DockerManager
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region CLASS__DockerManager
 class DockerManager:
@@ -623,7 +644,7 @@ class DockerManager:
         """Run a docker/docker compose command with consistent error handling."""
         try:
             return subprocess.run(
-                ["sudo", "docker"] + args,
+                ["sudo", "docker", *args],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -638,26 +659,36 @@ class DockerManager:
     def compose_down(self, service: str) -> bool:
         """docker compose down <service>"""
         logger.info("[IMP:8][watchdog][rollback] Step 5a: stopping %s via docker compose down", service)
-        result = self._run_docker([
-            "compose", "-f", self._compose_file,
-            "--project-name", self._project,
-            "down", service,
-        ])
+        result = self._run_docker(
+            [
+                "compose",
+                "-f",
+                self._compose_file,
+                "--project-name",
+                self._project,
+                "down",
+                service,
+            ]
+        )
         if result.returncode != 0:
             logger.info(
-                "[IMP:9][watchdog][rollback] WARNING: docker compose down returned non-zero — "
-                "continuing rollback"
+                "[IMP:9][watchdog][rollback] WARNING: docker compose down returned non-zero — continuing rollback"
             )
         return result.returncode == 0
 
     def compose_pull(self) -> bool:
         """docker compose pull"""
         logger.info("[IMP:8][watchdog][rollback] Step 5b: pulling image via docker compose pull")
-        result = self._run_docker([
-            "compose", "-f", self._compose_file,
-            "--project-name", self._project,
-            "pull",
-        ])
+        result = self._run_docker(
+            [
+                "compose",
+                "-f",
+                self._compose_file,
+                "--project-name",
+                self._project,
+                "pull",
+            ]
+        )
         if result.returncode != 0:
             logger.info(
                 "[IMP:9][watchdog][rollback] CRITICAL: docker compose pull failed — "
@@ -668,18 +699,23 @@ class DockerManager:
     def compose_up(self, service: str) -> bool:
         """docker compose up -d <service>"""
         logger.info(
-            "[IMP:8][watchdog][rollback] Step 5c: starting %s with previous version "
-            "(docker compose up -d)", service,
+            "[IMP:8][watchdog][rollback] Step 5c: starting %s with previous version (docker compose up -d)",
+            service,
         )
-        result = self._run_docker([
-            "compose", "-f", self._compose_file,
-            "--project-name", self._project,
-            "up", "-d", service,
-        ])
+        result = self._run_docker(
+            [
+                "compose",
+                "-f",
+                self._compose_file,
+                "--project-name",
+                self._project,
+                "up",
+                "-d",
+                service,
+            ]
+        )
         if result.returncode != 0:
-            logger.info(
-                "[IMP:9][watchdog][rollback] CRITICAL: docker compose up -d failed"
-            )
+            logger.info("[IMP:9][watchdog][rollback] CRITICAL: docker compose up -d failed")
         return result.returncode == 0
 
     def cleanup_old_images(self, keep: int) -> int:
@@ -690,11 +726,17 @@ class DockerManager:
         logger.info("[IMP:7][watchdog][cleanup] Cleaning old hermes-agent images (keep=%d)", keep)
 
         # List hermes-agent images sorted by creation date (newest first)
-        result = self._run_docker([
-            "image", "ls",
-            "--filter", "reference=hermes-agent",
-            "--format", "{{.Repository}}:{{.Tag}} {{.CreatedAt}}",
-        ], timeout=30)
+        result = self._run_docker(
+            [
+                "image",
+                "ls",
+                "--filter",
+                "reference=hermes-agent",
+                "--format",
+                "{{.Repository}}:{{.Tag}} {{.CreatedAt}}",
+            ],
+            timeout=30,
+        )
 
         if result.returncode != 0 or not result.stdout.strip():
             logger.info("[IMP:7][watchdog][cleanup] No hermes-agent images found — skipping cleanup")
@@ -728,21 +770,30 @@ class DockerManager:
 
         logger.info(
             "[IMP:7][watchdog][cleanup] Image cleanup complete (found=%d, kept=%d, removed=%d)",
-            len(images), min(len(images), keep), removed,
+            len(images),
+            min(len(images), keep),
+            removed,
         )
         return removed
 
     def stop_container(self, name: str) -> bool:
         """Stop a Docker container (docker stop, fallback to docker kill)."""
         # Check if container is running
-        ps_result = self._run_docker([
-            "ps", "--format", "{{.Names}}",
-        ], timeout=10)
+        ps_result = self._run_docker(
+            [
+                "ps",
+                "--format",
+                "{{.Names}}",
+            ],
+            timeout=10,
+        )
 
         running_containers = ps_result.stdout.strip().splitlines()
         if name not in running_containers:
             logger.info(
-                "[IMP:8][watchdog][cb:%s] Container %s is not running", name, name,
+                "[IMP:8][watchdog][cb:%s] Container %s is not running",
+                name,
+                name,
             )
             return True  # Already stopped = success
 
@@ -758,24 +809,34 @@ class DockerManager:
         if kill_result.returncode != 0:
             logger.info(
                 "[IMP:9][watchdog][cb:%s] WARNING: Could not stop container %s",
-                name, name,
+                name,
+                name,
             )
             return False
         return True
 
     def container_status(self, name: str) -> str:
         """Get container status for diagnostics."""
-        result = self._run_docker([
-            "ps", "-a",
-            "--filter", f"name={name}",
-            "--format", "{{.Names}} {{.Status}} {{.Image}}",
-        ], timeout=10)
+        result = self._run_docker(
+            [
+                "ps",
+                "-a",
+                "--filter",
+                f"name={name}",
+                "--format",
+                "{{.Names}} {{.Status}} {{.Image}}",
+            ],
+            timeout=10,
+        )
         return result.stdout.strip()
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Watchdog — main orchestrator
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region CLASS__Watchdog
 class Watchdog:
@@ -785,20 +846,15 @@ class Watchdog:
         self._config = config
         self._log = AuditLogger(config.audit_log)
         self._circuit_breaker = CircuitBreaker(config)
-        self._health_checker = HealthChecker(
-            config.health_url, config.poll_interval, config.curl_max_time
-        )
-        self._telegram = TelegramNotifier(
-            config.secrets_file, config.telegram_proxy_url, config.curl_tg_max_time
-        )
-        self._docker = DockerManager(
-            config.compose_file, config.compose_project, config.module_dir
-        )
+        self._health_checker = HealthChecker(config.health_url, config.poll_interval, config.curl_max_time)
+        self._telegram = TelegramNotifier(config.secrets_file, config.telegram_proxy_url, config.curl_tg_max_time)
+        self._docker = DockerManager(config.compose_file, config.compose_project, config.module_dir)
         self._shutdown_requested = False
 
     # region FUNC_setup_signal_handlers
     def setup_signal_handlers(self) -> None:
         """Register signal handlers for graceful shutdown."""
+
         def _handler(signum: int, frame) -> None:
             sig_name = signal.Signals(signum).name
             self._log.log(f"[IMP:9][watchdog][signal] Received {sig_name} — shutting down")
@@ -806,20 +862,20 @@ class Watchdog:
 
         signal.signal(signal.SIGTERM, _handler)
         signal.signal(signal.SIGINT, _handler)
+
     # endregion
 
     # region FUNC__run_circuit_breaker_phase
     def _run_circuit_breaker_phase(self) -> None:
         """Phase 1: Check all circuit breaker services."""
         self._circuit_breaker.check_all_services(self._docker, self._telegram)
+
     # endregion
 
     # region FUNC__handle_update_success
     def _handle_update_success(self, update: PendingUpdate) -> None:
         """Handle successful self-update: mark state, cleanup images."""
-        self._log.log(
-            f"[IMP:9][watchdog][success] New version {update.new_version} is ready and healthy"
-        )
+        self._log.log(f"[IMP:9][watchdog][success] New version {update.new_version} is ready and healthy")
 
         # Mark success
         update.state = "success"
@@ -830,10 +886,10 @@ class Watchdog:
         self._docker.cleanup_old_images(self._config.keep_images)
 
         self._log.log(
-            f"[IMP:9][watchdog][success] Self-update to {update.new_version} "
-            f"completed successfully — agent healthy"
+            f"[IMP:9][watchdog][success] Self-update to {update.new_version} completed successfully — agent healthy"
         )
         self._log.log("[IMP:8][watchdog][main] ===== Watchdog tick completed (success) =====")
+
     # endregion
 
     # region FUNC__handle_rollback
@@ -846,9 +902,7 @@ class Watchdog:
             f"[IMP:9][watchdog][rollback] New version {update.new_version} FAILED /ready check "
             f"({self._config.watchdog_timeout}s timeout) — initiating automatic rollback"
         )
-        self._log.log(
-            "[IMP:8][watchdog][rollback] Rollback strategy: down → compose pull → up → re-wait → notify"
-        )
+        self._log.log("[IMP:8][watchdog][rollback] Rollback strategy: down → compose pull → up → re-wait → notify")
 
         # 5a: docker compose down
         self._docker.compose_down("hermes-agent")
@@ -860,17 +914,12 @@ class Watchdog:
         self._docker.compose_up("hermes-agent")
 
         # 5d: Re-poll /ready
-        self._log.log(
-            "[IMP:8][watchdog][rollback] Step 5d: re-polling /ready for previous version"
-        )
-        rollback_ok = self._health_checker.poll(
-            self._config.watchdog_timeout, "rollback"
-        )
+        self._log.log("[IMP:8][watchdog][rollback] Step 5d: re-polling /ready for previous version")
+        rollback_ok = self._health_checker.poll(self._config.watchdog_timeout, "rollback")
 
         if rollback_ok:
             self._log.log(
-                "[IMP:9][watchdog][rollback_success] Rollback to previous version "
-                "SUCCESSFUL — agent is healthy"
+                "[IMP:9][watchdog][rollback_success] Rollback to previous version SUCCESSFUL — agent is healthy"
             )
 
             # Mark rollback state
@@ -886,36 +935,24 @@ class Watchdog:
                 f"Reverted to previous image"
             )
 
-            self._log.log(
-                "[IMP:9][watchdog][rollback_success] Rollback complete — node operational"
-            )
-            self._log.log(
-                "[IMP:8][watchdog][main] ===== Watchdog tick completed (rolled_back) ====="
-            )
+            self._log.log("[IMP:9][watchdog][rollback_success] Rollback complete — node operational")
+            self._log.log("[IMP:8][watchdog][main] ===== Watchdog tick completed (rolled_back) =====")
             return 0
 
         return self._handle_rollback_failure(update)
+
     # endregion
 
     # region FUNC__handle_rollback_failure
     def _handle_rollback_failure(self, update: PendingUpdate) -> int:
         """Critical escalation when rollback also fails."""
-        self._log.log(
-            "[IMP:9][watchdog][rollback_critical] "
-            "====================================================="
-        )
+        self._log.log("[IMP:9][watchdog][rollback_critical] =====================================================")
         self._log.log(
             f"[IMP:9][watchdog][rollback_critical] CRITICAL: Agent rollback FAILED "
             f"after {self._config.watchdog_timeout}s"
         )
-        self._log.log(
-            "[IMP:9][watchdog][rollback_critical] Agent is NOT responsive — "
-            "manual intervention required"
-        )
-        self._log.log(
-            "[IMP:9][watchdog][rollback_critical] "
-            "====================================================="
-        )
+        self._log.log("[IMP:9][watchdog][rollback_critical] Agent is NOT responsive — manual intervention required")
+        self._log.log("[IMP:9][watchdog][rollback_critical] =====================================================")
 
         # Mark failure state
         update.state = "rollback_failed"
@@ -923,27 +960,22 @@ class Watchdog:
         update.write(self._config.pending_file)
 
         # Diagnostic: container status
-        self._log.log(
-            "[IMP:9][watchdog][rollback_critical] Current hermes-agent container status:"
-        )
+        self._log.log("[IMP:9][watchdog][rollback_critical] Current hermes-agent container status:")
         status = self._docker.container_status("hermes-agent")
         for line in status.splitlines():
             if line.strip():
                 self._log.log(f"[IMP:9][watchdog][rollback_critical]   {line}")
 
         # Critical Telegram notification
-        self._telegram.send(
-            "\U0001f6a8 CRITICAL: Agent rollback FAILED — manual intervention required"
-        )
+        self._telegram.send("\U0001f6a8 CRITICAL: Agent rollback FAILED — manual intervention required")
 
         self._log.log(
             "[IMP:9][watchdog][rollback_critical] Watchdog exiting with code 1 — "
             "node remains operational (agent is non-critical)"
         )
-        self._log.log(
-            "[IMP:8][watchdog][main] ===== Watchdog tick completed (CRITICAL FAILURE) ====="
-        )
+        self._log.log("[IMP:8][watchdog][main] ===== Watchdog tick completed (CRITICAL FAILURE) =====")
         return 1
+
     # endregion
 
     # region FUNC__run_self_update_phase
@@ -953,10 +985,7 @@ class Watchdog:
         Returns exit code: 0 = success/skip, 1 = critical failure.
         """
         if not Path(self._config.pending_file).is_file():
-            self._log.log(
-                "[IMP:3][watchdog][main] No pending update file — "
-                "circuit breaker cycle complete"
-            )
+            self._log.log("[IMP:3][watchdog][main] No pending update file — circuit breaker cycle complete")
             return 0
 
         # Read pending update
@@ -984,6 +1013,7 @@ class Watchdog:
             return 0
 
         return self._handle_rollback(update)
+
     # endregion
 
     # region FUNC_run
@@ -995,15 +1025,18 @@ class Watchdog:
         self._run_circuit_breaker_phase()
 
         # Phase 2: Self-update (only if PENDING_FILE exists)
-        exit_code = self._run_self_update_phase()
+        return self._run_self_update_phase()
 
-        return exit_code
+
     # endregion
+
+
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # CLI entry point
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_main
 def main() -> None:
@@ -1037,6 +1070,8 @@ def main() -> None:
 
     exit_code = watchdog.run()
     sys.exit(exit_code)
+
+
 # endregion
 
 if __name__ == "__main__":

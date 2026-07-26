@@ -16,37 +16,23 @@
 # endregion MODULE_CONTRACT
 """
 
-import json
 import logging
 import os
 import sys
-import time
 import urllib.error
 from pathlib import Path
-from unittest.mock import MagicMock, PropertyMock, patch
-
-import pytest
+from unittest.mock import patch
 
 sys.path.insert(
     0,
-    str(
-        Path(__file__).resolve().parent.parent.parent
-        / "core"
-        / "modules"
-        / "hermes-agent"
-        / "watchdog"
-    ),
+    str(Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "watchdog"),
 )
 from agent_watchdog import (
-    AuditLogger,
     CircuitBreaker,
     CircuitBreakerService,
-    CircuitEvent,
-    DockerManager,
     HealthChecker,
     PendingUpdate,
     TelegramNotifier,
-    Watchdog,
     WatchdogConfig,
 )
 
@@ -71,10 +57,21 @@ class TestWatchdogConfig:
 
         # Clear relevant env vars
         for key in [
-            "AGENT_PORT", "WATCHDOG_TIMEOUT", "PENDING_FILE", "SECRETS_FILE",
-            "AUDIT_LOG", "KEEP_IMAGES", "MODULE_DIR", "COMPOSE_FILE",
-            "COMPOSE_PROJECT", "CIRCUIT_BREAKER_STATE_DIR", "CIRCUIT_BREAKER_SERVICES",
-            "POLL_INTERVAL", "CURL_MAX_TIME", "CURL_TG_MAX_TIME", "TELEGRAM_PROXY_URL",
+            "AGENT_PORT",
+            "WATCHDOG_TIMEOUT",
+            "PENDING_FILE",
+            "SECRETS_FILE",
+            "AUDIT_LOG",
+            "KEEP_IMAGES",
+            "MODULE_DIR",
+            "COMPOSE_FILE",
+            "COMPOSE_PROJECT",
+            "CIRCUIT_BREAKER_STATE_DIR",
+            "CIRCUIT_BREAKER_SERVICES",
+            "POLL_INTERVAL",
+            "CURL_MAX_TIME",
+            "CURL_TG_MAX_TIME",
+            "TELEGRAM_PROXY_URL",
             "AGENT_READY_URL",
         ]:
             os.environ.pop(key, None)
@@ -98,14 +95,12 @@ class TestWatchdogConfig:
         assert len(config.cb_services) == 5
 
         # Verify LDD telemetry
-        found_imp9 = False
         for record in caplog.records:
-            if "[IMP:" in record.message:
-                if int(record.message.split("[IMP:")[1].split("]")[0]) >= 9:
-                    found_imp9 = True
-                    break
+            if "[IMP:" in record.message and int(record.message.split("[IMP:")[1].split("]")[0]) >= 9:
+                break
         # No specific IMP:9 expected from from_env() — config construction is not logged
         # This test verifies no errors during config construction
+
     # endregion
 
     # region test_config_from_env_overrides
@@ -140,10 +135,14 @@ class TestWatchdogConfig:
 
         # Cleanup
         for key in [
-            "AGENT_PORT", "WATCHDOG_TIMEOUT", "KEEP_IMAGES",
-            "POLL_INTERVAL", "CIRCUIT_BREAKER_SERVICES",
+            "AGENT_PORT",
+            "WATCHDOG_TIMEOUT",
+            "KEEP_IMAGES",
+            "POLL_INTERVAL",
+            "CIRCUIT_BREAKER_SERVICES",
         ]:
             os.environ.pop(key, None)
+
     # endregion
 
 
@@ -173,6 +172,7 @@ class TestCircuitBreakerService:
         assert svc.check_command_str == "pg_isready -U postgres -h 127.0.0.1 -t 5"
         assert svc.max_failures == 5
         assert svc.window_seconds == 300
+
     # endregion
 
     # region test_cb_service_from_config_entry_invalid
@@ -191,6 +191,7 @@ class TestCircuitBreakerService:
         # Empty string
         svc = CircuitBreakerService.from_config_entry("")
         assert svc is None
+
     # endregion
 
 
@@ -232,6 +233,7 @@ class TestCircuitBreaker:
         assert actual == expected
         assert actual["circuit_open"] is True
         assert len(actual["failures"]) == 2
+
     # endregion
 
     # region test_circuit_breaker_closed_to_open
@@ -250,7 +252,7 @@ class TestCircuitBreaker:
             # Failures 1-4: circuit stays closed
             for i in range(4):
                 is_open = cb._increment_failures("test-svc", 5, 300)
-                assert is_open is False, f"Failure {i+1} should not open circuit"
+                assert is_open is False, f"Failure {i + 1} should not open circuit"
 
             # Failure 5: circuit opens
             is_open = cb._increment_failures("test-svc", 5, 300)
@@ -268,6 +270,7 @@ class TestCircuitBreaker:
                     found_imp9 = True
                     break
             assert found_imp9, "LDD Error: No [IMP:9] circuit breaker opened log"
+
     # endregion
 
     # region test_circuit_breaker_window_expiry_reset
@@ -296,6 +299,7 @@ class TestCircuitBreaker:
             state = cb._read_state("test-svc")
             assert state["circuit_open"] is False
             assert len(state["failures"]) == 0
+
     # endregion
 
     # region test_circuit_breaker_failures_filtered_by_window
@@ -327,6 +331,7 @@ class TestCircuitBreaker:
             state = cb._read_state("test-svc")
             assert len(state["failures"]) == 4
             assert state["circuit_open"] is False
+
     # endregion
 
 
@@ -351,6 +356,7 @@ class TestHealthChecker:
 
         class MockResponse:
             """Mock urllib response with context manager support."""
+
             status = 200
 
             def __enter__(self):
@@ -368,15 +374,14 @@ class TestHealthChecker:
             mock_urlopen.assert_called_once()
 
         # Verify LDD trajectory
-        found_imp9 = False
         for record in caplog.records:
             if "[IMP:" in record.message:
                 imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
                 if imp_level >= 9:
-                    found_imp9 = True
                     break
         # On success path, IMP:8 is expected (not IMP:9)
         # The assertion is that no error occurs
+
     # endregion
 
     # region test_health_checker_poll_timeout
@@ -401,6 +406,7 @@ class TestHealthChecker:
                 found_imp9 = True
                 break
         assert found_imp9, "LDD Error: No [IMP:9] timeout log found"
+
     # endregion
 
 
@@ -445,6 +451,7 @@ class TestPendingUpdate:
         assert "new_version=v2.0.0" in text
         assert "timestamp=2026-07-25T12:00:00Z" in text
         assert "state=pending" in text
+
     # endregion
 
     # region test_pending_update_missing_file
@@ -459,6 +466,7 @@ class TestPendingUpdate:
         pf = tmp_path / "nonexistent.file"
         result = PendingUpdate.from_file(str(pf))
         assert result is None, "from_file should return None for missing file"
+
     # endregion
 
 
@@ -495,4 +503,5 @@ class TestTelegramNotifier:
                 found_warning = True
                 break
         assert found_warning, "LDD Error: No [IMP:9] secrets file warning log"
+
     # endregion

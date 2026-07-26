@@ -35,6 +35,7 @@ IMPACTS:
   - core/internal/bootstrap/deploy/context_deployer.py (MODIFIED, Phase C)
   - core/internal/bootstrap/deploy/docker_orchestrator.py (MODIFIED, Phase C)
 REQUIRES:   Coder fixes for gate registration drift (DRIFT-GATE1, DRIFT-SPEC1)
+$END_ARTIFACT_CONTRACT
 ---
 
 🔒 **Verified against SHA:** `59062413dac109757dbb03f5e86b70e01e778484`

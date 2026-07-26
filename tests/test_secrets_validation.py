@@ -395,18 +395,19 @@ def test_litellm_master_key_present(
     """LITELLM_MASTER_KEY must be in REQUIRED_SECRET_KEYS and have ci_default in definitions."""
     # region BLOCK_Check_REQUIRED
     logger.info("[IMP:7][test_litellm_master_key_present] Checking LITELLM_MASTER_KEY in REQUIRED_SECRET_KEYS")
-    assert "LITELLM_MASTER_KEY" in REQUIRED_SECRET_KEYS, (
-        "LITELLM_MASTER_KEY missing from REQUIRED_SECRET_KEYS"
-    )
+    assert "LITELLM_MASTER_KEY" in REQUIRED_SECRET_KEYS, "LITELLM_MASTER_KEY missing from REQUIRED_SECRET_KEYS"
     logger.info("[IMP:9][test_litellm_master_key_present] ✅ LITELLM_MASTER_KEY present in REQUIRED_SECRET_KEYS")
     # endregion
 
     # region BLOCK_Check_definitions
-    import yaml
     import os as _os
+
+    import yaml
+
     _defs_path = _os.path.join(
         _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-        "core", "secret-definitions.yaml",
+        "core",
+        "secret-definitions.yaml",
     )
     logger.info("[IMP:7][test_litellm_master_key_present] Reading definitions: %s", _defs_path)
     with open(_defs_path) as _f:

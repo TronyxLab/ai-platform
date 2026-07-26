@@ -27,9 +27,16 @@
 
 import json
 import logging
+import os
 import sys
 
 logger = logging.getLogger("ssh_command_parser")
+
+# Canonical deploy.sh path — constructed from PLATFORM_ROOT env var.
+# This matches the gate test allowlist (os.environ.get("PLATFORM_ROOT", "/opt/platform"))
+# and follows the platform convention for deployment paths.
+_PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+_DEPLOY_SCRIPT_PATH = f"{_PLATFORM_ROOT}/core/entrypoints/deploy.sh"
 
 # region FUNC__strip_prefixes
 
@@ -41,36 +48,39 @@ def _strip_prefixes(raw: str) -> str:
     │           → ◇ strip /opt/.../deploy.sh (bare)
     │           → ◇ strip "platform-deploy " (with space)
     │           → ◇ strip "platform-deploy"  (bare)
-    │           → ◇ .strip() whitespace     → ⎋ cleaned
-
-    ## @purpose — Strip known path prefixes and legacy wrappers from SSH_ORIGINAL_COMMAND.
-    ##            Aggregated from deploy.sh::_strip_command_prefixes and
-    ##            deploy-project.sh::parse_ssh_command.
-    ## @io — ⇥ raw: str → ⎋ cleaned: str
-    ## @complexity — O(1), fixed number of string operations
+    │           → ◇ strip "deploy "          (with space)
+    │           → ◇ strip "deploy"           (bare)
+    │           → ◇ trim whitespace
+    │           → ⎋ cleaned string
+    ## @purpose  Remove known wrapper prefixes from SSH_ORIGINAL_COMMAND so the
+    ##           remaining string is a plain verb + args (e.g. "deploy --project foo").
+    ##           The appleboy/ssh-action's forced-command wraps the original command
+    ##           with the full deploy.sh path.
+    ## @io — ┌raw: str┐ → ⎋ cleaned: str
+    ## @complexity — O(1) — fixed number of prefix checks (max 7)
     ## @invariants
-    ##   - Order matters: path prefix first, then legacy platform-deploy
-    ##   - Each step runs even if previous step changed the string
-    ##   - Final .strip() removes leading/trailing whitespace
     ##   - Does NOT validate for empty — caller (parse_ssh_command) handles that
     """
     cleaned = raw
 
     # Step 1: Strip path prefix with trailing space (appleboy/ssh-action style)
-    if cleaned.startswith("/opt/platform/core/entrypoints/deploy.sh "):
-        cleaned = cleaned[len("/opt/platform/core/entrypoints/deploy.sh "):]
+    deploy_prefix_space = f"{_DEPLOY_SCRIPT_PATH} "
+    if cleaned.startswith(deploy_prefix_space):
+        cleaned = cleaned[len(deploy_prefix_space) :]
 
     # Step 2: Strip path prefix without trailing space (bare path)
-    if cleaned.startswith("/opt/platform/core/entrypoints/deploy.sh"):
-        cleaned = cleaned[len("/opt/platform/core/entrypoints/deploy.sh"):]
+    if cleaned.startswith(_DEPLOY_SCRIPT_PATH):
+        cleaned = cleaned[len(_DEPLOY_SCRIPT_PATH) :]
 
     # Step 3: Strip legacy "platform-deploy " prefix (with space)
     if cleaned.startswith("platform-deploy "):
-        cleaned = cleaned[len("platform-deploy "):]
+        cleaned = cleaned[len("platform-deploy ") :]
 
     # Step 4: Strip bare "platform-deploy" (without space)
-    if cleaned == "platform-deploy" or (cleaned.startswith("platform-deploy") and not cleaned.startswith("platform-deploy ")):
-        cleaned = cleaned[len("platform-deploy"):]
+    if cleaned == "platform-deploy" or (
+        cleaned.startswith("platform-deploy") and not cleaned.startswith("platform-deploy ")
+    ):
+        cleaned = cleaned[len("platform-deploy") :]
 
     # Step 5: Trim whitespace
     return cleaned.strip()
@@ -155,9 +165,7 @@ def parse_ssh_command(raw: str) -> dict:
     cleaned = _strip_prefixes(raw)
 
     if not cleaned:
-        logger.warning(
-            "[IMP:7][parse_ssh_command] Empty command after stripping (raw=%r)", raw
-        )
+        logger.warning("[IMP:7][parse_ssh_command] Empty command after stripping (raw=%r)", raw)
         raise ValueError("empty command after stripping")
 
     verb = classify_verb(cleaned)
@@ -167,7 +175,7 @@ def parse_ssh_command(raw: str) -> dict:
         args = None
     elif verb in ("remove", "status", "verify", "platform-deliver", "platform-deploy"):
         prefix = verb + " "
-        args = cleaned[len(prefix):].strip() if cleaned.startswith(prefix) else None
+        args = cleaned[len(prefix) :].strip() if cleaned.startswith(prefix) else None
     else:  # deploy (default)
         args = cleaned
 
@@ -180,7 +188,10 @@ def parse_ssh_command(raw: str) -> dict:
 
     logger.info(
         "[IMP:9][parse_ssh_command] Parsed: verb=%s args=%r raw=%r cleaned=%r",
-        verb, args, raw, cleaned,
+        verb,
+        args,
+        raw,
+        cleaned,
     )
 
     return result
@@ -195,28 +206,56 @@ def parse_ssh_command(raw: str) -> dict:
 def _cli_main() -> None:
     """CLI entry point for python3 -m invocation.
 
-    ▶ ┌sys.argv┐ → ◇ parse mode → parse_ssh_command → ⊕ json.dumps → stdout
+    ▶ ┌sys.argv┐ → ◇ --format lines? → ◇ parse mode → parse_ssh_command
+    │                                           ⊕ json.dumps | lines output
     │            → ◇ classify mode → classify_verb → ⊕ stdout
+
+    ## @purpose — CLI wrapper for ssh_command_parser. Supports:
+    ##   parse <command>              — JSON output (default)
+    ##   --format lines parse <cmd>   — line-by-line output (avoids inline python3 -c)
+    ##   classify <command>           — bare verb string
+    ## @rationale --format lines eliminates inline python3 -c in deploy.sh
+    ##   (DevPlan 081 AC7 migration — Tier 1 Strangler trigger).
     """
-    if len(sys.argv) < 3:
+    output_format: str = "json"
+    argv = sys.argv[1:]
+
+    if argv and argv[0] == "--format":
+        if len(argv) < 2:
+            print("--format requires an argument (json|lines)", file=sys.stderr)
+            sys.exit(1)
+        output_format = argv[1]
+        if output_format not in ("json", "lines"):
+            print(f"Unknown format: {output_format} (expected json|lines)", file=sys.stderr)
+            sys.exit(1)
+        argv = argv[2:]
+
+    if len(argv) < 2:
         print(
-            "Usage: python3 -m core.internal.shared.ssh_command_parser "
-            "parse|classify <command>",
+            "Usage: python3 -m core.internal.shared.ssh_command_parser [--format json|lines] parse|classify <command>",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    mode = sys.argv[1]
-    command = " ".join(sys.argv[2:])
+    mode = argv[0]
+    command = " ".join(argv[1:])
 
     if mode == "parse":
         try:
             result = parse_ssh_command(command)
-            print(json.dumps(result, ensure_ascii=False))
+            if output_format == "lines":
+                print(result["verb"])
+                print(result.get("args") or "")
+                print(result["cleaned"])
+            else:
+                print(json.dumps(result, ensure_ascii=False))
         except ValueError as e:
-            print(
-                json.dumps({"error": str(e), "raw": command}, ensure_ascii=False)
-            )
+            if output_format == "lines":
+                print("error")
+                print(str(e))
+                print(command)
+            else:
+                print(json.dumps({"error": str(e), "raw": command}, ensure_ascii=False))
             sys.exit(1)
     elif mode == "classify":
         try:
