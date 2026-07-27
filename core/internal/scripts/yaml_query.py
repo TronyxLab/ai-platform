@@ -151,6 +151,11 @@ def _cli() -> int:
         action="store_true",
         help="If value is a list, print each item on its own line (backward compat for yaml_get_list)",
     )
+    parser.add_argument(
+        "--keys",
+        action="store_true",
+        help="Print all top-level keys of the JSON/YAML object, one per line",
+    )
     args = parser.parse_args()
 
     try:
@@ -171,13 +176,41 @@ def _cli() -> int:
             except json.JSONDecodeError as e:
                 print(f"[IMP:10][yaml_query] ERROR: invalid JSON from stdin: {e}", file=sys.stderr)
                 return 3
+            if args.keys:
+                # --stdin --keys: print all top-level keys, one per line
+                if isinstance(data, dict):
+                    for k in data:
+                        print(k)
+                    return 0
+                print(f"[IMP:9][yaml_query] --keys requires a dict, got {type(data).__name__}", file=sys.stderr)
+                return 1
             if args.get:
                 value = _dotted_get(data, args.get, args.default)
             elif args.query:
                 value = _jq_eval(data, args.query)
+            elif args.items:
+                # --stdin --items without --get: treat stdin JSON as array
+                if isinstance(data, list):
+                    for item in data:
+                        print(_format_item(item, args.json_output))
+                    return 0
+                print(
+                    f"[IMP:9][yaml_query] --stdin --items requires a list at root, got {type(data).__name__}",
+                    file=sys.stderr,
+                )
+                return 1
             else:
-                parser.error("either --get or --query required")
+                parser.error("either --get, --query, or --keys required")
                 return 1  # unreachable
+        elif args.keys:
+            # --file --keys: print all top-level YAML keys, one per line
+            data = _load_yaml(args.file)
+            if isinstance(data, dict):
+                for k in data:
+                    print(k)
+                return 0
+            print(f"[IMP:9][yaml_query] --keys requires a dict, got {type(data).__name__}", file=sys.stderr)
+            return 1
         elif args.get:
             value = yaml_get(args.file, args.get, args.default)
         elif args.query:

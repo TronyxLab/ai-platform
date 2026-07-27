@@ -134,7 +134,7 @@ def discover_modules(modules_dir: Path) -> list[str]:
             module_name = module_yaml.parent.name
             compose_path = f"core/modules/{module_name}/docker-compose.base.yml"
             modules.append(compose_path)
-        except Exception as e:
+        except (yaml.YAMLError, OSError, KeyError) as e:
             print(f"WARNING: Skipping {module_yaml}: {e}", file=sys.stderr)
     return modules
 

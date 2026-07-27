@@ -21,11 +21,20 @@ def _module_contract():
 # endregion MODULE_CONTRACT
 
 import logging
+import os
+import sys
 
 import pytest
 from conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
+
+# Add backup-cron scripts path for imports of backup_config module
+_backup_cron_scripts = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "core", "modules", "backup-cron", "scripts")
+)
+if _backup_cron_scripts not in sys.path:
+    sys.path.insert(0, _backup_cron_scripts)
 
 
 # region TESTS
@@ -173,7 +182,7 @@ def test_defaults_region_prefix(monkeypatch, caplog) -> None:
         logger.critical(
             "[IMP:9][test_backup_config][defaults] ASSERT: region=%s prefix=%s", config["region"], config["prefix"]
         )
-        assert config["region"] == "us-east-1"
+        assert config["region"] == "ru-1"
         assert config["prefix"] == "platform/backups"
 
 

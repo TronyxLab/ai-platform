@@ -85,7 +85,7 @@ def _load_cert(path: str) -> dict | None:
 
     try:
         cert = x509.load_pem_x509_certificate(pem_data)
-    except Exception as exc:
+    except (ValueError, TypeError, OSError) as exc:
         _logger.warning("[IMP:8][cert_collector][_load_cert] Failed to parse cert %s: %s", path, exc)
         return None
 
@@ -95,7 +95,7 @@ def _load_cert(path: str) -> dict | None:
     # Issuer
     try:
         issuer = cert.issuer.rfc4514_string() if cert.issuer else ""
-    except Exception:
+    except (ValueError, AttributeError, TypeError):
         # Some certs have non-standard issuer fields
         issuer_attrs = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
         issuer = issuer_attrs[0].value if issuer_attrs else "unknown"
@@ -103,7 +103,7 @@ def _load_cert(path: str) -> dict | None:
     # Subject
     try:
         subject = cert.subject.rfc4514_string() if cert.subject else ""
-    except Exception:
+    except (ValueError, AttributeError, TypeError):
         subject_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
         subject = subject_attrs[0].value if subject_attrs else "unknown"
 
@@ -181,7 +181,7 @@ def get_certs(node_yaml_path: str) -> list[dict]:
 
         with open(node_yaml_path) as f:
             node_data = yaml.safe_load(f) or {}
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
         _logger.warning("[IMP:8][cert_collector][get_certs] Failed to load node.yaml %s: %s", node_yaml_path, exc)
         return []
 

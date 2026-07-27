@@ -40,7 +40,7 @@ import hashlib
 import logging
 import os
 
-logger = logging.getLogger("content_hash")
+logger = logging.getLogger(__name__)
 
 # ── Patterns always excluded from build context hashing ──
 _ALWAYS_EXCLUDE = {

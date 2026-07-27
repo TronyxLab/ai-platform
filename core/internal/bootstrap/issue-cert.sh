@@ -24,6 +24,14 @@
 ## · Rejected: HTTP-01 only (no wildcard certs)
 ## · Reason: DNS-01 preferred (wildcard), HTTP-01 fallback when DNS-01 unavailable
 ## · Rev: when webnames.ru API recovers → revert to DNS-01 only
+# ⚠️ TRAP[DECISION] · 2026-07-26 · HI · Wave 5a: issue-cert.sh осознанно пропущен — shell subprocess by design
+# · Rejected: Python-порт acme.sh CLI interaction (696 LOC → Python subprocess.run(["acme.sh", ...]))
+# · Reason: TRAP cert_orchestrator (DevPlan 052) определяет issue-cert.sh как shell subprocess.
+#   Бизнес-логика оркестрации (domain iteration, S3 cache, cron scheduling, project certs)
+#   уже в cert_orchestrator.py. Порт acme.sh CLI в Python не даст прироста тестируемости
+#   (acme.sh требует реального DNS API), но создаст risk для cron-based cert renewal.
+# · @see DevPlan 036A D2 — полное обоснование
+# · Rev: если acme.sh получит Python API — пересмотреть решение
 # endregion MODULE_CONTRACT
 
 set -euo pipefail

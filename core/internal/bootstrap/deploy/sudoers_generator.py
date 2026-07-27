@@ -35,7 +35,7 @@ from pathlib import Path
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 
-logger = logging.getLogger("sudoers_generator")
+logger = logging.getLogger(__name__)
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
@@ -163,7 +163,7 @@ def _render_template(
         logger.error("[IMP:9][_render_template] Template render TIMEOUT (>30s)")
         _safe_cleanup(output_path)  # type: ignore[possibly-undefined]
         return None
-    except Exception as exc:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as exc:
         logger.error("[IMP:9][_render_template] Template render EXCEPTION: %s", exc)
         _safe_cleanup(output_path)  # type: ignore[possibly-undefined]
         return None
@@ -177,7 +177,7 @@ def _safe_cleanup(path: str) -> None:
     try:
         if path and os.path.exists(path):
             os.unlink(path)
-    except Exception:
+    except Exception:  # noqa: EXC — best-effort cleanup, never raise
         pass
 
 
@@ -410,11 +410,13 @@ def _write_sudoers_file(
         logger.error("[IMP:10][_write_sudoers_file] OS error: %s", exc)
         _safe_cleanup(tmp_path)  # type: ignore[possibly-undefined]
         return False
-    except Exception as exc:
+    except Exception as exc:  # noqa: EXC — catch-all after OSError, prevents silent write failure
         logger.error("[IMP:9][_write_sudoers_file] Unexpected error: %s", exc)
         _safe_cleanup(tmp_path)  # type: ignore[possibly-undefined]
         return False
-    # endregion FUNC__write_sudoers_file
+
+
+# endregion FUNC__write_sudoers_file
 
 
 def _validate_with_visudo(tmp_path: str) -> bool:
@@ -454,7 +456,7 @@ def _validate_with_visudo(tmp_path: str) -> bool:
     except subprocess.TimeoutExpired:
         logger.error("[IMP:9][_validate_with_visudo] TIMEOUT (>15s): %s", tmp_path)
         return False
-    except Exception as exc:
+    except (subprocess.CalledProcessError, OSError) as exc:
         logger.error("[IMP:9][_validate_with_visudo] Error: %s", exc)
         return False
     # endregion FUNC__validate_with_visudo

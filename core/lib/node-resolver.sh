@@ -250,27 +250,18 @@ resolve_node_from_env() {
     # [IMP:8][resolve_node_from_env] Begin resolution
     log_imp 8 "-" "Resolving host for node=${node_name} from NODE_HOST_MAP"
 
-    # ── Parse JSON via python3 ─────────────────────────────────────
+    # ── Parse JSON via yaml_query.py --stdin ────────────────────────
+    # Replaces inline python3 -c "import json..." (DevPlan 038c T5.2)
     local host
-    host="$(python3 -c "
-import json, sys
-try:
-    data = json.loads('${node_host_map_json//\'/\'\"\'\"\'}')
-    node = '${node_name}'
-    if node not in data:
-        print(f'K5: Node \"{node}\" not found in NODE_HOST_MAP', file=sys.stderr)
-        sys.exit(1)
-    print(data[node])
-except json.JSONDecodeError as e:
-    print(f'K5: NODE_HOST_MAP is not valid JSON: {e}', file=sys.stderr)
-    sys.exit(1)
-except Exception as e:
-    print(f'K5: Failed to resolve node: {e}', file=sys.stderr)
-    sys.exit(1)
-")" || {
+    host="$(echo "${node_host_map_json}" | python3 "$(dirname "$_NODE_RESOLVER_LIB_DIR")/internal/scripts/yaml_query.py" \
+        --stdin --get "${node_name}" --default "" 2>/dev/null)" || {
         log_imp 10 "-" "Failed to resolve node=${node_name} from NODE_HOST_MAP"
         return 1
     }
+    if [[ -z "$host" ]]; then
+        log_imp 10 "-" "Node ${node_name} not found in NODE_HOST_MAP"
+        return 1
+    fi
 
     # ── Result ─────────────────────────────────────────────────────
     log_imp 9 "-" "Resolved host for node=${node_name}: ${host}"
@@ -298,22 +289,14 @@ extract_node_host() {
     # [IMP:8][extract_node_host] Begin extraction
     log_imp 8 "-" "Extracting host from: ${yaml_path}"
 
-    # ── Parse YAML via python3 ─────────────────────────────────────
-    # Uses python3 -c with inline script. The yaml_path is interpolated
-    # into a single-quoted python string — path must not contain a single
-    # quote (accepted limitation, see MODULE_CONTRACT invariants).
+    # ── Parse YAML via NodeYaml CLI ────────────────────────────────
+    # Uses python3 -m core.internal.shared.node_yaml (DevPlan 038c)
+    # Replaces inline python3 -c "import yaml..." block.
     local host
-    host="$(python3 -c "
-import yaml, sys
-try:
-    with open('${yaml_path}') as f:
-        data = yaml.safe_load(f)
-    if data is None:
-        sys.exit(1)
-    print(data.get('node', {}).get('host', '') or '')
-except Exception:
-    sys.exit(1)
-" 2>/dev/null)" || {
+    host="$(python3 -m core.internal.shared.node_yaml \
+        --file "${yaml_path}" \
+        --get node.host \
+        --default "" 2>/dev/null)" || {
         log_imp 10 "-" "Failed to parse YAML or extract host: ${yaml_path}"
         return 1
     }

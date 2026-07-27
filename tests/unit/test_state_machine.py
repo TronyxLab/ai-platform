@@ -30,6 +30,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.internal.shared.exceptions import PlatformFatalError
+
 # Load the LDD trajectory decorator
 from tests._conftest.ldd import ldd_trajectory
 
@@ -528,14 +530,14 @@ def test_cli_context_arg(caplog):
 
 
 # 🧪 TRAP[TEST] · Regression · ssh_access step fails without root
-# · Scenario: os.geteuid() returns non-zero → _execute_init_step raises RuntimeError
+# · Scenario: os.geteuid() returns non-zero → _execute_init_step raises PlatformFatalError
 # · Last fail: N/A (new test)
 # · Remove if: root check logic changes
 @ldd_trajectory
 def test_init_step_ssh_access_no_root(caplog, machine, monkeypatch):
     """ssh_access step should fail if not running as root."""
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
-    with pytest.raises(RuntimeError, match="must run as root"):
+    with pytest.raises(PlatformFatalError, match="must run as root"):
         sm._execute_init_step(machine, 1, "ssh_access", "/tmp", "node", "yaml")
     logger.critical("[IMP:9][test] ssh_access detected non-root — OK")
 

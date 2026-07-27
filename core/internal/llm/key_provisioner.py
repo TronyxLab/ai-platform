@@ -42,6 +42,7 @@ from typing import Any
 
 from core.internal.llm.admin_client import LiteLLMAdminClient
 from core.internal.llm.policy_schema import LLMPolicy
+from core.internal.shared.exceptions import PlatformError
 
 logger = logging.getLogger(__name__)
 
@@ -587,7 +588,7 @@ def provision_all(
                 provisioned_keys[consumer_name] = existing_token
                 persist_project_key(consumer_name, existing_token, persist_path)
                 continue
-            except Exception as e:
+            except (OSError, ConnectionError, TimeoutError) as e:
                 logger.log(
                     logging.WARNING,
                     "[IMP:8][provision_all] Update failed for '%s': %s — falling through to generate",
@@ -618,7 +619,7 @@ def provision_all(
             )
             provisioned_keys[consumer_name] = new_key
             persist_project_key(consumer_name, new_key, persist_path)
-        except Exception as e:
+        except (OSError, ConnectionError, TimeoutError) as e:
             logger.log(
                 logging.WARNING,
                 "[IMP:8][provision_all] Generate failed for '%s': %s",
@@ -738,14 +739,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    except Exception as e:
+    except PlatformError as e:
+        logger.log(
+            logging.CRITICAL,
+            "[IMP:10][main] Provisioning failed with exit=%d: %s",
+            e.exit_code,
+            e,
+        )
+        return e.exit_code
+    except Exception as e:  # noqa: EXC — top-level CLI handler for unknown exceptions
         logger.log(
             logging.CRITICAL,
             "[IMP:10][main] Provisioning failed: %s: %s",
             type(e).__name__,
             e,
         )
-        print(f"ERROR: {e}", file=sys.stderr)
         return 1
 
 

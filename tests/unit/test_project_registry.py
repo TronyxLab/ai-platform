@@ -411,3 +411,200 @@ def test_list_projects_missing_file(caplog, tmp_path):
 
 
 # endregion Tests: list_projects
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: validate_project_name
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · valid project name passes
+# · Scenario: "my-project_01" → True
+# · Last fail: N/A (new test)
+# · Remove if: validate_project_name logic changes
+@ldd_trajectory
+def test_validate_project_name_valid(caplog, tmp_path):
+    """validate_project_name should return True for valid names."""
+    from core.internal.shared.project_registry import validate_project_name
+
+    assert validate_project_name("my-project_01") is True
+    assert validate_project_name("simple") is True
+    assert validate_project_name("with-hyphens_and_underscores") is True
+    assert validate_project_name("Project123") is True
+
+    logger.critical("[IMP:9][test] validate_name_valid: valid names pass — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · empty name fails
+# · Scenario: "" → False
+# · Last fail: N/A (new test)
+# · Remove if: validate_project_name logic changes
+@ldd_trajectory
+def test_validate_project_name_empty(caplog, tmp_path):
+    """validate_project_name should return False for empty name."""
+    from core.internal.shared.project_registry import validate_project_name
+
+    assert validate_project_name("") is False
+    assert validate_project_name(None) is False  # type: ignore
+
+    logger.critical("[IMP:9][test] validate_name_empty: empty fails — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · invalid chars fail
+# · Scenario: "../escape" → False
+# · Last fail: N/A (new test)
+# · Remove if: validate_project_name logic changes
+@ldd_trajectory
+def test_validate_project_name_invalid_chars(caplog, tmp_path):
+    """validate_project_name should return False for names with path traversal or special chars."""
+    from core.internal.shared.project_registry import validate_project_name
+
+    assert validate_project_name("../escape") is False
+    assert validate_project_name("foo/bar") is False
+    assert validate_project_name("with space") is False
+    assert validate_project_name("special@chars") is False
+    assert validate_project_name("dot.dot") is False
+
+    logger.critical("[IMP:9][test] validate_name_invalid: invalid chars fail — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · slash in name fails
+# · Scenario: "foo/bar" → False (path traversal defense)
+# · Last fail: N/A (new test)
+# · Remove if: validate_project_name logic changes
+@ldd_trajectory
+def test_validate_project_name_traversal(caplog, tmp_path):
+    """validate_project_name should reject path traversal patterns."""
+    from core.internal.shared.project_registry import validate_project_name
+
+    assert validate_project_name("../etc/passwd") is False
+    assert validate_project_name("a/b") is False
+    assert validate_project_name("..") is False
+    assert validate_project_name(".") is False
+
+    logger.critical("[IMP:9][test] validate_name_traversal: path traversal rejected — OK")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: return tuple (W2 — DevPlan 038b)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · register returns tuple
+# · Scenario: Direct call to register_project() returns (bool, str)
+# · Last fail: N/A (new test)
+# · Remove if: return type changes
+@ldd_trajectory
+def test_register_returns_tuple(caplog, tmp_path):
+    """register_project should return (True, str) on success.
+
+    ## @purpose  Verify that register_project returns a (bool, str) tuple
+    ##           instead of calling sys.exit() — enables direct function calls.
+    """
+    from core.internal.shared.project_registry import register_project
+
+    yaml_path = _create_node_yaml(tmp_path, "domain: example.com\n")
+    success, msg = register_project(
+        name="test-register-tuple",
+        repo="org/test-register-tuple",
+        project_type="backend",
+        node_yaml_path=yaml_path,
+    )
+
+    assert success is True
+    assert "Registered" in msg
+    assert "[IMP:9]" in msg
+
+    logger.critical("[IMP:9][test] register_returns_tuple: success=%s msg=%s — OK", success, msg)
+
+
+# 🧪 TRAP[TEST] · Regression · deregister returns tuple
+# · Scenario: Direct call to deregister_project() returns (bool, str)
+# · Last fail: N/A (new test)
+# · Remove if: return type changes
+@ldd_trajectory
+def test_deregister_returns_tuple(caplog, tmp_path):
+    """deregister_project should return (True, str) on success.
+
+    ## @purpose  Verify that deregister_project returns a (bool, str) tuple.
+    """
+    from core.internal.shared.project_registry import deregister_project
+
+    yaml_path = _create_node_yaml(
+        tmp_path, "projects:\n  - name: tuple-test\n    repo: org/tuple-test\n    type: backend\n"
+    )
+
+    success, msg = deregister_project(name="tuple-test", node_yaml_path=yaml_path)
+
+    assert success is True
+    assert "Removed" in msg
+
+    logger.critical("[IMP:9][test] deregister_returns_tuple: success=%s msg=%s — OK", success, msg)
+
+
+# 🧪 TRAP[TEST] · Regression · list returns tuple
+# · Scenario: Direct call to list_projects() returns (bool, str)
+# · Last fail: N/A (new test)
+# · Remove if: return type changes
+@ldd_trajectory
+def test_list_returns_tuple(caplog, tmp_path):
+    """list_projects should return (True, str) on success.
+
+    ## @purpose  Verify that list_projects returns a (bool, str) tuple.
+    """
+    from core.internal.shared.project_registry import list_projects
+
+    yaml_path = _create_node_yaml(tmp_path, "projects:\n  - name: proj-a\n    repo: org/a\n    type: backend\n")
+
+    success, msg = list_projects(node_yaml_path=yaml_path)
+
+    assert success is True
+    assert "Listed" in msg
+
+    logger.critical("[IMP:9][test] list_returns_tuple: success=%s msg=%s — OK", success, msg)
+
+
+# 🧪 TRAP[TEST] · Regression · register failure returns (False, str)
+# · Scenario: Direct call with missing params returns (False, error_msg)
+# · Last fail: N/A (new test)
+# · Remove if: error handling changes
+@ldd_trajectory
+def test_register_failure_returns_false(caplog, tmp_path):
+    """register_project should return (False, msg) on missing params.
+
+    ## @purpose  Verify that error conditions return (False, message) tuple.
+    """
+    from core.internal.shared.project_registry import register_project
+
+    success, msg = register_project(name="", repo="", node_yaml_path="")
+
+    assert success is False
+    assert "Missing required params" in msg
+
+    logger.critical("[IMP:9][test] register_failure_returns_false: success=%s msg=%s — OK", success, msg)
+
+
+# 🧪 TRAP[TEST] · Regression · cli exit code preserved
+# · Scenario: CLI --name missing → exit code 1 (from sys.exit)
+# · Last fail: N/A (new test)
+# · Remove if: CLI exit code handling changes
+@ldd_trajectory
+def test_cli_exit_code_failure(caplog, tmp_path):
+    """CLI entrypoint should exit 1 on failure.
+
+    ## @purpose  Verify that __main__ preserves exit code 1 on error.
+    """
+    result = _run_via_subprocess(
+        ["register", "--name", "", "--repo", "", "--node-yaml", ""],
+        tmp_path,
+    )
+
+    assert result.returncode == 1
+
+    logger.critical("[IMP:9][test] cli_exit_code_failure: returncode=%d — OK", result.returncode)
+
+
+# endregion Tests: return tuple
+
+
+# endregion Tests: validate_project_name

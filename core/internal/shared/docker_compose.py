@@ -13,7 +13,7 @@
 ##           projects, contexts, or modules. Business orchestration stays in callers.
 ## @invariants
 ##   1. All functions operate via subprocess.run(['docker', 'compose', ...]) — no SDK
-##   2. All functions log via standard logging.getLogger("docker_compose")
+##   2. All functions log via standard logging.getLogger(__name__)
 ##   3. Non-fatal: failures return False/empty, never raise (caller decides severity)
 ##   4. Standard timeouts: pull 120s, build 300s, up 120s, healthcheck composite
 ##   5. Directory existence is validated before operations (returns False if missing)
@@ -30,7 +30,7 @@ import os
 import subprocess
 import time
 
-logger = logging.getLogger("docker_compose")
+logger = logging.getLogger(__name__)
 
 # ── Default timeouts ──
 PULL_TIMEOUT = 120

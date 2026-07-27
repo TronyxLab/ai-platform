@@ -43,7 +43,7 @@ def register_context(
     try:
         with open(yaml_path) as f:
             data = yaml.safe_load(f) or {}
-    except Exception as e:
+    except (yaml.YAMLError, OSError, FileNotFoundError) as e:
         print(f"ERROR: Failed to read {yaml_path}: {e}")
         sys.exit(1)
 
@@ -67,7 +67,7 @@ def register_context(
     try:
         with open(yaml_path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    except Exception as e:
+    except (yaml.YAMLError, OSError) as e:
         print(f"ERROR: Failed to write {yaml_path}: {e}")
         sys.exit(1)
 

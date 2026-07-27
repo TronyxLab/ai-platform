@@ -688,7 +688,7 @@ def _parse_projects_yaml(node_yaml_path: str) -> list[dict]:
             elif isinstance(p, str):
                 out.append({"name": p, "domain": ""})
         return out
-    except Exception as exc:
+    except (yaml.YAMLError, OSError, FileNotFoundError, KeyError) as exc:
         logger.warning("[IMP:8][_parse_projects_yaml] Failed to parse projects from %s: %s", node_yaml_path, exc)
         return []
 
@@ -1196,7 +1196,7 @@ def _resolve_nginx_overlay(node_yaml_path: str, converge_node: str, base_dir: st
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
         context_name = data.get("context", "") if data else ""
-    except Exception:
+    except (FileNotFoundError, yaml.YAMLError, OSError):
         context_name = ""
 
     if context_name:
@@ -1324,7 +1324,7 @@ def _parse_node_modules_yaml(node_yaml_path: str) -> list[dict]:
             elif isinstance(m, str):
                 out.append({"name": m, "enabled": True})
         return out
-    except Exception as exc:
+    except (yaml.YAMLError, OSError, FileNotFoundError, KeyError) as exc:
         logger.warning("[IMP:8][_parse_node_modules_yaml] Failed to parse modules from %s: %s", node_yaml_path, exc)
         return []
 
@@ -1616,7 +1616,8 @@ def _atomic_write_sudoers(target_path: Path, content: str, module_name: str) -> 
         logger.error("[IMP:10][_atomic_write_sudoers] OS error writing %s: %s", target_path, exc)
         _safe_cleanup_tmp(tmp_path)
         return False
-    except Exception as exc:
+    # noqa: EXC — catch-all after OSError already handled, prevents silent sudoers write failure
+    except Exception as exc:  # noqa: EXC — catch-all after OSError already handled
         logger.error("[IMP:9][_atomic_write_sudoers] Unexpected error writing %s: %s", target_path, exc)
         _safe_cleanup_tmp(tmp_path)
         return False
@@ -1704,7 +1705,7 @@ def reconcile_sudoers(
                 templates_dir=templates_dir_path,
                 platform_root=platform_root,
             )
-        except Exception as exc:
+        except (OSError, FileNotFoundError) as exc:
             logger.warning("[IMP:8][converge][%s] Failed to render rules for %s: %s", unit, mod_name, exc)
             errors += 1
             _set_exit(2)

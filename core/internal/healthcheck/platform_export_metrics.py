@@ -21,6 +21,7 @@
 ##             Graceful degradation (Δ13) ensures partial data + errors on any collector failure.
 # endregion MODULE_CONTRACT
 
+import json
 import logging
 import os
 import sys
@@ -109,7 +110,7 @@ def main() -> int:
 
         containers = get_containers()
         _logger.info("[IMP:9][coordinator][main] Docker containers collected: %d", len(containers))
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Docker container collection failed: %s", exc)
         errors.append(f"docker_containers: {exc}")
 
@@ -125,7 +126,7 @@ def main() -> int:
         cache_mgr = _get_cache_manager(_logger, cache_dir)
         image_sizes = _get_image_sizes_cached(image_ids, cache_mgr, _logger)
         _logger.info("[IMP:9][coordinator][main] Image sizes collected: %d", len(image_sizes))
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Image size collection failed: %s", exc)
         errors.append(f"image_sizes: {exc}")
 
@@ -135,8 +136,8 @@ def main() -> int:
 
         certs = get_certs(node_yaml_path)
         _logger.info("[IMP:9][coordinator][main] Certificates collected: %d", len(certs))
-    except Exception as exc:
-        _logger.warning("[IMP:8][coordinator][main] Certificate collection failed: %s", exc)
+    except (ImportError, OSError, FileNotFoundError) as exc:
+        _logger.warning("[IMP:8][coordinator][main] Cert collection failed: %s", exc)
         errors.append(f"certs: {exc}")
 
     # ── 5. Projects (mtime cache) ──
@@ -145,7 +146,7 @@ def main() -> int:
 
         projects = get_projects(node_yaml_path, image_cache=image_sizes, cache_mgr=cache_mgr)
         _logger.info("[IMP:9][coordinator][main] Projects collected: %d", len(projects))
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Project collection failed: %s", exc)
         errors.append(f"projects: {exc}")
 
@@ -155,7 +156,7 @@ def main() -> int:
 
         host = get_host_disk()
         _logger.info("[IMP:9][coordinator][main] Host disk collected")
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Host disk collection failed: %s", exc)
         errors.append(f"host: {exc}")
 
@@ -166,7 +167,7 @@ def main() -> int:
         host_uptime = get_host_uptime()
         host.update(host_uptime)
         _logger.info("[IMP:9][coordinator][main] Host uptime & load collected")
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Host uptime collection failed: %s", exc)
         errors.append(f"host_uptime: {exc}")
 
@@ -178,7 +179,7 @@ def main() -> int:
             _logger.info("[IMP:9][coordinator][main] Docker images total size: %.2f GB", host["docker_images_size_gb"])
         else:
             host["docker_images_size_gb"] = 0.0
-    except Exception as exc:
+    except (OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Docker images size calc failed: %s", exc)
         errors.append(f"docker_images_size: {exc}")
 
@@ -188,7 +189,7 @@ def main() -> int:
 
         host.update(get_host_memory())
         _logger.info("[IMP:9][coordinator][main] Host memory & swap collected")
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Host memory collection failed: %s", exc)
         errors.append(f"host_memory: {exc}")
 
@@ -198,7 +199,7 @@ def main() -> int:
 
         host.update(get_host_uname())
         _logger.info("[IMP:9][coordinator][main] Host OS/kernel collected")
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Host OS collection failed: %s", exc)
         errors.append(f"host_os: {exc}")
 
@@ -209,7 +210,7 @@ def main() -> int:
 
         backup = get_backup_status()
         _logger.info("[IMP:9][coordinator][main] Backup status collected: %s", backup.get("status", "unknown"))
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][main] Backup collection failed: %s", exc)
         errors.append(f"backup: {exc}")
 
@@ -242,7 +243,7 @@ def main() -> int:
             len(errors),
             duration_s,
         )
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         _logger.error("[IMP:9][coordinator][main] Atomic write failed: %s", exc)
         errors.append(f"write: {exc}")
         # If even writing fails, return 1
@@ -267,7 +268,7 @@ def _load_node_yaml(path: str, _logger: logging.Logger) -> dict:
         with open(path) as f:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else {}
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
         _logger.warning("[IMP:8][coordinator][_load_node_yaml] Failed to load %s: %s", path, exc)
         return {}
 
@@ -288,7 +289,7 @@ def _get_cache_manager(_logger: logging.Logger, cache_dir: str | None = None):
         from core.internal.healthcheck.metrics.cache import CacheManager
 
         return CacheManager(cache_dir)
-    except Exception as exc:
+    except (ImportError, OSError, FileNotFoundError) as exc:
         _logger.warning("[IMP:8][coordinator][_get_cache_manager] Cache init failed: %s", exc)
         return None
 

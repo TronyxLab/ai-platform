@@ -279,6 +279,7 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# Дублирующие ключи для upload-s3.sh (AWS SDK совместимость)")
     lines.append("AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY}")
     lines.append("AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY}")
+    lines.append("CONTEXT=" + get_val("CONTEXT", "test"))
     lines.append("PLATFORM_CONTEXT=" + get_val("PLATFORM_CONTEXT", "personal"))
 
     # ── LLM Provider API Keys ──
@@ -529,7 +530,7 @@ def write_atomic(content: str, output_path: Path) -> None:
 
     try:
         os.rename(tmp_path, output_path)
-    except Exception:
+    except OSError:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise

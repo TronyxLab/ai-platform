@@ -30,7 +30,7 @@ import logging
 import os
 import sys
 
-logger = logging.getLogger("ssh_command_parser")
+logger = logging.getLogger(__name__)
 
 # Canonical deploy.sh path — constructed from PLATFORM_ROOT env var.
 # This matches the gate test allowlist (os.environ.get("PLATFORM_ROOT", "/opt/platform"))
@@ -261,7 +261,7 @@ def _cli_main() -> None:
         try:
             verb = classify_verb(command)
             print(verb)
-        except Exception as e:
+        except (ValueError, KeyError, TypeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
     else:

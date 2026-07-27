@@ -1,0 +1,23 @@
+# @purpose Test fixture for NodeYaml unit tests — valid node.yaml with all fields
+# GREP_SUMMARY: test-data node-yaml-facade valid
+node:
+  host: 1.2.3.4
+  fqdn: node1.example.com
+  owner_key: age1abc123
+  docker_mirror: https://mirror.example.com
+context: myorg
+domain:
+  platform: example.com
+  email: admin@example.com
+  acme_dns_plugin: cloudflare
+projects:
+  - name: app1
+    domain: app1.example.com
+    repo: git@github.com:org/app1.git
+  - name: app2
+    domain: app2.example.com
+modules:
+  - name: nginx
+    enabled: true
+  - name: postgres
+    enabled: false

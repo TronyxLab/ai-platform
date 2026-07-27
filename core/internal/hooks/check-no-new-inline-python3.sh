@@ -8,18 +8,24 @@
 ## @scope    Только staged changes (+line prefix в git diff) в .sh файлах под core/ и .yml/.yaml под .github/.
 ## @invariants
 ##   - Проверяет только staged additions (git diff --cached, строки с '+')
-##   - Whitelist: core/lib/yaml_read.sh, core/internal/scripts/*.py, core/internal/hooks/*.sh
+##   - Whitelist: core/internal/scripts/*.py, core/internal/hooks/*.sh
+##   - yaml_read.sh removed from whitelist after 038c (zero inline python3)
 ##   - Whitelist для легитимных CI-однострочников: `python3 -c` без `import` разрешён (print/format only)
 ##   - Exit 0 = clean | Exit 1 = violation detected
 ## @rationale Enforcement языковой политики (AGENTS.md «Языковая политика» Tier 1).
 ##            CI gate отклонён оператором (TRAP[DECISION] в AGENTS.md).
 ## @changes
-##   LAST_CHANGE: 2026-07-21 | Created (DevPlan 028 W1-E7)
+##   LAST_CHANGE: 2026-07-26 | DevPlan 038c — yaml_read.sh removed from whitelist
+##   2026-07-21 | Created (DevPlan 028 W1-E7)
 ##   2026-07-22 | Extended scope to .github/**/*.yml (StatusReport 046 T6 — CICD-01e)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
-WHITELIST_REGEX="^core/lib/yaml_read\.sh$|^core/internal/scripts/.*\.py$|^core/internal/hooks/.*\.sh$"
+WHITELIST_REGEX="^core/internal/scripts/.*\.py$|^core/internal/hooks/.*\.sh$"
+# ⚠️ TRAP[DEBT] · 2026-07-26 · yaml_read.sh removed — zero inline python3 after 038c
+# ⚠️ TRAP[DEBT] · 2026-07-26 · generate-catalog.sh heredoc — deferred extraction to Python module
+# ⚠️ TRAP[DEBT] · 2026-07-26 · adopt-project.sh complex JSON analysis (not covered by yaml_query)
+# ⚠️ TRAP[DEBT] · 2026-07-26 · add-vhost.sh duplicate domain check (stream processing, not yaml_query)
 
 # Получаем staged files: shell under core/ + CI yaml under .github/ (StatusReport 046 T6)
 # DRIFT-046-2 prevention: hook script glob must match .pre-commit-config.yaml files filter

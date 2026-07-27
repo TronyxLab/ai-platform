@@ -252,15 +252,15 @@ def test_entrypoint_flags_contract(caplog) -> None:
 
 # region FUNC_test_node_update_has_ssh_proxy
 ## @purpose  Verify node-update.sh delegates to execute_remote_update() in remote-cmd.sh,
-##           and that remote-cmd.sh contains the SSH proxy logic (resolve_node_yaml +
-##           extract_node_host). Local exec fallback remains in entrypoint.
+##           and that remote-cmd.sh delegates node resolution to Python overlay_deliverer.py
+##           via _resolve_and_extract(). Local exec fallback remains in entrypoint.
 ## @io       Script content → grep → assert patterns present
 ## @complexity O(S)
 ## @invariants — Entrypoint calls execute_remote_update; remote-cmd.sh has SSH proxy;
 ##               local fallback in entrypoint
 @pytest.mark.static_audit
 def test_node_update_has_ssh_proxy(caplog) -> None:
-    """node-update.sh: delegates to execute_remote_update(); remote-cmd.sh has SSH proxy."""
+    """node-update.sh: delegates to execute_remote_update(); remote-cmd.sh delegates to Python."""
     # 🧪 TRAP[TEST] · Regression: T1 — SSH proxy in remote-cmd.sh via execute_remote_update
     # · Scenario: make node-update from macOS fails "must run as root"
     # · Last fail: Wave 1 pre-merge (no SSH proxy)
@@ -278,17 +278,17 @@ def test_node_update_has_ssh_proxy(caplog) -> None:
     )
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: execute_remote_update() called from entrypoint")
 
-    # ── Check 2: resolve_node_yaml in remote-cmd.sh (SSH proxy moved) ──
-    assert "resolve_node_yaml" in remote_content, (
-        "[IMP:9][test] FAIL: remote-cmd.sh must call resolve_node_yaml() inside execute_remote_update"
+    # ── Check 2: _resolve_and_extract in remote-cmd.sh (Python CLI delegation, Wave 5d) ──
+    assert "_resolve_and_extract" in remote_content, (
+        "[IMP:9][test] FAIL: remote-cmd.sh must delegate node resolution to _resolve_and_extract() (Python CLI)"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: resolve_node_yaml() in remote-cmd.sh")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: _resolve_and_extract() in remote-cmd.sh")
 
-    # ── Check 3: extract_node_host in remote-cmd.sh (SSH proxy moved) ──
-    assert "extract_node_host" in remote_content, (
-        "[IMP:9][test] FAIL: remote-cmd.sh must call extract_node_host() inside execute_remote_update"
+    # ── Check 3: overlay_deliverer referenced in remote-cmd.sh (Python delegation) ──
+    assert "overlay_deliverer" in remote_content, (
+        "[IMP:9][test] FAIL: remote-cmd.sh must reference overlay_deliverer Python module"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 3 PASS: extract_node_host() in remote-cmd.sh")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 3 PASS: overlay_deliverer in remote-cmd.sh")
 
     # ── Check 4: SSH_HOST fallback — local exec path exists in entrypoint ──
     assert "LOCALLY" in entrypoint_content or "local" in entrypoint_content.lower(), (
@@ -305,6 +305,12 @@ def test_node_update_has_ssh_proxy(caplog) -> None:
     # ── Check 6: detect_age_key exists in entrypoint ──
     assert "detect_age_key" in entrypoint_content, "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 6 PASS: detect_age_key() present")
+
+    # ── Check 7: printf %q builders still in shell (D3) ──
+    assert "build_ssh_cmd" in remote_content, (
+        "[IMP:9][test] FAIL: remote-cmd.sh must retain build_ssh_cmd (printf %q per D3)"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 7 PASS: build_ssh_cmd retained in shell")
 
     logger.info("[IMP:9][test_node_update_has_ssh_proxy] ALL CHECKS PASS")
 

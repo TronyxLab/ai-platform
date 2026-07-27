@@ -52,7 +52,7 @@ def get_projects(node_yaml_path: str, image_cache: dict[str, int] | None = None,
 
         with open(node_yaml_path) as f:
             node_data = yaml.safe_load(f) or {}
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
         _logger.warning("[IMP:8][project_collector][get_projects] Failed to load node.yaml %s: %s", node_yaml_path, exc)
         return []
 

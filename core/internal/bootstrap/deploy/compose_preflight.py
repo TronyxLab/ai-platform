@@ -36,7 +36,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-logger = logging.getLogger("compose_preflight")
+logger = logging.getLogger(__name__)
 
 # Default path for secrets.env
 _SECRETS_ENV_DEFAULT = "/run/platform/secrets.env"

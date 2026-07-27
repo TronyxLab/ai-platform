@@ -80,18 +80,18 @@ class TestWatchdogConfig:
 
         assert config.health_url == "http://localhost:9119/ready"
         assert config.watchdog_timeout == 90
-        assert config.pending_file == "/var/lib/platform/agent.update-pending"
-        assert config.secrets_file == "/run/platform/secrets.env"
-        assert config.audit_log == "/var/log/platform/watchdog-audit.log"
+        assert config.pending_file == WatchdogConfig.DEFAULT_PENDING_FILE
+        assert config.secrets_file == WatchdogConfig.DEFAULT_SECRETS_FILE
+        assert config.audit_log == WatchdogConfig.DEFAULT_AUDIT_LOG
         assert config.keep_images == 3
-        assert config.module_dir == "/opt/platform/core/modules/hermes-agent"
+        assert config.module_dir == WatchdogConfig.DEFAULT_PLATFORM_ROOT + "/core/modules/hermes-agent"
         assert config.compose_project == "hermes-agent"
         assert config.agent_port == 9119
-        assert config.cb_state_dir == "/var/lib/platform/watchdog"
+        assert config.cb_state_dir == WatchdogConfig.DEFAULT_CB_STATE_DIR
         assert config.poll_interval == 5
         assert config.curl_max_time == 3
         assert config.curl_tg_max_time == 30
-        assert config.telegram_proxy_url == "http://127.0.0.1:8118"
+        assert config.telegram_proxy_url == WatchdogConfig.DEFAULT_TELEGRAM_PROXY_URL
         assert len(config.cb_services) == 5
 
         # Verify LDD telemetry

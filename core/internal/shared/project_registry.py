@@ -9,34 +9,68 @@
 ## @scope    Shell-accessible via CLI subcommands (register, deregister, list). Python-importable
 ##           for direct function calls. Used by add-project.sh, adopt-project.sh, remove-project.sh.
 ## @invariants
-##   1. All functions exit via sys.exit (not return) — shell wrappers check exit code
-##   2. Idempotent: register skips if name/repo already exists; deregister skips if not found
-##   3. YAML written with default_flow_style=False, sort_keys=False (preserves ordering)
-##   4. Logs to stderr at IMP:9 on success/skip, IMP:7-8 for warnings
+##   1. Library functions return (bool, str) tuple — True=success, False=error, message describes outcome
+##   2. CLI __main__ still calls sys.exit(0/1) for shell compatibility — shell wrappers check exit code
+##   3. Idempotent: register skips if name/repo already exists; deregister skips if not found
+##   4. YAML written with default_flow_style=False, sort_keys=False (preserves ordering)
+##   5. Logs to stderr at IMP:9 on success/skip, IMP:7-8 for warnings
 ## @rationale DRIFT-B5 elimination (Brief 077): 3 Python heredoc blocks → 1 canonical source.
-##            sys.exit pattern preserves shell error-handling contract (|| log_warn).
+##            sys.exit replaced with return (bool, str) in library functions for testability.
+##            CLI layer handles exit code generation for shell compatibility.
 ## @changes  2026-07-25 · DevPlan 070 — Created shared module (DRIFT-B5)
+##           2026-07-26 · DevPlan 038b — sys.exit removed from library functions, return (bool, str) instead
 # endregion MODULE_CONTRACT
 
 import logging
+import re
 import sys
 
 logger = logging.getLogger(__name__)
+
+# ── Project name validation ─────────────────────────────────────────────────
+## @purpose  Canonical project name validation used by deploy_engine, payload_deliverer, reconciler.
+##           Rejects empty names, path traversal sequences, and invalid characters.
+## @invariants
+##   - Regex: ^[a-zA-Z0-9_-]+$ — alphanumeric, underscore, hyphen only
+##   - Returns bool (never raises, never sys.exit)
+##   - DRY: single implementation shared by 3+ consumers
+## @rationale D7 (DevPlan 036E): _validate_project_name() дублировалась в deploy-project.sh:207,
+##            reconciler.py:701, и новой payload_deliverer.py. Единая реализация в project_registry.py
+##            устраняет дублирование. Regex ^[a-zA-Z0-9_-]+$ строже shell-версии (reject '/..'/special chars).
+## @changes 2026-07-26 · DevPlan 036E — Added validate_project_name() for Wave 5e Strangler-Fig
+
+
+def validate_project_name(name: str) -> bool:
+    """Validate project name: alphanumeric, underscore, hyphen only.
+
+    Args:
+        name: Project name string to validate.
+
+    Returns:
+        True if valid, False otherwise.
+    """
+    if not name or not isinstance(name, str):
+        return False
+    # Regex: alphanumeric, underscore, hyphen — no spaces, slashes, or path traversal
+    return bool(re.match(r"^[a-zA-Z0-9_-]+$", name))
 
 
 # region FUNC_register_project
 ## @purpose — Register a project in node.yaml. Idempotent: skips if name/repo already exist.
 ##            Supports optional domain and database fields. Appends entry to projects list.
 ## @io — ⇥ name: str, repo: str, project_type: str = "", node_yaml_path: str = "",
-##        domain: str = "", database: str = "", log_prefix: str = "add-project" → ⎋ None (exits via sys.exit)
+##        domain: str = "", database: str = "", log_prefix: str = "add-project"
+##        → ⎋ tuple[bool, str]: (True, message) on success, (False, message) on error
 ## @complexity — O(N) where N = len(projects)
 ## @invariants
-##   - Idempotent: if project name or repo already exists → print IMP:9 SKIP, sys.exit(0)
+##   - Idempotent: if project name or repo already exists → returns (True, "Idempotent SKIP...")
 ##   - Creates 'projects' key if missing
 ##   - Writes YAML with default_flow_style=False, sort_keys=False (preserves existing ordering)
 ##   - Logs to stderr at IMP:9 on success/skip
+##   - Does NOT call sys.exit() — caller (CLI or test) handles exit code
 ## @rationale Extracted from add-project.sh:719 heredoc and adopt-project.sh:674 heredoc
 ##            (DRIFT-B5 elimination, Brief 077). Idempotency check prevents duplicate entries.
+##            DevPlan 038b: sys.exit replaced with return tuple for testability.
 def register_project(
     name: str,
     repo: str,
@@ -45,20 +79,21 @@ def register_project(
     domain: str = "",
     database: str = "",
     log_prefix: str = "add-project",
-) -> None:
-    """Register a project in node.yaml. Idempotent. Exits via sys.exit."""
+) -> tuple[bool, str]:
+    """Register a project in node.yaml. Idempotent. Returns (success, message)."""
     try:
         import yaml
     except ImportError:
-        print(f"[IMP:10][{log_prefix}][register] PyYAML not available — cannot register", file=sys.stderr)
-        sys.exit(1)
+        msg = f"[IMP:10][{log_prefix}][register] PyYAML not available — cannot register"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
     if not name or not repo or not node_yaml_path:
-        print(
-            f"[IMP:7][{log_prefix}][register] Missing required params (name={name}, repo={repo}, yaml={node_yaml_path})",
-            file=sys.stderr,
+        msg = (
+            f"[IMP:7][{log_prefix}][register] Missing required params (name={name}, repo={repo}, yaml={node_yaml_path})"
         )
-        sys.exit(0)
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
     with open(node_yaml_path) as f:
         data = yaml.safe_load(f)
@@ -66,11 +101,9 @@ def register_project(
     if "projects" in data:
         for p in data["projects"]:
             if p.get("name") == name or p.get("repo") == repo:
-                print(
-                    f"[IMP:9][{log_prefix}][register] Idempotent SKIP — {name} already in node.yaml",
-                    file=sys.stderr,
-                )
-                sys.exit(0)
+                msg = f"[IMP:9][{log_prefix}][register] Idempotent SKIP — {name} already in node.yaml"
+                print(msg, file=sys.stderr)
+                return (True, msg)
 
     entry: dict[str, str] = {"name": name, "repo": repo}
     if project_type:
@@ -87,8 +120,9 @@ def register_project(
     with open(node_yaml_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
-    print(f"[IMP:9][{log_prefix}][register] Registered {name} → {node_yaml_path}", file=sys.stderr)
-    sys.exit(0)
+    msg = f"[IMP:9][{log_prefix}][register] Registered {name} → {node_yaml_path}"
+    print(msg, file=sys.stderr)
+    return (True, msg)
 
 
 # endregion FUNC_register_project
@@ -96,39 +130,42 @@ def register_project(
 
 # region FUNC_deregister_project
 ## @purpose — Remove a project from node.yaml by name. Idempotent.
-## @io — ⇥ name: str = "", node_yaml_path: str = "", log_prefix: str = "remove-project" → ⎋ None (exits via sys.exit)
+## @io — ⇥ name: str = "", node_yaml_path: str = "", log_prefix: str = "remove-project"
+##        → ⎋ tuple[bool, str]: (True, message) on success, (False, message) on error
 ## @complexity — O(N) where N = len(projects)
 ## @invariants
-##   - Idempotent: if project not found → sys.exit(0) (no error)
+##   - Idempotent: if project not found → returns (True, ...) (no error)
 ##   - Filters projects list, preserving all other entries
 ##   - Writes YAML with default_flow_style=False, sort_keys=False
 ##   - Reports removed count at IMP:9
+##   - Does NOT call sys.exit() — caller handles exit code
 ## @rationale Extracted from remove-project.sh:212 heredoc (DRIFT-B5 elimination, Brief 077).
+##            DevPlan 038b: sys.exit replaced with return tuple for testability.
 def deregister_project(
     name: str = "",
     node_yaml_path: str = "",
     log_prefix: str = "remove-project",
-) -> None:
-    """Remove a project from node.yaml by name. Idempotent. Exits via sys.exit."""
+) -> tuple[bool, str]:
+    """Remove a project from node.yaml by name. Idempotent. Returns (success, message)."""
     try:
         import yaml
     except ImportError:
-        print(f"[IMP:10][{log_prefix}][unregister] PyYAML not available — cannot deregister", file=sys.stderr)
-        sys.exit(1)
+        msg = f"[IMP:10][{log_prefix}][unregister] PyYAML not available — cannot deregister"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
     if not name or not node_yaml_path:
-        print(
-            f"[IMP:7][{log_prefix}][unregister] Missing required params (name={name}, yaml={node_yaml_path})",
-            file=sys.stderr,
-        )
-        sys.exit(0)
+        msg = f"[IMP:7][{log_prefix}][unregister] Missing required params (name={name}, yaml={node_yaml_path})"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
     with open(node_yaml_path) as f:
         data = yaml.safe_load(f)
 
     if "projects" not in data:
-        print(f"[IMP:8][{log_prefix}][unregister] No projects section — nothing to remove", file=sys.stderr)
-        sys.exit(0)
+        msg = f"[IMP:8][{log_prefix}][unregister] No projects section — nothing to remove"
+        print(msg, file=sys.stderr)
+        return (True, msg)
 
     orig_count = len(data["projects"])
     data["projects"] = [p for p in data["projects"] if p.get("name") != name]
@@ -137,11 +174,9 @@ def deregister_project(
     with open(node_yaml_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
-    print(
-        f"[IMP:9][{log_prefix}][unregister] Removed '{name}' from {node_yaml_path} ({removed} entries removed)",
-        file=sys.stderr,
-    )
-    sys.exit(0)
+    msg = f"[IMP:9][{log_prefix}][unregister] Removed '{name}' from {node_yaml_path} ({removed} entries removed)"
+    print(msg, file=sys.stderr)
+    return (True, msg)
 
 
 # endregion FUNC_deregister_project
@@ -150,37 +185,43 @@ def deregister_project(
 # region FUNC_list_projects
 ## @purpose — List all projects registered in node.yaml. Outputs one line per project to stdout,
 ##            space-separated: name repo type domain. Empty fields output as "-".
-## @io — ⇥ node_yaml_path: str = "", log_prefix: str = "list-projects" → ⎋ None (writes to stdout, exits via sys.exit)
+## @io — ⇥ node_yaml_path: str = "", log_prefix: str = "list-projects"
+##        → ⎋ tuple[bool, str]: (True, message) on success, (False, message) on error
 ## @complexity — O(N) where N = len(projects)
 ## @invariants
 ##   - Outputs to stdout (designed for shell `grep` / `while read` consumers)
-##   - Empty projects list → exits 0, no stdout output
-##   - Missing projects key → exits 0, no stdout output
-##   - Errors (missing file, invalid YAML) → exits 1 with message to stderr
+##   - Empty projects list → returns (True, ...), no stdout output
+##   - Missing projects key → returns (True, ...), no stdout output
+##   - Errors (missing file, invalid YAML) → returns (False, ...) with message to stderr
+##   - Does NOT call sys.exit() — caller handles exit code
 ## @rationale Extracted from duplicate project-existence checks in adopt-project.sh:687 and
 ##            add-project.sh:725 heredocs (DRIFT-B5 elimination, Brief 077).
 ##            Forward-looking: DevPlans 079/080 need project listing for drift detection.
+##            DevPlan 038b: sys.exit replaced with return tuple for testability.
 def list_projects(
     node_yaml_path: str = "",
     log_prefix: str = "list-projects",
-) -> None:
-    """List all projects. Outputs 'name repo type domain' per line to stdout."""
+) -> tuple[bool, str]:
+    """List all projects. Outputs 'name repo type domain' per line to stdout. Returns (success, message)."""
     try:
         import yaml
     except ImportError:
-        print(f"[IMP:10][{log_prefix}][list] PyYAML not available", file=sys.stderr)
-        sys.exit(1)
+        msg = f"[IMP:10][{log_prefix}][list] PyYAML not available"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
     if not node_yaml_path:
-        print(f"[IMP:7][{log_prefix}][list] Missing node_yaml_path", file=sys.stderr)
-        sys.exit(1)
+        msg = f"[IMP:7][{log_prefix}][list] Missing node_yaml_path"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
     try:
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
     except (FileNotFoundError, yaml.YAMLError) as e:
-        print(f"[IMP:8][{log_prefix}][list] Failed to read {node_yaml_path}: {e}", file=sys.stderr)
-        sys.exit(1)
+        msg = f"[IMP:8][{log_prefix}][list] Failed to read {node_yaml_path}: {e}"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
     projects = data.get("projects", []) if isinstance(data, dict) else []
     for p in projects:
@@ -190,8 +231,9 @@ def list_projects(
         domain = p.get("domain", "-") or "-"
         print(f"{name} {repo} {ptype} {domain}")
 
-    print(f"[IMP:9][{log_prefix}][list] Listed {len(projects)} project(s) from {node_yaml_path}", file=sys.stderr)
-    sys.exit(0)
+    msg = f"[IMP:9][{log_prefix}][list] Listed {len(projects)} project(s) from {node_yaml_path}"
+    print(msg, file=sys.stderr)
+    return (True, msg)
 
 
 # endregion FUNC_list_projects
@@ -229,7 +271,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.action == "register":
-        register_project(
+        success, msg = register_project(
             name=args.name,
             repo=args.repo,
             project_type=getattr(args, "type", ""),
@@ -238,17 +280,23 @@ if __name__ == "__main__":
             database=getattr(args, "database", ""),
             log_prefix=args.log_prefix,
         )
+        print(msg, file=sys.stderr)
+        sys.exit(0 if success else 1)
     elif args.action == "deregister":
-        deregister_project(
+        success, msg = deregister_project(
             name=args.name,
             node_yaml_path=getattr(args, "node_yaml", ""),
             log_prefix=args.log_prefix,
         )
+        print(msg, file=sys.stderr)
+        sys.exit(0 if success else 1)
     elif args.action == "list":
-        list_projects(
+        success, msg = list_projects(
             node_yaml_path=getattr(args, "node_yaml", ""),
             log_prefix=args.log_prefix,
         )
+        print(msg, file=sys.stderr)
+        sys.exit(0 if success else 1)
 
 
 # endregion FUNC_CLI

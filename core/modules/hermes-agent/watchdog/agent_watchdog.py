@@ -34,9 +34,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
-logger = logging.getLogger("watchdog")
+from core.internal.config import platform_config
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
 # Configuration dataclasses
@@ -94,12 +96,20 @@ class CircuitBreakerService:
 class WatchdogConfig:
     """Central configuration — populated from environment variables."""
 
+    # Class-level default constants — single source of truth for deployment paths
+    DEFAULT_PLATFORM_ROOT: ClassVar[str] = "/opt/platform"
+    DEFAULT_PENDING_FILE: ClassVar[str] = "/var/lib/platform/agent.update-pending"
+    DEFAULT_SECRETS_FILE: ClassVar[str] = "/run/platform/secrets.env"
+    DEFAULT_AUDIT_LOG: ClassVar[str] = "/var/log/platform/watchdog-audit.log"
+    DEFAULT_CB_STATE_DIR: ClassVar[str] = "/var/lib/platform/watchdog"
+    DEFAULT_TELEGRAM_PROXY_URL: ClassVar[str] = "http://127.0.0.1:8118"
+
     # Self-update
     health_url: str = "http://localhost:9119/ready"
     watchdog_timeout: int = 90
-    pending_file: str = "/var/lib/platform/agent.update-pending"
-    secrets_file: str = "/run/platform/secrets.env"
-    audit_log: str = "/var/log/platform/watchdog-audit.log"
+    pending_file: str = ""
+    secrets_file: str = ""
+    audit_log: str = ""
     keep_images: int = 3
     # module_dir default is set dynamically in from_env() using PLATFORM_ROOT.
     # Empty string signals "not set" — from_env() provides the real default.
@@ -109,7 +119,7 @@ class WatchdogConfig:
     agent_port: int = 9119
 
     # Circuit breaker
-    cb_state_dir: str = "/var/lib/platform/watchdog"
+    cb_state_dir: str = ""
     cb_services: list[CircuitBreakerService] = field(default_factory=list)
 
     # Polling
@@ -118,15 +128,15 @@ class WatchdogConfig:
     curl_tg_max_time: int = 30
 
     # Telegram
-    telegram_proxy_url: str = "http://127.0.0.1:8118"
+    telegram_proxy_url: str = ""
 
     @classmethod
     def from_env(cls) -> "WatchdogConfig":
         """Construct config from environment variables with defaults."""
         agent_port = int(os.environ.get("AGENT_PORT", "9119"))
         # Use PLATFORM_ROOT as base for deployment paths — canonical platform pattern.
-        # This matches the gate test allowlist (os.environ.get("PLATFORM_ROOT", "/opt/platform")).
-        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        # This matches the gate test allowlist (os.environ.get("PLATFORM_ROOT", cls.DEFAULT_PLATFORM_ROOT)).
+        platform_root = os.environ.get("PLATFORM_ROOT", cls.DEFAULT_PLATFORM_ROOT)
         module_dir = os.environ.get("MODULE_DIR", f"{platform_root}/core/modules/hermes-agent")
 
         # Circuit breaker services: parse from env or use defaults
@@ -152,20 +162,20 @@ class WatchdogConfig:
         return cls(
             health_url=os.environ.get("AGENT_READY_URL", f"http://localhost:{agent_port}/ready"),
             watchdog_timeout=int(os.environ.get("WATCHDOG_TIMEOUT", "90")),
-            pending_file=os.environ.get("PENDING_FILE", "/var/lib/platform/agent.update-pending"),
-            secrets_file=os.environ.get("SECRETS_FILE", "/run/platform/secrets.env"),
-            audit_log=os.environ.get("AUDIT_LOG", "/var/log/platform/watchdog-audit.log"),
+            pending_file=os.environ.get("PENDING_FILE", cls.DEFAULT_PENDING_FILE),
+            secrets_file=os.environ.get("SECRETS_FILE", cls.DEFAULT_SECRETS_FILE),
+            audit_log=os.environ.get("AUDIT_LOG", cls.DEFAULT_AUDIT_LOG),
             keep_images=int(os.environ.get("KEEP_IMAGES", "3")),
             module_dir=module_dir,
             compose_file=os.environ.get("COMPOSE_FILE", f"{module_dir}/docker-compose.base.yml"),
             compose_project=os.environ.get("COMPOSE_PROJECT", "hermes-agent"),
             agent_port=agent_port,
-            cb_state_dir=os.environ.get("CIRCUIT_BREAKER_STATE_DIR", "/var/lib/platform/watchdog"),
+            cb_state_dir=os.environ.get("CIRCUIT_BREAKER_STATE_DIR", cls.DEFAULT_CB_STATE_DIR),
             cb_services=cb_services,
             poll_interval=int(os.environ.get("POLL_INTERVAL", "5")),
             curl_max_time=int(os.environ.get("CURL_MAX_TIME", "3")),
             curl_tg_max_time=int(os.environ.get("CURL_TG_MAX_TIME", "30")),
-            telegram_proxy_url=os.environ.get("TELEGRAM_PROXY_URL", "http://127.0.0.1:8118"),
+            telegram_proxy_url=os.environ.get("TELEGRAM_PROXY_URL", cls.DEFAULT_TELEGRAM_PROXY_URL),
         )
 
 
@@ -430,7 +440,7 @@ class CircuitBreaker:
                 svc.service_name,
             )
             docker_manager.stop_container(svc.service_name)
-            context = os.environ.get("CONTEXT", "unknown")
+            context = os.environ.get("CONTEXT", platform_config.default_context())
             telegram.send(
                 f"\U0001f6a8 [{context}] Circuit breaker opened for {svc.service_name}%0A"
                 f"{svc.max_failures} failures in {svc.window_seconds}s%0A"
@@ -928,7 +938,7 @@ class Watchdog:
             update.write(self._config.pending_file)
 
             # Telegram notification
-            context = os.environ.get("CONTEXT", "unknown")
+            context = os.environ.get("CONTEXT", platform_config.default_context())
             self._telegram.send(
                 f"\U0001f504 [{context}] Agent auto-rollback%0A"
                 f"New version failed /ready check ({self._config.watchdog_timeout}s timeout)%0A"

@@ -35,6 +35,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from core.internal.config import platform_config
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
@@ -238,7 +240,7 @@ def probe_s3_connectivity(
             detail=f"S3 head_bucket failed (code={code}) — cert restore degraded",
             error=str(e)[:200],
         )
-    except Exception as e:
+    except (OSError, ConnectionError, TimeoutError) as e:
         latency = int((time.monotonic() - start) * 1000)
         return CheckResult(
             status="warn",
@@ -380,7 +382,7 @@ def probe_dns_resolution(domain: str = "") -> CheckResult:
             detail=f"DNS resolution failed for {domain} — cert issuance may fail",
             error=str(e)[:200],
         )
-    except Exception as e:
+    except (OSError, socket.gaierror) as e:
         latency = int((time.monotonic() - start) * 1000)
         return CheckResult(
             status="warn",
@@ -422,7 +424,7 @@ def run_preflight(node_yaml: str = "", context: str = "", node_name: str = "") -
 
     # Extract S3 credentials from env
     s3_endpoint = os.environ.get("S3_ENDPOINT_URL", "https://s3.timeweb.cloud")
-    s3_bucket = os.environ.get("S3_BUCKET", "")
+    s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     s3_access_key = os.environ.get("S3_ACCESS_KEY", "")
     s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
     ghcr_token = os.environ.get("GHCR_PULL_TOKEN", "")
@@ -472,7 +474,7 @@ def _extract_domain_from_node_yaml(node_yaml_path: str) -> str:
             if isinstance(node_info, dict):
                 domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
         return domain or ""
-    except Exception as e:
+    except (FileNotFoundError, yaml.YAMLError, OSError) as e:
         logger.warning("[IMP:7][preflight] Failed to extract domain from %s: %s", node_yaml_path, e)
         return ""
 

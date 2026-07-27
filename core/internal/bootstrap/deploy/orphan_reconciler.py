@@ -149,9 +149,9 @@ def _get_existing_containers() -> set:
             e.stderr.strip() if e.stderr else "no stderr",
         )
         return set()
-    except Exception as e:
+    except (OSError, FileNotFoundError) as e:
         logger.warning(
-            "[IMP:8][_get_existing_containers] Unexpected error running docker ps -a: %s — returning empty container set",
+            "[IMP:8][_get_existing_containers] Unexpected docker ps error: %s — returning empty container set",
             e,
         )
         return set()
@@ -238,9 +238,9 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
             DOCKER_COMPOSE_CONFIG_TIMEOUT,
         )
         return []
-    except Exception as e:
+    except (OSError, FileNotFoundError, subprocess.CalledProcessError) as e:
         logger.warning(
-            "[IMP:8][_get_compose_services] Unexpected error resolving services for %s: %s",
+            "[IMP:8][_get_compose_services] Unexpected compose config error for %s: %s — returning empty service list",
             module_name,
             e,
         )
@@ -296,9 +296,9 @@ def _inspect_project_label(container_name: str) -> str:
             DOCKER_INSPECT_TIMEOUT,
         )
         return ""
-    except Exception as e:
+    except (OSError, FileNotFoundError, subprocess.CalledProcessError) as e:
         logger.warning(
-            "[IMP:8][_inspect_project_label] Unexpected error inspecting container %s: %s — returning empty project",
+            "[IMP:8][_inspect_project_label] Unexpected docker inspect error for %s: %s — returning empty",
             container_name,
             e,
         )

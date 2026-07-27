@@ -77,12 +77,12 @@ services:
       # 🧐 TRAP[DECISION] · 2026-07-15 · — · S3 env chains via ${S3_*} vars
       # · Dev: MinIO container (minio:9000), bucket names via compose-interpolation
       # · Rev: if S3 provider changes or MinIO is removed, review all 6 chain variables
-      #   (${S3_BUCKET:-platform-backups}/${LANGFUSE_S3_BUCKET:-langfuse-events}).
+      #   (${S3_BUCKET:-test-bucket}/${LANGFUSE_S3_BUCKET:-langfuse-events}).
       #   Creds from ${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-dummy}} chain.
       # · Prod: override via SOPS with Timeweb S3 endpoint — ALL 6 vars overridable
       #   because every value is a ${VAR:-default} chain.
       # · Rejected: literals (lrm SOPS-override, QAImplReport 010 QF-2)
-      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "${LANGFUSE_S3_BUCKET:-${S3_BUCKET:-local-dev}}"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "${LANGFUSE_S3_BUCKET:-${S3_BUCKET:-test-bucket}}"
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: "${S3_ENDPOINT_URL:-https://s3.timeweb.cloud}"
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: "${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-dummy}}"
       LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: "${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-dummy}}"

@@ -41,7 +41,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-logger = logging.getLogger("spool_validator")
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants — mirrors shell ensure_spool_dirs() hardcoded paths

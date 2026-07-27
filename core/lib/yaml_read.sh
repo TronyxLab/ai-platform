@@ -107,22 +107,23 @@ yaml_get_list() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # region yaml_read_domain_config
 ## @purpose  Extract domain configuration fields from a node.yaml for SSL provisioning
-##           and nginx config. Replaces 3 inline python3 blocks across node-lifecycle.sh
-##           and issue-cert.sh with a single sourced function.
+##           and nginx config. Uses NodeYaml CLI instead of inline python3.
 ## @io       Input: $1=node_yaml path
 ##           Output: stdout — lines in format "field_name:value"
 ##           Fields: platform_domain, email, acme_dns_plugin, project_domains (space-separated)
 ##           Return: 0=success, 1=file not found or parse error
-## @complexity 1 — single python3 call
+## @complexity 1 — single NodeYaml CLI call (was inline python3 heredoc)
 ## @invariants
 ##   - Output fields are pipe-safe (key:value lines)
 ##   - Empty fields produce empty value after colon (field_name:)
 ##   - project_domains space-separated, one line, may be empty
 ##   - Missing file → empty output + return 1
 ##   - Missing fields → empty value (not "None")
+## @changes 2026-07-26 · 038c — Replaced inline python3 heredoc with NodeYaml CLI
 ## @rationale  Three files (node-lifecycle.sh step_14, update_step_3, issue-cert.sh main)
 ##             had identical python3 blocks for domain extraction. Centralizing in yaml_read.sh
-##             eliminates 3×18 lines of duplicated inline Python, making callers 20% shorter.
+##             eliminates 3×18 lines of duplicated inline Python. DevPlan 038c converted to
+##             NodeYaml CLI for zero inline python3 in yaml_read.sh.
 yaml_read_domain_config() {
     local node_yaml="$1"
     if [[ ! -f "$node_yaml" ]]; then
@@ -130,19 +131,8 @@ yaml_read_domain_config() {
         return 1
     fi
     echo "[IMP:8][yaml_read][domain_config] Reading domain config from ${node_yaml}" >&2
-    python3 - "$node_yaml" <<'PYEOF'
-import yaml, sys
-with open(sys.argv[1]) as f:
-    data = yaml.safe_load(f)
-domain = data.get('domain', '')
-email = data.get('email', '')
-acme_dns_plugin = data.get('acme_dns_plugin', '')
-projects = data.get('projects', [])
-project_domains = [p.get('domain', '') for p in projects if isinstance(p, dict) and p.get('domain')]
-print(f"platform_domain:{domain}")
-print(f"email:{email}")
-print(f"acme_dns_plugin:{acme_dns_plugin}")
-print(f"project_domains:{' '.join(project_domains)}")
-PYEOF
+    python3 -m core.internal.shared.node_yaml \
+        --file "$node_yaml" \
+        --domain-config || return $?
 }
 # endregion yaml_read_domain_config

@@ -157,30 +157,18 @@ find_node_yaml() {
                 return 0
             fi
         else
-            # Fallback: python3+yaml
+            # Fallback: NodeYaml CLI (DevPlan 038c — replaces inline python3)
             local py_result
-            py_result="$(python3 -c "
-import yaml, sys, json
-try:
-    with open('${ny}') as f:
-        data = yaml.safe_load(f)
-    for p in data.get('projects', []):
-        if p.get('name') == '${name}':
-            print(json.dumps(p))
-            print('___ORG___' + (p.get('repo', '').split('/')[0] if p.get('repo') else ''))
-            print('___HOST___' + (data.get('node', {}).get('host', '')))
-            sys.exit(0)
-    sys.exit(1)
-except Exception:
-    sys.exit(1)
-" 2>/dev/null || true)"
+            py_result="$(python3 -m core.internal.shared.node_yaml \
+                --file "${ny}" \
+                --find-project "${name}" 2>/dev/null || true)"
             if [[ -n "$py_result" ]]; then
                 FOUND_NODE_YAML="$ny"
                 FOUND_PROJECT_ENTRY="$(echo "$py_result" | head -1)"
                 PROJECT_ORG="$(echo "$py_result" | grep '___ORG___' | sed 's/___ORG___//')"
                 PROJECT_NODE_HOST="$(echo "$py_result" | grep '___HOST___' | sed 's/___HOST___//')"
                 NODE_CONFIGS_DIR="$(dirname "$(dirname "$ny")")"
-                log_imp 7 "-" "Found project '${name}' in: ${ny} (python3 fallback)"
+                log_imp 7 "-" "Found project '${name}' in: ${ny} (NodeYaml CLI fallback)"
                 return 0
             fi
         fi

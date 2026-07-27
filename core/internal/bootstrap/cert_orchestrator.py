@@ -30,6 +30,13 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from core.internal.config import platform_config
+from core.internal.shared.exceptions import (
+    ConfigNotFoundError,
+    ConfigParseError,
+    PlatformFatalError,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── Direct import of s3_ssl_cache (DevPlan 052 Phase 1) ──
@@ -343,7 +350,7 @@ def _try_s3_restore(domain: str) -> DomainCertResult:
         logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not available — S3 restore disabled")
         return DomainCertResult(domain=domain, status="pending", source="s3")
 
-    s3_bucket = os.environ.get("S3_BUCKET", "")
+    s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     if not s3_bucket:
         logger.warning("[IMP:7][cert_orchestrator] S3_BUCKET not set — S3 restore unavailable")
         return DomainCertResult(domain=domain, status="pending", source="s3")
@@ -379,9 +386,9 @@ def _try_s3_restore(domain: str) -> DomainCertResult:
             source="s3",
             error="download succeeded but cert file missing",
         )
-    except Exception as e:
+    except (ConfigNotFoundError, ConfigParseError, PlatformFatalError, OSError) as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — S3 operation failed: %s", domain, e)
-        return DomainCertResult(domain=domain, status="pending", source="s3", error=str(e))
+        return DomainCertResult(domain=domain, status="pending", source="s3", error=f"{type(e).__name__}: {e}")
 
 
 # endregion FUNC_try_s3_restore
@@ -401,12 +408,12 @@ def _try_s3_restore(domain: str) -> DomainCertResult:
 ##           (skip, restore, issue) prevents cert loss for platform domain.
 def _upload_to_s3(domain: str) -> bool:
     """Upload cert to S3 via s3_ssl_cache (direct import)."""
-    s3_bucket = os.environ.get("S3_BUCKET", "")
+    s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     if not s3_bucket:
         return False
     try:
         return s3_ssl_cache.upload_cert(domain, CERT_VALIDITY_PATH, "/opt/acme.sh", s3_bucket)
-    except Exception as e:
+    except (ConfigNotFoundError, ConfigParseError, PlatformFatalError, OSError) as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — S3 upload failed: %s", domain, e)
         return False
 
@@ -475,7 +482,9 @@ def _issue_cert(domain: str, issue_cert_script: str) -> DomainCertResult:
         )
     except FileNotFoundError as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — issue-cert.sh error: %s", domain, e)
-        return DomainCertResult(domain=domain, status="failed", source="acme", challenge=challenge_mode, error=str(e))
+        return DomainCertResult(
+            domain=domain, status="failed", source="acme", challenge=challenge_mode, error=f"{type(e).__name__}: {e}"
+        )
 
 
 # endregion FUNC_issue_cert
@@ -544,9 +553,9 @@ def _generate_self_signed(domain: str) -> DomainCertResult:
             domain,
         )
         return DomainCertResult(domain=domain, status="issued", source="self_signed")
-    except Exception as e:
+    except (OSError, FileNotFoundError, subprocess.CalledProcessError) as e:
         logger.warning("[IMP:7][cert_orchestrator] %s — self-signed generation failed: %s", domain, e)
-        return DomainCertResult(domain=domain, status="failed", source="none", error=str(e))
+        return DomainCertResult(domain=domain, status="failed", source="none", error=f"{type(e).__name__}: {e}")
 
 
 # endregion FUNC_generate_self_signed
@@ -608,7 +617,7 @@ def _install_cron(acme_home: str = "/opt/acme.sh") -> bool:
             logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache.py not found — --renew-hook skipped")
         return True
 
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][cert_orchestrator] Cron install failed: %s", e)
         return False
 
@@ -685,7 +694,7 @@ def migrate_cron_if_needed(acme_home: str = "/opt/acme.sh") -> bool:
             logger.warning("[IMP:7][cron_migrate] s3_ssl_cache.py not found — --renew-hook skipped")
         return True
 
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][cron_migrate] Migration failed: %s", e)
         return False
 

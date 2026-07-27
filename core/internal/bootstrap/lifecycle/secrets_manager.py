@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -136,7 +137,7 @@ def _read_manifest(manifest_path: str) -> list[dict[str, Any]]:
     except ImportError:
         logger.warning("[IMP:7][secrets_manager] PyYAML not available — fallback to hardcoded list")
         return []
-    except Exception as e:
+    except (yaml.YAMLError, OSError, FileNotFoundError, json.JSONDecodeError) as e:
         logger.warning("[IMP:7][secrets_manager] Manifest parse error: %s — fallback to hardcoded list", e)
         return []
 

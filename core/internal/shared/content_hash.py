@@ -25,7 +25,7 @@ import hashlib
 import logging
 import sys
 
-logger = logging.getLogger("content_hash")
+logger = logging.getLogger(__name__)
 
 
 # region FUNC_compute_content_hash

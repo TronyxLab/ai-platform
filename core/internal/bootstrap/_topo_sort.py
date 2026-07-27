@@ -40,7 +40,9 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-logger = logging.getLogger("_topo_sort")
+logger = logging.getLogger(__name__)
+
+from core.internal.shared.exceptions import ConfigValidationError
 
 
 # region FUNC_load_module_yamls
@@ -153,7 +155,7 @@ def build_dag(modules: list[dict[str, Any]], filter_names: list[str] | None = No
 ## @invariants
 ##   - Returns groups where all modules in the same group have no dependency on each other
 ##   - Groups are ordered: group[0] deploys first (no deps), group[1] after, etc.
-##   - Raises RuntimeError if a cycle is detected, listing the stuck nodes
+##   - Raises ConfigValidationError if a cycle is detected, listing the stuck nodes
 def kahn_topological_sort(dag: dict[str, list[str]]) -> list[list[str]]:
     logger.info("[IMP:7][kahn_topological_sort][start] Starting Kahn's algorithm on %d nodes", len(dag))
 
@@ -214,7 +216,7 @@ def kahn_topological_sort(dag: dict[str, list[str]]) -> list[list[str]]:
             len(cycle_nodes),
             cycle_nodes,
         )
-        raise RuntimeError(f"Cycle detected in module dependency graph. Unresolved modules: {cycle_nodes}")
+        raise ConfigValidationError(f"Cycle detected in module dependency graph. Unresolved modules: {cycle_nodes}")
 
     logger.info("[IMP:9][kahn_topological_sort][done] %d groups produced: %s", len(groups), groups)
     return groups

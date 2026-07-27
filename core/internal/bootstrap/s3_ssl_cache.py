@@ -40,17 +40,25 @@ import tempfile
 
 import boto3
 import yaml
+from boto3.exceptions import S3UploadFailedError
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
+
+from core.internal.config import platform_config
+from core.internal.shared.exceptions import (
+    ConfigNotFoundError,
+    ConfigParseError,
+    PlatformFatalError,
+)
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_CERT_DIR = "/etc/letsencrypt/live"
 DEFAULT_ACME_HOME = "/opt/acme.sh"
-DEFAULT_S3_PREFIX = "platform/ssl-certs"
+DEFAULT_SSL_CACHE_PREFIX = "platform/ssl-certs"
 DEFAULT_S3_ENDPOINT_URL = "https://s3.timeweb.cloud"
-DEFAULT_S3_REGION = "us-east-1"
+# DEFAULT_S3_REGION removed — use platform_config.default_s3_region() instead
 OPENSSL_TIMEOUT = 10  # seconds for each openssl subprocess call
 CHECKEND_THRESHOLD = 2592000  # 30 days in seconds
 
@@ -88,7 +96,7 @@ def _get_s3_client() -> boto3.client:
     endpoint = os.environ.get("S3_ENDPOINT_URL") or DEFAULT_S3_ENDPOINT_URL
     akid = os.environ.get("S3_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID") or ""
     sak = os.environ.get("S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
-    region = os.environ.get("S3_REGION", DEFAULT_S3_REGION)
+    region = os.environ.get("S3_REGION", platform_config.default_s3_region())
 
     return boto3.client(
         "s3",
@@ -230,7 +238,7 @@ def _download_s3_file(s3_key: str, local_dst: str) -> bool:
     """
     try:
         client = _get_s3_client()
-        bucket = os.environ.get("S3_BUCKET", "")
+        bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
         if not bucket:
             logger.warning("[IMP:7][s3_ssl_cache] S3_BUCKET not set — cannot download")
             return False
@@ -249,7 +257,7 @@ def _download_s3_file(s3_key: str, local_dst: str) -> bool:
                 e,
             )
         return False
-    except Exception as e:
+    except (ClientError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] S3 download failed for key %s: %s", s3_key, e)
         return False
 
@@ -271,14 +279,14 @@ def _upload_s3_file(local_path: str, s3_key: str) -> bool:
     """
     try:
         client = _get_s3_client()
-        bucket = os.environ.get("S3_BUCKET", "")
+        bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
         if not bucket:
             logger.warning("[IMP:7][s3_ssl_cache] S3_BUCKET not set — cannot upload")
             return False
         client.upload_file(local_path, bucket, s3_key)
         logger.info("[IMP:9][s3_ssl_cache] Uploaded: %s → %s", local_path, s3_key)
         return True
-    except Exception as e:
+    except (ClientError, S3UploadFailedError, FileNotFoundError, OSError) as e:
         logger.warning(
             "[IMP:7][s3_ssl_cache] S3 upload failed for %s → %s: %s",
             local_path,
@@ -312,7 +320,7 @@ def _extract_domains_from_yaml(node_yaml_path: str) -> list[str]:
     try:
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f) or {}
-    except Exception as e:
+    except (FileNotFoundError, yaml.YAMLError, OSError, ConfigParseError, ConfigNotFoundError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to parse node.yaml: %s", e)
         return []
 
@@ -364,7 +372,7 @@ def upload_cert(
     cert_dir: str = DEFAULT_CERT_DIR,
     acme_home: str = DEFAULT_ACME_HOME,
     s3_bucket: str = "",
-    s3_prefix: str = DEFAULT_S3_PREFIX,
+    s3_prefix: str = DEFAULT_SSL_CACHE_PREFIX,
 ) -> bool:
     """Upload cert files to S3: fullchain.pem, privkey.pem, chain.pem (opt), account.tar.gz.
 
@@ -380,7 +388,7 @@ def upload_cert(
     ##           Direct os.environ access fixes credential propagation bug.
     """
     if not s3_bucket:
-        s3_bucket = os.environ.get("S3_BUCKET", "")
+        s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     if not s3_bucket:
         logger.warning("[IMP:7][s3_ssl_cache] S3_BUCKET not set — cannot upload cert for %s", domain)
         return False
@@ -444,7 +452,7 @@ def upload_cert(
             else:
                 overall_success = False
             os.unlink(tar_path)
-        except Exception as e:
+        except (tarfile.TarError, OSError, FileNotFoundError) as e:
             logger.warning(
                 "[IMP:7][s3_ssl_cache] Failed to pack/upload account data for %s: %s",
                 domain,
@@ -483,7 +491,7 @@ def download_cert(
     cert_dir: str = DEFAULT_CERT_DIR,
     acme_home: str = DEFAULT_ACME_HOME,
     s3_bucket: str = "",
-    s3_prefix: str = DEFAULT_S3_PREFIX,
+    s3_prefix: str = DEFAULT_SSL_CACHE_PREFIX,
 ) -> bool:
     """Download and validate cert from S3. Validates issuer (LE only), domain match,
     openssl integrity. Returns True if restored successfully.
@@ -497,7 +505,7 @@ def download_cert(
     ##   - account.tar.gz: extracted to acme_home/, non-fatal on failure
     """
     if not s3_bucket:
-        s3_bucket = os.environ.get("S3_BUCKET", "")
+        s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     if not s3_bucket:
         logger.warning("[IMP:7][s3_ssl_cache] S3_BUCKET not set — cannot download cert for %s", domain)
         return False
@@ -532,7 +540,7 @@ def download_cert(
         os.replace(tmp_fullchain_path, dest_fullchain)
         os.chmod(dest_fullchain, 0o644)
         logger.info("[IMP:9][s3_ssl_cache] fullchain.pem restored for %s", domain)
-    except Exception as e:
+    except (OSError, FileNotFoundError, PermissionError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to restore fullchain.pem for %s: %s", domain, e)
         if os.path.exists(tmp_fullchain_path):
             os.unlink(tmp_fullchain_path)
@@ -549,7 +557,7 @@ def download_cert(
             logger.info("[IMP:9][s3_ssl_cache] privkey.pem restored for %s", domain)
         else:
             logger.warning("[IMP:8][s3_ssl_cache] privkey.pem not in S3 for %s — proceeding without it", domain)
-    except Exception as e:
+    except (OSError, FileNotFoundError, PermissionError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to restore privkey.pem for %s: %s", domain, e)
     finally:
         if os.path.exists(tmp_privkey_path):
@@ -566,7 +574,7 @@ def download_cert(
             logger.info("[IMP:9][s3_ssl_cache] chain.pem restored for %s", domain)
         else:
             logger.info("[IMP:8][s3_ssl_cache] chain.pem not in S3 for %s — optional, skipping", domain)
-    except Exception as e:
+    except (OSError, FileNotFoundError, PermissionError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to restore chain.pem for %s: %s", domain, e)
     finally:
         if os.path.exists(tmp_chain_path):
@@ -584,7 +592,7 @@ def download_cert(
             logger.info("[IMP:9][s3_ssl_cache] acme.sh account data restored for %s", domain)
         else:
             logger.info("[IMP:8][s3_ssl_cache] No account data in S3 for %s — skipping", domain)
-    except Exception as e:
+    except (tarfile.TarError, OSError, FileNotFoundError) as e:
         logger.warning(
             "[IMP:7][s3_ssl_cache] Failed to restore account data for %s: %s",
             domain,
@@ -613,7 +621,7 @@ def download_cert(
 def check_cert(
     domain: str,
     s3_bucket: str = "",
-    s3_prefix: str = DEFAULT_S3_PREFIX,
+    s3_prefix: str = DEFAULT_SSL_CACHE_PREFIX,
 ) -> bool:
     """Check if valid cert exists in S3 (>30 days expiry, correct domain, LE issuer).
 
@@ -622,7 +630,7 @@ def check_cert(
     ## @returns True if valid LE cert >30 days exists in S3
     """
     if not s3_bucket:
-        s3_bucket = os.environ.get("S3_BUCKET", "")
+        s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     if not s3_bucket:
         logger.info("[IMP:8][s3_ssl_cache] S3_BUCKET not set — cannot check %s", domain)
         return False
@@ -667,7 +675,7 @@ def check_cert(
 def bulk_restore(
     node_yaml_path: str,
     s3_bucket: str = "",
-    s3_prefix: str = DEFAULT_S3_PREFIX,
+    s3_prefix: str = DEFAULT_SSL_CACHE_PREFIX,
 ) -> dict[str, str]:
     """Parse node.yaml → extract all domains → check + download each.
 
@@ -676,7 +684,7 @@ def bulk_restore(
     ## @returns {domain: status} dict where status ∈ {"restored", "miss", "error"}
     """
     if not s3_bucket:
-        s3_bucket = os.environ.get("S3_BUCKET", "")
+        s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
     if not s3_bucket:
         s3_bucket = ""
 
@@ -706,7 +714,7 @@ def bulk_restore(
                     logger.warning("[IMP:7][s3_ssl_cache] Bulk download failed: %s", domain)
             else:
                 logger.info("[IMP:8][s3_ssl_cache] Bulk cache miss: %s", domain)
-        except Exception as e:
+        except (ConfigNotFoundError, ConfigParseError, PlatformFatalError, OSError) as e:
             status = "error"
             logger.warning("[IMP:7][s3_ssl_cache] Bulk restore error for %s: %s", domain, e)
         result[domain] = status
@@ -790,7 +798,7 @@ if __name__ == "__main__":
             print(f"Usage: s3_ssl_cache.py {command} <domain>")
             sys.exit(1)
         domain = sys.argv[2]
-        s3_bucket = os.environ.get("S3_BUCKET", "")
+        s3_bucket = os.environ.get("S3_BUCKET", platform_config.default_s3_bucket_sentinel())
         ok = False
         if command == "upload":
             ok = upload_cert(domain, s3_bucket=s3_bucket)

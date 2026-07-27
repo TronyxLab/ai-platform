@@ -51,6 +51,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.internal.shared.exceptions import (
+    ConfigNotFoundError,
+    PlatformError,
+    PlatformFatalError,
+)
+
 # Import steps module for step implementations
 # PYTHONPATH must include lifecycle/ directory (set by node-lifecycle.sh).
 # Handle standalone execution (e.g., tests) by falling back to direct import.
@@ -847,9 +853,14 @@ def main() -> int:
         return _run_single_step(sm, args.mode, args.run_step)
 
     # ── Dispatch full mode run ──
-    if args.mode == "init":
-        return _run_init_mode(sm)
-    return _run_update_mode(sm)
+    try:
+        if args.mode == "init":
+            return _run_init_mode(sm)
+        return _run_update_mode(sm)
+    except PlatformError as e:
+        logger.critical("[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
 
 
 # endregion MAIN
@@ -877,7 +888,11 @@ def _run_single_step(sm: StateMachine, mode: str, step_n: int) -> int:
         _execute_step(sm, step_n, step_name, mode)
         sm.complete_step(step_n)
         logger.info("[IMP:9][run_step] Step %d (%s) completed successfully", step_n, step_name)
-    except Exception as e:
+    except PlatformError as e:
+        sm.fail_step(step_n, str(e))
+        logger.critical("[IMP:10][run_step] Step %d failed (exit=%d): %s", step_n, e.exit_code, e)
+        return e.exit_code
+    except Exception as e:  # noqa: EXC — catch-all for non-PlatformError step failures
         sm.fail_step(step_n, str(e))
         logger.error("[IMP:10][run_step] Step %d failed: %s", step_n, e)
         return 1
@@ -962,7 +977,7 @@ def _run_steps(sm: StateMachine, step_list: list[str], mode: str) -> int:
                     _execute_step(sm, i, step_name, mode)
                     last_exception = None
                     break
-                except Exception as e:
+                except Exception as e:  # noqa: EXC — retry loop: catches all to decide retry vs re-raise
                     if _should_retry(e, attempt):
                         last_exception = e
                         continue
@@ -977,7 +992,15 @@ def _run_steps(sm: StateMachine, step_list: list[str], mode: str) -> int:
                 logger.error("[IMP:10][run_steps] Post-condition FAILED for step %d (%s): %s", i, step_name, e)
                 raise
             logger.info("[IMP:9][run_steps] Step %d (%s) completed successfully", i, step_name)
-        except Exception as e:
+        except PlatformError as e:
+            sm.fail_step(i, str(e))
+            exit_code = e.exit_code
+            logger.error("[IMP:10][run_steps] Step %d (%s) FAILED (exit=%d): %s", i, step_name, e.exit_code, e)
+            # Critical steps abort; non-critical continue (listed below)
+            if step_name in ("ssh_access", "verify_core", "verify_node_configs", "read_node_yaml"):
+                logger.error("[IMP:10][run_steps] Critical step %d failed — aborting %s mode", i, mode)
+                break
+        except Exception as e:  # noqa: EXC — catch-all for non-PlatformError step failures
             sm.fail_step(i, str(e))
             exit_code = 1
             logger.error("[IMP:10][run_steps] Step %d (%s) FAILED: %s", i, step_name, e)
@@ -1031,7 +1054,7 @@ def _execute_init_step(
     if step_name == "ssh_access":
         # Verify running as root
         if os.geteuid() != 0:
-            raise RuntimeError("node-lifecycle must run as root (euid=0)")
+            raise PlatformFatalError("node-lifecycle must run as root (euid=0)")
         logger.info("[IMP:9][init][ssh_access] Running as root — OK")
 
     elif step_name == "apt_deps":
@@ -1103,7 +1126,7 @@ def _execute_init_step(
 
     elif step_name == "verify_node_configs":
         if not node_yaml or not os.path.isfile(node_yaml):
-            raise RuntimeError(f"node.yaml not found: {node_yaml}")
+            raise ConfigNotFoundError(f"node.yaml not found: {node_yaml}")
         logger.info("[IMP:9][init][verify_node_configs] node.yaml present: %s", node_yaml)
 
     elif step_name == "decrypt_secrets":
@@ -1345,7 +1368,7 @@ def _import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> Non
             )
         else:
             logger.warning("[IMP:7][deploy_context] Cannot load context_deployer.py")
-    except Exception as e:
+    except Exception as e:  # noqa: EXC — non-fatal: deploy_context is best-effort
         logger.warning("[IMP:7][deploy_context] deploy_context failed (non-fatal): %s", e)
 
 
@@ -1368,7 +1391,7 @@ def _import_extract_domains(core_dir: str, node_yaml: str, context: str) -> list
             deployer_mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(deployer_mod)
             return deployer_mod._extract_domains_for_context(node_yaml, context)
-    except Exception as e:
+    except Exception as e:  # noqa: EXC — catch-all for importlib-based calls
         logger.warning("[IMP:7][ssl_provision] Failed to extract domains: %s", e)
     return []
 
@@ -1405,11 +1428,11 @@ def _subprocess_run(
                 # ⚠️ TRAP[BUG] · 2026-07-22 · P1 · 043-staging-fix B3
                 # · exit=127 (command not found) is always fatal — indicates missing dependency/binary
                 # · non_fatal flag does NOT apply to 127 — it's a configuration error, not a runtime error
-                raise RuntimeError(f"Command not found (exit=127): {err_msg}")
+                raise PlatformFatalError(f"Command not found (exit=127): {err_msg}")
             if non_fatal:
                 logger.warning("[IMP:7][subprocess][%s] %s", step_name, err_msg)
             elif check_required:
-                raise RuntimeError(err_msg)
+                raise PlatformFatalError(err_msg)
             else:
                 logger.info(
                     "[IMP:7][subprocess][%s] Non-critical command returned %d: %s",
@@ -1425,13 +1448,13 @@ def _subprocess_run(
         if non_fatal:
             logger.warning("[IMP:7][subprocess][%s] %s", step_name, msg)
             return subprocess.CompletedProcess(cmd, -1, "", msg)
-        raise RuntimeError(msg) from None
+        raise PlatformFatalError(msg) from None
     except FileNotFoundError:
         msg = f"Command not found: {cmd[0]}"
         if non_fatal:
             logger.warning("[IMP:7][subprocess][%s] %s", step_name, msg)
             return subprocess.CompletedProcess(cmd, -1, "", msg)
-        raise RuntimeError(msg) from None
+        raise PlatformFatalError(msg) from None
 
 
 # region FUNC__is_pkg_installed
@@ -1507,7 +1530,7 @@ def _ensure_sops() -> None:
         )
         _subprocess_run(["chmod", "0755", "/usr/local/bin/sops"], "sops_chmod")
         logger.info("[IMP:9][sops] sops v3.9.4 installed")
-    except (RuntimeError, subprocess.TimeoutExpired) as e:
+    except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][sops] Failed to install sops: %s", e)
 
 
@@ -1611,7 +1634,7 @@ def _verify_core_files(core_dir: str) -> None:
     """
     marker = os.path.join(core_dir, "internal", "bootstrap", "node-lifecycle.sh")
     if not os.path.isfile(marker):
-        raise RuntimeError(
+        raise ConfigNotFoundError(
             f"Core bootstrap not found at {marker}. Deploy first:\n  rsync -avz core/ root@<server>:{core_dir}/"
         )
     ver_file = os.path.join(core_dir, "VERSION")
@@ -1676,7 +1699,7 @@ def _ensure_secrets_exist(core_dir: str) -> None:
     # Step 1: Check file exists (after decrypt)
     if not os.path.isfile(secrets_env):
         logger.error("[IMP:9][ensure_secrets] %s not found after decrypt — cannot generate secrets", secrets_env)
-        raise RuntimeError(f"secrets.env not found: {secrets_env}")
+        raise ConfigNotFoundError(f"secrets.env not found: {secrets_env}")
 
     # Step 2: Source secrets.env into os.environ
     try:
@@ -1687,7 +1710,7 @@ def _ensure_secrets_exist(core_dir: str) -> None:
             if k not in os.environ:
                 os.environ[k] = v
         logger.info("[IMP:9][ensure_secrets] Sourced %d vars from %s", len(env_vars), secrets_env)
-    except Exception as e:
+    except Exception as e:  # noqa: EXC — non-fatal: secrets source failure is recoverable
         logger.warning("[IMP:7][ensure_secrets] Failed to source secrets.env: %s", e)
 
     # Step 3: Generate missing autogen secrets
@@ -1698,7 +1721,7 @@ def _ensure_secrets_exist(core_dir: str) -> None:
         generated = do_ensure(manifest_path, secrets_env)
         if generated:
             logger.info("[IMP:9][ensure_secrets] Generated %d secrets: %s", len(generated), generated)
-    except Exception as e:
+    except Exception as e:  # noqa: EXC — non-fatal: autogen failure is recoverable
         logger.warning("[IMP:7][ensure_secrets] Autogen failed: %s", e)
 
 
@@ -1710,7 +1733,7 @@ def _validate_node_yaml(node_yaml: str, core_dir: str) -> None:
     ## @complexity — O(1) for schema load + validation
     """
     if not node_yaml or not os.path.isfile(node_yaml):
-        raise RuntimeError(f"node.yaml not found: {node_yaml}")
+        raise ConfigNotFoundError(f"node.yaml not found: {node_yaml}")
 
     schema_file = os.path.join(core_dir, "schemas", "node.schema.json")
     if not os.path.isfile(schema_file):
@@ -1809,7 +1832,7 @@ def _validate_sudoers() -> None:
             errors += 1
 
     if errors > 0:
-        raise RuntimeError(
+        raise PlatformFatalError(
             f"{errors} sudoers file(s) with wrong owner/permissions. Fix:\n"
             f"  chown root:root {sudoers_d}/*\n"
             f"  chmod 0440 {sudoers_d}/*"
@@ -1840,7 +1863,7 @@ def _step_secrets_init(core_dir: str) -> None:
                 if k not in os.environ:
                     os.environ[k] = v
             logger.info("[IMP:9][secrets_init] Sourced %d vars for secrets-init.sh", len(env_vars))
-        except Exception as e:
+        except Exception as e:  # noqa: EXC — non-fatal: sourcing secrets.env is best-effort
             logger.warning("[IMP:7][secrets_init] Failed to source secrets.env: %s", e)
 
     init_script = os.path.join(core_dir, "internal", "bootstrap", "secrets-init.sh")
@@ -2070,7 +2093,7 @@ def _send_telegram(sm: StateMachine) -> None:
         opener = urllib.request.build_opener(proxy)
         opener.open(req, timeout=30)
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
-    except Exception as e:
+    except Exception as e:  # noqa: EXC — non-fatal: Telegram notification is best-effort
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
 
 
@@ -2078,4 +2101,13 @@ def _send_telegram(sm: StateMachine) -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except PlatformError as e:
+        logger.critical("[IMP:10][__main__] Platform error (exit=%d): %s", e.exit_code, e)
+        print(f"{e}", file=sys.stderr)
+        sys.exit(e.exit_code)
+    except Exception as e:  # noqa: EXC — top-level CLI handler for unexpected errors
+        logger.critical("[IMP:10][__main__] Unexpected error: %s", e)
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        sys.exit(1)

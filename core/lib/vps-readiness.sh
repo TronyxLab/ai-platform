@@ -71,11 +71,18 @@ check_vps_ready() {
         diag_messages+=("NODE_HOST_MAP not set — cannot resolve node to SSH host")
         remediation_hints+=("Set NODE_HOST_MAP env var: export NODE_HOST_MAP='{\"node\":\"host\"}'")
     else
-        ssh_host="$(echo "${NODE_HOST_MAP}" | python3 -c "import json,sys; m=json.load(sys.stdin); print(m.get('${node_name}',''))" 2>/dev/null || true)"
+        _VPS_READINESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        ssh_host="$(echo "${NODE_HOST_MAP}" | python3 "${_VPS_READINESS_DIR}/../internal/scripts/yaml_query.py" \
+            --stdin --get "${node_name}" --default "" 2>/dev/null || true)"
         if [[ -z "${ssh_host}" ]]; then
             all_ok=false
             diag_messages+=("Node '${node_name}' not found in NODE_HOST_MAP")
-            remediation_hints+=("Check NODE_HOST_MAP for node '${node_name}'. Current keys: $(echo "${NODE_HOST_MAP}" | python3 -c "import json,sys; print(list(json.load(sys.stdin).keys()))" 2>/dev/null || echo "unparseable")")
+            # ⚡ TRAP[DEBT] · 2026-07-26 · uses yaml_query.py --keys (added in 038c)
+            # Replaced inline python3 -c "import json..." with yaml_query.py --keys
+            local _keys
+            _keys="$(echo "${NODE_HOST_MAP}" | python3 "${_VPS_READINESS_DIR}/../internal/scripts/yaml_query.py" \
+                --stdin --keys 2>/dev/null | tr '\n' ' ' || echo "unparseable")"
+            remediation_hints+=("Check NODE_HOST_MAP for node '${node_name}'. Current keys: ${_keys}")
         fi
     fi
 

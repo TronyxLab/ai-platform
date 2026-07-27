@@ -31,7 +31,9 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-logger = logging.getLogger("reconcile_projects")
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+
+logger = logging.getLogger(__name__)
 
 # Platform convention — SSH user for all remote operations (ci-deploy key)
 # ⚠️ TRAP[DECISION] · 2026-07-25 · — · SSH_USER as module constant
@@ -130,7 +132,7 @@ def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
 
         with open(node_yaml_path) as f:
             data = yaml.safe_load(f)
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, OSError, ConfigParseError, ConfigNotFoundError) as exc:
         logger.warning("[IMP:8][parse_node_yaml] Failed to parse %s: %s", node_yaml_path, exc)
         return []
 
@@ -273,7 +275,7 @@ def resolve_ssh_host(
         if host:
             logger.info("[IMP:8][resolve_host] Resolved from node.yaml: %s", host)
             return host
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, OSError, ConfigParseError, ConfigNotFoundError) as exc:
         logger.warning("[IMP:8][resolve_host] Failed to parse node.yaml for host: %s", exc)
 
     return None
@@ -459,7 +461,7 @@ def deliver_payload(
         logger.info("[IMP:9][deliver][%s] Payload delivered successfully", spec.name)
         return True
 
-    except Exception as exc:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError, ConfigNotFoundError, ConfigParseError) as exc:
         logger.error("[IMP:10][deliver][%s] FAIL: %s", spec.name, exc)
         return False
     finally:

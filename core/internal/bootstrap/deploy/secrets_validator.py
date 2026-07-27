@@ -37,7 +37,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-logger = logging.getLogger("secrets_validator")
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # region FUNC__check_env_requires

@@ -1,0 +1,9 @@
+# @purpose Test fixture for NodeYaml unit tests — contexts array fallback
+# GREP_SUMMARY: test-data node-yaml-facade contexts-array
+contexts:
+  - name: myorg
+    repo: git@github.com:myorg/ai-platform.git
+node:
+  host: 1.2.3.4
+domain:
+  platform: example.com

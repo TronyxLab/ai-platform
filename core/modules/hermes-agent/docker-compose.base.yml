@@ -87,7 +87,7 @@ services:
       context: ${PLATFORM_ROOT:-/opt/platform}
       dockerfile: core/modules/hermes-agent/context/Dockerfile
       args:
-        CONTEXT: ${CONTEXT:-personal}
+        CONTEXT: ${CONTEXT:-test}
     container_name: hermes-agent
     profiles: [hermes-agent]
     restart: unless-stopped
@@ -151,7 +151,7 @@ services:
 
       # Agent identity
       NODE_NAME: "${NODE_NAME:-unknown}"
-      CONTEXT: "${CONTEXT:-personal}"
+      CONTEXT: "${CONTEXT:-test}"
 
       # Dependency health check endpoints (used by Hermes /ready endpoint)
       POSTGRES_HOST: "${POSTGRES_HOST:-pgbouncer}"

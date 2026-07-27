@@ -130,7 +130,7 @@ def _read_context_name(node_yaml_path: str) -> str:
         ctx = (data or {}).get("context", "") or ""
         logger.info("[IMP:8][_read_context_name] context='%s' (from %s)", ctx, node_yaml_path)
         return ctx
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
         logger.warning("[IMP:7][_read_context_name][error] Failed to read context: %s", exc)
         return ""
 
@@ -291,7 +291,7 @@ def _read_repo_url(node_yaml_path: str) -> str:
         url = repos.get("core", "") or ""
         logger.info("[IMP:8][_read_repo_url] repos.core='%s' (from %s)", url, node_yaml_path)
         return url
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
         logger.warning("[IMP:7][_read_repo_url][error] Failed to read repos.core: %s", exc)
         return ""
 

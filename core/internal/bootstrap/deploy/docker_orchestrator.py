@@ -86,6 +86,7 @@ from content_hash import check_build_needed, compute_source_hash, save_build_has
 
 # DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
 # DRIFT-D6 resolved: unified JSON-lines audit format
+from core.internal.config import platform_config
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
 # DevPlan 079 DRIFT-B6: shared docker compose operations
@@ -96,7 +97,7 @@ from core.internal.shared.docker_compose import (
     docker_compose_pull as _shared_docker_compose_pull,
 )
 
-logger = logging.getLogger("docker_orchestrator")
+logger = logging.getLogger(__name__)
 
 # ── Constants ──
 L1_BASE_IMAGE = "hermes-agent-base"
@@ -387,7 +388,7 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
                     module_name,
                     "build",
                     "--build-arg",
-                    f"CONTEXT={os.environ.get('CONTEXT', 'personal')}",
+                    f"CONTEXT={os.environ.get('CONTEXT', platform_config.default_context())}",
                 ]
                 l1_build = subprocess.run(build_args, capture_output=True, timeout=300)
                 if l1_build.returncode != 0:
@@ -613,9 +614,9 @@ def deploy_docker_module(
                     new_hash = compute_source_hash(os.path.join(module_dir, module_name))
                     if new_hash:
                         save_build_hash(os.path.join(module_dir, module_name), new_hash)
-                except Exception as exc:
+                except (OSError, FileNotFoundError) as exc:
                     logger.warning(
-                        "[IMP:5][deploy_docker_module][hash_save] Failed to save build hash for %s: %s — non-fatal",
+                        "[IMP:7][docker_orchestrator][build] Failed to save build hash for %s: %s",
                         module_name,
                         exc,
                     )
@@ -909,13 +910,13 @@ def _pre_pull_images(
         if pid == 0:
             # Child process — use os._exit() NOT sys.exit() to avoid pytest
             # intercepting SystemExit in forked children (SystemExit inherits
-            # BaseException, not Exception, so try/except Exception doesn't catch it)
+            # BaseException, not Exception, so bare Exception catch misses it)
             try:
                 success = _pull_module_images(
                     mod_name, mod_overlay or None, secrets_env_file, platform_root, modules_dir
                 )
                 os._exit(0 if success else 1)
-            except Exception:
+            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation
                 os._exit(1)
         else:
             pids.append(pid)
@@ -1005,7 +1006,7 @@ def deploy_docker_group(
                     modules_dir,
                 )
                 os._exit(0 if success else 1)
-            except Exception:
+            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation
                 os._exit(1)
         else:
             pids.append(pid)
@@ -1072,7 +1073,7 @@ def deploy_docker_group(
             try:
                 success = run_healthcheck(mod_name, "docker")
                 os._exit(0 if success else 1)
-            except Exception:
+            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation
                 os._exit(1)
         else:
             hc_pids.append(pid)

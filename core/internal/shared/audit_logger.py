@@ -30,7 +30,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
-logger = logging.getLogger("audit_logger")
+logger = logging.getLogger(__name__)
 
 DEFAULT_LOG_FILE = "/var/log/platform/audit.jsonl"
 

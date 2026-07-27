@@ -28,7 +28,7 @@ from pathlib import Path
 import yaml
 
 # ── Logger setup ──────────────────────────────────────────────────────────────
-logger = logging.getLogger("provisioner")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 _ch = logging.StreamHandler(sys.stderr)
 _ch.setFormatter(logging.Formatter("%(message)s"))
@@ -364,7 +364,7 @@ def main() -> int:
     except yaml.YAMLError as e:
         logger.error("[IMP:10][provision] FATAL: Cannot parse %s: %s", yaml_path, e)
         return 1
-    except Exception as e:
+    except (FileNotFoundError, OSError) as e:
         logger.error("[IMP:10][provision] FATAL: Error reading %s: %s", yaml_path, e)
         return 1
 

@@ -11,7 +11,7 @@
 ## @invariants
 ##   1. All functions are idempotent — safe to re-run on provisioned node
 ##   2. Non-fatal failures log WARN, do NOT raise exceptions
-##   3. Fatal failures (critical preconditions) raise RuntimeError
+##   3. Fatal failures (critical preconditions) raise PlatformFatalError (or ConfigNotFoundError for missing files)
 ##   4. All subprocess.run calls use capture_output=True, text=True, timeout=120
 ##   5. No direct state mutation — state transitions handled by StateMachine
 ##   6. Env var access via os.environ (set by shell-фасад or StateMachine CLI)
@@ -30,6 +30,11 @@ import os
 import subprocess
 import time
 from pathlib import Path
+
+from core.internal.shared.exceptions import (
+    ConfigNotFoundError,
+    PlatformFatalError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +165,7 @@ def _is_pkg_installed(pkg: str) -> bool:
 
 
 def _install_apt_packages(packages: list[str], tor_enabled: bool = False) -> None:
-    """Install apt packages idempotently. Raises RuntimeError on critical failure."""
+    """Install apt packages idempotently. Raises PlatformFatalError on critical failure."""
     all_packages = list(packages)
     if tor_enabled:
         all_packages.extend(["tor", "privoxy", "obfs4proxy"])
@@ -184,12 +189,12 @@ def _install_apt_packages(packages: list[str], tor_enabled: bool = False) -> Non
             timeout=300,
         )
         if install_result.returncode != 0:
-            raise RuntimeError(f"apt-get install failed: {install_result.stderr.strip()}")
+            raise PlatformFatalError(f"apt-get install failed: {install_result.stderr.strip()}")
         logger.info("[IMP:9][apt] Packages installed successfully")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("apt-get update/install timed out") from None
+        raise PlatformFatalError("apt-get update/install timed out") from None
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"apt-get failed: {e}") from e
+        raise PlatformFatalError(f"apt-get failed: {e}") from e
 
 
 # endregion FUNC__install_apt_packages
@@ -256,7 +261,7 @@ def _install_docker(core_dir: str) -> bool:
     """Install Docker via install-docker.sh. Returns True on success."""
     install_script = os.path.join(core_dir, "internal", "bootstrap", "install-docker.sh")
     if not os.path.isfile(install_script):
-        raise RuntimeError(f"install-docker.sh not found at {install_script}")
+        raise ConfigNotFoundError(f"install-docker.sh not found at {install_script}")
 
     logger.info("[IMP:9][docker] Installing Docker + Compose plugin")
     try:
@@ -269,9 +274,9 @@ def _install_docker(core_dir: str) -> bool:
         if result.returncode == 0:
             logger.info("[IMP:9][docker] Docker installed successfully")
             return True
-        raise RuntimeError(f"Docker installation failed: {result.stderr.strip()[:500]}")
+        raise PlatformFatalError(f"Docker installation failed: {result.stderr.strip()[:500]}")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Docker installation timed out (300s)") from None
+        raise PlatformFatalError("Docker installation timed out (300s)") from None
 
 
 # endregion FUNC__install_docker
@@ -286,7 +291,7 @@ def _install_docker(core_dir: str) -> bool:
 ##   - Raises RuntimeError on useradd failure
 ##   - Groups are comma-separated in system call
 def _create_system_user(username: str, groups: list[str] | None = None, home_dir: str | None = None) -> None:
-    """Create system user idempotently. Raises RuntimeError on failure."""
+    """Create system user idempotently. Raises PlatformFatalError on failure."""
     check = subprocess.run(["id", username], capture_output=True, text=True, timeout=10)
     if check.returncode == 0:
         logger.info("[IMP:7][user] User '%s' already exists — skipping", username)
@@ -312,10 +317,10 @@ def _create_system_user(username: str, groups: list[str] | None = None, home_dir
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            raise RuntimeError(f"useradd for '{username}' failed: {result.stderr.strip()}")
+            raise PlatformFatalError(f"useradd for '{username}' failed: {result.stderr.strip()}")
         logger.info("[IMP:9][user] User '%s' created successfully", username)
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"useradd for '{username}' timed out") from None
+        raise PlatformFatalError(f"useradd for '{username}' timed out") from None
 
 
 # endregion FUNC__create_system_user
@@ -381,7 +386,7 @@ def _apply_firewall(core_dir: str, extra_ports: list[str] | None = None) -> bool
     """Apply ufw firewall baseline. Returns True on success."""
     firewall_script = os.path.join(core_dir, "internal", "bootstrap", "firewall.sh")
     if not os.path.isfile(firewall_script):
-        raise RuntimeError(f"firewall.sh not found at {firewall_script}")
+        raise ConfigNotFoundError(f"firewall.sh not found at {firewall_script}")
 
     cmd = ["bash", firewall_script]
     if extra_ports:
@@ -393,9 +398,9 @@ def _apply_firewall(core_dir: str, extra_ports: list[str] | None = None) -> bool
         if result.returncode == 0:
             logger.info("[IMP:9][firewall] Firewall applied successfully")
             return True
-        raise RuntimeError(f"Firewall setup failed: {result.stderr.strip()[:500]}")
+        raise PlatformFatalError(f"Firewall setup failed: {result.stderr.strip()[:500]}")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Firewall setup timed out") from None
+        raise PlatformFatalError("Firewall setup timed out") from None
 
 
 # endregion FUNC__apply_firewall
@@ -471,7 +476,7 @@ print('VALID')
     except (json.JSONDecodeError, yaml.YAMLError) as e:
         logger.warning("[IMP:7][validate] node.yaml parse error: %s", e)
         return False
-    except Exception as e:
+    except Exception as e:  # noqa: EXC — catch-all after specific YAML/JSON handlers
         logger.warning("[IMP:7][validate] Validation error: %s", e)
         return False
 
@@ -526,7 +531,7 @@ def _ghcr_docker_login(token: str) -> bool:
 ## @io — ⇥ sudoers_d: str → ⎋ bool (True = all files valid)
 ## @complexity — O(N) where N = files in sudoers.d
 ## @invariants
-##   - Raises RuntimeError if any file has wrong owner/permissions
+##   - Raises PlatformFatalError if any file has wrong owner/permissions
 ##   - Skips README file
 def _validate_sudoers_files(sudoers_d: str = "/etc/sudoers.d") -> bool:
     """Validate sudoers.d ownership and permissions. Raises RuntimeError on violations."""
@@ -557,7 +562,7 @@ def _validate_sudoers_files(sudoers_d: str = "/etc/sudoers.d") -> bool:
             errors += 1
 
     if errors > 0:
-        raise RuntimeError(
+        raise PlatformFatalError(
             f"{errors} sudoers file(s) with wrong owner/permissions. Fix:\n"
             f"  chown root:root {sudoers_d}/*\n"
             f"  chmod 0440 {sudoers_d}/*"
@@ -655,7 +660,7 @@ def _send_telegram_notification(
         opener.open(url, timeout=30)
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
         return True
-    except Exception as e:
+    except (OSError, ConnectionError, TimeoutError) as e:
         logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
         return False
 
@@ -674,7 +679,7 @@ def _tor_provision(core_dir: str, bridges_file: str = "", skip_verify: bool = Fa
     """Install and verify Tor/Privoxy. Returns True on success."""
     tor_script = os.path.join(core_dir, "internal", "bootstrap", "install-tor-proxy.sh")
     if not os.path.isfile(tor_script):
-        raise RuntimeError(f"install-tor-proxy.sh not found at {tor_script}")
+        raise ConfigNotFoundError(f"install-tor-proxy.sh not found at {tor_script}")
 
     cmd = ["bash", tor_script]
     if bridges_file:
@@ -764,7 +769,7 @@ def _step_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
             )
         else:
             logger.warning("[IMP:7][step:deploy_context] Cannot load context_deployer.py")
-    except Exception as e:
+    except (ImportError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][step:deploy_context] deploy_context failed (non-fatal): %s", e)
 
 

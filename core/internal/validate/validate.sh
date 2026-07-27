@@ -68,12 +68,9 @@ validate_with_ajv() {
     tmp_json="$(mktemp /tmp/platform-validate-XXXXXX.json)"
     trap 'rm -f "${tmp_json}" 2>/dev/null || true' RETURN
 
-    if ! python3 -c "
-import sys, json, yaml
-with open(sys.argv[1]) as f:
-    data = yaml.safe_load(f)
-print(json.dumps(data))
-" "$yaml_file" > "$tmp_json" 2>/dev/null; then
+    if ! python3 -m core.internal.shared.node_yaml \
+        --file "$yaml_file" \
+        --json-output > "$tmp_json" 2>/dev/null; then
         vlog_fail "ajv" "Failed to parse YAML: ${yaml_file}"
         return 1
     fi
@@ -273,13 +270,10 @@ check_port_conflict() {
         project_name="$(basename "$(dirname "$yaml_file")")"
 
         local host_port
-        host_port="$(python3 -c "
-import sys, json, yaml
-with open('${yaml_file}') as f:
-    data = yaml.safe_load(f)
-mon = data.get('monitoring', {})
-print(mon.get('host_port', 0))
-" 2>/dev/null || echo "0")"
+        host_port="$(python3 -m core.internal.shared.node_yaml \
+            --file "${yaml_file}" \
+            --get monitoring.host_port \
+            --default "0" 2>/dev/null || echo "0")"
 
         if [[ "$host_port" -eq 0 ]]; then
             continue

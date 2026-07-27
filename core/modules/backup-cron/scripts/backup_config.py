@@ -33,6 +33,8 @@ import logging
 import os
 from typing import TypedDict
 
+from core.internal.config import platform_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,9 +64,9 @@ class BackupConfig(S3Config):
 # region CONSTANTS
 
 _DEFAULT_S3_ENDPOINT_URL = "s3.timeweb.cloud"
-_DEFAULT_S3_REGION = "us-east-1"
+# _DEFAULT_S3_REGION removed — use platform_config.default_s3_region() instead
 _DEFAULT_S3_PREFIX = "platform/backups"
-_DEFAULT_CONTEXT = "personal"
+_DEFAULT_PLATFORM_CONTEXT = "personal"
 
 # endregion CONSTANTS
 
@@ -96,7 +98,7 @@ def get_backup_config() -> BackupConfig:
     aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
     aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")
-    region = os.environ.get("S3_REGION", _DEFAULT_S3_REGION)
+    region = os.environ.get("S3_REGION", platform_config.default_s3_region())
     prefix = os.environ.get("S3_PREFIX", _DEFAULT_S3_PREFIX)
     context = _detect_context()
     node_name = os.environ.get("NODE_NAME", "unknown")
@@ -170,7 +172,7 @@ def get_s3_config() -> S3Config:
     aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
     aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")
-    region = os.environ.get("S3_REGION", _DEFAULT_S3_REGION)
+    region = os.environ.get("S3_REGION", platform_config.default_s3_region())
 
     # Validate required vars (same as get_backup_config)
     missing: list[str] = []
@@ -229,12 +231,14 @@ def _detect_context() -> str:
         logger.warning(
             "[IMP:8][backup_config][context] Unknown PLATFORM_CONTEXT=%s, falling back to %s",
             raw,
-            _DEFAULT_CONTEXT,
+            _DEFAULT_PLATFORM_CONTEXT,
         )
     else:
-        logger.info("[IMP:7][backup_config][context] PLATFORM_CONTEXT not set, defaulting to %s", _DEFAULT_CONTEXT)
+        logger.info(
+            "[IMP:7][backup_config][context] PLATFORM_CONTEXT not set, defaulting to %s", _DEFAULT_PLATFORM_CONTEXT
+        )
 
-    return _DEFAULT_CONTEXT
+    return _DEFAULT_PLATFORM_CONTEXT
 
 
 # endregion FUNC_detect_context

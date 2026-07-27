@@ -113,19 +113,21 @@ test:
 gate:
 	$(eval MODE := $(or $(MODE),full))
 	@if [ "$(MODE)" = "fast" ]; then \
-		echo "[IMP:7][make][gate] MODE=fast — 7 steps: pre-commit, validate, check-dead-code, gates, contract, static, predeploy..."; \
+		echo "[IMP:7][make][gate] MODE=fast — 8 steps: pre-commit, validate, check-dead-code, check-exception-patterns, gates, contract, static, predeploy..."; \
 		rm -f tests/report.xml tests/report*.xml && \
 		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
-			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run..."; \
+			echo "[IMP:7][make][gate] Step 1/8: pre-commit-run..."; \
 			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; exit 1; }; \
 		else \
-			echo "[IMP:7][make][gate] Step 1/7: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
+			echo "[IMP:7][make][gate] Step 1/8: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
 		fi; \
-		echo "[IMP:7][make][gate] Step 2/7: validate..."; \
+		echo "[IMP:7][make][gate] Step 2/8: validate..."; \
 		bash $(_platform_root)/core/entrypoints/validate.sh || { echo "[IMP:9][make][gate] FAIL: validate"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 2b/7: check-dead-code..."; \
+		echo "[IMP:7][make][gate] Step 2b/8: check-dead-code..."; \
 		$(MAKE) check-dead-code || { echo "[IMP:9][make][gate] FAIL: check-dead-code"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 3a/7: anti-drift CI gates (static, parallel)..."; \
+		echo "[IMP:7][make][gate] Step 2c/8: check-exception-patterns..."; \
+		$(MAKE) check-exception-patterns || { echo "[IMP:9][make][gate] FAIL: check-exception-patterns"; exit 1; }; \
+		echo "[IMP:7][make][gate] Step 3a/8: anti-drift CI gates (static, parallel)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v || { echo "[IMP:9][make][gate] FAIL: gates (static)"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 3b/6: anti-drift CI gates (Docker, sequential)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and requires_docker" -v \
@@ -275,6 +277,16 @@ secrets-unlock:
 	@echo "[IMP:7][make][secrets-unlock] Decrypting secrets..."
 	@$(_platform_root)/core/entrypoints/secrets.sh $(NODE)
 	@echo "[IMP:9][make][secrets-unlock] Secrets decrypted"
+
+## check-exception-patterns: CI gate — ensure bare except Exception only in __main__ or # noqa: EXC-marked
+check-exception-patterns:
+	@echo "[IMP:7][gate] Checking for bare except Exception in non-CLI code..."
+	@! grep -rEn 'except[[:space:]]+Exception' core/internal/ --include='*.py' \
+		| grep -v '__main__' \
+		| grep -v '# noqa: EXC' \
+		|| (echo "[IMP:9][gate] FAIL: bare except Exception found in non-CLI code" && exit 1)
+	@echo "[IMP:9][gate] All exception handlers are typed — OK"
+
 
 ## audit: Run platform system audit
 ##   Usage: make audit [NODE=<name>]

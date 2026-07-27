@@ -27,7 +27,7 @@ import json
 import logging
 import sys
 
-logger = logging.getLogger("platform_deliver")
+logger = logging.getLogger(__name__)
 
 
 # region FUNC_build_deliver_command
@@ -118,6 +118,13 @@ def _cli() -> None:
 
     # ── parse subcommand ──────────────────────────────────────────────────
     parse_parser = subparsers.add_parser("parse", help="Parse platform-deliver args")
+    parse_parser.add_argument(
+        "--format",
+        choices=["json", "lines"],
+        default="json",
+        dest="output_format",
+        help="Output format: json (default) or lines (project\\norg)",
+    )
     parse_parser.add_argument("args", help="Arguments string after 'platform-deliver '")
 
     args = parser.parse_args()
@@ -133,8 +140,12 @@ def _cli() -> None:
     elif args.command == "parse":
         try:
             org, project = parse_deliver_args(args.args)
-            output = {"org": org, "project": project}
-            print(json.dumps(output))
+            if args.output_format == "lines":
+                print(project)
+                print(org)
+            else:
+                output = {"org": org, "project": project}
+                print(json.dumps(output))
         except ValueError as exc:
             logger.error("[IMP:3][CLI] parse failed: %s", exc)
             sys.exit(1)

@@ -40,14 +40,17 @@ _auto_create_db() {
     fi
 
     local db_name
-    db_name="$(python3 -c "
-import sys, json, yaml
-with open('${ai_yaml}') as f:
-    data = yaml.safe_load(f)
-needs = data.get('needs', {})
-db = needs.get('database', False)
-print(db if db and db != False else '')
-" 2>/dev/null || echo "")"
+    # NodeYaml CLI for needs.database (DevPlan 038c — replaces inline python3 import yaml)
+    # Note: database: false in YAML returns "False" string, not empty.
+    # Handle both missing key (default "") and explicit false.
+    db_name="$(python3 -m core.internal.shared.node_yaml \
+        --file "${ai_yaml}" \
+        --get needs.database \
+        --default "" 2>/dev/null || echo "")"
+    # Convert "False" → "" for backward compat with database: false in YAML
+    if [[ "$db_name" == "False" || "$db_name" == "false" ]]; then
+        db_name=""
+    fi
 
     if [[ -z "$db_name" ]]; then
         log_imp 7 "db" "No database declared in needs.database — skipping"

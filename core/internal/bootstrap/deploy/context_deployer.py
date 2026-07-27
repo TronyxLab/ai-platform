@@ -32,6 +32,8 @@ import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from core.internal.config import platform_config
+
 logger = logging.getLogger(__name__)
 
 # Shared library imports
@@ -547,7 +549,7 @@ def _write_audit(project: ProjectInfo, result: ProjectDeployResult) -> None:
 
     try:
         write_audit_entry(tag=tag, status=result.status.upper(), message=msg)
-    except Exception as e:
+    except OSError as e:
         logger.warning("[IMP:7][context_deployer] Failed to write audit log via shared: %s", e)
 
 
@@ -588,7 +590,7 @@ def _render_and_provision_llm() -> None:
             logger.info("[IMP:9][llm] litellm-config.yml rendered via subprocess")
         else:
             logger.warning("[IMP:7][llm] config_renderer.py not found at %s", renderer_path)
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][llm] Failed to render litellm-config.yml (non-fatal): %s", e)
 
     # Step 2: Provision virtual keys via subprocess
@@ -612,7 +614,7 @@ def _render_and_provision_llm() -> None:
                 )
         else:
             logger.warning("[IMP:7][llm] provision-llm.sh not found at %s", provision_entrypoint)
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][llm] Failed to provision keys (non-fatal): %s", e)
 
 
@@ -659,7 +661,7 @@ def _extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]
                 pd = p.get("domain", "")
                 if pd and pd not in domains:
                     domains.append(pd)
-    except Exception as e:
+    except (yaml.YAMLError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][deploy_context] Failed to extract domains: %s", e)
     return domains
 
@@ -704,7 +706,7 @@ def deploy_context(
 
     # ── Step 1: Extract/confirm CONTEXT ──
     if not context:
-        context = os.environ.get("CONTEXT", "")
+        context = os.environ.get("CONTEXT", platform_config.default_context_sentinel())
     if not context and node_yaml and os.path.isfile(node_yaml):
         context = extract_context_from_node_yaml(node_yaml, log_tag="deploy_context")
     if not context:
@@ -736,7 +738,7 @@ def deploy_context(
                 logger.info("[IMP:9][deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
             else:
                 logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py")
-        except Exception as e:
+        except (ImportError, OSError, FileNotFoundError) as e:
             logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s", e)
 
     # ── Step 3: Deploy context projects ──
@@ -754,7 +756,7 @@ def deploy_context(
                 timeout=60,
             )
             logger.info("[IMP:9][deploy_context] Vhosts rendered for node=%s", node_name)
-        except Exception as e:
+        except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
             logger.warning("[IMP:7][deploy_context] Vhost render failed (non-fatal): %s", e)
 
     # ── Step 5: Reload nginx ──
@@ -765,7 +767,7 @@ def deploy_context(
             text=True,
             timeout=15,
         )
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][deploy_context] Nginx reload failed (non-fatal): %s", e)
 
     # ── Step 6: Final verify ──
@@ -780,7 +782,7 @@ def deploy_context(
                 timeout=120,
             )
             logger.info("[IMP:9][deploy_context] Verify complete for node=%s", node_name)
-        except Exception as e:
+        except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
             logger.warning("[IMP:7][deploy_context] Verify failed (non-fatal): %s", e)
 
     # ── Build result ──
@@ -850,7 +852,7 @@ def main() -> int:
         context = extract_context_from_node_yaml(args.node_yaml, log_tag="context_deployer")
     if not context:
         # Try env var
-        context = os.environ.get("CONTEXT", "")
+        context = os.environ.get("CONTEXT", platform_config.default_context_sentinel())
     if not context:
         logger.error("[IMP:10][context_deployer] CONTEXT not set and cannot be extracted from node.yaml")
         return 1

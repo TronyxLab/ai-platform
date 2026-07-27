@@ -33,6 +33,8 @@ from pathlib import Path
 
 import yaml
 
+from core.internal.shared.exceptions import PlatformError
+
 # endregion IMPORTS
 
 # region CONSTANTS
@@ -470,7 +472,10 @@ def main() -> int:
         )
         return 0
 
-    except Exception as e:
+    except PlatformError as e:
+        print(f"[IMP:1][main] Manifest generation failed (exit={e.exit_code}): {e}", file=sys.stderr)
+        return e.exit_code
+    except Exception as e:  # noqa: EXC — top-level CLI handler for unexpected errors
         print(f"[IMP:1][main] CRITICAL: Manifest generation failed: {e}", file=sys.stderr)
         return 1
 
