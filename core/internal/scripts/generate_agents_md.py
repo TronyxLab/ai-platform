@@ -30,8 +30,6 @@ from pathlib import Path
 
 import yaml
 
-from core.internal.shared.exceptions import PlatformError
-
 # endregion IMPORTS
 
 # region CONSTANTS
@@ -281,9 +279,6 @@ def main() -> int:
         print(f"[IMP:9][main] AGENTS.md generation complete — {args.agents_md} updated", file=sys.stderr)
         return 0
 
-    except PlatformError as e:
-        print(f"[IMP:1][main] AGENTS.md generation failed (exit={e.exit_code}): {e}", file=sys.stderr)
-        return e.exit_code
     except Exception as e:  # noqa: EXC — top-level CLI handler for unexpected errors
         print(f"[IMP:1][main] CRITICAL: AGENTS.md generation failed: {e}", file=sys.stderr)
         return 1

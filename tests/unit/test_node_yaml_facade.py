@@ -23,14 +23,11 @@
 
 import json
 import logging
-import os
 import subprocess
 import sys
-
 from pathlib import Path
 
 import pytest
-from tests._conftest.ldd import ldd_trajectory
 
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
@@ -42,6 +39,7 @@ from core.internal.shared.node_yaml import (
     NodeInfo,
     NodeYaml,
 )
+from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +60,7 @@ def _run_cli(args: list[str], cwd: str | None = None) -> subprocess.CompletedPro
     ## @complexity — O(N) for subprocess run
     ## @invariants  Uses PROJECT_ROOT as default cwd to ensure core/ package is importable.
     """
-    cmd = [sys.executable, "-m", PYTHON_MODULE] + args
+    cmd = [sys.executable, "-m", PYTHON_MODULE, *args]
     return subprocess.run(
         cmd,
         capture_output=True,
@@ -105,8 +103,7 @@ def test_load_valid_yaml(caplog, tmp_path):
     assert data["node"]["host"] == "1.2.3.4"
     assert data["context"] == "myorg"
 
-    logger.critical("[IMP:9][test] load_valid_yaml: host=%s, ctx=%s — OK",
-                    data["node"]["host"], data["context"])
+    logger.critical("[IMP:9][test] load_valid_yaml: host=%s, ctx=%s — OK", data["node"]["host"], data["context"])
 
 
 # 🧪 TRAP[TEST] · Regression · load raises ConfigNotFoundError for missing file
@@ -257,8 +254,7 @@ def test_reload_invalidates_cache(caplog, tmp_path):
     data2 = node.reload()
     assert data2["value"] == "modified"
 
-    logger.critical("[IMP:9][test] reload_cache: before=%s, after=%s — OK",
-                    data1["value"], data2["value"])
+    logger.critical("[IMP:9][test] reload_cache: before=%s, after=%s — OK", data1["value"], data2["value"])
 
 
 # endregion Tests: Cache / Reload
@@ -577,8 +573,9 @@ def test_get_domain_config(caplog, tmp_path):
     assert cfg.acme_dns_plugin == "cloudflare"
     assert cfg.project_domains == ["app1.example.com", "app2.example.com"]
 
-    logger.critical("[IMP:9][test] get_domain_config: domain=%s, projects=%d — OK",
-                    cfg.platform_domain, len(cfg.project_domains))
+    logger.critical(
+        "[IMP:9][test] get_domain_config: domain=%s, projects=%d — OK", cfg.platform_domain, len(cfg.project_domains)
+    )
 
 
 # 🧪 TRAP[TEST] · Regression · get_node_info returns correct NamedTuple
@@ -593,8 +590,7 @@ def test_get_node_info(caplog, tmp_path):
     """
     yaml_path = _write_yaml(
         tmp_path,
-        "node:\n  fqdn: node1.example.com\n  owner_key: age1abc123\n"
-        "  docker_mirror: https://mirror.example.com\n",
+        "node:\n  fqdn: node1.example.com\n  owner_key: age1abc123\n  docker_mirror: https://mirror.example.com\n",
     )
     node = NodeYaml(str(yaml_path))
     info = node.get_node_info()

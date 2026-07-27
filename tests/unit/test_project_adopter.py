@@ -85,6 +85,7 @@ def _has_yaml_module() -> bool:
     """Check if PyYAML is available (skip guard)."""
     try:
         import yaml  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -115,6 +116,7 @@ def test_generate_minimal_yaml_no_domain(caplog: pytest.LogCaptureFixture, tmp_p
     assert adopter.yaml_file.exists(), "ai-platform.yaml should exist"
 
     import yaml
+
     with open(adopter.yaml_file) as f:
         data = yaml.safe_load(f)
 
@@ -153,6 +155,7 @@ def test_generate_minimal_yaml_with_domain(caplog: pytest.LogCaptureFixture, tmp
 
     assert result == "generated"
     import yaml
+
     with open(adopter.yaml_file) as f:
         data = yaml.safe_load(f)
 
@@ -188,6 +191,7 @@ def test_generate_minimal_yaml_type_detection(caplog: pytest.LogCaptureFixture, 
     (adopter.project_dir / "src" / "index.html").write_text("<html></html>")
     adopter.generate_minimal_ai_platform_yaml()
     import yaml
+
     with open(adopter.yaml_file) as f:
         data = yaml.safe_load(f)
     assert data["type"] == "frontend", f"Expected frontend, got {data['type']}"
@@ -321,15 +325,20 @@ networks:
 # · Last fail: N/A (new test)
 # · Remove if: validate_compose_networks logic changes
 @ldd_trajectory
-def test_validate_compose_networks_no_services(caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_compose_networks_no_services(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Compose with proxy-net external, but 0 services connected → FAIL."""
     # Disable docker to force PyYAML path (docker compose config drops unused external networks)
     import shutil as _shutil
+
     _orig_which = _shutil.which
+
     def _no_docker_which(cmd: str, *args: object, **kwargs: object) -> str | None:
         if cmd == "docker":
             return None
         return _orig_which(cmd, *args, **kwargs)
+
     monkeypatch.setattr("shutil.which", _no_docker_which)
 
     caplog.set_level(logging.INFO)
@@ -484,7 +493,9 @@ def test_simplify_deploy_yml(caplog: pytest.LogCaptureFixture, tmp_path: Path, m
 
     # Create old-style deploy.yml
     old_deploy = adopter.deploy_yml
-    old_deploy.write_text("name: Deploy\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo old\n")
+    old_deploy.write_text(
+        "name: Deploy\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo old\n"
+    )
 
     result = adopter.simplify_deploy_yml()
 
@@ -559,7 +570,9 @@ jobs:
 # · Last fail: N/A (new test)
 # · Remove if: _register_project_safe logic changes
 @ldd_trajectory
-def test_register_in_node_yaml_new(caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_register_in_node_yaml_new(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Register new project via project_registry import (sys.exit wrapped per D3)."""
     caplog.set_level(logging.INFO)
 
@@ -614,7 +627,9 @@ def test_register_in_node_yaml_new(caplog: pytest.LogCaptureFixture, tmp_path: P
 # · Last fail: N/A (new test)
 # · Remove if: configure_vhost import logic changes
 @ldd_trajectory
-def test_configure_vhost_mocked(caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_vhost_mocked(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Configure vhost with mocked vhost_renderer (D4 primary path)."""
     caplog.set_level(logging.INFO)
 
@@ -623,11 +638,13 @@ def test_configure_vhost_mocked(caplog: pytest.LogCaptureFixture, tmp_path: Path
     # Create ai-platform.yaml for vhost update
     if _has_yaml_module():
         import yaml
+
         with open(adopter.yaml_file, "w") as f:
             yaml.dump({"name": "test-project", "needs": {"domain": False, "expose": False}}, f)
 
     # Mock vhost_renderer module
     import types
+
     mock_renderer = types.ModuleType("vhost_renderer")
 
     def mock_configure(project_dir: Path, domain: str, node_configs_dir: Path | None = None) -> bool:

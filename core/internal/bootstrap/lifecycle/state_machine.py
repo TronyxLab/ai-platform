@@ -53,6 +53,8 @@ from typing import Any
 
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
+    ConfigParseError,
+    ConfigValidationError,
     PlatformError,
     PlatformFatalError,
 )
@@ -1742,12 +1744,12 @@ def _validate_node_yaml(node_yaml: str, core_dir: str) -> None:
 
     try:
         import jsonschema
-        import yaml
+
+        from core.internal.shared.node_yaml import NodeYaml
 
         with open(schema_file) as f:
             schema = json.load(f)
-        with open(node_yaml) as f:
-            instance = yaml.safe_load(f)
+        instance = NodeYaml(node_yaml).raw()
         jsonschema.validate(instance, schema)
         logger.info("[IMP:9][validate_node_yaml] node.yaml valid against schema")
     except ImportError:
@@ -1758,9 +1760,10 @@ def _validate_node_yaml(node_yaml: str, core_dir: str) -> None:
                 "python3",
                 "-c",
                 f"""
-import json, yaml, jsonschema, sys
-with open('{node_yaml}') as f:
-    instance = yaml.safe_load(f)
+import json, sys
+from core.internal.shared.node_yaml import NodeYaml
+import jsonschema
+instance = NodeYaml('{node_yaml}').raw()
 with open('{schema_file}') as f:
     schema = json.load(f)
 jsonschema.validate(instance, schema)
@@ -1769,7 +1772,7 @@ jsonschema.validate(instance, schema)
             "validate_node_yaml",
             non_fatal=True,
         )
-    except (yaml.YAMLError, json.JSONDecodeError, jsonschema.ValidationError) as e:
+    except (json.JSONDecodeError, jsonschema.ValidationError) as e:
         logger.warning("[IMP:7][validate_node_yaml] node.yaml validation failed: %s", e)
 
 
@@ -1939,11 +1942,10 @@ def _run_healthchecks(node_yaml: str) -> None:
     hc_fail = 0
 
     try:
-        import yaml
+        from core.internal.shared.node_yaml import NodeYaml
 
-        with open(node_yaml) as f:
-            data = yaml.safe_load(f)
-        modules = data.get("modules", {})
+        node = NodeYaml(node_yaml)
+        modules = node.get("modules", default={})
         if isinstance(modules, dict):
             module_items = modules.items()
         elif isinstance(modules, list):
@@ -2007,8 +2009,8 @@ def _run_healthchecks(node_yaml: str) -> None:
                 logger.warning("[IMP:7][healthcheck:%s] Healthcheck FAILED after %d attempts", mod_name, hc_max_retries)
                 hc_fail += 1
     except ImportError:
-        logger.warning("[IMP:7][healthcheck] yaml library not available — skipping inline healthchecks")
-    except yaml.YAMLError as e:
+        logger.warning("[IMP:7][healthcheck] NodeYaml library not available — skipping inline healthchecks")
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as e:
         logger.warning("[IMP:7][healthcheck] Failed to parse node.yaml: %s", e)
 
     if hc_fail > 0:

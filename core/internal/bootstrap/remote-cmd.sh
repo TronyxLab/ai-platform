@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # GREP_SUMMARY: bootstrap remote-cmd build_ssh_cmd build_update_ssh_cmd ssh-command quoting printf or node-yaml owner-key age-key overlay_deliverer
 # STRUCTURE: ▶ ┌build_{ssh,update,converge}_cmd (printf %q)┐ → ○ _resolve_and_extract (Python CLI) → ◇ execute_remote_{update,converge,reconcile} → ◇ deliver_vhost_overlays (Python facade)
-#region MODULE_CONTRACT
+# region MODULE_CONTRACT
 ## @purpose  Shell facade for remote SSH proxy operations. Delegates node resolution,
 ##           host extraction, vhost overlay delivery, and core rsync to Python
 ##           overlay_deliverer.py. Retains printf %q command builders per D3.
@@ -12,7 +12,7 @@
 ##              — DRY_RUN global variable controls dry-run mode
 ## @rationale Strangler-Fig: 672→~230 LOC shell facade + ~200 LOC Python module. D3: printf %q stays.
 ## @changes 2026-07-26 | TASK-036D — Wave 5d Strangler: migrated deliver/extract/resolve to Python
-#endregion MODULE_CONTRACT
+# endregion MODULE_CONTRACT
 
 # ── Source paths.sh + ssh.sh ─────────────────────────────────────────
 if [[ -z "${PATHS_LIB_DIR:-}" ]]; then
@@ -29,7 +29,7 @@ OVERLAY_DELIVERER="python3 -m core.internal.bootstrap.overlay_deliverer"
 # ══════════════════════════════════════════════════════════════════════
 # BUILD SSH CMD — init mode (printf %q)
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_build_ssh_cmd
+# region FUNC_build_ssh_cmd
 build_ssh_cmd() {
     local node_name="$1" owner_key="$2" ci_deploy_key="$3" age_key="$4"
     shift 4; local passthrough_args=("$@")
@@ -65,12 +65,12 @@ build_ssh_cmd() {
     for arg in "${passthrough_args[@]}"; do cmd+=" $(printf '%q' "${arg}")"; done
     echo "${cmd}"
 }
-#endregion FUNC_build_ssh_cmd
+# endregion FUNC_build_ssh_cmd
 
 # ══════════════════════════════════════════════════════════════════════
 # BUILD UPDATE SSH CMD — update mode (printf %q, no --owner-key, no --resume D2)
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_build_update_ssh_cmd
+# region FUNC_build_update_ssh_cmd
 build_update_ssh_cmd() {
     local node_name="$1" age_key="$2"
     shift 2; local passthrough_args=("$@")
@@ -95,12 +95,12 @@ build_update_ssh_cmd() {
     for arg in "${passthrough_args[@]}"; do cmd+=" $(printf '%q' "${arg}")"; done
     echo "${cmd}"
 }
-#endregion FUNC_build_update_ssh_cmd
+# endregion FUNC_build_update_ssh_cmd
 
 # ══════════════════════════════════════════════════════════════════════
 # BUILD CONVERGE SSH CMD (printf %q)
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_build_converge_ssh_cmd
+# region FUNC_build_converge_ssh_cmd
 build_converge_ssh_cmd() {
     local node_name="$1"; shift 1; local passthrough_args=("$@")
     local remote_converge="${PLATFORM_ROOT:-/opt/platform}/core/internal/bootstrap/converge.sh"
@@ -109,12 +109,12 @@ build_converge_ssh_cmd() {
     for arg in "${passthrough_args[@]}"; do cmd+=" $(printf '%q' "${arg}")"; done
     echo "${cmd}"
 }
-#endregion FUNC_build_converge_ssh_cmd
+# endregion FUNC_build_converge_ssh_cmd
 
 # ══════════════════════════════════════════════════════════════════════
 # RESOLVE + EXTRACT HELPER (calls Python CLI)
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_resolve_and_extract
+# region FUNC_resolve_and_extract
 ## @globals RESOLVED_NODE_YAML RESOLVED_SSH_HOST
 _resolve_and_extract() {
     local node_name="$1"
@@ -127,12 +127,12 @@ _resolve_and_extract() {
         echo "[IMP:9][remote-cmd] No SSH host — local fallback" >&2; return 2
     fi
 }
-#endregion FUNC_resolve_and_extract
+# endregion FUNC_resolve_and_extract
 
 # ══════════════════════════════════════════════════════════════════════
 # EXECUTE REMOTE UPDATE
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_execute_remote_update
+# region FUNC_execute_remote_update
 execute_remote_update() {
     local node_name="$1" detected_age_key="$2"; shift 2; local passthrough_args=("$@")
     local _eru_dir; _eru_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -171,12 +171,12 @@ execute_remote_update() {
         local rc=$?; log_imp 1 "execute_remote_update" "SSH exec failed — exit=${rc}"; return "${rc}"
     }
 }
-#endregion FUNC_execute_remote_update
+# endregion FUNC_execute_remote_update
 
 # ══════════════════════════════════════════════════════════════════════
 # EXECUTE REMOTE CONVERGE
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_execute_remote_converge
+# region FUNC_execute_remote_converge
 execute_remote_converge() {
     local node_name="$1"; shift 1; local passthrough_args=("$@")
     local _erc_dir; _erc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -197,22 +197,22 @@ execute_remote_converge() {
         local rc=$?; log_imp 1 "execute_remote_converge" "SSH exec failed — exit=${rc}"; return "${rc}"
     }
 }
-#endregion FUNC_execute_remote_converge
+# endregion FUNC_execute_remote_converge
 
 # ══════════════════════════════════════════════════════════════════════
 # DELIVER VHOST OVERLAYS (Python facade)
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_deliver_vhost_overlays
+# region FUNC_deliver_vhost_overlays
 deliver_vhost_overlays() {
     local node_name="$1"
     ${OVERLAY_DELIVERER} deliver --node "${node_name}" ${DRY_RUN:+--dry-run}
 }
-#endregion FUNC_deliver_vhost_overlays
+# endregion FUNC_deliver_vhost_overlays
 
 # ══════════════════════════════════════════════════════════════════════
 # EXECUTE REMOTE RECONCILE
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_execute_remote_reconcile
+# region FUNC_execute_remote_reconcile
 execute_remote_reconcile() {
     local node_name="$1"; shift 1; local passthrough_args=("$@")
     local _err_dir; _err_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -233,14 +233,14 @@ execute_remote_reconcile() {
         local rc=$?; log_imp 1 "execute_remote_reconcile" "SSH exec failed — exit=${rc}"; return "${rc}"
     }
 }
-#endregion FUNC_execute_remote_reconcile
+# endregion FUNC_execute_remote_reconcile
 
 # ══════════════════════════════════════════════════════════════════════
 # EXECUTE REMOTE RECONCILE ENTRYPOINT
 # ══════════════════════════════════════════════════════════════════════
-#region FUNC_execute_remote_reconcile_entrypoint
+# region FUNC_execute_remote_reconcile_entrypoint
 execute_remote_reconcile_entrypoint() {
     local node_name="$1"; shift 1
     execute_remote_reconcile "${node_name}" "$@"
 }
-#endregion FUNC_execute_remote_reconcile_entrypoint
+# endregion FUNC_execute_remote_reconcile_entrypoint

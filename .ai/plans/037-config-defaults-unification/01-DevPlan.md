@@ -316,7 +316,7 @@ def default_platform_context() -> str: ...
 ### TASK-1: Создать Python-фасад `platform_config.py`
 - **Owner:** Coder
 - **Output:** `core/internal/config/__init__.py` + `core/internal/config/platform_config.py` + `tests/unit/test_platform_config.py`
-- **Acceptance:** 
+- **Acceptance:**
   - Модуль загружает `platform-env.yaml` при импорте
   - Предоставляет типизированные accessors: `default_s3_region()`, `default_s3_prefix()`, `default_s3_bucket_sentinel()`, `default_context()`, `default_platform_context()`
   - `default_s3_bucket_sentinel()` возвращает `""` с документированной семантикой sentinel

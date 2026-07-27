@@ -25,7 +25,7 @@
 core/modules/{module}/
 ├── module.yaml                 # D4-контракт метаданных
 ├── docker-compose.base.yml     # profiles: [module-name], HEALTHCHECK, x-logging
-├── healthcheck.sh              # source ../../lib/healthcheck.sh
+├── healthcheck.sh              # uses lib/healthcheck.sh
 ├── Makefile                    # include ../../templates/module.mk
 ├── .dockerignore               # symlink → ../../templates/.dockerignore
 ├── config/                     # (опционально)
@@ -118,7 +118,7 @@ restart: unless-stopped           # D5: модуль-уровневая restart-
 
 | Режим | Механизм | Вызов |
 |-------|----------|-------|
-| **Liveness** (default) | `check_docker_health "$CONTAINER"` | `source ../../lib/healthcheck.sh` → `check_docker_health` |
+| **Liveness** (default) | `check_docker_health "$CONTAINER"` | uses lib/healthcheck.sh → `check_docker_health` |
 | **Deep diagnostics** | `check_docker_health` + service check | `MODE=deep` → `check_docker_health` THEN `check_http`/`exec_check` |
 
 ### Unified contract template
@@ -126,7 +126,7 @@ restart: unless-stopped           # D5: модуль-уровневая restart-
 ```bash
 #!/usr/bin/env bash
 # GREP_SUMMARY: <module> healthcheck liveness deep check_docker_health <tool>
-# STRUCTURE: ▶ source ../../lib/healthcheck.sh → ◇ MODE=deep ? check_docker_health + service-check → ⎋ liveness: check_docker_health → exit 0|1
+# STRUCTURE: ▶ uses ../../lib/healthcheck.sh → ◇ MODE=deep ? check_docker_health + service-check → ⎋ liveness: check_docker_health → exit 0|1
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"

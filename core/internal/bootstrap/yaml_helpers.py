@@ -14,6 +14,11 @@
 ##   - Depends on PyYAML (`import yaml`) — no fallback parser
 ## @rationale Inline `python3 -c "..."` in bootstrap.sh is fragile, untestable, and produces 0 LDD telemetry.
 ##            A dedicated module provides testable, logged, single-responsibility extraction.
+## @rationale (MIGRATION) EXCLUDED from NodeYaml migration — general-purpose YAML reader,
+##            not node.yaml-specific. Used via subprocess (python3 yaml_helpers.py <file> <field.path>)
+##            in bootstrap.sh for arbitrary YAML field extraction (owner_key, ci_deploy_key, domain,
+##            context, contexts.0.name). Callers pass different YAML files, not just node.yaml.
+##            Keeping direct yaml.safe_load for maximum compatibility.
 ## @changes
 ##   2026-07-25 · Initial — extracted from bootstrap.sh inline python3 blocks
 ## @modulemap

@@ -287,7 +287,7 @@ However, the following drift findings prevent a STABLE verdict:
 ```
 score = 100
 - 0 (no CRITICAL drift)
-- 0 (no HIGH drift)  
+- 0 (no HIGH drift)
 - 2 per MEDIUM/WARNING drift (DRIFT-D1, DRIFT-D2) → -2
 - 0 (no VIOLATED invariants)
 - 0 (no AT_RISK invariants)

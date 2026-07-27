@@ -45,9 +45,9 @@ import shutil
 import sys
 import tarfile
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 from core.internal.shared.project_registry import validate_project_name
 
@@ -70,12 +70,10 @@ WHITELIST_FILES: set[str] = {
 
 class SizeLimitError(Exception):
     """Raised when payload exceeds size limit."""
-    pass
 
 
 class ValidationError(Exception):
     """Raised when payload fails content validation."""
-    pass
 
 
 # ── Data classes ────────────────────────────────────────────────────────────
@@ -84,11 +82,12 @@ class ValidationError(Exception):
 @dataclass
 class DeliverResult:
     """Result of a payload delivery operation."""
+
     success: bool
     project: str
-    org: Optional[str] = None
+    org: str | None = None
     files_delivered: int = 0
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 # ── PayloadDeliverer ────────────────────────────────────────────────────────
@@ -117,8 +116,8 @@ class PayloadDeliverer:
     def deliver(
         self,
         project: str,
-        org: Optional[str] = None,
-        projects_base: Optional[str] = None,
+        org: str | None = None,
+        projects_base: str | None = None,
         stdin: BinaryIO = sys.stdin.buffer,
     ) -> DeliverResult:
         """Read, validate, and atomically extract tar.gz payload.
@@ -135,7 +134,9 @@ class PayloadDeliverer:
         base = projects_base or self.projects_base
         target_dir = os.path.join(base, f"{org + '/' if org else ''}{project}")
 
-        logger.info("[IMP:9][deliver][start] Deliver START: project=%s org=%s target=%s", project, org or "", target_dir)
+        logger.info(
+            "[IMP:9][deliver][start] Deliver START: project=%s org=%s target=%s", project, org or "", target_dir
+        )
 
         # Validate project name
         if not validate_project_name(project):
@@ -176,6 +177,7 @@ class PayloadDeliverer:
             # Cleanup temp dir
             if os.path.isdir(tmp_dir):
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+
     # endregion FUNC_deliver
 
     # region FUNC__read_payload
@@ -202,6 +204,7 @@ class PayloadDeliverer:
         if len(data) > max_size:
             raise SizeLimitError(f"Payload exceeds {max_size} byte limit ({len(data)} bytes read)")
         return data
+
     # endregion FUNC__read_payload
 
     # region FUNC__validate_and_extract
@@ -250,12 +253,10 @@ class PayloadDeliverer:
             raise ValidationError("Missing docker-compose.yml or compose.yaml in payload")
 
         # Verify extracted files exist and are regular
-        result: list[Path] = []
-        for p in extracted:
-            if p.is_file() and not p.is_symlink():
-                result.append(p)
+        result: list[Path] = [p for p in extracted if p.is_file() and not p.is_symlink()]
 
         return result
+
     # endregion FUNC__validate_and_extract
 
     # region FUNC__validate_entry
@@ -292,6 +293,7 @@ class PayloadDeliverer:
         # Whitelist check
         if name not in WHITELIST_FILES:
             raise ValidationError(f"Non-whitelisted file: {name} (allowed: {', '.join(sorted(WHITELIST_FILES))})")
+
     # endregion FUNC__validate_entry
 
     # region FUNC__atomic_move
@@ -317,6 +319,7 @@ class PayloadDeliverer:
             dest = os.path.join(target_dir, f.name)
             shutil.move(str(f), dest)
             logger.info("[IMP:8][atomic-move] Moved %s → %s", f.name, dest)
+
     # endregion FUNC__atomic_move
 
 

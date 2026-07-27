@@ -85,6 +85,7 @@ def overlay_dir(tmp_path):
 # _build_rsync_ssh_e
 # ═══════════════════════════════════════════════════════════════════
 
+
 # region FUNC_test_ssh_e
 def test_ssh_e(caplog) -> None:
     """Verify _ssh_e constructs correct -e argument from SSH_OPTS."""
@@ -98,12 +99,15 @@ def test_ssh_e(caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: SSH option format changes
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_ssh_e
 
 
 # ═══════════════════════════════════════════════════════════════════
 # resolve_node_yaml
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_test_resolve_node_yaml_found
 ## @purpose  Verify resolve_node_yaml finds node.yaml via path 1 (platform-local).
@@ -121,6 +125,8 @@ def test_resolve_node_yaml_found(platform_root: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: resolve_node_yaml signature or search logic changes fundamentally
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_resolve_node_yaml_found
 
 
@@ -134,7 +140,7 @@ def test_resolve_node_yaml_not_found(tmp_path: str, caplog) -> None:
     logger.info("[IMP:7][test_resolve_node_yaml_not_found][start] BEGIN")
     platform_root = str(tmp_path / "empty-root")
     os.makedirs(platform_root)
-    with pytest.raises(NodeYamlNotFoundError, match="node.yaml not found"):
+    with pytest.raises(NodeYamlNotFoundError, match=r"node\.yaml not found"):
         resolve_node_yaml("nonexistent", platform_root=platform_root, projects_dir=str(tmp_path / "projects"))
     logger.info("[IMP:9][test_resolve_node_yaml_not_found][done] NodeYamlNotFoundError raised as expected")
     # 🧪 TRAP[TEST] · Regression: resolve_node_yaml fails silently instead of raising
@@ -142,12 +148,15 @@ def test_resolve_node_yaml_not_found(tmp_path: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_resolve_node_yaml_not_found
 
 
 # ═══════════════════════════════════════════════════════════════════
 # extract_node_host
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_test_extract_node_host_with_host
 ## @purpose  Verify extract_node_host returns host from node.yaml with node.host field.
@@ -165,6 +174,8 @@ def test_extract_node_host_with_host(platform_root: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: YAML structure changes fundamentally
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_extract_node_host_with_host
 
 
@@ -184,12 +195,15 @@ def test_extract_node_host_empty(platform_root_no_host: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: host extraction logic changes
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_extract_node_host_empty
 
 
 # ═══════════════════════════════════════════════════════════════════
 # sync_core_to_vps
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_test_sync_core_dry_run
 ## @purpose  Verify sync_core_to_vps dry-run mode prints commands and returns True.
@@ -216,6 +230,8 @@ def test_sync_core_dry_run(tmp_path: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: dry-run mode is removed
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_sync_core_dry_run
 
 
@@ -230,21 +246,26 @@ def test_sync_core_rsync_failure(tmp_path: str, caplog) -> None:
     os.makedirs(core_src)
     (tmp_path / "core" / "test.py").write_text("# test")
 
-    with mock.patch.object(subprocess, "run", return_value=mock.MagicMock(returncode=1, stderr="rsync error")):
-        with pytest.raises(SyncCoreError, match="rsync core/ failed"):
-            sync_core_to_vps(host="1.2.3.4", core_src=core_src, dry_run=False)
+    with (
+        mock.patch.object(subprocess, "run", return_value=mock.MagicMock(returncode=1, stderr="rsync error")),
+        pytest.raises(SyncCoreError, match="rsync core/ failed"),
+    ):
+        sync_core_to_vps(host="1.2.3.4", core_src=core_src, dry_run=False)
     logger.info("[IMP:9][test_sync_core_rsync_failure][done] SyncCoreError raised as expected")
     # 🧪 TRAP[TEST] · Regression: rsync failure silently ignored
     # · Scenario: failed rsync should raise, not return False
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_sync_core_rsync_failure
 
 
 # ═══════════════════════════════════════════════════════════════════
 # deliver_vhost_overlays
 # ═══════════════════════════════════════════════════════════════════
+
 
 # region FUNC_test_deliver_no_overlays
 ## @purpose  Verify deliver_vhost_overlays gracefully skips when no overlays directory exists.
@@ -261,6 +282,8 @@ def test_deliver_no_overlays(platform_root: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: overlay delivery strategy changes
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_deliver_no_overlays
 
 
@@ -279,6 +302,8 @@ def test_deliver_dry_run(overlay_dir: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: dry-run mode removed
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_deliver_dry_run
 
 
@@ -298,6 +323,8 @@ def test_deliver_with_overlays_mocked(overlay_dir: str, caplog) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: delivery pipeline architecture changes
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_deliver_with_overlays_mocked
 
 
@@ -311,21 +338,26 @@ def test_deliver_mkdir_failure(overlay_dir: str, caplog) -> None:
 
     # First mock call (mkdir) fails, second (rsync) would not be reached
     mock_fail = mock.MagicMock(returncode=1, stderr="mkdir: cannot create directory")
-    with mock.patch.object(subprocess, "run", return_value=mock_fail):
-        with pytest.raises(DeliveryError, match="mkdir failed on"):
-            deliver_vhost_overlays("test-node", platform_root=overlay_dir, dry_run=False)
+    with (
+        mock.patch.object(subprocess, "run", return_value=mock_fail),
+        pytest.raises(DeliveryError, match="mkdir failed on"),
+    ):
+        deliver_vhost_overlays("test-node", platform_root=overlay_dir, dry_run=False)
     logger.info("[IMP:9][test_deliver_mkdir_failure][done] DeliveryError raised as expected")
     # 🧪 TRAP[TEST] · Regression: mkdir failure silently ignored
     # · Scenario: failed mkdir should raise, not silently skip rsync
     # · Last fail: N/A (new test)
     # · Remove if: error handling strategy changes
     _assert_imp9(caplog)
+
+
 # endregion FUNC_test_deliver_mkdir_failure
 
 
 # ═══════════════════════════════════════════════════════════════════
 # HELPER
 # ═══════════════════════════════════════════════════════════════════
+
 
 def _assert_imp9(caplog) -> None:
     """LDD trajectory check: verify at least one IMP:9 log exists."""

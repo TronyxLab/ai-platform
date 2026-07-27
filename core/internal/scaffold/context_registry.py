@@ -41,9 +41,11 @@ def register_context(
         SystemExit(1) on YAML read/write errors
     """
     try:
-        with open(yaml_path) as f:
-            data = yaml.safe_load(f) or {}
-    except (yaml.YAMLError, OSError, FileNotFoundError) as e:
+        from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+        from core.internal.shared.node_yaml import NodeYaml
+
+        data = NodeYaml(yaml_path).raw()
+    except (ConfigNotFoundError, ConfigParseError) as e:
         print(f"ERROR: Failed to read {yaml_path}: {e}")
         sys.exit(1)
 

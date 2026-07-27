@@ -382,7 +382,7 @@ def probe_dns_resolution(domain: str = "") -> CheckResult:
             detail=f"DNS resolution failed for {domain} — cert issuance may fail",
             error=str(e)[:200],
         )
-    except (OSError, socket.gaierror) as e:
+    except OSError as e:
         latency = int((time.monotonic() - start) * 1000)
         return CheckResult(
             status="warn",
@@ -461,20 +461,17 @@ def run_preflight(node_yaml: str = "", context: str = "", node_name: str = "") -
 def _extract_domain_from_node_yaml(node_yaml_path: str) -> str:
     """Extract platform domain from node.yaml."""
     try:
-        import yaml
+        from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
 
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            return ""
-        # node.yaml: domain at top level or under node.platform_domain
-        domain = data.get("domain", "")
+        node = NodeYaml(node_yaml_path)
+        cfg = node.get_domain_config()
+        domain = cfg.platform_domain
         if not domain:
-            node_info = data.get("node", {})
-            if isinstance(node_info, dict):
-                domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
+            domain = node.get("node.platform_domain", default="")
+            if not domain:
+                domain = node.get("node.domain", default="")
         return domain or ""
-    except (FileNotFoundError, yaml.YAMLError, OSError) as e:
+    except (ConfigNotFoundError, ConfigParseError, OSError) as e:
         logger.warning("[IMP:7][preflight] Failed to extract domain from %s: %s", node_yaml_path, e)
         return ""
 

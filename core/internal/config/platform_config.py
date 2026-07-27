@@ -24,9 +24,7 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -71,7 +69,7 @@ def _load_defaults() -> None:
 
     # Search paths: cwd → parent → grandparent (up to 3 levels up)
     search_dir = Path.cwd()
-    yaml_path: Optional[Path] = None
+    yaml_path: Path | None = None
     for _ in range(4):
         candidate = search_dir / "platform-env.yaml"
         if candidate.is_file():
@@ -89,9 +87,7 @@ def _load_defaults() -> None:
             yaml_path = candidate
 
     if yaml_path is None:
-        logger.warning(
-            "[IMP:7][platform_config] platform-env.yaml not found — using fallback values"
-        )
+        logger.warning("[IMP:7][platform_config] platform-env.yaml not found — using fallback values")
         return
 
     try:
@@ -143,6 +139,7 @@ def get_default(key: str, fallback: str = "") -> str:
 
 
 # region TYPED ACCESSORS
+
 
 # region FUNC_default_s3_region
 ## @purpose  Get default S3 region (SoT: ru-1)

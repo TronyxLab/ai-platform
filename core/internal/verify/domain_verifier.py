@@ -29,11 +29,10 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
-import yaml
+from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +57,9 @@ class VerifyResult:
     """The domain or endpoint that was verified."""
     status: str
     """One of: 'pass' (HTTP 200), 'warn' (HTTP non-200), 'connection_error' (curl failed), 'skip' (no credentials)."""
-    http_code: Optional[int] = None
+    http_code: int | None = None
     """HTTP response code, or None on connection error / skip."""
-    error: Optional[str] = None
+    error: str | None = None
     """Error message on failure, None on success."""
 
 
@@ -183,10 +182,8 @@ def get_expose_domains(yaml_path: Path) -> list[str]:
     ##   - YAML parse errors propagate as exceptions
     """
     logger.info("[IMP:8][get_expose_domains][parse] Reading: %s", yaml_path)
-    with open(yaml_path) as f:
-        data = yaml.safe_load(f)
-
-    projects = data.get("projects", []) if data else []
+    node = NodeYaml(yaml_path)
+    projects = node.get_projects()
     domains: list[str] = []
     for p in projects:
         if p.get("expose", False) is True:
@@ -225,8 +222,14 @@ def verify_domain(domain: str, timeout: int = CURL_TIMEOUT_DEFAULT) -> VerifyRes
     """
     url = f"https://{domain}"
     cmd = [
-        "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
-        "--max-time", str(timeout),
+        "curl",
+        "-sS",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        "--max-time",
+        str(timeout),
         url,
     ]
     logger.info("[IMP:7][verify_domain][curl] Checking %s (timeout=%ds)", url, timeout)
@@ -248,8 +251,7 @@ def verify_domain(domain: str, timeout: int = CURL_TIMEOUT_DEFAULT) -> VerifyRes
         )
 
     if result.returncode != 0:
-        logger.info("[IMP:9][verify_domain][fail] Connection failed for %s: curl exit %d",
-                     domain, result.returncode)
+        logger.info("[IMP:9][verify_domain][fail] Connection failed for %s: curl exit %d", domain, result.returncode)
         return VerifyResult(
             domain=domain,
             status="connection_error",
@@ -271,9 +273,8 @@ def verify_domain(domain: str, timeout: int = CURL_TIMEOUT_DEFAULT) -> VerifyRes
     if http_code == 200:
         logger.info("[IMP:9][verify_domain][pass] %s — HTTP 200 ✓", domain)
         return VerifyResult(domain=domain, status="pass", http_code=http_code)
-    else:
-        logger.info("[IMP:9][verify_domain][warn] %s — HTTP %d ⚠️ (expected 200)", domain, http_code)
-        return VerifyResult(domain=domain, status="warn", http_code=http_code)
+    logger.info("[IMP:9][verify_domain][warn] %s — HTTP %d ⚠️ (expected 200)", domain, http_code)
+    return VerifyResult(domain=domain, status="warn", http_code=http_code)
 
 
 # endregion FUNC_VERIFY_DOMAIN
@@ -286,7 +287,7 @@ def verify_status_page(
     platform_domain: str,
     email: str,
     password: str,
-) -> Optional[VerifyResult]:
+) -> VerifyResult | None:
     """Check status-page /health endpoint with Basic Auth.
 
     ## @purpose  Verify the status-page service is operational by curling
@@ -315,9 +316,16 @@ def verify_status_page(
 
     status_page_url = f"https://platform.{platform_domain}/health"
     cmd = [
-        "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
-        "--max-time", str(STATUS_PAGE_TIMEOUT),
-        "-u", f"{email}:{password}",
+        "curl",
+        "-sS",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        "--max-time",
+        str(STATUS_PAGE_TIMEOUT),
+        "-u",
+        f"{email}:{password}",
         status_page_url,
     ]
     logger.info("[IMP:7][verify_status_page][curl] Checking %s", status_page_url)
@@ -339,8 +347,7 @@ def verify_status_page(
         )
 
     if result.returncode != 0:
-        logger.error("[IMP:9][verify_status_page][fail] Status-page connection failed: curl exit %d",
-                      result.returncode)
+        logger.error("[IMP:9][verify_status_page][fail] Status-page connection failed: curl exit %d", result.returncode)
         return VerifyResult(
             domain=status_page_url,
             status="connection_error",
@@ -362,9 +369,8 @@ def verify_status_page(
     if http_code == 200:
         logger.info("[IMP:9][verify_status_page][pass] Status-page /health — HTTP 200 PASS ✓")
         return VerifyResult(domain=status_page_url, status="pass", http_code=http_code)
-    else:
-        logger.error("[IMP:9][verify_status_page][fail] Status-page /health — HTTP %d FAIL ⚠️", http_code)
-        return VerifyResult(domain=status_page_url, status="warn", http_code=http_code)
+    logger.error("[IMP:9][verify_status_page][fail] Status-page /health — HTTP %d FAIL ⚠️", http_code)
+    return VerifyResult(domain=status_page_url, status="warn", http_code=http_code)
 
 
 # endregion FUNC_VERIFY_STATUS_PAGE
@@ -373,7 +379,7 @@ def verify_status_page(
 # region FUNC_MAIN
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for domain verification.
 
     ## @purpose  Parse command-line arguments, orchestrate full verification pipeline:
@@ -416,7 +422,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     logger.info("[IMP:7][main][parse] Parsing projects with expose:true from %s", yaml_path)
     try:
         domains = get_expose_domains(yaml_path)
-    except (FileNotFoundError, yaml.YAMLError, OSError) as e:
+    except (ConfigNotFoundError, ConfigParseError, OSError) as e:
         logger.error("[IMP:10][main][parse] Failed to parse YAML: %s — %s", yaml_path, e)
         return 1
 
@@ -457,7 +463,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp_result = verify_status_page(platform_domain, master_email, master_password)
     if sp_result is not None:
         if sp_result.status == "pass":
-            print(f"  status-page /health -> HTTP 200 PASS ✓")
+            print("  status-page /health -> HTTP 200 PASS ✓")
             logger.info("[IMP:7][main][status-page] Status-page health check PASSED")
         elif sp_result.status == "connection_error":
             print(f"  status-page /health -> {sp_result.error}")
@@ -468,7 +474,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             logger.error("[IMP:9][main][status-page] Status-page health check FAILED (HTTP %s)", sp_result.http_code)
             all_ok = False
     else:
-        logger.info("[IMP:8][main][status-page] Skipping status-page health check — missing PLATFORM_DOMAIN or credentials")
+        logger.info(
+            "[IMP:8][main][status-page] Skipping status-page health check — missing PLATFORM_DOMAIN or credentials"
+        )
 
     if sp_result is not None:
         print("")
@@ -477,9 +485,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     if all_ok:
         logger.info("[IMP:9][main][verdict] ALL CHECKS PASS — domains + status-page health")
         return 0
-    else:
-        logger.info("[IMP:9][main][verdict] SOME CHECKS FAILED — review output above")
-        return 1
+    logger.info("[IMP:9][main][verdict] SOME CHECKS FAILED — review output above")
+    return 1
 
 
 # endregion FUNC_MAIN

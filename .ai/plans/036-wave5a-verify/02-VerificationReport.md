@@ -196,7 +196,7 @@ All 7 ACs have measurable verification methods with concrete commands. AC-3 is m
 
 ### Finding L1 [LOW] · main() listed in AC-2 but untested
 
-**Evidence:** L12 includes `main` in the function list ("Все 4 функции (resolve_node_yaml, get_expose_domains, verify_domain, verify_status_page)"). $TEST_SPEC (L376-401) has 0 tests for main(). 
+**Evidence:** L12 includes `main` in the function list ("Все 4 функции (resolve_node_yaml, get_expose_domains, verify_domain, verify_status_page)"). $TEST_SPEC (L376-401) has 0 tests for main().
 
 **Actually:** AC-2 text says "все 4 функции" but then lists 4 specific functions (resolve_node_yaml, get_expose_domains, verify_domain, verify_status_page) — note that main() is enumerated separately in the Step-by-Step Data Flow (L213: "main(): argparse CLI → orchestrate"). So AC-2 is itself ambiguous: the count says 4 but 5 functions are described across the plan (4 business-logic + 1 main).
 

@@ -115,7 +115,7 @@ $START_VERIFICATION_REPORT
   ```
 - **Actual schema:** The manifest uses top-level category sections (`ci:`, `bootstrap:`, `deploy:`, ...) with entries containing `make_target`, `mechanism`, `delegates_to`, `signature`, `operation_ru`, `description`. New make targets are added to the `allowed_verbs` flat list (L1318-1371). There is NO `verb`, `type`, or `allowed_in` field in any existing entry.
 - **Impact:** Adding a non-conformant YAML entry would break manifest validation (`make check-manifests` gate) and CI.
-- **Fix:** 
+- **Fix:**
   1. Add `check-exception-patterns` to `allowed_verbs` list (in alphabetical order between `check-env-defaults` and `check-file-lines`)
   2. Add a new entry in the `ci` section (or appropriate category) following the existing format: `make_target: check-exception-patterns`
 

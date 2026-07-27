@@ -33,6 +33,11 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.internal.config import platform_config
+from core.internal.shared.exceptions import (
+    ConfigNotFoundError,
+    ConfigParseError,
+)
+from core.internal.shared.node_yaml import NodeYaml
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +175,7 @@ class DeployResult:
 
 
 # region FUNC_resolve_context_projects
-## @purpose — Parse node.yaml and filter projects[] where context matches.
+## @purpose — Parse node.yaml via NodeYaml and filter projects[] where context matches.
 ##            One node = one context: if project has no context field, include it.
 ## @io — ⇥ node_yaml: str, context: str → ⎋ list[ProjectInfo]
 ## @complexity — O(N) where N = projects in node.yaml
@@ -181,25 +186,19 @@ class DeployResult:
 def resolve_context_projects(node_yaml: str, context: str) -> list[ProjectInfo]:
     """Parse node.yaml → filter projects by context.
 
-    ▶ ┌node.yaml┐ → ◇ parse projects[] → ◇ filter context==<context> → ⊕ list[ProjectInfo] → ⎋
+    ▶ ┌node.yaml → NodeYaml┐ → ◇ parse projects[] → ◇ filter context==<context> → ⊕ list[ProjectInfo] → ⎋
     """
     if not node_yaml or not os.path.isfile(node_yaml):
         logger.warning("[IMP:7][context_deployer] node.yaml not found: %s", node_yaml)
         return []
 
     try:
-        import yaml
-
-        with open(node_yaml) as f:
-            data = yaml.safe_load(f)
-    except (ImportError, OSError) as e:
+        node = NodeYaml(node_yaml)
+    except (ConfigNotFoundError, ConfigParseError, OSError) as e:
         logger.error("[IMP:10][context_deployer] Cannot read node.yaml: %s", e)
         return []
 
-    if not isinstance(data, dict):
-        return []
-
-    raw_projects = data.get("projects", [])
+    raw_projects = node.get("projects", default=[])
     if not isinstance(raw_projects, list):
         return []
 
@@ -625,10 +624,10 @@ def _render_and_provision_llm() -> None:
 
 
 # region FUNC_extract_domains_for_context
-## @purpose — Extract all domains from node.yaml for cert orchestration.
+## @purpose — Extract all domains from node.yaml for cert orchestration via NodeYaml.
 ##            Migrated from steps.py (DevPlan 079 DRIFT-B3 unification).
 ## @io — ⇥ node_yaml_path: str, context: str → ⎋ list[str]
-## @complexity — O(N) for YAML parse
+## @complexity — O(N) for NodeYaml parse
 ## @invariants
 ##   - Combines platform domain + project domains (filtered by context)
 ##   - Deduplicates domains
@@ -637,20 +636,19 @@ def _extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]
     """Extract all domains from node.yaml for cert orchestration."""
     domains: list[str] = []
     try:
-        import yaml
+        node = NodeYaml(node_yaml_path)
 
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        if not isinstance(data, dict):
-            return domains
-        domain = data.get("domain", "")
+        # Platform domain: try top-level domain, then node.platform_domain, then node.domain
+        domain = node.get("domain", default="")
         if not domain:
-            node_info = data.get("node", {})
-            if isinstance(node_info, dict):
-                domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
+            domain = node.get("node.platform_domain", default="")
+        if not domain:
+            domain = node.get("node.domain", default="")
         if domain:
             domains.append(domain)
-        projects = data.get("projects", [])
+
+        # Project domains filtered by context
+        projects = node.get("projects", default=[])
         if isinstance(projects, list):
             for p in projects:
                 if not isinstance(p, dict):
@@ -661,7 +659,7 @@ def _extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]
                 pd = p.get("domain", "")
                 if pd and pd not in domains:
                     domains.append(pd)
-    except (yaml.YAMLError, OSError, FileNotFoundError) as e:
+    except (ConfigNotFoundError, ConfigParseError, OSError) as e:
         logger.warning("[IMP:7][deploy_context] Failed to extract domains: %s", e)
     return domains
 

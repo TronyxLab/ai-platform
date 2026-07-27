@@ -25,11 +25,10 @@ import pytest
 _project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
-from core.internal.deploy.payload_deliverer import (  # noqa: E402
+from core.internal.deploy.payload_deliverer import (
     MAX_PAYLOAD_SIZE,
     PayloadDeliverer,
     SizeLimitError,
-    ValidationError,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,11 +96,13 @@ def test_deliver_valid_payload(caplog, tmp_path, deliverer):
     """Valid payload with compose, yaml, env should succeed."""
     caplog.set_level(logging.INFO)
 
-    tar_bytes = _make_tar_bytes({
-        "docker-compose.yml": b"version: '3'\nservices:\n  app:\n    image: test\n",
-        "ai-platform.yaml": b"service: app\n",
-        ".env.platform": b"VAR=value\n",
-    })
+    tar_bytes = _make_tar_bytes(
+        {
+            "docker-compose.yml": b"version: '3'\nservices:\n  app:\n    image: test\n",
+            "ai-platform.yaml": b"service: app\n",
+            ".env.platform": b"VAR=value\n",
+        }
+    )
 
     result = deliverer.deliver(
         project="test-app",
@@ -233,9 +234,11 @@ def test_deliver_no_whitelist_file(caplog, tmp_path, deliverer):
     """Payload with non-whitelisted file should be rejected."""
     caplog.set_level(logging.INFO)
 
-    tar_bytes = _make_tar_bytes({
-        "script.sh": b"#!/bin/sh\necho hello\n",
-    })
+    tar_bytes = _make_tar_bytes(
+        {
+            "script.sh": b"#!/bin/sh\necho hello\n",
+        }
+    )
 
     result = deliverer.deliver(
         project="test-app",
@@ -277,10 +280,12 @@ def test_deliver_compose_yaml_alternative(caplog, tmp_path, deliverer):
     """Payload with compose.yaml (alternative to docker-compose.yml) should succeed."""
     caplog.set_level(logging.INFO)
 
-    tar_bytes = _make_tar_bytes({
-        "compose.yaml": b"version: '3'\nservices:\n  app:\n    image: test\n",
-        ".env.platform": b"VAR=value\n",
-    })
+    tar_bytes = _make_tar_bytes(
+        {
+            "compose.yaml": b"version: '3'\nservices:\n  app:\n    image: test\n",
+            ".env.platform": b"VAR=value\n",
+        }
+    )
 
     result = deliverer.deliver(
         project="test-app",

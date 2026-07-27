@@ -426,8 +426,6 @@ def _validate_node_yaml(node_yaml: str, schema_file: str) -> bool:
 
     logger.info("[IMP:8][validate] Validating node.yaml against schema")
     try:
-        import yaml
-
         try:
             import jsonschema
         except ImportError:
@@ -439,9 +437,10 @@ def _validate_node_yaml(node_yaml: str, schema_file: str) -> bool:
                         "python3",
                         "-c",
                         f"""
-import json, yaml, jsonschema, sys
-with open('{node_yaml}') as f:
-    instance = yaml.safe_load(f)
+import json, sys
+from core.internal.shared.node_yaml import NodeYaml
+import jsonschema
+instance = NodeYaml('{node_yaml}').raw()
 with open('{schema_file}') as f:
     schema = json.load(f)
 jsonschema.validate(instance, schema)
@@ -461,19 +460,20 @@ print('VALID')
                 logger.warning("[IMP:7][validate] Validation subprocess error: %s", e)
                 return True
 
-        # In-process validation
+        # In-process validation using NodeYaml
+        from core.internal.shared.node_yaml import NodeYaml
+
         with open(schema_file) as f:
             schema = json.load(f)
-        with open(node_yaml) as f:
-            instance = yaml.safe_load(f)
+        instance = NodeYaml(node_yaml).raw()
         jsonschema.validate(instance, schema)
         logger.info("[IMP:9][validate] node.yaml valid against schema")
         return True
 
     except ImportError:
-        logger.warning("[IMP:7][validate] yaml library not available — skipping schema validation")
+        logger.warning("[IMP:7][validate] NodeYaml library not available — skipping schema validation")
         return True
-    except (json.JSONDecodeError, yaml.YAMLError) as e:
+    except json.JSONDecodeError as e:
         logger.warning("[IMP:7][validate] node.yaml parse error: %s", e)
         return False
     except Exception as e:  # noqa: EXC — catch-all after specific YAML/JSON handlers

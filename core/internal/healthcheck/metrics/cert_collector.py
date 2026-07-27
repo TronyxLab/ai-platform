@@ -177,16 +177,15 @@ def get_certs(node_yaml_path: str) -> list[dict]:
 
     # Step 1: Load node.yaml
     try:
-        import yaml
+        from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
 
-        with open(node_yaml_path) as f:
-            node_data = yaml.safe_load(f) or {}
-    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
+        node = NodeYaml(node_yaml_path)
+        projects = node.get_projects()
+    except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
         _logger.warning("[IMP:8][cert_collector][get_certs] Failed to load node.yaml %s: %s", node_yaml_path, exc)
         return []
 
     # Extract domains from projects
-    projects = node_data.get("projects", [])
     domains: list[str] = []
     for p in projects:
         if isinstance(p, dict):

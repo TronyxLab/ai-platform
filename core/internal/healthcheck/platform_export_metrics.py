@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: platform-export-metrics coordinator metrics-collector atomic-write cron status-metrics.json host-uptime backup docker-images-size memory swap uname os
-# STRUCTURE: ▶ main() → load node.yaml → docker_collector → cert_collector → project_collector → host_collector
+# STRUCTURE: ▶ main() → NodeYaml → docker_collector → cert_collector → project_collector → host_collector
 #            → host_uptime → docker_images_size_gb → host_memory → host_uname → backup_collector
 #            → merge + errors[] + backup + platform_services
 #            → json_writer.atomic_write(/run/platform/status-metrics.json) → ⎋ exit 0
@@ -27,6 +27,9 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.node_yaml import NodeYaml
 
 # Configuration — lazy env lookup to support test-time env override
 # (module-level constants would freeze at first import across tests)
@@ -101,7 +104,7 @@ def main() -> int:
     host: dict = {}
     image_sizes: dict[str, int] = {}
 
-    # ── 1. Node.yaml (loaded, used by downstream collectors) ──
+    # ── 1. Node.yaml via NodeYaml (used by downstream collectors) ──
     _load_node_yaml(node_yaml_path, _logger)
 
     # ── 2. Docker containers (always fresh) ──
@@ -257,18 +260,14 @@ def main() -> int:
 
 # region FUNC_load_node_yaml
 def _load_node_yaml(path: str, _logger: logging.Logger) -> dict:
-    """Load node.yaml, return dict (empty on failure).
+    """Load node.yaml via NodeYaml facade, return dict (empty on failure).
 
     ## @io  ⇥ path: str → ⎋ dict
-    ## @complexity  O(1) — single file read + yaml parse
+    ## @complexity  O(1) — single file read + NodeYaml parse
     """
     try:
-        import yaml
-
-        with open(path) as f:
-            data = yaml.safe_load(f)
-        return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
+        return NodeYaml(path).raw()
+    except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
         _logger.warning("[IMP:8][coordinator][_load_node_yaml] Failed to load %s: %s", path, exc)
         return {}
 

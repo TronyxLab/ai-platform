@@ -15,13 +15,11 @@
 import logging
 import os
 import sys
-import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 import yaml
-
 
 # region FIXTURES
 
@@ -50,9 +48,7 @@ def yaml_file(tmp_path: Path, env_defaults_yaml: dict) -> Path:
 
 
 @pytest.fixture
-def isolated_platform_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Generator:
+def isolated_platform_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Generator:
     """Isolate platform_config by changing cwd and clearing module cache.
 
     Changes current directory to tmp_path, then reloads the platform_config
@@ -90,9 +86,7 @@ def isolated_platform_config(
 ## @purpose  Verify that env_defaults are loaded from platform-env.yaml
 ## @scenario Write a platform-env.yaml → import platform_config → verify all accessors
 ## @complexity 1
-def test_load_from_yaml(
-    yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_load_from_yaml(yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
     """Verify that env_defaults are loaded from platform-env.yaml."""
     caplog.set_level(logging.INFO)
     pc = isolated_platform_config
@@ -122,9 +116,7 @@ def test_load_from_yaml(
 ## @purpose  Verify fallback values when platform-env.yaml is missing
 ## @scenario empty tmp_dir → import platform_config → verify fallback accessors
 ## @complexity 1
-def test_fallback_values(
-    tmp_path: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_fallback_values(tmp_path: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
     """Verify fallback values when platform-env.yaml is missing."""
     caplog.set_level(logging.INFO)
     pc = isolated_platform_config
@@ -139,10 +131,8 @@ def test_fallback_values(
     assert pc.default_context_sentinel() == ""
 
     # Check LDD telemetry — should have warning log about missing file
-    found_warning = False
     for record in caplog.records:
         if "[IMP:" in record.message and "not found" in record.message:
-            found_warning = True
             break
     # This is acceptable: when YAML is available, it uses it; when not, fallback
     # We assert the values are correct regardless
@@ -155,9 +145,7 @@ def test_fallback_values(
 ## @purpose  Verify all typed accessors return correct types and values
 ## @scenario Test each accessor independently with a known YAML
 ## @complexity 1
-def test_typed_accessors(
-    yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_typed_accessors(yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
     """Verify all typed accessor functions."""
     caplog.set_level(logging.INFO)
     pc = isolated_platform_config
@@ -215,9 +203,7 @@ def test_typed_accessors(
 ## @purpose  Verify get_default works with custom fallback
 ## @scenario Call get_default with unknown key and custom fallback
 ## @complexity 1
-def test_get_default(
-    yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_get_default(yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
     """Verify get_default with custom fallback for unknown keys."""
     caplog.set_level(logging.INFO)
     pc = isolated_platform_config

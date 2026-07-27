@@ -23,7 +23,7 @@ import pytest
 _project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
-from core.internal.deploy.deploy_engine import (  # noqa: E402
+from core.internal.deploy.deploy_engine import (
     DeployEngine,
     DeployResult,
     ImageInfo,
@@ -79,18 +79,26 @@ def _check_ldd(caplog, min_level: int = 9) -> bool:
 # · Last fail: N/A (new test)
 @patch.object(DeployEngine, "_preflight_checks", return_value=None)
 @patch.object(DeployEngine, "_save_previous_image", return_value=ImageInfo(id="sha256:prev", tag="test:latest"))
-@patch.object(DeployEngine, "_capture_deploy_snapshot", return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"))
+@patch.object(
+    DeployEngine,
+    "_capture_deploy_snapshot",
+    return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
+)
 @patch.object(DeployEngine, "_pull_image_with_retry", return_value=True)
 @patch.object(DeployEngine, "_atomic_up", return_value=True)
 @patch.object(DeployEngine, "_poll_health", return_value=True)
-def test_deploy_success(mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight,
-                        caplog, tmp_project, engine):
+def test_deploy_success(
+    mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine
+):
     """Full deploy pipeline should succeed with all steps mocked."""
     caplog.set_level(logging.INFO)
 
     result = engine.deploy(
-        project="test-app", ref="v1.0.0", service="app",
-        project_dir=tmp_project, max_wait=5,
+        project="test-app",
+        ref="v1.0.0",
+        service="app",
+        project_dir=tmp_project,
+        max_wait=5,
     )
 
     assert _check_ldd(caplog), "Missing IMP:9 business logic log"
@@ -112,19 +120,27 @@ def test_deploy_success(mock_health, mock_up, mock_pull, mock_snap, mock_save, m
 # · Last fail: N/A (new test)
 @patch.object(DeployEngine, "_preflight_checks", return_value=None)
 @patch.object(DeployEngine, "_save_previous_image", return_value=None)  # first deploy
-@patch.object(DeployEngine, "_capture_deploy_snapshot", return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"))
+@patch.object(
+    DeployEngine,
+    "_capture_deploy_snapshot",
+    return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
+)
 @patch.object(DeployEngine, "_pull_image_with_retry", return_value=True)
 @patch.object(DeployEngine, "_atomic_up", return_value=True)
 @patch.object(DeployEngine, "_poll_health", return_value=False)  # health fails
-def test_deploy_first_deploy_fail(mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight,
-                                  caplog, tmp_project, engine):
+def test_deploy_first_deploy_fail(
+    mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine
+):
     """First deploy with health fail should raise SystemExit."""
     caplog.set_level(logging.INFO)
 
     with pytest.raises(SystemExit) as exc_info:
         engine.deploy(
-            project="test-app", ref="v1.0.0", service="app",
-            project_dir=tmp_project, max_wait=2,
+            project="test-app",
+            ref="v1.0.0",
+            service="app",
+            project_dir=tmp_project,
+            max_wait=2,
         )
 
     assert exc_info.value.code == 1
@@ -137,19 +153,27 @@ def test_deploy_first_deploy_fail(mock_health, mock_up, mock_pull, mock_snap, mo
 # · Last fail: N/A (new test)
 @patch.object(DeployEngine, "_preflight_checks", return_value=None)
 @patch.object(DeployEngine, "_save_previous_image", return_value=ImageInfo(id="sha256:prev", tag="test:prev"))
-@patch.object(DeployEngine, "_capture_deploy_snapshot", return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"))
+@patch.object(
+    DeployEngine,
+    "_capture_deploy_snapshot",
+    return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
+)
 @patch.object(DeployEngine, "_pull_image_with_retry", return_value=True)
 @patch.object(DeployEngine, "_atomic_up", return_value=True)
 @patch.object(DeployEngine, "_poll_health", return_value=False)  # health fails
 @patch.object(DeployEngine, "_perform_rollback", return_value=True)  # rollback succeeds
-def test_deploy_rollback(mock_rollback, mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight,
-                         caplog, tmp_project, engine):
+def test_deploy_rollback(
+    mock_rollback, mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine
+):
     """Healthcheck failure should trigger rollback for existing deploy."""
     caplog.set_level(logging.INFO)
 
     result = engine.deploy(
-        project="test-app", ref="v2.0.0-broken", service="app",
-        project_dir=tmp_project, max_wait=2,
+        project="test-app",
+        ref="v2.0.0-broken",
+        service="app",
+        project_dir=tmp_project,
+        max_wait=2,
     )
 
     assert _check_ldd(caplog), "Missing IMP:9 log"
@@ -165,17 +189,23 @@ def test_deploy_rollback(mock_rollback, mock_health, mock_up, mock_pull, mock_sn
 # · Last fail: N/A (new test)
 @patch.object(DeployEngine, "_preflight_checks", return_value=None)
 @patch.object(DeployEngine, "_save_previous_image", return_value=None)  # first deploy
-@patch.object(DeployEngine, "_capture_deploy_snapshot", return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"))
+@patch.object(
+    DeployEngine,
+    "_capture_deploy_snapshot",
+    return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
+)
 @patch.object(DeployEngine, "_pull_image_with_retry", return_value=False)  # pull fails
-def test_pull_image_all_fail(mock_pull, mock_snap, mock_save, mock_preflight,
-                             caplog, tmp_project, engine):
+def test_pull_image_all_fail(mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine):
     """All pull attempts fail should trigger first-deploy failure."""
     caplog.set_level(logging.INFO)
 
     with pytest.raises(SystemExit) as exc_info:
         engine.deploy(
-            project="test-app", ref="v1.0.0", service="app",
-            project_dir=tmp_project, max_wait=2,
+            project="test-app",
+            ref="v1.0.0",
+            service="app",
+            project_dir=tmp_project,
+            max_wait=2,
         )
 
     assert exc_info.value.code == 1
@@ -208,8 +238,7 @@ def test_remove_active(mock_run, caplog, engine, tmp_project):
 
     # Verify docker compose down was called and does NOT contain -v
     compose_down_calls = [
-        c for c in mock_run.call_args_list
-        if "docker" in str(c) and "compose" in str(c) and "down" in str(c)
+        c for c in mock_run.call_args_list if "docker" in str(c) and "compose" in str(c) and "down" in str(c)
     ]
     assert len(compose_down_calls) >= 1, "docker compose down should be called"
     for call in compose_down_calls:
@@ -314,7 +343,7 @@ def test_save_previous_image_exists(mock_run, caplog, tmp_project, engine):
 
     # Two calls: compose images -q returns ID, image inspect returns tag
     mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="sha256:prev123\n", stderr=""),   # compose images -q
+        MagicMock(returncode=0, stdout="sha256:prev123\n", stderr=""),  # compose images -q
         MagicMock(returncode=0, stdout="test-app:latest\n", stderr=""),  # image inspect --format
     ]
 
@@ -372,7 +401,7 @@ def test_poll_health_healthy(mock_sleep, mock_run, caplog, tmp_project, engine):
 
     # compose ps -q returns cid, inspect returns healthy
     mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="container123\n", stderr=""),   # compose ps -q
+        MagicMock(returncode=0, stdout="container123\n", stderr=""),  # compose ps -q
         MagicMock(returncode=0, stdout="running healthy\n", stderr=""),  # inspect
     ]
 
@@ -396,7 +425,7 @@ def test_poll_health_timeout(mock_sleep, mock_time, mock_run, caplog, tmp_projec
     # Mock time to force immediate timeout: only 1 iteration before deadline
     mock_time.side_effect = [100, 105]  # start=100, deadline=105; second check at 105 → timeout
     mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="container123\n", stderr=""),   # compose ps -q
+        MagicMock(returncode=0, stdout="container123\n", stderr=""),  # compose ps -q
         MagicMock(returncode=0, stdout="running unhealthy\n", stderr=""),  # inspect (unhealthy)
     ]
 
@@ -450,8 +479,11 @@ def test_deploy_calls_validate_project_name(caplog, engine):
     caplog.set_level(logging.INFO)
 
     result = engine.deploy(
-        project="../escape", ref="v1.0.0", service="app",
-        project_dir="/tmp", max_wait=5,
+        project="../escape",
+        ref="v1.0.0",
+        service="app",
+        project_dir="/tmp",
+        max_wait=5,
     )
 
     assert _check_ldd(caplog), "Missing IMP:9 log"

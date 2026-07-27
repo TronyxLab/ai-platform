@@ -13,8 +13,6 @@
 
 import logging
 
-from tests._conftest.ldd import ldd_trajectory
-
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
@@ -22,6 +20,7 @@ from core.internal.shared.exceptions import (
     PlatformError,
     PlatformFatalError,
 )
+from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +48,14 @@ def test_platform_error_exit_codes(caplog):
     assert ConfigValidationError.exit_code == 4
     assert PlatformFatalError.exit_code == 10
 
-    logger.critical("[IMP:9][test] exit_codes: base=%d, not_found=%d, parse=%d, validation=%d, fatal=%d — OK",
-                    PlatformError.exit_code, ConfigNotFoundError.exit_code,
-                    ConfigParseError.exit_code, ConfigValidationError.exit_code,
-                    PlatformFatalError.exit_code)
+    logger.critical(
+        "[IMP:9][test] exit_codes: base=%d, not_found=%d, parse=%d, validation=%d, fatal=%d — OK",
+        PlatformError.exit_code,
+        ConfigNotFoundError.exit_code,
+        ConfigParseError.exit_code,
+        ConfigValidationError.exit_code,
+        PlatformFatalError.exit_code,
+    )
 
 
 # 🧪 TRAP[TEST] · Regression · verify exception inheritance

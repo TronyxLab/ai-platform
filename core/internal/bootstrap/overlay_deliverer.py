@@ -26,9 +26,8 @@ import logging
 import os
 import subprocess
 import sys
-from typing import List, Optional
 
-import yaml
+from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, ConfigValidationError, NodeYaml
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
@@ -37,37 +36,55 @@ logger = logging.getLogger(__name__)
 # region EXC_OverlayDelivererError
 class OverlayDelivererError(Exception):
     """Base exception for overlay_deliverer errors."""
+
+
 # endregion EXC_OverlayDelivererError
 
 
 # region EXC_NodeYamlNotFoundError
 class NodeYamlNotFoundError(OverlayDelivererError):
     """Raised when node.yaml cannot be found in any search path."""
+
+
 # endregion EXC_NodeYamlNotFoundError
 
 
 # region EXC_SyncCoreError
 class SyncCoreError(OverlayDelivererError):
     """Raised when rsync core/ delivery to VPS fails."""
+
+
 # endregion EXC_SyncCoreError
 
 
 # region EXC_DeliveryError
 class DeliveryError(OverlayDelivererError):
     """Raised when overlay delivery (mkdir/rsync/ssh) fails."""
+
+
 # endregion EXC_DeliveryError
 
 
 # Mirror lib/ssh.sh SSH_OPTS_COMMON — BatchMode, accept-new, timeouts
-SSH_OPTS: List[str] = [
-    "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=30",
-    "-o", "ServerAliveCountMax=10",
+SSH_OPTS: list[str] = [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ConnectTimeout=30",
+    "-o",
+    "ServerAliveInterval=30",
+    "-o",
+    "ServerAliveCountMax=10",
 ]
 
-RSYNC_EXCLUDES: List[str] = [
-    "--exclude=.git", "--exclude=__pycache__", "--exclude=.pytest_cache",
-    "--exclude=default-user.xml", "--exclude=.env",
+RSYNC_EXCLUDES: list[str] = [
+    "--exclude=.git",
+    "--exclude=__pycache__",
+    "--exclude=.pytest_cache",
+    "--exclude=default-user.xml",
+    "--exclude=.env",
 ]
 
 
@@ -78,6 +95,8 @@ RSYNC_EXCLUDES: List[str] = [
 def _ssh_e() -> str:
     """Build rsync -e argument from SSH_OPTS."""
     return f"ssh {' '.join(SSH_OPTS)}"
+
+
 # endregion FUNC__ssh_e
 
 
@@ -89,7 +108,7 @@ def _ssh_e() -> str:
 def resolve_node_yaml(
     node_name: str,
     platform_root: str = "/opt/platform",
-    projects_dir: Optional[str] = None,
+    projects_dir: str | None = None,
 ) -> str:
     """Search node.yaml across 3 paths: platform-local → org repos → VPS fallback.
 
@@ -102,14 +121,12 @@ def resolve_node_yaml(
         projects_dir = os.path.expanduser("~/projects")
 
     logger.info("[IMP:8][resolve_node_yaml][search] Resolving node.yaml for node=%s", node_name)
-    candidates: List[str] = [
+    candidates: list[str] = [
         os.path.join(platform_root, "node-configs", node_name, "node.yaml"),
     ]
     # Path 2: org repos glob — nullglob handled by Python glob (empty list if no match)
     # ⚠️ TRAP[BUG] · 2026-07-07 · P2 · Glob expansion nullguard (ported from node-resolver.sh)
-    candidates.extend(sorted(glob_module.glob(
-        os.path.join(projects_dir, "*", "node-configs", node_name, "node.yaml")
-    )))
+    candidates.extend(sorted(glob_module.glob(os.path.join(projects_dir, "*", "node-configs", node_name, "node.yaml"))))
     candidates.append(f"/opt/node-configs/{node_name}/node.yaml")
 
     for p in candidates:
@@ -119,15 +136,17 @@ def resolve_node_yaml(
 
     logger.info("[IMP:10][resolve_node_yaml][result] Not found for node=%s (searched: %s)", node_name, candidates)
     raise NodeYamlNotFoundError(f"node.yaml not found for node={node_name}")
+
+
 # endregion FUNC_resolve_node_yaml
 
 
 # region FUNC_extract_node_host
-## @purpose  Extract node.host from node.yaml via pyyaml. Returns "" if absent.
+## @purpose  Extract node.host from node.yaml via NodeYaml. Returns "" if absent.
 ## @io  input: yaml_path (str), output: host string or "" (empty = no host)
-## @complexity  O(1) — single YAML parse + key lookup
+## @complexity  O(1) — single NodeYaml lazy load + get
 def extract_node_host(yaml_path: str) -> str:
-    """Extract node.host from node.yaml via pyyaml. Returns "" if absent."""
+    """Extract node.host from node.yaml via NodeYaml. Returns "" if absent."""
     if not yaml_path:
         raise NodeYamlNotFoundError("Missing required argument: yaml_path")
     if not os.path.isfile(yaml_path):
@@ -135,17 +154,15 @@ def extract_node_host(yaml_path: str) -> str:
 
     logger.info("[IMP:8][extract_node_host][parse] Extracting host from: %s", yaml_path)
     try:
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except (yaml.YAMLError, OSError, FileNotFoundError) as exc:
+        node = NodeYaml(yaml_path)
+        host = node.get("node.host", default="")
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
         raise NodeYamlNotFoundError(f"Failed to parse YAML: {yaml_path}") from exc
 
-    if data is None:
-        raise NodeYamlNotFoundError(f"Empty YAML file: {yaml_path}")
-
-    host = (data.get("node", {}) or {}).get("host", "") or ""
     logger.info("[IMP:9][extract_node_host][result] Host: %s", host if host else "(empty)")
     return host
+
+
 # endregion FUNC_extract_node_host
 
 
@@ -153,9 +170,7 @@ def extract_node_host(yaml_path: str) -> str:
 ## @purpose  Rsync core/ + optional node.yaml to remote VPS. Dry-run mode prints commands, does not execute.
 ## @io  input: host, core_src, node_name, node_yaml, dry_run (bool); output: bool success
 ## @complexity  O(f + m) where f = files rsynced, m = metadata (node.yaml) rsync
-def sync_core_to_vps(
-    host: str, core_src: str, node_name: str = "", node_yaml: str = "", dry_run: bool = False
-) -> bool:
+def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: str = "", dry_run: bool = False) -> bool:
     """Rsync core/ + optional node.yaml to remote VPS. Dry-run: print, don't exec.
 
     @raises SyncCoreError  On rsync failure.
@@ -167,14 +182,17 @@ def sync_core_to_vps(
     core_src = core_src if core_src.endswith("/") else core_src + "/"
 
     ssh_e = _ssh_e()
-    cmd = ["rsync", "-avz", "--delete"] + RSYNC_EXCLUDES + ["-e", ssh_e, core_src,
-           f"root@{host}:/opt/platform/core/"]
+    cmd = ["rsync", "-avz", "--delete", *RSYNC_EXCLUDES, "-e", ssh_e, core_src, f"root@{host}:/opt/platform/core/"]
 
     if dry_run:
         logger.info("[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: %s", " ".join(cmd))
         if node_yaml and os.path.isfile(node_yaml):
-            logger.info("[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: rsync %s → root@%s:/opt/node-configs/%s/node.yaml",
-                        node_yaml, host, node_name)
+            logger.info(
+                "[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: rsync %s → root@%s:/opt/node-configs/%s/node.yaml",
+                node_yaml,
+                host,
+                node_name,
+            )
         return True
 
     logger.info("[IMP:9][sync_core_to_vps][exec] Rsyncing core/ → %s:/opt/platform/core/", host)
@@ -185,8 +203,7 @@ def sync_core_to_vps(
     logger.info("[IMP:9][sync_core_to_vps][exec] core/ rsync complete")
 
     if node_yaml and os.path.isfile(node_yaml):
-        cmd2 = ["rsync", "-avz", "-e", ssh_e, node_yaml,
-                f"root@{host}:/opt/node-configs/{node_name}/node.yaml"]
+        cmd2 = ["rsync", "-avz", "-e", ssh_e, node_yaml, f"root@{host}:/opt/node-configs/{node_name}/node.yaml"]
         logger.info("[IMP:9][sync_core_to_vps][exec] Rsyncing node.yaml → %s:/opt/node-configs/%s/", host, node_name)
         r = subprocess.run(cmd2, capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
@@ -196,6 +213,8 @@ def sync_core_to_vps(
         logger.info("[IMP:8][sync_core_to_vps][exec] SKIP node.yaml — not found")
 
     return True
+
+
 # endregion FUNC_sync_core_to_vps
 
 
@@ -211,7 +230,7 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
     @raises DeliveryError  On mkdir or rsync failure.
     """
     logger.info("[IMP:8][deliver_vhost_overlays][start] Starting delivery for node=%s", node_name)
-    
+
     try:
         node_yaml = resolve_node_yaml(node_name, platform_root)
         ssh_host = extract_node_host(node_yaml)
@@ -241,21 +260,29 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
         logger.info("[IMP:8][deliver_vhost_overlays][dry-run] DRY-RUN: rsync %s/ → root@%s:...", overlay_dir, ssh_host)
         return True
 
-    mkdir_cmd = ["ssh"] + SSH_OPTS + [f"root@{ssh_host}",
-                 f"mkdir -p /opt/node-configs/{node_name}/overlays/nginx"]
+    mkdir_cmd = ["ssh", *SSH_OPTS, f"root@{ssh_host}", f"mkdir -p /opt/node-configs/{node_name}/overlays/nginx"]
     logger.info("[IMP:9][deliver_vhost_overlays][ssh] Creating remote overlay dir on %s", ssh_host)
     r = subprocess.run(mkdir_cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
         raise DeliveryError(f"mkdir failed on {ssh_host} (exit={r.returncode}): {r.stderr.strip()}")
 
-    rsync_cmd = ["rsync", "-avz", "--delete", "-e", ssh_e,
-                 f"{overlay_dir}/", f"root@{ssh_host}:/opt/node-configs/{node_name}/overlays/nginx/"]
+    rsync_cmd = [
+        "rsync",
+        "-avz",
+        "--delete",
+        "-e",
+        ssh_e,
+        f"{overlay_dir}/",
+        f"root@{ssh_host}:/opt/node-configs/{node_name}/overlays/nginx/",
+    ]
     logger.info("[IMP:9][deliver_vhost_overlays][rsync] Rsyncing overlays → %s", ssh_host)
     r = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         raise DeliveryError(f"rsync overlays failed for {ssh_host} (exit={r.returncode}): {r.stderr.strip()}")
     logger.info("[IMP:9][deliver_vhost_overlays][done] Overlay delivery complete")
     return True
+
+
 # endregion FUNC_deliver_vhost_overlays
 
 
@@ -301,6 +328,8 @@ def cli() -> None:
     except OverlayDelivererError as e:
         logger.info("[IMP:10][cli][error] %s", e)
         sys.exit(1)
+
+
 # endregion FUNC_cli
 
 

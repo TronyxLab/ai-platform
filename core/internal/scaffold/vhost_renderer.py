@@ -38,7 +38,6 @@
 
 import argparse
 import hashlib
-import json
 import logging
 import os
 import re
@@ -48,9 +47,11 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import yaml
+
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.node_yaml import NodeYaml
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class ProjectConfig:
     ## @purpose — Extracted expose/domain/target_node from project YAML.
     ## @io — ⇥ YAML fields → ⎋ dataclass with name, domain, target_node, expose
     """
+
     name: str
     domain: str
     target_node: str
@@ -81,6 +83,7 @@ class ProjectEntry:
     ## @purpose — Lightweight pair for FQDN uniqueness and vhost rendering.
     ## @io — ⇥ node.yaml#projects[].name + .domain → ⎋ ProjectEntry
     """
+
     name: str
     domain: str
 
@@ -92,6 +95,7 @@ class VhostFile:
     ## @purpose — Captures the output path, FQDN, project name, and content hash.
     ## @io — ⇥ render_vhost() → ⎋ VhostFile
     """
+
     path: str
     fqdn: str
     project_name: str
@@ -105,6 +109,7 @@ class RenderResult:
     ## @purpose — Aggregate result with count, errors, and nginx -t status.
     ## @io — ⇥ render_all() → ⎋ RenderResult
     """
+
     rendered_count: int = 0
     errors: list[str] = field(default_factory=list)
     harness_passed: bool = True
@@ -116,7 +121,6 @@ class DuplicateDomainError(Exception):
     ## @purpose — FQDN uniqueness enforcement (exit code 2).
     ## @io — ⇥ duplicate domain details → ⎋ error message
     """
-    pass
 
 
 # endregion DATA_CLASSES
@@ -129,7 +133,7 @@ class DuplicateDomainError(Exception):
 # region FUNC_read_project_yaml
 
 
-def read_project_yaml(project_dir: str) -> Optional[ProjectConfig]:
+def read_project_yaml(project_dir: str) -> ProjectConfig | None:
     """Read ai-platform.yaml, extract expose/domain/target_node.
 
     ▶ ┌project_dir┐ → ◇ ai-platform.yaml exists? → ◇ safe_load → ◇ expose:true?
@@ -190,7 +194,9 @@ def read_project_yaml(project_dir: str) -> Optional[ProjectConfig]:
         return None
 
     project_name = yaml_path.parent.name
-    logger.info("[IMP:9][read_project_yaml] Parsed: expose=true, domain=%s, target_node=%s", domain_str, target_node_str)
+    logger.info(
+        "[IMP:9][read_project_yaml] Parsed: expose=true, domain=%s, target_node=%s", domain_str, target_node_str
+    )
 
     return ProjectConfig(
         name=project_name,
@@ -211,12 +217,12 @@ def read_project_yaml(project_dir: str) -> Optional[ProjectConfig]:
 
 
 def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
-    """Read node.yaml and extract project entries with domain.
+    """Read node.yaml via NodeYaml and extract project entries with domain.
 
-    ▶ ┌node_yaml_path┐ → ◇ file exists? → ◇ safe_load → ◇ iterate projects[]
-    → ◇ name + domain? → ⊕ append → ⎋ list[ProjectEntry]
+    ▶ ┌node_yaml_path → NodeYaml┐ → ◇ get_projects → ◇ filter name + domain
+    → ⊕ append → ⎋ list[ProjectEntry]
 
-    ## @purpose — Parse node.yaml for vhost batch generation (render-all mode).
+    ## @purpose — Parse node.yaml via NodeYaml for vhost batch generation (render-all mode).
     ## @io — ⇥ node_yaml_path: str — path to node.yaml
     ##       → ⎋ list[ProjectEntry] — projects with non-empty domain
     ## @complexity — O(P) where P = number of projects
@@ -224,7 +230,7 @@ def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
     ##   - Only emits projects with non-empty 'domain' field
     ##   - Returns empty list if node.yaml missing or no projects
     ##   - Projects without domain field are silently skipped
-    ##   - safe_load prevents YAML code execution
+    ##   - Uses NodeYaml facade (not direct yaml.safe_load)
     """
     yaml_path = Path(node_yaml_path)
     if not yaml_path.exists():
@@ -234,17 +240,12 @@ def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
     logger.info("[IMP:7][read_node_yaml_projects] Parsing projects from: %s", yaml_path)
 
     try:
-        with open(yaml_path) as f:
-            data = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        logger.error("[IMP:8][read_node_yaml_projects] YAML parse error: %s", e)
+        node = NodeYaml(node_yaml_path)
+    except (ConfigNotFoundError, ConfigParseError, OSError) as e:
+        logger.error("[IMP:8][read_node_yaml_projects] Failed to parse node.yaml: %s", e)
         return []
 
-    if not isinstance(data, dict):
-        logger.warning("[IMP:8][read_node_yaml_projects] Invalid YAML structure (not a dict)")
-        return []
-
-    projects = data.get("projects", [])
+    projects = node.get("projects", default=[])
     if not isinstance(projects, list):
         return []
 
@@ -272,7 +273,7 @@ def read_node_yaml_projects(node_yaml_path: str) -> list[ProjectEntry]:
 # region FUNC_resolve_cert_domain
 
 
-def resolve_cert_domain(fqdn: str, platform_domain: Optional[str] = None) -> str:
+def resolve_cert_domain(fqdn: str, platform_domain: str | None = None) -> str:
     """Determine cert domain for SSL certificate path.
 
     ▶ ┌fqdn + platform_domain┐ → ◇ fqdn ends with .<platform_domain>?
@@ -291,7 +292,9 @@ def resolve_cert_domain(fqdn: str, platform_domain: Optional[str] = None) -> str
     ##   - Otherwise → return fqdn (personal cert)
     """
     if platform_domain and fqdn.endswith(f".{platform_domain}"):
-        logger.info("[IMP:9][resolve_cert_domain] Wildcard cert domain: %s (subdomain of PLATFORM_DOMAIN)", platform_domain)
+        logger.info(
+            "[IMP:9][resolve_cert_domain] Wildcard cert domain: %s (subdomain of PLATFORM_DOMAIN)", platform_domain
+        )
         return platform_domain
 
     logger.info("[IMP:9][resolve_cert_domain] Personal cert domain: %s (own cert path)", fqdn)
@@ -448,7 +451,7 @@ def generate_vhost_header(project_name: str, fqdn: str, node: str, body_hash: st
     ##   - Format must be parseable by cleanup step (contains # GENERATED)
     ##   - body_hash enables drift detection (R6)
     """
-    header = f"""# ============================================================
+    return f"""# ============================================================
 # GENERATED by vhost_renderer.py — DO NOT EDIT
 # Source: node.yaml#projects[{project_name}]
 # Domain: {fqdn}
@@ -458,7 +461,6 @@ def generate_vhost_header(project_name: str, fqdn: str, node: str, body_hash: st
 # ============================================================
 
 """
-    return header
 
 
 # endregion FUNC_generate_vhost_header
@@ -556,8 +558,8 @@ def render_vhost(
     entry: ProjectEntry,
     node: str,
     node_configs_dir: str,
-    platform_domain: Optional[str] = None,
-    output_dir: Optional[str] = None,
+    platform_domain: str | None = None,
+    output_dir: str | None = None,
 ) -> VhostFile:
     """Render a single vhost file for a project entry.
 
@@ -589,10 +591,7 @@ def render_vhost(
     full_content = header + body
 
     # Determine output path
-    if output_dir:
-        vhost_dir = Path(output_dir)
-    else:
-        vhost_dir = Path(node_configs_dir) / node / "overlays" / "nginx"
+    vhost_dir = Path(output_dir) if output_dir else Path(node_configs_dir) / node / "overlays" / "nginx"
 
     vhost_dir.mkdir(parents=True, exist_ok=True)
     vhost_path = vhost_dir / f"{fqdn}.conf"
@@ -600,8 +599,13 @@ def render_vhost(
     # Write to file
     vhost_path.write_text(full_content, encoding="utf-8")
 
-    logger.info("[IMP:9][render_vhost] Rendered: %s → %s (cert=%s, hash=%s...)",
-                entry.name, vhost_path, cert_domain, body_hash[:12])
+    logger.info(
+        "[IMP:9][render_vhost] Rendered: %s → %s (cert=%s, hash=%s...)",
+        entry.name,
+        vhost_path,
+        cert_domain,
+        body_hash[:12],
+    )
 
     return VhostFile(
         path=str(vhost_path),
@@ -621,7 +625,7 @@ def render_vhost(
 # region FUNC_remove_vhost
 
 
-def remove_vhost(project_name: str, overlays_dir: str, platform_root: Optional[str] = None) -> bool:
+def remove_vhost(project_name: str, overlays_dir: str, platform_root: str | None = None) -> bool:
     """Remove an existing nginx vhost config.
 
     ▶ ┌project_name + overlays_dir┐ → ◇ find .conf with matching name/fqdn
@@ -667,6 +671,7 @@ def remove_vhost(project_name: str, overlays_dir: str, platform_root: Optional[s
         audit_dir.mkdir(parents=True, exist_ok=True)
         audit_log = audit_dir / "audit.log"
         from datetime import datetime, timezone
+
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         audit_line = f"[{timestamp}] [audit] [vhost:remove] project={project_name}\n"
         with open(audit_log, "a") as f:
@@ -740,7 +745,8 @@ def nginx_t_harness(temp_dir: str, nginx_version: str = "1.28-alpine") -> bool:
 
         # ── Step 2: Generate minimal nginx.conf ───────────────────────────
         nginx_conf = harness_nginx_dir / "nginx.conf"
-        nginx_conf.write_text("""events {
+        nginx_conf.write_text(
+            """events {
     worker_connections 64;
 }
 http {
@@ -763,14 +769,19 @@ http {
     # Overlay vhosts
     include /etc/nginx/conf.d/overlay/*.conf;
 }
-""", encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
 
         # ── Step 3: Generate stub security-headers.conf ───────────────────
         security_headers = includes_dir / "security-headers.conf"
-        security_headers.write_text("""# Stub security-headers.conf for nginx -t validation
+        security_headers.write_text(
+            """# Stub security-headers.conf for nginx -t validation
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
-""", encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
 
         # ── Step 4: Generate dev certs ────────────────────────────────────
         fullchain = dev_certs_dir / "fullchain.pem"
@@ -778,11 +789,22 @@ add_header X-Frame-Options "DENY" always;
 
         try:
             result = subprocess.run(
-                ["openssl", "req", "-x509", "-nodes", "-days", "1",
-                 "-newkey", "rsa:2048",
-                 "-keyout", str(privkey),
-                 "-out", str(fullchain),
-                 "-subj", "/CN=localhost"],
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-nodes",
+                    "-days",
+                    "1",
+                    "-newkey",
+                    "rsa:2048",
+                    "-keyout",
+                    str(privkey),
+                    "-out",
+                    str(fullchain),
+                    "-subj",
+                    "/CN=localhost",
+                ],
                 capture_output=True,
                 timeout=30,
             )
@@ -820,7 +842,7 @@ add_header X-Frame-Options "DENY" always;
                 "/etc/nginx/dev-certs/privkey.pem",
                 swapped,
             )
-            swapped = swapped.replace("/var/www/acme", "/tmp/acme-stub")
+            swapped = swapped.replace("/var/www/acme", "/tmp/acme-stub")  # nosec B108 — dev-only acme stub, not prod
             dev_vhost.write_text(swapped, encoding="utf-8")
             vhost_count += 1
 
@@ -837,13 +859,20 @@ add_header X-Frame-Options "DENY" always;
 
         docker_result = subprocess.run(
             [
-                "docker", "run", "--rm",
-                "-v", f"{harness_nginx_dir}/nginx.conf:/etc/nginx/nginx.conf:ro",
-                "-v", f"{dev_certs_dir}:/etc/nginx/dev-certs:ro",
-                "-v", f"{includes_dir}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro",
-                "-v", f"{vhosts_dir}:/etc/nginx/conf.d/overlay:ro",
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{harness_nginx_dir}/nginx.conf:/etc/nginx/nginx.conf:ro",
+                "-v",
+                f"{dev_certs_dir}:/etc/nginx/dev-certs:ro",
+                "-v",
+                f"{includes_dir}/security-headers.conf:/etc/nginx/includes/security-headers.conf:ro",
+                "-v",
+                f"{vhosts_dir}:/etc/nginx/conf.d/overlay:ro",
                 f"nginx:{nginx_version}",
-                "nginx", "-t",
+                "nginx",
+                "-t",
             ],
             capture_output=True,
             timeout=120,
@@ -852,12 +881,11 @@ add_header X-Frame-Options "DENY" always;
         if docker_result.returncode == 0:
             logger.info("[IMP:9][nginx_t_harness] nginx -t PASS: %d vhost(s) valid", vhost_count)
             return True
-        else:
-            logger.error("[IMP:10][nginx_t_harness] nginx -t FAIL — rendered configs contain syntax errors")
-            stderr_text = docker_result.stderr.decode("utf-8", errors="replace")
-            for line in stderr_text.splitlines():
-                logger.error("[IMP:8][nginx_t_harness] nginx -t: %s", line)
-            return False
+        logger.error("[IMP:10][nginx_t_harness] nginx -t FAIL — rendered configs contain syntax errors")
+        stderr_text = docker_result.stderr.decode("utf-8", errors="replace")
+        for line in stderr_text.splitlines():
+            logger.error("[IMP:8][nginx_t_harness] nginx -t: %s", line)
+        return False
 
     finally:
         # Cleanup harness directory
@@ -879,7 +907,7 @@ def render_all(
     node_yaml_path: str,
     node_configs_dir: str,
     node: str,
-    platform_domain: Optional[str] = None,
+    platform_domain: str | None = None,
 ) -> RenderResult:
     """Render all vhosts from node.yaml#projects with domain.
 
@@ -1034,10 +1062,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="nginx vhost config manager — render, add, remove",
     )
-    parser.add_argument("--platform-domain", default=None,
-                        help="Platform wildcard domain (PLATFORM_DOMAIN) — subdomains use wildcard cert")
-    parser.add_argument("--platform-root", default=None,
-                        help="Platform root directory (for audit log path)")
+    parser.add_argument(
+        "--platform-domain",
+        default=None,
+        help="Platform wildcard domain (PLATFORM_DOMAIN) — subdomains use wildcard cert",
+    )
+    parser.add_argument("--platform-root", default=None, help="Platform root directory (for audit log path)")
 
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
@@ -1049,18 +1079,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── add subcommand ────────────────────────────────────────────
     add_parser = subparsers.add_parser("add", help="Generate vhost for a single project")
-    add_parser.add_argument("--project-dir", required=True, help="Path to project directory (contains ai-platform.yaml)")
+    add_parser.add_argument(
+        "--project-dir", required=True, help="Path to project directory (contains ai-platform.yaml)"
+    )
     add_parser.add_argument("--node-configs-dir", required=True, help="Path to node-configs/ directory")
 
     # ── remove subcommand ─────────────────────────────────────────
     remove_parser = subparsers.add_parser("remove", help="Remove vhost for a project")
-    remove_parser.add_argument("--project-dir", required=True, help="Path to project directory (contains ai-platform.yaml)")
+    remove_parser.add_argument(
+        "--project-dir", required=True, help="Path to project directory (contains ai-platform.yaml)"
+    )
     remove_parser.add_argument("--node-configs-dir", required=True, help="Path to node-configs/ directory")
 
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """CLI entry point for vhost_renderer.
 
     ▶ ┌sys.argv┐ → ◇ parse args → ◇ dispatch (render-all|add|remove) → ⊕ exit code
@@ -1093,7 +1127,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             return 0
 
-        elif args.command == "add":
+        if args.command == "add":
             # Read project YAML
             config = read_project_yaml(args.project_dir)
             if config is None:
@@ -1116,7 +1150,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             logger.info("[IMP:9][main] DONE: vhost for %s generated successfully", config.domain)
             return 0
 
-        elif args.command == "remove":
+        if args.command == "remove":
             # Read project YAML
             config = read_project_yaml(args.project_dir)
             if config is None:
@@ -1139,9 +1173,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             logger.info("[IMP:9][main] DONE: vhost for %s removed successfully", config.domain)
             return 0
 
-        else:
-            parser.print_help()
-            return 1
+        parser.print_help()
+        return 1
 
     except DuplicateDomainError as e:
         logger.error("[IMP:10][main] FQDN uniqueness violation: %s", str(e))

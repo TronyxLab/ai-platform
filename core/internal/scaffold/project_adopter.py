@@ -65,7 +65,6 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +86,7 @@ class AdoptionResult:
     ## @io        ┌ changes: list[str] — human-readable change descriptions
     ##            └ success: bool — whether adoption completed without fatal errors
     """
+
     changes: list[str] = field(default_factory=list)
     success: bool = True
 
@@ -103,6 +103,7 @@ class ValidationResult:
     ## @io        ┌ valid: bool — True if validation passes
     ##            └ message: str — human-readable validation message
     """
+
     valid: bool = True
     message: str = ""
 
@@ -255,7 +256,9 @@ class ProjectAdopter:
         # Check if it already uses reusable workflow
         content = self.deploy_yml.read_text()
         if "uses: " in content and "/ai-platform/.github/workflows/deploy-project.yml" in content:
-            logger.info("[IMP:9][%s][simplify] deploy.yml already uses reusable workflow — preserving", self._log_prefix)
+            logger.info(
+                "[IMP:9][%s][simplify] deploy.yml already uses reusable workflow — preserving", self._log_prefix
+            )
             return False
 
         logger.info("[IMP:7][%s][simplify] Simplifying deploy.yml to use reusable workflow (K4)", self._log_prefix)
@@ -359,7 +362,11 @@ jobs:
             logger.info("[IMP:6][%s][delete_pd] platform-deploy.yml not found — nothing to delete", self._log_prefix)
             return False
 
-        logger.info("[IMP:7][%s][delete_pd] Removing deprecated platform-deploy.yml: %s", self._log_prefix, self.platform_deploy_yml)
+        logger.info(
+            "[IMP:7][%s][delete_pd] Removing deprecated platform-deploy.yml: %s",
+            self._log_prefix,
+            self.platform_deploy_yml,
+        )
         self.platform_deploy_yml.unlink()
         logger.info("[IMP:9][%s][delete_pd] platform-deploy.yml deleted", self._log_prefix)
         return True
@@ -390,7 +397,9 @@ jobs:
         platform_env_yaml = self.project_dir / "platform-env.yaml"
 
         if not platform_env_yaml.exists():
-            logger.info("[IMP:8][%s][gen_env] platform-env.yaml not found at %s — skipping", self._log_prefix, platform_env_yaml)
+            logger.info(
+                "[IMP:8][%s][gen_env] platform-env.yaml not found at %s — skipping", self._log_prefix, platform_env_yaml
+            )
             return False
 
         logger.info("[IMP:7][%s][gen_env] Generating .env.platform from platform-env.yaml", self._log_prefix)
@@ -398,10 +407,14 @@ jobs:
         try:
             result = subprocess.run(
                 [
-                    sys.executable, str(gen_script),
-                    "--yaml", str(platform_env_yaml),
-                    "--name", self.name,
-                    "--domain", self.domain or "ai-platform.local",
+                    sys.executable,
+                    str(gen_script),
+                    "--yaml",
+                    str(platform_env_yaml),
+                    "--name",
+                    self.name,
+                    "--domain",
+                    self.domain or "ai-platform.local",
                 ],
                 capture_output=True,
                 text=True,
@@ -411,9 +424,12 @@ jobs:
                 env_file.write_text(result.stdout)
                 logger.info("[IMP:9][%s][gen_env] .env.platform generated: %s", self._log_prefix, env_file)
                 return True
-            else:
-                logger.info("[IMP:8][%s][gen_env] gen_env_platform.py returned non-zero — stderr: %s", self._log_prefix, result.stderr.strip())
-                return False
+            logger.info(
+                "[IMP:8][%s][gen_env] gen_env_platform.py returned non-zero — stderr: %s",
+                self._log_prefix,
+                result.stderr.strip(),
+            )
+            return False
         except FileNotFoundError:
             logger.info("[IMP:8][%s][gen_env] gen_env_platform.py not found or not executable", self._log_prefix)
             return False
@@ -435,7 +451,9 @@ jobs:
 
         if makefile.exists():
             if not self.force:
-                logger.info("[IMP:6][%s][makefile] Makefile exists — SKIP (use --force to regenerate)", self._log_prefix)
+                logger.info(
+                    "[IMP:6][%s][makefile] Makefile exists — SKIP (use --force to regenerate)", self._log_prefix
+                )
                 return "exists"
             logger.info("[IMP:7][%s][makefile] Force mode: overwriting existing Makefile", self._log_prefix)
 
@@ -547,7 +565,9 @@ node: {self.node}
         """
         # If no domain configured, project doesn't need proxy-net
         if not self.domain:
-            logger.info("[IMP:9][%s][validate_net] No domain configured — skipping proxy-net validation", self._log_prefix)
+            logger.info(
+                "[IMP:9][%s][validate_net] No domain configured — skipping proxy-net validation", self._log_prefix
+            )
             return ValidationResult(valid=True, message="No domain — validation skipped")
 
         logger.info("[IMP:7][%s][validate_net] Validating proxy-net in compose: %s", self._log_prefix, compose_path)
@@ -555,8 +575,12 @@ node: {self.node}
         # Step 1: Parse compose
         data = self._try_parse_compose(compose_path)
         if data is None:
-            logger.info("[IMP:8][%s][validate_net] Cannot parse compose — neither docker nor PyYAML available", self._log_prefix)
-            logger.info("[IMP:8][%s][validate_net]  WARN: skipping proxy-net validation (best-effort)", self._log_prefix)
+            logger.info(
+                "[IMP:8][%s][validate_net] Cannot parse compose — neither docker nor PyYAML available", self._log_prefix
+            )
+            logger.info(
+                "[IMP:8][%s][validate_net]  WARN: skipping proxy-net validation (best-effort)", self._log_prefix
+            )
             return ValidationResult(valid=True, message="Parse unavailable — best-effort skip")
 
         # Step 2: Analyze proxy-net
@@ -565,7 +589,11 @@ node: {self.node}
             logger.info("[IMP:10][%s][validate_net] FAIL: %s", self._log_prefix, msg)
             return ValidationResult(valid=False, message=msg)
 
-        logger.info("[IMP:9][%s][validate_net] PASS: compose declares proxy-net (external) with %d service(s) connected", self._log_prefix, svc_count)
+        logger.info(
+            "[IMP:9][%s][validate_net] PASS: compose declares proxy-net (external) with %d service(s) connected",
+            self._log_prefix,
+            svc_count,
+        )
         return ValidationResult(valid=True, message=f"proxy-net valid with {svc_count} service(s)")
 
     def _try_parse_compose(self, compose_path: Path) -> dict | None:
@@ -582,12 +610,16 @@ node: {self.node}
                 env["COMPOSE_PROFILES"] = self.compose_profiles
                 result = subprocess.run(
                     ["docker", "compose", "-f", str(compose_path), "config"],
-                    capture_output=True, text=True, check=False, env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=env,
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     logger.info("[IMP:7][%s][validate_net] Compose parsed via docker compose config", self._log_prefix)
                     try:
                         import yaml
+
                         return yaml.safe_load(result.stdout)
                     except (ImportError, yaml.YAMLError):
                         pass
@@ -597,6 +629,7 @@ node: {self.node}
         # Method 2: PyYAML fallback
         try:
             import yaml
+
             with open(compose_path) as f:
                 data = yaml.safe_load(f)
             if data and isinstance(data, dict):
@@ -624,27 +657,24 @@ node: {self.node}
 
         # Check external: true
         external = proxy_net.get("external", False)
-        if isinstance(external, dict):
-            # docker compose config resolves external: true → bool
-            has_external = True
-        else:
-            has_external = bool(external)
+        # docker compose config resolves external: true → bool
+        has_external = True if isinstance(external, dict) else bool(external)
 
         if not has_external:
             msg = (
                 "FAIL: compose does not declare networks.proxy-net with external:true\n"
-                f"  Add to compose:\n"
-                f"    networks:\n"
-                f"      proxy-net:\n"
-                f"        name: proxy-net\n"
-                f"        external: true\n"
-                f"  And connect at least one service:\n"
-                f"    services:\n"
-                f"      <name>:\n"
-                f"        networks:\n"
-                f"          proxy-net:\n"
-                f"            aliases:\n"
-                f"              - <name>"
+                "  Add to compose:\n"
+                "    networks:\n"
+                "      proxy-net:\n"
+                "        name: proxy-net\n"
+                "        external: true\n"
+                "  And connect at least one service:\n"
+                "    services:\n"
+                "      <name>:\n"
+                "        networks:\n"
+                "          proxy-net:\n"
+                "            aliases:\n"
+                "              - <name>"
             )
             return False, 0, msg
 
@@ -654,13 +684,13 @@ node: {self.node}
             services = {}
 
         svc_count = 0
-        for svc_name, svc_config in services.items():
+        for svc_config in services.values():
             if not isinstance(svc_config, dict):
                 continue
             svc_networks = svc_config.get("networks", {})
-            if isinstance(svc_networks, dict) and "proxy-net" in svc_networks:
-                svc_count += 1
-            elif isinstance(svc_networks, list) and "proxy-net" in svc_networks:
+            if (isinstance(svc_networks, dict) and "proxy-net" in svc_networks) or (
+                isinstance(svc_networks, list) and "proxy-net" in svc_networks
+            ):
                 svc_count += 1
 
         if svc_count == 0:
@@ -691,8 +721,12 @@ node: {self.node}
             logger.info("[IMP:8][%s][register] node.yaml not found: %s", self._log_prefix, node_yaml_path)
             logger.info("[IMP:8][%s][register]   Create it or register manually:", self._log_prefix)
             logger.info(
-                "[IMP:8][%s][register]     yq eval -i '.projects += [{\"name\": \"%s\", \"repo\": \"%s/%s\", \"type\": \"project\"}]' %s",
-                self._log_prefix, self.name, self.org, self.name, node_yaml_path,
+                '[IMP:8][%s][register]     yq eval -i \'.projects += [{"name": "%s", "repo": "%s/%s", "type": "project"}]\' %s',
+                self._log_prefix,
+                self.name,
+                self.org,
+                self.name,
+                node_yaml_path,
             )
             return False
 
@@ -734,7 +768,9 @@ node: {self.node}
             if e.code == 0 or e.code is None:
                 logger.info("[IMP:9][%s][register] Registration complete (sys.exit caught per D3)", self._log_prefix)
             else:
-                logger.info("[IMP:8][%s][register] Registration sys.exit(%s) — manual check required", self._log_prefix, e.code)
+                logger.info(
+                    "[IMP:8][%s][register] Registration sys.exit(%s) — manual check required", self._log_prefix, e.code
+                )
 
     def _register_via_yq(self, node_yaml_path: Path) -> bool:
         """Fallback registration using yq subprocess (when project_registry not available).
@@ -750,7 +786,9 @@ node: {self.node}
         # Check if already registered
         result = subprocess.run(
             ["yq", "eval", f'.projects[] | select(.name == "{self.name}") | .name', str(node_yaml_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.stdout.strip():
             logger.info("[IMP:9][%s][register] Project already registered — SKIP (idempotent)", self._log_prefix)
@@ -762,15 +800,14 @@ node: {self.node}
         entry += "}"
 
         result = subprocess.run(
-            ["yq", "eval", "-i", f'.projects += [{entry}]', str(node_yaml_path)],
+            ["yq", "eval", "-i", f".projects += [{entry}]", str(node_yaml_path)],
             check=False,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][%s][register] Registered via yq: %s", self._log_prefix, self.name)
             return True
-        else:
-            logger.info("[IMP:8][%s][register] yq registration failed — register manually", self._log_prefix)
-            return False
+        logger.info("[IMP:8][%s][register] yq registration failed — register manually", self._log_prefix)
+        return False
 
     # endregion FUNC_register_in_node_yaml
 
@@ -799,7 +836,9 @@ node: {self.node}
 
         # D4: Try direct import vhost_renderer, fallback to subprocess add-vhost.sh
         try:
-            from core.internal.scaffold.vhost_renderer import configure_vhost_for_project  # type: ignore[import-untyped]
+            from core.internal.scaffold.vhost_renderer import (
+                configure_vhost_for_project,  # type: ignore[import-untyped]
+            )
 
             logger.info("[IMP:7][%s][vhost] Using vhost_renderer (Python API)", self._log_prefix)
             result = configure_vhost_for_project(
@@ -808,12 +847,18 @@ node: {self.node}
                 node_configs_dir=node_configs_dir,
             )
             if result:
-                logger.info("[IMP:9][%s][vhost] Vhost configured via vhost_renderer for: %s", self._log_prefix, self.domain)
+                logger.info(
+                    "[IMP:9][%s][vhost] Vhost configured via vhost_renderer for: %s", self._log_prefix, self.domain
+                )
                 return True
-            else:
-                logger.info("[IMP:8][%s][vhost] vhost_renderer returned False — trying subprocess fallback", self._log_prefix)
+            logger.info(
+                "[IMP:8][%s][vhost] vhost_renderer returned False — trying subprocess fallback", self._log_prefix
+            )
         except ImportError:
-            logger.info("[IMP:7][%s][vhost] vhost_renderer not available — using subprocess add-vhost.sh (D4 fallback)", self._log_prefix)
+            logger.info(
+                "[IMP:7][%s][vhost] vhost_renderer not available — using subprocess add-vhost.sh (D4 fallback)",
+                self._log_prefix,
+            )
 
         # Fallback: subprocess add-vhost.sh
         return self._configure_vhost_via_subprocess(node_configs_dir)
@@ -843,7 +888,11 @@ node: {self.node}
 
                 with open(self.yaml_file, "w") as f:
                     yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-                logger.info("[IMP:7][%s][vhost] ai-platform.yaml updated: needs.domain=%s, expose=true", self._log_prefix, self.domain)
+                logger.info(
+                    "[IMP:7][%s][vhost] ai-platform.yaml updated: needs.domain=%s, expose=true",
+                    self._log_prefix,
+                    self.domain,
+                )
         except (ImportError, yaml.YAMLError):
             logger.info("[IMP:8][%s][vhost] Could not update ai-platform.yaml (PyYAML not available)", self._log_prefix)
 
@@ -858,7 +907,10 @@ node: {self.node}
 
         if not add_vhost_script.exists():
             logger.info("[IMP:8][%s][vhost] add-vhost.sh not found — skipping vhost generation", self._log_prefix)
-            logger.info("[IMP:8][%s][vhost]   Manual: cp <template>/nginx/default.conf to node-configs overlays", self._log_prefix)
+            logger.info(
+                "[IMP:8][%s][vhost]   Manual: cp <template>/nginx/default.conf to node-configs overlays",
+                self._log_prefix,
+            )
             return False
 
         if node_configs_dir is None:
@@ -869,25 +921,31 @@ node: {self.node}
             logger.info("[IMP:8][%s][vhost]   Manual: create vhost manually in overlays/nginx/", self._log_prefix)
             return False
 
-        logger.info("[IMP:7][%s][vhost] Configuring nginx vhost via add-vhost.sh for domain: %s", self._log_prefix, self.domain)
+        logger.info(
+            "[IMP:7][%s][vhost] Configuring nginx vhost via add-vhost.sh for domain: %s", self._log_prefix, self.domain
+        )
 
         result = subprocess.run(
             [
-                "bash", str(add_vhost_script),
-                "--project-dir", str(self.project_dir),
-                "--node-configs-dir", str(node_configs_dir),
+                "bash",
+                str(add_vhost_script),
+                "--project-dir",
+                str(self.project_dir),
+                "--node-configs-dir",
+                str(node_configs_dir),
             ],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
         if result.returncode == 0:
             logger.info("[IMP:9][%s][vhost] Vhost configured via add-vhost.sh for: %s", self._log_prefix, self.domain)
             return True
-        else:
-            logger.info("[IMP:8][%s][vhost] add-vhost.sh returned non-zero — check vhost manually", self._log_prefix)
-            if result.stderr.strip():
-                logger.info("[IMP:8][%s][vhost] add-vhost.sh stderr: %s", self._log_prefix, result.stderr.strip()[:500])
-            return False
+        logger.info("[IMP:8][%s][vhost] add-vhost.sh returned non-zero — check vhost manually", self._log_prefix)
+        if result.stderr.strip():
+            logger.info("[IMP:8][%s][vhost] add-vhost.sh stderr: %s", self._log_prefix, result.stderr.strip()[:500])
+        return False
 
     def _resolve_node_configs_dir(self) -> Path | None:
         """Resolve node-configs directory from project path.
@@ -937,7 +995,7 @@ node: {self.node}
             for c in changes:
                 print(f"    {c}")
         print("")
-        print('  ❗ NOT modified (preserved): src/, Dockerfile, application code')
+        print("  ❗ NOT modified (preserved): src/, Dockerfile, application code")
         print("")
         print("────────────────────────────────────────────────────────────")
         logger.info("[IMP:9][%s][report] adopt-project DONE: %s", self._log_prefix, self.name)
@@ -968,7 +1026,10 @@ node: {self.node}
         if self.simplify_deploy_yml():
             result.changes.append("✔ deploy.yml simplified (uses: org/ai-platform/...)")
         else:
-            if self.deploy_yml.exists() and "/ai-platform/.github/workflows/deploy-project.yml" in self.deploy_yml.read_text():
+            if (
+                self.deploy_yml.exists()
+                and "/ai-platform/.github/workflows/deploy-project.yml" in self.deploy_yml.read_text()
+            ):
                 result.changes.append("- deploy.yml unchanged or already simplified")
             else:
                 result.changes.append("- deploy.yml not found or unchanged")
@@ -1007,7 +1068,10 @@ node: {self.node}
             if vr.valid:
                 result.changes.append("✔ Compose proxy-net validated")
             else:
-                logger.info("[IMP:8][%s][adopt]   proxy-net validation FAILED — adopt continues, but fix before deploy", self._log_prefix)
+                logger.info(
+                    "[IMP:8][%s][adopt]   proxy-net validation FAILED — adopt continues, but fix before deploy",
+                    self._log_prefix,
+                )
                 result.changes.append("⚠️  Compose proxy-net VALIDATION FAILED — must fix before deploy")
         else:
             logger.info("[IMP:6][%s][adopt] No compose file found — skipping proxy-net validation", self._log_prefix)
@@ -1087,18 +1151,13 @@ def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
         return org
 
     try:
-        import yaml
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-    except (ImportError, yaml.YAMLError):
+        from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
+
+        node = NodeYaml(str(node_yaml_path))
+        node_context = node.get_context()
+    except (ConfigNotFoundError, ConfigParseError):
         logger.info("[IMP:9][validate_org] Cannot parse node.yaml — skipping context validation")
         return org
-
-    if not isinstance(data, dict):
-        logger.info("[IMP:9][validate_org] node.yaml is not a dict — skipping context validation")
-        return org
-
-    node_context = data.get("context", "")
     if not node_context:
         logger.info("[IMP:9][validate_org] node.yaml has no context field — skipping validation")
         return org
@@ -1107,7 +1166,8 @@ def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
     if org.lower() != str(node_context).lower():
         logger.info(
             "[IMP:9][validate_org] FAIL-FAST: org='%s' vs node.yaml context='%s' — mismatch detected",
-            org, node_context,
+            org,
+            node_context,
         )
         raise ValueError(
             f"Project org '{org}' does not match node.yaml context '{node_context}'. "
@@ -1118,7 +1178,8 @@ def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
     if org != node_context:
         logger.info(
             "[IMP:9][validate_org] Casing mismatch: org='%s' vs node.yaml context='%s' — using node.yaml variant",
-            org, node_context,
+            org,
+            node_context,
         )
         return str(node_context)
 

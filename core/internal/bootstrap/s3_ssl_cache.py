@@ -39,7 +39,6 @@ import tarfile
 import tempfile
 
 import boto3
-import yaml
 from boto3.exceptions import S3UploadFailedError
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
@@ -50,6 +49,7 @@ from core.internal.shared.exceptions import (
     ConfigParseError,
     PlatformFatalError,
 )
+from core.internal.shared.node_yaml import NodeYaml
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,7 @@ def _download_s3_file(s3_key: str, local_dst: str) -> bool:
                 e,
             )
         return False
-    except (ClientError, OSError, FileNotFoundError) as e:
+    except (ClientError, OSError) as e:  # noqa: B025 — ClientError is boto3, not OSError subclass
         logger.warning("[IMP:7][s3_ssl_cache] S3 download failed for key %s: %s", s3_key, e)
         return False
 
@@ -318,25 +318,24 @@ def _extract_domains_from_yaml(node_yaml_path: str) -> list[str]:
         return []
 
     try:
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f) or {}
-    except (FileNotFoundError, yaml.YAMLError, OSError, ConfigParseError, ConfigNotFoundError) as e:
+        node = NodeYaml(node_yaml_path)
+    except (ConfigNotFoundError, ConfigParseError, OSError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to parse node.yaml: %s", e)
         return []
 
     domains: list[str] = []
 
-    # Platform domain
-    domain = data.get("domain", "")
+    # Platform domain: try top-level domain, then node.platform_domain, then node.domain
+    domain = node.get("domain", default="")
     if not domain:
-        node_info = data.get("node", {})
-        if isinstance(node_info, dict):
-            domain = node_info.get("platform_domain", "") or node_info.get("domain", "")
+        domain = node.get("node.platform_domain", default="")
+    if not domain:
+        domain = node.get("node.domain", default="")
     if domain:
         domains.append(domain)
 
     # Project domains
-    projects = data.get("projects", [])
+    projects = node.get("projects", default=[])
     if isinstance(projects, list):
         for p in projects:
             if isinstance(p, dict):

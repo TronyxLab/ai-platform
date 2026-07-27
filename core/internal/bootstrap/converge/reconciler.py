@@ -676,11 +676,10 @@ def _parse_projects_yaml(node_yaml_path: str) -> list[dict]:
     Returns empty list on parse error or missing section.
     """
     try:
-        import yaml
+        from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
+        from core.internal.shared.node_yaml import NodeYaml
 
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        projects_raw = data.get("projects", []) if data else []
+        projects_raw = NodeYaml(node_yaml_path).get_list("projects")
         out: list[dict] = []
         for p in projects_raw:
             if isinstance(p, dict):
@@ -688,7 +687,7 @@ def _parse_projects_yaml(node_yaml_path: str) -> list[dict]:
             elif isinstance(p, str):
                 out.append({"name": p, "domain": ""})
         return out
-    except (yaml.YAMLError, OSError, FileNotFoundError, KeyError) as exc:
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
         logger.warning("[IMP:8][_parse_projects_yaml] Failed to parse projects from %s: %s", node_yaml_path, exc)
         return []
 
@@ -1191,12 +1190,11 @@ def verify_vhosts(
 def _resolve_nginx_overlay(node_yaml_path: str, converge_node: str, base_dir: str = "/opt") -> str | None:
     """Resolve nginx vhost directory from node.yaml context or node fallback."""
     try:
-        import yaml
+        from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+        from core.internal.shared.node_yaml import NodeYaml
 
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        context_name = data.get("context", "") if data else ""
-    except (FileNotFoundError, yaml.YAMLError, OSError):
+        context_name = NodeYaml(node_yaml_path).get_context()
+    except (ConfigNotFoundError, ConfigParseError):
         context_name = ""
 
     if context_name:
@@ -1307,11 +1305,10 @@ def _parse_node_modules_yaml(node_yaml_path: str) -> list[dict]:
     Returns empty list on parse error or missing section.
     """
     try:
-        import yaml
+        from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
+        from core.internal.shared.node_yaml import NodeYaml
 
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        modules_raw = data.get("modules", []) if data else []
+        modules_raw = NodeYaml(node_yaml_path).get_list("modules")
         out: list[dict] = []
         for m in modules_raw:
             if isinstance(m, dict):
@@ -1324,7 +1321,7 @@ def _parse_node_modules_yaml(node_yaml_path: str) -> list[dict]:
             elif isinstance(m, str):
                 out.append({"name": m, "enabled": True})
         return out
-    except (yaml.YAMLError, OSError, FileNotFoundError, KeyError) as exc:
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
         logger.warning("[IMP:8][_parse_node_modules_yaml] Failed to parse modules from %s: %s", node_yaml_path, exc)
         return []
 

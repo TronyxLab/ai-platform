@@ -196,12 +196,12 @@ DevPlan 038 содержит CRITICAL path drift против актуально
 ## Proposed Delegation
 
 ```text
-task(subagent_type="Architect", 
+task(subagent_type="Architect",
      description="Fix DevPlan 038 path drift",
      prompt="Review VerificationReport 02 at .ai/plans/038-arch-unification-node-yaml-errors-loggers/02-VerificationReport.md.
-     
+
      CRITICAL issues to fix in DevPlan 01-DevPlan.md:
-     
+
      1. [DRIFT-1] Update all file paths from flat structure to post-079 subdirectory structure:
         - core/internal/bootstrap/state_machine.py → core/internal/bootstrap/lifecycle/state_machine.py
         - core/internal/bootstrap/steps.py → core/internal/bootstrap/lifecycle/steps.py
@@ -212,18 +212,18 @@ task(subagent_type="Architect",
         - core/internal/bootstrap/spool_validator.py → core/internal/bootstrap/deploy/spool_validator.py
         - core/internal/bootstrap/secrets_manager.py → core/internal/bootstrap/lifecycle/secrets_manager.py
         Sections to fix: P1.1, P4.3, P4.5, File Manifest (W1 modified), Architecture diagram
-        
-     2. [S1] Either: (a) Create 01-Brief.md and rename 01-DevPlan.md to 02-DevPlan.md, 
+
+     2. [S1] Either: (a) Create 01-Brief.md and rename 01-DevPlan.md to 02-DevPlan.md,
         OR (b) reclassify task as STANDARD if scope can be reduced below LARGE threshold.
         Note: task clearly exceeds LARGE threshold (>60 files, architectural changes).
-        
+
      3. [DRIFT-2] Ensure internal consistency — verify that ALL sections use the same path convention.
         W3 logger list already uses correct subdirectory paths — use that as reference.
-        
+
      4. [MINOR fixes] DRIFT-3 (line numbers), DRIFT-4 (debt line), DRIFT-5 (except count)
-     
-     After fixing, run: grep 'core/internal/bootstrap/[a-z_]+\.py' on the DevPlan to verify 
-     no flat paths remain (except files that genuinely live at bootstrap/ root level like 
+
+     After fixing, run: grep 'core/internal/bootstrap/[a-z_]+\.py' on the DevPlan to verify
+     no flat paths remain (except files that genuinely live at bootstrap/ root level like
      preflight.py, yaml_helpers.py, s3_ssl_cache.py, discover_modules.py, cert_orchestrator.py).")
 ```
 

@@ -2,9 +2,11 @@
 # shellcheck disable=SC2034
 # GREP_SUMMARY: adopt-project, shell-facade, strangler-fig, parse-args, dispatch
 # STRUCTURE: ▶ source libs → parse_args (auto-detection) → validate_org (fast grep) → dispatch python3 -m project_adopter → exit
+# region MODULE_CONTRACT
 ## @purpose  Shell facade (≤150 LOC) for adopt-project. parse_args and org validation stay in shell per D1/D6.
 ##           All business logic delegates to project_adopter.py.
 ## @changes  2026-07-26 · Wave 5c — Reduced from 906 LOC to ~120 LOC facade
+# endregion MODULE_CONTRACT
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

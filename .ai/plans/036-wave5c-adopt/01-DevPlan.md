@@ -361,7 +361,7 @@ result = subprocess.run([
 
 **Q:** Зачем сохранять оба метода парсинга (docker compose config + PyYAML)?
 
-**A:** 
+**A:**
 1. **`docker compose config`** — разрешает anchors (`&ref` / `*ref`), aliases, `extends`, переменные окружения. PyYAML не делает этого.
 2. **PyYAML fallback** — работает без Docker daemon (CI, macOS без Docker Desktop).
 3. **Best-effort:** Если ни один метод не доступен → WARN + skip (return 0). Это сохраняет обратную совместимость — adopt-project не должен требовать Docker для работы.

@@ -16,7 +16,6 @@
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -32,7 +31,6 @@ logger = logging.getLogger(__name__)
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "verify"
 sys.path.insert(0, str(_MODULE_DIR))
 import domain_verifier as dv
-
 
 # ═══════════════════════════════════════════════════════════════════
 # region Fixtures
@@ -182,9 +180,8 @@ def test_resolve_node_yaml_not_found(tmp_path, caplog):
     home_dir = tmp_path / "home"
     home_dir.mkdir(parents=True)
 
-    with patch.object(Path, "home", return_value=home_dir):
-        with pytest.raises(FileNotFoundError) as exc_info:
-            dv.resolve_node_yaml(node_name, platform_root)
+    with patch.object(Path, "home", return_value=home_dir), pytest.raises(FileNotFoundError) as exc_info:
+        dv.resolve_node_yaml(node_name, platform_root)
 
     msg = str(exc_info.value)
     assert "ghost-node" in msg
@@ -354,12 +351,17 @@ projects:
 
     # Mock subprocess.run to return HTTP 200 for verify_domain
     with patch("subprocess.run", return_value=_mock_curl("200")):
-        exit_code = dv.main([
-            "verify",
-            "--node", node_name,
-            "--platform-root", str(platform_root),
-            "--curl-timeout", "5",
-        ])
+        exit_code = dv.main(
+            [
+                "verify",
+                "--node",
+                node_name,
+                "--platform-root",
+                str(platform_root),
+                "--curl-timeout",
+                "5",
+            ]
+        )
 
     assert exit_code == 0
     # 🧪 TRAP[TEST] · Regression: full CLI integration · Scenario: all domains pass, status-page skipped

@@ -14,9 +14,6 @@
 # endregion MODULE_CONTRACT
 
 import hashlib
-import json
-import os
-import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -25,7 +22,6 @@ import yaml
 
 from core.internal.scaffold.vhost_renderer import (
     DuplicateDomainError,
-    ProjectConfig,
     ProjectEntry,
     VhostFile,
     check_duplicate_domains,
@@ -196,7 +192,7 @@ class TestGenerateVhostBody:
         assert f"/etc/letsencrypt/live/{cert_domain}/fullchain.pem" in body
         assert f"/etc/letsencrypt/live/{cert_domain}/privkey.pem" in body
         assert f"server_name {fqdn};" in body
-        assert f"set $upstream_my_app" in body
+        assert "set $upstream_my_app" in body
         assert f"http://{project_name}:80" in body
 
         # LDD telemetry
@@ -270,8 +266,8 @@ class TestGenerateVhostBody:
 
         # http2 on; should be on its own line
         lines = body.split("\n")
-        http2_lines = [l for l in lines if "http2" in l]
-        assert any("http2 on;" in l for l in http2_lines)
+        http2_lines = [line for line in lines if "http2" in line]
+        assert any("http2 on;" in line for line in http2_lines)
         # Must NOT be part of listen directive
         assert "listen ... http2" not in body
 
@@ -356,7 +352,9 @@ class TestReadProjectYaml:
     # · Last fail: None
     # · Remove if: YAML reading logic changes
 
-    def test_read_project_yaml_expose_true(self, project_yaml_expose_true: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_read_project_yaml_expose_true(
+        self, project_yaml_expose_true: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """ai-platform.yaml with expose:true + domain + target_node → ProjectConfig."""
         caplog.set_level(0)
         config = read_project_yaml(str(project_yaml_expose_true))
@@ -390,7 +388,9 @@ class TestReadProjectYaml:
     # · Last fail: None
     # · Remove if: YAML reading logic changes
 
-    def test_read_project_yaml_expose_no_domain(self, project_yaml_expose_no_domain: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_read_project_yaml_expose_no_domain(
+        self, project_yaml_expose_no_domain: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """expose:true but no domain → None (skip)."""
         caplog.set_level(0)
         config = read_project_yaml(str(project_yaml_expose_no_domain))
@@ -423,7 +423,9 @@ class TestReadNodeYamlProjects:
     # · Last fail: None
     # · Remove if: YAML reading logic changes
 
-    def test_read_node_yaml_projects_with_domains(self, node_yaml_with_domains: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_read_node_yaml_projects_with_domains(
+        self, node_yaml_with_domains: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """node.yaml with 3 projects, 2 with domain → list[ProjectEntry] len=2."""
         caplog.set_level(0)
         entries = read_node_yaml_projects(str(node_yaml_with_domains))
@@ -456,7 +458,9 @@ class TestReadNodeYamlProjects:
     # · Last fail: 2026-07-26
     # · Remove if: YAML reading logic changes
 
-    def test_read_node_yaml_projects_no_domains(self, node_yaml_no_domains: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_read_node_yaml_projects_no_domains(
+        self, node_yaml_no_domains: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """node.yaml with projects but no domains → empty list."""
         caplog.set_level(0)
         entries = read_node_yaml_projects(str(node_yaml_no_domains))
@@ -742,8 +746,8 @@ class TestRenderVhost:
         # Verify hash matches body
         body_lines = content.split("\n")
         # Find the blank line that separates header from body
-        blank_idx = next((i for i, l in enumerate(body_lines) if l.strip() == ""), -1)
-        body = "\n".join(body_lines[blank_idx + 1:])
+        blank_idx = next((i for i, line in enumerate(body_lines) if line.strip() == ""), -1)
+        body = "\n".join(body_lines[blank_idx + 1 :])
         expected_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
         assert vhost.body_hash == expected_hash
 
@@ -877,9 +881,7 @@ class TestRenderAll:
             name = conf_file.name
             assert name in first_output, f"Missing file: {name}"
             second_content = conf_file.read_text(encoding="utf-8")
-            assert first_output[name] == second_content, (
-                f"DETERMINISM VIOLATION: {name} differs between render passes"
-            )
+            assert first_output[name] == second_content, f"DETERMINISM VIOLATION: {name} differs between render passes"
 
         # LDD telemetry
         found_imp9 = False

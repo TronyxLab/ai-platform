@@ -389,14 +389,10 @@ def parse_modules_from_node_yaml(node_yaml_path: str) -> list[tuple[str, str, st
         )
         return []
 
-    with open(yaml_path) as f:
-        data = yaml.safe_load(f)
+    from core.internal.shared.node_yaml import NodeYaml
 
-    if data is None:
-        logger.warning("[IMP:5][parse_modules_from_node_yaml][empty] node.yaml %s is empty", node_yaml_path)
-        return []
-
-    modules = data.get("modules", {})
+    node = NodeYaml(node_yaml_path)
+    modules = node.get("modules", default={})
     results: list[tuple[str, str, str]] = []
 
     if isinstance(modules, dict):

@@ -597,9 +597,6 @@ gates:
 - id: cross_layer
   test_file: test_gate_cross_layer.py
   description: 'Auto-discovered gate: cross_layer'
-- id: check-exception-patterns
-  description: "Ensure all except Exception blocks are typed (non-CLI code only)"
-  gate: [fast, full]
 - id: test_all_entrypoints_have_live_caller
   test_file: test_gate_dead_code.py
   description: 'Auto-discovered gate: test_all_entrypoints_have_live_caller'

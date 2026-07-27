@@ -3,7 +3,7 @@
 """
 # region MODULE_CONTRACT
 ## @purpose  Git context-overlay git repo clone/pull with S9 caching. Extracted from deploy-modules.sh (W4-E1).
-## @scope    Context overlay repository management for /opt/{context}/platform/. Reads node.yaml via yaml library,
+## @scope    Context overlay repository management for /opt/{context}/platform/. Reads node.yaml via NodeYaml facade,
 ##           manages git clone/pull lifecycle with 5-minute pull caching. Called from deploy-modules.sh shell facade.
 ## @invariants
 ##   - No context: field in node.yaml → SKIP (return 0)
@@ -12,14 +12,14 @@
 ##   - Context path absent + repos.core URL → git clone (return 1 if fails)
 ##   - Context path absent + no URL → WARN (return 0)
 ## @rationale Replaces shell ensure_context_repo() function (lines 219-269) from deploy-modules.sh 1664-line monolith.
-##            Uses yaml library directly instead of inline python3 -c for node.yaml parsing.
+##            Uses NodeYaml facade instead of inline python3 -c or direct yaml.safe_load for node.yaml parsing.
 ##            S9 pull caching (300s) avoids redundant git operations during CI retry cycles.
 ## @changes
 ##   2026-07-22 · Created (W4-E1 Strangler extraction)
 # endregion MODULE_CONTRACT
 
 Replaces the ensure_context_repo() shell function (lines 219-269 of deploy-modules.sh)
-with typed Python: yaml-based node.yaml parsing, subprocess git operations, S9 pull caching.
+with typed Python: NodeYaml-based node.yaml parsing, subprocess git operations, S9 pull caching.
 
 # STRUCTURE: ┌parse node.yaml (context+repos)┐ → ◇ context? no→SKIP ┐
 #                               ↓ yes                                │
@@ -44,7 +44,8 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.node_yaml import NodeYaml
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ CONTEXT_PULL_TS_PATH: str = "/var/lib/platform/.context-pull-ts"
 ##   - Git pull failure is non-fatal (return 0, log WARN)
 ##   - Git clone failure returns 1 (log WARN)
 ## @rationale Extracted directly from deploy-modules.sh (lines 219-269).
-##            Uses yaml library directly instead of inline python3 -c for node.yaml parsing.
+##            Uses NodeYaml facade instead of inline python3 -c or direct yaml.safe_load.
 ##            See TRAP[DECISION] on CONTEXT_PULL_CACHE_SECONDS for caching rationale.
 def ensure_context_repo(node_yaml_path: str) -> int:
     """Clone or pull the context overlay git repo with 5-minute pull caching.
@@ -110,14 +111,13 @@ def ensure_context_repo(node_yaml_path: str) -> int:
 
 
 # region FUNC__read_context_name
-## @purpose  Extract `context:` field from node.yaml using yaml library (not grep/awk).
+## @purpose  Extract `context:` field from node.yaml via NodeYaml facade.
 ## @io       ⇥ node_yaml_path: str → ⎋ str (context name, empty if absent or error)
-## @complexity  O(1) — single yaml key lookup
+## @complexity  O(1) — single key lookup via NodeYaml
 def _read_context_name(node_yaml_path: str) -> str:
-    """Read the `context:` field from node.yaml.
+    """Read the `context:` field from node.yaml via NodeYaml.
 
-    Uses the yaml library directly instead of the original grep/awk approach
-    from deploy-modules.sh line 222.
+    Uses the NodeYaml facade (NodeYaml.get_context()) instead of direct yaml.safe_load.
 
     Returns the context name string, or '' if absent/unreadable.
     """
@@ -125,12 +125,10 @@ def _read_context_name(node_yaml_path: str) -> str:
     ##   - Returns '' on any exception (file not found, yaml parse error)
     ##   - Never raises — all exceptions caught and logged at IMP:7
     try:
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        ctx = (data or {}).get("context", "") or ""
+        ctx = NodeYaml(node_yaml_path).get_context()
         logger.info("[IMP:8][_read_context_name] context='%s' (from %s)", ctx, node_yaml_path)
         return ctx
-    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
+    except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
         logger.warning("[IMP:7][_read_context_name][error] Failed to read context: %s", exc)
         return ""
 
@@ -270,28 +268,24 @@ def _clone_context_repo(node_yaml_path: str, context_path: str) -> int:
 
 
 # region FUNC__read_repo_url
-## @purpose  Extract repos.core URL from node.yaml using yaml library.
+## @purpose  Extract repos.core URL from node.yaml via NodeYaml facade.
 ## @io       ⇥ node_yaml_path: str → ⎋ str (repo URL, empty if absent)
-## @complexity  O(1) — nested dict lookup
+## @complexity  O(1) — dotted-key lookup via NodeYaml
 def _read_repo_url(node_yaml_path: str) -> str:
-    """Read the `repos.core` field from node.yaml.
+    """Read the `repos.core` field from node.yaml via NodeYaml.
 
-    Uses yaml library directly (replaces inline python3 -c pattern from original
-    deploy-modules.sh line 250-256).
+    Uses NodeYaml.get("repos.core", default="") instead of direct yaml.safe_load.
 
     Returns the repo URL string, or '' if absent/unreadable.
     """
     ## @invariants
     ##   - Returns '' on any exception (file not found, yaml parse error)
-    ##   - Handles None values safely with `or {}`
+    ##   - Handles None values safely via NodeYaml.get(default="")
     try:
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        repos = (data or {}).get("repos", {}) or {}
-        url = repos.get("core", "") or ""
+        url = NodeYaml(node_yaml_path).get("repos.core", default="")
         logger.info("[IMP:8][_read_repo_url] repos.core='%s' (from %s)", url, node_yaml_path)
         return url
-    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
+    except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
         logger.warning("[IMP:7][_read_repo_url][error] Failed to read repos.core: %s", exc)
         return ""
 

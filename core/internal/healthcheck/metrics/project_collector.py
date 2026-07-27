@@ -48,15 +48,13 @@ def get_projects(node_yaml_path: str, image_cache: dict[str, int] | None = None,
 
     # Step 1: Load node.yaml
     try:
-        import yaml
+        from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
 
-        with open(node_yaml_path) as f:
-            node_data = yaml.safe_load(f) or {}
-    except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
+        node = NodeYaml(node_yaml_path)
+        projects_config = node.get_projects()
+    except (ConfigNotFoundError, ConfigParseError, OSError) as exc:
         _logger.warning("[IMP:8][project_collector][get_projects] Failed to load node.yaml %s: %s", node_yaml_path, exc)
         return []
-
-    projects_config = node_data.get("projects", [])
     if not projects_config:
         _logger.info("[IMP:8][project_collector][get_projects] No projects in node.yaml")
         return []

@@ -92,9 +92,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, NoReturn, Optional
+from typing import Any, NoReturn
 
 from core.internal.shared.project_registry import validate_project_name
 
@@ -106,48 +104,53 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DeployResult:
     """Result of a deploy operation."""
+
     success: bool
     project: str
     ref: str
     service: str
-    previous_image: Optional[str] = None
+    previous_image: str | None = None
     rollback_performed: bool = False
     first_deploy_failed: bool = False
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 @dataclass
 class RemoveResult:
     """Result of a remove operation."""
+
     success: bool
     project: str
     already_removed: bool = False
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 @dataclass
 class StatusResult:
     """Result of a status operation."""
+
     project: str
     node: str
     status: str  # "found" | "not_found" | "stub"
     containers: list[dict] = field(default_factory=list)
-    last_deploy: Optional[dict] = None
+    last_deploy: dict | None = None
 
 
 @dataclass
 class ImageInfo:
     """Info about a saved previous image."""
+
     id: str
-    tag: Optional[str] = None
+    tag: str | None = None
 
 
 @dataclass
 class SnapshotInfo:
     """Info about a pre-deploy snapshot."""
+
     timestamp: int
-    ps_file: Optional[str] = None
-    images_file: Optional[str] = None
+    ps_file: str | None = None
+    images_file: str | None = None
 
 
 # ── Custom exceptions ───────────────────────────────────────────────────────
@@ -155,12 +158,10 @@ class SnapshotInfo:
 
 class DeployError(Exception):
     """Raised on unrecoverable deploy failure."""
-    pass
 
 
 class ValidationError(Exception):
     """Raised on input validation failure."""
-    pass
 
 
 # ── DeployEngine ────────────────────────────────────────────────────────────
@@ -179,7 +180,9 @@ class DeployEngine:
         self.projects_base = projects_base
         self._validate_script = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "internal", "validate", "validate.sh",
+            "internal",
+            "validate",
+            "validate.sh",
         )
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -281,21 +284,22 @@ class DeployEngine:
                 service=service,
                 previous_image=previous_image.id if previous_image else None,
             )
-        else:
-            logger.error("[IMP:10][deploy][health] Healthcheck FAILED for %s/%s", project, service)
-            if is_first_deploy:
-                self._handle_first_deploy(project, service, ref, "Healthcheck failed on first deploy")
-            else:
-                rollback_ok = self._perform_rollback(project_dir, service, previous_image)
-                return DeployResult(
-                    success=False,
-                    project=project,
-                    ref=ref,
-                    service=service,
-                    previous_image=previous_image.id if previous_image else None,
-                    rollback_performed=rollback_ok,
-                    error_message="Healthcheck failed, rollback " + ("performed" if rollback_ok else "failed"),
-                )
+        logger.error("[IMP:10][deploy][health] Healthcheck FAILED for %s/%s", project, service)
+        if is_first_deploy:
+            self._handle_first_deploy(project, service, ref, "Healthcheck failed on first deploy")
+            # unreachable — _handle_first_deploy raises SystemExit
+
+        rollback_ok = self._perform_rollback(project_dir, service, previous_image)
+        return DeployResult(
+            success=False,
+            project=project,
+            ref=ref,
+            service=service,
+            previous_image=previous_image.id if previous_image else None,
+            rollback_performed=rollback_ok,
+            error_message="Healthcheck failed, rollback " + ("performed" if rollback_ok else "failed"),
+        )
+
     # endregion FUNC_deploy
 
     # region FUNC_remove
@@ -336,14 +340,18 @@ class DeployEngine:
         logger.info("[IMP:9][remove][down] Stopping containers for %s (data preserved, no -v)...", project)
         result = subprocess.run(
             ["docker", "compose", "down", "--timeout", "30"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode != 0:
-            logger.warning("[IMP:8][remove][down-warn] docker compose down exit=%s: %s",
-                           result.returncode, result.stderr.strip())
+            logger.warning(
+                "[IMP:8][remove][down-warn] docker compose down exit=%s: %s", result.returncode, result.stderr.strip()
+            )
 
         logger.info("[IMP:9][remove][done] Remove DONE: %s (data preserved)", project)
         return RemoveResult(success=True, project=project, already_removed=False)
+
     # endregion FUNC_remove
 
     # region FUNC_status
@@ -381,7 +389,9 @@ class DeployEngine:
                 if "GENERATED-STUB" in first_line:
                     logger.info("[IMP:9][status][stub] Project %s is a GENERATED-STUB", project)
                     return StatusResult(
-                        project=project, node="", status="stub",
+                        project=project,
+                        node="",
+                        status="stub",
                         last_deploy={"message": "Project directory exists but ai-platform.yaml is a GENERATED-STUB"},
                     )
             except OSError:
@@ -393,19 +403,21 @@ class DeployEngine:
             os.chdir(project_dir)
             ps_result = subprocess.run(
                 ["docker", "compose", "ps", "--format", "json"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if ps_result.returncode == 0 and ps_result.stdout.strip():
                 for line in ps_result.stdout.strip().split("\n"):
                     try:
                         containers.append(json.loads(line))
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError:  # noqa: PERF203
                         continue
         except (OSError, subprocess.TimeoutExpired) as e:
             logger.warning("[IMP:8][status][ps-error] docker compose ps error: %s", str(e))
 
         # ── Last deploy result ──
-        last_deploy: Optional[dict[str, Any]] = None
+        last_deploy: dict[str, Any] | None = None
         deploy_result_file = os.path.join(project_dir, ".deploy-snapshots", "deploy-result.json")
         if os.path.isfile(deploy_result_file):
             try:
@@ -416,9 +428,13 @@ class DeployEngine:
 
         logger.info("[IMP:9][status][found] Project %s: %d containers", project, len(containers))
         return StatusResult(
-            project=project, node="", status="found",
-            containers=containers, last_deploy=last_deploy,
+            project=project,
+            node="",
+            status="found",
+            containers=containers,
+            last_deploy=last_deploy,
         )
+
     # endregion FUNC_status
 
     # ── Internal helpers ────────────────────────────────────────────────────
@@ -431,7 +447,7 @@ class DeployEngine:
     ##   - Called BEFORE pull (critical ordering for rollback)
     ##   - Returns None if no previous image (first deploy)
     ##   - If image tag is <none>:<none>, creates fallback tag `project:previous-rollback`
-    def _save_previous_image(self, project_dir: str, service: str) -> Optional[ImageInfo]:
+    def _save_previous_image(self, project_dir: str, service: str) -> ImageInfo | None:
         """Save current image ID and tag before deploy.
 
         Args:
@@ -445,7 +461,9 @@ class DeployEngine:
 
         result = subprocess.run(
             ["docker", "compose", "images", "-q", service],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=project_dir,
         )
         image_id = result.stdout.strip()
@@ -457,7 +475,9 @@ class DeployEngine:
         # Get tag
         tag_result = subprocess.run(
             ["docker", "image", "inspect", image_id, "--format", "{{index .RepoTags 0}}"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         tag = tag_result.stdout.strip()
 
@@ -465,12 +485,14 @@ class DeployEngine:
             tag = f"{service}:previous-rollback"
             subprocess.run(
                 ["docker", "tag", image_id, tag],
-                capture_output=True, timeout=30,
+                capture_output=True,
+                timeout=30,
             )
             logger.info("[IMP:8][save-prev] Created fallback tag for dangling image: %s", tag)
 
         logger.info("[IMP:9][save-prev] Previous image saved: ID=%s TAG=%s", image_id, tag)
         return ImageInfo(id=image_id, tag=tag)
+
     # endregion FUNC__save_previous_image
 
     # region FUNC__capture_deploy_snapshot
@@ -495,7 +517,9 @@ class DeployEngine:
 
         ps_result = subprocess.run(
             ["docker", "compose", "ps", "--format", "json"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=project_dir,
         )
         if ps_result.returncode == 0 and ps_result.stdout:
@@ -507,13 +531,17 @@ class DeployEngine:
 
         images_result = subprocess.run(
             ["docker", "compose", "images", "--format", "json"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=project_dir,
         )
         if images_result.returncode == 0 and images_result.stdout:
             with open(images_file, "w") as f:
                 f.write(images_result.stdout)
-            logger.info("[IMP:8][snapshot] Wrote images snapshot: %s (%d bytes)", images_file, len(images_result.stdout))
+            logger.info(
+                "[IMP:8][snapshot] Wrote images snapshot: %s (%d bytes)", images_file, len(images_result.stdout)
+            )
         else:
             logger.info("[IMP:6][snapshot] images snapshot empty or failed (rc=%d)", images_result.returncode)
 
@@ -524,6 +552,7 @@ class DeployEngine:
 
         logger.info("[IMP:9][snapshot] Snapshot complete: ts=%s dir=%s", timestamp, snapshot_dir)
         return SnapshotInfo(timestamp=timestamp, ps_file=ps_file, images_file=images_file)
+
     # endregion FUNC__capture_deploy_snapshot
 
     # region FUNC__preflight_checks
@@ -552,7 +581,9 @@ class DeployEngine:
             logger.info("[IMP:8][preflight] Checking FQDN uniqueness...")
             result = subprocess.run(
                 [self._validate_script, "--check-fqdn", project_dir],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if result.returncode != 0:
                 msg = f"FQDN conflict detected: {result.stderr.strip()}"
@@ -568,6 +599,7 @@ class DeployEngine:
         if os.path.isfile(ai_yaml):
             try:
                 import yaml
+
                 with open(ai_yaml) as f:
                     config = yaml.safe_load(f)
                 host_port = None
@@ -579,7 +611,10 @@ class DeployEngine:
                     port = int(host_port)
                     logger.info("[IMP:8][preflight] Checking port %s for conflicts...", port)
                     ss_result = subprocess.run(
-                        ["ss", "-tlnp"], capture_output=True, text=True, timeout=15,
+                        ["ss", "-tlnp"],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
                     )
                     if f":{port} " in ss_result.stdout:
                         msg = f"Port {port} already in use — deploy blocked"
@@ -588,6 +623,7 @@ class DeployEngine:
                     logger.info("[IMP:8][preflight] Port %s available", port)
             except (ImportError, yaml.YAMLError, OSError) as e:
                 logger.info("[IMP:6][preflight] Could not check port: %s", str(e))
+
     # endregion FUNC__preflight_checks
 
     # region FUNC__pull_image_with_retry
@@ -599,7 +635,11 @@ class DeployEngine:
     ##   - Rate-limit detected via "toomanyrequests|429|rate limit" in output
     ##   - Returns False after all attempts exhausted
     def _pull_image_with_retry(
-        self, project_dir: str, service: str, ref: str, max_attempts: int = 3,
+        self,
+        project_dir: str,
+        service: str,
+        ref: str,
+        max_attempts: int = 3,
     ) -> bool:
         """Pull image with retry and backoff.
 
@@ -617,12 +657,16 @@ class DeployEngine:
         env["IMAGE_TAG"] = ref
 
         for attempt in range(1, max_attempts + 1):
-            logger.info("[IMP:8][pull] Attempt %d/%d: pulling %s with IMAGE_TAG=%s",
-                        attempt, max_attempts, service, ref)
+            logger.info(
+                "[IMP:8][pull] Attempt %d/%d: pulling %s with IMAGE_TAG=%s", attempt, max_attempts, service, ref
+            )
             result = subprocess.run(
                 ["docker", "compose", "pull", service],
-                capture_output=True, text=True, timeout=120,
-                cwd=project_dir, env=env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=project_dir,
+                env=env,
             )
 
             if result.returncode == 0:
@@ -634,17 +678,21 @@ class DeployEngine:
             if any(pattern in output for pattern in ("toomanyrequests", "429", "rate limit")):
                 logger.warning("[IMP:9][pull] Rate limit hit on attempt %d", attempt)
             else:
-                logger.warning("[IMP:9][pull] Pull failed on attempt %d (exit=%d): %s",
-                               attempt, result.returncode, result.stderr.strip()[:200])
+                logger.warning(
+                    "[IMP:9][pull] Pull failed on attempt %d (exit=%d): %s",
+                    attempt,
+                    result.returncode,
+                    result.stderr.strip()[:200],
+                )
 
             if attempt < max_attempts:
                 delay = delays[min(attempt - 1, len(delays) - 1)]
                 logger.info("[IMP:7][pull] Waiting %ds before retry...", delay)
                 time.sleep(delay)
 
-        logger.error("[IMP:10][pull] FATAL: pull failed after %d attempts for %s:%s",
-                     max_attempts, service, ref)
+        logger.error("[IMP:10][pull] FATAL: pull failed after %d attempts for %s:%s", max_attempts, service, ref)
         return False
+
     # endregion FUNC__pull_image_with_retry
 
     # region FUNC__atomic_up
@@ -668,17 +716,22 @@ class DeployEngine:
 
         result = subprocess.run(
             ["docker", "compose", "up", "-d", service],
-            capture_output=True, text=True, timeout=120,
-            cwd=project_dir, env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=project_dir,
+            env=env,
         )
 
         if result.returncode != 0:
-            logger.error("[IMP:10][up] docker compose up -d failed (exit=%d): %s",
-                         result.returncode, result.stderr.strip()[:200])
+            logger.error(
+                "[IMP:10][up] docker compose up -d failed (exit=%d): %s", result.returncode, result.stderr.strip()[:200]
+            )
             return False
 
         logger.info("[IMP:8][up] Container started for %s", service)
         return True
+
     # endregion FUNC__atomic_up
 
     # region FUNC__poll_health
@@ -701,14 +754,15 @@ class DeployEngine:
         Returns:
             True if healthy, False on timeout.
         """
-        logger.info("[IMP:8][health] Polling health for %s (timeout=%ds, interval=%ds)",
-                    service, timeout, interval)
+        logger.info("[IMP:8][health] Polling health for %s (timeout=%ds, interval=%ds)", service, timeout, interval)
         deadline = time.time() + timeout
 
         while time.time() < deadline:
             cid_result = subprocess.run(
                 ["docker", "compose", "ps", "-q", service],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
                 cwd=project_dir,
             )
             cid = cid_result.stdout.strip()
@@ -716,19 +770,21 @@ class DeployEngine:
             if cid:
                 inspect_result = subprocess.run(
                     ["docker", "inspect", "--format", "{{.State.Status}} {{.State.Health.Status}}", cid],
-                    capture_output=True, text=True, timeout=15,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
                 )
                 status_line = inspect_result.stdout.strip()
 
-                if "running" in status_line:
-                    if "healthy" in status_line or "unhealthy" not in status_line:
-                        logger.info("[IMP:9][health] Container %s is healthy", service)
-                        return True
+                if "running" in status_line and ("healthy" in status_line or "unhealthy" not in status_line):
+                    logger.info("[IMP:9][health] Container %s is healthy", service)
+                    return True
 
             time.sleep(interval)
 
         logger.error("[IMP:10][health] Healthcheck timeout for %s (%ds)", service, timeout)
         return False
+
     # endregion FUNC__poll_health
 
     # region FUNC__perform_rollback
@@ -739,7 +795,7 @@ class DeployEngine:
     ##   - Re-tags previous image before compose up (ensures correct image reference)
     ##   - Uses --force-recreate to ensure container replacement
     ##   - Returns False if rollback compose up fails
-    def _perform_rollback(self, project_dir: str, service: str, previous_image: Optional[ImageInfo]) -> bool:
+    def _perform_rollback(self, project_dir: str, service: str, previous_image: ImageInfo | None) -> bool:
         """Rollback to previous image.
 
         Args:
@@ -760,7 +816,8 @@ class DeployEngine:
         if previous_image.tag:
             subprocess.run(
                 ["docker", "tag", previous_image.id, previous_image.tag],
-                capture_output=True, timeout=30,
+                capture_output=True,
+                timeout=30,
             )
             logger.info("[IMP:9][rollback] Re-tagged %s → %s", previous_image.id, previous_image.tag)
 
@@ -768,17 +825,24 @@ class DeployEngine:
         env = os.environ.copy()
         result = subprocess.run(
             ["docker", "compose", "up", "-d", "--force-recreate", service],
-            capture_output=True, text=True, timeout=120,
-            cwd=project_dir, env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=project_dir,
+            env=env,
         )
 
         if result.returncode != 0:
-            logger.error("[IMP:10][rollback] Rollback compose up FAILED (exit=%d): %s",
-                         result.returncode, result.stderr.strip()[:200])
+            logger.error(
+                "[IMP:10][rollback] Rollback compose up FAILED (exit=%d): %s",
+                result.returncode,
+                result.stderr.strip()[:200],
+            )
             return False
 
         logger.info("[IMP:10][rollback] Rollback complete: %s restored to %s", service, previous_image.id)
         return True
+
     # endregion FUNC__perform_rollback
 
     # region FUNC__handle_first_deploy
@@ -796,9 +860,9 @@ class DeployEngine:
         Raises:
             SystemExit: Always exits with code 1.
         """
-        logger.error("[IMP:10][first-deploy] CRITICAL: %s — %s no previous image to rollback",
-                     reason, service)
+        logger.error("[IMP:10][first-deploy] CRITICAL: %s — %s no previous image to rollback", reason, service)
         sys.exit(1)
+
     # endregion FUNC__handle_first_deploy
 
 
@@ -851,26 +915,34 @@ if __name__ == "__main__":
             keep_images=args.keep_images,
         )
         # JSON output for shell facade
-        print(json.dumps({
-            "success": result.success,
-            "project": result.project,
-            "ref": result.ref,
-            "service": result.service,
-            "previous_image": result.previous_image,
-            "rollback_performed": result.rollback_performed,
-            "first_deploy_failed": result.first_deploy_failed,
-            "error_message": result.error_message,
-        }))
+        print(
+            json.dumps(
+                {
+                    "success": result.success,
+                    "project": result.project,
+                    "ref": result.ref,
+                    "service": result.service,
+                    "previous_image": result.previous_image,
+                    "rollback_performed": result.rollback_performed,
+                    "first_deploy_failed": result.first_deploy_failed,
+                    "error_message": result.error_message,
+                }
+            )
+        )
         sys.exit(0 if result.success else 1)
 
     elif args.command == "remove":
         result = engine.remove(project=args.project, project_dir=args.project_dir)
-        print(json.dumps({
-            "success": result.success,
-            "project": result.project,
-            "already_removed": result.already_removed,
-            "error_message": result.error_message,
-        }))
+        print(
+            json.dumps(
+                {
+                    "success": result.success,
+                    "project": result.project,
+                    "already_removed": result.already_removed,
+                    "error_message": result.error_message,
+                }
+            )
+        )
         sys.exit(0 if result.success else 1)
 
     elif args.command == "status":
@@ -879,12 +951,16 @@ if __name__ == "__main__":
             project_dir=args.project_dir,
             stub_aware=args.stub_aware,
         )
-        print(json.dumps({
-            "project": result.project,
-            "node": result.node,
-            "status": result.status,
-            "containers": result.containers,
-            "last_deploy": result.last_deploy,
-        }))
+        print(
+            json.dumps(
+                {
+                    "project": result.project,
+                    "node": result.node,
+                    "status": result.status,
+                    "containers": result.containers,
+                    "last_deploy": result.last_deploy,
+                }
+            )
+        )
         sys.exit(0)
 # endregion CLI

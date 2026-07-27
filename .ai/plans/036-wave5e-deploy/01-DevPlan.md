@@ -559,7 +559,7 @@ class StatusResult:
     containers: list[dict] = field(default_factory=list)
     last_deploy: Optional[dict] = None
 
-@dataclass  
+@dataclass
 class DeliverResult:
     success: bool
     project: str

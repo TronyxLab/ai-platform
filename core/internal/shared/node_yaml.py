@@ -61,7 +61,7 @@ class DomainConfig(NamedTuple):
     platform_domain: str = ""
     email: str = ""
     acme_dns_plugin: str = ""
-    project_domains: list[str] = []
+    project_domains: list[str] = []  # noqa: RUF012 — NamedTuple, not mutable class
 
 
 class NodeInfo(NamedTuple):
@@ -139,12 +139,12 @@ class NodeYaml:
         try:
             with open(self._path) as f:
                 raw = yaml.safe_load(f)
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             logger.error("[IMP:9][NodeYaml] node.yaml not found: %s", self._path)
-            raise ConfigNotFoundError(f"node.yaml not found: {self._path}")
+            raise ConfigNotFoundError(f"node.yaml not found: {self._path}") from e
         except yaml.YAMLError as e:
             logger.error("[IMP:9][NodeYaml] YAML parse error in %s: %s", self._path, e)
-            raise ConfigParseError(f"YAML parse error in {self._path}: {e}")
+            raise ConfigParseError(f"YAML parse error in {self._path}: {e}") from e
 
         # Handle None/empty YAML
         if raw is None:
@@ -455,9 +455,7 @@ class NodeYaml:
         project_domains: list[str] = []
         projects = data.get("projects", [])
         if isinstance(projects, list):
-            for proj in projects:
-                if isinstance(proj, dict) and proj.get("domain"):
-                    project_domains.append(proj["domain"])
+            project_domains.extend(proj["domain"] for proj in projects if isinstance(proj, dict) and proj.get("domain"))
 
         cfg = DomainConfig(
             platform_domain=platform_domain,
@@ -636,10 +634,7 @@ def _cli_get(node: NodeYaml, args: argparse.Namespace) -> int:
     ## @complexity — O(1) after load
     """
     try:
-        if args.default is not None:
-            value = node.get(args.get, default=args.default)
-        else:
-            value = node.get(args.get)
+        value = node.get(args.get, default=args.default) if args.default is not None else node.get(args.get)
     except ConfigValidationError:
         # Missing key without default → exit 1 for shell || compatibility
         print(f"Key not found: {args.get}", file=sys.stderr)
