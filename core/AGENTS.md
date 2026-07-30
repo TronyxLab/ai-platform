@@ -152,3 +152,13 @@
 | [`entrypoint-manifest.yaml`](entrypoint-manifest.yaml) | Машиночитаемый YAML-реестр |
 | [`templates/`](templates/) | Параметризованные шаблоны |
 - [Root AGENTS.md — языковая политика](../AGENTS.md#языковая-политика) — Python-only new code, двухуровневый Strangler-триггер
+
+---
+
+## New shared modules (DevPlan 086)
+
+| Module | Path | Purpose |
+|--------|------|---------|
+| `secrets_env_parser` | `core/internal/shared/secrets_env_parser.py` | Единый парсер secrets.env — parse()/write()/merge()/export_shell(). Заменяет 7 inline-парсеров. |
+| `telegram_notifier` | `core/internal/shared/telegram_notifier.py` | Единый Telegram-клиент — send_telegram(). Заменяет 6 независимых реализаций (3 shell + 3 Python). |
+| `docker_auth` | `core/internal/shared/docker_auth.py` | Единый Docker registry auth — docker_login()/ghcr_login()/configure_docker_auth(). Заменяет 5 дублирующихся точек. |

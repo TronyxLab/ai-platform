@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: docker login library ghcr registry-credentials container-registry ghcr-login ghcr_login GHCR_PULL_TOKEN
-# STRUCTURE: ┌env vars (DOCKER_HUB_USERNAME+TOKEN | GHCR_PULL_TOKEN)┐ → ◇ docker_login → ◇ ghcr_login → ◇ fallback anonymous → ⊕ exit
+# GREP_SUMMARY: docker login library ghcr registry-credentials container-registry ghcr-login ghcr_login GHCR_PULL_TOKEN docker_auth
+# STRUCTURE: ┌delegate to docker_auth.py┐ → ◇ docker_login (thin facade) → ◇ ghcr_login (thin facade) → ◇ ensure_docker_network → ⎋ exit
 # ═══════════════════════════════════════════════════════════════════
 # MODULE_CONTRACT — Canonical Docker Login Library
 # ═══════════════════════════════════════════════════════════════════
 # region MODULE_CONTRACT
 ## @modulecontract
-## @purpose  Canonical Docker and GHCR authentication library.
-##           Provides docker_login() for Docker Hub and ghcr_login() for
-##           GitHub Container Registry, with graceful anonymous fallback.
-##           Eliminates duplicate login definitions across deploy scripts.
-## @scope    — docker_login() with env-var-based auth (Docker Hub)
-##           — ghcr_login() with GHCR_PULL_TOKEN auth (ghcr.io)
-##           — logs at IMP:7-9 for traceability
-##           — zero side-effects on source (pure function definition only)
+## @purpose  Canonical Docker and GHCR authentication library (thin facades).
+##           Delegates docker_login() and ghcr_login() to the shared
+##           docker_auth.py module. Provides ensure_docker_network() for
+##           network creation. All credential handling lives in the shared module.
+## @scope    — docker_login() thin facade → shared docker_auth.docker_login()
+##           — ghcr_login() thin facade → shared docker_auth.ghcr_login()
+##           — ensure_docker_network() — unchanged, unrelated to auth
+##           — logs at IMP:8 for delegation traceability
 ## @input    — DOCKER_HUB_USERNAME (env var, optional)
 ##           — DOCKER_HUB_TOKEN    (env var, optional)
 ##           — GHCR_PULL_TOKEN     (env var, optional)
@@ -39,14 +39,15 @@
 ## @changes   CREATED: 2026-07-09 · TASK-9 — Extracted from
 ##            deploy-project.sh and deploy-modules.sh
 ##           MODIFIED: 2026-07-17 · T13 — Added ghcr_login() from deploy-modules.sh
+##           MODIFIED: 2026-07-30 · T13a — Delegated to shared docker_auth module
 ## @modulemap — docker_login  [W:100] Canonical Docker Hub authentication
 ##             — ghcr_login   [W:100] Canonical GHCR authentication
 ## @usecases  — CI/CD deploy: DOCKER_HUB_USERNAME + TOKEN set → login
 ##             — CI/CD deploy: GHCR_PULL_TOKEN set → ghcr.io login
 ##             — Anonymous bootstrap: env vars absent → log warning, continue
 # endregion MODULE_CONTRACT
-# GREP_SUMMARY: docker, docker-login, docker_login, DOCKER_HUB_USERNAME, DOCKER_HUB_TOKEN, auth, registry
-# STRUCTURE: ▶ ┌DOCKER_HUB_USERNAME + TOKEN?┐ → ◇ ┌both set?┐ → ⚡ echo TOKEN | docker login --username USER --password-stdin → [IMP:9] success | ⚡ [IMP:8] WARN: anonymous → ⎋ return 0
+# GREP_SUMMARY: docker, docker-login, docker_login, DOCKER_HUB_USERNAME, DOCKER_HUB_TOKEN, auth, registry, docker_auth
+# STRUCTURE: ▶ ┌delegate to docker_auth.py┐ → ◇ docker-login (thin facade) → ⎋ exit
 __LOG_PREFIX="${__LOG_PREFIX:-docker}"
 source "${BASH_SOURCE[0]%/*}/logging.sh"
 
@@ -66,44 +67,15 @@ source "${BASH_SOURCE[0]%/*}/logging.sh"
 ##             — Never writes to stdout (all output via stderr)
 ##             - stdout from docker login (Login Succeeded) redirected to /dev/null
 docker_login() {
-    # ⚠️ TRAP[BUGFIX] · 2026-07-17 · HI · unbound variable under set -euo pipefail
-    # · Symptom: bash dies with "DOCKER_HUB_USERNAME: unbound variable" under set -euo pipefail
-    # · Root: env probe ${VAR} without default expansion syntax ${VAR:-}
-    # · Fix: added :- default values; sibling ghcr_login() already used correct pattern
-    if [[ -n "${DOCKER_HUB_USERNAME:-}" && -n "${DOCKER_HUB_TOKEN:-}" ]]; then
-        # Happy path: credentials present → attempt authenticated login
-        log_imp 8 "docker_login" "Authenticating to Docker Hub as ${DOCKER_HUB_USERNAME}"
-        echo "$DOCKER_HUB_TOKEN" | docker login --username "$DOCKER_HUB_USERNAME" --password-stdin 2>/dev/null && {
-            log_imp 9 "docker_login" "Docker Hub login succeeded as ${DOCKER_HUB_USERNAME}"
-            return 0
-        } || {
-            log_imp 9 "docker_login" "WARNING: docker login failed — continuing with anonymous access"
-            return 0
-        }
-    else
-        # Fallback: credentials absent → anonymous access
-        log_imp 8 "docker_login" "DOCKER_HUB_USERNAME/TOKEN not set — continuing with anonymous access"
-    fi
+    # ⚠️ TRAP[DECISION] · 2026-07-30 · — · Delegated to shared docker_auth.py
+    # · Rejected: inline subprocess.run --password-stdin (duplicate auth logic)
+    # · Reason: DRIFT-D8 consolidation — 5 duplicate auth sites → 1 canonical module
+    # · Rev: if shared module interface changes, update thin facade
+    log_imp 8 "docker_login" "Delegating to docker_auth.py (shared module)"
+    python3 "${BASH_SOURCE[0]%/*}/../internal/shared/docker_auth.py" docker-login
 }
 # endregion FUNC_docker_login
 
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_ghcr_login
-## @purpose  Authenticate to GitHub Container Registry (ghcr.io) for image pulls.
-##           Uses GHCR_PULL_TOKEN env var; falls back to anonymous access if absent.
-##           Non-fatal — missing or invalid credentials produce warnings, not errors.
-## @param    (none — reads GHCR_PULL_TOKEN env)
-## @io       env read: GHCR_PULL_TOKEN
-##           side-effect: docker login session to ghcr.io
-##           out: stderr → [IMP:8-9] login status messages
-## @complexity O(1) — one docker invocation at most
-## @invariants — Never exits non-zero (anonymous fallback always succeeds)
-##             — Never writes to stdout (all output via stderr)
-##             - stdout from docker login redirected to /dev/null to avoid token leak
-## @rationale GHCR is used for Hermes-built images (L1→L2 pipeline). Authentication is
-##           required for private packages; anonymous access works for public images.
-##           Extracted from deploy-modules.sh to lib/ so deploy-project.sh can also
-##           call ghcr_login() if needed, without duplicating the function.
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_ensure_docker_network
 ## @purpose  Ensure a Docker network exists; create it if missing.
@@ -141,20 +113,29 @@ ensure_docker_network() {
 }
 # endregion FUNC_ensure_docker_network
 
+# ═══════════════════════════════════════════════════════════════════
+# region FUNC_ghcr_login
+## @purpose  Authenticate to GitHub Container Registry (ghcr.io) for image pulls.
+##           Uses GHCR_PULL_TOKEN env var; falls back to anonymous access if absent.
+##           Non-fatal — missing or invalid credentials produce warnings, not errors.
+## @param    (none — reads GHCR_PULL_TOKEN env)
+## @io       env read: GHCR_PULL_TOKEN
+##           side-effect: docker login session to ghcr.io
+##           out: stderr → [IMP:8-9] login status messages
+## @complexity O(1) — one docker invocation at most
+## @invariants — Never exits non-zero (anonymous fallback always succeeds)
+##             — Never writes to stdout (all output via stderr)
+##             - stdout from docker login redirected to /dev/null to avoid token leak
+## @rationale GHCR is used for Hermes-built images (L1→L2 pipeline). Authentication is
+##           required for private packages; anonymous access works for public images.
+##           Extracted from deploy-modules.sh to lib/ so deploy-project.sh can also
+##           call ghcr_login() if needed, without duplicating the function.
 ghcr_login() {
-    if [[ -z "${GHCR_PULL_TOKEN:-}" ]]; then
-        log_imp 8 "ghcr_login" "GHCR_PULL_TOKEN not set — skipping ghcr.io login (anonymous)"
-        return 0
-    fi
-
-    log_imp 8 "ghcr_login" "Authenticating to ghcr.io as root"
-    local login_output
-    login_output="$(echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io -u x-access-token --password-stdin 2>&1)" || {
-        log_imp 9 "ghcr_login" "WARNING: ghcr.io login failed — continuing with anonymous access"
-        log_imp 7 "ghcr_login" "Output: ${login_output}"
-        return 0
-    }
-
-    log_imp 9 "ghcr_login" "GHCR login succeeded as root"
+    # ⚠️ TRAP[DECISION] · 2026-07-30 · — · Delegated to shared docker_auth.py
+    # · Rejected: inline subprocess.run --password-stdin (duplicate auth logic)
+    # · Reason: DRIFT-D8 consolidation — 5 duplicate auth sites → 1 canonical module
+    # · Rev: if shared module interface changes, update thin facade
+    log_imp 8 "ghcr_login" "Delegating to docker_auth.py (shared module)"
+    python3 "${BASH_SOURCE[0]%/*}/../internal/shared/docker_auth.py" ghcr-login
 }
 # endregion FUNC_ghcr_login

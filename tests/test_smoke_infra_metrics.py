@@ -408,10 +408,15 @@ def test_infra_metrics_healthcheck(caplog, infra_metrics_compose) -> None:
     logger.info("[IMP:7][smoke][healthcheck] Running healthcheck.sh deep")
 
     # ⚠️ Передаём shifted test порты (F-7): CADVISOR_PORT=18081, NODE_EXPORTER_PORT=19100
+    # ⚠️ Передаём test container names (2026-07-27): канонические имена заменены на -test суффиксы
     healthcheck_env = {
         **os.environ,
         "CADVISOR_PORT": str(_CADVISOR_PORT),
         "NODE_EXPORTER_PORT": str(_NODE_EXPORTER_PORT),
+        "CADVISOR_CONTAINER_NAME": _CADVISOR_CONTAINER,
+        "NODE_EXPORTER_CONTAINER_NAME": _NODE_EXPORTER_CONTAINER,
+        "NGINX_EXPORTER_CONTAINER_NAME": "nginx-prometheus-exporter-test",
+        "REDIS_EXPORTER_CONTAINER_NAME": "redis-exporter-test",
     }
     result = subprocess.run(
         ["bash", str(_HEALTHCHECK_SH), "deep"],

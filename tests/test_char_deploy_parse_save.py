@@ -417,166 +417,25 @@ echo "[IMP:9][verify] NODE_NAME=${NODE_NAME}"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-# region TEST_save_previous_image_exists
-# 🧪 TRAP[TEST]
-# Regression: save_previous_image() должен сохранить image ID и tag когда образ существует
-# Scenario: docker compose images возвращает sha256, docker image inspect возвращает tag
-#           FIRST_DEPLOY=0, PREVIOUS_IMAGE_ID и PREVIOUS_IMAGE_TAG установлены
-# Last fail: None
-# Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_save_previous_image_exists(tmp_path, caplog) -> None:
-    """Verify save_previous_image() captures image ID and tag when a previous image exists."""
-    caplog.set_level(logging.DEBUG)
-
-    projects_base = str(tmp_path)
-    project_dir = os.path.join(projects_base, "myapp-img")
-
-    preamble = f"""set -euo pipefail
-{LOG_STUBS}
-{DOCKER_MOCK}
-export PROJECT="{GOLDEN_PROJECT}"
-export PROJECT_DIR="{project_dir}"
-export SERVICE_NAME="{GOLDEN_PROJECT}"
-export __LOG_PREFIX="test"
-export DOCKER_MOCK_IMAGES_OUTPUT="{GOLDEN_IMAGE_ID}"
-export DOCKER_MOCK_IMAGES_RC=0
-export DOCKER_MOCK_INSPECT_OUTPUT="{GOLDEN_IMAGE_TAG}"
-export DOCKER_MOCK_INSPECT_RC=0
-mkdir -p "{project_dir}"
-cd /tmp
-"""
-
-    test_call = """save_previous_image
-echo "[IMP:9][verify] FIRST_DEPLOY=${FIRST_DEPLOY}"
-echo "[IMP:9][verify] PREVIOUS_IMAGE_ID=${PREVIOUS_IMAGE_ID}"
-echo "[IMP:9][verify] PREVIOUS_IMAGE_TAG=${PREVIOUS_IMAGE_TAG}"
-"""
-
-    stdout, stderr, rc = _test_func(
-        DEPLOY_PROJECT_SH,
-        ["save_previous_image"],
-        test_call,
-        env={"__LOG_PREFIX": "test"},
-        preamble=preamble,
-    )
-
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"save_previous_image failed with rc={rc}: stderr={stderr}"
-    assert "FIRST_DEPLOY=0" in stdout, f"Expected FIRST_DEPLOY=0 (image exists), got: {stdout}"
-    assert f"PREVIOUS_IMAGE_ID={GOLDEN_IMAGE_ID}" in stdout, (
-        f"Expected PREVIOUS_IMAGE_ID={GOLDEN_IMAGE_ID}, got: {stdout}"
-    )
-    assert f"PREVIOUS_IMAGE_TAG={GOLDEN_IMAGE_TAG}" in stdout, (
-        f"Expected PREVIOUS_IMAGE_TAG={GOLDEN_IMAGE_TAG}, got: {stdout}"
-    )
-    logger.info(
-        "[IMP:9][test_save_previous_image_exists][assert] Image ID=%s Tag=%s captured",
-        GOLDEN_IMAGE_ID,
-        GOLDEN_IMAGE_TAG,
-    )
-    assert found_imp9, f"Critical LDD Error: No IMP:9 log found. stdout={stdout!r}"
-
-
+# region TEST_save_previous_image_REMOVED
+# 🧪 TRAP[TEST] · 2026-07-27 · REMOVED · Strangler-Fig migration (DevPlan 036E)
+# · Reason: save_previous_image removed from deploy-project.sh (1183→133 LOC),
+# ·   migrated to deploy_engine.py::_save_previous_image().
+# · Coverage: tests/unit/test_deploy_engine.py:
+# ·   - test_save_previous_image_exists (line 340): returns ImageInfo when image exists
+# ·   - test_save_previous_image_first_deploy (line 363): returns None for first deploy
+# · Previous test annotations: "Remove if: После рефакторинга с явным тестом на новую сигнатуру"
+# · Removed tests: test_save_previous_image_exists, test_save_previous_image_none,
+# ·   test_save_previous_image_docker_error — all tested shell function via bash extraction.
 # endregion
 
 
-# region TEST_save_previous_image_none
-# 🧪 TRAP[TEST]
-# Regression: При первом деплое (нет предыдущего образа) FIRST_DEPLOY=1, PREVIOUS_IMAGE_ID=""
-# Scenario: docker compose images возвращает пустую строку
-#           Функция устанавливает FIRST_DEPLOY=1 и возвращает 0
-# Last fail: None
-# Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_save_previous_image_none(tmp_path, caplog) -> None:
-    """Verify save_previous_image() sets FIRST_DEPLOY=1 when no previous image exists."""
-    caplog.set_level(logging.DEBUG)
-
-    project_dir = os.path.join(str(tmp_path), "myapp-new")
-
-    preamble = f"""set -euo pipefail
-{LOG_STUBS}
-{DOCKER_MOCK}
-export PROJECT="{GOLDEN_PROJECT}"
-export PROJECT_DIR="{project_dir}"
-export SERVICE_NAME="{GOLDEN_PROJECT}"
-export __LOG_PREFIX="test"
-export DOCKER_MOCK_IMAGES_OUTPUT=""
-export DOCKER_MOCK_IMAGES_RC=0
-mkdir -p "{project_dir}"
-cd /tmp
-"""
-
-    test_call = """save_previous_image
-echo "[IMP:9][verify] FIRST_DEPLOY=${FIRST_DEPLOY}"
-echo "[IMP:9][verify] PREVIOUS_IMAGE_ID=[${PREVIOUS_IMAGE_ID}]"
-echo "[IMP:9][verify] PREVIOUS_IMAGE_TAG=[${PREVIOUS_IMAGE_TAG}]"
-"""
-
-    stdout, stderr, rc = _test_func(
-        DEPLOY_PROJECT_SH,
-        ["save_previous_image"],
-        test_call,
-        env={"__LOG_PREFIX": "test"},
-        preamble=preamble,
-    )
-
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"save_previous_image failed with rc={rc}: stderr={stderr}"
-    assert "FIRST_DEPLOY=1" in stdout, f"Expected FIRST_DEPLOY=1 (first deploy), got: {stdout}"
-    assert "PREVIOUS_IMAGE_ID=[]" in stdout, f"Expected empty PREVIOUS_IMAGE_ID, got: {stdout}"
-    assert "PREVIOUS_IMAGE_TAG=[]" in stdout, f"Expected empty PREVIOUS_IMAGE_TAG, got: {stdout}"
-    # stderr should contain FIRST_DEPLOY log message
-    assert FIRST_DEPLOY_MSG in stderr, f"Expected '{FIRST_DEPLOY_MSG}' log message in stderr, got: {stderr}"
-    logger.info("[IMP:9][test_save_previous_image_none][assert] First deploy detected correctly")
-    assert found_imp9, f"Critical LDD Error: No IMP:9 log found. stderr={stderr!r}"
-
-
-# endregion
-
-
-# region TEST_save_previous_image_docker_error
-# 🧪 TRAP[TEST]
-# Regression: Ошибка docker compose images должна вызывать exit 1 с CRITICAL-сообщением
-# Scenario: docker возвращает non-zero exit code, функция должна exit 1
-# Last fail: None
-# Remove if: После рефакторинга с явным тестом на новую сигнатуру
-def test_save_previous_image_docker_error(tmp_path, caplog) -> None:
-    """Verify save_previous_image() exits 1 when docker compose images fails."""
-    caplog.set_level(logging.DEBUG)
-
-    project_dir = os.path.join(str(tmp_path), "myapp-err")
-
-    preamble = f"""set -euo pipefail
-{LOG_STUBS}
-{DOCKER_MOCK}
-export PROJECT="{GOLDEN_PROJECT}"
-export PROJECT_DIR="{project_dir}"
-export SERVICE_NAME="{GOLDEN_PROJECT}"
-export __LOG_PREFIX="test"
-export DOCKER_MOCK_IMAGES_OUTPUT=""
-export DOCKER_MOCK_IMAGES_RC=1
-mkdir -p "{project_dir}"
-cd /tmp
-"""
-
-    test_call = """save_previous_image
-echo "[IMP:9][verify] UNEXPECTED_SUCCESS"
-"""
-
-    stdout, stderr, rc = _test_func(
-        DEPLOY_PROJECT_SH,
-        ["save_previous_image"],
-        test_call,
-        env={"__LOG_PREFIX": "test"},
-        preamble=preamble,
-    )
-
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc != 0, f"save_previous_image should have failed with docker error, got rc=0. stdout={stdout}"
-    assert CRITICAL_DOCKER_FAILED in stderr, f"Expected '{CRITICAL_DOCKER_FAILED}' in stderr, got: {stderr}"
-    assert "UNEXPECTED_SUCCESS" not in stdout, f"Function should have exited before this line: {stdout}"
-    logger.info("[IMP:9][test_save_previous_image_docker_error][assert] Docker error correctly escalated")
-    assert found_imp9, f"Critical LDD Error: No IMP:9 log found. stderr={stderr!r}"
-
-
+# region TEST_save_previous_image_docker_error_REMOVED
+# 🧪 TRAP[TEST] · 2026-07-27 · REMOVED · Strangler-Fig migration (DevPlan 036E)
+# · Reason: save_previous_image removed from deploy-project.sh (1183→133 LOC),
+# ·   migrated to deploy_engine.py::_save_previous_image().
+# · Coverage: tests/unit/test_deploy_engine.py lines 336-368 cover
+# ·   test_save_previous_image_exists and test_save_previous_image_first_deploy
+# ·   via @patch.object mocking of subprocess.run.
+# · Previous test assertion: "Remove if: После рефакторинга с явным тестом на новую сигнатуру"
 # endregion

@@ -81,8 +81,12 @@ update_step_2_provision(){ _delegate --mode "${MODE}" --run-step 2; }
 update_step_2_5_deliver_overlays(){ _delegate --mode "${MODE}" --run-step 3; }
 update_step_3_ssl_provision(){
     local ssl_script="${SM_SCRIPT}" secrets_env="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
-    [[ -f "$secrets_env" ]] && { set -a; source "$secrets_env"; set +a; unset_platform_proxy
-        echo "[IMP:9][ssl-provision] WEBNAMES_API_KEY loaded from ${secrets_env}" >&2; } ||
+    [[ -f "$secrets_env" ]] && {
+        echo "[IMP:9][ssl-provision] Loading secrets via export_shell from ${secrets_env}" >&2
+        eval "$(python3 -c "from core.internal.shared.secrets_env_parser import export_shell; print(export_shell('${secrets_env}'))")"
+        unset_platform_proxy
+        echo "[IMP:9][ssl-provision] WEBNAMES_API_KEY loaded from ${secrets_env}" >&2
+    } || \
         log_step "ssl-provision" "WARN" "${secrets_env} missing — cert renewal may fail"
     python3 "$ssl_script" --mode "${MODE}" --run-step 4; }
 update_step_4_deploy_modules(){ _delegate --mode "${MODE}" --run-step 5; }

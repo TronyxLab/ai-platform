@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: cert-orchestrator, bulk-restore, s3-cache, acme-issue, ssl, letsencrypt, idempotent, graceful-degradation
+# GREP_SUMMARY: cert-orchestrator, bulk-restore, s3-cache, acme-issue, ssl, letsencrypt, idempotent, graceful-degradation, secrets_env_parser
 # STRUCTURE: ▶ ┌domains list┐ → ○ for each domain: s3 check → s3 download → (miss?) issue-cert.sh → ⊕ CertResult → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Certificate orchestrator: bulk-restore SSL certs from S3 cache first,
@@ -20,6 +20,7 @@
 ##           bootstrap time from minutes to seconds for cert phase.
 ## @changes  2026-07-22 | DevPlan 047 Phase 3 — Created cert orchestrator
 ## @changes  2026-07-23 | DevPlan 058 — ACME_CHALLENGE_MODE env var passthrough, DomainCertResult.challenge field
+## @changes  2026-07-30 | DevPlan 086 — Migrated _source_secrets_env() from bash subprocess to shared secrets_env_parser.parse()
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from core.internal.shared.exceptions import (
     ConfigParseError,
     PlatformFatalError,
 )
+from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 
 logger = logging.getLogger(__name__)
 
@@ -717,51 +719,52 @@ def migrate_cron_if_needed(acme_home: str = "/opt/acme.sh") -> bool:
 ##   - Non-fatal: if source fails, logs WARN
 ##   - Only exports env vars, does not modify the file
 def _source_secrets_env(secrets_env_path: str) -> None:
-    """Source secrets.env to load WEBNAMES_API_KEY and other secrets."""
+    """Source secrets.env to load WEBNAMES_API_KEY and other secrets.
+
+    Uses shared secrets_env_parser.parse() instead of bash subprocess with
+    `set -a; source`. Eliminates subshell credential-propagation bug and
+    removes subprocess dependency for secrets parsing.
+    """
     try:
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f"set -a; source '{secrets_env_path}'; set +a; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy; env",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            # Parse env output and update os.environ
-            for line in result.stdout.splitlines():
-                if "=" in line:
-                    key, _, value = line.partition("=")
-                    if key.startswith(("WEBNAMES", "S3_", "PLATFORM_")):
-                        os.environ[key] = value
-            # Defence-in-depth: strip proxy vars that leaked from secrets.env
-            for proxy_var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"):
-                os.environ.pop(proxy_var, None)
-            logger.info("[IMP:9][cert_orchestrator] Secrets loaded from %s", secrets_env_path)
-            # Validate WEBNAMES_API_KEY format — must include leading asterisk
-            # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · FALSE DIAGNOSIS: zone_manager_unavailable ≠ DNS-01 broken
-            # · Symptom: webnames.ru API returns {"result":"ERROR","details":"zone_manager_unavailable"}
-            #   for `domains_list` action only. TXT record add/delete work correctly.
-            # · Reality: DNS-01 via webnames.ru WORKS for certificate issuance.
-            #   Verified 2026-07-23: wildcard *.tronyx.ru issued via LE staging.
-            # · Root cause of prior failure: LE rate-limit (50 certs/domain/week), not DNS API.
-            # · Prevention: DO NOT treat zone_manager_unavailable as DNS-01 failure.
-            #   Test add/delete before concluding DNS API is broken.
-            # · Rev: if add/delete also fail → DNS-01 truly broken, HTTP-01 fallback needed.
-            webnames_key = os.environ.get("WEBNAMES_API_KEY", "")
-            if webnames_key and not webnames_key.startswith("*"):
-                logger.warning(
-                    "[IMP:9][cert_orchestrator] WEBNAMES_API_KEY missing leading '*' — "
-                    "webnames.ru API may return zone_manager_unavailable for domains_list "
-                    "(listing only, add/delete TXT records still work). "
-                    "The key shown in webnames control panel includes the asterisk prefix."
-                )
-        else:
-            logger.warning("[IMP:7][cert_orchestrator] Failed to source %s", secrets_env_path)
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        logger.warning("[IMP:7][cert_orchestrator] Error sourcing secrets: %s", e)
+        # ── Parse secrets.env via shared parser (no subprocess) ──
+        parsed = parse_secrets_env(secrets_env_path)
+
+        # ── Prefix filter: only WEBNAMES, S3_, PLATFORM_ ──
+        target_prefixes = ("WEBNAMES", "S3_", "PLATFORM_")
+        for key, value in parsed.items():
+            if key.startswith(target_prefixes):
+                os.environ[key] = value
+                logger.debug("[IMP:8][cert_orchestrator] Set env: %s", key)
+
+        # ── Defence-in-depth: strip proxy vars that leaked from secrets.env ──
+        for proxy_var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"):
+            os.environ.pop(proxy_var, None)
+
+        logger.info("[IMP:9][cert_orchestrator] Secrets loaded from %s (%d entries matched)", secrets_env_path, len(parsed))
+
+        # ══════════════════════════════════════════════════════════
+        # Validate WEBNAMES_API_KEY format — must include leading asterisk
+        # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · FALSE DIAGNOSIS: zone_manager_unavailable ≠ DNS-01 broken
+        # · Symptom: webnames.ru API returns {"result":"ERROR","details":"zone_manager_unavailable"}
+        #   for `domains_list` action only. TXT record add/delete work correctly.
+        # · Reality: DNS-01 via webnames.ru WORKS for certificate issuance.
+        #   Verified 2026-07-23: wildcard *.tronyx.ru issued via LE staging.
+        # · Root cause of prior failure: LE rate-limit (50 certs/domain/week), not DNS API.
+        # · Prevention: DO NOT treat zone_manager_unavailable as DNS-01 failure.
+        #   Test add/delete before concluding DNS API is broken.
+        # · Rev: if add/delete also fail → DNS-01 truly broken, HTTP-01 fallback needed.
+        # ══════════════════════════════════════════════════════════
+        webnames_key = os.environ.get("WEBNAMES_API_KEY", "")
+        if webnames_key and not webnames_key.startswith("*"):
+            logger.warning(
+                "[IMP:9][cert_orchestrator] WEBNAMES_API_KEY missing leading '*' — "
+                "webnames.ru API may return zone_manager_unavailable for domains_list "
+                "(listing only, add/delete TXT records still work). "
+                "The key shown in webnames control panel includes the asterisk prefix."
+            )
+
+    except FileNotFoundError:
+        logger.warning("[IMP:7][cert_orchestrator] Secrets file not found (non-fatal): %s", secrets_env_path)
 
 
 # endregion FUNC_source_secrets_env

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: tor-proxy-healthcheck telegram proxy monitoring audit-log cron
+# GREP_SUMMARY: tor-proxy-healthcheck telegram telegram_notifier shared-module proxy monitoring audit-log cron
 # STRUCTURE: check_tor_socks → check_privoxy_forward → check_telegram_api → log_result → exit
 # region MODULE_CONTRACT
 ## @purpose  Healthcheck for Tor→Privoxy→Telegram proxy chain; logs to audit log, exits 0 on success
@@ -19,6 +19,7 @@
 ## ·   Config: HTTP_PROXY=http://127.0.0.1:8118 in .env.
 ## ·   This healthcheck verifies the full chain: Tor SOCKS5 → Privoxy HTTP → Telegram API.
 ## ·   Rev: if alternative proxy (SOCKS5, VPN) is used, update PROXY_URL var.
+## @changes  2026-07-30 | T14b — Replaced curl getMe with shared telegram_notifier module (get_me)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -70,7 +71,7 @@ check_privoxy() {
 # endregion CHECK_PRIVOXY
 
 # region CHECK_TELEGRAM_API
-# [IMP:9][tor-hc][telegram-api] Verify Telegram Bot API getMe through proxy chain
+# [IMP:9][tor-hc][telegram-api] Verify Telegram Bot API getMe through proxy chain via shared module
 check_telegram_api() {
     log_result "telegram-api" "START" "Checking Telegram getMe through proxy"
 
@@ -90,19 +91,20 @@ check_telegram_api() {
         return 0
     fi
 
-    local response
-    response="$(curl --proxy "$PROXY_URL" -s --max-time "$MAX_TIME" \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null)" || {
+    # Delegate to shared telegram_notifier.get_me() — uses urllib, no curl dependency
+    if ! TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
+         python3 -c "
+import sys, os
+sys.path.insert(0, '${PLATFORM_ROOT}/core/internal/shared')
+from telegram_notifier import get_me
+proxy = os.environ.get('PROXY_URL', '${PROXY_URL}')
+sys.exit(0 if get_me(proxy_url=proxy) else 1)
+" 2>/dev/null; then
         log_result "telegram-api" "FAIL" "Telegram getMe request failed"
         exit 1
-    }
-
-    if echo "$response" | grep -q '"ok":true'; then
-        log_result "telegram-api" "DONE" "Telegram API reachable through proxy"
-    else
-        log_result "telegram-api" "FAIL" "Telegram getMe response invalid: $(echo "$response" | head -c 200)"
-        exit 1
     fi
+
+    log_result "telegram-api" "DONE" "Telegram API reachable through proxy"
 }
 # endregion CHECK_TELEGRAM_API
 

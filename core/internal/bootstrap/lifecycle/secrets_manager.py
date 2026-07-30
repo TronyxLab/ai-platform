@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: secrets-manager, autogen-secrets, manifest, ensure-secrets, sops, htpasswd
+# GREP_SUMMARY: secrets-manager, autogen-secrets, manifest, ensure-secrets, sops, htpasswd, secrets-env-parser
 # STRUCTURE: ▶ ensure_secrets → source_secrets_env → _read_manifest → _generate_secret → _persist_to_sops → _ensure_htpasswd → ⎋ CLI
 # region MODULE_CONTRACT
 ## @purpose  Auto-generate missing tier=generated secrets from secrets-manifest.yaml or fallback hardcoded list.
@@ -18,6 +18,7 @@
 ## @rationale  Python port of shell secrets logic. Enables unit-testing, typed returns,
 ##             and consistent error handling without relying on bash eval() for secret generation.
 ## @changes  2026-07-25 | W5-E6 secrets_manager — created from secrets.sh step_12b decomposition
+## @changes  2026-07-30 | DevPlan 086 — source_secrets_env() delegates to shared secrets_env_parser.parse()
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -29,6 +30,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+from core.internal.shared.secrets_env_parser import write as write_secrets_env
 
 logger = logging.getLogger(__name__)
 
@@ -45,48 +49,30 @@ _FALLBACK_SECRETS: list[dict[str, str]] = [
 
 
 # region FUNC_source_secrets_env
-## @purpose — Parse a secrets.env file into a dict. Handles comments (#), empty lines,
-##            quoted values, and inline `export` prefix. NEVER raises — returns empty dict on failure.
+## @purpose — Parse a secrets.env file into a dict. Delegates to shared secrets_env_parser.parse()
+##            (DevPlan 086). Preserves backward-compat: returns empty dict on failure (never raises).
 ## @io — ⇥ secrets_env: path to secrets.env file → ⎋ dict[str, str]
-## @complexity — O(N) where N = lines in file
+## @complexity — O(N) where N = lines in file (delegated)
 ## @invariants
-##   - Returns empty dict if file not found or unreadable
-##   - Strips surrounding quotes from values
-##   - Removes leading `export ` prefix
+##   - Returns empty dict if file not found or unreadable (backward compat wrapper)
+##   - Actual parsing logic in shared secrets_env_parser module
 def source_secrets_env(secrets_env: str) -> dict[str, str]:
-    """Parse secrets.env key=value file into dict. Returns empty dict on failure."""
-    env_vars: dict[str, str] = {}
-    if not os.path.isfile(secrets_env):
-        logger.info("[IMP:7][secrets_manager] Secrets env file not found: %s", secrets_env)
-        return env_vars
-
-    logger.info("[IMP:8][secrets_manager] Sourcing secrets env: %s", secrets_env)
+    """Parse secrets.env key=value file into dict. Returns empty dict on failure.
+    Delegates to shared secrets_env_parser.parse() (DevPlan 086)."""
+    logger.info("[IMP:7][secrets_manager] Delegating source_secrets_env to shared secrets_env_parser.parse()")
     try:
-        with open(secrets_env) as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith("#"):
-                    continue
-                # Strip leading 'export ' prefix
-                if line.startswith("export "):
-                    line = line[len("export ") :].strip()
-                # Split on first '='
-                if "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip()
-                # Strip surrounding quotes
-                if len(value) >= 2 and value[0] in ("'", '"') and value[0] == value[-1]:
-                    value = value[1:-1]
-                if key:
-                    env_vars[key] = value
-        logger.info("[IMP:9][secrets_manager] Sourced %d variables from %s", len(env_vars), secrets_env)
-    except OSError as e:
-        logger.warning("[IMP:7][secrets_manager] Cannot read %s: %s", secrets_env, e)
-
-    return env_vars
+        result = parse_secrets_env(secrets_env)
+        logger.info(
+            "[IMP:9][secrets_manager] source_secrets_env: parsed %d entries via shared module",
+            len(result),
+        )
+        return result
+    except FileNotFoundError:
+        logger.info("[IMP:7][secrets_manager] Secrets env file not found: %s — returning empty dict", secrets_env)
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning("[IMP:7][secrets_manager] Cannot read %s: %s — returning empty dict", secrets_env, e)
+        return {}
 
 
 # endregion FUNC_source_secrets_env

@@ -14,6 +14,13 @@
 ##   3. Logs masked (first 8 chars) key source at IMP:8 for audit
 ##   4. No side effects — does NOT export env vars
 ##   5. AGE_SECRET_KEY_FILE is read as first line (head -1 equivalent)
+##   6. No AGE key value ever appears in plaintext logs (only first 8 chars masked)
+## @standard Canonical AGE-key format:
+##           • AGE_SECRET_KEY=AGE-SECRET-KEY-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+##           • The key is always stored as an environment variable (never bare)
+##           • AGE_SECRET_KEY_FILE contains the raw key (first line, no prefix — same AGE-SECRET-KEY-xxxxxxxx… format)
+##           • SOPS_AGE_KEY is a deprecated fallback (same AGE-SECRET-KEY-xxxxxxxx… format)
+##           • All three locations (age_key.py, decrypt-secrets.sh, platform-secrets/install.sh) MUST use the same format
 ## @rationale DevPlan 078 T1: DRIFT-S1 — shell had 2 identical detect_age_key() functions
 ##            (bootstrap.sh + node-update.sh). Centralizing in shared/age_key.py eliminates
 ##            copy-paste drift and enables unit testing.
@@ -45,18 +52,21 @@ def detect_age_key() -> str | None:
     Returns the key string, or None if not found through any mechanism.
     """
     # ── Check 1: AGE_SECRET_KEY env ──
+    # Returns key in canonical AGE-SECRET-KEY-xxxxxxxx… format (with prefix)
     key = os.environ.get("AGE_SECRET_KEY", "")
     if key:
         _log_masked("AGE_SECRET_KEY", key, "environment")
         return key
 
     # ── Check 2: SOPS_AGE_KEY env (fallback) ──
+    # SOPS_AGE_KEY uses the same AGE-SECRET-KEY-xxxxxxxx… canonical format
     key = os.environ.get("SOPS_AGE_KEY", "")
     if key:
         _log_masked("AGE_SECRET_KEY", key, "SOPS_AGE_KEY env fallback")
         return key
 
     # ── Check 3: AGE_SECRET_KEY_FILE content ──
+    # File contains the raw key (first line, no prefix — same AGE-SECRET-KEY-xxxxxxxx… format)
     file_path = os.environ.get("AGE_SECRET_KEY_FILE", "")
     if file_path:
         try:

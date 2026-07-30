@@ -35,6 +35,8 @@
 ##           indices (str(n)) to Python step NAMES (self._step_name(n)). Eliminates
 ##           step-name/key misalignment (F1 fix). Added backward-compat migration
 ##           in BootstrapState.from_dict() for old numeric-key state.json files.
+##           2026-07-30 | T19/T20a/T21 — Migrated _send_telegram()→shared telegram_notifier,
+##           _ghcr_auth()→shared docker_auth. Confirmed _step_secrets_init() removed (T11).
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -74,8 +76,10 @@ class StateTransitionError(Exception):
     """Raised when a state transition violates pre/post-conditions (W5-E6 C3)."""
 
 
-# Import shared content_hash (DevPlan 079 DRIFT-B4 unification)
+# Import shared modules (DevPlan 081B7 DRIFT elimination)
 from core.internal.shared.content_hash import compute_content_hash as _shared_compute_content_hash
+from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram
+from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
@@ -1139,8 +1143,7 @@ def _execute_init_step(
         _ensure_secrets_exist(core_dir)
 
     elif step_name == "secrets_init":
-        # F3: Sources secrets.env first for PLATFORM_MASTER_PASSWORD
-        _step_secrets_init(core_dir)
+        logger.info("[IMP:9][init][secrets_init] Service passwords already initialized via secrets_manager — secrets-init.sh removed")
 
     elif step_name == "read_node_yaml":
         _validate_node_yaml(node_yaml, core_dir)
@@ -1312,7 +1315,6 @@ def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
         "firewall": [os.path.join(core_dir, "internal", "bootstrap", "firewall.sh")],
         "decrypt_secrets": [os.path.join(core_dir, "lib", "secrets.sh")],
         "ensure_secrets": [os.path.join(core_dir, "lib", "secrets.sh")],
-        "secrets_init": [os.path.join(core_dir, "internal", "bootstrap", "secrets-init.sh")],
         "sudoers": [os.path.join(core_dir, "internal", "bootstrap", "setup-node.sh")],
         "install_acme": [os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")],
         "node_update": [os.path.join(core_dir, "internal", "bootstrap", "node-lifecycle.sh")],
@@ -1782,16 +1784,16 @@ def _ghcr_auth() -> None:
     ## @purpose — Docker login to ghcr.io using GHCR_PULL_TOKEN for ci-deploy user.
     ## @io — ⇥ None → ⎋ None (non-fatal if token not set)
     ## @complexity — O(1)
+    ## @changes 2026-07-30 | T20a — Replaced inline subprocess with shared docker_auth.ghcr_login()
+    ##           (runs as root directly, no sudo needed in bootstrap context)
     """
     token = os.environ.get("GHCR_PULL_TOKEN", "")
     if not token:
         logger.info("[IMP:7][ghcr_auth] GHCR_PULL_TOKEN not set — skipping ghcr auth")
         return
-    _subprocess_run(
-        ["bash", "-c", f"echo '{token}' | sudo -u ci-deploy docker login ghcr.io -u x-access-token --password-stdin"],
-        "ghcr_auth",
-        non_fatal=True,
-    )
+    success = _shared_ghcr_login(token, user="ci-deploy")
+    if success:
+        logger.info("[IMP:9][ghcr_auth] GHCR auth successful")
 
 
 def _validate_sudoers() -> None:
@@ -1841,39 +1843,6 @@ def _validate_sudoers() -> None:
             f"  chmod 0440 {sudoers_d}/*"
         )
     logger.info("[IMP:9][sudoers] All sudoers files validated: owner=root:root, mode≤0440")
-
-
-def _step_secrets_init(core_dir: str) -> None:
-    """Initialize service passwords. Sources secrets.env first for PLATFORM_MASTER_PASSWORD.
-
-    ## @purpose — F3 fix: Source secrets.env into os.environ BEFORE calling secrets-init.sh
-    ##            because secrets-init.sh requires PLATFORM_MASTER_PASSWORD in environment.
-    ## @io — ⇥ core_dir → ⎋ None (non-fatal)
-    ## @complexity — O(1)
-    ## @invariants
-    ##   - Sources secrets.env first (defence-in-depth, secrets already sourced in ensure_secrets)
-    ##   - Non-fatal: if source fails, still attempts secrets-init.sh
-    """
-    # Source secrets.env into os.environ BEFORE calling secrets-init.sh
-    # Bug F3: secrets-init.sh requires PLATFORM_MASTER_PASSWORD in env
-    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-    if os.path.isfile(secrets_env):
-        try:
-            from .secrets_manager import source_secrets_env  # type: ignore[import]
-
-            env_vars = source_secrets_env(secrets_env)
-            for k, v in env_vars.items():
-                if k not in os.environ:
-                    os.environ[k] = v
-            logger.info("[IMP:9][secrets_init] Sourced %d vars for secrets-init.sh", len(env_vars))
-        except Exception as e:  # noqa: EXC — non-fatal: sourcing secrets.env is best-effort
-            logger.warning("[IMP:7][secrets_init] Failed to source secrets.env: %s", e)
-
-    init_script = os.path.join(core_dir, "internal", "bootstrap", "secrets-init.sh")
-    if os.path.isfile(init_script):
-        _subprocess_run(["bash", init_script], "secrets_init", non_fatal=True)
-    else:
-        logger.warning("[IMP:7][secrets_init] %s not found — skipping secrets initialization", init_script)
 
 
 def _ssl_provision_via_orchestrator(core_dir: str, node_yaml: str) -> None:
@@ -2053,6 +2022,7 @@ def _send_telegram(sm: StateMachine) -> None:
     ## @purpose — Notify via Telegram bot about lifecycle completion status.
     ## @io — ⇥ sm → ⎋ None (non-fatal)
     ## @complexity — O(1)
+    ## @changes 2026-07-30 | T19 — Replaced inline urllib with shared telegram_notifier.send_telegram()
     """
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -2076,27 +2046,9 @@ def _send_telegram(sm: StateMachine) -> None:
             msg += f"\n- ❌ {e}"
 
     proxy_url = os.environ.get("TELEGRAM_PROXY_URL", "http://127.0.0.1:8118")
-    try:
-        import urllib.parse
-        import urllib.request
-
-        params = urllib.parse.urlencode(
-            {
-                "chat_id": chat_id,
-                "text": msg,
-            },
-            quote_via=urllib.parse.quote,
-        )
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage?{params}"
-        req = urllib.request.Request(url)
-
-        # Set proxy if available
-        proxy = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-        opener = urllib.request.build_opener(proxy)
-        opener.open(req, timeout=30)
+    success = _shared_send_telegram(msg, bot_token, chat_id, proxy_url)
+    if success:
         logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
-    except Exception as e:  # noqa: EXC — non-fatal: Telegram notification is best-effort
-        logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
 
 
 # endregion HELPER_FUNCTIONS

@@ -28,7 +28,7 @@ if [ "$MODE" = "deep" ]; then
     # Step 2: Service-specific diagnostics via check_http
     check_http "http://127.0.0.1:8123/ping" "200" 5 || exit 1
     log_imp 9 "deep" "clickhouse deep check PASSED"
-    exit 0
+    exit 0  # ранний выход
 fi
 
 # Default liveness check via docker inspect

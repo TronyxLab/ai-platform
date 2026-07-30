@@ -80,8 +80,8 @@ def test_shell_to_python_mapping(caplog):
     assert cm.SHELL_TO_PYTHON_STEP["ghcr-auth"] == "ghcr_auth"
     assert cm.SHELL_TO_PYTHON_STEP["sudoers"] == "sudoers"
     assert cm.SHELL_TO_PYTHON_STEP["metrics-cron"] == "metrics_cron"
-    assert len(cm.SHELL_TO_PYTHON_STEP) == 16
-    logger.critical("[IMP:9][test] SHELL_TO_PYTHON_STEP mapping complete — all 16 entries valid")
+    assert len(cm.SHELL_TO_PYTHON_STEP) == 23
+    logger.critical("[IMP:9][test] SHELL_TO_PYTHON_STEP mapping complete — all 23 entries valid")
 
 
 # 🧪 TRAP[TEST] · Regression · Reverse mapping PYTHON_TO_SHELL_STEP is consistent

@@ -21,7 +21,12 @@ echo "[IMP:7][infra-metrics-hc][main] Starting infra-metrics healthcheck" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/healthcheck.sh"
 
-CONTAINERS=("cadvisor" "node-exporter" "nginx-prometheus-exporter" "redis-exporter")
+CONTAINERS=(
+    "${CADVISOR_CONTAINER_NAME:-cadvisor}"
+    "${NODE_EXPORTER_CONTAINER_NAME:-node-exporter}"
+    "${NGINX_EXPORTER_CONTAINER_NAME:-nginx-prometheus-exporter}"
+    "${REDIS_EXPORTER_CONTAINER_NAME:-redis-exporter}"
+)
 MODE="${1:-}"
 
 # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · hardcoded canonical порты ломали smoke
@@ -29,6 +34,11 @@ MODE="${1:-}"
 # ·   но healthcheck.sh deep ходил на canonical (8080/9100).
 # · Fix: порты через env с каноническими дефолтами; smoke передаёт shifted.
 # · Rev: если добавится новый deep-проверяемый сервис — по тому же паттерну.
+# ⚠️ TRAP[BUG] · 2026-07-27 · HI · CONTAINERS array used canonical names, test uses -test suffix
+# · Root: docker-compose.test.yml renames cadvisor→cadvisor-test, but healthcheck.sh
+# ·   looked for "cadvisor" → check_docker_health returned 3 (not found) → exit 1.
+# · Fix: CONTAINERS parameterized via env vars (CADVISOR_CONTAINER_NAME etc.),
+# ·   canonical names as defaults. Smoke test passes shifted names via env.
 CADVISOR_PORT="${CADVISOR_PORT:-8080}"
 NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-9100}"
 

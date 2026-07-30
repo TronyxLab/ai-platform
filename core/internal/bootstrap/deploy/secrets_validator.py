@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Secrets validation and module metadata extraction — W4-E1 deploy-modules.sh decomposition."""
-# GREP_SUMMARY: secrets-validator, env-requires, charset-validation, module-metadata, transitive-deps, node-yaml-parser, deploy-modules-decomposition
+# GREP_SUMMARY: secrets-validator, env-requires, secrets-env-parser, charset-validation, module-metadata, transitive-deps, node-yaml-parser, deploy-modules-decomposition
 # STRUCTURE: ┌secrets-manifest.yaml → ◇ _check_env_requires(module↦consumers+tier) → ⊕ missing vars │ ┌_validate_secret_charsets → ⊕ re.match(charset) │ ┌_batch_module_metadata → ∑ glob→name:install_type:severity │ ┌_expand_transitive_deps → BFS(module.yaml depends_on) → ⎋ sorted │ ┌parse_modules_from_node_yaml → ⟦(name,enabled,overlay)⟧ │ ┌detect_install_type ← module.yaml.install_type
 # region MODULE_CONTRACT [DOMAIN(DEPLOY): bootstrap; CONCEPT(SECRETS): validation-gauntlet; TECH(PYTHON): argparse+yaml+re+bfs]
 ## @purpose  Extract secrets validation, module metadata, and DAG expansion from deploy-modules.sh into typed Python
@@ -21,6 +21,7 @@
 ##            counterpart, enabling incremental replacement without breaking existing callers. Python provides type safety,
 ##            testability, and composability — the shell functions were opaque string pipelines.
 ## @changes  Initial: 2026-07-22 — W4-E1 extraction from deploy-modules.sh
+##           2026-07-30 — DevPlan 086: replaced inline secrets.env parsing with shared secrets_env_parser.parse()
 ## @usecases
 ##   - deploy-modules.sh CLI caller: `python3 secrets_validator.py --action check-env --module-name postgres`
 ##   - Batch metadata → avoid N+1 per-module calls
@@ -34,6 +35,8 @@ import re as _re
 import sys
 from collections import deque
 from pathlib import Path
+
+from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 
 import yaml  # type: ignore[import-untyped]
 
@@ -91,17 +94,12 @@ def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[st
         )
         return []
 
-    # Build env map from secrets.env file
+    # Build env map from secrets.env file using shared parser
     secrets_file = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
     env_map: dict[str, str] = {}
     secrets_file_path = Path(secrets_file)
     if secrets_file_path.is_file():
-        with open(secrets_file_path) as sf:
-            for line in sf:
-                line_stripped = line.strip()
-                if "=" in line_stripped and not line_stripped.startswith("#"):
-                    k, _, v = line_stripped.partition("=")
-                    env_map[k.strip()] = v.strip()
+        env_map = parse_secrets_env(str(secrets_file_path))
         logger.info("[IMP:7][_check_env_requires][env_file] Loaded %d vars from %s", len(env_map), secrets_file)
     else:
         logger.info(

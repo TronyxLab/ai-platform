@@ -29,7 +29,7 @@ if [ "$MODE" = "deep" ]; then
     # Step 2: Service-specific diagnostics via exec_check (runs pgrep inside container — no false positive)
     exec_check "$CONTAINER" "pgrep -x cron" || exit 1
     log_imp 9 "deep" "backup-cron deep check PASSED"
-    exit 0
+    exit 0  # ранний выход
 fi
 
 # Default liveness check via docker inspect

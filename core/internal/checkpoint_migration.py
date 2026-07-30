@@ -22,6 +22,9 @@
 ##             (Strangler trigger for new Python code in shell scripts). Eliminates F1
 ##             step-name/key misalignment by using actual step names as dict keys.
 ## @changes  2026-07-25 | DevPlan 071 Rev 2 — Created
+##           2026-07-30 | DevPlan 086 — Removed secrets-init mapping (deleted in T11),
+##                       added missing mappings: ensure-secrets, install-acme, node-update,
+##                       converge, audit-log, telegram, deploy-context
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -56,9 +59,16 @@ SHELL_TO_PYTHON_STEP: dict[str, str] = {
     "verify-core": "verify_core",
     "verify-node-configs": "verify_node_configs",
     "decrypt-secrets": "decrypt_secrets",
+    "ensure-secrets": "ensure_secrets",
     "read-node-yaml": "read_node_yaml",
     "ghcr-auth": "ghcr_auth",
     "sudoers": "sudoers",
+    "install-acme": "install_acme",
+    "node-update": "node_update",
+    "converge": "converge",
+    "audit-log": "audit_log",
+    "telegram": "telegram",
+    "deploy-context": "deploy_context",
     "metrics-cron": "metrics_cron",  # Shell-only step, no Python equivalent
 }
 

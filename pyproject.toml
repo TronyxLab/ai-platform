@@ -66,6 +66,7 @@ markers = [
     "requires_fresh_state: test requires fresh container state (compose restart before run)",
     "wave: wave number for Wave-Pipeline test execution ordering",
     "unit: unit tests for Python modules (no Docker, no subprocess)",
+    "benchmark: performance benchmarks for critical path operations",
 ]
 
 # Ruff configuration lives in ruff.toml (project root) — auto-discovered by ruff

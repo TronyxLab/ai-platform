@@ -102,26 +102,26 @@ main() {
 
     if [[ "$MODE" == "render-all" ]]; then
         log_imp 8 "main" "Mode: render-all for node=${RENDER_NODE}"
-        exec python3 -m "$python_module" render-all \
+        # shellcheck disable=SC2086
+        exec python3 -m "$python_module" $common_args render-all \
             --node "$RENDER_NODE" \
-            --node-configs-dir "$NODE_CONFIGS_DIR" \
-            $common_args
+            --node-configs-dir "$NODE_CONFIGS_DIR"
     fi
 
     log_imp 8 "main" "START: add-vhost mode=${MODE} for ${PROJECT_DIR}"
 
     if [[ "$MODE" == "remove" ]]; then
-        exec python3 -m "$python_module" remove \
+        # shellcheck disable=SC2086
+        exec python3 -m "$python_module" $common_args remove \
             --project-dir "$PROJECT_DIR" \
-            --node-configs-dir "$NODE_CONFIGS_DIR" \
-            $common_args
+            --node-configs-dir "$NODE_CONFIGS_DIR"
     fi
 
     # Add mode (default)
-    exec python3 -m "$python_module" add \
+    # shellcheck disable=SC2086
+    exec python3 -m "$python_module" $common_args add \
         --project-dir "$PROJECT_DIR" \
-        --node-configs-dir "$NODE_CONFIGS_DIR" \
-        $common_args
+        --node-configs-dir "$NODE_CONFIGS_DIR"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: secrets library decrypt-secrets ensure-secrets sops age secrets.env auto-generate litellm langfuse nextauth
-# STRUCTURE: ┌NODE_CONFIGS_DIR/secrets/*.enc.yaml┐ → step_10_decrypt_secrets → ◇ ┌age key┐ → ⊕ bash decrypt-secrets.sh → ☰ source secrets.env → ◇ ┌TOR_ENABLED?┐ → ⊕ sed proxy vars → ⎋ step_done
+# STRUCTURE: ┌NODE_CONFIGS_DIR/secrets/*.enc.yaml┐ → step_10_decrypt_secrets → ◇ ┌age key┐ → ⊕ python3 decrypt_secrets.py → ☰ source secrets.env → ◇ ┌TOR_ENABLED?┐ → ⊕ sed proxy vars → ⎋ step_done
 #            └ step_12b_ensure_secrets → ◇ ┌manifest + secrets_env┐ → ⚡ python3 secrets_manager.py ensure → ⎋ step_done
 # ═══════════════════════════════════════════════════════════════════
 # MODULE_CONTRACT — Secrets Library
@@ -32,7 +32,7 @@
 ##           — On missing AGE_SECRET_KEY: exit 1 (critical)
 ## @links    — USED_BY: core/internal/bootstrap/node-lifecycle.sh
 ##           — EXTRACTED_FROM: same file, lines 340-445
-##           — CALLS: bash CORE_DIR/internal/secrets/decrypt-secrets.sh
+##           — CALLS: python3 CORE_DIR/internal/secrets/decrypt_secrets.py
 ##           — CALLS: sed (proxy var cleanup from secrets.env)
 ##           — CALLS: python3 secrets_manager.py ensure (step_12b facade, DevPlan 053)
 ## @invariants — Functions assume step_start/done/skip/log_step are defined
@@ -59,7 +59,7 @@
 # endregion MODULE_CONTRACT
 # GREP_SUMMARY: secrets, decrypt, sops, age, encrypt, secrets.env, ensure, validate, litellm, langfuse, nextauth, salt, auto-generate
 # STRUCTURE: ▶ ┌unset_platform_proxy → unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy┐
-#            ▶ ┌step_10_decrypt_secrets → ◇ ┌enc_file?┐ → ◇ ┌AGE_SECRET_KEY? + SOPS_AGE_KEY fallback?┐ → ⊕ bash decrypt-secrets.sh → ☰ source secrets.env → ◇ ┌TOR_ENABLED?┐ → ⊕ sed HTTP_PROXY/HTTPS_PROXY┐ → ⎋ step_done
+#            ▶ ┌step_10_decrypt_secrets → ◇ ┌enc_file?┐ → ◇ ┌AGE_SECRET_KEY? + SOPS_AGE_KEY fallback?┐ → ⊕ python3 decrypt_secrets.py → ☰ source secrets.env → ◇ ┌TOR_ENABLED?┐ → ⊕ sed HTTP_PROXY/HTTPS_PROXY┐ → ⎋ step_done
 #            ▶ ┌step_12b_ensure_secrets → ◇ ┌manifest + secrets_env┐ → ⚡ python3 secrets_manager.py ensure → ⎋ step_done
 
 # ═══════════════════════════════════════════════════════════════════
@@ -97,7 +97,7 @@ unset_platform_proxy() {
 ##            effect: may modify secrets.env (sed) if TOR_ENABLED != true
 ##            return: 0 on success, exit 1 if AGE_SECRET_KEY missing
 ## @complexity O(n) where n = number of vars in secrets.env
-## @dependencies — bash CORE_DIR/internal/secrets/decrypt-secrets.sh
+## @dependencies — python3 CORE_DIR/internal/secrets/decrypt_secrets.py
 ##               — sed (for proxy var cleanup)
 ##               — step_start/step_done/step_skip/log_step from consumer
 ## @invariants — If no encrypted file exists → skip (return 0)
@@ -143,7 +143,8 @@ step_10_decrypt_secrets() {
     fi
 
     export SECRETS_FILE="$enc_file"
-    bash "${CORE_DIR}/internal/secrets/decrypt-secrets.sh"
+    log_step "decrypt-secrets" "INFO" "Delegating to decrypt_secrets.py (Python core)"
+    python3 "${CORE_DIR}/internal/secrets/decrypt_secrets.py"
 
     local secrets_env="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
     if [[ -f "$secrets_env" ]]; then

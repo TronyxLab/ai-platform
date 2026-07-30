@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: steps, step-implementations, subprocess, acme, secrets-init, install, apt, sudoers, ssl, converge, healthcheck, telegram, audit
-# STRUCTURE: ┌independent step implementations┐ → ◇ _step_install_acme + _step_secrets_init → ◇ apt/docker/user helpers → ◇ ssl_provision/healthcheck → ◇ telegram/audit → subprocess_run wrapper
+# GREP_SUMMARY: steps, step-implementations, subprocess, acme, install, apt, sudoers, ssl, converge, healthcheck, telegram, audit
+# STRUCTURE: ┌independent step implementations┐ → ◇ _step_install_acme → ◇ apt/docker/user helpers → ◇ ssl_provision/healthcheck → ◇ telegram/audit → subprocess_run wrapper
 # region MODULE_CONTRACT
 ## @purpose  Step implementation functions extracted from StateMachine for separation of concerns.
 ##           Each function is a standalone step with pre/post conditions, subprocess calls,
@@ -19,6 +19,8 @@
 ##             steps.py handles actual execution logic. This enables unit-testing
 ##             of step implementations without state machine coupling.
 ## @changes  2026-07-22 | W4-E2 — Created from node-lifecycle.sh decomposition
+##           2026-07-30 | T20b/T22 — Migrated _ghcr_docker_login()→shared docker_auth,
+##           _send_telegram_notification()→shared telegram_notifier.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -44,6 +46,10 @@ import sys as _sys
 _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "shared")
 if _SHARED_DIR not in _sys.path:
     _sys.path.insert(0, _SHARED_DIR)
+
+# Import shared modules (DevPlan 081B7 DRIFT elimination)
+from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login  # noqa: E402
+from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram  # noqa: E402
 
 
 # region FUNC__step_install_acme
@@ -90,52 +96,6 @@ def _step_install_acme(core_dir: str) -> bool:
 
 # endregion FUNC__step_install_acme
 
-
-# region FUNC__step_secrets_init
-## @purpose — Initialize all service passwords (HERMES_DASHBOARD_PASSWORD,
-##            GF_SECURITY_ADMIN_PASSWORD, LANGFUSE_INIT_USER_PASSWORD) from
-##            PLATFORM_MASTER_PASSWORD. Called once at bootstrap init, NOT at update.
-## @detail  Delegates to secrets-init.sh. Idempotent: if a service password is
-##          already set (operator-defined), it is NOT overwritten.
-## @io — ⇥ core_dir: platform core directory path → ⎋ bool (True = success)
-## @complexity — O(1) + subprocess
-## @invariants
-##   - Non-fatal: if secrets-init.sh fails, log WARN and continue
-##   - Init-only — update mode does NOT call this again
-##   - Requires secrets.env to be available (decrypted secrets)
-def _step_secrets_init(core_dir: str) -> bool:
-    """Initialize service passwords from PLATFORM_MASTER_PASSWORD. Returns True on success."""
-    init_script = os.path.join(core_dir, "internal", "bootstrap", "secrets-init.sh")
-    if not os.path.isfile(init_script):
-        logger.warning("[IMP:7][step:secrets_init] secrets-init.sh not found at %s — skipping", init_script)
-        return False
-
-    logger.info("[IMP:9][step:secrets_init] Initializing service passwords")
-    try:
-        result = subprocess.run(
-            ["bash", init_script],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][step:secrets_init] Service passwords initialized")
-            return True
-        logger.warning(
-            "[IMP:7][step:secrets_init] secrets-init.sh failed (exit=%d): %s — passwords may already be set in SOPS",
-            result.returncode,
-            result.stderr.strip()[:200],
-        )
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][step:secrets_init] secrets-init.sh timed out")
-        return False
-    except FileNotFoundError as e:
-        logger.warning("[IMP:7][step:secrets_init] Command not found: %s", e)
-        return False
-
-
-# endregion FUNC__step_secrets_init
 
 
 # region FUNC__install_apt_packages
@@ -486,40 +446,18 @@ print('VALID')
 
 # region FUNC__ghcr_docker_login
 ## @purpose — Docker login to GitHub Container Registry for ci-deploy user.
-##            Uses GHCR_PULL_TOKEN for authentication.
+##            Uses GHCR_PULL_TOKEN for authentication. Delegates to shared docker_auth.ghcr_login().
 ## @io — ⇥ token: str → ⎋ bool (True = success)
-## @complexity — O(1) + subprocess
+## @complexity — O(1) + subprocess (via shared module)
 ## @invariants
 ##   - Non-fatal: if token not set, skip without error
+## @changes 2026-07-30 | T20b — Replaced inline subprocess with shared docker_auth.ghcr_login()
 def _ghcr_docker_login(token: str) -> bool:
     """Login to ghcr.io as ci-deploy. Returns True on success."""
     if not token:
         logger.info("[IMP:7][ghcr] GHCR_PULL_TOKEN not set — skipping ghcr auth")
         return True  # Not an error
-
-    logger.info("[IMP:9][ghcr] Authenticating ci-deploy to ghcr.io")
-    try:
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f"echo '{token}' | sudo -u ci-deploy docker login ghcr.io -u x-access-token --password-stdin",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][ghcr] ci-deploy authenticated to ghcr.io")
-            return True
-        logger.warning("[IMP:7][ghcr] GHCR login failed: %s", result.stderr.strip()[:200])
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][ghcr] GHCR login timed out")
-        return False
-    except FileNotFoundError as e:
-        logger.warning("[IMP:7][ghcr] Command not found: %s", e)
-        return False
+    return _shared_ghcr_login(token, user="ci-deploy")
 
 
 # endregion FUNC__ghcr_docker_login
@@ -608,10 +546,12 @@ def _write_bootstrap_audit(
 ## @purpose — Send Telegram notification about bootstrap/update completion.
 ##            Uses TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars.
 ##            Routes through TELEGRAM_PROXY_URL (tor proxy by default).
+##            Delegates to shared telegram_notifier.send_telegram().
 ## @io — ⇥ node: str, warnings: list[str], errors: list[str] → ⎋ bool
-## @complexity — O(1) + HTTP request
+## @complexity — O(1) + HTTP request (via shared module)
 ## @invariants
 ##   - Non-fatal: if env vars not set or request fails, log and return False
+## @changes 2026-07-30 | T22 — Replaced inline urllib with shared telegram_notifier.send_telegram()
 def _send_telegram_notification(
     node: str,
     warnings: list[str],
@@ -636,33 +576,7 @@ def _send_telegram_notification(
         msg += f"\n- ❌ {e}"
 
     proxy_url = os.environ.get("TELEGRAM_PROXY_URL", "http://127.0.0.1:8118")
-
-    try:
-        import urllib.parse
-        import urllib.request
-
-        params = urllib.parse.urlencode(
-            {
-                "chat_id": chat_id,
-                "text": msg,
-            },
-            quote_via=urllib.parse.quote,
-        )
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage?{params}"
-
-        proxy_handler = urllib.request.ProxyHandler(
-            {
-                "http": proxy_url,
-                "https": proxy_url,
-            }
-        )
-        opener = urllib.request.build_opener(proxy_handler)
-        opener.open(url, timeout=30)
-        logger.info("[IMP:9][telegram] Notification sent to chat %s", chat_id)
-        return True
-    except (OSError, ConnectionError, TimeoutError) as e:
-        logger.warning("[IMP:7][telegram] Telegram notification failed (non-fatal): %s", e)
-        return False
+    return _shared_send_telegram(msg, bot_token, chat_id, proxy_url)
 
 
 # endregion FUNC__send_telegram_notification

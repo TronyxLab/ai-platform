@@ -19,6 +19,7 @@
 ##           Registry-mirror (mirror.gcr.io) provides a pull-through cache that reduces
 ##           direct Docker Hub requests.
 ## @changes  2026-07-22 | DevPlan 047 Phase 2 — Created Docker Hub auth + registry-mirror module
+##           2026-07-30 | T13b — Delegated _docker_login() to shared docker_auth module
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -26,9 +27,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 import subprocess
 import sys
 from typing import Any
+
+# ── Path setup for shared module import ──
+_CORE_DIR = Path(__file__).resolve().parent.parent.parent  # core/
+if str(_CORE_DIR) not in sys.path:
+    sys.path.insert(0, str(_CORE_DIR))
+
+from core.internal.shared.docker_auth import docker_login as shared_docker_login
 
 logger = logging.getLogger(__name__)
 
@@ -153,30 +162,15 @@ def _write_daemon_json(mirror_url: str) -> bool:
 ##   - Non-fatal: failure logs WARN and returns False
 ##   - Idempotent: Docker caches credentials in ~/.docker/config.json
 def _docker_login(username: str, token: str) -> bool:
-    """Login to Docker Hub via password-stdin. Returns True on success."""
-    try:
-        result = subprocess.run(
-            ["docker", "login", "-u", username, "--password-stdin"],
-            input=token,
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_RESTART_TIMEOUT,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][docker_auth] Docker Hub login successful for user %s", username)
-            return True
-        logger.warning(
-            "[IMP:7][docker_auth] Docker Hub login failed (exit=%d): %s",
-            result.returncode,
-            result.stderr.strip()[:200],
-        )
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][docker_auth] Docker Hub login timed out")
-        return False
-    except FileNotFoundError as e:
-        logger.warning("[IMP:7][docker_auth] Docker binary not found: %s", e)
-        return False
+    """Login to Docker Hub via shared docker_auth module.
+
+    ## @purpose — Thin wrapper delegating to docker_auth.docker_login().
+    ##            All credential handling, subprocess management, and
+    ##            error handling live in the shared module.
+    ## @io — ⇥ username: str, token: str → ⎋ bool (True = success)
+    ## @complexity — O(1) + delegation
+    """
+    return shared_docker_login(username=username, token=token)
 
 
 # endregion FUNC_docker_login

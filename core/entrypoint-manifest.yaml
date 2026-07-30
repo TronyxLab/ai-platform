@@ -19,7 +19,7 @@ bootstrap:
     → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py
     + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh
     + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh
-    + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/secrets-init.sh
+    + core/internal/bootstrap/install-acme.sh
     + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py
     + core/internal/bootstrap/deploy/context_deployer.py
   signature: make bootstrap-node NODE=<name>
@@ -1370,3 +1370,32 @@ allowed_verbs:
 - validate
 - validate-modules
 - verify
+
+# NEW: Shared modules (DevPlan 086)
+shared_modules:
+  - module: secrets_env_parser
+    path: core/internal/shared/secrets_env_parser.py
+    consumers:
+      - secrets_manager.py
+      - secrets_validator.py
+      - compose_preflight.py
+      - agent_watchdog.py
+      - cert_orchestrator.py
+      - node-lifecycle.sh
+      - decrypt-secrets.sh (facade)
+  - module: telegram_notifier
+    path: core/internal/shared/telegram_notifier.py
+    consumers:
+      - agent_watchdog.py
+      - state_machine.py
+      - steps.py
+      - notify-hook.sh
+      - disk-monitor.sh
+      - tor-proxy-healthcheck.sh
+  - module: docker_auth
+    path: core/internal/shared/docker_auth.py
+    consumers:
+      - lib/docker.sh
+      - docker_registry_auth.py
+      - state_machine.py
+      - steps.py

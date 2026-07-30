@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: disk-monitor usage-threshold alert prune docker-system docker-volume loki-retention
-# STRUCTURE: ▶ df /var/lib/platform → ◇ usage > 80%? → Telegram alert → ◇ docker system prune (weekly) → ◇ docker volume prune (weekly) → ◇ loki data size check → ⎋ exit 0
+# GREP_SUMMARY: disk-monitor usage-threshold alert telegram_notifier shared-module prune docker-system docker-volume loki-retention
+# STRUCTURE: ▶ df /var/lib/platform → ◇ usage > 80%? → Telegram alert (shared module) → ◇ docker system prune (weekly) → ◇ docker volume prune (weekly) → ◇ loki data size check → ⎋ exit 0
 
 set -euo pipefail
 
@@ -14,7 +14,11 @@ set -euo pipefail
 ##   - Loki dir check is best-effort (dir may not exist)
 ## @rationale Proactive disk management prevents platform outages due to full disk;
 ##   weekly prune prevents image bloat without destroying recent layers (48h filter)
+## @changes  2026-07-30 | T14c — Replaced inline curl Telegram alert with shared telegram_notifier module
 # endregion MODULE_CONTRACT
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_ROOT="$(cd "${SCRIPT_DIR}/../../../.." 2>/dev/null && pwd || echo "$(dirname "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")")")"
 
 THRESHOLD=80
 PLATFORM_DIR="/var/lib/platform"
@@ -33,10 +37,16 @@ if [ "$usage" -gt "$THRESHOLD" ]; then
         source "$secrets_env"
         if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_ALLOWED_USERS:-}" ]; then
             CHAT_ID=$(echo "$TELEGRAM_ALLOWED_USERS" | cut -d',' -f1)
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-                -d "chat_id=${CHAT_ID}" \
-                -d "text=⚠️ Disk usage ${usage}% on $(hostname) — threshold ${THRESHOLD}%" \
-                --max-time 10 || true
+            # Delegate to shared telegram_notifier module — urllib stdlib, no curl dependency
+            TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
+            TELEGRAM_CHAT_ID="${CHAT_ID}" \
+            python3 -c "
+import sys, os
+sys.path.insert(0, '${PLATFORM_ROOT}/core/internal/shared')
+from telegram_notifier import send_telegram
+send_telegram(sys.argv[1])
+sys.exit(0)
+" "⚠️ Disk usage ${usage}% on $(hostname) — threshold ${THRESHOLD}%" 2>/dev/null || true
         fi
     fi
 fi

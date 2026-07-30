@@ -42,6 +42,7 @@ _ALLOWED_NON_TARGET_SETS: set[str] = {
     "_CONVENIENCE_TARGETS",
     "_MODULE_SCOPED_VERBS",
     "env_dependent",
+    "required_fields",  # test_gate_deploy_paths.py:151 — field validation set, not make targets
 }
 
 logger = logging.getLogger(__name__)

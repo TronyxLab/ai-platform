@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: agent_watchdog, circuit-breaker, self-update, hermes-agent, healthcheck, rollback, telegram, watchdog-daemon
+# GREP_SUMMARY: agent_watchdog, circuit-breaker, self-update, hermes-agent, healthcheck, rollback, telegram, watchdog-daemon, secrets_env_parser, telegram_notifier
 # STRUCTURE: ▶ argparse config → ▶ CircuitBreaker.check_all → ▶ check PENDING_FILE → ◇ poll_ready → ⊕ success(cleanup+exit0) | ◇ rollback(down→pull→up→re-poll) → ⊕ rollback_ok(telegram+exit0) | ⊕ rollback_fail(critical_telegram+exit1)
 # region MODULE_CONTRACT
 ## @purpose  Production watchdog daemon for hermes-agent self-update monitoring and stateful service circuit breaking.
@@ -7,17 +7,21 @@
 ##           Two independent phases per tick: (1) circuit breaker for 5 stateful services,
 ##           (2) self-update readiness check with automatic rollback.
 ## @invariants
-##   - Zero imports from core.* — OS-level independence (system Python only)
-##   - Python 3.10+ stdlib only: json, subprocess, signal, logging, dataclasses, time, os, pathlib, sys, argparse, urllib
+##   - Imports from core.internal.shared for shared utilities (secrets_env_parser, telegram_notifier)
+##   - Core dependencies: Python 3.10+ stdlib + core/internal/shared modules (both stdlib-only)
 ##   - Two phases are independent — circuit breaker failure does NOT affect self-update phase
 ##   - Exit codes: 0 = success or skip, 1 = critical failure (self-update rollback failed)
 ##   - All logs to both stdout (systemd journal) and AUDIT_LOG file
-##   - Telegram via direct HTTP (urllib) — bypasses dead agent
+##   - Telegram via shared telegram_notifier module (urllib-based) — bypasses dead agent
 ##   - Secrets file absence handled gracefully (log warning, skip notification)
 ##   - Docker commands via subprocess.run — NEVER shell=True for command strings
 ## @rationale Migrated from shell (platform-agent-watchdog.sh) per Strangler-Fig Tier 1 trigger:
 ##           5 inline python3 calls for JSON state management → extracted into CircuitBreaker class.
 ##           Shell watchdog = single point of failure; Python daemon with signal handling = production-grade.
+##           T8: Inline Telegram parser and sender replaced with shared modules from
+##           core/internal/shared/ to eliminate code duplication across the platform.
+## @changes    2026-07-30 | DevPlan T8 — Replaced inline _load_token() with secrets_env_parser shared module;
+##            replaced send() urllib with telegram_notifier shared module; updated invariants
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -29,7 +33,6 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -37,6 +40,8 @@ from pathlib import Path
 from typing import ClassVar, Optional
 
 from core.internal.config import platform_config
+from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+from core.internal.shared.telegram_notifier import send_telegram as send_tg
 
 logger = logging.getLogger(__name__)
 
@@ -558,24 +563,29 @@ class TelegramNotifier:
     def _load_token(self) -> tuple[str, str] | None:
         """Load TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from secrets file.
 
+        Delegates to shared secrets_env_parser module (core/internal/shared/secrets_env_parser.py).
+
         Returns (token, chat_id) or None if not found.
         """
-        secrets_path = Path(self._secrets_file)
-        if not secrets_path.is_file():
+        if not os.path.isfile(self._secrets_file):
             logger.info(
                 "[IMP:9][watchdog][telegram] WARNING: Secrets file not found at %s — cannot send Telegram notification",
                 self._secrets_file,
             )
             return None
 
-        token = None
-        chat_id = None
-        for line in secrets_path.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("TELEGRAM_BOT_TOKEN="):
-                token = line.split("=", 1)[1].strip().strip('"').strip("'")
-            elif line.startswith("TELEGRAM_CHAT_ID="):
-                chat_id = line.split("=", 1)[1].strip().strip('"').strip("'")
+        try:
+            secrets = parse_secrets_env(self._secrets_file)
+        except (FileNotFoundError, OSError) as e:
+            logger.info(
+                "[IMP:9][watchdog][telegram] ERROR: Could not read secrets file %s: %s",
+                self._secrets_file,
+                e,
+            )
+            return None
+
+        token = secrets.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = secrets.get("TELEGRAM_CHAT_ID", "")
 
         if not token or not chat_id:
             logger.info(
@@ -589,6 +599,8 @@ class TelegramNotifier:
     def send(self, message: str) -> bool:
         """Send a message to Telegram.
 
+        Delegates to shared telegram_notifier module (core/internal/shared/telegram_notifier.py).
+
         Returns True if sent successfully, False otherwise.
         Non-fatal to watchdog flow — failures are logged, not escalated.
         """
@@ -597,41 +609,7 @@ class TelegramNotifier:
             return False
 
         token, chat_id = creds
-
-        # Build URL-encoded request
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        data = f"chat_id={chat_id}&text={urllib.parse.quote(message, safe='')}"
-        data_bytes = data.encode("ascii")
-
-        try:
-            # Set up proxy if configured
-            if self._proxy_url:
-                proxy_handler = urllib.request.ProxyHandler({"https": self._proxy_url})
-                opener = urllib.request.build_opener(proxy_handler)
-            else:
-                opener = urllib.request.build_opener()
-
-            req = urllib.request.Request(
-                url,
-                data=data_bytes,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                method="POST",
-            )
-            with opener.open(req, timeout=self._timeout) as resp:
-                if resp.status == 200:
-                    logger.info("[IMP:8][watchdog][telegram] Notification sent successfully")
-                    return True
-                logger.info(
-                    "[IMP:9][watchdog][telegram] ERROR: Telegram API returned HTTP %d",
-                    resp.status,
-                )
-                return False
-        except Exception as e:
-            logger.info(
-                "[IMP:9][watchdog][telegram] ERROR: Telegram API request failed: %s",
-                e,
-            )
-            return False
+        return send_tg(message, token, chat_id, self._proxy_url)
 
 
 # endregion

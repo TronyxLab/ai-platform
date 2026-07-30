@@ -106,6 +106,14 @@ _STATIC_SMOKE_ENV: dict[str, str] = {
     "NGINX_CONF_DIR": "./dev-config",
     "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
     "NODE_NAME": "test-node",
+    # ⚠️ TRAP[BUG] · 2026-07-27 · HI · CONTEXT_IMAGE must be set for smoke tests
+    # · Root: base.yml default ${CONTEXT_IMAGE:-ghcr.io/...@sha256:STALE} has stale SHA;
+    # ·   Compose tries pull → not found → build with /opt/platform context → path missing on macOS.
+    # · Fix: override CONTEXT_IMAGE to use locally-built :latest tag (no SHA digest).
+    # ·   This matches `make hermes-build-context CONTEXT=test` output.
+    # · Rev: when hermes-agent-context is rebuilt — update SMOKE_ENV_GENERATED (via platform-env.yaml)
+    # ·   and remove this static override.
+    "CONTEXT_IMAGE": "ghcr.io/tronyxlab/hermes-agent-context:latest",
     "LITELLM_TEST_PORT": "14000",
     "HERMES_DASHBOARD_TEST_PORT": "19119",
     "HERMES_DESKTOP_TEST_PORT": "18642",

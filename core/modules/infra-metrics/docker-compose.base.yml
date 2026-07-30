@@ -71,8 +71,15 @@ services:
       - observability-net
 
     # 🧐 TRAP[TASK-3] · 2026-07-02 · Optimized: start_period 30→15s (container startup optimization)
+    # ⚠️ TRAP[BUG] · 2026-07-27 · HI · wget missing in scratch-based v0.55.1 → HEALTHCHECK always fails
+    # · Root: v0.52.0 (Alpine, has wget) → v0.55.1 (scratch, no wget). TRAP comment said
+    # ·   "no breaking changes expected" — incorrect: base image change = breaking for HEALTHCHECK.
+    # · Fix: use binary-based check like other scratch exporters
+    # ·   (nginx-prometheus-exporter: /usr/bin/nginx-prometheus-exporter --version,
+    # ·    redis-exporter: /redis_exporter --version).
+    # · Rev: on next cadvisor upgrade — verify HEALTHCHECK command works in new base image.
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/usr/bin/cadvisor", "--version"]
       interval: 30s
       timeout: 10s
       retries: 3

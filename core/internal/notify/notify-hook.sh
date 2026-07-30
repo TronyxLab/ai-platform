@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: notify-hook telegram-notifier secrets deploy-events audit-log AR5-no-fallback
-# STRUCTURE: load_secrets → validate_token_chat_id → curl_telegram(emoji+message) → audit_log → exit 0
+# GREP_SUMMARY: notify-hook telegram-notifier telegram_notifier shared-module secrets deploy-events audit-log AR5-no-fallback
+# STRUCTURE: load_secrets → validate_token_chat_id → python_telegram_notifier(emoji+message) → audit_log → exit 0
 # region MODULE_CONTRACT
-## @purpose  Notification hook for deploy events — sends Telegram messages via direct curl.
+## @purpose  Notification hook for deploy events — sends Telegram messages via shared telegram_notifier module.
 ##           Called by deploy-project.sh with optional --severity flag and pre-formatted 🚀 message.
 ## @scope    Moved to core/internal/notify/notify-hook.sh from core/scripts/notify-hook.sh.
 ## @invariants
@@ -12,6 +12,7 @@
 ##   - Network/API failure → log error, exit 0 (non-blocking)
 ##   - Messages prefixed with context from SECRETS env or "platform"
 ## @rationale Non-blocking by design — notification failure must not abort deploy.
+## @changes  2026-07-30 | T14a — Replaced curl POST with shared telegram_notifier module (send_telegram with parse_mode=HTML)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -82,26 +83,19 @@ load_secrets() {
 send_telegram() {
     local text="$1"
 
-    local encoded
-    encoded="$(python3 "$SCRIPT_DIR/url_encoder.py" encode "${text}" 2>/dev/null || echo "${text}")"
-
-    local response http_code
-    response="$(curl -s -w "\n%{http_code}" -X POST \
-        --proxy "$TELEGRAM_PROXY_URL" \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${CHAT_ID}" \
-        -d "text=${encoded}" \
-        -d "parse_mode=HTML" \
-        --max-time "$CURL_TIMEOUT" 2>/dev/null)" || {
-        log_imp 9 "telegram" "ERROR: curl to Telegram API failed (network)"
+    # Delegate to shared telegram_notifier module (stdlib-only, handles proxy, encoding, HTML parse_mode)
+    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
+    TELEGRAM_CHAT_ID="${CHAT_ID}" \
+    python3 -c "
+import sys, os
+sys.path.insert(0, '${PLATFORM_ROOT}/core/internal/shared')
+from telegram_notifier import send_telegram
+proxy = os.environ.get('TELEGRAM_PROXY_URL')
+sys.exit(0 if send_telegram(sys.argv[1], proxy_url=proxy, parse_mode='HTML') else 1)
+" "${text}" 2>/dev/null || {
+        log_imp 9 "telegram" "ERROR: Python telegram_notifier failed"
         return 1
     }
-
-    http_code="$(echo "$response" | tail -n1)"
-    if [[ "$http_code" != "200" ]]; then
-        log_imp 9 "telegram" "ERROR: Telegram API returned HTTP ${http_code}"
-        return 1
-    fi
 
     log_imp 8 "telegram" "Notification sent: ${text:0:80}..."
     return 0

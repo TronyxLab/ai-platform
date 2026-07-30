@@ -28,7 +28,7 @@ if [ "$MODE" = "deep" ]; then
     # Step 2: Service-specific diagnostics via exec_check
     exec_check "$CONTAINER" "redis-cli -h 127.0.0.1 -p 6379 ping" || exit 1
     log_imp 9 "deep" "redis deep check PASSED"
-    exit 0
+    exit 0  # ранний выход
 fi
 
 # Default liveness check via docker inspect

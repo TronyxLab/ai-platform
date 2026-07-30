@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Docker compose preflight validation — blocks `up` if required secrets are missing or charset-invalid."""
-# GREP_SUMMARY: compose-preflight, secrets-validation, docker-compose-wrapper, pre-up-check, missing-secrets, charset-validation
+# GREP_SUMMARY: compose-preflight, secrets-validation, docker-compose-wrapper, pre-up-check, missing-secrets, charset-validation, secrets_env_parser
 # STRUCTURE: ▶ parse_compose_args → ◇ resolve_modules(profiles) → ◇ load_secrets_manifest → ◇ check_secrets(modules) → ◇ validate_charsets → ⊕ missing|invalid → ⎋ exit(0|1)
 # region MODULE_CONTRACT [DOMAIN(DEPLOY): bootstrap; CONCEPT(SECRETS): preflight-validation; TECH(PYTHON): argparse+yaml+re+os]
 ## @purpose  Docker compose preflight validation wrapper — ensures all required secrets for target modules
@@ -22,6 +22,7 @@
 ##            but iterative `docker compose up` during development bypasses that validation.
 ##            The wrapper is opt-in (compose-safe-up make target), not a global override.
 ## @changes 2026-07-22 | Initial — TASK-4 of Plan 049 secrets-centralization
+##          2026-07-30 | Refactored load_env_map() to delegate to shared secrets_env_parser.parse() — DRY consolidation
 ## @usecases
 ##   - `make compose-safe-up MODULES=postgres,litellm` → preflight check → docker compose up
 ##   - Developer running `docker compose up --profile my-module` directly (bypass): no guard
@@ -35,6 +36,8 @@ import sys
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
+
+from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 
 logger = logging.getLogger(__name__)
 
@@ -56,25 +59,15 @@ _MANIFEST_DEFAULT = os.path.join(
 ## @io       env_file_path (str) → dict[str, str]
 ## @complexity 1 — linear file read + partition per line
 def load_env_map(env_file_path: str) -> dict[str, str]:
-    """Load key=value pairs from an env file (stripping comments and blanks)."""
+    """Load key=value pairs from an env file, delegating to the shared secrets_env_parser module."""
     logger.info("[IMP:7][load_env_map][start] path=%s", env_file_path)
-    env_map: dict[str, str] = {}
-    p = Path(env_file_path)
-    if not p.is_file():
-        logger.info("[IMP:7][load_env_map][missing] File %s not found — returning empty map", env_file_path)
+    try:
+        env_map = parse_secrets_env(env_file_path)
+        logger.info("[IMP:8][load_env_map][loaded] %d vars loaded from %s", len(env_map), env_file_path)
         return env_map
-
-    with p.open() as f:
-        for line in f:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if "=" in stripped:
-                k, _, v = stripped.partition("=")
-                env_map[k.strip()] = v.strip()
-
-    logger.info("[IMP:8][load_env_map][loaded] %d vars loaded from %s", len(env_map), env_file_path)
-    return env_map
+    except FileNotFoundError:
+        logger.info("[IMP:7][load_env_map][missing] File %s not found — returning empty map", env_file_path)
+        return {}
 
 
 # endregion FUNC_load_env_map

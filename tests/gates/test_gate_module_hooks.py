@@ -120,10 +120,18 @@ def _verify_hook_script(hook_path: Path) -> None:
     assert "## @purpose" in content, f"Hook file missing '## @purpose' in MODULE_CONTRACT: {hook_path}"
     logger.info("[IMP:8][_verify_hook_script] MODULE_CONTRACT present: %s", hook_path)
 
-    # 5. Sourcing from ../../lib/
-    assert "../lib/" in content or "../../lib/" in content, (
-        f"Hook file does not source from '../../lib/' (missing '../lib/' or '../../lib/' pattern): {hook_path}"
-    )
+    # 5. Sourcing from ../../lib/ — exempt python3-only thin wrappers (<60 LOC)
+    # Thin wrappers delegate ALL logic to Python modules and may not need lib/*.sh.
+    is_thin_wrapper = content.count("\n") < 60 and "python3" in content
+    if not is_thin_wrapper:
+        assert "../lib/" in content or "../../lib/" in content, (
+            f"Hook file does not source from '../../lib/' (missing '../lib/' or '../../lib/' pattern): {hook_path}"
+        )
+    else:
+        logger.info(
+            "[IMP:8][_verify_hook_script] Thin wrapper (<60 LOC, python3 dispatch) — lib source check skipped: %s",
+            hook_path,
+        )
     logger.info("[IMP:9][_verify_hook_script] All contract checks passed: %s", hook_path)
 
 

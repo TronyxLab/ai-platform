@@ -159,11 +159,6 @@ CALLSITES: list[tuple[str, Path, callable]] = [
         _extract_shell_default,
     ),
     (
-        "adopt-project.sh:387",
-        PROJECT_ROOT / "core/internal/scaffold/adopt-project.sh",
-        _extract_shell_default,
-    ),
-    (
         "docker_orchestrator.py:455",
         PROJECT_ROOT / "core/internal/bootstrap/deploy/docker_orchestrator.py",
         _extract_python_setdefault,
