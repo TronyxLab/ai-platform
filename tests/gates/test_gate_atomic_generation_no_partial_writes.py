@@ -21,10 +21,8 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import os
 import subprocess
 import sys
-import tempfile
 
 import pytest
 
@@ -104,8 +102,6 @@ def test_no_partial_writes_on_failure(tmp_path, caplog) -> None:
     # Create original files with known content (simulating previous valid manifests)
     orig1.write_text("original_value: should_not_change\n")
     orig2.write_text("original_value: should_not_change\n")
-    orig1_checksum_before = orig1.stat().st_mtime_ns
-    orig2_checksum_before = orig2.stat().st_mtime_ns
 
     print("[IMP:7][test_no_partial_writes_on_failure] Original files created with checksums", file=sys.stderr)
 
@@ -122,8 +118,7 @@ def test_no_partial_writes_on_failure(tmp_path, caplog) -> None:
         timeout=30,
     )
     assert result.returncode == 0, (
-        f"Atomic success script failed: returncode={result.returncode}\n"
-        f"stderr: {result.stderr}"
+        f"Atomic success script failed: returncode={result.returncode}\nstderr: {result.stderr}"
     )
     assert orig1.read_text() == "secret: value1\n", (
         f"Atomic success: orig1 content mismatch. Expected 'secret: value1\\n', got '{orig1.read_text()}'"
@@ -165,24 +160,25 @@ def test_no_partial_writes_on_failure(tmp_path, caplog) -> None:
     # Verify staging is cleaned up (no orphaned staging dirs)
     staging_dirs = [p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith("tmp.")]
     assert len(staging_dirs) == 0, (
-        f"Atomic failure: orphaned staging directories remain: {staging_dirs}\n"
-        f"trap EXIT should have cleaned them up."
+        f"Atomic failure: orphaned staging directories remain: {staging_dirs}\ntrap EXIT should have cleaned them up."
     )
-    logger.info("[IMP:9][test_no_partial_writes_on_failure] Test 2 (failure+trap): PASS — originals unchanged, staging cleaned")
+    logger.info(
+        "[IMP:9][test_no_partial_writes_on_failure] Test 2 (failure+trap): PASS — originals unchanged, staging cleaned"
+    )
 
     # ── Test 3: Anti-pattern detection ──
     # Detect scripts without trap EXIT by statically analyzing the pattern
     script_no_trap = _ATOMIC_SCRIPT_NO_TRAP.format(orig1=str(orig1), orig2=str(orig2))
     has_trap = "trap" in script_no_trap
     has_mktemp = "mktemp -d" in script_no_trap or "mktemp" in script_no_trap
-    has_mv = "mv " in script_no_trap
 
     if has_mktemp and not has_trap:
-        logger.warning(
-            "[IMP:7][test_no_partial_writes_on_failure] Anti-pattern detected: uses mktemp but no trap EXIT"
-        )
+        logger.warning("[IMP:7][test_no_partial_writes_on_failure] Anti-pattern detected: uses mktemp but no trap EXIT")
         # This is what we expect the test to detect — the anti-pattern
-        print("[IMP:7][test_no_partial_writes_on_failure] Anti-pattern detection: PASS (no trap = risk of partial write)", file=sys.stderr)
+        print(
+            "[IMP:7][test_no_partial_writes_on_failure] Anti-pattern detection: PASS (no trap = risk of partial write)",
+            file=sys.stderr,
+        )
     else:
         print("[IMP:7][test_no_partial_writes_on_failure] Script has trap — proper atomic pattern", file=sys.stderr)
 

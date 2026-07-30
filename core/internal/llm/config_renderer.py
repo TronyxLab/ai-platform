@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # GREP_SUMMARY: config_renderer, litellm-config, Jinja2, policy.yaml, model_list, fallbacks, --check, CLI, LDD
 # STRUCTURE: ▶ parse_args() → ◇ load_policy(path) → ◇ build_model_list(policy) → ◇ build_fallbacks(policy) →
 #            ◇ render_jinja2(template, data) → ◇ write_output(content, path) → ⎋ exit_code

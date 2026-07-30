@@ -24,7 +24,6 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import time
@@ -100,8 +99,7 @@ class HealthcheckPoller:
 
         # Fall back to Docker inspect
         if project_dir:
-            docker_result = self._try_docker(project_name, project_dir)
-            return docker_result
+            return self._try_docker(project_name, project_dir)
 
         logger.warning("[IMP:7][HealthcheckPoller][unknown] %s: no healthcheck method available", project_name)
         return HealthcheckResult(
@@ -145,6 +143,20 @@ class HealthcheckPoller:
             detail=f"Healthcheck timeout after {self.max_retries * self.interval}s",
         )
 
+    def _try_url(self, url: str) -> bool:
+        """Try a single healthcheck URL. Returns True if 200 OK.
+
+        ## @purpose — Isolate try-except from loop to avoid PERF203.
+        ## @io — ⇥ url: str → ⎋ bool
+        ## @complexity — O(1)
+        """
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # nosec B310 — internal healthcheck endpoint
+                return resp.status == 200
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+            return False
+
     def _try_http(self, project_name: str) -> bool:
         """Try HTTP GET /health for a project.
 
@@ -161,16 +173,7 @@ class HealthcheckPoller:
             f"http://{project_name}/health",
         ]
 
-        for url in urls:
-            try:
-                req = urllib.request.Request(url, method="GET")
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    if resp.status == 200:
-                        return True
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-                continue
-
-        return False
+        return any(self._try_url(url) for url in urls)
 
     def _try_docker(self, project_name: str, project_dir: str) -> HealthcheckResult:
         """Try Docker inspect for health status.

@@ -175,9 +175,10 @@ def _parse_delegates_to_files(manifest_path: pathlib.Path) -> list[str]:
     for f in files:
         # Strip trailing flags like '--lint' and trailing subcommand args like 'build-platform'
         # e.g. 'core/internal/build/hermes-images.sh build-platform' → 'core/internal/build/hermes-images.sh'
+        # Also handle .py scripts with trailing args like 'orchestrator_cli.py receive'
         words = f.split()
-        if len(words) > 1 and words[0].endswith(".sh") and not words[1].startswith("--"):
-            # If the first word is a .sh script and second is not a flag,
+        if len(words) > 1 and (words[0].endswith(".sh") or words[0].endswith(".py")) and not words[1].startswith("--"):
+            # If the first word is a .sh/.py script and second is not a flag,
             # the second word is a subcommand argument — keep only the script path
             base = words[0]
         else:

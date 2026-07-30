@@ -43,13 +43,15 @@ MIGRATION_MAP: dict[str, list[str]] = {
     "certificates": ["install_acme", "ssl_provision"],
     "deploy_services": ["deploy_modules", "deploy_context"],
     "converge_services": ["converge"],
-
     # ── UPDATE phases (φ9-φ13) ──
     "secrets_update": ["decrypt_secrets"],
     "node_config_update": ["read_node_yaml", "verify_core"],
     "registry_update": [
-        "ghcr_auth", "provision", "deliver_overlays",
-        "provision_llm_keys", "healthcheck",
+        "ghcr_auth",
+        "provision",
+        "deliver_overlays",
+        "provision_llm_keys",
+        "healthcheck",
     ],
     "deploy_update": ["deploy_modules", "ssl_provision", "verify_core", "deploy_context"],
     "converge_update": ["converge"],
@@ -76,9 +78,7 @@ def _is_sub_step_done(state: dict, key: str) -> bool:
         if status == "done":
             return True
         # Also check boolean done field
-        if step_entry.get("done") is True:
-            return True
-        return False
+        return step_entry.get("done") is True
 
     # Check flat format: state[key]
     flat_entry = state.get(key)

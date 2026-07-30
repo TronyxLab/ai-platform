@@ -25,7 +25,6 @@
 import logging
 import os
 import tempfile
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +109,7 @@ def _parse_line(line: str) -> tuple[str, str] | None:
         return None
 
     key = remaining[:eq_pos].strip()
-    raw_value = remaining[eq_pos + 1:]
+    raw_value = remaining[eq_pos + 1 :]
 
     if not key:
         logger.debug("[IMP:4][_parse_line] Empty key after split, skipping")
@@ -125,11 +124,10 @@ def _parse_line(line: str) -> tuple[str, str] | None:
     value = raw_value.strip()
 
     # ── Step 5: Strip surrounding quotes ──
-    if len(value) >= 2:
-        if (value[0] == "'" and value[-1] == "'") or (value[0] == '"' and value[-1] == '"'):
-            inner = value[1:-1]
-            logger.debug("[IMP:4][_parse_line] Stripped surrounding quotes from value")
-            value = inner
+    if len(value) >= 2 and ((value[0] == "'" and value[-1] == "'") or (value[0] == '"' and value[-1] == '"')):
+        inner = value[1:-1]
+        logger.debug("[IMP:4][_parse_line] Stripped surrounding quotes from value")
+        value = inner
 
     logger.info("[IMP:7][_parse_line] Parsed: %s='%.80s'", key, value[:80])
     return (key, value)
@@ -141,7 +139,7 @@ def _parse_line(line: str) -> tuple[str, str] | None:
 # region FUNC_parse
 
 
-def parse(path: str, prefix_filter: Optional[str] = None) -> dict[str, str]:
+def parse(path: str, prefix_filter: str | None = None) -> dict[str, str]:
     """Parse a secrets.env file into a dictionary.
 
     ▶ ┌path┐ → ◇ FileNotFoundError if absent → ⊕ _parse_line per line → ◇ prefix_filter? → ⎋ dict
@@ -170,7 +168,7 @@ def parse(path: str, prefix_filter: Optional[str] = None) -> dict[str, str]:
     result: dict[str, str] = {}
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line_no, raw_line in enumerate(f, start=1):
                 parsed = _parse_line(raw_line)
                 if parsed is not None:
@@ -300,9 +298,7 @@ def merge(*paths: str) -> dict[str, str]:
         result.update(parsed)
         new_keys = len(result) - before
         overridden = len(parsed) - new_keys
-        logger.info(
-            "[IMP:8][merge] File %s: %d new keys, %d overridden", path, new_keys, overridden
-        )
+        logger.info("[IMP:8][merge] File %s: %d new keys, %d overridden", path, new_keys, overridden)
 
     logger.info("[IMP:9][merge] Merged %d total entries from %d files", len(result), len(paths))
     return result
@@ -346,9 +342,7 @@ def export_shell(path: str) -> str:
         lines.append(f"export {key}='{escaped}'")
 
     result = "\n".join(lines) + "\n"
-    logger.info(
-        "[IMP:9][export_shell] Generated %d export lines from %s", len(lines), path
-    )
+    logger.info("[IMP:9][export_shell] Generated %d export lines from %s", len(lines), path)
     return result
 
 

@@ -26,6 +26,7 @@ Unified audit logger for DeployOrchestrator — wraps shared audit_logger with d
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -162,7 +163,7 @@ class AuditLogger:
             os.chmod(self.log_file, 0o640)
             # Try to chgrp to adm — non-fatal if not root
             if os.geteuid() == 0:
-                import grp  # noqa: PLC0415
+                import grp
 
                 try:
                     adm_gid = grp.getgrnam("adm").gr_gid
@@ -180,15 +181,13 @@ class AuditLogger:
 # region CLI
 
 
-def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0913
+def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for audit logger operations.
 
     ## @purpose — CLI entry for standalone audit log operations.
     ## @io — ⇥ None → ⎋ argparse.ArgumentParser
     ## @complexity — O(1)
     """
-    import argparse  # noqa: PLC0415
-
     parser = argparse.ArgumentParser(
         description="Unified deploy audit logger — write/read audit entries (DevPlan 089 T4)",
     )
@@ -219,7 +218,6 @@ def main() -> int:
     ## @io — ⇥ sys.argv → ⎋ exit code (0 = success, 1 = error)
     ## @complexity — O(L) for read, O(1) for write
     """
-    import argparse  # noqa: PLC0415
 
     logging.basicConfig(
         level=logging.INFO,
@@ -243,11 +241,11 @@ def main() -> int:
         return 0
 
     if args.command == "read":
-        from core.internal.shared.audit_logger import read_audit_log  # noqa: PLC0415
+        from core.internal.shared.audit_logger import read_audit_log
 
         entries = read_audit_log(log_file=args.log_file, limit=args.limit)
         for entry in entries:
-            import json  # noqa: PLC0415
+            import json
 
             print(json.dumps(entry, ensure_ascii=False))
         return 0

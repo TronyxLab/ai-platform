@@ -16,7 +16,7 @@ ACCEPTANCE_CRITERIA:
   - AC9: .github/workflows/platform-test.yml — check-manifests раскомментирован
   - AC10: test_no_shell_manifest_generators.py — fail если любой генератор манифестов в shell
 IMPLEMENTS:            Superposition Analysis 2026-07-28 — Проблема 5 (Manifest DAG cycle) + Agent 4 S5 findings + Agent 3 Manifest domain gaps + Findings 1-3 из архитектурного аудита 2026-07-28
-IMPACTS:               19 файлов (5 CREATE, 12 MODIFY, 1 DELETE + Makefile MODIFY). Подробно в §4 File Manifest.
+IMPACTS:               19 файлов (5 CREATE, 13 MODIFY, 1 DELETE). Подробно в §4 File Manifest.
 REQUIRES:              DP-088 (NodeYaml — генераторы будут использовать NodeYaml.load()). DP-089 (Deploy — не конфликтует, но может пересекаться по Makefile/CI changes). Рекомендуется merge DP-089 перед стартом DP-090 или координировать изменения.
 $END_ARTIFACT_CONTRACT
 
@@ -366,12 +366,12 @@ def generate(input_manifest_path, makefile_path, gate_tests_dir, output_path):
 - [ ] AC2: `generate_entrypoint_manifest.py` — grep "yaml.safe_load.*entrypoint-manifest" внутри функции generate() → только для metadata/convention/schema, НЕ для allowed_verbs/gates
 - [ ] AC3: `make generate-manifests-atomic` — создаёт staging/ (mktemp), генерирует туда, атомарно mv. При failure trap EXIT удаляет staging. Оригиналы не тронуты.
 - [ ] AC4: `python3 core/internal/scripts/generate_secrets_manifest.py --check; echo $?` → 0 (нет divergence). Аналогично для G2-G6.
-- [ ] AC5: `ls core/internal/scaffold/gen-env-platform.sh` → file not found
-- [ ] AC6: `grep "gen-env-platform\.sh" core/` → empty (кроме исторических references в AGENTS.md)
-- [ ] AC7: `make check-manifests` — использует --check всех 6 генераторов (быстрее полной генерации + git diff)
-- [ ] AC8: `make gate MODE=fast` — зелёный, все gate тесты PASS
-- [ ] AC9: `python -m pytest tests/ -v` — все тесты проходят
-- [ ] AC10: `.github/workflows/platform-test.yml` — check-manifests раскомментирован (L122-125), echo-заглушка удалена
+- [ ] AC5: `ls core/internal/scaffold/gen-env-platform.sh` → file not found. `grep "gen-env-platform\.sh" core/` → empty (кроме исторических references в AGENTS.md)
+- [ ] AC6: `make check-manifests` — использует --check всех 6 генераторов (быстрее полной генерации + git diff)
+- [ ] AC7: `make gate MODE=fast` — зелёный, все gate тесты PASS
+- [ ] AC8: `python -m pytest tests/ -v` — все тесты проходят
+- [ ] AC9: `.github/workflows/platform-test.yml` — check-manifests раскомментирован (L122-125), echo-заглушка удалена
+- [ ] AC10: `python -m pytest tests/gates/test_no_shell_manifest_generators.py -v` — PASS; fail если любой генератор манифестов реализован в shell
 
 ---
 

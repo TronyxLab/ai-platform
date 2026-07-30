@@ -36,9 +36,9 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
-
 import yaml  # type: ignore[import-untyped]
+
+from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 
 logger = logging.getLogger(__name__)
 

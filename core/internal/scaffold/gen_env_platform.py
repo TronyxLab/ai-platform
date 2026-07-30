@@ -36,13 +36,13 @@ import yaml
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "generate_env_platform",
-    "generate",
-    "load_yaml",
-    "validate_provides",
-    "main",
     "GenEnvPlatformError",
     "GenEnvPlatformValidationError",
+    "generate",
+    "generate_env_platform",
+    "load_yaml",
+    "main",
+    "validate_provides",
 ]
 
 

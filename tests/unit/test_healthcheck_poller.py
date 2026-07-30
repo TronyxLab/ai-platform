@@ -14,11 +14,6 @@
 
 from __future__ import annotations
 
-import logging
-from unittest.mock import patch
-
-import pytest
-
 from core.internal.deploy.healthcheck_poller import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_POLL_INTERVAL,

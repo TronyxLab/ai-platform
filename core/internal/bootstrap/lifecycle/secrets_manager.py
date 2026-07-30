@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
-from core.internal.shared.secrets_env_parser import write as write_secrets_env
 
 logger = logging.getLogger(__name__)
 

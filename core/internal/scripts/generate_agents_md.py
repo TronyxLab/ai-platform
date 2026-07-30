@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # GREP_SUMMARY: generate_agents_md, canon-table, forbidden-lists, inject-into-md, AGENTS.md-generator, CI
 # STRUCTURE: ▶ load manifest → ◇ generate_canon_table(sections) → ◇ generate_forbidden_lists(forbidden_*) → ⊕ inject_into_md(md, marker, content) → ⎋ AGENTS.md with generated regions
 # region MODULE_CONTRACT

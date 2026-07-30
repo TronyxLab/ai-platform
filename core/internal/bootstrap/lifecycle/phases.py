@@ -61,7 +61,6 @@ logger = logging.getLogger(__name__)
 # ── Import helpers from state_machine (single source of truth) ──────────────
 from core.internal.bootstrap.lifecycle import state_machine as _sm
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # INIT PHASES — 9 phases for full node bootstrap
 # ═══════════════════════════════════════════════════════════════════════════
@@ -202,7 +201,9 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
         raise PlatformFatalError("PLATFORM_OWNER_KEY is required for phase_user_accounts")
     ci_deploy_key = os.environ.get("PLATFORM_CI_DEPLOY_KEY", "").strip()
     if not ci_deploy_key:
-        logger.warning("[IMP:7][phase:user_accounts] PLATFORM_CI_DEPLOY_KEY not set — ci-deploy user will have no deploy key")
+        logger.warning(
+            "[IMP:7][phase:user_accounts] PLATFORM_CI_DEPLOY_KEY not set — ci-deploy user will have no deploy key"
+        )
 
     non_fatal_issues = False
 
@@ -398,8 +399,7 @@ def phase_node_configuration(core_dir: str, node_name: str, node_yaml: str) -> b
     # ── 2. Verify node configs (node.yaml exists) ──
     if not node_yaml or not os.path.isfile(node_yaml):
         raise ConfigNotFoundError(
-            f"node.yaml not found: {node_yaml}. "
-            f"Ensure node config is delivered to /opt/node-configs/{node_name}/"
+            f"node.yaml not found: {node_yaml}. Ensure node config is delivered to /opt/node-configs/{node_name}/"
         )
     logger.info("[IMP:9][phase:node_configuration] node.yaml present: %s", node_yaml)
 
@@ -414,9 +414,7 @@ def phase_node_configuration(core_dir: str, node_name: str, node_yaml: str) -> b
     # ── 4. Verify node configs directory exists ──
     node_configs_dir = f"/opt/node-configs/{node_name}"
     if not os.path.isdir(node_configs_dir):
-        logger.warning(
-            "[IMP:7][phase:node_configuration] Node configs directory not found: %s", node_configs_dir
-        )
+        logger.warning("[IMP:7][phase:node_configuration] Node configs directory not found: %s", node_configs_dir)
         non_fatal_issues = True
     else:
         logger.info("[IMP:8][phase:node_configuration] Node configs directory present: %s", node_configs_dir)
@@ -479,8 +477,7 @@ def phase_registry_auth(core_dir: str, node_name: str, node_yaml: str) -> bool:
             logger.info("[IMP:7][phase:registry_auth] docker_registry_auth.py not found — skipping Docker Hub auth")
     else:
         logger.info(
-            "[IMP:7][phase:registry_auth] DOCKER_HUB_USERNAME/DOCKER_HUB_TOKEN not both set — "
-            "skipping Docker Hub auth"
+            "[IMP:7][phase:registry_auth] DOCKER_HUB_USERNAME/DOCKER_HUB_TOKEN not both set — skipping Docker Hub auth"
         )
 
     if non_fatal_issues:
@@ -910,6 +907,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
             "(DEPLOY_PARALLEL) — skipping standalone healthcheck"
         )
         import contextlib
+
         with contextlib.suppress(OSError):
             os.unlink(hc_done_marker)
     elif node_yaml and os.path.isfile(node_yaml):

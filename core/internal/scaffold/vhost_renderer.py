@@ -842,7 +842,7 @@ add_header X-Frame-Options "DENY" always;
                 "/etc/nginx/dev-certs/privkey.pem",
                 swapped,
             )
-            swapped = swapped.replace("/var/www/acme", "/tmp/acme-stub")  # nosec B108 — dev-only acme stub, not prod
+            swapped = swapped.replace("/var/www/acme", "/tmp/acme-stub")  # nosec B108 — dev-only acme stub, not production
             dev_vhost.write_text(swapped, encoding="utf-8")
             vhost_count += 1
 

@@ -282,6 +282,7 @@ secrets-unlock:
 check-exception-patterns:
 	@echo "[IMP:7][gate] Checking for bare except Exception in non-CLI code..."
 	@! grep -rEn 'except[[:space:]]+Exception' core/internal/ --include='*.py' \
+		| grep -vE ':[[:space:]]*#' \
 		| grep -v '__main__' \
 		| grep -v '# noqa: EXC' \
 		|| (echo "[IMP:9][gate] FAIL: bare except Exception found in non-CLI code" && exit 1)

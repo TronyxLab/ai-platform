@@ -15,14 +15,12 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import tempfile
 
 import pytest
 
-from core.internal.deploy.deploy_history import DeployHistory, MAX_SNAPSHOTS, SNAPSHOT_DIR
-
+from core.internal.deploy.deploy_history import MAX_SNAPSHOTS, SNAPSHOT_DIR, DeployHistory
 
 # ── Fixtures ──
 
@@ -33,6 +31,7 @@ def projects_base() -> str:
     path = tempfile.mkdtemp(prefix="test-projects-")
     yield path
     import shutil
+
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
 

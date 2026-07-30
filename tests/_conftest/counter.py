@@ -35,6 +35,7 @@ def _write_counter(data: dict) -> None:
     """Write attempt counter to .test_counter.json."""
     with open(_COUNTER_FILE, "w") as f:
         json.dump(data, f)
+        f.write("\n")
 
 
 # endregion COUNTER_IO

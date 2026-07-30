@@ -24,12 +24,11 @@ from unittest import mock
 
 import pytest
 
-from tests.conftest import ldd_trajectory
-
 from core.internal.secrets.decrypt_secrets import (
-    decrypt_sops_file,
     _TEMP_FILES,
+    decrypt_sops_file,
 )
+from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +133,11 @@ def test_decrypt_fail_wrong_key(caplog: pytest.LogCaptureFixture, tmp_path: pyte
     # Clear any leftover temp file tracking from previous tests
     _TEMP_FILES.clear()
 
-    with mock.patch("subprocess.run", side_effect=_mock_run):
-        with pytest.raises(RuntimeError, match="sops decryption failed"):
-            decrypt_sops_file("wrong-age-key-for-testing", str(enc_path))
+    with (
+        mock.patch("subprocess.run", side_effect=_mock_run),
+        pytest.raises(RuntimeError, match="sops decryption failed"),
+    ):
+        decrypt_sops_file("wrong-age-key-for-testing", str(enc_path))
 
     # Verify _TEMP_FILES is clean (finally block cleaned up)
     assert len(_TEMP_FILES) == 0, f"Orphaned temp file entries after failure: {_TEMP_FILES}"
@@ -189,19 +190,13 @@ def test_temp_key_cleanup(caplog: pytest.LogCaptureFixture, tmp_path: pytest.Tem
         decrypt_sops_file("AGE-SECRET-KEY-test-key-for-dd-wipe", str(enc_path))
 
     # ── Assertion 1: dd was called for wipe ──
-    assert len(dd_calls) >= 1, (
-        f"dd wipe must be called by _wipe_temp_key, got {len(dd_calls)} dd calls"
-    )
+    assert len(dd_calls) >= 1, f"dd wipe must be called by _wipe_temp_key, got {len(dd_calls)} dd calls"
     dd_args = dd_calls[-1]
-    assert "if=/dev/zero" in dd_args, (
-        f"dd must use if=/dev/zero for secure wipe, got args: {dd_args}"
-    )
+    assert "if=/dev/zero" in dd_args, f"dd must use if=/dev/zero for secure wipe, got args: {dd_args}"
 
     # ── Assertion 2: tracked temp files are removed from disk ──
     for tmp_file_path in list(_TEMP_FILES):
-        assert not os.path.exists(tmp_file_path), (
-            f"Temp file {tmp_file_path} still exists after cleanup"
-        )
+        assert not os.path.exists(tmp_file_path), f"Temp file {tmp_file_path} still exists after cleanup"
 
     # ── Assertion 3: _TEMP_FILES tracking list is empty ──
     assert len(_TEMP_FILES) == 0, f"Orphaned temp file entries: {_TEMP_FILES}"
@@ -250,14 +245,10 @@ def test_no_secret_in_logs(caplog: pytest.LogCaptureFixture, tmp_path: pytest.Te
         decrypt_sops_file(secret_key, str(enc_path))
 
     # ── Verify no log record contains the full secret key ──
-    leaked_records: list[str] = []
-    for record in caplog.records:
-        if secret_key in record.message:
-            leaked_records.append(record.message)
+    leaked_records: list[str] = [record.message for record in caplog.records if secret_key in record.message]
 
-    assert len(leaked_records) == 0, (
-        f"Full secret key leaked in {len(leaked_records)} log records:\n"
-        + "\n".join(leaked_records)
+    assert len(leaked_records) == 0, f"Full secret key leaked in {len(leaked_records)} log records:\n" + "\n".join(
+        leaked_records
     )
 
     # ── Verify masked key IS present (proves logging occurred) ──

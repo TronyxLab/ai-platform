@@ -124,7 +124,6 @@ port_mappings:
 env_defaults:
   CONTEXT: test
   NODE_NAME: test-node
-  PLATFORM_DOMAIN: ai-platform.local
   CONTEXT_IMAGE: ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1
   POSTGRES_USER: postgres
   POSTGRES_DB: platform

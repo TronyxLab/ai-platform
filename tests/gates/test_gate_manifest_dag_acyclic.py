@@ -26,13 +26,15 @@ from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-# Chain definitions: expected target basenames in order
-# Chain A: secrets-manifest → platform-env (the env_defaults_generated and smoke_env_generated
-#          are side outputs of the platform-env generator, not separate DAG nodes)
-# Chain B: entrypoint-manifest → agents-md (agents-md reads entrypoint-manifest as input)
-# Chain C: litellm-config (standalone generator, no dependencies within the DAG)
-# NOTE: sync-env-defaults (.env.example) is a separate make target — not part of
-#       `make generate-manifests`. It's tested by test_gate_env_example_sync.
+# Chain definitions: expected target basenames
+# The `make generate-manifests` target depends on 3 chain heads (G1, G3, G6).
+# Full chain sequences are verified via chain-specific targets.
+# Chain A heads: generate-secrets-manifest (G1)
+# Chain B heads: generate-entrypoint-manifest (G3)
+# Chain C heads: generate-litellm-config (G6)
+# Full chain A sequence: secrets-manifest → platform-env → env-example (G1 → G2 → G5)
+# Full chain B sequence: entrypoint-manifest → agents-md (G3 → G4)
+CHAIN_HEADS = ["secrets-manifest", "entrypoint-manifest", "litellm-config"]
 CHAIN_A = ["secrets-manifest", "platform-env"]
 CHAIN_B = ["entrypoint-manifest", "agents-md"]
 CHAIN_C = ["litellm-config"]
@@ -72,10 +74,7 @@ def test_generator_dag_acyclic(caplog) -> None:
             result.returncode,
             stderr_preview,
         )
-        pytest.fail(
-            f"`make generate-manifests -n` exited with code {result.returncode}.\n"
-            f"Stderr: {stderr_preview}"
-        )
+        pytest.fail(f"`make generate-manifests -n` exited with code {result.returncode}.\nStderr: {stderr_preview}")
 
     output = result.stdout
     lines = output.splitlines()
@@ -91,7 +90,7 @@ def test_generator_dag_acyclic(caplog) -> None:
         # Extract the python script or the make target name from echo lines
         for marker in ["Generating ", "generating "]:
             if marker in stripped:
-                target = stripped.split(marker)[-1].rstrip("...").strip().lower()
+                target = stripped.split(marker)[-1].replace("...", "").strip().lower()
                 # Normalize: strip file extensions, paths
                 for ext in [".yaml", ".yml", ".py"]:
                     if target.endswith(ext):
@@ -101,7 +100,9 @@ def test_generator_dag_acyclic(caplog) -> None:
                 seen_targets.append(target)
                 break
 
-    print(f"[IMP:7][test_generator_dag_acyclic] Extracted {len(seen_targets)} target(s): {seen_targets}", file=sys.stderr)
+    print(
+        f"[IMP:7][test_generator_dag_acyclic] Extracted {len(seen_targets)} target(s): {seen_targets}", file=sys.stderr
+    )
 
     # Check for repeats (cycle indicator)
     target_counts: dict[str, int] = {}
@@ -121,38 +122,70 @@ def test_generator_dag_acyclic(caplog) -> None:
         )
     print("[IMP:9][test_generator_dag_acyclic] No cycles detected — all targets unique", file=sys.stderr)
 
-    # ── Check 2: All 3 chains are present ──
-    # Flatten to lowercase token list for fuzzy matching
-    output_lower = output.lower()
+    # ── Check 2: All 3 chain heads are present in `make generate-manifests -n` ──
+    # `make generate-manifests` only depends on chain heads (G1, G3, G6).
+    # Full chain sequences are verified via chain-specific targets.
+    output.lower()
 
-    def chain_present(chain_name: str, tokens: list[str]) -> bool:
-        """Check if all tokens from a chain appear in the output."""
-        missing = [t for t in tokens if t not in output_lower]
-        if missing:
-            logger.warning("[IMP:7][test_generator_dag_acyclic] Chain %s missing: %s", chain_name, missing)
-            return False
-        return True
+    def tokens_present(tokens: list[str], text: str) -> list[str]:
+        """Return missing tokens from the given text."""
+        text_lower = text.lower()
+        return [t for t in tokens if t not in text_lower]
 
-    assert chain_present("A (secrets→platform-env)", CHAIN_A), (
-        f"Chain A not fully present in `make generate-manifests -n` output.\n"
-        f"Expected tokens: {CHAIN_A}\nOutput:\n{output}"
+    missing_heads = tokens_present(CHAIN_HEADS, output)
+    assert not missing_heads, (
+        f"Chain heads missing in `make generate-manifests -n` output.\n"
+        f"Missing: {missing_heads}\nExpected: {CHAIN_HEADS}\nOutput:\n{output}"
     )
-    logger.info("[IMP:9][test_generator_dag_acyclic] Chain A (secrets→platform-env): PRESENT")
+    logger.info("[IMP:9][test_generator_dag_acyclic] All 3 chain heads present: %s", CHAIN_HEADS)
 
-    assert chain_present("B (entrypoint→agents-md)", CHAIN_B), (
-        f"Chain B not fully present in `make generate-manifests -n` output.\n"
-        f"Expected tokens: {CHAIN_B}\nOutput:\n{output}"
+    # ── Check 3: Full chains via chain-specific targets ──
+    # Chain A: generate-env-example → G1 → G2 → G5
+    result_a = subprocess.run(
+        ["make", "generate-env-example", "-n"],
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
-    logger.info("[IMP:9][test_generator_dag_acyclic] Chain B (entrypoint→agents-md): PRESENT")
+    assert result_a.returncode == 0, f"make generate-env-example -n failed: {result_a.stderr[:500]}"
+    missing_a = tokens_present(CHAIN_A, result_a.stdout)
+    assert not missing_a, (
+        f"Chain A not fully present in `make generate-env-example -n`.\n"
+        f"Missing: {missing_a}\nExpected: {CHAIN_A}\nOutput:\n{result_a.stdout}"
+    )
+    logger.info("[IMP:9][test_generator_dag_acyclic] Chain A (secrets→platform-env→env-example): FULLY PRESENT")
 
-    assert chain_present("C (litellm-config)", CHAIN_C), (
-        f"Chain C not fully present in `make generate-manifests -n` output.\n"
-        f"Expected tokens: {CHAIN_C}\nOutput:\n{output}"
+    # Chain B: generate-agents-md → G3 → G4
+    result_b = subprocess.run(
+        ["make", "generate-agents-md", "-n"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result_b.returncode == 0, f"make generate-agents-md -n failed: {result_b.stderr[:500]}"
+    missing_b = tokens_present(CHAIN_B, result_b.stdout)
+    assert not missing_b, (
+        f"Chain B not fully present in `make generate-agents-md -n`.\n"
+        f"Missing: {missing_b}\nExpected: {CHAIN_B}\nOutput:\n{result_b.stdout}"
+    )
+    logger.info("[IMP:9][test_generator_dag_acyclic] Chain B (entrypoint→agents-md): FULLY PRESENT")
+
+    # Chain C: generate-litellm-config → G6 (singleton)
+    result_c = subprocess.run(
+        ["make", "generate-litellm-config", "-n"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result_c.returncode == 0, f"make generate-litellm-config -n failed: {result_c.stderr[:500]}"
+    missing_c = tokens_present(CHAIN_C, result_c.stdout)
+    assert not missing_c, (
+        f"Chain C not present in `make generate-litellm-config -n`.\n"
+        f"Missing: {missing_c}\nExpected: {CHAIN_C}\nOutput:\n{result_c.stdout}"
     )
     logger.info("[IMP:9][test_generator_dag_acyclic] Chain C (litellm-config): PRESENT")
 
-    # ── Check 3: Chain ordering — Chain A targets appear before Chain B targets ──
-    # Since make -n echoes in execution order, we can check the index positions
+    # ── Check 4: Chain ordering via make generate-manifests -n ──
     def find_line_index(text: str, pattern: str) -> int:
         """Find first line containing pattern (case-insensitive). Returns -1 if not found."""
         for i, line in enumerate(lines):
@@ -160,33 +193,18 @@ def test_generator_dag_acyclic(caplog) -> None:
                 return i
         return -1
 
-    # Chain A should appear before Chain B (A is called first in Makefile)
-    # Get first line of each chain
-    chain_a_first_line = -1
-    for token in CHAIN_A:
-        idx = find_line_index(output, token)
-        if idx >= 0:
-            chain_a_first_line = idx if chain_a_first_line == -1 else min(chain_a_first_line, idx)
-            break
-
-    chain_b_first_line = -1
-    for token in CHAIN_B:
-        idx = find_line_index(output, token)
-        if idx >= 0:
-            chain_b_first_line = idx if chain_b_first_line == -1 else min(chain_b_first_line, idx)
-            break
-
-    if chain_a_first_line >= 0 and chain_b_first_line >= 0:
-        assert chain_a_first_line < chain_b_first_line, (
-            f"Chain order violation: Chain A starts at line {chain_a_first_line} "
-            f"but Chain B starts earlier at line {chain_b_first_line}.\n"
-            f"Expected Chain A → Chain B (secrets → platform-env before entrypoint → AGENTS.md)."
+    # Chain A (secrets-manifest) should appear before Chain B (entrypoint-manifest)
+    a_idx = find_line_index(output, "secrets-manifest")
+    b_idx = find_line_index(output, "entrypoint-manifest")
+    if a_idx >= 0 and b_idx >= 0:
+        assert a_idx < b_idx, (
+            f"Chain order violation: Chain A at line {a_idx} "
+            f"but Chain B at earlier line {b_idx}.\n"
+            f"Expected Chain A → Chain B."
         )
         print("[IMP:9][test_generator_dag_acyclic] Chain ordering verified: A before B", file=sys.stderr)
 
-    logger.info(
-        "[IMP:9][test_generator_dag_acyclic] ALL PASS — DAG is acyclic with 3 chains in correct order"
-    )
+    logger.info("[IMP:9][test_generator_dag_acyclic] ALL PASS — DAG is acyclic with 3 chains in correct order")
 
 
 # endregion FUNC_test_generator_dag_acyclic

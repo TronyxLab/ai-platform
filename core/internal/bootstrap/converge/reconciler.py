@@ -812,7 +812,7 @@ def _reconcile_env_platform(
             platform_env_path,
         )
         _create_empty_env_file(env_file, unit)
-    except Exception as exc:
+    except (ImportError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         logger.warning(
             "[IMP:9][converge][%s] WARN: generate_env_platform() failed for %s — creating empty .env.platform: %s",
             unit,

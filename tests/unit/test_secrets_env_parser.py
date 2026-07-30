@@ -97,9 +97,7 @@ def test_parse_with_quotes(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> 
     result = parse(str(env_file))
 
     found_imp9 = _print_ldd(caplog)
-    assert result == {"SINGLE": "hello", "DOUBLE": "world"}, (
-        f"Expected both unquoted, got {result}"
-    )
+    assert result == {"SINGLE": "hello", "DOUBLE": "world"}, f"Expected both unquoted, got {result}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
@@ -187,9 +185,7 @@ def test_merge_override(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> Non
     result = merge(str(base_file), str(override_file))
 
     found_imp9 = _print_ldd(caplog)
-    assert result == {"A": "1", "B": "3", "C": "4"}, (
-        f"Expected last-wins merge, got {result}"
-    )
+    assert result == {"A": "1", "B": "3", "C": "4"}, f"Expected last-wins merge, got {result}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
@@ -237,9 +233,7 @@ def test_inline_comments(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> No
     result = parse(str(env_file))
 
     found_imp9 = _print_ldd(caplog)
-    assert result == {"VAR": "value"}, (
-        f"Expected {{'VAR': 'value'}} with comment stripped, got {result}"
-    )
+    assert result == {"VAR": "value"}, f"Expected {{'VAR': 'value'}} with comment stripped, got {result}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
@@ -258,11 +252,7 @@ def test_mixed_quotes(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     # · Remove if: parse() changes quote handling
 
     env_file = tmp_path / "secrets.env"
-    env_file.write_text(
-        "SINGLE_Q='value with # hash'\n"
-        "DOUBLE_Q=\"value with # hash\"\n"
-        "NO_QUOTE=plain\n"
-    )
+    env_file.write_text("SINGLE_Q='value with # hash'\nDOUBLE_Q=\"value with # hash\"\nNO_QUOTE=plain\n")
 
     result = parse(str(env_file))
 
@@ -295,9 +285,7 @@ def test_spaces_around_eq(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> N
     result = parse(str(env_file))
 
     found_imp9 = _print_ldd(caplog)
-    assert result == {"VAR": "spaced value"}, (
-        f"Expected key='VAR', value='spaced value', got {result}"
-    )
+    assert result == {"VAR": "spaced value"}, f"Expected key='VAR', value='spaced value', got {result}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
@@ -345,9 +333,7 @@ def test_unicode(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     result = parse(str(env_file))
 
     found_imp9 = _print_ldd(caplog)
-    assert result == {"VAR": "привет", "UNICODE": "日本語"}, (
-        f"Expected unicode values preserved, got {result}"
-    )
+    assert result == {"VAR": "привет", "UNICODE": "日本語"}, f"Expected unicode values preserved, got {result}"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
@@ -366,12 +352,7 @@ def test_prefix_filter(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None
     # · Remove if: prefix_filter parameter is removed from parse()
 
     env_file = tmp_path / "secrets.env"
-    env_file.write_text(
-        "DB_HOST=localhost\n"
-        "DB_PORT=5432\n"
-        "API_KEY=secret\n"
-        "DB_NAME=testdb\n"
-    )
+    env_file.write_text("DB_HOST=localhost\nDB_PORT=5432\nAPI_KEY=secret\nDB_NAME=testdb\n")
 
     result = parse(str(env_file), prefix_filter="DB_")
 
@@ -408,9 +389,7 @@ def test_export_shell(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     # Verify format
     assert output.startswith("export "), "Output must start with 'export '"
     assert "export VAR='simple'" in output, "Simple value must be export VAR='simple'"
-    assert "export QUOTED='it'\\''s a test'" in output, (
-        "Single quote must be escaped as '\\''"
-    )
+    assert "export QUOTED='it'\\''s a test'" in output, "Single quote must be escaped as '\\''"
     assert output.endswith("\n"), "Output must end with newline"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 

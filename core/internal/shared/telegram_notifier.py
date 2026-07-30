@@ -167,9 +167,7 @@ def get_me(
     """
     token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
-        logger.warning(
-            "[IMP:7][telegram_notifier][get_me] TELEGRAM_BOT_TOKEN not set"
-        )
+        logger.warning("[IMP:7][telegram_notifier][get_me] TELEGRAM_BOT_TOKEN not set")
         return False
 
     url = TELEGRAM_GETME_URL.format(token=token)
@@ -204,9 +202,7 @@ def get_me(
                         bot_username,
                     )
                     return True
-                logger.warning(
-                    "[IMP:7][telegram_notifier][get_me] getMe returned ok:false"
-                )
+                logger.warning("[IMP:7][telegram_notifier][get_me] getMe returned ok:false")
                 return False
             logger.warning(
                 "[IMP:7][telegram_notifier][get_me] HTTP %d from getMe",

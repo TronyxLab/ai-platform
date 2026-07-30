@@ -42,6 +42,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -51,7 +52,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
@@ -64,10 +65,8 @@ from core.internal.shared.exceptions import (
 # Import steps module for step implementations
 # PYTHONPATH must include lifecycle/ directory (set by node-lifecycle.sh).
 # Handle standalone execution (e.g., tests) by falling back to direct import.
-try:
-    from . import steps as _steps  # type: ignore[import]
-except ImportError:
-    pass  # type: ignore[import]  # standalone fallback
+with contextlib.suppress(ImportError):
+    from . import steps  # noqa: F401  # standalone fallback — module loads step implementations
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +152,7 @@ class BootstrapPhase:
     ALL_PHASES = INIT_PHASES | UPDATE_PHASES
 
     # ── Ordered phase lists (deterministic execution order) ──
-    INIT_PHASE_ORDER: list[str] = [
+    INIT_PHASE_ORDER: ClassVar[list[str]] = [
         SYSTEM_BOOTSTRAP,
         USER_ACCOUNTS,
         PLATFORM_SETUP,
@@ -165,7 +164,7 @@ class BootstrapPhase:
         CONVERGE_SERVICES,
     ]
 
-    UPDATE_PHASE_ORDER: list[str] = [
+    UPDATE_PHASE_ORDER: ClassVar[list[str]] = [
         SECRETS_UPDATE,
         NODE_CONFIG_UPDATE,
         REGISTRY_UPDATE,
@@ -1154,7 +1153,7 @@ class StateMachine:
         self.state.current_step = 0
         phase_list = self._step_list()  # now returns BootstrapPhase phase list
         # Always reset all phase entries to pending
-        for i, phase_val in enumerate(phase_list, 1):
+        for _i, phase_val in enumerate(phase_list, 1):
             self.state.steps[phase_val] = StepState(name=phase_val, status="pending")
         logger.info(
             "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s phases=%d",
@@ -1368,7 +1367,7 @@ def main() -> int:
                     if pv in migrated:
                         sm.state.steps[pv] = migrated[pv]
                 logger.info("[IMP:9][main] State migrated from old 23-step keys to 14-phase format")
-        except Exception as e:
+        except (json.JSONDecodeError, OSError, KeyError, ValueError, TypeError) as e:
             logger.warning("[IMP:7][main] State migration skipped: %s", e)
 
     # ── --force: clear state ──

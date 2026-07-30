@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 # ── Constants ───────────────────────────────────────────────────────────────
 
 # Performance thresholds
-DEV_THRESHOLD_MS: float = 50.0   # Development threshold (fast local machine)
-CI_THRESHOLD_MS: float = 100.0   # CI gate threshold (accounting for runner variability)
-NUM_VARIABLES: int = 1000         # Number of variables to generate
+DEV_THRESHOLD_MS: float = 50.0  # Development threshold (fast local machine)
+CI_THRESHOLD_MS: float = 100.0  # CI gate threshold (accounting for runner variability)
+NUM_VARIABLES: int = 1000  # Number of variables to generate
 
 # ── Fixture: generate 1000 variables ───────────────────────────────────────
 
@@ -71,7 +71,7 @@ def large_secrets_env_content() -> str:
 
         # Every 100th line: add a comment
         if i % 100 == 0:
-            lines.append(f"# Group {i // 100}: variables {i-99} to {i}")
+            lines.append(f"# Group {i // 100}: variables {i - 99} to {i}")
 
         # Every 200th var: unicode value
         if i % 200 == 0:
@@ -163,9 +163,7 @@ def test_parse_benchmark_1000_vars(
     # ── Step 2: Warm-up parse (cold cache) ──
     # Run once before timing to warm OS page cache (first parse may be slower)
     _warmup = parse(str(env_file))
-    logger.info(
-        "[IMP:7][benchmark] Warm-up parse returned %d entries", len(_warmup)
-    )
+    logger.info("[IMP:7][benchmark] Warm-up parse returned %d entries", len(_warmup))
 
     # ── Step 3: Timed parse ──
     # Use time.perf_counter() for high-precision timing
@@ -177,24 +175,14 @@ def test_parse_benchmark_1000_vars(
     elapsed_us = (end_time - start_time) * 1_000_000.0
 
     # ── Step 4: Verify correctness of parsed data ──
-    assert len(result) >= NUM_VARIABLES, (
-        f"parse() returned {len(result)} entries, expected >= {NUM_VARIABLES}"
-    )
+    assert len(result) >= NUM_VARIABLES, f"parse() returned {len(result)} entries, expected >= {NUM_VARIABLES}"
 
     # Spot-check known values
-    assert result.get("VAR_0042") == "", (
-        "VAR_0042 should have empty value"
-    )
-    assert result.get("VAR_0777") == "", (
-        "VAR_0777 (export empty) should have empty value"
-    )
-    assert result.get("VAR_0200") == "значение_200_日本語", (
-        "VAR_0200 (i%200==0) unicode value mismatch"
-    )
+    assert result.get("VAR_0042") == "", "VAR_0042 should have empty value"
+    assert result.get("VAR_0777") == "", "VAR_0777 (export empty) should have empty value"
+    assert result.get("VAR_0200") == "значение_200_日本語", "VAR_0200 (i%200==0) unicode value mismatch"
     # VAR_1000 is 1000 % 200 == 0 → unicode value from fixture logic
-    assert result.get("VAR_1000") == "значение_1000_日本語", (
-        "VAR_1000 (i%200==0) should have unicode value"
-    )
+    assert result.get("VAR_1000") == "значение_1000_日本語", "VAR_1000 (i%200==0) should have unicode value"
 
     logger.info(
         "[IMP:8][benchmark] Parsed %d entries in %.3f ms (%.1f µs/variable)",
@@ -210,7 +198,9 @@ def test_parse_benchmark_1000_vars(
     print(f"  File size:       {file_size} bytes")
     print(f"  Dev threshold:   < {DEV_THRESHOLD_MS} ms")
     print(f"  CI gate threshold: < {CI_THRESHOLD_MS} ms")
-    print(f"  Result:          {'PASS' if elapsed_ms < DEV_THRESHOLD_MS else 'WARN' if elapsed_ms < CI_THRESHOLD_MS else 'FAIL'}")
+    print(
+        f"  Result:          {'PASS' if elapsed_ms < DEV_THRESHOLD_MS else 'WARN' if elapsed_ms < CI_THRESHOLD_MS else 'FAIL'}"
+    )
 
     # ── Step 6: Assert performance threshold ──
     # Development assertion: < 50ms
@@ -273,9 +263,7 @@ def test_parse_benchmark_edge_cases(
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
     assert result == {}, "Empty file should return empty dict"
-    assert elapsed_ms < 10.0, (
-        f"Empty file parse took {elapsed_ms:.2f} ms, expected < 10 ms"
-    )
+    assert elapsed_ms < 10.0, f"Empty file parse took {elapsed_ms:.2f} ms, expected < 10 ms"
     logger.info(
         "[IMP:8][benchmark-edge] Empty file: %.3f ms (threshold: <10 ms)",
         elapsed_ms,
@@ -284,10 +272,7 @@ def test_parse_benchmark_edge_cases(
     # ── Edge case 2: Comments-only file ──
     comments_file = tmp_path / "comments_only.env"
     comments_file.write_text(
-        "# This is a comment file\n"
-        "# Another comment\n"
-        "# Yet another comment\n"
-        "# With a trailing comment\n",
+        "# This is a comment file\n# Another comment\n# Yet another comment\n# With a trailing comment\n",
         encoding="utf-8",
     )
 
@@ -296,9 +281,7 @@ def test_parse_benchmark_edge_cases(
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
     assert result == {}, "Comments-only file should return empty dict"
-    assert elapsed_ms < 10.0, (
-        f"Comments-only file parse took {elapsed_ms:.2f} ms, expected < 10 ms"
-    )
+    assert elapsed_ms < 10.0, f"Comments-only file parse took {elapsed_ms:.2f} ms, expected < 10 ms"
     logger.info(
         "[IMP:8][benchmark-edge] Comments-only: %.3f ms (threshold: <10 ms)",
         elapsed_ms,
@@ -313,17 +296,13 @@ def test_parse_benchmark_edge_cases(
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
     assert result == {"KEY": "value"}, "Single-line file parse mismatch"
-    assert elapsed_ms < 10.0, (
-        f"Single-line file parse took {elapsed_ms:.2f} ms, expected < 10 ms"
-    )
+    assert elapsed_ms < 10.0, f"Single-line file parse took {elapsed_ms:.2f} ms, expected < 10 ms"
     logger.info(
         "[IMP:8][benchmark-edge] Single-line: %.3f ms (threshold: <10 ms)",
         elapsed_ms,
     )
 
-    logger.info(
-        "[IMP:9][benchmark-edge] PASS — all edge cases parsed within threshold"
-    )
+    logger.info("[IMP:9][benchmark-edge] PASS — all edge cases parsed within threshold")
 
 
 # endregion FUNC_test_parse_benchmark_edge_cases

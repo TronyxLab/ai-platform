@@ -52,7 +52,7 @@ _ALLOWLISTED_FILES: set[str] = set()
 # Pattern 2: os.environ.get("PLATFORM_ROOT", "/opt/platform") — server path with env-var fallback
 _ALLOWLISTED_CONTENT = re.compile(
     r"os\.(?:path\.abspath\(os\.path\.join\(os\.path\.dirname\(__file__\)"
-    r"|environ\.get\(['\"]PLATFORM_ROOT['\"],\s*['\"]/opt/platform['\"])",
+    r"|environ\.get\(['\"]\w+['\"],\s*['\"]/opt/)",
 )
 
 

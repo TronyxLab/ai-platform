@@ -31,7 +31,7 @@ from pathlib import Path
 
 from core.internal.deploy.channels import ForcedCommandChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
-from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml
 
 # DevPlan 089 T11.5: DeployOrchestrator as sole deploy path
@@ -312,7 +312,15 @@ def deploy_via_orchestrator(
             result.error_info,
         )
         return False
-    except Exception as e:
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        ConfigNotFoundError,
+        ConfigParseError,
+        ConfigValidationError,
+    ) as e:
         logger.error(
             "[IMP:10][deploy_via_orchestrator][%s] Orchestrator error: %s",
             project_name,

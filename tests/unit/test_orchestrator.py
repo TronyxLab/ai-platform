@@ -16,18 +16,15 @@
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 
 from core.internal.deploy.audit_logger import AuditLogger
 from core.internal.deploy.channels import DeliveryChannel, DeliveryResult, Payload
 from core.internal.deploy.deploy_history import DeployHistory
-from core.internal.deploy.healthcheck_poller import HealthcheckPoller, HealthcheckResult
+from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 from core.internal.deploy.orchestrator import (
     DEFAULT_PROJECTS_BASE,
     DeployOrchestrator,
@@ -35,7 +32,6 @@ from core.internal.deploy.orchestrator import (
     DeployStatus,
     ProjectStatus,
 )
-
 
 # ── Mock Channel ──
 
@@ -75,6 +71,7 @@ def projects_base() -> str:
     path = tempfile.mkdtemp(prefix="test-projects-")
     yield path
     import shutil
+
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
 
@@ -175,7 +172,9 @@ class TestDeployOrchestrator:
     # region FUNC_test_deploy_channel_failure
     ## @purpose  Verify deploy() returns FAILED when channel delivery fails.
     def test_deploy_channel_failure(
-        self, orchestrator: DeployOrchestrator, failing_channel: MockChannel,
+        self,
+        orchestrator: DeployOrchestrator,
+        failing_channel: MockChannel,
     ) -> None:
         """Verify deploy fails on channel error."""
         result = orchestrator.deploy(project_name="test-project", channel=failing_channel)
@@ -187,7 +186,10 @@ class TestDeployOrchestrator:
     # region FUNC_test_deploy_many
     ## @purpose  Verify deploy_many processes all projects.
     def test_deploy_many(
-        self, orchestrator: DeployOrchestrator, mock_channel: MockChannel, projects_base: str,
+        self,
+        orchestrator: DeployOrchestrator,
+        mock_channel: MockChannel,
+        projects_base: str,
     ) -> None:
         """Verify deploy_many returns results for all projects."""
         # Create project dirs

@@ -51,9 +51,8 @@ if _SHARED_DIR not in _sys.path:
     _sys.path.insert(0, _SHARED_DIR)
 
 # Import shared modules (DevPlan 081B7 DRIFT elimination)
-from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login  # noqa: E402
-from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram  # noqa: E402
-
+from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login
+from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram
 
 # region FUNC__install_apt_packages
 ## @purpose — Idempotent apt package installation: check dpkg first, install only missing.

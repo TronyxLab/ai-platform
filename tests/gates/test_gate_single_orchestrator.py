@@ -23,7 +23,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sys
 
 import pytest
 
@@ -90,7 +89,7 @@ def _iter_py_files(root_dir: str) -> list[str]:
                 full = os.path.join(dirpath, fn)
                 rel = os.path.relpath(full, _CORE_DIR)
                 # Skip tests/ directory
-                if rel.startswith("../tests/") or rel.startswith("tests/"):
+                if rel.startswith(("../tests/", "tests/")):
                     continue
                 result.append(rel)
     return sorted(result)
@@ -110,10 +109,7 @@ def _iter_sh_files(root_dir: str) -> list[str]:
 
 def _is_path_allowed(filepath: str, allowed_patterns: list[str]) -> bool:
     """Check if filepath matches any allowed pattern (prefix match for dirs)."""
-    for pattern in allowed_patterns:
-        if filepath == pattern or filepath.startswith(pattern):
-            return True
-    return False
+    return any(filepath == pattern or filepath.startswith(pattern) for pattern in allowed_patterns)
 
 
 def _read_file_content(root: str, rel_path: str) -> str:
@@ -167,9 +163,11 @@ def test_layer1_python_docker_compose(caplog):
     if violations:
         msg = (
             f"[LAYER1] Found {len(violations)} Python file(s) calling `docker compose` "
-            f"outside allowed modules:\n  " + "\n  ".join(violations) +
-            "\nAllowed modules: " + ", ".join(ALLOWED_DOCKER_COMPOSE_MODULES) +
-            "\nAll docker compose operations MUST go through DeployOrchestrator or DeployEngine."
+            f"outside allowed modules:\n  "
+            + "\n  ".join(violations)
+            + "\nAllowed modules: "
+            + ", ".join(ALLOWED_DOCKER_COMPOSE_MODULES)
+            + "\nAll docker compose operations MUST go through DeployOrchestrator or DeployEngine."
         )
         logger.error("[IMP:10][LAYER1] FAIL: %s", msg)
         pytest.fail(msg)
@@ -199,8 +197,8 @@ def test_layer2_shell_scp_rsync(caplog):
     logger.info("[IMP:8][LAYER2] Scanning %d shell files in core/...", len(sh_files))
 
     # Pattern: scp or rsync command invocations
-    scp_pattern = re.compile(r'\bscp\b')
-    rsync_pattern = re.compile(r'\brsync\b')
+    scp_pattern = re.compile(r"\bscp\b")
+    rsync_pattern = re.compile(r"\brsync\b")
 
     for sh_file in sh_files:
         # Skip non-deploy files (modules, lib, scaffold)
@@ -221,9 +219,11 @@ def test_layer2_shell_scp_rsync(caplog):
     if violations:
         msg = (
             f"[LAYER2] Found {len(violations)} shell file(s) using `scp`/`rsync` "
-            f"outside allowed paths:\n  " + "\n  ".join(violations) +
-            "\nAllowed paths: " + ", ".join(ALLOWED_SCP_RSYNC_PATHS) +
-            "\nAll SCP/rsync operations MUST go through SCPChannel (channels.py) or bootstrap."
+            f"outside allowed paths:\n  "
+            + "\n  ".join(violations)
+            + "\nAllowed paths: "
+            + ", ".join(ALLOWED_SCP_RSYNC_PATHS)
+            + "\nAll SCP/rsync operations MUST go through SCPChannel (channels.py) or bootstrap."
         )
         logger.error("[IMP:10][LAYER2] FAIL: %s", msg)
         pytest.fail(msg)
@@ -255,7 +255,7 @@ def test_layer3_ssh_forced_command(caplog):
     # Pattern: command="..." in SSH context (force-command) — deploy-related only
     # We only flag forced-commands that contain deploy/deliver/receive keywords
     forced_cmd_pat = re.compile(r'command\s*=\s*["\']')
-    deploy_keyword_pat = re.compile(r'\b(deploy|deliver|receive|platform-)\b', re.IGNORECASE)
+    deploy_keyword_pat = re.compile(r"\b(deploy|deliver|receive|platform-)\b", re.IGNORECASE)
 
     for sh_file in sh_files:
         # Skip non-deploy files — lib/ and modules/ have SSH for non-deploy purposes
@@ -294,9 +294,11 @@ def test_layer3_ssh_forced_command(caplog):
     if violations:
         msg = (
             f"[LAYER3] Found {len(violations)} shell file(s) with ssh forced-command "
-            f"outside permitted channels:\n  " + "\n  ".join(violations) +
-            "\nPermitted commands: " + ", ".join(PERMITTED_FORCED_COMMANDS) +
-            "\nAll ssh forced-commands MUST use orchestrator_cli.py receive/deploy-many."
+            f"outside permitted channels:\n  "
+            + "\n  ".join(violations)
+            + "\nPermitted commands: "
+            + ", ".join(PERMITTED_FORCED_COMMANDS)
+            + "\nAll ssh forced-commands MUST use orchestrator_cli.py receive/deploy-many."
         )
         logger.error("[IMP:10][LAYER3] FAIL: %s", msg)
         pytest.fail(msg)

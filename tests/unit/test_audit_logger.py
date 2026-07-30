@@ -23,7 +23,6 @@ import pytest
 
 from core.internal.deploy.audit_logger import AuditLogger
 
-
 # ── Fixtures ──
 
 
@@ -44,6 +43,7 @@ def temp_log_dir() -> str:
     path = tempfile.mkdtemp(prefix="test-audit-dir-")
     yield path
     import shutil
+
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
 

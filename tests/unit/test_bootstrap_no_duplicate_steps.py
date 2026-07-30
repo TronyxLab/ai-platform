@@ -58,9 +58,7 @@ def _assert_grep_target_files() -> None:
     ## @complexity 1 — file existence checks
     """
     for name, path in _PATHS.items():
-        assert path.exists(), (
-            f"[IMP:10][preflight] Target file not found: {name} at {path}"
-        )
+        assert path.exists(), f"[IMP:10][preflight] Target file not found: {name} at {path}"
 
 
 # endregion HELPER__assert_grep_target_files
@@ -208,13 +206,9 @@ def test_no_shell_to_python_step_references(caplog: pytest.LogCaptureFixture) ->
         )
         for m in matches:
             logger.error("[IMP:10][test_no_shell_to_python_step_references]   %s", m)
-        pytest.fail(
-            f"SHELL_TO_PYTHON_STEP found in {len(matches)} file(s): {matches}"
-        )
+        pytest.fail(f"SHELL_TO_PYTHON_STEP found in {len(matches)} file(s): {matches}")
 
-    logger.info(
-        "[IMP:9][test_no_shell_to_python_step_references] PASS: No SHELL_TO_PYTHON_STEP in core/"
-    )
+    logger.info("[IMP:9][test_no_shell_to_python_step_references] PASS: No SHELL_TO_PYTHON_STEP in core/")
     _assert_ldd_imp9(caplog)
 
 
@@ -251,9 +245,7 @@ def test_no_step_underscore_functions_in_steps(caplog: pytest.LogCaptureFixture)
     pattern = r"^\s*def\s+_step_\w+\s*\("
     matches = re.findall(pattern, content, re.MULTILINE)
 
-    logger.info(
-        "[IMP:9][test_no_step_underscore_functions_in_steps] Check steps.py for _step_* function defs"
-    )
+    logger.info("[IMP:9][test_no_step_underscore_functions_in_steps] Check steps.py for _step_* function defs")
 
     if matches:
         logger.error(
@@ -262,13 +254,9 @@ def test_no_step_underscore_functions_in_steps(caplog: pytest.LogCaptureFixture)
         )
         for m in matches:
             logger.error("[IMP:10][test_no_step_underscore_functions_in_steps]   %s", m.strip())
-        pytest.fail(
-            f"steps.py contains {len(matches)} _step_* function definition(s)"
-        )
+        pytest.fail(f"steps.py contains {len(matches)} _step_* function definition(s)")
 
-    logger.info(
-        "[IMP:9][test_no_step_underscore_functions_in_steps] PASS: No _step_* functions in steps.py"
-    )
+    logger.info("[IMP:9][test_no_step_underscore_functions_in_steps] PASS: No _step_* functions in steps.py")
     _assert_ldd_imp9(caplog)
 
 
@@ -299,9 +287,7 @@ def test_no_done_file_references_in_bootstrap(caplog: pytest.LogCaptureFixture) 
     """
     caplog.set_level(logging.INFO)
 
-    assert BOOTSTRAP_DIR.is_dir(), (
-        f"[IMP:10][preflight] Bootstrap dir not found: {BOOTSTRAP_DIR}"
-    )
+    assert BOOTSTRAP_DIR.is_dir(), f"[IMP:10][preflight] Bootstrap dir not found: {BOOTSTRAP_DIR}"
 
     # Collect all .done references excluding common false positives
     EXCLUDED_PATTERNS = (".done.log", ".done.pid")
@@ -320,7 +306,7 @@ def test_no_done_file_references_in_bootstrap(caplog: pytest.LogCaptureFixture) 
                 stripped = line.strip()
                 if any(excl in stripped for excl in EXCLUDED_PATTERNS):
                     continue
-                if stripped.startswith("#") or stripped.startswith("//"):
+                if stripped.startswith(("#", "//")):
                     continue
                 violating_lines.append(f"{fpath}: {stripped}")
         except (OSError, UnicodeDecodeError) as exc:
@@ -338,14 +324,9 @@ def test_no_done_file_references_in_bootstrap(caplog: pytest.LogCaptureFixture) 
         )
         for vl in violating_lines:
             logger.error("[IMP:10][test_no_done_file_references_in_bootstrap]   %s", vl)
-        pytest.fail(
-            f"Found {len(violating_lines)} .done reference(s) in bootstrap/:\n"
-            + "\n".join(violating_lines)
-        )
+        pytest.fail(f"Found {len(violating_lines)} .done reference(s) in bootstrap/:\n" + "\n".join(violating_lines))
 
-    logger.info(
-        "[IMP:9][test_no_done_file_references_in_bootstrap] PASS: No .done checkpoint files"
-    )
+    logger.info("[IMP:9][test_no_done_file_references_in_bootstrap] PASS: No .done checkpoint files")
     _assert_ldd_imp9(caplog)
 
 
@@ -390,11 +371,12 @@ def test_no_step_1_step_18_in_node_lifecycle(caplog: pytest.LogCaptureFixture) -
         "checkpoint_reset_all",
     ]
 
-    violations: list[str] = []
-    for line_num, line in enumerate(content.splitlines(), start=1):
-        for pat in forbidden_patterns:
-            if pat in line and not line.strip().startswith("#"):
-                violations.append(f"  line {line_num}: {line.strip()}  (pattern: {pat})")
+    violations: list[str] = [
+        f"  line {line_num}: {line.strip()}  (pattern: {pat})"
+        for line_num, line in enumerate(content.splitlines(), start=1)
+        for pat in forbidden_patterns
+        if pat in line and not line.strip().startswith("#")
+    ]
 
     logger.info(
         "[IMP:9][test_no_step_1_step_18_in_node_lifecycle] Check node-lifecycle.sh for index-addressed step patterns"
@@ -408,13 +390,10 @@ def test_no_step_1_step_18_in_node_lifecycle(caplog: pytest.LogCaptureFixture) -
         for v in violations:
             logger.error("[IMP:10]   %s", v)
         pytest.fail(
-            f"node-lifecycle.sh contains {len(violations)} index-addressed step pattern(s):\n"
-            + "\n".join(violations)
+            f"node-lifecycle.sh contains {len(violations)} index-addressed step pattern(s):\n" + "\n".join(violations)
         )
 
-    logger.info(
-        "[IMP:9][test_no_step_1_step_18_in_node_lifecycle] PASS: No index-addressed step patterns"
-    )
+    logger.info("[IMP:9][test_no_step_1_step_18_in_node_lifecycle] PASS: No index-addressed step patterns")
     _assert_ldd_imp9(caplog)
 
 
@@ -459,9 +438,7 @@ def test_node_lifecycle_under_80_loc(caplog: pytest.LogCaptureFixture) -> None:
             "[IMP:10][test_node_lifecycle_under_80_loc] FAIL: %d lines exceeds 80 LOC limit",
             total_lines,
         )
-        pytest.fail(
-            f"node-lifecycle.sh has {total_lines} lines, expected < 80 (thin facade)"
-        )
+        pytest.fail(f"node-lifecycle.sh has {total_lines} lines, expected < 80 (thin facade)")
 
     logger.info(
         "[IMP:9][test_node_lifecycle_under_80_loc] PASS: node-lifecycle.sh is %d lines (<80)",

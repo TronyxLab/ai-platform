@@ -53,7 +53,7 @@ def _is_violation(line: str) -> bool:
     if len(parts) >= 3:
         content = parts[2].strip()
         # If the line content starts with #, it's a comment/documentation line
-        if content.startswith("#") or content.startswith("##"):
+        if content.startswith(("#", "##")):
             return False
 
     return True
@@ -72,7 +72,9 @@ def test_no_yaml_safe_load_node(caplog) -> None:
 
     result = subprocess.run(
         ["grep", "-rn", r"yaml\.safe_load.*node", str(INTERNAL_DIR)],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
     lines = result.stdout.strip().split("\n") if result.stdout.strip() else []

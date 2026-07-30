@@ -84,8 +84,7 @@ def test_update_mode_resolves_node_yaml(caplog) -> None:
     )
     if resolver_pos >= 0 and delegate_pos >= 0:
         assert resolver_pos < delegate_pos, (
-            f"[IMP:9][test] FAIL: resolve_node_yaml ({resolver_pos}) must precede "
-            f"_delegate ({delegate_pos})"
+            f"[IMP:9][test] FAIL: resolve_node_yaml ({resolver_pos}) must precede _delegate ({delegate_pos})"
         )
     logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 5 PASS: resolution before _delegate")
 
@@ -123,18 +122,12 @@ def test_dry_run_flag_accepted(caplog) -> None:
     # ── Check 2: state_machine.py has --dry-run handling ──
     sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
     sm_content = sm_path.read_text()
-    assert "dry_run" in sm_content.lower(), (
-        "[IMP:9][test] FAIL: state_machine.py must handle --dry-run"
-    )
-    assert "dry_run_plan" in sm_content, (
-        "[IMP:9][test] FAIL: state_machine.py must have dry_run_plan method"
-    )
+    assert "dry_run" in sm_content.lower(), "[IMP:9][test] FAIL: state_machine.py must handle --dry-run"
+    assert "dry_run_plan" in sm_content, "[IMP:9][test] FAIL: state_machine.py must have dry_run_plan method"
     logger.info("[IMP:8][test_dry_run_flag_accepted] Check 2 PASS: state_machine.py handles dry-run")
 
     # ── Check 3: Init mode delegates via _delegate with --node-name and --node-yaml ──
-    assert "_delegate --mode init" in content, (
-        "[IMP:9][test] FAIL: init mode must delegate to _delegate --mode init"
-    )
+    assert "_delegate --mode init" in content, "[IMP:9][test] FAIL: init mode must delegate to _delegate --mode init"
     logger.info("[IMP:8][test_dry_run_flag_accepted] Check 3 PASS: init mode delegates to state_machine")
 
     # ── Check 4: Update mode delegates via _delegate with --node-name and --node-yaml ──
@@ -403,9 +396,7 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     # ── Check 2: state_machine.py has execute_phase for certificates ──
     sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
     sm_content = sm_path.read_text()
-    assert "execute_phase" in sm_content, (
-        "[IMP:9][test] FAIL: state_machine.py must have execute_phase()"
-    )
+    assert "execute_phase" in sm_content, "[IMP:9][test] FAIL: state_machine.py must have execute_phase()"
     assert "CERTIFICATES" in sm_content or "certificates" in sm_content, (
         "[IMP:9][test] FAIL: state_machine.py must handle certificates phase"
     )
@@ -414,9 +405,7 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     # ── Check 3: phases.py has phase_certificates with ssl_provision_via_orchestrator ──
     phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
     phases_content = phases_path.read_text()
-    assert "phase_certificates" in phases_content, (
-        "[IMP:9][test] FAIL: phases.py must have phase_certificates()"
-    )
+    assert "phase_certificates" in phases_content, "[IMP:9][test] FAIL: phases.py must have phase_certificates()"
     assert "_ssl_provision_via_orchestrator" in phases_content, (
         "[IMP:9][test] FAIL: phase_certificates must call _ssl_provision_via_orchestrator"
     )
@@ -448,9 +437,7 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     assert "phase_secrets_provision" in phases_content, (
         "[IMP:9][test] FAIL: phases.py must have phase_secrets_provision"
     )
-    assert "phase_certificates" in phases_content, (
-        "[IMP:9][test] FAIL: phases.py must have phase_certificates"
-    )
+    assert "phase_certificates" in phases_content, "[IMP:9][test] FAIL: phases.py must have phase_certificates"
     logger.info(
         "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 7 PASS: phase_secrets and phase_cert in phases.py"
     )
@@ -556,9 +543,7 @@ def test_checkpoint_step_uses_content_hash(caplog) -> None:
     assert "execute_grouped_phase" in sm_content, (
         "FAIL: state_machine.py must have execute_grouped_phase for sub-step idempotency"
     )
-    assert "resume_phase" in sm_content, (
-        "FAIL: state_machine.py must have resume_phase for partial failure recovery"
-    )
+    assert "resume_phase" in sm_content, "FAIL: state_machine.py must have resume_phase for partial failure recovery"
     logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 2 PASS: state_machine.py has hash-check")
 
     # ── Check 3: phases.py has _install_acme and other phase functions ──
@@ -581,9 +566,7 @@ def test_checkpoint_step_uses_content_hash(caplog) -> None:
     logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 5 PASS: RESUME+FORCE modes")
 
     # ── Check 6: _phase_dependency_graph defined in state_machine.py ──
-    assert "_phase_dependency_graph" in sm_content, (
-        "FAIL: state_machine.py must have _phase_dependency_graph"
-    )
+    assert "_phase_dependency_graph" in sm_content, "FAIL: state_machine.py must have _phase_dependency_graph"
     logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 6 PASS: dependency graph present")
 
     logger.info("[IMP:9][test_checkpoint_step_uses_content_hash] ALL CHECKS PASS")
@@ -728,11 +711,19 @@ def test_init_has_more_steps_than_update(caplog) -> None:
     # Phase values are ALL_CAPS strings like SYSTEM_BOOTSTRAP, USER_ACCOUNTS, etc.
     # They appear as: SYSTEM_BOOTSTRAP = "system_bootstrap"  (assignment pattern)
     import re
+
     phase_assignments = re.findall(r'^    ([A-Z_]+) = "[a-z_]+"', sm_content, re.MULTILINE)
     # Filter out non-phase keywords like INIT_PHASES, UPDATE_PHASES, ALL_PHASES
-    phase_names = [p for p in phase_assignments if p not in (
-        "INIT_PHASES", "UPDATE_PHASES", "ALL_PHASES",
-    )]
+    phase_names = [
+        p
+        for p in phase_assignments
+        if p
+        not in (
+            "INIT_PHASES",
+            "UPDATE_PHASES",
+            "ALL_PHASES",
+        )
+    ]
     total_count = len(phase_names)
 
     logger.info(
@@ -747,10 +738,18 @@ def test_init_has_more_steps_than_update(caplog) -> None:
 
     # ── Count init vs update phases ──
     # Check the known sets: INIT mode has SYSTEM_BOOTSTRAP through CONVERGE_SERVICES
-    init_phases = [p for p in phase_names if p not in (
-        "SECRETS_UPDATE", "NODE_CONFIG_UPDATE", "REGISTRY_UPDATE",
-        "DEPLOY_UPDATE", "CONVERGE_UPDATE",
-    )]
+    init_phases = [
+        p
+        for p in phase_names
+        if p
+        not in (
+            "SECRETS_UPDATE",
+            "NODE_CONFIG_UPDATE",
+            "REGISTRY_UPDATE",
+            "DEPLOY_UPDATE",
+            "CONVERGE_UPDATE",
+        )
+    ]
     update_phases = [p for p in phase_names if p not in init_phases]
     init_count = len(init_phases)
     update_count = len(update_phases)
@@ -758,9 +757,7 @@ def test_init_has_more_steps_than_update(caplog) -> None:
     logger.info("[IMP:8][test_init_has_more_steps] INIT=%d UPDATE=%d", init_count, update_count)
 
     # ── Check 2: init has > update phases ──
-    assert init_count > update_count, (
-        f"FAIL: init ({init_count}) must have MORE phases than update ({update_count})"
-    )
+    assert init_count > update_count, f"FAIL: init ({init_count}) must have MORE phases than update ({update_count})"
     logger.info("[IMP:8][test_init_has_more_steps] Check 2 PASS: init(%d) > update(%d)", init_count, update_count)
 
     # ── Check 3: init has 9 phases ──
@@ -772,5 +769,6 @@ def test_init_has_more_steps_than_update(caplog) -> None:
     logger.info("[IMP:8][test_init_has_more_steps] Check 4 PASS: update has 5 phases")
 
     logger.info("[IMP:9][test_init_has_more_steps_than_update] ALL CHECKS PASS")
+
 
 # endregion FUNC_test_init_has_more_steps_than_update

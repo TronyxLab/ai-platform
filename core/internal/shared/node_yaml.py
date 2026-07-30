@@ -912,16 +912,15 @@ class NodeYaml:
         if not isinstance(sc, dict):
             logger.info("[IMP:7][NodeYaml.get_secrets_config] 'secrets' not a dict, returning defaults")
             return SecretsConfig()
-        required: list[SecretEntry] = []
-        for entry in sc.get("required", []):
-            if isinstance(entry, dict):
-                required.append(
-                    SecretEntry(
-                        name=entry.get("name", ""),
-                        env_var=entry.get("env_var", ""),
-                        description=entry.get("description", ""),
-                    )
-                )
+        required: list[SecretEntry] = [
+            SecretEntry(
+                name=entry.get("name", ""),
+                env_var=entry.get("env_var", ""),
+                description=entry.get("description", ""),
+            )
+            for entry in sc.get("required", [])
+            if isinstance(entry, dict)
+        ]
         cfg = SecretsConfig(
             enc_file=sc.get("enc_file", ""),
             required=required,
@@ -1322,7 +1321,7 @@ class NodeYaml:
             return
         except ImportError:
             logger.info("[IMP:7][NodeYaml._write_back] ruamel.yaml not available, using PyYAML")
-        except Exception as e:
+        except (yaml.YAMLError, OSError) as e:
             logger.warning("[IMP:7][NodeYaml._write_back] ruamel.yaml failed (%s), falling back to PyYAML", e)
 
         # Fallback: PyYAML

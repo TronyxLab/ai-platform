@@ -740,7 +740,9 @@ def _source_secrets_env(secrets_env_path: str) -> None:
         for proxy_var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"):
             os.environ.pop(proxy_var, None)
 
-        logger.info("[IMP:9][cert_orchestrator] Secrets loaded from %s (%d entries matched)", secrets_env_path, len(parsed))
+        logger.info(
+            "[IMP:9][cert_orchestrator] Secrets loaded from %s (%d entries matched)", secrets_env_path, len(parsed)
+        )
 
         # ══════════════════════════════════════════════════════════
         # Validate WEBNAMES_API_KEY format — must include leading asterisk

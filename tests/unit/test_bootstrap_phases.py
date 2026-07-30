@@ -37,7 +37,7 @@ from tests._conftest.ldd import ldd_trajectory
 # ── Import the module under test ──
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "lifecycle"
 sys.path.insert(0, str(_MODULE_DIR))
-import state_machine as sm  # noqa: E402
+import state_machine as sm
 
 # Re-export for concise test references
 BootstrapPhase = sm.BootstrapPhase
@@ -93,7 +93,10 @@ def test_bootstrap_phase_enum_has_14_values(caplog) -> None:
     assert len(BootstrapPhase.INIT_PHASES) == 9
     assert len(BootstrapPhase.UPDATE_PHASES) == 5
     logger.critical("[IMP:9][test] BootstrapPhase.phase_count() = 14 — OK")
+
+
 # endregion FUNC_test_bootstrap_phase_enum_has_14_values
+
 
 # 🧪 TRAP[TEST] · Regression · All 14 phase value strings match canonical names
 # · Scenario: Iterate ALL_PHASES → verify each value string is expected
@@ -103,34 +106,40 @@ def test_bootstrap_phase_enum_has_14_values(caplog) -> None:
 @ldd_trajectory
 def test_bootstrap_phase_enum_values(caplog) -> None:
     """All 14 phase values should have canonical string names."""
-    expected_init = frozenset({
-        "system_bootstrap",
-        "user_accounts",
-        "platform_setup",
-        "secrets_provision",
-        "node_configuration",
-        "registry_auth",
-        "certificates",
-        "deploy_services",
-        "converge_services",
-    })
-    expected_update = frozenset({
-        "secrets_update",
-        "node_config_update",
-        "registry_update",
-        "deploy_update",
-        "converge_update",
-    })
-    assert BootstrapPhase.INIT_PHASES == expected_init, (
+    expected_init = frozenset(
+        {
+            "system_bootstrap",
+            "user_accounts",
+            "platform_setup",
+            "secrets_provision",
+            "node_configuration",
+            "registry_auth",
+            "certificates",
+            "deploy_services",
+            "converge_services",
+        }
+    )
+    expected_update = frozenset(
+        {
+            "secrets_update",
+            "node_config_update",
+            "registry_update",
+            "deploy_update",
+            "converge_update",
+        }
+    )
+    assert expected_init == BootstrapPhase.INIT_PHASES, (
         f"INIT_PHASES mismatch: {BootstrapPhase.INIT_PHASES - expected_init} extra, "
         f"{expected_init - BootstrapPhase.INIT_PHASES} missing"
     )
-    assert BootstrapPhase.UPDATE_PHASES == expected_update, (
+    assert expected_update == BootstrapPhase.UPDATE_PHASES, (
         f"UPDATE_PHASES mismatch: {BootstrapPhase.UPDATE_PHASES - expected_update} extra, "
         f"{expected_update - BootstrapPhase.UPDATE_PHASES} missing"
     )
     assert len(BootstrapPhase.ALL_PHASES) == 14
     logger.critical("[IMP:9][test] All 14 BootstrapPhase values verified — OK")
+
+
 # endregion FUNC_test_bootstrap_phase_enum_values
 
 # endregion
@@ -168,7 +177,10 @@ def test_phase_dependency_graph_has_all_phases(caplog) -> None:
     )
     assert len(graph_phases) == 13, f"Expected 13 explicit phases in graph, got {len(graph_phases)}"
     logger.critical("[IMP:9][test] _phase_dependency_graph has all 14 phases (13 keys + φ1 root) — OK")
+
+
 # endregion FUNC_test_phase_dependency_graph_has_all_phases
+
 
 # 🧪 TRAP[TEST] · Regression · Converge phases depend on deploy (φ8.5←φ8, φ13←φ12)
 # · Scenario: CONVERGE_SERVICES depends on DEPLOY_SERVICES
@@ -182,9 +194,7 @@ def test_phase_dependency_graph_converge(caplog) -> None:
     φ13 (converge_update) should depend on φ12 (deploy_update)."""
     # φ8.5 ← φ8 (converge depends on deploy)
     converge_deps = _phase_dependency_graph[BootstrapPhase.CONVERGE_SERVICES]
-    assert BootstrapPhase.DEPLOY_SERVICES in converge_deps, (
-        f"φ8.5 should depend on φ8, got deps: {converge_deps}"
-    )
+    assert BootstrapPhase.DEPLOY_SERVICES in converge_deps, f"φ8.5 should depend on φ8, got deps: {converge_deps}"
     assert len(converge_deps) == 1, f"φ8.5 should have exactly 1 dependency, got {len(converge_deps)}"
 
     # φ13 ← φ12 (converge_update depends on deploy_update)
@@ -195,7 +205,10 @@ def test_phase_dependency_graph_converge(caplog) -> None:
     assert len(converge_update_deps) == 1, f"φ13 should have exactly 1 dependency, got {len(converge_update_deps)}"
 
     logger.critical("[IMP:9][test] Converge dependencies verified — φ8.5←φ8, φ13←φ12 — OK")
+
+
 # endregion FUNC_test_phase_dependency_graph_converge
+
 
 # 🧪 TRAP[TEST] · Regression · Update deploy phase depends on secrets and registry (φ12←φ9,φ11)
 # · Scenario: DEPLOY_UPDATE depends on SECRETS_UPDATE and REGISTRY_UPDATE
@@ -219,6 +232,8 @@ def test_phase_dependency_graph_update(caplog) -> None:
     assert _phase_dependency_graph[BootstrapPhase.REGISTRY_UPDATE] == set(), "φ11 should have no deps"
 
     logger.critical("[IMP:9][test] Update dependency edges verified — φ12←φ9,φ11 — OK")
+
+
 # endregion FUNC_test_phase_dependency_graph_update
 
 # endregion
@@ -237,7 +252,9 @@ def test_phase_dependency_graph_update(caplog) -> None:
 # region FUNC_test_precondition_check_system_bootstrap_root
 @ldd_trajectory
 def test_precondition_check_system_bootstrap_root(
-    caplog, state: sm.BootstrapState, monkeypatch,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
 ) -> None:
     """φ1 precondition should pass when running as root with apt-get/dpkg available."""
     monkeypatch.setattr(os, "geteuid", lambda: 0)
@@ -254,6 +271,8 @@ def test_precondition_check_system_bootstrap_root(
         assert any("dpkg" in str(args) for args in call_args), "dpkg check expected"
 
     logger.critical("[IMP:9][test] φ1 precondition passed with root + tools — OK")
+
+
 # endregion FUNC_test_precondition_check_system_bootstrap_root
 
 
@@ -264,7 +283,9 @@ def test_precondition_check_system_bootstrap_root(
 # region FUNC_test_precondition_check_system_bootstrap_no_root
 @ldd_trajectory
 def test_precondition_check_system_bootstrap_no_root(
-    caplog, state: sm.BootstrapState, monkeypatch,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
 ) -> None:
     """φ1 precondition should fail when not running as root (euid != 0)."""
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
@@ -272,10 +293,10 @@ def test_precondition_check_system_bootstrap_no_root(
     with pytest.raises(PhasePreconditionError) as excinfo:
         state.precondition_check(BootstrapPhase.SYSTEM_BOOTSTRAP)
 
-    assert "euid=0" in str(excinfo.value), (
-        f"Error should mention euid=0, got: {excinfo.value}"
-    )
+    assert "euid=0" in str(excinfo.value), f"Error should mention euid=0, got: {excinfo.value}"
     logger.critical("[IMP:9][test] φ1 precondition failed as non-root — OK")
+
+
 # endregion FUNC_test_precondition_check_system_bootstrap_no_root
 
 # endregion
@@ -293,7 +314,9 @@ def test_precondition_check_system_bootstrap_no_root(
 # region FUNC_test_precondition_check_secrets_with_age_key
 @ldd_trajectory
 def test_precondition_check_secrets_with_age_key(
-    caplog, state: sm.BootstrapState, monkeypatch,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
 ) -> None:
     """φ4 precondition should pass when AGE_SECRET_KEY env var is present."""
     monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-1234567890abcdef")
@@ -302,6 +325,8 @@ def test_precondition_check_secrets_with_age_key(
     state.precondition_check(BootstrapPhase.SECRETS_PROVISION)
 
     logger.critical("[IMP:9][test] φ4 precondition passed with AGE_SECRET_KEY — OK")
+
+
 # endregion FUNC_test_precondition_check_secrets_with_age_key
 
 
@@ -313,7 +338,9 @@ def test_precondition_check_secrets_with_age_key(
 # region FUNC_test_precondition_check_secrets_no_age_key
 @ldd_trajectory
 def test_precondition_check_secrets_no_age_key(
-    caplog, state: sm.BootstrapState, monkeypatch,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
 ) -> None:
     """φ4 precondition should fail when no age key env var or file exists."""
     monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
@@ -332,10 +359,10 @@ def test_precondition_check_secrets_no_age_key(
     with pytest.raises(PhasePreconditionError) as excinfo:
         state.precondition_check(BootstrapPhase.SECRETS_PROVISION)
 
-    assert "AGE_SECRET_KEY" in str(excinfo.value), (
-        f"Error should mention AGE_SECRET_KEY, got: {excinfo.value}"
-    )
+    assert "AGE_SECRET_KEY" in str(excinfo.value), f"Error should mention AGE_SECRET_KEY, got: {excinfo.value}"
     logger.critical("[IMP:9][test] φ4 precondition failed without age key — OK")
+
+
 # endregion FUNC_test_precondition_check_secrets_no_age_key
 
 # endregion
@@ -354,7 +381,10 @@ def test_precondition_check_secrets_no_age_key(
 # region FUNC_test_precondition_check_node_config_success
 @ldd_trajectory
 def test_precondition_check_node_config_success(
-    caplog, state: sm.BootstrapState, monkeypatch, tmp_path: Path,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     """φ5 precondition should pass when NODE_YAML points to an existing file."""
     node_yaml = tmp_path / "node.yaml"
@@ -364,6 +394,8 @@ def test_precondition_check_node_config_success(
     state.precondition_check(BootstrapPhase.NODE_CONFIGURATION)
 
     logger.critical("[IMP:9][test] φ5 precondition passed with valid NODE_YAML — OK")
+
+
 # endregion FUNC_test_precondition_check_node_config_success
 
 
@@ -374,7 +406,9 @@ def test_precondition_check_node_config_success(
 # region FUNC_test_precondition_check_node_config_no_yaml
 @ldd_trajectory
 def test_precondition_check_node_config_no_yaml(
-    caplog, state: sm.BootstrapState, monkeypatch,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
 ) -> None:
     """φ5 precondition should fail when NODE_YAML path does not exist."""
     monkeypatch.setenv("NODE_YAML", "/tmp/non-existent-node.yaml")
@@ -382,10 +416,10 @@ def test_precondition_check_node_config_no_yaml(
     with pytest.raises(PhasePreconditionError) as excinfo:
         state.precondition_check(BootstrapPhase.NODE_CONFIGURATION)
 
-    assert "NODE_YAML" in str(excinfo.value), (
-        f"Error should mention NODE_YAML, got: {excinfo.value}"
-    )
+    assert "NODE_YAML" in str(excinfo.value), f"Error should mention NODE_YAML, got: {excinfo.value}"
     logger.critical("[IMP:9][test] φ5 precondition failed without valid NODE_YAML — OK")
+
+
 # endregion FUNC_test_precondition_check_node_config_no_yaml
 
 # endregion
@@ -403,7 +437,9 @@ def test_precondition_check_node_config_no_yaml(
 # region FUNC_test_precondition_check_registry_auth
 @ldd_trajectory
 def test_precondition_check_registry_auth(
-    caplog, state: sm.BootstrapState, monkeypatch,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
 ) -> None:
     """φ6 precondition should not raise when GHCR_PULL_TOKEN is missing — only warn."""
     monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
@@ -411,15 +447,14 @@ def test_precondition_check_registry_auth(
     state.precondition_check(BootstrapPhase.REGISTRY_AUTH)
 
     # Verify a WARNING-level log was emitted about missing token
-    warning_found = any(
-        "GHCR_PULL_TOKEN" in r.message and r.levelname == "WARNING"
-        for r in caplog.records
-    )
+    warning_found = any("GHCR_PULL_TOKEN" in r.message and r.levelname == "WARNING" for r in caplog.records)
     assert warning_found, (
         "Expected a WARNING log about missing GHCR_PULL_TOKEN, "
         f"records: {[(r.levelname, r.message) for r in caplog.records]}"
     )
     logger.critical("[IMP:9][test] φ6 precondition passed with GHCR_PULL_TOKEN warning — OK")
+
+
 # endregion FUNC_test_precondition_check_registry_auth
 
 # endregion
@@ -438,7 +473,10 @@ def test_precondition_check_registry_auth(
 # region FUNC_test_precondition_check_deploy_success
 @ldd_trajectory
 def test_precondition_check_deploy_success(
-    caplog, state: sm.BootstrapState, monkeypatch, tmp_core_dir: Path,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
+    tmp_core_dir: Path,
 ) -> None:
     """φ8 precondition should pass when deploy-modules.sh exists and Docker is running."""
     monkeypatch.setenv("CORE_DIR", str(tmp_core_dir))
@@ -451,6 +489,8 @@ def test_precondition_check_deploy_success(
         state.precondition_check(BootstrapPhase.DEPLOY_SERVICES)
 
     logger.critical("[IMP:9][test] φ8 precondition passed — deploy-modules.sh + docker OK")
+
+
 # endregion FUNC_test_precondition_check_deploy_success
 
 
@@ -462,7 +502,10 @@ def test_precondition_check_deploy_success(
 # region FUNC_test_precondition_check_deploy_no_docker
 @ldd_trajectory
 def test_precondition_check_deploy_no_docker(
-    caplog, state: sm.BootstrapState, monkeypatch, tmp_core_dir: Path,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
+    tmp_core_dir: Path,
 ) -> None:
     """φ8 precondition should fail when Docker daemon is not running."""
     monkeypatch.setenv("CORE_DIR", str(tmp_core_dir))
@@ -476,10 +519,10 @@ def test_precondition_check_deploy_no_docker(
         with pytest.raises(PhasePreconditionError) as excinfo:
             state.precondition_check(BootstrapPhase.DEPLOY_SERVICES)
 
-    assert "Docker" in str(excinfo.value), (
-        f"Error should mention Docker, got: {excinfo.value}"
-    )
+    assert "Docker" in str(excinfo.value), f"Error should mention Docker, got: {excinfo.value}"
     logger.critical("[IMP:9][test] φ8 precondition failed — Docker not running — OK")
+
+
 # endregion FUNC_test_precondition_check_deploy_no_docker
 
 # endregion
@@ -499,7 +542,10 @@ def test_precondition_check_deploy_no_docker(
 # region FUNC_test_precondition_check_update_phases
 @ldd_trajectory
 def test_precondition_check_update_phases(
-    caplog, state: sm.BootstrapState, monkeypatch, tmp_core_dir: Path,
+    caplog,
+    state: sm.BootstrapState,
+    monkeypatch,
+    tmp_core_dir: Path,
 ) -> None:
     """φ9-φ13 update phases should pass precondition_check without raising errors.
 
@@ -523,6 +569,8 @@ def test_precondition_check_update_phases(
     state.precondition_check(BootstrapPhase.CONVERGE_UPDATE)
 
     logger.critical("[IMP:9][test] All update phases (φ9-φ13) passed precondition_check — OK")
+
+
 # endregion FUNC_test_precondition_check_update_phases
 
 # endregion

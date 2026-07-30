@@ -29,6 +29,8 @@ import os
 import sys
 from typing import Any
 
+import yaml
+
 # ── logging setup ──────────────────────────────────────────────────────────────
 
 
@@ -102,7 +104,7 @@ def generate_catalog(projects_root: str, catalog_file: str) -> int:
                 entry: dict[str, Any] = _parse_project_yaml(yaml_file, org_dir, proj_dir)
                 catalog.append(entry)
                 log.log(8, "%s/%s (type=%s)", org_dir, proj_dir, entry["type"], extra={"imp_level": 8})  # type: ignore[call-arg]
-            except Exception as exc:
+            except (OSError, yaml.YAMLError, AttributeError) as exc:
                 log.log(6, "WARN: %s: %s", yaml_file, exc, extra={"imp_level": 6})  # type: ignore[call-arg]
 
     # ∑ sort and persist

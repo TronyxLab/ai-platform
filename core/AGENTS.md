@@ -40,15 +40,22 @@
 | `make test` | Запуск тестов | make test [MARKER=...] | make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all] |
 | `make test-inventory-sync` | Синхронизация test inventory | make test-inventory-sync | tests/tools/sync_inventory.py |
 | `make gate` | Production gate | make gate [MODE=fast|full] | make gate [MODE=fast|full] |
-| `make check-manifests` | Проверка актуальности сгенерированных манифестов | make check-manifests | git diff --exit-code |
+| `make check-manifests` | Проверка актуальности сгенерированных манифестов | make check-manifests | --check for all 6 generators (G1-G6) — byte-level comparison |
 | `make generate-manifests` | Генерация всех манифестов | make generate-manifests | make generate-manifests |
+| `make generate-secrets-manifest` | Генерация secrets-manifest.yaml | make generate-secrets-manifest | python3 core/internal/scripts/generate_secrets_manifest.py |
+| `make generate-platform-env` | Генерация platform-env.yaml + Python env files | make generate-platform-env | python3 core/internal/scripts/generate_platform_env.py |
+| `make generate-env-example` | Генерация .env.example | make generate-env-example | python3 core/internal/scripts/sync_env_defaults.py → .env.example |
+| `make generate-entrypoint-manifest` | Генерация entrypoint-manifest.yaml | make generate-entrypoint-manifest | python3 core/internal/scripts/generate_entrypoint_manifest.py |
+| `make generate-agents-md` | Генерация core/AGENTS.md | make generate-agents-md | python3 core/internal/scripts/generate_agents_md.py → core/AGENTS.md |
+| `make generate-litellm-config` | Генерация litellm-config.yml | make generate-litellm-config | python3 core/internal/llm/config_renderer.py → litellm-config.yml |
+| `make generate-manifests-atomic` | Атомарная генерация всех манифестов | make generate-manifests-atomic | mktemp → Chain A+B+C → mv |
 | `make sync-env-defaults` | Генерация .env.example из SoT | make sync-env-defaults | core/internal/scripts/sync_env_defaults.py → .env.example |
 | `make check-env-defaults` | Проверка актуальности .env.example | make check-env-defaults | core/internal/scripts/sync_env_defaults.py --check |
 | `make new-project` | Создание проекта из шаблона | make new-project NAME=<n> TEMPLATE=<t> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |
 | `make new-context` | Создание контекста деплоя | make new-context NODE=<n> | core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh |
-| `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=<name>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen-env-platform.sh |
+| `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=<name>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py |
 | `make remove-project` | Удаление проекта из lifecycle | make remove-project NAME=<name> | core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh |
-| `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=<dir> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen-env-platform.sh |
+| `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=<dir> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen_env_platform.py |
 | `make project-list` | Список проектов | make project-list [NODE=<node>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |
 | `make project-status` | Статус проекта | make project-status NAME=<name> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
 | `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=<name> | core/internal/scaffold/add-vhost.sh --render-all --node <n> |

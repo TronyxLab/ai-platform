@@ -17,11 +17,9 @@
 ## @changes 2026-07-30 · Created — DevPlan 090 gate
 # endregion MODULE_CONTRACT
 
-import importlib
 import logging
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -30,9 +28,7 @@ from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT: str = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-)
+_PROJECT_ROOT: str = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 # ── Generator info: (module_path, function_name, kwargs_builder) ──
 # kwargs_builder(tmp_path) returns dict of kwargs for the generate function
@@ -44,12 +40,8 @@ def _build_secrets_kwargs(tmp_path: Path) -> dict:
     sys.path.insert(0, os.path.join(_PROJECT_ROOT, "core", "internal", "scripts"))
     import generate_secrets_manifest as gsm  # type: ignore[import-untyped]
 
-    secret_defs = gsm.load_secret_definitions(
-        Path(_PROJECT_ROOT) / "core" / "secret-definitions.yaml"
-    )
-    modules = gsm.load_module_yamls(
-        Path(_PROJECT_ROOT) / "core" / "modules"
-    )
+    secret_defs = gsm.load_secret_definitions(Path(_PROJECT_ROOT) / "core" / "secret-definitions.yaml")
+    modules = gsm.load_module_yamls(Path(_PROJECT_ROOT) / "core" / "modules")
     return {"secret_defs": secret_defs, "modules": modules}
 
 
@@ -97,14 +89,13 @@ def test_secrets_manifest_deterministic(tmp_path, caplog) -> None:
         return
 
     # Run twice with identical inputs
-    secret_defs = gsm.load_secret_definitions(
-        Path(_PROJECT_ROOT) / "core" / "secret-definitions.yaml"
-    )
-    modules = gsm.load_module_yamls(
-        Path(_PROJECT_ROOT) / "core" / "modules"
-    )
+    secret_defs = gsm.load_secret_definitions(Path(_PROJECT_ROOT) / "core" / "secret-definitions.yaml")
+    modules = gsm.load_module_yamls(Path(_PROJECT_ROOT) / "core" / "modules")
 
-    print(f"[IMP:7][test_secrets_manifest_deterministic] Loaded {len(secret_defs)} secret defs, {len(modules)} modules", file=sys.stderr)
+    print(
+        f"[IMP:7][test_secrets_manifest_deterministic] Loaded {len(secret_defs)} secret defs, {len(modules)} modules",
+        file=sys.stderr,
+    )
 
     # Run 1
     result1 = gsm.generate(secret_defs, modules)
@@ -114,6 +105,7 @@ def test_secrets_manifest_deterministic(tmp_path, caplog) -> None:
 
     # Dump to YAML strings
     import yaml
+
     yaml_str1 = yaml.dump(result1, default_flow_style=False, sort_keys=False)
     yaml_str2 = yaml.dump(result2, default_flow_style=False, sort_keys=False)
 
@@ -191,9 +183,7 @@ def test_platform_env_deterministic(tmp_path, caplog) -> None:
     print(f"[IMP:7][test_platform_env_deterministic] smoke_env Run 2 hash: {hash2}", file=sys.stderr)
 
     assert hash1 == hash2, (
-        f"generate_smoke_env_py() produced DIFFERENT output on 2nd run!\n"
-        f"Run 1 SHA256: {hash1}\n"
-        f"Run 2 SHA256: {hash2}"
+        f"generate_smoke_env_py() produced DIFFERENT output on 2nd run!\nRun 1 SHA256: {hash1}\nRun 2 SHA256: {hash2}"
     )
 
     # Test generate_helpers_py determinism
@@ -281,7 +271,11 @@ def test_entrypoint_manifest_deterministic(tmp_path, caplog) -> None:
     allowed_verbs = ["deploy", "build", "test", "lint", "validate"]
     gates = [
         {"id": "dag-acyclic", "test_file": "test_gate_manifest_dag_acyclic.py", "description": "DAG acyclicity gate"},
-        {"id": "no-self-read", "test_file": "test_gate_generate_entrypoint_manifest_no_self_read.py", "description": "G3 no-self-read gate"},
+        {
+            "id": "no-self-read",
+            "test_file": "test_gate_generate_entrypoint_manifest_no_self_read.py",
+            "description": "G3 no-self-read gate",
+        },
     ]
     existing = {
         "forbidden_directories": ["core/scripts/e2e", "core/scripts"],
@@ -294,6 +288,7 @@ def test_entrypoint_manifest_deterministic(tmp_path, caplog) -> None:
     result2 = gem.merge(allowed_verbs, gates, existing)
 
     import yaml
+
     yaml_str1 = yaml.dump(result1, default_flow_style=False, sort_keys=False)
     yaml_str2 = yaml.dump(result2, default_flow_style=False, sort_keys=False)
 
@@ -304,13 +299,10 @@ def test_entrypoint_manifest_deterministic(tmp_path, caplog) -> None:
     print(f"[IMP:7][test_entrypoint_manifest_deterministic] Run 2 hash: {hash2}", file=sys.stderr)
 
     assert hash1 == hash2, (
-        f"merge() produced DIFFERENT output on 2nd run!\n"
-        f"Run 1 SHA256: {hash1}\n"
-        f"Run 2 SHA256: {hash2}"
+        f"merge() produced DIFFERENT output on 2nd run!\nRun 1 SHA256: {hash1}\nRun 2 SHA256: {hash2}"
     )
 
     # Also test extract_phony_targets determinism (calls make -np)
-    import tempfile
     import subprocess
 
     # We test with a fixed Makefile to avoid CI variance
@@ -337,11 +329,12 @@ def test_entrypoint_manifest_deterministic(tmp_path, caplog) -> None:
     targets2 = gem.extract_phony_targets(str(test_makefile_dir), gmake_path)
 
     assert targets1 == targets2, (
-        f"extract_phony_targets() returned different results!\n"
-        f"Run 1: {targets1}\n"
-        f"Run 2: {targets2}"
+        f"extract_phony_targets() returned different results!\nRun 1: {targets1}\nRun 2: {targets2}"
     )
-    print(f"[IMP:9][test_entrypoint_manifest_deterministic] extract_phony_targets: stable — {len(targets1)} targets", file=sys.stderr)
+    print(
+        f"[IMP:9][test_entrypoint_manifest_deterministic] extract_phony_targets: stable — {len(targets1)} targets",
+        file=sys.stderr,
+    )
 
     logger.info(
         "[IMP:9][test_entrypoint_manifest_deterministic] PASS — merge() + extract_phony_targets are deterministic"

@@ -32,9 +32,7 @@ from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT: str = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-)
+_PROJECT_ROOT: str = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 # Canonical manifest generators that MUST be Python-only.
 # Each entry: (name, expected_py_file)
@@ -50,16 +48,12 @@ _CANONICAL_GENERATORS: list[tuple[str, str]] = [
 # Patterns to detect if a shell script directly implements a manifest generator
 # (i.e., defines a shell function with the same name as a canonical generator)
 _SHELL_GENERATOR_FUNC_PATTERN: re.Pattern = re.compile(
-    r"(?:"
-    + "|".join(re.escape(name) for name, _ in _CANONICAL_GENERATORS)
-    + r")\s*\(\s*\)\s*\{"
+    r"(?:" + "|".join(re.escape(name) for name, _ in _CANONICAL_GENERATORS) + r")\s*\(\s*\)\s*\{"
 )
 
 # Detect if a shell script calls the generator as a thin facade
 _GENERATOR_CALL_PATTERN: re.Pattern = re.compile(
-    r"python3\s+core/internal/scripts/(?:"
-    + "|".join(re.escape(file) for _, file in _CANONICAL_GENERATORS)
-    + r")"
+    r"python3\s+core/internal/scripts/(?:" + "|".join(re.escape(file) for _, file in _CANONICAL_GENERATORS) + r")"
 )
 
 

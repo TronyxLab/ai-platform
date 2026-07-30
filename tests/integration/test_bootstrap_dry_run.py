@@ -49,7 +49,6 @@ from core.internal.bootstrap.lifecycle.state_migration import (
     MIGRATION_MAP,
     migrate_state_to_phases,
 )
-from core.internal.shared.exceptions import PlatformFatalError
 
 logger = logging.getLogger(__name__)
 
@@ -386,15 +385,15 @@ def test_init_mode_14_phases_dry_run(
 
     # ── Define the INIT phase execution order based on dependency graph ──
     init_phases_order: list[str] = [
-        BootstrapPhase.SYSTEM_BOOTSTRAP,    # φ1
-        BootstrapPhase.USER_ACCOUNTS,        # φ2
-        BootstrapPhase.PLATFORM_SETUP,       # φ3
-        BootstrapPhase.SECRETS_PROVISION,    # φ4
-        BootstrapPhase.NODE_CONFIGURATION,   # φ5
-        BootstrapPhase.REGISTRY_AUTH,        # φ6
-        BootstrapPhase.CERTIFICATES,         # φ7
-        BootstrapPhase.DEPLOY_SERVICES,      # φ8
-        BootstrapPhase.CONVERGE_SERVICES,    # φ8.5
+        BootstrapPhase.SYSTEM_BOOTSTRAP,  # φ1
+        BootstrapPhase.USER_ACCOUNTS,  # φ2
+        BootstrapPhase.PLATFORM_SETUP,  # φ3
+        BootstrapPhase.SECRETS_PROVISION,  # φ4
+        BootstrapPhase.NODE_CONFIGURATION,  # φ5
+        BootstrapPhase.REGISTRY_AUTH,  # φ6
+        BootstrapPhase.CERTIFICATES,  # φ7
+        BootstrapPhase.DEPLOY_SERVICES,  # φ8
+        BootstrapPhase.CONVERGE_SERVICES,  # φ8.5
     ]
 
     # ── Execute each phase in order ──
@@ -420,9 +419,7 @@ def test_init_mode_14_phases_dry_run(
     # ── Verify state file now has entries for all 9 phases ──
     state_content = machine.state_file.read_text()
     for phase_val in init_phases_order:
-        assert phase_val in state_content, (
-            f"Phase '{phase_val}' should appear in state file"
-        )
+        assert phase_val in state_content, f"Phase '{phase_val}' should appear in state file"
     logger.info(
         "[IMP:9][test_init] All 9 INIT phase keys present in state file",
     )
@@ -466,11 +463,11 @@ def test_update_mode_5_phases_dry_run(
 
     # ── Define the UPDATE phase execution order ──
     update_phases_order: list[str] = [
-        BootstrapPhase.SECRETS_UPDATE,     # φ9
+        BootstrapPhase.SECRETS_UPDATE,  # φ9
         BootstrapPhase.NODE_CONFIG_UPDATE,  # φ10
-        BootstrapPhase.REGISTRY_UPDATE,     # φ11
-        BootstrapPhase.DEPLOY_UPDATE,       # φ12
-        BootstrapPhase.CONVERGE_UPDATE,     # φ13
+        BootstrapPhase.REGISTRY_UPDATE,  # φ11
+        BootstrapPhase.DEPLOY_UPDATE,  # φ12
+        BootstrapPhase.CONVERGE_UPDATE,  # φ13
     ]
 
     # ── Execute each phase in order ──
@@ -495,9 +492,7 @@ def test_update_mode_5_phases_dry_run(
     # ── Verify state file has entries for all 5 phases ──
     state_content = sm.state_file.read_text()
     for phase_val in update_phases_order:
-        assert phase_val in state_content, (
-            f"UPDATE phase '{phase_val}' should appear in state file"
-        )
+        assert phase_val in state_content, f"UPDATE phase '{phase_val}' should appear in state file"
     logger.info(
         "[IMP:9][test_update] All 5 UPDATE phase keys present in state file",
     )
@@ -543,8 +538,7 @@ def test_precondition_block_on_dependency_gap(
     # ── Verify that φ6 depends on φ4 in the dependency graph ──
     deps_for_registry = _phase_dependency_graph.get(BootstrapPhase.REGISTRY_AUTH, set())
     assert BootstrapPhase.SECRETS_PROVISION in deps_for_registry, (
-        f"Expected REGISTRY_AUTH to depend on SECRETS_PROVISION, "
-        f"got deps={deps_for_registry}"
+        f"Expected REGISTRY_AUTH to depend on SECRETS_PROVISION, got deps={deps_for_registry}"
     )
     logger.info(
         "[IMP:9][test_dep_gap] Verified dependency: φ6 depends on φ4 (deps=%s)",
@@ -560,16 +554,12 @@ def test_precondition_block_on_dependency_gap(
 
     # ── Verify error message contains both phase identifiers ──
     assert BootstrapPhase.REGISTRY_AUTH in error_msg, (
-        f"Error should mention attempted phase '{BootstrapPhase.REGISTRY_AUTH}', "
-        f"got: {error_msg}"
+        f"Error should mention attempted phase '{BootstrapPhase.REGISTRY_AUTH}', got: {error_msg}"
     )
     assert BootstrapPhase.SECRETS_PROVISION in error_msg, (
-        f"Error should mention missing dependency '{BootstrapPhase.SECRETS_PROVISION}', "
-        f"got: {error_msg}"
+        f"Error should mention missing dependency '{BootstrapPhase.SECRETS_PROVISION}', got: {error_msg}"
     )
-    assert "prerequisite" in error_msg, (
-        f"Error should contain 'prerequisite' keyword, got: {error_msg}"
-    )
+    assert "prerequisite" in error_msg, f"Error should contain 'prerequisite' keyword, got: {error_msg}"
 
     # ── Verify state file is not corrupted ──
     state_file_path = machine.state_file
@@ -673,19 +663,11 @@ def test_skip_already_done_phases(
         f"execute_phase was called {call_count[0]} times but should have been 0 "
         f"(all sub_steps had done=true + matched hash)"
     )
-    assert result is True, (
-        f"execute_grouped_phase returned {result}, expected True (all sub_steps done)"
-    )
+    assert result is True, f"execute_grouped_phase returned {result}, expected True (all sub_steps done)"
 
     # ── Verify skip log entries ──
-    skip_logs = [
-        r.message
-        for r in caplog.records
-        if "SKIP sub_step" in r.message
-    ]
-    assert len(skip_logs) == 4, (
-        f"Expected 4 'SKIP sub_step' log messages, found {len(skip_logs)}"
-    )
+    skip_logs = [r.message for r in caplog.records if "SKIP sub_step" in r.message]
+    assert len(skip_logs) == 4, f"Expected 4 'SKIP sub_step' log messages, found {len(skip_logs)}"
     for log_msg in skip_logs:
         logger.info("[IMP:8][test_skip] Verified skip log: %s", log_msg)
 
@@ -721,9 +703,7 @@ def test_resume_phase_partial_failure(
     caplog.set_level(logging.DEBUG)
 
     # ── Verify φ4 is a grouped phase (module-level constant) ──
-    assert BootstrapPhase.SECRETS_PROVISION in _grouped_phases, (
-        f"Expected SECRETS_PROVISION to be in _grouped_phases"
-    )
+    assert BootstrapPhase.SECRETS_PROVISION in _grouped_phases, "Expected SECRETS_PROVISION to be in _grouped_phases"
     logger.info(
         "[IMP:9][test_resume] Verified SECRETS_PROVISION is a grouped phase",
     )
@@ -732,9 +712,9 @@ def test_resume_phase_partial_failure(
     # φ4 (secrets_provision) depends on φ3 (platform_setup) in
     # _phase_dependency_graph. resume_phase → execute_grouped_phase checks
     # dependencies and raises PhaseDependencyError if unmet.
-    _mark_phase_done(machine, BootstrapPhase.SYSTEM_BOOTSTRAP)    # φ1
-    _mark_phase_done(machine, BootstrapPhase.USER_ACCOUNTS)       # φ2
-    _mark_phase_done(machine, BootstrapPhase.PLATFORM_SETUP)      # φ3 ← φ4 dependency
+    _mark_phase_done(machine, BootstrapPhase.SYSTEM_BOOTSTRAP)  # φ1
+    _mark_phase_done(machine, BootstrapPhase.USER_ACCOUNTS)  # φ2
+    _mark_phase_done(machine, BootstrapPhase.PLATFORM_SETUP)  # φ3 ← φ4 dependency
     logger.info(
         "[IMP:9][test_resume] Dependency phases φ1-φ3 marked done for φ4 resume",
     )
@@ -748,7 +728,7 @@ def test_resume_phase_partial_failure(
 
     sub_steps: dict[str, dict[str, Any]] = {
         "decrypt_secrets": {"done": True, "hash": decrypt_hash},
-        "ensure_secrets": {"done": False, "hash": ""},     # ← FAILED sub_step
+        "ensure_secrets": {"done": False, "hash": ""},  # ← FAILED sub_step
         "secrets_init": {"done": True, "hash": init_hash},
     }
 
@@ -782,26 +762,17 @@ def test_resume_phase_partial_failure(
 
     # ── Assertions ──
     assert len(call_log) == 1, (
-        f"Expected exactly 1 execute_phase call (for ensure_secrets), "
-        f"got {len(call_log)}: {call_log}"
+        f"Expected exactly 1 execute_phase call (for ensure_secrets), got {len(call_log)}: {call_log}"
     )
     assert call_log[0] == BootstrapPhase.SECRETS_PROVISION, (
-        f"execute_phase was called for '{call_log[0]}', "
-        f"expected '{BootstrapPhase.SECRETS_PROVISION}'"
+        f"execute_phase was called for '{call_log[0]}', expected '{BootstrapPhase.SECRETS_PROVISION}'"
     )
-    assert result is True, (
-        f"resume_phase returned {result}, expected True"
-    )
+    assert result is True, f"resume_phase returned {result}, expected True"
 
     # ── Verify skip logs for the 2 done sub_steps ──
-    skip_logs = [
-        r.message
-        for r in caplog.records
-        if "SKIP sub_step" in r.message
-    ]
+    skip_logs = [r.message for r in caplog.records if "SKIP sub_step" in r.message]
     assert len(skip_logs) >= 2, (
-        f"Expected at least 2 'SKIP sub_step' log messages "
-        f"(for decrypt_secrets, secrets_init), found {len(skip_logs)}"
+        f"Expected at least 2 'SKIP sub_step' log messages (for decrypt_secrets, secrets_init), found {len(skip_logs)}"
     )
 
     # ── LDD trajectory ──
@@ -845,10 +816,10 @@ def test_grouped_phase_skip_unchanged_sub_steps(
     done_hash_3 = machine._step_hash("sub_system_bootstrap_tor_proxy")
 
     sub_steps: dict[str, dict[str, Any]] = {
-        sub_step_keys[0]: {"done": True, "hash": done_hash_1},     # system_packages → SKIP
-        sub_step_keys[1]: {"done": True, "hash": done_hash_2},     # docker_install → SKIP
-        sub_step_keys[2]: {"done": True, "hash": done_hash_3},     # tor_proxy → SKIP
-        sub_step_keys[3]: {"done": False, "hash": ""},              # firewall → EXECUTE
+        sub_step_keys[0]: {"done": True, "hash": done_hash_1},  # system_packages → SKIP
+        sub_step_keys[1]: {"done": True, "hash": done_hash_2},  # docker_install → SKIP
+        sub_step_keys[2]: {"done": True, "hash": done_hash_3},  # tor_proxy → SKIP
+        sub_step_keys[3]: {"done": False, "hash": ""},  # firewall → EXECUTE
     }
 
     # ── Wrap execute_phase to track calls ──
@@ -874,35 +845,17 @@ def test_grouped_phase_skip_unchanged_sub_steps(
     machine.execute_phase = original_execute
 
     # ── Assertions ──
-    assert len(call_log) == 1, (
-        f"Expected exactly 1 execute_phase call (for firewall), "
-        f"got {len(call_log)}: {call_log}"
-    )
+    assert len(call_log) == 1, f"Expected exactly 1 execute_phase call (for firewall), got {len(call_log)}: {call_log}"
     assert call_log[0] == BootstrapPhase.SYSTEM_BOOTSTRAP
-    assert result is True, (
-        f"execute_grouped_phase returned {result}, expected True"
-    )
+    assert result is True, f"execute_grouped_phase returned {result}, expected True"
 
     # ── Verify skip logs: exactly 3 skip messages ──
-    skip_logs = [
-        r.message
-        for r in caplog.records
-        if "SKIP sub_step" in r.message
-    ]
-    assert len(skip_logs) == 3, (
-        f"Expected exactly 3 'SKIP sub_step' log messages, "
-        f"found {len(skip_logs)}"
-    )
+    skip_logs = [r.message for r in caplog.records if "SKIP sub_step" in r.message]
+    assert len(skip_logs) == 3, f"Expected exactly 3 'SKIP sub_step' log messages, found {len(skip_logs)}"
 
     # ── Verify run log for firewall ──
-    run_logs = [
-        r.message
-        for r in caplog.records
-        if "EXECUTE sub_step" in r.message and "firewall" in r.message
-    ]
-    assert len(run_logs) >= 1, (
-        "Expected 'EXECUTE sub_step' log for firewall sub_step"
-    )
+    run_logs = [r.message for r in caplog.records if "EXECUTE sub_step" in r.message and "firewall" in r.message]
+    assert len(run_logs) >= 1, "Expected 'EXECUTE sub_step' log for firewall sub_step"
 
     # ── LDD trajectory ──
     found_imp9 = _print_ldd_trajectory(caplog, "test_grouped_phase_skip_unchanged_sub_steps")
@@ -954,13 +907,10 @@ def test_phase_dependency_graph_integrity(
 
     # ── Verify every key in the dependency graph is a valid phase ──
     for phase_key in _phase_dependency_graph:
-        assert phase_key in all_phase_values, (
-            f"Dependency graph key '{phase_key}' is not a valid BootstrapPhase value"
-        )
+        assert phase_key in all_phase_values, f"Dependency graph key '{phase_key}' is not a valid BootstrapPhase value"
         for dep in _phase_dependency_graph[phase_key]:
             assert dep in all_phase_values, (
-                f"Dependency graph value '{dep}' for phase '{phase_key}' "
-                f"is not a valid BootstrapPhase value"
+                f"Dependency graph value '{dep}' for phase '{phase_key}' is not a valid BootstrapPhase value"
             )
 
     # ── Verify no cross-mode dependencies (INIT ← UPDATE or UPDATE ← INIT) ──
@@ -1006,13 +956,9 @@ def test_phase_dependency_graph_integrity(
         assert "done" in phase_entry, f"Phase '{phase_name}' missing 'done' field"
         assert "sub_steps" in phase_entry, f"Phase '{phase_name}' missing 'sub_steps' field"
 
-        all_done_predicted = all(
-            old_state["steps"].get(k, {}).get("status") == "done"
-            for k in sub_keys
-        )
+        all_done_predicted = all(old_state["steps"].get(k, {}).get("status") == "done" for k in sub_keys)
         assert phase_entry["done"] == all_done_predicted, (
-            f"Phase '{phase_name}' done={phase_entry['done']} predicted={all_done_predicted} "
-            f"(sub_steps: {sub_keys})"
+            f"Phase '{phase_name}' done={phase_entry['done']} predicted={all_done_predicted} (sub_steps: {sub_keys})"
         )
 
     logger.info(
@@ -1026,13 +972,9 @@ def test_phase_dependency_graph_integrity(
         # BootstrapPhase values use the same strings, so direct comparison works
         assert phase_key in all_phase_values or phase_key.replace("_", "") in {
             v.replace("_", "") for v in all_phase_values
-        }, (
-            f"MIGRATION_MAP key '{phase_key}' does not match any BootstrapPhase value"
-        )
+        }, f"MIGRATION_MAP key '{phase_key}' does not match any BootstrapPhase value"
 
-    logger.info(
-        "[IMP:9][test_graph] MIGRATION_MAP all keys validated against BootstrapPhase"
-    )
+    logger.info("[IMP:9][test_graph] MIGRATION_MAP all keys validated against BootstrapPhase")
 
     # ── LDD trajectory ──
     found_imp9 = _print_ldd_trajectory(caplog, "test_phase_dependency_graph_integrity")

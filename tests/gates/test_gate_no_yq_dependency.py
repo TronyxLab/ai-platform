@@ -49,7 +49,7 @@ def _is_violation(line: str) -> bool:
     if len(parts) >= 3:
         content = parts[2].strip()
         # Skip if it's a comment/docstring (just mentioning yq in text)
-        if content.startswith("#") or content.startswith("##"):
+        if content.startswith(("#", "##")):
             return False
     return True
 
@@ -67,7 +67,9 @@ def test_no_yq_operations_on_node(caplog) -> None:
 
     result = subprocess.run(
         ["grep", "-rn", r"yq.*node", str(CORE_DIR)],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
     lines = result.stdout.strip().split("\n") if result.stdout.strip() else []

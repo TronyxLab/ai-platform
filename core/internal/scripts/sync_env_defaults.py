@@ -369,7 +369,7 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# Генерировать ключ: openssl rand -hex 32")
     lines.append("API_SERVER_ENABLED=" + get_val("API_SERVER_ENABLED", "false"))
     lines.append("API_SERVER_KEY=" + get_val("API_SERVER_KEY", "test-api-server-key-for-ci-only"))
-    lines.append("API_SERVER_HOST=" + get_val("API_SERVER_HOST", "0.0.0.0"))  # nosec B104 — CI test default only
+    lines.append("API_SERVER_HOST=" + get_val("API_SERVER_HOST", "0.0.0.0"))  # nosec B104 — CI test default, not production
 
     # ── Telegram ──
     lines.append("")

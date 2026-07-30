@@ -145,7 +145,7 @@ class DeliveryChannel(abc.ABC):
                     )
                     return result
                 last_result = result
-            except Exception as e:  # noqa: BLE001
+            except (subprocess.CalledProcessError, OSError, TimeoutError) as e:
                 duration = time.monotonic() - start
                 logger.error(
                     "[IMP:10][_retry_deliver][exception] Deliver exception on attempt %d for %s: %s",

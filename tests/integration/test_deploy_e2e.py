@@ -18,11 +18,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -31,16 +31,13 @@ from core.internal.deploy.channels import (
     DeliveryChannel,
     DeliveryResult,
     Payload,
-    SCPChannel,
 )
 from core.internal.deploy.deploy_history import DeployHistory
-from core.internal.deploy.healthcheck_poller import HealthcheckPoller, HealthcheckResult
+from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 from core.internal.deploy.orchestrator import (
     DeployOrchestrator,
-    DeployStatus,
 )
 from core.internal.deploy.payload_deliverer import PayloadDeliverer
-
 
 # ── Mock Channel for integration test ──
 
@@ -69,6 +66,7 @@ def work_dir() -> str:
     path = tempfile.mkdtemp(prefix="test-e2e-")
     yield path
     import shutil
+
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
 
@@ -131,7 +129,6 @@ class TestDeployE2E:
     ## @purpose  Verify channel.deliver() returns correct DeliveryResult.
     def test_channel_delivery(self, project_dir: str, work_dir: str) -> None:
         """Verify channel delivery produces correct result."""
-        import tarfile
 
         deliverer = PayloadDeliverer(projects_base=os.path.join(work_dir, "projects"))
         payload = deliverer.assemble_payload(
@@ -180,22 +177,16 @@ class TestDeployE2E:
 
         channel = IntegrationMockChannel()
 
-        # Wrap in try/except to handle SystemExit from deploy_engine
+        # Wrap in suppress to handle SystemExit from deploy_engine
         # in environments without Docker
-        try:
-            result = orchestrator.deploy(
+        with contextlib.suppress(SystemExit):
+            orchestrator.deploy(
                 project_name="test-project",
                 channel=channel,
                 project_dir=project_dir,
             )
-        except SystemExit:
-            # Deploy engine may call sys.exit on first deploy failure
-            # This is expected in CI without Docker
-            # Fall through to verify audit/history below
-            result = None
 
         # Check LDD trajectory
-        found_imp9 = False
         print("\n--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
             if "[IMP:" in record.message:
@@ -203,13 +194,13 @@ class TestDeployE2E:
                 if imp_level >= 7:
                     print(record.message)
                 if imp_level >= 9:
-                    found_imp9 = True
+                    pass
         print("--- END LDD TRAJECTORY ---\n")
 
         # Verify audit log was written
         assert os.path.isfile(log_file)
         with open(log_file) as f:
-            entries = [json.loads(l) for l in f if l.strip()]
+            entries = [json.loads(line) for line in f if line.strip()]
         # At minimum, log entries were written (or attempt was made)
         assert len(entries) >= 0
 
@@ -234,11 +225,13 @@ class TestDeployE2E:
         audit.log(operation="deploy", project="test-project", channel="scp", result="DEPLOYED", duration_s=5.0)
         snap_id = history.create_snapshot(project="test-project", version="v1.0.0", health_status="healthy")
 
-        audit.log(operation="rollback", project="test-project", result="ROLLED_BACK", duration_s=1.0, snapshot_id=snap_id)
+        audit.log(
+            operation="rollback", project="test-project", result="ROLLED_BACK", duration_s=1.0, snapshot_id=snap_id
+        )
 
         # Verify audit file
         with open(log_file) as f:
-            entries = [json.loads(l) for l in f if l.strip()]
+            entries = [json.loads(line) for line in f if line.strip()]
         assert len(entries) == 2
         assert entries[0]["operation"] == "deploy"
         assert entries[1]["operation"] == "rollback"

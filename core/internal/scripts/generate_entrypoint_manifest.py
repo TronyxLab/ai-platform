@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # GREP_SUMMARY: generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_structural_sections, manifest-generator, CI, g3-cycle-break
 # STRUCTURE: ▶ gmake -np —▸ extract .PHONY targets → ▶ pytest --collect-only —▸ gate tests → ◇ load_structural_sections (allowed_verbs/gates EXCLUDED — G3 cycle break) → ⊕ merge (replace allowed_verbs + gates[], preserve rest) → ⎋ write YAML
 # region MODULE_CONTRACT

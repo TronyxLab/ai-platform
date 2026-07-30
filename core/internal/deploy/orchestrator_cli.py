@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: orchestrator-cli, cli, receive, deploy, deploy-many, rollback, status, remove, entrypoint
+# STRUCTURE: ▶ main() → argparse dispatch → receive | deploy | deploy-many | rollback | status | remove → sys.exit(0|1)
 """
 CLI entrypoint for DeployOrchestrator. Commands: receive, deploy, deploy-many, rollback, status, remove.
 Usage:
@@ -10,7 +11,6 @@ Usage:
     python3 -m core.internal.deploy.orchestrator_cli status ...       # Project status
     python3 -m core.internal.deploy.orchestrator_cli remove ...       # Remove project
 """
-# STRUCTURE: ▶ main() → argparse dispatch → receive | deploy | deploy-many | rollback | status | remove → sys.exit(0|1)
 # region MODULE_CONTRACT
 ## @purpose  CLI entrypoint for DeployOrchestrator. Replaces deploy-project.sh and provides
 ##           direct access to all orchestrator operations from command line.
@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # ── receive — VPS-side tar reader ──
-    recv = sub.add_parser("receive", help="Receive deploy payload via stdin (tar.gz)")
+    sub.add_parser("receive", help="Receive deploy payload via stdin (tar.gz)")
 
     # ── deploy — single project ──
     dep = sub.add_parser("deploy", help="Deploy a single project")
@@ -113,10 +113,7 @@ def build_channel(args: argparse.Namespace) -> SCPChannel | ForcedCommandChannel
     key_file = getattr(args, "key_file", "")
     host = host or os.environ.get("DEPLOY_HOST", "")
 
-    if use_forced:
-        channel = ForcedCommandChannel()
-    else:
-        channel = SCPChannel()
+    channel = ForcedCommandChannel() if use_forced else SCPChannel()
 
     if host:
         channel.metadata_defaults = {"host": host}
@@ -152,8 +149,7 @@ def main() -> int:
 
     # ── receive ──
     if args.command == "receive":
-        exit_code = DeployOrchestrator.receive()
-        return exit_code
+        return DeployOrchestrator.receive()
 
     # ── deploy ──
     if args.command == "deploy":

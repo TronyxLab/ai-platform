@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -42,7 +43,7 @@ from typing import Any
 from core.internal.deploy.audit_logger import AuditLogger
 from core.internal.deploy.channels import DeliveryChannel, Payload
 from core.internal.deploy.deploy_history import DeployHistory
-from core.internal.deploy.healthcheck_poller import HealthcheckPoller, HealthcheckResult
+from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,25 @@ DEFAULT_PROJECTS_BASE = "/opt/projects"
 PROJECTS_BASE = os.environ.get("PROJECTS_BASE", DEFAULT_PROJECTS_BASE)
 
 
+def _try_json_loads(s: str) -> dict | None:
+    """Parse a JSON string, returning None on failure.
+
+    ## @purpose — Helper for PERF203: isolate try-except from loop.
+    ## @io — ⇥ s: str → ⎋ dict | None
+    ## @complexity — O(n) where n = len(s)
+    """
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        return None
+
+
 # region ENUMS & DATACLASSES
 
 
 class DeployStatus(str, Enum):
     """Deploy result status."""
+
     DEPLOYED = "DEPLOYED"
     FAILED = "FAILED"
     PARTIAL = "PARTIAL"
@@ -215,7 +230,11 @@ class DeployOrchestrator:
         # ── Step 1: Validate ──
         if not project_name:
             return self._result(
-                DeployStatus.FAILED, project_name, "", error_info="Project name is required", duration_s=time.monotonic() - start
+                DeployStatus.FAILED,
+                project_name,
+                "",
+                error_info="Project name is required",
+                duration_s=time.monotonic() - start,
             )
 
         # ── Step 2: Assemble payload ──
@@ -223,7 +242,9 @@ class DeployOrchestrator:
             payload = self._assemble_payload(project_name, version, project_dir, metadata)
         except (OSError, ValueError) as e:
             return self._result(
-                DeployStatus.FAILED, project_name, channel.__class__.__name__,
+                DeployStatus.FAILED,
+                project_name,
+                channel.__class__.__name__,
                 error_info=f"Payload assembly failed: {e}",
                 duration_s=time.monotonic() - start,
             )
@@ -240,7 +261,9 @@ class DeployOrchestrator:
                 duration_s=time.monotonic() - start,
             )
             return self._result(
-                DeployStatus.FAILED, project_name, channel.__class__.__name__,
+                DeployStatus.FAILED,
+                project_name,
+                channel.__class__.__name__,
                 error_info=f"Delivery failed: {delivery_result.error_message}",
                 stdout=delivery_result.stdout,
                 stderr=delivery_result.stderr,
@@ -373,7 +396,13 @@ class DeployOrchestrator:
         # Audit multi-deploy summary
         deployed = sum(1 for r in results if r.status == DeployStatus.DEPLOYED)
         failed = sum(1 for r in results if r.status in (DeployStatus.FAILED, DeployStatus.ROLLED_BACK))
-        overall = DeployStatus.DEPLOYED.value if failed == 0 else DeployStatus.PARTIAL.value if deployed > 0 else DeployStatus.FAILED.value
+        overall = (
+            DeployStatus.DEPLOYED.value
+            if failed == 0
+            else DeployStatus.PARTIAL.value
+            if deployed > 0
+            else DeployStatus.FAILED.value
+        )
         self.audit_logger.log_many(
             operation="deploy_many",
             projects=project_names,
@@ -419,7 +448,8 @@ class DeployOrchestrator:
         snapshot = self.deploy_history.rollback(project_name, snapshot_id)
         if not snapshot:
             return self._result(
-                DeployStatus.FAILED, project_name,
+                DeployStatus.FAILED,
+                project_name,
                 error_info=f"No snapshot found for rollback of {project_name}",
                 duration_s=time.monotonic() - start,
             )
@@ -481,19 +511,19 @@ class DeployOrchestrator:
         # Get containers via docker compose ps
         containers: list[dict[str, Any]] = []
         try:
-            import subprocess  # noqa: PLC0415
+            import subprocess
 
             ps_result = subprocess.run(
                 ["docker", "compose", "ps", "--format", "json"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
                 cwd=project_dir,
             )
             if ps_result.returncode == 0 and ps_result.stdout.strip():
-                for line in ps_result.stdout.strip().split("\n"):
-                    try:
-                        containers.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+                containers.extend(
+                    c for line in ps_result.stdout.strip().split("\n") if (c := _try_json_loads(line)) is not None
+                )
         except (OSError, subprocess.TimeoutExpired) as e:
             logger.warning("[IMP:8][status] docker compose ps error: %s", e)
 
@@ -536,28 +566,34 @@ class DeployOrchestrator:
         project_dir = os.path.join(self.projects_base, project_name)
         if not os.path.isdir(project_dir):
             return self._result(
-                DeployStatus.SKIPPED, project_name,
+                DeployStatus.SKIPPED,
+                project_name,
                 error_info="Project directory not found — already removed",
                 duration_s=time.monotonic() - start,
             )
 
         # docker compose down (± -v)
         try:
-            import subprocess  # noqa: PLC0415
+            import subprocess
 
             cmd = ["docker", "compose", "down", "--timeout", "30"]
             if purge:
                 cmd.append("-v")
 
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120, cwd=project_dir,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=project_dir,
             )
             duration = time.monotonic() - start
 
             if result.returncode != 0:
                 logger.warning(
                     "[IMP:8][remove] docker compose down exit=%s: %s",
-                    result.returncode, result.stderr.strip(),
+                    result.returncode,
+                    result.stderr.strip(),
                 )
 
             self.audit_logger.log(
@@ -568,14 +604,16 @@ class DeployOrchestrator:
             )
 
             return self._result(
-                DeployStatus.DEPLOYED, project_name,
+                DeployStatus.DEPLOYED,
+                project_name,
                 duration_s=duration,
                 stdout=result.stdout,
                 stderr=result.stderr,
             )
         except (subprocess.TimeoutExpired, OSError) as e:
             return self._result(
-                DeployStatus.FAILED, project_name,
+                DeployStatus.FAILED,
+                project_name,
                 error_info=str(e),
                 duration_s=time.monotonic() - start,
             )
@@ -605,11 +643,11 @@ class DeployOrchestrator:
         Returns:
             Exit code (0 = success, 1 = failure).
         """
-        import io  # noqa: PLC0415
-        import sys  # noqa: PLC0415
-        import tarfile  # noqa: PLC0415
-        import tempfile  # noqa: PLC0415
-        import shutil  # noqa: PLC0415
+        import io
+        import shutil
+        import sys
+        import tarfile
+        import tempfile
 
         logger.info("[IMP:9][DeployOrchestrator][receive] Receiving deploy payload via stdin")
 
@@ -634,7 +672,8 @@ class DeployOrchestrator:
                 print(json.dumps({"status": "FAILED", "error": "ai-platform.yaml not found in payload"}))
                 return 1
 
-            import yaml  # noqa: PLC0415
+            import yaml
+
             with open(ai_yaml) as f:
                 config = yaml.safe_load(f) or {}
 
@@ -657,7 +696,8 @@ class DeployOrchestrator:
                     shutil.copy2(str(item), os.path.join(target_dir, item.name))
 
             # Execute deploy
-            from core.internal.deploy.channels import SCPChannel  # noqa: PLC0415
+            from core.internal.deploy.channels import SCPChannel
+
             local_channel = SCPChannel()
             orchestrator = DeployOrchestrator(projects_base=projects_base)
             result = orchestrator.deploy(
@@ -706,9 +746,8 @@ class DeployOrchestrator:
             OSError: If project files cannot be read.
             ValueError: If required files are missing.
         """
-        import tempfile  # noqa: PLC0415
-        import subprocess  # noqa: PLC0415
-        import tarfile  # noqa: PLC0415
+        import tarfile
+        import tempfile
 
         # Create tar.gz of project files
         tar_fd, tar_path = tempfile.mkstemp(suffix=".tar.gz", prefix=f"deploy-{project_name}-")
@@ -739,7 +778,7 @@ class DeployOrchestrator:
             True if compose up succeeded.
         """
         try:
-            from core.internal.deploy.deploy_engine import DeployEngine  # noqa: PLC0415
+            from core.internal.deploy.deploy_engine import DeployEngine
 
             engine = DeployEngine(projects_base=self.projects_base)
             result = engine.deploy(
@@ -752,7 +791,7 @@ class DeployOrchestrator:
         except SystemExit:
             logger.error("[IMP:10][DeployOrchestrator][deploy_compose] Deploy engine exited (first deploy failure)")
             return False
-        except Exception as e:  # noqa: BLE001
+        except (OSError, subprocess.SubprocessError) as e:
             logger.error("[IMP:10][DeployOrchestrator][deploy_compose] Failed: %s", e)
             return False
 
@@ -768,17 +807,20 @@ class DeployOrchestrator:
             True if rollback succeeded.
         """
         try:
-            from core.internal.deploy.deploy_engine import DeployEngine  # noqa: PLC0415
+            from core.internal.deploy.deploy_engine import DeployEngine
 
             engine = DeployEngine(projects_base=self.projects_base)
             prev_image_id = snapshot.get("compose_state", {}).get("previous_image")
 
             # Re-tag and restart
             if prev_image_id:
-                import subprocess  # noqa: PLC0415
+                import subprocess
+
                 subprocess.run(
                     ["docker", "tag", prev_image_id, f"{service}:previous-rollback"],
-                    capture_output=True, timeout=30, check=False,
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
                 )
 
             result = engine.deploy(
@@ -791,7 +833,7 @@ class DeployOrchestrator:
         except SystemExit:
             logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Engine exited during rollback")
             return False
-        except Exception as e:  # noqa: BLE001
+        except (OSError, subprocess.SubprocessError) as e:
             logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Failed: %s", e)
             return False
 
@@ -823,7 +865,7 @@ class DeployOrchestrator:
         Returns:
             DeployResult instance.
         """
-        from datetime import datetime, timezone  # noqa: PLC0415
+        from datetime import datetime, timezone
 
         return DeployResult(
             status=status,

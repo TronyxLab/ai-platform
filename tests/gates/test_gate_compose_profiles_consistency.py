@@ -6,10 +6,13 @@
 ##            the compose-profiles composite action instead of hardcoded strings.
 ##            Catches drift when Docker modules are added/removed without updating
 ##            all locations. Read-only gate — does NOT modify any production code.
-## @scope — 5 hardcoded files: Makefile, deploy-project.sh, adopt-project.sh,
-##          docker_orchestrator.py, helpers.mk (_get_all_profiles)
+## @scope — 4 hardcoded files: Makefile, docker_orchestrator.py,
+##          helpers.mk (_get_all_profiles)
 ##          + 2 CI workflows verified to use composite action: push-gate.yml,
 ##          platform-test.yml
+##          Deploy-project.sh callsite removed 2026-07-30 — file deleted during
+##          Strangler-Fig migration (DevPlan 036E), COMPOSE_PROFILES now propagated
+##          via os.environ from Makefile/docker_orchestrator.py.
 ## @invariants
 ##   - Canonical value obtained from `make _get_all_profiles` (single source of truth)
 ##   - All extractors are read-only — no file modifications
@@ -154,11 +157,6 @@ CALLSITES: list[tuple[str, Path, callable]] = [
         _extract_makefile_value,
     ),
     (
-        "deploy-project.sh:719",
-        PROJECT_ROOT / "core/internal/deploy/deploy-project.sh",
-        _extract_shell_default,
-    ),
-    (
         "docker_orchestrator.py:455",
         PROJECT_ROOT / "core/internal/bootstrap/deploy/docker_orchestrator.py",
         _extract_python_setdefault,
@@ -176,8 +174,8 @@ CALLSITES: list[tuple[str, Path, callable]] = [
 # === Tests ===
 
 
-# 🧪 TRAP[TEST] · Regression · Scenarios: AC-2 (consistency gate) · Last fail: 2026-07-22 · Remove if: COMPOSE_PROFILES centralized to single source
-# · Check 5 hardcoded callsites for identical 13-module COMPOSE_PROFILES list
+# 🧪 TRAP[TEST] · Regression · Scenarios: AC-2 (consistency gate) · Last fail: 2026-07-30 · Remove if: COMPOSE_PROFILES centralized to single source
+# · Check 4 hardcoded callsites for identical 13-module COMPOSE_PROFILES list
 # · CI workflows (push-gate.yml, platform-test.yml) now use compose-profiles composite action — verified in separate test
 # · Any mismatch = drift detection after adding/removing Docker modules
 @pytest.mark.gate
@@ -194,7 +192,7 @@ def test_compose_profiles_consistency(canonical_profiles: str, caplog) -> None:
     ##            updating all locations. Fail shows exact file:line guidance.
     ## @io        Input: canonical_profiles (str) from make _get_all_profiles
     ##            Output: pass or pytest.fail with per-callsite mismatch details
-    ## @complexity O(N) where N = len(CALLSITES) = 5
+    ## @complexity O(N) where N = len(CALLSITES) = 4
     """
     import logging
 

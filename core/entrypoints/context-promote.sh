@@ -32,7 +32,6 @@
 set -euo pipefail
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
-source "${_EP_DIR}/../lib/audit_logging.sh"
 
 # region CONTEXT_VALIDATION
 ## @purpose Validate CONTEXT env var — must resolve to a GitHub org name

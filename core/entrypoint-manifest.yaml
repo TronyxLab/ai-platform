@@ -243,10 +243,11 @@ test/gate:
     MODE=fast: syntax+JSON+gates+static+predeploy (no Docker).'
 - make_target: check-manifests
   mechanism: python-check
-  delegates_to: '--check for all 6 generators (G1-G6) — byte-level comparison'
+  delegates_to: --check for all 6 generators (G1-G6) — byte-level comparison
   signature: make check-manifests
   operation_ru: Проверка актуальности сгенерированных манифестов
-  description: 'Freshness gate — all generated manifests are in sync with authoritative sources. Uses --check of all 6 generators (byte-level, parallel in CI).'
+  description: Freshness gate — all generated manifests are in sync with authoritative
+    sources. Uses --check of all 6 generators (byte-level, parallel in CI).
 - make_target: generate-manifests
   mechanism: python-script
   delegates_to: make generate-manifests
@@ -254,6 +255,51 @@ test/gate:
   operation_ru: Генерация всех манифестов
   description: Generate secrets-manifest.yaml, platform-env.yaml, entrypoint-manifest.yaml,
     smoke_env_generated.py, env_defaults_generated.py.
+- make_target: generate-secrets-manifest
+  mechanism: python-script
+  delegates_to: python3 core/internal/scripts/generate_secrets_manifest.py
+  signature: make generate-secrets-manifest
+  operation_ru: Генерация secrets-manifest.yaml
+  description: Generate secrets-manifest.yaml from secret-definitions.yaml + module.yaml
+    consumers.
+- make_target: generate-platform-env
+  mechanism: python-script
+  delegates_to: python3 core/internal/scripts/generate_platform_env.py
+  signature: make generate-platform-env
+  operation_ru: Генерация platform-env.yaml + Python env files
+  description: Generate platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py
+    from infra + modules + secrets.
+- make_target: generate-env-example
+  mechanism: python-script
+  delegates_to: python3 core/internal/scripts/sync_env_defaults.py → .env.example
+  signature: make generate-env-example
+  operation_ru: Генерация .env.example
+  description: Generate .env.example from platform-env.yaml via sync_env_defaults.py.
+- make_target: generate-entrypoint-manifest
+  mechanism: python-script
+  delegates_to: python3 core/internal/scripts/generate_entrypoint_manifest.py
+  signature: make generate-entrypoint-manifest
+  operation_ru: Генерация entrypoint-manifest.yaml
+  description: Generate entrypoint-manifest.yaml from Makefile .PHONY targets + existing
+    manifest.
+- make_target: generate-agents-md
+  mechanism: python-script
+  delegates_to: python3 core/internal/scripts/generate_agents_md.py → core/AGENTS.md
+  signature: make generate-agents-md
+  operation_ru: Генерация core/AGENTS.md
+  description: Generate canonical operations table in core/AGENTS.md from manifest.
+- make_target: generate-litellm-config
+  mechanism: python-script
+  delegates_to: python3 core/internal/llm/config_renderer.py → litellm-config.yml
+  signature: make generate-litellm-config
+  operation_ru: Генерация litellm-config.yml
+  description: Generate LiteLLM config from policy.yaml via config_renderer.py.
+- make_target: generate-manifests-atomic
+  mechanism: python-script
+  delegates_to: mktemp → Chain A+B+C → mv
+  signature: make generate-manifests-atomic
+  operation_ru: Атомарная генерация всех манифестов
+  description: Atomic generation of ALL manifests via staging dir + atomic rename.
 - make_target: sync-env-defaults
   mechanism: python-script
   delegates_to: core/internal/scripts/sync_env_defaults.py → .env.example
@@ -509,6 +555,133 @@ name_linter:
   - pre-commit-
   namespace_collision_names:
   - deploy
+non_repairable_gates:
+- gate_id: test_single_gitleaks_version
+  repairable: false
+  repair_class: L3
+  repair_reason: Security gate — requires manual audit
+- gate_id: test_gitleaks_composite_action_used
+  repairable: false
+  repair_class: L3
+  repair_reason: Security gate — requires manual audit
+- gate_id: template-syntax-contract
+  repairable: false
+  repair_class: L3
+  repair_reason: 'Template syntax contract: config/ uses ${}, templates/ uses {{}},
+    no mixed syntax'
+forbidden_directories:
+- core/scripts/e2e
+- core/scripts
+forbidden_scripts:
+- dev.sh
+- platform-push.sh
+- apply.sh
+- bare-metal-reset.sh
+- prepare-bare-server.sh
+- stage-manager.sh
+- image-prewarm.sh
+forbidden_verbs:
+- push-core
+- deploy-node
+- build-local
+- bootstrap-core
+- hermes-deploy-vps
+scripts:
+- script: orchestrator_cli.py
+  path: core/internal/deploy/orchestrator_cli.py
+  signature: python3 -m core.internal.deploy.orchestrator_cli receive/deploy-many
+  operation_ru: CLI entrypoint для DeployOrchestrator
+  type: python
+  description: Unified deploy CLI — replaces deploy-project.sh
+shared_modules:
+- module: secrets_env_parser
+  path: core/internal/shared/secrets_env_parser.py
+  consumers:
+  - secrets_manager.py
+  - secrets_validator.py
+  - compose_preflight.py
+  - agent_watchdog.py
+  - cert_orchestrator.py
+  - node-lifecycle.sh
+  - decrypt-secrets.sh (facade)
+- module: telegram_notifier
+  path: core/internal/shared/telegram_notifier.py
+  consumers:
+  - agent_watchdog.py
+  - state_machine.py
+  - steps.py
+  - notify-hook.sh
+  - disk-monitor.sh
+  - tor-proxy-healthcheck.sh
+- module: docker_auth
+  path: core/internal/shared/docker_auth.py
+  consumers:
+  - lib/docker.sh
+  - docker_registry_auth.py
+  - state_machine.py
+  - steps.py
+allowed_verbs:
+- _get_all_profiles
+- adopt-project
+- audit
+- backup
+- bootstrap-node
+- check-dead-code
+- check-env-defaults
+- check-file-lines
+- check-manifests
+- compose-safe-up
+- context-promote
+- converge
+- deploy
+- deploy-context
+- deploy-project
+- dev-certs
+- discover-modules
+- down
+- fix-executable-bit
+- fix-gate
+- fix-ruff
+- gate
+- generate-agents-md
+- generate-entrypoint-manifest
+- generate-env-example
+- generate-litellm-config
+- generate-manifests
+- generate-manifests-atomic
+- generate-platform-env
+- generate-secrets-manifest
+- healthcheck
+- hermes-build-context
+- hermes-build-platform
+- hermes-push-l1
+- hermes-push-l2
+- lint
+- new-context
+- new-project
+- node-update
+- project-list
+- project-status
+- project-sync-env
+- provision
+- provision-llm
+- remove-project
+- render-vhosts
+- restart
+- restore
+- scripts-audit
+- secrets-unlock
+- status
+- sync-env-defaults
+- templates-check
+- templates-render
+- test
+- test-inventory-sync
+- up
+- up-safe
+- validate
+- validate-modules
+- verify
 gates:
 - id: test_no_partial_writes_on_failure
   test_file: test_gate_atomic_generation_no_partial_writes.py
@@ -1323,123 +1496,3 @@ gates:
 - id: test_referenced_container_names_have_alias
   test_file: test_p20_container_coupling.py
   description: 'Auto-discovered gate: test_referenced_container_names_have_alias'
-non_repairable_gates:
-- gate_id: test_single_gitleaks_version
-  repairable: false
-  repair_class: L3
-  repair_reason: Security gate — requires manual audit
-- gate_id: test_gitleaks_composite_action_used
-  repairable: false
-  repair_class: L3
-  repair_reason: Security gate — requires manual audit
-- gate_id: template-syntax-contract
-  repairable: false
-  repair_class: L3
-  repair_reason: 'Template syntax contract: config/ uses ${}, templates/ uses {{}},
-    no mixed syntax'
-forbidden_directories:
-- core/scripts/e2e
-- core/scripts
-forbidden_scripts:
-- dev.sh
-- platform-push.sh
-- apply.sh
-- bare-metal-reset.sh
-- prepare-bare-server.sh
-- stage-manager.sh
-- image-prewarm.sh
-forbidden_verbs:
-- push-core
-- deploy-node
-- build-local
-- bootstrap-core
-- hermes-deploy-vps
-allowed_verbs:
-- _get_all_profiles
-- adopt-project
-- audit
-- backup
-- bootstrap-node
-- check-dead-code
-- check-env-defaults
-- check-file-lines
-- check-manifests
-- compose-safe-up
-- context-promote
-- converge
-- deploy
-- deploy-context
-- deploy-project
-- dev-certs
-- discover-modules
-- down
-- fix-executable-bit
-- fix-gate
-- fix-ruff
-- gate
-- generate-manifests
-- healthcheck
-- hermes-build-context
-- hermes-build-platform
-- hermes-push-l1
-- hermes-push-l2
-- lint
-- new-context
-- new-project
-- node-update
-- project-list
-- project-status
-- project-sync-env
-- provision
-- provision-llm
-- remove-project
-- render-vhosts
-- restart
-- restore
-- scripts-audit
-- secrets-unlock
-- status
-- sync-env-defaults
-- templates-check
-- templates-render
-- test
-- test-inventory-sync
-- up
-- up-safe
-- validate
-- validate-modules
-- verify
-scripts:
-- script: orchestrator_cli.py
-  path: core/internal/deploy/orchestrator_cli.py
-  signature: python3 -m core.internal.deploy.orchestrator_cli receive/deploy-many
-  operation_ru: CLI entrypoint для DeployOrchestrator
-  type: python
-  description: Unified deploy CLI — replaces deploy-project.sh
-shared_modules:
-- module: secrets_env_parser
-  path: core/internal/shared/secrets_env_parser.py
-  consumers:
-  - secrets_manager.py
-  - secrets_validator.py
-  - compose_preflight.py
-  - agent_watchdog.py
-  - cert_orchestrator.py
-  - node-lifecycle.sh
-  - decrypt-secrets.sh (facade)
-- module: telegram_notifier
-  path: core/internal/shared/telegram_notifier.py
-  consumers:
-  - agent_watchdog.py
-  - state_machine.py
-  - steps.py
-  - notify-hook.sh
-  - disk-monitor.sh
-  - tor-proxy-healthcheck.sh
-- module: docker_auth
-  path: core/internal/shared/docker_auth.py
-  consumers:
-  - lib/docker.sh
-  - docker_registry_auth.py
-  - state_machine.py
-  - steps.py

@@ -938,7 +938,6 @@ def test_phase_key_misalignment_prevented(caplog, state_file):
     directly as dict keys.
     """
     init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
-    update_phases = sm.BootstrapPhase.UPDATE_PHASE_ORDER
 
     # ── SCENARIO A: Phase-based state (new format) ──
     phase_state = {}

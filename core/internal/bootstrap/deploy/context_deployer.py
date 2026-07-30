@@ -282,15 +282,16 @@ def _deploy_single_project_via_orchestrator(
 
     # Bootstrap guard
     project_dir = os.path.join(projects_base, project.name)
-    if not os.path.isfile(os.path.join(project_dir, "docker-compose.yml")):
-        if not _ensure_bootstrap_compose(project_dir, project):
-            return ProjectDeployResult(
-                name=project.name,
-                status="failed",
-                channel="none",
-                health="unhealthy",
-                error="bootstrap compose generation failed",
-            )
+    if not os.path.isfile(os.path.join(project_dir, "docker-compose.yml")) and not _ensure_bootstrap_compose(
+        project_dir, project
+    ):
+        return ProjectDeployResult(
+            name=project.name,
+            status="failed",
+            channel="none",
+            health="unhealthy",
+            error="bootstrap compose generation failed",
+        )
 
     # Deploy via orchestrator
     try:
@@ -317,7 +318,14 @@ def _deploy_single_project_via_orchestrator(
             health="unhealthy",
             error=result.error_info or "DeployOrchestrator deploy failed",
         )
-    except Exception as e:
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        ConfigNotFoundError,
+        ConfigParseError,
+    ) as e:
         logger.error(
             "[IMP:10][context_deployer] DeployOrchestrator failed for %s: %s",
             project.name,

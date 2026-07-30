@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from core.internal.deploy.channels import Payload
 from core.internal.shared.project_registry import validate_project_name
 
 logger = logging.getLogger(__name__)

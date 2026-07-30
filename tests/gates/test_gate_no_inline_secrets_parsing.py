@@ -26,7 +26,6 @@
 import logging
 import os
 import pathlib
-import re
 import subprocess
 
 import pytest
@@ -44,9 +43,7 @@ _SCAN_DIRS: tuple[str, ...] = (
     "core/entrypoints",
 )
 
-_EXCLUDE_DIRS: tuple[str, ...] = (
-    "core/internal/shared",
-)
+_EXCLUDE_DIRS: tuple[str, ...] = ("core/internal/shared",)
 
 # ── Patterns to detect ────────────────────────────────────────────────────
 
@@ -129,8 +126,7 @@ def _find_offending_files(
             "--include=" + file_glob,
         ]
         # Add scan directories
-        for scan_dir in _SCAN_DIRS:
-            grep_cmd.append(os.path.join(scan_root, scan_dir))
+        grep_cmd.extend(os.path.join(scan_root, scan_dir) for scan_dir in _SCAN_DIRS)
 
         try:
             result = subprocess.run(
@@ -174,13 +170,15 @@ def _find_offending_files(
             if rel_path.startswith((".ai/", ".venv/", ".git/")):
                 continue
 
-            violations.append({
-                "pattern_id": pattern_id,
-                "pattern_name": pattern_name,
-                "file": rel_path,
-                "line": line,
-                "description": desc,
-            })
+            violations.append(
+                {
+                    "pattern_id": pattern_id,
+                    "pattern_name": pattern_name,
+                    "file": rel_path,
+                    "line": line,
+                    "description": desc,
+                }
+            )
 
     return violations
 
@@ -256,10 +254,7 @@ def test_no_inline_secrets_parsing_outside_shared(caplog) -> None:
             f"All secrets.env parsing must go through the shared module:\n"
             f"  from core.internal.shared.secrets_env_parser import parse\n"
             f"See DevPlan 086 for details.\n"
-            + "\n".join(
-                f"  {v['file']}: [{v['pattern_id']}] {v['description']}"
-                for v in violations
-            )
+            + "\n".join(f"  {v['file']}: [{v['pattern_id']}] {v['description']}" for v in violations)
         )
 
     logger.info(

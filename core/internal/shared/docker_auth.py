@@ -35,7 +35,6 @@
 # endregion MODULE_CONTRACT
 
 import base64
-import json
 import logging
 import os
 import subprocess
@@ -255,15 +254,15 @@ def _cli_dispatch() -> int:
     cmd = sys.argv[1]
     if cmd == "docker-login":
         return 0 if docker_login() else 1
-    elif cmd == "ghcr-login":
+    if cmd == "ghcr-login":
         return 0 if ghcr_login() else 1
-    else:
-        print(f"Unknown command: {cmd}", file=sys.stderr)
-        return 1
+    print(f"Unknown command: {cmd}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
     import sys
+
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     sys.exit(_cli_dispatch())
 

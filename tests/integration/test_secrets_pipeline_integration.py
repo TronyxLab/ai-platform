@@ -23,8 +23,8 @@
 ##            undetected until production.
 # endregion MODULE_CONTRACT
 
+import contextlib
 import logging
-import os
 import pathlib
 from textwrap import dedent
 
@@ -192,9 +192,7 @@ def _verify_secrets_manager(parsed: dict[str, str], caplog: pytest.LogCaptureFix
     assert parsed.get("DOCKER_HUB_TOKEN") == expected["DOCKER_HUB_TOKEN"], (
         "DOCKER_HUB_TOKEN mismatch in secrets_manager data"
     )
-    assert parsed.get("GHCR_TOKEN") == expected["GHCR_TOKEN"], (
-        "GHCR_TOKEN mismatch in secrets_manager data"
-    )
+    assert parsed.get("GHCR_TOKEN") == expected["GHCR_TOKEN"], "GHCR_TOKEN mismatch in secrets_manager data"
     logger.info("[IMP:9][verify_secrets_manager] PASS — secrets_manager data consistent")
 
 
@@ -222,9 +220,7 @@ def _verify_secrets_validator(parsed: dict[str, str], caplog: pytest.LogCaptureF
 
     # secrets_validator checks password length, charset — verify data integrity
     db_password = parsed.get("POSTGRES_PASSWORD", "")
-    assert len(db_password) >= 8, (
-        f"POSTGRES_PASSWORD too short for secrets_validator: '{db_password}'"
-    )
+    assert len(db_password) >= 8, f"POSTGRES_PASSWORD too short for secrets_validator: '{db_password}'"
     assert parsed["DB_HOST"] == expected["DB_HOST"]
     assert parsed["DB_PORT"] == expected["DB_PORT"]
     assert parsed["DB_NAME"] == expected["DB_NAME"]
@@ -261,9 +257,7 @@ def _verify_compose_preflight(parsed: dict[str, str], caplog: pytest.LogCaptureF
         "TELEGRAM_BOT_TOKEN",
     ]
     for key in required_preflight_keys:
-        assert key in parsed, (
-            f"compose_preflight requires '{key}' but it's missing from parsed data"
-        )
+        assert key in parsed, f"compose_preflight requires '{key}' but it's missing from parsed data"
         assert parsed[key] == expected[key], (
             f"compose_preflight: {key} value mismatch: '{parsed[key]}' != '{expected[key]}'"
         )
@@ -295,9 +289,7 @@ def _verify_agent_watchdog(parsed: dict[str, str], caplog: pytest.LogCaptureFixt
     assert parsed.get("TELEGRAM_BOT_TOKEN") == expected["TELEGRAM_BOT_TOKEN"], (
         "TELEGRAM_BOT_TOKEN mismatch for agent_watchdog"
     )
-    assert parsed.get("HERMES_API_KEY") == expected["HERMES_API_KEY"], (
-        "HERMES_API_KEY mismatch for agent_watchdog"
-    )
+    assert parsed.get("HERMES_API_KEY") == expected["HERMES_API_KEY"], "HERMES_API_KEY mismatch for agent_watchdog"
 
     logger.info("[IMP:9][verify_agent_watchdog] PASS — agent_watchdog data consistent")
 
@@ -361,12 +353,8 @@ def _verify_docker_auth(parsed: dict[str, str], caplog: pytest.LogCaptureFixture
     assert parsed.get("DOCKER_HUB_USERNAME") == expected["DOCKER_HUB_USERNAME"], (
         "DOCKER_HUB_USERNAME mismatch for docker_auth"
     )
-    assert parsed.get("DOCKER_HUB_TOKEN") == expected["DOCKER_HUB_TOKEN"], (
-        "DOCKER_HUB_TOKEN mismatch for docker_auth"
-    )
-    assert parsed.get("GHCR_TOKEN") == expected["GHCR_TOKEN"], (
-        "GHCR_TOKEN mismatch for docker_auth"
-    )
+    assert parsed.get("DOCKER_HUB_TOKEN") == expected["DOCKER_HUB_TOKEN"], "DOCKER_HUB_TOKEN mismatch for docker_auth"
+    assert parsed.get("GHCR_TOKEN") == expected["GHCR_TOKEN"], "GHCR_TOKEN mismatch for docker_auth"
 
     logger.info("[IMP:9][verify_docker_auth] PASS — docker_auth data consistent")
 
@@ -409,14 +397,10 @@ def _verify_export_shell_output(
     for key, value in expected.items():
         if value == "":
             # Empty values: export KEY='' must appear
-            assert f"export {key}=''" in output, (
-                f"export_shell must include empty-valued export for '{key}'"
-            )
+            assert f"export {key}=''" in output, f"export_shell must include empty-valued export for '{key}'"
         else:
             # Non-empty values: export KEY='value' must appear
-            assert f"export {key}='" in output, (
-                f"export_shell must include export for '{key}'"
-            )
+            assert f"export {key}='" in output, f"export_shell must include export for '{key}'"
 
     # Single quotes in values must be escaped properly
     # (no values in our test data have single quotes, but verify the export format)
@@ -425,9 +409,7 @@ def _verify_export_shell_output(
     )
 
     # Unicode in shell output (values should be raw bytes, not escaped)
-    assert "привет_мир" in output, (
-        "export_shell must preserve unicode characters in values"
-    )
+    assert "привет_мир" in output, "export_shell must preserve unicode characters in values"
 
     logger.info("[IMP:9][verify_export_shell] PASS — export_shell output consistent with parsed data")
 
@@ -507,15 +489,14 @@ def test_secrets_pipeline_consistency(
             sorted(extra_keys),
         )
 
-    assert not missing_keys, (
-        f"Expected keys missing from parsed data: {sorted(missing_keys)}"
-    )
+    assert not missing_keys, f"Expected keys missing from parsed data: {sorted(missing_keys)}"
 
     # Verify each expected key has correct value
-    mismatches: list[str] = []
-    for key in expected:
-        if parsed.get(key) != expected[key]:
-            mismatches.append(f"  {key}: expected='{expected[key]}', got='{parsed.get(key)}'")
+    mismatches: list[str] = [
+        f"  {key}: expected='{expected[key]}', got='{parsed.get(key)}'"
+        for key in expected
+        if parsed.get(key) != expected[key]
+    ]
 
     if mismatches:
         logger.error(
@@ -525,9 +506,8 @@ def test_secrets_pipeline_consistency(
         for m in mismatches:
             print(m)
 
-    assert not mismatches, (
-        f"{len(mismatches)} value mismatch(es) between parsed and expected:\n"
-        + "\n".join(mismatches)
+    assert not mismatches, f"{len(mismatches)} value mismatch(es) between parsed and expected:\n" + "\n".join(
+        mismatches
     )
 
     logger.info(
@@ -580,8 +560,7 @@ def test_secrets_pipeline_missing_file_error(caplog: pytest.LogCaptureFixture, t
 
     missing_path = tmp_path / "nonexistent.env"
     logger.info(
-        "[IMP:8][test_secrets_pipeline_missing_file_error] "
-        "Attempting parse of missing file: %s",
+        "[IMP:8][test_secrets_pipeline_missing_file_error] Attempting parse of missing file: %s",
         missing_path,
     )
 
@@ -589,8 +568,7 @@ def test_secrets_pipeline_missing_file_error(caplog: pytest.LogCaptureFixture, t
         parse_secrets_env(str(missing_path))
 
     logger.info(
-        "[IMP:9][test_secrets_pipeline_missing_file_error] "
-        "FileNotFoundError raised correctly: %s",
+        "[IMP:9][test_secrets_pipeline_missing_file_error] FileNotFoundError raised correctly: %s",
         exc_info.value,
     )
 
@@ -664,9 +642,7 @@ def test_secrets_pipeline_merge_multiple_files(
 
     # ── Merge all 3 files ──
     merged = merge(str(file1), str(file2), str(file3))
-    logger.info(
-        "[IMP:8][merge] Merged %d total entries from 3 files", len(merged)
-    )
+    logger.info("[IMP:8][merge] Merged %d total entries from 3 files", len(merged))
 
     # ── Verify last-wins semantics ──
     # SHARED_KEY: file1=from_base, file2=from_override, file3=from_env → WINNER: from_env
@@ -683,26 +659,29 @@ def test_secrets_pipeline_merge_multiple_files(
 
     # ── Verify unique keys from all files are present ──
     expected_keys = {
-        "POSTGRES_PASSWORD", "POSTGRES_USER", "DB_HOST", "DB_PORT", "DB_NAME",
-        "LITELLM_API_KEY", "OPENAI_API_KEY",
-        "NEW_KEY_FILE2", "ENV_SPECIFIC", "SHARED_KEY",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_USER",
+        "DB_HOST",
+        "DB_PORT",
+        "DB_NAME",
+        "LITELLM_API_KEY",
+        "OPENAI_API_KEY",
+        "NEW_KEY_FILE2",
+        "ENV_SPECIFIC",
+        "SHARED_KEY",
     }
     merged_keys = set(merged.keys())
     missing = expected_keys - merged_keys
     extra = merged_keys - expected_keys
 
-    assert not missing, (
-        f"merge() missing expected keys: {sorted(missing)}"
-    )
+    assert not missing, f"merge() missing expected keys: {sorted(missing)}"
     if extra:
         logger.info("[IMP:7][merge] Unexpected keys in merge result: %s", sorted(extra))
 
     # ── Verify single-file merge is equivalent to parse ──
     single_merged = merge(str(file1))
     single_parsed = parse(str(file1))
-    assert single_merged == single_parsed, (
-        "merge() with single file must produce same result as parse()"
-    )
+    assert single_merged == single_parsed, "merge() with single file must produce same result as parse()"
     logger.info("[IMP:9][merge] Single-file merge equivalence verified")
 
     # ── Verify empty merge ──
@@ -768,56 +747,40 @@ def test_secrets_pipeline_write_roundtrip(
     # ── Verify file exists with correct permissions ──
     assert env_file.is_file(), f"write() did not create file: {env_file}"
     file_mode = env_file.stat().st_mode & 0o777
-    assert file_mode == 0o600, (
-        f"write() default permissions: expected 0o600, got 0o{file_mode:o}"
-    )
+    assert file_mode == 0o600, f"write() default permissions: expected 0o600, got 0o{file_mode:o}"
     logger.info("[IMP:9][roundtrip] File permissions correct: 0o%o", file_mode)
 
     # ── Re-parse and verify roundtrip ──
     reparsed = parse(str(env_file))
-    logger.info(
-        "[IMP:8][roundtrip] Re-parsed %d entries from %s", len(reparsed), env_file
-    )
+    logger.info("[IMP:8][roundtrip] Re-parsed %d entries from %s", len(reparsed), env_file)
 
     # Verify all original keys present
     missing_keys = set(original.keys()) - set(reparsed.keys())
     extra_keys = set(reparsed.keys()) - set(original.keys())
-    assert not missing_keys, (
-        f"Roundtrip lost keys: {sorted(missing_keys)}"
-    )
+    assert not missing_keys, f"Roundtrip lost keys: {sorted(missing_keys)}"
     if extra_keys:
         logger.warning("[IMP:7][roundtrip] Extra keys in reparsed: %s", sorted(extra_keys))
 
     # Verify all values match
-    mismatches: list[str] = []
-    for key in original:
-        if reparsed.get(key) != original[key]:
-            mismatches.append(
-                f"  {key}: original='{original[key]}', reparsed='{reparsed.get(key)}'"
-            )
+    mismatches: list[str] = [
+        f"  {key}: original='{original[key]}', reparsed='{reparsed.get(key)}'"
+        for key in original
+        if reparsed.get(key) != original[key]
+    ]
 
-    assert not mismatches, (
-        f"{len(mismatches)} value mismatch(es) in write→parse roundtrip:\n"
-        + "\n".join(mismatches)
-    )
-    logger.info(
-        "[IMP:9][roundtrip] Roundtrip verified: %d entries intact", len(original)
-    )
+    assert not mismatches, f"{len(mismatches)} value mismatch(es) in write→parse roundtrip:\n" + "\n".join(mismatches)
+    logger.info("[IMP:9][roundtrip] Roundtrip verified: %d entries intact", len(original))
 
     # ── Verify atomicity: write does not corrupt on failure ──
     # Write a file first, then trigger an intentional write error (invalid type)
     write(str(env_file), {"VALID": "data"})
-    try:
-        # TypeError: int is not string — should not corrupt the file
+    # TypeError: int is not string — should not corrupt the file
+    with contextlib.suppress(TypeError, AttributeError):
         write(str(env_file), {"BAD": 42})  # type: ignore[dict-item]
-    except (TypeError, AttributeError):
-        pass
 
     # After failed write, the valid file should still be intact
     after_failure = parse(str(env_file))
-    assert after_failure.get("VALID") == "data", (
-        "write() should not corrupt existing file on failure (atomic tempfile)"
-    )
+    assert after_failure.get("VALID") == "data", "write() should not corrupt existing file on failure (atomic tempfile)"
     logger.info("[IMP:9][roundtrip] Atomicity verified: existing file intact after failed write")
 
     # ── Final LDD trajectory ──

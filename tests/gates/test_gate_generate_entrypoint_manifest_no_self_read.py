@@ -91,22 +91,21 @@ def test_no_self_read(caplog) -> None:
     )
     # Check that load_structural_sections() is called in main() (NOT load_existing_manifest)
     assert "existing = load_structural_sections" in source, (
-        f"load_structural_sections() must be called from main() to break the G3 cycle. "
-        f"Look for `existing = load_structural_sections(...)` in main()."
+        "load_structural_sections() must be called from main() to break the G3 cycle. "
+        "Look for `existing = load_structural_sections(...)` in main()."
     )
     print("[IMP:7][test_no_self_read] load_structural_sections() defined and called from main() — OK", file=sys.stderr)
 
     # ── Verify 1b: `load_existing_manifest()` exists for backward compat but NOT called from main() ──
     assert "def load_existing_manifest" in source, (
-        f"Missing load_existing_manifest() function in {_GENERATOR_PATH} — "
-        f"kept for backward compat"
+        f"Missing load_existing_manifest() function in {_GENERATOR_PATH} — kept for backward compat"
     )
     # load_existing_manifest should NOT be called from main() — only from unit tests or external consumers
     # The function definition contains "load_existing_manifest(" but main() should NOT call it
     # Check that the call pattern "existing = load_existing_manifest" is NOT present
     assert "existing = load_existing_manifest" not in source, (
-        f"G3 CYCLE BREAK VIOLATION: main() still calls load_existing_manifest() instead of "
-        f"load_structural_sections(). Replace with load_structural_sections() to break the cycle."
+        "G3 CYCLE BREAK VIOLATION: main() still calls load_existing_manifest() instead of "
+        "load_structural_sections(). Replace with load_structural_sections() to break the cycle."
     )
     print(
         "[IMP:7][test_no_self_read] load_existing_manifest() defined (backward compat) but NOT called from main() — OK",
@@ -121,33 +120,41 @@ def test_no_self_read(caplog) -> None:
     )
 
     # Check that merge() replaces allowed_verbs and gates[], not reads them from existing
-    merge_assign_verbs = "result[\"allowed_verbs\"]" in source or "result['allowed_verbs']" in source
-    merge_assign_gates = "result[\"gates\"]" in source or "result['gates']" in source
+    merge_assign_verbs = 'result["allowed_verbs"]' in source or "result['allowed_verbs']" in source
+    merge_assign_gates = 'result["gates"]' in source or "result['gates']" in source
     assert merge_assign_verbs, (
-        f"merge() must REPLACE allowed_verbs, not read from existing. "
-        f"Look for `result['allowed_verbs'] = ...` in merge()."
+        "merge() must REPLACE allowed_verbs, not read from existing. "
+        "Look for `result['allowed_verbs'] = ...` in merge()."
     )
     assert merge_assign_gates, (
-        f"merge() must REPLACE gates[], not read from existing. "
-        f"Look for `result['gates'] = ...` in merge()."
+        "merge() must REPLACE gates[], not read from existing. Look for `result['gates'] = ...` in merge()."
     )
-    print("[IMP:9][test_no_self_read] merge() replaces allowed_verbs and gates[] from generated values — OK", file=sys.stderr)
+    print(
+        "[IMP:9][test_no_self_read] merge() replaces allowed_verbs and gates[] from generated values — OK",
+        file=sys.stderr,
+    )
 
     # ── Verify 3: load_structural_sections() is called from main(), not from extract or collect ──
     # load_existing_manifest() is defined for backward compat but NOT called in main()
     lines = source.splitlines()
     structural_lines = [
-        i + 1 for i, line in enumerate(lines)
-        if "load_structural_sections" in line and not line.strip().startswith("#")
+        i + 1 for i, line in enumerate(lines) if "load_structural_sections" in line and not line.strip().startswith("#")
     ]
     load_existing_lines = [
-        i + 1 for i, line in enumerate(lines)
-        if "load_existing_manifest" in line and not line.strip().startswith("#")
+        i + 1 for i, line in enumerate(lines) if "load_existing_manifest" in line and not line.strip().startswith("#")
     ]
-    merge_calls = [i + 1 for i, line in enumerate(lines) if "existing" in line and "merge(" in line and not line.strip().startswith("#")]
+    merge_calls = [
+        i + 1
+        for i, line in enumerate(lines)
+        if "existing" in line and "merge(" in line and not line.strip().startswith("#")
+    ]
 
-    print(f"[IMP:7][test_no_self_read] load_structural_sections referenced at lines: {structural_lines}", file=sys.stderr)
-    print(f"[IMP:7][test_no_self_read] load_existing_manifest referenced at lines: {load_existing_lines}", file=sys.stderr)
+    print(
+        f"[IMP:7][test_no_self_read] load_structural_sections referenced at lines: {structural_lines}", file=sys.stderr
+    )
+    print(
+        f"[IMP:7][test_no_self_read] load_existing_manifest referenced at lines: {load_existing_lines}", file=sys.stderr
+    )
     print(f"[IMP:7][test_no_self_read] merge() receiving 'existing' at lines: {merge_calls}", file=sys.stderr)
 
     # ── Verify 4: allowed_verbs and gates are NOT read from existing manifest ──
@@ -177,7 +184,7 @@ def test_no_self_read(caplog) -> None:
                     violations.append((lineno, stripped))
 
     if violations:
-        violation_msg = "\n".join(f"  Line {l}: {t}" for l, t in violations)
+        violation_msg = "\n".join(f"  Line {line_no}: {t}" for line_no, t in violations)
         logger.error(
             "[IMP:10][test_no_self_read] VIOLATION: G3 reads allowed_verbs/gates from existing manifest:\n%s",
             violation_msg,
@@ -199,7 +206,10 @@ def test_no_self_read(caplog) -> None:
     assert '"gates"' in source or "'gates'" in source, (
         "load_structural_sections() must explicitly reference gates in its exclusion set."
     )
-    print("[IMP:9][test_no_self_read] load_structural_sections() explicitly excludes allowed_verbs and gates — OK", file=sys.stderr)
+    print(
+        "[IMP:9][test_no_self_read] load_structural_sections() explicitly excludes allowed_verbs and gates — OK",
+        file=sys.stderr,
+    )
 
     # ── Verify 6: Structural sections that ARE preserved are legitimate ──
     # Verify the merge() function preserves forbidden_*, module_lifecycle, etc.
@@ -217,9 +227,7 @@ def test_no_self_read(caplog) -> None:
         if key in source:
             print(f"[IMP:7][test_no_self_read] Preserved section '{key}' found in merge() — OK", file=sys.stderr)
 
-    logger.info(
-        "[IMP:9][test_no_self_read] ALL PASS — G3 does not read allowed_verbs/gates from existing manifest"
-    )
+    logger.info("[IMP:9][test_no_self_read] ALL PASS — G3 does not read allowed_verbs/gates from existing manifest")
 
 
 # endregion FUNC_test_no_self_read

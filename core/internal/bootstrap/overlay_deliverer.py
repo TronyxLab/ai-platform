@@ -284,7 +284,7 @@ def deliver_via_orchestrator_scp(
             return True
         logger.warning("[IMP:5][deliver_via_orchestrator_scp] Delivery failed: %s", result.error_message)
         return False
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         logger.warning("[IMP:5][deliver_via_orchestrator_scp] Error: %s", e)
         return False
 

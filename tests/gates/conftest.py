@@ -28,7 +28,6 @@ Escalation levels:
 
 import json
 import logging
-import sys
 from pathlib import Path
 
 import pytest
@@ -64,15 +63,15 @@ def _read_counter() -> int:
 
 def _write_counter(count: int) -> None:
     """Write attempt counter to .test_counter.json."""
-    COUNTER_FILE.write_text(json.dumps({"failed_runs": count}, indent=2))
+    COUNTER_FILE.write_text(json.dumps({"failed_runs": count}, indent=2) + "\n")
     logger.info("[IMP:7][anti-loop][counter] Set failed_runs=%d", count)
 
 
 def _print_escalation(attempt: int) -> None:
     """Print escalation message based on attempt count."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  ANTI-LOOP ESCALATION: Attempt #{attempt}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     if attempt <= 2:
         print("\n  CHECKLIST — common errors to verify:")
@@ -86,7 +85,7 @@ def _print_escalation(attempt: int) -> None:
     else:
         print("\n  >> CRITICAL ERROR: Agent looping detected. STOP.")
         print("  >> Formulate a help request for an operator.")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

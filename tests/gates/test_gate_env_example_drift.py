@@ -4,18 +4,18 @@
 # region MODULE_CONTRACT
 ## @purpose  Gate test: validate .env.example consistency with SoT (platform-infra.yaml + secret-definitions.yaml).
 ##           Implements DRIFT-E1, E2, E6, E7 closure verification. S3_ENDPOINT elimination audit.
-##           Language policy: gen-env-platform.sh must be thin facade (zero inline python3).
+##           Validation: gen-env-platform.sh deleted (DevPlan 090), gen_env_platform.py canonical.
 ## @scope    Production code (core/, .env.example, .env). Test files excluded from S3_ENDPOINT audit.
 ## @invariants
 ##   - .env.example is byte-identical to sync_env_defaults.py generated output
 ##   - .env.example NO_PROXY is superset of platform-infra.yaml no_proxy_internal
 ##   - All POSTGRES_PASSWORD defaults reference secret-definitions.yaml ci_default (test-pg-pwd)
 ##   - S3_ENDPOINT (without _URL) does NOT exist in production code
-##   - PLATFORM_DOMAIN default is ai-platform.local in gen-env-platform.sh
-##   - gen-env-platform.sh has zero inline python3 heredoc blocks
+##   - PLATFORM_DOMAIN default is ai-platform.local in sync_env_defaults.py (env .example SoT)
+##   - gen-env-platform.sh deleted — gen_env_platform.py is the canonical source
 ##   - NEXTAUTH_SECRET validation skipped if DevPlan 078 marker absent (exit 0 with skip)
 ## @rationale Gate-enforced drift prevention: catches any manual edits to .env.example or
-##            regressions in S3_ENDPOINT removal. Language policy enforcement for shell scripts.
+##            regressions in S3_ENDPOINT removal. gen-env-platform.sh deleted per DevPlan 090.
 ## @changes  2026-07-26 | Created per DevPlan 082 TASK-8
 # endregion MODULE_CONTRACT
 
@@ -39,6 +39,7 @@ SECRET_DEFS = ROOT / "core" / "secret-definitions.yaml"
 PLATFORM_INFRA = ROOT / "core" / "platform-infra.yaml"
 GEN_ENV_PLATFORM_SH = ROOT / "core" / "internal" / "scaffold" / "gen-env-platform.sh"
 SYNC_SCRIPT = ROOT / "core" / "internal" / "scripts" / "sync_env_defaults.py"
+ENV_DEFAULTS_GENERATED = ROOT / "tests" / "helpers" / "env_defaults_generated.py"
 
 
 @pytest.mark.gate
@@ -214,45 +215,47 @@ def test_s3_endpoint_removed(caplog):
 @pytest.mark.gate
 @ldd_trajectory
 def test_platform_domain_default(caplog):
-    """PLATFORM_DOMAIN default is ai-platform.local in gen-env-platform.sh."""
-    with open(GEN_ENV_PLATFORM_SH) as f:
+    """PLATFORM_DOMAIN default is ai-platform.local in sync_env_defaults.py (SoT)."""
+    with open(SYNC_SCRIPT) as f:
         content = f.read()
 
-    # Check for the default domain
-    assert "ai-platform.local" in content, "gen-env-platform.sh must reference ai-platform.local"
-    assert "tronyx.ru" not in content, "gen-env-platform.sh must NOT reference the old default tronyx.ru"
-
-    logger.info("[IMP:9][gate] PASS: PLATFORM_DOMAIN default = ai-platform.local")
+    # Check for the default in sync_env_defaults.py hardcoded line
+    assert "PLATFORM_DOMAIN" in content, "sync_env_defaults.py must define PLATFORM_DOMAIN"
+    assert "ai-platform.local" in content, "sync_env_defaults.py must default PLATFORM_DOMAIN to ai-platform.local"
+    # Also verify it's NOT in env_defaults_generated.py (production-only key)
+    with open(ENV_DEFAULTS_GENERATED) as f:
+        gen = f.read()
+    assert "PLATFORM_DOMAIN" not in gen, (
+        "PLATFORM_DOMAIN must NOT be in env_defaults_generated.py — "
+        "it's a production-only key set during deployment, not a test helper default"
+    )
+    logger.info("[IMP:9][gate] PASS: PLATFORM_DOMAIN default = ai-platform.local (sync_env_defaults.py SoT)")
 
 
 @pytest.mark.gate
 @ldd_trajectory
 def test_no_inline_python3_in_scaffold(caplog):
-    """gen-env-platform.sh must be a thin facade — zero inline python3 heredoc blocks."""
-    with open(GEN_ENV_PLATFORM_SH) as f:
-        content = f.read()
+    """gen-env-platform.sh deleted (DevPlan 090) — gen_env_platform.py is the canonical source."""
+    # Verify gen-env-platform.sh is gone
+    assert not GEN_ENV_PLATFORM_SH.exists(), (
+        "gen-env-platform.sh must be deleted — business logic migrated to gen_env_platform.py"
+    )
 
-    # Check for inline python3 patterns
-    inline_patterns = [
-        r'python3\s+-c\s+"',
-        r"python3\s+-c\s+'",
-        r"python3\s+<<\s*PYEOF",
-        r"python3\s+<<\s*'PYEOF'",
-    ]
+    # Verify gen_env_platform.py exists and is a proper Python module
+    gen_env_py = GEN_ENV_PLATFORM_SH.with_suffix(".py").with_name("gen_env_platform.py")
+    assert gen_env_py.is_file(), f"gen_env_platform.py not found at {gen_env_py}"
 
-    for pat in inline_patterns:
-        if re.search(pat, content):
-            logger.error("[IMP:10][gate] Inline python3 found in gen-env-platform.sh matching pattern: %s", pat)
-            pytest.fail(
-                "gen-env-platform.sh contains inline python3 — extract to gen_env_platform.py (Tier 1 Strangler)"
-            )
+    content = gen_env_py.read_text()
+    # Must be native Python (no inline shell)
+    assert "python3" not in content or "#!/usr/bin/env python3" in content, (
+        "gen_env_platform.py must be Python, not shell with inline python3"
+    )
 
-    # Verify the thin facade calls the Python module
-    assert "gen_env_platform.py" in content, "gen-env-platform.sh must delegate to gen_env_platform.py"
-
-    # Check shell script is reasonably short (< 150 lines)
-    lines = content.splitlines()
-    logger.info("[IMP:9][gate] PASS: gen-env-platform.sh is thin facade (%d lines, no inline python3)", len(lines))
+    logger.info(
+        "[IMP:9][gate] PASS: gen-env-platform.sh removed, gen_env_platform.py exists (%d lines, %d bytes)",
+        len(content.splitlines()),
+        len(content),
+    )
 
 
 @pytest.mark.gate

@@ -23,8 +23,6 @@ from pathlib import Path
 import pytest
 
 from core.internal.shared.exceptions import (
-    ConfigNotFoundError,
-    ConfigParseError,
     ConfigValidationError,
 )
 from core.internal.shared.node_yaml import (
@@ -286,6 +284,7 @@ def test_write_back_preserves_comments(caplog, tmp_path):
     """
     try:
         import ruamel.yaml  # noqa: F401
+
         _ruamel_available = True
     except ImportError:
         _ruamel_available = False
@@ -329,14 +328,10 @@ projects:
         assert "# Node configuration" in content
         assert "# production host" in content
         assert "# First project: existing-app" in content
-        logger.critical(
-            "[IMP:9][test] write_back_preserves_comments: ruamel available, comments preserved — OK"
-        )
+        logger.critical("[IMP:9][test] write_back_preserves_comments: ruamel available, comments preserved — OK")
     else:
         # PyYAML fallback — comments may be stripped, but write-back succeeded
-        logger.critical(
-            "[IMP:9][test] write_back_preserves_comments: ruamel unavailable, PyYAML fallback — OK"
-        )
+        logger.critical("[IMP:9][test] write_back_preserves_comments: ruamel unavailable, PyYAML fallback — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · write-back falls back to PyYAML when ruamel is absent

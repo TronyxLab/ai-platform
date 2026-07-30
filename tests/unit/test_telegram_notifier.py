@@ -26,7 +26,6 @@ import pytest
 
 from core.internal.shared.telegram_notifier import send_telegram
 
-
 # region FUNC_test_send_telegram_mocked
 
 
@@ -63,9 +62,7 @@ def test_send_telegram_mocked(caplog: pytest.LogCaptureFixture) -> None:
         captured_request.append(req)
         return mock_response
 
-    with patch.object(
-        urllib.request.OpenerDirector, "open", side_effect=fake_open
-    ):
+    with patch.object(urllib.request.OpenerDirector, "open", side_effect=fake_open):
         result = send_telegram(
             message=message,
             bot_token=bot_token,
@@ -95,9 +92,7 @@ def test_send_telegram_mocked(caplog: pytest.LogCaptureFixture) -> None:
     # Verify Content-Type header (Python 3.14 normalizes header names to Camel-Case)
     header_items = dict(req.header_items())
     assert header_items.get("Content-type") == "application/x-www-form-urlencoded"
-    assert (
-        f"bot{bot_token}/sendMessage" in req.full_url
-    ), "URL must point to sendMessage endpoint"
+    assert f"bot{bot_token}/sendMessage" in req.full_url, "URL must point to sendMessage endpoint"
 
     # Verify POST body contains chat_id and text
     body = req.data.decode("ascii") if req.data else ""
@@ -204,8 +199,9 @@ def test_send_telegram_env_fallback(caplog: pytest.LogCaptureFixture) -> None:
         "TELEGRAM_CHAT_ID": "env-chat-789",
     }
 
-    with patch.dict(os.environ, env_vars, clear=True), patch.object(
-        urllib.request.OpenerDirector, "open", side_effect=fake_open
+    with (
+        patch.dict(os.environ, env_vars, clear=True),
+        patch.object(urllib.request.OpenerDirector, "open", side_effect=fake_open),
     ):
         result = send_telegram(
             message="env test",
@@ -262,7 +258,6 @@ def test_send_telegram_with_proxy(caplog: pytest.LogCaptureFixture) -> None:
         captured_handlers.extend(handlers)
         opener = original_build_opener(*handlers)
         # Wrap open to return mock
-        original_open = opener.open
 
         def tracking_open(
             req: urllib.request.Request,
@@ -273,9 +268,7 @@ def test_send_telegram_with_proxy(caplog: pytest.LogCaptureFixture) -> None:
         opener.open = tracking_open  # type: ignore[method-assign]
         return opener
 
-    with patch(
-        "urllib.request.build_opener", side_effect=tracking_build_opener
-    ):
+    with patch("urllib.request.build_opener", side_effect=tracking_build_opener):
         result = send_telegram(
             message="proxy test",
             bot_token=bot_token,
@@ -295,9 +288,7 @@ def test_send_telegram_with_proxy(caplog: pytest.LogCaptureFixture) -> None:
     assert found_imp7_proxy, "IMP:7 log must mention proxy configuration"
 
     # Verify a ProxyHandler was created
-    found_proxy_handler = any(
-        isinstance(h, urllib.request.ProxyHandler) for h in captured_handlers
-    )
+    found_proxy_handler = any(isinstance(h, urllib.request.ProxyHandler) for h in captured_handlers)
     assert found_proxy_handler, "ProxyHandler must be configured when proxy_url is set"
 
 

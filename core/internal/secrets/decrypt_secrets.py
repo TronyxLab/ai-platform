@@ -38,7 +38,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +49,12 @@ _SHARED_DIR = os.path.join(
 if _SHARED_DIR not in sys.path:
     sys.path.insert(0, _SHARED_DIR)
 
-from age_key import detect_age_key as _detect_age_key_impl  # noqa: E402
+import contextlib
+
+from age_key import detect_age_key as _detect_age_key_impl
 
 # ── Global cleanup state ───────────────────────────────────────────────────────
-_TEMP_FILES: List[str] = []
+_TEMP_FILES: list[str] = []
 
 
 def _wipe_temp_key(path: str) -> None:
@@ -79,7 +80,7 @@ def _wipe_temp_key(path: str) -> None:
                 capture_output=True,
                 timeout=10,
             )
-    except Exception:
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         logger.warning("[IMP:7][wipe_temp_key] dd wipe failed for %s (continuing with rm)", path)
     try:
         os.remove(path)
@@ -94,7 +95,7 @@ def _cleanup_temp_files() -> None:
     ##            snapshot (copy) to avoid mid-iteration mutation.
     ## @io — ⎋ None (side-effect: files wiped + deleted)
     """
-    for tmp_path in list(_TEMP_FILES):
+    for tmp_path in _TEMP_FILES:
         _wipe_temp_key(tmp_path)
     _TEMP_FILES.clear()
 
@@ -134,8 +135,7 @@ def detect_age_key() -> str:
             "(checked AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE)"
         )
         raise RuntimeError(
-            "AGE_SECRET_KEY not found. Set AGE_SECRET_KEY, SOPS_AGE_KEY, "
-            "or AGE_SECRET_KEY_FILE environment variable."
+            "AGE_SECRET_KEY not found. Set AGE_SECRET_KEY, SOPS_AGE_KEY, or AGE_SECRET_KEY_FILE environment variable."
         )
     masked = key[:8] if len(key) >= 8 else key
     logger.info("[IMP:8][detect_age_key] AGE key found (%s...)", masked)
@@ -160,7 +160,7 @@ def detect_age_key() -> str:
 ##            Python version uses re.match + str.replace for the same semantics.
 def _yaml_to_env(yaml_content: str) -> str:
     """Convert YAML key:value pairs to KEY='value' env format."""
-    lines: List[str] = []
+    lines: list[str] = []
     for raw_line in yaml_content.splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
@@ -299,13 +299,11 @@ def write_secrets_env(decrypted_data: str, output_path: str) -> None:
         os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, output_path)
         logger.info("[IMP:9][write_secrets_env] SUCCESS: Written %s (%d bytes)", output_path, len(decrypted_data))
-    except Exception:
+    except (OSError, ValueError) as e:
         # Cleanup temp file on failure
-        try:
+        with contextlib.suppress(OSError):
             os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
+        raise RuntimeError(f"Failed to write secrets env to {output_path}: {e}") from e
 
 
 # endregion FUNC_write_secrets_env
@@ -340,9 +338,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.enc_path:
-        parser.error(
-            "enc_path is required: set SECRETS_FILE env var or pass as positional argument"
-        )
+        parser.error("enc_path is required: set SECRETS_FILE env var or pass as positional argument")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -372,7 +368,7 @@ def main() -> None:
     except (RuntimeError, FileNotFoundError) as e:
         logger.error("[IMP:9][main] FAILED: %s", e)
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: EXC — CLI entry point catch-all; already catches (RuntimeError, FileNotFoundError) above
         logger.error("[IMP:9][main] UNEXPECTED FAILURE: %s", e)
         sys.exit(2)
 

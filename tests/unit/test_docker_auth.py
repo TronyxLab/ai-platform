@@ -24,10 +24,9 @@ import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from tests._conftest.ldd import ldd_trajectory
-
 # ── Module under test ─────────────────────────────────────────────
 from core.internal.shared.docker_auth import configure_docker_auth, docker_login, ghcr_login
+from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +57,12 @@ def test_docker_login_success(caplog) -> None:
 
     # Command structure: docker login <registry> --username <user> --password-stdin
     assert pos_args[0] == [
-        "docker", "login", "https://index.docker.io/v1/",
-        "--username", "testuser", "--password-stdin",
+        "docker",
+        "login",
+        "https://index.docker.io/v1/",
+        "--username",
+        "testuser",
+        "--password-stdin",
     ]
     assert kw_args.get("input") == "testtoken"
     assert kw_args.get("stdout") == subprocess.DEVNULL
@@ -115,9 +118,11 @@ def test_docker_login_env_fallback(caplog) -> None:
         "DOCKER_HUB_USERNAME": "envuser",
         "DOCKER_HUB_TOKEN": "envtoken",
     }
-    with patch.dict(os.environ, env, clear=True):
-        with patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result) as mock_run:
-            ok = docker_login()  # No args → should use env vars
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result) as mock_run,
+    ):
+        ok = docker_login()  # No args → should use env vars
 
     assert ok is True
     mock_run.assert_called_once()
@@ -154,8 +159,12 @@ def test_ghcr_login_success(caplog) -> None:
 
     # Command: docker login ghcr.io --username ci-bot --password-stdin
     assert pos_args[0] == [
-        "docker", "login", "ghcr.io",
-        "--username", "ci-bot", "--password-stdin",
+        "docker",
+        "login",
+        "ghcr.io",
+        "--username",
+        "ci-bot",
+        "--password-stdin",
     ]
     assert kw_args.get("input") == "ghcr_pat_123"
     assert kw_args.get("stdout") == subprocess.DEVNULL
@@ -205,9 +214,11 @@ def test_ghcr_login_env_fallback(caplog) -> None:
     mock_result = MagicMock()
     mock_result.returncode = 0
 
-    with patch.dict(os.environ, {"GHCR_PULL_TOKEN": "env_token_456"}, clear=True):
-        with patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result) as mock_run:
-            ok = ghcr_login()  # No token arg → should use GHCR_PULL_TOKEN
+    with (
+        patch.dict(os.environ, {"GHCR_PULL_TOKEN": "env_token_456"}, clear=True),
+        patch("core.internal.shared.docker_auth.subprocess.run", return_value=mock_result) as mock_run,
+    ):
+        ok = ghcr_login()  # No token arg → should use GHCR_PULL_TOKEN
 
     assert ok is True
     mock_run.assert_called_once()
