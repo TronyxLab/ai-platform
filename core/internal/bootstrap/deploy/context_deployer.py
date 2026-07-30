@@ -37,17 +37,15 @@ from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
 )
+from core.internal.deploy.channels import SCPChannel
+from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.node_yaml import NodeYaml
 
-# DevPlan 089 T11: DeployOrchestrator delegation
-_ORCHESTRATOR_AVAILABLE = False
-try:
-    from core.internal.deploy.channels import SCPChannel
-    from core.internal.deploy.orchestrator import DeployOrchestrator
-
-    _ORCHESTRATOR_AVAILABLE = True
-except ImportError:
-    pass
+# DevPlan 091 Wave A (AC4): _ORCHESTRATOR_AVAILABLE fallback removed — DeployOrchestrator is sole path.
+# ⚠️ TRAP[DECISION] · 2026-07-30 · HI · Removed _ORCHESTRATOR_AVAILABLE vestigial flag
+# · Rejected: keep try/except ImportError fallback (risk: silent bypass of orchestrator if import broken)
+# · Reason: DeployOrchestrator is the only deploy path (DevPlan 089). Import failure must fail loud, not silently fall back to parallel _deploy_single_project() which bypasses audit/healthcheck/snapshot.
+# · Rev: if a future deployment genuinely cannot ship deploy/ package alongside context_deployer — reintroduce import guard, but route to error not bypass.
 
 logger = logging.getLogger(__name__)
 
@@ -244,27 +242,21 @@ def resolve_context_projects(node_yaml: str, context: str) -> list[ProjectInfo]:
 
 
 # region FUNC_deploy_single_project_via_orchestrator
-## @purpose — Deploy a single project via DeployOrchestrator instead of internal logic.
-##            Falls back to original _deploy_single_project() if orchestrator unavailable.
+## @purpose — Deploy a single project via DeployOrchestrator (sole deploy path, DevPlan 091 Wave A).
+##            The legacy _deploy_single_project() parallel path was removed (AC4 cleanup):
+##            it bypassed AuditLogger / DeployHistory snapshots / HealthcheckPoller unification.
 ## @io — ⇥ project: ProjectInfo, projects_base: str, ghcr_fallback_build: bool → ⎋ ProjectDeployResult
 ## @complexity — O(T) where T = deploy lifecycle
 ## @invariants
-##   - Uses DeployOrchestrator.deploy() if available
-##   - Falls back to _deploy_single_project() if orchestrator unavailable
-##   - Same return type as _deploy_single_project for callers
+##   - Always uses DeployOrchestrator.deploy() (no fallback)
+##   - Idempotent skip if project already healthy
+##   - Bootstrap compose generation if docker-compose.yml missing
 def _deploy_single_project_via_orchestrator(
     project: ProjectInfo,
     projects_base: str,
     ghcr_fallback_build: bool,
 ) -> ProjectDeployResult:
-    """Deploy a single project via DeployOrchestrator. Falls back to internal logic."""
-    if not _ORCHESTRATOR_AVAILABLE:
-        logger.info(
-            "[IMP:8][context_deployer] DeployOrchestrator not available — using internal deploy for %s",
-            project.name,
-        )
-        return _deploy_single_project(project, projects_base, ghcr_fallback_build)
-
+    """Deploy a single project via DeployOrchestrator (sole path)."""
     logger.info(
         "[IMP:9][context_deployer] Deploying %s via DeployOrchestrator",
         project.name,
@@ -372,11 +364,8 @@ def deploy_context_projects(
 
     results: list[ProjectDeployResult] = []
     for project in projects:
-        # DevPlan 089 T11: use DeployOrchestrator when available
-        if _ORCHESTRATOR_AVAILABLE:
-            result = _deploy_single_project_via_orchestrator(project, projects_base, ghcr_fallback_build)
-        else:
-            result = _deploy_single_project(project, projects_base, ghcr_fallback_build)
+        # DevPlan 091 Wave A (AC4): DeployOrchestrator is sole deploy path — no flag, no fallback.
+        result = _deploy_single_project_via_orchestrator(project, projects_base, ghcr_fallback_build)
         results.append(result)
         _write_audit(project, result)
 
@@ -460,98 +449,13 @@ services:
 # endregion FUNC_ensure_bootstrap_compose
 
 
-# region FUNC_deploy_single_project
-## @purpose — Deploy a single project: healthcheck skip → ghcr pull → build fallback → up → health-gate.
-## @io — ⇥ project: ProjectInfo, projects_base: str, ghcr_fallback_build: bool → ⎋ ProjectDeployResult
-## @complexity — O(T) where T = health-gate timeout
-## @invariants
-##   - Step 1: Check if already healthy → skip (idempotent)
-##   - Step 2: ghcr.io pull (primary)
-##   - Step 3: If pull fails and fallback enabled → build on-node
-##   - Step 4: docker compose up -d
-##   - Step 5: Wait healthcheck (≤60s)
-def _deploy_single_project(
-    project: ProjectInfo,
-    projects_base: str,
-    ghcr_fallback_build: bool,
-) -> ProjectDeployResult:
-    """Deploy a single project. Returns ProjectDeployResult."""
-    logger.info("[IMP:8][context_deployer] Deploying project: %s", project.name)
-
-    # Step 1: Idempotent check — skip if healthy
-    if _is_project_healthy(project.name):
-        logger.info("[IMP:9][context_deployer] %s — already healthy, skipping", project.name)
-        return ProjectDeployResult(
-            name=project.name,
-            status="skipped",
-            channel="skip",
-            health="healthy",
-        )
-
-    project_dir = os.path.join(projects_base, project.name)
-
-    # Bootstrap guard: if project dir has no docker-compose.yml, generate minimal one
-    if not os.path.isfile(os.path.join(project_dir, "docker-compose.yml")) and not _ensure_bootstrap_compose(
-        project_dir, project
-    ):
-        return ProjectDeployResult(
-            name=project.name,
-            status="failed",
-            channel="none",
-            health="unhealthy",
-            error="bootstrap compose generation failed",
-        )
-
-    # Step 2: Try ghcr.io pull with retries (primary channel)
-    channel = "ghcr"
-    pull_ok = _shared_retry_pull(project_dir, max_attempts=3, backoff_seconds=[5, 10, 20])
-    if not pull_ok:
-        if not ghcr_fallback_build:
-            return ProjectDeployResult(
-                name=project.name,
-                status="failed",
-                channel="ghcr",
-                health="unhealthy",
-                error="ghcr.io pull failed and fallback build disabled",
-            )
-        # Step 3: Fallback — build on-node
-        logger.warning("[IMP:7][context_deployer] %s — ghcr.io pull failed, building on-node", project.name)
-        build_ok = _docker_compose_build(project_dir)
-        if not build_ok:
-            return ProjectDeployResult(
-                name=project.name,
-                status="failed",
-                channel="build",
-                health="unhealthy",
-                error="both ghcr pull and build failed",
-            )
-        channel = "build"
-
-    # Step 4: docker compose up -d
-    up_ok = _docker_compose_up(project_dir)
-    if not up_ok:
-        return ProjectDeployResult(
-            name=project.name,
-            status="failed",
-            channel=channel,
-            health="unhealthy",
-            error="docker compose up -d failed",
-        )
-
-    # Step 5: Health-gate
-    health = _wait_until_healthy(project.name, timeout=HEALTH_GATE_TIMEOUT)
-    status = "deployed"
-    return ProjectDeployResult(
-        name=project.name,
-        status=status,
-        channel=channel,
-        health=health,
-    )
-
-
-# endregion FUNC_deploy_single_project
-
-
+# ── REMOVED (DevPlan 091 Wave A, AC4) ──────────────────────────────────────
+# _deploy_single_project() — 90 LOC parallel deploy path (pull→build→up→healthcheck)
+# that bypassed DeployOrchestrator, AuditLogger, DeployHistory snapshots, and unified
+# HealthcheckPoller. Removed in favor of _deploy_single_project_via_orchestrator() as
+# the sole deploy entrypoint. The Docker-operations helpers below (_docker_compose_pull,
+# _docker_compose_build, _docker_compose_up, _wait_until_healthy) are retained as thin
+# wrappers consumed by other callers and by tests, but are no longer used by a bypass path.
 # endregion DEPLOY_LOGIC
 
 

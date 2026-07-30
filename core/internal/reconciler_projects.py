@@ -34,13 +34,13 @@ from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml
 
-# DevPlan 089 T11.5: DeployOrchestrator as sole deploy path
-# ⚠️ TRAP[DEBT] · 2026-07-30 · MED · _ORCHESTRATOR_AVAILABLE flag is transitional
-# · Observed: Partial migration complete — deliver_payload + deploy_project removed, DeployOrchestrator is sole path
-# · Suspected: _ORCHESTRATOR_AVAILABLE flag should be removed after production validation
-# · Impact: dead code — flag always True; removal risk: no one validates production behavior
-# · When: during DRIFT-AC14 cleanup (post-089)
-_ORCHESTRATOR_AVAILABLE = True
+# DevPlan 091 Wave A (AC14): _ORCHESTRATOR_AVAILABLE vestigial flag removed.
+# DeployOrchestrator is the sole deploy path — flag was always True and only masked
+# the transitional state. Now an import failure surfaces loudly instead of falling back.
+# ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Removed _ORCHESTRATOR_AVAILABLE transitional flag
+# · Rejected: keep flag for forward-compat (risk: dead branch never exercised, hides import errors)
+# · Reason: transition complete — deliver_payload/deploy_project already removed (DRIFT-AC14).
+# · Rev: if a new deploy path is introduced that must be opt-in — use explicit channel selection, not a module-level boolean.
 
 logger = logging.getLogger(__name__)
 

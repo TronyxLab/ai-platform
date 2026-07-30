@@ -28,7 +28,6 @@ import pathlib
 import subprocess
 
 import pytest
-from conftest import assert_ldd_stderr
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 
@@ -108,7 +107,7 @@ TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.join(TEST_DIR, "..")
 BOOTSTRAP_SH = os.path.join(PROJECT_ROOT, "core", "entrypoints", "bootstrap.sh")
 SCP_DELIVER_SH = os.path.join(PROJECT_ROOT, "core", "internal", "bootstrap", "scp-deliver.sh")
-REMOTE_CMD_SH = os.path.join(PROJECT_ROOT, "core", "internal", "bootstrap", "remote-cmd.sh")
+# REMOTE_CMD_SH removed — build_ssh_cmd deleted (DevPlan 089: deploy-project.sh migrated to Python)
 
 # ═══════════════════════════════════════════════════════════════════
 # GOLDEN OUTPUT CONSTANTS
@@ -151,14 +150,7 @@ GOLDEN_SCP_LOG_SECRETS_START = "[IMP:9][bootstrap][scp] Phase 3/4: Rsyncing node
 GOLDEN_SCP_LOG_SECRETS_DONE = "[IMP:9][bootstrap][scp] Phase 3/4: node-configs/secrets/ rsync complete"
 GOLDEN_SCP_LOG_SECRETS_SKIP = "[IMP:8][bootstrap][scp] Phase 3/4: SKIP"
 
-GOLDEN_SSH_CMD_PREFIX = "set -euo pipefail"
-GOLDEN_SSH_CMD_EXPORT = "export AGE_SECRET_KEY="
-GOLDEN_SSH_CMD_NODE_LIFECYCLE = "/opt/platform/core/internal/bootstrap/node-lifecycle.sh"
-GOLDEN_SSH_CMD_NODE_NAME_FLAG = "--node-name"
-GOLDEN_SSH_CMD_NODE_YAML_FLAG = "--node-yaml"
-GOLDEN_SSH_CMD_OWNER_KEY_FLAG = "--owner-key"
-GOLDEN_SSH_CMD_RESUME_FLAG = "--resume"
-GOLDEN_SSH_CMD_FORBIDDEN_CLI = "--age-secret-key"
+# GOLDEN_SSH_CMD_* constants removed — build_ssh_cmd deleted (DevPlan 089)
 
 GOLDEN_MOCK_RSYNC_CORE_DST = "/opt/platform/core/"
 GOLDEN_MOCK_RSYNC_NODE_DST = "/opt/node-configs/"
@@ -317,6 +309,7 @@ def _print_ldd(stderr: str, stdout: str = "") -> bool:
 # · Scenario: exactly one non-service directory in /opt/node-configs/
 # · Last fail: N/A (new test)
 # · Remove if: auto_detect_node_name is removed
+@pytest.mark.contract
 def test_auto_detect_node_name_success(caplog, tmp_path) -> None:
     """auto_detect_node_name() returns the single non-service node name."""
     caplog.set_level(logging.DEBUG)
@@ -359,6 +352,7 @@ def test_auto_detect_node_name_success(caplog, tmp_path) -> None:
 # · Scenario: /opt/node-configs/ does not exist
 # · Last fail: N/A (new test)
 # · Remove if: auto_detect_node_name is removed
+@pytest.mark.contract
 def test_auto_detect_node_name_no_configs_dir(caplog) -> None:
     """auto_detect_node_name() returns 1 when /opt/node-configs/ does not exist."""
     caplog.set_level(logging.DEBUG)
@@ -397,6 +391,7 @@ def test_auto_detect_node_name_no_configs_dir(caplog) -> None:
 # · Scenario: /opt/node-configs/ exists but has only service dirs (scripts, secrets)
 # · Last fail: N/A (new test)
 # · Remove if: auto_detect_node_name logic changes
+@pytest.mark.contract
 def test_auto_detect_node_name_no_dirs(caplog, tmp_path) -> None:
     """auto_detect_node_name() returns 1 when no non-service directories found."""
     caplog.set_level(logging.DEBUG)
@@ -439,6 +434,7 @@ def test_auto_detect_node_name_no_dirs(caplog, tmp_path) -> None:
 # · Scenario: two non-service directories → must fail with "Multiple node directories"
 # · Last fail: N/A (new test)
 # · Remove if: auto_detect_node_name logic changes
+@pytest.mark.contract
 def test_auto_detect_node_name_multi_dirs(caplog, tmp_path) -> None:
     """auto_detect_node_name() returns 1 when multiple node directories exist."""
     caplog.set_level(logging.DEBUG)
@@ -490,6 +486,7 @@ def test_auto_detect_node_name_multi_dirs(caplog, tmp_path) -> None:
 # · Scenario: core/ + platform-env.yaml + node-configs/ + secrets/ all present
 # · Last fail: N/A (new test)
 # · Remove if: scp_to_server is removed or reimplemented
+@pytest.mark.contract
 def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
     """scp_to_server() executes all 4 phases with secrets and platform-env.yaml present."""
     caplog.set_level(logging.DEBUG)
@@ -580,6 +577,7 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
 # · Scenario: no secrets/ directory → must skip phase 3/4 with SKIP log
 # · Last fail: N/A (new test)
 # · Remove if: scp_to_server is removed or secrets handling changes
+@pytest.mark.contract
 def test_scp_to_server_no_secrets(caplog, tmp_path) -> None:
     """scp_to_server() skips secrets phase when secrets/ dir does not exist."""
     caplog.set_level(logging.DEBUG)
@@ -645,6 +643,7 @@ def test_scp_to_server_no_secrets(caplog, tmp_path) -> None:
 # · Scenario: ssh mkdir -p returns non-zero → function must return 1 immediately
 # · Last fail: N/A (new test)
 # · Remove if: error handling in scp_to_server is changed
+@pytest.mark.contract
 def test_scp_to_server_ssh_failure(caplog, tmp_path) -> None:
     """scp_to_server() returns 1 when ssh mkdir -p fails (no rsync calls)."""
     caplog.set_level(logging.DEBUG)
@@ -708,6 +707,7 @@ def test_scp_to_server_ssh_failure(caplog, tmp_path) -> None:
 # · Scenario: rsync core/ fails → function returns 1
 # · Last fail: N/A (new test)
 # · Remove if: error handling in scp_to_server is changed
+@pytest.mark.contract
 def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
     """scp_to_server() returns 1 when rsync core/ fails."""
     caplog.set_level(logging.DEBUG)
@@ -774,191 +774,9 @@ def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
 # endregion
 
 
-# ═══════════════════════════════════════════════════════════════════
-# build_ssh_cmd
-# ═══════════════════════════════════════════════════════════════════
-
-
-# region test_build_ssh_cmd_no_cli_age_key
-# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd no --age-secret-key CLI in remote command
-# · Regression: if --age-secret-key is re-added to remote SSH, key exposed in ps aux
-# · Scenario: remote command must NOT contain --age-secret-key CLI arg
-# · Last fail: N/A (new test)
-# · Remove if: AGE key hardening policy changes (env-only vs fd-passing)
-def test_build_ssh_cmd_no_cli_age_key(caplog) -> None:
-    """build_ssh_cmd() output does NOT contain --age-secret-key CLI argument."""
-    caplog.set_level(logging.DEBUG)
-
-    stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
-        ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}"
-echo "[IMP:9][test][build_ssh_cmd] Command constructed"
-""",
-    )
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"build_ssh_cmd failed: rc={rc}, stderr={stderr}"
-
-    cmd = stdout.split("\n")[0]
-
-    # Core assertion: --age-secret-key must NOT be in remote SSH command
-    assert GOLDEN_SSH_CMD_FORBIDDEN_CLI not in cmd, (
-        f"build_ssh_cmd contains {GOLDEN_SSH_CMD_FORBIDDEN_CLI} CLI arg: {cmd[:300]}...\n"
-        "DevPlan D-1: AGE key must be passed via env export ONLY for remote SSH"
-    )
-
-    # Verify basic command structure
-    assert GOLDEN_SSH_CMD_PREFIX in cmd
-    assert GOLDEN_SSH_CMD_NODE_LIFECYCLE in cmd
-    assert GOLDEN_SSH_CMD_NODE_NAME_FLAG in cmd
-    assert GOLDEN_SSH_CMD_RESUME_FLAG in cmd
-
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.info("[IMP:9][test][build_ssh_cmd] --age-secret-key absent: PASS")
-
-
-# endregion
-
-
-# region test_build_ssh_cmd_has_env_export
-# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd has export AGE_SECRET_KEY=
-# · Regression: if env export is removed, orchestrator runs without decryption
-# · Scenario: with non-empty age_key, must contain export AGE_SECRET_KEY=
-# · Last fail: N/A (new test)
-# · Remove if: AGE key transport mechanism changes
-def test_build_ssh_cmd_has_env_export(caplog) -> None:
-    """build_ssh_cmd() output contains export AGE_SECRET_KEY= when key is provided."""
-    caplog.set_level(logging.DEBUG)
-
-    stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
-        ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}"
-echo "[IMP:9][test][build_ssh_cmd] Command constructed"
-""",
-    )
-    _print_ldd(stderr, stdout)
-    assert rc == 0, f"build_ssh_cmd failed: rc={rc}, stderr={stderr}"
-
-    cmd = stdout.split("\n")[0]
-
-    assert GOLDEN_SSH_CMD_EXPORT in cmd, f"build_ssh_cmd missing export AGE_SECRET_KEY=: {cmd[:300]}...\n"
-    logger.info("[IMP:9][test][build_ssh_cmd] export AGE_SECRET_KEY= present: PASS")
-
-
-# endregion
-
-
-# region test_build_ssh_cmd_empty_key
-# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd without AGE key
-# · Regression: empty key still injects export AGE_SECRET_KEY= (log noise)
-# · Scenario: empty age_key → no export, but command structure intact
-# · Last fail: N/A (new test)
-# · Remove if: build_ssh_cmd logic changes
-def test_build_ssh_cmd_empty_key(caplog) -> None:
-    """build_ssh_cmd() without AGE key does NOT include export AGE_SECRET_KEY=."""
-    caplog.set_level(logging.DEBUG)
-
-    stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
-        ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" ""
-echo "[IMP:9][test][build_ssh_cmd] Command constructed"
-""",
-    )
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"build_ssh_cmd failed: rc={rc}, stderr={stderr}"
-
-    cmd = stdout.split("\n")[0]
-
-    # No export when key is empty
-    assert GOLDEN_SSH_CMD_EXPORT not in cmd, (
-        f"build_ssh_cmd should NOT include export when key is empty: {cmd[:300]}..."
-    )
-    # Basic structure still intact
-    assert GOLDEN_SSH_CMD_NODE_LIFECYCLE in cmd
-
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.info("[IMP:9][test][build_ssh_cmd] Empty key — no export: PASS")
-
-
-# endregion
-
-
-# region test_build_ssh_cmd_owner_key_quoting
-# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd printf %q quoting for owner key
-# · Regression: if printf %q is removed, SSH keys with spaces break remote command
-# · Scenario: owner key "ssh-ed25519 AAAATestKey test@example.com" with spaces
-# · Last fail: N/A (new test)
-# · Remove if: printf %q quoting is intentionally changed
-def test_build_ssh_cmd_owner_key_quoting(caplog) -> None:
-    """build_ssh_cmd() quotes owner key with spaces using printf %q."""
-    caplog.set_level(logging.DEBUG)
-
-    stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
-        ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}"
-echo "[IMP:9][test][build_ssh_cmd] Command constructed"
-""",
-    )
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"build_ssh_cmd failed: rc={rc}, stderr={stderr}"
-
-    cmd = stdout.split("\n")[0]
-
-    # printf %q quotes spaces in different ways depending on shell version:
-    # Either backslash-escaped spaces or single-quoted with spaces
-    has_backslash_quoting = "ssh-ed25519\\ AAAATestKey\\ test@example.com" in cmd
-    has_single_quote_quoting = "'ssh-ed25519 AAAATestKey test@example.com'" in cmd
-    assert has_backslash_quoting or has_single_quote_quoting, (
-        f"Owner key not properly %q-quoted in command: {cmd[:400]}..."
-    )
-
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.info("[IMP:9][test][build_ssh_cmd] Owner key %q quoting: PASS")
-
-
-# endregion
-
-
-# region test_build_ssh_cmd_passthrough_args
-# 🧪 TRAP[TEST] · 2026-07-17 · build_ssh_cmd appends passthrough args
-# · Regression: if passthrough args are dropped, --force or custom flags lost
-# · Scenario: passthrough args must appear after --resume in command
-# · Last fail: N/A (new test)
-# · Remove if: passthrough args handling is changed
-def test_build_ssh_cmd_passthrough_args(caplog) -> None:
-    """build_ssh_cmd() appends passthrough args after --resume."""
-    caplog.set_level(logging.DEBUG)
-
-    stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
-        ["build_ssh_cmd"],
-        f"""build_ssh_cmd "{GOLDEN_NODE_NAME}" "{GOLDEN_OWNER_KEY}" "" "{GOLDEN_AGE_KEY}" "--force" "--custom-flag=value"
-echo "[IMP:9][test][build_ssh_cmd] Passthrough args test"
-""",
-    )
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"build_ssh_cmd failed: rc={rc}, stderr={stderr}"
-
-    cmd = stdout.split("\n")[0]
-
-    # Passthrough args must come after --resume
-    resume_pos = cmd.find("--resume")
-    force_pos = cmd.find("--force")
-    custom_pos = cmd.find("--custom-flag=value")
-
-    assert resume_pos >= 0, f"--resume missing: {cmd[:300]}"
-    assert force_pos > resume_pos, f"--force should come after --resume. resume_pos={resume_pos}, force_pos={force_pos}"
-    assert custom_pos > resume_pos, (
-        f"--custom-flag should come after --resume. resume_pos={resume_pos}, custom_pos={custom_pos}"
-    )
-
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.info("[IMP:9][test][build_ssh_cmd] Passthrough args appended: PASS")
-
-
-# endregion
-
-# endregion build_ssh_cmd
+# -- build_ssh_cmd tests removed (DevPlan 089: deploy-project.sh shell scripts deleted,
+# migrated to DeployOrchestrator Python). The 5 tests were:
+#   test_build_ssh_cmd_no_cli_age_key, test_build_ssh_cmd_has_env_export,
+#   test_build_ssh_cmd_empty_key, test_build_ssh_cmd_owner_key_quoting,
+#   test_build_ssh_cmd_passthrough_args
+# All tested functions from remote-cmd.sh which no longer exists.

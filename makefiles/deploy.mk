@@ -51,15 +51,17 @@ deploy:
 			echo "[IMP:10][make][deploy] FATAL: LAUNCH=1 requires NODE=<node>" >&2; \
 			exit 1; \
 		fi; \
-		bash $(_platform_root)/core/entrypoints/deploy-project.sh \
+		python3 -m core.internal.deploy.orchestrator_cli deploy \
 			--project "$(PROJECT)" \
-			--node "$(NODE)" \
-			--launch; \
+			--host "$$(source $(_platform_root)/core/lib/ssh.sh && _ssh_host_for_node "$(NODE)")" \
+			--forced-command; \
 	fi
 
 ## deploy-project: Direct project deploy bypassing CI (emergency fallback)
 ##   Usage: make deploy-project PROJECT=<dir> NODE=<node> [SKIP_VERIFY=1] [DRY_RUN=1]
-##   Validates PROJECT has ai-platform.yaml, resolves NODE→SSH host, deploys with audit
+##   Validates PROJECT has ai-platform.yaml, resolves NODE→SSH host, deploys with audit.
+##   DevPlan 091 Wave A (AC-A2): delegates to DeployOrchestrator via orchestrator_cli
+##   (replaces deleted core/entrypoints/deploy-project.sh — STALE ref bugfix).
 deploy-project:
 	@echo "[IMP:7][make][deploy-project] Direct deploy PROJECT=$(PROJECT) NODE=$(NODE)..."
 	@if [[ -z "$(PROJECT)" ]]; then \
@@ -68,11 +70,15 @@ deploy-project:
 	@if [[ -z "$(NODE)" ]]; then \
 		echo "[IMP:9][make][deploy-project] ERROR: NODE not set" >&2; exit 1; \
 	fi
-	@$(_platform_root)/core/entrypoints/deploy-project.sh \
-		--project "$(PROJECT)" \
-		--node "$(NODE)" \
-		$(if $(filter 1,$(SKIP_VERIFY)),--skip-verify) \
-		$(if $(filter 1,$(DRY_RUN)),--dry-run)
+	@PROJECT_BASE="$$(dirname "$(PROJECT)")"; \
+	PROJECT_NAME="$$(basename "$(PROJECT)")"; \
+	EXTRA=""; \
+	if [[ "$(filter 1,$(SKIP_VERIFY))" = "1" ]]; then EXTRA="$$EXTRA --skip-verify"; fi; \
+	python3 -m core.internal.deploy.orchestrator_cli deploy \
+		--project "$$PROJECT_NAME" \
+		--project-dir "$(PROJECT)" \
+		--scp \
+		$$EXTRA
 	@echo "[IMP:9][make][deploy-project] Direct deploy complete"
 
 ## context-promote: Promote platform to context org
