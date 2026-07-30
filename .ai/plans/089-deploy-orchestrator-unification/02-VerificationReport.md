@@ -207,7 +207,7 @@ local restrict_opts="command=\"${PLATFORM_ROOT}/core/internal/deploy/deploy-proj
 
 **Impact:** AC15 не может быть верифицирован даже после успешной реализации — grep всегда вернёт «empty» независимо от того, обновлён путь или нет.
 
-**Fix:** 
+**Fix:**
 - Исправить путь файла
 - Исправить grep-паттерн на `grep "deploy-project.sh" core/internal/bootstrap/setup-node.sh core/internal/bootstrap/lifecycle/state_machine.py`
 - После исправления ожидать «empty» во всех трёх локациях (setup-node.sh, deploy.sh, state_machine.py)

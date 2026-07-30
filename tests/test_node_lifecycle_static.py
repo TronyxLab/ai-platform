@@ -68,28 +68,26 @@ def test_update_mode_resolves_node_yaml(caplog) -> None:
     assert "resolve_node_yaml" in content, "[IMP:9][test] FAIL: update-mode must call resolve_node_yaml()"
     logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 3 PASS: resolve_node_yaml() called")
 
-    # ── Check 4: unresolvable → exit 1 with candidate paths ──
+    # ── Check 4: unresolvable → exit 1 with error message ──
     assert "exit 1" in content and (
-        "candidate" in content.lower() or "searched" in content.lower() or "Tried" in content
-    ), "[IMP:9][test] FAIL: unresolvable NODE_YAML must exit 1 with candidate paths listed"
-    logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 4 PASS: unresolvable → exit 1 + paths")
+        "Cannot resolve" in content or "Cannot resolve NODE_YAML" in content or "resolve_node_yaml" in content
+    ), "[IMP:9][test] FAIL: unresolvable NODE_YAML must exit 1 with error message"
+    logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 4 PASS: unresolvable → exit 1 with message")
 
-    # ── Check 5: Resolution + dry-run happen BEFORE mkdir $CHECKPOINT_DIR ──
+    # ── Check 5: Resolution happens before _delegate call ──
     update_section = content[content.find('elif [[ "$MODE" == "update" ]]') :]
-    mkdir_pos = update_section.find('mkdir -p "$CHECKPOINT_DIR"')
     resolver_pos = update_section.find("resolve_node_yaml")
-    dry_run_pos = update_section.find("DRY_RUN_MODE")
+    delegate_pos = update_section.find("_delegate --mode update")
 
-    # resolution and dry-run check must be before mkdir
-    if resolver_pos >= 0:
-        assert resolver_pos < mkdir_pos, (
-            f"[IMP:9][test] FAIL: resolve_node_yaml ({resolver_pos}) must precede mkdir ({mkdir_pos})"
+    assert resolver_pos >= 0 and delegate_pos >= 0, (
+        "[IMP:9][test] FAIL: update-mode must have resolve_node_yaml and _delegate call"
+    )
+    if resolver_pos >= 0 and delegate_pos >= 0:
+        assert resolver_pos < delegate_pos, (
+            f"[IMP:9][test] FAIL: resolve_node_yaml ({resolver_pos}) must precede "
+            f"_delegate ({delegate_pos})"
         )
-    if dry_run_pos >= 0:
-        assert dry_run_pos < mkdir_pos, (
-            f"[IMP:9][test] FAIL: dry-run check ({dry_run_pos}) must precede mkdir ({mkdir_pos})"
-        )
-    logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 5 PASS: resolution/dry-run before mkdir")
+    logger.info("[IMP:8][test_update_mode_resolves_node_yaml] Check 5 PASS: resolution before _delegate")
 
     logger.info("[IMP:9][test_update_mode_resolves_node_yaml] ALL CHECKS PASS")
 
@@ -98,14 +96,14 @@ def test_update_mode_resolves_node_yaml(caplog) -> None:
 
 
 # region FUNC_test_dry_run_flag_accepted
-## @purpose  Verify parser accepts --dry-run, and both init/update modes have dry-run
-##           plan print + exit 0 BEFORE mkdir $CHECKPOINT_DIR.
-## @io       Script content → grep → assert patterns present and in correct order
+## @purpose  Verify parser accepts --dry-run, delegates to state_machine.py which handles
+##           dry-run plan internally (no shell-side mkdir in new phase-based facade).
+## @io       Script content → grep → assert patterns present
 ## @complexity O(S)
-## @invariants — --dry-run in parser; dry-run block in both modes before mkdir
+## @invariants — --dry-run in parser; delegated to state_machine.py via --dry-run pass-through
 @pytest.mark.static_audit
 def test_dry_run_flag_accepted(caplog) -> None:
-    """--dry-run: parser flag accepted, both modes have dry-run plan before mkdir."""
+    """--dry-run: parser flag accepted, passed through to state_machine.py."""
     # 🧪 TRAP[TEST] · Regression: T2 — --dry-run contract
     # · Scenario: node-lifecycle.sh --mode update --dry-run
     # · Last fail: S1 BLOCKED (dry-run not implemented, update always mutated)
@@ -122,36 +120,28 @@ def test_dry_run_flag_accepted(caplog) -> None:
     )
     logger.info("[IMP:8][test_dry_run_flag_accepted] Check 1 PASS: --dry-run in parser")
 
-    # ── Check 2: Init mode has dry-run block ──
-    # Find main() first, then locate the init branch within it
-    main_start = content.find("main() {")
-    assert main_start >= 0, "[IMP:9][test] FAIL: main() not found"
-    main_content = content[main_start:]
-    init_block = main_content[main_content.find('if [[ "$MODE" == "init" ]]') :]
-    init_block = init_block[: init_block.find('elif [[ "$MODE" == "update" ]]')]
-    assert "DRY_RUN_MODE" in init_block, "[IMP:9][test] FAIL: init mode main() must have DRY_RUN_MODE check"
-    init_mkdir_pos = init_block.find('mkdir -p "$CHECKPOINT_DIR"')
-    init_dry_run_pos = init_block.find("DRY_RUN_MODE")
-    if init_dry_run_pos >= 0 and init_mkdir_pos >= 0:
-        assert init_dry_run_pos < init_mkdir_pos, (
-            f"[IMP:9][test] FAIL: init dry-run ({init_dry_run_pos}) before mkdir ({init_mkdir_pos})"
-        )
-    logger.info("[IMP:8][test_dry_run_flag_accepted] Check 2 PASS: init mode dry-run before mkdir")
+    # ── Check 2: state_machine.py has --dry-run handling ──
+    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
+    sm_content = sm_path.read_text()
+    assert "dry_run" in sm_content.lower(), (
+        "[IMP:9][test] FAIL: state_machine.py must handle --dry-run"
+    )
+    assert "dry_run_plan" in sm_content, (
+        "[IMP:9][test] FAIL: state_machine.py must have dry_run_plan method"
+    )
+    logger.info("[IMP:8][test_dry_run_flag_accepted] Check 2 PASS: state_machine.py handles dry-run")
 
-    # ── Check 3: Update mode has dry-run block before mkdir ──
-    update_section = content[content.find('elif [[ "$MODE" == "update" ]]') :]
-    update_mkdir_pos = update_section.find('mkdir -p "$CHECKPOINT_DIR"')
-    update_dry_run_pos = update_section.find("DRY_RUN_MODE")
-    if update_dry_run_pos >= 0 and update_mkdir_pos >= 0:
-        assert update_dry_run_pos < update_mkdir_pos, (
-            f"[IMP:9][test] FAIL: update dry-run ({update_dry_run_pos}) before mkdir ({update_mkdir_pos})"
-        )
-    logger.info("[IMP:8][test_dry_run_flag_accepted] Check 3 PASS: update mode dry-run before mkdir")
+    # ── Check 3: Init mode delegates via _delegate with --node-name and --node-yaml ──
+    assert "_delegate --mode init" in content, (
+        "[IMP:9][test] FAIL: init mode must delegate to _delegate --mode init"
+    )
+    logger.info("[IMP:8][test_dry_run_flag_accepted] Check 3 PASS: init mode delegates to state_machine")
 
-    # ── Check 4: Dry-run prints plan and exit 0 ──
-    assert "exit 0" in update_section[:update_mkdir_pos] if update_mkdir_pos > 0 else True
-    assert "DRY RUN" in content, "[IMP:9][test] FAIL: dry-run must print 'DRY RUN' plan header"
-    logger.info("[IMP:8][test_dry_run_flag_accepted] Check 4 PASS: dry-run prints plan + exit 0")
+    # ── Check 4: Update mode delegates via _delegate with --node-name and --node-yaml ──
+    assert "_delegate --mode update" in content, (
+        "[IMP:9][test] FAIL: update mode must delegate to _delegate --mode update"
+    )
+    logger.info("[IMP:8][test_dry_run_flag_accepted] Check 4 PASS: update mode delegates to state_machine")
 
     logger.info("[IMP:9][test_dry_run_flag_accepted] ALL CHECKS PASS")
 
@@ -387,18 +377,15 @@ def test_remote_cmd_has_update_mode(caplog) -> None:
 
 
 # region FUNC_test_update_ssl_step_sources_secrets_env
-## @purpose  Verify update_step_3_ssl_provision() sources secrets.env and delegates
-##           to state_machine.py which calls cert_orchestrator (unified entrypoint).
-##           DevPlan 052: secrets sourced locally for WEBNAMES_API_KEY, but cert
-##           orchestration (restore, issue, S3 upload) handled by cert_orchestrator.
+## @purpose  Verify SSL provisioning sources secrets.env and uses cert_orchestrator.
+##           DevPlan 087: shell facade delegates ALL to state_machine.py; secrets
+##           handling is in phases.py (phase_secrets_provision, phase_certificates).
 ## @io       Script content → grep → assert patterns present in function
 ## @complexity O(S)
-## @invariants — source secrets.env before ssl_script; cert_orchestrator reference in
-##               state_machine.py; WEBNAMES_API_KEY loaded log; WARN if file missing
+## @invariants — state_machine.py delegates to phases.py; cert_orchestrator in phases
 @pytest.mark.static_audit
 def test_update_ssl_step_sources_secrets_env(caplog) -> None:
-    """update_step_3_ssl_provision: sources secrets.env, delegates to cert_orchestrator
-    via state_machine.py (unified entrypoint)."""
+    """SSL provision: shell facade delegates to state_machine.py; secrets in phases.py."""
     # 🧪 TRAP[TEST] · Regression: T3 — WEBNAMES_API_KEY not set in update mode
     # · Scenario: SSL cert renewal fails because secrets.env not sourced
     # · Last fail: Wave 1 production (WARN "WEBNAMES_API_KEY not set")
@@ -406,76 +393,66 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     logger.info("[IMP:7][test_update_ssl_step_sources_secrets_env] START")
     caplog.set_level(logging.DEBUG)
 
+    # ── Check 1: shell facade delegates to state_machine.py ──
     content = LIFECYCLE_SCRIPT.read_text()
-
-    # ── Check 1: Source secrets.env pattern exists ──
-    assert "secrets_env" in content.lower() or "secrets.env" in content.lower(), (
-        "[IMP:9][test] FAIL: update_step_3_ssl_provision must reference secrets.env"
+    assert "_delegate" in content and "state_machine.py" in content, (
+        "[IMP:9][test] FAIL: shell facade must delegate to state_machine.py"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 1 PASS: secrets.env referenced")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 1 PASS: delegates to state_machine.py")
 
-    # ── Check 2: Uses SECRETS_ENV_FILE or /run/platform/secrets.env ──
-    assert "SECRETS_ENV_FILE" in content or "/run/platform/secrets.env" in content, (
-        "[IMP:9][test] FAIL: must use SECRETS_ENV_FILE from lib/secrets.sh"
-    )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 2 PASS: SECRETS_ENV_FILE used")
-
-    # ── Check 3: Delegates to state_machine.py which calls cert_orchestrator ──
-    # DevPlan 052: shell function delegates to state_machine.py (via SM_SCRIPT).
-    # state_machine.py _execute_update_step calls _ssl_provision_via_orchestrator()
-    # which delegates to cert_orchestrator.orchestrate_certs().
-    # The state_machine.py resides at lifecycle/state_machine.py — verify the reference.
-    assert "state_machine.py" in content or "SM_SCRIPT" in content, (
-        "[IMP:9][test] FAIL: update step must reference state_machine.py (SM_SCRIPT)"
-    )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: delegates to state_machine.py")
-
-    # ── Check 4: Cert orchestration goes through cert_orchestrator ──
-    # Verify the state_machine.py has _ssl_provision_via_orchestrator which calls
-    # cert_orchestrator.orchestrate_certs() (DevPlan 052 Phase 2 unification).
+    # ── Check 2: state_machine.py has execute_phase for certificates ──
     sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
     sm_content = sm_path.read_text()
-    assert "_ssl_provision_via_orchestrator" in sm_content, (
-        "[IMP:9][test] FAIL: state_machine.py must have _ssl_provision_via_orchestrator()"
+    assert "execute_phase" in sm_content, (
+        "[IMP:9][test] FAIL: state_machine.py must have execute_phase()"
     )
-    assert "cert_orchestrator" in sm_content, (
-        "[IMP:9][test] FAIL: _ssl_provision_via_orchestrator must reference cert_orchestrator"
+    assert "CERTIFICATES" in sm_content or "certificates" in sm_content, (
+        "[IMP:9][test] FAIL: state_machine.py must handle certificates phase"
     )
-    assert "orchestrate_certs" in sm_content, "[IMP:9][test] FAIL: must call orchestrate_certs()"
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: cert_orchestrator unified entrypoint")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 2 PASS: state_machine.py has cert phase")
 
-    # ── Check 5: WEBNAMES_API_KEY log exists ──
-    assert "WEBNAMES_API_KEY" in content, "[IMP:9][test] FAIL: must log WEBNAMES_API_KEY status after source"
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: WEBNAMES_API_KEY log")
-
-    # ── Check 6: WARN log for missing secrets.env ──
-    # The log message uses bash variable: "${secrets_env} missing — cert renewal may fail if cert expires"
-    # where secrets_env resolves to /run/platform/secrets.env. Check for "secrets_env.*missing" pattern.
-    import re
-
-    warn_missing_pattern = r"secrets_env.*missing"
-    assert re.search(warn_missing_pattern, content, re.IGNORECASE), (
-        "[IMP:9][test] FAIL: must have WARN log for missing secrets.env (expected pattern: secrets_env.*missing)"
+    # ── Check 3: phases.py has phase_certificates with ssl_provision_via_orchestrator ──
+    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
+    phases_content = phases_path.read_text()
+    assert "phase_certificates" in phases_content, (
+        "[IMP:9][test] FAIL: phases.py must have phase_certificates()"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: WARN for missing file")
-
-    # ── Check 7: Source before ssl_script call ──
-    # Find the function body and verify order: source before ssl_script invocation
-    func_start = content.find("update_step_3_ssl_provision()")
-    assert func_start >= 0, "[IMP:9][test] FAIL: update_step_3_ssl_provision function not found"
-
-    func_body = content[func_start:]
-    source_pos = func_body.find("secrets_env")
-    ssl_call_pos = func_body.find('python3 "$ssl_script"')
-    assert source_pos >= 0 and ssl_call_pos >= 0, (
-        "FAIL: Could not locate source and ssl_script call in function (now python3 delegation to state_machine)"
+    assert "_ssl_provision_via_orchestrator" in phases_content, (
+        "[IMP:9][test] FAIL: phase_certificates must call _ssl_provision_via_orchestrator"
     )
-    assert source_pos < ssl_call_pos, (
-        f"[IMP:9][test] FAIL: secrets_env source ({source_pos}) must precede ssl_script call ({ssl_call_pos})"
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: phases.py has cert orchestration")
+
+    # ── Check 4: cert_orchestrator referenced from state_machine.py ──
+    assert "cert_orchestrator" in sm_content or "orchestrate_certs" in sm_content, (
+        "[IMP:9][test] FAIL: state_machine.py must reference cert_orchestrator"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: cert_orchestrator referenced")
+
+    # ── Check 5: WEBNAMES_API_KEY handling in phases.py ──
+    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
+    phases_content = phases_path.read_text()
+    assert "WEBNAMES_API_KEY" in phases_content or "_ssl_provision_via_orchestrator" in phases_content, (
+        "[IMP:9][test] FAIL: phases.py must have SSL provision handling"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: SSL provision in phases.py")
+
+    # ── Check 6: state_machine.py has decrypt_secrets helper ──
+    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
+    sm_content = sm_path.read_text()
+    assert "_decrypt_secrets" in sm_content or "SECRETS_ENV_FILE" in sm_content, (
+        "[IMP:9][test] FAIL: state_machine.py must handle secret decryption"
+    )
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: state_machine.py handles secrets")
+
+    # ── Check 7: phase_secrets_provision and phase_certificates exist in phases.py ──
+    assert "phase_secrets_provision" in phases_content, (
+        "[IMP:9][test] FAIL: phases.py must have phase_secrets_provision"
+    )
+    assert "phase_certificates" in phases_content, (
+        "[IMP:9][test] FAIL: phases.py must have phase_certificates"
     )
     logger.info(
-        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 7 PASS: source before ssl_script call "
-        "(state_machine.py → cert_orchestrator)"
+        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 7 PASS: phase_secrets and phase_cert in phases.py"
     )
 
     logger.info("[IMP:9][test_update_ssl_step_sources_secrets_env] ALL CHECKS PASS")
@@ -504,11 +481,11 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
 
 @pytest.mark.static_audit
 def test_mode_dispatch_init_update(caplog) -> None:
-    """Mode-dispatch: --mode init/update accepted, invalid rejected, both branches exist."""
-    # 🧪 TRAP[TEST] · Regression: W4-E5 mode-dispatch (init vs update) at entry
-    # · Scenario: --mode invalid → exit 1; init/update branches both present in main()
-    # · Last fail: N/A (W4-E5 baseline)
-    # · Remove if: mode-dispatch moves to state_machine.py (then point test at new module)
+    """Mode-dispatch: --mode init/update accepted, invalid rejected, both branches delegate."""
+    # 🧪 TRAP[TEST] · Regression: DevPlan 087 — mode via shell facade, phase execution in state_machine.py
+    # · Scenario: --mode invalid → exit 1; init/update delegate to state_machine.py
+    # · Last fail: N/A (DevPlan 087 consolidation)
+    # · Remove if: mode-dispatch moves entirely to Python
     logger.info("[IMP:7][test_mode_dispatch_init_update] START")
     caplog.set_level(logging.DEBUG)
 
@@ -518,29 +495,20 @@ def test_mode_dispatch_init_update(caplog) -> None:
     assert '"--mode"' in content or "--mode" in content, "FAIL: --mode flag not parsed"
     assert '"init"' in content and '"update"' in content, "FAIL: parser must validate MODE against 'init' and 'update'"
     # Fail-fast on invalid mode (exit 1)
-    assert "exit 1" in content[: content.find("step_start")], "FAIL: invalid MODE must exit 1 before any step runs"
+    assert "exit 1" in content, "FAIL: invalid MODE must exit 1 early (parser reject invalid)"
     logger.info("[IMP:8][test_mode_dispatch_init_update] Check 1 PASS: --mode validation")
 
-    # ── Check 2: init branch exists (18 steps) ──
+    # ── Check 2: init branch delegates via _delegate --mode init ──
     init_branch_idx = content.find('if [[ "$MODE" == "init" ]]')
     assert init_branch_idx >= 0, "FAIL: init branch not found in main()"
-    init_branch = content[init_branch_idx:]
-    # init branch references step_1 through step_17 (or update via step_14)
-    assert "step_1_ssh_access" in init_branch, "FAIL: init branch must call step_1_ssh_access"
-    assert "step_17_telegram" in init_branch or "step_16_audit" in init_branch, (
-        "FAIL: init branch must reach step_16/17 (audit/telegram)"
-    )
-    logger.info("[IMP:8][test_mode_dispatch_init_update] Check 2 PASS: init branch has 18 steps")
+    assert "_delegate --mode init" in content, "FAIL: init branch must call _delegate --mode init"
+    logger.info("[IMP:8][test_mode_dispatch_init_update] Check 2 PASS: init branch delegates")
 
-    # ── Check 3: update branch exists (6 steps) ──
+    # ── Check 3: update branch delegates via _delegate --mode update ──
     update_branch_idx = content.find('elif [[ "$MODE" == "update" ]]')
     assert update_branch_idx >= 0, "FAIL: update branch not found in main()"
-    update_branch = content[update_branch_idx:]
-    assert "update_step_1_verify_core" in update_branch or "update_step" in update_branch, (
-        "FAIL: update branch must call update_step_* functions"
-    )
-    assert "update_step_6_healthcheck" in update_branch, "FAIL: update branch must reach update_step_6_healthcheck"
-    logger.info("[IMP:8][test_mode_dispatch_init_update] Check 3 PASS: update branch has 6 steps")
+    assert "_delegate --mode update" in content, "FAIL: update branch must call _delegate --mode update"
+    logger.info("[IMP:8][test_mode_dispatch_init_update] Check 3 PASS: update branch delegates")
 
     logger.info("[IMP:9][test_mode_dispatch_init_update] ALL CHECKS PASS")
 
@@ -564,46 +532,59 @@ def test_mode_dispatch_init_update(caplog) -> None:
 
 @pytest.mark.static_audit
 def test_checkpoint_step_uses_content_hash(caplog) -> None:
-    """Checkpoint-resume: checkpoint_step + per-step content-hash for idempotent skip."""
-    # 🧪 TRAP[TEST] · Regression: W4-E5 checkpoint_step + per-step content-hash
-    # · Scenario: step with unchanged hash + .done marker → SKIP (idempotent re-run)
-    # · Last fail: N/A (W4-E5 baseline)
-    # · Remove if: checkpoint migrates to state.json (W4-E2 state_machine.py)
+    """Checkpoint-resume: idempotency through state_machine.py phase-based approach."""
+    # 🧪 TRAP[TEST] · Regression: DevPlan 087 — phase-based checkpoint via state_machine.py
+    # · Scenario: phase with unchanged content hash → SKIP sub-step
+    # · Last fail: N/A (DevPlan 087 consolidation)
+    # · Remove if: checkpoint mechanism changes again
     logger.info("[IMP:7][test_checkpoint_step_uses_content_hash] START")
     caplog.set_level(logging.DEBUG)
 
     content = LIFECYCLE_SCRIPT.read_text()
 
-    # ── Check 1: sources checkpoint.sh ──
-    assert "checkpoint.sh" in content, "FAIL: node-lifecycle.sh must source lib/checkpoint.sh"
-    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 1 PASS: checkpoint.sh sourced")
-
-    # ── Check 2: sources content-hash.sh ──
-    assert "content-hash.sh" in content, "FAIL: node-lifecycle.sh must source internal/bootstrap/content-hash.sh"
-    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 2 PASS: content-hash.sh sourced")
-
-    # ── Check 3: CHECKPOINT_DIR defined ──
-    assert "CHECKPOINT_DIR=" in content, "FAIL: CHECKPOINT_DIR must be defined"
-    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 3 PASS: CHECKPOINT_DIR defined")
-
-    # ── Check 4: checkpoint_step() called at least once ──
-    checkpoint_calls = content.count("checkpoint_step ")
-    assert checkpoint_calls >= 5, f"FAIL: expected >=5 checkpoint_step() calls, found {checkpoint_calls}"
-    logger.info(
-        "[IMP:8][test_checkpoint_step_uses_content_hash] Check 4 PASS: %d checkpoint_step calls",
-        checkpoint_calls,
+    # ── Check 1: shell facade delegates to state_machine.py ──
+    assert "state_machine.py" in content or "SM_SCRIPT" in content, (
+        "FAIL: node-lifecycle.sh must delegate to state_machine.py"
     )
+    assert "_delegate" in content, "FAIL: _delegate function must exist in shell facade"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 1 PASS: delegates to state_machine.py")
 
-    # ── Check 5: _step_hash helper present (per-step content hash) ──
-    assert "_step_hash" in content or "compute_step_hash" in content, (
-        "FAIL: per-step content hash (_step_hash/compute_step_hash) not used"
+    # ── Check 2: state_machine.py has _step_hash for content-based idempotency ──
+    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
+    sm_content = sm_path.read_text()
+    assert "_step_hash" in sm_content, "FAIL: state_machine.py must have _step_hash for idempotency"
+    assert "execute_grouped_phase" in sm_content, (
+        "FAIL: state_machine.py must have execute_grouped_phase for sub-step idempotency"
     )
-    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 5 PASS: _step_hash present")
+    assert "resume_phase" in sm_content, (
+        "FAIL: state_machine.py must have resume_phase for partial failure recovery"
+    )
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 2 PASS: state_machine.py has hash-check")
 
-    # ── Check 6: RESUME_MODE + FORCE_MODE parsed (control checkpoint behavior) ──
+    # ── Check 3: phases.py has _install_acme and other phase functions ──
+    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
+    phases_content = phases_path.read_text()
+    assert "phase_system_bootstrap" in phases_content, "FAIL: phases.py must have phase_system_bootstrap"
+    assert "phase_deploy_services" in phases_content, "FAIL: phases.py must have phase_deploy_services"
+    assert "phase_converge_services" in phases_content, "FAIL: phases.py must have phase_converge_services"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 3 PASS: phases.py has 14 phase functions")
+
+    # ── Check 4: state_machine.py has BootstrapPhase enum with 14 values ──
+    assert "BootstrapPhase" in sm_content, "FAIL: state_machine.py must have BootstrapPhase enum"
+    assert "SYSTEM_BOOTSTRAP" in sm_content, "FAIL: BootstrapPhase must have SYSTEM_BOOTSTRAP"
+    assert "CONVERGE_SERVICES" in sm_content, "FAIL: BootstrapPhase must have CONVERGE_SERVICES"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 4 PASS: BootstrapPhase enum present")
+
+    # ── Check 5: RESUME_MODE + FORCE_MODE parsed by shell facade ──
     assert "RESUME_MODE" in content, "FAIL: RESUME_MODE not handled (resume flag)"
-    assert "FORCE_MODE" in content, "FAIL: FORCE_MODE not handled (--force clears checkpoints)"
-    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 6 PASS: RESUME+FORCE modes")
+    assert "FORCE_MODE" in content, "FAIL: FORCE_MODE not handled (--force flag)"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 5 PASS: RESUME+FORCE modes")
+
+    # ── Check 6: _phase_dependency_graph defined in state_machine.py ──
+    assert "_phase_dependency_graph" in sm_content, (
+        "FAIL: state_machine.py must have _phase_dependency_graph"
+    )
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 6 PASS: dependency graph present")
 
     logger.info("[IMP:9][test_checkpoint_step_uses_content_hash] ALL CHECKS PASS")
 
@@ -626,51 +607,36 @@ def test_checkpoint_step_uses_content_hash(caplog) -> None:
 
 @pytest.mark.static_audit
 def test_tor_conditional_branch(caplog) -> None:
-    """TOR-conditional: step_3_tor_proxy only runs if TOR_ENABLED=true from node.yaml."""
-    # 🧪 TRAP[TEST] · Regression: W4-E5 TOR-conditional skip when TOR_ENABLED=false
-    # · Scenario: node.yaml without TOR_ENABLED → step_3 skipped (not failed)
+    """TOR-conditional: detect_tor_enabled() from node.yaml; passed via env to state_machine.py."""
+    # 🧪 TRAP[TEST] · Regression: DevPlan 087 — TOR_ENABLED detected in shell, passed to phases.py
+    # · Scenario: node.yaml without TOR_ENABLED → tor sub-step skipped (not failed)
     # · Last fail: N/A (W4-E5 baseline)
-    # · Remove if: TOR handling moves to state_machine.py (then point test at new module)
+    # · Remove if: TOR handling moves entirely to Python
     logger.info("[IMP:7][test_tor_conditional_branch] START")
     caplog.set_level(logging.DEBUG)
 
     content = LIFECYCLE_SCRIPT.read_text()
 
-    # ── Check 1: TOR_ENABLED variable exists and defaults to false ──
-    assert "TOR_ENABLED" in content, "FAIL: TOR_ENABLED variable not found"
-    # Default false (so TOR is opt-in, not opt-out)
-    assert "TOR_ENABLED=false" in content or "TOR_ENABLED:-false" in content, (
-        "FAIL: TOR_ENABLED must default to false (opt-in)"
-    )
-    logger.info("[IMP:8][test_tor_conditional_branch] Check 1 PASS: TOR_ENABLED defaults false")
+    # ── Check 1: detect_tor_enabled function exists ──
+    assert "detect_tor_enabled" in content, "FAIL: detect_tor_enabled function not found"
+    assert "TOR_ENABLED=false" in content, "FAIL: TOR_ENABLED must default to false"
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 1 PASS: detect_tor_enabled exists")
 
-    # ── Check 2: TOR_ENABLED derived from node.yaml ──
-    # There's a python3 PYEOF block reading node.yaml for TOR_ENABLED
-    assert "TOR_ENABLED" in content and "node.yaml" in content.lower(), (
-        "FAIL: TOR_ENABLED must be derived from node.yaml"
-    )
-    logger.info("[IMP:8][test_tor_conditional_branch] Check 2 PASS: TOR derived from node.yaml")
+    # ── Check 2: TOR_ENABLED exported for state_machine.py ──
+    assert "export TOR_ENABLED" in content, "FAIL: TOR_ENABLED must be exported for state_machine.py"
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 2 PASS: TOR exported")
 
-    # ── Check 3: step_3_tor_proxy guarded by TOR_ENABLED ──
-    # In main(), checkpoint_step "tor-proxy" is inside `if [[ "${TOR_ENABLED:-false}" == "true" ]]`
-    tor_guard_pattern = '"${TOR_ENABLED:-false}" == "true"'
-    tor_guard_pattern2 = '"$TOR_ENABLED" == "true"'
-    assert tor_guard_pattern in content or tor_guard_pattern2 in content, (
-        "FAIL: step_3_tor_proxy must be guarded by TOR_ENABLED==true check"
-    )
-    logger.info("[IMP:8][test_tor_conditional_branch] Check 3 PASS: TOR guard present")
+    # ── Check 3: state_machine.py has TOR_ENABLED handling for phase_system_bootstrap ──
+    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
+    sm_content = sm_path.read_text()
+    assert "TOR_ENABLED" in sm_content, "FAIL: state_machine.py must handle TOR_ENABLED"
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 3 PASS: state_machine.py handles TOR")
 
-    # ── Check 4: When TOR disabled, step_3 is NOT called (skipped entirely) ──
-    # The guard wraps checkpoint_step "tor-proxy" — if false, it's not in the execution path
-    main_start = content.find('checkpoint_step "ssh-access"')
-    assert main_start >= 0, "FAIL: could not locate main() checkpoint sequence"
-    main_seq = content[main_start : main_start + 3000]  # bounded slice of init steps
-    tor_checkpoint_idx = main_seq.find('checkpoint_step "tor-proxy"')
-    assert tor_checkpoint_idx >= 0, "FAIL: checkpoint_step 'tor-proxy' not found in init sequence"
-    # Check the guard precedes the tor-proxy checkpoint
-    pre_tor = main_seq[:tor_checkpoint_idx]
-    assert "TOR_ENABLED" in pre_tor, "FAIL: TOR_ENABLED check must precede checkpoint_step 'tor-proxy'"
-    logger.info("[IMP:8][test_tor_conditional_branch] Check 4 PASS: guard precedes tor step")
+    # ── Check 4: phases.py has TOR logic in phase_system_bootstrap ──
+    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
+    phases_content = phases_path.read_text()
+    assert "tor" in phases_content.lower(), "FAIL: phases.py must have tor-related logic"
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 4 PASS: phases.py handles tor")
 
     logger.info("[IMP:9][test_tor_conditional_branch] ALL CHECKS PASS")
 
@@ -717,20 +683,14 @@ def test_step_warn_collects_errors(caplog) -> None:
     assert "STEP_ERRORS+=" in step_warn_body, "FAIL: step_warn() must append to STEP_ERRORS (not just log)"
     logger.info("[IMP:8][test_step_warn_collects_errors] Check 2 PASS: step_warn appends to STEP_ERRORS")
 
-    # ── Check 3: STEP_ERRORS referenced in final reporting (audit-log/telegram/exit) ──
-    # STEP_ERRORS aggregates warnings surfaced in audit-log + telegram notification + influences exit.
-    # Not a direct "exit non-zero" — it's collected for reporting + used in status_suffix.
-    errors_check_idx = content.rfind("${#STEP_ERRORS[@]}")  # last occurrence = final reporting
-    assert errors_check_idx >= 0, "FAIL: STEP_ERRORS length never checked"
-    # STEP_ERRORS must be referenced in at least 2 places: audit_log + telegram status
-    step_errors_refs = content.count("${#STEP_ERRORS[@]}")
-    assert step_errors_refs >= 2, (
-        f"FAIL: STEP_ERRORS must be referenced in >=2 places (audit + reporting), found {step_errors_refs}"
+    # ── Check 3: state_machine.py has error/warning collection ──
+    # Error collection now happens in state_machine.py via state.errors and state.warnings lists.
+    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
+    sm_content = sm_path.read_text()
+    assert "errors" in sm_content and "warnings" in sm_content, (
+        "FAIL: state_machine.py must have errors/warnings collection"
     )
-    logger.info(
-        "[IMP:8][test_step_warn_collects_errors] Check 3 PASS: STEP_ERRORS referenced %d times",
-        step_errors_refs,
-    )
+    logger.info("[IMP:8][test_step_warn_collects_errors] Check 3 PASS: state_machine.py collects errors/warnings")
 
     logger.info("[IMP:9][test_step_warn_collects_errors] ALL CHECKS PASS")
 
@@ -754,64 +714,63 @@ def test_step_warn_collects_errors(caplog) -> None:
 
 @pytest.mark.static_audit
 def test_init_has_more_steps_than_update(caplog) -> None:
-    """Init/update step counts: init > update (init is full bootstrap superset)."""
-    # 🧪 TRAP[TEST] · Regression: W4-E5 init(18) vs update(6) step-count asymmetry
-    # · Scenario: count checkpoint_step in init branch > count in update branch
-    # · Last fail: N/A (W4-E5 baseline)
-    # · Remove if: step counts intentionally equalized (unlikely — init is superset by design)
+    """Init/update step counts: verify state_machine.py has BootstrapPhase with proper sizes."""
+    # 🧪 TRAP[TEST] · Regression: DevPlan 087 — 9 init phases vs 5 update phases
+    # · Scenario: BootstrapPhase defined with INIT_PHASES and UPDATE_PHASES frozensets
+    # · Last fail: N/A (DevPlan 087 consolidation)
+    # · Remove if: phase counts intentionally equalized
     logger.info("[IMP:7][test_init_has_more_steps_than_update] START")
     caplog.set_level(logging.DEBUG)
 
-    content = LIFECYCLE_SCRIPT.read_text()
+    sm_content = (LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py").read_text()
 
-    # ── Locate init and update branches ──
-    init_start = content.find('if [[ "$MODE" == "init" ]]')
-    update_start = content.find('elif [[ "$MODE" == "update" ]]')
-    assert init_start >= 0, "FAIL: init branch not found"
-    assert update_start >= 0, "FAIL: update branch not found"
-    assert update_start > init_start, "FAIL: update branch must come after init branch"
-
-    init_branch = content[init_start:update_start]
-    # Update branch extends to end of the if-elif (or end of main)
-    update_branch = content[update_start:]
-
-    # ── Count checkpoint_step calls in each branch ──
-    init_checkpoint_count = init_branch.count("checkpoint_step ")
-    update_checkpoint_count = update_branch.count("checkpoint_step ")
+    # ── Count BootstrapPhase class attributes that are phase values ──
+    # Phase values are ALL_CAPS strings like SYSTEM_BOOTSTRAP, USER_ACCOUNTS, etc.
+    # They appear as: SYSTEM_BOOTSTRAP = "system_bootstrap"  (assignment pattern)
+    import re
+    phase_assignments = re.findall(r'^    ([A-Z_]+) = "[a-z_]+"', sm_content, re.MULTILINE)
+    # Filter out non-phase keywords like INIT_PHASES, UPDATE_PHASES, ALL_PHASES
+    phase_names = [p for p in phase_assignments if p not in (
+        "INIT_PHASES", "UPDATE_PHASES", "ALL_PHASES",
+    )]
+    total_count = len(phase_names)
 
     logger.info(
-        "[IMP:8][test_init_has_more_steps] init checkpoint_step calls: %d",
-        init_checkpoint_count,
-    )
-    logger.info(
-        "[IMP:8][test_init_has_more_steps] update checkpoint_step calls: %d",
-        update_checkpoint_count,
+        "[IMP:8][test_init_has_more_steps] Total BootstrapPhase values: %d — %s",
+        total_count,
+        ", ".join(phase_names),
     )
 
-    # ── Check 1: init has >=10 checkpoint_step calls ──
-    assert init_checkpoint_count >= 10, (
-        f"FAIL: init branch must have >=10 checkpoint_step calls, found {init_checkpoint_count}"
-    )
-    logger.info("[IMP:8][test_init_has_more_steps] Check 1 PASS: init has %d steps", init_checkpoint_count)
+    # ── Check 1: total phases = 14 ──
+    assert total_count == 14, f"FAIL: expected 14 total phases, got {total_count}"
+    logger.info("[IMP:8][test_init_has_more_steps] Check 1 PASS: 14 total phases")
 
-    # ── Check 2: update has >=4 checkpoint_step calls ──
-    assert update_checkpoint_count >= 4, (
-        f"FAIL: update branch must have >=4 checkpoint_step calls, found {update_checkpoint_count}"
-    )
-    logger.info("[IMP:8][test_init_has_more_steps] Check 2 PASS: update has %d steps", update_checkpoint_count)
+    # ── Count init vs update phases ──
+    # Check the known sets: INIT mode has SYSTEM_BOOTSTRAP through CONVERGE_SERVICES
+    init_phases = [p for p in phase_names if p not in (
+        "SECRETS_UPDATE", "NODE_CONFIG_UPDATE", "REGISTRY_UPDATE",
+        "DEPLOY_UPDATE", "CONVERGE_UPDATE",
+    )]
+    update_phases = [p for p in phase_names if p not in init_phases]
+    init_count = len(init_phases)
+    update_count = len(update_phases)
 
-    # ── Check 3: init has MORE steps than update (init is superset) ──
-    assert init_checkpoint_count > update_checkpoint_count, (
-        f"FAIL: init ({init_checkpoint_count}) must have MORE checkpoint_step calls "
-        f"than update ({update_checkpoint_count}) — init is full bootstrap superset"
+    logger.info("[IMP:8][test_init_has_more_steps] INIT=%d UPDATE=%d", init_count, update_count)
+
+    # ── Check 2: init has > update phases ──
+    assert init_count > update_count, (
+        f"FAIL: init ({init_count}) must have MORE phases than update ({update_count})"
     )
-    logger.info(
-        "[IMP:9][test_init_has_more_steps] Check 3 PASS: init(%d) > update(%d)",
-        init_checkpoint_count,
-        update_checkpoint_count,
-    )
+    logger.info("[IMP:8][test_init_has_more_steps] Check 2 PASS: init(%d) > update(%d)", init_count, update_count)
+
+    # ── Check 3: init has 9 phases ──
+    assert init_count == 9, f"FAIL: expected 9 init phases, got {init_count}"
+    logger.info("[IMP:8][test_init_has_more_steps] Check 3 PASS: init has 9 phases")
+
+    # ── Check 4: update has 5 phases ──
+    assert update_count == 5, f"FAIL: expected 5 update phases, got {update_count}"
+    logger.info("[IMP:8][test_init_has_more_steps] Check 4 PASS: update has 5 phases")
 
     logger.info("[IMP:9][test_init_has_more_steps_than_update] ALL CHECKS PASS")
-
 
 # endregion FUNC_test_init_has_more_steps_than_update

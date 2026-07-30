@@ -21,6 +21,9 @@
 ## @changes  2026-07-22 | W4-E2 — Created from node-lifecycle.sh decomposition
 ##           2026-07-30 | T20b/T22 — Migrated _ghcr_docker_login()→shared docker_auth,
 ##           _send_telegram_notification()→shared telegram_notifier.
+##           2026-07-30 | DevPlan 087 T5 — Removed _step_deploy_context() (logic moved to
+##           state_machine._import_deploy_context() and phases.py). steps.py is legacy module
+##           being phased out — all new phase logic goes to phases.py.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -50,52 +53,6 @@ if _SHARED_DIR not in _sys.path:
 # Import shared modules (DevPlan 081B7 DRIFT elimination)
 from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login  # noqa: E402
 from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram  # noqa: E402
-
-
-# region FUNC__step_install_acme
-## @purpose — Install acme.sh and DNS API extensions for SSL provisioning.
-##            Called once at bootstrap/init, BEFORE node-update.
-##            At update time, issue-cert.sh is called directly (acme.sh already installed).
-##            Delegates to install-acme.sh. Idempotent: skips if already installed.
-## @io — ⇥ core_dir: platform core directory path → ⎋ bool (True = success)
-## @complexity — O(1) + subprocess
-## @invariants
-##   - Non-fatal: if install-acme.sh fails, log WARN and continue
-##   - acme.sh must be installed BEFORE ssl-provision step
-def _step_install_acme(core_dir: str) -> bool:
-    """Install acme.sh for SSL provisioning (init only). Returns True on success."""
-    install_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
-    if not os.path.isfile(install_script):
-        logger.warning("[IMP:7][step:install_acme] install-acme.sh not found at %s — skipping", install_script)
-        return False
-
-    logger.info("[IMP:9][step:install_acme] Installing acme.sh")
-    try:
-        result = subprocess.run(
-            ["bash", install_script],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][step:install_acme] acme.sh installed successfully")
-            return True
-        logger.warning(
-            "[IMP:7][step:install_acme] acme.sh install failed (exit=%d): %s",
-            result.returncode,
-            result.stderr.strip()[:200],
-        )
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:7][step:install_acme] acme.sh install timed out")
-        return False
-    except FileNotFoundError as e:
-        logger.warning("[IMP:7][step:install_acme] Command not found: %s", e)
-        return False
-
-
-# endregion FUNC__step_install_acme
-
 
 
 # region FUNC__install_apt_packages
@@ -653,38 +610,7 @@ def _run_converge(core_dir: str, node_name: str, extra_args: list[str] | None = 
 
 # endregion FUNC__run_converge
 
-
-# region FUNC__step_deploy_context
-## @purpose — Thin facade for deploy_context. Delegates to context_deployer.deploy_context().
-##            DevPlan 079 DRIFT-B3: logic moved to context_deployer.py, steps.py is thin proxy.
-## @io — ⇥ core_dir: str, node_name: str, node_yaml: str → ⎋ None (non-fatal)
-## @complexity — O(1) delegation
-## @invariants
-##   - Preserved for backward compatibility (state_machine.py still calls it)
-##   - All logic is in context_deployer.deploy_context()
-def _step_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None:
-    """Deploy context via context_deployer.deploy_context(). Thin facade."""
-    logger.info("[IMP:8][step:deploy_context] Delegating to context_deployer.deploy_context()")
-    try:
-        import importlib.util
-
-        bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
-        deployer_path = os.path.join(bootstrap_dir, "deploy", "context_deployer.py")
-        spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
-        if spec and spec.loader:
-            deployer_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(deployer_mod)
-            result = deployer_mod.deploy_context(core_dir, node_name, node_yaml)
-            logger.info(
-                "[IMP:9][step:deploy_context] Deploy complete: deployed=%d skipped=%d failed=%d",
-                result.deployed if result else 0,
-                result.skipped if result else 0,
-                result.failed if result else 0,
-            )
-        else:
-            logger.warning("[IMP:7][step:deploy_context] Cannot load context_deployer.py")
-    except (ImportError, OSError, FileNotFoundError) as e:
-        logger.warning("[IMP:7][step:deploy_context] deploy_context failed (non-fatal): %s", e)
-
-
-# endregion FUNC__step_deploy_context
+# ── _step_deploy_context REMOVED per DevPlan 087 T5 ──
+# Business logic moved to state_machine.py._import_deploy_context() (DevPlan 079)
+# and phases.py phase_deploy_services() / phase_deploy_update().
+# Steps.py no longer contains step implementations — all phase logic in phases.py.

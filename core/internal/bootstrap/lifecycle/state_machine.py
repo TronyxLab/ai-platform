@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, step-transitions, state-json, content-hash
-# STRUCTURE: ▶ [--state-file] → ┌StepState + BootstrapState dataclasses┐ → ◇ StateMachine.__init__(load|create) → ○ transition loop: start→(done|skip|fail) → ⊕ hash-compare → ⚡ save() → ⎋ CLI dispatch (init/update)
+# GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, step-transitions, state-json, content-hash, BootstrapPhase, phase-dependency-graph, precondition-check
+# STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState + _phase_dependency_graph┐ → ◇ precondition_check() → ○ _execute_phase() / _execute_grouped_phase() → ⊕ _resume_phase() → ⚡ save() → ⎋ CLI dispatch (init/update)
 # region MODULE_CONTRACT
 ## @purpose  Explicit state machine for node-lifecycle.sh bootstrap/update process.
-##           Manages 17 init steps + 6 update steps via a JSON state file
+##           Manages 14 consolidated phases (φ1-φ13 + φ8.5) via a JSON state file
 ##           at /var/lib/platform/.bootstrap/state.json (configurable).
-##           Each step is a typed transition with pre/post conditions.
+##           Each phase is a typed transition with precondition and dependency checks.
 ## @scope    Python-side of W4-E2 Strangler-Fig decomposition of node-lifecycle.sh (1301 LOC).
 ##           Handles: state persistence, content-hash invalidation, checkpoint-resume,
-##           TOR-conditional skip, step error/warning collection, dry-run, force-reset.
-##           Shell-фасад (node-lifecycle.sh) handles orchestration (flock, env exports, lib sourcing).
+##           phase precondition checks, phase dependency graph, grouped-phase sub-checkpoints,
+##           partial failure recovery (_resume_phase), TOR-conditional skip, error/warning collection,
+##           dry-run, force-reset. Business logic extraction → phases.py.
 ## @invariants
 ##   1. State file is at /var/lib/platform/.bootstrap/state.json (configurable via --state-file)
 ##   2. All subprocess.run calls use capture_output=True, text=True, timeout=120;
@@ -20,23 +21,22 @@
 ##   5. --dry-run prints plan and exits 0 BEFORE any mutations
 ##   6. --force clears all state (rm state file)
 ##   7. --resume loads existing state and continues from last checkpoint
-##   8. TOR_ENABLED=false → step_3_tor_proxy is skipped (not failed)
-##   9. State file format: {mode, node, current_step, steps: {str: StepState}, errors, warnings}
+##   8. TOR_ENABLED=false → tor_proxy sub-step is skipped (not failed)
+##   9. State file format: {mode, node, current_step, phases: {str: PhaseState}, errors, warnings}
 ##   10. CLI args or env vars for: NODE_NAME, NODE_YAML, PLATFORM_OWNER_KEY, PLATFORM_CI_DEPLOY_KEY
-## @rationale  Shell-оригинал (node-lifecycle.sh) смешивал 5 ответственностей: arg parsing,
-##             state management, step logic, logging, checkpoint. Python decomposition:
-##             state_machine.py — чистая state-machine с transitions; steps.py — step реализация;
-##             shell-фасад — orchestration (flock, env exports).
+##   11. Phase dependency graph enforces execution order: φ2 ← φ1, φ4 ← φ3, φ6 ← φ4, φ8 ← φ4+φ6+φ7
+##   12. precondition_check() verifies intra-phase conditions BEFORE execution
+##   13. grouped-phases (φ1-φ5, φ7, φ12) support sub_checkpoints for granular skip
+## @rationale  DevPlan 087: Consolidate 32+ steps → 14 phases with explicit dependency graph
+##             and precondition checks. Eliminates 8 silent failure propagation points.
+##             _phase_dependency_graph replaces implicit sequential ordering with explicit DAG.
 ## @changes  2026-07-22 | W4-E2 — Created from node-lifecycle.sh decomposition
-##           2026-07-24 | W5.T5.3 — Added HC_DONE_MARKER check in healthcheck step:
-##           when /var/lib/platform/.bootstrap/.hc_done_in_deploy exists, skips the
-##           standalone healthcheck (already done inside deploy_docker_group)
-##           2026-07-25 | DevPlan 071 Rev 2 — Refactored state.json keys from numeric
-##           indices (str(n)) to Python step NAMES (self._step_name(n)). Eliminates
-##           step-name/key misalignment (F1 fix). Added backward-compat migration
-##           in BootstrapState.from_dict() for old numeric-key state.json files.
-##           2026-07-30 | T19/T20a/T21 — Migrated _send_telegram()→shared telegram_notifier,
-##           _ghcr_auth()→shared docker_auth. Confirmed _step_secrets_init() removed (T11).
+##           2026-07-24 | W5.T5.3 — Added HC_DONE_MARKER check in healthcheck step
+##           2026-07-25 | DevPlan 071 Rev 2 — Name-based state.json keys, numeric-key backward compat
+##           2026-07-30 | T19/T20a/T21 — Shared module extraction (telegram_notifier, docker_auth)
+##           2026-07-30 | DevPlan 087 — BootstrapPhase enum (14 values), _phase_dependency_graph,
+##           precondition_check(), _execute_phase(), _execute_grouped_phase(), _resume_phase().
+##           Added `--phase` CLI argument for phase-level execution.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -74,6 +74,111 @@ logger = logging.getLogger(__name__)
 
 class StateTransitionError(Exception):
     """Raised when a state transition violates pre/post-conditions (W5-E6 C3)."""
+
+
+class PhaseDependencyError(Exception):
+    """Raised when a phase's dependency graph check fails — a prerequisite phase is not done.
+
+    ## @purpose — Distinguish structural phase ordering violations from intra-phase precondition failures.
+    ##             Operator sees: "Phase φ6 requires φ4, but φ4 is pending".
+    """
+
+
+class PhasePreconditionError(Exception):
+    """Raised when a phase's precondition_check() fails — intra-phase condition not met.
+
+    ## @purpose — Intra-phase condition (root access, file exists, network available).
+    ##             Operator sees: "Phase φ1 precondition failed: must run as root (euid=0)".
+    """
+
+
+# ── BootstrapPhase enum (14 consolidated phases per DevPlan 087) ──
+class BootstrapPhase:
+    """Consolidated bootstrap phases — 14 values (9 init + 5 update).
+
+    φ1-φ8.5 = INIT mode phases
+    φ9-φ13  = UPDATE mode phases
+
+    ## @purpose — Canonical phase names replacing 23+ old step names.
+    ##             Each phase maps to a function in phases.py.
+    ## @invariants
+    ##   - 14 values total (len(list(BootstrapPhase.init_phases()) + list(update_phases())) == 14)
+    ##   - Value string is the canonical state.json key for the phase
+    ##   - converge_services (φ8.5) and converge_update (φ13) are separate for clear init/update separation
+    """
+
+    # ── INIT mode phases (φ1-φ8.5) ──
+    SYSTEM_BOOTSTRAP = "system_bootstrap"        # φ1: packages, docker, tor, firewall
+    USER_ACCOUNTS = "user_accounts"              # φ2: users, SSH keys, projects base
+    PLATFORM_SETUP = "platform_setup"            # φ3: docker auth, metrics cron
+    SECRETS_PROVISION = "secrets_provision"      # φ4: decrypt, ensure-passwords
+    NODE_CONFIGURATION = "node_configuration"    # φ5: node.yaml, verify core, configs
+    REGISTRY_AUTH = "registry_auth"              # φ6: ghcr auth, docker auth
+    CERTIFICATES = "certificates"                # φ7: acme.sh, ssl provision
+    DEPLOY_SERVICES = "deploy_services"          # φ8: deploy modules, deploy context
+    CONVERGE_SERVICES = "converge_services"      # φ8.5: converge
+
+    # ── UPDATE mode phases (φ9-φ13) ──
+    SECRETS_UPDATE = "secrets_update"                     # φ9: decrypt secrets
+    NODE_CONFIG_UPDATE = "node_config_update"             # φ10: read node.yaml, verify core
+    REGISTRY_UPDATE = "registry_update"                   # φ11: ghcr auth, provision, overlays, llm, healthcheck
+    DEPLOY_UPDATE = "deploy_update"                       # φ12: deploy modules, ssl, deploy context
+    CONVERGE_UPDATE = "converge_update"                   # φ13: converge
+
+    # ── Phase sets ──
+    INIT_PHASES = frozenset({
+        SYSTEM_BOOTSTRAP, USER_ACCOUNTS, PLATFORM_SETUP,
+        SECRETS_PROVISION, NODE_CONFIGURATION, REGISTRY_AUTH,
+        CERTIFICATES, DEPLOY_SERVICES, CONVERGE_SERVICES,
+    })
+
+    UPDATE_PHASES = frozenset({
+        SECRETS_UPDATE, NODE_CONFIG_UPDATE, REGISTRY_UPDATE,
+        DEPLOY_UPDATE, CONVERGE_UPDATE,
+    })
+
+    ALL_PHASES = INIT_PHASES | UPDATE_PHASES
+
+    @classmethod
+    def phase_count(cls) -> int:
+        """Return total number of phases: 14."""
+        return len(cls.ALL_PHASES)
+
+
+# ── Phase dependency graph (DevPlan 087 §2) ──
+# Maps each phase to its prerequisite phase(s) that must be done before it can run.
+_phase_dependency_graph: dict[str, set[str]] = {
+    # INIT mode
+    BootstrapPhase.USER_ACCOUNTS:      {BootstrapPhase.SYSTEM_BOOTSTRAP},       # φ2 ← φ1
+    BootstrapPhase.PLATFORM_SETUP:     {BootstrapPhase.USER_ACCOUNTS},          # φ3 ← φ2
+    BootstrapPhase.SECRETS_PROVISION:  {BootstrapPhase.PLATFORM_SETUP},         # φ4 ← φ3
+    BootstrapPhase.NODE_CONFIGURATION: {BootstrapPhase.PLATFORM_SETUP},         # φ5 ← φ3
+    BootstrapPhase.REGISTRY_AUTH:      {BootstrapPhase.SECRETS_PROVISION},      # φ6 ← φ4
+    BootstrapPhase.CERTIFICATES:       {BootstrapPhase.NODE_CONFIGURATION},      # φ7 ← φ5
+    BootstrapPhase.DEPLOY_SERVICES:    {BootstrapPhase.SECRETS_PROVISION,
+                                        BootstrapPhase.REGISTRY_AUTH,
+                                        BootstrapPhase.CERTIFICATES},            # φ8 ← φ4, φ6, φ7
+    BootstrapPhase.CONVERGE_SERVICES:  {BootstrapPhase.DEPLOY_SERVICES},         # φ8.5 ← φ8
+
+    # UPDATE mode
+    BootstrapPhase.SECRETS_UPDATE:     set(),                                    # φ9 (no deps — entry point)
+    BootstrapPhase.NODE_CONFIG_UPDATE: set(),                                    # φ10 (no deps)
+    BootstrapPhase.REGISTRY_UPDATE:    set(),                                    # φ11 (no deps)
+    BootstrapPhase.DEPLOY_UPDATE:      {BootstrapPhase.SECRETS_UPDATE,
+                                        BootstrapPhase.REGISTRY_UPDATE},         # φ12 ← φ9, φ11
+    BootstrapPhase.CONVERGE_UPDATE:    {BootstrapPhase.DEPLOY_UPDATE},           # φ13 ← φ12
+}
+
+# Grouped phases (have sub_steps for granular checkpoint tracking)
+_grouped_phases: frozenset[str] = frozenset({
+    BootstrapPhase.SYSTEM_BOOTSTRAP,
+    BootstrapPhase.USER_ACCOUNTS,
+    BootstrapPhase.PLATFORM_SETUP,
+    BootstrapPhase.SECRETS_PROVISION,
+    BootstrapPhase.NODE_CONFIGURATION,
+    BootstrapPhase.CERTIFICATES,
+    BootstrapPhase.DEPLOY_UPDATE,
+})
 
 
 # Import shared modules (DevPlan 081B7 DRIFT elimination)
@@ -260,6 +365,145 @@ class BootstrapState:
             errors=data.get("errors", []),
             warnings=data.get("warnings", []),
         )
+
+
+    # region FUNC_precondition_check
+    ## @purpose — Validate intra-phase conditions before execution.
+    ##            Each phase has specific preconditions (root access, file existence, etc.).
+    ## @io — ⇥ phase_value: str (from BootstrapPhase) → ⎋ None (raises PhasePreconditionError on failure)
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - precondition failures are BLOCKING — phase will not execute
+    ##   - Error message is human-readable for operator action
+    def precondition_check(self, phase_value: str) -> None:
+        """Validate preconditions for a given phase value. Raises PhasePreconditionError on failure."""
+        if phase_value == BootstrapPhase.SYSTEM_BOOTSTRAP:
+            if os.geteuid() != 0:
+                raise PhasePreconditionError(
+                    f"Phase {phase_value} (system-bootstrap) requires root access (euid=0), "
+                    f"got euid={os.geteuid()}"
+                )
+            # Verify basic system tools
+            for cmd in ("apt-get", "dpkg"):
+                if not self._check_command_exists(cmd):
+                    raise PhasePreconditionError(
+                        f"Phase {phase_value} requires '{cmd}' which is not available"
+                    )
+
+        elif phase_value == BootstrapPhase.USER_ACCOUNTS:
+            # Verify user management tools available
+            for cmd in ("useradd", "id", "chown"):
+                if not self._check_command_exists(cmd):
+                    raise PhasePreconditionError(
+                        f"Phase {phase_value} requires '{cmd}' which is not available"
+                    )
+
+        elif phase_value == BootstrapPhase.SECRETS_PROVISION:
+            # Age key must be available for decryption
+            age_key = os.environ.get("AGE_SECRET_KEY", "") or os.environ.get("SOPS_AGE_KEY", "")
+            if not age_key:
+                age_key_file = "/etc/age/key.txt"
+                if not os.path.isfile(age_key_file):
+                    raise PhasePreconditionError(
+                        f"Phase {phase_value} requires AGE_SECRET_KEY env var or "
+                        f"{age_key_file} file for secret decryption"
+                    )
+
+        elif phase_value == BootstrapPhase.REGISTRY_AUTH:
+            # GHCR token is optional but warn if missing
+            ghcr_token = os.environ.get("GHCR_PULL_TOKEN", "")
+            if not ghcr_token:
+                logger.warning(
+                    "[IMP:7][precondition] Phase %s: GHCR_PULL_TOKEN not set — "
+                    "Docker Hub rate-limit may apply (~100 pulls/6h)",
+                    phase_value,
+                )
+
+        elif phase_value == BootstrapPhase.NODE_CONFIGURATION:
+            node_yaml = os.environ.get("NODE_YAML", "")
+            if not node_yaml or not os.path.isfile(node_yaml):
+                raise PhasePreconditionError(
+                    f"Phase {phase_value} requires valid NODE_YAML path: {node_yaml}"
+                )
+
+        elif phase_value == BootstrapPhase.CERTIFICATES:
+            # Verify acme.sh or install script available
+            core_dir = os.environ.get("CORE_DIR", "/opt/platform/core")
+            acme_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
+            if not os.path.isfile(acme_script):
+                logger.warning(
+                    "[IMP:7][precondition] Phase %s: install-acme.sh not found at %s — "
+                    "acme.sh installation may fail",
+                    phase_value,
+                    acme_script,
+                )
+
+        elif phase_value in (BootstrapPhase.DEPLOY_SERVICES, BootstrapPhase.DEPLOY_UPDATE):
+            core_dir = os.environ.get("CORE_DIR", "/opt/platform/core")
+            deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
+            if not os.path.isfile(deploy_script):
+                raise PhasePreconditionError(
+                    f"Phase {phase_value} requires deploy-modules.sh at {deploy_script}"
+                )
+            # Docker must be running
+            docker_check = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if docker_check.returncode != 0:
+                raise PhasePreconditionError(
+                    f"Phase {phase_value} requires Docker daemon running: "
+                    f"{docker_check.stderr.strip()[:200]}"
+                )
+
+        elif phase_value in (BootstrapPhase.CONVERGE_SERVICES, BootstrapPhase.CONVERGE_UPDATE):
+            # Converge script must exist
+            core_dir = os.environ.get("CORE_DIR", "/opt/platform/core")
+            converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
+            if not os.path.isfile(converge_script):
+                logger.warning(
+                    "[IMP:7][precondition] Phase %s: converge.sh not found at %s — "
+                    "converge will be skipped",
+                    phase_value,
+                    converge_script,
+                )
+
+        # UPDATE mode phases — lighter precondition checks
+        elif phase_value == BootstrapPhase.SECRETS_UPDATE:
+            # Same as SECRETS_PROVISION but non-blocking (update mode)
+            pass
+
+        elif phase_value in (BootstrapPhase.NODE_CONFIG_UPDATE, BootstrapPhase.REGISTRY_UPDATE):
+            # Light check — these are optional update steps
+            pass
+
+        logger.info(
+            "[IMP:8][precondition_check] Phase %s preconditions satisfied",
+            phase_value,
+        )
+
+    # endregion FUNC_precondition_check
+
+    @staticmethod
+    def _check_command_exists(cmd: str) -> bool:
+        """Check if a system command is available via command -v.
+
+        ## @purpose — Verify prerequisite command existence for precondition checks.
+        ## @io — ⇥ cmd: str → ⎋ bool
+        ## @complexity — O(1)
+        """
+        try:
+            result = subprocess.run(
+                ["command", "-v", cmd],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
 
 
 # endregion DATACLASSES
@@ -489,6 +733,248 @@ class StateMachine:
         return True
 
     # endregion FUNC_validate_bootstrap_env
+
+    # region FUNC_execute_phase
+    ## @purpose — Execute a single phase by calling its phase function from phases.py.
+    ##            Checks dependency graph first, then precondition, then executes.
+    ## @io — ⇥ phase_value: str (from BootstrapPhase) → ⎋ None (raises on failure)
+    ## @complexity — O(D + P) where D = dependency check, P = phase execution
+    ## @invariants
+    ##   - Dependency check before precondition check
+    ##   - Phase dependency graph: all prerequisite phases must be done
+    ##   - Precondition check: intra-phase conditions verified before execution
+    def execute_phase(self, phase_value: str) -> None:
+        """Execute a single phase with dependency and precondition checks.
+
+        Steps: dependency graph → precondition check → phase execution → post-condition.
+        """
+        logger.info("[IMP:9][execute_phase] Starting phase %s", phase_value)
+
+        # Step 1: Check dependency graph
+        deps = _phase_dependency_graph.get(phase_value, set())
+        missing_deps: list[str] = []
+        for dep in deps:
+            phase_state = self.state.steps.get(
+                dep, self._state_from_phase_key(dep)
+            )
+            if isinstance(phase_state, dict):
+                phase_done = phase_state.get("done", False)
+            else:
+                phase_done = getattr(phase_state, "status", "pending") == "done"
+            if not phase_done:
+                missing_deps.append(dep)
+
+        if missing_deps:
+            raise PhaseDependencyError(
+                f"Phase '{phase_value}' requires prerequisite phase(s): "
+                f"{', '.join(missing_deps)}. "
+                f"Execute missing phases first."
+            )
+
+        # Step 2: Check preconditions
+        self.state.precondition_check(phase_value)
+
+        # Step 3: Dynamic import and execute from phases.py
+        try:
+            from core.internal.bootstrap.lifecycle.phases import (
+                phase_system_bootstrap,
+                phase_user_accounts,
+                phase_platform_setup,
+                phase_secrets_provision,
+                phase_node_configuration,
+                phase_registry_auth,
+                phase_certificates,
+                phase_deploy_services,
+                phase_converge_services,
+                phase_secrets_update,
+                phase_node_config_update,
+                phase_registry_update,
+                phase_deploy_update,
+                phase_converge_update,
+            )
+        except ImportError:
+            logger.error("[IMP:10][execute_phase] Cannot import phases module")
+            raise
+
+        # Map phase value to function
+        phase_func_map = {
+            BootstrapPhase.SYSTEM_BOOTSTRAP: phase_system_bootstrap,
+            BootstrapPhase.USER_ACCOUNTS: phase_user_accounts,
+            BootstrapPhase.PLATFORM_SETUP: phase_platform_setup,
+            BootstrapPhase.SECRETS_PROVISION: phase_secrets_provision,
+            BootstrapPhase.NODE_CONFIGURATION: phase_node_configuration,
+            BootstrapPhase.REGISTRY_AUTH: phase_registry_auth,
+            BootstrapPhase.CERTIFICATES: phase_certificates,
+            BootstrapPhase.DEPLOY_SERVICES: phase_deploy_services,
+            BootstrapPhase.CONVERGE_SERVICES: phase_converge_services,
+            BootstrapPhase.SECRETS_UPDATE: phase_secrets_update,
+            BootstrapPhase.NODE_CONFIG_UPDATE: phase_node_config_update,
+            BootstrapPhase.REGISTRY_UPDATE: phase_registry_update,
+            BootstrapPhase.DEPLOY_UPDATE: phase_deploy_update,
+            BootstrapPhase.CONVERGE_UPDATE: phase_converge_update,
+        }
+
+        phase_func = phase_func_map.get(phase_value)
+        if phase_func is None:
+            raise PhaseDependencyError(f"Unknown phase: {phase_value}")
+
+        # Execute
+        core_dir = self.core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
+        node_name = os.environ.get("NODE_NAME", "")
+        node_yaml = os.environ.get("NODE_YAML", "")
+
+        result = phase_func(core_dir, node_name, node_yaml)
+        logger.info(
+            "[IMP:9][execute_phase] Phase %s completed: %s",
+            phase_value,
+            "success" if result else "with warnings",
+        )
+
+    # endregion FUNC_execute_phase
+
+    # region FUNC_execute_grouped_phase
+    ## @purpose — Execute a grouped phase with sub-checkpoint support.
+    ##            Checks each sub_step individually; skips unchanged+done sub_steps.
+    ## @io — ⇥ phase_value: str, sub_steps: dict[str, dict] → ⎋ bool (True = all done)
+    ## @complexity — O(S * H) where S = sub_steps, H = hash computation
+    ## @invariants
+    ##   - Sub-steps with done=true + unchanged hash → SKIP (not executed)
+    ##   - Sub-steps with done=false or changed hash → EXECUTE
+    ##   - Phase is done=true only when ALL sub_steps are done
+    def execute_grouped_phase(self, phase_value: str, sub_steps: dict[str, dict] | None = None) -> bool:
+        """Execute a grouped phase, checking each sub-step individually for skip/execute.
+
+        Returns True if phase is now fully done, False if partial failure.
+        """
+        logger.info("[IMP:9][execute_grouped_phase] Starting grouped phase %s", phase_value)
+
+        # Check dependencies first
+        deps = _phase_dependency_graph.get(phase_value, set())
+        for dep in deps:
+            phase_state = self.state.steps.get(dep, {})
+            if isinstance(phase_state, dict):
+                phase_done = phase_state.get("done", False)
+            else:
+                phase_done = getattr(phase_state, "status", "pending") == "done"
+            if not phase_done:
+                raise PhaseDependencyError(
+                    f"Grouped phase '{phase_value}' requires prerequisite '{dep}'"
+                )
+
+        # Check preconditions
+        self.state.precondition_check(phase_value)
+
+        if sub_steps is None:
+            logger.info("[IMP:7][execute_grouped_phase] No sub_steps for %s — running as simple phase", phase_value)
+            self.execute_phase(phase_value)
+            return True
+
+        all_done = True
+        for sub_name, sub_state in sub_steps.items():
+            sub_done = sub_state.get("done", False)
+            sub_hash = sub_state.get("hash", "")
+
+            # Compute current hash for this sub-step
+            current_hash = self._step_hash(f"sub_{phase_value}_{sub_name}")
+
+            if sub_done and sub_hash and sub_hash == current_hash:
+                logger.info(
+                    "[IMP:8][execute_grouped_phase][%s] SKIP sub_step '%s' (unchanged hash=%s)",
+                    phase_value,
+                    sub_name,
+                    sub_hash[:12],
+                )
+                continue
+
+            # Execute the sub-step
+            logger.info(
+                "[IMP:9][execute_grouped_phase][%s] EXECUTE sub_step '%s' (done=%s, hash_changed=%s)",
+                phase_value,
+                sub_name,
+                sub_done,
+                sub_hash and sub_hash != current_hash,
+            )
+
+            try:
+                # Run the full phase for this sub-step (each phase function handles all its sub-steps)
+                self.execute_phase(phase_value)
+                logger.info(
+                    "[IMP:9][execute_grouped_phase][%s] Sub_step '%s' completed",
+                    phase_value,
+                    sub_name,
+                )
+            except (PhaseDependencyError, PhasePreconditionError, PlatformError) as e:
+                logger.error(
+                    "[IMP:10][execute_grouped_phase][%s] Sub_step '%s' FAILED: %s",
+                    phase_value,
+                    sub_name,
+                    e,
+                )
+                all_done = False
+
+        return all_done
+
+    # endregion FUNC_execute_grouped_phase
+
+    # region FUNC_resume_phase
+    ## @purpose — Resume execution of a partially-failed grouped phase.
+    ##            Runs only failed/pending sub_steps; skips successful, unchanged ones.
+    ## @io — ⇥ phase_value: str → ⎋ bool (True = phase fully done after resume)
+    ## @complexity — O(S) where S = number of sub_steps
+    ## @invariants
+    ##   - Does NOT re-execute sub_steps with done=true + unchanged hash
+    ##   - Partial failure: if 3/4 sub_steps done, only the failed one is retried
+    ##   - No manual state.json editing required by operator
+    def resume_phase(self, phase_value: str) -> bool:
+        """Resume a partially-failed grouped phase. Executes only failed/pending sub-steps.
+
+        Returns True if all sub-steps completed, False if some still failed.
+        """
+        logger.info("[IMP:9][resume_phase] Resuming phase %s after partial failure", phase_value)
+
+        # Load phase state from state.json
+        phase_key = phase_value
+        phase_state = self.state.steps.get(phase_key, {})
+        if isinstance(phase_state, dict):
+            sub_steps = phase_state.get("sub_steps", {})
+        else:
+            sub_steps = getattr(phase_state, "sub_steps", {})
+
+        if not sub_steps:
+            logger.info(
+                "[IMP:7][resume_phase] Phase %s has no sub_steps — running complete phase",
+                phase_value,
+            )
+            self.execute_phase(phase_value)
+            return True
+
+        return self.execute_grouped_phase(phase_value, sub_steps)
+
+    # endregion FUNC_resume_phase
+
+    def _state_from_phase_key(self, phase_key: str) -> dict:
+        """Get phase state from state dict using the phase key directly.
+
+        ## @purpose — Helper to look up phase state in both old (steps dict) and new format.
+        ## @io — ⇥ phase_key: str → ⎋ dict (state entry or empty)
+        ## @complexity — O(1)
+        """
+        step_entry = self.state.steps.get(phase_key)
+        if step_entry is not None:
+            if hasattr(step_entry, "to_dict"):
+                return step_entry.to_dict()
+            if isinstance(step_entry, dict):
+                return step_entry
+            return {"status": step_entry.status if hasattr(step_entry, "status") else "pending"}
+
+        # Also check top-level state for phase keys
+        state_dict = getattr(self.state, "state_dict", None)
+        if state_dict is None:
+            try:
+                state_dict = self.state.to_dict()
+            except Exception:  # noqa: EXC — best-effort
+                return {}
+        return state_dict.get("steps", {}).get(phase_key, {})
 
     # region FUNC_add_warning
     ## @purpose — Add a non-fatal warning to the state warnings list.
@@ -746,6 +1232,11 @@ Examples:
         help="Run mode: init (full bootstrap) or update (incremental)",
     )
     parser.add_argument("--run-step", type=int, help="Run a specific step by number")
+    parser.add_argument(
+        "--run-phase",
+        type=str,
+        help="Run a specific phase by name (e.g., system_bootstrap, secrets_provision, deploy_services)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print execution plan, no mutations")
     parser.add_argument("--resume", action="store_true", help="Resume from last checkpoint")
     parser.add_argument("--force", action="store_true", help="Clear all checkpoints before running")
@@ -857,6 +1348,24 @@ def main() -> int:
     # ── --run-step: execute single step ──
     if args.run_step:
         return _run_single_step(sm, args.mode, args.run_step)
+
+    # ── --run-phase: execute single phase ──
+    if args.run_phase:
+        if args.run_phase not in BootstrapPhase.ALL_PHASES:
+            logger.error(
+                "[IMP:10][main] Unknown phase '%s'. Valid phases: %s",
+                args.run_phase,
+                ", ".join(sorted(BootstrapPhase.ALL_PHASES)),
+            )
+            return 1
+        logger.info("[IMP:9][main] Running single phase: %s", args.run_phase)
+        try:
+            sm.execute_phase(args.run_phase)
+            logger.info("[IMP:9][main] Phase '%s' completed successfully", args.run_phase)
+            return 0
+        except (PhaseDependencyError, PhasePreconditionError, PlatformFatalError) as e:
+            logger.error("[IMP:10][main] Phase '%s' FAILED: %s", args.run_phase, e)
+            return 1
 
     # ── Dispatch full mode run ──
     try:
@@ -1157,7 +1666,15 @@ def _execute_init_step(
         _validate_sudoers()
 
     elif step_name == "install_acme":
-        _steps._step_install_acme(core_dir)
+        # _install_acme moved to phases.py per DevPlan 087 (removed from steps.py)
+        try:
+            from core.internal.bootstrap.lifecycle.phases import _install_acme as _phases_install_acme
+            _phases_install_acme(core_dir)
+        except ImportError:
+            logger.warning("[IMP:7][init][install_acme] Cannot import _install_acme from phases — falling back to subprocess")
+            install_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
+            if os.path.isfile(install_script):
+                _subprocess_run(["bash", install_script], "install_acme", non_fatal=True)
 
     elif step_name == "node_update":
         # Delegate to update mode (self-invocation)

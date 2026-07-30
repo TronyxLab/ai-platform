@@ -583,7 +583,7 @@ grouped-фаза (φ1-φ5, φ7, φ12) объединяет несколько п
 ```python
 def _resume_phase(phase: Phase, state: dict) -> None:
     """Resume execution of a partially-failed grouped phase.
-    
+
     - Анализирует sub_steps из state.json
     - Запускает только failed/pending подшаги
     - Не трогает успешные подшаги (done=true + hash unchanged = skip)

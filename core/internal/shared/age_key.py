@@ -15,7 +15,7 @@
 ##   4. No side effects — does NOT export env vars
 ##   5. AGE_SECRET_KEY_FILE is read as first line (head -1 equivalent)
 ##   6. No AGE key value ever appears in plaintext logs (only first 8 chars masked)
-## @standard Canonical AGE-key format:
+## @canonical_format AGE-key format:
 ##           • AGE_SECRET_KEY=AGE-SECRET-KEY-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ##           • The key is always stored as an environment variable (never bare)
 ##           • AGE_SECRET_KEY_FILE contains the raw key (first line, no prefix — same AGE-SECRET-KEY-xxxxxxxx… format)

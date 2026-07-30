@@ -1,57 +1,63 @@
 <!-- GREP_SUMMARY: AGENTS.md, bootstrap, deploy-modules, orchestration, system, docker, idempotent -->
 
-# GREP_SUMMARY: AGENTS.md, bootstrap, deploy-modules, orchestration, system, docker, idempotent
-# STRUCTURE: ┌bootstrap pipeline┐ → ◇ deploy-modules (system|docker branches) → ◇ idempotence (.done + content-hash) → ◇ artifact paths → ⎋ cross-refs
+# GREP_SUMMARY: AGENTS.md, bootstrap, deploy-modules, orchestration, phases, 14-phases, state-machine
+# STRUCTURE: ┌14 consolidated phases (DevPlan 087)┐ → ◇ BootstrapPhase enum → ◇ _phase_dependency_graph → ◇ precondition_check → ◇ grouped-phases (sub-checkpoints) → ◇ deploy-modules (system|docker) → ◇ idempotence (state.json + content-hash) → ◇ artifact paths → ⎋ cross-refs
 # region MODULE_CONTRACT
-## @purpose  Bootstrap pipeline orchestration: node setup, module deployment, healthcheck execution
-## @scope    All scripts under core/internal/bootstrap/ — node-lifecycle, deploy-modules, setup-node, install-docker, install-tor-proxy, firewall, _topo_sort, content-hash, discover_modules, remote-cmd, scp-deliver
+## @purpose  Bootstrap pipeline orchestration: 14 consolidated phases (DevPlan 087),
+##           node setup, module deployment, healthcheck execution, idempotent state machine
+## @scope    All scripts under core/internal/bootstrap/ — node-lifecycle.sh (thin facade),
+##           lifecycle/state_machine.py (BootstrapPhase enum, _phase_dependency_graph,
+##           precondition_check, _resume_phase), lifecycle/phases.py (14 phase implementations),
+##           lifecycle/state_migration.py (one-shot 23→14 key migration), deploy-modules,
+##           setup-node, install-docker, install-tor-proxy, firewall, _topo_sort, content-hash,
+##           discover_modules, remote-cmd, scp-deliver
 ## @invariants
-##   1. node-lifecycle.sh — единственный entrypoint для bootstrap и node-update. Режимы: --mode init (полный bootstrap) и --mode update (инкрементальный update). setup-node.sh, deploy-modules.sh, firewall.sh, install-docker.sh, install-tor-proxy.sh вызываются ТОЛЬКО из node-lifecycle.sh.
-##   2. deploy-modules.sh — две ветки: system (install.sh) и docker (_topo_sort + docker compose up)
-##   3. Идемпотентность: .done-маркеры + per-step content-hash (content-hash.sh), не «просто повторный вызов»
-##   4. Артефакты: /opt/platform/core/ (core), /opt/<context>/platform/ (context-overlay)
-##   5. Никаких git-операций в bootstrap — только SCP/rsync для core; git clone/pull только через ensure_context_repo() для context-overlay
-## @rationale Bootstrap — самая сложная подсистема платформы (deploy-modules.sh 560+ строк).
-##            Агенты регулярно путают --modules фильтрацию, system vs docker ветки,
-##            _topo_sort.py интеграцию, .done-маркеры. Единая документация сокращает ошибки.
+##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё state_machine.py. Режимы: --mode init (14 INIT фаз) и --mode update (5 UPDATE фаз).
+##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), _execute_phase(), _execute_grouped_phase(), _resume_phase()
+##   3. phases.py — business logic: 14 phase_*() функций, вызываемых из state_machine.py
+##   4. state_migration.py — однократная миграция 23→14 ключей при обновлении production ноды.
+##   5. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
+##   6. Идемпотентность: state.json с 14 phase-ключами + content-hash для grouped-phase sub_steps
+##   7. Артефакты: /opt/platform/core/ (core), /opt/<context>/platform/ (context-overlay)
+##   8. Никаких git-операций в bootstrap — только SCP/rsync для core; git clone/pull только через ensure_context_repo() для context-overlay
+## @rationale DevPlan 087: Consolidate 32+ steps → 14 phases with explicit dependency graph.
+##            Eliminates 8 silent failure propagation points via precondition BLOCKS.
+##            Adds partial failure recovery (_resume_phase()) for grouped phases.
 # endregion MODULE_CONTRACT
 
 # AGENTS.md — core/internal/bootstrap/
 
 ---
 
-## Bootstrap pipeline
+## Bootstrap pipeline (14 consolidated phases)
 
 ```
-node-lifecycle.sh --mode init
-├── 1. ssh-access           # SSH key distribution + access verification
-├── 2. apt-deps             # System package dependencies
-├── 3. [tor]                # Tor proxy (obfs4 bridges) for DPI bypass
-├── 4. install-docker       # Docker CE installation
-├── 5. user-platform        # platform system user
-├── 6. user-ci-deploy       # ci-deploy user with ssh forced-command
-├── 6b. projects-base       # /opt/projects base directory
-├── 7. firewall             # Declarative ufw baseline
-├── 8. verify-core          # Content hash verification of delivered core
-├── 9. verify-node-configs  # Node config structural validation
-├── 10. decrypt-secrets     # AGE-decrypt secrets from encrypted files
-├── 12b. ensure-secrets     # Ensure secrets.env exists from decrypted files
-├── 11. read-node-yaml      # Parse node.yaml for domain/acme/projects
-├── 12. ghcr-auth           # GitHub Container Registry docker login
-├── 13. sudoers             # Sudo whitelist generation
-├── 13b. install-acme       # acme.sh installation (init only, via install-acme.sh)
-├── 14 → node-lifecycle.sh --mode update  # provision → ssl → deploy → healthcheck
-├── 16. audit-summary       # Post-init audit log
-└── 17. telegram            # Notification hook
+node-lifecycle.sh --mode init  →  state_machine.py (BootstrapPhase enum)
 
-node-lifecycle.sh --mode update
-├── 1. verify-core         # Content hash verification of delivered core
-├── 2. provision            # Environment provision (networks + volumes)
-├── 3. ssl-provision        # SSL certificate issuance via issue-cert.sh (acme.sh DNS-01)
-├── 4. deploy-modules       # ALL modules (docker + system) — single call with --skip-provision
-├── 5. healthcheck          # Per-module healthcheck after deploy
-└── 6. converge             # Desired-state reconciler
+  φ1  system-bootstrap     # packages, docker-install, tor-proxy, firewall
+  φ2  user-accounts        # ssh-access, platform-user, ci-deploy-user, projects-base
+  φ3  platform-setup       # platform-dirs, docker-config, metrics-cron
+  φ4  secrets-provision    # decrypt-secrets, ensure-passwords (BLOCKS φ6)
+  φ5  node-configuration   # read-node-yaml, verify-core, verify-node-configs
+  φ6  registry-auth        # ghcr-auth, docker-auth (BLOCKS φ8)
+  φ7  certificates         # install-acme, ssl-provision
+  φ8  deploy-services      # deploy-modules, deploy-context
+  φ8.5 converge-services   # converge (explicit separate phase)
+
+node-lifecycle.sh --mode update → state_machine.py
+
+  φ9  secrets-update       # decrypt-secrets
+  φ10 node-config-update   # read-node-yaml, verify-core
+  φ11 registry-update      # ghcr-auth, provision, overlays, llm-keys, healthcheck
+  φ12 deploy-update        # deploy-modules, ssl-provision, deploy-context
+  φ13 converge-update      # converge
 ```
+
+**Группировка:** φ1-φ5, φ7, φ12 — grouped phases с sub-checkpoint поддержкой.
+Каждый подшаг внутри grouped-фазы имеет свой done-статус и content-hash в state.json.
+При перезапуске: unchanged + done подшаги SKIP, изменившиеся EXECUTE, failed EXECUTE.
+**Precondition BLOCKS:** φ4→φ6→φ8 — если φ4 не выполнен (нет секретов), φ6 (registry-auth) и φ8 (deploy-services) блокируются с читаемой ошибкой.
+**Dependency graph:** см. `state_machine.py._phase_dependency_graph`.
 
 ⚠️ TRAP[BUG] · 2026-07-23 · P0 · FALSE DIAGNOSIS: webnames.ru zone_manager_unavailable ≠ DNS-01 broken
 · Symptom: webnames.ru API returns `{"result":"ERROR","details":"zone_manager_unavailable"}` for `domains_list`.
@@ -114,20 +120,32 @@ node-lifecycle.sh --mode update
 
 ---
 
-## Идемпотентность (state.json + name-based keys)
+## Идемпотентность (state.json + phase-based keys)
 
-**Механизм:** `checkpoint_migration.py` + `state.json` в `/var/lib/platform/.bootstrap/state.json`
+**Механизм:** `state_machine.py` управляет state.json в `/var/lib/platform/.bootstrap/state.json`
 
 | Механизм | Где | Что делает |
 |----------|-----|------------|
-| `state.json` (name-based keys) | `/var/lib/platform/.bootstrap/state.json` | Единый source of truth для checkpoint'ов. Ключи — имена шагов Python (underscores). Shell маппит свои hyphen-имена через `checkpoint_migration.py::SHELL_TO_PYTHON_STEP`. (DevPlan 071 Rev 2) |
-| content-hash | `content-hash.sh` (shell) / `state_machine._step_hash()` (Python) | Хеширует содержимое скриптов для idempotency. Shell hash пишется в state.json через `checkpoint_migration.py`, Python проверяет через `_hash_changed()`. |
+| `state.json` (phase keys) | `/var/lib/platform/.bootstrap/state.json` | Единый source of truth для checkpoint'ов. Ключи — имена фаз BootstrapPhase enum. 14 ключей: system_bootstrap, user_accounts, platform_setup, secrets_provision, node_configuration, registry_auth, certificates, deploy_services, converge_services, secrets_update, node_config_update, registry_update, deploy_update, converge_update. |
+| content-hash | `state_machine._step_hash()` (Python) | SHA256 content hash per sub-step для grouped phases (φ1-φ5, φ7, φ12). Хеш проверяется при _resume_phase() — unchanged+done = SKIP. |
+| sub-checkpoints | nested в state.json | Grouped-фазы имеют `sub_steps: {name: {done: bool, hash: str}}` для granular idempotency |
 
-**Пример:** `checkpoint_step "ssh-access" step_1_ssh_access` → `checkpoint_migration.py mark-done` пишет `{"ssh_access": {"status": "done"}}` в state.json. Повторный запуск с `--resume` видит `ssh_access.done` → no-op.
+**Пример:** `system_bootstrap` в state.json:
+```json
+{
+  "done": true,
+  "sub_steps": {
+    "packages": {"done": true, "hash": "abc123"},
+    "docker_install": {"done": true, "hash": "def456"},
+    "tor_proxy": {"done": true, "hash": "ghi789"},
+    "firewall": {"done": true, "hash": "jkl012"}
+  }
+}
+```
 
-**Миграция:** При первом запуске после обновления `checkpoint_migrate_legacy()` импортирует старые `.done`-файлы из `/var/lib/platform/.bootstrap-checkpoints/` в name-based state.json. После миграции `.done`-файлы удаляются. (DevPlan 071 Rev 2)
+**Миграция:** `state_migration.py::migrate_state_to_phases()` — однократная миграция при обновлении с 23 старых ключей на 14 новых. Composite hash: все подшаги done → фаза done. Старые ключи сохраняются для rollback. Вызывается при первом запуске после обновления.
 
-**Сброс:** `python3 core/internal/checkpoint_migration.py reset /var/lib/platform/.bootstrap/state.json` или `make bootstrap-node ... --force` → следующий bootstrap будет полным.
+**Сброс:** `rm /var/lib/platform/.bootstrap/state.json` или `make bootstrap-node ... --force` → следующий bootstrap будет полным.
 
 ---
 
@@ -143,49 +161,55 @@ node-lifecycle.sh --mode update
 
 ---
 
-### Lifecycle State Machine (W5-E6)
+### Lifecycle State Machine (DevPlan 087 — 14 phases)
 
-```mermaid
-stateDiagram-v2
-    [*] --> ssh_access
-    ssh_access --> apt_deps
-    apt_deps --> tor_proxy
-    tor_proxy --> install_docker
-    install_docker --> create_platform_user
-    create_platform_user --> create_ci_deploy_user
-    create_ci_deploy_user --> create_projects_base
-    create_projects_base --> firewall
-    firewall --> verify_core
-    verify_core --> verify_node_configs
-    verify_node_configs --> decrypt_secrets
-    decrypt_secrets --> ensure_secrets
-    ensure_secrets --> secrets_init
-    secrets_init --> read_node_yaml
-    read_node_yaml --> ghcr_auth
-    ghcr_auth --> sudoers
-    sudoers --> install_acme
-    install_acme --> node_update
-    node_update --> converge
-    converge --> audit_log
-    audit_log --> telegram
-    telegram --> [*]
-
-    state node_update {
-        [*] --> verify_core_update
-        verify_core_update --> provision
-        provision --> deliver_overlays
-        deliver_overlays --> ssl_provision
-        ssl_provision --> deploy_modules
-        deploy_modules --> healthcheck
-        healthcheck --> converge_update
-        converge_update --> [*]
-    }
-
-    note right of tor_proxy
-        Conditional: TOR_ENABLED
-        Retry: 3x, backoff 2s/4s/8s
-    end note
 ```
+INIT MODE (9 phases):
+  φ1  system-bootstrap ──→ φ2  user-accounts ──→ φ3  platform-setup
+                                  │                      │
+                                  ├──→ φ5  node-config    │
+                                  │                      ├──→ φ4  secrets-provision
+                                  │                      │         │
+                                  │                      │         ├──→ φ6  registry-auth
+                                  │                      │         │         │
+                                  │                      │         ├────←────┘
+                                  │                      │         ↓
+                                  │                      └──→ φ7  certificates
+                                  │                                 │
+                                  └──────────────────────┬───────────┘
+                                                         ↓
+                                                    φ8  deploy-services
+                                                         │
+                                                         ↓
+                                                    φ8.5 converge-services
+
+UPDATE MODE (5 phases):
+  φ9  secrets-update ──────────────────────────────┐
+  φ10 node-config-update (no deps)                  ├──→ φ12 deploy-update
+  φ11 registry-update ─────────────────────────────┘       │
+                                                            ↓
+                                                       φ13 converge-update
+```
+
+**Dependency rules:**
+- φ6 (registry-auth) requires φ4 (secrets) — needs credentials for docker login
+- φ8 (deploy-services) requires φ4 (secrets) + φ6 (registry) + φ7 (certs) — all three prerequisites
+- φ8.5 (converge) requires φ8 (deploy) — structural ordering
+- φ12 (deploy-update) requires φ9 (secrets-update) + φ11 (registry-update)
+- φ13 (converge-update) requires φ12 (deploy-update)
+
+**Precondition checks per phase (state_machine.py.BootstrapState.precondition_check()):**
+- φ1: root access (euid=0), apt-get/dpkg available
+- φ2: useradd/id/chown commands available
+- φ4: AGE_SECRET_KEY env var or /etc/age/key.txt exists
+- φ5: NODE_YAML file exists and is readable
+- φ8/φ12: Docker daemon running, deploy-modules.sh exists
+- φ6: GHCR_PULL_TOKEN present (warning only)
+
+**Partial failure recovery (_resume_phase()):**
+Grouped phases (φ1-φ5, φ7, φ12) support sub-checkpoints. If φ4 partially fails
+(decrypt-secrets OK, ensure-passwords FAIL), restart only runs the failed sub-step.
+Successful sub-steps with unchanged hash are SKIPPED — no age passphrase re-entry required.
 
 ### SSL Cert Lifecycle Unification (DevPlan 052)
 
