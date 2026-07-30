@@ -1,17 +1,20 @@
 """
-# GREP_SUMMARY: test_generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_existing_manifest, tmp_path
-# STRUCTURE: ▶ merge 3× (preserves-sections/replaces-allowed/replaces-gates) → ▶ extract_phony_targets 2× (gmake/grep) → ▶ load_existing_manifest 2× (valid/missing) → ⎋ LDD trajectory
+# GREP_SUMMARY: test_generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_existing_manifest, load_structural_sections, tmp_path, g3-cycle-break
+# STRUCTURE: ▶ merge 3× (preserves-sections/replaces-allowed/replaces-gates) → ▶ extract_phony_targets 2× (gmake/grep) → ▶ load_existing_manifest 2× (valid/missing) → ▶ load_structural_sections 3× (excludes/missing/preserves) → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for generate_entrypoint_manifest.py — merge(), extract_phony_targets(),
-##           load_existing_manifest(). No subprocess calls in merge tests.
+##           load_existing_manifest(), load_structural_sections(). No subprocess calls in merge tests.
 ## @scope    Tests merge logic (preserves sections, replaces allowed_verbs/gates), target extraction,
-##           and manifest loading. extract_phony_targets tested with mock directories.
+##           manifest loading, and G3 cycle break (load_structural_sections).
 ## @invariants
 ##   - All tests import the module directly via sys.path.insert
 ##   - Each test is decorated with @ldd_trajectory and asserts IMP:9 log presence
 ##   - tmp_path used for temp file and directory creation
+##   - load_structural_sections tests verify G3 cycle break: allowed_verbs/gates excluded
 ## @rationale DevPlan 051 §5: Unit coverage for generate_entrypoint_manifest generator
+##            DevPlan 090 T6: G3 cycle break — load_structural_sections excludes generated keys
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 2)
+##           2026-07-30 | Added load_structural_sections tests (G3 cycle break)
 # endregion MODULE_CONTRACT
 """
 
@@ -218,6 +221,208 @@ def test_load_existing_manifest_missing(caplog):
     assert result == {}, f"Expected empty dict, got {result}"
 
     logger.critical("[IMP:9][test] load_existing_manifest missing returns {}")
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: load_structural_sections (G3 cycle break)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · load_structural_sections excludes allowed_verbs and gates
+# · Scenario: Valid YAML with structural keys + allowed_verbs/gates → returns ONLY structural keys
+# · Last fail: N/A (new test)
+# · Remove if: load_structural_sections logic changes
+@ldd_trajectory
+def test_load_structural_sections_excludes_generated_keys(caplog, tmp_path):
+    """load_structural_sections should exclude allowed_verbs and gates from result."""
+    manifest_file = tmp_path / "manifest.yaml"
+    manifest_data = {
+        "metadata": {"version": 1},
+        "convention": {"entrypoint_prefix": "core/entrypoints/"},
+        "allowed_verbs": ["deploy", "test"],
+        "gates": [{"id": "gate1", "test_file": "test_gate_1.py"}],
+        "forbidden_verbs": ["push-core"],
+        "name_linter": {"system_exceptions": ["help"]},
+        "module_lifecycle": ["start", "stop"],
+        "lib": [{"script": "ssh.sh", "path": "core/lib/ssh.sh"}],
+    }
+    with open(str(manifest_file), "w") as f:
+        yaml.dump(manifest_data, f)
+
+    result = gem.load_structural_sections(str(manifest_file))
+
+    # allowed_verbs and gates must be excluded
+    assert "allowed_verbs" not in result, (
+        f"G3 CYCLE BREAK: allowed_verbs must NOT be in load_structural_sections result. "
+        f"Found key in result: {list(result.keys())}"
+    )
+    assert "gates" not in result, (
+        f"G3 CYCLE BREAK: gates must NOT be in load_structural_sections result. "
+        f"Found key in result: {list(result.keys())}"
+    )
+
+    # Structural sections must be preserved
+    assert result["metadata"] == {"version": 1}, "metadata should be preserved"
+    assert result["convention"] == {"entrypoint_prefix": "core/entrypoints/"}, "convention should be preserved"
+    assert result["forbidden_verbs"] == ["push-core"], "forbidden_verbs should be preserved"
+    assert result["name_linter"] == {"system_exceptions": ["help"]}, "name_linter should be preserved"
+    assert result["module_lifecycle"] == ["start", "stop"], "module_lifecycle should be preserved"
+    assert result["lib"] == [{"script": "ssh.sh", "path": "core/lib/ssh.sh"}], "lib should be preserved"
+
+    logger.critical(
+        "[IMP:9][test] load_structural_sections returned %d keys (excluded allowed_verbs/gates)",
+        len(result),
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · load_structural_sections missing file returns empty dict
+# · Scenario: Non-existent path → returns empty dict
+# · Last fail: N/A (new test)
+# · Remove if: load_structural_sections logic changes
+@ldd_trajectory
+def test_load_structural_sections_missing(caplog):
+    """load_structural_sections should return empty dict for missing file."""
+    result = gem.load_structural_sections("/tmp/nonexistent_structural_manifest.yaml")
+    assert result == {}, f"Expected empty dict, got {result}"
+
+    logger.critical("[IMP:9][test] load_structural_sections missing returns {}")
+
+
+# 🧪 TRAP[TEST] · Regression · load_structural_sections preserves ALL other keys
+# · Scenario: YAML with 20+ non-generated keys → all preserved, only allowed_verbs/gates excluded
+# · Last fail: N/A (new test)
+# · Remove if: load_structural_sections logic changes
+@ldd_trajectory
+def test_load_structural_sections_preserves_all_structural_keys(caplog, tmp_path):
+    """load_structural_sections should preserve all keys except allowed_verbs and gates."""
+    manifest_file = tmp_path / "manifest.yaml"
+    # Construct a manifest with many structural sections
+    manifest_data = {
+        "metadata": {"version": 1},
+        "convention": {"entrypoint_prefix": "core/entrypoints/"},
+        "schema": {"type": "object"},
+        "repair": [{"repair_id": "test", "repairs_gates": [{"gate_id": "g1"}]}],
+        "forbidden_directories": ["core/scripts/e2e"],
+        "forbidden_scripts": ["dev.sh"],
+        "forbidden_verbs": ["push-core"],
+        "name_linter": {"system_exceptions": ["help"]},
+        "module_lifecycle": ["start", "stop"],
+        "system_module_lifecycle": ["init"],
+        "lib": [{"script": "ssh.sh"}],
+        "module_hooks": {"pre-up": ["check"]},
+        "shared_modules": ["secrets_env_parser"],
+        "bootstrap": [{"make_target": "bootstrap-node"}],
+        "deploy": [{"make_target": "deploy-project"}],
+        "non_repairable_gates": ["test_gate_env_extra_vars"],
+        "allowed_verbs": ["deploy"],  # must be excluded
+        "gates": [{"id": "g1"}],  # must be excluded
+    }
+    with open(str(manifest_file), "w") as f:
+        yaml.dump(manifest_data, f)
+
+    result = gem.load_structural_sections(str(manifest_file))
+
+    # These must be excluded
+    assert "allowed_verbs" not in result, "allowed_verbs MUST be excluded"
+    assert "gates" not in result, "gates MUST be excluded"
+
+    # All other keys must be preserved
+    preserved_count = 0
+    for key in manifest_data:
+        if key in ("allowed_verbs", "gates"):
+            continue
+        assert key in result, f"Structural key '{key}' should be preserved"
+        preserved_count += 1
+
+    assert preserved_count == len(result), (
+        f"Expected {preserved_count} preserved keys, got {len(result)}. "
+        f"Missing keys: {set(manifest_data.keys()) - {'allowed_verbs', 'gates'} - set(result.keys())}"
+    )
+
+    logger.critical(
+        "[IMP:9][test] load_structural_sections preserved %d structural keys (excluded 2 generated keys)",
+        len(result),
+    )
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _check_generated_content / _generate_output (--check mode)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · _generate_output produces valid YAML string with header
+# · Scenario: Merged dict → returns YAML string with header comments
+# · Last fail: N/A (new test)
+# · Remove if: _generate_output logic changes
+@ldd_trajectory
+def test_generate_output(caplog):
+    """_generate_output should produce valid YAML string with header."""
+    merged = {
+        "metadata": {"version": 1},
+        "allowed_verbs": ["deploy", "test"],
+        "gates": [{"id": "gate1", "test_file": "test_gate_1.py"}],
+    }
+    result = gem._generate_output(merged)
+
+    assert "core/entrypoint-manifest.yaml" in result, "Should contain header comment"
+    assert "allowed_verbs" in result, "Should contain allowed_verbs"
+    assert "deploy" in result, "Should contain deploy verb"
+    assert "gate1" in result, "Should contain gate1"
+
+    logger.critical("[IMP:9][test] _generate_output produced %d chars", len(result))
+
+
+# 🧪 TRAP[TEST] · Regression · check passes when content matches existing file
+# · Scenario: tmp_path with file containing matching content → exit 0
+# · Last fail: N/A (new test)
+# · Remove if: _check_generated_content logic changes
+@ldd_trajectory
+def test_check_matches(caplog, tmp_path):
+    """_check_generated_content should return 0 when content matches existing file."""
+    test_file = tmp_path / "manifest.yaml"
+    content = "hello: world\n"
+    test_file.write_text(content, encoding="utf-8")
+
+    result = gem._check_generated_content(content, test_file)
+    assert result == 0, f"Expected 0 (match), got {result}"
+
+    logger.critical("[IMP:9][test] _check_generated_content match returns 0")
+
+
+# 🧪 TRAP[TEST] · Regression · check fails when content diverges from file
+# · Scenario: tmp_path with file containing DIFFERENT content → exit 1, stderr diff
+# · Last fail: N/A (new test)
+# · Remove if: _check_generated_content logic changes
+@ldd_trajectory
+def test_check_diverges(caplog, tmp_path):
+    """_check_generated_content should return 1 when content diverges from file."""
+    test_file = tmp_path / "manifest.yaml"
+    test_file.write_text("old: content\n", encoding="utf-8")
+    generated = "new: content\n"
+
+    result = gem._check_generated_content(generated, test_file)
+    assert result == 1, f"Expected 1 (diverges), got {result}"
+
+    logger.critical("[IMP:9][test] _check_generated_content diverges returns 1")
+
+
+# 🧪 TRAP[TEST] · Regression · check fails when file does not exist
+# · Scenario: Non-existent file path → exit 1
+# · Last fail: N/A (new test)
+# · Remove if: _check_generated_content logic changes
+@ldd_trajectory
+def test_check_missing_file(caplog):
+    """_check_generated_content should return 1 for missing file."""
+    result = gem._check_generated_content("content", Path("/tmp/nonexistent_check_manifest.yaml"))
+    assert result == 1, f"Expected 1 (missing file), got {result}"
+
+    logger.critical("[IMP:9][test] _check_generated_content missing file returns 1")
 
 
 # endregion

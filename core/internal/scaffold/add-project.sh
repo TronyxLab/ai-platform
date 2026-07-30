@@ -11,7 +11,7 @@
 ##   - Projects created in $PROJECTS_ROOT/$ORG/$NAME/, NOT inside ai-platform/.
 ##   - Templates in ai-platform/templates/ — copied with placeholder substitution.
 ##   - platform-deploy.yml is EXCLUDED from template copy (removed from templates).
-##   - .env.platform generated via gen-env-platform.sh if gen-env-platform.sh exists.
+##   - .env.platform generated via gen_env_platform.py from platform-env.yaml.
 ##   - Project Makefile and AGENTS.md generated if not already provided by template.
 ##   - --domain not set → auto-domain: $NAME.$PLATFORM_DOMAIN.
 ##   - --org defaults to ${PLATFORM_ORG:-}, --node defaults to ${PLATFORM_DEFAULT_NODE:-}.
@@ -22,6 +22,7 @@
 ## @rationale ai-platform/ is a tool, not a workspace. Projects live in org folders.
 ## @changes 2026-07-17 · T9 — auto-domain, gen-env-platform.sh integration, Makefile/AGENTS.md generation,
 ##          platform-deploy.yml exclusion, optional --org/--node defaults from env
+## @changes 2026-07-30 · T9d — gen_env_platform() uses gen_env_platform.py instead of gen-env-platform.sh
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -342,17 +343,18 @@ render_project_template() {
 # endregion RENDER_PROJECT_TEMPLATE
 
 # region GEN_ENV_PLATFORM
-## @purpose  Generate .env.platform in the project directory via gen-env-platform.sh.
-## @io       Calls: gen-env-platform.sh --name <NAME> --domain <DOMAIN> --output <.env.platform>
+## @purpose  Generate .env.platform in the project directory via gen_env_platform.py.
+## @io       Calls: gen_env_platform.py --yaml <platform-env.yaml> --name <NAME> --domain <DOMAIN> --output <.env.platform>
 ## @rationale T9: every scaffolded project gets its runtime environment contract.
+##            T9d: migrated from gen-env-platform.sh to gen_env_platform.py (Strangler-Fig).
 ##            Idempotent: if .env.platform exists, it will be overwritten (regeneration is safe).
 gen_env_platform() {
     local project_dir="${PROJECTS_ROOT}/${ORG}/${NAME}"
-    local gen_script="${SCRIPT_DIR}/gen-env-platform.sh"
+    local gen_script="${SCRIPT_DIR}/gen_env_platform.py"
     local env_file="${project_dir}/.env.platform"
 
-    if [[ ! -x "$gen_script" ]]; then
-        log_imp 8 "-" "gen-env-platform.sh not found at ${gen_script} — skipping .env.platform generation"
+    if [[ ! -f "$gen_script" ]]; then
+        log_imp 8 "-" "gen_env_platform.py not found at ${gen_script} — skipping .env.platform generation"
         return 0
     fi
 
@@ -365,13 +367,14 @@ gen_env_platform() {
 
     mkdir -p "$(dirname "$env_file")"
 
-    if "$gen_script" \
+    if python3 "$gen_script" \
+        --yaml "${PLATFORM_ROOT}/platform-env.yaml" \
         --name "$NAME" \
         --domain "${DOMAIN:-}" \
         --output "$env_file"; then
         log_imp 9 "-" ".env.platform generated: ${env_file}"
     else
-        log_imp 8 "-" "gen-env-platform.sh returned non-zero — .env.platform might be incomplete"
+        log_imp 8 "-" "gen_env_platform.py returned non-zero — .env.platform might be incomplete"
     fi
 }
 # endregion GEN_ENV_PLATFORM

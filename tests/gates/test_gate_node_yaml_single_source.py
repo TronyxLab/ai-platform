@@ -63,7 +63,7 @@ def _is_violation(line: str) -> bool:
 @ldd_trajectory
 def test_no_yaml_safe_load_node(caplog) -> None:
     """Fail if any file in core/internal/ uses yaml.safe_load for node.yaml outside NodeYaml.
-    
+
     ## @purpose  Enforce AC2: all node.yaml reads go through NodeYaml
     ## @invariants — Exceptions: node_yaml.py itself
     # 🧪 TRAP[TEST] · 2026-07-30 · Gate(AC2) · yaml.safe_load node.yaml · Remove if: all consumers migrated

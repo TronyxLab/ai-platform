@@ -188,7 +188,7 @@ scaffold:
   description: Create a new deployment context (GitHub org + repos)
 - make_target: project-sync-env
   mechanism: shell-script
-  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/gen-env-platform.sh
+  delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py
   signature: make project-sync-env [NAME=<name>]
   operation_ru: Синхронизация .env.platform
   description: Sync .env.platform from platform-env.yaml
@@ -202,7 +202,7 @@ scaffold:
 - make_target: adopt-project
   mechanism: shell-script
   delegates_to: core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh
-    → core/internal/scaffold/gen-env-platform.sh
+    → core/internal/scaffold/gen_env_platform.py
   signature: make adopt-project DIR=<dir>
   operation_ru: Адаптация существующего проекта
   description: Adopt existing project into platform lifecycle
@@ -242,12 +242,11 @@ test/gate:
   description: 'Production gate. MODE=full (default): lint+validate+gates+static+predeploy+smoke+component.
     MODE=fast: syntax+JSON+gates+static+predeploy (no Docker).'
 - make_target: check-manifests
-  mechanism: git-diff
-  delegates_to: git diff --exit-code
+  mechanism: python-check
+  delegates_to: '--check for all 6 generators (G1-G6) — byte-level comparison'
   signature: make check-manifests
   operation_ru: Проверка актуальности сгенерированных манифестов
-  description: Freshness gate — all generated manifests are in sync with authoritative
-    sources.
+  description: 'Freshness gate — all generated manifests are in sync with authoritative sources. Uses --check of all 6 generators (byte-level, parallel in CI).'
 - make_target: generate-manifests
   mechanism: python-script
   delegates_to: make generate-manifests
@@ -511,6 +510,9 @@ name_linter:
   namespace_collision_names:
   - deploy
 gates:
+- id: test_no_partial_writes_on_failure
+  test_file: test_gate_atomic_generation_no_partial_writes.py
+  description: 'Auto-discovered gate: test_no_partial_writes_on_failure'
 - id: test_check_doc_headers_equivalent
   test_file: test_gate_ci_coverage.py
   description: 'Auto-discovered gate: test_check_doc_headers_equivalent'
@@ -706,6 +708,9 @@ gates:
 - id: test_all_test_fixtures_match_schemas
   test_file: test_gate_fixture_schema.py
   description: 'Auto-discovered gate: test_all_test_fixtures_match_schemas'
+- id: test_no_self_read
+  test_file: test_gate_generate_entrypoint_manifest_no_self_read.py
+  description: 'Auto-discovered gate: test_no_self_read'
 - id: test_gitleaks_composite_action_used
   test_file: test_gate_gitleaks_version.py
   description: 'Auto-discovered gate: test_gitleaks_composite_action_used'
@@ -817,6 +822,9 @@ gates:
 - id: test_root_makefile_line_limit
   test_file: test_gate_makefile_targets.py
   description: 'Auto-discovered gate: test_root_makefile_line_limit'
+- id: test_generator_dag_acyclic
+  test_file: test_gate_manifest_dag_acyclic.py
+  description: 'Auto-discovered gate: test_generator_dag_acyclic'
 - id: test_agents_md_synced_with_manifest
   test_file: test_gate_manifest_integrity.py
   description: 'Auto-discovered gate: test_agents_md_synced_with_manifest'
@@ -973,6 +981,9 @@ gates:
 - id: test_no_inline_secrets_parsing_outside_shared
   test_file: test_gate_no_inline_secrets_parsing.py
   description: 'Auto-discovered gate: test_no_inline_secrets_parsing_outside_shared'
+- id: test_no_shell_generators
+  test_file: test_gate_no_shell_manifest_generators.py
+  description: 'Auto-discovered gate: test_no_shell_generators'
 - id: test_no_simulator_classes_in_test_suite
   test_file: test_gate_no_simulators.py
   description: 'Auto-discovered gate: test_no_simulator_classes_in_test_suite'
@@ -1117,6 +1128,15 @@ gates:
 - id: vps_readiness_sourceable
   test_file: test_gate_sequencing.py
   description: 'Auto-discovered gate: vps_readiness_sourceable'
+- id: test_layer1_python_docker_compose
+  test_file: test_gate_single_orchestrator.py
+  description: 'Auto-discovered gate: test_layer1_python_docker_compose'
+- id: test_layer2_shell_scp_rsync
+  test_file: test_gate_single_orchestrator.py
+  description: 'Auto-discovered gate: test_layer2_shell_scp_rsync'
+- id: test_layer3_ssh_forced_command
+  test_file: test_gate_single_orchestrator.py
+  description: 'Auto-discovered gate: test_layer3_ssh_forced_command'
 - id: test_default_catch_all_no_status_page
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_default_catch_all_no_status_page'
@@ -1285,6 +1305,15 @@ gates:
 - id: test_workflow_module_lists_match_filesystem
   test_file: test_gate_workflow_consistency.py
   description: 'Auto-discovered gate: test_workflow_module_lists_match_filesystem'
+- id: test_entrypoint_manifest_deterministic
+  test_file: test_gate_yaml_deterministic_output.py
+  description: 'Auto-discovered gate: test_entrypoint_manifest_deterministic'
+- id: test_platform_env_deterministic
+  test_file: test_gate_yaml_deterministic_output.py
+  description: 'Auto-discovered gate: test_platform_env_deterministic'
+- id: test_secrets_manifest_deterministic
+  test_file: test_gate_yaml_deterministic_output.py
+  description: 'Auto-discovered gate: test_secrets_manifest_deterministic'
 - id: test_env_hostnames_resolvable
   test_file: test_p20_container_coupling.py
   description: 'Auto-discovered gate: test_env_hostnames_resolvable'
@@ -1294,15 +1323,6 @@ gates:
 - id: test_referenced_container_names_have_alias
   test_file: test_p20_container_coupling.py
   description: 'Auto-discovered gate: test_referenced_container_names_have_alias'
-- id: layer1_docker_compose_through_orchestrator
-  test_file: test_gate_single_orchestrator.py
-  description: 'Layer 1: Python — fail if docker compose called via subprocess outside allowed modules'
-- id: layer2_scp_rsync_through_channels
-  test_file: test_gate_single_orchestrator.py
-  description: 'Layer 2: Shell — fail if scp/rsync used outside channels.py or bootstrap'
-- id: layer3_ssh_forced_command_through_orchestrator
-  test_file: test_gate_single_orchestrator.py
-  description: 'Layer 3: Shell — fail if ssh forced-command outside permitted channels'
 non_repairable_gates:
 - gate_id: test_single_gitleaks_version
   repairable: false

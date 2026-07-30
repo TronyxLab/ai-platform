@@ -22,6 +22,8 @@
 ## @changes  Plan 041 — created: dynamic generator for platform-env.yaml
 ##           Plan 082 — merged env_defaults from platform-infra.yaml (non-secret) with
 ##                      ci_defaults from secret-definitions.yaml (secret, takes precedence)
+##           Plan 090 — added --check mode: generates all 3 outputs in memory,
+##                      compares byte-by-byte, exit 0/1, diff on stderr
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

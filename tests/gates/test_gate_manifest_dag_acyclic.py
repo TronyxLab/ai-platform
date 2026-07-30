@@ -1,5 +1,5 @@
 # GREP_SUMMARY: manifest-dag dag-acyclic generator-chains cycle-detection make-generate-manifests
-# STRUCTURE: ▶ make generate-manifests -n → parse chains → ◇ Chain A (secrets → platform-env → env-example) ◇ Chain B (entrypoint → agents-md) ◇ Chain C (litellm-config) → ⊕ grep for repeated targets → ⎋ pass/fail
+# STRUCTURE: ▶ make generate-manifests -n → parse chains → ◇ Chain A (secrets → platform-env) ◇ Chain B (entrypoint → agents-md) ◇ Chain C (litellm-config) → ⊕ grep for repeated targets → ⎋ pass/fail
 # region MODULE_CONTRACT
 ## @purpose  Проверка ацикличности Makefile .PHONY цепочки генераторов манифестов.
 ##            Гарантирует, что `make generate-manifests` выполняется в топологическом порядке
@@ -27,7 +27,13 @@ from tests.conftest import ldd_trajectory
 logger = logging.getLogger(__name__)
 
 # Chain definitions: expected target basenames in order
-CHAIN_A = ["secrets-manifest", "platform-env", "env-example"]
+# Chain A: secrets-manifest → platform-env (the env_defaults_generated and smoke_env_generated
+#          are side outputs of the platform-env generator, not separate DAG nodes)
+# Chain B: entrypoint-manifest → agents-md (agents-md reads entrypoint-manifest as input)
+# Chain C: litellm-config (standalone generator, no dependencies within the DAG)
+# NOTE: sync-env-defaults (.env.example) is a separate make target — not part of
+#       `make generate-manifests`. It's tested by test_gate_env_example_sync.
+CHAIN_A = ["secrets-manifest", "platform-env"]
 CHAIN_B = ["entrypoint-manifest", "agents-md"]
 CHAIN_C = ["litellm-config"]
 
@@ -127,11 +133,11 @@ def test_generator_dag_acyclic(caplog) -> None:
             return False
         return True
 
-    assert chain_present("A (secrets→platform-env→env-example)", CHAIN_A), (
+    assert chain_present("A (secrets→platform-env)", CHAIN_A), (
         f"Chain A not fully present in `make generate-manifests -n` output.\n"
         f"Expected tokens: {CHAIN_A}\nOutput:\n{output}"
     )
-    logger.info("[IMP:9][test_generator_dag_acyclic] Chain A (secrets→platform-env→env-example): PRESENT")
+    logger.info("[IMP:9][test_generator_dag_acyclic] Chain A (secrets→platform-env): PRESENT")
 
     assert chain_present("B (entrypoint→agents-md)", CHAIN_B), (
         f"Chain B not fully present in `make generate-manifests -n` output.\n"

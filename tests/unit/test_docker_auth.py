@@ -128,7 +128,7 @@ def test_docker_login_env_fallback(caplog) -> None:
     logger.critical("[IMP:9][test] docker_login env var fallback — DOCKER_HUB_USERNAME picked up — OK")
 
 
-# enregion
+# endregion
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: ghcr_login
 # ═══════════════════════════════════════════════════════════════════
@@ -216,7 +216,7 @@ def test_ghcr_login_env_fallback(caplog) -> None:
     logger.critical("[IMP:9][test] ghcr_login env fallback — GHCR_PULL_TOKEN used — OK")
 
 
-# enregion
+# endregion
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: configure_docker_auth
 # ═══════════════════════════════════════════════════════════════════
@@ -273,4 +273,4 @@ def test_configure_docker_auth_empty_creds(caplog) -> None:
     logger.critical("[IMP:9][test] configure_docker_auth — empty creds produce colon-only encoding — OK")
 
 
-# enregion
+# endregion

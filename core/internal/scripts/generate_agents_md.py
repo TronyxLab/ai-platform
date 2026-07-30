@@ -18,6 +18,8 @@
 ## @see      core/AGENTS.md — target file with generated sections
 ## @see      core/entrypoint-manifest.yaml — source file
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 3)
+##           2026-07-30 | Added --check mode: in-memory injection + byte comparison, exit 0/1
+##           Refactored inject_into_md → _inject_content (string-based) + inject_into_md (file wrapper)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

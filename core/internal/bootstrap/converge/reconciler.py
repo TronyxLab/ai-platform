@@ -36,6 +36,8 @@
 ##   2026-07-22 · Added R7 reconcile_volumes (detect-only named volumes)
 ##   2026-07-22 · Added R8 reconcile_sudoers (sudoers.d drift + self-heal via visudo + atomic write)
 ##   2026-07-22 · Added R9 reconcile_runtime_state (container state + compose up -d + cooldown)
+##   2026-07-30 · T9b — replaced subprocess call to gen-env-platform.sh with direct
+##              import of generate_env_platform() from gen_env_platform module
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -719,8 +721,46 @@ def _validate_project_name(name: str) -> bool:
 # endregion FUNC__validate_project_name
 
 
+# region FUNC__create_empty_env_file
+## @purpose  Helper: create an empty .env.platform file with correct permissions and ownership.
+##           Used as fallback when generate_env_platform() is unavailable or fails.
+## @param env_file  Path to .env.platform file
+## @param unit      R-unit name for logging
+## @return  True if the file was created successfully, False on error
+def _create_empty_env_file(env_file: Path, unit: str) -> bool:
+    """Create an empty .env.platform file with 0640 ci-deploy:ci-deploy.
+
+    Args:
+        env_file: Path to the .env.platform file to create.
+        unit: R-unit name for logging.
+
+    Returns:
+        True on success, False on OSError.
+    """
+    try:
+        env_file.write_text("")
+        _run_subprocess(["chmod", "0640", str(env_file)], timeout=FILE_OP_TIMEOUT)
+        _run_subprocess(["chown", "ci-deploy:ci-deploy", str(env_file)], timeout=FILE_OP_TIMEOUT)
+        logger.info("[IMP:9][converge][%s] DONE: %s created (fallback: empty)", unit, env_file)
+        return True
+    except OSError as exc:
+        logger.error("[IMP:10][converge][%s] FAIL: .env.platform creation failed: %s", unit, exc)
+        _set_exit(2)
+        return False
+
+
+# endregion FUNC__create_empty_env_file
+
+
 # region FUNC__reconcile_env_platform
-## @purpose  Ensure .env.platform exists in project directory (if-missing)
+## @purpose  Ensure .env.platform exists in project directory (if-missing).
+##           T9b: replaced subprocess call to gen-env-platform.sh with direct
+##           Python import of generate_env_platform() from gen_env_platform module.
+## @param proj_name    Project name (used for DSN substitution and logging)
+## @param proj_dir     Path to the project directory
+## @param unit         R-unit name for logging (typically "R3")
+## @param dry_run      If True, only log planned mutations
+## @param report_only  If True, skip mutations entirely
 def _reconcile_env_platform(
     proj_name: str,
     proj_dir: str,
@@ -728,7 +768,10 @@ def _reconcile_env_platform(
     dry_run: bool,
     report_only: bool,
 ) -> None:
-    """Create .env.platform via gen-env-platform.sh or fallback to empty file.
+    """Create .env.platform via generate_env_platform() or fallback to empty file.
+
+    Uses direct Python import (T9b) instead of shell subprocess. Falls back
+    to empty file if platform-env.yaml is missing or generation fails.
 
     Reports via report_add and _set_exit; does not modify caller's local mutated counter —
     the approximate count from report entries is sufficient for the exit code contract.
@@ -740,58 +783,43 @@ def _reconcile_env_platform(
         return
 
     if dry_run or report_only:
-        logger.info("[IMP:9][converge][%s] WOULD create: %s via gen-env-platform.sh", unit, env_file)
+        logger.info("[IMP:9][converge][%s] WOULD create: %s via generate_env_platform()", unit, env_file)
         report_add(unit, "mutated", f".env.platform would be created for {proj_name}")
         _set_exit(1)
         return
 
-    logger.info("[IMP:8][converge][%s] Creating .env.platform via gen-env-platform.sh for %s", unit, proj_name)
+    logger.info("[IMP:8][converge][%s] Creating .env.platform via generate_env_platform() for %s", unit, proj_name)
 
-    # Try gen-env-platform.sh first; fall back to empty file
-    core_dir_global = _core_dir  # use module-level _core_dir
-    gen_env_script = Path(core_dir_global) / "internal" / "scaffold" / "gen-env-platform.sh"
+    # Determine platform-env.yaml path relative to _core_dir
+    platform_env_path = str(Path(_core_dir).parent / "platform-env.yaml")
+    domain = os.environ.get("PLATFORM_DOMAIN", "ai-platform.local")
 
-    if gen_env_script.is_file():
-        r = _run_subprocess(
-            ["bash", str(gen_env_script), "--name", proj_name, "--output", str(env_file)],
-            timeout=DOCKER_TIMEOUT,
-        )
-        if r.returncode == 0:
-            _run_subprocess(["chmod", "0640", str(env_file)], timeout=FILE_OP_TIMEOUT)
-            _run_subprocess(["chown", "ci-deploy:ci-deploy", str(env_file)], timeout=FILE_OP_TIMEOUT)
-            logger.info("[IMP:9][converge][%s] DONE: %s generated via gen-env-platform.sh", unit, env_file)
-        else:
-            logger.warning(
-                "[IMP:9][converge][%s] WARN: gen-env-platform.sh failed for %s — creating empty .env.platform",
-                unit,
-                proj_name,
-            )
-            try:
-                env_file.write_text("")
-                _run_subprocess(["chmod", "0640", str(env_file)], timeout=FILE_OP_TIMEOUT)
-                _run_subprocess(["chown", "ci-deploy:ci-deploy", str(env_file)], timeout=FILE_OP_TIMEOUT)
-                logger.info("[IMP:9][converge][%s] DONE: %s created (fallback: empty)", unit, env_file)
-            except OSError as exc:
-                logger.error("[IMP:10][converge][%s] FAIL: .env.platform creation failed: %s", unit, exc)
-                _set_exit(2)
-                return
-    else:
+    try:
+        # Lazy import to match codebase pattern (same as core.internal.shared imports)
+        from core.internal.scaffold.gen_env_platform import generate_env_platform
+
+        lines = generate_env_platform(platform_env_path, domain=domain, project_name=proj_name)
+        env_file.write_text("\n".join(lines) + "\n")
+        _run_subprocess(["chmod", "0640", str(env_file)], timeout=FILE_OP_TIMEOUT)
+        _run_subprocess(["chown", "ci-deploy:ci-deploy", str(env_file)], timeout=FILE_OP_TIMEOUT)
+        logger.info("[IMP:9][converge][%s] DONE: %s generated via generate_env_platform()", unit, env_file)
+        report_add(unit, "mutated", f".env.platform created for {proj_name}")
+        _set_exit(1)
+    except FileNotFoundError:
         logger.warning(
-            "[IMP:8][converge][%s] WARN: gen-env-platform.sh not found — creating empty .env.platform",
+            "[IMP:9][converge][%s] WARN: platform-env.yaml not found at %s — creating empty .env.platform",
             unit,
+            platform_env_path,
         )
-        try:
-            env_file.write_text("")
-            _run_subprocess(["chmod", "0640", str(env_file)], timeout=FILE_OP_TIMEOUT)
-            _run_subprocess(["chown", "ci-deploy:ci-deploy", str(env_file)], timeout=FILE_OP_TIMEOUT)
-            logger.info("[IMP:9][converge][%s] DONE: %s created (fallback: empty)", unit, env_file)
-        except OSError as exc:
-            logger.error("[IMP:10][converge][%s] FAIL: .env.platform creation failed: %s", unit, exc)
-            _set_exit(2)
-            return
-
-    report_add(unit, "mutated", f".env.platform created for {proj_name}")
-    _set_exit(1)
+        _create_empty_env_file(env_file, unit)
+    except Exception as exc:
+        logger.warning(
+            "[IMP:9][converge][%s] WARN: generate_env_platform() failed for %s — creating empty .env.platform: %s",
+            unit,
+            proj_name,
+            exc,
+        )
+        _create_empty_env_file(env_file, unit)
 
 
 # endregion FUNC__reconcile_env_platform

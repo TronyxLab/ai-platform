@@ -58,7 +58,7 @@ def _is_violation(line: str) -> bool:
 @ldd_trajectory
 def test_no_yq_operations_on_node(caplog) -> None:
     """Fail if any file in core/ uses yq for node.yaml operations.
-    
+
     ## @purpose  Enforce AC3: yq removed as dependency for node.yaml operations
     ## @invariants — yq is no longer required for node.yaml operations
     # 🧪 TRAP[TEST] · 2026-07-30 · Gate(AC3) · yq.*node in core/ · Remove if: all yq artifacts removed

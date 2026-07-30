@@ -8,7 +8,7 @@
 ## @invariants
 ##   - Detects subcommand from first argument
 ##   - Aliases: new-project/add-project/project → add-project.sh, new-context/context-init/context → context-init.sh
-##   - Aliases: project-sync-env/sync-env → gen-env-platform.sh
+##   - Aliases: project-sync-env/sync-env → gen_env_platform.py
 ##   - Aliases: remove-project → remove-project.sh, adopt-project → adopt-project.sh
 ##   - Aliases: project-list/list → project-list.sh, project-status/status → project-list.sh --status
 ##   - All subcommands delegate to internal/scaffold/ scripts — scaffold.sh is a thin wrapper
@@ -18,6 +18,7 @@
 ##            New lifecycle subcommands (sync-env, remove, adopt, list, status) complete the OBSERVE+REMOVE phases.
 ## @changes  2026-07-17 · T8 — Added lifecycle subcommands (project-sync-env, remove-project, adopt-project,
 ##           project-list, project-status) + positional→named bridge for new-project + --remove flag for add-vhost
+## @changes  2026-07-30 · T9c — sync-env delegates to gen_env_platform.py (was gen-env-platform.sh)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,8 +77,8 @@ case "$CMD" in
         ;;
     project-sync-env|sync-env)
         shift
-        log_imp 7 "-" "Delegating to gen-env-platform.sh $*"
-        exec "${PATHS_INTERNAL_DIR}/scaffold/gen-env-platform.sh" "$@"
+        log_imp 7 "-" "Delegating to gen_env_platform.py $*"
+        exec python3 "${PATHS_INTERNAL_DIR}/scaffold/gen_env_platform.py" "$@"
         ;;
     remove-project)
         shift

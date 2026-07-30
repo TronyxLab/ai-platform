@@ -306,7 +306,7 @@ $END_ARTIFACT_CONTRACT
 100
 -10 (BROKEN-1: test_checkpoint_migration.py blocks collection)
 -5 (DRIFT-088-1: duplicate resolve_node_yaml)
--3 (DRIFT-088-2: missing CREATE test files)  
+-3 (DRIFT-088-2: missing CREATE test files)
 -3 (DRIFT-088-3: non-deleted DELETE files)
 -15 (GAP-MUTATION: mutation API без тестов)
 -2 (DRIFT-088-5: partial reconciler migration)

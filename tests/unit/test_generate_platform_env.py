@@ -178,3 +178,58 @@ def test_generate_smoke_env_py(caplog):
 
 
 # endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _check_generated_content (--check mode)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · check passes when content matches existing file
+# · Scenario: tmp_path with file containing matching content → exit 0
+# · Last fail: N/A (new test)
+# · Remove if: _check_generated_content logic changes
+@ldd_trajectory
+def test_check_matches(caplog, tmp_path):
+    """_check_generated_content should return 0 when content matches existing file."""
+    test_file = tmp_path / "test_output.txt"
+    content = "hello world\n"
+    test_file.write_text(content, encoding="utf-8")
+
+    result = gpe._check_generated_content(content, test_file, "test")
+    assert result == 0, f"Expected 0 (match), got {result}"
+
+    logger.critical("[IMP:9][test] _check_generated_content match returns 0")
+
+
+# 🧪 TRAP[TEST] · Regression · check fails when content diverges from file
+# · Scenario: tmp_path with file containing DIFFERENT content → exit 1, stderr diff
+# · Last fail: N/A (new test)
+# · Remove if: _check_generated_content logic changes
+@ldd_trajectory
+def test_check_diverges(caplog, tmp_path):
+    """_check_generated_content should return 1 when content diverges from file."""
+    test_file = tmp_path / "test_output.txt"
+    test_file.write_text("old content\n", encoding="utf-8")
+    generated = "new content\n"
+
+    result = gpe._check_generated_content(generated, test_file, "test")
+    assert result == 1, f"Expected 1 (diverges), got {result}"
+
+    logger.critical("[IMP:9][test] _check_generated_content diverges returns 1")
+
+
+# 🧪 TRAP[TEST] · Regression · check fails when file does not exist
+# · Scenario: Non-existent file path → exit 1
+# · Last fail: N/A (new test)
+# · Remove if: _check_generated_content logic changes
+@ldd_trajectory
+def test_check_missing_file(caplog):
+    """_check_generated_content should return 1 for missing file."""
+    result = gpe._check_generated_content("content", Path("/tmp/nonexistent_check_file.txt"), "test")
+    assert result == 1, f"Expected 1 (missing file), got {result}"
+
+    logger.critical("[IMP:9][test] _check_generated_content missing file returns 1")
+
+
+# endregion

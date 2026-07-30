@@ -224,3 +224,95 @@ def test_inject_into_md_missing_file(caplog):
 
 
 # endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _inject_content (string-based, --check mode)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · _inject_content replaces content between existing markers
+# · Scenario: String with START/END markers → replaces content, preserves markers
+# · Last fail: N/A (new test)
+# · Remove if: _inject_content logic changes
+@ldd_trajectory
+def test_inject_content_replaces(caplog):
+    """_inject_content should replace content between existing markers."""
+    original = textwrap.dedent("""\
+        # Header
+        Before
+        <!-- GENERATED:START:canon-operations -->
+        | old | content |
+        <!-- GENERATED:END:canon-operations -->
+        After
+    """)
+    new_content = "| `make deploy` | Deploy project |"
+
+    result = gam._inject_content(original, "canon-operations", new_content)
+
+    assert "<!-- GENERATED:START:canon-operations -->" in result, "Start marker preserved"
+    assert "<!-- GENERATED:END:canon-operations -->" in result, "End marker preserved"
+    assert "| `make deploy` | Deploy project |" in result, "New content present"
+    assert "| old | content |" not in result, "Old content replaced"
+    assert "Before" in result, "Text before marker preserved"
+    assert "After" in result, "Text after marker preserved"
+
+    logger.critical("[IMP:9][test] _inject_content replaced content between markers")
+
+
+# 🧪 TRAP[TEST] · Regression · _inject_content appends markers when none exist
+# · Scenario: String without markers → markers + content appended at end
+# · Last fail: N/A (new test)
+# · Remove if: _inject_content logic changes
+@ldd_trajectory
+def test_inject_content_appends(caplog):
+    """_inject_content should append markers and content when no markers exist."""
+    original = "# Header\nExisting content\n"
+    new_content = "| `make test` | Test |"
+
+    result = gam._inject_content(original, "test-marker", new_content)
+
+    assert "<!-- GENERATED:START:test-marker -->" in result, "Start marker added"
+    assert "<!-- GENERATED:END:test-marker -->" in result, "End marker added"
+    assert "| `make test` | Test |" in result, "Content added"
+    assert "Existing content" in result, "Original content preserved"
+
+    logger.critical("[IMP:9][test] _inject_content appended markers when none found")
+
+
+# 🧪 TRAP[TEST] · Regression · _inject_content handles multiple markers independently
+# · Scenario: String with two different marker pairs → both replaced correctly
+# · Last fail: N/A (new test)
+# · Remove if: _inject_content logic changes
+@ldd_trajectory
+def test_inject_content_multiple_markers(caplog):
+    """_inject_content should handle multiple marker pairs independently."""
+    original = textwrap.dedent("""\
+        # Header
+        <!-- GENERATED:START:canon -->
+        | old | canon |
+        <!-- GENERATED:END:canon -->
+        Middle
+        <!-- GENERATED:START:forbidden -->
+        - old_script
+        <!-- GENERATED:END:forbidden -->
+        Footer
+    """)
+    new_canon = "| `make deploy` | Deploy |"
+    new_forbidden = "- dev.sh"
+
+    # Apply both injections sequentially
+    result = gam._inject_content(original, "canon", new_canon)
+    result = gam._inject_content(result, "forbidden", new_forbidden)
+
+    assert "| `make deploy` | Deploy |" in result, "Canon content replaced"
+    assert "- dev.sh" in result, "Forbidden content replaced"
+    assert "| old | canon |" not in result, "Old canon content removed"
+    assert "- old_script" not in result, "Old forbidden content removed"
+    assert "Middle" in result, "Text between sections preserved"
+    assert "Footer" in result, "Text after preserved"
+
+    logger.critical("[IMP:9][test] _inject_content handles multiple markers independently")
+
+
+# endregion

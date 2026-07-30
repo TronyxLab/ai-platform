@@ -1,23 +1,30 @@
-# GREP_SUMMARY: generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, manifest-generator, CI
-# STRUCTURE: ▶ gmake -np —▸ extract .PHONY targets → ▶ pytest --collect-only —▸ gate tests → ◇ load existing manifest → ⊕ merge (replace allowed_verbs + gates[], preserve rest) → ⎋ write YAML
+# GREP_SUMMARY: generate_entrypoint_manifest, extract_phony_targets, collect_gate_tests, merge, load_structural_sections, manifest-generator, CI, g3-cycle-break
+# STRUCTURE: ▶ gmake -np —▸ extract .PHONY targets → ▶ pytest --collect-only —▸ gate tests → ◇ load_structural_sections (allowed_verbs/gates EXCLUDED — G3 cycle break) → ⊕ merge (replace allowed_verbs + gates[], preserve rest) → ⎋ write YAML
 # region MODULE_CONTRACT
 ## @purpose  Generator for entrypoint-manifest.yaml — extracts .PHONY targets from Makefile via gmake -np,
-##           collects gate tests via pytest --collect-only, merges into existing manifest by replacing
-##           allowed_verbs and gates[] sections while preserving all other sections (bootstrap, deploy,
-##           build, validate, test, scaffold, secrets, lifecycle, provision, dev, module_hooks, lib,
-##           module_lifecycle, name_linter, forbidden_*).
+##           collects gate tests via pytest --collect-only, loads STRUCTURAL sections from existing manifest
+##           (NEVER allowed_verbs or gates — G3 cycle break), merges by replacing allowed_verbs and gates[]
+##           while preserving all other sections.
 ## @scope    Used by `make generate-manifests` (Wave 2 of DevPlan 051). Run as CLI.
 ## @invariants
+##   - G3 CYCLE BREAK (DevPlan 090 T6): allowed_verbs and gates are NEVER loaded from existing manifest.
+##     They come EXCLUSIVELY from Makefile .PHONY targets and pytest gate markers.
+##   - load_structural_sections() explicitly excludes allowed_verbs and gates keys.
 ##   - gmake -np preferred; falls back to grep-based .PHONY parsing if gmake unavailable
 ##   - system_exceptions filtered out: help, venv, pre-commit-*, test-*, gate-*
-##   - gates[] replaced entirely from pytest --collect-only -m gate -q output
-##   - allowed_verbs replaced entirely from extracted targets (minus system_exceptions)
 ##   - All other sections preserved verbatim from existing manifest
 ##   - Empty lists are written as [] in YAML (never null)
 ## @rationale DevPlan 051 Wave 2: automated sync eliminates drift between Makefile targets and
 ##            entrypoint-manifest.yaml allowed_verbs, and between pytest gate markers and gates[].
+##            DevPlan 090 T6: Breaking the G3 cyclic dependency — the generator must NOT read its own
+##            output (allowed_verbs/gates) from the manifest, because this creates a self-reinforcing
+##            drift mask. If a target is deleted from Makefile but remains in YAML, the old value
+##            would be perpetuated. Atomic generation requires each section from authoritative sources.
 ## @see      core/entrypoint-manifest.yaml — target manifest file
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 2)
+##           2026-07-30 | Added --check mode: byte-level comparison, exit 0/1, stderr diff
+##           2026-07-30 | G3 CYCLE BREAK: load_structural_sections() replaces load_existing_manifest()
+##                        in main(). allowed_verbs and gates NEVER read from manifest (DevPlan 090 T6).
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -247,12 +254,17 @@ def collect_gate_tests(tests_dir: str) -> list[dict]:
 
 
 def load_existing_manifest(path: str) -> dict:
-    """Load existing entrypoint-manifest.yaml.
+    """Load existing entrypoint-manifest.yaml (full load — backward compat).
 
-    ## @purpose  Read YAML manifest from disk.
+    ## @purpose  Read YAML manifest from disk. Loads ALL sections including allowed_verbs/gates.
+    ##            ⚠️ DEPRECATED for main() flow: use load_structural_sections() instead.
+    ##            Kept for backward compatibility with external consumers importing this function.
     ## @io       ⇥ path: path to entrypoint-manifest.yaml
     ##           → ⎋ dict: parsed YAML content (empty dict if file missing)
     ## @complexity O(1) — single file read + parse
+    ## @invariants
+    ##   - Returns ALL keys from manifest, including allowed_verbs and gates
+    ##   - Missing file returns empty dict
     """
     print(f"[IMP:7][load_existing_manifest] Loading existing manifest from {path}", file=sys.stderr)
     manifest_path = Path(path)
@@ -265,6 +277,54 @@ def load_existing_manifest(path: str) -> dict:
         data = {}
     print(f"[IMP:9][load_existing_manifest] Loaded manifest with {len(data)} top-level keys", file=sys.stderr)
     return data
+
+
+def load_structural_sections(path: str) -> dict:
+    """Load structural sections ONLY from entrypoint-manifest.yaml — explicitly excludes allowed_verbs and gates.
+
+    ## @purpose  Load existing manifest for structural sections ONLY.
+    ##            allowed_verbs and gates are NEVER loaded from the manifest —
+    ##            they are generated EXCLUSIVELY from Makefile .PHONY targets and pytest gate markers.
+    ##            This breaks the G3 cyclic dependency (DevPlan 090 T6) where the generator would
+    ##            read its own output and perpetuate stale values.
+    ## @io       ⇥ path: path to entrypoint-manifest.yaml
+    ##           → ⎋ dict: structural sections only (allowed_verbs and gates explicitly excluded)
+    ## @complexity O(1) — single file read + parse + filter
+    ## @invariants
+    ##   - allowed_verbs key is NEVER present in result
+    ##   - gates key is NEVER present in result
+    ##   - Missing file returns empty dict
+    ##   - All other keys preserved verbatim
+    ## @rationale G3 CYCLE BREAK (DevPlan 090 T6): Allowed_verbs and gates MUST come EXCLUSIVELY from
+    ##            Makefile .PHONY targets and pytest gate markers. Loading them from the manifest would
+    ##            create a self-reinforcing drift mask — if a target is deleted from Makefile but remains
+    ##            in YAML, the generator would preserve it. Explicit exclusion makes the contract
+    ##            impossible to violate at the data-loading layer.
+    """
+    print(f"[IMP:7][load_structural_sections] Loading structural sections from {path}", file=sys.stderr)
+    manifest_path = Path(path)
+    if not manifest_path.is_file():
+        print(f"[IMP:6][load_structural_sections] Manifest not found at {path}, returning empty", file=sys.stderr)
+        return {}
+    with open(str(manifest_path)) as f:
+        data = yaml.safe_load(f)
+    if data is None:
+        data = {}
+
+    # ⚠️ G3 CYCLE BREAK: allowed_verbs and gates are explicitly excluded.
+    # They come EXCLUSIVELY from Makefile .PHONY targets and pytest gate markers.
+    # Loading them from the manifest would create a self-reinforcing drift mask
+    # where deleted Makefile targets persist in YAML forever.
+    excluded: set[str] = {"allowed_verbs", "gates"}
+    structural: dict = {k: v for k, v in data.items() if k not in excluded}
+
+    excluded_count = sum(1 for k in data if k in excluded)
+    print(
+        f"[IMP:9][load_structural_sections] Loaded {len(structural)} structural keys "
+        f"(excluded {excluded_count} generated keys: allowed_verbs/gates)",
+        file=sys.stderr,
+    )
+    return structural
 
 
 def _collect_repair_mappings(existing: dict) -> dict[str, dict]:
@@ -318,23 +378,31 @@ def merge(allowed_verbs: list[str], gates: list[dict], existing: dict) -> dict:
 
     Also injects repair fields from the repair: section into matching gates[]
     entries (DevPlan 060 — Repair Contract Infrastructure).
+    NOTE: repair field injection is currently SUPPRESSED (B4).
 
-    ## @purpose  Merge extracted targets and gate tests into existing manifest.
-    ##            Replaces allowed_verbs and gates[] entirely.
+    ## @purpose  Merge extracted targets and gate tests into structural sections.
+    ##            Replaces allowed_verbs and gates[] ENTIRELY from generated values.
     ##            Preserves all other sections verbatim.
-    ##            Injects repair fields from repair: → repairs_gates into gates[].
+    ##            This is the last line of defense for the G3 cycle break:
+    ##            even if load_structural_sections() mistakenly returned
+    ##            allowed_verbs/gates, merge() overwrites them anyway.
     ## @io       ⇥ allowed_verbs: list[str] — extracted .PHONY targets
     ##           ⇥ gates: list[dict] — collected gate test entries
-    ##           ⇥ existing: dict — existing manifest content
+    ##           ⇥ existing: dict — structural sections from manifest (allowed_verbs/gates SHOULD be absent)
     ##           → ⎋ dict: merged manifest ready for YAML output
     ## @complexity O(G + R*G) where G=gates, R=repair entries
     ## @invariants
-    ##   - allowed_verbs in output always from extracted targets, not existing
-    ##   - gates[] in output always from collected tests, not existing
-    ##   - Repair fields injected from repair: section into matching gates
+    ##   - allowed_verbs in output always from extracted targets, NEVER from existing
+    ##   - gates[] in output always from collected tests, NEVER from existing
+    ##   - G3 cycle break: merge() overwrites allowed_verbs/gates unconditionally.
+    ##     This is a safety net even if load_structural_sections() fails to exclude them.
+    ##   - Repair fields injection from repair: section is SUPPRESSED (B4)
     ##   - All other sections from existing preserved unchanged
     ##   - Result dict maintains YAML-compatible structure (list, not None)
-    ## @changes  2026-07-23 | DevPlan 060: repair fields injection from repair: section
+    ## @changes  2026-07-23 | DevPlan 060: repair fields injection from repair: section (suppressed B4)
+    ##            2026-07-30 | G3 cycle break defensive: merge() explicitly overwrites allowed_verbs/gates
+    ##                         regardless of what `existing` contains. This is a safety net — the real
+    ##                         cycle break is in load_structural_sections() excluding these keys at load time.
     """
     print(
         f"[IMP:7][merge] Merging {len(allowed_verbs)} verbs + {len(gates)} gates into existing manifest",
@@ -473,7 +541,8 @@ def _check_generated_content(content: str, path: Path) -> int:
 def main() -> int:
     """CLI entrypoint for entrypoint manifest generator.
 
-    ▶ argparse → ◇ extract_phony_targets + collect_gate_tests + load_existing_manifest
+    ▶ argparse → ◇ extract_phony_targets + collect_gate_tests + load_structural_sections
+      (G3 cycle break: allowed_verbs/gates NEVER loaded from manifest)
       → ⊕ merge → ◇ --check ? compare byte-by-byte : write YAML output → ⎋ exit 0/1
 
     ## @purpose  CLI for make generate-manifests integration.
@@ -481,6 +550,10 @@ def main() -> int:
     ##             --tests-dir, --output, --check
     ##           → ⎋ exit code 0 on success/match, 1 on error/divergence
     ## @complexity O(T + N) where T=targets, N=gate tests
+    ## @invariants
+    ##   - Uses load_structural_sections() NOT load_existing_manifest() — G3 cycle break
+    ##   - allowed_verbs/gates come EXCLUSIVELY from Makefile/pytest, never from manifest
+    ## @rationale G3 CYCLE BREAK (DevPlan 090 T6): structural sections only from manifest
     """
     parser = argparse.ArgumentParser(
         prog="generate_entrypoint_manifest.py",
@@ -524,7 +597,10 @@ def main() -> int:
     try:
         targets = extract_phony_targets(args.makefile_dir, args.gmake_path)
         gates = collect_gate_tests(args.tests_dir)
-        existing = load_existing_manifest(args.existing_manifest)
+        # ⚠️ G3 CYCLE BREAK: use load_structural_sections(), NOT load_existing_manifest().
+        # allowed_verbs and gates are NEVER loaded from the manifest — they come EXCLUSIVELY
+        # from Makefile .PHONY targets and pytest gate markers (DevPlan 090 T6).
+        existing = load_structural_sections(args.existing_manifest)
         merged = merge(targets, gates, existing)
 
         # Generate output content in memory
