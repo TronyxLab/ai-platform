@@ -738,9 +738,9 @@ node: {self.node}
             return True
         except ImportError as e:
             logger.info("[IMP:8][%s][register] project_registry.py not importable: %s", self._log_prefix, e)
-            logger.info("[IMP:8][%s][register]   Falling back to subprocess yq...", self._log_prefix)
-            # Fallback: yq append
-            return self._register_via_yq(node_yaml_path)
+            logger.info("[IMP:8][%s][register]   Falling back to NodeYaml CLI...", self._log_prefix)
+            # Fallback: NodeYaml CLI mutation API (replaces yq)
+            return self._register_via_node_yaml(node_yaml_path)
 
     def _register_project_safe(self, register_func: Any, node_yaml_path: Path) -> None:
         """Safe wrapper for register_project that handles sys.exit (D3).
@@ -772,41 +772,59 @@ node: {self.node}
                     "[IMP:8][%s][register] Registration sys.exit(%s) — manual check required", self._log_prefix, e.code
                 )
 
-    def _register_via_yq(self, node_yaml_path: Path) -> bool:
-        """Fallback registration using yq subprocess (when project_registry not available).
+    def _register_via_node_yaml(self, node_yaml_path: Path) -> bool:
+        """Register project using NodeYaml CLI (replaces yq subprocess).
 
-        ## @purpose  If project_registry import fails, try yq subprocess as fallback.
+        ## @purpose  If project_registry import fails, use NodeYaml CLI mutation API.
         ## @io        ⇥ node_yaml_path → ⎋ bool
         ## @complexity O(1)
         """
-        if not shutil.which("yq"):
-            logger.info("[IMP:8][%s][register] yq not available — cannot auto-register", self._log_prefix)
-            return False
+        import subprocess
 
-        # Check if already registered
+        # Check if already registered via NodeYaml CLI --find-project
         result = subprocess.run(
-            ["yq", "eval", f'.projects[] | select(.name == "{self.name}") | .name', str(node_yaml_path)],
+            [
+                sys.executable,
+                "-m",
+                "core.internal.shared.node_yaml",
+                "--file",
+                str(node_yaml_path),
+                "--find-project",
+                self.name,
+            ],
             capture_output=True,
             text=True,
             check=False,
         )
-        if result.stdout.strip():
+        if result.returncode == 0 and result.stdout.strip():
             logger.info("[IMP:9][%s][register] Project already registered — SKIP (idempotent)", self._log_prefix)
             return True
 
-        entry = f'{{"name": "{self.name}", "repo": "{self.org}/{self.name}", "type": "adopted"'
-        if self.domain:
-            entry += f', "domain": "{self.domain}"'
-        entry += "}"
-
+        # Add project via NodeYaml CLI mutation API
+        domain_arg = self.domain or "-"
         result = subprocess.run(
-            ["yq", "eval", "-i", f".projects += [{entry}]", str(node_yaml_path)],
+            [
+                sys.executable,
+                "-m",
+                "core.internal.shared.node_yaml",
+                "--file",
+                str(node_yaml_path),
+                "--add-project",
+                self.name,
+                f"{self.org}/{self.name}",
+                "adopted",
+                domain_arg,
+                "-",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
             check=False,
         )
         if result.returncode == 0:
-            logger.info("[IMP:9][%s][register] Registered via yq: %s", self._log_prefix, self.name)
+            logger.info("[IMP:9][%s][register] Registered via NodeYaml CLI: %s", self._log_prefix, self.name)
             return True
-        logger.info("[IMP:8][%s][register] yq registration failed — register manually", self._log_prefix)
+        logger.info("[IMP:8][%s][register] NodeYaml CLI registration failed — register manually", self._log_prefix)
         return False
 
     # endregion FUNC_register_in_node_yaml

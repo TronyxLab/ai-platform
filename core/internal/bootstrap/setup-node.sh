@@ -8,7 +8,7 @@
 ## @invariants
 ##   - useradd skipped if `id <user>` succeeds (idempotency)
 ##   - authorized_keys entry added only if grep finds it absent
-##   - ci-deploy SSH key uses command="${PLATFORM_ROOT}/core/internal/deploy/deploy-project.sh",restrict (no shell access, 00 §4)
+##   - ci-deploy SSH key uses command="python3 -m core.internal.deploy.orchestrator_cli receive",restrict (no shell access, 00 §4)
 ##   - ci-deploy is in docker group → no sudo for docker commands; sudoers only: nginx reload/status
 ##   - ci-deploy role is SEPARATE from ci role — different scope and sudoers entries (06 §4.2)
 ##   - sudoers generated via temp file → visudo -c → atomic mv (lockout-safe, SC5)
@@ -83,7 +83,7 @@ add_ssh_key() {
 ## @brief  Configure ci-deploy user: forced command SSH key + docker/adm group membership
 ## @param  $1  node_name (for logging context)
 ## @param  $2  deploy_key (public SSH key for ci-deploy)
-## @detail Authorized_keys entry: command="${PLATFORM_ROOT}/core/internal/deploy/deploy-project.sh",restrict
+## @detail Authorized_keys entry: command="python3 -m core.internal.deploy.orchestrator_cli receive",restrict
 ##         No shell access; only platform-deploy.sh can be executed.
 ##         ci-deploy added to docker group (no sudo for docker) and adm group (audit log write).
 ##         Separate sudoers entry from ci role (06 §4.2).
@@ -91,7 +91,7 @@ add_ci_deploy_command() {
     local node_name="$1"
     local deploy_key="$2"
 
-    log_step "ci-deploy-command" "START" "Configuring ci-deploy with forced command=${PLATFORM_ROOT}/core/internal/deploy/deploy-project.sh"
+    log_step "ci-deploy-command" "START" "Configuring ci-deploy with forced command=python3 -m core.internal.deploy.orchestrator_cli receive"
 
     # Idempotent user creation with docker + adm groups
     # docker group: direct docker socket access (no sudo) — principle of least privilege
@@ -109,7 +109,7 @@ add_ci_deploy_command() {
 
     # [IMP:9][setup-node][ci-deploy-command] Forced command restricts ci-deploy to ONLY platform-deploy.sh
     # SSH_ORIGINAL_COMMAND will carry <project> <ref> — see platform-deploy.sh parse_ssh_command
-    local restrict_opts="command=\"${PLATFORM_ROOT}/core/internal/deploy/deploy-project.sh\",restrict"
+    local restrict_opts="command=\"python3 -m core.internal.deploy.orchestrator_cli receive\",restrict"
     add_ssh_key "ci-deploy" "$deploy_key" "$restrict_opts"
 
     log_step "ci-deploy-command" "DONE" "ci-deploy: forced_command=platform-deploy.sh, restrict enabled, groups=docker,adm"

@@ -98,11 +98,76 @@ class DeliverResult:
 class PayloadDeliverer:
     """Validate and atomically extract tar.gz payload delivered via stdin.
 
+    ## @rationale DevPlan 089 T8: assemble_payload() is the public API for DeployOrchestrator.
+    ##            deliver() preserved for backward compatibility with deploy-project.sh.
+
     Zero Docker dependency. Pure file I/O + tar validation.
     """
 
     def __init__(self, projects_base: str = "/opt/projects"):
         self.projects_base = projects_base
+
+    # region FUNC_assemble_payload
+    ## @purpose  Assemble project files into a Payload dataclass for DeployOrchestrator.
+    ##           Creates tar.gz of project files (docker-compose.yml, ai-platform.yaml, .env.platform)
+    ##           from the project directory. Returns Payload with tar_path pointing to created archive.
+    ## @io       ⇥ project_name: str, version: str, project_dir: str, metadata: dict → ⎋ Payload
+    ## @complexity — O(N) where N = files to include
+    ## @invariants
+    ##   - Creates tar.gz in temp directory (caller responsible for cleanup)
+    ##   - Only includes whitelisted files (same as deliver)
+    ##   - Returns Payload with project_name and version
+    def assemble_payload(
+        self,
+        project_name: str,
+        version: str = "",
+        project_dir: str = "",
+        metadata: dict | None = None,
+    ) -> Payload:
+        """Assemble project files into a deploy payload.
+
+        Args:
+            project_name: Project name.
+            version: Version/tag.
+            project_dir: Project directory path.
+            metadata: Additional metadata.
+
+        Returns:
+            Payload with tar_path pointing to created tar.gz.
+        """
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        base_dir = project_dir or os.path.join(self.projects_base, project_name)
+        metadata = metadata or {}
+
+        # Create tar.gz
+        tar_fd, tar_path = tempfile.mkstemp(suffix=".tar.gz", prefix=f"payload-{project_name}-")
+        os.close(tar_fd)
+
+        with tarfile.open(tar_path, "w:gz") as tar:
+            for fname in ("docker-compose.yml", "compose.yaml", "ai-platform.yaml", ".env.platform"):
+                fpath = os.path.join(base_dir, fname)
+                if os.path.isfile(fpath):
+                    tar.add(fpath, arcname=fname)
+
+        logger.info(
+            "[IMP:9][assemble_payload] Assembled payload for %s (version=%s): %s",
+            project_name,
+            version,
+            tar_path,
+        )
+        from core.internal.deploy.channels import Payload
+
+        return Payload(
+            tar_path=Path(tar_path),
+            project_name=project_name,
+            version=version,
+            metadata=metadata,
+        )
+
+    # endregion FUNC_assemble_payload
 
     # region FUNC_deliver
     ## @purpose  Full deliver flow: read stdin tar.gz → validate → atomically extract to target.

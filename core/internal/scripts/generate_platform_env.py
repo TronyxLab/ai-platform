@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import logging
 import re
 import sys
@@ -587,18 +588,66 @@ def generate_helpers_py(ci_defaults: dict[str, str]) -> str:
 # endregion FUNC_generate_helpers_py
 
 
+# region FUNC_check_generated_content
+def _check_generated_content(content: str, path: Path, label: str) -> int:
+    """Compare generated content with existing file byte-by-byte.
+
+    ## @purpose  Byte-level comparison for --check mode. Returns 0 if match,
+    ##            1 if divergence. Prints first 20 lines of unified diff on stderr.
+    ## @io        ⇥ content: generated string, path: existing file, label: display name
+    ##           → ⎋ int: 0=match, 1=diverges
+    ## @complexity O(N) where N = file size
+    ## @invariants
+    ##   - Reads file as text (UTF-8)
+    ##   - Prints diff only on divergence
+    ##   - Never writes to disk
+    """
+    logger.info("[IMP:7][check][START] Checking %s against %s", label, path)
+
+    if not path.is_file():
+        logger.error("[IMP:1][check][FAIL] File not found: %s — cannot check", path)
+        print(f"[IMP:1][check] File not found: {path} — cannot check", file=sys.stderr)
+        return 1
+
+    existing = path.read_text(encoding="utf-8")
+    if content == existing:
+        logger.info("[IMP:9][check][OK] %s — matches on disk", label)
+        return 0
+
+    logger.warning("[IMP:6][check][DIVERGE] %s — content differs from %s", label, path)
+    print(f"[IMP:6][check] Divergence in {label}:", file=sys.stderr)
+    diff_lines = list(
+        difflib.unified_diff(
+            existing.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=f"{label} (file)",
+            tofile=f"{label} (generated)",
+        )
+    )
+    for line in diff_lines[:20]:
+        print(line, end="", file=sys.stderr)
+    if len(diff_lines) > 20:
+        print(f"[IMP:6][check] ... truncated ({len(diff_lines) - 20} more lines)", file=sys.stderr)
+    return 1
+
+
+# endregion FUNC_check_generated_content
+
+
 # region FUNC_main
 def main() -> None:
     """CLI entrypoint.
 
     ## @purpose  Parse CLI args, load infra + discover modules + scan ports + load defaults,
-    ##            generate all output files.
+    ##            generate all output files. Supports --check mode for byte-level verification.
     ## @io        ⇥ sys.argv → ⎋ exit code 0/1
     ## @complexity O(1) dispatch to sub-functions
     ## @invariants
-    ##   - All output files are overwritten if exist
-    ##   - --smoke-env-output and --helpers-output are optional
-    ##   - Exit 0 on success, 1 on error
+    ##   - All output files are overwritten if exist (normal mode)
+    ##   - --check mode never writes to disk, compares byte-by-byte
+    ##   - --smoke-env-output and --helpers-output are optional in both modes
+    ##   - --check without --output → error (no file to compare)
+    ##   - Exit 0 on success/up-to-date, 1 on error/divergence
     """
     parser = argparse.ArgumentParser(
         description="Generate platform-env.yaml and associated Python files",
@@ -638,6 +687,12 @@ def main() -> None:
         type=str,
         default=None,
         help="Output path for generated env_defaults_generated.py",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check mode: compare generated output with existing files byte-by-byte. "
+        "Never writes to disk. Exit 0 if all match, 1 if any diverges.",
     )
     parser.add_argument(
         "-v",
@@ -718,6 +773,43 @@ def main() -> None:
         env_defaults=merged_env_defaults,
     )
 
+    # ── Generate smoke_env_generated.py (optional) ──
+    smoke_content: str | None = None
+    smoke_env_path: Path | None = None
+    if args.smoke_env_output:
+        smoke_env_path = Path(args.smoke_env_output).resolve()
+        smoke_content = generate_smoke_env_py(ci_defaults)
+
+    # ── Generate env_defaults_generated.py (optional) ──
+    helpers_content: str | None = None
+    helpers_path: Path | None = None
+    if args.helpers_output:
+        helpers_path = Path(args.helpers_output).resolve()
+        helpers_content = generate_helpers_py(ci_defaults)
+
+    # ══════════════════════════════════════════════════════════════
+    # ── CHECK MODE: compare byte-by-byte, never write ──
+    # ══════════════════════════════════════════════════════════════
+    if args.check:
+        logger.info("[IMP:7][main][CHECK] Running check mode — comparing with existing files")
+
+        exit_code = _check_generated_content(yaml_content, output_path, "platform-env.yaml")
+        if smoke_content is not None and smoke_env_path is not None:
+            exit_code |= _check_generated_content(smoke_content, smoke_env_path, "smoke_env_generated.py")
+        if helpers_content is not None and helpers_path is not None:
+            exit_code |= _check_generated_content(helpers_content, helpers_path, "env_defaults_generated.py")
+
+        if exit_code == 0:
+            logger.info("[IMP:9][main][CHECK] All outputs match — exit 0")
+            sys.exit(0)
+        else:
+            logger.warning("[IMP:6][main][CHECK] Some outputs diverge — exit 1")
+            sys.exit(1)
+
+    # ══════════════════════════════════════════════════════════════
+    # ── NORMAL MODE: write outputs to disk ──
+    # ══════════════════════════════════════════════════════════════
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         f.write(yaml_content)
@@ -726,10 +818,7 @@ def main() -> None:
     print(f"[IMP:9][main] platform-env.yaml written to {output_path}")
 
     # ── Generate smoke_env_generated.py (optional) ──
-    if args.smoke_env_output:
-        smoke_env_path = Path(args.smoke_env_output).resolve()
-        smoke_content: str = generate_smoke_env_py(ci_defaults)
-
+    if smoke_content is not None and smoke_env_path is not None:
         smoke_env_path.parent.mkdir(parents=True, exist_ok=True)
         with open(smoke_env_path, "w") as f:
             f.write(smoke_content)
@@ -738,10 +827,7 @@ def main() -> None:
         print(f"[IMP:9][main] smoke_env_generated.py written to {smoke_env_path}")
 
     # ── Generate env_defaults_generated.py (optional) ──
-    if args.helpers_output:
-        helpers_path = Path(args.helpers_output).resolve()
-        helpers_content: str = generate_helpers_py(ci_defaults)
-
+    if helpers_content is not None and helpers_path is not None:
         helpers_path.parent.mkdir(parents=True, exist_ok=True)
         with open(helpers_path, "w") as f:
             f.write(helpers_content)

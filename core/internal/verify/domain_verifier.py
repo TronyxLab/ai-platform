@@ -107,58 +107,29 @@ def _setup_logging() -> None:
 
 
 def resolve_node_yaml(node_name: str, platform_root: Path) -> Path:
-    """Resolve node.yaml via 3-path search.
+    """Resolve node.yaml via NodeYaml.resolve() — single source of truth.
 
-    ## @purpose  Locate the node.yaml file for a given node by searching through
-    ##            three ordered paths: platform-local → org repos → VPS fallback.
-    ## @param node_name     Node name (directory name in node-configs/)
+    ## @purpose  3-path resolution delegated to NodeYaml.resolve()
+    ## @param node_name     Node name
     ## @param platform_root Base path for platform-local lookup
     ## @returns Absolute Path to existing node.yaml
     ## @raises FileNotFoundError If none of the 3 paths contain the file
-    ## @complexity O(1) — at most 3 path probes + optional glob
-
+    ## @complexity O(1) — at most 3 path probes via NodeYaml.resolve()
     ## @invariants
-    ##   1. Path 1: {platform_root}/node-configs/{node_name}/node.yaml
-    ##   2. Path 2: $HOME/projects/*/node-configs/{node_name}/node.yaml (glob)
-    ##   3. Path 3: /opt/node-configs/{node_name}/node.yaml
-    ##   4. First match wins — no merging
-    ##   5. Raises FileNotFoundError with all 3 searched paths on no match
+    ##   1. Delegates to NodeYaml.resolve() — single source of truth for 3-path resolution
+    ##   2. Converts ConfigNotFoundError → FileNotFoundError for backward compat
+    ##   3. Returns absolute Path to found node.yaml
+    ## @rationale Replaces 3 hand-rolled path probes with unified NodeYaml.resolve().
+    ##            DevPlan 088 Wave 2 T2.5: eliminate redundancy across 3 resolve_node_yaml implementations.
     """
-    # Path 1: platform-local
-    candidate = platform_root / "node-configs" / node_name / "node.yaml"
-    logger.info("[IMP:8][resolve_node_yaml][path1] Checking: %s", candidate)
-    if candidate.is_file():
-        logger.info("[IMP:9][resolve_node_yaml][found] node.yaml found (path 1): %s", candidate)
-        return candidate
-
-    # Path 2: org repos (projects dir — glob match)
-    home = Path.home()
-    projects_dir = home / "projects"
-    logger.info("[IMP:8][resolve_node_yaml][path2] Globbing: %s/*/node-configs/", projects_dir)
-    if projects_dir.is_dir():
-        for org_dir in projects_dir.iterdir():
-            if org_dir.is_dir():
-                candidate = org_dir / "node-configs" / node_name / "node.yaml"
-                if candidate.is_file():
-                    logger.info("[IMP:9][resolve_node_yaml][found] node.yaml found (path 2): %s", candidate)
-                    return candidate
-
-    # Path 3: VPS fallback
-    candidate = Path("/opt/node-configs") / node_name / "node.yaml"
-    logger.info("[IMP:8][resolve_node_yaml][path3] Checking: %s", candidate)
-    if candidate.is_file():
-        logger.info("[IMP:9][resolve_node_yaml][found] node.yaml found (path 3): %s", candidate)
-        return candidate
-
-    # None found — report all searched paths
-    searched = [
-        f"1. {platform_root}/node-configs/{node_name}/node.yaml",
-        f"2. {home}/projects/*/node-configs/{node_name}/node.yaml",
-        f"3. /opt/node-configs/{node_name}/node.yaml",
-    ]
-    msg = f"node.yaml not found for node={node_name}. Searched: {', '.join(searched)}"
-    logger.error("[IMP:10][resolve_node_yaml][error] %s", msg)
-    raise FileNotFoundError(msg)
+    try:
+        ny = NodeYaml.resolve(node_name=node_name, config_dir=str(platform_root))
+        result = Path(ny._path)
+        logger.info("[IMP:9][resolve_node_yaml][found] Resolved via NodeYaml: %s", result)
+        return result
+    except ConfigNotFoundError as e:
+        logger.error("[IMP:10][resolve_node_yaml][error] %s", str(e))
+        raise FileNotFoundError(str(e)) from e
 
 
 # endregion FUNC_RESOLVE_NODE_YAML

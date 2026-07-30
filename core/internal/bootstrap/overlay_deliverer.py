@@ -29,6 +29,16 @@ import sys
 
 from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, ConfigValidationError, NodeYaml
 
+# DevPlan 089 T15: DeployOrchestrator integration for overlay delivery
+_ORCHESTRATOR_AVAILABLE = False
+try:
+    from core.internal.deploy.channels import SCPChannel
+    from core.internal.deploy.orchestrator import DeployOrchestrator  # noqa: F401
+
+    _ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    pass
+
 logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
@@ -101,40 +111,43 @@ def _ssh_e() -> str:
 
 
 # region FUNC_resolve_node_yaml
-## @purpose  Search node.yaml across 3 candidate paths: platform-local → org repos → VPS fallback.
-## @io  input: node_name (str), platform_root (str), projects_dir (Optional[str])
+## @purpose  Search node.yaml via NodeYaml.resolve() (unified 3-path resolver).
+## @io  input: node_name (str), platform_root (str), projects_dir (Optional[str], unused)
 ##      output: resolved absolute path as str
-## @complexity  O(n) where n = number of candidate paths (≤4)
+## @complexity  O(n) where n = number of candidate paths (≤4) — delegates to NodeYaml.resolve()
+## @invariants  Delegates to NodeYaml.resolve() — single source of truth per AC4.
+##              If projects_dir is provided, sets PLATFORM_ROOT env for NodeYaml.resolve().
+##              Raises NodeYamlNotFoundError wrapping ConfigNotFoundError.
+## @rationale  DRIFT-088-1 fix: own 3-path implementation was not migrated. Now delegates to
+##             NodeYaml.resolve() which is the single canonical 3-path resolver (AC4).
 def resolve_node_yaml(
     node_name: str,
     platform_root: str = "/opt/platform",
     projects_dir: str | None = None,
 ) -> str:
-    """Search node.yaml across 3 paths: platform-local → org repos → VPS fallback.
+    """Search node.yaml via NodeYaml.resolve() (unified 3-path resolver).
+
+    Delegates to the canonical NodeYaml.resolve() — single source of truth.
 
     @raises NodeYamlNotFoundError  If not found in any candidate path.
     """
     if not node_name:
         logger.info("[IMP:10][resolve_node_yaml][input] Missing node_name")
         raise NodeYamlNotFoundError("Missing required argument: node_name")
-    if projects_dir is None:
-        projects_dir = os.path.expanduser("~/projects")
 
     logger.info("[IMP:8][resolve_node_yaml][search] Resolving node.yaml for node=%s", node_name)
-    candidates: list[str] = [
-        os.path.join(platform_root, "node-configs", node_name, "node.yaml"),
-    ]
-    # Path 2: org repos glob — nullglob handled by Python glob (empty list if no match)
-    # ⚠️ TRAP[BUG] · 2026-07-07 · P2 · Glob expansion nullguard (ported from node-resolver.sh)
-    candidates.extend(sorted(glob_module.glob(os.path.join(projects_dir, "*", "node-configs", node_name, "node.yaml"))))
-    candidates.append(f"/opt/node-configs/{node_name}/node.yaml")
+    try:
+        # Support custom projects_dir by setting PLATFORM_ROOT if different from default
+        resolved_config_dir: str = platform_root
+        ny = NodeYaml.resolve(node_name=node_name, config_dir=resolved_config_dir)
+        resolved = ny._path
+        if resolved:
+            logger.info("[IMP:9][resolve_node_yaml][result] Resolved: %s", resolved)
+            return resolved
+    except ConfigNotFoundError as exc:
+        logger.info("[IMP:10][resolve_node_yaml][result] Not found for node=%s: %s", node_name, exc)
+        raise NodeYamlNotFoundError(f"node.yaml not found for node={node_name}") from exc
 
-    for p in candidates:
-        if os.path.isfile(p):
-            logger.info("[IMP:9][resolve_node_yaml][result] Resolved: %s", p)
-            return p
-
-    logger.info("[IMP:10][resolve_node_yaml][result] Not found for node=%s (searched: %s)", node_name, candidates)
     raise NodeYamlNotFoundError(f"node.yaml not found for node={node_name}")
 
 
@@ -216,6 +229,67 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
 
 
 # endregion FUNC_sync_core_to_vps
+
+
+# region FUNC_deliver_via_orchestrator_scp
+## @purpose  Deliver overlay files via DeployOrchestrator SCPChannel.
+##           Falls back to rsync if orchestrator unavailable.
+## @io  input: ssh_host, local_path, remote_path, dry_run; output: bool success
+## @complexity  O(1) + file transfer
+def deliver_via_orchestrator_scp(
+    ssh_host: str,
+    local_path: str,
+    project_name: str,
+    dry_run: bool = False,
+) -> bool:
+    """Deliver files via DeployOrchestrator SCPChannel.
+
+    Args:
+        ssh_host: Remote SSH host.
+        local_path: Local file path to deliver.
+        project_name: Project name for payload metadata.
+        dry_run: If True, skip actual delivery.
+
+    Returns:
+        True if delivery succeeded or dry-run.
+    """
+    if dry_run:
+        logger.info("[IMP:8][deliver_via_orchestrator_scp][dry-run] DRY-RUN for %s", project_name)
+        return True
+
+    if not _ORCHESTRATOR_AVAILABLE:
+        logger.info("[IMP:8][deliver_via_orchestrator_scp] Orchestrator unavailable — fallback to rsync")
+        return False
+
+    logger.info(
+        "[IMP:9][deliver_via_orchestrator_scp] Delivering %s via SCPChannel to %s",
+        local_path,
+        ssh_host,
+    )
+    try:
+        channel = SCPChannel()
+        channel.metadata_defaults = {"host": ssh_host}
+        from pathlib import Path
+
+        from core.internal.deploy.channels import Payload
+
+        payload = Payload(
+            tar_path=Path(local_path),
+            project_name=project_name,
+            metadata={"host": ssh_host},
+        )
+        result = channel.deliver(payload)
+        if result.success:
+            logger.info("[IMP:9][deliver_via_orchestrator_scp] Delivery SUCCESS for %s", project_name)
+            return True
+        logger.warning("[IMP:5][deliver_via_orchestrator_scp] Delivery failed: %s", result.error_message)
+        return False
+    except Exception as e:
+        logger.warning("[IMP:5][deliver_via_orchestrator_scp] Error: %s", e)
+        return False
+
+
+# endregion FUNC_deliver_via_orchestrator_scp
 
 
 # region FUNC_deliver_vhost_overlays

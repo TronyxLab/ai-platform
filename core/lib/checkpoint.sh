@@ -39,6 +39,10 @@
 ## @purpose  Check if a step is done by reading state.json directly.
 ##           Returns 0 if done, 1 if pending/missing.
 ## @param $1  step_name — step key (underscores, e.g. "ssh_access")
+## @deprecated DevPlan 087 — Python state_machine.py handles all checkpoint tracking.
+##             This shell library remains for backward compatibility with shell scripts
+##             that directly reference it. Supports both old step keys (in data['steps'])
+##             and new phase-based keys (at root level or in data['steps']).
 _checkpoint_is_done_json() {
     local step_name="$1"
     local state_file="${CHECKPOINT_STATE_FILE:-/var/lib/platform/.bootstrap/state.json}"
@@ -50,11 +54,14 @@ import json, sys
 try:
     with open('${state_file}') as f:
         data = json.load(f)
+    # Check in steps dict (old format)
     steps = data.get('steps', {})
     step = steps.get('${step_name}', {})
-    if isinstance(step, dict) and step.get('status') == 'done':
+    if isinstance(step, dict) and (step.get('status') == 'done' or step.get('done') is True):
         sys.exit(0)
-    if isinstance(step, dict) and step.get('done') is True:
+    # Check at root level (new phase-based format from migrate_state_to_phases)
+    root_step = data.get('${step_name}', {})
+    if isinstance(root_step, dict) and (root_step.get('status') == 'done' or root_step.get('done') is True):
         sys.exit(0)
 except Exception:
     pass

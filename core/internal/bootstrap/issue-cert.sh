@@ -40,7 +40,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/paths.sh"
 __LOG_PREFIX="issue-cert"
 source "${SCRIPT_DIR}/../../lib/logging.sh"
-source "${SCRIPT_DIR}/../../lib/yaml_read.sh"
+# yaml_read.sh removed — using NodeYaml CLI directly
 
 # NOTE: All functions extracted from original monolithic ssl-provision script. Original TRAP comments preserved.
 # The install_acme() function lives in install-acme.sh — this script handles cert issuance only.
@@ -581,11 +581,11 @@ issue_tls_cert() {
 ##   - When challenge mode is http or auto, issues individual subdomain certs for platform.domain
 ## @changes  2026-07-26 | DevPlan 080 — main "$@" restored; cron and S3 logic removed (handled by cert_orchestrator.py)
 main() {
-    # ── S7: Parse NODE_YAML via yaml_read_domain_config() (replaces inline python3) ──
+    # ── S7: Parse NODE_YAML via NodeYaml CLI --domain-config (replaces yaml_read_domain_config) ──
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
         local yaml_info
-        yaml_info="$(yaml_read_domain_config "$NODE_YAML" 2>/dev/null)" || {
-            log_warn "Failed to parse NODE_YAML via yaml_read_domain_config — falling back to env vars"
+        yaml_info="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --domain-config 2>/dev/null)" || {
+            log_warn "Failed to parse NODE_YAML via NodeYaml CLI — falling back to env vars"
         }
         if [[ -n "${yaml_info:-}" ]]; then
             local yaml_domain yaml_email yaml_acme_dns yaml_project_domains

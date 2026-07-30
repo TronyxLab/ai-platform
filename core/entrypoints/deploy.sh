@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: entrypoint deploy git-push ci forced-command verb-contract remove status lifecycle shared ssh-command-parser
-# STRUCTURE: ▶ init → ◇ python3 ssh_command_parser parse(raw) → ◇ dispatch_verb(verb, args, cleaned) → ⊕ exec deploy-project.sh → ⎋
+# STRUCTURE: ▶ init → ◇ python3 ssh_command_parser parse(raw) → ◇ dispatch_verb(verb, args, cleaned) → ⊕ exec orchestrator_cli → ⎋
 #            ▶ parse_verb → ssh_command_parser (DevPlan 081 Phase B — shared module imported)
 # region MODULE_CONTRACT
 ## @purpose  Entry-point for `make deploy` and SSH forced-command on VPS.
 ##           Parses SSH_ORIGINAL_COMMAND via shared ssh_command_parser (DevPlan 081 Phase B),
 ##           dispatches verb contract K1:
 ##           - <project> <sha> <env> → deploy (backward compat)
-##           - remove <project> → deploy-project.sh --remove
-##           - status <project> → deploy-project.sh --status
+##           - remove <project> → orchestrator_cli remove
+##           - status <project> → orchestrator_cli status
 ##           - verify <node> → verify-domains.sh
 ## @scope    Called from:
 ##           1. Makefile (local development)
-##           2. SSH forced-command on VPS (via authorized_keys command="...")
+##           2. SSH forced-command on VPS (via authorized_keys command="python3 ... orchestrator_cli receive")
 ##           3. appleboy/ssh-action in CI workflow
 ## @invariants
 ##   - Backward compatible: legacy <project> <sha> [env] works unchanged (K1)
-##   - All verbs dispatched to internal/deploy/deploy-project.sh (DD12)
+##   - All verbs dispatched to DeployOrchestrator CLI (orchestrator_cli.py)
 ##   - "remove" never contains --purge or volume destruction (O7)
 ##   - Parsing delegated to core.internal.shared.ssh_command_parser.parse_ssh_command()
 ## @rationale Single entrypoint for all deploy verbs — no second SSH user (DD12)
@@ -30,6 +30,9 @@
 ##           2026-07-26 · DevPlan 081 AC7 (H4) — replaced inline python3 -c JSON
 ##             parsing with ssh_command_parser --format lines. Eliminates last
 ##             inline python3 in deploy.sh facade (Tier 1 Strangler trigger).
+##           2026-07-30 · DevPlan 089 T10 — routed through DeployOrchestrator CLI
+##             instead of deploy-project.sh. Verbs deploy/remove/status use
+##             python3 -m core.internal.deploy.orchestrator_cli.
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -45,13 +48,13 @@ source "${_EP_DIR}/../lib/logging.sh"
 ##           Receives parsed data from shared ssh_command_parser.
 ##           Verb dispatch table:
 ##           ┌──────────┬──────────────────────────────────────────────────────┐
-##           │ ping     │ Echo "pong" and exit 0 (pre-flight connectivity)     │
-##           │ exit     │ Exit 0 (SSH connectivity test, no-op success)        │
-##           │ remove   │ exec deploy-project.sh --remove <project>            │
-##           │ status   │ exec deploy-project.sh --status <project> --stub-aware│
-##           │ verify   │ exec verify-domains.sh <node>                        │
-##           │ * (other)│ exec deploy-project.sh <project> <sha> [env] (deploy) │
-##           └──────────┴──────────────────────────────────────────────────────┘
+##           │ ping     │ Echo "pong" and exit 0 (pre-flight connectivity)          │
+##           │ exit     │ Exit 0 (SSH connectivity test, no-op success)             │
+##           │ remove   │ exec orchestrator_cli remove --project <project>          │
+##           │ status   │ exec orchestrator_cli status --project <project>          │
+##           │ verify   │ exec verify-domains.sh <node>                             │
+##           │ * (other)│ exec orchestrator_cli deploy --project <p> --version <sha>│
+##           └──────────┴──────────────────────────────────────────────────────────┘
 ## @param $1 verb string (from shared ssh_command_parser)
 ## @param $2 args string (project name or full deploy args, from shared)
 ## @param $3 cleaned string (original cleaned command, from shared)
@@ -64,6 +67,8 @@ _dispatch_verb() {
     local args="${2:-}"
     local cleaned="${3:-}"
 
+    local ORCHESTRATOR_CLI="python3 -m core.internal.deploy.orchestrator_cli"
+
     case "$verb" in
         ping)
             echo "pong"
@@ -75,12 +80,12 @@ _dispatch_verb() {
         remove)
             local project_name="$args"
             log_imp 9 "entrypoint" "Verb: remove project=${project_name}"
-            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --remove "$project_name"
+            exec $ORCHESTRATOR_CLI remove --project "$project_name"
             ;;
         status)
             local project_name="$args"
             log_imp 9 "entrypoint" "Verb: status project=${project_name}"
-            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" --status "$project_name" --stub-aware
+            exec $ORCHESTRATOR_CLI status --project "$project_name"
             ;;
         verify)
             local node="$args"
@@ -91,8 +96,12 @@ _dispatch_verb() {
         *)
             # Deploy format (backward compat): <project> <sha> [environment]
             log_imp 9 "entrypoint" "Verb: deploy (backward compat): ${cleaned}"
-            # shellcheck disable=SC2086
-            exec "${PATHS_INTERNAL_DIR}/deploy/deploy-project.sh" $cleaned
+            # DevPlan 089 T10: route through DeployOrchestrator CLI
+            # Parse <project> <sha> [env] and call orchestrator_cli deploy
+            local proj="${args%% *}"
+            local rest="${args#* }"
+            local sha="${rest%% *}"
+            exec $ORCHESTRATOR_CLI deploy --project "$proj" --version "$sha"
             ;;
     esac
 }

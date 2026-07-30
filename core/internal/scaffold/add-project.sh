@@ -660,6 +660,20 @@ run_add_vhost() {
 # endregion RUN_ADD_VHOST
 
 # region REGISTER_IN_NODE_YAML
+## @purpose  Register a project in node.yaml via NodeYaml CLI mutation API.
+##           Replaces yq eval -i and project_registry.py fallback.
+## @param $1  name     Project name
+## @param $2  org      Organization name
+## @param $3  node     Node name
+## @param $4  ptype    Project type (frontend/backend/fullstack)
+## @param $5  domain   Domain name (optional)
+## @param $6  database Database name (optional)
+## @env       DRY_RUN, CONTEXT, PROJECTS_ROOT
+## @invariants
+##   - Uses python3 NodeYaml CLI as sole registration method (yq removed)
+##   - Checks for duplicate project via --find-project before adding
+##   - Falls back to manual instructions if python3 unavailable
+##   - Uses --add-project with 6 positional args matching ProjectEntry
 register_in_node_yaml() {
     local name="$1"
     local org="$2"
@@ -678,54 +692,42 @@ register_in_node_yaml() {
         return 0
     fi
 
-    if command -v yq &>/dev/null; then
-        local existing
-        existing=$(yq eval ".projects[] | select(.name == \"${name}\" or .repo == \"${org}/${name}\") | .name" "$node_yaml" 2>/dev/null || true)
-        if [[ -n "$existing" ]]; then
-            log_imp 7 "-" "Project already registered in node.yaml: ${name} — SKIP (idempotent)"
-            return 0
-        fi
-
-        if [[ "$DRY_RUN" == true ]]; then
-            log_imp 7 "-" "[DRY-RUN] Would register in node.yaml: name=${name} repo=${org}/${name} type=${ptype}"
-            return 0
-        fi
-
-        local yaml_entry="{\"name\": \"${name}\", \"repo\": \"${org}/${name}\", \"type\": \"${ptype}\""
-        if [[ -n "$domain" ]]; then
-            yaml_entry+=", \"domain\": \"${domain}\""
-        fi
-        if [[ -n "$database" ]]; then
-            yaml_entry+=", \"database\": \"${database}\""
-        fi
-        yaml_entry+="}"
-
-        yq eval -i ".projects += [${yaml_entry}]" "$node_yaml"
-        log_imp 9 "-" "Project registered in node.yaml: ${name}"
-
-    elif command -v python3 &>/dev/null && require_python_module yaml; then
-        log_info "yq not found — using Python3+yaml fallback for node.yaml registration"
-
-        if [[ "$DRY_RUN" == true ]]; then
-            log_imp 7 "-" "[DRY-RUN] Would register in node.yaml: name=${name} repo=${org}/${name} type=${ptype}"
-            return 0
-        fi
-
-        python3 "${SCRIPT_DIR}/../shared/project_registry.py" register \
-            --name "$name" \
-            --repo "${org}/${name}" \
-            --type "$ptype" \
-            ${domain:+--domain "$domain"} \
-            ${database:+--database "$database"} \
-            --node-yaml "$node_yaml" \
-            --log-prefix "add-project" \
-            || log_warn "Python registration failed — register manually"
-    else
-        log_warn "Neither yq nor Python3+yaml available — cannot auto-register in node.yaml"
+    if ! command -v python3 &>/dev/null; then
+        log_imp 8 "-" "python3 not available — cannot register in node.yaml"
         log_warn "Manually add to ${node_yaml}:"
         log_warn "  - name: ${name}"
         log_warn "    repo: ${org}/${name}"
+        return 0
     fi
+
+    # Check if project already exists via NodeYaml CLI
+    local existing
+    existing="$(python3 -m core.internal.shared.node_yaml --file "$node_yaml" --find-project "$name" 2>/dev/null || true)"
+    if [[ -n "$existing" ]] && echo "$existing" | grep -q "$name"; then
+        log_imp 7 "-" "Project already registered in node.yaml: ${name} — SKIP (idempotent)"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        log_imp 7 "-" "[DRY-RUN] Would register in node.yaml: name=${name} repo=${org}/${name} type=${ptype}"
+        return 0
+    fi
+
+    # Use NodeYaml CLI mutation API to add project
+    local domain_arg="${domain:--}"
+    local database_arg="${database:--}"
+    local context_arg="${CONTEXT:--}"
+
+    python3 -m core.internal.shared.node_yaml \
+        --file "$node_yaml" \
+        --add-project "$name" "${org}/${name}" "$ptype" "$domain_arg" "$database_arg" "$context_arg" 2>&1 || {
+        log_imp 8 "-" "NodeYaml CLI add-project failed — register manually"
+        log_warn "Manually add to ${node_yaml}:"
+        log_warn "  - name: ${name}"
+        log_warn "    repo: ${org}/${name}"
+        return 1
+    }
+    log_imp 9 "-" "Project registered in node.yaml: ${name}"
 }
 # endregion REGISTER_IN_NODE_YAML
 

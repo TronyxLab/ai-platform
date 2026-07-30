@@ -24,6 +24,7 @@ from __future__ import annotations
 
 # region IMPORTS
 import argparse
+import difflib
 import logging
 import os
 import re
@@ -389,6 +390,83 @@ def merge(allowed_verbs: list[str], gates: list[dict], existing: dict) -> dict:
 # endregion PUBLIC_API
 
 
+# region CHECK_HELPERS
+
+
+def _generate_output(merged: dict) -> str:
+    """Generate the YAML output string with header (no disk I/O).
+
+    ## @purpose  Produce the full manifest content as a string, including the
+    ##            YAML header comment block, for --check comparison or normal write.
+    ## @io        ⇥ merged: dict — merged manifest data
+    ##           → ⎋ str: full YAML document with header
+    ## @complexity O(K) where K = number of keys in merged dict
+    """
+    header = (
+        "# core/entrypoint-manifest.yaml\n"
+        "# GREP_SUMMARY: entrypoint-manifest, yaml, canonical-targets, operations-registry, forbidden\n"
+        "# STRUCTURE: ┌Makefile targets┐ → ◇ map target→script→delegation → ⊕ CI gates verify parity with AGENTS.md triad\n"
+        "# region MODULE_CONTRACT\n"
+        "## @purpose  Canonical operations registry consumed by CI gates (no-unregistered-entrypoint, manifest-integrity).\n"
+        "## @scope    Lists all canonical make targets, CI gates, forbidden scripts/directories/verbs, and allowed_verbs dictionary\n"
+        "## @invariants\n"
+        "##   - Every Makefile .PHONY target must have a corresponding entry in this manifest\n"
+        "##   - Every entry here must have a corresponding entry in core/AGENTS.md\n"
+        "##   - allowed_verbs list must match Makefile canonical targets\n"
+        "##   - Forbidden lists are explicit deny — no additions without Architect approval\n"
+        "## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad\n"
+        "# endregion MODULE_CONTRACT\n"
+        "\n"
+    )
+    yaml_str = yaml.dump(merged, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    return header + yaml_str
+
+
+def _check_generated_content(content: str, path: Path) -> int:
+    """Compare generated content with existing file byte-by-byte.
+
+    ## @purpose  Byte-level comparison for --check mode. Returns 0 if match,
+    ##            1 if divergence. Prints first 20 lines of unified diff on stderr.
+    ## @io        ⇥ content: generated string, path: existing file
+    ##           → ⎋ int: 0=match, 1=diverges
+    ## @complexity O(N) where N = file size
+    ## @invariants
+    ##   - Reads file as text (UTF-8)
+    ##   - Prints diff only on divergence
+    ##   - Never writes to disk
+    """
+    logger.info("[IMP:7][check][START] Checking against %s", path)
+
+    if not path.is_file():
+        logger.error("[IMP:1][check][FAIL] File not found: %s", path)
+        print(f"[IMP:1][check] File not found: {path} — cannot check", file=sys.stderr)
+        return 1
+
+    existing = path.read_text(encoding="utf-8")
+    if content == existing:
+        logger.info("[IMP:9][check][OK] Content matches %s", path)
+        return 0
+
+    logger.warning("[IMP:6][check][DIVERGE] Content differs from %s", path)
+    print(f"[IMP:6][check] Divergence in {path.name}:", file=sys.stderr)
+    diff_lines = list(
+        difflib.unified_diff(
+            existing.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=f"{path.name} (file)",
+            tofile=f"{path.name} (generated)",
+        )
+    )
+    for line in diff_lines[:20]:
+        print(line, end="", file=sys.stderr)
+    if len(diff_lines) > 20:
+        print(f"[IMP:6][check] ... truncated ({len(diff_lines) - 20} more lines)", file=sys.stderr)
+    return 1
+
+
+# endregion CHECK_HELPERS
+
+
 # region CLI
 
 
@@ -396,12 +474,12 @@ def main() -> int:
     """CLI entrypoint for entrypoint manifest generator.
 
     ▶ argparse → ◇ extract_phony_targets + collect_gate_tests + load_existing_manifest
-      → ⊕ merge → ⎋ write YAML output → exit 0
+      → ⊕ merge → ◇ --check ? compare byte-by-byte : write YAML output → ⎋ exit 0/1
 
     ## @purpose  CLI for make generate-manifests integration.
     ## @io       ⇥ CLI args: --makefile-dir, --gmake-path, --existing-manifest,
-    ##             --tests-dir, --output
-    ##           → ⎋ exit code 0 on success, 1 on error
+    ##             --tests-dir, --output, --check
+    ##           → ⎋ exit code 0 on success/match, 1 on error/divergence
     ## @complexity O(T + N) where T=targets, N=gate tests
     """
     parser = argparse.ArgumentParser(
@@ -433,6 +511,12 @@ def main() -> int:
         default="core/entrypoint-manifest.yaml",
         help="Output path for generated manifest (default: core/entrypoint-manifest.yaml)",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check mode: compare generated output with existing file byte-by-byte. "
+        "Never writes to disk. Exit 0 if match, 1 if divergence.",
+    )
     args = parser.parse_args()
 
     print("[IMP:7][main] Starting entrypoint manifest generation", file=sys.stderr)
@@ -443,26 +527,25 @@ def main() -> int:
         existing = load_existing_manifest(args.existing_manifest)
         merged = merge(targets, gates, existing)
 
+        # Generate output content in memory
+        output_content: str = _generate_output(merged)
+
+        # ── CHECK MODE: compare byte-by-byte, never write ──
+        if args.check:
+            logger.info("[IMP:7][main][CHECK] Running check mode — comparing with %s", args.output)
+            output_path = Path(args.output)
+            exit_code = _check_generated_content(output_content, output_path)
+            if exit_code == 0:
+                print("[IMP:9][main][CHECK] Manifest is up-to-date — exit 0", file=sys.stderr)
+                return 0
+            print("[IMP:6][main][CHECK] Manifest is stale — exit 1", file=sys.stderr)
+            return 1
+
+        # ── NORMAL MODE: write to disk ──
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(str(output_path), "w") as f:
-            f.write(
-                "# core/entrypoint-manifest.yaml\n"
-                "# GREP_SUMMARY: entrypoint-manifest, yaml, canonical-targets, operations-registry, forbidden\n"
-                "# STRUCTURE: ┌Makefile targets┐ → ◇ map target→script→delegation → ⊕ CI gates verify parity with AGENTS.md triad\n"
-                "# region MODULE_CONTRACT\n"
-                "## @purpose  Canonical operations registry consumed by CI gates (no-unregistered-entrypoint, manifest-integrity).\n"
-                "## @scope    Lists all canonical make targets, CI gates, forbidden scripts/directories/verbs, and allowed_verbs dictionary\n"
-                "## @invariants\n"
-                "##   - Every Makefile .PHONY target must have a corresponding entry in this manifest\n"
-                "##   - Every entry here must have a corresponding entry in core/AGENTS.md\n"
-                "##   - allowed_verbs list must match Makefile canonical targets\n"
-                "##   - Forbidden lists are explicit deny — no additions without Architect approval\n"
-                "## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad\n"
-                "# endregion MODULE_CONTRACT\n"
-                "\n"
-            )
-            yaml.dump(merged, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            f.write(output_content)
 
         print(
             f"[IMP:9][main] Manifest written to {args.output} — {len(targets)} verbs, {len(gates)} gates",

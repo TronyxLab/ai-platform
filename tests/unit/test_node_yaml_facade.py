@@ -622,7 +622,7 @@ def test_validate_valid(caplog, tmp_path):
     """
     yaml_path = _write_yaml(
         tmp_path,
-        "node:\n  host: 1.2.3.4\ndomain:\n  platform: example.com\n",
+        "node:\n  name: test-node\n  host: 1.2.3.4\n  owner_key: test-key\ncontext: test\ndomain: test.example.com\nmodules: []\n",
     )
     node = NodeYaml(str(yaml_path))
     errors = node.validate()

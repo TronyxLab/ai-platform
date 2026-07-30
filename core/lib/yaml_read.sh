@@ -6,8 +6,10 @@
 # ═══════════════════════════════════════════════════════════════════
 # region MODULE_CONTRACT
 ## @modulecontract
-## @purpose  Centralized YAML reading via python3+yaml — replaces inline
-##           `python3 -c "import yaml; ..."` patterns across the codebase.
+## @purpose  Shell facade for NodeYaml Python CLI. All YAML reading logic
+##           delegated to `python3 -m core.internal.shared.node_yaml`.
+##           Replaces inline `python3 -c "import yaml; ..."` patterns and
+##           the old yaml_query.py script with a single source of truth.
 ##           Provides two functions: yaml_get_field (single value or JSON
 ##           for complex types) and yaml_get_list (one item per line).
 ## @scope    — yaml_get_field(yaml_path, dotted_key): traverse YAML by dotted
@@ -46,11 +48,7 @@
 
 set -euo pipefail
 
-# Resolve core directory from script path for yaml_query.py calls
-YAML_READ_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YAML_READ_CORE_DIR="${CORE_DIR:-"$(dirname "$YAML_READ_SCRIPT_DIR")"}"
-
-echo "[IMP:7][yaml_read][lib] Loading YAML read library" >&2
+echo "[IMP:7][yaml_read][lib] Loading YAML read library (NodeYaml CLI facade)" >&2
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # region yaml_get_field
@@ -68,12 +66,10 @@ echo "[IMP:7][yaml_read][lib] Loading YAML read library" >&2
 ## @complexity O(d) where d = depth of dotted key
 ##             Each key traversal is O(1) dict lookup in Python.
 yaml_get_field() {
-    echo "[IMP:8][yaml_read][yaml_get_field] Reading ${1} key=${2}" >&2
+    echo "[IMP:8][yaml_read][yaml_get_field] Reading ${1} key=${2} via NodeYaml CLI" >&2
     local yaml_path="$1"
     local dotted_key="$2"
-
-    python3 "${YAML_READ_CORE_DIR}/internal/scripts/yaml_query.py" \
-        --file "$yaml_path" --get "$dotted_key" 2>/dev/null || return $?
+    python3 -m core.internal.shared.node_yaml --file "$yaml_path" --get "$dotted_key" 2>/dev/null || return $?
 }
 # endregion yaml_get_field
 
@@ -95,12 +91,10 @@ yaml_get_field() {
 ##             `while IFS= read -r line; do ... done`.
 ## @complexity O(n) where n = number of items in the list
 yaml_get_list() {
-    echo "[IMP:8][yaml_read][yaml_get_list] Reading list from ${1} key=${2}" >&2
+    echo "[IMP:8][yaml_read][yaml_get_list] Reading list from ${1} key=${2} via NodeYaml CLI" >&2
     local yaml_path="$1"
     local dotted_key="$2"
-
-    python3 "${YAML_READ_CORE_DIR}/internal/scripts/yaml_query.py" \
-        --file "$yaml_path" --get "$dotted_key" --items 2>/dev/null || return $?
+    python3 -m core.internal.shared.node_yaml --file "$yaml_path" --get "$dotted_key" --items 2>/dev/null || return $?
 }
 # endregion yaml_get_list
 

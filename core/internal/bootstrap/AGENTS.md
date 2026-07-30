@@ -80,11 +80,11 @@ node-lifecycle.sh --mode update → state_machine.py
 
 ### `--mode init` — полный bootstrap
 
-Выполняет 17 шагов инициализации bare VPS: проверка SSH → apt-зависимости → Tor (опционально) → Docker → пользователи (platform, ci-deploy) → UFW → верификация core + node-configs → decrypt secrets → node.yaml валидация → GHCR auth → sudoers → node-update (вызов `--mode update`) → audit-log → Telegram. Идемпотентен: при повторном запуске шаги с неизменившимся content-hash пропускаются. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
+Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, sudoers) → φ4 secrets-provision (decrypt, ensure-passwords) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: phase-функции в phases.py обрабатывают content-hash пропуск внутри grouped-фаз. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
 
 ### `--mode update` — инкрементальный update
 
-Выполняет 5 шагов на уже забутстрапленной ноде: verify-core (content-hash) → provision (networks + volumes) → issue-cert.sh (acme.sh DNS-01 wildcard cert) → deploy-modules (docker + system одним вызовом с --skip-provision) → healthcheck. S2 DevPlan 024: шаги deploy docker + deploy system объединены в один вызов deploy-modules.sh, устранён повторный полный проход main(). Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из step-14 init-режима (post-init update).
+Выполняет 5 фаз обновления на уже забутстрапленной ноде: φ9 secrets-update → φ10 node-config-update → φ11 registry-update → φ12 deploy-update → φ13 converge-update. Каждая фаза реализована в phases.py с precondition проверками и dependency graph. Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из пост-инициализационного запуска (после φ8 deploy-services в init-режиме).
 
 ---
 

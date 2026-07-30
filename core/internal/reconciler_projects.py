@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: reconciler_projects, stub-detection, ghcr-check, auto-deploy, idempotent, recovery, post-bootstrap, converge
-# STRUCTURE: ▶ parse node.yaml#projects → ○ for each: _is_stub? → ◇ ghcr image exists? → ⚡ deliver payload + compose up → ⊕ summary
+# STRUCTURE: ▶ parse node.yaml#projects → ○ for each: _is_stub? → ◇ ghcr image exists? → ⚡ deploy_via_orchestrator → ⊕ summary
 # region MODULE_CONTRACT
 ## @purpose  Post-bootstrap recovery: detect stub projects from node.yaml,
 ##           check GHCR for Docker images, deploy if found. Idempotent.
@@ -9,55 +9,41 @@
 ##           Migrated from core/internal/deploy/reconcile-projects.sh per DevPlan 076.
 ## @invariants
 ##   - Reads node.yaml#projects — does NOT scan filesystem blindly
-##   - For each project: is_stub_project() → check_ghcr_image() → deliver_payload() + deploy_project()
+##   - For each project: is_stub_project() → check_ghcr_image() → deploy_via_orchestrator()
 ##   - Stub without GHCR image → WARN "awaiting first CI deploy"
 ##   - Already deployed (real ai-platform.yaml) → SKIP
 ##   - Idempotent: repeat run = no-op for deployed projects
 ##   - One project failure does NOT abort others
-##   - All SSH operations via subprocess.run (respects ci-deploy key convention)
+##   - All deploy operations via DeployOrchestrator (unified path, DevPlan 089)
 ## @rationale Extracted from shell per Strangler-Fig Tier 1 trigger (6 inline python3 calls).
 ##            Separate module from reconciler.py R3: R3 creates stubs locally,
 ##            this module deploys stubs remotely via SSH — orthogonal concerns.
 ## @changes 2026-07-25 | Migrated from shell to Python (DevPlan 076)
+## @changes 2026-07-30 | DRIFT-AC14: deliver_payload + deploy_project removed, DeployOrchestrator is sole path
 # endregion MODULE_CONTRACT
 
 import argparse
 import logging
-import os
-import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.internal.deploy.channels import ForcedCommandChannel
+from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.node_yaml import NodeYaml
+
+# DevPlan 089 T11.5: DeployOrchestrator as sole deploy path
+# ⚠️ TRAP[DEBT] · 2026-07-30 · MED · _ORCHESTRATOR_AVAILABLE flag is transitional
+# · Observed: Partial migration complete — deliver_payload + deploy_project removed, DeployOrchestrator is sole path
+# · Suspected: _ORCHESTRATOR_AVAILABLE flag should be removed after production validation
+# · Impact: dead code — flag always True; removal risk: no one validates production behavior
+# · When: during DRIFT-AC14 cleanup (post-089)
+_ORCHESTRATOR_AVAILABLE = True
 
 logger = logging.getLogger(__name__)
 
-# Platform convention — SSH user for all remote operations (ci-deploy key)
-# ⚠️ TRAP[DECISION] · 2026-07-25 · — · SSH_USER as module constant
-# · Rejected: env var per call
-# · Reason: drift risk — two places (deliver_payload, deploy_project) used same hardcoded value;
-#   centralizing prevents future divergence
-# · Rev: when ci-deploy key name changes → update single constant
-SSH_USER = "ci-deploy"
-
-
-# region FUNC__build_deliver_verb
-## @purpose — Build platform-deliver verb string via shared platform_deliver module.
-##            DevPlan 081 Phase B TASK-081B10: replaces inline string construction.
-##            DRIFT-D5 resolved: unified platform-deliver builder.
-## @io — ⇥ org: str, project: str → ⎋ str
-## @complexity — O(1)
-def _build_deliver_verb(org: str, project: str) -> str:
-    """Build platform-deliver verb via shared module."""
-    from core.internal.shared.platform_deliver import build_deliver_command
-
-    return build_deliver_command(org, project)
-
-
-# endregion FUNC__build_deliver_verb
 
 # ═══════════════════════════════════════════════════════════════════
 # Dataclasses
@@ -128,19 +114,10 @@ def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
         List of ProjectSpec. Empty list if no projects or parse error.
     """
     try:
-        import yaml
-
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-    except (FileNotFoundError, yaml.YAMLError, OSError, ConfigParseError, ConfigNotFoundError) as exc:
+        node = NodeYaml(node_yaml_path)
+        projects_raw = node.get_projects()
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
         logger.warning("[IMP:8][parse_node_yaml] Failed to parse %s: %s", node_yaml_path, exc)
-        return []
-
-    if not data:
-        return []
-
-    projects_raw = data.get("projects", [])
-    if not isinstance(projects_raw, list):
         return []
 
     out: list[ProjectSpec] = []
@@ -264,18 +241,14 @@ def resolve_ssh_host(
         except (json.JSONDecodeError, TypeError):
             logger.warning("[IMP:8][resolve_host] Failed to parse NODE_HOST_MAP JSON")
 
-    # Fallback: node.yaml → node.host
+    # Fallback: node.yaml → node.host via typed getter
     try:
-        import yaml
-
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-        node = data.get("node", {}) if data else {}
-        host = node.get("host", "")
+        ny = NodeYaml(node_yaml_path)
+        host = ny.get("node.host", default="")
         if host:
             logger.info("[IMP:8][resolve_host] Resolved from node.yaml: %s", host)
             return host
-    except (FileNotFoundError, yaml.YAMLError, OSError, ConfigParseError, ConfigNotFoundError) as exc:
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
         logger.warning("[IMP:8][resolve_host] Failed to parse node.yaml for host: %s", exc)
 
     return None
@@ -284,237 +257,68 @@ def resolve_ssh_host(
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
-# SSH helpers
+# Deploy via Orchestrator
 # ═══════════════════════════════════════════════════════════════════
 
 
-# region FUNC__ssh_run
-def _ssh_run(
+# region FUNC_deploy_via_orchestrator
+def deploy_via_orchestrator(
     ssh_host: str,
-    ssh_user: str,
-    command: str,
-    timeout: int = 600,
-) -> subprocess.CompletedProcess:
-    """Execute a command over SSH.
-
-    Uses the ci-deploy key for authentication. Returns CompletedProcess.
-
-    Args:
-        ssh_host: SSH host (user@host or just host).
-        ssh_user: SSH user for key path construction.
-        command: Command to execute on remote host.
-        timeout: Timeout in seconds (default 600 = 10min for deploys).
-
-    Returns:
-        subprocess.CompletedProcess with returncode, stdout, stderr.
-    """
-    ci_key = os.environ.get(
-        "CI_DEPLOY_KEY",
-        os.environ.get("PLATFORM_CI_DEPLOY_KEY_FILE", os.path.expanduser("~/.ssh/ci_deploy_key")),
-    )
-
-    cmd = [
-        "ssh",
-        "-i",
-        ci_key,
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "ConnectTimeout=10",
-        f"{ssh_user}@{ssh_host}" if "@" not in ssh_host else ssh_host,
-        command,
-    ]
-
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        logger.error("[IMP:10][ssh] SSH timeout after %ds: %s", timeout, " ".join(cmd))
-        return subprocess.CompletedProcess(args=cmd, returncode=124, stdout="", stderr="timeout")
-    except FileNotFoundError:
-        logger.error("[IMP:10][ssh] ssh binary not found")
-        return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr="ssh: not found")
-
-
-# endregion
-
-# ═══════════════════════════════════════════════════════════════════
-# Deliver payload
-# ═══════════════════════════════════════════════════════════════════
-
-
-# region FUNC_deliver_payload
-def deliver_payload(
-    ssh_host: str,
-    project_dir: str,
-    spec: ProjectSpec,
-    node_name: str,
+    project_name: str,
     dry_run: bool = False,
 ) -> bool:
-    """Build and deliver ai-platform.yaml + docker-compose.yml via SSH forced-command.
+    """Deploy project via DeployOrchestrator (sole deploy path).
 
-    Creates a temporary directory with real ai-platform.yaml (not stub) and
-    docker-compose.yml, then delivers via tar+ssh platform-deliver forced-command.
-
-    Args:
-        ssh_host: SSH host for delivery.
-        project_dir: Existing project directory on remote (source of compose file).
-        spec: ProjectSpec with name, org, domain.
-        node_name: Target node name.
-        dry_run: If True, skip actual delivery.
-
-    Returns:
-        True if delivery succeeded, False otherwise.
-    """
-    if dry_run:
-        logger.info(
-            "[IMP:8][deliver][%s] DRY-RUN: would deliver payload to %s",
-            spec.name,
-            ssh_host,
-        )
-        return True
-
-    tmp_dir = tempfile.mkdtemp(prefix=f"reconcile-{spec.name}-")
-    tmp_path = Path(tmp_dir)
-
-    try:
-        # Write real ai-platform.yaml
-        ai_yaml_content = f"project: {spec.name}\nservice: {spec.name}\ntarget_node: {node_name}\n"
-        if spec.domain:
-            ai_yaml_content += f"domain: {spec.domain}\n"
-        if spec.org:
-            ai_yaml_content += f"org: {spec.org}\n"
-        (tmp_path / "ai-platform.yaml").write_text(ai_yaml_content)
-
-        # Copy docker-compose.yml (or create minimal)
-        proj_path = Path(project_dir)
-        compose_src = None
-        for cf in ("compose.yaml", "compose.yml", "docker-compose.yml"):
-            candidate = proj_path / cf
-            if candidate.is_file():
-                compose_src = candidate
-                break
-
-        if compose_src:
-            shutil.copy2(str(compose_src), str(tmp_path / "docker-compose.yml"))
-        else:
-            # Create minimal compose file
-            org = spec.org if spec.org else "tronyx-lab"
-            compose_content = (
-                f"services:\n  {spec.name}:\n    image: ghcr.io/{org}/{spec.name}:latest\n    restart: unless-stopped\n"
-            )
-            (tmp_path / "docker-compose.yml").write_text(compose_content)
-
-        # Build deliver verb via shared platform_deliver (DevPlan 081 Phase B TASK-081B10)
-        # DRIFT-D5 resolved: unified platform-deliver builder
-        deliver_verb = _build_deliver_verb(spec.org or "", spec.name)
-
-        # Deliver via SSH: tar czf - ai-platform.yaml docker-compose.yml | ssh ...
-        # We use ssh with stdin pipe
-        ci_key = os.environ.get(
-            "CI_DEPLOY_KEY",
-            os.environ.get("PLATFORM_CI_DEPLOY_KEY_FILE", os.path.expanduser("~/.ssh/ci_deploy_key")),
-        )
-
-        logger.info("[IMP:8][deliver][%s] Delivering payload to %s...", spec.name, ssh_host)
-
-        # Create tar and pipe to SSH
-        tar_proc = subprocess.Popen(
-            ["tar", "czf", "-", "-C", str(tmp_path), "ai-platform.yaml", "docker-compose.yml"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-        ssh_cmd = [
-            "ssh",
-            "-i",
-            ci_key,
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "ConnectTimeout=10",
-            f"{SSH_USER}@{ssh_host}" if "@" not in ssh_host else ssh_host,
-            deliver_verb,
-        ]
-
-        ssh_proc = subprocess.Popen(
-            ssh_cmd,
-            stdin=tar_proc.stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-        if tar_proc.stdout:
-            tar_proc.stdout.close()
-
-        tar_proc.wait(timeout=30)
-        _ssh_stdout, ssh_stderr = ssh_proc.communicate(timeout=30)
-
-        if ssh_proc.returncode != 0:
-            logger.error(
-                "[IMP:10][deliver][%s] FAIL: Payload delivery failed: %s",
-                spec.name,
-                ssh_stderr.strip(),
-            )
-            return False
-
-        logger.info("[IMP:9][deliver][%s] Payload delivered successfully", spec.name)
-        return True
-
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError, ConfigNotFoundError, ConfigParseError) as exc:
-        logger.error("[IMP:10][deliver][%s] FAIL: %s", spec.name, exc)
-        return False
-    finally:
-        # Cleanup tmp dir
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-# endregion
-
-# ═══════════════════════════════════════════════════════════════════
-# Deploy project
-# ═══════════════════════════════════════════════════════════════════
-
-
-# region FUNC_deploy_project
-def deploy_project(
-    ssh_host: str,
-    project_dir: str,
-    dry_run: bool = False,
-) -> bool:
-    """Deploy project via docker compose pull && up -d over SSH.
+    Uses ForcedCommandChannel over SSH to deliver and deploy the project.
 
     Args:
         ssh_host: SSH host.
-        project_dir: Project directory on remote host.
+        project_name: Project name.
         dry_run: If True, skip actual deployment.
 
     Returns:
         True if deployment succeeded, False otherwise.
     """
     if dry_run:
-        logger.info("[IMP:8][deploy] DRY-RUN: would deploy in %s", project_dir)
+        logger.info(
+            "[IMP:8][deploy_via_orchestrator][%s] DRY-RUN: would deploy via orchestrator",
+            project_name,
+        )
         return True
 
-    logger.info("[IMP:9][deploy] Deploying via docker compose in %s...", project_dir)
-
-    result = _ssh_run(
+    logger.info(
+        "[IMP:9][deploy_via_orchestrator] Deploying %s via DeployOrchestrator on %s",
+        project_name,
         ssh_host,
-        SSH_USER,
-        f"cd {project_dir} && docker compose pull && docker compose up -d",
-        timeout=600,
     )
 
-    if result.returncode == 0:
-        logger.info("[IMP:9][deploy] Deploy succeeded in %s", project_dir)
-        return True
-
-    logger.error(
-        "[IMP:10][deploy] FAIL: docker compose up failed in %s: %s",
-        project_dir,
-        result.stderr.strip(),
-    )
-    return False
+    try:
+        channel = ForcedCommandChannel()
+        channel.metadata_defaults = {"host": ssh_host}
+        orchestrator = DeployOrchestrator()
+        result = orchestrator.deploy(
+            project_name=project_name,
+            channel=channel,
+        )
+        if result.is_success():
+            logger.info(
+                "[IMP:9][deploy_via_orchestrator][%s] Deploy via orchestrator SUCCESS",
+                project_name,
+            )
+            return True
+        logger.error(
+            "[IMP:10][deploy_via_orchestrator][%s] Deploy failed: %s",
+            project_name,
+            result.error_info,
+        )
+        return False
+    except Exception as e:
+        logger.error(
+            "[IMP:10][deploy_via_orchestrator][%s] Orchestrator error: %s",
+            project_name,
+            e,
+        )
+        return False
 
 
 # endregion
@@ -646,16 +450,10 @@ def reconcile_projects(
             summary.results.append(ReconcileResult(spec.name, "failed", "Cannot resolve SSH host"))
             continue
 
-        # Deliver payload
-        if not deliver_payload(ssh_host, proj_dir, spec, node_name, dry_run=False):
+        # Deploy via DeployOrchestrator (sole deploy path, DevPlan 089)
+        if not deploy_via_orchestrator(ssh_host, spec.name, dry_run=False):
             summary.failures += 1
-            summary.results.append(ReconcileResult(spec.name, "failed", "Payload delivery failed"))
-            continue
-
-        # Deploy via docker compose
-        if not deploy_project(ssh_host, proj_dir, dry_run=False):
-            summary.failures += 1
-            summary.results.append(ReconcileResult(spec.name, "failed", "Deploy failed"))
+            summary.results.append(ReconcileResult(spec.name, "failed", "Orchestrator deploy failed"))
             continue
 
         logger.info("[IMP:9][reconcile][%s] DONE: stub → deployed", spec.name)

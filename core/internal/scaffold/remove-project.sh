@@ -20,7 +20,8 @@
 ##            Safe-only (O7): no automatic data deletion. User must manually clean
 ##            volumes/DB/repo if desired.
 ## @links    CALLED_BY: scaffold.sh (remove-project)
-##           CALLS: yq for node.yaml manipulation, SSH for remote compose down
+##           CALLS: NodeYaml CLI for node.yaml (--find-project, --remove-project),
+##                  SSH for remote compose down
 ##           CONTRACTS: O7/DD10 — remove = disconnect, not destroy
 ## @changes  2026-07-17 · T10 — full implementation
 ##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, 2 inline ssh → ssh_read/ssh_exec
@@ -99,6 +100,7 @@ parse_cli_args() {
 ## @purpose  Locate the node.yaml that contains the project.
 ##           If --node provided, search only that node's config.
 ##           Otherwise search PROJECTS_ROOT/*/node-configs/*/node.yaml.
+##           Uses NodeYaml CLI (--find-project) as primary — yq removed.
 ## @param $1  Project name
 ## @param $2  Optional node name
 ## @io       Sets FOUND_NODE_YAML, FOUND_PROJECT_ENTRY (JSON), PROJECT_DOMAIN,
@@ -118,7 +120,7 @@ find_node_yaml() {
         search_pattern="$PROJECTS_ROOT/*/node-configs/*/node.yaml"
     fi
 
-    # Use yq for robust YAML querying — prefer over python3+yaml for node.yaml ops
+    # Use NodeYaml CLI for node.yaml operations (yq removed per DevPlan 088)
     local yaml_files=()
     # shellcheck disable=SC2086
     while IFS= read -r -d '' ny; do
@@ -135,40 +137,25 @@ find_node_yaml() {
     for ny in "${yaml_files[@]}"; do
         log_imp 6 "-" "Checking: ${ny}"
 
-        # Try yq first
-        if command -v yq &>/dev/null; then
+        # Use NodeYaml CLI as primary (yq removed per DevPlan 088)
+        if command -v python3 &>/dev/null; then
             local entry_json
-            entry_json="$(yq eval ".projects[] | select(.name == \"${name}\")" "$ny" 2>/dev/null || true)"
-            if [[ -n "$entry_json" && "$entry_json" != "null" ]]; then
+            entry_json="$(python3 -m core.internal.shared.node_yaml --file "$ny" --find-project "$name" 2>/dev/null || true)"
+            if [[ -n "$entry_json" ]]; then
                 FOUND_NODE_YAML="$ny"
                 FOUND_PROJECT_ENTRY="$entry_json"
-                PROJECT_DOMAIN="$(yq eval ".projects[] | select(.name == \"${name}\") | .domain // \"\"" "$ny" 2>/dev/null || true)"
-                PROJECT_NODE_HOST="$(yq eval ".node.host // \"\"" "$ny" 2>/dev/null || true)"
+                PROJECT_DOMAIN="$(echo "$entry_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('domain',''))" 2>/dev/null || true)"
+                PROJECT_NODE_HOST="$(python3 -m core.internal.shared.node_yaml --file "$ny" --get node.host --default "" 2>/dev/null || true)"
                 # Extract org from the repo field: org/project
                 local repo_val
-                repo_val="$(yq eval ".projects[] | select(.name == \"${name}\") | .repo // \"\"" "$ny" 2>/dev/null || true)"
-                if [[ -n "$repo_val" && "$repo_val" != "null" ]]; then
+                repo_val="$(echo "$entry_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('repo',''))" 2>/dev/null || true)"
+                if [[ -n "$repo_val" ]]; then
                     PROJECT_ORG="${repo_val%%/*}"
                 fi
                 # Derive node-configs dir from node.yaml path
                 NODE_CONFIGS_DIR="$(dirname "$(dirname "$ny")")"
                 log_imp 7 "-" "Found project '${name}' in: ${ny}"
                 log_imp 8 "-" "  domain=${PROJECT_DOMAIN:-<none>} host=${PROJECT_NODE_HOST:-<unknown>} org=${PROJECT_ORG:-unknown}"
-                return 0
-            fi
-        else
-            # Fallback: NodeYaml CLI (DevPlan 038c — replaces inline python3)
-            local py_result
-            py_result="$(python3 -m core.internal.shared.node_yaml \
-                --file "${ny}" \
-                --find-project "${name}" 2>/dev/null || true)"
-            if [[ -n "$py_result" ]]; then
-                FOUND_NODE_YAML="$ny"
-                FOUND_PROJECT_ENTRY="$(echo "$py_result" | head -1)"
-                PROJECT_ORG="$(echo "$py_result" | grep '___ORG___' | sed 's/___ORG___//')"
-                PROJECT_NODE_HOST="$(echo "$py_result" | grep '___HOST___' | sed 's/___HOST___//')"
-                NODE_CONFIGS_DIR="$(dirname "$(dirname "$ny")")"
-                log_imp 7 "-" "Found project '${name}' in: ${ny} (NodeYaml CLI fallback)"
                 return 0
             fi
         fi
@@ -181,8 +168,9 @@ find_node_yaml() {
 
 # ──────────────────────────────────────────────────────────────────
 # region FUNC_unregister_from_node_yaml
-## @purpose  Remove the project entry from node.yaml using yq.
-##           Preserves all other projects and YAML structure.
+## @purpose  Remove the project entry from node.yaml using NodeYaml CLI
+##           mutation API (--remove-project). Preserves all other projects
+##           and YAML structure via ruamel.yaml. yq removed.
 ## @io       Modifies node.yaml in-place
 ## @complexity O(p) where p = projects count
 unregister_from_node_yaml() {
@@ -191,25 +179,16 @@ unregister_from_node_yaml() {
 
     log_imp 7 "-" "Unregistering '${name}' from: ${node_yaml}"
 
-    if command -v yq &>/dev/null; then
-        # Remove project by name — yq eval -i with del(..|select)
-        yq eval -i "del(.projects[] | select(.name == \"${name}\"))" "$node_yaml"
-        log_imp 9 "-" "yq: removed '${name}' from projects[] in ${node_yaml}"
-    elif command -v python3 &>/dev/null && require_python_module yaml; then
-        log_imp 7 "-" "yq not available — using python3+yaml fallback"
-        local py_rc=0
-        python3 "${SCRIPT_DIR}/../shared/project_registry.py" deregister \
-            --name "$name" \
-            --node-yaml "$node_yaml" \
-            --log-prefix "remove-project"
-        py_rc=$?
-        if [[ $py_rc -ne 0 ]]; then
-            log_imp 8 "-" "Python unregistration failed (exit=${py_rc})"
+    if command -v python3 &>/dev/null; then
+        log_imp 7 "-" "Removing project via NodeYaml CLI"
+        if python3 -m core.internal.shared.node_yaml --file "$node_yaml" --remove-project "$name" 2>/dev/null; then
+            log_imp 9 "-" "NodeYaml CLI: removed '${name}' from ${node_yaml}"
+        else
+            log_imp 8 "-" "NodeYaml remove-project failed"
             return 1
         fi
-        log_imp 9 "-" "python3: removed '${name}' from projects[] (fallback)"
     else
-        log_imp 8 "-" "Neither yq nor python3+yaml available — cannot unregister automatically"
+        log_imp 8 "-" "python3 not available — cannot unregister automatically"
         log_imp 8 "-" "Manually remove '${name}' from: ${node_yaml}"
         return 1
     fi

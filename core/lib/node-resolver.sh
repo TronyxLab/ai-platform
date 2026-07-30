@@ -9,13 +9,14 @@ case $- in *e*) ;; *) echo "[WARN] node-resolver.sh sourced without set -e" >&2 
 # ═══════════════════════════════════════════════════════════════════
 # region MODULE_CONTRACT
 ## @modulecontract
-## @purpose  Find and parse node.yaml configuration files across
-##           multiple search paths (platform-local, org repos, VPS
-##           fallback). Replaces 3+ duplicated inline implementations
-##           across context-init.sh (and former apply.sh — deleted, core-deploy.yml)
-##           with a single source of truth.
-## @scope    — resolve_node_yaml() with 3-candidate-path search
-##           — extract_node_host() with YAML host extraction via python3
+## @purpose  Shell facade for NodeYaml Python CLI. All YAML resolution
+##           logic moved to core.internal.shared.node_yaml. resolve_node_yaml()
+##           is now a thin wrapper around `python3 -m core.internal.shared.node_yaml --resolve`.
+##           Replaces 3+ duplicated inline implementations and shell-based
+##           3-candidate-path search with a single Python source of truth.
+## @scope    — resolve_node_yaml() → thin facade (delegates to NodeYaml.resolve())
+##           — extract_node_host() with YAML host extraction via NodeYaml CLI
+##           — resolve_node_from_env() with JSON NODE_HOST_MAP parsing
 ##           — zero side-effects on source (pure function definitions only)
 ## @input    — __LOG_PREFIX (env var, set before source; default: "node-resolver")
 ##           — resolve_node_yaml: node_name, [platform_root], [projects_dir]
@@ -123,65 +124,22 @@ resolve_node_yaml() {
     local platform_root="${2:-${PLATFORM_ROOT:-/opt/platform}}"
     local projects_dir="${3:-${HOME}/projects}"
 
-    # ── Validate input ─────────────────────────────────────────────
     if [[ -z "${node_name}" ]]; then
         log_imp 10 "-" "Missing required argument: node_name"
         return 1
     fi
 
-    # [IMP:8][resolve_node_yaml] Begin search for node.yaml
-    log_imp 8 "-" "Resolving node.yaml for node=${node_name}"
+    log_imp 8 "-" "Resolving node.yaml for node=${node_name} via NodeYaml Python CLI"
 
-    # ── Build candidate paths ──────────────────────────────────────
-    # Search 3 locations: platform-local → org repos → VPS fallback
-    local candidate_paths=()
-
-    # Path 1: platform_root/node-configs/<node>/node.yaml (platform-local)
-    # Used for platform-managed configs (legacy — платформа не хранит конфиги нод)
-    candidate_paths+=("${platform_root}/node-configs/${node_name}/node.yaml")
-
-    # Path 2: <projects_dir>/*/node-configs/<node>/node.yaml (org repos)
-    # ⚠️ TRAP[BUG] · 2026-07-07 · P2 · Glob expansion in array
-    # · Symptom: If no matching paths, the array gets the literal glob string
-    # · Root: bash does not expand globs that match nothing by default (nullglob off)
-    # · Fix: Use shopt -s nullglob before glob capture, restore after
-    local shopt_nullglob=false
-    if [[ ! -o nullglob ]]; then
-        shopt -s nullglob
-        shopt_nullglob=true
-    fi
-    for dir in "${projects_dir}"/*/node-configs; do
-        local candidate="${dir}/${node_name}/node.yaml"
-        candidate_paths+=("${candidate}")
-    done
-    if [[ "${shopt_nullglob}" == true ]]; then
-        shopt -u nullglob
-    fi
-
-    # Path 3: /opt/node-configs/<node>/node.yaml (VPS fallback)
-    # Available when running directly on the target server
-    candidate_paths+=("/opt/node-configs/${node_name}/node.yaml")
-
-    # ── Search for existing file ───────────────────────────────────
-    local found_path=""
-    for path in "${candidate_paths[@]}"; do
-        if [[ -f "${path}" ]]; then
-            found_path="${path}"
-            log_imp 8 "-" "Found node.yaml: ${found_path}"
-            break
-        fi
-    done
-
-    # ── Result ─────────────────────────────────────────────────────
-    if [[ -z "${found_path}" ]]; then
+    local result
+    result="$(python3 -m core.internal.shared.node_yaml --resolve --resolve-node "$node_name" 2>/dev/null)" || {
         log_imp 10 "-" "node.yaml not found for node=${node_name}"
-        log_imp 10 "-" "  Searched: ${candidate_paths[*]}"
         log_imp 10 "-" "  Ensure node-configs/${node_name}/node.yaml exists"
         return 1
-    fi
+    }
 
-    echo "${found_path}"
-    log_imp 9 "-" "Resolved node.yaml: ${found_path}"
+    echo "$result"
+    log_imp 9 "-" "Resolved node.yaml: ${result}"
 }
 # endregion FUNC_resolve_node_yaml
 

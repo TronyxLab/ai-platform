@@ -15,7 +15,9 @@
 ##   - api_key = "os.environ/<provider.key_env>" resolved from provider definition
 ##   - model_info.mode = first alias.features entry
 ##   - Fallbacks chain primary → fallback for each alias with a fallback deployment
-##   --check mode: renders to temp, compares byte-for-byte with output file, exit 0 if fresh
+##   --check mode: renders to temp, compares byte-for-byte with output file
+##   --check: exit 0 if fresh, 1 if stale; prints first 20 lines of diff on stderr on divergence
+##   --check without --output → error (no file to compare)
 ## @rationale Python Jinja2 rendering ensures type safety, testability, and
 ##            consistent output compared to manual YAML editing. --check mode
 ##            enables CI gate for manifest freshness (make check-manifests).
@@ -28,6 +30,7 @@
 # endregion MODULE_CONTRACT
 
 import argparse
+import difflib
 import logging
 import pathlib
 import sys
@@ -370,6 +373,20 @@ def check_freshness(
                 logger.log(logging.CRITICAL, "[IMP:9][check_freshness] Output is FRESH (content matches rendered)")
             else:
                 logger.log(logging.WARNING, "[IMP:6][check_freshness] Output is STALE (content differs from rendered)")
+                # Emit diff to stderr (first 20 lines) — byte-level comparison
+                existing_text = existing_bytes.decode("utf-8")
+                diff_lines = list(
+                    difflib.unified_diff(
+                        existing_text.splitlines(keepends=True),
+                        content.splitlines(keepends=True),
+                        fromfile=str(output_path),
+                        tofile="rendered",
+                    )
+                )
+                for line in diff_lines[:20]:
+                    sys.stderr.write(line)
+                if len(diff_lines) > 20:
+                    sys.stderr.write(f"... ({len(diff_lines) - 20} more lines)\n")
         finally:
             tmp_path.unlink(missing_ok=True)
 

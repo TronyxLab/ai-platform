@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""
+Shared healthcheck poller for DeployOrchestrator. Extracted from context_deployer._shared_healthcheck_poll() + docker_compose.py.
+"""
+# GREP_SUMMARY: healthcheck, poll, http, docker-inspect, retry, timeout, health-status
+# STRUCTURE: ▶ HealthcheckPoller.__init__(timeout, interval, max_retries) → ○ poll_project(project_name) → ◇ HTTP GET /health → ◇ docker inspect → ⎋ str(healthy|unhealthy)
+# region MODULE_CONTRACT
+## @purpose  Shared healthcheck polling utility. Supports two protocols:
+##           1. HTTP GET /health → 200 (web services)
+##           2. docker inspect → State.Health.Status (workers/daemons)
+##           Extracted from context_deployer._shared_healthcheck_poll() + docker_compose.py.healthcheck_poll().
+## @scope    Used by DeployOrchestrator after deploy to verify health. Single poll, not a lifecycle manager.
+## @invariants
+##   1. timeout: 30s per check by default
+##   2. retry interval: 10s between attempts
+##   3. max retries: 6 (total ~60s polling window)
+##   4. HTTP check: GET /health endpoint, 200 = healthy
+##   5. Docker check: inspect State.Health.Status == "healthy" OR State.Status == "running" (no healthcheck)
+##   6. Non-fatal: returns "unhealthy" on failure, does NOT raise
+## @rationale DevPlan 089 DD4: context_deployer AND DeployEngine both do healthcheck →
+##            double work. Single HealthcheckPoller used once by DeployOrchestrator.
+## @changes 2026-07-30 | DevPlan 089 T5 — Created
+# endregion MODULE_CONTRACT
+
+from __future__ import annotations
+
+import json
+import logging
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_POLL_TIMEOUT = 30
+DEFAULT_POLL_INTERVAL = 10
+DEFAULT_MAX_RETRIES = 6
+
+
+@dataclass
+class HealthcheckResult:
+    """Result of a healthcheck poll.
+
+    ## @purpose — Encapsulate healthcheck outcome and metadata.
+    ## @io — ⇥ constructor params → ⎋ HealthcheckResult
+    ## @complexity — O(1)
+    """
+
+    status: str  # "healthy", "unhealthy", "timeout"
+    project: str
+    method: str  # "http", "docker", "unknown"
+    attempts: int = 0
+    detail: str = ""
+
+
+# region CLASS_HealthcheckPoller
+
+
+class HealthcheckPoller:
+    """Poll project health via HTTP or Docker inspect.
+
+    ## @purpose — Verify project health after deploy. Supports HTTP GET /health
+    ##            for web services and docker inspect for workers/daemons.
+    ## @io — ⇥ project_name → ⎋ HealthcheckResult
+    ## @complexity — O(max_retries) — each attempt is O(1)
+    ## @invariants
+    ##   - Non-fatal: returns "unhealthy" on any failure
+    ##   - HTTP check: 200 on /health = healthy
+    ##   - Docker check: State.Health.Status == "healthy" or running without healthcheck
+    ##   - Total poll window = interval × max_retries
+    """
+
+    def __init__(
+        self,
+        timeout: int = DEFAULT_POLL_TIMEOUT,
+        interval: int = DEFAULT_POLL_INTERVAL,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ):
+        self.timeout = timeout
+        self.interval = interval
+        self.max_retries = max_retries
+
+    def poll_project(self, project_name: str, project_dir: str | None = None) -> HealthcheckResult:
+        """Poll project health until healthy or retries exhausted.
+
+        Args:
+            project_name: Project name for container/URL resolution.
+            project_dir: Optional project directory for docker compose operations.
+
+        Returns:
+            HealthcheckResult with status.
+        """
+        # Try HTTP healthcheck first
+        http_result = self._try_http(project_name)
+        if http_result:
+            logger.info("[IMP:9][HealthcheckPoller][http] %s healthy via HTTP", project_name)
+            return HealthcheckResult(status="healthy", project=project_name, method="http", attempts=1)
+
+        # Fall back to Docker inspect
+        if project_dir:
+            docker_result = self._try_docker(project_name, project_dir)
+            return docker_result
+
+        logger.warning("[IMP:7][HealthcheckPoller][unknown] %s: no healthcheck method available", project_name)
+        return HealthcheckResult(
+            status="unhealthy",
+            project=project_name,
+            method="unknown",
+            attempts=1,
+            detail="No healthcheck method available",
+        )
+
+    def poll_until_healthy(self, project_name: str, project_dir: str | None = None) -> HealthcheckResult:
+        """Poll repeatedly until healthy or max_retries exhausted.
+
+        Args:
+            project_name: Project name.
+            project_dir: Optional project directory.
+
+        Returns:
+            HealthcheckResult with final status.
+        """
+        for attempt in range(1, self.max_retries + 1):
+            result = self.poll_project(project_name, project_dir)
+            if result.status == "healthy":
+                return result
+
+            logger.info(
+                "[IMP:8][HealthcheckPoller][retry] %s attempt %d/%d: %s — retrying in %ds",
+                project_name,
+                attempt,
+                self.max_retries,
+                result.status,
+                self.interval,
+            )
+            time.sleep(self.interval)
+
+        return HealthcheckResult(
+            status="timeout",
+            project=project_name,
+            method="unknown",
+            attempts=self.max_retries,
+            detail=f"Healthcheck timeout after {self.max_retries * self.interval}s",
+        )
+
+    def _try_http(self, project_name: str) -> bool:
+        """Try HTTP GET /health for a project.
+
+        Args:
+            project_name: Project/container name for host resolution.
+
+        Returns:
+            True if HTTP /health returns 200.
+        """
+        # Try common project health endpoints
+        urls = [
+            f"http://{project_name}:8080/health",
+            f"http://{project_name}:8000/health",
+            f"http://{project_name}/health",
+        ]
+
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    if resp.status == 200:
+                        return True
+            except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+                continue
+
+        return False
+
+    def _try_docker(self, project_name: str, project_dir: str) -> HealthcheckResult:
+        """Try Docker inspect for health status.
+
+        Args:
+            project_name: Project/container name.
+            project_dir: Project directory for compose commands.
+
+        Returns:
+            HealthcheckResult with Docker health status.
+        """
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                # Get container ID
+                cid_result = subprocess.run(
+                    ["docker", "compose", "ps", "-q", project_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    cwd=project_dir,
+                )
+                cid = cid_result.stdout.strip()
+
+                if not cid:
+                    time.sleep(self.interval)
+                    continue
+
+                # Inspect health
+                inspect_cmd = [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{.State.Status}} {{.State.Health.Status}}",
+                    cid,
+                ]
+                inspect_result = subprocess.run(inspect_cmd, capture_output=True, text=True, timeout=15)
+                status_line = inspect_result.stdout.strip()
+
+                if "running" in status_line and ("healthy" in status_line or "unhealthy" not in status_line):
+                    return HealthcheckResult(
+                        status="healthy",
+                        project=project_name,
+                        method="docker",
+                        attempts=attempt,
+                        detail=status_line,
+                    )
+
+                logger.info(
+                    "[IMP:8][HealthcheckPoller][docker] %s attempt %d/%d: %s",
+                    project_name,
+                    attempt,
+                    self.max_retries,
+                    status_line,
+                )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.warning("[IMP:7][HealthcheckPoller][docker] Error: %s", e)
+
+            if attempt < self.max_retries:
+                time.sleep(self.interval)
+
+        return HealthcheckResult(
+            status="timeout",
+            project=project_name,
+            method="docker",
+            attempts=self.max_retries,
+            detail="Docker healthcheck timeout",
+        )
+
+
+# endregion CLASS_HealthcheckPoller

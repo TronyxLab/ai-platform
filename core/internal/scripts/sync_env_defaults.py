@@ -9,7 +9,7 @@
 ##   - .env.example is GENERATED — never edit manually
 ##   - All values come from SoT (platform-env.yaml env_defaults section)
 ##   - Secret charset constraints and gen_commands are pulled from secret-definitions.yaml
-##   - --check mode produces byte-identical output or fails with exit code 2
+##   - --check mode produces byte-identical output or fails with exit code 1
 ##   - Atomic write (tempfile + os.rename)
 ## @rationale Eliminates manual sync between .env, .env.example, and compose defaults.
 ##            Single SoT → single generator → zero drift.
@@ -545,7 +545,7 @@ def main() -> None:
     parser.add_argument("--platform-env", required=True, type=str, help="Path to platform-env.yaml")
     parser.add_argument("--secret-defs", required=True, type=str, help="Path to core/secret-definitions.yaml")
     parser.add_argument("--output", required=True, type=str, help="Path to write .env.example")
-    parser.add_argument("--check", action="store_true", help="Dry-run: diff with existing, exit 2 on divergence")
+    parser.add_argument("--check", action="store_true", help="Dry-run: diff with existing, exit 1 on divergence")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
@@ -570,20 +570,25 @@ def main() -> None:
     if args.check:
         if not output_path.is_file():
             logger.error("[IMP:9][sync_env][CHECK] Output file %s does not exist — cannot compare", output_path)
-            sys.exit(2)
+            sys.exit(1)
         existing = output_path.read_text()
         if existing != generated:
-            diff = difflib.unified_diff(
-                existing.splitlines(keepends=True),
-                generated.splitlines(keepends=True),
-                fromfile=str(output_path),
-                tofile="generated",
+            diff_lines = list(
+                difflib.unified_diff(
+                    existing.splitlines(keepends=True),
+                    generated.splitlines(keepends=True),
+                    fromfile=str(output_path),
+                    tofile="generated",
+                )
             )
-            sys.stderr.writelines(diff)
+            for line in diff_lines[:20]:
+                sys.stderr.write(line)
+            if len(diff_lines) > 20:
+                sys.stderr.write(f"... ({len(diff_lines) - 20} more lines)\n")
             logger.error(
                 "[IMP:9][sync_env][CHECK] Divergence detected — .env.example is stale. Run: make sync-env-defaults"
             )
-            sys.exit(2)
+            sys.exit(1)
         logger.info("[IMP:9][sync_env][CHECK] .env.example is up-to-date")
         sys.exit(0)
 

@@ -37,7 +37,7 @@
 ##
 ##   🧐 TRAP[DECISION] · 2026-07-17 · — · audit_log() replaces audit_write()
 ##   · Rejected: keeping audit_write() in deploy-project.sh (duplicate)
-##   · Reason: audit_log() from lib/audit_logging.sh is the canonical function.
+##   · Reason: audit_log() was the canonical shell audit function (now replaced by AuditLogger Python).
 ##
 ##   ⚠️ TRAP[BUG] · 2026-07-20 · REF="<sha> production" — env suffix leaks into image tag
 ##   · Symptom: "invalid reference format" — docker pulls "image:sha production"
@@ -172,6 +172,13 @@ class ValidationError(Exception):
 class DeployEngine:
     """Atomic deploy/rollback/remove/status engine.
 
+    ## @rationale DevPlan 089 T7: DeployEngine is called from DeployOrchestrator,
+    ##            not as standalone. API: deploy_compose() is the public interface.
+    ##            CLI argparse is preserved for backward compatibility.
+    """
+
+    """Atomic deploy/rollback/remove/status engine.
+
     All Docker operations via subprocess.run(["docker", "compose", ...]).
     Healthcheck uses shell lib/healthcheck.sh via subprocess.
     """
@@ -186,6 +193,45 @@ class DeployEngine:
         )
 
     # ── Public API ──────────────────────────────────────────────────────────
+
+    # region FUNC_deploy_compose
+    ## @purpose  Simplified deploy interface for DeployOrchestrator. Thin wrapper around deploy()
+    ##           with project_dir-based project name extraction.
+    ## @io       ⇥ project_dir: str, service: str, version: str → ⎋ DeployResult
+    ## @complexity — O(N) where N = deploy steps
+    ## @invariants
+    ##   - Extracts project name from project_dir basename
+    ##   - Uses default max_wait=60 and keep_images=3
+    ##   - Returns DeployResult compatible with DeployOrchestrator
+    def deploy_compose(self, project_dir: str, service: str, version: str) -> DeployResult:
+        """Deploy a single compose service. Called by DeployOrchestrator.
+
+        Args:
+            project_dir: Absolute path to project directory.
+            service: Docker Compose service name.
+            version: Image version/tag to deploy.
+
+        Returns:
+            DeployResult with success/failure status.
+        """
+        project = os.path.basename(project_dir.rstrip("/"))
+        logger.info(
+            "[IMP:9][deploy_compose][start] Deploy compose: %s/%s → %s",
+            project,
+            service,
+            version,
+        )
+        return self.deploy(
+            project=project,
+            ref=version,
+            service=service,
+            project_dir=project_dir,
+            node="",
+            max_wait=60,
+            keep_images=3,
+        )
+
+    # endregion FUNC_deploy_compose
 
     # region FUNC_deploy
     ## @purpose  Perform atomic deploy with healthcheck-based rollback.

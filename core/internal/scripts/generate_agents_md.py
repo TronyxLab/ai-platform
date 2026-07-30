@@ -24,6 +24,7 @@ from __future__ import annotations
 
 # region IMPORTS
 import argparse
+import difflib
 import logging
 import sys
 from pathlib import Path
@@ -152,12 +153,58 @@ def generate_forbidden_lists(manifest: dict) -> str:
     return result
 
 
+def _inject_content(content: str, marker: str, new_content: str) -> str:
+    """Inject generated content between GENERATED markers in a string copy.
+
+    ## @purpose  Core injection logic — works on a string, returns modified string.
+    ##            Used by both inject_into_md (disk) and --check (in-memory).
+    ## @io        ⇥ content: original markdown content, marker: marker name,
+    ##             new_content: content to inject between markers
+    ##           → ⎋ str: content with injected text
+    ## @complexity O(L) where L = number of lines in content
+    ## @invariants
+    ##   - Marker lines are preserved
+    ##   - Content between markers is fully replaced
+    ##   - If markers missing, appended at end
+    """
+    start_tag = f"<!-- GENERATED:START:{marker} -->"
+    end_tag = f"<!-- GENERATED:END:{marker} -->"
+
+    start_idx = content.find(start_tag)
+    end_idx = content.find(end_tag)
+
+    if start_idx == -1 or end_idx == -1:
+        # Markers not found — append at end
+        if not content.endswith("\n"):
+            content += "\n"
+        content += f"\n{start_tag}\n"
+        content += new_content
+        if not new_content.endswith("\n"):
+            content += "\n"
+        content += f"{end_tag}\n"
+    else:
+        # Replace content between markers (exclusive)
+        before = content[: start_idx + len(start_tag)]
+        after = content[end_idx:]
+
+        if not before.endswith("\n"):
+            before += "\n"
+
+        content = before + new_content
+        if not new_content.endswith("\n"):
+            content += "\n"
+        content += after
+
+    return content
+
+
 def inject_into_md(md_path: str, marker: str, new_content: str) -> None:
     """Replace content between <!-- GENERATED:START:marker --> and <!-- GENERATED:END:marker -->.
 
     ## @purpose  Inject generated content into AGENTS.md between marker comments.
     ##            If markers missing, appends them with content at end of file.
-    ## @io       ⇥ md_path: path to markdown file
+    ##            Delegates to _inject_content for string manipulation.
+    ## @io        ⇥ md_path: path to markdown file
     ##           ⇥ marker: marker name (e.g., "canon-operations")
     ##           ⇥ new_content: string to inject between markers
     ##           → ⎋ None (side-effect: modifies file)
@@ -175,39 +222,7 @@ def inject_into_md(md_path: str, marker: str, new_content: str) -> None:
         raise FileNotFoundError(f"Markdown file not found: {md_path}")
 
     content = file_path.read_text(encoding="utf-8")
-
-    start_tag = f"<!-- GENERATED:START:{marker} -->"
-    end_tag = f"<!-- GENERATED:END:{marker} -->"
-
-    start_idx = content.find(start_tag)
-    end_idx = content.find(end_tag)
-
-    if start_idx == -1 or end_idx == -1:
-        # Markers not found — append at end
-        print(f"[IMP:6][inject_into_md] Markers '{marker}' not found, appending at end", file=sys.stderr)
-        if not content.endswith("\n"):
-            content += "\n"
-        content += f"\n{start_tag}\n"
-        content += new_content
-        if not new_content.endswith("\n"):
-            content += "\n"
-        content += f"{end_tag}\n"
-    else:
-        # Replace content between markers (exclusive)
-        before = content[: start_idx + len(start_tag)]
-        after = content[end_idx:]
-
-        # Determine newline after start tag
-        if before.endswith("\n"):
-            pass  # keep newline
-        else:
-            before += "\n"
-
-        content = before + new_content
-        if not new_content.endswith("\n"):
-            content += "\n"
-        content += after
-
+    content = _inject_content(content, marker, new_content)
     file_path.write_text(content, encoding="utf-8")
     print(f"[IMP:9][inject_into_md] Content injected into {md_path} for marker '{marker}'", file=sys.stderr)
 
@@ -249,6 +264,12 @@ def main() -> int:
         help="Marker prefix for GENERATED sections (default: canon-operations). "
         "Forbidden lists use marker + '-forbidden' (e.g., canon-operations-forbidden)",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check mode: compare generated output with existing file byte-by-byte. "
+        "Never writes to disk. Exit 0 if match, 1 if divergence.",
+    )
     args = parser.parse_args()
 
     print("[IMP:7][main] Starting AGENTS.md generation", file=sys.stderr)
@@ -267,11 +288,64 @@ def main() -> int:
 
         # Generate canonical table
         canon_table = generate_canon_table(manifest)
-        if canon_table:
-            inject_into_md(args.agents_md, args.marker, canon_table)
 
         # Generate forbidden lists
         forbidden_content = generate_forbidden_lists(manifest)
+
+        # ══════════════════════════════════════════════════════════════
+        # ── CHECK MODE: in-memory injection + byte comparison ──
+        # ══════════════════════════════════════════════════════════════
+        if args.check:
+            logger.info("[IMP:7][main][CHECK] Running check mode — comparing %s", args.agents_md)
+
+            agents_md_path = Path(args.agents_md)
+            if not agents_md_path.is_file():
+                logger.error("[IMP:1][main][CHECK] AGENTS.md not found: %s", args.agents_md)
+                print(f"[IMP:1][main][CHECK] File not found: {args.agents_md}", file=sys.stderr)
+                return 1
+
+            # Read existing file content
+            existing_content = agents_md_path.read_text(encoding="utf-8")
+
+            # Inject generated content into a copy (simulate what generation would produce)
+            simulated_content = existing_content
+            if canon_table:
+                simulated_content = _inject_content(simulated_content, args.marker, canon_table)
+            if forbidden_content:
+                forbidden_marker = f"{args.marker}-forbidden"
+                simulated_content = _inject_content(simulated_content, forbidden_marker, forbidden_content)
+
+            # Compare byte-by-byte
+            if simulated_content == existing_content:
+                logger.info("[IMP:9][main][CHECK] AGENTS.md is up-to-date — exit 0")
+                print("[IMP:9][main][CHECK] AGENTS.md is up-to-date — exit 0", file=sys.stderr)
+                return 0
+
+            logger.warning("[IMP:6][main][CHECK] AGENTS.md is stale — exit 1")
+            print("[IMP:6][main][CHECK] AGENTS.md is stale — divergence detected", file=sys.stderr)
+            diff_lines = list(
+                difflib.unified_diff(
+                    existing_content.splitlines(keepends=True),
+                    simulated_content.splitlines(keepends=True),
+                    fromfile=f"{args.agents_md} (file)",
+                    tofile=f"{args.agents_md} (regenerated)",
+                )
+            )
+            for line in diff_lines[:20]:
+                print(line, end="", file=sys.stderr)
+            if len(diff_lines) > 20:
+                print(f"[IMP:6][check] ... truncated ({len(diff_lines) - 20} more lines)", file=sys.stderr)
+            return 1
+
+        # ══════════════════════════════════════════════════════════════
+        # ── NORMAL MODE: write to disk ──
+        # ══════════════════════════════════════════════════════════════
+
+        # Inject canonical table
+        if canon_table:
+            inject_into_md(args.agents_md, args.marker, canon_table)
+
+        # Inject forbidden lists
         if forbidden_content:
             forbidden_marker = f"{args.marker}-forbidden"
             inject_into_md(args.agents_md, forbidden_marker, forbidden_content)

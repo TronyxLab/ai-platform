@@ -23,6 +23,8 @@
 from __future__ import annotations
 
 import argparse
+import difflib
+import io
 import logging
 import sys
 from pathlib import Path
@@ -239,17 +241,69 @@ def generate(secret_defs: list[dict[str, Any]], modules: list[dict[str, Any]]) -
 # endregion FUNC_generate
 
 
+# region FUNC_check_output
+def _check_output(generated_content: str, output_path: Path) -> None:
+    """Byte-level comparison for --check mode. Exit 0 if fresh, 1 if stale.
+
+    ## @purpose  Compare generated content with existing file byte-by-byte.
+    ##            Prints diff (first 20 lines) to stderr on divergence.
+    ##            NEVER writes to disk.
+    ## @io        ⇥ generated_content: str, output_path: Path → ⎋ sys.exit(0|1)
+    ## @complexity O(N) where N = file size in bytes
+    ## @invariants
+    ##   - NEVER writes to disk — pure read-only comparison
+    ##   - Exit 0 if content matches, 1 if divergence
+    ##   - Prints first 20 lines of diff to stderr on divergence
+    """
+    logger.info("[IMP:7][_check_output][START] Checking output against %s", output_path)
+
+    if not output_path.is_file():
+        logger.error("[IMP:9][_check_output][ERROR] Output file %s does not exist — cannot compare", output_path)
+        sys.exit(1)
+
+    generated_bytes = generated_content.encode("utf-8")
+    existing_bytes = output_path.read_bytes()
+
+    if generated_bytes == existing_bytes:
+        logger.info("[IMP:9][_check_output][OK] Output is fresh — matches %s", output_path)
+        sys.exit(0)
+
+    # Divergence — compute and print diff
+    diff_lines = list(
+        difflib.unified_diff(
+            existing_bytes.decode("utf-8").splitlines(keepends=True),
+            generated_content.splitlines(keepends=True),
+            fromfile=str(output_path),
+            tofile="generated",
+        )
+    )
+    for line in diff_lines[:20]:
+        sys.stderr.write(line)
+    if len(diff_lines) > 20:
+        sys.stderr.write(f"... ({len(diff_lines) - 20} more lines)\n")
+
+    logger.error(
+        "[IMP:9][_check_output][FAIL] Divergence detected — %s is stale. Regenerate without --check.",
+        output_path,
+    )
+    sys.exit(1)
+
+
+# endregion FUNC_check_output
+
+
 # region FUNC_main
 def main() -> None:
     """CLI entrypoint.
 
     ## @purpose  Parse CLI args, load definitions + modules, compute consumers,
-    ##            write output YAML.
+    ##            write output YAML. --check mode: byte-level comparison.
     ## @io        ⇥ sys.argv → ⎋ exit code 0/1
     ## @complexity O(1) dispatch to sub-functions
     ## @invariants
     ##   - Writes output file only if computation succeeds
-    ##   - Exit 0 on success, 1 on error
+    ##   - --check mode: byte-level comparison, never writes to disk
+    ##   - Exit 0 on success / fresh, 1 on error or divergence
     ##   --output file is overwritten if exists
     """
     parser = argparse.ArgumentParser(
@@ -272,6 +326,11 @@ def main() -> None:
         required=True,
         type=str,
         help="Output path for generated secrets-manifest.yaml",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check mode: compare generated output with existing file. Exit 0 if fresh, 1 if stale. Read-only.",
     )
     parser.add_argument(
         "-v",
@@ -319,28 +378,37 @@ def main() -> None:
     # ── Generate ──
     manifest: dict[str, Any] = generate(secret_defs, modules)
 
+    # ── Render output to string (shared between check and write) ──
+    buf = io.StringIO()
+    buf.write(
+        "# core/secrets-manifest.yaml\n"
+        "# GREP_SUMMARY: secrets-manifest, sso, tier-model, required, generated, optional, consumers, anti-drift\n"
+        "# STRUCTURE: ┌secrets[]┐ → ◇ tier(required|generated|optional|removed) → ⊕ consumers[] → ⟦source(sops|autogen|ci-secret)⟧ → ⎋ gate-verifiable\n"
+        "# region MODULE_CONTRACT\n"
+        "## @purpose  Единый SSoT для всех секретов платформы. Anti-drift механизм: gate блокирует незарегистрированные секреты.\n"
+        "## @scope    Auto-generated from core/secret-definitions.yaml + module.yaml consumers.\n"
+        "##           Consumed by CI gates, deploy-modules.sh, secrets-init.sh.\n"
+        "## @invariants\n"
+        "##   tier ∈ {required, generated, optional, removed}\n"
+        "##   source ∈ {sops, autogen, ci-secret, provisioner}\n"
+        "##   generated-секреты всегда имеют gen_command\n"
+        "##   ci-secret секреты имеют consumers: [] (CI-side, не модули)\n"
+        "##   removed-секреты имеют tier=removed (историческая запись)\n"
+        "## @rationale SSoT предотвращает дрейф: gate блокирует добавление секретов без регистрации в манифесте\n"
+        "# endregion MODULE_CONTRACT\n"
+        "\n"
+    )
+    yaml.dump(manifest, buf, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    output_content: str = buf.getvalue()
+
+    # ── Check mode (read-only, byte-level comparison) ──
+    if args.check:
+        _check_output(output_content, output_path)
+
     # ── Write output ──
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
-        f.write(
-            "# core/secrets-manifest.yaml\n"
-            "# GREP_SUMMARY: secrets-manifest, sso, tier-model, required, generated, optional, consumers, anti-drift\n"
-            "# STRUCTURE: ┌secrets[]┐ → ◇ tier(required|generated|optional|removed) → ⊕ consumers[] → ⟦source(sops|autogen|ci-secret)⟧ → ⎋ gate-verifiable\n"
-            "# region MODULE_CONTRACT\n"
-            "## @purpose  Единый SSoT для всех секретов платформы. Anti-drift механизм: gate блокирует незарегистрированные секреты.\n"
-            "## @scope    Auto-generated from core/secret-definitions.yaml + module.yaml consumers.\n"
-            "##           Consumed by CI gates, deploy-modules.sh, secrets-init.sh.\n"
-            "## @invariants\n"
-            "##   tier ∈ {required, generated, optional, removed}\n"
-            "##   source ∈ {sops, autogen, ci-secret, provisioner}\n"
-            "##   generated-секреты всегда имеют gen_command\n"
-            "##   ci-secret секреты имеют consumers: [] (CI-side, не модули)\n"
-            "##   removed-секреты имеют tier=removed (историческая запись)\n"
-            "## @rationale SSoT предотвращает дрейф: gate блокирует добавление секретов без регистрации в манифесте\n"
-            "# endregion MODULE_CONTRACT\n"
-            "\n"
-        )
-        yaml.dump(manifest, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        f.write(output_content)
 
     logger.info(
         "[IMP:9][main][OK] Written %d secrets to %s",

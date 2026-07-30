@@ -16,7 +16,7 @@
 ## @rationale Completes the OBSERVE lifecycle phase — owner can see what's registered
 ##            without SSH. Production monitoring uses healthcheck.sh, not this.
 ## @links    CALLED_BY: scaffold.sh (project-list, project-status)
-##           READS: node.yaml files under PROJECTS_ROOT
+##           READS: node.yaml files under PROJECTS_ROOT (via NodeYaml CLI — yq removed)
 ##           CALLS: SSH forced-command status verb (K1)
 ## @changes  2026-07-17 · T12 — full implementation
 ##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, inline ssh in get_status_via_ssh → ssh_read
@@ -154,18 +154,33 @@ list_projects_offline() {
         local node_name
         node_name="$(basename "$(dirname "$ny")")"  # .../node-configs/<node>/node.yaml → <node>
         local node_host=""
-        node_host="$(yq eval ".node.host // \"\"" "$ny" 2>/dev/null || true)"
+        node_host="$(python3 -m core.internal.shared.node_yaml --file "$ny" --get node.host --default "" 2>/dev/null || true)"
+
+        # Read full YAML as JSON via NodeYaml CLI (single call)
+        local full_json
+        full_json="$(python3 -m core.internal.shared.node_yaml --file "$ny" --json-output 2>/dev/null || echo "{}")"
 
         if [[ "$FORMAT" == "json" ]]; then
-            # JSON output mode
+            # JSON output mode — extract projects via python3
             local projects_json
-            projects_json="$(yq eval ".projects[] | {name, node: \"${node_name}\", host: \"${node_host}\", domain: (.domain // \"\"), type: (.type // \"\"), repo: (.repo // \"\")}" "$ny" 2>/dev/null || true)"
-            if [[ -n "$projects_json" && "$projects_json" != "null" ]]; then
+            projects_json="$(echo "$full_json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+projects = d.get('projects', []) if isinstance(d, dict) else []
+node_name = '${node_name}'
+node_host = '${node_host}'
+for p in projects:
+    p['node'] = node_name
+    p['host'] = node_host
+    print(json.dumps(p))
+" 2>/dev/null || true)"
+            if [[ -n "$projects_json" ]]; then
                 while IFS= read -r pj; do
+                    [[ -z "$pj" ]] && continue
                     # Filter by name if specified
                     if [[ -n "$PROJECT_NAME" ]]; then
                         local pn
-                        pn="$(echo "$pj" | yq eval ".name // \"\"" - 2>/dev/null || true)"
+                        pn="$(echo "$pj" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null || true)"
                         [[ "$pn" != "$PROJECT_NAME" ]] && continue
                     fi
                     if [[ "$first_entry" == "true" ]]; then
@@ -184,27 +199,33 @@ list_projects_offline() {
                 header_printed=true
             fi
 
-            # Read projects via yq
-            if command -v yq &>/dev/null; then
-                local project_count
-                project_count="$(yq eval ".projects | length" "$ny" 2>/dev/null || echo 0)"
-                for ((i=0; i<project_count; i++)); do
-                    local pname pdomain ptype prepo
-                    pname="$(yq eval ".projects[$i].name // \"\"" "$ny" 2>/dev/null || true)"
-                    pdomain="$(yq eval ".projects[$i].domain // \"\"" "$ny" 2>/dev/null || true)"
-                    ptype="$(yq eval ".projects[$i].type // \"\"" "$ny" 2>/dev/null || true)"
-                    prepo="$(yq eval ".projects[$i].repo // \"\"" "$ny" 2>/dev/null || true)"
+            # Extract projects via python3 json parsing (yq removed per DevPlan 088)
+            local project_list
+            project_list="$(echo "$full_json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+projects = d.get('projects', []) if isinstance(d, dict) else []
+for p in projects:
+    print(json.dumps(p))
+" 2>/dev/null || true)"
 
-                    # Filter by name
-                    if [[ -n "$PROJECT_NAME" && "$pname" != "$PROJECT_NAME" ]]; then
-                        continue
-                    fi
+            while IFS= read -r pj; do
+                [[ -z "$pj" ]] && continue
+                local pname pdomain ptype prepo
+                pname="$(echo "$pj" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null || true)"
+                pdomain="$(echo "$pj" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('domain',''))" 2>/dev/null || true)"
+                ptype="$(echo "$pj" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('type',''))" 2>/dev/null || true)"
+                prepo="$(echo "$pj" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('repo',''))" 2>/dev/null || true)"
 
-                    if [[ -n "$pname" ]]; then
-                        printf "%-25s %-20s %-30s %-15s %s\n" "$pname" "$node_name" "${pdomain:--}" "${ptype:--}" "$prepo"
-                    fi
-                done
-            fi
+                # Filter by name
+                if [[ -n "$PROJECT_NAME" && "$pname" != "$PROJECT_NAME" ]]; then
+                    continue
+                fi
+
+                if [[ -n "$pname" ]]; then
+                    printf "%-25s %-20s %-30s %-15s %s\n" "$pname" "$node_name" "${pdomain:--}" "${ptype:--}" "$prepo"
+                fi
+            done <<< "$project_list"
         fi
     done <<< "$yaml_files"
 
@@ -236,19 +257,11 @@ find_project_node_yaml() {
         [[ -z "$ny" ]] && continue
 
         local found
-        if command -v yq &>/dev/null; then
-            found="$(yq eval ".projects[] | select(.name == \"${name}\") | .name" "$ny" 2>/dev/null || true)"
-        else
-            found="$(grep -E "^\s*-\s*name:\s*${name}\s*$" "$ny" 2>/dev/null || true)"
-        fi
+        found="$(python3 -m core.internal.shared.node_yaml --file "$ny" --find-project "$name" 2>/dev/null || true)"
 
-        if [[ -n "$found" && "$found" != "null" ]]; then
+        if [[ -n "$found" ]]; then
             PROJECT_NODE_YAML="$ny"
-            if command -v yq &>/dev/null; then
-                PROJECT_SSH_HOST="$(yq eval ".node.host // \"\"" "$ny" 2>/dev/null || true)"
-            else
-                PROJECT_SSH_HOST="$(grep -E '^\s*host:\s*' "$ny" 2>/dev/null | head -1 | awk '{print $2}' || true)"
-            fi
+            PROJECT_SSH_HOST="$(python3 -m core.internal.shared.node_yaml --file "$ny" --get node.host --default "" 2>/dev/null || true)"
             log_imp 7 "-" "Found project '${name}' in: ${ny} host=${PROJECT_SSH_HOST:-<unknown>}"
             return 0
         fi

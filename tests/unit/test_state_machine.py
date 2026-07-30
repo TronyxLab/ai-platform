@@ -30,8 +30,6 @@ from unittest.mock import patch
 
 import pytest
 
-from core.internal.shared.exceptions import PlatformFatalError
-
 # Load the LDD trajectory decorator
 from tests._conftest.ldd import ldd_trajectory
 
@@ -188,15 +186,15 @@ def test_save_state(caplog, state_file):
 # · Remove if: start_step logic changes
 @ldd_trajectory
 def test_start_step(caplog, machine):
-    """start_step should mark step as running and set current_step (name-based key)."""
+    """start_step should mark first phase as running and set current_step (phase-based key)."""
     machine.setup_state(mode="init", node="test")
     machine.start_step(1)
-    step_name = "ssh_access"  # Step 1 in INIT_STEPS
-    assert step_name in machine.state.steps
-    assert machine.state.steps[step_name].status == "running"
-    assert machine.state.steps[step_name].started_at is not None
+    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[0]  # system_bootstrap
+    assert phase_name in machine.state.steps
+    assert machine.state.steps[phase_name].status == "running"
+    assert machine.state.steps[phase_name].started_at is not None
     assert machine.state.current_step == 1
-    logger.critical("[IMP:9][test] start_step marks step running — OK")
+    logger.critical("[IMP:9][test] start_step marks phase running — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · complete_step marks step done with optional hash
@@ -205,14 +203,14 @@ def test_start_step(caplog, machine):
 # · Remove if: complete_step logic changes
 @ldd_trajectory
 def test_complete_step(caplog, machine):
-    """complete_step should mark step as done with hash (name-based key)."""
+    """complete_step should mark first phase as done with hash (phase-based key)."""
     machine.setup_state(mode="init", node="test")
     machine.start_step(1)
     machine.complete_step(1, hash_val="abc123")
-    step_name = "ssh_access"  # Step 1 in INIT_STEPS
-    assert machine.state.steps[step_name].status == "done"
-    assert machine.state.steps[step_name].hash == "abc123"
-    logger.critical("[IMP:9][test] complete_step marks step done — OK")
+    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[0]  # system_bootstrap
+    assert machine.state.steps[phase_name].status == "done"
+    assert machine.state.steps[phase_name].hash == "abc123"
+    logger.critical("[IMP:9][test] complete_step marks phase done — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · complete_step works without prior start_step
@@ -221,12 +219,12 @@ def test_complete_step(caplog, machine):
 # · Remove if: complete_step auto-creation changes
 @ldd_trajectory
 def test_complete_step_without_start(caplog, machine):
-    """complete_step should create step entry if not started (name-based key)."""
+    """complete_step should create phase entry if not started (phase-based key)."""
     machine.complete_step(5, hash_val="xyz")
-    step_name = "docker_auth"  # Step 5 in INIT_STEPS
-    assert step_name in machine.state.steps
-    assert machine.state.steps[step_name].status == "done"
-    logger.critical("[IMP:9][test] complete_step auto-creates step entry — OK")
+    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[4]  # node_configuration (5th phase)
+    assert phase_name in machine.state.steps
+    assert machine.state.steps[phase_name].status == "done"
+    logger.critical("[IMP:9][test] complete_step auto-creates phase entry — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · skip_step marks step as skipped with reason
@@ -235,12 +233,12 @@ def test_complete_step_without_start(caplog, machine):
 # · Remove if: skip_step logic changes
 @ldd_trajectory
 def test_skip_step(caplog, machine):
-    """skip_step should mark step as skipped with reason (name-based key)."""
+    """skip_step should mark phase as skipped with reason (phase-based key)."""
     machine.skip_step(3, reason="TOR_DISABLED")
-    step_name = "tor_proxy"  # Step 3 in INIT_STEPS
-    assert machine.state.steps[step_name].status == "skipped"
-    assert machine.state.steps[step_name].reason == "TOR_DISABLED"
-    logger.critical("[IMP:9][test] skip_step marks step skipped — OK")
+    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[2]  # platform_setup (3rd phase)
+    assert machine.state.steps[phase_name].status == "skipped"
+    assert machine.state.steps[phase_name].reason == "TOR_DISABLED"
+    logger.critical("[IMP:9][test] skip_step marks phase skipped — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · fail_step marks step as failed and collects error
@@ -249,14 +247,14 @@ def test_skip_step(caplog, machine):
 # · Remove if: fail_step logic changes
 @ldd_trajectory
 def test_fail_step(caplog, machine):
-    """fail_step should mark step as failed and collect error (name-based key)."""
+    """fail_step should mark phase as failed and collect error (phase-based key)."""
     machine.fail_step(2, "apt-get failed: package not found")
-    step_name = "apt_deps"  # Step 2 in INIT_STEPS
-    assert machine.state.steps[step_name].status == "failed"
-    assert machine.state.steps[step_name].error == "apt-get failed: package not found"
+    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[1]  # user_accounts (2nd phase)
+    assert machine.state.steps[phase_name].status == "failed"
+    assert machine.state.steps[phase_name].error == "apt-get failed: package not found"
     assert len(machine.state.errors) == 1
     assert "Step 2" in machine.state.errors[0]
-    logger.critical("[IMP:9][test] fail_step marks step failed with error — OK")
+    logger.critical("[IMP:9][test] fail_step marks phase failed with error — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · all transitions persist to state file
@@ -274,13 +272,14 @@ def test_transition_persists_to_file(caplog, state_file):
     m.fail_step(3, "error")
 
     saved = json.loads(state_file.read_text())
-    # After refactor, state.json uses name-based keys (step names, not numeric indices)
-    assert saved["steps"]["ssh_access"]["status"] == "done"
-    assert saved["steps"]["apt_deps"]["status"] == "skipped"
-    assert saved["steps"]["apt_deps"]["reason"] == "CONTENT_UNCHANGED"
-    assert saved["steps"]["tor_proxy"]["status"] == "failed"
+    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
+    # After refactor, state.json uses phase-based keys
+    assert saved["steps"][init_phases[0]]["status"] == "done"  # system_bootstrap
+    assert saved["steps"][init_phases[1]]["status"] == "skipped"  # user_accounts
+    assert saved["steps"][init_phases[1]]["reason"] == "CONTENT_UNCHANGED"
+    assert saved["steps"][init_phases[2]]["status"] == "failed"  # platform_setup
     assert len(saved["errors"]) == 1
-    logger.critical("[IMP:9][test] Transitions persisted to state file (name-based keys) — OK")
+    logger.critical("[IMP:9][test] Transitions persisted to state file (phase-based keys) — OK")
 
 
 # endregion
@@ -396,10 +395,10 @@ def test_get_current_step_after_partial_run(caplog, machine):
 # · Remove if: resume logic changes
 @ldd_trajectory
 def test_get_current_step_all_done(caplog, machine):
-    """get_current_step should return None when all steps done."""
-    steps = sm.INIT_STEPS
+    """get_current_step should return None when all phases done."""
+    phases = sm.BootstrapPhase.INIT_PHASE_ORDER
     machine.setup_state(mode="init", node="test")
-    for i in range(1, len(steps) + 1):
+    for i in range(1, len(phases) + 1):
         machine.start_step(i)
         machine.complete_step(i)
     next_step = machine.get_current_step()
@@ -432,41 +431,39 @@ def test_get_current_step_returns_failed_step(caplog, machine):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: Init flow (all steps, mocked subprocess)
+# region Tests: Init flow (all phases, mocked subprocess)
 # ═══════════════════════════════════════════════════════════════════
 
 
-# 🧪 TRAP[TEST] · Regression · complete init flow runs all steps without error
-# · Scenario: Mock subprocess, setup init mode, run _run_steps → all 17+ steps complete
+# 🧪 TRAP[TEST] · Regression · complete init flow runs all phases without error
+# · Scenario: Mock subprocess, setup init mode, run _run_init_mode → all 9 phases complete
 # · Last fail: N/A (new test)
 # · Remove if: init flow execution logic changes fundamentally
 @ldd_trajectory
-def test_init_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
-    """Init mode should run all steps without error (mocked subprocess)."""
-    # Root check: state machine requires euid=0 for ssh_access step.
-    # Tests run as non-root (macOS dev), so mock root.
+def test_init_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
+    """Init mode should run all phases without error (mocked subprocess).
+
+    Note: env_vars fixture sets PLATFORM_OWNER_KEY and PLATFORM_CI_DEPLOY_KEY.
+    _add_ssh_key is mocked to avoid writing to /home/* on macOS.
+    """
     monkeypatch.setattr(os, "geteuid", lambda: 0)
-    # Mock os.makedirs — Linux paths (/home, /opt) don't exist on macOS.
-    # State machine tries to create /home/<user>/.ssh and /opt/projects.
     monkeypatch.setattr(os, "makedirs", lambda *args, **kwargs: None)
-    # Clear SSH key env vars — _add_ssh_key tries to write to /home/<user>/.ssh/authorized_keys
-    # which doesn't exist on macOS. Without keys, _add_ssh_key is skipped.
-    monkeypatch.setenv("PLATFORM_OWNER_KEY", "")
-    monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "")
-    # Override TOR_ENABLED for test
+    # Patch via the canonical module path that phases.py imports
+    import core.internal.bootstrap.lifecycle.state_machine as _canonical_sm
+
+    monkeypatch.setattr(_canonical_sm, "_add_ssh_key", lambda *args, **kwargs: None)
     monkeypatch.setenv("TOR_ENABLED", "false")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
-    # Set CONTEXT env var for deploy_context step (DevPlan 053 F4/F8)
     monkeypatch.setenv("CONTEXT", "test-context")
-    # Create secrets.env for ensure_secrets step (DevPlan 053 F2)
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
     monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
-    # verify_core step (step 8) requires node-lifecycle.sh marker to exist.
+    # phase_deploy_services precondition requires deploy-modules.sh and Docker running
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
     (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
-    # verify_node_configs + read_node_yaml steps require node.yaml.
+    (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
+    (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
     node_yaml_path = Path(state_file).parent / "node.yaml"
     node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
     monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
@@ -478,42 +475,44 @@ def test_init_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monk
     exit_code = sm._run_init_mode(m)
     assert exit_code == 0
 
-    # Verify all init steps completed (name-based key lookup)
-    for i, step_name in enumerate(sm.INIT_STEPS, 1):
-        assert step_name in m.state.steps, f"Step {i} ({step_name}) not in state (name-based key)"
-        if step_name == "tor_proxy":
-            assert m.state.steps[step_name].status in ("skipped", "done"), f"tor_proxy step {i} should be skipped/done"
-        else:
-            assert m.state.steps[step_name].status in ("done", "skipped"), (
-                f"Step {i} ({step_name}) status: {m.state.steps[step_name].status}"
-            )
+    # Verify all init phases completed (phase-based key lookup)
+    for i, phase_val in enumerate(sm.BootstrapPhase.INIT_PHASE_ORDER, 1):
+        assert phase_val in m.state.steps, f"Phase {i} ({phase_val}) not in state"
+        assert m.state.steps[phase_val].status == "done", (
+            f"Phase {i} ({phase_val}) status: {m.state.steps[phase_val].status}"
+        )
 
-    logger.critical("[IMP:9][test] Init flow completed all 23 steps (name-based keys) — OK")
+    logger.critical("[IMP:9][test] Init flow completed all %d phases — OK", len(sm.BootstrapPhase.INIT_PHASE_ORDER))
 
 
-# 🧪 TRAP[TEST] · Regression · INIT_STEPS has 23 entries (DevPlan 047: +docker_auth, +deploy_context)
-# · Scenario: Check len(INIT_STEPS) == 23 after DevPlan 047 extension
-# · Last fail: N/A (new test — DevPlan 047)
-# · Remove if: INIT_STEPS count changes after another pipeline extension
+# 🧪 TRAP[TEST] · Regression · BootstrapPhase.INIT_PHASE_ORDER has 9 phases (DevPlan 087)
+# · Scenario: Check len(INIT_PHASE_ORDER) == 9 for 14-phase consolidation
+# · Last fail: N/A (new test — DevPlan 087)
+# · Remove if: phase count changes
 @ldd_trajectory
-def test_init_steps_count_devplan_047(caplog):
-    """INIT_STEPS should have 23 entries after DevPlan 047 extension."""
-    assert len(sm.INIT_STEPS) == 23, f"Expected 23 init steps, got {len(sm.INIT_STEPS)}"
-    assert sm.INIT_STEPS[4] == "docker_auth", f"Expected docker_auth at index 5, got {sm.INIT_STEPS[4]}"
-    assert sm.INIT_STEPS[22] == "deploy_context", f"Expected deploy_context at index 23, got {sm.INIT_STEPS[22]}"
-    logger.critical("[IMP:9][test] INIT_STEPS count=23 (DevPlan 047) — docker_auth + deploy_context present")
+def test_init_phase_count_devplan_087(caplog):
+    """BootstrapPhase.INIT_PHASE_ORDER should have 9 phases after DevPlan 087 consolidation."""
+    assert len(sm.BootstrapPhase.INIT_PHASE_ORDER) == 9, (
+        f"Expected 9 init phases, got {len(sm.BootstrapPhase.INIT_PHASE_ORDER)}"
+    )
+    assert sm.BootstrapPhase.INIT_PHASE_ORDER[0] == "system_bootstrap"
+    assert sm.BootstrapPhase.INIT_PHASE_ORDER[-1] == "converge_services"
+    logger.critical("[IMP:9][test] INIT_PHASE_ORDER count=9 (DevPlan 087) — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · UPDATE_STEPS has 9 entries (DevPlan 053: +provision_llm_keys)
-# · Scenario: Check len(UPDATE_STEPS) == 9 after DevPlan 053 extension
-# · Last fail: N/A (DevPlan 053 — UPDATE_STEPS grew by 1)
-# · Remove if: UPDATE_STEPS count changes
+# 🧪 TRAP[TEST] · Regression · UPDATE_PHASE_ORDER has 5 phases (DevPlan 087)
+# · Scenario: Check len(UPDATE_PHASE_ORDER) == 5 for 14-phase consolidation
+# · Last fail: N/A (new test — DevPlan 087)
+# · Remove if: phase count changes
 @ldd_trajectory
-def test_update_steps_count_devplan_047(caplog):
-    """UPDATE_STEPS should have 9 entries after DevPlan 053 extension."""
-    assert len(sm.UPDATE_STEPS) == 9, f"Expected 9 update steps, got {len(sm.UPDATE_STEPS)}"
-    assert sm.UPDATE_STEPS[8] == "deploy_context", f"Expected deploy_context at index 9, got {sm.UPDATE_STEPS[8]}"
-    logger.critical("[IMP:9][test] UPDATE_STEPS count=9 (DevPlan 053) — deploy_context present")
+def test_update_phase_count_devplan_087(caplog):
+    """BootstrapPhase.UPDATE_PHASE_ORDER should have 5 phases after DevPlan 087 consolidation."""
+    assert len(sm.BootstrapPhase.UPDATE_PHASE_ORDER) == 5, (
+        f"Expected 5 update phases, got {len(sm.BootstrapPhase.UPDATE_PHASE_ORDER)}"
+    )
+    assert sm.BootstrapPhase.UPDATE_PHASE_ORDER[0] == "secrets_update"
+    assert sm.BootstrapPhase.UPDATE_PHASE_ORDER[-1] == "converge_update"
+    logger.critical("[IMP:9][test] UPDATE_PHASE_ORDER count=5 (DevPlan 087) — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · --context CLI arg sets CONTEXT env var (DevPlan 047)
@@ -529,17 +528,17 @@ def test_cli_context_arg(caplog):
     logger.critical("[IMP:9][test] CLI --context parsed (DevPlan 047) — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · ssh_access step fails without root
-# · Scenario: os.geteuid() returns non-zero → _execute_init_step raises PlatformFatalError
+# 🧪 TRAP[TEST] · Regression · phase_system_bootstrap fails without root
+# · Scenario: os.geteuid() returns non-zero → precondition_check raises PhasePreconditionError
 # · Last fail: N/A (new test)
 # · Remove if: root check logic changes
 @ldd_trajectory
-def test_init_step_ssh_access_no_root(caplog, machine, monkeypatch):
-    """ssh_access step should fail if not running as root."""
+def test_phase_system_bootstrap_no_root(caplog, machine, monkeypatch):
+    """phase_system_bootstrap should fail if not running as root (via precondition check)."""
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
-    with pytest.raises(PlatformFatalError, match="must run as root"):
-        sm._execute_init_step(machine, 1, "ssh_access", "/tmp", "node", "yaml")
-    logger.critical("[IMP:9][test] ssh_access detected non-root — OK")
+    with pytest.raises(sm.PhasePreconditionError, match="requires root access"):
+        machine.state.precondition_check(sm.BootstrapPhase.SYSTEM_BOOTSTRAP)
+    logger.critical("[IMP:9][test] system_bootstrap precondition detected non-root — OK")
 
 
 # endregion
@@ -550,25 +549,30 @@ def test_init_step_ssh_access_no_root(caplog, machine, monkeypatch):
 # ═══════════════════════════════════════════════════════════════════
 
 
-# 🧪 TRAP[TEST] · Regression · complete update flow runs all steps without error
-# · Scenario: Mock subprocess, setup update mode, run _run_steps → all 7 steps complete
+# 🧪 TRAP[TEST] · Regression · complete update flow runs all phases without error
+# · Scenario: Mock subprocess, setup update mode, run _run_update_mode → all 5 phases complete
 # · Last fail: N/A (new test)
 # · Remove if: update flow execution logic changes
 @ldd_trajectory
-def test_update_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
-    """Update mode should run all steps without error (mocked subprocess)."""
+def test_update_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
+    """Update mode should run all phases without error (mocked subprocess)."""
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
-    # Set CONTEXT env var for deploy_context step (DevPlan 053 F4/F8)
     monkeypatch.setenv("CONTEXT", "test-context")
-    # Create secrets.env for ensure_secrets source
+    # phase_node_config_update requires NODE_YAML to exist and be readable
+    node_yaml_path = Path(state_file).parent / "node.yaml"
+    node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
+    # phase_secrets_update reads secrets.env
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\n")
     monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
-    # verify_core step requires node-lifecycle.sh marker to exist.
-    # Create minimal directory structure for core verification.
+    # phase_deploy_update precondition requires deploy-modules.sh and Docker running
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
     (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
+    (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
+    # All phase_*() functions also need converge.sh for φ13 converge_update
+    (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
 
     m = sm.StateMachine(state_file_path=str(state_file))
     m.core_dir = str(Path(state_file).parent)
@@ -577,14 +581,14 @@ def test_update_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, mo
     exit_code = sm._run_update_mode(m)
     assert exit_code == 0
 
-    # Verify all update steps (name-based key lookup)
-    for i, step_name in enumerate(sm.UPDATE_STEPS, 1):
-        assert step_name in m.state.steps, f"Update step {i} ({step_name}) not in state (name-based key)"
-        assert m.state.steps[step_name].status == "done", (
-            f"Update step {i} ({step_name}) status: {m.state.steps[step_name].status}"
+    # Verify all update phases (phase-based key lookup)
+    for i, phase_val in enumerate(sm.BootstrapPhase.UPDATE_PHASE_ORDER, 1):
+        assert phase_val in m.state.steps, f"Update phase {i} ({phase_val}) not in state"
+        assert m.state.steps[phase_val].status == "done", (
+            f"Update phase {i} ({phase_val}) status: {m.state.steps[phase_val].status}"
         )
 
-    logger.critical("[IMP:9][test] Update flow completed all 9 steps (name-based keys) — OK")
+    logger.critical("[IMP:9][test] Update flow completed all %d phases — OK", len(sm.BootstrapPhase.UPDATE_PHASE_ORDER))
 
 
 # endregion
@@ -601,17 +605,17 @@ def test_update_flow_all_steps(caplog, state_file, mock_subprocess, env_vars, mo
 # · Remove if: dry-run logic changes
 @ldd_trajectory
 def test_dry_run_plan_no_mutations(caplog, state_file):
-    """dry_run_plan should return plan without writing state file."""
+    """dry_run_plan should return phase-based plan without writing state file."""
     m = sm.StateMachine(state_file_path=str(state_file))
     m.setup_state(mode="init", node="test-node")
 
     plan = m.dry_run_plan()
     assert "DRY RUN" in plan
-    assert "init" in plan or "update" in plan
+    assert "9-phase" in plan or "5-phase" in plan
+    assert sm.BootstrapPhase.INIT_PHASE_ORDER[0] in plan  # system_bootstrap in plan
     assert not state_file.exists() or state_file.stat().st_size == 0 or True
-    # Check that dry-run didn't change current_step
 
-    logger.critical("[IMP:9][test] dry_run_plan returns plan without mutations — OK")
+    logger.critical("[IMP:9][test] dry_run_plan returns phase-based plan without mutations — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · dry-run prints all steps
@@ -619,16 +623,16 @@ def test_dry_run_plan_no_mutations(caplog, state_file):
 # · Last fail: N/A (new test)
 # · Remove if: dry-run plan format changes
 @ldd_trajectory
-def test_dry_run_plan_lists_all_steps(caplog, state_file):
-    """dry_run_plan should list all steps for the mode."""
+def test_dry_run_plan_lists_all_phases(caplog, state_file):
+    """dry_run_plan should list all phases for the mode."""
     m = sm.StateMachine(state_file_path=str(state_file))
     m.setup_state(mode="init", node="test")
     plan = m.dry_run_plan()
 
-    for step_name in sm.INIT_STEPS:
-        assert step_name in plan, f"Step {step_name} missing from dry-run plan"
+    for phase_val in sm.BootstrapPhase.INIT_PHASE_ORDER:
+        assert phase_val in plan, f"Phase {phase_val} missing from dry-run plan"
 
-    logger.critical("[IMP:9][test] dry_run_plan lists all init steps — OK")
+    logger.critical("[IMP:9][test] dry_run_plan lists all init phases — OK")
 
 
 # endregion
@@ -752,6 +756,7 @@ def test_report_format(caplog, machine):
 
     report = machine.report()
     data = json.loads(report)
+    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
 
     assert data["mode"] == "init"
     assert data["node"] == "test-node"
@@ -759,9 +764,9 @@ def test_report_format(caplog, machine):
     assert "errors" in data
     assert "warnings" in data
     assert len(data["warnings"]) == 2
-    assert data["steps"]["ssh_access"]["status"] == "done"
-    assert data["steps"]["tor_proxy"]["status"] == "skipped"
-    assert data["steps"]["tor_proxy"]["reason"] == "TOR_DISABLED"
+    assert data["steps"][init_phases[0]]["status"] == "done"  # system_bootstrap
+    assert data["steps"][init_phases[2]]["status"] == "skipped"  # platform_setup
+    assert data["steps"][init_phases[2]]["reason"] == "TOR_DISABLED"
 
     logger.critical("[IMP:9][test] report returns valid JSON — OK")
 
@@ -780,16 +785,16 @@ def test_report_format(caplog, machine):
 # · Remove if: TOR conditional logic changes
 @ldd_trajectory
 def test_tor_conditional_skip(caplog, machine, monkeypatch):
-    """tor_proxy step should be skipped when TOR_ENABLED=false."""
+    """Phase should be skippable with reason (phase-based key)."""
     monkeypatch.setenv("TOR_ENABLED", "false")
     machine.setup_state(mode="init", node="test")
-    machine.start_step(3)  # tor_proxy is step 3 in INIT_STEPS
+    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[2]  # platform_setup (3rd phase)
+    machine.start_step(3)
     machine.skip_step(3, reason="TOR_DISABLED")
 
-    step_name = "tor_proxy"  # Step 3 in INIT_STEPS
-    assert machine.state.steps[step_name].status == "skipped"
-    assert machine.state.steps[step_name].reason == "TOR_DISABLED"
-    logger.critical("[IMP:9][test] TOR_DISABLED skips tor_proxy — OK")
+    assert machine.state.steps[phase_name].status == "skipped"
+    assert machine.state.steps[phase_name].reason == "TOR_DISABLED"
+    logger.critical("[IMP:9][test] Phase skip with reason — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · TOR_ENABLED=true runs tor_proxy step normally
@@ -798,29 +803,25 @@ def test_tor_conditional_skip(caplog, machine, monkeypatch):
 # · Remove if: TOR conditional logic changes
 @ldd_trajectory
 def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
-    """tor_proxy step should run when TOR_ENABLED=true."""
-    # Root check: state machine requires euid=0 for ssh_access step.
-    # Tests run as non-root (macOS dev), so mock root.
+    """Init flow runs phases with TOR_ENABLED=true."""
     monkeypatch.setattr(os, "geteuid", lambda: 0)
-    # Mock os.makedirs — Linux paths (/home, /opt) don't exist on macOS.
-    # State machine tries to create /home/<user>/.ssh and /opt/projects.
     monkeypatch.setattr(os, "makedirs", lambda *args, **kwargs: None)
-    # Clear SSH key env vars — _add_ssh_key tries to write to /home/<user>/.ssh/authorized_keys
-    # which doesn't exist on macOS. Without keys, _add_ssh_key is skipped.
-    monkeypatch.setenv("PLATFORM_OWNER_KEY", "")
-    monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "")
+    # Patch via the canonical module path that phases.py imports
+    import core.internal.bootstrap.lifecycle.state_machine as _canonical_sm
+
+    monkeypatch.setattr(_canonical_sm, "_add_ssh_key", lambda *args, **kwargs: None)
     monkeypatch.setenv("TOR_ENABLED", "true")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
     monkeypatch.setenv("CONTEXT", "test-context")
-    # Create secrets.env for ensure_secrets step (DevPlan 053 F2)
     secrets_env = Path(state_file).parent / "secrets.env"
     secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
     monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
-    # verify_core step (step 8) requires node-lifecycle.sh marker to exist.
+    # phase_deploy_services precondition requires deploy-modules.sh and Docker running
     core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
     core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
     (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
-    # verify_node_configs + read_node_yaml steps require node.yaml.
+    (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
+    (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
     node_yaml_path = Path(state_file).parent / "node.yaml"
     node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
     monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
@@ -829,18 +830,17 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="init", node="test-node")
 
-    # Run only the init flow
     exit_code = sm._run_init_mode(m)
     assert exit_code == 0
 
-    # tor_proxy should have been run (not skipped) — name-based key lookup
-    step_name = "tor_proxy"
-    assert step_name in m.state.steps
-    assert m.state.steps[step_name].status == "done", (
-        f"tor_proxy should be done, got: {m.state.steps[step_name].status}"
+    # system_bootstrap phase should be done (Tor is handled inside phase)
+    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[0]  # system_bootstrap
+    assert phase_name in m.state.steps
+    assert m.state.steps[phase_name].status == "done", (
+        f"system_bootstrap should be done, got: {m.state.steps[phase_name].status}"
     )
 
-    logger.critical("[IMP:9][test] TOR_ENABLED runs tor_proxy — OK")
+    logger.critical("[IMP:9][test] Init flow with TOR_ENABLED=true — OK")
 
 
 # endregion
@@ -857,44 +857,33 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
 # · Last fail: N/A (new test — DevPlan 071 Rev 2)
 # · Remove if: name-based key logic changes
 @ldd_trajectory
-def test_name_based_keys_load(caplog, state_file):
-    """StateMachine should load state.json with name-based keys correctly."""
-    name_based_state = {
+def test_phase_keys_load(caplog, state_file):
+    """StateMachine should load state.json with phase-based keys correctly."""
+    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
+    phase_state = {}
+    for i, pv in enumerate(init_phases):
+        phase_state[pv] = {"name": pv, "status": "done" if i < 3 else "pending"}
+    phase_state_data = {
         "mode": "init",
         "node": "test-node",
-        "current_step": 1,
-        "steps": {
-            "ssh_access": {"name": "ssh_access", "status": "done", "hash": "abc"},
-            "apt_deps": {"name": "apt_deps", "status": "done"},
-            "tor_proxy": {"name": "tor_proxy", "status": "done"},
-            "install_docker": {"name": "install_docker", "status": "done"},
-            "docker_auth": {"name": "docker_auth", "status": "done"},
-            "create_platform_user": {"name": "create_platform_user", "status": "done"},
-            "create_ci_deploy_user": {"name": "create_ci_deploy_user", "status": "done"},
-            "create_projects_base": {"name": "create_projects_base", "status": "done"},
-            "firewall": {"name": "firewall", "status": "done"},
-            "verify_core": {"name": "verify_core", "status": "done"},
-            "verify_node_configs": {"name": "verify_node_configs", "status": "done"},
-            "decrypt_secrets": {"name": "decrypt_secrets", "status": "done"},
-            "ensure_secrets": {"name": "ensure_secrets", "status": "pending"},
-            "read_node_yaml": {"name": "read_node_yaml", "status": "done"},
-        },
+        "current_step": 3,
+        "steps": phase_state,
         "errors": [],
         "warnings": [],
     }
-    state_file.write_text(json.dumps(name_based_state))
+    state_file.write_text(json.dumps(phase_state_data))
 
     machine = sm.StateMachine(state_file_path=str(state_file))
 
-    # Verify name-based key lookup
-    assert machine._is_step_done(1) is True, "ssh_access (step 1) should be done"
-    assert machine._is_step_done(13) is False, "ensure_secrets (step 13) should be pending"
+    # Verify phase-based key lookup
+    assert machine._is_step_done(1) is True, f"{init_phases[0]} (phase 1) should be done"
+    assert machine._is_step_done(4) is False, f"{init_phases[3]} (phase 4) should be pending"
 
     # Verify get_current_step returns next pending
     next_step = machine.get_current_step()
-    assert next_step == 13, f"Expected next step 13 (ensure_secrets), got {next_step}"
+    assert next_step == 4, f"Expected next phase 4 ({init_phases[3]}), got {next_step}"
 
-    logger.critical("[IMP:9][test] Name-based keys loaded correctly — step 1 done, step 13 pending")
+    logger.critical("[IMP:9][test] Phase-based keys loaded correctly — phase 1 done, phase 4 pending")
 
 
 # 🧪 TRAP[TEST] · Regression · StateMachine loads shell-written state.json and resumes correctly
@@ -904,19 +893,16 @@ def test_name_based_keys_load(caplog, state_file):
 # · Remove if: resume with name-based keys logic changes
 @ldd_trajectory
 def test_shell_written_state_json(caplog, state_file):
-    """StateMachine should load shell-written name-based state.json and resume correctly."""
+    """StateMachine should load state.json with old-style keys (backward compat) and resume correctly."""
+    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
+    phase_state = {}
+    for i, pv in enumerate(init_phases):
+        phase_state[pv] = {"name": pv, "status": "done" if i < 5 else "running" if i == 5 else "pending"}
     shell_written_state = {
         "mode": "init",
         "node": "test-node",
         "current_step": 5,
-        "steps": {
-            "ssh_access": {"name": "ssh_access", "status": "done"},
-            "apt_deps": {"name": "apt_deps", "status": "done"},
-            "tor_proxy": {"name": "tor_proxy", "status": "done"},
-            "install_docker": {"name": "install_docker", "status": "done"},
-            "docker_auth": {"name": "docker_auth", "status": "done"},
-            "create_platform_user": {"name": "create_platform_user", "status": "running"},
-        },
+        "steps": phase_state,
         "errors": [],
         "warnings": [],
     }
@@ -924,17 +910,17 @@ def test_shell_written_state_json(caplog, state_file):
 
     machine = sm.StateMachine(state_file_path=str(state_file))
 
-    # Verify step 1-5 are done by index
+    # Verify phases 1-5 are done by index
     for i in range(1, 6):
-        assert machine._is_step_done(i) is True, f"Step {i} should be done"
+        assert machine._is_step_done(i) is True, f"Phase {i} should be done"
 
-    # Step 6 (create_platform_user) is running → _is_step_done should be False
+    # Phase 6 is running → _is_step_done should be False
     assert machine._is_step_done(6) is False
 
-    # get_current_step should return 6 (running step → re-run)
-    assert machine.get_current_step() == 6, f"Expected next step 6, got {machine.get_current_step()}"
+    # get_current_step should return 6 (running phase → re-run)
+    assert machine.get_current_step() == 6, f"Expected next phase 6, got {machine.get_current_step()}"
 
-    logger.critical("[IMP:9][test] Shell-written name-based state.json loads and resumes correctly")
+    logger.critical("[IMP:9][test] State.json with phase-based keys loads and resumes correctly")
 
 
 # 🧪 TRAP[TEST] · Regression · F1: ensure_secrets NOT incorrectly skipped when shell wrote read-node-yaml at key 13
@@ -944,79 +930,48 @@ def test_shell_written_state_json(caplog, state_file):
 # · Last fail: F1 (VerificationReport — critical misalignment)
 # · Remove if: numeric-key migration is no longer supported
 @ldd_trajectory
-def test_name_key_misalignment_prevented(caplog, state_file):
-    """F1 regression guard: ensure_secrets is NOT incorrectly skipped
-    when shell wrote read-node-yaml at numeric key 13.
+def test_phase_key_misalignment_prevented(caplog, state_file):
+    """Regression guard: phase-based keys prevent key misalignment.
 
-    This test reproduces the EXACT scenario from the VerificationReport
-    that would cause ensure_secrets + secrets_init to be skipped on resume.
+    With the old 23-step dispatch, numeric keys could cause F1 misalignment.
+    Phase-based keys (DevPlan 087) eliminate this by using canonical phase names
+    directly as dict keys.
     """
-    # ── SCENARIO A: Name-based keys (Rev 2) prevent F1 misalignment ──
-    # Shell (via checkpoint_migration.py) writes steps with NAME-based keys.
-    # Python reads steps with NAME-based keys. Different steps use DIFFERENT keys.
-    # This eliminates the misalignment: shell writes "read_node_yaml" at its own key,
-    # Python looks up "ensure_secrets" — different keys → no conflict.
-    # Simulate a realistic shell-written state: steps 1-12 done (shell init), step 15 done
-    # ensure_secrets (13) and secrets_init (14) are NOT in steps — the shell never writes them.
-    name_based_state = {
+    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
+    update_phases = sm.BootstrapPhase.UPDATE_PHASE_ORDER
+
+    # ── SCENARIO A: Phase-based state (new format) ──
+    phase_state = {}
+    for pv in init_phases:
+        phase_state[pv] = {"name": pv, "status": "done"}
+    phase_state[init_phases[3]] = {"name": init_phases[3], "status": "pending"}  # Phase 4 = pending
+    phase_state_data = {
         "mode": "init",
         "node": "test-node",
-        "current_step": 15,
-        "steps": {
-            "ssh_access": {"name": "ssh_access", "status": "done"},
-            "apt_deps": {"name": "apt_deps", "status": "done"},
-            "tor_proxy": {"name": "tor_proxy", "status": "done"},
-            "install_docker": {"name": "install_docker", "status": "done"},
-            "docker_auth": {"name": "docker_auth", "status": "done"},
-            "create_platform_user": {"name": "create_platform_user", "status": "done"},
-            "create_ci_deploy_user": {"name": "create_ci_deploy_user", "status": "done"},
-            "create_projects_base": {"name": "create_projects_base", "status": "done"},
-            "firewall": {"name": "firewall", "status": "done"},
-            "verify_core": {"name": "verify_core", "status": "done"},
-            "verify_node_configs": {"name": "verify_node_configs", "status": "done"},
-            "decrypt_secrets": {"name": "decrypt_secrets", "status": "done"},
-            "read_node_yaml": {"name": "read_node_yaml", "status": "done", "hash": "xyz"},
-            # ensure_secrets (13) and secrets_init (14) are NOT in steps
-            # → shell never wrote them → Python sees them as pending
-        },
+        "current_step": 3,
+        "steps": phase_state,
         "errors": [],
         "warnings": [],
     }
-    state_file.write_text(json.dumps(name_based_state))
+    state_file.write_text(json.dumps(phase_state_data))
 
     machine = sm.StateMachine(state_file_path=str(state_file))
 
-    # F1 VERIFICATION: ensure_secrets (index 13) is NOT in name-based state → pending
-    # In old system: shell wrote numeric key "13" (read_node_yaml),
-    # Python read key 13 as ensure_secrets → incorrectly skipped.
-    # In new system: shell wrote key "read_node_yaml", Python looks up
-    # key "ensure_secrets" — different keys → correct.
-    assert machine._is_step_done(13) is False, (
-        "F1 REGRESSION: ensure_secrets incorrectly skipped! Step 13 should be pending."
+    # Phase 4 should be pending
+    assert machine._is_step_done(4) is False, f"Phase 4 ({init_phases[3]}) should be pending"
+    assert machine.get_current_step() == 4, (
+        f"Expected next phase 4 ({init_phases[3]}), got {machine.get_current_step()}"
     )
-
-    # F1 VERIFICATION: secrets_init (index 14) is NOT in name-based state → pending
-    assert machine._is_step_done(14) is False, (
-        "F1 REGRESSION: secrets_init incorrectly skipped! Step 14 should be pending."
-    )
-
-    # F1 VERIFICATION: read_node_yaml (index 15) IS correctly recognized as done
-    assert machine._is_step_done(15) is True, "read_node_yaml should be done (name-based key)"
-
-    # F1 VERIFICATION: get_current_step returns 13 (ensure_secrets) — first pending
-    assert machine.get_current_step() == 13, f"Expected next step 13 (ensure_secrets), got {machine.get_current_step()}"
 
     # ── SCENARIO B: Backward-compat migration from old numeric-key format ──
     # Old numeric-key state.json where key "13" = read_node_yaml (misplaced).
-    # After from_dict migration: key "13" → step_list[12] = "ensure_secrets" (mapped by position).
-    # The migration translates by POSITION in the step list, not by stored name.
     old_state = {
         "mode": "init",
         "node": "test-node",
         "current_step": 16,
         "steps": {
             "1": {"name": "ssh_access", "status": "done"},
-            "13": {"name": "read_node_yaml", "status": "done"},  # Shell wrote here (position 13)
+            "13": {"name": "read_node_yaml", "status": "done"},
         },
         "errors": [],
         "warnings": [],
@@ -1025,15 +980,13 @@ def test_name_key_misalignment_prevented(caplog, state_file):
 
     machine2 = sm.StateMachine(state_file_path=str(state_file))
 
-    # After migration by position: key "13" → "ensure_secrets" (step 13 in INIT_STEPS)
-    # So ensure_secrets will be done (migrated from the old key 13).
-    # This is acceptable because old numeric-key state.json ALWAYS had numbers
-    # aligned with step list position. The F1 fix is that NEW writes use name keys.
+    # After migration by position: key "13" → init_phases[12] (in the old step list)
+    # Since INIT_STEPS still exists as a deprecated constant, the numeric migration still works
     assert "ensure_secrets" in machine2.state.steps, (
         "Key 13 should migrate to ensure_secrets (by position in step list)"
     )
 
-    logger.critical("[IMP:9][test] F1 regression guard: name-based keys prevent misalignment — PASS")
+    logger.critical("[IMP:9][test] Phase-based key regression guard — PASS")
 
 
 # endregion
@@ -1050,14 +1003,15 @@ def test_name_key_misalignment_prevented(caplog, state_file):
 # · Remove if: setup_state logic changes
 @ldd_trajectory
 def test_setup_state_init(caplog, machine):
-    """setup_state with init mode should create init step entries."""
+    """setup_state with init mode should create init phase entries."""
     machine.setup_state(mode="init", node="test")
-    assert len(machine.state.steps) == len(sm.INIT_STEPS)
-    for i, name in enumerate(sm.INIT_STEPS, 1):
-        assert name in machine.state.steps, f"Step {i} ({name}) not in steps (name-based key)"
-        assert machine.state.steps[name].name == name
-        assert machine.state.steps[name].status == "pending"
-    logger.critical("[IMP:9][test] setup_state init creates all steps (name-based keys) — OK")
+    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
+    assert len(machine.state.steps) == len(init_phases)
+    for i, phase_val in enumerate(init_phases, 1):
+        assert phase_val in machine.state.steps, f"Phase {i} ({phase_val}) not in steps"
+        assert machine.state.steps[phase_val].name == phase_val
+        assert machine.state.steps[phase_val].status == "pending"
+    logger.critical("[IMP:9][test] setup_state init creates all phases — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · setup_state with update mode creates update step entries
@@ -1066,14 +1020,15 @@ def test_setup_state_init(caplog, machine):
 # · Remove if: setup_state logic changes
 @ldd_trajectory
 def test_setup_state_update(caplog, machine):
-    """setup_state with update mode should create update step entries."""
+    """setup_state with update mode should create update phase entries."""
     machine.setup_state(mode="update", node="test")
-    assert len(machine.state.steps) == len(sm.UPDATE_STEPS)
-    for i, name in enumerate(sm.UPDATE_STEPS, 1):
-        assert name in machine.state.steps, f"Update step {i} ({name}) not in steps (name-based key)"
-        assert machine.state.steps[name].name == name
-        assert machine.state.steps[name].status == "pending"
-    logger.critical("[IMP:9][test] setup_state update creates all steps (name-based keys) — OK")
+    update_phases = sm.BootstrapPhase.UPDATE_PHASE_ORDER
+    assert len(machine.state.steps) == len(update_phases)
+    for i, phase_val in enumerate(update_phases, 1):
+        assert phase_val in machine.state.steps, f"Update phase {i} ({phase_val}) not in steps"
+        assert machine.state.steps[phase_val].name == phase_val
+        assert machine.state.steps[phase_val].status == "pending"
+    logger.critical("[IMP:9][test] setup_state update creates all phases — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · add_warning collects warnings in state
@@ -1123,23 +1078,23 @@ def test_stepstate_round_trip(caplog):
 def test_bootstrapstate_round_trip(caplog):
     """BootstrapState to_dict/from_dict should round-trip correctly."""
     original = sm.BootstrapState(
-        mode="update",
+        mode="init",
         node="test-node",
         current_step=3,
         steps={
-            "1": sm.StepState(name="verify_core", status="done"),
-            "2": sm.StepState(name="provision", status="running"),
+            "system_bootstrap": sm.StepState(name="system_bootstrap", status="done"),
+            "user_accounts": sm.StepState(name="user_accounts", status="running"),
         },
         errors=["error1"],
         warnings=["warn1"],
     )
     data = original.to_dict()
     restored = sm.BootstrapState.from_dict(data)
-    assert restored.mode == "update"
+    assert restored.mode == "init"
     assert restored.node == "test-node"
     assert restored.current_step == 3
     assert len(restored.steps) == 2
-    assert restored.steps["1"].status == "done"
+    assert restored.steps["system_bootstrap"].status == "done"
     assert restored.errors == ["error1"]
     assert restored.warnings == ["warn1"]
     logger.critical("[IMP:9][test] BootstrapState round-trip OK")
@@ -1177,17 +1132,17 @@ def test_build_parser(caplog):
     logger.critical("[IMP:9][test] build_parser creates valid parser — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · CLI parses --run-step correctly
-# · Scenario: Parse --run-step 5 → args.run_step == 5
+# 🧪 TRAP[TEST] · Regression · CLI parses --run-phase correctly
+# · Scenario: Parse --run-phase system_bootstrap → args.run_phase == "system_bootstrap"
 # · Last fail: N/A (new test)
-# · Remove if: --run-step arg changes
+# · Remove if: --run-phase arg changes
 @ldd_trajectory
-def test_cli_run_step(caplog):
-    """CLI should parse --run-step correctly."""
+def test_cli_run_phase(caplog):
+    """CLI should parse --run-phase correctly."""
     parser = sm.build_parser()
-    args = parser.parse_args(["--mode", "init", "--run-step", "10"])
-    assert args.run_step == 10
-    logger.critical("[IMP:9][test] CLI --run-step parsed — OK")
+    args = parser.parse_args(["--mode", "init", "--run-phase", "system_bootstrap"])
+    assert args.run_phase == "system_bootstrap"
+    logger.critical("[IMP:9][test] CLI --run-phase parsed — OK")
 
 
 # endregion

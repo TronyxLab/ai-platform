@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
 esac; done
 [[ -z "${AGE_SECRET_KEY:-}" && -n "${SOPS_AGE_KEY:-}" ]] && export AGE_SECRET_KEY="$SOPS_AGE_KEY" && echo "[IMP:8][node-lifecycle][args] AGE_SECRET_KEY from SOPS_AGE_KEY" >&2
 source "${SCRIPT_DIR}/../../lib/paths.sh"; CORE_DIR="${PATHS_CORE_DIR}"
-source "${CORE_DIR}/lib/logging.sh"; source "${CORE_DIR}/lib/secrets.sh"; source "${CORE_DIR}/lib/yaml_read.sh"
+source "${CORE_DIR}/lib/logging.sh"; source "${CORE_DIR}/lib/secrets.sh"
 STEP=0; STEP_ERRORS=(); __LOG_PREFIX="${MODE/init/bootstrap}"; __LOG_PREFIX="${__LOG_PREFIX/update/node-update}"
 step_start() { STEP=$((STEP+1)); log_step "$1" "START" "${2:-}"; }
 step_done() { log_step "$1" "DONE" "${2:-}"; }
@@ -48,7 +48,7 @@ step_warn() { log_step "$1" "WARN" "${2:-}"; STEP_ERRORS+=("Step ${STEP}: $1 —
 _delegate() { python3 "${SM_SCRIPT}" "$@"; }
 detect_tor_enabled(){
     TOR_ENABLED=false; local val
-    [[ -n "${NODE_YAML:-}" && -f "$NODE_YAML" ]] && val="$(yaml_read_key "$NODE_YAML" "tor.enabled" 2>/dev/null || echo "false")"
+    [[ -n "${NODE_YAML:-}" && -f "$NODE_YAML" ]] && val="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --get tor.enabled --default "false" 2>/dev/null || echo "false")"
     [[ "${val:-false}" == "true" ]] && TOR_ENABLED=true
 }
 main() {

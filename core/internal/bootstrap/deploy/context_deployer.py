@@ -39,6 +39,16 @@ from core.internal.shared.exceptions import (
 )
 from core.internal.shared.node_yaml import NodeYaml
 
+# DevPlan 089 T11: DeployOrchestrator delegation
+_ORCHESTRATOR_AVAILABLE = False
+try:
+    from core.internal.deploy.channels import SCPChannel
+    from core.internal.deploy.orchestrator import DeployOrchestrator
+
+    _ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 # Shared library imports
@@ -233,6 +243,98 @@ def resolve_context_projects(node_yaml: str, context: str) -> list[ProjectInfo]:
 # region DEPLOY_LOGIC
 
 
+# region FUNC_deploy_single_project_via_orchestrator
+## @purpose — Deploy a single project via DeployOrchestrator instead of internal logic.
+##            Falls back to original _deploy_single_project() if orchestrator unavailable.
+## @io — ⇥ project: ProjectInfo, projects_base: str, ghcr_fallback_build: bool → ⎋ ProjectDeployResult
+## @complexity — O(T) where T = deploy lifecycle
+## @invariants
+##   - Uses DeployOrchestrator.deploy() if available
+##   - Falls back to _deploy_single_project() if orchestrator unavailable
+##   - Same return type as _deploy_single_project for callers
+def _deploy_single_project_via_orchestrator(
+    project: ProjectInfo,
+    projects_base: str,
+    ghcr_fallback_build: bool,
+) -> ProjectDeployResult:
+    """Deploy a single project via DeployOrchestrator. Falls back to internal logic."""
+    if not _ORCHESTRATOR_AVAILABLE:
+        logger.info(
+            "[IMP:8][context_deployer] DeployOrchestrator not available — using internal deploy for %s",
+            project.name,
+        )
+        return _deploy_single_project(project, projects_base, ghcr_fallback_build)
+
+    logger.info(
+        "[IMP:9][context_deployer] Deploying %s via DeployOrchestrator",
+        project.name,
+    )
+
+    # Check if already healthy (idempotent skip)
+    if _is_project_healthy(project.name):
+        logger.info("[IMP:9][context_deployer] %s — already healthy, skipping", project.name)
+        return ProjectDeployResult(
+            name=project.name,
+            status="skipped",
+            channel="skip",
+            health="healthy",
+        )
+
+    # Bootstrap guard
+    project_dir = os.path.join(projects_base, project.name)
+    if not os.path.isfile(os.path.join(project_dir, "docker-compose.yml")):
+        if not _ensure_bootstrap_compose(project_dir, project):
+            return ProjectDeployResult(
+                name=project.name,
+                status="failed",
+                channel="none",
+                health="unhealthy",
+                error="bootstrap compose generation failed",
+            )
+
+    # Deploy via orchestrator
+    try:
+        channel = SCPChannel()
+        orchestrator = DeployOrchestrator(projects_base=projects_base)
+        result = orchestrator.deploy(
+            project_name=project.name,
+            channel=channel,
+            project_dir=project_dir,
+        )
+        if result.is_success():
+            health = result.healthcheck_status or "healthy"
+            channel_name = "orchestrator"
+            return ProjectDeployResult(
+                name=project.name,
+                status="deployed",
+                channel=channel_name,
+                health=health,
+            )
+        return ProjectDeployResult(
+            name=project.name,
+            status="failed",
+            channel="orchestrator",
+            health="unhealthy",
+            error=result.error_info or "DeployOrchestrator deploy failed",
+        )
+    except Exception as e:
+        logger.error(
+            "[IMP:10][context_deployer] DeployOrchestrator failed for %s: %s",
+            project.name,
+            e,
+        )
+        return ProjectDeployResult(
+            name=project.name,
+            status="failed",
+            channel="orchestrator",
+            health="unhealthy",
+            error=str(e),
+        )
+
+
+# endregion FUNC_deploy_single_project_via_orchestrator
+
+
 # region FUNC_deploy_context_projects
 ## @purpose — Deploy all projects from node.yaml where context matches.
 ##            Uses ghcr.io pull as primary, falls back to on-node build.
@@ -262,7 +364,11 @@ def deploy_context_projects(
 
     results: list[ProjectDeployResult] = []
     for project in projects:
-        result = _deploy_single_project(project, projects_base, ghcr_fallback_build)
+        # DevPlan 089 T11: use DeployOrchestrator when available
+        if _ORCHESTRATOR_AVAILABLE:
+            result = _deploy_single_project_via_orchestrator(project, projects_base, ghcr_fallback_build)
+        else:
+            result = _deploy_single_project(project, projects_base, ghcr_fallback_build)
         results.append(result)
         _write_audit(project, result)
 

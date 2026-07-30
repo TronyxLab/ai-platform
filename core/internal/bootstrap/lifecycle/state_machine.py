@@ -67,7 +67,7 @@ from core.internal.shared.exceptions import (
 try:
     from . import steps as _steps  # type: ignore[import]
 except ImportError:
-    import steps as _steps  # type: ignore[import]  # standalone fallback
+    pass  # type: ignore[import]  # standalone fallback
 
 logger = logging.getLogger(__name__)
 
@@ -108,83 +108,126 @@ class BootstrapPhase:
     """
 
     # ── INIT mode phases (φ1-φ8.5) ──
-    SYSTEM_BOOTSTRAP = "system_bootstrap"        # φ1: packages, docker, tor, firewall
-    USER_ACCOUNTS = "user_accounts"              # φ2: users, SSH keys, projects base
-    PLATFORM_SETUP = "platform_setup"            # φ3: docker auth, metrics cron
-    SECRETS_PROVISION = "secrets_provision"      # φ4: decrypt, ensure-passwords
-    NODE_CONFIGURATION = "node_configuration"    # φ5: node.yaml, verify core, configs
-    REGISTRY_AUTH = "registry_auth"              # φ6: ghcr auth, docker auth
-    CERTIFICATES = "certificates"                # φ7: acme.sh, ssl provision
-    DEPLOY_SERVICES = "deploy_services"          # φ8: deploy modules, deploy context
-    CONVERGE_SERVICES = "converge_services"      # φ8.5: converge
+    SYSTEM_BOOTSTRAP = "system_bootstrap"  # φ1: packages, docker, tor, firewall
+    USER_ACCOUNTS = "user_accounts"  # φ2: users, SSH keys, projects base
+    PLATFORM_SETUP = "platform_setup"  # φ3: docker auth, metrics cron
+    SECRETS_PROVISION = "secrets_provision"  # φ4: decrypt, ensure-passwords
+    NODE_CONFIGURATION = "node_configuration"  # φ5: node.yaml, verify core, configs
+    REGISTRY_AUTH = "registry_auth"  # φ6: ghcr auth, docker auth
+    CERTIFICATES = "certificates"  # φ7: acme.sh, ssl provision
+    DEPLOY_SERVICES = "deploy_services"  # φ8: deploy modules, deploy context
+    CONVERGE_SERVICES = "converge_services"  # φ8.5: converge
 
     # ── UPDATE mode phases (φ9-φ13) ──
-    SECRETS_UPDATE = "secrets_update"                     # φ9: decrypt secrets
-    NODE_CONFIG_UPDATE = "node_config_update"             # φ10: read node.yaml, verify core
-    REGISTRY_UPDATE = "registry_update"                   # φ11: ghcr auth, provision, overlays, llm, healthcheck
-    DEPLOY_UPDATE = "deploy_update"                       # φ12: deploy modules, ssl, deploy context
-    CONVERGE_UPDATE = "converge_update"                   # φ13: converge
+    SECRETS_UPDATE = "secrets_update"  # φ9: decrypt secrets
+    NODE_CONFIG_UPDATE = "node_config_update"  # φ10: read node.yaml, verify core
+    REGISTRY_UPDATE = "registry_update"  # φ11: ghcr auth, provision, overlays, llm, healthcheck
+    DEPLOY_UPDATE = "deploy_update"  # φ12: deploy modules, ssl, deploy context
+    CONVERGE_UPDATE = "converge_update"  # φ13: converge
 
     # ── Phase sets ──
-    INIT_PHASES = frozenset({
-        SYSTEM_BOOTSTRAP, USER_ACCOUNTS, PLATFORM_SETUP,
-        SECRETS_PROVISION, NODE_CONFIGURATION, REGISTRY_AUTH,
-        CERTIFICATES, DEPLOY_SERVICES, CONVERGE_SERVICES,
-    })
+    INIT_PHASES = frozenset(
+        {
+            SYSTEM_BOOTSTRAP,
+            USER_ACCOUNTS,
+            PLATFORM_SETUP,
+            SECRETS_PROVISION,
+            NODE_CONFIGURATION,
+            REGISTRY_AUTH,
+            CERTIFICATES,
+            DEPLOY_SERVICES,
+            CONVERGE_SERVICES,
+        }
+    )
 
-    UPDATE_PHASES = frozenset({
-        SECRETS_UPDATE, NODE_CONFIG_UPDATE, REGISTRY_UPDATE,
-        DEPLOY_UPDATE, CONVERGE_UPDATE,
-    })
+    UPDATE_PHASES = frozenset(
+        {
+            SECRETS_UPDATE,
+            NODE_CONFIG_UPDATE,
+            REGISTRY_UPDATE,
+            DEPLOY_UPDATE,
+            CONVERGE_UPDATE,
+        }
+    )
 
     ALL_PHASES = INIT_PHASES | UPDATE_PHASES
+
+    # ── Ordered phase lists (deterministic execution order) ──
+    INIT_PHASE_ORDER: list[str] = [
+        SYSTEM_BOOTSTRAP,
+        USER_ACCOUNTS,
+        PLATFORM_SETUP,
+        SECRETS_PROVISION,
+        NODE_CONFIGURATION,
+        REGISTRY_AUTH,
+        CERTIFICATES,
+        DEPLOY_SERVICES,
+        CONVERGE_SERVICES,
+    ]
+
+    UPDATE_PHASE_ORDER: list[str] = [
+        SECRETS_UPDATE,
+        NODE_CONFIG_UPDATE,
+        REGISTRY_UPDATE,
+        DEPLOY_UPDATE,
+        CONVERGE_UPDATE,
+    ]
 
     @classmethod
     def phase_count(cls) -> int:
         """Return total number of phases: 14."""
         return len(cls.ALL_PHASES)
 
+    @classmethod
+    def phase_list(cls, mode: str) -> list[str]:
+        """Return the ordered phase list for the given mode."""
+        if mode == "init":
+            return list(cls.INIT_PHASE_ORDER)
+        return list(cls.UPDATE_PHASE_ORDER)
+
 
 # ── Phase dependency graph (DevPlan 087 §2) ──
 # Maps each phase to its prerequisite phase(s) that must be done before it can run.
 _phase_dependency_graph: dict[str, set[str]] = {
     # INIT mode
-    BootstrapPhase.USER_ACCOUNTS:      {BootstrapPhase.SYSTEM_BOOTSTRAP},       # φ2 ← φ1
-    BootstrapPhase.PLATFORM_SETUP:     {BootstrapPhase.USER_ACCOUNTS},          # φ3 ← φ2
-    BootstrapPhase.SECRETS_PROVISION:  {BootstrapPhase.PLATFORM_SETUP},         # φ4 ← φ3
-    BootstrapPhase.NODE_CONFIGURATION: {BootstrapPhase.PLATFORM_SETUP},         # φ5 ← φ3
-    BootstrapPhase.REGISTRY_AUTH:      {BootstrapPhase.SECRETS_PROVISION},      # φ6 ← φ4
-    BootstrapPhase.CERTIFICATES:       {BootstrapPhase.NODE_CONFIGURATION},      # φ7 ← φ5
-    BootstrapPhase.DEPLOY_SERVICES:    {BootstrapPhase.SECRETS_PROVISION,
-                                        BootstrapPhase.REGISTRY_AUTH,
-                                        BootstrapPhase.CERTIFICATES},            # φ8 ← φ4, φ6, φ7
-    BootstrapPhase.CONVERGE_SERVICES:  {BootstrapPhase.DEPLOY_SERVICES},         # φ8.5 ← φ8
-
+    BootstrapPhase.USER_ACCOUNTS: {BootstrapPhase.SYSTEM_BOOTSTRAP},  # φ2 ← φ1
+    BootstrapPhase.PLATFORM_SETUP: {BootstrapPhase.USER_ACCOUNTS},  # φ3 ← φ2
+    BootstrapPhase.SECRETS_PROVISION: {BootstrapPhase.PLATFORM_SETUP},  # φ4 ← φ3
+    BootstrapPhase.NODE_CONFIGURATION: {BootstrapPhase.PLATFORM_SETUP},  # φ5 ← φ3
+    BootstrapPhase.REGISTRY_AUTH: {BootstrapPhase.SECRETS_PROVISION},  # φ6 ← φ4
+    BootstrapPhase.CERTIFICATES: {BootstrapPhase.NODE_CONFIGURATION},  # φ7 ← φ5
+    BootstrapPhase.DEPLOY_SERVICES: {
+        BootstrapPhase.SECRETS_PROVISION,
+        BootstrapPhase.REGISTRY_AUTH,
+        BootstrapPhase.CERTIFICATES,
+    },  # φ8 ← φ4, φ6, φ7
+    BootstrapPhase.CONVERGE_SERVICES: {BootstrapPhase.DEPLOY_SERVICES},  # φ8.5 ← φ8
     # UPDATE mode
-    BootstrapPhase.SECRETS_UPDATE:     set(),                                    # φ9 (no deps — entry point)
-    BootstrapPhase.NODE_CONFIG_UPDATE: set(),                                    # φ10 (no deps)
-    BootstrapPhase.REGISTRY_UPDATE:    set(),                                    # φ11 (no deps)
-    BootstrapPhase.DEPLOY_UPDATE:      {BootstrapPhase.SECRETS_UPDATE,
-                                        BootstrapPhase.REGISTRY_UPDATE},         # φ12 ← φ9, φ11
-    BootstrapPhase.CONVERGE_UPDATE:    {BootstrapPhase.DEPLOY_UPDATE},           # φ13 ← φ12
+    BootstrapPhase.SECRETS_UPDATE: set(),  # φ9 (no deps — entry point)
+    BootstrapPhase.NODE_CONFIG_UPDATE: set(),  # φ10 (no deps)
+    BootstrapPhase.REGISTRY_UPDATE: set(),  # φ11 (no deps)
+    BootstrapPhase.DEPLOY_UPDATE: {BootstrapPhase.SECRETS_UPDATE, BootstrapPhase.REGISTRY_UPDATE},  # φ12 ← φ9, φ11
+    BootstrapPhase.CONVERGE_UPDATE: {BootstrapPhase.DEPLOY_UPDATE},  # φ13 ← φ12
 }
 
 # Grouped phases (have sub_steps for granular checkpoint tracking)
-_grouped_phases: frozenset[str] = frozenset({
-    BootstrapPhase.SYSTEM_BOOTSTRAP,
-    BootstrapPhase.USER_ACCOUNTS,
-    BootstrapPhase.PLATFORM_SETUP,
-    BootstrapPhase.SECRETS_PROVISION,
-    BootstrapPhase.NODE_CONFIGURATION,
-    BootstrapPhase.CERTIFICATES,
-    BootstrapPhase.DEPLOY_UPDATE,
-})
+_grouped_phases: frozenset[str] = frozenset(
+    {
+        BootstrapPhase.SYSTEM_BOOTSTRAP,
+        BootstrapPhase.USER_ACCOUNTS,
+        BootstrapPhase.PLATFORM_SETUP,
+        BootstrapPhase.SECRETS_PROVISION,
+        BootstrapPhase.NODE_CONFIGURATION,
+        BootstrapPhase.CERTIFICATES,
+        BootstrapPhase.DEPLOY_UPDATE,
+    }
+)
 
 
 # Import shared modules (DevPlan 081B7 DRIFT elimination)
 from core.internal.shared.content_hash import compute_content_hash as _shared_compute_content_hash
-from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram
 from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login
+from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
@@ -366,7 +409,6 @@ class BootstrapState:
             warnings=data.get("warnings", []),
         )
 
-
     # region FUNC_precondition_check
     ## @purpose — Validate intra-phase conditions before execution.
     ##            Each phase has specific preconditions (root access, file existence, etc.).
@@ -380,23 +422,18 @@ class BootstrapState:
         if phase_value == BootstrapPhase.SYSTEM_BOOTSTRAP:
             if os.geteuid() != 0:
                 raise PhasePreconditionError(
-                    f"Phase {phase_value} (system-bootstrap) requires root access (euid=0), "
-                    f"got euid={os.geteuid()}"
+                    f"Phase {phase_value} (system-bootstrap) requires root access (euid=0), got euid={os.geteuid()}"
                 )
             # Verify basic system tools
             for cmd in ("apt-get", "dpkg"):
                 if not self._check_command_exists(cmd):
-                    raise PhasePreconditionError(
-                        f"Phase {phase_value} requires '{cmd}' which is not available"
-                    )
+                    raise PhasePreconditionError(f"Phase {phase_value} requires '{cmd}' which is not available")
 
         elif phase_value == BootstrapPhase.USER_ACCOUNTS:
             # Verify user management tools available
             for cmd in ("useradd", "id", "chown"):
                 if not self._check_command_exists(cmd):
-                    raise PhasePreconditionError(
-                        f"Phase {phase_value} requires '{cmd}' which is not available"
-                    )
+                    raise PhasePreconditionError(f"Phase {phase_value} requires '{cmd}' which is not available")
 
         elif phase_value == BootstrapPhase.SECRETS_PROVISION:
             # Age key must be available for decryption
@@ -422,9 +459,7 @@ class BootstrapState:
         elif phase_value == BootstrapPhase.NODE_CONFIGURATION:
             node_yaml = os.environ.get("NODE_YAML", "")
             if not node_yaml or not os.path.isfile(node_yaml):
-                raise PhasePreconditionError(
-                    f"Phase {phase_value} requires valid NODE_YAML path: {node_yaml}"
-                )
+                raise PhasePreconditionError(f"Phase {phase_value} requires valid NODE_YAML path: {node_yaml}")
 
         elif phase_value == BootstrapPhase.CERTIFICATES:
             # Verify acme.sh or install script available
@@ -432,8 +467,7 @@ class BootstrapState:
             acme_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
             if not os.path.isfile(acme_script):
                 logger.warning(
-                    "[IMP:7][precondition] Phase %s: install-acme.sh not found at %s — "
-                    "acme.sh installation may fail",
+                    "[IMP:7][precondition] Phase %s: install-acme.sh not found at %s — acme.sh installation may fail",
                     phase_value,
                     acme_script,
                 )
@@ -442,9 +476,7 @@ class BootstrapState:
             core_dir = os.environ.get("CORE_DIR", "/opt/platform/core")
             deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
             if not os.path.isfile(deploy_script):
-                raise PhasePreconditionError(
-                    f"Phase {phase_value} requires deploy-modules.sh at {deploy_script}"
-                )
+                raise PhasePreconditionError(f"Phase {phase_value} requires deploy-modules.sh at {deploy_script}")
             # Docker must be running
             docker_check = subprocess.run(
                 ["docker", "info"],
@@ -454,8 +486,7 @@ class BootstrapState:
             )
             if docker_check.returncode != 0:
                 raise PhasePreconditionError(
-                    f"Phase {phase_value} requires Docker daemon running: "
-                    f"{docker_check.stderr.strip()[:200]}"
+                    f"Phase {phase_value} requires Docker daemon running: {docker_check.stderr.strip()[:200]}"
                 )
 
         elif phase_value in (BootstrapPhase.CONVERGE_SERVICES, BootstrapPhase.CONVERGE_UPDATE):
@@ -464,8 +495,7 @@ class BootstrapState:
             converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
             if not os.path.isfile(converge_script):
                 logger.warning(
-                    "[IMP:7][precondition] Phase %s: converge.sh not found at %s — "
-                    "converge will be skipped",
+                    "[IMP:7][precondition] Phase %s: converge.sh not found at %s — converge will be skipped",
                     phase_value,
                     converge_script,
                 )
@@ -544,6 +574,12 @@ class StateMachine:
                 loaded_mode = data.get("mode", "init")
                 step_list = INIT_STEPS if loaded_mode == "init" else UPDATE_STEPS
                 self.state = BootstrapState.from_dict(data, step_list=step_list)
+                # Phase key migration: copy phase keys from root level into steps dict.
+                # This handles migrated state.json files where migrate_state_to_phases()
+                # wrote phase keys at root level but from_dict only reads data["steps"].
+                for pv in BootstrapPhase.ALL_PHASES:
+                    if pv in data and pv not in self.state.steps:
+                        self.state.steps[pv] = data[pv]
                 logger.info(
                     "[IMP:8][StateMachine][init] State loaded: mode=%s node=%s current_step=%d",
                     self.state.mode,
@@ -754,9 +790,7 @@ class StateMachine:
         deps = _phase_dependency_graph.get(phase_value, set())
         missing_deps: list[str] = []
         for dep in deps:
-            phase_state = self.state.steps.get(
-                dep, self._state_from_phase_key(dep)
-            )
+            phase_state = self.state.steps.get(dep, self._state_from_phase_key(dep))
             if isinstance(phase_state, dict):
                 phase_done = phase_state.get("done", False)
             else:
@@ -777,20 +811,20 @@ class StateMachine:
         # Step 3: Dynamic import and execute from phases.py
         try:
             from core.internal.bootstrap.lifecycle.phases import (
+                phase_certificates,
+                phase_converge_services,
+                phase_converge_update,
+                phase_deploy_services,
+                phase_deploy_update,
+                phase_node_config_update,
+                phase_node_configuration,
+                phase_platform_setup,
+                phase_registry_auth,
+                phase_registry_update,
+                phase_secrets_provision,
+                phase_secrets_update,
                 phase_system_bootstrap,
                 phase_user_accounts,
-                phase_platform_setup,
-                phase_secrets_provision,
-                phase_node_configuration,
-                phase_registry_auth,
-                phase_certificates,
-                phase_deploy_services,
-                phase_converge_services,
-                phase_secrets_update,
-                phase_node_config_update,
-                phase_registry_update,
-                phase_deploy_update,
-                phase_converge_update,
             )
         except ImportError:
             logger.error("[IMP:10][execute_phase] Cannot import phases module")
@@ -857,9 +891,7 @@ class StateMachine:
             else:
                 phase_done = getattr(phase_state, "status", "pending") == "done"
             if not phase_done:
-                raise PhaseDependencyError(
-                    f"Grouped phase '{phase_value}' requires prerequisite '{dep}'"
-                )
+                raise PhaseDependencyError(f"Grouped phase '{phase_value}' requires prerequisite '{dep}'")
 
         # Check preconditions
         self.state.precondition_check(phase_value)
@@ -991,10 +1023,13 @@ class StateMachine:
 
     # region FUNC__step_list
     def _step_list(self) -> list[str]:
-        """Return the step list for the current mode."""
-        if self.state.mode == "init":
-            return INIT_STEPS
-        return UPDATE_STEPS
+        """Return the step/phase list for the current mode.
+
+        Now returns phase-based list (BootstrapPhase.INIT_PHASE_ORDER
+        or UPDATE_PHASE_ORDER) instead of the old INIT_STEPS/UPDATE_STEPS.
+        Old step constants are preserved as deprecated.
+        """
+        return BootstrapPhase.phase_list(self.state.mode)
 
     # endregion FUNC__step_list
 
@@ -1105,30 +1140,27 @@ class StateMachine:
     # endregion FUNC__check_postcondition
 
     # region FUNC_setup_state
-    ## @purpose — Initialize state for a run: set mode, node, create step entries.
+    ## @purpose — Initialize state for a run: set mode, node, create phase entries.
     ## @io — ⇥ mode: str, node: Optional[str] → ⎋ None
-    ## @complexity — O(N) where N = number of steps
+    ## @complexity — O(N) where N = number of phases
     def setup_state(self, mode: str, node: str | None = None) -> None:
-        """Initialize state for a new run. Sets mode, node, resets step entries.
+        """Initialize state for a new run with phase-based keys.
 
-        ## ⚠️ TRAP[BUG] · 2026-07-24 · P0 · setup_state не сбрасывал current_step и статусы шагов
-        ## · Symptom: при смене mode init→update current_step оставался 23, статусы старых шагов
-        ##   сохранялись. _run_steps пытался выполнить шаги с невалидными пред-условиями.
-        ## · Fix: сброс current_step=0 + принудительный reset всех шагов в pending.
+        Sets mode, node, resets all phase entries to pending.
+        Uses BootstrapPhase phase list instead of old INIT_STEPS.
         """
         self.state.mode = mode
         self.state.node = node
         self.state.current_step = 0
-        step_list = self._step_list()
-        # Always reset all step entries to pending (not just add missing ones)
-        for i, name in enumerate(step_list, 1):
-            step_name = self._step_name(i)
-            self.state.steps[step_name] = StepState(name=name, status="pending")
+        phase_list = self._step_list()  # now returns BootstrapPhase phase list
+        # Always reset all phase entries to pending
+        for i, phase_val in enumerate(phase_list, 1):
+            self.state.steps[phase_val] = StepState(name=phase_val, status="pending")
         logger.info(
-            "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s steps=%d",
+            "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s phases=%d",
             mode,
             node,
-            len(step_list),
+            len(phase_list),
         )
         self.save()
 
@@ -1162,20 +1194,23 @@ class StateMachine:
     ## @io — ⇥ None → ⎋ str: formatted plan
     ## @complexity — O(N)
     def dry_run_plan(self) -> str:
-        """Generate a dry-run execution plan string (no mutations)."""
-        step_list = self._step_list()
+        """Generate a phase-based dry-run execution plan (no mutations)."""
+        phase_list = self._step_list()  # returns BootstrapPhase phase list
+        total = len(phase_list)
         lines: list[str] = []
-        lines.append(f"===== DRY RUN: {self.state.mode} mode =====")
+        lines.append(f"===== DRY RUN: {self.state.mode} mode ({total}-phase) =====")
         lines.append(f"NODE: {self.state.node or '<unset>'}")
-        lines.append("Steps:")
-        for i, name in enumerate(step_list, 1):
-            step_name = self._step_name(i)
-            step = self.state.steps.get(step_name)
-            if step is not None:
-                status = step.status
-                lines.append(f"  {i}. {name} [{status}]")
+        lines.append("Phases:")
+        for i, phase_val in enumerate(phase_list, 1):
+            phase_state = self.state.steps.get(phase_val)
+            if phase_state is not None:
+                if isinstance(phase_state, dict):
+                    status = "done" if phase_state.get("done") else "pending"
+                else:
+                    status = getattr(phase_state, "status", "pending")
+                lines.append(f"  {i}. {phase_val} [{status}]")
             else:
-                lines.append(f"  {i}. {name} [pending]")
+                lines.append(f"  {i}. {phase_val} [pending]")
         if self.state.mode == "init":
             lines.append("Bootstrap DRY RUN — no mutations performed, exit 0")
         else:
@@ -1194,7 +1229,7 @@ class StateMachine:
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser.
 
-    ## @purpose — CLI entry point for state_machine.py. Supports --mode, --run-step,
+    ## @purpose — CLI entry point for state_machine.py. Supports --mode, --run-phase,
     ##            --dry-run, --resume, --force, and config overrides.
     ## @io — ⇥ None → ⎋ argparse.ArgumentParser
     ## @complexity — O(1)
@@ -1231,7 +1266,6 @@ Examples:
         default="init",
         help="Run mode: init (full bootstrap) or update (incremental)",
     )
-    parser.add_argument("--run-step", type=int, help="Run a specific step by number")
     parser.add_argument(
         "--run-phase",
         type=str,
@@ -1265,9 +1299,9 @@ def main() -> int:
     """CLI entry point. Parses args, creates StateMachine, dispatches to mode.
 
     ## @purpose — Top-level orchestrator for state machine CLI.
-    ##            Handles: --dry-run, --force, --resume, --run-step, mode dispatch.
+    ##            Handles: --dry-run, --force, --resume, --run-phase, mode dispatch.
     ## @io — ⇥ sys.argv → ⎋ exit code (0 = success, 1 = error)
-    ## @complexity — O(N * M) where N = steps, M = sub-step operations per step
+    ## @complexity — O(N * M) where N = phases, M = per-phase operations
     """
     parser = build_parser()
     args = parser.parse_args()
@@ -1318,6 +1352,25 @@ def main() -> int:
     core_dir = os.environ.get("CORE_DIR", os.path.join(platform_root, "core"))
     sm.core_dir = core_dir
 
+    # ── Phase state migration (one-shot: old 23 keys → 14 phase keys) ──
+    if sm.state_file.exists():
+        try:
+            raw_state = json.loads(sm.state_file.read_text())
+            has_old_keys = bool(raw_state.get("steps"))
+            has_new_keys = any(p in raw_state for p in BootstrapPhase.ALL_PHASES)
+            if has_old_keys and not has_new_keys:
+                from core.internal.bootstrap.lifecycle.state_migration import migrate_state_to_phases  # fmt: skip
+
+                migrated = migrate_state_to_phases(raw_state)
+                sm.state_file.write_text(json.dumps(migrated, indent=2))
+                # Copy migrated phase keys into state.steps for execute_phase()
+                for pv in BootstrapPhase.ALL_PHASES:
+                    if pv in migrated:
+                        sm.state.steps[pv] = migrated[pv]
+                logger.info("[IMP:9][main] State migrated from old 23-step keys to 14-phase format")
+        except Exception as e:
+            logger.warning("[IMP:7][main] State migration skipped: %s", e)
+
     # ── --force: clear state ──
     if args.force:
         logger.info("[IMP:9][main] --force: Clearing state")
@@ -1344,10 +1397,6 @@ def main() -> int:
         sm.setup_state(mode=args.mode, node=os.environ.get("NODE_NAME"))
     elif args.resume:
         logger.info("[IMP:8][main] --resume: Continuing from step %d", sm.state.current_step)
-
-    # ── --run-step: execute single step ──
-    if args.run_step:
-        return _run_single_step(sm, args.mode, args.run_step)
 
     # ── --run-phase: execute single phase ──
     if args.run_phase:
@@ -1381,52 +1430,71 @@ def main() -> int:
 # endregion MAIN
 
 
-# region RUN_SINGLE_STEP
-def _run_single_step(sm: StateMachine, mode: str, step_n: int) -> int:
-    """Execute a single step by number.
-
-    ## @purpose — --run-step N support: validates step exists, runs it, returns exit code.
-    ## @io — ⇥ sm: StateMachine, mode: str, step_n: int → ⎋ int exit code
-    ## @complexity — O(1) for dispatch, O(M) for step execution
-    """
-    steps = INIT_STEPS if mode == "init" else UPDATE_STEPS
-
-    if step_n < 1 or step_n > len(steps):
-        logger.error("[IMP:10][run_step] Invalid step number %d. Mode %s has %d steps.", step_n, mode, len(steps))
-        return 1
-
-    step_name = steps[step_n - 1]
-    logger.info("[IMP:9][run_step] Running single step %d: %s", step_n, step_name)
-
-    try:
-        sm.start_step(step_n)
-        _execute_step(sm, step_n, step_name, mode)
-        sm.complete_step(step_n)
-        logger.info("[IMP:9][run_step] Step %d (%s) completed successfully", step_n, step_name)
-    except PlatformError as e:
-        sm.fail_step(step_n, str(e))
-        logger.critical("[IMP:10][run_step] Step %d failed (exit=%d): %s", step_n, e.exit_code, e)
-        return e.exit_code
-    except Exception as e:  # noqa: EXC — catch-all for non-PlatformError step failures
-        sm.fail_step(step_n, str(e))
-        logger.error("[IMP:10][run_step] Step %d failed: %s", step_n, e)
-        return 1
-
-    return 0
-
-
-# endregion RUN_SINGLE_STEP
-
-
 # region RUN_INIT_MODE
 def _run_init_mode(sm: StateMachine) -> int:
-    """Execute all init mode steps (full bootstrap).
+    """Execute all init mode phases (9 phases from BootstrapPhase enum).
 
-    ## @purpose — Run all 17 init steps sequentially with checkpoint-resume.
+    ## @purpose — Run 9 init phases sequentially with dependency checking.
     ## @io — ⇥ sm: StateMachine → ⎋ int exit code
-    ## @complexity — O(N * M) where N = 17 steps, M = per-step operations
+    ## @complexity — O(N * M) where N = 9 phases, M = per-phase operations
     """
-    return _run_steps(sm, INIT_STEPS, "init")
+    init_phases = BootstrapPhase.INIT_PHASE_ORDER
+    total = len(init_phases)
+    for i, phase in enumerate(init_phases, 1):
+        logger.info("[IMP:9][run_init] Phase %d/%d: %s", i, total, phase)
+
+        # ── Check if already done ──
+        phase_state = sm.state.steps.get(phase)
+        if phase_state is not None:
+            if isinstance(phase_state, dict):
+                if phase_state.get("done", False):
+                    logger.info("[IMP:7][run_init] Phase %s already done — skipping", phase)
+                    continue
+            elif phase_state.status == "done":
+                logger.info("[IMP:7][run_init] Phase %s already done — skipping", phase)
+                continue
+
+        try:
+            sm.execute_phase(phase)
+            # Mark phase as done in state
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["done"] = True
+                entry["status"] = "done"
+            else:
+                sm.state.steps[phase] = StepState(name=phase, status="done")
+            sm.save()
+            logger.info("[IMP:9][run_init] Phase %s completed successfully", phase)
+        except PhaseDependencyError as e:
+            logger.error("[IMP:10][run_init] Dependency error in phase %s: %s", phase, e)
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["status"] = "failed"
+            elif entry is not None:
+                entry.status = "failed"
+            sm.save()
+            return e.exit_code if hasattr(e, "exit_code") else 1
+        except PhasePreconditionError as e:
+            logger.error("[IMP:10][run_init] Precondition failed for phase %s: %s", phase, e)
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["status"] = "failed"
+            elif entry is not None:
+                entry.status = "failed"
+            sm.save()
+            return 1
+        except PlatformFatalError as e:
+            logger.critical("[IMP:10][run_init] Fatal error in phase %s: %s", phase, e)
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["status"] = "failed"
+            elif entry is not None:
+                entry.status = "failed"
+            sm.save()
+            return e.exit_code
+
+    logger.info("[IMP:10][run_init] All %d init phases completed successfully", total)
+    return 0
 
 
 # endregion RUN_INIT_MODE
@@ -1434,381 +1502,85 @@ def _run_init_mode(sm: StateMachine) -> int:
 
 # region RUN_UPDATE_MODE
 def _run_update_mode(sm: StateMachine) -> int:
-    """Execute all update mode steps (incremental node update).
+    """Execute all update mode phases (5 phases from BootstrapPhase enum).
 
-    ## @purpose — Run all 6 update steps sequentially with checkpoint-resume.
+    ## @purpose — Run 5 update phases sequentially with dependency checking.
     ## @io — ⇥ sm: StateMachine → ⎋ int exit code
-    ## @complexity — O(N * M) where N = 6 steps, M = per-step operations
+    ## @complexity — O(N * M) where N = 5 phases, M = per-phase operations
     """
-    return _run_steps(sm, UPDATE_STEPS, "update")
+    update_phases = BootstrapPhase.UPDATE_PHASE_ORDER
+    total = len(update_phases)
+    for i, phase in enumerate(update_phases, 1):
+        logger.info("[IMP:9][run_update] Phase %d/%d: %s", i, total, phase)
+
+        # ── Check if already done ──
+        phase_state = sm.state.steps.get(phase)
+        if phase_state is not None:
+            if isinstance(phase_state, dict):
+                if phase_state.get("done", False):
+                    logger.info("[IMP:7][run_update] Phase %s already done — skipping", phase)
+                    continue
+            elif phase_state.status == "done":
+                logger.info("[IMP:7][run_update] Phase %s already done — skipping", phase)
+                continue
+
+        try:
+            sm.execute_phase(phase)
+            # Mark phase as done in state
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["done"] = True
+                entry["status"] = "done"
+            else:
+                sm.state.steps[phase] = StepState(name=phase, status="done")
+            sm.save()
+            logger.info("[IMP:9][run_update] Phase %s completed successfully", phase)
+        except PhaseDependencyError as e:
+            logger.error("[IMP:10][run_update] Dependency error in phase %s: %s", phase, e)
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["status"] = "failed"
+            elif entry is not None:
+                entry.status = "failed"
+            sm.save()
+            return e.exit_code if hasattr(e, "exit_code") else 1
+        except PhasePreconditionError as e:
+            logger.error("[IMP:10][run_update] Precondition failed for phase %s: %s", phase, e)
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["status"] = "failed"
+            elif entry is not None:
+                entry.status = "failed"
+            sm.save()
+            return 1
+        except PlatformFatalError as e:
+            logger.critical("[IMP:10][run_update] Fatal error in phase %s: %s", phase, e)
+            entry = sm.state.steps.get(phase)
+            if isinstance(entry, dict):
+                entry["status"] = "failed"
+            elif entry is not None:
+                entry.status = "failed"
+            sm.save()
+            return e.exit_code
+
+    logger.info("[IMP:10][run_update] All %d update phases completed successfully", total)
+    return 0
 
 
 # endregion RUN_UPDATE_MODE
 
 
-# region RUN_STEPS
-def _run_steps(sm: StateMachine, step_list: list[str], mode: str) -> int:
-    """Core step runner: iterate steps from current checkpoint to end.
-
-    ## @purpose — Shared loop for both init and update modes.
-    ##            Checks content hash for idempotency; skips done steps;
-    ##            handles TOR conditional; collects errors/warnings.
-    ## @io — ⇥ sm: StateMachine, step_list: list[str], mode: str → ⎋ int exit code
-    ## @complexity — O(N * M) where N = steps, M = per-step operations
-    """
-    tor_enabled = os.environ.get("TOR_ENABLED", "false").lower() == "true"
-    exit_code = 0
-
-    for i, step_name in enumerate(step_list, 1):
-        # ── Skip scheduling ──
-        if sm._is_step_done(i):
-            logger.info("[IMP:7][run_steps] Step %d (%s) already done — skipping", i, step_name)
-            continue
-
-        # ── TOR conditional ──
-        if step_name == "tor_proxy" and not tor_enabled:
-            sm.skip_step(i, "TOR_DISABLED")
-            logger.info("[IMP:8][run_steps] Step %d (%s): TOR_DISABLED — skipping", i, step_name)
-            continue
-
-        # ── Compute hash and check idempotency ──
-        hash_val = _compute_step_hash(sm, step_name, mode)
-
-        # ── Pre-condition check (W5-E6 C3) ──
-        try:
-            sm._check_precondition(sm.state, i, step_name)
-        except StateTransitionError as e:
-            logger.error("[IMP:10][run_steps] Pre-condition FAILED for step %d (%s): %s", i, step_name, e)
-            sm.fail_step(i, str(e))
-            exit_code = 1
-            break
-
-        # ── Execute step with retry loop (W5-E6 C2) ──
-        try:
-            sm.start_step(i)
-            last_exception: Exception | None = None
-            for attempt in range(1, MAX_RETRIES + 1):
-                try:
-                    _execute_step(sm, i, step_name, mode)
-                    last_exception = None
-                    break
-                except Exception as e:  # noqa: EXC — retry loop: catches all to decide retry vs re-raise
-                    if _should_retry(e, attempt):
-                        last_exception = e
-                        continue
-                    raise  # Non-transient or out of retries
-            if last_exception:
-                raise last_exception  # type: ignore[misc]
-            sm.complete_step(i, hash_val=hash_val)
-            # ── Post-condition check (W5-E6 C3) ──
-            try:
-                sm._check_postcondition(sm.state, i, step_name)
-            except StateTransitionError as e:
-                logger.error("[IMP:10][run_steps] Post-condition FAILED for step %d (%s): %s", i, step_name, e)
-                raise
-            logger.info("[IMP:9][run_steps] Step %d (%s) completed successfully", i, step_name)
-        except PlatformError as e:
-            sm.fail_step(i, str(e))
-            exit_code = e.exit_code
-            logger.error("[IMP:10][run_steps] Step %d (%s) FAILED (exit=%d): %s", i, step_name, e.exit_code, e)
-            # Critical steps abort; non-critical continue (listed below)
-            if step_name in ("ssh_access", "verify_core", "verify_node_configs", "read_node_yaml"):
-                logger.error("[IMP:10][run_steps] Critical step %d failed — aborting %s mode", i, mode)
-                break
-        except Exception as e:  # noqa: EXC — catch-all for non-PlatformError step failures
-            sm.fail_step(i, str(e))
-            exit_code = 1
-            logger.error("[IMP:10][run_steps] Step %d (%s) FAILED: %s", i, step_name, e)
-            # Critical steps abort; non-critical continue (listed below)
-            if step_name in ("ssh_access", "verify_core", "verify_node_configs", "read_node_yaml"):
-                logger.error("[IMP:10][run_steps] Critical step %d failed — aborting %s mode", i, mode)
-                break
-
-    return exit_code
-
-
+# region RUN_STEPS (DEPRECATED)
+## @deprecated — Replaced by phase-based _run_init_mode()/_run_update_mode()
+##               which call execute_phase() directly. Old step-based dispatch
+##               (30 elif branches) is removed. All execution goes through
+##               phase functions in phases.py.
 # endregion RUN_STEPS
 
 
-# region EXECUTE_STEP
-def _execute_step(sm: StateMachine, step_n: int, step_name: str, mode: str) -> None:
-    """Dispatch execution of a single step to its implementation.
-
-    ## @purpose — Map step name to implementation function (from steps.py or inlined).
-    ## @io — ⇥ sm, step_n, step_name, mode → ⎋ None (side-effect: executes step logic)
-    ## @complexity — O(M) per step (varies by step)
-    """
-    core_dir = sm.core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
-    node_name = os.environ.get("NODE_NAME", "")
-    node_yaml = os.environ.get("NODE_YAML", "")
-
-    if mode == "init":
-        _execute_init_step(sm, step_n, step_name, core_dir, node_name, node_yaml)
-    else:
-        _execute_update_step(sm, step_n, step_name, core_dir, node_name, node_yaml)
-
-
-# endregion EXECUTE_STEP
-
-
-# region EXECUTE_INIT_STEP
-def _execute_init_step(
-    sm: StateMachine,
-    step_n: int,
-    step_name: str,
-    core_dir: str,
-    node_name: str,
-    node_yaml: str,
-) -> None:
-    """Execute a single init-mode step by dispatching to steps.py or inlined logic.
-
-    ## @purpose — Dispatch 17 init steps to their implementations.
-    ## @io — ⇥ step context → ⎋ None (side-effect: subprocess calls, file ops)
-    ## @complexity — O(M) per step
-    """
-    if step_name == "ssh_access":
-        # Verify running as root
-        if os.geteuid() != 0:
-            raise PlatformFatalError("node-lifecycle must run as root (euid=0)")
-        logger.info("[IMP:9][init][ssh_access] Running as root — OK")
-
-    elif step_name == "apt_deps":
-        # Install apt dependencies
-        tor_enabled = os.environ.get("TOR_ENABLED", "false").lower() == "true"
-        packages = ["make", "curl", "ufw", "python3-yaml", "python3-jsonschema"]
-        if tor_enabled:
-            packages.extend(["tor", "privoxy", "obfs4proxy"])
-        _install_apt_packages(packages)
-        # Install sops if missing
-        _ensure_sops()
-
-    elif step_name == "tor_proxy":
-        # Install Tor + Privoxy proxy
-        bridges_file = os.environ.get("TOR_BRIDGES_FILE", "")
-        skip_verify = os.environ.get("SKIP_TOR_VERIFY", "false").lower() == "true"
-        tor_script = os.path.join(core_dir, "internal", "bootstrap", "install-tor-proxy.sh")
-        if os.path.exists(tor_script):
-            cmd = ["bash", tor_script]
-            if bridges_file:
-                cmd.extend(["--tor-bridges-file", bridges_file])
-            if skip_verify:
-                cmd.append("--skip-tor-verify")
-            _subprocess_run(cmd, "tor_proxy")
-
-    elif step_name == "install_docker":
-        install_script = os.path.join(core_dir, "internal", "bootstrap", "install-docker.sh")
-        _subprocess_run(["bash", install_script], "install_docker")
-
-    elif step_name == "docker_auth":
-        # DevPlan 047: Docker Hub auth + registry-mirror (step index 5)
-        bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
-        auth_script = os.path.join(bootstrap_dir, "docker_registry_auth.py")
-        username = os.environ.get("DOCKER_HUB_USERNAME", "")
-        token = os.environ.get("DOCKER_HUB_TOKEN", "")
-        if not username or not token:
-            logger.warning("[IMP:7][init][docker_auth] Docker Hub creds not set — rate-limit may apply")
-        elif os.path.isfile(auth_script):
-            _subprocess_run(
-                ["python3", auth_script],
-                "docker_auth",
-                non_fatal=True,
-            )
-        else:
-            logger.warning("[IMP:7][init][docker_auth] docker_registry_auth.py not found — skipping")
-
-    elif step_name == "create_platform_user":
-        _create_user("platform", ["docker"])
-        owner_key = os.environ.get("PLATFORM_OWNER_KEY", "")
-        if owner_key:
-            _add_ssh_key("platform", owner_key)
-
-    elif step_name == "create_ci_deploy_user":
-        _create_user("ci-deploy", ["docker"])
-        ci_deploy_key = os.environ.get("PLATFORM_CI_DEPLOY_KEY", "")
-        if ci_deploy_key:
-            forced_command = f'command="{core_dir}/internal/deploy/deploy-project.sh {node_name}",restrict'
-            _add_ssh_key("ci-deploy", ci_deploy_key, forced_command_prefix=forced_command)
-
-    elif step_name == "create_projects_base":
-        _ensure_projects_base(core_dir, node_name)
-
-    elif step_name == "firewall":
-        firewall_script = os.path.join(core_dir, "internal", "bootstrap", "firewall.sh")
-        _subprocess_run(["bash", firewall_script], "firewall")
-
-    elif step_name == "verify_core":
-        _verify_core_files(core_dir)
-
-    elif step_name == "verify_node_configs":
-        if not node_yaml or not os.path.isfile(node_yaml):
-            raise ConfigNotFoundError(f"node.yaml not found: {node_yaml}")
-        logger.info("[IMP:9][init][verify_node_configs] node.yaml present: %s", node_yaml)
-
-    elif step_name == "decrypt_secrets":
-        _decrypt_secrets(core_dir)
-
-    elif step_name == "ensure_secrets":
-        # F2: Now generates missing autogen secrets via secrets_manager
-        _ensure_secrets_exist(core_dir)
-
-    elif step_name == "secrets_init":
-        logger.info("[IMP:9][init][secrets_init] Service passwords already initialized via secrets_manager — secrets-init.sh removed")
-
-    elif step_name == "read_node_yaml":
-        _validate_node_yaml(node_yaml, core_dir)
-
-    elif step_name == "ghcr_auth":
-        _ghcr_auth()
-
-    elif step_name == "sudoers":
-        setup_script = os.path.join(core_dir, "internal", "bootstrap", "setup-node.sh")
-        _subprocess_run(["bash", setup_script], "sudoers")
-        _validate_sudoers()
-
-    elif step_name == "install_acme":
-        # _install_acme moved to phases.py per DevPlan 087 (removed from steps.py)
-        try:
-            from core.internal.bootstrap.lifecycle.phases import _install_acme as _phases_install_acme
-            _phases_install_acme(core_dir)
-        except ImportError:
-            logger.warning("[IMP:7][init][install_acme] Cannot import _install_acme from phases — falling back to subprocess")
-            install_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
-            if os.path.isfile(install_script):
-                _subprocess_run(["bash", install_script], "install_acme", non_fatal=True)
-
-    elif step_name == "node_update":
-        # Delegate to update mode (self-invocation)
-        # F1: timeout=600s because node_update wraps entire update pipeline:
-        # deploy 14 modules ~300s + provision + ssl + healthcheck + converge
-        lifecycle_script = os.path.join(core_dir, "internal", "bootstrap", "node-lifecycle.sh")
-        if os.path.exists(lifecycle_script):
-            _subprocess_run(["bash", lifecycle_script, "--mode", "update"], "node_update", non_fatal=True, timeout=600)
-        else:
-            logger.warning("[IMP:7][init][node_update] node-lifecycle.sh not found — skipping post-init update")
-
-    elif step_name == "converge":
-        converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
-        if os.path.exists(converge_script):
-            converge_args = ["bash", converge_script, "--node", node_name]
-            if os.environ.get("AUTO_RECONCILE", "false").lower() == "true":
-                converge_args.append("--reconcile")
-            if os.environ.get("DRY_RUN_MODE", "false").lower() == "true":
-                converge_args.append("--dry-run")
-            _subprocess_run(converge_args, "converge", non_fatal=True)
-
-    elif step_name == "audit_log":
-        _write_audit_log(sm)
-
-    elif step_name == "telegram":
-        _send_telegram(sm)
-
-    elif step_name == "deploy_context":
-        # DevPlan 047: deploy_context step (init index 23, update index 8)
-        # DevPlan 079: direct importlib call to context_deployer.deploy_context()
-        _import_deploy_context(core_dir, node_name, node_yaml)
-
-
-# endregion EXECUTE_INIT_STEP
-
-
-# region EXECUTE_UPDATE_STEP
-def _execute_update_step(
-    sm: StateMachine,
-    step_n: int,
-    step_name: str,
-    core_dir: str,
-    node_name: str,
-    node_yaml: str,
-) -> None:
-    """Execute a single update-mode step.
-
-    ## @purpose — Dispatch 6 update steps to their implementations.
-    ## @io — ⇥ step context → ⎋ None (side-effect: subprocess calls, file ops)
-    ## @complexity — O(M) per step
-    """
-    if step_name == "verify_core":
-        _verify_core_files(core_dir)
-
-    elif step_name == "provision":
-        provision_script = os.path.join(core_dir, "internal", "provision-environment.sh")
-        _subprocess_run(
-            ["bash", provision_script, "--scope", "networks", "--scope", "volumes"],
-            "provision",
-        )
-
-    elif step_name == "deliver_overlays":
-        overlay_dir = f"/opt/node-configs/{node_name}/overlays/nginx"
-        if os.path.isdir(overlay_dir):
-            conf_files = list(Path(overlay_dir).glob("*.conf"))
-            if conf_files:
-                logger.info("[IMP:8][update][deliver_overlays] Found %d overlay(s) in %s", len(conf_files), overlay_dir)
-                # Reload nginx if running
-                _subprocess_run(
-                    ["docker", "exec", "nginx", "nginx", "-s", "reload"],
-                    "deliver_overlays",
-                    non_fatal=True,
-                    check_required=False,
-                )
-            else:
-                logger.info("[IMP:7][update][deliver_overlays] No .conf files in %s — skipping", overlay_dir)
-        else:
-            logger.info("[IMP:7][update][deliver_overlays] No overlay directory at %s — skipping", overlay_dir)
-
-    elif step_name == "ssl_provision":
-        _ssl_provision_via_orchestrator(core_dir, node_yaml)
-
-    elif step_name == "deploy_modules":
-        deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
-        _subprocess_run(["bash", deploy_script, "--skip-provision"], "deploy_modules", timeout=300)
-
-    elif step_name == "provision_llm_keys":
-        # DevPlan 049 Phase 7: render litellm-config.yml from policy.yaml, then provision virtual keys
-        llm_dir = os.path.join(core_dir, "internal", "llm")
-        renderer_script = os.path.join(llm_dir, "config_renderer.py")
-        config_output = os.path.join(core_dir, "modules", "litellm", "config", "litellm-config.yml")
-        if os.path.isfile(renderer_script):
-            _subprocess_run(
-                ["python3", renderer_script, "--output", config_output],
-                "render_litellm_config",
-                non_fatal=True,
-            )
-        provision_entrypoint = os.path.join(core_dir, "entrypoints", "provision-llm.sh")
-        if os.path.isfile(provision_entrypoint):
-            _subprocess_run(
-                ["bash", provision_entrypoint],
-                "provision_llm_keys",
-                non_fatal=True,
-            )
-
-    elif step_name == "healthcheck":
-        # T5.3: Skip standalone healthcheck if already done during parallel deploy
-        hc_done_marker = "/var/lib/platform/.bootstrap/.hc_done_in_deploy"
-        if os.path.isfile(hc_done_marker):
-            logger.info(
-                "[IMP:9][update][healthcheck] Healthcheck already done during deploy "
-                "(DEPLOY_PARALLEL) — skipping standalone healthcheck step"
-            )
-            import contextlib
-
-            with contextlib.suppress(OSError):
-                os.unlink(hc_done_marker)
-            return
-        _run_healthchecks(node_yaml)
-
-    elif step_name == "converge":
-        converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
-        if os.path.exists(converge_script):
-            converge_args = ["bash", converge_script, "--node", node_name]
-            if os.environ.get("AUTO_RECONCILE", "false").lower() == "true":
-                converge_args.append("--reconcile")
-            _subprocess_run(converge_args, "converge", non_fatal=True)
-
-    elif step_name == "deploy_context":
-        # DevPlan 047: incremental project deploy + cert check (update step 8)
-        # DevPlan 079: direct importlib call to context_deployer.deploy_context()
-        _import_deploy_context(core_dir, node_name, node_yaml)
-
-
+# region EXECUTE_UPDATE_STEP (DEPRECATED — removed, now in phases.py)
+## @deprecated — Old 9-step update dispatch removed (DevPlan 087).
+##               All update execution goes through phase functions in phases.py.
 # endregion EXECUTE_UPDATE_STEP
 
 

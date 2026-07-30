@@ -19,9 +19,8 @@ bootstrap:
     → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py
     + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh
     + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh
-    + core/internal/bootstrap/install-acme.sh
-    + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py
-    + core/internal/bootstrap/deploy/context_deployer.py
+    + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/deploy-modules.sh
+    + core/internal/bootstrap/cert_orchestrator.py + core/internal/bootstrap/deploy/context_deployer.py
   signature: make bootstrap-node NODE=<name>
   operation_ru: Идемпотентный bootstrap ноды
   description: Idempotent bootstrap of a new node to FULL readiness (infra + context
@@ -38,19 +37,18 @@ deploy:
 - make_target: deploy
   mechanism: git-push
   delegates_to: git push → CI → core/entrypoints/deploy.sh (VPS forced-command) →
-    core/internal/deploy/deploy-project.sh → core/internal/notify/notify-hook.sh +
-    core/internal/catalog/generate-catalog.sh
+    core/internal/deploy/orchestrator_cli.py receive → core/internal/notify/notify-hook.sh
+    + core/internal/catalog/generate-catalog.sh
   signature: make deploy PROJECT=<dir>
   operation_ru: Деплой проекта
   description: Deploy a project via git push → CI → SSH forced-command on VPS
 - make_target: deploy-project
   mechanism: ssh+tar
-  delegates_to: core/entrypoints/deploy-project.sh → ssh platform-deliver + ssh deploy.sh
-    → core/internal/deploy/deploy-project.sh
+  delegates_to: core/internal/deploy/orchestrator_cli.py deploy-many (SCPChannel)
   signature: make deploy-project PROJECT=<dir> NODE=<node>
-  operation_ru: Прямой деплой минуя CI
-  description: Direct project deploy bypassing CI (emergency fallback) — tar+ssh deliver,
-    deploy with DEPLOY-DIRECT audit, optional post-deploy verify
+  operation_ru: Прямой деплой минуя CI (DeployOrchestrator)
+  description: Direct project deploy via DeployOrchestrator (SCPChannel) — bypassing
+    CI for emergency fallback
 - make_target: context-promote
   mechanism: git-push-context
   delegates_to: core/entrypoints/context-promote.sh → copy to <context>/ai-platform
@@ -471,7 +469,7 @@ lib:
   operation_ru: Audit logging library
   type: sourced
   consumers:
-  - core/internal/deploy/deploy-project.sh
+  - core/internal/deploy/orchestrator_cli.py
   - core/entrypoints/context-promote.sh
   - core/internal/scaffold/remove-project.sh
   - core/internal/provision-environment.sh
@@ -972,6 +970,9 @@ gates:
 - id: test_no_hardcoded_local_paths
   test_file: test_gate_no_hardcoded_local_paths.py
   description: 'Auto-discovered gate: test_no_hardcoded_local_paths'
+- id: test_no_inline_secrets_parsing_outside_shared
+  test_file: test_gate_no_inline_secrets_parsing.py
+  description: 'Auto-discovered gate: test_no_inline_secrets_parsing_outside_shared'
 - id: test_no_simulator_classes_in_test_suite
   test_file: test_gate_no_simulators.py
   description: 'Auto-discovered gate: test_no_simulator_classes_in_test_suite'
@@ -987,6 +988,12 @@ gates:
 - id: test_no_ssl_provision_exception
   test_file: test_gate_no_unregistered_entrypoint.py
   description: 'Auto-discovered gate: test_no_ssl_provision_exception'
+- id: test_no_yq_operations_on_node
+  test_file: test_gate_no_yq_dependency.py
+  description: 'Auto-discovered gate: test_no_yq_operations_on_node'
+- id: test_no_yaml_safe_load_node
+  test_file: test_gate_node_yaml_single_source.py
+  description: 'Auto-discovered gate: test_no_yaml_safe_load_node'
 - id: test_hermes_compose_has_no_fallback
   test_file: test_gate_password_charset.py
   description: 'Auto-discovered gate: test_hermes_compose_has_no_fallback'
@@ -1083,6 +1090,9 @@ gates:
 - id: removed_keys_in_secret_definitions
   test_file: test_gate_secrets_llm_cleanup.py
   description: 'Auto-discovered gate: removed_keys_in_secret_definitions'
+- id: test_all_consumers_import_secrets_env_parser
+  test_file: test_gate_secrets_parser_import.py
+  description: 'Auto-discovered gate: test_all_consumers_import_secrets_env_parser'
 - id: test_clickhouse_access_management_not_1
   test_file: test_gate_security_config.py
   description: 'Auto-discovered gate: test_clickhouse_access_management_not_1'
@@ -1284,6 +1294,15 @@ gates:
 - id: test_referenced_container_names_have_alias
   test_file: test_p20_container_coupling.py
   description: 'Auto-discovered gate: test_referenced_container_names_have_alias'
+- id: layer1_docker_compose_through_orchestrator
+  test_file: test_gate_single_orchestrator.py
+  description: 'Layer 1: Python — fail if docker compose called via subprocess outside allowed modules'
+- id: layer2_scp_rsync_through_channels
+  test_file: test_gate_single_orchestrator.py
+  description: 'Layer 2: Shell — fail if scp/rsync used outside channels.py or bootstrap'
+- id: layer3_ssh_forced_command_through_orchestrator
+  test_file: test_gate_single_orchestrator.py
+  description: 'Layer 3: Shell — fail if ssh forced-command outside permitted channels'
 non_repairable_gates:
 - gate_id: test_single_gitleaks_version
   repairable: false
@@ -1370,32 +1389,37 @@ allowed_verbs:
 - validate
 - validate-modules
 - verify
-
-# NEW: Shared modules (DevPlan 086)
+scripts:
+- script: orchestrator_cli.py
+  path: core/internal/deploy/orchestrator_cli.py
+  signature: python3 -m core.internal.deploy.orchestrator_cli receive/deploy-many
+  operation_ru: CLI entrypoint для DeployOrchestrator
+  type: python
+  description: Unified deploy CLI — replaces deploy-project.sh
 shared_modules:
-  - module: secrets_env_parser
-    path: core/internal/shared/secrets_env_parser.py
-    consumers:
-      - secrets_manager.py
-      - secrets_validator.py
-      - compose_preflight.py
-      - agent_watchdog.py
-      - cert_orchestrator.py
-      - node-lifecycle.sh
-      - decrypt-secrets.sh (facade)
-  - module: telegram_notifier
-    path: core/internal/shared/telegram_notifier.py
-    consumers:
-      - agent_watchdog.py
-      - state_machine.py
-      - steps.py
-      - notify-hook.sh
-      - disk-monitor.sh
-      - tor-proxy-healthcheck.sh
-  - module: docker_auth
-    path: core/internal/shared/docker_auth.py
-    consumers:
-      - lib/docker.sh
-      - docker_registry_auth.py
-      - state_machine.py
-      - steps.py
+- module: secrets_env_parser
+  path: core/internal/shared/secrets_env_parser.py
+  consumers:
+  - secrets_manager.py
+  - secrets_validator.py
+  - compose_preflight.py
+  - agent_watchdog.py
+  - cert_orchestrator.py
+  - node-lifecycle.sh
+  - decrypt-secrets.sh (facade)
+- module: telegram_notifier
+  path: core/internal/shared/telegram_notifier.py
+  consumers:
+  - agent_watchdog.py
+  - state_machine.py
+  - steps.py
+  - notify-hook.sh
+  - disk-monitor.sh
+  - tor-proxy-healthcheck.sh
+- module: docker_auth
+  path: core/internal/shared/docker_auth.py
+  consumers:
+  - lib/docker.sh
+  - docker_registry_auth.py
+  - state_machine.py
+  - steps.py

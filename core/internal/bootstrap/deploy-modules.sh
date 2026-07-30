@@ -9,6 +9,9 @@
 ## @rationale W4-E1 extraction. Each Python module has unit tests in tests/unit/.
 ## @changes   2026-07-24 · W5.T5.2 — added IMP:7 log for sequential path (DEPLOY_PARALLEL=false)
 ##             W5.T5.3 — added HC_DONE_MARKER flag file after parallel deploy groups
+##            2026-07-30 · DevPlan 089 T14 — added DeployOrchestrator CLI support.
+##             When DEPLOY_ORCHESTRATOR=true, uses orchestrator_cli.py deploy-many
+##             instead of docker_orchestrator.py for group-based deploy.
 ## @invariants HC_DONE_MARKER at /var/lib/platform/.bootstrap/.hc_done_in_deploy signals
 ##             to state_machine.py that healthcheck was already done during parallel deploy.
 ##             Sequential path (DEPLOY_PARALLEL != true) does NOT set this marker.
@@ -115,6 +118,30 @@ if [ "${DEPLOY_PARALLEL:-false}" = "true" ]; then
 
     # Extract system module names from TOPO_MODULES enriched output
     SYSTEM_NAMES="$(echo "$TOPO_MODULES" | python3 "${SCRIPT_DIR}/json_field_extractor.py" --filter install_type=system)"
+
+    # ── DevPlan 089 T14: DeployOrchestrator CLI (when DEPLOY_ORCHESTRATOR=true) ──
+    if [ "${DEPLOY_ORCHESTRATOR:-false}" = "true" ] && [ -n "$TOPO_MODULES" ]; then
+        echo "[IMP:9][deploy-modules][orchestrator] Using DeployOrchestrator CLI for deploy-many" >&2
+        # Build comma-separated module names
+        MOD_NAMES=""
+        while IFS= read -r mod_name; do
+            [ -z "$mod_name" ] && continue
+            [ -n "$MOD_NAMES" ] && MOD_NAMES="${MOD_NAMES},"
+            MOD_NAMES="${MOD_NAMES}${mod_name}"
+        done < <(echo "$TOPO_MODULES" | python3 "${SCRIPT_DIR}/json_field_extractor.py" --items 2>/dev/null)
+
+        if [ -n "$MOD_NAMES" ]; then
+            python3 -m core.internal.deploy.orchestrator_cli deploy-many \
+                --projects "$MOD_NAMES" \
+                --scp || {
+                echo "[IMP:5][deploy-modules][orchestrator] WARNING: Orchestrator deploy-many had failures" >&2
+            }
+            # Skip the rest of the parallel deploy section
+            HC_DONE_MARKER="/var/lib/platform/.bootstrap/.hc_done_in_deploy"
+            mkdir -p "$(dirname "$HC_DONE_MARKER")"
+            touch "$HC_DONE_MARKER"
+        fi
+    fi
 
     # ── Deploy docker groups SEQUENTIALLY ──
     if [ -n "$TOPO_GROUPS" ] && [ "$TOPO_GROUPS" != "[]" ] && [ "${N_GROUPS:-0}" -gt 0 ]; then

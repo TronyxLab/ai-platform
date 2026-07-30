@@ -120,8 +120,10 @@ def test_resolve_node_yaml_path2_org(tmp_path, caplog):
     yaml_path = org_dir / "node.yaml"
     yaml_path.write_text("node:\n  name: test-node")
 
-    # Mock Path.home() to return our tmp_path/home
-    with patch.object(Path, "home", return_value=home_dir):
+    # Mock os.path.expanduser so NodeYaml.resolve() finds ~/projects/*/node-configs/
+    # os.path.expanduser("~/projects") → projects_dir → glob("projects/*/node-configs/...")
+    projects_dir = home_dir / "projects"
+    with patch("os.path.expanduser", return_value=str(projects_dir)):
         platform_root = tmp_path / "platform"
         platform_root.mkdir(parents=True)
 
@@ -139,53 +141,52 @@ def test_resolve_node_yaml_path3_vps(tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
     node_name = "test-node"
 
-    # Create VPS fallback path — we need to mock /opt/node-configs
-    # Use tmp_path as fake /opt for testing, then patch the hardcoded path
+    # Create VPS fallback path — but NodeYaml.resolve() checks /opt/node-configs directly
     vps_dir = tmp_path / "opt" / "node-configs" / node_name
     vps_dir.mkdir(parents=True)
     yaml_path = vps_dir / "node.yaml"
     yaml_path.write_text("node:\n  name: test-node")
 
-    # We need to patch the hardcoded /opt/node-configs path in resolve_node_yaml
-    # Since it's hardcoded, we'll monkeypatch by making path 1 and 2 fail, then
-    # mock Path.is_file to return True for our test path
     platform_root = tmp_path / "platform"
     platform_root.mkdir(parents=True)
 
-    # Mock Path.home() to avoid the glob step finding anything
-    home_dir = tmp_path / "home" / "empty"
-    home_dir.mkdir(parents=True)
+    # Mock os.path.expanduser so the glob step finds nothing
+    empty_home = tmp_path / "empty-home"
+    empty_home.mkdir(parents=True)
 
-    with patch.object(Path, "home", return_value=home_dir):
-        # We can't easily mock the hardcoded /opt/node-configs, so let's
-        # instead just make sure platform_root path and home path fail,
-        # then assert FileNotFoundError with the right message
+    with patch("os.path.expanduser", return_value=str(empty_home)):
+        # All 3 paths fail (platform_root has no node.yaml, empty_home has nothing,
+        # /opt/node-configs/test-node/node.yaml does not exist on dev machine)
         with pytest.raises(FileNotFoundError) as exc_info:
             dv.resolve_node_yaml(node_name, platform_root)
 
-        # Verify all 3 paths were searched
+        # NodeYaml.resolve() error message is concise
         assert node_name in str(exc_info.value)
-        assert "/opt/node-configs" in str(exc_info.value)
+        # Path details are in the log, not the exception message
+        path_found_in_log = any("/opt/node-configs" in record.message for record in caplog.records)
+        assert path_found_in_log, "/opt/node-configs should appear in NodeYaml.resolve() log output"
         # 🧪 TRAP[TEST] · Regression: path3 not found mocked · Scenario: VPS fallback = no match
         # · Last fail: never · Remove if: resolve_node_yaml contract changes
 
 
 @ldd_trajectory
 def test_resolve_node_yaml_not_found(tmp_path, caplog):
-    """No path matches → FileNotFoundError with all searched paths."""
+    """No path matches → FileNotFoundError with node name."""
     caplog.set_level(logging.DEBUG)
     node_name = "ghost-node"
     platform_root = tmp_path / "platform"
     platform_root.mkdir(parents=True)
-    home_dir = tmp_path / "home"
-    home_dir.mkdir(parents=True)
+    empty_home = tmp_path / "empty"
+    empty_home.mkdir(parents=True)
 
-    with patch.object(Path, "home", return_value=home_dir), pytest.raises(FileNotFoundError) as exc_info:
+    with patch("os.path.expanduser", return_value=str(empty_home)), pytest.raises(FileNotFoundError) as exc_info:
         dv.resolve_node_yaml(node_name, platform_root)
 
     msg = str(exc_info.value)
     assert "ghost-node" in msg
-    assert "node-configs/ghost-node/node.yaml" in msg
+    # Path details are in the NodeYaml.resolve() log, not in exception message
+    path_found_in_log = any("node-configs/ghost-node/node.yaml" in record.message for record in caplog.records)
+    assert path_found_in_log, "Searched paths should appear in NodeYaml.resolve() log output"
     # 🧪 TRAP[TEST] · Regression: not found · Scenario: no path matches
     # · Last fail: never · Remove if: resolve_node_yaml contract changes
 
