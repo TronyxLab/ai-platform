@@ -190,14 +190,23 @@ def test_gate_reconcile_not_entrypoint(tmp_path):
 
 # ═══════════════════════════════════════════════════════════════════
 # region TEST_GATE_VPS_READINESS_SOURCEABLE
-## @purpose  Verify vps-readiness.sh can be sourced and check_vps_ready is defined
-## @scenario Source vps-readiness.sh, verify function exists
-## 🧪 TRAP[TEST] · Gate invariant: library must be sourceable
+## @purpose  Verify vps-readiness.sh is a sourceable thin shell facade that defines
+##           check_vps_ready() and delegates business logic to the Python module
+##           (DevPlan 105 Strangler-Fig: 181 LOC bash → ~20 LOC facade).
+## @scenario Source vps-readiness.sh, verify function exists + Python delegation
+## 🧪 TRAP[TEST] · Gate invariant: library must be sourceable + Python-delegating
 ##   · Last fail: N/A (new gate)
 ##   · Remove if: vps-readiness.sh is removed or renamed
+## 🧐 TRAP[DECISION] · 2026-07-31 · — · Manifest description НЕ изменён (DevPlan 105 TASK-5)
+## · Rejected: ручная правка description записи vps_readiness_sourceable в entrypoint-manifest.yaml
+## · Reason: gates[] перегенерируются из pytest (G3 cycle break, generate_entrypoint_manifest.py:228
+## ·         всегда эмитит 'Auto-discovered gate: {id}'); make check-manifests делает byte-level --check.
+## ·         Эксперимент 2026-07-31: правка описания → "Manifest is stale — exit 1" → AC10 нарушен.
+## ·         id + test_file записи не меняются (gate-тест остаётся в этом файле) — регистрация корректна.
+## · Rev: если description станет значимой метаданной → генератор должен поддерживать кастомные описания
 @pytest.mark.gate
 def test_gate_vps_readiness_sourceable(tmp_path):
-    """Gate: vps-readiness.sh must be sourceable and define check_vps_ready."""
+    """Gate: vps-readiness.sh must be sourceable, define check_vps_ready, delegate to Python."""
     script = """
     set -euo pipefail
     VPS_SCRIPT="$PROJECT_ROOT/core/lib/vps-readiness.sh"
@@ -210,6 +219,13 @@ def test_gate_vps_readiness_sourceable(tmp_path):
         echo "[IMP:9][gate] OK: vps-readiness.sh sourceable, check_vps_ready defined" >&2
     else
         echo "[IMP:10][gate] FAIL: check_vps_ready not defined after source" >&2
+        exit 1
+    fi
+    # DevPlan 105: facade must delegate to Python module (business logic migrated)
+    if grep -q "core.internal.shared.vps_readiness" "$VPS_SCRIPT"; then
+        echo "[IMP:9][gate] OK: facade delegates to python3 -m core.internal.shared.vps_readiness" >&2
+    else
+        echo "[IMP:10][gate] FAIL: facade does not delegate to Python module (DevPlan 105)" >&2
         exit 1
     fi
     """

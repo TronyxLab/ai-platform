@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: entrypoint converge reconcile remote-cmd auto-detect-node dry-run ssh-proxy
-# STRUCTURE: ▶ init ┌parse --node --dry-run --reconcile┐ → ◇ --node? → ┌auto_detect_node_name┐ → ⚡ execute_remote_converge() → ◇ RC=2? → └─ exec local converge.sh ─┘ → ⎋ exit 0|1|2
+# STRUCTURE: ▶ init ┌parse --node --dry-run --reconcile┐ → ◇ --node? → ┌python3 -m node_detect --detect-node-name┐ → ⚡ execute_remote_converge() → ◇ RC=2? → └─ exec local converge.sh ─┘ → ⎋ exit 0|1|2
 # region MODULE_CONTRACT
 ## @purpose  Thin entrypoint for `make converge`: parses --node/--dry-run/--reconcile, delegates
 ##           to execute_remote_converge() in remote-cmd.sh for SSH proxy, or falls back
 ##           to local exec of core/internal/bootstrap/converge.sh when no SSH host.
 ## @scope    Called ONLY from Makefile.
-##           Owns: usage, auto_detect_node_name, main.
+##           Owns: usage, main.
 ## @invariants
-##   - --node is recommended; if missing → auto_detect_node_name() fallback
+##   - --node is recommended; if missing → python3 -m core.internal.shared.node_detect fallback
 ##   - --dry-run prints SSH command or local args without executing
 ##   - --reconcile: passthrough flag — after converge, reconcile stub projects (W4)
 ##   - SSH proxy logic lives entirely in remote-cmd.sh (execute_remote_converge)
@@ -45,39 +45,6 @@ USAGE_OPTIONS=(
 # · Rev: Wave 4 — redesign passthrough into parse_args spec
 
 # ═══════════════════════════════════════════════════════════════════
-# region FUNC_auto_detect_node_name
-## @purpose  Fallback when --node not provided: detect single node from
-##           /opt/node-configs/ directories.
-## @stdout   Node name on success
-## @return 0  Node detected
-## @return 1  No unique node found
-auto_detect_node_name() {
-    local d="/opt/node-configs"
-    [[ -d "$d" ]] || {
-        echo "[IMP:8][converge][detect] ${d} does not exist" >&2
-        return 1
-    }
-    local candidates=() dir
-    for dir in "$d"/*/; do
-        [[ -d "$dir" ]] || continue
-        local b; b="$(basename "$dir")"
-        [[ "$b" == "scripts" || "$b" == "secrets" ]] && continue
-        candidates+=("$b")
-    done
-    [[ ${#candidates[@]} -eq 0 ]] && {
-        echo "[IMP:10][converge][detect] No node directories found" >&2
-        return 1
-    }
-    [[ ${#candidates[@]} -gt 1 ]] && {
-        echo "[IMP:10][converge][detect] Multiple nodes: ${candidates[*]} — use --node <name>" >&2
-        return 1
-    }
-    echo "${candidates[0]}"
-    return 0
-}
-# endregion FUNC_auto_detect_node_name
-
-# ═══════════════════════════════════════════════════════════════════
 # region FUNC_main
 ## @purpose  Parse CLI args, auto-detect node, delegate to SSH proxy or local exec
 main() {
@@ -94,7 +61,7 @@ main() {
     # ── Auto-detect if --node not provided ──
     if [[ -z "${NODE_NAME}" ]]; then
         echo "[IMP:9][converge][entrypoint] --node not provided — attempting auto-detect" >&2
-        NODE_NAME="$(auto_detect_node_name)" || {
+        NODE_NAME="$(python3 -m core.internal.shared.node_detect --detect-node-name 2>/dev/null)" || {
             echo "[IMP:10][converge][entrypoint] FATAL: --node is required" >&2
             echo "  Usage: converge.sh --node <name> [--dry-run]" >&2
             exit 1

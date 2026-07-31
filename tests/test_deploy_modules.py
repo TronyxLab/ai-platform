@@ -45,7 +45,6 @@
 
 import json
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -62,6 +61,9 @@ _BOOTSTRAP_DIR = repo_root() / "core" / "internal" / "bootstrap"
 _STATE_MACHINE_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "state_machine.py"
 _PHASES_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "phases.py"
 _DEPLOY_PYTHON_DIR = repo_root() / "core" / "internal" / "bootstrap" / "deploy"
+# DevPlan 100: routing + deploy delegation moved from deploy-modules.sh facade to deploy_orchestrator.py.
+# Static grep-цели для python-вызовов (secrets_validator/sudoers_generator/orphan_reconciler) указывают сюда.
+_ORCHESTRATOR_PY = _DEPLOY_PYTHON_DIR / "deploy_orchestrator.py"
 
 
 def _extract_python_func(filepath: Path, func_name: str) -> str:
@@ -439,13 +441,15 @@ def test_batch_module_metadata(caplog) -> None:
     )
     logger.info("[IMP:9][test_batch_module_metadata] Return type list[dict] OK (enriched metadata)")
 
-    # ── 3. deploy-modules.sh must call secrets_validator.py batch-module-metadata action ──
-    dm_content = _DEPLOY_MODULES_SH.read_text()
-    assert "secrets_validator.py" in dm_content, "S3 violation: secrets_validator.py not called from deploy-modules.sh"
-    assert "module-metadata" in dm_content or "batch" in dm_content, (
-        "S3 violation: batch module metadata action not invoked in deploy-modules.sh"
+    # ── 3. deploy_orchestrator.py must IMPORT secrets_validator and use batch env checks (DevPlan 100) ──
+    # DevPlan 100 TASK-1: routing moved from deploy-modules.sh shell to deploy/deploy_orchestrator.py —
+    # the orchestrator imports secrets_validator natively (no subprocess).
+    orch_content = _ORCHESTRATOR_PY.read_text()
+    assert "secrets_validator" in orch_content, "S3 violation: secrets_validator not imported in deploy_orchestrator.py"
+    assert "_batch_check_env" in orch_content or "_check_env_requires" in orch_content, (
+        "S3 violation: batch env check functions not used in deploy_orchestrator.py"
     )
-    logger.info("[IMP:9][test_batch_module_metadata] secrets_validator.py called from deploy-modules.sh OK")
+    logger.info("[IMP:9][test_batch_module_metadata] secrets_validator imported in deploy_orchestrator.py OK")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -534,10 +538,13 @@ def test_batch_sudoers(caplog) -> None:
     )
     logger.info("[IMP:9][test_batch_sudoers] _render_sudoers_rules() helper OK")
 
-    # ── 3. deploy-modules.sh calls sudoers_generator.py batch-generate action ──
-    dm_content = _DEPLOY_MODULES_SH.read_text()
-    assert "sudoers_generator.py" in dm_content, "S6 violation: sudoers_generator.py not called from deploy-modules.sh"
-    logger.info("[IMP:9][test_batch_sudoers] sudoers_generator.py called from deploy-modules.sh OK")
+    # ── 3. deploy_orchestrator.py must import sudoers_generator and call _batch_generate_sudoers (DevPlan 100) ──
+    orch_content = _ORCHESTRATOR_PY.read_text()
+    assert "sudoers_generator" in orch_content, "S6 violation: sudoers_generator not imported in deploy_orchestrator.py"
+    assert "_batch_generate_sudoers" in orch_content, (
+        "S6 violation: _batch_generate_sudoers not used in deploy_orchestrator.py"
+    )
+    logger.info("[IMP:9][test_batch_sudoers] sudoers_generator imported in deploy_orchestrator.py OK")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -583,10 +590,13 @@ def test_batch_orphan(caplog) -> None:
     )
     logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation uses docker ps OK")
 
-    # ── 3. Must be called from deploy-modules.sh ──
-    dm_content = _DEPLOY_MODULES_SH.read_text()
-    assert "orphan_reconciler.py" in dm_content, "S8 violation: orphan_reconciler.py not called from deploy-modules.sh"
-    logger.info("[IMP:9][test_batch_orphan] orphan_reconciler.py called from deploy-modules.sh OK")
+    # ── 3. deploy_orchestrator.py must import orphan_reconciler (DevPlan 100) ──
+    orch_content = _ORCHESTRATOR_PY.read_text()
+    assert "orphan_reconciler" in orch_content, "S8 violation: orphan_reconciler not imported in deploy_orchestrator.py"
+    assert "_batch_orphan_reconciliation" in orch_content, (
+        "S8 violation: _batch_orphan_reconciliation not used in deploy_orchestrator.py"
+    )
+    logger.info("[IMP:9][test_batch_orphan] orphan_reconciler imported in deploy_orchestrator.py OK")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -829,80 +839,6 @@ projects:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# region FUNC__extract_bash_func
-## @purpose  Extract a bash function body from a source file via brace counting.
-##           Mirrors _extract_func from test_bootstrap_auto.py — keeps deploy-modules tests
-##           self-contained (no cross-file dependency for the helper).
-## @io       filepath (str), func_name (str) → str (function definition incl. signature)
-## @complexity O(N) — single pass over file content
-def _extract_bash_func(filepath: Path, func_name: str) -> str:
-    """Extract a bash function definition from source using brace counting."""
-
-    content = filepath.read_text()
-    patterns = [
-        rf"^{re.escape(func_name)}\s*\(\s*\)\s*\{{",
-        rf"^function\s+{re.escape(func_name)}\s*\{{",
-    ]
-    start = -1
-    for pat in patterns:
-        m = re.search(pat, content, re.MULTILINE)
-        if m:
-            line_start = content.rfind("\n", 0, m.start())
-            line_start = 0 if line_start == -1 else line_start + 1
-            prefix = content[line_start : m.start()]
-            if prefix.strip() == "" or prefix.strip().startswith("#"):
-                start = m.start()
-                break
-    if start < 0:
-        raise ValueError(f"Function '{func_name}' not found in {filepath}")
-    brace_pos = -1
-    for i in range(start, min(start + 200, len(content))):
-        if content[i] == "{":
-            brace_pos = i
-            break
-    if brace_pos < 0:
-        raise ValueError(f"No opening brace for '{func_name}'")
-    count = 1
-    pos = brace_pos + 1
-    while count > 0 and pos < len(content):
-        if content[pos] == "{":
-            count += 1
-        elif content[pos] == "}":
-            count -= 1
-        pos += 1
-    return content[start:pos]
-
-
-# endregion FUNC__extract_bash_func
-
-
-# region FUNC__run_bash_func
-## @purpose  Run an extracted bash function in an isolated environment with mocked PATHS_MODULES_DIR.
-## @io       func_name, test_call, env (dict) → (stdout, stderr, returncode)
-## @complexity 1 — single subprocess.run
-def _run_bash_func(func_name: str, test_call: str, env: dict | None = None) -> tuple[str, str, int]:
-    """Extract + execute a bash function from deploy-modules.sh with a given test call."""
-    import os
-    import subprocess
-
-    func_body = _extract_bash_func(_DEPLOY_MODULES_SH, func_name)
-    script = "\n\n".join([func_body, test_call])
-    merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
-    proc = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True,
-        text=True,
-        env=merged_env,
-        timeout=30,
-    )
-    return proc.stdout.strip(), proc.stderr.strip(), proc.returncode
-
-
-# endregion FUNC__run_bash_func
-
-
 # region FUNC_test_parallel_deploy_failure_isolates_modules
 ## @purpose  W4-E5 edge-case: verify deploy_docker_group in docker_orchestrator.py isolates failure of
 ##           1 module in a group. Checks the function signature returns tuple[int, int, list[str]]
@@ -1000,12 +936,12 @@ def test_orphan_reconciliation_marks_foreign(caplog) -> None:
     assert "orphan" in or_content.lower(), "W4-E5 violation: orphan reconciler must mark/log orphan containers"
     logger.info("[IMP:9][test_orphan_reconciliation] orphan marking pattern present")
 
-    # ── 5. Must be called from deploy-modules.sh ──
-    dm_content = _DEPLOY_MODULES_SH.read_text()
-    assert "orphan_reconciler.py" in dm_content, (
-        "W4-E5 violation: orphan_reconciler.py must be called from deploy-modules.sh"
+    # ── 5. Must be imported by deploy_orchestrator.py (DevPlan 100 — routing moved to Python) ──
+    orch_content = _ORCHESTRATOR_PY.read_text()
+    assert "orphan_reconciler" in orch_content, (
+        "W4-E5 violation: orphan_reconciler must be imported in deploy_orchestrator.py"
     )
-    logger.info("[IMP:9][test_orphan_reconciliation] orphan_reconciler.py called from deploy-modules.sh OK")
+    logger.info("[IMP:9][test_orphan_reconciliation] orphan_reconciler imported in deploy_orchestrator.py OK")
 
     _assert_ldd_trajectory(caplog)
 

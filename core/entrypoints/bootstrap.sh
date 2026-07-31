@@ -5,13 +5,14 @@
 ## @purpose  Entry-point for `make bootstrap-node`: resolves node.yaml → detects SSH host → SCPs
 ##           core + node-configs → SSH-executes orchestrator (or locally if no host).
 ##           Thin-wrapper: delegates SCP/SSH to internal/ libraries.
-## @scope    Called ONLY from Makefile. Owns: usage, detect_age_key, auto_detect_node_name, main.
-##           Delegates scp_to_server + prepare_ssh_opts → scp-deliver.sh, build_ssh_cmd → remote-cmd.sh.
+## @scope    Called ONLY from Makefile. Owns: usage, main.
+##           Delegates scp_to_server + prepare_ssh_opts → scp-deliver.sh, build_ssh_cmd → build-ssh-cmd.sh,
+##           AGE key + node detection → core/internal/shared/node_detect.py (DevPlan 104).
 ## @invariants
-##   - 4 functions max: usage, detect_age_key, auto_detect_node_name, main
+##   - 2 functions max: usage, main (detection delegated to python3 -m node_detect)
 ##   - --auto-reconcile: passed through to node-lifecycle.sh → converge --reconcile (DevPlan 025 W4)
 ##   - NODE=<name> is OPTIONAL in --resolve mode (auto-detection from /opt/node-configs/)
-##   - AGE_SECRET_KEY detection chain: env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE
+##   - AGE_SECRET_KEY detection chain (node_detect.py): env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE
 ##   - Missing AGE key = WARN (not fatal)
 ##   - --dry-run prints SCP + SSH commands without executing
 ## 🧐 TRAP[DECISION] · 2026-07-21 · — · Encrypted secrets path
@@ -24,7 +25,7 @@
 ## @rationale Thin-wrapper per DevPlan 020 T4+T15. Auto-SSH + SCP eliminates manual rsync + SSH steps.
 ## @changes 2026-07-17 | T15 — Layer re-homing: scp_to_server+prepare_ssh_opts→scp-deliver.sh, build_ssh_cmd→remote-cmd.sh
 ##           2026-07-17 | Lifecycle refactoring: ORCHESTRATOR→NODE_LIFECYCLE, --mode init passthrough
-##           2026-07-21 | W4: +--auto-reconcile flag passthrough (DevPlan 025)
+##           2026-07-21 | W4: +--auto-reconcile flag passthrough (DevPlan 025); 2026-07-31 | DevPlan 104: detect functions → python3 -m node_detect
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -32,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${CORE_DIR}/lib/paths.sh"
 source "${CORE_DIR}/internal/bootstrap/scp-deliver.sh"
-source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"
+source "${CORE_DIR}/internal/bootstrap/build-ssh-cmd.sh"
 source "${CORE_DIR}/lib/args.sh"
 NODE_LIFECYCLE="${PATHS_INTERNAL_DIR}/bootstrap/node-lifecycle.sh"
 
@@ -50,40 +51,6 @@ USAGE_OPTIONS=(
 # · Reason: minimal W1 scope, bootstrap.sh forwards unknown args via PASSTHROUGH_ARGS
 # · Rev: Wave 4 — redesign passthrough into parse_args spec
 
-## @purpose  Detect AGE_SECRET_KEY from env chain via shared/age_key.py (DevPlan 078 T2)
-##           Delegates to Python single-source-of-truth replacing duplicate shell logic.
-##           Returns: key to stdout + exit 0 (found) / exit 1 (not found).
-detect_age_key() {
-    local age_key_script="${CORE_DIR}/internal/shared/age_key.py"
-    if [[ -f "$age_key_script" ]]; then
-        python3 "$age_key_script" 2>/dev/null && return 0 || return 1
-    fi
-    # Fallback: direct env check if Python module unavailable
-    if [[ -n "${AGE_SECRET_KEY:-}" ]]; then
-        echo "${AGE_SECRET_KEY}"; return 0
-    fi
-    if [[ -n "${SOPS_AGE_KEY:-}" ]]; then
-        echo "${SOPS_AGE_KEY}"; return 0
-    fi
-    return 1
-}
-## @purpose  Auto-detect node name from /opt/node-configs/ directories
-auto_detect_node_name() {
-    local d="/opt/node-configs"
-    [[ -d "$d" ]] || { echo "[IMP:8][bootstrap][auto-detect] ${d} does not exist" >&2; return 1; }
-    local candidates=() dir
-    for dir in "$d"/*/; do
-        [[ -d "$dir" ]] || continue
-        local b; b="$(basename "$dir")"
-        [[ "$b" == "scripts" || "$b" == "secrets" ]] && continue
-        candidates+=("$b")
-    done
-    [[ ${#candidates[@]} -eq 0 ]] && { echo "[IMP:10][bootstrap][auto-detect] No node directories found" >&2; return 1; }
-    [[ ${#candidates[@]} -gt 1 ]] && { echo "[IMP:10][bootstrap][auto-detect] Multiple directories: ${candidates[*]}" >&2; return 1; }
-    echo "${candidates[0]}"
-    echo "[IMP:9][bootstrap][auto-detect] Auto-detected node: ${candidates[0]}" >&2
-    return 0
-}
 NODE_NAME=""; RESOLVE_MODE=false; DRY_RUN=false; PASSTHROUGH_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -103,7 +70,7 @@ main() {
     # ── Validate/resolve node name ──────────────────────────────────
     if [[ -z "$NODE_NAME" ]]; then
         echo "[IMP:8][bootstrap][entrypoint] Auto-detecting node name"
-        NODE_NAME=$(auto_detect_node_name) || {
+        NODE_NAME=$(python3 -m core.internal.shared.node_detect --detect-node-name 2>/dev/null) || {
             echo "[IMP:10][bootstrap][entrypoint] FATAL: Cannot detect node — use make bootstrap-node NODE=<name>" >&2; exit 1
         }
         echo "[IMP:9][bootstrap][entrypoint] Auto-detected NODE_NAME=${NODE_NAME}"
@@ -157,7 +124,17 @@ main() {
     [[ -n "$CONTEXT" ]] && echo "[IMP:9][bootstrap][entrypoint] CONTEXT=${CONTEXT}"
 
     SSH_HOST="$(extract_node_host "${NODE_YAML}")" || { echo "[IMP:8][bootstrap][entrypoint] WARN: No SSH host — local mode" >&2; SSH_HOST=""; }
-    DETECTED_AGE_KEY="$(detect_age_key)" || DETECTED_AGE_KEY=""
+    # DevPlan 104 D3: python3 -m node_detect — fail-fast on missing python3/module, non-fatal on absent key.
+    # Exit-code contract (node_detect.py): 0 = key found, 3 = module OK + key absent (non-fatal),
+    # any other non-zero = python3/module missing or unexpected error → FATAL.
+    DETECTED_AGE_KEY="$(python3 -m core.internal.shared.node_detect --detect-age-key 2>/dev/null)" || {
+        _detect_rc=$?
+        if [[ ${_detect_rc} -eq 3 ]]; then
+            DETECTED_AGE_KEY=""
+        else
+            echo "[IMP:10][bootstrap][entrypoint] FATAL: python3 or core.internal.shared.node_detect unavailable" >&2; exit 1
+        fi
+    }
 
     # ── Local bootstrap ─────────────────────────────────────────────
     if [[ -z "${SSH_HOST}" ]]; then

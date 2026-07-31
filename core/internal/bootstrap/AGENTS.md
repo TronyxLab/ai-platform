@@ -9,7 +9,8 @@
 ##           lifecycle/state_machine.py (BootstrapPhase enum, _phase_dependency_graph,
 ##           precondition_check, _resume_phase), lifecycle/phases.py (14 phase implementations),
 ##           deploy-modules, setup-node, install-docker, install-tor-proxy, firewall,
-##           _topo_sort, content-hash, discover_modules, remote-cmd, scp-deliver
+##           _topo_sort, content-hash, discover_modules, remote-cmd, scp-deliver,
+##           core_deliverer.py (Python Core-канал: mkdir + 5 rsync фаз, DevPlan 108)
 ## @invariants
 ##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё state_machine.py. Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
 ##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), _execute_phase(), _execute_grouped_phase(), _resume_phase()
@@ -87,30 +88,33 @@ node-lifecycle.sh --mode update → state_machine.py
 
 ---
 
-## deploy-modules.sh — две ветки
+## deploy-modules.sh — фасад + Python-оркестратор (DevPlan 100)
 
-`deploy-modules.sh` обрабатывает два типа модулей, декларированных в `node.yaml`:
+`deploy-modules.sh` — тонкий shell-фасад (≤50 LOC): arg parsing, root/NODE_YAML check,
+network provision, docker login, затем `exec python3 deploy/deploy_orchestrator.py`.
+Вся routing-логика (PARALLEL / ORCHESTRATOR / SEQUENTIAL), деплой модулей, sudoers,
+orphan-реконсиляция и severity-based exit code {0,1,2} — в `deploy/deploy_orchestrator.py`
+(импортирует `docker_orchestrator`, `secrets_validator`, `_topo_sort`, `sudoers_generator`,
+`orphan_reconciler`, `context_overlay`, `spool_validator` нативно — без subprocess).
 
-### system-модули
-- Устанавливаются через install.sh в директории модуля
-- Поддерживаются через `deploy_system_module()`:
-  - `systemctl daemon-reload && systemctl enable --now <service>`
-  - healthcheck: `healthcheck.sh` (liveness или deep mode)
-- Примеры: nginx (системная установка)
+### Типы модулей (из node.yaml)
+- **system-модули** — `invoke_module_interface <name> install` (install.sh в директории модуля),
+  затем healthcheck liveness (best-effort). Примеры: nginx (системная установка)
+- **docker-модули** — Docker Compose через `deploy_docker_module()` / `deploy_docker_group()`.
+  Примеры: postgres, redis, litellm, langfuse, hermes-agent, status-page, backup-cron
 
-### docker-модули
-- Развёртываются через Docker Compose
-- **Два режима** (feature flag `DEPLOY_PARALLEL`, default=false):
-  - **Последовательный** (`DEPLOY_PARALLEL=false`, обратная совместимость):
-    `_topo_sort.py` (сортировка по depends_on) → `docker compose pull` → `docker compose up -d`
-  - **Параллельный** (`DEPLOY_PARALLEL=true`, DevPlan 050):
-    `_topo_sort.py` → batch-metadata + batch-check-env → pre-pull (parallel_limit=4) → итерация по topo-группам →
-    `deploy_docker_group()` (os.fork per module, content-hash skip для build-модулей) →
-    parallel healthcheck внутри группы → severity-based exit
+### Режимы деплоя (feature flag `DEPLOY_PARALLEL`, default=false)
+- **Последовательный** (`DEPLOY_PARALLEL=false`, обратная совместимость): for-loop по enabled-модулям:
+  check-env → detect-type → `deploy_docker_module()` | `invoke_module_interface install`
+- **Параллельный** (`DEPLOY_PARALLEL=true`, DevPlan 050): `_topo_sort` (Kahn по depends_on) →
+  pre-pull (parallel_limit=4) → batch-check-env → итерация по topo-группам →
+  `deploy_docker_group()` (os.fork per module, content-hash skip для build-модулей) →
+  system-модули sequential → маркер `/var/lib/platform/.bootstrap/.hc_done_in_deploy` (healthcheck уже выполнен внутри группы)
+- **DeployOrchestrator** (`DEPLOY_ORCHESTRATOR=true` + `DEPLOY_PARALLEL=true`):
+  `orchestrator_cli.py deploy-many --scp` (subprocess — отдельный CLI слой, DevPlan 089 T14),
+  для docker-модулей, ЗАМЕНЯЕТ group-based deploy
 - Healthcheck: `docker inspect` → `State.Health.Status` (liveness) или `healthcheck.sh MODE=deep`
-- При параллельном режиме healthcheck выполняется внутри `deploy_docker_group()`, маркер `/var/lib/platform/.bootstrap/.hc_done_in_deploy` предотвращает дублирование в node-lifecycle
 - Content-hash skip (status-page, backup-cron): `content_hash.py` кэширует SHA256 исходников → пропускает `docker compose build` при совпадении
-- Примеры: postgres, redis, litellm, langfuse, hermes-agent, status-page, backup-cron
 
 ### Фильтрация --modules
 - `deploy-modules.sh --modules postgres,redis` → развернуть только указанные
@@ -248,12 +252,17 @@ CRON:
 
 | Скрипт | До (LOC) | После (LOC) | Сокращение |
 |--------|----------|-------------|------------|
-| `deploy-modules.sh` | 1664 | 91 | 95% |
+| `deploy-modules.sh` | 1664 | 50 | 97% |
 | `converge.sh` | 1149 | 137 | 88% |
 | `node-lifecycle.sh` | 1301 | 164 | 87% |
-| **Итого** | **4114** | **392** | **90%** |
+| `remote-cmd.sh` | 266 | 60 | 77% |
+| `scp-deliver.sh` | 251 | ≤60 | 76% (DevPlan 108 — rsync-фазы → core_deliverer.py) |
+| `build-ssh-cmd.sh` | — | ~100 | — (извлечение из remote-cmd.sh, DevPlan 101 D1) |
+| **Итого** | **4631** | **571** | **88%** |
 
 Inline `python3 -c` / `<<PYEOF` в фасадах: 0 (было 31 в топ-3). Все inline-блоки мигрированы в Python-функции с unit-тестами.
+
+**Python-оркестрация (DevPlan 101):** `remote_executor.py` (~200 LOC) — полный цикл удалённой команды (resolve → VPS self-SSH detect → sync-core → ssh_exec, exit 0/1/2/124, DRY_RUN). Shell-фасад `remote-cmd.sh` — тонкие обёртки: `build_*_ssh_cmd` (printf %q, D3, в `build-ssh-cmd.sh`) → `python3 -m core.internal.bootstrap.remote_executor execute-*` → `return $?`.
 
 ### Unit-тесты
 
@@ -268,6 +277,8 @@ Inline `python3 -c` / `<<PYEOF` в фасадах: 0 (было 31 в топ-3). 
 - `tests/unit/test_state_machine.py`
 - `tests/unit/test_s3_ssl_cache.py` (NEW — DevPlan 052 Phase 3)
 - `tests/unit/test_cert_upload_on_skip.py` (NEW — DevPlan 052 Phase 3)
+- `tests/unit/test_remote_executor.py` (NEW — DevPlan 101)
+- `tests/unit/test_core_deliverer.py` (NEW — DevPlan 108)
 
 ---
 

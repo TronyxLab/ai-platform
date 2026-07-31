@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -41,6 +42,8 @@ DEFAULT_PROJECTS_BASE = "/opt/projects"
 SNAPSHOT_DIR = ".deploy-snapshots"
 LOCK_DIR = "/var/lock"
 MAX_SNAPSHOTS = 10
+# DeployHistory-owned snapshot file pattern: <ISO8601-ts>-<8-hex>.json (create_snapshot format)
+_SNAPSHOT_ID_RE = re.compile(r"^\d{8}T\d{6}-[0-9a-f]{8}\.json$")
 
 
 # region CLASS_DeployHistory
@@ -274,9 +277,19 @@ class DeployHistory:
             return
 
         try:
-            files = sorted(
-                [f for f in os.listdir(snap_dir) if f.endswith(".json")],
-            )
+            # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · prune удалял СВЕЖИЕ снапшоты DeployHistory
+            # · Symptom: DeployResult.snapshot_id непустой, но файл <snapshot_id>.json отсутствует;
+            # ·   count в .deploy-snapshots не растёт (10→10). E2E DevPlan 095 T16 на tronyx-vps.
+            # · Root: в .deploy-snapshots/ лежат ДВА namespace: DeployEngine (images-<epoch>.json,
+            # ·   ps-<epoch>.json) и DeployHistory (<ISO8601>-<hex8>.json). Prune сортировал ВСЕ
+            # ·   *.json по имени и pop(0) удалял первые — history-файлы ("2026..." < "images-...")
+            # ·   удалялись первыми, включая только что записанный снапшот (после 5 деплоев
+            # ·   = 10 engine-файлов → каждый новый history-снапшот мгновенно принудился).
+            # · Fix: prune учитывает ТОЛЬКО собственные файлы DeployHistory (паттерн
+            # ·   YYYYMMDDTHHMMSS-<8hex>.json) — engine-снапшоты не трогаются.
+            # · Prevention: не смешивать namespace'ы в одном prune; фильтр по формату имени —
+            # ·   инвариант формата snapshot_id (create_snapshot, строка ~121).
+            files = sorted(f for f in os.listdir(snap_dir) if _SNAPSHOT_ID_RE.match(f))
             while len(files) > MAX_SNAPSHOTS:
                 oldest = files.pop(0)
                 os.remove(os.path.join(snap_dir, oldest))

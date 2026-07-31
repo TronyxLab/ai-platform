@@ -85,7 +85,8 @@ deploy-project:
 
 ## context-promote: Promote platform to context org
 ##   Usage: make context-promote CONTEXT=<name>
-##   Delegates to core/entrypoints/context-promote.sh → copies to <context>/ai-platform
+##   Delegates to core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py
+##   (git push --mirror: SSH primary / HTTPS fallback с GIT_ASKPASS)
 context-promote:
 	@echo "[IMP:7][make][context-promote] Promoting platform to CONTEXT=$(CONTEXT)..."
 	@if [[ -z "$(CONTEXT)" ]]; then \

@@ -32,14 +32,15 @@ templates-render:
 	@echo "[IMP:9][make][templates-render] All templates rendered"
 
 ## dev-certs: Generate or validate dev SSL certificates (idempotent)
-##   Delegates to core/modules/nginx/generate-dev-certs.sh
+##   Delegates to core/modules/nginx/dev_cert_generator.py (DevPlan 099)
 ##   CERT_BACKEND env: auto (default), mkcert, openssl
 ## # ⚠️ TRAP[BUG] · 2026-07-16 · HIGH · PLATFORM_DOMAIN from .env · Root: env-chain break — `make` не читает .env, → контекстный домен молча терялся · Fix: recipe-level extraction (grep PLATFORM_DOMAIN= из .env) · Prevention: contract-проверка через DEV_CERTS_DIR+tmp
 dev-certs:
 	@echo "[IMP:7][make][dev-certs] Ensuring dev SSL certificates..."
 	@_env_pd="$$(grep -E '^PLATFORM_DOMAIN=' "$(_platform_root)/.env" 2>/dev/null | tail -n1 | cut -d= -f2-)"; \
 	PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$${_env_pd:-ai-platform.local}}" \
-	bash $(_platform_root)/core/modules/nginx/generate-dev-certs.sh
+	DEV_CERTS_DIR="$${DEV_CERTS_DIR:-$(_platform_root)/core/modules/nginx/dev-certs}" \
+	python3 $(_platform_root)/core/modules/nginx/dev_cert_generator.py
 	@echo "[IMP:9][make][dev-certs] Dev certificates check complete"
 
 ## provision-llm: Provision LiteLLM virtual keys for all LLM consumers

@@ -345,14 +345,13 @@ def test_core_deploy_auto_detects_node():
     )
     logger.info("[IMP:9][test] core-deploy.yml rsyncs makefiles/ to VPS")
 
-    # ── bootstrap.sh has auto_detect_node_name() function ─────────
+    # ── bootstrap.sh delegates node detection to python3 -m node_detect (DevPlan 104) ──
     bootstrap_path = repo_root() / "core/entrypoints/bootstrap.sh"
     bootstrap_content = bootstrap_path.read_text()
-    assert "auto_detect_node_name" in bootstrap_content, (
-        "bootstrap.sh must define auto_detect_node_name() for bootstrap-node auto-detection"
+    assert "python3 -m core.internal.shared.node_detect" in bootstrap_content, (
+        "bootstrap.sh must delegate node auto-detection to python3 -m core.internal.shared.node_detect"
     )
-    assert "/opt/node-configs" in bootstrap_content, "auto_detect_node_name() must search /opt/node-configs/"
-    logger.info("[IMP:9][test] bootstrap.sh has auto_detect_node_name() function")
+    logger.info("[IMP:9][test] bootstrap.sh delegates node auto-detection to python3 -m node_detect")
 
     # ── Makefile allows bootstrap-node without NODE= ──────────────
     makefile_content = _MAKEFILE_PATH.read_text()

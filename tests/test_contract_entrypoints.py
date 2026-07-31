@@ -420,11 +420,12 @@ def test_manifest_covers_all_entrypoints() -> None:
 # region FUNC_test_node_update_has_ssh_proxy
 ## @purpose  Verify node-update.sh entrypoint contract: registered in manifest,
 ##           has SSH proxy flags (--age-secret-key-file, --dry-run, --node) and
-##           detect_age_key() function. Validates entrypoint↔manifest consistency.
+##           delegates AGE key detection to python3 -m core.internal.shared.node_detect
+##           (DevPlan 104 — shell detect_age_key() removed). Validates entrypoint↔manifest consistency.
 ## @io       Manifest extractor + script content → grep → assertions
 ## @complexity O(M + S) where M = manifest entries, S = script content
 ## @invariants — node-update.sh in manifest; --age-secret-key-file and
-##               detect_age_key are present in the entrypoint
+##               python3 -m core.internal.shared.node_detect present in the entrypoint
 @pytest.mark.contract
 def test_node_update_has_ssh_proxy() -> None:
     """Entrypoint contract: node-update.sh registered in manifest with SSH proxy flags."""
@@ -464,9 +465,11 @@ def test_node_update_has_ssh_proxy() -> None:
     assert "--age-secret-key-file" in content, "[IMP:9][test] FAIL: node-update.sh must accept --age-secret-key-file"
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 4 PASS: --age-secret-key-file flag present")
 
-    # ── Check 5: has detect_age_key() ──
-    assert "detect_age_key" in content, "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: detect_age_key() present")
+    # ── Check 5: delegates AGE key detection to python3 -m node_detect (DevPlan 104) ──
+    assert "python3 -m core.internal.shared.node_detect" in content, (
+        "[IMP:9][test] FAIL: node-update.sh must delegate AGE key detection to python3 -m core.internal.shared.node_detect"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: node_detect delegation present")
 
     # ── Check 6: has SSH_HOST/local exec fallback ──
     assert "ssh_host" in content.lower() or "SSH_HOST" in content, (

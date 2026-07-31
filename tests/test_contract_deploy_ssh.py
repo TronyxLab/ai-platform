@@ -105,7 +105,8 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.join(TEST_DIR, "..")
-BOOTSTRAP_SH = os.path.join(PROJECT_ROOT, "core", "entrypoints", "bootstrap.sh")
+# BOOTSTRAP_SH removed (DevPlan 104) — auto_detect_node_name migrated to
+# python3 -m core.internal.shared.node_detect; coverage lives in tests/unit/test_node_detect.py.
 SCP_DELIVER_SH = os.path.join(PROJECT_ROOT, "core", "internal", "bootstrap", "scp-deliver.sh")
 # REMOTE_CMD_SH removed — build_ssh_cmd deleted (DevPlan 089: deploy-project.sh migrated to Python)
 
@@ -129,11 +130,6 @@ GOLDEN_AGE_LOG_FILE_EMPTY = "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY_FI
 GOLDEN_AGE_LOG_NOT_FOUND = (
     "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy"
 )
-
-GOLDEN_AUTO_LOG_SUCCESS = "[IMP:9][bootstrap][auto-detect] Auto-detected node:"
-GOLDEN_AUTO_LOG_NO_DIRS = "[IMP:10][bootstrap][auto-detect] No node directories found"
-GOLDEN_AUTO_LOG_MULTI = "[IMP:10][bootstrap][auto-detect] Multiple directories:"
-GOLDEN_AUTO_LOG_NO_CONFIGS = "[IMP:8][bootstrap][auto-detect] /opt/node-configs does not exist"
 
 GOLDEN_SCP_LOG_MKDIR = "[IMP:8][bootstrap][scp] Ensuring remote directories exist on"
 GOLDEN_SCP_LOG_MKDIR_CONFIRMED = "[IMP:9][bootstrap][scp] Remote directories confirmed"
@@ -295,180 +291,13 @@ def _print_ldd(stderr: str, stdout: str = "") -> bool:
 # NOTE: detect_age_key tests removed — bootstrap.sh detect_age_key() now delegates to
 # core/internal/shared/age_key.py (Python). Shell golden log messages are no longer produced.
 # The Python module has its own unit tests in tests/unit/.
-# auto_detect_node_name
 # ═══════════════════════════════════════════════════════════════════
-# ⚠️ NOTE: auto_detect_node_name() hardcodes /opt/node-configs/ as configs_dir.
-#   In tests, we replace this path via string substitution to use tmp_path.
-#   This preserves the function's logic while allowing isolated testing.
+# ⚠️ NOTE: auto_detect_node_name tests removed (DevPlan 104) — the shell function was
+#   deleted from bootstrap.sh/converge.sh and replaced by python3 -m
+#   core.internal.shared.node_detect --detect-node-name. Coverage (single/multiple/no-nodes/
+#   scripts-secrets-exclusion) is fully duplicated by tests/unit/test_node_detect.py
+#   (TestAutoDetectNodeName ×4) per QA Review §Оставшиеся риски recommendation.
 # ═══════════════════════════════════════════════════════════════════
-
-
-# region test_auto_detect_node_name_success
-# 🧪 TRAP[TEST] · 2026-07-17 · auto_detect_node_name single non-service dir
-# · Regression: if detection logic changes, CI zero-config deploy breaks
-# · Scenario: exactly one non-service directory in /opt/node-configs/
-# · Last fail: N/A (new test)
-# · Remove if: auto_detect_node_name is removed
-@pytest.mark.contract
-def test_auto_detect_node_name_success(caplog, tmp_path) -> None:
-    """auto_detect_node_name() returns the single non-service node name."""
-    caplog.set_level(logging.DEBUG)
-
-    # Create /opt/node-configs/ equivalent with one node dir
-    ncd = tmp_path / "node-configs"
-    (ncd / "tronyx-vps").mkdir(parents=True)
-    (ncd / "scripts").mkdir(parents=False)  # should be excluded
-    (ncd / "secrets").mkdir(parents=False)  # should be excluded
-
-    func_body = _extract_func(BOOTSTRAP_SH, "auto_detect_node_name")
-    func_body = func_body.replace("/opt/node-configs", str(ncd))
-
-    script = textwrap.dedent(f"""\
-        set -euo pipefail
-        {func_body}
-
-        result=$(auto_detect_node_name)
-        rc=$?
-        echo "[IMP:9][test][auto_detect] result=$result"
-        echo "EXIT_CODE:$rc"
-    """)
-    stdout, stderr, rc = _bash(script)
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"Script failed: {stderr}"
-
-    assert "result=tronyx-vps" in stdout, f"Expected 'result=tronyx-vps' in stdout: {stdout[:300]}"
-
-    assert GOLDEN_AUTO_LOG_SUCCESS in stderr
-    logger.info("[IMP:9][test][auto_detect] Single node found: PASS")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion
-
-
-# region test_auto_detect_node_name_no_configs_dir
-# 🧪 TRAP[TEST] · 2026-07-17 · auto_detect_node_name when /opt/node-configs/ missing
-# · Regression: returns wrong exit code on missing directory
-# · Scenario: /opt/node-configs/ does not exist
-# · Last fail: N/A (new test)
-# · Remove if: auto_detect_node_name is removed
-@pytest.mark.contract
-def test_auto_detect_node_name_no_configs_dir(caplog) -> None:
-    """auto_detect_node_name() returns 1 when /opt/node-configs/ does not exist."""
-    caplog.set_level(logging.DEBUG)
-
-    func_body = _extract_func(BOOTSTRAP_SH, "auto_detect_node_name")
-    # Replace with nonexistent path
-    func_body = func_body.replace("/opt/node-configs", "/tmp/nonexistent-node-configs-XXXX")
-
-    script = textwrap.dedent(f"""\
-        set -euo pipefail
-        {func_body}
-
-        if result=$(auto_detect_node_name 2>&1); then
-            echo "[IMP:9][test][auto_detect] UNEXPECTED_SUCCESS:$result"
-        else
-            echo "[IMP:9][test][auto_detect] EXPECTED_FAILURE"
-        fi
-    """)
-    stdout, stderr, rc = _bash(script)
-    _print_ldd(stderr, stdout)
-    assert rc == 0, f"Script crashed: {stderr}"
-    assert "EXPECTED_FAILURE" in stdout, f"Expected failure, got: {stdout}"
-    # NOTE: The golden LOG_NO_CONFIGS message says "/opt/node-configs does not exist"
-    # but due to string replacement we used a different path. The original golden message
-    # pattern is "[IMP:8][bootstrap][auto-detect] /opt/node-configs does not exist"
-    # which after replacement becomes "[IMP:8][bootstrap][auto-detect] /tmp/... does not exist"
-    logger.info("[IMP:9][test][auto_detect] Missing configs dir: PASS")
-
-
-# endregion
-
-
-# region test_auto_detect_node_name_no_dirs
-# 🧪 TRAP[TEST] · 2026-07-17 · auto_detect_node_name empty configs dir
-# · Regression: returns wrong error on zero candidate directories
-# · Scenario: /opt/node-configs/ exists but has only service dirs (scripts, secrets)
-# · Last fail: N/A (new test)
-# · Remove if: auto_detect_node_name logic changes
-@pytest.mark.contract
-def test_auto_detect_node_name_no_dirs(caplog, tmp_path) -> None:
-    """auto_detect_node_name() returns 1 when no non-service directories found."""
-    caplog.set_level(logging.DEBUG)
-
-    ncd = tmp_path / "node-configs"
-    ncd.mkdir(parents=True)
-
-    func_body = _extract_func(BOOTSTRAP_SH, "auto_detect_node_name")
-    func_body = func_body.replace("/opt/node-configs", str(ncd))
-
-    script = textwrap.dedent(f"""\
-        set -euo pipefail
-        {func_body}
-
-        if result=$(auto_detect_node_name 2>&1); then
-            echo "[IMP:9][test][auto_detect] UNEXPECTED_SUCCESS:$result"
-        else
-            echo "[IMP:9][test][auto_detect] EXPECTED_FAILURE"
-            echo "STDERR:$result"
-        fi
-        echo "EXIT_CODE:$?"
-    """)
-    stdout, stderr, rc = _bash(script)
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"Script crashed: {stderr}"
-    assert "EXPECTED_FAILURE" in stdout, f"Expected failure, got: {stdout}"
-
-    # The "No node directories found" message is emitted on stderr by the function
-    assert "No node directories found" in stdout, f"Expected 'No node directories found' in stdout: {stdout[:400]}"
-    logger.info("[IMP:9][test][auto_detect] No candidate dirs: PASS")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion
-
-
-# region test_auto_detect_node_name_multi_dirs
-# 🧪 TRAP[TEST] · 2026-07-17 · auto_detect_node_name ambiguous multiple nodes
-# · Regression: silently picks first match instead of error
-# · Scenario: two non-service directories → must fail with "Multiple node directories"
-# · Last fail: N/A (new test)
-# · Remove if: auto_detect_node_name logic changes
-@pytest.mark.contract
-def test_auto_detect_node_name_multi_dirs(caplog, tmp_path) -> None:
-    """auto_detect_node_name() returns 1 when multiple node directories exist."""
-    caplog.set_level(logging.DEBUG)
-
-    ncd = tmp_path / "node-configs"
-    (ncd / "node-alpha").mkdir(parents=True)
-    (ncd / "node-beta").mkdir(parents=True)
-
-    func_body = _extract_func(BOOTSTRAP_SH, "auto_detect_node_name")
-    func_body = func_body.replace("/opt/node-configs", str(ncd))
-
-    script = textwrap.dedent(f"""\
-        set -euo pipefail
-        {func_body}
-
-        if result=$(auto_detect_node_name 2>&1); then
-            echo "[IMP:9][test][auto_detect] UNEXPECTED_SUCCESS:$result"
-        else
-            echo "[IMP:9][test][auto_detect] EXPECTED_FAILURE"
-            echo "STDERR:$result"
-        fi
-        echo "EXIT_CODE:$?"
-    """)
-    stdout, stderr, rc = _bash(script)
-    found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"Script crashed: {stderr}"
-    assert "EXPECTED_FAILURE" in stdout, f"Expected failure, got: {stdout}"
-    assert "Multiple directories:" in stdout, f"Expected 'Multiple directories:' in stdout: {stdout[:400]}"
-    logger.info("[IMP:9][test][auto_detect] Multiple nodes ambiguous: PASS")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-
-
-# endregion
-
 
 # ═══════════════════════════════════════════════════════════════════
 # scp_to_server

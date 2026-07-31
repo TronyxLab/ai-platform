@@ -84,9 +84,7 @@ def test_fqdn_falsey_domain_skipped(tmp_path: Path, caplog) -> None:
     base = tmp_path / "projects"
     project_dir = base / "myapp"
     project_dir.mkdir(parents=True)
-    (project_dir / "ai-platform.yaml").write_text(
-        "expose: true\nneeds:\n  domain: false\ntarget_node: mynode\n"
-    )
+    (project_dir / "ai-platform.yaml").write_text("expose: true\nneeds:\n  domain: false\ntarget_node: mynode\n")
 
     ok, msg = check_fqdn_conflict(str(project_dir), str(base))
     _print_trajectory(caplog)
@@ -129,7 +127,7 @@ def test_port_unique(tmp_path: Path, caplog) -> None:
     _write_project(base, "app-a", host_port=8080)
     _write_project(base, "app-b", host_port=8081)
 
-    ok, msg = check_port_conflict(str(base))
+    ok, _msg = check_port_conflict(str(base))
     _print_trajectory(caplog)
 
     assert ok is True

@@ -23,7 +23,7 @@
 | `make deploy-context` | Деплой проектов контекста на ноде | make deploy-context NODE=\<n\> [CONTEXT=\<ctx\>] | core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py |
 | `make deploy` | Деплой проекта | make deploy PROJECT=\<dir\> | git push → CI → core/entrypoints/deploy.sh (VPS forced-command) → core/internal/deploy/orchestrator_cli.py receive → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh |
 | `make deploy-project` | Прямой деплой минуя CI (DeployOrchestrator) | make deploy-project PROJECT=\<dir\> NODE=\<node\> | core/internal/deploy/orchestrator_cli.py deploy-many (SCPChannel) |
-| `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=\<context\> | core/entrypoints/context-promote.sh → copy to \<context\>/ai-platform → CI |
+| `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=\<context\> | core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py |
 | `make hermes-build-platform` | Сборка L1 образа | make hermes-build-platform | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-platform |
 | `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=\<context\> | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context |
 | `make hermes-push-l1` | Push L1 в ghcr.io | make hermes-push-l1 | docker tag + docker push to ghcr.io |
@@ -78,7 +78,7 @@
 | `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh → core/internal/provisioner.py |
 | `make provision-llm` | Provision LiteLLM virtual keys | make provision-llm | core/entrypoints/provision-llm.sh → core/internal/llm/key_provisioner.py |
 | `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |
-| `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/generate-dev-certs.sh |
+| `make dev-certs` | Генерация dev SSL-сертификатов | make dev-certs [CERT_BACKEND=...] | core/modules/nginx/dev_cert_generator.py |
 | `make _get_all_profiles` | Вывод COMPOSE_PROFILES | make _get_all_profiles | echo |
 | `make fix-executable-bit` | Исправление executable bit на .sh файлах | make fix-executable-bit [DRY_RUN=1] | git add --chmod=+x + git update-index --chmod=+x |
 | `make fix-ruff` | Форматирование Python файлов через ruff | make fix-ruff [SCOPE=diff|staged|all] [DRY_RUN=1] | ruff check --fix + ruff format |

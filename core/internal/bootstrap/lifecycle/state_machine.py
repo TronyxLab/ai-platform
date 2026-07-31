@@ -1153,18 +1153,30 @@ class StateMachine:
     def setup_state(self, mode: str, node: str | None = None) -> None:
         """Initialize state for a new run with phase-based keys.
 
-        Sets mode, node, resets all phase entries to pending.
-        Uses BootstrapPhase phase list instead of old INIT_STEPS.
+        Sets mode, node, creates MISSING phase entries as pending (existing preserved).
         """
+        # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · setup_state сбрасывал ВСЕ фазы в pending — идемпотентность мёртва
+        # · Symptom: повторный `make bootstrap-node` ПЕРЕВЫПОЛНЯЛ все 9 INIT фаз (~10 мин) без
+        # ·   SKIP-логов; E2E DevPlan 095 T13 (idempotent rebootstrap): "skip markers found=0" при exit 0.
+        # ·   Триггер: CLI (строка ~1397) вызывал setup_state при current_step==0 — а phase-based
+        # ·   машина НЕ инкрементит current_step (всегда 0) → setup_state на КАЖДОМ запуске.
+        # · Root: docstring "Always reset all phase entries to pending" — наследие step-based машины;
+        # ·   run_init/run_update already-done-проверки никогда не могли сработать (фазы всегда pending).
+        # · Fix: setdefault-семантика — существующие записи фаз сохраняются (done остаётся done),
+        # ·   недостающие (другой mode) создаются pending. Полный сброс = --force (reset()).
+        # · Prevention: setup_state никогда не должен стирать done-состояния без явного --force;
+        # ·   unit-контракт: повторный setup_state(mode) не меняет существующие статусы.
         self.state.mode = mode
         self.state.node = node
         self.state.current_step = 0
         phase_list = self._step_list()  # now returns BootstrapPhase phase list
-        # Always reset all phase entries to pending
-        for _i, phase_val in enumerate(phase_list, 1):
-            self.state.steps[phase_val] = StepState(name=phase_val, status="pending")
+        # Create missing phase entries as pending; preserve existing (idempotency)
+        for phase_val in phase_list:
+            existing = self.state.steps.get(phase_val)
+            if existing is None:
+                self.state.steps[phase_val] = StepState(name=phase_val, status="pending")
         logger.info(
-            "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s phases=%d",
+            "[IMP:8][StateMachine][setup_state] State initialized: mode=%s node=%s phases=%d (existing preserved)",
             mode,
             node,
             len(phase_list),

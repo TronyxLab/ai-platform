@@ -1,251 +1,59 @@
 # shellcheck shell=bash
-# GREP_SUMMARY: bootstrap scp-deliver scp_to_server prepare_ssh_opts rsync ssh ssh-keygen ssh-opts mkdir-p remote-transfer
-# STRUCTURE: ▶ init SSH_OPTS → ⚡ prepare_ssh_opts(ssh_host) → ⚡ scp_to_server(host, node, ncd, cd) → ┌mkdir -p┐ → ⚡ phase 1/4 rsync core/ → ⚡ phase 1b/4 rsync platform-env.yaml → ⚡ phase 1c/4 rsync Makefile → ⚡ phase 2/4 rsync node-configs/ → ◇ secrets? → ⚡ phase 3/4 rsync secrets/ → ⎋ return 0|1
+# GREP_SUMMARY: bootstrap scp-deliver scp_to_server prepare_ssh_opts ssh-keygen ssh-opts thin-facade python3 core-deliverer sourced-library
+# STRUCTURE: ▶ init SSH_OPTS → ⚡ prepare_ssh_opts(host, mode) → ⚡ scp_to_server(host, node, ncd, cd) → python3 core_deliverer deliver → ⎋ return $?
 # region MODULE_CONTRACT
-## @purpose  SCP delivery functions for bootstrap — rsync core/ + node-configs/ to remote server,
-##           and prepare SSH options (host key cleanup + opts array)
-## @scope    Sourced by core/entrypoints/bootstrap.sh. Provides scp_to_server() and prepare_ssh_opts().
-##           Not intended for direct invocation.
-## @invariants
-##   - SSH_OPTS global array is initialized in this file (readonly initialization guard)
-##   - All rsync operations use --delete for idempotent sync
-##   - Remote directories are created via ssh mkdir -p before rsync (bare metal safe)
-##   - scp_to_server returns 0 on success, 1 on any rsync/ssh failure
-##   - prepare_ssh_opts runs ssh-keygen -R to gracefully handle server recreation
-##   - Phase order: core/ → platform-env.yaml → Makefile → node-configs/ → secrets/
-## @rationale Extraction from bootstrap.sh to thin-wrappen entrypoint. Layer re-homing T15 (DevPlan 020).
-##            scp_to_server carries Makefile rsync (Phase 1c, T6 from DevPlan 020).
-## @changes 2026-07-17 | T15 — Extracted from bootstrap.sh (pure extraction, identical logic)
-##           ｜           Multi-line SSH_OPTS spanning removed, SSH_OPTS init moved to this file
-##           2026-07-21 | W2-E1 — Migrated to lib/ssh.sh: source ssh.sh, prepare_ssh_opts deprecated,
-##                       inline ssh → ssh_exec, rsync uses SSH_OPTS_COMMON[*]
-## @rationale Q: Why 3 separate rsync calls for root-level files (platform-env.yaml, Makefile) instead of one?
-##            A: Different remote destinations — platform-env.yaml → /opt/platform/, Makefile → /opt/platform/.
-##            Same destination = two separate rsync calls (conservative pattern from original bootstrap.sh).
-##            If more root-level files need SCP, implement a manifest-based sync approach.
-## @rationale Q: Why not use UserKnownHostsFile=/dev/null in prepare_ssh_opts?
-##            A: That completely disables host key checking (MITM risk). Removing the old key first + accept-new
-##            is safer — it only adds new keys, doesn't blindly accept all.
-## ⚠️ TRAP[DECISION] · 2026-07-17 · HI · Rejected: registration in entrypoint-manifest.yaml
-## · Rejected: entrypoint-manifest.yaml — registry of executable operations; sourced library
-##   would corrupt gate semantics (gate checks for shebang + manifest registration).
-## · Follows sibling convention: remote-cmd.sh, content-hash.sh also non-shebang sourced libs.
-## · Rev: if a direct exec invocation of scp-deliver.sh is added — restore shebang and register.
+## @purpose  SCP delivery facade: prepare_ssh_opts (host-key cleanup, 4 active callers) + thin scp_to_server → python3 core_deliverer (DevPlan 108).
+## @scope    Sourced by bootstrap.sh + remote-cmd.sh (prepare_ssh_opts ×3). Not for direct invocation.
+## @invariants  SSH_OPTS init-guarded; exit 0|1 passthrough; ssh-keygen -R init-only. @rationale Strangler-Fig Tier 2 (108).
+## ⚠️ TRAP[DECISION] · 2026-07-17 · HI · Rejected: entrypoint-manifest.yaml registration (sourced lib corrupts gate semantics)
+## · Sibling convention: remote-cmd.sh, content-hash.sh. Rev: direct exec → restore shebang.
+## @changes 2026-07-31 | DevPlan 108 — 251→≤60 LOC; rsync/ssh оркестрация → core_deliverer.py
 # endregion MODULE_CONTRACT
-
-# ── source paths.sh for PLATFORM_ROOT ──────────────────────────────
-# Guard: if paths.sh already sourced from entrypoint, skip
 if [[ -z "${PATHS_LIB_DIR:-}" ]]; then
-    # Resolve our own path when sourced from different SCRIPT_DIR contexts
-    # shellcheck disable=SC2128  # BASH_SOURCE[0] is correct in source-context
     _SCP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     # shellcheck source=../../lib/paths.sh
     source "${_SCP_DIR}/../../lib/paths.sh"
     unset _SCP_DIR
 fi
-
-# ── Source lib/ssh.sh for SSH_OPTS_COMMON, ssh_exec, ssh_read ─────
 # shellcheck source=../../lib/ssh.sh
 source "${PATHS_LIB_DIR}/ssh.sh"
-
-# ── SSH_OPTS global array ──────────────────────────────────────────
-# Legacy: retained for backward-compat fallback branches (${SSH_OPTS[*]:-...}).
-# prepare_ssh_opts() now aliases SSH_OPTS_COMMON to SSH_OPTS.
-# Guard against re-sourcing (second source doesn't reset)
 if [[ "$(declare -p SSH_OPTS 2>/dev/null || true)" != "declare -a SSH_OPTS="* ]]; then
     SSH_OPTS=()
 fi
-
-# ═══════════════════════════════════════════════════════════════════
-# SSH: Clean host key + build opts
-# ═══════════════════════════════════════════════════════════════════
 # region FUNC_prepare_ssh_opts
-## @purpose  Populate SSH_OPTS array. Conditionally remove old SSH host key.
-## @param $1  SSH host (IP or domain)
-## @param $2  mode — "init" (bootstrap, removes old key) or "update" (preserve known_hosts)
-## @globals  SSH_OPTS — array of -o flags for ssh
-## @complexity O(1)
-## @invariants
-##   - ssh-keygen -R only runs when mode=init (honest TOFU for update/deploy)
-##   - StrictHostKeyChecking=accept-new allows new host keys without manual prompt
-##   - ConnectTimeout=30 avoids hanging on unreachable hosts
-##   - ServerAliveInterval=30 + ServerAliveCountMax=10 for long-running SSH sessions
+## @purpose  Populate SSH_OPTS array. Remove old SSH host key (mode=init). @param $1 host; $2 init|update
 ## ⚠️ TRAP[DECISION] · 2026-07-18 · HI · M7/G4: known_hosts init-only
 ## · Rejected: ssh-keygen -R at every deploy (MITM protection defeated)
-## · Reason: per G4 resolution, ssh-keygen -R only in init mode. Update/deploy
-##   trust the saved key (honest TOFU). This is the user-chosen security trade-off.
-## · Rev: if reinstall-detection is needed in CI, add a separate mechanism
-## @deprecated W2-E1: use SSH_OPTS_COMMON from lib/ssh.sh directly.
-##             Retained as backward-compat alias (NOT dead code).
-##             prepare_ssh_opts() has 8 active callers and manages host-key cleanup
-##             not covered by SSH_OPTS_COMMON. See TRAP[DECISION] below.
+## · Reason: per G4 resolution, ssh-keygen -R only in init mode (honest TOFU).
+## · Rev: if reinstall-detection needed in CI, add a separate mechanism
 prepare_ssh_opts() {
     local ssh_host="$1"
     local mode="${2:-init}"
     echo "[IMP:8][bootstrap][ssh] BACKWARD-COMPAT: prepare_ssh_opts() — use SSH_OPTS_COMMON from lib/ssh.sh" >&2
-
-    # Keep host-key management for backward compat (ssh_exec doesn't manage known_hosts)
     if [[ "${mode}" == "init" ]]; then
         echo "[IMP:8][bootstrap][ssh] Cleaning SSH host key for ${ssh_host} (mode=init)"
         ssh-keygen -R "${ssh_host}" 2>/dev/null || true
     else
         echo "[IMP:8][bootstrap][ssh] Preserving known_hosts for ${ssh_host} (mode=${mode})"
     fi
-
-    # Delegate SSH options to SSH_OPTS_COMMON (lib/ssh.sh)
     SSH_OPTS=("${SSH_OPTS_COMMON[@]}")
     echo "[IMP:7][bootstrap][ssh] SSH_OPTS populated from SSH_OPTS_COMMON" >&2
 }
 # endregion FUNC_prepare_ssh_opts
-
-# ═══════════════════════════════════════════════════════════════════
-# SCP PHASE: Rsync core/ and node-configs/ to remote server
-# ═══════════════════════════════════════════════════════════════════
 # region FUNC_scp_to_server
-## @purpose  Rsync core/ + platform-env.yaml + Makefile + node-configs/<node>/ + node-configs/secrets/ to remote server
-## @param $1  SSH host (IP or domain)
-## @param $2  Node name
-## @param $3  Node configs root directory (local)
-## @param $4  Core directory (local)
-## @globals  SSH_OPTS — array of -o flags for ssh (populated by prepare_ssh_opts)
-##           REMOTE_SSH_USER — remote user (default: root)
-##           PLATFORM_REMOTE_BASE — remote platform base (default: /opt/platform)
-##           NODE_CONFIGS_REMOTE_BASE — remote node-configs base (default: /opt/node-configs)
-## @io       stdout/stderr: rsync progress + LDD logs
-##           exit 0: all rsyncs succeeded, exit 1: any rsync failed
-## @complexity O(F) where F = number of files to transfer
-## @rationale Q: Why 3 separate rsync calls instead of one big one?
-##            A: Different remote destinations: core/ → ${PLATFORM_ROOT}/core/,
-##            node-configs/<node>/ → /opt/node-configs/<node>/,
-##            secrets/ → /opt/node-configs/secrets/.
-##            They arrive in different directory subtrees.
+## @purpose  Thin wrapper → core_deliverer.py deliver (mkdir + 5 rsync фаз, exit 0|1 passthrough).
+## 🧐 TRAP[DECISION] · 2026-07-31 · — · DRY_RUN guard [[ == "true" ]] вместо ${DRY_RUN:+--dry-run}
+## · Rejected: bootstrap.sh DRY_RUN="false" (непустая строка) → bare ${...:+} всегда dry-run
+## · Reason: intent AC5 — dry-run флаг только при фактическом dry-run; bootstrap-путь не меняется
 scp_to_server() {
-    local ssh_host="$1"
-    local node_name="$2"
-    local node_configs_dir="$3"
-    local core_dir="$4"
-
-    local remote_user="${REMOTE_SSH_USER:-root}"
-    local remote_platform_base="${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}"
-    local remote_node_configs_base="${NODE_CONFIGS_REMOTE_BASE:-/opt/node-configs}"
-
-    # ── Ensure target directories exist on remote server ──────────────
-    # ⚠️ TRAP[BUG] · 2026-07-16 · FIXED (D2) · Bare server: mkdir -p отсутствовал
-    # · Symptom: `rsync: mkdir /opt/platform/core/ failed: No such file or directory` на bare VPS
-    # · Root: rsync не создаёт родительские директории на удалённом сервере без --rsync-path="mkdir -p ..."
-    # ·   Сисадмин вручную создавал /opt/platform/ — правка не попала в diff.
-    # · Fix: явный ssh mkdir -p для всех целевых директорий перед rsync.
-    # ·   Каждый bootstrap начинается с создания иерархии — bare metal safe.
-    # · Rev: если появятся новые target-директории — добавить их сюда.
-    echo "[IMP:8][bootstrap][scp] Ensuring remote directories exist on ${ssh_host}"
-    # Use ssh_exec from lib/ssh.sh (timeout=30 for mkdir operation)
-    ssh_exec "${ssh_host}" "${remote_user}" \
-        "mkdir -p ${remote_platform_base}/core ${remote_node_configs_base}/${node_name} ${remote_node_configs_base}/secrets" 30 || {
-        echo "[IMP:10][bootstrap][scp] FATAL: ssh mkdir -p failed for ${ssh_host}" >&2
-        return 1
-    }
-    echo "[IMP:9][bootstrap][scp] Remote directories confirmed"
-
-    # ── SCP 1: core/ → ${PLATFORM_ROOT:-/opt/platform}/core/ ───────────────────
-    echo "[IMP:9][bootstrap][scp] Phase 1/4: Rsyncing core/ → ${ssh_host}:${remote_platform_base}/core/"
-    local core_src="${core_dir}/"
-    local core_dst="${remote_user}@${ssh_host}:${remote_platform_base}/core/"
-    # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
-    if ! rsync -avz --delete \
-        -e "ssh ${SSH_OPTS_COMMON[*]}" \
-        --exclude=.git \
-        --exclude=__pycache__ \
-        --exclude=.pytest_cache \
-        --exclude='default-user.xml' \
-        --exclude='.env' \
-        "${core_src}" \
-        "${core_dst}"; then
-        echo "[IMP:10][bootstrap][scp] FATAL: rsync core/ failed for ${ssh_host}" >&2
-        return 1
-    fi
-    echo "[IMP:9][bootstrap][scp] Phase 1/4: core/ rsync complete"
-
-    # 🧐 TRAP[DECISION] · 2026-07-16 · — · SCP platform-env.yaml from project root to /opt/platform/
-    # · Rejected: duplicating platform-env.yaml into core/ (cross-layer violation)
-    # · Reason: bootstrap only SCPs core/ and node-configs/; root-level platform-env.yaml is separate
-    # · Rev: if more root-level files need SCP, implement a manifest-based sync approach
-    # ── SCP 1b: platform-env.yaml → ${PLATFORM_ROOT:-/opt/platform}/ ──
-    local platform_env_src="${core_dir}/../platform-env.yaml"
-    if [[ -f "$platform_env_src" ]]; then
-        echo "[IMP:9][bootstrap][scp] Phase 1b/4: Rsyncing platform-env.yaml → ${ssh_host}:${remote_platform_base}/"
-        local env_dst="${remote_user}@${ssh_host}:${remote_platform_base}/platform-env.yaml"
-        # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
-        if ! rsync -avz -e "ssh ${SSH_OPTS_COMMON[*]}" "${platform_env_src}" "${env_dst}"; then
-            echo "[IMP:10][bootstrap][scp] FATAL: rsync platform-env.yaml failed for ${ssh_host}" >&2
-            return 1
-        fi
-        echo "[IMP:9][bootstrap][scp] Phase 1b/4: platform-env.yaml rsync complete"
-    else
-        echo "[IMP:8][bootstrap][scp] Phase 1b/4: SKIP — platform-env.yaml not found at ${platform_env_src}"
-    fi
-
-    # 🧐 TRAP[DECISION] · 2026-07-17 · — · SCP Makefile from project root to /opt/platform/
-    # · Rejected: manifest-based sync approach (over-engineering for one extra file)
-    # · Reason: follows same pattern as platform-env.yaml (Phase 1b) — explicit rsync call
-    # · Rev: if more root-level files need SCP, implement a manifest-based sync approach
-    # ── SCP 1c: Makefile → ${PLATFORM_ROOT:-/opt/platform}/ ──
-    local makefile_src="${core_dir}/../Makefile"
-    if [[ -f "$makefile_src" ]]; then
-        echo "[IMP:9][bootstrap][scp] Phase 1c/4: Rsyncing Makefile → ${ssh_host}:${remote_platform_base}/"
-        local makefile_dst="${remote_user}@${ssh_host}:${remote_platform_base}/Makefile"
-        # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
-        if ! rsync -avz -e "ssh ${SSH_OPTS_COMMON[*]}" "${makefile_src}" "${makefile_dst}"; then
-            echo "[IMP:10][bootstrap][scp] FATAL: rsync Makefile failed for ${ssh_host}" >&2
-            return 1
-        fi
-        echo "[IMP:9][bootstrap][scp] Phase 1c/4: Makefile rsync complete"
-    else
-        echo "[IMP:8][bootstrap][scp] Phase 1c/4: SKIP — Makefile not found at ${makefile_src}"
-    fi
-
-    # ── SCP 2: node-configs/<node>/ → /opt/node-configs/<node>/ ──
-    echo "[IMP:9][bootstrap][scp] Phase 2/4: Rsyncing node-configs/${node_name}/ → ${ssh_host}:${remote_node_configs_base}/${node_name}/"
-    local node_src="${node_configs_dir}/${node_name}/"
-    local node_dst="${remote_user}@${ssh_host}:${remote_node_configs_base}/${node_name}/"
-    # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
-    if ! rsync -avz --delete \
-        -e "ssh ${SSH_OPTS_COMMON[*]}" \
-        --exclude=.git \
-        --exclude=__pycache__ \
-        --exclude=.pytest_cache \
-        "${node_src}" \
-        "${node_dst}"; then
-        echo "[IMP:10][bootstrap][scp] FATAL: rsync node-configs/${node_name}/ failed for ${ssh_host}" >&2
-        return 1
-    fi
-    echo "[IMP:9][bootstrap][scp] Phase 2/4: node-configs/${node_name}/ rsync complete"
-
-    # ── SCP 3: node-configs/<node>/secrets/ → /opt/node-configs/secrets/ ──
-    # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · Phase 3 искал secrets в node-configs/secrets/ (top-level),
-    #   но структура была изменена на per-node: node-configs/<node>/secrets/.
-    #   Результат: Phase 3 всегда SKIP, encrypted secrets не доставлялись на VPS,
-    #   decrypt-secrets падал с «No encrypted secrets file».
-    # · Fix: искать secrets в per-node директории (node-configs/<node>/secrets/),
-    #   доставлять в /opt/node-configs/secrets/ (куда смотрят decrypt-скрипты).
-    local per_node_secrets="${node_configs_dir}/${node_name}/secrets"
-    if [[ -d "${per_node_secrets}" ]]; then
-        echo "[IMP:9][bootstrap][scp] Phase 3/4: Rsyncing ${per_node_secrets}/ → ${ssh_host}:${remote_node_configs_base}/secrets/"
-        local secrets_src="${per_node_secrets}/"
-        local secrets_dst="${remote_user}@${ssh_host}:${remote_node_configs_base}/secrets/"
-        # shellcheck disable=SC2086  # SSH_OPTS_COMMON intentionally word-split for rsync -e
-        if ! rsync -avz --delete \
-            -e "ssh ${SSH_OPTS_COMMON[*]}" \
-            --exclude=.git \
-            "${secrets_src}" \
-            "${secrets_dst}"; then
-            echo "[IMP:10][bootstrap][scp] FATAL: rsync secrets/ failed for ${ssh_host}" >&2
-            return 1
-        fi
-        echo "[IMP:9][bootstrap][scp] Phase 3/4: secrets/ rsync complete"
-    else
-        echo "[IMP:8][bootstrap][scp] Phase 3/4: SKIP — no secrets/ directory at ${per_node_secrets}"
-    fi
-
-    return 0
+    local ssh_host="$1" node_name="$2" node_configs_dir="$3" core_dir="$4"
+    local dry_arg=""; [[ "${DRY_RUN:-}" == "true" ]] && dry_arg="--dry-run"
+    python3 -m core.internal.bootstrap.core_deliverer deliver \
+        --host "${ssh_host}" \
+        --node "${node_name}" \
+        --node-configs-dir "${node_configs_dir}" \
+        --core-dir "${core_dir}" \
+        --remote-user "${REMOTE_SSH_USER:-root}" \
+        ${dry_arg:+--dry-run}
 }
 # endregion FUNC_scp_to_server

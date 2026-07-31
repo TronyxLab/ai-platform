@@ -49,7 +49,8 @@ NODE_YAML_PATH = os.path.join(TEST_DATA_DIR, "node.yaml")
 NODE_RESOLVER_SH = os.path.join(CORE_LIB, "node-resolver.sh")
 BOOTSTRAP_SH = os.path.join(ENTRYPOINTS_DIR, "bootstrap.sh")
 SCP_DELIVER_SH = os.path.join(INTERNAL_BOOTSTRAP_DIR, "scp-deliver.sh")
-REMOTE_CMD_SH = os.path.join(INTERNAL_BOOTSTRAP_DIR, "remote-cmd.sh")
+# DevPlan 101 D1: build_*_ssh_cmd извлечены из remote-cmd.sh в build-ssh-cmd.sh
+BUILD_SSH_CMD_SH = os.path.join(INTERNAL_BOOTSTRAP_DIR, "build-ssh-cmd.sh")
 NODE_LIFECYCLE_SH = os.path.join(INTERNAL_BOOTSTRAP_DIR, "node-lifecycle.sh")
 PLATFORM_SECRETS_INSTALL_SH = os.path.join(PLATFORM_SECRETS_DIR, "install.sh")
 DECRYPT_SECRETS_SH = os.path.join(INTERNAL_SECRETS_DIR, "decrypt-secrets.sh")
@@ -230,32 +231,37 @@ fi
 
 
 # region TEST_test_detect_age_key_from_env
+# 🧪 TRAP[TEST] · 2026-07-31 · detect_age_key migrated to python3 -m node_detect (DevPlan 104)
+# · Regression: shell detect_age_key() removed from bootstrap.sh — logic now in
+# ·   core/internal/shared/node_detect.py (canonical SoT)
+# · Scenario: python3 -m core.internal.shared.node_detect --detect-age-key with
+# ·   AGE_SECRET_KEY env set → key on stdout, exit 0
+# · Last fail: 2026-07-31 — shell function extraction no longer possible (removed)
+# · Remove if: node_detect CLI is reworked
 
 
 def test_detect_age_key_from_env(caplog) -> None:
-    """Verify detect_age_key() returns the key when AGE_SECRET_KEY env is set."""
+    """Verify python3 -m node_detect --detect-age-key returns the key when AGE_SECRET_KEY env is set."""
     caplog.set_level(logging.DEBUG)
 
     test_key = "AGE-SECRET-KEY-test-value-12345"
 
-    # detect_age_key echoes the key to stdout; test echoes exit code
-    test_call = """detect_age_key
+    test_call = """python3 -m core.internal.shared.node_detect --detect-age-key
 rc=$?
-echo "[IMP:9][detect_age_key] exit_code=${rc}"
+echo "[IMP:9][node_detect] exit_code=${rc}"
 echo "KEY_OUTPUT_SEPARATOR"
-echo "KEY_VALUE:$(detect_age_key)"
+echo "KEY_VALUE:$(python3 -m core.internal.shared.node_detect --detect-age-key)"
 """
-    stdout, stderr, rc = _test_func(
-        BOOTSTRAP_SH,
-        ["detect_age_key"],
+    stdout, stderr, rc = _bash(
         test_call,
-        env={"AGE_SECRET_KEY": test_key, "__LOG_PREFIX": "test"},
+        env={"AGE_SECRET_KEY": test_key, "SOPS_AGE_KEY": "", "AGE_SECRET_KEY_FILE": "", "__LOG_PREFIX": "test"},
     )
 
     found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"detect_age_key failed with rc={rc}: {stderr}"
-    assert test_key in stdout, f"Expected key '{test_key}' in stdout, got '{stdout}'"
-    logger.info("[IMP:9][test_detect_age_key_from_env][assert] Key detected from AGE_SECRET_KEY env")
+    assert rc == 0, f"node_detect --detect-age-key failed with rc={rc}: {stderr}"
+    assert "exit_code=0" in stdout, f"Expected exit_code=0 in stdout, got '{stdout}'"
+    assert f"KEY_VALUE:{test_key}" in stdout, f"Expected key '{test_key}' in stdout, got '{stdout}'"
+    logger.info("[IMP:9][test_detect_age_key_from_env][assert] Key detected from AGE_SECRET_KEY env via python3 -m")
     assert found_imp9, f"Critical LDD Error: No IMP:9 log found. stdout={stdout!r}"
 
 
@@ -263,35 +269,41 @@ echo "KEY_VALUE:$(detect_age_key)"
 
 
 # region TEST_test_detect_age_key_missing_warns
+# 🧪 TRAP[TEST] · 2026-07-31 · detect_age_key missing path via python3 -m node_detect (DevPlan 104)
+# · Regression: shell detect_age_key() warn-on-missing (non-fatal) removed from bootstrap.sh
+# · Scenario: python3 -m core.internal.shared.node_detect --detect-age-key with no key
+# ·   → exit 3, stderr diagnostic "AGE_SECRET_KEY not found" (warn semantics preserved;
+# ·     exit 3 = module OK + key absent, per language-policy contract, TRAP[DECISION] node_detect.py)
+# · Last fail: 2026-07-31 — shell function extraction no longer possible (removed)
+# · Remove if: node_detect CLI is reworked
 
 
 def test_detect_age_key_missing_warns(caplog) -> None:
-    """Verify detect_age_key() warns when no AGE key is set (non-fatal)."""
+    """Verify node_detect --detect-age-key exits non-zero (3) with WARN diagnostic when no AGE key is set."""
     caplog.set_level(logging.DEBUG)
 
     test_call = """\
-if detected="$(detect_age_key 2>&1)"; then
-    echo "[IMP:9][detect_age_key] KEY_FOUND=${detected}"
+detected="$(python3 -m core.internal.shared.node_detect --detect-age-key 2>&1)"
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    echo "[IMP:9][node_detect] KEY_FOUND=${detected}"
 else
-    echo "[IMP:9][detect_age_key] KEY_NOT_FOUND (expected)"
+    echo "[IMP:9][node_detect] KEY_NOT_FOUND (expected) rc=${rc}"
     echo "STDERR_WARN:${detected}"
 fi
-echo "EXIT_CODE:$?"
 """
-    stdout, stderr, rc = _test_func(
-        BOOTSTRAP_SH,
-        ["detect_age_key"],
+    stdout, stderr, rc = _bash(
         test_call,
-        env={"__LOG_PREFIX": "test", "AGE_SECRET_KEY": ""},
+        env={"__LOG_PREFIX": "test", "AGE_SECRET_KEY": "", "SOPS_AGE_KEY": "", "AGE_SECRET_KEY_FILE": ""},
     )
 
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"Script crashed with rc={rc}: {stderr}"
     assert "KEY_NOT_FOUND" in stdout, f"Expected KEY_NOT_FOUND: {stdout}"
-    # The WARN message is captured in stdout (via 2>&1) and stderr (direct from function)
+    # The WARN diagnostic is captured in stdout (via 2>&1) — stderr carries it directly from logging
     combined = stdout + "\n" + stderr
-    assert "WARN" in combined, f"Expected WARN message in output: {combined}"
-    logger.info("[IMP:9][test_detect_age_key_missing_warns][assert] WARN emitted")
+    assert "not found" in combined.lower(), f"Expected 'not found' WARN message in output: {combined}"
+    logger.info("[IMP:9][test_detect_age_key_missing_warns][assert] WARN emitted via node_detect stderr")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
@@ -309,7 +321,7 @@ def test_ssh_command_construction(caplog) -> None:
 echo "[IMP:9][build_ssh_cmd] SSH command constructed"
 """
     stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
+        BUILD_SSH_CMD_SH,
         ["build_ssh_cmd"],
         test_call,
         env={"__LOG_PREFIX": "test"},
@@ -338,7 +350,7 @@ echo "[IMP:9][build_ssh_cmd] SSH command constructed"
 
     # Test without age key (but with ci_deploy_key)
     stdout3, _stderr3, rc3 = _test_func(
-        REMOTE_CMD_SH,
+        BUILD_SSH_CMD_SH,
         ["build_ssh_cmd"],
         'build_ssh_cmd "test-node" "key" "ci-key" ""; echo "[IMP:9][build_ssh_cmd] No-age-key test"',
         env={"__LOG_PREFIX": "test"},
@@ -812,7 +824,7 @@ def test_build_ssh_cmd_includes_ci_deploy_key(caplog) -> None:
 echo "[IMP:9][build_ssh_cmd_ci] Exit=$?"
 """
     stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
+        BUILD_SSH_CMD_SH,
         ["build_ssh_cmd"],
         test_call,
         env={"__LOG_PREFIX": "test"},
@@ -850,7 +862,7 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
     caplog.set_level(logging.DEBUG)
 
     stdout, stderr, rc = _test_func(
-        REMOTE_CMD_SH,
+        BUILD_SSH_CMD_SH,
         ["build_ssh_cmd"],
         'build_ssh_cmd "test-node" "ssh-ed25519 AAAATestOwnerKey owner@test" "" "AGE-SECRET-KEY-12345"\n'
         'echo "[IMP:9][build_ssh_cmd_empty] Exit=$?"',
@@ -874,7 +886,7 @@ def test_build_ssh_cmd_empty_ci_deploy_key_omits_flag(caplog) -> None:
 
     # Also test with both ci_deploy_key AND age_key empty
     stdout2, stderr2, rc2 = _test_func(
-        REMOTE_CMD_SH,
+        BUILD_SSH_CMD_SH,
         ["build_ssh_cmd"],
         'build_ssh_cmd "test-node" "key" "" ""\necho "[IMP:9][build_ssh_cmd_both_empty] Exit=$?"',
         env={"__LOG_PREFIX": "test"},
@@ -980,16 +992,17 @@ fi
 
 
 # region TEST_test_detect_age_key_from_file_fallback
-# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 detect_age_key AGE_SECRET_KEY_FILE fallback
-# · Regression: age key from --age-secret-key-file must be detected when AGE_SECRET_KEY env unset
-# · Scenario: AGE_SECRET_KEY_FILE points to tmp file with key → detect_age_key returns it
-# · Last fail: 2026-07-31 — stale contract: extract context lacked CORE_DIR env → function fell
-#   back to env-only chain (path ${CORE_DIR}/internal/shared/age_key.py = /internal/... missing)
-# · Remove if: detect_age_key moves to Python (then point test at new module)
+# 🧪 TRAP[TEST] · 2026-07-31 · detect_age_key AGE_SECRET_KEY_FILE fallback via python3 -m (DevPlan 104)
+# · Regression: shell detect_age_key() removed from bootstrap.sh — file fallback now in
+# ·   core/internal/shared/node_detect.py (AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE chain)
+# · Scenario: python3 -m core.internal.shared.node_detect --detect-age-key with AGE_SECRET_KEY unset
+# ·   and AGE_SECRET_KEY_FILE pointing at tmp file → key on stdout
+# · Last fail: 2026-07-31 — shell function extraction no longer possible (removed)
+# · Remove if: node_detect CLI is reworked
 
 
 def test_detect_age_key_from_file_fallback(caplog, tmp_path) -> None:
-    """Verify detect_age_key() reads from AGE_SECRET_KEY_FILE when env var is unset."""
+    """Verify node_detect --detect-age-key reads from AGE_SECRET_KEY_FILE when env var is unset."""
     caplog.set_level(logging.DEBUG)
 
     # Create a file with the age key
@@ -1000,27 +1013,26 @@ def test_detect_age_key_from_file_fallback(caplog, tmp_path) -> None:
 
     logger.info("[IMP:9][test_age_key_file] Testing AGE_SECRET_KEY_FILE fallback")
 
-    # detect_age_key: env AGE_SECRET_KEY empty → falls back to AGE_SECRET_KEY_FILE
-    test_call = f"""AGE_SECRET_KEY=""
-AGE_SECRET_KEY_FILE="{key_file}"
-detected="$(detect_age_key 2>/dev/null)" || true
+    # Chain: AGE_SECRET_KEY empty → SOPS_AGE_KEY empty → AGE_SECRET_KEY_FILE content
+    test_call = f"""\
+detected="$(python3 -m core.internal.shared.node_detect --detect-age-key 2>/dev/null)"
+rc=$?
+echo "[IMP:9][test_age_key_file] rc=${{rc}}"
 echo "[IMP:9][test_age_key_file] DETECTED_LEN=${{#detected}}"
 echo "[IMP:9][test_age_key_file] MATCH=$([[ "$detected" == "{test_key}" ]] && echo yes || echo no)"
 """
-    stdout, stderr, rc = _test_func(
-        BOOTSTRAP_SH,
-        ["detect_age_key"],
+    stdout, stderr, rc = _bash(
         test_call,
-        env={"__LOG_PREFIX": "test", "CORE_DIR": CORE_DIR, "AGE_SECRET_KEY": "", "AGE_SECRET_KEY_FILE": str(key_file)},
+        env={"__LOG_PREFIX": "test", "AGE_SECRET_KEY": "", "SOPS_AGE_KEY": "", "AGE_SECRET_KEY_FILE": str(key_file)},
     )
 
     found_imp9 = _print_ldd(stderr, stdout)
-    assert rc == 0, f"detect_age_key with file fallback failed: {stderr}"
+    assert rc == 0, f"node_detect with file fallback failed: {stderr}"
 
     # Key must be detected from file (non-empty, matches test_key)
     assert f"DETECTED_LEN={len(test_key)}" in stdout, f"Expected key length {len(test_key)}, got: {stdout}"
     assert "MATCH=yes" in stdout, f"Detected key must match file content, got: {stdout}"
-    logger.info("[IMP:9][test_age_key_file][assert] age key read from AGE_SECRET_KEY_FILE OK")
+    logger.info("[IMP:9][test_age_key_file][assert] age key read from AGE_SECRET_KEY_FILE OK via python3 -m")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 

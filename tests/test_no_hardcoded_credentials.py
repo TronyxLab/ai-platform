@@ -248,8 +248,16 @@ def _scan_shell_for_password_argument(
     ## @complexity — O(L) where L = lines
     ## @invariants
     ##   - Matches: --password LITERAL where LITERAL does not start with $ or ${
+    ##   - Skips quoted variable references ("$password", '${PW}') — the value is a
+    ##     shell variable reference, not a literal (2026-07-31, plan 102)
+    ##   - Quoted literals ("test2026") are STILL detected — the post-filter only
+    ##     skips values whose unquoted inner content starts with $
     ##   - Skips comment lines
     ##   - Returns empty list if file cannot be read
+    ## @changes  2026-07-31 | plan 102 | false positive fix: core/lib/secrets.sh:62
+    ##           `--password "$password"` matched as literal — regex lookahead only
+    ##           excluded a bare leading $; quoted variable refs now post-filtered
+    ##           via _is_shell_variable_ref (quote-strip + $ prefix check)
     """
     # region BLOCK_ScanPasswordArg
     findings: list[tuple[int, str]] = []
@@ -266,7 +274,28 @@ def _scan_shell_for_password_argument(
 
         # Match --password followed by a non-whitespace value that is NOT a $ ref
         pattern = re.compile(r"(?i)--password\s+(?P<value>(?!\$\{|\$\(|\$)\S+)")
-        findings.extend((i, m.group("value")) for m in pattern.finditer(stripped))
+        for m in pattern.finditer(stripped):
+            raw_value: str = m.group("value")
+            # ⚠️ TRAP[BUG] · 2026-07-31 · P2 · False positive: quoted variable refs
+            #   ("$password", '${PW}') matched as literal --password values
+            # · Symptom: core/lib/secrets.sh:62 `--password "$password"` failed the
+            #   scanner — negative lookahead only excludes a bare leading $, so a
+            #   value starting with a quote passed as "literal"
+            # · Root: regex lookahead (?!\$\{|\$\(|\$) checks the first char only;
+            #   quoted variable references were indistinguishable from quoted literals
+            # · Fix: post-filter via _is_shell_variable_ref — strip surrounding quotes,
+            #   if inner content starts with $ it is a variable reference → skip
+            # · Prevention: real quoted literals ("test2026") still match — the filter
+            #   only excludes values whose unquoted content is a $ reference
+            if _is_shell_variable_ref(raw_value):
+                logger.info(
+                    "[IMP:8][scan_password_arg][skip-var-ref] %s:%d --password %s (quoted variable reference, not literal)",
+                    filepath,
+                    i,
+                    _truncate(raw_value),
+                )
+                continue
+            findings.append((i, raw_value))
     # endregion
     return findings
 

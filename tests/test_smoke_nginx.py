@@ -214,24 +214,21 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
     )
 
     # ── Step 4: Ensure dev certificates exist (idempotent) ────────────────────
-    _logger.info("[IMP:7][nginx_compose][setup] Ensuring dev certificates via generate-dev-certs.sh")
-    _script_path = os.path.join(str(_NGINX_MODULE), "generate-dev-certs.sh")
+    _logger.info("[IMP:7][nginx_compose][setup] Ensuring dev certificates via dev_cert_generator.py")
+    _script_path = os.path.join(str(_NGINX_MODULE), "dev_cert_generator.py")
     cert_result = subprocess.run(
-        ["bash", _script_path],
+        ["python3", _script_path],
         capture_output=True,
         text=True,
         timeout=30,
     )
-    for line in cert_result.stdout.strip().split("\n"):
+    # Module writes LDD logs to stderr — merge both streams for telemetry
+    for line in (cert_result.stdout + cert_result.stderr).strip().split("\n"):
         if line.strip():
             _logger.info("[IMP:8][nginx_compose][certs] %s", line.strip())
-    if cert_result.stderr.strip():
-        for line in cert_result.stderr.strip().split("\n"):
-            if line.strip():
-                _logger.warning("[IMP:8][nginx_compose][certs] %s", line.strip())
     if cert_result.returncode != 0:
         _logger.warning(
-            "[IMP:8][nginx_compose][certs] generate-dev-certs.sh exited %d (may still work with existing certs)",
+            "[IMP:8][nginx_compose][certs] dev_cert_generator.py exited %d (may still work with existing certs)",
             cert_result.returncode,
         )
     _logger.info("[IMP:9][nginx_compose][setup] Dev certificates ensured")

@@ -15,8 +15,6 @@
 import json
 import logging
 
-import pytest
-
 from core.internal.bootstrap.docker_daemon import merge_live_restore
 
 logger = logging.getLogger("test_docker_daemon")

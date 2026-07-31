@@ -12,6 +12,8 @@
 ##              — SSH_OPTS mirror lib/ssh.sh SSH_OPTS_COMMON
 ## @rationale Strangler-Fig: remote-cmd.sh 672→~230 LOC shell facade. Business logic → unit-testable Python.
 ## @changes 2026-07-26 | TASK-036D — Initial implementation (Wave 5d Strangler-Fig)
+##           2026-07-31 | DevPlan 108 — sync_core_to_vps делегирует core/ rsync в
+##                       core_deliverer.deliver_core(); dead exclude-const удалён
 # ⚠️ TRAP[BUG] · 2026-07-24 · P0 · node-update не доставлял core/ на VPS
 # · Ported from remote-cmd.sh:294. Fix: rsync core/ + node.yaml before remote exec.
 # · Prevention: always call sync_core_to_vps() before remote exec in node-update.
@@ -27,6 +29,9 @@ import os
 import subprocess
 import sys
 
+# DevPlan 108 F3: sync_core_to_vps делегирует core/ rsync в core_deliverer.deliver_core()
+# (DRY-унификация двойного core/ rsync, P2/D3). Направление импорта overlay → core — без цикла.
+from core.internal.bootstrap.core_deliverer import CoreDeliveryError, deliver_core
 from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, ConfigValidationError, NodeYaml
 
 # DevPlan 089 T15: DeployOrchestrator integration for overlay delivery
@@ -87,14 +92,6 @@ SSH_OPTS: list[str] = [
     "ServerAliveInterval=30",
     "-o",
     "ServerAliveCountMax=10",
-]
-
-RSYNC_EXCLUDES: list[str] = [
-    "--exclude=.git",
-    "--exclude=__pycache__",
-    "--exclude=.pytest_cache",
-    "--exclude=default-user.xml",
-    "--exclude=.env",
 ]
 
 
@@ -181,8 +178,13 @@ def extract_node_host(yaml_path: str) -> str:
 
 # region FUNC_sync_core_to_vps
 ## @purpose  Rsync core/ + optional node.yaml to remote VPS. Dry-run mode prints commands, does not execute.
+##           core/ rsync ДЕЛЕГИРУЕТСЯ в core_deliverer.deliver_core() (DevPlan 108 F3) — единый источник.
 ## @io  input: host, core_src, node_name, node_yaml, dry_run (bool); output: bool success
 ## @complexity  O(f + m) where f = files rsynced, m = metadata (node.yaml) rsync
+## @rationale  D3 DevPlan 108: ДВА независимых core/ rsync (scp-deliver Phase 1 + этот inline) породили
+##             P1-дрейф remote base (TRAP[BUG] ниже). Делегирование сохраняет сигнатуру (host, core_src,
+##             node_name, node_yaml, dry_run) → bool и исключение SyncCoreError → тесты test_sync_core_*
+##             проходят без модификации. node.yaml rsync остаётся overlay-специфичной доставкой.
 def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: str = "", dry_run: bool = False) -> bool:
     """Rsync core/ + optional node.yaml to remote VPS. Dry-run: print, don't exec.
 
@@ -192,23 +194,22 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
         raise SyncCoreError("Missing required argument: host")
     if not core_src or not os.path.isdir(core_src):
         raise SyncCoreError(f"core_src not found: {core_src}")
-    core_src = core_src if core_src.endswith("/") else core_src + "/"
 
-    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · hardcoded /opt/platform расходился с scp-deliver.sh (remote base)
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · ДВА независимых core/ rsync → ЕДИНЫЙ источник (DevPlan 108 F3)
     # · Symptom: `make node-update NODE=<host>` доставлял core в /opt/platform/core, а bootstrap —
     # ·   в ${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}/core → на VPS ДВЕ копии core;
     # ·   update-фазы выполнялись из чужого дерева (state.json от init не находил скриптов).
-    # · Fix: единый remote_root = PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform
-    # ·   (та же цепочка, что scp-deliver.sh:129 и remote-cmd.sh build_*_ssh_cmd).
-    # · Prevention: любой код, доставляющий core на VPS, использует одну функцию резолюции базы.
-    remote_root = os.environ.get("PLATFORM_REMOTE_BASE") or os.environ.get("PLATFORM_ROOT") or "/opt/platform"
-    remote_core = f"{remote_root.rstrip('/')}/core/"
+    # · Fix (DevPlan 108): ЕДИНАЯ точка резолюции remote base — core_deliverer.resolve_remote_base()
+    # ·   (цепочка PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform, та же, что scp-deliver.sh:129).
+    # ·   sync_core_to_vps ДЕЛЕГИРУЕТ core/ rsync в core_deliverer.deliver_core() — дублирование устранено.
+    # · Prevention: любой код, доставляющий core на VPS, использует core_deliverer.deliver_core().
+    try:
+        deliver_core(host=host, core_dir=core_src, remote_user="root", dry_run=dry_run)
+    except CoreDeliveryError as exc:
+        raise SyncCoreError(str(exc)) from exc
 
     ssh_e = _ssh_e()
-    cmd = ["rsync", "-avz", "--delete", *RSYNC_EXCLUDES, "-e", ssh_e, core_src, f"root@{host}:{remote_core}"]
-
     if dry_run:
-        logger.info("[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: %s", " ".join(cmd))
         if node_yaml and os.path.isfile(node_yaml):
             logger.info(
                 "[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: rsync %s → root@%s:/opt/node-configs/%s/node.yaml",
@@ -217,13 +218,6 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
                 node_name,
             )
         return True
-
-    logger.info("[IMP:9][sync_core_to_vps][exec] Rsyncing core/ → %s:%s", host, remote_core)
-    logger.info("[IMP:7][sync_core_to_vps][exec] Running: %s", " ".join(cmd))
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if r.returncode != 0:
-        raise SyncCoreError(f"rsync core/ failed for {host} (exit={r.returncode}): {r.stderr.strip()}")
-    logger.info("[IMP:9][sync_core_to_vps][exec] core/ rsync complete")
 
     if node_yaml and os.path.isfile(node_yaml):
         cmd2 = ["rsync", "-avz", "-e", ssh_e, node_yaml, f"root@{host}:/opt/node-configs/{node_name}/node.yaml"]

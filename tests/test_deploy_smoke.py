@@ -14,8 +14,10 @@
 ##   - tmp_path fixture is used for the mock wrapper script
 ## @rationale DevPlan 042 Option D — 2 integration smoke tests verify the shell facade behaves
 ##           correctly at its first validation gate. These are the minimum viable smoke tests
-##           for a 91-LOC thin facade.
+##           for a 50-LOC thin facade (DevPlan 100 — routing/deploy delegated to deploy_orchestrator.py).
 ## @changes   2026-07-22 · DevPlan 042 — created 2 smoke tests
+##            2026-07-31 · DevPlan 100 TASK-4c — facade reduced to ≤50 LOC + exec python3
+##            orchestrator; NODE_YAML validation gates still exit before the exec (contract unchanged)
 # endregion MODULE_CONTRACT
 """
 

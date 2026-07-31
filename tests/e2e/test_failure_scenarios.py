@@ -111,7 +111,9 @@ def test_resume_phase7_after_midphase_kill(
         if time.monotonic() > deadline:
             break
 
-    assert phase1_seen, "φ1 (system_bootstrap) never started within 900s — kill window missed (bootstrap too slow/failed)"
+    assert phase1_seen, (
+        "φ1 (system_bootstrap) never started within 900s — kill window missed (bootstrap too slow/failed)"
+    )
     time.sleep(2)  # allow apt-get to begin executing → mid-φ1 kill
 
     # ── 3. SIGKILL the remote bootstrap process (mid-φ1) + orphan apt-get (dpkg lock) ──
@@ -212,12 +214,6 @@ def test_deploy_forced_command_receive(
     """
     caplog.set_level(logging.DEBUG)
 
-    before = node_ssh.ssh_read(
-        "ls -1 /opt/projects/test-project/.deploy-snapshots/*.json 2>/dev/null | wc -l", timeout=30
-    )
-    count_before = int(before.stdout.strip() or "0")
-    logger.info("[IMP:8][T16][receive] snapshots before=%d", count_before)
-
     tar_path = build_payload_tar(Path(test_project_dir))
     delivery = deliver_payload_via_ssh(node_ssh, tar_path, timeout=600)
     logger.info("[IMP:9][T16][receive] exit=%d", delivery.exit_code)
@@ -243,8 +239,25 @@ def test_deploy_forced_command_receive(
         "ls -1 /opt/projects/test-project/.deploy-snapshots/*.json 2>/dev/null | wc -l", timeout=30
     )
     count_after = int(after.stdout.strip() or "0")
-    logger.info("[IMP:9][T16][receive] snapshots after=%d (delta=%d)", count_after, count_after - count_before)
-    assert count_after > count_before, f"No new snapshot created: before={count_before} after={count_after}"
+    logger.info("[IMP:9][T16][receive] snapshots after=%d", count_after)
+    # ⚠️ TRAP[DECISION] · 2026-07-31 · MED · Ассерт на snapshot-ФАЙЛ, не на count-delta
+    # · Rejected: `count_after > count_before` — DeployHistory PRUNE сохраняет последние 10
+    # ·   снапшотов (deploy_history.py: "prune to keep last 10"): после 10 накопленных деплоев
+    #   count не растёт (10→10) — "No new snapshot created" при успешном receive (status=PARTIAL,
+    #   snapshot_id присутствует). Подтверждено на tronyx-vps (run4, before=10 after=10).
+    # · Reason: детерминированный признак нового снапшота = файл <snapshot_id>.json из
+    # ·   DeployResult (имя файла = snapshot_id, deploy_history.py _snapshot_path) —
+    # ·   prune-устойчив и проверяет именно артефакт бэкапа.
+    # · Rev: если DeployHistory изменит формат имён — обновить проверку файла.
+    assert count_after >= 1, f"No snapshots at all after receive: {after.stdout}"
+    snap_id = result_json.get("snapshot_id")
+    assert snap_id, "DeployResult.snapshot_id must be non-empty (backup artifact)"
+    snap_check = node_ssh.ssh_read(
+        f"test -f /opt/projects/test-project/.deploy-snapshots/{snap_id}.json && echo EXISTS || echo MISSING",
+        timeout=30,
+    )
+    logger.info("[IMP:9][T16][receive] snapshot file %s.json -> %s", snap_id, snap_check.stdout.strip())
+    assert "EXISTS" in snap_check.stdout, f"Snapshot file {snap_id}.json not found after receive"
 
     assert_ldd_imp9_e2e(caplog)
 

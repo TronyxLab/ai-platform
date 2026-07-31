@@ -24,12 +24,13 @@ import textwrap
 
 logger = logging.getLogger(__name__)
 
-REMOTE_CMD_SH = os.path.join(
+# DevPlan 101 D1: build_*_ssh_cmd извлечены из remote-cmd.sh в build-ssh-cmd.sh
+BUILD_SSH_CMD_SH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "core",
     "internal",
     "bootstrap",
-    "remote-cmd.sh",
+    "build-ssh-cmd.sh",
 )
 
 
@@ -84,11 +85,11 @@ def _extract_func(func_name: str, source_path: str) -> str:
 def _run_build_ssh_cmd(
     age_key: str, node_name: str = "test-node", owner_key: str = "ssh-ed25519 AAAATestKey test@example.com"
 ) -> tuple[str, str, int]:
-    """Extract and run build_ssh_cmd() from remote-cmd.sh with given arguments."""
-    func_def = _extract_func("build_ssh_cmd", REMOTE_CMD_SH)
+    """Extract and run build_ssh_cmd() from build-ssh-cmd.sh with given arguments."""
+    func_def = _extract_func("build_ssh_cmd", BUILD_SSH_CMD_SH)
 
     if not func_def:
-        raise RuntimeError(f"Could not extract build_ssh_cmd from {REMOTE_CMD_SH}")
+        raise RuntimeError(f"Could not extract build_ssh_cmd from {BUILD_SSH_CMD_SH}")
 
     script = textwrap.dedent(f"""\
         set -euo pipefail

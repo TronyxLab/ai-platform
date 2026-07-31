@@ -51,8 +51,7 @@ deploy:
     CI for emergency fallback
 - make_target: context-promote
   mechanism: git-push-context
-  delegates_to: core/entrypoints/context-promote.sh → copy to <context>/ai-platform
-    → CI
+  delegates_to: core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py
   signature: make context-promote CONTEXT=<context>
   operation_ru: Промоут платформы в контекст
   description: Promote platform to a context org (copy + CI + auto-deploy)
@@ -150,13 +149,14 @@ validate:
 lint:
 - script: lint.sh
   mechanism: pre-commit-hook
-  delegates_to: core/entrypoints/lint.sh
+  delegates_to: core/entrypoints/lint.sh → core/internal/lint/grepsummary_validator.py
+    (grepsummary) + core/internal/lint/doc_header_validator.py (namelint)
   signature: (pre-commit hook)
   operation_ru: Pre-commit hook — линтинг
   description: Pre-commit hook runner for GREP_SUMMARY validation + target name check
 - script: check-doc-headers.sh
   mechanism: pre-commit-hook
-  delegates_to: core/entrypoints/check-doc-headers.sh
+  delegates_to: core/entrypoints/check-doc-headers.sh → core/internal/lint/doc_header_validator.py
   signature: (pre-commit hook)
   operation_ru: Pre-commit hook — проверка документ-хедеров
   description: Validates GREP_SUMMARY, MODULE_CONTRACT, STRUCTURE, regions in source
@@ -497,8 +497,8 @@ dev:
   operation_ru: Авто-обнаружение модулей
   description: Auto-discover modules and regenerate docker-compose.yml include section
 - make_target: dev-certs
-  mechanism: shell-script
-  delegates_to: core/modules/nginx/generate-dev-certs.sh
+  mechanism: python-script
+  delegates_to: core/modules/nginx/dev_cert_generator.py
   signature: make dev-certs [CERT_BACKEND=...]
   operation_ru: Генерация dev SSL-сертификатов
   description: Idempotent generation of self-signed dev SSL certificates for nginx
@@ -539,7 +539,6 @@ lib:
   type: sourced
   consumers:
   - core/internal/provision-environment.sh
-  - core/entrypoints/context-promote.sh
   - core/entrypoints/build.sh
   - core/internal/notify/notify-hook.sh
   - core/internal/healthcheck/tor-proxy-healthcheck.sh

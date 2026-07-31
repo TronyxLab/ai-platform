@@ -215,16 +215,16 @@ def test_entrypoint_flags_contract(caplog) -> None:
     assert "--age-secret-key-file" in entrypoint_content, (
         "[IMP:9][test] FAIL: --age-secret-key-file not in node-update.sh parser"
     )
-    # Verify node-update.sh sets AGE_SECRET_KEY_FILE from flag (consumed by detect_age_key)
+    # Verify node-update.sh sets AGE_SECRET_KEY_FILE from flag (consumed by node_detect)
     assert "AGE_SECRET_KEY_FILE" in entrypoint_content, (
         "[IMP:9][test] FAIL: node-update.sh must set AGE_SECRET_KEY_FILE from --age-secret-key-file"
     )
-    # Verify detect_age_key function exists in entrypoint
-    assert "detect_age_key" in entrypoint_content, (
-        "[IMP:9][test] FAIL: node-update.sh must have detect_age_key() to consume AGE_SECRET_KEY_FILE"
+    # Verify AGE key detection is delegated to python3 -m node_detect (DevPlan 104)
+    assert "python3 -m core.internal.shared.node_detect" in entrypoint_content, (
+        "[IMP:9][test] FAIL: node-update.sh must delegate AGE key detection to python3 -m core.internal.shared.node_detect"
     )
     logger.info(
-        "[IMP:8][test_entrypoint_flags_contract] Check 6 PASS: --age-secret-key-file in entrypoint + detect_age_key"
+        "[IMP:8][test_entrypoint_flags_contract] Check 6 PASS: --age-secret-key-file in entrypoint + node_detect delegation"
     )
 
     logger.info("[IMP:9][test_entrypoint_flags_contract] ALL CHECKS PASS")
@@ -235,8 +235,9 @@ def test_entrypoint_flags_contract(caplog) -> None:
 
 # region FUNC_test_node_update_has_ssh_proxy
 ## @purpose  Verify node-update.sh delegates to execute_remote_update() in remote-cmd.sh,
-##           and that remote-cmd.sh delegates node resolution to Python overlay_deliverer.py
-##           via _resolve_and_extract(). Local exec fallback remains in entrypoint.
+##           and that remote-cmd.sh delegates node resolution to Python remote_executor.py
+##           (DevPlan 101 — replaces shell _resolve_and_extract wrapper). Local exec fallback
+##           remains in entrypoint.
 ## @io       Script content → grep → assert patterns present
 ## @complexity O(S)
 ## @invariants — Entrypoint calls execute_remote_update; remote-cmd.sh has SSH proxy;
@@ -261,11 +262,11 @@ def test_node_update_has_ssh_proxy(caplog) -> None:
     )
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 1 PASS: execute_remote_update() called from entrypoint")
 
-    # ── Check 2: _resolve_and_extract in remote-cmd.sh (Python CLI delegation, Wave 5d) ──
-    assert "_resolve_and_extract" in remote_content, (
-        "[IMP:9][test] FAIL: remote-cmd.sh must delegate node resolution to _resolve_and_extract() (Python CLI)"
+    # ── Check 2: remote_executor CLI in remote-cmd.sh (Python delegation, DevPlan 101) ──
+    assert "remote_executor" in remote_content, (
+        "[IMP:9][test] FAIL: remote-cmd.sh must delegate node resolution to remote_executor.py CLI (DevPlan 101)"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: _resolve_and_extract() in remote-cmd.sh")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 2 PASS: remote_executor CLI in remote-cmd.sh")
 
     # ── Check 3: overlay_deliverer referenced in remote-cmd.sh (Python delegation) ──
     assert "overlay_deliverer" in remote_content, (
@@ -285,15 +286,18 @@ def test_node_update_has_ssh_proxy(caplog) -> None:
     )
     logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 5 PASS: --age-secret-key-file flag")
 
-    # ── Check 6: detect_age_key exists in entrypoint ──
-    assert "detect_age_key" in entrypoint_content, "[IMP:9][test] FAIL: node-update.sh must have detect_age_key()"
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 6 PASS: detect_age_key() present")
-
-    # ── Check 7: printf %q builders still in shell (D3) ──
-    assert "build_ssh_cmd" in remote_content, (
-        "[IMP:9][test] FAIL: remote-cmd.sh must retain build_ssh_cmd (printf %q per D3)"
+    # ── Check 6: AGE key detection delegated to python3 -m node_detect (DevPlan 104) ──
+    assert "python3 -m core.internal.shared.node_detect" in entrypoint_content, (
+        "[IMP:9][test] FAIL: node-update.sh must delegate AGE key detection to python3 -m core.internal.shared.node_detect"
     )
-    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 7 PASS: build_ssh_cmd retained in shell")
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 6 PASS: node_detect delegation present")
+
+    # ── Check 7: printf %q builders still in shell (D3, DevPlan 101 D1: build-ssh-cmd.sh) ──
+    build_script = CORE_DIR / "internal" / "bootstrap" / "build-ssh-cmd.sh"
+    assert "build_ssh_cmd" in build_script.read_text(), (
+        "[IMP:9][test] FAIL: build-ssh-cmd.sh must retain build_ssh_cmd (printf %q per D3)"
+    )
+    logger.info("[IMP:8][test_node_update_has_ssh_proxy] Check 7 PASS: build_ssh_cmd retained in build-ssh-cmd.sh (D3)")
 
     logger.info("[IMP:9][test_node_update_has_ssh_proxy] ALL CHECKS PASS")
 
@@ -302,25 +306,26 @@ def test_node_update_has_ssh_proxy(caplog) -> None:
 
 
 # region FUNC_test_remote_cmd_has_update_mode
-## @purpose  Verify remote-cmd.sh contains build_update_ssh_cmd() with --mode update.
+## @purpose  Verify build-ssh-cmd.sh contains build_update_ssh_cmd() with --mode update.
+##           DevPlan 101 D1: build-функции извлечены из remote-cmd.sh в build-ssh-cmd.sh.
 ## @io       Script content → grep → assert patterns present
 ## @complexity O(S)
-## @invariants — build_update_ssh_cmd exists; contains --mode update; no --resume (D2)
+## @invariants — build_update_ssh_cmd exists in build-ssh-cmd.sh; contains --mode update; no --resume (D2)
 @pytest.mark.static_audit
 def test_remote_cmd_has_update_mode(caplog) -> None:
-    """remote-cmd.sh: build_update_ssh_cmd exists with --mode update, no --resume."""
-    # 🧪 TRAP[TEST] · Regression: T2 — build_update_ssh_cmd contract
+    """build-ssh-cmd.sh: build_update_ssh_cmd exists with --mode update, no --resume."""
+    # 🧪 TRAP[TEST] · Regression: T2 — build_update_ssh_cmd contract (DevPlan 101 D1: moved to build-ssh-cmd.sh)
     # · Scenario: SSH proxy calls build_update_ssh_cmd but internal changes signature
     # · Last fail: Wave 1 pre-merge (function didn't exist)
-    # · Remove if: remote-cmd.sh no longer needed for SSH proxy
+    # · Remove if: build-ssh-cmd.sh no longer needed for SSH proxy
     logger.info("[IMP:7][test_remote_cmd_has_update_mode] START")
     caplog.set_level(logging.DEBUG)
 
-    remote_cmd_script = CORE_DIR / "internal" / "bootstrap" / "remote-cmd.sh"
-    content = remote_cmd_script.read_text()
+    build_script = CORE_DIR / "internal" / "bootstrap" / "build-ssh-cmd.sh"
+    content = build_script.read_text()
 
     # ── Check 1: build_update_ssh_cmd exists ──
-    assert "build_update_ssh_cmd" in content, "[IMP:9][test] FAIL: remote-cmd.sh must define build_update_ssh_cmd()"
+    assert "build_update_ssh_cmd" in content, "[IMP:9][test] FAIL: build-ssh-cmd.sh must define build_update_ssh_cmd()"
     logger.info("[IMP:8][test_remote_cmd_has_update_mode] Check 1 PASS: build_update_ssh_cmd() defined")
 
     # ── Check 2: contains --mode update ──

@@ -1,10 +1,11 @@
 """
-# GREP_SUMMARY: test_secrets_manager, secrets-manager, autogen-secrets, manifest, ensure-secrets, source-secrets-env, fallback-hardcoded, skip-existing
-# STRUCTURE: ▶ tmp_path + monkeypatch + mock subprocess → ◇ source_secrets_env: basic/export-prefix (2x) → ◇ ensure_secrets: manifest/fallback/skip-existing (3x) → ⎋ LDD trajectory IMP:7-10 assertions
+# GREP_SUMMARY: test_secrets_manager, secrets-manager, autogen-secrets, manifest, ensure-secrets, source-secrets-env, fallback-hardcoded, skip-existing, htpasswd-idempotent, salt-extraction
+# STRUCTURE: ▶ tmp_path + monkeypatch + mock subprocess → ◇ source_secrets_env: basic/export-prefix (2x) → ◇ ensure_secrets: manifest/fallback/skip-existing (3x) → ◇ _ensure_htpasswd: idempotent salt-extraction (1x) → ⎋ LDD trajectory IMP:7-10 assertions
 # region MODULE_CONTRACT
-## @purpose  Unit tests for secrets_manager.py — source_secrets_env() parsing and ensure_secrets() generation logic
-## @scope    Tests source_secrets_env and ensure_secrets functions with tmp_path fixtures,
-##           monkeypatch for env vars, and mock subprocess.run for system commands.
+## @purpose  Unit tests for secrets_manager.py — source_secrets_env() parsing, ensure_secrets()
+##           generation logic, and _ensure_htpasswd() salt-extraction idempotency (DevPlan 102)
+## @scope    Tests source_secrets_env, ensure_secrets, and _ensure_htpasswd functions with
+##           tmp_path fixtures, monkeypatch for env vars, and mock subprocess.run for system commands.
 ## @invariants
 ##   - All subprocess-dependent tests mock subprocess.run to avoid real system calls
 ##   - File operations use tmp_path exclusively — never /run/platform
@@ -12,9 +13,11 @@
 ##   - os.environ modifications made by ensure_secrets are cleaned up after each test
 ## @changes
 ##   2026-07-25 · Created
+##   2026-07-31 · DevPlan 102 TASK-7 — +test_ensure_htpasswd_idempotent (salt extraction)
 # endregion MODULE_CONTRACT
 """
 
+import hashlib
 import logging
 import os
 import sys
@@ -492,3 +495,55 @@ def test_ensure_secrets_preserves_nongenerated(caplog, secrets_env, mock_subproc
 
 
 # endregion Tests: ensure_secrets — atomic overwrite (DevPlan 072)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _ensure_htpasswd — salt-extraction idempotency (DevPlan 102)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · htpasswd salt-extraction idempotency (TRAP[BUG] 2026-07-31)
+# · Scenario: two calls to _ensure_htpasswd with identical credentials → identical md5sum
+# ·   (2nd call extracts $apr1$ salt from existing file, recomputes entry with fixed salt)
+# · Last fail: N/A (new test — validates DevPlan 102 TASK-1 fix)
+# · Remove if: salt-extraction logic in _write_htpasswd_file changes fundamentally
+@ldd_trajectory
+def test_ensure_htpasswd_idempotent(caplog, tmp_path, monkeypatch):
+    """Two calls to _ensure_htpasswd with same creds → identical md5sum (salt extraction).
+
+    ## @purpose  Verify DevPlan 102 TASK-1 fix: random salt broke idempotency —
+    ##           each call regenerated a different $apr1$ hash and rewrote the file.
+    ##           Now the existing file's salt is extracted and reused, so the second
+    ##           call produces the identical entry (md5-stable file).
+    """
+    secrets_env_file = tmp_path / "secrets.env"
+    secrets_env_file.write_text("PLATFORM_MASTER_EMAIL=admin@test.local\nPLATFORM_MASTER_PASSWORD=test-password-123\n")
+    htpasswd_file = tmp_path / ".htpasswd-platform"
+
+    # Ensure env not pre-seeded — _ensure_htpasswd sources from secrets.env
+    monkeypatch.delenv("PLATFORM_MASTER_EMAIL", raising=False)
+    monkeypatch.delenv("PLATFORM_MASTER_PASSWORD", raising=False)
+
+    assert sm._ensure_htpasswd(str(secrets_env_file), str(htpasswd_file)) is True
+    first_md5 = hashlib.md5(htpasswd_file.read_bytes()).hexdigest()
+
+    # Clear env so the second call re-sources credentials from secrets.env
+    monkeypatch.delenv("PLATFORM_MASTER_EMAIL", raising=False)
+    monkeypatch.delenv("PLATFORM_MASTER_PASSWORD", raising=False)
+
+    assert sm._ensure_htpasswd(str(secrets_env_file), str(htpasswd_file)) is True
+    second_md5 = hashlib.md5(htpasswd_file.read_bytes()).hexdigest()
+
+    assert first_md5 == second_md5, (
+        f"htpasswd file changed on second call (md5 {first_md5} → {second_md5}) — salt extraction fix not effective"
+    )
+
+    # Sanity: file holds a valid APR1 entry for the given credentials
+    content = htpasswd_file.read_text().strip()
+    assert "admin@test.local" in content, f"Email not found in htpasswd entry: {content}"
+    assert "$apr1$" in content, f"APR1 hash not found in htpasswd entry: {content}"
+
+    logger.critical("[IMP:9][test] htpasswd idempotent across 2 calls (salt extraction) — OK")
+
+
+# endregion Tests: _ensure_htpasswd — salt-extraction idempotency (DevPlan 102)

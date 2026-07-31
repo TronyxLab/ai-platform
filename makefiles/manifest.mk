@@ -22,6 +22,15 @@
 .PHONY: generate-secrets-manifest generate-platform-env generate-env-example
 .PHONY: generate-entrypoint-manifest generate-agents-md generate-litellm-config
 
+# 📝 TRAP[DEBT] · 2026-07-31 · MED · generate-manifests omits G2/G4/G5 — fix-gate doesn't fully repair stale manifests
+# · Observed: final-gate F1 session — `make fix-gate` → generate-manifests ran ONLY G1/G3/G6;
+#   core/AGENTS.md (G4) stayed stale until `make generate-agents-md` was invoked explicitly.
+# · Suspected: hypothesis, needs verification — generate-manifests target list (line 25) missing
+#   generate-agents-md / generate-env-example; only generate-manifests-atomic covers all 3 chains
+#   (despite the DAG comment above declaring Chain B: G3→G4 part of the flow).
+# · Impact: canonical repair claims G1-G6 but leaves G4 (and G2/G5) stale → check-manifests
+#   still fails after `make fix-gate` — repair-loop break for manifest-drift blockers.
+# · When: during BLOCKER F1 fix (plans 099/103 delegates_to drift), 2026-07-31
 generate-manifests: generate-secrets-manifest generate-entrypoint-manifest generate-litellm-config
 	@echo "[IMP:9][generate-manifests] All manifests generated."
 

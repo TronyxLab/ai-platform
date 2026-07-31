@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: secrets-manager, autogen-secrets, manifest, ensure-secrets, sops, htpasswd, secrets-env-parser
+# GREP_SUMMARY: secrets-manager, autogen-secrets, manifest, ensure-secrets, sops, htpasswd, cleanup-proxy, tor-enabled, secrets-env-parser, salt-idempotent
 # STRUCTURE: ▶ ensure_secrets → source_secrets_env → _read_manifest → _generate_secret → _persist_to_sops → _ensure_htpasswd → ⎋ CLI
+#            ▶ cleanup_secrets_env → ◇ parse → ◇ TOR_ENABLED≠"true"? → ⊕ filter proxy → ⊕ atomic write (0o600) → ⎋ dict
+#            ▶ _write_htpasswd_file → ◇ existing? → ⊕ extract $apr1$SALT$ → ⊕ recompute fixed-salt → ◇ match? → ⎋ no-op|write
 # region MODULE_CONTRACT
 ## @purpose  Auto-generate missing tier=generated secrets from secrets-manifest.yaml or fallback hardcoded list.
 ##           Port of core/lib/secrets.sh:step_12b_ensure_secrets() lines 298-411 plus source_secrets_env()
 ##           and htpasswd generation. Designed for bootstrap pipeline step 12b.
 ## @scope    core/internal/bootstrap/lifecycle/ — secrets management for bootstrap pipeline.
-##           Three responsibilities: (1) read manifest and fill gaps, (2) parse secrets.env,
-##           (3) generate htpasswd from platform credentials.
+##           Responsibilities: (1) read manifest and fill gaps, (2) parse secrets.env,
+##           (3) generate htpasswd from platform credentials, (4) proxy-var cleanup of secrets.env
+##           (DevPlan 102 — cleanup_secrets_env + htpasswd CLI for thin shell facades).
 ## @invariants
 ##   1. Non-fatal: returns partial list on failure, NEVER raises exceptions
 ##   2. Existing secrets are NOT overwritten — only missing (empty) secrets are generated
@@ -15,10 +18,17 @@
 ##   4. sops --set persistence is non-fatal on failure
 ##   5. htpasswd generation called after secrets (requires PLATFORM_MASTER_PASSWORD)
 ##   6. sourced secrets.env values take precedence over manifest/hardcoded defaults
+##   7. htpasswd idempotency: existing file salt ($apr1$SALT$) is reused for deterministic
+##      comparison — never rewrites on unchanged credentials (TRAP[BUG] 2026-07-31)
+##   8. cleanup_secrets_env: no-op on missing file (returns {}), never raises — logs warnings
 ## @rationale  Python port of shell secrets logic. Enables unit-testing, typed returns,
 ##             and consistent error handling without relying on bash eval() for secret generation.
 ## @changes  2026-07-25 | W5-E6 secrets_manager — created from secrets.sh step_12b decomposition
 ## @changes  2026-07-30 | DevPlan 086 — source_secrets_env() delegates to shared secrets_env_parser.parse()
+## @changes  2026-07-31 | DevPlan 102 — cleanup_secrets_env(), htpasswd CLI, salt-extraction idempotency fix;
+##             import: canonical core.internal.shared form kept (gate test_gate_secrets_parser_import) +
+##             ModuleNotFoundError fallback to shared-dir bootstrap so the script runs standalone as CLI
+##             (the bare package import previously crashed outside pytest — ModuleNotFoundError)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -31,7 +41,38 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+# ── Shared modules import ──
+# Canonical package import (DevPlan 086 — gate test_gate_secrets_parser_import enforces the
+# `core.internal.shared.secrets_env_parser` form for all direct consumers).
+# Fallback: standalone CLI execution (shell facades: python3 .../secrets_manager.py) runs
+# outside pytest where the `core` package is NOT importable — bootstrap the shared dir and
+# import the module directly (pattern: decrypt_secrets.py L44-54).
+# ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Module-level `core.internal` import crashed standalone CLI
+# · Symptom: `python3 secrets_manager.py cleanup|htpasswd|ensure` → ModuleNotFoundError:
+# ·   No module named 'core' (script sys.path[0] = script dir, `core` package unreachable).
+# ·   The plan's shell facades (step_10 cleanup, htpasswd) depend on standalone invocation.
+# · Root: (a) bare `from core.internal.shared.secrets_env_parser import` — works only under
+# ·   pytest (rootdir in sys.path); (b) legacy `_ensure_htpasswd` sys.path bootstrap used
+# ·   4× dirname from lifecycle/ → `core/shared` (NONEXISTENT) → `from crypto import ...`
+# ·   failed whenever _ensure_htpasswd was actually invoked (production step_12b).
+# · Fix: canonical import kept for the gate + ModuleNotFoundError fallback to shared-dir
+# ·   bootstrap; _SHARED_DIR computed with 3× dirname (core/internal/shared) and reused
+# ·   by _write_htpasswd_file.
+# · Rev: if secrets_manager.py moves out of core/internal/bootstrap/lifecycle/, recompute
+# ·   _SHARED_DIR relative path; if the gate test's import pattern changes, sync both arms.
+_SHARED_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "shared",
+)
+
+try:
+    from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+    from core.internal.shared.secrets_env_parser import write as write_secrets_env
+except ModuleNotFoundError:
+    if _SHARED_DIR not in sys.path:
+        sys.path.insert(0, _SHARED_DIR)
+    from secrets_env_parser import parse as parse_secrets_env
+    from secrets_env_parser import write as write_secrets_env
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +116,77 @@ def source_secrets_env(secrets_env: str) -> dict[str, str]:
 
 
 # endregion FUNC_source_secrets_env
+
+
+# region FUNC_cleanup_secrets_env
+## @purpose — Read secrets.env, conditionally strip HTTP_PROXY/HTTPS_PROXY when
+##            TOR_ENABLED != "true", write back atomically (tmp+rename, 0o600).
+##            DevPlan 102 TASK-2 — replaces shell source+sed logic in step_10_decrypt_secrets.
+## @io — ⇥ secrets_env_path: str, tor_enabled: str (default "false") → ⎋ dict[str, str]
+##       (parsed secrets AFTER cleanup; {} if file missing)
+## @complexity — O(N) where N = vars in secrets.env (parse + write delegated)
+## @invariants
+##   - No-op if file doesn't exist — returns {} without error
+##   - Never raises — logs warnings on parse/write I/O errors
+##   - Only HTTP_PROXY/HTTPS_PROXY (uppercase) are removed, matching legacy sed behavior
+##   - Atomic write via shared secrets_env_parser.write() (tempfile + os.replace, 0o600)
+##   - File is NOT rewritten when nothing is removed (byte-identical preservation)
+## @rationale — Proxy cleanup was shell sed logic in step_10 (DevPlan 102 P1). Moving to
+##              Python makes it testable and reuses the canonical secrets_env_parser.
+def cleanup_secrets_env(
+    secrets_env_path: str,
+    tor_enabled: str = "false",
+) -> dict[str, str]:
+    """Read secrets.env, conditionally strip proxy vars, write back atomically.
+
+    ▶ ┌secrets_env_path┐ → ◇ parse → ◇ TOR_ENABLED≠"true"? → filter proxy →
+      ⊕ atomic write (tmp+rename, 0o600) → ⎋ dict[str, str]
+
+    Returns: parsed secrets dict AFTER cleanup.
+    No-op if file doesn't exist (returns empty dict).
+    Never raises — logs warnings on I/O errors.
+    """
+    env_path = Path(secrets_env_path)
+    if not env_path.is_file():
+        logger.info("[IMP:7][secrets_manager] cleanup: %s not found — no-op", secrets_env_path)
+        return {}
+
+    try:
+        env_vars = parse_secrets_env(str(env_path))
+    except (OSError, ValueError) as e:
+        logger.warning("[IMP:7][secrets_manager] cleanup: cannot parse %s: %s", secrets_env_path, e)
+        return {}
+
+    removed: list[str] = []
+    if tor_enabled != "true":
+        for proxy_var in ("HTTP_PROXY", "HTTPS_PROXY"):
+            if proxy_var in env_vars:
+                del env_vars[proxy_var]
+                removed.append(proxy_var)
+
+    if removed:
+        try:
+            write_secrets_env(str(env_path), env_vars)
+        except (OSError, TypeError) as e:
+            logger.warning("[IMP:7][secrets_manager] cleanup: cannot write %s: %s", secrets_env_path, e)
+            return {}
+        logger.info(
+            "[IMP:9][secrets_manager] cleanup: removed %s from %s (TOR_ENABLED=%s)",
+            ", ".join(removed),
+            secrets_env_path,
+            tor_enabled,
+        )
+    else:
+        logger.info(
+            "[IMP:8][secrets_manager] cleanup: no proxy vars to remove in %s (TOR_ENABLED=%s)",
+            secrets_env_path,
+            tor_enabled,
+        )
+
+    return env_vars
+
+
+# endregion FUNC_cleanup_secrets_env
 
 
 # region FUNC__read_manifest
@@ -383,26 +495,123 @@ def ensure_secrets(
 # endregion FUNC_ensure_secrets
 
 
-# region FUNC__ensure_htpasswd
-## @purpose — Generate /run/platform/.htpasswd-platform from PLATFORM_MASTER_EMAIL and
-##            PLATFORM_MASTER_PASSWORD. Uses shared/crypto.py for APR1 hashing (DevPlan 078 T4).
-##            Idempotent: checks existing file hash matches current credentials.
-## @io — ⇥ secrets_env: str (for sourcing PLATFORM_MASTER_* if not in os.environ) → ⎋ bool
+# region FUNC__extract_apr1_salt
+## @purpose — Extract salt from an existing APR1 htpasswd entry ($apr1$SALT$HASH).
+##            Returns "" when the entry is missing or not an apr1 hash (unparseable).
+## @io — ⇥ entry: str → ⎋ str (salt) | "" (unparseable)
+## @complexity — O(1) — single split
+## @invariants
+##   - Empty entry → ""
+##   - Only accepts apr1 structure: parts[0]=user, parts[1]="apr1", parts[2]=salt, parts[3]=hash
+##   - Non-apr1 hashes (bcrypt $2y$, etc.) → "" → caller regenerates
+## @rationale — Port of shell `cut -d'$' -f3` (secrets.sh L225) with added apr1 validation:
+##              field-3 extraction without structure check would treat a bcrypt salt as apr1 salt.
+def _extract_apr1_salt(entry: str) -> str:
+    """Extract salt from an APR1 htpasswd entry ($apr1$SALT$HASH). '' if unparseable."""
+    if not entry:
+        return ""
+    parts = entry.split("$")
+    if len(parts) >= 4 and parts[1] == "apr1" and parts[2]:
+        return parts[2]
+    return ""
+
+
+# endregion FUNC__extract_apr1_salt
+
+
+# region FUNC__write_htpasswd_file
+## @purpose — Generate .htpasswd-platform from explicit credentials. Core of both
+##            _ensure_htpasswd() (env-based) and the htpasswd CLI action (DevPlan 102 TASK-1).
+##            Idempotent: existing file salt is extracted and reused for deterministic
+##            comparison — file is only rewritten when credentials changed.
+## @io — ⇥ email: str, password: str, htpasswd_file: str (default /run/platform/.htpasswd-platform)
+##       → ⎋ bool
 ## @complexity — O(1) + hash_apr1 from shared.crypto
 ## @invariants
-##   - Non-fatal: returns False on failure, never raises
-##   - Idempotent: if existing htpasswd entry matches current credentials, skip
-##   - Requires both PLATFORM_MASTER_EMAIL and PLATFORM_MASTER_PASSWORD to be set
-def _ensure_htpasswd(secrets_env: str = "/run/platform/secrets.env") -> bool:
-    """Generate .htpasswd-platform from platform master credentials. Returns True on success."""
+##   - Non-fatal: returns False on failure, never raises (OSError caught)
+##   - First call (no file): random salt via generate_htpasswd_entry(email, password)
+##   - Subsequent calls: extract salt from existing file → recompute with fixed salt →
+##     skip if identical (idempotent, md5-stable)
+##   - Unparseable existing entry (no apr1 salt) → regenerate with random salt
+##   - Exports HTPASSWD_FILE into os.environ on success
+def _write_htpasswd_file(
+    email: str,
+    password: str,
+    htpasswd_file: str = "/run/platform/.htpasswd-platform",
+) -> bool:
+    """Generate .htpasswd-platform from explicit credentials. Returns True on success."""
     # Import shared crypto — sys.path insert for module-level availability
-    _shared_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "shared"
-    )
-    if _shared_dir not in sys.path:
-        sys.path.insert(0, _shared_dir)
+    if _SHARED_DIR not in sys.path:
+        sys.path.insert(0, _SHARED_DIR)
     from crypto import generate_htpasswd_entry  # type: ignore[import-untyped]
 
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Random salt breaks idempotency
+    # · Symptom: повторный вызов перезаписывает .htpasswd-platform (md5 меняется).
+    # · Root: crypto.generate_htpasswd_entry(email, password) без соли = случайный salt
+    # ·   каждый вызов → existing == expected всегда False → вечная перезапись.
+    # · Fix: при существующем файле извлекаем соль ($apr1$SALT$...), пересчитываем
+    # ·   entry с фиксированной солью, сравниваем.
+    # · Ported from: shell _ensure_htpasswd_generated() L221-241
+    try:
+        htpasswd_path = Path(htpasswd_file)
+        existing = ""
+        existing_salt = ""
+        if htpasswd_path.exists():
+            existing = htpasswd_path.read_text().strip()
+            existing_salt = _extract_apr1_salt(existing)
+
+        if existing_salt:
+            expected_entry = generate_htpasswd_entry(email, password, salt=existing_salt)
+            if expected_entry is None:
+                logger.warning("[IMP:7][secrets_manager] shared crypto generate_htpasswd_entry failed")
+                return False
+            if existing == expected_entry:
+                logger.info(
+                    "[IMP:8][secrets_manager] htpasswd already up-to-date for %s — skipping",
+                    email,
+                )
+                os.environ["HTPASSWD_FILE"] = htpasswd_file
+                return True
+            logger.info("[IMP:8][secrets_manager] htpasswd credentials changed — regenerating")
+        else:
+            # No file or unparseable entry — generate with fresh random salt
+            expected_entry = generate_htpasswd_entry(email, password)
+            if expected_entry is None:
+                logger.warning("[IMP:7][secrets_manager] shared crypto generate_htpasswd_entry failed")
+                return False
+
+        # Write htpasswd file
+        htpasswd_path.parent.mkdir(parents=True, exist_ok=True)
+        htpasswd_path.write_text(expected_entry + "\n")
+        htpasswd_path.chmod(0o644)
+        os.environ["HTPASSWD_FILE"] = htpasswd_file
+        logger.info("[IMP:9][secrets_manager] htpasswd generated at %s for %s", htpasswd_file, email)
+        return True
+
+    except OSError as e:
+        logger.warning("[IMP:7][secrets_manager] htpasswd OS error: %s", e)
+        return False
+
+
+# endregion FUNC__write_htpasswd_file
+
+
+# region FUNC__ensure_htpasswd
+## @purpose — Generate /run/platform/.htpasswd-platform from PLATFORM_MASTER_EMAIL and
+##            PLATFORM_MASTER_PASSWORD (env or sourced from secrets.env). Thin wrapper
+##            over _write_htpasswd_file() — all hashing/idempotency logic in the core.
+## @io — ⇥ secrets_env: str (for sourcing PLATFORM_MASTER_* if not in os.environ),
+##       htpasswd_file: str (optional override for tests) → ⎋ bool
+## @complexity — O(1) + _write_htpasswd_file
+## @invariants
+##   - Non-fatal: returns False on failure, never raises
+##   - Idempotent: salt-extraction in _write_htpasswd_file prevents rewrite on unchanged creds
+##   - Requires both PLATFORM_MASTER_EMAIL and PLATFORM_MASTER_PASSWORD to be set
+def _ensure_htpasswd(
+    secrets_env: str = "/run/platform/secrets.env",
+    htpasswd_file: str = "/run/platform/.htpasswd-platform",
+) -> bool:
+    """Generate .htpasswd-platform from platform master credentials. Returns True on success."""
     # Source secrets.env into os.environ if not already set
     if not os.environ.get("PLATFORM_MASTER_PASSWORD") or not os.environ.get("PLATFORM_MASTER_EMAIL"):
         env_vars = source_secrets_env(secrets_env)
@@ -420,66 +629,59 @@ def _ensure_htpasswd(secrets_env: str = "/run/platform/secrets.env") -> bool:
         )
         return False
 
-    htpasswd_file = "/run/platform/.htpasswd-platform"
-
-    try:
-        # Generate htpasswd entry via shared crypto (DevPlan 078 T4)
-        expected_entry = generate_htpasswd_entry(email, password)
-        if expected_entry is None:
-            logger.warning("[IMP:7][secrets_manager] shared crypto generate_htpasswd_entry failed")
-            return False
-
-        # Check idempotency: compare with existing file content
-        htpasswd_path = Path(htpasswd_file)
-        if htpasswd_path.exists():
-            existing = htpasswd_path.read_text().strip()
-            if existing == expected_entry:
-                logger.info(
-                    "[IMP:8][secrets_manager] htpasswd already up-to-date for %s — skipping",
-                    email,
-                )
-                os.environ["HTPASSWD_FILE"] = htpasswd_file
-                return True
-            logger.info(
-                "[IMP:8][secrets_manager] htpasswd credentials changed — regenerating",
-            )
-
-        # Write htpasswd file
-        htpasswd_path.parent.mkdir(parents=True, exist_ok=True)
-        htpasswd_path.write_text(expected_entry + "\n")
-        htpasswd_path.chmod(0o644)
-        os.environ["HTPASSWD_FILE"] = htpasswd_file
-        logger.info(
-            "[IMP:9][secrets_manager] htpasswd generated at %s for %s",
-            htpasswd_file,
-            email,
-        )
-        return True
-
-    except OSError as e:
-        logger.warning("[IMP:7][secrets_manager] htpasswd OS error: %s", e)
-        return False
+    return _write_htpasswd_file(email, password, htpasswd_file)
 
 
 # endregion FUNC__ensure_htpasswd
 
 
 # region FUNC_CLI
-## @purpose — CLI entrypoint for ensure/source actions.
-##            Parses argparse, dispatches to appropriate function, prints results to stdout.
+## @purpose — CLI entrypoint for ensure/source/cleanup/htpasswd actions.
+##            Parses argparse subcommands, dispatches to the matching function.
 ##            Usage:
 ##              python3 secrets_manager.py ensure [--manifest <path>] [--secrets-env <path>]
 ##              python3 secrets_manager.py source [--secrets-env <path>]
+##              python3 secrets_manager.py cleanup --secrets-env <path> [--tor-enabled <true|false>]
+##              python3 secrets_manager.py htpasswd --email <e> --password <p> [--htpasswd-file <path>]
 ## @io — ⇥ sys.argv → ⎋ None (exits with 0 on success, 1 on error)
 ## @complexity — O(1) dispatch
+## @invariants
+##   - cleanup: exit 0 + "OK"/"SKIP" on success; exit 1 on missing/unreadable file
+##   - htpasswd: exit 0 on success, exit 1 on generation failure
+##   - ensure/source: exit 0 (source prints KEY=VALUE lines to stdout)
 if __name__ == "__main__":
     import argparse
     import sys
 
-    parser = argparse.ArgumentParser(description="Secrets Manager — generate/ensure/source secrets")
-    parser.add_argument("action", choices=["ensure", "source"], help="Action to perform")
-    parser.add_argument("--manifest", default="", help="Path to secrets-manifest.yaml")
-    parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        stream=sys.stderr,
+    )
+
+    parser = argparse.ArgumentParser(description="Secrets Manager — ensure/source/cleanup/htpasswd secrets")
+    subparsers = parser.add_subparsers(dest="action", required=True)
+
+    ensure_parser = subparsers.add_parser("ensure", help="Generate missing tier=generated secrets")
+    ensure_parser.add_argument("--manifest", default="", help="Path to secrets-manifest.yaml")
+    ensure_parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
+
+    source_parser = subparsers.add_parser("source", help="Print parsed secrets.env KEY=VALUE lines to stdout")
+    source_parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
+
+    cleanup_parser = subparsers.add_parser(
+        "cleanup", help="Strip HTTP_PROXY/HTTPS_PROXY from secrets.env when TOR_ENABLED != true"
+    )
+    cleanup_parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
+    cleanup_parser.add_argument("--tor-enabled", default="false", help="TOR_ENABLED flag (true keeps proxy vars)")
+
+    htpasswd_parser = subparsers.add_parser("htpasswd", help="Generate .htpasswd-platform from explicit credentials")
+    htpasswd_parser.add_argument("--email", required=True, help="Username/email for htpasswd entry")
+    htpasswd_parser.add_argument("--password", required=True, help="Password for htpasswd entry")
+    htpasswd_parser.add_argument(
+        "--htpasswd-file", default="/run/platform/.htpasswd-platform", help="Target htpasswd file path"
+    )
+
     args = parser.parse_args()
 
     if args.action == "ensure":
@@ -490,6 +692,28 @@ if __name__ == "__main__":
         env_vars = source_secrets_env(args.secrets_env)
         for k, v in env_vars.items():
             print(f"{k}={v}")
+    elif args.action == "cleanup":
+        if not os.path.isfile(args.secrets_env):
+            print(f"SKIP: file not found: {args.secrets_env}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            before = parse_secrets_env(args.secrets_env)
+        except (OSError, ValueError) as e:
+            print(f"ERROR: cannot read {args.secrets_env}: {e}", file=sys.stderr)
+            sys.exit(1)
+        after = cleanup_secrets_env(args.secrets_env, args.tor_enabled)
+        if args.tor_enabled != "true" and ("HTTP_PROXY" in before or "HTTPS_PROXY" in before):
+            if "HTTP_PROXY" in after or "HTTPS_PROXY" in after:
+                print(f"ERROR: proxy vars still present after cleanup: {args.secrets_env}", file=sys.stderr)
+                sys.exit(1)
+            print("OK")
+        else:
+            print("SKIP")
+    elif args.action == "htpasswd":
+        ok = _write_htpasswd_file(args.email, args.password, args.htpasswd_file)
+        if not ok:
+            print("ERROR: htpasswd generation failed", file=sys.stderr)
+            sys.exit(1)
 
     sys.exit(0)
 # endregion FUNC_CLI

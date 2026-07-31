@@ -1,16 +1,19 @@
 # GREP_SUMMARY: test-nginx-dev-certs contract dev-certs cert-generation openssl san-idempotency regeneration
 # STRUCTURE: ┌tmp_path per test┐ → ◇ test_generate_certs_openssl_backend(◇ CERT_BACKEND=openssl → SAN check) → ◇ test_context_domain_in_san(◇ PLATFORM_DOMAIN=demo-ctx.local → *.demo-ctx.local) → ◇ test_second_run_is_noop(◇ same SAN → no-op, mtime unchanged) → ◇ test_regenerates_on_san_drift(◇ missing SAN entry → regenerates)
 # region MODULE_CONTRACT
-## @purpose  Static contract tests for core/modules/nginx/generate-dev-certs.sh.
-##           Validate idempotency, SAN generation, context domain inclusion, SAN drift detection.
-## @scope    Pure bash tests — no Docker required. All tests use tmp_path + env overrides.
+## @purpose  Static contract tests for core/modules/nginx/dev_cert_generator.py (DevPlan 099,
+##           migrated from generate-dev-certs.sh). Validate idempotency, SAN generation,
+##           context domain inclusion, SAN drift detection.
+## @scope    Pure subprocess tests — no Docker required. All tests use tmp_path + env overrides.
 ## @invariants
 ##   - Zero Hardcode: DEV_CERTS_DIR always via tmp_path
 ##   - CERT_BACKEND=openssl for all tests (CI-compatible, no mkcert dependency)
 ##   - LDD telemetry: caplog, IMP:7-10 filtering, at least one IMP:9 per test
 ##   - Detached from filesystem — no hardcoded paths (tmp_path)
-## @rationale  DevPlan 012 TASK-5 — static contract ensures script works on CI without mkcert.
-## @see DevPlan 012 — §TEST_SPEC
+## @rationale  DevPlan 012 TASK-5 — static contract ensures module works on CI without mkcert.
+##             DevPlan 099 — contract migrated from bash facade to python3 module (streams
+##             merged stdout+stderr because the Python module writes LDD logs to stderr).
+## @see DevPlan 012 — §TEST_SPEC · DevPlan 099 — §11 (print-to-stderr rationale)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -22,8 +25,8 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-# Path to the script under test
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "core" / "modules" / "nginx" / "generate-dev-certs.sh"
+# Path to the module under test (DevPlan 099: dev_cert_generator.py replaces the shell facade)
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "core" / "modules" / "nginx" / "dev_cert_generator.py"
 
 # Required SAN entries for base domain
 _BASE_SAN = {"DNS:*.ai-platform.local", "DNS:localhost", "IP:127.0.0.1"}
@@ -35,9 +38,9 @@ def _run_script(
     *,
     env_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run generate-dev-certs.sh with DEV_CERTS_DIR pointing to tmp_path.
+    """Run dev_cert_generator.py with DEV_CERTS_DIR pointing to tmp_path.
 
-    ## @purpose — Isolated script invocation for contract tests.
+    ## @purpose — Isolated module invocation for contract tests.
     ## @io — ⇥ tmp_path, env_overrides → ⚡ subprocess.run → ⎋ CompletedProcess
     ## @complexity — O(1)
     """
@@ -50,13 +53,27 @@ def _run_script(
     if env_overrides:
         env.update(env_overrides)
 
+    # DevPlan 099: python3 invocation. Module writes LDD logs to stderr (print-to-stderr
+    # contract) — tests merge stdout+stderr for marker assertions (facade-era 2>&1 parity).
     return subprocess.run(
-        ["bash", str(_SCRIPT_PATH)],
+        ["python3", str(_SCRIPT_PATH)],
         capture_output=True,
         text=True,
         timeout=30,
         env=env,
     )
+
+
+def _combined_output(result: subprocess.CompletedProcess) -> str:
+    """Return stdout+stderr merged (Python module writes LDD logs to stderr).
+
+    ## @purpose — DevPlan 099: dev_cert_generator.py logs via print(file=sys.stderr).
+    ##            The old bash facade merged streams (exec python3 2>&1) so stdout-only
+    ##            assertions worked. Direct python3 invocation requires merged reads.
+    ## @io — ⇥ result: CompletedProcess → ⎋ str (stdout + stderr)
+    ## @complexity — O(1)
+    """
+    return (result.stdout or "") + (result.stderr or "")
 
 
 def _get_cert_sans(cert_file: Path) -> set[str]:
@@ -131,7 +148,7 @@ def test_generate_certs_openssl_backend(tmp_path: Path, caplog) -> None:
     logger.info("[IMP:7][test_generate_certs_openssl_backend] Starting")
     result = _run_script(tmp_path)
     logger.info("[IMP:8][test_generate_certs_openssl_backend] Script exited %d", result.returncode)
-    for line in result.stdout.strip().split("\n"):
+    for line in _combined_output(result).strip().split("\n"):
         if line.strip():
             logger.info("[IMP:8][test_generate_certs_openssl_backend] %s", line.strip())
 
@@ -169,7 +186,7 @@ def test_context_domain_in_san(tmp_path: Path, caplog) -> None:
     logger.info("[IMP:7][test_context_domain_in_san] Starting")
     result = _run_script(tmp_path, env_overrides={"PLATFORM_DOMAIN": "demo-ctx.local"})
     logger.info("[IMP:8][test_context_domain_in_san] Script exited %d", result.returncode)
-    for line in result.stdout.strip().split("\n"):
+    for line in _combined_output(result).strip().split("\n"):
         if line.strip():
             logger.info("[IMP:8][test_context_domain_in_san] %s", line.strip())
 
@@ -226,9 +243,10 @@ def test_second_run_is_noop(tmp_path: Path, caplog) -> None:
     assert mtime_cert_1 == mtime_cert_2, f"Cert file was overwritten! mtime changed: {mtime_cert_1} → {mtime_cert_2}"
     assert mtime_key_1 == mtime_key_2, f"Key file was overwritten! mtime changed: {mtime_key_1} → {mtime_key_2}"
 
-    # Output should indicate no-op
-    assert "up-to-date" in result2.stdout.lower() or "no action" in result2.stdout.lower(), (
-        f"Second run output does not indicate no-op: {result2.stdout}"
+    # Output should indicate no-op (markers live in stderr for the python3 module)
+    noop_output = _combined_output(result2)
+    assert "up-to-date" in noop_output.lower() or "no action" in noop_output.lower(), (
+        f"Second run output does not indicate no-op: {noop_output}"
     )
 
     logger.info("[IMP:9][test_second_run_is_noop] ✅ Second run is no-op (mtime unchanged, up-to-date)")
@@ -283,9 +301,10 @@ def test_regenerates_on_san_drift(tmp_path: Path, caplog) -> None:
     for required in _BASE_SAN:
         assert required in new_sans, f"Regenerated cert missing base SAN: {required}. Got: {new_sans}"
 
-    # Output should indicate SAN drift
-    assert "SAN drift" in result2.stdout.lower() or "missing" in result2.stdout.lower(), (
-        f"Regeneration output does not indicate drift detection: {result2.stdout}"
+    # Output should indicate SAN drift (markers live in stderr for the python3 module)
+    drift_output = _combined_output(result2)
+    assert "SAN drift" in drift_output.lower() or "missing" in drift_output.lower(), (
+        f"Regeneration output does not indicate drift detection: {drift_output}"
     )
 
     logger.info("[IMP:9][test_regenerates_on_san_drift] ✅ SAN drift detected and cert regenerated")

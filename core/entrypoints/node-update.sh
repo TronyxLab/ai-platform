@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: entrypoint node-update update lifecycle remote-cmd age-key dry-run
-# STRUCTURE: ▶ init → ◇ --node? → ◇ --dry-run? → ┌detect_age_key + execute_remote_update┐ → ◇ RC=2? → └─ ⚡ exec local node-lifecycle.sh --mode update ─┘ → ⎋ exit 0|1
+# STRUCTURE: ▶ init → ◇ --node? → ◇ --dry-run? → ┌node_detect --detect-age-key + execute_remote_update┐ → ◇ RC=2? → └─ ⚡ exec local node-lifecycle.sh --mode update ─┘ → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Thin entrypoint for `make node-update`: parses args, detects AGE key,
 ##           delegates to execute_remote_update() in remote-cmd.sh, or falls back to
@@ -41,27 +41,6 @@ USAGE_OPTIONS=(
 # · Rev: Wave 4 — redesign passthrough into parse_args spec
 
 # ═══════════════════════════════════════════════════════════════════
-# region FUNC_detect_age_key
-## @purpose  Detect AGE_SECRET_KEY from env chain via shared/age_key.py (DevPlan 078 T2).
-##           Python single-source-of-truth eliminates duplicate shell logic.
-##           Returns: key to stdout + exit 0 (found) / exit 1 (not found).
-detect_age_key() {
-    local age_key_script="${CORE_DIR}/internal/shared/age_key.py"
-    if [[ -f "$age_key_script" ]]; then
-        python3 "$age_key_script" 2>/dev/null && return 0 || return 1
-    fi
-    # Fallback: direct env check if Python module unavailable
-    if [[ -n "${AGE_SECRET_KEY:-}" ]]; then
-        echo "${AGE_SECRET_KEY}"; return 0
-    fi
-    if [[ -n "${SOPS_AGE_KEY:-}" ]]; then
-        echo "${SOPS_AGE_KEY}"; return 0
-    fi
-    return 1
-}
-# endregion FUNC_detect_age_key
-
-# ═══════════════════════════════════════════════════════════════════
 # region FUNC_main
 ## @purpose  Parse CLI args, detect AGE key, delegate to SSH proxy or local exec
 main() {
@@ -82,8 +61,18 @@ main() {
         exit 1
     fi
     echo "[IMP:9][node-update][entrypoint] Starting node-update for NODE=${NODE_NAME}" >&2
+    # DevPlan 104 D3: python3 -m node_detect — fail-fast on missing python3/module, non-fatal on absent key.
+    # Exit-code contract (node_detect.py): 0 = key found, 3 = module OK + key absent (non-fatal),
+    # any other non-zero = python3/module missing or unexpected error → FATAL.
     local detected_age_key
-    detected_age_key="$(detect_age_key)" || detected_age_key=""
+    detected_age_key="$(python3 -m core.internal.shared.node_detect --detect-age-key 2>/dev/null)" || {
+        _detect_rc=$?
+        if [[ ${_detect_rc} -eq 3 ]]; then
+            detected_age_key=""
+        else
+            echo "[IMP:10][node-update][entrypoint] FATAL: python3 or core.internal.shared.node_detect unavailable" >&2; exit 1
+        fi
+    }
     # ── S2 (DevPlan 019): deliver generated vhost overlays to server ──
     if ! $DRY_RUN; then
         source "${CORE_DIR}/internal/bootstrap/remote-cmd.sh"

@@ -9,7 +9,7 @@
 #            ▶ test_status_page_schema_version_check → ◇ wrong schema_version → assert warning
 #            ▶ test_status_page_staleness_warning → ◇ old generated_at → assert staleness
 #            ▶ test_status_page_jinja2_autoescape → ◇ XSS payload → assert escaped
-#            ▶ test_htpasswd_generation tests (unchanged)
+#            ▶ test_htpasswd_generation tests (thin shell facade → secrets_manager.py htpasswd, DevPlan 102)
 #            ▶ 047: test_format_bytes_autoscale + _format_bytes unit → assert correct unit
 #            ▶ 047: test_html_structure_has_memory/os/progress/nav/backup/no-cicd → assert new HTML fields
 # @file test_status_page.py
@@ -1217,12 +1217,19 @@ class TestStatusPageNewFeatures:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: secrets.sh — htpasswd generation (unchanged)
+# TESTS: secrets.sh — htpasswd generation (DevPlan 102: thin shell facade)
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestHtpasswdGeneration:
-    """Tests for _ensure_htpasswd_generated() in secrets.sh."""
+    """Tests for _ensure_htpasswd_generated() in secrets.sh (thin facade, DevPlan 102).
+
+    The shell function is now a ≤12 LOC facade that delegates to
+    `python3 secrets_manager.py htpasswd --email --password --htpasswd-file`.
+    APR1 hashing + salt-extraction idempotency live in the Python core
+    (_write_htpasswd_file, TRAP[BUG] 2026-07-31). These tests exercise the
+    shell→Python delegation end-to-end via subprocess (existing pattern).
+    """
 
     def test_htpasswd_generation_creates_valid_file(self, tmp_path, caplog):
         """_ensure_htpasswd_generated creates a valid .htpasswd-platform file."""
@@ -1271,9 +1278,16 @@ class TestHtpasswdGeneration:
         content = htpasswd_file.read_text().strip()
         assert email in content, f"Email not found in htpasswd file: {content}"
         assert "$apr1$" in content, f"APR1 hash not found in htpasswd file: {content}"
+        # Thin-facade contract (DevPlan 102 TASK-5): HTPASSWD_FILE exported by the facade
+        assert "HTPASSWD_FILE=" in result.stdout, f"Facade must export HTPASSWD_FILE, got stdout: {result.stdout}"
 
     def test_htpasswd_generation_idempotent(self, tmp_path):
-        """Second call to _ensure_htpasswd_generated is a no-op."""
+        """Second call to _ensure_htpasswd_generated is a no-op.
+
+        Thin-facade contract (DevPlan 102): idempotency now guaranteed by the Python
+        core's salt extraction (_write_htpasswd_file, TRAP[BUG] 2026-07-31) — the
+        facade delegates both calls to `secrets_manager.py htpasswd`.
+        """
         htpasswd_file = tmp_path / ".htpasswd-platform"
         email = "admin@test.local"
         password = "test-password-123"

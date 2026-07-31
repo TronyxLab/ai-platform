@@ -776,3 +776,9 @@ removed:
     reason: "Same — ssh_command_parser.py unit-покрытие."
     issue: "debt-cleanup-2026-07-31 DBT-002"
     approved_by: "@tronyx"
+
+  # ── DevPlan 105 (vps-readiness python migration): test_ping_check_uses_pong deleted with file ──
+  - nodeid: "tests/test_vps_readiness.py::test_ping_check_uses_pong"
+    reason: "DevPlan 105: vps-readiness.sh (181 LOC bash) мигрирован в Python — core/internal/shared/vps_readiness.py. Файл целиком удалён; статический grep-тест заменён на 11 unit-тестов tests/unit/test_vps_readiness.py (mock ssh_runner, DI, LDD IMP:9, R5 ANTI-SURVIVORSHIP на баг $first)."
+    issue: "105-vps-readiness-python TASK-6"
+    approved_by: "@tronyx"
