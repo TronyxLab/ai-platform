@@ -291,6 +291,9 @@ def validate_with_python(yaml_file: Path, schema_file: Path) -> bool:
     ▶ ┌(yaml_file, schema_file)┐ → ○ subprocess jsonschema_validate → ◇ rc → ⎋ bool
 
     ## @purpose — python-jsonschema путь (байт-идентично validate_with_python() из validate.sh L92-105).
+    ##            DevPlan 116 B6 T5.4: jsonschema_validate теперь — wrapper над
+    ##            core.internal.shared.schema_validator (единый вход соблюдён); этот вызов —
+    ##            wrapper над wrapper'ом, не трогаем (orchestrator не является парсером).
     ## @io — ⇥ yaml_file: Path · schema_file: Path → ⎋ bool (True = valid)
     ## @complexity — O(S*I) доминирует jsonschema (subprocess)
     ## @invariants

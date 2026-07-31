@@ -5,9 +5,10 @@
 ##           Eliminates 6× duplicate boilerplate across CI workflows.
 ## @scope    All .github/workflows/*.yml that need Python + pytest dependencies
 ## @invariants
-##   - Python version: 3.10 (default, overridable via input)
+##   - Python version: 3.14 (default, overridable via input) — pinned to match local .venv (3.14.5)
 ##   - pip cache: actions/setup-python cache: 'pip'
-##   - .venv cache key: venv-${{ runner.os }}-${{ hashFiles('Makefile') }}
+##   - .venv cache key: venv-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles('Makefile', 'pyproject.toml') }}
+##     (python-version in key — cache from an old Python version must not be reused)
 ##   - Dependencies: pytest, pyyaml, jsonschema, requests, python-dotenv, boto3, botocore
 ##   - Optional: pre-commit (via install-pre-commit input)
 ## @rationale  TestsMetaDevPlan2.md audit identified 6× identical .venv setup sequences
@@ -21,7 +22,7 @@ inputs:
   python-version:
     description: 'Python version'
     required: false
-    default: '3.10'
+    default: '3.14'
   install-pre-commit:
     description: 'Install pre-commit in venv (true/false)'
     required: false
@@ -40,9 +41,12 @@ runs:
       uses: actions/cache@v6
       with:
         path: .venv
-        key: venv-${{ runner.os }}-${{ hashFiles('Makefile', 'pyproject.toml') }}
+        # python-version in cache key: .venv is NOT portable across Python versions.
+        # A cache created under 3.10 must never be restored for a 3.14 run (stale
+        # binaries/site-packages) — the symlink fix below is a safety net, not a policy.
+        key: venv-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles('Makefile', 'pyproject.toml') }}
         restore-keys: |
-          venv-${{ runner.os }}-
+          venv-${{ runner.os }}-${{ inputs.python-version }}-
 
     # TRAP[BUG] 2026-07-23: symlink must be set BEFORE pip install.
     # Cached .venv/bin symlinks may point to old Python version (e.g. 3.10.19).
@@ -50,7 +54,7 @@ runs:
     # Then symlink overwrite points to new Python — tests fail with ModuleNotFoundError.
     #
     # Additionally: cached .venv/pyvenv.cfg makes Python treat .venv as real venv,
-    # using .venv/lib/python3.10/site-packages instead of system site-packages.
+    # using .venv/lib/python3.*/site-packages (old version) instead of system site-packages.
     # Delete pyvenv.cfg to ensure plain symlink setup — no virtual env isolation.
     #
     # TRAP[BUG] 2026-07-23 (stale binaries): After pyvenv.cfg removal, pip installs

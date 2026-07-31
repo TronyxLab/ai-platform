@@ -17,10 +17,15 @@
 ##   6. _load() raises ConfigParseError on YAMLError or non-dict root.
 ##   7. get(key) raises ConfigValidationError when key not found AND default is None.
 ##   8. get_list(key) returns [] on missing key, raises ConfigValidationError if not a list.
-##   9. extract_context_from_node_yaml() is maintained as deprecated alias.
+##   9. Context canon (invariant 3, DevPlan 116 B6): get_context() reads ONLY contexts[0].name;
+##      legacy top-level 'context' and str-form contexts[0] are removed (decisions D4/D5).
 ##   10. resolve() searches 3 paths (config_dir/node-configs, ~/projects/*/node-configs/, /opt/node-configs/).
-##   11. validate() with schema_path runs jsonschema Draft7 validation against core/schemas/node.schema.json.
-##   12. Mutation methods (add/remove/update) write back via ruamel.yaml (if available) or PyYAML.
+##   11. validate() with schema_path runs jsonschema Draft7 validation via shared schema_validator
+##      against core/schemas/node.schema.json; legacy 'context' field → error.
+##   12. Mutation methods (add/remove/update/add_context) write back via ruamel.yaml (if available)
+##      or PyYAML on a DEEPCOPY — cache is never poisoned by a failed write (DevPlan 116 B6 T6).
+##   13. Single project parser canon: all node.yaml#projects consumers delegate to
+##      get_project_entries()/get_projects(); malformed record → ConfigValidationError (D3 fail-fast).
 ## @rationale Single facade eliminates 36+ duplicate yaml.safe_load calls (DevPlan 038a).
 ##   Lazy-load prevents I/O in 30% of cases where NodeYaml is created but not used (preflight).
 ##   Dotted-key API eliminates nested dict boilerplate (data["node"]["host"] → node.get("node.host")).
@@ -28,19 +33,23 @@
 ##   Typed dataclasses (T1) give shell consumers structured JSON output without ad-hoc parsing.
 ##   Mutation API (T3.5) enables project lifecycle operations from Python without subprocess make.
 ##   3-path resolve (T2) eliminates ad-hoc path guessing across 8 call sites.
+## @changes 2026-08-01 · DevPlan 116 B6 — contexts[] canon (get_context/validate, D4/D5), deprecated
+##           context-extract alias removed, get_project_entries() canon parser (T4),
+##           shared schema_validator delegation (T5), _write_back deepcopy + cache invalidation (T6),
+##           add_context() mutation (T6.3), flat-only domain (T7)
 ## @changes 2026-07-30 · DevPlan 088 — Wave 1: typed dataclasses (T1), resolve() (T2), jsonschema validate (T3),
 ##           mutation API + getters + CLI (T3.5), all LDD logs + region markers
 ## @changes 2026-07-26 · DevPlan 038a — Complete rewrite: added NodeYaml class, CLI, NamedTuples
-## @changes 2026-07-25 · DevPlan 070 — Created as shared module with extract_context_from_node_yaml
+## @changes 2026-07-25 · DevPlan 070 — Created as shared module with the deprecated context-extract alias
 # endregion MODULE_CONTRACT
 
 import argparse
+import copy
 import glob as glob_module
 import json
 import logging
 import os
 import sys
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -499,42 +508,33 @@ class NodeYaml:
     # endregion FUNC_get_list
 
     # region FUNC_get_context
-    ## @purpose  Extract context name from node.yaml.
+    ## @purpose  Extract context name from node.yaml — contexts[] canon (invariant 3).
     ## @io — ⇥ → ⎋ str
     ## @complexity — O(1) after _load()
     ## @invariants
-    ##   Priority: 1. 'context' field (string)  2. 'contexts[0].name' (dict) or 'contexts[0]' (str)
-    ##   3. Empty string if neither found
+    ##   Priority: 1. contexts[0].name (dict-form, node.schema.json canon)  2. Empty string.
+    ##   Legacy top-level 'context' field and str-form contexts[0] are REMOVED
+    ##   (DevPlan 116 B6, decisions D4/D5). No raise — consumers (deploy_orchestrator,
+    ##   context_overlay, reconciler, adopter) rely on "".
     def get_context(self) -> str:
         """Extract context name from node.yaml.
 
-        Priority:
-          1. Top-level 'context' field (string)
-          2. 'contexts' array → first element's 'name' field (dict) or value (string)
-          3. Empty string if neither found
+        Canon (invariant 3, DevPlan 116 B6): only `contexts[0].name` (dict-form).
+        Legacy top-level 'context' field and str-form `contexts[0]` were removed.
 
         Returns:
             Context name or ""
         """
         data = self._load()
 
-        # Primary: context field (string)
-        ctx = data.get("context", "")
-        if ctx and isinstance(ctx, str):
-            logger.info("[IMP:8][NodeYaml] Context: %s", ctx)
-            return ctx
-
-        # Fallback: contexts array
         contexts = data.get("contexts", [])
         if contexts and isinstance(contexts, list) and len(contexts) > 0:
             first = contexts[0]
             if isinstance(first, dict):
                 ctx = first.get("name", "")
-            elif isinstance(first, str):
-                ctx = first
-            if ctx:
-                logger.info("[IMP:8][NodeYaml] Context: %s (from contexts[0])", ctx)
-                return ctx
+                if ctx:
+                    logger.info("[IMP:8][NodeYaml] Context: %s (from contexts[0].name)", ctx)
+                    return ctx
 
         logger.info("[IMP:7][NodeYaml] Context: (empty)")
         return ""
@@ -610,42 +610,25 @@ class NodeYaml:
         Returns:
             DomainConfig(platform_domain, email, acme_dns_plugin, project_domains)
 
-        Data source priority:
-          1. Top-level field (e.g., data["domain"] as string)
-          2. Nested domain.{field} (e.g., data.get("domain", {}).get("platform"))
-        This supports both schemas: legacy with domain as dict, and new flat schema.
+        Flat schema only (invariant: domain is a string, DevPlan 116 B6 T7):
+          - platform_domain: top-level data["domain"] as str
+          - email: top-level data["email"]
+          - acme_dns_plugin: top-level data["acme_dns_plugin"]
+          - project_domains: from projects[].domain
+        Legacy dict-form (domain: {platform: ...}) was removed (greenfield).
         """
         data = self._load()
 
         # ── platform_domain ──
-        # Priority: top-level "domain" string > nested domain.platform > ""
-        domain_raw = data.get("domain")
-        if isinstance(domain_raw, str):
-            platform_domain = domain_raw
-        elif isinstance(domain_raw, dict):
-            platform_domain = domain_raw.get("platform", "")
-        else:
-            platform_domain = ""
-        if not isinstance(platform_domain, str):
-            platform_domain = ""
+        platform_domain = data.get("domain") if isinstance(data.get("domain"), str) else ""
 
         # ── email ──
-        # Priority: top-level "email" string > nested domain.email > ""
         email = data.get("email", "")
-        if not isinstance(email, str) or not email:
-            domain = data.get("domain", {})
-            if isinstance(domain, dict):
-                email = domain.get("email", "")
         if not isinstance(email, str):
             email = ""
 
         # ── acme_dns_plugin ──
-        # Priority: top-level "acme_dns_plugin" string > nested domain.acme_dns_plugin > ""
         acme_dns_plugin = data.get("acme_dns_plugin", "")
-        if not isinstance(acme_dns_plugin, str) or not acme_dns_plugin:
-            domain = data.get("domain", {})
-            if isinstance(domain, dict):
-                acme_dns_plugin = domain.get("acme_dns_plugin", "")
         if not isinstance(acme_dns_plugin, str):
             acme_dns_plugin = ""
 
@@ -698,9 +681,11 @@ class NodeYaml:
     ## @io — ⇥ schema_path: Optional[str] = None → ⎋ list[str]
     ## @complexity — O(N) for YAML parse + O(S) for jsonschema validation
     ## @invariants
-    ##   Basic checks: node section exists, node.host non-empty, domain section exists,
-    ##   domain.platform non-empty.
-    ##   If schema_path provided or schema exists at default path → also run Draft7 jsonschema.
+    ##   Basic checks: node section exists, node.host non-empty, domain section exists (flat string
+    ##   only — dict form is an error), contexts[] canon (legacy 'context' field → error,
+    ##   contexts must be a list with non-empty contexts[0].name).
+    ##   If schema_path provided or schema exists at default path → also run Draft7 jsonschema
+    ##   via shared schema_validator (DevPlan 116 B6 T5).
     ##   Returns list of error messages (empty = valid).
     def validate(self, schema_path: str | None = None) -> list[str]:
         """Validate node.yaml structure — basic checks + optional jsonschema.
@@ -728,21 +713,29 @@ class NodeYaml:
             if not host:
                 errors.append("Missing or empty 'node.host'")
 
-        # Check domain section
+        # Check domain section (flat schema only — legacy dict form removed, DevPlan 116 B6 T7)
         domain = data.get("domain")
         if domain is None:
             errors.append("Missing 'domain' section")
-        elif not isinstance(domain, (dict, str)):
-            errors.append("'domain' section is not a dict or string")
         elif isinstance(domain, dict):
-            platform = domain.get("platform", "")
-            if not platform:
-                errors.append("Missing or empty 'domain.platform'")
+            errors.append("'domain' must be a string (flat schema — legacy dict form removed)")
+        elif not isinstance(domain, str):
+            errors.append("'domain' section is not a string")
 
-        # Check context field
-        ctx = data.get("context", "")
-        if not isinstance(ctx, str) or not ctx:
-            errors.append("Missing or empty 'context' field")
+        # ── Context contract (invariant 3, DevPlan 116 B6 T1): contexts[] canon ──
+        # Legacy top-level 'context' field is rejected; contexts must be a list with
+        # a dict-form contexts[0].name (node.schema.json canon, decisions D4/D5).
+        if data.get("context") is not None:
+            errors.append("Legacy 'context' field is removed — use 'contexts[0].name' (invariant 3)")
+        contexts = data.get("contexts")
+        if contexts is None or not isinstance(contexts, list):
+            errors.append("Missing 'contexts' section")
+        elif not contexts:
+            errors.append("Missing or empty 'contexts[0].name'")
+        else:
+            first = contexts[0]
+            if not isinstance(first, dict) or not first.get("name"):
+                errors.append("Missing or empty 'contexts[0].name'")
 
         # ── Optional jsonschema validation ──
         if schema_path is None:
@@ -758,13 +751,12 @@ class NodeYaml:
             try:
                 import jsonschema
 
+                # DevPlan 116 B6 T5: inline Draft7-цикл → shared schema_validator (single entry).
+                from core.internal.shared.schema_validator import validate_dict_against_schema
+
                 with open(schema_path) as f:
                     schema = json.load(f)
-                validator = jsonschema.Draft7Validator(schema)
-                validation_errors = list(validator.iter_errors(data))
-                for ve in validation_errors:
-                    path = " -> ".join(str(p) for p in ve.absolute_path) if ve.absolute_path else "root"
-                    msg = f"{path}: {ve.message}"
+                for msg in validate_dict_against_schema(data, schema):
                     errors.append(msg)
                     logger.error("[IMP:10][NodeYaml.validate] Schema error: %s", msg)
             except json.JSONDecodeError as e:
@@ -1067,15 +1059,14 @@ class NodeYaml:
     # endregion FUNC_get_email
 
     # region FUNC_get_domain
-    ## @purpose  Get domain field from node.yaml (supports both flat string and nested dict).
+    ## @purpose  Get domain field from node.yaml (flat string only).
     ## @io — ⇥ → ⎋ str
     ## @complexity — O(1) after _load()
     def get_domain(self) -> str:
         """Get domain from node.yaml.
 
-        Supports both:
-          - Top-level string: domain: "example.com"
-          - Nested dict: domain: { platform: "example.com" }
+        Flat string only (DevPlan 116 B6 T7): domain: "example.com".
+        Legacy dict form (domain: { platform: ... }) was removed (greenfield).
 
         Returns:
             Domain string or empty string
@@ -1085,11 +1076,6 @@ class NodeYaml:
         if isinstance(domain, str):
             logger.info("[IMP:7][NodeYaml.get_domain] %s", domain)
             return domain
-        if isinstance(domain, dict):
-            val = domain.get("platform", "")
-            if isinstance(val, str):
-                logger.info("[IMP:7][NodeYaml.get_domain] %s (from domain.platform)", val)
-                return val
         logger.info("[IMP:7][NodeYaml.get_domain] (empty)")
         return ""
 
@@ -1120,6 +1106,55 @@ class NodeYaml:
 
     # endregion FUNC_get_project
 
+    # region FUNC_get_project_entries
+    ## @purpose  Canonical typed parser of node.yaml#projects → list[ProjectEntry].
+    ## @io — ⇥ → ⎋ list[ProjectEntry]
+    ## @complexity — O(P) where P = number of projects
+    ## @invariants
+    ##   - Fail-fast (decision D3, DevPlan 116 B6 T4): str-entry, non-dict, or dict without a
+    ##     non-empty 'name' → ConfigValidationError with record index. Malformed records are
+    ##     NEVER silently skipped.
+    ##   - Single parser canon: all node.yaml#projects consumers delegate to
+    ##     get_project_entries()/get_projects() (reconciler, context_deployer,
+    ##     reconciler_projects, vhost_renderer, lister).
+    ##   - Empty optional fields → "".
+    def get_project_entries(self) -> list[ProjectEntry]:
+        """Parse node.yaml#projects into typed ProjectEntry list (canonical parser).
+
+        Returns:
+            List of ProjectEntry (empty list if 'projects' key missing)
+
+        Raises:
+            ConfigValidationError: malformed record (str, non-dict, or missing/empty 'name')
+        """
+        projects = self.get_projects()
+        entries: list[ProjectEntry] = []
+        for idx, p in enumerate(projects):
+            if not isinstance(p, dict) or not p.get("name"):
+                logger.error(
+                    "[IMP:10][NodeYaml.get_project_entries] Malformed project record at index %d: %r",
+                    idx,
+                    p,
+                )
+                raise ConfigValidationError(
+                    f"Malformed project entry at projects[{idx}]: expected dict with non-empty 'name' "
+                    "(fail-fast, DevPlan 116 B6 D3)"
+                )
+            entries.append(
+                ProjectEntry(
+                    name=str(p.get("name", "")),
+                    repo=str(p.get("repo", "")),
+                    type=str(p.get("type", "")),
+                    domain=str(p.get("domain", "")),
+                    database=str(p.get("database", "")),
+                    context=str(p.get("context", "")),
+                )
+            )
+        logger.info("[IMP:9][NodeYaml.get_project_entries] %d project(s) parsed", len(entries))
+        return entries
+
+    # endregion FUNC_get_project_entries
+
     # region FUNC_add_project
     ## @purpose  Add a project to node.yaml and write back to disk.
     ## @io — ⇥ project: ProjectEntry → ⎋ None
@@ -1127,17 +1162,16 @@ class NodeYaml:
     ## @invariants
     ##   Raises ConfigValidationError if project with same name already exists.
     ##   Writes back via _write_back() preserving comments (ruamel.yaml) if available.
-    # ⚠️ TRAP[BUG] · 2026-07-30 · P2 · add_project mutates _data cache in-place before _write_back
-    # · Symptom: If _write_back fails (e.g. disk full, permission denied), the in-memory _data
-    #   cache has already been mutated (project appended to data["projects"]), but the file
-    #   on disk is NOT updated. Next read from disk returns old data, but reload() returns
-    #   the mutated cache (since _data is not None after mutation).
-    # · Root: _load() caches data at self._data. add_project() calls _load() → gets cached ref,
-    #   appends to projects list (mutating the cached list in-place), then calls _write_back().
-    #   If _write_back fails, self._data still has the mutated value.
-    # · Fix: (a) shallow-copy data before mutation, or (b) invalidate cache on _write_back failure,
-    #   or (c) add_project should work on a fresh load() if cache is stale.
-    # · Prevention: always invalidate cache (self._data = None) when _write_back fails.
+    ##   Mutates a DEEPCOPY of _load() — cache is never poisoned by a failed write
+    ##   (DevPlan 116 B6 T6.1; TRAP 2026-07-30 fixed).
+    # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · FIXED — add_project mutates _data cache in-place before _write_back
+    # · Symptom: If _write_back fails (disk full, permission denied), the in-memory _data
+    # ·   cache already contains the appended project but the file is NOT updated → cache/file desync.
+    # · Root: _load() returns the cached dict by reference; appending to its "projects" list
+    # ·   mutates the cache in-place.
+    # · Fix: `data = copy.deepcopy(self._load())` — mutation happens on a copy; _write_back
+    # ·   invalidates cache on success and on failure (DevPlan 116 B6 T6).
+    # · Prevention: all mutation methods must deepcopy before modifying; never mutate _load() ref.
     def add_project(self, project: ProjectEntry) -> None:
         """Add a project to node.yaml and write back to disk.
 
@@ -1147,7 +1181,7 @@ class NodeYaml:
         Raises:
             ConfigValidationError: if project with same name already exists
         """
-        data = self._load()
+        data = copy.deepcopy(self._load())
         projects = data.get("projects", [])
         if not isinstance(projects, list):
             projects = []
@@ -1183,6 +1217,7 @@ class NodeYaml:
     ## @io — ⇥ name: str → ⎋ bool
     ## @complexity — O(P) for filter + O(N) for YAML dump
     ## @invariants  Returns False if project not found (no exception raised).
+    ##   Mutates a DEEPCOPY — cache clean on write failure (DevPlan 116 B6 T6.1).
     # ⚠️ TRAP[BUG] · 2026-07-30 · P2 · remove_project uses list comprehension filter
     # · Symptom: If projects list contains duplicate names (shouldn't but possible after
     #   manual YAML edits), remove_project removes ALL entries with matching name, not
@@ -1200,7 +1235,7 @@ class NodeYaml:
         Returns:
             True if project was found and removed, False if not found
         """
-        data = self._load()
+        data = copy.deepcopy(self._load())
         projects = data.get("projects", [])
         if not isinstance(projects, list):
             return False
@@ -1223,13 +1258,16 @@ class NodeYaml:
     ## @io — ⇥ name: str, **updates → ⎋ bool
     ## @complexity — O(P) for search + O(N) for YAML dump
     ## @invariants  None-value fields are removed from the dict (pop). Returns False if not found.
-    # ⚠️ TRAP[BUG] · 2026-07-30 · P2 · update_project mutates cached dict in-place
+    ##   Mutates a DEEPCOPY (nested dict entries) — cache clean on write failure
+    ##   (DevPlan 116 B6 T6.1; TRAP 2026-07-30 fixed).
+    # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · FIXED — update_project mutates cached dict in-place
     # · Symptom: Same cache-corruption risk as add_project. If _write_back fails after
     #   updating the project dict in-place (p[key] = value), the in-memory cache is
     #   desynchronized from the file on disk.
     # · Root: p is a reference into the cached list self._data["projects"]. Mutating p
-    #   mutates the cache directly. If _write_back fails, the cache is wrong.
-    # · Fix: same as add_project — either shallow-copy or invalidate cache on failure.
+    #   mutates the cache directly.
+    # · Fix: `data = copy.deepcopy(self._load())` — deep copy required because update_project
+    #   mutates nested dict entries (shallow would still share the inner project dicts).
     def update_project(self, name: str, **updates: Any) -> bool:
         """Update fields of an existing project entry.
 
@@ -1240,7 +1278,7 @@ class NodeYaml:
         Returns:
             True if project was found and updated, False if not found
         """
-        data = self._load()
+        data = copy.deepcopy(self._load())
         projects = data.get("projects", [])
         if not isinstance(projects, list):
             return False
@@ -1267,33 +1305,92 @@ class NodeYaml:
 
     # endregion FUNC_update_project
 
+    # region FUNC_add_context
+    ## @purpose  Add a context entry to node.yaml contexts[] and write back to disk (DevPlan 116 B6 D2).
+    ## @io — ⇥ name: str, description: str = "", node_configs_repo: str = "",
+    ##        hermes_agent_repo: str = "" → ⎋ bool
+    ## @complexity — O(C) for duplicate check + O(N) for YAML dump
+    ## @invariants
+    ##   - Raises ConfigValidationError if context with same name already exists (like add_project).
+    ##   - Missing/None 'contexts' section → created as a list.
+    ##   - Entry keys limited to the 4 schema-allowed fields (node.schema.json items
+    ##     additionalProperties: false): name, description, node_configs_repo, hermes_agent_repo.
+    ##   - Mutates a DEEPCOPY — cache clean on write failure (DevPlan 116 B6 T6).
+    def add_context(
+        self,
+        name: str,
+        description: str = "",
+        node_configs_repo: str = "",
+        hermes_agent_repo: str = "",
+    ) -> bool:
+        """Add a context entry to node.yaml contexts[] and write back to disk.
+
+        Args:
+            name: Context name (referenced by projects[].context)
+            description: Human-readable description
+            node_configs_repo: GitHub repo for node-configs (org/repo)
+            hermes_agent_repo: GitHub repo for hermes-agent overlay (org/repo)
+
+        Returns:
+            True on success
+
+        Raises:
+            ConfigValidationError: if context with same name already exists,
+                                   or 'contexts' section is not a list
+        """
+        data = copy.deepcopy(self._load())
+        contexts = data.get("contexts")
+        if contexts is None:
+            contexts = []
+            data["contexts"] = contexts
+        if not isinstance(contexts, list):
+            logger.error("[IMP:10][NodeYaml.add_context] 'contexts' is not a list: %s", type(contexts))
+            raise ConfigValidationError(f"'contexts' is not a list: {type(contexts)}")
+
+        # Duplicate check
+        for ctx in contexts:
+            if isinstance(ctx, dict) and ctx.get("name") == name:
+                logger.error("[IMP:10][NodeYaml.add_context] Duplicate context: %s", name)
+                raise ConfigValidationError(f"Context already exists: {name}")
+
+        new_entry: dict[str, str] = {"name": name}
+        if description:
+            new_entry["description"] = description
+        if node_configs_repo:
+            new_entry["node_configs_repo"] = node_configs_repo
+        if hermes_agent_repo:
+            new_entry["hermes_agent_repo"] = hermes_agent_repo
+
+        contexts.append(new_entry)
+
+        self._write_back(data)
+        logger.info("[IMP:9][NodeYaml.add_context] Added context: %s", name)
+        return True
+
+    # endregion FUNC_add_context
+
     # region FUNC__write_back
     ## @purpose  Write YAML data back to the original file.
     ## @io — ⇥ data: dict → ⎋ None | raise ConfigParseError
     ## @complexity — O(N) for YAML dump
     ## @invariants
     ##   Uses ruamel.yaml first for comment preservation, falls back to PyYAML.
-    ##   Invalidates _data cache after write.
+    ##   Invalidates _data cache after write AND on failure (DevPlan 116 B6 T6.2).
     ##   Raises ConfigParseError on write failure.
-    # ⚠️ TRAP[BUG] · 2026-07-30 · P2 · _write_back has broad except Exception for ruamel fallback
-    # · Symptom: If ruamel.yaml is installed but fails for an unexpected reason (bug in
-    #   ruamel, file system error during dump, etc.), the broad `except Exception` catches it
-    #   and falls back to PyYAML. This can silently lose YAML comments (which ruamel preserves
-    #   but PyYAML does not) or mask real errors.
-    # · Root: try/except ImportError covers the normal case (ruamel not installed).
-    #   The additional `except Exception as e` catches everything else, including genuine
-    #   failures that should have been raised.
-    # · Fix: narrow the catch to specific expected failures (OSError, AttributeError) or
-    #   log at IMP:9 before falling back so operators know comments were lost.
-    # · Prevention: review ruamel.yaml error types after upgrading ruamel version.
-    # ⚠️ TRAP[BUG] · 2026-07-30 · P2 · _write_back does NOT invalidate cache on PyYAML failure
-    # · Symptom: If PyYAML write fails (OSError → ConfigParseError), self._data is NOT set
-    #   to None. The cache retains the old (pre-mutation) data, so the caller might
-    #   incorrectly believe the file was not changed. Actually, the mutation already
-    #   happened in-memory (add/remove/update modified self._data via reference).
-    # · Root: the three mutation methods mutate self._data in-place before calling _write_back.
-    #   If _write_back fails, self._data is already mutated but the file on disk is NOT updated.
-    # · Fix: always set self._data = None on any write failure, not just on success.
+    # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · FIXED — broad except Exception for ruamel fallback
+    # · Symptom: Any ruamel.yaml failure (unexpected error, FS error during dump) was swallowed
+    # ·   by `except Exception` → silent fallback to PyYAML (comments lost) or masked real errors.
+    # · Root: try/except ImportError covered the normal case; the additional broad except caught all.
+    # · Fix: except narrowed to (yaml.YAMLError, OSError) only — genuine failures surface loudly
+    #   (DevPlan 116 B6 T6.2).
+    # · Prevention: do not re-broaden the ruamel fallback catch.
+    # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · FIXED — cache not invalidated on PyYAML failure
+    # · Symptom: If PyYAML write fails, self._data retained the pre-mutation value → caller could
+    #   believe the file was unchanged while the mutation methods had already worked on cached refs.
+    # · Root: no self._data = None in the failure branch of the PyYAML fallback.
+    # · Fix: self._data = None BEFORE raise in the PyYAML failure branch + mutations deepcopy
+    #   (DevPlan 116 B6 T6.1/T6.2) — cache is never poisoned regardless of write outcome.
+    # · Prevention: any _write_back exit path (success or failure) must invalidate _data.
     def _write_back(self, data: dict) -> None:
         """Write the YAML data back to the original file.
 
@@ -1331,6 +1428,9 @@ class NodeYaml:
             self._data = None  # invalidate cache
             logger.info("[IMP:9][NodeYaml._write_back] Written via PyYAML")
         except (OSError, yaml.YAMLError) as e:
+            # DevPlan 116 B6 T6.2: invalidate cache BEFORE raise — mutations work on deepcopy,
+            # but this guard protects against any cached-state drift on write failure.
+            self._data = None
             logger.error("[IMP:10][NodeYaml._write_back] Write failed: %s", e)
             raise ConfigParseError(f"Failed to write node.yaml: {e}") from e
 
@@ -1351,40 +1451,6 @@ class NodeYaml:
         return self._load()
 
     # endregion FUNC_raw
-
-
-# ── Backward-Compat Alias (Deprecated) ────────────────────────────────────────
-
-
-# region FUNC_extract_context_from_node_yaml (deprecated)
-## @purpose  DEPRECATED: Use NodeYaml(path).get_context() instead.
-##            Maintained for backward compatibility during migration.
-## @io — ⇥ node_yaml_path: str, log_tag: str = "context" → ⎋ str
-## @complexity — O(N) YAML parse on first call
-## @invariants  Returns "" on error (backward-compat with old exception-absorbing behavior)
-def extract_context_from_node_yaml(node_yaml_path: str, log_tag: str = "context") -> str:
-    """DEPRECATED: Use NodeYaml(path).get_context() instead.
-
-    Maintained for backward compatibility during migration.
-    The old behavior absorbed FileNotFoundError and YAMLError and returned "".
-    This wrapper preserves that contract while emitting a DeprecationWarning.
-    """
-    warnings.warn(
-        "extract_context_from_node_yaml() is deprecated. Use NodeYaml(path).get_context() instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    try:
-        ctx = NodeYaml(node_yaml_path).get_context()
-        if ctx:
-            logger.info("[IMP:8][%s] Context: %s", log_tag, ctx)
-        return ctx
-    except (ConfigNotFoundError, ConfigParseError) as e:
-        logger.warning("[IMP:7][%s] Failed to parse %s: %s", log_tag, node_yaml_path, e)
-        return ""
-
-
-# endregion FUNC_extract_context_from_node_yaml (deprecated)
 
 
 # ── CLI Entrypoint ────────────────────────────────────────────────────────────

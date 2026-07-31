@@ -34,7 +34,8 @@ case $- in *e*) ;; *) echo "[WARN] node-resolver.sh sourced without set -e" >&2 
 ##               definitions and SETUP bootstrap (no side-effects)
 ##             — resolve_node_yaml MUST search exactly 3 paths in order:
 ##               platform-local → org repos → VPS fallback
-##             — extract_node_host MUST use python3 + yaml for parsing
+##             — extract_node_host MUST use NodeYaml CLI `--get node.host`
+##               (python3 -m core.internal.shared.node_yaml) for parsing — DevPlan 116 B6 T8.3
 ##             — A single quote in yaml_path would break python -c string
 ##               literal (accepted limitation — paths come from
 ##               resolve_node_yaml which only returns validated paths)
@@ -47,7 +48,7 @@ case $- in *e*) ;; *) echo "[WARN] node-resolver.sh sourced without set -e" >&2 
 ## @changes   LAST_CHANGE: 2026-07-09 · T2 — Updated references (apply.sh, platform-push.sh deleted)
 ##            Original (2026-07-07 · T1): extracted from apply.sh, platform-push.sh, context-init.sh patterns.
 ## @modulemap — resolve_node_yaml [W:80] 3-path search → stdout resolved path
-##             — extract_node_host  [W:30] yaml host extraction → stdout host
+##             — extract_node_host  [W:30] NodeYaml CLI host extraction → stdout host
 ## @usecases  — Developer: source node-resolver.sh; yaml_path="$(resolve_node_yaml
 ##               "prod-web")" || exit 1
 ##             — Deploy: host="$(extract_node_host "${yaml_path}")"
@@ -56,7 +57,7 @@ case $- in *e*) ;; *) echo "[WARN] node-resolver.sh sourced without set -e" >&2 
 # endregion MODULE_CONTRACT
 # GREP_SUMMARY: node, node.yaml, resolve, resolver, extract, host, yaml, config, node-configs, platform-root
 # STRUCTURE: ▶ ┌node,platform_root,projects_dir┐ → ○ resolve_node_yaml → ◇ ┌3 paths┐ ⊕ ┌-f path?┐ → ⊕ echo path | ⎋ exit1
-#            ▶ ┌yaml_path┐ → ○ extract_node_host → ⊕python3 yaml→ ◇ ┌host∋?┐ → ⊕ echo host | ⎋ empty | ⎋ exit1
+#            ▶ ┌yaml_path┐ → ○ extract_node_host → ⊕NodeYaml CLI --get node.host→ ◇ ┌host∋?┐ → ⊕ echo host | ⎋ empty | ⎋ exit1
 
 # ═══════════════════════════════════════════════════════════════════
 # DEPENDENCIES
@@ -147,20 +148,21 @@ resolve_node_yaml() {
 # FUNCTION — extract_node_host
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_extract_node_host
-## @purpose  Extract the host field from a node.yaml file using
-##           python3 + yaml library. Expected YAML structure:
-##           { node: { host: "1.2.3.4" } }. Prints the host value
+## @purpose  Extract the host field from a node.yaml file using the NodeYaml CLI
+##           (`python3 -m core.internal.shared.node_yaml --get node.host`).
+##           Expected YAML structure: { node: { host: "1.2.3.4" } }. Prints the host value
 ##           to stdout. Returns empty string if host field is absent.
 ## @param $1  yaml_path — absolute path to an existing node.yaml file
 ## @io       stdout: host string (IP or domain), empty if field missing
 ##           stderr: LDD logs via log_imp at IMP:7-10
 ##           exit 0: success (host may be empty — not an error),
 ##           exit 1: file not found, unparseable YAML, or missing arg
-## @complexity O(1) — single file read + yaml.safe_load + dict traversal
+## @complexity O(1) — single NodeYaml CLI --get call
 ## @invariants — YAML structure expected: node.host (nested dict)
 ##             — Empty or absent host produces empty stdout (not an error)
 ##             — File not found or YAML parse error → exit code 1 + IMP:10 log
-##             — python3 must have pyyaml (yaml) module installed
+##             — Uses NodeYaml CLI --get node.host (DevPlan 116 B6 T8.3) — python3 must have
+##               core.internal.shared.node_yaml importable (repo root on PYTHONPATH)
 ##             — Result is captured via command substitution; trailing
 ##               newlines are stripped by bash
 ## @example   host="$(extract_node_host "${PLATFORM_ROOT:-/opt/platform}/node-configs/prod-web/node.yaml")"

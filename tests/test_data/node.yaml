@@ -5,7 +5,8 @@
 # Auto-validated against core/schemas/node.schema.json at pytest_sessionstart
 # Update this file whenever node.schema.json evolves — sessionstart will catch drift
 
-context: test
+contexts:
+  - name: test
 
 node:
   name: test-node

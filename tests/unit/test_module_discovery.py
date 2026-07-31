@@ -128,6 +128,82 @@ def test_empty_modules_dir(caplog, tmp_path):
     logger.critical("[IMP:9][test] Empty modules dir → empty result")
 
 
+# 🧪 TRAP[TEST] · Regression · U-59 (DevPlan 116 T7) · comment mentioning install_type: system NOT excluded
+# · Scenario: module.yaml comment contains «install_type: system» (prose) + install_type: docker
+# ·   → module INCLUDED (line-anchored regex, not substring)
+# · Last fail: N/A (new test — substring false-positive fix)
+# · Remove if: discover_docker_modules detection logic changes
+@ldd_trajectory
+def test_comment_mentioning_system_not_excluded(caplog, tmp_path):
+    """Comments mentioning 'install_type: system' must NOT trigger exclusion (U-59)."""
+    mod_dir = tmp_path / "nginx"
+    mod_dir.mkdir()
+    # Comment line starts with '#' — line-anchored regex must not match it
+    content = (
+        "# NOTE: install_type: system modules are managed by systemd, not compose\nname: nginx\ninstall_type: docker\n"
+    )
+    (mod_dir / "module.yaml").write_text(content)
+    (mod_dir / "docker-compose.base.yml").write_text("services:\n  nginx:\n    image: nginx:latest")
+
+    result = md.discover_docker_modules(tmp_path)
+
+    assert len(result) == 1, f"Expected nginx included, got {len(result)} module(s)"
+    assert mod_dir / "docker-compose.base.yml" in result
+    logger.critical("[IMP:9][test] Comment mentioning install_type: system does not exclude module")
+
+
+# 🧪 TRAP[TEST] · Regression · U-59 (DevPlan 116 T7) · quoted/indented install_type: system excluded
+# · Scenario: `install_type: "system"` (quoted) and `  install_type: system` (indented) → excluded
+# · Last fail: N/A (new test)
+# · Remove if: discover_docker_modules detection logic changes
+@ldd_trajectory
+def test_quoted_and_indented_system_excluded(caplog, tmp_path):
+    """install_type: system with quotes/indentation must be excluded (line-anchored regex)."""
+    # Quoted form
+    quoted_dir = tmp_path / "quoted-system"
+    quoted_dir.mkdir()
+    (quoted_dir / "module.yaml").write_text('name: quoted-system\ninstall_type: "system"\n')
+    (quoted_dir / "docker-compose.base.yml").write_text("services:\n  agent:\n    image: agent:latest")
+
+    # Indented form (inside a block)
+    indented_dir = tmp_path / "indented-system"
+    indented_dir.mkdir()
+    (indented_dir / "module.yaml").write_text("name: indented-system\n  install_type: system\n")
+    (indented_dir / "docker-compose.base.yml").write_text("services:\n  agent:\n    image: agent:latest")
+
+    result = md.discover_docker_modules(tmp_path)
+
+    assert len(result) == 0, f"Expected both system modules excluded, got {len(result)}"
+    logger.critical("[IMP:9][test] Quoted/indented install_type: system both excluded")
+
+
+# 🧪 TRAP[TEST] · Regression · U-59 (DevPlan 116 T7) · bootstrap adapter uses canonical predicate
+# · Scenario: bootstrap discover_modules() delegates to canonical discover_docker_modules
+# ·   (same 13 modules on real core/modules; adapter maps Path → repo-relative strings)
+# · Last fail: N/A (new test)
+# · Remove if: bootstrap adapter changes
+@ldd_trajectory
+def test_bootstrap_uses_canonical_predicate(caplog):
+    """bootstrap discover_modules must delegate to the canonical predicate (D3, one code)."""
+    from core.internal.bootstrap.discover_modules import discover_modules as bootstrap_discover
+    from core.internal.scripts.module_discovery import discover_docker_modules as canonical_discover
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    modules_dir = project_root / "core" / "modules"
+
+    canonical = canonical_discover(modules_dir)
+    bootstrap = bootstrap_discover(modules_dir)
+
+    # Set-equality of module names — both consumers give identical results (13==13)
+    canonical_names = {p.parent.name for p in canonical}
+    bootstrap_names = {Path(p).parent.name for p in bootstrap}
+    assert canonical_names == bootstrap_names, (
+        f"bootstrap/canonical predicates diverged: {sorted(canonical_names)} vs {sorted(bootstrap_names)}"
+    )
+    assert len(canonical_names) == 13, f"Expected 13 docker modules, got {len(canonical_names)}"
+    logger.critical("[IMP:9][test] bootstrap == canonical predicate (%d docker modules)", len(canonical_names))
+
+
 # endregion
 
 

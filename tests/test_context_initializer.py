@@ -67,7 +67,8 @@ def test_create_skeleton_node_yaml(tmp_path: pathlib.Path, caplog) -> None:
     content = skeleton_path.read_text()
     assert "GREP_SUMMARY:" in content, "Missing GREP_SUMMARY in skeleton"
     assert "STRUCTURE:" in content, "Missing STRUCTURE in skeleton"
-    assert f"context: {context_name}" in content, f"Missing 'context: {context_name}' in skeleton"
+    # contexts[] canon (DevPlan 116 B6 T1.4): legacy `context:` поле заменено на contexts:[0].name
+    assert f"contexts:\n  - name: {context_name}" in content, f"Missing 'contexts[0].name: {context_name}' in skeleton"
     assert "node:" in content, "Missing 'node:' section"
     assert "modules:" in content, "Missing 'modules:' section"
     assert "projects:" in content, "Missing 'projects:' section"

@@ -83,7 +83,9 @@ jobs:
       - name: Setup platform
         uses: ./.github/actions/setup-platform
         with:
-          python-version: ''
+          # Pinned to 3.14: Read ai-platform.yaml step uses python3 yaml_query.py which
+          # requires PyYAML — provided by the venv (absent in runner system python3).
+          python-version: '3.14'
           install-gitleaks: 'false'
           run-provisioner: 'false'
 
@@ -154,7 +156,9 @@ jobs:
       - name: Setup platform
         uses: ./.github/actions/setup-platform
         with:
-          python-version: ''
+          # Pinned to 3.14: Read ai-platform.yaml step uses python3 yaml_query.py which
+          # requires PyYAML — provided by the venv (absent in runner system python3).
+          python-version: '3.14'
           install-gitleaks: 'false'
           run-provisioner: 'false'
 
@@ -197,7 +201,9 @@ jobs:
       - name: Setup platform
         uses: ./.github/actions/setup-platform
         with:
-          python-version: ''
+          # Pinned to 3.14: Read ai-platform.yaml step uses python3 yaml_query.py which
+          # requires PyYAML — provided by the venv (absent in runner system python3).
+          python-version: '3.14'
           install-gitleaks: 'false'
           run-provisioner: 'false'
       - name: Smoke test — health endpoint

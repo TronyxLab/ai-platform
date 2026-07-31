@@ -39,6 +39,16 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
+from core.internal.shared.secrets_manifest_reader import (
+    charset as secret_charset,
+)
+from core.internal.shared.secrets_manifest_reader import (
+    consumers as secret_consumers,
+)
+from core.internal.shared.secrets_manifest_reader import (
+    iter_secrets as iter_manifest_secrets,
+)
+from core.internal.shared.secrets_manifest_reader import tier as secret_tier
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +60,13 @@ logger = logging.getLogger(__name__)
 ## @purpose  Read secrets-manifest.yaml and verify all secrets required by a given module are non-empty
 ##           in the process environment OR in a secrets.env file. Manifest-driven gate.
 ## @io       module_name (str), secrets_manifest_path (str) → List[str] of missing variable names
-## @complexity 2 — single YAML parse + linear pass over secrets list
+##           ⚡ raise FileNotFoundError/ValueError if manifest missing/malformed (strict, DevPlan 116 T4)
+## @complexity 2 — single YAML parse (delegated to shared iter_secrets) + linear pass over secrets list
 ## @invariants
 ##   - Checks both os.environ and SECRETS_ENV_FILE (default /run/platform/secrets.env)
 ##   - Only secrets where consumers includes module_name AND tier ∈ {required, generated} are checked
-##   - If manifest absent → returns [] (graceful degradation, SSoT not yet available)
+##   - STRICT: manifest absent/malformed → RAISE (no graceful degradation — manifest always
+##     delivered with core/; «gate зелёный, система врёт» устранён, invariant 7)
 ##   - Incident 2026-07-17: minio deployed with empty MINIO_ROOT_USER/PASSWORD → Access Denied
 ## @rationale Manifest-driven approach replaces module.yaml env_requires parsing.
 ##            secrets-manifest.yaml is the Single Source of Truth. Gate validates
@@ -62,29 +74,11 @@ logger = logging.getLogger(__name__)
 def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[str]:
     logger.info("[IMP:7][_check_env_requires][start] Module=%s, manifest=%s", module_name, secrets_manifest_path)
 
-    manifest_path = Path(secrets_manifest_path)
-    if not manifest_path.is_file():
-        logger.warning(
-            "[IMP:5][_check_env_requires][skip] Manifest not found at %s — skipping env check (graceful degradation)",
-            secrets_manifest_path,
-        )
-        return []
-
-    with open(manifest_path) as f:
-        data = yaml.safe_load(f)
-
-    if data is None:
-        logger.warning("[IMP:5][_check_env_requires][empty] Manifest %s is empty", secrets_manifest_path)
-        return []
-
-    secrets_list = data.get("secrets", [])
-    if not secrets_list:
-        logger.info("[IMP:7][_check_env_requires][no_secrets] Manifest has no secrets entries")
-        return []
+    secrets_list = iter_manifest_secrets(secrets_manifest_path)
 
     # Filter: secrets where consumers includes module_name AND tier ∈ {required, generated}
     module_secrets = [
-        s for s in secrets_list if module_name in s.get("consumers", []) and s.get("tier") in ("required", "generated")
+        s for s in secrets_list if module_name in secret_consumers(s) and secret_tier(s) in ("required", "generated")
     ]
 
     if not module_secrets:
@@ -134,40 +128,26 @@ def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[st
 ## @purpose  Validate all secrets with charset field in secrets-manifest.yaml match their declared regex charset.
 ##           Fails fast before any docker compose up if any secret violates its charset constraint.
 ## @io       secrets_manifest_path (str) → tuple[int, list[str]]: (failure_count, list_of_error_messages)
-## @complexity 2 — single YAML parse + linear pass with re.match per secret
+##           ⚡ raise FileNotFoundError/ValueError if manifest missing/malformed (strict, DevPlan 116 T4)
+## @complexity 2 — single YAML parse (delegated to shared iter_secrets) + linear pass with re.match per secret
 ## @invariants
 ##   - Only secrets with explicit charset field are validated (no charset → skip)
 ##   - Empty/missing env vars are skipped (checked separately by _check_env_requires)
 ##   - Uses re.match (full string match, not re.search)
-##   - Graceful degradation: if manifest file not found → WARN + return (0, [])
+##   - STRICT: manifest absent/malformed → RAISE (graceful degradation removed, invariant 7)
 ## @rationale Charset constraint prevents pgbouncer crash-loop from special characters in POSTGRES_PASSWORD.
 ##            Validation happens at deploy time (not decrypt time) because secrets-manifest.yaml is consumed
 ##            by deploy-modules.sh and this is the last checkpoint before docker compose up.
 def _validate_secret_charsets(secrets_manifest_path: str) -> tuple[int, list[str]]:
     logger.info("[IMP:7][_validate_secret_charsets][start] Manifest=%s", secrets_manifest_path)
 
-    manifest_path = Path(secrets_manifest_path)
-    if not manifest_path.is_file():
-        logger.warning(
-            "[IMP:5][_validate_secret_charsets][skip] Manifest not found at %s — skipping charset validation (graceful degradation)",
-            secrets_manifest_path,
-        )
-        return (0, [])
-
-    with open(manifest_path) as f:
-        data = yaml.safe_load(f)
-
-    if data is None:
-        logger.warning("[IMP:5][_validate_secret_charsets][empty] Manifest %s is empty", secrets_manifest_path)
-        return (0, [])
-
-    secrets_list = data.get("secrets", [])
+    secrets_list = iter_manifest_secrets(secrets_manifest_path)
     failed = 0
     errors: list[str] = []
 
     for s in secrets_list:
-        charset = s.get("charset", "")
-        if not charset:
+        charset_re = secret_charset(s)
+        if not charset_re:
             continue
 
         name = s["name"]
@@ -177,13 +157,13 @@ def _validate_secret_charsets(secrets_manifest_path: str) -> tuple[int, list[str
             logger.info("[IMP:7][_validate_secret_charsets][skip] %s has charset but empty value — skipping", name)
             continue
 
-        if not _re.match(charset, val):
-            msg = f"[IMP:9][charset] FAIL: {name} does not match charset {charset}"
+        if not _re.match(charset_re, val):
+            msg = f"[IMP:9][charset] FAIL: {name} does not match charset {charset_re}"
             logger.error(msg)
             failed += 1
             errors.append(msg)
         else:
-            logger.info("[IMP:8][_validate_secret_charsets][ok] %s matches charset %s", name, charset)
+            logger.info("[IMP:8][_validate_secret_charsets][ok] %s matches charset %s", name, charset_re)
 
     if failed:
         logger.error("[IMP:9][_validate_secret_charsets][FAIL] %d secret(s) failed charset validation", failed)
@@ -558,6 +538,25 @@ def main() -> int:
 
     action = args.action
     logger.info("[IMP:9][main][dispatch] Action=%s", action)
+
+    # STRICT manifest reader (DevPlan 116 T4, U-33): missing/malformed secrets-manifest.yaml
+    # is a configuration error, not a skip condition — surface it, don't hide it (R4, invariant 7).
+    try:
+        return _dispatch_action(action, args)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        print("[GATE:FAIL][id:secrets-validator][class:L1]", file=sys.stderr)
+        print(">>> REPAIR_RECIPE_START >>>", file=sys.stderr)
+        print("make generate-secrets-manifest && make fix-gate", file=sys.stderr)
+        print("<<< REPAIR_RECIPE_END <<<", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+
+def _dispatch_action(action: str, args: argparse.Namespace) -> int:
+    """Dispatch parsed CLI action to its handler (extracted for strict-error handling)."""
 
     if action == "check-env":
         if not args.module_name or not args.secrets_manifest:

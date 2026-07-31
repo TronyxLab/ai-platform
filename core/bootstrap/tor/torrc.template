@@ -3,11 +3,11 @@
 #
 # 🔧 BRIDGES REQUIRED IN RUSSIA:
 #    Tor is blocked by RKN/ISPs — without bridges, Tor circuit will FAIL.
-#    Bridges are injected from ${BRIDGES_FILE} when --tor-bridges-file is passed
+#    Bridges are injected from $BRIDGES_FILE when --tor-bridges-file is passed
 #    to install-tor-proxy.sh (via bootstrap orchestrator --tor-bridges-file).
 #
 #    SHARED bridges file (all nodes):  core/bootstrap/tor/bridges.txt
-#    Per-node bridges file:            /opt/node-configs/${NODE_NAME}/overlays/tor/bridges.txt
+#    Per-node bridges file:            /opt/node-configs/$NODE_NAME/overlays/tor/bridges.txt
 #    Explicit override:                --tor-bridges-file /path/to/bridges.txt
 #
 #    Resolution order: 1. TOR_BRIDGES_FILE env → 2. per-node overlay → 3. shared bridges.txt

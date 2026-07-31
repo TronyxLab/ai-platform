@@ -63,12 +63,12 @@ class TestParseNodeYamlProjects:
     """Tests for parse_node_yaml_projects()."""
 
     def test_dict_entries(self, tmp_path, caplog):
-        """Node.yaml with dict projects → list of ProjectSpec."""
+        """Node.yaml with dict projects → list of ProjectSpec (org derived from repo, DevPlan 116 B6 T4.6)."""
         caplog.set_level(logging.INFO)
         content = """
 projects:
   - name: myapp
-    org: myorg
+    repo: myorg/myapp
     domain: myapp.example.com
   - name: anotherapp
 """
@@ -77,7 +77,7 @@ projects:
 
         assert len(result) == 2
         assert result[0].name == "myapp"
-        assert result[0].org == "myorg"
+        assert result[0].org == "myorg"  # derived from repo.split("/")[0]
         assert result[0].domain == "myapp.example.com"
         assert result[1].name == "anotherapp"
         assert result[1].org == ""
@@ -86,8 +86,12 @@ projects:
         # LDD trajectory
         _print_ldd_trajectory(caplog)
 
-    def test_string_entries(self, tmp_path, caplog):
-        """Node.yaml with string projects → list of ProjectSpec (org="", domain="")."""
+    def test_string_entries_rejected(self, tmp_path, caplog):
+        """Node.yaml with string projects → [] (fail-fast D3, DevPlan 116 B6 T4.6).
+
+        str-форма отменена: node.schema.json требует dict-записи; malformed → ConfigValidationError,
+        пойманный в parse_node_yaml_projects → [] (не тихий пропуск).
+        """
         caplog.set_level(logging.INFO)
         content = """
 projects:
@@ -97,13 +101,7 @@ projects:
         yaml_path = _make_node_yaml(tmp_path, content)
         result = reconciler_projects.parse_node_yaml_projects(yaml_path)
 
-        assert len(result) == 2
-        assert result[0].name == "simple-project"
-        assert result[0].org == ""
-        assert result[0].domain == ""
-        assert result[1].name == "another-project"
-        assert result[1].org == ""
-        assert result[1].domain == ""
+        assert result == [], "str-form project entries must be rejected (fail-fast D3)"
 
         _print_ldd_trajectory(caplog)
 

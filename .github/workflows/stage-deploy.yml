@@ -94,6 +94,9 @@ jobs:
       - name: Setup platform (composite — python only)
         uses: ./.github/actions/setup-platform
         with:
+          # python-version intentionally left '' — thin SSH wrapper: no local Python
+          # execution (SSH forced-command + curl smoke test only). Pinning would create
+          # a .venv + install test deps for zero benefit. Step is effectively a no-op.
           python-version: ''
           install-gitleaks: 'false'
           run-provisioner: 'false'

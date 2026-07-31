@@ -65,6 +65,111 @@ templates:
         required: false
         source: standard
 
+  # ── Nginx vhost templates (config/, envsubst ${VAR} syntax — 20-envsubst-on-templates.sh) ──
+  # 9 монтирований в /etc/nginx/templates/*.conf.template (DevPlan 116 T6, U-47):
+  #   docker-compose.base.yml:55-65. ${VAR}-синтаксис — {{}}-плейсхолдеров нет →
+  #   check_all проходит тривиально; vars документирующие.
+  - template: ../modules/nginx/config/platform-http.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:56 (envsubst, /etc/nginx/templates/platform-http.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/grafana-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:57 (envsubst, /etc/nginx/templates/grafana-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/hermes-dashboard.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:58 (envsubst, /etc/nginx/templates/hermes-dashboard.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/langfuse-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:59 (envsubst, /etc/nginx/templates/langfuse-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/loki-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:60 (envsubst, /etc/nginx/templates/loki-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/prometheus-vhost.conf
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:61 (envsubst, /etc/nginx/templates/prometheus-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  - template: ../modules/nginx/config/platform-vhost.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:62 (envsubst, /etc/nginx/templates/platform-vhost.conf.template)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Nginx dev-config templates (dev-режим NGINX_CONF_DIR=./dev-config) ──
+  # docker-compose.base.yml:54-55 — тот же nginx envsubst-entrypoint, dev-варианты vhost'ов.
+  # ⚠️ TRAP[DECISION] · 2026-07-31 · — · dev-config: зарегистрирован ТОЛЬКО реальный файл
+  # · Rejected: литерал DevPlan 116 T6 (dev-config platform-vhost.conf.template + ssl-params.conf.template)
+  # · Reason: эти два файла НЕ существуют в git — dev-config содержит только
+  # ·   platform-default.conf.template (*.template) + *.conf (nginx.conf, vhost'ы и т.д.).
+  # ·   Остальные /etc/nginx/templates-источники в dev-режиме — *.conf из dev-config/
+  # ·   (basename-матчинг гейта template_manifest_coverage покрывает их через config/-записи).
+  # ·   (пустые директории platform-vhost.conf.template/ ssl-params.conf.template — артефакты
+  # ·   docker bind-mount, не репо-контент; удалены 2026-07-31)
+  # · Rev: если dev-config получит реальные *.template файлы — зарегистрировать их.
+  - template: ../modules/nginx/dev-config/platform-default.conf.template
+    output: null
+    type: single
+    consumer: core/modules/nginx/docker-compose.base.yml:dev-mode NGINX_CONF_DIR=./dev-config (envsubst)
+    vars:
+      PLATFORM_DOMAIN:
+        required: false
+        source: standard
+
+  # ── Tor proxy templates (cp-потребители — install-tor-proxy.sh) ──────────
+  # ⚠️ TRAP[DECISION] · 2026-07-31 · — · Путь `../bootstrap/tor/` (НЕ `../../bootstrap/tor/`)
+  # · Rejected: литерал DevPlan 116 T6 `../../bootstrap/tor/torrc.template` — резолвится
+  # ·   в root/bootstrap/ (не существует). Манифест-пути относительны core/templates/ →
+  # ·   `../bootstrap/tor/...` = core/bootstrap/tor/... (фактическое расположение).
+  # · Rev: если tor-шаблоны переедут — обновить пути.
+  - template: ../bootstrap/tor/torrc.template
+    output: null
+    type: single
+    consumer: core/internal/bootstrap/install-tor-proxy.sh:write_torrc() (cp torrc.template → /etc/tor/torrc)
+    vars: {}
+
+  - template: ../bootstrap/tor/privoxy-config.template
+    output: null
+    type: single
+    consumer: core/internal/bootstrap/install-tor-proxy.sh:write_privoxy_config() (cp privoxy-config.template → /etc/privoxy/config)
+    vars: {}
+
   # ── Alert rules (dual-role: template + live config) ──────────────────────
   - template: ../modules/monitoring/config/alert-rules.yml
     output: null

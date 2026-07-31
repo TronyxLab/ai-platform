@@ -1,5 +1,5 @@
-# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, deploy-paths, platform-deliver, project-registry, exceptions
-# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 17 модулей (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
+# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, platform-deliver, project-registry, exceptions
+# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 18 модулей (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
 # region MODULE_CONTRACT
 ## @purpose  Архитектурный контракт области core/internal/shared/ — инвентарь модулей и правила добавления.
 ## @scope    Все модули под core/internal/shared/. Закрывает остаток RC3 C1: «no canonical architecture document
@@ -16,6 +16,7 @@
 ## @changes 2026-07-31 | Создан (debt C1) — инвентарь 15 модулей, правила добавления, запреты
 ##           2026-07-31 | DevPlan 104 — +node_detect.py (16-й модуль); age_key.py → compat-шим
 ##           2026-07-31 | DevPlan 105 — +vps_readiness.py (17-й модуль); фасад vps-readiness.sh
+##           2026-08-01 | DevPlan 116 B6 — +schema_validator.py (18-й модуль); inventory update
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -34,7 +35,9 @@
 | `node_yaml.py` | Единый фасад чтения node.yaml (мутации с TRAP[BUG] 2026-07-30) | `NodeYaml(path).get(...)`, CLI `--get/--set` | vhost_renderer, reconciler, converge, scaffold |
 | `platform_deliver.py` | Сборка verb-команды forced-command platform-deliver (замена дублирующих строк) | `build_platform_deliver_verb()` | deploy, orchestrator_cli |
 | `project_registry.py` | Реестр проектов: регистрация/дерегистрация/список поверх NodeYaml | `validate_project_name()`, `register/unregister/list` | DeployEngine, scaffold, lifecycle |
+| `schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — единственная Draft7Validator-точка (DevPlan 116 B6 T5, дедупликация jsonschema_validate.py + node_yaml.validate) | `validate_yaml_against_schema()`, `validate_dict_against_schema()` | jsonschema_validate, node_yaml.validate |
 | `secrets_env_parser.py` | Единый парсер secrets.env (заменяет 7 inline-парсеров) | `parse()`, `write()`, `merge()`, `export_shell()` | decrypt-secrets, secrets-init, bootstrap |
+| `secrets_manifest_reader.py` | Строгий ридер secrets-manifest.yaml (заменяет 3 парсера с разными graceful-degradation семантиками; отсутствие = громкий fail, не silent `[]`) — DevPlan 116 T4, U-33/U-43 | `iter_secrets()`, `tier()`, `consumers()`, `charset()`, `gen_command()` | secrets_manager, secrets_validator |
 | `ssh_command_parser.py` | Парсер SSH_ORIGINAL_COMMAND (заменяет 2 дублирующихся парсера) | `parse_ssh_command()`, `classify_verb()` | deploy forced-command, deploy.sh |
 | `telegram_notifier.py` | Единый Telegram-клиент (заменяет 6 реализаций: 3 shell + 3 Python) | `send_telegram()` | notify-hook, hermes-agent, deploy |
 | `vps_readiness.py` | VPS pre-flight проверки (SSH, forced-command ping, /opt/projects/, Docker) — Strangler-миграция vps-readiness.sh (DevPlan 105, дедупликация deploy.mk/CI pre-flight) | `check_vps_ready()`, CLI `NODE [--json|--quick]` | deploy.mk pre-flight, deploy-project.yml (через фасад core/lib/vps-readiness.sh) |

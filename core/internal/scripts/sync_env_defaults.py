@@ -93,6 +93,22 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     def get_val(name: str, default: str = "") -> str:
         return env_defaults.get(name, default)
 
+    def get_val_required(name: str) -> str:
+        """Fail-fast lookup — no silent fallback for SoT keys (DevPlan 116 invariant 7).
+
+        ## @purpose  Keys that MUST exist in platform-env.yaml env_defaults (e.g.
+        ##            PLATFORM_DOMAIN, COMPOSE_PROFILES) raise instead of silently
+        ##            emitting an empty value — eliminates «gate зелёный, система врёт».
+        ## @io        ⇥ name: str → ⎋ str value ⚡ raise KeyError if absent
+        ## @complexity O(1)
+        """
+        if name not in env_defaults:
+            raise KeyError(
+                f"[IMP:10][sync_env] Missing required env_defaults key: {name} — "
+                "run `make generate-platform-env` (SoT: core/platform-infra.yaml env_defaults)"
+            )
+        return str(env_defaults[name])
+
     def sd_get(name: str, field: str) -> str:
         entry = sd.get(name, {})
         val = entry.get(field, "")
@@ -172,8 +188,8 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# Базовое значение: ai-platform.local. При загруженном контексте (context = GitHub org):")
     lines.append("#   PLATFORM_DOMAIN=<context>.local, SAN дополнительно включает *.${PLATFORM_DOMAIN}.")
     lines.append("# Сертификаты генерируются автоматически через generate-dev-certs.sh (make dev-certs).")
-    lines.append("# @domain-scheme DevPlan 012 — test.local упразднён.")
-    lines.append("PLATFORM_DOMAIN=" + get_val("PLATFORM_DOMAIN", "ai-platform.local"))
+    lines.append("# @domain-scheme DevPlan 012 — legacy-тестовый домен упразднён.")
+    lines.append("PLATFORM_DOMAIN=" + get_val_required("PLATFORM_DOMAIN"))
     lines.append("# ⚠️ Pin to a specific version — avoid float tag (W7 fix).")
     lines.append("# Update this tag when you want to use a newer context overlay image.")
     lines.append("# Available tags: ghcr.io/<context>/hermes-agent-context")
@@ -199,7 +215,9 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     gen_master_pwd = sd_get("PLATFORM_MASTER_PASSWORD", "gen_command")
     if gen_master_pwd:
         lines.append("# Генерация: " + gen_master_pwd)
-    lines.append("PLATFORM_MASTER_EMAIL=" + get_val("PLATFORM_MASTER_EMAIL", "admin@test.local"))
+    # Fail-fast: PLATFORM_MASTER_EMAIL всегда в env_defaults (ci_default из secret-definitions.yaml).
+    # Legacy-fallback admin@test-домен удалён (DevPlan 116 T3, U-16; parity-гейт domain_parity).
+    lines.append("PLATFORM_MASTER_EMAIL=" + get_val_required("PLATFORM_MASTER_EMAIL"))
     lines.append("PLATFORM_MASTER_PASSWORD=" + get_val("PLATFORM_MASTER_PASSWORD", "test-master-password"))
     lines.append("")
     lines.append("# AGE_SECRET_KEY — master age-key для SOPS-расшифровки platform-secrets.")
@@ -276,9 +294,11 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("S3_BUCKET=" + get_val("S3_BUCKET", "test-bucket"))
     lines.append("S3_ACCESS_KEY=" + get_val("S3_ACCESS_KEY", "test-access-key"))
     lines.append("S3_SECRET_KEY=" + get_val("S3_SECRET_KEY", "test-secret-key"))
-    lines.append("# Дублирующие ключи для upload-s3.sh (AWS SDK совместимость)")
-    lines.append("AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY}")
-    lines.append("AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY}")
+    # Дублирующие ключи для upload-s3.sh (AWS SDK совместимость) — значения из SoT
+    # (platform-infra.yaml env_defaults, литералы ${S3_ACCESS_KEY}/${S3_SECRET_KEY} —
+    # compose резолвит алиасы через S3_*). DevPlan 116 T3 (U-17): генератор без хардкода.
+    lines.append("AWS_ACCESS_KEY_ID=" + get_val("AWS_ACCESS_KEY_ID"))
+    lines.append("AWS_SECRET_ACCESS_KEY=" + get_val("AWS_SECRET_ACCESS_KEY"))
     lines.append("PLATFORM_CONTEXT=" + get_val("PLATFORM_CONTEXT", "personal"))
 
     # ── LLM Provider API Keys ──
@@ -453,14 +473,13 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     # ── Compose Profiles ──
     lines.append("")
     lines.append("# ── Compose Profiles ──────────────────────────────────────────────────────")
-    lines.append("# Все 12 профилей — активирует все модули при make up (без явного MODULES=)")
+    # Fail-fast: COMPOSE_PROFILES обязателен в SoT (platform-infra.yaml env_defaults) —
+    # fallback-копия удалена (DevPlan 116 T2/T8, U-02/U-68, инвариант 7).
+    compose_profiles = get_val_required("COMPOSE_PROFILES")
     lines.append(
-        "COMPOSE_PROFILES="
-        + get_val(
-            "COMPOSE_PROFILES",
-            "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio",
-        )
+        f"# Все {len(compose_profiles.split(','))} профилей — активирует все модули при make up (без явного MODULES=)"
     )
+    lines.append("COMPOSE_PROFILES=" + compose_profiles)
 
     # ── Misc ──
     lines.append("")

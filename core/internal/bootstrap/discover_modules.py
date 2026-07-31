@@ -10,16 +10,35 @@
 ##   - Preserves all other sections (networks, volumes, etc.)
 ##   - Idempotent: running twice = no-op if modules unchanged
 ##   - Excludes modules with install_type: system
-## @rationale Eliminates manual compose updates when adding/removing modules
+## @rationale Eliminates manual compose updates when adding/removing modules.
+##            🧐 TRAP[DECISION] · 2026-07-31 · — · Изоляция ОТМЕНЕНА (DevPlan 116 T7, D3)
+##            · Rejected: собственный YAML-предикат (exact) в bootstrap-критическом пути
+##            · Reason: решение пользователя 2026-07-31 (U-59): предикаты разошлись —
+##              substring (scripts/module_discovery) vs exact YAML (здесь). Дублирование
+##              кода опаснее изоляции. Канонический предикат: scripts/module_discovery.py
+##              ::discover_docker_modules — импортируется с fallback (см. импорты ниже).
+##            · Rev: если module_discovery.py переедет — обновить fallback-путь _SCRIPTS_DIR
 # endregion MODULE_CONTRACT
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 import yaml
+
+# ── Canonical predicate import (DevPlan 116 T7, D3) ──
+# Паттерн импорта как в secrets_manager.py:54-70 — canonical package import +
+# sys.path fallback для script-инвокации (python3 discover_modules.py вне pytest).
+try:
+    from core.internal.scripts.module_discovery import discover_docker_modules
+except ModuleNotFoundError:
+    _SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+    if _SCRIPTS_DIR not in sys.path:
+        sys.path.insert(0, _SCRIPTS_DIR)
+    from module_discovery import discover_docker_modules  # type: ignore[import-untyped]
 
 # ── Custom YAML tag constructors ──────────────────────────────────────────────
 # docker-compose.test.yml files use !override tag for network/port/container
@@ -118,25 +137,37 @@ def discover_test_infra() -> list[dict]:
 
 
 # region FUNC_discover_modules
-## @purpose  Scan module.yaml files, return sorted list of docker compose paths
+## @purpose  Discover docker compose paths (repo-relative strings) via the CANONICAL
+##            predicate scripts/module_discovery.discover_docker_modules (DevPlan 116 T7, D3).
+##            Thin adapter: canonical returns Path objects → mapped to repo-relative
+##            `core/modules/<name>/docker-compose.base.yml` strings for include-секции.
 ## @io       Path (modules_dir) → list[str]
-## @complexity 2 — file I/O with sorted glob
+## @complexity 2 — file I/O with sorted glob (delegated)
+def _to_repo_relative(path: Path, project_root: Path) -> str:
+    """Map a compose Path to a repo-relative string (fallback: as-is for test fixtures).
+
+    ## @purpose  Canonical predicate returns Path objects relative to the given modules_dir.
+    ##            include-секция docker-compose.yml ожидает repo-relative `core/modules/...`.
+    ## @io        ⇥ path, project_root → ⎋ str
+    ## @complexity O(1)
+    """
+    try:
+        return str(path.relative_to(project_root))
+    except ValueError:
+        # modules_dir вне repo (тестовая фикстура) — используем путь как есть
+        return str(path)
+
+
 def discover_modules(modules_dir: Path) -> list[str]:
-    """Scan module.yaml files, return sorted list of docker compose paths."""
-    modules = []
-    for module_yaml in sorted(modules_dir.glob("*/module.yaml")):
-        try:
-            with open(module_yaml) as f:
-                data = yaml.safe_load(f)
-            install_type = data.get("install_type", "docker")
-            if install_type == "system":
-                continue  # Skip system modules (e.g., platform-secrets)
-            module_name = module_yaml.parent.name
-            compose_path = f"core/modules/{module_name}/docker-compose.base.yml"
-            modules.append(compose_path)
-        except (yaml.YAMLError, OSError, KeyError) as e:
-            print(f"WARNING: Skipping {module_yaml}: {e}", file=sys.stderr)
-    return modules
+    """Scan module.yaml files via canonical predicate, return repo-relative compose paths."""
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    compose_files = discover_docker_modules(modules_dir)
+    result = [_to_repo_relative(compose_file, project_root) for compose_file in compose_files]
+    print(
+        f"[IMP:9][discover_modules] Canonical predicate discovered {len(result)} docker modules",
+        file=sys.stderr,
+    )
+    return result
 
 
 # endregion FUNC_discover_modules

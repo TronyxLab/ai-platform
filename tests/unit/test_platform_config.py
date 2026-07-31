@@ -124,7 +124,8 @@ def test_fallback_values(tmp_path: Path, isolated_platform_config, caplog: pytes
     # All values should fall back to hardcoded defaults
     assert pc.default_s3_region() == "ru-1"
     assert pc.default_s3_prefix() == "platform/backups"
-    assert pc.default_context() == "test"
+    # DevPlan 116 B6 D4: CONTEXT НЕ имеет литерального fallback'а — "" (fail-visible)
+    assert pc.default_context() == ""
     assert pc.default_platform_context() == "personal"
     # Sentinel values are always the same
     assert pc.default_s3_bucket_sentinel() == ""

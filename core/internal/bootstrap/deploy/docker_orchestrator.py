@@ -120,9 +120,54 @@ DEFAULT_READINESS_INTERVAL_SEC = 2
 DEFAULT_HEALTHCHECK_MAX_RETRIES = 10
 DEFAULT_HEALTHCHECK_RETRY_INTERVAL = 10
 
+# ⚠️ TRAP[BUG] · 2026-07-31 · P1 · COMPOSE_PROFILES hardcoded here diverged from SoT (U-02)
+# · Symptom: 12-item setdefault (без status-page) vs platform-infra.yaml 13-item env_defaults —
+#   `docker compose config --services` в deploy-orchestrator не видел status-page профиль.
+# · Root: хардкод-копия списка профилей (8-я копия из аудита U-02).
+# · Fix: runtime-чтение core/platform-infra.yaml env_defaults.COMPOSE_PROFILES (SoT).
+# · Verification: platform-infra.yaml доставляется с core/ (core-deploy rsync включает
+#   core/platform-infra.yaml — подтверждено 2026-07-31). Fail-fast (raise) при отсутствии.
+# · Rev: если VPS-деплой когда-либо окажется без platform-infra.yaml — fallback на
+#   os.environ.setdefault без хардкода (dev-ветка проверки), см. DevPlan 116 §4 риски.
+
 # Path to invoke_module_interface shell function — used for readiness and healthcheck
 _INVOKE_MODULE_INTERFACE_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "module-interface.sh")
 _PATHS_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "paths.sh")
+
+
+# region FUNC__resolve_compose_profiles_from_infra
+## @purpose  Read COMPOSE_PROFILES from core/platform-infra.yaml env_defaults (SoT, U-02).
+##            Repo root resolved relative to this file (core/internal/bootstrap/deploy/ → 5 levels up).
+## @io       ⇥ None → ⎋ str: comma-separated profile list ⚡ raise FileNotFoundError/KeyError (fail-fast)
+## @complexity O(1) — single YAML load
+## @invariants
+##   - Raises if platform-infra.yaml missing (fail-fast, invariant 7 — no silent fallback)
+##   - Raises if env_defaults.COMPOSE_PROFILES absent
+##   - Caller keeps os.environ.setdefault semantics — explicit env COMPOSE_PROFILES wins
+def _resolve_compose_profiles_from_infra() -> str:
+    """Return COMPOSE_PROFILES from platform-infra.yaml env_defaults (SoT)."""
+    repo_root = Path(__file__).resolve().parents[4]
+    infra_path = repo_root / "core" / "platform-infra.yaml"
+    if not infra_path.is_file():
+        raise FileNotFoundError(
+            f"[IMP:10][docker_orchestrator] platform-infra.yaml not found at {infra_path} — "
+            "cannot resolve COMPOSE_PROFILES (SoT). File is delivered with core/ (rsync core-deploy)."
+        )
+    import yaml  # type: ignore[import-untyped]
+
+    with open(infra_path) as f:
+        data = yaml.safe_load(f)
+    profiles = (data or {}).get("env_defaults", {}).get("COMPOSE_PROFILES")
+    if not profiles:
+        raise KeyError(
+            f"[IMP:10][docker_orchestrator] env_defaults.COMPOSE_PROFILES missing in {infra_path} — "
+            "run `make generate-platform-env` (DevPlan 116 T2, U-02)."
+        )
+    logger.info("[IMP:9][_resolve_compose_profiles_from_infra][OK] COMPOSE_PROFILES from SoT: %s", profiles)
+    return str(profiles)
+
+
+# endregion FUNC__resolve_compose_profiles_from_infra
 
 
 # region FUNC__check_image_exists
@@ -509,10 +554,9 @@ def deploy_docker_module(
         return False
 
     # ── COMPOSE_PROFILES for config --services calls ──
-    os.environ.setdefault(
-        "COMPOSE_PROFILES",
-        "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page",
-    )
+    # SoT: core/platform-infra.yaml env_defaults (DevPlan 116 T2, U-02). Explicit env
+    # COMPOSE_PROFILES (from Makefile export / CI) takes precedence — setdefault semantics.
+    os.environ.setdefault("COMPOSE_PROFILES", _resolve_compose_profiles_from_infra())
 
     # ── Observability: pre-deploy container cleanup ──
     if module_name == "observability":

@@ -49,6 +49,7 @@ jobs:
       - name: Setup platform (composite — python + gitleaks + provisioner)
         uses: ./.github/actions/setup-platform
         with:
+          python-version: '3.14'
           install-pre-commit: 'true'
           install-gitleaks: 'true'
           run-provisioner: 'true'

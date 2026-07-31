@@ -428,17 +428,17 @@ def test_get_list_missing_key(caplog, tmp_path):
 # ═══════════════════════════════════════════════════════════════════
 
 
-# 🧪 TRAP[TEST] · Regression · get_context from string field
-# · Scenario: context: "myorg" → get_context() returns "myorg"
-# · Last fail: N/A (new test)
-# · Remove if: get_context() primary path changes
+# 🧪 TRAP[TEST] · Regression · get_context from contexts[0].name (canon)
+# · Scenario: contexts: [{name: "myorg"}] → get_context() returns "myorg"
+# · Last fail: N/A (DevPlan 116 B6 T1 — contexts[] canon)
+# · Remove if: get_context() canon changes
 @ldd_trajectory
 def test_get_context_string(caplog, tmp_path):
-    """NodeYaml.get_context() returns context from 'context' string field.
+    """NodeYaml.get_context() returns contexts[0].name (dict-form canon).
 
-    ## @purpose  Verify primary context extraction path.
+    ## @purpose  Verify primary context extraction path (contexts[] canon, DevPlan 116 B6 T1).
     """
-    yaml_path = _write_yaml(tmp_path, "context: myorg\n")
+    yaml_path = _write_yaml(tmp_path, "contexts:\n  - name: myorg\n")
     node = NodeYaml(str(yaml_path))
     result = node.get_context()
     assert result == "myorg"
@@ -554,14 +554,15 @@ def test_get_modules(caplog, tmp_path):
 # · Remove if: get_domain_config() logic changes
 @ldd_trajectory
 def test_get_domain_config(caplog, tmp_path):
-    """NodeYaml.get_domain_config() returns DomainConfig with correct fields.
+    """NodeYaml.get_domain_config() returns DomainConfig with correct fields (flat schema).
 
-    ## @purpose  Verify domain configuration extraction.
+    ## @purpose  Verify domain configuration extraction (flat-only, DevPlan 116 B6 T7).
     """
     yaml_path = _write_yaml(
         tmp_path,
-        "domain:\n  platform: example.com\n  email: admin@example.com\n"
-        "  acme_dns_plugin: cloudflare\n"
+        "domain: example.com\n"
+        "email: admin@example.com\n"
+        "acme_dns_plugin: cloudflare\n"
         "projects:\n  - name: app1\n    domain: app1.example.com\n"
         "  - name: app2\n    domain: app2.example.com\n",
     )
@@ -622,7 +623,7 @@ def test_validate_valid(caplog, tmp_path):
     """
     yaml_path = _write_yaml(
         tmp_path,
-        "node:\n  name: test-node\n  host: 1.2.3.4\n  owner_key: test-key\ncontext: test\ndomain: test.example.com\nmodules: []\n",
+        "node:\n  name: test-node\n  host: 1.2.3.4\n  owner_key: test-key\ncontexts:\n  - name: test\ndomain: test.example.com\nmodules: []\n",
     )
     node = NodeYaml(str(yaml_path))
     errors = node.validate()
@@ -696,22 +697,22 @@ def test_get_non_dict_intermediate(caplog, tmp_path):
     logger.critical("[IMP:9][test] get_non_dict_intermediate: raised ConfigValidationError — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · get_context returns first from string array
-# · Scenario: contexts: ["first", "second"] → get_context() = "first"
-# · Last fail: N/A (new test)
-# · Remove if: get_context() string array handling changes
+# 🧪 TRAP[TEST] · Regression · get_context ignores str-form contexts (legacy, D5)
+# · Scenario: contexts: ["first", "second"] (str-form, removed per D5) → get_context() = ""
+# · Last fail: N/A (DevPlan 116 B6 T1/D5 — str-форма отменена, schema требует dict)
+# · Remove if: contexts[] canon semantics change
 @ldd_trajectory
 def test_get_context_string_array(caplog, tmp_path):
-    """NodeYaml.get_context() returns first element from string array.
+    """NodeYaml.get_context() returns '' for str-form contexts (legacy removed, D5).
 
-    ## @purpose  Verify fallback path when contexts is a string array.
+    ## @purpose  Verify str-form contexts[0] is no longer read (node.schema.json requires dict).
     """
     yaml_path = _write_yaml(tmp_path, "contexts:\n  - first\n  - second\n")
     node = NodeYaml(str(yaml_path))
     result = node.get_context()
-    assert result == "first"
+    assert result == ""
 
-    logger.critical("[IMP:9][test] get_context_string_array: context=%s — OK", result)
+    logger.critical("[IMP:9][test] get_context_string_array: str-form ignored → '' — OK")
 
 
 # endregion Tests: Edge cases

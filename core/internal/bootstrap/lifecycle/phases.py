@@ -18,6 +18,8 @@
 ##   5. No direct state mutation — phases do NOT write state.json or manage checkpoints.
 ##   6. Env var access via os.environ — set by shell-фасад or higher-level orchestrator.
 ##   7. Import helpers from state_machine via _sm prefix, never duplicate business logic.
+##   8. φ1 installs Python 3.14 + platform deps via python_deps.py ensure (FATAL — prerequisite
+##      for all Python-orchestrated phases). System /usr/bin/python3 (3.12) is never touched.
 ## @rationale  Single-dispatch _execute_init_step() in state_machine.py grew to 23 init steps
 ##             + 9 update steps in one monolithic if/elif chain. Extracting grouped phases
 ##             enables: (a) independent testing of each phase, (b) reordering/composing phases
@@ -26,8 +28,10 @@
 ## @changes  2026-07-30 | T20c — Created from _execute_init_step / _execute_update_step decomposition.
 ##             Extracted 9 init phases + 5 update phases. All business logic preserved from
 ##             state_machine._execute_init_step() and _execute_update_step().
+##           2026-08-01 | Python 3.14 (deadsnakes) + platform deps wired into φ1 as step 1.5
+##             (python_deps.py ensure, FATAL on failure).
 ## @modulemap
-##   INIT  φ1  phase_system_bootstrap   — root check, apt, sops, docker, tor, firewall
+##   INIT  φ1  phase_system_bootstrap   — root check, apt, python3.14+deps, sops, docker, tor, firewall
 ##   INIT  φ2  phase_user_accounts      — platform/ci-deploy users, SSH keys, projects base
 ##   INIT  φ3  phase_platform_setup     — docker auth, metrics cron, setup-node
 ##   INIT  φ4  phase_secrets_provision  — decrypt secrets, ensure-secrets, init
@@ -105,6 +109,26 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:system_bootstrap] Apt package installation failed: %s", e)
         raise PlatformFatalError(f"Apt package installation failed: {e}") from e
+
+    # ── 1.5 Install Python 3.14 (deadsnakes PPA) + platform Python dependencies ──
+    # python_deps.py ensure is idempotent: skips when marker (hash + python version) matches.
+    # FATAL — Python runtime is a prerequisite for all Python-orchestrated phases (φ8 deploy,
+    # converge, healthcheck). A bare `python3` must resolve to 3.14 after this step.
+    python_deps_script = os.path.join(core_dir, "internal", "bootstrap", "python_deps.py")
+    if os.path.isfile(python_deps_script):
+        try:
+            _sm._subprocess_run(
+                ["python3", python_deps_script, "ensure", "--core-dir", core_dir],
+                "python_deps",
+                timeout=600,
+            )
+            logger.info("[IMP:9][phase:system_bootstrap] Python 3.14 + dependencies installed")
+        except (PlatformError, subprocess.TimeoutExpired) as e:
+            logger.error("[IMP:10][phase:system_bootstrap] Python deps installation FAILED: %s", e)
+            raise PlatformFatalError(f"Python deps installation failed: {e}") from e
+    else:
+        logger.warning("[IMP:7][phase:system_bootstrap] python_deps.py not found at %s — skipping", python_deps_script)
+        non_fatal_issues = True
 
     # ── 2. Install sops (non-fatal) ──
     try:

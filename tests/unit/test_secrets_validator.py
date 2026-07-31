@@ -342,17 +342,18 @@ def test_check_env_requires_generated_tier(secrets_manifest_file, caplog, monkey
 
 
 # region FUNC_test_check_env_requires_no_manifest_found
-## @purpose  Manifest file does not exist — graceful degradation returns empty list
+## @purpose  Manifest file does not exist — STRICT mode raises FileNotFoundError
+##           (graceful degradation removed, DevPlan 116 T4 / U-33 / invariant 7)
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires with missing manifest → empty list
-# · Last fail: N/A · Remove if: _check_env_requires behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires with missing manifest → raises FileNotFoundError
+# · Last fail: 2026-07-31 · Remove if: strict manifest reader is superseded
 @ldd_trajectory
 def test_check_env_requires_no_manifest_found(tmp_path, caplog):
-    """Manifest not found — graceful degradation returns []."""
-    missing = _check_env_requires("postgres", str(tmp_path / "nonexistent.yaml"))
+    """Manifest not found — strict reader raises FileNotFoundError (fail-visible)."""
+    with pytest.raises(FileNotFoundError):
+        _check_env_requires("postgres", str(tmp_path / "nonexistent.yaml"))
 
-    logger.info("[IMP:9][test][check_env] Missing vars (no manifest): %s", missing)
-    assert missing == [], "Expected empty missing list when manifest not found"
+    logger.info("[IMP:9][test][check_env] Missing manifest raises FileNotFoundError — OK")
 
 
 # endregion FUNC_test_check_env_requires_no_manifest_found
@@ -444,18 +445,18 @@ def test_validate_secret_charsets_no_charset_field(secrets_manifest_file, caplog
 
 
 # region FUNC_test_validate_secret_charsets_manifest_missing
-## @purpose  Manifest file not found — graceful degradation
+## @purpose  Manifest file not found — STRICT mode raises FileNotFoundError
+##           (graceful degradation removed, DevPlan 116 T4 / U-33 / invariant 7)
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _validate_secret_charsets with missing manifest → (0, [])
-# · Last fail: N/A · Remove if: _validate_secret_charsets behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: _validate_secret_charsets with missing manifest → raises
+# · Last fail: 2026-07-31 · Remove if: strict manifest reader is superseded
 @ldd_trajectory
 def test_validate_secret_charsets_manifest_missing(tmp_path, caplog):
-    """Manifest not found — graceful degradation returns (0, [])."""
-    failed, errors = _validate_secret_charsets(str(tmp_path / "nonexistent.yaml"))
+    """Manifest not found — strict reader raises FileNotFoundError (fail-visible)."""
+    with pytest.raises(FileNotFoundError):
+        _validate_secret_charsets(str(tmp_path / "nonexistent.yaml"))
 
-    logger.info("[IMP:9][test][charset] Missing manifest: Failed=%d", failed)
-    assert failed == 0
-    assert errors == []
+    logger.info("[IMP:9][test][charset] Missing manifest raises FileNotFoundError — OK")
 
 
 # endregion FUNC_test_validate_secret_charsets_manifest_missing

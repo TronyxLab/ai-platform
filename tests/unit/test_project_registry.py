@@ -450,9 +450,9 @@ def test_validate_project_name_empty(caplog, tmp_path):
     logger.critical("[IMP:9][test] validate_name_empty: empty fails — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · invalid chars fail
-# · Scenario: "../escape" → False
-# · Last fail: N/A (new test)
+# 🧪 TRAP[TEST] · Regression · invalid chars fail (strict regex DevPlan 116 B6 T3)
+# · Scenario: "../escape" → False; leading '-'/'_' → False (regex ужесточён)
+# · Last fail: N/A (DevPlan 116 B6 T3 — leading -/_ now rejected)
 # · Remove if: validate_project_name logic changes
 @ldd_trajectory
 def test_validate_project_name_invalid_chars(caplog, tmp_path):
@@ -466,6 +466,26 @@ def test_validate_project_name_invalid_chars(caplog, tmp_path):
     assert validate_project_name("dot.dot") is False
 
     logger.critical("[IMP:9][test] validate_name_invalid: invalid chars fail — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · leading hyphen/underscore rejected (DevPlan 116 B6 T3)
+# · Scenario: "-foo" / "_bar" / "-" / "_" → False (regex ^[a-zA-Z0-9]... rejects leading -/_)
+# · Last fail: N/A (canon усилился в B6 T3)
+# · Remove if: validate_project_name strictness changes
+@ldd_trajectory
+def test_validate_project_name_leading_dash_underscore(caplog, tmp_path):
+    """validate_project_name should reject leading '-'/'_' (strict regex, DevPlan 116 B6 T3)."""
+    from core.internal.shared.project_registry import validate_project_name
+
+    assert validate_project_name("-foo") is False
+    assert validate_project_name("_bar") is False
+    assert validate_project_name("-") is False
+    assert validate_project_name("_") is False
+    # But inner hyphens/underscores remain valid
+    assert validate_project_name("foo-bar") is True
+    assert validate_project_name("foo_bar") is True
+
+    logger.critical("[IMP:9][test] validate_name_leading_dash: leading -/_ rejected, inner allowed — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · slash in name fails

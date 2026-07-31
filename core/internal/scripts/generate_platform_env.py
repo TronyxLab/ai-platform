@@ -276,14 +276,21 @@ def scan_compose_ports(modules_dir: Path) -> dict[str, int]:
                     continue
 
                 # Generate variable name
+                # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Second port overwrites first when service==module
+                # · Symptom: port_mappings.MINIO_PORT: 9001 while env_defaults.MINIO_PORT: 9000 —
+                #   minio's second port (9001 console) overwrote the first (9000 S3 API).
+                # · Root: service_port_count incremented only in the `elif service_port_count == 0`
+                #   branch. When service_upper == module_upper (minio service inside minio module)
+                #   the counter never grew AND the first branch matched again for the second port →
+                #   port_map[MINIO_PORT] overwritten. Same latent bug: nginx (80/443 → NGINX_PORT=443),
+                #   hermes-agent (9119/8642 → HERMES_AGENT_PORT=8642).
+                # · Fix: increment the counter for the FIRST port of every service (including
+                #   service==module). First port → MODULE_PORT; subsequent → MODULE_SERVICE_PORT
+                #   (e.g. MINIO_MINIO_PORT). Scheme per DevPlan 116 T1 (U-01).
+                # · Prevention: T1 unit tests (minio-style fixture, infra-metrics-style regression).
                 service_upper = service_name.upper().replace("-", "_")
-                if service_upper == module_upper:
-                    var_name = f"{module_upper}_PORT"
-                elif service_port_count == 0:
-                    var_name = f"{module_upper}_PORT"
-                    service_port_count += 1
-                else:
-                    var_name = f"{module_upper}_{service_upper}_PORT"
+                var_name = f"{module_upper}_PORT" if service_port_count == 0 else f"{module_upper}_{service_upper}_PORT"
+                service_port_count += 1
 
                 port_map[var_name] = host_port
                 logger.info(

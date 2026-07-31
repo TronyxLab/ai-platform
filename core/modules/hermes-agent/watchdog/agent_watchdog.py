@@ -445,6 +445,13 @@ class CircuitBreaker:
                 svc.service_name,
             )
             docker_manager.stop_container(svc.service_name)
+            # 🧐 TRAP[DECISION] · 2026-08-01 · — · default_context() без "test" fallback (DevPlan 116 B6 D4)
+            # · Rejected: literal fallback "test" (хардкод-копия SoT env_defaults.CONTEXT)
+            # · Reason: platform-env.yaml отсутствует в образе hermes-agent (верифицировано 2026-08-01 —
+            #   нет COPY в L2 Dockerfile, нет volume-маунта); watchdog всегда получает CONTEXT из
+            #   docker-compose env (`${CONTEXT:-test}`, base.yml:154) → поведение не меняется; если env
+            #   отсутствует — fallback деградирует до "" (fail-visible) вместо тихой лжи "test".
+            # · Rev: если образ начнёт доставлять platform-env.yaml — удалить заметку
             context = os.environ.get("CONTEXT", platform_config.default_context())
             telegram.send(
                 f"\U0001f6a8 [{context}] Circuit breaker opened for {svc.service_name}%0A"
@@ -916,6 +923,11 @@ class Watchdog:
             update.write(self._config.pending_file)
 
             # Telegram notification
+            # 🧐 TRAP[DECISION] · 2026-08-01 · — · default_context() без "test" fallback (DevPlan 116 B6 D4)
+            # · Rejected: literal fallback "test" (хардкод-копия SoT env_defaults.CONTEXT)
+            # · Reason: watchdog получает CONTEXT из docker-compose env (`${CONTEXT:-test}`); платформенный
+            #   platform-env.yaml в образе отсутствует → fallback деградирует до "" (fail-visible).
+            # · Rev: если образ начнёт доставлять platform-env.yaml — удалить заметку
             context = os.environ.get("CONTEXT", platform_config.default_context())
             self._telegram.send(
                 f"\U0001f504 [{context}] Agent auto-rollback%0A"

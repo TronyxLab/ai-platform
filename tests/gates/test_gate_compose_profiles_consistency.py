@@ -1,138 +1,65 @@
 # GREP_SUMMARY: gate compose-profiles consistency COMPOSE_PROFILES mismatch drift callsites composite-action
-# STRUCTURE: ┌fixture: canonical profiles from make┐ → ◇ test: cross-check hardcoded callsites → ◇ test: verify CI workflows use composite action → ⎋ assert all valid
+# STRUCTURE: ┌fixture: canonical profiles from platform-infra.yaml SoT┐ → ◇ test: no hardcoded copies at former callsites → ◇ test: verify CI workflows use composite action → ⎋ assert all valid
 # region MODULE_CONTRACT
-## @purpose — Gate: verify COMPOSE_PROFILES list is identical across hardcoded callsites
-##            (Makefile, shell scripts, Python code). Verify that CI workflows use
-##            the compose-profiles composite action instead of hardcoded strings.
-##            Catches drift when Docker modules are added/removed without updating
-##            all locations. Read-only gate — does NOT modify any production code.
-## @scope — 4 hardcoded files: Makefile, docker_orchestrator.py,
-##          helpers.mk (_get_all_profiles)
+## @purpose — Gate: verify COMPOSE_PROFILES has РОВНО один SoT (core/platform-infra.yaml
+##            env_defaults, DevPlan 116 T2/T9, U-02) и что бывшие хардкод-callsites
+##            (Makefile, docker_orchestrator.py, helpers.mk, project_adopter.py) больше
+##            НЕ содержат полную строку. Verify that CI workflows use the compose-profiles
+##            composite action instead of hardcoded strings.
+##            Read-only gate — does NOT modify any production code.
+## @scope — Бывшие 4 хардкод-файла: Makefile, docker_orchestrator.py,
+##          helpers.mk (_get_all_profiles), project_adopter.py
 ##          + 2 CI workflows verified to use composite action: push-gate.yml,
 ##          platform-test.yml
 ##          Deploy-project.sh callsite removed 2026-07-30 — file deleted during
 ##          Strangler-Fig migration (DevPlan 036E), COMPOSE_PROFILES now propagated
 ##          via os.environ from Makefile/docker_orchestrator.py.
 ## @invariants
-##   - Canonical value obtained from `make _get_all_profiles` (single source of truth)
+##   - Canonical value obtained from core/platform-infra.yaml env_defaults (single SoT)
+##   - Бывшие callsites НЕ должны содержать полную 13-item строку (хардкод-копии удалены)
 ##   - All extractors are read-only — no file modifications
 ##   - Test is marked @pytest.mark.gate — runs in `make gate MODE=fast`
-##   - On mismatch, test fails with exact file:line guidance for developer
+##   - On violation, test fails with exact file:line guidance for developer
 ##   - CI workflows (push-gate.yml, platform-test.yml) MUST use compose-profiles
 ##     composite action, NOT hardcoded COMPOSE_PROFILES — verified by separate test
-## @rationale — MISMATCH-1 from VerificationReport-postfix (Wave 3).
-##              Updated per DevPlan 064 S1: CI workflows now use compose-profiles
-##              composite action that reads from platform-env.yaml (authoritative source).
-##              Hardcoded locations remain in Makefile (local source of truth) and
-##              shell/Python scripts (deployment code). CI workflows verified separately.
+##   - Репо-wide «копий нет» проверяется гейтом test_gate_profiles_parity (d) — этот
+##     тест даёт точечную регрессию по конкретным бывшим callsites (не дублирование)
+## @rationale — MISMATCH-1 from VerificationReport-postfix (Wave 3). DevPlan 116 T2 (U-02):
+##              COMPOSE_PROFILES консолидирован в platform-infra.yaml; 7 копий заменены
+##              runtime-чтением. CI workflows используют compose-profiles composite action
+##              (DevPlan 064 S1), который читает platform-env.yaml profiles.
 ## @changes — 2026-07-22 | Created per 037-DevPlan GOAL_MISMATCH
 ## @changes — 2026-07-23 | Updated per DevPlan 064 S1: removed CI workflow callsites,
 ##            added composite-action verification test
+## @changes — 2026-07-31 | DevPlan 116 T9: canonical → platform-infra.yaml SoT;
+##            CALLSITES-тест конвертирован в «хардкод-копий нет» (T2 устранил копии)
 # endregion MODULE_CONTRACT
 
-import os
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 # === Constants ===
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PLATFORM_INFRA = PROJECT_ROOT / "core" / "platform-infra.yaml"
 
 # === Helpers ===
 
 
 def _get_canonical_profiles() -> str:
-    """Get canonical COMPOSE_PROFILES from `make _get_all_profiles`.
+    """Get canonical COMPOSE_PROFILES from core/platform-infra.yaml env_defaults (SoT, U-02).
 
-    ▶ subprocess.run(make _get_all_profiles) → stdout.strip → ⎋ str
+    ▶ yaml.safe_load(platform-infra.yaml) → env_defaults.COMPOSE_PROFILES → ⎋ str
     """
-    result = subprocess.run(
-        ["make", "_get_all_profiles"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        cwd=str(PROJECT_ROOT),
-        env={**os.environ},
-    )
-    if result.returncode != 0:
-        pytest.fail(f"make _get_all_profiles failed (exit {result.returncode}): {result.stderr.strip()}")
-    # GNU Make ≥4.x outputs make[1]: Entering/Leaving directory messages to stdout.
-    # Strip these to get only the profile string.
-    lines = result.stdout.strip().splitlines()
-    profile_lines = [
-        line
-        for line in lines
-        if not line.startswith("make[") and "Entering directory" not in line and "Leaving directory" not in line
-    ]
-    return "".join(profile_lines).strip()
-
-
-def _extract_makefile_value(filepath: Path) -> str:
-    """Extract COMPOSE_PROFILES from Makefile export line.
-
-    ⚡ regex: export COMPOSE_PROFILES \\?= (.+) → ⎋ value
-    """
-    content = filepath.read_text()
-    m = re.search(r"export COMPOSE_PROFILES \?= (.+)", content)
-    if not m:
-        raise ValueError(f"No COMPOSE_PROFILES export found in {filepath}")
-    return m.group(1).strip()
-
-
-def _extract_shell_default(filepath: Path) -> str:
-    """Extract COMPOSE_PROFILES from shell ${COMPOSE_PROFILES:-...} pattern.
-
-    ⚡ regex: COMPOSE_PROFILES="${COMPOSE_PROFILES:-(.+?)}" → ⎋ default value
-    """
-    content = filepath.read_text()
-    m = re.search(r'COMPOSE_PROFILES[=:][\'"]?\$\{COMPOSE_PROFILES:-(.+?)\}[\'"]?', content)
-    if not m:
-        raise ValueError(f"No COMPOSE_PROFILES default found in {filepath}")
-    return m.group(1).strip()
-
-
-def _extract_ci_workflow_value(filepath: Path) -> str:
-    """Extract COMPOSE_PROFILES from GitHub Actions workflow env section.
-
-    ⚡ regex: COMPOSE_PROFILES:\\s*"(.+?)" → ⎋ value
-    """
-    content = filepath.read_text()
-    m = re.search(r'COMPOSE_PROFILES:\s*"(.+?)"', content)
-    if not m:
-        raise ValueError(f"No COMPOSE_PROFILES found in {filepath}")
-    return m.group(1).strip()
-
-
-def _extract_python_setdefault(filepath: Path) -> str:
-    """Extract COMPOSE_PROFILES from os.environ.setdefault() call.
-
-    ⚡ multi-line regex: os.environ.setdefault("COMPOSE_PROFILES",\n"value") → ⎋ value
-    """
-    content = filepath.read_text()
-    m = re.search(
-        r'os\.environ\.setdefault\(\s*"COMPOSE_PROFILES",\s*\n\s*"(.+?)"',
-        content,
-        re.MULTILINE,
-    )
-    if not m:
-        raise ValueError(f"No COMPOSE_PROFILES setdefault found in {filepath}")
-    return m.group(1).strip()
-
-
-def _extract_helpers_mk_value(filepath: Path) -> str:
-    """Extract COMPOSE_PROFILES from helpers.mk _get_all_profiles @echo line.
-
-    ⚡ regex: _get_all_profiles: + @echo "(.+?)" → ⎋ value
-    """
-    content = filepath.read_text()
-    # Match _get_all_profiles target followed by @echo "..." (with tab)
-    m = re.search(r'_get_all_profiles:\s+@echo "(.+?)"', content)
-    if not m:
-        raise ValueError(f"No _get_all_profiles @echo value found in {filepath}")
-    return m.group(1).strip()
+    with open(PLATFORM_INFRA) as f:
+        data = yaml.safe_load(f)
+    profiles = (data.get("env_defaults") or {}).get("COMPOSE_PROFILES")
+    if not profiles:
+        pytest.fail("platform-infra.yaml env_defaults.COMPOSE_PROFILES missing (SoT)")
+    return str(profiles).strip()
 
 
 # === Fixtures ===
@@ -140,31 +67,26 @@ def _extract_helpers_mk_value(filepath: Path) -> str:
 
 @pytest.fixture(scope="module")
 def canonical_profiles() -> str:
-    """Canonical COMPOSE_PROFILES from `make _get_all_profiles`.
+    """Canonical COMPOSE_PROFILES from platform-infra.yaml env_defaults (SoT).
 
-    ◇ side effect: subprocess call to make → ⎋ canonical string
+    ◇ read SoT → ⎋ canonical string
     """
     return _get_canonical_profiles()
 
 
-# === CALLSITES ===
-# region CALLSITES — each entry: (label, filepath, extractor_func)
+# === FORMER CALLSITES — must NOT contain the full hardcoded profile list ===
+# region CALLSITES — each entry: (label, filepath) where the hardcoded copy was REMOVED (DevPlan 116 T2)
 
-CALLSITES: list[tuple[str, Path, callable]] = [
+FORMER_CALLSITES: list[tuple[str, Path]] = [
+    ("Makefile:30", PROJECT_ROOT / "Makefile"),
     (
-        "Makefile:30",
-        PROJECT_ROOT / "Makefile",
-        _extract_makefile_value,
-    ),
-    (
-        "docker_orchestrator.py:455",
+        "docker_orchestrator.py:511-515",
         PROJECT_ROOT / "core/internal/bootstrap/deploy/docker_orchestrator.py",
-        _extract_python_setdefault,
     ),
+    ("helpers.mk (_get_all_profiles)", PROJECT_ROOT / "makefiles/helpers.mk"),
     (
-        "helpers.mk:78 (_get_all_profiles)",
-        PROJECT_ROOT / "makefiles/helpers.mk",
-        _extract_helpers_mk_value,
+        "project_adopter.py (former _DEFAULT_COMPOSE_PROFILES)",
+        PROJECT_ROOT / "core/internal/scaffold/project_adopter.py",
     ),
 ]
 
@@ -174,74 +96,57 @@ CALLSITES: list[tuple[str, Path, callable]] = [
 # === Tests ===
 
 
-# 🧪 TRAP[TEST] · Regression · Scenarios: AC-2 (consistency gate) · Last fail: 2026-07-30 · Remove if: COMPOSE_PROFILES centralized to single source
-# · Check 4 hardcoded callsites for identical 13-module COMPOSE_PROFILES list
-# · CI workflows (push-gate.yml, platform-test.yml) now use compose-profiles composite action — verified in separate test
-# · Any mismatch = drift detection after adding/removing Docker modules
+# 🧪 TRAP[TEST] · Regression · Scenarios: AC-2 (U-02) · Last fail: 2026-07-31 · Remove if: COMPOSE_PROFILES centralized to single source
+# · Check that former hardcoded callsites no longer carry the full 13-item profile list
 @pytest.mark.gate
-def test_compose_profiles_consistency(canonical_profiles: str, caplog) -> None:
-    """Verify COMPOSE_PROFILES is identical across all 5 hardcoded callsites.
+def test_no_hardcoded_profiles_at_former_callsites(canonical_profiles: str, caplog) -> None:
+    """Verify COMPOSE_PROFILES hardcoded copies were REMOVED from former callsites.
 
-    ◇ canonical_profiles → ⚡ for each callsite → extract → compare
-       → ∋ mismatch? → ⎋ fail with line-guidance | pass
+    ◇ canonical_profiles → ⚡ for each former callsite → assert full string absent
+       → ∋ violation? → ⎋ fail with line-guidance | pass
 
-    ## @purpose  Cross-check all hardcoded COMPOSE_PROFILES definitions against canonical value.
-    ##            CI workflows removed from callsites per DevPlan 064 S1 — they use
-    ##            compose-profiles composite action (verified in separate test).
-    ##            Any mismatch means a developer added/removed a Docker module without
-    ##            updating all locations. Fail shows exact file:line guidance.
-    ## @io        Input: canonical_profiles (str) from make _get_all_profiles
-    ##            Output: pass or pytest.fail with per-callsite mismatch details
-    ## @complexity O(N) where N = len(CALLSITES) = 4
+    ## @purpose  DevPlan 116 T2 (U-02): все 7 копий COMPOSE_PROFILES заменены runtime-
+    ##            чтением SoT. Этот тест точечно проверяет 4 бывших callsite на отсутствие
+    ##            полной строки (repo-wide проверка — в test_gate_profiles_parity (d)).
+    ## @io        Input: canonical_profiles (str) from platform-infra.yaml
+    ##            Output: pass or pytest.fail with per-callsite violation details
+    ## @complexity O(N) where N = len(FORMER_CALLSITES) = 4
     """
     import logging
 
     logger = logging.getLogger(__name__)
 
-    mismatches: list[str] = []
+    violations: list[str] = []
 
-    for label, filepath, extractor in CALLSITES:
-        logger.info("[IMP:8][test_compose_profiles_consistency] Checking: %s (%s)", label, filepath)
+    for label, filepath in FORMER_CALLSITES:
+        logger.info("[IMP:8][test_no_hardcoded_profiles] Checking: %s (%s)", label, filepath)
 
         if not filepath.exists():
-            mismatches.append(f"[{label}] File not found: {filepath}")
-            logger.error("[IMP:4][test_compose_profiles_consistency] NOT FOUND: %s", filepath)
+            violations.append(f"[{label}] File not found: {filepath}")
             continue
 
-        try:
-            value = extractor(filepath)
-        except (ValueError, OSError) as exc:
-            mismatches.append(f"[{label}] Extraction error: {exc}")
-            logger.error("[IMP:4][test_compose_profiles_consistency] FAIL extraction: %s — %s", label, exc)
-            continue
-
-        if value != canonical_profiles:
-            mismatches.append(
-                f"[{label}] COMPOSE_PROFILES MISMATCH:\n"
-                f"  expected (from make _get_all_profiles): {canonical_profiles}\n"
-                f"  actual (in {filepath}):                 {value}"
+        content = filepath.read_text()
+        if canonical_profiles in content:
+            violations.append(
+                f"[{label}] full COMPOSE_PROFILES string still hardcoded — replace with "
+                "runtime-read (yaml_query.py / platform-infra.yaml) per DevPlan 116 T2"
             )
-            logger.error("[IMP:4][test_compose_profiles_consistency] MISMATCH: %s", label)
+            logger.error("[IMP:4][test_no_hardcoded_profiles] VIOLATION: %s", label)
         else:
-            logger.info("[IMP:9][test_compose_profiles_consistency] ✅ %s: consistent", label)
+            logger.info("[IMP:9][test_no_hardcoded_profiles] ✅ %s: no hardcoded copy", label)
 
-    if mismatches:
-        logger.error(
-            "[IMP:10][test_compose_profiles_consistency] FAIL: %d callsite(s) out of sync",
-            len(mismatches),
-        )
+    if violations:
+        logger.error("[IMP:10][test_no_hardcoded_profiles] FAIL: %d callsite(s) still hardcoded", len(violations))
         pytest.fail(
-            f"COMPOSE_PROFILES inconsistency detected in {len(mismatches)} callsite(s):\n"
-            + "\n".join(mismatches)
-            + "\n\nCanonical value (from `make _get_all_profiles`): "
-            + canonical_profiles
-            + "\n\nUpdate ALL locations when adding/removing Docker modules."
+            f"COMPOSE_PROFILES hardcoded copy detected in {len(violations)} former callsite(s):\n"
+            + "\n".join(violations)
+            + "\n\nSoT: core/platform-infra.yaml env_defaults.COMPOSE_PROFILES. "
+            "All other places must read it at runtime (DevPlan 116 T2)."
         )
 
     logger.info(
-        "[IMP:9][test_compose_profiles_consistency] ✅ All %d callsites consistent with canonical value: %s",
-        len(CALLSITES),
-        canonical_profiles,
+        "[IMP:9][test_no_hardcoded_profiles] ✅ All %d former callsites free of hardcoded COMPOSE_PROFILES",
+        len(FORMER_CALLSITES),
     )
 
 

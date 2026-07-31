@@ -91,19 +91,14 @@ _DOCKER_LOG_TIMEOUT = 30  # timeout for docker compose logs
 _STDERR_TAIL_LINES = 300  # tail lines for stderr truncation
 _COMPOSE_EXTRA_TIMEOUT = 30  # extra timeout added to PLATFORM_COMPOSE_TIMEOUT
 
+# ── Static test-specific env (DevPlan 116 T3, U-16/U-17/D2) ─────────
+# Значения, дублирующие env_defaults из platform-env.yaml, УДАЛЕНЫ — они
+# загружаются runtime-мержем (load_platform_env_defaults). Здесь остаётся
+# ТОЛЬКО тест-специфика: test-порты, tmp-пути, намеренные TRAP-оверрайды.
 _STATIC_SMOKE_ENV: dict[str, str] = {
-    "PLATFORM_DOMAIN": "test.local",
     "COMPOSE_PROJECT_NAME": "ai-platform-test",
     "PLATFORM_DIR": "/tmp/ai-platform-test",
-    "POSTGRES_USER": "postgres",
-    "POSTGRES_DB": "platform",
-    "HERMES_DASHBOARD_USERNAME": "admin@ai-platform.local",
-    "GF_SECURITY_ADMIN_USER": "admin@ai-platform.local",
-    "S3_BUCKET": "test-bucket",
     "S3_ENDPOINT_URL": "",  # ⚠️ TRAP[FIX] · 2026-07-24 · Empty — skip S3 in test; production endpoint unreachable in CI
-    "PROMETHEUS_TARGETS_DIR": "/tmp/prometheus-targets",
-    "PROMETHEUS_RULES_DIR": "/tmp/prometheus-rules",
-    "NGINX_CONF_DIR": "./dev-config",
     "NGINX_CERT_DIR": "/etc/nginx/dev-certs",
     "NODE_NAME": "test-node",
     # ⚠️ TRAP[BUG] · 2026-07-27 · HI · CONTEXT_IMAGE must be set for smoke tests
@@ -122,7 +117,51 @@ _STATIC_SMOKE_ENV: dict[str, str] = {
     "GRAFANA_TEST_PORT": "13030",
 }
 
-SMOKE_ENV: dict[str, str] = {**_STATIC_SMOKE_ENV, **SMOKE_ENV_GENERATED}
+
+def load_platform_env_defaults() -> dict[str, str]:
+    """Load env_defaults from repo-root platform-env.yaml (runtime, D2).
+
+    ## @purpose — Runtime-источник не-секретных env-дефолтов для smoke-тестов.
+    ##            Устраняет дубли static-копий (DevPlan 116 T3, U-17): значения
+    ##            (PLATFORM_DOMAIN, POSTGRES_USER, PROMETHEUS_TARGETS_DIR, ...)
+    ##            читаются из generated platform-env.yaml, а не хардкодятся в smoke.py.
+    ## @io — ⎋ dict[str, str]: env_defaults секция platform-env.yaml
+    ## @complexity — O(1) — single YAML load
+    ## @invariants
+    ##   - File resolved from repo root (tests/helpers/gate_helpers.py::repo_root)
+    ##   - Raises if platform-env.yaml missing (fail-fast — generated file must exist)
+    ##   - Returned dict contains ONLY env_defaults (не port_mappings/profiles)
+    """
+    import yaml as _yaml_load
+
+    from tests.helpers.gate_helpers import repo_root as _repo_root
+
+    env_path = _repo_root() / "platform-env.yaml"
+    if not env_path.is_file():
+        raise FileNotFoundError(
+            f"[IMP:10][smoke] platform-env.yaml not found at {env_path} — "
+            "run `make generate-platform-env` (DevPlan 116 T3, D2)."
+        )
+    with open(env_path) as f:
+        data = _yaml_load.safe_load(f)
+    raw = (data or {}).get("env_defaults", {})
+    defaults = {str(k): str(v) for k, v in raw.items() if v is not None} if isinstance(raw, dict) else {}
+    logging.getLogger(__name__).info(
+        "[IMP:8][smoke][load_platform_env_defaults] Loaded %d env_defaults from %s", len(defaults), env_path
+    )
+    return defaults
+
+
+PLATFORM_ENV_DEFAULTS: dict[str, str] = load_platform_env_defaults()
+
+# ⚠️ TRAP[DECISION] · 2026-07-31 · — · Merge order: env_defaults → static → generated
+# · Rejected: literal DevPlan 116 order {static, env_defaults, generated}
+# · Reason: env_defaults AFTER static would clobber намеренные тест-оверрайды
+# ·   (S3_ENDPOINT_URL:"" TRAP[FIX], CONTEXT_IMAGE:latest TRAP[BUG], NGINX_CERT_DIR test-путь).
+# ·   Static содержит ТОЛЬКО тест-специфику (дубли удалены) → статик должен побеждать env_defaults.
+# ·   SMOKE_ENV_GENERATED (секреты ci_default) — последний, как в generate_platform_env (secret > non-secret).
+# · Rev: если статик снова получит ключи, дублирующие env_defaults → вернуть порядок DevPlan.
+SMOKE_ENV: dict[str, str] = {**PLATFORM_ENV_DEFAULTS, **_STATIC_SMOKE_ENV, **SMOKE_ENV_GENERATED}
 
 _SMOKE_VOLUME_BIND_DIRS: list[str] = [
     "/var/lib/platform/postgres-data",

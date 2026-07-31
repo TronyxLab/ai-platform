@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from core.internal.shared.exceptions import (
+    ConfigParseError,
     ConfigValidationError,
 )
 from core.internal.shared.node_yaml import (
@@ -62,7 +63,8 @@ def _read_yaml(path: Path) -> str:
 
 
 SAMPLE_NODE_YAML = """\
-context: myorg
+contexts:
+  - name: myorg
 node:
   name: test-node
   host: 1.2.3.4
@@ -293,7 +295,8 @@ def test_write_back_preserves_comments(caplog, tmp_path):
 # ═══════════════════════════════════════
 # Node configuration for test-node
 # ═══════════════════════════════════════
-context: myorg
+contexts:
+  - name: myorg
 
 node:
   name: test-node
@@ -383,3 +386,171 @@ def test_write_back_pyyaml_fallback(caplog, tmp_path, monkeypatch):
 
 
 # endregion Tests: _write_back
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: cache-safety on disk error (DevPlan 116 B6 T6.1)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _patch_write_open_raises(monkeypatch):
+    """Patch builtins.open so ANY write-mode open raises OSError; reads pass through.
+
+    ## @purpose  Simulates disk-full/permission-denied for _write_back write paths.
+    ## @io        ⇥ monkeypatch → ⎋ None (side-effect: patched builtins.open)
+    """
+    import builtins
+
+    original_open = builtins.open
+
+    def mock_open(*args, **kwargs):
+        mode = kwargs.get("mode", args[1] if len(args) > 1 else "r")
+        if "w" in str(mode):
+            raise OSError("Mock: disk full (write)")
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", mock_open)
+
+
+# 🧪 TRAP[TEST] · Regression · add_project disk error → ConfigParseError + cache clean
+# · Scenario: write fails (OSError) → add_project raises ConfigParseError; reload() from disk
+# ·   must NOT contain the added project (cache never poisoned — deepcopy mutation)
+# · Last fail: N/A (DevPlan 116 B6 T6.1 — TRAP[BUG] 2026-07-30 fix verification)
+# · Remove if: _write_back failure semantics change
+@ldd_trajectory
+def test_add_project_disk_error_cache_clean(caplog, tmp_path, monkeypatch):
+    """add_project on disk write failure → ConfigParseError AND reload() shows no mutation."""
+    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)  # fixture written BEFORE patching open
+    _patch_write_open_raises(monkeypatch)
+    node = NodeYaml(str(yaml_path))
+
+    with pytest.raises(ConfigParseError):
+        node.add_project(ProjectEntry(name="new-app", repo="myorg/new-app", type="backend"))
+
+    # Cache must be clean — reload from disk must NOT contain the added project
+    node.reload()
+    names = [p.get("name") for p in node.get_projects() if isinstance(p, dict)]
+    assert "new-app" not in names, "add_project mutation leaked into cache after failed write"
+
+    logger.critical("[IMP:9][test] add_project_disk_error: ConfigParseError raised, cache clean — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · remove_project disk error → ConfigParseError + project intact
+# · Scenario: write fails → remove_project raises ConfigParseError; reload() from disk still
+# ·   contains the project (removal not persisted, cache clean)
+# · Last fail: N/A (DevPlan 116 B6 T6.1)
+# · Remove if: _write_back failure semantics change
+@ldd_trajectory
+def test_remove_project_disk_error_cache_clean(caplog, tmp_path, monkeypatch):
+    """remove_project on disk write failure → ConfigParseError AND reload() shows project intact."""
+    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)  # fixture written BEFORE patching open
+    _patch_write_open_raises(monkeypatch)
+    node = NodeYaml(str(yaml_path))
+
+    with pytest.raises(ConfigParseError):
+        node.remove_project("existing-app")
+
+    node.reload()
+    names = [p.get("name") for p in node.get_projects() if isinstance(p, dict)]
+    assert "existing-app" in names, "remove_project mutation leaked into cache after failed write"
+
+    logger.critical("[IMP:9][test] remove_project_disk_error: ConfigParseError raised, project intact — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · update_project disk error → ConfigParseError + original value
+# · Scenario: write fails → update_project raises ConfigParseError; reload() shows OLD domain
+# · Last fail: N/A (DevPlan 116 B6 T6.1)
+# · Remove if: _write_back failure semantics change
+@ldd_trajectory
+def test_update_project_disk_error_cache_clean(caplog, tmp_path, monkeypatch):
+    """update_project on disk write failure → ConfigParseError AND reload() shows old value."""
+    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)  # fixture written BEFORE patching open
+    _patch_write_open_raises(monkeypatch)
+    node = NodeYaml(str(yaml_path))
+
+    with pytest.raises(ConfigParseError):
+        node.update_project("existing-app", domain="hacked.example.com")
+
+    node.reload()
+    projects = node.get_projects()
+    for p in projects:
+        if isinstance(p, dict) and p.get("name") == "existing-app":
+            assert p.get("domain") != "hacked.example.com", "update_project mutation leaked into cache"
+            break
+
+    logger.critical("[IMP:9][test] update_project_disk_error: ConfigParseError raised, old value intact — OK")
+
+
+# endregion Tests: cache-safety on disk error
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: add_context (DevPlan 116 B6 T6.3)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · add_context adds entry to contexts[]
+# · Scenario: contexts[] exists → add_context appends {"name": ...} + optional fields
+# · Last fail: N/A (DevPlan 116 B6 T6.3)
+# · Remove if: add_context() logic changes
+@ldd_trajectory
+def test_add_context_success(caplog, tmp_path):
+    """NodeYaml.add_context() should append a context entry and persist on disk."""
+    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    node = NodeYaml(str(yaml_path))
+
+    result = node.add_context(
+        name="prod",
+        description="production",
+        node_configs_repo="org/prod-node-configs",
+        hermes_agent_repo="org/prod-hermes",
+    )
+    assert result is True
+
+    node2 = NodeYaml(str(yaml_path))
+    contexts = node2.get_contexts()
+    names = [c.get("name") for c in contexts if isinstance(c, dict)]
+    assert "prod" in names
+    assert len(contexts) == 2  # myorg + prod
+
+    logger.critical("[IMP:9][test] add_context_success: added 'prod', %d contexts total — OK", len(contexts))
+
+
+# 🧪 TRAP[TEST] · Regression · add_context raises on duplicate name
+# · Scenario: add context with same name as existing → ConfigValidationError
+# · Last fail: N/A (DevPlan 116 B6 T6.3)
+# · Remove if: add_context() duplicate detection changes
+@ldd_trajectory
+def test_add_context_duplicate_raises(caplog, tmp_path):
+    """NodeYaml.add_context() should raise ConfigValidationError for duplicate context name."""
+    yaml_path = _write_yaml(tmp_path, SAMPLE_NODE_YAML)
+    node = NodeYaml(str(yaml_path))
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        node.add_context(name="myorg")
+    assert "already exists" in str(exc_info.value).lower() or "duplicate" in str(exc_info.value).lower()
+
+    logger.critical("[IMP:9][test] add_context_duplicate: raised ConfigValidationError — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · add_context creates contexts[] when missing
+# · Scenario: node.yaml without contexts section → add_context creates it
+# · Last fail: N/A (DevPlan 116 B6 T6.3)
+# · Remove if: add_context() section-creation logic changes
+@ldd_trajectory
+def test_add_context_creates_section(caplog, tmp_path):
+    """NodeYaml.add_context() should create a missing contexts section."""
+    yaml_path = _write_yaml(tmp_path, "node:\n  name: test-node\n  host: 1.2.3.4\nprojects: []\n")
+    node = NodeYaml(str(yaml_path))
+
+    node.add_context(name="first-ctx")
+
+    node2 = NodeYaml(str(yaml_path))
+    contexts = node2.get_contexts()
+    assert len(contexts) == 1
+    assert contexts[0].get("name") == "first-ctx"
+
+    logger.critical("[IMP:9][test] add_context_creates_section: contexts section created — OK")
+
+
+# endregion Tests: add_context

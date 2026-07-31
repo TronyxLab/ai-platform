@@ -33,7 +33,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import subprocess
@@ -68,24 +67,15 @@ _SHARED_DIR = os.path.join(
 try:
     from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
     from core.internal.shared.secrets_env_parser import write as write_secrets_env
+    from core.internal.shared.secrets_manifest_reader import iter_secrets as _iter_manifest_secrets
 except ModuleNotFoundError:
     if _SHARED_DIR not in sys.path:
         sys.path.insert(0, _SHARED_DIR)
     from secrets_env_parser import parse as parse_secrets_env
     from secrets_env_parser import write as write_secrets_env
+    from secrets_manifest_reader import iter_secrets as _iter_manifest_secrets
 
 logger = logging.getLogger(__name__)
-
-# ── Hardcoded fallback secrets (when manifest unavailable) ──
-_FALLBACK_SECRETS: list[dict[str, str]] = [
-    {"name": "LITELLM_MASTER_KEY", "gen_command": 'echo "sk-$(openssl rand -hex 32)"'},
-    {"name": "LANGFUSE_INIT_ORG_ID", "gen_command": 'echo "org_$(openssl rand -hex 4)"'},
-    {"name": "LANGFUSE_INIT_PROJECT_ID", "gen_command": 'echo "proj_$(openssl rand -hex 4)"'},
-    {"name": "LANGFUSE_PUBLIC_KEY", "gen_command": 'echo "pk-lf_$(openssl rand -hex 16)"'},
-    {"name": "LANGFUSE_SECRET_KEY", "gen_command": 'echo "sk-lf_$(openssl rand -hex 16)"'},
-    {"name": "NEXTAUTH_SECRET", "gen_command": "openssl rand -hex 32"},
-    {"name": "SALT", "gen_command": "openssl rand -hex 16"},
-]
 
 
 # region FUNC_source_secrets_env
@@ -191,52 +181,24 @@ def cleanup_secrets_env(
 
 # region FUNC__read_manifest
 ## @purpose — Read secrets-manifest.yaml and extract tier=generated secrets as a list of dicts.
-##            Returns empty list on any error (file not found, YAML parse error, missing key).
-## @io — ⇥ manifest_path: str → ⎋ list[dict[str, Any]]
-## @complexity — O(N) where N = YAML document size
+##            Delegates to shared secrets_manifest_reader.iter_secrets (DevPlan 116 T4, U-33).
+##            STRICT: missing/malformed manifest RAISES — hardcoded fallback list removed
+##            (invariant 7 — fail-visible instead of silent divergence).
+## @io — ⇥ manifest_path: str → ⎋ list[dict[str, Any]] ⚡ raise FileNotFoundError/ValueError
+## @complexity — O(N) where N = YAML document size (delegated)
 ## @invariants
-##   - Returns empty list on any error (never raises)
+##   - Raises on missing/malformed manifest (no `return []` fallback)
 ##   - Filters only entries with tier == "generated"
 ##   - Each entry requires name and gen_command keys
 def _read_manifest(manifest_path: str) -> list[dict[str, Any]]:
-    """Read secrets-manifest.yaml, return tier=generated secrets. Returns [] on error."""
-    if not manifest_path or not os.path.isfile(manifest_path):
-        logger.info("[IMP:7][secrets_manager] Manifest not found: %s — fallback to hardcoded list", manifest_path)
-        return []
-
+    """Read secrets-manifest.yaml, return tier=generated secrets. Raises on missing manifest."""
     logger.info("[IMP:8][secrets_manager] Reading generated secrets from manifest: %s", manifest_path)
-    try:
-        import yaml
-
-        with open(manifest_path) as f:
-            data = yaml.safe_load(f)
-
-        if not isinstance(data, dict):
-            logger.warning("[IMP:7][secrets_manager] Manifest is not a dict — fallback to hardcoded")
-            return []
-
-        secrets: list[dict[str, Any]] = data.get("secrets", [])
-        if not isinstance(secrets, list):
-            logger.warning("[IMP:7][secrets_manager] Manifest secrets is not a list — fallback to hardcoded")
-            return []
-
-        generated: list[dict[str, Any]] = [
-            s
-            for s in secrets
-            if isinstance(s, dict) and s.get("tier") == "generated" and s.get("name") and s.get("gen_command")
-        ]
-
-        if not generated:
-            logger.info("[IMP:7][secrets_manager] Manifest has no generated secrets — fallback to hardcoded list")
-
-        return generated
-
-    except ImportError:
-        logger.warning("[IMP:7][secrets_manager] PyYAML not available — fallback to hardcoded list")
-        return []
-    except (yaml.YAMLError, OSError, FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning("[IMP:7][secrets_manager] Manifest parse error: %s — fallback to hardcoded list", e)
-        return []
+    secrets = _iter_manifest_secrets(manifest_path)
+    generated: list[dict[str, Any]] = [
+        s for s in secrets if s.get("tier") == "generated" and s.get("name") and s.get("gen_command")
+    ]
+    logger.info("[IMP:9][secrets_manager] Manifest has %d tier=generated secrets", len(generated))
+    return generated
 
 
 # endregion FUNC__read_manifest
@@ -355,7 +317,6 @@ def ensure_secrets(
 ) -> list[str]:
     """Ensure all required secrets exist. Generates missing ones. Returns list of generated names."""
     generated: list[str] = []
-    manifest_generated: list[dict[str, Any]] = []
 
     # ── Step 1: Source existing secrets.env into os.environ ──
     env_vars = source_secrets_env(secrets_env)
@@ -363,22 +324,14 @@ def ensure_secrets(
         if key not in os.environ:
             os.environ[key] = value
 
-    # ── Step 2: Read manifest for tier=generated secrets ──
-    manifest_generated = _read_manifest(manifest_path)
-
-    secrets_to_process: list[dict[str, Any]] = []
-    if manifest_generated:
-        secrets_to_process = manifest_generated
-        logger.info(
-            "[IMP:9][secrets_manager] Processing %d generated secrets from manifest",
-            len(secrets_to_process),
-        )
-    else:
-        secrets_to_process = list(_FALLBACK_SECRETS)
-        logger.info(
-            "[IMP:9][secrets_manager] Processing %d secrets from hardcoded fallback",
-            len(secrets_to_process),
-        )
+    # ── Step 2: Read manifest for tier=generated secrets (STRICT — raises if missing) ──
+    # Hardcoded fallback list removed (DevPlan 116 T4, U-33): manifest is always
+    # delivered with core/ — silent fallback was a drift vector («gate зелёный, система врёт»).
+    secrets_to_process: list[dict[str, Any]] = _read_manifest(manifest_path)
+    logger.info(
+        "[IMP:9][secrets_manager] Processing %d generated secrets from manifest",
+        len(secrets_to_process),
+    )
 
     # ⚠️ TRAP[BUG] · 2026-07-25 · P1 · Append-mode → duplicate secrets on repeated --force runs
     # · Symptom: secrets.env grew with duplicate lines (same VAR=value appended on each run).
@@ -663,7 +616,9 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="action", required=True)
 
     ensure_parser = subparsers.add_parser("ensure", help="Generate missing tier=generated secrets")
-    ensure_parser.add_argument("--manifest", default="", help="Path to secrets-manifest.yaml")
+    ensure_parser.add_argument(
+        "--manifest", required=True, help="Path to secrets-manifest.yaml (required — fail-fast, DevPlan 116 T4)"
+    )
     ensure_parser.add_argument("--secrets-env", default="/run/platform/secrets.env", help="Path to secrets.env")
 
     source_parser = subparsers.add_parser("source", help="Print parsed secrets.env KEY=VALUE lines to stdout")

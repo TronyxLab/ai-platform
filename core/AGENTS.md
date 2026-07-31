@@ -83,6 +83,9 @@
 | `make fix-executable-bit` | Исправление executable bit на .sh файлах | make fix-executable-bit [DRY_RUN=1] | git add --chmod=+x + git update-index --chmod=+x |
 | `make fix-ruff` | Форматирование Python файлов через ruff | make fix-ruff [SCOPE=diff|staged|all] [DRY_RUN=1] | ruff check --fix + ruff format |
 | `make fix-gate` | Композитное исправление gate-ошибок | make fix-gate [DRY_RUN=1] | fix-executable-bit + fix-ruff + generate-manifests |
+| `make check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) | make check-profiles-parity | pytest tests/gates/test_gate_profiles_parity.py (COMPOSE_PROFILES SoT parity, DevPlan 116 T9) |
+| `make check-domain-parity` | Parity-гейт PLATFORM_DOMAIN (единое определение, 0 legacy-доменов) | make check-domain-parity | pytest tests/gates/test_gate_domain_parity.py (PLATFORM_DOMAIN SoT parity, DevPlan 116 T9) |
+| `make templates-check` | Проверка покрытия и разрешимости шаблонов | make templates-check | core/internal/template_engine.py check (template-manifest coverage) |
 <!-- GENERATED:END:canon_table -->
 
 ---
@@ -170,5 +173,6 @@
 | Module | Path | Purpose |
 |--------|------|---------|
 | `secrets_env_parser` | `core/internal/shared/secrets_env_parser.py` | Единый парсер secrets.env — parse()/write()/merge()/export_shell(). Заменяет 7 inline-парсеров. |
+| `schema_validator` | `core/internal/shared/schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — validate_yaml_against_schema()/validate_dict_against_schema(). Единственная Draft7Validator-точка (DevPlan 116 B6 T5). |
 | `telegram_notifier` | `core/internal/shared/telegram_notifier.py` | Единый Telegram-клиент — send_telegram(). Заменяет 6 независимых реализаций (3 shell + 3 Python). |
 | `docker_auth` | `core/internal/shared/docker_auth.py` | Единый Docker registry auth — docker_login()/ghcr_login()/configure_docker_auth(). Заменяет 5 дублирующихся точек. |

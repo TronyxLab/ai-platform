@@ -31,7 +31,7 @@ SMOKE_ENV_GENERATED: dict[str, str] = {
     "MINIO_ROOT_PASSWORD": "minioadmin",
     "MINIO_ROOT_USER": "minioadmin",
     "NEXTAUTH_SECRET": "ci-test-nextauth-secret-32-chars-min!!",
-    "PLATFORM_MASTER_EMAIL": "admin@test.local",
+    "PLATFORM_MASTER_EMAIL": "admin@ai-platform.local",
     "PLATFORM_MASTER_PASSWORD": "test-master-password",
     "POSTGRES_PASSWORD": "test-pg-pwd",
     "POSTGRES_USER": "postgres",

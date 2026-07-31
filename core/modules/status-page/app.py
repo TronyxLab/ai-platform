@@ -40,6 +40,13 @@
 ##   2026-07-24 | 047 W1  | _format_bytes() replaces _bytes_to_gb()/_bytes_to_gb_str() — auto-unit B/KB/MB/GB/TB
 ##   2026-07-24 | 047 W1  | _enrich_projects/_enrich_containers use _format_bytes() instead of _bytes_to_gb*
 ##   2026-07-24 | 047 W2  | _render_html() — host context extended with memory_*, swap_*, os_* fields
+# ⚠️ TRAP[DECISION] · 2026-08-01 · — · status-page stays on raw yaml.safe_load — exception from NodeYaml facade invariant
+# · Rejected: migrating load_node_yaml() to core.internal.shared.node_yaml (risk: layer violation + image bloat)
+# · Reason: module image is python:3.12-alpine WITHOUT core/; modules→internal import is forbidden
+#   (core/AGENTS.md Cross-layer — modules can only import lib/ and templates/). node.yaml is mounted
+#   ro as data. The "single read point" invariant (DRIFT-088-7) applies to core/ only. status-page is
+#   EXCLUDED from the "single project parser" gate (DevPlan 116 B6 T9, decision D1).
+# · Rev: if node.yaml reading moves into a core-owned service (e.g. internal API) → remove raw parsing here.
 # endregion MODULE_CONTRACT
 
 import http.server

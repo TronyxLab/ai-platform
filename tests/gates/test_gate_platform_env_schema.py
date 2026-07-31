@@ -315,13 +315,25 @@ class TestCrossSectionConsistency:
 
     @ldd_trajectory
     def test_env_defaults_do_not_contain_dot_env_keys(self, env_data: dict, caplog) -> None:
-        """env_defaults must not override keys that should come from .env only."""
+        """env_defaults contract: PLATFORM_DOMAIN present (SoT per DevPlan 116 D4), no forbidden keys.
+
+        ⚠️ DevPlan 116 D4 (U-16): PLATFORM_DOMAIN ПЕРЕЕХАЛ в env_defaults как SoT
+        (platform-infra.yaml) — позитивная проверка: ключ ОБЯЗАН присутствовать.
+        Production-only ключи, которые НЕ должны иметь YAML-дефолт, — в
+        forbidden_in_defaults (сейчас пусто: секреты идут через ci_default).
+        """
         env_defaults = env_data.get("env_defaults", {})
-        # These keys are production secrets that MUST NOT have defaults in YAML
-        forbidden_in_defaults = {
-            "PLATFORM_DOMAIN",
-        }
+        # D4: PLATFORM_DOMAIN — SoT env_defaults (генерируется из platform-infra.yaml)
+        assert "PLATFORM_DOMAIN" in env_defaults, (
+            "PLATFORM_DOMAIN must be in platform-env.yaml env_defaults — SoT per DevPlan 116 D4 "
+            "(run `make generate-platform-env`)"
+        )
+        assert env_defaults["PLATFORM_DOMAIN"] == "ai-platform.local", (
+            f"env_defaults.PLATFORM_DOMAIN = {env_defaults['PLATFORM_DOMAIN']!r}, expected ai-platform.local"
+        )
+        # Запрещённые production-only ключи (на данный момент нет ни одного)
+        forbidden_in_defaults: set[str] = set()
         found = forbidden_in_defaults & set(env_defaults.keys())
         logger.info("[IMP:9][gate][platform-env] Checking forbidden keys in env_defaults: found=%s", found)
         assert not found, f"Forbidden env_defaults keys (production-only): {found}"
-        logger.info("[IMP:9][gate][platform-env] No forbidden keys in env_defaults ✓")
+        logger.info("[IMP:9][gate][platform-env] PLATFORM_DOMAIN SoT present; no forbidden keys ✓")

@@ -32,7 +32,7 @@ from pathlib import Path
 from core.internal.deploy.channels import ForcedCommandChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
-from core.internal.shared.node_yaml import NodeYaml
+from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
 # DevPlan 091 Wave A (AC14): _ORCHESTRATOR_AVAILABLE vestigial flag removed.
 # DeployOrchestrator is the sole deploy path — flag was always True and only masked
@@ -53,11 +53,22 @@ logger = logging.getLogger(__name__)
 # region DATACLASS__ProjectSpec
 @dataclass
 class ProjectSpec:
-    """Parsed project entry from node.yaml#projects."""
+    """Parsed project entry from node.yaml#projects — reconcile-DTO view over canonical ProjectEntry.
+
+    DevPlan 116 B6 T4.6: view, НЕ определение канона — name/org/domain берутся из
+    shared.ProjectEntry через from_entry().
+    """
 
     name: str
     org: str = ""
     domain: str = ""
+
+    @classmethod
+    def from_entry(cls, entry: ProjectEntry, org: str = "") -> "ProjectSpec":
+        """Create a ProjectSpec view from a canonical ProjectEntry."""
+        if not org and "/" in entry.repo:
+            org = entry.repo.split("/")[0]
+        return cls(name=entry.name, org=org, domain=entry.domain)
 
 
 # endregion
@@ -102,9 +113,10 @@ class ReconcileSummary:
 
 # region FUNC_parse_node_yaml_projects
 def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
-    """Extract project list from node.yaml.
+    """Extract project list from node.yaml via canonical NodeYaml.get_project_entries().
 
-    Supports both dict entries (with name/org/domain keys) and string entries.
+    DevPlan 116 B6 T4.6: manual dict/str parsing → canonical parser. str-form entries
+    are rejected (decision D3 — schema requires dict records).
     Returns empty list on parse error or missing section.
 
     Args:
@@ -115,25 +127,12 @@ def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
     """
     try:
         node = NodeYaml(node_yaml_path)
-        projects_raw = node.get_projects()
+        entries = node.get_project_entries()
     except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
         logger.warning("[IMP:8][parse_node_yaml] Failed to parse %s: %s", node_yaml_path, exc)
         return []
 
-    out: list[ProjectSpec] = []
-    for p in projects_raw:
-        if isinstance(p, dict):
-            out.append(
-                ProjectSpec(
-                    name=p.get("name", ""),
-                    org=p.get("org", ""),
-                    domain=p.get("domain", ""),
-                )
-            )
-        elif isinstance(p, str):
-            out.append(ProjectSpec(name=p))
-
-    return out
+    return [ProjectSpec.from_entry(e) for e in entries]
 
 
 # endregion

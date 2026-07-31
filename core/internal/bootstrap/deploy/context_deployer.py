@@ -38,8 +38,9 @@ from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
+    ConfigValidationError,
 )
-from core.internal.shared.node_yaml import NodeYaml
+from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
 # DevPlan 091 Wave A (AC4): _ORCHESTRATOR_AVAILABLE fallback removed — DeployOrchestrator is sole path.
 # ⚠️ TRAP[DECISION] · 2026-07-30 · HI · Removed _ORCHESTRATOR_AVAILABLE vestigial flag
@@ -49,13 +50,9 @@ from core.internal.shared.node_yaml import NodeYaml
 
 logger = logging.getLogger(__name__)
 
-# Shared library imports
-import sys as _sys
-
-_SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "shared")
-if _SHARED_DIR not in _sys.path:
-    _sys.path.insert(0, _SHARED_DIR)
-from node_yaml import extract_context_from_node_yaml
+# DevPlan 116 B6 T2: sys.path-hack + `from node_yaml import <deprecated-context-alias>`
+# (строки 55-58) удалены — NodeYaml уже импортирован на 42, deprecated alias удалён из
+# node_yaml.py. Graceful-degradation на фасаде: get_context() с try/except (см. deploy_context).
 
 # DevPlan 079 DRIFT-B6: shared docker compose operations
 # (docker_compose_build/pull/up импорты удалены 2026-07-31 — dead wrappers F1 устранены,
@@ -82,11 +79,13 @@ LITELLM_BASE_URL = "http://litellm:4000"
 
 @dataclass
 class ProjectInfo:
-    """Project metadata extracted from node.yaml.
+    """Project metadata extracted from node.yaml — view over canonical ProjectEntry.
 
     ## @purpose — Represent a single project entry from node.yaml#projects.
-    ## @io — ⇥ parsed dict → ⎋ ProjectInfo with typed fields
+    ## @io — ⇥ ProjectEntry → ⎋ ProjectInfo with typed fields
     ## @complexity — O(1)
+    ## @invariants  Local deploy-DTO (view над shared ProjectEntry, DevPlan 116 B6 T4.5) —
+    ##              не является определением канона (единственное определение — в node_yaml.py).
     """
 
     name: str = ""
@@ -97,15 +96,15 @@ class ProjectInfo:
     database: str = ""
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ProjectInfo:
-        """Create from a dict (node.yaml project entry)."""
+    def from_entry(cls, entry: ProjectEntry) -> ProjectInfo:
+        """Create from a canonical ProjectEntry (node.yaml project entry)."""
         return cls(
-            name=data.get("name", ""),
-            repo=data.get("repo", ""),
-            type=data.get("type", ""),
-            domain=data.get("domain", ""),
-            context=data.get("context", ""),
-            database=data.get("database", ""),
+            name=entry.name,
+            repo=entry.repo,
+            type=entry.type,
+            domain=entry.domain,
+            context=entry.context,
+            database=entry.database,
         )
 
 
@@ -175,18 +174,18 @@ class DeployResult:
 
 
 # region FUNC_resolve_context_projects
-## @purpose — Parse node.yaml via NodeYaml and filter projects[] where context matches.
-##            One node = one context: if project has no context field, include it.
+## @purpose — Parse node.yaml via canonical NodeYaml.get_project_entries() and filter
+##            projects[] where context matches. One node = one context.
 ## @io — ⇥ node_yaml: str, context: str → ⎋ list[ProjectInfo]
 ## @complexity — O(N) where N = projects in node.yaml
 ## @invariants
 ##   - If context is empty, returns ALL projects (operator must specify context)
 ##   - Projects without context field are included if context matches node context
-##   - Malformed YAML entries are skipped (non-fatal)
+##   - Malformed entries → ConfigValidationError caught → [] (fail-fast D3, DevPlan 116 B6 T4.5)
 def resolve_context_projects(node_yaml: str, context: str) -> list[ProjectInfo]:
     """Parse node.yaml → filter projects by context.
 
-    ▶ ┌node.yaml → NodeYaml┐ → ◇ parse projects[] → ◇ filter context==<context> → ⊕ list[ProjectInfo] → ⎋
+    ▶ ┌node.yaml → NodeYaml┐ → ◇ get_project_entries() → ◇ filter context==<context> → ⊕ list[ProjectInfo] → ⎋
     """
     if not node_yaml or not os.path.isfile(node_yaml):
         logger.warning("[IMP:7][context_deployer] node.yaml not found: %s", node_yaml)
@@ -198,15 +197,15 @@ def resolve_context_projects(node_yaml: str, context: str) -> list[ProjectInfo]:
         logger.error("[IMP:10][context_deployer] Cannot read node.yaml: %s", e)
         return []
 
-    raw_projects = node.get("projects", default=[])
-    if not isinstance(raw_projects, list):
+    try:
+        entries = node.get_project_entries()
+    except ConfigValidationError as e:
+        logger.error("[IMP:10][context_deployer] Malformed projects in %s: %s", node_yaml, e)
         return []
 
     projects: list[ProjectInfo] = []
-    for entry in raw_projects:
-        if not isinstance(entry, dict):
-            continue
-        proj = ProjectInfo.from_dict(entry)
+    for entry in entries:
+        proj = ProjectInfo.from_entry(entry)
         if not proj.name:
             continue
         # Filter by context: include if project.context matches or is empty
@@ -655,10 +654,15 @@ def deploy_context(
     if not context:
         context = os.environ.get("CONTEXT", platform_config.default_context_sentinel())
     if not context and node_yaml and os.path.isfile(node_yaml):
-        context = extract_context_from_node_yaml(node_yaml, log_tag="deploy_context")
+        # DevPlan 116 B6 T2: extract-алиас поглощал ошибки и возвращал "";
+        # graceful-degradation сохранена, но на фасаде NodeYaml.get_context().
+        try:
+            context = NodeYaml(node_yaml).get_context()
+        except (ConfigParseError, ConfigNotFoundError) as exc:
+            logger.warning("[IMP:7][deploy_context] Cannot read context from %s: %s", node_yaml, exc)
     if not context:
         logger.error(
-            "[IMP:10][deploy_context] CONTEXT not set — pass via --context or ensure node.yaml has context/contexts[0]"
+            "[IMP:10][deploy_context] CONTEXT not set — pass via --context or ensure node.yaml has contexts[0].name"
         )
         result = DeployResult()
         result.failed = 1
@@ -796,7 +800,11 @@ def main() -> int:
     # Extract context if not provided
     context = args.context
     if not context:
-        context = extract_context_from_node_yaml(args.node_yaml, log_tag="context_deployer")
+        # DevPlan 116 B6 T2: фасад NodeYaml.get_context() вместо deprecated extract-алиаса.
+        try:
+            context = NodeYaml(args.node_yaml).get_context()
+        except (ConfigParseError, ConfigNotFoundError) as exc:
+            logger.warning("[IMP:7][context_deployer] Cannot read context from %s: %s", args.node_yaml, exc)
     if not context:
         # Try env var
         context = os.environ.get("CONTEXT", platform_config.default_context_sentinel())

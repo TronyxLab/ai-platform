@@ -24,10 +24,12 @@ PIP := $(VENV)/bin/pip
 # === Platform root (resolved relative to this Makefile) ===
 _platform_root := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-# === Docker Compose profiles — all 13 Docker modules ===
-# Export COMPOSE_PROFILES globally — covers gate, test, and all docker compose invocations.
+# === Docker Compose profiles — all Docker modules ===
+# SoT: core/platform-infra.yaml env_defaults.COMPOSE_PROFILES (DevPlan 116 T2, U-02).
+# Runtime-чтение через yaml_query.py — никаких хардкод-копий вне allowlist
+# {platform-infra.yaml, platform-env.yaml, .env.example}.
 # Uses ?= so existing env takes precedence.
-export COMPOSE_PROFILES ?= postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page
+export COMPOSE_PROFILES ?= $(shell python3 core/internal/scripts/yaml_query.py --file core/platform-infra.yaml --get env_defaults.COMPOSE_PROFILES)
 
 # === Docker Compose shared files (resolved at parse time, used by modules.mk) ===
 COMPOSE_BASE_FILES := -f docker-compose.yml -f docker-compose.platform-dev.yml

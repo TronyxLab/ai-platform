@@ -102,6 +102,88 @@ def test_discover_profiles_excludes_system(caplog, tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# region Tests: scan_compose_ports
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · U-01 (DevPlan 116 T1) · second port must NOT overwrite first
+# · Scenario: module "minio" with service "minio" (service==module) and 2 ports (9000, 9001)
+# ·   → MINIO_PORT=9000 (first port), MINIO_MINIO_PORT=9001 (second, not overwriting)
+# · Last fail: 2026-07-31 — MINIO_PORT: 9001 (bug: second port overwrote first)
+# · Remove if: scan_compose_ports naming scheme changes
+@ldd_trajectory
+def test_scan_compose_ports_service_equals_module_two_ports(caplog, tmp_path):
+    """First port lands in MODULE_PORT; second port must NOT overwrite it (U-01)."""
+    mod_dir = tmp_path / "minio"
+    mod_dir.mkdir()
+    compose = (
+        "services:\n"
+        "  minio:\n"
+        "    image: minio/minio:latest\n"
+        "    ports:\n"
+        '      - "127.0.0.1:${MINIO_PORT:-9000}:9000"\n'
+        '      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"\n'
+    )
+    (mod_dir / "docker-compose.base.yml").write_text(compose)
+
+    result = gpe.scan_compose_ports(tmp_path)
+
+    assert result.get("MINIO_PORT") == 9000, (
+        f"First port (9000) must map to MINIO_PORT — got {result.get('MINIO_PORT')}"
+    )
+    assert result.get("MINIO_MINIO_PORT") == 9001, (
+        f"Second port (9001) must map to MINIO_MINIO_PORT — got {result.get('MINIO_MINIO_PORT')}"
+    )
+    logger.critical(
+        "[IMP:9][test] scan_compose_ports service==module 2 ports: MINIO_PORT=%s MINIO_MINIO_PORT=%s",
+        result.get("MINIO_PORT"),
+        result.get("MINIO_MINIO_PORT"),
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · U-01 (DevPlan 116 T1) · multi-service module naming preserved
+# · Scenario: module "infra-metrics" with services cadvisor(8080), node-exporter(9100)
+# ·   → INFRA_METRICS_PORT=8080 (first port of first service), INFRA_METRICS_NODE_EXPORTER_PORT=9100
+# · Last fail: 2026-07-31 — verified consistent with committed platform-env.yaml
+# · Remove if: scan_compose_ports naming scheme changes
+@ldd_trajectory
+def test_scan_compose_ports_multi_service_regression(caplog, tmp_path):
+    """Multi-service module: first port → MODULE_PORT, per-service ports preserved (U-01)."""
+    mod_dir = tmp_path / "infra-metrics"
+    mod_dir.mkdir()
+    compose = (
+        "services:\n"
+        "  cadvisor:\n"
+        "    image: gcr.io/cadvisor/cadvisor:latest\n"
+        "    ports:\n"
+        '      - "127.0.0.1:${CADVISOR_PORT:-8080}:8080"\n'
+        "  node-exporter:\n"
+        "    image: prom/node-exporter:latest\n"
+        "    ports:\n"
+        '      - "127.0.0.1:${NODE_EXPORTER_PORT:-9100}:9100"\n'
+    )
+    (mod_dir / "docker-compose.base.yml").write_text(compose)
+
+    result = gpe.scan_compose_ports(tmp_path)
+
+    assert result.get("INFRA_METRICS_PORT") == 8080, (
+        f"First port (8080) must map to INFRA_METRICS_PORT — got {result.get('INFRA_METRICS_PORT')}"
+    )
+    assert result.get("INFRA_METRICS_NODE_EXPORTER_PORT") == 9100, (
+        f"node-exporter port must map to INFRA_METRICS_NODE_EXPORTER_PORT — "
+        f"got {result.get('INFRA_METRICS_NODE_EXPORTER_PORT')}"
+    )
+    logger.critical(
+        "[IMP:9][test] scan_compose_ports multi-service: INFRA_METRICS_PORT=%s NODE_EXPORTER=%s",
+        result.get("INFRA_METRICS_PORT"),
+        result.get("INFRA_METRICS_NODE_EXPORTER_PORT"),
+    )
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
 # region Tests: load_ci_defaults
 # ═══════════════════════════════════════════════════════════════════
 

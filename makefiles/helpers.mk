@@ -35,10 +35,12 @@ templates-render:
 ##   Delegates to core/modules/nginx/dev_cert_generator.py (DevPlan 099)
 ##   CERT_BACKEND env: auto (default), mkcert, openssl
 ## # ⚠️ TRAP[BUG] · 2026-07-16 · HIGH · PLATFORM_DOMAIN from .env · Root: env-chain break — `make` не читает .env, → контекстный домен молча терялся · Fix: recipe-level extraction (grep PLATFORM_DOMAIN= из .env) · Prevention: contract-проверка через DEV_CERTS_DIR+tmp
+## # DevPlan 116 T3 (U-16): третий уровень fallback — platform-env.yaml env_defaults.PLATFORM_DOMAIN
+## #   (SoT), приоритет: env → .env → platform-env.yaml. Хардкод ai-platform.local удалён.
 dev-certs:
 	@echo "[IMP:7][make][dev-certs] Ensuring dev SSL certificates..."
 	@_env_pd="$$(grep -E '^PLATFORM_DOMAIN=' "$(_platform_root)/.env" 2>/dev/null | tail -n1 | cut -d= -f2-)"; \
-	PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$${_env_pd:-ai-platform.local}}" \
+	PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$${_env_pd:-$$(python3 "$(_platform_root)/core/internal/scripts/yaml_query.py" --file "$(_platform_root)/platform-env.yaml" --get env_defaults.PLATFORM_DOMAIN)}}" \
 	DEV_CERTS_DIR="$${DEV_CERTS_DIR:-$(_platform_root)/core/modules/nginx/dev-certs}" \
 	python3 $(_platform_root)/core/modules/nginx/dev_cert_generator.py
 	@echo "[IMP:9][make][dev-certs] Dev certificates check complete"
@@ -84,7 +86,8 @@ help:
 	@grep -E '^## [a-zA-Z][a-zA-Z0-9_-]*: .*$$' $(MAKEFILE_LIST) | \
 		sed 's/^## /  /' | column -t -s ':'
 
-# COMPOSE_PROFILES source of truth: all 13 Docker modules with profiles.
-# Used by CI and production scripts for ${VAR:?error} compatibility (DevPlan 033 Option A).
+# COMPOSE_PROFILES — SoT: core/platform-infra.yaml env_defaults (DevPlan 116 T2, U-02).
+# Runtime-чтение через yaml_query.py (dotted-ключи) — хардкод-копии устранены;
+# parity-гейт test_gate_profiles_parity проверяет отсутствие копий вне allowlist.
 _get_all_profiles:
-	@echo "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
+	@echo "$$(python3 core/internal/scripts/yaml_query.py --file core/platform-infra.yaml --get env_defaults.COMPOSE_PROFILES)"

@@ -622,9 +622,18 @@ def main(argv: list[str] | None = None) -> None:
         print(f"ERROR: Invalid template type: '{args.template}'. Must be: frontend | backend | fullstack")
         sys.exit(1)
 
-    if not args.name.replace("-", "").replace("_", "").isalnum():
+    # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · Old strip-check accepted leading '-'/'_' project names
+    # · Symptom: "--foo" passed the old replace-based isalnum strip-check — it stripped ALL
+    #   hyphens (including leading) → "foo".isalnum() == True → name "--foo" accepted.
+    # · Root: replace-based check never validated character POSITION — only character set.
+    # · Fix: canonical validate_project_name (regex ^[a-zA-Z0-9][a-zA-Z0-9_-]*$, DevPlan 116 B6 T3) —
+    #   rejects leading '-'/'_' (поведение УСИЛЕНО).
+    # · Prevention: единый канон validate_project_name для всех имён проектов/контекстов.
+    from core.internal.shared.project_registry import validate_project_name
+
+    if not validate_project_name(args.name):
         logger.info("[IMP:10][scaffold][main] Invalid project name: %s", args.name)
-        print(f"ERROR: Invalid project name: '{args.name}'. Use alphanumeric, hyphens, underscores only.")
+        print(f"ERROR: Invalid project name: '{args.name}'. Use alphanumeric, hyphens, underscores (no leading -/_).")
         sys.exit(1)
 
     template_dir = os.path.join(

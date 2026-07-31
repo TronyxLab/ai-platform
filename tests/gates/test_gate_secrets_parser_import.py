@@ -74,6 +74,22 @@ _CONSUMERS: list[dict[str, str]] = [
 ]
 
 
+# ── Manifest reader consumers (DevPlan 116 T4, U-33) — must import the canonical
+#    core.internal.shared.secrets_manifest_reader (strict reader) ──
+_MANIFEST_READER_CONSUMERS: list[dict[str, str]] = [
+    {
+        "file": "core/internal/bootstrap/lifecycle/secrets_manager.py",
+        "description": "Secrets manager — _read_manifest delegates to shared iter_secrets (strict)",
+        "pattern": r"from\s+core\.internal\.shared\.secrets_manifest_reader\s+import",
+    },
+    {
+        "file": "core/internal/bootstrap/deploy/secrets_validator.py",
+        "description": "Secrets validator — env-requires/charset checks use shared iter_secrets (strict)",
+        "pattern": r"from\s+core\.internal\.shared\.secrets_manifest_reader\s+import",
+    },
+]
+
+
 # region FUNC_test_all_consumers_import_secrets_env_parser
 
 ## @purpose — Verify every consumer listed in _CONSUMERS imports from the shared
@@ -192,3 +208,67 @@ def test_all_consumers_import_secrets_env_parser(caplog) -> None:
 
 
 # endregion FUNC_test_all_consumers_import_secrets_env_parser
+
+
+# region FUNC_test_manifest_reader_consumers_import_shared
+
+## @purpose — Verify every consumer of secrets-manifest.yaml imports the canonical
+##            strict reader core.internal.shared.secrets_manifest_reader (DevPlan 116 T4).
+##            Prevents re-introduction of inline/graceless-degradation parsers.
+
+# 🧪 TRAP[TEST] · 2026-07-31 · gate/secrets-manifest-reader-import · REGRESSION(116)
+# · SCENARIO(grep for canonical import pattern in the 2 manifest reader consumers)
+# · LAST_FAIL(N/A — new gate)
+# · REMOVE_IF(consumer list changes or import pattern changes)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_manifest_reader_consumers_import_shared(caplog) -> None:
+    """Verify secrets_manager + secrets_validator import the shared strict manifest reader.
+
+    ## @purpose — DevPlan 116 T4 regression gate: all consumers of secrets-manifest.yaml
+    ##            must use core.internal.shared.secrets_manifest_reader.iter_secrets
+    ##            (strict mode — raise on missing/malformed, no silent fallback).
+    ## @io — ⎋ None (assert side-effect via pytest.fail on missing imports)
+    ## @complexity — O(C * F) where C = 2 consumers, F = file read size per consumer
+    """
+    logger.info(
+        "[IMP:8][test_manifest_reader_consumers_import_shared] "
+        "Checking %d consumers for canonical secrets_manifest_reader import",
+        len(_MANIFEST_READER_CONSUMERS),
+    )
+
+    missing_imports: list[dict[str, str]] = []
+
+    for consumer in _MANIFEST_READER_CONSUMERS:
+        filepath = _PROJECT_ROOT / consumer["file"]
+        if not filepath.is_file():
+            missing_imports.append({"file": consumer["file"], "issue": "FILE NOT FOUND"})
+            continue
+
+        content = filepath.read_text(encoding="utf-8")
+        if not re.search(consumer["pattern"], content):
+            missing_imports.append(
+                {
+                    "file": consumer["file"],
+                    "issue": "Missing canonical import of core.internal.shared.secrets_manifest_reader",
+                }
+            )
+
+    if missing_imports:
+        for m in missing_imports:
+            logger.error("[IMP:10][test_manifest_reader] %s — %s", m["file"], m["issue"])
+        pytest.fail(
+            "secrets-manifest readers must import the canonical shared module "
+            "core.internal.shared.secrets_manifest_reader (DevPlan 116 T4, U-33):\n"
+            + "\n".join(f"  {m['file']} — {m['issue']}" for m in missing_imports)
+        )
+
+    logger.info(
+        "[IMP:9][test_manifest_reader_consumers_import_shared] PASS — all %d consumers use shared strict reader",
+        len(_MANIFEST_READER_CONSUMERS),
+    )
+
+
+# endregion FUNC_test_manifest_reader_consumers_import_shared

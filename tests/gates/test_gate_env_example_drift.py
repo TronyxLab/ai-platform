@@ -215,13 +215,24 @@ def test_s3_endpoint_removed(caplog):
 @pytest.mark.gate
 @ldd_trajectory
 def test_platform_domain_default(caplog):
-    """PLATFORM_DOMAIN default is ai-platform.local in sync_env_defaults.py (SoT)."""
+    """PLATFORM_DOMAIN SoT = platform-infra.yaml env_defaults (DevPlan 116 T3, U-16/D4)."""
+    # SoT: platform-infra.yaml env_defaults.PLATFORM_DOMAIN = ai-platform.local (одно определение)
+    with open(PLATFORM_INFRA) as f:
+        infra = yaml.safe_load(f)
+    pd_sot = (infra.get("env_defaults") or {}).get("PLATFORM_DOMAIN")
+    assert pd_sot == "ai-platform.local", (
+        f"platform-infra.yaml env_defaults.PLATFORM_DOMAIN must be ai-platform.local, got {pd_sot!r}"
+    )
+
+    # Генератор НЕ содержит hardcoded fallback-значения (fail-fast через get_val_required)
     with open(SYNC_SCRIPT) as f:
         content = f.read()
+    assert 'get_val("PLATFORM_DOMAIN", "ai-platform.local")' not in content, (
+        "sync_env_defaults.py must NOT contain hardcoded PLATFORM_DOMAIN fallback — "
+        "use get_val_required (DevPlan 116 T3, invariant 7)"
+    )
+    assert "get_val_required" in content, "sync_env_defaults.py must use get_val_required for SoT keys"
 
-    # Check for the default in sync_env_defaults.py hardcoded line
-    assert "PLATFORM_DOMAIN" in content, "sync_env_defaults.py must define PLATFORM_DOMAIN"
-    assert "ai-platform.local" in content, "sync_env_defaults.py must default PLATFORM_DOMAIN to ai-platform.local"
     # Also verify it's NOT in env_defaults_generated.py (production-only key)
     with open(ENV_DEFAULTS_GENERATED) as f:
         gen = f.read()
@@ -229,7 +240,7 @@ def test_platform_domain_default(caplog):
         "PLATFORM_DOMAIN must NOT be in env_defaults_generated.py — "
         "it's a production-only key set during deployment, not a test helper default"
     )
-    logger.info("[IMP:9][gate] PASS: PLATFORM_DOMAIN default = ai-platform.local (sync_env_defaults.py SoT)")
+    logger.info("[IMP:9][gate] PASS: PLATFORM_DOMAIN SoT = platform-infra.yaml env_defaults (ai-platform.local)")
 
 
 @pytest.mark.gate

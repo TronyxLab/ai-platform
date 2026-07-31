@@ -1,25 +1,20 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://core/schemas/node.schema.json",
-  "$comment": "GREP_SUMMARY: node, node-configs, declarative, apply, schema, context, project, module, domain, secrets, TLS, wildcard, contexts, tor | STRUCTURE: ▶ node.yaml → ┌contexts+node+domain┐ → ◇ validate ← ⊕ modules+projects+secrets+firewall → ⚡ registry | MODULE_CONTRACT: @purpose Validate node.yaml declarative desired state for platform deploy and diff computation; @scope Full node declaration — contexts, node, modules, projects, firewall, secrets, domain, postgres, repos; @invariants Backward-compatible — all legacy fields continue to validate unchanged; @rationale Single source of truth for make bootstrap-node NODE=<name> — describes desired state, used by diff engine to compute changes vs actual state on VPS | LDD: IMP:9[SCHEMA_VALIDATE] validate() → check required fields [node, modules] → assert property types → validate enum (project.type) → assert minLength → pattern validation → ⚡ schema registry OK",
+  "$comment": "GREP_SUMMARY: node, node-configs, declarative, apply, schema, context, project, module, domain, secrets, TLS, wildcard, contexts, tor | STRUCTURE: ▶ node.yaml → ┌contexts+node+domain┐ → ◇ validate ← ⊕ modules+projects+secrets+firewall → ⚡ registry | MODULE_CONTRACT: @purpose Validate node.yaml declarative desired state for platform deploy and diff computation; @scope Full node declaration — contexts, node, modules, projects, firewall, secrets, domain, postgres, repos; @invariants contexts[] canon — legacy top-level 'context' removed (invariant 3, DevPlan 116 B6), contexts minItems 1, projects[].context references contexts[].name; @rationale Single source of truth for make bootstrap-node NODE=<name> — describes desired state, used by diff engine to compute changes vs actual state on VPS | LDD: IMP:9[SCHEMA_VALIDATE] validate() → check required fields [node, modules, contexts] → assert property types → validate enum (project.type) → assert minLength → pattern validation → ⚡ schema registry OK",
   "title": "NodeDeclaration",
   "description": "Schema for node.yaml — declares a platform node, its contexts, desired module/project state, firewall rules, secrets, and declarative deploy configuration",
   "type": "object",
   "required": [
     "node",
     "modules",
-    "context"
+    "contexts"
   ],
   "additionalProperties": false,
   "properties": {
-    "context": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Deployment context identifier (e.g. production, staging). Legacy field — use contexts array for new configs."
-    },
     "contexts": {
       "type": "array",
-      "minItems": 0,
+      "minItems": 1,
       "items": {
         "type": "object",
         "required": [

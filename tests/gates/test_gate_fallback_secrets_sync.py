@@ -1,135 +1,98 @@
-# GREP_SUMMARY: gate fallback-secrets-sync _FALLBACK_SECRETS secret-definitions.yaml sync drift prevention
-# STRUCTURE: ◇ test_fallback_secrets_match_definitions → ○ load _FALLBACK_SECRETS → ○ load definitions → ⊕ compare names → ⎋ pass|fail
+# GREP_SUMMARY: gate fallback-secrets-removed secrets_manager strict-manifest secrets_manifest_reader canonical-import
+# STRUCTURE: ◇ test_fallback_secrets_removed → ○ read secrets_manager.py → ◇ _FALLBACK_SECRETS absent? → ◇ canonical shared import present? → ⊕ strict reader (no return []) → ⎋ pass|fail
 
 # region MODULE_CONTRACT
-## @purpose  Gate test: verify that _FALLBACK_SECRETS in secrets_manager.py stays
-##           in sync with secret-definitions.yaml. Both lists must contain the same
-##           autogen secret names. Drift would mean bootstrap generates stale secrets.
-## @scope    Reads secrets_manager module directly (no subprocess), reads
-##           core/secret-definitions.yaml. Pure static analysis — no Docker daemon.
+## @purpose  Gate test: verify the hardcoded _FALLBACK_SECRETS list is REMOVED from
+##           secrets_manager.py and the module delegates to the canonical shared
+##           secrets_manifest_reader (DevPlan 116 T4, U-33). Silent fallback was a
+##           drift vector — manifest is always delivered with core/ (fail-visible).
+## @scope    Reads secrets_manager.py source (no subprocess). Pure static analysis.
 ## @invariants
-##   - _FALLBACK_SECRETS names ⊆ secret-definitions.yaml names (for autogen secrets)
-##   - Failure means bootstrap would generate secrets not in definitions or vice versa
+##   - _FALLBACK_SECRETS must NOT exist in secrets_manager.py (removal enforced)
+##   - secrets_manager.py must import from core.internal.shared.secrets_manifest_reader
+##     (canonical form — gate test_gate_secrets_parser_import covers env parser; this
+##     gate covers the manifest reader contract)
+##   - _read_manifest must NOT contain a `return []` graceful-degradation fallback
 ##   - @pytest.mark.gate — registered in CI gate suite
-## @rationale DevPlan 078 T6: _FALLBACK_SECRETS is the hardcoded fallback used when
-##            manifest is unavailable during bootstrap. If it diverges from definitions,
-##            secrets-init may produce inconsistent state.
-## @changes  CREATED: 2026-07-25 | DevPlan 078 Phase A T6
+## @rationale DevPlan 116 T4: hardcoded fallback removed — manifest is the single
+##            source. This gate prevents re-introduction of the fallback list.
+## @changes  REPLACED: 2026-07-31 | was test_fallback_secrets_match_definitions
+##           (DevPlan 078 T6) — obsolete: _FALLBACK_SECRETS removed per DevPlan 116 T4
 # endregion MODULE_CONTRACT
 
 import logging
 import os
-import sys
+import re
 
 import pytest
-import yaml
 
 from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SECRET_DEFINITIONS_PATH = os.path.join(ROOT_DIR, "core", "secret-definitions.yaml")
-
-
-# Helper: import _FALLBACK_SECRETS from secrets_manager
-def _get_fallback_secret_names() -> list[str]:
-    """Import _FALLBACK_SECRETS from secrets_manager and return secret names."""
-    # Ensure the secrets_manager module can be found
-    sm_path = os.path.join(ROOT_DIR, "core", "internal", "bootstrap", "lifecycle")
-    if sm_path not in sys.path:
-        sys.path.insert(0, sm_path)
-
-    from secrets_manager import _FALLBACK_SECRETS  # type: ignore[import-untyped]
-
-    return [s["name"] for s in _FALLBACK_SECRETS]
-
-
-def _get_definition_autogen_names() -> list[str]:
-    """Read secret-definitions.yaml and return names of autogen/generated secrets."""
-    logger.info("[IMP:7][fallback_sync] Loading definitions: %s", SECRET_DEFINITIONS_PATH)
-    with open(SECRET_DEFINITIONS_PATH) as f:
-        defs = yaml.safe_load(f)
-
-    autogen_names: list[str] = []
-    for secret in defs.get("secrets", []):
-        tier = secret.get("tier", "")
-        source = secret.get("source", "")
-        # autogen and generated secrets are the ones that appear in _FALLBACK_SECRETS
-        if source == "autogen" or tier == "generated":
-            autogen_names.append(secret["name"])
-    logger.info("[IMP:8][fallback_sync] Found %d autogen/generated definitions", len(autogen_names))
-    return sorted(autogen_names)
-
-
-def _get_definition_ci_default_names() -> list[str]:
-    """Read secret-definitions.yaml and return names of secrets WITH ci_default."""
-    logger.info("[IMP:7][fallback_sync] Loading definitions for ci_default: %s", SECRET_DEFINITIONS_PATH)
-    with open(SECRET_DEFINITIONS_PATH) as f:
-        defs = yaml.safe_load(f)
-
-    return sorted(secret["name"] for secret in defs.get("secrets", []) if secret.get("ci_default"))
+SECRETS_MANAGER_PATH = os.path.join(ROOT_DIR, "core", "internal", "bootstrap", "lifecycle", "secrets_manager.py")
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-# region FUNC_test_fallback_secrets_match_definitions
-## @purpose — Verify _FALLBACK_SECRETS names are subset of secret-definitions.yaml
-##            generated/autogen secret names. If a fallback secret has no definition,
-##            bootstrap would generate a secret unknown to the platform.
-## @io — ⇥ caplog → ⎋ None (pytest.fail on mismatch)
-## @complexity — O(N log N) — set comparison of two lists
+# region FUNC_test_fallback_secrets_removed
+## @purpose — Verify hardcoded fallback list is gone and secrets_manager delegates
+##            to the canonical shared secrets_manifest_reader (strict mode).
+## @io — ⇥ caplog → ⎋ None (pytest.fail on violation)
+## @complexity — O(F) where F = file size
 ## @invariants
-##   - Each _FALLBACK_SECRETS name must appear in definitions (as autogen or generated)
-##   - Additional definitions not in fallback are allowed (non-fallback secrets)
-##   - @pytest.mark.gate, static check — no CI skip needed
+##   - No `_FALLBACK_SECRETS` symbol in secrets_manager.py
+##   - Canonical import of secrets_manifest_reader present
+##   - No `return []` silent-fallback in _read_manifest
 
 
 @pytest.mark.gate
 @ldd_trajectory
 
-# 🧪 TRAP[TEST] · 2026-07-25 · REGRESSION · _FALLBACK_SECRETS ÷ definitions drift
-# · Last fail: N/A (new gate)
-# · Remove if: _FALLBACK_SECRETS is removed and replaced by dynamic manifest-only
-def test_fallback_secrets_match_definitions(
+# 🧪 TRAP[TEST] · 2026-07-31 · REGRESSION · fallback list re-introduction (DevPlan 116 T4)
+# · Last fail: 2026-07-31 (fallback list removed this wave)
+# · Remove if: secrets_manager manifest contract is superseded
+def test_fallback_secrets_removed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """_FALLBACK_SECRETS must be in sync with secret-definitions.yaml."""
-    # region BLOCK_Load
-    logger.info("[IMP:7][fallback_sync] Loading _FALLBACK_SECRETS from secrets_manager")
-    fallback_names = sorted(_get_fallback_secret_names())
-    logger.info("[IMP:8][fallback_sync] _FALLBACK_SECRETS names: %s", fallback_names)
-
-    def_names = _get_definition_autogen_names()
-    logger.info("[IMP:8][fallback_sync] Definition autogen names: %s", def_names)
-    # endregion
+    """_FALLBACK_SECRETS must be removed; secrets_manager uses shared strict reader."""
+    with open(SECRETS_MANAGER_PATH) as f:
+        content = f.read()
 
     # region BLOCK_Check
-    fallback_set = set(fallback_names)
-    def_set = set(def_names)
+    violations: list[str] = []
 
-    missing_in_defs = fallback_set - def_set
-    logger.info("[IMP:8][fallback_sync] Fallback entries missing from definitions: %s", missing_in_defs)
+    if "_FALLBACK_SECRETS" in content:
+        violations.append(
+            "secrets_manager.py still defines _FALLBACK_SECRETS — hardcoded fallback was removed "
+            "(DevPlan 116 T4, U-33). Manifest is always delivered with core/; fallback is a drift vector."
+        )
+
+    if "from core.internal.shared.secrets_manifest_reader import" not in content:
+        violations.append(
+            "secrets_manager.py must import iter_secrets from "
+            "core.internal.shared.secrets_manifest_reader (canonical shared module)."
+        )
+
+    # Code-level `return []` (graceful degradation) — docstring-упоминания не считаются
+    if re.search(r"^\s+return \[\]\s*$", content, re.MULTILINE):
+        violations.append(
+            "secrets_manager.py contains a code-level `return []` graceful-degradation — "
+            "strict mode requires raising on missing/malformed manifest (invariant 7)."
+        )
     # endregion
 
     # region BLOCK_Assert
-    if missing_in_defs:
-        logger.error(
-            "[IMP:9][fallback_sync] %d _FALLBACK_SECRETS missing from secret-definitions.yaml: %s",
-            len(missing_in_defs),
-            sorted(missing_in_defs),
-        )
+    if violations:
+        for v in violations:
+            logger.error("[IMP:9][fallback_removed] %s", v)
         pytest.fail(
-            f"_FALLBACK_SECRETS has {len(missing_in_defs)} secret(s) not in secret-definitions.yaml:\n"
-            + "\n".join(f"  - {n}" for n in sorted(missing_in_defs))
-            + "\nAdd them to secret-definitions.yaml or remove from _FALLBACK_SECRETS."
+            "secrets_manager fallback/strictness contract violated:\n" + "\n".join(f"  - {v}" for v in violations)
         )
 
-    logger.info(
-        "[IMP:9][fallback_sync] ✅ All %d _FALLBACK_SECRETS matched in definitions",
-        len(fallback_names),
-    )
+    logger.info("[IMP:9][fallback_removed] ✅ _FALLBACK_SECRETS removed; secrets_manager uses shared strict reader")
     # endregion
 
 
-# endregion FUNC_test_fallback_secrets_match_definitions
+# endregion FUNC_test_fallback_secrets_removed

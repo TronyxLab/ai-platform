@@ -394,6 +394,98 @@ repair:
     repair_safe: true
     repair_idempotent: true
     repair_class: L1
+- make_target: check-profiles-parity
+  mechanism: pytest-gate
+  delegates_to: pytest tests/gates/test_gate_profiles_parity.py (COMPOSE_PROFILES
+    SoT parity, DevPlan 116 T9)
+  signature: make check-profiles-parity
+  operation_ru: Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml)
+  description: 'Verifies SoT == discovered modules, generated parity, make _get_all_profiles,
+    and zero hardcoded copies outside allowlist. Repair: regenerate manifests.'
+  repairs_gates:
+  - gate_id: test_sot_matches_discovered_modules
+    repair_id: profiles-parity
+    repair_command: make generate-manifests
+    repair_description: Regenerates platform-env.yaml + .env.example from SoT (COMPOSE_PROFILES)
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
+  - gate_id: test_generated_files_match_sot
+    repair_id: profiles-parity
+    repair_command: make generate-manifests
+    repair_description: Regenerates platform-env.yaml + .env.example from SoT (COMPOSE_PROFILES)
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
+  - gate_id: test_make_get_all_profiles_matches_sot
+    repair_id: profiles-parity
+    repair_command: make generate-manifests
+    repair_description: Regenerates platform-env.yaml from SoT (COMPOSE_PROFILES)
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
+  - gate_id: test_no_hardcoded_profiles_outside_allowlist
+    repair_id: profiles-parity
+    repair_command: make generate-manifests
+    repair_description: Replaces hardcoded COMPOSE_PROFILES copies with runtime-read
+      (yaml_query)
+    repair_safe: false
+    repair_idempotent: true
+    repair_class: L1
+- make_target: check-domain-parity
+  mechanism: pytest-gate
+  delegates_to: pytest tests/gates/test_gate_domain_parity.py (PLATFORM_DOMAIN SoT
+    parity, DevPlan 116 T9)
+  signature: make check-domain-parity
+  operation_ru: Parity-гейт PLATFORM_DOMAIN (единое определение, 0 legacy-доменов)
+  description: 'Verifies single SoT definition in platform-infra.yaml, generated parity,
+    and zero legacy-тестовых-доменов in production env chain. Repair: regenerate manifests.'
+  repairs_gates:
+  - gate_id: test_platform_domain_single_sot
+    repair_id: domain-parity
+    repair_command: make generate-manifests
+    repair_description: Regenerates platform-env.yaml + .env.example from SoT (PLATFORM_DOMAIN)
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
+  - gate_id: test_no_test_local_in_production_chain
+    repair_id: domain-parity
+    repair_command: make generate-manifests
+    repair_description: Regenerates generated files (legacy-домен артефакты удалены
+      из SoT)
+    repair_safe: false
+    repair_idempotent: true
+    repair_class: L1
+  - gate_id: test_env_defaults_generated_has_no_domain
+    repair_id: domain-parity
+    repair_command: make generate-manifests
+    repair_description: Regenerates env_defaults_generated.py (PLATFORM_DOMAIN не
+      секрет)
+    repair_safe: true
+    repair_idempotent: true
+    repair_class: L1
+- make_target: templates-check
+  mechanism: template-engine
+  delegates_to: core/internal/template_engine.py check (template-manifest coverage)
+  signature: make templates-check
+  operation_ru: Проверка покрытия и разрешимости шаблонов
+  description: 'Verifies all templates in template-manifest resolve. Repair: register
+    missing templates in core/templates/template-manifest.yaml.'
+  repairs_gates:
+  - gate_id: test_all_template_files_registered
+    repair_id: template-coverage
+    repair_command: make templates-check
+    repair_description: Register missing *.template files in core/templates/template-manifest.yaml
+    repair_safe: false
+    repair_idempotent: true
+    repair_class: L1
+  - gate_id: test_nginx_template_volume_sources_registered
+    repair_id: template-coverage
+    repair_command: make templates-check
+    repair_description: Register nginx /etc/nginx/templates volume sources in template-manifest
+    repair_safe: false
+    repair_idempotent: true
+    repair_class: L1
 lifecycle:
 - make_target: up-safe
   mechanism: compose-wrapper+preflight
@@ -650,9 +742,11 @@ allowed_verbs:
 - backup
 - bootstrap-node
 - check-dead-code
+- check-domain-parity
 - check-env-defaults
 - check-file-lines
 - check-manifests
+- check-profiles-parity
 - compose-safe-up
 - context-promote
 - converge
@@ -766,9 +860,9 @@ gates:
 - id: test_ci_workflows_use_compose_profiles_composite
   test_file: test_gate_compose_profiles_consistency.py
   description: 'Auto-discovered gate: test_ci_workflows_use_compose_profiles_composite'
-- id: test_compose_profiles_consistency
+- id: test_no_hardcoded_profiles_at_former_callsites
   test_file: test_gate_compose_profiles_consistency.py
-  description: 'Auto-discovered gate: test_compose_profiles_consistency'
+  description: 'Auto-discovered gate: test_no_hardcoded_profiles_at_former_callsites'
 - id: test_base_compose_restart_production
   test_file: test_gate_compose_restart_consistency.py
   description: 'Auto-discovered gate: test_base_compose_restart_production'
@@ -781,6 +875,24 @@ gates:
 - id: test_depends_on_references_exist
   test_file: test_gate_container_name_consistency.py
   description: 'Auto-discovered gate: test_depends_on_references_exist'
+- id: test_no_extract_context_alias_in_core
+  test_file: test_gate_context_contract.py
+  description: 'Auto-discovered gate: test_no_extract_context_alias_in_core'
+- id: test_no_private_cache_access
+  test_file: test_gate_context_contract.py
+  description: 'Auto-discovered gate: test_no_private_cache_access'
+- id: test_node_yaml_samples_contexts_canon
+  test_file: test_gate_context_contract.py
+  description: 'Auto-discovered gate: test_node_yaml_samples_contexts_canon'
+- id: test_node_yaml_samples_domain_flat_only
+  test_file: test_gate_context_contract.py
+  description: 'Auto-discovered gate: test_node_yaml_samples_domain_flat_only'
+- id: test_validate_rejects_dict_domain
+  test_file: test_gate_context_contract.py
+  description: 'Auto-discovered gate: test_validate_rejects_dict_domain'
+- id: test_validate_rejects_legacy_context
+  test_file: test_gate_context_contract.py
+  description: 'Auto-discovered gate: test_validate_rejects_legacy_context'
 - id: test_core_rsync_excludes_git
   test_file: test_gate_context_overlay_git.py
   description: 'Auto-discovered gate: test_core_rsync_excludes_git'
@@ -853,6 +965,15 @@ gates:
 - id: test_all_docker_modules_have_dockerignore_symlink
   test_file: test_gate_dockerignore_symlink.py
   description: 'Auto-discovered gate: test_all_docker_modules_have_dockerignore_symlink'
+- id: test_env_defaults_generated_has_no_domain
+  test_file: test_gate_domain_parity.py
+  description: 'Auto-discovered gate: test_env_defaults_generated_has_no_domain'
+- id: test_no_test_local_in_production_chain
+  test_file: test_gate_domain_parity.py
+  description: 'Auto-discovered gate: test_no_test_local_in_production_chain'
+- id: test_platform_domain_single_sot
+  test_file: test_gate_domain_parity.py
+  description: 'Auto-discovered gate: test_platform_domain_single_sot'
 - id: test_prometheus_config_no_unexpanded_vars
   test_file: test_gate_env_chain.py
   description: 'Auto-discovered gate: test_prometheus_config_no_unexpanded_vars'
@@ -925,9 +1046,9 @@ gates:
 - id: test_negative_detects_644_outside_lib
   test_file: test_gate_executable_bit.py
   description: 'Auto-discovered gate: test_negative_detects_644_outside_lib'
-- id: test_fallback_secrets_match_definitions
+- id: test_fallback_secrets_removed
   test_file: test_gate_fallback_secrets_sync.py
-  description: 'Auto-discovered gate: test_fallback_secrets_match_definitions'
+  description: 'Auto-discovered gate: test_fallback_secrets_removed'
 - id: test_all_test_fixtures_match_schemas
   test_file: test_gate_fixture_schema.py
   description: 'Auto-discovered gate: test_all_test_fixtures_match_schemas'
@@ -1261,6 +1382,18 @@ gates:
 - id: test_no_opt_core_references
   test_file: test_gate_path_consistency.py
   description: 'Auto-discovered gate: test_no_opt_core_references'
+- id: test_generated_files_match_sot
+  test_file: test_gate_profiles_parity.py
+  description: 'Auto-discovered gate: test_generated_files_match_sot'
+- id: test_make_get_all_profiles_matches_sot
+  test_file: test_gate_profiles_parity.py
+  description: 'Auto-discovered gate: test_make_get_all_profiles_matches_sot'
+- id: test_no_hardcoded_profiles_outside_allowlist
+  test_file: test_gate_profiles_parity.py
+  description: 'Auto-discovered gate: test_no_hardcoded_profiles_outside_allowlist'
+- id: test_sot_matches_discovered_modules
+  test_file: test_gate_profiles_parity.py
+  description: 'Auto-discovered gate: test_sot_matches_discovered_modules'
 - id: test_env_file_platform_present
   test_file: test_gate_project_compose.py
   description: 'Auto-discovered gate: test_env_file_platform_present'
@@ -1327,6 +1460,9 @@ gates:
 - id: test_all_consumers_import_secrets_env_parser
   test_file: test_gate_secrets_parser_import.py
   description: 'Auto-discovered gate: test_all_consumers_import_secrets_env_parser'
+- id: test_manifest_reader_consumers_import_shared
+  test_file: test_gate_secrets_parser_import.py
+  description: 'Auto-discovered gate: test_manifest_reader_consumers_import_shared'
 - id: test_clickhouse_access_management_not_1
   test_file: test_gate_security_config.py
   description: 'Auto-discovered gate: test_clickhouse_access_management_not_1'
@@ -1360,6 +1496,15 @@ gates:
 - id: test_layer3_ssh_forced_command
   test_file: test_gate_single_orchestrator.py
   description: 'Auto-discovered gate: test_layer3_ssh_forced_command'
+- id: test_callsites_no_node_yaml_safe_load
+  test_file: test_gate_single_project_parser.py
+  description: 'Auto-discovered gate: test_callsites_no_node_yaml_safe_load'
+- id: test_single_draft7_validator_point
+  test_file: test_gate_single_project_parser.py
+  description: 'Auto-discovered gate: test_single_draft7_validator_point'
+- id: test_single_project_entry_definition
+  test_file: test_gate_single_project_parser.py
+  description: 'Auto-discovered gate: test_single_project_entry_definition'
 - id: test_default_catch_all_no_status_page
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_default_catch_all_no_status_page'
@@ -1423,6 +1568,12 @@ gates:
 - id: test_all_templates_resolvable
   test_file: test_gate_template_drift.py
   description: 'Auto-discovered gate: test_all_templates_resolvable'
+- id: test_all_template_files_registered
+  test_file: test_gate_template_manifest_coverage.py
+  description: 'Auto-discovered gate: test_all_template_files_registered'
+- id: test_nginx_template_volume_sources_registered
+  test_file: test_gate_template_manifest_coverage.py
+  description: 'Auto-discovered gate: test_nginx_template_volume_sources_registered'
 - id: test_templates_metrics_endpoint_in_main
   test_file: test_gate_template_metrics.py
   description: 'Auto-discovered gate: test_templates_metrics_endpoint_in_main'

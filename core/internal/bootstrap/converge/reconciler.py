@@ -576,6 +576,14 @@ def reconcile_projects(
     mutated = 0
     errors = 0
 
+    # DevPlan 116 B6 T3: единый канон validate_project_name (project_registry) вместо
+    # локального приватного валидатора имён. Lazy-import по паттерну _parse_projects_yaml 680-683.
+    try:
+        from core.internal.shared.project_registry import validate_project_name
+    except ImportError:
+        logger.error("[IMP:10][converge][%s] FAIL: project_registry not importable", unit)
+        validate_project_name = None
+
     for proj in projects:
         proj_name = proj.get("name", "")
         if not proj_name:
@@ -583,8 +591,8 @@ def reconcile_projects(
 
         logger.info("[IMP:7][converge][%s] Processing project: %s", unit, proj_name)
 
-        # Validate project name
-        if not _validate_project_name(proj_name):
+        # Validate project name (canonical strict regex — rejects leading -/_, '/', '..')
+        if validate_project_name is None or not validate_project_name(proj_name):
             errors += 1
             report_add(unit, "fail", f"Invalid project name: {proj_name}")
             _set_exit(2)
@@ -670,55 +678,27 @@ def reconcile_projects(
 
 
 # region FUNC__parse_projects_yaml
-## @purpose  Parse projects list from node.yaml
+## @purpose  Parse projects list from node.yaml via canonical NodeYaml.get_project_entries().
 def _parse_projects_yaml(node_yaml_path: str) -> list[dict]:
     """Parse projects from node.yaml.
 
-    Supports both dict entries (with name/domain keys) and string entries.
+    DevPlan 116 B6 T4: manual dict/str parsing replaced with the single canonical parser
+    NodeYaml.get_project_entries(). str-form entries are REJECTED (decision D3 —
+    node.schema.json requires dict records; legacy str-form cancelled).
     Returns empty list on parse error or missing section.
     """
     try:
         from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
         from core.internal.shared.node_yaml import NodeYaml
 
-        projects_raw = NodeYaml(node_yaml_path).get_list("projects")
-        out: list[dict] = []
-        for p in projects_raw:
-            if isinstance(p, dict):
-                out.append({"name": p.get("name", ""), "domain": p.get("domain", "")})
-            elif isinstance(p, str):
-                out.append({"name": p, "domain": ""})
-        return out
+        entries = NodeYaml(node_yaml_path).get_project_entries()
+        return [{"name": e.name, "domain": e.domain} for e in entries]
     except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
         logger.warning("[IMP:8][_parse_projects_yaml] Failed to parse projects from %s: %s", node_yaml_path, exc)
         return []
 
 
 # endregion FUNC__parse_projects_yaml
-
-
-# region FUNC__validate_project_name
-## @purpose  Validate project name — no /, .., only [a-zA-Z0-9_-]
-def _validate_project_name(name: str) -> bool:
-    """Validate that a project name contains no path separators and only safe chars.
-
-    Returns True if valid, False otherwise.
-    """
-    if not name:
-        logger.warning("[IMP:10][_validate_project_name] FAIL: Empty project name")
-        return False
-    if "/" in name or ".." in name:
-        logger.warning("[IMP:10][_validate_project_name] FAIL: Invalid project name '%s' — contains / or ..", name)
-        return False
-    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
-        logger.warning(
-            "[IMP:10][_validate_project_name] FAIL: Invalid project name '%s' — only [a-zA-Z0-9_-] allowed", name
-        )
-        return False
-    return True
-
-
-# endregion FUNC__validate_project_name
 
 
 # region FUNC__create_empty_env_file

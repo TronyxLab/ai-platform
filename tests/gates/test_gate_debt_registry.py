@@ -184,9 +184,7 @@ def test_debt_registry_shell_residual_entries(caplog: pytest.LogCaptureFixture) 
     content = _read_registry()
     section = _extract_section(content, "## §SHELL-RESIDUAL", "## §P2-BACKLOG")
     rows = [
-        line.strip()
-        for line in section.splitlines()
-        if line.strip().startswith("| S") and line.strip().endswith("|")
+        line.strip() for line in section.splitlines() if line.strip().startswith("| S") and line.strip().endswith("|")
     ]
     logger.info("[IMP:7][test_debt_registry_shell_residual_entries] Found %d SHELL-RESIDUAL row(s)", len(rows))
     # endregion
@@ -200,7 +198,9 @@ def test_debt_registry_shell_residual_entries(caplog: pytest.LogCaptureFixture) 
         assert cols[2].isdigit(), f"SHELL_RESIDUAL_LOC_NOT_NUMERIC: {row}"
         assert cols[3], f"SHELL_RESIDUAL_RATIONALE_EMPTY: {row}"
         assert cols[4], f"SHELL_RESIDUAL_REVDATE_EMPTY: {row}"
-    logger.info("[IMP:9][test_debt_registry_shell_residual_entries] ✅ 8 entries × 5 columns (file/LOC/rationale/rev-date)")
+    logger.info(
+        "[IMP:9][test_debt_registry_shell_residual_entries] ✅ 8 entries × 5 columns (file/LOC/rationale/rev-date)"
+    )
     # endregion
 
 
@@ -263,9 +263,7 @@ def test_debt_registry_no_trivial_entries(caplog: pytest.LogCaptureFixture) -> N
     content = _read_registry()
     section = _extract_section(content, "## §SHELL-RESIDUAL", "## §P2-BACKLOG")
     rows = [
-        line.strip()
-        for line in section.splitlines()
-        if line.strip().startswith("| S") and line.strip().endswith("|")
+        line.strip() for line in section.splitlines() if line.strip().startswith("| S") and line.strip().endswith("|")
     ]
     violations: list[str] = []
     # endregion
@@ -342,7 +340,9 @@ def test_check_file_lines_ignores_debt(caplog: pytest.LogCaptureFixture) -> None
     assert re.search(r'find "\$\{PATHS_CORE_DIR\}"', script), "CHECK_FILE_LINES_NOT_SCOPED_TO_CORE"
     find_block = script[script.find('find "${PATHS_CORE_DIR}"') :]
     assert ".ai" not in find_block, "CHECK_FILE_LINES_SCANS_DOT_AI"
-    logger.info("[IMP:7][test_check_file_lines_ignores_debt] Static scope OK: find rooted at ${PATHS_CORE_DIR}, no .ai/")
+    logger.info(
+        "[IMP:7][test_check_file_lines_ignores_debt] Static scope OK: find rooted at ${PATHS_CORE_DIR}, no .ai/"
+    )
     # endregion
 
     # region BLOCK_Runtime

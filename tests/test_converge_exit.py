@@ -429,19 +429,16 @@ def test_is_stub_edge_cases(tmp_path):
 
 
 # region TEST_test_project_name_validation_rejects_traversal
-# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 project name validation → W4-E3 redirect to reconciler.py _validate_project_name
-# · Regression: _validate_project_name must reject "../", "/", and non-alphanumeric names
-# · Scenario: import reconciler._validate_project_name and test with malicious names
-# · Last fail: N/A (W4-E5 baseline, updated for W4-E3)
-# · Remove if: project validation moves to reconciler.py (then point test at new module)
+# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 project name validation → DevPlan 116 B6 T3 (canonical validator)
+# · Regression: canonical validate_project_name must reject "../", "/", leading "-/_", non-alphanumeric
+# · Scenario: import core.internal.shared.project_registry.validate_project_name (единый канон)
+# · Last fail: N/A (W4-E5 baseline, migrated to canonical validator in B6 T3)
+# · Remove if: project validation moves away from project_registry (then point test at new module)
 
 
 def test_project_name_validation_rejects_traversal(tmp_path):
-    """_validate_project_name: rejects path traversal (../), slashes, and invalid chars."""
-    import sys
-
-    sys.path.insert(0, str(_RECONCILER_PY.parent))
-    from reconciler import _validate_project_name  # type: ignore
+    """validate_project_name: rejects path traversal (../), slashes, leading -/_, invalid chars."""
+    from core.internal.shared.project_registry import validate_project_name
 
     # Test cases: (name, should_pass)
     test_cases: list[tuple[str, bool]] = [
@@ -454,13 +451,15 @@ def test_project_name_validation_rejects_traversal(tmp_path):
         ("name with space", False),  # space not in [a-zA-Z0-9_-]
         ("name;rm -rf", False),  # shell injection attempt
         ("", False),  # empty
+        ("-leading-dash", False),  # leading '-' (strict regex, DevPlan 116 B6 T3)
+        ("_leading-underscore", False),  # leading '_' (strict regex, DevPlan 116 B6 T3)
     ]
 
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     imp_found = False
 
     for name, should_pass in test_cases:
-        result = _validate_project_name(name)
+        result = validate_project_name(name)
         if should_pass:
             assert result is True, f"W4-E3 violation: valid name '{name}' should pass, got {result}"
             print(f"[IMP:9][test_validate] OK: '{name}'")
@@ -470,7 +469,7 @@ def test_project_name_validation_rejects_traversal(tmp_path):
         imp_found = True
 
     # Explicitly verify path traversal is REJECTED (critical security check)
-    assert _validate_project_name("../etc/passwd") is False, (
+    assert validate_project_name("../etc/passwd") is False, (
         "W4-E3 CRITICAL violation: path traversal '../etc/passwd' must be REJECTED"
     )
     print("[IMP:9][test_validate] CRITICAL: path traversal ../etc/passwd correctly rejected")

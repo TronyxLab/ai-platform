@@ -4,7 +4,8 @@ node:
   host: 1.2.3.4
   name: test-node
   owner_key: age1abc123
-context: myorg
+contexts:
+  - name: myorg
 domain: example.com
 email: admin@example.com
 acme_dns_plugin: cf

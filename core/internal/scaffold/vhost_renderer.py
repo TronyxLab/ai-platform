@@ -51,7 +51,7 @@ from pathlib import Path
 import yaml
 
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
-from core.internal.shared.node_yaml import NodeYaml
+from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
 logger = logging.getLogger(__name__)
 
@@ -76,16 +76,9 @@ class ProjectConfig:
     expose: bool = True
 
 
-@dataclass
-class ProjectEntry:
-    """A project entry from node.yaml with domain for vhost generation.
-
-    ## @purpose — Lightweight pair for FQDN uniqueness and vhost rendering.
-    ## @io — ⇥ node.yaml#projects[].name + .domain → ⎋ ProjectEntry
-    """
-
-    name: str
-    domain: str
+# NOTE (DevPlan 116 B6 T4.3): локальный DTO ProjectEntry УДАЛЁН — канон живёт
+# в core.internal.shared.node_yaml.ProjectEntry (единственное определение в core/).
+# Конструкции ProjectEntry(name=..., domain=...) валидны — остальные поля имеют defaults.
 
 
 @dataclass

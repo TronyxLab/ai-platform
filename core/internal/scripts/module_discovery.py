@@ -7,21 +7,27 @@
 ## @scope    Чтение core/modules/*/module.yaml, фильтрация system-модулей, возврат списка compose-файлов.
 ##           Read-only — не мутирует файлы.
 ## @invariants
-##   - Модули с `install_type: system` исключаются из результата (text-search, не YAML parse)
+##   - Модули с `install_type: system` исключаются из результата (line-anchored regex,
+##     семантически exact — НЕ substring: комментарии с упоминанием не матчатся)
 ##   - Только модули с docker-compose.base.yml рядом с module.yaml включаются
 ##   - CLI: `--format json` (JSON array of strings) / `--format lines` (one file per line) / `--count` (int)
 ##   - API: возвращает list[pathlib.Path], отсортированный по имени модуля
 ##   - Сортировка стабильна: alphabetical по имени директории модуля
 ## @rationale Тот же inline-блок `python3 -c "import json; from pathlib..."` дублирован в 1 workflow-файле
 ##           (platform-test.yml ×3). Экстракция в typed-модуль даёт тестируемость,
-##           единую валидацию, устранение дублирования. Zero-dependency: text search `'install_type: system'
-##           not in content` вместо PyYAML — CI-раннер не требует PyYAML.
-## @see      core/internal/bootstrap/discover_modules.py — полный аналог для bootstrap-окружения (YAML-based,
-##           обновляет docker-compose.yml include-секцию). Новый CI-модуль изолирован: баг в CI не сломает
-##           bootstrap critical path. Rejected: расширение bootstrap-модуля флагом --ci-list — добавляет
-##           conditional complexity в критичный bootstrap-код (SRP violation).
+##           единую валидацию, устранение дублирования. Zero-dependency: text search
+##           вместо PyYAML — CI-раннер не требует PyYAML.
+##           🧐 TRAP[DECISION] · 2026-07-31 · — · Изоляция ОТМЕНЕНА (DevPlan 116 T7, D3)
+##           · Rejected: изоляция CI-предиката от bootstrap (баг CI не ломает critical path)
+##           · Reason: решение пользователя 2026-07-31 (U-59): дублирование кода опаснее
+##             изоляции — два предиката разошлись (substring vs exact YAML). Канонический
+##             предикат живёт здесь; bootstrap/discover_modules.py ИМПОРТИРУЕТ его (D3).
+##           · Rev: если module_discovery.py станет >300 LOC — разделить API/CLI.
+## @see      core/internal/bootstrap/discover_modules.py — импортирует discover_docker_modules (D3).
 ## @changes
 ##   LAST_CHANGE: 2026-07-22 | Created (StatusReport 046 T2 — CICD-01a inline extraction)
+##   2026-07-31 | DevPlan 116 T7 — substring → line-anchored regex `^\s*install_type:\s*['\"]?system\b`
+##               (MULTILINE); SYSTEM_INSTALL_MARKER удалён; изоляция отменена (D3)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import sys
 
 # endregion IMPORTS
@@ -38,7 +45,11 @@ import sys
 # region CONSTANTS
 
 MODULES_DIR = pathlib.Path("core/modules")
-SYSTEM_INSTALL_MARKER = "install_type: system"
+
+# Line-anchored exact detector (DevPlan 116 T7, U-59): matches `install_type: system`
+# as a YAML key-value on its own line (with optional quotes/indentation) — comments or
+# prose mentioning «install_type: system» do NOT match (substring false-positive fixed).
+_SYSTEM_INSTALL_RE = re.compile(r"^\s*install_type:\s*['\"]?system\b", re.MULTILINE)
 
 # endregion CONSTANTS
 
@@ -59,7 +70,7 @@ def discover_docker_modules(modules_dir: pathlib.Path = MODULES_DIR) -> list[pat
     modules: list[pathlib.Path] = []
     for module_yaml in sorted(modules_dir.glob("*/module.yaml")):
         content = module_yaml.read_text()
-        if SYSTEM_INSTALL_MARKER in content:
+        if _SYSTEM_INSTALL_RE.search(content):
             print(f"[IMP:8][module_discovery] skip system module: {module_yaml.parent.name}", file=sys.stderr)
             continue
         compose_file = module_yaml.parent / "docker-compose.base.yml"

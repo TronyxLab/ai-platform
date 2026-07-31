@@ -75,6 +75,9 @@ jobs:
         if: steps.sha.outputs.skip != 'true'
         uses: ./.github/actions/setup-platform
         with:
+          # python-version intentionally left '' — core-deploy is a pure SSH/rsync wrapper:
+          # all make targets (provision, node-update) run REMOTELY on the VPS (apt python3
+          # 3.10-3.12), no local Python execution on the runner. Step is effectively a no-op.
           python-version: ''
           install-gitleaks: 'false'
           run-provisioner: 'false'

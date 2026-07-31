@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
 import subprocess
 import sys
 import time
@@ -45,18 +44,16 @@ _DEFAULT_PROJECTS_DIR = os.path.join(os.environ.get("HOME", "/"), "projects")
 _DEFAULT_NODE = os.environ.get("NODE", "tronyx-vps")
 _DEFAULT_ORG = os.environ.get("NODE_ORG", "tronyx-lab")
 
-# ── Name validation regex ─────────────────────────────────────────────
-_VALID_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
-
 # ── Skeleton node.yaml template (preserve GREP_SUMMARY/STRUCTURE) ─────
 _SKELETON_TEMPLATE = """# GREP_SUMMARY: {context_name} node context declarative apply declarative-deploy
-# STRUCTURE: ▶ resolve → ┌node+modules┐ → ◇ validate ← ⊕ projects+secrets+firewall → ⚡ apply
+# STRUCTURE: ▶ resolve → ┌contexts+node+modules┐ → ◇ validate ← ⊕ projects+secrets+firewall → ⚡ apply
 
 # Skeleton node.yaml for context '{context_name}'.
 # MUST EDIT: Replace placeholder values below with actual configuration.
 
-# Deployment context this node belongs to
-context: {context_name}
+# Deployment context this node belongs to (contexts[] canon — invariant 3, DevPlan 116 B6)
+contexts:
+  - name: {context_name}
 
 # --- Node definition (MUST EDIT) ---
 node:
@@ -80,19 +77,24 @@ projects: []
 
 
 # region FUNC_validate_name
-## @purpose  Validate context name against alphanumeric+hyphen+underscore pattern
+## @purpose  Validate context name against canonical project name regex
 ## @param name  Context name string
 ## @io        ⎋ raises SystemExit(1) on invalid name
 ## @complexity O(1)
+## @invariants  Thin wrapper over project_registry.validate_project_name (DevPlan 116 B6 T3):
+##              единый строгий regex ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ (reject leading -/_), CLI
+##              SystemExit(1) контракт сохранён.
 def validate_name(name: str) -> None:
     """Validate context name format.
 
     ## @purpose  Fail-fast on invalid names before any I/O.
     ## @io        ⇥ name → ⎋ None (sys.exit on failure)
     """
-    if not _VALID_NAME_RE.match(name):
+    from core.internal.shared.project_registry import validate_project_name
+
+    if not validate_project_name(name):
         logger.info("[IMP:10][context][validate] FATAL: Invalid context name '%s'", name)
-        print(f"ERROR: Invalid context name '{name}'. Use alphanumeric, hyphens, underscores.")
+        print(f"ERROR: Invalid context name '{name}'. Use alphanumeric, hyphens, underscores (no leading -/_).")
         sys.exit(1)
     logger.info("[IMP:8][context][validate] Context name: %s", name)
 

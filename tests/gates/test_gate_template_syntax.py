@@ -103,11 +103,15 @@ def _is_binary(filepath: str) -> bool:
 def _is_dual_role_file(display_path: str) -> bool:
     """Check if a file uses ${VAR} for Docker envsubst compatibility (dual-role).
 
-    Nginx template files use ${PLATFORM_DOMAIN} for both Docker envsubst (container
-    entrypoint) and bare-metal sed rendering. These are NOT migrated to {{VAR}}
-    because envsubst only handles ${VAR} syntax.
+    Nginx module files use ${PLATFORM_DOMAIN} for BOTH Docker envsubst (container
+    entrypoint 20-envsubst-on-templates.sh) and bare-metal sed rendering. These are
+    NOT migrated to {{VAR}} because envsubst only handles ${VAR} syntax.
+    DevPlan 116 T6 (U-47): покрывает ВСЕ файлы core/modules/nginx/ — config/*.conf
+    монтируются как /etc/nginx/templates/*.conf.template (envsubst-источники),
+    не только *.conf.template. Контракт: core/modules/nginx/AGENTS.md §Template
+    Syntax Contract (config/ = ${} envsubst, templates/ = {{}} template_engine).
     """
-    return "nginx" in display_path and ".template" in display_path
+    return "modules/nginx/" in display_path
 
 
 def _is_readme_documentation(display_path: str) -> bool:

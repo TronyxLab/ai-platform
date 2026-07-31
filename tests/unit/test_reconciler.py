@@ -64,7 +64,8 @@ def reset_state():
 def sample_node_yaml(tmp_path):
     """Create a sample node.yaml with projects."""
     yaml_content = """
-context: test-context
+contexts:
+  - name: test-context
 projects:
   - name: myapp
     domain: myapp.example.com
@@ -79,7 +80,7 @@ projects:
 
 def empty_node_yaml(tmp_path):
     """Create node.yaml with no projects."""
-    yaml_content = "context: test-context\nprojects: []\n"
+    yaml_content = "contexts:\n  - name: test-context\nprojects: []\n"
     yaml_path = tmp_path / "node.yaml"
     yaml_path.write_text(yaml_content)
     return str(yaml_path)
@@ -664,7 +665,9 @@ def test_reconcile_networks_create_proxy_net(tmp_path, caplog):
     # · Root: _check_proxy_connectivity parses node.yaml via NodeYaml; a directory is not a file
     # · Fix: fixture writes a real node.yaml file; pass its path, not the tmp_path dir
     yaml_path = tmp_path / "node.yaml"
-    yaml_path.write_text("context: test-context\nprojects:\n  - name: myapp\n    domain: myapp.example.com\n")
+    yaml_path.write_text(
+        "contexts:\n  - name: test-context\nprojects:\n  - name: myapp\n    domain: myapp.example.com\n"
+    )
 
     create_called = []
 
@@ -713,7 +716,9 @@ def test_reconcile_networks_exists(tmp_path, caplog):
     # · Root: _check_proxy_connectivity parses node.yaml via NodeYaml; a directory is not a file
     # · Fix: fixture writes a real node.yaml file; pass its path, not the tmp_path dir
     yaml_path = tmp_path / "node.yaml"
-    yaml_path.write_text("context: test-context\nprojects:\n  - name: myapp\n    domain: myapp.example.com\n")
+    yaml_path.write_text(
+        "contexts:\n  - name: test-context\nprojects:\n  - name: myapp\n    domain: myapp.example.com\n"
+    )
 
     create_called = []
 
@@ -856,7 +861,8 @@ def test_verify_vhosts_no_nginx(tmp_path, caplog):
 
     yaml_path = tmp_path / "node.yaml"
     yaml_content = """
-context: test-context
+contexts:
+  - name: test-context
 projects:
   - name: myapp
     domain: myapp.example.com
@@ -907,7 +913,8 @@ def test_verify_vhosts_orphan(tmp_path, caplog):
 
     yaml_path = tmp_path / "node.yaml"
     yaml_content = """
-context: test-context
+contexts:
+  - name: test-context
 projects:
   - name: myapp
     domain: myapp.example.com
@@ -962,7 +969,8 @@ def test_verify_vhosts_all_ok(tmp_path, caplog):
 
     yaml_path = tmp_path / "node.yaml"
     yaml_content = """
-context: test-context
+contexts:
+  - name: test-context
 projects:
   - name: myapp
     domain: myapp.example.com
@@ -1048,13 +1056,13 @@ def test_unit_enabled_filter(caplog):
 
 
 # region FUNC_test_parse_projects_yaml
-## 🧪 TRAP[TEST] · _parse_projects_yaml · Scenario: parse various project formats
-## · Regression: converge.sh inline python3 lines 502-518
+## 🧪 TRAP[TEST] · _parse_projects_yaml · Scenario: parse dict project entries via canonical parser
+## · Regression: converge.sh inline python3 lines 502-518; DevPlan 116 B6 T4 (canonical parser)
 ## · Last fail: never
 ## · Remove if: reconciler yaml parsing logic changes
 @ldd_trajectory
 def test_parse_projects_yaml(tmp_path, caplog):
-    """_parse_projects_yaml: parses dict and string project entries."""
+    """_parse_projects_yaml: canonical NodeYaml.get_project_entries() (DevPlan 116 B6 T4)."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] _parse_projects_yaml parsing")
 
@@ -1063,27 +1071,46 @@ def test_parse_projects_yaml(tmp_path, caplog):
 projects:
   - name: myapp
     domain: myapp.example.com
-  - simple-project
   - name: api
 """
     yaml_path.write_text(yaml_content)
 
     projects = reconciler._parse_projects_yaml(str(yaml_path))
-    assert len(projects) == 3
+    assert len(projects) == 2
 
     # Dict entry with domain
     assert projects[0]["name"] == "myapp"
     assert projects[0]["domain"] == "myapp.example.com"
 
-    # String entry
-    assert projects[1]["name"] == "simple-project"
-
     # Dict entry without domain
-    assert projects[2]["name"] == "api"
-    assert projects[2]["domain"] == ""
+    assert projects[1]["name"] == "api"
+    assert projects[1]["domain"] == ""
 
 
 # endregion FUNC_test_parse_projects_yaml
+
+
+# region FUNC_test_parse_projects_yaml_str_form_rejected
+## 🧪 TRAP[TEST] · _parse_projects_yaml str-form · Scenario: str project entry → fail-fast [] (D3)
+## · Regression: DevPlan 116 B6 D3 — str-форма отменена (schema требует dict), парсер не пропускает malformed
+## · Last fail: never
+## · Remove if: fail-fast parser semantics change
+@ldd_trajectory
+def test_parse_projects_yaml_str_form_rejected(tmp_path, caplog):
+    """_parse_projects_yaml: str-form entry → ConfigValidationError caught → [] (fail-fast D3)."""
+    caplog.set_level(logging.INFO)
+    logger.info("[IMP:9][test] _parse_projects_yaml str-form rejection")
+
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text("projects:\n  - simple-project\n")
+
+    projects = reconciler._parse_projects_yaml(str(yaml_path))
+    assert projects == [], "str-form project entries must be rejected (fail-fast D3)"
+
+    logger.critical("[IMP:9][test] _parse_projects_yaml str-form rejected → [] — OK")
+
+
+# endregion FUNC_test_parse_projects_yaml_str_form_rejected
 
 
 # ═══════════════════════════════════════════════════════════════════

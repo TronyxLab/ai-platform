@@ -30,9 +30,10 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NODE_SCHEMA = _REPO_ROOT / "core" / "schemas" / "node.schema.json"
 
-# Valid per node.schema.json (required: node, modules, context)
+# Valid per node.schema.json (required: node, modules, contexts — DevPlan 116 B6 T1)
 VALID_NODE_YAML = """\
-context: prod
+contexts:
+  - name: prod
 node:
   name: test-node
   host: 10.0.0.1
@@ -42,7 +43,8 @@ modules: []
 
 # Missing required "modules" — golden error line at root
 INVALID_MISSING_FIELD_YAML = """\
-context: prod
+contexts:
+  - name: prod
 node:
   name: test-node
   host: 10.0.0.1
@@ -51,7 +53,8 @@ node:
 
 # node.name: 123 — golden error line with " > " absolute path
 INVALID_TYPE_MISMATCH_YAML = """\
-context: prod
+contexts:
+  - name: prod
 node:
   name: 123
   host: 10.0.0.1

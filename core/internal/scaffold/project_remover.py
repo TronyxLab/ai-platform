@@ -106,7 +106,10 @@ def find_project_in_node_yaml(
             domain = project.get("domain", "")
             repo = project.get("repo", "")
             org = repo.split("/")[0] if "/" in repo else ""
-            node_host = node._data.get("node", {}).get("host", "") if node._data else ""
+            # DevPlan 116 B6 T8.2: dotted-key фасад вместо приватного кэш-атрибута (`_data`)
+            # (rg "node\._data" core/ → 0). node.get("node.host", default="") — НЕ get_node_info().fqdn
+            # (тот читает node.fqdn, а в образцах только node.host — не эквивалентно).
+            node_host = node.get("node.host", default="")
             node_configs_dir = str(ny.parent.parent)  # .../node-configs/<node>/node.yaml → .../node-configs/
 
             logger.info("[IMP:7][remove][find] Found project '%s' in: %s", name, ny)

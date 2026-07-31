@@ -216,52 +216,26 @@ def test_ensure_secrets_from_manifest(caplog, secrets_env, mock_subprocess_run, 
     logger.critical("[IMP:9][test] ensure_secrets generated %d secrets from manifest — OK", len(generated))
 
 
-# 🧪 TRAP[TEST] · Regression · ensure_secrets falls back to hardcoded when no manifest
-# · Scenario: manifest_path="" → _read_manifest returns [] → ensure_secrets uses _FALLBACK_SECRETS
-# · Last fail: N/A (new test)
-# · Remove if: fallback logic changes
+# 🧪 TRAP[TEST] · Regression · DevPlan 116 T4 (U-33) · ensure_secrets with missing manifest RAISES
+# · Scenario: manifest_path="" → _read_manifest raises FileNotFoundError (hardcoded fallback removed)
+# · Last fail: 2026-07-31 (fallback list existed)
+# · Remove if: strict manifest reader is superseded
 @ldd_trajectory
-def test_ensure_secrets_fallback_hardcoded(caplog, secrets_env, mock_subprocess_run, monkeypatch):
-    """ensure_secrets should use hardcoded fallback when manifest is empty or unavailable.
+def test_ensure_secrets_missing_manifest_raises(caplog, secrets_env, monkeypatch):
+    """ensure_secrets must raise FileNotFoundError when manifest is unavailable (fail-visible).
 
-    ## @purpose  Verify that when manifest returns no generated secrets,
-    ##           ensure_secrets falls back to the _FALLBACK_SECRETS list
-    ##           (LITELLM_MASTER_KEY, LANGFUSE_INIT_ORG_ID, etc.).
-    ##           All 7 hardcoded fallback secrets should be generated.
+    ## @purpose  Verify hardcoded fallback list is GONE: missing manifest now propagates
+    ##           a FileNotFoundError instead of silently generating from _FALLBACK_SECRETS.
+    ##           Manifest is always delivered with core/ — silent fallback was a drift vector.
     """
-    # Ensure fallback secrets are NOT set in os.environ before the test
-    for fb_name in [s["name"] for s in sm._FALLBACK_SECRETS]:
-        monkeypatch.delenv(fb_name, raising=False)
-
-    secrets_env_path = Path(secrets_env)
-    if secrets_env_path.exists():
-        secrets_env_path.unlink()
-
-    with patch.object(sm, "_ensure_htpasswd", return_value=False):
-        generated = sm.ensure_secrets(
+    with patch.object(sm, "_ensure_htpasswd", return_value=False), pytest.raises(FileNotFoundError):
+        sm.ensure_secrets(
             manifest_path="",
             secrets_env=secrets_env,
             persist_to_sops=False,
         )
 
-    # Should have generated all 7 hardcoded fallback secrets
-    expected_count = len(sm._FALLBACK_SECRETS)
-    assert len(generated) == expected_count, f"Expected {expected_count} fallback secrets, got {len(generated)}"
-
-    # LITELLM_MASTER_KEY is first in fallback list
-    assert "LITELLM_MASTER_KEY" in generated
-    assert os.environ.get("LITELLM_MASTER_KEY") == "generated_value_abc123"
-
-    # Verify env var was set in the file
-    assert secrets_env_path.exists()
-    env_content = secrets_env_path.read_text()
-    assert "LITELLM_MASTER_KEY=generated_value_abc123" in env_content
-
-    # Clean up leaked env vars
-    for g in generated:
-        monkeypatch.delenv(g, raising=False)
-
-    logger.critical("[IMP:9][test] ensure_secrets fallback generated %d secrets — OK", len(generated))
+    logger.critical("[IMP:9][test] ensure_secrets missing manifest raises FileNotFoundError — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · ensure_secrets does NOT overwrite existing secrets

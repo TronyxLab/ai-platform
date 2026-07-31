@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: context_registry.py, register-context, yaml, platform-node-yaml
-# STRUCTURE: ▶ register_context → ⎋ CLI (argparse: register)
+# GREP_SUMMARY: context_registry.py, register-context, yaml, platform-node-yaml, NodeYaml-facade
+# STRUCTURE: ▶ register_context → NodeYaml.add_context → ⎋ "OK" | "EXISTS" | SystemExit(1) | CLI (argparse: register)
 # region MODULE_CONTRACT
 ## @purpose  Register a context entry in platform node.yaml contexts[] list.
 ## @scope    CLI tool: register-context with yaml-path, name, desc, repos.
 ## @invariants
 ##   - Exits with 0 if context already exists ("EXISTS" response)
 ##   - Exits with 1 on YAML read/write errors
-##   - Uses PyYAML safe_load — no arbitrary code execution
+##   - Uses NodeYaml facade add_context() (DevPlan 116 B6 T6.4, D2) — последний raw-путь
+##     мутации node.yaml закрыт (сырой дамп + yaml.dump удалены из этого модуля)
 ## @rationale Needed for scaffold automation — programmatic context registration
 ##            without manual node.yaml editing.
+## @changes 2026-08-01 · DevPlan 116 B6 T6.4 (D2) — raw() + yaml.dump → NodeYaml.add_context()
 # endregion MODULE_CONTRACT
 
 import argparse
 import sys
-
-import yaml
 
 
 def register_context(
@@ -26,6 +26,9 @@ def register_context(
     hermes_agent_repo: str = "",
 ) -> str:
     """Register a new context entry in the platform node.yaml contexts[] list.
+
+    DevPlan 116 B6 T6.4 (D2): raw-мутация (сырой дамп NodeYaml + yaml.dump) заменена на
+    фасадный NodeYaml.add_context(). Дубликат (ConfigValidationError) → "EXISTS".
 
     Args:
         yaml_path: Path to the platform node.yaml file
@@ -41,36 +44,28 @@ def register_context(
         SystemExit(1) on YAML read/write errors
     """
     try:
-        from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+        from core.internal.shared.exceptions import (
+            ConfigNotFoundError,
+            ConfigParseError,
+            ConfigValidationError,
+        )
         from core.internal.shared.node_yaml import NodeYaml
 
-        data = NodeYaml(yaml_path).raw()
-    except (ConfigNotFoundError, ConfigParseError) as e:
-        print(f"ERROR: Failed to read {yaml_path}: {e}")
-        sys.exit(1)
-
-    if "contexts" not in data or data["contexts"] is None:
-        data["contexts"] = []
-
-    for ctx in data["contexts"]:
-        if isinstance(ctx, dict) and ctx.get("name") == name:
+        NodeYaml(yaml_path).add_context(
+            name=name,
+            description=desc,
+            node_configs_repo=node_cfg_repo,
+            hermes_agent_repo=hermes_agent_repo,
+        )
+    except ConfigValidationError as e:
+        # Duplicate context name → "EXISTS" (контракт сохранён);
+        # прочие validation-ошибки (contexts не list) → читаемая ошибка + exit 1.
+        if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
             return "EXISTS"
-
-    new_entry = {"name": name}
-    if desc:
-        new_entry["description"] = desc
-    if node_cfg_repo:
-        new_entry["node_configs_repo"] = node_cfg_repo
-    if hermes_agent_repo:
-        new_entry["hermes_agent_repo"] = hermes_agent_repo
-
-    data["contexts"].append(new_entry)
-
-    try:
-        with open(yaml_path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    except (yaml.YAMLError, OSError) as e:
-        print(f"ERROR: Failed to write {yaml_path}: {e}")
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except (ConfigNotFoundError, ConfigParseError) as e:
+        print(f"ERROR: Failed to read/write {yaml_path}: {e}")
         sys.exit(1)
 
     return "OK"

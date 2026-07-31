@@ -46,9 +46,10 @@ from core.internal.scripts import jsonschema_validate
 # Real schema — read-only consumer (DevPlan 093 §6: schemas NOT modified)
 _NODE_SCHEMA = _REPO_ROOT / "core" / "schemas" / "node.schema.json"
 
-# ── Static fixtures (valid per node.schema.json: required node/modules/context) ──
+# ── Static fixtures (valid per node.schema.json: required node/modules/contexts) ──
 VALID_NODE_YAML = """\
-context: prod
+contexts:
+  - name: prod
 node:
   name: test-node
   host: 10.0.0.1
@@ -58,7 +59,8 @@ modules: []
 
 # Missing "modules" (required at root) — R5 negative trigger
 INVALID_MISSING_FIELD_YAML = """\
-context: prod
+contexts:
+  - name: prod
 node:
   name: test-node
   host: 10.0.0.1
@@ -67,7 +69,8 @@ node:
 
 # node.name: 123 instead of string — type-mismatch negative trigger
 INVALID_TYPE_MISMATCH_YAML = """\
-context: prod
+contexts:
+  - name: prod
 node:
   name: 123
   host: 10.0.0.1
@@ -75,7 +78,7 @@ node:
 modules: []
 """
 
-# Missing BOTH "context" and "modules" — aggregation negative trigger
+# Missing BOTH "contexts" and "modules" — aggregation negative trigger
 INVALID_MULTIPLE_ERRORS_YAML = """\
 node:
   name: test-node
@@ -177,7 +180,7 @@ def test_type_mismatch_exit_1(tmp_path, caplog, capsys) -> None:
 def test_multiple_errors_aggregated(tmp_path, caplog, capsys) -> None:
     """AC7b: 2+ violations → ALL reported (iter_errors aggregation, never first-error-only)."""
     # 🧪 TRAP[TEST] · Regression: DevPlan 093 W1-T2 — multiple-errors aggregation (AC7b)
-    # · Scenario: missing 'context' AND 'modules' → ≥2 error lines
+    # · Scenario: missing 'contexts' AND 'modules' → ≥2 error lines
     # · Last fail: N/A (new CLI)
     # · Remove if: aggregation semantics change
     logger.info("[IMP:7][test_multiple_errors_aggregated] START")
@@ -189,7 +192,7 @@ def test_multiple_errors_aggregated(tmp_path, caplog, capsys) -> None:
     assert rc == 1, f"FAIL: invalid yaml must exit 1, got {rc}"
     lines = [ln for ln in err.splitlines() if ln.startswith("  Error at ")]
     assert len(lines) >= 2, f"FAIL: expected ≥2 aggregated error lines, got {len(lines)}: {err!r}"
-    assert any("'context'" in ln for ln in lines), f"FAIL: 'context' error missing: {lines}"
+    assert any("'contexts'" in ln for ln in lines), f"FAIL: 'contexts' error missing: {lines}"
     assert any("'modules'" in ln for ln in lines), f"FAIL: 'modules' error missing: {lines}"
     logger.info("[IMP:9][test_multiple_errors_aggregated] PASS: %d errors aggregated", len(lines))
 

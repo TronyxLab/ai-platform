@@ -70,11 +70,43 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ── Compose profiles default (synchronized with Makefile COMPOSE_PROFILES) ──
-_DEFAULT_COMPOSE_PROFILES = (
-    "postgres,redis,nginx,clickhouse,backup-cron,hermes-agent,"
-    "monitoring,logging,litellm,langfuse,infra-metrics,minio,status-page"
-)
+# ── Compose profiles — SoT: platform-env.yaml env_defaults (DevPlan 116 T2, U-02) ──
+# Repo root resolved relative to this file (core/internal/scaffold/ → 4 levels up).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+# region FUNC_load_compose_profiles_from_platform_env
+## @purpose  Read COMPOSE_PROFILES from repo-root platform-env.yaml env_defaults.
+##            Local tool — platform-env.yaml is always in the repo (generated).
+##            Fail-fast: raise on missing file/key (invariant 7 — no silent fallback).
+## @io       ⇥ None → ⎋ str: comma-separated profile list ⚡ raise FileNotFoundError/KeyError
+## @complexity O(1) — single YAML load
+## @invariants
+##   - platform-env.yaml resolved relative to this file (repo root), not project dir
+##   - Raises readable error if file or key missing — adopt must not proceed with wrong profiles
+def _load_compose_profiles_from_platform_env() -> str:
+    """Return COMPOSE_PROFILES from platform-env.yaml env_defaults (SoT)."""
+    platform_env_path = _REPO_ROOT / "platform-env.yaml"
+    if not platform_env_path.is_file():
+        raise FileNotFoundError(
+            f"[IMP:10][project_adopter] platform-env.yaml not found at {platform_env_path} — "
+            "run `make generate-platform-env` (SoT: core/platform-infra.yaml env_defaults)"
+        )
+    import yaml  # type: ignore[import-untyped]
+
+    with open(platform_env_path) as f:
+        data = yaml.safe_load(f)
+    profiles = (data or {}).get("env_defaults", {}).get("COMPOSE_PROFILES")
+    if not profiles:
+        raise KeyError(
+            f"[IMP:10][project_adopter] env_defaults.COMPOSE_PROFILES missing in {platform_env_path} — "
+            "run `make generate-platform-env` (DevPlan 116 T2, U-02)."
+        )
+    logger.info("[IMP:9][load_compose_profiles] COMPOSE_PROFILES from platform-env.yaml: %s", profiles)
+    return str(profiles)
+
+
+# endregion FUNC_load_compose_profiles_from_platform_env
 
 
 # region dataclass_AdoptionResult
@@ -127,11 +159,11 @@ class ProjectAdopter:
     ## @complexity O(1) construction; adopt() orchestrates 9 steps with linear complexity each
     """
 
-    # 🧐 TRAP[DECISION] · 2026-07-26 · — · COMPOSE_PROFILES from env with fallback
-    # · Rejected: hardcoded COMPOSE_PROFILES in shell (adopt-project.sh:388)
-    # · Reason: хардкод удалён — Python читает COMPOSE_PROFILES из os.environ
-    #   с fallback-значением из platform-env.yaml (синхронизировано с Makefile _get_all_profiles)
-    # · Rev: если COMPOSE_PROFILES определён в platform-env.yaml → читать оттуда
+    # 🧐 TRAP[DECISION] · 2026-07-26 · — · COMPOSE_PROFILES from env with SoT fallback — EXECUTED 2026-07-31
+    # · Rejected: hardcoded COMPOSE_PROFILES in shell (adopt-project.sh:388) и в Python (_DEFAULT_COMPOSE_PROFILES)
+    # · Reason: хардкод удалён (DevPlan 116 T2, U-02) — Python читает COMPOSE_PROFILES из os.environ
+    #   с fallback-значением из platform-env.yaml env_defaults.COMPOSE_PROFILES (SoT, generated).
+    # · Rev: если COMPOSE_PROFILES переедет в другой SoT — обновить _load_compose_profiles_from_platform_env()
 
     def __init__(
         self,
@@ -163,7 +195,7 @@ class ProjectAdopter:
         self.yaml_file = self.project_dir / "ai-platform.yaml"
         self.deploy_yml = self.project_dir / ".github" / "workflows" / "deploy.yml"
         self.platform_deploy_yml = self.project_dir / ".github" / "workflows" / "platform-deploy.yml"
-        self.compose_profiles = os.environ.get("COMPOSE_PROFILES", _DEFAULT_COMPOSE_PROFILES)
+        self.compose_profiles = os.environ.get("COMPOSE_PROFILES") or _load_compose_profiles_from_platform_env()
 
         self._log_prefix = "adopt"
 
@@ -986,30 +1018,38 @@ jobs:
         return result
 
     def _resolve_node_yaml_path(self) -> Path | None:
-        """Resolve node.yaml path from project directory context.
+        """Resolve node.yaml path via canonical NodeYaml.resolve (DevPlan 116 B6 T8.1).
 
         ## @purpose  Determine the node.yaml path for project registration.
+        ##            resolve Path 1 = {config_dir}/node-configs/{node}/node.yaml ≡
+        ##            PROJECTS_ROOT/org/node-configs/<node>/node.yaml (config_dir =
+        ##            os.path.join(projects_root, self.org)) — семантика сохранена.
+        ##            Fallback: parent-структура проекта (adopter запускается из project dir);
+        ##            финальный fallback — путь даже если файл не существует
+        ##            (caller обрабатывает отсутствие).
         ## @io        ⎋ Path | None
-        ## @complexity O(1)
+        ## @complexity O(P) — resolve 3-path search
         """
-        # Try from PROJECTS_ROOT env
         projects_root = os.environ.get("PROJECTS_ROOT")
-        if projects_root:
-            candidate = Path(projects_root) / self.org / "node-configs" / self.node / "node.yaml"
-            if candidate.exists():
-                return candidate
+        try:
+            from core.internal.shared.exceptions import ConfigNotFoundError
+            from core.internal.shared.node_yaml import NodeYaml
 
-        # Try from parent directory structure
-        parent = self.project_dir.parent
-        if parent.name == self.org and parent.parent:
-            candidate = parent.parent / "node-configs" / self.node / "node.yaml"
-            if candidate.exists():
-                return candidate
-
-        # Fallback: return path even if doesn't exist (caller handles)
-        if projects_root:
-            return Path(projects_root) / self.org / "node-configs" / self.node / "node.yaml"
-        return None
+            resolved = NodeYaml.resolve(
+                node_name=self.node,
+                config_dir=os.path.join(projects_root, self.org) if projects_root else None,
+            )._path
+            return Path(resolved)
+        except ConfigNotFoundError:
+            # Fallback: parent-структура проекта (adopter запускается из project dir)
+            parent = self.project_dir.parent
+            if parent.name == self.org and parent.parent:
+                candidate = parent.parent / "node-configs" / self.node / "node.yaml"
+                if candidate.exists():
+                    return candidate
+            return (
+                None if not projects_root else Path(projects_root) / self.org / "node-configs" / self.node / "node.yaml"
+            )
 
     # endregion FUNC_adopt
 

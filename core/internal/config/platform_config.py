@@ -12,6 +12,8 @@
 ##   - Все accessors возвращают str; числовые значения — ответственность вызывающего
 ##   - Если platform-env.yaml недоступен — использует жёстко закодированные fallback'и,
 ##     идентичные значениям в platform-infra.yaml (defence-in-depth)
+##   - ИСКЛЮЧЕНИЕ (DevPlan 116 B6 D4): CONTEXT не имеет литерального fallback'а —
+##     default_context() возвращает "" при отсутствии platform-env.yaml (fail-visible)
 ##   - default_s3_bucket_sentinel() возвращает "" с явной семантикой sentinel
 ##     («S3 не сконфигурирован — graceful degradation»)
 ##   - default_context_sentinel() возвращает "" с семантикой валидационного sentinel
@@ -36,7 +38,9 @@ logger = logging.getLogger(__name__)
 _FALLBACK_S3_REGION = "ru-1"
 _FALLBACK_S3_PREFIX = "platform/backups"
 _FALLBACK_S3_BUCKET = "test-bucket"
-_FALLBACK_CONTEXT = "test"
+# NOTE (DevPlan 116 B6 D4): _FALLBACK_CONTEXT удалён — CONTEXT не имеет литерального
+# fallback'а. default_context() → get_default("CONTEXT", "") — при отсутствии
+# platform-env.yaml возвращает "" (fail-visible вместо тихой лжи "test").
 _FALLBACK_PLATFORM_CONTEXT = "personal"
 
 # Sentinel values (not from SoT — documented semantics)
@@ -196,16 +200,19 @@ def default_s3_bucket_sentinel() -> str:
 
 
 # region FUNC_default_context
-## @purpose  Get default CONTEXT value (SoT: test)
+## @purpose  Get default CONTEXT value (SoT: platform-infra.yaml env_defaults.CONTEXT; без fallback — fail-visible)
 ## @io       None → ⎋ str
 ## @complexity  O(1)
+## @invariants  Нет литерального fallback'а (DevPlan 116 B6 D4): при отсутствии
+##              platform-env.yaml → "" (fail-visible), не "test".
 def default_context() -> str:
     """Get default CONTEXT value.
 
-    Returns default from platform-env.yaml env_defaults.CONTEXT,
-    or fallback 'test' if not found.
+    Returns default from platform-env.yaml env_defaults.CONTEXT (SoT:
+    platform-infra.yaml env_defaults.CONTEXT), or "" if not found — fail-visible
+    instead of the silent "test" lie (DevPlan 116 B6 T1, decision D4).
     """
-    return get_default("CONTEXT", _FALLBACK_CONTEXT)
+    return get_default("CONTEXT", "")
 
 
 # endregion FUNC_default_context

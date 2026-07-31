@@ -142,6 +142,11 @@ env_defaults:
   CONTEXT: "test"
   NODE_NAME: "test-node"
   CONTEXT_IMAGE: "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1"
+  # PLATFORM_DOMAIN — единственный SoT домена платформы (DevPlan 116 T3, U-16).
+  # Базовое значение: ai-platform.local. При загруженном контексте (context = GitHub org):
+  #   PLATFORM_DOMAIN=<context>.local, SAN дополнительно включает *.${PLATFORM_DOMAIN}.
+  # @domain-scheme DevPlan 012 — legacy-тестовый домен упразднён (parity-гейт test_gate_domain_parity).
+  PLATFORM_DOMAIN: "ai-platform.local"
   # ── Postgres (shared-db) ──
   POSTGRES_USER: "postgres"
   POSTGRES_DB: "platform"
@@ -169,6 +174,10 @@ env_defaults:
   S3_BUCKET: "test-bucket"
   S3_ACCESS_KEY: "test-access-key"
   S3_SECRET_KEY: "test-secret-key"
+  # AWS-алиасы для upload-s3.sh (AWS SDK совместимость) — SoT (DevPlan 116 T3, U-17).
+  # Литералы ${S3_ACCESS_KEY}/${S3_SECRET_KEY} — compose резолвит их через S3_* (alias, не копия).
+  AWS_ACCESS_KEY_ID: "${S3_ACCESS_KEY}"
+  AWS_SECRET_ACCESS_KEY: "${S3_SECRET_KEY}"
   PLATFORM_CONTEXT: "personal"
   # ── LLM Provider API Keys ──
   DEEPSEEK_API_KEY: "sk-placeholder-key-for-ci"

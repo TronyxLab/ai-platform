@@ -782,3 +782,23 @@ removed:
     reason: "DevPlan 105: vps-readiness.sh (181 LOC bash) мигрирован в Python — core/internal/shared/vps_readiness.py. Файл целиком удалён; статический grep-тест заменён на 11 unit-тестов tests/unit/test_vps_readiness.py (mock ssh_runner, DI, LDD IMP:9, R5 ANTI-SURVIVORSHIP на баг $first)."
     issue: "105-vps-readiness-python TASK-6"
     approved_by: "@tronyx"
+
+  # ── DevPlan 116 (B2 hardening, U-33/U-02): test renames matching consolidated contracts ──
+  - nodeid: "tests/gates/test_gate_compose_profiles_consistency.py::test_compose_profiles_consistency"
+    reason: "DevPlan 116 T2/T9 (U-02): COMPOSE_PROFILES консолидирован в SoT platform-infra.yaml; хардкод-callsites удалены. Тест переименован в test_no_hardcoded_profiles_at_former_callsites (проверяет отсутствие копий, а не их консистентность); repo-wide «копий нет» — новый test_gate_profiles_parity (d)."
+    issue: "116-hardening-program T2/T9"
+    approved_by: "@tronyx"
+  - nodeid: "tests/gates/test_gate_fallback_secrets_sync.py::test_fallback_secrets_match_definitions"
+    reason: "DevPlan 116 T4 (U-33): _FALLBACK_SECRETS удалён (strict-режим через shared secrets_manifest_reader). Тест переименован в test_fallback_secrets_removed — проверяет отсутствие fallback-списка и canonical-импорт shared-модуля."
+    issue: "116-hardening-program T4"
+    approved_by: "@tronyx"
+  - nodeid: "tests/unit/test_secrets_manager.py::test_ensure_secrets_fallback_hardcoded"
+    reason: "DevPlan 116 T4 (U-33): hardcoded fallback удалён — ensure_secrets с отсутствующим manifest теперь RAISES. Тест переименован в test_ensure_secrets_missing_manifest_raises (fail-visible контракт)."
+    issue: "116-hardening-program T4"
+    approved_by: "@tronyx"
+
+  # ── DevPlan 116 B6 (hardening, U-06/U-18/U-20/U-54): str-form/legacy removed, canonical parser ──
+  - nodeid: "tests/unit/test_project_reconciler.py::test_string_entries"
+    reason: "DevPlan 116 B6 T4.6/D3 (U-20): str-form записи projects[] отменены (node.schema.json требует dict, fail-fast ConfigValidationError). Тест переименован в test_string_entries_rejected — проверяет fail-fast ([]), а не тихий пропуск."
+    issue: "116-hardening-program B6 T4/D3"
+    approved_by: "@tronyx"

@@ -34,7 +34,7 @@
 ```
 node-lifecycle.sh --mode init  →  state_machine.py (BootstrapPhase enum)
 
-  φ1  system-bootstrap     # packages, docker-install, tor-proxy, firewall
+  φ1  system-bootstrap     # packages, python3.14+deps, docker-install, tor-proxy, firewall
   φ2  user-accounts        # ssh-access, platform-user, ci-deploy-user, projects-base
   φ3  platform-setup       # platform-dirs, docker-config, metrics-cron
   φ4  secrets-provision    # decrypt-secrets, ensure-passwords (BLOCKS φ6)
@@ -80,7 +80,17 @@ node-lifecycle.sh --mode update → state_machine.py
 
 ### `--mode init` — полный bootstrap
 
-Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, sudoers) → φ4 secrets-provision (decrypt, ensure-passwords) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: phase-функции в phases.py обрабатывают content-hash пропуск внутри grouped-фаз. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
+Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Python 3.14, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, sudoers) → φ4 secrets-provision (decrypt, ensure-passwords) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: phase-функции в phases.py обрабатывают content-hash пропуск внутри grouped-фаз. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
+
+### Python runtime на ноде (2026-08-01)
+
+- **Цель:** голый `python3` после φ1 = Python **3.14** (deadsnakes PPA, Ubuntu 24.04).
+- Механизм: `python_deps.py ensure --core-dir <core_dir>` вызывается в φ1 (шаг 1.5, FATAL):
+  `DEBIAN_FRONTEND=noninteractive` apt-установка `software-properties-common` → `add-apt-repository -y ppa:deadsnakes/ppa` → `apt-get update` → `python3.14 python3.14-venv` → `python3.14 -m ensurepip --upgrade` → симлинк `/usr/local/bin/python3 → /usr/bin/python3.14` (PATH: /usr/local/bin раньше /usr/bin).
+- **Системный `/usr/bin/python3` (3.12) НЕ трогается** — на нём висят cloud-init и системные утилиты. update-alternatives для python3 запрещён.
+- Идемпотентность: маркер `/var/lib/platform/.bootstrap/python-deps.hash` содержит (хеш requirements.txt + версию python) — повторный бутстрап = no-op; старый маркер (только хеш, эра 3.12) трактуется как mismatch → переустановка.
+- Зависимости ставятся через `/usr/local/bin/python3 -m pip install -r requirements.txt --break-system-packages` (PEP 668 — deadsnakes 3.14 тоже externally-managed).
+- Не-Ubuntu 24.04 → WARN + fallback на system `python3-pip` (старый путь, без 3.14).
 
 ### `--mode update` — инкрементальный update
 

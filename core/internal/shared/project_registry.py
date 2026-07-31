@@ -45,20 +45,28 @@ from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
 # ── Project name validation ─────────────────────────────────────────────────
-## @purpose  Canonical project name validation used by deploy_engine, payload_deliverer, reconciler.
-##           Rejects empty names, path traversal sequences, and invalid characters.
+## @purpose  Canonical project name validation used by deploy_engine, payload_deliverer, reconciler,
+##           context_initializer, project_scaffolder. Rejects empty names, path traversal sequences,
+##           invalid characters, and leading '-'/'_' (strict regex, DevPlan 116 B6 T3).
 ## @invariants
-##   - Regex: ^[a-zA-Z0-9_-]+$ — alphanumeric, underscore, hyphen only
+##   - Regex: ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ — must start with alphanumeric; hyphen/underscore allowed
+##     only after the first char. STRICT: rejects leading '-'/'_' (эквивалентен бывшему
+##     контекстному валидатору context_initializer).
 ##   - Returns bool (never raises, never sys.exit)
-##   - DRY: single implementation shared by 3+ consumers
-## @rationale D7 (DevPlan 036E): _validate_project_name() дублировалась в deploy-project.sh:207,
+##   - DRY: single implementation shared by 5+ consumers
+## @rationale D7 (DevPlan 036E): приватный валидатор имён дублировался в deploy-project.sh:207,
 ##            reconciler.py:701, и новой payload_deliverer.py. Единая реализация в project_registry.py
 ##            устраняет дублирование. Regex ^[a-zA-Z0-9_-]+$ строже shell-версии (reject '/..'/special chars).
+##            DevPlan 116 B6 T3 (U-06): regex ужесточён до ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ — reject leading
+##            '-'/'_' (эквивалент контекстного валидатора); все 3 локальных валидатора
+##            (reconciler, context_initializer, project_scaffolder strip-check)
+##            мигрированы на этот канон.
 ## @changes 2026-07-26 · DevPlan 036E — Added validate_project_name() for Wave 5e Strangler-Fig
+## @changes 2026-08-01 · DevPlan 116 B6 T3 — regex ужесточён: leading '-'/'_' rejected
 
 
 def validate_project_name(name: str) -> bool:
-    """Validate project name: alphanumeric, underscore, hyphen only.
+    """Validate project name: alphanumeric first char, then alphanumeric/underscore/hyphen.
 
     Args:
         name: Project name string to validate.
@@ -68,8 +76,9 @@ def validate_project_name(name: str) -> bool:
     """
     if not name or not isinstance(name, str):
         return False
-    # Regex: alphanumeric, underscore, hyphen — no spaces, slashes, or path traversal
-    return bool(re.match(r"^[a-zA-Z0-9_-]+$", name))
+    # Strict regex: must start [a-zA-Z0-9]; then [a-zA-Z0-9_-]* — no spaces, slashes,
+    # path traversal ('.' not in class), or leading '-'/'_' (DevPlan 116 B6 T3).
+    return bool(re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$", name))
 
 
 # region FUNC_register_project

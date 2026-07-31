@@ -129,7 +129,10 @@ def list_projects_offline(
 
             node = NodeYaml(str(ny))
             projects = node.get_projects()
-            node_host = node._data.get("node", {}).get("host", "") if node._data else ""
+            # DevPlan 116 B6 T8.2: dotted-key фасад вместо приватного кэш-атрибута (`_data`).
+            # node.get("node.host", default="") — НЕ get_node_info().fqdn (тот читает node.fqdn,
+            # а в образцах только node.host — не эквивалентно).
+            node_host = node.get("node.host", default="")
         except (ImportError, ValueError, FileNotFoundError, OSError) as exc:
             logger.info("[IMP:8][list][offline] Failed to read %s: %s", ny, exc)
             continue
@@ -138,10 +141,13 @@ def list_projects_offline(
             continue
 
         for p in projects:
-            p["node"] = node_name
-            p["host"] = node_host
-            if not project_name or p.get("name") == project_name:
-                all_projects.append(p)
+            # DevPlan 116 B6 T4.7: мутируем КОПИЮ dict (entry = dict(p)), а не ссылку
+            # из get_projects() — get_projects() возвращает ССЫЛКУ на кэш NodeYaml.
+            entry = dict(p)
+            entry["node"] = node_name
+            entry["host"] = node_host
+            if not project_name or entry.get("name") == project_name:
+                all_projects.append(entry)
 
     # ── Output ──
     if output_format == "json":

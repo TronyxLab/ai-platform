@@ -70,14 +70,14 @@ def _make_adopter(tmp_path: Path, **kwargs: str | bool | None) -> pa.ProjectAdop
 
 
 def _make_node_yaml(tmp_path: Path, context: str = "testorg") -> Path:
-    """Create a node.yaml with context field.
+    """Create a node.yaml with contexts[] canon (DevPlan 116 B6 T1 — legacy 'context' field removed).
 
     ## @purpose  Create minimal node.yaml for org validation tests.
     ## @io        ⇥ tmp_path, context → ⎋ Path to node.yaml
     """
     node_yaml = tmp_path / "node-configs" / "tronyx-vps" / "node.yaml"
     node_yaml.parent.mkdir(parents=True, exist_ok=True)
-    node_yaml.write_text(f"context: {context}\nprojects: []\n")
+    node_yaml.write_text(f"contexts:\n  - name: {context}\nprojects: []\n")
     return node_yaml
 
 
@@ -813,6 +813,42 @@ def test_generate_minimal_yaml_exists(caplog: pytest.LogCaptureFixture, tmp_path
                 found_imp9 = True
     print("--- END LDD TRAJECTORY ---")
     assert found_imp9
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Test 17: _resolve_node_yaml_path via canonical NodeYaml.resolve (DevPlan 116 B6 T8.1)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · _resolve_node_yaml_path finds PROJECTS_ROOT/org/node-configs/node/node.yaml
+# · Scenario: PROJECTS_ROOT env → {root}/testorg/node-configs/tronyx-vps/node.yaml создан → resolve находит его
+# · Last fail: N/A (DevPlan 116 B6 T8.1 — ручные эвристики → NodeYaml.resolve)
+# · Remove if: adopter node.yaml resolution changes
+@ldd_trajectory
+def test_resolve_node_yaml_path_via_nodeyaml_resolve(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_resolve_node_yaml_path: canonical resolve Path 1 = PROJECTS_ROOT/org/node-configs/<node>/node.yaml."""
+    caplog.set_level(logging.INFO)
+
+    # Set PROJECTS_ROOT to an isolated tmp dir (Zero Hardcode Rule)
+    projects_root = tmp_path / "projects-root"
+    projects_root.mkdir()
+    monkeypatch.setenv("PROJECTS_ROOT", str(projects_root))
+
+    adopter = _make_adopter(tmp_path, domain="example.com")  # org=testorg, node=tronyx-vps
+    node_yaml = projects_root / "testorg" / "node-configs" / "tronyx-vps" / "node.yaml"
+    node_yaml.parent.mkdir(parents=True)
+    node_yaml.write_text("contexts:\n  - name: testorg\nnode:\n  name: tronyx-vps\n  host: 1.2.3.4\n")
+
+    resolved = adopter._resolve_node_yaml_path()
+    assert resolved is not None, "resolve must find the node.yaml under PROJECTS_ROOT/org/node-configs/<node>/"
+    assert Path(resolved) == node_yaml, f"expected {node_yaml}, got {resolved}"
+
+    logger.critical("[IMP:9][test] _resolve_node_yaml_path via NodeYaml.resolve → %s — OK", resolved)
 
 
 # endregion

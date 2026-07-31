@@ -153,6 +153,8 @@ def test_generate_output(caplog):
     env_defaults = {
         "POSTGRES_PASSWORD": "test-pg-pwd",
         "PLATFORM_DOMAIN": "ai-platform.local",
+        "PLATFORM_MASTER_EMAIL": "admin@ai-platform.local",
+        "COMPOSE_PROFILES": "postgres,redis,nginx",
         "NO_PROXY": "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus",
         "S3_ENDPOINT_URL": "https://s3.timeweb.cloud",
     }
@@ -196,7 +198,14 @@ def test_check_mode_detects_divergence(caplog, tmp_path):
     """--check mode should exit with code 2 when .env.example diverges from generated output."""
     # Create test source files
     platform_env = tmp_path / "platform-env.yaml"
-    platform_data = {"env_defaults": {"PLATFORM_DOMAIN": "test.local", "NO_PROXY": ""}}
+    platform_data = {
+        "env_defaults": {
+            "PLATFORM_DOMAIN": "test.local",
+            "PLATFORM_MASTER_EMAIL": "admin@test.local",
+            "COMPOSE_PROFILES": "postgres,redis",
+            "NO_PROXY": "",
+        }
+    }
     with open(str(platform_env), "w") as f:
         yaml.dump(platform_data, f)
 

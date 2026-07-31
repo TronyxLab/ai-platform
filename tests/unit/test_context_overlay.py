@@ -44,17 +44,17 @@ from context_overlay import ensure_context_repo
 
 @pytest.fixture
 def node_yaml_with_context(tmp_path):
-    """Create node.yaml with `context:` and `repos.core:`. (clone-branch fixture)"""
+    """Create node.yaml with contexts[0].name and `repos.core:`. (clone-branch fixture, DevPlan 116 B6 T1)"""
     path = tmp_path / "node.yaml"
-    path.write_text("context: testctx\nrepos:\n  core: https://github.com/org/test-context.git\n")
+    path.write_text("contexts:\n  - name: testctx\nrepos:\n  core: https://github.com/org/test-context.git\n")
     return str(path)
 
 
 @pytest.fixture
 def node_yaml_with_context_no_repo(tmp_path):
-    """Create node.yaml with `context:` but NO `repos.core:`. (no-clone-branch fixture)"""
+    """Create node.yaml with contexts[0].name but NO `repos.core:`. (no-clone-branch fixture)"""
     path = tmp_path / "node.yaml"
-    path.write_text("context: testctx\nrepos: {}\n")
+    path.write_text("contexts:\n  - name: testctx\nrepos: {}\n")
     return str(path)
 
 

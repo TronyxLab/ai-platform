@@ -18,21 +18,16 @@
 #   Chain A: G1 → G2 → G5 (secrets-manifest → platform-env → .env.example)
 #   Chain B: G3 → G4 (entrypoint-manifest → AGENTS.md)
 #   Chain C: G6 (litellm-config)
+# generate-manifests покрывает ВСЕ 6 генераторов (DevPlan 116 T5, U-44) — fix-gate
+# (repair.mk → generate-manifests) чинит check-manifests полностью (G1-G6).
 .PHONY: generate-manifests generate-manifests-atomic check-manifests sync-env-defaults check-env-defaults
 .PHONY: generate-secrets-manifest generate-platform-env generate-env-example
 .PHONY: generate-entrypoint-manifest generate-agents-md generate-litellm-config
+.PHONY: check-profiles-parity check-domain-parity
 
-# 📝 TRAP[DEBT] · 2026-07-31 · MED · generate-manifests omits G2/G4/G5 — fix-gate doesn't fully repair stale manifests
-# · Observed: final-gate F1 session — `make fix-gate` → generate-manifests ran ONLY G1/G3/G6;
-#   core/AGENTS.md (G4) stayed stale until `make generate-agents-md` was invoked explicitly.
-# · Suspected: hypothesis, needs verification — generate-manifests target list (line 25) missing
-#   generate-agents-md / generate-env-example; only generate-manifests-atomic covers all 3 chains
-#   (despite the DAG comment above declaring Chain B: G3→G4 part of the flow).
-# · Impact: canonical repair claims G1-G6 but leaves G4 (and G2/G5) stale → check-manifests
-#   still fails after `make fix-gate` — repair-loop break for manifest-drift blockers.
-# · When: during BLOCKER F1 fix (plans 099/103 delegates_to drift), 2026-07-31
-generate-manifests: generate-secrets-manifest generate-entrypoint-manifest generate-litellm-config
-	@echo "[IMP:9][generate-manifests] All manifests generated."
+generate-manifests: generate-secrets-manifest generate-platform-env generate-env-example \
+                    generate-entrypoint-manifest generate-agents-md generate-litellm-config
+	@echo "[IMP:9][generate-manifests] All manifests generated (G1-G6)."
 
 # ── Chain A ─────────────────────────────────────────────────
 .PHONY: generate-secrets-manifest
@@ -222,3 +217,23 @@ check-env-defaults:
 		 echo "make sync-env-defaults && git add .env.example && make check-env-defaults" && \
 		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
 	@echo "[IMP:9][check-env-defaults] .env.example is up to date."
+
+## check-profiles-parity: COMPOSE_PROFILES — единый SoT (platform-infra.yaml), 0 хардкод-копий (DevPlan 116 T9)
+check-profiles-parity:
+	@echo "[IMP:7][check-profiles-parity] Running profiles parity gate..."
+	@python3 -m pytest tests/gates/test_gate_profiles_parity.py -q || \
+		(echo "[GATE:FAIL][id:check-profiles-parity][class:L1]" && \
+		 echo ">>> REPAIR_RECIPE_START >>>" && \
+		 echo "make generate-manifests && git add -u && make check-profiles-parity" && \
+		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
+	@echo "[IMP:9][check-profiles-parity] Profiles parity gate passed."
+
+## check-domain-parity: PLATFORM_DOMAIN — единое определение, 0 legacy-доменов (DevPlan 116 T9)
+check-domain-parity:
+	@echo "[IMP:7][check-domain-parity] Running domain parity gate..."
+	@python3 -m pytest tests/gates/test_gate_domain_parity.py -q || \
+		(echo "[GATE:FAIL][id:check-domain-parity][class:L1]" && \
+		 echo ">>> REPAIR_RECIPE_START >>>" && \
+		 echo "make generate-manifests && git add -u && make check-domain-parity" && \
+		 echo "<<< REPAIR_RECIPE_END <<<" && exit 1)
+	@echo "[IMP:9][check-domain-parity] Domain parity gate passed."

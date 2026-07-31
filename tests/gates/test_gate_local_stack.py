@@ -102,7 +102,7 @@ def _get_expected_modules() -> set[str]:
 def test_compose_config_resolves_full_stack(caplog):
     """Verify root docker-compose.yml structurally: all include paths, networks, volumes.
 
-    ## @purpose — Validate Invariant 7 (static): 12 docker modules, 6 networks,
+    ## @purpose — Validate Invariant 7 (static): 13 docker modules, 6 networks,
     ##            10 volumes all resolve. Uses YAML parsing, NOT docker compose config
     ##            (no docker daemon required). Falls back to docker compose config if
     ##            docker is available for runtime validation.

@@ -1,5 +1,5 @@
 # GREP_SUMMARY: docker-compose root include profiles networks volumes x-logging
-# STRUCTURE: ▶ include: 12 docker modules → networks: 6 external → volumes: 11 driver:local → x-logging
+# STRUCTURE: ▶ include: 13 docker modules → networks: 6 external → volumes: 11 driver:local → x-logging
 # region MODULE_CONTRACT
 ## @purpose  Root docker-compose — include: всех docker-модулей + networks + volumes + x-logging
 ## @scope    Локальный полный стек (инвариант #7) и VPS; сервисы только через include:, без инлайна
@@ -7,6 +7,8 @@
 ##   - Только include: модулей — инлайн-сервисы запрещены (core/modules/AGENTS.md запрет #7)
 ##   - Каждый модуль фильтруется profiles: [module-name] (pluggability)
 ##   - networks/volumes согласованы с platform-env.yaml
+##   - Количество модулей в STRUCTURE-комментарии — вычисляемое: 13 (DevPlan 116 T8, U-68).
+##     При добавлении/удалении модуля обновляй комментарий (make discover-modules пересчитает include).
 ## @rationale Единая точка компоновки стека; модульность через include + profiles (DD1/DD3)
 # endregion MODULE_CONTRACT
 

@@ -8,7 +8,7 @@
 ##           need repo checked out first — cannot include actions/checkout internally).
 ## @scope    All .github/workflows/*.yml — 7+ workflow consumers targeted in W2-E2
 ## @invariants
-##   - Cache key: venv-${{ runner.os }}-${{ hashFiles('Makefile') }} (inherited from setup-python-venv, no invalidation)
+##   - Cache key: venv-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles('Makefile', 'pyproject.toml') }} (inherited from setup-python-venv; python-version included so a version bump invalidates the cache)
 ##   - Python venv is optional — controlled by python-version input (empty = skip)
 ##   - Gitleaks installation is optional — controlled by install-gitleaks boolean
 ##   - Provisioner-call is optional — controlled by run-provisioner + provisioner-scope
@@ -28,7 +28,7 @@ inputs:
   python-version:
     description: 'Python version for setup-python-venv. Empty string skips Python setup entirely.'
     required: false
-    default: '3.10'
+    default: '3.14'
   install-pre-commit:
     description: 'Install pre-commit in venv (true/false)'
     required: false

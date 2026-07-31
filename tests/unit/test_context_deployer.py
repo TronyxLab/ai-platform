@@ -3,7 +3,8 @@
 # STRUCTURE: ▶ tmp_path + node.yaml + mock subprocess → ◇ filter projects → ◇ ghcr pull → ◇ build fallback → ◇ idempotent skip → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for context_deployer.py — context project deploy orchestration.
-## @scope    Tests resolve_context_projects, deploy_context_projects, extract_context_from_node_yaml.
+## @scope    Tests resolve_context_projects, deploy_context_projects, deploy_context context
+##           resolution (contexts[] canon, DevPlan 116 B6 T2).
 ## @invariants
 ##   - All subprocess calls mocked (no real docker compose)
 ##   - node.yaml created in tmp_path
@@ -37,12 +38,13 @@ import context_deployer as cd
 
 @pytest.fixture
 def node_yaml_file(tmp_path):
-    """Create a node.yaml with test projects."""
+    """Create a node.yaml with test projects (contexts[] canon — DevPlan 116 B6 T1)."""
     yaml_content = """\
 node:
   name: test-node
   platform_domain: test.example.com
-context: test-ctx
+contexts:
+  - name: test-ctx
 projects:
   - name: webapp
     repo: https://github.com/test/webapp
@@ -115,20 +117,53 @@ def test_filter_projects_no_match(caplog, node_yaml_file):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: extract_context_from_node_yaml
+# region Tests: deploy_context context resolution (DevPlan 116 B6 T2)
 # ═══════════════════════════════════════════════════════════════════
 
 
-# 🧪 TRAP[TEST] · Regression · extract_context_from_node_yaml reads context field
-# · Scenario: node.yaml has context: test-ctx → returns "test-ctx"
-# · Last fail: N/A (new test)
-# · Remove if: context extraction logic changes
+# 🧪 TRAP[TEST] · Regression · deploy_context resolves context from contexts[0].name
+# · Scenario: node.yaml has contexts[0].name=test-ctx (no CONTEXT env) → deploy_context uses it
+# · Last fail: N/A (DevPlan 116 B6 T2 — extract-alias removed, facade get_context)
+# · Remove if: context resolution logic changes
 @ldd_trajectory
-def test_extract_context_string(caplog, node_yaml_file):
-    """extract_context_from_node_yaml should read context field."""
-    ctx = cd.extract_context_from_node_yaml(node_yaml_file)
-    assert ctx == "test-ctx"
-    logger.critical("[IMP:9][test] Context extracted from string field")
+def test_deploy_context_resolves_from_contexts(caplog, node_yaml_file, mock_docker, monkeypatch):
+    """deploy_context should resolve context from contexts[0].name via NodeYaml.get_context()."""
+    monkeypatch.delenv("CONTEXT", raising=False)
+    monkeypatch.setattr(cd, "deploy_context_projects", lambda *a, **k: [])
+    caplog.set_level(logging.INFO)
+
+    result = cd.deploy_context(
+        core_dir="/nonexistent/core",
+        node_name="test-node",
+        node_yaml=node_yaml_file,
+        context="",
+    )
+    assert result.failed == 0, "context resolved → deploy should proceed"
+    found = any("[IMP:9][deploy_context] Using context=test-ctx" in r.message for r in caplog.records)
+    assert found, "deploy_context did not resolve context=test-ctx from contexts[0].name"
+    logger.critical("[IMP:9][test] deploy_context resolved context from contexts[0].name — OK")
+
+
+# 🧪 TRAP[TEST] · Regression · deploy_context with broken/missing node.yaml → failed=1, readable log
+# · Scenario: node.yaml path missing, no CONTEXT env → DeployResult.failed=1, "CONTEXT not set" log (not traceback)
+# · Last fail: N/A (DevPlan 116 B6 T2)
+# · Remove if: fail-path semantics change
+@ldd_trajectory
+def test_deploy_context_broken_yaml_failed(caplog, tmp_path, monkeypatch):
+    """deploy_context with unreadable node.yaml → DeployResult.failed=1 + readable log."""
+    monkeypatch.delenv("CONTEXT", raising=False)
+    caplog.set_level(logging.INFO)
+
+    missing = str(tmp_path / "missing" / "node.yaml")
+    result = cd.deploy_context(
+        core_dir="/nonexistent/core",
+        node_name="test-node",
+        node_yaml=missing,
+        context="",
+    )
+    assert result.failed == 1
+    assert any("CONTEXT not set" in r.message for r in caplog.records), "expected readable CONTEXT-not-set log"
+    logger.critical("[IMP:9][test] deploy_context broken yaml → failed=1 with readable log — OK")
 
 
 # endregion

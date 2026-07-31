@@ -103,6 +103,8 @@
 | ✅ | `hermes-build-context` | Сборка L1→L2 |
 | ✅ | `hermes-push-l1` | Push L1 в ghcr.io как disaster recovery backup (make hermes-push-l1 → docker tag + docker push) |
 | ✅ | `provision` | Provision окружения (сети, volumes, CI env) из platform-env.yaml (`make provision [SCOPE=all|networks|volumes|env]`) |
+| ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES: единый SoT platform-infra.yaml, 0 хардкод-копий вне allowlist (make check-profiles-parity → pytest test_gate_profiles_parity.py) |
+| ✅ | `check-domain-parity` | Parity-гейт PLATFORM_DOMAIN: единое определение, 0 test.local в прод-цепочке (make check-domain-parity → pytest test_gate_domain_parity.py) |
 | ✅ | `templates-check` | Dry-run проверка разрешимости шаблонов |
 | ✅ | `templates-render` | Рендер шаблонов по манифесту |
 | ✅ | `validate` / `lint` / `audit` / `check-file-lines` / `verify` | Проверки и аудит |
@@ -164,6 +166,11 @@
 · Rejected: CI gate на создание .sh файлов (риск: блокирует легитимные lib-правки, замедляет hotfix-cycle)
 · Reason: Code review + AGENTS.md (настоящий раздел) + pre-commit hook на новые inline python3 = достаточная защита при текущем масштабе команды и velocity. CI gate добавит friction без пропорционального gains.
 · Rev: если через квартал (2026-10-21) зафиксировано >3 нарушений языковой политики → поднять вопрос о CI gate (Whitelist .sh через core/entrypoint-manifest.yaml).
+
+⚠️ TRAP[DECISION] · 2026-07-31 · HI · Enforcement-гейты с allowlist ПРИНЯТЫ (DevPlan 116 T9) — пересмотр TRAP 2026-07-21
+· Rejected: pre-commit/pre-push hook как единственный enforcement (риск: «gate зелёный, система врёт» — хардкод-копии живут без CI-детекции)
+· Reason: решения пользователя 2026-07-31 (D1, 01-Brief §1) — parity-гейты как pytest-гейты (trinity: файл tests/gates/ + @pytest.mark.gate + entrypoint-manifest с repair-полями L1) + тонкие make-обёртки (check-profiles-parity, check-domain-parity). Гейты с allowlist: хардкод значений разрешён ТОЛЬКО в SoT (platform-infra.yaml) и generated-файлах (platform-env.yaml, .env.example); всё остальное — RED. Охват: COMPOSE_PROFILES (profiles_parity), PLATFORM_DOMAIN/test.local (domain_parity), *.template покрытие (template_manifest_coverage), копий-нет по бывшим callsites (compose_profiles_consistency).
+· Rev: если parity-гейты начнут ложно-блокировать легитимные правки (friction > gain) → сузить allowlist или пересмотреть формат; пересмотр 2026-10-21 вместе с TRAP языковой политики.
 
 ⚠️ TRAP[DECISION] · 2026-07-21 · HI · SSH staging-gate для lib/ssh.sh — single point of failure для всех remote-операций
 · Rejected: Прямой merge в main без staging-test (риск: единая точка отказа для deploy/bootstrap/healthcheck/node-update/converge/project-list/remove-project/verify)
