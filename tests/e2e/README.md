@@ -81,7 +81,7 @@ make test MARKER=static    # requires_node тесты не запускаютс�
 | `Kill window missed: φ7 completed before SIGKILL` | φ7 (install_acme) выполнился быстрее окна | Повторить тест — нода уже прогрета, окно стабильнее |
 | `state.json` в неконсистентном состоянии после падения | Незавершённая фаза | Сброс: `ssh root@<host> "rm -f /var/lib/platform/.bootstrap/state.json"` (или следующий `make test-node` сделает это сам через `test_vps_fresh`) |
 | Docker broken после T14 | Процессный kill (не docker) — docker не трогается | Если всё же docker повреждён: `ssh root@<host> "systemctl restart docker"` |
-| Container test-project-web не поднимается | Порт 8080 занят, nginx:alpine недоступен | Освободить 8080; проверить Docker Hub доступность |
+| Container test-project-web не поднимается | Порт 8080 занят, pull mirror.gcr.io недоступен | Освободить 8080; fixture использует mirror.gcr.io (публичный mirror без rate-limit — docker.io/library/nginx:alpine с datacenter-IP упирается в 429 Docker Hub) |
 
 ## Что НЕ покрывает
 

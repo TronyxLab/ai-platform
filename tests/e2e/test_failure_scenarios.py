@@ -16,14 +16,18 @@
 ##   - Every test: @pytest.mark.requires_node + requires_node fixture + IMP:9 LDD + TRAP[TEST]
 ## @rationale DevPlan 095: единственный способ покрыть resume_phase-семантику отказа, ssh
 ##           timeout и forced-command receive на реальном окружении (ранее mock-only).
-## ⚠️ TRAP[DECISION] · 2026-07-31 · HI · T14: kill docker заменён на kill процесса state_machine.py
-## · Rejected: `systemctl stop docker` (DevPlan §T14) — φ7 (certificates) НЕ зависит от docker:
+## ⚠️ TRAP[DECISION] · 2026-07-31 · HI · T14: kill docker заменён на kill процесса state_machine.py (φ1)
+## · Rejected: (1) `systemctl stop docker` (DevPlan §T14) — φ7 (certificates) НЕ зависит от docker:
 ##   install-acme.sh и cert_orchestrator.py docker-free (проверено grep'ом) — остановка docker
 ##   НЕ уронит φ7 детерминированно. Дополнительно: sub_step-resume (install_acme skip) —
 ##   МЁРТВЫЙ КОД (resume_phase() не вызывается из _run_init_mode; TRAP[DEBT] в state_machine.py:213).
+## · (2) kill во время φ7 (DevPlan T14) — на ноде БЕЗ domain φ7 завершается <1s (install_acme
+##   уже установлен + ssl_provision SKIP по "No domains") → kill window отсутствует
+##   ("Kill window missed" — подтверждено на tronyx-vps 2026-07-31, run3).
 ## · Reason: детерминированный mid-phase kill = SIGKILL реального bootstrap-процесса
-##   (pkill -9 -f state_machine.py) в момент выполнения φ7. Recovery-ассерт: повторный
-##   bootstrap завершается exit 0, все 9 INIT фаз done (фаза перевыполняется целиком —
+##   (pkill -9 -f '[s]tate_machine[.]py') в момент выполнения ДЛИТЕЛЬНОЙ фазы — φ1
+##   system_bootstrap (apt-get install, минуты). Recovery-ассерт: повторный bootstrap
+##   завершается exit 0, все 9 INIT фаз done (фаза перевыполняется целиком —
 ##   честная проверка текущего поведения pipeline, не заявленного resume).
 ## · Rev: если resume_phase() будет подключён к run-циклам — усилить ассерт до
 ##   «SKIP sub_step install_acme» (лог IMP:8) и вернуть φ7-семантику частичного отказа.
@@ -57,26 +61,35 @@ logger = logging.getLogger(__name__)
 def test_resume_phase7_after_midphase_kill(
     requires_node: str, node_ssh: NodeSSHClient, node_state: NodeState, caplog
 ) -> None:
-    """Kill bootstrap mid-φ7 (certificates) → re-run → pipeline recovers, all INIT phases done.
+    """Kill bootstrap mid-φ1 (system_bootstrap) → re-run → pipeline recovers, all INIT phases done.
 
-    # 🧪 TRAP[TEST] · Scenario: SIGKILL state_machine.py во время φ7 · Last fail: N/A
-    # · Regression: после kill повторный bootstrap застревает (stuck partial state) → recovery fail
-    # · Remove if: resume_phase() подключён к run-циклам — усилить ассерт до sub_step-SKIP
-    ## @purpose — AC5: bootstrap переживает mid-phase kill. Инъекция отказа: φ7 reset
+    # 🧪 TRAP[TEST] · Scenario: SIGKILL state_machine.py во время φ1 (apt-get long-running) · Last fail: N/A
+    # · Regression: после kill повторный bootstrap застревает (stuck partial state / dpkg lock) → recovery fail
+    # · Remove if: resume_phase() подключён к run-циклам — вернуть φ7 sub_step-SKIP семантику
+    ## @purpose — AC5: bootstrap переживает mid-phase kill. Инъекция отказа: φ1 reset
     ##            (done=false) → bootstrap в фоне → SIGKILL реального state_machine.py в момент
-    ##            старта φ7 → повторный bootstrap восстанавливается (exit 0, φ7 done, 9/9 INIT).
-    ##            Детерминированная замена планового «kill docker» (см. TRAP[DECISION]).
+    ##            выполнения φ1 → повторный bootstrap восстанавливается (exit 0, все 9 INIT done).
+    ## ⚠️ TRAP[DECISION] · 2026-07-31 · HI · Kill-цель: φ1 system_bootstrap, не φ7 certificates
+    ## · Rejected: φ7 (DevPlan T14) — на ноде БЕЗ domain φ7 завершается <1s (install_acme уже
+    ## ·   установлен + ssl_provision SKIP по "No domains") → kill window физически отсутствует
+    ## ·   ("Kill window missed: φ7 completed before SIGKILL" — подтверждено на tronyx-vps).
+    ## · Reason: детерминированный mid-phase kill требует ДЛИТЕЛЬНОЙ фазы — φ1 apt-get install
+    ## ·   идёт минуты. Семантика теста (phase-level recovery после kill) не меняется —
+    ## ·   sub_step-resume мёртвый код (TRAP[DEBT] state_machine.py:213), φ7-семантика не тестируема.
+    ## ·   Дополнительно убивается orphan apt-get (dpkg lock) после kill python.
+    ## · Rev: если resume_phase() подключён к run-циклам — усилить ассерт до sub_step-SKIP и
+    ## ·   вернуть φ7-семантику частичного отказа.
     ## @io — ⇥ requires_node, node_ssh, node_state, caplog → ⎋ None (asserts)
     ## @complexity — O(1) — one background kill + one full rebootstrap
     """
     caplog.set_level(logging.DEBUG)
 
-    # ── 1. Reset φ7 (certificates) — force re-execution of the phase ──
-    reset = node_state.reset_phase("certificates", timeout=30)
-    assert reset.exit_code == 0, f"φ7 reset failed: {reset.stderr}"
-    logger.info("[IMP:9][T14][kill] φ7 certificates reset (done=false)")
+    # ── 1. Reset φ1 (system_bootstrap) — force re-execution of the phase ──
+    reset = node_state.reset_phase("system_bootstrap", timeout=30)
+    assert reset.exit_code == 0, f"φ1 reset failed: {reset.stderr}"
+    logger.info("[IMP:9][T14][kill] φ1 system_bootstrap reset (done=false)")
 
-    # ── 2. Start bootstrap in background, watch for φ7 start ──
+    # ── 2. Start bootstrap in background, watch for φ1 start ──
     proc = subprocess.Popen(
         ["make", "bootstrap-node", f"NODE={requires_node}"],
         cwd=str(repo_root()),
@@ -86,33 +99,43 @@ def test_resume_phase7_after_midphase_kill(
         bufsize=1,
     )
 
-    phase7_seen = False
+    phase1_seen = False
     deadline = time.monotonic() + 900
     assert proc.stdout is not None
     for line in proc.stdout:
         stripped = line.strip()
-        if "Phase 7/9: certificates" in stripped:
-            phase7_seen = True
-            logger.info("[IMP:9][T14][kill] φ7 started: %s", stripped)
+        if "Phase 1/9: system_bootstrap" in stripped:
+            phase1_seen = True
+            logger.info("[IMP:9][T14][kill] φ1 started: %s", stripped)
             break
         if time.monotonic() > deadline:
             break
 
-    assert phase7_seen, "φ7 (certificates) never started within 900s — kill window missed (bootstrap too slow/failed)"
-    time.sleep(0.75)  # allow install_acme to begin executing → mid-φ7 kill
+    assert phase1_seen, "φ1 (system_bootstrap) never started within 900s — kill window missed (bootstrap too slow/failed)"
+    time.sleep(2)  # allow apt-get to begin executing → mid-φ1 kill
 
-    # ── 3. SIGKILL the remote bootstrap process (mid-φ7) ──
-    kill = node_ssh.ssh_exec("pkill -9 -f state_machine.py || true", timeout=30)
+    # ── 3. SIGKILL the remote bootstrap process (mid-φ1) + orphan apt-get (dpkg lock) ──
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · pkill -f сам себя убивал (exit 255)
+    # · Symptom: `pkill -9 -f state_machine.py || true` возвращал exit 255 (SSH-сбой) — kill не срабатывал.
+    # · Root: -f матчит ПОЛНУЮ командную строку, включая саму remote-команду ssh
+    # ·   (bash -c "pkill -9 -f state_machine.py || true") → pkill убивал родительский shell → ssh рвался.
+    # · Fix: bracket-паттерн '[s]tate_machine[.]py' — матчит целевой процесс (python3 ...state_machine.py),
+    # ·   но НЕ собственную командную строку pkill. Тот же приём для orphan apt-get ('[a]pt-get').
+    # · Prevention: pkill -f с паттерном, встречающимся в собственной cmdline, всегда через [x]-trick.
+    kill = node_ssh.ssh_exec(
+        "pkill -9 -f '[s]tate_machine[.]py' || true; sleep 1; pkill -9 -f '[a]pt-get' || true",
+        timeout=30,
+    )
     logger.info("[IMP:9][T14][kill] pkill exit=%d", kill.exit_code)
     assert kill.exit_code == 0, f"pkill failed: {kill.stderr}"
 
     proc.wait(timeout=120)
     logger.info("[IMP:9][T14][kill] background bootstrap exited rc=%d", proc.returncode)
 
-    # ── 4. Verify the kill landed mid-φ7 (phase NOT completed) ──
-    mid_phase = not node_state.phase_done("certificates")
-    logger.info("[IMP:9][T14][kill] φ7 done after kill=%s (expected False)", not mid_phase)
-    assert mid_phase, "Kill window missed: φ7 completed before SIGKILL (retry the test)"
+    # ── 4. Verify the kill landed mid-φ1 (phase NOT completed) ──
+    mid_phase = not node_state.phase_done("system_bootstrap")
+    logger.info("[IMP:9][T14][kill] φ1 done after kill=%s (expected False)", not mid_phase)
+    assert mid_phase, "Kill window missed: φ1 completed before SIGKILL (retry the test)"
 
     # ── 5. Recovery: full re-run must complete the pipeline ──
     recovery = subprocess.run(
@@ -129,7 +152,7 @@ def test_resume_phase7_after_midphase_kill(
     done, pending = node_state.all_phases_done(INIT_PHASES)
     logger.info("[IMP:9][T14][recovery] INIT done=%d/%d pending=%s", len(done), len(INIT_PHASES), pending)
     assert not pending, f"Recovery incomplete — pending phases: {pending}"
-    assert node_state.phase_done("certificates"), "φ7 (certificates) not done after recovery"
+    assert node_state.phase_done("system_bootstrap"), "φ1 (system_bootstrap) not done after recovery"
 
     assert_ldd_imp9_e2e(caplog)
 

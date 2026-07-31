@@ -85,6 +85,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -274,7 +275,54 @@ class DeployEngine:
             logger.error("[IMP:10][deploy][validation] %s", msg)
             return DeployResult(success=False, project=project, ref=ref, service=service, error_message=msg)
 
-        os.chdir(project_dir)
+        # 🧐 TRAP[DECISION] · 2026-07-31 · HI · os.chdir без восстановления — ядовитый cwd для pytest-процесса
+        # · Symptom: tests/integration/test_deploy_e2e.py → DeployEngine → os.chdir(project_dir) из tempdir +
+        #   teardown rmtree = удалённый cwd → FileNotFoundError os.getcwd() во ВСЕХ последующих тестах
+        #   (каскад 71 failure в static_audit, gate MODE=fast RED). Root-cause: строки 277/380/449.
+        # · Fix (2026-07-31): deploy() → contextlib.chdir (восстановление при любом exit path, включая
+        #   SystemExit от _handle_first_deploy); remove()/status() → subprocess cwd=project_dir (процесс
+        #   вообще не меняет cwd). Rejected: subprocess-level cwd во всех 14 вызовах deploy() — большой
+        #   рефакторинг с риском регрессии, contextlib.chdir семантически эквивалентен прежнему chdir.
+        # · Rev: если deploy() начнёт вызываться из долгоживущих процессов чаще CLI-паттерна → вариант (a).
+        with contextlib.chdir(project_dir):
+            return self._deploy_inner(project, ref, service, project_dir, node, max_wait, keep_images)
+
+    # endregion FUNC_deploy
+
+    # region FUNC_deploy_inner
+    ## @purpose  Внутреннее тело deploy() — выполняется внутри contextlib.chdir(project_dir).
+    ## @scope    Изолировано для гарантированного восстановления cwd при любом выходе (return/SystemExit).
+    def _deploy_inner(
+        self,
+        project: str,
+        ref: str,
+        service: str,
+        project_dir: str,
+        node: str = "",
+        max_wait: int = 60,
+        keep_images: int = 3,
+    ) -> DeployResult:
+        """Execute atomic deploy with rollback capability (cwd=project_dir гарантирован обёрткой).
+
+        Args:
+            project: Project name.
+            ref: Image tag/ref to deploy.
+            service: Docker Compose service name.
+            project_dir: Path to project directory.
+            node: Node name (hostname).
+            max_wait: Max seconds to wait for healthcheck.
+            keep_images: Number of old images to keep during prune.
+
+        Returns:
+            DeployResult with status and rollback metadata.
+        """
+        # ── Validate ──
+        logger.info("[IMP:9][deploy][start] Deploy START: %s/%s → %s", project, service, ref)
+
+        if not validate_project_name(project):
+            msg = f"Invalid project name: {project}"
+            logger.error("[IMP:10][deploy][validation] %s", msg)
+            return DeployResult(success=False, project=project, ref=ref, service=service, error_message=msg)
 
         try:
             self._preflight_checks(project_dir, service)
@@ -346,7 +394,7 @@ class DeployEngine:
             error_message="Healthcheck failed, rollback " + ("performed" if rollback_ok else "failed"),
         )
 
-    # endregion FUNC_deploy
+    # endregion FUNC_deploy_inner
 
     # region FUNC_remove
     ## @purpose  Idempotent remove: stop containers WITHOUT destroying data (O7/DD10).
@@ -376,12 +424,6 @@ class DeployEngine:
             logger.info("[IMP:9][remove][not-found] Project dir not found: %s — already removed", project_dir)
             return RemoveResult(success=True, project=project, already_removed=True)
 
-        try:
-            os.chdir(project_dir)
-        except OSError as e:
-            logger.warning("[IMP:8][remove][chdir] Cannot cd to %s: %s", project_dir, e)
-            return RemoveResult(success=True, project=project, already_removed=True)
-
         # docker compose down WITHOUT -v (O7 — data preserved)
         logger.info("[IMP:9][remove][down] Stopping containers for %s (data preserved, no -v)...", project)
         result = subprocess.run(
@@ -389,6 +431,7 @@ class DeployEngine:
             capture_output=True,
             text=True,
             timeout=120,
+            cwd=project_dir,
         )
         if result.returncode != 0:
             logger.warning(
@@ -446,12 +489,12 @@ class DeployEngine:
         # ── Docker compose ps ──
         containers: list[dict[str, Any]] = []
         try:
-            os.chdir(project_dir)
             ps_result = subprocess.run(
                 ["docker", "compose", "ps", "--format", "json"],
                 capture_output=True,
                 text=True,
                 timeout=30,
+                cwd=project_dir,
             )
             if ps_result.returncode == 0 and ps_result.stdout.strip():
                 for line in ps_result.stdout.strip().split("\n"):

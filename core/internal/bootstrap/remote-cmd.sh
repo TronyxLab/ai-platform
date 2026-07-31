@@ -33,13 +33,26 @@ OVERLAY_DELIVERER="python3 -m core.internal.bootstrap.overlay_deliverer"
 build_ssh_cmd() {
     local node_name="$1" owner_key="$2" ci_deploy_key="$3" age_key="$4"
     shift 4; local passthrough_args=("$@")
-    local remote_orchestrator="${PLATFORM_ROOT:-/opt/platform}/core/internal/bootstrap/node-lifecycle.sh"
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PLATFORM_ROOT не экспортировался на remote — фазы искали core по /opt/platform
+    # · Symptom: state_machine.py:1333 берёт core_dir из PLATFORM_ROOT (default /opt/platform), но remote
+    # ·   команда его не экспортировала → φ1 искал install-docker.sh/firewall.sh в /opt/platform/core (SKIP),
+    # ·   φ2 падал: "group 'docker' does not exist" (docker не установлен — install-docker.sh пропущен).
+    # · Root: remote_root = PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform (scp-deliver.sh:129),
+    # ·   а remote-команда не знала этой базы. Core на VPS лежит по remote_root/core.
+    # · Fix: экспортировать PLATFORM_ROOT=${remote_root} в remote-команде — state_machine/фазы резолвят
+    # ·   core_dir из него (единый источник: scp-deliver.sh + remote-cmd.sh + overlay_deliverer.sync_core_to_vps).
+    # · Prevention: любая remote-команда, выполняющая core-скрипты на VPS, обязана экспортировать
+    # ·   PLATFORM_ROOT с той же базой, куда scp/sync доставил core.
+    # · Source: обнаружено при верификации DevPlan 095 AC4 (cold-start bootstrap на test-VPS).
+    local remote_root="${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}"
+    local remote_orchestrator="${remote_root}/core/internal/bootstrap/node-lifecycle.sh"
     local remote_node_yaml="/opt/node-configs/${node_name}/node.yaml"
     local cmd="set -euo pipefail"
 
     if [[ -n "${age_key}" ]]; then
         local q; q="$(printf '%q' "${age_key}")"; cmd+=" && export AGE_SECRET_KEY=${q}"
     fi
+    local q; q="$(printf '%q' "${remote_root}")"; cmd+=" && export PLATFORM_ROOT=${q}"
     # ⚠️ TRAP[BUG] · 2026-07-17 · P2 · ci_deploy_key from node.yaml not exported
     # · Fix: fallback to ci_deploy_key parameter when env var is unset.
     local effective_ci_key="${PLATFORM_CI_DEPLOY_KEY:-${ci_deploy_key:-}}"
@@ -74,13 +87,16 @@ build_ssh_cmd() {
 build_update_ssh_cmd() {
     local node_name="$1" age_key="$2"
     shift 2; local passthrough_args=("$@")
-    local remote_orchestrator="${PLATFORM_ROOT:-/opt/platform}/core/internal/bootstrap/node-lifecycle.sh"
+    # PLATFORM_ROOT export — same convention as build_ssh_cmd (remote_root = scp-deliver base)
+    local remote_root="${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}"
+    local remote_orchestrator="${remote_root}/core/internal/bootstrap/node-lifecycle.sh"
     local remote_node_yaml="/opt/node-configs/${node_name}/node.yaml"
     local cmd="set -euo pipefail"
 
     if [[ -n "${age_key}" ]]; then
         local q; q="$(printf '%q' "${age_key}")"; cmd+=" && export AGE_SECRET_KEY=${q}"
     fi
+    local q; q="$(printf '%q' "${remote_root}")"; cmd+=" && export PLATFORM_ROOT=${q}"
     if [[ -n "${PLATFORM_DOMAIN:-}" ]]; then
         local q; q="$(printf '%q' "${PLATFORM_DOMAIN}")"; cmd+=" && export PLATFORM_DOMAIN=${q}"
     fi
@@ -103,8 +119,12 @@ build_update_ssh_cmd() {
 # region FUNC_build_converge_ssh_cmd
 build_converge_ssh_cmd() {
     local node_name="$1"; shift 1; local passthrough_args=("$@")
-    local remote_converge="${PLATFORM_ROOT:-/opt/platform}/core/internal/bootstrap/converge.sh"
-    local cmd="set -euo pipefail && bash $(printf '%q' "${remote_converge}")"
+    # PLATFORM_ROOT export — same convention as build_ssh_cmd (remote_root = scp-deliver base)
+    local remote_root="${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}"
+    local remote_converge="${remote_root}/core/internal/bootstrap/converge.sh"
+    local cmd="set -euo pipefail"
+    local q; q="$(printf '%q' "${remote_root}")"; cmd+=" && export PLATFORM_ROOT=${q}"
+    cmd+=" && bash $(printf '%q' "${remote_converge}")"
     cmd+=" $(printf '%q' '--node') $(printf '%q' "${node_name}")"
     for arg in "${passthrough_args[@]}"; do cmd+=" $(printf '%q' "${arg}")"; done
     echo "${cmd}"

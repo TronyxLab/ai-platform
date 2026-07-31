@@ -58,15 +58,8 @@ if _SHARED_DIR not in _sys.path:
 from node_yaml import extract_context_from_node_yaml
 
 # DevPlan 079 DRIFT-B6: shared docker compose operations
-from core.internal.shared.docker_compose import (
-    docker_compose_build as _shared_docker_compose_build,
-)
-from core.internal.shared.docker_compose import (
-    docker_compose_pull as _shared_docker_compose_pull,
-)
-from core.internal.shared.docker_compose import (
-    docker_compose_up as _shared_docker_compose_up,
-)
+# (docker_compose_build/pull/up импорты удалены 2026-07-31 — dead wrappers F1 устранены,
+#  остался только healthcheck_poll для _is_project_healthy)
 from core.internal.shared.docker_compose import (
     healthcheck_poll as _shared_healthcheck_poll,
 )
@@ -76,7 +69,6 @@ from core.internal.shared.docker_compose import (
 
 # ── Constants ──────────────────────────────────────────────────────────────
 HEALTH_GATE_TIMEOUT = 60  # seconds per project
-HEALTH_POLL_INTERVAL = 3  # seconds between healthcheck retries
 DEFAULT_PROJECTS_BASE = "/opt/projects"
 AUDIT_LOG = "/var/log/platform/audit.log"
 PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")
@@ -449,13 +441,12 @@ services:
 # endregion FUNC_ensure_bootstrap_compose
 
 
-# ── REMOVED (DevPlan 091 Wave A, AC4) ──────────────────────────────────────
+# ── REMOVED (DevPlan 091 Wave A, AC4 + debt F1 2026-07-31) ─────────────────
 # _deploy_single_project() — 90 LOC parallel deploy path (pull→build→up→healthcheck)
 # that bypassed DeployOrchestrator, AuditLogger, DeployHistory snapshots, and unified
 # HealthcheckPoller. Removed in favor of _deploy_single_project_via_orchestrator() as
-# the sole deploy entrypoint. The Docker-operations helpers below (_docker_compose_pull,
-# _docker_compose_build, _docker_compose_up, _wait_until_healthy) are retained as thin
-# wrappers consumed by other callers and by tests, but are no longer used by a bypass path.
+# the sole deploy entrypoint. Thin wrappers (_docker_compose_pull, _docker_compose_build,
+# _docker_compose_up, _wait_until_healthy) были dead code — удалены (F1).
 # endregion DEPLOY_LOGIC
 
 
@@ -476,66 +467,6 @@ def _is_project_healthy(project_name: str) -> bool:
 
 
 # endregion FUNC_is_project_healthy
-
-
-# region FUNC_docker_compose_pull
-## @purpose — Run docker compose pull via shared module (DevPlan 079).
-## @io — ⇥ project_dir: str → ⎋ bool (True = success)
-## @complexity — O(1) + network
-## @invariants
-##   - Delegates to shared docker_compose_pull()
-##   - Timeout: 120s
-def _docker_compose_pull(project_dir: str) -> bool:
-    """Pull images for project via shared docker_compose_pull."""
-    return _shared_docker_compose_pull(project_dir)
-
-
-# endregion FUNC_docker_compose_pull
-
-
-# region FUNC_docker_compose_build
-## @purpose — Run docker compose build via shared module (DevPlan 079).
-## @io — ⇥ project_dir: str → ⎋ bool (True = success)
-## @complexity — O(1) + build time
-## @invariants
-##   - Delegates to shared docker_compose_build()
-##   - Timeout: 300s
-def _docker_compose_build(project_dir: str) -> bool:
-    """Build images for project via shared docker_compose_build."""
-    return _shared_docker_compose_build(project_dir)
-
-
-# endregion FUNC_docker_compose_build
-
-
-# region FUNC_docker_compose_up
-## @purpose — Run docker compose up -d via shared module (DevPlan 079).
-## @io — ⇥ project_dir: str → ⎋ bool (True = success)
-## @complexity — O(1) + startup time
-## @invariants
-##   - Delegates to shared docker_compose_up()
-##   - Timeout: 120s
-def _docker_compose_up(project_dir: str) -> bool:
-    """Start project via shared docker_compose_up."""
-    return _shared_docker_compose_up(project_dir)
-
-
-# endregion FUNC_docker_compose_up
-
-
-# region FUNC_wait_until_healthy
-## @purpose — Poll project health via shared healthcheck_poll until healthy or timeout.
-## @io — ⇥ project_name: str, timeout: int → ⎋ str ("healthy" | "unhealthy")
-## @complexity — O(T/I) where T = timeout, I = poll interval
-## @invariants
-##   - Delegates to shared healthcheck_poll()
-##   - Returns "unhealthy" if timeout reached
-def _wait_until_healthy(project_name: str, timeout: int) -> str:
-    """Wait until project is healthy or timeout via shared healthcheck_poll."""
-    return _shared_healthcheck_poll(project_name, timeout=timeout, interval=HEALTH_POLL_INTERVAL)
-
-
-# endregion FUNC_wait_until_healthy
 
 
 # endregion DOCKER_OPERATIONS

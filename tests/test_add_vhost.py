@@ -26,6 +26,16 @@ from conftest import assert_ldd_stderr, source_and_run
 
 # ─── Constants ───────────────────────────────────────────────────────
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "core" / "internal" / "scaffold" / "add-vhost.sh"
+# 📝 TRAP[DEBT] · 2026-07-31 · HI · Все 7 тестов этого файла падают (main() exit 1 после
+# · Observed: "Starting vhost management" без stderr — "main() failed"; gate MODE=fast RED
+#   (83 failures на HEAD, из них 7 здесь).
+# · Suspected: needs investigation — add-vhost.sh мигрирован на Strangler-Fig Python-модуль
+#   `core.internal.scaffold.vhost_renderer` (exec python3 -m ..., строка 106), а тесты всё ещё
+#   ожидают shell-генерацию vhost с перехватом через mock validate.sh (TRAP-6). Мок больше
+#   не вызывается; python-модуль падает (exit 1) на синтетическом входе теста.
+# · Impact: make gate MODE=fast красный на HEAD — блокирует CI; TRAP-6 делегирование validate.sh
+#   покрыто vhost_renderer-путем, тест не обновлён.
+# · When: верификация DevPlan 095 AC9 (2026-07-31) — pre-existing, не связано с 095.
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent  # /Users/.../ai-platform
 
 
@@ -195,82 +205,64 @@ target_node: mynode
 # endregion FUNC_test_add_vhost_cert_path_independent
 
 
-# region FUNC_test_fqdn_check_delegates_to_validate
-## @purpose  Verify that FQDN checking delegates to validate.sh --check-fqdn (TRAP-6).
-##           The test:
-##           1. Copies add-vhost.sh to a temp directory with a mock validate.sh alongside
-##           2. Creates a minimal ai-platform.yaml with expose:true + domain
-##           3. Runs main() via source_and_run
-##           4. Asserts that validate.sh --check-fqdn was called by checking mock's stderr
+# region FUNC_test_fqdn_duplicate_domain_rejected
+## @purpose  Verify FQDN uniqueness enforcement moved to Python (check_duplicate_domains):
+##           render-all с двумя проектами с одинаковым domain → DuplicateDomainError → ненулевой rc,
+##           stderr содержит "Duplicate domain". Заменяет stale-тест делегации в validate.sh --check-fqdn
+##           (контракт удалён при Strangler-миграции — см. TRAP в vhost_renderer.py:30).
 ## @io       ⇥ tmp_path fixture → ⎛ assertions on stderr + return code
 ## @complexity O(1)
 
 
-# 🧪 TRAP[TEST] · Regression: TRAP-6 — add-vhost.sh must delegate to validate.sh --check-fqdn
-# · Scenario: basic ai-platform.yaml with expose:true + domain → main() calls validate.sh
-# · Last fail: N/A (new test)
-# · Remove if: FQDN check is moved to a different mechanism (not shell script delegation)
-def test_fqdn_check_delegates_to_validate(tmp_path: Path) -> None:
-    """FQDN delegation: add-vhost.sh calls validate.sh --check-fqdn (not local grep)."""
-    # ── Arrange: copy script to temp, create mock validate.sh, create fixtures ──
+# 🧪 TRAP[TEST] · Regression: duplicate FQDN must abort render-all (бывш. TRAP-6 validate.sh --check-fqdn)
+# · Scenario: node.yaml с двумя проектами, domain=a.test.local у обоих → render-all FAIL
+# · Last fail: shell-делегация удалена; Python check_duplicate_domains (vhost_renderer.py:519)
+# · Remove if: FQDN check is moved to a different mechanism
+def test_fqdn_duplicate_domain_rejected(tmp_path: Path) -> None:
+    """Duplicate FQDN in node.yaml → render-all abort with DuplicateDomainError."""
+    # ── Arrange: copy script to temp, create fixtures ──
 
     # 1. Copy add-vhost.sh to temp (so SCRIPT_DIR points to temp dir)
     script_copy = tmp_path / "add-vhost.sh"
     shutil.copy2(str(SCRIPT_PATH), str(script_copy))
 
-    # 2. Create mock validate.sh next to the temp copy
-    mock_validate = tmp_path / "validate.sh"
-    mock_validate.write_text("""#!/bin/bash
-# Mock validate.sh — logs call and exits 0 (no FQDN conflict)
-echo "[IMP:9][validate][mock] Called with: $@" >&2
-exit 0
-""")
-    mock_validate.chmod(0o755)
-
-    # 3. Create project directory with ai-platform.yaml
-    project_dir = tmp_path / "test-project"
-    project_dir.mkdir()
-    (project_dir / "ai-platform.yaml").write_text("""expose: true
-domain: example.com
-target_node: mynode
-""")
-
-    # 4. Create node-configs directory (flat layout — no conf.d/ subdir)
+    # 2. Create node-configs directory structure with node.yaml (2 projects, SAME domain)
     node_configs_dir = tmp_path / "node-configs"
-    (node_configs_dir / "mynode" / "overlays" / "nginx").mkdir(parents=True)
+    overlay_dir = node_configs_dir / "testnode" / "overlays" / "nginx"
+    overlay_dir.mkdir(parents=True)
+    node_yaml = node_configs_dir / "testnode" / "node.yaml"
+    node_yaml.write_text("""domain: test.local
+projects:
+  - name: project-a
+    domain: a.test.local
+    repo: git@github.com:test/a.git
+  - name: project-b
+    domain: a.test.local
+    repo: git@github.com:test/b.git
+""")
 
-    # 5. Set PLATFORM_ROOT to real project root (so logging.sh resolves)
+    # 3. Set PLATFORM_ROOT + PLATFORM_DOMAIN
     env = {
         "PLATFORM_ROOT": str(PLATFORM_ROOT),
+        "PLATFORM_DOMAIN": "test.local",
     }
 
-    # ── Act ──
+    # ── Act: main --render-all (FQDN uniqueness check выполняется ДО генерации) ──
     result = source_and_run(
-        f'main "--project-dir" "{project_dir}" "--node-configs-dir" "{node_configs_dir}"',
+        f'main "--render-all" "--node" "testnode" "--node-configs-dir" "{node_configs_dir}"',
         env=env,
         script_path=str(script_copy),
     )
 
     # ── Assert ──
-    assert result.returncode == 0, f"main() failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
-
-    # Verify mock validate.sh received --check-fqdn with project dir
-    mock_output = [line for line in result.stderr.splitlines() if "[validate][mock]" in line]
-    assert any("Called with: --check-fqdn" in line for line in mock_output), (
-        "Mock validate.sh was not called with --check-fqdn.\n"
-        "Mock stderr lines:\n" + "\n".join(mock_output) + "\n"
-        f"Full stderr:\n{result.stderr}"
+    # Duplicate domain → DuplicateDomainError → exit 1, НИ ОДИН vhost не записан
+    assert result.returncode != 0, (
+        f"render-all должен упасть при дубликате FQDN (all-or-nothing), но вернул 0.\nSTDERR:\n{result.stderr}"
     )
-
-    # Verify the project directory was passed to validate.sh
-    assert any(str(project_dir) in line for line in mock_output), (
-        "validate.sh did not receive project directory.\nMock lines:\n" + "\n".join(mock_output)
+    assert "Duplicate domain" in result.stderr, f"stderr должен содержать 'Duplicate domain':\n{result.stderr}"
+    assert not list(overlay_dir.glob("*.conf")), (
+        "Ни один vhost не должен быть записан при дубликате FQDN (all-or-nothing)"
     )
-
-    # Verify the nginx vhost was generated (confirming full flow completed, flat layout)
-    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "example.com.conf"
-    assert vhost_file.is_file(), f"Vhost file was not generated: {vhost_file}"
-    assert "proxy_pass" in vhost_file.read_text(), "Vhost missing proxy_pass directive"
 
     # LDD telemetry
     assert_ldd_stderr(result)
@@ -390,17 +382,19 @@ target_node: mynode
 
 
 # region FUNC_test_add_vhost_hyphen_normalization
-## @purpose  Verify that generate_vhost_body() normalizes hyphens to underscores in nginx
+## @purpose  Verify that vhost rendering normalizes hyphens to underscores in nginx
 ##           upstream variable names. Project name `my-cool-app` → `$upstream_my_cool_app`
 ##           (underscores), NOT `$upstream_my-cool-app` (which nginx would parse as variable minus literals).
+##           Контракт: main --add → vhost файл (раньше: прямой вызов generate_vhost_body в shell —
+##           функция удалена при Strangler-миграции в vhost_renderer.py).
 ## @regression  D1.1: hyphens in project name cause nginx syntax error in upstream variable
-## @io       ⇥ tmp_path → ◇ source_and_run(generate_vhost_body) → ⊕ assert upstream uses underscores
+## @io       ⇥ tmp_path → ◇ main --add → ⊕ assert upstream uses underscores
 ##           ⊕ assert no hyphenated upstream variable ⊕ assert server_name preserves hyphens
 ## @complexity O(1)
 
 
 # 🧪 TRAP[TEST] · Regression: D1.1 — hyphens in project name → underscore normalization
-# · Scenario: my-cool-app project → generate_vhost_body → must use $upstream_my_cool_app
+# · Scenario: my-cool-app project → vhost body must use $upstream_my_cool_app
 # · Last fail: nginx syntax error on $upstream_my minus cool minus app
 # · Remove if: nginx variable names are no longer derived from project name
 def test_add_vhost_hyphen_normalization(tmp_path: Path) -> None:
@@ -409,25 +403,35 @@ def test_add_vhost_hyphen_normalization(tmp_path: Path) -> None:
     script_copy = tmp_path / "add-vhost.sh"
     shutil.copy2(str(SCRIPT_PATH), str(script_copy))
 
-    # Create mock validate.sh (needed for script source, not used by generate_vhost_body directly)
-    mock_validate = tmp_path / "validate.sh"
-    mock_validate.write_text("""#!/bin/bash
-echo "[IMP:9][validate][mock] Called with: $@" >&2
-exit 0
+    # Create project directory named my-cool-app with ai-platform.yaml
+    project_dir = tmp_path / "my-cool-app"
+    project_dir.mkdir()
+    (project_dir / "ai-platform.yaml").write_text("""expose: true
+domain: app.test.local
+target_node: mynode
 """)
-    mock_validate.chmod(0o755)
+
+    node_configs_dir = tmp_path / "node-configs"
+    (node_configs_dir / "mynode" / "overlays" / "nginx").mkdir(parents=True)
 
     env = {
         "PLATFORM_ROOT": str(PLATFORM_ROOT),
+        "PLATFORM_DOMAIN": "test.local",
     }
 
-    # ── Act: call generate_vhost_body directly ──
-    function_call = 'generate_vhost_body "app.test.local" "my-cool-app" "test.local"'
-    result = source_and_run(function_call, env=env, script_path=str(script_copy))
+    # ── Act: main --add (публичный контракт facade; render_vhost в Python) ──
+    result = source_and_run(
+        f'main "--project-dir" "{project_dir}" "--node-configs-dir" "{node_configs_dir}"',
+        env=env,
+        script_path=str(script_copy),
+    )
 
     # ── Assert ──
-    assert result.returncode == 0, f"generate_vhost_body failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
-    body = result.stdout
+    assert result.returncode == 0, f"main() failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+
+    vhost_file = node_configs_dir / "mynode" / "overlays" / "nginx" / "app.test.local.conf"
+    assert vhost_file.is_file(), f"Vhost file not generated: {vhost_file}"
+    body = vhost_file.read_text()
 
     print("--- VHOST BODY (hyphen normalization) ---")
     print(body)
@@ -444,93 +448,75 @@ exit 0
     # server_name can still use hyphens (nginx allows hyphens in server_name)
     assert "server_name app.test.local" in body, f"Vhost body must contain 'server_name app.test.local':\n{body}"
 
-    # LDD telemetry — generate_vhost_body has no log_imp calls (pure stdout),
-    # so manual trajectory print without IMP:9 assertion
-    print("--- LDD TRAJECTORY (stderr) ---")
-    for line in result.stderr.splitlines():
-        if "[IMP:" in line:
-            try:
-                imp_level = int(line.split("[IMP:")[1].split("]")[0])
-                if imp_level >= 7:
-                    print(line)
-            except (ValueError, IndexError):
-                pass
-    print("--- END LDD TRAJECTORY ---")
+    # LDD telemetry
+    assert_ldd_stderr(result)
 
 
 # endregion FUNC_test_add_vhost_hyphen_normalization
 
 
 # region FUNC_test_add_vhost_wildcard_cert_resolution
-## @purpose  Verify resolve_cert_domain() returns correct cert path:
+## @purpose  Verify cert domain resolution in rendered vhost:
 ##           - Subdomains of PLATFORM_DOMAIN → wildcard cert path (PLATFORM_DOMAIN)
 ##           - Apex PLATFORM_DOMAIN → wildcard cert path (PLATFORM_DOMAIN)
 ##           - Independent domains → personal cert path (own FQDN)
+##           Контракт: main --add → stderr render_vhost "(cert=...)" (раньше: прямой вызов
+##           resolve_cert_domain в shell — функция удалена при Strangler-миграции).
 ## @regression  Ensure cert path resolution for DD3 (wildcard) and O11 (own cert)
-## @io       ⇥ tmp_path → ◇ source_and_run(resolve_cert_domain) with various FQDNs
-##           ⊕ assert stdout contains expected cert domain
+## @io       ⇥ tmp_path → ◇ main --add с разными FQDNs → ⊕ assert cert= в stderr
 ## @complexity O(1)
 
 
 # 🧪 TRAP[TEST] · Regression: cert domain resolution — subdomain/apex/independent
-# · Scenario: resolve_cert_domain with app.tronyx.ru → platform domain;
-#             resolve_cert_domain with myapp.com → own domain
+# · Scenario: app.tronyx.ru → platform domain; myapp.com → own domain
 # · Last fail: N/A (new test)
 # · Remove if: cert resolution logic is replaced with different mechanism
 def test_add_vhost_wildcard_cert_resolution(tmp_path: Path) -> None:
-    """Verify resolve_cert_domain returns correct cert domain for subdomain, apex, and independent domains."""
+    """Verify rendered vhost uses correct cert domain for subdomain, apex, and independent domains."""
     # ── Arrange ──
     script_copy = tmp_path / "add-vhost.sh"
     shutil.copy2(str(SCRIPT_PATH), str(script_copy))
 
-    # Base env: PLATFORM_DOMAIN + PLATFORM_ROOT for logging.sh
+    node_configs_dir = tmp_path / "node-configs"
+    (node_configs_dir / "mynode" / "overlays" / "nginx").mkdir(parents=True)
+
     env = {
         "PLATFORM_DOMAIN": "tronyx.ru",
         "PLATFORM_ROOT": str(PLATFORM_ROOT),
     }
 
+    def run_add(project_name: str, domain: str):
+        """Run main --add for a project with the given domain; return CompletedProcess."""
+        project_dir = tmp_path / project_name
+        project_dir.mkdir(exist_ok=True)
+        (project_dir / "ai-platform.yaml").write_text(f"expose: true\ndomain: {domain}\ntarget_node: mynode\n")
+        return source_and_run(
+            f'main "--project-dir" "{project_dir}" "--node-configs-dir" "{node_configs_dir}"',
+            env=env,
+            script_path=str(script_copy),
+        )
+
     # ── Test 1: Subdomain of PLATFORM_DOMAIN → wildcard cert path ──
-    result = source_and_run(
-        'resolve_cert_domain "app.tronyx.ru"',
-        env=env,
-        script_path=str(script_copy),
-    )
-    assert result.returncode == 0, (
-        f"resolve_cert_domain subdomain failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
-    )
+    result = run_add("sub-app", "app.tronyx.ru")
+    assert result.returncode == 0, f"main() subdomain failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
     print("--- Test 1: subdomain app.tronyx.ru ---")
-    print(f"STDOUT: [{result.stdout.strip()}]")
     print(f"STDERR: [{result.stderr.strip()}]")
-    assert "tronyx.ru" in result.stdout, (
-        f"Subdomain should resolve to wildcard cert domain 'tronyx.ru', got: '{result.stdout.strip()}'"
-    )
+    assert "cert=tronyx.ru" in result.stderr, f"Subdomain should use wildcard cert 'tronyx.ru', got:\n{result.stderr}"
 
     # ── Test 2: Apex domain → wildcard cert path (apex IS the platform domain) ──
-    result = source_and_run(
-        'resolve_cert_domain "tronyx.ru"',
-        env=env,
-        script_path=str(script_copy),
-    )
-    assert result.returncode == 0, f"resolve_cert_domain apex failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
+    result = run_add("apex-app", "tronyx.ru")
+    assert result.returncode == 0, f"main() apex failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
     print("--- Test 2: apex tronyx.ru ---")
-    print(f"STDOUT: [{result.stdout.strip()}]")
-    assert "tronyx.ru" in result.stdout, (
-        f"Apex domain should resolve to its own cert path 'tronyx.ru', got: '{result.stdout.strip()}'"
-    )
+    print(f"STDERR: [{result.stderr.strip()}]")
+    assert "cert=tronyx.ru" in result.stderr, f"Apex domain should use cert 'tronyx.ru', got:\n{result.stderr}"
 
     # ── Test 3: Independent domain (not subdomain of PLATFORM_DOMAIN) → personal cert path ──
-    result = source_and_run(
-        'resolve_cert_domain "myapp.com"',
-        env=env,
-        script_path=str(script_copy),
-    )
-    assert result.returncode == 0, (
-        f"resolve_cert_domain independent failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
-    )
+    result = run_add("indie-app", "myapp.com")
+    assert result.returncode == 0, f"main() independent failed:\nSTDERR:{result.stderr}\nSTDOUT:{result.stdout}"
     print("--- Test 3: independent myapp.com ---")
-    print(f"STDOUT: [{result.stdout.strip()}]")
-    assert "myapp.com" in result.stdout, (
-        f"Independent domain should resolve to personal cert domain 'myapp.com', got: '{result.stdout.strip()}'"
+    print(f"STDERR: [{result.stderr.strip()}]")
+    assert "cert=myapp.com" in result.stderr, (
+        f"Independent domain should use own cert 'myapp.com', got:\n{result.stderr}"
     )
 
     # LDD telemetry from last result
@@ -592,12 +578,9 @@ projects:
     repo: git@github.com:test/b.git
 """)
 
-    # Mock nginx_t_harness to skip Docker validation (unit test focus: file cleanup)
-    function_call = (
-        'nginx_t_harness() { log_imp 7 "harness" "MOCK: skipping nginx -t for unit test"; return 0; }; '
-        'parse_args "--render-all" "--node" "testnode" '
-        f'"--node-configs-dir" "{node_configs_dir}" && render_all'
-    )
+    # nginx_t_harness выполняется в Python (vhost_renderer) — не мокается через shell-функцию.
+    # nginx:1.28-alpine образ локально закеширован → harness работает быстро.
+    function_call = f'main "--render-all" "--node" "testnode" "--node-configs-dir" "{node_configs_dir}"'
     result = source_and_run(function_call, env=env, script_path=str(script_copy))
 
     # Verify both vhosts were rendered

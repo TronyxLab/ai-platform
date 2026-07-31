@@ -218,3 +218,48 @@ def get_me(
 
 
 # endregion FUNC_get_me
+
+
+# region FUNC_main
+def main() -> int:
+    """CLI entry: `python3 -m core.internal.shared.telegram_notifier send <text>|get-me`.
+
+    ▶ ┌argv + env┐ → ◇ parse → ◇ send/get-me dispatch → ⎋ exit 0|1
+
+    ## @purpose — CLI для shell-фасадов: send / get-me (Strangler 2026-07-31 — заменяет 3 inline
+    ##            python3 -c с sys.path.insert: notify-hook.sh, tor-proxy-healthcheck.sh, disk-monitor.sh).
+    ## @io — ⇥ argv + env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_URL|PROXY_URL)
+    ##       → ⎋ exit 0|1
+    ## @invariants — токен/чат читаются из env (никаких секретов в argv)
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Telegram notifier CLI")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    send_parser = subparsers.add_parser("send", help="Send message to chat")
+    send_parser.add_argument("text", help="Message text")
+    subparsers.add_parser("get-me", help="Verify Telegram API reachability")
+    args = parser.parse_args()
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        logger.error("[IMP:10][telegram][cli] TELEGRAM_BOT_TOKEN not set")
+        return 1
+
+    proxy = os.environ.get("TELEGRAM_PROXY_URL") or os.environ.get("PROXY_URL")
+    if args.command == "send":
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if not chat_id:
+            logger.error("[IMP:10][telegram][cli] TELEGRAM_CHAT_ID not set")
+            return 1
+        ok = send_telegram(args.text, chat_id=chat_id, token=token, proxy_url=proxy, parse_mode="HTML")
+        return 0 if ok else 1
+    ok = get_me(token=token, proxy_url=proxy)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())
+# endregion FUNC_main

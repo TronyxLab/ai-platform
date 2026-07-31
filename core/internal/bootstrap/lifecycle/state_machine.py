@@ -389,8 +389,15 @@ class BootstrapState:
     ## @invariants
     ##   - precondition failures are BLOCKING — phase will not execute
     ##   - Error message is human-readable for operator action
-    def precondition_check(self, phase_value: str) -> None:
-        """Validate preconditions for a given phase value. Raises PhasePreconditionError on failure."""
+    def precondition_check(self, phase_value: str, core_dir: str | None = None) -> None:
+        """Validate preconditions for a given phase value. Raises PhasePreconditionError on failure.
+
+        ## @io — ⇥ phase_value: BootstrapPhase, core_dir: str | None (StateMachine.core_dir
+        ##        — единый источник резолюции; fallback: CORE_DIR env → /opt/platform/core)
+        ## @invariants
+        ##   - core_dir передаётся из StateMachine (self.core_dir, установлен CLI из PLATFORM_ROOT);
+        ##     BootstrapState не хранит core_dir — параметр, не атрибут.
+        """
         if phase_value == BootstrapPhase.SYSTEM_BOOTSTRAP:
             if os.geteuid() != 0:
                 raise PhasePreconditionError(
@@ -435,7 +442,14 @@ class BootstrapState:
 
         elif phase_value == BootstrapPhase.CERTIFICATES:
             # Verify acme.sh or install script available
-            core_dir = os.environ.get("CORE_DIR", "/opt/platform/core")
+            # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · precondition искал core по CORE_DIR env (default /opt/platform)
+            # · Symptom: φ8 precondition: "deploy-modules.sh at /opt/platform/core/... required" на ноде,
+            # ·   где core лежит по mirror-пути PLATFORM_ROOT (см. remote-cmd.sh TRAP[BUG] PLATFORM_ROOT).
+            # ·   CORE_DIR env не экспортируется remote-командой — использовался дефолт /opt/platform.
+            # · Fix: резолвить core_dir через self.core_dir (уже установлен CLI из PLATFORM_ROOT,
+            # ·   строка 1333) — единый источник с _execute_phase (строка 838).
+            # · Prevention: не дублировать резолюцию core_dir в прекондишенах — всегда self.core_dir.
+            core_dir = core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
             acme_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
             if not os.path.isfile(acme_script):
                 logger.warning(
@@ -445,7 +459,7 @@ class BootstrapState:
                 )
 
         elif phase_value in (BootstrapPhase.DEPLOY_SERVICES, BootstrapPhase.DEPLOY_UPDATE):
-            core_dir = os.environ.get("CORE_DIR", "/opt/platform/core")
+            core_dir = core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
             deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
             if not os.path.isfile(deploy_script):
                 raise PhasePreconditionError(f"Phase {phase_value} requires deploy-modules.sh at {deploy_script}")
@@ -463,7 +477,7 @@ class BootstrapState:
 
         elif phase_value in (BootstrapPhase.CONVERGE_SERVICES, BootstrapPhase.CONVERGE_UPDATE):
             # Converge script must exist
-            core_dir = os.environ.get("CORE_DIR", "/opt/platform/core")
+            core_dir = core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
             converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
             if not os.path.isfile(converge_script):
                 logger.warning(
@@ -490,15 +504,34 @@ class BootstrapState:
 
     @staticmethod
     def _check_command_exists(cmd: str) -> bool:
-        """Check if a system command is available via command -v.
+        """Check if a system command is available via `command -v` (bash builtin).
+
+        ▶ ┌cmd┐ → ⚡ bash -c "command -v <cmd>" → ◇ rc!=0? → False | ⎋ True
 
         ## @purpose — Verify prerequisite command existence for precondition checks.
         ## @io — ⇥ cmd: str → ⎋ bool
         ## @complexity — O(1)
+        ## @invariants
+        ##   - `command -v` — bash builtin: запускается ЧЕРЕЗ bash -c (не прямым exec)
+        ## ⚠️ TRAP[BUG] · 2026-07-31 · P1 · `command -v` через прямой exec НИКОГДА не работал
+        ## · Symptom: precondition_check(φ1 system_bootstrap) падал на ЧИСТОЙ ноде:
+        ## ·   "Phase system_bootstrap requires 'apt-get' which is not available" —
+        ## ·   apt-get существует (which apt-get → /usr/bin/apt-get). E2E DevPlan 095 T6.
+        ## · Root: `command` — bash-встроенная (builtin), НЕ исполняемый файл.
+        ## ·   subprocess.run(["command", "-v", cmd]) → FileNotFoundError:
+        ## ·   "No such file or directory: 'command'" → except → return False.
+        ## ·   Функция возвращала False для ЛЮБОЙ команды в ЛЮБОМ окружении —
+        ## ·   все command-прекондишены всех фаз были мёртвыми (ложный отказ).
+        ## · Fix: /bin/bash -c "command -v <cmd>" — builtin вызывается внутри bash.
+        ## ·   (shutil.which отклонён: 3 pre-existing unit-теста мокают subprocess.run —
+        ## ·   MagicMock(returncode=0) → контракт моков сохраняется; платформа bash-first.)
+        ## · Prevention: не использовать bash builtins через subprocess.run(list) —
+        ## ·   builtin обязан вызываться через bash -c.
+        ## · Source: обнаружено при верификации DevPlan 095 AC4 (cold-start bootstrap).
         """
         try:
             result = subprocess.run(
-                ["command", "-v", cmd],
+                ["/bin/bash", "-c", f"command -v {shlex.quote(cmd)} >/dev/null 2>&1"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -780,7 +813,7 @@ class StateMachine:
             )
 
         # Step 2: Check preconditions
-        self.state.precondition_check(phase_value)
+        self.state.precondition_check(phase_value, core_dir=self.core_dir)
 
         # Step 3: Dynamic import and execute from phases.py
         try:
@@ -868,7 +901,7 @@ class StateMachine:
                 raise PhaseDependencyError(f"Grouped phase '{phase_value}' requires prerequisite '{dep}'")
 
         # Check preconditions
-        self.state.precondition_check(phase_value)
+        self.state.precondition_check(phase_value, core_dir=self.core_dir)
 
         if sub_steps is None:
             logger.info("[IMP:7][execute_grouped_phase] No sub_steps for %s — running as simple phase", phase_value)
@@ -1415,7 +1448,12 @@ def _run_init_mode(sm: StateMachine) -> int:
         phase_state = sm.state.steps.get(phase)
         if phase_state is not None:
             if isinstance(phase_state, dict):
-                if phase_state.get("done", False):
+                # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · loaded state.json (StepState dict: {name,status,hash})
+                # · не содержит ключа "done" → проверка phase_state.get("done") всегда False →
+                # · повторный bootstrap ПЕРЕВЫПОЛНЯЛ все 9 фаз (без SKIP-логов, ~10 мин лишних).
+                # · E2E DevPlan 095 T13 (idempotent rebootstrap): skip markers found=0 при exit 0.
+                # · Fix: status=="done" учитывается и для dict-представления (StepState.to_dict).
+                if phase_state.get("done", False) or phase_state.get("status") == "done":
                     logger.info("[IMP:7][run_init] Phase %s already done — skipping", phase)
                     continue
             elif phase_state.status == "done":
@@ -1960,8 +1998,25 @@ def _ensure_secrets_exist(core_dir: str) -> None:
 
     # Step 1: Check file exists (after decrypt)
     if not os.path.isfile(secrets_env):
-        logger.error("[IMP:9][ensure_secrets] %s not found after decrypt — cannot generate secrets", secrets_env)
-        raise ConfigNotFoundError(f"secrets.env not found: {secrets_env}")
+        # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Чистая нода без secrets не могла забутстрапиться
+        # · Symptom: φ4 secrets_provision FATAL на ноде без AGE-секретов: "secrets.env not found:
+        # ·   /run/platform/secrets.env" — decrypt SKIP (нет enc-файла) → env не создан →
+        # ·   ensure падал ConfigNotFoundError. E2E DevPlan 095 T6 (node-configs/test-e2e без secrets/).
+        # · Root: step_10_decrypt_secrets SKIP'ается при отсутствии <node>.enc.yaml (lib/secrets.sh),
+        # ·   но _ensure_secrets_exist требовал secrets.env безусловно. Autogen-механизм
+        # ·   (secrets_manager.ensure_secrets → Step 3.5) сам создаёт secrets.env из
+        # ·   secrets-manifest.yaml — блокировал только этот ранний raise.
+        # · Fix: env отсутствует + НЕТ enc-файла → нода без операторских секретов → SKIP до autogen
+        # ·   (ensure создаст файл из манифеста). env отсутствует + enc ЕСТЬ → decrypt FAILED → FATAL.
+        # · Prevention: no-secrets нода (modules=[], без secrets/) — валидное состояние; FATAL только
+        # ·   при реальном сбое расшифровки.
+        node_name = os.environ.get("NODE_NAME", "")
+        configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
+        enc_file = os.path.join(configs_dir, "secrets", f"{node_name}.enc.yaml")
+        if os.path.isfile(enc_file):
+            logger.error("[IMP:9][ensure_secrets] %s not found after decrypt — cannot generate secrets", secrets_env)
+            raise ConfigNotFoundError(f"secrets.env not found: {secrets_env}")
+        logger.info("[IMP:8][ensure_secrets] No encrypted secrets for node='%s' — autogen-only secrets.env", node_name)
 
     # Step 2: Source secrets.env into os.environ
     try:

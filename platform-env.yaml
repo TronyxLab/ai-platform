@@ -201,6 +201,8 @@ env_defaults:
   DEPENDENCY_CHECK_TIMEOUT: '2.0'
   GHCR_PULL_TOKEN: ghp_test-token-for-ci-only
   GHCR_PUSH_TOKEN: ci-ghcr-push-token
+  PROJECTS_BASE: /opt/projects
+  PLATFORM_DEPLOY_TIMEOUT: '600'
   POSTGRES_PASSWORD: test-pg-pwd
   CLICKHOUSE_PASSWORD: test-clickhouse-pwd-not-for-prod
   AGE_SECRET_KEY: AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ

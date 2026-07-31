@@ -43,6 +43,13 @@ PLATFORM_AUDIT_LOG="${PLATFORM_LOG_DIR}/audit.log"
 ## @invariants — never fails the caller (errors → stderr WARN, exit 0)
 audit_log() {
     local tag="${1:-unknown}" status="${2:-INFO}" msg="${3:-}"
+    # AUDIT_LOG_FILE env — тестовый override пути (иначе DEFAULT_LOG_FILE в Python-модуле)
+    if [[ -n "${AUDIT_LOG_FILE:-}" ]]; then
+        python3 -m "${_AUDIT_PY_MODULE}" write \
+            --tag "${tag}" --status "${status}" --msg "${msg}" --log-file "${AUDIT_LOG_FILE}" 2>/dev/null || \
+            echo "[IMP:6][audit][audit_log] WARN: audit entry dropped (tag=${tag} status=${status})" >&2
+        return 0
+    fi
     python3 -m "${_AUDIT_PY_MODULE}" write \
         --tag "${tag}" --status "${status}" --msg "${msg}" 2>/dev/null || \
         echo "[IMP:6][audit][audit_log] WARN: audit entry dropped (tag=${tag} status=${status})" >&2

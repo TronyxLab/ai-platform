@@ -9,7 +9,8 @@
 # endregion MODULE_CONTRACT
 set -euo pipefail; MODE=""; RESUME_MODE=false; FORCE_MODE=""; DRY_RUN_MODE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; SM_SCRIPT="${SCRIPT_DIR}/lifecycle/state_machine.py"
-export PYTHONPATH="${SCRIPT_DIR}/lifecycle:${PYTHONPATH:-}"
+# ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PYTHONPATH отсутствовал → ModuleNotFoundError: core (script-path не добавляет CWD в sys.path); Fix: корень + lifecycle/ (паттерн converge.sh:64)
+export PYTHONPATH="${SCRIPT_DIR}/../../..:${SCRIPT_DIR}/lifecycle:${PYTHONPATH:-}"
 [[ "${1:-}" == "--mode" ]] && { shift; MODE="${1:-}"; shift || true; }
 [[ "$MODE" == @(init|update) ]] || { echo "[IMP:10][node-lifecycle][args] ERROR: --mode init|update required" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do case "$1" in
@@ -47,9 +48,10 @@ step_skip() { log_step "$1" "SKIP" "${2:-}"; }
 step_warn() { log_step "$1" "WARN" "${2:-}"; STEP_ERRORS+=("Step ${STEP}: $1 — $2"); }
 _delegate() { python3 "${SM_SCRIPT}" "$@"; }
 detect_tor_enabled(){
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · set -e убивал bootstrap при tor.enabled=false — [[ ]] && в конце функции = rc1; Fix: if-форма без else = rc0
     TOR_ENABLED=false; local val
     [[ -n "${NODE_YAML:-}" && -f "$NODE_YAML" ]] && val="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --get tor.enabled --default "false" 2>/dev/null || echo "false")"
-    [[ "${val:-false}" == "true" ]] && TOR_ENABLED=true
+    if [[ "${val:-false}" == "true" ]]; then TOR_ENABLED=true; fi
 }
 main() {
     if [[ "$MODE" == "init" ]]; then

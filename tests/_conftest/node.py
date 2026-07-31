@@ -33,6 +33,8 @@ from typing import Any
 
 import pytest
 
+from tests.helpers.gate_helpers import repo_root
+
 logger = logging.getLogger(__name__)
 
 # ── Constants (mirror core/lib/ssh.sh SSH_OPTS_COMMON + state_machine.DEFAULT_STATE_FILE) ──
@@ -356,22 +358,44 @@ def build_payload_tar(project_dir: Path, out_path: Path | None = None) -> Path:
     return out_path
 
 
-def deliver_payload_via_ssh(node_ssh: NodeSSHClient, tar_path: Path, timeout: int = 300) -> SSHResult:
+def deliver_payload_via_ssh(
+    node_ssh: NodeSSHClient, tar_path: Path, timeout: int = 300, remote_root: str | None = None
+) -> SSHResult:
     """Stream a payload tar to `orchestrator_cli receive` on the node via SSH stdin.
 
-    ▶ ┌tar_path┐ → ⚡ ssh node: cd /opt/platform && PYTHONPATH=/opt/platform python3 -m core.internal.deploy.orchestrator_cli receive ⇦ stdin(tar) → ⎋ SSHResult
+    ▶ ┌tar_path┐ → ⚡ ssh node: cd {remote_root} && PYTHONPATH={remote_root} python3 -m core.internal.deploy.orchestrator_cli receive ⇦ stdin(tar) → ⎋ SSHResult
 
     ## @purpose — CI-equivalent forced-command delivery (DevPlan 095 T9/T16): the tar is
     ##            piped through stdin to the VPS-side DeployOrchestrator.receive().
-    ##            Requires the platform core to be deployed at /opt/platform (bootstrap SCP).
-    ## @io — ⇥ node_ssh, tar_path → ⎋ SSHResult (exit 0 = DeployResult success JSON on stdout)
+    ##            Requires the platform core to be deployed on the VPS (bootstrap SCP).
+    ## @io — ⇥ node_ssh, tar_path, remote_root → ⎋ SSHResult (exit 0 = DeployResult success JSON on stdout)
     ## @complexity — O(P) where P = payload size / bandwidth
     ## @invariants
-    ##   - Remote command: cd /opt/platform && PYTHONPATH=/opt/platform python3 -m core.internal.deploy.orchestrator_cli receive
+    ##   - Remote command: cd {remote_root} && PYTHONPATH={remote_root} python3 -m core.internal.deploy.orchestrator_cli receive
     ##   - stdin = tar.gz bytes; stdout = DeployResult JSON
+    ##   - remote_root resolution: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → repo_root() —
+    ##     единая конвенция с scp-deliver.sh:129 / remote-cmd.sh / overlay_deliverer.sync_core_to_vps
+    ##     (core на VPS лежит по {remote_root}/core — mirror пути локального репозитория,
+    ##     т.к. make bootstrap-node задаёт PLATFORM_ROOT=_platform_root)
+    ## 🧐 TRAP[DECISION] · 2026-07-31 · HI · remote_root вместо hardcoded /opt/platform
+    ## · Rejected: /opt/platform — DevPlan-эскиз предполагал классическую базу, но bootstrap
+    ##   на dev-машине доставляет core в mirror-путь PLATFORM_ROOT (scp-deliver.sh:129),
+    ##   /opt/platform на VPS отсутствует → receive падал "cd: /opt/platform: No such file".
+    ## · Reason: тест должен делить remote-базу с фактической доставкой (AC4), не с эскизом.
+    ## · Rev: если bootstrap перейдёт на PLATFORM_REMOTE_BASE=/opt/platform по умолчанию —
+    ##   конвенция сохранится (env имеет приоритет).
     """
-    logger.info("[IMP:8][deliver_payload] Streaming %s to receive on %s", tar_path.name, node_ssh.host)
-    remote_cmd = "cd /opt/platform && PYTHONPATH=/opt/platform python3 -m core.internal.deploy.orchestrator_cli receive"
+    if remote_root is None:
+        remote_root = os.environ.get("PLATFORM_REMOTE_BASE") or os.environ.get("PLATFORM_ROOT") or str(repo_root())
+    logger.info(
+        "[IMP:8][deliver_payload] Streaming %s to receive on %s (remote_root=%s)",
+        tar_path.name,
+        node_ssh.host,
+        remote_root,
+    )
+    remote_cmd = (
+        f"cd {remote_root} && PYTHONPATH={remote_root} python3 -m core.internal.deploy.orchestrator_cli receive"
+    )
     with open(tar_path, "rb") as tar_in:
         proc = subprocess.run(
             [*node_ssh._base_cmd(), f"{node_ssh.user}@{node_ssh.host}", remote_cmd],

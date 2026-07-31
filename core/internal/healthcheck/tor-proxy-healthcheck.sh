@@ -91,14 +91,9 @@ check_telegram_api() {
     fi
 
     # Delegate to shared telegram_notifier.get_me() — uses urllib, no curl dependency
+    # Strangler 2026-07-31: inline python3 -c → python3 -m core.internal.shared.telegram_notifier get-me
     if ! TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
-         python3 -c "
-import sys, os
-sys.path.insert(0, '${PLATFORM_ROOT}/core/internal/shared')
-from telegram_notifier import get_me
-proxy = os.environ.get('PROXY_URL', '${PROXY_URL}')
-sys.exit(0 if get_me(proxy_url=proxy) else 1)
-" 2>/dev/null; then
+         python3 -m core.internal.shared.telegram_notifier get-me 2>/dev/null; then
         log_result "telegram-api" "FAIL" "Telegram getMe request failed"
         exit 1
     fi

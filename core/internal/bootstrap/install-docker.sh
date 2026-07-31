@@ -112,16 +112,12 @@ configure_daemon() {
 
     if [[ -f "$daemon_json" ]]; then
         log_step "daemon-config" "MERGE" "daemon.json exists — merging live-restore: true"
-        # Read existing, add live-restore, write back
-        python3 -c "
-import json, sys
-with open('${daemon_json}') as f:
-    config = json.load(f)
-config['live-restore'] = True
-with open('${daemon_json}', 'w') as f:
-    json.dump(config, f, indent=2)
-f.write('\n')
-"
+        # Strangler 2026-07-31: inline python3 -c (с TRAP[BUG]: f.write после закрытия файла)
+        # → docker_daemon.py merge-live-restore (atomic write, дефект устранён)
+        python3 "${SCRIPT_DIR}/docker_daemon.py" merge-live-restore "$daemon_json" || {
+            log_fail "Failed to merge live-restore into ${daemon_json}"
+            return 1
+        }
         log_step "daemon-config" "DONE" "live-restore: true merged into existing daemon.json"
         # [IMP:8][install-docker][daemon] Restart Docker daemon to apply live-restore config
         systemctl restart docker

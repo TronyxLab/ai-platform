@@ -25,6 +25,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || echo "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")")}"
 
+# ⚠️ TRAP[BUG] · 2026-07-31 · P1 · python3 -m core.* fails outside repo root (ModuleNotFoundError)
+# · Symptom: 7 test_add_vhost tests RED — subprocess cwd=tmp → `python3 -m core.internal.scaffold.vhost_renderer`
+#   не находит модуль; в production работало только потому, что Makefile вызывает из корня репо.
+# · Root: Strangler-миграция (Wave 5b) не сохранила PYTHONPATH-экспорт старого скрипта.
+# · Fix: export PYTHONPATH с PLATFORM_ROOT — канонический паттерн audit.sh/converge.sh/provision-llm.sh.
+# · Prevention: любой facade, вызывающий `python3 -m core.*`, обязан экспортировать PYTHONPATH сам.
+export PYTHONPATH="${PLATFORM_ROOT}:${PYTHONPATH:-}"
+
 PROJECT_DIR=""
 NODE_CONFIGS_DIR=""
 MODE="add"
@@ -87,6 +95,12 @@ parse_args() {
     [[ -z "$PROJECT_DIR" || -z "$NODE_CONFIGS_DIR" ]] && { log_crit "--project-dir and --node-configs-dir required"; usage; }
     [[ ! -d "$PROJECT_DIR" ]] && { log_crit "Project dir not found: ${PROJECT_DIR}"; exit 1; }
     [[ ! -d "$NODE_CONFIGS_DIR" ]] && { log_crit "Node configs dir not found: ${NODE_CONFIGS_DIR}"; exit 1; }
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · set -e убивает main() на false-return parse_args
+    # · Root: последняя команда функции — `[[ ! -d ... ]] && {...}`; при существующей директории
+    #   [[ ]] возвращает 1 → функция возвращает 1 → `parse_args "$@"` в main (простая команда)
+    #   → set -e → молчаливый exit 1 ДО exec python3. Симптом: "main() failed: returncode=1"
+    #   с пустым stderr (7 test_add_vhost tests). Симптоматика маскировала N-2 (PYTHONPATH).
+    return 0
 }
 
 # ── MAIN ─────────────────────────────────────────────────────────────────

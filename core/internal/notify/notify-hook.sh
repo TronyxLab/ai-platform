@@ -84,15 +84,10 @@ send_telegram() {
     local text="$1"
 
     # Delegate to shared telegram_notifier module (stdlib-only, handles proxy, encoding, HTML parse_mode)
+    # Strangler 2026-07-31: inline python3 -c → python3 -m core.internal.shared.telegram_notifier send
     TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
     TELEGRAM_CHAT_ID="${CHAT_ID}" \
-    python3 -c "
-import sys, os
-sys.path.insert(0, '${PLATFORM_ROOT}/core/internal/shared')
-from telegram_notifier import send_telegram
-proxy = os.environ.get('TELEGRAM_PROXY_URL')
-sys.exit(0 if send_telegram(sys.argv[1], proxy_url=proxy, parse_mode='HTML') else 1)
-" "${text}" 2>/dev/null || {
+    python3 -m core.internal.shared.telegram_notifier send "${text}" 2>/dev/null || {
         log_imp 9 "telegram" "ERROR: Python telegram_notifier failed"
         return 1
     }

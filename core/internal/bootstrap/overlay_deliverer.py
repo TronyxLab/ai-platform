@@ -194,8 +194,18 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
         raise SyncCoreError(f"core_src not found: {core_src}")
     core_src = core_src if core_src.endswith("/") else core_src + "/"
 
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · hardcoded /opt/platform расходился с scp-deliver.sh (remote base)
+    # · Symptom: `make node-update NODE=<host>` доставлял core в /opt/platform/core, а bootstrap —
+    # ·   в ${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}/core → на VPS ДВЕ копии core;
+    # ·   update-фазы выполнялись из чужого дерева (state.json от init не находил скриптов).
+    # · Fix: единый remote_root = PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform
+    # ·   (та же цепочка, что scp-deliver.sh:129 и remote-cmd.sh build_*_ssh_cmd).
+    # · Prevention: любой код, доставляющий core на VPS, использует одну функцию резолюции базы.
+    remote_root = os.environ.get("PLATFORM_REMOTE_BASE") or os.environ.get("PLATFORM_ROOT") or "/opt/platform"
+    remote_core = f"{remote_root.rstrip('/')}/core/"
+
     ssh_e = _ssh_e()
-    cmd = ["rsync", "-avz", "--delete", *RSYNC_EXCLUDES, "-e", ssh_e, core_src, f"root@{host}:/opt/platform/core/"]
+    cmd = ["rsync", "-avz", "--delete", *RSYNC_EXCLUDES, "-e", ssh_e, core_src, f"root@{host}:{remote_core}"]
 
     if dry_run:
         logger.info("[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: %s", " ".join(cmd))
@@ -208,7 +218,7 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
             )
         return True
 
-    logger.info("[IMP:9][sync_core_to_vps][exec] Rsyncing core/ → %s:/opt/platform/core/", host)
+    logger.info("[IMP:9][sync_core_to_vps][exec] Rsyncing core/ → %s:%s", host, remote_core)
     logger.info("[IMP:7][sync_core_to_vps][exec] Running: %s", " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if r.returncode != 0:

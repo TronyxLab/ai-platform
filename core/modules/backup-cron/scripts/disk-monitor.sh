@@ -38,15 +38,10 @@ if [ "$usage" -gt "$THRESHOLD" ]; then
         if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_ALLOWED_USERS:-}" ]; then
             CHAT_ID=$(echo "$TELEGRAM_ALLOWED_USERS" | cut -d',' -f1)
             # Delegate to shared telegram_notifier module — urllib stdlib, no curl dependency
+            # Strangler 2026-07-31: inline python3 -c → python3 -m core.internal.shared.telegram_notifier send
             TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
             TELEGRAM_CHAT_ID="${CHAT_ID}" \
-            python3 -c "
-import sys, os
-sys.path.insert(0, '${PLATFORM_ROOT}/core/internal/shared')
-from telegram_notifier import send_telegram
-send_telegram(sys.argv[1])
-sys.exit(0)
-" "⚠️ Disk usage ${usage}% on $(hostname) — threshold ${THRESHOLD}%" 2>/dev/null || true
+            python3 -m core.internal.shared.telegram_notifier send "⚠️ Disk usage ${usage}% on $(hostname) — threshold ${THRESHOLD}%" 2>/dev/null || true
         fi
     fi
 fi

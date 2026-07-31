@@ -60,9 +60,17 @@ node-update:
 ##   Usage: make converge NODE=<name> [DRY_RUN=1] [RECONCILE=1]
 ##   RECONCILE=1: after converge, reconcile stub projects (deploy if GHCR image exists) (W4)
 ##   Delegates to core/entrypoints/converge.sh
+##   ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PLATFORM_ROOT не экспортировался → REMOTE converge падал
+##   · Symptom: `make converge NODE=<host>` → "bash: /opt/platform/core/internal/bootstrap/converge.sh:
+##   ·   No such file or directory" — E2E DevPlan 095 T8 на test-VPS.
+##   · Root: без PLATFORM_ROOT remote-cmd.sh build_converge_ssh_cmd резолвил remote_root=/opt/platform
+##   ·   (core на VPS лежит по mirror-пути PLATFORM_ROOT — см. remote-cmd.sh TRAP[BUG] PLATFORM_ROOT).
+##   ·   node-update (строкой ниже) PLATFORM_ROOT экспортирует — converge НЕТ (несоответствие).
+##   · Fix: PLATFORM_ROOT="$(_platform_root)" — та же обвязка, что у bootstrap-node/node-update.
+##   · Prevention: любой remote-таргет (bootstrap-node/node-update/converge) экспортирует PLATFORM_ROOT.
 converge:
 	@echo "[IMP:7][make][converge] Running node reconciliation..."
-	@bash $(_platform_root)/core/entrypoints/converge.sh --node $(NODE) \
+	@PLATFORM_ROOT="$(_platform_root)" bash $(_platform_root)/core/entrypoints/converge.sh --node $(NODE) \
 		$(if $(DRY_RUN),--dry-run,) \
 		$(if $(filter 1,$(RECONCILE)),--reconcile)
 	@echo "[IMP:9][make][converge] Node reconciliation complete"

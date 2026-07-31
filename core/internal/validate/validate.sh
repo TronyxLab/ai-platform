@@ -145,135 +145,28 @@ validate_file() {
 # endregion VALIDATE_FILE
 
 # region CHECK_FQDN_CONFLICT
-## @brief  Check FQDN uniqueness across all ai-platform.yaml files on the node (06 §5.4 E1)
+## @brief  FQDN uniqueness across ai-platform.yaml files (06 §5.4 E1) — Python-порт (Strangler 2026-07-31)
 ## @param  $1  project directory to check
 ## @return 0 if domain is unique, 1 if conflict found
-## @invariants
-##   - First project to claim a FQDN owns it
-##   - Second project claiming same FQDN → exit 1 with E1 error
-##   - Projects without domain declaration are skipped
-##   - Only ai-platform.yaml supported (legacy declaration files removed per AD-2)
+## @rationale grep-based parsing → core/internal/validate/conflict_checks.py (yaml.safe_load, TRAP[BUG] false-positive устранён)
 check_fqdn_conflict() {
     local project_dir="$1"
-    local project_yaml=""
-
-    if [[ -f "${project_dir}/ai-platform.yaml" ]]; then
-        project_yaml="${project_dir}/ai-platform.yaml"
-    else
-        vlog_info "fqdn" "No ai-platform.yaml in ${project_dir} — skipping FQDN check"
-        return 0
-    fi
-
-    # Extract own domain from needs.domain
-    local own_domain
-    own_domain="$(grep -m1 '^\s*domain:' "$project_yaml" 2>/dev/null | awk '{print $2}' || true)"
-
-    # ⚠️ TRAP[BUG] FQDN false-positive: needs.domain: false matches grep as a real domain
-    # grep '^\s*domain:' also catches "domain: false" / "domain: none" / "domain: null" etc.
-    # Without this guard, YAML keys like "needs.domain: false" → own_domain="false" → false-positive E1.
-    # Skip non-real domain values: false, none, no, null, empty
-    if [[ -z "$own_domain" || "$own_domain" == "false" || "$own_domain" == "none" || "$own_domain" == "no" || "$own_domain" == "null" ]]; then
-        vlog_info "fqdn" "No domain declared in $(basename "${project_yaml}") — skipping FQDN check"
-        return 0
-    fi
-
-    vlog_info "fqdn" "Checking FQDN uniqueness: '${own_domain}' claimed by $(basename "${project_dir}")"
-
-    # Scan all ai-platform.yaml files in PROJECTS_BASE (if set) or nearby projects
-    local projects_base="${PROJECTS_BASE:-}"
-    if [[ -z "$projects_base" ]]; then
-        # Fallback: search relative to script dir
-        projects_base="$(cd "${SCRIPT_DIR}/../../projects" 2>/dev/null && pwd || true)"
-    fi
-
-    if [[ ! -d "$projects_base" ]]; then
-        vlog_info "fqdn" "PROJECTS_BASE (${projects_base}) not available — skipping cross-project FQDN check"
-        return 0
-    fi
-
-    local conflict_found=0
-    local other_project_name=""
-
-    while IFS= read -r -d '' other_yaml; do
-        # Skip own project file
-        local other_dir
-        other_dir="$(dirname "$other_yaml")"
-        if [[ "$other_dir" == "$project_dir" ]]; then
-            continue
-        fi
-
-        local other_domain
-        other_domain="$(grep -m1 '^\s*domain:' "$other_yaml" 2>/dev/null | awk '{print $2}' || true)"
-
-        if [[ "$other_domain" == "$own_domain" ]]; then
-            other_project_name="$(basename "$other_dir")"
-            vlog_fail "fqdn" "E1: FQDN '${own_domain}' already claimed by '${other_project_name}' — deploy blocked (06 §5.4)"
-            conflict_found=1
-        fi
-    done < <(find "$projects_base" -maxdepth 2 -name "ai-platform.yaml" -print0 2>/dev/null || true)
-
-    if [[ "$conflict_found" -eq 1 ]]; then
-        vlog_fail "fqdn" "FQDN conflict detected for '${own_domain}' — exiting"
-        return 1
-    fi
-
-    vlog_ok "fqdn" "FQDN '${own_domain}' is unique across projects on this node"
-    return 0
+    python3 -m core.internal.validate.conflict_checks check-fqdn "${project_dir}"
 }
 # endregion CHECK_FQDN_CONFLICT
 
 
+
 # region CHECK_PORTS
-## @brief  Check host_port uniqueness across all ai-platform.yaml files on the node
+## @brief  host_port uniqueness across ai-platform.yaml files — Python-порт (Strangler 2026-07-31)
 ## @param  $1  projects base directory
 ## @return 0 if all ports unique, 1 if conflict
-## @invariants
-##   - Only checks host_port in monitoring section
-##   - Projects without host_port are skipped
 check_port_conflict() {
     local projects_base="$1"
-
-    if [[ ! -d "$projects_base" ]]; then
-        vlog_info "ports" "PROJECTS_BASE (${projects_base}) not available — skipping port check"
-        return 0
-    fi
-
-    vlog_info "ports" "Checking port uniqueness across ${projects_base}..."
-
-    local -A port_map=()
-    local conflict_found=0
-
-    while IFS= read -r -d '' yaml_file; do
-        local project_name
-        project_name="$(basename "$(dirname "$yaml_file")")"
-
-        local host_port
-        host_port="$(python3 -m core.internal.shared.node_yaml \
-            --file "${yaml_file}" \
-            --get monitoring.host_port \
-            --default "0" 2>/dev/null || echo "0")"
-
-        if [[ "$host_port" -eq 0 ]]; then
-            continue
-        fi
-
-        if [[ -n "${port_map[$host_port]:-}" ]]; then
-            vlog_fail "ports" "Port conflict: ${host_port} claimed by '${project_name}' and '${port_map[$host_port]}'"
-            conflict_found=1
-        else
-            port_map[$host_port]="$project_name"
-            vlog_info "ports" "  Port ${host_port} → ${project_name}"
-        fi
-    done < <(find "$projects_base" -maxdepth 3 -name "ai-platform.yaml" -print0 2>/dev/null || true)
-
-    if [[ "$conflict_found" -eq 1 ]]; then
-        return 1
-    fi
-
-    vlog_ok "ports" "All host ports are unique across projects"
-    return 0
+    python3 -m core.internal.validate.conflict_checks check-ports "${projects_base}"
 }
 # endregion CHECK_PORTS
+
 
 # region MAIN
 main() {

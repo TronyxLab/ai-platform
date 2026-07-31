@@ -1242,6 +1242,8 @@ class TestHtpasswdGeneration:
                 export PLATFORM_MASTER_EMAIL="{email}"
                 export PLATFORM_MASTER_PASSWORD="{password}"
                 export HTPASSWD_FILE="{htpasswd_file}"
+                # secrets.sh требует CORE_DIR из окружения (контракт — paths.sh консьюмера)
+                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
                 step_start() {{ echo "[IMP:7][htpasswd][start] $*" >&2; }}
                 step_done() {{ echo "[IMP:9][htpasswd][done] $*" >&2; }}
                 log_step() {{ echo "[IMP:7][htpasswd][log] $*" >&2; }}
@@ -1287,6 +1289,7 @@ class TestHtpasswdGeneration:
                 export PLATFORM_MASTER_EMAIL="{email}"
                 export PLATFORM_MASTER_PASSWORD="{password}"
                 export HTPASSWD_FILE="{htpasswd_file}"
+                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
                 step_start() {{ :; }}
                 step_done() {{ :; }}
                 log_step() {{ :; }}
@@ -1311,6 +1314,7 @@ class TestHtpasswdGeneration:
                 export PLATFORM_MASTER_EMAIL="{email}"
                 export PLATFORM_MASTER_PASSWORD="{password}"
                 export HTPASSWD_FILE="{htpasswd_file}"
+                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
                 step_start() {{ :; }}
                 step_done() {{ :; }}
                 log_step() {{ :; }}
@@ -1346,6 +1350,7 @@ class TestHtpasswdGeneration:
                 export PLATFORM_MASTER_PASSWORD="{password}"
                 SERVICE_PASSWORD="${{MONITORING_AUTH_PASSWORD:-$PLATFORM_MASTER_PASSWORD}}"
                 export HTPASSWD_FILE="{htpasswd_file}"
+                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
                 step_start() {{ :; }}
                 step_done() {{ :; }}
                 log_step() {{ :; }}

@@ -39,6 +39,8 @@ if str(_BOOTSTRAP_DIR) not in sys.path:
 
 import _topo_sort
 
+from core.internal.shared.exceptions import ConfigValidationError
+
 logger = logging.getLogger("test_topo_sort")
 
 
@@ -160,10 +162,11 @@ def test_topo_sort_parallel_groups(tmp_path: Path, caplog) -> None:
 
 
 # region FUNC_test_topo_sort_cycle_detection
-## @purpose  Cyclic graph: a->b, b->c, c->a -> RuntimeError with cycle info
-## @io       tmp_path + caplog -> assert RuntimeError raised
+## @purpose  Cyclic graph: a->b, b->c, c->a -> ConfigValidationError with cycle info
+## @io       tmp_path + caplog -> assert ConfigValidationError raised
 ## @complexity 2
-## 🧪 TRAP[TEST] · REGRESSION(cycle-detection) · SCENARIO(cyclic-graph) · LAST_FAIL(no failures) · REMOVE_IF(cycle detection removed)
+## 🧪 TRAP[TEST] · REGRESSION(cycle-detection) · SCENARIO(cyclic-graph) · LAST_FAIL(RuntimeError→ConfigValidationError,
+##              контракт мигрирован на shared.exceptions, 2026-07-31) · REMOVE_IF(cycle detection removed)
 def test_topo_sort_cycle_detection(tmp_path: Path, caplog) -> None:
     caplog.set_level(logging.INFO)
 
@@ -177,7 +180,7 @@ def test_topo_sort_cycle_detection(tmp_path: Path, caplog) -> None:
     docker_mods = _topo_sort.filter_docker_modules(modules)
     dag = _topo_sort.build_dag(docker_mods)
 
-    with pytest.raises(RuntimeError) as excinfo:
+    with pytest.raises(ConfigValidationError) as excinfo:
         _topo_sort.kahn_topological_sort(dag)
 
     error_msg = str(excinfo.value)

@@ -38,8 +38,9 @@ DOT_ENV_EXAMPLE: str = os.path.join(PLATFORM_ROOT, ".env.example")
 # · Symptom: fast gate FAIL "Expected 12 env_defaults, got 13" — hidden until pre-commit stage went green
 # · Root: EXPECTED_ENV_DEFAULTS_COUNT written as 12 while platform-env.yaml env_defaults (incl. PROMETHEUS_RULES_DIR) counts 13
 # · Fix: aligned constant to actual canonical set (13)
+# · 2026-07-31 | 86 — PLATFORM_DOMAIN удалён (8a6dbcb), PROJECTS_BASE + PLATFORM_DEPLOY_TIMEOUT добавлены (debt F4)
 # · Prevention: keep this constant in sync when adding env_defaults; parity asserts below catch key/value drift
-EXPECTED_ENV_DEFAULTS_COUNT: int = 85
+EXPECTED_ENV_DEFAULTS_COUNT: int = 86
 
 # Canonical Prometheus directory paths
 PROMETHEUS_TARGETS_DIR_CANONICAL: str = "/opt/platform/prometheus-targets"

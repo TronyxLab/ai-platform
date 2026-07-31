@@ -236,3 +236,6 @@ env_defaults:
   DEPENDENCY_CHECK_TIMEOUT: "2.0"
   GHCR_PULL_TOKEN: "ghp_test-token-for-ci-only"
   GHCR_PUSH_TOKEN: ""
+  # ── Deploy (F4 debt: документированные overrides orchestrator) ──
+  PROJECTS_BASE: "/opt/projects"
+  PLATFORM_DEPLOY_TIMEOUT: "600"

@@ -467,6 +467,11 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# ── Misc ──────────────────────────────────────────────────────────────────────")
     lines.append("# Таймаут проверки зависимостей в секундах (default: 2.0)")
     lines.append("DEPENDENCY_CHECK_TIMEOUT=" + get_val("DEPENDENCY_CHECK_TIMEOUT", "2.0"))
+    lines.append("")
+    lines.append("# PROJECTS_BASE — базовая директория проектов для DeployOrchestrator (default: /opt/projects)")
+    lines.append("PROJECTS_BASE=" + get_val("PROJECTS_BASE", "/opt/projects"))
+    lines.append("# PLATFORM_DEPLOY_TIMEOUT — таймаут деплоя в секундах для DeliveryChannel (default: 600)")
+    lines.append("PLATFORM_DEPLOY_TIMEOUT=" + get_val("PLATFORM_DEPLOY_TIMEOUT", "600"))
 
     # ── GitHub Actions secrets ──
     lines.append("")

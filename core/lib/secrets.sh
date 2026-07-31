@@ -212,15 +212,33 @@ _ensure_htpasswd_generated() {
     mkdir -p "$(dirname "$htpasswd_file")" 2>/dev/null || true
 
     # ── Idempotency: check existing file ──
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Случайная соль ломает идемпотентность
+    # · Symptom: повторный _ensure_htpasswd_generated перезаписывает файл (md5 меняется) —
+    #   test_htpasswd_generation_idempotent RED. crypto.py entry без соли = случайный salt
+    #   каждый вызов → `existing == entry` никогда не равен → вечная перезапись.
+    # · Fix: при существующем файле извлекаем соль ($apr1$SALT$...), пересчитываем entry
+    #   с фиксированной солью (детерминировано, контракт crypto.py п.2) и сравниваем.
     if [[ -f "$htpasswd_file" ]]; then
         local existing
         existing=$(cat "$htpasswd_file" 2>/dev/null)
-        if [[ "$existing" == "$entry" ]]; then
-            export HTPASSWD_FILE="$htpasswd_file"
-            log_step "htpasswd" "INFO" "htpasswd file exists and matches credentials — no-op"
-            return 0
+        local existing_salt
+        existing_salt=$(printf '%s' "$existing" | cut -d'$' -f3)
+        if [[ -n "$existing_salt" ]]; then
+            local expected_entry
+            expected_entry=$(python3 "$crypto_script" entry "$email" "$password" --salt "$existing_salt" 2>/dev/null) || {
+                log_step "htpasswd" "FAIL" "shared/crypto.py entry failed — cannot verify htpasswd"
+                return 1
+            }
+            if [[ "$existing" == "$expected_entry" ]]; then
+                export HTPASSWD_FILE="$htpasswd_file"
+                log_step "htpasswd" "INFO" "htpasswd file exists and matches credentials — no-op"
+                return 0
+            fi
+            log_step "htpasswd" "INFO" "htpasswd file exists but credentials changed — regenerating"
+        else
+            # Соль не извлекается (повреждённая запись) — пересоздаём
+            log_step "htpasswd" "WARN" "htpasswd file exists but salt unparseable — regenerating"
         fi
-        log_step "htpasswd" "INFO" "htpasswd file exists but credentials changed — regenerating"
     fi
 
     # ── Write htpasswd file ──

@@ -1,23 +1,31 @@
-# GREP_SUMMARY: fixture test-project compose nginx alpine port-8080 healthcheck IMAGE_TAG
-# STRUCTURE: ┌compose manifest┐ → service web (nginx:alpine) → port 8080:80 → healthcheck wget → ⎋ fixture
+# GREP_SUMMARY: fixture test-project compose nginx alpine port-8080 healthcheck mirror-gcr
+# STRUCTURE: ┌compose manifest┐ → service web (mirror.gcr.io/library/nginx:alpine) → port 8080:80 → healthcheck wget → ⎋ fixture
 # region MODULE_CONTRACT
 ## @purpose  Canonical E2E test-project compose (DevPlan 095 T18) — deterministic per Anti-Loop
 ##           Note (0 parameterized). Deployed on the test-VPS via DeployOrchestrator.receive()
-##           (SCP payload → compose up -d). image uses ${IMAGE_TAG} so DeployEngine._atomic_up
-##           (IMAGE_TAG=$ref docker compose up) resolves correctly on every deploy.
+##           (SCP payload → compose up -d).
 ## @scope    E2E fixture compose consumed during forced-command receive tests.
 ## @invariants
 ##   - Service name `web` matches ai-platform.yaml#service
-##   - nginx:alpine is a public Docker Hub image — pull works without registry credentials
+##   - image: mirror.gcr.io/library/nginx:alpine — СТАТИЧНЫЙ публичный image
+##     (DevPlan T18: "nginx:alpine" — зеркало Docker Hub от Google)
 ##   - Port 8080 must be free on the test-VPS (fresh node per invariant 9)
 ##   - Healthcheck: busybox wget against nginx — container becomes healthy (~5-10s)
-## @rationale  Mirrors production compose shape so receive-path exercises a realistic
-##             deploy payload (IMAGE_TAG substitution + healthcheck gate).
+## 🧐 TRAP[DECISION] · 2026-07-31 · HI · Статичный mirror-образ вместо nginx:${IMAGE_TAG:-alpine}
+## · Rejected: (1) `nginx:${IMAGE_TAG:-alpine}` — DeployEngine тянет с IMAGE_TAG=$ref (v1.0.0) →
+## ·   тег nginx:v1.0.0 НЕ существует на Docker Hub → pull всегда падал бы;
+## ·   (2) docker.io/library/nginx:alpine — анонимный pull с datacenter-IP test-VPS упирается
+## ·   в rate limit Docker Hub (429 Too Many Requests — подтверждено на tronyx-vps 2026-07-31).
+## · Reason: mirror.gcr.io — публичный pull-through mirror без rate-limit (инвариант платформы,
+## ·   docker_registry_auth.py:16 "mirror.gcr.io is a public Google mirror — no auth required").
+## ·   Для E2E-фикстуры важен детерминированный pull, не production-схема тегов CI-образов.
+## · Rev: если deploy-пайплайн получит собственный registry с реальными тегами — вернуть
+## ·   ${IMAGE_TAG}-подстановку с ghcr.io/<org>/test-project.
 # endregion MODULE_CONTRACT
 
 services:
   web:
-    image: nginx:${IMAGE_TAG:-alpine}
+    image: mirror.gcr.io/library/nginx:alpine
     container_name: test-project-web
     ports:
       - "8080:80"
