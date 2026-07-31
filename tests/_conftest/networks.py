@@ -242,17 +242,61 @@ class NetworkLeaseManager:
     # endregion
 
     # region FUNC_create_network
-    ## @purpose  Create Docker network via subprocess. Best-effort — ignores "already exists".
+    ## @purpose  Create Docker network via subprocess. Best-effort — ignore "already exists".
+    ##           Failures MUST be visible: silent create failure cascades into
+    ##           "network declared as external, but could not be found" for every
+    ##           module compose up (smoke AC1 — "All modules failed to start").
     ## @io       ⇥ name: str → ⎋ None
     ## @complexity — O(1)
+    ## @invariants
+    ##   - "already exists" → debug log (idempotent acquire)
+    ##   - Other failures → verify with docker network inspect; missing network → [IMP:9] error
     def _create_network(self, name: str) -> None:
         """Create Docker network. Best-effort — ignore "already exists" errors."""
-        subprocess.run(
+        # ⚠️ TRAP[BUG] · 2026-07-31 · HI · Silent network create failure → all modules fail
+        # · Root: best-effort create (check=False, timeout=15, output discarded) swallowed
+        # ·   `docker network create` failures; fixture proceeded with missing external
+        # ·   networks → EVERY module's `docker compose up` failed with
+        # ·   "network declared as external, but could not be found" → test_platform_starts_all_containers
+        # ·   reported "All modules failed to start".
+        # · Fix: log create result; on real failure verify actual state via docker network inspect
+        # ·   and emit [IMP:9] error if the network is truly missing (visibility-first).
+        # · Rev: if create failures persist in CI — add explicit retry + acquire() result check.
+        result = subprocess.run(
             ["docker", "network", "create", name],
             capture_output=True,
             text=True,
             check=False,
             timeout=15,
+        )
+        if result.returncode == 0:
+            _logger.debug("[IMP:8][NetworkLeaseManager] Network '%s' created", name)
+            return
+        if "already exists" in (result.stderr or "").lower():
+            _logger.debug("[IMP:7][NetworkLeaseManager] Network '%s' already exists — idempotent acquire", name)
+            return
+        # Real failure — verify actual state before alarming (race with another process)
+        verify = subprocess.run(
+            ["docker", "network", "inspect", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if verify.returncode == 0:
+            _logger.warning(
+                "[IMP:8][NetworkLeaseManager] Network '%s' create failed (rc=%d: %s) but network exists — continuing",
+                name,
+                result.returncode,
+                (result.stderr or "").strip()[-200:],
+            )
+            return
+        _logger.error(
+            "[IMP:9][NetworkLeaseManager] Network '%s' create FAILED (rc=%d: %s) and network is MISSING — "
+            "dependent modules will fail with 'network declared as external, but could not be found'",
+            name,
+            result.returncode,
+            (result.stderr or "").strip()[-300:],
         )
 
     # endregion

@@ -17,6 +17,7 @@ SMOKE_ENV_GENERATED: dict[str, str] = {
     "AGE_SECRET_KEY": "AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
     "API_SERVER_KEY": "test-api-server-key-for-ci-only",
     "CLICKHOUSE_PASSWORD": "test-clickhouse-pwd-not-for-prod",
+    "DEEPSEEK_API_KEY": "sk-placeholder-key-for-ci",
     "GF_SECURITY_ADMIN_PASSWORD": "testpass",
     "GHCR_PULL_TOKEN": "ghp_test-token-for-ci-only",
     "GHCR_PUSH_TOKEN": "ci-ghcr-push-token",
