@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-07-31 | regenerated (2577 tests)
+## @changes — 2026-07-31 | regenerated (2585 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -70,6 +70,14 @@ test_nodeids:
 - 'tests/gates/test_gate_dead_code.py::test_no_deprecated_markers_stale'
 - 'tests/gates/test_gate_dead_code.py::test_no_ssl_provision_references'
 - 'tests/gates/test_gate_dead_code.py::test_ssl_provision_sh_deleted'
+- 'tests/gates/test_gate_debt_registry.py::test_check_file_lines_ignores_debt'
+- 'tests/gates/test_gate_debt_registry.py::test_debt_registry_all_sections'
+- 'tests/gates/test_gate_debt_registry.py::test_debt_registry_arch_decisions_rev_dates'
+- 'tests/gates/test_gate_debt_registry.py::test_debt_registry_exists'
+- 'tests/gates/test_gate_debt_registry.py::test_debt_registry_no_trivial_entries'
+- 'tests/gates/test_gate_debt_registry.py::test_debt_registry_node_resolver_in_p2'
+- 'tests/gates/test_gate_debt_registry.py::test_debt_registry_shell_residual_entries'
+- 'tests/gates/test_gate_debt_registry.py::test_gitignore_covers_debt'
 - 'tests/gates/test_gate_deploy_paths.py::test_canonical_paths_registered'
 - 'tests/gates/test_gate_deploy_paths.py::test_deprecated_have_removal_plan'
 - 'tests/gates/test_gate_deploy_paths.py::test_no_unregistered_paths'
