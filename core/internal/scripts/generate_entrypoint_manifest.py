@@ -57,6 +57,7 @@ SYSTEM_EXCEPTIONS: set[str] = {
 # These are registered in AGENTS.md and MUST appear in allowed_verbs
 ALLOWED_PREFIX_EXCEPTIONS: set[str] = {
     "test-inventory-sync",
+    "test-summary",
 }
 
 SYSTEM_PREFIXES: tuple[str, ...] = (

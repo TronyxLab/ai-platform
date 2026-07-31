@@ -290,7 +290,7 @@ make test-node NODE=test-e2e -k "failure_scenarios" -v
 @pytest.fixture(scope="session", autouse=True)
 def test_vps_fresh(node_ssh: NodeSSHClient, requires_node: str) -> None:
     """Reset test-VPS to clean state before E2E suite.
-    
+
     Per AGENTS.md invariant 9: test-VPS is recreatable — cold start only.
     Runs `make bootstrap-node NODE=$(node) --force` which clears state.json
     (state_machine.py:1333 — [IMP:9][main] --force: Clearing state).

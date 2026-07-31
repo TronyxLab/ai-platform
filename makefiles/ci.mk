@@ -1,15 +1,16 @@
-# GREP_SUMMARY: ci.mk, test, gate, validate, lint, check-file-lines, pre-commit, scripts-audit, audit, secrets-unlock
-# STRUCTURE: ┌variables┐ → ◇ test → ◇ gate → ◇ validate → ◇ lint → ◇ check-file-lines → ◇ pre-commit-install → ◇ pre-commit-run → ◇ scripts-audit → ◇ audit → ◇ secrets-unlock
+# GREP_SUMMARY: ci.mk, test, test-summary, gate, validate, lint, check-file-lines, pre-commit, scripts-audit, audit, secrets-unlock
+# STRUCTURE: ┌variables┐ → ◇ test → ◇ test-summary → ◇ gate → ◇ validate → ◇ lint → ◇ check-file-lines → ◇ pre-commit-install → ◇ pre-commit-run → ◇ scripts-audit → ◇ audit → ◇ secrets-unlock
 # region MODULE_CONTRACT
-## @purpose  CI and quality targets — test, gate, validate, lint, pre-commit, audit, secrets
-## @scope    Included from root Makefile; uses pytest + shell entrypoints
+## @purpose  CI and quality targets — test, test-summary (agent-oriented wrapper), gate, validate, lint, pre-commit, audit, secrets
+## @scope    Included from root Makefile; uses pytest + shell entrypoints + Python test_runner
 ## @invariants
 ##   - gate MODE=fast must pass before push (CI pre-flight rule)
 ##   - test MARKER=all runs canonical order: validate→lint→gates→contract→static→predeploy→smoke→component→integration
+##   - test-summary delegates to core/internal/test_runner.py — compact agent-oriented output
 ## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
 # endregion MODULE_CONTRACT
 
-.PHONY: test gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock check-dead-code
+.PHONY: test test-summary gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock check-dead-code
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -104,6 +105,16 @@ test:
 		exit 1; \
 	fi
 	@echo "[IMP:9][make][test] Tests complete (MARKER=$(MARKER))"
+
+## test-summary: Run tests via compact agent-oriented wrapper. Usage: make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|all|static] [TIMEOUT=1800]
+##   Delegates to core/internal/test_runner.py — outputs compact summary (<100 lines, PASS/FAIL counts).
+##   MARKER=static_audit (default) — static analysis only, no Docker.
+##   MARKER=static — validate.sh + lint + pytest static_audit (full static pipeline).
+##   TIMEOUT=N — subprocess timeout in seconds (default 1800 per DevPlan 098 AC8).
+test-summary:
+	$(eval MARKER := $(or $(MARKER),static_audit))
+	$(eval TIMEOUT := $(or $(TIMEOUT),1800))
+	@$(PYTHON) -m core.internal.test_runner --marker $(MARKER) --timeout $(TIMEOUT)
 
 ## gate: Production Gate. Usage: make gate [MODE=fast|full|ci-docker] [PROJECT=<name>]
 ##   MODE=full (default) — validate → lint → gates → contract → static → predeploy → smoke → component

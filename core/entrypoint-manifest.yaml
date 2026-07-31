@@ -677,6 +677,7 @@ allowed_verbs:
 - templates-render
 - test
 - test-inventory-sync
+- test-summary
 - up
 - up-safe
 - validate
