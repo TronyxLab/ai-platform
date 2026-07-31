@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: sudoers-generator, visudo, template-render, role-mapping, batch-sudoers, NOPASSWD
-# STRUCTURE: ┌argparse→action dispatch┐ → ◇ template render (subprocess bash template-engine.sh) → ◇ parse lines (role action path) → ◇ role→username mapping → ⊕ format sudoers rules → ◇ visudo -c validate → ⎷ atomic write
+# STRUCTURE: ┌argparse→action dispatch┐ → ◇ template render (template_engine.render_template native) → ◇ parse lines (role action path) → ◇ role→username mapping → ⊕ format sudoers rules → ◇ visudo -c validate → ⎷ atomic write
 # region MODULE_CONTRACT
 ## @purpose  Extract sudoers generation from deploy-modules.sh into typed Python.
-##           Generates /etc/sudoers.d/ files from sudo-whitelist.template via template-engine.sh,
+##           Generates /etc/sudoers.d/ files from sudo-whitelist.template via template_engine.render_template,
 ##           validates with visudo -c, writes atomically (temp → mv).
 ## @scope    Three operations: per-module generate, render-only (for batch collection), batch all-modules.
 ##           CLI entrypoint for shell scripts (deploy-modules.sh wrapper).
 ## @invariants
-##   - Template engine is called via `bash template-engine.sh render <template> <output> VAR=val...`
+##   - Template rendering is native: template_engine.render_template(dry_run=True) — no subprocess, no temp file
 ##   - Only lines with action matching `make:*` produce sudoers entries
 ##   - Comment lines (starting with #) and blank lines are skipped
 ##   - Role→username mapping: owner→platform, agent→platform-agent, ci→ci-deploy, monitor→platform-monitor
@@ -18,10 +18,11 @@
 ##   - No git operations — pure template render + sudoers generation
 ## @rationale Strangler-Fig decomposition of deploy-modules.sh (1664 lines, W4-E1).
 ##            Python enables typed contracts, testable parsing, and LDD telemetry.
-##            The subprocess call to template-engine.sh maintains backward compatibility with
-##            the existing template rendering pipeline.
+##            Native import of template_engine (DevPlan 094) removes the last
+##            subprocess call to the shell wrapper — in-process render, no temp-file dance.
 ## @changes
 ##   2026-07-22 · Created from deploy-modules.sh _render_sudoers_rules, generate_module_sudoers, _batch_generate_sudoers
+##   2026-07-31 · DevPlan 094 Wave 2.B: subprocess bash wrapper → native template_engine.render_template
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -32,6 +33,28 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# ── template_engine native import (DevPlan 094 — 0 subprocess) ──────────────
+# Invocation: `python3 ${SCRIPT_DIR}/deploy/sudoers_generator.py` (direct script).
+# sys.path[0] = core/internal/bootstrap/deploy/ — template_engine.py is 4 levels up.
+# PLATFORM_ROOT is always defined by the calling shell wrapper (deploy-modules.sh);
+# fallback derives the platform root relative to this module's location.
+# ⚠️ TRAP[BUG] · 2026-07-31 · P1 · sys.path fallback depth — 4 levels up, not 3
+# · Symptom: direct-script invocation raised ModuleNotFoundError: No module named 'core'
+# · Root: deploy/ → ../../.. resolves to core/ (3 levels); platform root requires 4 (deploy→bootstrap→internal→core→root)
+# · Fix: join("..","..","..","..") — verified via python3 deploy/sudoers_generator.py --help
+# · Prevention: invocation-mode smoke tests (direct script + module) are part of the import contract
+_PLATFORM_ROOT = os.environ.get(
+    "PLATFORM_ROOT",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", ".."),
+)
+# Validate the resolved root actually contains core/ — guards against stale/misconfigured
+# PLATFORM_ROOT env values (DevPlan 094 §7.5). Falls back to relative derivation.
+if not os.path.isdir(os.path.join(_PLATFORM_ROOT, "core", "internal")):
+    _PLATFORM_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..")
+if _PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, _PLATFORM_ROOT)
+from core.internal.template_engine import TemplateError, render_template
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 
@@ -70,35 +93,13 @@ def _map_role_to_username(role: str) -> str:
     # endregion FUNC__map_role_to_username
 
 
-def _resolve_template_engine() -> Path:
-    """
-    Resolve the path to template-engine.sh relative to this module's location.
-
-    Module is at: core/internal/bootstrap/deploy/sudoers_generator.py
-    Engine is at: core/internal/template-engine.sh
-
-    @returns: Absolute Path to template-engine.sh.
-    """
-    # region FUNC__resolve_template_engine
-    ## @purpose  Resolve template-engine.sh path relative to this module
-    ## @io       → Path
-    ## @complexity O(1) — pure path resolution, no I/O
-    module_dir = Path(__file__).resolve().parent  # core/internal/bootstrap/deploy/
-    bootstrap_dir = module_dir.parent  # core/internal/bootstrap/
-    internal_dir = bootstrap_dir.parent  # core/internal/
-    engine = internal_dir / "template-engine.sh"
-    logger.debug("[IMP:7][_resolve_template_engine] engine=%s", engine)
-    return engine
-    # endregion FUNC__resolve_template_engine
-
-
 def _render_template(
     module_name: str,
     templates_dir: Path,
     platform_root: str,
 ) -> str | None:
     """
-    Call template-engine.sh to render the sudo-whitelist template for a module.
+    Render the sudo-whitelist template for a module via template_engine.render_template (native).
 
     @param module_name: Name of the module (e.g. "nginx", "postgres").
     @param templates_dir: Directory containing sudo-whitelist.template.
@@ -106,69 +107,38 @@ def _render_template(
     @returns: Rendered template text, or None if render failed.
     """
     # region FUNC__render_template
-    ## @purpose  Invoke template-engine.sh render via subprocess, capture output
+    ## @purpose  Native render via template_engine.render_template(dry_run=True) — returns str
+    ##            directly, no temp-file dance, no subprocess (DevPlan 094 Wave 2.B)
     ## @io       module_name, templates_dir, platform_root → str|None
-    ## @complexity O(1) — single subprocess call with file I/O
+    ## @complexity O(1) — single in-process render (bounded by template size)
     template_file = templates_dir / "sudo-whitelist.template"
     if not template_file.is_file():
         logger.error("[IMP:9][_render_template] Template not found: %s", template_file)
         return None
 
-    engine_path = _resolve_template_engine()
-    if not engine_path.is_file():
-        logger.error("[IMP:9][_render_template] Template engine not found: %s", engine_path)
-        return None
-
-    # Render to a temp file, then read it back
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", prefix="platform-sudoers-rendered-", suffix=".tmp", delete=False
-        ) as tmp_out:
-            output_path = tmp_out.name
-
-        cmd = [
-            "bash",
-            str(engine_path),
-            "render",
+        rendered_text = render_template(
             str(template_file),
-            output_path,
-            f"MODULE_NAME={module_name}",
-            f"PLATFORM_ROOT={platform_root}",
-        ]
-        logger.info("[IMP:8][_render_template] Running: %s", " ".join(cmd))
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
+            vars={"MODULE_NAME": module_name, "PLATFORM_ROOT": platform_root},
+            dry_run=True,
         )
-
-        if result.returncode != 0:
-            logger.error(
-                "[IMP:9][_render_template] Template render FAILED (exit=%d): %s",
-                result.returncode,
-                result.stderr.strip(),
-            )
-            _safe_cleanup(output_path)
-            return None
-
-        with open(output_path) as fh:
-            rendered_text = fh.read()
-
-        logger.info("[IMP:9][_render_template] Template rendered OK (%d bytes)", len(rendered_text))
-        return rendered_text
-
-    except subprocess.TimeoutExpired:
-        logger.error("[IMP:9][_render_template] Template render TIMEOUT (>30s)")
-        _safe_cleanup(output_path)  # type: ignore[possibly-undefined]
+    except TemplateError as exc:
+        logger.error(
+            "[IMP:9][_render_template] Template render FAILED: %s (unresolved: %s)",
+            exc,
+            exc.unresolved,
+        )
         return None
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as exc:
+    except OSError as exc:
         logger.error("[IMP:9][_render_template] Template render EXCEPTION: %s", exc)
-        _safe_cleanup(output_path)  # type: ignore[possibly-undefined]
         return None
-    finally:
-        _safe_cleanup(output_path)  # type: ignore[possibly-undefined]
+
+    if rendered_text is None:
+        logger.error("[IMP:9][_render_template] Template render returned None")
+        return None
+
+    logger.info("[IMP:9][_render_template] Template rendered OK (%d bytes)", len(rendered_text))
+    return rendered_text
     # endregion FUNC__render_template
 
 
@@ -188,7 +158,7 @@ def _parse_rendered_lines(rendered_text: str) -> list[str]:
     Skips comment lines and blank lines. Only handles actions matching `make:*`.
     Each parsed line generates: `<username> ALL=(root) NOPASSWD: /usr/bin/make -C <module_abs_dir> <target>`
 
-    @param rendered_text: Rendered template text from template-engine.sh.
+    @param rendered_text: Rendered template text from template_engine.render_template.
     @returns: List of sudoers rule strings (may be empty).
     """
     # region FUNC__parse_rendered_lines
@@ -249,7 +219,7 @@ def _render_sudoers_rules(
     """
     Extract sudoers rule text for one module (template render + rule generation).
 
-    Renders the sudo-whitelist template via template-engine.sh, parses the output,
+    Renders the sudo-whitelist template via template_engine.render_template, parses the output,
     and returns a list of sudoers rule strings. Does NOT validate with visudo
     and does NOT write to /etc/sudoers.d/ — this is a pure render function for
     batch collection.

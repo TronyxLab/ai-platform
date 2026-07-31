@@ -1,8 +1,8 @@
 # GREP_SUMMARY: sudo-whitelist template roles owner agent ci monitor make-targets no-stop
 # region MODULE_CONTRACT
 ## @purpose  Declarative sudo permission map template — parameterized per module
-## @scope    Parsed by deploy-modules.sh generate_module_sudoers() via template-engine.sh render to emit /etc/sudoers.d/
-## @usage    template-engine.sh render <template> <output> MODULE_NAME=<name> PLATFORM_ROOT=<path>
+## @scope    Parsed by sudoers_generator._render_template() via template_engine.render_template to emit /etc/sudoers.d/
+## @usage    template_engine.render_template(sudo-whitelist.template, vars={MODULE_NAME, PLATFORM_ROOT}) (native, DevPlan 094)
 ## @invariants
 ##   - agent: status, logs, restart, backup — NO stop (agent cannot stop itself, 07 §2.3)
 ##   - owner: ALL targets (full control)
@@ -16,15 +16,16 @@
 ## @changes
 ##   2026-07-09 · Created from hermes-agent sudo-whitelist.conf as parameterized template
 ##   · Removed build/deploy/build-local targets (removed in Phase 2)
-##   2026-07-18 · T2.D: Migrated from symlink+sources to template-engine.sh render pipeline
+##   2026-07-18 · T2.D: Migrated from symlink+sources to the template-engine render pipeline
 ##   · Replaced hardcoded /opt/core/ paths with {{PLATFORM_ROOT}} variable
-##   · Updated usage docs to reference template-engine.sh instead of inline sed
+##   · Updated usage docs to reference the template engine instead of inline sed
+##   2026-07-31 · DevPlan 094: shell wrapper deleted — native template_engine.render_template
 ## @modulemap MODULE_NAME → module directory and Makefile path
 # endregion MODULE_CONTRACT
 
 # AUTO-GENERATED — do not edit directly.
 # Source of truth: core/templates/sudo-whitelist.template
-# Module name is substituted at bootstrap time: template-engine.sh render
+# Module name is substituted at bootstrap time: template_engine.render_template
 # Generated from core/templates/sudo-whitelist.template
 
 # Module: {{MODULE_NAME}}
@@ -32,8 +33,8 @@
 # Template: replace {{MODULE_NAME}} with actual module name before deployment
 #
 # Usage:
-#   template-engine.sh render sudo-whitelist.template <output> MODULE_NAME=<name> PLATFORM_ROOT=<path>
-#   Generated automatically by deploy-modules.sh generate_module_sudoers()
+#   template_engine.render_template(sudo-whitelist.template, vars={"MODULE_NAME": name, "PLATFORM_ROOT": root})
+#   Generated automatically by sudoers_generator.py / deploy-modules.sh generate_module_sudoers()
 
 # owner — full control (ALL make targets)
 owner make:start    {{PLATFORM_ROOT}}/core/modules/{{MODULE_NAME}}/Makefile

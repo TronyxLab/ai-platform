@@ -84,14 +84,14 @@ build:
 validate:
 - make_target: templates-check
   mechanism: python-script
-  delegates_to: core/internal/template-engine.sh check --verbose
+  delegates_to: core/internal/template_engine.py check --verbose
   signature: make templates-check
   operation_ru: Dry-run проверка шаблонов
   description: Dry-run render all templates from manifest — exit 0 if all resolvable,
     1 with diagnostic
 - make_target: templates-render
   mechanism: python-script
-  delegates_to: core/internal/template-engine.sh render-all
+  delegates_to: core/internal/template_engine.py render-all
   signature: make templates-render
   operation_ru: Рендер шаблонов
   description: Render all templates from manifest to output paths

@@ -740,33 +740,18 @@ def test_update_loki_retention_forever_period(
 
 
 # 🧪 TRAP[TEST] · alert_rules_enabled · Unit · Regression never · Remove if: alert rules dispatch logic changes
-def test_generate_alert_rules_enabled(tmp_path: pathlib.Path, caplog, monkeypatch) -> None:
-    """alerting_enabled=True → template-engine.sh called via subprocess.
+def test_generate_alert_rules_enabled(tmp_path: pathlib.Path, caplog) -> None:
+    """alerting_enabled=True → native template_engine.render_template invoked, output file created.
 
-    ## @purpose T4.17: Verify alert rules template rendering is invoked.
+    ## @purpose T4.17: Verify alert rules template rendering is invoked (native render,
+    ##            DevPlan 094 — no subprocess, no shell wrapper).
     ## @complexity O(1)
     """
     caplog.set_level(logging.INFO)
 
-    # Create a mock template
+    # Strict {{UPPER_SNAKE}} placeholder — native render substitutes it
     template_path = tmp_path / "alert-rules.yml"
-    template_path.write_text("groups:\n  - name: ${PROJECT}-alerts\n")
-
-    # Monkeypatch subprocess.run to avoid actual template-engine.sh call
-    original_run = __import__("subprocess").run
-    call_args = []
-
-    def _mock_run(args, **kwargs):
-        call_args.append(args)
-        # Simulate successful render by copying template to output
-        # Find output path in args (3rd positional arg is output)
-        if len(args) >= 4 and args[0].endswith("template-engine.sh") and args[1] == "render":
-            output_path = pathlib.Path(args[3])
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(f"groups:\n  - name: {args[4].split('=')[1]}-alerts\n")
-        return original_run(args, **kwargs)
-
-    monkeypatch.setattr("subprocess.run", _mock_run)
+    template_path.write_text("groups:\n  - name: {{PROJECT}}-alerts\n")
 
     config = ProjectMonitoringConfig(
         project_name="test-app",
@@ -783,6 +768,13 @@ def test_generate_alert_rules_enabled(tmp_path: pathlib.Path, caplog, monkeypatc
 
     assert result.status == "created"
     assert result.component == "alerting"
+
+    # Native render: output file written with substituted PROJECT value
+    output_file = output_dir / "test-app-alerts.yml"
+    assert output_file.is_file(), "Alert rules output file must be created by native render"
+    content = output_file.read_text()
+    assert "name: test-app-alerts" in content, f"PROJECT placeholder not substituted: {content!r}"
+    assert "{{PROJECT}}" not in content
 
     found = _print_ldd_trajectory(caplog, "test_generate_alert_rules_enabled")
     assert found, "No IMP:9 log found — LDD violation"

@@ -1665,7 +1665,8 @@ def _safe_cleanup_tmp(tmp_path: str) -> None:
 
 # region FUNC_reconcile_sudoers
 ## @purpose  Reconcile sudoers.d files for all enabled modules. Generates desired
-##           content via sudoers_generator (template-engine.sh render), compares
+##           content via sudoers_generator (template_engine.render_template native),
+##           compares
 ##           with actual files at SUDOERS_DIR, and self-heals via atomic write.
 ## @complexity O(N×M) — N=modules, M=sudoers files per module
 ## @io       stdout/stderr: LDD logs [IMP:7-10]

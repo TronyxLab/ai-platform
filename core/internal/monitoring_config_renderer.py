@@ -15,7 +15,7 @@
 ##   - Langfuse project creation: HTTP POST with Bearer token; 409 → skipped (idempotent)
 ##   - All YAML loading returns empty dict on file-not-found (non-fatal)
 ##   - Missing ai-platform.yaml or no monitoring section → exit 0 (backward compat)
-##   - template-engine.sh call with sed fallback for dashboard/alert rendering
+##   - Template rendering via template_engine.render_template (native import, strict {{UPPER_SNAKE}} only)
 ## @rationale Shell script had 19 inline python3 calls, 3-level nested merge via shell eval,
 ##            fragile and ungreppable. Python module with typed dataclasses and unit tests
 ##            eliminates the entire class of risk. Strangler-Fig Tier 1 extraction.
@@ -35,6 +35,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+# ⚠️ TRAP[DECISION] · 2026-07-31 · — · Native template import — dual-path (DevPlan 094 §7.1)
+# · Rejected: subprocess to the deleted shell wrapper (2 extra processes, arg-marshalling, sed fallback drift)
+# · Reason: direct import — 0 subprocess in Python domain; strict {{UPPER_SNAKE}} grammar enforced
+# · Rev: if monitoring_config_renderer gains a packaging namespace, drop the direct-import fallback
+try:
+    # Imported as core.internal.monitoring_config_renderer (tests, python3 -m) — single module instance
+    from core.internal.template_engine import TemplateError, render_template
+except ImportError:  # pragma: no cover — direct-script invocation path
+    # Invoked as `python3 ${PLATFORM_ROOT}/core/internal/monitoring_config_renderer.py`:
+    # sys.path[0] = core/internal/ — template_engine.py lives in the same directory.
+    _INTERNAL_DIR = str(Path(__file__).resolve().parent)
+    if _INTERNAL_DIR not in sys.path:
+        sys.path.insert(0, _INTERNAL_DIR)
+    from template_engine import TemplateError, render_template
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +78,6 @@ DEFAULT_L1_DEFAULTS = "core/modules/monitoring/defaults.yaml"
 
 # Catalog script relative to platform root
 CATALOG_SCRIPT = "core/internal/catalog/generate-catalog.sh"
-
-# Template engine script relative to platform root
-TEMPLATE_ENGINE_SCRIPT = "core/internal/template-engine.sh"
 
 # Service reload endpoints
 PROMETHEUS_RELOAD_URL = "http://prometheus:9090/-/reload"
@@ -362,40 +374,37 @@ def _parse_ai_retention(val) -> int:
 # region TEMPLATE_RENDERING
 
 
-def _render_template(template_path: Path, output_path: Path, variables: dict[str, str], platform_root: Path) -> None:
-    """Render template via template-engine.sh, with sed fallback.
+def _render_template(template_path: Path, output_path: Path, variables: dict[str, str]) -> None:
+    """Render template via template_engine.render_template (native import, no subprocess).
 
     ## @purpose  Shared rendering logic for Grafana dashboards and alert rules.
-    ##            Uses core/internal/template-engine.sh if available, falls back
-    ##            to sed-based $VAR substitution.
+    ##            Uses template_engine.render_template directly — 0 subprocess,
+    ##            0 sed fallback. Strict {{UPPER_SNAKE}} grammar only.
     ## @io
     ##   ⇥ template_path: Path — source template file
     ##   ⇥ output_path: Path — output file path
     ##   ⇥ variables: dict — KEY=VALUE substitution variables
-    ##   ⇥ platform_root: Path — platform root for resolving template-engine.sh
+    ## @raises TemplateError: on unresolved placeholders (allow_missing=False)
+    ## @raises FileNotFoundError / PermissionError: on template read failure
     ## @complexity O(T + V) where T = template size, V = number of variables
     ## @invariants
     ##   - Output parent directory is created if missing
-    ##   - template-engine.sh called with `render` subcommand and KEY=VALUE args
-    ##   - sed fallback: replaces $KEY with VALUE for each variable
-    ##   - Missing template → raises FileNotFoundError
+    ##   - render_template(allow_missing=False) raises on unresolved {{VAR}}
+    ##   - No sed fallback — strict {{UPPER_SNAKE}} is the only grammar (DevPlan 094)
     """
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P2 · Removed sed-fallback — strict {{UPPER_SNAKE}} is the only grammar now
+    # · Symptom: sed fallback substituted ${K} and {{{K}}} — non-strict grammars silently produced
+    #   malformed dashboards/alert-rules when the shell wrapper was missing
+    # · Root: fallback bypassed template_engine strict grammar (DevPlan 094 Wave 2.A)
+    # · Fix: native render_template(allow_missing=False) — single rendering path, TemplateError on unresolved
+    # · Prevention: never reintroduce non-strict substitution for monitoring templates
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    engine_path = platform_root / TEMPLATE_ENGINE_SCRIPT
-    if engine_path.is_file():
-        args = [str(engine_path), "render", str(template_path), str(output_path)]
-        for k, v in variables.items():
-            args.append(f"{k}={v}")
-        subprocess.run(args, check=True)
-    else:
-        logger.info("[IMP:6][template] template-engine.sh not found at %s — falling back to sed", engine_path)
-        content = template_path.read_text(encoding="utf-8")
-        for k, v in variables.items():
-            content = content.replace(f"${{{k}}}", v)
-            content = content.replace(f"${k}", v)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(content, encoding="utf-8")
+    render_template(
+        str(template_path),
+        output_path=str(output_path),
+        vars=variables,
+        allow_missing=False,
+    )
 
 
 # endregion TEMPLATE_RENDERING
@@ -509,7 +518,7 @@ def generate_grafana_dashboard(
 ) -> RenderResult:
     """Generate Grafana dashboard JSON from template.
 
-    ## @purpose  Render project dashboard using template-engine.sh (or sed fallback).
+    ## @purpose  Render project dashboard via template_engine.render_template (native).
     ##           Skips if dashboard_enabled is False or template missing.
     ## @io
     ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
@@ -521,7 +530,7 @@ def generate_grafana_dashboard(
     ##   - Skips if dashboard_enabled is False (status="noop")
     ##   - Skips if template file missing (status="skipped", log IMP:6)
     ##   - Output directory created if missing
-    ##   - template-engine.sh fallback to sed: $PROJECT, $TYPE, $NODE substitution
+    ##   - Native render: strict {{UPPER_SNAKE}} substitution (no sed fallback)
     """
     if not config.dashboard_enabled:
         logger.info("[IMP:8][grafana] Dashboard disabled for %s — skipping", config.project_name)
@@ -544,11 +553,10 @@ def generate_grafana_dashboard(
                 "TYPE": config.project_type,
                 "NODE": config.node_name,
             },
-            platform_root=config.platform_root,
         )
         logger.info("[IMP:9][grafana] Dashboard generated: %s", dash_file)
         return RenderResult(component="grafana", status="created", output_path=dash_file)
-    except (OSError, subprocess.CalledProcessError) as e:
+    except (OSError, TemplateError) as e:
         logger.info("[IMP:6][grafana] Dashboard generation failed for %s: %s", config.project_name, e)
         return RenderResult(component="grafana", status="failed", detail=str(e))
 
@@ -717,7 +725,7 @@ def generate_alert_rules(
 ) -> RenderResult:
     """Generate Prometheus alert rules YAML from template.
 
-    ## @purpose  Render project alert rules using template-engine.sh (or sed fallback).
+    ## @purpose  Render project alert rules via template_engine.render_template (native).
     ##           Skips if alerting_enabled is False or template missing.
     ## @io
     ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
@@ -748,11 +756,10 @@ def generate_alert_rules(
             template_path=tmpl,
             output_path=output_file,
             variables={"PROJECT": config.project_name},
-            platform_root=config.platform_root,
         )
         logger.info("[IMP:9][alerting] Alert rules generated: %s", output_file)
         return RenderResult(component="alerting", status="created", output_path=output_file)
-    except (OSError, subprocess.CalledProcessError) as e:
+    except (OSError, TemplateError) as e:
         logger.info("[IMP:6][alerting] Alert rules generation failed for %s: %s", config.project_name, e)
         return RenderResult(component="alerting", status="failed", detail=str(e))
 

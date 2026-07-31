@@ -21,7 +21,7 @@
 ## @rationale Largest scaffold shell script — 782 LOC, 16 functions. Strangler-Fig migration.
 ##            Uses scaffold_helpers for shared gen functions (AC6). DI for subprocess calls.
 ## @links    CALLED_BY: add-project.sh (facade)
-##           CALLS: scaffold_helpers.py, template-engine.sh, gen_env_platform.py
+##           CALLS: scaffold_helpers.py, template_engine.py (render_directory_in_place), gen_env_platform.py
 ##           DP-092 Wave 4b
 ## @changes  2026-07-30 · Wave 4b — full Strangler-Fig from add-project.sh
 # endregion MODULE_CONTRACT
@@ -39,6 +39,11 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# template_engine native import (DevPlan 094 Wave 2.C — 0 subprocess).
+# Invocation: `python3 -m core.internal.scaffold.project_scaffolder` — project root
+# is on sys.path via -m, so core.internal.template_engine resolves without PYTHONPATH.
+from core.internal.template_engine import render_directory_in_place
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +207,7 @@ def copy_template(src: str, dst: str, dry_run: bool = False) -> bool:
 
 
 # region FUNC_render_project_template
-## @purpose  Render project template files via template-engine.sh (replaces inline sed).
+## @purpose  Render project template files via template_engine.render_directory_in_place (native).
 ## @param project_dir  Target project directory
 ## @param name         Project name
 ## @param org          Organization name
@@ -219,9 +224,11 @@ def render_project_template(
     node: str = "",
     dry_run: bool = False,
 ) -> bool:
-    """Render project templates via template-engine.sh.
+    """Render project templates via template_engine.render_directory_in_place (native).
 
     ## @purpose  Mirror of render_project_template() from add-project.sh:310-342.
+    ##            Direct in-process render — no subprocess, no shell wrapper
+    ##            (DevPlan 094 Wave 2.C).
     ## @io        ⇥ project_dir, name, org, domain, node, dry_run → ⎋ bool
     ## @complexity O(f)
     """
@@ -229,40 +236,24 @@ def render_project_template(
         logger.info("[IMP:7][scaffold][render] [DRY-RUN] Would render templates in: %s", project_dir)
         return True
 
-    logger.info("[IMP:7][scaffold][render] Rendering project templates via template-engine.sh")
-
-    script_dir = Path(__file__).resolve().parent
-    engine_script = script_dir.parent / "template-engine.sh"
-
-    if not engine_script.exists() or not os.access(str(engine_script), os.X_OK):
-        logger.info("[IMP:10][scaffold][render] Template engine not found or not executable: %s", engine_script)
-        print(f"ERROR: Template engine not found: {engine_script}")
-        return False
+    logger.info("[IMP:7][scaffold][render] Rendering project templates via template_engine.render_directory_in_place")
 
     domain_val = domain or "false"
-    result = subprocess.run(
-        [
-            "bash",
-            str(engine_script),
-            "render-dir",
-            project_dir,
-            f"PROJECT_NAME={name}",
-            f"ORG_NAME={org}",
-            f"DOMAIN={domain_val}",
-            f"NODE_NAME={node or _DEFAULT_NODE}",
-            f"PLATFORM_DOMAIN={os.environ.get('PLATFORM_DOMAIN', '')}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    errors = render_directory_in_place(
+        project_dir,
+        vars={
+            "PROJECT_NAME": name,
+            "ORG_NAME": org,
+            "DOMAIN": domain_val,
+            "NODE_NAME": node or _DEFAULT_NODE,
+            "PLATFORM_DOMAIN": os.environ.get("PLATFORM_DOMAIN", ""),
+        },
     )
 
-    if result.returncode == 0:
+    if errors == 0:
         logger.info("[IMP:9][scaffold][render] Project templates rendered successfully")
         return True
-    logger.info("[IMP:10][scaffold][render] Template rendering failed (exit=%d)", result.returncode)
-    if result.stderr.strip():
-        logger.info("[IMP:8][scaffold][render] stderr: %s", result.stderr.strip()[:500])
+    logger.info("[IMP:10][scaffold][render] Template rendering failed (%d error(s))", errors)
     return False
 
 

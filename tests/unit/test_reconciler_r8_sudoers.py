@@ -134,16 +134,6 @@ def test_reconcile_sudoers_converged(tmp_path, caplog, node_yaml_with_modules, s
     # Mock template-engine.sh render — write template content to output file (cmd[4])
     def mock_run(cmd, *args, **kwargs):
         cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        if "template-engine.sh" in cmd_str or "sudo-whitelist.template" in cmd_str:
-            output_path = cmd[4]
-            with open(output_path, "w") as f:
-                f.write("ci make:restart /path/to/module\nci make:reload /path/to/module\n")
-            return subprocess.CompletedProcess(
-                args=cmd,
-                returncode=0,
-                stdout="",
-                stderr="",
-            )
         # Mock visudo validation
         if "visudo" in cmd_str:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -192,17 +182,6 @@ def test_reconcile_sudoers_drift_detected(tmp_path, caplog, node_yaml_with_modul
 
     def mock_run(cmd, *args, **kwargs):
         cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        # Mock template-engine.sh render — write content to output file (cmd[4])
-        if "template-engine.sh" in cmd_str or "sudo-whitelist.template" in cmd_str:
-            output_path = cmd[4]
-            with open(output_path, "w") as f:
-                f.write("ci make:restart /path/to/module\nci make:reload /path/to/module\n")
-            return subprocess.CompletedProcess(
-                args=cmd,
-                returncode=0,
-                stdout="",
-                stderr="",
-            )
         # Mock visudo validation
         if "visudo" in cmd_str:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -262,17 +241,6 @@ def test_reconcile_sudoers_visudo_fail(tmp_path, caplog, node_yaml_with_modules,
     # Track any writes to the actual target file
     def mock_run(cmd, *args, **kwargs):
         cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        # Mock template-engine.sh render — write content to output file (cmd[4])
-        if "template-engine.sh" in cmd_str or "sudo-whitelist.template" in cmd_str:
-            output_path = cmd[4]
-            with open(output_path, "w") as f:
-                f.write("ci make:restart /path/to/module\nci make:reload /path/to/module\n")
-            return subprocess.CompletedProcess(
-                args=cmd,
-                returncode=0,
-                stdout="",
-                stderr="",
-            )
         # Mock visudo VALIDATION FAILURE
         if "visudo" in cmd_str:
             return subprocess.CompletedProcess(

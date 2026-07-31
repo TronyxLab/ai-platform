@@ -22,13 +22,13 @@ venv: $(VENV)
 ## templates-check: Dry-run render all templates from manifest — exit 0 if all resolvable, 1 with diagnostic at unresolved
 templates-check:
 	@echo "[IMP:7][make][templates-check] Checking template resolvability..."
-	@$(_platform_root)/core/internal/template-engine.sh check --verbose
+	@python3 $(_platform_root)/core/internal/template_engine.py check --verbose
 	@echo "[IMP:9][make][templates-check] All templates resolvable"
 
 ## templates-render: Render all templates per manifest
 templates-render:
 	@echo "[IMP:7][make][templates-render] Rendering templates from manifest..."
-	@$(_platform_root)/core/internal/template-engine.sh render-all
+	@python3 $(_platform_root)/core/internal/template_engine.py render-all
 	@echo "[IMP:9][make][templates-render] All templates rendered"
 
 ## dev-certs: Generate or validate dev SSL certificates (idempotent)

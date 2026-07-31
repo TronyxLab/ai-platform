@@ -28,8 +28,8 @@
 | `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=<context> | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context |
 | `make hermes-push-l1` | Push L1 в ghcr.io | make hermes-push-l1 | docker tag + docker push to ghcr.io |
 | `make hermes-push-l2` | Push L2 в ghcr.io | make hermes-push-l2 CONTEXT=<org> | docker tag + docker push to ghcr.io |
-| `make templates-check` | Dry-run проверка шаблонов | make templates-check | core/internal/template-engine.sh check --verbose |
-| `make templates-render` | Рендер шаблонов | make templates-render | core/internal/template-engine.sh render-all |
+| `make templates-check` | Dry-run проверка шаблонов | make templates-check | core/internal/template_engine.py check --verbose |
+| `make templates-render` | Рендер шаблонов | make templates-render | core/internal/template_engine.py render-all |
 | `make validate-modules` | Валидация module.yaml | make validate-modules | core/internal/scripts/validate_module_yaml.py --all |
 | `make validate` | Schema-валидация | make validate [FILES=...] | core/entrypoints/validate.sh → core/internal/validate/validate.sh |
 | `make lint` | Линтинг | make lint | core/entrypoints/validate.sh --lint → core/internal/validate/validate.sh |

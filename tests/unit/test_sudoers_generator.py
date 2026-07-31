@@ -39,7 +39,7 @@ from core.internal.bootstrap.deploy.sudoers_generator import (
 
 @pytest.fixture
 def sample_rendered_text() -> str:
-    """Produce realistic rendered template output as would come from template-engine.sh."""
+    """Produce realistic rendered template output as produced by template_engine.render_template."""
     return """# AUTO-GENERATED — do not edit directly.
 # Module: test-module
 
@@ -728,53 +728,18 @@ def test_batch_generate_sudoers_all_fail(
     _assert_ldd_trajectory(caplog)
 
 
-# ── Tests: integration — real _render_template with mocked subprocess ─────────
+# ── Tests: integration — real _render_template with native template_engine render ──
 
 
-# 🧪 TRAP[TEST] · Regression: _render_template subprocess call · Scenario: mock subprocess.run → renders to temp file → reads back · Last fail: N/A · Remove if: _render_template implementation changes
-def test_render_template_subprocess_call(
+# 🧪 TRAP[TEST] · Regression: _render_template native render · Scenario: real render via template_engine.render_template(dry_run=True) → str with substituted vars, no temp file · Last fail: N/A · Remove if: _render_template implementation changes
+def test_render_template_native_render(
     caplog: pytest.LogCaptureFixture,
     templates_dir: Path,
-    tmp_path: Path,
 ) -> None:
-    """_render_template calls template-engine.sh with correct arguments and returns rendered text."""
+    """_render_template renders via template_engine.render_template (native import) and returns rendered text."""
     caplog.set_level(logging.DEBUG)
 
     import core.internal.bootstrap.deploy.sudoers_generator as sg
-
-    rendered_expected = "owner make:start /opt/platform/core/modules/test-module/Makefile\n"
-
-    # We need to mock subprocess.run but also have it create the output file
-
-    def mock_subprocess_run(cmd, *args, **kwargs):
-        # Extract output path from cmd (3rd positional arg after "render")
-        if "render" in cmd:
-            # cmd = ["bash", "/path/template-engine.sh", "render", template, output, "MODULE_NAME=...", "PLATFORM_ROOT=..."]
-            output_idx = None
-            for _i, part in enumerate(cmd):
-                if part == "render":
-                    # render is cmd[2], template is cmd[3], output is cmd[4]
-                    if len(cmd) > 4 and "=" not in cmd[4]:
-                        output_idx = 4
-                    break
-            if output_idx is not None:
-                output_path = cmd[output_idx]
-                Path(output_path).write_text(rendered_expected)
-
-        return MagicMock(returncode=0, stdout="", stderr="")
-
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(sg.subprocess, "run", mock_subprocess_run)
-
-    # Also mock _resolve_template_engine to avoid requiring the real script
-    monkeypatch.setattr(sg, "_resolve_template_engine", lambda: tmp_path / "template-engine.sh")
-    # Create a dummy template-engine.sh so file existence check passes
-    (tmp_path / "template-engine.sh").write_text("#!/bin/bash\necho ok")
-
-    # Monkeypatch the engine path resolver to point to our dummy
-    # But actually, _resolve_template_engine resolves relative to its own location
-    # which is inside core/internal/bootstrap/deploy/
-    # Let's just mock it to return our tmp_path/template-engine.sh
 
     rendered = sg._render_template(
         module_name="test-module",
@@ -785,8 +750,10 @@ def test_render_template_subprocess_call(
     assert rendered is not None
     assert "owner make:start" in rendered
     assert "/opt/platform/core/modules/test-module/Makefile" in rendered
+    # dry_run=True returns str directly — no placeholders left, no temp file involved
+    assert "{{MODULE_NAME}}" not in rendered
+    assert "{{PLATFORM_ROOT}}" not in rendered
 
-    monkeypatch.undo()
     _assert_ldd_trajectory(caplog)
 
 

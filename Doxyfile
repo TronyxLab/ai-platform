@@ -49,6 +49,7 @@ GENERATE_MAN           = NO
 
 # ── Aliases — AI-Instructions Semantic Markup Tags ───────
 # Map ## @tag python comments to Doxygen \par \b TagName: formatting
+# DevPlan 097 Wave A: aliases with {1} capture trailing text (Doxygen 1.17)
 ALIASES                = purpose="\b Purpose:" \
                          scope="\b Scope:" \
                          invariants="\b Invariants:" \
@@ -72,7 +73,15 @@ ALIASES                = purpose="\b Purpose:" \
                          renamed_from="\b Renamed from:" \
                          staticmethod="\b Static:" \
                          host="\b Host:" \
-                         digest="\b Digest:"
+                         digest="\b Digest:" \
+                         edge{1}="\b Edge cases: \1" \
+                         coverage{1}="\b Coverage: \1" \
+                         raises{1}="\b Raises: \1" \
+                         exitcode{1}="\b Exit code: \1" \
+                         checks{1}="\b Checks: \1" \
+                         envvars{1}="\b Environment variables: \1" \
+                         main{1}="\b Main: \1" \
+                         strategy{1}="\b Strategy: \1"
 
 # ── Preprocessing ────────────────────────────────────────
 ENABLE_PREPROCESSING   = YES

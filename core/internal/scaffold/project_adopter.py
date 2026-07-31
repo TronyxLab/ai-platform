@@ -629,56 +629,48 @@ jobs:
 
     # ──────────────────────────────────────────────────────────────────
     # region FUNC_register_in_node_yaml
-    ## @purpose  Register project in node.yaml via direct import of project_registry (D3).
-    ##            Wraps sys.exit from register_project() in try/except SystemExit.
+    ## @purpose  Register project in node.yaml via scaffold_helpers (AC6 — DP-092 Wave 4a).
+    ##            Delegates to scaffold_helpers.register_in_node_yaml() which uses NodeYaml CLI.
     ## @io        ⇥ node_yaml_path: Path → ⎋ bool — True if registered/skip, False on error
-    ## @complexity O(N) where N = len(projects) (delegated to project_registry)
+    ## @complexity O(1) — delegated to scaffold_helpers subprocess call
     ## @invariants
-    ##   - Direct import instead of subprocess (eliminates 1 subprocess call)
-    ##   - Wraps sys.exit(0) from project_registry via try/except SystemExit (D3)
-    ##   - If project_registry not importable → fallback to yq/manual instructions
-    ##   - Idempotent: skips if project already registered
+    ##   - Delegates to scaffold_helpers.register_in_node_yaml (shared helper, AC6)
+    ##   - Idempotent: skips if project already registered (via --find-project)
+    ##   - Uses NodeYaml CLI mutation API (not direct import, eliminates SystemExit wrapper)
     def register_in_node_yaml(self, node_yaml_path: Path) -> bool:
         """Register project in node.yaml. Idempotent.
 
         Returns True if registered or already registered, False on error.
+
+        Delegates to scaffold_helpers.register_in_node_yaml (AC6 — DP-092 Wave 4a).
         """
-        if not node_yaml_path.exists():
-            logger.info("[IMP:8][%s][register] node.yaml not found: %s", self._log_prefix, node_yaml_path)
-            logger.info("[IMP:8][%s][register]   Create it or register manually:", self._log_prefix)
-            logger.info(
-                '[IMP:8][%s][register]     yq eval -i \'.projects += [{"name": "%s", "repo": "%s/%s", "type": "project"}]\' %s',
-                self._log_prefix,
-                self.name,
-                self.org,
-                self.name,
-                node_yaml_path,
-            )
-            return False
+        # Delegate to scaffold_helpers (DP-092 Wave 4a — AC6 completion)
+        from core.internal.scaffold.scaffold_helpers import register_in_node_yaml as _register
 
-        # D3: Wrapping sys.exit from project_registry in try/except SystemExit
-        try:
-            from core.internal.shared.project_registry import register_project
+        return _register(
+            name=self.name,
+            org=self.org,
+            node=self.node or os.environ.get("PLATFORM_DEFAULT_NODE", ""),
+            ptype="adopted",
+            domain=self.domain or "",
+            database="",
+            yaml_path=str(node_yaml_path),
+            dry_run=False,
+            context="",
+        )
 
-            self._register_project_safe(register_project, node_yaml_path)
-            return True
-        except ImportError as e:
-            logger.info("[IMP:8][%s][register] project_registry.py not importable: %s", self._log_prefix, e)
-            logger.info("[IMP:8][%s][register]   Falling back to NodeYaml CLI...", self._log_prefix)
-            # Fallback: NodeYaml CLI mutation API (replaces yq)
-            return self._register_via_node_yaml(node_yaml_path)
+    # endregion FUNC_register_in_node_yaml
 
+    # ──────────────────────────────────────────────────────────────────
+    # 📝 TRAP[DEPRECATED] · 2026-07-31 · DP-092 AC6 — _register_project_safe + _register_via_node_yaml
+    # · Status: DEPRECATED — replaced by delegation to scaffold_helpers.register_in_node_yaml.
+    # · Keep: for backward compatibility with tests/unit/test_project_adopter.py:597
+    # · Removal: after test migration to scaffold_helpers delegation pattern
     def _register_project_safe(self, register_func: Any, node_yaml_path: Path) -> None:
-        """Safe wrapper for register_project that handles sys.exit (D3).
+        """DEPRECATED: Safe wrapper for register_project (SystemExit handler).
 
-        ## @purpose  project_registry.register_project() calls sys.exit(0) on success/skip.
-        ##            This wrapper captures SystemExit so the caller can continue execution.
-        ## @io        ⇥ register_func — callable, node_yaml_path → ⎋ None
-        ## @complexity O(N) delegated to register_func
-        ## @invariants
-        ##   - SystemExit(0) is caught and treated as success
-        ##   - SystemExit(1) is caught and logged as error
-        ##   - Non-exit returns are also treated as success
+        Replaced by scaffold_helpers.register_in_node_yaml delegation (DP-092 AC6).
+        Kept for backward compatibility with existing tests.
         """
         try:
             register_func(
@@ -689,71 +681,23 @@ jobs:
                 domain=self.domain or "",
                 log_prefix=self._log_prefix,
             )
-            # If we get here without sys.exit, it's still a success
         except SystemExit as e:
             if e.code == 0 or e.code is None:
-                logger.info("[IMP:9][%s][register] Registration complete (sys.exit caught per D3)", self._log_prefix)
+                logger.info("[IMP:9][%s][register] Registration complete (DEPRECATED wrapper)", self._log_prefix)
             else:
                 logger.info(
-                    "[IMP:8][%s][register] Registration sys.exit(%s) — manual check required", self._log_prefix, e.code
+                    "[IMP:8][%s][register] Registration sys.exit(%s) — manual check required (DEPRECATED)",
+                    self._log_prefix,
+                    e.code,
                 )
 
     def _register_via_node_yaml(self, node_yaml_path: Path) -> bool:
-        """Register project using NodeYaml CLI (replaces yq subprocess).
+        """DEPRECATED: Register via NodeYaml CLI directly.
 
-        ## @purpose  If project_registry import fails, use NodeYaml CLI mutation API.
-        ## @io        ⇥ node_yaml_path → ⎋ bool
-        ## @complexity O(1)
+        Replaced by scaffold_helpers.register_in_node_yaml delegation (DP-092 AC6).
+        Kept for backward compatibility.
         """
-        import subprocess
-
-        # Check if already registered via NodeYaml CLI --find-project
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "core.internal.shared.node_yaml",
-                "--file",
-                str(node_yaml_path),
-                "--find-project",
-                self.name,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            logger.info("[IMP:9][%s][register] Project already registered — SKIP (idempotent)", self._log_prefix)
-            return True
-
-        # Add project via NodeYaml CLI mutation API
-        domain_arg = self.domain or "-"
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "core.internal.shared.node_yaml",
-                "--file",
-                str(node_yaml_path),
-                "--add-project",
-                self.name,
-                f"{self.org}/{self.name}",
-                "adopted",
-                domain_arg,
-                "-",
-                "-",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            logger.info("[IMP:9][%s][register] Registered via NodeYaml CLI: %s", self._log_prefix, self.name)
-            return True
-        logger.info("[IMP:8][%s][register] NodeYaml CLI registration failed — register manually", self._log_prefix)
-        return False
-
-    # endregion FUNC_register_in_node_yaml
+        return self.register_in_node_yaml(node_yaml_path)
 
     # ──────────────────────────────────────────────────────────────────
     # region FUNC_configure_vhost

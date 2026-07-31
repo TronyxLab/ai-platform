@@ -3,7 +3,7 @@
 # STRUCTURE: ┌parse_vars→StrictGrammar RE┐ → ◇ render_template → ◇ render_all → ◇ check_all
 # region MODULE_CONTRACT
 ## @purpose  Core template rendering engine with strict placeholder grammar {{UPPER_SNAKE}}
-## @scope    Вызывается из bash-CLI (template-engine.sh), CI-gates, и тестов
+## @scope    Вызывается из CLI, CI-gates, тестов и напрямую через import
 ## @invariants
 ##   - Placeholder grammar: {{[A-Z][A-Z0-9_]*}} — uppercase start, no spaces, no dollar sign
 ##   - All variables resolvable or explicit allow_missing=True
@@ -402,7 +402,11 @@ def render_all(
                         continue
                     _render_directory(abs_tmpl_path, merged_vars, dry_run=dry_run)
             else:
-                allow_missing = not required_vars_list
+                # output: null = render-at-use entry — vars are supplied at render-time by the
+                # consumer (sudoers_generator, monitoring renderer, scaffold). render_all must not
+                # fail on such entries (DevPlan 094 AC8 fix, Architect-approved).
+                # For committed artifacts (output path set), required vars must be resolvable.
+                allow_missing = (output is None) or (not required_vars_list)
                 render_template(
                     abs_tmpl_path,
                     output_path=output if not dry_run else None,
