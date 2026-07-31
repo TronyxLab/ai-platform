@@ -212,7 +212,7 @@ def test_merge_deploy_steps(caplog) -> None:
 
 
 # region FUNC__setup_module_yaml
-## @purpose  Helper: write a module.yaml file under tmp_path/<name>/module.yaml
+## @purpose  Helper: write a module.yaml file under tmp_path/<name\>/module.yaml
 ##           with install_type and severity fields for S10 enrichment tests.
 ## @io       tmp_path (Path), name (str), install_type (str), severity (str), depends_on (list|None) -> Path
 ## @complexity 1

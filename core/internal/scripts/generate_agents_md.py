@@ -59,6 +59,28 @@ TABLE_SECTIONS: tuple[str, ...] = (
 # endregion CONSTANTS
 
 
+# region HELPERS
+
+
+def _escape_xml_tags(text: str) -> str:
+    """Escape XML/HTML angle brackets for Doxygen compatibility.
+
+    ▶ ┌text┐ → ⊕ replace(<, \\)) → ⊕ replace(>, \\)) → ⎋ escaped text
+
+    ## @purpose  Escape angle brackets so Doxygen does not interpret <tag>
+    ##            as an XML/HTML element (DevPlan 097 Wave B1).
+    ##            Applied to manifest signature/delegates_to fields that
+    ##            contain placeholder syntax like NODE=<name>.
+    ## @io       ⇥ text: str — raw field value
+    ##           → ⎋ str — value with < and > escaped as \\< and \\>
+    ## @complexity O(L) where L = text length
+    """
+    return text.replace("<", "\\<").replace(">", "\\>")
+
+
+# endregion HELPERS
+
+
 # region PUBLIC_API
 
 
@@ -96,9 +118,9 @@ def generate_canon_table(manifest: dict) -> str:
             description = entry.get("description", "")
             operation_ru = entry.get("operation_ru", description)
             signature = entry.get("signature", f"`make {target}`")
-            delegates_to = entry.get("delegates_to", "")
+            delegates_to = _escape_xml_tags(entry.get("delegates_to", ""))
 
-            row = f"| `make {target}` | {operation_ru} | {signature} | {delegates_to} |"
+            row = f"| `make {target}` | {operation_ru} | {_escape_xml_tags(signature)} | {delegates_to} |"
             rows.append(row)
 
     print(

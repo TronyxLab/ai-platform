@@ -74,6 +74,14 @@ ALIASES                = purpose="\b Purpose:" \
                          staticmethod="\b Static:" \
                          host="\b Host:" \
                          digest="\b Digest:" \
+                         edge="\b Edge cases:" \
+                         coverage="\b Coverage:" \
+                         raises="\b Raises:" \
+                         exitcode="\b Exit code:" \
+                         checks="\b Checks:" \
+                         envvars="\b Environment variables:" \
+                         main="\b Main:" \
+                         strategy="\b Strategy:" \
                          edge{1}="\b Edge cases: \1" \
                          coverage{1}="\b Coverage: \1" \
                          raises{1}="\b Raises: \1" \

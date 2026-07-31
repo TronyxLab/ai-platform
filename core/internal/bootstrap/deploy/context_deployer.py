@@ -416,7 +416,7 @@ def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
     port = getattr(project, "port", None) or "3000"
     domain = getattr(project, "domain", None) or project.name
 
-    compose_content = f"""# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI platform-deliver.
+    compose_content = f'''# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI platform-deliver.
 version: '3.8'
 services:
   {project.name}-proxy:
@@ -435,7 +435,7 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
-"""
+'''
     try:
         with open(compose_file, "w") as f:
             f.write(compose_content)

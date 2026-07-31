@@ -43,7 +43,7 @@ logger = logging.getLogger("test_topo_sort")
 
 
 # region FUNC__setup_module_yaml
-## @purpose  Helper: write a module.yaml file under modules_dir/<name>/module.yaml
+## @purpose  Helper: write a module.yaml file under modules_dir/<name\>/module.yaml
 ## @io       modules_dir (str), name (str), install_type (str), depends_on (list[str]|None) -> Path
 ## @complexity 1
 def _setup_module_yaml(

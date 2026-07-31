@@ -763,14 +763,12 @@ def test_no_restart_loops(
 
 # region FUNC_test_platform_cleanup
 ## @purpose — Verify that the cleanup mechanism is correctly configured. The actual
-##            `docker compose down --remove-orphans` is performed by the platform_services
-##            fixture teardown after this test completes. This test validates:
-##            1. The COMPOSE_PROJECT_NAME is set for isolation (not production)
-##            2. The docker compose down command syntax is valid
-##            3. The fixture teardown is registered and will execute
+##            docker compose down --remove-orphans is performed by the platform_services
+##            fixture teardown after this test completes.
 ## @io — ⇥ caplog, platform_env, all_compose_files → ⎋ None
 ## @complexity — O(N) where N = compose files
 ## @invariants
+##
 ##   - COMPOSE_PROJECT_NAME must be "ai-platform-test" (not production)
 ##   - docker compose down --remove-orphans must be a valid command
 ##   - All compose files must have a corresponding down command
@@ -785,8 +783,8 @@ def test_platform_cleanup(
     all_compose_files: dict[str, str],
 ) -> None:
     """
-    # ▶ [project_name] → ◇ == "ai-platform-test" ? → ⊕ [IMP:9] isolation OK
-    # ▶ [∀ compose ∈ all_compose_files] → ◇ docker compose down --dry-run → ⊕ [IMP:9] cleanup valid
+    ▶ [project_name] → ◇ == "ai-platform-test" ? → ⊕ [IMP:9] isolation OK
+    ▶ [∀ compose ∈ all_compose_files] → ◇ docker compose down --dry-run → ⊕ [IMP:9] cleanup valid
     """
     # region BLOCK_Setup
 

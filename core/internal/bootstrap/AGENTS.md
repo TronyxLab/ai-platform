@@ -17,7 +17,7 @@
 ##   4. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
 ##   (state_migration.py — удалён в DevPlan 091 Wave B. Backward-compat 23→14 key migration удалена; cold start only.)
 ##   5. Идемпотентность: state.json с 14 phase-ключами + content-hash для grouped-phase sub_steps
-##   7. Артефакты: /opt/platform/core/ (core), /opt/<context>/platform/ (context-overlay)
+##   7. Артефакты: /opt/platform/core/ (core), /opt/\<context\>/platform/ (context-overlay)
 ##   8. Никаких git-операций в bootstrap — только SCP/rsync для core; git clone/pull только через ensure_context_repo() для context-overlay
 ## @rationale DevPlan 087: Consolidate 32+ steps → 14 phases with explicit dependency graph.
 ##            Eliminates 8 silent failure propagation points via precondition BLOCKS.
@@ -151,7 +151,7 @@ node-lifecycle.sh --mode update → state_machine.py
 | Путь | Содержимое | Доставка |
 |------|-----------|----------|
 | `/opt/platform/core/` | core/ файлы (entrypoints, internal, lib, modules) | SCP/rsync push (core-deploy CI) |
-| `/opt/<context>/platform/` | Context-overlay (ayaml, node-configs, кастомизации) | git clone/pull (ensure_context_repo()) |
+| `/opt/\<context\>/platform/` | Context-overlay (ayaml, node-configs, кастомизации) | git clone/pull (ensure_context_repo()) |
 | `/opt/platform/secrets/` | AGE-encrypted secrets | SCP (через decrypt-secrets.sh) |
 
 ---
@@ -276,5 +276,5 @@ Inline `python3 -c` / `<<PYEOF` в фасадах: 0 (было 31 в топ-3). 
 | Файл | Назначение |
 |------|-----------|
 | [`../../../core/AGENTS.md`](../../AGENTS.md) | Канонические операции, структура слоёв, forbidden-списки |
-| [`../../../AGENTS.md`](../../../AGENTS.md) | Архитектурные инварианты, модель деплоя, dual delivery |
+| `../../../AGENTS.md` (root) | Архитектурные инварианты, модель деплоя, dual delivery |
 | [`../../../core/entrypoint-manifest.yaml`](../../entrypoint-manifest.yaml) | YAML-реестр операций (bootstrap-node в секции bootstrap) |

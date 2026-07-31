@@ -7,6 +7,7 @@
 ##           format, wrapper semantics, auto-block detection, custom prefix, and zero
 ##           side-effects on source.
 ## @scope    9 test functions covering:
+##
 ##           - log_imp with explicit block name (test_log_imp_explicit_block)
 ##           - log_imp with auto-block from FUNCNAME[1] (test_log_imp_auto_block)
 ##           - log_imp stderr-only invariant (test_log_imp_stdout_empty)
@@ -15,6 +16,7 @@
 ##           - custom __LOG_PREFIX injection (test_custom_log_prefix)
 ##           - zero side-effects on source (test_no_side_effects_on_source)
 ## @invariants
+##
 ##   - Every test uses tmp_path for script isolation (Zero Hardcode Rule)
 ##   - LIB path resolved via Path(__file__).resolve() — no hardcoded paths
 ##   - All positive scenarios assert stderr contains [IMP:N] at expected level

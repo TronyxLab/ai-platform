@@ -147,7 +147,7 @@ def get_backup_config() -> BackupConfig:
 ## @complexity 2
 ## @rationale  Used by upload.py with --config-source ssl-cache. Does NOT include prefix,
 ##             context, or node_name — ssl-cache uses absolute S3 keys like
-##             platform/ssl-certs/<domain>/fullchain.pem (no backup prefix).
+##             platform/ssl-certs/<domain\>/fullchain.pem (no backup prefix).
 ## @invariants
 ##   - Same env vars as get_backup_config() — zero config overhead
 ##   - Validates S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET (same required vars)

@@ -18,6 +18,6 @@ triggers:
 
 response: |
   Agent is operational.
-  - Uptime: <uptime>
+  - Uptime: \<uptime\>
   - Version: base-image latest
   - Container: hermes-base-agent

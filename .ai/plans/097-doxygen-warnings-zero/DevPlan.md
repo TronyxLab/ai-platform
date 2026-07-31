@@ -134,7 +134,7 @@ Doxygen interprets `<name>`, `<n>`, `<ctx>`, `<dir>`, `<node>`, `<context>`, `<o
 ```python
 def _escape_xml_tags(text: str) -> str:
     """Escape XML/HTML angle brackets for Doxygen compatibility.
-    
+
     Doxygen interprets <text> as HTML tags. \<text\> is the safe form.
     """
     return text.replace("<", "\\<").replace(">", "\\>")
@@ -366,8 +366,8 @@ Or use Markdown inline code: `` `core/entrypoint-manifest.yaml#forbidden_scripts
 **Problem:**
 ```
 warning: The following parameter of converge.reconciler.verify_vhosts(
-    str node_yaml_path, str converge_node, str core_dir, 
-    bool dry_run=False, bool report_only=False, 
+    str node_yaml_path, str converge_node, str core_dir,
+    bool dry_run=False, bool report_only=False,
     str|None overlay_base=None
 ) is not documented:
 ```

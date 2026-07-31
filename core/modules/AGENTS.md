@@ -276,7 +276,7 @@ make up                        → все модули (profiles не фильт
 
 | Файл | Назначение |
 |------|-----------|
-| [`core/AGENTS.md`](../AGENTS.md) | Канонические операции, структура слоёв, forbidden-списки |
-| [`AGENTS.md`](../../AGENTS.md) (root) | Архитектурные инварианты, модель деплоя, глоссарий глаголов |
+| `core/AGENTS.md` | Канонические операции, структура слоёв, forbidden-списки |
+| `AGENTS.md` (root) | Архитектурные инварианты, модель деплоя, глоссарий глаголов |
 | [`core/templates/`](../templates/) | Шаблоны module.mk, module-system.mk, .dockerignore |
 | [`core/lib/`](../lib/) | Библиотеки healthcheck, logging |

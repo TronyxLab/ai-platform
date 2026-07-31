@@ -1092,7 +1092,7 @@ def detect_hosts_drift(node_yaml_path: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_verify_vhosts
 ## @purpose  Read-only verification of nginx vhost config integrity.
-##           Checks: (1) for each project with domain, <domain>.conf exists;
+##           Checks: (1) for each project with domain, <domain\>.conf exists;
 ##           (2) GENERATED marker present; (3) orphan vhosts without project
 ##           → WARN; (4) docker exec nginx nginx -t passes.
 ## @io       stdout/stderr: LDD logs [IMP:7-10], drift report entries
@@ -1101,6 +1101,7 @@ def detect_hosts_drift(node_yaml_path: str) -> dict:
 ## @param core_dir        Path to core/ directory
 ## @param dry_run         If True, only report planned mutations
 ## @param report_only     If True, skip mutations entirely
+## @param overlay_base    Base directory for nginx overlay resolution (default /opt)
 ## @return  Drift report entry dict
 ## @edge-cases
 ##   - nginx container not running → WARN nginx -t, other checks proceed

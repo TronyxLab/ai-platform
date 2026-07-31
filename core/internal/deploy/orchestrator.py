@@ -176,13 +176,14 @@ class DeployOrchestrator:
 
     # region FUNC_deploy
     ## @purpose  Deploy a single project through a delivery channel. Full lifecycle:
-    ##           1. Check concurrent guard (file lock)
-    ##           2. Assemble payload via DeployEngine/PayloadDeliverer
-    ##           3. Deliver via DeliveryChannel
-    ##           4. Deploy compose via DeployEngine.deploy_compose()
-    ##           5. Healthcheck via HealthcheckPoller
-    ##           6. Create snapshot via DeployHistory
-    ##           7. Audit via AuditLogger
+    ##
+    ##           - Check concurrent guard (file lock)
+    ##           - Assemble payload via DeployEngine/PayloadDeliverer
+    ##           - Deliver via DeliveryChannel
+    ##           - Deploy compose via DeployEngine.deploy_compose()
+    ##           - Healthcheck via HealthcheckPoller
+    ##           - Create snapshot via DeployHistory
+    ##           - Audit via AuditLogger
     ##           When dry_run=True: validate inputs and emit a plan (channels, steps, target
     ##           project_dir) to stderr, then return DeployStatus.SKIPPED WITHOUT executing
     ##           delivery/compose/healthcheck. DevPlan 089 AC10 / DevPlan 091 Wave A.
@@ -190,6 +191,7 @@ class DeployOrchestrator:
     ##              project_dir: str, metadata: dict, dry_run: bool → ⎋ DeployResult
     ## @complexity — O(N) where N = deploy lifecycle steps (dry_run: O(1))
     ## @invariants
+    ##
     ##   - Lock file acquired before deploy, released after (try/finally)
     ##   - Payload assembled from project_dir (docker-compose.yml + ai-platform.yaml)
     ##   - Healthcheck runs AFTER compose up, BEFORE snapshot creation

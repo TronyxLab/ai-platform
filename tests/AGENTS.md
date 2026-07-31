@@ -125,10 +125,10 @@ Gate-тест ДОЛЖЕН быть зарегистрирован в **трёх
 | Файл | Назначение |
 |------|-----------|
 | [`tests/gates/AGENTS.md`](gates/AGENTS.md) | Gate taxonomy, registration protocol |
-| [`../AGENTS.md`](../AGENTS.md) (root) | Архитектурные инварианты платформы |
+| `../AGENTS.md` (root) | Архитектурные инварианты платформы |
 | [`../core/AGENTS.md`](../core/AGENTS.md) | Канонические операции, слои |
 | [`../core/entrypoint-manifest.yaml`](../core/entrypoint-manifest.yaml) | YAML-реестр gates + repair-поля |
 | [`../makefiles/repair.mk`](../makefiles/repair.mk) | Repair targets: fix-executable-bit, fix-ruff, fix-gate |
-| [`.ai/plans/060-self-healing-gates/DevPlan.md`](../.ai/plans/060-self-healing-gates/DevPlan.md) | Полный DevPlan Repair Contract Infrastructure |
-| [`.kilo/rules/testing.md`](../.kilo/rules/testing.md) | **Канонический источник:** R1-R5, LDD telemetry, Anti-Loop protocol |
-| [`.kilo/rules/markup.md`](../.kilo/rules/markup.md) | Semantic markup standard |
+| `.ai/plans/060-self-healing-gates/DevPlan.md` | Полный DevPlan Repair Contract Infrastructure |
+| `.kilo/rules/testing.md` | **Канонический источник:** R1-R5, LDD telemetry, Anti-Loop protocol |
+| `.kilo/rules/markup.md` | Semantic markup standard |

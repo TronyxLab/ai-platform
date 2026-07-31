@@ -104,7 +104,6 @@ def test_list_offline_json(single_node_yaml: pathlib.Path, capfd, caplog) -> Non
 
     projects_root = single_node_yaml.parent.parent.parent.parent
     logger.info("[IMP:9][test][lister] test_list_offline_json — starting JSON listing")
-    result = list_projects_offline(projects_root=projects_root, output_format="json")
     captured = capfd.readouterr()
     stdout_text = captured.out.strip()
     assert stdout_text, "Expected JSON output on stdout"

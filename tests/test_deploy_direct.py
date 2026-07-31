@@ -53,15 +53,23 @@ exit 0
 # ═══════════════════════════════════════════════════════════════════
 # Helper: minimal extract_org() implementation for testing
 # ═══════════════════════════════════════════════════════════════════
-_EXTRACT_ORG_SCRIPT = """\
+_EXTRACT_ORG_SCRIPT = (
+    """\
 #!/usr/bin/env bash
 # Extract org and project name from path ~/projects/<org>/<name>/
 PROJECT_DIR="$1"
 real_path="$(realpath "$PROJECT_DIR" 2>/dev/null || echo "$PROJECT_DIR")"
 if [[ "$real_path" == *"/projects/"* ]]; then
-    after_projects="${real_path#*/projects/}"
+    """
+    # DEVPLAN-097: mid-line `#` inside a """...""" string corrupts Doxygen 1.17
+    # comment parsing (subsequent @alias docblocks fail to expand). These two
+    # bash parameter-expansion lines are kept in plain strings on purpose.
+    + 'after_projects="${real_path#*/projects/}"\n'
+    + """\
     first_segment="${after_projects%%/*}"
-    rest="${after_projects#*/}"
+    """
+    + 'rest="${after_projects#*/}"\n'
+    + """\
     if [[ "$first_segment" == "$after_projects" ]]; then
         PROJECT_NAME="${first_segment}"
         ORG=""
@@ -76,22 +84,31 @@ fi
 echo "ORG=${ORG:-}"
 echo "PROJECT_NAME=${PROJECT_NAME}"
 """
+)
 
 # ═══════════════════════════════════════════════════════════════════
 # Helper: minimal platform-deliver dispatch for testing
 # ═══════════════════════════════════════════════════════════════════
-_DELIVER_DISPATCH_SCRIPT = """\
+_DELIVER_DISPATCH_SCRIPT = (
+    """\
 #!/usr/bin/env bash
 # Simulate parse_ssh_command() platform-deliver dispatch
 PROJECTS_BASE="${PROJECTS_BASE:-/opt/projects}"
 raw="platform-deliver $*"
-args="${raw#platform-deliver }"
+"""
+    # DEVPLAN-097: mid-line `#` inside a """...""" string corrupts Doxygen 1.17
+    # comment parsing (subsequent @alias docblocks fail to expand). These two
+    # bash parameter-expansion lines are kept in plain strings on purpose.
+    + 'args="${raw#platform-deliver }"\n'
+    + """\
 args="$(echo "$args" | xargs)"
 org=""
 project=""
 if [[ "$args" == *" "* ]]; then
     org="${args%% *}"
-    project="${args#* }"
+    """
+    + 'project="${args#* }"\n'
+    + """\
     project="$(echo "$project" | xargs)"
     if [[ "$org" == */* ]]; then
         echo "FATAL: org '${org}' contains '/'" >&2
@@ -104,6 +121,7 @@ PROJECT_DIR="${PROJECTS_BASE}/${org:+${org}/}${project}"
 echo "PROJECT_DIR=${PROJECT_DIR}"
 exit 0
 """
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helper: minimal resolve_node_host() implementation for testing
@@ -295,7 +313,7 @@ def test_deploy_project_validation_success(caplog, tmp_path: Path) -> None:
 
 # region FUNC_test_extract_org_from_path
 ## @purpose  Assert extract_org correctly extracts org and project name from
-##           ~/projects/<org>/<name>/ path.
+##           ~/projects/<org\>/<name\>/ path.
 ## @io       ⇥ tmp_path simulating ~/projects/myorg/myproject → subprocess bash → ⎋ assert ORG=myorg, PROJECT_NAME=myproject
 ## @complexity 1 — string manipulation
 
@@ -355,7 +373,7 @@ def test_extract_org_from_path(caplog, tmp_path: Path) -> None:
 
 # region FUNC_test_extract_org_deep_path
 ## @purpose  Assert extract_org correctly extracts org as the first segment after
-##           projects/ even when path has subdirectories: ~/projects/<org>/<subgroup>/<project>/
+##           projects/ even when path has subdirectories: ~/projects/<org\>/<subgroup\>/<project\>/
 ## @io       ⇥ tmp_path simulating ~/projects/myorg/subgroup/myproject → subprocess → ⎋ assert ORG=myorg, PROJECT_NAME=subgroup (not myproject!)
 ## @complexity 1 — string manipulation
 

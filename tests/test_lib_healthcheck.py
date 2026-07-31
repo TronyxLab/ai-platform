@@ -7,12 +7,14 @@
 ##           Tests verify polling logic, return codes, mock docker/curl via PATH
 ##           injection, and custom timeouts/intervals — all in isolated tmp_path.
 ## @scope    13 test functions covering:
+##
 ##           - poll_until_healthy: success (exit 0), timeout (exit 1), retry
 ##             (counter-based 3rd attempt succeeds), custom interval
 ##           - check_docker_health: healthy, unhealthy, starting, not-found
 ##           - check_http: 200 success, 404 wrong code, 301 multi-code expected
 ##           - poll_docker_health: defined (function exists), success (mock docker healthy)
 ## @invariants
+##
 ##   - Every test uses tmp_path for script isolation (Zero Hardcode Rule)
 ##   - LIB_DIR resolved via Path(__file__).resolve() — no hardcoded paths
 ##   - Mock docker and curl scripts created in tmp_path/mock-bin/ with PATH override

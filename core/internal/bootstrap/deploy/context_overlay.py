@@ -315,7 +315,7 @@ def _update_timestamp(pull_ts_path: Path, now: int) -> None:
 
 
 # region FUNC_main
-## @purpose  CLI entrypoint: --action {ensure} --node-yaml <path>
+## @purpose  CLI entrypoint: --action {ensure} --node-yaml <path\>
 ##           Called from deploy-modules.sh shell facade after Strangler extraction.
 ## @io       ⇥ sys.argv → ⎋ exit code via sys.exit
 ## @complexity  O(1) + delegated ensure_context_repo

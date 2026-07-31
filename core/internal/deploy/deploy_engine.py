@@ -492,7 +492,7 @@ class DeployEngine:
     ## @invariants
     ##   - Called BEFORE pull (critical ordering for rollback)
     ##   - Returns None if no previous image (first deploy)
-    ##   - If image tag is <none>:<none>, creates fallback tag `project:previous-rollback`
+    ##   - If image tag is <none\>:<none\>, creates fallback tag `project:previous-rollback`
     def _save_previous_image(self, project_dir: str, service: str) -> ImageInfo | None:
         """Save current image ID and tag before deploy.
 

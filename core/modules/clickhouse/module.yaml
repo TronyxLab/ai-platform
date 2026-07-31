@@ -1,5 +1,5 @@
 # GREP_SUMMARY: clickhouse module docker observability-net analytical-db liveness wget-ping
-# STRUCTURE: ▶ module:clickhouse → observability-net → config.d/*.xml → wget /ping → ┐
+# STRUCTURE: ▶ module:clickhouse → observability-net → config.d/xml → wget /ping → ┐
 # region MODULE_CONTRACT
 ## @purpose  ClickHouse analytical DB — telemetry storage, metrics aggregation, high-cardinality event queries
 ## @scope    Single-node; part of observability stack; HTTP/Native access via observability-net

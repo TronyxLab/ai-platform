@@ -9,12 +9,14 @@
 ##           implementations across node-lifecycle.sh, core-deploy.yml, and context-init.sh
 ##           with a single source of truth tested here.
 ## @scope    9 test functions covering:
+##
 ##           - resolve_node_yaml 3-path search with first-match-wins (tests 1-4)
 ##           - resolve_node_yaml not-found error handling (test 5)
 ##           - extract_node_host positive and missing-host cases (tests 6-7)
 ##           - empty glob directory — no bash errors (test 8)
 ##           - nullglob restoration after call (test 9)
 ## @invariants
+##
 ##   - Every test uses tmp_path for script isolation (Zero Hardcode Rule)
 ##   - LIB path resolved via Path(__file__).resolve() — no hardcoded paths
 ##   - Except test_resolve_from_opt which creates /opt/node-configs/ (path 3
@@ -38,7 +40,7 @@
 ##            asserting stderr contains [IMP:N] for the expected importance level.
 ##            Q: Why test 3 uses real /opt/ path?
 ##            A: resolve_node_yaml hardcodes candidate path 3 as
-##            /opt/node-configs/<node>/node.yaml. There is no injection parameter
+##            /opt/node-configs/<node\>/node.yaml. There is no injection parameter
 ##            for this path. The test creates the file at the real /opt/node-configs/
 ##            location; if /opt/ is not writable the test is skipped.
 ## @changes LAST_CHANGE: 2026-07-07 · Initial implementation per DevPlan test spec
@@ -135,7 +137,7 @@ def _run_bash(tmp_path: Path, code: str) -> subprocess.CompletedProcess:
 
 # region FUNC_test_resolve_from_platform_root
 ## @purpose  Verify resolve_node_yaml finds node.yaml in path 1:
-##           platform_root/node-configs/<node>/node.yaml.
+##           platform_root/node-configs/<node\>/node.yaml.
 ##           Path 1 is the first candidate — must be found immediately.
 ## @io       ⇥ tmp_path → ⎋ assert stdout captured to PATH=… in stderr, returncode == 0
 ## @complexity O(1)
@@ -177,7 +179,7 @@ echo "PATH=$resolved" >&2
 
 # region FUNC_test_resolve_from_projects_glob
 ## @purpose  Verify resolve_node_yaml finds node.yaml via path 2 (glob):
-##           projects_dir/*/node-configs/<node>/node.yaml.
+##           projects_dir/*/node-configs/<node\>/node.yaml.
 ##           Path 1 must not contain the file so search continues to path 2.
 ## @io       ⇥ tmp_path → ⎋ assert glob path in PATH=… stderr, returncode == 0
 ## @complexity O(1)
@@ -215,7 +217,7 @@ echo "PATH=$resolved" >&2
 
 # region FUNC_test_resolve_from_opt
 ## @purpose  Verify resolve_node_yaml finds node.yaml via path 3 (VPS fallback):
-##           /opt/node-configs/<node>/node.yaml. This path is hardcoded in the
+##           /opt/node-configs/<node\>/node.yaml. This path is hardcoded in the
 ##           function; no parameter can override it. If /opt/ is not writable
 ##           (e.g. CI or container), the test is skipped.
 ## @io       ⇥ tmp_path → ⎋ assert /opt path in PATH=… stderr, returncode == 0

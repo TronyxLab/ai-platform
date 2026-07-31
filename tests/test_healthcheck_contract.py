@@ -12,11 +12,13 @@ from tests.conftest import ldd_trajectory
 # region MODULE_CONTRACT
 ## @purpose  Регрессионные контрактные тесты для healthcheck-фиксов (StatusReport §2.2)
 ## @scope    Четыре теста:
+##
 ##           1. hermes-agent healthcheck использует порт 9119 (не 8080)
 ##           2. nginx healthcheck использует check_docker_health + MODE=deep (Docker module)
 ##           3. litellm healthcheck содержит check_docker_health (после разделения observability)
 ##           4. nginx MODE=deep содержит docker exec curl с HTTP-верификацией
 ## @invariants
+##
 ##   - Тесты анализируют только содержимое файлов (subprocess не используется)
 ##   - Не требуют Docker, nginx или других внешних зависимостей
 ##   - IMP:9 логирование для LDD-трассировки

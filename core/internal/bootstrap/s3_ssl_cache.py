@@ -738,7 +738,7 @@ def bulk_restore(
 
 # region FUNC_find_acme_account_dir
 ## @purpose  Find acme.sh account directory for a domain.
-##           Tries <domain>_ecc/ first (acme.sh default), falls back to data/<domain>/ (legacy).
+##           Tries <domain\>_ecc/ first (acme.sh default), falls back to data/<domain\>/ (legacy).
 ## @io — ⇥ domain: str, acme_home: str → ⎋ str | None
 ## @complexity — O(1) — filesystem stat calls
 ## @invariants
@@ -746,10 +746,10 @@ def bulk_restore(
 def _find_acme_account_dir(domain: str, acme_home: str) -> str | None:
     """Find acme.sh account directory for domain.
 
-    ⚠️ TRAP[BUG] · 2026-07-23 · G3 · acme.sh account data path uses <domain>_ecc/
-    · Observed: account data never uploaded because data/<domain>/ doesn't exist
-    · Root: acme.sh stores account data in <domain>_ecc/ directory structure
-    · Fix: try <domain>_ecc first (acme.sh default), fall back to data/<domain> (legacy)
+    ⚠️ TRAP[BUG] · 2026-07-23 · G3 · acme.sh account data path uses <domain\\>_ecc/
+    · Observed: account data never uploaded because data/<domain\\>/ doesn't exist
+    · Root: acme.sh stores account data in <domain\\>_ecc/ directory structure
+    · Fix: try <domain\\>_ecc first (acme.sh default), fall back to data/<domain\\> (legacy)
     """
     ecc_path = os.path.join(acme_home, f"{domain}_ecc")
     if os.path.isdir(ecc_path):

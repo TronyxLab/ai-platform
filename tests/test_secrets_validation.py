@@ -19,6 +19,7 @@
 
 # region MODULE_CONTRACT
 ## @purpose  3 pre-deploy tests validating secrets and env configuration:
+##
 ##           - .env file exists (AC-T4.2)
 ##           - Required secrets are non-empty (AC-T4.1)
 ##           - No literal secrets in compose files (AC-T4.3)
@@ -26,6 +27,7 @@
 ##           docker-compose.base.yml files across all docker modules.
 ##           All tests are marked @pytest.mark.predeploy.
 ## @invariants
+##
 ##   - test_secrets_env_file_exists: checks hermes-agent/.env file existence
 ##   - test_required_secrets_not_empty: reads .env, asserts required keys non-empty
 ##   - test_no_secret_leaks_in_compose: scans compose environment: sections for

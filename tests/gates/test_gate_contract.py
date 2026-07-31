@@ -6,9 +6,11 @@
 ##            are properly marked with @pytest.mark.contract. Structural checks only
 ##            (no subprocess invocation of `make test MARKER=contract`).
 ## @scope — Gate #4 of 7 anti-drift CI gates (TASK-5G4 Phase 5)
+##
 ##          1. test_contract_test_files_exist — check contract test files exist and have markers
 ##          2. test_contract_target_exists — verify Makefile defines the parameterized test target
 ## @invariants
+##
 ##   - PROJECT_ROOT = parents[2] from this file (tests/gates/ → tests/ → project root)
 ##   - Contract test files must exist under tests/test_contract_*.py
 ##   - Each contract test file must have at least one @pytest.mark.contract decorator

@@ -4,7 +4,7 @@
 # STRUCTURE: ┌canonical operations table┐ → ◇ core/ dir structure → ◇ cross-layer import rules → ◇ forbidden lists → ⎋ navigation refs
 # region MODULE_CONTRACT
 ## @purpose  Catalog of canonical make targets, core/ directory structure, cross-layer import rules, and forbidden scripts/verbs for the ai-platform core
-## @scope    All operations that pass through Makefile; layer isolation rules; deleted/forbidden script inventory. Source of truth for forbidden scripts: core/entrypoint-manifest.yaml#forbidden_scripts
+## @scope    All operations that pass through Makefile; layer isolation rules; deleted/forbidden script inventory. Source of truth for forbidden scripts: core/entrypoint-manifest.yaml §forbidden_scripts
 ## @invariants
 ##   - Every Makefile .PHONY target maps to a row in the canonical operations table
 ##   - Entrypoints only call internal/ or lib/ — never modules/
@@ -19,15 +19,15 @@
 ## Канонические операции
 
 <!-- GENERATED:START:canon_table -->
-| `make bootstrap-node` | Идемпотентный bootstrap ноды | make bootstrap-node NODE=<name> | core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py + core/internal/bootstrap/deploy/context_deployer.py |
-| `make deploy-context` | Деплой проектов контекста на ноде | make deploy-context NODE=<n> [CONTEXT=<ctx>] | core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py |
-| `make deploy` | Деплой проекта | make deploy PROJECT=<dir> | git push → CI → core/entrypoints/deploy.sh (VPS forced-command) → core/internal/deploy/orchestrator_cli.py receive → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh |
-| `make deploy-project` | Прямой деплой минуя CI (DeployOrchestrator) | make deploy-project PROJECT=<dir> NODE=<node> | core/internal/deploy/orchestrator_cli.py deploy-many (SCPChannel) |
-| `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=<context> | core/entrypoints/context-promote.sh → copy to <context>/ai-platform → CI |
+| `make bootstrap-node` | Идемпотентный bootstrap ноды | make bootstrap-node NODE=\<name\> | core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/deploy-modules.sh + core/internal/bootstrap/cert_orchestrator.py + core/internal/bootstrap/deploy/context_deployer.py |
+| `make deploy-context` | Деплой проектов контекста на ноде | make deploy-context NODE=\<n\> [CONTEXT=\<ctx\>] | core/entrypoints/deploy-context.sh → core/internal/bootstrap/deploy/context_deployer.py |
+| `make deploy` | Деплой проекта | make deploy PROJECT=\<dir\> | git push → CI → core/entrypoints/deploy.sh (VPS forced-command) → core/internal/deploy/orchestrator_cli.py receive → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh |
+| `make deploy-project` | Прямой деплой минуя CI (DeployOrchestrator) | make deploy-project PROJECT=\<dir\> NODE=\<node\> | core/internal/deploy/orchestrator_cli.py deploy-many (SCPChannel) |
+| `make context-promote` | Промоут платформы в контекст | make context-promote CONTEXT=\<context\> | core/entrypoints/context-promote.sh → copy to \<context\>/ai-platform → CI |
 | `make hermes-build-platform` | Сборка L1 образа | make hermes-build-platform | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-platform |
-| `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=<context> | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context |
+| `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=\<context\> | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context |
 | `make hermes-push-l1` | Push L1 в ghcr.io | make hermes-push-l1 | docker tag + docker push to ghcr.io |
-| `make hermes-push-l2` | Push L2 в ghcr.io | make hermes-push-l2 CONTEXT=<org> | docker tag + docker push to ghcr.io |
+| `make hermes-push-l2` | Push L2 в ghcr.io | make hermes-push-l2 CONTEXT=\<org\> | docker tag + docker push to ghcr.io |
 | `make templates-check` | Dry-run проверка шаблонов | make templates-check | core/internal/template_engine.py check --verbose |
 | `make templates-render` | Рендер шаблонов | make templates-render | core/internal/template_engine.py render-all |
 | `make validate-modules` | Валидация module.yaml | make validate-modules | core/internal/scripts/validate_module_yaml.py --all |
@@ -51,27 +51,27 @@
 | `make generate-manifests-atomic` | Атомарная генерация всех манифестов | make generate-manifests-atomic | mktemp → Chain A+B+C → mv |
 | `make sync-env-defaults` | Генерация .env.example из SoT | make sync-env-defaults | core/internal/scripts/sync_env_defaults.py → .env.example |
 | `make check-env-defaults` | Проверка актуальности .env.example | make check-env-defaults | core/internal/scripts/sync_env_defaults.py --check |
-| `make new-project` | Создание проекта из шаблона | make new-project NAME=<n> TEMPLATE=<t> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |
-| `make new-context` | Создание контекста деплоя | make new-context NODE=<n> | core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh |
-| `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=<name>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py |
-| `make remove-project` | Удаление проекта из lifecycle | make remove-project NAME=<name> | core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh |
-| `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=<dir> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen_env_platform.py |
-| `make project-list` | Список проектов | make project-list [NODE=<node>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |
-| `make project-status` | Статус проекта | make project-status NAME=<name> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
-| `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=<name> | core/internal/scaffold/add-vhost.sh --render-all --node <n> |
+| `make new-project` | Создание проекта из шаблона | make new-project NAME=\<n\> TEMPLATE=\<t\> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |
+| `make new-context` | Создание контекста деплоя | make new-context NODE=\<n\> | core/entrypoints/scaffold.sh → core/internal/scaffold/context-init.sh |
+| `make project-sync-env` | Синхронизация .env.platform | make project-sync-env [NAME=\<name\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/gen_env_platform.py |
+| `make remove-project` | Удаление проекта из lifecycle | make remove-project NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/remove-project.sh |
+| `make adopt-project` | Адаптация существующего проекта | make adopt-project DIR=\<dir\> | core/entrypoints/scaffold.sh → core/internal/scaffold/adopt-project.sh → core/internal/scaffold/gen_env_platform.py |
+| `make project-list` | Список проектов | make project-list [NODE=\<node\>] | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh |
+| `make project-status` | Статус проекта | make project-status NAME=\<name\> | core/entrypoints/scaffold.sh → core/internal/scaffold/project-list.sh --status |
+| `make render-vhosts` | Генерация vhost конфигов | make render-vhosts NODE=\<name\> | core/internal/scaffold/add-vhost.sh --render-all --node \<n\> |
 | `make secrets-unlock` | Расшифровка секретов | make secrets-unlock [NODE=...] | core/entrypoints/secrets.sh → core/internal/secrets/decrypt-secrets.sh |
 | `make up-safe` | Безопасный compose up | make up-safe [MODULES=...] | core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up |
 | `make compose-safe-up` | Deprecated alias for up-safe | make compose-safe-up (deprecated — use up-safe) | up-safe (deprecated alias) |
-| `make converge` | Реконсиляция ноды | make converge NODE=<name> | core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh |
+| `make converge` | Реконсиляция ноды | make converge NODE=\<name\> | core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh |
 | `make healthcheck` | Проверка здоровья | make healthcheck [NODE=...] | core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh |
 | `make up` | Запуск compose-стека | make up [PROJECT=...] | core/internal/provision-environment.sh → docker compose up |
 | `make down` | Остановка compose-стека | make down | docker compose down |
 | `make restart` | Мягкий перезапуск compose-стека | make restart | docker compose stop && docker compose start |
 | `make status` | Статус compose-стека | make status | docker compose ps |
 | `make backup` | Резервное копирование | make backup [NODE=...] | Module backup scripts |
-| `make restore` | Восстановление из бэкапа | make restore NODE=<n> | Module restore scripts |
-| `make node-update` | Обновление provisioned ноды | make node-update NODE=<name> | core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules + healthcheck |
-| `make verify` | HTTPS-верификация | make verify NODE=<node> | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
+| `make restore` | Восстановление из бэкапа | make restore NODE=\<n\> | Module restore scripts |
+| `make node-update` | Обновление provisioned ноды | make node-update NODE=\<name\> | core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules + healthcheck |
+| `make verify` | HTTPS-верификация | make verify NODE=\<node\> | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
 | `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh → core/internal/provisioner.py |
 | `make provision-llm` | Provision LiteLLM virtual keys | make provision-llm | core/entrypoints/provision-llm.sh → core/internal/llm/key_provisioner.py |
 | `make discover-modules` | Авто-обнаружение модулей | make discover-modules | core/internal/bootstrap/discover_modules.py |
@@ -144,7 +144,7 @@
 
 ## Архитектурные инварианты
 
-11 архитектурных инвариантов платформы определены **только** в [`AGENTS.md`](../AGENTS.md#region-MODULE_CONTRACT) (root). Настоящий файл не дублирует их — все расхождения между копиями устранены в пользу root как единственного Source of Truth.
+11 архитектурных инвариантов платформы определены **только** в `AGENTS.md` (root) — `#region MODULE_CONTRACT`. Настоящий файл не дублирует их — все расхождения между копиями устранены в пользу root как единственного Source of Truth.
 
 **Правило:** если новый инвариант затрагивает общую архитектуру платформы — добавляй в root AGENTS.md. В core/AGENTS.md описываются только core-специфичные контракты (операции, структура, forbidden-списки).
 
@@ -154,11 +154,11 @@
 
 | Файл | Назначение |
 |------|-----------|
-| [`AGENTS.md`](../AGENTS.md) (root) | **Единственный Source of Truth** — архитектурные инварианты, модель деплоя, глоссарий глаголов |
+| `AGENTS.md` (root) | **Единственный Source of Truth** — архитектурные инварианты, модель деплоя, глоссарий глаголов |
 | [`modules/AGENTS.md`](modules/AGENTS.md) | Шаблон модуля, контракты |
 | [`entrypoint-manifest.yaml`](entrypoint-manifest.yaml) | Машиночитаемый YAML-реестр |
 | [`templates/`](templates/) | Параметризованные шаблоны |
-- [Root AGENTS.md — языковая политика](../AGENTS.md#языковая-политика) — Python-only new code, двухуровневый Strangler-триггер
+- Root AGENTS.md — языковая политика — Python-only new code, двухуровневый Strangler-триггер
 
 ---
 

@@ -111,7 +111,7 @@ def test_ssh_e(caplog) -> None:
 
 # region FUNC_test_resolve_node_yaml_found
 ## @purpose  Verify resolve_node_yaml finds node.yaml via path 1 (platform-local).
-## @scenario node.yaml at platform_root/node-configs/<node>/node.yaml
+## @scenario node.yaml at platform_root/node-configs/<node\>/node.yaml
 def test_resolve_node_yaml_found(platform_root: str, caplog) -> None:
     """resolve_node_yaml: node.yaml found at platform-local path."""
     caplog.set_level(logging.DEBUG)

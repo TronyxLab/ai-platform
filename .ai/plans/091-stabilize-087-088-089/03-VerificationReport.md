@@ -109,7 +109,7 @@ $END_ARTIFACT_CONTRACT
 
 ```
 tests/unit/test_deploy_single_orchestrator.py .... 6 PASSED
-tests/unit/test_project_registry.py ............... 19 PASSED  
+tests/unit/test_project_registry.py ............... 19 PASSED
 tests/unit/test_state_machine.py .................. 43 PASSED
 tests/gates/test_gate_single_orchestrator.py ...... 3 PASSED
 ─────────────────────────────────────────────────────────

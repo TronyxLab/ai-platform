@@ -29,7 +29,7 @@ $START_BRIEF
 
 ### Wave 1: test infrastructure
 1. Определить тестовую ноду (test-VPS, пересоздаваемая). Зафиксировать в `node-configs/test-e2e.yaml`.
-2. Создать `tests/e2e/test_bootstrap_pipeline.py` — pytest с `@pytest.mark.e2e` (маркер, не входит в `make test` по умолчанию).
+2. Создать `tests/e2e/test_bootstrap_pipeline.py` — pytest с `@pytest.mark.requires_node` (маркер, не входит в `make test` по умолчанию — запуск через `make test-node`).
 3. Setup/teardown: пересоздание ноды (или reset state) перед прогоном.
 
 ### Wave 2: happy-path scenarios
@@ -45,13 +45,14 @@ $START_BRIEF
 11. `test_deploy_forced_command`: CI-equivalent deploy через SSH forced-command → orchestrator_cli receive работает.
 
 ### Wave 4: runner + documentation
-12. `make test-e2e` target (отдельный от `make test` — долго, требует VPS).
+12. `make test-node` target (отдельный от `make test` — долго, требует VPS).
 13. Документация: `tests/e2e/README.md` — как подготовить test-VPS, как запускать.
 
 ## Verification
-- `make test-e2e NODE=test-e2e` → зелёный (после подготовки ноды).
+- `make test-node NODE=test-e2e` → зелёный (после подготовки ноды).
 - Все 11 сценариев PASS.
 - Не входит в `make gate` (e2e = manual/expensive), но в CI можно запускать по тегу.
+- Маркер `requires_node` ортогонален существующему `e2e` (HTTP-проверки *.tronyx.ru) — см. DD1 в DevPlan.
 
 ## Anti-Loop Note
 E2E тест должен быть **детерминированным** (фиксированный test-project, фиксированная конфигурация). Не делать parameterized matrix — это замедлит и сделает хрупким. Один canonical happy-path + 3 failure-сценария.

@@ -169,11 +169,11 @@ def _get_existing_containers() -> set:
 ##   - JSON parse error: log WARN, return empty list
 ##   - Service container_name resolves to explicit container_name or service name
 ##   - Services without container_name AND without name field are skipped
-##   - --profile <module_name> is passed to get the correct config resolution
+##   - --profile <module_name\> is passed to get the correct config resolution
 def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
     """Run docker compose config --format json and extract container names.
 
-    Uses --profile <module_name> so compose resolves the correct service set
+    Uses --profile <module_name\\> so compose resolves the correct service set
     for the given module. Returns a list of container names (explicit or
     service-name fallback).
     """

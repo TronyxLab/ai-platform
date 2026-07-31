@@ -16,9 +16,10 @@
 ## @rationale Gate-тест `test_gate_vhost_nginx_t.py` валидирует контракт в Docker-харнесе с эталонным node.yaml (проекты с дефисами + поддомены PLATFORM_DOMAIN).
 ## @changes 2026-07-20 · Создан (DevPlan 020 Wave 6 — D3 documentation)
 ## @changes 2026-07-26 · DevPlan 080 — Added §6 Template Syntax Contract, deleted nginx/install.sh references
-## @see tests/gates/test_gate_vhost_nginx_t.py — Docker-harness gate test
-## @see core/internal/scaffold/add-vhost.sh — генератор vhost'ов
-## @see core/modules/nginx/config/ — эталонные vhost конфиги
+##
+@see tests/gates/test_gate_vhost_nginx_t.py — Docker-harness gate test
+@see core/internal/scaffold/add-vhost.sh — генератор vhost'ов
+@see core/modules/nginx/config/ — эталонные vhost конфиги
 # endregion MODULE_CONTRACT
 
 # VHOST_CONTRACT — nginx vhost generation

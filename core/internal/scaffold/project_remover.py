@@ -175,7 +175,7 @@ def unregister_from_node_yaml(node_yaml_path: str, name: str) -> bool:
 
 # region FUNC_remove_vhost
 ## @purpose  Remove nginx vhost file for the project, if a domain is configured.
-##           The vhost file lives at <node-configs>/<node>/overlays/nginx/<domain>.conf
+##           The vhost file lives at <node-configs>/<node\>/overlays/nginx/<domain\>.conf
 ## @param domain            Domain name (empty = skip)
 ## @param node_configs_dir  Path to node-configs directory
 ## @return   True if removed or skipped, False on error

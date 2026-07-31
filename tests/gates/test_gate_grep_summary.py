@@ -17,7 +17,7 @@
 ##   - test_all_py_files_have_grep_summary:  glob core/**/*.py + tests/**/*.py
 ##   - Only first 10 lines per file are examined
 ##   - Excluded: __pycache__/, .venv/, node_modules/, test_data/, .pytest_cache/, .test_counter.json
-##   - Fail message: MISSING_GREP_SUMMARY: <path> (all missing in single message)
+##   - Fail message: MISSING_GREP_SUMMARY: <path\> (all missing in single message)
 ##   - Does NOT add GREP_SUMMARY — only verifies presence
 ## @rationale  GREP_SUMMARY is part of the Semantic Markup Standard (§MARKUP).
 ##             Every source file MUST have it for agent-based discovery. This gate
@@ -152,7 +152,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 ##   - Globs core/**/*.sh recursively from repo root
 ##   - Exclusion rules apply (__pycache__/, .venv/, etc.)
 ##   - All missing paths reported in single pytest.fail message
-##   - Format: MISSING_GREP_SUMMARY: <absolute_path>
+##   - Format: MISSING_GREP_SUMMARY: <absolute_path\>
 
 
 @pytest.mark.gate
@@ -206,7 +206,7 @@ def test_all_sh_files_have_grep_summary(caplog: pytest.LogCaptureFixture) -> Non
 ##   - Globs core/**/*.py + tests/**/*.py recursively from repo root
 ##   - Exclusion rules apply (__pycache__/, .venv/, etc.)
 ##   - All missing paths reported in single pytest.fail message
-##   - Format: MISSING_GREP_SUMMARY: <absolute_path>
+##   - Format: MISSING_GREP_SUMMARY: <absolute_path\>
 
 
 @pytest.mark.gate

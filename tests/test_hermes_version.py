@@ -8,7 +8,7 @@
 ## @scope    Unit tests; no Docker daemon required. Reads YAML and Dockerfile from disk.
 ## @invariants
 ##   - L1 LABEL = hermes-agent-base (local build, pushed to ghcr.io as DR backup)
-##   - L2 image = ghcr.io/<context>/hermes-agent-context (publishable)
+##   - L2 image = ghcr.io/<context\>/hermes-agent-context (publishable)
 ##   - L0 FROM = nousresearch/hermes-agent (immutable upstream)
 ##   - PLATFORM_CONTEXT_REPO unset → skip (L2 context optional); set but missing → fail
 ## @rationale — Brief §3.5: L1=hermes-agent-base (local-only), L2=hermes-agent-context (GHCR).

@@ -132,8 +132,8 @@ def confirm(dry_run: bool = False) -> bool:
 
 # region FUNC_copy_template
 ## @purpose  Copy template directory to project dir, EXCLUDING platform-deploy.yml.
-## @param src      Template source dir (templates/template-<type>)
-## @param dst      Destination dir (projects/<org>/<name>)
+## @param src      Template source dir (templates/template-<type\>)
+## @param dst      Destination dir (projects/<org\>/<name\>)
 ## @param dry_run  If True, print plan only
 ## @io        stdout: progress; side-effect: rsync —exclude
 ## @complexity O(f) where f = files in template

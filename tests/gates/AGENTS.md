@@ -68,4 +68,4 @@ Gate-тесты делятся на категории по предмету п�
 |------|-----------|
 | [`core/entrypoint-manifest.yaml`](../../core/entrypoint-manifest.yaml) | YAML-реестр gates (секция `gates:`) |
 | [`../../core/AGENTS.md`](../../core/AGENTS.md) | Канонические операции, структура слоёв |
-| [`../../AGENTS.md`](../../AGENTS.md) | Архитектурные инварианты платформы |
+| `../../AGENTS.md` (root) | Архитектурные инварианты платформы |
