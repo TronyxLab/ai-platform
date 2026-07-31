@@ -34,4 +34,4 @@ name: data-etl
   ### "Small Simple Blocks" Principle
   Logic should be simple. Prefer linear code with moderate repetition over over-engineered DRY patterns. Start simple — if problems arise, immediately split into maximum individual steps.
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

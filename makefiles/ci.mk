@@ -1,16 +1,18 @@
-# GREP_SUMMARY: ci.mk, test, test-summary, gate, validate, lint, check-file-lines, pre-commit, scripts-audit, audit, secrets-unlock
-# STRUCTURE: ┌variables┐ → ◇ test → ◇ test-summary → ◇ gate → ◇ validate → ◇ lint → ◇ check-file-lines → ◇ pre-commit-install → ◇ pre-commit-run → ◇ scripts-audit → ◇ audit → ◇ secrets-unlock
+# GREP_SUMMARY: ci.mk, test, test-summary, gate, validate, lint, check-file-lines, doxygen-check, pre-commit, scripts-audit, audit, secrets-unlock
+# STRUCTURE: ┌variables┐ → ◇ test → ◇ test-summary → ◇ gate → ◇ validate → ◇ lint → ◇ check-file-lines → ◇ doxygen-check → ◇ pre-commit-install → ◇ pre-commit-run → ◇ scripts-audit → ◇ audit → ◇ secrets-unlock
 # region MODULE_CONTRACT
 ## @purpose  CI and quality targets — test, test-summary (agent-oriented wrapper), gate, validate, lint, pre-commit, audit, secrets
 ## @scope    Included from root Makefile; uses pytest + shell entrypoints + Python test_runner
 ## @invariants
 ##   - gate MODE=fast must pass before push (CI pre-flight rule)
+##   - gate MODE=fast включает doxygen-check (zero-warnings инвариант DevPlan 097)
 ##   - test MARKER=all runs canonical order: validate→lint→gates→contract→static→predeploy→smoke→component→integration
 ##   - test-summary delegates to core/internal/test_runner.py — compact agent-oriented output
 ## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
+## @changes 2026-07-31 | DevPlan 097 close-out: doxygen-check target + gate step (zero-warnings guard)
 # endregion MODULE_CONTRACT
 
-.PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock check-dead-code
+.PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock check-dead-code doxygen-check
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -148,6 +150,8 @@ gate:
 		$(MAKE) check-dead-code || { echo "[IMP:9][make][gate] FAIL: check-dead-code"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 2c/8: check-exception-patterns..."; \
 		$(MAKE) check-exception-patterns || { echo "[IMP:9][make][gate] FAIL: check-exception-patterns"; exit 1; }; \
+		echo "[IMP:7][make][gate] Step 2d/8: doxygen-check (zero-warnings invariant, DevPlan 097)..."; \
+		$(MAKE) doxygen-check || { echo "[IMP:9][make][gate] FAIL: doxygen-check"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 3a/8: anti-drift CI gates (static, parallel)..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v || { echo "[IMP:9][make][gate] FAIL: gates (static)"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 3b/6: anti-drift CI gates (Docker, sequential)..."; \
@@ -178,6 +182,8 @@ gate:
 		$(MAKE) check-dead-code || { echo "[IMP:9][make][gate] FAIL: check-dead-code"; GATE_FAILED=1; }; \
 		echo "[IMP:7][make][gate] Step 3/11: lint..."; \
 		$(MAKE) lint || { echo "[IMP:9][make][gate] FAIL: lint"; GATE_FAILED=1; }; \
+		echo "[IMP:7][make][gate] Step 3b/11: doxygen-check (zero-warnings invariant, DevPlan 097)..."; \
+		$(MAKE) doxygen-check || { echo "[IMP:9][make][gate] FAIL: doxygen-check"; GATE_FAILED=1; }; \
 		echo "[IMP:7][make][gate] Step 4/10: check-file-lines (non-blocking)..."; \
 		$(MAKE) check-file-lines || true; \
 		echo "[IMP:7][make][gate] Step 5/10: anti-drift gates (fail-fast)..."; \
@@ -259,6 +265,31 @@ check-dead-code:
 	@echo "[IMP:7][make][check-dead-code] Checking for stale DEPRECATED markers..."
 	@bash $(_platform_root)/core/entrypoints/check-dead-code.sh
 	@echo "[IMP:9][make][check-dead-code] All DEPRECATED markers within grace period"
+
+## doxygen-check: CI gate — Doxygen generation must produce ZERO warnings (DevPlan 097 invariant).
+##   Usage: make doxygen-check. Fast (<10s — doxygen Doxyfile ~6s on dev machine).
+##   Fails if doxygen exit code != 0 OR output contains any "warning:" line.
+##   Skips gracefully (exit 0) when doxygen binary is absent — CI containers without
+##   doxygen must not block the gate; the invariant is enforced on hosts that have it.
+doxygen-check:
+	@if ! command -v doxygen >/dev/null 2>&1; then \
+		echo "[IMP:7][make][doxygen-check] doxygen not installed — SKIP (zero-warnings invariant not enforceable on this host)"; \
+	else \
+		echo "[IMP:7][make][doxygen-check] Running doxygen Doxyfile (zero-warnings invariant)..."; \
+		doxygen Doxyfile > /tmp/doxygen-check.log 2>&1; \
+		EXIT=$$?; \
+		COUNT=$$(grep -c "warning:" /tmp/doxygen-check.log 2>/dev/null || true); \
+		rm -f /tmp/doxygen-check.log; \
+		if [ $$EXIT -ne 0 ]; then \
+			echo "[IMP:9][make][doxygen-check] FAIL: doxygen exited $$EXIT"; \
+			exit 1; \
+		fi; \
+		if [ "$$COUNT" != "0" ]; then \
+			echo "[IMP:9][make][doxygen-check] FAIL: $$COUNT doxygen warning(s) found — DevPlan 097 zero-warnings invariant violated"; \
+			exit 1; \
+		fi; \
+		echo "[IMP:9][make][doxygen-check] PASS: 0 doxygen warnings"; \
+	fi
 
 ## pre-commit-install: Install pre-commit hooks (gitleaks + code-quality + check-doc-headers + pre-push + commit-msg)
 pre-commit-install:

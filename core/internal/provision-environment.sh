@@ -21,20 +21,12 @@ set -euo pipefail
 __PROVISION_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 __PROVISION_PLATFORM_ROOT="$(cd "${__PROVISION_SCRIPT_DIR}/../.." && pwd)"
 
-# 📝 TRAP[DEBT] · 2026-07-31 · HI · Stale source of deleted audit_logging.sh — breaks make provision
-# · Observed: during DevPlan 093 gate verification — 17/17 TestProvisionerDryRun tests fail
-#   with "audit_logging.sh: No such file or directory"; same failure at HEAD baseline
-#   (commit 8be2843), zero regression from 093.
-# · Suspected: DevPlan 088/089 removed core/lib/audit_logging.sh (commit aa6bd61) but this
-#   source line was missed; set -euo pipefail aborts the whole script on source failure.
-#   audit_step() is consumed at L94+ — likely undefined at runtime too.
-# · Impact: make provision (networks/volumes/env) fails on every node; 17 gate tests red.
-#   Same-family refs: core/entrypoints/context-promote.sh, core/entrypoints/build.sh
-#   (comments mention audit_logging.sh — verify), platform-secrets uses safe `|| true`.
-# · When: during DevPlan 093 W1/W2 verification — deferred, out of scope (093 File Manifest
-#   covers validate.sh + state_machine.py only). Fix: source audit_logger.py equivalent or
-#   drop the source + define audit_step inline, per DevPlan 089 pattern.
-source "${__PROVISION_SCRIPT_DIR}/../lib/audit_logging.sh"
+# ⚠️ TRAP[BUG] · 2026-07-31 · HI · Stale source of deleted audit_logging.sh broke make provision
+# · Fix: DevPlan 089 removed core/lib/audit_logging.sh (aa6bd61) but this source line
+#   was missed → set -euo pipefail aborted the whole script (17 gate tests red).
+#   Replaced with canonical thin facade core/lib/audit.sh (Python shared/audit_logger).
+# · Reverted-debt: previously registered as C-5 in .ai/debt/096-Residual-Debt.md.
+source "${__PROVISION_SCRIPT_DIR}/../lib/audit.sh"
 
 __PROVISION_DEFAULT_PLATFORM_ENV="${__PROVISION_PLATFORM_ROOT}/platform-env.yaml"
 

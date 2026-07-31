@@ -20,6 +20,16 @@ $END_ARTIFACT_CONTRACT
 
 ---
 
+> **STATUS UPDATE 2026-07-31:** SUPERSEDED — implementation committed (см. git log).
+> Phase A выполнена: `core/internal/shared/` содержит 15 модулей (включая `age_key.py`, `crypto.py`,
+> `secrets_env_parser.py`, `docker_auth.py`, `telegram_notifier.py`), `core/internal/secrets/` —
+> `decrypt-secrets.sh` + `decrypt_secrets.py`. Post-implementation верификация:
+> `02-VerificationReport.md` → **STABLE**. Прежний вердикт «PREREQUISITES BLOCKED — NOT STARTED»
+> отражал отсутствие prerequisite 070 на момент проверки (070 де-факто реализован планами 079/081).
+> Актуальный статус: DevPlan.md / 02-VerificationReport.md.
+
+---
+
 ## Final Verdict: **PREREQUISITES BLOCKED** — DevPlan NOT STARTED
 
 **One-liner:** Plan is self-consistent and all 7 DRIFT points are accurately characterized, but **DevPlan 070 prerequisite is MISSING** (`core/internal/shared/__init__.py` does not exist) — this blocks Waves 1-2 which depend on the `shared` package. Implementation has not yet started (0/22 files modified, 0/4 new files created).

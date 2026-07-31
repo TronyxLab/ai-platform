@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test_test_runner, junit-xml-parse, testsuites-wrapper, format-summary, build-pytest-args, build-pytest-args-file, marker-map, compact-output, TRAP-regression
-# STRUCTURE: ▶ tmp_path XML fixtures → ◇ parse_junit_xml (pass/fail/error/testsuites-wrapper) → ◇ format_summary compact-bound → ◇ _build_pytest_args (static/unknown) → ◇ _build_pytest_args_file (AC6) → ⎋ LDD IMP:9 trajectory
+# GREP_SUMMARY: test_test_runner, junit-xml-parse, testsuites-wrapper, format-summary, build-pytest-args, build-pytest-args-file, marker-map, compact-output, all-marker, compression, TRAP-regression
+# STRUCTURE: ▶ tmp_path XML fixtures → ◇ parse_junit_xml (pass/fail/error/testsuites-wrapper) → ◇ format_summary compressed-bound (MAX_FAIL_DETAILS) → ◇ _build_pytest_args (static/all/unknown) → ◇ _build_pytest_args_file (AC6) → ⎋ LDD IMP:9 trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/test_runner.py — JUnit XML → TestSummary parsing,
 ##           compact summary formatting, marker → pytest args mapping (DevPlan 098 Wave 4, F4).
@@ -15,6 +15,8 @@
 ##            (атрибуты counts на <testsuite>, НЕ на <testsuites> wrapper) и AC7 static
 ##            special handler. Покрывает риски B2/B3/M3 DevPlan §8.
 ## @changes  2026-07-31 | DevPlan 098 Wave 4 — Created
+## @changes  2026-07-31 | DevPlan 098 close-out (VR 098): test_build_pytest_args_all (DRIFT-2),
+##            test_format_summary_compact → сжатие MAX_FAIL_DETAILS (AC1)
 # endregion MODULE_CONTRACT
 """
 
@@ -193,21 +195,23 @@ def test_parse_junit_xml_testsuites_wrapper(caplog, tmp_path):
 # region Tests: format_summary
 # ═══════════════════════════════════════════════════════════════════
 
-# 🧐 TRAP[DECISION] · 2026-07-31 · — · format_summary: "<100 строк при 50 failures" не выполняется
-# · Rejected: assert len(output.splitlines()) < 100 при 50 failures (спецификация DevPlan Wave 4 —
-# ·   арифметически невозможна: 6 header + 1 blank + 1 section + 2×50 = 108 строк)
-# · Reason: реальный контракт реализации — AC3 (вывод НИКОГДА > 2000 строк, даже при 100+ failures,
-# ·   DevPlan §5 AC3) при детерминированном формате 2 строки на failure. "< 100" держится до 45 failures.
-# · Rev: если формат сменится на 1 строку на failure → вернуть assert len < 100 при 50 failures.
+# 🧐 TRAP[DECISION] · 2026-07-31 · — · format_summary: "<100 строк при 50 failures" — решено сжатием
+# · Rejected: assert len(output.splitlines()) < 100 при 50 failures в старом формате
+# ·   (2 строки на failure — арифметически невозможно: 6 header + 1 blank + 1 section + 2×50 = 108 строк)
+# · Reason: DevPlan 098 close-out (VR 098 AC1) — внедрён MAX_FAIL_DETAILS=20: при >20 failures
+# ·   вывод обрезается до первых 20 + "... and M more". 50 failures → 48 строк (< 100, AC1 держится
+# ·   при ЛЮБОМ числе failures). 119 failures (реальный прогон VR 098) → 244 строк → 48 строк.
+# · Rev: если формат снова сменится на 1 строку на failure → пересмотреть MAX_FAIL_DETAILS.
 
 
-# 🧪 TRAP[TEST] · Regression · AC3: format_summary output stays bounded/compact at 50 failures
-# · Scenario: TestSummary с 50 FAIL entries → deterministic 8 + 2×50 = 108 lines, < 2000 (AC3 bound)
-# · Last fail: N/A (new test)
-# · Remove if: format_summary line-per-failure layout changes
+# 🧪 TRAP[TEST] · Regression · AC1: format_summary compressed — >MAX_FAIL_DETAILS failures → first 20 + "... and M more"
+# · Scenario: TestSummary с 50 FAIL entries → 48 строк (6 header + 1 blank + 1 section + 2×20 + 1 more),
+# ·   первый failure присутствует, последний отсутствует, "... and 30 more failures" в выводе
+# · Last fail: N/A (new test — заменяет арифметику 8 + 2×F, VR 098 AC1)
+# · Remove if: format_summary compression (MAX_FAIL_DETAILS) changes
 @ldd_trajectory
 def test_format_summary_compact(caplog):
-    """format_summary output must stay compact: 2 lines/failure, bounded by AC3 (< 2000 lines)."""
+    """format_summary must compress: first MAX_FAIL_DETAILS failures + \"... and M more\" (AC1)."""
     failures = 50
     summary = TestSummary(
         pass_count=0,
@@ -228,11 +232,15 @@ def test_format_summary_compact(caplog):
     output = format_summary(summary, "static_audit", 1.23)
     lines = output.splitlines()
 
-    # Compact deterministic layout: 6 counts header + 1 blank + 1 section header + 2 lines per failure
-    assert len(lines) == 8 + 2 * failures
-    # AC3: output never exceeds 2000 lines even with 100+ failures
-    assert len(lines) < 2000
-    logger.critical("[IMP:9][test] format_summary compact: %d lines for %d failures", len(lines), failures)
+    # Compressed layout: 6 counts header + 1 blank + 1 section header + 2×20 shown + 1 more-line
+    assert len(lines) == 8 + 2 * 20 + 1
+    # AC1: output < 100 lines even with 50 (and 119+) failures
+    assert len(lines) < 100
+    # First failure shown, last failure compressed away
+    assert "tests.test_example::test_fail_0" in output
+    assert "tests.test_example::test_fail_49" not in output
+    assert "... and 30 more failures" in output
+    logger.critical("[IMP:9][test] format_summary compressed: %d lines for %d failures", len(lines), failures)
 
 
 # endregion Tests: format_summary
@@ -261,9 +269,42 @@ def test_build_pytest_args_static(caplog):
     assert "static_audit" in expr
     assert "not e2e" in expr
     assert "not requires_docker" in expr
+    # DevPlan 095 AC9/AC12: requires_node (E2E pipeline) excluded from static_audit —
+    # иначе tests/e2e/ подхватываются выражением и FAIL без NODE env (Rule R4)
+    assert "not requires_node" in expr
     logger.critical(
         "[IMP:9][test] static→None special handler; static_audit→%d arg(s) with -m expression",
         len(static_audit_args),
+    )
+
+
+# 🧪 TRAP[TEST] · Regression · DRIFT-2 close-out: "all" → None special handler (НЕ Unknown MARKER)
+# · Scenario: _build_pytest_args("all") == None (sequential suites + merge_junit dispatch в main()),
+# ·   _ALL_SUITES_ORDER не содержит special handlers (static/all) — только pytest-суиты MARKER_MAP
+# · Last fail: VR 098 DRIFT-2 — `_build_pytest_args("all")` → SystemExit(1) "Unknown MARKER"
+# · Remove if: "all" stops being a special handler or _ALL_SUITES_ORDER changes
+@ldd_trajectory
+def test_build_pytest_args_all(caplog):
+    """AC2/DRIFT-2: all → None (special handler); _ALL_SUITES_ORDER = pytest suites only."""
+    all_args = _build_pytest_args("all")
+    assert all_args is None
+
+    from core.internal.test_runner import _ALL_SUITES_ORDER
+
+    assert isinstance(_ALL_SUITES_ORDER, list)
+    assert len(_ALL_SUITES_ORDER) >= 4
+    # Каждый элемент — реальный pytest-маркер из MARKER_MAP, НЕ special handler (static/all)
+    from core.internal.test_runner import MARKER_MAP
+
+    for suite in _ALL_SUITES_ORDER:
+        assert suite in MARKER_MAP
+        assert MARKER_MAP[suite] is not None, f"{suite} — special handler не может быть в _ALL_SUITES_ORDER"
+    # Canonical ci.mk order: contract → static_audit → predeploy → smoke → component → integration
+    assert _ALL_SUITES_ORDER[0] == "contract"
+    assert "static_audit" in _ALL_SUITES_ORDER
+    logger.critical(
+        "[IMP:9][test] all→None special handler; _ALL_SUITES_ORDER=%s",
+        ",".join(_ALL_SUITES_ORDER),
     )
 
 
@@ -281,6 +322,7 @@ def test_build_pytest_args_unknown_marker(caplog, capsys):
     err = capsys.readouterr().err
     assert "Unknown MARKER" in err
     assert "nonexistent" in err
+    assert "all" in err  # valid list включает all (DRIFT-2 close-out)
     logger.critical("[IMP:9][test] Unknown marker 'nonexistent' → SystemExit(1) with error message")
 
 

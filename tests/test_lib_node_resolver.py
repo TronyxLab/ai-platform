@@ -44,6 +44,9 @@
 ##            for this path. The test creates the file at the real /opt/node-configs/
 ##            location; if /opt/ is not writable the test is skipped.
 ## @changes LAST_CHANGE: 2026-07-07 · Initial implementation per DevPlan test spec
+##            2026-07-31 · resolve_node_yaml tests aligned with DP-088/091 delegation:
+##            args platform_root/projects_dir are vestigial — NodeYaml.resolve() reads
+##            PLATFORM_ROOT + HOME env (3-path search now lives in core.internal.shared.node_yaml)
 ## @modulemap
 ##   - _run_bash                         [W:30] Helper: source node-resolver.sh, run bash, return result
 ##   - test_resolve_from_platform_root   [W:40] Path 1: platform_root/node-configs/N/node.yaml
@@ -64,6 +67,7 @@ def _module_contract():
 
 # endregion MODULE_CONTRACT
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -91,7 +95,7 @@ _NODE_RESOLVER_PATH: Path = Path(__file__).resolve().parent.parent / "core" / "l
 ##           in an isolated tmp_path directory — no cross-test contamination.
 ##           Sources node-resolver.sh (which internally sources logging.sh)
 ##           and sets __LOG_PREFIX="test" for deterministic LDD output.
-## @io       ⇥ (tmp_path: Path, code: str) → ⎋ CompletedProcess(stdout, stderr, returncode)
+## @io       ⇥ (tmp_path: Path, code: str, env: dict|None) → ⎋ CompletedProcess(stdout, stderr, returncode)
 ## @complexity O(1) — single subprocess.run with 10s timeout
 ## @invariants
 ##   - Always prepends #!/usr/bin/env bash + set -euo pipefail
@@ -99,7 +103,10 @@ _NODE_RESOLVER_PATH: Path = Path(__file__).resolve().parent.parent / "core" / "l
 ##   - Always sources node-resolver.sh via _NODE_RESOLVER_PATH
 ##   - Script file is chmod 755 before execution
 ##   - Timeout set to 10 seconds (fail-fast on infinite loops)
-def _run_bash(tmp_path: Path, code: str) -> subprocess.CompletedProcess:
+##   - env (optional) merged into os.environ.copy() — used to set PLATFORM_ROOT/HOME
+##     so NodeYaml.resolve() (DP-088/091: resolve_node_yaml delegates to
+##     `python3 -m core.internal.shared.node_yaml --resolve`) finds tmp_path fixtures
+def _run_bash(tmp_path: Path, code: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run bash code with node-resolver.sh sourced, return subprocess result.
 
     ## @purpose  Isolate bash script execution in a temp file for deterministic testing.
@@ -107,6 +114,7 @@ def _run_bash(tmp_path: Path, code: str) -> subprocess.CompletedProcess:
     ##            user code. node-resolver.sh internally sources logging.sh.
     ## @io       ⇥ tmp_path: Path — pytest fixture for temp dir
     ##             code: str — bash commands to execute after sourcing node-resolver.sh
+    ##             env: dict — optional env overrides (PLATFORM_ROOT, HOME)
     ##           ⎋ CompletedProcess with stdout, stderr, returncode attributes
     ## @complexity O(1)
     """
@@ -119,11 +127,16 @@ def _run_bash(tmp_path: Path, code: str) -> subprocess.CompletedProcess:
     script.write_text(script_content)
     script.chmod(0o755)
 
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
+
     return subprocess.run(
         ["bash", str(script)],
         capture_output=True,
         text=True,
         timeout=10,
+        env=run_env,
     )
 
 
@@ -143,8 +156,9 @@ def _run_bash(tmp_path: Path, code: str) -> subprocess.CompletedProcess:
 ## @complexity O(1)
 def test_resolve_from_platform_root(tmp_path: Path) -> None:
     # 🧪 TRAP[TEST] · Regression: path 1 must be searched first
-    # · Scenario: node.yaml exists at platform_root/node-configs/N/node.yaml
-    # · Last fail: Never
+    # · Scenario: node.yaml exists at {PLATFORM_ROOT}/node-configs/N/node.yaml
+    # · Last fail: 2026-07-31 — resolve_node_yaml delegates to NodeYaml CLI (DP-088/091);
+    # ·   platform_root arg no longer drives the search — PLATFORM_ROOT env does
     # · Remove if: resolve_node_yaml search order changes (path 1 removed or reordered)
     node_name = "mynode"
     platform_root = tmp_path / "platform"
@@ -162,6 +176,7 @@ __LOG_PREFIX="test"
 resolved="$(resolve_node_yaml "{node_name}" "{platform_root}" "{projects_dir}")"
 echo "PATH=$resolved" >&2
 ''',
+        env={"PLATFORM_ROOT": str(platform_root)},
     )
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert str(node_yaml) in result.stderr, f"Expected path '{node_yaml}' in stderr, got: {result.stderr}"
@@ -185,15 +200,16 @@ echo "PATH=$resolved" >&2
 ## @complexity O(1)
 def test_resolve_from_projects_glob(tmp_path: Path) -> None:
     # 🧪 TRAP[TEST] · Regression: path 2 glob must be searched when path 1 has no match
-    # · Scenario: node.yaml only at projects_dir/ctx/node-configs/N/node.yaml
-    # · Last fail: Never
+    # · Scenario: node.yaml only at $HOME/projects/ctx/node-configs/N/node.yaml
+    # · Last fail: 2026-07-31 — resolve_node_yaml delegates to NodeYaml CLI (DP-088/091);
+    # ·   projects_dir arg no longer drives the search — $HOME env glob does
     # · Remove if: resolve_node_yaml search order changes (path 2 removed or reordered)
     node_name = "myprojectnode"
     platform_root = tmp_path / "platform"
     platform_root.mkdir(parents=True)
     projects_dir = tmp_path / "projects"
 
-    # Create the glob-matching path: projects_dir/ctx/node-configs/<node>/node.yaml
+    # Create the glob-matching path: $HOME/projects/ctx/node-configs/<node>/node.yaml
     node_yaml = projects_dir / "ctx" / "node-configs" / node_name / "node.yaml"
     node_yaml.parent.mkdir(parents=True)
     node_yaml.write_text("node:\n  host: 10.0.0.1\n")
@@ -205,6 +221,8 @@ __LOG_PREFIX="test"
 resolved="$(resolve_node_yaml "{node_name}" "{platform_root}" "{projects_dir}")"
 echo "PATH=$resolved" >&2
 ''',
+        # HOME override → NodeYaml.resolve() globs ~/projects/*/node-configs/
+        env={"HOME": str(tmp_path)},
     )
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     assert str(node_yaml) in result.stderr, f"Expected glob path '{node_yaml}' in stderr, got: {result.stderr}"
@@ -281,8 +299,9 @@ echo "PATH=$resolved" >&2
 ## @complexity O(1)
 def test_resolve_first_wins(tmp_path: Path) -> None:
     # 🧪 TRAP[TEST] · Regression: first match wins — path 1 beats paths 2 and 3
-    # · Scenario: node.yaml in all 3 locations → path 1 (platform_root) returned
-    # · Last fail: Never
+    # · Scenario: node.yaml in all 3 locations → path 1 (PLATFORM_ROOT) returned
+    # · Last fail: 2026-07-31 — resolve_node_yaml delegates to NodeYaml CLI (DP-088/091);
+    # ·   search driven by PLATFORM_ROOT + HOME env, not path args
     # · Remove if: resolve_node_yaml search order or break logic changes
     node_name = "firstwins"
     platform_root = tmp_path / "platform"
@@ -314,6 +333,7 @@ __LOG_PREFIX="test"
 resolved="$(resolve_node_yaml "{node_name}" "{platform_root}" "{projects_dir}")"
 echo "PATH=$resolved" >&2
 ''',
+        env={"PLATFORM_ROOT": str(platform_root), "HOME": str(tmp_path)},
     )
     assert result.returncode == 0, f"Script failed: {result.stderr}"
     # Must return path 1 (first found)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: test-runner pytest wrapper junit xml compact summary marker static_audit test_file junit-output parse
-# STRUCTURE: ▶ main ┌marker→args | test_file→args_file┐ → ◇ static ? validate.sh→lint→pytest : run(pytest --junitxml) → ⊕ parse_junit_xml → ⟦format_summary⟧ → ⎋ exit code
+# GREP_SUMMARY: test-runner pytest wrapper junit xml compact summary marker static_audit test_file junit-output parse all merge
+# STRUCTURE: ▶ main ┌marker→args | test_file→args_file┐ → ◇ static ? validate.sh→lint→pytest : ◇ all ? sequential suites + merge_junit : run(pytest --junitxml) → ⊕ parse_junit_xml → ⟦format_summary (compressed >20 fails)⟧ → ⎋ exit code
 # region MODULE_CONTRACT
 ## @purpose  Тонкая Python-обёртка над pytest (DevPlan 098, Уровень A): один вызов bash-tool
 ##           возвращает компактный machine-readable результат — PASS/FAIL/SKIP/ERROR counts +
@@ -10,7 +10,7 @@
 ##           (core/ и core/internal/ БЕЗ __init__.py). Запуск: python -m core.internal.test_runner
 ## @invariants
 ##   - stdout = ТОЛЬКО machine-readable summary; IMP-логи идут в stderr через logging
-##   - Вывод < 100 строк для нормальных прогонов, NEVER > 2000 строк даже при 100+ failures (AC3)
+##   - Вывод < 100 строк ВСЕГДА (AC1): compression — MAX_FAIL_DETAILS=20 при >20 failures
 ##   - PYTEST_NO_ESCALATION=1 ВСЕГДА в env subprocess (AC10: anti-loop контракт, _conftest/session.py:255)
 ##   - subprocess timeout default 1800s (AC8) — wrapper не висит при зависшем Docker healthcheck
 ##   - JUnit XML temp dir автоочищается в finally-блоке (AC4); --junit-output → без автоочистки
@@ -23,6 +23,11 @@
 ## @changes 2026-07-31 | Wave 1: core wrapper (F1) per DevPlan 098 §7
 ## @changes 2026-07-31 | DevPlan 099: --junit-output (явный путь, для 'make test' routing),
 ##            --test-file (один файл, AC6), _build_pytest_args_file()
+## @changes 2026-07-31 | DevPlan 095 AC9/AC12: static_audit expr исключает requires_node
+##            (E2E pipeline тесты не входят в gate/test-all — иначе 11 тестов FAIL без NODE, Rule R4)
+## @changes 2026-07-31 | DevPlan 098 close-out (VR 098): MARKER=all (AC2, DRIFT-2) —
+##            _run_all_suites + merge_junit агрегация; FAIL compression (AC1) —
+##            MAX_FAIL_DETAILS=20 при >20 failures; doxygen docstring XML-escape (DevPlan 097)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -41,9 +46,14 @@ logger = logging.getLogger(__name__)
 
 # ── Marker → pytest expression mapping ──────────────────────────────────────
 # Зеркало ci.mk строки 24-105 (make test MARKER=...). См. TRAP[DESIGN] ниже.
+# not requires_node: DevPlan 095 AC9/AC12 — E2E pipeline тесты (tests/e2e/, маркер
+# requires_node) НЕ входят в make test MARKER=static_audit/static, MARKER=all и
+# make gate MODE=fast. Без этого фильтра 11 E2E-тестов подхватываются выражением
+# (у них нет e2e/component/smoke/... маркеров) и FAIL без NODE env (Rule R4).
 _STATIC_AUDIT_EXPR = (
     "static_audit or (not e2e and not component and not smoke "
-    "and not integration and not local_auth and not requires_docker)"
+    "and not integration and not local_auth and not requires_docker "
+    "and not requires_node)"
 )
 
 # ⚠️ TRAP[DESIGN] · 2026-07-31 · MED · MARKER_MAP дублирует ci.mk строки 24-105 — сознательный компромисс
@@ -55,8 +65,11 @@ _STATIC_AUDIT_EXPR = (
 # ·   оттуда — правильно, но вне рамок Уровня A. Зарегистрировано как debt для Уровня B/C.
 # · Rev: при добавлении 4-го маркера или первом расхождении с ci.mk → рефакторинг в YAML SoT.
 # · static (None) = special handler → _run_static_full (AC7: validate.sh → lint → pytest).
+# · all (None) = special handler → _run_all_suites (AC2: sequential suites + merge_junit).
+# ·   DRIFT-2 close-out (VR 098): "all" больше не Unknown MARKER.
 MARKER_MAP: dict[str, list[str] | None] = {
     "static": None,  # special handler: validate.sh → lint → pytest (AC7)
+    "all": None,  # special handler: sequential suites + merge_junit aggregation (AC2)
     "static_audit": ["-m", _STATIC_AUDIT_EXPR],
     "smoke": ["-m", "smoke", "-rs"],
     "component": ["-m", "component", "-rs"],
@@ -66,6 +79,25 @@ MARKER_MAP: dict[str, list[str] | None] = {
     "e2e": ["-m", "e2e", "-rs"],
     "local_auth": ["-m", "local_auth"],
 }
+
+# MARKER=all suite order — зеркало `make test MARKER=all` pytest-шагов (ci.mk строки 74-84):
+# contract → static_audit → predeploy → smoke → component → integration.
+# e2e исключён (external *.tronyx.ru manual, ci.mk:59-63 — НЕ входит в make test MARKER=all);
+# local_auth не входит в make test MARKER=all (ci.mk full suite); static — special handler
+# (pytest-часть покрыта static_audit; validate+lint — отдельный прогон, не дублируются).
+_ALL_SUITES_ORDER: list[str] = [
+    "contract",
+    "static_audit",
+    "predeploy",
+    "smoke",
+    "component",
+    "integration",
+]
+
+# AC1 close-out (VR 098): при > MAX_FAIL_DETAILS failures вывод обрезается до первых N +
+# "... and M more" — компактный режим держит < 100 строк при ЛЮБОМ числе failures (ранее
+# 2 строки на failure: 119 failures → 244 строки, DevPlan 098 AC1 нарушен).
+MAX_FAIL_DETAILS = 20
 
 
 # region FUNC_TESTSUMMARY
@@ -118,12 +150,12 @@ def _first_line(text: str, max_chars: int = 200) -> str:
 
 
 # region FUNC_PARSE_JUNIT_XML
-## @purpose  Парсинг JUnit XML → TestSummary: агрегация counts с <testsuite> и сбор
-##           failed_tests из <testcase> с <failure>/<error> (DevPlan §4 data flow step 6)
+## @purpose  Парсинг JUnit XML → TestSummary: агрегация counts с \<testsuite\> и сбор
+##           failed_tests из \<testcase\> с \<failure\>/\<error\> (DevPlan §4 data flow step 6)
 ## @io — path (str, JUnit XML file) → TestSummary
-## @complexity — O(T) где T = общее число <testcase> по всем <testsuite>
+## @complexity — O(T) где T = общее число \<testcase\> по всем \<testsuite\>
 ## @rationale — root.iter("testsuite") вместо root.get(): pytest --junitxml оборачивает
-##              вывод в <testsuites>, атрибуты живут на дочерних <testsuite> (см. TRAP[BUG])
+##              вывод в \<testsuites\>, атрибуты живут на дочерних \<testsuite\> (см. TRAP[BUG])
 def parse_junit_xml(path: str) -> TestSummary:
     """Parse JUnit XML report into a TestSummary."""
     # pytest-generated JUnit XML (trusted local artifact, not untrusted input);
@@ -196,11 +228,13 @@ def parse_junit_xml(path: str) -> TestSummary:
 
 # region FUNC_FORMAT_SUMMARY
 ## @purpose  Компактный machine-readable summary: header + counts + failed list
-##           (DevPlan §5 AC1). 2 строки на failure (имя + first-line message) — AC3
+##           (DevPlan §5 AC1). 2 строки на failure, но при > MAX_FAIL_DETAILS (20)
+##           failures вывод сжимается: первые 20 + "... and M more" (AC1 close-out:
+##           < 100 строк при ЛЮБОМ числе failures, 119 failures → 244 → 48 строк)
 ## @io — summary (TestSummary), marker (str), duration (float wall-clock s) → str
-## @complexity — O(F) где F = число failed tests
+## @complexity — O(min(F, MAX_FAIL_DETAILS)) где F = число failed tests
 def format_summary(summary: TestSummary, marker: str, duration: float) -> str:
-    """Format compact summary: counts block + failed/error sections."""
+    """Format compact summary: counts block + failed/error sections (compressed > 20)."""
     lines = [
         f"=== TEST SUMMARY (marker={marker}, {duration:.1f}s) ===",
         f"PASS:  {summary.pass_count}",
@@ -215,17 +249,23 @@ def format_summary(summary: TestSummary, marker: str, duration: float) -> str:
     if failed:
         lines.append("")
         lines.append("--- FAILED TESTS ---")
-        for f in failed:
+        for f in failed[:MAX_FAIL_DETAILS]:
             detail = _first_line(f["message"]) or _first_line(f["text"])
             lines.append(f"FAIL {f['name']}")
             lines.append(f"     {detail}")
+        hidden = len(failed) - MAX_FAIL_DETAILS
+        if hidden > 0:
+            lines.append(f"... and {hidden} more failures")
     if errors:
         lines.append("")
         lines.append("--- ERRORS ---")
-        for e in errors:
+        for e in errors[:MAX_FAIL_DETAILS]:
             detail = _first_line(e["message"]) or _first_line(e["text"])
             lines.append(f"ERROR {e['name']}")
             lines.append(f"       {detail}")
+        hidden = len(errors) - MAX_FAIL_DETAILS
+        if hidden > 0:
+            lines.append(f"... and {hidden} more errors")
 
     logger.info("[IMP:9][format_summary][result] %s", " | ".join(lines[:6]))
     return "\n".join(lines)
@@ -236,20 +276,21 @@ def format_summary(summary: TestSummary, marker: str, duration: float) -> str:
 
 # region FUNC_BUILD_PYTEST_ARGS
 ## @purpose  Маппинг marker → pytest CLI args (зеркало ci.mk строки 24-105, DevPlan §6).
-##           static возвращает None — main() делегирует в _run_static_full (AC7)
-## @io — marker (str) → list[str] pytest args | None для static
+##           static и all возвращают None — main() делегирует в специальные handlers
+##           (_run_static_full / _run_all_suites). DRIFT-2 close-out: "all" больше не Unknown.
+## @io — marker (str) → list[str] pytest args | None для static/all
 ## @complexity — O(1)
-## @rationale — Номинальная аннотация DevPlan §7 — list[str], но static-path возвращает None
-##              (special handler). Аннотация list[str] | None честнее: static обрабатывается
-##              отдельным диспетчером, а не pytest-аргументами
+## @rationale — Номинальная аннотация DevPlan §7 — list[str], но static/all-path возвращает
+##              None (special handlers). Аннотация list[str] | None честнее: специальные
+##              маркеры обрабатываются отдельными диспетчерами, а не pytest-аргументами
 def _build_pytest_args(marker: str) -> list[str] | None:
-    """Resolve marker → pytest CLI args; None for `static` (special handler)."""
-    if marker == "static":
-        logger.info("[IMP:7][build_args][static] Marker=static → special handler (validate+lint+pytest)")
+    """Resolve marker → pytest CLI args; None for `static`/`all` (special handlers)."""
+    if marker in ("static", "all"):
+        logger.info("[IMP:7][build_args][special] Marker=%s → special handler", marker)
         return None
     args = MARKER_MAP.get(marker)
     if args is None:
-        valid = ", ".join(sorted(k for k in MARKER_MAP if k != "static")) + ", static"
+        valid = ", ".join(sorted(MARKER_MAP))
         logger.critical("[IMP:9][build_args][error] Unknown MARKER=%r. Valid values: %s", marker, valid)
         print(f"[IMP:9][test_runner] ERROR: Unknown MARKER='{marker}'. Valid values: {valid}", file=sys.stderr)
         sys.exit(1)
@@ -325,6 +366,89 @@ def _run_static_full(platform_root: Path, junit_path: Path, timeout: int) -> int
 
 
 # endregion FUNC_RUN_STATIC_FULL
+
+
+# region FUNC_RUN_ALL_SUITES
+## @purpose  Имплементация `all` маркера (AC2, DRIFT-2 close-out): последовательный прогон
+##           всех pytest-суит из _ALL_SUITES_ORDER (зеркало make test MARKER=all, ci.mk
+##           строки 74-84), агрегация через tests/merge_junit.py (DevPlan §6: reuse,
+##           НЕ новая логика агрегации), merged report пишется в junit_path → main()
+##           парсит и печатает стандартный компактный summary.
+## @io — platform_root (Path), junit_path (Path, merged report destination), timeout (int s) → int exit code
+## @complexity — O(S) subprocess-вызовов (S = число суит + 1 merge)
+## @invariants
+##   - Порядок суит = _ALL_SUITES_ORDER (canonical ci.mk order)
+##   - e2e/local_auth/static НЕ входят: external manual / вне make test MARKER=all / special handler
+##   - Любой fail (exit != 0) → общий exit = max(exit codes) — fail не маскируется
+##   - timeout на каждую суиту отдельно (AC8) — одна зависшая суита не блокирует остальные
+##   - merge_junit пропускает missing files; если ни один junit не создан → fallback
+## @rationale — AC2 требовал "all" без Unknown MARKER. ci.mk делает это через $(MAKE) test
+##              recursion + merge_junit; wrapper повторяет последовательность нативно.
+def _run_all_suites(platform_root: Path, junit_path: Path, timeout: int) -> int:
+    """Run all MARKER_MAP suites sequentially; aggregate via merge_junit (AC2)."""
+    env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
+    suite_dir = junit_path.parent
+    junit_files: list[Path] = []
+    exit_codes: list[int] = []
+
+    for marker in _ALL_SUITES_ORDER:
+        args = MARKER_MAP[marker]
+        assert args is not None, f"_ALL_SUITES_ORDER содержит special handler: {marker}"
+        suite_junit = suite_dir / f"junit-{marker}.xml"
+        pytest_args = [*args, "--junitxml", str(suite_junit)]
+        logger.info("[IMP:7][all_suites][run] Suite marker=%s", marker)
+        proc: subprocess.CompletedProcess[str] | None = None
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+                env=env,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+            )
+            exit_codes.append(proc.returncode)
+        except subprocess.TimeoutExpired:
+            logger.critical("[IMP:9][all_suites][timeout] Suite marker=%s TIMEOUT after %ds", marker, timeout)
+            print(f"TIMEOUT after {timeout}s (suite={marker})", file=sys.stderr)
+            exit_codes.append(124)
+        if suite_junit.exists():
+            junit_files.append(suite_junit)
+            logger.info("[IMP:7][all_suites][junit] Suite marker=%s → %s", marker, suite_junit)
+        else:
+            # Fallback: suite crashed before writing XML — tail captured output
+            captured = proc.stderr or proc.stdout or "" if proc is not None else ""
+            _print_no_xml_fallback(marker, captured)
+            logger.warning("[IMP:7][all_suites][junit] Suite marker=%s produced no JUnit XML", marker)
+
+    overall = max(exit_codes, default=2)
+    if not junit_files:
+        logger.critical("[IMP:9][all_suites][merge] No JUnit XML produced by any suite — no aggregation")
+        return overall
+
+    # Агрегация: tests/merge_junit.py (DevPlan §6 — reuse, missing files skip)
+    merged = suite_dir / "merged.xml"
+    merge_proc = subprocess.run(
+        [
+            sys.executable,
+            str(platform_root / "tests" / "merge_junit.py"),
+            *(str(f) for f in junit_files),
+            "-o",
+            str(merged),
+        ],
+        env=env,
+        timeout=timeout,
+        capture_output=True,
+        text=True,
+    )
+    if merge_proc.returncode != 0 or not merged.exists():
+        logger.critical("[IMP:9][all_suites][merge] merge_junit failed exit=%d", merge_proc.returncode)
+        return overall
+    shutil.copy2(merged, junit_path)  # main() парсит merged report по стандартному пути
+    logger.info("[IMP:9][all_suites][merge] Merged %d suite(s) → %s (exit=%d)", len(junit_files), junit_path, overall)
+    return overall
+
+
+# endregion FUNC_RUN_ALL_SUITES
 
 
 # region FUNC_PRINT_NO_XML_FALLBACK
@@ -476,11 +600,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 124
         else:
             # Marker mode: resolve marker → pytest args
-            pytest_args = _build_pytest_args(args.marker)
-            if pytest_args is None:
+            if args.marker == "static":
                 # static special handler (AC7): validate.sh → lint → pytest
                 result_code = _run_static_full(platform_root, junit_path, args.timeout)
+            elif args.marker == "all":
+                # all special handler (AC2, DRIFT-2 close-out): sequential suites + merge_junit
+                result_code = _run_all_suites(platform_root, junit_path, args.timeout)
             else:
+                pytest_args = _build_pytest_args(args.marker)
+                assert pytest_args is not None, f"marker={args.marker} не special handler, но вернул None"
                 pytest_args = [*pytest_args, "--junitxml", str(junit_path)]
                 env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
                 try:
@@ -511,8 +639,9 @@ def main(argv: list[str] | None = None) -> int:
             # Fallback: pytest crashed before writing XML (collection error) — tail stderr
             _print_no_xml_fallback(display_label, proc.stderr or proc.stdout or "")
         else:
-            # static path — fallback уже напечатан внутри _run_static_full
-            logger.info("[IMP:9][main][parse] static path: JUnit XML not produced (fallback printed)")
+            # static/all special-handler paths — fallback уже напечатан внутри
+            # _run_static_full / _run_all_suites
+            logger.info("[IMP:9][main][parse] special handler path: JUnit XML not produced (fallback printed)")
 
         logger.info("[IMP:9][main][exit] exit=%d duration=%.1fs", result_code, duration)
         return result_code

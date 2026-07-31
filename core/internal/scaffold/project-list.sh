@@ -7,8 +7,6 @@
 ## @invariants  <30 LOC; zero business logic; exit code passthrough
 # endregion MODULE_CONTRACT
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")}"
 
 # Map --list / --status to explicit flags for project_lister.py
 exec python3 -m core.internal.scaffold.project_lister "$@"

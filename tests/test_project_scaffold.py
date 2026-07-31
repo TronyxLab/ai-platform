@@ -1,23 +1,30 @@
 # GREP_SUMMARY: test project scaffold converge r3 gen-env-platform step-6b node-lifecycle idempotent
-# STRUCTURE: ┌test_env fixture┐ → ○ test_converge_r3_dry_run → ○ test_converge_r3_scaffold → ○ test_converge_r3_idempotent → ○ test_step_6b_calls_converge → ○ test_gen_env_platform_interface → ⊕ LDD trajectory IMP:7-10
+# STRUCTURE: ┌tmp_path platform_root fixture┐ → ○ test_converge_r3_dry_run → ○ test_converge_r3_scaffold → ○ test_converge_r3_idempotent → ○ test_step_6b_calls_converge → ○ test_gen_env_platform_interface → ⊕ LDD trajectory IMP:7-10
 # region MODULE_CONTRACT
-## @purpose  Test suite for Wave 2 project scaffold through converge: converge.sh --units R3,
-##           gen-env-platform.sh integration, step_6b converge call, and idempotent behavior.
+## @purpose  Test suite for project scaffold through converge: converge.sh --units R3,
+##           gen_env_platform.py integration, step 6b converge call (_ensure_projects_base),
+##           and idempotent behavior.
 ## @scope    5 test functions covering dry-run planning, real mutation (conditional), idempotent
-##           repeat, source-code verification of step_6b converge invocation, and gen-env-platform
+##           repeat, source-code verification of step 6b converge invocation, and gen_env_platform
 ##           interface verification.
 ## @invariants
-##   - All subprocess tests create node.yaml in a discoverable location (under project's
-##     node-configs/ dir or /opt/platform/node-configs/ via sudo)
+##   - All tests use tmp_path — node.yaml is created at
+##     {platform_root}/node-configs/<node>/node.yaml (Path 1 of NodeYaml.resolve, DP-088)
+##     and PLATFORM_ROOT env is passed to converge.sh subprocess. No hardcoded $HOME paths.
 ##   - Fixture node.yaml provides 1-2 test projects for converge R3 to process
-##   - Fixture platform-env.yaml provides valid profiles/provides for gen-env-platform.sh
 ##   - converge.sh is called from its real location (CORE_DIR resolved from script path)
 ##   - Mutation tests (scaffold, idempotent) require write access to /opt/projects;
 ##     if unavailable, tests verify error behavior instead of full scaffold
-## @rationale DevPlan 024 Wave 2: project scaffold through converge R3 replaces inline
-##            mkdir+touch in step_6b with converge.sh --units R3, which calls
-##            gen-env-platform.sh for .env.platform generation.
+##   - gen_env_platform tests call gen_env_platform.py library directly (DP-090 deleted
+##     gen-env-platform.sh) — native Python, no subprocess for business logic
+## @rationale DevPlan 024 Wave 2 heritage: project scaffold through converge R3. Updated for
+##            DP-090 (gen-env-platform.sh → gen_env_platform.py) and DP-091 (state machine:
+##            step_6b_create_projects_base → state_machine.py::_ensure_projects_base;
+##            resolve_node_yaml → python3 -m core.internal.shared.node_yaml --resolve).
+##            Pre-existing failures fixed 2026-07-31 (VR 092 §4).
 ## @changes 2026-07-21 · Wave 2 — initial implementation
+## @changes 2026-07-31 · Fixed 5 pre-existing failures: tmp_path fixture for NodeYaml.resolve,
+##           native gen_env_platform.py interface test, step_6b → _ensure_projects_base
 # endregion MODULE_CONTRACT
 
 import logging
@@ -27,9 +34,9 @@ import shutil
 import subprocess
 import sys
 
-import pytest
 import yaml
 
+from core.internal.scaffold.gen_env_platform import generate_env_platform
 from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -37,51 +44,32 @@ logger = logging.getLogger(__name__)
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
 _CONVERGE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "converge.sh"
-_GEN_ENV_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "gen-env-platform.sh"
 _NODE_LIFECYCLE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
+_STATE_MACHINE_SCRIPT: pathlib.Path = (
+    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "state_machine.py"
+)
 
-# converge.sh resolves node.yaml via resolve_node_yaml which searches:
-#   1. PLATFORM_ROOT/node-configs/<node>/node.yaml  (PLATFORM_ROOT hardcoded to /opt/platform)
-#   2. $HOME/projects/*/node-configs/<node>/node.yaml
+# converge.sh resolves node.yaml via resolve_node_yaml → NodeYaml.resolve() (DP-088/091)
+# which searches:
+#   1. {PLATFORM_ROOT}/node-configs/<node>/node.yaml   (PLATFORM_ROOT env, default /opt/platform)
+#   2. $HOME/projects/*/node-configs/<node>/node.yaml  (glob)
 #   3. /opt/node-configs/<node>/node.yaml
-# For testing without root, we use Path 2: create under $HOME/projects/<test-org>/node-configs/
+# For testing we use Path 1: set PLATFORM_ROOT=<tmp_path>/platform in the subprocess env.
 _NODE_NAME = "test-node-scaffold"
-_TEST_ORG_DIR = pathlib.Path.home() / "projects" / "test-scaffold-org"
-_TEST_NODE_CONFIG_DIR = _TEST_ORG_DIR / "node-configs" / _NODE_NAME
-
-
-# ── Fixtures ──────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture(scope="session")
-def converge_test_org_dir() -> pathlib.Path:
-    """Session-scoped fixture: create and clean up the test org directory.
-
-    ## @purpose — Creates ~/projects/.test-scaffold-org/ for node.yaml discovery
-    ##            via converge.sh Path 2 ($HOME/projects/*/node-configs/). Cleans
-    ##            up after all tests in the session complete.
-    ## @io — ⎋ path to test org directory
-    """
-    org_dir = _TEST_ORG_DIR
-    org_dir.mkdir(parents=True, exist_ok=True)
-    yield org_dir
-    # Cleanup: remove test org directory
-    if org_dir.exists():
-        shutil.rmtree(org_dir, ignore_errors=True)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _create_test_node_yaml(node_name: str = _NODE_NAME) -> pathlib.Path:
+def _create_test_node_yaml(platform_root: pathlib.Path) -> pathlib.Path:
     """Create a test node.yaml with 2 projects for converge R3 tests.
 
-    ## @purpose — Creates node.yaml under ~/projects/.test-scaffold-org/node-configs/<node>/
-    ##            so converge.sh Path 2 ($HOME/projects/*/node-configs/) discovers it.
-    ## @io — Returns path to created node.yaml
+    ## @purpose — Creates node.yaml under {platform_root}/node-configs/<node>/node.yaml
+    ##            so NodeYaml.resolve() Path 1 ({PLATFORM_ROOT}/node-configs/) discovers it.
+    ## @io — ⇥ platform_root (tmp_path subdir) → ⎋ path to created node.yaml
     ## @invariants — 2 projects (testapp, demoapp) with distinct domains
     """
-    node_config_dir = _TEST_NODE_CONFIG_DIR
+    node_config_dir = platform_root / "node-configs" / _NODE_NAME
     node_config_dir.mkdir(parents=True, exist_ok=True)
     node_yaml = node_config_dir / "node.yaml"
 
@@ -160,12 +148,14 @@ def _run_converge(
     units: str = "R3",
     dry_run: bool = False,
     report_only: bool = False,
+    platform_root: pathlib.Path | None = None,
 ) -> subprocess.CompletedProcess:
     """Run converge.sh with given parameters and return result.
 
     ## @purpose — Single entry point for calling converge.sh in tests.
-    ##            Finds node.yaml via Path 2 ($HOME/projects/*/node-configs/).
-    ## @io — ⇥ node/units/dry_run → ⎋ CompletedProcess
+    ##            Passes PLATFORM_ROOT env so NodeYaml.resolve() Path 1
+    ##            ({platform_root}/node-configs/) discovers the fixture node.yaml.
+    ## @io — ⇥ node/units/dry_run/platform_root → ⎋ CompletedProcess
     """
     args = [
         "bash",
@@ -190,6 +180,8 @@ def _run_converge(
     # ·   to ensure the correct Python interpreter is used for reconciler.py.
     env = os.environ.copy()
     env.setdefault("CONVERGE_PYTHON", sys.executable)
+    if platform_root is not None:
+        env["PLATFORM_ROOT"] = str(platform_root)
 
     result = subprocess.run(
         args,
@@ -214,12 +206,13 @@ def _run_converge(
 # 🧪 TRAP[TEST] · 2026-07-21
 # · Regression: N/A (new test)
 # · Scenario: converge.sh --units R3 --dry-run with 2 projects in node.yaml
-# · Last fail: exit code 2 (flock missing on macOS), fixed by TRAP[DECISION] adding flock check
+# · Last fail: exit 2 (resolve_node_yaml → --resolve CLI broken: --file required +
+# ·   ___CONTEXT___ dead output); fixed 2026-07-31 in node_yaml.py CLI + tmp_path fixture
 # · Remove if: converge R3 is removed or dry-run mode is deprecated
 @ldd_trajectory
 def test_converge_r3_dry_run(
     caplog,
-    converge_test_org_dir: pathlib.Path,
+    tmp_path: pathlib.Path,
 ) -> None:
     """Converge R3 dry-run must plan all expected operations without mutation.
 
@@ -229,8 +222,9 @@ def test_converge_r3_dry_run(
     ## @acceptance — DevPlan 024 Wave 2: converge R3 dry-run shows all 2 projects
     ##               (testapp, demoapp) with planned mkdir + stub + gen-env ops.
     """
-    # Setup
-    _create_test_node_yaml()
+    # Setup — node.yaml at {PLATFORM_ROOT}/node-configs/ (NodeYaml.resolve Path 1)
+    platform_root = tmp_path / "platform"
+    _create_test_node_yaml(platform_root)
 
     # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · test_converge_r3_scaffold creates project dirs
     # ·   before this test, so reconciler sees STUBs instead of WOULD-create.
@@ -241,7 +235,7 @@ def test_converge_r3_dry_run(
             shutil.rmtree(_proj_dir, ignore_errors=True)
 
     # Run converge --units R3 --dry-run
-    result = _run_converge(dry_run=True)
+    result = _run_converge(dry_run=True, platform_root=platform_root)
 
     # Print converge stderr for debugging
     print("--- CONVERGE DRY-RUN STDERR ---")
@@ -280,28 +274,29 @@ def test_converge_r3_dry_run(
 # 🧪 TRAP[TEST] · 2026-07-21
 # · Regression: N/A (new test)
 # · Scenario: converge.sh --units R3 with 2 projects; if /opt/projects not writable, test error path
-# · Last fail: incorrect exit code expectations (flock, CONVERGE_EXIT_CODE not set on mkdir errors)
+# · Last fail: exit 2 (resolve_node_yaml broken); fixed 2026-07-31 (node_yaml.py CLI + tmp_path fixture)
 # · Remove if: converge R3 is removed or error path behavior changes
 @ldd_trajectory
 def test_converge_r3_scaffold(
     caplog,
-    converge_test_org_dir: pathlib.Path,
+    tmp_path: pathlib.Path,
 ) -> None:
     """Converge R3 must create project directories, stubs, and .env.platform.
 
     ## @purpose — Verify that converge.sh --units R3 creates per-project directories
     ##            under /opt/projects/<name>/, ai-platform.yaml stub, and .env.platform
-    ##            via gen-env-platform.sh with correct ownership (ci-deploy:ci-deploy).
+    ##            via gen_env_platform() with correct ownership (ci-deploy:ci-deploy).
     ##            If /opt/projects is not writable, verify graceful error handling.
     ## @acceptance — DevPlan 024 Wave 2: converge R3 scaffold creates real project files.
     """
-    # Setup
-    _create_test_node_yaml()
+    # Setup — node.yaml at {PLATFORM_ROOT}/node-configs/ (NodeYaml.resolve Path 1)
+    platform_root = tmp_path / "platform"
+    _create_test_node_yaml(platform_root)
 
     # ── If projects dir is not writable, test error behavior ──
     if not _projects_writable():
         logger.warning("[IMP:7][test][scaffold] /opt/projects not writable — testing error behavior")
-        result = _run_converge()
+        result = _run_converge(platform_root=platform_root)
 
         print("--- CONVERGE STDERR (no /opt write access) ---")
         print(result.stderr)
@@ -328,7 +323,7 @@ def test_converge_r3_scaffold(
         return
 
     # ── Normal mutation test: run converge R3 ──
-    result = _run_converge()
+    result = _run_converge(platform_root=platform_root)
 
     print("--- CONVERGE STDERR (mutation) ---")
     print(result.stderr)
@@ -351,13 +346,13 @@ def test_converge_r3_scaffold(
         stub_content = stub_file.read_text()
         assert proj in stub_content, f"Stub should reference project name '{proj}'"
 
-        # Verify .env.platform (may be generated by gen-env-platform.sh or fallback empty)
+        # Verify .env.platform (may be generated by gen_env_platform() or fallback empty)
         env_file = proj_dir / ".env.platform"
         assert env_file.is_file(), f".env.platform {env_file} should exist"
 
-    # Verify gen-env-platform.sh was consulted
-    if "gen-env-platform.sh" in result.stderr:
-        logger.info("[IMP:7][test][scaffold] gen-env-platform.sh was invoked for .env.platform generation")
+    # Verify gen_env_platform was consulted
+    if "gen_env_platform" in result.stderr:
+        logger.info("[IMP:7][test][scaffold] gen_env_platform() was invoked for .env.platform generation")
 
     logger.critical(
         "[IMP:9][test][scaffold] Converge R3 scaffold completed — project dirs, stubs, and .env.platform created"
@@ -367,12 +362,12 @@ def test_converge_r3_scaffold(
 # 🧪 TRAP[TEST] · 2026-07-21
 # · Regression: N/A (new test)
 # · Scenario: two converge.sh --units R3 calls; first run creates, second run skips
-# · Last fail: exit code assertions on dry-run fallback (no /opt/projects access)
+# · Last fail: exit 2 (resolve_node_yaml broken); fixed 2026-07-31 (node_yaml.py CLI + tmp_path fixture)
 # · Remove if: converge R3 idempotency contract changes
 @ldd_trajectory
 def test_converge_r3_idempotent(
     caplog,
-    converge_test_org_dir: pathlib.Path,
+    tmp_path: pathlib.Path,
 ) -> None:
     """Second converge R3 run must be no-op (idempotent).
 
@@ -382,16 +377,17 @@ def test_converge_r3_idempotent(
     ## @acceptance — DevPlan 024 Wave 2: converge R3 is idempotent — no file overwrites,
     ##               exit code 0 on repeat run.
     """
-    # Setup
-    _create_test_node_yaml()
+    # Setup — node.yaml at {PLATFORM_ROOT}/node-configs/ (NodeYaml.resolve Path 1)
+    platform_root = tmp_path / "platform"
+    _create_test_node_yaml(platform_root)
 
     # ── If projects dir is not writable, test idempotent planning (dry-run) ──
     if not _projects_writable():
         logger.warning("[IMP:7][test][idempotent] /opt/projects not writable — testing idempotent dry-run instead")
 
         # Run dry-run twice to verify consistent planning
-        result1 = _run_converge(dry_run=True)
-        result2 = _run_converge(dry_run=True)
+        result1 = _run_converge(dry_run=True, platform_root=platform_root)
+        result2 = _run_converge(dry_run=True, platform_root=platform_root)
 
         print("--- FIRST DRY-RUN STDERR ---")
         print(result1.stderr)
@@ -411,7 +407,7 @@ def test_converge_r3_idempotent(
         return
 
     # ── First run: create everything ──
-    result1 = _run_converge()
+    result1 = _run_converge(platform_root=platform_root)
     print("--- FIRST CONVERGE STDERR ---")
     print(result1.stderr)
     print("--- END STDERR ---")
@@ -420,7 +416,7 @@ def test_converge_r3_idempotent(
     assert result1.returncode in (0, 1), f"First converge exit {result1.returncode}: {result1.stderr[:2000]}"
 
     # ── Second run: should be no-op ──
-    result2 = _run_converge()
+    result2 = _run_converge(platform_root=platform_root)
     print("--- SECOND CONVERGE STDERR ---")
     print(result2.stderr)
     print("--- END STDERR ---")
@@ -468,28 +464,27 @@ def test_converge_r3_idempotent(
 
 
 # 🧪 TRAP[TEST] · 2026-07-21
-# · Regression: N/A (new test)
-# · Scenario: grep node-lifecycle.sh source for 'converge_script --units R3' pattern
-# · Last fail: no prior failures
-# · Remove if: step_6b no longer calls converge R3
+# · Regression: DP-091 state machine refactor — step_6b_create_projects_base moved out of node-lifecycle.sh
+# · Scenario: state_machine.py _ensure_projects_base() calls converge.sh --units R3; node-lifecycle.sh delegates
+# · Last fail: 2026-07-31 — "step_6b_create_projects_base must exist in node-lifecycle.sh" (stale assertion)
+# · Remove if: _ensure_projects_base no longer calls converge R3
 @ldd_trajectory
 def test_step_6b_calls_converge(
     caplog,
 ) -> None:
-    """step_6b in node-lifecycle.sh must call converge.sh --units R3.
+    """Step 6b in state_machine.py must call converge.sh --units R3.
 
-    ## @purpose — Source-level verification that step_6b_create_projects_base()
-    ##            in node-lifecycle.sh invokes converge.sh with the --units R3 flag.
-    ##            This test does NOT run node-lifecycle.sh — it greps the source
-    ##            to verify the converge call pattern is present.
-    ## @acceptance — DevPlan 024 Wave 2: step_6b calls converge --units R3 for
-    ##               project scaffold during bootstrap.
+    ## @purpose — Source-level verification that _ensure_projects_base()
+    ##            in lifecycle/state_machine.py invokes converge.sh with the
+    ##            --units R3 flag. This test does NOT run the pipeline — it
+    ##            greps the sources to verify the converge call pattern.
+    ## @acceptance — DevPlan 024 Wave 2: step 6b calls converge --units R3 for
+    ##               project scaffold during bootstrap (DP-091: state_machine.py
+    ##               owns phase logic; node-lifecycle.sh is a thin facade).
     """
-    # After W4-E2 strangler-fig refactoring, step_6b delegates to state_machine.py
-    # which calls converge.sh --units R3 from _ensure_projects_base().
-    # Check state_machine.py for the converge R3 call pattern.
-    _SM_SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "core/internal/bootstrap/lifecycle/state_machine.py"
-    sm_source = _SM_SCRIPT.read_text()
+    # After DP-091 strangler-fig refactoring, step_6b_create_projects_base moved
+    # from node-lifecycle.sh to state_machine.py::_ensure_projects_base().
+    sm_source = _STATE_MACHINE_SCRIPT.read_text()
 
     # Verify _ensure_projects_base() calls converge.sh with --units R3
     converge_call_pattern = False
@@ -500,9 +495,15 @@ def test_step_6b_calls_converge(
 
     assert converge_call_pattern, (
         f"_ensure_projects_base() in state_machine.py must call converge.sh with --units R3\n"
-        f"Look for '--units R3' pattern in {_SM_SCRIPT}\n"
+        f"Look for '--units R3' pattern in {_STATE_MACHINE_SCRIPT}\n"
         f"Converge-related lines:\n"
         + "\n".join(line for line in sm_source.splitlines() if "converge" in line.lower())[:3000]
+    )
+
+    # Verify _ensure_projects_base() exists in state_machine.py (DP-091 replacement
+    # for the deleted step_6b_create_projects_base shell function)
+    assert "_ensure_projects_base" in sm_source, (
+        "_ensure_projects_base() must exist in state_machine.py (DP-091 step 6b replacement)"
     )
 
     # Verify converge.sh has the --units flag in usage
@@ -510,32 +511,36 @@ def test_step_6b_calls_converge(
     assert "--units" in converge_source, "converge.sh must support the --units flag in its argument parsing"
     print("[IMP:7][test][step_6b] converge.sh --units flag confirmed in source")
 
-    # Verify step_6b function still exists in node-lifecycle.sh
+    # Verify node-lifecycle.sh is a thin facade delegating to state_machine.py
+    # (DP-091: all step logic moved to Python — step_6b_create_projects_base deleted)
     node_source = _NODE_LIFECYCLE_SCRIPT.read_text()
-    assert "step_6b_create_projects_base" in node_source, (
-        "step_6b_create_projects_base() must exist in node-lifecycle.sh"
+    assert "state_machine.py" in node_source, (
+        "node-lifecycle.sh must delegate to state_machine.py (DP-091 facade contract)"
     )
+    print("[IMP:7][test][step_6b] node-lifecycle.sh delegates to state_machine.py")
 
-    logger.critical("[IMP:9][test][step_6b] Verified converge --units R3 called from state_machine.py")
+    logger.critical(
+        "[IMP:9][test][step_6b] Verified converge --units R3 called from state_machine.py::_ensure_projects_base"
+    )
 
 
 # 🧪 TRAP[TEST] · 2026-07-21
-# · Regression: N/A (new test)
-# · Scenario: run gen-env-platform.sh --name testapp --output tmp_path/.env.platform
-# · Last fail: no prior failures
-# · Remove if: gen-env-platform.sh --name flag is removed or renamed
+# · Regression: DP-090 deleted gen-env-platform.sh → gen_env_platform.py
+# · Scenario: call gen_env_platform.generate_env_platform() with --name testapp semantics (project_name)
+# · Last fail: 2026-07-31 — "gen-env-platform.sh: No such file" (exit 127, subprocess of deleted script)
+# · Remove if: gen_env_platform.generate_env_platform() signature/contract changes
 @ldd_trajectory
 def test_gen_env_platform_interface(
     caplog,
     tmp_path: pathlib.Path,
 ) -> None:
-    """gen-env-platform.sh must support --name flag for converge calls.
+    """gen_env_platform.py must support project_name substitution (--name flag equivalent).
 
-    ## @purpose — Verify that gen-env-platform.sh accepts --name and --output flags,
-    ##            which converge R3 uses to generate .env.platform per project.
-    ##            This test runs gen-env-platform.sh directly with test inputs.
-    ## @acceptance — DevPlan 024 Wave 2: gen-env-platform.sh --name <project> --output <file>
-    ##               generates valid .env.platform content.
+    ## @purpose — Verify that generate_env_platform() accepts project_name (converge R3
+    ##            passes the project name for DSN ${NAME} substitution) and produces
+    ##            valid .env.platform content. Native Python call — no subprocess.
+    ## @acceptance — DevPlan 024 Wave 2: gen_env_platform.py project_name=<project>
+    ##               generates valid .env.platform content with DSN substitution.
     """
     # Create minimal platform-env.yaml in tmp_path
     env_yaml = tmp_path / "platform-env.yaml"
@@ -562,37 +567,14 @@ def test_gen_env_platform_interface(
     with open(env_yaml, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
-    output_file = tmp_path / ".env.platform"
+    # Run gen_env_platform.py library function (native) — project_name = --name testapp
+    lines = generate_env_platform(str(env_yaml), domain="ai-platform.local", project_name="testapp")
 
-    # Run gen-env-platform.sh with --name and --output
-    result = subprocess.run(
-        [
-            "bash",
-            str(_GEN_ENV_SCRIPT),
-            "--yaml",
-            str(env_yaml),
-            "--name",
-            "testapp",
-            "--output",
-            str(output_file),
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-    print("--- GEN-ENV-PLATFORM STDOUT ---")
-    print(result.stdout)
-    print("--- GEN-ENV-PLATFORM STDERR ---")
-    print(result.stderr)
+    print("--- GEN-ENV-PLATFORM OUTPUT ---")
+    print("\n".join(lines))
     print("--- END ---")
 
-    assert result.returncode == 0, f"gen-env-platform.sh should exit 0, got {result.returncode}: {result.stderr}"
-
-    # Verify output file exists
-    assert output_file.is_file(), f"Output file {output_file} should exist"
-
-    # Verify content
-    content = output_file.read_text()
+    content = "\n".join(lines)
     assert "PLATFORM_DOMAIN" in content, "Should contain PLATFORM_DOMAIN"
     assert "PLATFORM_POSTGRES_HOST" in content or "PLATFORM_REDIS_HOST" in content, (
         "Should contain at least one PLATFORM_* service variable"
@@ -600,8 +582,12 @@ def test_gen_env_platform_interface(
     assert "# GENERATED by ai-platform" in content, "Should start with GENERATED marker"
 
     # Verify DSN substitution: testapp should appear in DSN
-    if "PLATFORM_POSTGRES_DSN" in content:
-        dsn_line = next(line for line in content.splitlines() if "PLATFORM_POSTGRES_DSN" in line)
-        assert "testapp" in dsn_line, f"DSN should contain project name 'testapp': {dsn_line}"
+    dsn_line = ""
+    for line in lines:
+        if "PLATFORM_POSTGRES_DSN" in line:
+            dsn_line = line
+            break
+    assert dsn_line, "PLATFORM_POSTGRES_DSN not found"
+    assert "testapp" in dsn_line, f"DSN should contain project name 'testapp': {dsn_line}"
 
-    logger.critical("[IMP:9][test][gen-env-interface] gen-env-platform.sh --name testapp --output works correctly")
+    logger.critical("[IMP:9][test][gen-env-interface] gen_env_platform.py project_name=testapp works correctly")

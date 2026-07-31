@@ -1,5 +1,6 @@
 <!-- GREP_SUMMARY: AGENTS.md, ai-platform, invariants, deploy-model, verb-glossary, architecture -->
 
+<!-- ai-instructions:0.6.1 -->
 # GREP_SUMMARY: AGENTS.md, ai-platform, invariants, deploy-model, verb-glossary, architecture
 # STRUCTURE: ┌make targets┐ → ◇ invariants (11 rules) → ◇ deploy-model (local→CI→context) → ⊕ verb glossary → ⎋ navigation
 # region MODULE_CONTRACT
@@ -108,6 +109,7 @@
 | ✅ | `secrets-unlock` | Расшифровка SOPS/age секретов |
 | ✅ | `test` | Тестирование (`make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]`) |
 | ✅ | `test-inventory-sync` | Регенерация test_inventory.yaml из pytest --collect-only (make test-inventory-sync → tests/tools/sync_inventory.py) |
+| ✅ | `test-summary` | Компактный agent-oriented тестовый раннер (make test-summary [MARKER=static_audit\|...] → core/internal/test_runner.py) |
 | ✅ | `gate` | Production gate (`make gate [MODE=fast|full]`) |
 | ✅ | `new-project` / `new-context` | Создание из шаблона |
 | ✅ | `project-sync-env` | Синхронизация .env.platform из platform-env.yaml (make project-sync-env → scaffold.sh sync-env) |

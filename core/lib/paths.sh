@@ -33,4 +33,14 @@ source "${PATHS_LIB_DIR}/module-interface.sh"
 # Canonical platform root — single source of truth for all `/opt/platform` references
 # ⚠️ NOT readonly: some entrypoints (lint.sh) override PLATFORM_ROOT from PATHS_CORE_DIR/..
 # for local dev where /opt/platform may not exist. Readonly guard would break those scripts.
-PLATFORM_ROOT="/opt/platform"
+# ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PLATFORM_ROOT env silently dropped → Python resolver misses node.yaml
+# · Symptom: `PLATFORM_ROOT=/x converge.sh --node N` → resolve_node_yaml (python3 -m
+# ·   core.internal.shared.node_yaml --resolve) reports "node.yaml not found" even though
+# ·   /x/node-configs/N/node.yaml exists.
+# · Root: plain assignment `PLATFORM_ROOT="/opt/platform"` overwrote the caller's env value;
+# ·   and since the var was not exported, the shell→Python CLI delegation (DP-088/091:
+# ·   node-resolver.sh → NodeYaml.resolve() reads os.environ["PLATFORM_ROOT"]) never saw it.
+# · Fix: honor a pre-set value, default to /opt/platform, and export so child Python
+# ·   processes (NodeYaml.resolve, reconciler) resolve the same root.
+# · Prevention: keep PLATFORM_ROOT exportable — tests and entrypoints override it.
+export PLATFORM_ROOT="${PLATFORM_ROOT:-/opt/platform}"

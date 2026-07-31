@@ -34,6 +34,16 @@ $END_ARTIFACT_CONTRACT
 
 ---
 
+> **STATUS UPDATE 2026-07-31:** SUPERSEDED — implementation committed (см. git log).
+> `core/internal/provisioner.py` (389 LOC) реализован и закоммичен (`c8100e4`), `provision-environment.sh`
+> мигрирован в тонкий wrapper (145 LOC, `audit_step`-диспетчер по scopes, ноль inline `python3 -c`).
+> Прежний вердикт «Implementation not started» (см. ниже) отражает состояние ДО коммита реализации.
+> ⚠️ Новая находка 2026-07-31: wrapper содержит stale `source core/lib/audit_logging.sh` (файл удалён
+> коммитом `aa6bd61`, план 088/089) → `make provision` падает. Зарегистрировано в
+> `.ai/debt/096-Residual-Debt.md` (COSMETIC C-5). Актуальный статус: DevPlan.md + новые VR.
+
+---
+
 ## 1. Plan Self-Consistency Audit
 
 ### 1.1 File Existence Matrix

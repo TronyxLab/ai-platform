@@ -30,7 +30,7 @@ name: dev-pipeline
   - Wait for wave completion before starting the next wave.
 
   ### Stage 3: QA (verification)
-  Delegate to the QA role: run `python -m pytest tests/ -s -v`, verify LDD trajectory
+   Delegate to the QA role: run tests, verify LDD trajectory
   (IMP:9 present), audit acceptance criteria from DevPlan, write VerificationReport.md
   with verdict (SUCCESS/PARTIAL/FAIL/BLOCKED).
 
@@ -44,4 +44,4 @@ name: dev-pipeline
   Output artifact paths (DevPlan, VerificationReport), final verdict, test summary.
   Then STOP (§COMPLETION_PROTOCOL).
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

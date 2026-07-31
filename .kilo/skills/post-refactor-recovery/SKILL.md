@@ -232,4 +232,4 @@ name: post-refactor-recovery
   | Documentation fix | Coder | — (lightweight) | Architect |
   | Small fix (≤3 files, no arch impact) | Architect (direct) | — (self-review) | — |
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

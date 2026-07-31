@@ -76,14 +76,6 @@
     **Attempt 4 (Reflection):** "WARNING: Looping risk! Pause and reflect. Are you repeating a failed strategy? Consider alternatives (Superposition)."
 
     **Attempt 5+ (Escalation):** "CRITICAL ERROR: Agent looping detected. STOP. Formulate a help request for an operator."
-
-    Always run tests via: make test-summary [MARKER=static_audit|static|contract|smoke|...] [TEST_FILE=<path>]
-    Canonical compact wrapper (DevPlan 099) — delegates to core/internal/test_runner.py:
-      • make test-summary                              → static_audit (default, compact <100 lines)
-      • make test-summary MARKER=static                → validate + lint + pytest (compact)
-      • make test-summary MARKER=smoke                 → Docker smoke tests (verbose — Docker required)
-      • make test-summary TEST_FILE=tests/unit/test_x  → single file (compact)
-    Direct pytest (python -m pytest -v) is DEPRECATED for agent use — use test-summary wrapper.
 **Test Honesty Rules**
 
     Prevent test suite degradation into unfalsifiable pass-collections. A test that cannot fail is not a test.
@@ -112,4 +104,4 @@
 
     **QA Integration:** QA Phase 4 (Test Quality Deep Audit) checks R1-R5. R1/R3/R4 violation → DEGRADED verdict. R2/R5 violations → documented in report, contribute to test health score.
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

@@ -50,6 +50,13 @@ GENERATE_MAN           = NO
 # ── Aliases — AI-Instructions Semantic Markup Tags ───────
 # Map ## @tag python comments to Doxygen \par \b TagName: formatting
 # DevPlan 097 Wave A: aliases with {1} capture trailing text (Doxygen 1.17)
+# ⚠️ TRAP[DECISION] · 2026-07-31 · — · purpose/scope/invariants/io/complexity БЕЗ {1} — DevPlan 097 §1.1 deviation
+# · Rejected: добавление {1} ко ВСЕМ aliases (как требует DevPlan §1.1) → doxygen 1.17.0 КРАШИТСЯ
+# ·   flex scanner push-back overflow в commentcnv.l при парсинге reconciler.py (exit 2)
+# · Reason: многострочные аргументы alias'ов (@invariants-блоки) переполняют lexer-буфер.
+# ·   Эмпирически 0 unexpanded-alias warnings без {1} (65 warnings из §1.1 уже закрыты волной c484c17).
+# ·   Задокументировано в VR 097 §3 как non-issue. edge/coverage/... (строки ниже) имеют {1} — работают.
+# · Rev: если doxygen исправит flex overflow И появятся unexpanded-alias warnings → вернуться к {1}.
 ALIASES                = purpose="\b Purpose:" \
                          scope="\b Scope:" \
                          invariants="\b Invariants:" \

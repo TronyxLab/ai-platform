@@ -31,6 +31,14 @@ $END_ARTIFACT_CONTRACT
 
 ---
 
+> **STATUS UPDATE 2026-07-31:** SUPERSEDED — implementation committed (см. git log).
+> `core/internal/reconciler_projects.py` (552 LOC) реализован, `core/internal/deploy/reconcile-projects.sh`
+> сокращён до 48-LOC sourceable фасада (ноль inline `python3 -c` в активном коде). План 091
+> верифицировал оркестраторную унификацию (71/71 тестов). Прежний вердикт «DRIFTED (WARNING) — NOT
+> STARTED» отражает pre-implementation состояние (2026-07-25). Актуальный статус: DevPlan.md + планы 091/089.
+
+---
+
 ## 1. Plan Self-Consistency Audit
 
 ### 1.1 File Referencing — All references resolvable

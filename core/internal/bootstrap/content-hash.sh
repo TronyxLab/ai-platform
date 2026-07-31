@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# GREP_SUMMARY: content-hash thin-wrapper python compute-step-hash step-hash-changed checkpoint bootstrap unified-drift
+# GREP_SUMMARY: content-hash thin-wrapper python compute-step-hash step-hash-changed bootstrap unified-drift
 # STRUCTURE: ▶ compute_step_hash(step, paths...) → delegate to python3 shared/content_hash.py → ⎋ hash
 #            └ step_hash_changed(step, hash) → stored vs current comparison → 0|1
 # region MODULE_CONTRACT

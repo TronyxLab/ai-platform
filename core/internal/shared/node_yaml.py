@@ -1406,7 +1406,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     ## @complexity — O(1)
     """
     parser = argparse.ArgumentParser(description="NodeYaml unified facade CLI")
-    parser.add_argument("--file", required=True, help="Path to node.yaml")
+    # --file is NOT argparse-required: --resolve (3-path search) legitimately runs without it.
+    # Runtime enforcement in main(): all other operations print help when --file is absent.
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · --resolve unreachable: --file required=True rejected
+    # · Symptom: `python3 -m core.internal.shared.node_yaml --resolve --resolve-node X` → argparse
+    # ·   error "the following arguments are required: --file", exit 2 — _cli_resolve never ran.
+    # · Root: argparse validates required args BEFORE main() dispatch; --resolve needs no --file.
+    # · Fix: required=False + runtime check in main() (line ~1604: `if not args.file`).
+    # · Prevention: CLI mode-flag args (--resolve, --find-project) must not require --file at parse time.
+    parser.add_argument("--file", required=False, help="Path to node.yaml")
     parser.add_argument("--get", help="Dotted key to retrieve (e.g., node.host)")
     parser.add_argument("--default", help="Default value if key not found")
     parser.add_argument("--items", action="store_true", help="Output list as JSON array")
@@ -1542,16 +1550,17 @@ def _cli_validate_schema(node: NodeYaml, schema_path: str | None = None) -> int:
 def _cli_resolve(args: argparse.Namespace) -> int:
     """Handle --resolve CLI operation.
 
-    ## @purpose  Resolve node.yaml via 3-path search and print path + context.
+    ## @purpose  Resolve node.yaml via 3-path search and print path.
     ## @io — ⇥ args → ⎋ exit_code: int
     ## @complexity — O(P) for search + O(N) for YAML parse
+    ## @invariants
+    ##   - stdout contains EXACTLY ONE line: the resolved node.yaml path.
+    ##     Shell consumers do `path="$(python3 -m ... --resolve ...)"` — multi-line
+    ##     stdout would corrupt NODE_YAML_PATH (path + marker lines).
     """
     try:
         resolved = NodeYaml.resolve(node_name=args.resolve_node)
         print(resolved._path)
-        ctx = resolved.get_context()
-        if ctx:
-            print(f"___CONTEXT___{ctx}")
         return 0
     except ConfigNotFoundError as e:
         print(str(e), file=sys.stderr)

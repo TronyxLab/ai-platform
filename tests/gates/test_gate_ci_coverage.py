@@ -449,13 +449,11 @@ def test_mode_fast_excludes_requires_docker(caplog) -> None:
             )
             assert expr_match, (
                 "Could not find _STATIC_AUDIT_EXPR constant in core/internal/test_runner.py. "
-                "Expected: _STATIC_AUDIT_EXPR = ( \"...\" ... ) with marker expression."
+                'Expected: _STATIC_AUDIT_EXPR = ( "..." ... ) with marker expression.'
             )
             # Join all quoted fragments, removing quotes and whitespace between them
             raw_fragments = expr_match.group(1)
-            expression_static = "".join(
-                re.findall(r'"([^"]*)"', raw_fragments)
-            )
+            expression_static = "".join(re.findall(r'"([^"]*)"', raw_fragments))
             logger.info(
                 "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (test_runner _STATIC_AUDIT_EXPR): %s",
                 expression_static,

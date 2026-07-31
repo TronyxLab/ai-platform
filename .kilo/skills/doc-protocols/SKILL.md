@@ -99,4 +99,4 @@ name: doc-protocols
   | FAIL | Blocking issues, cannot proceed |
   | BLOCKED | Environmental (permission denied, command not found, etc.) |
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

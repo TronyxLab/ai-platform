@@ -4,19 +4,26 @@ $START_VERIFICATION_REPORT
 $ARTIFACT_CONTRACT
 PURPOSE:               Semantic quality verification of DevPlan 098 implementation (test_runner.py + ci.mk +
                         entrypoint-manifest.yaml regeneration + unit tests). Audit scope: 4 files, STANDARD task.
+                        Close-out revision: resolves DRIFT-1 (AC9, committed 2e45c0f) and DRIFT-2 (AC2) + AC1.
 DESCRIPTION:           Static audit (Phase 1), cross-file drift detection (Phase 2), runtime validation (Phase 5).
                         Report AC-by-AC compliance, structural markup, drift findings, and semantic verdict.
-RATIONALE:             Manifest regeneration was NOT performed after ci.mk modification → Invariant 11 violation.
-                        This is a CRITICAL drift: `test-summary` added to Makefile .PHONY but absent from
-                        entrypoint-manifest.yaml allowed_verbs.
+                        This revision supersedes the previous DRIFTED verdict: DRIFT-1 fixed by commit 2e45c0f
+                        (test-summary added to allowed_verbs); DRIFT-2 fixed by MARKER=all implementation
+                        (_run_all_suites + merge_junit); AC1 fixed by FAIL compression (MAX_FAIL_DETAILS=20).
+RATIONALE:             Original verdict was DRIFTED (CRITICAL) — Invariant 11 violation (manifest not regenerated
+                        after ci.mk change) + DRIFT-2 (all not in MARKER_MAP) + AC1 (<100 lines not guaranteed).
+                        All three resolved: AC9/DRIFT-1 via commit 2e45c0f + verification below, DRIFT-2 via
+                        _run_all_suites, AC1 via compression. No remaining findings.
 ACCEPTANCE_CRITERIA:   AC-by-AC verification of all 11 acceptance criteria from DevPlan 098 §5.
 IMPLEMENTS:            QA Phase 1, 2, 5 for STANDARD task per .kilo/agent/qa.md §BEHAVIOR.
-IMPACTS:               Delegation to Coder: regenerate manifest via `make generate-manifests`, verify `make check-manifests` passes.
+IMPACTS:               None — no delegation required (all findings resolved).
 REQUIRES:              No environmental dependencies for this audit.
 $END_ARTIFACT_CONTRACT
 
-🔒 **Verified against SHA:** `6477f8a20692da488689312f1390ed992ab4067b`
-⚠️ Working tree NOT clean: `makefiles/ci.mk` modified (unstaged), `core/entrypoint-manifest.yaml` NOT modified.
+🔒 **Verified against SHA:** working tree (uncommitted — per task constraints; no commit/push requested).
+Original DRIFT-1 fix committed at `2e45c0f` (`feat(098): test-runner-wrapper — ... entrypoint-manifest verb registration`).
+⚠️ Working tree NOT clean by design: `core/entrypoint-manifest.yaml`, `core/AGENTS.md`, `makefiles/ci.mk`,
+`core/internal/test_runner.py`, `tests/unit/test_test_runner.py` modified (this close-out + parallel coder).
 
 ---
 
@@ -36,10 +43,11 @@ $END_ARTIFACT_CONTRACT
 | # | Severity | File:Line | Issue |
 |---|----------|-----------|-------|
 | S1 | INFO | `test_runner.py:38` | `TestSummary.__test__ = False` — idiomatic pytest pattern to silence PytestCollectionWarning on imported dataclass |
-| S2 | INFO | `test_test_runner.py:197-202` | TRAP[DECISION] acknowledging `<100 строк при 50 failures` arithmetic impossibility — format produces 108 lines at 50 failures. AC3 guarantee (<2000 lines) holds at practical failure counts (≤996 failures = 2000 lines) |
+| S2 | RESOLVED | `test_test_runner.py:196-202` | TRAP[DECISION] superseded — FAIL compression (MAX_FAIL_DETAILS=20) now guarantees <100 lines at ANY failure count. Updated TRAP documents the new format |
 | S3 | INFO | `test_runner.py:46-53` | TRAP[DESIGN] MARKER_MAP duplication with ci.mk — documented tech debt with rev-trigger (4th marker → YAML SoT) |
+| S4 | INFO | `test_runner.py:196-236` | New TRAP[DESIGN]/DRIFT-2 close-out comment — `all`/`static` special handlers; `_ALL_SUITES_ORDER` rationale |
 
-**Static audit summary:** 0 BLOCKER, 0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW, 3 INFO. All structural contracts satisfied.
+**Static audit summary:** 0 BLOCKER, 0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW, 3 INFO.
 
 ---
 
@@ -47,86 +55,78 @@ $END_ARTIFACT_CONTRACT
 
 ### Drift Register
 
-| DRIFT-ID | Severity | Files | Expected | Actual | Fix |
-|----------|----------|-------|----------|--------|-----|
-| DRIFT-1 | **CRITICAL** | `makefiles/ci.mk:13` vs `core/entrypoint-manifest.yaml:624-684` | `test-summary` in `allowed_verbs` after `make generate-manifests` (AC9, Invariant 11) | `test-summary` ABSENT from `allowed_verbs`. 57 verbs present; `test-summary` is 58th expected. | Run `make generate-manifests`, verify `make check-manifests` passes, commit regenerated manifest |
-| DRIFT-2 | **WARNING** | `test_runner.py:55-65` vs DevPlan §6 | MARKER_MAP should include `all` with sequential aggregation via `tests/merge_junit.py` | `all` NOT in MARKER_MAP — `_build_pytest_args("all")` → SystemExit(1) | Either add `all` to MARKER_MAP with multi-suite handler, or explicitly document as non-goal for agent wrapper |
+| DRIFT-ID | Severity | Files | Expected | Actual | Status |
+|----------|----------|-------|----------|--------|--------|
+| DRIFT-1 | ~~CRITICAL~~ | `makefiles/ci.mk:13` vs `core/entrypoint-manifest.yaml:706` | `test-summary` in `allowed_verbs` after `make generate-manifests` (AC9, Invariant 11) | `test-summary` PRESENT at `core/entrypoint-manifest.yaml:706` (`allowed_verbs`) | **RESOLVED** — commit 2e45c0f regenerated manifest. `make check-manifests` green (verified 2026-07-31) |
+| DRIFT-2 | ~~WARNING~~ | `test_runner.py:55-65` vs DevPlan §6 | MARKER_MAP should include `all` with sequential aggregation via `tests/merge_junit.py` | `all` implemented: MARKER_MAP["all"]=None special handler → `_run_all_suites()` (sequential `_ALL_SUITES_ORDER` + merge_junit). `_build_pytest_args("all")` no longer SystemExit(1) | **RESOLVED** — verified: `python -m core.internal.test_runner --marker all --timeout 600` runs 6 suites, merges, prints compact summary, exit 5 (max suite exit — integration suite collects 0 tests → pytest exit 5, matches `make test MARKER=all` behavior) |
 
 ### Contract Violations
 
-- **Invariant 11 (Manifest Generation Contract):** VIOLATED. `allowed_verbs` is a GENERATED section, but it was NOT regenerated after adding `test-summary` to `.PHONY`. The DevPlan §7 Wave 3 explicitly states: "AC9 + Wave 3 переписан — regeneration через `make generate-manifests`." This step was skipped.
+- **Invariant 11 (Manifest Generation Contract):** HELD. `allowed_verbs` regenerated via
+  `make generate-manifests` (not manual). Additionally, this close-out added `doxygen-check` verb —
+  also regenerated. `make check-manifests` → "All generated manifests are up to date" (exit 0).
 
 ### Cross-File Value Consistency
 
-- **MARKER_MAP vs ci.mk mapping:** `static_audit` expression is identical in both locations (verified). Other markers (`smoke`, `component`, etc.) map identically. ✅ No drift in existing markers.
+- **MARKER_MAP vs ci.mk mapping:** `static_audit` expression identical in both locations (verified).
+  Other markers (`smoke`, `component`, etc.) map identically. ✅ No drift in existing markers.
+- **`all` suite order vs ci.mk `make test MARKER=all`:** `_ALL_SUITES_ORDER =
+  [contract, static_audit, predeploy, smoke, component, integration]` — mirrors ci.mk steps 4-9
+  (gates excluded — outside MARKER_MAP scope; e2e/local_auth/static excluded with documented rationale).
 
 ### Manifest Parity
 
-- `makefiles/ci.mk` `.PHONY` line 13: `test test-summary gate validate lint ...` → `test-summary` registered
-- `core/entrypoint-manifest.yaml` `allowed_verbs` lines 624-684: `test-summary` NOT present
-- **Orphan:** Makefile target `test-summary` has no corresponding `allowed_verbs` entry
+- `makefiles/ci.mk` `.PHONY` line 13: `test test-summary test-node gate validate lint check-file-lines
+  pre-commit-install pre-commit-run scripts-audit audit secrets-unlock check-dead-code doxygen-check`
+- `core/entrypoint-manifest.yaml` `allowed_verbs:706`: `test-summary` present ✅; `allowed_verbs:666`: `doxygen-check` present ✅
+- `core/AGENTS.md:42`: `make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static|all]` — signature includes `all` ✅
+- **Bidirectional parity:** `test_make_target_contracts.py` (3 passed), `test_gate_manifest_integrity.py`
+  (11 passed, incl. `test_agents_md_synced_with_manifest`)
 
-### Gate Test Coverage
-
-- Gate `test_all_makefile_targets_in_allowed_verbs` (line 362, `test_gate_no_unregistered_entrypoint.py`) only checks `core/modules/*/Makefile` — NOT root makefiles like `makefiles/ci.mk`. This gate would NOT catch the drift.
-- Gate `test_no_self_read` (G3 byte-level check) would catch the drift IF `make check-manifests` is run — the regenerated manifest would differ from committed manifest.
-- **Coverage gap:** No gate checks that all `.PHONY` targets from root `Makefile` + `makefiles/*.mk` are present in `allowed_verbs`.
-
-**Drift summary:** 1 CRITICAL, 1 WARNING.
+**Drift summary:** 0 unresolved findings.
 
 ---
 
-## Section 3 — Invariant Status (Phase 3) — for STANDARD, limited scope
+## Section 3 — Invariant Status (Phase 3)
 
 | Invariant | Status | Evidence |
 |-----------|--------|----------|
-| Invariant 11: Manifest Generation Contract — allowed_verbs generated, never manually edited | **VIOLATED** | `test-summary` added to `.PHONY` but NOT in `allowed_verbs` → manifest was not regenerated |
+| Invariant 11: Manifest Generation Contract — allowed_verbs generated, never manually edited | **HELD** | `test-summary` at allowed_verbs:706 (commit 2e45c0f); `doxygen-check` at allowed_verbs:666 (regenerated via `make generate-manifests`); `make check-manifests` exit 0 |
 | Invariant 1: Makefile — единый фасад | HELD | `test-summary` delegates to `core.internal.test_runner` via `makefiles/ci.mk` included from root Makefile |
 
 ---
 
 ## Section 4 — Runtime Validation (Phase 5)
 
-### Unit Test Results
+### Unit Test Results (updated)
 
 ```
 $ python -m pytest tests/unit/test_test_runner.py -v
-============================= test session starts ==============================
-tests/unit/test_test_runner.py::test_build_pytest_args_static PASSED     [ 14%]
-tests/unit/test_test_runner.py::test_build_pytest_args_unknown_marker PASSED [ 28%]
-tests/unit/test_test_runner.py::test_format_summary_compact PASSED       [ 42%]
-tests/unit/test_test_runner.py::test_parse_junit_xml_error PASSED        [ 57%]
-tests/unit/test_test_runner.py::test_parse_junit_xml_failure PASSED      [ 71%]
-tests/unit/test_test_runner.py::test_parse_junit_xml_pass PASSED         [ 85%]
-tests/unit/test_test_runner.py::test_parse_junit_xml_testsuites_wrapper PASSED [100%]
-
-============================== 7 passed in 0.08s ===============================
+collected 9 items — 9 passed in 6.26s
+tests/unit/test_test_runner.py::test_parse_junit_xml_pass PASSED
+tests/unit/test_test_runner.py::test_parse_junit_xml_failure PASSED
+tests/unit/test_test_runner.py::test_parse_junit_xml_error PASSED
+tests/unit/test_test_runner.py::test_parse_junit_xml_testsuites_wrapper PASSED
+tests/unit/test_test_runner.py::test_format_summary_compact PASSED   (updated: compression — 48 lines at 50 failures)
+tests/unit/test_test_runner.py::test_build_pytest_args_static PASSED
+tests/unit/test_test_runner.py::test_build_pytest_args_all PASSED    (new: DRIFT-2 regression guard)
+tests/unit/test_test_runner.py::test_build_pytest_args_unknown_marker PASSED  (valid list includes all)
+tests/unit/test_test_runner.py::test_build_pytest_args_file PASSED
 ```
 
-**Result:** 7/7 PASS ✅
+**Result:** 9/9 PASS ✅
 
 ### LDD Trajectory Analysis
 
-All 7 tests use `@ldd_trajectory` decorator (imported from `tests/_conftest/ldd.py`). Each test has at least one `logger.critical("[IMP:9][test] ...")` call — verified:
-
-| Test | IMP:9 Log |
-|------|-----------|
-| `test_parse_junit_xml_pass` | `[IMP:9][test] All-pass suite parsed: pass=3 total=3, failed_tests empty` |
-| `test_parse_junit_xml_failure` | `[IMP:9][test] Failure parsed: type=FAIL message=...` |
-| `test_parse_junit_xml_error` | `[IMP:9][test] Error parsed: type=ERROR message=...` |
-| `test_parse_junit_xml_testsuites_wrapper` | `[IMP:9][test] Wrapper XML parsed: total=3 fail=1 skip=1` |
-| `test_format_summary_compact` | `[IMP:9][test] format_summary compact: 108 lines for 50 failures` |
-| `test_build_pytest_args_static` | `[IMP:9][test] static→None special handler; static_audit→2 arg(s)` |
-| `test_build_pytest_args_unknown_marker` | `[IMP:9][test] Unknown marker 'nonexistent' → SystemExit(1)` |
-
+All 9 tests use `@ldd_trajectory` decorator with `logger.critical("[IMP:9][test] ...")` — verified.
 **Anti-Illusion verdict:** PASS — all tests have IMP:9 business-logic logs.
 
 ### Test Honesty Compliance
 
 | Rule | Check | Status |
 |------|-------|--------|
-| R1 (no pass-tests) | All 7 tests have `assert` statements on computed values | ✅ |
-| R2 (no unfalsifiable) | All assertions on parsed data, not language guarantees | ✅ |
+| R1 (no pass-tests) | All 9 tests have `assert` statements on computed values | ✅ |
+| R2 (no unfalsifiable) | All assertions on parsed data/format, not language guarantees | ✅ |
 | R3 (stale skip) | No `@pytest.mark.skip` markers present | ✅ |
 | R4 (NO_SERVICE) | No service-dependent skips | ✅ |
 
@@ -134,63 +134,54 @@ All 7 tests use `@ldd_trajectory` decorator (imported from `tests/_conftest/ldd.
 
 | AC | Description | Status | Evidence |
 |----|-------------|--------|----------|
-| AC1 | `make test-summary MARKER=static_audit` — вывод <100 строк, counts + failed list, exit code passthrough | **PASS** (code review) | `format_summary()` produces deterministic <100 line output at practical failure counts (≤45 failures); exit code returned at line 445 |
-| AC2 | `make test-summary MARKER=all` — same for full suite | **WARNING** | `all` NOT in MARKER_MAP — `_build_pytest_args("all")` → SystemExit(1). See DRIFT-2 |
-| AC3 | Output never exceeds 2000 lines even with 100+ failures | **PASS** | `format_summary()` formula: 8 + 2×F lines. At 100 failures: 208 lines. At 996 failures: 2000 lines (boundary). Test `test_format_summary_compact` verifies 108 lines at 50 failures |
-| AC4 | JUnit XML temp file auto-cleaned after parsing | **PASS** | `shutil.rmtree(tmpdir, ignore_errors=True)` in finally-block at line 447 |
-| AC5 | `make test-summary` без MARKER → static_audit default | **PASS** | argparse `--marker default="static_audit"` at line 345; ci.mk `$(eval MARKER := $(or $(MARKER),static_audit))` at line 115 |
-| AC6 | `make test-summary MARKER=smoke` — Docker-dependent | **PASS** (conceptual) | `smoke` in MARKER_MAP with `["-m", "smoke", "-rs"]`. Runtime requires Docker — not verifiable in this environment. |
-| AC7 | `make test-summary MARKER=static` — validate.sh + lint + pytest | **PASS** | `_build_pytest_args("static")` returns None → `_run_static_full()` handler validates validate.sh existence, runs sequence: validate.sh → validate.sh --lint → pytest static_audit (lines 264-305) |
-| AC8 | `--timeout` configurable, default 1800s | **PASS** | argparse `--timeout type=int default=1800` at line 349; `subprocess.run(timeout=args.timeout)` at line 423; TimeoutExpired handler at line 428-431; ci.mk `$(eval TIMEOUT := $(or $(TIMEOUT),1800))` at line 116 |
-| AC9 | `allowed_verbs` updated via `make generate-manifests`, NOT manual | **FAIL — CRITICAL** | `test-summary` absent from `allowed_verbs` (lines 624-684). `makefiles/ci.mk` modified but manifest NOT regenerated. See DRIFT-1 |
-| AC10 | `PYTEST_NO_ESCALATION=1` proxied to subprocess | **PASS** | `env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}` at line 413 (main path) and line 272 (_run_static_full path) |
-| AC11 | Unit tests cover parse_junit_xml and format_summary | **PASS** | 7/7 pass: 4 parse tests (pass, fail, error, testsuites-wrapper), 1 format test, 2 build_args tests |
+| AC1 | `make test-summary MARKER=static_audit` — вывод <100 строк, counts + failed list, exit code passthrough | **PASS** | FAIL compression (MAX_FAIL_DETAILS=20): 50 failures → 48 строк; real run 91 failures → 48 строк ("... and 71 more failures"). Counts in header always; exit code passthrough verified (`make test-summary` → Error 1 on failures) |
+| AC2 | `make test-summary MARKER=all` — same for full suite | **PASS** | `_run_all_suites()` + merge_junit aggregation. Verified end-to-end: 6 suites, PASS:2572 FAIL:95 SKIP:18 ERROR:4 TOTAL:2689, exit 5 (max suite exit — matches `make test MARKER=all`). No Unknown MARKER |
+| AC3 | Output never exceeds 2000 lines even with 100+ failures | **PASS** | Compression caps FAIL+ERROR sections at 2×20+1 lines each → max ~98 lines total regardless of failure count (well below 2000). Old formula 8+2×F was already <2000 at ≤996 failures; new formula is unconditionally bounded |
+| AC4 | JUnit XML temp file auto-cleaned after parsing | **PASS** | `shutil.rmtree(tmpdir, ignore_errors=True)` in finally-block; `--junit-output` → no temp dir, no cleanup |
+| AC5 | `make test-summary` без MARKER → static_audit default | **PASS** | argparse `--marker default="static_audit"`; ci.mk `$(eval MARKER := $(or $(MARKER),static_audit))` |
+| AC6 | `make test-summary MARKER=smoke` — Docker-dependent | **PASS** (conceptual) | `smoke` in MARKER_MAP with `["-m", "smoke", "-rs"]`; included in `_ALL_SUITES_ORDER`. Runtime requires Docker — smoke/component/integration ran in `all` verification with failures (no Docker stack), exit codes aggregated |
+| AC7 | `make test-summary MARKER=static` — validate.sh + lint + pytest | **PASS** | `_build_pytest_args("static")` returns None → `_run_static_full()`: validate.sh → validate.sh --lint → pytest static_audit |
+| AC8 | `--timeout` configurable, default 1800s | **PASS** | argparse `--timeout type=int default=1800`; `subprocess.run(timeout=...)`; TimeoutExpired handler (exit 124); per-suite timeout in `_run_all_suites` |
+| AC9 | `allowed_verbs` updated via `make generate-manifests`, NOT manual | **PASS** | `test-summary` at `core/entrypoint-manifest.yaml:706` (commit 2e45c0f); `make check-manifests` → "All generated manifests are up to date" (exit 0) |
+| AC10 | `PYTEST_NO_ESCALATION=1` proxied to subprocess | **PASS** | `env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}` in main path, `_run_static_full`, and `_run_all_suites` |
+| AC11 | Unit tests cover parse_junit_xml and format_summary | **PASS** | 9/9 pass: 4 parse tests (pass, fail, error, testsuites-wrapper), 1 format test (compression), 3 build_args tests (static, all, unknown), 1 file test |
 
 ---
 
-## Section 5 — Config Sync Audit (Phase 6) — for STANDARD, limited scope
+## Section 5 — Config Sync Audit (Phase 6)
 
 ### Env Variable Propagation
 
-- `PYTEST_NO_ESCALATION=1`: ci.mk lines 33,39,45,50,55,60,65,70,81 → test_runner.py lines 272,413. Chain consistent. ✅
+- `PYTEST_NO_ESCALATION=1`: ci.mk test/gate paths → test_runner.py main / `_run_static_full` /
+  `_run_all_suites`. Chain consistent. ✅
 
 ### Manifest-Makefile Consistency
 
-- `makefiles/ci.mk` `.PHONY` targets (13): `test`, `test-summary`, `gate`, `validate`, `lint`, `check-file-lines`, `pre-commit-install`, `pre-commit-run`, `scripts-audit`, `audit`, `secrets-unlock`, `check-dead-code`
-- `allowed_verbs` entries (57): all of the above EXCEPT `test-summary`
-- Missing: `test-summary`
-- Extra: none
+- `makefiles/ci.mk` `.PHONY` targets (14): `test`, `test-summary`, `gate`, `validate`, `lint`,
+  `check-file-lines`, `pre-commit-install`, `pre-commit-run`, `scripts-audit`, `audit`,
+  `secrets-unlock`, `check-dead-code`, `doxygen-check` (+ `test-node`)
+- `allowed_verbs` entries: all of the above (system exceptions excluded per generator)
+- Missing: none. Extra: none (verified by `test_make_target_contracts.py` — 3 passed)
 
 ### Generator Analysis
 
-The G3 generator `generate_entrypoint_manifest.py` at line 124 scans `makefiles/*.mk`:
-```python
-for mk_file in sorted(makefile_path.glob("Makefile")) + sorted(makefile_path.glob("makefiles/*.mk")):
-```
-When `make generate-manifests` runs, the generator WILL extract `test-summary` from ci.mk and add it to `allowed_verbs`. Running `make check-manifests` would then pass (byte-level comparison). The issue is that this regeneration step was simply not performed.
+G3 (`generate_entrypoint_manifest.py`) extracts `.PHONY` from `makefiles/*.mk` →
+`test-summary` (via `ALLOWED_PREFIX_EXCEPTIONS`) and `doxygen-check` present in `allowed_verbs`.
+`make check-manifests` byte-level comparison green.
 
 ---
 
 ## Semantic Verdict
 
-**VERDICT: DRIFTED (CRITICAL)**
+**VERDICT: STABLE**
 
-**Rationale:** AC9 FAIL — `test-summary` not in `allowed_verbs`. Manifest generation contract (Invariant 11) violated. The implementation code (test_runner.py, ci.mk, unit tests) is structurally correct and all 10 other ACs pass at code-review level. This is a single-step fix: `make generate-manifests` + verify `make check-manifests` passes.
+**Rationale:** All previously-reported findings resolved:
+- AC9/DRIFT-1 (CRITICAL): fixed by commit 2e45c0f — `test-summary` in `allowed_verbs:706`, check-manifests green.
+- AC2/DRIFT-2 (WARNING): fixed — MARKER=all implemented (`_run_all_suites` + merge_junit), verified end-to-end.
+- AC1: fixed — FAIL compression guarantees <100 lines at any failure count (91 failures → 48 lines).
 
-**Finding count:** 1 CRITICAL (DRIFT-1), 1 WARNING (DRIFT-2), 3 INFO.
+**Finding count:** 0 BLOCKER, 0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW, 3 INFO (documented debt/patterns).
 
-**Delegation required:** Coder — run `make generate-manifests`, verify `make check-manifests`, commit regenerated `core/entrypoint-manifest.yaml`. Additionally consider adding `all` to MARKER_MAP or explicitly documenting it as non-goal.
-
----
-
-## Delegation Proposal
-
-**Target:** Coder
-**Action:** Fix DRIFT-1 (required) + evaluate DRIFT-2 (optional)
-**Steps:**
-1. Run `make generate-manifests` — this will add `test-summary` to `allowed_verbs` in `core/entrypoint-manifest.yaml`
-2. Run `make check-manifests` — verify byte-level consistency
-3. Commit the regenerated manifest
-4. (Optional) Add `all` to MARKER_MAP with multi-suite sequential aggregation, or add explicit documentation that `MARKER=all` is unsupported in the wrapper
+**Delegation required:** none.
 
 $END_VERIFICATION_REPORT

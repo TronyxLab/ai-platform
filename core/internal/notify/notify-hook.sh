@@ -19,8 +19,8 @@ set -euo pipefail
 
 echo "[IMP:7][notify-hook][main] Starting notification hook" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../../internal/audit/audit.sh" 2>/dev/null || true
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || echo "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")")}"
+source "${PLATFORM_ROOT}/core/lib/audit.sh" 2>/dev/null || true
 __LOG_PREFIX="notify-hook"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
 

@@ -1,3 +1,5 @@
+# GREP_SUMMARY: e2e, bootstrap-pipeline, test-vps, requires-node, devplan-095
+# STRUCTURE: ┌test-VPS prep┐ → ◇ env vars (NODE/AGE/SSH) → ◇ run (make test-node) → ◇ troubleshooting → ⎋ coverage limits
 # E2E Bootstrap Pipeline Tests (DevPlan 095)
 
 E2E-тесты полного bootstrap-pipeline на **пересоздаваемой test-VPS** (AGENTS.md инвариант 9).

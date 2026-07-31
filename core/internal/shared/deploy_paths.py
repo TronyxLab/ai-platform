@@ -55,7 +55,7 @@ DEPRECATED_DEPLOY_PATHS: dict[str, dict[str, str]] = {
         "description": (
             "Temporary nginx:alpine container generated during node bootstrap, "
             "replaced by first real project deployment via "
-            "context_deployer._deploy_single_project()"
+            "context_deployer._deploy_single_project_via_orchestrator()"
         ),
         "removal_mechanism": ("docker compose up -d на реальный проект заменяет заглушку автоматически"),
         "verification": "docker compose ps --format '{{.Image}}' | grep -c 'nginx:alpine' returns 0",

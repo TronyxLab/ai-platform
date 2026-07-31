@@ -144,8 +144,8 @@ permission:
        e. **Test fragility index:** count tests with skip markers OR unchanged >90 days.
           → FRAGILE "N tests stale (skip-marked or unchanged >90 days)"
 
-     5. **Phase 5 — Runtime Validation (inherited):**
-       - Run: `python -m pytest tests/ -s -v`
+      5. **Phase 5 — Runtime Validation (inherited):**
+         - Run tests with output to temp file. If timeout — grep temp file for results; do NOT re-run unless file is empty.
        - If FAIL → analyze: env error → retry once → BLOCKED if still failing
        - If PASS → LDD trace analysis: extract IMP:7-10 logs, verify IMP:9 coverage
        - **Anti-Illusion Rule:** 100% PASS without IMP:9-10 business-logic logs = FAIL
@@ -160,7 +160,7 @@ permission:
           .env → .env.example → docker-compose.yml → docker-compose.base.yml →
           CI workflow files → tests/conftest.py (SMOKE_ENV)
           → For each variable in .env: trace through chain, flag break points.
-          → CHAIN "HERMES_DASHBOARD_PASSWORD: .env ✓ → .env.example ✓ → compose ✓ → CI ✗ (missing in platform-test.yml)"
+          → CHAIN "HERMES_DASHBOARD_PASSWORD: .env ✓ → .env.example ✓ → compose ✓ → CI ✗ (missing in nightly-gate.yml)"
 
        b. **Compose override consistency:**
           base.yml → test.yml → macos.yml → platform-dev.yml
@@ -189,6 +189,18 @@ permission:
     14. **Test remediation handoff:** When test quality issues found (≥3 WARNING from Phase 4 OR skip rate >15% OR invariant coverage gaps) → document in VerificationReport.md → propose delegation to Architect via task tool: `task(subagent_type="Plan", description="Fix test quality issues", prompt="Review VerificationReport.md at {path}. Create DevPlan for test suite improvements.")`
 
     15. **Session Completion Protocol** — Follow §COMPLETION_PROTOCOL in completion.xml. See artifact-registry.xml for artifact paths (.ai/plans/NNN-slug/).
+**Long-Running Command Output**
+
+    For any bash command expected to run >30 seconds (test suites, builds,
+    doxygen, data processing), redirect stdout/stderr to a timestamped
+    temp file:
+
+    ```
+    OUTPUT="/tmp/cmd_$(date +%s)_$$.log" && <command> > "$OUTPUT" 2>&1; echo "OUTPUT_FILE=$OUTPUT"
+    ```
+
+    If the command times out — grep/read the temp file for results instead
+    of re-running. The `OUTPUT_FILE=` line tells you the exact path.
 **Fail-Fast Principle**
 
     Validate inputs and state BEFORE producing output. Never write artifacts that are semantically invalid.
@@ -336,7 +348,7 @@ permission:
     | If scope contains... | Also include... |
     |---------------------|-----------------|
     | Any `docker-compose*.yml` | ALL `docker-compose*.yml` files in project (root + modules) |
-    | `.env` or `.env.example` | All CI workflow yml files (`platform-test.yml`, `push-gate.yml`, etc.) + `tests/conftest.py` (SMOKE_ENV section) |
+    | `.env` or `.env.example` | All CI workflow yml files (`platform-test.yml`, `main-full-gate.yml`, `nightly-gate.yml`, etc.) + `tests/conftest.py` (SMOKE_ENV section) |
     | Any file in `core/modules/{name}/` | `module.yaml` + ALL files in that module directory |
     | Any `healthcheck.sh` | Docker HEALTHCHECK directives in compose files for the same service |
     | `Makefile` or `entrypoint-manifest.yaml` | Both files + all `core/modules/*/Makefile` + `core/templates/module.mk` |
@@ -358,7 +370,7 @@ permission:
       - `grep "\.PHONY"` in Makefiles → compare with manifest entries
     - **Phase 3 (invariants):** `read` AGENTS.md (or project constitution). Extract each invariant. Verify with `grep` across relevant files.
     - **Phase 4 (test quality):** for LARGE/PERIODIC only. `glob "tests/**/*.py"`. For each: check TRAP[TEST], skip markers, assertion types.
-    - **Phase 5 (runtime):** `bash` with `python -m pytest tests/ -s -v`. Parse output for PASS/FAIL/skip counts. Extract LDD traces.
+     - **Phase 5 (runtime):** Run tests via `bash`, output to temp file. If timeout — grep temp file. Parse output for PASS/FAIL/skip counts. Extract LDD traces.
     - **Phase 6 (config sync):** trace each env var from .env through the propagation chain. Read each file in the chain.
     - **Cross-file comparison technique:**
       1. Identify the value domain (e.g., "image versions", "NO_PROXY hosts", "network names")
@@ -492,58 +504,6 @@ permission:
     - Incident was caused by a gap in monitoring or alerting
 
     **Do NOT add for:** minor incidents with obvious root cause, routine bug fixes, non-production issues, incidents already fully documented in an external system.
-# §ARTIFACT_REGISTRY
-## $ARTIFACT_REGISTRY
-
-    Every management artifact follows the journal naming model: sequential NN prefix within a NNN-slug task folder.
-
-    ### Naming Grammar (single source of truth — do NOT repeat in roles/skills)
-
-    **Folder:** `.ai/plans/{NNN:03d}-{slug}/`
-    - NNN  — zero-padded 3-digit sequence. Allocation rule: re-glob `.ai/plans/*` IMMEDIATELY before mkdir; NNN = max existing + 1; if taken at mkdir time → increment and retry.
-      Post-merge collisions (parallel worktrees) are TOLERATED: folder identity = full `NNN-slug` string, never NNN alone. Do NOT renumber existing folders.
-    - slug — 2-4 kebab-case lowercase words.
-
-    **File:** `{NN}-{Type}[-{qualifier}].md`
-    - NN        — 2-digit GLOBAL creation-order sequence within the task folder (01, 02, ...);
-                 next NN = max existing NN in folder + 1.
-    - Type      — CLOSED vocabulary: Brief | DevPlan | VerificationReport | StatusReport | Debt.
-    - qualifier — optional, kebab-case lowercase [a-z0-9-] only (no dots/underscores/uppercase);
-                 wave/phase/fix context: -fix-d12, -wave-t5-1, -phase2, -preimpl.
-
-    ### Rules
-
-    | Rule | Description |
-    |------|-------------|
-    | R1 AUTHORITATIVE | The authoritative artifact of type T = highest NN matching `{NN}-{Type}*.md`. |
-    | R2 BAN LIST | Forbidden type names (converge to VerificationReport): QAAuditReport, QAImplReport, GateAudit, AuditReport, QAReport. Any type outside the closed vocabulary is a violation. |
-    | R3 PAYLOADS | Non-artifact files (backups, quarantine, data, .bak) go into a subfolder (e.g., files/); root-level *.md is reserved for canonical artifacts. |
-    | R4 SINGLE SOURCE | This grammar is defined ONLY in artifact-registry; roles/skills keep one example + a pointer. |
-
-    ### Artifact Table
-
-    | Artifact | Path Pattern | Created by | Trigger |
-    |----------|-------------|-----------|---------|
-    | Brief | .ai/plans/{NNN:03d}-{slug}/{NN}-Brief.md | Architect | LARGE task |
-    | DevPlan | .ai/plans/{NNN:03d}-{slug}/{NN}-DevPlan.md | Architect | STANDARD or LARGE task |
-    | VerificationReport | .ai/plans/{NNN:03d}-{slug}/{NN}-VerificationReport.md | QA | After verification |
-    | StatusReport | .ai/plans/{NNN:03d}-{slug}/{NN}-StatusReport.md | Sysadmin | After operations |
-    | Debt | .ai/plans/{NNN:03d}-{slug}/{NN}-Debt.md | Any role | On discovery of deferred design debt |
-
-    ### Task Size Rules
-
-    | Size | Criteria | Folder | Artifacts |
-    |------|----------|--------|-----------|
-    | SMALL | ≤8 files, no arch/API/schema changes | None | None |
-    | STANDARD | 9-20 files, business logic | .ai/plans/NNN-slug/ | 01-DevPlan.md only |
-    | LARGE | >20 files OR arch/schema/contract changes | .ai/plans/NNN-slug/ | 01-Brief.md + 02-DevPlan.md |
-
-    ### Path Rules
-
-    - SMALL tasks: no folder, no artifacts — verbal only
-    - All artifacts for one task share the same .ai/plans/NNN-slug/ folder
-    - NN starts at 01 and increments globally across the folder
-    - Readers resolve "the DevPlan" as the highest-NN `*-DevPlan*.md` (R1)
 # §COMPLETION_PROTOCOL
 ### §PRIME: No output after task completion.
 
@@ -658,4 +618,4 @@ permission:
     - **Results are supplementary** — prefer official docs over blog posts, source code over tutorials
     - **Do NOT search for project-internal information** — it's in the repo, not on the web
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

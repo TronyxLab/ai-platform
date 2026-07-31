@@ -651,13 +651,20 @@ def test_reconcile_networks_no_docker(tmp_path, caplog):
 # region FUNC_test_reconcile_networks_create_proxy_net
 ## 🧪 TRAP[TEST] · R4 create proxy-net · Scenario: proxy-net missing → created
 ## · Regression: converge.sh lines 707-719
-## · Last fail: never
+## · Last fail: 2026-07-31 — IsADirectoryError: tmp_path dir passed as node.yaml to NodeYaml
 ## · Remove if: reconciler.R4 network create logic changes
 @pytest.mark.usefixtures("reset_state")
 @ldd_trajectory
 def test_reconcile_networks_create_proxy_net(tmp_path, caplog):
     """R4: proxy-net missing → docker network create called."""
     caplog.set_level(logging.INFO)
+
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · IsADirectoryError in _check_proxy_connectivity
+    # · Symptom: reconcile_networks(str(tmp_path)) → NodeYaml(dir).get_list() → IsADirectoryError
+    # · Root: _check_proxy_connectivity parses node.yaml via NodeYaml; a directory is not a file
+    # · Fix: fixture writes a real node.yaml file; pass its path, not the tmp_path dir
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text("context: test-context\nprojects:\n  - name: myapp\n    domain: myapp.example.com\n")
 
     create_called = []
 
@@ -679,7 +686,7 @@ def test_reconcile_networks_create_proxy_net(tmp_path, caplog):
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch.object(subprocess, "run", side_effect=mock_run):
-        entry = reconciler.reconcile_networks(str(tmp_path), dry_run=False, report_only=False)
+        entry = reconciler.reconcile_networks(str(yaml_path), dry_run=False, report_only=False)
 
     assert entry["unit"] == "R4"
     assert reconciler._has_warnings or not reconciler._has_errors
@@ -693,13 +700,20 @@ def test_reconcile_networks_create_proxy_net(tmp_path, caplog):
 # region FUNC_test_reconcile_networks_exists
 ## 🧪 TRAP[TEST] · R4 proxy-net exists · Scenario: proxy-net already exists → SKIP
 ## · Regression: converge.sh lines 720-731
-## · Last fail: never
+## · Last fail: 2026-07-31 — IsADirectoryError: tmp_path dir passed as node.yaml to NodeYaml
 ## · Remove if: reconciler.R4 network check logic changes
 @pytest.mark.usefixtures("reset_state")
 @ldd_trajectory
 def test_reconcile_networks_exists(tmp_path, caplog):
     """R4: proxy-net already exists (bridge) → no create."""
     caplog.set_level(logging.INFO)
+
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · IsADirectoryError in _check_proxy_connectivity
+    # · Symptom: reconcile_networks(str(tmp_path)) → NodeYaml(dir).get_list() → IsADirectoryError
+    # · Root: _check_proxy_connectivity parses node.yaml via NodeYaml; a directory is not a file
+    # · Fix: fixture writes a real node.yaml file; pass its path, not the tmp_path dir
+    yaml_path = tmp_path / "node.yaml"
+    yaml_path.write_text("context: test-context\nprojects:\n  - name: myapp\n    domain: myapp.example.com\n")
 
     create_called = []
 
@@ -719,7 +733,7 @@ def test_reconcile_networks_exists(tmp_path, caplog):
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch.object(subprocess, "run", side_effect=mock_run):
-        entry = reconciler.reconcile_networks(str(tmp_path), dry_run=False, report_only=False)
+        entry = reconciler.reconcile_networks(str(yaml_path), dry_run=False, report_only=False)
 
     assert entry["unit"] == "R4"
     assert len(create_called) == 0, "docker network create should NOT have been called"

@@ -20,6 +20,14 @@ $END_ARTIFACT_CONTRACT
 
 ---
 
+> **STATUS UPDATE 2026-07-31:** SUPERSEDED — implementation committed (см. git log).
+> `core/internal/monitoring_config_renderer.py` (938 LOC) реализован (Strangler-Fig: 413→44 LOC shell,
+> 19 inline `python3 -c` устранены), `on-project-deploy.sh` — тонкий фасад. Post-implementation
+> верификация: `02-VerificationReport.md` → **STABLE**. Прежний вердикт «STABLE (blueprint, NOT STARTED)»
+> отражает pre-implementation состояние. Актуальный статус: DevPlan.md / 02-VerificationReport.md.
+
+---
+
 ## Final Verdict: **STABLE**
 
 Implementation has NOT started — DevPlan is a complete, self-consistent blueprint. All referenced files exist, 19 inline `python3 -c` calls accurately catalogued, ACs measurable. One pre-existing test failure (`test_module_yaml_contract`) unrelated to this plan. Ready for Coder delegation.

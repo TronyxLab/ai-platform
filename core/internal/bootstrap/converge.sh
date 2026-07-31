@@ -51,6 +51,17 @@ EOF
 setup_environment() {
     local script_dir; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     CORE_DIR="$(cd "${script_dir}/../.." && pwd)"
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · ModuleNotFoundError: 'core' in reconciler.py
+    # · Symptom: converge.sh → `python3 reconiler.py` (script path) → lazy imports
+    # ·   `from core.internal.shared... import` raise ModuleNotFoundError when node.yaml
+    # ·   has projects → R3/R4/R5/R6 silently parse zero projects and exit 1.
+    # · Root: script-path execution does NOT add CWD to sys.path; only the script's own
+    # ·   directory. core.internal.* packages live one level above core/.
+    # · Fix: export PYTHONPATH=<project root> — same pattern as provision-llm.sh:22 and
+    # ·   platform-export-metrics.sh:37 (shell facade → Python with core.* imports).
+    # · Prevention: any shell facade dispatching a Python script that imports core.internal.*
+    # ·   MUST export PYTHONPATH="${ROOT}:${PYTHONPATH:-}".
+    export PYTHONPATH="${CORE_DIR}/..:${PYTHONPATH:-}"
     source "${CORE_DIR}/lib/paths.sh"
     source "${CORE_DIR}/lib/node-resolver.sh"
     __LOG_PREFIX="converge"; source "${CORE_DIR}/lib/logging.sh"

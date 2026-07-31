@@ -72,6 +72,18 @@ permission:
        13. Group independent edits into parallel tool calls. When making the same change across N files with no interdependency, issue all N `edit` calls in a single message (parallel), not sequentially. This reduces round-trips from O(N) to O(1).
         14. **Session Completion Protocol** — Follow §COMPLETION_PROTOCOL in completion.xml.
            See artifact-registry.xml for artifact paths (.ai/plans/NNN-slug/).
+**Long-Running Command Output**
+
+    For any bash command expected to run >30 seconds (test suites, builds,
+    doxygen, data processing), redirect stdout/stderr to a timestamped
+    temp file:
+
+    ```
+    OUTPUT="/tmp/cmd_$(date +%s)_$$.log" && <command> > "$OUTPUT" 2>&1; echo "OUTPUT_FILE=$OUTPUT"
+    ```
+
+    If the command times out — grep/read the temp file for results instead
+    of re-running. The `OUTPUT_FILE=` line tells you the exact path.
 **Fail-Fast Principle**
 
     Validate inputs and state BEFORE producing output. Never write artifacts that are semantically invalid.
@@ -119,7 +131,7 @@ permission:
       - If $TEST_SPEC has entries → create ONLY the tests listed in the table (Test file | Test function | Scenario | Module under test)
       Use `write` to create `tests/test_module.py` files. Native imports only (no subprocess.run). Use `tmp_path` fixture. Include caplog-based IMP:7-10 telemetry output. Each test function must include `# 🧪 TRAP[TEST]` with Regression/Scenario/Last fail/Remove if fields (see QA §MARKUP for format). Create `tests/conftest.py` with Anti-Loop protocol if not already present.
 
-    **Step 5: VERIFY_TESTS** — Run `python -m pytest tests/ -s -v` via `bash`. Check IMP:7-10 log output. Fix failures.
+     **Step 5: VERIFY_TESTS** — Run tests via `bash` with output to temp file. If timeout — grep temp file for test results before re-running. Check IMP:7-10 log output. Fix failures.
 
     **Step 6: FINAL_AUDIT** — Run self-critique checklist (CONSTITUTION). Verify all # region/#endregion pairs are balanced. Verify GREP_SUMMARY on every file. Verify `# 🧪 TRAP[TEST]` present on every test function. Verify `TRAP[DEBT]` comments are present for any latent problems encountered during implementation (per rule 11). If swarm was used: verify no duplicate GREP_SUMMARY keywords across modules, verify cross-module imports resolve.
 
@@ -129,7 +141,7 @@ permission:
     - **CRITICAL RULE:** Run ONLY after all tests pass (Step 5) and FINAL_AUDIT (Step 6) is clean.
     - **Actions:**
       1. Verify `Doxyfile` exists at project root. If absent, run `ai-instructions compile` to generate it (idempotent — won't overwrite existing).
-      2. Run `doxygen Doxyfile` via `bash`.
+       2. Run `doxygen Doxyfile` via `bash` with output to temp file. If timeout — grep temp file for errors.
       3. If doxygen reports inline-documentation syntax errors in `## @…` tags (malformed `@purpose`, unbalanced markup, etc.):
          - Read stderr to identify file:line of each error
          - Fix them at the source using `edit` tool
@@ -331,58 +343,6 @@ permission:
     - Performance regression fixed with non-obvious mitigation
 
     **Do NOT add for:** speculative performance concerns without data, micro-optimizations (<1% impact), performance issues fixed by scaling infrastructure only, routine query optimization.
-# §ARTIFACT_REGISTRY
-## $ARTIFACT_REGISTRY
-
-    Every management artifact follows the journal naming model: sequential NN prefix within a NNN-slug task folder.
-
-    ### Naming Grammar (single source of truth — do NOT repeat in roles/skills)
-
-    **Folder:** `.ai/plans/{NNN:03d}-{slug}/`
-    - NNN  — zero-padded 3-digit sequence. Allocation rule: re-glob `.ai/plans/*` IMMEDIATELY before mkdir; NNN = max existing + 1; if taken at mkdir time → increment and retry.
-      Post-merge collisions (parallel worktrees) are TOLERATED: folder identity = full `NNN-slug` string, never NNN alone. Do NOT renumber existing folders.
-    - slug — 2-4 kebab-case lowercase words.
-
-    **File:** `{NN}-{Type}[-{qualifier}].md`
-    - NN        — 2-digit GLOBAL creation-order sequence within the task folder (01, 02, ...);
-                 next NN = max existing NN in folder + 1.
-    - Type      — CLOSED vocabulary: Brief | DevPlan | VerificationReport | StatusReport | Debt.
-    - qualifier — optional, kebab-case lowercase [a-z0-9-] only (no dots/underscores/uppercase);
-                 wave/phase/fix context: -fix-d12, -wave-t5-1, -phase2, -preimpl.
-
-    ### Rules
-
-    | Rule | Description |
-    |------|-------------|
-    | R1 AUTHORITATIVE | The authoritative artifact of type T = highest NN matching `{NN}-{Type}*.md`. |
-    | R2 BAN LIST | Forbidden type names (converge to VerificationReport): QAAuditReport, QAImplReport, GateAudit, AuditReport, QAReport. Any type outside the closed vocabulary is a violation. |
-    | R3 PAYLOADS | Non-artifact files (backups, quarantine, data, .bak) go into a subfolder (e.g., files/); root-level *.md is reserved for canonical artifacts. |
-    | R4 SINGLE SOURCE | This grammar is defined ONLY in artifact-registry; roles/skills keep one example + a pointer. |
-
-    ### Artifact Table
-
-    | Artifact | Path Pattern | Created by | Trigger |
-    |----------|-------------|-----------|---------|
-    | Brief | .ai/plans/{NNN:03d}-{slug}/{NN}-Brief.md | Architect | LARGE task |
-    | DevPlan | .ai/plans/{NNN:03d}-{slug}/{NN}-DevPlan.md | Architect | STANDARD or LARGE task |
-    | VerificationReport | .ai/plans/{NNN:03d}-{slug}/{NN}-VerificationReport.md | QA | After verification |
-    | StatusReport | .ai/plans/{NNN:03d}-{slug}/{NN}-StatusReport.md | Sysadmin | After operations |
-    | Debt | .ai/plans/{NNN:03d}-{slug}/{NN}-Debt.md | Any role | On discovery of deferred design debt |
-
-    ### Task Size Rules
-
-    | Size | Criteria | Folder | Artifacts |
-    |------|----------|--------|-----------|
-    | SMALL | ≤8 files, no arch/API/schema changes | None | None |
-    | STANDARD | 9-20 files, business logic | .ai/plans/NNN-slug/ | 01-DevPlan.md only |
-    | LARGE | >20 files OR arch/schema/contract changes | .ai/plans/NNN-slug/ | 01-Brief.md + 02-DevPlan.md |
-
-    ### Path Rules
-
-    - SMALL tasks: no folder, no artifacts — verbal only
-    - All artifacts for one task share the same .ai/plans/NNN-slug/ folder
-    - NN starts at 01 and increments globally across the folder
-    - Readers resolve "the DevPlan" as the highest-NN `*-DevPlan*.md` (R1)
 # §COMPLETION_PROTOCOL
 ### §PRIME: No output after task completion.
 
@@ -497,4 +457,4 @@ permission:
     - **Results are supplementary** — prefer official docs over blog posts, source code over tutorials
     - **Do NOT search for project-internal information** — it's in the repo, not on the web
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

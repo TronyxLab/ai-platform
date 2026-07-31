@@ -38,7 +38,8 @@ TEST_DIR = os.path.dirname(__file__)
 TEST_DATA_DIR = os.path.join(TEST_DIR, "test_data")
 PROJECT_ROOT = os.path.join(TEST_DIR, "..")
 
-CORE_LIB = os.path.join(PROJECT_ROOT, "core", "lib")
+CORE_DIR = os.path.join(PROJECT_ROOT, "core")
+CORE_LIB = os.path.join(CORE_DIR, "lib")
 ENTRYPOINTS_DIR = os.path.join(PROJECT_ROOT, "core", "entrypoints")
 INTERNAL_BOOTSTRAP_DIR = os.path.join(PROJECT_ROOT, "core", "internal", "bootstrap")
 INTERNAL_SECRETS_DIR = os.path.join(PROJECT_ROOT, "core", "internal", "secrets")
@@ -637,28 +638,32 @@ echo "[IMP:9][resolve] OK: ${{M[0]}}"
 
 
 # region TEST_test_docker_login_set_u_safe
+# 🧪 TRAP[TEST] · 2026-07-31 · docker_login extract→source migration
+# · Regression: _test_func() extract context made BASH_SOURCE[0]="bash" → docker.sh resolved
+#   ${BASH_SOURCE[0]%/*}/../internal/shared/docker_auth.py as <cwd>/bash/../… → file missing →
+#   docker_login crashed under set -euo pipefail
+# · Scenario: source docker.sh with ABSOLUTE path (BASH_SOURCE[0] correct inside) → (a) no creds →
+#   anonymous fallback exit 0; (b) creds + PATH-substituted docker stub → subprocess mock invoked
+# · Last fail: 2026-07-31 — rc=2 "can't open file .../bash/../internal/shared/docker_auth.py"
+# · Remove if: docker_login moves fully to Python (then point test at docker_auth.py directly)
 
 
-def test_docker_login_set_u_safe(caplog) -> None:
+def test_docker_login_set_u_safe(caplog, tmp_path) -> None:
     """Verify docker_login() does not crash under set -euo pipefail when vars unset."""
     caplog.set_level(logging.DEBUG)
 
     docker_sh = os.path.join(CORE_LIB, "docker.sh")
+    source_line = f'source "{docker_sh}"'
 
     # Scenario 1: no env vars → anonymous fallback
-    test_call_anon = """set -euo pipefail
+    test_call_anon = f"""set -euo pipefail
 unset DOCKER_HUB_USERNAME DOCKER_HUB_TOKEN
 __LOG_PREFIX="test"
+{source_line}
 docker_login
 echo "[IMP:9][docker_test] exit=$?"
 """
-    stdout, stderr, rc = _test_func(
-        docker_sh,
-        ["docker_login"],
-        test_call_anon,
-        env={"__LOG_PREFIX": "test"},
-        preamble=LOG_STUBS,
-    )
+    stdout, stderr, rc = _bash(test_call_anon, env={"__LOG_PREFIX": "test"})
 
     found_imp9 = _print_ldd(stderr, stdout)
     assert rc == 0, f"docker_login crashed under set -euo pipefail (no vars): {stderr}"
@@ -667,29 +672,43 @@ echo "[IMP:9][docker_test] exit=$?"
     logger.info("[IMP:9][test_docker_login_set_u_safe][assert] Anonymous fallback exits 0")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
-    # Scenario 2: env vars set → authenticated login with mock docker
-    test_call_auth = """set -euo pipefail
+    # Scenario 2: env vars set → authenticated login via PATH-substituted docker stub.
+    # docker_auth.py invokes docker through subprocess.run(["docker", ...]) — a bash function
+    # mock is INVISIBLE to the Python subprocess, so a real executable stub on PATH is required
+    # (Test Honesty R1: the mock must actually be exercised). The stub's stderr is PIPE-captured
+    # by docker_auth.py, so the [IMP:9][mock-docker] evidence is appended to a marker file.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker_file = tmp_path / "docker-call.log"
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "[IMP:9][mock-docker] login --username ${{DOCKER_HUB_USERNAME}} --password-stdin" >> "{marker_file}"\n'
+        "exit 0\n"
+    )
+    docker_stub.chmod(0o755)
+
+    test_call_auth = f"""set -euo pipefail
 __LOG_PREFIX="test"
-docker() {
-    echo "[IMP:9][mock-docker] login --username ${DOCKER_HUB_USERNAME} --password-stdin" >&2
-    return 0
-}
+export PATH="{bin_dir}:$PATH"
 export DOCKER_HUB_USERNAME="testuser"
 export DOCKER_HUB_TOKEN="testtoken123"
+{source_line}
 docker_login
 echo "[IMP:9][docker_test] auth exit=$?"
 """
-    stdout2, stderr2, rc2 = _test_func(
-        docker_sh,
-        ["docker_login"],
-        test_call_auth,
-        env={"__LOG_PREFIX": "test"},
-        preamble=LOG_STUBS,
-    )
+    stdout2, stderr2, rc2 = _bash(test_call_auth, env={"__LOG_PREFIX": "test"})
 
     found_imp9_2 = _print_ldd(stderr2, stdout2)
     assert rc2 == 0, f"docker_login crashed with vars set: {stderr2}"
     assert "testuser" in stderr2 or "testuser" in stdout2, "Expected testuser in output"
+    # Honest mock verification: docker_auth.py must have actually invoked the stub
+    assert marker_file.exists(), (
+        "PATH-substituted docker mock was never exercised — docker_auth.py subprocess should call docker"
+    )
+    mock_log = marker_file.read_text()
+    assert "[IMP:9][mock-docker]" in mock_log, f"Mock not invoked: {mock_log!r}"
+    assert "testuser" in mock_log, f"Mock called without username: {mock_log!r}"
     logger.info("[IMP:9][test_docker_login_set_u_safe][assert] Authenticated path works")
     assert found_imp9_2, "Critical LDD Error: No IMP:9 business logic log found (auth)"
 
@@ -910,7 +929,10 @@ source "{NODE_RESOLVER_SH}"
 result="$(resolve_node_yaml "test-multi" "{empty_platform}" "{projects_dir}")"
 echo "[IMP:9][test_resolve_multi_path] RESOLVED: $result"
 """
-    stdout, stderr, rc = _bash(script, env={"__LOG_PREFIX": "test"})
+    # DP-088/091: resolve_node_yaml delegates to NodeYaml.resolve() which globs
+    # $HOME/projects/*/node-configs/ — HOME override routes the org-repos fixture
+    # ({projects_dir}/myorg/node-configs/) into the actual search path.
+    stdout, stderr, rc = _bash(script, env={"__LOG_PREFIX": "test", "HOME": str(tmp_path)})
     found_imp9 = _print_ldd(stderr, stdout)
 
     assert rc == 0, f"resolve_node_yaml failed (rc={rc}): {stderr}"
@@ -961,7 +983,8 @@ fi
 # 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 detect_age_key AGE_SECRET_KEY_FILE fallback
 # · Regression: age key from --age-secret-key-file must be detected when AGE_SECRET_KEY env unset
 # · Scenario: AGE_SECRET_KEY_FILE points to tmp file with key → detect_age_key returns it
-# · Last fail: N/A (W4-E5 baseline)
+# · Last fail: 2026-07-31 — stale contract: extract context lacked CORE_DIR env → function fell
+#   back to env-only chain (path ${CORE_DIR}/internal/shared/age_key.py = /internal/... missing)
 # · Remove if: detect_age_key moves to Python (then point test at new module)
 
 
@@ -988,7 +1011,7 @@ echo "[IMP:9][test_age_key_file] MATCH=$([[ "$detected" == "{test_key}" ]] && ec
         BOOTSTRAP_SH,
         ["detect_age_key"],
         test_call,
-        env={"__LOG_PREFIX": "test", "AGE_SECRET_KEY": "", "AGE_SECRET_KEY_FILE": str(key_file)},
+        env={"__LOG_PREFIX": "test", "CORE_DIR": CORE_DIR, "AGE_SECRET_KEY": "", "AGE_SECRET_KEY_FILE": str(key_file)},
     )
 
     found_imp9 = _print_ldd(stderr, stdout)

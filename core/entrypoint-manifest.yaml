@@ -139,6 +139,14 @@ validate:
   operation_ru: Проверка мёртвого кода
   description: CI gate — detect DEPRECATED markers older than 30 days (Dead Code Sweep
     084)
+- make_target: doxygen-check
+  mechanism: ci-gate
+  delegates_to: doxygen Doxyfile (zero-warnings invariant, DevPlan 097)
+  signature: make doxygen-check
+  operation_ru: Doxygen zero-warnings проверка
+  description: CI gate — doxygen Doxyfile must produce zero warnings (DevPlan 097
+    zero-warnings invariant). Fails on warning count > 0 or doxygen exit != 0. Skips
+    gracefully when doxygen binary is absent.
 lint:
 - script: lint.sh
   mechanism: pre-commit-hook
@@ -169,7 +177,7 @@ test:
 - make_target: test-summary
   mechanism: python-wrapper
   delegates_to: core/internal/test_runner.py --marker <MARKER>
-  signature: make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static]
+  signature: make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static|all]
     [TIMEOUT=1800]
   operation_ru: Запуск тестов (агент-ориентированная обёртка)
   description: Run tests via compact agent-oriented wrapper (pytest → JUnit XML →
@@ -524,21 +532,19 @@ lib:
   - core/internal/deploy/reconcile-projects.sh
   description: SSH facade with timeout wrapper — single source of truth for all remote
     operations (W2-E1)
-- script: audit_logging.sh
-  path: core/lib/audit_logging.sh
+- script: audit.sh
+  path: core/lib/audit.sh
   signature: (sourced library)
-  operation_ru: Audit logging library
+  operation_ru: Audit logging facade (thin shell wrapper over Python shared/audit_logger)
   type: sourced
   consumers:
-  - core/internal/deploy/orchestrator_cli.py
-  - core/entrypoints/context-promote.sh
-  - core/internal/scaffold/remove-project.sh
   - core/internal/provision-environment.sh
+  - core/entrypoints/context-promote.sh
   - core/entrypoints/build.sh
-  - core/internal/secrets/decrypt-secrets.sh
-  - core/internal/bootstrap/node-lifecycle.sh (update-mode)
-  description: Audit logging + audit_step wrapper — dual-write audit trail for state-modifying
-    entrypoints (W2-E3)
+  - core/internal/notify/notify-hook.sh
+  - core/internal/healthcheck/tor-proxy-healthcheck.sh
+  description: Thin facade over core.internal.shared.audit_logger (JSON-lines + syslog)
+    — replaces deleted audit_logging.sh (aa6bd61, debt C-5 fixed 2026-07-31)
 module_lifecycle:
 - start
 - stop
@@ -655,6 +661,7 @@ allowed_verbs:
 - dev-certs
 - discover-modules
 - down
+- doxygen-check
 - fix-executable-bit
 - fix-gate
 - fix-ruff

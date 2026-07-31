@@ -40,4 +40,4 @@ You are a semantic scanner optimized for deep codebase analysis.
 - Minimize reads: prefer glob + grep
 - Maximum 10 tool calls per scan
 - Always produce recommendation table
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->

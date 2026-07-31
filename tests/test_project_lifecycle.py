@@ -2,9 +2,9 @@
 # STRUCTURE: ┌node_yaml fixture┐ → ┌fake_project fixture┐ → ○ 9 tests → ⊕ LDD trajectory IMP:7-10
 # region MODULE_CONTRACT
 ## @purpose  Test suite for project lifecycle scripts: remove-project.sh, adopt-project.sh,
-##           project-list.sh, deploy.sh, deploy-project.sh
+##           project-list.sh, deploy.sh
 ## @scope    9 test functions covering: unregister, idempotent remove, safe-remove (no data deletion),
-##           remove hooks in deploy-project.sh, verb contract backward compat, adopt preserves files,
+##           remove hooks in module-interface.sh, verb contract backward compat, adopt preserves files,
 ##           adopt idempotent, personal domain cert path, project-list offline
 ## @invariants
 ##   - All subprocess tests use tmp_path and PROJECTS_ROOT env var (no hardcoded paths)
@@ -13,12 +13,13 @@
 ##   - grep-based tests scan script source files for patterns
 ## @rationale T20 per DevPlan $TEST_SPEC — validates lifecycle completion (REMOVE, ADOPT, OBSERVE phases)
 ## @changes 2026-07-17 · T20 — initial implementation
+##           2026-07-31 · Strangler cleanup — deploy-project.sh removed (aa6bd61); remove-hook
+##           + verb-contract tests point at core/lib/module-interface.sh and core/entrypoints/deploy.sh
 # endregion MODULE_CONTRACT
 
 import logging
 import os
 import pathlib
-import re
 import subprocess
 
 import pytest
@@ -33,8 +34,8 @@ _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
 _REMOVE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "remove-project.sh"
 _ADOPT_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "adopt-project.sh"
 _LIST_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "project-list.sh"
-_DEPLOY_PROJECT_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "deploy" / "deploy-project.sh"
 _DEPLOY_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "entrypoints" / "deploy.sh"
+_MODULE_INTERFACE_SH: pathlib.Path = _PROJECT_ROOT / "core" / "lib" / "module-interface.sh"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -249,11 +250,11 @@ def test_unregister_idempotent(
 
 @ldd_trajectory
 def test_remove_is_safe_no_data_deletion(caplog) -> None:
-    """remove-project.sh and deploy-project.sh must NOT contain dangerous patterns (O7/DD10).
+    """remove-project.sh and deploy.sh must NOT contain dangerous patterns (O7/DD10).
 
     ── Scenario: grep for `down -v`, `volume rm`, `image rm`, `gh repo delete` in lifecycle scripts ──
     """
-    scripts_to_check = [_REMOVE_SCRIPT, _DEPLOY_PROJECT_SCRIPT]
+    scripts_to_check = [_REMOVE_SCRIPT, _DEPLOY_SCRIPT]
     # Patterns that are FORBIDDEN in actual command execution (O7/DD10)
     # NOTE: echo/print messages that tell the user how to manually clean up are OK —
     #       only actual command execution (subshell, eval, direct) is forbidden.
@@ -284,63 +285,78 @@ def test_remove_is_safe_no_data_deletion(caplog) -> None:
 
 @ldd_trajectory
 def test_remove_hooks_triggered_in_runtime(caplog) -> None:
-    """deploy-project.sh must contain _trigger_remove_hooks and hooks.on_project_remove (K2).
+    """module-interface.sh must contain the K2 remove-hook dispatcher (hooks.on_project_remove).
 
-    ── Scenario: grep deploy-project.sh for hook patterns (closes forensics V3) ──
+    ── Scenario: grep module-interface.sh for remove-hook interface + _invoke_dispatch_hook ──
     """
-    if not _DEPLOY_PROJECT_SCRIPT.exists():
-        pytest.fail(
-            f"Missing required file: {_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)} — "
-            "was T6 (Wave 1) properly implemented?"
-        )
+    # 🧪 TRAP[TEST] · 2026-07-31 · remove-hook dispatcher lives in core/lib/module-interface.sh
+    # · Regression: test previously required core/internal/deploy/deploy-project.sh (deleted in
+    #   aa6bd61). K2 dispatcher (invoke_module_interface remove-hook → _invoke_dispatch_hook
+    #   → hooks.on_project_remove) now lives in core/lib/module-interface.sh:84-85.
+    # · Scenario: grep module-interface.sh for 'remove-hook', '_invoke_dispatch_hook',
+    #   'hooks.on_project_remove'
+    # · Last fail: 2026-07-31 — "Missing required file: core/internal/deploy/deploy-project.sh"
+    # · Remove if: K2 hook dispatch moves to Python (then point test at the new dispatcher module)
+    # · NOTE: the remove path (project_remover.py) does NOT invoke this hook because no module.yaml
+    #   in the repo registers hooks.on_project_remove (grep = 0 matches). If a consumer appears,
+    #   extend this test to verify the hook is invoked from project_remover.py at runtime.
+    if not _MODULE_INTERFACE_SH.exists():
+        pytest.fail(f"Missing required file: {_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}")
 
-    content = _DEPLOY_PROJECT_SCRIPT.read_text()
+    content = _MODULE_INTERFACE_SH.read_text()
 
-    has_remove_hooks_func = "_trigger_remove_hooks" in content
+    has_remove_hook_interface = "remove-hook" in content
     has_on_project_remove = "hooks.on_project_remove" in content
+    has_dispatch_hook = "_invoke_dispatch_hook" in content
 
     logger.info(
-        "[IMP:7][test][remove_hooks] _trigger_remove_hooks=%s, hooks.on_project_remove=%s",
-        has_remove_hooks_func,
+        "[IMP:7][test][remove_hooks] remove-hook=%s, hooks.on_project_remove=%s, _invoke_dispatch_hook=%s",
+        has_remove_hook_interface,
         has_on_project_remove,
+        has_dispatch_hook,
     )
 
-    assert has_remove_hooks_func, (
-        f"{_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)}: missing _trigger_remove_hooks() function. "
-        "T6 (Wave 1) must implement this. Currently only _trigger_deploy_hooks() exists."
+    assert has_remove_hook_interface, (
+        f"{_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}: missing 'remove-hook' interface "
+        "in invoke_module_interface() dispatch case (K2)"
     )
     assert has_on_project_remove, (
-        f"{_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)}: missing 'hooks.on_project_remove' reference. "
-        "K2 requires _trigger_remove_hooks to iterate hooks.on_project_remove."
+        f"{_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}: missing 'hooks.on_project_remove' "
+        "reference in remove-hook dispatch (K2)"
+    )
+    assert has_dispatch_hook, (
+        f"{_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}: missing _invoke_dispatch_hook() function"
     )
 
-    logger.info("[IMP:9][test][remove_hooks] Verified: _trigger_remove_hooks and hooks.on_project_remove present")
+    logger.info("[IMP:9][test][remove_hooks] Verified: K2 remove-hook dispatcher present in module-interface.sh")
 
 
 @ldd_trajectory
 def test_deploy_verb_contract_backward_compat(caplog) -> None:
-    """deploy.sh and deploy-project.sh must support verb contract K1 (backward compatible).
+    """deploy.sh must support verb contract K1 (backward compatible).
 
-    ── Scenario: Check for remove/status verb parsing in deploy scripts ──
+    ── Scenario: Check SSH_ORIGINAL_COMMAND parsing + remove/status verb dispatch in deploy.sh ──
     """
+    # 🧪 TRAP[TEST] · 2026-07-31 · verb contract K1 lives in core/entrypoints/deploy.sh
+    # · Regression: test previously required core/internal/deploy/deploy-project.sh (deleted in
+    #   aa6bd61). deploy.sh now dispatches all verbs (remove/status → orchestrator_cli, legacy
+    #   <proj> <sha> <env> → deploy) and parses SSH_ORIGINAL_COMMAND via shared ssh_command_parser.py.
+    # · Scenario: grep deploy.sh for SSH_ORIGINAL_COMMAND parsing + 'remove'/'status' verb dispatch
+    # · Last fail: 2026-07-31 — "Missing required file: core/internal/deploy/deploy-project.sh"
+    # · Remove if: verb dispatch moves out of deploy.sh (then point test at the new dispatcher)
     if not _DEPLOY_SCRIPT.exists():
         pytest.fail(f"Missing required file: {_DEPLOY_SCRIPT.relative_to(_PROJECT_ROOT)}")
-    if not _DEPLOY_PROJECT_SCRIPT.exists():
-        pytest.fail(f"Missing required file: {_DEPLOY_PROJECT_SCRIPT.relative_to(_PROJECT_ROOT)}")
 
     deploy_content = _DEPLOY_SCRIPT.read_text()
-    deploy_project_content = _DEPLOY_PROJECT_SCRIPT.read_text()
 
     # K1: SSH_ORIGINAL_COMMAND parsing — must handle legacy format <proj> <sha> <env>
-    has_legacy_deploy = bool(
-        re.search(r"SSH_ORIGINAL_COMMAND", deploy_content) or re.search(r"SSH_ORIGINAL_COMMAND", deploy_project_content)
-    )
+    has_legacy_deploy = "SSH_ORIGINAL_COMMAND" in deploy_content
 
-    # K1: remove verb handling
-    has_remove_verb = "--remove" in deploy_project_content or "remove" in deploy_project_content.lower()
+    # K1: remove verb handling → orchestrator_cli remove
+    has_remove_verb = "remove" in deploy_content.lower()
 
-    # K1: status verb handling
-    has_status_verb = "--status" in deploy_project_content or "status" in deploy_project_content.lower()
+    # K1: status verb handling → orchestrator_cli status
+    has_status_verb = "status" in deploy_content.lower()
 
     logger.info(
         "[IMP:7][test][verb_contract] legacy_deploy=%s, remove_verb=%s, status_verb=%s",
@@ -350,14 +366,17 @@ def test_deploy_verb_contract_backward_compat(caplog) -> None:
     )
 
     # Backward compat: legacy deploy format must work
-    # The current deploy.sh is a thin wrapper that passes through to deploy-project.sh
-    # The legacy format is <proj> <sha> <env> → handled by deploy-project.sh
+    # deploy.sh is the single entrypoint: parse_verb() reads SSH_ORIGINAL_COMMAND (or CLI args),
+    # _dispatch_verb() routes remove/status to orchestrator_cli and the legacy
+    # <proj> <sha> <env> format to orchestrator_cli deploy.
     assert has_legacy_deploy, (
-        "K1 backward compat: SSH_ORIGINAL_COMMAND parsing must be preserved. "
+        "K1 backward compat: SSH_ORIGINAL_COMMAND parsing must be preserved in deploy.sh. "
         "Legacy <proj> <sha> <env> format must still work."
     )
+    assert has_remove_verb, "K1: deploy.sh must dispatch the 'remove' verb (orchestrator_cli remove --project)"
+    assert has_status_verb, "K1: deploy.sh must dispatch the 'status' verb (orchestrator_cli status --project)"
 
-    logger.info("[IMP:9][test][verb_contract] K1 backward compat verified")
+    logger.info("[IMP:9][test][verb_contract] K1 backward compat verified in deploy.sh")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

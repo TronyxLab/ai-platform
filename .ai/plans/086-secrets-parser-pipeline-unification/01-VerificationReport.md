@@ -31,6 +31,16 @@ tests/test_smoke_infra_metrics.py
 
 ---
 
+> **STATUS UPDATE 2026-07-31:** SUPERSEDED — pre-implementation audit; план после этого
+> скорректирован и реализован (commit `119da0f`). Post-implementation верификация:
+> `02-VerificationReport.md` → **DRIFTED (WARNING)** — 3 missed tasks (T4-finalize, T25, T26),
+> неблокирующие; 125/125 DP-086-specific тестов PASS. Shared-модули (`secrets_env_parser.py`,
+> `docker_auth.py`, `telegram_notifier.py`, `secrets/decrypt_secrets.py`, `catalog/generate_catalog.py`)
+> существуют. Прежний вердикт «BROKEN — 5 BLOCKER» отражал состояние DevPlan ДО исправления path
+> drift / dependency inversion (F1-F5). Актуальный статус: DevPlan.md / 02-VerificationReport.md.
+
+---
+
 ## §1. Findings Register
 
 ### BLOCKER (5) — Plan is not executable till resolved

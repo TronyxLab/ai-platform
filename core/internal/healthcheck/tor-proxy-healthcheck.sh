@@ -28,11 +28,10 @@ PROXY_URL="${TELEGRAM_PROXY_URL:-http://127.0.0.1:8118}"
 SECRETS_FILE="${SECRETS_ENV_FILE:-/run/platform/secrets.env}"
 MAX_TIME=30
 
-# Source audit.sh for audit_log if available
+# Source audit.sh facade for audit_log (Python shared/audit_logger, non-fatal)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=core/internal/audit/audit.sh
-source "${SCRIPT_DIR}/../audit/audit.sh" 2>/dev/null || true
 PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || echo "$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")")}"
+source "${PLATFORM_ROOT}/core/lib/audit.sh" 2>/dev/null || true
 __LOG_PREFIX="tor-proxy"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
 

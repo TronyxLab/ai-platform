@@ -14,6 +14,7 @@ set -euo pipefail
 echo "[IMP:7][build][main] Starting build entrypoint" >&2
 _EP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_EP_DIR}/../lib/paths.sh"
+source "${_EP_DIR}/../lib/audit.sh"
 
 ACTION="${1:-}"
 if [[ -z "$ACTION" ]]; then

@@ -143,4 +143,4 @@ name: role-retrospective
   6. **Self-criticism** — check for repetitions, redundancy, new exceptions
   7. **Architect review** — independent verification by architect (Part B)
 
-<!-- ai-instructions:0.5.18 -->
+<!-- ai-instructions:0.6.1 -->
