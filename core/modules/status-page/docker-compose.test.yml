@@ -24,6 +24,7 @@ services:
     restart: "no"
     networks: !override
       - test-proxy-net
+      - test-observability-net
     ports: !override
       - "18082:8080"
     volumes: !override
@@ -33,4 +34,6 @@ services:
 
 networks:
   test-proxy-net:
+    external: true
+  test-observability-net:
     external: true

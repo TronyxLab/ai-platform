@@ -27,8 +27,16 @@ logger = logging.getLogger(__name__)
 # Docker Compose extends YAML with !override (array replacement vs concatenation).
 # Standard PyYAML doesn't know this tag — register a constructor that returns
 # the list as-is (the tag only affects compose merge semantics).
-def _yaml_override_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> list:
-    """YAML constructor for !override tag — returns the list value unchanged."""
+def _yaml_override_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> list | dict:
+    """YAML constructor for !override tag — returns the value unchanged.
+
+    Handles BOTH forms used across test overlays:
+    - sequence: `networks: !override [test-proxy-net, ...]`
+    - mapping:  clickhouse test.yml `networks: !override {test-observability-net: {aliases: [...]}}`
+      (mapping form preserves the 'clickhouse' alias for langfuse DNS — TRAP[FIX] 2026-07-22).
+    """
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
     return loader.construct_sequence(node)
 
 

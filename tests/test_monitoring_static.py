@@ -7,7 +7,7 @@
 ## @scope    All tests are @pytest.mark.static_audit — no Docker daemon required.
 ##           Tests parse YAML and JSON files directly.
 ## @invariants
-##   - module.yaml: name=monitoring, install_type=docker, env_requires=[GF_SECURITY_ADMIN_PASSWORD]
+##   - module.yaml: name=monitoring, install_type=docker, env_requires=[GF_SECURITY_ADMIN_PASSWORD, LITELLM_MASTER_KEY]
 ##   - docker-compose.base.yml: profiles: [monitoring] on every service, healthcheck present
 ##   - Prometheus image: prom/prometheus:v3.13.1, Grafana image: grafana/grafana:11.6.16
 ##   - prometheus.yml: valid YAML with scrape_configs
@@ -47,7 +47,7 @@ INFRA_METRICS_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "infra-metrics
 # ── Expected values ───────────────────────────────────────────────────────────
 EXPECTED_MODULE_NAME = "monitoring"
 EXPECTED_INSTALL_TYPE = "docker"
-EXPECTED_ENV_REQUIRES = ["GF_SECURITY_ADMIN_PASSWORD"]
+EXPECTED_ENV_REQUIRES = ["GF_SECURITY_ADMIN_PASSWORD", "LITELLM_MASTER_KEY"]
 EXPECTED_PROMETHEUS_IMAGE = "prom/prometheus:v3.13.1"
 EXPECTED_GRAFANA_IMAGE = "grafana/grafana:11.6.16"
 EXPECTED_NETWORKS = ["observability-net", "proxy-net"]

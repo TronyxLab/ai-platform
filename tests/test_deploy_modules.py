@@ -60,6 +60,7 @@ _DEPLOY_MODULES_SH = repo_root() / "core" / "internal" / "bootstrap" / "deploy-m
 _NODE_LIFECYCLE_SH = repo_root() / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
 _BOOTSTRAP_DIR = repo_root() / "core" / "internal" / "bootstrap"
 _STATE_MACHINE_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "state_machine.py"
+_PHASES_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "phases.py"
 _DEPLOY_PYTHON_DIR = repo_root() / "core" / "internal" / "bootstrap" / "deploy"
 
 
@@ -104,15 +105,18 @@ def test_skip_provision_flag(caplog) -> None:
     # ◇ read state_machine.py → ⚡ grep --skip-provision in deploy_modules step → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_skip_provision_flag] Reading state_machine.py ...")
-    content = _STATE_MACHINE_PY.read_text()
+    logger.info("[IMP:7][test_skip_provision_flag] Reading phases.py ...")
+    content = _PHASES_PY.read_text()
 
-    # ── 1. --skip-provision passed from state_machine.py deploy_modules step ──
-    logger.info("[IMP:8][test_skip_provision_flag] Checking --skip-provision in state_machine.py ...")
+    # ── 1. --skip-provision passed from phases.py deploy phase (DevPlan 087) ──
+    # DevPlan 087: step calls moved from state_machine.py to lifecycle/phases.py —
+    # φ8 phase_deploy_services and φ12 phase_deploy_update both invoke
+    # deploy-modules.sh with --skip-provision.
+    logger.info("[IMP:8][test_skip_provision_flag] Checking --skip-provision in phases.py ...")
     assert '"--skip-provision"' in content, (
-        "S1 violation: --skip-provision not passed from state_machine.py deploy_modules step"
+        "S1 violation: --skip-provision not passed from phases.py deploy phase (φ8/φ12)"
     )
-    logger.info("[IMP:9][test_skip_provision_flag] --skip-provision passed from state_machine.py OK")
+    logger.info("[IMP:9][test_skip_provision_flag] --skip-provision passed from phases.py OK")
 
     # ── 2. deploy-modules.sh still has the SKIP_PROVISION guard for standalone use ──
     dm_content = _DEPLOY_MODULES_SH.read_text()
@@ -153,13 +157,22 @@ def test_merge_deploy_steps(caplog) -> None:
     logger.info("[IMP:7][test_merge_deploy_steps] Reading node-lifecycle.sh ...")
     content = _NODE_LIFECYCLE_SH.read_text()
 
-    # ── 1. update_step_4_deploy_docker must be RENAMED ──
-    logger.info("[IMP:8][test_merge_deploy_steps] Checking step function names ...")
+    # ── 1. node-lifecycle.sh is a thin facade — NO step functions (DevPlan 087) ──
+    logger.info("[IMP:8][test_merge_deploy_steps] Checking facade has no step functions ...")
     assert "update_step_4_deploy_docker" not in content, (
         "S2 violation: update_step_4_deploy_docker still exists — must be renamed to update_step_4_deploy_modules"
     )
-    assert "update_step_4_deploy_modules" in content, "S2 violation: update_step_4_deploy_modules not found"
-    logger.info("[IMP:9][test_merge_deploy_steps] Step function renamed: deploy_docker → deploy_modules OK")
+    assert "update_step_4" not in content, (
+        "S2 violation: node-lifecycle.sh facade must NOT contain step functions (update_step_4) — "
+        "phase logic lives in lifecycle/phases.py"
+    )
+    # The merged deploy-modules step now lives in phases.py (φ8 phase_deploy_services,
+    # φ12 phase_deploy_update) — registered as "deploy_modules" step in state_machine.py.
+    phases_content = _PHASES_PY.read_text()
+    assert "deploy_modules" in phases_content, (
+        "S2 violation: deploy_modules phase not found in phases.py (φ8/φ12)"
+    )
+    logger.info("[IMP:9][test_merge_deploy_steps] Facade has no step functions; deploy_modules in phases.py OK")
 
     # ── 2. update_step_5_deploy_system must be REMOVED ──
     assert "update_step_5_deploy_system" not in content, (
@@ -167,39 +180,40 @@ def test_merge_deploy_steps(caplog) -> None:
     )
     logger.info("[IMP:9][test_merge_deploy_steps] Step 5 function removed OK")
 
-    # ── 3. deploy-modules.sh called with --skip-provision (via state_machine.py delegation) ──
-    # node-lifecycle.sh delegates to state_machine.py which passes --skip-provision
+    # ── 3. deploy-modules.sh called with --skip-provision (via phases.py) ──
+    # node-lifecycle.sh delegates to state_machine.py → phases.py which passes --skip-provision
     sm_content = _STATE_MACHINE_PY.read_text()
     assert '"deploy_modules"' in sm_content, "S2 violation: deploy_modules step not registered in state_machine.py"
-    assert '"--skip-provision"' in sm_content, (
-        "S2 violation: --skip-provision not passed from state_machine.py deploy_modules step"
+    assert '"--skip-provision"' in phases_content, (
+        "S2 violation: --skip-provision not passed from phases.py deploy phase (φ8/φ12)"
     )
     assert "deploy-modules.sh" in sm_content, (
         "S2 violation: deploy-modules.sh not invoked from state_machine.py deploy_modules step"
     )
-    logger.info("[IMP:9][test_merge_deploy_steps] --skip-provision flag in state_machine.py OK")
+    logger.info("[IMP:9][test_merge_deploy_steps] --skip-provision flag in phases.py OK")
 
-    # ── 4. Single checkpoint_step "deploy-modules" ──
-    deploy_modules_checkpoints = len(re.findall(r'checkpoint_step\s+"deploy-modules"', content))
-    assert deploy_modules_checkpoints >= 1, (
-        f"S2 violation: expected checkpoint_step 'deploy-modules', found {deploy_modules_checkpoints}"
+    # ── 4. Checkpoints are now phase keys in state.json (DevPlan 087) — no shell checkpoint_step ──
+    assert "checkpoint_step" not in content, (
+        "S2 violation: node-lifecycle.sh facade must NOT contain checkpoint_step — "
+        "checkpoints are phase keys in state.json (BootstrapPhase enum)"
     )
-    deploy_docker_checkpoints = len(re.findall(r'checkpoint_step\s+"deploy-docker"', content))
-    deploy_system_checkpoints = len(re.findall(r'checkpoint_step\s+"deploy-system"', content))
-    assert deploy_docker_checkpoints == 0 and deploy_system_checkpoints == 0, (
-        f"S2 violation: stale checkpoint steps remain (deploy-docker={deploy_docker_checkpoints}, "
-        f"deploy-system={deploy_system_checkpoints})"
+    assert "phase_deploy_services" in phases_content, (
+        "S2 violation: phase_deploy_services (φ8) not found in phases.py"
+    )
+    assert "phase_deploy_update" in phases_content, (
+        "S2 violation: phase_deploy_update (φ12) not found in phases.py"
     )
     logger.info(
-        "[IMP:9][test_merge_deploy_steps] Checkpoint steps: deploy-docker=0, deploy-system=0, deploy-modules=%d OK",
-        deploy_modules_checkpoints,
+        "[IMP:9][test_merge_deploy_steps] Checkpoints as phase keys: φ8 phase_deploy_services + φ12 phase_deploy_update OK"
     )
 
     # ── 5. Dry-run output updated ──
     assert "deploy-docker → deploy-system" not in content, (
         "S2 violation: dry-run output still shows old 'deploy-docker → deploy-system'"
     )
-    assert "deploy-modules" in content, "S2 violation: 'deploy-modules' not in dry-run output"
+    assert "deploy-modules.sh" in phases_content, (
+        "S2 violation: 'deploy-modules.sh' not referenced in phases.py (φ8/φ12)"
+    )
     logger.info("[IMP:9][test_merge_deploy_steps] Dry-run output updated OK")
 
 
@@ -724,11 +738,17 @@ def test_yaml_read_domain_config(caplog, tmp_path) -> None:
     assert "yaml_read_domain_config() {" in content, "S7 violation: yaml_read_domain_config() not found in yaml_read.sh"
     logger.info("[IMP:8][test_yaml_read_domain_config] Function declared OK")
 
-    # ── 2. Must contain python3 heredoc with domain extraction fields ──
-    assert "platform_domain:" in content, "S7 violation: platform_domain output not found in yaml_read_domain_config"
-    assert "project_domains:" in content, "S7 violation: project_domains output not found in yaml_read_domain_config"
-    assert "acme_dns_plugin:" in content, "S7 violation: acme_dns_plugin output not found"
-    logger.info("[IMP:9][test_yaml_read_domain_config] All domain fields present in function OK")
+    # ── 2. Must delegate to NodeYaml CLI --domain-config ──
+    assert "--domain-config" in content, "S7 violation: yaml_read_domain_config does not delegate to NodeYaml CLI --domain-config"
+    logger.info("[IMP:9][test_yaml_read_domain_config] Delegation to NodeYaml CLI --domain-config OK")
+
+    # ── 2b. Verify output format contract in NodeYaml CLI (_cli_domain_config) ──
+    ny_path = repo_root() / "core" / "internal" / "shared" / "node_yaml.py"
+    ny_content = ny_path.read_text()
+    assert "platform_domain:" in ny_content, "S7 violation: node_yaml.py _cli_domain_config missing platform_domain output"
+    assert "project_domains:" in ny_content, "S7 violation: node_yaml.py _cli_domain_config missing project_domains output"
+    assert "acme_dns_plugin:" in ny_content, "S7 violation: node_yaml.py _cli_domain_config missing acme_dns_plugin output"
+    logger.info("[IMP:9][test_yaml_read_domain_config] NodeYaml CLI --domain-config output format contract verified OK")
 
     # ── 3. Write a mock node.yaml and test extraction via subprocess ──
     mock_node_yaml = tmp_path / "node.yaml"

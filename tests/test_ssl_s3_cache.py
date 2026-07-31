@@ -243,8 +243,8 @@ def test_get_s3_config_default_region():
             os.environ[k] = v
 
         config = get_s3_config()
-        assert config["region"] == "us-east-1", f"Expected default region us-east-1, got {config['region']}"
-        logger.critical("[IMP:9][test_default_region] ASSERT: region defaults to us-east-1")
+        assert config["region"] == "ru-1", f"Expected default region ru-1, got {config['region']}"
+        logger.critical("[IMP:9][test_default_region] ASSERT: region defaults to ru-1")
     finally:
         for k, v in original_env.items():
             if v:
@@ -468,31 +468,31 @@ def test_issue_cert_saves_to_s3_after_success():
     with open(script_path) as f:
         content = f.read()
 
-    # Must reference s3-ssl-cache.sh
-    assert "s3-ssl-cache.sh" in content, "issue-cert.sh must reference s3-ssl-cache.sh"
+    # Must reference s3_ssl_cache.py (Python module — DevPlan 052 replaces s3-ssl-cache.sh)
+    assert "s3_ssl_cache.py" in content, "issue-cert.sh must reference s3_ssl_cache.py"
 
     # Must call upload after successful issue
-    assert "upload" in content, "issue-cert.sh must call s3-ssl-cache.sh upload"
+    assert "upload" in content, "issue-cert.sh must call s3_ssl_cache.py upload"
 
     # Must be non-fatal (WARN on failure)
     assert "WARN" in content, "S3 save must be non-fatal (WARN on failure)"
 
-    # Must happen after issue_tls_cert success
-    # Look for the upload call after issue_tls_cert
+    # Post-issue S3 upload is wired through acme.sh --reloadcmd (runs right after the
+    # cert is installed) and --renew-hook (runs after cron renewal). Both invoke
+    # `python3 s3_ssl_cache.py upload <domain>`.
     lines = content.split("\n")
-    cert_save_section = False
-    for i, line in enumerate(lines):
-        if "issue_tls_cert" in line and "true" in line:
-            # The upload call should be within the next ~50 lines (increased from 30
-            # to accommodate HTTP-01 subdomain cert issuance block — DevPlan 058 Wave 2)
-            for j in range(i, min(i + 50, len(lines))):
-                if "s3-ssl-cache.sh" in lines[j]:
-                    cert_save_section = True
-                    break
-    assert cert_save_section, "issue-cert.sh must call s3-ssl-cache.sh upload after issue_tls_cert success"
+    reloadcmd_uploads = [
+        line for line in lines if "s3_ssl_cache.py" in line and "upload" in line
+    ]
+    assert reloadcmd_uploads, (
+        "issue-cert.sh must wire s3_ssl_cache.py upload into reloadcmd/renew-hook"
+    )
+    for line in reloadcmd_uploads:
+        logger.info("[IMP:8][test_issue_cert_s3] reloadcmd upload: %s", line.strip())
 
     logger.critical(
-        "[IMP:9][test_issue_cert_s3] ASSERT: issue-cert.sh calls s3-ssl-cache.sh upload after successful cert issuance"
+        "[IMP:9][test_issue_cert_s3] ASSERT: issue-cert.sh wires s3_ssl_cache.py upload "
+        "via acme.sh reloadcmd/renew-hook after successful cert issuance"
     )
 
 

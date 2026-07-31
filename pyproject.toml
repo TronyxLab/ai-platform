@@ -67,6 +67,7 @@ markers = [
     "wave: wave number for Wave-Pipeline test execution ordering",
     "unit: unit tests for Python modules (no Docker, no subprocess)",
     "benchmark: performance benchmarks for critical path operations",
+    "xdist_group: pytest-xdist serial execution group (e.g. 'serial') — git-index-sensitive tests run sequentially",
 ]
 
 # Ruff configuration lives in ruff.toml (project root) — auto-discovered by ruff

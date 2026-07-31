@@ -217,10 +217,10 @@ def test_healthcheck_sh_contract(caplog) -> None:
         "healthcheck.sh deep mode must check Loki /ready endpoint"
     )
 
-    # Must have deep mode with check_docker_health for promtail
-    assert 'check_docker_health "promtail"' in content, (
-        "healthcheck.sh deep mode must check promtail via docker inspect"
-    )
+    # Must have deep mode with check_docker_health — script loops over CONTAINERS
+    # (["loki" "promtail"]) instead of hardcoding per-container literals
+    assert "check_docker_health" in content, "Must use check_docker_health"
+    assert "promtail" in content, "promtail must be checked"
 
     logger.critical("[IMP:9][test_healthcheck_sh] ✅ healthcheck.sh contract OK: executable, sourced lib, deep mode")
 
@@ -288,8 +288,10 @@ def test_promtail_config_valid(caplog) -> None:
     assert len(data["clients"]) > 0, "promtail-config.yml has empty clients list"
 
     assert "scrape_configs" in data, "promtail-config.yml missing 'scrape_configs' section"
-    assert len(data["scrape_configs"]) >= 2, (
-        f"promtail-config.yml has {len(data['scrape_configs'])} scrape configs, expected at least 2"
+    # 2026-07-25: nginx file-scrape removed — nginx image symlinks access.log → /dev/stdout,
+    # docker_sd scrape (job_name: docker) covers nginx logs. Single scrape config is canonical now.
+    assert len(data["scrape_configs"]) >= 1, (
+        f"promtail-config.yml has {len(data['scrape_configs'])} scrape configs, expected at least 1"
     )
 
     logger.info(

@@ -35,6 +35,7 @@ _GENERATED_FILES = [
 
 
 @pytest.mark.gate
+@pytest.mark.xdist_group("serial")
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-07-22 · REGRESSION · Gate invariant — all generated manifests up to date
 # · Scenario: Generated files (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py,

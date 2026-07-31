@@ -311,69 +311,40 @@ def test_backup_app_data_stub_no_cert_scope_creep():
 # 🧪 TRAP[TEST] · 2026-07-22 · Scenario: issue-cert.sh → s3-ssl-cache.sh upload full flow
 # · Last fail: None (first run) · Remove if: issue-cert.sh post-issue logic changes
 def test_issue_cert_saves_all_4_files_to_s3():
-    """issue-cert.sh must call s3-ssl-cache.sh upload for ALL cert files after
-    successful certificate issuance. This test verifies the code path references.
+    """issue-cert.sh must wire S3 upload for ALL cert files after successful
+    certificate issuance. S3 upload is invoked via acme.sh --reloadcmd and
+    --renew-hook, which call s3_ssl_cache.py upload (DevPlan 052: shell → Python).
 
-    Flow: issue-cert.sh main()
-      1. issue_tls_cert() → acme.sh DNS-01 →
+    Flow: issue-cert.sh
+      1. issue_tls_cert() → acme.sh DNS-01 (--reloadcmd runs s3_ssl_cache.py upload
+         right after acme.sh installs the cert)
       2. save fullchain.pem + privkey.pem to /etc/letsencrypt/live/<domain>/
-      3. _acme_install_cron() → daily renewal cron
-      4. s3-ssl-cache.sh upload <domain> → uploads 4 files to S3
-      5. _acme_verify_cert() → openssl validation
+      3. _acme_install_cron() → daily renewal cron + --renew-hook (S3 upload on renewal)
+      4. _acme_verify_cert() → openssl validation
     """
     content = _read_script(CERT_SCRIPTS["issue_cert"])
 
-    # Must call s3-ssl-cache.sh upload
-    assert "s3-ssl-cache.sh" in content, "issue-cert.sh must reference s3-ssl-cache.sh"
-    assert "upload" in content, "issue-cert.sh must call s3-ssl-cache.sh upload"
+    # Must reference s3_ssl_cache.py (Python module — replaces s3-ssl-cache.sh)
+    assert "s3_ssl_cache.py" in content, "issue-cert.sh must reference s3_ssl_cache.py"
+    assert "upload" in content, "issue-cert.sh must call s3_ssl_cache.py upload"
 
-    # The upload call must be AFTER issue_tls_cert success
+    # Post-issue S3 upload is wired via acme.sh --reloadcmd / --renew-hook.
+    # acme.sh runs reloadcmd AFTER the cert is installed and renew-hook after renewal —
+    # both invoke `python3 s3_ssl_cache.py upload <domain>`.
     lines = content.split("\n")
-    issue_line = -1
-    upload_line = -1
-    for i, line in enumerate(lines):
-        if "issue_tls_cert" in line and "return 0" in line:
-            # This is the success path in issue_tls_cert — look for the
-            # caller in main() which calls issue_tls_cert then uploads
-            pass
-        if "if ! issue_tls_cert" in line:
-            issue_line = i
-        if "s3_cache" in line and "upload" in line:
-            upload_line = i
-
-    if issue_line >= 0 and upload_line >= 0:
-        assert upload_line > issue_line, (
-            f"S3 upload (line {upload_line}) must happen AFTER issue_tls_cert success (line {issue_line})"
-        )
-        logger.info(
-            "[IMP:8][test_issue_flow] issue_tls_cert at line %d → s3-ssl-cache.sh upload at line %d — ordering OK",
-            issue_line,
-            upload_line,
-        )
-    else:
-        logger.info(
-            "[IMP:7][test_issue_flow] Line numbers not found via grep "
-            "(expected if function is inlined) — checking content instead"
-        )
+    upload_lines = [
+        i for i, line in enumerate(lines) if "s3_ssl_cache.py" in line and "upload" in line
+    ]
+    assert upload_lines, "issue-cert.sh must wire s3_ssl_cache.py upload into reloadcmd/renew-hook"
+    for i in upload_lines:
+        logger.info("[IMP:8][test_issue_flow] s3_ssl_cache.py upload at line %d: %s", i + 1, lines[i].strip())
 
     # The upload must be non-fatal (WARN on failure, not FAIL)
     assert "WARN" in content, "S3 save failure must be non-fatal (WARN, not FAIL)"
 
-    # The S3 cache upload happens in main() after issue_tls_cert
-    # Look for the section that has both issue_tls_cert and s3_cache
-    issue_section = content.find("if ! issue_tls_cert")
-    if issue_section >= 0:
-        # Check that upload follows within 40 lines (~3000 chars with extensive TRAP comments)
-        after_issue = content[issue_section : issue_section + 3000]
-        assert "s3-ssl-cache.sh" in after_issue, (
-            "s3-ssl-cache.sh upload must be called in main() after issue_tls_cert success (within 40 lines)"
-        )
-        assert "upload" in after_issue, "s3-ssl-cache.sh upload must be called after issue_tls_cert"
-
     logger.critical(
-        "[IMP:9][test_issue_flow] ASSERT: issue-cert.sh calls "
-        "s3-ssl-cache.sh upload AFTER issue_tls_cert success — "
-        "all 4 cert files uploaded to S3"
+        "[IMP:9][test_issue_flow] ASSERT: issue-cert.sh wires s3_ssl_cache.py upload "
+        "via acme.sh reloadcmd/renew-hook — all 4 cert files uploaded to S3 after issue"
     )
 
 
@@ -520,7 +491,11 @@ def test_s3_unavailable_does_not_block_cert_issue():
     assert "return False" in py_content, "s3_ssl_cache.py must return False on failure (not raise)"
     # Each public function wraps in try/except to handle S3 failures gracefully
     assert "try:" in py_content, "s3_ssl_cache.py must use try/except for graceful S3 failure handling"
-    assert "Exception" in py_content, "s3_ssl_cache.py must catch exceptions gracefully"
+    # DevPlan 052: s3_ssl_cache.py catches CONCRETE exceptions (ClientError, OSError,
+    # S3UploadFailedError, FileNotFoundError, tarfile.TarError, subprocess.TimeoutExpired),
+    # not a bare `except Exception` — graceful degradation via specific handlers.
+    assert "except" in py_content, "s3_ssl_cache.py must catch exceptions gracefully"
+    assert "ClientError" in py_content, "s3_ssl_cache.py must catch boto3 ClientError"
 
     logger.critical(
         "[IMP:9][test_s3_nonfatal] ASSERT: S3 unavailability does NOT block "
@@ -608,9 +583,13 @@ def test_node_lifecycle_update_step_calls_ssl_provision():
         "There must be a handler function _ssl_provision_via_orchestrator() for the ssl_provision step"
     )
 
-    # Verify the call in _execute_update_step goes to _ssl_provision_via_orchestrator
-    assert "_ssl_provision_via_orchestrator(core_dir, node_yaml)" in content, (
-        "_execute_update_step must call _ssl_provision_via_orchestrator(core_dir, node_yaml)"
+    # Verify the invocation: DevPlan 087 moved step calls from state_machine.py into
+    # phases.py — _sm._ssl_provision_via_orchestrator(core_dir, node_yaml) at φ7
+    # certificates and φ12 deploy_update. The function has type annotations in
+    # state_machine.py (def _ssl_provision_via_orchestrator(core_dir: str, node_yaml: str)).
+    phases_content = _read_script("core/internal/bootstrap/lifecycle/phases.py")
+    assert "_ssl_provision_via_orchestrator" in phases_content, (
+        "phases.py must call _ssl_provision_via_orchestrator (φ7 certificates / φ12 deploy_update)"
     )
 
     logger.critical(

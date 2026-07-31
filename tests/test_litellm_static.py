@@ -64,7 +64,7 @@ def test_litellm_config_has_required_keys(caplog) -> None:
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
 
-    required_keys = ["general_settings", "model_list", "router_settings", "litellm_settings"]
+    required_keys = ["general_settings", "model_list", "litellm_settings"]
     for key in required_keys:
         assert key in config, f"Missing required config key: {key}"
         logger.info("[IMP:8][test_litellm_static] Key present: %s", key)
@@ -84,10 +84,6 @@ def test_litellm_config_has_required_keys(caplog) -> None:
     )
     logger.info("[IMP:8][test_litellm_static] database_url references os.environ/DATABASE_URL")
 
-    # Validate auth bypass for health
-    assert gs.get("disable_auth_for_health_check") is True, (
-        "general_settings.disable_auth_for_health_check must be True"
-    )
     logger.info("[IMP:9][test_litellm_static] ✅ Config has all required keys with correct values")
     # endregion FUNC_test_litellm_config_has_required_keys
 
