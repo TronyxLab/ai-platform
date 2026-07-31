@@ -415,24 +415,84 @@ def test_mode_fast_excludes_requires_docker(caplog) -> None:
     )
 
     # Also extract the make test MARKER=static expression — must exclude requires_docker
-    # for Step 6 (static tests without Docker)
-    marker_static_section = re.search(
-        r'if \[ "\$\(MARKER\)" = "static" \].*?PYTEST_NO_ESCALATION=1.*?pytest tests/.*?-m\s+"([^"]+)"',
+    # for Step 6 (static tests without Docker).
+    # DevPlan 099: MARKER=static now delegates to test_runner.py → check _STATIC_AUDIT_EXPR there.
+    # First check if the static section delegates to test_runner (bounded: between MARKER=static and next elif/fi)
+    uses_test_runner_static = re.search(
+        r'if \[ "\$\(MARKER\)" = "static" \].*?test_runner.*?--marker static',
         makefile_content,
         re.DOTALL,
     )
 
-    assert marker_static_section, (
-        "Could not find MARKER=static pytest -m expression in Makefile. "
-        'Expected a section with \'if [ "$(MARKER)" = "static" ]\' followed by '
-        "pytest with -m expression."
-    )
-
-    expression_static = marker_static_section.group(1)
-    logger.info(
-        "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression: %s",
-        expression_static,
-    )
+    if uses_test_runner_static:
+        # DevPlan 099: Makefile delegates to test_runner → check _STATIC_AUDIT_EXPR in Python
+        # Verify delegation is within the static section (not spilling into other markers)
+        # by checking the bounded section between MARKER=static and the next elif
+        bounded_static = re.search(
+            r'if \[ "\$\(MARKER\)" = "static" \].*?(?=elif \[ "\$\(MARKER\)" = ")',
+            makefile_content,
+            re.DOTALL,
+        )
+        if bounded_static and "test_runner" in bounded_static.group(0):
+            logger.info(
+                "[IMP:8][test_mode_fast_excludes_requires_docker] MARKER=static delegates to test_runner — checking _STATIC_AUDIT_EXPR"
+            )
+            test_runner_path = _PROJECT_ROOT / "core" / "internal" / "test_runner.py"
+            test_runner_content = test_runner_path.read_text(encoding="utf-8")
+            # _STATIC_AUDIT_EXPR is a multi-line string concatenation:
+            #   ( "line1 " "line2 " "line3" )
+            # Capture all string literal fragments between the opening ( and closing )
+            expr_match = re.search(
+                r'_STATIC_AUDIT_EXPR\s*=\s*\(\s*((?:"[^"]*"\s*)+)\)',
+                test_runner_content,
+                re.DOTALL,
+            )
+            assert expr_match, (
+                "Could not find _STATIC_AUDIT_EXPR constant in core/internal/test_runner.py. "
+                "Expected: _STATIC_AUDIT_EXPR = ( \"...\" ... ) with marker expression."
+            )
+            # Join all quoted fragments, removing quotes and whitespace between them
+            raw_fragments = expr_match.group(1)
+            expression_static = "".join(
+                re.findall(r'"([^"]*)"', raw_fragments)
+            )
+            logger.info(
+                "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (test_runner _STATIC_AUDIT_EXPR): %s",
+                expression_static,
+            )
+        else:
+            # Fallback: try old regex
+            marker_static_section = re.search(
+                r'if \[ "\$\(MARKER\)" = "static" \].*?PYTEST_NO_ESCALATION=1.*?pytest tests/.*?-m\s+"([^"]+)"',
+                makefile_content,
+                re.DOTALL,
+            )
+            assert marker_static_section, (
+                "Could not find MARKER=static expression — neither test_runner delegation nor pytest -m expression. "
+                "Expected either test_runner --marker static or pytest -m with marker expression."
+            )
+            expression_static = marker_static_section.group(1)
+            logger.info(
+                "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (legacy): %s",
+                expression_static,
+            )
+    else:
+        # Legacy: direct pytest in Makefile
+        marker_static_section = re.search(
+            r'if \[ "\$\(MARKER\)" = "static" \].*?PYTEST_NO_ESCALATION=1.*?pytest tests/.*?-m\s+"([^"]+)"',
+            makefile_content,
+            re.DOTALL,
+        )
+        assert marker_static_section, (
+            "Could not find MARKER=static pytest -m expression in Makefile. "
+            'Expected a section with \'if [ "$(MARKER)" = "static" ]\' followed by '
+            "pytest with -m expression."
+        )
+        expression_static = marker_static_section.group(1)
+        logger.info(
+            "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (legacy): %s",
+            expression_static,
+        )
 
     # NOTE: MODE=fast and MARKER=static expressions are NOT identical anymore.
     # MODE=fast gates are split into two phases (static + Docker), while

@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test project_scaffolder new-project scaffold template copy render git-init checklist FQDN vhost register dry-run auto-domain
-# STRUCTURE: ┌tmp_path fixtures┐ → ○ 9 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
+# STRUCTURE: ┌tmp_path fixtures┐ → ○ 11 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты project_scaffolder.py: backend scaffold, frontend scaffold, конфликт,
 ##           missing template, dry-run (no mutation), auto_domain, checklist generation.
@@ -7,7 +7,15 @@
 ## @scope    Tests under tests/ (unit, no Docker). DI over Mocks для subprocess.
 ## @invariants  Все тесты используют tmp_path (R1). R1-R5 compliance.
 ## @rationale AC4: 8 unit-тестов на project_scaffolder.py согласно DevPlan 092 §4.
+## ⚠️ TRAP[DECISION] · 2026-07-31 · MED · Дедупликация: unit-версия тестов удалена (import file mismatch)
+## · Rejected: оставить tests/unit/test_project_scaffolder.py (риск: pytest import file mismatch —
+##   одинаковый basename с tests/test_project_scaffolder.py ломает collection всего сьюта)
+## · Reason: корневая версия каноническая (в test_inventory.yaml); уникальные сценарии
+##   test_auto_domain_name_with_hyphens и test_copy_template_excludes_platform_deploy (T9)
+##   перенесены сюда.
+## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
 ## @changes 2026-07-31 · DevPlan 092 AC4 — initial implementation
+## @changes 2026-07-31 · Dedup fix — test_auto_domain_name_with_hyphens + test_copy_template_excludes_platform_deploy перенесены из tests/unit/
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -54,7 +62,33 @@ def test_auto_domain_no_env(tmp_path: pathlib.Path, monkeypatch, caplog) -> None
     assert result == "", f"Expected empty string, got '{result}'"
 
 
+@ldd_trajectory
+def test_auto_domain_name_with_hyphens(tmp_path: pathlib.Path, monkeypatch, caplog) -> None:
+    """Hyphenated project names produce a valid auto-domain (persisted from tests/unit/).
+
+    # 🧪 TRAP[TEST] · 2026-07-30 · — · Regression: test_auto_domain_name_with_hyphens · Scenario: project name with hyphens → valid domain · Last fail: N/A · Remove if: auto_domain logic changes
+    ## @purpose — Hyphenated names like "my-app-api" must not break domain generation.
+    ## @io — ⇥ tmp_path, monkeypatch, caplog → ⎋ None (asserts)
+    ## @complexity — O(1)
+    """
+    monkeypatch.setenv("PLATFORM_DOMAIN", "example.com")
+    logger.info("[IMP:9][test][scaffolder] test_auto_domain_name_with_hyphens")
+    result = auto_domain(name="my-app-api", domain="")
+    assert result == "my-app-api.example.com", f"Expected hyphenated domain, got '{result}'"
+
+
 # ── copy_template tests ───────────────────────────────────────────────────
+
+
+def _write_minimal_template(template_dir: pathlib.Path) -> None:
+    """Create minimal template files with a platform-deploy.yml workflow (T9 exclusion check)."""
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "docker-compose.yml").write_text("services: {}\n")
+    (template_dir / "Dockerfile").write_text("FROM alpine:latest\n")
+    workflows_dir = template_dir / ".github" / "workflows"
+    workflows_dir.mkdir(parents=True, exist_ok=True)
+    (workflows_dir / "deploy.yml").write_text("# deploy workflow\n")
+    (workflows_dir / "platform-deploy.yml").write_text("# DEPRECATED\n")
 
 
 @ldd_trajectory
@@ -89,6 +123,31 @@ def test_copy_template_missing_source(tmp_path: pathlib.Path, caplog) -> None:
     logger.info("[IMP:9][test][scaffolder] test_copy_template_missing_source")
     result = copy_template(src="/nonexistent/template", dst=dst, dry_run=False)
     assert not result
+
+
+@ldd_trajectory
+def test_copy_template_excludes_platform_deploy(tmp_path: pathlib.Path, caplog) -> None:
+    """Template copy must exclude .github/workflows/platform-deploy.yml (T9).
+
+    # 🧪 TRAP[TEST] · 2026-07-30 · — · Regression: test_copy_template_excludes_platform_deploy · Scenario: template has platform-deploy.yml → excluded from copy (T9) · Last fail: N/A · Remove if: copy_template logic changes
+    ## @purpose — Legacy platform-deploy.yml workflow must NOT leak into scaffolded projects
+    ##            (T9, persisted from tests/unit/ during dedup).
+    ## @io — ⇥ tmp_path, caplog → ⎋ None (asserts)
+    ## @complexity — O(F) — copy of template file tree
+    """
+    src = tmp_path / "template-backend"
+    _write_minimal_template(src)
+    dst = tmp_path / "projects" / "test-org" / "myapp"
+    logger.info("[IMP:9][test][scaffolder] test_copy_template_excludes_platform_deploy")
+    result = copy_template(str(src), str(dst), dry_run=False)
+    assert result is True
+
+    assert (dst / "docker-compose.yml").exists()
+    assert (dst / "Dockerfile").exists()
+    assert (dst / ".github" / "workflows" / "deploy.yml").exists()
+    assert not (dst / ".github" / "workflows" / "platform-deploy.yml").exists(), (
+        "platform-deploy.yml must be excluded (T9)"
+    )
 
 
 # ── scaffold scenario tests ───────────────────────────────────────────────

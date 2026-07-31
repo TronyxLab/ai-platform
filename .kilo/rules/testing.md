@@ -77,7 +77,13 @@
 
     **Attempt 5+ (Escalation):** "CRITICAL ERROR: Agent looping detected. STOP. Formulate a help request for an operator."
 
-    Always run tests via: python -m pytest tests/ -s -v
+    Always run tests via: make test-summary [MARKER=static_audit|static|contract|smoke|...] [TEST_FILE=<path>]
+    Canonical compact wrapper (DevPlan 099) — delegates to core/internal/test_runner.py:
+      • make test-summary                              → static_audit (default, compact <100 lines)
+      • make test-summary MARKER=static                → validate + lint + pytest (compact)
+      • make test-summary MARKER=smoke                 → Docker smoke tests (verbose — Docker required)
+      • make test-summary TEST_FILE=tests/unit/test_x  → single file (compact)
+    Direct pytest (python -m pytest -v) is DEPRECATED for agent use — use test-summary wrapper.
 **Test Honesty Rules**
 
     Prevent test suite degradation into unfalsifiable pass-collections. A test that cannot fail is not a test.

@@ -7,7 +7,14 @@
 ## @scope    Tests under tests/ (unit, no Docker). DI over Mocks для NodeYaml CLI subprocess.
 ## @invariants  Все тесты используют tmp_path (R1). R1-R5 compliance: негативные тесты для overwrite protection.
 ## @rationale AC4: 4 unit-теста на scaffold_helpers.py (расширено до 13 для покрытия всех типов).
+## ⚠️ TRAP[DECISION] · 2026-07-31 · MED · Дедупликация: unit-версия тестов удалена (import file mismatch)
+## · Rejected: оставить tests/unit/test_scaffold_helpers.py (риск: pytest import file mismatch —
+##   одинаковый basename с tests/test_scaffold_helpers.py ломает collection всего сьюта)
+## · Reason: корневая версия каноническая (в test_inventory.yaml); уникальные ассерты из unit
+##   (target_node, ai_retention absent, PLATFORM_DIR, postgres/DD13-контракты) перенесены сюда.
+## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
 ## @changes 2026-07-31 · DevPlan 092 AC4 — initial implementation
+## @changes 2026-07-31 · Dedup fix — уникальные ассерты перенесены из tests/unit/
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -53,6 +60,7 @@ def test_gen_yaml_backend_full(tmp_path: pathlib.Path, caplog) -> None:
     parsed = yaml.safe_load(content)
     assert parsed["name"] == "test-backend"
     assert parsed["type"] == "backend"
+    assert parsed["target_node"] == "tronyx-vps", f"Expected target_node, got {parsed.get('target_node')}"
     mon = parsed["monitoring"]
     assert mon["metrics"] is True
     assert mon["logs_retention"] == "14d"
@@ -123,6 +131,7 @@ def test_gen_yaml_minimal_mode(tmp_path: pathlib.Path, caplog) -> None:
     assert mon["logs_retention"] == "7d"
     assert mon["alerting"] is False
     assert mon["dashboard"] is False
+    assert "ai_retention" not in mon, "minimal mode must not include ai_retention"
     assert "database" not in parsed.get("needs", {})
 
 
@@ -154,6 +163,7 @@ def test_gen_makefile_new(tmp_path: pathlib.Path, caplog) -> None:
     assert "status:" in content
     assert "project-status" in content
     assert "help:" in content
+    assert "PLATFORM_DIR" in content, "Makefile must reference PLATFORM_DIR"
     assert "test-project" in content
     assert "\t@" in content
 
@@ -205,6 +215,9 @@ def test_gen_agents_new(tmp_path: pathlib.Path, caplog) -> None:
     assert "test-project" in content
     assert "test-org" in content
     assert "tronyx-vps" in content
+    assert "postgres" in content, "AGENTS.md must reference postgres service"
+    assert "make sync-env" in content, "AGENTS.md must reference make sync-env"
+    assert "make status" in content, "AGENTS.md must reference make status"
     line_count = content.count("\n")
     assert line_count <= 70, f"AGENTS.md exceeds 70 lines: {line_count} lines"
 

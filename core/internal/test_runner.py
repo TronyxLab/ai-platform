@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: test-runner pytest wrapper junit xml compact summary marker static_audit parse
-# STRUCTURE: ▶ main ┌marker→args┐ → ◇ static ? validate.sh→lint→pytest : run(pytest --junitxml) → ⊕ parse_junit_xml → ⟦format_summary⟧ → ⎋ exit code
+# GREP_SUMMARY: test-runner pytest wrapper junit xml compact summary marker static_audit test_file junit-output parse
+# STRUCTURE: ▶ main ┌marker→args | test_file→args_file┐ → ◇ static ? validate.sh→lint→pytest : run(pytest --junitxml) → ⊕ parse_junit_xml → ⟦format_summary⟧ → ⎋ exit code
 # region MODULE_CONTRACT
 ## @purpose  Тонкая Python-обёртка над pytest (DevPlan 098, Уровень A): один вызов bash-tool
 ##           возвращает компактный machine-readable результат — PASS/FAIL/SKIP/ERROR counts +
@@ -13,13 +13,16 @@
 ##   - Вывод < 100 строк для нормальных прогонов, NEVER > 2000 строк даже при 100+ failures (AC3)
 ##   - PYTEST_NO_ESCALATION=1 ВСЕГДА в env subprocess (AC10: anti-loop контракт, _conftest/session.py:255)
 ##   - subprocess timeout default 1800s (AC8) — wrapper не висит при зависшем Docker healthcheck
-##   - JUnit XML temp dir автоочищается в finally-блоке (AC4)
+##   - JUnit XML temp dir автоочищается в finally-блоке (AC4); --junit-output → без автоочистки
 ##   - exit code = pytest returncode (0 pass / 1 fail / 2 error) | 124 timeout (AC6)
+##   - Два режима: marker (маркерный фильтр на tests/) | test_file (один файл, --test-file, AC6)
 ## @rationale Уровень A DevPlan 098: <100 строк вывода укладывается в лимиты bash-tool
 ##            (120s / 2000 строк / 51200 bytes), counts в первой строке устраняют --collect-only,
 ##            единый формат для всех MARKER'ов. stdout/stderr разделение сохраняет
 ##            machine-readability summary для агента.
 ## @changes 2026-07-31 | Wave 1: core wrapper (F1) per DevPlan 098 §7
+## @changes 2026-07-31 | DevPlan 099: --junit-output (явный путь, для 'make test' routing),
+##            --test-file (один файл, AC6), _build_pytest_args_file()
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -257,6 +260,20 @@ def _build_pytest_args(marker: str) -> list[str] | None:
 # endregion FUNC_BUILD_PYTEST_ARGS
 
 
+# region FUNC_BUILD_PYTEST_ARGS_FILE
+## @purpose  Построить pytest CLI args для одного тестового файла (без маркерного фильтра).
+##           Use-case: make test-summary TEST_FILE=tests/unit/test_foo.py (AC6)
+## @io — test_file (str, путь относительно platform_root) → list[str] (pytest args)
+## @complexity — O(1)
+def _build_pytest_args_file(test_file: str) -> list[str]:
+    """Build pytest args for a single test file: quiet mode, short traceback."""
+    logger.info("[IMP:7][build_args_file][resolve] TEST_FILE=%s → quiet mode + short traceback", test_file)
+    return ["-q", "--tb=short", test_file]
+
+
+# endregion FUNC_BUILD_PYTEST_ARGS_FILE
+
+
 # region FUNC_RUN_STATIC_FULL
 ## @purpose  Имплементация `static` маркера (AC7): ПОЛНАЯ эквивалентность
 ##           `make test MARKER=static` — validate.sh → validate.sh --lint → pytest static_audit
@@ -333,7 +350,9 @@ def _print_no_xml_fallback(marker: str, captured: str) -> None:
 
 # region FUNC_PARSE_ARGS
 ## @purpose  argparse: --marker (default static_audit per AC5), --timeout (default 1800s per AC8),
-##           --platform-root (default: авто-детект из расположения файла)
+##           --platform-root (default: авто-детект из расположения файла),
+##           --junit-output (явный путь для JUnit XML, вместо temp dir),
+##           --test-file (путь к конкретному тестовому файлу, AC6)
 ## @io — argv (list[str]) → argparse.Namespace
 ## @complexity — O(1)
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -357,6 +376,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--platform-root",
         default=None,
         help="Platform root (default: auto-detect as parent.parent.parent of this file)",
+    )
+    parser.add_argument(
+        "-o",
+        "--junit-output",
+        default=None,
+        help="Write JUnit XML to explicit path (no temp dir, no auto-cleanup). For 'make test' routing.",
+    )
+    parser.add_argument(
+        "-f",
+        "--test-file",
+        default=None,
+        help="Run pytest on a single test file (no marker filter). Overrides --marker.",
     )
     return parser.parse_args(argv)
 
@@ -384,43 +415,55 @@ def _resolve_platform_root(args_root: str | None) -> Path:
 
 
 # region FUNC_MAIN
-## @purpose  Entry point: argparse → marker resolution → subprocess pytest (env с
-##           PYTEST_NO_ESCALATION=1, timeout) → parse JUnit → print summary → cleanup в finally
+## @purpose  Entry point: argparse → mode selection (marker или test_file) → subprocess pytest
+##           (env с PYTEST_NO_ESCALATION=1, timeout) → parse JUnit → print summary → cleanup
 ## @io — argv (list[str] | None) → int exit code (pytest returncode | 124 timeout)
 ## @complexity — O(1) + время subprocess
 ## @rationale — stdout = только summary (machine-readable); IMP-логи в stderr. exit code
-##              прокидывается как есть (AC6): 0 pass / 1 fail / 2 error / 124 timeout
+##              прокидывается как есть (AC6): 0 pass / 1 fail / 2 error / 124 timeout.
+##              Режимы: marker (маркерный фильтр на tests/) | test_file (один файл, AC6).
+##              --junit-output управляет размещением JUnit XML (temp dir или явный путь).
 def main(argv: list[str] | None = None) -> int:
-    """Run pytest with marker filter and print compact JUnit-XML summary."""
+    """Run pytest with marker filter or single file, print compact JUnit-XML summary."""
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     platform_root = _resolve_platform_root(args.platform_root)
+    log_label = f"marker={args.marker}" if not args.test_file else f"test_file={args.test_file}"
     logger.info(
-        "[IMP:7][main][init] marker=%s timeout=%ds platform_root=%s",
-        args.marker,
+        "[IMP:7][main][init] %s timeout=%ds platform_root=%s",
+        log_label,
         args.timeout,
         platform_root,
     )
 
-    tmpdir = tempfile.mkdtemp(prefix="test-runner-")
-    junit_path = Path(tmpdir) / "report.xml"
+    # ── JUnit XML placement: explicit path or temp dir ──
+    if args.junit_output:
+        junit_path = Path(args.junit_output)
+        tmpdir = None  # no temp dir → no cleanup needed
+        logger.info("[IMP:7][main][junit] Explicit JUnit output: %s", junit_path)
+    else:
+        tmpdir = tempfile.mkdtemp(prefix="test-runner-")
+        junit_path = Path(tmpdir) / "report.xml"
+        # ensure parent directory exists (tmpdir всегда свежесозданная, но для явного пути — нужно)
+        junit_path.parent.mkdir(parents=True, exist_ok=True)
+
     run_start = time.monotonic()
     proc: subprocess.CompletedProcess[str] | None = None
     try:
-        pytest_args = _build_pytest_args(args.marker)
-        if pytest_args is None:
-            # static special handler (AC7): validate.sh → lint → pytest
-            result_code = _run_static_full(platform_root, junit_path, args.timeout)
-        else:
+        # ── Mode selection: test_file (AC6) vs marker ──
+        if args.test_file:
+            # Single-file mode (AC6): no marker filter, run pytest on specific file
+            pytest_args = _build_pytest_args_file(args.test_file)
             pytest_args = [*pytest_args, "--junitxml", str(junit_path)]
+            test_target = str(platform_root / args.test_file)
             env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
             try:
                 logger.info(
                     "[IMP:7][main][pytest] Running: python -m pytest %s %s",
-                    platform_root / "tests",
+                    test_target,
                     " ".join(pytest_args),
                 )
                 proc = subprocess.run(
-                    [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+                    [sys.executable, "-m", "pytest", test_target, *pytest_args],
                     env=env,
                     timeout=args.timeout,
                     capture_output=True,
@@ -431,14 +474,42 @@ def main(argv: list[str] | None = None) -> int:
                 logger.critical("[IMP:9][main][timeout] TIMEOUT after %ds", args.timeout)
                 print(f"TIMEOUT after {args.timeout}s")
                 return 124
+        else:
+            # Marker mode: resolve marker → pytest args
+            pytest_args = _build_pytest_args(args.marker)
+            if pytest_args is None:
+                # static special handler (AC7): validate.sh → lint → pytest
+                result_code = _run_static_full(platform_root, junit_path, args.timeout)
+            else:
+                pytest_args = [*pytest_args, "--junitxml", str(junit_path)]
+                env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
+                try:
+                    logger.info(
+                        "[IMP:7][main][pytest] Running: python -m pytest %s %s",
+                        platform_root / "tests",
+                        " ".join(pytest_args),
+                    )
+                    proc = subprocess.run(
+                        [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+                        env=env,
+                        timeout=args.timeout,
+                        capture_output=True,
+                        text=True,
+                    )
+                    result_code = proc.returncode
+                except subprocess.TimeoutExpired:
+                    logger.critical("[IMP:9][main][timeout] TIMEOUT after %ds", args.timeout)
+                    print(f"TIMEOUT after {args.timeout}s")
+                    return 124
 
         duration = time.monotonic() - run_start
+        display_label = args.test_file if args.test_file else args.marker
         if junit_path.exists():
             summary = parse_junit_xml(str(junit_path))
-            print(format_summary(summary, args.marker, duration))
+            print(format_summary(summary, display_label, duration))
         elif proc is not None:
             # Fallback: pytest crashed before writing XML (collection error) — tail stderr
-            _print_no_xml_fallback(args.marker, proc.stderr or proc.stdout or "")
+            _print_no_xml_fallback(display_label, proc.stderr or proc.stdout or "")
         else:
             # static path — fallback уже напечатан внутри _run_static_full
             logger.info("[IMP:9][main][parse] static path: JUnit XML not produced (fallback printed)")
@@ -446,7 +517,8 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("[IMP:9][main][exit] exit=%d duration=%.1fs", result_code, duration)
         return result_code
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)  # AC4: авто-очистка JUnit XML temp dir
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)  # AC4: авто-очистка только для temp dir
 
 
 # endregion FUNC_MAIN

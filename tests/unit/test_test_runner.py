@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test_test_runner, junit-xml-parse, testsuites-wrapper, format-summary, build-pytest-args, marker-map, compact-output, TRAP-regression
-# STRUCTURE: ▶ tmp_path XML fixtures → ◇ parse_junit_xml (pass/fail/error/testsuites-wrapper) → ◇ format_summary compact-bound → ◇ _build_pytest_args (static/unknown) → ⎋ LDD IMP:9 trajectory
+# GREP_SUMMARY: test_test_runner, junit-xml-parse, testsuites-wrapper, format-summary, build-pytest-args, build-pytest-args-file, marker-map, compact-output, TRAP-regression
+# STRUCTURE: ▶ tmp_path XML fixtures → ◇ parse_junit_xml (pass/fail/error/testsuites-wrapper) → ◇ format_summary compact-bound → ◇ _build_pytest_args (static/unknown) → ◇ _build_pytest_args_file (AC6) → ⎋ LDD IMP:9 trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/test_runner.py — JUnit XML → TestSummary parsing,
 ##           compact summary formatting, marker → pytest args mapping (DevPlan 098 Wave 4, F4).
@@ -26,6 +26,7 @@ import pytest
 from core.internal.test_runner import (
     TestSummary,
     _build_pytest_args,
+    _build_pytest_args_file,
     format_summary,
     parse_junit_xml,
 )
@@ -284,3 +285,32 @@ def test_build_pytest_args_unknown_marker(caplog, capsys):
 
 
 # endregion Tests: _build_pytest_args
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: _build_pytest_args_file
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · AC6: --test-file → pytest args for single file (quiet mode, short tb)
+# · Scenario: _build_pytest_args_file("tests/unit/test_foo.py") → ["-q", "--tb=short", "tests/unit/test_foo.py"]
+# · Last fail: N/A (new test — DevPlan 099 AC9)
+# · Remove if: _build_pytest_args_file signature or arg semantics change
+@ldd_trajectory
+def test_build_pytest_args_file(caplog):
+    """AC6: _build_pytest_args_file returns quiet-mode + short-tb args for a single file."""
+    args = _build_pytest_args_file("tests/unit/test_foo.py")
+
+    assert isinstance(args, list)
+    assert len(args) == 3
+    assert args[0] == "-q"
+    assert args[1] == "--tb=short"
+    assert args[2] == "tests/unit/test_foo.py"
+    logger.critical(
+        "[IMP:9][test] _build_pytest_args_file → %d arg(s): %s",
+        len(args),
+        " ".join(args),
+    )
+
+
+# endregion Tests: _build_pytest_args_file

@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test project_lister list projects offline table json ssh-status node-yaml filter empty-state multiple-nodes
-# STRUCTURE: ┌fixture node_yaml┐ → ┌fixture multi_node_yamls┐ → ○ 8 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
+# STRUCTURE: ┌fixture node_yaml┐ → ┌fixture multi_node_yamls┐ → ○ 9 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты project_lister.py: offline listing, JSON output, фильтрация по name/node,
 ##           empty-state, multiple nodes, SSH status (mocked). LDD IMP:9 + Anti-Loop + R1-R5.
@@ -14,7 +14,14 @@
 ##   - R4: no skip за сервис/SSH — всё через mock
 ##   - R5: негативный тест для empty-state (test_list_empty_state)
 ## @rationale AC4: 6 unit-тестов на project_lister.py согласно DevPlan 092 §4.
+## ⚠️ TRAP[DECISION] · 2026-07-31 · MED · Дедупликация: unit-версия тестов удалена (import file mismatch)
+## · Rejected: оставить tests/unit/test_project_lister.py (риск: pytest import file mismatch —
+##   одинаковый basename с tests/test_project_lister.py ломает collection всего сьюта)
+## · Reason: корневая версия каноническая (в test_inventory.yaml); уникальный сценарий
+##   test_find_node_yaml_files (фильтр по ноде + nonexistent) перенесён сюда.
+## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
 ## @changes 2026-07-31 · DevPlan 092 AC4 — initial implementation
+## @changes 2026-07-31 · Dedup fix — test_find_node_yaml_files перенесён из tests/unit/
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 # ── Импорт тестируемого модуля ────────────────────────────────────────────
 from core.internal.scaffold.project_lister import (
+    find_node_yaml_files,
     find_project_node,
     get_status_via_ssh,
     list_projects_offline,
@@ -181,6 +189,29 @@ def test_get_status_via_ssh_mocked(single_node_yaml: pathlib.Path, caplog) -> No
     assert success, "Expected SSH status to return True with mock runner"
     status_logs = [r for r in caplog.records if "Status retrieved" in r.message]
     assert len(status_logs) >= 1, f"Expected 'Status retrieved' IMP:9 log, got {len(status_logs)}"
+
+
+@ldd_trajectory
+def test_find_node_yaml_files(multi_node_yamls: pathlib.Path, caplog) -> None:
+    """find_node_yaml_files() helper: all files, node filter, nonexistent node.
+
+    # 🧪 TRAP[TEST] · 2026-07-30 · — · Regression: test_find_node_yaml_files · Scenario: filter by node name → only matching files · Last fail: N/A · Remove if: lister API changes
+    ## @purpose — Unit coverage for the node.yaml discovery helper: unfiltered count,
+    ##            node_filter narrowing, and empty result for a nonexistent node.
+    ##            Persisted from tests/unit/ during dedup (import file mismatch fix).
+    ## @io — ⇥ multi_node_yamls, caplog → ⎋ None (asserts)
+    ## @complexity — O(N) — glob over node-configs
+    """
+    logger.info("[IMP:9][test][lister] test_find_node_yaml_files — helper coverage")
+    all_files = find_node_yaml_files(multi_node_yamls)
+    assert len(all_files) == 2, f"Expected 2 node.yaml files, got {len(all_files)}"
+
+    filtered = find_node_yaml_files(multi_node_yamls, node_filter="dev-server")
+    assert len(filtered) == 1, f"Expected 1 file for dev-server, got {len(filtered)}"
+    assert "dev-server" in str(filtered[0])
+
+    empty = find_node_yaml_files(multi_node_yamls, node_filter="nonexistent")
+    assert len(empty) == 0, f"Expected 0 files for nonexistent node, got {len(empty)}"
 
 
 @ldd_trajectory

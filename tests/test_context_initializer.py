@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test context_initializer scaffold context hermes-agent node-configs skeleton idempotent registration
-# STRUCTURE: ┌fixture setup┐ → ○ 7 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
+# STRUCTURE: ┌fixture setup┐ → ○ 8 tests → ⊕ LDD trajectory (IMP:9) → ⚡ anti-loop counter
 # region MODULE_CONTRACT
 ## @purpose  Unit-тесты context_initializer.py: создание директорий, skeleton node.yaml,
 ##           идемпотентность, graceful degradation при отсутствии org, регистрация в platform node.yaml.
@@ -8,11 +8,19 @@
 ## @invariants
 ##   - Все тесты используют tmp_path (R1: No hardcoded paths)
 ##   - gh_runner и git_runner внедряются как callable (DI)
-##   - context_registry.register_context mock для теста регистрации
+##   - context_registry.register_context mock для теста регистрации (исключение:
+##     test_register_in_platform_yaml — реальный путь записи в YAML + idempotency)
 ##   - Все тесты с @ldd_trajectory декоратором
 ##   - R1-R5 compliance
 ## @rationale AC4: 5 unit-тестов на context_initializer.py согласно DevPlan 092 §4.
+## ⚠️ TRAP[DECISION] · 2026-07-31 · MED · Дедупликация: unit-версия тестов удалена (import file mismatch)
+## · Rejected: оставить tests/unit/test_context_initializer.py (риск: pytest import file mismatch —
+##   одинаковый basename с tests/test_context_initializer.py ломает collection всего сьюта)
+## · Reason: корневая версия каноническая (в test_inventory.yaml); уникальный сценарий
+##   test_register_in_platform_yaml (реальная регистрация, не mock) перенесён сюда.
+## · Rev: если unit-директория вернётся к полному покрытию — ресинхронизировать inventory.
 ## @changes 2026-07-31 · DevPlan 092 AC4 — initial implementation
+## @changes 2026-07-31 · Dedup fix — test_register_in_platform_yaml перенесён из tests/unit/
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ import logging
 import pathlib
 
 import pytest
+import yaml
 
 from tests.conftest import ldd_trajectory
 
@@ -152,6 +161,53 @@ def test_register_in_platform_yaml_mocked(tmp_path: pathlib.Path, monkeypatch, c
     assert len(call_args) == 1, f"Expected register_context called once, called {len(call_args)}"
     assert call_args[0]["name"] == "test-ctx"
     assert call_args[0]["desc"] == "Test context"
+
+
+@ldd_trajectory
+def test_register_in_platform_yaml(tmp_path: pathlib.Path, caplog) -> None:
+    """Real registration path (no context_registry mock): YAML updated + idempotent re-register.
+
+    # 🧪 TRAP[TEST] · 2026-07-30 · — · Regression: test_register_in_platform_yaml · Scenario: fresh node.yaml → context registered · Last fail: N/A · Remove if: initializer API changes
+    ## @purpose — Real-path coverage of register_in_platform_yaml(): writes contexts[] entries
+    ##            into the platform node.yaml and is idempotent (re-register keeps 1 entry).
+    ##            Persisted from tests/unit/ during dedup (import file mismatch fix).
+    ## @io — ⇥ tmp_path, caplog → ⎋ None (asserts)
+    ## @complexity — O(1) — two register calls + YAML parse
+    """
+    platform_yaml = tmp_path / "platform" / "node.yaml"
+    platform_yaml.parent.mkdir(parents=True)
+    platform_yaml.write_text(
+        yaml.dump(
+            {"node": {"name": "test-node", "host": "127.0.0.1"}, "contexts": [], "modules": [], "projects": []},
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    )
+
+    logger.info("[IMP:9][test][context] test_register_in_platform_yaml — real registration path")
+    rc = register_in_platform_yaml(
+        yaml_path=str(platform_yaml),
+        ctx_name="test-context",
+        ctx_desc="Test context for unit tests",
+        node_cfg_repo="test-org/test-context-node-configs",
+        hermes_agent_repo="test-org/test-context-hermes-agent",
+    )
+    assert rc == 0, f"Expected return code 0, got {rc}"
+
+    data = yaml.safe_load(platform_yaml.read_text())
+    contexts = data.get("contexts", [])
+    assert len(contexts) == 1, f"Expected 1 context after register, got {len(contexts)}"
+    ctx = contexts[0]
+    assert ctx["name"] == "test-context"
+    assert ctx["description"] == "Test context for unit tests"
+    assert ctx["node_configs_repo"] == "test-org/test-context-node-configs"
+    assert ctx["hermes_agent_repo"] == "test-org/test-context-hermes-agent"
+
+    # Idempotent: register again → still 1 entry
+    rc2 = register_in_platform_yaml(yaml_path=str(platform_yaml), ctx_name="test-context")
+    assert rc2 == 0, f"Expected idempotent register rc 0, got {rc2}"
+    data2 = yaml.safe_load(platform_yaml.read_text())
+    assert len(data2.get("contexts", [])) == 1, "Re-register must not duplicate the context entry"
 
 
 @ldd_trajectory

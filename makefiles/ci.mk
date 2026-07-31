@@ -14,31 +14,23 @@
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
-##   MARKER=static — schema validation + lint + static_audit + unit (no Docker)
-##   MARKER=smoke — compose lifecycle + healthchecks (needs Docker)
-##   MARKER=component — hermes-agent + observability health endpoints (needs Docker)
-##   MARKER=integration — full hermes LLM stack (needs Docker)
-##   MARKER=predeploy — container/config/network validation (needs Docker)
-##   MARKER=contract — contract tests for entrypoint scripts (no Docker)
-##   MARKER=static_audit — pure pytest static_audit only (no validate/lint)
-##   MARKER=e2e — manual end-to-end tests against *.tronyx.ru (external, no Docker, dev-only)
+##   MARKER=static — schema validation + lint + static_audit + unit (no Docker, compact output via test_runner)
+##   MARKER=static_audit — pure pytest static_audit only (no validate/lint, compact output via test_runner)
+##   MARKER=contract — contract tests for entrypoint scripts (no Docker, compact output via test_runner)
+##   MARKER=smoke — compose lifecycle + healthchecks (needs Docker, verbose)
+##   MARKER=component — hermes-agent + observability health endpoints (needs Docker, verbose)
+##   MARKER=integration — full hermes LLM stack (needs Docker, verbose)
+##   MARKER=predeploy — container/config/network validation (needs Docker, verbose)
+##   MARKER=e2e — manual end-to-end tests against *.tronyx.ru (external, no Docker, dev-only, verbose)
 test:
 	$(eval MARKER := $(or $(MARKER),all))
 	@if [ "$(MARKER)" = "static" ]; then \
-		echo "[IMP:7][make][test] Running schema validation..."; \
-		bash $(_platform_root)/core/entrypoints/validate.sh && \
-		echo "[IMP:7][make][test] Running lint..."; \
-		bash $(_platform_root)/core/entrypoints/validate.sh --lint; \
-		echo "[IMP:7][make][test] Running static_audit + unit tests..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ \
-			-m "static_audit or (not e2e and not requires_node and not component and not smoke and not integration and not local_auth and not requires_docker)" \
-			-v --tb=short --junitxml=tests/report-static.xml && \
+		echo "[IMP:7][make][test] Running static pipeline (validate+lint+pytest) — compact via test_runner..."; \
+		$(PYTHON) -m core.internal.test_runner --marker static --junit-output tests/report-static.xml && \
 		cp tests/report-static.xml tests/report.xml; \
 	elif [ "$(MARKER)" = "static_audit" ]; then \
-		echo "[IMP:7][make][test] Running static_audit only (no validate/lint)..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ \
-			-m "static_audit or (not e2e and not requires_node and not component and not smoke and not integration and not local_auth and not requires_docker)" \
-			-v --tb=short --junitxml=tests/report-static.xml && \
+		echo "[IMP:7][make][test] Running static_audit only (no validate/lint) — compact via test_runner..."; \
+		$(PYTHON) -m core.internal.test_runner --marker static_audit --junit-output tests/report-static.xml && \
 		cp tests/report-static.xml tests/report.xml; \
 	elif [ "$(MARKER)" = "smoke" ]; then \
 		echo "[IMP:7][make][test] Running smoke tests..."; \
@@ -61,9 +53,8 @@ test:
 			--junitxml=tests/report-predeploy.xml && \
 		cp tests/report-predeploy.xml tests/report.xml; \
 	elif [ "$(MARKER)" = "contract" ]; then \
-		echo "[IMP:7][make][test] Running contract tests..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m contract -v \
-			--junitxml=tests/report-contract.xml && \
+		echo "[IMP:7][make][test] Running contract tests — compact via test_runner..."; \
+		$(PYTHON) -m core.internal.test_runner --marker contract --junit-output tests/report-contract.xml && \
 		cp tests/report-contract.xml tests/report.xml; \
 	elif [ "$(MARKER)" = "e2e" ]; then \
 		echo "[IMP:7][make][test] Running E2E tests (manual, targets external *.tronyx.ru)..."; \
@@ -121,15 +112,19 @@ test-node:
 		--junitxml=tests/report-node.xml
 	@echo "[IMP:9][make][test-node] E2E pipeline tests complete NODE=$(NODE)"
 
-## test-summary: Run tests via compact agent-oriented wrapper. Usage: make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|all|static] [TIMEOUT=1800]
+## test-summary: Run tests via compact agent-oriented wrapper. Usage: make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|all|static] [TIMEOUT=1800] [TEST_FILE=<path>]
 ##   Delegates to core/internal/test_runner.py — outputs compact summary (<100 lines, PASS/FAIL counts).
 ##   MARKER=static_audit (default) — static analysis only, no Docker.
 ##   MARKER=static — validate.sh + lint + pytest static_audit (full static pipeline).
 ##   TIMEOUT=N — subprocess timeout in seconds (default 1800 per DevPlan 098 AC8).
+##   TEST_FILE=<path> — run pytest on a single file (e.g. tests/unit/test_foo.py). Overrides MARKER.
 test-summary:
 	$(eval MARKER := $(or $(MARKER),static_audit))
 	$(eval TIMEOUT := $(or $(TIMEOUT),1800))
-	@$(PYTHON) -m core.internal.test_runner --marker $(MARKER) --timeout $(TIMEOUT)
+	$(if $(TEST_FILE), \
+		@$(PYTHON) -m core.internal.test_runner --test-file $(TEST_FILE) --timeout $(TIMEOUT), \
+		@$(PYTHON) -m core.internal.test_runner --marker $(MARKER) --timeout $(TIMEOUT) \
+	)
 
 ## gate: Production Gate. Usage: make gate [MODE=fast|full|ci-docker] [PROJECT=<name>]
 ##   MODE=full (default) — validate → lint → gates → contract → static → predeploy → smoke → component
@@ -161,11 +156,8 @@ gate:
 			|| { echo "[IMP:9][make][gate] FAIL: gates (Docker)"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 4/6: contract tests..."; \
 		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 5/6: static tests (no Docker)..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ \
-			-m "static_audit or (not e2e and not requires_node and not component and not smoke and not integration and not local_auth and not requires_docker)" \
-			-v --tb=short \
-			--junitxml=tests/report-static.xml || { echo "[IMP:9][make][gate] FAIL: static"; exit 1; }; \
+		echo "[IMP:7][make][gate] Step 5/6: static tests (no Docker) — compact via test_runner..."; \
+		$(PYTHON) -m core.internal.test_runner --marker static_audit --junit-output tests/report-static.xml || { echo "[IMP:9][make][gate] FAIL: static"; exit 1; }; \
 		echo "[IMP:7][make][gate] Step 6/6: predeploy tests (PROJECT=$(or $(PROJECT),all))..."; \
 		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy and not requires_docker" -v --tb=short -rs \
 			$(if $(PROJECT),-k "$(PROJECT)",) \
