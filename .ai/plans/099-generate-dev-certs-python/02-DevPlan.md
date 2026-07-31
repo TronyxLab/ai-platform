@@ -477,7 +477,7 @@ def test_verify_san_missing(capsys, tmp_path):
 
 ### @rationale (print(stderr) для LDD, не logging)
 **Q:** Почему модуль использует `print(..., file=sys.stderr)` а не `logging`?
-**A:** Сохранение обратной совместимости с shell-скриптом: `>&2 echo "[IMP:X]..."`. 
+**A:** Сохранение обратной совместимости с shell-скриптом: `>&2 echo "[IMP:X]..."`.
 `print(stderr)` — минимальная зависимость (нет импорта logging), консистентный формат
 с существующими shell-логами, видим в docker logs/stderr без настройки log levels.
 Тесты используют `capsys`/`capfd` (не `caplog` — он ловит только logging, не stderr).

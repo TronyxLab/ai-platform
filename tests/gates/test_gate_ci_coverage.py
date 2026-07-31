@@ -3,14 +3,16 @@
 # region MODULE_CONTRACT
 ## @purpose — Gate test suite for CI structure and architectural invariants.
 ##            Validates SHA-aware aggregator in deploy workflows, MODE=fast
-##            expression in Makefile, check-doc-headers.sh equivalence,
-##            platform-test.yml push trigger consistency, and MARKER=all contract.
+##            expression in Makefile, check-doc-headers.sh→doc_header_validator
+##            equivalence (DevPlan 106), platform-test.yml push trigger
+##            consistency, and MARKER=all contract.
 ## @scope — Parses CI workflow YAMLs, Makefile, pre-commit config, and shell scripts
 ##          to verify structural invariants.
 ## @invariants
 ##   - Deploy workflows (core-deploy, build-platform, mirror) use SHA-aware aggregator (D4)
 ##   - MODE=fast excludes Docker-dependent markers (requires_docker, local_auth)
-##   - check-doc-headers.sh covers all old hook checks; old grepsummary hook is removed
+##   - check-doc-headers.sh (facade) delegates all old hook checks to
+##     core.internal.lint.doc_header_validator; old grepsummary hook is removed
 ##   - platform-test.yml triggers on push to main, does NOT have merge_group (replaced main-full-gate.yml)
 ## @rationale — Prevents silent test erosion and architectural drift in CI.
 ##              Extended gates close coverage gaps identified in 002-fix-gate-coverage audit.
@@ -24,6 +26,14 @@ import re
 import pytest
 import yaml
 
+from core.internal.lint.doc_header_validator import (
+    check_grep_summary_presence,
+    check_module_contract,
+    check_regions_balanced,
+    check_structure,
+    check_yaml_purpose,
+    validate_file,
+)
 from tests.conftest import ldd_trajectory
 from tests.helpers.gate_helpers import get_on_section, load_workflow
 
@@ -559,51 +569,93 @@ def test_mode_fast_excludes_requires_docker(caplog) -> None:
 
 @pytest.mark.gate
 @ldd_trajectory
-def test_check_doc_headers_equivalent(caplog) -> None:
-    """Verify check-doc-headers.sh covers all old hook checks and old grepsummary hook is removed.
+# 🧪 TRAP[TEST] · 2026-07-31 · REGRESSION · DevPlan 106: doc checks moved from check-doc-headers.sh
+#   (shell, 236 LOC) to core/internal/lint/doc_header_validator.py — facade is now a 17-LOC delegator
+#   (DRIFT-GATE-1, QA P1). Old assertion looked for shell function names in the facade → false negative.
+# · Scenario: (1) facade contains `python3 -m core.internal.lint.doc_header_validator doc-headers`
+# ·   delegation; (2) module defines all 5 check functions (import + callable introspection);
+# ·   (3) validate_file fires all 5 checks on tmp negative controls and passes a fully-marked
+# ·   positive control; (4) pre-commit wiring: old grepsummary hook removed, check-doc-headers hook
+# ·   registered
+# · Last fail: 2026-07-31 — "check-doc-headers.sh missing 5 check(s)" (function names not found in facade)
+# · Remove if: check-doc-headers delegation moves to a different module (re-point facade + import assertions)
+def test_check_doc_headers_equivalent(caplog, tmp_path) -> None:
+    """Verify check-doc-headers.sh (facade) delegates all old hook checks to doc_header_validator.py.
 
-    ## @purpose — Validate that the unified check-doc-headers.sh script performs
-    ##            all validations previously done by grepsummary + presence-check.
-    ##            Ensures no regression after TASK-1 consolidation from TestsMetaDevPlan2.
-    ##            Also verify that .pre-commit-config.yaml no longer references old grepsummary hook.
+    ## @purpose — Validate that the unified check-doc-headers.sh facade performs all validations
+    ##            previously done by grepsummary + presence-check (TASK-1 consolidation). Equivalence
+    ##            contract after DevPlan 106: facade runs `python3 -m core.internal.lint.doc_header_validator
+    ##            doc-headers "$@"` AND the module defines+wires the 5 check functions into validate_file.
+    ##            Also verify .pre-commit-config.yaml no longer references the old grepsummary hook
+    ##            and still registers check-doc-headers.
     ## @io — ⎋ None (assert side-effect)
     ## @complexity — O(1)
     """
+    logger.info("[IMP:8][test_check_doc_headers_equivalent] Checking facade→Python equivalence...")
 
-    logger.info("[IMP:8][test_check_doc_headers_equivalent] Checking check-doc-headers.sh equivalence...")
-
-    # 1. Read check-doc-headers.sh
+    # 1. Facade delegation contract — thin shell facade, business logic in Python (DevPlan 106 AC4)
     with open(_CHECK_DOC_HEADERS_PATH) as f:
         script_content = f.read()
+    delegation = "python3 -m core.internal.lint.doc_header_validator doc-headers"
+    assert delegation in script_content, (
+        f"check-doc-headers.sh must delegate to doc_header_validator (missing: {delegation!r})"
+    )
+    logger.info("[IMP:9][test_check_doc_headers_equivalent] OK: facade delegates via %r", delegation)
 
-    # Expected checks in the script
+    # 2. Module contract — the 5 old hook checks exist as callables in the Python module
     expected_checks = {
-        "GREP_SUMMARY validation": "check_grep_summary",
-        "MODULE_CONTRACT validation": "check_module_contract",
-        "STRUCTURE validation": "check_structure",
-        "Region balance check": "check_regions_balanced",
-        "YAML @purpose check": "check_yaml_purpose",
+        "GREP_SUMMARY validation": check_grep_summary_presence,
+        "MODULE_CONTRACT validation": check_module_contract,
+        "STRUCTURE validation": check_structure,
+        "Region balance check": check_regions_balanced,
+        "YAML @purpose check": check_yaml_purpose,
     }
+    for check_name, func in expected_checks.items():
+        assert callable(func), f"{check_name}: {func!r} is not a callable function"
+    logger.info(
+        "[IMP:9][test_check_doc_headers_equivalent] OK: all %d check functions present in doc_header_validator",
+        len(expected_checks),
+    )
 
-    missing_checks: list[str] = []
-    for check_name, function_name in expected_checks.items():
-        if function_name in script_content:
-            logger.info(
-                "[IMP:9][test_check_doc_headers_equivalent] OK: '%s' found (function %s)", check_name, function_name
-            )
-        else:
-            missing_checks.append(check_name)
-            logger.warning(
-                "[IMP:7][test_check_doc_headers_equivalent] MISSING: '%s' (function %s not found)",
-                check_name,
-                function_name,
-            )
+    # 3. Functional equivalence — validate_file actually FIRES each check (negative + positive controls)
+    bad_py = tmp_path / "bad_module.py"
+    bad_py.write_text("#!/usr/bin/env python3\ndef foo() -> None:\n    pass\n# region FUNC_foo\n")
+    bad_yaml = tmp_path / "bad_config.yaml"
+    bad_yaml.write_text("key: value\n")
+    good_py = tmp_path / "good_module.py"
+    good_py.write_text(
+        "# GREP_SUMMARY: good-file demo module\n"
+        "# STRUCTURE: flow → end\n"
+        "# region MODULE_CONTRACT\n"
+        "## @purpose demo module good-file\n"
+        "# endregion MODULE_CONTRACT\n"
+        "def main() -> None:\n"
+        "    pass\n"
+        "# region FUNC_main\n"
+        "# endregion FUNC_main\n"
+    )
 
-    # 2. Read .pre-commit-config.yaml — check no old grepsummary hook entry
+    bad_py_errors = validate_file(bad_py)
+    bad_yaml_errors = validate_file(bad_yaml)
+    good_py_errors = validate_file(good_py)
+
+    assert any("GREP_SUMMARY" in err for err in bad_py_errors), f"bad .py must fail GREP_SUMMARY: {bad_py_errors}"
+    assert any("STRUCTURE" in err for err in bad_py_errors), f"bad .py must fail STRUCTURE: {bad_py_errors}"
+    assert any("MODULE_CONTRACT" in err for err in bad_py_errors), f"bad .py must fail MODULE_CONTRACT: {bad_py_errors}"
+    assert any("#region count" in err for err in bad_py_errors), f"bad .py must fail region balance: {bad_py_errors}"
+    assert any("@purpose" in err for err in bad_yaml_errors), f"bad .yaml must fail @purpose: {bad_yaml_errors}"
+    assert good_py_errors == [], f"fully-marked .py must pass: {good_py_errors}"
+    logger.info(
+        "[IMP:9][test_check_doc_headers_equivalent] OK: validate_file fires 5 checks "
+        "(negative: %d error(s) on .py, %d on .yaml; positive: 0 on .py)",
+        len(bad_py_errors),
+        len(bad_yaml_errors),
+    )
+
+    # 4. Pre-commit wiring — old grepsummary hook removed, check-doc-headers hook present
     with open(_PRE_COMMIT_CONFIG_PATH) as f:
         precommit_config = yaml.safe_load(f)
 
-    # Check for actual hook entries with grepsummary (not text in comments/docs)
     has_old_grepsummary = False
     for repo_entry in precommit_config.get("repos", []):
         hooks = repo_entry.get("hooks", [])
@@ -621,48 +673,23 @@ def test_check_doc_headers_equivalent(caplog) -> None:
         if has_old_grepsummary:
             break
 
-    if not has_old_grepsummary:
-        logger.info(
-            "[IMP:9][test_check_doc_headers_equivalent] OK: old grepsummary hook removed from .pre-commit-config.yaml"
-        )
+    has_check_doc_headers = any(
+        hook.get("id") == "check-doc-headers"
+        for repo_entry in precommit_config.get("repos", [])
+        for hook in repo_entry.get("hooks", [])
+    )
 
-    # 3. Verify that check-doc-headers.sh hook is present in .pre-commit-config.yaml
-    has_check_doc_headers = False
-    for repo_entry in precommit_config.get("repos", []):
-        hooks = repo_entry.get("hooks", [])
-        for hook in hooks:
-            if hook.get("id") == "check-doc-headers":
-                has_check_doc_headers = True
-                logger.info(
-                    "[IMP:9][test_check_doc_headers_equivalent] OK: check-doc-headers hook present (id=check-doc-headers)"
-                )
-                break
-        if has_check_doc_headers:
-            break
-
-    if not has_check_doc_headers:
-        logger.warning(
-            "[IMP:7][test_check_doc_headers_equivalent] MISSING: check-doc-headers hook NOT found in .pre-commit-config.yaml"
-        )
-
-    errors: list[str] = []
-    if missing_checks:
-        errors.append(
-            f"check-doc-headers.sh missing {len(missing_checks)} check(s):\n"
-            + "\n".join(f"  - {m}" for m in missing_checks)
-        )
-    if has_old_grepsummary:
-        errors.append(
-            "Old grepsummary hook still present in .pre-commit-config.yaml. "
-            "Remove it — check-doc-headers.sh replaces grepsummary + presence-check."
-        )
-
-    if errors:
-        pytest.fail("\n\n".join(errors))
+    assert not has_old_grepsummary, (
+        "Old grepsummary hook still present in .pre-commit-config.yaml. "
+        "Remove it — check-doc-headers.sh replaces grepsummary + presence-check."
+    )
+    assert has_check_doc_headers, "check-doc-headers hook NOT found in .pre-commit-config.yaml"
+    logger.info(
+        "[IMP:9][test_check_doc_headers_equivalent] OK: pre-commit wiring — grepsummary removed, check-doc-headers present"
+    )
 
     logger.info(
-        "[IMP:9][test_check_doc_headers_equivalent] ALL PASS — check-doc-headers.sh covers all expected checks, "
-        "old grepsummary hook removed"
+        "[IMP:9][test_check_doc_headers_equivalent] ALL PASS — facade delegates, module defines+fires all 5 checks"
     )
 
 

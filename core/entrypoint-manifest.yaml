@@ -104,12 +104,14 @@ validate:
 - make_target: validate
   mechanism: shell-script
   delegates_to: core/entrypoints/validate.sh → core/internal/validate/validate.sh
+    → core/internal/validate/validate_orchestrator.py
   signature: make validate [FILES=...]
   operation_ru: Schema-валидация
   description: Schema validation of project files
 - make_target: lint
   mechanism: shell-script
   delegates_to: core/entrypoints/validate.sh --lint → core/internal/validate/validate.sh
+    → core/internal/validate/validate_orchestrator.py
   signature: make lint
   operation_ru: Линтинг
   description: shellcheck + yamllint + pytest-lint

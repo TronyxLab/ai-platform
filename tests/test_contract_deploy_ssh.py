@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: contract-test deploy-project ssh forced-command parse_ssh_command NODE_NAME SSH_ORIGINAL_COMMAND bash subprocess
-# STRUCTURE: ▶ source deploy-project.sh → ∋ parse_ssh_command → ◇ SSH_ORIGINAL_COMMAND format ┌with-export┐┌plain┐┌missing-ref┐ → ⊕ PROJECT+REF → ◇ PROJECT_DIR exists + compose.yml → ⎋ exit0|exit1
+# GREP_SUMMARY: contract-test scp-deliver facade core_deliverer python3-module delegation scp_to_server PATH-stub subprocess
+# STRUCTURE: ▶ source scp-deliver.sh (real facade) → ∋ PATH-intercept python3 stub → ◇ scp_to_server delegate → ◇ stub argv: -m core_deliverer deliver + 5 flags → ⊕ exit passthrough (0|1) + stderr diagnostics → ⎋ exit0|exit1
 # region MODULE_CONTRACT
-## @purpose  Contract tests for deploy-project.sh parse_ssh_command(). Verifies SSH
-##           forced-command parsing for all formats, NODE_NAME validation, project
-##           directory existence checks, and rejection of invalid/unknown commands.
-## @scope    Five test cases: basic format, with export statements, missing ref,
-##           nonexistent project directory, missing compose file, and ai-platform.yaml
-##           service name override. All use subprocess isolation with mock files.
+## @purpose  Contract tests for scp-deliver.sh scp_to_server() facade (DevPlan 108): verifies
+##           delegation to `python3 -m core.internal.bootstrap.core_deliverer deliver` with the
+##           exact CLI contract (--host/--node/--node-configs-dir/--core-dir/--remote-user),
+##           exit-code passthrough (0|1) and stderr diagnostics passthrough.
+## @scope    Four test cases: full-args delegation, no-secrets pass-through (SKIP decision is
+##           Python's), failure → exit 1 passthrough, FATAL diagnostic passthrough.
+##           All run the REAL scp-deliver.sh facade with a PATH-intercepted python3 stub.
 ## @invariants
-##   - SSH_ORIGINAL_COMMAND="platform-deploy <project> <ref>" → exit 0
-##   - SSH_ORIGINAL_COMMAND without <ref> → exit 1 (PROJECT==REF → REF="" → exit)
-##   - Missing PROJECT_DIR → exit 1 with "project directory not found"
-##   - Missing docker-compose.yml → exit 1 with "no docker-compose.yml found"
-##   - Export lines in SSH_ORIGINAL_COMMAND are stripped before parsing
-##   - ai-platform.yaml service: field overrides SERVICE_NAME
-##   - PROJECTS_BASE is readonly in deploy-project.sh — must be set via env only
+##   - scp_to_server invokes python3 with `-m core.internal.bootstrap.core_deliverer deliver`
+##   - All 5 flags forwarded: --host/--node/--node-configs-dir/--core-dir/--remote-user
+##   - DRY_RUN=true → --dry-run appended; DRY_RUN=false/unset → no --dry-run
+##   - python3 exit code 0|1 propagated (shell || return 1 passthrough contract)
+##   - python3 stderr diagnostics NOT swallowed by the facade
 ##   - All tests use tmp_path for isolation (Zero Hardcode Rule)
-## @rationale Q: Why test all formats?
-##            A: SSH forced-commands come from CI and may include export statements or
-##            varying formats. Robust parsing prevents silent deploy failures.
-## @changes CREATED: 2026-07-17 | T3: Contract tests — deploy-project.sh (SSH)
+## @rationale DevPlan 108 (Strangler-Fig Tier 2): scp_to_server стал тонким фасадом над
+##            core_deliverer.py — shell-моки rsync/ssh больше не работают (логика в Python).
+##            Контракт фасада = точная python3-инвокация: тест FAILs при изменении имени
+##            модуля или флагов. Skip/fail-fast логика покрыта tests/unit/test_core_deliverer.py.
+## @changes 2026-07-31 | DevPlan 108 — 4 теста переориентированы с shell-моков на
+##           PATH-intercept python3 stub (контракт фасада)
 # endregion MODULE_CONTRACT
 
 import os
@@ -96,7 +97,6 @@ def _run_bash(
 
 import logging
 import re
-import textwrap
 
 logger = logging.getLogger(__name__)
 
@@ -131,26 +131,10 @@ GOLDEN_AGE_LOG_NOT_FOUND = (
     "[IMP:8][bootstrap][age-key] WARN: AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy"
 )
 
-GOLDEN_SCP_LOG_MKDIR = "[IMP:8][bootstrap][scp] Ensuring remote directories exist on"
-GOLDEN_SCP_LOG_MKDIR_CONFIRMED = "[IMP:9][bootstrap][scp] Remote directories confirmed"
-GOLDEN_SCP_LOG_MKDIR_FAIL = "[IMP:10][bootstrap][scp] FATAL: ssh mkdir -p failed for"
-GOLDEN_SCP_LOG_CORE_START = "[IMP:9][bootstrap][scp] Phase 1/4: Rsyncing core/"
-GOLDEN_SCP_LOG_CORE_DONE = "[IMP:9][bootstrap][scp] Phase 1/4: core/ rsync complete"
-GOLDEN_SCP_LOG_CORE_FAIL = "[IMP:10][bootstrap][scp] FATAL: rsync core/ failed for"
-GOLDEN_SCP_LOG_PLATFORM_ENV_DONE = "[IMP:9][bootstrap][scp] Phase 1b/4: platform-env.yaml rsync complete"
-GOLDEN_SCP_LOG_PLATFORM_ENV_SKIP = "[IMP:8][bootstrap][scp] Phase 1b/4: SKIP"
-GOLDEN_SCP_LOG_NODE_START = "[IMP:9][bootstrap][scp] Phase 2/4: Rsyncing node-configs/"
-GOLDEN_SCP_LOG_NODE_DONE = "[IMP:9][bootstrap][scp] Phase 2/4: node-configs/ rsync complete"
-GOLDEN_SCP_LOG_NODE_FAIL = "[IMP:10][bootstrap][scp] FATAL: rsync node-configs/ failed for"
-GOLDEN_SCP_LOG_SECRETS_START = "[IMP:9][bootstrap][scp] Phase 3/4: Rsyncing node-configs/secrets/"
-GOLDEN_SCP_LOG_SECRETS_DONE = "[IMP:9][bootstrap][scp] Phase 3/4: node-configs/secrets/ rsync complete"
-GOLDEN_SCP_LOG_SECRETS_SKIP = "[IMP:8][bootstrap][scp] Phase 3/4: SKIP"
-
-# GOLDEN_SSH_CMD_* constants removed — build_ssh_cmd deleted (DevPlan 089)
-
-GOLDEN_MOCK_RSYNC_CORE_DST = "/opt/platform/core/"
-GOLDEN_MOCK_RSYNC_NODE_DST = "/opt/node-configs/"
-GOLDEN_MOCK_RSYNC_SECRETS_DST = "/opt/node-configs/secrets/"
+# Golden facade delegation contract (DevPlan 108) — the python3 module invocation that
+# scp_to_server() MUST produce. Changing the module name or the subcommand breaks the
+# facade contract and silently kills the whole Core delivery channel.
+GOLDEN_DELIVER_MODULE = "-m core.internal.bootstrap.core_deliverer deliver"
 
 # ═══════════════════════════════════════════════════════════════════
 # HELPERS — bash subprocess and function extraction
@@ -302,22 +286,88 @@ def _print_ldd(stderr: str, stdout: str = "") -> bool:
 # ═══════════════════════════════════════════════════════════════════
 # scp_to_server
 # ═══════════════════════════════════════════════════════════════════
-# ⚠️ NOTE: scp_to_server() calls ssh (mkdir -p) and rsync externally.
-#   We mock both commands to isolate the function's logic.
-#   Mock rsync logs via "[IMP:9][mock-rsync]" for assertion in LDD.
-#   Mock ssh does the same.
+# ⚠️ NOTE (DevPlan 108): scp_to_server() is now a THIN FACADE — it delegates to
+#   `python3 -m core.internal.bootstrap.core_deliverer deliver` (mkdir + 5 rsync фаз
+#   живут в Python). Shell-моки rsync/ssh/ssh_exec больше НЕ работают: Python-процесс
+#   их не видит. Контракт фасада = точная python3-инвокация + exit/stderr passthrough.
+#   Мы тестируем его через PATH-intercept python3 stub: stub записывает argv в stderr
+#   (формат "[IMP:9][mock-python3] ...") и моделирует exit-код Python-модуля.
+#   Skip/fail-fast логика фаз покрыта tests/unit/test_core_deliverer.py (14 тестов).
 # ═══════════════════════════════════════════════════════════════════
+
+# region FACADE_HELPER
+
+
+def _run_scp_facade(
+    tmp_path: pathlib.Path,
+    host: str,
+    node: str,
+    ncd: pathlib.Path,
+    cd: pathlib.Path,
+    stub_exit: int = 0,
+    stub_stderr: str = "",
+    env_extra: dict | None = None,
+    dry_run: str = "false",
+) -> tuple[str, str, int]:
+    """Run the REAL scp-deliver.sh scp_to_server() with a PATH-intercepted python3 stub.
+
+    ## @purpose — Contract-test the facade delegation (DevPlan 108): a stub `python3`
+    ##            executable on PATH captures the invocation argv (stderr) and models the
+    ##            Python module's exit code (0 success / 1 CoreDeliveryError → `|| return 1`).
+    ## @io — args → (stdout, stderr, returncode)
+    ## @complexity O(1) — single subprocess.run with 15s timeout
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "python3"
+    stub_extra = f'echo "{stub_stderr}" >&2\n' if stub_stderr else ""
+    stub.write_text('#!/usr/bin/env bash\necho "[IMP:9][mock-python3] $*" >&2\n' + stub_extra + f"exit {stub_exit}\n")
+    stub.chmod(0o755)
+
+    script = tmp_path / "facade_test.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f'export PATH="{bin_dir}:$PATH"\n'
+        f'export DRY_RUN="{dry_run}"\n'
+        f'source "{SCP_DELIVER_SH}"\n'
+        # NOTE: sourcing scp-deliver.sh activates `set -euo pipefail` (via paths.sh →
+        # module-interface.sh). `|| rc=$?` is the set -e-safe way to capture the
+        # function's return code instead of letting bash exit on non-zero.
+        "rc=0\n"
+        f'scp_to_server "{host}" "{node}" "{ncd}" "{cd}" || rc=$?\n'
+        'echo "[IMP:9][test][scp] exit_code=$rc"\n'
+    )
+    script.chmod(0o755)
+
+    full_env = os.environ.copy()
+    full_env["__LOG_PREFIX"] = "test"
+    if env_extra:
+        full_env.update(env_extra)
+
+    proc = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=full_env,
+    )
+    return proc.stdout.strip(), proc.stderr.strip(), proc.returncode
+
+
+# endregion FACADE_HELPER
 
 
 # region test_scp_to_server_all_phases
-# 🧪 TRAP[TEST] · 2026-07-17 · scp_to_server all 4 phases with secrets + platform-env
-# · Regression: if SCP phase order changes, remote deployment breaks
-# · Scenario: core/ + platform-env.yaml + node-configs/ + secrets/ all present
-# · Last fail: N/A (new test)
+# 🧪 TRAP[TEST] · 2026-07-31 · scp_to_server facade → core_deliverer delegation (DevPlan 108)
+# · Regression: if the facade stops delegating to python3 -m core.internal.bootstrap.core_deliverer
+# ·   deliver, the whole Core delivery channel (mkdir + 5 rsync фаз) silently drops
+# · Scenario: source real scp-deliver.sh, PATH-intercept python3 stub, call scp_to_server with
+# ·   full delivery tree → stub must receive module + all 5 flags
+# · Last fail: 2026-07-31 — shell-mock tests broke (rsync/ssh moved to Python, exit_code=1)
 # · Remove if: scp_to_server is removed or reimplemented
 @pytest.mark.contract
 def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
-    """scp_to_server() executes all 4 phases with secrets and platform-env.yaml present."""
+    """scp_to_server() delegates to core_deliverer deliver with all 5 flags."""
     caplog.set_level(logging.DEBUG)
 
     host = GOLDEN_SSH_HOST
@@ -329,86 +379,38 @@ def test_scp_to_server_all_phases(caplog, tmp_path) -> None:
     cd = tmp_path / "core"
     cd.mkdir(parents=True)
 
-    # Create platform-env.yaml at project root level (scp_to_server reads from core_dir/../)
-    platform_env = tmp_path / "platform-env.yaml"
-    platform_env.write_text("dummy: env")
-
-    preamble = textwrap.dedent("""\
-        SSH_OPTS=()
-        ssh_exec() {
-            echo "[IMP:9][mock-ssh-exec] $*" >&2
-            return 0
-        }
-        ssh() {
-            echo "[IMP:9][mock-ssh] $*" >&2
-            return 0
-        }
-        rsync() {
-            echo "[IMP:9][mock-rsync] $*" >&2
-            return 0
-        }
-    """)
-
-    test_call = textwrap.dedent(f"""\
-        scp_to_server "{host}" "{node}" "{ncd}" "{cd}"
-        rc=$?
-        echo "[IMP:9][test][scp] exit_code=$rc"
-    """)
-    stdout, stderr, _rc = _test_func(
-        SCP_DELIVER_SH,
-        ["scp_to_server"],
-        test_call,
-        env={"__LOG_PREFIX": "test"},
-        preamble=preamble,
-    )
+    stdout, stderr, _rc = _run_scp_facade(tmp_path, host, node, ncd, cd)
     found_imp9 = _print_ldd(stderr, stdout)
-    # Note: scp_to_server logs non-fatal messages to stdout (echo without >&2),
-    # fatal messages go to stderr. The process exit code is always 0 (script
-    # continues after function call). Check function return code from stdout.
     assert "exit_code=0" in stdout, f"scp_to_server failed: stdout={stdout[:300]}, stderr={stderr[:300]}"
 
-    # Log assertions — non-fatal logs go to stdout
-    assert GOLDEN_SCP_LOG_MKDIR in stdout
-    assert GOLDEN_SCP_LOG_MKDIR_CONFIRMED in stdout
-    assert GOLDEN_SCP_LOG_CORE_START in stdout
-    assert GOLDEN_SCP_LOG_CORE_DONE in stdout
+    mock_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-python3]" in line]
+    assert len(mock_lines) == 1, f"Expected exactly 1 python3 stub invocation, got {len(mock_lines)}"
+    invocation = mock_lines[0]
+    assert GOLDEN_DELIVER_MODULE in invocation, f"Facade must invoke core_deliverer deliver: {invocation}"
+    assert f"--host {host}" in invocation
+    assert f"--node {node}" in invocation
+    assert f"--node-configs-dir {ncd}" in invocation
+    assert f"--core-dir {cd}" in invocation
+    assert "--remote-user root" in invocation, f"Default remote-user must be root: {invocation}"
+    assert "--dry-run" not in invocation, f"DRY_RUN=false must NOT pass --dry-run: {invocation}"
 
-    # Mock calls go to stderr
-    mock_ssh_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-ssh-exec]" in line]
-    assert len(mock_ssh_lines) == 1, f"Expected 1 ssh_exec mock call, got {len(mock_ssh_lines)}"
-
-    mock_rsync_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line]
-    # With platform-env.yaml present: core, platform-env, Makefile, node-configs, secrets = 5 rsync calls
-    assert len(mock_rsync_lines) >= 4, f"Expected ≥4 rsync mock calls, got {len(mock_rsync_lines)}: {stderr[:500]}"
-
-    # Verify rsync destinations
-    all_rsync_args = " ".join(mock_rsync_lines)
-    assert "root@192.168.1.100:/opt/platform/core/" in all_rsync_args
-    assert "root@192.168.1.100:/opt/node-configs/test-node/" in all_rsync_args
-    assert "root@192.168.1.100:/opt/node-configs/secrets/" in all_rsync_args
-
-    # core rsync should have --delete --exclude=.git
-    core_rsync = [line for line in mock_rsync_lines if "/opt/platform/core/" in line]
-    assert len(core_rsync) >= 1
-    assert "--delete" in core_rsync[0]
-    assert "--exclude=.git" in core_rsync[0]
-
-    logger.info("[IMP:9][test][scp] All 4+ phases executed: PASS")
+    logger.info("[IMP:9][test][scp] Facade delegated with all flags: PASS")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
-# endregion
+# endregion test_scp_to_server_all_phases
 
 
 # region test_scp_to_server_no_secrets
-# 🧪 TRAP[TEST] · 2026-07-17 · scp_to_server skips secrets when dir missing
-# · Regression: if secrets dir check is removed, empty dir errors occur
-# · Scenario: no secrets/ directory → must skip phase 3/4 with SKIP log
-# · Last fail: N/A (new test)
+# 🧪 TRAP[TEST] · 2026-07-31 · scp_to_server passes node-configs-dir through when secrets absent
+# · Regression: if the facade pre-checks secrets locally (shell) it would duplicate/break the
+# ·   Python skip decision (deliver_secrets IMP:8 SKIP) — the facade must stay a pass-through
+# · Scenario: no secrets/ dir locally → facade still delegates with --node-configs-dir/--node
+# · Last fail: 2026-07-31 — shell-mock tests broke (secrets SKIP now decided in Python)
 # · Remove if: scp_to_server is removed or secrets handling changes
 @pytest.mark.contract
 def test_scp_to_server_no_secrets(caplog, tmp_path) -> None:
-    """scp_to_server() skips secrets phase when secrets/ dir does not exist."""
+    """scp_to_server() passes node/node-configs-dir through — secrets SKIP is Python's decision."""
     caplog.set_level(logging.DEBUG)
 
     host = GOLDEN_SSH_HOST
@@ -419,62 +421,36 @@ def test_scp_to_server_no_secrets(caplog, tmp_path) -> None:
     cd = tmp_path / "core"
     cd.mkdir(parents=True)
 
-    preamble = textwrap.dedent("""\
-        SSH_OPTS=()
-        ssh_exec() {
-            echo "[IMP:9][mock-ssh-exec] $*" >&2
-            return 0
-        }
-        ssh() {
-            echo "[IMP:9][mock-ssh] $*" >&2
-            return 0
-        }
-        rsync() {
-            echo "[IMP:9][mock-rsync] $*" >&2
-            return 0
-        }
-    """)
-
-    test_call = textwrap.dedent(f"""\
-        scp_to_server "{host}" "{node}" "{ncd}" "{cd}"
-        rc=$?
-        echo "[IMP:9][test][scp] exit_code=$rc"
-    """)
-    stdout, stderr, _rc = _test_func(
-        SCP_DELIVER_SH,
-        ["scp_to_server"],
-        test_call,
-        preamble=preamble,
-    )
+    stdout, stderr, _rc = _run_scp_facade(tmp_path, host, node, ncd, cd)
     found_imp9 = _print_ldd(stderr, stdout)
     assert "exit_code=0" in stdout, f"scp_to_server failed: stdout={stdout[:300]}, stderr={stderr[:300]}"
 
-    # Must see SKIP for secrets — non-fatal log goes to stdout
-    assert GOLDEN_SCP_LOG_SECRETS_SKIP in stdout
-
-    # No secrets rsync calls
-    mock_rsync_secrets = [
-        line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line and "/node-configs/secrets/" in line
-    ]
-    assert len(mock_rsync_secrets) == 0, f"Expected no secrets rsync calls, got {len(mock_rsync_secrets)}"
+    mock_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-python3]" in line]
+    assert len(mock_lines) == 1, f"Expected exactly 1 python3 stub invocation, got {len(mock_lines)}"
+    invocation = mock_lines[0]
+    # Facade must forward the dirs so Python's deliver_secrets() can make the SKIP decision
+    assert GOLDEN_DELIVER_MODULE in invocation
+    assert f"--node {node}" in invocation
+    assert f"--node-configs-dir {ncd}" in invocation
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.info("[IMP:9][test][scp] No secrets — SKIP log: PASS")
-    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+    logger.info("[IMP:9][test][scp] Facade pass-through without secrets: PASS")
 
 
-# endregion
+# endregion test_scp_to_server_no_secrets
 
 
 # region test_scp_to_server_ssh_failure
-# 🧪 TRAP[TEST] · 2026-07-17 · scp_to_server fails on ssh mkdir error
-# · Regression: if ssh failure is silently ignored, rsyncs run without target dirs
-# · Scenario: ssh mkdir -p returns non-zero → function must return 1 immediately
-# · Last fail: N/A (new test)
+# 🧪 TRAP[TEST] · 2026-07-31 · scp_to_server propagates python3 exit 1 (fail-fast passthrough)
+# · Regression: if the facade swallows the Python module's non-zero exit, a failed ssh mkdir
+# ·   (or any CoreDeliveryError) would report success while the rsync phases never ran
+# · Scenario: python3 stub exits 1 (models CoreDeliveryError from ensure_remote_dirs) →
+# ·   facade must propagate exit_code=1, delegation still complete
+# · Last fail: 2026-07-31 — shell-mock tests broke (mkdir failure now raised in Python)
 # · Remove if: error handling in scp_to_server is changed
 @pytest.mark.contract
 def test_scp_to_server_ssh_failure(caplog, tmp_path) -> None:
-    """scp_to_server() returns 1 when ssh mkdir -p fails (no rsync calls)."""
+    """scp_to_server() propagates the python3 module's exit 1 (fail-fast passthrough)."""
     caplog.set_level(logging.DEBUG)
 
     host = GOLDEN_SSH_HOST
@@ -485,60 +461,34 @@ def test_scp_to_server_ssh_failure(caplog, tmp_path) -> None:
     cd = tmp_path / "core"
     cd.mkdir(parents=True)
 
-    preamble = textwrap.dedent("""\
-        SSH_OPTS=()
-        ssh_exec() {
-            echo "[IMP:9][mock-ssh-exec] SSH FAILURE (simulated)" >&2
-            return 1
-        }
-        ssh() {
-            echo "[IMP:9][mock-ssh] $*" >&2
-            return 0
-        }
-        rsync() {
-            echo "[IMP:9][mock-rsync] $*" >&2
-            return 0
-        }
-    """)
-
-    test_call = textwrap.dedent(f"""\
-        scp_to_server "{host}" "{node}" "{ncd}" "{cd}"
-        rc=$?
-        echo "[IMP:9][test][scp] exit_code=$rc"
-    """)
-    stdout, stderr, _rc = _test_func(
-        SCP_DELIVER_SH,
-        ["scp_to_server"],
-        test_call,
-        preamble=preamble,
-    )
+    stdout, stderr, _rc = _run_scp_facade(tmp_path, host, node, ncd, cd, stub_exit=1)
     found_imp9 = _print_ldd(stderr, stdout)
-    # Check function return code from stdout (exit_code=1), not process exit code
+    # Facade return-code passthrough: python3 exit 1 → scp_to_server exit 1
     assert "exit_code=1" in stdout, f"Expected exit_code=1, got stdout: {stdout[:300]}, stderr: {stderr[:300]}"
 
-    # Fatal log goes to stderr (uses >&2)
-    assert GOLDEN_SCP_LOG_MKDIR_FAIL in stderr, f"Expected golden mkdir failure log, got: {stderr[:500]}"
-
-    # No rsync calls should happen
-    mock_rsync_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line]
-    assert len(mock_rsync_lines) == 0, f"Expected 0 rsync calls after SSH failure, got {len(mock_rsync_lines)}"
+    # Delegation still happened (the failure decision lives inside the Python module)
+    mock_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-python3]" in line]
+    assert len(mock_lines) == 1
+    assert GOLDEN_DELIVER_MODULE in mock_lines[0]
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.info("[IMP:9][test][scp] SSH failure → abort with exit 1: PASS")
+    logger.info("[IMP:9][test][scp] Python failure → facade exit 1 passthrough: PASS")
 
 
-# endregion
+# endregion test_scp_to_server_ssh_failure
 
 
 # region test_scp_to_server_rsync_core_failure
-# 🧪 TRAP[TEST] · 2026-07-17 · scp_to_server fails on rsync core/ error
-# · Regression: if rsync failure is silently ignored, corrupt deployment
-# · Scenario: rsync core/ fails → function returns 1
-# · Last fail: N/A (new test)
+# 🧪 TRAP[TEST] · 2026-07-31 · scp_to_server passes python3 stderr diagnostics through (rsync core FATAL)
+# · Regression: if the facade swallowed python3 stderr, the [IMP:10] FATAL rsync core/ diagnostic
+# ·   would be invisible in bootstrap logs → silent deploy corruption
+# · Scenario: python3 stub exits 1 + emits the Python FATAL line (deliver_core format) →
+# ·   facade exit_code=1 and the diagnostic visible in stderr
+# · Last fail: 2026-07-31 — shell-mock tests broke (rsync core failure now raised in Python)
 # · Remove if: error handling in scp_to_server is changed
 @pytest.mark.contract
 def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
-    """scp_to_server() returns 1 when rsync core/ fails."""
+    """scp_to_server() passes the Python module's FATAL rsync core/ diagnostic through."""
     caplog.set_level(logging.DEBUG)
 
     host = GOLDEN_SSH_HOST
@@ -548,59 +498,26 @@ def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
     cd = tmp_path / "core"
     cd.mkdir(parents=True)
 
-    call_count = [0]
-
-    def _make_preamble():
-        nonlocal call_count
-        call_count[0] = 0
-
-        ssh_code = textwrap.dedent("""\
-            ssh_exec() {
-                echo "[IMP:9][mock-ssh-exec] $*" >&2
-                return 0
-            }
-            ssh() {
-                echo "[IMP:9][mock-ssh] $*" >&2
-                return 0
-            }
-        """)
-
-        # First rsync call (core) fails, subsequent ones should not be reached
-        rsync_code = textwrap.dedent("""\
-            RSYNC_CALLS=0
-            rsync() {
-                RSYNC_CALLS=$((RSYNC_CALLS + 1))
-                echo "[IMP:9][mock-rsync] call=$RSYNC_CALLS $*" >&2
-                if [ "$RSYNC_CALLS" -eq 1 ]; then
-                    return 1
-                fi
-                return 0
-            }
-        """)
-        return ssh_code + "\n" + rsync_code
-
-    test_call = textwrap.dedent(f"""\
-        scp_to_server "{host}" "{node}" "{ncd}" "{cd}"
-        rc=$?
-        echo "[IMP:9][test][scp] exit_code=$rc"
-    """)
-    stdout, stderr, _rc = _test_func(
-        SCP_DELIVER_SH,
-        ["scp_to_server"],
-        test_call,
-        preamble=_make_preamble(),
+    fatal_line = "[IMP:10][deliver_core][error] FATAL: rsync core/ failed for"
+    stdout, stderr, _rc = _run_scp_facade(
+        tmp_path,
+        host,
+        node,
+        ncd,
+        cd,
+        stub_exit=1,
+        stub_stderr=fatal_line,
     )
     found_imp9 = _print_ldd(stderr, stdout)
     assert "exit_code=1" in stdout, f"Expected exit_code=1, got stdout: {stdout[:300]}, stderr: {stderr[:300]}"
-
-    # Fatal log goes to stderr (uses >&2)
-    assert GOLDEN_SCP_LOG_CORE_FAIL in stderr, f"Expected golden core failure log, got: {stderr[:500]}"
+    # Stderr diagnostics from the Python module must NOT be swallowed by the facade
+    assert fatal_line in stderr, f"Expected FATAL core diagnostic passthrough, got: {stderr[:500]}"
 
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
-    logger.info("[IMP:9][test][scp] rsync core/ failure → exit 1: PASS")
+    logger.info("[IMP:9][test][scp] rsync core/ failure diagnostic passthrough: PASS")
 
 
-# endregion
+# endregion test_scp_to_server_rsync_core_failure
 
 
 # -- build_ssh_cmd tests removed (DevPlan 089: deploy-project.sh shell scripts deleted,

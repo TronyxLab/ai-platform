@@ -1,20 +1,25 @@
-# GREP_SUMMARY: gate context-overlay-git delivery-invariants D1 D2 D3 ensure_context_repo rsync-exclude-git scp-deliver
-# STRUCTURE: ▶ test_git_only_in_ensure_context_repo → grep deploy-modules.sh for git clone/pull outside ensure_context_repo() → ◇ test_core_rsync_excludes_git → grep scp-deliver.sh + CI workflows for rsync core/ without --exclude '.git/' → ⊕ delivery invariants coverage
+# GREP_SUMMARY: gate context-overlay-git delivery-invariants D1 D2 D3 ensure_context_repo rsync-exclude-git scp-deliver core_deliverer
+# STRUCTURE: ▶ test_git_only_in_ensure_context_repo → grep deploy-modules.sh for git clone/pull outside ensure_context_repo() → ◇ test_core_rsync_excludes_git → assert RSYNC_EXCLUDES_{CORE,NODE,SECRETS} contain --exclude=.git (core_deliverer.py) + grep scp-deliver.sh delegation + CI workflows rsync → ⊕ delivery invariants coverage
 # region MODULE_CONTRACT
 ## @purpose  Gate tests for delivery invariants D1/D2/D3:
 ##           - D1: Core-код NEVER доставляется через git
 ##           - D2: context-overlay использует git только внутри ensure_context_repo()
 ##           - D3: AGE-ключи/secrets/SSH-keys никогда не передаются через git
-## @scope    Static grep-scan of delivery scripts (deploy-modules.sh, scp-deliver.sh)
-##           and CI workflows (core-deploy.yml) for git calls outside allowed function
-##           and rsync calls without .git exclusion.
+## @scope    Static checks: (a) RSYNC_EXCLUDES_CORE/NODE/SECRETS в core_deliverer.py —
+##           единый источник правды excludes после DevPlan 108 (rsync ушёл из shell);
+##           (b) git-сканирование deploy-modules.sh; (c) rsync-сканирование CI workflows
+##           (core-deploy.yml) + shell-фасадов (defense-in-depth).
 ## @invariants
 ##   - Все git clone/pull в deploy-modules.sh — только внутри ensure_context_repo()
-##   - Все rsync core/ вызовы в delivery chain — содержат --exclude '.git/'
+##   - RSYNC_EXCLUDES_CORE, RSYNC_EXCLUDES_NODE, RSYNC_EXCLUDES_SECRETS содержат --exclude=.git
+##   - scp-deliver.sh фасад делегирует в core_deliverer (excludes достижимы в delivery path)
+##   - Все rsync core/ вызовы в CI delivery chain — содержат --exclude '.git/'
 ## @rationale  D1/D2 — критическая модель доставки: core push (SCP/rsync, без git),
 ##             context pull (git только через ensure_context_repo). Без gate-теста
 ##             дрейф модели доставки недетектируем на этапе CI.
 ## @changes — 2026-07-18 | Created per DevPlan 011 T7 · $TEST_SPEC
+## @changes — 2026-07-31 | DevPlan 108: test_core_rsync_excludes_git больше НЕ vacuous —
+##            проверяет RSYNC_EXCLUDES_* в core_deliverer.py (0 rsync в shell-фасаде)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -23,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from core.internal.bootstrap.core_deliverer import RSYNC_EXCLUDES_CORE, RSYNC_EXCLUDES_NODE, RSYNC_EXCLUDES_SECRETS
 from tests._conftest.ldd import ldd_trajectory
 from tests.helpers.gate_helpers import repo_root
 
@@ -33,7 +39,8 @@ _DELIVERY_GIT_SCRIPTS = [
     repo_root() / "core" / "internal" / "bootstrap" / "deploy-modules.sh",
 ]
 
-# Delivery scripts to scan for rsync --exclude '.git/'
+# Delivery scripts to scan for rsync --exclude '.git/' (defense-in-depth — rsync moved
+# to core_deliverer.py in DevPlan 108, but a reintroduced shell rsync must still exclude .git)
 _DELIVERY_RSYNC_SCRIPTS = [
     repo_root() / "core" / "internal" / "bootstrap" / "scp-deliver.sh",
 ]
@@ -387,19 +394,64 @@ def test_git_only_in_ensure_context_repo(caplog):
 @pytest.mark.gate
 @ldd_trajectory
 def test_core_rsync_excludes_git(caplog):
-    """Verify rsync calls delivering core/ include --exclude '.git/'.
+    """Verify core/ rsync delivery excludes .git — in core_deliverer.py (real source of truth).
 
     ## @purpose — Validate D1: Core-код NEVER доставляется через git.
-    ##            Rsync commands delivering core/ or node-configs/ must
-    ##            explicitly exclude .git/ for defense-in-depth.
-    ## @io — ⎋ None (asserts rsync calls include --exclude '.git/')
+    ##            DevPlan 108: rsync-исключения живут в core_deliverer.py
+    ##            (RSYNC_EXCLUDES_CORE/NODE/SECRETS). Этот тест проверяет константы
+    ##            НАПРЯМУЮ — без этого gate был VACUOUS PASS (0 rsync в shell-фасаде =
+    ##            0 нарушений = потеря покрытия). Дополнительно: scp-deliver.sh фасад
+    ##            должен делегировать в core_deliverer, и CI workflows rsync core/
+    ##            обязаны содержать --exclude '.git/'.
+    ## @io — ⎋ None (asserts excludes in Python constants + CI workflows)
     ## @complexity — O(L) where L = sum of lines in delivery scripts + CI workflows
     """
-    # 🧪 TRAP[TEST] · 2026-07-18 · D1 delivery invariant: rsync --delete excludes .git
+    # 🧪 TRAP[TEST] · 2026-07-31 · D1 delivery invariant: .git excluded in ALL rsync phases
+    # · Regression: removal of --exclude=.git from any phase delivers the .git dir to VPS
+    # ·   (repo metadata, hooks, potentially secrets in history) — defense-in-depth
+    # · Scenario: assert RSYNC_EXCLUDES_{CORE,NODE,SECRETS} contain --exclude=.git
+    # · Last fail: 2026-07-31 — VACUOUS PASS (0 rsync в scp-deliver.sh после DevPlan 108)
+    # · Remove if: exclude lists intentionally drop .git (needs Architect approval)
     total_violations = 0
     total_scanned = 0
 
-    # ── Scan delivery shell scripts ──────────────────────────────────────
+    # ── core_deliverer.py: RSYNC_EXCLUDES_* (single source of truth, DevPlan 108) ──
+    # Real coverage: FAILs if --exclude=.git is removed from any delivery phase list.
+    for name, excludes in [
+        ("RSYNC_EXCLUDES_CORE", RSYNC_EXCLUDES_CORE),
+        ("RSYNC_EXCLUDES_NODE", RSYNC_EXCLUDES_NODE),
+        ("RSYNC_EXCLUDES_SECRETS", RSYNC_EXCLUDES_SECRETS),
+    ]:
+        has_git_exclude = "--exclude=.git" in excludes
+        logger.info(
+            "[IMP:9][gate][context_overlay_git] %s contains --exclude=.git: %s (%d excludes)",
+            name,
+            has_git_exclude,
+            len(excludes),
+        )
+        total_scanned += 1
+        if not has_git_exclude:
+            logger.error("[IMP:9][gate][context_overlay_git] FAIL: %s missing --exclude=.git", name)
+            total_violations += 1
+
+    # ── scp-deliver.sh facade → core_deliverer delegation (excludes reachable in path) ──
+    facade_path = repo_root() / "core" / "internal" / "bootstrap" / "scp-deliver.sh"
+    if facade_path.exists():
+        facade_content = facade_path.read_text(errors="replace")
+        has_delegation = "core_deliverer" in facade_content and "deliver" in facade_content
+        logger.info(
+            "[IMP:9][gate][context_overlay_git] scp-deliver.sh delegates to core_deliverer deliver: %s",
+            has_delegation,
+        )
+        total_scanned += 1
+        if not has_delegation:
+            logger.error(
+                "[IMP:9][gate][context_overlay_git] FAIL: scp-deliver.sh no longer delegates to core_deliverer — "
+                "the RSYNC_EXCLUDES_* .git exclusions would be unreachable in the delivery path"
+            )
+            total_violations += 1
+
+    # ── Scan delivery shell scripts (defense-in-depth: reintroduced shell rsync) ─────
     for script_path in _DELIVERY_RSYNC_SCRIPTS:
         if not script_path.exists():
             logger.warning("[IMP:7][gate][context_overlay_git] Script not found: %s — skipping", script_path)
@@ -449,8 +501,8 @@ def test_core_rsync_excludes_git(caplog):
         )
 
     assert total_violations == 0, (
-        f"[IMP:9][gate][context_overlay_git] FAIL: {total_violations} rsync --delete call(s) "
-        f"without --exclude=.git in {total_scanned} file(s)"
+        f"[IMP:9][gate][context_overlay_git] FAIL: {total_violations} violation(s) "
+        f"(.git exclusion missing) across {total_scanned} checked item(s)"
     )
 
-    logger.info("[IMP:9][gate][context_overlay_git] PASS: All rsync --delete calls include --exclude=.git")
+    logger.info("[IMP:9][gate][context_overlay_git] PASS: .git excluded in all rsync phases (Python + CI)")

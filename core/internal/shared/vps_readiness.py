@@ -74,7 +74,7 @@ _DOCKER_CHECK_CMD = "docker info --format '{{.ServerVersion}}' 2>/dev/null || ec
 _SSH_LIB_PATH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "ssh.sh")
 
 # Remediation hints — по одному на каждый failure mode (AC7), сохранены из bash-версии
-_REMEDIATION_NO_MAP = "Set NODE_HOST_MAP env var: export NODE_HOST_MAP='{\"node\":\"host\"}'"
+_REMEDIATION_NO_MAP = 'Set NODE_HOST_MAP env var: export NODE_HOST_MAP=\'{"node":"host"}\''
 _REMEDIATION_SSH = (
     "VPS unreachable. Check: ssh ci-deploy@<host> — verify network, SSH key, and ci-deploy user existence"
 )
@@ -112,7 +112,9 @@ def _default_ssh_runner(
     ▶ ┌host,user,cmd,timeout┐ → ⚡ subprocess(bash -c 'source ssh.sh && ssh_read ...') → ◇ rc → ⎋ (rc, stdout)
     """
     lib_path = ssh_lib_path or _SSH_LIB_PATH
-    logger.info("[IMP:7][vps_readiness][ssh_runner] ssh_read %s@%s (timeout=%ss, lib=%s)", user, host, timeout, lib_path)
+    logger.info(
+        "[IMP:7][vps_readiness][ssh_runner] ssh_read %s@%s (timeout=%ss, lib=%s)", user, host, timeout, lib_path
+    )
     try:
         result = subprocess.run(
             ["bash", "-c", f'source "{lib_path}" && ssh_read "{host}" "{user}" "{cmd}" {timeout}'],
@@ -159,9 +161,7 @@ def _resolve_node_host(
     if node_host_map is None:
         raw_map = os.environ.get(_NODE_HOST_MAP_ENV)
         if not raw_map:
-            logger.info(
-                "[IMP:10][vps_readiness][resolve] NODE_HOST_MAP not set — cannot resolve node to SSH host"
-            )
+            logger.info("[IMP:10][vps_readiness][resolve] NODE_HOST_MAP not set — cannot resolve node to SSH host")
             return None, "NODE_HOST_MAP not set — cannot resolve node to SSH host", _REMEDIATION_NO_MAP
         try:
             node_host_map = json.loads(raw_map)
@@ -176,8 +176,10 @@ def _resolve_node_host(
     if not host:
         keys = ", ".join(sorted(str(k) for k in node_host_map)) or "empty"
         logger.info("[IMP:10][vps_readiness][resolve] Node '%s' not found in NODE_HOST_MAP", node_name)
-        return None, f"Node '{node_name}' not found in NODE_HOST_MAP", (
-            f"Check NODE_HOST_MAP for node '{node_name}'. Current keys: {keys}"
+        return (
+            None,
+            f"Node '{node_name}' not found in NODE_HOST_MAP",
+            (f"Check NODE_HOST_MAP for node '{node_name}'. Current keys: {keys}"),
         )
 
     logger.info("[IMP:9][vps_readiness][resolve] Resolved node '%s' → host %s", node_name, host)
@@ -287,9 +289,7 @@ def check_vps_ready(
         logger.info("[IMP:9][vps_readiness][check] SSH OK: ci-deploy@%s", ssh_host)
     else:
         all_ok = False
-        failures.append(
-            {"check": f"SSH to ci-deploy@{ssh_host} failed (timeout=30s)", "remediation": _REMEDIATION_SSH}
-        )
+        failures.append({"check": f"SSH to ci-deploy@{ssh_host} failed (timeout=30s)", "remediation": _REMEDIATION_SSH})
         logger.info("[IMP:10][vps_readiness][check] SSH FAIL: ci-deploy@%s (rc=%s)", ssh_host, ssh_rc)
 
     # ── Step 2: Forced-command ping (fail-if-not-ready) ──────────────

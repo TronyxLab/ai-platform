@@ -10,6 +10,9 @@
 ## @scope    Tests bash functions from: core/lib/node-resolver.sh, core/entrypoints/bootstrap.sh,
 ##           core/internal/bootstrap/node-lifecycle.sh, core/modules/platform-secrets/install.sh,
 ##           core/internal/secrets/decrypt-secrets.sh.
+##           test_rsync_command_generation — исключение (DevPlan 108): rsync-оркестрация
+##           переехала из scp-deliver.sh в core_deliverer.py — тест импортирует deliver_all()
+##           и мокает subprocess.run (native import, без bash-extraction).
 ##           Each test extracts the target function from source (or sources the library) and
 ##           runs it with controlled arguments in a bash subprocess (subprocess.run is required
 ##           for bash tests — the "NO subprocess.run for business logic" rule applies to Python
@@ -29,7 +32,9 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
+from unittest import mock
+
+from core.internal.bootstrap.core_deliverer import deliver_all
 
 logger = logging.getLogger(__name__)
 
@@ -370,99 +375,117 @@ echo "[IMP:9][build_ssh_cmd] SSH command constructed"
 
 
 # region TEST_test_rsync_command_generation
+# 🧪 TRAP[TEST] · 2026-07-31 · rsync generation moved to core_deliverer.py (DevPlan 108)
+# · Regression: scp_to_server (shell) no longer builds rsync commands — deliver_all() in
+# ·   core_deliverer.py orchestrates mkdir + 5 rsync фаз (1→1b→1c→2→3)
+# · Scenario: import deliver_all, mock subprocess.run recorder, assert phase order +
+# ·   destinations; scenario 2: missing root-level files + secrets → only core+node-configs
+# · Last fail: 2026-07-31 — 0 rsync in shell facade (expected 5)
+# · Remove if: deliver_all orchestration is reimplemented elsewhere
 
 
-def test_rsync_command_generation(caplog) -> None:
-    """Verify scp_to_server() constructs correct rsync commands for all 5 phases (core, platform-env, Makefile, node-configs, secrets)."""
+def test_rsync_command_generation(caplog, tmp_path) -> None:
+    """Verify deliver_all() constructs the correct rsync sequence for all 5 phases (core, platform-env, Makefile, node-configs, secrets)."""
     caplog.set_level(logging.DEBUG)
 
     host = "192.168.1.100"
     node = "test-node"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ncd = os.path.join(tmpdir, "node-configs")
-        os.makedirs(os.path.join(ncd, node), exist_ok=True)
-        os.makedirs(os.path.join(ncd, node, "secrets"), exist_ok=True)
-        cd = os.path.join(tmpdir, "core")
-        os.makedirs(cd, exist_ok=True)
-        # Create platform-env.yaml and Makefile so Phase 1b + 1c execute
-        open(os.path.join(tmpdir, "platform-env.yaml"), "w").close()
-        open(os.path.join(tmpdir, "Makefile"), "w").close()
+    def _ok_run(*_args, **_kwargs) -> mock.MagicMock:
+        """subprocess.run mock return — success."""
+        return mock.MagicMock(returncode=0, stdout="", stderr="")
 
-        logger.info("[IMP:9][test_rsync][setup] Testing rsync with secrets dir + root-level files")
+    # ── Scenario 1: full tree (platform-env.yaml + Makefile + secrets present) ──
+    ncd = tmp_path / "node-configs"
+    (ncd / node).mkdir(parents=True)
+    (ncd / node / "secrets").mkdir(parents=True)
+    cd = tmp_path / "core"
+    cd.mkdir(parents=True)
+    # Create platform-env.yaml and Makefile so Phase 1b + 1c execute
+    (tmp_path / "platform-env.yaml").write_text("dummy: env")
+    (tmp_path / "Makefile").write_text(".PHONY: test")
 
-        tc = (
-            'ssh_exec() { echo "[IMP:8][mock-ssh-exec] $*" >&2; return 0; }\n'
-            'ssh() { echo "[IMP:8][mock-ssh] $*" >&2; return 0; }\n'
-            'ssh-keygen() { echo "[IMP:8][mock-ssh-keygen] $*" >&2; return 0; }\n'
-            'rsync() { echo "[IMP:9][mock-rsync] $*" >&2; }\n'
-            + f'scp_to_server "{host}" "{node}" "{ncd}" "{cd}"\n'
-            + 'echo "[IMP:9][scp_test] SCP completed"'
-        )
+    logger.info("[IMP:9][test_rsync][setup] Testing rsync with secrets dir + root-level files")
 
-        stdout, stderr, rc = _test_func(
-            SCP_DELIVER_SH,
-            ["scp_to_server"],
-            tc,
-            env={"__LOG_PREFIX": "test"},
-        )
+    calls: list[list[str]] = []
 
-        found_imp9 = _print_ldd(stderr, stdout)
-        assert rc == 0, f"scp_to_server failed rc={rc}: {stderr}"
+    def _recorder(*args, **_kwargs) -> mock.MagicMock:
+        calls.append(args[0])
+        return _ok_run()
 
-        rsync_lines = [line for line in stderr.split("\n") if "[IMP:9][mock-rsync]" in line]
-        # 5 phases: core + platform-env.yaml + Makefile + node-configs/<node>/ + secrets/
-        assert len(rsync_lines) == 5, f"Expected 5 rsync calls, got {len(rsync_lines)}"
+    with mock.patch.object(subprocess, "run", side_effect=_recorder):
+        result = deliver_all(host, node, str(ncd), str(cd))
+    assert result is True, "deliver_all must succeed with all phases present"
 
-        p1 = rsync_lines[0]
-        assert "root@192.168.1.100:/opt/platform/core/" in p1, f"Phase1: {p1}"
-        assert "--delete" in p1
-        assert "--exclude=.git" in p1
+    # 6 subprocess calls: ssh mkdir + 5 rsync фаз (1, 1b, 1c, 2, 3)
+    assert len(calls) == 6, f"Expected 6 subprocess calls, got {len(calls)}: {calls}"
+    assert calls[0][0] == "ssh", f"Step 1 must be ssh mkdir: {calls[0]}"
+    rsync_phases = calls[1:]
+    assert all(c[0] == "rsync" for c in rsync_phases), "Steps 2-6 must be rsync"
 
-        p1b = rsync_lines[1]
-        assert "platform-env.yaml" in p1b, f"Phase1b: {p1b}"
-        assert "/opt/platform/platform-env.yaml" in p1b
+    # Phase 1/4: core/ — --delete + runtime-artifact excludes
+    p1 = " ".join(rsync_phases[0])
+    assert "root@192.168.1.100:/opt/platform/core/" in p1, f"Phase1: {p1}"
+    assert "--delete" in p1
+    assert "--exclude=.git" in p1
+    assert "--exclude=default-user.xml" in p1
+    assert "--exclude=.env" in p1
 
-        p1c = rsync_lines[2]
-        assert "Makefile" in p1c, f"Phase1c: {p1c}"
-        assert "/opt/platform/Makefile" in p1c
+    # Phase 1b/4: platform-env.yaml
+    p1b = " ".join(rsync_phases[1])
+    assert "platform-env.yaml" in p1b, f"Phase1b: {p1b}"
+    assert "/opt/platform/platform-env.yaml" in p1b
 
-        p2 = rsync_lines[3]
-        assert "root@192.168.1.100:/opt/node-configs/test-node/" in p2
-        assert "--delete" in p2
+    # Phase 1c/4: Makefile
+    p1c = " ".join(rsync_phases[2])
+    assert "Makefile" in p1c, f"Phase1c: {p1c}"
+    assert "/opt/platform/Makefile" in p1c
 
-        p3 = rsync_lines[4]
-        assert "root@192.168.1.100:/opt/node-configs/secrets/" in p3
+    # Phase 2/4: node-configs/<node>/
+    p2 = " ".join(rsync_phases[3])
+    assert "root@192.168.1.100:/opt/node-configs/test-node/" in p2
+    assert "--delete" in p2
 
-        logger.info("[IMP:9][test_rsync][assert] 5 rsync phases validated")
+    # Phase 3/4: secrets/
+    p3 = " ".join(rsync_phases[4])
+    assert "root@192.168.1.100:/opt/node-configs/secrets/" in p3
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ncd2 = os.path.join(tmpdir, "node-configs")
-        os.makedirs(os.path.join(ncd2, node), exist_ok=True)
-        cd2 = os.path.join(tmpdir, "core")
-        os.makedirs(cd2, exist_ok=True)
-        # No platform-env.yaml, no Makefile, no secrets/ — 1b, 1c, 3 skipped
+    logger.info("[IMP:9][test_rsync][assert] 5 rsync phases validated")
 
-        tc2 = (
-            'ssh_exec() { echo "[IMP:8][mock-ssh-exec] $*" >&2; return 0; }\n'
-            'ssh() { echo "[IMP:8][mock-ssh] $*" >&2; return 0; }\n'
-            'ssh-keygen() { echo "[IMP:8][mock-ssh-keygen] $*" >&2; return 0; }\n'
-            'rsync() { echo "[IMP:9][mock-rsync] $*" >&2; }\n'
-            + f'scp_to_server "{host}" "{node}" "{ncd2}" "{cd2}"\n'
-            + 'echo "[IMP:9][scp_test] SCP without secrets"'
-        )
+    # ── Scenario 2: minimal tree — no platform-env.yaml, no Makefile, no secrets/ ──
+    # Isolated subtree: root-level files from scenario 1 must NOT leak into 1b/1c skips
+    s2 = tmp_path / "scenario2"
+    ncd2 = s2 / "node-configs"
+    (ncd2 / node).mkdir(parents=True)
+    cd2 = s2 / "core"
+    cd2.mkdir(parents=True)
 
-        _stdout2, stderr2, _rc2 = _test_func(
-            SCP_DELIVER_SH,
-            ["scp_to_server"],
-            tc2,
-            env={"__LOG_PREFIX": "test"},
-        )
-        rsync2 = [line for line in stderr2.split("\n") if "[IMP:9][mock-rsync]" in line]
-        # 2 phases: core + node-configs (1b+1c+3 skipped)
-        assert len(rsync2) == 2, f"Expected 2 rsync, got {len(rsync2)}"
-        logger.info("[IMP:9][test_rsync][assert] Without root-level files + secrets: 2 phases only")
+    calls2: list[list[str]] = []
 
+    def _recorder2(*args, **_kwargs) -> mock.MagicMock:
+        calls2.append(args[0])
+        return _ok_run()
+
+    with mock.patch.object(subprocess, "run", side_effect=_recorder2):
+        result2 = deliver_all(host, node, str(ncd2), str(cd2))
+    assert result2 is True
+    # ssh mkdir + core + node-configs = 3 calls; 1b+1c+3 skipped → 2 rsync
+    assert len(calls2) == 3, f"Expected 3 subprocess calls, got {len(calls2)}: {calls2}"
+    rsync2 = [c for c in calls2 if c[0] == "rsync"]
+    assert len(rsync2) == 2, f"Expected 2 rsync, got {len(rsync2)}"
+    logger.info("[IMP:9][test_rsync][assert] Without root-level files + secrets: 2 phases only")
+
+    # LDD trajectory
+    found_imp9 = False
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in caplog.records:
+        if "[IMP:" in record.message:
+            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            if imp_level >= 7:
+                print(record.message)
+            if imp_level >= 9:
+                found_imp9 = True
+    print("--- END LDD TRAJECTORY ---")
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 

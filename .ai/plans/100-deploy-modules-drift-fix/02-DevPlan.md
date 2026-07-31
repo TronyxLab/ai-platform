@@ -420,7 +420,7 @@ def orchestrate(
     deploy_orchestrator: bool = False,
 ) -> DeployResult:
     """Main orchestration entry point — importable and CLI-callable.
-    
+
     Returns DeployResult with exit_code. Caller should sys.exit(result.exit_code).
     """
 ```
@@ -434,7 +434,7 @@ def orchestrate(
 #      DEPLOY_PARALLEL=true|false (default: false)
 #      DEPLOY_ORCHESTRATOR=true|false (default: false)
 # Exit: 0=success, 1=warnings, 2=critical failures
-# Side effects: docker login (~/.docker/config.json), network provision, 
+# Side effects: docker login (~/.docker/config.json), network provision,
 #               module deployment via Python orchestrator
 ```
 

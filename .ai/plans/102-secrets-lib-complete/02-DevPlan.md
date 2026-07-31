@@ -253,10 +253,10 @@ def cleanup_secrets_env(
     tor_enabled: str = "false",
 ) -> dict[str, str]:
     """Read secrets.env, conditionally strip proxy vars, write back atomically.
-    
-    ▶ ┌secrets_env_path┐ → ◇ parse → ◇ TOR_ENABLED≠"true"? → filter proxy → 
+
+    ▶ ┌secrets_env_path┐ → ◇ parse → ◇ TOR_ENABLED≠"true"? → filter proxy →
       ⊕ atomic write (tmp+rename, 0o600) → ⎋ dict[str, str]
-    
+
     Returns: parsed secrets dict AFTER cleanup.
     No-op if file doesn't exist (returns empty dict).
     Never raises — logs warnings on I/O errors.
@@ -414,7 +414,7 @@ TASK-6 + TASK-7 + TASK-8 ────┴──► TASK-10 (gate MODE=fast)
 **Стратегия тестирования AC5/AC6 (AGE_SECRET_KEY/SOPS_AGE_KEY):** поведение fallback-а проверяется на двух уровнях:
 1. **Python-уровень:** `detect_age_key()` (цепочка AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE) покрыт существующими тестами `test_decrypt_secrets.py` и `test_age_key.py`.
 2. **Shell-уровень:** fallback в `step_10_decrypt_secrets` — чистый bash-builtin (2 строки: `[[ -z A ]] && [[ -n B ]] && export A="$B"`; `[[ -z A ]] && exit 1`), не бизнес-логика. Верифицируется через `make gate MODE=fast` (интеграционные тесты CI-окружения) и `test_status_page.py::TestHtpasswdGeneration` (косвенно — подтверждает source-safe поведение `secrets.sh` через `declare -f` stub-guard).
-Отдельный юнит-тест на 2 строки bash-builtin не требуется — избыточен (Test Honesty R2: unfalsifiable assert на language guarantee). 
+Отдельный юнит-тест на 2 строки bash-builtin не требуется — избыточен (Test Honesty R2: unfalsifiable assert на language guarantee).
 
 **Фикстуры:** все тесты используют `tmp_path` (Test Honesty R1), НИКОГДА не используют реальные секреты. Для cleanup-тестов: secrets.env создаётся через `tmp_path / "secrets.env"` с fake `KEY=value` строками. Для htpasswd-тестов: `PLATFORM_MASTER_PASSWORD=test-password-123` (не секрет). LDD caplog IMP:9 проверяется в каждом тесте.
 

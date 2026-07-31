@@ -39,6 +39,7 @@ def _mock_ssh_runner(responses: dict[str, tuple[int, str]]):
     ▶ ∋ responses: {cmd_substring: (rc, stdout)} → ⎋ runner(host, user, cmd, timeout) -> (rc, stdout)
     @invariants — Неожиданный cmd → AssertionError (fail-fast/quick-skip доказательство)
     """
+
     def runner(host: str, user: str, cmd: str, timeout: int) -> tuple[int, str]:
         logger.info("[IMP:7][test_vps_readiness][mock] ssh_runner %s@%s cmd=%.60r", user, host, cmd)
         for pattern, response in responses.items():
@@ -77,6 +78,8 @@ def test_all_checks_pass(caplog: pytest.LogCaptureFixture) -> None:
     assert result["node"] == NODE and result["host"] == HOST
     assert result["checks"] == ["ssh", "forced-command", "projects", "docker"]
     logger.info("[IMP:9][test_vps_readiness] T1 PASS: 4/4 checks OK — status=ready")
+
+
 # endregion FUNC_test_all_checks_pass
 
 
@@ -104,6 +107,8 @@ def test_no_node_host_map(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.
     assert "NODE_HOST_MAP not set" in failures[0]["check"]
     assert "Set NODE_HOST_MAP env var" in failures[0]["remediation"]
     logger.info("[IMP:9][test_vps_readiness] T2 PASS: unset map → not_ready + remediation")
+
+
 # endregion FUNC_test_no_node_host_map
 
 
@@ -131,6 +136,8 @@ def test_node_not_in_map(caplog: pytest.LogCaptureFixture) -> None:
         f"Available keys must be listed, got {failures[0]['remediation']}"
     )
     logger.info("[IMP:9][test_vps_readiness] T3 PASS: unknown node → keys listed in remediation")
+
+
 # endregion FUNC_test_node_not_in_map
 
 
@@ -156,6 +163,8 @@ def test_ssh_unreachable(caplog: pytest.LogCaptureFixture) -> None:
     assert "SSH to ci-deploy@1.2.3.4 failed" in failures[0]["check"]
     assert "verify network, SSH key" in failures[0]["remediation"]
     logger.info("[IMP:9][test_vps_readiness] T4 PASS: ssh unreachable → remediation hint")
+
+
 # endregion FUNC_test_ssh_unreachable
 
 
@@ -181,6 +190,8 @@ def test_ping_no_pong(caplog: pytest.LogCaptureFixture) -> None:
     assert "did not respond with pong" in failures[0]["check"]
     assert failures[0]["remediation"] == "Core not delivered. Run: make bootstrap-node NODE=node1 first"
     logger.info("[IMP:9][test_vps_readiness] T5 PASS: ping no-pong → bootstrap remediation")
+
+
 # endregion FUNC_test_ping_no_pong
 
 
@@ -196,9 +207,7 @@ def test_ping_no_pong(caplog: pytest.LogCaptureFixture) -> None:
 def test_projects_missing(caplog: pytest.LogCaptureFixture) -> None:
     """/opt/projects/ not OK → (False, failure with remediation hint)."""
     caplog.set_level(logging.DEBUG)
-    runner = _mock_ssh_runner(
-        {"exit": (0, ""), "ping": (0, "pong"), "/opt/projects": (0, "FAIL")}
-    )
+    runner = _mock_ssh_runner({"exit": (0, ""), "ping": (0, "pong"), "/opt/projects": (0, "FAIL")})
 
     logger.info("[IMP:7][test_vps_readiness] T6: projects-missing scenario")
     all_ok, result = check_vps_ready(NODE, ssh_runner=runner, node_host_map=NODE_HOST_MAP)
@@ -208,6 +217,8 @@ def test_projects_missing(caplog: pytest.LogCaptureFixture) -> None:
     assert "/opt/projects/ missing or not writable" in failures[0]["check"]
     assert failures[0]["remediation"] == "Project base missing. Run: make bootstrap-node NODE=node1"
     logger.info("[IMP:9][test_vps_readiness] T6 PASS: projects missing → bootstrap remediation")
+
+
 # endregion FUNC_test_projects_missing
 
 
@@ -235,6 +246,8 @@ def test_docker_unreachable(caplog: pytest.LogCaptureFixture) -> None:
     assert "Docker daemon not reachable on 1.2.3.4" in failures[0]["check"]
     assert "systemctl start docker" in failures[0]["remediation"]
     logger.info("[IMP:9][test_vps_readiness] T7 PASS: docker unreachable → systemctl remediation")
+
+
 # endregion FUNC_test_docker_unreachable
 
 
@@ -251,9 +264,7 @@ def test_quick_skips_docker(caplog: pytest.LogCaptureFixture) -> None:
     """--quick: docker check skipped → (True, ready); docker cmd никогда не вызывается."""
     caplog.set_level(logging.DEBUG)
     # Нет ключа "docker info" — если check 4 выполнится, _mock_ssh_runner бросит AssertionError
-    runner = _mock_ssh_runner(
-        {"exit": (0, ""), "ping": (0, "pong"), "/opt/projects": (0, "OK")}
-    )
+    runner = _mock_ssh_runner({"exit": (0, ""), "ping": (0, "pong"), "/opt/projects": (0, "OK")})
 
     logger.info("[IMP:7][test_vps_readiness] T8: quick-mode scenario")
     all_ok, result = check_vps_ready(NODE, quick_mode=True, ssh_runner=runner, node_host_map=NODE_HOST_MAP)
@@ -263,6 +274,8 @@ def test_quick_skips_docker(caplog: pytest.LogCaptureFixture) -> None:
         "checks list preserved (bash-версия включала docker даже при --quick)"
     )
     logger.info("[IMP:9][test_vps_readiness] T8 PASS: quick mode skipped docker, ready")
+
+
 # endregion FUNC_test_quick_skips_docker
 
 
@@ -292,6 +305,8 @@ def test_json_output_ready(caplog: pytest.LogCaptureFixture) -> None:
     assert parsed["node"] == NODE and parsed["host"] == HOST
     assert parsed["checks"] == ["ssh", "forced-command", "projects", "docker"]
     logger.info("[IMP:9][test_vps_readiness] T9 PASS: ready JSON round-trips with status=ready")
+
+
 # endregion FUNC_test_json_output_ready
 
 
@@ -323,6 +338,8 @@ def test_json_output_failures(caplog: pytest.LogCaptureFixture) -> None:
     assert "Docker daemon not reachable" in failure["check"]
     assert "systemctl start docker" in failure["remediation"]
     logger.info("[IMP:9][test_vps_readiness] T10 PASS: not_ready JSON round-trips with failures array")
+
+
 # endregion FUNC_test_json_output_failures
 
 
@@ -362,4 +379,6 @@ def test_json_no_extra_commas(caplog: pytest.LogCaptureFixture) -> None:
     # Канонический round-trip: повторная сериализация парса = исходная строка (нет мусора)
     assert json.dumps(json.loads(serialized)) == serialized
     logger.info("[IMP:9][test_vps_readiness] T11 PASS: 3 failures → valid JSON, no extra commas")
+
+
 # endregion FUNC_test_json_no_extra_commas

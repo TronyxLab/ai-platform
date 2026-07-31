@@ -482,7 +482,7 @@ bash core/entrypoints/validate.sh tests/test_data/valid-node.yaml 2>&1 | grep -q
 bash core/entrypoints/validate.sh --lint 2>&1; echo "EXIT: $?"   # 3 строки, exit 0
 
 # AC7: golden error format
-bash core/entrypoints/validate.sh tests/test_data/invalid-node.yaml 2>&1 | grep -q "FAIL: .*:\n  Error at" 
+bash core/entrypoints/validate.sh tests/test_data/invalid-node.yaml 2>&1 | grep -q "FAIL: .*:\n  Error at"
 
 # AC8: gate
 make gate MODE=fast   # exit 0

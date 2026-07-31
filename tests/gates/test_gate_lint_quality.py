@@ -1,28 +1,36 @@
-# GREP_SUMMARY: gate linter-parity bash-python name-linter module-lifecycle G1.3 anti-drift
-# STRUCTURE: ▶ _make_temp_makefile → _run_bash_linter ∥ _run_python_linter → ◇ diff(results) → ⟦assert no diff⟧
+# GREP_SUMMARY: gate linter-parity namelint make-target manifest G1.3 anti-drift facade-delegation
+# STRUCTURE: ▶ facade delegation (lint.sh→python3 -m) → ▶ validate_make_target_names(real repo) →
+#            ▶ _make_temp_lint_repo (manifest symlink + Makefile + makefiles/*.mk) → validate_make_target_names(temp) ∥
+#            _run_python_linter (spec oracle) → ◇ diff(module, oracle, expected) → ⟦assert no diff⟧
 # region MODULE_CONTRACT
-## @purpose — Regression test: verify that bash (lint.sh namelint) and Python
-##            (test_gate_manifest_integrity name-linter logic) linters give identical results
-##            on the same set of test targets. G1.3 requirement.
-## @scope — Creates a temporary Makefile with a curated set of test targets
-##          (valid canonical, valid module, forbidden, system exceptions, unknown).
-##          Runs both linters and compares their outputs.
+## @purpose — Regression test: verify the namelint contract — make-target names from Makefile +
+##            makefiles/*.mk validated against entrypoint-manifest.yaml by the unified Python
+##            implementation (core.internal.lint.doc_header_validator.validate_make_target_names,
+##            DevPlan 106). lint.sh namelint is a thin facade delegating to the SAME module → the
+##            pre-commit hook and CI gate give identical feedback by construction (G1.3).
+## @scope — (1) facade parity: lint.sh delegates namelint to the module under test; (2) production
+##          contract: real repo targets all pass against the manifest; (3) classification parity:
+##          temp repo root with curated .PHONY targets split across Makefile and makefiles/*.mk →
+##          module output equals an independent spec oracle on every target category.
 ## @invariants
-##   - Both linters must agree on every target category
-##   - Diff output on mismatch shows exact disagreement
-## @rationale — Two independent linter implementations (bash awk + Python YAML)
-##              must produce the same results. If they diverge, the CI gate and
-##              pre-commit hook give different feedback, confusing developers.
+##   - Module output must equal the spec oracle on every target category: forbidden/unknown → FAIL,
+##     allowed/module_lifecycle/system-exception/system-prefix → pass
+##   - Temp repo is self-contained: manifest symlink + Makefile + makefiles/*.mk. A Makefile outside
+##     the repo root is NOT validated — Python parses repo_root/Makefile + makefiles/*.mk (documented
+##     DevPlan 106 behavior, QA P2 root cause)
+## @rationale — After DevPlan 106, bash awk and Python YAML linters are ONE implementation
+##              (Strangler-Fig). The parity test is reoriented: compare the production implementation
+##              against an independent spec oracle instead of comparing two now-identical code paths.
 # endregion MODULE_CONTRACT
 
 import logging
 import pathlib
 import re
-import subprocess
 
 import pytest
 import yaml
 
+from core.internal.lint.doc_header_validator import validate_make_target_names
 from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -30,7 +38,6 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
 _MANIFEST_PATH: pathlib.Path = _PROJECT_ROOT / "core" / "entrypoint-manifest.yaml"
 _LINT_SH_PATH: pathlib.Path = _PROJECT_ROOT / "core" / "entrypoints" / "lint.sh"
-_PATHS_SH_PATH: pathlib.Path = _PROJECT_ROOT / "core" / "lib" / "paths.sh"
 
 
 # ── Test target catalog ──
@@ -55,84 +62,54 @@ _TEST_TARGETS: dict[str, str] = {
     "random-task": "fail",
 }
 
-_MAKEFILE_TEMPLATE: str = """# Temporary Makefile for parity test
-.PHONY: {targets}
-"""
 
+def _make_temp_lint_repo(tmp_path: pathlib.Path, targets: list[str]) -> pathlib.Path:
+    """Create a temp repo root: manifest symlink + Makefile + makefiles/*.mk with .PHONY targets.
 
-def _make_temp_makefile(tmp_path: pathlib.Path, targets: list[str]) -> pathlib.Path:
-    """Create a temporary Makefile with the given .PHONY targets.
-
-    ## @purpose — Generate a minimal Makefile for the bash linter to parse.
-    ## @io — ⇥ tmp_path: Path, targets: list[str] → ⎋ Path to generated Makefile
+    ## @purpose — Build a self-contained repo root for validate_make_target_names: manifest is
+    ##            symlinked (same Source of Truth as production), targets are split between the
+    ##            root Makefile and makefiles/*.mk to verify BOTH are scanned (lint.sh:114-126 port).
+    ## @io — ⇥ tmp_path: Path, targets: list[str] → ⎋ Path to temp repo root
     ## @complexity — O(N) where N = number of targets
     """
-    mf_path = tmp_path / "Makefile"
-    phony_line = " ".join(targets)
-    mf_path.write_text(_MAKEFILE_TEMPLATE.format(targets=phony_line))
-    logger.info("[IMP:8][_make_temp_makefile] Created temp Makefile with %d targets", len(targets))
-    return mf_path
-
-
-def _run_bash_linter(makefile_path: pathlib.Path, tmp_path: pathlib.Path) -> list[str]:
-    """Run lint.sh namelint on a temporary Makefile and return list of FAIL targets.
-
-    ## @purpose — Execute the bash linter in isolation by creating a minimal
-    ##            project directory structure that mirrors the real project layout.
-    ## @io — ⇥ makefile_path: Path → ⎋ list[str] of target names that FAILED
-    ## @complexity — O(N) where N = targets
-    """
-    temp_root = tmp_path / "project"
-    temp_root.mkdir()
-    temp_core = temp_root / "core"
-    temp_core.mkdir()
-    temp_entrypoints = temp_core / "entrypoints"
-    temp_entrypoints.mkdir()
-
-    manifest_link = temp_core / "entrypoint-manifest.yaml"
+    temp_root = tmp_path / "repo"
+    (temp_root / "core").mkdir(parents=True)
+    manifest_link = temp_root / "core" / "entrypoint-manifest.yaml"
     manifest_link.symlink_to(_MANIFEST_PATH)
 
-    temp_lib = temp_core / "lib"
-    temp_lib.mkdir()
-    paths_script = temp_lib / "paths.sh"
-    paths_script.write_text(_PATHS_SH_PATH.read_text())
-
-    # Create stub for module-interface.sh (needed by paths.sh since gate8-v2)
-    stub_interface = temp_lib / "module-interface.sh"
-    stub_interface.write_text("""#!/usr/bin/env bash
-# Stub for test isolation
-invoke_module_interface() { return 0; }
-""")
-
-    lint_script = temp_entrypoints / "lint.sh"
-    lint_script.write_text(_LINT_SH_PATH.read_text())
-    lint_script.chmod(0o755)
-
-    temp_makefile = temp_root / "Makefile"
-    temp_makefile.write_text(makefile_path.read_text())
-
-    result = subprocess.run(
-        ["bash", "core/entrypoints/lint.sh", "namelint"],
-        capture_output=True,
-        text=True,
-        cwd=str(temp_root),
+    half = len(targets) // 2
+    (temp_root / "Makefile").write_text(f".PHONY: {' '.join(targets[:half])}\n")
+    mk_dir = temp_root / "makefiles"
+    mk_dir.mkdir()
+    (mk_dir / "split.mk").write_text(f".PHONY: {' '.join(targets[half:])}\n")
+    logger.info(
+        "[IMP:8][_make_temp_lint_repo] temp repo: %d target(s) across Makefile + makefiles/split.mk",
+        len(targets),
     )
+    return temp_root
 
-    failed_targets: list[str] = []
-    for line in result.stdout.splitlines():
-        if "[FAIL]" in line:
-            m = re.search(r"'([^']+)'", line)
-            if m:
-                failed_targets.append(m.group(1))
 
-    logger.info("[IMP:8][_run_bash_linter] Bash linter: %d FAIL, returncode=%d", len(failed_targets), result.returncode)
-    return failed_targets
+def _flagged_targets(errors: list[str]) -> set[str]:
+    """Extract FAIL target names from validate_make_target_names error messages.
+
+    ## @purpose — Parse "[FAIL] Target '<name>' ..." messages → set of flagged names.
+    ## @io — ⇥ errors: list[str] → ⎋ set[str] of flagged target names
+    ## @complexity — O(E) where E = number of errors
+    """
+    flagged: set[str] = set()
+    for err in errors:
+        m = re.search(r"Target '([^']+)'", err)
+        if m:
+            flagged.add(m.group(1))
+    return flagged
 
 
 def _run_python_linter(test_targets: dict[str, str]) -> list[str]:
-    """Run Python linter logic and return list of FAIL targets.
+    """Run the independent spec oracle and return list of FAIL targets.
 
-    ## @purpose — Duplicate the Python linter logic using the same manifest data.
+    ## @purpose — Independent re-implementation of the namelint spec (manifest data only): forbidden
+    ##            → FAIL; allowed/module_lifecycle/system_exceptions/system_prefixes → pass; else FAIL.
+    ##            Serves as the reference oracle for parity against validate_make_target_names.
     ## @io — ⇥ test_targets: dict[str, str] (target → expected verdict) → ⎋ list[str] of FAIL targets
     ## @complexity — O(N * L) where N = targets, L = lookup time
     """
@@ -162,7 +139,7 @@ def _run_python_linter(test_targets: dict[str, str]) -> list[str]:
         failed_targets.append(target)
 
     logger.info(
-        "[IMP:8][_run_python_linter] Python linter: %d FAIL out of %d targets", len(failed_targets), len(test_targets)
+        "[IMP:8][_run_python_linter] Spec oracle: %d FAIL out of %d targets", len(failed_targets), len(test_targets)
     )
     return failed_targets
 
@@ -172,55 +149,69 @@ def _run_python_linter(test_targets: dict[str, str]) -> list[str]:
 
 @pytest.mark.gate
 @ldd_trajectory
-# 🧪 TRAP[TEST] · 2026-07-10 · gate/linter-parity · G1.3 bash↔Python parity
-
-# 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
-# · Last fail: N/A (preventive)
-# · Remove if: entire gate category is superseded by a newer mechanism
+# 🧪 TRAP[TEST] · 2026-07-31 · REGRESSION · DevPlan 106: namelint moved from lint.sh (awk) to
+#   doc_header_validator.validate_make_target_names — bash facade now exec's the SAME Python module,
+#   so bash-vs-python comparison collapsed (DRIFT-GATE-2, QA P2). Temp Makefile was ignored because
+#   Python parses repo_root/Makefile + makefiles/*.mk, not the test's temp path.
+# · Scenario: (1) lint.sh facade delegates namelint to the module under test; (2) real repo → PASS
+# ·   (production contract); (3) temp repo root (manifest symlink + curated .PHONY across Makefile and
+# ·   makefiles/*.mk) → module flags exactly forbidden+unknown targets and passes
+# ·   allowed/lifecycle/system-exception/system-prefix targets — parity with the independent spec oracle
+# · Last fail: 2026-07-31 — "Bash linter missed expected FAIL targets: [deploy-node, foobar, push-core, random-task]"
+# · Remove if: namelint moves out of doc_header_validator (re-point import + facade delegation assertion)
 def test_linter_parity(caplog, tmp_path) -> None:
-    """Validate bash and Python linters produce identical results on test targets.
+    """Validate namelint contract: module output equals spec oracle on every target category.
 
-    ## @purpose — G1.3 regression gate: ensures the bash (lint.sh namelint) and
-    ##            Python (manifest_integrity name-linter logic) linters agree.
+    ## @purpose — G1.3 regression gate: after DevPlan 106 the bash (lint.sh namelint) and Python
+    ##            name-linter are one implementation. Parity is now asserted between the production
+    ##            implementation (validate_make_target_names) and an independent spec oracle on a
+    ##            curated target catalog, plus the facade-delegation contract that lint.sh runs the
+    ##            exact tested module.
     ## @io — ⎋ None (assert side-effect via pytest.fail on diff)
     ## @complexity — O(N) where N = test targets
     """
-    logger.info("[IMP:8][test_linter_parity] === Bash vs Python linter parity check ===")
+    logger.info("[IMP:8][test_linter_parity] === namelint contract + spec oracle parity check ===")
 
+    # 1. Facade parity — lint.sh namelint must delegate to the exact module under test
+    lint_sh = _LINT_SH_PATH.read_text()
+    delegation = "python3 -m core.internal.lint.doc_header_validator namelint"
+    assert delegation in lint_sh, f"lint.sh must delegate namelint to doc_header_validator (missing: {delegation!r})"
+    logger.info("[IMP:9][test_linter_parity] OK: lint.sh namelint delegates via %r", delegation)
+
+    # 2. Production contract — real repo .PHONY targets all valid against the manifest
+    real_errors = validate_make_target_names(_PROJECT_ROOT)
+    assert real_errors == [], f"real repo namelint must PASS against manifest: {real_errors}"
+    logger.info("[IMP:9][test_linter_parity] OK: real repo namelint PASS (0 errors)")
+
+    # 3. Classification parity — temp repo (Makefile + makefiles/*.mk), curated catalog
     target_names = sorted(_TEST_TARGETS.keys())
-    mf_path = _make_temp_makefile(tmp_path, target_names)
-
-    bash_fails = _run_bash_linter(mf_path, tmp_path)
-    python_fails = _run_python_linter(_TEST_TARGETS)
-
-    bash_only = set(bash_fails) - set(python_fails)
-    python_only = set(python_fails) - set(bash_fails)
-
-    expected_fails = sorted(t for t, v in _TEST_TARGETS.items() if v == "fail")
-    bash_expected_diff = set(bash_fails) - set(expected_fails)
-    python_expected_diff = set(python_fails) - set(expected_fails)
-    bash_missed = set(expected_fails) - set(bash_fails)
-    python_missed = set(expected_fails) - set(python_fails)
+    temp_root = _make_temp_lint_repo(tmp_path, target_names)
+    module_fails = _flagged_targets(validate_make_target_names(temp_root))
+    oracle_fails = set(_run_python_linter(_TEST_TARGETS))
+    expected_fails = {t for t, v in _TEST_TARGETS.items() if v == "fail"}
 
     errors: list[str] = []
-    if bash_only:
-        errors.append(f"Bash linter flagged targets that Python did not: {sorted(bash_only)}")
-    if python_only:
-        errors.append(f"Python linter flagged targets that Bash did not: {sorted(python_only)}")
-    if bash_expected_diff:
-        errors.append(f"Bash linter result differs from expected: {sorted(bash_expected_diff)}")
-    if python_expected_diff:
-        errors.append(f"Python linter result differs from expected: {sorted(python_expected_diff)}")
-    if bash_missed:
-        errors.append(f"Bash linter missed expected FAIL targets: {sorted(bash_missed)}")
-    if python_missed:
-        errors.append(f"Python linter missed expected FAIL targets: {sorted(python_missed)}")
+    if module_fails != expected_fails:
+        errors.append(
+            f"Module linter result differs from expected: module={sorted(module_fails)} expected={sorted(expected_fails)}"
+        )
+    if oracle_fails != expected_fails:
+        errors.append(
+            f"Spec oracle result differs from expected: oracle={sorted(oracle_fails)} expected={sorted(expected_fails)}"
+        )
+    if module_fails != oracle_fails:
+        errors.append(
+            f"Parity violation — module vs spec oracle disagree: "
+            f"module={sorted(module_fails)} oracle={sorted(oracle_fails)}"
+        )
 
     if errors:
         logger.error("[IMP:9][test_linter_parity] FAIL: %d disagreement(s)", len(errors))
     else:
         logger.info(
-            "[IMP:9][test_linter_parity] ALL PASS — bash and Python linters agree on all %d targets", len(target_names)
+            "[IMP:9][test_linter_parity] ALL PASS — module==oracle==expected on %d targets (FAIL: %s)",
+            len(target_names),
+            sorted(module_fails),
         )
 
     assert not errors, "\n".join(errors)

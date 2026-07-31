@@ -400,7 +400,7 @@ bootstrap.sh
   - TASK-5 влит в TASK-3 (оба затрагивают документацию bootstrap, <20 строк)
 
 ### Wave 4 (зависит от TASK-1 + TASK-3)
-- **TASK-4** — Обновить caller'ы: bootstrap.sh, node-update.sh, converge.sh 
+- **TASK-4** — Обновить caller'ы: bootstrap.sh, node-update.sh, converge.sh
   - Файлы F4/F5/F6 не пересекаются с F2/F8
 
 ### Wave 5 (зависит от TASK-2)
