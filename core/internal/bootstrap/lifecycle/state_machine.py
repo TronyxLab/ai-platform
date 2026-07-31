@@ -210,6 +210,17 @@ _phase_dependency_graph: dict[str, set[str]] = {
 }
 
 # Grouped phases (have sub_steps for granular checkpoint tracking)
+# 📝 TRAP[DEBT] · 2026-07-31 · MED · resume_phase()/execute_grouped_phase()/_grouped_phases — мёртвый код
+# · Observed: _run_init_mode()/_run_update_mode() вызывают только execute_phase(); resume_phase()
+#   не имеет ни одного caller'а во всём core/. DevPlan 095 T14 (E2E mid-phase kill → sub_step-resume)
+#   подтвердил: после kill подшаг-resume не срабатывает — фаза перевыполняется целиком.
+# · Suspected: grouped-phase resume проектировался (DevPlan 087) как partial-failure recovery,
+#   но не был подключён к run-циклам; --resume флаг в main() только логирует (L1355-1356).
+# · Impact: частичный отказ внутри grouped-фазы (φ1-φ5, φ7, φ12) перевыполняет ВСЕ подшаги фазы —
+#   потеря инкрементальности resume; SKIP sub_step логи (IMP:8) никогда не эмитятся в реальном pipeline.
+# · When: during DevPlan 095 E2E implementation — deferred, out of scope (test-only план)
+# · Fix-hint: в _run_init_mode/_run_update_mode для фаз из _grouped_phases вызывать
+#   resume_phase(phase) вместо execute_phase(phase) (resume_phase сама решает full vs partial).
 _grouped_phases: frozenset[str] = frozenset(
     {
         BootstrapPhase.SYSTEM_BOOTSTRAP,

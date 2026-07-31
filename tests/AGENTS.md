@@ -63,6 +63,7 @@ gates:
 | `tests/gates/` | CI gate-тесты (`make gate MODE=fast`) | `@pytest.mark.gate` |
 | `tests/contracts/` | Контрактные тесты entrypoints | `make contracts` |
 | `tests/unit/` | Unit-тесты Python-модулей (без Docker) | Нет `requires_docker` |
+| `tests/e2e/` | E2E pipeline тесты на test-VPS (DevPlan 095) | `@pytest.mark.requires_node`, `make test-node NODE=<name>`. **НЕ** в `make test MARKER=all` и `make gate` (фильтр `not requires_node`). Нужны NODE env, SSH, AGE-ключ; без test-VPS → FAIL (Rule R4) |
 | `tests/_conftest/` | Внутренние фикстуры/хелперы. **НЕ содержит тестов.** | Пакет, `__init__.py` |
 | `tests/helpers/` | Shared helpers (YAML, LDD, repo_root) | `gate_helpers.py` |
 | `tests/test_data/` | Статические test fixtures | node.yaml auto-validated |

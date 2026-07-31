@@ -185,8 +185,8 @@ When `make generate-manifests` runs, the generator WILL extract `test-summary` f
 
 ## Delegation Proposal
 
-**Target:** Coder  
-**Action:** Fix DRIFT-1 (required) + evaluate DRIFT-2 (optional)  
+**Target:** Coder
+**Action:** Fix DRIFT-1 (required) + evaluate DRIFT-2 (optional)
 **Steps:**
 1. Run `make generate-manifests` — this will add `test-summary` to `allowed_verbs` in `core/entrypoint-manifest.yaml`
 2. Run `make check-manifests` — verify byte-level consistency

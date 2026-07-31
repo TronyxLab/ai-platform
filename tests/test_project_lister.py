@@ -102,8 +102,15 @@ def test_list_offline_table(single_node_yaml: pathlib.Path, caplog) -> None:
 def test_list_offline_json(single_node_yaml: pathlib.Path, capfd, caplog) -> None:
     import json
 
+    # ⚠️ TRAP[BUG] · 2026-07-31 · P2 · Lost list_projects_offline() call — capfd captured empty stdout
+    # · Symptom: test_list_offline_json always failed ("Expected JSON output on stdout", assert '')
+    #   while ruff flagged F841 (projects_root unused) — the call + print were lost in an earlier refactor
+    # · Root: refactor deleted the invocation; capfd.readouterr() ran before any output existed
+    # · Fix: restored canonical invocation (mirror of test_list_offline_table) + json.dumps print
+    # · Prevention: capfd-based tests must call the target before readouterr()
     projects_root = single_node_yaml.parent.parent.parent.parent
     logger.info("[IMP:9][test][lister] test_list_offline_json — starting JSON listing")
+    list_projects_offline(projects_root=projects_root, output_format="json")  # prints JSON to stdout (L148)
     captured = capfd.readouterr()
     stdout_text = captured.out.strip()
     assert stdout_text, "Expected JSON output on stdout"

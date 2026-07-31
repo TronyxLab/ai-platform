@@ -169,9 +169,7 @@ def test_merge_deploy_steps(caplog) -> None:
     # The merged deploy-modules step now lives in phases.py (φ8 phase_deploy_services,
     # φ12 phase_deploy_update) — registered as "deploy_modules" step in state_machine.py.
     phases_content = _PHASES_PY.read_text()
-    assert "deploy_modules" in phases_content, (
-        "S2 violation: deploy_modules phase not found in phases.py (φ8/φ12)"
-    )
+    assert "deploy_modules" in phases_content, "S2 violation: deploy_modules phase not found in phases.py (φ8/φ12)"
     logger.info("[IMP:9][test_merge_deploy_steps] Facade has no step functions; deploy_modules in phases.py OK")
 
     # ── 2. update_step_5_deploy_system must be REMOVED ──
@@ -197,12 +195,8 @@ def test_merge_deploy_steps(caplog) -> None:
         "S2 violation: node-lifecycle.sh facade must NOT contain checkpoint_step — "
         "checkpoints are phase keys in state.json (BootstrapPhase enum)"
     )
-    assert "phase_deploy_services" in phases_content, (
-        "S2 violation: phase_deploy_services (φ8) not found in phases.py"
-    )
-    assert "phase_deploy_update" in phases_content, (
-        "S2 violation: phase_deploy_update (φ12) not found in phases.py"
-    )
+    assert "phase_deploy_services" in phases_content, "S2 violation: phase_deploy_services (φ8) not found in phases.py"
+    assert "phase_deploy_update" in phases_content, "S2 violation: phase_deploy_update (φ12) not found in phases.py"
     logger.info(
         "[IMP:9][test_merge_deploy_steps] Checkpoints as phase keys: φ8 phase_deploy_services + φ12 phase_deploy_update OK"
     )
@@ -739,15 +733,23 @@ def test_yaml_read_domain_config(caplog, tmp_path) -> None:
     logger.info("[IMP:8][test_yaml_read_domain_config] Function declared OK")
 
     # ── 2. Must delegate to NodeYaml CLI --domain-config ──
-    assert "--domain-config" in content, "S7 violation: yaml_read_domain_config does not delegate to NodeYaml CLI --domain-config"
+    assert "--domain-config" in content, (
+        "S7 violation: yaml_read_domain_config does not delegate to NodeYaml CLI --domain-config"
+    )
     logger.info("[IMP:9][test_yaml_read_domain_config] Delegation to NodeYaml CLI --domain-config OK")
 
     # ── 2b. Verify output format contract in NodeYaml CLI (_cli_domain_config) ──
     ny_path = repo_root() / "core" / "internal" / "shared" / "node_yaml.py"
     ny_content = ny_path.read_text()
-    assert "platform_domain:" in ny_content, "S7 violation: node_yaml.py _cli_domain_config missing platform_domain output"
-    assert "project_domains:" in ny_content, "S7 violation: node_yaml.py _cli_domain_config missing project_domains output"
-    assert "acme_dns_plugin:" in ny_content, "S7 violation: node_yaml.py _cli_domain_config missing acme_dns_plugin output"
+    assert "platform_domain:" in ny_content, (
+        "S7 violation: node_yaml.py _cli_domain_config missing platform_domain output"
+    )
+    assert "project_domains:" in ny_content, (
+        "S7 violation: node_yaml.py _cli_domain_config missing project_domains output"
+    )
+    assert "acme_dns_plugin:" in ny_content, (
+        "S7 violation: node_yaml.py _cli_domain_config missing acme_dns_plugin output"
+    )
     logger.info("[IMP:9][test_yaml_read_domain_config] NodeYaml CLI --domain-config output format contract verified OK")
 
     # ── 3. Write a mock node.yaml and test extraction via subprocess ──
@@ -835,7 +837,6 @@ projects:
 ## @complexity O(N) — single pass over file content
 def _extract_bash_func(filepath: Path, func_name: str) -> str:
     """Extract a bash function definition from source using brace counting."""
-    import re
 
     content = filepath.read_text()
     patterns = [

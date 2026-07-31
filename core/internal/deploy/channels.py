@@ -2,14 +2,15 @@
 """
 Delivery Channel abstractions for DeployOrchestrator — SCPChannel and ForcedCommandChannel.
 """
-# GREP_SUMMARY: delivery-channels, abc, scp, rsync, forced-command, ssh, payload, deliver, timeout, retry, auth
-# STRUCTURE: ▶ Payload dataclass → DeliveryResult dataclass → DeliveryChannel ABC → SCPChannel(deliver via scp/rsync) → ForcedCommandChannel(deliver via SSH forced-command)
+# GREP_SUMMARY: delivery-channels, abc, scp, rsync, forced-command, ssh, payload, deliver, timeout, retry, auth, local
+# STRUCTURE: ▶ Payload dataclass → DeliveryResult dataclass → DeliveryChannel ABC → SCPChannel(deliver via scp/rsync) → LocalChannel(no-op, VPS-side receive) → ForcedCommandChannel(deliver via SSH forced-command)
 # region MODULE_CONTRACT
-## @purpose  DeliveryChannel ABC with SCPChannel and ForcedCommandChannel implementations.
+## @purpose  DeliveryChannel ABC with SCPChannel, LocalChannel and ForcedCommandChannel implementations.
 ##           Each channel delivers a Payload (tar_path, project_name, version, metadata)
 ##           and returns DeliveryResult (success, stdout, stderr, exit_code, duration_s).
 ## @scope    Used by DeployOrchestrator to abstract delivery mechanism. SCPChannel for
-##           bootstrap/rsync delivery, ForcedCommandChannel for CI/tar+SSH forced-command.
+##           bootstrap/rsync delivery, LocalChannel for VPS-side receive (payload already
+##           in place), ForcedCommandChannel for CI/tar+SSH forced-command.
 ## @invariants
 ##   1. Payload must contain at minimum tar_path and project_name
 ##   2. All channels have configurable timeout (default 600s) via PLATFORM_DEPLOY_TIMEOUT env var
@@ -314,6 +315,57 @@ class SCPChannel(DeliveryChannel):
 
 
 # endregion CLASS_SCPChannel
+
+
+# region CLASS_LocalChannel
+
+# 🧐 TRAP[DECISION] · 2026-07-31 · HI · LocalChannel — VPS-side receive delivery
+# · Rejected: SCPChannel() with empty metadata in DeployOrchestrator.receive()
+#   (bug: deliver ALWAYS failed with "SCPChannel requires 'host' in payload.metadata" —
+#   receive() ran the compose engine through a transport channel that cannot work locally;
+#   exposed by DevPlan 095 E2E T16 on a real VPS)
+# · Reason: receive() already extracted the payload to /opt/projects/<name>/ — a transport
+#   channel is meaningless there. LocalChannel is a contract-compliant no-op delivery that
+#   lets the full DeployOrchestrator pipeline run (compose up → healthcheck → snapshot →
+#   audit) on the VPS side. Alternative rejected: self-SSH (root@127.0.0.1) — requires the
+#   VPS root key to authorize itself, unreliable on fresh nodes.
+# · Rev: if a real "deliver locally" semantic is needed (e.g., remote-dir override),
+#   extend LocalChannel with a local copy step instead of a transport.
+
+
+class LocalChannel(DeliveryChannel):
+    """Delivery channel for payloads already present at the target location (VPS-side receive).
+
+    ## @purpose — No-op transport for DeployOrchestrator.receive(): the payload tar was
+    ##            already extracted to projects_base/<project>/ before deploy() is called.
+    ##            Keeps the DeployOrchestrator pipeline (compose-up → healthcheck →
+    ##            snapshot → audit) intact on the VPS without a self-SSH transport hop.
+    ## @io — ⇥ Payload → ⎋ DeliveryResult(success=True) — files already in place
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - deliver() never touches the network
+    ##   - Always succeeds (payload placement is the caller's responsibility)
+    ##   - Retry wrapper (_retry_deliver) degenerates to a single no-op call
+    ## @rationale DevPlan 095 E2E exposed that receive() used SCPChannel with empty
+    ##            metadata — deliver() always failed. LocalChannel is the minimal
+    ##            contract-compliant replacement (no self-SSH dependency).
+    """
+
+    def deliver(self, payload: Payload) -> DeliveryResult:
+        logger.info(
+            "[IMP:9][LocalChannel][deliver] Local delivery — payload for %s already in place (tar=%s)",
+            payload.project_name,
+            payload.tar_path.name,
+        )
+        return DeliveryResult(
+            success=True,
+            stdout="local delivery — payload already extracted",
+            exit_code=0,
+            duration_s=0.0,
+        )
+
+
+# endregion CLASS_LocalChannel
 
 
 # region CLASS_ForcedCommandChannel

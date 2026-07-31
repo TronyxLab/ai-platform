@@ -58,6 +58,9 @@ SYSTEM_EXCEPTIONS: set[str] = {
 ALLOWED_PREFIX_EXCEPTIONS: set[str] = {
     "test-inventory-sync",
     "test-summary",
+    # DevPlan 095: E2E pipeline tests target — test-* prefix but canonical verb
+    # (requires NODE env + test-VPS; NOT part of make test MARKER=all)
+    "test-node",
 }
 
 SYSTEM_PREFIXES: tuple[str, ...] = (

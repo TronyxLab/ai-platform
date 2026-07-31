@@ -58,6 +58,7 @@ markers = [
     "predeploy: container/config/network validation (needs Docker)",
     "contract: contract tests for entrypoint scripts (no Docker)",
     "e2e: manual end-to-end tests against external *.tronyx.ru (no Docker, dev-only)",
+    "requires_node: E2E pipeline tests against a recreatable test-VPS (needs NODE env, SSH, Docker)",
     "gate: CI gate tests",
     "skip_enforcement: skip enforcement gate tests",
     "requires_docker: tests that require a running Docker daemon",

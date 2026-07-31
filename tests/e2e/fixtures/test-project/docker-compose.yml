@@ -1,0 +1,23 @@
+# GREP_SUMMARY: fixture test-project compose nginx alpine port-8080 healthcheck IMAGE_TAG
+# @purpose Canonical E2E test-project compose (DevPlan 095 T18) — deterministic per Anti-Loop
+#   Note (0 parameterized). Deployed on the test-VPS via DeployOrchestrator.receive()
+#   (SCP payload → compose up -d). image uses ${IMAGE_TAG} so DeployEngine._atomic_up
+#   (IMAGE_TAG=$ref docker compose up) resolves correctly on every deploy.
+# @invariants
+#   - Service name `web` matches ai-platform.yaml#service
+#   - nginx:alpine is a public Docker Hub image — pull works without registry credentials
+#   - Port 8080 must be free on the test-VPS (fresh node per invariant 9)
+#   - Healthcheck: busybox wget against nginx — container becomes healthy (~5-10s)
+services:
+  web:
+    image: nginx:${IMAGE_TAG:-alpine}
+    container_name: test-project-web
+    ports:
+      - "8080:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

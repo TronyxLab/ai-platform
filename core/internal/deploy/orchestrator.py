@@ -733,9 +733,21 @@ class DeployOrchestrator:
                     shutil.copy2(str(item), os.path.join(target_dir, item.name))
 
             # Execute deploy
-            from core.internal.deploy.channels import SCPChannel
+            # 🧐 TRAP[DECISION] · 2026-07-31 · HI · receive() local delivery channel
+            # · Rejected: SCPChannel() with empty metadata (bug — deliver() always FAILED:
+            #   "SCPChannel requires 'host' in payload.metadata"; the payload is already
+            #   extracted to target_dir, so a transport hop is meaningless; exposed by
+            #   DevPlan 095 E2E T16 on a real VPS — the mocked IntegrationMockChannel never
+            #   caught it)
+            # · Reason: LocalChannel is a no-op delivery that preserves the full
+            #   DeployOrchestrator pipeline (compose up → healthcheck → DeployHistory
+            #   snapshot → audit) on the VPS side. Alternative rejected: self-SSH
+            #   (root@127.0.0.1) — requires the VPS root key to authorize itself.
+            # · Rev: if receive() ever needs to ship the payload to a THIRD host, switch
+            #   back to a real transport channel with explicit host metadata.
+            from core.internal.deploy.channels import LocalChannel
 
-            local_channel = SCPChannel()
+            local_channel = LocalChannel()
             orchestrator = DeployOrchestrator(projects_base=projects_base)
             result = orchestrator.deploy(
                 project_name=project_name,

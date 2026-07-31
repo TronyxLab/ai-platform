@@ -38,7 +38,9 @@
 | `make scripts-audit` | Аудит регистрации скриптов | make scripts-audit | core/internal/scripts-audit.sh |
 | `make check-dead-code` | Проверка мёртвого кода | make check-dead-code | core/entrypoints/check-dead-code.sh |
 | `make test` | Запуск тестов | make test [MARKER=...] | make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all] |
+| `make test-summary` | Запуск тестов (агент-ориентированная обёртка) | make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static] [TIMEOUT=1800] | core/internal/test_runner.py --marker \<MARKER\> |
 | `make test-inventory-sync` | Синхронизация test inventory | make test-inventory-sync | tests/tools/sync_inventory.py |
+| `make test-node` | E2E pipeline тесты на test-VPS | make test-node NODE=\<name\> | pytest tests/e2e/ -m requires_node |
 | `make gate` | Production gate | make gate [MODE=fast|full] | make gate [MODE=fast|full] |
 | `make check-manifests` | Проверка актуальности сгенерированных манифестов | make check-manifests | --check for all 6 generators (G1-G6) — byte-level comparison |
 | `make generate-manifests` | Генерация всех манифестов | make generate-manifests | make generate-manifests |

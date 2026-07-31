@@ -166,12 +166,28 @@ test:
   signature: make test [MARKER=...]
   operation_ru: Запуск тестов
   description: Run tests with MARKER filter. MARKER=all (default) runs full suite.
+- make_target: test-summary
+  mechanism: python-wrapper
+  delegates_to: core/internal/test_runner.py --marker <MARKER>
+  signature: make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static]
+    [TIMEOUT=1800]
+  operation_ru: Запуск тестов (агент-ориентированная обёртка)
+  description: Run tests via compact agent-oriented wrapper (pytest → JUnit XML →
+    compact summary <100 lines). MARKER=static_audit (default).
 - make_target: test-inventory-sync
   mechanism: pytest-collect
   delegates_to: tests/tools/sync_inventory.py
   signature: make test-inventory-sync
   operation_ru: Синхронизация test inventory
   description: Regenerate tests/test_inventory.yaml from pytest --collect-only
+- make_target: test-node
+  mechanism: pytest
+  delegates_to: pytest tests/e2e/ -m requires_node
+  signature: make test-node NODE=<name>
+  operation_ru: E2E pipeline тесты на test-VPS
+  description: Run E2E bootstrap pipeline tests against a recreatable test-VPS (requires_node
+    marker, NODE env, SSH, Docker). NOT in make test MARKER=all or make gate. DevPlan
+    095.
 scaffold:
 - make_target: new-project
   mechanism: shell-script
@@ -677,6 +693,7 @@ allowed_verbs:
 - templates-render
 - test
 - test-inventory-sync
+- test-node
 - test-summary
 - up
 - up-safe

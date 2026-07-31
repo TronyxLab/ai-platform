@@ -182,9 +182,7 @@ def test_parse_junit_xml_testsuites_wrapper(caplog, tmp_path):
     assert summary.error_count == 0
     assert summary.pass_count == 1
     assert len(summary.failed_tests) == 1
-    logger.critical(
-        "[IMP:9][test] Wrapper XML parsed: total=3 fail=1 skip=1 — attrs from <testsuite>, not wrapper"
-    )
+    logger.critical("[IMP:9][test] Wrapper XML parsed: total=3 fail=1 skip=1 — attrs from <testsuite>, not wrapper")
 
 
 # endregion Tests: parse_junit_xml
@@ -200,6 +198,7 @@ def test_parse_junit_xml_testsuites_wrapper(caplog, tmp_path):
 # · Reason: реальный контракт реализации — AC3 (вывод НИКОГДА > 2000 строк, даже при 100+ failures,
 # ·   DevPlan §5 AC3) при детерминированном формате 2 строки на failure. "< 100" держится до 45 failures.
 # · Rev: если формат сменится на 1 строку на failure → вернуть assert len < 100 при 50 failures.
+
 
 # 🧪 TRAP[TEST] · Regression · AC3: format_summary output stays bounded/compact at 50 failures
 # · Scenario: TestSummary с 50 FAIL entries → deterministic 8 + 2×50 = 108 lines, < 2000 (AC3 bound)

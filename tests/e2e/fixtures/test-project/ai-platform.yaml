@@ -1,0 +1,12 @@
+# GREP_SUMMARY: fixture test-project ai-platform-yaml metadata backend web v1.0.0
+# @purpose Canonical test-project metadata (DevPlan 095 T18) — read by
+#   DeployOrchestrator.receive() for project/service/version resolution.
+# @invariants
+#   - project name MUST be `test-project` (matches node-configs/test-e2e/node.yaml projects[].name)
+#   - service MUST match the compose service name (`web`)
+#   - NO monitoring.host_port — skips DeployEngine port-conflict preflight (port 8080
+#     is asserted by the E2E tests themselves)
+project: test-project
+service: web
+version: v1.0.0
+type: backend

@@ -481,12 +481,8 @@ def test_issue_cert_saves_to_s3_after_success():
     # cert is installed) and --renew-hook (runs after cron renewal). Both invoke
     # `python3 s3_ssl_cache.py upload <domain>`.
     lines = content.split("\n")
-    reloadcmd_uploads = [
-        line for line in lines if "s3_ssl_cache.py" in line and "upload" in line
-    ]
-    assert reloadcmd_uploads, (
-        "issue-cert.sh must wire s3_ssl_cache.py upload into reloadcmd/renew-hook"
-    )
+    reloadcmd_uploads = [line for line in lines if "s3_ssl_cache.py" in line and "upload" in line]
+    assert reloadcmd_uploads, "issue-cert.sh must wire s3_ssl_cache.py upload into reloadcmd/renew-hook"
     for line in reloadcmd_uploads:
         logger.info("[IMP:8][test_issue_cert_s3] reloadcmd upload: %s", line.strip())
 

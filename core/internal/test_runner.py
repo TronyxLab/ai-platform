@@ -123,7 +123,9 @@ def _first_line(text: str, max_chars: int = 200) -> str:
 ##              вывод в <testsuites>, атрибуты живут на дочерних <testsuite> (см. TRAP[BUG])
 def parse_junit_xml(path: str) -> TestSummary:
     """Parse JUnit XML report into a TestSummary."""
-    tree = ET.parse(path)
+    # pytest-generated JUnit XML (trusted local artifact, not untrusted input);
+    # defusedxml не требуется: файл создаётся самим pytest в tests/report-*.xml
+    tree = ET.parse(path)  # nosec B314
     root = tree.getroot()
     total_tests = 0
     fail_count = 0
