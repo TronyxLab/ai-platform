@@ -119,7 +119,7 @@ def mock_fs(tmp_path: Path) -> tuple[Path, Path, Path]:
     ##   - All bootstrap scripts (install-docker, firewall, deploy-modules, etc.)
     ##     exist under core_dir/internal/bootstrap/
     ##   - VERSION file exists at core_dir/VERSION
-    ##   - lib/ scripts (secrets.sh, logging.sh, checkpoint.sh) exist for _decrypt_secrets
+    ##   - lib/ scripts (secrets.sh, logging.sh) exist for _decrypt_secrets
     ##   - secrets.env exists for _ensure_secrets_exist
     ##   - secrets-manifest.yaml exists for secrets_manager
     ##   - node.yaml exists for NODE_YAML env var
@@ -158,7 +158,7 @@ def mock_fs(tmp_path: Path) -> tuple[Path, Path, Path]:
     (bootstrap_dir / "setup-node.sh").write_text("#!/bin/bash\nexit 0\n")
 
     # ── lib/ scripts (sourced by _decrypt_secrets) ──
-    for lib_script in ["secrets.sh", "logging.sh", "checkpoint.sh"]:
+    for lib_script in ["secrets.sh", "logging.sh"]:
         (lib_dir / lib_script).write_text("#!/bin/bash\necho mock\n")
 
     # ── LLM config renderer (used by φ11 registry_update) ──

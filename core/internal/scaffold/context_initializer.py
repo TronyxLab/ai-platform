@@ -299,6 +299,7 @@ def _git_init_and_push(
     ## @complexity O(1)
     """
     if git_runner is None:
+
         def _default_git(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
             result = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=str(cwd))
             return result.returncode, result.stdout, result.stderr

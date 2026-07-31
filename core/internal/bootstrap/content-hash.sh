@@ -12,7 +12,7 @@
 ## @invariants
 ##   - Falls back to old sha256sum algorithm if Python module unavailable
 ##   - step_hash_changed remains in shell (requires CHECKPOINT_DIR access)
-##   - All callers (checkpoint.sh, node-lifecycle.sh) work without changes
+##   - All callers (node-lifecycle.sh, state_machine.py) work without changes
 ## @changes  2026-07-25 | DevPlan 079 — Reduced to thin wrapper (~40 LOC, was 127)
 # endregion MODULE_CONTRACT
 

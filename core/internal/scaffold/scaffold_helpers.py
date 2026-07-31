@@ -384,8 +384,13 @@ def register_in_node_yaml(
         return False
 
     if dry_run:
-        logger.info("[IMP:7][helpers][register] [DRY-RUN] Would register in node.yaml: name=%s repo=%s/%s type=%s",
-                    name, org, name, ptype)
+        logger.info(
+            "[IMP:7][helpers][register] [DRY-RUN] Would register in node.yaml: name=%s repo=%s/%s type=%s",
+            name,
+            org,
+            name,
+            ptype,
+        )
         return True
 
     logger.info("[IMP:7][helpers][register] Registering project in node.yaml: %s", yaml_path)

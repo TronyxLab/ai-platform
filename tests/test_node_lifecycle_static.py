@@ -504,17 +504,18 @@ def test_mode_dispatch_init_update(caplog) -> None:
 
 
 # region FUNC_test_checkpoint_step_uses_content_hash
-## @purpose  W4-E5 edge-case: verify node-lifecycle.sh sources checkpoint.sh + content-hash.sh
-##           and uses checkpoint_step() with per-step content hash for idempotent skip.
-##           When a step's content-hash is unchanged, the step is SKIPPED (not re-executed).
-##           This is the idempotency contract W4-E2 state_machine.py checkpoint-resume must preserve.
+## @purpose  W4-E5 edge-case: verify node-lifecycle.sh delegates checkpoint-resume to
+##           state_machine.py (phase-based, content-hash idempotency).
+##           When a sub-step's content-hash is unchanged, the sub-step is SKIPPED (not re-executed).
+##           This is the idempotency contract state_machine.py checkpoint-resume must preserve.
 ## @io       caplog → ⎋ None (pytest.fail if checkpoint/hash logic absent)
-## @complexity 1 — static grep for checkpoint_step + _step_hash + content-hash source
+## @complexity 1 — static grep for state_machine delegation + _step_hash + content-hash source
 ## @invariants
-##   - node-lifecycle.sh sources lib/checkpoint.sh
+##   - node-lifecycle.sh delegates checkpoint-resume to state_machine.py (does NOT source
+##     the removed legacy checkpoint lib — DevPlan 091 backward-compat removal)
 ##   - node-lifecycle.sh sources internal/bootstrap/content-hash.sh
-##   - checkpoint_step() is called with CHECKPOINT_STEP_HASH env for per-step invalidation
-##   - CHECKPOINT_DIR + RESUME_MODE + FORCE_MODE are set before checkpoint calls
+##   - _step_hash() (state_machine.py) is used for per-sub-step content-hash invalidation
+##   - RESUME_MODE + FORCE_MODE are parsed by the shell facade before delegation
 
 
 @pytest.mark.static_audit

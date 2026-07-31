@@ -7,13 +7,12 @@
 - **ACCEPTANCE_CRITERIA:**
   - AC1: `make validate` работает идентично на существующем наборе файлов (regression test).
   - AC2: `make validate-modules` не затронут (отдельный путь через `validate_module_yaml.py`).
-  - AC3: `grep -rn 'python3.*<<\|python3 -c' core/internal/validate/ core/lib/checkpoint.sh` → 0 (ловит все формы: `python3 -c "..."`, `python3 - ... <<'PYEOF'`, `python3 <<'EOF'`).
+  - AC3: `grep -rn "python3 -c\|python3 <<\|python3 - <<" core/internal/validate/ core/lib/checkpoint.sh` → 0.
   - AC4: `checkpoint_step/checkpoint_force/checkpoint_reset_all` API сохранён (shell-функции-фасады), все потребители (`secrets.sh`, `state_machine._decrypt_secrets`, `tests/test_unit_checkpoint_v2.py`) работают без изменений.
   - AC5: `state_machine.py` НЕ модифицируется по вайбу брифа (нет замены checkpoint на прямой state.json — `state_machine` сам зависит от `checkpoint.sh`).
-  - AC6: `validate.sh` ≤ 350 LOC (фасад), вся jsonschema-логика в Python CLI.
-  - AC7: `checkpoint.sh` ≤ 135 LOC (фасад, было 203), вся state.json логика в Python CLI.
-  - AC8a: `tests/unit/test_jsonschema_validate.py` — IMP:9 assertion (valid node.yaml → exit 0).
-  - AC8b: `tests/unit/test_checkpoint_cli.py` — IMP:9 assertion (round-trip mark→is-done → exit 0).
+  - AC6: `validate.sh` ≤ 250 LOC (фасад), вся jsonschema-логика в Python CLI.
+  - AC7: `checkpoint.sh` ≤ 90 LOC (фасад), вся state.json логика в Python CLI.
+  - AC8: Unit-тесты на новый Python CLI (jsonschema + checkpoint) с IMP:9 assertion.
   - AC9: `make gate MODE=fast` зелёный.
 - **IMPLEMENTS:** Закрытие Tier-1 Strangler-триггера (AGENTS.md §Языковая политика) для `validate.sh` и `checkpoint.sh`. НЕ реализует мнимое «удаление дублирования» из брифа (его не существует — см. Diagnosis D3).
 - **IMPACTS:**
@@ -120,7 +119,7 @@
 | **W1-T1** | Создать `core/internal/scripts/jsonschema_validate.py`: CLI `--yaml-file --schema-file`, generic Draft7Validator с `iter_errors`, формат error "path: message", exit 0/1. MODULE_CONTRACT + LDD [IMP:9]. | 2 |
 | **W1-T2** | `tests/unit/test_jsonschema_validate.py`: valid node.yaml, missing-field (invalid), type-mismatch, multiple-errors aggregation, malformed-yaml, missing-schema. caplog + IMP:9 assert. | 2 |
 | **W1-T3** | `validate.sh`: заменить тело `validate_with_python()` на `python3 -m core.internal.scripts.jsonschema_validate --yaml-file "$yaml_file" --schema-file "$schema_file"`. Удалить PYOF heredoc (стр. 94-119). Сохранить error-проброс через `$output`. | 1 |
-| **W1-T4** | Smoke: `make validate` на реальном дереве node.yaml/module.yaml/ai-platform.yaml — output byte-identical (capture до/после, diff). Интеграционный regression-test в `tests/unit/test_validate_cli.py` (NEW): CLI subprocess на tmp fixtures, byte-comparison с baseline. | 1 |
+| **W1-T4** | Smoke: `make validate` на реальном дереве node.yaml/module.yaml/ai-platform.yaml — output byte-identical (capture до/после, diff). Regression-test в `tests/test_validate.py` расширить интеграционным случаем (CLI subprocess на tmp fixtures). | 1 |
 | **W1-T5** | Обновить `core/AGENTS.md` навигацию если нужно; обновить GREP_SUMMARY `validate.sh` (убрать "python-jsonschema" если теперь только delegator). | 1 |
 
 **Wave 1 exit criteria:**
@@ -136,12 +135,11 @@
 
 | Task | Описание | Est (pts) |
 |------|----------|-----------|
-| **W2-T1** | Создать `core/internal/scripts/checkpoint_cli.py`: subcommands `is-done --step <name>`, `mark-done --step <name> [--hash <h>]`, `force --step <name>`, `reset-all`. Exit codes: is-done → 0/1 (shell-совместимо), остальные 0. Поддержка `CHECKPOINT_STATE_FILE` env (default `/var/lib/platform/.bootstrap/state.json`). Atomic write (tmp + os.replace). Чтение supports both `data['steps'][name]` (old) и root-level phase keys (new, post-087). MODULE_CONTRACT + GREP_SUMMARY + STRUCTURE + #region/#endregion paired + LDD [IMP:9] на каждую операцию записи в state.json. | 2 |
+| **W2-T1** | Создать `core/internal/scripts/checkpoint_cli.py`: subcommands `is-done --step <name>`, `mark-done --step <name> [--hash <h>]`, `force --step <name>`, `reset-all`. Exit codes: is-done → 0/1 (shell-совместимо), остальные 0. Поддержка `CHECKPOINT_STATE_FILE` env (default `/var/lib/platform/.bootstrap/state.json`). Atomic write (tmp + os.replace). Чтение supports both `data['steps'][name]` (old) и root-level phase keys (new, post-087). | 2 |
 | **W2-T2** | `tests/unit/test_checkpoint_cli.py`: round-trip (mark → is-done), missing-state-file (is-done exit 1), force resets to pending, reset-all deletes file, old-format-key compat, new-phase-key compat, hash stored+read. caplog IMP:9. | 2 |
 | **W2-T3** | `checkpoint.sh`: переписать `_checkpoint_is_done_json` → `python3 ... checkpoint_cli.py is-done --step "$1"`, `_checkpoint_mark_done_json` → `mark-done`, тело `checkpoint_force` → `force`, тело `checkpoint_reset_all` → `reset-all`. Сохранить `checkpoint_step()` orchestration (resume/force/verify) — она вызывает helper'ы. Inline python3 = 0. | 2 |
 | **W2-T4** | `tests/test_unit_checkpoint_v2.py`: VERIFY не сломан. Запустить, добавить negative-test на phase-key формат если отсутствует (R5 anti-survivorship — bug 087 DRIFT-CHECKPOINT-004). | 1 |
 | **W2-T5** | `state_machine._decrypt_secrets:1966` + `path_map["verify_core"]:1630`: VERIFY не сломаны (checkpoint.sh всё ещё source'ится с теми же именами функций). Доказать: `tests/unit/test_state_machine.py` green, dry-run bootstrap test green. | 1 |
-| **W2-T6** | `checkpoint.sh`: обновить MODULE_CONTRACT — @purpose «Thin shell facade delegating to checkpoint_cli.py»; удалить @changes python3 inline упоминания; обновить GREP_SUMMARY (убрать «direct-json», добавить «thin-facade»); обновить STRUCTURE (заменить «python3 inline» на «CLI call»). | 0.5 |
 
 **Wave 2 exit criteria:**
 - AC3, AC4, AC5, AC7, AC8 met
@@ -156,12 +154,12 @@
 |------|----------|------------------|-----------|
 | `core/internal/scripts/jsonschema_validate.py` | NEW | 0 → ~120 | Generic Draft7Validator CLI |
 | `core/internal/scripts/checkpoint_cli.py` | NEW | 0 → ~110 | state.json R/W CLI |
-| `core/internal/validate/validate.sh` | MODIFY | 380 → ~350 | Удалить PYOF (94-119), `validate_with_python` делегирует. check_fqdn_conflict/check_port_conflict/main — без изменений |
-| `core/lib/checkpoint.sh` | MODIFY | 203 → ~135 | 3 inline → CLI-вызовы, API сохранён. checkpoint_step (55 LOC) + checkpoint_reset_all (11 LOC) + MODULE_CONTRACT — без изменений |
+| `core/internal/validate/validate.sh` | MODIFY | 380 → ~250 | Удалить PYOF (94-119), `validate_with_python` делегирует |
+| `core/lib/checkpoint.sh` | MODIFY | 203 → ~90 | 3 inline → CLI-вызовы, API сохранён |
 | `tests/unit/test_jsonschema_validate.py` | NEW | 0 → ~150 | |
 | `tests/unit/test_checkpoint_cli.py` | NEW | 0 → ~180 | |
 | `tests/test_unit_checkpoint_v2.py` | VERIFY | 264 | Не сломать |
-| `tests/unit/test_validate_cli.py` | NEW | 0 → ~80 | Интеграционный subprocess-тест CLI (W1-T4) |
+| `tests/test_validate.py` | EXTEND | — | + integration case CLI subprocess |
 | `core/AGENTS.md` | VERIFY | — | Обновить навигацию/scripts-секцию если требуется generated |
 
 ---
@@ -192,22 +190,16 @@
 
 ## 7. Verification Plan
 
-### Baseline capture (before implementation)
-```bash
-make validate 2>/tmp/validate_baseline_before.txt
-make gate MODE=fast 2>&1 | tee /tmp/gate_baseline_before.log
-```
-
 ### Pre-merge (per wave)
 ```bash
 make fix-gate && git add -u
 make gate MODE=fast
 # Wave 1:
-grep -rn 'python3.*<<\|python3 -c' core/internal/validate/  # → 0
+grep -rn "python3 -c\|python3 <<\|python3 - -" core/internal/validate/  # → 0
 make validate  # exit 0 на чистом дереве
 
 # Wave 2:
-grep -rn 'python3.*<<\|python3 -c' core/lib/checkpoint.sh  # → 0
+grep -rn "python3 -c\|python3 <<" core/lib/checkpoint.sh  # → 0
 python -m pytest tests/unit/test_checkpoint_cli.py tests/test_unit_checkpoint_v2.py -v
 python -m pytest tests/unit/test_state_machine.py -v  # consumer не сломан
 ```

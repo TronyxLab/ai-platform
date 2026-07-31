@@ -1,5 +1,5 @@
 # GREP_SUMMARY: test template-engine unit-test render check parse_vars strict-grammar atomic-write
-# STRUCTURE: ┌18 atomic tests┐ → ◇ render basic → ◇ strict grammar → ◇ error cases → ◇ edge cases → ◇ check_all
+# STRUCTURE: ┌20 atomic tests┐ → ◇ render basic → ◇ strict grammar → ◇ error cases → ◇ edge cases → ◇ check_all
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/template_engine.py — native imports, no subprocess
 ## @scope    Tests: render_template, parse_vars, check_all, render_all, TemplateError
@@ -8,7 +8,7 @@
 ##   - Every test uses @ldd_trajectory decorator for IMP:9 assertion
 ##   - tmp_path used instead of hardcoded paths
 ##   - No Docker, no external services required
-## @rationale Native pytest for Python core per §TESTING rule. 18 atomic tests
+## @rationale Native pytest for Python core per §TESTING rule. 20 atomic tests
 ##            covering all edge cases from DevPlan T1.4.
 # endregion MODULE_CONTRACT
 

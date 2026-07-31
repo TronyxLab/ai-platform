@@ -194,6 +194,7 @@ def find_project_node(
 
     # Check python3 availability once (not per file)
     import shutil
+
     if not shutil.which("python3"):
         logger.info("[IMP:8][list][find_node] python3 not available for NodeYaml CLI")
         return None, ""
@@ -282,6 +283,7 @@ def get_status_via_ssh(
 
     # Default ssh runner: subprocess-based ssh_read from lib/ssh.sh
     if ssh_runner is None:
+
         def _ssh_read(h: str, u: str, cmd: str, timeout: int = 10) -> str | None:
             """Default SSH runner via lib/ssh.sh facade."""
             try:

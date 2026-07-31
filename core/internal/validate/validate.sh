@@ -86,38 +86,16 @@ validate_with_ajv() {
 # endregion VALIDATE_WITH_AJV
 
 # region VALIDATE_WITH_PYTHON
+# Delegates to core/internal/scripts/jsonschema_validate.py — Strangler Tier-1 extraction
+# of the former PYOF heredoc (DevPlan 093 W1). Error format byte-identical:
+# "  Error at '<path>': <message>"; exit 0=valid, 1=violations, 2=usage/file error.
 validate_with_python() {
     local yaml_file="$1"
     local schema_file="$2"
 
     local output
-    if ! output="$(python3 - "$yaml_file" "$schema_file" <<'PYEOF' 2>&1
-import sys
-import json
-import yaml
-import jsonschema
-
-yaml_file = sys.argv[1]
-schema_file = sys.argv[2]
-
-with open(yaml_file) as f:
-    instance = yaml.safe_load(f)
-
-with open(schema_file) as f:
-    schema = json.load(f)
-
-validator = jsonschema.Draft7Validator(schema)
-errors = list(validator.iter_errors(instance))
-
-if errors:
-    for e in errors:
-        path = " > ".join(str(p) for p in e.absolute_path) if e.absolute_path else "(root)"
-        print(f"  Error at '{path}': {e.message}", file=sys.stderr)
-    sys.exit(1)
-
-sys.exit(0)
-PYEOF
-)"; then
+    if ! output="$(python3 -m core.internal.scripts.jsonschema_validate \
+        --yaml-file "$yaml_file" --schema-file "$schema_file" 2>&1)"; then
         vlog_fail "python" "${yaml_file}:
 ${output}"
         return 1

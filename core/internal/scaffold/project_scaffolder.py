@@ -166,8 +166,10 @@ def copy_template(src: str, dst: str, dry_run: bool = False) -> bool:
     try:
         subprocess.run(
             [
-                "rsync", "-a",
-                "--exclude", ".github/workflows/platform-deploy.yml",
+                "rsync",
+                "-a",
+                "--exclude",
+                ".github/workflows/platform-deploy.yml",
                 f"{str(src_path).rstrip('/')}/",
                 str(dst_path) + "/",
             ],
@@ -240,7 +242,10 @@ def render_project_template(
     domain_val = domain or "false"
     result = subprocess.run(
         [
-            "bash", str(engine_script), "render-dir", project_dir,
+            "bash",
+            str(engine_script),
+            "render-dir",
+            project_dir,
             f"PROJECT_NAME={name}",
             f"ORG_NAME={org}",
             f"DOMAIN={domain_val}",
@@ -297,11 +302,16 @@ def gen_env_platform(project_dir: str, name: str, domain: str = "", dry_run: boo
 
     result = subprocess.run(
         [
-            sys.executable, str(gen_script),
-            "--yaml", str(platform_env_yaml),
-            "--name", name,
-            "--domain", domain or "",
-            "--output", str(env_file),
+            sys.executable,
+            str(gen_script),
+            "--yaml",
+            str(platform_env_yaml),
+            "--name",
+            name,
+            "--domain",
+            domain or "",
+            "--output",
+            str(env_file),
         ],
         capture_output=True,
         text=True,
@@ -375,19 +385,26 @@ def create_github_repo(org: str, name: str, project_dir: str, dry_run: bool = Fa
     # Check if repo already exists
     result = subprocess.run(
         ["gh", "repo", "view", f"{org}/{name}"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode == 0:
         logger.info("[IMP:7][scaffold][gh] GitHub repo already exists: %s/%s — skipping creation", org, name)
         # Add remote if not already set
         remote_result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
-            cwd=project_dir, capture_output=True, text=True, check=False,
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if remote_result.returncode != 0:
             subprocess.run(
                 ["git", "remote", "add", "origin", f"git@github.com:{org}/{name}.git"],
-                cwd=project_dir, capture_output=True, check=False,
+                cwd=project_dir,
+                capture_output=True,
+                check=False,
             )
             logger.info("[IMP:7][scaffold][gh] Added git remote: origin git@github.com:%s/%s.git", org, name)
         return True
@@ -396,18 +413,25 @@ def create_github_repo(org: str, name: str, project_dir: str, dry_run: bool = Fa
 
     result = subprocess.run(
         ["gh", "repo", "create", f"{org}/{name}", "--private", "--description", f"{name} project"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
     if result.returncode == 0:
         logger.info("[IMP:7][scaffold][gh] GitHub repo created: %s/%s", org, name)
         subprocess.run(
             ["git", "remote", "add", "origin", f"git@github.com:{org}/{name}.git"],
-            cwd=project_dir, capture_output=True, check=False,
+            cwd=project_dir,
+            capture_output=True,
+            check=False,
         )
         push_result = subprocess.run(
             ["git", "push", "-u", "origin", "main"],
-            cwd=project_dir, capture_output=True, text=True, check=False,
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if push_result.returncode != 0:
             logger.info("[IMP:8][scaffold][gh] WARNING: git push failed — push manually")
@@ -452,7 +476,7 @@ def generate_checklist(
         "## 1. Создать репозиторий на GitHub",
         "",
         "```bash",
-        f"gh repo create {org}/{name} --private --description \"{name} project\"",
+        f'gh repo create {org}/{name} --private --description "{name} project"',
         "```",
         "",
         "## 2. Добавить remote и запушить",
@@ -479,32 +503,38 @@ def generate_checklist(
     ]
 
     if domain:
-        lines.extend([
-            "",
-            "## 5. TLS-сертификат выпускается автоматически",
-            "",
-            "## 6. Применить nginx overlay на сервере",
-            "",
-            "```bash",
-            "sudo nginx -t && sudo nginx -s reload",
-            "```",
-        ])
+        lines.extend(
+            [
+                "",
+                "## 5. TLS-сертификат выпускается автоматически",
+                "",
+                "## 6. Применить nginx overlay на сервере",
+                "",
+                "```bash",
+                "sudo nginx -t && sudo nginx -s reload",
+                "```",
+            ]
+        )
 
     if database:
-        lines.extend([
-            "",
-            "## 7. Создать базу данных",
-            "",
-            "```bash",
-            f"sudo -u postgres psql -c \"CREATE DATABASE {database};\"",
-            "```",
-        ])
+        lines.extend(
+            [
+                "",
+                "## 7. Создать базу данных",
+                "",
+                "```bash",
+                f'sudo -u postgres psql -c "CREATE DATABASE {database};"',
+                "```",
+            ]
+        )
 
-    lines.extend([
-        "",
-        "---",
-        f"> Сгенерировано `add-project.sh` ({datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            f"> Сгенерировано `add-project.sh` ({datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})",
+        ]
+    )
 
     checklist_path.write_text("\n".join(lines) + "\n")
     logger.info("[IMP:7][scaffold][cl] Setup checklist generated: %s", checklist_path)
@@ -550,8 +580,10 @@ def run_add_vhost(project_dir: str, domain: str = "", dry_run: bool = False) -> 
     result = subprocess.run(
         [
             str(add_vhost_script),
-            "--project-dir", project_dir,
-            "--node-configs-dir", str(node_configs_dir),
+            "--project-dir",
+            project_dir,
+            "--node-configs-dir",
+            str(node_configs_dir),
         ],
         capture_output=True,
         text=True,
@@ -604,7 +636,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"ERROR: Invalid project name: '{args.name}'. Use alphanumeric, hyphens, underscores only.")
         sys.exit(1)
 
-    template_dir = os.path.join(os.path.dirname(Path(__file__).resolve().parent.parent), "..", "templates", f"template-{args.template}")
+    template_dir = os.path.join(
+        os.path.dirname(Path(__file__).resolve().parent.parent), "..", "templates", f"template-{args.template}"
+    )
     template_path = Path(template_dir).resolve()
     if not template_path.is_dir():
         logger.info("[IMP:10][scaffold][main] Template not found: %s", template_path)
@@ -616,7 +650,10 @@ def main(argv: list[str] | None = None) -> None:
 
     logger.info(
         "[IMP:6][scaffold][main] START: add-project --name %s --template %s --org %s --node %s",
-        args.name, args.template, org, node,
+        args.name,
+        args.template,
+        org,
+        node,
     )
 
     # Show plan

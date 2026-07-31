@@ -1584,8 +1584,9 @@ def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
             os.path.join(core_dir, "internal", "verify", "verify-domains.sh"),
             os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh"),
         ],
+        # DevPlan 093 W2-T1: checkpoint.sh removed in DevPlan 091 (commit 8be2843) —
+        # content-hash for verify_core depends only on content_hash.py (real hash logic).
         "verify_core": [
-            os.path.join(core_dir, "lib", "checkpoint.sh"),
             os.path.join(core_dir, "internal", "shared", "content_hash.py"),  # DevPlan 079: shared module
         ],
     }
@@ -1915,20 +1916,20 @@ def _decrypt_secrets(core_dir: str) -> None:
     """
     secrets_lib = os.path.join(core_dir, "lib", "secrets.sh")
     if os.path.isfile(secrets_lib):
-        # lib/secrets.sh requires CORE_DIR, logging.sh (log_step), checkpoint.sh (step_start/done/skip)
+        # lib/secrets.sh requires CORE_DIR, logging.sh (log_step). step_start/done/skip are
+        # self-contained via declare -f stub-guard (secrets.sh L117-121) — checkpoint.sh
+        # removed in DevPlan 091, no longer sourced (DevPlan 093 W2-T2/W2-T3 preverified).
         # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · source secrets.sh без зависимостей
         # · Symptom: step_start/log_step: command not found, CORE_DIR/internal/... : No such file
         # · Root: bash -c "source secrets.sh" не имел CORE_DIR и не подгружал checkpoint/logging libs
-        # · Fix: export CORE_DIR, source logging.sh + checkpoint.sh перед secrets.sh
+        # · Fix: export CORE_DIR, source logging.sh перед secrets.sh (checkpoint.sh удалён в 091)
         logging_lib = os.path.join(core_dir, "lib", "logging.sh")
-        checkpoint_lib = os.path.join(core_dir, "lib", "checkpoint.sh")
         _subprocess_run(
             [
                 "bash",
                 "-c",
                 f"export CORE_DIR={shlex.quote(core_dir)}"
                 f" && source {shlex.quote(logging_lib)}"
-                f" && source {shlex.quote(checkpoint_lib)}"
                 f" && source {shlex.quote(secrets_lib)}"
                 f" && step_10_decrypt_secrets",
             ],

@@ -90,8 +90,7 @@ def test_source_has_no_orchestrator_flag() -> None:
         src = f.read()
     # Comments/TRAPs referencing the symbol are allowed; an assignment (= True / = False) is not.
     assert "_ORCHESTRATOR_AVAILABLE =" not in src, (
-        "Found `_ORCHESTRATOR_AVAILABLE =` assignment in context_deployer — "
-        "Wave A removal regressed (DevPlan 091)."
+        "Found `_ORCHESTRATOR_AVAILABLE =` assignment in context_deployer — Wave A removal regressed (DevPlan 091)."
     )
 
 
@@ -123,10 +122,11 @@ def test_deploy_context_projects_routes_via_orchestrator(
         seen.append(project.name)
         return cd.ProjectDeployResult(name=project.name, status="deployed", channel="orchestrator", health="healthy")
 
-    with mock.patch.object(cd, "resolve_context_projects", return_value=projects), mock.patch.object(
-        cd, "_deploy_single_project_via_orchestrator", side_effect=fake_via_orchestrator
-    ), mock.patch.object(cd, "_render_and_provision_llm", return_value=None), mock.patch.object(
-        cd, "_write_audit", return_value=None
+    with (
+        mock.patch.object(cd, "resolve_context_projects", return_value=projects),
+        mock.patch.object(cd, "_deploy_single_project_via_orchestrator", side_effect=fake_via_orchestrator),
+        mock.patch.object(cd, "_render_and_provision_llm", return_value=None),
+        mock.patch.object(cd, "_write_audit", return_value=None),
     ):
         results = cd.deploy_context_projects("/no/node.yaml", "ctx")
 
@@ -164,9 +164,11 @@ def test_deploy_context_projects_routes_via_orchestrator(
 # · Remove-if: never
 def test_deploy_context_projects_empty_returns_empty() -> None:
     """deploy_context_projects() returns [] without invoking the orchestrator path."""
-    with mock.patch.object(cd, "resolve_context_projects", return_value=[]), mock.patch.object(
-        cd, "_deploy_single_project_via_orchestrator"
-    ) as orch_path, mock.patch.object(cd, "_render_and_provision_llm", return_value=None):
+    with (
+        mock.patch.object(cd, "resolve_context_projects", return_value=[]),
+        mock.patch.object(cd, "_deploy_single_project_via_orchestrator") as orch_path,
+        mock.patch.object(cd, "_render_and_provision_llm", return_value=None),
+    ):
         results = cd.deploy_context_projects("/no/node.yaml", "ctx")
 
     assert results == []
@@ -185,7 +187,8 @@ def test_deploy_context_projects_empty_returns_empty() -> None:
 # · Last fail: never
 # · Remove-if: dry_run semantics change with explicit Architect sign-off
 def test_orchestrator_dry_run_skips_execution(
-    tmp_path, caplog: pytest.LogCaptureFixture  # type: ignore[no-untyped-def]
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,  # type: ignore[no-untyped-def]
 ) -> None:
     """DeployOrchestrator.deploy(dry_run=True) must return SKIPPED and not invoke delivery."""
     caplog.set_level(logging.INFO)
@@ -220,9 +223,7 @@ def test_orchestrator_dry_run_skips_execution(
         dry_run=True,
     )
 
-    assert result.status == DeployStatus.SKIPPED, (
-        f"dry_run deploy must return SKIPPED, got {result.status}"
-    )
+    assert result.status == DeployStatus.SKIPPED, f"dry_run deploy must return SKIPPED, got {result.status}"
     assert channel.deliver_called is False, "dry_run must not reach channel.deliver()"
 
     # LDD trajectory — confirm IMP:8 dry-run plan logs were emitted

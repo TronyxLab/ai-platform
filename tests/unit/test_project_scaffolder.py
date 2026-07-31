@@ -139,7 +139,9 @@ def test_copy_template_excludes_platform_deploy(tmp_path: pathlib.Path, caplog: 
     assert (dst / ".github" / "workflows" / "deploy.yml").exists()
 
     # Verify platform-deploy.yml is EXCLUDED (T9)
-    assert not (dst / ".github" / "workflows" / "platform-deploy.yml").exists(), "platform-deploy.yml must be excluded (T9)"
+    assert not (dst / ".github" / "workflows" / "platform-deploy.yml").exists(), (
+        "platform-deploy.yml must be excluded (T9)"
+    )
 
     _assert_ldd_imp9(caplog)
 

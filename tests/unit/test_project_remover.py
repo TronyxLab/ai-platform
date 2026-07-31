@@ -306,10 +306,8 @@ def test_compose_down_no_volumes_flag() -> None:
         # Find "down" and check subsequent words
         for i, word in enumerate(words):
             if word == "down":
-                remaining = words[i + 1:]
-                assert "-v" not in remaining, (
-                    f"O7/DD10 VIOLATION: compose down contains -v flag in: {cmd}"
-                )
+                remaining = words[i + 1 :]
+                assert "-v" not in remaining, f"O7/DD10 VIOLATION: compose down contains -v flag in: {cmd}"
                 break
 
     assert result is True

@@ -110,8 +110,12 @@ def find_project_in_node_yaml(
             node_configs_dir = str(ny.parent.parent)  # .../node-configs/<node>/node.yaml → .../node-configs/
 
             logger.info("[IMP:7][remove][find] Found project '%s' in: %s", name, ny)
-            logger.info("[IMP:8][remove][find]   domain=%s host=%s org=%s",
-                        domain or "<none>", node_host or "<unknown>", org or "unknown")
+            logger.info(
+                "[IMP:8][remove][find]   domain=%s host=%s org=%s",
+                domain or "<none>",
+                node_host or "<unknown>",
+                org or "unknown",
+            )
 
             return {
                 "node_yaml": str(ny),
@@ -375,7 +379,10 @@ def main(argv: list[str] | None = None) -> None:
 
     logger.info(
         "[IMP:7][remove][main] Args: name=%s node=%s force=%s dry-run=%s",
-        args.name, args.node_name or "<auto>", args.force, args.dry_run,
+        args.name,
+        args.node_name or "<auto>",
+        args.force,
+        args.dry_run,
     )
 
     # ── Find project in node.yaml ──
@@ -386,7 +393,9 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     if not project_info:
-        logger.info("[IMP:9][remove][main] Project '%s' not found in any node.yaml — SKIP (idempotent, exit 0)", args.name)
+        logger.info(
+            "[IMP:9][remove][main] Project '%s' not found in any node.yaml — SKIP (idempotent, exit 0)", args.name
+        )
         return  # exit 0
 
     # ── Dry-run: print plan and exit ──
@@ -410,7 +419,9 @@ def main(argv: list[str] | None = None) -> None:
     if not args.force:
         print()
         print(f"  This will REMOVE '{args.name}' from the platform lifecycle.")
-        print(f"  Node:  {project_info.get('host') or args.node_name or project_info.get('node_configs_dir', 'unknown')}")
+        print(
+            f"  Node:  {project_info.get('host') or args.node_name or project_info.get('node_configs_dir', 'unknown')}"
+        )
         print(f"  Org:   {project_info.get('org', 'unknown')}")
         print()
         print("  Volumes, databases, images, and GitHub repo will NOT be deleted (safe remove O7).")

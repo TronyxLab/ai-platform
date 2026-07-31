@@ -1,7 +1,7 @@
 $START_DEVPLAN
 
 $ARTIFACT_CONTRACT
-PURPOSE:               Мигрировать 4 крупнейших scaffold shell-монолита в Python по Strangler-Fig: project-list.sh (403 LOC, 7 inline python3), context-init.sh (364 LOC), remove-project.sh (423 LOC, 2 inline python3), add-project.sh (782 LOC, 16 функций). Суммарно 1972 LOC shell → 4 Python-модуля + 4 shell-фасада <50 LOC каждый. Вынести общую логику add-project ↔ adopt-project в общий shared-helper. Удалить 9 inline python3 блоков.
+PURPOSE:               Мигрировать 4 крупнейших scaffold shell-монолита в Python по Strangler-Fig: project-list.sh (403 LOC, 7 inline python3), context-init.sh (364 LOC), remove-project.sh (423 LOC, 2 inline python3), add-project.sh (782 LOC, 11 функций). Суммарно 1972 LOC shell → 4 Python-модуля + 4 shell-фасада <50 LOC каждый. Вынести общую логику add-project ↔ adopt-project в общий shared-helper. Удалить 9 inline python3 блоков.
 DESCRIPTION:           Создаёт `core/internal/scaffold/` Python-модули: `project_lister.py` (offline/SSH listing через NodeYaml.get_projects()), `context_initializer.py` (multi-step context scaffold через context_registry.py), `project_remover.py` (unregister + compose down + vhost cleanup), `project_scaffolder.py` (копирование шаблона + генерация ai-platform.yaml/Makefile/AGENTS.md + регистрация). Shell-файлы превращаются в тонкие фасады. Wave-структура: от простейшего (lister) к сложнейшему (scaffolder). Поведение мигрируется 1:1 (behaviour-preserving per Anti-Loop Note в Brief).
 RATIONALE:             Это последний крупный блок business-logic без Python-двойника (DP 070-090 его не покрывают). 9 inline python3 блоков (project-list: 7 JSON-парсинг, remove-project: 2 field extraction) — прямое нарушение языковой политики Tier-1 (AGENTS.md §Языковая политика). Каждый inline python3 = отдельная точка нетестируемой логики. Без миграции этого блока цель «переписать sh на Python» формально не достигнута — Strangler-Fig Decision Gate (TRAP 2026-07-22) требует продолжения. Параллельно: общая логика add-project ↔ adopt-project дублируется → вынос в shared helper устраняет drift-риск.
 ACCEPTANCE_CRITERIA:
@@ -214,7 +214,7 @@ exec python3 -m core.internal.scaffold.<module> "$@"
    - `create_skeleton_node_yaml(path, context_name)` → генерация skeleton YAML (L151-189). ⚠️ Сохранить GREP_SUMMARY/STRUCTURE-комментарии в шаблоне (семантическая разметка).
    - `gh_repo_create(org, ctx, skip)` → subprocess `gh repo create`. Graceful degradation если gh не установлен (WARN, не error — L193-205).
    - `register_in_platform_yaml(...)` → вызов `context_registry.register_context()`.
-   - `main()` — argparse: positional `name` (`nargs="?"`) или `--name`, `--node`, `--org`, `--skip-gh-repo`.
+   - `main()` — argparse: `--name`, `--node`, `--org`, `--skip-gh-repo`.
 2. MODIFY `context-init.sh` → фасад <50 LOC.
 3. CREATE `tests/test_context_initializer.py`:
    - `test_new_context_creates_dirs` — tmp_path, проверка структуры каталогов
@@ -242,7 +242,7 @@ exec python3 -m core.internal.scaffold.<module> "$@"
    - `remove_vhost(domain, node_configs_dir)` → rm vhost file. Заменяет L207-228.
    - `ssh_compose_down(host, project)` → ssh_exec wrapper, **NO `-v`** per O7/DD10 (L240+). Документировать инвариант: «compose down без -v = не удаляем volumes».
    - `print_report(...)` → L310.
-   - `main()` — argparse: `--name`, `--node`, `--force`, `--dry-run`.
+   - `main()` — argparse: `--name`, `--node`, `--keep-data`, `--dry-run`.
 2. MODIFY `remove-project.sh` → фасад <50 LOC.
 3. DELETE 2 inline python3 блока (подтвердить grep перед удалением).
 4. CREATE `tests/test_project_remover.py`:
@@ -475,7 +475,6 @@ python -m pytest tests/test_project_lifecycle.py tests/test_adopt_project_org_va
 | R6 | macOS `timeout` vs Linux `gtimeout` | LOW | TRAP DP-087 — использовать ssh_read timeout-параметр, не внешний timeout | TRAP lib/ssh.sh |
 | R7 | context-init skeleton YAML semantic markup | LOW | Сохранить GREP_SUMMARY/STRUCTURE-комментарии в template | — |
 | R8 | template-engine.sh subprocess contract | LOW | Поведение 1:1 (render-dir вызов сохранён) | Anti-Loop Note |
-| R9 | модификация `entrypoints/scaffold.sh` при изменении CLI-контрактов фасадов | LOW | verify scaffold.sh dispatch после каждого Wave; фасады сохраняют backward-compat парсинг | C1 (context-init positional arg), C2 (remove-project --force) |
 
 ---
 

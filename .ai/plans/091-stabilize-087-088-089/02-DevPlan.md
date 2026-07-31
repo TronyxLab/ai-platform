@@ -8,7 +8,7 @@ DESCRIPTION:           Завершение (не новая миграция) �
 RATIONALE:             Каскадная блокировка 087↔088↔089 делает каждый план отдельно нерешаемым: 088 gate заблокирован 089-зависимостью (orchestrator_cli.py), 087 не может удалить backward-compat пока 089 держит fallback-паттерн `_ORCHESTRATOR_AVAILABLE`, 088 project_registry блокирует AC2. Решаем в порядке зависимостей. User Constraint (тестовая фаза): backward-compat удаляется полностью, миграция state.json НЕ пишется — чистый cold start.
 ACCEPTANCE_CRITERIA:   §5 — все 14 AC (5 общих + 4+3+2 per-Wave). Финальные VR 087/088/089 → все STABLE. `make gate MODE=fast` зелёный.
 IMPLEMENTS:            Brief 091 (.ai/plans/091-stabilize-087-088-089/01-Brief.md). Завершение DevPlans 087, 088, 089 (не новый план).
-IMPACTS:               core/internal/bootstrap/deploy/context_deployer.py, core/internal/deploy/orchestrator.py, core/internal/deploy/orchestrator_cli.py, core/internal/reconciler_projects.py, core/internal/bootstrap/lifecycle/state_machine.py, core/internal/bootstrap/lifecycle/state_migration.py, core/lib/checkpoint.sh, core/internal/shared/project_registry.py, core/internal/shared/node_yaml.py, makefiles/deploy.mk, core/entrypoint-manifest.yaml, core/internal/bootstrap/AGENTS.md, tests/.
+IMPACTS:               core/internal/bootstrap/deploy/context_deployer.py, core/internal/deploy/orchestrator.py, core/internal/deploy/orchestrator_cli.py, core/internal/deploy/reconciler_projects.py, core/internal/bootstrap/lifecycle/state_machine.py, core/internal/bootstrap/lifecycle/state_migration.py, core/lib/checkpoint.sh, core/internal/shared/project_registry.py, core/internal/shared/node_yaml.py, makefiles/deploy.mk, core/entrypoint-manifest.yaml, core/internal/bootstrap/AGENTS.md, tests/.
 REQUIRES:              Выполнение в порядке Wave A → Wave B → Wave C. AGENTS.md инвариант 9 (тестовая фаза, можно ронять). `make generate-manifests` + `make check-manifests` доступны (план 090 re-enabled).
 $END_ARTIFACT_CONTRACT
 
@@ -162,20 +162,15 @@ A1. context_deployer.py:
     MODIFY deploy_context_projects() [L358-395] → прямой вызов _deploy_single_project_via_orchestrator() [L255-343]
     → verify: rg "_ORCHESTRATOR_AVAILABLE|_deploy_single_project\b" context_deployer.py = пусто
 
-    ДОПОЛНИТЕЛЬНО в context_deployer.py:
-    DELETE guard `if not _ORCHESTRATOR_AVAILABLE:` + return _deploy_single_project() в _deploy_single_project_via_orchestrator() [L261-266]
-    MODIFY deploy_context_projects() [L376-379] → убрать if/else, всегда вызывать _deploy_single_project_via_orchestrator()
-
 A2. reconciler_projects.py:
     DELETE _ORCHESTRATOR_AVAILABLE flag [L43]
-    DELETE `_ORCHESTRATOR_AVAILABLE = True` + TRAP[DEBT] блок [L37-43]
+    DELETE `if not _ORCHESTRATOR_AVAILABLE:` guard [~L277]
     → verify: rg "_ORCHESTRATOR_AVAILABLE" reconciler_projects.py = пусто
 
 A3. makefiles/deploy.mk:
     MODIFY L54: bash deploy-project.sh → python3 -m core.internal.deploy.orchestrator_cli deploy-many (SCPChannel)
     MODIFY L71 (target deploy-project:): @...deploy-project.sh → @orchestrator_cli deploy-many
     → verify: rg "deploy-project\.sh" makefiles/ = пусто
-    → NOTE: deploy-project.sh уже удалён физически — L54 вызывает несуществующий файл. A3 = CRITICAL bugfix, не просто cleanup.
 
 A4. entrypoint-manifest.yaml:
     RUN make generate-entrypoint-manifest (regenerate from Makefile .PHONY)
@@ -223,7 +218,6 @@ B5. tests/unit/test_state_machine.py test_phase_key_misalignment_prevented [L965
 
 B6. core/lib/checkpoint.sh (203 LOC):
     АНАЛИЗ: rg "checkpoint_step|checkpoint_done|checkpoint_mark" core/ --type sh
-    ДОПОЛНИТЕЛЬНЫЙ поиск: rg 'source.*checkpoint\.sh|\. .*checkpoint\.sh' core/ --type sh (shell-скрипты могут source'ить без вызова функций)
     ЕСЛИ 0 активных потребителей → DELETE файл целиком
     ЕСЛИ есть → СОКРАТИТЬ до тонкой обёртки над state_machine.py (phase-key only, убрать old-step support)
     → verify: решение зафиксировано в VR 087
@@ -236,7 +230,7 @@ B7. core/internal/bootstrap/AGENTS.md:
 B8. Wave B verification gate:
     make fix-gate && make gate MODE=fast → зелёный
     pytest tests/unit/test_state_machine.py tests/integration/test_bootstrap_dry_run.py -v → зелёный
-    Smoke: make bootstrap-node --mode init на чистой тестовой ноде → 9 INIT фаз проходят (cold start, без migration)
+    Smoke: make bootstrap-node --mode init на чистой тестовой ноде → 14 фаз проходят (cold start, без migration)
     Финальный VR 087 → STABLE
 ```
 
@@ -345,10 +339,10 @@ C7. Wave C verification gate:
 | Action | File | LOC Δ | AC |
 |--------|------|-------|----|
 | MODIFY | `core/internal/bootstrap/deploy/context_deployer.py` | −~100 (delete _deploy_single_project + flag) | AC4 |
-| MODIFY | `core/internal/reconciler_projects.py` | −~5 (delete vestigial flag) | AC14 |
+| MODIFY | `core/internal/deploy/reconciler_projects.py` | −~5 (delete vestigial flag) | AC14 |
 | MODIFY | `makefiles/deploy.mk` | ~4 (deploy-project.sh → orchestrator_cli) | DRIFT-MANIFEST |
 | MODIFY (generated) | `core/entrypoint-manifest.yaml` | auto (make generate-entrypoint-manifest) | Invariant 11 |
-| MODIFY | `core/internal/deploy/orchestrator.py` | +~45 (dry_run param) | AC10 |
+| MODIFY | `core/internal/deploy/orchestrator.py` | +~30 (dry_run param) | AC10 |
 | MODIFY | `core/internal/deploy/orchestrator_cli.py` | +~10 (--dry-run flag) | AC10 |
 | CREATE | `tests/unit/test_deploy_single_orchestrator.py` | +~80 | AC13 |
 
@@ -357,7 +351,7 @@ C7. Wave C verification gate:
 | Action | File | LOC Δ | AC |
 |--------|------|-------|----|
 | DELETE | `core/internal/bootstrap/lifecycle/state_migration.py` | −198 | User Constraint |
-| MODIFY | `core/internal/bootstrap/lifecycle/state_machine.py` | −~73 (migration block L1354-1371 + INIT_STEPS L234-275 + from_dict L574-581 + A1 guard cleanup) | AC8 |
+| MODIFY | `core/internal/bootstrap/lifecycle/state_machine.py` | −~60 (migration block L1354-1371 + INIT_STEPS L234-275 + from_dict L574-581) | AC8 |
 | MODIFY | `tests/unit/test_state_machine.py` | −~22 (Scenario B L965-986) | Test honesty |
 | ANALYZE→(DELETE or MODIFY) | `core/lib/checkpoint.sh` | TBD (B6 analysis) | DRIFT-CHECKPOINT-004 |
 | MODIFY | `core/internal/bootstrap/AGENTS.md` | ~3 (doc fix L15 + remove state_migration refs) | DRIFT-AGENTS-005 |
@@ -407,7 +401,7 @@ C7. Wave C verification gate:
 |----|----------|-------------------|
 | AC-B1 | `ls core/internal/bootstrap/lifecycle/state_migration.py` = No such file + `rg "state_migration\|migrate_state_to_phases\|has_old_keys" state_machine.py` = пусто | ls + grep |
 | AC-B2 | `rg "INIT_STEPS\|UPDATE_STEPS\|INIT_STEP_COUNT\|UPDATE_STEP_COUNT" core/internal/bootstrap/lifecycle/state_machine.py` = пусто | grep |
-| AC-B3 | Smoke: `make bootstrap-node --mode init` на чистой тестовой ноде → 9 INIT фаз проходят, state.json содержит 9 phase-ключей (cold start, без migration) | manual dry-run / fresh node (manual — requires test VPS) |
+| AC-B3 | Smoke: `make bootstrap-node --mode init` на чистой тестовой ноде → 9 INIT фаз проходят, state.json содержит 9 phase-ключей (cold start, без migration) | manual dry-run / fresh node |
 
 ### Wave C: 088 (2 AC)
 
