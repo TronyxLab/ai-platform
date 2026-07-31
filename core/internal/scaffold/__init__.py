@@ -1,10 +1,11 @@
-# GREP_SUMMARY: scaffold, package-init
-# STRUCTURE: ┌package-init┐ → ◇ sibling modules
+# GREP_SUMMARY: scaffold package-init exports project_lister context_initializer project_remover scaffold_helpers project_scaffolder
+# STRUCTURE: ┌package-init┐ → ◇ sibling modules re-exports
 # region MODULE_CONTRACT
 ## @purpose  Package init for core.internal.scaffold — project scaffolding operations
-## @scope    Package-level exports and documentation
-## @invariants  This is a thin init; all business logic lives in sibling .py modules
+##            (DP-092 Wave 1-4 Strangler-Fig Python migration).
+## @scope    Package-level exports: project_lister, context_initializer, project_remover,
+##           scaffold_helpers, project_scaffolder, context_registry, gen_env_platform,
+##           vhost_renderer, project_adopter.
+## @invariants  All business logic lives in sibling .py modules.
+##              Shell files are now thin facades delegating to Python modules.
 # endregion MODULE_CONTRACT
-# MODULE_CONTRACT — scaffold is a Python package for project scaffolding operations.
-# This file makes core.internal.scaffold importable as a package.
-# All business logic lives in sibling .py modules (gen_env_platform, vhost_renderer, etc.).

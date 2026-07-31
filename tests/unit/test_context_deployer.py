@@ -157,100 +157,21 @@ def test_idempotent_skip_healthy(caplog, node_yaml_file, monkeypatch):
     logger.critical("[IMP:9][test] Idempotent skip — healthy projects not re-deployed")
 
 
-# 🧪 TRAP[TEST] · Regression · ghcr.io pull success path
-# · Scenario: retry_pull returns True → channel="ghcr", project deployed
-# · Last fail: N/A (new test)
-# · Remove if: ghcr pull path changes
-@ldd_trajectory
-def test_ghcr_pull_success(caplog, node_yaml_file, monkeypatch, tmp_path):
-    """deploy_context_projects should use ghcr channel on successful pull."""
-    monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    # DevPlan 079: use shared retry_pull instead of _docker_compose_pull
-    monkeypatch.setattr(cd, "_shared_retry_pull", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_docker_compose_build", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "healthy")
-    monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
-
-    results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))
-    assert len(results) == 2
-    for r in results:
-        assert r.status == "deployed"
-        assert r.channel == "ghcr"
-        assert r.health == "healthy"
-    logger.critical("[IMP:9][test] ghcr pull success — channel=ghcr")
-
-
-# 🧪 TRAP[TEST] · Regression · ghcr.io pull fails → build fallback
-# · Scenario: retry_pull returns False → build called → channel="build"
-# · Last fail: 2026-07-25 — mock target changed (_docker_compose_pull → _shared_retry_pull per DevPlan 079)
-# · Remove if: build fallback logic changes
-@ldd_trajectory
-def test_ghcr_fails_fallback_build(caplog, node_yaml_file, monkeypatch, tmp_path):
-    """deploy_context_projects should fall back to build when ghcr pull fails."""
-    monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    # DevPlan 079: retry_pull fails → fallback to build
-    monkeypatch.setattr(cd, "_shared_retry_pull", lambda d, **kw: False)  # ghcr fails
-    monkeypatch.setattr(cd, "_shared_docker_compose_build", lambda d, **kw: True)  # build succeeds
-    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "healthy")
-    monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
-
-    results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))
-    assert len(results) == 2
-    for r in results:
-        assert r.status == "deployed"
-        assert r.channel == "build"  # fallback to build
-    logger.critical("[IMP:9][test] ghcr fail → build fallback — channel=build")
-
-
-# 🧪 TRAP[TEST] · Regression · health-gate timeout marks unhealthy
-# · Scenario: healthcheck_poll returns "unhealthy" → health="unhealthy"
-# · Last fail: N/A (new test)
-# · Remove if: health-gate logic changes
-@ldd_trajectory
-def test_health_gate_timeout(caplog, node_yaml_file, monkeypatch, tmp_path):
-    """deploy_context_projects should mark unhealthy on health-gate timeout."""
-    monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    monkeypatch.setattr(cd, "_shared_retry_pull", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "unhealthy")  # timeout
-    monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
-
-    results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))
-    for r in results:
-        assert r.health == "unhealthy"
-    logger.critical("[IMP:9][test] Health-gate timeout — unhealthy detected")
-
-
-# 🧪 TRAP[TEST] · Regression · one project failure does not block others (non-fatal)
-# · Scenario: First project deploy fails, second succeeds → both processed
-# · Last fail: 2026-07-25 — mock target changed per DevPlan 079
-# · Remove if: non-fatal continuation logic changes
-@ldd_trajectory
-def test_non_fatal_continues_on_failure(caplog, node_yaml_file, monkeypatch, tmp_path):
-    """deploy_context_projects should continue after one project fails."""
-    call_count = {"retry_pull": 0}
-
-    def mock_retry_pull(d, **kw):
-        call_count["retry_pull"] += 1
-        return call_count["retry_pull"] != 1  # First project fails, second succeeds
-
-    def mock_build(d, **kw):
-        return False  # Build also fails for first project
-
-    monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    monkeypatch.setattr(cd, "_shared_retry_pull", mock_retry_pull)
-    monkeypatch.setattr(cd, "_shared_docker_compose_build", mock_build)
-    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "healthy")
-    monkeypatch.setattr(cd, "_write_audit", lambda p, r: None)
-
-    results = cd.deploy_context_projects(node_yaml_file, "test-ctx", projects_base=str(tmp_path))
-    assert len(results) == 2
-    statuses = [r.status for r in results]
-    assert "failed" in statuses  # At least one failed
-    logger.critical("[IMP:9][test] Non-fatal — second project processed despite first failure")
+# ── REMOVED (DevPlan 091 Wave A, AC4) ─────────────────────────────────────────
+# The following bypass-path tests were removed together with context_deployer._deploy_single_project():
+#   - test_ghcr_pull_success              (tested _shared_retry_pull + ghcr channel)
+#   - test_ghcr_fails_fallback_build      (tested retry_pull→build fallback)
+#   - test_health_gate_timeout            (tested _shared_healthcheck_poll unhealthy path)
+#   - test_non_fatal_continues_on_failure (tested bypass non-fatal propagation)
+# Rationale: these asserted behavior of the parallel pull→build→up→healthcheck path that
+# bypassed DeployOrchestrator. That path was deleted (AC4 cleanup); equivalent coverage now
+# lives in tests/unit/test_orchestrator.py (DeployOrchestrator unit tests) and
+# tests/unit/test_deploy_single_orchestrator.py (routing invariant tests).
+# ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Removed bypass-path unit tests with the bypass code
+# · Rejected: keep tests as xfail markers (risk: dead xfail markers accumulate, hide regressions)
+# · Reason: tests of deleted code are dead tests (R1 Test Honesty). Coverage of deploy semantics
+#   is preserved via test_orchestrator.py + test_deploy_single_orchestrator.py.
+# · Rev: if a parallel deploy path is reintroduced with Architect sign-off — recreate equivalent tests.
 
 
 # endregion

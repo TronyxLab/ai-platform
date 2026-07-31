@@ -17,8 +17,6 @@
 """
 
 import logging
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -26,163 +24,27 @@ from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-# ── Import the module under test ──
-_MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "lifecycle"
-sys.path.insert(0, str(_MODULE_DIR))
-import steps
+# Note: `steps` module import + `subprocess`/`os` imports removed — T1/T2 tests that used
+# steps._step_deploy_context were deleted (DevPlan 087 phase consolidation). T3/T4 tests use
+# inline imports only.
 
 # ═══════════════════════════════════════════════════════════════════
-# region T1: add-vhost.sh receives --node-configs-dir
+# region T1: add-vhost.sh receives --node-configs-dir  [REMOVED — DevPlan 087 follow-up]
 # ═══════════════════════════════════════════════════════════════════
 
-
-# 🧪 TRAP[TEST] · Regression · add-vhost.sh receives --node-configs-dir argument
-# · Scenario: _step_deploy_context calls add-vhost.sh with --node-configs-dir
-# · Last fail: N/A (new test — B4 regression guard)
-# · Remove if: shell-script arg passing logic changes
-@ldd_trajectory
-def test_add_vhost_passes_config_dir(caplog, tmp_path, monkeypatch):
-    """Verify add-vhost.sh receives --node-configs-dir argument."""
-    # ── record subprocess.run calls ──
-    calls: list[list[str]] = []
-
-    def mock_run(args, **kwargs):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-
-    # ── mock os.path.isfile to "find" script paths ──
-    real_isfile = os.path.isfile
-
-    def mock_isfile(path):
-        if "add-vhost.sh" in str(path) or "verify-domains.sh" in str(path):
-            return True
-        return real_isfile(path)
-
-    monkeypatch.setattr(os.path, "isfile", mock_isfile)
-
-    # ── set env vars ──
-    monkeypatch.setenv("CONTEXT", "test")
-    monkeypatch.setenv("NODE_CONFIGS_DIR", "/opt/node-configs")
-    monkeypatch.setenv("PLATFORM_ROOT", "/opt/platform")
-
-    # ── create minimal node.yaml ──
-    node_yaml = tmp_path / "node.yaml"
-    node_yaml.write_text("context: test\nprojects: []\n")
-
-    # ── Create mock context_deployer module for importlib ──
-    # DevPlan 079: steps._step_deploy_context delegates via importlib
-    core_dir = str(tmp_path / "core")
-    deploy_dir = os.path.join(core_dir, "internal", "bootstrap", "deploy")
-    os.makedirs(deploy_dir, exist_ok=True)
-    mock_cd_path = os.path.join(deploy_dir, "context_deployer.py")
-
-    # Create a minimal mock that captures subprocess calls
-    mock_cd_code = """import subprocess
-import os
-def deploy_context(core_dir, node_name, node_yaml, context=""):
-    # Simulate deploy_context flow — calls add-vhost.sh and verify-domains.sh
-    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
-    if os.path.isfile(vhost_script):
-        subprocess.run(["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", "/opt/node-configs"])
-    subprocess.run(["docker", "exec", "nginx", "nginx", "-s", "reload"])
-    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
-    if os.path.isfile(verify_script):
-        subprocess.run(["bash", verify_script, node_name, "/opt/platform"])
-def _extract_domains_for_context(node_yaml_path, context):
-    return []
-"""
-    with open(mock_cd_path, "w") as f:
-        f.write(mock_cd_code)
-
-    # ── call the function under test ──
-    steps._step_deploy_context(core_dir=core_dir, node_name="test-node", node_yaml=str(node_yaml))
-
-    # ── assert --node-configs-dir was passed ──
-    vhost_calls = [c for c in calls if "add-vhost.sh" in str(c)]
-    assert len(vhost_calls) > 0, "add-vhost.sh was not called"
-    flat_args = " ".join(str(a) for a in vhost_calls[0])
-    assert "--node-configs-dir" in flat_args, f"Missing --node-configs-dir in: {flat_args}"
-    logger.critical("[IMP:9][test] add-vhost.sh receives --node-configs-dir")
-
-
-# endregion
-
-
-# ═══════════════════════════════════════════════════════════════════
-# region T2: verify-domains.sh receives platform_root
-# ═══════════════════════════════════════════════════════════════════
-
-
-# 🧪 TRAP[TEST] · Regression · verify-domains.sh receives platform_root argument
-# · Scenario: _step_deploy_context passes node_name + platform_root to verify-domains.sh
-# · Last fail: N/A (new test — B3 regression guard)
-# · Remove if: shell-script arg passing logic changes
-@ldd_trajectory
-def test_verify_domains_passes_platform_root(caplog, tmp_path, monkeypatch):
-    """Verify verify-domains.sh receives platform_root as second argument."""
-    # ── record subprocess.run calls ──
-    calls: list[list[str]] = []
-
-    def mock_run(args, **kwargs):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-
-    # ── mock os.path.isfile to "find" script paths ──
-    real_isfile = os.path.isfile
-
-    def mock_isfile(path):
-        if "add-vhost.sh" in str(path) or "verify-domains.sh" in str(path):
-            return True
-        return real_isfile(path)
-
-    monkeypatch.setattr(os.path, "isfile", mock_isfile)
-
-    # ── set env vars ──
-    monkeypatch.setenv("CONTEXT", "test")
-    monkeypatch.setenv("NODE_CONFIGS_DIR", "/opt/node-configs")
-    monkeypatch.setenv("PLATFORM_ROOT", "/opt/platform")
-
-    # ── create minimal node.yaml ──
-    node_yaml = tmp_path / "node.yaml"
-    node_yaml.write_text("context: test\nprojects: []\n")
-
-    # ── Create mock context_deployer module for importlib ──
-    core_dir = str(tmp_path / "core")
-    deploy_dir = os.path.join(core_dir, "internal", "bootstrap", "deploy")
-    os.makedirs(deploy_dir, exist_ok=True)
-    mock_cd_path = os.path.join(deploy_dir, "context_deployer.py")
-    if not os.path.isfile(mock_cd_path):
-        mock_cd_code = """import subprocess
-import os
-def deploy_context(core_dir, node_name, node_yaml, context=""):
-    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
-    if os.path.isfile(vhost_script):
-        subprocess.run(["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", "/opt/node-configs"])
-    subprocess.run(["docker", "exec", "nginx", "nginx", "-s", "reload"])
-    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
-    if os.path.isfile(verify_script):
-        subprocess.run(["bash", verify_script, node_name, "/opt/platform"])
-def _extract_domains_for_context(node_yaml_path, context):
-    return []
-"""
-        with open(mock_cd_path, "w") as f:
-            f.write(mock_cd_code)
-
-    # ── call the function under test ──
-    steps._step_deploy_context(core_dir=core_dir, node_name="test-node", node_yaml=str(node_yaml))
-
-    # ── assert verify-domains.sh has ≥4 args ──
-    verify_calls = [c for c in calls if "verify-domains.sh" in str(c)]
-    assert len(verify_calls) > 0, "verify-domains.sh was not called"
-    # First arg is bash, second is script path, third is node_name, fourth is platform_root
-    assert len(verify_calls[0]) >= 4, (
-        f"verify-domains.sh got only {len(verify_calls[0])} args, expected ≥4: {verify_calls[0]}"
-    )
-    logger.critical("[IMP:9][test] verify-domains.sh receives platform_root argument")
+# ── REMOVED (DevPlan 087 phase consolidation / DevPlan 091 stabilization) ────
+# test_add_vhost_passes_config_dir and test_verify_domains_passes_platform_root
+# asserted that `steps._step_deploy_context(...)` passed specific args to add-vhost.sh
+# and verify-domains.sh. The `_step_deploy_context` function was removed in DevPlan 087
+# (30-elif dispatch → 14-phase BootstrapPhase). These tests referenced a non-existent
+# symbol → stale tests (Test Honesty R3).
+# Equivalent coverage of vhost/verify arg contracts is provided by:
+#   - tests/unit/test_vhost_renderer.py (render-all --node-configs-dir)
+#   - tests/unit/test_deploy_single_orchestrator.py (deploy routing)
+# ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Removed stale _step_deploy_context integration tests
+# · Rejected: keep as xfail (risk: dead markers accumulate)
+# · Reason: function under test deleted in 087; tests can never pass again. Stale.
+# · Rev: if a step-based dispatch is reintroduced — recreate equivalent arg-contract tests.
 
 
 # endregion

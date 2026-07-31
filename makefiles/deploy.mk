@@ -46,14 +46,16 @@ deploy:
 	@echo "[IMP:9][make][deploy] Git push complete — CI pipeline triggered"
 	@# ── W6: LAUNCH=1 mode — deploy-project + verify ──
 	@if [ "$(filter 1,$(LAUNCH))" = "1" ]; then \
-		echo "[IMP:7][make][deploy] LAUNCH mode: waiting for CI and verifying..." >&2; \
+		echo "[IMP:7][make][deploy] LAUNCH mode: deploying directly to NODE=$(NODE) via orchestrator..." >&2; \
 		if [ -z "$(NODE)" ]; then \
 			echo "[IMP:10][make][deploy] FATAL: LAUNCH=1 requires NODE=<node>" >&2; \
 			exit 1; \
 		fi; \
+		PROJECT_NAME="$$(basename "$(PROJECT)")"; \
 		python3 -m core.internal.deploy.orchestrator_cli deploy \
-			--project "$(PROJECT)" \
-			--host "$$(source $(_platform_root)/core/lib/ssh.sh && _ssh_host_for_node "$(NODE)")" \
+			--project "$$PROJECT_NAME" \
+			--project-dir "$(PROJECT)" \
+			--host "$(NODE)" \
 			--forced-command; \
 	fi
 

@@ -75,22 +75,27 @@ projects:
 
 @pytest.fixture
 def mock_context_deployer_shared(monkeypatch):
-    """Mock all shared docker compose operations in context_deployer for success path.
+    """Mock DeployOrchestrator path in context_deployer for success path.
 
-    ## @purpose  Allow deploy_context_projects to run through without real docker calls.
-    ##            All shared operations return success so _write_audit is exercised
-    ##            with status="deployed" and channel="ghcr".
+    ## @purpose  Allow deploy_context_projects to run through without real docker/SSH calls.
+    ##            After DevPlan 091 Wave A (AC4), deploy_context_projects no longer has a
+    ##            parallel _shared_retry_pull / _shared_docker_compose_* path — every project
+    ##            goes through _deploy_single_project_via_orchestrator. We mock the orchestrator
+    ##            entrypoint to return a synthetic ProjectDeployResult with status="deployed"
+    ##            and channel="ghcr" so _write_audit is exercised on real audit logging.
     ## @io  ⎋ None (side-effect: monkeypatch on cd module)
     ## @invariants
     ##   - _is_project_healthy → False (force deploy, not skip)
-    ##   - _shared_retry_pull → True (ghcr channel)
-    ##   - _shared_docker_compose_up → True
-    ##   - _shared_healthcheck_poll → "healthy"
+    ##   - _deploy_single_project_via_orchestrator → synthetic deployed result
+    ##   - _render_and_provision_llm → no-op (non-fatal, uninteresting for audit tests)
     """
     monkeypatch.setattr(cd, "_is_project_healthy", lambda name: False)
-    monkeypatch.setattr(cd, "_shared_retry_pull", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_docker_compose_up", lambda d, **kw: True)
-    monkeypatch.setattr(cd, "_shared_healthcheck_poll", lambda n, **kw: "healthy")
+    monkeypatch.setattr(
+        cd,
+        "_deploy_single_project_via_orchestrator",
+        lambda p, pb, fb: cd.ProjectDeployResult(name=p.name, status="deployed", channel="ghcr", health="healthy"),
+    )
+    monkeypatch.setattr(cd, "_render_and_provision_llm", lambda: None)
 
 
 @pytest.fixture
@@ -447,38 +452,17 @@ def test_docker_orchestrator_writes_audit_on_healthcheck_fail(
 
 
 # 🧪 TRAP[TEST] · Regression · Shell audit_log() preserved after Phase C changes
-# · Scenario: core/lib/audit_logging.sh exists and contains audit_log() definition
-# · Last fail: N/A (new test)
-# · Remove if: shell audit_log function is intentionally removed or replaced
-@ldd_trajectory
-def test_old_shell_format_unchanged(caplog):
-    """Shell audit_log() in core/lib/audit_logging.sh must still exist and be unchanged.
-
-    ▶ ┌core/lib/audit_logging.sh┐ → ◇ exists? → ◇ contains audit_log()? → ◇ not write_audit_entry → ⎋
-    """
-    project_root = Path(__file__).resolve().parent.parent.parent
-    audit_sh = project_root / "core" / "lib" / "audit_logging.sh"
-
-    # Assert file exists
-    assert audit_sh.is_file(), f"core/lib/audit_logging.sh should exist at {audit_sh}"
-
-    content = audit_sh.read_text()
-
-    # Assert the old shell audit_log() function definition is present
-    assert "audit_log()" in content, (
-        "audit_log() function must be defined in core/lib/audit_logging.sh (old format preserved)"
-    )
-
-    # Assert the new Python function name is NOT in the shell library
-    # This proves Phase C changes did NOT break/modify the shell audit format
-    assert "write_audit_entry" not in content, (
-        "write_audit_entry should NOT appear in shell library — JSON-lines is Python-only"
-    )
-
-    logger.critical(
-        "[IMP:9][test] Shell audit_log format preserved — file=%s, audit_log() found, write_audit_entry absent",
-        audit_sh,
-    )
+# ── REMOVED (DevPlan 089 AC7 follow-up) ──────────────────────────────────────
+# test_old_shell_format_unchanged asserted that core/lib/audit_logging.sh existed
+# and contained audit_log(). That file was removed in DevPlan 089 AC7 (audit_logging.sh
+# references cleared from core/internal/deploy/). The TRAP[TEST] guard explicitly stated
+# "Remove if: shell audit_log function is intentionally removed or replaced" — condition met.
+# Kept as a comment to document why the shell-format invariant test is gone.
+# ⚠️ TRAP[DECISION] · 2026-07-30 · LO · Removed stale shell-audit existence test
+# · Rejected: keep as skip (risk: R4 NO_SERVICE-as-skip degradation)
+# · Reason: audit_logging.sh deletion is intentional and permanent (DevPlan 089). Test of a
+#   non-existent file violates Test Honesty R3 (stale test). JSON-lines audit is now the only format.
+# · Rev: if a shell audit_log() is reintroduced — recreate an equivalent invariant test.
 
 
 # endregion

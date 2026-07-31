@@ -962,28 +962,14 @@ def test_phase_key_misalignment_prevented(caplog, state_file):
         f"Expected next phase 4 ({init_phases[3]}), got {machine.get_current_step()}"
     )
 
-    # ── SCENARIO B: Backward-compat migration from old numeric-key format ──
-    # Old numeric-key state.json where key "13" = read_node_yaml (misplaced).
-    old_state = {
-        "mode": "init",
-        "node": "test-node",
-        "current_step": 16,
-        "steps": {
-            "1": {"name": "ssh_access", "status": "done"},
-            "13": {"name": "read_node_yaml", "status": "done"},
-        },
-        "errors": [],
-        "warnings": [],
-    }
-    state_file.write_text(json.dumps(old_state))
-
-    machine2 = sm.StateMachine(state_file_path=str(state_file))
-
-    # After migration by position: key "13" → init_phases[12] (in the old step list)
-    # Since INIT_STEPS still exists as a deprecated constant, the numeric migration still works
-    assert "ensure_secrets" in machine2.state.steps, (
-        "Key 13 should migrate to ensure_secrets (by position in step list)"
-    )
+    # ── REMOVED (DevPlan 091 Wave B, AC8): Scenario B — backward-compat migration ──
+    # Scenario B tested numeric-key (old 23-step) migration through INIT_STEPS constant
+    # and from_dict(step_list=INIT_STEPS). That path was removed together with state_migration.py
+    # and the dead INIT_STEPS/UPDATE_STEPS constants (B4). Cold start only from 091 onward;
+    # old numeric-key state.json files are no longer supported.
+    # ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Removed backward-compat numeric-key test scenario
+    # · Rejected: keep test as xfail (risk: dead markers accumulate, Test Honesty R3)
+    # · Reason: code under test (INIT_STEPS + numeric-key migration) deleted per User Constraint
 
     logger.critical("[IMP:9][test] Phase-based key regression guard — PASS")
 

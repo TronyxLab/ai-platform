@@ -33,12 +33,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.internal.config import platform_config
+from core.internal.deploy.channels import SCPChannel
+from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
 )
-from core.internal.deploy.channels import SCPChannel
-from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.node_yaml import NodeYaml
 
 # DevPlan 091 Wave A (AC4): _ORCHESTRATOR_AVAILABLE fallback removed — DeployOrchestrator is sole path.
@@ -70,9 +70,9 @@ from core.internal.shared.docker_compose import (
 from core.internal.shared.docker_compose import (
     healthcheck_poll as _shared_healthcheck_poll,
 )
-from core.internal.shared.docker_compose import (
-    retry_pull as _shared_retry_pull,
-)
+
+# DevPlan 091 Wave A: retry_pull import removed — was only consumed by the deleted
+# _deploy_single_project() bypass path. ghcr retry/pull now flows through DeployOrchestrator.
 
 # ── Constants ──────────────────────────────────────────────────────────────
 HEALTH_GATE_TIMEOUT = 60  # seconds per project

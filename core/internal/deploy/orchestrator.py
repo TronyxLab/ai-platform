@@ -183,9 +183,12 @@ class DeployOrchestrator:
     ##           5. Healthcheck via HealthcheckPoller
     ##           6. Create snapshot via DeployHistory
     ##           7. Audit via AuditLogger
+    ##           When dry_run=True: validate inputs and emit a plan (channels, steps, target
+    ##           project_dir) to stderr, then return DeployStatus.SKIPPED WITHOUT executing
+    ##           delivery/compose/healthcheck. DevPlan 089 AC10 / DevPlan 091 Wave A.
     ## @io       ⇥ project_name: str, channel: DeliveryChannel, version: str, service: str,
-    ##              project_dir: str, metadata: dict → ⎋ DeployResult
-    ## @complexity — O(N) where N = deploy lifecycle steps
+    ##              project_dir: str, metadata: dict, dry_run: bool → ⎋ DeployResult
+    ## @complexity — O(N) where N = deploy lifecycle steps (dry_run: O(1))
     ## @invariants
     ##   - Lock file acquired before deploy, released after (try/finally)
     ##   - Payload assembled from project_dir (docker-compose.yml + ai-platform.yaml)
@@ -193,6 +196,7 @@ class DeployOrchestrator:
     ##   - Snapshot contains pre-deploy state + post-deploy health
     ##   - Audit entry written regardless of success/failure
     ##   - Rollback on healthcheck failure (if previous snapshot exists)
+    ##   - dry_run=True short-circuits BEFORE delivery — no side effects, status=SKIPPED
     def deploy(
         self,
         project_name: str,
@@ -201,6 +205,7 @@ class DeployOrchestrator:
         service: str = "",
         project_dir: str | None = None,
         metadata: dict[str, Any] | None = None,
+        dry_run: bool = False,
     ) -> DeployResult:
         """Deploy a single project.
 
@@ -211,6 +216,7 @@ class DeployOrchestrator:
             service: Docker Compose service name (defaults to project_name).
             project_dir: Project directory path (defaults to projects_base/project_name).
             metadata: Additional metadata for channel delivery.
+            dry_run: If True, emit a plan to stderr and return SKIPPED without executing.
 
         Returns:
             DeployResult with status and timing.
@@ -221,10 +227,11 @@ class DeployOrchestrator:
         service = service or project_name
 
         logger.info(
-            "[IMP:9][DeployOrchestrator][deploy] START: %s (channel=%s, version=%s)",
+            "[IMP:9][DeployOrchestrator][deploy] START: %s (channel=%s, version=%s, dry_run=%s)",
             project_name,
             channel.__class__.__name__,
             version,
+            dry_run,
         )
 
         # ── Step 1: Validate ──
@@ -234,6 +241,29 @@ class DeployOrchestrator:
                 project_name,
                 "",
                 error_info="Project name is required",
+                duration_s=time.monotonic() - start,
+            )
+
+        # ── dry-run short-circuit (DevPlan 089 AC10) ──
+        # Emit a human/machine-readable plan to stderr, return SKIPPED without side effects.
+        if dry_run:
+            plan_lines = [
+                "[DRY-RUN][DeployOrchestrator][deploy] Plan (no execution):",
+                f"  project     = {project_name}",
+                f"  project_dir = {project_dir}",
+                f"  service     = {service}",
+                f"  version     = {version or 'latest'}",
+                f"  channel     = {channel.__class__.__name__}",
+                f"  channel_meta= {metadata}",
+                "  steps       = assemble-payload → deliver → compose-up → healthcheck → snapshot → audit",
+            ]
+            for line in plan_lines:
+                logger.info("[IMP:8][DeployOrchestrator][deploy][DRY-RUN] %s", line)
+            return self._result(
+                DeployStatus.SKIPPED,
+                project_name,
+                channel.__class__.__name__,
+                error_info="dry-run — no execution",
                 duration_s=time.monotonic() - start,
             )
 
@@ -358,19 +388,22 @@ class DeployOrchestrator:
     # region FUNC_deploy_many
     ## @purpose  Deploy multiple projects sequentially. Each project uses the same channel.
     ##           Failure of one project does NOT block subsequent projects.
+    ##           When dry_run=True: every project is planned but not executed.
     ## @io       ⇥ project_names: list[str], channel: DeliveryChannel,
-    ##              version: str, project_base_dir: str → ⎋ list[DeployResult]
+    ##              version: str, project_base_dir: str, dry_run: bool → ⎋ list[DeployResult]
     ## @complexity — O(N × M) where N = projects, M = deploy lifecycle per project
     ## @invariants
     ##   - Projects are deployed sequentially (not parallel)
     ##   - One project failure does NOT block others
     ##   - Result list preserves input order
+    ##   - dry_run propagates to each deploy() call — no side effects for the whole batch
     def deploy_many(
         self,
         project_names: list[str],
         channel: DeliveryChannel,
         version: str = "",
         project_base_dir: str | None = None,
+        dry_run: bool = False,
     ) -> list[DeployResult]:
         """Deploy multiple projects sequentially.
 
@@ -379,6 +412,7 @@ class DeployOrchestrator:
             channel: Delivery channel.
             version: Version/tag for all projects.
             project_base_dir: Base directory for projects.
+            dry_run: If True, plan each deploy without executing.
 
         Returns:
             List of DeployResult in input order.
@@ -390,6 +424,7 @@ class DeployOrchestrator:
                 channel=channel,
                 version=version,
                 project_dir=os.path.join(project_base_dir or self.projects_base, name),
+                dry_run=dry_run,
             )
             results.append(result)
 

@@ -1,31 +1,48 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: project_registry, node-yaml, register-project, deregister-project, scaffold, idempotent
-# STRUCTURE: ▶ register_project(name, repo, type, domain, database, node_yaml) → ◇ idempotency check → ◇ append entry → ⎋ yaml.dump
-#            └ deregister_project(name, node_yaml) → ◇ filter projects list → ⎋ yaml.dump
-#            └ list_projects(node_yaml) → ○ for each: stdout "name repo type domain" → ⎋ exit 0
+# GREP_SUMMARY: project_registry, node-yaml, register-project, deregister-project, scaffold, idempotent, NodeYaml-bridge
+# STRUCTURE: ▶ register_project → ◇ NodeYaml.add_project → ◇ soft-idempotency bridge (ConfigValidationError→skip) → ⎋ (bool, str)
+#            └ deregister_project → ◇ NodeYaml.remove_project → ⎋ (bool, str)
+#            └ list_projects → ◇ NodeYaml.get_projects → ⊕ stdout: "name repo type domain" → ⎋ exit 0
 # region MODULE_CONTRACT
-## @purpose  Project registry — single-source-of-truth for project registration/deregistration/listing
-##           in node.yaml. Extracted from 3 independent Python heredoc blocks in scaffold scripts.
-## @scope    Shell-accessible via CLI subcommands (register, deregister, list). Python-importable
-##           for direct function calls. Used by add-project.sh, adopt-project.sh, remove-project.sh.
+## @purpose  Project registry — thin wrapper over NodeYaml for project registration/deregistration/listing.
+##           DevPlan 091 Wave C (AC2): migrated from yaml.safe_load/dump to NodeYaml.add_project/remove_project/get_projects.
+##           Soft-idempotency preserved via ConfigValidationError bridge for register (hard-error → soft skip).
+## @scope    Shell-accessible via CLI subcommands. Python-importable for direct function calls.
 ## @invariants
-##   1. Library functions return (bool, str) tuple — True=success, False=error, message describes outcome
-##   2. CLI __main__ still calls sys.exit(0/1) for shell compatibility — shell wrappers check exit code
-##   3. Idempotent: register skips if name/repo already exists; deregister skips if not found
-##   4. YAML written with default_flow_style=False, sort_keys=False (preserves ordering)
+##   1. Library functions return (bool, str) tuple
+##   2. CLI __main__ calls sys.exit(0/1) for shell compatibility
+##   3. Idempotent: register skips via ConfigValidationError catch; deregister is nodeyaml-idempotent
+##   4. No direct yaml.safe_load/dump — all YAML ops through NodeYaml
 ##   5. Logs to stderr at IMP:9 on success/skip, IMP:7-8 for warnings
-## @rationale DRIFT-B5 elimination (Brief 077): 3 Python heredoc blocks → 1 canonical source.
-##            sys.exit replaced with return (bool, str) in library functions for testability.
-##            CLI layer handles exit code generation for shell compatibility.
-## @changes  2026-07-25 · DevPlan 070 — Created shared module (DRIFT-B5)
-##           2026-07-26 · DevPlan 038b — sys.exit removed from library functions, return (bool, str) instead
+## @rationale DRIFT-088-7: 3 yaml.safe_load calls were bypassing NodeYaml facade, creating
+##            a parallel node.yaml mutation path that didn't benefit from NodeYaml validation,
+##            error handling, and mutation safety. Now a thin bridge — consumers unchanged,
+##            but node.yaml access is unified through a single facade.
+## @changes  2026-07-25 · DevPlan 070 — Created
+##           2026-07-26 · DevPlan 038b — sys.exit replaced with return tuple
+##           2026-07-30 · DevPlan 091 Wave C — yaml.safe_load → NodeYaml bridge (AC2)
 # endregion MODULE_CONTRACT
 
 import logging
+import os
 import re
 import sys
 
+# Standalone CLI bootstrap: when run directly (subprocess), add project root to sys.path
+# so that `from core.internal.shared.*` imports resolve. This is the same pattern used
+# in context_deployer.py and other CLI-accessible shared modules.
+if __name__ == "__main__" or not __package__:
+    _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    if _project_root not in sys.path:
+        sys.path.insert(0, _project_root)
+
 logger = logging.getLogger(__name__)
+
+# DevPlan 091 Wave C (AC2): NodeYaml replaces yaml.safe_load/dump.
+# Imports are module-level — the sys.path bootstrap above ensures they resolve
+# in standalone CLI (subprocess) mode. For pytest, rootdir = project root.
+from core.internal.shared.exceptions import ConfigValidationError
+from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
 # ── Project name validation ─────────────────────────────────────────────────
 ## @purpose  Canonical project name validation used by deploy_engine, payload_deliverer, reconciler.
@@ -80,14 +97,13 @@ def register_project(
     database: str = "",
     log_prefix: str = "add-project",
 ) -> tuple[bool, str]:
-    """Register a project in node.yaml. Idempotent. Returns (success, message)."""
-    try:
-        import yaml
-    except ImportError:
-        msg = f"[IMP:10][{log_prefix}][register] PyYAML not available — cannot register"
-        print(msg, file=sys.stderr)
-        return (False, msg)
+    """Register a project in node.yaml via NodeYaml. Idempotent. Returns (success, message).
 
+    DevPlan 091 Wave C (AC2/DRIFT-088-7): replaced yaml.safe_load/dump with NodeYaml.add_project().
+    Soft-idempotency preserved: NodeYaml.add_project() raises ConfigValidationError on duplicate →
+    caught and translated to (True, "Idempotent SKIP") to maintain the existing consumer contract.
+    Signal signature unchanged — consumers (project_adopter.py, CLI) are not affected.
+    """
     if not name or not repo or not node_yaml_path:
         msg = (
             f"[IMP:7][{log_prefix}][register] Missing required params (name={name}, repo={repo}, yaml={node_yaml_path})"
@@ -95,34 +111,41 @@ def register_project(
         print(msg, file=sys.stderr)
         return (False, msg)
 
-    with open(node_yaml_path) as f:
-        data = yaml.safe_load(f)
+    try:
+        ny = NodeYaml(node_yaml_path)
 
-    if "projects" in data:
-        for p in data["projects"]:
-            if p.get("name") == name or p.get("repo") == repo:
-                msg = f"[IMP:9][{log_prefix}][register] Idempotent SKIP — {name} already in node.yaml"
+        # Pre-check: repo-based idempotency (backward-compat with old yaml.safe_load path).
+        # NodeYaml.add_project() only guards on name; the old code also checked repo.
+        for p in ny.get_projects():
+            if p.get("repo") == repo and p.get("name") != name:
+                msg = f"[IMP:9][{log_prefix}][register] Idempotent SKIP — {name} already in node.yaml (repo duplicate: {repo})"
                 print(msg, file=sys.stderr)
                 return (True, msg)
 
-    entry: dict[str, str] = {"name": name, "repo": repo}
-    if project_type:
-        entry["type"] = project_type
-    if domain:
-        entry["domain"] = domain
-    if database:
-        entry["database"] = database
-
-    if "projects" not in data:
-        data["projects"] = []
-    data["projects"].append(entry)
-
-    with open(node_yaml_path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-    msg = f"[IMP:9][{log_prefix}][register] Registered {name} → {node_yaml_path}"
-    print(msg, file=sys.stderr)
-    return (True, msg)
+        project = ProjectEntry(
+            name=name,
+            repo=repo,
+            type=project_type,
+            domain=domain,
+            database=database,
+        )
+        ny.add_project(project)
+        msg = f"[IMP:9][{log_prefix}][register] Registered {name} → {node_yaml_path}"
+        print(msg, file=sys.stderr)
+        return (True, msg)
+    except ConfigValidationError as e:
+        # Bridge: NodeYaml hard-error on duplicate → soft-idempotent skip
+        if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+            msg = f"[IMP:9][{log_prefix}][register] Idempotent SKIP — {name} already in node.yaml"
+            print(msg, file=sys.stderr)
+            return (True, msg)
+        msg = f"[IMP:10][{log_prefix}][register] Validation error: {e}"
+        print(msg, file=sys.stderr)
+        return (False, msg)
+    except (OSError, ValueError) as e:
+        msg = f"[IMP:10][{log_prefix}][register] Failed to register {name}: {e}"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
 
 # endregion FUNC_register_project
@@ -146,37 +169,40 @@ def deregister_project(
     node_yaml_path: str = "",
     log_prefix: str = "remove-project",
 ) -> tuple[bool, str]:
-    """Remove a project from node.yaml by name. Idempotent. Returns (success, message)."""
-    try:
-        import yaml
-    except ImportError:
-        msg = f"[IMP:10][{log_prefix}][unregister] PyYAML not available — cannot deregister"
-        print(msg, file=sys.stderr)
-        return (False, msg)
+    """Remove a project from node.yaml by name via NodeYaml. Idempotent. Returns (success, message).
 
+    DevPlan 091 Wave C (AC2): replaced yaml.safe_load/dump with NodeYaml.remove_project().
+    NodeYaml.remove_project() returns bool (True=removed, False=not found) → wrapped in tuple.
+    """
     if not name or not node_yaml_path:
         msg = f"[IMP:7][{log_prefix}][unregister] Missing required params (name={name}, yaml={node_yaml_path})"
         print(msg, file=sys.stderr)
         return (False, msg)
 
-    with open(node_yaml_path) as f:
-        data = yaml.safe_load(f)
+    try:
+        ny = NodeYaml(node_yaml_path)
 
-    if "projects" not in data:
-        msg = f"[IMP:8][{log_prefix}][unregister] No projects section — nothing to remove"
+        # Pre-check: count existing projects for backward-compat message format.
+        existing_projects = ny.get_projects()
+        if not existing_projects:  # type: ignore[truthy-function]
+            msg = f"[IMP:8][{log_prefix}][unregister] No projects section — nothing to remove"
+            print(msg, file=sys.stderr)
+            return (True, msg)
+
+        orig_count = len(existing_projects)  # type: ignore[arg-type]
+        removed = ny.remove_project(name)
+
+        if removed:
+            removed_count = orig_count - len(ny.get_projects())  # type: ignore[arg-type]
+            msg = f"[IMP:9][{log_prefix}][unregister] Removed '{name}' from {node_yaml_path} ({removed_count} entries removed)"
+        else:
+            msg = f"[IMP:8][{log_prefix}][unregister] Removed '{name}' from {node_yaml_path} (0 entries removed)"
         print(msg, file=sys.stderr)
         return (True, msg)
-
-    orig_count = len(data["projects"])
-    data["projects"] = [p for p in data["projects"] if p.get("name") != name]
-    removed = orig_count - len(data["projects"])
-
-    with open(node_yaml_path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-    msg = f"[IMP:9][{log_prefix}][unregister] Removed '{name}' from {node_yaml_path} ({removed} entries removed)"
-    print(msg, file=sys.stderr)
-    return (True, msg)
+    except (OSError, ValueError) as e:
+        msg = f"[IMP:10][{log_prefix}][unregister] Failed to deregister {name}: {e}"
+        print(msg, file=sys.stderr)
+        return (False, msg)
 
 
 # endregion FUNC_deregister_project
@@ -202,28 +228,29 @@ def list_projects(
     node_yaml_path: str = "",
     log_prefix: str = "list-projects",
 ) -> tuple[bool, str]:
-    """List all projects. Outputs 'name repo type domain' per line to stdout. Returns (success, message)."""
-    try:
-        import yaml
-    except ImportError:
-        msg = f"[IMP:10][{log_prefix}][list] PyYAML not available"
-        print(msg, file=sys.stderr)
-        return (False, msg)
+    """List all projects via NodeYaml.get_projects(). Outputs 'name repo type domain' per line.
 
+    DevPlan 091 Wave C (AC2): replaced yaml.safe_load with NodeYaml.get_projects().
+    """
     if not node_yaml_path:
         msg = f"[IMP:7][{log_prefix}][list] Missing node_yaml_path"
         print(msg, file=sys.stderr)
         return (False, msg)
 
     try:
-        with open(node_yaml_path) as f:
-            data = yaml.safe_load(f)
-    except (FileNotFoundError, yaml.YAMLError) as e:
+        from core.internal.shared.exceptions import ConfigNotFoundError
+
+        ny = NodeYaml(node_yaml_path)
+        projects = ny.get_projects()
+    except ConfigNotFoundError:
+        msg = f"[IMP:8][{log_prefix}][list] Failed to read {node_yaml_path}: FileNotFoundError"
+        print(msg, file=sys.stderr)
+        return (False, msg)
+    except (OSError, ValueError, FileNotFoundError) as e:
         msg = f"[IMP:8][{log_prefix}][list] Failed to read {node_yaml_path}: {e}"
         print(msg, file=sys.stderr)
         return (False, msg)
 
-    projects = data.get("projects", []) if isinstance(data, dict) else []
     for p in projects:
         name = p.get("name", "-") or "-"
         repo = p.get("repo", "-") or "-"

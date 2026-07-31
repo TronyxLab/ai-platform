@@ -45,10 +45,27 @@ from core.internal.bootstrap.lifecycle.state_machine import (
     _grouped_phases,
     _phase_dependency_graph,
 )
-from core.internal.bootstrap.lifecycle.state_migration import (
-    MIGRATION_MAP,
-    migrate_state_to_phases,
-)
+
+# DevPlan 091 Wave B: state_migration.py deleted (cold start only, no backward-compat).
+# MIGRATION_MAP constant (sub_step names per grouped phase) is inlined here for the
+# two tests that still use it (skip_already_done_phases, grouped_phase_skip_unchanged).
+# The migration-specific assertions in test_phase_dependency_graph_integrity were
+# removed together with migrate_state_to_phases().
+# ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Inlined MIGRATION_MAP from deleted state_migration.py
+# · Rejected: extract sub_step names dynamically from _grouped_phases (risk: changes test behavior)
+# · Reason: MIGRATION_MAP is a static list of grouped-phase sub_step keys; only system_bootstrap
+#   is referenced. Inlining preserves test semantics without importing deleted module.
+# · Rev: when a new grouped phase is added with sub_steps — update this constant.
+MIGRATION_MAP: dict[str, list[str]] = {
+    "system_bootstrap": ["packages", "docker_install", "tor_proxy", "firewall"],
+    "user_accounts": ["ssh_access", "create_platform_user", "create_ci_deploy_user"],
+    "platform_setup": ["create_projects_base", "platform_dirs", "docker_config", "metrics_cron"],
+    "secrets_provision": ["decrypt_secrets", "ensure_secrets", "secrets_init"],
+    "node_configuration": ["read_node_yaml", "verify_core", "verify_node_configs"],
+    "certificates": ["install_acme"],
+    "deploy_services": ["deploy_modules", "deploy_context"],
+}
+assert "system_bootstrap" in MIGRATION_MAP, "MIGRATION_MAP must contain system_bootstrap"
 
 logger = logging.getLogger(__name__)
 
@@ -888,10 +905,11 @@ def test_grouped_phase_skip_unchanged_sub_steps(
 def test_phase_dependency_graph_integrity(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Verify _phase_dependency_graph consistency and migrate_state_to_phases correctness."""
-    # 🧪 TRAP[TEST] · 2026-07-30 · Regression: _phase_dependency_graph + MIGRATION_MAP integrity
-    # · Scenario: Structural test of the dependency graph and migration map
-    # · Last fail: N/A (first implementation)
+    """Verify _phase_dependency_graph consistency and MIGRATION_MAP key validity."""
+    # 🧪 TRAP[TEST] · 2026-07-30 · Regression: _phase_dependency_graph + MIGRATION_MAP structural integrity
+    # · Scenario: Structural test of the dependency graph and inline migration map keys
+    # · Last fail: never
+    # · Updated: 2026-07-30 (Wave B) — migrate_state_to_phases() assertions removed (state_migration.py deleted)
     # · Remove if: phases are no longer tracked via dependency graph
 
     caplog.set_level(logging.DEBUG)
@@ -930,46 +948,10 @@ def test_phase_dependency_graph_integrity(
         len(_phase_dependency_graph),
     )
 
-    # ── Test migrate_state_to_phases composite hash correctness ──
-    old_state: dict[str, Any] = {"steps": {}}
-    migration_all_keys: set[str] = set()
-    for keys in MIGRATION_MAP.values():
-        migration_all_keys.update(keys)
-
-    # Mark first half of all known old keys as done
-    sorted_all_keys = sorted(migration_all_keys)
-    halfway = len(sorted_all_keys) // 2
-    for i, key in enumerate(sorted_all_keys):
-        if i < halfway:
-            old_state["steps"][key] = {"status": "done"}
-        else:
-            old_state["steps"][key] = {"status": "pending"}
-
-    # Migrate
-    migrated = migrate_state_to_phases(old_state)
-
-    # Verify: phases composed entirely of first-half (done) keys → done=True
-    # Phases with any second-half (pending) keys → done=False
-    for phase_name, sub_keys in MIGRATION_MAP.items():
-        phase_entry = migrated.get(phase_name)
-        assert phase_entry is not None, f"Phase '{phase_name}' missing after migration"
-        assert "done" in phase_entry, f"Phase '{phase_name}' missing 'done' field"
-        assert "sub_steps" in phase_entry, f"Phase '{phase_name}' missing 'sub_steps' field"
-
-        all_done_predicted = all(old_state["steps"].get(k, {}).get("status") == "done" for k in sub_keys)
-        assert phase_entry["done"] == all_done_predicted, (
-            f"Phase '{phase_name}' done={phase_entry['done']} predicted={all_done_predicted} (sub_steps: {sub_keys})"
-        )
-
-    logger.info(
-        "[IMP:9][test_graph] migrate_state_to_phases composite hash validated for all %d phases",
-        len(MIGRATION_MAP),
-    )
-
     # ── Verify MIGRATION_MAP keys are valid BootstrapPhase values ──
+    # (MIGRATION_MAP is now inlined; migrate_state_to_phases() removed in Wave B.
+    #  Only the structural key-validity check is preserved.)
     for phase_key in MIGRATION_MAP:
-        # Phase keys in MIGRATION_MAP use underscore names like "system_bootstrap"
-        # BootstrapPhase values use the same strings, so direct comparison works
         assert phase_key in all_phase_values or phase_key.replace("_", "") in {
             v.replace("_", "") for v in all_phase_values
         }, f"MIGRATION_MAP key '{phase_key}' does not match any BootstrapPhase value"

@@ -230,49 +230,11 @@ from core.internal.shared.telegram_notifier import send_telegram as _shared_send
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
-# DevPlan 047: INIT_STEP_COUNT 17→23 (added docker_auth at index 5, deploy_context at index 23)
-INIT_STEP_COUNT = 23
-UPDATE_STEP_COUNT = 8
 
-# Step name → index mapping (1-indexed, matches state.json keys)
-# DevPlan 047: docker_auth inserted at position 5 (shifts 5→6...21→22), deploy_context at 23
-INIT_STEPS: list[str] = [
-    "ssh_access",  # 1
-    "apt_deps",  # 2
-    "tor_proxy",  # 3 (conditional — TOR_ENABLED)
-    "install_docker",  # 4
-    "docker_auth",  # 5 ← NEW (DevPlan 047): Docker Hub auth + registry-mirror
-    "create_platform_user",  # 6 (was 5)
-    "create_ci_deploy_user",  # 7 (was 6)
-    "create_projects_base",  # 8 (was 6b/7)
-    "firewall",  # 9 (was 7/8)
-    "verify_core",  # 10 (was 8/9)
-    "verify_node_configs",  # 11 (was 9/10)
-    "decrypt_secrets",  # 12 (was 10/11)
-    "ensure_secrets",  # 13 (was 12b)
-    "secrets_init",  # 14 (was secrets-init)
-    "read_node_yaml",  # 15 (was 11/14)
-    "ghcr_auth",  # 16 (was 12/15)
-    "sudoers",  # 17 (was 13/16)
-    "install_acme",  # 18 (was 13b/17)
-    "node_update",  # 19 (was 14/18)
-    "converge",  # 20 (was 15/19)
-    "audit_log",  # 21 (was 16/20)
-    "telegram",  # 22 (was 17/21)
-    "deploy_context",  # 23 ← NEW (DevPlan 047): bulk cert restore + context projects + verify
-]
-
-UPDATE_STEPS: list[str] = [
-    "verify_core",  # 1
-    "provision",  # 2
-    "deliver_overlays",  # 2.5/3
-    "ssl_provision",  # 3/4
-    "deploy_modules",  # 4/5
-    "provision_llm_keys",  # 6 ← NEW (DevPlan 049): render litellm config + provision virtual keys
-    "healthcheck",  # 7
-    "converge",  # 8 (after healthcheck)
-    "deploy_context",  # 9 ← NEW (DevPlan 047): incremental project deploy + cert check
-]
+# INIT_STEPS / UPDATE_STEPS / *_COUNT removed (DevPlan 091 Wave B, AC8).
+# Pre-DevPlan-087 23-step dispatch was consolidated to 14 phases. The numeric-key
+# fallback in from_dict() no longer has a caller since __init__ now loads directly
+# from BootstrapPhase keys. See comment at L574 for the simplified loading path.
 
 
 # ── Retry Policy (W5-E6 C2) ──
@@ -570,9 +532,11 @@ class StateMachine:
             try:
                 with open(self.state_file) as f:
                     data = json.load(f)
-                loaded_mode = data.get("mode", "init")
-                step_list = INIT_STEPS if loaded_mode == "init" else UPDATE_STEPS
-                self.state = BootstrapState.from_dict(data, step_list=step_list)
+                # DevPlan 091 Wave B (AC8): load directly from BootstrapPhase keys.
+                # The old INIT_STEPS/UPDATE_STEPS numeric-key fallback was removed together
+                # with the 23-step constants and state_migration.py. state.json now contains
+                # only phase keys (system_bootstrap, user_accounts, …).
+                self.state = BootstrapState.from_dict(data)
                 # Phase key migration: copy phase keys from root level into steps dict.
                 # This handles migrated state.json files where migrate_state_to_phases()
                 # wrote phase keys at root level but from_dict only reads data["steps"].
@@ -1351,24 +1315,18 @@ def main() -> int:
     core_dir = os.environ.get("CORE_DIR", os.path.join(platform_root, "core"))
     sm.core_dir = core_dir
 
-    # ── Phase state migration (one-shot: old 23 keys → 14 phase keys) ──
-    if sm.state_file.exists():
-        try:
-            raw_state = json.loads(sm.state_file.read_text())
-            has_old_keys = bool(raw_state.get("steps"))
-            has_new_keys = any(p in raw_state for p in BootstrapPhase.ALL_PHASES)
-            if has_old_keys and not has_new_keys:
-                from core.internal.bootstrap.lifecycle.state_migration import migrate_state_to_phases  # fmt: skip
-
-                migrated = migrate_state_to_phases(raw_state)
-                sm.state_file.write_text(json.dumps(migrated, indent=2))
-                # Copy migrated phase keys into state.steps for execute_phase()
-                for pv in BootstrapPhase.ALL_PHASES:
-                    if pv in migrated:
-                        sm.state.steps[pv] = migrated[pv]
-                logger.info("[IMP:9][main] State migrated from old 23-step keys to 14-phase format")
-        except (json.JSONDecodeError, OSError, KeyError, ValueError, TypeError) as e:
-            logger.warning("[IMP:7][main] State migration skipped: %s", e)
+    # ── REMOVED (DevPlan 091 Wave B, User Constraint): state migration block ──
+    # The one-shot `migrate_state_to_phases()` call (old 23-step keys → 14-phase keys)
+    # was removed together with state_migration.py (B1). User Constraint: тестовая фаза,
+    # можно ронять. state.json создаётся с нуля при cold start bootstrap; старые файлы
+    # с numeric keys больше не поддерживаются. Если на production-ноде ещё остался старый
+    # state.json с 23 keys — оператор должен вручную удалить его перед обновлением.
+    # ⚠️ TRAP[DECISION] · 2026-07-30 · HI · Removed state migration — cold start only
+    # · Rejected: keep migration for backward-compat (risk: dead code rotting, 198 LOC untested)
+    # · Reason: тестовая фаза (AGENTS.md инвариант 9). Cold start = 9 INIT фаз создают новый
+    #   state.json. Production rollout — перед обновлением: rm /var/lib/platform/.bootstrap/state.json
+    # · Rev: если production-нода не может быть пересоздана → восстановить миграцию как отдельный скрипт,
+    #   не в hot path bootstrap.
 
     # ── --force: clear state ──
     if args.force:

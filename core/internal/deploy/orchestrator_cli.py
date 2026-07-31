@@ -68,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--host", default="", help="Remote host for channel delivery")
     dep.add_argument("--user", default="", help="SSH user")
     dep.add_argument("--key-file", default="", help="SSH key file path")
+    dep.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Plan the deploy without executing (AC10)",
+    )
 
     # ── deploy-many — multiple projects ──
     dm = sub.add_parser("deploy-many", help="Deploy multiple projects sequentially")
@@ -76,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
     dm.add_argument("--scp", action="store_true", help="Use SCPChannel (default)")
     dm.add_argument("--forced-command", action="store_true", help="Use ForcedCommandChannel")
     dm.add_argument("--host", default="", help="Remote host")
+    dm.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Plan each deploy without executing (AC10)",
+    )
 
     # ── rollback ──
     rb = sub.add_parser("rollback", help="Rollback a project")
@@ -166,6 +178,7 @@ def main() -> int:
             version=args.version,
             service=service,
             project_dir=project_dir,
+            dry_run=args.dry_run,
         )
         print(json.dumps(result.to_dict()))
         return 0 if result.is_success() else 1
@@ -179,6 +192,7 @@ def main() -> int:
             project_names=projects,
             channel=channel,
             version=args.version,
+            dry_run=args.dry_run,
         )
         output = [r.to_dict() for r in results]
         print(json.dumps(output))

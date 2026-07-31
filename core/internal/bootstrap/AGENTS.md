@@ -8,16 +8,15 @@
 ## @scope    All scripts under core/internal/bootstrap/ — node-lifecycle.sh (thin facade),
 ##           lifecycle/state_machine.py (BootstrapPhase enum, _phase_dependency_graph,
 ##           precondition_check, _resume_phase), lifecycle/phases.py (14 phase implementations),
-##           lifecycle/state_migration.py (one-shot 23→14 key migration), deploy-modules,
-##           setup-node, install-docker, install-tor-proxy, firewall, _topo_sort, content-hash,
-##           discover_modules, remote-cmd, scp-deliver
+##           deploy-modules, setup-node, install-docker, install-tor-proxy, firewall,
+##           _topo_sort, content-hash, discover_modules, remote-cmd, scp-deliver
 ## @invariants
-##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё state_machine.py. Режимы: --mode init (14 INIT фаз) и --mode update (5 UPDATE фаз).
+##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё state_machine.py. Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
 ##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), _execute_phase(), _execute_grouped_phase(), _resume_phase()
 ##   3. phases.py — business logic: 14 phase_*() функций, вызываемых из state_machine.py
-##   4. state_migration.py — однократная миграция 23→14 ключей при обновлении production ноды.
-##   5. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
-##   6. Идемпотентность: state.json с 14 phase-ключами + content-hash для grouped-phase sub_steps
+##   4. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
+##   (state_migration.py — удалён в DevPlan 091 Wave B. Backward-compat 23→14 key migration удалена; cold start only.)
+##   5. Идемпотентность: state.json с 14 phase-ключами + content-hash для grouped-phase sub_steps
 ##   7. Артефакты: /opt/platform/core/ (core), /opt/<context>/platform/ (context-overlay)
 ##   8. Никаких git-операций в bootstrap — только SCP/rsync для core; git clone/pull только через ensure_context_repo() для context-overlay
 ## @rationale DevPlan 087: Consolidate 32+ steps → 14 phases with explicit dependency graph.
@@ -142,8 +141,6 @@ node-lifecycle.sh --mode update → state_machine.py
   }
 }
 ```
-
-**Миграция:** `state_migration.py::migrate_state_to_phases()` — однократная миграция при обновлении с 23 старых ключей на 14 новых. Composite hash: все подшаги done → фаза done. Старые ключи сохраняются для rollback. Вызывается при первом запуске после обновления.
 
 **Сброс:** `rm /var/lib/platform/.bootstrap/state.json` или `make bootstrap-node ... --force` → следующий bootstrap будет полным.
 
