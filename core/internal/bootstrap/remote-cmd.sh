@@ -3,7 +3,7 @@
 # STRUCTURE: ▶ ┌source paths+ssh+build-ssh-cmd┐ → ○ execute_remote_{update,converge,reconcile} → ⚡ python3 -m remote_executor → ⎋ return $?
 # region MODULE_CONTRACT
 ## @purpose  Thin shell facade for remote SSH proxy operations: build_*_ssh_cmd via build-ssh-cmd.sh (printf %q, D3), orchestration → remote_executor.py
-## @scope    Sourced by bootstrap.sh, node-update.sh, converge.sh. Provides execute_remote_* + deliver_vhost_overlays().
+## @scope    Sourced by node-update.sh, converge.sh. Provides execute_remote_* + deliver_vhost_overlays(). build-ssh-cmd.sh sourced separately by bootstrap.sh.
 ## @invariants — printf %q builders live in build-ssh-cmd.sh (D3, logic untouched); exit: 2=local fallback, 1=fatal, 124=timeout; DRY_RUN→--dry-run
 ## @rationale Strangler-Fig: 672→~60 LOC facade + build-ssh-cmd.sh (~100 LOC) + remote_executor.py (~200 LOC).
 ## @changes 2026-07-31 | DevPlan 101 — execute_* orchestration (resolve/VPS-detect/sync-core/ssh_exec) → Python
