@@ -11,7 +11,7 @@
 ##   1. Source of projects: node.yaml → projects[] where context == <context>
 ##   2. Image channel: ghcr.io pull primary → build on-node fallback
 ##   3. Idempotent: healthcheck before deploy, skip if healthy
-##   4. Health-gate: ≤60s per project (same as deploy-project.sh)
+##   4. Health-gate: ≤60s per project (same as the legacy deploy pipeline)
 ##   5. Non-fatal: failure of one project does NOT block others
 ##   6. Audit: each deploy recorded in /var/log/platform/audit.log
 ##   7. One node = one context (CONTEXT from node.yaml or CLI --context)

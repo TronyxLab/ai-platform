@@ -42,16 +42,6 @@ from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
 # DevPlan 116 B5 T1: rsync/ssh таймауты — единый реестр shared/timeouts.py (U-11)
 from core.internal.shared.timeouts import RSYNC_TIMEOUT, SSH_CONNECT_TIMEOUT
 
-# DevPlan 089 T15: DeployOrchestrator integration for overlay delivery
-_ORCHESTRATOR_AVAILABLE = False
-try:
-    from core.internal.deploy.channels import SCPChannel
-    from core.internal.deploy.orchestrator import DeployOrchestrator  # noqa: F401
-
-    _ORCHESTRATOR_AVAILABLE = True
-except ImportError:
-    pass
-
 logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
@@ -214,67 +204,6 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
 
 
 # endregion FUNC_sync_core_to_vps
-
-
-# region FUNC_deliver_via_orchestrator_scp
-## @purpose  Deliver overlay files via DeployOrchestrator SCPChannel.
-##           Falls back to rsync if orchestrator unavailable.
-## @io  input: ssh_host, local_path, remote_path, dry_run; output: bool success
-## @complexity  O(1) + file transfer
-def deliver_via_orchestrator_scp(
-    ssh_host: str,
-    local_path: str,
-    project_name: str,
-    dry_run: bool = False,
-) -> bool:
-    """Deliver files via DeployOrchestrator SCPChannel.
-
-    Args:
-        ssh_host: Remote SSH host.
-        local_path: Local file path to deliver.
-        project_name: Project name for payload metadata.
-        dry_run: If True, skip actual delivery.
-
-    Returns:
-        True if delivery succeeded or dry-run.
-    """
-    if dry_run:
-        logger.info("[IMP:8][deliver_via_orchestrator_scp][dry-run] DRY-RUN for %s", project_name)
-        return True
-
-    if not _ORCHESTRATOR_AVAILABLE:
-        logger.info("[IMP:8][deliver_via_orchestrator_scp] Orchestrator unavailable — fallback to rsync")
-        return False
-
-    logger.info(
-        "[IMP:9][deliver_via_orchestrator_scp] Delivering %s via SCPChannel to %s",
-        local_path,
-        ssh_host,
-    )
-    try:
-        channel = SCPChannel()
-        channel.metadata_defaults = {"host": ssh_host}
-        from pathlib import Path
-
-        from core.internal.deploy.channels import Payload
-
-        payload = Payload(
-            tar_path=Path(local_path),
-            project_name=project_name,
-            metadata={"host": ssh_host},
-        )
-        result = channel.deliver(payload)
-        if result.success:
-            logger.info("[IMP:9][deliver_via_orchestrator_scp] Delivery SUCCESS for %s", project_name)
-            return True
-        logger.warning("[IMP:5][deliver_via_orchestrator_scp] Delivery failed: %s", result.error_message)
-        return False
-    except (OSError, subprocess.SubprocessError) as e:
-        logger.warning("[IMP:5][deliver_via_orchestrator_scp] Error: %s", e)
-        return False
-
-
-# endregion FUNC_deliver_via_orchestrator_scp
 
 
 # region FUNC_deliver_vhost_overlays

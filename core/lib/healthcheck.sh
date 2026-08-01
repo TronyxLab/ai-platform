@@ -23,7 +23,7 @@ case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;;
 ##           — Return codes: 0=healthy, 1=timeout/unhealthy, 2=starting,
 ##             3=not-found/error
 ## @links    — SOURCES: core/lib/logging.sh for LDD logging
-##           — USED_BY: deploy-project.sh, all module/*/healthcheck.sh scripts
+##           — USED_BY: deploy_engine.py, all module/*/healthcheck.sh scripts
 ##           — REPLACES: inline healthcheck loops in deleted scripts (core-deploy.yml CI workflow,
 ##             deploy.sh); module healthcheck.sh scripts now source this library directly
 ## @invariants — MUST NOT execute any code on source (no side-effects)

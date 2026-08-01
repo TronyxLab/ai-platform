@@ -4,7 +4,7 @@
 #            ▶ CLI: python3 -m core.internal.shared.ssh_command_parser parse|classify <command>
 # region MODULE_CONTRACT
 ## @purpose  Unified SSH_ORIGINAL_COMMAND parser — replaces two duplicate parsers in
-##           deploy.sh and deploy-project.sh with a single canonical implementation.
+##           deploy.sh and the legacy deploy shell with a single canonical implementation.
 ##           See: DevPlan 081 TASK-081B1.
 ## @scope    Core/internal/shared — low-level parsing layer (by DDD). No business logic.
 ##           Two public functions: parse_ssh_command(raw) and classify_verb(cleaned).
@@ -17,7 +17,7 @@
 ##   5. CLI outputs JSON for parse mode, bare string for classify mode
 ##   6. Non-fatal: I/O errors in CLI cause sys.exit(1), not silent failures
 ## @rationale  D1 from DevPlan 081: Two independent SSH command parsers exist in
-##             deploy.sh (shell-function _strip_command_prefixes) and deploy-project.sh
+##             deploy.sh (shell-function _strip_command_prefixes) and the legacy deploy shell
 ##             (shell-function parse_ssh_command). Both implement the same stripping
 ##             and verb classification logic with minor differences. Consolidating into
 ##             a single Python module owned by core/internal/shared eliminates

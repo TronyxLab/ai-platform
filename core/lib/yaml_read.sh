@@ -24,8 +24,7 @@
 ##             (yaml_get_list). Dict/list values serialized as JSON.
 ##           — stderr: error messages to /dev/null by default callers,
 ##             can be redirected for debugging
-## @links    — USED_BY: core/internal/deploy/deploy-project.sh
-##           — USED_BY: core/internal/provision-environment.sh
+## @links    — USED_BY: node-lifecycle.sh, provision-environment.sh, deploy-modules.sh
 ##           — USED_BY: any script needing YAML field extraction
 ##           — CONSOLIDATES: 13+ inline `python3 -c "import yaml"` calls
 ## @invariants
@@ -97,36 +96,3 @@ yaml_get_list() {
     python3 -m core.internal.shared.node_yaml --file "$yaml_path" --get "$dotted_key" --items 2>/dev/null || return $?
 }
 # endregion yaml_get_list
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# region yaml_read_domain_config
-## @purpose  Extract domain configuration fields from a node.yaml for SSL provisioning
-##           and nginx config. Uses NodeYaml CLI instead of inline python3.
-## @io       Input: $1=node_yaml path
-##           Output: stdout — lines in format "field_name:value"
-##           Fields: platform_domain, email, acme_dns_plugin, project_domains (space-separated)
-##           Return: 0=success, 1=file not found or parse error
-## @complexity 1 — single NodeYaml CLI call (was inline python3 heredoc)
-## @invariants
-##   - Output fields are pipe-safe (key:value lines)
-##   - Empty fields produce empty value after colon (field_name:)
-##   - project_domains space-separated, one line, may be empty
-##   - Missing file → empty output + return 1
-##   - Missing fields → empty value (not "None")
-## @changes 2026-07-26 · 038c — Replaced inline python3 heredoc with NodeYaml CLI
-## @rationale  Three files (node-lifecycle.sh step_14, update_step_3, issue-cert.sh main)
-##             had identical python3 blocks for domain extraction. Centralizing in yaml_read.sh
-##             eliminates 3×18 lines of duplicated inline Python. DevPlan 038c converted to
-##             NodeYaml CLI for zero inline python3 in yaml_read.sh.
-yaml_read_domain_config() {
-    local node_yaml="$1"
-    if [[ ! -f "$node_yaml" ]]; then
-        echo "[IMP:8][yaml_read][domain_config] ERROR: File not found: ${node_yaml}" >&2
-        return 1
-    fi
-    echo "[IMP:8][yaml_read][domain_config] Reading domain config from ${node_yaml}" >&2
-    python3 -m core.internal.shared.node_yaml \
-        --file "$node_yaml" \
-        --domain-config || return $?
-}
-# endregion yaml_read_domain_config

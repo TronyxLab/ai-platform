@@ -1,11 +1,11 @@
 # GREP_SUMMARY: test deploy-direct validate-project extract-org platform-deliver parse-ssh-command handle-deliver org-validation backward-compat
 # STRUCTURE: ▶ test_validate_project (3 scenarios) → ▶ test_extract_org (2 scenarios) → ▶ test_deliver_dispatch (3 scenarios) → ⎋ assert exit_codes + PROJECT_DIR
 # region MODULE_CONTRACT
-## @purpose  Unit tests for deploy-project.sh entrypoint validation, org extraction,
-##           and platform-deliver backward compatibility
-## @scope    Covers core/entrypoints/deploy-project.sh (validate_project, extract_org,
-##           resolve_node_host) and core/internal/deploy/deploy-project.sh (parse_ssh_command,
-##           handle_deliver org-aware logic)
+## @purpose  Unit tests for bash snippet parity — validate_project/extract_org semantics
+##           reimplemented inline, and platform-deliver backward compatibility
+## @scope    Tests inline bash snippets replicating the legacy deploy shell entrypoint
+##           validation (validate_project, extract_org, resolve_node_host) and the
+##           parse_ssh_command / handle_deliver org-aware logic
 ## @invariants
 ##   - All tests use tmp_path fixture — no hardcoded paths
 ##   - No Docker, no SSH, no network dependencies

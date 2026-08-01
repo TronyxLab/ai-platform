@@ -62,8 +62,7 @@ deploy:
 ## deploy-project: Direct project deploy bypassing CI (emergency fallback)
 ##   Usage: make deploy-project PROJECT=<dir> NODE=<node> [SKIP_VERIFY=1] [DRY_RUN=1]
 ##   Validates PROJECT has ai-platform.yaml, resolves NODE→SSH host, deploys with audit.
-##   DevPlan 091 Wave A (AC-A2): delegates to DeployOrchestrator via orchestrator_cli
-##   (replaces deleted core/entrypoints/deploy-project.sh — STALE ref bugfix).
+##   DevPlan 091 Wave A (AC-A2): delegates to DeployOrchestrator via orchestrator_cli.
 deploy-project:
 	@echo "[IMP:7][make][deploy-project] Direct deploy PROJECT=$(PROJECT) NODE=$(NODE)..."
 	@if [[ -z "$(PROJECT)" ]]; then \

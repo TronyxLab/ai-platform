@@ -9,10 +9,10 @@
 ##   - Overrides `logger` with no-op to avoid syslog noise in tests
 ##   - Each test creates a bash wrapper that sources the real audit.sh
 ##   - LDD trajectory printed before assertions (Anti-Loop protocol)
-## @changes  2026-07-31 | Adapted to audit.sh contract (debt N-3): source path audit_logging.sh → audit.sh,
+## @changes  2026-07-31 | Adapted to audit.sh contract (debt N-3): source path → audit.sh,
 ##            формат лога pipe-delimited → JSON-lines, exit-код "exit=N" → "rc=N" в msg,
 ##            truncation >200 удалён (новый контракт JSON не обрезает msg — см. TRAP в audit.sh/audit_logger.py)
-## @rationale C-5 fix (debt 096) создал audit.sh; тест оставался stale на удалённый audit_logging.sh — 5 failures
+## @rationale C-5 fix (debt 096) создал audit.sh; тест оставался stale на удалённый legacy shell audit — 5 failures
 # endregion MODULE_CONTRACT
 """
 

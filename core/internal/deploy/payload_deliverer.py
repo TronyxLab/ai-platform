@@ -5,8 +5,8 @@
 #            _atomic_move(extracted_files,target_dir) → ⎋ DeliverResult(success|files_delivered)
 # region MODULE_CONTRACT
 ## @purpose  Validate and atomically extract tar.gz payload delivered via stdin.
-##           Used by platform-deliver verb in deploy-project.sh shell facade.
-##           Migrated from handle_deliver() in deploy-project.sh (Wave 5e Strangler-Fig).
+##           Used by platform-deliver verb in the legacy shell facade.
+##           Migrated from handle_deliver() in the legacy deploy shell (Wave 5e Strangler-Fig).
 ## @scope    Pure file I/O + tar validation. Zero Docker dependency. Can be reused by
 ##           other entrypoints (reconcile-projects.sh, context_deployer.py, etc.).
 ## @invariants
@@ -100,7 +100,7 @@ class PayloadDeliverer:
     """Validate and atomically extract tar.gz payload delivered via stdin.
 
     ## @rationale DevPlan 089 T8: assemble_payload() is the public API for DeployOrchestrator.
-    ##            deliver() preserved for backward compatibility with deploy-project.sh.
+    ##            deliver() preserved for backward compatibility with the legacy shell facade.
 
     Zero Docker dependency. Pure file I/O + tar validation.
     """

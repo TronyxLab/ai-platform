@@ -5,7 +5,7 @@
 ## @purpose  Idempotent dev certificate generator for nginx — hybrid mkcert→openssl.
 ##           SAN derived from domain scheme: `*.ai-platform.local` (base) + `*.${PLATFORM_DOMAIN}`
 ##           if loaded context differs + localhost + 127.0.0.1. Behaviour-preserving 1:1
-##           migration of core/modules/nginx/generate-dev-certs.sh (295 LOC shell → Python).
+##           migration of the legacy generate-dev-certs shell (295 LOC shell → Python).
 ## @scope    core/modules/nginx/dev-certs/ — output files fullchain.pem, privkey.pem.
 ##           Python module (DevPlan 099); thin shell facade kept for backward compat.
 ## @invariants

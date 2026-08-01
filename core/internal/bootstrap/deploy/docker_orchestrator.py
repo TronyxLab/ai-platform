@@ -122,17 +122,6 @@ from core.internal.shared.timeouts import (
 
 logger = logging.getLogger(__name__)
 
-# DevPlan 089 T9: DeployOrchestrator integration
-# deploy_docker_group() can delegate to DeployOrchestrator.deploy_many()
-_ORCHESTRATOR_AVAILABLE = False
-try:
-    from core.internal.deploy.channels import SCPChannel
-    from core.internal.deploy.orchestrator import DeployOrchestrator
-
-    _ORCHESTRATOR_AVAILABLE = True
-except ImportError:
-    pass
-
 # ── Constants ──
 L1_BASE_IMAGE = "hermes-agent-base"
 GHCR_ORG = os.environ.get("GHCR_ORG", "ghcr.io/tronyx161")
@@ -966,75 +955,6 @@ def _pre_pull_images(
 
 
 # endregion FUNC__pre_pull_images
-
-
-# region FUNC_deploy_via_orchestrator
-## @purpose  Deploy modules via DeployOrchestrator.deploy_many(). Uses SCPChannel for delivery.
-##           Falls back to local deploy_docker_module() if orchestrator unavailable.
-## @io       ⇥ entries: list[str] ("module:overlay" format) → ⎋ bool
-## @complexity — O(N × M) where N = modules, M = deploy lifecycle
-## @invariants
-##   - Uses DeployOrchestrator.deploy_many() if available
-##   - Falls back to deploy_docker_group() if orchestrator unavailable
-##   - Each module deploy status is logged individually
-def deploy_via_orchestrator(
-    entries: list[str],
-    modules_dir: str,
-    secrets_env_file: str | None = None,
-    platform_root: str | None = None,
-) -> tuple[int, int, list[str], list[str]]:
-    """Deploy docker modules via DeployOrchestrator.
-
-    Args:
-        entries: Module entry strings ("module:overlay" format).
-        modules_dir: Base modules directory.
-        secrets_env_file: Secrets env file path.
-        platform_root: Platform root path.
-
-    Returns:
-        Tuple of (deployed, failed, failed_names, rolled_back) — same format as deploy_docker_group.
-    """
-    if not _ORCHESTRATOR_AVAILABLE:
-        logger.info(
-            "[IMP:8][deploy_via_orchestrator] DeployOrchestrator not available — falling back to deploy_docker_group",
-        )
-        return deploy_docker_group(entries, modules_dir, secrets_env_file, platform_root)
-
-    logger.info(
-        "[IMP:9][deploy_via_orchestrator] Deploying %d modules via DeployOrchestrator",
-        len(entries),
-    )
-
-    # Extract project names
-    project_names: list[str] = []
-    for entry in entries:
-        mod_name, _, _ = entry.partition(":")
-        project_names.append(mod_name)
-
-    # Build SCPChannel for local delivery
-    channel = SCPChannel()
-
-    # Deploy via orchestrator
-    orchestrator = DeployOrchestrator()
-    results = orchestrator.deploy_many(
-        project_names=project_names,
-        channel=channel,
-        project_base_dir=modules_dir,
-    )
-
-    deployed = sum(1 for r in results if r.is_success())
-    failed = len(results) - deployed
-    failed_names = [r.project for r in results if not r.is_success()]
-
-    logger.info(
-        "[IMP:9][deploy_via_orchestrator] Complete: %d deployed, %d failed",
-        deployed,
-        failed,
-    )
-    return (deployed, failed, failed_names, [])
-
-
-# endregion FUNC_deploy_via_orchestrator
 
 
 # region FUNC_deploy_docker_group

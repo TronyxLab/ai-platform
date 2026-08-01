@@ -21,6 +21,16 @@
 ##   11. Manifest Generation Contract — authoritative sources (module.yaml, secret-definitions.yaml, platform-infra.yaml, Makefile .PHONY, @pytest.mark.gate) порождают generated files (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py, entrypoint-manifest.yaml#allowed_verbs/gates, core/AGENTS.md generated-секции). Generated files коммитятся, но НЕ редактируются вручную. CI gate `make check-manifests` блокирует divergence.
 ## @rationale Single source of truth for platform architecture consumed by autonomous agents and developers
 ## @rationale (D2) Invariant 4 обновлён по результатам drift-аудита: 3 канонических + 2 вспомогательных (core/internal/bootstrap/, tests/gates/) в §Навигация root AGENTS.md; templates/template-*/ — payload `make new-project`/`make new-context`, вне скоупа инварианта (не являются архитектурной документацией платформы)
+## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · Bootstrap forced-command → orchestrator_cli receive (DevPlan 116 B8 D2)
+## · Rejected: оставить forced-command на удалённый legacy deploy-скрипт (риск: новые ноды получают сломанные authorized_keys)
+## · Reason: канонический паттерн setup-node.sh:112 — `command="python3 -m core.internal.deploy.orchestrator_cli receive",restrict`.
+##   B1 позже апгрейдит канал до dispatch (SSH_ORIGINAL_COMMAND-диспетчер) — B8 не ждёт B1.
+## · Rev: когда B1 введёт единый verb-канал — forced-command заменится диспетчером.
+## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · Строгий гейт фантомов — 0 упоминаний 4 удалённых имён (DevPlan 116 B8 D3)
+## · Rejected: мягкий allowlist-режим (риск: allowlist-дрейф как в dead-code gate; фантомные имена живут в docstring/TRAP)
+## · Reason: решение пользователя 2026-08-01 (D3) — история удаляется вместе с именами;
+##   перечень имён — tests/gates/test_gate_phantom_refs.py::_PHANTOM_NAMES, allowlist гейта пуст.
+## · Rev: 2026-10-21 — пересмотр, если гейт начнёт блокировать легитимную историческую документацию.
 ## @changes  Plan 082 — added Template Mechanisms section with decision table
 ## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · SSH_OPTS — Python SoT shared/ssh_opts.py (D1 B5) — триггер vps_readiness:37-42 сработал
 ## · Rejected: 5 Python-копий «SSH_OPTS» + shell lib/ssh.sh (каждая правка ConnectTimeout = 6 правок; ConnectTimeout=10 outlier в context_promoter)
@@ -104,7 +114,7 @@
 | ✅ | `deploy` | Деплой проекта (git push → CI → forced-command) |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды (LIFE CYCLE/INIT) |
 | ✅ | `deploy-context` | Деплой всех проектов контекста на ноде (post-bootstrap, standalone) |
-| ✅ | `dev-certs` | Генерация dev SSL-сертификатов (make dev-certs → generate-dev-certs.sh) |
+| ✅ | `dev-certs` | Генерация dev SSL-сертификатов (make dev-certs → dev_cert_generator.py) |
 | ✅ | `context-promote` | Промоут платформы в контекстную org |
 | ✅ | `discover-modules` | Авто-обнаружение модулей и обновление docker-compose.yml include-секции (make discover-modules → discover_modules.py) |
 | ✅ | `hermes-build-platform` | Сборка L1 локально |

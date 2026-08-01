@@ -187,7 +187,7 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# PLATFORM_DOMAIN — домен платформы для dev-сертификатов и vhost-роутинга.")
     lines.append("# Базовое значение: ai-platform.local. При загруженном контексте (context = GitHub org):")
     lines.append("#   PLATFORM_DOMAIN=<context>.local, SAN дополнительно включает *.${PLATFORM_DOMAIN}.")
-    lines.append("# Сертификаты генерируются автоматически через generate-dev-certs.sh (make dev-certs).")
+    lines.append("# Сертификаты генерируются автоматически через dev_cert_generator.py (make dev-certs).")
     lines.append("# @domain-scheme DevPlan 012 — legacy-тестовый домен упразднён.")
     lines.append("PLATFORM_DOMAIN=" + get_val_required("PLATFORM_DOMAIN"))
     lines.append("# ⚠️ Pin to a specific version — avoid float tag (W7 fix).")

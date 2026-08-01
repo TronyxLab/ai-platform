@@ -6,7 +6,7 @@
 ##           then issue missing ones via acme.sh (issue-cert.sh).
 ##           Restore-first strategy minimizes acme.sh API calls and bootstrap latency.
 ## @scope    Called from state_machine.py deploy_context step (18.2 + 18.3).
-##           Orchestrates s3-ssl-cache.sh (check/download/upload) and issue-cert.sh.
+##           Orchestrates the S3 SSL cache (check/download/upload) and issue-cert.sh.
 ## @invariants
 ##   1. Restore-first: try S3 cache before acme.sh issue
 ##   2. Idempotent: valid certs (>30 days) are skipped
@@ -42,7 +42,7 @@ from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 logger = logging.getLogger(__name__)
 
 # ── Direct import of s3_ssl_cache (DevPlan 052 Phase 1) ──
-# Replaces subprocess calls to s3-ssl-cache.sh with direct Python calls.
+# Replaces subprocess calls to the legacy shell S3 cache with direct Python calls.
 # Eliminates subshell credential propagation bug — S3_* env vars are read
 # directly by s3_ssl_cache functions from os.environ (no subshell).
 try:
@@ -52,7 +52,7 @@ except ImportError:
     logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache module not available — S3 operations disabled")
 
 # ── Constants ──────────────────────────────────────────────────────────────
-S3_TIMEOUT = 120  # seconds for s3-ssl-cache.sh operations
+S3_TIMEOUT = 120  # seconds for S3 cache operations
 ISSUE_TIMEOUT = 300  # seconds for issue-cert.sh
 CERT_VALIDITY_PATH = "/etc/letsencrypt/live"
 
@@ -137,7 +137,7 @@ class CertResult:
 ## @complexity — O(D * T) where D = domains, T = timeout per operation
 ## @invariants
 ##   - Each domain is processed independently (non-fatal on failure)
-##   - Valid certs (>30 days, checked via s3-ssl-cache.sh check) are skipped
+##   - Valid certs (>30 days, checked via S3 cache check) are skipped
 ##   - S3 restore failure → fall back to issue-cert.sh
 ##   - All subprocess calls have timeout
 def orchestrate_certs(
@@ -333,7 +333,7 @@ def _is_le_issuer(cert_path: str) -> bool:
 
 # region FUNC_try_s3_restore
 ## @purpose — Try to restore a cert from S3 via s3_ssl_cache (direct import, no subprocess).
-##            Replaces subprocess calls to s3-ssl-cache.sh (DevPlan 052 Phase 1).
+##            Replaces subprocess calls to the legacy shell S3 cache (DevPlan 052 Phase 1).
 ##            Eliminates subshell credential propagation bug.
 ## @io — ⇥ domain: str → ⎋ DomainCertResult
 ## @complexity — O(T) where T = S3 round-trip time

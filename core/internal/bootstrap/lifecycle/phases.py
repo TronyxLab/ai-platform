@@ -210,7 +210,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
 ##   - PLATFORM_OWNER_KEY is REQUIRED — missing key triggers PlatformFatalError
 ##   - PLATFORM_CI_DEPLOY_KEY is semi-optional — missing key logs warning
 ##   - Both users get 'docker' group membership
-##   - ci-deploy gets forced-command prefix for deploy-project.sh
+##   - ci-deploy gets forced-command prefix for orchestrator_cli receive
 ##   - /opt/projects ownership set to ci-deploy after creation
 def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
     """φ2: User accounts — platform, ci-deploy, SSH keys, projects base.
@@ -246,7 +246,7 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
         _sm._create_user("ci-deploy", ["docker"])
         logger.info("[IMP:9][phase:user_accounts] ci-deploy user created/verified")
         if ci_deploy_key:
-            forced_command = f'command="{core_dir}/internal/deploy/deploy-project.sh {node_name}",restrict'
+            forced_command = 'command="python3 -m core.internal.deploy.orchestrator_cli receive",restrict'
             _sm._add_ssh_key("ci-deploy", ci_deploy_key, forced_command_prefix=forced_command)
             logger.info("[IMP:9][phase:user_accounts] SSH key added for ci-deploy user")
     except (PlatformError, subprocess.TimeoutExpired) as e:

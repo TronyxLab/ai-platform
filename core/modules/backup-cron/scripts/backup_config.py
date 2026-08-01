@@ -6,7 +6,7 @@ Shared configuration module for backup-cron scripts (upload.py, retention.py, ba
 
 @purpose  Provide unified S3 configuration (endpoint, bucket, prefix, context)
           from environment variables. Used by all backup-cron Python scripts
-          and by s3-ssl-cache.sh via upload.py --config-source ssl-cache.
+          and by s3_ssl_cache.py via upload.py --config-source ssl-cache.
           Two config levels: S3Config (base, 5 fields) for generic S3 operations,
           BackupConfig (extends S3Config, 8 fields) for backup-specific operations.
 @scope    core/modules/backup-cron/scripts/; imported by upload.py, retention.py,

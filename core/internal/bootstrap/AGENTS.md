@@ -7,22 +7,22 @@
 ##           node setup, module deployment, healthcheck execution, idempotent state machine
 ## @scope    All scripts under core/internal/bootstrap/ — node-lifecycle.sh (thin facade),
 ##           lifecycle/state_machine.py (BootstrapPhase enum, _phase_dependency_graph,
-##           precondition_check, _resume_phase), lifecycle/phases.py (14 phase implementations),
+##           precondition_check), lifecycle/phases.py (14 phase implementations),
 ##           deploy-modules, setup-node, install-docker, install-tor-proxy, firewall,
-##           _topo_sort, content-hash, discover_modules, remote-cmd, scp-deliver,
+##           _topo_sort, discover_modules, remote-cmd, scp-deliver,
 ##           core_deliverer.py (Python Core-канал: mkdir + 5 rsync фаз, DevPlan 108)
 ## @invariants
 ##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё state_machine.py. Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
-##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), _execute_phase(), _execute_grouped_phase(), _resume_phase()
+##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), _execute_phase(), _execute_grouped_phase()
 ##   3. phases.py — business logic: 14 phase_*() функций, вызываемых из state_machine.py
 ##   4. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
-##   (state_migration.py — удалён в DevPlan 091 Wave B. Backward-compat 23→14 key migration удалена; cold start only.)
+##   (Legacy 23→14 key migration removed in DevPlan 091 Wave B — cold start only.)
 ##   5. Идемпотентность: state.json с 14 phase-ключами + content-hash для grouped-phase sub_steps
 ##   7. Артефакты: /opt/platform/core/ (core), /opt/\<context\>/platform/ (context-overlay)
 ##   8. Никаких git-операций в bootstrap — только SCP/rsync для core; git clone/pull только через ensure_context_repo() для context-overlay
 ## @rationale DevPlan 087: Consolidate 32+ steps → 14 phases with explicit dependency graph.
 ##            Eliminates 8 silent failure propagation points via precondition BLOCKS.
-##            Adds partial failure recovery (_resume_phase()) for grouped phases.
+##            Adds grouped-phase sub-checkpoints with partial-failure skip semantics.
 # endregion MODULE_CONTRACT
 
 # AGENTS.md — core/internal/bootstrap/
@@ -140,7 +140,7 @@ orphan-реконсиляция и severity-based exit code {0,1,2} — в `depl
 | Механизм | Где | Что делает |
 |----------|-----|------------|
 | `state.json` (phase keys) | `/var/lib/platform/.bootstrap/state.json` | Единый source of truth для checkpoint'ов. Ключи — имена фаз BootstrapPhase enum. 14 ключей: system_bootstrap, user_accounts, platform_setup, secrets_provision, node_configuration, registry_auth, certificates, deploy_services, converge_services, secrets_update, node_config_update, registry_update, deploy_update, converge_update. |
-| content-hash | `state_machine._step_hash()` (Python) | SHA256 content hash per sub-step для grouped phases (φ1-φ5, φ7, φ12). Хеш проверяется при _resume_phase() — unchanged+done = SKIP. |
+| content-hash | `state_machine._step_hash()` (Python) | SHA256 content hash per sub-step для grouped phases (φ1-φ5, φ7, φ12). Хеш проверяется при execute_grouped_phase() — unchanged+done = SKIP. |
 | sub-checkpoints | nested в state.json | Grouped-фазы имеют `sub_steps: {name: {done: bool, hash: str}}` для granular idempotency |
 
 **Пример:** `system_bootstrap` в state.json:
@@ -217,10 +217,12 @@ UPDATE MODE (5 phases):
 - φ8/φ12: Docker daemon running, deploy-modules.sh exists
 - φ6: GHCR_PULL_TOKEN present (warning only)
 
-**Partial failure recovery (_resume_phase()):**
-Grouped phases (φ1-φ5, φ7, φ12) support sub-checkpoints. If φ4 partially fails
-(decrypt-secrets OK, ensure-passwords FAIL), restart only runs the failed sub-step.
-Successful sub-steps with unchanged hash are SKIPPED — no age passphrase re-entry required.
+**Повторный запуск после частичного отказа:**
+Grouped phases (φ1-φ5, φ7, φ12) support sub-checkpoints. При повторном запуске
+`_run_init_mode()`/`_run_update_mode()` пропускают done-фазы через `execute_phase()`;
+sub-step SKIP (unchanged + done) — через `execute_grouped_phase()`. Если φ4 частично
+провалилась (decrypt-secrets OK, ensure-passwords FAIL), фаза перевыполняется целиком —
+успешные подшаги с неизменённым хешем SKIP, без повторного ввода age-passphrase.
 
 ### SSL Cert Lifecycle Unification (DevPlan 052)
 
@@ -230,8 +232,7 @@ Successful sub-steps with unchanged hash are SKIPPED — no age passphrase re-en
 
 | Компонент | Назначение | Взаимодействие |
 |-----------|-----------|----------------|
-| `s3_ssl_cache.py` (NEW) | Python-порт s3-ssl-cache.sh — upload/download/check/bulk-restore через boto3 | Прямой импорт в cert_orchestrator.py (без subprocess). os.environ доступ решает проблему credential propagation. |
-| `s3-ssl-cache.sh` (REDUCED) | CLI-фасад ~30 строк | Парсинг аргументов + вызов python3 s3_ssl_cache.py. Только для обратной совместимости (issue-cert.sh --reloadcmd). |
+| `s3_ssl_cache.py` (NEW) | Python-порт legacy shell s3-ssl-cache — upload/download/check/bulk-restore через boto3 | Прямой импорт в cert_orchestrator.py (без subprocess). os.environ доступ решает проблему credential propagation. |
 | `cert_orchestrator.py` (MODIFIED) | Unified SSL entrypoint | Прямой импорт s3_ssl_cache, upload-on-skip (cert на диске → upload в S3), upload после успешного issue. |
 | `state_machine.py` (MODIFIED) | `_ssl_provision_via_orchestrator()` | Вызывает cert_orchestrator.orchestrate_certs() для ALL domains (platform + projects). |
 

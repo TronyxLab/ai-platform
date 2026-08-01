@@ -2,13 +2,13 @@
 # GREP_SUMMARY: s3-ssl-cache, boto3, cert-upload, cert-download, cert-check, bulk-restore, letsencrypt
 # STRUCTURE: ▶ upload_cert → download_cert → check_cert → bulk_restore → ⎋ CLI entry
 # region MODULE_CONTRACT
-## @purpose  Python port of s3-ssl-cache.sh — SSL certificate caching on S3.
+## @purpose  Python port of the legacy shell s3-ssl-cache — SSL certificate caching on S3.
 ##           Provides four operations: upload (save certs after issue), download
 ##           (restore certs before issue), check (validate cached cert), bulk-restore
 ##           (restore all domains from node.yaml). Direct os.environ access eliminates
 ##           the subshell credential propagation bug (DevPlan 052 root cause).
 ## @scope    Called from cert_orchestrator.py (direct import, no subprocess) and from
-##           s3-ssl-cache.sh CLI facade (for backward compat with issue-cert.sh).
+##           the legacy shell s3-ssl-cache CLI facade (for backward compat with issue-cert.sh).
 ## @location core/internal/bootstrap/s3_ssl_cache.py
 ## @input    env: S3_ACCESS_KEY, S3_SECRET_KEY, S3_ENDPOINT_URL, S3_BUCKET, S3_REGION
 ## @output   Each function returns bool (success/failure) — non-fatal, never raises.
@@ -25,7 +25,7 @@
 ##            Eliminates two Tier-1 Strangler triggers (inline python3 heredoc in
 ##            _s3_download_file and _s3_bulk_restore). Direct import enables typed API
 ##            contract instead of subprocess string-based protocol.
-## @changes   CREATED: 2026-07-25 · DevPlan 052 Phase 1 — Python port of s3-ssl-cache.sh
+## @changes   CREATED: 2026-07-25 · DevPlan 052 Phase 1 — Python port of the legacy shell s3-ssl-cache
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -311,7 +311,7 @@ def _upload_s3_file(local_path: str, s3_key: str) -> bool:
 def _extract_domains_from_yaml(node_yaml_path: str) -> list[str]:
     """Extract all domains from a node.yaml file.
 
-    ## @purpose  Port of the inline python3 YAML parsing from s3-ssl-cache.sh _s3_bulk_restore().
+    ## @purpose  Port of the inline python3 YAML parsing from the legacy shell s3-ssl-cache _s3_bulk_restore().
     """
     if not node_yaml_path or not os.path.isfile(node_yaml_path):
         logger.warning("[IMP:7][s3_ssl_cache] node.yaml not found: %s", node_yaml_path)
@@ -357,7 +357,7 @@ def _extract_domains_from_yaml(node_yaml_path: str) -> list[str]:
 
 # region FUNC_upload_cert
 ## @purpose  Upload SSL cert files + acme.sh account data to S3.
-##           Port of s3-ssl-cache.sh _s3_upload(). Uses boto3 directly.
+##           Port of the legacy shell s3-ssl-cache _s3_upload(). Uses boto3 directly.
 ## @io — ⇥ domain: str, cert_dir: str, acme_home: str, s3_bucket: str,
 ##       s3_prefix: str → ⎋ bool
 ## @complexity — O(N) where N = files to upload (~4-5)
@@ -375,7 +375,7 @@ def upload_cert(
 ) -> bool:
     """Upload cert files to S3: fullchain.pem, privkey.pem, chain.pem (opt), account.tar.gz.
 
-    ## @purpose — Port of s3-ssl-cache.sh _s3_upload(). Uses boto3 directly.
+    ## @purpose — Port of the legacy shell s3-ssl-cache _s3_upload(). Uses boto3 directly.
     ##            Reads S3_ACCESS_KEY, S3_SECRET_KEY, S3_ENDPOINT_URL from os.environ.
     ##            No subshell needed — works in the same Python process as caller.
     ## @invariants
@@ -383,7 +383,7 @@ def upload_cert(
     ##   - Required files: fullchain.pem, privkey.pem (chain.pem optional)
     ##   - Account data: tar czf acme.sh domain dir → upload to S3
     ##   - Uses boto3 client with retries (max_attempts=3, mode='standard')
-    ## @rationale Eliminates inline python3 heredoc in s3-ssl-cache.sh _s3_upload().
+    ## @rationale Eliminates inline python3 heredoc in the legacy shell s3-ssl-cache _s3_upload().
     ##           Direct os.environ access fixes credential propagation bug.
     """
     if not s3_bucket:
@@ -475,7 +475,7 @@ def upload_cert(
 # region FUNC_download_cert
 ## @purpose  Download and validate cert from S3. Validates issuer (LE only), domain match,
 ##           openssl integrity. Returns True if restored successfully.
-##           Port of s3-ssl-cache.sh _s3_download() + _s3_download_file().
+##           Port of the legacy shell s3-ssl-cache _s3_download() + _s3_download_file().
 ## @io — ⇥ domain: str, cert_dir: str, acme_home: str, s3_bucket: str,
 ##       s3_prefix: str → ⎋ bool
 ## @complexity — O(T) where T = S3 round-trips + openssl validation
@@ -495,7 +495,7 @@ def download_cert(
     """Download and validate cert from S3. Validates issuer (LE only), domain match,
     openssl integrity. Returns True if restored successfully.
 
-    ## @purpose — Port of s3-ssl-cache.sh _s3_download(). Downloads files to temp,
+    ## @purpose — Port of the legacy shell s3-ssl-cache _s3_download(). Downloads files to temp,
     ##            validates with openssl, then moves to destination.
     ## @invariants
     ##   - fullchain.pem validated: openssl parseable, LE issuer, domain match
@@ -626,7 +626,7 @@ def check_cert(
 ) -> bool:
     """Check if valid cert exists in S3 (>30 days expiry, correct domain, LE issuer).
 
-    ## @purpose — Port of s3-ssl-cache.sh _s3_check(). Downloads fullchain.pem to temp,
+    ## @purpose — Port of the legacy shell s3-ssl-cache _s3_check(). Downloads fullchain.pem to temp,
     ##            validates with openssl (checkend 2592000s, issuer, domain match).
     ## @returns True if valid LE cert >30 days exists in S3
     """
@@ -666,7 +666,7 @@ def check_cert(
 # region FUNC_bulk_restore
 ## @purpose  Parse node.yaml → extract all domains → check + download each.
 ##           Returns {domain: status} dict. Replaces inline python3 YAML parsing
-##           from s3-ssl-cache.sh _s3_bulk_restore().
+##           from the legacy shell s3-ssl-cache _s3_bulk_restore().
 ## @io — ⇥ node_yaml_path: str, s3_bucket: str, s3_prefix: str → ⎋ dict[str, str]
 ## @complexity — O(D * (check + download)) where D = number of domains
 ## @invariants
@@ -680,7 +680,7 @@ def bulk_restore(
 ) -> dict[str, str]:
     """Parse node.yaml → extract all domains → check + download each.
 
-    ## @purpose — Port of s3-ssl-cache.sh _s3_bulk_restore(). Replaces inline
+    ## @purpose — Port of the legacy shell s3-ssl-cache _s3_bulk_restore(). Replaces inline
     ##            python3 YAML parsing + JSON output with typed Python API.
     ## @returns {domain: status} dict where status ∈ {"restored", "miss", "error"}
     """

@@ -453,14 +453,14 @@ def test_docker_orchestrator_writes_audit_on_healthcheck_fail(
 
 # 🧪 TRAP[TEST] · Regression · Shell audit_log() preserved after Phase C changes
 # ── REMOVED (DevPlan 089 AC7 follow-up) ──────────────────────────────────────
-# test_old_shell_format_unchanged asserted that core/lib/audit_logging.sh existed
-# and contained audit_log(). That file was removed in DevPlan 089 AC7 (audit_logging.sh
+# test_old_shell_format_unchanged asserted that the legacy shell audit logger existed
+# and contained audit_log(). That file was removed in DevPlan 089 AC7 (legacy shell audit
 # references cleared from core/internal/deploy/). The TRAP[TEST] guard explicitly stated
 # "Remove if: shell audit_log function is intentionally removed or replaced" — condition met.
 # Kept as a comment to document why the shell-format invariant test is gone.
 # ⚠️ TRAP[DECISION] · 2026-07-30 · LO · Removed stale shell-audit existence test
 # · Rejected: keep as skip (risk: R4 NO_SERVICE-as-skip degradation)
-# · Reason: audit_logging.sh deletion is intentional and permanent (DevPlan 089). Test of a
+# · Reason: legacy shell audit deletion is intentional and permanent (DevPlan 089). Test of a
 #   non-existent file violates Test Honesty R3 (stale test). JSON-lines audit is now the only format.
 # · Rev: if a shell audit_log() is reintroduced — recreate an equivalent invariant test.
 

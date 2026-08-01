@@ -3,7 +3,7 @@
 # STRUCTURE: ┌args(PROJECT_DIR,PROJECT)┐ → ◇ read ai-platform.yaml → ◇ extract needs.database → ◇ validate db_name → ◇ docker exec psql CREATE DATABASE IF NOT EXISTS → ⎋ log_imp done
 # region MODULE_CONTRACT
 ## @purpose  Post-deploy hook for postgres module: auto-create project database if declared in ai-platform.yaml needs.database
-## @scope    Invoked by deploy-project.sh after successful project deploy; receives PROJECT_DIR, PROJECT, NODE_NAME (unused)
+## @scope    Invoked after successful project deploy; receives PROJECT_DIR, PROJECT, NODE_NAME (unused)
 ## @invariants
 ##   - Non-fatal: errors are logged but do not block deploy
 ##   - Sources ../../../lib/logging.sh for LDD logging
@@ -11,8 +11,8 @@
 ##   - Database name validated: ^[a-zA-Z0-9_]+$
 ##   - POSTGRES_PASSWORD must be available (via environment or secrets)
 ##   - docker exec postgres psql used to create database
-## @rationale Extracted from deploy-project.sh:auto_create_db() to hook system; postgres module owns its post-deploy DB creation logic
-## @changes  Extracted from deploy-project.sh:803-856
+## @rationale Extracted from the legacy deploy shell auto_create_db() to hook system; postgres module owns its post-deploy DB creation logic
+## @changes  Extracted from the legacy deploy shell (803-856)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail

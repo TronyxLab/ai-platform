@@ -3,11 +3,11 @@
 # STRUCTURE: ▶ cd nginx_module → ◇ docker compose exec nginx nginx -t → ┌if pass: nginx -s reload┐ → ⎋ exit 0/1
 # region MODULE_CONTRACT
 ## @purpose  nginx reload hook — validate config with nginx -t, reload if valid. Called by _trigger_deploy_hooks() after project deploy
-## @scope    Invoked as a hook script from deploy-project.sh _trigger_deploy_hooks(); runs in nginx module directory
+## @scope    Invoked as a hook script from project deploy hooks; runs in nginx module directory
 ## @io       ⇥ $1=PROJECT_DIR $2=PROJECT $3=NODE_NAME → ◇ nginx -t → ◇ nginx -s reload → ⎋ exit 0 if OK, exit 1 if config invalid
 ## @invariants
 ##   - NEVER reload if nginx -t fails (config error protection)
-##   - Runs ONLY after successful project deploy + healthcheck (enforced by call site in deploy-project.sh)
+##   - Runs ONLY after successful project deploy + healthcheck (enforced by call site in project deploy)
 ##   - Hook failure is non-fatal to deploy (enforced by _trigger_deploy_hooks: HOOK-FAIL logged, deploy continues)
 ##   - LDD logs: IMP:7 for trace, IMP:9 for business logic, IMP:10 for errors
 ## @rationale

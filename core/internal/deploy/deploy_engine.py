@@ -8,9 +8,9 @@
 #            CLI: argparse(subcommands:deploy|remove|status) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Atomic deploy/rollback/remove/status engine for VPS-side forced-command deploy operations.
-##           Migrated from deploy-project.sh (1183→~600 LOC) via Strangler-Fig methodology (Wave 5e).
+##           Migrated from the legacy deploy shell (1183→~600 LOC) via Strangler-Fig methodology (Wave 5e).
 ##           All Docker operations via subprocess.run (docker compose CLI), NOT docker-py SDK (D4).
-## @scope    Called by deploy-project.sh shell facade for deploy/remove/status verbs.
+## @scope    Called by the deploy shell facade for deploy/remove/status verbs.
 ##           Importable by other Python modules (context_deployer.py, etc.) via DeployEngine class.
 ## @invariants
 ##   1. All Docker operations go through shared docker_compose_* (sole path) — zero docker-py dependency
@@ -36,7 +36,7 @@
 ##   · Rev: if deploy latency >5min from CI → reconsider
 ##
 ##   🧐 TRAP[DECISION] · 2026-07-17 · — · audit_log() replaces audit_write()
-##   · Rejected: keeping audit_write() in deploy-project.sh (duplicate)
+##   · Rejected: keeping audit_write() in the legacy deploy shell (duplicate)
 ##   · Reason: audit_log() was the canonical shell audit function (now replaced by AuditLogger Python).
 ##
 ##   ⚠️ TRAP[BUG] · 2026-07-20 · REF="<sha> production" — env suffix leaks into image tag
@@ -64,7 +64,7 @@
 ##   · Reason: stub detection requires yaml_read — optional flag avoids unnecessary I/O
 ##   · Rev: if stub detection overhead <1ms → make it default, remove flag
 ##
-##   🧐 TRAP[DECISION] · 2026-07-26 · — · Wave 5e: deploy-project.sh Strangler-Fig migrated to Python
+##   🧐 TRAP[DECISION] · 2026-07-26 · — · Wave 5e: legacy deploy shell Strangler-Fig migrated to Python
 ##   · Rejected: keeping deploy logic in shell (risk: 1183 LOC monolith, 3 inline python3)
 ##   · Reason: языковая политика (AGENTS.md), тестируемость, дедупликация с ssh_command_parser
 ##   · Rev: если Python deploy_engine добавляет >2s latency vs shell → профилировать subprocess overhead
@@ -79,7 +79,7 @@
 ##   · Suspected: дедупликация в core/internal/shared/docker_ops.py сократит ~200 LOC дублирования
 ##   · Impact: при изменении Docker API — правка в 3+ местах вместо одного
 ##   · When: during Wave 5e implementation — deferred to follow-up DevPlan
-## @changes 2026-07-26 · DevPlan 036E — Created (Wave 5e Strangler-Fig migration from deploy-project.sh)
+## @changes 2026-07-26 · DevPlan 036E — Created (Wave 5e Strangler-Fig migration from the legacy deploy shell)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

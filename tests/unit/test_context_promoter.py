@@ -379,8 +379,8 @@ def test_no_ssh_no_token_fails(
 # endregion FUNC_test_no_ssh_no_token_fails
 
 
-# region FUNC_test_audit_logging_imp9
-def test_audit_logging_imp9(
+# region FUNC_test_audit_step_imp9
+def test_audit_step_imp9(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
@@ -420,4 +420,4 @@ def test_audit_logging_imp9(
         assert json.loads(line)["tag"] == "context-promote:myctx"
 
 
-# endregion FUNC_test_audit_logging_imp9
+# endregion FUNC_test_audit_step_imp9

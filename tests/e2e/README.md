@@ -96,5 +96,3 @@ make test MARKER=static    # requires_node тесты не запускаютс�
   проверяется docker inspect на VPS напрямую
 - **GNU `timeout` (macOS)** — ssh timeout в тестах Python-side (subprocess timeout),
   macOS-safe; lib/ssh.sh DRIFT-note не блокирует
-- **sub_step-resume** — `resume_phase()` мёртвый код (TRAP[DEBT] state_machine.py:213):
-  T14 проверяет phase-level recovery, не sub_step-SKIP

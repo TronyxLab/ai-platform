@@ -54,7 +54,7 @@ from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 ##     контекстному валидатору context_initializer).
 ##   - Returns bool (never raises, never sys.exit)
 ##   - DRY: single implementation shared by 5+ consumers
-## @rationale D7 (DevPlan 036E): приватный валидатор имён дублировался в deploy-project.sh:207,
+## @rationale D7 (DevPlan 036E): приватный валидатор имён дублировался в legacy shell,
 ##            reconciler.py:701, и новой payload_deliverer.py. Единая реализация в project_registry.py
 ##            устраняет дублирование. Regex ^[a-zA-Z0-9_-]+$ строже shell-версии (reject '/..'/special chars).
 ##            DevPlan 116 B6 T3 (U-06): regex ужесточён до ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ — reject leading

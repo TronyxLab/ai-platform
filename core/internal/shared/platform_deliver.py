@@ -3,7 +3,7 @@
 # STRUCTURE: ▶ build_deliver_command(org, project) → ◇ parse_deliver_args(args) → ⊕ CLI → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Unified platform-deliver verb builder — replaces duplicate string construction
-##           in deploy-project.sh and reconcile-projects.sh. Provides canonical build/parse
+##           in the legacy shell deliverers and reconcile-projects.sh. Provides canonical build/parse
 ##           operations for the SSH forced-command verb "platform-deliver".
 ## @scope    Used by reconciler_projects.py, deploy scripts, and any consumer that needs
 ##           to construct or deconstruct platform-deliver command strings.
@@ -14,7 +14,7 @@
 ##   3. CLI via `python3 -m core.internal.shared.platform_deliver`
 ##   4. parse_deliver_args raises ValueError on empty input
 ##   5. build_deliver_command raises ValueError if project is empty
-## @rationale DRIFT-elimination (Brief 077): deploy-project.sh and reconciler_projects.py
+## @rationale DRIFT-elimination (Brief 077): the legacy deploy shell and reconciler_projects.py
 ##            both constructed platform-deliver strings manually, leading to subtle
 ##            formatting drift. Single canonical source prevents divergence.
 ## @changes  2026-07-26 | DevPlan 081 Phase A — Created platform-deliver verb builder

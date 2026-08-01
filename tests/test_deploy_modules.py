@@ -31,7 +31,6 @@
 ##   test_batch_orphan [S8] — static: orphan_reconciler.py _batch_orphan_reconciliation contract
 ##   test_git_pull_caching [S9] — static: context_overlay.py S9 caching constants + _pull_with_cache
 ##   test_rsync_consolidation [S5] — static: core-deploy.yml consolidated rsync
-##   test_yaml_read_domain_config [S7] — static: yaml_read.sh + state_machine.py issue-cert delegation
 ##   test_parallel_deploy_failure_isolates_modules [W4-E5] — edge: docker_orchestrator.py failure isolation
 ##   test_orphan_reconciliation_marks_foreign [W4-E5] — edge: orphan_reconciler.py orphan detection
 ##   test_image_exists_short_circuit [W4-E5] — edge: docker_orchestrator.py _check_image_exists contract
@@ -181,9 +180,12 @@ def test_merge_deploy_steps(caplog) -> None:
     logger.info("[IMP:9][test_merge_deploy_steps] Step 5 function removed OK")
 
     # ── 3. deploy-modules.sh called with --skip-provision (via phases.py) ──
-    # node-lifecycle.sh delegates to state_machine.py → phases.py which passes --skip-provision
+    # node-lifecycle.sh delegates to state_machine.py → phases.py which passes --skip-provision.
+    # Phase-based design (DevPlan 087): deploy-modules выполняется в φ8 (DEPLOY_SERVICES) и
+    # φ12 (DEPLOY_UPDATE) — отдельного step "deploy_modules" в state_machine.py нет
+    # (единственное вхождение было в path_map удалённого _compute_step_hash, DevPlan 116 B8 T1).
     sm_content = _STATE_MACHINE_PY.read_text()
-    assert '"deploy_modules"' in sm_content, "S2 violation: deploy_modules step not registered in state_machine.py"
+    assert '"deploy_services"' in sm_content, "S2 violation: deploy_services phase not registered in state_machine.py"
     assert '"--skip-provision"' in phases_content, (
         "S2 violation: --skip-provision not passed from phases.py deploy phase (φ8/φ12)"
     )
@@ -665,7 +667,7 @@ def test_git_pull_caching(caplog) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# S5 + S7: RSync consolidation + yaml_read_domain_config
+# S5: RSync consolidation
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_rsync_consolidation
@@ -720,115 +722,6 @@ def test_rsync_consolidation(caplog) -> None:
 # · Last fail: N/A
 # · Remove if: CI deployment strategy changes fundamentally
 # endregion FUNC_test_rsync_consolidation
-
-
-# region FUNC_test_yaml_read_domain_config
-## @purpose  Verify yaml_read_domain_config() exists and correctly extracts domain configuration
-##           from a node.yaml fixture. Uses tmp_path for isolation.
-## @io       ⇥ tmp_path, caplog → ⎋ None (pytest.fail if function missing or wrong output)
-
-
-@pytest.mark.smoke
-def test_yaml_read_domain_config(caplog, tmp_path) -> None:
-    """
-    # ▶ tmp_path → ⚡ write mock node.yaml → ⚡ source yaml_read.sh → call yaml_read_domain_config() → ◇ verify field extraction → ⎋ pass | fail
-    """
-    caplog.set_level(logging.DEBUG)
-    yaml_read_sh = repo_root() / "core" / "lib" / "yaml_read.sh"
-    logger.info("[IMP:7][test_yaml_read_domain_config] Reading yaml_read.sh ...")
-    content = yaml_read_sh.read_text()
-
-    # ── 1. yaml_read_domain_config function must exist in yaml_read.sh ──
-    assert "yaml_read_domain_config() {" in content, "S7 violation: yaml_read_domain_config() not found in yaml_read.sh"
-    logger.info("[IMP:8][test_yaml_read_domain_config] Function declared OK")
-
-    # ── 2. Must delegate to NodeYaml CLI --domain-config ──
-    assert "--domain-config" in content, (
-        "S7 violation: yaml_read_domain_config does not delegate to NodeYaml CLI --domain-config"
-    )
-    logger.info("[IMP:9][test_yaml_read_domain_config] Delegation to NodeYaml CLI --domain-config OK")
-
-    # ── 2b. Verify output format contract in NodeYaml CLI (_cli_domain_config) ──
-    ny_path = repo_root() / "core" / "internal" / "shared" / "node_yaml.py"
-    ny_content = ny_path.read_text()
-    assert "platform_domain:" in ny_content, (
-        "S7 violation: node_yaml.py _cli_domain_config missing platform_domain output"
-    )
-    assert "project_domains:" in ny_content, (
-        "S7 violation: node_yaml.py _cli_domain_config missing project_domains output"
-    )
-    assert "acme_dns_plugin:" in ny_content, (
-        "S7 violation: node_yaml.py _cli_domain_config missing acme_dns_plugin output"
-    )
-    logger.info("[IMP:9][test_yaml_read_domain_config] NodeYaml CLI --domain-config output format contract verified OK")
-
-    # ── 3. Write a mock node.yaml and test extraction via subprocess ──
-    mock_node_yaml = tmp_path / "node.yaml"
-    mock_node_yaml.write_text("""domain: example.com
-email: admin@example.com
-acme_dns_plugin: webnames
-projects:
-  - name: app1
-    domain: app1.example.com
-  - name: app2
-    domain: app2.example.com
-""")
-    logger.info("[IMP:8][test_yaml_read_domain_config] Running bash subprocess to test extraction ...")
-    import subprocess
-
-    result = subprocess.run(
-        ["bash", "-c", f"source {yaml_read_sh} && yaml_read_domain_config {mock_node_yaml}"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 0, (
-        f"S7 violation: yaml_read_domain_config exited with {result.returncode}: {result.stderr}"
-    )
-    stdout = result.stdout.strip()
-    assert "platform_domain:example.com" in stdout, (
-        f"S7 violation: expected 'platform_domain:example.com' in output, got: {stdout}"
-    )
-    assert "email:admin@example.com" in stdout, (
-        f"S7 violation: expected 'email:admin@example.com' in output, got: {stdout}"
-    )
-    assert "acme_dns_plugin:webnames" in stdout, (
-        f"S7 violation: expected 'acme_dns_plugin:webnames' in output, got: {stdout}"
-    )
-    assert "project_domains:app1.example.com app2.example.com" in stdout, (
-        f"S7 violation: expected project_domains, got: {stdout}"
-    )
-    logger.info("[IMP:9][test_yaml_read_domain_config] All domain fields extracted correctly from mock node.yaml")
-
-    # ── 4. Check that state_machine.py delegates to issue-cert.sh (which calls yaml_read_domain_config) ──
-    # node-lifecycle.sh now delegates to state_machine.py; the SSL provision step invokes issue-cert.sh
-    sm_content = _STATE_MACHINE_PY.read_text()
-    assert "issue-cert.sh" in sm_content or "ssl_script" in sm_content, (
-        "S7 violation: state_machine.py does not invoke issue-cert.sh (which provides yaml_read_domain_config)"
-    )
-    logger.info("[IMP:9][test_yaml_read_domain_config] state_machine.py delegates to issue-cert.sh OK")
-
-    issue_cert_content = (repo_root() / "core" / "internal" / "bootstrap" / "issue-cert.sh").read_text()
-    assert "yaml_read_domain_config" in issue_cert_content, (
-        "S7 violation: issue-cert.sh does not use yaml_read_domain_config"
-    )
-    logger.info("[IMP:9][test_yaml_read_domain_config] issue-cert.sh uses yaml_read_domain_config OK")
-
-    # ── 5. Check that old inline python3 blocks are removed ──
-    # The old block had 'import yaml, sys' followed by 'with open(sys.argv[1])'
-    # We can't do multiline regex easily, so just check for absence of the function-less pattern
-    # in the areas that should be migrated
-    logger.info("[IMP:8][test_yaml_read_domain_config] Checking for migrated calls in node-lifecycle.sh ...")
-
-    # ── LDD trajectory ──
-    _assert_ldd_trajectory(caplog)
-
-
-# 🧪 TRAP[TEST] · Regression: S7 yaml_read_domain_config must exist and replace inline python3 blocks
-# · Scenario: static grep + subprocess test of yaml_read_domain_config with mock node.yaml
-# · Last fail: N/A
-# · Remove if: YAML domain extraction approach changes
-# endregion FUNC_test_yaml_read_domain_config
 
 
 # ══════════════════════════════════════════════════════════════════════════════

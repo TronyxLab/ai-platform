@@ -12,7 +12,7 @@ Usage:
     python3 -m core.internal.deploy.orchestrator_cli remove ...       # Remove project
 """
 # region MODULE_CONTRACT
-## @purpose  CLI entrypoint for DeployOrchestrator. Replaces deploy-project.sh and provides
+## @purpose  CLI entrypoint for DeployOrchestrator. Replaces the legacy shell deploy pipeline and provides
 ##           direct access to all orchestrator operations from command line.
 ##           Command `receive` reads Payload from stdin (tar), extracts, and calls DeployOrchestrator.deploy().
 ##           Command `deploy-many` accepts project_names + channel, delegates to DeployOrchestrator.deploy_many().
@@ -22,7 +22,7 @@ Usage:
 ##   2. deploy-many accepts comma-separated project names
 ##   3. All commands return JSON to stdout and exit 0/1
 ##   4. Channel selection: --scp for SCPChannel, --forced-command for ForcedCommandChannel
-## @rationale DevPlan 089 T6.6: Single CLI entrypoint replaces deploy-project.sh and
+## @rationale DevPlan 089 T6.6: Single CLI entrypoint replaces the legacy shell deploy pipeline and
 ##            provides machine-parseable JSON output for shell consumers.
 ## @changes 2026-07-30 | DevPlan 089 T6.6 — Created
 # endregion MODULE_CONTRACT

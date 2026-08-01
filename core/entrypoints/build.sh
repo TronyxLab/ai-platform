@@ -8,7 +8,7 @@
 ##   - Delegates to internal/build/hermes-images.sh with action arg
 ##   - action: build-platform (L1) or build-context (L2)
 ## @rationale Thin wrapper — all build logic in internal/build/hermes-images.sh
-## @changes 2026-07-21 | W2-E3 — Added audit_step wrapper (replaced exec, source audit_logging.sh)
+## @changes 2026-07-21 | W2-E3 — Added audit_step wrapper (replaced exec, source lib/audit.sh)
 # endregion MODULE_CONTRACT
 set -euo pipefail
 echo "[IMP:7][build][main] Starting build entrypoint" >&2

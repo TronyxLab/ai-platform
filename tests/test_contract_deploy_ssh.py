@@ -36,59 +36,14 @@ from core.internal.shared.ssh_opts import SSH_OPTS
 # ── Paths ──────────────────────────────────────────────────────────────────
 
 PLATFORM_ROOT: str = str(pathlib.Path(__file__).resolve().parent.parent)
-DEPLOY_SCRIPT_PATH: str = os.path.join(PLATFORM_ROOT, "core", "internal", "deploy", "deploy-project.sh")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
-# region FUNC__run_bash
-## @purpose  Source deploy-project.sh, remove traps, then run provided bash code.
-##           PROJECTS_BASE is readonly in deploy-project.sh — must be passed via
-##           env dict (set before sourcing). All tests pass their tmp_path as
-##           PROJECTS_BASE for isolated project directory creation.
-## @io       ⇥ (tmp_path, code, env) → ⎋ CompletedProcess
-## @complexity O(1) — single subprocess.run with 15s timeout
-def _run_bash(
-    tmp_path: pathlib.Path,
-    code: str,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess:
-    script = tmp_path / "test_ssh.sh"
-    deploy_path_escaped = str(DEPLOY_SCRIPT_PATH)
-
-    script_content = (
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        'logger() { local tag="$2"; shift 2; echo "[MOCK:logger] tag=" "$tag" "msg=$*" >&2; }\n'
-        "export -f logger\n"
-        f'source "{deploy_path_escaped}"\n'
-        "trap - ERR EXIT\n"
-        f"{code}\n"
-    )
-    script.write_text(script_content)
-    script.chmod(0o755)
-
-    full_env = os.environ.copy()
-    full_env["__LOG_PREFIX"] = "test"
-    # PROJECTS_BASE is readonly — inject via env before sourcing
-    full_env["PROJECTS_BASE"] = str(tmp_path)
-    if env:
-        full_env.update(env)
-
-    return subprocess.run(
-        ["bash", str(script)],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        env=full_env,
-    )
-
-
-# endregion FUNC__run_bash
-
-
-# NOTE: parse_ssh_command tests removed — deploy-project.sh was deleted (DevPlan 089),
+# NOTE: _run_bash helper (sourcing the legacy deploy shell) removed in DevPlan 116
+# B8 T5.5 — the file it sourced was deleted (DevPlan 089); the helper had no callers.
+# parse_ssh_command tests removed — the legacy deploy shell was deleted (DevPlan 089),
 # replaced by core/internal/deploy/orchestrator.py/orchestrator_cli.py (Python).
 # The SSH forced-command parsing logic is now in the Python orchestrator.
 
@@ -111,7 +66,7 @@ PROJECT_ROOT = os.path.join(TEST_DIR, "..")
 # BOOTSTRAP_SH removed (DevPlan 104) — auto_detect_node_name migrated to
 # python3 -m core.internal.shared.node_detect; coverage lives in tests/unit/test_node_detect.py.
 SCP_DELIVER_SH = os.path.join(PROJECT_ROOT, "core", "internal", "bootstrap", "scp-deliver.sh")
-# REMOTE_CMD_SH removed — build_ssh_cmd deleted (DevPlan 089: deploy-project.sh migrated to Python)
+# REMOTE_CMD_SH removed — build_ssh_cmd deleted (DevPlan 089: legacy deploy shell migrated to Python)
 
 # ═══════════════════════════════════════════════════════════════════
 # GOLDEN OUTPUT CONSTANTS
@@ -532,7 +487,7 @@ def test_scp_to_server_rsync_core_failure(caplog, tmp_path) -> None:
 # endregion test_scp_to_server_rsync_core_failure
 
 
-# -- build_ssh_cmd tests removed (DevPlan 089: deploy-project.sh shell scripts deleted,
+# -- build_ssh_cmd tests removed (DevPlan 089: legacy deploy shell scripts deleted,
 # migrated to DeployOrchestrator Python). The 5 tests were:
 #   test_build_ssh_cmd_no_cli_age_key, test_build_ssh_cmd_has_env_export,
 #   test_build_ssh_cmd_empty_key, test_build_ssh_cmd_owner_key_quoting,

@@ -1,14 +1,13 @@
 """
 # GREP_SUMMARY: test-bootstrap-no-duplicate-steps, gate-test, static-audit, DevPlan-087-T10, bootstrap-consolidation, no-step-deploy-context, no-shell-to-python-step, no-step-underscore, no-done-files, node-lifecycle-clean
-# STRUCTURE: ▶ resolve CORE_DIR + key file paths → ◇ read source files → ○ grep/regex analysis for 6 AC invariants → ⊕ 6 gate test functions → ┌print LDD trajectory┐ → ⎋ IMP:9 assertions
+# STRUCTURE: ▶ resolve CORE_DIR + key file paths → ◇ read source files → ○ grep/regex analysis for AC invariants → ⊕ 4 gate test functions → ┌print LDD trajectory┐ → ⎋ IMP:9 assertions
 # region MODULE_CONTRACT
 ## @purpose  Gate test (DevPlan 087 T10) verifying bootstrap consolidation invariants:
-##           1. No duplicate _step_* function definitions across state_machine.py and steps.py
-##           2. No _step_deploy_context in steps.py (removed per DevPlan 087 T5)
-##           3. No SHELL_TO_PYTHON_STEP references in core/ (checkpoint_migration.py deleted)
-##           4. No .done-file references in core/internal/bootstrap/ (all checkpoints via state.json)
-##           5. No step_1_*, step_18_*, checkpoint_step, checkpoint_migrate_legacy in node-lifecycle.sh
-##           6. node-lifecycle.sh <80 LOC (thin facade per DevPlan 087 T7)
+##           1. No duplicate _step_* function definitions across state_machine.py and phases.py
+##           2. No SHELL_TO_PYTHON_STEP references in core/ (checkpoint_migration.py deleted)
+##           3. No .done-file references in core/internal/bootstrap/ (all checkpoints via state.json)
+##           4. No step_1_*, step_18_*, checkpoint_step, checkpoint_migrate_legacy in node-lifecycle.sh
+##           5. node-lifecycle.sh <80 LOC (thin facade per DevPlan 087 T7)
 ## @scope    Static analysis — reads source files from disk, applies grep-based assertions.
 ##           No Docker, VPS, or network access required. All tests are gate-compatible.
 ## @invariants
@@ -17,15 +16,19 @@
 ##   - Comment-only references to deleted patterns (.done.log, .done.pid, #, //) are ignored
 ##   - All tests fail on first violation — no silent pass for partial matches
 ## @rationale DevPlan 087 consolidates 32+ bootstrap steps → 14 phases. These gate tests
-##            prevent regression: duplicate step implementations (AC2/AC4), stale shell-to-python
+##            prevent regression: duplicate step implementations (AC2/AC4 — steps.py removed
+##            in DevPlan 116 B8 U-27, тесты-консерваторы удалены), stale shell-to-python
 ##            bridge (AC3), shell .done-file checkpoints (AC5), and shell index-addressed step
 ##            functions (AC9) must not reappear after refactoring.
 ## @changes  2026-07-30 · Created (DevPlan 087 T10 gate test)
+##           2026-08-01 · DevPlan 116 B8 T1 (U-27) — steps.py deleted; STEPS_PY/_PATHS entry and
+##           2 теста-консерватора (AC2 test_no_step_deploy_context_in_steps, AC4
+##           test_no_step_underscore_functions_in_steps) удалены — TRAP[TEST] разрешал
+##           («Remove if: steps.py is fully replaced by phases.py and deleted»).
 # endregion MODULE_CONTRACT
 """
 
 import logging
-import re
 from pathlib import Path
 
 import pytest
@@ -35,14 +38,12 @@ logger = logging.getLogger(__name__)
 # ── Path resolution ──
 CORE_DIR = Path(__file__).resolve().parent.parent.parent / "core"
 
-STEPS_PY = CORE_DIR / "internal" / "bootstrap" / "lifecycle" / "steps.py"
 STATE_MACHINE_PY = CORE_DIR / "internal" / "bootstrap" / "lifecycle" / "state_machine.py"
 NODE_LIFECYCLE_SH = CORE_DIR / "internal" / "bootstrap" / "node-lifecycle.sh"
 BOOTSTRAP_DIR = CORE_DIR / "internal" / "bootstrap"
 
 # Native file paths must exist at test time
 _PATHS = {
-    "steps.py": STEPS_PY,
     "state_machine.py": STATE_MACHINE_PY,
     "node-lifecycle.sh": NODE_LIFECYCLE_SH,
     "bootstrap dir": BOOTSTRAP_DIR,
@@ -120,54 +121,6 @@ def _grep_core_excluding_pycache(pattern: str, include_extensions: tuple[str, ..
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AC2: No _step_deploy_context in steps.py
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-# region FUNC_test_no_step_deploy_context_in_steps
-# 🧪 TRAP[TEST] · DevPlan AC2 · Steps.py must not contain _step_deploy_context function def
-# · Regression: If _step_deploy_context() reappears as a function, it duplicates
-#   logic in state_machine.py / phases.py
-# · Scenario: grep for "def _step_deploy_context" in steps.py
-# · Last fail: N/A (first test)
-# · Remove if: steps.py is fully replaced by phases.py and deleted
-@pytest.mark.gate
-@pytest.mark.static_audit
-def test_no_step_deploy_context_in_steps(caplog: pytest.LogCaptureFixture) -> None:
-    """Verify steps.py has NO _step_deploy_context function definition.
-
-    ## @purpose — DevPlan 087 AC2: _step_deploy_context was removed from steps.py
-    ##            (T5). Business logic migrated to state_machine.py and phases.py.
-    ##            A comment acknowledging the removal is allowed; a function def is not.
-    ## @io — reads STEPS_PY → ⎋ None, raises AssertionError if function def found
-    ## @complexity 1 — single regex match on file content
-    """
-    caplog.set_level(logging.INFO)
-    _assert_grep_target_files()
-
-    content = STEPS_PY.read_text(encoding="utf-8")
-    pattern = r"^\s*def\s+_step_deploy_context\s*\("
-    match = re.search(pattern, content, re.MULTILINE)
-
-    logger.info("[IMP:9][test_no_step_deploy_context_in_steps] Check steps.py for _step_deploy_context def")
-    logger.info("[IMP:8][test_no_step_deploy_context_in_steps] File size: %d bytes", len(content))
-
-    if match:
-        line_num = content[: match.start()].count("\n") + 1
-        logger.error(
-            "[IMP:10][test_no_step_deploy_context_in_steps] FAIL: _step_deploy_context() defined at line %d",
-            line_num,
-        )
-        pytest.fail(f"_step_deploy_context() found in steps.py at line {line_num}")
-
-    logger.info("[IMP:9][test_no_step_deploy_context_in_steps] PASS: No _step_deploy_context function in steps.py")
-    _assert_ldd_imp9(caplog)
-
-
-# endregion FUNC_test_no_step_deploy_context_in_steps
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # AC3: No SHELL_TO_PYTHON_STEP references in core/
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -213,54 +166,6 @@ def test_no_shell_to_python_step_references(caplog: pytest.LogCaptureFixture) ->
 
 
 # endregion FUNC_test_no_shell_to_python_step_references
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# AC4: No _step_* function definitions in steps.py
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-# region FUNC_test_no_step_underscore_functions_in_steps
-# 🧪 TRAP[TEST] · DevPlan AC4 · Steps.py must not contain any _step_* function defs
-# · Regression: A new _step_* function in steps.py duplicates phase logic from
-#   phases.py/state_machine.py
-# · Scenario: regex grep for "def _step_" in steps.py
-# · Last fail: N/A (first test)
-# · Remove if: steps.py is fully replaced by phases.py and deleted
-@pytest.mark.gate
-@pytest.mark.static_audit
-def test_no_step_underscore_functions_in_steps(caplog: pytest.LogCaptureFixture) -> None:
-    """Verify steps.py has NO _step_* function definitions.
-
-    ## @purpose — DevPlan 087 AC4: All _step_* implementations moved to phases.py
-    ##            or state_machine.py. Steps.py is a legacy module being phased out.
-    ##            Any new def _step_* in steps.py = regression.
-    ## @io — reads STEPS_PY → ⎋ None, raises AssertionError if any _step_ def found
-    ## @complexity 1 — single regex scan
-    """
-    caplog.set_level(logging.INFO)
-    _assert_grep_target_files()
-
-    content = STEPS_PY.read_text(encoding="utf-8")
-    pattern = r"^\s*def\s+_step_\w+\s*\("
-    matches = re.findall(pattern, content, re.MULTILINE)
-
-    logger.info("[IMP:9][test_no_step_underscore_functions_in_steps] Check steps.py for _step_* function defs")
-
-    if matches:
-        logger.error(
-            "[IMP:10][test_no_step_underscore_functions_in_steps] FAIL: %d _step_* function(s) found",
-            len(matches),
-        )
-        for m in matches:
-            logger.error("[IMP:10][test_no_step_underscore_functions_in_steps]   %s", m.strip())
-        pytest.fail(f"steps.py contains {len(matches)} _step_* function definition(s)")
-
-    logger.info("[IMP:9][test_no_step_underscore_functions_in_steps] PASS: No _step_* functions in steps.py")
-    _assert_ldd_imp9(caplog)
-
-
-# endregion FUNC_test_no_step_underscore_functions_in_steps
 
 
 # ══════════════════════════════════════════════════════════════════════════════

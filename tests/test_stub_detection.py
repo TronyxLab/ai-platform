@@ -3,7 +3,7 @@
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for stub detection (DevPlan 025 Wave 3).
 ##           Tests _is_stub() helper, R3 stub-vs-deployed reporting, and
-##           deploy-project.sh --status stub-aware output.
+##           stub-aware status output.
 ## @scope    Tests bash logic through isolated scripts. No VPS/Docker required.
 ## @invariants
 ##   - Uses tmp_path for isolated test environment

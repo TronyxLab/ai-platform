@@ -13,7 +13,7 @@
 ##   - grep-based tests scan script source files for patterns
 ## @rationale T20 per DevPlan $TEST_SPEC — validates lifecycle completion (REMOVE, ADOPT, OBSERVE phases)
 ## @changes 2026-07-17 · T20 — initial implementation
-##           2026-07-31 · Strangler cleanup — deploy-project.sh removed (aa6bd61); remove-hook
+##           2026-07-31 · Strangler cleanup — legacy deploy shell removed (aa6bd61); remove-hook
 ##           + verb-contract tests point at core/lib/module-interface.sh and core/entrypoints/deploy.sh
 # endregion MODULE_CONTRACT
 
@@ -290,12 +290,12 @@ def test_remove_hooks_triggered_in_runtime(caplog) -> None:
     ── Scenario: grep module-interface.sh for remove-hook interface + _invoke_dispatch_hook ──
     """
     # 🧪 TRAP[TEST] · 2026-07-31 · remove-hook dispatcher lives in core/lib/module-interface.sh
-    # · Regression: test previously required core/internal/deploy/deploy-project.sh (deleted in
+    # · Regression: test previously required the deleted legacy deploy shell (removed in
     #   aa6bd61). K2 dispatcher (invoke_module_interface remove-hook → _invoke_dispatch_hook
     #   → hooks.on_project_remove) now lives in core/lib/module-interface.sh:84-85.
     # · Scenario: grep module-interface.sh for 'remove-hook', '_invoke_dispatch_hook',
     #   'hooks.on_project_remove'
-    # · Last fail: 2026-07-31 — "Missing required file: core/internal/deploy/deploy-project.sh"
+    # · Last fail: 2026-07-31 — "Missing required file: the legacy deploy shell"
     # · Remove if: K2 hook dispatch moves to Python (then point test at the new dispatcher module)
     # · NOTE: the remove path (project_remover.py) does NOT invoke this hook because no module.yaml
     #   in the repo registers hooks.on_project_remove (grep = 0 matches). If a consumer appears,
@@ -338,11 +338,11 @@ def test_deploy_verb_contract_backward_compat(caplog) -> None:
     ── Scenario: Check SSH_ORIGINAL_COMMAND parsing + remove/status verb dispatch in deploy.sh ──
     """
     # 🧪 TRAP[TEST] · 2026-07-31 · verb contract K1 lives in core/entrypoints/deploy.sh
-    # · Regression: test previously required core/internal/deploy/deploy-project.sh (deleted in
+    # · Regression: test previously required the deleted legacy deploy shell (removed in
     #   aa6bd61). deploy.sh now dispatches all verbs (remove/status → orchestrator_cli, legacy
     #   <proj> <sha> <env> → deploy) and parses SSH_ORIGINAL_COMMAND via shared ssh_command_parser.py.
     # · Scenario: grep deploy.sh for SSH_ORIGINAL_COMMAND parsing + 'remove'/'status' verb dispatch
-    # · Last fail: 2026-07-31 — "Missing required file: core/internal/deploy/deploy-project.sh"
+    # · Last fail: 2026-07-31 — "Missing required file: the legacy deploy shell"
     # · Remove if: verb dispatch moves out of deploy.sh (then point test at the new dispatcher)
     if not _DEPLOY_SCRIPT.exists():
         pytest.fail(f"Missing required file: {_DEPLOY_SCRIPT.relative_to(_PROJECT_ROOT)}")

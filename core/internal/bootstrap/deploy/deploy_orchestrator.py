@@ -20,14 +20,12 @@
 ##     and invoke_module_interface (shell function from core/lib/module-interface.sh, D4)
 ##   - exit code contract: CRIT>0 → 2, WARN>0 → 0 (logged), no failures → 0 (legacy shell parity)
 ##   - Deploy failures are non-fatal — orchestrator continues and aggregates severity
-##   - json_field_extractor.py is NOT called (R5 — exists for other shell consumers)
 ##   - Depends on PYTHONPATH=<project root> from the shell facade; also self-bootstraps sys.path
 ##     (4 levels up) for direct-script invocation (TRAP[BUG] pattern from sudoers_generator.py)
 ## @rationale D1: Python-import faster than subprocess (no fork+exec per call), testable via
 ##            unittest.mock.patch, gives typed interface (ruff validates signatures), all modules
 ##            already live in deploy/ package. D2: shell facade uses `exec python3` — same PID,
-##            automatic exit-code propagation. D3: JSON interop (json_field_extractor) obsolete in
-##            Python — native json.loads/json.dumps; module kept for other shell consumers.
+##            automatic exit-code propagation. D3: JSON interop via native json.loads/json.dumps (Python).
 ## @changes   2026-07-31 · Created (DevPlan 100 TASK-1)
 ## @modulemap
 ##   DeployResult [W:1] — dataclass: deployed, failed, crit_count, warn_count, exit_code
@@ -758,7 +756,7 @@ def _render_litellm_config(core_dir: str) -> None:
 ##           ⎋ tuple[int, int] — (crit_count, warn_count)
 ## @complexity 2 — linear lookup with per-module fallback
 ## @invariants
-##   - severity defaults to "warn" for unknown modules (legacy json_field_extractor --default warn parity)
+##   - severity defaults to "warn" for unknown modules (default warn severity)
 ##   - fallback reads module.yaml severity field (secrets_validator._get_module_severity)
 def _aggregate_severity(
     failed: list[str],

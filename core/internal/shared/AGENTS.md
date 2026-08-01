@@ -26,8 +26,8 @@
 | Модуль | Назначение | Ключевой API | Потребители |
 |--------|-----------|--------------|-------------|
 | `age_key.py` | Compat-re-export шим — детекция AGE-ключа делегирована в node_detect.py (DevPlan 104) | `detect_age_key()` (re-export), CLI | decrypt-secrets, bootstrap, node-update |
-| `audit_logger.py` | Единый JSON-lines audit логгер (заменяет прямой file.write и shell audit_logging.sh) | `write_audit_entry()`, `read_audit_log()`, CLI `write/read --log-file` | context_deployer, deploy, lib/audit.sh |
-| `content_hash.py` | SHA256 content-hash для идемпотентности bootstrap (state.json sub-steps) | `compute_step_hash()`, `step_hash_changed()` | state_machine, content-hash.sh |
+| `audit_logger.py` | Единый JSON-lines audit логгер (заменяет прямой file.write и shell-аудит) | `write_audit_entry()`, `read_audit_log()`, CLI `write/read --log-file` | context_deployer, deploy, lib/audit.sh |
+| `content_hash.py` | SHA256 content-hash для идемпотентности bootstrap (state.json sub-steps) | `compute_step_hash()`, `step_hash_changed()` | state_machine |
 | `contracts.py` | Контракт операционных политик (DevPlan 116 B4 T1, U-39) — DEPLOY_BEST_EFFORT (legacy parity) + machine-readable exit-коды | `DEPLOY_BEST_EFFORT`, `EXIT_OK/GENERIC/CONFIG_NOT_FOUND/CONFIG_PARSE/CONFIG_VALIDATION/FATAL` | deploy_orchestrator, гейты B4 (broad-except-allowlist, exit-codes-documented) |
 | `crypto.py` | APR1/htpasswd хэширование (openssl passwd -apr1, детерминизм через salt) | `hash_apr1()`, `generate_htpasswd_entry()`, CLI `hash/entry [--salt]` | lib/secrets.sh, secrets_manager |
 | `deploy_paths.py` | Канонический реестр путей доставки кода (SoT для удаления deprecated путей) | `get_canonical_paths()`, `DEPRECATED_DEPLOY_PATHS` | core-deploy CI, deploy |

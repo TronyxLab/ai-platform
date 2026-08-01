@@ -964,7 +964,7 @@ def test_phase_key_misalignment_prevented(caplog, state_file):
 
     # ── REMOVED (DevPlan 091 Wave B, AC8): Scenario B — backward-compat migration ──
     # Scenario B tested numeric-key (old 23-step) migration through INIT_STEPS constant
-    # and from_dict(step_list=INIT_STEPS). That path was removed together with state_migration.py
+    # and from_dict(step_list=INIT_STEPS). That path was removed with the legacy migration
     # and the dead INIT_STEPS/UPDATE_STEPS constants (B4). Cold start only from 091 onward;
     # old numeric-key state.json files are no longer supported.
     # ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Removed backward-compat numeric-key test scenario

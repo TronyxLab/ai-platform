@@ -3,7 +3,7 @@
 # STRUCTURE: ▶ init PYTHONPATH → ◇ audit_log (thin facade) → ◇ audit_step (wrapper START→exec→capture rc→DONE|FAIL) → ⎋ exit
 # region MODULE_CONTRACT
 ## @purpose  Append-only audit log helper (thin facade over Python shared/audit_logger).
-##           Replaces deleted core/lib/audit_logging.sh (DevPlan 089: shell logger → unified
+##           Replaces the deleted legacy shell audit logger (DevPlan 089: shell logger → unified
 ##           JSON-lines Python logger). All audit entries now go through
 ##           core/internal/shared/audit_logger.py (write_audit_entry, JSON-lines, syslog, non-fatal).
 ## @scope    Sourced by bootstrap scripts, modules, and entrypoints; provides
@@ -18,7 +18,7 @@
 ## @rationale Centralized audit trail enables post-hoc forensics and compliance review.
 ##   Python-first policy: shell facade stays a thin wrapper; all logic in Python module.
 ## @changes 2026-07-31 | DevPlan 089 follow-up (debt C-5) — recreated as thin facade after
-##           audit_logging.sh deletion (aa6bd61) broke provision/context-promote/build
+##           the legacy shell audit logger deletion (aa6bd61) broke provision/context-promote/build
 ## @links    DELEGATES_TO: core/internal/shared/audit_logger.py
 # endregion MODULE_CONTRACT
 
@@ -29,7 +29,7 @@ _AUDIT_PY_MODULE="core.internal.shared.audit_logger"
 # Repo root = core/lib/../..
 export PYTHONPATH="${_AUDIT_LIB_DIR}/../..:${PYTHONPATH:-}"
 
-# Compatibility constants (same names as deleted audit_logging.sh)
+# Compatibility constants (same names as the deleted legacy shell audit logger)
 PLATFORM_LOG_DIR="/var/log/platform"
 PLATFORM_AUDIT_LOG="${PLATFORM_LOG_DIR}/audit.log"
 

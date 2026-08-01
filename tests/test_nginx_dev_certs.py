@@ -2,7 +2,7 @@
 # STRUCTURE: ┌tmp_path per test┐ → ◇ test_generate_certs_openssl_backend(◇ CERT_BACKEND=openssl → SAN check) → ◇ test_context_domain_in_san(◇ PLATFORM_DOMAIN=demo-ctx.local → *.demo-ctx.local) → ◇ test_second_run_is_noop(◇ same SAN → no-op, mtime unchanged) → ◇ test_regenerates_on_san_drift(◇ missing SAN entry → regenerates)
 # region MODULE_CONTRACT
 ## @purpose  Static contract tests for core/modules/nginx/dev_cert_generator.py (DevPlan 099,
-##           migrated from generate-dev-certs.sh). Validate idempotency, SAN generation,
+##           migrated from the legacy dev-certs shell). Validate idempotency, SAN generation,
 ##           context domain inclusion, SAN drift detection.
 ## @scope    Pure subprocess tests — no Docker required. All tests use tmp_path + env overrides.
 ## @invariants

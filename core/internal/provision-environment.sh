@@ -21,8 +21,8 @@ set -euo pipefail
 __PROVISION_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 __PROVISION_PLATFORM_ROOT="$(cd "${__PROVISION_SCRIPT_DIR}/../.." && pwd)"
 
-# ⚠️ TRAP[BUG] · 2026-07-31 · HI · Stale source of deleted audit_logging.sh broke make provision
-# · Fix: DevPlan 089 removed core/lib/audit_logging.sh (aa6bd61) but this source line
+# ⚠️ TRAP[BUG] · 2026-07-31 · HI · Stale source of deleted legacy shell audit broke make provision
+# · Fix: DevPlan 089 removed the legacy shell audit logger (aa6bd61) but this source line
 #   was missed → set -euo pipefail aborted the whole script (17 gate tests red).
 #   Replaced with canonical thin facade core/lib/audit.sh (Python shared/audit_logger).
 # · Reverted-debt: previously registered as C-5 in .ai/debt/096-Residual-Debt.md.

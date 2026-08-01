@@ -91,12 +91,10 @@ _EXCEPTION_PATHS: tuple[str, ...] = (
     "core/modules/hermes-agent/context/scripts/",
     # generate-catalog.sh — called via variable-based path resolution
     # (${CORE_DIR}/internal/catalog/generate-catalog.sh) from node-lifecycle.sh
-    # and deploy-project.sh; static call graph builder cannot resolve ${CORE_DIR}
+    # and the legacy deploy shell; static call graph builder cannot resolve ${CORE_DIR}
     "core/internal/catalog/generate-catalog.sh",
-    # s3-ssl-cache.sh — DevPlan 024, sourced dynamically, not canonical entrypoint
-    "core/internal/bootstrap/s3-ssl-cache.sh",
     # W4 state-machine delegation — scripts called from Python
-    # (state_machine.py / steps.py via subprocess.run), not from shell source/exec.
+    # (state_machine.py / phases.py via subprocess.run), not from shell source/exec.
     # Static bash call-graph analyzer cannot trace Python subprocess calls.
     "core/internal/bootstrap/deploy-modules.sh",
     "core/internal/bootstrap/install-acme.sh",

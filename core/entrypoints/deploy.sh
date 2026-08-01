@@ -21,7 +21,7 @@
 ##   - Parsing delegated to core.internal.shared.ssh_command_parser.parse_ssh_command()
 ## @rationale Single entrypoint for all deploy verbs — no second SSH user (DD12)
 ## @changes 2026-07-17 · T6 — Added verb contract K1 (remove/status dispatch)
-##           2026-07-21 · W3: status verb passes --stub-aware to deploy-project.sh
+##           2026-07-21 · W3: status verb passes --stub-aware to orchestrator_cli
 ##           2026-07-26 · DevPlan 081 Phase A — Structural refactoring:
 ##             extracted _dispatch_verb()
 ##           2026-07-26 · DevPlan 081 Phase B (TASK-081B7) — replaced local
@@ -31,7 +31,7 @@
 ##             parsing with ssh_command_parser --format lines. Eliminates last
 ##             inline python3 in deploy.sh facade (Tier 1 Strangler trigger).
 ##           2026-07-30 · DevPlan 089 T10 — routed through DeployOrchestrator CLI
-##             instead of deploy-project.sh. Verbs deploy/remove/status use
+##             instead of the legacy shell facade. Verbs deploy/remove/status use
 ##             python3 -m core.internal.deploy.orchestrator_cli.
 # endregion MODULE_CONTRACT
 

@@ -129,7 +129,7 @@ jobs:
           STAGING: "true"
         run: |
           set -euo pipefail
-          # [IMP:10][deploy][ssh] Forced-command: authorized_keys runs deploy-project.sh
+          # [IMP:10][deploy][ssh] Forced-command: authorized_keys runs orchestrator_cli receive
           # regardless of what we send. Pass project + ref + environment as arguments.
           # Environment is relayed via SendEnv in ssh_config (DOCKER_HUB_*, STAGING).
           ssh -o IdentitiesOnly=yes \
@@ -181,7 +181,7 @@ jobs:
           DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN || '' }}
         run: |
           set -euo pipefail
-          # [IMP:10][deploy][ssh] Forced-command passes project + sha + environment to deploy-project.sh
+          # [IMP:10][deploy][ssh] Forced-command passes project + sha + environment to orchestrator_cli receive
           ssh -o IdentitiesOnly=yes \
               -o SendEnv=DOCKER_HUB_USERNAME \
               -o SendEnv=DOCKER_HUB_TOKEN \

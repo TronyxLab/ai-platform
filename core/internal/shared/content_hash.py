@@ -3,10 +3,10 @@
 # STRUCTURE: ▶ ┌compute_content_hash(files)┐ → ○ for each: file? → hasher.update(content) → WARN if missing → ⎋ sha256.hexdigest()
 # region MODULE_CONTRACT
 ## @purpose  Unified content hash computation for bootstrap idempotency.
-##           Replaces 3 independent implementations: shell content-hash.sh,
+##           Replaces 3 independent implementations: legacy shell content-hash,
 ##           state_machine._step_hash(), add-vhost.sh compute_body_hash().
-## @scope    Shared library consumed by state_machine.py, content-hash.sh (thin wrapper),
-##           add-vhost.sh (thin wrapper), and any other module needing content hash.
+## @scope    Shared library consumed by state_machine.py, add-vhost.sh (thin wrapper),
+##           and any other module needing content hash.
 ## @invariants
 ##   1. Always SHA-256 via hashlib (deterministic, cross-platform)
 ##   2. Files are read in the order specified in the input list

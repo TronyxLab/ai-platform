@@ -637,7 +637,7 @@ lib:
   - core/internal/notify/notify-hook.sh
   - core/internal/healthcheck/tor-proxy-healthcheck.sh
   description: Thin facade over core.internal.shared.audit_logger (JSON-lines + syslog)
-    — replaces deleted audit_logging.sh (aa6bd61, debt C-5 fixed 2026-07-31)
+    — replaces legacy shell audit (aa6bd61, debt C-5 fixed 2026-07-31)
 module_lifecycle:
 - start
 - stop
@@ -727,7 +727,7 @@ scripts:
   signature: python3 -m core.internal.deploy.orchestrator_cli receive/deploy-many
   operation_ru: CLI entrypoint для DeployOrchestrator
   type: python
-  description: Unified deploy CLI — replaces deploy-project.sh
+  description: Unified deploy CLI
 shared_modules:
 - module: secrets_env_parser
   path: core/internal/shared/secrets_env_parser.py
@@ -744,7 +744,6 @@ shared_modules:
   consumers:
   - agent_watchdog.py
   - state_machine.py
-  - steps.py
   - notify-hook.sh
   - disk-monitor.sh
   - tor-proxy-healthcheck.sh
@@ -754,7 +753,6 @@ shared_modules:
   - lib/docker.sh
   - docker_registry_auth.py
   - state_machine.py
-  - steps.py
 allowed_verbs:
 - _get_all_profiles
 - adopt-project
@@ -1417,6 +1415,12 @@ gates:
 - id: test_no_opt_core_references
   test_file: test_gate_path_consistency.py
   description: 'Auto-discovered gate: test_no_opt_core_references'
+- id: test_no_phantom_names_in_code_and_ci
+  test_file: test_gate_phantom_refs.py
+  description: 'Auto-discovered gate: test_no_phantom_names_in_code_and_ci'
+- id: test_phantom_scan_detects_dummy_file
+  test_file: test_gate_phantom_refs.py
+  description: 'Auto-discovered gate: test_phantom_scan_detects_dummy_file'
 - id: test_generated_files_match_sot
   test_file: test_gate_profiles_parity.py
   description: 'Auto-discovered gate: test_generated_files_match_sot'

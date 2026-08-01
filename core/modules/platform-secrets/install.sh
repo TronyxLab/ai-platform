@@ -17,7 +17,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../../lib/audit_logging.sh" 2>/dev/null || true
+# DevPlan 116 B8 T5.2: канонический shell-аудит — lib/audit.sh (Python shared/audit_logger фасад)
+source "${SCRIPT_DIR}/../../lib/audit.sh" 2>/dev/null || true
 
 __LOG_PREFIX="platform-secrets"
 source "${SCRIPT_DIR}/../../lib/logging.sh"

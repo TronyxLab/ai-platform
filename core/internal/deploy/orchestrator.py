@@ -656,7 +656,7 @@ class DeployOrchestrator:
 
     # region FUNC_receive
     ## @purpose  VPS-side forced-command receiver. Reads tar from stdin,
-    ##           extracts payload metadata, calls deploy(). Replaces deploy-project.sh.
+    ##           extracts payload metadata, calls deploy(). Replaces the legacy shell deploy pipeline.
     ## @io       ⇥ stdin (tar bytes) → ⎋ str (JSON DeployResult) via stdout
     ## @complexity — O(N) where N = tar entries
     ## @invariants
@@ -670,7 +670,7 @@ class DeployOrchestrator:
         """Receive a deploy payload via stdin (tar) and execute deploy.
 
         This is the VPS-side entry point for ForcedCommandChannel.
-        Replaces deploy-project.sh as the forced-command receiver.
+        Replaces the legacy shell deploy pipeline as the forced-command receiver.
 
         Returns:
             Exit code (0 = success, 1 = failure).

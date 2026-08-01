@@ -3,7 +3,7 @@
 # STRUCTURE: load_secrets → validate_token_chat_id → python_telegram_notifier(emoji+message) → audit_log → exit 0
 # region MODULE_CONTRACT
 ## @purpose  Notification hook for deploy events — sends Telegram messages via shared telegram_notifier module.
-##           Called by deploy-project.sh with optional --severity flag and pre-formatted 🚀 message.
+##           Called with optional --severity flag and pre-formatted 🚀 message.
 ## @scope    Moved to core/internal/notify/notify-hook.sh from core/scripts/notify-hook.sh.
 ## @invariants
 ##   - Always exits 0 — must never block the calling deploy pipeline

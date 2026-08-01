@@ -47,7 +47,6 @@ logger = logging.getLogger(__name__)
 
 CERT_SCRIPTS = {
     "issue_cert": "core/internal/bootstrap/issue-cert.sh",
-    "s3_cache": "core/internal/bootstrap/s3-ssl-cache.sh",
     "state_machine": "core/internal/bootstrap/lifecycle/state_machine.py",
 }
 
@@ -530,7 +529,8 @@ def test_dev_certs_not_backed_up_gap():
             logger.warning("[IMP:7][test_dev_certs] %s references dev-certs — dev certs would be in backup", name)
 
     # Verify S3 cache does NOT reference dev-certs
-    s3_content = _read_script(CERT_SCRIPTS["s3_cache"])
+    # (s3-ssl-cache.sh deleted in DevPlan 116 B8 U-41 — Python s3_ssl_cache.py is the live implementation)
+    s3_content = _read_script("core/internal/bootstrap/s3_ssl_cache.py")
     assert "dev-certs" not in s3_content, "S3 SSL cache must not reference dev-certs — they are LE-only"
 
     logger.critical(

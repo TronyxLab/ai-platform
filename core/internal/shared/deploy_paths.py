@@ -27,7 +27,7 @@ from __future__ import annotations
 
 CANONICAL_DEPLOY_PATHS: list[str] = [
     # 1. CI → platform-deliver + deploy.sh
-    #    git push → GitHub CI → tar via SSH forced-command → deploy-project.sh
+    #    git push → GitHub CI → tar via SSH forced-command → orchestrator_cli receive
     "CI → platform-deliver + deploy.sh",
     # 2. make deploy-project (direct)
     #    tar + SSH, bypass CI, emergency fallback with DEPLOY-DIRECT audit

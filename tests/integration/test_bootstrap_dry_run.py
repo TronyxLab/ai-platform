@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: test_bootstrap_dry_run, integration, bootstrap, 14-phases, dry-run, state-machine, dependency-graph, precondition, resume-phase, grouped-phase, skip-phases, phase-migration
-# STRUCTURE: ▶ ┌tmp_path + monkeypatch + mock subprocess┐ → ◇ test_init_mode_14_phases_dry_run (9 init phases, φ1-φ8.5) → ◇ test_update_mode_5_phases_dry_run (5 update phases, φ9-φ13) → ◇ test_precondition_block_on_dependency_gap (φ6 = requires φ4 → PhaseDependencyError) → ◇ test_skip_already_done_phases (grouped-phase all sub_steps done+unchanged → SKIP) → ◇ test_resume_phase_partial_failure (φ4 decrypt OK, ensure-secrets FAIL → resume retry) → ◇ test_grouped_phase_skip_unchanged_sub_steps (φ1 3/4 done → only failed sub-step runs) → ◇ test_phase_dependency_graph_integrity (graph + migration validation) → ◇ test_precondition_check_root_failure (non-root → PhasePreconditionError) → ⎋ LDD IMP:7-10 assertions + TRAP[TEST] markers
+# GREP_SUMMARY: test_bootstrap_dry_run, integration, bootstrap, 14-phases, dry-run, state-machine, dependency-graph, precondition, grouped-phase, skip-phases, phase-migration
+# STRUCTURE: ▶ ┌tmp_path + monkeypatch + mock subprocess┐ → ◇ test_init_mode_14_phases_dry_run (9 init phases, φ1-φ8.5) → ◇ test_update_mode_5_phases_dry_run (5 update phases, φ9-φ13) → ◇ test_precondition_block_on_dependency_gap (φ6 = requires φ4 → PhaseDependencyError) → ◇ test_skip_already_done_phases (grouped-phase all sub_steps done+unchanged → SKIP) → ◇ test_grouped_phase_skip_unchanged_sub_steps (φ1 3/4 done → only failed sub-step runs) → ◇ test_phase_dependency_graph_integrity (graph + migration validation) → ◇ test_precondition_check_root_failure (non-root → PhasePreconditionError) → ⎋ LDD IMP:7-10 assertions + TRAP[TEST] markers
 # region MODULE_CONTRACT
 ## @purpose  Integration tests for the 14-phase bootstrap pipeline in dry-run mode (DevPlan T14).
 ##           Simulates all 14 phases (9 INIT + 5 UPDATE) with mocked subprocess calls,
 ##           verifies dependency enforcement, precondition blocks, skip-already-done logic,
-##           and partial failure recovery via _resume_phase().
-## @scope    Integration (not unit) — tests the interaction of state_machine.py, phases.py,
-##           and state_migration.py with mocked system dependencies. Does NOT execute real
+##           and grouped-phase sub-step skip logic.
+## @scope    Integration (not unit) — tests the interaction of state_machine.py and phases.py
+##           with mocked system dependencies. Does NOT execute real
 ##           subprocess commands — all subprocess.run calls are monkeypatched. A real mock
 ##           filesystem at tmp_path ensures file open() calls succeed for expected paths.
 ## @invariants
@@ -42,17 +42,16 @@ from core.internal.bootstrap.lifecycle.state_machine import (
     PhasePreconditionError,
     StateMachine,
     StepState,
-    _grouped_phases,
     _phase_dependency_graph,
 )
 
-# DevPlan 091 Wave B: state_migration.py deleted (cold start only, no backward-compat).
+# DevPlan 091 Wave B: legacy 23→14 migration deleted (cold start only, no backward-compat).
 # MIGRATION_MAP constant (sub_step names per grouped phase) is inlined here for the
 # two tests that still use it (skip_already_done_phases, grouped_phase_skip_unchanged).
 # The migration-specific assertions in test_phase_dependency_graph_integrity were
 # removed together with migrate_state_to_phases().
-# ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Inlined MIGRATION_MAP from deleted state_migration.py
-# · Rejected: extract sub_step names dynamically from _grouped_phases (risk: changes test behavior)
+# ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Inlined MIGRATION_MAP from the deleted migration module
+# · Rejected: extract sub_step names dynamically (risk: changes test behavior)
 # · Reason: MIGRATION_MAP is a static list of grouped-phase sub_step keys; only system_bootstrap
 #   is referenced. Inlining preserves test semantics without importing deleted module.
 # · Rev: when a new grouped phase is added with sub_steps — update this constant.
@@ -623,14 +622,6 @@ def test_skip_already_done_phases(
 
     caplog.set_level(logging.DEBUG)
 
-    # ── Verify φ1 is a grouped phase (module-level constant) ──
-    assert BootstrapPhase.SYSTEM_BOOTSTRAP in _grouped_phases, (
-        f"Expected SYSTEM_BOOTSTRAP to be in _grouped_phases, got: {_grouped_phases}"
-    )
-    logger.info(
-        "[IMP:9][test_skip] Verified SYSTEM_BOOTSTRAP is a grouped phase",
-    )
-
     # ── Get sub_step names for φ1 from MIGRATION_MAP ──
     sub_step_keys = MIGRATION_MAP["system_bootstrap"]
     assert len(sub_step_keys) == 4, (
@@ -694,110 +685,6 @@ def test_skip_already_done_phases(
 
 
 # endregion FUNC_test_skip_already_done_phases
-
-
-# region FUNC_test_resume_phase_partial_failure
-## @purpose — Verify _resume_phase() for φ4 (secrets_provision) when 2/3 sub_steps are done
-##            and 1 (ensure_secrets) failed. resume_phase should execute only the failed sub_step,
-##            skipping the successful ones (decrypt_secrets, secrets_init) with unchanged hash.
-## @io — ⇥ caplog, machine → ⎋ None (verifies partial failure recovery)
-## @complexity — O(S * H) where S = 3 sub_steps
-## @invariants
-##   - decrypt_secrets and secrets_init are pre-set as done+unchanged → skipped
-##   - ensure_secrets is pre-set as done=False → re-executed
-##   - execute_phase is called exactly 1 time (for the failed sub_step)
-##   - resume_phase returns True (all sub_steps eventually completed)
-def test_resume_phase_partial_failure(
-    caplog: pytest.LogCaptureFixture,
-    machine: StateMachine,
-) -> None:
-    """φ4 partial failure: decrypt OK, ensure-passwords FAIL → resume retries only the failed sub_step."""
-    # 🧪 TRAP[TEST] · 2026-07-30 · Regression: φ4 partial failure recovery via _resume_phase
-    # · Scenario: decrypt_secrets → done, ensure_secrets → failed, secrets_init → done
-    # · Last fail: N/A (first implementation)
-    # · Remove if: SECRETS_PROVISION is no longer a grouped phase or _resume_phase is removed
-
-    caplog.set_level(logging.DEBUG)
-
-    # ── Verify φ4 is a grouped phase (module-level constant) ──
-    assert BootstrapPhase.SECRETS_PROVISION in _grouped_phases, "Expected SECRETS_PROVISION to be in _grouped_phases"
-    logger.info(
-        "[IMP:9][test_resume] Verified SECRETS_PROVISION is a grouped phase",
-    )
-
-    # ── Mark dependency graph prerequisites as done ──
-    # φ4 (secrets_provision) depends on φ3 (platform_setup) in
-    # _phase_dependency_graph. resume_phase → execute_grouped_phase checks
-    # dependencies and raises PhaseDependencyError if unmet.
-    _mark_phase_done(machine, BootstrapPhase.SYSTEM_BOOTSTRAP)  # φ1
-    _mark_phase_done(machine, BootstrapPhase.USER_ACCOUNTS)  # φ2
-    _mark_phase_done(machine, BootstrapPhase.PLATFORM_SETUP)  # φ3 ← φ4 dependency
-    logger.info(
-        "[IMP:9][test_resume] Dependency phases φ1-φ3 marked done for φ4 resume",
-    )
-
-    # ── Set up φ4 sub_steps with partial failure ──
-    # decrypt_secrets: done, hash matched → SKIP
-    # ensure_secrets: NOT done (failed) → RE-EXECUTE
-    # secrets_init: done, hash matched → SKIP
-    decrypt_hash = machine._step_hash("sub_secrets_provision_decrypt_secrets")
-    init_hash = machine._step_hash("sub_secrets_provision_secrets_init")
-
-    sub_steps: dict[str, dict[str, Any]] = {
-        "decrypt_secrets": {"done": True, "hash": decrypt_hash},
-        "ensure_secrets": {"done": False, "hash": ""},  # ← FAILED sub_step
-        "secrets_init": {"done": True, "hash": init_hash},
-    }
-
-    # Store sub_steps in state so resume_phase picks them up.
-    # resume_phase calls self.state.steps.get(phase_key) and expects
-    # a dict with a "sub_steps" key containing the sub_step entries.
-    phase_key = BootstrapPhase.SECRETS_PROVISION
-    machine.state.steps[phase_key] = {
-        "done": False,
-        "sub_steps": sub_steps,
-    }
-
-    # ── Wrap execute_phase to track calls ──
-    call_log: list[str] = []
-    original_execute = machine.execute_phase
-
-    def _tracking_execute(phase_value: str) -> None:
-        call_log.append(phase_value)
-        logger.info(
-            "[IMP:8][test_resume] execute_phase called for '%s' (sub_step re-execution)",
-            phase_value,
-        )
-
-    machine.execute_phase = _tracking_execute  # type: ignore[assignment]
-
-    # ── Call resume_phase for φ4 ──
-    result = machine.resume_phase(BootstrapPhase.SECRETS_PROVISION)
-
-    # ── Restore original ──
-    machine.execute_phase = original_execute
-
-    # ── Assertions ──
-    assert len(call_log) == 1, (
-        f"Expected exactly 1 execute_phase call (for ensure_secrets), got {len(call_log)}: {call_log}"
-    )
-    assert call_log[0] == BootstrapPhase.SECRETS_PROVISION, (
-        f"execute_phase was called for '{call_log[0]}', expected '{BootstrapPhase.SECRETS_PROVISION}'"
-    )
-    assert result is True, f"resume_phase returned {result}, expected True"
-
-    # ── Verify skip logs for the 2 done sub_steps ──
-    skip_logs = [r.message for r in caplog.records if "SKIP sub_step" in r.message]
-    assert len(skip_logs) >= 2, (
-        f"Expected at least 2 'SKIP sub_step' log messages (for decrypt_secrets, secrets_init), found {len(skip_logs)}"
-    )
-
-    # ── LDD trajectory ──
-    found_imp9 = _print_ldd_trajectory(caplog, "test_resume_phase_partial_failure")
-    assert found_imp9, "No IMP:9 business logic log found in resume test"
-
-
-# endregion FUNC_test_resume_phase_partial_failure
 
 
 # region FUNC_test_grouped_phase_skip_unchanged_sub_steps
@@ -909,7 +796,7 @@ def test_phase_dependency_graph_integrity(
     # 🧪 TRAP[TEST] · 2026-07-30 · Regression: _phase_dependency_graph + MIGRATION_MAP structural integrity
     # · Scenario: Structural test of the dependency graph and inline migration map keys
     # · Last fail: never
-    # · Updated: 2026-07-30 (Wave B) — migrate_state_to_phases() assertions removed (state_migration.py deleted)
+    # · Updated: 2026-07-30 (Wave B) — migrate_state_to_phases() assertions removed with the legacy migration
     # · Remove if: phases are no longer tracked via dependency graph
 
     caplog.set_level(logging.DEBUG)

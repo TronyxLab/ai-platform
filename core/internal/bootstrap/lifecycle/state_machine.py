@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, step-transitions, state-json, content-hash, BootstrapPhase, phase-dependency-graph, precondition-check
-# STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState + _phase_dependency_graph┐ → ◇ precondition_check() → ○ _execute_phase() / _execute_grouped_phase() → ⊕ _resume_phase() → ⚡ save() → ⎋ CLI dispatch (init/update)
+# STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState + _phase_dependency_graph┐ → ◇ precondition_check() → ○ _execute_phase() / _execute_grouped_phase() → ⚡ save() → ⎋ CLI dispatch (init/update)
 # region MODULE_CONTRACT
 ## @purpose  Explicit state machine for node-lifecycle.sh bootstrap/update process.
 ##           Manages 14 consolidated phases (φ1-φ13 + φ8.5) via a JSON state file
@@ -9,7 +9,7 @@
 ## @scope    Python-side of W4-E2 Strangler-Fig decomposition of node-lifecycle.sh (1301 LOC).
 ##           Handles: state persistence, content-hash invalidation, checkpoint-resume,
 ##           phase precondition checks, phase dependency graph, grouped-phase sub-checkpoints,
-##           partial failure recovery (_resume_phase), TOR-conditional skip, error/warning collection,
+##           TOR-conditional skip, error/warning collection,
 ##           dry-run, force-reset. Business logic extraction → phases.py.
 ## @invariants
 ##   1. State file is at /var/lib/platform/.bootstrap/state.json (configurable via --state-file)
@@ -35,14 +35,13 @@
 ##           2026-07-25 | DevPlan 071 Rev 2 — Name-based state.json keys, numeric-key backward compat
 ##           2026-07-30 | T19/T20a/T21 — Shared module extraction (telegram_notifier, docker_auth)
 ##           2026-07-30 | DevPlan 087 — BootstrapPhase enum (14 values), _phase_dependency_graph,
-##           precondition_check(), _execute_phase(), _execute_grouped_phase(), _resume_phase().
+##           precondition_check(), _execute_phase(), _execute_grouped_phase().
 ##           Added `--phase` CLI argument for phase-level execution.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import logging
 import os
@@ -61,12 +60,6 @@ from core.internal.shared.exceptions import (
     PlatformError,
     PlatformFatalError,
 )
-
-# Import steps module for step implementations
-# PYTHONPATH must include lifecycle/ directory (set by node-lifecycle.sh).
-# Handle standalone execution (e.g., tests) by falling back to direct import.
-with contextlib.suppress(ImportError):
-    from . import steps  # noqa: F401  # standalone fallback — module loads step implementations
 
 logger = logging.getLogger(__name__)
 
@@ -210,28 +203,14 @@ _phase_dependency_graph: dict[str, set[str]] = {
 }
 
 # Grouped phases (have sub_steps for granular checkpoint tracking)
-# 📝 TRAP[DEBT] · 2026-07-31 · MED · resume_phase()/execute_grouped_phase()/_grouped_phases — мёртвый код
-# · Observed: _run_init_mode()/_run_update_mode() вызывают только execute_phase(); resume_phase()
-#   не имеет ни одного caller'а во всём core/. DevPlan 095 T14 (E2E mid-phase kill → sub_step-resume)
-#   подтвердил: после kill подшаг-resume не срабатывает — фаза перевыполняется целиком.
-# · Suspected: grouped-phase resume проектировался (DevPlan 087) как partial-failure recovery,
-#   но не был подключён к run-циклам; --resume флаг в main() только логирует (L1355-1356).
-# · Impact: частичный отказ внутри grouped-фазы (φ1-φ5, φ7, φ12) перевыполняет ВСЕ подшаги фазы —
-#   потеря инкрементальности resume; SKIP sub_step логи (IMP:8) никогда не эмитятся в реальном pipeline.
-# · When: during DevPlan 095 E2E implementation — deferred, out of scope (test-only план)
-# · Fix-hint: в _run_init_mode/_run_update_mode для фаз из _grouped_phases вызывать
-#   resume_phase(phase) вместо execute_phase(phase) (resume_phase сама решает full vs partial).
-_grouped_phases: frozenset[str] = frozenset(
-    {
-        BootstrapPhase.SYSTEM_BOOTSTRAP,
-        BootstrapPhase.USER_ACCOUNTS,
-        BootstrapPhase.PLATFORM_SETUP,
-        BootstrapPhase.SECRETS_PROVISION,
-        BootstrapPhase.NODE_CONFIGURATION,
-        BootstrapPhase.CERTIFICATES,
-        BootstrapPhase.DEPLOY_UPDATE,
-    }
-)
+# ⚠️ TRAP[DEBT] · 2026-08-01 · MED · execute_grouped_phase() вызывается только из тестов
+# · Observed: _run_init_mode()/_run_update_mode() вызывают только execute_phase(); execute_grouped_phase()
+#   не имеет ни одного production-caller'а (резюме-разводка удалена в DevPlan 116 B8 U-66, D4).
+# · Impact: sub-step SKIP логика (φ1-φ5, φ7, φ12) не используется в реальном pipeline —
+#   фазы перевыполняются целиком; D4 оставил функцию + 2 прямых теста.
+# · When: during DevPlan 116 B8 — deferred, out of scope
+# · Fix-hint: B9 — развести execute_grouped_phase() в run-циклы (_run_init_mode/_run_update_mode)
+#   для фаз с sub_steps, либо удалить функцию вместе с консервирующими тестами.
 
 
 # Import shared modules (DevPlan 081B7 DRIFT elimination)
@@ -553,7 +532,7 @@ class StateMachine:
     ## @purpose — Load/create/save state.json, orchestrate step transitions,
     ##            compute content hashes, validate env, dispatch to step implementations.
     ## @scope — Core of W4-E2 decomposition. Manages state transitions only —
-    ##          actual step logic lives in steps.py (optional) or is inlined.
+    ##          actual step logic lives in phases.py (14 phase implementations).
     ## @invariants
     ##   - save() MUST be called after every state mutation
     ##   - All subprocess calls have 120s timeout
@@ -578,7 +557,7 @@ class StateMachine:
                     data = json.load(f)
                 # DevPlan 091 Wave B (AC8): load directly from BootstrapPhase keys.
                 # The old INIT_STEPS/UPDATE_STEPS numeric-key fallback was removed together
-                # with the 23-step constants and state_migration.py. state.json now contains
+                # with the 23-step constants. state.json now contains
                 # only phase keys (system_bootstrap, user_accounts, …).
                 self.state = BootstrapState.from_dict(data)
                 # Phase key migration: copy phase keys from root level into steps dict.
@@ -954,42 +933,6 @@ class StateMachine:
         return all_done
 
     # endregion FUNC_execute_grouped_phase
-
-    # region FUNC_resume_phase
-    ## @purpose — Resume execution of a partially-failed grouped phase.
-    ##            Runs only failed/pending sub_steps; skips successful, unchanged ones.
-    ## @io — ⇥ phase_value: str → ⎋ bool (True = phase fully done after resume)
-    ## @complexity — O(S) where S = number of sub_steps
-    ## @invariants
-    ##   - Does NOT re-execute sub_steps with done=true + unchanged hash
-    ##   - Partial failure: if 3/4 sub_steps done, only the failed one is retried
-    ##   - No manual state.json editing required by operator
-    def resume_phase(self, phase_value: str) -> bool:
-        """Resume a partially-failed grouped phase. Executes only failed/pending sub-steps.
-
-        Returns True if all sub-steps completed, False if some still failed.
-        """
-        logger.info("[IMP:9][resume_phase] Resuming phase %s after partial failure", phase_value)
-
-        # Load phase state from state.json
-        phase_key = phase_value
-        phase_state = self.state.steps.get(phase_key, {})
-        if isinstance(phase_state, dict):
-            sub_steps = phase_state.get("sub_steps", {})
-        else:
-            sub_steps = getattr(phase_state, "sub_steps", {})
-
-        if not sub_steps:
-            logger.info(
-                "[IMP:7][resume_phase] Phase %s has no sub_steps — running complete phase",
-                phase_value,
-            )
-            self.execute_phase(phase_value)
-            return True
-
-        return self.execute_grouped_phase(phase_value, sub_steps)
-
-    # endregion FUNC_resume_phase
 
     def _state_from_phase_key(self, phase_key: str) -> dict:
         """Get phase state from state dict using the phase key directly.
@@ -1373,7 +1316,7 @@ def main() -> int:
 
     # ── REMOVED (DevPlan 091 Wave B, User Constraint): state migration block ──
     # The one-shot `migrate_state_to_phases()` call (old 23-step keys → 14-phase keys)
-    # was removed together with state_migration.py (B1). User Constraint: тестовая фаза,
+    # was removed in the same wave. User Constraint: тестовая фаза,
     # можно ронять. state.json создаётся с нуля при cold start bootstrap; старые файлы
     # с numeric keys больше не поддерживаются. Если на production-ноде ещё остался старый
     # state.json с 23 keys — оператор должен вручную удалить его перед обновлением.
@@ -1603,57 +1546,6 @@ def _run_update_mode(sm: StateMachine) -> int:
 
 
 # region HELPER_FUNCTIONS
-
-
-def _compute_step_hash(sm: StateMachine, step_name: str, mode: str) -> str:
-    """Compute content hash for a step, including step-specific scripts.
-
-    ## @purpose — Wrapper around _step_hash that adds step-specific script paths.
-    ## @io — ⇥ sm, step_name, mode → ⎋ str hexdigest
-    ## @complexity — O(S) where S = total file bytes
-    """
-    core_dir = sm.core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
-    extra_paths: list[str] = []
-
-    # Map step name to extra script paths
-    path_map: dict[str, list[str]] = {
-        "tor_proxy": [os.path.join(core_dir, "internal", "bootstrap", "install-tor-proxy.sh")],
-        "install_docker": [os.path.join(core_dir, "internal", "bootstrap", "install-docker.sh")],
-        "firewall": [os.path.join(core_dir, "internal", "bootstrap", "firewall.sh")],
-        "decrypt_secrets": [os.path.join(core_dir, "lib", "secrets.sh")],
-        "ensure_secrets": [os.path.join(core_dir, "lib", "secrets.sh")],
-        "sudoers": [os.path.join(core_dir, "internal", "bootstrap", "setup-node.sh")],
-        "install_acme": [os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")],
-        "node_update": [os.path.join(core_dir, "internal", "bootstrap", "node-lifecycle.sh")],
-        "converge": [os.path.join(core_dir, "internal", "bootstrap", "converge.sh")],
-        "provision": [os.path.join(core_dir, "internal", "provision-environment.sh")],
-        "deliver_overlays": [os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")],
-        "ssl_provision": [
-            os.path.join(core_dir, "internal", "bootstrap", "cert_orchestrator.py"),
-            os.path.join(core_dir, "internal", "bootstrap", "s3_ssl_cache.py"),
-        ],
-        "deploy_modules": [os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")],
-        "provision_llm_keys": [
-            os.path.join(core_dir, "internal", "llm", "config_renderer.py"),
-            os.path.join(core_dir, "entrypoints", "provision-llm.sh"),
-        ],
-        # DevPlan 047: new step paths
-        "docker_auth": [os.path.join(core_dir, "internal", "bootstrap", "docker_registry_auth.py")],
-        "deploy_context": [
-            os.path.join(core_dir, "internal", "bootstrap", "deploy", "context_deployer.py"),
-            os.path.join(core_dir, "internal", "bootstrap", "cert_orchestrator.py"),
-            os.path.join(core_dir, "internal", "verify", "verify-domains.sh"),
-            os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh"),
-        ],
-        # DevPlan 093 W2-T1: checkpoint.sh removed in DevPlan 091 (commit 8be2843) —
-        # content-hash for verify_core depends only on content_hash.py (real hash logic).
-        "verify_core": [
-            os.path.join(core_dir, "internal", "shared", "content_hash.py"),  # DevPlan 079: shared module
-        ],
-    }
-
-    extra_paths.extend(path_map.get(step_name, []))
-    return sm._step_hash(step_name, *extra_paths)
 
 
 # region FUNC__import_deploy_context

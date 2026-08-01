@@ -4,8 +4,8 @@
 # region MODULE_CONTRACT
 ## @purpose  Generate catalog.json — центральный реестр всех проектов платформы. Сканирует
 ##           PROJECTS_ROOT/*/*/ai-platform.yaml, извлекает метаданные, пишет JSON-массив.
-## @scope    Вызывается deploy-project.sh _reconfigure_monitoring() после каждого успешного
-##           деплоя, а также standalone через make generate-catalog.
+## @scope    Вызывается после успешного деплоя (reconfigure monitoring),
+##           а также standalone через make generate-catalog.
 ## @invariants
 ##   - Обходит $PROJECTS_ROOT/*/*/ai-platform.yaml (org/project двухуровневая вложенность)
 ##   - Генерирует валидный JSON-массив с name, type, node, org, domain, database, metrics_port
@@ -18,7 +18,7 @@
 ## @changes  Extracted from generate-catalog.sh inline heredoc → standalone module with CLI args
 ## @usecases
 ##   - make generate-catalog (через generate-catalog.sh facade)
-##   - deploy-project.sh _reconfigure_monitoring()
+##   - reconfigure monitoring после успешного деплоя
 ##   - node-update → deploy-modules → healthcheck pipeline
 # endregion MODULE_CONTRACT
 

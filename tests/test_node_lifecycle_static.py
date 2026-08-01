@@ -518,7 +518,7 @@ def test_mode_dispatch_init_update(caplog) -> None:
 ## @invariants
 ##   - node-lifecycle.sh delegates checkpoint-resume to state_machine.py (does NOT source
 ##     the removed legacy checkpoint lib — DevPlan 091 backward-compat removal)
-##   - node-lifecycle.sh sources internal/bootstrap/content-hash.sh
+##   - node-lifecycle.sh delegates content-hash to shared content_hash.py / state_machine._step_hash()
 ##   - _step_hash() (state_machine.py) is used for per-sub-step content-hash invalidation
 ##   - RESUME_MODE + FORCE_MODE are parsed by the shell facade before delegation
 
@@ -549,7 +549,6 @@ def test_checkpoint_step_uses_content_hash(caplog) -> None:
     assert "execute_grouped_phase" in sm_content, (
         "FAIL: state_machine.py must have execute_grouped_phase for sub-step idempotency"
     )
-    assert "resume_phase" in sm_content, "FAIL: state_machine.py must have resume_phase for partial failure recovery"
     logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 2 PASS: state_machine.py has hash-check")
 
     # ── Check 3: phases.py has _install_acme and other phase functions ──

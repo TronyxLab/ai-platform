@@ -19,9 +19,9 @@
 ##           — GHCR_PULL_TOKEN     (env var, optional)
 ## @output   — Authenticated Docker Hub + GHCR sessions (side effect)
 ##           — Structured stderr logs via log_imp
-## @links    — USED_BY: core/internal/deploy/deploy-project.sh,
+## @links    — USED_BY: orchestrator_cli.py / deploy_engine.py,
 ##             core/internal/bootstrap/deploy-modules.sh
-##           — REPLACES: inline docker_login() in deploy-project.sh:82,
+##           — REPLACES: inline docker_login() in the legacy deploy shell,
 ##             deploy-modules.sh:35; inline ghcr_login() in deploy-modules.sh:65
 ## @invariants — Self-contained: sources logging.sh internally; no caller
 ##               dependency on logging.sh.
@@ -37,7 +37,7 @@
 ##            with early return, but the canonical form inlines the
 ##            positive guard for readability.
 ## @changes   CREATED: 2026-07-09 · TASK-9 — Extracted from
-##            deploy-project.sh and deploy-modules.sh
+##            the legacy deploy shell and deploy-modules.sh
 ##           MODIFIED: 2026-07-17 · T13 — Added ghcr_login() from deploy-modules.sh
 ##           MODIFIED: 2026-07-30 · T13a — Delegated to shared docker_auth module
 ## @modulemap — docker_login  [W:100] Canonical Docker Hub authentication
@@ -128,7 +128,7 @@ ensure_docker_network() {
 ##             - stdout from docker login redirected to /dev/null to avoid token leak
 ## @rationale GHCR is used for Hermes-built images (L1→L2 pipeline). Authentication is
 ##           required for private packages; anonymous access works for public images.
-##           Extracted from deploy-modules.sh to lib/ so deploy-project.sh can also
+##           Extracted from deploy-modules.sh to lib/ so the deploy pipeline can also
 ##           call ghcr_login() if needed, without duplicating the function.
 ghcr_login() {
     # ⚠️ TRAP[DECISION] · 2026-07-30 · — · Delegated to shared docker_auth.py

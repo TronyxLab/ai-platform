@@ -42,7 +42,6 @@ EXCEPTIONS=(
     "core/modules/hermes-agent/context/scripts/*" # Hermes context
     # ssl-provision wrapper: deleted (Dead Code Sweep 084) — 0 callers, all deps migrated
     "core/modules/nginx/nginx_reload_hook.sh"    # Nginx hook
-    "core/internal/bootstrap/s3-ssl-cache.sh"    # SSL cache (DevPlan 024)
     "core/internal/deploy/reconcile-projects.sh"  # Reconciliation (DevPlan 025)
     "core/internal/hooks/*.sh"                    # Pre-commit hooks (DevPlan 028 W1-E7)
     "core/internal/scripts-audit.sh"              # Self

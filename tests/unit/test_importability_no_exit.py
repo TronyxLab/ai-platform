@@ -40,7 +40,6 @@ _IMPORTABLE_MODULES: tuple[str, ...] = (
     "core.internal.shared.secrets_manifest_reader",
     "core.internal.shared.node_yaml",
     "core.internal.reconciler_projects",
-    "core.internal.bootstrap.json_field_extractor",
     "core.internal.bootstrap.core_deliverer",
 )
 

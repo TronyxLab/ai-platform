@@ -6,7 +6,7 @@
 ## @scope    Sourced by bootstrap.sh + remote-cmd.sh (prepare_ssh_opts ×3). Not for direct invocation.
 ## @invariants  SSH_OPTS init-guarded; exit 0|1 passthrough; ssh-keygen -R init-only. @rationale Strangler-Fig Tier 2 (108).
 ## ⚠️ TRAP[DECISION] · 2026-07-17 · HI · Rejected: entrypoint-manifest.yaml registration (sourced lib corrupts gate semantics)
-## · Sibling convention: remote-cmd.sh, content-hash.sh. Rev: direct exec → restore shebang.
+## · Sibling convention: remote-cmd.sh. Rev: direct exec → restore shebang.
 ## @changes 2026-07-31 | DevPlan 108 — 251→≤60 LOC; rsync/ssh оркестрация → core_deliverer.py
 # endregion MODULE_CONTRACT
 if [[ -z "${PATHS_LIB_DIR:-}" ]]; then

@@ -4,7 +4,7 @@
 # region MODULE_CONTRACT
 ## @purpose  Thin wrapper for monitoring post-deploy hook — delegates all logic to
 ##           core/internal/monitoring_config_renderer.py (Python).
-## @scope    Invoked by deploy-project.sh after successful project deploy;
+## @scope    Invoked after successful project deploy;
 ##           receives PROJECT_DIR, PROJECT, NODE_NAME as positional args.
 ## @invariants
 ##   - PROJECT_DIR and PROJECT are required; missing → exit 0 (backward compat)

@@ -10,7 +10,7 @@
 ##   - No tmp_path needed (no file I/O)
 ##   - LDD: at least one IMP:9 log in each successful scenario
 ## @rationale  New shared module requires test coverage to prevent regressions
-##             when deploy.sh/deploy-project.sh are migrated to use this parser.
+##             when deploy.sh and the legacy deploy shell are migrated to use this parser.
 # endregion MODULE_CONTRACT
 
 import contextlib
