@@ -100,12 +100,22 @@ jobs:
           ssh-user: ${{ env.VPS_USER }}
 
       # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 117 D27: SSH_OPTS — единый SoT (core/internal/shared/ssh_opts.py).
+      # CI-воркфлоу не импортируют Python напрямую — получают флаги через CLI --shell
+      # (ConnectTimeout из timeouts.SSH_CONNECT_TIMEOUT=30, канон; raw-литералы в CI запрещены, D69).
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Get SSH_OPTS from SoT
+        if: steps.sha.outputs.skip != 'true'
+        id: ssh_opts
+        run: echo "opts=$(python3 -m core.internal.shared.ssh_opts --shell)" >> $GITHUB_OUTPUT
+
+      # ═══════════════════════════════════════════════════════════════════
       # DevPlan 065 P2: SSH pre-flight check — fail-fast before deploy
       # ═══════════════════════════════════════════════════════════════════
       - name: SSH pre-flight check
         if: steps.sha.outputs.skip != 'true'
         run: |
-          if ssh -o ConnectTimeout=10 \
+          if ssh ${{ steps.ssh_opts.outputs.opts }} \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "echo OK" 2>&1; then
             echo "[IMP:9][preflight] SSH connectivity to ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} verified"
           else
@@ -125,7 +135,7 @@ jobs:
         if: steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
-          ssh -o ConnectTimeout=10 \
+          ssh ${{ steps.ssh_opts.outputs.opts }} \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} "mkdir -p /opt/platform/core"
           # Rsync core/ with --delete (excludes .git, __pycache__, *.pyc)
           rsync -avz --delete \
@@ -158,7 +168,7 @@ jobs:
       - name: Provision environment on VPS (networks + volumes)
         if: steps.sha.outputs.skip != 'true'
         run: |
-          ssh -o ConnectTimeout=10 \
+          ssh ${{ steps.ssh_opts.outputs.opts }} \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "cd /opt/platform && make provision SCOPE=networks,volumes"
 
@@ -176,7 +186,7 @@ jobs:
           # (DevPlan 116 B3 T2, U-38 — single detector, excludes scripts/secrets).
           # python3 = 3.14 after φ1; core lives in /opt/platform.
           # Same logic as converge.sh / platform-export-metrics.sh wrapper.
-          NODE=$(ssh -o ConnectTimeout=10 \
+          NODE=$(ssh ${{ steps.ssh_opts.outputs.opts }} \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             'cd /opt/platform && python3 -m core.internal.shared.node_detect --detect-node-name' 2>/dev/null) || NODE=""
           if [ -z "$NODE" ]; then
@@ -185,7 +195,7 @@ jobs:
             exit 1
           fi
           echo "[IMP:8][deploy][node-detect] Auto-detected NODE=${NODE}"
-          ssh -o ConnectTimeout=10 \
+          ssh ${{ steps.ssh_opts.outputs.opts }} \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "cd /opt/platform && DEPLOY_PARALLEL=true GITHUB_SHA=$SHA make node-update NODE=$NODE"
 

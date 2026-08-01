@@ -48,6 +48,12 @@ from core.internal.shared.secrets_env_parser import (
 from core.internal.shared.telegram_notifier import (
     send_telegram as send_tg,
 )  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1)
+from core.internal.shared.timeouts import (
+    WATCHDOG_CURL_MAX_TIME,
+    WATCHDOG_CURL_TG_MAX_TIME,
+    WATCHDOG_POLL_INTERVAL,
+    WATCHDOG_TIMEOUT,
+)  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, DevPlan 117 D29)
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +150,10 @@ class WatchdogConfig:
     @classmethod
     def from_env(cls) -> "WatchdogConfig":
         """Construct config from environment variables with defaults."""
+        # AGENT_PORT — runtime env var; соответствует HERMES_DASHBOARD_PORT (9119) из
+        # platform-infra.yaml env_defaults (SoT портов). Двойное имя сохранено для
+        # backward-compat: AGENT_PORT используется watchdog-контейнером, HERMES_DASHBOARD_PORT —
+        # платформенным env (DevPlan 117 D31). Дефолт 9119 — единый порт дашборда.
         agent_port = int(os.environ.get("AGENT_PORT", "9119"))
         # Use PLATFORM_ROOT as base for deployment paths — canonical platform pattern.
         # This matches the gate test allowlist (os.environ.get("PLATFORM_ROOT", cls.DEFAULT_PLATFORM_ROOT)).
@@ -172,7 +182,8 @@ class WatchdogConfig:
 
         return cls(
             health_url=os.environ.get("AGENT_READY_URL", f"http://localhost:{agent_port}/ready"),
-            watchdog_timeout=int(os.environ.get("WATCHDOG_TIMEOUT", "90")),
+            # Таймаут-дефолты — из timeouts.py (DevPlan 117 D29); env-переменные сохраняют приоритет.
+            watchdog_timeout=int(os.environ.get("WATCHDOG_TIMEOUT", str(WATCHDOG_TIMEOUT))),
             pending_file=os.environ.get("PENDING_FILE", cls.DEFAULT_PENDING_FILE),
             secrets_file=os.environ.get("SECRETS_FILE", cls.DEFAULT_SECRETS_FILE),
             audit_log=os.environ.get("AUDIT_LOG", cls.DEFAULT_AUDIT_LOG),
@@ -183,9 +194,9 @@ class WatchdogConfig:
             agent_port=agent_port,
             cb_state_dir=os.environ.get("CIRCUIT_BREAKER_STATE_DIR", cls.DEFAULT_CB_STATE_DIR),
             cb_services=cb_services,
-            poll_interval=int(os.environ.get("POLL_INTERVAL", "5")),
-            curl_max_time=int(os.environ.get("CURL_MAX_TIME", "3")),
-            curl_tg_max_time=int(os.environ.get("CURL_TG_MAX_TIME", "30")),
+            poll_interval=int(os.environ.get("POLL_INTERVAL", str(WATCHDOG_POLL_INTERVAL))),
+            curl_max_time=int(os.environ.get("CURL_MAX_TIME", str(WATCHDOG_CURL_MAX_TIME))),
+            curl_tg_max_time=int(os.environ.get("CURL_TG_MAX_TIME", str(WATCHDOG_CURL_TG_MAX_TIME))),
             telegram_proxy_url=os.environ.get("TELEGRAM_PROXY_URL", cls.DEFAULT_TELEGRAM_PROXY_URL),
         )
 

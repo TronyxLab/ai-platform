@@ -67,7 +67,9 @@ services:
       - ./error-pages:/var/www/platform-default/error-pages:ro
       # Default index — иначе default vhost отдаёт 403 (root без index)
       - ./error-pages/index.html:/var/www/platform-default/index.html:ro
-      # VPS TLS certs (/etc/letsencrypt) — VPS default path; locally override via NGINX_CERT_DIR=./dev-certs
+      # VPS TLS certs (/etc/letsencrypt) — production default (certbot/ACME target dir).
+      # Dev override: NGINX_CERT_DIR=./dev-certs (SoT: platform-infra.yaml env_defaults).
+      # Dual-context by design (DevPlan 117 D30) — НЕ менять default.
       # ⚠️ Dev-only mounts (dev-certs → /etc/nginx/dev-certs, dev-config/ssl-dev.conf) перенесены
       #    в docker-compose.dev.yml (DevPlan 116 D3) — dev-режим явный opt-in, не в prod-базе.
       - ${NGINX_CERT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro

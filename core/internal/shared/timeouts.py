@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: timeouts, shared, compose-up, pull, build, healthcheck-poll, ssh-connect, deploy, ssh-read, retry-backoff, image-check, docker-cmd, docker-stop, rsync, constants
-# STRUCTURE: ▶ ┌registry of operational timeouts┐ → ◇ docker domain (up/pull/build/healthcheck/cmd/stop/image) → ◇ ssh domain (connect/read/deploy) → ◇ retry (backoff list) → ⎋ import targets
+# GREP_SUMMARY: timeouts, shared, compose-up, pull, build, healthcheck-poll, ssh-connect, deploy, ssh-read, retry-backoff, image-check, docker-cmd, docker-stop, rsync, watchdog, healthcheck-ports, constants
+# STRUCTURE: ▶ ┌registry of operational timeouts┐ → ◇ docker domain (up/pull/build/healthcheck/cmd/stop/image) → ◇ ssh domain (connect/read/deploy) → ◇ retry (backoff list + exponential base) → ◇ watchdog domain → ◇ healthcheck ports → ⎋ import targets
 # region MODULE_CONTRACT
 ## @purpose  Единый реестр таймаутов операционных политик (DevPlan 116 B5 T1, U-11).
 ##           Единственный источник числовых значений timeout= в docker/ssh/healthcheck-домене
-##           core/internal. Литералы {30,60,120,180,300,600} в этих доменах заменяются
+##           core/internal. Литералы {10,15,30,60,120,180,300,600} в этих доменах заменяются
 ##           импортом констант отсюда (гейт test_gate_timeout_literals.py enforce-ит).
-## @scope    Все Python-модули core/internal, выполняющие docker/ssh/rsync/healthcheck операции.
+## @scope    Все Python-модули core/internal + core/modules (watchdog), выполняющие
+##           docker/ssh/rsync/healthcheck операции.
 ##           Константы импортируются напрямую: `from core.internal.shared.timeouts import ...`.
 ##           shared/docker_compose.py и shared/ssh_opts.py используют эти константы как дефолты.
 ## @invariants
-##   1. Числовые значения определены ТОЛЬКО здесь — 0 литералов {30,60,120,180,300,600}
+##   1. Числовые значения определены ТОЛЬКО здесь — 0 литералов {10,15,30,60,120,180,300,600}
 ##      вне этого файла в docker/ssh/healthcheck-домене (гейт timeout_literals).
 ##   2. Константы immutable (module-level ints/list) — мутация запрещена (гейт не ловит,
 ##      но ревью-стандарт).
@@ -18,12 +19,16 @@
 ##      (экспоненциальное поведение сохраняется).
 ##   4. Значения канонизированы: up=180, pull=300, build=300, healthcheck-poll=60,
 ##      ssh-connect=30, deploy=600, ssh-read=60, image-check=60, docker-cmd=10,
-##      docker-stop=30, rsync=600.
+##      docker-stop=30, rsync=600, watchdog=90/5/3/30, healthcheck-ports=[8080,8000].
 ## @rationale U-11: 226 литералов timeout= (30/120/180/300/600) без констант. Единый реестр
 ##            делает значения grepable, гейт — enforce-емым. Значения стандартизированы из
 ##            существующих канонов (docker_orchestrator up=180, deploy-дефолт ssh.sh=600,
 ##            core_deliverer RSYNC_TIMEOUT=600, healthcheck_poll=60).
+##            DevPlan 117 D (бриф D): + watchdog-домен (D29), + HEALTHCHECK_POLL_INTERVAL/
+##            MAX_RETRIES (D32/D34), + RETRY_BACKOFF_EXPONENTIAL_BASE (D34),
+##            + SUDOERS_CMD_TIMEOUT (D28), + PROJECT_HEALTHCHECK_PORTS (D36).
 ## @changes  2026-08-01 | DevPlan 116 B5 T1 — Created (shared-реестр таймаутов)
+## @changes  2026-08-01 | DevPlan 117 D — watchdog/retry/ports домены (D28-D36)
 # endregion MODULE_CONTRACT
 
 # ── Docker domain ────────────────────────────────────────────────────────────
@@ -40,8 +45,19 @@ BUILD_TIMEOUT = 300
 # Poll окно healthcheck (healthcheck_poll, context_deployer, deploy_engine, bash-healthcheck invoke)
 HEALTHCHECK_POLL_TIMEOUT = 60
 
+# Интервал между опросами healthcheck (healthcheck_poll interval, docker_orchestrator retry_interval)
+HEALTHCHECK_POLL_INTERVAL = 3
+
+# Число retry-попыток healthcheck (HEALTHCHECK_POLL_TIMEOUT / HEALTHCHECK_POLL_INTERVAL = 20;
+# docker_orchestrator run_healthcheck max_retries, healthcheck_poller max_retries)
+HEALTHCHECK_POLL_MAX_RETRIES = 20
+
 # Внутренние подвызовы docker ps/inspect/tag в shared-функциях (healthcheck_poll, docker_compose_*)
 DOCKER_CMD_TIMEOUT = 10
+
+# visudo -c -f <file> — валидация sudoers (sudoers_generator, отдельный от docker домен;
+#   visudo на слабых VPS может занимать >DOCKER_CMD_TIMEOUT)
+SUDOERS_CMD_TIMEOUT = 15
 
 # docker stop/rm — lifecycle операции (orphan/legacy cleanup, rollback) — grace-period безопасный
 DOCKER_STOP_TIMEOUT = 30
@@ -71,3 +87,25 @@ RETRY_BACKOFF_SECONDS: list[int] = [5, 10, 20]
 
 # Число retry-попыток (channels DEFAULT_RETRY_COUNT)
 RETRY_COUNT = 2
+
+# База экспоненциального backoff state_machine (2**attempt: 2, 4, 8 — транзиентные ошибки шагов bootstrap)
+RETRY_BACKOFF_EXPONENTIAL_BASE = 2
+
+# ── Watchdog domain ───────────────────────────────────────────────────────────
+
+# Общий таймаут watchdog-цикла (agent_watchdog WATCHDOG_TIMEOUT)
+WATCHDOG_TIMEOUT = 90
+
+# Интервал опроса health endpoint (agent_watchdog POLL_INTERVAL)
+WATCHDOG_POLL_INTERVAL = 5
+
+# Таймаут curl healthcheck (agent_watchdog CURL_MAX_TIME)
+WATCHDOG_CURL_MAX_TIME = 3
+
+# Таймаут curl Telegram API (agent_watchdog CURL_TG_MAX_TIME)
+WATCHDOG_CURL_TG_MAX_TIME = 30
+
+# ── Healthcheck ports domain ───────────────────────────────────────────────────
+
+# Эвристические порты HTTP /health для проектов без healthcheck (healthcheck_poller _try_http)
+PROJECT_HEALTHCHECK_PORTS: list[int] = [8080, 8000]

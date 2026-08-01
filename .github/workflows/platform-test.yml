@@ -113,8 +113,10 @@ jobs:
           python3 core/internal/scripts/validate_dora_dashboard.py
 
       # Fast gate before Docker setup — fail-fast on syntax/static issues
+      # D71 (DevPlan 117): SKIP_PRECOMMIT=1 — pre-commit уже выполнен явно (Step pre-commit-run,
+      # L99-100). Повторный запуск через make gate MODE=fast (Step 1/8) = двойной прогон ~15s.
       - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
-        run: make gate MODE=fast
+        run: make gate MODE=fast SKIP_PRECOMMIT=1
 
       # Manifest generation contract — блокирует push если generated files diverged
       - name: Check generated manifests up to date

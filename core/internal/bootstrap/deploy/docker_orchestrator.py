@@ -114,7 +114,10 @@ from core.internal.shared.docker_compose import (
 from core.internal.shared.timeouts import (
     BUILD_TIMEOUT,
     COMPOSE_UP_TIMEOUT,
+    DOCKER_CMD_TIMEOUT,
     DOCKER_STOP_TIMEOUT,
+    HEALTHCHECK_POLL_INTERVAL,
+    HEALTHCHECK_POLL_MAX_RETRIES,
     HEALTHCHECK_POLL_TIMEOUT,
     IMAGE_CHECK_TIMEOUT,
     PULL_TIMEOUT,
@@ -129,8 +132,10 @@ COMPOSE_FILENAMES = ("compose.yaml", "docker-compose.yaml", "docker-compose.base
 DEFAULT_PARALLEL_LIMIT = 4
 DEFAULT_READINESS_MAX_ATTEMPTS = 15
 DEFAULT_READINESS_INTERVAL_SEC = 2
-DEFAULT_HEALTHCHECK_MAX_RETRIES = 10
-DEFAULT_HEALTHCHECK_RETRY_INTERVAL = 10
+# Healthcheck retry-политика — единый реестр timeouts (DevPlan 117 D32/D34):
+# 20 попыток × 3s = 60s окно (HEALTHCHECK_POLL_TIMEOUT=60 канон)
+DEFAULT_HEALTHCHECK_MAX_RETRIES = HEALTHCHECK_POLL_MAX_RETRIES
+DEFAULT_HEALTHCHECK_RETRY_INTERVAL = HEALTHCHECK_POLL_INTERVAL
 
 # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · COMPOSE_PROFILES hardcoded here diverged from SoT (U-02)
 # · Symptom: 12-item setdefault (без status-page) vs platform-infra.yaml 13-item env_defaults —
@@ -319,7 +324,7 @@ def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> N
             ["docker", "ps", "-a", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=DOCKER_CMD_TIMEOUT,
         )
         # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
         stdout = ps_result.stdout
@@ -348,7 +353,7 @@ def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> N
                 ],
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=DOCKER_CMD_TIMEOUT,
             )
             # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
             project_label = ins_result.stdout
@@ -725,7 +730,7 @@ def _cleanup_legacy_container(container_name: str) -> None:
             ["docker", "ps", "-a", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=DOCKER_CMD_TIMEOUT,
         )
         # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety in subprocess stdout
         # · Symptom: container_name in stdout.splitlines() silently fails when mock returns bytes
@@ -781,7 +786,7 @@ def _cleanup_observability_containers(compose_file: Path) -> None:
             ["docker", "ps", "-a", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=DOCKER_CMD_TIMEOUT,
         )
         # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
         all_containers = ps_result.stdout

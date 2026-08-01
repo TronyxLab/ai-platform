@@ -30,11 +30,15 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from core.internal.shared.timeouts import HEALTHCHECK_POLL_MAX_RETRIES, PROJECT_HEALTHCHECK_PORTS
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_TIMEOUT = 30
 DEFAULT_POLL_INTERVAL = 10
-DEFAULT_MAX_RETRIES = 6
+# Единый реестр retry-политик — timeouts.py (DevPlan 117 D34). Число retry-попыток
+# healthcheck-poll импортируется из timeouts.HEALTHCHECK_POLL_MAX_RETRIES.
+DEFAULT_MAX_RETRIES = HEALTHCHECK_POLL_MAX_RETRIES
 
 
 @dataclass
@@ -165,12 +169,9 @@ class HealthcheckPoller:
         Returns:
             True if HTTP /health returns 200.
         """
-        # Try common project health endpoints
-        urls = [
-            f"http://{project_name}:8080/health",
-            f"http://{project_name}:8000/health",
-            f"http://{project_name}/health",
-        ]
+        # Эвристические HTTP /health порты — из timeouts.PROJECT_HEALTHCHECK_PORTS (DevPlan 117 D36).
+        urls = [f"http://{project_name}:{port}/health" for port in PROJECT_HEALTHCHECK_PORTS]
+        urls.append(f"http://{project_name}/health")
 
         return any(self._try_url(url) for url in urls)
 

@@ -468,6 +468,8 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# Infra-metrics exporters")
     lines.append("CADVISOR_PORT=" + str(get_val("CADVISOR_PORT", "8080")))
     lines.append("NODE_EXPORTER_PORT=" + str(get_val("NODE_EXPORTER_PORT", "9100")))
+    lines.append("# Status Page (внутренний HTTP-порт модуля, DevPlan 117 D31 — зарегистрирован в SoT)")
+    lines.append("STATUS_PAGE_PORT=" + str(get_val("STATUS_PAGE_PORT", "8080")))
 
     # ── Compose Profiles ──
     lines.append("")

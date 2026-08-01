@@ -84,7 +84,17 @@ def test_constants_values(caplog: pytest.LogCaptureFixture) -> None:
     assert timeouts.RSYNC_TIMEOUT == 600
     assert timeouts.RETRY_BACKOFF_SECONDS == [5, 10, 20]
     assert timeouts.RETRY_COUNT == 2
-    logger.info("[IMP:9][test_constants_values] Все %d констант канонизированы", 13)
+    # DevPlan 117 D28/D32/D34/D36/D29 — новые домены реестра
+    assert timeouts.SUDOERS_CMD_TIMEOUT == 15
+    assert timeouts.HEALTHCHECK_POLL_INTERVAL == 3
+    assert timeouts.HEALTHCHECK_POLL_MAX_RETRIES == 20
+    assert timeouts.RETRY_BACKOFF_EXPONENTIAL_BASE == 2
+    assert timeouts.WATCHDOG_TIMEOUT == 90
+    assert timeouts.WATCHDOG_POLL_INTERVAL == 5
+    assert timeouts.WATCHDOG_CURL_MAX_TIME == 3
+    assert timeouts.WATCHDOG_CURL_TG_MAX_TIME == 30
+    assert timeouts.PROJECT_HEALTHCHECK_PORTS == [8080, 8000]
+    logger.info("[IMP:9][test_constants_values] Все %d констант канонизированы", 22)
     _assert_imp9(caplog)
 
 

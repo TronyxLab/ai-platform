@@ -1049,6 +1049,9 @@ gates:
 - id: test_docker_compose_subprocess_sole_path
   test_file: test_gate_docker_sole_path.py
   description: 'Auto-discovered gate: test_docker_compose_subprocess_sole_path'
+- id: test_shell_and_make_no_direct_docker_compose
+  test_file: test_gate_docker_sole_path.py
+  description: 'Auto-discovered gate: test_shell_and_make_no_direct_docker_compose'
 - id: test_all_docker_modules_have_dockerignore_symlink
   test_file: test_gate_dockerignore_symlink.py
   description: 'Auto-discovered gate: test_all_docker_modules_have_dockerignore_symlink'
@@ -1661,6 +1664,9 @@ gates:
 - id: test_single_project_entry_definition
   test_file: test_gate_single_project_parser.py
   description: 'Auto-discovered gate: test_single_project_entry_definition'
+- id: test_ci_workflows_no_raw_connect_timeout
+  test_file: test_gate_ssh_opts_sole_path.py
+  description: 'Auto-discovered gate: test_ci_workflows_no_raw_connect_timeout'
 - id: test_connect_timeout_literals_sole_path
   test_file: test_gate_ssh_opts_sole_path.py
   description: 'Auto-discovered gate: test_connect_timeout_literals_sole_path'
@@ -1805,6 +1811,9 @@ gates:
 - id: test_entrypoint_no_direct_binary_calls
   test_file: test_gate_thin_wrapper.py
   description: 'Auto-discovered gate: test_entrypoint_no_direct_binary_calls'
+- id: test_no_timeout_literals_in_ci_workflows
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_no_timeout_literals_in_ci_workflows'
 - id: test_no_timeout_literals_in_docker_ssh_healthcheck
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_no_timeout_literals_in_docker_ssh_healthcheck'
