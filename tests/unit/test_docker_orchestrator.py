@@ -130,6 +130,7 @@ def test_check_image_exists_found(mock_subprocess):
     args = mock_subprocess.call_args[0][0]
     assert args[:4] == ["docker", "manifest", "inspect", "test/image:latest"]
     assert mock_subprocess.call_args[1].get("timeout") == 60
+    logger.info("[IMP:9][test_check_image_exists_found] Image found via manifest inspect — True, timeout=60")
 
 
 # 🧪 TRAP[TEST] · Regression · Image NOT found via docker manifest inspect · Last fail: N/A · Remove if: docker manifest inspect interface changes
@@ -140,6 +141,7 @@ def test_check_image_exists_not_found(mock_subprocess):
     result = dorch._check_image_exists("test/missing:latest")
 
     assert result is False
+    logger.info("[IMP:9][test_check_image_exists_not_found] Image NOT found — False (exit 1)")
 
 
 # 🧪 TRAP[TEST] · Regression · FileNotFoundError when docker binary missing · Last fail: N/A · Remove if: python docker SDK replaces CLI
@@ -150,6 +152,7 @@ def test_check_image_exists_no_docker(mock_subprocess):
     result = dorch._check_image_exists("test/image:latest")
 
     assert result is False
+    logger.info("[IMP:9][test_check_image_exists_no_docker] docker CLI missing — False (graceful)")
 
 
 # 🧪 TRAP[TEST] · Regression · Timeout on docker manifest inspect · Last fail: N/A · Remove if: timeout handling removed
@@ -160,6 +163,7 @@ def test_check_image_exists_timeout(mock_subprocess):
     result = dorch._check_image_exists("test/image:latest")
 
     assert result is False
+    logger.info("[IMP:9][test_check_image_exists_timeout] manifest inspect timeout — False (graceful)")
 
 
 # endregion TEST__check_image_exists
@@ -180,6 +184,7 @@ def test_resolve_compose_file_yaml(tmp_path):
     result = dorch._resolve_compose_file(str(mod_dir))
 
     assert result == mod_dir / "compose.yaml"
+    logger.info("[IMP:9][test_resolve_compose_file_yaml] compose.yaml resolved first")
 
 
 # 🧪 TRAP[TEST] · Edge-case · docker-compose.yaml fallback · Last fail: N/A · Remove if: compose filename resolution order changes
@@ -192,6 +197,7 @@ def test_resolve_compose_file_docker_yaml(tmp_path):
     result = dorch._resolve_compose_file(str(mod_dir))
 
     assert result == mod_dir / "docker-compose.yaml"
+    logger.info("[IMP:9][test_resolve_compose_file_docker_yaml] docker-compose.yaml fallback resolved")
 
 
 # 🧪 TRAP[TEST] · Edge-case · docker-compose.base.yml fallback · Last fail: N/A · Remove if: compose filename resolution order changes
@@ -204,6 +210,7 @@ def test_resolve_compose_file_base_yml(tmp_path):
     result = dorch._resolve_compose_file(str(mod_dir))
 
     assert result == mod_dir / "docker-compose.base.yml"
+    logger.info("[IMP:9][test_resolve_compose_file_base_yml] docker-compose.base.yml fallback resolved")
 
 
 # 🧪 TRAP[TEST] · Edge-case · No compose file found · Last fail: N/A · Remove if: compose filename resolution order changes
@@ -215,6 +222,7 @@ def test_resolve_compose_file_missing(tmp_path):
     result = dorch._resolve_compose_file(str(mod_dir))
 
     assert result is None
+    logger.info("[IMP:9][test_resolve_compose_file_missing] No compose file — None (precondition failure)")
 
 
 # endregion TEST__resolve_compose_file
@@ -259,6 +267,7 @@ def test_build_compose_args(tmp_path):
     assert str(override) in args
     assert "--profile" in args
     assert "test_mod" in args
+    logger.info("[IMP:9][test_build_compose_args] compose args include -f/env-file/override/--profile test_mod")
 
 
 # endregion TEST__build_compose_args
@@ -288,6 +297,7 @@ def test_deploy_docker_module_basic(mock_subprocess, module_dir):
     assert "up" in up_args
     assert "-d" in up_args
     assert "--remove-orphans" in up_args
+    logger.info("[IMP:9][test_deploy_docker_module_basic] basic deploy: compose up -d --remove-orphans → True")
 
 
 # 🧪 TRAP[TEST] · Edge-case · No compose file returns False · Last fail: N/A · Remove if: error handling changes
@@ -302,6 +312,7 @@ def test_deploy_docker_module_no_compose_file(mock_subprocess, tmp_path):
     )
 
     assert result is False
+    logger.info("[IMP:9][test_deploy_docker_module_no_compose_file] missing compose → False (no crash)")
 
 
 # 🧪 TRAP[TEST] · Edge-case · docker compose up failure returns False · Last fail: N/A · Remove if: error handling changes
@@ -323,6 +334,7 @@ def test_deploy_docker_module_up_fails(mock_subprocess, module_dir):
     )
 
     assert result is False
+    logger.info("[IMP:9][test_deploy_docker_module_up_fails] compose up exit 1 → False (fail propagates)")
 
 
 # 🧪 TRAP[TEST] · Regression · Hermes-agent special case (image pre-check) · Last fail: N/A · Remove if: hermes-agent handling moves to separate module
@@ -371,6 +383,7 @@ def test_deploy_docker_module_hermes_agent(mock_subprocess, module_dir):
     ]
     assert len(stop_calls) == 1
     assert len(rm_calls) == 1
+    logger.info("[IMP:9][test_deploy_docker_module_hermes_agent] legacy hermes-base-agent stopped+removed, deploy True")
 
 
 # 🧪 TRAP[TEST] · Edge-case · Hermes-agent L1→L2 build fallback when image not found · Last fail: N/A · Remove if: hermes-agent image build logic changes
@@ -413,6 +426,7 @@ def test_deploy_docker_module_hermes_build_fallback(mock_subprocess, module_dir)
     # Verify build was called
     build_calls = [c for c in mock_subprocess.call_args_list if "build" in str(c)]
     assert len(build_calls) >= 1
+    logger.info("[IMP:9][test_deploy_docker_module_hermes_build_fallback] L1→L2 build fallback triggered, deploy True")
 
 
 # endregion TEST_deploy_docker_module
@@ -437,6 +451,7 @@ def test_pull_module_images(mock_subprocess, module_dir):
     assert result is True
     pull_calls = [c for c in mock_subprocess.call_args_list if "pull" in str(c)]
     assert len(pull_calls) >= 1
+    logger.info("[IMP:9][test_pull_module_images] docker compose pull executed → True")
 
 
 # 🧪 TRAP[TEST] · Edge-case · Skip pull when module has local build: section · Last fail: N/A · Remove if: build detection logic changes
@@ -466,6 +481,7 @@ def test_pull_module_images_skip_build(tmp_path):
     # docker compose pull should NOT be called
     pull_calls = [c for c in mock_run.call_args_list if "pull" in str(c)]
     assert len(pull_calls) == 0
+    logger.info("[IMP:9][test_pull_module_images_skip_build] build: section present → pull skipped (0 calls)")
 
 
 # 🧪 TRAP[TEST] · Edge-case · Skip pull when no compose file exists · Last fail: N/A · Remove if: error handling changes
@@ -486,6 +502,7 @@ def test_pull_module_images_no_compose(tmp_path):
 
     assert result is True
     mock_run.assert_not_called()
+    logger.info("[IMP:9][test_pull_module_images_no_compose] no compose file → pull skipped, 0 subprocess calls")
 
 
 # endregion TEST__pull_module_images
@@ -512,6 +529,7 @@ def test_wait_for_readiness_pass(mock_subprocess):
     assert len(bash_calls) >= 1
     bash_cmd = " ".join(bash_calls[0].args[0]) if bash_calls[0].args else ""
     assert "readiness" in bash_cmd
+    logger.info("[IMP:9][test_wait_for_readiness_pass] readiness check passed on first attempt")
 
 
 # 🧪 TRAP[TEST] · Regression · Readiness timeout after max attempts · Last fail: N/A · Remove if: timeout handling changes
@@ -527,6 +545,7 @@ def test_wait_for_readiness_timeout(mock_subprocess):
     # Should have tried exactly max_attempts times
     bash_calls = [c for c in mock_subprocess.call_args_list if "invoke_module_interface" in str(c)]
     assert len(bash_calls) == 3
+    logger.info("[IMP:9][test_wait_for_readiness_timeout] readiness timeout after 3 attempts → False")
 
 
 # 🧪 TRAP[TEST] · Edge-case · Readiness subprocess error · Last fail: N/A · Remove if: error handling changes
@@ -537,6 +556,7 @@ def test_wait_for_readiness_subprocess_error(mock_subprocess):
     result = dorch.wait_for_readiness("test_mod", max_attempts=2, interval_sec=0)
 
     assert result is False
+    logger.info("[IMP:9][test_wait_for_readiness_subprocess_error] subprocess TimeoutExpired → False (graceful)")
 
 
 # endregion TEST_wait_for_readiness
@@ -561,6 +581,7 @@ def test_run_healthcheck_pass(mock_subprocess):
     assert len(bash_calls) >= 1
     bash_cmd = " ".join(bash_calls[0].args[0]) if bash_calls[0].args else ""
     assert "liveness" in bash_cmd
+    logger.info("[IMP:9][test_run_healthcheck_pass] liveness healthcheck passed on first attempt")
 
 
 # 🧪 TRAP[TEST] · Regression · Healthcheck fails after max retries · Last fail: N/A · Remove if: retry logic changes
@@ -575,6 +596,7 @@ def test_run_healthcheck_fail(mock_subprocess):
     assert result is False
     bash_calls = [c for c in mock_subprocess.call_args_list if "invoke_module_interface" in str(c)]
     assert len(bash_calls) == 3
+    logger.info("[IMP:9][test_run_healthcheck_fail] healthcheck failed after 3 retries → False")
 
 
 # endregion TEST_run_healthcheck
@@ -607,6 +629,7 @@ def testpre_pull_images_single(mock_subprocess, module_dir):
         # should return without raising
         assert isinstance(ok, int)
         assert isinstance(fail, int)
+        logger.info("[IMP:9][testpre_pull_images_single] pre_pull_images fork dispatch: ok=%r fail=%r (int)", ok, fail)
     finally:
         dorch._pull_module_images = original_fn
 
@@ -646,6 +669,7 @@ def test_reconcile_orphan_containers_no_orphans(mock_subprocess):
     # Stop/rm should NOT have been called (container "test_container" not in existing set)
     stop_calls = [c for c in mock_subprocess.call_args_list if "stop" in str(c)]
     assert len(stop_calls) == 0
+    logger.info("[IMP:9][test_reconcile_orphan_containers_no_orphans] no orphan — 0 stop/rm calls")
 
 
 # 🧪 TRAP[TEST] · Regression · Orphan container is removed when found · Last fail: N/A · Remove if: orphan reconciliation logic changes
@@ -684,6 +708,9 @@ def test_reconcile_orphan_containers_with_orphan(mock_subprocess):
     # Verify stop and rm were called for the orphan
     assert any("stop" in c and "orphan_container" in c for c in call_log), f"stop not in {call_log}"
     assert any("rm" in c and "orphan_container" in c for c in call_log), f"rm not in {call_log}"
+    logger.info(
+        "[IMP:9][test_reconcile_orphan_containers_with_orphan] orphan_container stopped+removed (different project)"
+    )
 
 
 # endregion TEST__reconcile_orphan_containers
@@ -712,6 +739,7 @@ def test_cleanup_legacy_container_found(mock_subprocess):
     ]
     assert len(stop_calls) == 1
     assert len(rm_calls) == 1
+    logger.info("[IMP:9][test_cleanup_legacy_container_found] legacy container found → stop+rm (1/1)")
 
 
 # 🧪 TRAP[TEST] · Edge-case · Legacy container not found — no stop/rm · Last fail: N/A · Remove if: legacy cleanup logic changes
@@ -730,6 +758,7 @@ def test_cleanup_legacy_container_not_found(mock_subprocess):
         if isinstance(c.args[0], list) and len(c.args[0]) >= 2 and c.args[0][1] in ("stop", "rm")
     ]
     assert len(stop_rm_calls) == 0
+    logger.info("[IMP:9][test_cleanup_legacy_container_not_found] legacy container absent → 0 stop/rm calls")
 
 
 # endregion TEST__cleanup_legacy_container
@@ -757,6 +786,7 @@ def test_invoke_healthcheck(mock_subprocess):
     assert "invoke_module_interface" in call_args[2]
     assert "test_mod" in call_args[2]
     assert "readiness" in call_args[2]
+    logger.info("[IMP:9][test_invoke_healthcheck] invoke_module_interface readiness → True (bash -c)")
 
 
 # 🧪 TRAP[TEST] · Edge-case · _invoke_healthcheck returns False on non-zero exit · Last fail: N/A · Remove if: healthcheck invocation changes
@@ -769,6 +799,7 @@ def test_invoke_healthcheck_fail(mock_subprocess):
     result = dorch._invoke_healthcheck("test_mod", "liveness")
 
     assert result is False
+    logger.info("[IMP:9][test_invoke_healthcheck_fail] invoke_module_interface exit 1 → False")
 
 
 # endregion TEST__invoke_healthcheck
@@ -805,6 +836,7 @@ def test_cleanup_observability_containers(mock_subprocess, tmp_path):
 
     assert any("stop" in c for c in call_log)
     assert any("rm" in c for c in call_log)
+    logger.info("[IMP:9][test_cleanup_observability_containers] observability services stopped+removed")
 
 
 # endregion TEST__cleanup_observability_containers
@@ -828,6 +860,7 @@ def test_main_cli_check_image(mock_subprocess):
         exit_code = dorch.main()
 
     assert exit_code == 0
+    logger.info("[IMP:9][test_main_cli_check_image] CLI check-image → exit 0")
 
 
 # 🧪 TRAP[TEST] · Edge-case · CLI missing required argument · Last fail: N/A · Remove if: CLI validation changes
@@ -837,6 +870,7 @@ def test_main_cli_missing_args():
         exit_code = dorch.main()
 
     assert exit_code == 1  # --image-ref missing
+    logger.info("[IMP:9][test_main_cli_missing_args] CLI missing --image-ref → exit 1 (validation)")
 
 
 # endregion TEST_main_cli

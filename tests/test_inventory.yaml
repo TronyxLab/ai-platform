@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-08-01 | regenerated (2734 tests)
+## @changes — 2026-08-01 | regenerated (2737 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -367,6 +367,9 @@ test_nodeids:
 - 'tests/gates/test_gate_test_infra_consistency.py::test_test_ports_match_compose_ports'
 - 'tests/gates/test_gate_test_inventory.py::test_all_tests_have_registered_marker'
 - 'tests/gates/test_gate_test_inventory.py::test_inventory_header_count_matches_entries'
+- 'tests/gates/test_gate_test_inventory.py::test_negative_documented_removal_not_flagged'
+- 'tests/gates/test_gate_test_inventory.py::test_negative_rename_pair_exempt_from_changelog'
+- 'tests/gates/test_gate_test_inventory.py::test_negative_undocumented_removal_detected'
 - 'tests/gates/test_gate_test_inventory.py::test_no_test_removed_without_changelog'
 - 'tests/gates/test_gate_test_inventory.py::test_rename_detection_normalization'
 - 'tests/gates/test_gate_test_inventory.py::test_single_inventory_regeneration_source'

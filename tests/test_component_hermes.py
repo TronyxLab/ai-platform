@@ -150,7 +150,7 @@ def postgres_up(platform_services: dict[str, list[str]], modules_dir) -> None:
 
     compose_file = os.path.join(modules_dir, "postgres", "docker-compose.base.yml")
     if not os.path.exists(compose_file):
-        pytest.skip(f"postgres docker-compose.base.yml not found: {compose_file}")
+        pytest.fail(f"postgres docker-compose.base.yml not found: {compose_file}")
 
     # ── Ensure volume bind-mount directories exist ────────────────────────
     _ensure_volume_dirs(_VOLUME_BIND_DIRS)
@@ -309,7 +309,7 @@ def hermes_up(platform_services: dict[str, list[str]], postgres_up, modules_dir)
         yield compose_file
         return
     if not os.path.exists(compose_file):
-        pytest.skip(f"hermes-agent docker-compose.base.yml not found: {compose_file}")
+        pytest.fail(f"hermes-agent docker-compose.base.yml not found: {compose_file}")
 
     # ── Pre-flight cleanup: remove leftover containers from previous runs ──
     # [IMP:8] Container name conflict (already in use) occurs when a prior

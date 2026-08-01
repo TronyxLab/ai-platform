@@ -33,6 +33,7 @@ import os
 
 import pytest
 import requests
+from _conftest.honesty import require_env_or_fail
 from conftest import _handle_e2e_error, _module_container_running, ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,7 @@ def test_hermes_auth_login(caplog, platform_services) -> None:
 
     hermes_user, hermes_pass = _hermes_credentials()
     if not hermes_pass:
-        pytest.skip("HERMES_DASHBOARD_PASSWORD not set")
+        require_env_or_fail("HERMES_DASHBOARD_PASSWORD", reason="hermes auth login smoke test")
 
     dash_port = _HERMES_DASHBOARD_TEST_PORT
     hermes_dashboard_url = os.environ.get("HERMES_DASHBOARD_URL", _build_url(dash_port))
@@ -175,7 +176,7 @@ def test_hermes_api_completions(caplog, platform_services) -> None:
 
     api_server_key = os.environ.get("API_SERVER_KEY")
     if not api_server_key:
-        pytest.skip("API_SERVER_KEY not set — cannot authenticate")
+        require_env_or_fail("API_SERVER_KEY", reason="hermes API completions smoke test")
 
     api_port = _HERMES_DESKTOP_TEST_PORT
     hermes_api_url = os.environ.get("HERMES_API_URL", _build_url(api_port))

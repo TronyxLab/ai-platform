@@ -32,6 +32,7 @@ import time
 
 import pytest
 import requests
+from _conftest.honesty import require_env_or_fail
 from conftest import _handle_e2e_error, _module_container_running, ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -137,7 +138,7 @@ def test_litellm_models_api(caplog, platform_services) -> None:
 
     master_key = os.environ.get("LITELLM_MASTER_KEY", "")
     if not master_key:
-        pytest.skip("LITELLM_MASTER_KEY not set — cannot authenticate /v1/models")
+        require_env_or_fail("LITELLM_MASTER_KEY", reason="LiteLLM /v1/models requires master key")
 
     url = _build_litellm_url(_LITELLM_TEST_PORT, "/v1/models")
     headers = {"Authorization": f"Bearer {master_key}"}

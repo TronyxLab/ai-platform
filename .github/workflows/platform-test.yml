@@ -68,6 +68,10 @@ jobs:
     env:
       INTEGRATION_MODE: live
       HERMES_DASHBOARD_PASSWORD: ${{ secrets.HERMES_DASHBOARD_PASSWORD }}
+      # Test Honesty R4 (DevPlan 117 Brief F): поэтапный переход skip→fail.
+      # marker = поведение идентично текущему (skip при недоступности сервиса).
+      # Оператор переключает на "fail" когда CI-раннеры готовы (D46-C, out-of-scope).
+      REQUIRE_HONESTY_MODE: marker
     permissions:
       contents: read
       packages: write

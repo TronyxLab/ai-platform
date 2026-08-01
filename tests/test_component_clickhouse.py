@@ -164,9 +164,9 @@ def clickhouse_up(platform_services: dict[str, list[str]], modules_dir: str) -> 
     compose_test = os.path.join(compose_dir, _COMPOSE_TEST)
 
     if not os.path.exists(compose_base):
-        pytest.skip(f"ClickHouse compose file not found: {compose_base}")
+        pytest.fail(f"ClickHouse compose file not found: {compose_base}")
     if not os.path.exists(compose_test):
-        pytest.skip(f"ClickHouse test compose file not found: {compose_test}")
+        pytest.fail(f"ClickHouse test compose file not found: {compose_test}")
 
     # ── Check Docker availability ─────────────────────────────────────────
     require_docker_or_fail(reason="ClickHouse component tests require Docker daemon")

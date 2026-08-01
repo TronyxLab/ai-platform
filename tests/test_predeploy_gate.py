@@ -49,12 +49,12 @@ import contextlib
 import logging
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
+from _conftest.honesty import require_docker_or_fail
 from conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -764,10 +764,6 @@ def test_docker_networks_precreated(
 
 @pytest.mark.predeploy
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason="Docker CLI not available — cannot run docker compose config --dry-run",
-)
 @ldd_trajectory
 def test_project_compose_configs_valid(
     caplog: pytest.LogCaptureFixture,
@@ -778,6 +774,8 @@ def test_project_compose_configs_valid(
     # → ◇ exit code 0? → ⎋ pass | fail (with compose diagnostics)
     """
     # region BLOCK_Setup
+
+    require_docker_or_fail(reason="docker compose config --dry-run requires Docker daemon")
 
     logger.info(
         "[IMP:7][test_project_compose_configs_valid] Validating %d project compose file(s) ...",

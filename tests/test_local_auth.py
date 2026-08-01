@@ -10,7 +10,7 @@
 ##   - All tests use @pytest.mark.local_auth + @ldd_trajectory decorator
 ##   - All URLs hardcoded to 127.0.0.1:<port>
 ##   - Credentials from os.environ with sensible defaults
-##   - Connection refused → pytest.skip; auth failures → pytest.fail
+##   - Connection refused → require_service_healthy (R4 honesty: skip/fail по режиму); auth failures → pytest.fail
 ##   - Each test prints LDD trajectory (IMP:7-10) via caplog
 ## @rationale — TASK-4 from DevPlan 018-auth-fix: validate that all 3 dashboard
 ##             services accept correct creds and reject wrong creds after
@@ -23,7 +23,7 @@ import os
 
 import pytest
 import requests
-from _conftest.honesty import require_docker_or_fail
+from _conftest.honesty import require_docker_or_fail, require_env_or_fail, require_service_healthy
 
 logger = logging.getLogger(__name__)
 
@@ -77,17 +77,12 @@ logger.info(
 # region FUNC__skip_if_port_unreachable
 
 
-def _skip_if_port_unreachable(host: str, port: int) -> None:
-    ## @purpose — Test port reachability; pytest.skip if connection refused.
-    ## @io — ⇥ host, port → ⎋ None (side-effect: pytest.skip or no-op)
+def _skip_if_port_unreachable(host: str, port: int, reason: str = "local platform service") -> None:
+    ## @purpose — Test port reachability via require_service_healthy (R4 honesty);
+    ##            pytest.skip (marker mode) / fail (fail mode) if connection refused.
+    ## @io — ⇥ host, port → ⎋ None (side-effect: dispatch через honesty mode)
     ## @complexity — O(1)
-    try:
-        import socket
-
-        with socket.create_connection((host, port), timeout=2):
-            pass
-    except OSError:
-        pytest.skip(f"Port {host}:{port} not reachable — local platform not running")
+    require_service_healthy(host, port, reason=reason)
 
 
 # endregion FUNC__skip_if_port_unreachable
@@ -104,7 +99,7 @@ def test_hermes_login_local_correct(caplog) -> None:
     ## @purpose — POST 127.0.0.1:9119/auth/password-login with correct creds → 200, ok:true, session cookie
     ## @complexity — O(1)
     if not HERMES_PASS:
-        pytest.skip("HERMES_DASHBOARD_PASSWORD not set")
+        require_env_or_fail("HERMES_DASHBOARD_PASSWORD", reason="local Hermes auth test")
     _skip_if_port_unreachable("127.0.0.1", 9119)
     logger.info("[IMP:9][test_hermes_login_local_correct] Starting local Hermes auth test")
 
@@ -122,7 +117,8 @@ def test_hermes_login_local_correct(caplog) -> None:
             timeout=REQUEST_TIMEOUT,
         )
     except requests.ConnectionError:
-        pytest.skip("Hermes port 9119 not reachable")
+        require_service_healthy("127.0.0.1", 9119, reason="Hermes HTTP service")
+        pytest.fail(f"Hermes port 9119 reachable but HTTP request failed: {HERMES_AUTH_URL}")
     except requests.RequestException as exc:
         _handle_e2e_error(exc, HERMES_AUTH_URL, caplog, logger=logger)
         return
@@ -166,7 +162,8 @@ def test_hermes_login_local_wrong(caplog) -> None:
             timeout=REQUEST_TIMEOUT,
         )
     except requests.ConnectionError:
-        pytest.skip("Hermes port 9119 not reachable")
+        require_service_healthy("127.0.0.1", 9119, reason="Hermes HTTP service")
+        pytest.fail(f"Hermes port 9119 reachable but HTTP request failed: {HERMES_AUTH_URL}")
     except requests.RequestException as exc:
         _handle_e2e_error(exc, HERMES_AUTH_URL, caplog, logger=logger)
         return
@@ -199,7 +196,7 @@ def test_grafana_login_local_correct(caplog) -> None:
     ## @purpose — GET 127.0.0.1:3000/api/user with Basic Auth → 200, login+role fields
     ## @complexity — O(1)
     if not GRAFANA_PASS:
-        pytest.skip("GF_SECURITY_ADMIN_PASSWORD not set")
+        require_env_or_fail("GF_SECURITY_ADMIN_PASSWORD", reason="local Grafana auth test")
     _skip_if_port_unreachable("127.0.0.1", 3000)
     logger.info("[IMP:9][test_grafana_login_local_correct] Starting local Grafana auth test")
 
@@ -210,7 +207,8 @@ def test_grafana_login_local_correct(caplog) -> None:
             timeout=REQUEST_TIMEOUT,
         )
     except requests.ConnectionError:
-        pytest.skip("Grafana port 3000 not reachable")
+        require_service_healthy("127.0.0.1", 3000, reason="Grafana HTTP service")
+        pytest.fail(f"Grafana port 3000 reachable but HTTP request failed: {GRAFANA_USER_URL}")
     except requests.RequestException as exc:
         _handle_e2e_error(exc, GRAFANA_USER_URL, caplog, logger=logger)
         return
@@ -256,7 +254,8 @@ def test_grafana_login_local_wrong(caplog) -> None:
             timeout=REQUEST_TIMEOUT,
         )
     except requests.ConnectionError:
-        pytest.skip("Grafana port 3000 not reachable")
+        require_service_healthy("127.0.0.1", 3000, reason="Grafana HTTP service")
+        pytest.fail(f"Grafana port 3000 reachable but HTTP request failed: {GRAFANA_USER_URL}")
     except requests.RequestException as exc:
         _handle_e2e_error(exc, GRAFANA_USER_URL, caplog, logger=logger)
         return
@@ -285,7 +284,8 @@ def _langfuse_login(email: str, password: str, caplog):
     try:
         csrf_resp = session.get(LANGFUSE_CSRF_URL, timeout=REQUEST_TIMEOUT)
     except requests.ConnectionError:
-        pytest.skip("Langfuse port 3001 not reachable")
+        require_service_healthy("127.0.0.1", 3001, reason="Langfuse HTTP service")
+        pytest.fail(f"Langfuse port 3001 reachable but CSRF request failed: {LANGFUSE_CSRF_URL}")
     except requests.RequestException as exc:
         _handle_e2e_error(exc, LANGFUSE_CSRF_URL, caplog, logger=logger)
         return None
