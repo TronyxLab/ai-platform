@@ -50,7 +50,11 @@ def test_default_constants(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     assert DEFAULT_OPENSSL_TIMEOUT == 10
     assert DEFAULT_EXPIRY_THRESHOLD == 2592000
-    logger.info("[IMP:9][test][constants] DEFAULT_OPENSSL_TIMEOUT=%d DEFAULT_EXPIRY_THRESHOLD=%d", DEFAULT_OPENSSL_TIMEOUT, DEFAULT_EXPIRY_THRESHOLD)
+    logger.info(
+        "[IMP:9][test][constants] DEFAULT_OPENSSL_TIMEOUT=%d DEFAULT_EXPIRY_THRESHOLD=%d",
+        DEFAULT_OPENSSL_TIMEOUT,
+        DEFAULT_EXPIRY_THRESHOLD,
+    )
 
 
 # endregion TEST_constants
@@ -140,9 +144,7 @@ def test_is_le_issuer_accepts_le(caplog: pytest.LogCaptureFixture) -> None:
     """Issuer содержит 'Let's Encrypt' → True."""
     caplog.set_level(logging.INFO)
     with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="issuer=C = US, O = Let's Encrypt, CN = R11\n"
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="issuer=C = US, O = Let's Encrypt, CN = R11\n")
         assert cert_is_le_issuer("/tmp/cert.pem") is True
 
 
@@ -150,9 +152,7 @@ def test_is_le_issuer_rejects_mkcert(caplog: pytest.LogCaptureFixture) -> None:
     """Issuer mkcert/self-signed → False (P0 regression, DevPlan 117 D21)."""
     caplog.set_level(logging.INFO)
     with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="issuer=O = mkcert development CA, CN = mkcert\n"
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="issuer=O = mkcert development CA, CN = mkcert\n")
         assert cert_is_le_issuer("/tmp/cert.pem") is False
         _assert_imp9(caplog, "not Let's Encrypt")
 

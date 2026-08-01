@@ -16,9 +16,20 @@ def _module_contract():
 # endregion MODULE_CONTRACT
 
 import logging
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+# Module-specific path (tests/AGENTS.md §sys.path policy): backup-cron scripts.
+# S3Client — wrapper-класс контейнерного модуля backup-cron, НЕ shared-фабрика
+# get_s3_client() (DevPlan 117 D26). Hyphen в имени модуля → недоступен dotted-импорт,
+# поэтому канон — sys.path.insert как в tests/test_backup_retention.py.
+_SCRIPTS_DIR: str = str(Path(__file__).resolve().parent.parent / "core" / "modules" / "backup-cron" / "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
 from conftest import ldd_trajectory
 from s3_client import S3Client
 

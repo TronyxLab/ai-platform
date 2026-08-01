@@ -178,7 +178,7 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        51,
+        58,
         "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 117 D29)",
     ),
     (
