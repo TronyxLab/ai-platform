@@ -531,15 +531,13 @@ def test_cli_exit_codes(delivery_tree, monkeypatch, caplog) -> None:
             delivery_tree["core_dir"],
         ],
     )
-    with mock.patch.object(subprocess, "run", return_value=_ok_run()), pytest.raises(SystemExit) as exit_ok:
-        cli()
-    assert exit_ok.value.code == 0, f"Success path must exit 0, got {exit_ok.value.code}"
+    with mock.patch.object(subprocess, "run", return_value=_ok_run()):
+        assert cli() == 0, "Success path must return 0 (T3.6: sys.exit → return)"
 
     # Scenario B: mkdir failure → exit 1
     fail = mock.MagicMock(returncode=1, stderr="ssh: Permission denied")
-    with mock.patch.object(subprocess, "run", return_value=fail), pytest.raises(SystemExit) as exit_fail:
-        cli()
-    assert exit_fail.value.code == 1, f"Failure path must exit 1, got {exit_fail.value.code}"
+    with mock.patch.object(subprocess, "run", return_value=fail):
+        assert cli() == 1, "Failure path must return 1 (T3.6: sys.exit → return)"
     logger.info("[IMP:9][test_cli_exit_codes][done] CLI exit codes 0/1 verified")
     # 🧪 TRAP[TEST] · Regression: CLI exit code semantics
     # · Scenario: deliver success → 0, any CoreDeliveryError → 1 (shell || return 1 parity)

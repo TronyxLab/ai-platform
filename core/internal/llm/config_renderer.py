@@ -48,6 +48,7 @@ import yaml
 from jinja2 import Environment, FileSystemLoader
 
 from core.internal.llm.policy_schema import DeploymentList, LLMPolicy
+from core.internal.shared.exceptions import ConfigValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ def _build_model_list(policy: LLMPolicy) -> list[dict]:
                         provider_name,
                         alias_name,
                     )
-                    raise ValueError(f"Provider '{provider_name}' for alias '{alias_name}' not found")
+                    raise ConfigValidationError(f"Provider '{provider_name}' for alias '{alias_name}' not found")
                 api_key = f"os.environ/{provider.key_env}"
                 entry = {
                     "name": alias_name,
@@ -134,7 +135,9 @@ def _build_model_list(policy: LLMPolicy) -> list[dict]:
                         provider_name,
                         alias_name,
                     )
-                    raise ValueError(f"Fallback provider '{provider_name}' for alias '{alias_name}' not found")
+                    raise ConfigValidationError(
+                        f"Fallback provider '{provider_name}' for alias '{alias_name}' not found"
+                    )
                 api_key = f"os.environ/{provider.key_env}"
                 entry = {
                     "name": f"{alias_name}-fallback",
@@ -293,7 +296,7 @@ def render_litellm_config(
     try:
         parsed = yaml.safe_load(rendered)
         if not isinstance(parsed, dict):
-            raise ValueError("Rendered output is not a valid YAML mapping")
+            raise ConfigValidationError("Rendered output is not a valid YAML mapping")
         logger.log(
             logging.CRITICAL,
             "[IMP:9][render_litellm_config] Rendered YAML is valid: %d top-level keys: %s",

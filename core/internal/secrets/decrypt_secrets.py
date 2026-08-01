@@ -41,7 +41,18 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
-# ── Import detect_age_key from shared module ──
+# ── sys.path bootstrap: root (канонические core.* импорты) + shared dir (age_key) ──
+# ⚠️ TRAP[BUG] · 2026-08-01 · P1 · dual-module loading: `from exceptions import ...` (shim-имя) vs
+# · `from core.internal.shared.exceptions import ...` создают ДВА разных класса PlatformFatalError
+# · (Python кэширует модули по имени, не по файлу) → pytest.raises(PlatformFatalError) не ловит.
+# · Fix: root в sys.path (паттерн deploy_orchestrator.py TRAP[BUG] 2026-07-31) + канонический импорт.
+# · Prevention: НЕ использовать bare-импорты из shared/ во вновь редактируемых файлах.
+_PLATFORM_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+)
+if _PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, _PLATFORM_ROOT)
+
 _SHARED_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "shared",
@@ -52,6 +63,8 @@ if _SHARED_DIR not in sys.path:
 import contextlib
 
 from age_key import detect_age_key as _detect_age_key_impl
+
+from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # ── Global cleanup state ───────────────────────────────────────────────────────
 _TEMP_FILES: list[str] = []
@@ -134,7 +147,7 @@ def detect_age_key() -> str:
             "[IMP:9][detect_age_key] FAILED: AGE_SECRET_KEY not found "
             "(checked AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE)"
         )
-        raise RuntimeError(
+        raise PlatformFatalError(
             "AGE_SECRET_KEY not found. Set AGE_SECRET_KEY, SOPS_AGE_KEY, or AGE_SECRET_KEY_FILE environment variable."
         )
     masked = key[:8] if len(key) >= 8 else key
@@ -201,7 +214,7 @@ def decrypt_sops_file(age_key: str, enc_path: str) -> str:
     """Decrypt SOPS-encrypted file; returns decrypted plaintext content."""
     # ── Pre-flight: check sops is available ──
     if shutil.which("sops") is None:
-        raise RuntimeError("sops command not found — install sops (go.mozilla.org/sops)")
+        raise PlatformFatalError("sops command not found — install sops (go.mozilla.org/sops)")
 
     # ── Verify input file exists ──
     if not os.path.isfile(enc_path):
@@ -244,7 +257,7 @@ def decrypt_sops_file(age_key: str, enc_path: str) -> str:
                 result.returncode,
                 stderr_clean,
             )
-            raise RuntimeError(f"sops decryption failed: {stderr_clean}")
+            raise PlatformFatalError(f"sops decryption failed: {stderr_clean}")
 
         decrypted = result.stdout
         logger.info(
@@ -303,7 +316,7 @@ def write_secrets_env(decrypted_data: str, output_path: str) -> None:
         # Cleanup temp file on failure
         with contextlib.suppress(OSError):
             os.remove(tmp_path)
-        raise RuntimeError(f"Failed to write secrets env to {output_path}: {e}") from e
+        raise PlatformFatalError(f"Failed to write secrets env to {output_path}: {e}") from e
 
 
 # endregion FUNC_write_secrets_env
@@ -316,7 +329,7 @@ def write_secrets_env(decrypted_data: str, output_path: str) -> None:
 ## @complexity — O(n) where n = encrypted file size
 ## @envvars — SECRETS_FILE (alternative to positional enc_path arg)
 ##            SECRETS_ENV_FILE (alternative to positional output_path arg, default /run/platform/secrets.env)
-def main() -> None:
+def main() -> int:
     """CLI entrypoint: parse args, detect key, decrypt, convert to env, write."""
     import argparse
 
@@ -365,16 +378,20 @@ def main() -> None:
 
         logger.info("[IMP:9][main] Secrets decrypted successfully: %s", args.output_path)
 
+    except PlatformError as e:
+        logger.error("[IMP:9][main] PLATFORM ERROR (exit=%d): %s", e.exit_code, e)
+        return e.exit_code
     except (RuntimeError, FileNotFoundError) as e:
         logger.error("[IMP:9][main] FAILED: %s", e)
-        sys.exit(1)
-    except Exception as e:  # noqa: EXC — CLI entry point catch-all; already catches (RuntimeError, FileNotFoundError) above
+        return 1
+    except Exception as e:  # noqa: EXC — top-level CLI handler catch-all; already catches (RuntimeError, FileNotFoundError) above
         logger.error("[IMP:9][main] UNEXPECTED FAILURE: %s", e)
-        sys.exit(2)
+        return 2
+    return 0
 
 
 # endregion FUNC_main
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

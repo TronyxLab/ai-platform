@@ -31,6 +31,8 @@ from typing import Any
 
 import yaml
 
+from core.internal.shared.exceptions import PlatformError, PlatformFatalError
+
 # ── logging setup ──────────────────────────────────────────────────────────────
 
 
@@ -118,7 +120,8 @@ def generate_catalog(projects_root: str, catalog_file: str) -> int:
             json.dump(catalog, f, indent=2, ensure_ascii=False)
     except OSError as exc:
         log.log(9, "FATAL: cannot write %s: %s", catalog_file, exc, extra={"imp_level": 9})  # type: ignore[call-arg]
-        sys.exit(1)
+        # T3.6 (DevPlan 116 B4): business sys.exit → raise PlatformFatalError (IO — ручное вмешательство)
+        raise PlatformFatalError(f"Cannot write catalog {catalog_file}: {exc}") from exc
 
     count = len(catalog)
     log.log(9, "DONE: %d projects registered in %s", count, catalog_file, extra={"imp_level": 9})  # type: ignore[call-arg]
@@ -237,18 +240,23 @@ def parse_cli_args(argv: list[str]) -> argparse.Namespace:
 ## @io       Input:  argv (list[str]) — command-line arguments
 ##           Output: None (calls sys.exit)
 ## @complexity O(n) — delegates to generate_catalog
-def main(argv: list[str] | None = None) -> None:
-    """CLI entrypoint: parse args, generate catalog, exit with status code."""
-    args = parse_cli_args(argv if argv is not None else sys.argv)
-    count = generate_catalog(
-        projects_root=args.projects_root,
-        catalog_file=args.catalog_file,
-    )
-    sys.exit(0 if count >= 0 else 1)
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint: parse args, generate catalog, return status code (T4: main() -> int)."""
+    try:
+        args = parse_cli_args(argv if argv is not None else sys.argv)
+        count = generate_catalog(
+            projects_root=args.projects_root,
+            catalog_file=args.catalog_file,
+        )
+        return 0 if count >= 0 else 1
+    except PlatformError as e:
+        log.log(10, "[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)  # type: ignore[call-arg]
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
 
 
 # endregion FUNC_main
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

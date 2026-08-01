@@ -83,19 +83,21 @@ projects: []
 ## @complexity O(1)
 ## @invariants  Thin wrapper over project_registry.validate_project_name (DevPlan 116 B6 T3):
 ##              единый строгий regex ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ (reject leading -/_), CLI
-##              SystemExit(1) контракт сохранён.
+##              ConfigValidationError(4) контракт (T3.3: SystemExit(1) → raise).
 def validate_name(name: str) -> None:
     """Validate context name format.
 
     ## @purpose  Fail-fast on invalid names before any I/O.
-    ## @io        ⇥ name → ⎋ None (sys.exit on failure)
+    ## @io        ⇥ name → ⎋ None (raises ConfigValidationError on failure)
     """
+    from core.internal.shared.exceptions import ConfigValidationError
     from core.internal.shared.project_registry import validate_project_name
 
     if not validate_project_name(name):
         logger.info("[IMP:10][context][validate] FATAL: Invalid context name '%s'", name)
-        print(f"ERROR: Invalid context name '{name}'. Use alphanumeric, hyphens, underscores (no leading -/_).")
-        sys.exit(1)
+        raise ConfigValidationError(
+            f"Invalid context name: {name} — use alphanumeric, hyphens, underscores (no leading -/_)"
+        )
     logger.info("[IMP:8][context][validate] Context name: %s", name)
 
 
@@ -105,20 +107,21 @@ def validate_name(name: str) -> None:
 # region FUNC_check_idempotent
 ## @purpose  Check if context directory already exists — SKIP if yes (idempotent)
 ## @param context_dir  Path to the context directory
-## @io        ⎋ sys.exit(0) if already exists
+## @io        ⎋ bool — True если контекст уже существует (skip)
 ## @complexity O(1)
-def check_idempotent(context_dir: Path) -> None:
-    """Skip if context directory already exists.
+def check_idempotent(context_dir: Path) -> bool:
+    """Return True if context directory already exists (skip).
 
-    ## @purpose  Mirror of _check_idempotent from context-init.sh:116-126.
-    ## @io        ⇥ context_dir → ⎋ exit 0 if exists
+    ## @purpose  Mirror of _check_idempotent from context-init.sh:116-126 (T3.3: sys.exit(0) → return True).
+    ## @io        ⇥ context_dir → ⎋ bool (True = exists, caller решает exit 0)
     """
     if context_dir.exists():
         logger.info("[IMP:9][context][idempotent] SKIP: Context already exists at %s", context_dir)
         print(f"SKIP: Context directory already exists: {context_dir}")
-        sys.exit(0)
+        return True
 
     logger.info("[IMP:7][context][idempotent] Context does not exist — proceeding with scaffold")
+    return False
 
 
 # endregion FUNC_check_idempotent
@@ -435,11 +438,11 @@ def report_summary(
 ## @purpose  CLI entry point — full context scaffold orchestration
 ## @io        stdout: progress messages; exit 0 on success, 1 on validation error, 2 on registration error
 ## @complexity O(1) (subprocess calls for gh, otherwise pure Python)
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     """CLI dispatcher for context initializer.
 
     ## @purpose  Parse args, orchestrate full context-init flow.
-    ## @io        ⇥ argv → ⎋ None (sys.exit)
+    ## @io        ⇥ argv → ⎋ int exit code (contract T4: main() -> int)
     ## @complexity O(1)
     """
     parser = argparse.ArgumentParser(
@@ -462,7 +465,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("[IMP:10][context][main] FATAL: No context name provided")
         print("ERROR: No context name provided")
         parser.print_usage()
-        sys.exit(1)
+        return 1
 
     start_time = time.time()
 
@@ -470,71 +473,80 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("[IMP:9][context][main]   context-init — Declarative Context Scaffold")
     logger.info("[IMP:9][context][main] ══════════════════════════════════════════")
 
-    validate_name(context_name)
+    try:
+        from core.internal.shared.exceptions import PlatformError
 
-    context_dir = Path(args.projects_dir) / context_name
-    check_idempotent(context_dir)
+        validate_name(context_name)
 
-    create_dirs(context_dir)
+        context_dir = Path(args.projects_dir) / context_name
+        if check_idempotent(context_dir):
+            return 0
 
-    skeleton_path = context_dir / "node-configs" / "node.yaml"
-    create_skeleton_node_yaml(skeleton_path, context_name)
+        create_dirs(context_dir)
 
-    description = args.description or ""
-    gh_org = args.org
-    node_cfg_repo, hermes_agent_repo, gh_warnings = gh_repo_create(
-        org=gh_org,
-        ctx=context_name,
-        skip=args.skip_gh_repo,
-        context_dir=context_dir,
-    )
+        skeleton_path = context_dir / "node-configs" / "node.yaml"
+        create_skeleton_node_yaml(skeleton_path, context_name)
 
-    # Resolve platform node.yaml path
-    platform_yaml = args.node_yaml
-    if not platform_yaml:
-        # Try to resolve via node-resolver
-        from pathlib import Path as _Path
+        description = args.description or ""
+        gh_org = args.org
+        node_cfg_repo, hermes_agent_repo, gh_warnings = gh_repo_create(
+            org=gh_org,
+            ctx=context_name,
+            skip=args.skip_gh_repo,
+            context_dir=context_dir,
+        )
 
-        # Search for node.yaml in PROJECTS_ROOT (common pattern)
-        search_dirs = [
-            _Path(args.projects_dir) / "*" / "node-configs" / args.node / "node.yaml",
-            _Path(args.projects_dir) / "ai-platform" / "node-configs" / args.node / "node.yaml",
-        ]
-        for pattern in search_dirs:
-            matches = list(_Path(args.projects_dir).glob(str(pattern.relative_to(args.projects_dir))))
-            if matches:
-                platform_yaml = str(matches[0])
-                break
+        # Resolve platform node.yaml path
+        platform_yaml = args.node_yaml
+        if not platform_yaml:
+            # Try to resolve via node-resolver
+            from pathlib import Path as _Path
 
-    if not platform_yaml or not Path(platform_yaml).exists():
-        logger.info("[IMP:10][context][main] FATAL: Could not resolve platform node.yaml")
-        print(f"ERROR: Could not resolve platform node.yaml for NODE={args.node}")
-        sys.exit(1)
+            # Search for node.yaml in PROJECTS_ROOT (common pattern)
+            search_dirs = [
+                _Path(args.projects_dir) / "*" / "node-configs" / args.node / "node.yaml",
+                _Path(args.projects_dir) / "ai-platform" / "node-configs" / args.node / "node.yaml",
+            ]
+            for pattern in search_dirs:
+                matches = list(_Path(args.projects_dir).glob(str(pattern.relative_to(args.projects_dir))))
+                if matches:
+                    platform_yaml = str(matches[0])
+                    break
 
-    logger.info("[IMP:7][context][resolve] Platform node.yaml resolved: %s", platform_yaml)
+        if not platform_yaml or not Path(platform_yaml).exists():
+            logger.info("[IMP:10][context][main] FATAL: Could not resolve platform node.yaml")
+            print(f"ERROR: Could not resolve platform node.yaml for NODE={args.node}")
+            return 1
 
-    reg_rc = register_in_platform_yaml(
-        yaml_path=platform_yaml,
-        ctx_name=context_name,
-        ctx_desc=description,
-        node_cfg_repo=node_cfg_repo or "",
-        hermes_agent_repo=hermes_agent_repo or "",
-    )
-    if reg_rc != 0:
-        sys.exit(reg_rc)
+        logger.info("[IMP:7][context][resolve] Platform node.yaml resolved: %s", platform_yaml)
 
-    total_warnings = gh_warnings
-    report_summary(
-        ctx_name=context_name,
-        context_dir=context_dir,
-        warnings=total_warnings,
-        platform_yaml=platform_yaml,
-        node_cfg_repo=node_cfg_repo,
-        hermes_agent_repo=hermes_agent_repo,
-    )
+        reg_rc = register_in_platform_yaml(
+            yaml_path=platform_yaml,
+            ctx_name=context_name,
+            ctx_desc=description,
+            node_cfg_repo=node_cfg_repo or "",
+            hermes_agent_repo=hermes_agent_repo or "",
+        )
+        if reg_rc != 0:
+            return reg_rc
 
-    elapsed = time.time() - start_time
-    logger.info("[IMP:9][context][main] context-init COMPLETE — %.0fs", elapsed)
+        total_warnings = gh_warnings
+        report_summary(
+            ctx_name=context_name,
+            context_dir=context_dir,
+            warnings=total_warnings,
+            platform_yaml=platform_yaml,
+            node_cfg_repo=node_cfg_repo,
+            hermes_agent_repo=hermes_agent_repo,
+        )
+
+        elapsed = time.time() - start_time
+        logger.info("[IMP:9][context][main] context-init COMPLETE — %.0fs", elapsed)
+        return 0
+    except PlatformError as e:
+        logger.critical("[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
 
 
 # endregion FUNC_main
@@ -545,4 +557,4 @@ if __name__ == "__main__":
         format="[%(levelname)s][%(name)s] %(message)s",
         stream=sys.stderr,
     )
-    main()
+    sys.exit(main())

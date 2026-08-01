@@ -501,7 +501,7 @@ def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -
 ##   - Output is on stdout, one orphan per line in "container_name|project_name" format
 ##   - Empty project field outputs as empty string: "container_name|"
 ##   - Exit code is always 0 — shell reads stdout and handles stop/rm
-def main() -> None:
+def main() -> int:
     """CLI entrypoint for orphan_reconciler.py.
 
     Usage:
@@ -566,10 +566,10 @@ def main() -> None:
         print(f"{orphan['container_name']}|{orphan['project']}")
 
     logger.info("[IMP:7][main] CLI complete — %d orphans output to stdout", len(orphans))
-    sys.exit(0)
+    return 0
 
 
 # endregion FUNC_main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

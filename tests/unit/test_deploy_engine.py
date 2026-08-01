@@ -135,7 +135,9 @@ def test_deploy_first_deploy_fail(
     """First deploy with health fail should raise SystemExit."""
     caplog.set_level(logging.INFO)
 
-    with pytest.raises(SystemExit) as exc_info:
+    from core.internal.shared.exceptions import PlatformFatalError
+
+    with pytest.raises(PlatformFatalError) as exc_info:
         engine.deploy(
             project="test-app",
             ref="v1.0.0",
@@ -144,7 +146,7 @@ def test_deploy_first_deploy_fail(
             max_wait=2,
         )
 
-    assert exc_info.value.code == 1
+    assert exc_info.value.exit_code == 10
     assert _check_ldd(caplog), "Missing IMP:9 log"
     logger.critical("[IMP:9][test] first_deploy_fail: SystemExit(1) — OK")
 
@@ -200,7 +202,9 @@ def test_pull_image_all_fail(mock_pull, mock_snap, mock_save, mock_preflight, ca
     """All pull attempts fail should trigger first-deploy failure."""
     caplog.set_level(logging.INFO)
 
-    with pytest.raises(SystemExit) as exc_info:
+    from core.internal.shared.exceptions import PlatformFatalError
+
+    with pytest.raises(PlatformFatalError) as exc_info:
         engine.deploy(
             project="test-app",
             ref="v1.0.0",
@@ -209,7 +213,7 @@ def test_pull_image_all_fail(mock_pull, mock_snap, mock_save, mock_preflight, ca
             max_wait=2,
         )
 
-    assert exc_info.value.code == 1
+    assert exc_info.value.exit_code == 10
     assert _check_ldd(caplog), "Missing IMP:9 log"
     logger.critical("[IMP:9][test] pull_fail_all: SystemExit(1) — OK")
 

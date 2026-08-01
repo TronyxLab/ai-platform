@@ -944,7 +944,7 @@ def _pre_pull_images(
                     mod_name, mod_overlay or None, secrets_env_file, platform_root, modules_dir
                 )
                 os._exit(0 if success else 1)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation
+            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
                 os._exit(1)
         else:
             pids.append(pid)
@@ -1103,7 +1103,7 @@ def deploy_docker_group(
                     modules_dir,
                 )
                 os._exit(0 if success else 1)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation
+            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
                 os._exit(1)
         else:
             pids.append(pid)
@@ -1169,7 +1169,7 @@ def deploy_docker_group(
             try:
                 success = run_healthcheck(mod_name, "docker")
                 os._exit(0 if success else 1)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation
+            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
                 os._exit(1)
         else:
             hc_pids.append(pid)

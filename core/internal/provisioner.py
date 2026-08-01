@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: provision, platform-env, docker-network, volume-dir, ci-env, idempotent, dry-run
-# STRUCTURE: ▶ cli:args→dispatch → ◇ load_platform_env→PlatformEnv → ⊕ provision_networks(subprocess docker) → ⊕ provision_volumes(mkdir -p) → ⊕ provision_env(GITHUB_ENV|stderr) → ⊕ provision_profiles → ⎋ exit 0|1|2
+# STRUCTURE: ▶ cli:args→dispatch → ◇ load_platform_env→PlatformEnv → ⊕ provision_networks(subprocess docker) → ⊕ provision_volumes(mkdir -p) → ⊕ provision_env(GITHUB_ENV|stderr) → ⊕ provision_profiles → ⎋ exit 0|1|10
 # region MODULE_CONTRACT
 ## @purpose  Python provisioner — replaces 13 inline python3 calls in provision-environment.sh.
 ##           Reads platform-env.yaml, creates Docker networks, volume directories, CI env vars.
@@ -11,7 +11,7 @@
 ##   - Networks: docker inspect → exists → skip, else docker network create
 ##   - Volumes: os.path.isdir → exists → skip, else os.makedirs(exist_ok=True)
 ##   - Env: GITHUB_ENV from os.environ → write KEY=VALUE; None → print to stderr
-##   - Exit codes: 0=success, 1=parse error, 2=docker unavailable
+##   - Exit codes: 0=success, 1=parse error, 10=docker unavailable (PlatformFatalError, D4)
 ## @rationale  Eliminates YAML→JSON→shell→python3 round-trips, single YAML parse per scope.
 ##             All business logic testable natively (no subprocess for JSON parsing).
 # endregion MODULE_CONTRACT
@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 # ── Logger setup ──────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -151,7 +153,9 @@ def provision_networks(
 
     if not dry_run and not shutil.which("docker"):
         logger.error("[IMP:10][provision][networks] FATAL: Docker is not available")
-        sys.exit(2)
+        # D4 (DevPlan 116 B4): docker unavailable — невосстановимо без ручного действия → PlatformFatalError (10).
+        # Ранее sys.exit(2); shell-фасады обновлены (provision.mk/CI) — exit-код docker-unavailable теперь 10.
+        raise PlatformFatalError("Docker is not available — provision networks requires docker")
 
     for net in platform_env.networks:
         if dry_run:
@@ -322,7 +326,7 @@ def main() -> int:
     Exit codes:
         0 — success (all resources created or already exist)
         1 — parse error (YAML invalid, file not found, unknown scope)
-        2 — docker unavailable (for --scope networks)
+        10 — docker unavailable (for --scope networks) — PlatformFatalError (D4, DevPlan 116 B4)
     """
     parser = argparse.ArgumentParser(
         description="Idempotent environment provisioner — reads platform-env.yaml",
@@ -372,15 +376,20 @@ def main() -> int:
     scope: str = args.scope
     dry_run: bool = args.dry_run
 
-    if scope == "networks":
-        provision_networks(platform_env, dry_run=dry_run)
-    elif scope == "volumes":
-        provision_volumes(platform_env, dry_run=dry_run)
-    elif scope == "env":
-        github_env = os.environ.get("GITHUB_ENV")
-        provision_env(platform_env, dry_run=dry_run, github_env=github_env)
-    elif scope == "profiles":
-        provision_profiles(platform_env)
+    try:
+        if scope == "networks":
+            provision_networks(platform_env, dry_run=dry_run)
+        elif scope == "volumes":
+            provision_volumes(platform_env, dry_run=dry_run)
+        elif scope == "env":
+            github_env = os.environ.get("GITHUB_ENV")
+            provision_env(platform_env, dry_run=dry_run, github_env=github_env)
+        elif scope == "profiles":
+            provision_profiles(platform_env)
+    except PlatformError as e:
+        logger.critical("[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
 
     return 0
 

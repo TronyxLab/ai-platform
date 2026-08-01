@@ -80,9 +80,7 @@ def test_existing_context_idempotent(tmp_path: pathlib.Path, caplog) -> None:
     context_dir.mkdir(parents=True)
     (context_dir / "README.md").write_text("# existing")
     logger.info("[IMP:9][test][context] test_existing_context_idempotent — should SKIP")
-    with pytest.raises(SystemExit) as exc_info:
-        check_idempotent(context_dir)
-    assert exc_info.value.code == 0, f"Expected exit code 0, got {exc_info.value.code}"
+    assert check_idempotent(context_dir) is True  # T3.3: sys.exit(0) → return True
     idem_logs = [r for r in caplog.records if "SKIP" in r.message or "idempotent" in r.message.lower()]
     assert len(idem_logs) >= 1, f"Expected SKIP/idempotent log, got {len(idem_logs)}"
 
@@ -214,6 +212,8 @@ def test_register_in_platform_yaml(tmp_path: pathlib.Path, caplog) -> None:
 @ldd_trajectory
 def test_validate_name_invalid(caplog) -> None:
     logger.info("[IMP:9][test][context] test_validate_name_invalid")
-    with pytest.raises(SystemExit) as exc_info:
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as exc_info:
         validate_name("bad name!@#")
-    assert exc_info.value.code == 1, f"Expected exit code 1 for invalid name, got {exc_info.value.code}"
+    assert exc_info.value.exit_code == 4, f"Expected exit code 4 for invalid name, got {exc_info.value.exit_code}"

@@ -314,16 +314,17 @@ def test_build_pytest_args_all(caplog):
 # · Remove if: unknown-marker error handling changes
 @ldd_trajectory
 def test_build_pytest_args_unknown_marker(caplog, capsys):
-    """Unknown marker must exit(1) with a clear error on stderr."""
-    with pytest.raises(SystemExit) as excinfo:
+    """Unknown marker must raise ConfigValidationError (T3.6: sys.exit → raise)."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as excinfo:
         _build_pytest_args("nonexistent")
 
-    assert excinfo.value.code == 1
-    err = capsys.readouterr().err
+    err = str(excinfo.value)
     assert "Unknown MARKER" in err
     assert "nonexistent" in err
     assert "all" in err  # valid list включает all (DRIFT-2 close-out)
-    logger.critical("[IMP:9][test] Unknown marker 'nonexistent' → SystemExit(1) with error message")
+    logger.critical("[IMP:9][test] Unknown marker 'nonexistent' → ConfigValidationError")
 
 
 # endregion Tests: _build_pytest_args

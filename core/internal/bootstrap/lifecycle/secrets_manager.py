@@ -59,10 +59,21 @@ from typing import Any
 # ·   by _write_htpasswd_file.
 # · Rev: if secrets_manager.py moves out of core/internal/bootstrap/lifecycle/, recompute
 # ·   _SHARED_DIR relative path; if the gate test's import pattern changes, sync both arms.
+# ⚠️ TRAP[BUG] · 2026-08-01 · P1 · bare-fallback загрузка shared-модулей ломает их канонические
+# · импорты (T2: shared-модули импортируют core.internal.shared.exceptions на module level)
+# · Symptom: `python3 secrets_manager.py htpasswd` → ModuleNotFoundError: No module named 'core'
+# ·   внутри secrets_env_parser.py (bare-имя из shared dir не даёт core на sys.path).
+# · Fix: безусловный bootstrap project root (паттерн deploy_orchestrator TRAP[BUG] 2026-07-31) —
+# ·   канонический импорт работает всегда; fallback остаётся defensive.
 _SHARED_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "shared",
 )
+_PLATFORM_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))),
+)
+if _PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, _PLATFORM_ROOT)
 
 try:
     from core.internal.shared.secrets_env_parser import parse as parse_secrets_env

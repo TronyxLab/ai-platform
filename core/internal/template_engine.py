@@ -21,6 +21,8 @@ import re
 import sys
 import tempfile
 
+from core.internal.shared.exceptions import ConfigValidationError
+
 try:
     import yaml
 except ImportError:
@@ -79,10 +81,10 @@ def parse_vars(var_pairs: list[str]) -> dict[str, str]:
     result: dict[str, str] = {}
     for pair in var_pairs:
         if "=" not in pair:
-            raise ValueError(f"Invalid variable format, expected KEY=value: {pair!r}")
+            raise ConfigValidationError(f"Invalid variable format, expected KEY=value: {pair!r}")
         key, _, value = pair.partition("=")
         if not key:
-            raise ValueError(f"Empty key in variable pair: {pair!r}")
+            raise ConfigValidationError(f"Empty key in variable pair: {pair!r}")
         # Last value wins on duplicate
         result[key] = value
     return result
@@ -627,7 +629,7 @@ def render_directory_in_place(
 
 
 # region CLI_MAIN
-def main() -> None:
+def main() -> int:
     """CLI entry point for direct use (not through bash wrapper).
 
     Usage::
@@ -646,7 +648,7 @@ def main() -> None:
     args = sys.argv[1:]
     if not args:
         print("Usage: template_engine.py <render|render-all|check> [...]", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     command = args[0]
     rest = args[1:]
@@ -655,7 +657,7 @@ def main() -> None:
         if command == "render":
             if len(rest) < 1:
                 print("Usage: template_engine.py render <template> [output] [VAR=val ...]", file=sys.stderr)
-                sys.exit(2)
+                return 2
             tmpl = rest[0]
             output = rest[1] if len(rest) > 1 and "=" not in rest[1] else None
             var_start = 2 if output is not None else 1
@@ -679,16 +681,16 @@ def main() -> None:
                     i += 1
             extra = parse_vars(var_pairs) if var_pairs else None
             errors = render_all(manifest, extra_vars=extra)
-            sys.exit(min(errors, 127))
+            return min(errors, 127)
         elif command == "render-dir":
             if len(rest) < 1:
                 print("Usage: template_engine.py render-dir <directory> [VAR=val ...]", file=sys.stderr)
-                sys.exit(2)
+                return 2
             dir_path = rest[0]
             var_pairs = rest[1:]
             vars_dict = parse_vars(var_pairs) if var_pairs else {}
             errors = render_directory_in_place(dir_path, vars_dict)
-            sys.exit(min(errors, 127))
+            return min(errors, 127)
         elif command == "check":
             manifest = "core/templates/template-manifest.yaml"
             verbose = False
@@ -706,15 +708,16 @@ def main() -> None:
             if verbose:
                 for line in diagnostics:
                     print(line)
-            sys.exit(0 if ok else 1)
+            return 0 if ok else 1
         else:
             print(f"Unknown command: {command}", file=sys.stderr)
-            sys.exit(2)
-    except (TemplateError, FileNotFoundError, PermissionError, ValueError) as e:
+            return 2
+        return 0
+    except (TemplateError, FileNotFoundError, PermissionError, ValueError, ConfigValidationError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 # endregion CLI_MAIN

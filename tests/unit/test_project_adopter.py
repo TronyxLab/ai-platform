@@ -427,7 +427,9 @@ def test_validate_org_mismatch(caplog: pytest.LogCaptureFixture, tmp_path: Path)
     caplog.set_level(logging.INFO)
     node_yaml = _make_node_yaml(tmp_path, context="testorg")
 
-    with pytest.raises(ValueError, match="does not match"):
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="does not match"):
         pa.validate_org_against_node_yaml("wrongorg", node_yaml)
 
     found_imp9 = False

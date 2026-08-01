@@ -31,12 +31,22 @@ from __future__ import annotations
 import argparse
 import difflib
 import logging
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+# ── sys.path bootstrap for direct-script invocation (DevPlan 116 B4 T2: core.* импорты) ──
+_PLATFORM_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+)
+if _PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, _PLATFORM_ROOT)
+
+from core.internal.shared.exceptions import ConfigParseError
 
 # region CONSTANTS
 
@@ -92,7 +102,7 @@ def load_infra(infra_path: Path) -> dict[str, Any]:
         data: dict[str, Any] = yaml.safe_load(f)
 
     if not isinstance(data, dict):
-        raise ValueError(f"Infra file {infra_path} is not a valid YAML dict")
+        raise ConfigParseError(f"Infra file {infra_path} is not a valid YAML dict")
 
     result: dict[str, Any] = {
         "networks": data.get("networks", []),
@@ -644,12 +654,12 @@ def _check_generated_content(content: str, path: Path, label: str) -> int:
 
 
 # region FUNC_main
-def main() -> None:
+def main() -> int:
     """CLI entrypoint.
 
     ## @purpose  Parse CLI args, load infra + discover modules + scan ports + load defaults,
     ##            generate all output files. Supports --check mode for byte-level verification.
-    ## @io        ⇥ sys.argv → ⎋ exit code 0/1
+    ## @io        ⇥ sys.argv → ⎋ int exit code (контракт T4: main() -> int)
     ## @complexity O(1) dispatch to sub-functions
     ## @invariants
     ##   - All output files are overwritten if exist (normal mode)
@@ -739,7 +749,7 @@ def main() -> None:
 
     if not preflight_ok:
         logger.error("[IMP:10][main][FAIL] Pre-flight checks failed — aborting")
-        sys.exit(1)
+        return 1
 
     logger.info("[IMP:8][main][PREFLIGHT] All pre-flight checks passed")
 
@@ -810,10 +820,9 @@ def main() -> None:
 
         if exit_code == 0:
             logger.info("[IMP:9][main][CHECK] All outputs match — exit 0")
-            sys.exit(0)
-        else:
-            logger.warning("[IMP:6][main][CHECK] Some outputs diverge — exit 1")
-            sys.exit(1)
+            return 0
+        logger.warning("[IMP:6][main][CHECK] Some outputs diverge — exit 1")
+        return 1
 
     # ══════════════════════════════════════════════════════════════
     # ── NORMAL MODE: write outputs to disk ──
@@ -845,9 +854,10 @@ def main() -> None:
         print(f"[IMP:9][main] env_defaults_generated.py written to {helpers_path}")
 
     logger.info("[IMP:9][main][DONE] All outputs generated successfully")
+    return 0
 
 
 # endregion FUNC_main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

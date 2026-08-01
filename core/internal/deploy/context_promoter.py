@@ -44,6 +44,7 @@ import sys
 import tempfile
 
 from core.internal.shared import audit_logger
+from core.internal.shared.exceptions import ConfigValidationError
 
 # DevPlan 116 B5 T1/T2: единый ConnectTimeout (U-15) — литерал 10 outlier заменён
 from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
@@ -170,7 +171,7 @@ def promote_via_https(context: str, token: str) -> str:
     ##   - Raises ValueError on empty token (fail-fast); CalledProcessError on push failure.
     """
     if not token:
-        raise ValueError("GIT_MIRROR_TOKEN is empty — HTTPS fallback impossible")
+        raise ConfigValidationError("GIT_MIRROR_TOKEN is empty — HTTPS fallback impossible")
 
     temp_path: str | None = None
     try:

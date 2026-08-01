@@ -564,7 +564,7 @@ def write_atomic(content: str, output_path: Path) -> None:
 
 
 # region FUNC_main
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Generate .env.example from SoT")
     parser.add_argument("--platform-env", required=True, type=str, help="Path to platform-env.yaml")
     parser.add_argument("--secret-defs", required=True, type=str, help="Path to core/secret-definitions.yaml")
@@ -582,10 +582,10 @@ def main() -> None:
 
     if not platform_env_path.is_file():
         logger.error("platform-env.yaml not found: %s", platform_env_path)
-        sys.exit(1)
+        return 1
     if not secret_defs_path.is_file():
         logger.error("secret-definitions.yaml not found: %s", secret_defs_path)
-        sys.exit(1)
+        return 1
 
     env_defaults = load_platform_env(platform_env_path)
     secret_defs = load_secret_defs(secret_defs_path)
@@ -594,7 +594,7 @@ def main() -> None:
     if args.check:
         if not output_path.is_file():
             logger.error("[IMP:9][sync_env][CHECK] Output file %s does not exist — cannot compare", output_path)
-            sys.exit(1)
+            return 1
         existing = output_path.read_text()
         if existing != generated:
             diff_lines = list(
@@ -612,15 +612,16 @@ def main() -> None:
             logger.error(
                 "[IMP:9][sync_env][CHECK] Divergence detected — .env.example is stale. Run: make sync-env-defaults"
             )
-            sys.exit(1)
+            return 1
         logger.info("[IMP:9][sync_env][CHECK] .env.example is up-to-date")
-        sys.exit(0)
+        return 0
 
     write_atomic(generated, output_path)
     logger.info("[IMP:9][sync_env] .env.example generated at %s", output_path)
+    return 0
 
 
 # endregion FUNC_main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

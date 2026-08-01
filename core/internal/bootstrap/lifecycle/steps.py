@@ -392,7 +392,7 @@ print('VALID')
     except json.JSONDecodeError as e:
         logger.warning("[IMP:7][validate] node.yaml parse error: %s", e)
         return False
-    except Exception as e:  # noqa: EXC — catch-all after specific YAML/JSON handlers
+    except Exception as e:  # noqa: EXC — catch-all after specific YAML/JSON handlers (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][validate] Validation error: %s", e)
         return False
 

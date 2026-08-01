@@ -325,7 +325,7 @@ def _update_timestamp(pull_ts_path: Path, now: int) -> None:
 ##   - Exits with delegated return code (0=success/skip, 1=clone warn/fail)
 ## @rationale Standard CLI entrypoint for shell→Python Strangler pattern.
 ##            Each Python module in deploy/ has its own main() for independent invocation.
-def main() -> None:
+def main() -> int:
     """CLI entrypoint: context_overlay.py --action ensure --node-yaml <path>"""
     parser = argparse.ArgumentParser(
         description="Context overlay git operations (clone/pull with S9 caching)",
@@ -355,10 +355,11 @@ def main() -> None:
     if args.action == "ensure":
         exit_code = ensure_context_repo(args.node_yaml)
         logger.info("[IMP:9][main][exit] ensure_context_repo returned %d", exit_code)
-        sys.exit(exit_code)
+        return exit_code
+    return 0
 
 
 # endregion FUNC_main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

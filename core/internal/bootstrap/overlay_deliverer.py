@@ -349,7 +349,7 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
 ## @purpose  CLI entrypoint: resolve-node | extract-host | sync-core | deliver. Dispatches to sub-commands.
 ## @io  input: sys.argv (via argparse), output: stdout write or sys.exit(1) on error
 ## @complexity  O(1) — dispatch-only, delegates to sub-functions
-def cli() -> None:
+def cli() -> int:
     """CLI entrypoint: resolve-node | extract-host | sync-core | deliver."""
     p = argparse.ArgumentParser(description="overlay_deliverer — vhost overlay delivery")
     sp = p.add_subparsers(dest="command", required=True)
@@ -386,11 +386,12 @@ def cli() -> None:
             deliver_vhost_overlays(args.node, args.platform_root, args.dry_run)
     except OverlayDelivererError as e:
         logger.info("[IMP:10][cli][error] %s", e)
-        sys.exit(1)
+        return 1
+    return 0
 
 
 # endregion FUNC_cli
 
 
 if __name__ == "__main__":
-    cli()
+    sys.exit(cli())

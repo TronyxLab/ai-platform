@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: secrets-manifest-reader, iter-secrets, tier, consumers, charset, gen-command, strict, single-source-of-truth
-# STRUCTURE: ▶ ┌path┐ → ◇ exists? ⚡ raise FileNotFoundError → ◇ yaml.safe_load → ◇ is-dict/list? ⚡ raise ValueError → ⊕ iter_secrets → ◇ filters (tier/consumers/charset) → ⎋ dict
+# STRUCTURE: ▶ ┌path┐ → ◇ exists? ⚡ raise FileNotFoundError → ◇ yaml.safe_load → ◇ is-dict/list? ⚡ raise ConfigValidationError → ⊕ iter_secrets → ◇ filters (tier/consumers/charset) → ⎋ dict
 # region MODULE_CONTRACT
 ## @purpose  Single source of truth for reading secrets-manifest.yaml across the ai-platform.
 ##           Replaces 3 independent parsers (secrets_manager._read_manifest,
@@ -34,6 +34,8 @@ from typing import Any
 
 import yaml
 
+from core.internal.shared.exceptions import ConfigValidationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,16 +65,18 @@ def iter_secrets(path: Path | str) -> list[dict[str, Any]]:
         data = yaml.safe_load(f)
 
     if data is None:
-        raise ValueError(f"[IMP:10][iter_secrets] Manifest {manifest_path} is empty — expected dict with 'secrets' key")
+        raise ConfigValidationError(
+            f"[IMP:10][iter_secrets] Manifest {manifest_path} is empty — expected dict with 'secrets' key"
+        )
     if not isinstance(data, dict):
-        raise ValueError(
+        raise ConfigValidationError(
             f"[IMP:10][iter_secrets] Manifest {manifest_path} is {type(data).__name__}, expected dict — "
             "secrets-manifest.yaml is malformed"
         )
 
     secrets = data.get("secrets", [])
     if not isinstance(secrets, list):
-        raise ValueError(
+        raise ConfigValidationError(
             f"[IMP:10][iter_secrets] Manifest {manifest_path} 'secrets' key is {type(secrets).__name__}, "
             "expected list — secrets-manifest.yaml is malformed"
         )

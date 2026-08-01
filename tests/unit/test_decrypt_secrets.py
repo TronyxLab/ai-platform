@@ -28,6 +28,7 @@ from core.internal.secrets.decrypt_secrets import (
     _TEMP_FILES,
     decrypt_sops_file,
 )
+from core.internal.shared.exceptions import PlatformFatalError
 from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ def test_decrypt_fail_wrong_key(caplog: pytest.LogCaptureFixture, tmp_path: pyte
 
     with (
         mock.patch("subprocess.run", side_effect=_mock_run),
-        pytest.raises(RuntimeError, match="sops decryption failed"),
+        pytest.raises(PlatformFatalError, match="sops decryption failed"),
     ):
         decrypt_sops_file("wrong-age-key-for-testing", str(enc_path))
 

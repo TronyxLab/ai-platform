@@ -1062,15 +1062,15 @@ def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
     """Validate org against node.yaml context (case-insensitive). Returns canonical org.
 
     ## @purpose  Full Python version of org validation (D6). Verifies that the provided org
-    ##            matches node.yaml's context field. Returns canonical casing from node.yaml.
-    ##            Raises ValueError on mismatch.
+    ##            matches node.yaml's context field. Returns canonical org from node.yaml.
+    ##            Raises ConfigValidationError on mismatch.
     ## @io        ⇥ org: str, node_yaml_path: Path → ⎋ str — canonical org from node.yaml
-    ##            ⚡ raises ValueError if org does not match (even case-insensitive)
+    ##            ⚡ raises ConfigValidationError if org does not match (even case-insensitive)
     ## @complexity O(1)
     ## @invariants
     ##   - Case-insensitive comparison
     ##   - If casing differs → returns node.yaml variant (canonical)
-    ##   - If org does not match → raises ValueError
+    ##   - If org does not match → raises ConfigValidationError
     ##   - If node.yaml not found or has no context → returns org unchanged
     ##   - D6: duplicated in shell (fast grep) AND Python (full PyYAML)
     """
@@ -1079,6 +1079,7 @@ def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
         return org
 
     try:
+        from core.internal.shared.exceptions import ConfigValidationError
         from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
 
         node = NodeYaml(str(node_yaml_path))
@@ -1097,7 +1098,7 @@ def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
             org,
             node_context,
         )
-        raise ValueError(
+        raise ConfigValidationError(
             f"Project org '{org}' does not match node.yaml context '{node_context}'. "
             f"Use --org {node_context} or update node.yaml context."
         )
@@ -1119,12 +1120,12 @@ def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
 
 
 # region FUNC_main_CLI
-def main() -> None:
+def main() -> int:
     """CLI entrypoint for project_adopter. Invoked from shell facade.
 
     ## @purpose  Parses CLI arguments and runs the adopt flow.
     ##            Subcommand: adopt (full adoption flow).
-    ## @io        ⎋ None — exits via sys.exit
+    ## @io        ⎋ int exit code (контракт T4: main() -> int, sys.exit в __main__)
     ## @complexity O(S × N) for the full adopt flow
     """
     logging.basicConfig(
@@ -1150,7 +1151,7 @@ def main() -> None:
         project_dir = Path(args.project_dir)
         if not project_dir.is_dir():
             print(f"[IMP:10][adopt] FAIL-FAST: project directory not found: {project_dir}", file=sys.stderr)
-            sys.exit(1)
+            return 1
 
         adopter = ProjectAdopter(
             project_dir=project_dir,
@@ -1162,10 +1163,11 @@ def main() -> None:
         )
 
         result = adopter.adopt()
-        sys.exit(0 if result.success else 1)
+        return 0 if result.success else 1
+    return 0
 
 
 # endregion FUNC_main_CLI
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

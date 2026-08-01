@@ -373,7 +373,9 @@ def test_invalid_policy_bad_default_profile(caplog, tmp_path):
 
         logger.info("[IMP:7][test_invalid_bad_default_profile] Loading policy with non-existent default_profile...")
 
-        with pytest.raises(ValueError, match="nonexistent_profile"):
+        from core.internal.shared.exceptions import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="nonexistent_profile"):
             LLMPolicy.from_yaml(p)
 
         logger.critical(
@@ -430,7 +432,9 @@ def test_invalid_policy_bad_provider_ref(caplog, tmp_path):
 
         logger.info("[IMP:7][test_invalid_bad_provider_ref] Loading policy with non-existent provider in deployment...")
 
-        with pytest.raises(ValueError, match="nonexistent_provider"):
+        from core.internal.shared.exceptions import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="nonexistent_provider"):
             LLMPolicy.from_yaml(p)
 
         logger.critical(

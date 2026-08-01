@@ -30,6 +30,8 @@ import logging
 import os
 import sys
 
+from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+
 logger = logging.getLogger(__name__)
 
 # Canonical deploy.sh path — constructed from PLATFORM_ROOT env var.
@@ -160,13 +162,13 @@ def parse_ssh_command(raw: str) -> dict:
     """
     if not raw:
         logger.warning("[IMP:7][parse_ssh_command] Empty raw input")
-        raise ValueError("empty command after stripping")
+        raise ConfigValidationError("empty command after stripping")
 
     cleaned = _strip_prefixes(raw)
 
     if not cleaned:
         logger.warning("[IMP:7][parse_ssh_command] Empty command after stripping (raw=%r)", raw)
-        raise ValueError("empty command after stripping")
+        raise ConfigValidationError("empty command after stripping")
 
     verb = classify_verb(cleaned)
 
@@ -203,7 +205,7 @@ def parse_ssh_command(raw: str) -> dict:
 # region CLI_SUPPORT
 
 
-def _cli_main() -> None:
+def _cli_main() -> int:
     """CLI entry point for python3 -m invocation.
 
     ▶ ┌sys.argv┐ → ◇ --format lines? → ◇ parse mode → parse_ssh_command
@@ -223,11 +225,11 @@ def _cli_main() -> None:
     if argv and argv[0] == "--format":
         if len(argv) < 2:
             print("--format requires an argument (json|lines)", file=sys.stderr)
-            sys.exit(1)
+            return 1
         output_format = argv[1]
         if output_format not in ("json", "lines"):
             print(f"Unknown format: {output_format} (expected json|lines)", file=sys.stderr)
-            sys.exit(1)
+            return 1
         argv = argv[2:]
 
     if len(argv) < 2:
@@ -235,7 +237,7 @@ def _cli_main() -> None:
             "Usage: python3 -m core.internal.shared.ssh_command_parser [--format json|lines] parse|classify <command>",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     mode = argv[0]
     command = " ".join(argv[1:])
@@ -249,27 +251,28 @@ def _cli_main() -> None:
                 print(result["cleaned"])
             else:
                 print(json.dumps(result, ensure_ascii=False))
-        except ValueError as e:
+        except PlatformError as e:
             if output_format == "lines":
                 print("error")
                 print(str(e))
                 print(command)
             else:
                 print(json.dumps({"error": str(e), "raw": command}, ensure_ascii=False))
-            sys.exit(1)
+            return e.exit_code
     elif mode == "classify":
         try:
             verb = classify_verb(command)
             print(verb)
         except (ValueError, KeyError, TypeError) as e:
             print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
+            return 1
     else:
         print(f"Unknown mode: {mode} (expected parse or classify)", file=sys.stderr)
-        sys.exit(1)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    _cli_main()
+    sys.exit(_cli_main())
 
 # endregion CLI_SUPPORT

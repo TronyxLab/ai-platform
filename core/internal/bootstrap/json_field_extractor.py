@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 # region main
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Extract fields from JSON via stdin for shell pipelines")
     parser.add_argument(
         "field",
@@ -70,7 +70,7 @@ def main() -> None:
         data = json.load(sys.stdin)
     except json.JSONDecodeError as exc:
         logger.critical("[IMP:10][json_field_extractor] Invalid JSON input: %s", exc)
-        sys.exit(1)
+        return 1
 
     # --count: count top-level list items
     if args.count:
@@ -78,8 +78,8 @@ def main() -> None:
             print(len(data))
         else:
             logger.critical("[IMP:10][json_field_extractor] Cannot count: input is not a list")
-            sys.exit(1)
-        return
+            return 1
+        return 0
 
     # --index: extract list element by index
     if args.index is not None:
@@ -88,9 +88,9 @@ def main() -> None:
                 json.dump(data[args.index], sys.stdout)
             except IndexError:
                 print("[]")
-            return
+            return None
         logger.critical("[IMP:10][json_field_extractor] Cannot index: input is not a list")
-        sys.exit(1)
+        return 1
 
     # --items: print list elements one per line
     if args.items:
@@ -100,23 +100,23 @@ def main() -> None:
                     print(item)
                 else:
                     print(json.dumps(item))
-            return
+            return None
         logger.critical("[IMP:10][json_field_extractor] Cannot list items: input is not a list")
-        sys.exit(1)
+        return 1
 
     # --filter: filter dict entries and return comma-separated matching keys
     if args.filter is not None:
         if "=" not in args.filter:
             logger.critical("[IMP:10][json_field_extractor] Invalid filter format: %s (use KEY=VALUE)", args.filter)
-            sys.exit(1)
+            return 1
         filter_key, filter_val = args.filter.split("=", 1)
         if isinstance(data, dict):
             matching = [k for k, v in data.items() if isinstance(v, dict) and v.get(filter_key) == filter_val]
             print(",".join(matching))
         else:
             logger.critical("[IMP:10][json_field_extractor] Cannot filter: input is not a dict")
-            sys.exit(1)
-        return
+            return 1
+        return 0
 
     # --dump: extract sub-field and dump as JSON
     if args.dump is not None:
@@ -125,14 +125,14 @@ def main() -> None:
             result = data.get(key, {})
         else:
             logger.critical("[IMP:10][json_field_extractor] Cannot dump field from non-dict input")
-            sys.exit(1)
+            return 1
         json.dump(result, sys.stdout)
-        return
+        return None
 
     # No field and no operation → dump entire input
     if args.field is None:
         json.dump(data, sys.stdout)
-        return
+        return None
 
     # Navigate dot-separated path with --default fallback
     result = data
@@ -148,14 +148,15 @@ def main() -> None:
                 key,
                 type(result).__name__,
             )
-            sys.exit(1)
+            return 1
 
     if isinstance(result, (dict, list)):
         json.dump(result, sys.stdout)
     else:
         print(result)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 # endregion main

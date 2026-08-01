@@ -228,7 +228,9 @@ def test_parse_vars_empty_key(caplog):
     # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Input validation
     # · Last fail: N/A (preventive)
     # · Remove if: parse_vars validation changes
-    with pytest.raises(ValueError, match="Empty key"):
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="Empty key"):
         parse_vars(["=val"])
     logger.critical("[IMP:9][test][parse] parse_vars rejects empty key")
 
@@ -243,7 +245,9 @@ def test_parse_vars_no_equals(caplog):
     # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Input validation
     # · Last fail: N/A (preventive)
     # · Remove if: parse_vars validation changes
-    with pytest.raises(ValueError, match="Invalid variable format"):
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="Invalid variable format"):
         parse_vars(["invalid"])
     logger.critical("[IMP:9][test][parse] parse_vars rejects no-equals")
 

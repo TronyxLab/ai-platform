@@ -12,6 +12,7 @@
 # endregion MODULE_CONTRACT
 
 import argparse
+import sys
 import urllib.parse
 
 
@@ -27,7 +28,7 @@ def url_encode(text: str) -> str:
     return urllib.parse.quote(text, safe="")
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="URL-encode text for Telegram bot API")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
@@ -40,7 +41,8 @@ def main() -> None:
     if args.command == "encode":
         text = " ".join(args.text)
         print(url_encode(text))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

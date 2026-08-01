@@ -487,7 +487,7 @@ def reconcile_projects(
 
 
 # region FUNC_main
-def main() -> None:
+def main() -> int:
     """CLI entry point for reconciler_projects.py.
 
     Usage:
@@ -535,9 +535,8 @@ def main() -> None:
     )
 
     if summary.is_success():
-        sys.exit(0)
-    else:
-        sys.exit(1)
+        return 0
+    return 1
 
 
 # endregion
@@ -548,4 +547,4 @@ if __name__ == "__main__":
         format="%(message)s",
         stream=sys.stderr,
     )
-    main()
+    sys.exit(main())

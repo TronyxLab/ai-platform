@@ -720,12 +720,14 @@ def test_expand_transitive_deps_cycle_handling(modules_dir_with_cycle, caplog):
 # · Last fail: N/A · Remove if: _expand_transitive_deps behavior changed
 @ldd_trajectory
 def test_expand_transitive_deps_unknown_seed(modules_dir_with_deps, caplog):
-    """Unknown seed module 'ghost' — should sys.exit(1) with ERROR on stderr."""
-    with pytest.raises(SystemExit) as exc_info:
+    """Unknown seed module 'ghost' — ConfigValidationError (T3.6: sys.exit → raise)."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as exc_info:
         _expand_transitive_deps("ghost", str(modules_dir_with_deps))
 
-    logger.info("[IMP:9][test][deps] Unknown seed exit code=%s", exc_info.value.code)
-    assert exc_info.value.code == 1, "Expected exit code 1 for unknown module"
+    logger.info("[IMP:9][test][deps] Unknown seed error: %s", exc_info.value)
+    assert "ghost" in str(exc_info.value), "Expected error message with module name"
 
 
 # endregion FUNC_test_expand_transitive_deps_unknown_seed

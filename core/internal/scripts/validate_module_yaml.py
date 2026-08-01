@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -35,6 +36,15 @@ from typing import Any
 
 import jsonschema
 import yaml
+
+# ── sys.path bootstrap for direct-script invocation (DevPlan 116 B4 T2: core.* импорты) ──
+_PLATFORM_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+)
+if _PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, _PLATFORM_ROOT)
+
+from core.internal.shared.exceptions import ConfigValidationError
 
 # region CONSTANTS
 
@@ -117,13 +127,13 @@ def _normalize_env_requires_entry(entry: Any) -> dict[str, Any]:
     if isinstance(entry, dict):
         name = entry.get("name")
         if not name or not isinstance(name, str):
-            raise ValueError(f"env_requires object missing 'name' field: {entry}")
+            raise ConfigValidationError(f"env_requires object missing 'name' field: {entry}")
         return {
             "name": name,
             "type": entry.get("type", "secret"),
             "required": entry.get("required", True),
         }
-    raise ValueError(f"env_requires entry must be string or object, got {type(entry).__name__}: {entry}")
+    raise ConfigValidationError(f"env_requires entry must be string or object, got {type(entry).__name__}: {entry}")
 
 
 def _env_var_in_dotenv(env_example_path: Path, var_name: str) -> tuple[bool, str]:
@@ -260,20 +270,20 @@ def load_module(path: Path) -> dict[str, Any]:
     try:
         module = _load_yaml_file(path)
     except yaml.YAMLError as e:
-        raise ValueError(f"[load_module] YAML parse error in {path}: {e}") from e
+        raise ConfigValidationError(f"[load_module] YAML parse error in {path}: {e}") from e
     if not isinstance(module, dict):
-        raise ValueError(f"[load_module] module.yaml must be a mapping, got {type(module).__name__}: {path}")
+        raise ConfigValidationError(f"[load_module] module.yaml must be a mapping, got {type(module).__name__}: {path}")
     env_req = module.get("env_requires", [])
     if env_req is None:
         env_req = []
     if not isinstance(env_req, list):
-        raise ValueError(f"[load_module] env_requires must be a list, got {type(env_req).__name__}: {path}")
+        raise ConfigValidationError(f"[load_module] env_requires must be a list, got {type(env_req).__name__}: {path}")
     normalized = []
     for entry in env_req:
         try:
             normalized.append(_normalize_env_requires_entry(entry))
         except ValueError as e:  # noqa: PERF203
-            raise ValueError(f"[load_module] {path}: {e}") from e
+            raise ConfigValidationError(f"[load_module] {path}: {e}") from e
     module["env_requires"] = normalized
     logger.info("[IMP:7][load_module] Normalized %d env_requires entries for %s", len(normalized), path)
     return module

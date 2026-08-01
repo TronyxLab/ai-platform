@@ -244,7 +244,9 @@ def test_strip_platform_deploy(caplog: pytest.LogCaptureFixture) -> None:
 # · Remove if: parse_ssh_command empty-input validation changes
 def test_empty_command() -> None:
     """Empty raw command raises ValueError."""
-    with pytest.raises(ValueError, match="empty command after stripping"):
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="empty command after stripping"):
         parse_ssh_command("")
 
 

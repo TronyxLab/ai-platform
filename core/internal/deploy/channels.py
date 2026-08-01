@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 # ── Defaults (DevPlan 116 B5 T1/T7: значения — из единого реестра shared/timeouts.py) ──
 # DEPLOY_TIMEOUT/SSH_CONNECT_TIMEOUT/SSH_READ_TIMEOUT/RETRY_COUNT/RETRY_BACKOFF_SECONDS — SoT.
+from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
 from core.internal.shared.timeouts import (
     DEPLOY_TIMEOUT,
@@ -73,7 +74,7 @@ class Payload:
 
     def __post_init__(self) -> None:
         if not self.tar_path or not self.project_name:
-            raise ValueError("Payload requires tar_path and project_name")
+            raise ConfigValidationError("Payload requires tar_path and project_name")
 
 
 @dataclass

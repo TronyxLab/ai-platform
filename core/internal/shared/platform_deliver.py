@@ -27,6 +27,8 @@ import json
 import logging
 import sys
 
+from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,7 +52,7 @@ def build_deliver_command(org: str = "", project: str = "") -> str:
         ValueError: If project is empty.
     """
     if not project:
-        raise ValueError("project must be non-empty")
+        raise ConfigValidationError("project must be non-empty")
 
     cmd = f"platform-deliver {org} {project}" if org else f"platform-deliver {project}"
 
@@ -82,7 +84,7 @@ def parse_deliver_args(args: str) -> tuple[str, str]:
     """
     stripped = args.strip()
     if not stripped:
-        raise ValueError("args must be non-empty after stripping whitespace")
+        raise ConfigValidationError("args must be non-empty after stripping whitespace")
 
     tokens = stripped.split()
     if len(tokens) == 1:
@@ -90,7 +92,7 @@ def parse_deliver_args(args: str) -> tuple[str, str]:
     elif len(tokens) == 2:
         org, project = tokens[0], tokens[1]
     else:
-        raise ValueError(f"Expected 1 or 2 tokens, got {len(tokens)}: {stripped!r}")
+        raise ConfigValidationError(f"Expected 1 or 2 tokens, got {len(tokens)}: {stripped!r}")
 
     logger.info("[IMP:9][parse_deliver_args] Parsed args: org=%r project=%r", org, project)
     return org, project
@@ -133,9 +135,9 @@ def _cli() -> None:
         try:
             result = build_deliver_command(org=args.org, project=args.project)
             print(result)
-        except ValueError as exc:
+        except PlatformError as exc:
             logger.error("[IMP:3][CLI] build failed: %s", exc)
-            sys.exit(1)
+            return exc.exit_code
 
     elif args.command == "parse":
         try:
@@ -146,13 +148,15 @@ def _cli() -> None:
             else:
                 output = {"org": org, "project": project}
                 print(json.dumps(output))
-        except ValueError as exc:
+        except PlatformError as exc:
             logger.error("[IMP:3][CLI] parse failed: %s", exc)
-            sys.exit(1)
+            return exc.exit_code
 
     else:
         parser.print_help()
-        sys.exit(1)
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
@@ -160,5 +164,5 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(levelname)s:%(name)s:%(message)s",
     )
-    _cli()
+    sys.exit(_cli())
 # endregion FUNC_CLI

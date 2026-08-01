@@ -219,13 +219,13 @@ class TestLoadModule:
         assert module["env_requires"][1] == {"name": "VAR_INT", "type": "int", "required": False}
         assert _ldd_ok(caplog)
 
-    # 🧪 TRAP[TEST] · 2026-07-21 · NEGATIVE · load_module — malformed YAML raises (bubbles from yaml.safe_load)
+    # 🧪 TRAP[TEST] · 2026-07-21 · NEGATIVE · load_module — malformed YAML raises ConfigValidationError (T2 миграция)
     def test_malformed_yaml_raises(self, tmp_path, caplog):
-        import yaml
+        from core.internal.shared.exceptions import ConfigValidationError
 
         path = tmp_path / "bad.yaml"
         path.write_text(": :broken: yaml: ]]]")
-        with pytest.raises((yaml.YAMLError, ValueError)):
+        with pytest.raises(ConfigValidationError):
             load_module(path)
         logger.info("[IMP:9][test] malformed YAML caught ✓")
         assert _ldd_ok(caplog)
@@ -552,13 +552,17 @@ class TestNormalizeHelper:
         assert _ldd_ok(caplog)
 
     def test_invalid_type_raises(self, caplog):
-        with pytest.raises(ValueError):
+        from core.internal.shared.exceptions import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError):
             _normalize_env_requires_entry(123)  # type: ignore[arg-type]
         logger.info("[IMP:9][test] invalid type raised ✓")
         assert _ldd_ok(caplog)
 
     def test_object_missing_name_raises(self, caplog):
-        with pytest.raises(ValueError):
+        from core.internal.shared.exceptions import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError):
             _normalize_env_requires_entry({"type": "secret"})
         logger.info("[IMP:9][test] missing name raised ✓")
         assert _ldd_ok(caplog)

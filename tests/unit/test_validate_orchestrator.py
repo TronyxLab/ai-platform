@@ -270,15 +270,14 @@ def test_detect_validator_none_exits_1(caplog, monkeypatch, capsys) -> None:
     monkeypatch.setattr(validate_orchestrator.shutil, "which", lambda _name: None)
     monkeypatch.setattr(validate_orchestrator.importlib.util, "find_spec", lambda _name: None)
 
-    with pytest.raises(SystemExit) as exc_info:
+    from core.internal.shared.exceptions import PlatformFatalError
+
+    with pytest.raises(PlatformFatalError) as exc_info:
         validate_orchestrator.detect_validator()
 
-    assert exc_info.value.code == 1, "FAIL: exit code должен быть 1"
-    err = capsys.readouterr().err
-    assert (
-        "[IMP:10][validate][detect] ERROR: No validator found. "
-        "Install: npm install -g ajv-cli ajv-formats  OR  pip3 install jsonschema pyyaml" in err
-    ), f"FAIL: ERROR-строка не байт-идентична: {err!r}"
+    assert exc_info.value.exit_code == 10, "FAIL: exit code должен быть 10 (D4)"
+    # T3.6: сообщение перенесено в исключение (emit-вывод заменён на raise PlatformFatalError)
+    assert "No validator found" in str(exc_info.value), f"FAIL: сообщение ошибки: {str(exc_info.value)!r}"
 
 
 # endregion TEST_DETECT_NONE

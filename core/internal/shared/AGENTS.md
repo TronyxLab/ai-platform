@@ -1,5 +1,5 @@
-# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, platform-deliver, project-registry, exceptions, timeouts, ssh-opts
-# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 20 модулей (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
+# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, platform-deliver, project-registry, exceptions, timeouts, ssh-opts, contracts
+# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 21 модуль (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
 # region MODULE_CONTRACT
 ## @purpose  Архитектурный контракт области core/internal/shared/ — инвентарь модулей и правила добавления.
 ## @scope    Все модули под core/internal/shared/. Закрывает остаток RC3 C1: «no canonical architecture document
@@ -18,6 +18,7 @@
 ##           2026-07-31 | DevPlan 105 — +vps_readiness.py (17-й модуль); фасад vps-readiness.sh
 ##           2026-08-01 | DevPlan 116 B6 — +schema_validator.py (18-й модуль); inventory update
 ##           2026-08-01 | DevPlan 116 B5 — +timeouts.py (19-й), +ssh_opts.py (20-й); инвентарь
+##           2026-08-01 | DevPlan 116 B4 — +contracts.py (21-й); инвентарь
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -27,6 +28,7 @@
 | `age_key.py` | Compat-re-export шим — детекция AGE-ключа делегирована в node_detect.py (DevPlan 104) | `detect_age_key()` (re-export), CLI | decrypt-secrets, bootstrap, node-update |
 | `audit_logger.py` | Единый JSON-lines audit логгер (заменяет прямой file.write и shell audit_logging.sh) | `write_audit_entry()`, `read_audit_log()`, CLI `write/read --log-file` | context_deployer, deploy, lib/audit.sh |
 | `content_hash.py` | SHA256 content-hash для идемпотентности bootstrap (state.json sub-steps) | `compute_step_hash()`, `step_hash_changed()` | state_machine, content-hash.sh |
+| `contracts.py` | Контракт операционных политик (DevPlan 116 B4 T1, U-39) — DEPLOY_BEST_EFFORT (legacy parity) + machine-readable exit-коды | `DEPLOY_BEST_EFFORT`, `EXIT_OK/GENERIC/CONFIG_NOT_FOUND/CONFIG_PARSE/CONFIG_VALIDATION/FATAL` | deploy_orchestrator, гейты B4 (broad-except-allowlist, exit-codes-documented) |
 | `crypto.py` | APR1/htpasswd хэширование (openssl passwd -apr1, детерминизм через salt) | `hash_apr1()`, `generate_htpasswd_entry()`, CLI `hash/entry [--salt]` | lib/secrets.sh, secrets_manager |
 | `deploy_paths.py` | Канонический реестр путей доставки кода (SoT для удаления deprecated путей) | `get_canonical_paths()`, `DEPRECATED_DEPLOY_PATHS` | core-deploy CI, deploy |
 | `docker_auth.py` | Единый Docker registry auth (заменяет 5 дублирующихся точек) | `docker_login()`, `ghcr_login()`, `configure_docker_auth()` | bootstrap registry-auth, phases.py |

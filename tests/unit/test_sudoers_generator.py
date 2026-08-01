@@ -799,10 +799,7 @@ def test_cli_generate_action(
     monkeypatch.setattr(sg, "generate_module_sudoers", mock_generate)
     monkeypatch.setattr(sg.sys, "argv", test_args)
 
-    with pytest.raises(SystemExit) as exc_info:
-        sg.main()
-
-    assert exc_info.value.code == 0
+    assert sg.main() == 0
     assert called_action["name"] == "test-module"
 
     _assert_ldd_trajectory(caplog)
@@ -842,10 +839,7 @@ def test_cli_render_rules_action(
     monkeypatch.setattr(sg, "_render_sudoers_rules", lambda mn, md, td, pr: fake_rules)
     monkeypatch.setattr(sg.sys, "argv", test_args)
 
-    with pytest.raises(SystemExit) as exc_info:
-        sg.main()
-
-    assert exc_info.value.code == 0
+    assert sg.main() == 0
 
     _assert_ldd_trajectory(caplog)
 
@@ -886,10 +880,7 @@ def test_cli_batch_generate_action(
     )
     monkeypatch.setattr(sg.sys, "argv", test_args)
 
-    with pytest.raises(SystemExit) as exc_info:
-        sg.main()
-
-    assert exc_info.value.code == 0
+    assert sg.main() == 0
     assert called_names["names"] == ["nginx", "postgres", "redis"]
 
     _assert_ldd_trajectory(caplog)
@@ -924,9 +915,6 @@ def test_cli_missing_module_name(
     ]
     monkeypatch.setattr(sg.sys, "argv", test_args)
 
-    with pytest.raises(SystemExit) as exc_info:
-        sg.main()
-
-    assert exc_info.value.code == 1
+    assert sg.main() == 1
 
     _assert_ldd_trajectory(caplog)

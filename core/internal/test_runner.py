@@ -42,6 +42,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+
 logger = logging.getLogger(__name__)
 
 # ── Marker → pytest expression mapping ──────────────────────────────────────
@@ -292,8 +294,8 @@ def _build_pytest_args(marker: str) -> list[str] | None:
     if args is None:
         valid = ", ".join(sorted(MARKER_MAP))
         logger.critical("[IMP:9][build_args][error] Unknown MARKER=%r. Valid values: %s", marker, valid)
-        print(f"[IMP:9][test_runner] ERROR: Unknown MARKER='{marker}'. Valid values: {valid}", file=sys.stderr)
-        sys.exit(1)
+        # T3.6 (DevPlan 116 B4): business sys.exit → raise ConfigValidationError (main ловит PlatformError)
+        raise ConfigValidationError(f"Unknown MARKER='{marker}'. Valid values: {valid}")
     logger.info("[IMP:7][build_args][resolve] Marker=%s → %d arg(s): %s", marker, len(args), " ".join(args))
     return args
 
@@ -645,6 +647,10 @@ def main(argv: list[str] | None = None) -> int:
 
         logger.info("[IMP:9][main][exit] exit=%d duration=%.1fs", result_code, duration)
         return result_code
+    except PlatformError as e:
+        logger.critical("[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
     finally:
         if tmpdir is not None:
             shutil.rmtree(tmpdir, ignore_errors=True)  # AC4: авто-очистка только для temp dir

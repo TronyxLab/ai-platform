@@ -400,7 +400,7 @@ def deliver_all(
 ## @purpose  CLI entrypoint: `deliver` — полная Core-доставка (фасад scp-deliver.sh → python3).
 ## @io  input: sys.argv (argparse), output: sys.exit(0) на успех | sys.exit(1) на CoreDeliveryError
 ## @complexity  O(1) — dispatch-only, делегирует в deliver_all()
-def cli() -> None:
+def cli() -> int:
     """CLI entrypoint: deliver — full Core channel delivery. Exit 0 on success, 1 on failure."""
     p = argparse.ArgumentParser(description="core_deliverer — Core channel delivery (SCP/rsync, NO git)")
     sp = p.add_subparsers(dest="command", required=True)
@@ -416,12 +416,12 @@ def cli() -> None:
         deliver_all(args.host, args.node, args.node_configs_dir, args.core_dir, args.remote_user, args.dry_run)
     except CoreDeliveryError as exc:
         logger.info("[IMP:10][cli][error] %s", exc)
-        sys.exit(1)
-    sys.exit(0)
+        return 1
+    return 0
 
 
 # endregion FUNC_cli
 
 
 if __name__ == "__main__":
-    cli()
+    sys.exit(cli())

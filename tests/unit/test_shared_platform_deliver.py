@@ -130,7 +130,9 @@ def test_build_empty_project(caplog: pytest.LogCaptureFixture) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: build_deliver_command changes empty-project behavior
 
-    with pytest.raises(ValueError, match="project must be non-empty"):
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="project must be non-empty"):
         build_deliver_command(org="myorg", project="")
 
     # No IMP:9 expected since the function raises before logging
@@ -263,7 +265,9 @@ def test_parse_empty(caplog: pytest.LogCaptureFixture) -> None:
     # · Last fail: N/A (new test)
     # · Remove if: parse_deliver_args changes empty-input behavior
 
-    with pytest.raises(ValueError, match="args must be non-empty"):
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="args must be non-empty"):
         parse_deliver_args("")
 
     # No IMP:9 expected since the function raises before logging

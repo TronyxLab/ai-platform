@@ -362,11 +362,11 @@ def print_report(name: str, vhost_removed: bool, ssh_done: bool) -> None:
 ## @purpose  Main entry point — orchestrate safe project removal
 ## @io        stdout: progress + report; stderr: LDD logs; exit 0 on success/idempotent, 1 on error
 ## @complexity O(n·m) for find + O(p) for unregister + O(w) for SSH
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     """CLI dispatcher for project removal.
 
     ## @purpose  Parse args, find project, unregister, remove vhost, SSH compose down, print report.
-    ## @io        ⇥ argv → ⎋ None (sys.exit)
+    ## @io        ⇥ argv → ⎋ int exit code (контракт T4: main() -> int)
     ## @complexity O(n·m + p + w)
     """
     parser = argparse.ArgumentParser(
@@ -399,7 +399,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.info(
             "[IMP:9][remove][main] Project '%s' not found in any node.yaml — SKIP (idempotent, exit 0)", args.name
         )
-        return  # exit 0
+        return 0  # idempotent skip
 
     # ── Dry-run: print plan and exit ──
     if args.dry_run:
@@ -416,7 +416,7 @@ def main(argv: list[str] | None = None) -> None:
         print("    3. SSH: docker compose down (NO -v)")
         print("    4. Print safe-remove report")
         logger.info("[IMP:9][remove][main] Dry-run complete")
-        return
+        return 0
 
     # ── Confirmation ──
     if not args.force:
@@ -432,7 +432,7 @@ def main(argv: list[str] | None = None) -> None:
         response = input("  Continue? [y/N] ").strip().lower()
         if response not in ("y", "yes"):
             logger.info("[IMP:7][remove][main] Cancelled by user")
-            return
+            return 0
 
     # ── Step 1: Unregister from node.yaml ──
     logger.info("[IMP:7][remove][main] Step 1/4: Unregister from node.yaml")
@@ -461,6 +461,7 @@ def main(argv: list[str] | None = None) -> None:
     print_report(args.name, vhost_removed, ssh_done)
 
     logger.info("[IMP:9][remove][main] remove-project DONE: %s", args.name)
+    return 0
 
 
 # endregion FUNC_main
@@ -471,4 +472,4 @@ if __name__ == "__main__":
         format="[%(levelname)s][%(name)s] %(message)s",
         stream=sys.stderr,
     )
-    main()
+    sys.exit(main())

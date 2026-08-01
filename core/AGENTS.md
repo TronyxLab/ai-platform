@@ -156,6 +156,23 @@
 
 ---
 
+## Exit-коды (контракт)
+
+Единый контракт exit-кодов на весь core (DevPlan 116 B4, U-29). Машиночитаемые константы — `core/internal/shared/contracts.py`; runtime-классы исключений — `core/internal/shared/exceptions.py`.
+
+| Код | Семантика | Исключение |
+|-----|-----------|------------|
+| 0 | ok | — |
+| 1 | generic error | PlatformError base |
+| 2 | ConfigNotFound | ConfigNotFoundError (файл можно создать) |
+| 3 | ConfigParse | ConfigParseError (синтаксис YAML/JSON) |
+| 4 | ConfigValidation | ConfigValidationError (структура) |
+| 10 | Fatal — ручное вмешательство | PlatformFatalError |
+
+**Инвариант main()-контракта:** business-функции НЕ вызывают `sys.exit`; `sys.exit` — только в `main()` / `if __name__ == "__main__":`. Все `main()` в core/internal имеют сигнатуру `def main() -> int` и паттерн `except PlatformError as e: return e.exit_code`.
+
+---
+
 ## Навигация
 
 | Файл | Назначение |
@@ -172,6 +189,7 @@
 
 | Module | Path | Purpose |
 |--------|------|---------|
+| `contracts` | `core/internal/shared/contracts.py` | Контракт операционных политик — DEPLOY_BEST_EFFORT (legacy parity) + константы exit-кодов (0/1/2/3/4/10). Единый machine-readable источник для гейтов и CLI (DevPlan 116 B4 T1, U-39). |
 | `secrets_env_parser` | `core/internal/shared/secrets_env_parser.py` | Единый парсер secrets.env — parse()/write()/merge()/export_shell(). Заменяет 7 inline-парсеров. |
 | `schema_validator` | `core/internal/shared/schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — validate_yaml_against_schema()/validate_dict_against_schema(). Единственная Draft7Validator-точка (DevPlan 116 B6 T5). |
 | `ssh_opts` | `core/internal/shared/ssh_opts.py` | Единый SoT SSH-флагов — SSH_OPTS/build_rsync_ssh_opts()/CLI --shell. Заменяет 5 Python-копий + lib/ssh.sh фасад (DevPlan 116 B5 T2, D1). |

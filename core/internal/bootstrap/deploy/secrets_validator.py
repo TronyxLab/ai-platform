@@ -38,6 +38,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 from core.internal.shared.secrets_manifest_reader import (
     charset as secret_charset,
@@ -312,10 +313,10 @@ def _expand_transitive_deps(modules_filter: str, modules_dir: str) -> str:
     # Validate: all seed modules must exist in DAG
     unknown = [m for m in seed_modules if m not in dag]
     if unknown:
-        err_msg = f"ERROR: Unknown module(s): {', '.join(unknown)}"
+        err_msg = f"Unknown module(s): {', '.join(unknown)}"
         logger.error("[IMP:10][_expand_transitive_deps][error] %s", err_msg)
-        print(err_msg, file=sys.stderr)
-        sys.exit(1)
+        # T3.6 (DevPlan 116 B4): business sys.exit → raise ConfigValidationError (caller main ловит PlatformError)
+        raise ConfigValidationError(err_msg)
 
     # BFS to find transitive closure through depends_on
     expanded: set[str] = set(seed_modules)
@@ -550,6 +551,9 @@ def main() -> int:
         print("make generate-secrets-manifest && make fix-gate", file=sys.stderr)
         print("<<< REPAIR_RECIPE_END <<<", file=sys.stderr)
         return 1
+    except ConfigValidationError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return e.exit_code
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

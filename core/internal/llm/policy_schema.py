@@ -25,6 +25,8 @@ import jsonschema
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from core.internal.shared.exceptions import ConfigValidationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,11 +113,11 @@ class AliasDef(BaseModel):
         """
         if isinstance(v, list):
             if len(v) != 0:
-                raise ValueError(f"deployments list must be empty for reserved aliases, got {len(v)} items")
+                raise ConfigValidationError(f"deployments list must be empty for reserved aliases, got {len(v)} items")
             return v
         if isinstance(v, dict):
             return DeploymentList(**v)
-        raise ValueError(f"deployments must be an empty list or DeploymentList dict, got {type(v).__name__}")
+        raise ConfigValidationError(f"deployments must be an empty list or DeploymentList dict, got {type(v).__name__}")
 
 
 class BudgetDef(BaseModel):
@@ -217,7 +219,7 @@ class LLMPolicy(BaseModel):
         ## @complexity O(1)
         """
         if not v:
-            raise ValueError("providers must be non-empty (at least one AI provider)")
+            raise ConfigValidationError("providers must be non-empty (at least one AI provider)")
         return v
 
     @field_validator("aliases")
@@ -231,7 +233,9 @@ class LLMPolicy(BaseModel):
         """
         for required in ("reasoning", "chat"):
             if required not in v:
-                raise ValueError(f"Missing required alias '{required}' — at least reasoning and chat must be defined")
+                raise ConfigValidationError(
+                    f"Missing required alias '{required}' — at least reasoning and chat must be defined"
+                )
         return v
 
     @field_validator("profiles")
@@ -244,7 +248,7 @@ class LLMPolicy(BaseModel):
         ## @complexity O(1)
         """
         if "default" not in v:
-            raise ValueError("profiles must include a 'default' profile (required by auto-provision)")
+            raise ConfigValidationError("profiles must include a 'default' profile (required by auto-provision)")
         return v
 
     @field_validator("auto_provision")
@@ -292,7 +296,7 @@ class LLMPolicy(BaseModel):
 
         if not isinstance(data, dict):
             logger.critical("[IMP:10][LLMPolicy][from_yaml] Invalid YAML structure — expected dict")
-            raise ValueError("Invalid YAML structure: expected a top-level mapping (dict)")
+            raise ConfigValidationError("Invalid YAML structure: expected a top-level mapping (dict)")
 
         logger.info("[IMP:8][LLMPolicy][from_yaml] YAML loaded: %d top-level keys", len(data))
 
@@ -327,7 +331,7 @@ class LLMPolicy(BaseModel):
 
         # 4a: auto_provision.default_profile exists in profiles
         if policy.auto_provision.default_profile not in policy.profiles:
-            raise ValueError(
+            raise ConfigValidationError(
                 f"auto_provision.default_profile '{policy.auto_provision.default_profile}' "
                 f"not found in profiles: {list(policy.profiles.keys())}"
             )
@@ -336,7 +340,7 @@ class LLMPolicy(BaseModel):
         for profile_name, profile in policy.profiles.items():
             for model_ref in profile.models:
                 if model_ref not in policy.aliases:
-                    raise ValueError(
+                    raise ConfigValidationError(
                         f"Profile '{profile_name}' references alias '{model_ref}' "
                         f"which does not exist in aliases: {list(policy.aliases.keys())}"
                     )
@@ -356,7 +360,9 @@ class LLMPolicy(BaseModel):
                         )
 
         if alias_names_with_issues:
-            raise ValueError("Deployment references non-existent providers: " + "; ".join(alias_names_with_issues))
+            raise ConfigValidationError(
+                "Deployment references non-existent providers: " + "; ".join(alias_names_with_issues)
+            )
 
         logger.info(
             "[IMP:9][LLMPolicy][from_yaml] LLMPolicy instance created: "

@@ -18,7 +18,7 @@
 ##   3. Healthcheck poll ≤ max_wait seconds — shell-wrapper poll_until_healthy used
 ##   4. DEPLOY_STATUS="success" set immediately after health-gate — BEFORE non-fatal housekeeping (B1/T3)
 ##   5. Rollback: re-tag previous image → docker compose up -d --force-recreate (T1)
-##   6. First deploy with health fail → _handle_first_deploy → sys.exit(1) (no rollback possible)
+##   6. First deploy with health fail → _handle_first_deploy → PlatformFatalError (exit 10, no rollback possible)
 ##   7. Remove: docker compose down --timeout 30 WITHOUT -v (O7/DD10, T11)
 ##   8. Status: JSON stdout with docker compose ps + deploy-result.json; stub-aware flag
 ##   9. All methods log at IMP:7-10 for LDD telemetry
@@ -93,7 +93,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, NoReturn
+from typing import Any
 
 from core.internal.shared.docker_compose import (
     docker_compose_down as _shared_docker_compose_down,
@@ -113,6 +113,7 @@ from core.internal.shared.docker_compose import (
 from core.internal.shared.docker_compose import (
     retry_pull as _shared_retry_pull,
 )
+from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 from core.internal.shared.project_registry import validate_project_name
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
@@ -306,7 +307,7 @@ class DeployEngine:
         #   teardown rmtree = удалённый cwd → FileNotFoundError os.getcwd() во ВСЕХ последующих тестах
         #   (каскад 71 failure в static_audit, gate MODE=fast RED). Root-cause: строки 277/380/449.
         # · Fix (2026-07-31): deploy() → contextlib.chdir (восстановление при любом exit path, включая
-        #   SystemExit от _handle_first_deploy); remove()/status() → subprocess cwd=project_dir (процесс
+        #   PlatformFatalError от _handle_first_deploy); remove()/status() → subprocess cwd=project_dir (процесс
         #   вообще не меняет cwd). Rejected: subprocess-level cwd во всех 14 вызовах deploy() — большой
         #   рефакторинг с риском регрессии, contextlib.chdir семантически эквивалентен прежнему chdir.
         # · Rev: если deploy() начнёт вызываться из долгоживущих процессов чаще CLI-паттерна → вариант (a).
@@ -379,7 +380,7 @@ class DeployEngine:
             env_override={"IMAGE_TAG": ref},
         ):
             self._handle_first_deploy(project, service, ref, "Pull failed after 3 attempts")
-            # unreachable — _handle_first_deploy raises SystemExit
+            # unreachable — _handle_first_deploy raises PlatformFatalError
 
         # ── Atomic up ──
         if not self._atomic_up(project_dir, service, ref):
@@ -415,7 +416,7 @@ class DeployEngine:
         logger.error("[IMP:10][deploy][health] Healthcheck FAILED for %s/%s", project, service)
         if is_first_deploy:
             self._handle_first_deploy(project, service, ref, "Healthcheck failed on first deploy")
-            # unreachable — _handle_first_deploy raises SystemExit
+            # unreachable — _handle_first_deploy raises PlatformFatalError
 
         rollback_ok = self._perform_rollback(project_dir, service, previous_image)
         return DeployResult(
@@ -788,8 +789,8 @@ class DeployEngine:
 
     # region FUNC__handle_first_deploy
     ## @purpose  Handle first deploy failure — no rollback possible, escalate.
-    ## @io       ⇥ project, service, ref, reason → ⎋ NoReturn (sys.exit)
-    def _handle_first_deploy(self, project: str, service: str, ref: str, reason: str) -> NoReturn:
+    ## @io       ⇥ project, service, ref, reason → ⎋ None (raises PlatformFatalError, exit 10)
+    def _handle_first_deploy(self, project: str, service: str, ref: str, reason: str) -> None:
         """Handle first deploy failure — no rollback possible.
 
         Args:
@@ -799,10 +800,11 @@ class DeployEngine:
             reason: Failure reason for logging.
 
         Raises:
-            SystemExit: Always exits with code 1.
+            PlatformFatalError: Always — no rollback possible, requires manual intervention
+                (DevPlan 116 B4 T3.1: sys.exit(1) → raise PlatformFatalError, exit code 10).
         """
         logger.error("[IMP:10][first-deploy] CRITICAL: %s — %s no previous image to rollback", reason, service)
-        sys.exit(1)
+        raise PlatformFatalError(f"First deploy failed — no rollback possible: {reason}")
 
     # endregion FUNC__handle_first_deploy
 
@@ -812,12 +814,18 @@ class DeployEngine:
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+
 # region CLI
+# region FUNC_main
 ## @purpose  CLI entrypoint with argparse subcommands: deploy, remove, status.
-## @io       ⇥ sys.argv → ⎋ exit 0|1
+## @io       ⇥ sys.argv → ⎋ exit 0|1|10 (PlatformError → e.exit_code)
 ## @rationale D8 (DevPlan 036E): argparse subcommands for debuggability, testability, composability.
 ##            Shell facade performs verb classification before calling Python modules.
-if __name__ == "__main__":
+## @invariants
+##   - First-deploy failure → PlatformFatalError → exit 10 (DevPlan 116 B4 T3.1/D4)
+##   - Единый паттерн: except PlatformError as e → return e.exit_code (контракт T4)
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point — deploy/remove/status subcommands (contract: main() -> int)."""
     parser = argparse.ArgumentParser(description="Deploy Engine — atomic deploy/rollback/remove/status")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -842,51 +850,52 @@ if __name__ == "__main__":
     status_parser.add_argument("--project-dir", required=True)
     status_parser.add_argument("--stub-aware", action="store_true", default=False)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     engine = DeployEngine()
 
-    if args.command == "deploy":
-        result = engine.deploy(
-            project=args.project,
-            ref=args.ref,
-            service=args.service,
-            project_dir=args.project_dir,
-            node=args.node,
-            max_wait=args.max_wait,
-            keep_images=args.keep_images,
-        )
-        # JSON output for shell facade
-        print(
-            json.dumps(
-                {
-                    "success": result.success,
-                    "project": result.project,
-                    "ref": result.ref,
-                    "service": result.service,
-                    "previous_image": result.previous_image,
-                    "rollback_performed": result.rollback_performed,
-                    "first_deploy_failed": result.first_deploy_failed,
-                    "error_message": result.error_message,
-                }
+    try:
+        if args.command == "deploy":
+            result = engine.deploy(
+                project=args.project,
+                ref=args.ref,
+                service=args.service,
+                project_dir=args.project_dir,
+                node=args.node,
+                max_wait=args.max_wait,
+                keep_images=args.keep_images,
             )
-        )
-        sys.exit(0 if result.success else 1)
-
-    elif args.command == "remove":
-        result = engine.remove(project=args.project, project_dir=args.project_dir)
-        print(
-            json.dumps(
-                {
-                    "success": result.success,
-                    "project": result.project,
-                    "already_removed": result.already_removed,
-                    "error_message": result.error_message,
-                }
+            # JSON output for shell facade
+            print(
+                json.dumps(
+                    {
+                        "success": result.success,
+                        "project": result.project,
+                        "ref": result.ref,
+                        "service": result.service,
+                        "previous_image": result.previous_image,
+                        "rollback_performed": result.rollback_performed,
+                        "first_deploy_failed": result.first_deploy_failed,
+                        "error_message": result.error_message,
+                    }
+                )
             )
-        )
-        sys.exit(0 if result.success else 1)
+            return 0 if result.success else 1
 
-    elif args.command == "status":
+        if args.command == "remove":
+            result = engine.remove(project=args.project, project_dir=args.project_dir)
+            print(
+                json.dumps(
+                    {
+                        "success": result.success,
+                        "project": result.project,
+                        "already_removed": result.already_removed,
+                        "error_message": result.error_message,
+                    }
+                )
+            )
+            return 0 if result.success else 1
+
+        # status
         result = engine.status(
             project=args.project,
             project_dir=args.project_dir,
@@ -903,5 +912,16 @@ if __name__ == "__main__":
                 }
             )
         )
-        sys.exit(0)
+        return 0
+    except PlatformError as e:
+        logger.critical("[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
+
+
+# endregion FUNC_main
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 # endregion CLI

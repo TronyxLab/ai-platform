@@ -24,7 +24,17 @@
 import json
 import logging
 import os
+import sys
 import tempfile
+
+# ── sys.path bootstrap for direct-script invocation (DevPlan 116 B4 T2: core.* импорты) ──
+_PLATFORM_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+)
+if _PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, _PLATFORM_ROOT)
+
+from core.internal.shared.exceptions import ConfigParseError
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +111,7 @@ def atomic_write(data: dict, target_path: str, dir_mode: int = 0o755) -> None:
         except json.JSONDecodeError as exc:
             _logger.error("[IMP:9][json_writer][atomic_write] Temp file validation failed: %s", exc)
             os.unlink(tmp_path)
-            raise ValueError(f"Temp file contains invalid JSON: {exc}") from exc
+            raise ConfigParseError(f"Temp file contains invalid JSON: {exc}") from exc
 
         # Step 5: Overwrite target in-place (preserves inode)
         # TRAP[DOCKER-BIND-MOUNT]: must NOT use os.replace() — it creates new inode

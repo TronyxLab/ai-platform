@@ -380,7 +380,7 @@ def _write_sudoers_file(
         logger.error("[IMP:10][_write_sudoers_file] OS error: %s", exc)
         _safe_cleanup(tmp_path)  # type: ignore[possibly-undefined]
         return False
-    except Exception as exc:  # noqa: EXC — catch-all after OSError, prevents silent write failure
+    except Exception as exc:  # noqa: EXC — catch-all after OSError, prevents silent write failure (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.error("[IMP:9][_write_sudoers_file] Unexpected error: %s", exc)
         _safe_cleanup(tmp_path)  # type: ignore[possibly-undefined]
         return False
@@ -498,7 +498,7 @@ def _batch_generate_sudoers(
 # ── CLI Entrypoint ──────────────────────────────────────────────────────────
 
 
-def main() -> None:
+def main() -> int:
     """
     CLI entrypoint for sudoers_generator.py.
 
@@ -562,16 +562,16 @@ def main() -> None:
     # Validate paths
     if not modules_dir.is_dir():
         logger.error("[IMP:10][main] Modules directory not found: %s", modules_dir)
-        sys.exit(1)
+        return 1
     if not templates_dir.is_dir():
         logger.error("[IMP:10][main] Templates directory not found: %s", templates_dir)
-        sys.exit(1)
+        return 1
 
     # Dispatch
     if args.action in ("generate", "render-rules"):
         if not args.module_name:
             logger.error("[IMP:10][main] --module-name is required for action=%s", args.action)
-            sys.exit(1)
+            return 1
 
         if args.action == "generate":
             success = generate_module_sudoers(
@@ -594,7 +594,7 @@ def main() -> None:
     elif args.action == "batch-generate":
         if not args.module_names:
             logger.error("[IMP:10][main] --module-names is required for batch-generate")
-            sys.exit(1)
+            return 1
 
         module_names = [m.strip() for m in args.module_names.split(",") if m.strip()]
         success = _batch_generate_sudoers(
@@ -606,15 +606,15 @@ def main() -> None:
 
     else:
         logger.error("[IMP:10][main] Unknown action: %s", args.action)
-        sys.exit(1)
+        return 1
 
     if success:
         logger.info("[IMP:9][main] Action '%s' completed successfully", args.action)
     else:
         logger.error("[IMP:10][main] Action '%s' FAILED", args.action)
-    sys.exit(0 if success else 1)
+    return 0 if success else 1
     # endregion FUNC_main
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

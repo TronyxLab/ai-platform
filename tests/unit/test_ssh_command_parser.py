@@ -443,8 +443,10 @@ def test_parse_full_path_platform_deliver() -> None:
 # · Last fail: N/A (new test)
 # · Remove if: parse_ssh_command empty-input handling changes
 def test_parse_empty_raw_raises() -> None:
-    """Empty raw input raises ValueError."""
-    with pytest.raises(ValueError, match="empty command after stripping"):
+    """Empty raw input raises ConfigValidationError (T2 миграция)."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="empty command after stripping"):
         parse_ssh_command("")
 
 
@@ -457,8 +459,10 @@ def test_parse_empty_raw_raises() -> None:
 # · Last fail: N/A (new test)
 # · Remove if: parse_ssh_command empty-input handling changes
 def test_parse_none_raises() -> None:
-    """Empty string (whitespace) raises ValueError."""
-    with pytest.raises(ValueError, match="empty command after stripping"):
+    """Empty string (whitespace) raises ConfigValidationError (T2 миграция)."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="empty command after stripping"):
         parse_ssh_command("   ")
 
 
@@ -587,12 +591,9 @@ def test_cli_no_args() -> None:
     with (
         patch.object(sys, "argv", test_args),
         patch.object(sys, "stderr") as mock_stderr,
-        pytest.raises(SystemExit) as exc_info,
     ):
         mock_stderr.write = fake_stderr_write  # type: ignore[method-assign]
-        _cli_main()
-
-    assert exc_info.value.code == 1
+        assert _cli_main() == 1
     assert any("Usage" in line for line in captured_stderr)
 
 
@@ -611,11 +612,8 @@ def test_cli_invalid_mode() -> None:
     test_args = ["ssh_command_parser.py", "unknown", "arg"]
     with (
         patch.object(sys, "argv", test_args),
-        pytest.raises(SystemExit) as exc_info,
     ):
-        _cli_main()
-
-    assert exc_info.value.code == 1
+        assert _cli_main() == 1
 
 
 # endregion
@@ -700,11 +698,8 @@ def test_cli_parse_format_lines_empty() -> None:
     with (
         patch.object(sys, "argv", test_args),
         patch("builtins.print", fake_print),
-        pytest.raises(SystemExit) as exc_info,
     ):
-        _cli_main()
-
-    assert exc_info.value.code == 1
+        assert _cli_main() == 4  # ConfigValidationError.exit_code (T4)
     assert len(stdout_lines) == 3
     assert stdout_lines[0] == "error"
     assert "empty command" in stdout_lines[1]
@@ -725,11 +720,8 @@ def test_cli_format_lines_unknown_format() -> None:
     test_args = ["ssh_command_parser.py", "--format", "xml", "parse", "ping"]
     with (
         patch.object(sys, "argv", test_args),
-        pytest.raises(SystemExit) as exc_info,
     ):
-        _cli_main()
-
-    assert exc_info.value.code == 1
+        assert _cli_main() == 1
 
 
 # endregion
@@ -753,11 +745,8 @@ def test_cli_parse_empty() -> None:
     with (
         patch.object(sys, "argv", test_args),
         patch("builtins.print", fake_print),
-        pytest.raises(SystemExit) as exc_info,
     ):
-        _cli_main()
-
-    assert exc_info.value.code == 1
+        assert _cli_main() == 4  # ConfigValidationError.exit_code (T4: CLI возвращает e.exit_code)
     assert len(stdout_lines) == 1
     err = json.loads(stdout_lines[0])
     assert "error" in err

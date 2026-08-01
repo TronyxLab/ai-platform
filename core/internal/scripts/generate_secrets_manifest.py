@@ -242,31 +242,31 @@ def generate(secret_defs: list[dict[str, Any]], modules: list[dict[str, Any]]) -
 
 
 # region FUNC_check_output
-def _check_output(generated_content: str, output_path: Path) -> None:
-    """Byte-level comparison for --check mode. Exit 0 if fresh, 1 if stale.
+def _check_output(generated_content: str, output_path: Path) -> bool:
+    """Byte-level comparison for --check mode. True if fresh, False if stale.
 
     ## @purpose  Compare generated content with existing file byte-by-byte.
     ##            Prints diff (first 20 lines) to stderr on divergence.
     ##            NEVER writes to disk.
-    ## @io        ⇥ generated_content: str, output_path: Path → ⎋ sys.exit(0|1)
+    ## @io        ⇥ generated_content: str, output_path: Path → ⎋ bool (True = fresh)
     ## @complexity O(N) where N = file size in bytes
     ## @invariants
     ##   - NEVER writes to disk — pure read-only comparison
-    ##   - Exit 0 if content matches, 1 if divergence
+    ##   - True if content matches, False if divergence (T3.6: sys.exit → return bool)
     ##   - Prints first 20 lines of diff to stderr on divergence
     """
     logger.info("[IMP:7][_check_output][START] Checking output against %s", output_path)
 
     if not output_path.is_file():
         logger.error("[IMP:9][_check_output][ERROR] Output file %s does not exist — cannot compare", output_path)
-        sys.exit(1)
+        return False
 
     generated_bytes = generated_content.encode("utf-8")
     existing_bytes = output_path.read_bytes()
 
     if generated_bytes == existing_bytes:
         logger.info("[IMP:9][_check_output][OK] Output is fresh — matches %s", output_path)
-        sys.exit(0)
+        return True
 
     # Divergence — compute and print diff
     diff_lines = list(
@@ -286,14 +286,14 @@ def _check_output(generated_content: str, output_path: Path) -> None:
         "[IMP:9][_check_output][FAIL] Divergence detected — %s is stale. Regenerate without --check.",
         output_path,
     )
-    sys.exit(1)
+    return False
 
 
 # endregion FUNC_check_output
 
 
 # region FUNC_main
-def main() -> None:
+def main() -> int:
     """CLI entrypoint.
 
     ## @purpose  Parse CLI args, load definitions + modules, compute consumers,
@@ -364,7 +364,7 @@ def main() -> None:
 
     if not preflight_ok:
         logger.error("[IMP:10][main][FAIL] Pre-flight checks failed — aborting")
-        sys.exit(1)
+        return 1
 
     logger.info("[IMP:8][main][PREFLIGHT] All pre-flight checks passed")
 
@@ -403,7 +403,7 @@ def main() -> None:
 
     # ── Check mode (read-only, byte-level comparison) ──
     if args.check:
-        _check_output(output_content, output_path)
+        return 0 if _check_output(output_content, output_path) else 1
 
     # ── Write output ──
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -416,9 +416,10 @@ def main() -> None:
         output_path,
     )
     print(f"[IMP:9][main] Secrets manifest written to {output_path}")
+    return 0
 
 
 # endregion FUNC_main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

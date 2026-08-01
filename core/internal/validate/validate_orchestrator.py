@@ -63,6 +63,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+# ── sys.path bootstrap for direct-script invocation (validate.sh → python3 validate_orchestrator.py) ──
+_PLATFORM_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+)
+if _PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, _PLATFORM_ROOT)
+
+from core.internal.shared.exceptions import PlatformError, PlatformFatalError
+
 logger = logging.getLogger(__name__)
 
 # ── Repo-relative anchors (DD3) ─────────────────────────────────────────────
@@ -126,12 +135,10 @@ def detect_validator() -> str:
         spec = None
     if spec is not None:
         return "python"
-    emit(
-        10,
-        "detect",
-        "ERROR: No validator found. Install: npm install -g ajv-cli ajv-formats  OR  pip3 install jsonschema pyyaml",
+    # T3.6 (DevPlan 116 B4): business sys.exit → raise PlatformFatalError (нет валидатора — ручное действие)
+    raise PlatformFatalError(
+        "No validator found. Install: npm install -g ajv-cli ajv-formats  OR  pip3 install jsonschema pyyaml"
     )
-    sys.exit(1)
 
 
 # endregion FUNC_detect_validator
@@ -451,7 +458,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── Основной поток валидации ──
     emit(6, "start", "Detecting schema validator")
-    validator = detect_validator()
+    try:
+        validator = detect_validator()
+    except PlatformError as e:
+        logger.critical("[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
     emit(6, "start", f"Using validator: {validator}")
 
     # Files to validate: from args or auto-discover (D2: непустые args → discovery пропущен)

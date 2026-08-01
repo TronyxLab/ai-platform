@@ -1703,7 +1703,7 @@ def _import_extract_domains(core_dir: str, node_yaml: str, context: str) -> list
             deployer_mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(deployer_mod)
             return deployer_mod._extract_domains_for_context(node_yaml, context)
-    except Exception as e:  # noqa: EXC — catch-all for importlib-based calls
+    except Exception as e:  # noqa: EXC — catch-all for importlib-based calls (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][ssl_provision] Failed to extract domains: %s", e)
     return []
 
@@ -2039,7 +2039,7 @@ def _ensure_secrets_exist(core_dir: str) -> None:
             if k not in os.environ:
                 os.environ[k] = v
         logger.info("[IMP:9][ensure_secrets] Sourced %d vars from %s", len(env_vars), secrets_env)
-    except Exception as e:  # noqa: EXC — non-fatal: secrets source failure is recoverable
+    except Exception as e:  # noqa: EXC — non-fatal: secrets source failure is recoverable (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][ensure_secrets] Failed to source secrets.env: %s", e)
 
     # Step 3: Generate missing autogen secrets
@@ -2050,7 +2050,7 @@ def _ensure_secrets_exist(core_dir: str) -> None:
         generated = do_ensure(manifest_path, secrets_env)
         if generated:
             logger.info("[IMP:9][ensure_secrets] Generated %d secrets: %s", len(generated), generated)
-    except Exception as e:  # noqa: EXC — non-fatal: autogen failure is recoverable
+    except Exception as e:  # noqa: EXC — non-fatal: autogen failure is recoverable (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][ensure_secrets] Autogen failed: %s", e)
 
 

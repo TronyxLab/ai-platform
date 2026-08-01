@@ -98,6 +98,9 @@ from core.internal.bootstrap.deploy import (
     sudoers_generator as _sudoers_generator,
 )
 from core.internal.llm import config_renderer as _config_renderer
+
+# DevPlan 116 B4 T1 (U-39): deploy-политика legacy parity — контракт, а не комментарии.
+# DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
 from core.internal.shared.node_yaml import NodeYaml
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
@@ -245,7 +248,7 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
     try:
         rc = _context_overlay.ensure_context_repo(node_yaml)
         logger.info("[IMP:8][_preflight][context_overlay] ensure_context_repo rc=%d", rc)
-    except Exception as exc:  # noqa: EXC — non-fatal preflight step
+    except Exception as exc:  # noqa: EXC — non-fatal preflight step (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_preflight][context_overlay] error (non-fatal): %s", exc)
 
     # ── spool dirs verify (verify-only runtime check) ──
@@ -256,7 +259,7 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
             report.get("status"),
             len(report.get("missing", [])),
         )
-    except Exception as exc:  # noqa: EXC — non-fatal preflight step
+    except Exception as exc:  # noqa: EXC — non-fatal preflight step (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_preflight][spool] error (non-fatal): %s", exc)
 
     # ── status-metrics.json pre-create (prevents Docker bind-mount dir creation) ──
@@ -270,7 +273,7 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
                 "[IMP:8][_preflight][charset] %d secret(s) failed charset validation — continuing with deploy",
                 failed,
             )
-    except Exception as exc:  # noqa: EXC — non-fatal preflight step
+    except Exception as exc:  # noqa: EXC — non-fatal preflight step (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_preflight][charset] error (non-fatal): %s", exc)
 
 
@@ -439,7 +442,7 @@ def _deploy_parallel(
     try:
         ok, fail = _docker_orchestrator._pre_pull_images(_build_entries(enabled_names, overlays), modules_dir)
         logger.info("[IMP:9][_deploy_parallel][pre_pull] Pre-pull complete: success=%d failed=%d", ok, fail)
-    except Exception as exc:  # noqa: EXC — pre-pull non-fatal
+    except Exception as exc:  # noqa: EXC — pre-pull non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_deploy_parallel][pre_pull] Pre-pull error (non-fatal): %s", exc)
 
     # ── 3. batch-check-env (one call replaces per-module check-env) ──
@@ -448,7 +451,7 @@ def _deploy_parallel(
         logger.info(
             "[IMP:9][_deploy_parallel][batch_check_env] batch-check-env completed for %d modules", len(env_results)
         )
-    except Exception as exc:  # noqa: EXC — batch env check non-fatal
+    except Exception as exc:  # noqa: EXC — batch env check non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_deploy_parallel][batch_check_env] error (non-fatal): %s", exc)
 
     deployed = 0
@@ -581,7 +584,7 @@ def _deploy_sequential(
         # ── env check (missing vars → fail module, skip deploy) ──
         try:
             missing = _secrets_validator._check_env_requires(m_name, secrets_manifest)
-        except Exception as exc:  # noqa: EXC — env check failure treated as non-blocking
+        except Exception as exc:  # noqa: EXC — env check failure treated as non-blocking (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:8][_deploy_sequential][env_check] env check error for %s: %s", m_name, exc)
             missing = []
         if missing:
@@ -604,7 +607,7 @@ def _deploy_sequential(
         else:
             try:
                 ok = _docker_orchestrator.deploy_docker_module(m_name, modules_dir=modules_dir)
-            except Exception as exc:  # noqa: EXC — docker deploy failure → module failed, continue
+            except Exception as exc:  # noqa: EXC — docker deploy failure → module failed, continue (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:8][_deploy_sequential][docker] deploy error for %s: %s", m_name, exc)
                 ok = False
             if ok:
@@ -709,14 +712,14 @@ def _postflight(
             str(Path(core_dir).parent),
         )
         logger.info("[IMP:8][_postflight][sudoers] batch_generate ok=%s", ok)
-    except Exception as exc:  # noqa: EXC — sudoers non-fatal
+    except Exception as exc:  # noqa: EXC — sudoers non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_postflight][sudoers] error (non-fatal): %s", exc)
 
     # ── orphan container detection (batch, detect-only — self-heal not enabled) ──
     try:
         orphans = _orphan_reconciler._batch_orphan_reconciliation(enabled_names, modules_dir)
         logger.info("[IMP:8][_postflight][orphans] %d orphan(s) detected", len(orphans))
-    except Exception as exc:  # noqa: EXC — orphan detection non-fatal
+    except Exception as exc:  # noqa: EXC — orphan detection non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_postflight][orphans] error (non-fatal): %s", exc)
 
     # ── litellm-config.yml render (best-effort — existing config kept on failure) ──
@@ -741,7 +744,7 @@ def _render_litellm_config(core_dir: str) -> None:
     try:
         _config_renderer.render_to_file(policy_path, output_path)
         logger.info("[IMP:9][_render_litellm_config][done] litellm-config.yml rendered")
-    except Exception as exc:  # noqa: EXC — render non-fatal
+    except Exception as exc:  # noqa: EXC — render non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:8][_render_litellm_config][warn] render failed (non-fatal): %s", exc)
 
 
@@ -772,7 +775,7 @@ def _aggregate_severity(
         else:
             try:
                 severity = _secrets_validator._get_module_severity(os.path.join(modules_dir, name, "module.yaml"))
-            except Exception as exc:  # noqa: EXC — severity fallback failure → default warn
+            except Exception as exc:  # noqa: EXC — severity fallback failure → default warn (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:7][_aggregate_severity][fallback] severity lookup failed for %s: %s", name, exc)
         if severity == "critical":
             crit += 1
@@ -790,10 +793,10 @@ def _aggregate_severity(
 ## @io       ⇥ crit: int, warn: int, deployed: int → ⎋ int
 ## @complexity 1 — two comparisons
 ## @invariants
-##   - WARN maps to exit 0 (legacy parity — warnings are non-critical by definition)
+##   - WARN maps to exit 0 (DEPLOY_BEST_EFFORT policy — warnings are non-critical by definition)
 ##   - Only CRIT failures escalate to exit 2
 def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
-    """Severity-based exit code (legacy contract: CRIT→2, WARN→0, DONE→0)."""
+    """Severity-based exit code (DEPLOY_BEST_EFFORT contract: CRIT→2, WARN→0, DONE→0)."""
     if crit > 0:
         logger.error("[IMP:10][_compute_exit_code][critical] Critical:%d Warn:%d → exit 2", crit, warn)
         return 2
@@ -810,10 +813,16 @@ def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
 # region FUNC__set_hc_marker
 ## @purpose  Touch /var/lib/platform/.bootstrap/.hc_done_in_deploy — signals state_machine.py to skip
 ##           the standalone healthcheck (healthcheck already ran inside deploy_docker_group).
+##           HC_DONE_MARKER always set (DEPLOY_BEST_EFFORT policy — healthcheck был выполнен
+##           внутри деплоя даже при частичных сбоях).
 ## @io       ⇥ None → ⎋ None (side-effect: marker file)
 ## @complexity 1 — mkdir + touch with graceful failure
 def _set_hc_marker() -> None:
-    """Create the healthcheck-done marker file (non-fatal on failure)."""
+    """Create the healthcheck-done marker file (non-fatal on failure).
+
+    Поведение определяется политикой DEPLOY_BEST_EFFORT (shared/contracts.py, U-39):
+    маркер ставится всегда — healthcheck уже выполнен внутри deploy_docker_group.
+    """
     try:
         os.makedirs(os.path.dirname(_HC_DONE_MARKER), exist_ok=True)
         Path(_HC_DONE_MARKER).touch(exist_ok=True)

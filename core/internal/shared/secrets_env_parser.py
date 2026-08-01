@@ -26,6 +26,8 @@ import logging
 import os
 import tempfile
 
+from core.internal.shared.exceptions import ConfigValidationError
+
 logger = logging.getLogger(__name__)
 
 # Default permissions for secrets file (owner read/write only)
@@ -178,7 +180,7 @@ def parse(path: str, prefix_filter: str | None = None) -> dict[str, str]:
     except UnicodeDecodeError as e:
         logger.error("[IMP:9][parse] Unicode decode error in %s: %s", path, e)
         # Re-raise as ValueError to be explicit about encoding issues
-        raise ValueError(f"Unicode decode error in {path}: {e}") from e
+        raise ConfigValidationError(f"Unicode decode error in {path}: {e}") from e
     except OSError as e:
         logger.error("[IMP:9][parse] OS error reading %s: %s", path, e)
         raise

@@ -98,34 +98,38 @@ def test_iter_secrets_missing_raises(caplog, tmp_path):
     logger.critical("[IMP:9][test] iter_secrets missing manifest raises FileNotFoundError — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · DevPlan 116 T4 · non-dict document raises ValueError
-# · Scenario: manifest content is a YAML list → ValueError
+# 🧪 TRAP[TEST] · Regression · DevPlan 116 T4/T9 · non-dict document raises ConfigValidationError
+# · Scenario: manifest content is a YAML list → ConfigValidationError (T2 миграция)
 # · Last fail: N/A (new test)
 # · Remove if: strictness contract changes
 @ldd_trajectory
 def test_iter_secrets_non_dict_raises(caplog, tmp_path):
-    """iter_secrets must raise ValueError when document is not a dict."""
+    """iter_secrets must raise ConfigValidationError when document is not a dict."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
     path = _write_manifest(tmp_path, ["not", "a", "dict"])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigValidationError):
         smr.iter_secrets(path)
 
-    logger.critical("[IMP:9][test] iter_secrets non-dict manifest raises ValueError — OK")
+    logger.critical("[IMP:9][test] iter_secrets non-dict manifest raises ConfigValidationError — OK")
 
 
-# 🧪 TRAP[TEST] · Regression · DevPlan 116 T4 · secrets-not-a-list raises ValueError
-# · Scenario: dict without 'secrets' list → ValueError
+# 🧪 TRAP[TEST] · Regression · DevPlan 116 T4/T9 · secrets-not-a-list raises ConfigValidationError
+# · Scenario: dict without 'secrets' list → ConfigValidationError (T2 миграция)
 # · Last fail: N/A (new test)
 # · Remove if: strictness contract changes
 @ldd_trajectory
 def test_iter_secrets_secrets_not_list_raises(caplog, tmp_path):
-    """iter_secrets must raise ValueError when secrets key is not a list."""
+    """iter_secrets must raise ConfigValidationError when secrets key is not a list."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
     path = _write_manifest(tmp_path, {"secrets": "not-a-list"})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigValidationError):
         smr.iter_secrets(path)
 
-    logger.critical("[IMP:9][test] iter_secrets secrets-not-list raises ValueError — OK")
+    logger.critical("[IMP:9][test] iter_secrets secrets-not-list raises ConfigValidationError — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · DevPlan 116 T4 · non-dict entries skipped with warning

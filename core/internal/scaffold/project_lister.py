@@ -355,11 +355,11 @@ def get_status_via_ssh(
 ## @purpose  CLI entry point — dispatch to list or status based on --mode
 ## @io        stdout: formatted output; exit 0 on success, 1 on error
 ## @complexity O(p+f) for list, O(t) for status
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     """CLI dispatcher for project lister.
 
     ## @purpose  Parse args, dispatch to list or status mode.
-    ## @io        ⇥ argv → ⎋ None (sys.exit)
+    ## @io        ⇥ argv → ⎋ int exit code (контракт T4: main() -> int)
     ## @complexity O(p+f) or O(t)
     """
     parser = argparse.ArgumentParser(
@@ -407,7 +407,7 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("[IMP:10][list][main] FAIL-FAST: --status requires --name <project>")
             print("ERROR: --status requires --name <project>")
             print("Usage: project-list.sh --status --name <project> [--node <node>]")
-            sys.exit(1)
+            return 1
 
         node_yaml_path, ssh_host = find_project_node(
             name=args.project_name,
@@ -417,21 +417,22 @@ def main(argv: list[str] | None = None) -> None:
         if node_yaml_path is None:
             print(f"ERROR: Project '{args.project_name}' not found in node.yaml")
             print("  Register it first or check --name spelling")
-            sys.exit(1)
+            return 1
 
         if not ssh_host:
             print(f"ERROR: No SSH host found for project '{args.project_name}' in node.yaml")
             print(f"  Check node.host in: {node_yaml_path}")
-            sys.exit(1)
+            return 1
 
         success = get_status_via_ssh(host=ssh_host, project=args.project_name)
         if not success:
-            sys.exit(1)
+            return 1
     else:
         logger.info("[IMP:10][list][main] Unknown mode: %s", mode)
-        sys.exit(1)
+        return 1
 
     logger.info("[IMP:9][list][main] project-list DONE (mode=%s)", mode)
+    return 0
 
 
 # endregion FUNC_main

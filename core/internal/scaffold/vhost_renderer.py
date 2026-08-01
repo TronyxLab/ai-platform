@@ -50,7 +50,7 @@ from pathlib import Path
 
 import yaml
 
-from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, PlatformFatalError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
 logger = logging.getLogger(__name__)
@@ -975,7 +975,7 @@ def render_all(
         # ── Step 5: nginx -t validation ───────────────────────────
         if not nginx_t_harness(str(temp_dir)):
             logger.error("[IMP:10][render_all] nginx -t validation FAILED — removing temp dir, aborting")
-            raise RuntimeError("nginx -t validation failed — no files written (all-or-nothing)")
+            raise PlatformFatalError("nginx -t validation failed — no files written (all-or-nothing)")
 
         # ── Step 6: Atomic mv to overlay dir ──────────────────────
         overlay_dir.mkdir(parents=True, exist_ok=True)

@@ -1661,7 +1661,7 @@ def _cli_typed_json(node: NodeYaml, field: str) -> int:
     return 0
 
 
-def main() -> None:
+def main() -> int:
     """NodeYaml CLI entrypoint.
 
     ## @purpose  Main entry for python3 -m core.internal.shared.node_yaml [args]
@@ -1673,40 +1673,40 @@ def main() -> None:
 
     # --resolve does not need --file
     if args.resolve:
-        sys.exit(_cli_resolve(args))
+        return _cli_resolve(args)
 
     # All other operations need --file
     if not args.file:
         parser.print_help()
-        sys.exit(0)
+        return 0
 
     try:
         node = NodeYaml(args.file)
     except ConfigNotFoundError as e:
         print(str(e), file=sys.stderr)
-        sys.exit(2)
+        return 2
     except ConfigParseError as e:
         print(str(e), file=sys.stderr)
-        sys.exit(3)
+        return 3
 
     try:
         if args.get:
-            sys.exit(_cli_get(node, args))
-        elif args.domain_config:
-            sys.exit(_cli_domain_config(node))
-        elif args.context:
+            return _cli_get(node, args)
+        if args.domain_config:
+            return _cli_domain_config(node)
+        if args.context:
             print(node.get_context())
-            sys.exit(0)
-        elif args.json_output:
+            return 0
+        if args.json_output:
             print(json.dumps(node.raw(), indent=2))
-            sys.exit(0)
-        elif args.find_project:
-            sys.exit(_cli_find_project(node, args.find_project))
-        elif args.validate:
-            sys.exit(_cli_validate(node))
-        elif args.validate_schema:
-            sys.exit(_cli_validate_schema(node, schema_path=args.schema_path))
-        elif args.add_project:
+            return 0
+        if args.find_project:
+            return _cli_find_project(node, args.find_project)
+        if args.validate:
+            return _cli_validate(node)
+        if args.validate_schema:
+            return _cli_validate_schema(node, schema_path=args.schema_path)
+        if args.add_project:
             name, repo, ptype, domain, database, context = args.add_project
             project = ProjectEntry(
                 name=name,
@@ -1718,47 +1718,45 @@ def main() -> None:
             )
             node.add_project(project)
             print(f"Added project: {name}")
-            sys.exit(0)
-        elif args.remove_project:
+            return 0
+        if args.remove_project:
             removed = node.remove_project(args.remove_project)
             if removed:
                 print(f"Removed project: {args.remove_project}")
-                sys.exit(0)
-            else:
-                print(f"Project not found: {args.remove_project}", file=sys.stderr)
-                sys.exit(1)
-        elif args.update_project:
+                return 0
+            print(f"Project not found: {args.remove_project}", file=sys.stderr)
+            return 1
+        if args.update_project:
             if len(args.update_project) < 2:
                 print("Usage: --update-project name key=value [key=value ...]", file=sys.stderr)
-                sys.exit(1)
+                return 1
             name = args.update_project[0]
             updates: dict[str, str] = {}
             for kv in args.update_project[1:]:
                 if "=" not in kv:
                     print(f"Invalid key=value pair: {kv}", file=sys.stderr)
-                    sys.exit(1)
+                    return 1
                 k, v = kv.split("=", 1)
                 updates[k] = v
             updated = node.update_project(name, **updates)
             if updated:
                 print(f"Updated project: {name} ({', '.join(updates.keys())})")
-                sys.exit(0)
-            else:
-                print(f"Project not found: {name}", file=sys.stderr)
-                sys.exit(1)
-        elif args.typed_contexts:
-            sys.exit(_cli_typed_json(node, "contexts"))
-        elif args.typed_node:
-            sys.exit(_cli_typed_json(node, "node"))
-        elif args.typed_firewall:
-            sys.exit(_cli_typed_json(node, "firewall"))
-        elif args.typed_secrets:
-            sys.exit(_cli_typed_json(node, "secrets"))
-        elif args.typed_tor:
-            sys.exit(_cli_typed_json(node, "tor"))
-        elif args.typed_repos:
-            sys.exit(_cli_typed_json(node, "repos"))
-        elif args.typed_all:
+                return 0
+            print(f"Project not found: {name}", file=sys.stderr)
+            return 1
+        if args.typed_contexts:
+            return _cli_typed_json(node, "contexts")
+        if args.typed_node:
+            return _cli_typed_json(node, "node")
+        if args.typed_firewall:
+            return _cli_typed_json(node, "firewall")
+        if args.typed_secrets:
+            return _cli_typed_json(node, "secrets")
+        if args.typed_tor:
+            return _cli_typed_json(node, "tor")
+        if args.typed_repos:
+            return _cli_typed_json(node, "repos")
+        if args.typed_all:
             import dataclasses
 
             output = {
@@ -1778,26 +1776,26 @@ def main() -> None:
                 "modules": node.get_modules(),
             }
             print(json.dumps(output, indent=2, default=str))
-            sys.exit(0)
-        else:
-            parser.print_help()
-            sys.exit(0)
+            return 0
+        parser.print_help()
+        return 0
     except ConfigNotFoundError as e:
         print(str(e), file=sys.stderr)
-        sys.exit(2)
+        return 2
     except ConfigParseError as e:
         print(str(e), file=sys.stderr)
-        sys.exit(3)
+        return 3
     except ConfigValidationError as e:
         print(str(e), file=sys.stderr)
-        sys.exit(4)
+        return 4
     except PlatformFatalError as e:
         print(str(e), file=sys.stderr)
-        sys.exit(10)
+        return 10
+    return 0
 
 
 # endregion FUNC_cli
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1628,7 +1628,7 @@ def _atomic_write_sudoers(target_path: Path, content: str, module_name: str) -> 
         _safe_cleanup_tmp(tmp_path)
         return False
     # noqa: EXC — catch-all after OSError already handled, prevents silent sudoers write failure
-    except Exception as exc:  # noqa: EXC — catch-all after OSError already handled
+    except Exception as exc:  # noqa: EXC — catch-all after OSError already handled (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.error("[IMP:9][_atomic_write_sudoers] Unexpected error writing %s: %s", target_path, exc)
         _safe_cleanup_tmp(tmp_path)
         return False
@@ -2093,7 +2093,7 @@ def reconcile_runtime_state(
 ##   - --report-only: JSON report to stdout, exit 0
 ##   - --dry-run: LDD logs to stderr, exit 0
 ##   - Unit failure does NOT abort other units
-def main() -> None:
+def main() -> int:
     """CLI entry point for reconciler.py.
 
     Usage:
@@ -2184,7 +2184,7 @@ def main() -> None:
     if not Path(_node_yaml_path).is_file():
         logger.error("[IMP:10][converge][main] FATAL: node.yaml not found at %s", _node_yaml_path)
         print(f'{{"error":"node.yaml not found: {_node_yaml_path}","exit_code":2}}')
-        sys.exit(2)
+        return 2
 
     # ── Init report ──
     report_init()
@@ -2263,15 +2263,14 @@ def main() -> None:
     if _report_only:
         report_json = report_emit()
         print(report_json)
-        sys.exit(0)
+        return 0
 
     # ── Final exit code ──
     if _has_errors:
-        sys.exit(2)
-    elif _has_warnings:
-        sys.exit(1)
-    else:
-        sys.exit(0)
+        return 2
+    if _has_warnings:
+        return 1
+    return 0
 
 
 # endregion FUNC_main
@@ -2283,4 +2282,5 @@ if __name__ == "__main__":
         format="%(message)s",
         stream=sys.stderr,
     )
+    sys.exit(main())
     main()

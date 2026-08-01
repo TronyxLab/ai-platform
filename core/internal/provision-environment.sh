@@ -11,7 +11,7 @@
 ##   - Shell wrapper: arg parsing + scope expansion + audit_step dispatch
 ##   - --scope is required (no default)
 ##   - Multi-scope via --scope A --scope B (accumulator, deduplication)
-##   - Exit codes propagate from provisioner.py (0=success, 1=parse error, 2=docker unavailable)
+##   - Exit codes propagate from provisioner.py (0=success, 1=parse error, 10=docker unavailable)
 ## @rationale Strangler-Fig migration: 442 LOC shell → ~55 LOC wrapper + ~340 LOC Python.
 ##   Eliminates 13 inline python3 calls. Shell remains as audit_step integrator.
 # endregion MODULE_CONTRACT

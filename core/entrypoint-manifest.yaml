@@ -671,6 +671,26 @@ name_linter:
   namespace_collision_names:
   - deploy
 non_repairable_gates:
+- gate_id: test_exit_codes_documented_in_core_agents
+  repairable: false
+  repair_class: L3
+  repair_reason: Exit-codes contract documentation (DevPlan 116 B4 T7) — requires
+    manual doc update in core/AGENTS.md
+- gate_id: test_broad_except_requires_noqa_and_policy_marker
+  repairable: false
+  repair_class: L3
+  repair_reason: Broad except allowlist (DevPlan 116 B4 T8, U-39) — requires manual
+    policy marker annotation
+- gate_id: test_no_bare_valueerror_runtimeerror
+  repairable: false
+  repair_class: L3
+  repair_reason: Bare raise migration (DevPlan 116 B4 T5, U-12) — requires manual
+    raise → PlatformError migration
+- gate_id: test_sys_exit_only_in_main_and_main_returns_int
+  repairable: false
+  repair_class: L3
+  repair_reason: sys.exit contract (DevPlan 116 B4 T6, U-29) — requires manual sys.exit
+    → raise/return migration
 - gate_id: test_single_gitleaks_version
   repairable: false
   repair_class: L3
@@ -806,6 +826,9 @@ gates:
 - id: test_no_partial_writes_on_failure
   test_file: test_gate_atomic_generation_no_partial_writes.py
   description: 'Auto-discovered gate: test_no_partial_writes_on_failure'
+- id: test_broad_except_requires_noqa_and_policy_marker
+  test_file: test_gate_broad_except_allowlist.py
+  description: 'Auto-discovered gate: test_broad_except_requires_noqa_and_policy_marker'
 - id: test_check_doc_headers_equivalent
   test_file: test_gate_ci_coverage.py
   description: 'Auto-discovered gate: test_check_doc_headers_equivalent'
@@ -1049,6 +1072,9 @@ gates:
 - id: test_negative_detects_644_outside_lib
   test_file: test_gate_executable_bit.py
   description: 'Auto-discovered gate: test_negative_detects_644_outside_lib'
+- id: test_exit_codes_documented_in_core_agents
+  test_file: test_gate_exit_codes_documented.py
+  description: 'Auto-discovered gate: test_exit_codes_documented_in_core_agents'
 - id: test_fallback_secrets_removed
   test_file: test_gate_fallback_secrets_sync.py
   description: 'Auto-discovered gate: test_fallback_secrets_removed'
@@ -1325,6 +1351,9 @@ gates:
 - id: test_platform_domain_placeholder_present
   test_file: test_gate_nginx_domain_contract.py
   description: 'Auto-discovered gate: test_platform_domain_placeholder_present'
+- id: test_no_bare_valueerror_runtimeerror
+  test_file: test_gate_no_bare_raise.py
+  description: 'Auto-discovered gate: test_no_bare_valueerror_runtimeerror'
 - id: test_no_hardcoded_local_paths
   test_file: test_gate_no_hardcoded_local_paths.py
   description: 'Auto-discovered gate: test_no_hardcoded_local_paths'
@@ -1580,6 +1609,9 @@ gates:
 - id: test_master_password_registered
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_master_password_registered'
+- id: test_sys_exit_only_in_main_and_main_returns_int
+  test_file: test_gate_sys_exit_contract.py
+  description: 'Auto-discovered gate: test_sys_exit_only_in_main_and_main_returns_int'
 - id: test_all_templates_resolvable
   test_file: test_gate_template_drift.py
   description: 'Auto-discovered gate: test_all_templates_resolvable'

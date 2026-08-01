@@ -591,11 +591,11 @@ def run_add_vhost(project_dir: str, domain: str = "", dry_run: bool = False) -> 
 
 
 # region FUNC_main
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     """CLI dispatcher for project scaffold.
 
     ## @purpose  Parse args, orchestrate full project creation flow.
-    ## @io        ⇥ argv → ⎋ None (sys.exit)
+    ## @io        ⇥ argv → ⎋ int exit code (контракт T4: main() -> int, sys.exit только в __main__)
     ## @complexity O(f) for template copy + O(1) subprocess calls
     """
     parser = argparse.ArgumentParser(description="Create a new project from a template.")
@@ -620,7 +620,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.template not in ("frontend", "backend", "fullstack"):
         logger.info("[IMP:10][scaffold][main] Invalid template: %s", args.template)
         print(f"ERROR: Invalid template type: '{args.template}'. Must be: frontend | backend | fullstack")
-        sys.exit(1)
+        return 1
 
     # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · Old strip-check accepted leading '-'/'_' project names
     # · Symptom: "--foo" passed the old replace-based isalnum strip-check — it stripped ALL
@@ -634,7 +634,7 @@ def main(argv: list[str] | None = None) -> None:
     if not validate_project_name(args.name):
         logger.info("[IMP:10][scaffold][main] Invalid project name: %s", args.name)
         print(f"ERROR: Invalid project name: '{args.name}'. Use alphanumeric, hyphens, underscores (no leading -/_).")
-        sys.exit(1)
+        return 1
 
     template_dir = os.path.join(
         os.path.dirname(Path(__file__).resolve().parent.parent), "..", "templates", f"template-{args.template}"
@@ -643,7 +643,7 @@ def main(argv: list[str] | None = None) -> None:
     if not template_path.is_dir():
         logger.info("[IMP:10][scaffold][main] Template not found: %s", template_path)
         print(f"ERROR: Template not found: {template_path}")
-        sys.exit(1)
+        return 1
 
     # Auto-domain
     domain = auto_domain(args.name, args.domain)
@@ -661,7 +661,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Confirm
     if not confirm(args.dry_run):
-        sys.exit(0)
+        return 0
 
     logger.info("[IMP:7][scaffold][main] Starting project creation")
 
@@ -669,7 +669,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Step 1: Copy template
     if not copy_template(str(template_path), project_dir, dry_run=args.dry_run):
-        sys.exit(1)
+        return 1
 
     # Step 2: Generate ai-platform.yaml
     from core.internal.scaffold.scaffold_helpers import gen_ai_platform_yaml
@@ -753,6 +753,7 @@ def main(argv: list[str] | None = None) -> None:
     print()
 
     logger.info("[IMP:9][scaffold][main] DONE: project %s created successfully", args.name)
+    return 0
 
 
 # endregion FUNC_main
@@ -763,4 +764,4 @@ if __name__ == "__main__":
         format="[%(levelname)s][%(name)s] %(message)s",
         stream=sys.stderr,
     )
-    main()
+    sys.exit(main())

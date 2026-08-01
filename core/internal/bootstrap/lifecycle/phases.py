@@ -839,7 +839,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
         try:
             _sm._ghcr_auth()
             logger.info("[IMP:9][phase:registry_update] GHCR auth successful")
-        except Exception as e:  # noqa: EXC — non-fatal
+        except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:7][phase:registry_update] GHCR auth failed (non-fatal): %s", e)
             non_fatal_issues = True
     else:
@@ -855,7 +855,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
                 non_fatal=True,
             )
             logger.info("[IMP:9][phase:registry_update] Environment provisioned (networks + volumes)")
-        except Exception as e:  # noqa: EXC — non-fatal
+        except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:7][phase:registry_update] Environment provision failed (non-fatal): %s", e)
             non_fatal_issues = True
     else:
@@ -883,7 +883,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
                     check_required=False,
                 )
                 logger.info("[IMP:9][phase:registry_update] Nginx reloaded with overlays")
-            except Exception as e:  # noqa: EXC — non-fatal
+            except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:7][phase:registry_update] Nginx reload failed (non-fatal): %s", e)
                 non_fatal_issues = True
         else:
@@ -917,7 +917,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
                     "[IMP:7][phase:registry_update] provision-llm.sh not found at %s — skipping LLM key provision",
                     provision_entrypoint,
                 )
-        except Exception as e:  # noqa: EXC — non-fatal
+        except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:7][phase:registry_update] LLM key provisioning failed (non-fatal): %s", e)
             non_fatal_issues = True
     else:
@@ -938,7 +938,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
         try:
             _sm._run_healthchecks(node_yaml)
             logger.info("[IMP:9][phase:registry_update] Healthchecks completed")
-        except Exception as e:  # noqa: EXC — non-fatal
+        except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:7][phase:registry_update] Healthchecks failed (non-fatal): %s", e)
             non_fatal_issues = True
     else:
@@ -1010,7 +1010,7 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
     try:
         _sm._import_deploy_context(core_dir, node_name, node_yaml)
         logger.info("[IMP:9][phase:deploy_update] Context projects deployed incrementally")
-    except Exception as e:  # noqa: EXC — non-fatal
+    except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][phase:deploy_update] Context deploy failed (non-fatal): %s", e)
         non_fatal_issues = True
 

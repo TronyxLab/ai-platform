@@ -86,7 +86,9 @@ class TestPayload:
     ## @purpose  Verify Payload raises ValueError with empty project_name.
     def test_payload_empty_project_name(self, temp_tar: Path) -> None:
         """Verify Payload requires project_name."""
-        with pytest.raises(ValueError, match="requires tar_path and project_name"):
+        from core.internal.shared.exceptions import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="requires tar_path and project_name"):
             Payload(tar_path=temp_tar, project_name="")
 
     # endregion

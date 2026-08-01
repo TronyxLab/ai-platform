@@ -268,7 +268,7 @@ def generate_env_platform(yaml_path: str, domain: str, project_name: str = "") -
 ##           stderr: LDD logs + error messages
 ## @exitcode 0  Success
 ## @exitcode 1  File not found, YAML parse error, or validation error
-def main() -> None:
+def main() -> int:
     """CLI entry point for gen_env_platform.py.
 
     Wraps generate_env_platform() with CLI argument parsing and error
@@ -296,17 +296,18 @@ def main() -> None:
         logger.info("[IMP:9][gen_env_platform][main] CLI generation complete — %d lines written", len(lines))
     except FileNotFoundError as e:
         print(f"FAIL-FAST: {e}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except yaml.YAMLError as e:
         print(f"FAIL-FAST: YAML parse error in {args.yaml}: {e}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except GenEnvPlatformError as e:
         print(f"FAIL-FAST: {e}", file=sys.stderr)
-        sys.exit(1)
+        return 1
+    return 0
 
 
 # endregion FUNC_main
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

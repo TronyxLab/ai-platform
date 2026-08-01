@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: context_registry.py, register-context, yaml, platform-node-yaml, NodeYaml-facade
-# STRUCTURE: ▶ register_context → NodeYaml.add_context → ⎋ "OK" | "EXISTS" | SystemExit(1) | CLI (argparse: register)
+# STRUCTURE: ▶ register_context → NodeYaml.add_context → ⎋ "OK" | "EXISTS" | raise PlatformError | CLI (argparse: register, main()->int)
 # region MODULE_CONTRACT
 ## @purpose  Register a context entry in platform node.yaml contexts[] list.
 ## @scope    CLI tool: register-context with yaml-path, name, desc, repos.
 ## @invariants
 ##   - Exits with 0 if context already exists ("EXISTS" response)
-##   - Exits with 1 on YAML read/write errors
+##   - Raises ConfigValidationError (validation) / PlatformFatalError (IO) — sys.exit только в main()/__main__
+##     (DevPlan 116 B4 T3.4: business sys.exit → raise, контракт T4)
 ##   - Uses NodeYaml facade add_context() (DevPlan 116 B6 T6.4, D2) — последний raw-путь
 ##     мутации node.yaml закрыт (сырой дамп + yaml.dump удалены из этого модуля)
 ## @rationale Needed for scaffold automation — programmatic context registration
 ##            without manual node.yaml editing.
 ## @changes 2026-08-01 · DevPlan 116 B6 T6.4 (D2) — raw() + yaml.dump → NodeYaml.add_context()
+##           2026-08-01 · DevPlan 116 B4 T3.4 — sys.exit → raise; main() -> int + sys.exit(main())
 # endregion MODULE_CONTRACT
 
 import argparse
+import logging
 import sys
+
+from core.internal.shared.exceptions import PlatformError
+
+logger = logging.getLogger(__name__)
 
 
 def register_context(
@@ -41,13 +48,15 @@ def register_context(
         "OK" on success, "EXISTS" if context already registered
 
     Raises:
-        SystemExit(1) on YAML read/write errors
+        ConfigValidationError: validation-ошибка (кроме дубликата)
+        PlatformFatalError: YAML read/write errors (IO, требует вмешательства)
     """
     try:
         from core.internal.shared.exceptions import (
             ConfigNotFoundError,
             ConfigParseError,
             ConfigValidationError,
+            PlatformFatalError,
         )
         from core.internal.shared.node_yaml import NodeYaml
 
@@ -59,19 +68,18 @@ def register_context(
         )
     except ConfigValidationError as e:
         # Duplicate context name → "EXISTS" (контракт сохранён);
-        # прочие validation-ошибки (contexts не list) → читаемая ошибка + exit 1.
+        # прочие validation-ошибки (contexts не list) → raise (T3.4: sys.exit(1) → raise).
         if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
             return "EXISTS"
-        print(f"ERROR: {e}")
-        sys.exit(1)
+        raise
     except (ConfigNotFoundError, ConfigParseError) as e:
-        print(f"ERROR: Failed to read/write {yaml_path}: {e}")
-        sys.exit(1)
+        # IO-ошибки чтения/записи node.yaml — невосстановимо без ручного действия → PlatformFatalError (T3.4)
+        raise PlatformFatalError(f"Failed to read/write {yaml_path}: {e}") from e
 
     return "OK"
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Register a context in platform node.yaml")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
@@ -83,18 +91,24 @@ def main() -> None:
     register_parser.add_argument("--node-cfg-repo", default="", help="Node configs repo URL")
     register_parser.add_argument("--hermes-agent-repo", default="", help="Hermes agent repo URL")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    if args.command == "register":
-        result = register_context(
-            yaml_path=args.yaml_path,
-            name=args.name,
-            desc=args.desc,
-            node_cfg_repo=args.node_cfg_repo,
-            hermes_agent_repo=args.hermes_agent_repo,
-        )
-        print(result)
+    try:
+        if args.command == "register":
+            result = register_context(
+                yaml_path=args.yaml_path,
+                name=args.name,
+                desc=args.desc,
+                node_cfg_repo=args.node_cfg_repo,
+                hermes_agent_repo=args.hermes_agent_repo,
+            )
+            print(result)
+        return 0
+    except PlatformError as e:
+        logger.critical("[IMP:10][main] Unhandled platform error (exit=%d): %s", e.exit_code, e)
+        print(f"[FATAL] {e}", file=sys.stderr)
+        return e.exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
