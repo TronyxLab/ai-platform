@@ -466,6 +466,29 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, mon
     (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
     (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
     (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
+    # Волна 117 D5 (WARN-семантика): фаза, вернувшая False → done_with_warnings (НЕ done).
+    # Создаём все bootstrap-скрипты, которые проверяют фазы — happy path = все True.
+    for script in (
+        "python_deps.py",
+        "install-docker.sh",
+        "install-tor-proxy.sh",
+        "firewall.sh",
+        "setup-node.sh",
+        "install-acme.sh",
+    ):
+        (core_bootstrap_dir / script).write_text("#!/bin/bash\nexit 0\n")
+    # φ3: install_cron_metrics пишет в /etc/cron.d (реальный FS, не writable в тесте) → mock True
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.helpers.system.install_cron_metrics",
+        lambda core_dir: True,
+    )
+    # φ5 (node_configuration) проверяет /opt/node-configs/<node> через os.path.isdir — патуем
+    orig_isdir = os.path.isdir
+    monkeypatch.setattr(
+        os.path,
+        "isdir",
+        lambda p: True if str(p).startswith("/opt/node-configs") else orig_isdir(p),
+    )
     node_yaml_path = Path(state_file).parent / "node.yaml"
     node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
     monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
@@ -483,6 +506,12 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, mon
         assert m.state.steps[phase_val].status == "done", (
             f"Phase {i} ({phase_val}) status: {m.state.steps[phase_val].status}"
         )
+
+    # Волна 117 D5: current_step честно обновлён на индекс последней завершённой фазы
+    assert m.state.current_step == len(sm.BootstrapPhase.INIT_PHASE_ORDER), (
+        f"current_step должен быть {len(sm.BootstrapPhase.INIT_PHASE_ORDER)} (последняя завершённая фаза), "
+        f"got {m.state.current_step}"
+    )
 
     logger.critical("[IMP:9][test] Init flow completed all %d phases — OK", len(sm.BootstrapPhase.INIT_PHASE_ORDER))
 
@@ -581,6 +610,8 @@ def test_update_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, m
     (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
     # All phase_*() functions also need converge.sh for φ13 converge_update
     (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
+    # Волна 117 D5: φ11 (registry_update) проверяет internal/provision-environment.sh — happy path
+    (Path(state_file).parent / "internal" / "provision-environment.sh").write_text("#!/bin/bash\nexit 0\n")
 
     m = sm.StateMachine(state_file_path=str(state_file))
     m.core_dir = str(Path(state_file).parent)
@@ -595,6 +626,11 @@ def test_update_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, m
         assert m.state.steps[phase_val].status == "done", (
             f"Update phase {i} ({phase_val}) status: {m.state.steps[phase_val].status}"
         )
+
+    # Волна 117 D5: current_step честно обновлён на индекс последней завершённой фазы
+    assert m.state.current_step == len(sm.BootstrapPhase.UPDATE_PHASE_ORDER), (
+        f"current_step должен быть {len(sm.BootstrapPhase.UPDATE_PHASE_ORDER)}, got {m.state.current_step}"
+    )
 
     logger.critical("[IMP:9][test] Update flow completed all %d phases — OK", len(sm.BootstrapPhase.UPDATE_PHASE_ORDER))
 
@@ -830,6 +866,27 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
     (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
     (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
     (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
+    # Волна 117 D5: happy path — создаём все скрипты, проверяемые фазами (TOR=true → нужен install-tor-proxy.sh)
+    for script in (
+        "python_deps.py",
+        "install-docker.sh",
+        "install-tor-proxy.sh",
+        "firewall.sh",
+        "setup-node.sh",
+        "install-acme.sh",
+    ):
+        (core_bootstrap_dir / script).write_text("#!/bin/bash\nexit 0\n")
+    # φ3: install_cron_metrics пишет в /etc/cron.d (реальный FS, не writable в тесте) → mock True
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.helpers.system.install_cron_metrics",
+        lambda core_dir: True,
+    )
+    orig_isdir = os.path.isdir
+    monkeypatch.setattr(
+        os.path,
+        "isdir",
+        lambda p: True if str(p).startswith("/opt/node-configs") else orig_isdir(p),
+    )
     node_yaml_path = Path(state_file).parent / "node.yaml"
     node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
     monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
@@ -1091,6 +1148,196 @@ def test_bootstrapstate_round_trip(caplog):
     assert restored.errors == ["error1"]
     assert restored.warnings == ["warn1"]
     logger.critical("[IMP:9][test] BootstrapState round-trip OK")
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: WARN-семантика и честный current_step (волна 117 D5)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D5 — фаза с non-fatal issues → done_with_warnings (НЕ done)
+# · Scenario: phase_user_accounts возвращает False (non-fatal) → run_init_mode ставит done_with_warnings,
+#   done=False; повторный run_init_mode перевыполняет фазу (не SKIP)
+# · Last fail: WARN-фазы маскировались под done (execute_phase игнорировал результат)
+# · Remove if: WARN-семантика статусов изменена
+@ldd_trajectory
+def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess, env_vars, monkeypatch):
+    """Фаза, вернувшая False, получает done_with_warnings и перевыполняется (D5)."""
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "makedirs", lambda *args, **kwargs: None)
+    import core.internal.bootstrap.lifecycle.helpers.users as _helpers_users
+
+    monkeypatch.setattr(_helpers_users, "add_ssh_key", lambda *args, **kwargs: None)
+    monkeypatch.setenv("TOR_ENABLED", "false")
+    monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
+    monkeypatch.setenv("CONTEXT", "test-context")
+    secrets_env = Path(state_file).parent / "secrets.env"
+    secrets_env.write_text("PLATFORM_MASTER_PASSWORD=test-password\nPLATFORM_MASTER_EMAIL=admin@test.local\n")
+    monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
+    core_bootstrap_dir = Path(state_file).parent / "internal" / "bootstrap"
+    core_bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    (core_bootstrap_dir / "node-lifecycle.sh").write_text("#!/bin/bash\necho ok\n")
+    (core_bootstrap_dir / "deploy-modules.sh").write_text("#!/bin/bash\necho ok\n")
+    (core_bootstrap_dir / "converge.sh").write_text("#!/bin/bash\necho ok\n")
+    node_yaml_path = Path(state_file).parent / "node.yaml"
+    node_yaml_path.write_text("node:\n  name: test-node\n  platform_domain: test.local\nprojects: []\n")
+    monkeypatch.setenv("NODE_YAML", str(node_yaml_path))
+
+    # Заставить φ1 (system_bootstrap) вернуть False: НЕ создаём python_deps.py/install-docker.sh/firewall.sh
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(Path(state_file).parent)
+    m.setup_state(mode="init", node="test-node")
+
+    # φ1 → done_with_warnings; φ2 (зависит от φ1) → PhaseDependencyError.
+    # Примечание: script-path импорт (import state_machine as sm) vs package-импорт cli.py —
+    # except-клоза run_init_mode ловит package-класс, а raise приходит script-классом →
+    # исключение ПРОПАГИРУЕТСЯ в тест. Это артефакт test-infra, не production-баг
+    # (production: python3 lifecycle/cli.py — все импорты package-консистентны → except ловит).
+    with pytest.raises(sm.PhaseDependencyError) as exc_info:
+        cli.run_init_mode(m)
+    assert "user_accounts" in str(exc_info.value) and "system_bootstrap" in str(exc_info.value), (
+        f"Ожидается блокировка φ2←φ1 (done_with_warnings ≠ done), got: {exc_info.value}"
+    )
+
+    # State сохранён ДО PhaseDependencyError — φ1 уже помечен done_with_warnings
+    phi1 = m.state.steps[sm.BootstrapPhase.SYSTEM_BOOTSTRAP]
+    assert phi1.status == "done_with_warnings", f"φ1 должен быть done_with_warnings, got {phi1.status}"
+    assert getattr(phi1, "warnings", None), "done_with_warnings должен сохранять warnings в state"
+    assert phi1.warnings, "per-phase warnings должны быть записаны"
+
+    # Повторный init: φ1 (done_with_warnings) НЕ считается done → перевыполняется
+    m2 = sm.StateMachine(state_file_path=str(state_file))
+    m2.core_dir = str(Path(state_file).parent)
+    m2.setup_state(mode="init", node="test-node")
+    phi1_reloaded = m2.state.steps[sm.BootstrapPhase.SYSTEM_BOOTSTRAP]
+    assert phi1_reloaded.status == "done_with_warnings", "Перезагрузка state.json должна сохранить done_with_warnings"
+    # В run_init loop done_with_warnings НЕ склипается → фаза перевыполняется
+    # (проверяем через get_current_step — первый pending/не-done индекс = 1)
+    assert m2.get_current_step() == 1, "done_with_warnings фаза должна перевыполняться (get_current_step=1)"
+
+    logger.critical("[IMP:9][test] WARN-фаза → done_with_warnings + перевыполнение — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D5 — честный current_step (не всегда 0)
+# · Scenario: run_init_mode успешно завершает фазы → current_step = индекс последней завершённой
+# · Last fail: current_step всегда 0 (TRAP[BUG] 2026-07-31) — setup_state перевызывался
+# · Remove if: current_step семантика изменена
+@ldd_trajectory
+def test_current_step_honest_after_phase_success(caplog, state_file):
+    """current_step обновляется при успехе фазы (волна 117 D5)."""
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.setup_state(mode="init", node="test")
+    # Эмулируем успешное выполнение φ1 (индекс 1) через _mark_phase_success
+    cli._mark_phase_success(m, sm.BootstrapPhase.INIT_PHASE_ORDER[0], current_index=1)
+    assert m.state.current_step == 1, f"current_step должен быть 1, got {m.state.current_step}"
+
+    cli._mark_phase_success(m, sm.BootstrapPhase.INIT_PHASE_ORDER[1], current_index=2)
+    assert m.state.current_step == 2, f"current_step должен быть 2, got {m.state.current_step}"
+
+    # Перезагрузка state.json сохраняет честный current_step
+    m2 = sm.StateMachine(state_file_path=str(state_file))
+    assert m2.state.current_step == 2, f"current_step после reload должен быть 2, got {m2.state.current_step}"
+    logger.critical("[IMP:9][test] current_step честно обновляется и персистится — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D5 — _phase_is_done: done_with_warnings НЕ done
+# · Scenario: dict и StepState представления со статусом done_with_warnings → _phase_is_done False
+# · Last fail: dependency-check считал WARN-фазу done → молчаливые пропуски downstream
+# · Remove if: done-контракт изменён
+@ldd_trajectory
+def test_phase_is_done_contract(caplog):
+    """_phase_is_done: done == done; done_with_warnings/pending/failed == not done (D5)."""
+    assert sm.phase_is_done(sm.StepState(name="x", status="done")) is True
+    assert sm.phase_is_done(sm.StepState(name="x", status="done_with_warnings")) is False
+    assert sm.phase_is_done(sm.StepState(name="x", status="pending")) is False
+    assert sm.phase_is_done(sm.StepState(name="x", status="failed")) is False
+    # dict-представление (state.json load): done-ключ true + status done → done
+    assert sm.phase_is_done({"status": "done", "done": True}) is True
+    # dict: done_with_warnings → НЕ done даже если done-ключ каким-то образом true
+    assert sm.phase_is_done({"status": "done_with_warnings", "done": True}) is False
+    logger.critical("[IMP:9][test] _phase_is_done контракт (done_with_warnings ≠ done) — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D6 — preflight пропускается при всех done-фазах
+# · Scenario: _maybe_run_preflight при всех фазах done → [IMP:9] skip, preflight.py НЕ вызывается
+# · Last fail: preflight выполнялся при каждом init даже при done-состоянии (node-lifecycle.sh:60-64)
+# · Remove if: preflight решение перенесено обратно в shell
+@ldd_trajectory
+def test_preflight_skipped_when_all_phases_done(caplog, state_file, monkeypatch):
+    """_maybe_run_preflight: все фазы done → skip (D6)."""
+    monkeypatch.delenv("SKIP_PREFLIGHT", raising=False)
+    core_dir = Path(state_file).parent
+    bootstrap_dir = core_dir / "internal" / "bootstrap"
+    bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    (bootstrap_dir / "preflight.py").write_text("#!/usr/bin/env python3\nprint('probe')\n")
+    monkeypatch.setenv("CORE_DIR", str(core_dir))
+
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+    m.setup_state(mode="init", node="test")
+    # Все фазы done
+    for pv in sm.BootstrapPhase.INIT_PHASE_ORDER:
+        m.state.steps[pv] = sm.StepState(name=pv, status="done")
+    m.save()
+
+    preflight_calls: list[int] = []
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.cli.subprocess.run",
+        lambda *a, **kw: preflight_calls.append(1) or _FakeCompleted(0),
+    )
+
+    rc = cli._maybe_run_preflight(m)
+    assert rc == 0
+    assert len(preflight_calls) == 0, f"preflight не должен вызываться при всех done, calls={preflight_calls}"
+    assert any("preflight skipped" in r.message for r in caplog.records), (
+        "Должен быть [IMP:9] лог 'preflight skipped (D6)'"
+    )
+    logger.critical("[IMP:9][test] preflight skipped при all-done — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D6 — preflight выполняется при pending-фазах
+# · Scenario: _maybe_run_preflight при pending-фазах → preflight.py вызывается, rc прокидывается
+# · Last fail: N/A (новое поведение — решение перенесено в cli.py)
+# · Remove if: preflight решение перенесено обратно в shell
+@ldd_trajectory
+def test_preflight_runs_when_pending(caplog, state_file, monkeypatch):
+    """_maybe_run_preflight: есть pending-фазы → preflight выполняется (D6)."""
+    monkeypatch.delenv("SKIP_PREFLIGHT", raising=False)
+    core_dir = Path(state_file).parent
+    bootstrap_dir = core_dir / "internal" / "bootstrap"
+    bootstrap_dir.mkdir(parents=True, exist_ok=True)
+    (bootstrap_dir / "preflight.py").write_text("#!/usr/bin/env python3\nprint('probe')\n")
+    monkeypatch.setenv("CORE_DIR", str(core_dir))
+
+    m = sm.StateMachine(state_file_path=str(state_file))
+    m.core_dir = str(core_dir)
+    m.setup_state(mode="init", node="test")  # все pending
+
+    preflight_calls: list[int] = []
+    monkeypatch.setattr(
+        "core.internal.bootstrap.lifecycle.cli.subprocess.run",
+        lambda *a, **kw: preflight_calls.append(1) or _FakeCompleted(0),
+    )
+
+    rc = cli._maybe_run_preflight(m)
+    assert rc == 0
+    # 2 вызова: основной preflight + --parse-warnings (warnings печатаются)
+    assert len(preflight_calls) == 2, (
+        f"preflight должен вызваться 2 раза (probe + parse-warnings), calls={preflight_calls}"
+    )
+    logger.critical("[IMP:9][test] preflight выполнен при pending-фазах — OK")
+
+
+class _FakeCompleted:
+    """Минимальный subprocess.CompletedProcess-заменитель для _maybe_run_preflight."""
+
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+        self.stdout = ""
+        self.stderr = ""
 
 
 # endregion

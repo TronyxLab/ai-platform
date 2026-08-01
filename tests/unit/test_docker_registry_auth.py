@@ -158,6 +158,7 @@ def test_configure_docker_auth_success(caplog, tmp_path, monkeypatch):
     daemon_path = str(tmp_path / "daemon.json")
     monkeypatch.setattr(dra, "DAEMON_JSON_PATH", daemon_path)
     monkeypatch.setattr(dra, "_restart_docker", lambda: True)
+    monkeypatch.setattr(dra, "_auth_entry_exists", lambda: False)  # auth НЕ было → появилось
 
     mock_result = MagicMock()
     mock_result.returncode = 0
@@ -168,6 +169,59 @@ def test_configure_docker_auth_success(caplog, tmp_path, monkeypatch):
     assert ok is True
     assert os.path.isfile(daemon_path)
     logger.critical("[IMP:9][test] configure_docker_auth success — full flow OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D2 — restart guard, повторный вызов = no-op (AC-A2)
+# · Scenario: daemon.json уже сконфигурирован И auth-запись уже есть → _restart_docker НЕ вызывается
+# · Last fail: K2 (два restarts docker за init — φ3+φ6 вызывали docker_registry_auth.py)
+# · Remove if: restart-guard логика меняется
+@ldd_trajectory
+def test_configure_docker_auth_no_restart_when_no_change(caplog, tmp_path, monkeypatch):
+    """configure_docker_auth: 0 restarts when auth state did not change (idempotent, D2)."""
+    daemon_path = str(tmp_path / "daemon.json")
+    monkeypatch.setattr(dra, "DAEMON_JSON_PATH", daemon_path)
+    # Пред-сконфигурированный daemon.json (mirror уже есть) → _write_daemon_json = False
+    dra._write_daemon_json("https://mirror.gcr.io")
+    restart_calls: list[int] = []
+    monkeypatch.setattr(dra, "_restart_docker", lambda: restart_calls.append(1) or True)
+    # auth-запись УЖЕ существует → docker login no-op → auth_changed=False
+    monkeypatch.setattr(dra, "_auth_entry_exists", lambda: True)
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stderr = ""
+    with patch("subprocess.run", return_value=mock_result):
+        ok = dra.configure_docker_auth("user", "token")
+
+    assert ok is True
+    assert len(restart_calls) == 0, f"Expected 0 docker restarts (no auth-state change), got {len(restart_calls)}"
+    logger.critical("[IMP:9][test] No auth-state change → 0 docker restarts (D2 guard) — OK")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · Regression: D2 — restart при появлении auth-записи
+# · Scenario: auth-записи не было до login → появилась → _restart_docker вызывается ровно 1 раз
+# · Last fail: N/A (new test — D2 guard)
+# · Remove if: restart-guard логика меняется
+@ldd_trajectory
+def test_configure_docker_auth_restart_when_auth_appeared(caplog, tmp_path, monkeypatch):
+    """configure_docker_auth: 1 restart when auth entry appeared after login (D2 guard)."""
+    daemon_path = str(tmp_path / "daemon.json")
+    monkeypatch.setattr(dra, "DAEMON_JSON_PATH", daemon_path)
+    # Пред-сконфигурированный daemon.json → written=False; auth появилась → auth_changed=True
+    dra._write_daemon_json("https://mirror.gcr.io")
+    restart_calls: list[int] = []
+    monkeypatch.setattr(dra, "_restart_docker", lambda: restart_calls.append(1) or True)
+    monkeypatch.setattr(dra, "_auth_entry_exists", lambda: False)  # до login записи не было
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stderr = ""
+    with patch("subprocess.run", return_value=mock_result):
+        ok = dra.configure_docker_auth("user", "token")
+
+    assert ok is True
+    assert len(restart_calls) == 1, f"Expected exactly 1 docker restart, got {len(restart_calls)}"
+    logger.critical("[IMP:9][test] Auth entry appeared → 1 docker restart (D2 guard) — OK")
 
 
 # endregion

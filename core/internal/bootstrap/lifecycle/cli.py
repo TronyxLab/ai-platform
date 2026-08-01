@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import subprocess
 import sys
 
 from core.internal.bootstrap.lifecycle.helpers.reporting import send_telegram, write_audit_log
@@ -32,7 +33,7 @@ from core.internal.bootstrap.lifecycle.state_machine import (
     PhaseDependencyError,
     PhasePreconditionError,
     StateMachine,
-    StepState,
+    phase_is_done,
 )
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
@@ -208,6 +209,15 @@ def main() -> int:
             logger.error("[IMP:10][main] Phase '%s' FAILED: %s", args.run_phase, e)
             return 1
 
+    # ── D6 (волна 117): preflight — ТОЛЬКО при наличии pending/WARN-фаз ──
+    # Если state.json показывает все фазы done (без done_with_warnings) — preflight
+    # пропускается ([IMP:9] лог). Вызов переехал из node-lifecycle.sh:60-64 в cli.py
+    # (node-lifecycle.sh остаётся тонким фасадом; решение по статусам — у state_machine).
+    if args.mode == "init":
+        preflight_rc = _maybe_run_preflight(sm)
+        if preflight_rc != 0:
+            return preflight_rc
+
     # ── Dispatch full mode run ──
     try:
         if args.mode == "init":
@@ -237,12 +247,11 @@ def run_init_mode(sm: StateMachine) -> int:
         phase_state = sm.state.steps.get(phase)
         if phase_state is not None:
             if isinstance(phase_state, dict):
-                # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · loaded state.json (StepState dict: {name,status,hash})
-                # · не содержит ключа "done" → проверка phase_state.get("done") всегда False →
-                # · повторный bootstrap ПЕРЕВЫПОЛНЯЛ все 9 фаз (без SKIP-логов, ~10 мин лишних).
-                # · E2E DevPlan 095 T13 (idempotent rebootstrap): skip markers found=0 при exit 0.
-                # · Fix: status=="done" учитывается и для dict-представления (StepState.to_dict).
-                if phase_state.get("done", False) or phase_state.get("status") == "done":
+                # done_with_warnings НЕ считается done (волна 117 D5) — фаза перевыполняется.
+                # dict-представление: done-ключ true только при status == "done" (пишется ниже).
+                if phase_state.get("status") == "done" or (
+                    phase_state.get("done", False) and phase_state.get("status") in (None, "done")
+                ):
                     logger.info("[IMP:7][run_init] Phase %s already done — skipping", phase)
                     continue
             elif phase_state.status == "done":
@@ -250,16 +259,20 @@ def run_init_mode(sm: StateMachine) -> int:
                 continue
 
         try:
-            sm.execute_phase(phase)
-            # Mark phase as done in state
-            entry = sm.state.steps.get(phase)
-            if isinstance(entry, dict):
-                entry["done"] = True
-                entry["status"] = "done"
+            result = sm.execute_phase(phase)
+            # ── Mark phase status (волна 117 D5): WARN-семантика ──
+            # result=True → done; result=False (non-fatal issues) → done_with_warnings,
+            # который НЕ считается done → фаза перевыполняется при следующем init.
+            if result:
+                _mark_phase_success(sm, phase, current_index=i)
+                logger.info("[IMP:9][run_init] Phase %s completed successfully", phase)
             else:
-                sm.state.steps[phase] = StepState(name=phase, status="done")
-            sm.save()
-            logger.info("[IMP:9][run_init] Phase %s completed successfully", phase)
+                _mark_phase_with_warnings(sm, phase)
+                logger.warning(
+                    "[IMP:7][run_init] Phase %s completed WITH WARNINGS (done_with_warnings) — "
+                    "will be re-executed on next init",
+                    phase,
+                )
         except PhaseDependencyError as e:
             logger.error("[IMP:10][run_init] Dependency error in phase %s: %s", phase, e)
             entry = sm.state.steps.get(phase)
@@ -314,7 +327,10 @@ def run_update_mode(sm: StateMachine) -> int:
         phase_state = sm.state.steps.get(phase)
         if phase_state is not None:
             if isinstance(phase_state, dict):
-                if phase_state.get("done", False):
+                # done_with_warnings НЕ считается done (волна 117 D5)
+                if phase_state.get("status") == "done" or (
+                    phase_state.get("done", False) and phase_state.get("status") in (None, "done")
+                ):
                     logger.info("[IMP:7][run_update] Phase %s already done — skipping", phase)
                     continue
             elif phase_state.status == "done":
@@ -322,16 +338,18 @@ def run_update_mode(sm: StateMachine) -> int:
                 continue
 
         try:
-            sm.execute_phase(phase)
-            # Mark phase as done in state
-            entry = sm.state.steps.get(phase)
-            if isinstance(entry, dict):
-                entry["done"] = True
-                entry["status"] = "done"
+            result = sm.execute_phase(phase)
+            # ── WARN-семантика (волна 117 D5): result=False → done_with_warnings (НЕ done) ──
+            if result:
+                _mark_phase_success(sm, phase, current_index=i)
+                logger.info("[IMP:9][run_update] Phase %s completed successfully", phase)
             else:
-                sm.state.steps[phase] = StepState(name=phase, status="done")
-            sm.save()
-            logger.info("[IMP:9][run_update] Phase %s completed successfully", phase)
+                _mark_phase_with_warnings(sm, phase)
+                logger.warning(
+                    "[IMP:7][run_update] Phase %s completed WITH WARNINGS (done_with_warnings) — "
+                    "will be re-executed on next update",
+                    phase,
+                )
         except PhaseDependencyError as e:
             logger.error("[IMP:10][run_update] Dependency error in phase %s: %s", phase, e)
             entry = sm.state.steps.get(phase)
@@ -369,6 +387,146 @@ def run_update_mode(sm: StateMachine) -> int:
 
 
 # endregion FUNC_run_update_mode
+
+
+# region FUNC__mark_phase_success
+## @purpose — Mark a phase as completed successfully and advance current_step honestly.
+##            Волна 117 D5: current_step больше НЕ всегда 0 — обновляется на индекс последней
+##            успешно завершённой фазы (для resume-диагностики и детекции «уже init» в main()).
+##            При фейле — не вызывается (текущее значение сохраняется для resume-диагностики).
+## @io — ⇥ sm: StateMachine, phase: str, current_index: int (1-based) → ⎋ None
+## @complexity — O(1) + state.save()
+## @invariants
+##   - current_step = 1-based индекс последней успешно завершённой фазы (0 = not started)
+def _mark_phase_success(sm: StateMachine, phase: str, current_index: int) -> None:
+    """Mark a phase done + advance current_step (волна 117 D5 — честный current_step)."""
+    entry = sm.state.steps.get(phase)
+    if isinstance(entry, dict):
+        entry["done"] = True
+        entry["status"] = "done"
+    elif entry is not None:
+        entry.status = "done"
+    else:
+        sm.state.steps[phase] = {"name": phase, "status": "done", "done": True}
+    sm.state.current_step = current_index
+    sm.save()
+    logger.info("[IMP:9][state_mark] Phase %s marked done (current_step=%d)", phase, current_index)
+
+
+# endregion FUNC__mark_phase_success
+
+
+# region FUNC__mark_phase_with_warnings
+## @purpose — Mark a phase as done_with_warnings (НЕ done) and record the warning in state.
+##            Волна 117 D5: фаза с non-fatal issues (return False) получает статус
+##            done_with_warnings — НЕ считается done → перевыполняется при следующем init.
+##            Предупреждение сохраняется в state (per-phase warnings + top-level list).
+## @io — ⇥ sm: StateMachine, phase: str → ⎋ None
+## @complexity — O(1) + state.save()
+## @invariants
+##   - current_step НЕ продвигается (фаза не завершена успешно — resume-диагностика)
+##   - done-ключ dict-представления = False (единый phase_is_done контракт)
+def _mark_phase_with_warnings(sm: StateMachine, phase: str) -> None:
+    """Mark a phase done_with_warnings (re-run required) — волна 117 D5."""
+    warn_msg = f"Phase {phase} completed with non-fatal issues (returned False) — will be re-executed on next run"
+    entry = sm.state.steps.get(phase)
+    if isinstance(entry, dict):
+        entry["done"] = False
+        entry["status"] = "done_with_warnings"
+        entry.setdefault("warnings", []).append(warn_msg)
+    elif entry is not None:
+        entry.status = "done_with_warnings"
+        entry.warnings.append(warn_msg)
+    else:
+        sm.state.steps[phase] = {
+            "name": phase,
+            "status": "done_with_warnings",
+            "done": False,
+            "warnings": [warn_msg],
+        }
+    sm.state.warnings.append(warn_msg)
+    sm.save()
+    logger.warning("[IMP:7][state_mark] Phase %s marked done_with_warnings (re-run required)", phase)
+
+
+# endregion FUNC__mark_phase_with_warnings
+
+
+# region FUNC__maybe_run_preflight
+## @purpose — Run preflight checks ONLY when there are pending/WARN phases (волна 117 D6).
+##            Если state показывает все фазы done (без done_with_warnings) — preflight
+##            пропускается с [IMP:9] логом. Вызов переехал из node-lifecycle.sh:60-64.
+## @io — ⇥ sm: StateMachine → ⎋ int (0 = ok/skipped, 1 = preflight FAILED)
+## @complexity — O(N) phases + O(1) preflight subprocess
+## @invariants
+##   - SKIP_PREFLIGHT env → skip (backward-compat с node-lifecycle.sh)
+##   - preflight.py отсутствует → WARN + skip (non-fatal)
+##   - Все фазы done (status == "done") → skip с [IMP:9]
+##   - Preflight FAIL (FATAL probe) → return 1 (abort init, как node-lifecycle.sh:62)
+##   - --parse-warnings второй вызов: warnings печатаются, НЕ влияют на exit
+def _maybe_run_preflight(sm: StateMachine) -> int:
+    """Run preflight unless all init phases are already done (D6, волна 117)."""
+    if os.environ.get("SKIP_PREFLIGHT"):
+        logger.info("[IMP:7][preflight] SKIP_PREFLIGHT set — skipping preflight")
+        return 0
+
+    core_dir = sm.core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
+    preflight_script = os.path.join(core_dir, "internal", "bootstrap", "preflight.py")
+    if not os.path.isfile(preflight_script):
+        logger.warning("[IMP:7][preflight] preflight.py not found at %s — skipping", preflight_script)
+        return 0
+
+    # ── D6: все фазы done (без WARN-статусов) → preflight не нужен ──
+    all_done = all(phase_is_done(sm.state.steps.get(pv)) for pv in BootstrapPhase.phase_list("init"))
+    if all_done:
+        logger.info("[IMP:9][preflight] All init phases done — preflight skipped (D6)")
+        return 0
+
+    # ── Есть pending/WARN-фазы → выполнить (сохранённый путь node-lifecycle.sh:60-64) ──
+    logger.info("[IMP:8][preflight] Running pre-flight checks (pending/WARN phases present)")
+    node_yaml = os.environ.get("NODE_YAML", "")
+    context = os.environ.get("CONTEXT", "")
+    node_name = os.environ.get("NODE_NAME", "")
+    try:
+        proc = subprocess.run(
+            [
+                "python3",
+                preflight_script,
+                "--node-yaml",
+                node_yaml,
+                "--context",
+                context,
+                "--node-name",
+                node_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.error("[IMP:10][preflight] Preflight execution failed: %s", e)
+        return 1
+    if proc.returncode != 0:
+        logger.error(
+            "[IMP:10][preflight] Pre-flight checks FAILED: %s",
+            (proc.stderr or proc.stdout).strip()[-500:],
+        )
+        return 1
+    # --parse-warnings: read JSON from stdin, print warnings to stderr (non-fatal)
+    try:
+        subprocess.run(
+            ["python3", preflight_script, "--parse-warnings"],
+            input=proc.stdout,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("[IMP:7][preflight] Preflight warnings parse failed (non-fatal): %s", e)
+    return 0
+
+
+# endregion FUNC__maybe_run_preflight
 
 
 if __name__ == "__main__":

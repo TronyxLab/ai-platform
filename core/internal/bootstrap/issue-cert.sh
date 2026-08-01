@@ -561,12 +561,26 @@ issue_tls_cert() {
 }
 # endregion ACME_TLS
 
+# ══════════════════════════════════════════════════════════════════════
+# EXECUTOR ENTRY — вызывается ТОЛЬКО cert_orchestrator.py:451
+#   subprocess.run(["bash", issue-cert.sh], timeout=ISSUE_TIMEOUT(300), env={PLATFORM_DOMAIN, ...})
+# ══════════════════════════════════════════════════════════════════════
+# ⚠️ ОТКЛОНЕНИЕ от DevPlan 117 D4 (зафиксировано 2026-08-01, требует ревью Архитектора):
+# · DevPlan утверждает «main() — мёртвый код, 0 вызывающих». Факт: cert_orchestrator._issue_cert()
+# · вызывает `bash issue-cert.sh` (cert_orchestrator.py:451) — это ИСПОЛНЯЕТ main() (tail-call main "$@").
+# · Доказательство: tests/test_nginx_acme.py:40-60 _source_and_run_issue_cert_no_main() явно вырезает
+# ·   `main "$@"`, иначе main() выполнится и упадёт на root-check — main() — исполняемая точка входа.
+# · Удаление main() сделало бы `bash issue-cert.sh` no-op с exit 0 → cert_orchestrator молча пометил бы
+# · «issued», не выпустив сертификат (нарушение AC-A4 «executor работает» + Fail-Fast).
+# · Решение: main() СОХРАНЁН как живой executor; удалены только устаревший TRAP[DECISION]
+# · «CLI debug entrypoint» и standalone-CLI-фрейминг. Полный перевод issuance в Python —
+# · по TRAP cert_orchestrator.py:435 (после стабилизации acme.sh API ≥6 мес).
 # region MAIN
-## @purpose  Main cert issuance logic — called by cert_orchestrator.py via subprocess.
-##           NOT a standalone entrypoint (see NOT_CALLED_STANDALONE below).
+## @purpose  Executor cert issuance logic — called by cert_orchestrator.py via subprocess
+##           (`bash issue-cert.sh`, timeout=300). НЕ автономный CLI: env-контракт
+##           (PLATFORM_DOMAIN/PLATFORM_EMAIL/PLATFORM_ACME_DNS_PLUGIN/PLATFORM_PROJECT_DOMAINS/
+##           ACME_CHALLENGE_MODE/WEBNAMES_API_KEY) задаётся Python-оркестратором.
 ## @workflow
-##   ▶ python3 parse node.yaml → env vars
-##   → ○ /etc/letsencrypt/live/<domain>/fullchain.pem exists? → SKIP, exit 0
 ##   → ○ validate PLATFORM_DOMAIN, PLATFORM_EMAIL, PLATFORM_ACME_DNS_PLUGIN, WEBNAMES_API_KEY
 ##   → install_acme → issue_tls_cert (dns/http/auto per ACME_CHALLENGE_MODE)
 ##   → _acme_install_cron → _acme_verify_cert
@@ -580,6 +594,8 @@ issue_tls_cert() {
 ##   - ACME_CHALLENGE_MODE: dns (default), http (HTTP-01 only), auto (DNS-01 → HTTP-01 fallback)
 ##   - When challenge mode is http or auto, issues individual subdomain certs for platform.domain
 ## @changes  2026-07-26 | DevPlan 080 — main "$@" restored; cron and S3 logic removed (handled by cert_orchestrator.py)
+##           2026-08-01 | Волна 117 D4 — TRAP «CLI debug entrypoint» удалён; main() = живой executor
+##           (факт: cert_orchestrator.py:451 вызывает bash issue-cert.sh — отклонение от DevPlan задокументировано)
 main() {
     # ── S7: Parse NODE_YAML via NodeYaml CLI --domain-config (replaces the legacy shell domain-config helper) ──
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
@@ -695,10 +711,4 @@ main() {
 }
 # endregion MAIN
 
-# ⚠️ TRAP[DECISION] · 2026-07-26 · — · issue-cert.sh main() preserved as CLI debug entrypoint
-# · Rejected: removing main() entirely per DevPlan 080 TASK-5B
-# · Reason: main() is useful for CLI debugging and manual cert operations.
-#   No bootstrap code calls issue-cert.sh directly — all paths go through cert_orchestrator.py.
-#   Cron/S3 logic removed from main() — these are now handled by cert_orchestrator.py.
-# · Rev: if any bootstrap code starts calling issue-cert.sh directly, remove main() immediately.
 main "$@"

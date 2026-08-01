@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: test_bootstrap_dry_run, integration, bootstrap, 14-phases, dry-run, state-machine, dependency-graph, precondition, grouped-phase, skip-phases, phase-migration
-# STRUCTURE: ▶ ┌tmp_path + monkeypatch + mock subprocess┐ → ◇ test_init_mode_14_phases_dry_run (9 init phases, φ1-φ8.5) → ◇ test_update_mode_5_phases_dry_run (5 update phases, φ9-φ13) → ◇ test_precondition_block_on_dependency_gap (φ6 = requires φ4 → PhaseDependencyError) → ◇ test_skip_already_done_phases (grouped-phase all sub_steps done+unchanged → SKIP) → ◇ test_grouped_phase_skip_unchanged_sub_steps (φ1 3/4 done → only failed sub-step runs) → ◇ test_phase_dependency_graph_integrity (graph + migration validation) → ◇ test_precondition_check_root_failure (non-root → PhasePreconditionError) → ⎋ LDD IMP:7-10 assertions + TRAP[TEST] markers
+# GREP_SUMMARY: test_bootstrap_dry_run, integration, bootstrap, 14-phases, dry-run, state-machine, dependency-graph, precondition, skip-phases, phase-migration
+# STRUCTURE: ▶ ┌tmp_path + monkeypatch + mock subprocess┐ → ◇ test_init_mode_14_phases_dry_run (9 init phases, φ1-φ8.5) → ◇ test_update_mode_5_phases_dry_run (5 update phases, φ9-φ13) → ◇ test_precondition_block_on_dependency_gap (φ6 = requires φ4 → PhaseDependencyError) → ◇ test_phase_dependency_graph_integrity (graph validation) → ◇ test_precondition_check_root_failure (non-root → PhasePreconditionError) → ⎋ LDD IMP:7-10 assertions + TRAP[TEST] markers
 # region MODULE_CONTRACT
 ## @purpose  Integration tests for the 14-phase bootstrap pipeline in dry-run mode (DevPlan T14).
 ##           Simulates all 14 phases (9 INIT + 5 UPDATE) with mocked subprocess calls,
-##           verifies dependency enforcement, precondition blocks, skip-already-done logic,
-##           and grouped-phase sub-step skip logic.
+##           verifies dependency enforcement, precondition blocks, skip-already-done logic.
 ## @scope    Integration (not unit) — tests the interaction of state_machine.py and phases.py
 ##           with mocked system dependencies. Does NOT execute real
 ##           subprocess commands — all subprocess.run calls are monkeypatched. A real mock
@@ -19,11 +18,15 @@
 ##   5. State file operations use tmp_path exclusively — never /var/lib/platform
 ##   6. Each test validates IMP:9 business logic log presence via caplog trajectory
 ##   7. Each test function has # 🧪 TRAP[TEST] with Regression/Scenario/Last fail/Remove if fields
+##   8. Волна 117 D5: execute_grouped_phase удалён (sub-step resume вне скоупа) —
+##      grouped-phase тесты и MIGRATION_MAP удалены вместе с функцией
 ## @rationale DevPlan T14 explicitly requires integration test coverage of the 14-phase flow
 ##   in dry-run mode. The dependency graph and precondition system must be tested together
 ##   to catch cross-phase interaction bugs that unit tests would miss. Mocking system calls
 ##   makes the test safe to run on any machine (no root, no Docker, no real secrets).
 ## @changes 2026-07-30 | Created per DevPlan T14 — 8 integration tests for 14-phase bootstrap
+##           2026-08-01 | Волна 117 D5 — grouped-phase tests (skip_already_done, skip_unchanged)
+##           и MIGRATION_MAP удалены вместе с execute_grouped_phase (мёртвый код)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -31,7 +34,6 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -45,27 +47,6 @@ from core.internal.bootstrap.lifecycle.state_machine import (
     StepState,
     _phase_dependency_graph,
 )
-
-# DevPlan 091 Wave B: legacy 23→14 migration deleted (cold start only, no backward-compat).
-# MIGRATION_MAP constant (sub_step names per grouped phase) is inlined here for the
-# two tests that still use it (skip_already_done_phases, grouped_phase_skip_unchanged).
-# The migration-specific assertions in test_phase_dependency_graph_integrity were
-# removed together with migrate_state_to_phases().
-# ⚠️ TRAP[DECISION] · 2026-07-30 · MED · Inlined MIGRATION_MAP from the deleted migration module
-# · Rejected: extract sub_step names dynamically (risk: changes test behavior)
-# · Reason: MIGRATION_MAP is a static list of grouped-phase sub_step keys; only system_bootstrap
-#   is referenced. Inlining preserves test semantics without importing deleted module.
-# · Rev: when a new grouped phase is added with sub_steps — update this constant.
-MIGRATION_MAP: dict[str, list[str]] = {
-    "system_bootstrap": ["packages", "docker_install", "tor_proxy", "firewall"],
-    "user_accounts": ["ssh_access", "create_platform_user", "create_ci_deploy_user"],
-    "platform_setup": ["create_projects_base", "platform_dirs", "docker_config", "metrics_cron"],
-    "secrets_provision": ["decrypt_secrets", "ensure_secrets", "secrets_init"],
-    "node_configuration": ["read_node_yaml", "verify_core", "verify_node_configs"],
-    "certificates": ["install_acme"],
-    "deploy_services": ["deploy_modules", "deploy_context"],
-}
-assert "system_bootstrap" in MIGRATION_MAP, "MIGRATION_MAP must contain system_bootstrap"
 
 logger = logging.getLogger(__name__)
 
@@ -574,182 +555,6 @@ def test_precondition_block_on_dependency_gap(
 
 # endregion Tests: Precondition & Dependency Enforcement
 
-# ═══════════════════════════════════════════════════════════════════════════
-# region Tests: Skip Logic & Partial Failure Recovery
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-# region FUNC_test_skip_already_done_phases
-## @purpose — Verify that execute_grouped_phase() skips sub_steps that are already done
-##            with unchanged content hash. All 4 sub_steps of φ1 (system_bootstrap) are
-##            pre-set as done+unchanged → execute_phase should NOT be called.
-## @io — ⇥ caplog, machine → ⎋ None (verifies skip behavior)
-## @complexity — O(S * H) where S = 4 sub_steps, H = hash computation
-## @invariants
-##   - machine.execute_phase is wrapped to raise if called (should be skipped)
-##   - Each sub_step's hash is computed via machine._step_hash() for accurate matching
-##   - execute_grouped_phase returns True (all sub_steps done)
-##   - Log contains "SKIP sub_step" for each sub_step
-def test_skip_already_done_phases(
-    caplog: pytest.LogCaptureFixture,
-    machine: StateMachine,
-) -> None:
-    """Pre-set all φ1 sub_steps as done+unchanged → execute_grouped_phase skips all."""
-    # 🧪 TRAP[TEST] · 2026-07-30 · Regression: grouped-phase skip logic
-    # · Scenario: φ1 (system_bootstrap) has 4 sub_steps all done with matching hash
-    # · Last fail: N/A (first implementation)
-    # · Remove if: SYSTEM_BOOTSTRAP is no longer a grouped phase
-
-    caplog.set_level(logging.DEBUG)
-
-    # ── Get sub_step names for φ1 from MIGRATION_MAP ──
-    sub_step_keys = MIGRATION_MAP["system_bootstrap"]
-    assert len(sub_step_keys) == 4, (
-        f"Expected 4 sub_steps for system_bootstrap, got {len(sub_step_keys)}: {sub_step_keys}"
-    )
-
-    # ── Pre-compute hashes for each sub_step ──
-    sub_steps: dict[str, dict[str, Any]] = {}
-    for sub_key in sub_step_keys:
-        sub_hash = machine._step_hash(f"sub_system_bootstrap_{sub_key}")
-        sub_steps[sub_key] = {
-            "done": True,
-            "hash": sub_hash,
-        }
-        logger.info(
-            "[IMP:8][test_skip] Sub_step '%s' hash: %s...",
-            sub_key,
-            sub_hash[:12],
-        )
-
-    # ── Wrap execute_phase to detect unwanted calls ──
-    call_count: list[int] = [0]
-    original_execute = machine.execute_phase
-
-    def _tracking_execute(phase_value: str) -> None:
-        call_count[0] += 1
-        logger.warning(
-            "[IMP:7][test_skip] UNEXPECTED execute_phase call for '%s' (call #%d) — "
-            "all sub_steps should have been skipped",
-            phase_value,
-            call_count[0],
-        )
-
-    machine.execute_phase = _tracking_execute  # type: ignore[assignment]
-
-    # ── Execute grouped phase ──
-    result = machine.execute_grouped_phase(
-        BootstrapPhase.SYSTEM_BOOTSTRAP,
-        sub_steps,
-    )
-
-    # ── Restore original ──
-    machine.execute_phase = original_execute
-
-    # ── Assertions ──
-    assert call_count[0] == 0, (
-        f"execute_phase was called {call_count[0]} times but should have been 0 "
-        f"(all sub_steps had done=true + matched hash)"
-    )
-    assert result is True, f"execute_grouped_phase returned {result}, expected True (all sub_steps done)"
-
-    # ── Verify skip log entries ──
-    skip_logs = [r.message for r in caplog.records if "SKIP sub_step" in r.message]
-    assert len(skip_logs) == 4, f"Expected 4 'SKIP sub_step' log messages, found {len(skip_logs)}"
-    for log_msg in skip_logs:
-        logger.info("[IMP:8][test_skip] Verified skip log: %s", log_msg)
-
-    # ── LDD trajectory ──
-    found_imp9 = _print_ldd_trajectory(caplog, "test_skip_already_done_phases")
-    assert found_imp9, "No IMP:9 business logic log found in skip test"
-
-
-# endregion FUNC_test_skip_already_done_phases
-
-
-# region FUNC_test_grouped_phase_skip_unchanged_sub_steps
-## @purpose — Verify that execute_grouped_phase() skips only unchanged+done sub_steps and
-##            executes the remaining (failed/pending) ones. φ1 has 4 sub_steps; set 3 as
-##            done+unchanged (skipped) and 1 as pending (executed).
-## @io — ⇥ caplog, machine → ⎋ None (verifies selective skip)
-## @complexity — O(S * H) where S = 4 sub_steps
-## @invariants
-##   - 3 sub_steps (system_packages, docker_install, tor_proxy) are done+unchanged → SKIP
-##   - 1 sub_step (firewall) is pending → EXECUTE
-##   - execute_phase is called exactly 1 time (for the pending sub_step)
-##   - execute_grouped_phase returns True (all sub_steps eventually done)
-def test_grouped_phase_skip_unchanged_sub_steps(
-    caplog: pytest.LogCaptureFixture,
-    machine: StateMachine,
-) -> None:
-    """φ1: 3/4 sub_steps done with unchanged hash, 1 pending → only pending sub_step executes."""
-    # 🧪 TRAP[TEST] · 2026-07-30 · Regression: selective sub_step skip in grouped phases
-    # · Scenario: system_packages=d, docker_install=d, tor_proxy=d, firewall=pending
-    # · Last fail: N/A (first implementation)
-    # · Remove if: SYSTEM_BOOTSTRAP grouped-phase logic is removed
-
-    caplog.set_level(logging.DEBUG)
-
-    # ── Get φ1 sub_step keys ──
-    sub_step_keys = MIGRATION_MAP["system_bootstrap"]
-    assert len(sub_step_keys) == 4
-
-    # ── Set up: 3 done+unchanged, 1 pending ──
-    done_hash_1 = machine._step_hash("sub_system_bootstrap_system_packages")
-    done_hash_2 = machine._step_hash("sub_system_bootstrap_docker_install")
-    done_hash_3 = machine._step_hash("sub_system_bootstrap_tor_proxy")
-
-    sub_steps: dict[str, dict[str, Any]] = {
-        sub_step_keys[0]: {"done": True, "hash": done_hash_1},  # system_packages → SKIP
-        sub_step_keys[1]: {"done": True, "hash": done_hash_2},  # docker_install → SKIP
-        sub_step_keys[2]: {"done": True, "hash": done_hash_3},  # tor_proxy → SKIP
-        sub_step_keys[3]: {"done": False, "hash": ""},  # firewall → EXECUTE
-    }
-
-    # ── Wrap execute_phase to track calls ──
-    call_log: list[str] = []
-    original_execute = machine.execute_phase
-
-    def _tracking_execute(phase_value: str) -> None:
-        call_log.append(phase_value)
-        logger.info(
-            "[IMP:8][test_skip_selective] execute_phase called for '%s'",
-            phase_value,
-        )
-
-    machine.execute_phase = _tracking_execute  # type: ignore[assignment]
-
-    # ── Execute grouped phase ──
-    result = machine.execute_grouped_phase(
-        BootstrapPhase.SYSTEM_BOOTSTRAP,
-        sub_steps,
-    )
-
-    # ── Restore original ──
-    machine.execute_phase = original_execute
-
-    # ── Assertions ──
-    assert len(call_log) == 1, f"Expected exactly 1 execute_phase call (for firewall), got {len(call_log)}: {call_log}"
-    assert call_log[0] == BootstrapPhase.SYSTEM_BOOTSTRAP
-    assert result is True, f"execute_grouped_phase returned {result}, expected True"
-
-    # ── Verify skip logs: exactly 3 skip messages ──
-    skip_logs = [r.message for r in caplog.records if "SKIP sub_step" in r.message]
-    assert len(skip_logs) == 3, f"Expected exactly 3 'SKIP sub_step' log messages, found {len(skip_logs)}"
-
-    # ── Verify run log for firewall ──
-    run_logs = [r.message for r in caplog.records if "EXECUTE sub_step" in r.message and "firewall" in r.message]
-    assert len(run_logs) >= 1, "Expected 'EXECUTE sub_step' log for firewall sub_step"
-
-    # ── LDD trajectory ──
-    found_imp9 = _print_ldd_trajectory(caplog, "test_grouped_phase_skip_unchanged_sub_steps")
-    assert found_imp9, "No IMP:9 business logic log found in grouped-phase skip test"
-
-
-# endregion FUNC_test_grouped_phase_skip_unchanged_sub_steps
-
-
-# endregion Tests: Skip Logic & Partial Failure Recovery
 
 # ═══════════════════════════════════════════════════════════════════════════
 # region Tests: Phase Dependency Graph Integrity
@@ -759,24 +564,22 @@ def test_grouped_phase_skip_unchanged_sub_steps(
 # region FUNC_test_phase_dependency_graph_integrity
 ## @purpose — Verify _phase_dependency_graph integrity: all 14 phases have the expected
 ##            dependencies, no invalid phase names in graph, and the graph's transitive
-##            closure is consistent. Also verify that migrate_state_to_phases produces
-##            correct composite hashes.
+##            closure is consistent.
 ## @io — ⇥ caplog → ⎋ None
-## @complexity — O(P * S) where P=14 phases, S=avg sub_steps
+## @complexity — O(P) where P = phases in graph
 ## @invariants
 ##   - All phases in _phase_dependency_graph are valid BootstrapPhase values
 ##   - All dependency values are valid BootstrapPhase values
 ##   - INIT phases have no dependency on UPDATE phases, and vice-versa
-##   - migrate_state_to_phases produces correct composite hashes
-##   - MIGRATION_MAP keys match valid phase names
 def test_phase_dependency_graph_integrity(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Verify _phase_dependency_graph consistency and MIGRATION_MAP key validity."""
-    # 🧪 TRAP[TEST] · 2026-07-30 · Regression: _phase_dependency_graph + MIGRATION_MAP structural integrity
-    # · Scenario: Structural test of the dependency graph and inline migration map keys
+    """Verify _phase_dependency_graph consistency."""
+    # 🧪 TRAP[TEST] · 2026-07-30 · Regression: _phase_dependency_graph structural integrity
+    # · Scenario: Structural test of the dependency graph
     # · Last fail: never
-    # · Updated: 2026-07-30 (Wave B) — migrate_state_to_phases() assertions removed with the legacy migration
+    # · Updated: 2026-08-01 (волна 117 D5) — MIGRATION_MAP assertions removed together with
+    #   execute_grouped_phase (mёртвый код, sub-step resume вне скоупа волны)
     # · Remove if: phases are no longer tracked via dependency graph
 
     caplog.set_level(logging.DEBUG)
@@ -814,16 +617,6 @@ def test_phase_dependency_graph_integrity(
         "[IMP:9][test_graph] All %d phase dependency entries validated — no cross-mode deps",
         len(_phase_dependency_graph),
     )
-
-    # ── Verify MIGRATION_MAP keys are valid BootstrapPhase values ──
-    # (MIGRATION_MAP is now inlined; migrate_state_to_phases() removed in Wave B.
-    #  Only the structural key-validity check is preserved.)
-    for phase_key in MIGRATION_MAP:
-        assert phase_key in all_phase_values or phase_key.replace("_", "") in {
-            v.replace("_", "") for v in all_phase_values
-        }, f"MIGRATION_MAP key '{phase_key}' does not match any BootstrapPhase value"
-
-    logger.info("[IMP:9][test_graph] MIGRATION_MAP all keys validated against BootstrapPhase")
 
     # ── LDD trajectory ──
     found_imp9 = _print_ldd_trajectory(caplog, "test_phase_dependency_graph_integrity")

@@ -631,7 +631,8 @@ def extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
 ## @complexity — O(D * T + P * T) where D = domains, P = projects, T = timeout
 ## @invariants
 ##   1. CONTEXT extracted from: explicit arg → os.environ → node.yaml
-##   2. Cert orchestration via importlib cert_orchestrator (non-fatal)
+##   2. Cert orchestration via importlib cert_orchestrator (non-fatal); волна 117 D3 —
+##      skip, если все домены имеют валидные сертификаты (≥30 дней, LE)
 ##   3. Project deploy via deploy_context_projects()
 ##   4. Vhost render via subprocess add-vhost.sh --render-all (non-fatal)
 ##   5. Nginx reload via docker exec (non-fatal)
@@ -685,10 +686,26 @@ def deploy_context(
             if spec and spec.loader:
                 cert_mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(cert_mod)
-                issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
-                secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-                cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
-                logger.info("[IMP:9][deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
+                # ── D3 (волна 117): skip, если все домены контекста имеют валидные сертификаты ──
+                # φ7 (phase_certificates) уже выпустил/восстановил сертификаты для всех доменов;
+                # повторный вызов orchestrate_certs здесь — дубль S3/openssl-проходов (идемпотентен,
+                # но лишний). Критерий — тот же, что у cert_orchestrator._is_cert_valid (≥30 дней + LE).
+                invalid_domains = []
+                for dom in domains:
+                    cert_path = os.path.join(cert_mod.CERT_VALIDITY_PATH, dom, "fullchain.pem")
+                    if not (os.path.isfile(cert_path) and cert_mod._is_cert_valid(dom, cert_path)):
+                        invalid_domains.append(dom)
+                if invalid_domains:
+                    issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
+                    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+                    cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
+                    logger.info("[IMP:9][deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
+                else:
+                    logger.info(
+                        "[IMP:9][deploy_context] All %d domains have valid certs (≥30 days, LE) — "
+                        "skipping cert orchestration (D3)",
+                        len(domains),
+                    )
             else:
                 logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py")
         except (ImportError, OSError, FileNotFoundError) as e:

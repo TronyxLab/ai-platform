@@ -26,6 +26,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${CORE_DIR}/lib/paths.sh"
+source "${CORE_DIR}/lib/logging.sh"
 source "${CORE_DIR}/internal/bootstrap/scp-deliver.sh"
 source "${CORE_DIR}/internal/bootstrap/build-ssh-cmd.sh"
 source "${CORE_DIR}/lib/args.sh"
@@ -70,7 +71,15 @@ main() {
 
     # ── Batch-extract node.yaml fields (B3 T5, U-52): ONE --get-many call ──
     echo "[IMP:8][bootstrap][entrypoint] Batch-extracting node.yaml fields (--get-many)"
-    BATCH_OUTPUT="$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get-many owner_key:node.owner_key,ci_deploy_key:node.ci_deploy_key,platform_domain:domain,context:context,context0:contexts.0.name 2>/dev/null)" || true
+    # Волна 117 D8: stderr не глотаем — отсутствующий ключ = rc 0 + пустое значение (OK), файл не читается = rc 2/3/4 (WARN)
+    local _batch_err; _batch_err="$(mktemp)"
+    if BATCH_OUTPUT="$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get-many owner_key:node.owner_key,ci_deploy_key:node.ci_deploy_key,platform_domain:domain,context:context,context0:contexts.0.name 2>"${_batch_err}")"; then
+        : # rc=0 — ключи могут отсутствовать → пустые значения (легитимно)
+    else
+        local _batch_rc=$?
+        log_imp 7 "node-yaml" "Batch field extraction failed (rc=${_batch_rc}): $(tr '\n' ' ' < "${_batch_err}" | cut -c1-300)"
+    fi
+    rm -f "${_batch_err}"
     OWNER_KEY=""; CI_DEPLOY_KEY=""; PLATFORM_DOMAIN=""; CONTEXT=""; CONTEXT0=""
     while IFS=$'\t' read -r alias value; do
         case "$alias" in
@@ -140,11 +149,12 @@ main() {
         masked_remote_cmd="${REMOTE_CMD//${DETECTED_AGE_KEY}/<AGE_KEY:${m}...>}"
     fi
     $DRY_RUN && {
-        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS[*]} root@${SSH_HOST} ${masked_remote_cmd}" >&2
+        echo "[IMP:8][bootstrap][dry-run] DRY-RUN: ssh ${SSH_OPTS_COMMON[*]} root@${SSH_HOST} ${masked_remote_cmd}" >&2
         echo "[IMP:9][bootstrap][dry-run] DRY-RUN complete" >&2; exit 0
     }
     echo "[IMP:9][bootstrap][entrypoint] SSH node-lifecycle.sh --mode init on root@${SSH_HOST}"
-    exec ssh "${SSH_OPTS[@]}" "root@${SSH_HOST}" "${REMOTE_CMD}"
+    # Волна 117 D7: exec ssh → SSH_OPTS_COMMON (lib/ssh.sh, Python SoT ssh_opts.py); exec + DRY_RUN семантика сохранены
+    exec ssh "${SSH_OPTS_COMMON[@]}" "root@${SSH_HOST}" "${REMOTE_CMD}"
 }
 
 main "$@"

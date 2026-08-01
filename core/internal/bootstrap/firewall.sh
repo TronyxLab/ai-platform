@@ -72,7 +72,9 @@ apply_rules() {
     local -a extra_ports=("$@")
 
     log_step "reset" "START" "Resetting ufw rules (declarative replacement)"
-    # Disable ufw temporarily to allow non-interactive reset
+    # Best-effort (волна 117 D8): утилита ufw может отсутствовать на этом этапе —
+    # disable-fail не блокирует reset ниже (ufw --force reset переустанавливает состояние).
+    # НЕ менять на fail-fast: `disable` — вспомогательный, а не целевой шаг.
     ufw --force disable &>/dev/null || true
 
     # Reset wipes all rules; safe because we re-apply full set immediately

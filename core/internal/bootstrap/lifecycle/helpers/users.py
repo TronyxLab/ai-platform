@@ -9,7 +9,8 @@
 ## @invariants
 ##   - create_user идемпотентен (id check перед useradd); системный пользователь с home
 ##   - add_ssh_key: duplicate-check по содержимому authorized_keys; forced-command префикс
-##     для ci-deploy (orchestrator_cli receive — TRAP[DECISION] B8 D2)
+##     для ci-deploy (orchestrator_cli dispatch — SSH_ORIGINAL_COMMAND-диспетчер, B1;
+##     единственный писатель ci-deploy ключа, волна 117 D1: setup-node.sh дубли удалены)
 ##   - ensure_projects_base: /opt/projects ownership ci-deploy + вызов converge R3 (non-fatal)
 ##   - Все subprocess через helpers.subprocess_io.run_subprocess (единый канон)
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита (DevPlan 116 B9 D1).

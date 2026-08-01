@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, step-transitions, state-json, content-hash, BootstrapPhase, phase-dependency-graph, precondition-check
-# STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState (re-export из state_store)┐ → ◇ precondition_check() → ○ _execute_phase() / _execute_grouped_phase() → ⚡ save() → ⎋ compat CLI (lazy cli.py)
+# STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState (re-export из state_store)┐ → ◇ precondition_check() → ○ execute_phase() → ◇ statuses {done|done_with_warnings|...} → ⚡ save() → ⎋ compat CLI (lazy cli.py)
 # region MODULE_CONTRACT
 ## @purpose  Explicit state machine for node-lifecycle.sh bootstrap/update process.
 ##           Manages 14 consolidated phases (φ1-φ13 + φ8.5) via a JSON state file
@@ -10,7 +10,7 @@
 ##           CLI (cli.py) вынесены (B9 T1/T2, U-08) — state_machine.py ≤ 1200 LOC (гейт T6.2).
 ## @scope    Python-side of W4-E2 Strangler-Fig decomposition of node-lifecycle.sh (1301 LOC).
 ##           Handles: state orchestration, content-hash invalidation, checkpoint-resume,
-##           phase precondition checks, phase dependency graph, grouped-phase sub-checkpoints,
+##           phase precondition checks, phase dependency graph, WARN-статусы (done_with_warnings),
 ##           TOR-conditional skip, error/warning collection, dry-run, force-reset.
 ##           Business logic extraction → phases.py; I/O → lifecycle/helpers/; CLI → lifecycle/cli.py.
 ## @invariants
@@ -28,7 +28,8 @@
 ##   10. CLI args or env vars for: NODE_NAME, NODE_YAML, PLATFORM_OWNER_KEY, PLATFORM_CI_DEPLOY_KEY
 ##   11. Phase dependency graph enforces execution order: φ2 ← φ1, φ4 ← φ3, φ6 ← φ4, φ8 ← φ4+φ6+φ7
 ##   12. precondition_check() verifies intra-phase conditions BEFORE execution
-##   13. grouped-phases (φ1-φ5, φ7, φ12) support sub_checkpoints for granular skip
+##   13. Sub-step resume (execute_grouped_phase) УДАЛЁН (волна 117 D5) — фазы выполняются
+##       целиком; идемпотентность через phase-статусы: done_with_warnings ≠ done → перевыполнение
 ##   14. Зависимости: state_machine → phases (динамический импорт в execute_phase) → helpers;
 ##       односторонняя (цикл phases↔state_machine устранён, B9 T1)
 ##   15. BootstrapState/StepState/load_state/save_state re-экспортируются из state_store —
@@ -42,9 +43,11 @@
 ##           2026-07-25 | DevPlan 071 Rev 2 — Name-based state.json keys, numeric-key backward compat
 ##           2026-07-30 | T19/T20a/T21 — Shared module extraction (telegram_notifier, docker_auth)
 ##           2026-07-30 | DevPlan 087 — BootstrapPhase enum (14 values), _phase_dependency_graph,
-##           precondition_check(), _execute_phase(), _execute_grouped_phase().
+##           precondition_check(), _execute_phase().
 ##           Added `--phase` CLI argument for phase-level execution.
 ##           2026-08-01 | B9 T1/T2 — helpers/, state_store.py, cli.py extraction (2284 → ~950 LOC)
+##           2026-08-01 | Волна 117 D5 — execute_grouped_phase удалён (мёртвый код); WARN-семантика
+##           done_with_warnings (≠ done); честный current_step
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -65,9 +68,6 @@ from core.internal.bootstrap.lifecycle.state_store import (
     save_state,
 )
 from core.internal.shared.content_hash import compute_content_hash as _shared_compute_content_hash
-from core.internal.shared.exceptions import (
-    PlatformError,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -210,15 +210,41 @@ _phase_dependency_graph: dict[str, set[str]] = {
     BootstrapPhase.CONVERGE_UPDATE: {BootstrapPhase.DEPLOY_UPDATE},  # φ13 ← φ12
 }
 
-# Grouped phases (have sub_steps for granular checkpoint tracking)
-# ⚠️ TRAP[DEBT] · 2026-08-01 · MED · execute_grouped_phase() вызывается только из тестов
-# · Observed: _run_init_mode()/_run_update_mode() вызывают только execute_phase(); execute_grouped_phase()
-# ·   не имеет ни одного production-caller'а (резюме-разводка удалена в DevPlan 116 B8 U-66, D4).
-# · Impact: sub-step SKIP логика (φ1-φ5, φ7, φ12) не используется в реальном pipeline —
-# ·   фазы перевыполняются целиком; D4 оставил функцию + 2 прямых теста.
-# · When: during DevPlan 116 B8 — deferred, out of scope
-# · Fix-hint: B9 — развести execute_grouped_phase() в run-циклы (run_init_mode/run_update_mode в cli.py)
-# ·   для фаз с sub_steps, либо удалить функцию вместе с консервирующими тестами.
+# Grouped-phase sub-step resume (execute_grouped_phase) УДАЛЕНО (волна 117 D5):
+# · TRAP[DEBT] снят с фиксацией решения — sub-step resume вне скоупа волны (без нового
+# · функционала). Фазы выполняются целиком; идемпотентность обеспечивается phase-статусами
+# · (done / done_with_warnings / pending / failed) — WARN-фазы перевыполняются при следующем init.
+
+# ── Phase statuses (волна 117 D5: WARN-семантика) ──────────────────────────
+# Статус-константы фаз. done_with_warnings — фаза завершилась с non-fatal issues
+# (phase-функция вернула False): НЕ считается done → перевыполняется при следующем init.
+PHASE_STATUS_DONE = "done"
+PHASE_STATUS_DONE_WITH_WARNINGS = "done_with_warnings"
+PHASE_STATUS_PENDING = "pending"
+PHASE_STATUS_FAILED = "failed"
+PHASE_STATUS_SKIPPED = "skipped"
+PHASE_STATUS_RUNNING = "running"
+
+
+def phase_is_done(phase_state) -> bool:
+    """Return True if a phase state entry is completed successfully (status == 'done').
+
+    ## @purpose — Единая ПУБЛИЧНАЯ done-проверка для dict- и StepState-представлений (волна 117 D5).
+    ##             done_with_warnings НЕ считается done — фаза с non-fatal issues перевыполняется.
+    ## @io — ⇥ phase_state: StepState | dict → ⎋ bool
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - dict-представление: status == "done" ИЛИ (done-ключ true при отсутствии status)
+    ##   - StepState: status == "done"
+    ##   - Любой другой статус (pending/failed/running/done_with_warnings/skipped) → False
+    """
+    if isinstance(phase_state, dict):
+        if phase_state.get("status") == PHASE_STATUS_DONE:
+            return True
+        # backward-compat: старые state.json могли писать только done:true без status
+        return bool(phase_state.get("done", False)) and phase_state.get("status") in (None, PHASE_STATUS_DONE)
+    return getattr(phase_state, "status", PHASE_STATUS_PENDING) == PHASE_STATUS_DONE
+
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
@@ -402,7 +428,8 @@ class StateMachine:
             step = self.state.steps.get(step_name)
             if step is None:
                 return i
-            if step.status in ("pending", "failed"):
+            # done_with_warnings НЕ считается done (волна 117 D5) — фаза перевыполняется
+            if step.status in ("pending", "failed", PHASE_STATUS_DONE_WITH_WARNINGS):
                 return i
             if step.status == "running":
                 return i  # re-run hanging steps
@@ -474,11 +501,9 @@ class StateMachine:
         missing_deps: list[str] = []
         for dep in deps:
             phase_state = self.state.steps.get(dep, self._state_from_phase_key(dep))
-            if isinstance(phase_state, dict):
-                phase_done = phase_state.get("done", False)
-            else:
-                phase_done = getattr(phase_state, "status", "pending") == "done"
-            if not phase_done:
+            # done_with_warnings НЕ считается done (волна 117 D5) — WARN-фаза не удовлетворяет
+            # зависимость и блокирует downstream-фазы до успешного перевыполнения
+            if not phase_is_done(phase_state):
                 missing_deps.append(dep)
 
         if missing_deps:
@@ -546,90 +571,9 @@ class StateMachine:
             phase_value,
             "success" if result else "with warnings",
         )
+        return result
 
     # endregion FUNC_execute_phase
-
-    # region FUNC_execute_grouped_phase
-    ## @purpose — Execute a grouped phase with sub-checkpoint support.
-    ##            Checks each sub_step individually; skips unchanged+done sub_steps.
-    ## @io — ⇥ phase_value: str, sub_steps: dict[str, dict] → ⎋ bool (True = all done)
-    ## @complexity — O(S * H) where S = sub_steps, H = hash computation
-    ## @invariants
-    ##   - Sub-steps with done=true + unchanged hash → SKIP (not executed)
-    ##   - Sub-steps with done=false or changed hash → EXECUTE
-    ##   - Phase is done=true only when ALL sub_steps are done
-    def execute_grouped_phase(self, phase_value: str, sub_steps: dict[str, dict] | None = None) -> bool:
-        """Execute a grouped phase, checking each sub-step individually for skip/execute.
-
-        Returns True if phase is now fully done, False if partial failure.
-        """
-        logger.info("[IMP:9][execute_grouped_phase] Starting grouped phase %s", phase_value)
-
-        # Check dependencies first
-        deps = _phase_dependency_graph.get(phase_value, set())
-        for dep in deps:
-            phase_state = self.state.steps.get(dep, {})
-            if isinstance(phase_state, dict):
-                phase_done = phase_state.get("done", False)
-            else:
-                phase_done = getattr(phase_state, "status", "pending") == "done"
-            if not phase_done:
-                raise PhaseDependencyError(f"Grouped phase '{phase_value}' requires prerequisite '{dep}'")
-
-        # Check preconditions
-        self.state.precondition_check(phase_value, core_dir=self.core_dir)
-
-        if sub_steps is None:
-            logger.info("[IMP:7][execute_grouped_phase] No sub_steps for %s — running as simple phase", phase_value)
-            self.execute_phase(phase_value)
-            return True
-
-        all_done = True
-        for sub_name, sub_state in sub_steps.items():
-            sub_done = sub_state.get("done", False)
-            sub_hash = sub_state.get("hash", "")
-
-            # Compute current hash for this sub-step
-            current_hash = self._step_hash(f"sub_{phase_value}_{sub_name}")
-
-            if sub_done and sub_hash and sub_hash == current_hash:
-                logger.info(
-                    "[IMP:8][execute_grouped_phase][%s] SKIP sub_step '%s' (unchanged hash=%s)",
-                    phase_value,
-                    sub_name,
-                    sub_hash[:12],
-                )
-                continue
-
-            # Execute the sub-step
-            logger.info(
-                "[IMP:9][execute_grouped_phase][%s] EXECUTE sub_step '%s' (done=%s, hash_changed=%s)",
-                phase_value,
-                sub_name,
-                sub_done,
-                sub_hash and sub_hash != current_hash,
-            )
-
-            try:
-                # Run the full phase for this sub-step (each phase function handles all its sub-steps)
-                self.execute_phase(phase_value)
-                logger.info(
-                    "[IMP:9][execute_grouped_phase][%s] Sub_step '%s' completed",
-                    phase_value,
-                    sub_name,
-                )
-            except (PhaseDependencyError, PhasePreconditionError, PlatformError) as e:
-                logger.error(
-                    "[IMP:10][execute_grouped_phase][%s] Sub_step '%s' FAILED: %s",
-                    phase_value,
-                    sub_name,
-                    e,
-                )
-                all_done = False
-
-        return all_done
-
-    # endregion FUNC_execute_grouped_phase
 
     def _state_from_phase_key(self, phase_key: str) -> dict:
         """Get phase state from state dict using the phase key directly.
@@ -794,18 +738,12 @@ class StateMachine:
         """Initialize state for a new run with phase-based keys.
 
         Sets mode, node, creates MISSING phase entries as pending (existing preserved).
+        current_step сбрасывается в 0 только здесь (fresh/mode-change); в run-циклах (cli.py)
+        он честно обновляется при успехе фазы (волна 117 D5) — больше НЕ всегда 0.
         """
-        # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · setup_state сбрасывал ВСЕ фазы в pending — идемпотентность мёртва
-        # · Symptom: повторный `make bootstrap-node` ПЕРЕВЫПОЛНЯЛ все 9 INIT фаз (~10 мин) без
-        # ·   SKIP-логов; E2E DevPlan 095 T13 (idempotent rebootstrap): "skip markers found=0" при exit 0.
-        # ·   Триггер: CLI вызывал setup_state при current_step==0 — а phase-based
-        # ·   машина НЕ инкрементит current_step (всегда 0) → setup_state на КАЖДОМ запуске.
-        # · Root: docstring "Always reset all phase entries to pending" — наследие step-based машины;
-        # ·   run_init/run_update already-done-проверки никогда не могли сработать (фазы всегда pending).
-        # · Fix: setdefault-семантика — существующие записи фаз сохраняются (done остаётся done),
-        # ·   недостающие (другой mode) создаются pending. Полный сброс = --force (reset()).
-        # · Prevention: setup_state никогда не должен стирать done-состояния без явного --force;
-        # ·   unit-контракт: повторный setup_state(mode) не меняет существующие статусы.
+        # Волна 117 D5: TRAP[BUG] (2026-07-31, «current_step всегда 0») снят — root-причина
+        # устранена: (а) setdefault-семантика сохранена (done остаётся done), (б) cli.py
+        # run_init/run_update обновляют current_step при успешном выполнении фазы.
         self.state.mode = mode
         self.state.node = node
         self.state.current_step = 0

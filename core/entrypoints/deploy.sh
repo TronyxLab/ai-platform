@@ -12,7 +12,8 @@
 ##           - verify <node> → verify-domains.sh
 ## @scope    Called from:
 ##           1. Makefile (local development)
-##           2. SSH forced-command on VPS (via authorized_keys command="python3 ... orchestrator_cli receive")
+##           2. SSH forced-command on VPS (authorized_keys command="python3 -m core.internal.deploy.orchestrator_cli dispatch"
+##              — SSH_ORIGINAL_COMMAND диспетчеризуется; волна 117 D1, единственный писатель ключа — users.py φ2)
 ##           3. appleboy/ssh-action in CI workflow
 ## @invariants
 ##   - Backward compatible: legacy <project> <sha> [env] works unchanged (K1)

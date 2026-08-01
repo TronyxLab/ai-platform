@@ -656,8 +656,11 @@ def test_checkpoint_step_uses_content_hash(caplog) -> None:
     sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
     sm_content = sm_path.read_text()
     assert "_step_hash" in sm_content, "FAIL: state_machine.py must have _step_hash for idempotency"
-    assert "execute_grouped_phase" in sm_content, (
-        "FAIL: state_machine.py must have execute_grouped_phase for sub-step idempotency"
+    # Волна 117 D5: execute_grouped_phase удалён (мёртвый код, sub-step resume вне скоупа);
+    # идемпотентность — через phase-статусы (done / done_with_warnings ≠ done → перевыполнение)
+    assert "def execute_grouped_phase" not in sm_content, (
+        "FAIL: state_machine.py must NOT define execute_grouped_phase (removed in волна 117 D5 — "
+        "sub-step resume вне скоупа; фазы выполняются целиком)"
     )
     logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 2 PASS: state_machine.py has hash-check")
 

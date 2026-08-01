@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: docker-registry-auth, docker-hub-login, registry-mirror, daemon-json, rate-limit, idempotent, systemctl-restart
-# STRUCTURE: ▶ ┌username+token+mirror┐ → ○ docker login → ◇ write daemon.json → ⚡ systemctl restart docker → ⊕ bool → ⎋
+# STRUCTURE: ▶ ┌username+token+mirror┐ → ○ docker login → ◇ write daemon.json → ◇ auth-state guard (config.json) → ⚡ systemctl restart (только при изменении) → ⊕ bool → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Configure Docker Hub authentication and optional registry-mirror to eliminate
 ##           rate-limiting (HTTP 429) during bootstrap image pulls.
-## @scope    Called from state_machine.py step 4.5 (docker_auth, index 5) after install_docker.
+## @scope    Called from state_machine.py φ3 (phase_platform_setup, index 5) after install_docker.
 ##           Writes /etc/docker/daemon.json with registry-mirrors and log-driver config.
 ##           Performs `docker login` to Docker Hub with provided credentials.
 ## @invariants
@@ -12,14 +12,19 @@
 ##   2. Idempotent: docker login with existing valid credentials → no-op
 ##   3. Non-fatal: if credentials missing → WARN, continue (rate-limit may apply)
 ##   4. Requires Docker installed (install_docker step must have run first)
-##   5. systemctl restart docker is only called if daemon.json changed
+##   5. systemctl restart docker — 0 раз или 1 раз за init (волна 117 D2): ТОЛЬКО если
+##      daemon.json изменён ИЛИ запись auth появилась в ~/.docker/config.json после login
 ##   6. mirror.gcr.io is a public Google mirror — no auth required (TRAP[DECISION] in DevPlan)
+##   7. Docker Hub auth выполняется ТОЛЬКО из φ3 (φ6 дубль удалён, волна 117 D2)
 ## @rationale StatusReport 045: Docker Hub rate-limit (429) blocked nginx pull during bootstrap.
 ##           Configuring Docker Hub auth + registry-mirror eliminates anonymous rate-limit.
 ##           Registry-mirror (mirror.gcr.io) provides a pull-through cache that reduces
 ##           direct Docker Hub requests.
+##           Волна 117 D2: повторный вызов скрипта = no-op — restart docker по guard
+##           (auth-состояние изменилось), а не при каждом вызове.
 ## @changes  2026-07-22 | DevPlan 047 Phase 2 — Created Docker Hub auth + registry-mirror module
 ##           2026-07-30 | T13b — Delegated _docker_login() to shared docker_auth module
+##           2026-08-01 | Волна 117 D2 — restart по guard (auth-state change), idempotent no-op
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -50,13 +55,15 @@ DOCKER_RESTART_TIMEOUT = 60  # seconds
 # region FUNC_configure_docker_auth
 ## @purpose — Configure Docker Hub auth + registry-mirror in daemon.json.
 ##            Performs docker login if credentials provided.
-##            Idempotent: skips write if daemon.json already configured.
+##            Idempotent end-to-end (волна 117 D2): повторный вызов (любой) = no-op —
+##            restart docker происходит ТОЛЬКО если auth-состояние изменилось
+##            (daemon.json записан ИЛИ запись auth появилась в ~/.docker/config.json).
 ## @io — ⇥ username: str, token: str, mirror_url: Optional[str] → ⎋ bool (True = configured/written)
 ## @complexity — O(1) + subprocess for docker login
 ## @invariants
-##   - If daemon.json already has registry-mirrors with mirror_url → skip (idempotent)
-##   - If docker login already valid → skip (idempotent)
-##   - On write: systemctl restart docker (only if daemon.json changed)
+##   - If daemon.json already has registry-mirrors with mirror_url → skip write (no restart)
+##   - docker login идемпотентен; restart docker — только если записи auth НЕ было до login
+##   - Итог: systemctl restart docker — 0 раз или 1 раз за init (AC-A2, волна 117 D2)
 ##   - Non-fatal: missing credentials → WARN, return True (already "configured" as best-effort)
 def configure_docker_auth(
     username: str,
@@ -65,33 +72,91 @@ def configure_docker_auth(
 ) -> bool:
     """Configure Docker Hub auth + optional registry mirror.
 
-    ▶ ┌username+token+mirror┐ → ○ docker login → ◇ write daemon.json → ⚡ systemctl restart → ⊕ bool → ⎋
+    ▶ ┌username+token+mirror┐ → ○ docker login → ◇ write daemon.json → ◇ auth-state guard → ⚡ systemctl restart → ⊕ bool → ⎋
 
     Returns True if configured (or already configured), False on error.
     """
     mirror = mirror_url or DEFAULT_MIRROR_URL
     logger.info("[IMP:8][docker_auth] Configuring Docker Hub auth (mirror=%s)", mirror)
 
-    # ── Step 1: Write daemon.json with registry-mirror (idempotent) ──
+    # ── Step 1: Write daemon.json with registry-mirror (idempotent, guarded restart) ──
     written = _write_daemon_json(mirror)
     if written:
-        logger.info("[IMP:9][docker_auth] daemon.json updated — restarting Docker")
-        _restart_docker()
+        logger.info("[IMP:9][docker_auth] daemon.json updated — restart required (mirror applied)")
     else:
-        logger.info("[IMP:7][docker_auth] daemon.json already configured — skipping restart")
+        logger.info("[IMP:7][docker_auth] daemon.json already configured — no mirror change")
 
     # ── Step 2: Docker login (idempotent, non-fatal) ──
     if not username or not token:
         logger.warning("[IMP:7][docker_auth] Docker Hub credentials not set — rate-limit (429) may apply")
+        # без login нет изменения auth-состояния: restart только если daemon.json изменился
+        if written:
+            _restart_docker()
         return True  # Non-fatal: mirror is still configured
 
+    # ── Step 2a: Guard restart на изменение auth-состояния (волна 117 D2) ──
+    # docker login идемпотентен: повторный login с уже валидными creds = no-op.
+    # systemctl restart docker выполняется ТОЛЬКО если запись auth в ~/.docker/config.json
+    # отсутствовала ДО login (т.е. auth-состояние реально изменилось). Повторный вызов
+    # скрипта (или уже залогиненный оператор) → 0 restarts.
+    # ⚠️ TRAP[BUG] · 2026-08-01 · P2 · Edge case: оператор вручную залогинился ДО bootstrap
+    # · Symptom: config.json уже содержит auth-запись → auth_changed=False; если daemon.json
+    # ·   тоже предконфигурирован (mirror присутствует) → 0 restarts → mirror НЕ применяется
+    # ·   до следующего restart docker (деградация rate-limit оптимизации, не ошибка корректности).
+    # · Root: guard по auth-состоянию не может отличить «auth добавлен скриптом» от «был до».
+    # · Fix: restart при written (daemon.json изменился) НЕ зависит от auth — mirror применяется
+    # ·   всегда при первом bootstrap; ручной предварительный login — редкий операторский кейс.
+    # · Prevention: не менять guard на «всегда restart» — это вернёт 2 restarts за init (D2).
+    auth_before = _auth_entry_exists()
     login_ok = _docker_login(username, token)
     if not login_ok:
         logger.warning("[IMP:7][docker_auth] Docker Hub login failed — rate-limit may apply")
+    auth_changed = auth_before is False  # запись auth появилась после login
+
+    if written or auth_changed:
+        logger.info(
+            "[IMP:9][docker_auth] Restarting Docker (daemon_json_written=%s, auth_changed=%s)",
+            written,
+            auth_changed,
+        )
+        _restart_docker()
+    else:
+        logger.info("[IMP:7][docker_auth] No auth-state change — skipping docker restart (idempotent, D2)")
     return True
 
 
 # endregion FUNC_configure_docker_auth
+
+
+# region FUNC_auth_entry_exists
+## @purpose — Check whether ~/.docker/config.json already contains an auth entry for
+##            Docker Hub (registry-1.docker.io / https://index.docker.io/v1/).
+##            Используется как guard для restart (волна 117 D2): если запись уже есть —
+##            docker login no-op → restart не нужен.
+## @io — ⇥ None → ⎋ bool (True = auth entry present)
+## @complexity — O(1)
+## @invariants
+##   - config.json отсутствует или некорректен JSON → трактуется как «нет auth» (False)
+##   - Ключи auths: и registry-1.docker.io, и https://index.docker.io/v1/ считаются Docker Hub
+def _auth_entry_exists() -> bool:
+    """Return True if ~/.docker/config.json already has a Docker Hub auth entry."""
+    config_path = os.path.join(os.path.expanduser("~"), ".docker", "config.json")
+    if not os.path.isfile(config_path):
+        return False
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+        auths = data.get("auths", {}) if isinstance(data, dict) else {}
+        return any(
+            key in auths
+            for key in ("registry-1.docker.io", "https://index.docker.io/v1/", "https://registry-1.docker.io/v1/")
+        )
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("[IMP:7][docker_auth] Cannot read %s: %s — treating as no auth entry", config_path, e)
+        return False
+
+
+# endregion FUNC_auth_entry_exists
 
 
 # region FUNC_write_daemon_json

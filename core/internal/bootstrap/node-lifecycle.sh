@@ -49,19 +49,18 @@ step_warn() { log_step "$1" "WARN" "${2:-}"; STEP_ERRORS+=("Step ${STEP}: $1 —
 _delegate() { python3 "${SM_SCRIPT}" "$@"; }
 detect_tor_enabled(){
     # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · set -e убивал bootstrap при tor.enabled=false — [[ ]] && в конце функции = rc1; Fix: if-форма без else = rc0
+    # Волна 117 D8: stderr не глотаем — ключ отсутствует = rc 0 + default (OK), файл не читается = rc 2/3/4 (WARN)
     TOR_ENABLED=false; local val
-    [[ -n "${NODE_YAML:-}" && -f "$NODE_YAML" ]] && val="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --get tor.enabled --default "false" 2>/dev/null || echo "false")"
+    [[ -n "${NODE_YAML:-}" && -f "$NODE_YAML" ]] && val="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --get tor.enabled --default "false" 2>&1)" || { local _tor_rc=$?; log_imp 7 "node-yaml" "tor.enabled read failed (rc=${_tor_rc}): ${val:0:150} — fallback false"; val="false"; }
     if [[ "${val:-false}" == "true" ]]; then TOR_ENABLED=true; fi
 }
 main() {
     if [[ "$MODE" == "init" ]]; then
         for var in NODE_NAME NODE_YAML PLATFORM_OWNER_KEY; do [[ -z "${!var:-}" ]] && { echo "[IMP:10][bootstrap] FAIL: Missing ${var}" >&2; exit 1; }; done
         detect_tor_enabled; export TOR_ENABLED
-        if [[ -z "${SKIP_PREFLIGHT:-}" && -f "${SCRIPT_DIR}/preflight.py" ]]; then
-            echo "[IMP:8][node-lifecycle][preflight] Running pre-flight checks" >&2
-            PREFLIGHT_RESULT="$(python3 "${SCRIPT_DIR}/preflight.py" --node-yaml "${NODE_YAML}" --context "${CONTEXT:-}" --node-name "${NODE_NAME}" 2>&1)" || { echo "$PREFLIGHT_RESULT" >&2; echo "[IMP:10][node-lifecycle][preflight] Pre-flight checks FAILED" >&2; exit 1; }
-            echo "$PREFLIGHT_RESULT" | python3 "${SCRIPT_DIR}/preflight.py" --parse-warnings 2>&1 || true
-        fi
+        # Волна 117 D6: preflight перенесён в lifecycle/cli.py (_maybe_run_preflight) —
+        # решение «все фазы done → skip preflight» принимает state_machine. Этот фасад
+        # остаётся тонким: только делегирование. SKIP_PREFLIGHT env по-прежнему уважается.
         _delegate --mode init --node-name "${NODE_NAME}" --node-yaml "${NODE_YAML}" \
             ${PLATFORM_OWNER_KEY:+--owner-key "$PLATFORM_OWNER_KEY"} ${PLATFORM_CI_DEPLOY_KEY:+--ci-deploy-key "$PLATFORM_CI_DEPLOY_KEY"} \
             ${CONTEXT:+--context "$CONTEXT"} ${FORCE_MODE:+--force}

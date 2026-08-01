@@ -37,7 +37,7 @@
 ##   INIT  φ3  phase_platform_setup     — docker auth, metrics cron, setup-node
 ##   INIT  φ4  phase_secrets_provision  — decrypt secrets, ensure-secrets, init
 ##   INIT  φ5  phase_node_configuration — validate node.yaml, verify core, verify configs
-##   INIT  φ6  phase_registry_auth      — ghcr auth, docker auth, sudoers
+##   INIT  φ6  phase_registry_auth      — ghcr auth (docker auth — ТОЛЬКО φ3, D2)
 ##   INIT  φ7  phase_certificates       — install acme.sh, ssl provision
 ##   INIT  φ8  phase_deploy_services    — deploy modules, deploy context
 ##   INIT  φ8.5 phase_converge_services  — converge
@@ -217,7 +217,8 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
 ##   - PLATFORM_OWNER_KEY is REQUIRED — missing key triggers PlatformFatalError
 ##   - PLATFORM_CI_DEPLOY_KEY is semi-optional — missing key logs warning
 ##   - Both users get 'docker' group membership
-##   - ci-deploy gets forced-command prefix for orchestrator_cli receive
+##   - ci-deploy gets forced-command prefix for orchestrator_cli dispatch
+##     (единственный писатель ci-deploy ключа — users.py add_ssh_key, волна 117 D1)
 ##   - /opt/projects ownership set to ci-deploy after creation
 def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
     """φ2: User accounts — platform, ci-deploy, SSH keys, projects base.
@@ -253,7 +254,7 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
         helpers_users.create_user("ci-deploy", ["docker"])
         logger.info("[IMP:9][phase:user_accounts] ci-deploy user created/verified")
         if ci_deploy_key:
-            forced_command = 'command="python3 -m core.internal.deploy.orchestrator_cli receive",restrict'
+            forced_command = 'command="python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict'
             helpers_users.add_ssh_key("ci-deploy", ci_deploy_key, forced_command_prefix=forced_command)
             logger.info("[IMP:9][phase:user_accounts] SSH key added for ci-deploy user")
     except (PlatformError, subprocess.TimeoutExpired) as e:
@@ -478,20 +479,21 @@ def phase_node_configuration(core_dir: str, node_name: str, node_yaml: str) -> b
 
 
 # region FUNC_phase_registry_auth
-## @purpose φ6: Container registry authentication — GHCR (GitHub Container Registry) and
-##           Docker Hub authentication for image pulls.
-##           Corresponds to init steps: ghcr_auth (16) + sudoers (17) phase overlap.
+## @purpose φ6: Container registry authentication — GHCR (GitHub Container Registry) login
+##           for image pulls. Docker Hub auth выполняется ТОЛЬКО в φ3 (docker_registry_auth.py,
+##           ранний этап до pull) — дубль вызова убран (волна 117 D2).
+##           Corresponds to init steps: ghcr_auth (16).
 ## @io      ⇥ core_dir, node_name, node_yaml → ⎋ bool
 ## @complexity O(1) + subprocess
 ## @invariants
 ##   - GHCR auth uses GHCR_PULL_TOKEN env var — skip if not set
-##   - Both GHCR and Docker Hub auth are non-fatal (best-effort)
-##   - Docker Hub auth is done via docker_registry_auth.py (may be absent)
+##   - GHCR auth is non-fatal (best-effort)
+##   - Docker Hub auth НЕ выполняется в φ6 (единственная точка — φ3 phase_platform_setup, D2)
 def phase_registry_auth(core_dir: str, node_name: str, node_yaml: str) -> bool:
-    """φ6: Registry auth — GHCR and Docker Hub login.
+    """φ6: Registry auth — GHCR login.
 
     Pre-check: None (auth is best-effort, no hard precondition).
-    Execute: GHCR auth → Docker Hub auth (if docker_registry_auth.py exists).
+    Execute: GHCR auth.
     Post-check: registry credentials configured (best-effort).
     """
     non_fatal_issues = False
@@ -508,24 +510,12 @@ def phase_registry_auth(core_dir: str, node_name: str, node_yaml: str) -> bool:
             logger.warning("[IMP:7][phase:registry_auth] GHCR auth failed (non-fatal): %s", e)
             non_fatal_issues = True
 
-    # ── 2. Docker Hub auth ──
-    docker_hub_username = os.environ.get("DOCKER_HUB_USERNAME", "")
-    docker_hub_token = os.environ.get("DOCKER_HUB_TOKEN", "")
-    if docker_hub_username and docker_hub_token:
-        auth_script = os.path.join(core_dir, "internal", "bootstrap", "docker_registry_auth.py")
-        if os.path.isfile(auth_script):
-            try:
-                helpers_subprocess.run_subprocess(["python3", auth_script], "docker_registry_auth", non_fatal=True)
-                logger.info("[IMP:9][phase:registry_auth] Docker Hub auth configured")
-            except Exception as e:  # noqa: EXC — non-fatal: docker auth is best-effort
-                logger.warning("[IMP:7][phase:registry_auth] Docker Hub auth failed (non-fatal): %s", e)
-                non_fatal_issues = True
-        else:
-            logger.info("[IMP:7][phase:registry_auth] docker_registry_auth.py not found — skipping Docker Hub auth")
-    else:
-        logger.info(
-            "[IMP:7][phase:registry_auth] DOCKER_HUB_USERNAME/DOCKER_HUB_TOKEN not both set — skipping Docker Hub auth"
-        )
+    # ── 2. Docker Hub auth — ТОЛЬКО в φ3 (волна 117 D2) ──
+    # docker_registry_auth.py выполняется единственный раз за init в phase_platform_setup (φ3,
+    # ранний этап до pull). Повторный вызов здесь удалён — он давал 2-й systemctl restart docker.
+    logger.info(
+        "[IMP:7][phase:registry_auth] Docker Hub auth handled in φ3 (docker_registry_auth.py) — skipped in φ6 (D2)"
+    )
 
     if non_fatal_issues:
         logger.info("[IMP:8][phase:registry_auth] Complete with non-fatal issues")

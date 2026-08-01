@@ -15,7 +15,8 @@
 ##           core_deliverer.py (Python Core-канал: mkdir + 5 rsync фаз, DevPlan 108)
 ## @invariants
 ##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё lifecycle/cli.py (B9 T1, CS-7). Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
-##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), execute_phase(), execute_grouped_phase()
+##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), execute_phase()
+##      (execute_grouped_phase удалён, волна 117 D5 — sub-step resume вне скоупа)
 ##   3. phases.py — business logic: 14 phase_*() функций, вызываемых из state_machine.py;
 ##      I/O-хелперы — lifecycle/helpers/ (односторонняя зависимость state_machine → phases → helpers, B9 T1)
 ##   4. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
@@ -147,7 +148,7 @@ orphan-реконсиляция и severity-based exit code {0,1,2} — в `depl
 | Механизм | Где | Что делает |
 |----------|-----|------------|
 | `state.json` (phase keys) | `/var/lib/platform/.bootstrap/state.json` | Единый source of truth для checkpoint'ов. Ключи — имена фаз BootstrapPhase enum. 14 ключей: system_bootstrap, user_accounts, platform_setup, secrets_provision, node_configuration, registry_auth, certificates, deploy_services, converge_services, secrets_update, node_config_update, registry_update, deploy_update, converge_update. |
-| content-hash | `state_machine._step_hash()` (Python) | SHA256 content hash per sub-step для grouped phases (φ1-φ5, φ7, φ12). Хеш проверяется при execute_grouped_phase() — unchanged+done = SKIP. |
+| content-hash | `state_machine._step_hash()` (Python) | SHA256 content hash per sub-step (legacy grouped phases φ1-φ5, φ7, φ12). Волна 117 D5: execute_grouped_phase удалён — фазы выполняются целиком; идемпотентность через phase-статусы (done / done_with_warnings ≠ done → перевыполнение). |
 | sub-checkpoints | nested в state.json | Grouped-фазы имеют `sub_steps: {name: {done: bool, hash: str}}` для granular idempotency |
 
 **Пример:** `system_bootstrap` в state.json:
@@ -224,12 +225,12 @@ UPDATE MODE (5 phases):
 - φ8/φ12: Docker daemon running, deploy-modules.sh exists
 - φ6: GHCR_PULL_TOKEN present (warning only)
 
-**Повторный запуск после частичного отказа:**
-Grouped phases (φ1-φ5, φ7, φ12) support sub-checkpoints. При повторном запуске
-`_run_init_mode()`/`_run_update_mode()` пропускают done-фазы через `execute_phase()`;
-sub-step SKIP (unchanged + done) — через `execute_grouped_phase()`. Если φ4 частично
-провалилась (decrypt-secrets OK, ensure-passwords FAIL), фаза перевыполняется целиком —
-успешные подшаги с неизменённым хешем SKIP, без повторного ввода age-passphrase.
+**Повторный запуск после частичного отказа (волна 117 D5):**
+execute_grouped_phase (sub-step resume) удалён — фазы выполняются целиком. При повторном запуске
+`run_init_mode()`/`run_update_mode()` пропускают done-фазы через `execute_phase()`; фазы со статусом
+`done_with_warnings` (non-fatal issues, phase вернула False) НЕ считаются done и перевыполняются.
+Если φ4 частично провалилась (decrypt-secrets OK, ensure-passwords FAIL), фаза перевыполняется
+целиком, без повторного ввода age-passphrase.
 
 ### SSL Cert Lifecycle Unification (DevPlan 052)
 

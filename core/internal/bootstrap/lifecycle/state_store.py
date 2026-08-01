@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: state-store, step-state, bootstrap-state, state-json, load-state, save-state, persistence, checkpoint
-# STRUCTURE: ▶ StepState (name/status/hash/timing) → BootstrapState (mode/node/steps/errors/warnings + precondition_check) → ⚡ load_state(path) ┌json.load + phase-key migration┐ → ⚡ save_state(state, path) ┌atomic tmp+replace┐ → ⎋
+# STRUCTURE: ▶ StepState (name/status/hash/timing/warnings) → BootstrapState (mode/node/steps/errors/warnings + precondition_check) → ⚡ load_state(path) ┌json.load + phase-key migration┐ → ⚡ save_state(state, path) ┌atomic tmp+replace┐ → ⎋
 # region MODULE_CONTRACT
 ## @purpose  State persistence для bootstrap lifecycle — StepState/BootstrapState dataclasses +
 ##           state.json I/O (load_state/save_state), извлечено из state_machine (B9 T2, U-08).
@@ -37,19 +37,27 @@ logger = logging.getLogger(__name__)
 
 
 # region FUNC_StepState
-## @purpose  State of a single bootstrap step — status/hash/timing/error.
+## @purpose  State of a single bootstrap step — status/hash/timing/error/warnings.
 ## @io       ⇥ constructor params → ⎋ StepState instance with serializable fields
 ## @complexity O(1)
 @dataclass
 class StepState:
-    """State of a single bootstrap step."""
+    """State of a single bootstrap step.
+
+    ## @invariants
+    ##   - status ∈ {pending, running, done, skipped, failed, done_with_warnings}
+    ##   - done_with_warnings (волна 117 D5): фаза завершилась с non-fatal issues —
+    ##     НЕ считается done, перевыполняется при следующем init
+    ##   - warnings: per-phase non-fatal issue messages (сохраняются в state.json)
+    """
 
     name: str
-    status: str = "pending"  # pending | running | done | skipped | failed
+    status: str = "pending"  # pending | running | done | skipped | failed | done_with_warnings
     hash: str | None = None  # content hash for idempotency check
     started_at: str | None = None  # ISO timestamp
     error: str | None = None  # error message if failed
     reason: str | None = None  # skip reason (TOR_DISABLED, content_unchanged)
+    warnings: list[str] = field(default_factory=list)  # non-fatal issues (волна 117 D5)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON state file."""
@@ -62,6 +70,8 @@ class StepState:
             d["error"] = self.error
         if self.reason:
             d["reason"] = self.reason
+        if self.warnings:
+            d["warnings"] = self.warnings
         return d
 
     @classmethod
@@ -74,6 +84,7 @@ class StepState:
             started_at=data.get("started_at"),
             error=data.get("error"),
             reason=data.get("reason"),
+            warnings=data.get("warnings", []),
         )
 
 
