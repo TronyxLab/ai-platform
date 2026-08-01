@@ -58,6 +58,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # Copy backup scripts
 COPY scripts/backup-postgres.sh  /usr/local/bin/backup-postgres.sh
+COPY scripts/backup_postgres.py  /usr/local/bin/backup_postgres.py
 COPY scripts/backup-app-data.sh  /usr/local/bin/backup-app-data.sh
 COPY scripts/backup-cleanup.sh   /usr/local/bin/backup-cleanup.sh
 COPY scripts/upload-s3.sh        /usr/local/bin/upload-s3.sh
@@ -77,6 +78,7 @@ RUN chmod 0644 /etc/cron.d/platform-backup && \
     crontab /etc/cron.d/platform-backup && \
     chmod +x \
       /usr/local/bin/backup-postgres.sh \
+      /usr/local/bin/backup_postgres.py \
       /usr/local/bin/backup-app-data.sh \
       /usr/local/bin/backup-cleanup.sh \
       /usr/local/bin/upload-s3.sh \
