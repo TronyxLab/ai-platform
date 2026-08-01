@@ -19,6 +19,7 @@ import time
 
 import pytest
 import requests
+from _conftest.honesty import require_service_healthy
 from conftest import _handle_e2e_error, _module_container_running
 
 logger = logging.getLogger(__name__)
@@ -48,33 +49,14 @@ def _langfuse_credentials() -> tuple[str, str]:
     return pk, sk
 
 
-def _port_reachable(host=LANGFUSE_HOST, port=LANGFUSE_PORT, timeout=3.0):
-    """Check if langfuse HTTP endpoint responds (not just TCP port open).
-
-    ## @purpose — Docker Desktop port forwarding accepts TCP connections before the
-    ##            app inside the container has bound the port. A TCP-only check (socket
-    ##            connect) returns True even when the Node.js server hasn't started yet,
-    ##            causing RemoteDisconnected or ReadTimeout in subsequent requests.
-    ##            This version does an actual HTTP HEAD to verify the app is serving.
-    ## @io — ⎋ bool: True if HTTP endpoint responds (any status), False otherwise
-    ## ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
-    ## · Symptom: first http request to langfuse may hit the container startup window
-    ## ·            (Docker Desktop accepts TCP before Node.js binds the port)
-    ## · Root: langfuse Node.js process may not have bound the HTTP port yet even though
-    ## ·        Docker Desktop reports the container as healthy (TCP port forwarding race)
-    ## · Fix: retry with exponential backoff (1s/2s/4s) — gives the server a chance to bind
-    ## · Prevention: if retry count >1 in >50% CI runs → investigate langfuse startup time
-    """
-    for attempt in range(3):
-        try:
-            requests.get(f"http://{host}:{port}/api/public/health", timeout=timeout)
-            return True
-        except (requests.ConnectionError, requests.Timeout, ValueError):
-            if attempt < 2:
-                time.sleep(2**attempt)
-            else:
-                return False
-    return False  # unreachable — satisfies RET503 linter contract
+# ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
+# · Symptom: первый http-запрос к langfuse может попасть в окно старта контейнера
+# ·            (Docker Desktop принимает TCP до того, как Node.js забиндил порт)
+# · Root: процесс langfuse Node.js мог ещё не забиндить HTTP-порт, хотя Docker Desktop
+# ·        сообщает контейнер как healthy (гонка TCP-порт-форвардинга)
+# · Fix: TCP-преграда заменена на require_service_healthy (R4, DevPlan 117 Brief F);
+# ·        окно старта обрабатывается retry с экспоненциальным бэкоффом (1s/2s/4s) в теле тестов
+# · Prevention: если retry count >1 в >50% CI-прогонов → исследовать время старта langfuse
 
 
 @pytest.mark.smoke
@@ -84,8 +66,7 @@ def test_langfuse_health(caplog, platform_services):
     if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
         pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
-    if not _port_reachable():
-        pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
+    require_service_healthy(LANGFUSE_HOST, LANGFUSE_PORT, reason="langfuse smoke tests require running local service")
 
     # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
     # · Symptom: requests.get to langfuse health endpoint may raise ConnectionError
@@ -130,8 +111,7 @@ def test_langfuse_ingestion(caplog, platform_services):
     if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
         pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
-    if not _port_reachable():
-        pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
+    require_service_healthy(LANGFUSE_HOST, LANGFUSE_PORT, reason="langfuse smoke tests require running local service")
     langfuse_pk, langfuse_sk = _langfuse_credentials()
     now = time.time()
     _basic = base64.b64encode(f"{langfuse_pk}:{langfuse_sk}".encode()).decode()
@@ -187,8 +167,7 @@ def test_langfuse_login(caplog, platform_services):
     if not _module_container_running(platform_services, "langfuse", "langfuse-test", logger):
         pytest.fail("langfuse-test did not start — smoke tests require running containers")
     caplog.set_level(logging.INFO)
-    if not _port_reachable():
-        pytest.skip(f"Port {LANGFUSE_PORT} not reachable")
+    require_service_healthy(LANGFUSE_HOST, LANGFUSE_PORT, reason="langfuse smoke tests require running local service")
     # ⚠️ TRAP[BUG] · 2026-07-23 · P1 · Transient langfuse startup: ConnectionError without retry
     # · Symptom: requests.get to CSRF endpoint may raise ConnectionError
     # ·            during langfuse startup window (same root cause as health test)

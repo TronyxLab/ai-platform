@@ -1,9 +1,9 @@
-# GREP_SUMMARY: honesty, require-docker, require-script, require-env, R4-fix, mode-transition
-# STRUCTURE: ▶ require_docker_or_fail → ◇ _check_service_available → ⊕ mode-dispatch(marker|xfail|fail) → ⎋ skip|xfail|fail
+# GREP_SUMMARY: honesty, require-docker, require-script, require-env, require-service, R4-fix, mode-transition
+# STRUCTURE: ▶ require_docker_or_fail → ▶ require_service_healthy(TCP connect) → ◇ mode-dispatch(marker|xfail|fail) → ⎋ skip|xfail|fail
 # region MODULE_CONTRACT
 ## @purpose  Test Honesty enforcement: NO_SERVICE = FAIL, not skip (Test Honesty Rule R4).
 ##           Поэтапный переход через REQUIRE_HONESTY_MODE env var.
-## @scope    All tests requiring external service (Docker, scripts, env vars).
+## @scope    All tests requiring external service (Docker, scripts, env vars, TCP services).
 ## @invariants
 ##   - REQUIRE_HONESTY_MODE env var controls behavior:
 ##     "marker" (default W1) → pytest.mark.skip (soft, but tagged [IMP:10][honesty])
@@ -17,11 +17,13 @@
 ##            Wave 2 = переключение на fail (operator decision).
 ## @changes
 ##   LAST_CHANGE: 2026-07-21 | Created (DevPlan 028 W1-E2)
+##   2026-08-01 | DevPlan 117 Brief F (T6 #46): require_service_healthy (TCP port-check)
 # endregion MODULE_CONTRACT
 
 import os
 import pathlib
 import shutil
+import socket
 import subprocess
 from typing import Literal
 
@@ -91,6 +93,29 @@ def require_env_or_fail(var: str, reason: str = "") -> None:
     if os.environ.get(var):
         return
     _dispatch(_honesty_mode(), f"Env var not set: {var} — {reason}")
+
+
+def require_service_healthy(host: str, port: int, reason: str = "", timeout: int = 5) -> None:
+    """R4 fix: skip/fail when a TCP service on host:port is not reachable.
+
+    ## @purpose — R4 enforcement for inline port-unreachable skips: TCP connect
+    ##            probe (socket.create_connection). On success → no-op; on OSError
+    ##            → dispatch через _honesty_mode() (marker→skip, xfail→xfail, fail→fail).
+    ## @io — ⇥ host: str, port: int, reason: str, timeout: int=5 → ⎋ None (side-effect)
+    ## @complexity — O(1) — single TCP connect with timeout
+    ## @invariants
+    ##   - TCP connect с таймаутом (default 5s)
+    ##   - Успех → log [IMP:9] + return (без диспетчеризации)
+    ##   - OSError (refused/timeout/DNS) → dispatch через _honesty_mode()
+    ## @rationale — DevPlan 117 Brief F (T6 #46): миграция inline `pytest.skip("Port ... not reachable")`
+    ##            на единый honesty-механизм. Один источник поведения для всех port-checks.
+    """
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            print(f"[IMP:9][honesty] Service healthy: {host}:{port} — proceeding")
+            return
+    except OSError:
+        _dispatch(_honesty_mode(), f"Service not reachable on {host}:{port} — {reason}")
 
 
 # endregion PUBLIC_API

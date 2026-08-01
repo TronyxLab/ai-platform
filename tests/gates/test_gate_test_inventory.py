@@ -273,6 +273,45 @@ def _normalize_nodeid(nodeid: str) -> tuple[str, str]:
     return norm_file, norm_func
 
 
+def _find_undocumented_removals(
+    inventory: list[str],
+    collected: list[str],
+    documented_removals: set[str],
+) -> list[str]:
+    """Rename-aware: вернуть тесты, удалённые БЕЗ changelog записи (U-79).
+
+    ## @purpose — Чистая (тестируемая) логика anti-tamper детекции: baseline-тесты,
+    ##            отсутствующие в PR, минус rename-пары (нормализованные file+func
+    ##            совпадают с новой тест-функцией), минус задокументированные удаления.
+    ##            Используется и основным gate-тестом, и R5 negative-тестами (D48-C).
+    ## @io — ⇥ inventory: list[str], collected: list[str], documented_removals: set[str]
+    ##      → ⎋ list[str] — nodeids удалённых без changelog (неупорядоченные детектором)
+    ## @complexity — O(C + I + R) где C = collected, I = inventory, R = changelog removals
+    ## @invariants
+    ##   - Rename-пара (missing nid + new nid с той же нормализованной (file, func)) → НЕ undocumented
+    ##   - Задокументированное удаление (nid в changelog) → НЕ undocumented
+    ##   - Всё остальное отсутствующее → undocumented (RED)
+    """
+    inventory_set = set(inventory)
+    collected_set = set(collected)
+    missing = inventory_set - collected_set
+    new_tests = collected_set - inventory_set
+
+    # Rename-детекция (U-79): missing nid + new nid с той же нормализованной (file, func)
+    new_keys: dict[tuple[str, str], str] = {}
+    for nid in new_tests:
+        new_keys.setdefault(_normalize_nodeid(nid), nid)
+
+    undocumented: list[str] = []
+    for nid in sorted(missing):
+        if _normalize_nodeid(nid) in new_keys:
+            continue  # rename-пара — changelog не обязателен
+        if nid in documented_removals:
+            continue  # задокументированное удаление
+        undocumented.append(nid)
+    return undocumented
+
+
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
 
@@ -413,17 +452,13 @@ def test_no_test_removed_without_changelog(caplog) -> None:
         else:
             non_renamed.append(nid)
 
-    # Проверяем non-renamed против documented removals
-    undocumented_removals: list[str] = []
-    documented_found: list[str] = []
-
-    for nid in sorted(non_renamed):
-        if nid in documented_removals:
-            documented_found.append(nid)
-            logger.info("[IMP:8][test_no_test_removed_without_changelog] DOCUMENTED removal: %s", nid)
-        else:
-            undocumented_removals.append(nid)
-            logger.warning("[IMP:7][test_no_test_removed_without_changelog] UNDOCUMENTED removal: %s", nid)
+    # Проверяем non-renamed против documented removals (rename-aware, U-79)
+    undocumented_removals: list[str] = _find_undocumented_removals(non_renamed, [], documented_removals)
+    documented_found: list[str] = [nid for nid in sorted(non_renamed) if nid not in undocumented_removals]
+    for nid in documented_found:
+        logger.info("[IMP:8][test_no_test_removed_without_changelog] DOCUMENTED removal: %s", nid)
+    for nid in undocumented_removals:
+        logger.warning("[IMP:7][test_no_test_removed_without_changelog] UNDOCUMENTED removal: %s", nid)
 
     # Emit IMP:9 before LDD check so trajectory captures business logic
     if undocumented_removals:
@@ -592,3 +627,89 @@ def test_rename_detection_normalization(caplog) -> None:
     logger.info(
         "[IMP:9][test_rename_detection_normalization] ✅ rename-пары: равные (file,func)-ключи; разные функции/файлы — НЕ rename"
     )
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · NEGATIVE (R5) · удаление без changelog (U-79)
+# · Scenario: baseline-тест удалён из PR, changelog записи нет → детектор RED
+# · Last fail: до B11 гейт не ловил удаления без changelog (молчаливое выпадение тестов)
+# · Remove if: anti-tamper реестр заменён другим механизмом
+def test_negative_undocumented_removal_detected(caplog) -> None:
+    """R5 negative (U-79): удаление теста без changelog записи → детектор RED.
+
+    ## @purpose — Anti-survivorship (R5): вход, поймавший исходный баг U-79
+    ##            (тест удалён, changelog не обновлён), ДОЛЖЕН детектироваться
+    ##            _find_undocumented_removals. Если детектор перестанет ловить —
+    ##            тест упадёт, обнажая регрессию anti-tamper.
+    ## @io — ⎋ None (assert)
+    ## @complexity — O(1)
+    """
+
+    logger.info("[IMP:8][test_negative_undocumented_removal_detected] === R5 negative: undocumented removal ===")
+
+    inventory = ["tests/unit/test_gone.py::test_vanished"]
+    collected = []  # тест удалён из PR
+    documented = set()  # changelog записи нет
+
+    undocumented = _find_undocumented_removals(inventory, collected, documented)
+    assert undocumented == ["tests/unit/test_gone.py::test_vanished"], (
+        f"R5 FAIL (U-79): detector missed undocumented removal — got {undocumented}"
+    )
+    logger.info("[IMP:9][test_negative_undocumented_removal_detected] ✅ undocumented removal detected (RED)")
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · NEGATIVE (R5) · rename-пара не требует changelog (U-79)
+# · Scenario: baseline-тест переименован (same normalized file+func) → НЕ undocumented
+# · Last fail: до B11 rename-удаления ложно RED (требовали changelog)
+# · Remove if: rename-семантика реестра изменена
+def test_negative_rename_pair_exempt_from_changelog(caplog) -> None:
+    """R5 negative (U-79): rename-пара (нормализованные file+func) → НЕ undocumented.
+
+    ## @purpose — Anti-survivorship (R5): обратная сторона U-79 — переименование
+    ##            НЕ должно требовать changelog (иначе легитимные rename ложно RED).
+    ## @io — ⎋ None (assert)
+    ## @complexity — O(1)
+    """
+
+    logger.info("[IMP:8][test_negative_rename_pair_exempt_from_changelog] === R5 negative: rename exempt ===")
+
+    # Rename-пара U-79: параметризация [a]→[b] даёт тот же нормализованный (file, func) ключ
+    inventory = ["tests/unit/test_foo.py::test_bar[a]"]
+    collected = ["tests/unit/test_foo.py::test_bar[b]"]
+    documented = set()
+
+    undocumented = _find_undocumented_removals(inventory, collected, documented)
+    assert undocumented == [], f"R5 FAIL (U-79): rename pair must be exempt from changelog — got {undocumented}"
+    logger.info("[IMP:9][test_negative_rename_pair_exempt_from_changelog] ✅ rename-пара exempt (PASS)")
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · NEGATIVE (R5) · документированное удаление не RED (U-79)
+# · Scenario: baseline-тест удалён, changelog запись есть → НЕ undocumented (PASS)
+# · Last fail: N/A (парный negative к test_no_test_removed_without_changelog)
+# · Remove if: anti-tamper реестр заменён другим механизмом
+def test_negative_documented_removal_not_flagged(caplog) -> None:
+    """R5 negative (U-79): удаление с changelog записью → НЕ undocumented (PASS).
+
+    ## @purpose — Anti-survivorship (R5): документированное удаление должно быть
+    ##            корректно исключено из RED-множества (иначе гейт ложно RED).
+    ## @io — ⎋ None (assert)
+    ## @complexity — O(1)
+    """
+
+    logger.info("[IMP:8][test_negative_documented_removal_not_flagged] === R5 negative: documented removal ===")
+
+    inventory = ["tests/unit/test_gone.py::test_removed_legit"]
+    collected = []
+    documented = {"tests/unit/test_gone.py::test_removed_legit"}
+
+    undocumented = _find_undocumented_removals(inventory, collected, documented)
+    assert undocumented == [], f"R5 FAIL (U-79): documented removal must NOT be RED — got {undocumented}"
+    logger.info("[IMP:9][test_negative_documented_removal_not_flagged] ✅ documented removal PASS")

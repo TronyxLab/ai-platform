@@ -22,6 +22,67 @@
 
 ---
 
+## sys.path policy
+
+**Canonical roots** (добавляются `tests/conftest.py` через `site.addsitedir`, доступны всем тестам — DevPlan 117 Brief F, D47-A):
+- `<repo_root>/` — import core, tests, etc.
+- `<repo_root>/core/` — import internal, modules, lib, entrypoints
+- `<repo_root>/core/internal/` — import bootstrap, deploy, scripts, shared
+
+**Module-specific paths** (добавляются точечно в тестовом файле):
+- `core/modules/<name>/` — для тестов, импортирующих модульный код (app.py, etc.)
+- `core/internal/scripts/` — для тестов generate-скриптов
+- Шаблон: `sys.path.insert(0, str(Path(__file__).parent.parent / "core" / "modules" / "<name>"))`
+
+**Правила:**
+1. Новые тесты НЕ добавляют пути, уже покрытые conftest-хуком (`<repo_root>/`, `core/`, `core/internal/`).
+2. Module-specific пути — только когда импортируется код из `core/modules/` или `core/internal/scripts/`.
+3. Запрещено: `sys.path.append`, относительные импорты за пределами tests/, манипуляции с `__path__`.
+4. Существующие `sys.path.insert` для путей, теперь покрытых conftest-хуком, ИЗБЫТОЧНЫ — их удаление опционально (не блокирует gate, site.addsitedir идемпотентен).
+
+**Обоснование** (D47): 65 файлов / 76 вхождений `sys.path.insert` создавали точки дрейфа. Гибрид: общие корневые пути — через conftest один раз; module-specific — точечно по шаблону. Нулевая стоимость для новых тестов, явный контроль для специфичных импортов.
+
+---
+
+## R5 ANTI-SURVIVORSHIP Protocol
+
+### Правило (Test Honesty R5, `.kilo/rules/testing.md`)
+
+Для каждого gate-теста, ссылающегося на bug/issue ID, ДОЛЖЕН существовать negative-тест с точным входом, поймавшим оригинальный баг. Negative не может существовать без detector: он ломается, если детектор перестаёт ловить регрессию.
+
+### Алгоритм скана (D48-A)
+
+1. **Инвентаризация:** `rg "U-\d+|TASK-\d+|bug.*#\d+" tests/gates/` → список гейтов с bug-ссылками.
+2. **Классификация:** для каждого гейта определить пойманный bug (исходный вход) и наличие negative-теста с этим же входом.
+3. **Верификация:** отсутствующие negative → создать; существующие → зафиксировать статус.
+4. **Приоритет:** гейты БЕЗ R5-покрытия → гейты с частичным покрытием.
+
+### Формат negative-теста
+
+```python
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · <детектор> — <bug-id>
+# · Last fail: <исходный вход, поймавший bug U-XX>
+# · Remove if: <условие устаревания детектора>
+def test_<detector>_negative_<bug_id>(self) -> None:
+    """R5 negative: исходный вход, поймавший bug U-XX, детектируется."""
+    violations = _scan_function(bug_trigger_input)
+    assert len(violations) >= 1, f"R5 FAIL: detector missed original bug U-XX trigger"
+```
+
+### Статус R5-покрытия гейтов (DevPlan 117 Brief F, D48-B/D48-C)
+
+| Гейт | Bug ID | R5 negative | Файл |
+|------|--------|-------------|------|
+| R1 no-pass-tests | U-69 | ✅ inline fixtures (assert True / bare-pass / no-assert) | test_gate_r1_no_pass_tests.py |
+| audit-format R2 | U-10/D1 | ✅ `test_negative_direct_write_detected` (tmp .py с `open(audit.log, "a")`) | test_gate_audit_format.py |
+| debt-freshness | U-82/D4 | ✅ `test_negative_missing_rev_detected` + `test_negative_stale_date_detected` | test_gate_debt_registry.py |
+| cross-layer imports | U-09 | ✅ 2 negative (dotted py import RED + python3 -m RED) | tests/test_cross_layer_imports.py |
+| inventory rename | U-79 | ✅ `test_negative_undocumented_removal_detected` (удаление без changelog → RED) + `test_negative_rename_exempt` (rename-пара → PASS) | test_gate_test_inventory.py |
+| image tag form | U-60 | ✅ `test_bare_latest_rejected_negative` (inline `:latest` в base.yml → RED) | test_gate_image_tag_form.py |
+| volumes SoT | U-49 | ✅ `test_module_volume_name_must_not_collide_root` (модульный volume, коллизирующий root → RED) | test_gate_volumes_sot.py |
+
+---
+
 ## Repair Contract Infrastructure (DevPlan 060)
 
 Каждый gate в `entrypoint-manifest.yaml` получает repair-контракт — поля, описывающие исправимость ошибки:

@@ -23,9 +23,20 @@
 
 import os
 import pathlib
+import site
 
 import pytest
 import yaml
+
+# ── Test import paths: canonical roots for all test files ────────────────────
+# DevPlan 117 Brief F (T6 #47, D47-A): добавляем repo_root/, core/, core/internal/
+# через site.addsitedir — общие пути, используемые >50% тестов. Это легитимизирует
+# 65 индивидуальных sys.path.insert (policy-раздел в tests/AGENTS.md §sys.path policy).
+# site.addsitedir идемпотентен (повторные вызовы не дублируют пути).
+_PKG_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
+for _p in (_PKG_ROOT, _PKG_ROOT / "core", _PKG_ROOT / "core" / "internal"):
+    site.addsitedir(str(_p))
+
 from _conftest import *  # noqa: F403
 
 # Also import underscore-prefixed names explicitly (not included in *)

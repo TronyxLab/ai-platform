@@ -10,7 +10,7 @@
 ##           scenario using real Docker CLI: pull success, 404→build, build failure, no images.
 ## @invariants
 ##   - Static audit tests do NOT require Docker (run everywhere)
-##   - Integration tests use @pytest.mark.requires_docker + shutil.which skip
+##   - Integration tests use @pytest.mark.requires_docker + require_docker_or_fail
 ##   - Each test scenario maps to one DevPlan W4 acceptance criterion
 ##   - LDD trajectory printed at IMP:7-10 via @ldd_trajectory decorator
 ##   - Temp directories cleaned up via tmp_path fixture
@@ -32,12 +32,12 @@
 
 import logging
 import re
-import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
+from _conftest.honesty import require_docker_or_fail
 from conftest import ldd_trajectory
 
 from tests.helpers.gate_helpers import repo_root
@@ -145,16 +145,13 @@ def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason="Docker CLI not available — cannot test docker manifest inspect",
-)
 @ldd_trajectory
 def test_hermes_pull_success(caplog: pytest.LogCaptureFixture) -> None:
     """
     # ◇ alpine:latest → ⚡ docker manifest inspect → ◇ exit 0? → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
+    require_docker_or_fail(reason="docker manifest inspect requires Docker daemon")
     image_ref = "alpine:latest"
 
     logger.info("[IMP:7][test_hermes_pull_success] Checking image: %s", image_ref)
@@ -214,10 +211,6 @@ def test_hermes_pull_success(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason="Docker CLI not available — cannot test docker compose build",
-)
 @ldd_trajectory
 def test_hermes_pull_404_build(
     caplog: pytest.LogCaptureFixture,
@@ -227,6 +220,7 @@ def test_hermes_pull_404_build(
     # ▶ tmp compose + Dockerfile → ⚡ compose config --images → ◇ manifest inspect (fail) → ⚡ compose build → ⎋ pass
     """
     caplog.set_level(logging.DEBUG)
+    require_docker_or_fail(reason="docker compose build requires Docker daemon")
     logger.info("[IMP:7][test_hermes_pull_404_build] Setting up temp compose project in %s", tmp_path)
 
     # ── 1. Create a minimal Dockerfile ──
@@ -343,10 +337,6 @@ def test_hermes_pull_404_build(
 
 
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason="Docker CLI not available — cannot test docker compose build failure",
-)
 @ldd_trajectory
 def test_hermes_build_fallback_fail(
     caplog: pytest.LogCaptureFixture,
@@ -356,6 +346,7 @@ def test_hermes_build_fallback_fail(
     # ▶ tmp compose + BROKEN Dockerfile → ⚡ compose build → ◇ exit ≠ 0? → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
+    require_docker_or_fail(reason="docker compose build failure test requires Docker daemon")
     logger.info("[IMP:7][test_hermes_build_fallback_fail] Setting up broken build in %s", tmp_path)
 
     # ── 1. Create a Dockerfile that will fail to build ──
@@ -439,10 +430,6 @@ def test_hermes_build_fallback_fail(
 
 
 @pytest.mark.requires_docker
-@pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason="Docker CLI not available — cannot test docker compose config --images",
-)
 @ldd_trajectory
 def test_hermes_no_images_resolved(
     caplog: pytest.LogCaptureFixture,
@@ -452,6 +439,7 @@ def test_hermes_no_images_resolved(
     # ▶ tmp compose (profile mismatch) → ⚡ compose config --images (profile=hermes-agent) → ◇ output empty? → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
+    require_docker_or_fail(reason="docker compose config --images requires Docker daemon")
     logger.info("[IMP:7][test_hermes_no_images_resolved] Setting up profile-mismatch compose in %s", tmp_path)
 
     # ── 1. Create compose file with service on "other" profile ──

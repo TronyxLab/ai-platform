@@ -10,12 +10,17 @@
 ##   - postgres: deep включает pgbouncer pg_isready
 ##   - logging: deep включает promtail /ready
 ## @rationale Стандартизация healthcheck контракта (DevPlan 04 DD5, DD6)
+## @changes   2026-08-01 | DevPlan 117 Brief F (T6 #49): добавлены IMP:9-трассы в assert-блоки бизнес-правил
 # endregion MODULE_CONTRACT
 
+
+import logging
 
 import pytest
 
 from tests.helpers.gate_helpers import repo_root
+
+logger = logging.getLogger(__name__)
 
 MODULES_DIR = repo_root() / "core" / "modules"
 
@@ -53,6 +58,7 @@ class TestHealthcheckContract:
                 f"Deep mode must exit early, not fallthrough to liveness.\n"
                 f"Expected comment pattern 'exit 0  # ранний выход' after deep diagnostics."
             )
+            logger.info("[IMP:9][healthcheck-contract] %s: deep-блок завершается exit 0 (no fallthrough)", name)
 
     @pytest.mark.gate
     def test_litellm_uses_check_http(self) -> None:
@@ -66,6 +72,7 @@ class TestHealthcheckContract:
         assert "curl -sf" not in content, (
             "litellm/healthcheck.sh should not use raw curl - the check_http wrapper should be used"
         )
+        logger.info("[IMP:9][healthcheck-contract] litellm: check_http используется, raw curl отсутствует")
 
     @pytest.mark.gate
     def test_langfuse_uses_127_0_0_1(self) -> None:
@@ -78,6 +85,7 @@ class TestHealthcheckContract:
         assert "docker inspect" not in content or "docker inspect langfuse" not in content, (
             "langfuse/healthcheck.sh should not use 'docker inspect' for IP resolution"
         )
+        logger.info("[IMP:9][healthcheck-contract] langfuse: healthcheck на 127.0.0.1, docker inspect отсутствует")
 
     @pytest.mark.gate
     def test_postgres_deep_includes_pgbouncer(self) -> None:
@@ -88,6 +96,7 @@ class TestHealthcheckContract:
 
         assert "pgbouncer" in content.lower(), "postgres/healthcheck.sh: missing pgbouncer check in deep mode"
         assert "pg_isready" in content, "postgres/healthcheck.sh: missing pg_isready for pgbouncer deep check"
+        logger.info("[IMP:9][healthcheck-contract] postgres: deep-блок проверяет pgbouncer pg_isready")
 
     @pytest.mark.gate
     def test_logging_deep_includes_promtail(self) -> None:
@@ -98,3 +107,4 @@ class TestHealthcheckContract:
 
         assert "promtail" in content.lower(), "logging/healthcheck.sh: missing promtail deep check"
         assert "9080" in content, "logging/healthcheck.sh: missing promtail port 9080 in deep check"
+        logger.info("[IMP:9][healthcheck-contract] logging: deep-блок проверяет promtail /ready (порт 9080)")

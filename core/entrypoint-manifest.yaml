@@ -1795,6 +1795,15 @@ gates:
 - id: test_inventory_header_count_matches_entries
   test_file: test_gate_test_inventory.py
   description: 'Auto-discovered gate: test_inventory_header_count_matches_entries'
+- id: test_negative_documented_removal_not_flagged
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_negative_documented_removal_not_flagged'
+- id: test_negative_rename_pair_exempt_from_changelog
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_negative_rename_pair_exempt_from_changelog'
+- id: test_negative_undocumented_removal_detected
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_negative_undocumented_removal_detected'
 - id: test_no_test_removed_without_changelog
   test_file: test_gate_test_inventory.py
   description: 'Auto-discovered gate: test_no_test_removed_without_changelog'
