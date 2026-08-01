@@ -34,6 +34,16 @@
 ##           2026-07-30 · DevPlan 089 T10 — routed through DeployOrchestrator CLI
 ##             instead of the legacy shell facade. Verbs deploy/remove/status use
 ##             python3 -m core.internal.deploy.orchestrator_cli.
+## ⚠️ TRAP[DECISION] · 2026-08-02 · MED · KEEP transitional — deploy.sh остаётся
+## ·   как переходный SSH forced-command entrypoint (DevPlan 117 Brief H D60).
+## ·   Rejected: удаление сейчас (риск: ломает обратную совместимость для нод, где
+## ·   authorized_keys ещё содержит command="...deploy.sh" — brief A может быть не
+## ·   развёрнут на всех нодах; тесты test_deploy_verbs.py/CI workflow ссылаются).
+## ·   Reason: канонический канал после brief A (D1) — orchestrator_cli dispatch;
+## ·   deploy.sh — чистый фасад (0 inline python3, делегирует ssh_command_parser +
+## ·   orchestrator_cli). Удаление не снижает сложность, но ломает legacy-ноды.
+## ·   Rev: удалить ПОСЛЕ верификации brief A на production (все ноды получили
+## ·   orchestrator_cli dispatch) — финальная зачистка программы 117.
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
