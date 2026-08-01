@@ -154,11 +154,9 @@ services:
   # endregion service:langfuse-redis
 
 networks:
+  # @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): top-level volumes: секция удалена —
+  #   langfuse-redis-data docker-managed том объявлен в root docker-compose.yml (единый SoT).
   observability-net:
     external: true
   shared-db-net:
     external: true
-
-volumes:
-  langfuse-redis-data:
-    driver: local

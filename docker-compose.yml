@@ -1,5 +1,5 @@
 # GREP_SUMMARY: docker-compose root include profiles networks volumes x-logging
-# STRUCTURE: ▶ include: 13 docker modules → networks: 6 external → volumes: 11 driver:local → x-logging
+# STRUCTURE: ▶ include: 13 docker modules → networks: 6 external → volumes: 12 (5 bind driver_opts + 7 docker-managed) → x-logging
 # region MODULE_CONTRACT
 ## @purpose  Root docker-compose — include: всех docker-модулей + networks + volumes + x-logging
 ## @scope    Локальный полный стек (инвариант #7) и VPS; сервисы только через include:, без инлайна
@@ -9,7 +9,14 @@
 ##   - networks/volumes согласованы с platform-env.yaml
 ##   - Количество модулей в STRUCTURE-комментарии — вычисляемое: 13 (DevPlan 116 T8, U-68).
 ##     При добавлении/удалении модуля обновляй комментарий (make discover-modules пересчитает include).
-## @rationale Единая точка компоновки стека; модульность через include + profiles (DD1/DD3)
+##   - volumes: root compose — ЕДИНСТВЕННЫЙ SoT (12 имён, DevPlan 116 B3 T4, U-49):
+##     5 bind-томов с driver_opts (postgres-data, wal-archive, backup-spool, backup-logs,
+##     hermes-data) + 7 docker-managed driver:local (grafana-data, prometheus-data, loki-data,
+##     clickhouse-data, minio-data, langfuse-redis-data, prometheus-config-gen).
+##     Модульные docker-compose.base.yml НЕ объявляют top-level volumes (гейт test_gate_volumes_sot).
+## @rationale Единая точка компоновки стека; модульность через include + profiles (DD1/DD3).
+##            Консолидация volumes в root (U-49): driver_opts модулей мержились в root случайно
+##            (docker compose config) — явное объявление в одном месте устраняет дрейф.
 # endregion MODULE_CONTRACT
 
 x-logging: &default-logging
@@ -41,13 +48,43 @@ networks:
   backup-net:          { external: true, name: backup-net }
 
 volumes:
-  postgres-data:       { driver: local }
-  wal-archive:         { driver: local }
-  hermes-data:         { driver: local }
+  # ── Bind-тома (driver_opts, перенесены из модулей postgres/backup-cron/hermes-agent,
+  #    DevPlan 116 B3 T4 U-49) — host-директории /var/lib/platform/*, /var/log/platform/backup
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/postgres-data
+  wal-archive:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/wal-archive
+  backup-spool:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/backup-spool
+  backup-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/platform/backup
+  hermes-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/platform/hermes-agent/data
+  # ── Docker-managed тома (driver:local, без opts)
   grafana-data:        { driver: local }
   prometheus-data:     { driver: local }
   loki-data:           { driver: local }
-  backup-spool:        { driver: local }
-  backup-logs:         { driver: local }
   clickhouse-data:     { driver: local }
   minio-data:          { driver: local }
+  langfuse-redis-data: { driver: local }
+  prometheus-config-gen: { driver: local }

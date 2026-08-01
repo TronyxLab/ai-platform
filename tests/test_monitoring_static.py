@@ -35,7 +35,9 @@ MONITORING_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "monitoring")
 COMPOSE_BASE = os.path.join(MONITORING_DIR, "docker-compose.base.yml")
 MODULE_YAML = os.path.join(MONITORING_DIR, "module.yaml")
 HEALTHCHECK_SH = os.path.join(MONITORING_DIR, "healthcheck.sh")
-PROMETHEUS_YML = os.path.join(MONITORING_DIR, "config", "prometheus.yml")
+# .tmpl is the single source — prometheus.yml duplicate removed (DevPlan 116 B3 T3, U-48);
+# renderer (prometheus-config-init) generates /generated/prometheus.yml from this template.
+PROMETHEUS_YML = os.path.join(MONITORING_DIR, "config", "prometheus.yml.tmpl")
 GRAFANA_DIR = os.path.join(MONITORING_DIR, "config", "grafana")
 DATASOURCES_YML = os.path.join(GRAFANA_DIR, "datasources.yml")
 DASHBOARDS_YML = os.path.join(GRAFANA_DIR, "dashboards.yml")

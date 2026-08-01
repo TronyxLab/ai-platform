@@ -87,7 +87,7 @@ node-lifecycle.sh --mode update → lifecycle/cli.py → state_machine.py
 
 ### `--mode init` — полный bootstrap
 
-Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Python 3.14, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, sudoers) → φ4 secrets-provision (decrypt, ensure-passwords) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: phase-функции в phases.py обрабатывают content-hash пропуск внутри grouped-фаз. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
+Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Python 3.14, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, setup-node/sudoers, metrics-cron → /etc/cron.d/platform-metrics, DevPlan 116 B3 T1) → φ4 secrets-provision (decrypt, ensure-passwords) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: phase-функции в phases.py обрабатывают content-hash пропуск внутри grouped-фаз. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
 
 ### Python runtime на ноде (2026-08-01)
 

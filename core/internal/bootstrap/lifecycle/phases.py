@@ -280,7 +280,7 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
 
 # region FUNC_phase_platform_setup
-## @purpose φ3: Platform-level setup — Docker Hub auth, setup-node (sudoers), metrics.
+## @purpose φ3: Platform-level setup — Docker Hub auth, setup-node (sudoers), metrics cron.
 ##           Corresponds to init steps: docker_auth (5), sudoers (17).
 ## @io      ⇥ core_dir, node_name, node_yaml → ⎋ bool
 ## @complexity O(1) + subprocess
@@ -288,12 +288,14 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
 ##   - Docker Hub auth is non-fatal — rate-limit warning if creds missing
 ##   - docker_registry_auth.py may be absent (non-fatal)
 ##   - sudoers setup is via setup-node.sh — non-fatal if script not found
+##   - Metrics cron (step 2.5) is NON-FATAL — install_cron_metrics returns False on failure,
+##     phase continues (U-03, DevPlan 116 B3 T1)
 ##   - sudoers validation is non-fatal (permission denied on restricted nodes)
 def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
-    """φ3: Platform setup — Docker auth, sudoers, setup-node.
+    """φ3: Platform setup — Docker auth, setup-node, metrics cron, sudoers.
 
     Pre-check: core_dir exists.
-    Execute: Docker Hub auth → setup-node.sh (sudoers) → validate sudoers.
+    Execute: Docker Hub auth → setup-node.sh (sudoers) → install metrics cron → validate sudoers.
     Post-check: sudoers files validated (best-effort).
     """
     if not os.path.isdir(core_dir):
@@ -330,6 +332,20 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
             non_fatal_issues = True
     else:
         logger.warning("[IMP:7][phase:platform_setup] setup-node.sh not found at %s — skipping", setup_script)
+        non_fatal_issues = True
+
+    # ── 2.5 Metrics cron (DevPlan 116 B3 T1, U-03) ──
+    # install_cron_metrics() → /etc/cron.d/platform-metrics (flock -n + timeout 50s).
+    # Non-fatal: cron daemon absence or read-only /etc must not block the phase.
+    try:
+        cron_ok = helpers_system.install_cron_metrics(core_dir)
+        if cron_ok:
+            logger.info("[IMP:9][phase:platform_setup] Metrics cron installed (cron.d/platform-metrics)")
+        else:
+            logger.warning("[IMP:7][phase:platform_setup] Metrics cron install failed (non-fatal)")
+            non_fatal_issues = True
+    except Exception as e:  # noqa: EXC — non-fatal: metrics cron is best-effort
+        logger.warning("[IMP:7][phase:platform_setup] Metrics cron install raised (non-fatal): %s", e)
         non_fatal_issues = True
 
     # ── 3. Validate sudoers (non-fatal if permission denied) ──

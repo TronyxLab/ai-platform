@@ -9,6 +9,9 @@
 ##           testable Python module (DevPlan 104).
 ## @scope    Called from entrypoint shell scripts via `python3 -m core.internal.shared.node_detect`
 ##           (--detect-age-key / --detect-node-name subcommands). Pure env/file/dir I/O — no subprocess.
+##           Consumers of --detect-node-name (DevPlan 116 B3 T2, U-38): bootstrap.sh, converge.sh,
+##           node-update.sh, platform-export-metrics.sh (metrics wrapper), core-deploy CI workflow —
+##           scripts/ and secrets/ are ALWAYS excluded (single detector canon).
 ## @invariants
 ##   1. detect_age_key chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE (first non-empty wins)
 ##   2. detect_age_key returns None (never empty string) when no key found

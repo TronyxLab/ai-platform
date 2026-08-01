@@ -32,6 +32,8 @@ Gate-тесты делятся на категории по предмету п�
 | **drift** | Обнаружение дрейфа артефактов | test_gate_manifest_integrity, test_gate_workflow_consistency |
 | **coverage** | Покрытие: все скрипты/таргеты зарегистрированы | test_gate_no_unregistered_entrypoint |
 | **enforcement** | Принудительные проверки (proxyless, PostgreSQL-only) | test_gate_litellm_pg_enforcement, test_gate_env_example_sync (NO_PROXY) |
+| **volumes_sot** | Volumes: root compose — единственный SoT (DevPlan 116 B3 T4, U-49) | test_gate_volumes_sot.py |
+| **image_tag_form** | ghcr tag-политика: версионный тег / digest-pin, голый :latest — RED (DevPlan 116 B3 T7, U-60) | test_gate_image_tag_form.py |
 
 ---
 
@@ -54,11 +56,24 @@ Gate-тесты делятся на категории по предмету п�
 - `id` — краткий kebab-case идентификатор
 - `test_file` — имя файла в `tests/gates/` (без пути)
 - После регистрации в manifest, CI gate `test_all_shebang_files_in_manifest` валидирует соответствие
+- `make generate-entrypoint-manifest` пересобирает gates[] автоматически из pytest markers (DevPlan 090 G3 cycle break)
 
 ### Удаление gate
 1. Удалить файл из `tests/gates/`
 2. Удалить запись из `core/entrypoint-manifest.yaml` секции `gates`
 3. Очистить `tests/gates/__pycache__/` от остатков удалённого файла
+
+---
+
+## Инвентарь волны (DevPlan 116 B3)
+
+| Гейт | Файл | Предмет |
+|------|------|---------|
+| metrics cron contract (код-присутствие) | `test_gate_status_page.py` (TestGateStatusPageCrontabContract — расширен) | φ3 вызывает install_cron_metrics; CRON_METRICS_LINE = flock + timeout 50 + script |
+| volumes SoT | `test_gate_volumes_sot.py` (NEW) | root compose — 12 volumes; модульные top-level volumes = ∅; CONTEXT_IMAGE: "" = 0 |
+| image tag form | `test_gate_image_tag_form.py` (NEW) | ghcr refs = версионный тег/digest-pin; голый :latest RED; allowlist dev/test |
+| prometheus single source | `test_gate_env_chain.py` (расширен: negative prometheus.yml-дубль запрещён) | .tmpl — единственный источник (U-48) |
+| P20 prometheus targets | `test_p20_container_coupling.py` (PROMETHEUS_YML → .tmpl) | targets резолвятся из .tmpl |
 
 ---
 

@@ -114,10 +114,8 @@ services:
       retries: 3
       start_period: 15s  # 20→15s: standardized per DevPlan 083 (DB default)
 
-volumes:
-  clickhouse-data:
-    driver: local
-
 networks:
+  # @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): top-level volumes: секция удалена —
+  #   clickhouse-data docker-managed том объявлен в root docker-compose.yml (единый SoT).
   observability-net:
     external: true

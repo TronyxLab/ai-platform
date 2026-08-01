@@ -322,13 +322,17 @@ def test_core_deploy_auto_detects_node():
     ·   Result: CI green but make node-update failed silently on VPS — containers never restarted.
     · Fix: CI auto-detects NODE via SSH from /opt/node-configs/ BEFORE calling make node-update
     ·   (same logic as converge.sh auto_detect_node_name). NODE is explicitly passed to make.
+    · 2026-08-01 (DevPlan 116 B3 T2, U-38): the for-loop detector was replaced by the canonical
+    ·   `python3 -m core.internal.shared.node_detect --detect-node-name` invoked over SSH on the
+    ·   VPS — single detector (excludes scripts/secrets), same as converge.sh/metrics-wrapper.
     """
     core_deploy_path = _WORKFLOW_DIR / "core-deploy.yml"
     content = core_deploy_path.read_text()
 
-    # ── core-deploy.yml auto-detects NODE from /opt/node-configs/ on VPS ──
-    assert "Auto-detect NODE name from /opt/node-configs/" in content, (
-        "core-deploy.yml must auto-detect NODE from /opt/node-configs/ before calling make node-update"
+    # ── core-deploy.yml auto-detects NODE via the canonical node_detect on the VPS ──
+    assert "core.internal.shared.node_detect" in content, (
+        "core-deploy.yml must auto-detect NODE via the canonical node_detect module "
+        "(DevPlan 116 B3 T2, U-38) before calling make node-update"
     )
     assert "/opt/node-configs" in content, "core-deploy.yml must reference /opt/node-configs/ for NODE auto-detection"
 

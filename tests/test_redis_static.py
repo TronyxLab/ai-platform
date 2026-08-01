@@ -38,7 +38,7 @@ PROJECT_ROOT = repo_root()
 REDIS_MODULE_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "redis")
 INFRA_METRICS_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "infra-metrics")
 MONITORING_DIR = os.path.join(PROJECT_ROOT, "core", "modules", "monitoring")
-PROMETHEUS_YML = os.path.join(MONITORING_DIR, "config", "prometheus.yml")
+PROMETHEUS_YML = os.path.join(MONITORING_DIR, "config", "prometheus.yml.tmpl")
 DASHBOARDS_DIR = os.path.join(MONITORING_DIR, "config", "dashboards")
 
 
@@ -90,7 +90,7 @@ def infra_metrics_compose_path(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def prometheus_yml_path(tmp_path_factory):
-    """Copy prometheus.yml to temp dir."""
+    """Copy prometheus.yml.tmpl to temp dir (tmpl = single source, DevPlan 116 B3 T3)."""
     src = PROMETHEUS_YML
     dst_dir = tmp_path_factory.mktemp("redis_static_prom")
     dst = os.path.join(str(dst_dir), "prometheus.yml")

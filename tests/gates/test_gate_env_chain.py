@@ -97,6 +97,26 @@ def test_prometheus_config_no_unexpanded_vars(caplog):
     logger.info("[IMP:9][gate][env_chain] PASS: All template variables in prometheus.yml.tmpl are known")
 
 
+@pytest.mark.gate
+@ldd_trajectory
+def test_prometheus_yml_duplicate_forbidden(caplog):
+    """prometheus.yml (without .tmpl) must NOT exist — .tmpl is the single source.
+
+    ## @purpose — Negative gate (R5 anti-survivorship, DevPlan 116 B3 T3, U-48):
+    ##            the md5-identical prometheus.yml duplicate was deleted; the renderer
+    ##            (prometheus-config-init) generates the runtime config from .tmpl.
+    ##            This assert forbids reintroducing the duplicate.
+    ## @io — ⎋ None (asserts the .yml copy is absent)
+    ## @complexity — O(1)
+    """
+    assert PROMETHEUS_TMPL.exists(), f"prometheus.yml.tmpl not found at {PROMETHEUS_TMPL}"
+    assert not PROMETHEUS_YML.exists(), (
+        f"[GATE:FAIL][id:prometheus_yml_duplicate_forbidden] {PROMETHEUS_YML} must NOT exist — "
+        "prometheus.yml.tmpl is the single source (duplicate removed in DevPlan 116 B3 T3, U-48)"
+    )
+    logger.info("[IMP:9][gate][env_chain] PASS: prometheus.yml duplicate is absent — .tmpl is the single source")
+
+
 def _envsubst_available() -> bool:
     """Check if envsubst (from gettext) is available on this system."""
     try:

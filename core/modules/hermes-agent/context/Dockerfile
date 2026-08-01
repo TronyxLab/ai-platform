@@ -14,6 +14,9 @@
 ##   - NO EXPOSE — agent accessed through proxy-net (nginx reverse proxy) only
 ##   - NO resource limits set (AR3)
 ## @rationale   L1 (hermes-agent-base) is the platform base with all generic configs, profiles, skills.
+##              L1 is obtained from ghcr.io/tronyx161/hermes-agent-base (public distribution base,
+##              DevPlan 116 B3 T7, D1) and tagged locally as hermes-agent-base:latest before the L2
+##              build (see build-platform.yml pull step / make hermes-build-context).
 ##              L2 adds context-specific overlays (Telegram config, per-context skills, CONTEXT guard).
 ##              This separation allows multiple L2 images for different contexts (personal, dev, ci)
 ##              all sharing the same L1 base. See AGENTS.md §Layer Architecture for canonical L0/L1/L2.

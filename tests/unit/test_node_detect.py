@@ -248,6 +248,37 @@ class TestAutoDetectNodeName:
 
     # endregion FUNC_test_skips_scripts_secrets
 
+    # region FUNC_test_skips_scripts_secrets_app_fixture
+    ## @purpose — DevPlan 116 B3 T2 (U-38) fixture: dirs {app, scripts, secrets} → "app".
+    ##            Reproduces the metrics-wrapper scenario (platform-export-metrics.sh) where
+    ##            scripts/ would previously be picked as NODE_NAME by `ls | grep -v secrets`.
+    ## @io — ⇥ tmp_path → ⎋ None (asserts "app")
+    ## @complexity — O(N)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · app/scripts/secrets fixture (DevPlan 116 B3 T2, U-38)
+    # · Last fail: scripts/ WAS picked as node name by `ls | grep -v secrets | head -1` in
+    # ·   platform-export-metrics.sh:31-33 (grep -v secrets did not exclude scripts)
+    # · Remove if: auto_detect_node_name SKIP_DIRS changes
+    def test_skips_scripts_secrets_app_fixture(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        """auto_detect_node_name with {app, scripts, secrets} resolves 'app' (T2 fixture)."""
+        caplog.set_level(logging.DEBUG)
+
+        ncd = tmp_path / "node-configs"
+        (ncd / "app").mkdir(parents=True)
+        (ncd / "scripts").mkdir(parents=True)
+        (ncd / "secrets").mkdir(parents=True)
+
+        logger.info("[IMP:7][test_node_detect] Testing T2 app/scripts/secrets fixture")
+        result = auto_detect_node_name(str(ncd))
+        assert result == "app", f"Expected 'app' (scripts/secrets excluded), got {result}"
+        logger.info("[IMP:9][test_node_detect] app resolved with scripts/secrets excluded (T2 fixture)")
+
+    # endregion FUNC_test_skips_scripts_secrets_app_fixture
+
 
 # endregion CLASS_TestAutoDetectNodeName
 

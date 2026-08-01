@@ -62,6 +62,9 @@ services:
     # ⚡ TRAP[PERF] · 2026-07-18 · >0 · hermes-agent-context:latest — no digest pin
     # · Root: context overlay image has no versioned tag in ghcr.io; tag@digest pinned
     # ·   below. Update digest when CI pushes new overlay image.
+    # · 2026-08-01 (B3 T7, U-60): CI pushes versioned tags (см. tag-политику T7) —
+    # ·   при появлении версии v2026.x.y переключить default на версионный тег@digest.
+    # ·   Default image НЕ меняется в этой волне (digest-pin — канон прод-дефолта).
     # · Rev: when CI pipeline pushes versioned tags (e.g. v2026.7.2), switch to tag@digest.
     image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:dd36a803acf0ae2871b697d4d478e528c9083f5945d1bf6bd560ea208b59aa5a}
     # 🧐 TRAP[DECISION] · 2026-07-11 · — · Platform pin: linux/amd64 for cross-platform compatibility
@@ -184,15 +187,9 @@ services:
 
     # [IMP:8][hermes-agent-compose] Resource limits: 1G — intentional (limits protect host from OOM)
 
-volumes:
-  hermes-data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/platform/hermes-agent/data
-
 networks:
+  # @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): top-level volumes: секция удалена —
+  #   hermes-data bind-том объявлен в root docker-compose.yml (единый SoT).
   proxy-net:
     external: true
   hermes-agent-net:

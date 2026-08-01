@@ -1,26 +1,33 @@
-# GREP_SUMMARY: build-hermes ghcr-push hermes-agent-base L1 hermes-agent-context L2 gha-cache auto-build
-# STRUCTURE: on:push:main/core/modules/hermes-agent/** → ⚡ cancel-in-progress → ▶ checkout → ◇ setup-buildx → ◇ ghcr-login → ⊕ L1 build+push (ghcr.io/tronyx161/hermes-agent-base:latest) → ⊕ L2 build+push (ghcr.io/tronyx161/hermes-agent-context:latest) → ⎋
+# GREP_SUMMARY: build-hermes ghcr-push hermes-agent-base L1 gha-cache auto-build public-distribution-base tag-policy
+# STRUCTURE: on:push:main/core/modules/hermes-agent/** → ⚡ cancel-in-progress → ▶ checkout → ◇ setup-buildx → ◇ ghcr-login → ⊕ L1 build+push (ghcr.io/tronyx161/hermes-agent-base:latest + sha-<sha>) → ⎋
 # region MODULE_CONTRACT
-## @purpose  Auto-build hermes-agent L1 (hermes-agent-base) and L2 (hermes-agent-context) images on push to core/modules/hermes-agent/**, push to ghcr.io for zero-operator CI pipeline.
-##           VPS pulls pre-built images instead of building locally (120-185s savings per node-update).
-## @scope    CI workflow in tronyx161/ai-platform. Not for context-specific L2 builds (those use make hermes-build-context).
+## @purpose  Auto-build hermes-agent L1 (hermes-agent-base) image on push to core/modules/hermes-agent/**,
+##           push to ghcr.io/tronyx161 as a PUBLIC distribution base (DevPlan 116 B3 T7, U-60, D1).
+##           L1 is built ONCE in tronyx161 — context orgs pull it anonymously and build only their
+##           thin L2 (context overlay). No L2 is pushed from this workflow (L2 = context org responsibility).
+## @scope    CI workflow in tronyx161/ai-platform. Not for context-specific L2 builds (those use
+##           make hermes-build-context or context-org CI via build-platform.yml).
 ## @invariants
 ##   - Trigger: push to core/modules/hermes-agent/** on main branch only
 ##   - Concurrency: cancel-in-progress — redundant builds from rapid commits are cancelled
-##   - L1: hermes-agent-base (platform base with configs, profiles, skills) — disaster recovery backup
-##   - L2: hermes-agent-context (context overlay with CONTEXT build-arg, default=ci) — generic CI build
-##   - Cache: type=gha shared across L1+L2 within same workflow run (mode=max preserves all layers)
+##   - L1: hermes-agent-base (platform base with configs, profiles, skills) — public distribution base
+##   - Tags: ghcr.io/tronyx161/hermes-agent-base:latest + :sha-${GITHUB_SHA} (full SHA — unambiguity)
+##   - NO L2 build/push — L2 build step removed (D1, DevPlan 116 B3 T7); context orgs build L2
+##   - Cache: type=gha,scope=hermes-agent-base (mode=max preserves all layers)
 ##   - DOCKER_BUILDKIT=1 for BuildKit-enhanced builds
-##   - L2 build context is repo root (.) because context/Dockerfile uses COPY paths relative to repo root
-##   - Registry: ghcr.io/tronyx161 (source org) — disaster recovery backup per AGENTS.md TRAP[DECISION] 2026-07-15.
-##     Context org (ghcr.io/tronyxlab) builds its own L2 via make hermes-build-context.
-##     Compose defaults to context org image; _handle_hermes_agent() checks source org as fallback.
-## @rationale  Mirror of local build logic from hermes-images.sh — L1 build-platform, L2 build-context.
-##             CI builds use identical Dockerfiles and contexts, only differ in cache backend (gha vs local).
-##             Pushing to ghcr.io enables VPS _handle_hermes_agent() to pull (~10-20s) instead of build
-##             (120-185s), as documented in DevPlan 050 AC2a strategy.
-##             Registry divergence (tronyx161 ≠ tronyxlab) is intentional: source org = backup, context org = production.
+##   - Registry: ghcr.io/tronyx161 (source org) — package published PUBLIC (manual operator step below)
+## @rationale  U-60: L2-push into tronyx161 was dead weight (runtime pulls L2 from tronyxlab; no
+##             consumer pulled tronyx161 L2). L1 contains no secrets (TRAP 2026-07-15) — publishing
+##             the PACKAGE (org/repo stay private) enables anonymous pull for context-org L2 builds.
+##             Tag policy: releases = versioned tags; prod defaults = digest-pin; :latest — dev/test
+##             overrides + this workflow's floating base marker (DevPlan 116 B3 T7).
 ## @changes — 2026-07-24 | Initial creation — T3.2 CI workflow for auto-build + GHCR push
+## @changes — 2026-08-01 | DevPlan 116 B3 T7 (U-60, D1): L2 build+push REMOVED; L1 tags →
+##            :latest + :sha-${GITHUB_SHA}; @purpose/@rationale updated (public distribution base).
+##            MANUAL operator step after merge (NOT from CI): publish the package —
+##            `gh package visibility set hermes-agent-base --visibility public`
+##            (or UI: Packages → hermes-agent-base → visibility → public). Required once so
+##            context orgs can pull L1 anonymously (L1 has no secrets — only Python deps).
 # endregion MODULE_CONTRACT
 
 name: Build Hermes Images
@@ -43,11 +50,10 @@ env:
   DOCKER_BUILDKIT: 1
   REGISTRY: ghcr.io
   L1_IMAGE: ghcr.io/tronyx161/hermes-agent-base
-  L2_IMAGE: ghcr.io/tronyx161/hermes-agent-context
 
 jobs:
-  build-and-push:
-    # [IMP:9][CI][L1+L2] Build and push both L1 and L2 hermes-agent images on push to hermes-agent sources
+  build-and-push-l1:
+    # [IMP:9][CI][L1] Build and push ONLY the L1 distribution base on hermes-agent source changes
     runs-on: ubuntu-latest
     steps:
       # ─── Step 1: Checkout ────────────────────────────────────────────────
@@ -74,35 +80,16 @@ jobs:
       # [IMP:9][CI][L1] Build hermes-agent-base (platform base image) from build/Dockerfile
       # Context: core/modules/hermes-agent/build/ — contains configs, templates, skills, init scripts
       # Cache: type=gha with scope=hermes-agent-base for layer isolation from other workflows
+      # Tags (DevPlan 116 B3 T7, D1): :latest (floating base marker) + :sha-<full SHA> (immutable).
+      # Context orgs pull :latest anonymously (package is public — see MANUAL step in MODULE_CONTRACT).
       - name: Build and push L1 — hermes-agent-base
         uses: docker/build-push-action@v6
         with:
           context: core/modules/hermes-agent/build
           file: core/modules/hermes-agent/build/Dockerfile
           push: true
-          tags: ${{ env.L1_IMAGE }}:latest
+          tags: |
+            ${{ env.L1_IMAGE }}:latest
+            ${{ env.L1_IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=hermes-agent-base
           cache-to: type=gha,mode=max,scope=hermes-agent-base
-
-      # ─── Step 5: Build and push L2 (hermes-agent-context) ───────────────
-      # [IMP:9][CI][L2] Build hermes-agent-context (context overlay) from context/Dockerfile
-      # Context: repo root (.) — context/Dockerfile uses COPY paths relative to repo root:
-      #   COPY core/modules/hermes-agent/context/config/ /opt/hermes/context/config/
-      # Build-arg CONTEXT=ci — generic CI build (not context-specific).
-      # Cache: type=gha with scope=hermes-agent-context for layer isolation from L1 cache.
-      # 🧐 TRAP[DECISION] · 2026-07-24 · — · L2 CONTEXT=ci in CI workflow
-      # · CI builds use CONTEXT=ci for the generic overlay. Context-specific L2 images
-      # · (e.g., personal, production) are built locally via make hermes-build-context.
-      # · Rejected: CONTEXT=personal (could imply default production config)
-      # · Reason: ci distinguishes CI-built artefacts from context-specific images.
-      # · Rev: if CI starts building context-specific images, make CONTEXT a workflow_dispatch input.
-      - name: Build and push L2 — hermes-agent-context
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: core/modules/hermes-agent/context/Dockerfile
-          push: true
-          tags: ${{ env.L2_IMAGE }}:latest
-          build-args: CONTEXT=ci
-          cache-from: type=gha,scope=hermes-agent-context
-          cache-to: type=gha,mode=max,scope=hermes-agent-context

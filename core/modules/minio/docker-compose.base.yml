@@ -97,11 +97,9 @@ services:
       - shared-db-net
     logging: *default-logging
 
-volumes:
-  minio-data:
-    driver: local
-
 networks:
+  # @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): top-level volumes: секция удалена —
+  #   minio-data docker-managed том объявлен в root docker-compose.yml (единый SoT).
   backup-net:
     external: true
   shared-db-net:

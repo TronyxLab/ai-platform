@@ -59,7 +59,16 @@ def _get_status_metrics_json() -> str:
 
 
 def _get_node_name() -> str:
-    """Get node name from env."""
+    """Get node name from env.
+
+    ## @purpose — NODE_NAME arrives from the wrapper (platform-export-metrics.sh), which
+    ##            resolves it via the canonical node_detect (core.internal.shared.node_detect
+    ##            --detect-node-name, excludes scripts/secrets). The "unknown" env-fallback
+    ##            below is ONLY for manual/standalone execution of this Python module —
+    ##            detection is the wrapper's responsibility (one implementation, DevPlan 116 B3 T2).
+    ## @io — ⇥ NODE_NAME env → ⎋ str (NODE_NAME or "unknown" fallback)
+    ## @complexity — O(1)
+    """
     return os.environ.get("NODE_NAME", "unknown")
 
 

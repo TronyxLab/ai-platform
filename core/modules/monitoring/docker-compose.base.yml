@@ -37,6 +37,8 @@ services:
   # ·   4. mount ./config:/config:ro (read-only, не перезаписывает трекаемый файл)
   # ·   5. Prometheus читает сгенерированный конфиг из named volume
   # · Fix v3 (2026-07-24): LITELLM_METRICS_TOKEN → LITELLM_MASTER_KEY — единый токен для Prometheus→LiteLLM /metrics auth
+  # · 2026-08-01 (B3 T3, U-48): трекаемый config/prometheus.yml-дубль УДАЛЁН (md5-идентичен .tmpl);
+  # ·   источник истины — prometheus.yml.tmpl. Исторический симптом ниже относится к удалённому файлу.
   # · Prevention: gate-тест test_prometheus_config_no_unexpanded_vars проверяет отсутствие literal placeholder'ов
   # ── Prometheus Config Init (envsubst) ──────────────────────────────────────
   prometheus-config-init:
@@ -52,6 +54,9 @@ services:
     command:
       - |
         echo "[IMP:7][prometheus-config-init] Generating prometheus.yml from template..."
+        # Template is the SINGLE source — the committed prometheus.yml duplicate was
+        # removed (DevPlan 116 B3 T3, U-48). Gate test_gate_env_chain.py asserts the
+        # .yml copy does not come back.
         sed 's/$${LITELLM_MASTER_KEY}/'"${LITELLM_MASTER_KEY}"'/g' \
           /config/prometheus.yml.tmpl > /generated/prometheus.yml
         echo "[IMP:9][prometheus-config-init] prometheus.yml generated"
@@ -215,17 +220,9 @@ services:
         condition: service_healthy
   # endregion service:grafana
 
-volumes:
-  grafana-data:
-    driver: local
-
-  prometheus-data:
-    driver: local
-
-  prometheus-config-gen:
-    driver: local
-
 networks:
+  # @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): top-level volumes: секция удалена —
+  #   grafana-data/prometheus-data/prometheus-config-gen объявлены в root docker-compose.yml (единый SoT).
   observability-net:
     external: true
   proxy-net:

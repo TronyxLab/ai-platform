@@ -20,7 +20,10 @@ depends_on: []
 
 interfaces: []
 
-spool_dir: /var/lib/platform/minio-data
+# @changes 2026-08-01 (DevPlan 116 B3 T8, U-67, D3): spool_dir → none — host-путь minio-data
+# удалён из provision (контейнеры не монтируют его);
+# данные живут в docker-томе minio-data (spool_volume).
+spool_dir: none
 spool_volume: minio-data
 resources:
   limits:

@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: system-helpers, apt-packages, is-pkg-installed, install-apt-packages, ensure-sops, ghcr-auth, dpkg, idempotent
-# STRUCTURE: ▶ is_pkg_installed ┌dpkg -s┐ → ◇ rc=0? → ⚡ install_apt_packages ┌apt-get update+install┐ → ⚡ ensure_sops ┌GitHub release download┐ → ⚡ ghcr_auth ┌docker_auth.ghcr_login┐ → ⎋
+# GREP_SUMMARY: system-helpers, apt-packages, is-pkg-installed, install-apt-packages, ensure-sops, ghcr-auth, install-cron-metrics, cron, metrics, dpkg, idempotent
+# STRUCTURE: ▶ is_pkg_installed ┌dpkg -s┐ → ◇ rc=0? → ⚡ install_apt_packages ┌apt-get update+install┐ → ⚡ ensure_sops ┌GitHub release download┐ → ⚡ ghcr_auth ┌docker_auth.ghcr_login┐ → ⚡ install_cron_metrics ┌flock+timeout cron.d┐ → ⎋
 # region MODULE_CONTRACT
-## @purpose  Системные I/O-хелперы bootstrap-фаз (apt/пакеты, sops, GHCR auth) — извлечены
-##           из state_machine (B9 T1, U-08). Все функции публичные.
-## @scope    system.py: is_pkg_installed, install_apt_packages, ensure_sops, ghcr_auth.
-##           Используются phases.py (φ1 system_bootstrap, φ6/φ11 registry auth).
+## @purpose  Системные I/O-хелперы bootstrap-фаз (apt/пакеты, sops, GHCR auth, metrics cron) —
+##           извлечены из state_machine (B9 T1, U-08). Все функции публичные.
+## @scope    system.py: is_pkg_installed, install_apt_packages, ensure_sops, ghcr_auth,
+##           install_cron_metrics (+ CRON_METRICS_FILE/CRON_METRICS_LINE константы).
+##           Используются phases.py (φ1 system_bootstrap, φ3 platform_setup, φ6/φ11 registry auth).
 ## @invariants
 ##   - apt-get-операции идемпотентны (dpkg check перед установкой)
 ##   - sops-установка non-fatal (best-effort — скачивание из GitHub может быть недоступно)
 ##   - ghcr_auth: без GHCR_PULL_TOKEN → skip (не fatal)
+##   - install_cron_metrics: идемпотентен (content match → no-op), атомарен (temp+mv),
+##     non-fatal (False при сбое, никогда не raise) — φ3 контракт нефатальности (U-03, DevPlan 116 B3 T1)
 ##   - Все subprocess через helpers.subprocess_io.run_subprocess (единый канон)
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита в публичные helpers
 ##            (DevPlan 116 B9 D1) — state_machine остаётся оркестрацией.
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T1)
+## @changes  2026-08-01 · DevPlan 116 B3 T1 (U-03): +install_cron_metrics — /etc/cron.d/platform-metrics
+##           (flock -n + timeout 50 + absolute path), вызывается из φ3 phase_platform_setup шаг 2.5
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import subprocess
+import tempfile
 
 from core.internal.bootstrap.lifecycle.helpers.subprocess_io import run_subprocess
 from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login
@@ -130,3 +137,88 @@ def ghcr_auth() -> None:
 
 
 # endregion FUNC_ghcr_auth
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Metrics cron (DevPlan 116 B3 T1, U-03) — install_cron_metrics
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Cron.d target file — read by cron daemon (no crontab -e needed).
+# Absolute paths ONLY — cron.d runs with minimal PATH.
+CRON_METRICS_FILE = "/etc/cron.d/platform-metrics"
+# Contract line (gate test test_gate_status_page.py::TestGateStatusPageCrontabContract
+# asserts flock -n + timeout 50 + platform-export-metrics.sh):
+#   * * * * * root /usr/bin/flock -n <lock> /usr/bin/timeout 50 <core_dir>/internal/healthcheck/platform-export-metrics.sh
+# {core_dir} is formatted at call time (bootstrap core lives in /opt/platform on the node).
+CRON_METRICS_LINE = (
+    "* * * * * root /usr/bin/flock -n /run/lock/platform-metrics.lock "
+    "/usr/bin/timeout 50 {core_dir}/internal/healthcheck/platform-export-metrics.sh "
+    ">/dev/null 2>&1"
+)
+
+
+# region FUNC_install_cron_metrics
+## @purpose  Install the platform metrics export cron job into /etc/cron.d/platform-metrics
+##           (flock -n + timeout 50s + absolute script path). Idempotent: existing file with
+##           identical content → no-op (SKIP). Atomic: temp file → os.replace (mv).
+## @io       ⇥ core_dir: platform core directory (absolute path, embedded in cron line)
+##           ⎋ bool: True = installed/verified, False = failure (non-fatal — never raises)
+## @complexity O(1) — single file read + atomic write
+## @invariants
+##   - CRON_METRICS_LINE contract: flock -n + timeout 50 + absolute path to platform-export-metrics.sh
+##   - Idempotency: identical content → SKIP (no-op, mtime unchanged)
+##   - Content mutation → overwrite (IMP:7 log)
+##   - Fresh install → IMP:9 log «cron installed»
+##   - mkdir /run/lock best-effort (tmpfs — exists on Ubuntu 24.04)
+##   - Non-fatal: OSError (permission denied, read-only fs) → WARN + False — φ3 continues
+## @rationale  U-03: phases.py modulemap promised «metrics cron» in φ3 but no installer existed —
+##             greenfield node ended up without metrics. Pattern: install-tor-proxy.sh:324
+##             install_cron_healthcheck (/etc/cron.d/). Python-first language policy.
+def install_cron_metrics(core_dir: str) -> bool:
+    """Install the metrics cron entry. Returns True on success/no-op, False on failure."""
+    try:
+        cron_line = CRON_METRICS_LINE.format(core_dir=core_dir)
+    except (KeyError, IndexError) as e:
+        logger.warning("[IMP:7][cron_metrics] Invalid CRON_METRICS_LINE template (non-fatal): %s", e)
+        return False
+
+    try:
+        # ── Idempotency: existing file with identical content → SKIP (no-op) ──
+        try:
+            with open(CRON_METRICS_FILE) as f:
+                existing = f.read()
+        except FileNotFoundError:
+            existing = ""
+        if existing == cron_line + "\n":
+            logger.info("[IMP:7][cron_metrics] Cron already installed — no-op (idempotent)")
+            return True
+
+        # ── Ensure /run/lock exists (best-effort — tmpfs, present on Ubuntu) ──
+        try:
+            os.makedirs("/run/lock", exist_ok=True)
+        except OSError as e:
+            logger.warning("[IMP:7][cron_metrics] mkdir /run/lock failed (best-effort): %s", e)
+
+        # ── Atomic write: temp file in same dir → chmod 0644 → os.replace ──
+        target_dir = os.path.dirname(CRON_METRICS_FILE)
+        fd, tmp_path = tempfile.mkstemp(dir=target_dir, prefix="platform-metrics-")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(cron_line + "\n")
+            os.chmod(tmp_path, 0o644)
+            os.replace(tmp_path, CRON_METRICS_FILE)
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+
+        if existing:
+            logger.info("[IMP:7][cron_metrics] Cron file updated (content changed)")
+        logger.info("[IMP:9][cron_metrics] Metrics cron installed at %s", CRON_METRICS_FILE)
+        return True
+    except OSError as e:
+        logger.warning("[IMP:7][cron_metrics] Cron install failed (non-fatal): %s", e)
+        return False
+
+
+# endregion FUNC_install_cron_metrics

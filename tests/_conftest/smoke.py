@@ -108,6 +108,8 @@ _STATIC_SMOKE_ENV: dict[str, str] = {
     # ·   This matches `make hermes-build-context CONTEXT=test` output.
     # · Rev: when hermes-agent-context is rebuilt — update SMOKE_ENV_GENERATED (via platform-env.yaml)
     # ·   and remove this static override.
+    # · Allowlist: bare :latest here is dev/test-only — excluded from tag-form gate
+    # ·   (tests/gates/test_gate_image_tag_form.py, DevPlan 116 B3 T7).
     "CONTEXT_IMAGE": "ghcr.io/tronyxlab/hermes-agent-context:latest",
     "LITELLM_TEST_PORT": "14000",
     "HERMES_DASHBOARD_TEST_PORT": "19119",

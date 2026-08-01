@@ -4,7 +4,7 @@
 ## @purpose  P20 gate tests: validate container coupling invariants — every referenced container_name
 ##           has a network alias; every env hostname is resolvable; Prometheus targets are resolvable.
 ## @scope    Parses all core/modules/*/docker-compose.base.yml for service registry with aliases/env;
-##           parses core/modules/monitoring/config/prometheus.yml for scrape targets.
+##           parses core/modules/monitoring/config/prometheus.yml.tmpl for scrape targets.
 ## @invariants
 ##   - For each env/depends_on/prometheus reference to container_name X, service X must have
 ##     a network alias == X in at least one of its networks.
@@ -28,7 +28,9 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULES_DIR = PROJECT_ROOT / "core" / "modules"
-PROMETHEUS_YML = PROJECT_ROOT / "core" / "modules" / "monitoring" / "config" / "prometheus.yml"
+# .tmpl is the single source — prometheus.yml duplicate removed (DevPlan 116 B3 T3, U-48).
+# Renderer (prometheus-config-init) generates /generated/prometheus.yml from this template.
+PROMETHEUS_YML_TMPL = PROJECT_ROOT / "core" / "modules" / "monitoring" / "config" / "prometheus.yml.tmpl"
 
 
 # region FUNC__build_service_registry
@@ -265,15 +267,15 @@ def test_env_hostnames_resolvable():
 
 # region TEST_test_prometheus_targets_resolvable
 ## @purpose  Prometheus scrape target hostnames (excluding localhost) are resolvable
-## @io       Parses prometheus.yml → targets → validates hostnames in LOOKUP
+## @io       Parses prometheus.yml.tmpl → targets → validates hostnames in LOOKUP
 @pytest.mark.gate
 def test_prometheus_targets_resolvable():
     """Every Prometheus scrape target host (before :) resolves in
     aliases ∪ container_names ∪ service_names. Skip localhost/127.0.0.1.
     """
-    assert PROMETHEUS_YML.exists(), f"prometheus.yml not found at {PROMETHEUS_YML}"
+    assert PROMETHEUS_YML_TMPL.exists(), f"prometheus.yml.tmpl not found at {PROMETHEUS_YML_TMPL}"
 
-    with open(PROMETHEUS_YML) as f:
+    with open(PROMETHEUS_YML_TMPL) as f:
         data = yaml.safe_load(f)
 
     scrape_configs = data.get("scrape_configs", []) or []

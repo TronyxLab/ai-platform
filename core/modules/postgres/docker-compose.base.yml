@@ -111,27 +111,14 @@ services:
       retries: 3
       start_period: 15s
 
-volumes:
-  postgres-data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/platform/postgres-data
-
-  wal-archive:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/platform/wal-archive
-
 networks:
   # ⚠️ TRAP[BUG] · 2026-07-15 · MED · DNS-коллизия алиаса "postgres" при двух стеках на одной shared-db-net
   # · Symptom: pgbouncer тестового стека коннектится к чужому postgres → wrong password type
   # · Root: alias postgres не уникален в внешней сети, Docker DNS round-robin
   # · Fix: DB_NET_NAME parametrization REMOVED (Q4: YAGNI). shared-db-net фиксирован.
   # ·   Тестовые стеки используют изолированные сети — коллизия не возникает.
+  # @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): top-level volumes: секция удалена —
+  #   postgres-data/wal-archive bind-тома объявлены в root docker-compose.yml (единый SoT).
   shared-db-net:
     external: true
     name: shared-db-net

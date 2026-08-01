@@ -281,28 +281,44 @@ def test_compose_contract(test_id, extract_fn, expected, description, caplog) ->
 @ldd_trajectory
 def test_compose_spool_volume_declared(caplog) -> None:
     """
-    Spool volume /var/lib/platform/backup-spool/ must be declared in compose (03 §4, R3).
+    Spool volume /var/lib/platform/backup-spool/ must be declared (03 §4, R3).
+    @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): volume declarations consolidated —
+    backup-spool/backup-logs bind-тома живут в ROOT docker-compose.yml (единый SoT);
+    модульный compose объявляет только сервисные mount-ссылки.
     """
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_backup_cron][spool_volume] START")
 
+        # Root compose = single source of truth for volume declarations (B3 T4, U-49)
+        root_compose_path = os.path.join(os.path.dirname(__file__), "..", "docker-compose.yml")
+        with open(root_compose_path) as f:
+            root_data = yaml.safe_load(f)
+        root_volumes = root_data.get("volumes", {})
+
+        # Module compose keeps only service mount references
         data = _load_compose()
-        volumes = data.get("volumes", {})
         service_volumes = data.get("services", {}).get("backup-cron", {}).get("volumes", [])
 
-        # Check top-level volume declared
-        has_backup_spool_volume = "backup-spool" in volumes
+        # Check top-level volume declared in ROOT SoT
+        has_backup_spool_volume = "backup-spool" in root_volumes
+        # Bind device path present in root declaration (bind SoT)
+        backup_spool_decl = root_volumes.get("backup-spool", {}) or {}
+        device = (backup_spool_decl.get("driver_opts", {}) or {}).get("device", "")
 
         # Check service mounts include backup-spool path
         spool_path_mounted = any("/var/lib/platform/backup-spool" in str(v) for v in service_volumes)
 
         logger.critical(
-            "[IMP:9][test_backup_cron][spool_volume] ASSERT: volume_declared=%s spool_mounted=%s",
+            "[IMP:9][test_backup_cron][spool_volume] ASSERT: volume_declared(root)=%s spool_mounted=%s device=%s",
             has_backup_spool_volume,
             spool_path_mounted,
+            device,
         )
 
-        assert has_backup_spool_volume, "R3 violation: backup-spool volume must be declared in volumes:"
+        assert has_backup_spool_volume, "R3 violation: backup-spool volume must be declared in root volumes:"
+        assert device == "/var/lib/platform/backup-spool", (
+            f"R3 violation: backup-spool bind device must be /var/lib/platform/backup-spool. Got: {device}"
+        )
         assert spool_path_mounted, (
             f"R3 violation: /var/lib/platform/backup-spool must be mounted in service. Got: {service_volumes}"
         )

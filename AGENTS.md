@@ -17,7 +17,7 @@
 ##   7. Полный локальный стек через `docker compose up` на macOS разработчика.
 ##   8. LiteLLM — PostgreSQL во всех окружениях (никакого SQLite).
 ##   9. Тестовый сервер может быть пересоздан заново — обратная совместимость не требуется.
-##   10. Сборка образов hermes: `make hermes-build-platform` (L1, локально + push в ghcr.io как backup), `make hermes-push-l1` (L1 push в ghcr.io как disaster recovery) и `make hermes-build-context CONTEXT=<context>` (L1→L2, контекстная разработка и production).
+##   10. Сборка образов hermes: `make hermes-build-platform` (L1, локально + push в ghcr.io как backup), `make hermes-push-l1` (L1 push в ghcr.io как disaster recovery + дистрибутивная база, public package, DevPlan 116 B3 D1) и `make hermes-build-context CONTEXT=<context>` (L1→L2, контекстная разработка и production).
 ##   11. Manifest Generation Contract — authoritative sources (module.yaml, secret-definitions.yaml, platform-infra.yaml, Makefile .PHONY, @pytest.mark.gate) порождают generated files (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py, env_defaults_generated.py, entrypoint-manifest.yaml#allowed_verbs/gates, core/AGENTS.md generated-секции). Generated files коммитятся, но НЕ редактируются вручную. CI gate `make check-manifests` блокирует divergence.
 ## @rationale Single source of truth for platform architecture consumed by autonomous agents and developers
 ## @rationale (D2) Invariant 4 обновлён по результатам drift-аудита: 3 канонических + 2 вспомогательных (core/internal/bootstrap/, tests/gates/) в §Навигация root AGENTS.md; templates/template-*/ — payload `make new-project`/`make new-context`, вне скоупа инварианта (не являются архитектурной документацией платформы)
@@ -43,6 +43,9 @@
 ## ⚠️ TRAP[DECISION] · 2026-07-15 · HI · L1 pushed to ghcr.io as backup, never used directly by contexts
 ## · Rejected: local-only L1 (risk: loss of build machine → rebuild from scratch)
 ## · Reason: L1 contains no secrets (only Python dependencies). Push = disaster recovery, not delivery model change.
+## · 2026-08-01 (B3 D1, DevPlan 116 T7): L1 ПУБЛИКУЕТСЯ (public package hermes-agent-base на tronyx161,
+## ·   org/repo остаются приватными) — distribution base для контекстных L2-сборок и L1-только тестов;
+## ·   контексты НЕ используют L1 как runtime (runtime = L2), L1 — build-base + smoke-цель.
 ## · Rev: if L1 starts carrying context-specific data → revert to local-only.
 ## ⚠️ TRAP[DECISION] · 2026-07-22 · MED · Strangler-Fig decomposition — canonical pattern для shell→Python миграции
 ## · Rejected: Big-bang rewrite (risk: 4114 LOC top-3 монолиты → один PR — слишком высокий риск регрессии)
@@ -120,7 +123,7 @@
 | ✅ | `discover-modules` | Авто-обнаружение модулей и обновление docker-compose.yml include-секции (make discover-modules → discover_modules.py) |
 | ✅ | `hermes-build-platform` | Сборка L1 локально |
 | ✅ | `hermes-build-context` | Сборка L1→L2 |
-| ✅ | `hermes-push-l1` | Push L1 в ghcr.io как disaster recovery backup (make hermes-push-l1 → docker tag + docker push) |
+| ✅ | `hermes-push-l1` | Push L1 в ghcr.io как DR backup и дистрибутивную базу (public package hermes-agent-base, DevPlan 116 B3 D1 — make hermes-push-l1 → docker tag + docker push) |
 | ✅ | `provision` | Provision окружения (сети, volumes, CI env) из platform-env.yaml (`make provision [SCOPE=all|networks|volumes|env]`) |
 | ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES: единый SoT platform-infra.yaml, 0 хардкод-копий вне allowlist (make check-profiles-parity → pytest test_gate_profiles_parity.py) |
 | ✅ | `check-domain-parity` | Parity-гейт PLATFORM_DOMAIN: единое определение, 0 test.local в прод-цепочке (make check-domain-parity → pytest test_gate_domain_parity.py) |

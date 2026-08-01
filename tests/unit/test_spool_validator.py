@@ -131,6 +131,61 @@ def test_spool_dir_none_stateless(tmp_path, caplog) -> None:
     print("[IMP:9][test_spool_dir_none_stateless] PASS: spool_dir: none → stateless")
 
 
+# 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · minio spool_dir:none (DevPlan 116 B3 T8, U-67, D3)
+# · Scenario: minio module.yaml with spool_dir: none → stateless (data in docker volume minio-data),
+# ·   NOT missing — host-path /var/lib/platform/minio-data was removed from provision
+# · Last fail: minio declared spool_dir: /var/lib/platform/minio-data (dead host path)
+# · Remove if: spool_dir semantics change
+@pytest.mark.static_audit
+@ldd_trajectory
+def test_minio_spool_dir_none_stateless(tmp_path, caplog) -> None:
+    """minio with spool_dir: none → stateless (not missing) — T8 fixture."""
+    caplog.set_level(logging.DEBUG)
+
+    _create_module_yaml(tmp_path, "minio", spool_dir="none", spool_volume="minio-data")
+
+    result = verify_spool_dirs(str(tmp_path))
+
+    assert "minio" in result["stateless"], f"Expected minio in stateless, got {result['stateless']}"
+    for m in result["missing"]:
+        assert m.get("module") != "minio", "minio with spool_dir: none must NOT be in missing"
+
+    print("[IMP:9][test_minio_spool_dir_none_stateless] PASS: minio spool_dir:none → stateless")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · NEGATIVE (R5) · removed host-path must not return (DevPlan 116 B3 T8, U-67)
+# · Scenario: module declares spool_dir: /var/lib/platform/minio-data (removed path) →
+# ·   on a provisioned node the path does NOT exist → WARN missing (RED against silent regression)
+# · Last fail: N/A (new negative test — the removed path must stay absent from module.yamls)
+# · Remove if: minio/langfuse host spool dirs are reintroduced intentionally
+@pytest.mark.static_audit
+@ldd_trajectory
+def test_removed_host_path_negative(tmp_path, caplog) -> None:
+    """Negative: spool_dir pointing at the REMOVED path → WARN missing (regression guard)."""
+    caplog.set_level(logging.DEBUG)
+
+    removed_path = "/var/lib/platform/minio-data"  # removed in B3 T8 (U-67, D3)
+    _create_module_yaml(tmp_path, "minio", spool_dir=removed_path)
+
+    modules_dir_str = str(tmp_path)
+
+    # os.path.isdir: True for the modules dir + its module subdirs (tmp_path hierarchy);
+    # the REMOVED host path (/var/lib/platform/minio-data) does NOT exist on a freshly
+    # provisioned node (that's the whole point of the removal). Note: Path.is_dir()
+    # delegates to os.path.isdir on Python 3.14 — hence the substring mock pattern.
+    def _mock_isdir(path) -> bool:
+        return modules_dir_str in str(path)
+
+    with patch("os.path.isdir", side_effect=_mock_isdir):
+        result = verify_spool_dirs(modules_dir_str)
+
+    assert "minio" not in result["stateless"], "minio with removed path must NOT be stateless"
+    found = any(e.get("path") == removed_path for e in result["missing"])
+    assert found, f"Removed host path must be reported missing (regression guard): {result['missing']}"
+
+    print("[IMP:9][test_removed_host_path_negative] PASS: removed host path → missing (negative)")
+
+
 @pytest.mark.static_audit
 @ldd_trajectory
 def test_spool_volume_skip(tmp_path, caplog) -> None:

@@ -16,6 +16,10 @@
 ## @invariants
 ##   - Verify-only: NEVER calls os.makedirs/mkdir. Uses os.path.isdir exclusively.
 ##   - spool_dir: none → stateless module, logged as INFO, not WARN.
+##   - minio/langfuse use spool_dir: none (DevPlan 116 B3 T8, U-67, D3) — host-пути
+##     /var/lib/platform/{minio,langfuse}-data удалены из provision; данные живут в
+##     docker-томах (minio-data, langfuse-redis-data) — verify-логика НЕ меняется,
+##     stateless → INFO-пропуск, они НЕ попадают в WARN-список missing.
 ##   - spool_volume is a Docker volume name (not a filesystem path) → skipped for existence check.
 ##   - File-not-found → graceful: missing module dirs, no module.yaml → empty result.
 ##   - Observability dirs checked only if core/modules/observability/ exists.

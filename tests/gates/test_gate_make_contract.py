@@ -188,6 +188,13 @@ def test_no_empty_phony_targets(caplog) -> None:
 # · Scenario: make -n <target> для всех .PHONY-таргетов всех 13 docker-модулей → exit 0
 # · Last fail: U-25 (restore dry-run был тихим no-op)
 # · Remove if: make-контракт модулей меняется кардинально
+# 📝 TRAP[DEBT] · 2026-08-01 · MED · flaky unlink под xdist: .combined.mk.tmp пишется в фиксированный
+# ·   путь модуля и unlink() в finally падает с FileNotFoundError при параллельном прогоне (observed
+# ·   during DevPlan 116 B3 T10 gate run; passes in isolation)
+# · Suspected: xdist worker/процессный race — фиксированный путь в дереве модуля разделяется между
+# ·   параллельными прогонами одного теста (перезапись/удаление между write_text и unlink)
+# · Impact: периодический красный gate без изменения кода — ложный фейл волны
+# · When: deferred, out of scope B3 — фикс: tmp_path-фикстура вместо core/modules/<mod>/.combined.mk.tmp
 @pytest.mark.gate
 def test_make_n_dry_run_all_targets(caplog) -> None:
     """make -n для всех .PHONY-таргетов всех docker-модулей — exit 0 (без реального docker)."""

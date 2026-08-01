@@ -7,7 +7,8 @@
 ## @invariants
 ##   - set -euo pipefail — strict error handling
 ##   - Auto-detects PLATFORM_ROOT (/opt/platform or 3 levels up from script)
-##   - Auto-detects NODE_NAME from /opt/node-configs/ (fallback: "unknown")
+##   - Auto-detects NODE_NAME via python3 -m core.internal.shared.node_detect (excludes
+##     scripts/ and secrets/; fallback: "unknown") — single detector canon (DevPlan 116 B3 T2)
 ##   - Exports PYTHONPATH so `from core.internal.healthcheck.metrics...` works
 ##   - Creates /run/platform/ (tmpfs) and /var/cache/platform/metrics/ if missing
 ##   - Protective: removes status-metrics.json if it exists as directory (P1 safeguard)
@@ -27,10 +28,16 @@ if [ -z "${PLATFORM_ROOT:-}" ]; then
     [ -d "$PLATFORM_ROOT" ] || PLATFORM_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 fi
 
-# Auto-detect NODE_NAME from node-configs directory (fallback: "unknown")
+# Auto-detect NODE_NAME via canonical node_detect (DevPlan 116 B3 T2, U-38):
+#   node_detect.auto_detect_node_name excludes scripts/ and secrets/ subdirectories.
+#   Priority: explicit NODE_NAME env → node_detect → "unknown" (WARN).
+# @changes 2026-08-01 · Replaced `ls | grep -v secrets | head -1` hack (did NOT exclude
+#           scripts/ → scripts dir could be picked as NODE_NAME). Single detector now.
 if [ -z "${NODE_NAME:-}" ]; then
-    NODE_NAME=$(ls /opt/node-configs/ 2>/dev/null | grep -v secrets | head -1)
-    [ -z "$NODE_NAME" ] && NODE_NAME="unknown"
+    NODE_NAME=$(python3 -m core.internal.shared.node_detect --detect-node-name 2>/dev/null) || NODE_NAME="unknown"
+    if [ "$NODE_NAME" = "unknown" ]; then
+        echo "[IMP:7][platform-export-metrics][WARN] Node detection failed — NODE_NAME=unknown" >&2
+    fi
 fi
 
 # Set PYTHONPATH so 'from core.internal.healthcheck.metrics...' works

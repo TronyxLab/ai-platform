@@ -1,23 +1,32 @@
-# GREP_SUMMARY: build-platform sha-aware-aggregator workflow-run platform-test hermes-agent-base docker-buildx smoke-test load-true provisioner
-# STRUCTURE: on:workflow_run(platform-test:completed,main) + workflow_dispatch → push-filter → verify SHA → build L1 hermes-agent-base (load:true) → smoke test → cleanup
+# GREP_SUMMARY: build-platform sha-aware-aggregator workflow-run platform-test hermes-agent-base docker-buildx smoke-test load-true provisioner pull-l1 fallback-build
+# STRUCTURE: on:workflow_run(platform-test:completed,main) + workflow_dispatch → push-filter → verify SHA → ◇ owner==tronyx161 ? build L1 from source : pull public L1 (fallback build) → smoke test → [source org] push L1 → cleanup
 # region MODULE_CONTRACT
-## @purpose  SHA-aware platform agent build: triggered by platform-test success, builds L1 image
-##           locally (load:true), runs smoke test. Manual workflow_dispatch also validates SHA.
-## @scope    Uses SHA-aware aggregator (D4): verifies platform-test success for the same SHA before building.
+## @purpose  SHA-aware platform agent build: triggered by platform-test success, acquires the L1
+##           hermes-agent-base image (build from sources in tronyx161, OR pull the public
+##           ghcr.io/tronyx161/hermes-agent-base:latest distribution base in context orgs),
+##           runs smoke test. Manual workflow_dispatch also validates SHA.
+## @scope    Mirrored into context orgs (github.repository_owner != tronyx161) — context-dependent
+##           L1 acquisition (DevPlan 116 B3 T7, U-60, D1). Uses SHA-aware aggregator (D4).
 ## @invariants
 ##   - Triggers on workflow_run of platform-test (main-full-gate removed — Plan 2 consolidation)
 ##   - Push filter: github.event.workflow_run.event == 'push' prevents build on PR trigger
 ##   - Verifies platform-test succeeded for same SHA via GitHub API
-##   - Builds locally via load:true; L1 pushed to ghcr.io as disaster recovery backup (not used directly by contexts)
+##   - tronyx161 (source org): builds L1 from sources (load:true) + pushes to ghcr.io (DR backup +
+##     distribution base). Context orgs: pull ghcr.io/tronyx161/hermes-agent-base:latest anonymously
+##     + docker tag hermes-agent-base:latest; pull failure → fallback build from sources.
+##   - L1 is used as BUILD-BASE and smoke target — context orgs NEVER run L1 as runtime (runtime = L2).
 ##   - Smoke test: docker compose up + curl :9119/ + docker compose down
-##   - Cache: type=gha,scope=hermes-agent-base
+##   - Cache: type=gha,scope=hermes-agent-base (build path only)
 ##   - Provisioner: provision-environment.sh replaces inline docker network create
-## @rationale  SHA-aware prevents build after partial pipeline. load:true builds L1 locally.
-##             L1 pushed to ghcr.io as disaster recovery backup — never used directly by contexts
-##             (per RefactoringBrief M19/R6 context isolation).
+## @rationale  SHA-aware prevents build after partial pipeline. L1 built ONCE in tronyx161 (public
+##             package — distribution base per D1); context orgs pull anonymously (0 keys in foreign
+##             repos) and build only their thin L2. Fallback build covers registry outage
+##             (eventual-consistency of :latest is documented — releases use digest-pin).
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
 ## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks --scope volumes
 ## @changes — 2026-07-15 | Removed inline sudo mkdir (provisioner volumes scope handles it)
+## @changes — 2026-08-01 | DevPlan 116 B3 T7 (U-60, D1): context-dependent L1 — tronyx161 builds+pulls
+##             nothing; context orgs pull public L1 (fallback → build). Push L1 guarded to source org.
 # endregion MODULE_CONTRACT
 
 name: Build Platform Agent
@@ -80,8 +89,26 @@ jobs:
         with:
           scope: networks,volumes
 
-      # ─── Step 4: Build L1 locally (load:true) ────────────────────────
+      # ─── Step 4: Acquire L1 hermes-agent-base (context-dependent, B3 T7/D1) ──
+      # tronyx161 (source org): builds L1 from sources below (existing docker-build-cache path).
+      # Context orgs: pull the PUBLIC distribution base ghcr.io/tronyx161/hermes-agent-base:latest
+      # anonymously, tag it locally as hermes-agent-base:latest; on pull failure → build from sources.
+      - name: Pull L1 distribution base (context org)
+        id: pull-l1
+        if: github.repository_owner != 'tronyx161'
+        run: |
+          if docker pull ghcr.io/tronyx161/hermes-agent-base:latest; then
+            docker tag ghcr.io/tronyx161/hermes-agent-base:latest hermes-agent-base:latest
+            echo "pulled=true" >> "$GITHUB_OUTPUT"
+            echo "[IMP:9][CI][L1] Pulled public L1 distribution base (ghcr.io/tronyx161)"
+          else
+            echo "pulled=false" >> "$GITHUB_OUTPUT"
+            echo "[IMP:8][CI][L1] L1 pull FAILED — falling back to build from sources"
+          fi
+
+      # ─── Step 5: Build L1 from sources (source org / pull-fallback) ────
       - name: Build hermes-agent-base image
+        if: github.repository_owner == 'tronyx161' || steps.pull-l1.outputs.pulled != 'true'
         uses: ./.github/actions/docker-build-cache
         with:
           context: core/modules/hermes-agent/build
@@ -89,7 +116,7 @@ jobs:
           tags: hermes-agent-base:latest
           cache-scope: hermes-agent-base
 
-      # ─── Step 5: Smoke test ───────────────────────────────────────────
+      # ─── Step 6: Smoke test (L1 standalone = «базовая платформа без контекста для тестирования») ──
       - name: Pull dependency images
         env:
           COMPOSE_PROFILES: hermes-agent
@@ -148,7 +175,9 @@ jobs:
           docker compose -f core/modules/hermes-agent/docker-compose.base.yml \
             --project-name build-platform-smoke down -v 2>/dev/null || true
 
-      # ─── Step 6: Push L1 to ghcr.io (disaster recovery backup) ───────────
-      - name: Push L1 to ghcr.io (backup)
-        if: success()
+      # ─── Step 7: Push L1 to ghcr.io (SOURCE ORG ONLY — DR backup + distribution base) ───
+      # Context orgs must NOT push L1 — they pull the public base (D1). GHCR_OWNER default
+      # resolves to github.repository_owner in tronyx161; guarded here explicitly.
+      - name: Push L1 to ghcr.io (source org — backup + distribution base)
+        if: success() && github.repository_owner == 'tronyx161'
         run: make hermes-push-l1

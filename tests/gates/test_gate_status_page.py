@@ -267,13 +267,18 @@ class TestGateStatusPageCiNegative:
 
 @pytest.mark.gate
 class TestGateStatusPageCrontabContract:
-    """Gate: backup-cron crontab does NOT contain metrics export line (moved to host cron)."""
+    """Gate: metrics export runs via host cron (cron.d/platform-metrics), NOT container cron.
+
+    Code-presence invariant (DevPlan 116 B3 T1, U-03): the metrics cron installer exists
+    (helpers/system.py::install_cron_metrics) AND φ3 phase_platform_setup calls it —
+    the assertion is verified against CODE, not docstrings.
+    """
 
     def test_no_metrics_export_in_backup_cron_crontab(self):
         """backup-cron crontab must NOT have platform-export-metrics line.
 
-        Metrics export now runs via host cron (installed by node-lifecycle.sh bootstrap),
-        not through the backup-cron container.
+        Metrics export now runs via host cron — installed by phase_platform_setup (φ3)
+        via helpers/system.py::install_cron_metrics (see code-presence test below).
         """
         crontab_path = PROJECT_ROOT / "core" / "modules" / "backup-cron" / "scripts" / "crontab"
         content = _read_file(crontab_path)
@@ -296,6 +301,68 @@ class TestGateStatusPageCrontabContract:
                 assert "platform-export-metrics" not in line, (
                     f"Found every-minute metrics cron line in backup-cron crontab: '{line.strip()}'"
                 )
+
+    # 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · metrics cron installer code-presence (DevPlan 116 B3 T1, U-03)
+    # · Last fail: N/A (new test — previous gate asserted docstring «installed by node-lifecycle.sh»,
+    # ·   which was false: no installer existed anywhere in core)
+    # · Remove if: install_cron_metrics / phase_platform_setup contract changes
+    def test_phase_platform_setup_calls_install_cron_metrics(self):
+        """phase_platform_setup (φ3) invokes install_cron_metrics — code-presence, not docstring.
+
+        AST-based check: import phases.py, locate phase_platform_setup body, assert a Call
+        node whose function attribute name is 'install_cron_metrics'. The modulemap docstring
+        («docker auth, metrics cron, setup-node») becomes code-truth after this test.
+        """
+        import ast
+
+        phases_path = PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "phases.py"
+        assert phases_path.exists(), f"phases.py not found: {phases_path}"
+
+        tree = ast.parse(_read_file(phases_path))
+        called = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "phase_platform_setup":
+                for sub in ast.walk(node):
+                    # helpers_system.install_cron_metrics(core_dir) — attribute chain
+                    if (
+                        isinstance(sub, ast.Call)
+                        and isinstance(sub.func, ast.Attribute)
+                        and sub.func.attr == "install_cron_metrics"
+                    ):
+                        called = True
+                        break
+        assert called, (
+            "phase_platform_setup (φ3) must CALL install_cron_metrics (code-presence, "
+            "DevPlan 116 B3 T1) — metrics cron installer is missing from the phase"
+        )
+
+    # 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · CRON_METRICS_LINE contract (DevPlan 116 B3 T1)
+    # · Last fail: N/A (new test)
+    # · Remove if: CRON_METRICS_LINE contract changes (flock/timeout/script path)
+    def test_cron_metrics_line_contract(self):
+        """CRON_METRICS_LINE contains flock -n + timeout 50 + absolute script path.
+
+        Imports helpers/system.py (not a docstring claim): the cron line contract for
+        cron.d/platform-metrics — flock prevents overlapping runs, timeout 50s bounds
+        execution, absolute script path survives cron.d's minimal PATH.
+        """
+        import importlib.util
+
+        system_path = PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "helpers" / "system.py"
+        assert system_path.exists(), f"helpers/system.py not found: {system_path}"
+        spec = importlib.util.spec_from_file_location("helpers_system_gate", system_path)
+        assert spec is not None and spec.loader is not None, f"Cannot build spec for {system_path}"
+        system_helpers = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(system_helpers)
+
+        line = system_helpers.CRON_METRICS_LINE
+        assert "flock -n" in line, f"CRON_METRICS_LINE missing 'flock -n': {line!r}"
+        assert "timeout 50" in line, f"CRON_METRICS_LINE missing 'timeout 50': {line!r}"
+        assert "platform-export-metrics.sh" in line, f"CRON_METRICS_LINE missing absolute script path: {line!r}"
+        assert "/usr/bin/" in line, "CRON_METRICS_LINE must use absolute binary paths (cron.d minimal PATH)"
+
+        # Absolute script path must resolve via the {core_dir} template
+        assert "{core_dir}" in line, "CRON_METRICS_LINE must embed {core_dir} template"
 
 
 @pytest.mark.gate

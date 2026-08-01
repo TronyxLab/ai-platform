@@ -97,22 +97,9 @@ services:
 
     # [IMP:8][backup-cron-compose] Resource limits: 128M — limits protect host from OOM (AR3 cancelled)
 
-volumes:
-  backup-spool:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/platform/backup-spool
-
-  backup-logs:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/log/platform/backup
-
 networks:
+  # @changes 2026-08-01 (DevPlan 116 B3 T4, U-49): top-level volumes: секция удалена —
+  #   backup-spool/backup-logs bind-тома объявлены в root docker-compose.yml (единый SoT).
   backup-net:
     external: true
   shared-db-net:

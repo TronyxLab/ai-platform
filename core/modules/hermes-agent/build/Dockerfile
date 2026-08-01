@@ -1,6 +1,9 @@
 # GREP_SUMMARY: hermes-agent-base Dockerfile multi-stage validate final hermes-agent config profiles skills
 # region MODULE_CONTRACT
-## @purpose  Multi-stage build for hermes-agent-base (L1): platform base image with config, profiles, skills, init scripts. Built locally, pushed to ghcr.io as DR backup.
+## @purpose  Multi-stage build for hermes-agent-base (L1): platform base image with config, profiles, skills, init scripts.
+##           Built in tronyx161 CI and pushed to ghcr.io/tronyx161 as a PUBLIC distribution base
+##           (DevPlan 116 B3 T7, U-60, D1 — package visibility is a manual operator step).
+##           Context orgs pull it anonymously and build only their thin L2.
 ## @scope    Build context: ./build/ — only platform artifacts (no orchestration files)
 ## @invariants
 ##   - Stage validate: lightweight alpine image for pre-copy validation (shellcheck, yq, chmod)
@@ -73,7 +76,7 @@ LABEL org.tronyxlab.patches="known-issues:#55985-basic-auth-provider-patched-202
 LABEL org.tronyxlab.version="${PLATFORM_VERSION:-dev}"
 
 LABEL org.opencontainers.image.source="https://github.com/Tronyx161/ai-platform"
-LABEL org.opencontainers.image.description="Hermes Agent Base (L1) — platform base image with config, profiles, skills. Built locally, pushed to ghcr.io as DR backup."
+LABEL org.opencontainers.image.description="Hermes Agent Base (L1) — platform base image with config, profiles, skills. Pushed to ghcr.io/tronyx161 as PUBLIC distribution base (DevPlan 116 B3 T7, D1)."
 LABEL org.opencontainers.image.name="hermes-agent-base"
 LABEL maintainer="hermes-agent-base" \
       module="hermes-agent" \

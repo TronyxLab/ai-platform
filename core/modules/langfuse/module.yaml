@@ -24,7 +24,10 @@ depends_on:
 interfaces:
   - healthcheck
 
-spool_dir: /var/lib/platform/langfuse-data
+# @changes 2026-08-01 (DevPlan 116 B3 T8, U-67, D3): spool_dir → none — host-путь langfuse-data
+# удалён из provision (контейнеры не монтируют его);
+# данные живут в docker-томах (langfuse-redis-data / postgres / clickhouse).
+spool_dir: none
 
 resources:
   limits:

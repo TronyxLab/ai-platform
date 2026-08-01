@@ -37,6 +37,9 @@
 ##           context-extract alias removed, get_project_entries() canon parser (T4),
 ##           shared schema_validator delegation (T5), _write_back deepcopy + cache invalidation (T6),
 ##           add_context() mutation (T6.3), flat-only domain (T7)
+## @changes 2026-08-01 · DevPlan 116 B3 T5 (U-52) — CLI +--get-many (batch alias:dotted-key pairs,
+##           TAB-separated output, empty value for missing key exit 0, malformed/empty spec → exit 4).
+##           bootstrap.sh single batch call replaces 6 per-field --get invocations.
 ## @changes 2026-07-30 · DevPlan 088 — Wave 1: typed dataclasses (T1), resolve() (T2), jsonschema validate (T3),
 ##           mutation API + getters + CLI (T3.5), all LDD logs + region markers
 ## @changes 2026-07-26 · DevPlan 038a — Complete rewrite: added NodeYaml class, CLI, NamedTuples
@@ -1482,6 +1485,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # · Prevention: CLI mode-flag args (--resolve, --find-project) must not require --file at parse time.
     parser.add_argument("--file", required=False, help="Path to node.yaml")
     parser.add_argument("--get", help="Dotted key to retrieve (e.g., node.host)")
+    parser.add_argument(
+        "--get-many",
+        help="Batch extraction (DevPlan 116 B3 T5, U-52): comma-separated alias:dotted-key pairs "
+        "(e.g. owner_key:node.owner_key,context0:contexts.0.name). Output: alias<TAB>value lines; "
+        "missing key → empty value (exit 0); malformed/empty spec → ConfigValidationError (exit 4).",
+    )
     parser.add_argument("--default", help="Default value if key not found")
     parser.add_argument("--items", action="store_true", help="Output list as JSON array")
     parser.add_argument("--domain-config", action="store_true", help="Output domain config as field:value lines")
@@ -1545,6 +1554,84 @@ def _cli_get(node: NodeYaml, args: argparse.Namespace) -> int:
         print(json.dumps(value, indent=2) if isinstance(value, (list, dict)) else json.dumps([value]))
     else:
         print(value)
+    return 0
+
+
+def _traverse_dotted_list_aware(data: dict, key: str) -> Any:
+    """Traverse a dotted key supporting numeric list indices (e.g. contexts.0.name).
+
+    ## @purpose — Batch traversal for --get-many (DevPlan 116 B3 T5, U-52). The standard
+    ##            NodeYaml.get() only traverses dicts; the batch spec uses `contexts.0.name`
+    ##            (list-of-dicts contexts array). Missing key / non-dict / non-list / index
+    ##            out of range → ConfigValidationError (caller degrades to empty value, exit 0).
+    ## @io — ⇥ data: dict, key: str → ⎋ Any (value at dotted path)
+    ## @complexity — O(D) where D = dot-separated segments
+    ## @invariants
+    ##   - dict segment → key lookup; list segment → numeric index (isdigit)
+    ##   - Any traversal failure raises ConfigValidationError — never IndexError/TypeError
+    """
+    current: Any = data
+    for part in key.split("."):
+        if isinstance(current, dict):
+            if part not in current:
+                raise ConfigValidationError(f"Key not found: {key} (missing '{part}')")
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit():
+            idx = int(part)
+            if idx >= len(current):
+                raise ConfigValidationError(f"List index out of range: {key} (index {idx})")
+            current = current[idx]
+        else:
+            raise ConfigValidationError(f"Cannot traverse into non-dict at '{part}' for key '{key}'")
+    return current
+
+
+def _cli_get_many(node: NodeYaml, spec: str) -> int:
+    """Handle --get-many CLI operation (batch extraction, DevPlan 116 B3 T5, U-52).
+
+    ## @purpose  Batch extract multiple node.yaml fields in ONE python3 process — replaces
+    ##            N per-field --get calls in shell (bootstrap.sh 6 → 1). Spec format:
+    ##            alias:dotted.key,alias2:dotted.key2 (comma-separated). Output:
+    ##            lines `alias<TAB>value` — TAB separator (values may contain spaces/=).
+    ##            Missing key → line `alias<TAB>` (empty value, exit 0 — shell-compatible,
+    ##            mirrors --default ""). Malformed/empty spec → ConfigValidationError (exit 4,
+    ##            fail-fast — the shell must not silently proceed with a broken extraction).
+    ## @io — ⇥ node: NodeYaml, spec: str → ⎋ exit_code: int (0 always on valid spec)
+    ## @complexity — O(K * D) where K = spec entries, D = dotted-key depth
+    ## @invariants
+    ##   - Empty/whitespace spec → ConfigValidationError (exit 4)
+    ##   - Entry without ':' → ConfigValidationError (exit 4)
+    ##   - Missing key or non-dict traversal → empty value (exit 0), like --default ""
+    ##   - stdout carries ONLY alias<TAB>value lines — machine-parseable by `while IFS=$'\t' read`
+    """
+    if not spec or not spec.strip():
+        logger.error("[IMP:10][NodeYaml._cli_get_many] Empty --get-many spec")
+        raise ConfigValidationError("--get-many spec is empty (expected alias:key,alias2:key2)")
+
+    pairs: list[tuple[str, str]] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            logger.error("[IMP:10][NodeYaml._cli_get_many] Malformed spec entry: %r", part)
+            raise ConfigValidationError(f"--get-many malformed entry (expected alias:key): {part}")
+        alias, key = part.split(":", 1)
+        pairs.append((alias.strip(), key.strip()))
+
+    if not pairs:
+        logger.error("[IMP:10][NodeYaml._cli_get_many] Empty --get-many spec (no valid entries)")
+        raise ConfigValidationError("--get-many spec is empty (expected alias:key,alias2:key2)")
+
+    for alias, key in pairs:
+        try:
+            value = _traverse_dotted_list_aware(node.raw(), key)
+        except ConfigValidationError:
+            # Missing key / non-dict traversal → empty value (exit 0), shell-compatible
+            value = ""
+        print(f"{alias}\t{value}")
+
+    logger.info("[IMP:9][NodeYaml._cli_get_many] Batch-extracted %d field(s)", len(pairs))
     return 0
 
 
@@ -1692,6 +1779,8 @@ def main() -> int:
     try:
         if args.get:
             return _cli_get(node, args)
+        if args.get_many:
+            return _cli_get_many(node, args.get_many)
         if args.domain_config:
             return _cli_domain_config(node)
         if args.context:

@@ -1,31 +1,25 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: entrypoint bootstrap node orchestrator node-resolver resolve ssh scp age-key detect-age-key dry-run
-# STRUCTURE: ▶ init → ◇ --help? → ◇ --resolve? → ○ resolve_node_yaml → ○ extract owner_key → ○ extract host → ◇ host? → ⚡ SCP core+node-configs → ⚡ SSH orchestrator | ⎋ exec orchestrator --resume
+# GREP_SUMMARY: entrypoint bootstrap node orchestrator node-resolver resolve ssh scp age-key detect-age-key dry-run batch-get-many
+# STRUCTURE: ▶ init → ◇ --help? → ◇ --resolve? → ○ resolve_node_yaml → ○ batch-extract node.yaml (--get-many) → ○ extract host → ◇ host? → ⚡ SCP core+node-configs → ⚡ SSH orchestrator | ⎋ exec orchestrator --resume
 # region MODULE_CONTRACT
-## @purpose  Entry-point for `make bootstrap-node`: resolves node.yaml → detects SSH host → SCPs
-##           core + node-configs → SSH-executes orchestrator (or locally if no host).
-##           Thin-wrapper: delegates SCP/SSH to internal/ libraries.
-## @scope    Called ONLY from Makefile. Owns: usage, main.
-##           Delegates scp_to_server + prepare_ssh_opts → scp-deliver.sh, build_ssh_cmd → build-ssh-cmd.sh,
-##           AGE key + node detection → core/internal/shared/node_detect.py (DevPlan 104).
+## @purpose  Entry-point for `make bootstrap-node`: resolve node.yaml → detect SSH host → SCP
+##           core+node-configs → SSH-exec orchestrator (or local). Thin-wrapper per language policy.
+## @scope    Called ONLY from Makefile. Owns usage+main. Delegates: scp/ssh → scp-deliver.sh,
+##           build-ssh-cmd.sh; AGE key + node detection → node_detect.py (DevPlan 104);
+##           node.yaml fields → node_yaml --get-many batch (DevPlan 116 B3 T5, U-52).
 ## @invariants
-##   - 2 functions max: usage, main (detection delegated to python3 -m node_detect)
-##   - --auto-reconcile: passed through to node-lifecycle.sh → converge --reconcile (DevPlan 025 W4)
-##   - NODE=<name> is OPTIONAL in --resolve mode (auto-detection from /opt/node-configs/)
-##   - AGE_SECRET_KEY detection chain (node_detect.py): env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE
-##   - Missing AGE key = WARN (not fatal)
-##   - --dry-run prints SCP + SSH commands without executing
-## 🧐 TRAP[DECISION] · 2026-07-21 · — · Encrypted secrets path
-## · Context secrets лежат в <node-configs-dir>/secrets/<NODE>.enc.yaml
-## · bootstrap ищет node-configs/secrets/ — скопировать файл перед bootstrap если нет
-## · Rejected: symlink или fallback search (overhead > benefit)
-## · Rev: если CI научится auto-deploy, пересмотреть доставку secrets через core
-##   - --resume always passed to node-lifecycle.sh --mode init for idempotency
-##   - Without --resolve: passes all args through to node-lifecycle.sh --mode init (manual mode)
-## @rationale Thin-wrapper per DevPlan 020 T4+T15. Auto-SSH + SCP eliminates manual rsync + SSH steps.
-## @changes 2026-07-17 | T15 — Layer re-homing: scp_to_server+prepare_ssh_opts→scp-deliver.sh, build_ssh_cmd→remote-cmd.sh
-##           2026-07-17 | Lifecycle refactoring: ORCHESTRATOR→NODE_LIFECYCLE, --mode init passthrough
-##           2026-07-21 | W4: +--auto-reconcile flag passthrough (DevPlan 025); 2026-07-31 | DevPlan 104: detect functions → python3 -m node_detect
+##   - 2 functions max: usage, main
+##   - NODE=<name> optional in --resolve mode (auto-detection from /opt/node-configs/)
+##   - AGE_SECRET_KEY chain: env → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE; missing = WARN (not fatal)
+##   - ci_deploy_key: node.yaml единственный SoT (D2, B3 T6) — env-override удалён
+##   - --dry-run prints SCP+SSH commands; --resume always passed to node-lifecycle --mode init
+## 🧐 TRAP[DECISION] · 2026-07-21 · — · Encrypted secrets: <node-configs-dir>/secrets/<NODE>.enc.yaml
+## · Rejected: symlink/fallback search · Rev: если CI auto-deploy — пересмотреть доставку secrets
+## 🧐 TRAP[DECISION] · 2026-07-21 · — · passthrough arg pattern · Rejected: full parse_args
+## · Reason: minimal W1 scope · Rev: Wave 4 — redesign passthrough into parse_args spec
+## @rationale Thin-wrapper per DevPlan 020 T4+T15 — auto-SSH+SCP eliminates manual rsync/SSH steps.
+## @changes 2026-07-17 T15 layer re-homing; 2026-07-21 W4 --auto-reconcile; 2026-07-31 DevPlan 104;
+##           2026-08-01 B3 T5/T6 — 6×--get → ОДИН --get-many, env-override PLATFORM_CI_DEPLOY_KEY удалён (D2).
 # endregion MODULE_CONTRACT
 set -euo pipefail
 
@@ -36,21 +30,14 @@ source "${CORE_DIR}/internal/bootstrap/scp-deliver.sh"
 source "${CORE_DIR}/internal/bootstrap/build-ssh-cmd.sh"
 source "${CORE_DIR}/lib/args.sh"
 NODE_LIFECYCLE="${PATHS_INTERNAL_DIR}/bootstrap/node-lifecycle.sh"
-
 USAGE_SCRIPT="bootstrap.sh"
 USAGE_DESC="Entry-point for idempotent node bootstrap. Resolves node.yaml, detects SSH host, SCPs core+node-configs, delegates to node-lifecycle.sh."
 USAGE_OPTIONS=(
     "--node <name>       Node name to bootstrap"
-    "--resolve           Extract owner_key and host from node.yaml"
+    "--resolve           Extract node.yaml fields + host from node.yaml"
     "--dry-run           Print SCP+SSH commands without executing"
     "--auto-reconcile    Passthrough to node-lifecycle.sh --reconcile"
 )
-
-# 🧐 TRAP[DECISION] · 2026-07-21 · — · bootstrap.sh passthrough arg pattern
-# · Rejected: full parse_args adoption (passthrough pattern incompatible)
-# · Reason: minimal W1 scope, bootstrap.sh forwards unknown args via PASSTHROUGH_ARGS
-# · Rev: Wave 4 — redesign passthrough into parse_args spec
-
 NODE_NAME=""; RESOLVE_MODE=false; DRY_RUN=false; PASSTHROUGH_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -75,58 +62,43 @@ main() {
         }
         echo "[IMP:9][bootstrap][entrypoint] Auto-detected NODE_NAME=${NODE_NAME}"
     fi
-
     source "${CORE_DIR}/lib/node-resolver.sh"
     echo "[IMP:8][bootstrap][entrypoint] Resolving node.yaml for node=${NODE_NAME}"
     NODE_YAML=$(resolve_node_yaml "$NODE_NAME" "${PLATFORM_ROOT}" "${HOME}/projects") || {
         echo "[IMP:10][bootstrap][entrypoint] FATAL: Cannot resolve node.yaml" >&2; exit 1
     }
 
-    echo "[IMP:8][bootstrap][entrypoint] Extracting owner_key"
-    OWNER_KEY=$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get node.owner_key --default "" 2>/dev/null) || true
+    # ── Batch-extract node.yaml fields (B3 T5, U-52): ONE --get-many call ──
+    echo "[IMP:8][bootstrap][entrypoint] Batch-extracting node.yaml fields (--get-many)"
+    BATCH_OUTPUT="$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get-many owner_key:node.owner_key,ci_deploy_key:node.ci_deploy_key,platform_domain:domain,context:context,context0:contexts.0.name 2>/dev/null)" || true
+    OWNER_KEY=""; CI_DEPLOY_KEY=""; PLATFORM_DOMAIN=""; CONTEXT=""; CONTEXT0=""
+    while IFS=$'\t' read -r alias value; do
+        case "$alias" in
+            owner_key)      OWNER_KEY="$value" ;;
+            ci_deploy_key)  CI_DEPLOY_KEY="$value" ;;
+            platform_domain) PLATFORM_DOMAIN="$value" ;;
+            context)        CONTEXT="$value" ;;
+            context0)       CONTEXT0="$value" ;;
+        esac
+    done <<< "$BATCH_OUTPUT"
+    [[ -z "$CONTEXT" ]] && CONTEXT="$CONTEXT0"   # fallback: top-level context > contexts.0.name
+
     [[ -n "$OWNER_KEY" ]] || { echo "[IMP:10][bootstrap][entrypoint] FATAL: owner_key not found" >&2; exit 1; }
     echo "[IMP:9][bootstrap][entrypoint] Resolved: node=${NODE_NAME}"
 
-    # ── Extract ci_deploy_key ───────────────────────────────────────────
-    # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · ci_deploy_key not consumed by bootstrap channel
-    # · Symptom: ci_deploy_key declared in node.schema.json (node.ci_deploy_key) but never
-    #   extracted by bootstrap.sh — step_6_create_ci_deploy_user always skipped on first
-    #   bootstrap (no --ci-deploy-key / PLATFORM_CI_DEPLOY_KEY env). Every first bootstrap
-    #   of a new node required manual env override.
-    # · Root: bootstrap.sh extracted owner_key (line 114) but not ci_deploy_key — the key
-    #   was schema-valid but had no delivery channel to node-lifecycle.sh.
-    # · Fix: extract ci_deploy_key by same python3+yaml pattern as owner_key; env-приоритет:
-    #   явный PLATFORM_CI_DEPLOY_KEY (env) > node.yaml.
-    # · Prevention: schema-based contract test — every key in node.schema.json → extracted
-    #   by bootstrap.sh and passed to step_*.
-    # · Source: .ai/plans/007-dance-site-launch/02-Debt.md D1
-    echo "[IMP:8][bootstrap][entrypoint] Extracting ci_deploy_key"
-    CI_DEPLOY_KEY=$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get node.ci_deploy_key --default "" 2>/dev/null) || true
-    # Env override: explicit PLATFORM_CI_DEPLOY_KEY takes priority over node.yaml
-    if [[ -n "${PLATFORM_CI_DEPLOY_KEY:-}" ]]; then
-        CI_DEPLOY_KEY="$PLATFORM_CI_DEPLOY_KEY"
-        echo "[IMP:8][bootstrap][entrypoint] CI_DEPLOY_KEY from env PLATFORM_CI_DEPLOY_KEY (override)"
-    fi
+    # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · RESOLVED 2026-08-01 (B3 T5/T6) — ci_deploy_key извлекается
+    # · batch-вызовом node_yaml --get-many; env-override PLATFORM_CI_DEPLOY_KEY удалён (D2); node.yaml = SoT.
+    # · Prevention: schema-based contract test. Source: 007-dance-site-launch/02-Debt.md D1
     if [[ -n "$CI_DEPLOY_KEY" ]]; then
         echo "[IMP:9][bootstrap][entrypoint] ci_deploy_key resolved"
     else
         echo "[IMP:8][bootstrap][entrypoint] ci_deploy_key not set — ci-deploy restricted key setup will be skipped"
     fi
-
-    # ── Extract PLATFORM_DOMAIN + CONTEXT from node.yaml (F4) ──
-    echo "[IMP:8][bootstrap][entrypoint] Extracting PLATFORM_DOMAIN and CONTEXT"
-    PLATFORM_DOMAIN=$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get domain --default "" 2>/dev/null) || true
-    CONTEXT=$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get context --default "" 2>/dev/null) || true
-    if [[ -z "$CONTEXT" ]]; then
-        CONTEXT=$(python3 -m core.internal.shared.node_yaml --file "${NODE_YAML}" --get contexts.0.name --default "" 2>/dev/null) || true
-    fi
     [[ -n "$PLATFORM_DOMAIN" ]] && echo "[IMP:9][bootstrap][entrypoint] PLATFORM_DOMAIN=${PLATFORM_DOMAIN}"
     [[ -n "$CONTEXT" ]] && echo "[IMP:9][bootstrap][entrypoint] CONTEXT=${CONTEXT}"
 
     SSH_HOST="$(extract_node_host "${NODE_YAML}")" || { echo "[IMP:8][bootstrap][entrypoint] WARN: No SSH host — local mode" >&2; SSH_HOST=""; }
-    # DevPlan 104 D3: python3 -m node_detect — fail-fast on missing python3/module, non-fatal on absent key.
-    # Exit-code contract (node_detect.py): 0 = key found, 3 = module OK + key absent (non-fatal),
-    # any other non-zero = python3/module missing or unexpected error → FATAL.
+    # node_detect exit contract (DevPlan 104 D3): 0=key found, 3=module OK+key absent (non-fatal), other=FATAL
     DETECTED_AGE_KEY="$(python3 -m core.internal.shared.node_detect --detect-age-key 2>/dev/null)" || {
         _detect_rc=$?
         if [[ ${_detect_rc} -eq 3 ]]; then

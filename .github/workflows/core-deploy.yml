@@ -167,11 +167,13 @@ jobs:
         if: steps.sha.outputs.skip != 'true'
         run: |
           SHA="${{ steps.sha.outputs.sha }}"
-          # Auto-detect NODE name from /opt/node-configs/ (same logic as converge.sh)
-          # Excludes 'scripts' and 'secrets' subdirectories; expects exactly 1 node
+          # Auto-detect NODE name via canonical node_detect on the VPS
+          # (DevPlan 116 B3 T2, U-38 — single detector, excludes scripts/secrets).
+          # python3 = 3.14 after φ1; core lives in /opt/platform.
+          # Same logic as converge.sh / platform-export-metrics.sh wrapper.
           NODE=$(ssh -o ConnectTimeout=10 \
             ${{ env.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            'for d in /opt/node-configs/*/; do b=$(basename "$d"); [[ "$b" == "scripts" || "$b" == "secrets" ]] && continue; echo "$b"; done | head -1')
+            'cd /opt/platform && python3 -m core.internal.shared.node_detect --detect-node-name' 2>/dev/null) || NODE=""
           if [ -z "$NODE" ]; then
             echo "::error::[IMP:10][deploy] Cannot auto-detect NODE — no node directories in /opt/node-configs/"
             echo "::error::Action required: run make bootstrap-node NODE=<name> first, or check VPS state"
