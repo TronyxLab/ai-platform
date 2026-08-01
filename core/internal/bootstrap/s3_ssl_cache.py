@@ -40,7 +40,6 @@ import tempfile
 
 import boto3
 from boto3.exceptions import S3UploadFailedError
-from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 from core.internal.config import platform_config
@@ -50,6 +49,14 @@ from core.internal.shared.exceptions import (
     PlatformFatalError,
 )
 from core.internal.shared.node_yaml import NodeYaml
+from core.internal.shared.s3_client import get_s3_client as _shared_get_s3_client
+from core.internal.shared.ssl_certs import (
+    DEFAULT_EXPIRY_THRESHOLD,
+    DEFAULT_OPENSSL_TIMEOUT,
+    cert_check_expiry,
+    cert_get_issuer,
+    cert_is_parseable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +64,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_CERT_DIR = "/etc/letsencrypt/live"
 DEFAULT_ACME_HOME = "/opt/acme.sh"
 DEFAULT_SSL_CACHE_PREFIX = "platform/ssl-certs"
-DEFAULT_S3_ENDPOINT_URL = "https://s3.timeweb.cloud"
+# DEFAULT_S3_ENDPOINT_URL → shared/s3_client (DevPlan 117 D26)
 # DEFAULT_S3_REGION removed — use platform_config.default_s3_region() instead
-OPENSSL_TIMEOUT = 10  # seconds for each openssl subprocess call
-CHECKEND_THRESHOLD = 2592000  # 30 days in seconds
+# OPENSSL_TIMEOUT / CHECKEND_THRESHOLD → shared/ssl_certs (DevPlan 117 D21):
+#   DEFAULT_OPENSSL_TIMEOUT / DEFAULT_EXPIRY_THRESHOLD (единый источник openssl-примитивов)
 
 
 # region INTERNAL HELPERS
@@ -69,15 +76,15 @@ CHECKEND_THRESHOLD = 2592000  # 30 days in seconds
 # region FUNC_get_s3_client
 ## @purpose  Create boto3 S3 client from os.environ. Strips proxy vars first
 ##           (defence-in-depth against leaked HTTPS_PROXY from secrets.env).
+##           Делегирует создание клиента в shared/s3_client.get_s3_client (DevPlan 117 D26).
 ## @io — ⇥ None (reads env) → ⎋ boto3 S3 client
 ## @complexity — O(1)
 ## @invariants
 ##   - Proxy vars (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) stripped before client creation
-##   - Falls back to DEFAULT_S3_ENDPOINT_URL constant if S3_ENDPOINT_URL not set
-##   - Falls back to AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY if S3_* not set
+##   - Fallbacks (endpoint/keys/region) — в shared/s3_client (env-цепочка, DevPlan 117 D26)
 ##   - Uses botocore retries: max_attempts=3, mode='standard'
 def _get_s3_client() -> boto3.client:
-    """Create boto3 S3 client from environment variables.
+    """Create boto3 S3 client from environment variables (delegates to shared/s3_client).
 
     Strips proxy vars that may have leaked from secrets.env to prevent
     ProxyConnectionError on VPS (defence-in-depth).
@@ -93,19 +100,7 @@ def _get_s3_client() -> boto3.client:
     ):
         os.environ.pop(proxy_var, None)
 
-    endpoint = os.environ.get("S3_ENDPOINT_URL") or DEFAULT_S3_ENDPOINT_URL
-    akid = os.environ.get("S3_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID") or ""
-    sak = os.environ.get("S3_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
-    region = os.environ.get("S3_REGION", platform_config.default_s3_region())
-
-    return boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=akid,
-        aws_secret_access_key=sak,
-        region_name=region,
-        config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
-    )
+    return _shared_get_s3_client(max_attempts=3)
 
 
 # endregion FUNC_get_s3_client
@@ -114,13 +109,14 @@ def _get_s3_client() -> boto3.client:
 # region FUNC_validate_cert
 ## @purpose  Validate a downloaded PEM cert: openssl parseability, LE issuer,
 ##           domain subject match, and optional >30-day expiry check.
+##           Openssl-примитивы делегируются в shared/ssl_certs (DevPlan 117 D21).
 ## @io — ⇥ cert_path: str, domain: str, check_expiry: bool → ⎋ bool
 ## @complexity — O(1) + 3-4 openssl subprocess calls
 ## @invariants
 ##   - Returns False on any validation failure (corrupt cert, wrong issuer, mismatch)
 ##   - LE issuer check: case-insensitive "Let's Encrypt" in issuer string
-##   - Domain match: CN contains domain (supports wildcard *.domain)
-##   - check_expiry: uses openssl x509 -checkend 2592000
+##   - Domain match: CN contains domain (supports wildcard *.domain) — специфичен для S3-кеша
+##   - check_expiry: uses shared cert_check_expiry (DEFAULT_EXPIRY_THRESHOLD)
 ##   - Non-fatal: on openssl failure, returns False (never raises)
 def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True) -> bool:
     """Validate PEM cert at cert_path: openssl parseable, LE issuer, domain match.
@@ -129,42 +125,28 @@ def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True) -> bo
     ## @invariants
     ##   - LE issuer: case-insensitive match on "Let's Encrypt"
     ##   - Domain match: CN contains domain (escaped for regex safety)
-    ##   - check_expiry: openssl x509 -checkend <threshold>
+    ##   - check_expiry: shared ssl_certs.cert_check_expiry
     """
     try:
-        # Step 1: Verify cert is parseable
-        result = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-noout"],
-            capture_output=True,
-            timeout=OPENSSL_TIMEOUT,
-        )
-        if result.returncode != 0:
-            logger.info("[IMP:8][s3_ssl_cache] Cert not parseable: %s", cert_path)
+        # Step 1: Verify cert is parseable (shared primitive)
+        if not cert_is_parseable(cert_path, timeout=DEFAULT_OPENSSL_TIMEOUT):
             return False
 
-        # Step 2: Verify Let's Encrypt issuer
-        issuer_res = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-issuer", "-noout"],
-            capture_output=True,
-            text=True,
-            timeout=OPENSSL_TIMEOUT,
-        )
-        if issuer_res.returncode != 0:
-            return False
-        cert_issuer = issuer_res.stdout.strip()
-        if "Let's Encrypt" not in cert_issuer:
+        # Step 2: Verify Let's Encrypt issuer (shared primitive)
+        cert_issuer = cert_get_issuer(cert_path, timeout=DEFAULT_OPENSSL_TIMEOUT)
+        if cert_issuer is None or "Let's Encrypt" not in cert_issuer:
             logger.info(
                 "[IMP:8][s3_ssl_cache] Cert issuer is not Let's Encrypt: %s",
-                cert_issuer[:120],
+                (cert_issuer or "<none>")[:120],
             )
             return False
 
-        # Step 3: Check domain subject match
+        # Step 3: Check domain subject match (S3-кеш-специфично — остаётся здесь)
         subject_res = subprocess.run(
             ["openssl", "x509", "-in", cert_path, "-subject", "-noout"],
             capture_output=True,
             text=True,
-            timeout=OPENSSL_TIMEOUT,
+            timeout=DEFAULT_OPENSSL_TIMEOUT,
         )
         if subject_res.returncode != 0:
             return False
@@ -184,27 +166,13 @@ def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True) -> bo
             )
             return False
 
-        # Step 4: Optionally check >30 days expiry
-        if check_expiry:
-            checkend = subprocess.run(
-                [
-                    "openssl",
-                    "x509",
-                    "-in",
-                    cert_path,
-                    "-checkend",
-                    str(CHECKEND_THRESHOLD),
-                    "-noout",
-                ],
-                capture_output=True,
-                timeout=OPENSSL_TIMEOUT,
+        # Step 4: Optionally check >30 days expiry (shared primitive)
+        if check_expiry and not cert_check_expiry(cert_path, DEFAULT_EXPIRY_THRESHOLD, timeout=DEFAULT_OPENSSL_TIMEOUT):
+            logger.info(
+                "[IMP:8][s3_ssl_cache] Cert expires within 30 days or is expired: %s",
+                domain,
             )
-            if checkend.returncode != 0:
-                logger.info(
-                    "[IMP:8][s3_ssl_cache] Cert expires within 30 days or is expired: %s",
-                    domain,
-                )
-                return False
+            return False
 
         logger.info(
             "[IMP:9][s3_ssl_cache] Cert validated OK for %s (LE, domain match%s)",

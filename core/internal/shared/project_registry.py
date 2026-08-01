@@ -28,6 +28,8 @@ import os
 import re
 import sys
 
+import yaml  # type: ignore[import-untyped]
+
 # Standalone CLI bootstrap: when run directly (subprocess), add project root to sys.path
 # so that `from core.internal.shared.*` imports resolve. This is the same pattern used
 # in context_deployer.py and other CLI-accessible shared modules.
@@ -41,9 +43,12 @@ logger = logging.getLogger(__name__)
 # DevPlan 091 Wave C (AC2): NodeYaml replaces yaml.safe_load/dump.
 # Imports are module-level — the sys.path bootstrap above ensures they resolve
 # in standalone CLI (subprocess) mode. For pytest, rootdir = project root.
-from core.internal.shared.exceptions import ConfigValidationError
+from core.internal.shared.exceptions import ConfigNotFoundError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 from core.internal.shared.verbs import is_verb
+
+# ── LLM-проекты: default projects root на VPS (совпадает с deploy_engine/reconciler) ──
+DEFAULT_PROJECTS_ROOT: str = "/opt/projects"
 
 # ── Project name validation ─────────────────────────────────────────────────
 ## @purpose  Canonical project name validation used by deploy_engine, payload_deliverer, reconciler,
@@ -286,6 +291,89 @@ def list_projects(
 
 
 # endregion FUNC_list_projects
+
+
+# region FUNC_discover_llm_projects
+## @purpose — Discover LLM-enabled projects: читает projects из node.yaml, для каждого
+##            резолвит projects_root/{org}/{name}/ai-platform.yaml и фильтрует по llm.enabled=true.
+##            Реальная альтернатива хардкод-шима key_provisioner.discover_projects (DevPlan 117 D24).
+## @io — ⇥ node_yaml_path: str = "", projects_root: str = "", log_prefix: str = "discover-llm-projects"
+##        → ⎋ list[dict[str, Any]]: [{"name": ..., "llm": {...}}] — только llm.enabled=true проекты
+## @complexity — O(P * Y) где P = проекты в node.yaml, Y = parse ai-platform.yaml
+## @invariants
+##   - node_yaml_path пуст → NodeYaml.resolve() (env NODE_NAME/PLATFORM_ROOT, 3-path)
+##   - projects_root пуст → env PROJECTS_ROOT → DEFAULT_PROJECTS_ROOT (/opt/projects)
+##   - org проектов: из repo "org/repo" (канон ProjectSpec.from_entry)
+##   - Проект без ai-platform.yaml → skip (WARN); без llm.enabled=true → skip
+##   - Возвращает только {"name", "llm"} — формат key_provisioner consumers (без repo/domain)
+##   - Никогда не raise: ошибки чтения/парсинга → WARN + skip (graceful degradation)
+## @rationale key_provisioner.discover_projects был хардкод-шимом (3 тестовых проекта). Реальная
+##            детекция LLM-проектов (ai-platform.yaml llm.enabled: true) — через NodeYaml + файловый
+##            скан, единый для platform. Количество проектов ≤10 на ноде — O(projects) приемлемо.
+## @changes 2026-08-01 · DevPlan 117 D24 — создан (делегирование shim key_provisioner)
+def discover_llm_projects(
+    node_yaml_path: str = "",
+    projects_root: str = "",
+    log_prefix: str = "discover-llm-projects",
+) -> list[dict]:
+    """Discover LLM-enabled projects from node.yaml + ai-platform.yaml llm.enabled=true.
+
+    ## @purpose — Реальная детекция LLM-проектов вместо хардкод-шима (DevPlan 117 D24).
+    ##            Читает node.yaml через NodeYaml, резолвит каждый проект до ai-platform.yaml
+    ##            (projects_root/org/name/), фильтрует по llm.enabled=true.
+    ## @returns list[dict] — [{"name": ..., "llm": {...}}] только enabled-проекты
+    """
+    try:
+        ny = NodeYaml(node_yaml_path) if node_yaml_path else NodeYaml.resolve()
+    except (ConfigNotFoundError, OSError, ValueError) as e:
+        logger.warning("[IMP:8][%s][resolve] Failed to resolve node.yaml: %s", log_prefix, e)
+        return []
+
+    root = projects_root or os.environ.get("PROJECTS_ROOT") or DEFAULT_PROJECTS_ROOT
+
+    result: list[dict] = []
+    try:
+        project_entries = ny.get_projects()
+    except (ConfigNotFoundError, ConfigValidationError, OSError, ValueError) as e:
+        logger.warning("[IMP:8][%s][read] Failed to read projects: %s", log_prefix, e)
+        return []
+
+    for entry in project_entries:
+        name = entry.get("name", "") or ""
+        repo = entry.get("repo", "") or ""
+        if not name:
+            continue
+        org = ""
+        if "/" in repo:
+            org = repo.split("/")[0]
+
+        ai_yaml = (
+            os.path.join(root, org, name, "ai-platform.yaml") if org else os.path.join(root, name, "ai-platform.yaml")
+        )
+        if not os.path.isfile(ai_yaml):
+            logger.info("[IMP:7][%s][skip] No ai-platform.yaml for %s at %s", log_prefix, name, ai_yaml)
+            continue
+
+        try:
+            with open(ai_yaml) as f:
+                data = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError) as e:
+            logger.warning("[IMP:7][%s][error] Failed to parse %s: %s", log_prefix, ai_yaml, e)
+            continue
+
+        llm = data.get("llm")
+        if not isinstance(llm, dict) or not llm.get("enabled"):
+            logger.info("[IMP:7][%s][skip] %s — llm not enabled in %s", log_prefix, name, ai_yaml)
+            continue
+
+        result.append({"name": name, "llm": llm})
+        logger.info("[IMP:9][%s][found] LLM-enabled project: %s", log_prefix, name)
+
+    logger.info("[IMP:9][%s][done] %d LLM-enabled project(s) found", log_prefix, len(result))
+    return result
+
+
+# endregion FUNC_discover_llm_projects
 
 
 # region FUNC_CLI

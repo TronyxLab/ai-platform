@@ -4,7 +4,7 @@ DeployOrchestrator — единый typed фасад для всех deploy-оп
 Инкапсулирует DeployEngine, PayloadDeliverer, DeliveryChannel, AuditLogger, DeployHistory, HealthcheckPoller.
 """
 # GREP_SUMMARY: deploy-orchestrator, facade, deploy, rollback, status, remove, deploy-many, audit, delivery-channel
-# STRUCTURE: ▶ DeployOrchestrator(deploy|deploy_many|rollback|status|remove) → ┌DeliveryChannel deliver┐ → ┌DeployEngine deploy_compose┐ → ┌DeployHistory create_snapshot┐ → ┌AuditLogger log┐ → ⎋ DeployResult
+# STRUCTURE: ▶ DeployOrchestrator(deploy|deploy_many|rollback|status|remove) → ┌DeliveryChannel deliver┐ → ┌DeployEngine deploy_compose┐ → ┌DeployHistory create_snapshot┐ → ┌AuditLogger log┐ → ⎋ OrchestratorDeployResult
 # region MODULE_CONTRACT
 ## @purpose  Unified deploy orchestrator — single typed facade for all deploy operations.
 ##           Eliminates 6+ parallel deploy paths by providing deploy()/deploy_many()/rollback()/status()/remove().
@@ -14,13 +14,13 @@ DeployOrchestrator — единый typed фасад для всех deploy-оп
 ## @scope    All deploy operations pass through DeployOrchestrator. No direct calls to
 ##           DeployEngine, PayloadDeliverer, or DeliveryChannel outside this module.
 ## @invariants
-##   1. deploy() — принимает project_name + channel, возвращает DeployResult
+##   1. deploy() — принимает project_name + channel, возвращает OrchestratorDeployResult
 ##   2. deploy_many() — последовательно вызывает deploy() для каждого проекта
 ##   3. rollback() — восстанавливает compose_state из DeployHistory snapshot
 ##   4. status() — возвращает ProjectStatus (found/not_found/stub + containers + last_deploy)
 ##   5. remove() — docker compose down без -v (данные сохраняются)
 ##   6. Concurrent guard: file lock /var/lock/platform-deploy-{project}.lock
-##   7. DeployResult: Union[[DEPLOYED, FAILED, PARTIAL, SKIPPED], error_info, duration_s]
+##   7. OrchestratorDeployResult: Union[[DEPLOYED, FAILED, PARTIAL, SKIPPED], error_info, duration_s]
 ##   8. Healthcheck после deploy через HealthcheckPoller (один раз, не дублируется)
 ##   9. Аудит через AuditLogger (единый формат, заменяет deprecated shell audit logger)
 ## @rationale DevPlan 089 — устраняет дублирование бизнес-логики в 6+ путях деплоя.
@@ -168,11 +168,11 @@ class DeployStatus(str, Enum):
 
 
 @dataclass
-class DeployResult:
+class OrchestratorDeployResult:
     """Result of a deploy/rollback/remove operation.
 
     ## @purpose — Standardized result for all DeployOrchestrator operations.
-    ## @io — ⇥ constructor params → ⎋ DeployResult with status and timing
+    ## @io — ⇥ constructor params → ⎋ OrchestratorDeployResult with status and timing
     ## @complexity — O(1)
     """
 
@@ -245,7 +245,7 @@ class DeployOrchestrator:
 
     ## @purpose — Provide deploy()/deploy_many()/rollback()/status()/remove() as
     ##            typed methods. Internal components injected via constructor for testability.
-    ## @io — ⇥ project_name, channel → ⎋ DeployResult
+    ## @io — ⇥ project_name, channel → ⎋ OrchestratorDeployResult
     ## @complexity — O(N) where N = deploy steps (assemble → deliver → compose → healthcheck → audit)
     ## @invariants
     ##   - All operations log through AuditLogger
@@ -283,7 +283,7 @@ class DeployOrchestrator:
     ##           project_dir) to stderr, then return DeployStatus.SKIPPED WITHOUT executing
     ##           delivery/compose/healthcheck. DevPlan 089 AC10 / DevPlan 091 Wave A.
     ## @io       ⇥ project_name: str, channel: DeliveryChannel, version: str, service: str,
-    ##              project_dir: str, metadata: dict, dry_run: bool → ⎋ DeployResult
+    ##              project_dir: str, metadata: dict, dry_run: bool → ⎋ OrchestratorDeployResult
     ## @complexity — O(N) where N = deploy lifecycle steps (dry_run: O(1))
     ## @invariants
     ##
@@ -303,7 +303,7 @@ class DeployOrchestrator:
         project_dir: str | None = None,
         metadata: dict[str, Any] | None = None,
         dry_run: bool = False,
-    ) -> DeployResult:
+    ) -> OrchestratorDeployResult:
         """Deploy a single project.
 
         Args:
@@ -316,7 +316,7 @@ class DeployOrchestrator:
             dry_run: If True, emit a plan to stderr and return SKIPPED without executing.
 
         Returns:
-            DeployResult with status and timing.
+            OrchestratorDeployResult with status and timing.
         """
         start = time.monotonic()
         metadata = metadata or {}
@@ -488,7 +488,7 @@ class DeployOrchestrator:
     ##           Failure of one project does NOT block subsequent projects.
     ##           When dry_run=True: every project is planned but not executed.
     ## @io       ⇥ project_names: list[str], channel: DeliveryChannel,
-    ##              version: str, project_base_dir: str, dry_run: bool → ⎋ list[DeployResult]
+    ##              version: str, project_base_dir: str, dry_run: bool → ⎋ list[OrchestratorDeployResult]
     ## @complexity — O(N × M) where N = projects, M = deploy lifecycle per project
     ## @invariants
     ##   - Projects are deployed sequentially (not parallel)
@@ -502,7 +502,7 @@ class DeployOrchestrator:
         version: str = "",
         project_base_dir: str | None = None,
         dry_run: bool = False,
-    ) -> list[DeployResult]:
+    ) -> list[OrchestratorDeployResult]:
         """Deploy multiple projects sequentially.
 
         Args:
@@ -513,9 +513,9 @@ class DeployOrchestrator:
             dry_run: If True, plan each deploy without executing.
 
         Returns:
-            List of DeployResult in input order.
+            List of OrchestratorDeployResult in input order.
         """
-        results: list[DeployResult] = []
+        results: list[OrchestratorDeployResult] = []
         for name in project_names:
             result = self.deploy(
                 project_name=name,
@@ -555,13 +555,13 @@ class DeployOrchestrator:
 
     # region FUNC_rollback
     ## @purpose  Rollback a project to a previous snapshot.
-    ## @io       ⇥ project_name: str, snapshot_id: str | None → ⎋ DeployResult
+    ## @io       ⇥ project_name: str, snapshot_id: str | None → ⎋ OrchestratorDeployResult
     ## @complexity — O(M) where M = rollback lifecycle
     ## @invariants
     ##   - If snapshot_id is None, uses latest snapshot
     ##   - Rollback restores compose_state from snapshot
     ##   - No rollback possible if no snapshots exist
-    def rollback(self, project_name: str, snapshot_id: str | None = None) -> DeployResult:
+    def rollback(self, project_name: str, snapshot_id: str | None = None) -> OrchestratorDeployResult:
         """Rollback a project to a previous snapshot.
 
         Args:
@@ -569,7 +569,7 @@ class DeployOrchestrator:
             snapshot_id: Specific snapshot ID, or None for latest.
 
         Returns:
-            DeployResult with rollback status.
+            OrchestratorDeployResult with rollback status.
         """
         start = time.monotonic()
         logger.info(
@@ -672,13 +672,13 @@ class DeployOrchestrator:
 
     # region FUNC_remove
     ## @purpose  Remove a project's containers (idempotent). Data preserved — no -v flag.
-    ## @io       ⇥ project_name: str, purge: bool = False → ⎋ DeployResult
+    ## @io       ⇥ project_name: str, purge: bool = False → ⎋ OrchestratorDeployResult
     ## @complexity — O(1) — single docker compose call
     ## @invariants
     ##   - docker compose down WITHOUT -v (data preserved)
     ##   - purge=True removes compose volumes (docker compose down -v)
     ##   - Idempotent: if project dir missing → SKIPPED
-    def remove(self, project_name: str, purge: bool = False) -> DeployResult:
+    def remove(self, project_name: str, purge: bool = False) -> OrchestratorDeployResult:
         """Safely remove project containers (data preserved unless purge=True).
 
         Args:
@@ -686,7 +686,7 @@ class DeployOrchestrator:
             purge: If True, remove compose volumes (docker compose down -v).
 
         Returns:
-            DeployResult with status.
+            OrchestratorDeployResult with status.
         """
         start = time.monotonic()
         logger.info("[IMP:9][DeployOrchestrator][remove] START: %s (purge=%s)", project_name, purge)
@@ -746,7 +746,7 @@ class DeployOrchestrator:
     ##           аргументов SSH-команды (receive \<project\> \<sha\>); phantom-read version/service
     ##           из ai-platform.yaml УДАЛЁН (U-37). Вызывается из `orchestrator_cli dispatch receive`.
     ## @io       ⇥ stdin (tar bytes), project_name: str | None (из SSH-аргументов),
-    ##              version: str (sha из CI, D5) → ⎋ int (exit code 0/1) + JSON DeployResult в stdout
+    ##              version: str (sha из CI, D5) → ⎋ int (exit code 0/1) + JSON OrchestratorDeployResult в stdout
     ## @complexity — O(N) where N = tar entries + deploy lifecycle
     ## @invariants
     ##   - Пустой stdin → JSON-ошибка + exit 1 (fail-fast, БЕЗ || true-масок)
@@ -757,7 +757,7 @@ class DeployOrchestrator:
     ##   - Деплой через LocalChannel (payload уже извлечён — TRAP[DECISION] 2026-07-31)
     ##   - Пост-деплой цепочка (D4): notify-hook + generate-catalog — best-effort,
     ##     сбой → WARN, деплой НЕ фейлится (notify-hook always exit 0)
-    ##   - JSON DeployResult содержит version (AC2: project, version, sha, status)
+    ##   - JSON OrchestratorDeployResult содержит version (AC2: project, version, sha, status)
     def receive(
         self,
         project_name: str | None = None,
@@ -865,7 +865,7 @@ class DeployOrchestrator:
                 service=service,
                 project_dir=target_dir,
             )
-            # D5: version (sha) попадает в DeployResult JSON — sha-pinning в snapshots уже
+            # D5: version (sha) попадает в OrchestratorDeployResult JSON — sha-pinning в snapshots уже
             # сделан внутри deploy() (DeployHistory.create_snapshot(version=version)).
             result.version = version
 
@@ -1073,8 +1073,8 @@ class DeployOrchestrator:
         stdout: str = "",
         stderr: str = "",
         version: str = "",
-    ) -> DeployResult:
-        """Build a DeployResult with common fields.
+    ) -> OrchestratorDeployResult:
+        """Build a OrchestratorDeployResult with common fields.
 
         Args:
             status: Deploy status.
@@ -1089,11 +1089,11 @@ class DeployOrchestrator:
             version: Version/sha (D5 — из аргументов receive).
 
         Returns:
-            DeployResult instance.
+            OrchestratorDeployResult instance.
         """
         from datetime import datetime, timezone
 
-        return DeployResult(
+        return OrchestratorDeployResult(
             status=status,
             project=project,
             channel=channel,

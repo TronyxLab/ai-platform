@@ -24,10 +24,8 @@
 ## @rationale Python-first: all business logic in Python, shell is a thin facade.
 ##            Idempotency prevents duplicate key creation during retries.
 ## @changes — 2026-07-24 | Created (DevPlan 049 Phase 4)
-## 🧐 TRAP[DECISION] · 2026-07-24 · — · discover_projects is a shim, not real project discovery
-## · Rejected: implement full ai-platform.yaml scanner now (out of scope)
-## · Reason: real discovery depends on project directory layout that is not fully standardised
-## · Rev: when core/internal/bootstrap has discover_projects → remove shim and import real function
+##           2026-08-01 | DevPlan 117 D24 — discover_projects shim → shared/project_registry.discover_llm_projects
+##                      (реальная детекция ai-platform.yaml llm.enabled: true; TRAP[DECISION] снят)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -64,53 +62,28 @@ def discover_projects() -> list[dict[str, Any]]:
 
     ## @purpose  Scan project directories for ai-platform.yaml with llm section.
     ##           Returns a list of project descriptors with name and llm config.
-    ##           Currently a shim — returns hardcoded test data until the real
-    ##           project discovery mechanism is implemented.
+    ##           Делегирует в shared/project_registry.discover_llm_projects (DevPlan 117 D24) —
+    ##           реальная детекция вместо хардкод-шима.
     ## @io
     ##   - ⎋ list[dict] — each dict has 'name' (str) and 'llm' (dict with 'enabled', etc.)
-    ## @complexity O(1) — shim, hardcoded
+    ## @complexity O(P * Y) где P = проекты в node.yaml, Y = parse ai-platform.yaml
     ## @invariants
-    ##   - Each entry has at minimum 'name' and 'llm.enabled'
-    ##   - Projects with llm.enabled: false should be skipped during provisioning
-    ## @rationale Real discovery depends on project directory layout that is not
-    ##            fully standardised yet. Shim enables testing and integration.
-    ##
-    ## 🧐 TRAP[DECISION] · 2026-07-24 · — · discover_projects shim
-    ## · Rejected: implement full ai-platform.yaml scanner (out of scope)
-    ## · Reason: real discovery depends on project directory layout not yet standardised
-    ## · Rev: when core/internal/ has discover_projects → remove shim and import real function
+    ##   - Каждый entry имеет минимум 'name' и 'llm.enabled'
+    ##   - Проекты с llm.enabled: false пропускаются (фильтр в project_registry)
+    ## @rationale TRAP[DECISION] 2026-07-24 (shim) снят: реальная детекция через
+    ##            shared/project_registry.discover_llm_projects — фильтр по ai-platform.yaml
+    ##            llm.enabled: true (DevPlan 117 D24, рев-условие выполнено).
     """
-    # Attempt real discovery: try importing from platform's project scanner
-    # ⚠️ TRAP[DECISION] · 2026-07-26 · LOW · LLM key provisioner shim — replace with real ai-platform.yaml scanner
-    _discovery_paths = [
-        "core.internal.deploy.project_discovery",
-        "core.internal.bootstrap.project_discovery",
-        "core.internal.scaffold.project_discovery",
-    ]
-    for module_path in _discovery_paths:
-        try:
-            mod = __import__(module_path, fromlist=["discover_projects"])
-            if hasattr(mod, "discover_projects"):
-                logger.log(
-                    logging.INFO,
-                    "[IMP:8][discover_projects] Using real discovery from %s",
-                    module_path,
-                )
-                return mod.discover_projects()  # type: ignore[attr-defined]
-        except (ImportError, ModuleNotFoundError):  # noqa: PERF203
-            continue
+    # DevPlan 117 D24: единая детекция LLM-проектов в shared/project_registry (без хардкода).
+    from core.internal.shared.project_registry import discover_llm_projects
 
-    # Shim: return hardcoded test projects
+    projects = discover_llm_projects()
     logger.log(
-        logging.WARNING,
-        "[IMP:6][discover_projects] Real discovery not available — using hardcoded shim. "
-        "⚠️ TRAP[DECISION] · 2026-07-26 · LOW · replace with ai-platform.yaml scanner.",
+        logging.INFO,
+        "[IMP:8][discover_projects] Delegated to project_registry.discover_llm_projects — %d LLM-enabled project(s)",
+        len(projects),
     )
-    return [
-        {"name": "test-backend", "llm": {"enabled": True}},
-        {"name": "test-priority", "llm": {"enabled": True, "profile": "premium"}},
-        {"name": "test-legacy", "llm": {"enabled": False}},
-    ]
+    return projects
 
 
 def get_platform_consumers() -> list[dict[str, Any]]:

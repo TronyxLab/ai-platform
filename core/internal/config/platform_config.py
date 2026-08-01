@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: platform_config, config-facade, defaults, SoT, S3_REGION, S3_PREFIX, S3_BUCKET, CONTEXT, PLATFORM_CONTEXT, fail-visible, PLATFORM_ROOT
-# STRUCTURE: ▶ load platform-env.yaml (PLATFORM_ROOT env → script-relative root) → env_defaults dict → ◇ typed accessors → ⎋ get_default(key)
+# STRUCTURE: ▶ load platform-infra.yaml (PLATFORM_ROOT env → script-relative root) → env_defaults dict → ◇ typed accessors → ⎋ get_default(key)
 # region MODULE_CONTRACT
-## @purpose  Единый Python-фасад для чтения default-значений из platform-env.yaml.
+## @purpose  Единый Python-фасад для чтения default-значений из platform-infra.yaml (SoT).
 ##           Все consumers платформы получают default'ы только через этот модуль.
 ## @scope    Импортируется backup_config.py, s3_ssl_cache.py, cert_orchestrator.py,
 ##           preflight.py, docker_orchestrator.py, agent_watchdog.py, context_deployer.py
 ## @invariants
 ##   - Единственный Source of Truth для default-значений в Python-коде
-##   - Загружает platform-env.yaml при первом импорте (lazy-load с кэшированием)
+##   - Загружает platform-infra.yaml (SoT, env_defaults секция) при первом импорте
+##     (lazy-load с кэшированием; DevPlan 117 D23 — НЕ generated platform-env.yaml)
 ##   - Все accessors возвращают str; числовые значения — ответственность вызывающего
 ##   - ЛИТЕРАЛЬНЫХ fallback'ов НЕТ (DevPlan 116 B5 T8, D2, fail-visible): отсутствие
-##     platform-env.yaml → "" + громкий WARNING (консистентно с B6 D4)
-##   - Path-резолвинг (T8.3): (1) env PLATFORM_ROOT → Path(PLATFORM_ROOT)/platform-env.yaml;
-##     (2) script-relative корень репо (parents[3]); cwd-эвристика УДАЛЕНА
+##     platform-infra.yaml → "" + громкий WARNING (консистентно с B6 D4)
+##   - Path-резолвинг (T8.3 + D23): (1) env PLATFORM_ROOT → Path(PLATFORM_ROOT)/core/platform-infra.yaml;
+##     (2) script-relative корень репо (parents[3]/core/); cwd-эвристика УДАЛЕНА
 ##   - default_s3_bucket_sentinel() возвращает "" с явной семантикой sentinel
 ##     («S3 не сконфигурирован — graceful degradation»)
 ##   - default_context_sentinel() возвращает "" с семантикой валидационного sentinel
@@ -22,9 +23,12 @@
 ##            D2 (DevPlan 116 B5): fallback-копии SoT (_FALLBACK_S3_*_FALLBACK_PLATFORM_CONTEXT)
 ##            удалены — fail-visible вместо тихой лжи. Cwd-эвристика заменена каноническим
 ##            резолвингом (PLATFORM_ROOT env → script-relative корень репо).
+##            D23 (DevPlan 117): чтение переключено с generated platform-env.yaml на SoT
+##            platform-infra.yaml — единый loader устраняет расхождение SoT↔generated.
 ## @changes   CREATED: 2026-07-26 · DevPlan 037 — config defaults unification
 ##            2026-08-01 · DevPlan 116 B5 T8 — 4 fallback-константы удалены (D2, fail-visible);
 ##                       cwd-эвристика удалена; accessors без fallback-аргумента
+##            2026-08-01 · DevPlan 117 D23 — чтение platform-env.yaml → platform-infra.yaml (SoT)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -49,19 +53,24 @@ _loaded = False
 
 
 # region FUNC__load_defaults
-## @purpose  Load env_defaults from platform-env.yaml, cache in module-level dict
+## @purpose  Load env_defaults from platform-infra.yaml (SoT, DevPlan 117 D23), cache in module-level dict
 ## @io       None (reads file) → None (populates _defaults)
 ## @complexity  O(N) where N = number of env_defaults entries
 ## @invariants
 ##   - Idempotent: second call is no-op (guarded by _loaded flag)
-##   - Path-резолвинг (T8.3): PLATFORM_ROOT env → script-relative корень репо; cwd-эвристики НЕТ
+##   - Читает platform-infra.yaml (SoT), НЕ generated platform-env.yaml (DevPlan 117 D23):
+##     генерированная копия может расходиться с SoT; единый loader устраняет источник дрейфа
+##   - Path-резолвинг (T8.3 + D23): (1) PLATFORM_ROOT env → Path(PLATFORM_ROOT)/core/platform-infra.yaml;
+##     (2) script-relative корень репо; cwd-эвристики НЕТ
 ##   - Non-fatal on missing/parse errors — logs громкий WARNING, defaults остаются "" (fail-visible, D2)
 def _load_defaults() -> None:
-    """Load env_defaults from platform-env.yaml, cache in module-level dict.
+    """Load env_defaults from platform-infra.yaml (SoT), cache in module-level dict.
 
-    Resolves platform-env.yaml via: (1) env PLATFORM_ROOT → Path(PLATFORM_ROOT)/platform-env.yaml;
-    (2) script-relative корень репо (core/internal/config/ → 4 уровня вверх). Cwd-эвристика
-    удалена (DevPlan 116 B5 T8.3). При отсутствии файла — "" (fail-visible, D2).
+    DevPlan 117 D23: чтение переключено с generated platform-env.yaml на канонический
+    platform-infra.yaml (env_defaults секция). Path-резолвинг: (1) env PLATFORM_ROOT →
+    Path(PLATFORM_ROOT)/core/platform-infra.yaml (VPS layout: /opt/platform/core/platform-infra.yaml);
+    (2) script-relative корень репо (core/internal/config/ → 4 уровня вверх → repo_root/core/).
+    При отсутствии файла — "" (fail-visible, D2).
     """
     global _defaults, _loaded
     if _loaded:
@@ -73,20 +82,20 @@ def _load_defaults() -> None:
     # (1) env PLATFORM_ROOT — канонический override (тесты/деплой задают явно)
     platform_root = os.environ.get("PLATFORM_ROOT")
     if platform_root:
-        candidate = Path(platform_root) / "platform-env.yaml"
+        candidate = Path(platform_root) / "core" / "platform-infra.yaml"
         if candidate.is_file():
             yaml_path = candidate
 
     # (2) script-relative: core/internal/config/platform_config.py → parents[3] = корень репо
     if yaml_path is None:
         repo_root = Path(__file__).resolve().parents[3]
-        candidate = repo_root / "platform-env.yaml"
+        candidate = repo_root / "core" / "platform-infra.yaml"
         if candidate.is_file():
             yaml_path = candidate
 
     if yaml_path is None:
         logger.warning(
-            "[IMP:7][platform_config] platform-env.yaml not found (PLATFORM_ROOT=%s, script-relative) — "
+            "[IMP:7][platform_config] platform-infra.yaml not found (PLATFORM_ROOT=%s, script-relative) — "
             "defaults = '' (fail-visible, D2)",
             platform_root or "<unset>",
         )

@@ -134,7 +134,7 @@ class ProjectDeployResult:
 
 
 @dataclass
-class DeployResult:
+class ContextDeployResult:
     """Aggregated result of deploying all context projects.
 
     ## @purpose — Collect per-project results and summary counts.
@@ -627,7 +627,7 @@ def extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
 ## @purpose — Unified deploy_context entry point: cert orchestration + project deploy + vhost render + verify.
 ##            Replaces steps._step_deploy_context and deprecated 4 standalone entrypoints.
 ##            DevPlan 079 DRIFT-B3 — single public API for all deploy context paths.
-## @io — ⇥ core_dir: str, node_name: str, node_yaml: str, context: str → ⎋ DeployResult
+## @io — ⇥ core_dir: str, node_name: str, node_yaml: str, context: str → ⎋ ContextDeployResult
 ## @complexity — O(D * T + P * T) where D = domains, P = projects, T = timeout
 ## @invariants
 ##   1. CONTEXT extracted from: explicit arg → os.environ → node.yaml
@@ -643,11 +643,11 @@ def deploy_context(
     node_name: str,
     node_yaml: str,
     context: str = "",
-) -> DeployResult:
+) -> ContextDeployResult:
     """Deploy all context projects + restore certs + render vhosts + verify. Idempotent.
 
     ▶ ┌core_dir + node + node_yaml┐ → ◇ extract context → ◇ cert orchestration →
-    │  ◇ project deploy → ◇ vhost render → ◇ nginx reload → ◇ verify → ⎋ DeployResult
+    │  ◇ project deploy → ◇ vhost render → ◇ nginx reload → ◇ verify → ⎋ ContextDeployResult
     """
     logger.info("[IMP:9][deploy_context] Starting (node=%s, context=%s)", node_name, context or "auto")
 
@@ -667,7 +667,7 @@ def deploy_context(
         logger.error(
             "[IMP:10][deploy_context] CONTEXT not set — pass via --context or ensure node.yaml has contexts[0].name"
         )
-        result = DeployResult()
+        result = ContextDeployResult()
         result.failed = 1
         return result
 
@@ -756,7 +756,7 @@ def deploy_context(
             logger.warning("[IMP:7][deploy_context] Verify failed (non-fatal): %s", e)
 
     # ── Build result ──
-    result = DeployResult()
+    result = ContextDeployResult()
     for r in project_results:
         result.add(r)
     logger.info(

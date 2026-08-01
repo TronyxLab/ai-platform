@@ -2,7 +2,7 @@
 # GREP_SUMMARY: test_deploy_engine, deploy-engine, atomic-deploy, rollback, remove, status, healthcheck, snapshot, boundary-fixture, parametrize, no-call-args
 # STRUCTURE: ▶ deploy_boundary fixture (≤5 патчей границы: subprocess.run + retry_pull + healthcheck_poll + compose_up + compose_ps; +monkeypatch compose_images/compose_down) →
 #            ◇ parametrized deploy scenarios (success / first-deploy-fatal / rollback-ok / rollback-fail / pull-fail / up-fail) →
-#            ◇ remove/status/save-prev/snapshot/rollback unit tests → ⊕ assert observable DeployResult/StatusResult fields → ⎋ LDD IMP:9
+#            ◇ remove/status/save-prev/snapshot/rollback unit tests → ⊕ assert observable ServiceDeployResult/StatusResult fields → ⎋ LDD IMP:9
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/deploy/deploy_engine.py — DeployEngine class with mocked Docker I/O boundary (D1, DevPlan 116 B10 T3).
 ## @scope    All Docker CLI operations mocked at the boundary (subprocess.run + shared docker-compose helpers);
@@ -46,9 +46,9 @@ sys.path.insert(0, str(_project_root))
 
 from core.internal.deploy.deploy_engine import (
     DeployEngine,
-    DeployResult,
     ImageInfo,
     RemoveResult,
+    ServiceDeployResult,
     StatusResult,
 )
 from tests._conftest.ldd import _print_ldd_trajectory
@@ -228,7 +228,7 @@ _DEPLOY_SCENARIOS = [
 # · Remove if: deploy() flow fundamentally changes
 @pytest.mark.parametrize("scenario", _DEPLOY_SCENARIOS)
 def test_deploy_scenarios(scenario, deploy_boundary, tmp_project, engine, caplog):
-    """Deploy pipeline scenarios — assert observable DeployResult / PlatformFatalError only."""
+    """Deploy pipeline scenarios — assert observable ServiceDeployResult / PlatformFatalError only."""
     caplog.set_level(logging.INFO)
     b = deploy_boundary
 
@@ -534,11 +534,11 @@ def test_perform_rollback_no_image(caplog, engine):
 
 
 # 🧪 TRAP[TEST] · 2026-08-01 · D1 · validate_project_name called via deploy()
-# · Scenario: invalid project name → DeployResult with error
+# · Scenario: invalid project name → ServiceDeployResult with error
 # · Last fail: N/A (preserved)
 # · Remove if: project name validation changes
 def test_deploy_calls_validate_project_name(caplog, engine):
-    """Deploy rejects invalid project names (observable DeployResult)."""
+    """Deploy rejects invalid project names (observable ServiceDeployResult)."""
     caplog.set_level(logging.INFO)
 
     result = engine.deploy(project="../escape", ref="v1.0.0", service="app", project_dir="/tmp", max_wait=5)
@@ -559,11 +559,11 @@ def test_deploy_calls_validate_project_name(caplog, engine):
 
 def test_deploy_result_dataclass():
     """DeployResult dataclass creates with default values."""
-    r = DeployResult(success=True, project="test", ref="v1", service="app")
+    r = ServiceDeployResult(success=True, project="test", ref="v1", service="app")
     assert r.rollback_performed is False
     assert r.first_deploy_failed is False
     assert r.previous_image is None
-    logger.critical("[IMP:9][test] DeployResult dataclass — OK")
+    logger.critical("[IMP:9][test] ServiceDeployResult dataclass — OK")
 
 
 def test_remove_result_dataclass():

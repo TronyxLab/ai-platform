@@ -11,9 +11,12 @@
 ##   - Core dependencies: Python 3.10+ stdlib + core/internal/shared modules (both stdlib-only)
 ##   - Two phases are independent — circuit breaker failure does NOT affect self-update phase
 ##   - Exit codes: 0 = success or skip, 1 = critical failure (self-update rollback failed)
-##   - All logs to both stdout (systemd journal) and AUDIT_LOG file
+##   - All logs via standard logging to stderr (systemd journal); самописный AuditLogger
+##     удалён (DevPlan 117 D19) — файл /var/log/platform/watchdog-audit.log никем не читался
 ##   - Telegram via shared telegram_notifier module (urllib-based) — bypasses dead agent
 ##   - Secrets file absence handled gracefully (log warning, skip notification)
+##   - Docker compose-операции (down/pull/up) через shared/docker_compose.py (DevPlan 117 D19);
+##     raw docker-команды (image ls, stop, ps) — через _run_docker
 ##   - Docker commands via subprocess.run — NEVER shell=True for command strings
 ## @rationale Migrated from shell (platform-agent-watchdog.sh) per Strangler-Fig Tier 1 trigger:
 ##           5 inline python3 calls for JSON state management → extracted into CircuitBreaker class.
@@ -35,13 +38,17 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar, Optional
 
 from core.internal.config import (
     platform_config,
 )  # LINT-EXEMPT: контейнерный модуль; internal.config — by design (D1, allowlist 116 B11 T1)
+from core.internal.shared.docker_compose import (
+    docker_compose_down,
+    docker_compose_pull,
+    docker_compose_up,
+)  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1, DevPlan 117 D19)
 from core.internal.shared.secrets_env_parser import (
     parse as parse_secrets_env,
 )  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1)
@@ -254,39 +261,6 @@ class CircuitEvent:
     event_type: str  # "passed", "failed", "opened", "reset"
     failure_count: int = 0
     max_failures: int = 0
-
-
-# endregion
-
-# ═══════════════════════════════════════════════════════════════════
-# AuditLogger
-# ═══════════════════════════════════════════════════════════════════
-
-
-# region CLASS__AuditLogger
-class AuditLogger:
-    """Log to both stdout (systemd journal) and audit log file.
-
-    Mirrors shell timestamp() + log() functions.
-    """
-
-    def __init__(self, audit_log_path: str):
-        self._audit_log = Path(audit_log_path)
-        self._audit_log.parent.mkdir(parents=True, exist_ok=True)
-
-    def _timestamp(self) -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    def log(self, message: str) -> None:
-        """Write timestamped message to stdout and append to audit log."""
-        ts = self._timestamp()
-        line = f"{ts} {message}"
-        print(line, flush=True)
-        try:
-            with open(self._audit_log, "a") as f:
-                f.write(line + "\n")
-        except OSError:
-            pass  # Non-fatal: audit log write failure must not crash watchdog
 
 
 # endregion
@@ -658,66 +632,47 @@ class DockerManager:
             return subprocess.CompletedProcess(args=args, returncode=127, stdout="", stderr="docker: not found")
 
     def compose_down(self, service: str) -> bool:
-        """docker compose down <service>"""
+        """docker compose down <service> — delegated to shared/docker_compose (DevPlan 117 D19)."""
         logger.info("[IMP:8][watchdog][rollback] Step 5a: stopping %s via docker compose down", service)
-        result = self._run_docker(
-            [
-                "compose",
-                "-f",
-                self._compose_file,
-                "--project-name",
-                self._project,
-                "down",
-                service,
-            ]
+        ok = docker_compose_down(
+            self._module_dir,
+            compose_args=["-f", self._compose_file, "--project-name", self._project],
+            service=service,
         )
-        if result.returncode != 0:
+        if not ok:
             logger.info(
                 "[IMP:9][watchdog][rollback] WARNING: docker compose down returned non-zero — continuing rollback"
             )
-        return result.returncode == 0
+        return ok
 
     def compose_pull(self) -> bool:
-        """docker compose pull"""
+        """docker compose pull — delegated to shared/docker_compose (DevPlan 117 D19)."""
         logger.info("[IMP:8][watchdog][rollback] Step 5b: pulling image via docker compose pull")
-        result = self._run_docker(
-            [
-                "compose",
-                "-f",
-                self._compose_file,
-                "--project-name",
-                self._project,
-                "pull",
-            ]
+        ok = docker_compose_pull(
+            self._module_dir,
+            compose_args=["-f", self._compose_file, "--project-name", self._project],
         )
-        if result.returncode != 0:
+        if not ok:
             logger.info(
                 "[IMP:9][watchdog][rollback] CRITICAL: docker compose pull failed — "
                 "image may not be available in registry"
             )
-        return result.returncode == 0
+        return ok
 
     def compose_up(self, service: str) -> bool:
-        """docker compose up -d <service>"""
+        """docker compose up -d <service> — delegated to shared/docker_compose (DevPlan 117 D19)."""
         logger.info(
             "[IMP:8][watchdog][rollback] Step 5c: starting %s with previous version (docker compose up -d)",
             service,
         )
-        result = self._run_docker(
-            [
-                "compose",
-                "-f",
-                self._compose_file,
-                "--project-name",
-                self._project,
-                "up",
-                "-d",
-                service,
-            ]
+        ok = docker_compose_up(
+            self._module_dir,
+            compose_args=["-f", self._compose_file, "--project-name", self._project],
+            service=service,
         )
-        if result.returncode != 0:
+        if not ok:
             logger.info("[IMP:9][watchdog][rollback] CRITICAL: docker compose up -d failed")
-        return result.returncode == 0
+        return ok
 
     def cleanup_old_images(self, keep: int) -> int:
         """Remove old hermes-agent images beyond keep count.
@@ -845,7 +800,10 @@ class Watchdog:
 
     def __init__(self, config: WatchdogConfig):
         self._config = config
-        self._log = AuditLogger(config.audit_log)
+        # DevPlan 117 D19: AuditLogger (самописный ts+print+file) → стандартный logging.
+        # Файл /var/log/platform/watchdog-audit.log никем не читается (grep 2026-08-01) —
+        # замена безопасна; логи идут в stderr (systemd journal), форматтер в main().
+        self._log = logger
         self._circuit_breaker = CircuitBreaker(config)
         self._health_checker = HealthChecker(config.health_url, config.poll_interval, config.curl_max_time)
         self._telegram = TelegramNotifier(config.secrets_file, config.telegram_proxy_url, config.curl_tg_max_time)
@@ -858,7 +816,7 @@ class Watchdog:
 
         def _handler(signum: int, frame) -> None:
             sig_name = signal.Signals(signum).name
-            self._log.log(f"[IMP:9][watchdog][signal] Received {sig_name} — shutting down")
+            self._log.info(f"[IMP:9][watchdog][signal] Received {sig_name} — shutting down")
             self._shutdown_requested = True
 
         signal.signal(signal.SIGTERM, _handler)
@@ -876,7 +834,7 @@ class Watchdog:
     # region FUNC__handle_update_success
     def _handle_update_success(self, update: PendingUpdate) -> None:
         """Handle successful self-update: mark state, cleanup images."""
-        self._log.log(f"[IMP:9][watchdog][success] New version {update.new_version} is ready and healthy")
+        self._log.info(f"[IMP:9][watchdog][success] New version {update.new_version} is ready and healthy")
 
         # Mark success
         update.state = "success"
@@ -886,10 +844,10 @@ class Watchdog:
         # Cleanup old images
         self._docker.cleanup_old_images(self._config.keep_images)
 
-        self._log.log(
+        self._log.info(
             f"[IMP:9][watchdog][success] Self-update to {update.new_version} completed successfully — agent healthy"
         )
-        self._log.log("[IMP:8][watchdog][main] ===== Watchdog tick completed (success) =====")
+        self._log.info("[IMP:8][watchdog][main] ===== Watchdog tick completed (success) =====")
 
     # endregion
 
@@ -899,11 +857,11 @@ class Watchdog:
 
         Returns 0 on success, 1 on critical failure.
         """
-        self._log.log(
+        self._log.info(
             f"[IMP:9][watchdog][rollback] New version {update.new_version} FAILED /ready check "
             f"({self._config.watchdog_timeout}s timeout) — initiating automatic rollback"
         )
-        self._log.log("[IMP:8][watchdog][rollback] Rollback strategy: down → compose pull → up → re-wait → notify")
+        self._log.info("[IMP:8][watchdog][rollback] Rollback strategy: down → compose pull → up → re-wait → notify")
 
         # 5a: docker compose down
         self._docker.compose_down("hermes-agent")
@@ -915,11 +873,11 @@ class Watchdog:
         self._docker.compose_up("hermes-agent")
 
         # 5d: Re-poll /ready
-        self._log.log("[IMP:8][watchdog][rollback] Step 5d: re-polling /ready for previous version")
+        self._log.info("[IMP:8][watchdog][rollback] Step 5d: re-polling /ready for previous version")
         rollback_ok = self._health_checker.poll(self._config.watchdog_timeout, "rollback")
 
         if rollback_ok:
-            self._log.log(
+            self._log.info(
                 "[IMP:9][watchdog][rollback_success] Rollback to previous version SUCCESSFUL — agent is healthy"
             )
 
@@ -941,8 +899,8 @@ class Watchdog:
                 f"Reverted to previous image"
             )
 
-            self._log.log("[IMP:9][watchdog][rollback_success] Rollback complete — node operational")
-            self._log.log("[IMP:8][watchdog][main] ===== Watchdog tick completed (rolled_back) =====")
+            self._log.info("[IMP:9][watchdog][rollback_success] Rollback complete — node operational")
+            self._log.info("[IMP:8][watchdog][main] ===== Watchdog tick completed (rolled_back) =====")
             return 0
 
         return self._handle_rollback_failure(update)
@@ -952,13 +910,13 @@ class Watchdog:
     # region FUNC__handle_rollback_failure
     def _handle_rollback_failure(self, update: PendingUpdate) -> int:
         """Critical escalation when rollback also fails."""
-        self._log.log("[IMP:9][watchdog][rollback_critical] =====================================================")
-        self._log.log(
+        self._log.info("[IMP:9][watchdog][rollback_critical] =====================================================")
+        self._log.info(
             f"[IMP:9][watchdog][rollback_critical] CRITICAL: Agent rollback FAILED "
             f"after {self._config.watchdog_timeout}s"
         )
-        self._log.log("[IMP:9][watchdog][rollback_critical] Agent is NOT responsive — manual intervention required")
-        self._log.log("[IMP:9][watchdog][rollback_critical] =====================================================")
+        self._log.info("[IMP:9][watchdog][rollback_critical] Agent is NOT responsive — manual intervention required")
+        self._log.info("[IMP:9][watchdog][rollback_critical] =====================================================")
 
         # Mark failure state
         update.state = "rollback_failed"
@@ -966,20 +924,20 @@ class Watchdog:
         update.write(self._config.pending_file)
 
         # Diagnostic: container status
-        self._log.log("[IMP:9][watchdog][rollback_critical] Current hermes-agent container status:")
+        self._log.info("[IMP:9][watchdog][rollback_critical] Current hermes-agent container status:")
         status = self._docker.container_status("hermes-agent")
         for line in status.splitlines():
             if line.strip():
-                self._log.log(f"[IMP:9][watchdog][rollback_critical]   {line}")
+                self._log.info(f"[IMP:9][watchdog][rollback_critical]   {line}")
 
         # Critical Telegram notification
         self._telegram.send("\U0001f6a8 CRITICAL: Agent rollback FAILED — manual intervention required")
 
-        self._log.log(
+        self._log.info(
             "[IMP:9][watchdog][rollback_critical] Watchdog exiting with code 1 — "
             "node remains operational (agent is non-critical)"
         )
-        self._log.log("[IMP:8][watchdog][main] ===== Watchdog tick completed (CRITICAL FAILURE) =====")
+        self._log.info("[IMP:8][watchdog][main] ===== Watchdog tick completed (CRITICAL FAILURE) =====")
         return 1
 
     # endregion
@@ -991,7 +949,7 @@ class Watchdog:
         Returns exit code: 0 = success/skip, 1 = critical failure.
         """
         if not Path(self._config.pending_file).is_file():
-            self._log.log("[IMP:3][watchdog][main] No pending update file — circuit breaker cycle complete")
+            self._log.info("[IMP:3][watchdog][main] No pending update file — circuit breaker cycle complete")
             return 0
 
         # Read pending update
@@ -1000,13 +958,13 @@ class Watchdog:
             return 0
 
         if update.state != "pending":
-            self._log.log(
+            self._log.info(
                 f"[IMP:3][watchdog][main] PENDING_FILE state is '{update.state}' "
                 f"(not pending) — already handled, exiting"
             )
             return 0
 
-        self._log.log(
+        self._log.info(
             f"[IMP:8][watchdog][main] Pending update detected: "
             f"version={update.new_version} timestamp={update.timestamp}"
         )
@@ -1025,7 +983,7 @@ class Watchdog:
     # region FUNC_run
     def run(self) -> int:
         """Main watchdog entry point. Returns exit code."""
-        self._log.log("[IMP:8][watchdog][main] ===== Watchdog tick started =====")
+        self._log.info("[IMP:8][watchdog][main] ===== Watchdog tick started =====")
 
         # Phase 1: Circuit breaker (every tick, independent)
         self._run_circuit_breaker_phase()

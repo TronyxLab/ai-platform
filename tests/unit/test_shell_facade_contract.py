@@ -283,10 +283,11 @@ def test_shell_has_severity_exit(caplog) -> None:
     caplog.set_level(logging.DEBUG)
     content = _read_deploy_orchestrator()
 
-    # ── DeployResult dataclass with exit_code field (severity aggregation result) ──
-    has_deploy_result = "class DeployResult:" in content and "exit_code: int" in content
-    logger.critical("[IMP:9][S4][severity] DeployResult with exit_code field: %s", has_deploy_result)
-    assert has_deploy_result, "deploy_orchestrator.py must define DeployResult dataclass with exit_code"
+    # ── ModuleDeployResult dataclass with exit_code field (severity aggregation result) ──
+    # DevPlan 117 D22: DeployResult переименован по доменам → ModuleDeployResult (deploy_orchestrator)
+    has_deploy_result = "class ModuleDeployResult:" in content and "exit_code: int" in content
+    logger.critical("[IMP:9][S4][severity] ModuleDeployResult with exit_code field: %s", has_deploy_result)
+    assert has_deploy_result, "deploy_orchestrator.py must define ModuleDeployResult dataclass with exit_code"
 
     # ── Severity aggregation: failed modules → crit/warn counts ──
     has_aggregate = "def _aggregate_severity(" in content
