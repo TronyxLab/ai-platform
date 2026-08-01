@@ -22,6 +22,9 @@ description: "Shared PostgreSQL 16 with PgBouncer connection pooler"
 depends_on: []
 
 severity: critical
+# restart: always — критичный stateful-модуль (carve-out W3-R7: severity:critical → always OK
+# даже если compose base.yml говорит unless-stopped)
+restart: always
 
 interfaces:
   - healthcheck

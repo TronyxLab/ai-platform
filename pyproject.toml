@@ -27,13 +27,13 @@ description = "AI Platform — containerized LLM deployment stack"
 requires-python = ">=3.10"
 dependencies = [
     "boto3>=1.28.0",
+    "botocore>=1.31.0",  # direct import в core/ (s3_ssl_cache, backup-cron retention/upload) — импорт-гейт B7
     "cryptography>=41.0.0",
+    "httpx>=0.27.0",  # admin_client.py (httpx.Client/AsyncClient) — runtime (DevPlan 116 B7 T6, U-50)
     "jinja2>=3.1.0",
     "jsonschema>=4.17.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
-    "python-dotenv>=1.0.0",
-    "requests>=2.31.0",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +41,8 @@ dev = [
     "basedpyright>=1.12.0",
     "boto3-stubs>=1.28.0",
     "pytest>=7.4.0",
+    "python-dotenv>=1.0.0",  # только тесты (tests/_conftest/e2e.py, tests/test_env_contract.py) — dev extra (D4)
+    "requests>=2.31.0",  # только тесты (tests/test_smoke_*) — dev extra (D4)
     "ruff==0.15.21",
     "types-pyyaml>=6.0.12",
 ]

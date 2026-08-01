@@ -164,8 +164,34 @@ CONTAINER   := example
 include ../../templates/module.mk
 ```
 
-Канонические таргеты (определены в `module.mk`): `start`, `stop`, `restart`, `status`, `logs`, `build`, `up`, `backup`, `restore`.
-`restart` использует **soft restart** (`docker compose stop && docker compose start`) — остановка и запуск без пересоздания контейнеров (сохраняет сеть, монтирования и состояние). Для **hard restart** с пересозданием (down + up -d --force-recreate) используйте таргет `restart-hard`, определённый в `module.mk`.
+Канонические таргеты (определены в `module.mk` + `Makefile.common`): `start`, `stop`, `down`, `restart`, `restart-hard`, `status`, `logs`, `build`, `up`.
+
+**Точная семантика (DevPlan 116 B7, D2):**
+- `stop` = `compose stop --timeout $(STOP_TIMEOUT)` (default 30) — контейнеры **СОХРАНЯЮТСЯ**;
+- `down` = `compose down` — реальное удаление контейнеров (отдельный таргет, не алиас stop);
+- `restart` = `stop + start` — **soft restart БЕЗ пересоздания** (сохраняет сеть, монтирования и состояние);
+- `restart-hard` = `down && up -d --force-recreate` — hard restart с пересозданием (для подхвата новых конфигов/образов);
+- `up` = `up -d --force-recreate`.
+
+**Backup/restore — опциональные таргеты stateful-модулей (D1).** Только 3 модуля объявляют их:
+
+| Модуль | BACKUP_MODE | Механизм |
+|--------|-------------|----------|
+| `postgres` | `custom` | `pg_dumpall` via docker exec / `psql` restore (DUMP_FILE) |
+| `backup-cron` | `custom` | `docker exec` `/usr/local/bin/backup-postgres.sh` / делегация в postgres restore |
+| `hermes-agent` | `file` | `docker cp` — BACKUP_SOURCE_FILE=`/app/state.json` (generic-контракт module.mk) |
+
+Остальные модули (nginx, status-page, infra-metrics, litellm, langfuse, logging, monitoring, redis, minio, clickhouse) **НЕ объявляют** backup/restore (контракт сужен, D1). `make restore` на stateless-модуле = «No rule to make target» — это ожидаемое поведение, не тихий no-op (U-25).
+
+**Канон volume-rename (test-оверрайды, DevPlan 116 B7 T8 / U-62):** test-оверрайды (`docker-compose.test.yml`) НЕ переопределяют volume in-place — compose deep-merge не умеет удалять ключи (driver_opts/bind-mount сохраняются). Вместо этого объявляется НОВЫЙ volume с суффиксом `-test` и сервис перепривязывается к нему. Примеры канона: `postgres-data-test` (postgres), `backup-spool-test`/`backup-logs-test` (backup-cron), `clickhouse-data-test` (clickhouse), `hermes-data-test` (hermes-agent).
+
+# ⚠️ TRAP[DECISION] · 2026-08-01 · MED · Volume-rename канон для test-оверрайдов (U-62)
+# · Rejected: override-механизм (compose deep-merge НЕ может удалить ключ volume — нет механизма)
+# · Reason: паттерн объявления нового volume с суффиксом -test и перепривязки сервиса —
+# ·   канонический для docker-compose.test.yml. Скопирован в 5 модулей (postgres, backup-cron,
+# ·   clickhouse, hermes-agent) — теперь документирован как единый канон в Makefile-контракте.
+# · Rev: 2026-10-21 (вместе с TRAP-ревью программы хардненинга 116)
+
 Запрещено: переопределять канонические имена, добавлять свои `build`/`deploy`, healthcheck-логика в Makefile.
 
 ---

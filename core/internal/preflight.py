@@ -33,7 +33,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # endregion IMPORTS
 
@@ -46,6 +46,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # Number of parallel workers for Phase 3 checks
 _DEFAULT_MAX_WORKERS = 6
+
 
 def _resolve_python() -> str:
     """Resolve the canonical Python interpreter (venv if available, else sys.executable).
@@ -78,6 +79,7 @@ def _has_xdist(python_path: str) -> bool:
 
 # region DATA_MODELS
 
+
 @dataclass
 class CheckResult:
     """Result of a single preflight check."""
@@ -88,7 +90,7 @@ class CheckResult:
     stderr: str = ""
     duration_ms: float = 0.0
     auto_fixed: bool = False
-    fixed_by: Optional[str] = None
+    fixed_by: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -111,14 +113,11 @@ class CheckResult:
             if not stripped:
                 continue
             lower = stripped.lower()
-            if any(
-                kw in lower
-                for kw in ("fail", "error", "warning:", "could not", "unable", "ref", "undefined")
-            ):
+            if any(kw in lower for kw in ("fail", "error", "warning:", "could not", "unable", "ref", "undefined")):
                 key_lines.append(stripped)
         if not key_lines:
             # Return last few non-empty lines as fallback
-            non_empty = [l.strip() for l in lines if l.strip()]
+            non_empty = [ln.strip() for ln in lines if ln.strip()]
             key_lines = non_empty[-max_lines:]
         return "\n".join(key_lines[:max_lines])
 
@@ -155,12 +154,13 @@ class PreflightReport:
 
 # region CHECK_RUNNERS
 
+
 def _run_check(
     cmd: list[str],
     name: str,
     timeout: int = 120,
-    cwd: Optional[Path] = None,
-    env: Optional[dict[str, str]] = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> CheckResult:
     """Run a single check command and return its result.
 
@@ -284,9 +284,15 @@ def _run_parallel_checks(max_workers: int) -> dict[str, CheckResult]:
     # Build pytest args — add -n auto only if xdist is available.
     # Must be AFTER "pytest" (pytest argument, not python -m argument).
     gates_cmd = [
-        python, "-m", "pytest", "tests/gates/",
-        "-m", "gate and not requires_docker",
-        "-q", "--tb=line", "--no-header",
+        python,
+        "-m",
+        "pytest",
+        "tests/gates/",
+        "-m",
+        "gate and not requires_docker",
+        "-q",
+        "--tb=line",
+        "--no-header",
     ]
     if use_xdist:
         # Insert after "pytest" at index 3: python -m pytest -n auto tests/gates/ ...
@@ -294,9 +300,15 @@ def _run_parallel_checks(max_workers: int) -> dict[str, CheckResult]:
         gates_cmd.insert(4, "auto")
 
     predeploy_cmd = [
-        python, "-m", "pytest", "tests/",
-        "-m", "predeploy and not requires_docker",
-        "-q", "--tb=line", "--no-header",
+        python,
+        "-m",
+        "pytest",
+        "tests/",
+        "-m",
+        "predeploy and not requires_docker",
+        "-q",
+        "--tb=line",
+        "--no-header",
     ]
 
     # Define checks as (name, command_list, timeout_seconds)
@@ -350,9 +362,7 @@ def _run_parallel_checks(max_workers: int) -> dict[str, CheckResult]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures: dict[concurrent.futures.Future[CheckResult], str] = {}
         for name, cmd, timeout in checks:
-            future = executor.submit(
-                _run_check, cmd, name, timeout, _PROJECT_ROOT, env
-            )
+            future = executor.submit(_run_check, cmd, name, timeout, _PROJECT_ROOT, env)
             futures[future] = name
 
         for future in concurrent.futures.as_completed(futures):
@@ -373,6 +383,7 @@ def _run_parallel_checks(max_workers: int) -> dict[str, CheckResult]:
 
 
 # region REPORTING
+
 
 def _format_report(
     phase_results: list[CheckResult],
@@ -428,7 +439,7 @@ def _format_report(
     lines.append(f"  PREFLIGHT REPORT: {report.status.upper()}")
     lines.append(f"{sep}")
     lines.append(
-        f"  Duration: {total_duration_ms/1000:.1f}s  |  "
+        f"  Duration: {total_duration_ms / 1000:.1f}s  |  "
         f"Checks: {report.total_checks} total  |  "
         f"{report.passed} passed  |  "
         f"{report.auto_fixed} auto-fixed  |  "
@@ -445,7 +456,7 @@ def _format_report(
         else:
             marker = "FAIL"
         icon = {"PASS": "OK", "FIXED": "FX", "FAIL": "!!"}[marker]
-        lines.append(f"  [{icon}] {r.name}: {marker} ({r.duration_ms/1000:.1f}s)")
+        lines.append(f"  [{icon}] {r.name}: {marker} ({r.duration_ms / 1000:.1f}s)")
         if r.fixed_by:
             lines.append(f"       Fixed by: {r.fixed_by}")
 
@@ -458,8 +469,7 @@ def _format_report(
         for r in failed_checks:
             lines.append(f"\n  ### {r.name} (exit {r.exit_code})")
             summary = r.error_summary(max_lines=15)
-            for line in summary.split("\n"):
-                lines.append(f"      {line}")
+            lines.extend(f"      {line}" for line in summary.split("\n"))
 
     lines.append(f"\n{subsep}")
     if report.status == "green":
@@ -478,6 +488,7 @@ def _format_report(
 
 
 # region MAIN
+
 
 def main() -> int:
     """Preflight CLI entrypoint.
@@ -506,7 +517,8 @@ def main() -> int:
         help="Skip Phase 1+2 auto-fix (fix-gate + pre-commit). Use when files are already clean.",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Verbose output — show full stdout/stderr for failed checks.",
     )
@@ -530,22 +542,17 @@ def main() -> int:
                 file=sys.stderr,
             )
             total_ms = (time.monotonic() - start) * 1000
-            report_str, _ = _format_report(
-                all_phase_results, {}, total_ms, json_output=args.json
-            )
+            report_str, _ = _format_report(all_phase_results, {}, total_ms, json_output=args.json)
             print(report_str)
             return 1
 
     # Phase 3: Read-only checks (parallel)
-    print(f"[IMP:7][preflight] Phase 3/3: Running {8} checks in parallel "
-          f"(workers={args.workers})...", file=sys.stderr)
+    print(f"[IMP:7][preflight] Phase 3/3: Running {8} checks in parallel (workers={args.workers})...", file=sys.stderr)
     parallel_results = _run_parallel_checks(max_workers=args.workers)
 
     # Report
     total_ms = (time.monotonic() - start) * 1000
-    report_str, report = _format_report(
-        all_phase_results, parallel_results, total_ms, json_output=args.json
-    )
+    report_str, report = _format_report(all_phase_results, parallel_results, total_ms, json_output=args.json)
 
     if args.verbose and not args.json:
         # Append full output for failed checks

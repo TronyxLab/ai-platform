@@ -136,14 +136,15 @@
 | ✅ | `remove-project` | Безопасное удаление проекта из lifecycle (unregister + compose down без -v) |
 | ✅ | `adopt-project` | Адаптация существующего проекта в lifecycle платформы (make adopt-project DIR=&lt;dir&gt;) |
 | ✅ | `project-list` / `project-status` | Список проектов (offline) и live-статус на ноде |
-| ✅ | `backup` / `restore` | Резервное копирование. Root = оркестрация стека, module = один модуль |
+| ✅ | `backup` / `restore` | Резервное копирование. Root = оркестрация стека, module = один модуль. **Stateful-модули (postgres, backup-cron, hermes-agent); остальные модули НЕ объявляют backup/restore (контракт сужен, DevPlan 116 D1)** |
 | ✅ | `healthcheck` | Проверка здоровья |
 | ✅ | `node-update` | Регулярный update ноды (make node-update → provision + deploy-modules + healthcheck) |
 | ✅ | `converge` | Idempotent reconcile — конвергирует ноду с desired state из node.yaml (make converge NODE=&lt;name&gt;) |
 | ✅ | `render-vhosts` | Генерация nginx vhost конфигов из node.yaml (make render-vhosts NODE=&lt;name&gt;) |
+| ✅ | `render-monitoring` | Рендер конфигурации мониторинга после деплоя проекта (make render-monitoring PROJECT_DIR=&lt;dir&gt; PROJECT=&lt;name&gt; [NODE=&lt;node&gt;] → core/internal/monitoring_config_renderer.py) |
 | ✅ | `up` | Root = оркестрация стека, module = один модуль (compose up) |
-| ✅ | `down` | Root = оркестрация стека, module = алиас `stop` (discoverability) |
-| ✅ | `restart` | Soft restart (stop + start). Root = оркестрация стека, module = один модуль |
+| ✅ | `down` | Root = оркестрация стека, module = удаление контейнеров модуля (compose down — НЕ алиас stop, DevPlan 116 D2) |
+| ✅ | `restart` | Soft restart (stop + start, без пересоздания контейнеров). Root = оркестрация стека, module = один модуль |
 | ✅ | `restart-hard` | Hard restart c `--force-recreate` (module-level target only — нет root Makefile target) |
 | ✅ | `status` | Локальный compose-lifecycle |
 | ❌ | `push-core`, `deploy-node`, `build-local`, `bootstrap-core`, `hermes-deploy-vps` | Запрещены — не из словаря |

@@ -6,7 +6,8 @@
 ## @invariants
 ##   - MODULE_NAME := nginx — stateless reverse proxy, no spool_dir, no resources
 ##   - include ../../templates/module.mk — все канонические таргеты
-##   - Config bind-mounts via NGINX_CONF_DIR (read-only)
+##   - Config bind-mounts via NGINX_CONF_DIR (read-only); default ./config (prod-TLS, DevPlan 116 D3)
+##   - Dev-режим: docker-compose.dev.yml (override поверх config/), НЕ NGINX_CONF_DIR=./dev-config
 ##   - Ports 80 (HTTP) + 443 (HTTPS) — host-mapped
 ##   - Healthcheck: check_http (не systemctl) — macOS-совместимость
 ## @rationale Nginx — единственный модуль без spool_dir/persistent volumes.

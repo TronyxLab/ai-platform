@@ -1,17 +1,34 @@
+# GREP_SUMMARY: Makefile.common start stop restart restart-hard status logs build up down compose include
+# STRUCTURE: ┌COMPOSE_CMD┐ → targets: start ──→ up -d; stop ──→ compose stop; down ──→ compose down; restart ──→ stop start (soft); restart-hard ──→ down && up -d --force-recreate
 # Makefile.common — Shared targets for all modules
 # Usage: MODULE_NAME := <name>; include ../../Makefile.common
+# ⚠️ Включается ТОЛЬКО через module.mk (core/templates/module.mk) — не включать напрямую.
+#
+# Контракт (D2, DevPlan 116 B7 T2) — согласован с module.mk:
+#   start        — compose up -d
+#   stop         — compose stop (контейнеры СОХРАНЯЮТСЯ; grace — STOP_TIMEOUT, default 30)
+#   down         — compose down (реальное удаление контейнеров)
+#   restart      — stop + start (soft, БЕЗ пересоздания — сеть/монтирования/состояние сохраняются)
+#   restart-hard — down && up -d --force-recreate (hard restart с пересозданием)
+#   status/logs/build/up — compose ps / logs -f / build / up -d --force-recreate
 
 COMPOSE_CMD ?= docker compose
 
-.PHONY: start stop restart status logs build up
+.PHONY: start stop restart restart-hard status logs build up down
 
 start:
 	$(COMPOSE_CMD) up -d
 
 stop:
+	$(COMPOSE_CMD) stop
+
+down:
 	$(COMPOSE_CMD) down
 
 restart: stop start
+
+restart-hard:
+	$(COMPOSE_CMD) down && $(COMPOSE_CMD) up -d --force-recreate
 
 status:
 	$(COMPOSE_CMD) ps

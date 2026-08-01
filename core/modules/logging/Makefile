@@ -1,4 +1,4 @@
-# GREP_SUMMARY: logging Makefile start stop restart status logs backup compose include module-mk
+# GREP_SUMMARY: logging Makefile start stop restart status logs compose include module-mk
 # STRUCTURE: ┌logging targets┐ → ◇ module.mk include → ⊕ multi-service compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Makefile for logging module — Loki + Promtail compose lifecycle

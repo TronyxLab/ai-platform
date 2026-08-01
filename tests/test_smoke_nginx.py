@@ -10,7 +10,7 @@
 ##   - platform_services required — foreign container guard reuses nginx from shared stack
 ##   - Stops any existing ai-platform-test project before starting smoke project
 ##   - Ensures proxy-net and observability-net exist (external networks)
-##   - Uses NGINX_CONF_DIR=dev-config with self-signed mkcert certs for TLS
+##   - Dev-режим: docker-compose.dev.yml (override поверх config/) + NGINX_CERT_DIR=./dev-certs (D3 DevPlan 116)
 ##   - Container name: nginx-test (from test.yml override)
 ##   - Compose project: wave-nginx-smoke (isolated from other tests)
 ##   - At least one IMP:9 log per test per §TESTING LDD requirement
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _NGINX_MODULE = repo_root() / "core" / "modules" / "nginx"
 _COMPOSE_BASE = _NGINX_MODULE / "docker-compose.base.yml"
+_COMPOSE_DEV = _NGINX_MODULE / "docker-compose.dev.yml"
 _COMPOSE_TEST = _NGINX_MODULE / "docker-compose.test.yml"
 
 # Compose project names
@@ -119,7 +120,7 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
     ##   - Session-scoped; foreign container guard reuses nginx from platform_services
     ##   - Stops any running ai-platform-test project before starting smoke project
     ##   - Creates proxy-net and observability-net if absent (cleans up if created)
-    ##   - Uses dev-config for self-signed mkcert TLS certs
+    ##   - Uses dev-оверрайд (docker-compose.dev.yml) для self-signed mkcert TLS certs
     ##   - docker compose up -d --wait with 60s timeout
     ##   - Teardown: docker compose down --remove-orphans --timeout 5
     ##   - Only removes Docker networks if fixture created them (flag created_nets)
@@ -153,6 +154,8 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
         "-f",
         str(_COMPOSE_BASE),
         "-f",
+        str(_COMPOSE_DEV),
+        "-f",
         str(_COMPOSE_TEST),
         "--profile",
         "nginx",
@@ -172,6 +175,8 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
         "compose",
         "-f",
         str(_COMPOSE_BASE),
+        "-f",
+        str(_COMPOSE_DEV),
         "-f",
         str(_COMPOSE_TEST),
         "--profile",
@@ -243,14 +248,16 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
         check=False,
     )
 
-    # ── Step 6: Start compose (dev-config with auto-generated TLS) ────────────
+    # ── Step 6: Start compose (dev-режим: base + dev.yml override, NGINX_CONF_DIR default ./config) ────
     _logger.info("[IMP:7][nginx_compose][setup] Starting nginx compose (%s)", _SMOKE_PROJECT)
-    env = {"NGINX_CONF_DIR": "./dev-config", "NGINX_CERT_DIR": "./dev-certs"}
+    env = {"NGINX_CERT_DIR": "./dev-certs"}
     up_args = [
         "docker",
         "compose",
         "-f",
         str(_COMPOSE_BASE),
+        "-f",
+        str(_COMPOSE_DEV),
         "-f",
         str(_COMPOSE_TEST),
         "--profile",
@@ -271,6 +278,8 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
             "compose",
             "-f",
             str(_COMPOSE_BASE),
+            "-f",
+            str(_COMPOSE_DEV),
             "-f",
             str(_COMPOSE_TEST),
             "-p",
@@ -306,6 +315,8 @@ def nginx_compose(platform_services: dict[str, list[str]]) -> dict:
         "compose",
         "-f",
         str(_COMPOSE_BASE),
+        "-f",
+        str(_COMPOSE_DEV),
         "-f",
         str(_COMPOSE_TEST),
         "-p",

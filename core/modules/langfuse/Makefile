@@ -1,4 +1,4 @@
-# GREP_SUMMARY: langfuse Makefile start stop restart status logs backup compose include module-mk
+# GREP_SUMMARY: langfuse Makefile start stop restart status logs compose include module-mk
 # STRUCTURE: ┌langfuse targets┐ → ◇ module.mk include → ⊕ compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Makefile for langfuse module — Langfuse compose lifecycle

@@ -11,6 +11,10 @@
 # endregion MODULE_CONTRACT
 
 MODULE_NAME := hermes-agent
+# Stateful (D1): generic docker cp snapshot — state.json (U-61).
+# BACKUP_SOURCE_FILE = контейнерный путь файла состояния hermes-agent.
+BACKUP_MODE := file
+BACKUP_SOURCE_FILE := /app/state.json
 
 include ../../templates/module.mk
 

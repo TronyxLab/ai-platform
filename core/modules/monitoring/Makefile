@@ -1,4 +1,4 @@
-# GREP_SUMMARY: monitoring Makefile start stop restart status logs backup compose include module-mk
+# GREP_SUMMARY: monitoring Makefile start stop restart status logs compose include module-mk
 # STRUCTURE: ┌monitoring targets┐ → ◇ module.mk include → ⊕ multi-service compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Makefile for monitoring module — Prometheus + Grafana compose lifecycle

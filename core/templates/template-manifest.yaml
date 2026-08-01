@@ -132,7 +132,7 @@ templates:
         required: false
         source: standard
 
-  # ── Nginx dev-config templates (dev-режим NGINX_CONF_DIR=./dev-config) ──
+  # ── Nginx dev-config templates (dev-режим: docker-compose.dev.yml — override поверх config/) ──
   # docker-compose.base.yml:54-55 — тот же nginx envsubst-entrypoint, dev-варианты vhost'ов.
   # ⚠️ TRAP[DECISION] · 2026-07-31 · — · dev-config: зарегистрирован ТОЛЬКО реальный файл
   # · Rejected: литерал DevPlan 116 T6 (dev-config platform-vhost.conf.template + ssl-params.conf.template)
@@ -142,11 +142,13 @@ templates:
   # ·   (basename-матчинг гейта template_manifest_coverage покрывает их через config/-записи).
   # ·   (пустые директории platform-vhost.conf.template/ ssl-params.conf.template — артефакты
   # ·   docker bind-mount, не репо-контент; удалены 2026-07-31)
+  # · 2026-08-01 DevPlan 116 D3: dev-режим = docker-compose.dev.yml (НЕ NGINX_CONF_DIR=./dev-config);
+  # ·   security-headers.conf удалён из dev-config (идентичен config/, U-46).
   # · Rev: если dev-config получит реальные *.template файлы — зарегистрировать их.
   - template: ../modules/nginx/dev-config/platform-default.conf.template
     output: null
     type: single
-    consumer: core/modules/nginx/docker-compose.base.yml:dev-mode NGINX_CONF_DIR=./dev-config (envsubst)
+    consumer: core/modules/nginx/docker-compose.dev.yml (dev-оверрайд поверх config/, envsubst)
     vars:
       PLATFORM_DOMAIN:
         required: false

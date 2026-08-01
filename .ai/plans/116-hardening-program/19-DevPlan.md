@@ -4,7 +4,7 @@
 <!-- STRUCTURE: ┌решения D1-D5┐ → ◇ T1 module.mk restart → ◇ T2 Makefile.common → ◇ T3 модульные Makefile → ◇ T4 AGENTS.md+глоссарий → ◇ T5 nginx config/dev-config → ◇ T6 pyproject+import-гейт → ◇ T7 renderer регистрация → ◇ T8 volume-rename+restart-поля → ⊕ T9 самоверификация -->
 # region MODULE_CONTRACT
 ## @purpose  Волна B7 программы хардненинга (116): починить контракт модулей — make-таргеты (restore без рецепта, restart=recreate вопреки документации), backup-параметризация, nginx-конфиги (прод-дефолт уходил в dev-mode без TLS), pyproject-зависимости, регистрация monitoring_config_renderer.
-## @scope    U-25, U-46, U-50, U-61, U-62, U-65. Файлы: core/templates/module.mk, core/Makefile.common, core/modules/*/Makefile (14), core/modules/nginx/{config,dev-config,docker-compose.base.yml,docker-compose.dev.yml,Makefile}, core/platform-infra.yaml, core/internal/scripts/sync_env_defaults.py, .env.example, .env, platform-env.yaml, pyproject.toml, core/templates/template-manifest.yaml, core/entrypoint-manifest.yaml, core/AGENTS.md, AGENTS.md (root), core/modules/AGENTS.md, core/schemas/module.schema.json (без изменений — поле есть), core/modules/{postgres,backup-cron,hermes-agent,clickhouse,redis,status-page}/module.yaml, tests/gates/test_gate_imports.py, tests/unit/test_monitoring_config_renderer.py, tests/unit/test_make_contract.py, Makefile (root).
+## @scope    U-25, U-46, U-50, U-61, U-62, U-65. Файлы: core/templates/module.mk, core/Makefile.common, core/modules/*/Makefile (14), core/modules/nginx/{config,dev-config,docker-compose.base.yml,docker-compose.dev.yml,Makefile}, core/platform-infra.yaml, core/internal/scripts/sync_env_defaults.py, .env.example, .env, platform-env.yaml, pyproject.toml, core/templates/template-manifest.yaml, core/entrypoint-manifest.yaml, core/AGENTS.md, AGENTS.md (root), core/modules/AGENTS.md, core/schemas/module.schema.json (без изменений — поле есть), core/modules/{postgres,backup-cron,hermes-agent,clickhouse,redis,status-page}/module.yaml, tests/gates/test_gate_imports.py, tests/unit/test_monitoring_config_renderer.py, tests/gates/test_gate_make_contract.py (перенесён из tests/unit/, DRIFT-TRINITY фикс), Makefile (root).
 ## @invariants
 ##   1. module.mk — единственный источник make-контракта модуля; документация (AGENTS.md) не расходится с кодом (инвариант брифа).
 ##   2. Каждый .PHONY-таргет имеет рецепт — 0 пустых .PHONY (устранение тихого no-op U-25).
@@ -206,7 +206,7 @@ $END_ARTIFACT_CONTRACT
 
 **Шаги:**
 
-1. **make render-monitoring** (root Makefile, прецедент generate-litellm-config — Makefile зовёт python3 напрямую):
+1. **make render-monitoring** (прецедент generate-litellm-config — Makefile зовёт python3 напрямую):
    ```makefile
    ## render-monitoring: Рендер конфигурации мониторинга после деплоя проекта
    render-monitoring:
@@ -214,6 +214,7 @@ $END_ARTIFACT_CONTRACT
    		--project-dir "$(PROJECT_DIR)" --project "$(PROJECT)" \
    		$(if $(NODE),--node "$(NODE)",)
    ```
+   **Цепочка регистрации (задокументировано QA-верификацией B7, DRIFT-MANIFEST):** таргет определён в `makefiles/manifest.mk` (строки 87-94), который include'ится из корневого `Makefile` (`include makefiles/manifest.mk`, корневой Makefile строка 50) — НЕ напрямую в корневом Makefile. Функционально эквивалентно: `make render-monitoring` работает как корневой таргет, генератор entrypoint-manifest (`extract_phony_targets` → `gmake -np --dry-run` из корневого Makefile) обрабатывает include-цепочку и подхватывает `render-monitoring` из `.PHONY` (makefiles/manifest.mk:25). Решение принято: таргет оставлен в manifest.mk — это существующий канон платформы (DevPlan 090: корневой Makefile <150 строк, все генераторы живут в makefiles/*.mk); корневой Makefile НЕ трогается (манифест-интегрити гейты зелёные — `test_module_targets_in_manifest` и `test_agents_md_synced_with_manifest` проверяют манифест↔AGENTS.md, а не физическое расположение таргета).
    Сигнатура: `make render-monitoring PROJECT_DIR=<dir> PROJECT=<name> [NODE=<node>]`; отсутствие PROJECT_DIR/PROJECT → argparse fail (exit 1, fail-fast).
 2. **entrypoint-manifest.yaml**: новая секция (verb `render-monitoring`): make_target, delegates_to: `python3 core/internal/monitoring_config_renderer.py`, signature, operation_ru, description (U-65 — «жив через module-hook, вне manifest» закрывается); allowed_verbs + core/AGENTS.md canon_table — через `make generate-entrypoint-manifest` + `make generate-agents-md` (generated files не правятся руками).
 3. **Глоссарий (root AGENTS.md)**: строка `render-monitoring` в таблицу глаголов (✅).
@@ -235,7 +236,8 @@ $END_ARTIFACT_CONTRACT
    - Отклонено: override-механизм (deep-merge не может удалить ключ volume — нет механизма);
    - Rev-дата: 2026-10-21 (вместе с TRAP-ревью программы).
 2. **module.yaml restart-поля** (U-25 «restart 0/14»): заполнить в 6 модулях согласно документированным политикам (комментарии уже есть):
-   - postgres: `restart: always`; redis: `restart: always`; backup-cron: `restart: always`; hermes-agent: `restart: always`; clickhouse: `restart: unless-stopped`; status-page: `restart: unless-stopped`.
+   - postgres: `restart: always`; redis: `restart: always`; backup-cron: `restart: always`; clickhouse: `restart: unless-stopped`; status-page: `restart: unless-stopped`.
+   - **hermes-agent: `restart: unless-stopped` (ОТКЛОНЕНИЕ от первоначального `restart: always`, задокументировано QA-верификацией B7, DRIFT-HERMES-RESTART).** Consumer-scan docker-compose.base.yml:93 показал `restart: unless-stopped` (per Hermes recommendation — allows controlled stop). Coder согласовал module.yaml с compose ground-truth (module.yaml:35, комментарий объясняет deviation). Компромисс: hermes-agent не `severity: critical` → restart-drift валидатор зелёный (module.yaml = compose, carve-out не требуется). `restart: unless-stopped` ≠ `always`: контейнер НЕ перезапускается только если остановлен вручную оператором (docker stop) — при crash/host-reboot перезапуск идентичен `always`.
    - Валидация: `make validate-modules` (restart-drift: module.yaml.restart ↔ docker-compose.base.yml per-service restart; carve-out severity:critical). Перед заполнением — consumer-scan restart-значений в docker-compose.base.yml этих модулей: если compose говорит иначе — согласовать (или комментарий, или правка compose; критичные модули — carve-out всегда OK).
 3. **module.mk-комментарий** (T1 п.8): ссылка на канон volume-rename для test-оверрайдов.
 
@@ -243,12 +245,12 @@ $END_ARTIFACT_CONTRACT
 
 ### T9 — Самоверификация волны (порядок) [GATE]
 
-**Файлы:** `tests/unit/test_make_contract.py` (новый gate-тест), `core/entrypoint-manifest.yaml` (gates-запись), `core/modules/nginx/docker-compose.base.yml`+`dev.yml` (dry-run)
+**Файлы:** `tests/gates/test_gate_make_contract.py` (новый gate-тест — перенесён из tests/unit/, DRIFT-TRINITY), `core/entrypoint-manifest.yaml` (gates-запись), `core/modules/nginx/docker-compose.base.yml`+`dev.yml` (dry-run)
 
 **Шаги (строго по порядку):**
 
 1. **Регенерация манифестов**: `make generate-manifests` (entrypoint-manifest + platform-env + env-defaults + agents-md) → `git diff` — проверить, что изменения соответствуют T5/T7 (не ручная правка generated).
-2. **Гейт make-контракта** (бриф «для каждого модуля make -n restore/restart/backup не падает» — адаптирован под D1): новый gate-тест `tests/unit/test_make_contract.py` (@pytest.mark.gate):
+2. **Гейт make-контракта** (бриф «для каждого модуля make -n restore/restart/backup не падает» — адаптирован под D1): новый gate-тест `tests/gates/test_gate_make_contract.py` (@pytest.mark.gate):
    - для каждого docker-модуля: каждый таргет из `.PHONY` (парсинг make -qp) имеет рецепт — 0 пустых .PHONY (U-25 не возвращается);
    - dry-run: `make -n <target>` для всех .PHONY-таргетов всех 13 docker-модулей — exit 0 (без фактического docker);
    - backup/restore объявлены ровно у postgres, backup-cron, hermes-agent (матрица D1);

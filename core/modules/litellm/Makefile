@@ -1,4 +1,4 @@
-# GREP_SUMMARY: litellm Makefile start stop restart status logs backup compose include module-mk
+# GREP_SUMMARY: litellm Makefile start stop restart status logs compose include module-mk
 # STRUCTURE: ┌litellm targets┐ → ◇ module.mk include → ⊕ compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Makefile for litellm module — LiteLLM compose lifecycle

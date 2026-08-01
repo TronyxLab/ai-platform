@@ -217,7 +217,7 @@ env_defaults:
   TELEGRAM_CHAT_ID_CRITICAL: ""
   TELEGRAM_CHAT_ID_WARNING: ""
   # ── Nginx ──
-  NGINX_CONF_DIR: "./dev-config"
+  NGINX_CONF_DIR: "./config"
   NGINX_CERT_DIR: "./dev-certs"
   NGINX_OVERLAY_DIR: ""
   NGINX_HTTP_PORT: 80

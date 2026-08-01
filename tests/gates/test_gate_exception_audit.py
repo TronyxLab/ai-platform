@@ -47,6 +47,9 @@ _ALLOWED_NON_TARGET_SETS: set[str] = {
     "_SERVICES_30S",  # test_gate_healthcheck_intervals.py — healthcheck interval классы (D4), не make targets
     "_BACKGROUND_60S",  # test_gate_healthcheck_intervals.py — healthcheck interval классы (D4), не make targets
     "_DOCKER_SSH_MARKERS",  # test_gate_timeout_literals.py — docker/ssh/healthcheck домен-маркеры, не make targets
+    "_STATEFUL_MODULES",  # test_gate_make_contract.py — D1-матрица stateful-модулей (postgres/backup-cron/hermes-agent,
+    #   DevPlan 116 B7). Это ИМЕНА МОДУЛЕЙ, не make-таргеты. Authoritative source — DevPlan/AGENTS.md (контракт D1);
+    #   в entrypoint-manifest.yaml stateful-маркировки нет, поэтому чтение из манифеста невозможно.
 }
 
 logger = logging.getLogger(__name__)

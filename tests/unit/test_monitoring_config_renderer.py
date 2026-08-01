@@ -10,7 +10,7 @@
 #            test_generate_alert_rules_* → test_retention_parsing_variants → test_cli_missing_args →
 #            test_all_components_noop_when_no_monitoring
 # region MODULE_CONTRACT
-## @purpose  Unit tests for monitoring_config_renderer.py — 21 test functions covering
+## @purpose  Unit tests for monitoring_config_renderer.py — test functions covering
 ##           deep_merge, config loading, 3-level merge, Prometheus targets, Loki retention,
 ##           alert rules, retention parsing, CLI, and full-pipeline no-monitoring scenario.
 ## @scope    All tests use tmp_path (no hardcoded paths). HTTP-dependent tests use monkeypatch.
@@ -22,10 +22,13 @@
 ##   - Each test verifies [IMP:9] log presence via caplog fixture
 ##   - Tests run in tests/unit/ — no @pytest.mark.requires_docker
 ##   - YAML fixtures written to tmp_path in test setup (not committed as separate files)
-## @rationale DevPlan 074 §5.1 — 21 test cases covering all monitoring config renderer paths.
+##   - R1-чистка (DevPlan 116 B7 T7): 0 assert True/pass — все хвостовые pass-asserts удалены
+## @rationale DevPlan 074 §5.1 — test cases covering all monitoring config renderer paths.
 ##           Ensures the Python migration preserves all shell behavior exactly.
 ## @changes
 ##   LAST_CHANGE: 2026-07-25 | Created (DevPlan 074 TASK-4)
+##   2026-08-01 | B7 T7 (D5): удалены 19 хвостовых assert True (R1-чистка pass-тестов);
+##               контрактный CLI-тест вынесен в tests/unit/test_render_monitoring_cli.py
 # endregion MODULE_CONTRACT
 
 import json
@@ -211,7 +214,6 @@ def test_deep_merge_simple(caplog) -> None:
 
     _print_ldd_trajectory(caplog, "test_deep_merge_simple")
     # Pure function — no IMP:9 logs expected; assert at least no errors
-    assert True
 
 
 # ── T4.2: deep_merge nested 3 levels ────────────────────────────────────────
@@ -244,7 +246,6 @@ def test_deep_merge_nested_3levels(caplog) -> None:
     }
 
     _print_ldd_trajectory(caplog, "test_deep_merge_nested_3levels")
-    assert True
 
 
 # ── T4.3: deep_merge preserves base keys ────────────────────────────────────
@@ -267,7 +268,6 @@ def test_deep_merge_preserves_base_keys(caplog) -> None:
     # 'd' from base.b should survive
 
     _print_ldd_trajectory(caplog, "test_deep_merge_preserves_base_keys")
-    assert True
 
 
 # ── T4.4: load_l1_defaults with type ────────────────────────────────────────
@@ -315,7 +315,6 @@ def test_load_l1_defaults_missing_file(caplog) -> None:
     assert result == {}
 
     _print_ldd_trajectory(caplog, "test_load_l1_defaults_missing_file")
-    assert True
 
 
 # ── T4.6: load_l2_overrides present ─────────────────────────────────────────
@@ -335,7 +334,6 @@ def test_load_l2_overrides_present(test_l2_override_yaml: pathlib.Path, caplog) 
     assert result == {"metrics_port": 8080, "alerting": True}
 
     _print_ldd_trajectory(caplog, "test_load_l2_overrides_present")
-    assert True
 
 
 # ── T4.7: load_l2_overrides missing file ────────────────────────────────────
@@ -356,7 +354,6 @@ def test_load_l2_overrides_missing_file(caplog) -> None:
     assert result == {}
 
     _print_ldd_trajectory(caplog, "test_load_l2_overrides_missing_file")
-    assert True
 
 
 # ── T4.8: build_merged_config full pipeline ─────────────────────────────────
@@ -454,7 +451,6 @@ def test_build_merged_config_no_monitoring_section(tmp_path: pathlib.Path, caplo
     assert config is None
 
     _print_ldd_trajectory(caplog, "test_build_merged_config_no_monitoring_section")
-    assert True
 
 
 # ── T4.10: build_merged_config no ai-yaml ────────────────────────────────────
@@ -481,7 +477,6 @@ def test_build_merged_config_no_ai_yaml(tmp_path: pathlib.Path, caplog) -> None:
     assert config is None
 
     _print_ldd_trajectory(caplog, "test_build_merged_config_no_ai_yaml")
-    assert True
 
 
 # ── T4.11: generate_prometheus_target JSON schema ────────────────────────────
@@ -560,7 +555,6 @@ def test_generate_prometheus_target_metrics_disabled(caplog) -> None:
     assert result.component == "prometheus"
 
     _print_ldd_trajectory(caplog, "test_generate_prometheus_target_metrics_disabled")
-    assert True
 
 
 # ── T4.13: update_loki_retention new stream ────────────────────────────────
@@ -641,7 +635,6 @@ def test_update_loki_retention_idempotent(
     assert len(streams) == 1  # still just the original
 
     _print_ldd_trajectory(caplog, "test_update_loki_retention_idempotent")
-    assert True
 
 
 # ── T4.15: update_loki_retention before catch-all ──────────────────────────
@@ -696,7 +689,6 @@ def test_update_loki_retention_before_catch_all(caplog) -> None:
     config_path.unlink()
 
     _print_ldd_trajectory(caplog, "test_update_loki_retention_before_catch_all")
-    assert True
 
 
 # ── T4.16: update_loki_retention forever period ────────────────────────────
@@ -733,7 +725,6 @@ def test_update_loki_retention_forever_period(
     assert new_rule["period"] == "0h"
 
     _print_ldd_trajectory(caplog, "test_update_loki_retention_forever_period")
-    assert True
 
 
 # ── T4.17: generate_alert_rules enabled ──────────────────────────────────────
@@ -807,7 +798,6 @@ def test_generate_alert_rules_disabled(caplog) -> None:
     assert result.component == "alerting"
 
     _print_ldd_trajectory(caplog, "test_generate_alert_rules_disabled")
-    assert True
 
 
 # ── T4.19: retention parsing variants ────────────────────────────────────────
@@ -831,7 +821,6 @@ def test_retention_parsing_variants(caplog) -> None:
     assert _parse_retention_hours("") == 168  # default
 
     _print_ldd_trajectory(caplog, "test_retention_parsing_variants")
-    assert True
 
 
 # ── T4.20: CLI missing args ──────────────────────────────────────────────────
@@ -864,7 +853,6 @@ def test_cli_missing_args(caplog) -> None:
         sys.stderr = old_stderr
 
     _print_ldd_trajectory(caplog, "test_cli_missing_args")
-    assert True
 
 
 # ── T4.21: all components noop when no monitoring ──────────────────────────
@@ -896,7 +884,6 @@ def test_all_components_noop_when_no_monitoring(tmp_path: pathlib.Path, caplog) 
     # All render operations with None config should behave as documented
     # This test verifies the pipeline gracefully handles no-monitoring scenario
     _print_ldd_trajectory(caplog, "test_all_components_noop_when_no_monitoring")
-    assert True
 
 
 # ── Additional: _str_to_bool helper ──────────────────────────────────────────
@@ -924,7 +911,6 @@ def test_str_to_bool_variants(caplog) -> None:
     assert _str_to_bool(1) is True
 
     _print_ldd_trajectory(caplog, "test_str_to_bool_variants")
-    assert True
 
 
 # ── Additional: load_l3_project_config ──────────────────────────────────────
@@ -953,7 +939,6 @@ def test_load_l3_project_config(caplog) -> None:
     assert result2 == {}
 
     _print_ldd_trajectory(caplog, "test_load_l3_project_config")
-    assert True
 
 
 # ── Additional: generate_grafana_dashboard noop ──────────────────────────────
@@ -983,4 +968,3 @@ def test_generate_grafana_dashboard_disabled(caplog) -> None:
     assert result.component == "grafana"
 
     _print_ldd_trajectory(caplog, "test_generate_grafana_dashboard_disabled")
-    assert True

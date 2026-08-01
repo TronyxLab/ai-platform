@@ -22,7 +22,7 @@
 # (repair.mk → generate-manifests) чинит check-manifests полностью (G1-G6).
 .PHONY: generate-manifests generate-manifests-atomic check-manifests sync-env-defaults check-env-defaults
 .PHONY: generate-secrets-manifest generate-platform-env generate-env-example
-.PHONY: generate-entrypoint-manifest generate-agents-md generate-litellm-config
+.PHONY: generate-entrypoint-manifest generate-agents-md generate-litellm-config render-monitoring
 .PHONY: check-profiles-parity check-domain-parity
 
 generate-manifests: generate-secrets-manifest generate-platform-env generate-env-example \
@@ -83,6 +83,15 @@ generate-litellm-config:
 	@python3 core/internal/llm/config_renderer.py \
 		--policy core/internal/llm/policy.yaml \
 		--output core/modules/litellm/config/litellm-config.yml
+
+## render-monitoring: Рендер конфигурации мониторинга после деплоя проекта (DevPlan 116 B7 T7, U-65)
+##   Сигнатура: make render-monitoring PROJECT_DIR=<dir> PROJECT=<name> [NODE=<node>]
+##   Отсутствие PROJECT_DIR/PROJECT → argparse fail (exit 1, fail-fast)
+render-monitoring:
+	@echo "[IMP:7][render-monitoring] Rendering monitoring config for PROJECT=$(PROJECT)"
+	@python3 core/internal/monitoring_config_renderer.py \
+		--project-dir "$(PROJECT_DIR)" --project "$(PROJECT)" \
+		$(if $(NODE),--node "$(NODE)",)
 
 # ── Atomic generation (staging → rename) ────────────────────
 ## @purpose  Атомарная генерация ВСЕХ манифестов: staging dir (mktemp) → trap EXIT → rename.

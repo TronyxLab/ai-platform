@@ -6,7 +6,7 @@
 ## @invariants
 ##   - All docker compose calls use docker-compose.base.yml
 ##   - env-file loaded from SECRETS_ENV_FILE (default: /run/platform/secrets.env)
-##   - No backup/restore overrides — uses module.mk defaults
+##   - No backup/restore — stateless module (D1 DevPlan 116: контракт сужен, таргеты НЕ объявляются)
 ##   - All targets log at IMP:7 minimum
 ## @rationale Targets match standard module lifecycle; minimal override — include standard template
 # endregion MODULE_CONTRACT

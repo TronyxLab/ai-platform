@@ -554,13 +554,16 @@ lifecycle:
   delegates_to: Module backup scripts
   signature: make backup [NODE=...]
   operation_ru: Резервное копирование
-  description: Run backup for platform services
+  description: Run backup for platform services. Stateful-модули (postgres, backup-cron,
+    hermes-agent); остальные модули НЕ объявляют backup/restore (контракт сужен, DevPlan
+    116 D1)
 - make_target: restore
   mechanism: shell-script
   delegates_to: Module restore scripts
   signature: make restore NODE=<n>
   operation_ru: Восстановление из бэкапа
-  description: Restore from backup
+  description: Restore from backup. Stateful-модули (postgres, backup-cron, hermes-agent);
+    остальные модули НЕ объявляют backup/restore (контракт сужен, DevPlan 116 D1)
 - make_target: node-update
   mechanism: ssh+rsync
   delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh
@@ -613,6 +616,14 @@ dev:
   operation_ru: Вывод COMPOSE_PROFILES
   description: Private helper — echo COMPOSE_PROFILES string (all 13 Docker modules
     with profiles). Used by CI and production scripts.
+- make_target: render-monitoring
+  mechanism: python-script
+  delegates_to: python3 core/internal/monitoring_config_renderer.py
+  signature: make render-monitoring PROJECT_DIR=<dir> PROJECT=<name> [NODE=<node>]
+  operation_ru: Рендер конфигурации мониторинга после деплоя проекта
+  description: Post-deploy monitoring reconfiguration (Prometheus targets, Grafana
+    dashboards, Loki retention, Langfuse projects, alert rules). Registered make-target
+    (U-65, DevPlan 116 B7 T7) — основной runtime-путь остаётся module-hook on-project-deploy.sh.
 module_hooks:
 - script: nginx_reload_hook.sh
   path: core/modules/nginx/nginx_reload_hook.sh
@@ -811,6 +822,7 @@ allowed_verbs:
 - provision
 - provision-llm
 - remove-project
+- render-monitoring
 - render-vhosts
 - restart
 - restore
@@ -1139,6 +1151,12 @@ gates:
 - id: test_http_calls_have_retry
   test_file: test_gate_http_retry_policy.py
   description: 'Auto-discovered gate: test_http_calls_have_retry'
+- id: test_core_imports_covered_by_pyproject
+  test_file: test_gate_imports.py
+  description: 'Auto-discovered gate: test_core_imports_covered_by_pyproject'
+- id: imports_negative_fictitious_import
+  test_file: test_gate_imports.py
+  description: 'Auto-discovered gate: imports_negative_fictitious_import'
 - id: test_linter_parity
   test_file: test_gate_lint_quality.py
   description: 'Auto-discovered gate: test_linter_parity'
@@ -1184,6 +1202,24 @@ gates:
 - id: test_compose_config_resolves_full_stack
   test_file: test_gate_local_stack.py
   description: 'Auto-discovered gate: test_compose_config_resolves_full_stack'
+- id: test_backup_restore_matrix_d1
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_backup_restore_matrix_d1'
+- id: test_make_n_dry_run_all_targets
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_make_n_dry_run_all_targets'
+- id: test_nginx_dev_compose_valid
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_nginx_dev_compose_valid'
+- id: test_nginx_dev_config_no_duplicates
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_nginx_dev_config_no_duplicates'
+- id: test_no_empty_phony_targets
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_no_empty_phony_targets'
+- id: test_restart_soft_semantics
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_restart_soft_semantics'
 - id: test_all_phony_targets_discovered
   test_file: test_gate_makefile_targets.py
   description: 'Auto-discovered gate: test_all_phony_targets_discovered'

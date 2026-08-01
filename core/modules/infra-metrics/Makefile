@@ -1,4 +1,4 @@
-# GREP_SUMMARY: infra-metrics Makefile start stop restart status logs backup compose include module-mk
+# GREP_SUMMARY: infra-metrics Makefile start stop restart status logs compose include module-mk
 # STRUCTURE: ┌infra-metrics targets┐ → ◇ module.mk include → ⊕ multi-service compose lifecycle
 # region MODULE_CONTRACT
 ## @purpose  Makefile for infra-metrics module — cAdvisor + Node Exporter + Nginx Exporter compose lifecycle
