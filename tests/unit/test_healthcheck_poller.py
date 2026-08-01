@@ -6,10 +6,11 @@
 ## @purpose  Unit tests for HealthcheckPoller — health polling utility.
 ## @scope    Tests timeout, interval, max_retries configuration and edge cases.
 ## @invariants
-##   - Default timeout: 30s, interval: 10s, max_retries: 6
+##   - Default timeout: 30s, interval: 10s, max_retries: HEALTHCHECK_POLL_MAX_RETRIES (20, из timeouts.py D34)
 ##   - Returns "unhealthy" on any failure (never raises)
 ##   - poll_until_healthy returns "timeout" when retries exhausted
 ## @changes 2026-07-30 | DevPlan 089 T16 — Created
+## @changes 2026-08-01 | DevPlan 117 D34 — max_retries из timeouts.HEALTHCHECK_POLL_MAX_RETRIES (6→20)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

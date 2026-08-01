@@ -47,9 +47,18 @@ jobs:
         uses: ./.github/actions/setup-platform
         with:
           python-version: '3.14'
-          install-pre-commit: 'false'
+          # D67 (DevPlan 117): pre-commit НЕОБХОДИМ — make gate MODE=fast Step 1 = pre-commit-run.
+          # install-pre-commit: 'false' → cache-miss = command not found (K3). Вариант A: true + cache.
+          install-pre-commit: 'true'
           install-gitleaks: 'true'
           run-provisioner: 'false'
+
+      # ─── Step 2b: Cache pre-commit venv (D67 — mirror platform-test.yml) ──
+      - name: Cache pre-commit venv
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
 
       # ─── Step 3: Export COMPOSE_PROFILES (SoT platform-env.yaml) ──────
       - name: Export COMPOSE_PROFILES from platform-env.yaml

@@ -54,6 +54,8 @@ if not os.path.isdir(os.path.join(_PLATFORM_ROOT, "core", "internal")):
     _PLATFORM_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..")
 if _PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, _PLATFORM_ROOT)
+# Единый реестр таймаутов (DevPlan 117 D28) — visudo валидация: SUDOERS_CMD_TIMEOUT=15
+from core.internal.shared.timeouts import SUDOERS_CMD_TIMEOUT
 from core.internal.template_engine import TemplateError, render_template
 
 # ── Logging ─────────────────────────────────────────────────────────────────
@@ -408,7 +410,7 @@ def _validate_with_visudo(tmp_path: str) -> bool:
             ["visudo", "-c", "-f", tmp_path],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=SUDOERS_CMD_TIMEOUT,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][_validate_with_visudo] OK: %s", tmp_path)

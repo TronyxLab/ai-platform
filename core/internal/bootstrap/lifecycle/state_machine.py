@@ -256,25 +256,27 @@ DEFAULT_STATE_FILE = "/var/lib/platform/.bootstrap/state.json"
 
 
 # ── Retry Policy (W5-E6 C2) ──
-MAX_RETRIES = 3
-RETRY_BACKOFF_BASE = 2  # seconds: 2, 4, 8
+# Единый реестр retry-политик — timeouts.py (DevPlan 117 D34):
+#   RETRY_COUNT=2 попыток, RETRY_BACKOFF_EXPONENTIAL_BASE=2 (backoff 2**attempt: 2, 4)
+from core.internal.shared.timeouts import RETRY_BACKOFF_EXPONENTIAL_BASE, RETRY_COUNT
+
 RETRYABLE_EXCEPTIONS = (subprocess.TimeoutExpired, FileNotFoundError, OSError)
 
 
 def _should_retry(exc: Exception, attempt: int) -> bool:
-    """Return True if the exception is retryable and attempt < MAX_RETRIES.
+    """Return True if the exception is retryable and attempt < RETRY_COUNT.
 
     ## @purpose — Exponential-backoff retry policy for transient step failures.
     ## @io — ⇥ exc: caught exception, attempt: current attempt (1-based)
     ##       ⎋ bool: True to retry, False to fail-fast
     ## @complexity — O(1)
     """
-    if isinstance(exc, RETRYABLE_EXCEPTIONS) and attempt < MAX_RETRIES:
-        backoff = RETRY_BACKOFF_BASE**attempt
+    if isinstance(exc, RETRYABLE_EXCEPTIONS) and attempt < RETRY_COUNT:
+        backoff = RETRY_BACKOFF_EXPONENTIAL_BASE**attempt
         logger.info(
             "[IMP:8][_should_retry] Retryable exception (attempt %d/%d): %s — backing off %ds",
             attempt,
-            MAX_RETRIES,
+            RETRY_COUNT,
             exc,
             backoff,
         )

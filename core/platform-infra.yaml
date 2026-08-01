@@ -220,11 +220,17 @@ env_defaults:
   TELEGRAM_CHAT_ID_WARNING: ""
   # ── Nginx ──
   NGINX_CONF_DIR: "./config"
+  # Dev default; production overridden via node-configs/env to /etc/letsencrypt
+  # (VPS certbot/ACME target dir — см. nginx/docker-compose.base.yml, DevPlan 117 D30).
   NGINX_CERT_DIR: "./dev-certs"
   NGINX_OVERLAY_DIR: ""
   NGINX_HTTP_PORT: 80
   NGINX_HTTPS_PORT: 443
   NGINX_EXPORTER_PORT: 9113
+  # ── Status Page ──
+  # HTTP-порт status-page модуля (внутренний, без внешних проброшенных портов;
+  #   слушается внутри контейнера, DevPlan 117 D31).
+  STATUS_PAGE_PORT: 8080
   # ── SSL / DNS ──
   WEBNAMES_API_KEY: "*test-webnames-api-key"
   # ── Proxy ──

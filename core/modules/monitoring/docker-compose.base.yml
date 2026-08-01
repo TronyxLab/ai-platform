@@ -169,6 +169,8 @@ services:
 
       # Server config
       GF_SERVER_HTTP_PORT: "3000"
+      # PLATFORM_DOMAIN:-localhost — compose-level fallback (легитимный, DevPlan 117 D33):
+      # runtime PLATFORM_DOMAIN всегда задаётся через platform-env.yaml (SoT env_defaults).
       GF_SERVER_DOMAIN: "grafana.${PLATFORM_DOMAIN:-localhost}"
       GF_SERVER_ROOT_URL: "https://grafana.${PLATFORM_DOMAIN:-localhost}"
 

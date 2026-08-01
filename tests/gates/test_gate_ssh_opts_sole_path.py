@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: gate ssh-opts-sole-path SSH_OPTS BatchMode ConnectTimeout mirror anti-drift sole-path U-15
-# STRUCTURE: ▶ (a) rg "Mirror lib/ssh.sh" → 0 → ◇ (b) AST: списки "-o"+"BatchMode=yes" вне ssh_opts.py → RED → ◇ (c) AST: "ConnectTimeout=\d+" литералы → только ssh_opts.py → ⎋ PASS
+# GREP_SUMMARY: gate ssh-opts-sole-path SSH_OPTS BatchMode ConnectTimeout mirror anti-drift sole-path U-15 workflows
+# STRUCTURE: ▶ (a) rg "Mirror lib/ssh.sh" → 0 → ◇ (b) AST: списки "-o"+"BatchMode=yes" вне ssh_opts.py → RED → ◇ (c) AST: "ConnectTimeout=\d+" литералы → только ssh_opts.py → ◇ (d) CI workflows: ConnectTimeout=\d+ → RED (D69) → ⎋ PASS
 # region MODULE_CONTRACT
-## @purpose  Sole-path gate (DevPlan 116 B5 T10, U-15): SSH_OPTS определён РОВНО в одном месте —
+## @purpose  Sole-path gate (DevPlan 116 B5 T10, U-15 + DevPlan 117 D69): SSH_OPTS определён РОВНО в одном месте —
 ##           core/internal/shared/ssh_opts.py. 5 Python-копий («Mirror lib/ssh.sh») заменены
 ##           импортом волной B5; lib/ssh.sh — тонкий shell-фасад через `python3 -m ... --shell`.
+##           DevPlan 117 D69 (задача 69): CI-воркфлоу покрыты 4-й проверкой (d) — raw
+##           ConnectTimeout=\d+ в .github/workflows/*.yml → RED (K4: 8 литералов в core-deploy
+##           + deploy-project были вне скоупа гейта).
 ## @scope    (a) grep «Mirror lib/ssh.sh» по core/ → 0;
 ##           (b) AST-скан core/internal/*.py: списки, содержащие "-o"+"BatchMode=yes" вне
 ##               shared/ssh_opts.py → RED (копия SSH_OPTS); allowlist: github-probe "ssh -T"
 ##               (context_promoter — отдельная команда, не копия SSH_OPTS);
 ##           (c) AST: строковые литералы "ConnectTimeout=<число>" → только в ssh_opts.py
 ##               (context_promoter github-probe использует f"ConnectTimeout={SSH_CONNECT_TIMEOUT}"
-##               — f-string НЕ литерал, разрешён).
+##               — f-string НЕ литерал, разрешён);
+##           (d) grep-скан .github/workflows/*.yml: "ConnectTimeout=\d+" → RED (workflows получают
+##               флаги через `python3 -m core.internal.shared.ssh_opts --shell`, DevPlan 117 D27).
 ## @invariants
 ##   - Комментарии «Mirror lib/ssh.sh» устраняются (импорт канона вместо копирования, инвариант 2)
 ##   - ConnectTimeout литералы → только ssh_opts.py (единый SSH_CONNECT_TIMEOUT из timeouts)
 ##   - f-строки (f"ConnectTimeout={...}") НЕ являются литералами — не триггерят (c)
+##   - CI workflows: 0 raw ConnectTimeout (D69); упоминания в комментариях допускаются
 ## @rationale U-15: ConnectTimeout=10 outlier (context_promoter) vs 30 (канон). Единый SoT
 ##            делает расхождение структурно невозможным; гейт запрещает возврат копий.
+##            D69: слепая зона K4 — CI-воркфлоу не сканировались; теперь закрыта.
 ## @changes 2026-08-01 | DevPlan 116 B5 T10 — Created
+## @changes 2026-08-01 | DevPlan 117 D69 — (d) workflow-скан ConnectTimeout (test_ci_workflows_no_raw_connect_timeout)
 # endregion MODULE_CONTRACT
 
 import ast
@@ -36,6 +44,7 @@ logger = logging.getLogger(__name__)
 ROOT = repo_root()
 _CORE = ROOT / "core"
 _CORE_INTERNAL = ROOT / "core" / "internal"
+_WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 _ALLOWED_FILE = pathlib.Path("core/internal/shared/ssh_opts.py")
 
 _CONNECT_TIMEOUT_LITERAL = re.compile(r"ConnectTimeout=\d+")
@@ -146,7 +155,7 @@ def test_ssh_opts_list_sole_path(caplog) -> None:
 def _find_connect_timeout_literals() -> list[tuple[str, int, str]]:
     """Find string literals matching ConnectTimeout=<digits> outside ssh_opts.py.
 
-    ▶ ┌_CORE_INTERNAL┐ → ○ AST walk → ◇ ast.Constant str с "ConnectTimeout=\d+" → ⊕ offenders → ⎋ list
+    ▶ ┌_CORE_INTERNAL┐ → ○ AST walk → ◇ ast.Constant str с raw ConnectTimeout= → ⊕ offenders → ⎋ list
     """
     offenders: list[tuple[str, int, str]] = []
     for p in sorted(_CORE_INTERNAL.rglob("*.py")):
@@ -184,3 +193,51 @@ def test_connect_timeout_literals_sole_path(caplog) -> None:
         )
 
     logger.info("[IMP:9][ssh_opts][c] PASS: 0 ConnectTimeout literals outside shared/ssh_opts.py")
+
+
+# ── (d) CI workflows: ConnectTimeout=\d+ → RED (DevPlan 117 D69) ─────────────
+
+
+def _find_workflow_connect_timeout_literals() -> list[tuple[str, int, str]]:
+    """Find raw `ConnectTimeout=<digits>` literals in CI workflows.
+
+    ▶ ┌_WORKFLOWS_DIR┐ → ○ for each *.yml → ○ line scan → ◇ raw `ConnectTimeout=` в run-шаге
+    │                   → ⊕ offenders → ⎋ list (исключая комментарии)
+    """
+    offenders: list[tuple[str, int, str]] = []
+    for p in sorted(_WORKFLOWS_DIR.glob("*.yml")):
+        rel = p.relative_to(ROOT).as_posix()
+        try:
+            lines = p.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue  # комментарии/документация — не runtime флаги
+            match = _CONNECT_TIMEOUT_LITERAL.search(stripped)
+            if match:
+                offenders.append((rel, i, match.group(0)))
+    return offenders
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_ci_workflows_no_raw_connect_timeout(caplog) -> None:
+    """CI workflows must not contain raw ConnectTimeout= literals (DevPlan 117 D69, K4).
+
+    Воркфлоу получают SSH-флаги через `python3 -m core.internal.shared.ssh_opts --shell`
+    (шаг init → $GITHUB_OUTPUT, D27) — единый ConnectTimeout из timeouts.SSH_CONNECT_TIMEOUT=30.
+    """
+    offenders = _find_workflow_connect_timeout_literals()
+    if offenders:
+        for rel, lineno, val in offenders:
+            logger.error("[IMP:10][ssh_opts][d] %s:%d raw ConnectTimeout literal: %s", rel, lineno, val)
+        pytest.fail(
+            f"Raw ConnectTimeout literals in CI workflows ({len(offenders)}):\n"
+            + "\n".join(f"  - {rel}:{lineno} {val}" for rel, lineno, val in offenders)
+            + "\n\nИспользуй `python3 -m core.internal.shared.ssh_opts --shell` (шаг init, "
+            "D27) — единый SoT SSH-флагов (U-15, D69)."
+        )
+
+    logger.info("[IMP:9][ssh_opts][d] PASS: 0 raw ConnectTimeout literals in CI workflows")

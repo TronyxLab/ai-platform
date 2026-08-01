@@ -177,6 +177,11 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
         "контейнерный модуль; shared.telegram_notifier — by design (D1)",
     ),
     (
+        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
+        51,
+        "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 117 D29)",
+    ),
+    (
         "core/modules/postgres/hooks/on-project-deploy.sh",
         47,
         "postgres-hook; python3 -m shared.node_yaml — by design (D1)",

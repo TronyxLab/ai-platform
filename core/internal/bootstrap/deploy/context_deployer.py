@@ -66,7 +66,11 @@ from core.internal.shared.docker_compose import (
 # ── Constants ──────────────────────────────────────────────────────────────
 # DevPlan 116 B5 T9.2 (U-11): HEALTH_GATE_TIMEOUT — алиас канона shared/timeouts.py
 # (consumer-scan: константа не имеет других потребителей; единственный источник — timeouts)
-from core.internal.shared.timeouts import HEALTHCHECK_POLL_TIMEOUT
+from core.internal.shared.timeouts import (
+    DOCKER_CMD_TIMEOUT,
+    HEALTHCHECK_POLL_INTERVAL,
+    HEALTHCHECK_POLL_TIMEOUT,
+)
 
 HEALTH_GATE_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT  # seconds per project
 DEFAULT_PROJECTS_BASE = "/opt/projects"
@@ -464,7 +468,10 @@ services:
 ##   - Non-fatal: if docker unavailable, returns False
 def _is_project_healthy(project_name: str) -> bool:
     """Check if project containers are healthy via shared healthcheck_poll."""
-    return _shared_healthcheck_poll(project_name, timeout=10, interval=1) == "healthy"
+    return (
+        _shared_healthcheck_poll(project_name, timeout=HEALTHCHECK_POLL_TIMEOUT, interval=HEALTHCHECK_POLL_INTERVAL)
+        == "healthy"
+    )
 
 
 # endregion FUNC_is_project_healthy
@@ -735,7 +742,7 @@ def deploy_context(
             ["docker", "exec", "nginx", "nginx", "-s", "reload"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=DOCKER_CMD_TIMEOUT,
         )
     except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
         logger.warning("[IMP:7][deploy_context] Nginx reload failed (non-fatal): %s", e)

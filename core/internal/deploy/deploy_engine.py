@@ -730,7 +730,7 @@ class DeployEngine:
                         ["ss", "-tlnp"],
                         capture_output=True,
                         text=True,
-                        timeout=15,
+                        timeout=DOCKER_CMD_TIMEOUT,
                     )
                     if f":{port} " in ss_result.stdout:
                         msg = f"Port {port} already in use — deploy blocked"

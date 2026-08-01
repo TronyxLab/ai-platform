@@ -115,13 +115,21 @@ jobs:
           ssh-user: ci-deploy
 
       # ═══════════════════════════════════════════════════════════════════
+      # DevPlan 117 D27: SSH_OPTS — единый SoT (core/internal/shared/ssh_opts.py).
+      # CI-воркфлоу получают флаги через CLI --shell (ConnectTimeout из timeouts=30, канон).
+      # ═══════════════════════════════════════════════════════════════════
+      - name: Get SSH_OPTS from SoT
+        id: ssh_opts
+        run: echo "opts=$(python3 -m core.internal.shared.ssh_opts --shell)" >> $GITHUB_OUTPUT
+
+      # ═══════════════════════════════════════════════════════════════════
       # DevPlan 065 P2 + 116 B1 T4: SSH pre-flight — ЧЕСТНЫЙ ping (без || true).
       # forced-command dispatch: SSH_ORIGINAL_COMMAND="ping" → "pong", exit 0.
       # ═══════════════════════════════════════════════════════════════════
       - name: SSH pre-flight check
         run: |
           set -euo pipefail
-          PONG=$(ssh -o ConnectTimeout=10 ci-deploy@${{ env.ssh_host }} "ping")
+          PONG=$(ssh ${{ steps.ssh_opts.outputs.opts }} ci-deploy@${{ env.ssh_host }} "ping")
           echo "[IMP:9][preflight] ping response: ${PONG}"
           if [ "${PONG}" != "pong" ]; then
             echo "[IMP:10][preflight] FATAL: expected 'pong' from forced-command ping, got '${PONG}'"
@@ -142,7 +150,7 @@ jobs:
           # DevPlan 116 B1 D1: one-shot receive — tar по stdin → `receive <project> <sha>`.
           # forced-command dispatch диспетчеризует SSH_ORIGINAL_COMMAND="receive proj sha".
           # exit-код SSH = результат receive (БЕЗ || true) — честный канал.
-          tar czf - $FILES | ssh -o ConnectTimeout=10 \
+          tar czf - $FILES | ssh ${{ steps.ssh_opts.outputs.opts }} \
             ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
           echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
@@ -153,4 +161,4 @@ jobs:
         # канон пост-деплоя = verify <node>.
         run: |
           set -euo pipefail
-          ssh -o ConnectTimeout=10 ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"
+          ssh ${{ steps.ssh_opts.outputs.opts }} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"
