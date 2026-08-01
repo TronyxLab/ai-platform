@@ -526,15 +526,20 @@ class TestResolveCertDomain:
 
 
 class TestNginxTHarness:
-    """Tests for nginx_t_harness() — all with mocked subprocess/docker."""
+    """Tests for nginx_t_harness() — all with mocked subprocess/docker.
+
+    ## @purpose — Implementation moved to core/internal/scaffold/nginx_harness.py (DevPlan 117 G T53).
+    ##            vhost_renderer.nginx_t_harness is now a lazy facade; subprocess/shutil mocks
+    ##            target the implementation module.
+    """
 
     # 🧪 TRAP[TEST] · Regression · Scenario: Mock subprocess.run returns 0 (nginx -t passes)
     # · Expect: returns True
     # · Last fail: None
     # · Remove if: harness logic changes
 
-    @mock.patch("core.internal.scaffold.vhost_renderer.shutil.which")
-    @mock.patch("core.internal.scaffold.vhost_renderer.subprocess.run")
+    @mock.patch("core.internal.scaffold.nginx_harness.shutil.which")
+    @mock.patch("core.internal.scaffold.nginx_harness.subprocess.run")
     def test_nginx_t_harness_pass(
         self, mock_run: mock.MagicMock, mock_which: mock.MagicMock, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -565,8 +570,8 @@ class TestNginxTHarness:
     # · Last fail: None
     # · Remove if: harness logic changes
 
-    @mock.patch("core.internal.scaffold.vhost_renderer.shutil.which")
-    @mock.patch("core.internal.scaffold.vhost_renderer.subprocess.run")
+    @mock.patch("core.internal.scaffold.nginx_harness.shutil.which")
+    @mock.patch("core.internal.scaffold.nginx_harness.subprocess.run")
     def test_nginx_t_harness_fail(
         self, mock_run: mock.MagicMock, mock_which: mock.MagicMock, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -604,8 +609,8 @@ class TestNginxTHarness:
     # · Last fail: None
     # · Remove if: harness logic changes
 
-    @mock.patch("core.internal.scaffold.vhost_renderer.shutil.which")
-    @mock.patch("core.internal.scaffold.vhost_renderer.subprocess.run")
+    @mock.patch("core.internal.scaffold.nginx_harness.shutil.which")
+    @mock.patch("core.internal.scaffold.nginx_harness.subprocess.run")
     def test_nginx_t_harness_no_docker(
         self, mock_run: mock.MagicMock, mock_which: mock.MagicMock, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

@@ -164,22 +164,27 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
         47,
-        "контейнерный модуль; shared.docker_compose — by design (D1, DevPlan 117 D19)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        52,
         "контейнерный модуль; shared.secrets_env_parser — by design (D1)",
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        55,
+        50,
         "контейнерный модуль; shared.telegram_notifier — by design (D1)",
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        58,
+        53,
         "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 117 D29)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/circuit_breaker.py",
+        31,
+        "контейнерный модуль; internal.config platform_config — by design (D1, DevPlan 117 G T52)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/docker_ops.py",
+        24,
+        "контейнерный модуль; shared.docker_compose — by design (D1, DevPlan 117 D19, DevPlan 117 G T52)",
     ),
     (
         "core/modules/postgres/hooks/on-project-deploy.sh",

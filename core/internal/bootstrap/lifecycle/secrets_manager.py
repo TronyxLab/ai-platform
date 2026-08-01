@@ -460,140 +460,40 @@ def ensure_secrets(
 
 
 # region FUNC__extract_apr1_salt
-## @purpose — Extract salt from an existing APR1 htpasswd entry ($apr1$SALT$HASH).
-##            Returns "" when the entry is missing or not an apr1 hash (unparseable).
-## @io — ⇥ entry: str → ⎋ str (salt) | "" (unparseable)
-## @complexity — O(1) — single split
-## @invariants
-##   - Empty entry → ""
-##   - Only accepts apr1 structure: parts[0]=user, parts[1]="apr1", parts[2]=salt, parts[3]=hash
-##   - Non-apr1 hashes (bcrypt $2y$, etc.) → "" → caller regenerates
-## @rationale — Port of shell `cut -d'$' -f3` (secrets.sh L225) with added apr1 validation:
-##              field-3 extraction without structure check would treat a bcrypt salt as apr1 salt.
 def _extract_apr1_salt(entry: str) -> str:
-    """Extract salt from an APR1 htpasswd entry ($apr1$SALT$HASH). '' if unparseable."""
-    if not entry:
-        return ""
-    parts = entry.split("$")
-    if len(parts) >= 4 and parts[1] == "apr1" and parts[2]:
-        return parts[2]
-    return ""
+    """Lazy facade for htpasswd.extract_apr1_salt (DevPlan 117 G T58.3)."""
+    from core.internal.bootstrap.lifecycle.htpasswd import extract_apr1_salt as _impl
+
+    return _impl(entry)
 
 
 # endregion FUNC__extract_apr1_salt
 
 
 # region FUNC__write_htpasswd_file
-## @purpose — Generate .htpasswd-platform from explicit credentials. Core of both
-##            _ensure_htpasswd() (env-based) and the htpasswd CLI action (DevPlan 102 TASK-1).
-##            Idempotent: existing file salt is extracted and reused for deterministic
-##            comparison — file is only rewritten when credentials changed.
-## @io — ⇥ email: str, password: str, htpasswd_file: str (default /run/platform/.htpasswd-platform)
-##       → ⎋ bool
-## @complexity — O(1) + hash_apr1 from shared.crypto
-## @invariants
-##   - Non-fatal: returns False on failure, never raises (OSError caught)
-##   - First call (no file): random salt via generate_htpasswd_entry(email, password)
-##   - Subsequent calls: extract salt from existing file → recompute with fixed salt →
-##     skip if identical (idempotent, md5-stable)
-##   - Unparseable existing entry (no apr1 salt) → regenerate with random salt
-##   - Exports HTPASSWD_FILE into os.environ on success
 def _write_htpasswd_file(
     email: str,
     password: str,
     htpasswd_file: str = "/run/platform/.htpasswd-platform",
 ) -> bool:
-    """Generate .htpasswd-platform from explicit credentials. Returns True on success."""
-    # Import shared crypto — sys.path insert for module-level availability
-    if _SHARED_DIR not in sys.path:
-        sys.path.insert(0, _SHARED_DIR)
-    from crypto import generate_htpasswd_entry  # type: ignore[import-untyped]
+    """Lazy facade for htpasswd.write_htpasswd_file (DevPlan 117 G T58.3)."""
+    from core.internal.bootstrap.lifecycle.htpasswd import write_htpasswd_file as _impl
 
-    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Random salt breaks idempotency
-    # · Symptom: повторный вызов перезаписывает .htpasswd-platform (md5 меняется).
-    # · Root: crypto.generate_htpasswd_entry(email, password) без соли = случайный salt
-    # ·   каждый вызов → existing == expected всегда False → вечная перезапись.
-    # · Fix: при существующем файле извлекаем соль ($apr1$SALT$...), пересчитываем
-    # ·   entry с фиксированной солью, сравниваем.
-    # · Ported from: shell _ensure_htpasswd_generated() L221-241
-    try:
-        htpasswd_path = Path(htpasswd_file)
-        existing = ""
-        existing_salt = ""
-        if htpasswd_path.exists():
-            existing = htpasswd_path.read_text().strip()
-            existing_salt = _extract_apr1_salt(existing)
-
-        if existing_salt:
-            expected_entry = generate_htpasswd_entry(email, password, salt=existing_salt)
-            if expected_entry is None:
-                logger.warning("[IMP:7][secrets_manager] shared crypto generate_htpasswd_entry failed")
-                return False
-            if existing == expected_entry:
-                logger.info(
-                    "[IMP:8][secrets_manager] htpasswd already up-to-date for %s — skipping",
-                    email,
-                )
-                os.environ["HTPASSWD_FILE"] = htpasswd_file
-                return True
-            logger.info("[IMP:8][secrets_manager] htpasswd credentials changed — regenerating")
-        else:
-            # No file or unparseable entry — generate with fresh random salt
-            expected_entry = generate_htpasswd_entry(email, password)
-            if expected_entry is None:
-                logger.warning("[IMP:7][secrets_manager] shared crypto generate_htpasswd_entry failed")
-                return False
-
-        # Write htpasswd file
-        htpasswd_path.parent.mkdir(parents=True, exist_ok=True)
-        htpasswd_path.write_text(expected_entry + "\n")
-        htpasswd_path.chmod(0o644)
-        os.environ["HTPASSWD_FILE"] = htpasswd_file
-        logger.info("[IMP:9][secrets_manager] htpasswd generated at %s for %s", htpasswd_file, email)
-        return True
-
-    except OSError as e:
-        logger.warning("[IMP:7][secrets_manager] htpasswd OS error: %s", e)
-        return False
+    return _impl(email, password, htpasswd_file)
 
 
 # endregion FUNC__write_htpasswd_file
 
 
 # region FUNC__ensure_htpasswd
-## @purpose — Generate /run/platform/.htpasswd-platform from PLATFORM_MASTER_EMAIL and
-##            PLATFORM_MASTER_PASSWORD (env or sourced from secrets.env). Thin wrapper
-##            over _write_htpasswd_file() — all hashing/idempotency logic in the core.
-## @io — ⇥ secrets_env: str (for sourcing PLATFORM_MASTER_* if not in os.environ),
-##       htpasswd_file: str (optional override for tests) → ⎋ bool
-## @complexity — O(1) + _write_htpasswd_file
-## @invariants
-##   - Non-fatal: returns False on failure, never raises
-##   - Idempotent: salt-extraction in _write_htpasswd_file prevents rewrite on unchanged creds
-##   - Requires both PLATFORM_MASTER_EMAIL and PLATFORM_MASTER_PASSWORD to be set
 def _ensure_htpasswd(
     secrets_env: str = "/run/platform/secrets.env",
     htpasswd_file: str = "/run/platform/.htpasswd-platform",
 ) -> bool:
-    """Generate .htpasswd-platform from platform master credentials. Returns True on success."""
-    # Source secrets.env into os.environ if not already set
-    if not os.environ.get("PLATFORM_MASTER_PASSWORD") or not os.environ.get("PLATFORM_MASTER_EMAIL"):
-        env_vars = source_secrets_env(secrets_env)
-        for key, value in env_vars.items():
-            if key not in os.environ:
-                os.environ[key] = value
+    """Lazy facade for htpasswd.ensure_htpasswd (DevPlan 117 G T58.3)."""
+    from core.internal.bootstrap.lifecycle.htpasswd import ensure_htpasswd as _impl
 
-    email = os.environ.get("PLATFORM_MASTER_EMAIL", "")
-    password = os.environ.get("PLATFORM_MASTER_PASSWORD", "")
-
-    if not email or not password:
-        logger.info(
-            "[IMP:7][secrets_manager] PLATFORM_MASTER_EMAIL or PLATFORM_MASTER_PASSWORD not set — "
-            "skipping htpasswd generation",
-        )
-        return False
-
-    return _write_htpasswd_file(email, password, htpasswd_file)
+    return _impl(secrets_env, htpasswd_file)
 
 
 # endregion FUNC__ensure_htpasswd

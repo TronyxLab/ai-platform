@@ -32,7 +32,6 @@ import argparse
 import difflib
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -52,29 +51,9 @@ from core.internal.shared.exceptions import ConfigParseError
 
 logger = logging.getLogger(__name__)
 
-# Canonical port name map for well-known service ports
-_PORT_NAME_MAP: dict[int, str] = {
-    80: "http",
-    443: "https",
-    3000: "grafana",
-    3001: "langfuse",
-    3100: "loki",
-    4000: "litellm",
-    5432: "postgres",
-    6379: "redis",
-    6432: "pgbouncer",
-    8080: "cadvisor",
-    8123: "clickhouse_http",
-    8642: "hermes_desktop",
-    9000: "clickhouse_native",
-    9090: "prometheus",
-    9100: "node_exporter",
-    9113: "nginx_exporter",
-    9119: "hermes_dashboard",
-    9121: "redis_exporter",
-    9187: "postgres_exporter",
-    9363: "clickhouse_metrics",
-}
+# ⚠️ NOTE (DevPlan 117 G T56): _PORT_NAME_MAP moved to core/internal/scripts/port_scanner.py
+# (single source of truth). generate_platform_env.py no longer defines it — the scanner
+# functions below are lazy facades delegating to port_scanner.py.
 
 # endregion CONSTANTS
 
@@ -186,48 +165,18 @@ def discover_profiles(modules_dir: Path | str) -> list[str]:
 
 # region FUNC_extract_host_port
 def extract_host_port(port_mapping: str) -> int | None:
-    """Extract host port from a Docker Compose port mapping string.
+    """Lazy facade for core.internal.scripts.port_scanner.extract_host_port.
 
-    ## @purpose  Parse port mapping formats: "XXXX:YYYY", "127.0.0.1:XXXX:YYYY",
-    ##            "127.0.0.1:${VAR:-XXXX}:YYYY", "${VAR:-XXXX}:YYYY".
-    ##            Returns the resolved host port number.
-    ## @io        ⇥ port_mapping: str → ⎋ int | None: host port or None
-    ## @complexity O(1) — multi-pattern regex
+    ## @purpose — Backward-compatible entry point retained in generate_platform_env so
+    ##            existing callers keep the same import path. Implementation moved
+    ##            verbatim to port_scanner.py (DevPlan 117 G T56). Lazy import keeps
+    ##            start-up time unchanged (AC-G5).
+    ## @io — ⇥ port_mapping: str → ⎋ int | None: host port or None
+    ## @complexity — O(1) + delegate
     """
-    mapping = port_mapping.strip()
+    from core.internal.scripts.port_scanner import extract_host_port as _impl
 
-    # Pattern 1: "127.0.0.1:${VAR:-XXXX}:YYYY" with env var default
-    ip_var_pattern = re.compile(r"^\d+\.\d+\.\d+\.\d+:\$\{[^:}]+:-(\d+)\}:\d+$")
-    m = ip_var_pattern.match(mapping)
-    if m:
-        return int(m.group(1))
-
-    # Pattern 2: "${VAR:-XXXX}:YYYY" with env var default (bare)
-    var_pattern = re.compile(r"^\$\{[^:}]+:-(\d+)\}:\d+$")
-    m = var_pattern.match(mapping)
-    if m:
-        return int(m.group(1))
-
-    # Pattern 3: "127.0.0.1:XXXX:YYYY" or "0.0.0.0:XXXX:YYYY"
-    ip_pattern = re.compile(r"^\d+\.\d+\.\d+\.\d+:(\d+):\d+$")
-    m = ip_pattern.match(mapping)
-    if m:
-        return int(m.group(1))
-
-    # Pattern 4: "XXXX:YYYY" (bare mapping)
-    bare_pattern = re.compile(r"^(\d+):\d+$")
-    m = bare_pattern.match(mapping)
-    if m:
-        return int(m.group(1))
-
-    # Pattern 5: "${VAR}:YYYY" (no default — skip)
-    var_only_pattern = re.compile(r"^\$\{[^}]+\}:\d+$")
-    if var_only_pattern.match(mapping):
-        logger.debug("[IMP:8][extract_host_port][SKIP] Variable-only mapping (no default): %s", mapping)
-        return None
-
-    logger.warning("[IMP:8][extract_host_port][UNKNOWN] Cannot parse port mapping: %s", mapping)
-    return None
+    return _impl(port_mapping)
 
 
 # endregion FUNC_extract_host_port
@@ -235,83 +184,17 @@ def extract_host_port(port_mapping: str) -> int | None:
 
 # region FUNC_scan_compose_ports
 def scan_compose_ports(modules_dir: Path) -> dict[str, int]:
-    """Scan all docker-compose.base.yml files and extract host port mappings.
+    """Lazy facade for core.internal.scripts.port_scanner.scan_compose_ports.
 
-    ## @purpose  For each module with a docker-compose.base.yml, parse services
-    ##            and extract host port numbers. Maps to upper-cased variable names
-    ##            based on the service and port context.
-    ## @io        ⇥ modules_dir: Path → ⎋ dict[str, int]: {VAR_NAME: port}
-    ## @complexity O(M * S * P) where M = modules, S = services, P = ports
+    ## @purpose — Backward-compatible entry point retained in generate_platform_env so
+    ##            existing callers (main, gate test) keep the same import path.
+    ##            Implementation moved verbatim to port_scanner.py (DevPlan 117 G T56).
+    ## @io — ⇥ modules_dir: Path → ⎋ dict[str, int]: {VAR_NAME: port}
+    ## @complexity — O(1) + delegate
     """
-    logger.info("[IMP:7][scan_compose_ports][START] Scanning docker-compose.base.yml for port mappings")
+    from core.internal.scripts.port_scanner import scan_compose_ports as _impl
 
-    port_map: dict[str, int] = {}
-    compose_files = sorted(modules_dir.glob("*/docker-compose.base.yml"))
-
-    for compose_path in compose_files:
-        module_name = compose_path.parent.name
-        module_upper = module_name.upper().replace("-", "_")
-
-        try:
-            with open(compose_path) as f:
-                data: dict[str, Any] = yaml.safe_load(f)
-        except (yaml.YAMLError, OSError) as exc:
-            logger.warning("[IMP:8][scan_compose_ports][SKIP] Failed to parse %s: %s", compose_path, exc)
-            continue
-
-        if not isinstance(data, dict):
-            continue
-
-        services: dict[str, Any] = data.get("services") or {}
-        service_port_count = 0
-
-        for service_name, service_def in services.items():
-            if not isinstance(service_def, dict):
-                continue
-
-            ports_raw = service_def.get("ports")
-            if not isinstance(ports_raw, list):
-                continue
-
-            for port_entry in ports_raw:
-                if isinstance(port_entry, str):
-                    host_port = extract_host_port(port_entry)
-                elif isinstance(port_entry, dict):
-                    published = port_entry.get("published")
-                    host_port = int(published) if published is not None else None
-                else:
-                    continue
-
-                if host_port is None:
-                    continue
-
-                # Generate variable name
-                # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · Second port overwrites first when service==module
-                # · Symptom: port_mappings.MINIO_PORT: 9001 while env_defaults.MINIO_PORT: 9000 —
-                #   minio's second port (9001 console) overwrote the first (9000 S3 API).
-                # · Root: service_port_count incremented only in the `elif service_port_count == 0`
-                #   branch. When service_upper == module_upper (minio service inside minio module)
-                #   the counter never grew AND the first branch matched again for the second port →
-                #   port_map[MINIO_PORT] overwritten. Same latent bug: nginx (80/443 → NGINX_PORT=443),
-                #   hermes-agent (9119/8642 → HERMES_AGENT_PORT=8642).
-                # · Fix: increment the counter for the FIRST port of every service (including
-                #   service==module). First port → MODULE_PORT; subsequent → MODULE_SERVICE_PORT
-                #   (e.g. MINIO_MINIO_PORT). Scheme per DevPlan 116 T1 (U-01).
-                # · Prevention: T1 unit tests (minio-style fixture, infra-metrics-style regression).
-                service_upper = service_name.upper().replace("-", "_")
-                var_name = f"{module_upper}_PORT" if service_port_count == 0 else f"{module_upper}_{service_upper}_PORT"
-                service_port_count += 1
-
-                port_map[var_name] = host_port
-                logger.info(
-                    "[IMP:9][scan_compose_ports][PORT] %s → %s = %d",
-                    module_name,
-                    var_name,
-                    host_port,
-                )
-
-    logger.info("[IMP:9][scan_compose_ports][OK] Extracted %d port mappings", len(port_map))
-    return port_map
+    return _impl(modules_dir)
 
 
 # endregion FUNC_scan_compose_ports
@@ -319,85 +202,17 @@ def scan_compose_ports(modules_dir: Path) -> dict[str, int]:
 
 # region FUNC_scan_test_ports
 def scan_test_ports(modules_dir: Path) -> dict[str, dict[str, int]]:
-    """Scan all docker-compose.test.yml files and extract test port mappings.
+    """Lazy facade for core.internal.scripts.port_scanner.scan_test_ports.
 
-    ## @purpose  For each module with docker-compose.test.yml, parse services
-    ##            and extract host port numbers. Uses a custom YAML loader
-    ##            that handles the !override tag used in test compose files.
-    ## @io        ⇥ modules_dir: Path → ⎋ dict[str, dict[str, int]]: test port map
-    ## @complexity O(M * S * P) where M = modules, S = services, P = ports
+    ## @purpose — Backward-compatible entry point retained in generate_platform_env so
+    ##            existing callers (main, gate test) keep the same import path.
+    ##            Implementation moved verbatim to port_scanner.py (DevPlan 117 G T56).
+    ## @io — ⇥ modules_dir: Path → ⎋ dict[str, dict[str, int]]: test port map
+    ## @complexity — O(1) + delegate
     """
-    logger.info("[IMP:7][scan_test_ports][START] Scanning docker-compose.test.yml for port mappings")
+    from core.internal.scripts.port_scanner import scan_test_ports as _impl
 
-    # Custom YAML loader that handles !override tag
-    class OverrideLoader(yaml.SafeLoader):
-        pass
-
-    def override_constructor(loader, node):
-        return (
-            loader.construct_sequence(node) if isinstance(node, yaml.SequenceNode) else loader.construct_mapping(node)
-        )
-
-    OverrideLoader.add_constructor("!override", override_constructor)
-
-    test_port_map: dict[str, dict[str, int]] = {}
-    test_files = sorted(modules_dir.glob("*/docker-compose.test.yml"))
-
-    for test_path in test_files:
-        module_name = test_path.parent.name
-
-        try:
-            with open(test_path) as f:
-                data: dict[str, Any] = yaml.load(f, Loader=OverrideLoader)  # nosec B506 — OverrideLoader extends SafeLoader
-        except (yaml.YAMLError, OSError) as exc:
-            logger.warning("[IMP:8][scan_test_ports][SKIP] Failed to parse %s: %s", test_path, exc)
-            continue
-
-        if not isinstance(data, dict):
-            continue
-
-        services: dict[str, Any] = data.get("services") or {}
-        module_ports: dict[str, int] = {}
-
-        for service_name, service_def in services.items():
-            if not isinstance(service_def, dict):
-                continue
-
-            ports_raw = service_def.get("ports")
-            if not isinstance(ports_raw, list):
-                continue
-
-            for port_entry in ports_raw:
-                if isinstance(port_entry, str):
-                    host_port = extract_host_port(port_entry)
-                elif isinstance(port_entry, dict):
-                    published = port_entry.get("published")
-                    host_port = int(published) if published is not None else None
-                else:
-                    continue
-
-                if host_port is None:
-                    continue
-
-                # Derive port name from port number
-                port_name = _PORT_NAME_MAP.get(host_port, f"port_{host_port}")
-                module_ports[port_name] = host_port
-                logger.info(
-                    "[IMP:9][scan_test_ports][PORT] %s/%s → %s = %d",
-                    module_name,
-                    service_name,
-                    port_name,
-                    host_port,
-                )
-
-        if module_ports:
-            test_port_map[module_name] = module_ports
-
-    logger.info(
-        "[IMP:9][scan_test_ports][OK] Extracted test ports for %d modules",
-        len(test_port_map),
-    )
-    return test_port_map
+    return _impl(modules_dir)
 
 
 # endregion FUNC_scan_test_ports

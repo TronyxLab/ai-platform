@@ -268,3 +268,183 @@ def test_atomic_write(caplog, tmp_path):
 
 
 # endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: section builders (DevPlan 117 G T57 decomposition)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _full_env_defaults() -> dict[str, str]:
+    """Realistic env_defaults mirroring platform-env.yaml SoT shape."""
+    return {
+        "PLATFORM_DOMAIN": "ai-platform.local",
+        "PLATFORM_MASTER_EMAIL": "admin@ai-platform.local",
+        "COMPOSE_PROFILES": "postgres,redis,nginx,litellm,langfuse,hermes-agent,monitoring,status-page",
+        "NO_PROXY": "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus",
+    }
+
+
+def _full_secret_defs() -> dict[str, dict[str, str]]:
+    """Secret definitions with charset + gen_command for constraint comments."""
+    return {
+        "POSTGRES_PASSWORD": {
+            "ci_default": "test-pg-pwd",
+            "charset": "^[A-Za-z0-9._-]+$",
+            "gen_command": "openssl rand -hex 32",
+        },
+        "PLATFORM_MASTER_PASSWORD": {
+            "ci_default": "test-master-password",
+            "charset": "^[A-Za-z0-9._-]+$",
+            "gen_command": "openssl rand -base64 32",
+        },
+        "LANGFUSE_INIT_ORG_ID": {
+            "ci_default": "ci-test-org",
+            "gen_command": "openssl rand -hex 8",
+        },
+    }
+
+
+# 🧪 TRAP[TEST] · Regression · section orchestrator == monolithic output
+# · Scenario: generate_env_example orchestrates sections; each section renders its block
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: section decomposition changes
+def test_section_helpers_fail_fast(caplog):
+    """_get_val_required raises KeyError for missing SoT key."""
+    caplog.set_level(0)
+    with pytest.raises(KeyError) as exc_info:
+        sed._get_val_required({}, "PLATFORM_DOMAIN")
+    assert "Missing required env_defaults key" in str(exc_info.value)
+
+
+# 🧪 TRAP[TEST] · Regression · get_val_required KeyError
+# · Scenario: generate_env_example with missing PLATFORM_DOMAIN → KeyError
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: fail-fast semantics change
+def test_generate_missing_required_key_raises(caplog):
+    """Missing required key → KeyError (no silent fallback)."""
+    caplog.set_level(0)
+    with pytest.raises(KeyError):
+        sed.generate_env_example({}, {})
+
+
+# 🧪 TRAP[TEST] · Regression · section builder for platform_context
+# · Scenario: _section_platform_context renders PLATFORM_DOMAIN + CONTEXT lines
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: platform_context section changes
+def test_section_platform_context(caplog):
+    """_section_platform_context → CONTEXT, NODE_NAME, PLATFORM_DOMAIN, CONTEXT_IMAGE."""
+    caplog.set_level(0)
+    lines = sed._section_platform_context(_full_env_defaults())
+    text = "\n".join(lines)
+    assert "CONTEXT=test" in text
+    assert "PLATFORM_DOMAIN=ai-platform.local" in text
+    assert "CONTEXT_IMAGE=ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1" in text
+
+
+# 🧪 TRAP[TEST] · Regression · section builder for platform_secrets
+# · Scenario: constraint + gen_command comments emitted when present in secret_defs
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: platform_secrets section changes
+def test_section_platform_secrets_constraints(caplog):
+    """_section_platform_secrets → CONSTRAINT + Генерация comments from secret_defs."""
+    caplog.set_level(0)
+    lines = sed._section_platform_secrets(_full_env_defaults(), _full_secret_defs())
+    text = "\n".join(lines)
+    assert "CONSTRAINT: PLATFORM_MASTER_PASSWORD must match" in text
+    assert "# Генерация: openssl rand -base64 32" in text
+    assert "PLATFORM_MASTER_EMAIL=admin@ai-platform.local" in text
+    assert "AGE_SECRET_KEY=" in text
+
+
+# 🧪 TRAP[TEST] · Regression · section builder for postgres
+# · Scenario: POSTGRES_PASSWORD constraint + value lines
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: postgres section changes
+def test_section_postgres(caplog):
+    """_section_postgres → constraint + POSTGRES_* lines."""
+    caplog.set_level(0)
+    lines = sed._section_postgres(_full_env_defaults(), _full_secret_defs())
+    text = "\n".join(lines)
+    assert "CONSTRAINT: POSTGRES_PASSWORD must match" in text
+    assert "POSTGRES_PORT=6432" in text
+    assert "POSTGRES_HOST=pgbouncer" in text
+
+
+# 🧪 TRAP[TEST] · Regression · section builder for langfuse
+# · Scenario: gen_command comments for LANGFUSE_INIT_ORG_ID emitted
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: langfuse section changes
+def test_section_langfuse_gen_commands(caplog):
+    """_section_langfuse → gen_command comments for init keys."""
+    caplog.set_level(0)
+    lines = sed._section_langfuse(_full_env_defaults(), _full_secret_defs())
+    text = "\n".join(lines)
+    assert "LANGFUSE_INIT_ORG_ID:" in text
+    assert "LANGFUSE_PUBLIC_KEY=ci-test-public-key" in text
+    assert "LANGFUSE_S3_FORCE_PATH_STYLE=true" in text
+
+
+# 🧪 TRAP[TEST] · Regression · section builder for compose_profiles
+# · Scenario: profile count computed from COMPOSE_PROFILES
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: compose_profiles section changes
+def test_section_compose_profiles_count(caplog):
+    """_section_compose_profiles → profile count line + COMPOSE_PROFILES value."""
+    caplog.set_level(0)
+    lines = sed._section_compose_profiles(_full_env_defaults())
+    text = "\n".join(lines)
+    assert "Все 8 профилей" in text
+    assert "COMPOSE_PROFILES=postgres,redis,nginx,litellm,langfuse,hermes-agent,monitoring,status-page" in text
+
+
+# 🧪 TRAP[TEST] · Regression · section builder for github_actions
+# · Scenario: only comments + GHCR_PULL_TOKEN/GHCR_PUSH_TOKEN
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: github_actions section changes
+def test_section_github_actions_comments_only(caplog):
+    """_section_github_actions → comment-only section + tokens."""
+    caplog.set_level(0)
+    lines = sed._section_github_actions(_full_env_defaults())
+    text = "\n".join(lines)
+    assert "GitHub Actions secrets" in text
+    assert "GHCR_PULL_TOKEN=ghp_test-token-for-ci-only" in text
+    assert "GHCR_PUSH_TOKEN=" in text
+
+
+# 🧪 TRAP[TEST] · Regression · generate_env_example orchestration order
+# · Scenario: full output contains all section headers in structural order
+# · Last fail: N/A (new test for DevPlan 117 G T57)
+# · Remove if: section ordering changes
+def test_generate_orchestration_section_order(caplog):
+    """All section headers present in structural order."""
+    caplog.set_level(0)
+    result = sed.generate_env_example(_full_env_defaults(), _full_secret_defs())
+    headers = [
+        "# ── Platform / Context ──",
+        "# ── Platform secrets ──",
+        "# ── Postgres (shared-db) ──",
+        "# ── PgBouncer (connection pooler for Postgres)",
+        "# ── Redis (cache)",
+        "# ── ClickHouse (Analytical DB)",
+        "# ── MinIO (local S3, dev)",
+        "# ── S3 / Backup ──",
+        "# ── LLM Provider API Key ──",
+        "# ── LiteLLM (LLM Gateway)",
+        "# ── Langfuse (LLM Tracing)",
+        "# ── Hermes Agent — Dashboard ──",
+        "# ── Hermes Agent — API Server ──",
+        "# ── Telegram ──",
+        "# ── Nginx (Edge)",
+        "# ── SSL / DNS Challenge (acme.sh)",
+        "# ── Proxy (Tor/Privoxy, опционально)",
+        "# ── Monitoring / Observability",
+        "# ── Compose Profiles ──",
+        "# ── Misc ──",
+        "# GitHub Actions secrets (NOT .env vars",
+    ]
+    positions = [result.index(h) for h in headers]
+    assert positions == sorted(positions), f"Section order violated: {headers}"
+
+
+# endregion
