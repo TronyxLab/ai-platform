@@ -27,7 +27,7 @@ make gate        # Production gate (полная проверка перед д�
 | Команда | Описание |
 |---------|----------|
 | `make test [MARKER=...]` | Тестирование (static, smoke, component, integration, predeploy, contract, e2e, all) |
-| `make gate [MODE=fast\|full]` | Production gate |
+| `make gate [MODE=fast\|full\|ci-docker]` | Production gate |
 | `make deploy PROJECT=<dir>` | Деплой проекта |
 | `make bootstrap-node NODE=<name>` | Bootstrap ноды |
 | `make context-promote CONTEXT=<name>` | Промоут платформы в контекст |

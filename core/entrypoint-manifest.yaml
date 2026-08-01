@@ -16,11 +16,16 @@ bootstrap:
 - make_target: bootstrap-node
   mechanism: ssh+rsync
   delegates_to: core/entrypoints/bootstrap.sh → core/internal/bootstrap/preflight.py
-    → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/docker_registry_auth.py
-    + core/internal/bootstrap/firewall.sh + core/internal/bootstrap/install-docker.sh
-    + core/internal/bootstrap/install-tor-proxy.sh + core/internal/bootstrap/setup-node.sh
-    + core/internal/bootstrap/install-acme.sh + core/internal/bootstrap/deploy-modules.sh
-    + core/internal/bootstrap/cert_orchestrator.py + core/internal/bootstrap/deploy/context_deployer.py
+    → core/internal/bootstrap/node-lifecycle.sh --mode init → core/internal/bootstrap/lifecycle/cli.py
+    → core/internal/bootstrap/lifecycle/state_machine.py (B9 state machine — 14 фаз
+    — 9 INIT — φ1 system_bootstrap → core/internal/bootstrap/install-docker.sh → core/internal/bootstrap/install-tor-proxy.sh
+    → core/internal/bootstrap/firewall.sh · φ2 user_accounts · φ3 platform_setup →
+    core/internal/bootstrap/docker_registry_auth.py → core/internal/bootstrap/setup-node.sh
+    · φ4 secrets_provision · φ5 node_configuration · φ6 registry_auth · φ7 certificates
+    → core/internal/bootstrap/install-acme.sh · φ8 deploy_services → core/internal/bootstrap/deploy-modules.sh
+    → core/internal/bootstrap/cert_orchestrator.py → core/internal/bootstrap/deploy/context_deployer.py
+    · φ8.5 converge_services — 5 UPDATE — φ9 secrets_update · φ10 node_config_update
+    · φ11 registry_update · φ12 deploy_update · φ13 converge_update)
   signature: make bootstrap-node NODE=<name>
   operation_ru: Идемпотентный bootstrap ноды
   description: Idempotent bootstrap of a new node to FULL readiness (infra + context
@@ -565,8 +570,11 @@ lifecycle:
 - make_target: node-update
   mechanism: ssh+rsync
   delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh
-    --mode update → core/internal/bootstrap/issue-cert.sh + provision + deploy-modules
-    + healthcheck
+    --mode update → core/internal/bootstrap/lifecycle/cli.py → core/internal/bootstrap/lifecycle/state_machine.py
+    (B9 state machine — UPDATE mode — 5 фаз — φ9 secrets_update · φ10 node_config_update
+    · φ11 registry_update → provision · llm-keys · healthcheck · φ12 deploy_update
+    → core/internal/bootstrap/issue-cert.sh → core/internal/bootstrap/deploy-modules.sh
+    · φ13 converge_update)
   signature: make node-update NODE=<name>
   operation_ru: Обновление provisioned ноды
   description: Regular CI update of an already-provisioned node (not INIT)

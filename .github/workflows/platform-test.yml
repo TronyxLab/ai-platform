@@ -7,7 +7,7 @@
 ## @invariants
 ##   - Single unified job: platform-test (replaces 3 separate jobs)
 ##   - Fast gate (make gate MODE=fast) runs BEFORE Docker setup — fail-fast on syntax/static issues
-##   - Full gate (make gate MODE=full) runs AFTER Docker provisioning — includes smoke + component tests
+##   - ci-docker gate (make gate MODE=ci-docker) runs AFTER Docker provisioning — includes smoke + component tests
 ##   - Integration tests: error-path (always) + live (when secrets available)
 ##   - All obsolescence references use monitoring + logging (not observability) — D1 fix
 ##   - basedpyright-tests removed (informational only, never blocked merge)
@@ -15,7 +15,7 @@
 ##   - Provisioner: provision-environment.sh from platform-env.yaml (Plan 1)
 ##   - Cleanup runs unconditionally
 ## @rationale — Plan 2 CI Unification: 9→7 workflows. Single job eliminates race condition P6
-##   (dual main-full-gate + platform-integration make gate MODE=full). Fast gate before Docker
+##   (dual main-full-gate + platform-integration make gate MODE=ci-docker). Fast gate before Docker
 ##   provides <3 min feedback for syntax/static issues. D1 fix removes observability dead reference.
 ## @changes — 2026-07-15 | Consolidated 3 jobs→1 unified job per DevPlan 002 TASK-3
 ## @changes — 2026-07-15 | D1 fix: observability→monitoring+logging paths
@@ -217,18 +217,11 @@ jobs:
       - name: Generate dev SSL certs for nginx tests
         run: |
           echo "[IMP:7][dev-certs-pregen] Generating dev SSL certs for nginx tests..."
-          mkdir -p core/modules/nginx/dev-certs
-          openssl req -x509 -newkey rsa:2048 -nodes \
-            -keyout core/modules/nginx/dev-certs/_local-key.pem \
-            -out core/modules/nginx/dev-certs/_local.pem \
-            -days 825 \
-            -subj "/CN=*.ai-platform.local" \
-            -addext "subjectAltName=DNS:*.ai-platform.local,DNS:localhost,IP:127.0.0.1" \
-            2>&1 | sed 's/^/[IMP:8][openssl] /'
+          make dev-certs CERT_BACKEND=openssl
           echo "[IMP:9][dev-certs-pregen] ✅ Dev SSL certs generated in core/modules/nginx/dev-certs/"
         shell: bash
 
-      - name: Run full gate (smoke + component + predeploy-docker — no static duplication, contract/static/predeploy in fast gate)
+      - name: Run ci-docker gate (smoke + component + predeploy-docker — no static duplication, contract/static/predeploy in fast gate)
         id: full_gate
         env:
           CONTEXT_IMAGE: hermes-agent-base:latest
@@ -314,7 +307,7 @@ jobs:
             echo ""
             echo "### Gate Strategy"
             echo "- Fast gate: gates + contract + static + predeploy (no Docker, <3 min)"
-            echo "- Full gate: smoke + component + predeploy-docker (Docker stack, no static duplication)"
+            echo "- ci-docker gate: smoke + component + predeploy-docker (Docker stack, no static duplication)"
             echo "- Integration: error-path (no tokens) + live (real API call)"
             echo ""
             echo "### Links"
