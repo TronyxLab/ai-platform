@@ -14,10 +14,11 @@
 ##   1. Every phase is idempotent — safe to re-run on a provisioned node.
 ##   2. Non-fatal failures log WARN and return False — do NOT raise.
 ##   3. Fatal failures (missing node.yaml, decrypt failure, root required) raise PlatformFatalError.
-##   4. All subprocess calls use _sm._subprocess_run() standard wrapper (capture_output, timeout).
+##   4. All subprocess calls use helpers_subprocess.run_subprocess() standard wrapper (capture_output, timeout).
 ##   5. No direct state mutation — phases do NOT write state.json or manage checkpoints.
 ##   6. Env var access via os.environ — set by shell-фасад or higher-level orchestrator.
-##   7. Import helpers from state_machine via _sm prefix, never duplicate business logic.
+##   7. Import helpers from lifecycle/helpers (public names), never duplicate business logic.
+##      Односторонняя зависимость state_machine → phases → helpers (цикл устранён, B9 T1).
 ##   8. φ1 installs Python 3.14 + platform deps via python_deps.py ensure (FATAL — prerequisite
 ##      for all Python-orchestrated phases). System /usr/bin/python3 (3.12) is never touched.
 ## @rationale  Single-dispatch _execute_init_step() in state_machine.py grew to 23 init steps
@@ -62,8 +63,14 @@ from core.internal.shared.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-# ── Import helpers from state_machine (single source of truth) ──────────────
-from core.internal.bootstrap.lifecycle import state_machine as _sm
+# ── Import helpers from lifecycle/helpers (public I/O API, односторонняя зависимость) ──
+from core.internal.bootstrap.lifecycle.helpers import domains as helpers_domains
+from core.internal.bootstrap.lifecycle.helpers import reporting as helpers_reporting
+from core.internal.bootstrap.lifecycle.helpers import secrets as helpers_secrets
+from core.internal.bootstrap.lifecycle.helpers import subprocess_io as helpers_subprocess
+from core.internal.bootstrap.lifecycle.helpers import system as helpers_system
+from core.internal.bootstrap.lifecycle.helpers import users as helpers_users
+from core.internal.bootstrap.lifecycle.helpers import validation as helpers_validation
 
 # ═══════════════════════════════════════════════════════════════════════════
 # INIT PHASES — 9 phases for full node bootstrap
@@ -104,7 +111,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
         if tor_enabled:
             packages.extend(["tor", "privoxy", "obfs4proxy"])
             logger.info("[IMP:8][phase:system_bootstrap] Tor enabled — added tor/privoxy/obfs4proxy packages")
-        _sm._install_apt_packages(packages)
+        helpers_system.install_apt_packages(packages)
         logger.info("[IMP:9][phase:system_bootstrap] Apt packages installed: %s", " ".join(packages))
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:system_bootstrap] Apt package installation failed: %s", e)
@@ -117,7 +124,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
     python_deps_script = os.path.join(core_dir, "internal", "bootstrap", "python_deps.py")
     if os.path.isfile(python_deps_script):
         try:
-            _sm._subprocess_run(
+            helpers_subprocess.run_subprocess(
                 ["python3", python_deps_script, "ensure", "--core-dir", core_dir],
                 "python_deps",
                 timeout=600,
@@ -132,7 +139,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
 
     # ── 2. Install sops (non-fatal) ──
     try:
-        _sm._ensure_sops()
+        helpers_system.ensure_sops()
         logger.info("[IMP:9][phase:system_bootstrap] SOPS installed/verified")
     except Exception as e:  # noqa: EXC — non-fatal: sops installation is best-effort
         logger.warning("[IMP:7][phase:system_bootstrap] SOPS installation failed (non-fatal): %s", e)
@@ -142,7 +149,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
     docker_script = os.path.join(core_dir, "internal", "bootstrap", "install-docker.sh")
     if os.path.isfile(docker_script):
         try:
-            _sm._subprocess_run(["bash", docker_script], "install_docker", timeout=300)
+            helpers_subprocess.run_subprocess(["bash", docker_script], "install_docker", timeout=300)
             logger.info("[IMP:9][phase:system_bootstrap] Docker installed successfully")
         except PlatformFatalError:
             logger.error("[IMP:10][phase:system_bootstrap] Docker installation failed")
@@ -163,7 +170,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
             if skip_verify:
                 tor_cmd.append("--skip-tor-verify")
             try:
-                _sm._subprocess_run(tor_cmd, "tor_proxy", non_fatal=True)
+                helpers_subprocess.run_subprocess(tor_cmd, "tor_proxy", non_fatal=True)
                 logger.info("[IMP:9][phase:system_bootstrap] Tor proxy installed")
             except Exception as e:  # noqa: EXC — non-fatal: Tor is best-effort
                 logger.warning("[IMP:7][phase:system_bootstrap] Tor installation failed (non-fatal): %s", e)
@@ -180,7 +187,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
     firewall_script = os.path.join(core_dir, "internal", "bootstrap", "firewall.sh")
     if os.path.isfile(firewall_script):
         try:
-            _sm._subprocess_run(["bash", firewall_script], "firewall", non_fatal=True)
+            helpers_subprocess.run_subprocess(["bash", firewall_script], "firewall", non_fatal=True)
             logger.info("[IMP:9][phase:system_bootstrap] Firewall applied")
         except Exception as e:  # noqa: EXC — non-fatal: firewall is best-effort on already-configured nodes
             logger.warning("[IMP:7][phase:system_bootstrap] Firewall setup failed (non-fatal): %s", e)
@@ -233,9 +240,9 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 1. Create platform user + add owner SSH key ──
     try:
-        _sm._create_user("platform", ["docker"])
+        helpers_users.create_user("platform", ["docker"])
         logger.info("[IMP:9][phase:user_accounts] platform user created/verified")
-        _sm._add_ssh_key("platform", owner_key)
+        helpers_users.add_ssh_key("platform", owner_key)
         logger.info("[IMP:9][phase:user_accounts] SSH key added for platform user")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:user_accounts] Failed to create platform user: %s", e)
@@ -243,11 +250,11 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 2. Create ci-deploy user + add deploy SSH key ──
     try:
-        _sm._create_user("ci-deploy", ["docker"])
+        helpers_users.create_user("ci-deploy", ["docker"])
         logger.info("[IMP:9][phase:user_accounts] ci-deploy user created/verified")
         if ci_deploy_key:
             forced_command = 'command="python3 -m core.internal.deploy.orchestrator_cli receive",restrict'
-            _sm._add_ssh_key("ci-deploy", ci_deploy_key, forced_command_prefix=forced_command)
+            helpers_users.add_ssh_key("ci-deploy", ci_deploy_key, forced_command_prefix=forced_command)
             logger.info("[IMP:9][phase:user_accounts] SSH key added for ci-deploy user")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:user_accounts] Failed to create ci-deploy user: %s", e)
@@ -255,7 +262,7 @@ def phase_user_accounts(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 3. Create projects base directory ──
     try:
-        _sm._ensure_projects_base(core_dir, node_name)
+        helpers_users.ensure_projects_base(core_dir, node_name)
         logger.info("[IMP:9][phase:user_accounts] /opt/projects base directory created with ci-deploy ownership")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][phase:user_accounts] Failed to create projects base (non-fatal): %s", e)
@@ -303,7 +310,7 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
         logger.warning("[IMP:7][phase:platform_setup] Docker Hub credentials not set — rate-limit may apply")
     elif os.path.isfile(auth_script):
         try:
-            _sm._subprocess_run(["python3", auth_script], "docker_registry_auth", non_fatal=True)
+            helpers_subprocess.run_subprocess(["python3", auth_script], "docker_registry_auth", non_fatal=True)
             logger.info("[IMP:9][phase:platform_setup] Docker Hub auth configured")
         except Exception as e:  # noqa: EXC — non-fatal: docker auth is best-effort
             logger.warning("[IMP:7][phase:platform_setup] Docker Hub auth failed (non-fatal): %s", e)
@@ -316,7 +323,7 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
     setup_script = os.path.join(core_dir, "internal", "bootstrap", "setup-node.sh")
     if os.path.isfile(setup_script):
         try:
-            _sm._subprocess_run(["bash", setup_script], "setup_node", non_fatal=True)
+            helpers_subprocess.run_subprocess(["bash", setup_script], "setup_node", non_fatal=True)
             logger.info("[IMP:9][phase:platform_setup] setup-node.sh executed (sudoers generated)")
         except Exception as e:  # noqa: EXC — non-fatal: sudoers generation is best-effort
             logger.warning("[IMP:7][phase:platform_setup] setup-node.sh failed (non-fatal): %s", e)
@@ -327,7 +334,7 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 3. Validate sudoers (non-fatal if permission denied) ──
     try:
-        _sm._validate_sudoers()
+        helpers_validation.validate_sudoers()
         logger.info("[IMP:9][phase:platform_setup] Sudoers validated")
     except (PlatformError, PermissionError) as e:
         logger.warning("[IMP:7][phase:platform_setup] Sudoers validation (non-fatal): %s", e)
@@ -367,7 +374,7 @@ def phase_secrets_provision(core_dir: str, node_name: str, node_yaml: str) -> bo
 
     # ── 1. Decrypt AGE-encrypted secrets (FATAL on failure) ──
     try:
-        _sm._decrypt_secrets(core_dir)
+        helpers_secrets.decrypt_secrets(core_dir)
         logger.info("[IMP:9][phase:secrets_provision] Secrets decrypted successfully")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:secrets_provision] Secrets decryption FAILED — aborting: %s", e)
@@ -375,7 +382,7 @@ def phase_secrets_provision(core_dir: str, node_name: str, node_yaml: str) -> bo
 
     # ── 2. Ensure secrets.env exists + source into environ + generate autogen ──
     try:
-        _sm._ensure_secrets_exist(core_dir)
+        helpers_secrets.ensure_secrets_exist(core_dir)
         logger.info("[IMP:9][phase:secrets_provision] Secrets verified and autogen secrets generated")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:secrets_provision] Secrets verification failed — aborting: %s", e)
@@ -414,7 +421,7 @@ def phase_node_configuration(core_dir: str, node_name: str, node_yaml: str) -> b
 
     # ── 1. Verify core files delivered ──
     try:
-        _sm._verify_core_files(core_dir)
+        helpers_validation.verify_core_files(core_dir)
         logger.info("[IMP:9][phase:node_configuration] Core files verified")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:node_configuration] Core files verification FAILED: %s", e)
@@ -429,7 +436,7 @@ def phase_node_configuration(core_dir: str, node_name: str, node_yaml: str) -> b
 
     # ── 3. Validate node.yaml against schema ──
     try:
-        _sm._validate_node_yaml(node_yaml, core_dir)
+        helpers_validation.validate_node_yaml(node_yaml, core_dir)
         logger.info("[IMP:9][phase:node_configuration] node.yaml validated against schema")
     except Exception as e:  # noqa: EXC — non-fatal: schema validation is best-effort
         logger.warning("[IMP:7][phase:node_configuration] node.yaml schema validation failed (non-fatal): %s", e)
@@ -479,7 +486,7 @@ def phase_registry_auth(core_dir: str, node_name: str, node_yaml: str) -> bool:
         logger.info("[IMP:7][phase:registry_auth] GHCR_PULL_TOKEN not set — skipping ghcr auth")
     else:
         try:
-            _sm._ghcr_auth()
+            helpers_system.ghcr_auth()
             logger.info("[IMP:9][phase:registry_auth] GHCR auth successful")
         except Exception as e:  # noqa: EXC — non-fatal: ghcr auth is best-effort
             logger.warning("[IMP:7][phase:registry_auth] GHCR auth failed (non-fatal): %s", e)
@@ -492,7 +499,7 @@ def phase_registry_auth(core_dir: str, node_name: str, node_yaml: str) -> bool:
         auth_script = os.path.join(core_dir, "internal", "bootstrap", "docker_registry_auth.py")
         if os.path.isfile(auth_script):
             try:
-                _sm._subprocess_run(["python3", auth_script], "docker_registry_auth", non_fatal=True)
+                helpers_subprocess.run_subprocess(["python3", auth_script], "docker_registry_auth", non_fatal=True)
                 logger.info("[IMP:9][phase:registry_auth] Docker Hub auth configured")
             except Exception as e:  # noqa: EXC — non-fatal: docker auth is best-effort
                 logger.warning("[IMP:7][phase:registry_auth] Docker Hub auth failed (non-fatal): %s", e)
@@ -594,7 +601,7 @@ def phase_certificates(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 2. SSL provision via cert_orchestrator ──
     try:
-        _sm._ssl_provision_via_orchestrator(core_dir, node_yaml)
+        helpers_domains.ssl_provision_via_orchestrator(core_dir, node_yaml)
         logger.info("[IMP:9][phase:certificates] SSL certificates provisioned for all domains")
     except Exception as e:  # noqa: EXC — non-fatal: SSL provisioning is best-effort (S3 cache fallback)
         logger.warning("[IMP:7][phase:certificates] SSL provision failed (non-fatal): %s", e)
@@ -639,7 +646,7 @@ def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool
     deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
     if os.path.isfile(deploy_script):
         try:
-            _sm._subprocess_run(
+            helpers_subprocess.run_subprocess(
                 ["bash", deploy_script, "--skip-provision"],
                 "deploy_modules",
                 timeout=300,
@@ -654,7 +661,7 @@ def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool
 
     # ── 2. Deploy context projects ──
     try:
-        _sm._import_deploy_context(core_dir, node_name, node_yaml)
+        helpers_domains.import_deploy_context(core_dir, node_name, node_yaml)
         logger.info("[IMP:9][phase:deploy_services] Context projects deployed")
     except Exception as e:  # noqa: EXC — non-fatal: context deploy is best-effort
         logger.warning("[IMP:7][phase:deploy_services] Context deploy failed (non-fatal): %s", e)
@@ -698,7 +705,7 @@ def phase_converge_services(core_dir: str, node_name: str, node_yaml: str) -> bo
         logger.info("[IMP:8][phase:converge_services] Auto-reconcile enabled")
 
     try:
-        _sm._subprocess_run(converge_args, "converge", non_fatal=True, timeout=300)
+        helpers_subprocess.run_subprocess(converge_args, "converge", non_fatal=True, timeout=300)
         logger.info("[IMP:9][phase:converge_services] Converge completed")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][phase:converge_services] Converge failed (non-fatal): %s", e)
@@ -737,7 +744,7 @@ def phase_secrets_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── Decrypt secrets (FATAL on failure) ──
     try:
-        _sm._decrypt_secrets(core_dir)
+        helpers_secrets.decrypt_secrets(core_dir)
         logger.info("[IMP:9][phase:secrets_update] Secrets decrypted successfully (update)")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:secrets_update] Secrets decryption FAILED — aborting update: %s", e)
@@ -745,7 +752,7 @@ def phase_secrets_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # Re-source secrets into environ (same as init)
     try:
-        _sm._ensure_secrets_exist(core_dir)
+        helpers_secrets.ensure_secrets_exist(core_dir)
         logger.info("[IMP:9][phase:secrets_update] Secrets re-sourced and verified (update)")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:secrets_update] Secrets re-source FAILED — aborting update: %s", e)
@@ -778,7 +785,7 @@ def phase_node_config_update(core_dir: str, node_name: str, node_yaml: str) -> b
 
     # ── 1. Verify core delivery (FATAL) ──
     try:
-        _sm._verify_core_files(core_dir)
+        helpers_validation.verify_core_files(core_dir)
         logger.info("[IMP:9][phase:node_config_update] Core files verified for update")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.error("[IMP:10][phase:node_config_update] Core files verification FAILED: %s", e)
@@ -791,7 +798,7 @@ def phase_node_config_update(core_dir: str, node_name: str, node_yaml: str) -> b
 
     # ── 3. Validate node.yaml against schema ──
     try:
-        _sm._validate_node_yaml(node_yaml, core_dir)
+        helpers_validation.validate_node_yaml(node_yaml, core_dir)
         logger.info("[IMP:9][phase:node_config_update] node.yaml validated against schema")
     except Exception as e:  # noqa: EXC — non-fatal: schema validation is best-effort
         logger.warning("[IMP:7][phase:node_config_update] node.yaml schema validation failed (non-fatal): %s", e)
@@ -837,7 +844,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
     token = os.environ.get("GHCR_PULL_TOKEN", "")
     if token:
         try:
-            _sm._ghcr_auth()
+            helpers_system.ghcr_auth()
             logger.info("[IMP:9][phase:registry_update] GHCR auth successful")
         except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:7][phase:registry_update] GHCR auth failed (non-fatal): %s", e)
@@ -849,7 +856,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
     provision_script = os.path.join(core_dir, "internal", "provision-environment.sh")
     if os.path.isfile(provision_script):
         try:
-            _sm._subprocess_run(
+            helpers_subprocess.run_subprocess(
                 ["bash", provision_script, "--scope", "networks", "--scope", "volumes"],
                 "provision",
                 non_fatal=True,
@@ -876,7 +883,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
                 overlay_dir,
             )
             try:
-                _sm._subprocess_run(
+                helpers_subprocess.run_subprocess(
                     ["docker", "exec", "nginx", "nginx", "-s", "reload"],
                     "deliver_overlays",
                     non_fatal=True,
@@ -897,7 +904,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
     config_output = os.path.join(core_dir, "modules", "litellm", "config", "litellm-config.yml")
     if os.path.isfile(renderer_script):
         try:
-            _sm._subprocess_run(
+            helpers_subprocess.run_subprocess(
                 ["python3", renderer_script, "--output", config_output],
                 "render_litellm_config",
                 non_fatal=True,
@@ -906,7 +913,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
 
             provision_entrypoint = os.path.join(core_dir, "entrypoints", "provision-llm.sh")
             if os.path.isfile(provision_entrypoint):
-                _sm._subprocess_run(
+                helpers_subprocess.run_subprocess(
                     ["bash", provision_entrypoint],
                     "provision_llm_keys",
                     non_fatal=True,
@@ -936,7 +943,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
             os.unlink(hc_done_marker)
     elif node_yaml and os.path.isfile(node_yaml):
         try:
-            _sm._run_healthchecks(node_yaml)
+            helpers_reporting.run_healthchecks(node_yaml)
             logger.info("[IMP:9][phase:registry_update] Healthchecks completed")
         except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:7][phase:registry_update] Healthchecks failed (non-fatal): %s", e)
@@ -985,7 +992,7 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
     deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
     if os.path.isfile(deploy_script):
         try:
-            _sm._subprocess_run(
+            helpers_subprocess.run_subprocess(
                 ["bash", deploy_script, "--skip-provision"],
                 "deploy_modules",
                 timeout=300,
@@ -1000,7 +1007,7 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 2. SSL provision via cert_orchestrator ──
     try:
-        _sm._ssl_provision_via_orchestrator(core_dir, node_yaml)
+        helpers_domains.ssl_provision_via_orchestrator(core_dir, node_yaml)
         logger.info("[IMP:9][phase:deploy_update] SSL certificates provisioned")
     except Exception as e:  # noqa: EXC — non-fatal: SSL is best-effort (S3 cache fallback)
         logger.warning("[IMP:7][phase:deploy_update] SSL provision failed (non-fatal): %s", e)
@@ -1008,7 +1015,7 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
 
     # ── 3. Deploy context projects (incremental) ──
     try:
-        _sm._import_deploy_context(core_dir, node_name, node_yaml)
+        helpers_domains.import_deploy_context(core_dir, node_name, node_yaml)
         logger.info("[IMP:9][phase:deploy_update] Context projects deployed incrementally")
     except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:7][phase:deploy_update] Context deploy failed (non-fatal): %s", e)
@@ -1052,7 +1059,7 @@ def phase_converge_update(core_dir: str, node_name: str, node_yaml: str) -> bool
         logger.info("[IMP:8][phase:converge_update] Auto-reconcile enabled")
 
     try:
-        _sm._subprocess_run(converge_args, "converge", non_fatal=True, timeout=300)
+        helpers_subprocess.run_subprocess(converge_args, "converge", non_fatal=True, timeout=300)
         logger.info("[IMP:9][phase:converge_update] Converge completed (update)")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][phase:converge_update] Converge failed (non-fatal): %s", e)

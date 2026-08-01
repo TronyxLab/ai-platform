@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Docker orchestration functions extracted from deploy-modules.sh: deploy, pull, healthcheck."""
 # GREP_SUMMARY: docker-orchestrator, deploy-docker, compose-up, pre-pull, image-check, wait-readiness, healthcheck, hermes-agent, orphan-reconcile
-# STRUCTURE: ▶ _check_image_exists → deploy_docker_module [resolve_compose → build_args → hermes_special → orphan_reconcile → compose_up] → _pre_pull_images → deploy_docker_group [parallel_slot → drain → parallel_healthcheck] → wait_for_readiness [N×invoke_interface] → run_healthcheck [N×retry] → CLI dispatch
+# STRUCTURE: ▶ _check_image_exists → deploy_docker_module [resolve_compose → build_args → hermes_special → orphan_reconcile → compose_up] → pre_pull_images → deploy_docker_group [parallel_slot → drain → parallel_healthcheck] → wait_for_readiness [N×invoke_interface] → run_healthcheck [N×retry] → CLI dispatch
 # region MODULE_CONTRACT [DOMAIN(INFRA): bootstrap; CONCEPT(DOCKER): orchestration; TECH(PYTHON): subprocess+argparse+logging]
 ## @purpose  Deploy docker modules via docker compose, pre-pull images, check image existence,
 ##           wait for readiness, and run healthchecks — extracted from deploy-modules.sh.
@@ -25,7 +25,7 @@
 ##   direct Docker SDK calls would diverge from compose file semantics (profile resolution,
 ##   env-file handling, compose interpolation).
 ## @changes   2026-07-22 · W4-E1 — extracted from deploy-modules.sh deploy_docker_module,
-##   deploy_docker_group, _pre_pull_images, _check_image_exists, wait_for_readiness, run_healthcheck
+##   deploy_docker_group, pre_pull_images, _check_image_exists, wait_for_readiness, run_healthcheck
 ##   2026-07-23 · P0 fix — docker compose build before up -d for modules with build: section
 ##   (status-page served stale container after core-deploy rsync)
 ##   2026-07-24 · W2.T2.1 — added --action deploy-group CLI dispatch + handler in main()
@@ -37,10 +37,10 @@
 ## ⚠️ TRAP[DEBT] · 2026-07-22 · P2 · 5 test-side failures in test_docker_orchestrator.py (DevPlan 043-B5)
 ## · Root: mock subprocess.run returns bytes, code expects str via text=True
 ## · Impact: 5 unit-тестов падают (test_cleanup_legacy_container_found/not_found,
-##   test_deploy_docker_module_hermes_agent, test_pre_pull_images_single,
+##   test_deploy_docker_module_hermes_agent, testpre_pull_images_single,
 ##   test_reconcile_orphan_containers_with_orphan). Production-код корректен:
 ##   docker stop/rm присутствуют в _cleanup_legacy_container (L529-530),
-##   _reconcile_orphan_containers (L279-280); os._exit() в _pre_pull_images корректен
+##   _reconcile_orphan_containers (L279-280); os._exit() в pre_pull_images корректен
 ##   для forked child. P2 TypeGuard на bytes в L524-526 и L236-237 работает в production.
 ## · Fix: адаптировать моки в test_docker_orchestrator.py (DevPlan 042 Phase 4)
 ## · Non-blocking: production-код корректен, тесты требуют адаптации моков
@@ -51,8 +51,8 @@
 ##   _reconcile_orphan_containers [W:3] — pre-deploy orphan container cleanup per module
 ##   _handle_hermes_agent [W:3] — hermes-agent L1 pull/build fallback, image existence check
 ##   deploy_docker_module [W:5] — deploy single docker module: build (if build:) + compose up -d
-##   _pull_module_images [W:2] — pull images for one module (used by _pre_pull_images)
-##   _pre_pull_images [W:3] — parallel pre-pull for all docker modules with slot limit
+##   _pull_module_images [W:2] — pull images for one module (used by pre_pull_images)
+##   pre_pull_images [W:3] — parallel pre-pull for all docker modules with slot limit
 ##   deploy_docker_group [W:4] — parallel deploy with slot limit + parallel healthcheck
 ##   wait_for_readiness [W:2] — poll module readiness via invoke_module_interface
 ##   run_healthcheck [W:2] — healthcheck with retries via invoke_module_interface
@@ -861,7 +861,7 @@ def _pull_module_images(
 # endregion FUNC__pull_module_images
 
 
-# region FUNC__pre_pull_images
+# region FUNC_pre_pull_images
 ## @purpose  Parallel pre-pull of all docker module images BEFORE topo-sorted compose up.
 ##           Executes docker compose pull for each module in parallel with slot limiting.
 ##           Uses same parallel slot pattern as deploy_docker_group (subprocess PIDs via threading).
@@ -879,7 +879,7 @@ def _pull_module_images(
 ##   phase batches ALL image downloads at once, utilizing full network bandwidth.
 ##   Q: Why non-fatal? A: compose up -d already retries pull — pre-pull is optimization,
 ##   not correctness. Failing here and succeeding in up -d is harmless.
-def _pre_pull_images(
+def pre_pull_images(
     entries: list[str],
     modules_dir: str,
     secrets_env_file: str | None = None,
@@ -887,7 +887,7 @@ def _pre_pull_images(
     parallel_limit: int = DEFAULT_PARALLEL_LIMIT,
 ) -> tuple[int, int]:
     logger.info(
-        "[IMP:7][_pre_pull_images][start] Pre-pulling for %d modules (parallel: %d)",
+        "[IMP:7][pre_pull_images][start] Pre-pulling for %d modules (parallel: %d)",
         len(entries),
         parallel_limit,
     )
@@ -950,11 +950,11 @@ def _pre_pull_images(
         except ChildProcessError:  # noqa: PERF203
             pull_fail += 1
 
-    logger.info("[IMP:9][_pre_pull_images][done] Pre-pull complete: success=%d failed=%d", pull_ok, pull_fail)
+    logger.info("[IMP:9][pre_pull_images][done] Pre-pull complete: success=%d failed=%d", pull_ok, pull_fail)
     return (pull_ok, pull_fail)
 
 
-# endregion FUNC__pre_pull_images
+# endregion FUNC_pre_pull_images
 
 
 # region FUNC_deploy_docker_group
@@ -1438,7 +1438,7 @@ def main() -> int:
         if not args.module_entries:
             logger.error("[IMP:10][main][error] --module-entries required for pre-pull action")
             return 1
-        ok, fail = _pre_pull_images(
+        ok, fail = pre_pull_images(
             entries=list(args.module_entries),
             modules_dir=args.modules_dir or str(Path(__file__).resolve().parent.parent.parent / "modules"),
             secrets_env_file=args.secrets_env_file,

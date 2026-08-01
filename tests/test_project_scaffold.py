@@ -46,7 +46,8 @@ _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
 _CONVERGE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "converge.sh"
 _NODE_LIFECYCLE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
 _STATE_MACHINE_SCRIPT: pathlib.Path = (
-    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "state_machine.py"
+    # B9 T1: _ensure_projects_base переехал в lifecycle/helpers/users.py (I/O-хелперы state_machine)
+    _PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "helpers" / "users.py"
 )
 
 # converge.sh resolves node.yaml via resolve_node_yaml → NodeYaml.resolve() (DP-088/091)

@@ -1,6 +1,6 @@
 """
 # GREP_SUMMARY: test-docker-orchestrator, deploy-docker, pre-pull, image-check, wait-readiness, healthcheck, compose-up
-# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_pull_module_images [skip-build|pull] → ◇ test_pre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
+# STRUCTURE: ▶ mock subprocess.run → ◇ test_check_image_exists [found|not_found] → ◇ test_resolve_compose_file [found|missing] → ◇ test_deploy_docker_module [basic|hermes|orphan] → ◇ test_wait_for_readiness [pass|timeout] → ◇ test_run_healthcheck [pass|fail] → ◇ test_pull_module_images [skip-build|pull] → ◇ testpre_pull_images [single] → ◇ test_deploy_docker_group [single] → ⎋ LDD trajectory assert
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for docker_orchestrator.py — mock subprocess.run for docker CLI calls
 ## @scope    Tests all public and internal functions except parallel forking paths (which
@@ -581,19 +581,19 @@ def test_run_healthcheck_fail(mock_subprocess):
 
 
 # ────────────────────────────────────────────────────────────
-# region TEST__pre_pull_images (single entry, no true parallelism)
+# region TEST_pre_pull_images (single entry, no true parallelism)
 # ────────────────────────────────────────────────────────────
 
 
-# 🧪 TRAP[TEST] · Regression · Pre-pull images for 1 module via fork · Last fail: N/A · Remove if: _pre_pull_images interface changes
-def test_pre_pull_images_single(mock_subprocess, module_dir):
-    """Test _pre_pull_images with 1 module (fork dispatches to _pull_module_images)."""
+# 🧪 TRAP[TEST] · Regression · Pre-pull images for 1 module via fork · Last fail: N/A · Remove if: pre_pull_images interface changes
+def testpre_pull_images_single(mock_subprocess, module_dir):
+    """Test pre_pull_images with 1 module (fork dispatches to _pull_module_images)."""
     # Patch the per-module function at module level for child process inheritance
     original_fn = dorch._pull_module_images
     dorch._pull_module_images = mock.MagicMock(return_value=True)
 
     try:
-        ok, fail = dorch._pre_pull_images(
+        ok, fail = dorch.pre_pull_images(
             entries=["test_mod:"],
             modules_dir=module_dir,
             parallel_limit=1,
@@ -611,7 +611,7 @@ def test_pre_pull_images_single(mock_subprocess, module_dir):
         dorch._pull_module_images = original_fn
 
 
-# endregion TEST__pre_pull_images
+# endregion TEST_pre_pull_images
 
 
 # ────────────────────────────────────────────────────────────

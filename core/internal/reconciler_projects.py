@@ -146,8 +146,11 @@ def parse_node_yaml_projects(node_yaml_path: str) -> list[ProjectSpec]:
 def is_stub_project(project_dir: str) -> bool:
     """Check if ai-platform.yaml in project_dir is a GENERATED-STUB.
 
-    Reads the first line of ai-platform.yaml. Returns True if it contains
-    "GENERATED-STUB". Returns False if file missing, empty, or has real config.
+    Тонкий делегирующий wrapper над единой реализацией shared/stub_detection
+    (DevPlan 116 B9 T4, U-28) — публичный API модуля сохраняется (тесты
+    test_project_reconciler не меняют вызовы). Поведение идентично прежнему
+    локальному алгоритму: первая строка содержит "GENERATED-STUB" → True;
+    missing/empty/OSError/IndexError → False.
 
     Args:
         project_dir: Path to project directory containing ai-platform.yaml.
@@ -155,17 +158,12 @@ def is_stub_project(project_dir: str) -> bool:
     Returns:
         True if the ai-platform.yaml is a stub, False otherwise.
     """
-    ai_yaml = Path(project_dir) / "ai-platform.yaml"
-    if not ai_yaml.is_file():
-        return False
-    try:
-        first_line = ai_yaml.read_text().splitlines()[0] if ai_yaml.stat().st_size > 0 else ""
-        return "GENERATED-STUB" in first_line
-    except (OSError, IndexError):
-        return False
+    from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
+
+    return is_stub_ai_platform_yaml(Path(project_dir) / "ai-platform.yaml")
 
 
-# endregion
+# endregion FUNC_is_stub_project
 
 # ═══════════════════════════════════════════════════════════════════
 # GHCR check

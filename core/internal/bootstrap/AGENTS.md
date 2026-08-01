@@ -7,22 +7,28 @@
 ##           node setup, module deployment, healthcheck execution, idempotent state machine
 ## @scope    All scripts under core/internal/bootstrap/ — node-lifecycle.sh (thin facade),
 ##           lifecycle/state_machine.py (BootstrapPhase enum, _phase_dependency_graph,
-##           precondition_check), lifecycle/phases.py (14 phase implementations),
+##           precondition_check — оркестрация), lifecycle/state_store.py (persistence),
+##           lifecycle/cli.py (CLI/main), lifecycle/helpers/ (7 I/O-модулей),
+##           lifecycle/phases.py (14 phase implementations),
 ##           deploy-modules, setup-node, install-docker, install-tor-proxy, firewall,
-##           _topo_sort, discover_modules, remote-cmd, scp-deliver,
+##           topo_sort, discover_modules, remote-cmd, scp-deliver,
 ##           core_deliverer.py (Python Core-канал: mkdir + 5 rsync фаз, DevPlan 108)
 ## @invariants
-##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё state_machine.py. Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
-##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), _execute_phase(), _execute_grouped_phase()
-##   3. phases.py — business logic: 14 phase_*() функций, вызываемых из state_machine.py
+##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё lifecycle/cli.py (B9 T1, CS-7). Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
+##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), execute_phase(), execute_grouped_phase()
+##   3. phases.py — business logic: 14 phase_*() функций, вызываемых из state_machine.py;
+##      I/O-хелперы — lifecycle/helpers/ (односторонняя зависимость state_machine → phases → helpers, B9 T1)
 ##   4. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
 ##   (Legacy 23→14 key migration removed in DevPlan 091 Wave B — cold start only.)
 ##   5. Идемпотентность: state.json с 14 phase-ключами + content-hash для grouped-phase sub_steps
+##   6. Persistence (StepState/BootstrapState + state.json I/O) — lifecycle/state_store.py (B9 T2);
+##      CLI (build_parser/main/run_init_mode/run_update_mode) — lifecycle/cli.py
 ##   7. Артефакты: /opt/platform/core/ (core), /opt/\<context\>/platform/ (context-overlay)
 ##   8. Никаких git-операций в bootstrap — только SCP/rsync для core; git clone/pull только через ensure_context_repo() для context-overlay
 ## @rationale DevPlan 087: Consolidate 32+ steps → 14 phases with explicit dependency graph.
 ##            Eliminates 8 silent failure propagation points via precondition BLOCKS.
 ##            Adds grouped-phase sub-checkpoints with partial-failure skip semantics.
+##            DevPlan 116 B9 (U-08): SRP-декомпозиция state_machine (2284 → ~950 LOC).
 # endregion MODULE_CONTRACT
 
 # AGENTS.md — core/internal/bootstrap/
@@ -32,7 +38,7 @@
 ## Bootstrap pipeline (14 consolidated phases)
 
 ```
-node-lifecycle.sh --mode init  →  state_machine.py (BootstrapPhase enum)
+node-lifecycle.sh --mode init  →  lifecycle/cli.py → state_machine.py (BootstrapPhase enum)
 
   φ1  system-bootstrap     # packages, python3.14+deps, docker-install, tor-proxy, firewall
   φ2  user-accounts        # ssh-access, platform-user, ci-deploy-user, projects-base
@@ -44,7 +50,7 @@ node-lifecycle.sh --mode init  →  state_machine.py (BootstrapPhase enum)
   φ8  deploy-services      # deploy-modules, deploy-context
   φ8.5 converge-services   # converge (explicit separate phase)
 
-node-lifecycle.sh --mode update → state_machine.py
+node-lifecycle.sh --mode update → lifecycle/cli.py → state_machine.py
 
   φ9  secrets-update       # decrypt-secrets
   φ10 node-config-update   # read-node-yaml, verify-core
@@ -58,6 +64,7 @@ node-lifecycle.sh --mode update → state_machine.py
 При перезапуске: unchanged + done подшаги SKIP, изменившиеся EXECUTE, failed EXECUTE.
 **Precondition BLOCKS:** φ4→φ6→φ8 — если φ4 не выполнен (нет секретов), φ6 (registry-auth) и φ8 (deploy-services) блокируются с читаемой ошибкой.
 **Dependency graph:** см. `state_machine.py._phase_dependency_graph`.
+**CLI:** `lifecycle/cli.py` (build_parser/main/run_init_mode/run_update_mode); persistence — `lifecycle/state_store.py`; I/O — `lifecycle/helpers/` (B9 T1/T2).
 
 ⚠️ TRAP[BUG] · 2026-07-23 · P0 · FALSE DIAGNOSIS: webnames.ru zone_manager_unavailable ≠ DNS-01 broken
 · Symptom: webnames.ru API returns `{"result":"ERROR","details":"zone_manager_unavailable"}` for `domains_list`.
@@ -104,7 +111,7 @@ node-lifecycle.sh --mode update → state_machine.py
 network provision, docker login, затем `exec python3 deploy/deploy_orchestrator.py`.
 Вся routing-логика (PARALLEL / ORCHESTRATOR / SEQUENTIAL), деплой модулей, sudoers,
 orphan-реконсиляция и severity-based exit code {0,1,2} — в `deploy/deploy_orchestrator.py`
-(импортирует `docker_orchestrator`, `secrets_validator`, `_topo_sort`, `sudoers_generator`,
+(импортирует `docker_orchestrator`, `secrets_validator`, `topo_sort`, `sudoers_generator`,
 `orphan_reconciler`, `context_overlay`, `spool_validator` нативно — без subprocess).
 
 ### Типы модулей (из node.yaml)
@@ -116,7 +123,7 @@ orphan-реконсиляция и severity-based exit code {0,1,2} — в `depl
 ### Режимы деплоя (feature flag `DEPLOY_PARALLEL`, default=false)
 - **Последовательный** (`DEPLOY_PARALLEL=false`, обратная совместимость): for-loop по enabled-модулям:
   check-env → detect-type → `deploy_docker_module()` | `invoke_module_interface install`
-- **Параллельный** (`DEPLOY_PARALLEL=true`, DevPlan 050): `_topo_sort` (Kahn по depends_on) →
+- **Параллельный** (`DEPLOY_PARALLEL=true`, DevPlan 050): `topo_sort` (Kahn по depends_on) →
   pre-pull (parallel_limit=4) → batch-check-env → итерация по topo-группам →
   `deploy_docker_group()` (os.fork per module, content-hash skip для build-модулей) →
   system-модули sequential → маркер `/var/lib/platform/.bootstrap/.hc_done_in_deploy` (healthcheck уже выполнен внутри группы)

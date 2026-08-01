@@ -57,7 +57,7 @@ core/modules/{module}/
 name: postgres                    # без -shared суффикса
 install_type: docker              # docker | system
 description: "..."
-depends_on: [redis]               # для _topo_sort.py
+depends_on: [redis]               # для topo_sort.py
 severity: normal                  # D5: critical | normal (critical — deploy failure blocks node-update)
 interfaces:                       # массив строк — typed contract для cross-layer вызовов
   - healthcheck                  # из internal/bootstrap (healthcheck liveness/readiness)

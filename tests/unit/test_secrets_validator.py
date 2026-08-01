@@ -1,6 +1,6 @@
 """
 # GREP_SUMMARY: test_secrets_validator, check-env, charset-validation, module-metadata, batch-metadata, transitive-deps, node-yaml-parser, detect-install-type
-# STRUCTURE: ┌tmp_path + mock YAML stubs → ◇ [7 test functions] → ∋ _check_env_requires ⋙ ⊕ _validate_secret_charsets ⋙ ⊕ _get_module_severity ⋙ ⊕ _batch_module_metadata ⋙ ⊕ _expand_transitive_deps ⋙ ⊕ parse_modules_from_node_yaml ⋙ ⊕ detect_install_type → ⎋ LDD trajectory(IMP:7-10) assertions
+# STRUCTURE: ┌tmp_path + mock YAML stubs → ◇ [7 test functions] → ∋ check_env_requires ⋙ ⊕ validate_secret_charsets ⋙ ⊕ get_module_severity ⋙ ⊕ _batch_module_metadata ⋙ ⊕ _expand_transitive_deps ⋙ ⊕ parse_modules_from_node_yaml ⋙ ⊕ detect_install_type → ⎋ LDD trajectory(IMP:7-10) assertions
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for secrets_validator.py — all 7 public functions, tmp_path-based YAML fixtures, no external dependencies
 ## @scope    Direct Python import of secrets_validator module; tests each function in isolation with mock YAML files
@@ -28,12 +28,12 @@ from tests._conftest.ldd import ldd_trajectory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "deploy"))
 from secrets_validator import (
     _batch_module_metadata,
-    _check_env_requires,
     _expand_transitive_deps,
-    _get_module_severity,
-    _validate_secret_charsets,
+    check_env_requires,
     detect_install_type,
+    get_module_severity,
     parse_modules_from_node_yaml,
+    validate_secret_charsets,
 )
 
 logger = logging.getLogger(__name__)
@@ -258,283 +258,283 @@ def modules_dir_with_cycle(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test: _check_env_requires
+# Test: check_env_requires
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-# region FUNC_test_check_env_requires_all_present
+# region FUNC_testcheck_env_requires_all_present
 ## @purpose  All required env vars for postgres are set via os.environ — returns empty missing list
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires with all env vars set → empty missing list
-# · Last fail: N/A · Remove if: _check_env_requires behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: check_env_requires with all env vars set → empty missing list
+# · Last fail: N/A · Remove if: check_env_requires behavior changed
 @ldd_trajectory
-def test_check_env_requires_all_present(secrets_manifest_file, caplog, monkeypatch):
+def testcheck_env_requires_all_present(secrets_manifest_file, caplog, monkeypatch):
     """All required env vars are set — should return empty missing list."""
     monkeypatch.setenv("POSTGRES_PASSWORD", "secret123")
     monkeypatch.setenv("POSTGRES_USER", "postgres")
 
-    missing = _check_env_requires("postgres", str(secrets_manifest_file))
+    missing = check_env_requires("postgres", str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][check_env] Missing vars for postgres: %s", missing)
     assert missing == [], f"Expected no missing vars, got: {missing}"
 
 
-# endregion FUNC_test_check_env_requires_all_present
+# endregion FUNC_testcheck_env_requires_all_present
 
 
-# region FUNC_test_check_env_requires_missing
+# region FUNC_testcheck_env_requires_missing
 ## @purpose  Required env var is not set — returns list with the missing var name
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires with missing env var → returns missing list
-# · Last fail: N/A · Remove if: _check_env_requires behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: check_env_requires with missing env var → returns missing list
+# · Last fail: N/A · Remove if: check_env_requires behavior changed
 @ldd_trajectory
-def test_check_env_requires_missing(secrets_manifest_file, caplog, monkeypatch):
+def testcheck_env_requires_missing(secrets_manifest_file, caplog, monkeypatch):
     """POSTGRES_PASSWORD not set — should return missing list with it."""
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
-    missing = _check_env_requires("postgres", str(secrets_manifest_file))
+    missing = check_env_requires("postgres", str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][check_env] Missing vars for postgres: %s", missing)
     assert "POSTGRES_PASSWORD" in missing, "Expected POSTGRES_PASSWORD to be missing"
 
 
-# endregion FUNC_test_check_env_requires_missing
+# endregion FUNC_testcheck_env_requires_missing
 
 
-# region FUNC_test_check_env_requires_secrets_env_file
+# region FUNC_testcheck_env_requires_secrets_env_file
 ## @purpose  Secret is set via SECRETS_ENV_FILE (not os.environ) — should pass
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires reads from secrets.env file
-# · Last fail: N/A · Remove if: _check_env_requires behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: check_env_requires reads from secrets.env file
+# · Last fail: N/A · Remove if: check_env_requires behavior changed
 @ldd_trajectory
-def test_check_env_requires_secrets_env_file(secrets_manifest_file, caplog, monkeypatch, tmp_path):
+def testcheck_env_requires_secrets_env_file(secrets_manifest_file, caplog, monkeypatch, tmp_path):
     """Secret set in secrets.env file (not os.environ) — should pass."""
     secrets_env = tmp_path / "secrets.env"
     secrets_env.write_text("POSTGRES_PASSWORD=from_file\nPOSTGRES_USER=pgu\n")
     monkeypatch.setenv("SECRETS_ENV_FILE", str(secrets_env))
 
-    missing = _check_env_requires("postgres", str(secrets_manifest_file))
+    missing = check_env_requires("postgres", str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][check_env] Missing vars for postgres: %s", missing)
     assert missing == [], f"Expected no missing vars (from file), got: {missing}"
 
 
-# endregion FUNC_test_check_env_requires_secrets_env_file
+# endregion FUNC_testcheck_env_requires_secrets_env_file
 
 
-# region FUNC_test_check_env_requires_generated_tier
+# region FUNC_testcheck_env_requires_generated_tier
 ## @purpose  Module with generated-tier secret checked — should require the var like required
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires checks generated-tier secrets too
-# · Last fail: N/A · Remove if: _check_env_requires behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: check_env_requires checks generated-tier secrets too
+# · Last fail: N/A · Remove if: check_env_requires behavior changed
 @ldd_trajectory
-def test_check_env_requires_generated_tier(secrets_manifest_file, caplog, monkeypatch):
+def testcheck_env_requires_generated_tier(secrets_manifest_file, caplog, monkeypatch):
     """Generated-tier secret should be checked like required."""
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-test")
     monkeypatch.setenv("POSTGRES_PASSWORD", "pg-test-password")
 
-    missing = _check_env_requires("litellm", str(secrets_manifest_file))
+    missing = check_env_requires("litellm", str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][check_env] Missing vars for litellm: %s", missing)
     assert missing == [], f"Expected no missing vars for litellm, got: {missing}"
 
 
-# endregion FUNC_test_check_env_requires_generated_tier
+# endregion FUNC_testcheck_env_requires_generated_tier
 
 
-# region FUNC_test_check_env_requires_no_manifest_found
+# region FUNC_testcheck_env_requires_no_manifest_found
 ## @purpose  Manifest file does not exist — STRICT mode raises FileNotFoundError
 ##           (graceful degradation removed, DevPlan 116 T4 / U-33 / invariant 7)
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires with missing manifest → raises FileNotFoundError
+# 🧪 TRAP[TEST] · Regression · Scenario: check_env_requires with missing manifest → raises FileNotFoundError
 # · Last fail: 2026-07-31 · Remove if: strict manifest reader is superseded
 @ldd_trajectory
-def test_check_env_requires_no_manifest_found(tmp_path, caplog):
+def testcheck_env_requires_no_manifest_found(tmp_path, caplog):
     """Manifest not found — strict reader raises FileNotFoundError (fail-visible)."""
     with pytest.raises(FileNotFoundError):
-        _check_env_requires("postgres", str(tmp_path / "nonexistent.yaml"))
+        check_env_requires("postgres", str(tmp_path / "nonexistent.yaml"))
 
     logger.info("[IMP:9][test][check_env] Missing manifest raises FileNotFoundError — OK")
 
 
-# endregion FUNC_test_check_env_requires_no_manifest_found
+# endregion FUNC_testcheck_env_requires_no_manifest_found
 
 
-# region FUNC_test_check_env_requires_no_consumers_match
+# region FUNC_testcheck_env_requires_no_consumers_match
 ## @purpose  Module with no matching consumers in manifest — returns empty list
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _check_env_requires with unmatched consumer → empty
-# · Last fail: N/A · Remove if: _check_env_requires behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: check_env_requires with unmatched consumer → empty
+# · Last fail: N/A · Remove if: check_env_requires behavior changed
 @ldd_trajectory
-def test_check_env_requires_no_consumers_match(secrets_manifest_file, caplog):
+def testcheck_env_requires_no_consumers_match(secrets_manifest_file, caplog):
     """Module not in any secret's consumers list — should return empty."""
-    missing = _check_env_requires("nonexistent-module", str(secrets_manifest_file))
+    missing = check_env_requires("nonexistent-module", str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][check_env] Missing vars for nonexistent: %s", missing)
     assert missing == [], "Expected empty missing list for unmatched consumer"
 
 
-# endregion FUNC_test_check_env_requires_no_consumers_match
+# endregion FUNC_testcheck_env_requires_no_consumers_match
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test: _validate_secret_charsets
+# Test: validate_secret_charsets
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-# region FUNC_test_validate_secret_charsets_valid
+# region FUNC_testvalidate_secret_charsets_valid
 ## @purpose  All secrets with charset match their regex — returns (0, [])
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _validate_secret_charsets with valid charset values → zero failures
-# · Last fail: N/A · Remove if: _validate_secret_charsets behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: validate_secret_charsets with valid charset values → zero failures
+# · Last fail: N/A · Remove if: validate_secret_charsets behavior changed
 @ldd_trajectory
-def test_validate_secret_charsets_valid(secrets_manifest_file, caplog, monkeypatch):
+def testvalidate_secret_charsets_valid(secrets_manifest_file, caplog, monkeypatch):
     """All charset values match — should return 0 failures."""
     monkeypatch.setenv("POSTGRES_PASSWORD", "ValidPass.123")
     monkeypatch.setenv("MINIO_ROOT_USER", "admin_user")
     monkeypatch.setenv("MINIO_ROOT_PASSWORD", "Secure.Pass-123")
 
-    failed, errors = _validate_secret_charsets(str(secrets_manifest_file))
+    failed, errors = validate_secret_charsets(str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][charset] Failed=%d, errors=%s", failed, errors)
     assert failed == 0, f"Expected 0 failures, got {failed}: {errors}"
 
 
-# endregion FUNC_test_validate_secret_charsets_valid
+# endregion FUNC_testvalidate_secret_charsets_valid
 
 
-# region FUNC_test_validate_secret_charsets_invalid
+# region FUNC_testvalidate_secret_charsets_invalid
 ## @purpose  Secret value does not match charset regex — returns failure
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _validate_secret_charsets with invalid charset value → failure
-# · Last fail: N/A · Remove if: _validate_secret_charsets behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: validate_secret_charsets with invalid charset value → failure
+# · Last fail: N/A · Remove if: validate_secret_charsets behavior changed
 @ldd_trajectory
-def test_validate_secret_charsets_invalid(secrets_manifest_file, caplog, monkeypatch):
+def testvalidate_secret_charsets_invalid(secrets_manifest_file, caplog, monkeypatch):
     """Secret value with invalid characters — should return 1 failure."""
     monkeypatch.setenv("POSTGRES_PASSWORD", "invalid!!password@@")
     monkeypatch.setenv("MINIO_ROOT_USER", "admin_user")
     monkeypatch.setenv("MINIO_ROOT_PASSWORD", "Secure.Pass-123")
 
-    failed, errors = _validate_secret_charsets(str(secrets_manifest_file))
+    failed, errors = validate_secret_charsets(str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][charset] Failed=%d, errors=%s", failed, errors)
     assert failed == 1, f"Expected 1 failure, got {failed}"
     assert any("POSTGRES_PASSWORD" in e for e in errors), "Expected POSTGRES_PASSWORD in errors"
 
 
-# endregion FUNC_test_validate_secret_charsets_invalid
+# endregion FUNC_testvalidate_secret_charsets_invalid
 
 
-# region FUNC_test_validate_secret_charsets_no_charset_field
+# region FUNC_testvalidate_secret_charsets_no_charset_field
 ## @purpose  Secrets without charset field are skipped — no failures
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _validate_secret_charsets with no charset fields → zero failures
-# · Last fail: N/A · Remove if: _validate_secret_charsets behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: validate_secret_charsets with no charset fields → zero failures
+# · Last fail: N/A · Remove if: validate_secret_charsets behavior changed
 @ldd_trajectory
-def test_validate_secret_charsets_no_charset_field(secrets_manifest_file, caplog, monkeypatch):
+def testvalidate_secret_charsets_no_charset_field(secrets_manifest_file, caplog, monkeypatch):
     """POSTGRES_USER has no charset — skip. MINIO_ROOT_USER matches — pass."""
     monkeypatch.setenv("POSTGRES_USER", "postgres")
     monkeypatch.setenv("MINIO_ROOT_USER", "admin_user")
 
-    failed, errors = _validate_secret_charsets(str(secrets_manifest_file))
+    failed, errors = validate_secret_charsets(str(secrets_manifest_file))
 
     logger.info("[IMP:9][test][charset] No-charset-field: Failed=%d, errors=%s", failed, errors)
     assert failed == 0, f"Expected 0 failures, got {failed}"
 
 
-# endregion FUNC_test_validate_secret_charsets_no_charset_field
+# endregion FUNC_testvalidate_secret_charsets_no_charset_field
 
 
-# region FUNC_test_validate_secret_charsets_manifest_missing
+# region FUNC_testvalidate_secret_charsets_manifest_missing
 ## @purpose  Manifest file not found — STRICT mode raises FileNotFoundError
 ##           (graceful degradation removed, DevPlan 116 T4 / U-33 / invariant 7)
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _validate_secret_charsets with missing manifest → raises
+# 🧪 TRAP[TEST] · Regression · Scenario: validate_secret_charsets with missing manifest → raises
 # · Last fail: 2026-07-31 · Remove if: strict manifest reader is superseded
 @ldd_trajectory
-def test_validate_secret_charsets_manifest_missing(tmp_path, caplog):
+def testvalidate_secret_charsets_manifest_missing(tmp_path, caplog):
     """Manifest not found — strict reader raises FileNotFoundError (fail-visible)."""
     with pytest.raises(FileNotFoundError):
-        _validate_secret_charsets(str(tmp_path / "nonexistent.yaml"))
+        validate_secret_charsets(str(tmp_path / "nonexistent.yaml"))
 
     logger.info("[IMP:9][test][charset] Missing manifest raises FileNotFoundError — OK")
 
 
-# endregion FUNC_test_validate_secret_charsets_manifest_missing
+# endregion FUNC_testvalidate_secret_charsets_manifest_missing
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test: _get_module_severity
+# Test: get_module_severity
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-# region FUNC_test_get_module_severity_critical
+# region FUNC_testget_module_severity_critical
 ## @purpose  module.yaml with severity: critical returns "critical"
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _get_module_severity returns critical from yaml
-# · Last fail: N/A · Remove if: _get_module_severity behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: get_module_severity returns critical from yaml
+# · Last fail: N/A · Remove if: get_module_severity behavior changed
 @ldd_trajectory
-def test_get_module_severity_critical(module_yaml_file, caplog):
+def testget_module_severity_critical(module_yaml_file, caplog):
     """severity: critical → returns 'critical'."""
-    sev = _get_module_severity(str(module_yaml_file))
+    sev = get_module_severity(str(module_yaml_file))
     logger.info("[IMP:9][test][severity] Value=%s", sev)
     assert sev == "critical", f"Expected 'critical', got {sev!r}"
 
 
-# endregion FUNC_test_get_module_severity_critical
+# endregion FUNC_testget_module_severity_critical
 
 
-# region FUNC_test_get_module_severity_warn
+# region FUNC_testget_module_severity_warn
 ## @purpose  module.yaml with severity: warn returns "warn"
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _get_module_severity returns warn from yaml
-# · Last fail: N/A · Remove if: _get_module_severity behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: get_module_severity returns warn from yaml
+# · Last fail: N/A · Remove if: get_module_severity behavior changed
 @ldd_trajectory
-def test_get_module_severity_warn(tmp_path, caplog):
+def testget_module_severity_warn(tmp_path, caplog):
     """severity: warn in module.yaml → returns 'warn'."""
     yaml_file = tmp_path / "module.yaml"
     yaml_file.write_text(SAMPLE_MODULE_YAML_WARN)
 
-    sev = _get_module_severity(str(yaml_file))
+    sev = get_module_severity(str(yaml_file))
     logger.info("[IMP:9][test][severity] Value=%s", sev)
     assert sev == "warn", f"Expected 'warn', got {sev!r}"
 
 
-# endregion FUNC_test_get_module_severity_warn
+# endregion FUNC_testget_module_severity_warn
 
 
-# region FUNC_test_get_module_severity_default
+# region FUNC_testget_module_severity_default
 ## @purpose  module.yaml without severity field defaults to "warn"
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _get_module_severity defaults to warn when absent
-# · Last fail: N/A · Remove if: _get_module_severity behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: get_module_severity defaults to warn when absent
+# · Last fail: N/A · Remove if: get_module_severity behavior changed
 @ldd_trajectory
-def test_get_module_severity_default(tmp_path, caplog):
+def testget_module_severity_default(tmp_path, caplog):
     """No severity field → defaults to 'warn'."""
     yaml_file = tmp_path / "module.yaml"
     yaml_file.write_text(SAMPLE_MODULE_YAML_NO_SEVERITY)
 
-    sev = _get_module_severity(str(yaml_file))
+    sev = get_module_severity(str(yaml_file))
     logger.info("[IMP:9][test][severity] Default value=%s", sev)
     assert sev == "warn", f"Expected default 'warn', got {sev!r}"
 
 
-# endregion FUNC_test_get_module_severity_default
+# endregion FUNC_testget_module_severity_default
 
 
-# region FUNC_test_get_module_severity_file_not_found
+# region FUNC_testget_module_severity_file_not_found
 ## @purpose  module.yaml not found — returns "warn" (graceful degradation)
 ## @complexity 1
-# 🧪 TRAP[TEST] · Regression · Scenario: _get_module_severity with missing file → default warn
-# · Last fail: N/A · Remove if: _get_module_severity behavior changed
+# 🧪 TRAP[TEST] · Regression · Scenario: get_module_severity with missing file → default warn
+# · Last fail: N/A · Remove if: get_module_severity behavior changed
 @ldd_trajectory
-def test_get_module_severity_file_not_found(tmp_path, caplog):
+def testget_module_severity_file_not_found(tmp_path, caplog):
     """File not found → returns default 'warn'."""
-    sev = _get_module_severity(str(tmp_path / "nonexistent.yaml"))
+    sev = get_module_severity(str(tmp_path / "nonexistent.yaml"))
     logger.info("[IMP:9][test][severity] Not-found default=%s", sev)
     assert sev == "warn"
 
 
-# endregion FUNC_test_get_module_severity_file_not_found
+# endregion FUNC_testget_module_severity_file_not_found
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

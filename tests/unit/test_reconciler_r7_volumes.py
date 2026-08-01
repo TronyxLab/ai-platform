@@ -31,6 +31,8 @@ _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal
 sys.path.insert(0, str(_MODULE_DIR))
 import reconciler
 
+import core.internal.bootstrap.converge.infra as infra
+
 # ═══════════════════════════════════════════════════════════════════
 # region Fixtures
 # ═══════════════════════════════════════════════════════════════════
@@ -39,9 +41,9 @@ import reconciler
 @pytest.fixture
 def reset_state():
     """Reset reconciler module state before each test."""
-    reconciler._reset_state()
-    reconciler._node_name = "test-node"
-    reconciler._core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
+    infra.reset_state()
+    infra.node_name = "test-node"
+    infra.core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
 
 
 @pytest.fixture
@@ -162,7 +164,7 @@ def test_reconcile_volumes_exist(tmp_path, caplog, node_yaml_with_modules, compo
     logger.info("[IMP:9][test] R7 volumes-exist happy path — all volumes present")
 
     # Set reconciler core_dir so modules path resolves
-    reconciler._core_dir = str(Path(mock_modules_dir).parent)  # tmp_path which contains modules/
+    infra.core_dir = str(Path(mock_modules_dir).parent)  # tmp_path which contains modules/
 
     volume_inspect_calls = []
 
@@ -203,7 +205,7 @@ def test_reconcile_volumes_missing(tmp_path, caplog, node_yaml_with_modules, com
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] R7 volume-missing detect-only — warn, no create")
 
-    reconciler._core_dir = str(Path(mock_modules_dir).parent)
+    infra.core_dir = str(Path(mock_modules_dir).parent)
 
     volume_create_calls = []
 
@@ -226,7 +228,7 @@ def test_reconcile_volumes_missing(tmp_path, caplog, node_yaml_with_modules, com
     assert entry["unit"] == "R7"
     assert entry["status"] == "warn"
     assert len(volume_create_calls) == 0, "R7 is detect-only — MUST NOT create volumes (O7 invariant)"
-    assert not reconciler._has_errors, "Missing volumes should be warning, not error"
+    assert not infra.has_errors, "Missing volumes should be warning, not error"
 
 
 # endregion FUNC_test_reconcile_volumes_missing
@@ -244,7 +246,7 @@ def test_reconcile_volumes_bind_mount_excluded(tmp_path, caplog, node_yaml_with_
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] R7 bind-mount exclusion — O7 invariant")
 
-    reconciler._core_dir = str(Path(mock_modules_dir).parent)
+    infra.core_dir = str(Path(mock_modules_dir).parent)
 
     # Build a compose config that has ONLY bind mounts (no named volumes)
     bind_only_config = json.dumps(

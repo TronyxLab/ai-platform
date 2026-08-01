@@ -42,6 +42,14 @@ _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal
 sys.path.insert(0, str(_MODULE_DIR))
 import reconciler
 
+import core.internal.bootstrap.converge.audit as _converge_audit
+import core.internal.bootstrap.converge.infra as infra
+import core.internal.bootstrap.converge.networks as _converge_networks
+import core.internal.bootstrap.converge.projects as _converge_projects
+import core.internal.bootstrap.converge.vhosts as _converge_vhosts
+from core.internal.bootstrap.converge.projects import parse_projects_yaml as _converge_parse_projects_yaml
+from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
+
 # Re-export for fixture cleanups
 MODULE = reconciler
 
@@ -54,9 +62,9 @@ MODULE = reconciler
 @pytest.fixture
 def reset_state():
     """Reset reconciler module state before each test."""
-    reconciler._reset_state()
-    reconciler._node_name = "test-node"
-    reconciler._core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
+    infra.reset_state()
+    infra.node_name = "test-node"
+    infra.core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
     yield
 
 
@@ -293,8 +301,8 @@ def test_reconcile_audit_log_symlink_dir_fail(tmp_path, monkeypatch, caplog):
     fake_dir.mkdir(parents=True)
     fake_link.symlink_to(fake_dir)
 
-    reconciler.AUDIT_LOG_DIR = str(fake_link)
-    reconciler.AUDIT_LOG_FILE = str(fake_link / "audit.log")
+    _converge_audit.AUDIT_LOG_DIR = str(fake_link)
+    _converge_audit.AUDIT_LOG_FILE = str(fake_link / "audit.log")
 
     entry = reconciler.reconcile_audit_log(str(tmp_path), dry_run=False, report_only=False)
 
@@ -320,8 +328,8 @@ def test_reconcile_audit_log_missing_file(tmp_path, monkeypatch, caplog):
     log_dir = tmp_path / "var" / "log" / "platform"
     log_dir.mkdir(parents=True)
 
-    reconciler.AUDIT_LOG_DIR = str(log_dir)
-    reconciler.AUDIT_LOG_FILE = str(log_dir / "audit.log")
+    _converge_audit.AUDIT_LOG_DIR = str(log_dir)
+    _converge_audit.AUDIT_LOG_FILE = str(log_dir / "audit.log")
 
     entry = reconciler.reconcile_audit_log(str(tmp_path), dry_run=False, report_only=False)
 
@@ -361,15 +369,15 @@ def test_reconcile_audit_log_converged(tmp_path, monkeypatch, caplog, mock_subpr
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ci-deploy adm docker\n", stderr="")
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    reconciler.AUDIT_LOG_DIR = str(log_dir)
-    reconciler.AUDIT_LOG_FILE = str(audit_file)
+    _converge_audit.AUDIT_LOG_DIR = str(log_dir)
+    _converge_audit.AUDIT_LOG_FILE = str(audit_file)
 
     with patch.object(subprocess, "run", side_effect=stat_mock):
         entry = reconciler.reconcile_audit_log(str(tmp_path), dry_run=False, report_only=False)
 
     assert entry["unit"] == "R2"
     # The entry may be "converged" or "warn" — we check that no errors were set
-    assert not reconciler._has_errors
+    assert not infra.has_errors
 
 
 # endregion FUNC_test_reconcile_audit_log_converged
@@ -391,8 +399,8 @@ def test_reconcile_audit_log_ci_deploy_group(tmp_path, monkeypatch, caplog):
     audit_file = log_dir / "audit.log"
     audit_file.write_text("")
 
-    reconciler.AUDIT_LOG_DIR = str(log_dir)
-    reconciler.AUDIT_LOG_FILE = str(audit_file)
+    _converge_audit.AUDIT_LOG_DIR = str(log_dir)
+    _converge_audit.AUDIT_LOG_FILE = str(audit_file)
 
     usermod_called = []
 
@@ -438,7 +446,7 @@ def test_is_stub_true(tmp_path, caplog):
     logger.info("[IMP:9][test] _is_stub positive detection")
     stub_file = tmp_path / "ai-platform.yaml"
     stub_file.write_text("# GENERATED-STUB by converge\nproject: myapp\nservice: myapp\n")
-    assert reconciler._is_stub(str(stub_file)) is True
+    assert is_stub_ai_platform_yaml(str(stub_file)) is True
 
 
 # endregion FUNC_test_is_stub_true
@@ -456,7 +464,7 @@ def test_is_stub_false(tmp_path, caplog):
     logger.info("[IMP:9][test] _is_stub negative detection")
     real_file = tmp_path / "ai-platform.yaml"
     real_file.write_text("project: myapp\nservice: myapp\ndomain: myapp.example.com\n")
-    assert reconciler._is_stub(str(real_file)) is False
+    assert is_stub_ai_platform_yaml(str(real_file)) is False
 
 
 # endregion FUNC_test_is_stub_false
@@ -473,7 +481,7 @@ def test_is_stub_missing(tmp_path, caplog):
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] _is_stub missing-file")
     missing = str(tmp_path / "nonexistent.yaml")
-    assert reconciler._is_stub(missing) is False
+    assert is_stub_ai_platform_yaml(missing) is False
 
 
 # endregion FUNC_test_is_stub_missing
@@ -527,10 +535,10 @@ projects:
     # Monkeypatch PROJECTS_BASE to a tmp_path subdirectory
     projects_base = tmp_path / "projects"
     projects_base.mkdir()
-    reconciler.PROJECTS_BASE = str(projects_base)
+    _converge_projects.PROJECTS_BASE = str(projects_base)
 
     # Set _core_dir for gen-env-platform.sh fallback
-    reconciler._core_dir = str(tmp_path)
+    infra.core_dir = str(tmp_path)
 
     entry = reconciler.reconcile_projects(str(yaml_path), dry_run=False, report_only=False)
 
@@ -568,14 +576,14 @@ projects:
 
     projects_base = tmp_path / "projects"
     projects_base.mkdir()
-    reconciler.PROJECTS_BASE = str(projects_base)
+    _converge_projects.PROJECTS_BASE = str(projects_base)
 
     entry = reconciler.reconcile_projects(str(yaml_path), dry_run=False, report_only=False)
 
     assert entry["unit"] == "R3"
     # The unit should have errors
-    assert reconciler._has_errors
-    assert reconciler._exit_code >= 2
+    assert infra.has_errors
+    assert infra.exit_code >= 2
 
 
 # endregion FUNC_test_reconcile_projects_invalid_name
@@ -601,7 +609,7 @@ projects:
 
     projects_base = tmp_path / "projects"
     projects_base.mkdir()
-    reconciler.PROJECTS_BASE = str(projects_base)
+    _converge_projects.PROJECTS_BASE = str(projects_base)
 
     entry = reconciler.reconcile_projects(str(yaml_path), dry_run=True, report_only=False)
 
@@ -692,9 +700,9 @@ def test_reconcile_networks_create_proxy_net(tmp_path, caplog):
         entry = reconciler.reconcile_networks(str(yaml_path), dry_run=False, report_only=False)
 
     assert entry["unit"] == "R4"
-    assert reconciler._has_warnings or not reconciler._has_errors
+    assert infra.has_warnings or not infra.has_errors
     assert len(create_called) > 0, "docker network create should have been called"
-    assert reconciler.PROXY_NET in " ".join(create_called[0])
+    assert _converge_networks.PROXY_NET in " ".join(create_called[0])
 
 
 # endregion FUNC_test_reconcile_networks_create_proxy_net
@@ -765,7 +773,7 @@ def test_detect_hosts_drift_unreadable(tmp_path, caplog, monkeypatch):
     logger.info("[IMP:9][test] R5 unreadable hosts — warn-path")
 
     # Monkeypatch HOSTS_FILE to a nonexistent path
-    reconciler.HOSTS_FILE = str(tmp_path / "nonexistent_hosts")
+    _converge_vhosts.HOSTS_FILE = str(tmp_path / "nonexistent_hosts")
 
     entry = reconciler.detect_hosts_drift(str(tmp_path))
 
@@ -790,7 +798,7 @@ def test_detect_hosts_drift_found(tmp_path, caplog, monkeypatch):
     # Create a fake /etc/hosts with a stale entry
     hosts_file = tmp_path / "hosts"
     hosts_file.write_text("127.0.0.1 localhost\n192.168.1.1 myapp.example.com myapp\n")
-    reconciler.HOSTS_FILE = str(hosts_file)
+    _converge_vhosts.HOSTS_FILE = str(hosts_file)
 
     # Create node.yaml with project name "myapp"
     yaml_path = tmp_path / "node.yaml"
@@ -804,8 +812,8 @@ projects:
     entry = reconciler.detect_hosts_drift(str(yaml_path))
 
     assert entry["unit"] == "R5"
-    assert reconciler._has_warnings
-    assert reconciler._exit_code >= 1
+    assert infra.has_warnings
+    assert infra.exit_code >= 1
 
 
 # endregion FUNC_test_detect_hosts_drift_found
@@ -825,7 +833,7 @@ def test_detect_hosts_drift_clean(tmp_path, caplog, monkeypatch):
     # Clean hosts file
     hosts_file = tmp_path / "hosts"
     hosts_file.write_text("127.0.0.1 localhost\n::1 localhost\n")
-    reconciler.HOSTS_FILE = str(hosts_file)
+    _converge_vhosts.HOSTS_FILE = str(hosts_file)
 
     yaml_path = tmp_path / "node.yaml"
     yaml_content = """
@@ -894,7 +902,7 @@ projects:
 
     assert entry["unit"] == "R6"
     # The function should have skipped nginx -t but still checked vhost files
-    assert not reconciler._has_errors
+    assert not infra.has_errors
 
 
 # endregion FUNC_test_verify_vhosts_no_nginx
@@ -949,7 +957,7 @@ projects:
 
     assert entry["unit"] == "R6"
     # Should have found orphan
-    orphan_reports = [d for d in reconciler._drifts if "Orphan" in d.get("detail", "")]
+    orphan_reports = [d for d in infra.drifts if "Orphan" in d.get("detail", "")]
     assert len(orphan_reports) > 0, "Orphan vhost should have been detected"
 
 
@@ -1006,7 +1014,7 @@ projects:
         )
 
     assert entry["unit"] == "R6"
-    assert not reconciler._has_errors, "Should have no errors for all-ok case"
+    assert not infra.has_errors, "Should have no errors for all-ok case"
     assert len(nginx_test_called) > 0, "nginx -t should have been called"
 
 
@@ -1030,21 +1038,21 @@ def test_unit_enabled_filter(caplog):
     logger.info("[IMP:9][test] _unit_enabled filter semantics")
 
     # Empty filter → all enabled
-    assert reconciler._unit_enabled("", "R1") is True
-    assert reconciler._unit_enabled("", "R6") is True
+    assert infra.unit_enabled("", "R1") is True
+    assert infra.unit_enabled("", "R6") is True
 
     # Specific filter → only matching
-    assert reconciler._unit_enabled("R1,R3", "R1") is True
-    assert reconciler._unit_enabled("R1,R3", "R3") is True
-    assert reconciler._unit_enabled("R1,R3", "R2") is False
-    assert reconciler._unit_enabled("R1,R3", "R6") is False
+    assert infra.unit_enabled("R1,R3", "R1") is True
+    assert infra.unit_enabled("R1,R3", "R3") is True
+    assert infra.unit_enabled("R1,R3", "R2") is False
+    assert infra.unit_enabled("R1,R3", "R6") is False
 
     # Single unit
-    assert reconciler._unit_enabled("R3", "R3") is True
-    assert reconciler._unit_enabled("R3", "R1") is False
+    assert infra.unit_enabled("R3", "R3") is True
+    assert infra.unit_enabled("R3", "R1") is False
 
     # With whitespace
-    assert reconciler._unit_enabled("R1, R3", "R3") is True
+    assert infra.unit_enabled("R1, R3", "R3") is True
 
 
 # endregion FUNC_test_unit_enabled_filter
@@ -1075,7 +1083,7 @@ projects:
 """
     yaml_path.write_text(yaml_content)
 
-    projects = reconciler._parse_projects_yaml(str(yaml_path))
+    projects = _converge_parse_projects_yaml(str(yaml_path))
     assert len(projects) == 2
 
     # Dict entry with domain
@@ -1104,7 +1112,7 @@ def test_parse_projects_yaml_str_form_rejected(tmp_path, caplog):
     yaml_path = tmp_path / "node.yaml"
     yaml_path.write_text("projects:\n  - simple-project\n")
 
-    projects = reconciler._parse_projects_yaml(str(yaml_path))
+    projects = _converge_parse_projects_yaml(str(yaml_path))
     assert projects == [], "str-form project entries must be rejected (fail-fast D3)"
 
     logger.critical("[IMP:9][test] _parse_projects_yaml str-form rejected → [] — OK")
@@ -1128,10 +1136,10 @@ def test_exit_code_0(caplog):
     """Exit code: no errors, no warnings → exit_code=0."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] exit-code 0")
-    reconciler._reset_state()
-    assert reconciler._exit_code == 0
-    assert not reconciler._has_warnings
-    assert not reconciler._has_errors
+    infra.reset_state()
+    assert infra.exit_code == 0
+    assert not infra.has_warnings
+    assert not infra.has_errors
 
 
 # endregion FUNC_test_exit_code_0
@@ -1147,11 +1155,11 @@ def test_exit_code_1(caplog):
     """Exit code: warnings set → exit_code=1."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] exit-code 1")
-    reconciler._reset_state()
-    reconciler._set_exit(1)
-    assert reconciler._exit_code == 1
-    assert reconciler._has_warnings
-    assert not reconciler._has_errors
+    infra.reset_state()
+    infra.set_exit(1)
+    assert infra.exit_code == 1
+    assert infra.has_warnings
+    assert not infra.has_errors
 
 
 # endregion FUNC_test_exit_code_1
@@ -1167,11 +1175,11 @@ def test_exit_code_2(caplog):
     """Exit code: errors set → exit_code=2."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] exit-code 2")
-    reconciler._reset_state()
-    reconciler._set_exit(2)
-    assert reconciler._exit_code == 2
-    assert not reconciler._has_warnings
-    assert reconciler._has_errors
+    infra.reset_state()
+    infra.set_exit(2)
+    assert infra.exit_code == 2
+    assert not infra.has_warnings
+    assert infra.has_errors
 
 
 # endregion FUNC_test_exit_code_2
@@ -1187,12 +1195,12 @@ def test_exit_code_2_overrides_1(caplog):
     """Exit code: warning then error → exit_code=2 (errors take precedence)."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] exit-code precedence")
-    reconciler._reset_state()
-    reconciler._set_exit(1)  # warning
-    reconciler._set_exit(2)  # error → overrides
-    assert reconciler._exit_code == 2
-    assert reconciler._has_warnings  # Warnings flag remains
-    assert reconciler._has_errors  # Errors flag is set
+    infra.reset_state()
+    infra.set_exit(1)  # warning
+    infra.set_exit(2)  # error → overrides
+    assert infra.exit_code == 2
+    assert infra.has_warnings  # Warnings flag remains
+    assert infra.has_errors  # Errors flag is set
 
 
 # endregion FUNC_test_exit_code_2_overrides_1
@@ -1213,14 +1221,14 @@ def test_report_emit_format(caplog):
     """report_emit: produces valid JSON with correct schema."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] report_emit schema")
-    reconciler._reset_state()
-    reconciler._node_name = "test-node"
+    infra.reset_state()
+    infra.node_name = "test-node"
 
     # Add some drifts
-    reconciler.report_add("R1", "skipped", "All scripts already executable")
-    reconciler.report_add("R3", "mutated", "2 project items created")
+    infra.report_add("R1", "skipped", "All scripts already executable")
+    infra.report_add("R3", "mutated", "2 project items created")
 
-    report_json = reconciler.report_emit()
+    report_json = infra.report_emit()
     report = json.loads(report_json)
 
     # Schema validation
@@ -1248,11 +1256,11 @@ def test_report_emit_errors_status(caplog):
     """report_emit: errors set → status='errors'."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] report_emit errors status")
-    reconciler._reset_state()
-    reconciler._node_name = "test-node"
-    reconciler._set_exit(2)
+    infra.reset_state()
+    infra.node_name = "test-node"
+    infra.set_exit(2)
 
-    report_json = reconciler.report_emit()
+    report_json = infra.report_emit()
     report = json.loads(report_json)
     assert report["exit_code"] == 2
     assert report["status"] == "errors"
@@ -1271,11 +1279,11 @@ def test_report_emit_warnings_status(caplog):
     """report_emit: warnings set → status='mutations_applied'."""
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] report_emit warnings status")
-    reconciler._reset_state()
-    reconciler._node_name = "test-node"
-    reconciler._set_exit(1)
+    infra.reset_state()
+    infra.node_name = "test-node"
+    infra.set_exit(1)
 
-    report_json = reconciler.report_emit()
+    report_json = infra.report_emit()
     report = json.loads(report_json)
     assert report["exit_code"] == 1
     assert report["status"] == "mutations_applied"

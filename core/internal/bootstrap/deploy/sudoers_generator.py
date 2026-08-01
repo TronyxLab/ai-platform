@@ -21,7 +21,7 @@
 ##            Native import of template_engine (DevPlan 094) removes the last
 ##            subprocess call to the shell wrapper — in-process render, no temp-file dance.
 ## @changes
-##   2026-07-22 · Created from deploy-modules.sh _render_sudoers_rules, generate_module_sudoers, _batch_generate_sudoers
+##   2026-07-22 · Created from deploy-modules.sh render_sudoers_rules, generate_module_sudoers, batch_generate_sudoers
 ##   2026-07-31 · DevPlan 094 Wave 2.B: subprocess bash wrapper → native template_engine.render_template
 # endregion MODULE_CONTRACT
 
@@ -210,7 +210,7 @@ def _parse_rendered_lines(rendered_text: str) -> list[str]:
 # ── Public API ──────────────────────────────────────────────────────────────
 
 
-def _render_sudoers_rules(
+def render_sudoers_rules(
     module_name: str,
     modules_dir: Path,
     templates_dir: Path,
@@ -230,7 +230,7 @@ def _render_sudoers_rules(
     @param platform_root: PLATFORM_ROOT value.
     @returns: List of sudoers rule strings. Empty list on failure.
     """
-    # region FUNC__render_sudoers_rules
+    # region FUNC_render_sudoers_rules
     ## @purpose  Render + parse template into sudoers rules, no I/O write
     ## @io       module_name, modules_dir, templates_dir, platform_root → List[str]
     ## @complexity O(1) — single template render + parse
@@ -238,11 +238,11 @@ def _render_sudoers_rules(
     ##   - Does NOT validate with visudo
     ##   - Does NOT write to /etc/sudoers.d/
     ##   - Returns empty list on render failure (caller must handle)
-    logger.info("[IMP:8][_render_sudoers_rules] START module=%s", module_name)
+    logger.info("[IMP:8][render_sudoers_rules] START module=%s", module_name)
 
     rendered_text = _render_template(module_name, templates_dir, platform_root)
     if rendered_text is None:
-        logger.warning("[IMP:9][_render_sudoers_rules] Template render returned None for %s", module_name)
+        logger.warning("[IMP:9][render_sudoers_rules] Template render returned None for %s", module_name)
         return []
 
     rules = _parse_rendered_lines(rendered_text)
@@ -255,12 +255,12 @@ def _render_sudoers_rules(
         resolved_rules.append(resolved)
 
     logger.info(
-        "[IMP:9][_render_sudoers_rules] DONE module=%s count=%d",
+        "[IMP:9][render_sudoers_rules] DONE module=%s count=%d",
         module_name,
         len(resolved_rules),
     )
     return resolved_rules
-    # endregion FUNC__render_sudoers_rules
+    # endregion FUNC_render_sudoers_rules
 
 
 def generate_module_sudoers(
@@ -293,7 +293,7 @@ def generate_module_sudoers(
 
     sudoers_file = Path(f"/etc/sudoers.d/platform-{module_name}")
 
-    rules = _render_sudoers_rules(module_name, modules_dir, templates_dir, platform_root)
+    rules = render_sudoers_rules(module_name, modules_dir, templates_dir, platform_root)
     if not rules:
         logger.warning("[IMP:9][generate_module_sudoers] No rules generated for %s", module_name)
         return False
@@ -432,7 +432,7 @@ def _validate_with_visudo(tmp_path: str) -> bool:
     # endregion FUNC__validate_with_visudo
 
 
-def _batch_generate_sudoers(
+def batch_generate_sudoers(
     module_names: list[str],
     modules_dir: Path,
     templates_dir: Path,
@@ -441,7 +441,7 @@ def _batch_generate_sudoers(
     """
     Generate a single /etc/sudoers.d/platform-modules file for ALL modules.
 
-    Collects rules from _render_sudoers_rules() for each module, validates once
+    Collects rules from render_sudoers_rules() for each module, validates once
     with visudo -c, and writes atomically.
 
     @param module_names: List of module names.
@@ -450,7 +450,7 @@ def _batch_generate_sudoers(
     @param platform_root: PLATFORM_ROOT value.
     @returns: True if batch file was written and validated, False otherwise.
     """
-    # region FUNC__batch_generate_sudoers
+    # region FUNC_batch_generate_sudoers
     ## @purpose  Batch all-modules sudoers generation (one file, one visudo validation)
     ## @io       module_names: List[str], modules_dir, templates_dir, platform_root → bool
     ## @complexity O(n) where n = number of modules (n template renders + 1 visudo)
@@ -459,11 +459,11 @@ def _batch_generate_sudoers(
     ##   - Individual module render failures are tolerated (collected with 'or true')
     ##   - Single visudo validation for the whole batch
     if not module_names:
-        logger.info("[IMP:9][_batch_generate_sudoers] No modules — skipping")
+        logger.info("[IMP:9][batch_generate_sudoers] No modules — skipping")
         return True
 
     logger.info(
-        "[IMP:8][_batch_generate_sudoers] START: generating batch sudoers for %d modules",
+        "[IMP:8][batch_generate_sudoers] START: generating batch sudoers for %d modules",
         len(module_names),
     )
 
@@ -471,28 +471,28 @@ def _batch_generate_sudoers(
     all_rules: list[str] = []
 
     for mod_name in module_names:
-        rules = _render_sudoers_rules(mod_name, modules_dir, templates_dir, platform_root)
+        rules = render_sudoers_rules(mod_name, modules_dir, templates_dir, platform_root)
         if rules:
             all_rules.extend(rules)
-            logger.debug("[IMP:7][_batch_generate_sudoers] Module %s: %d rules", mod_name, len(rules))
+            logger.debug("[IMP:7][batch_generate_sudoers] Module %s: %d rules", mod_name, len(rules))
         else:
             logger.info(
-                "[IMP:8][_batch_generate_sudoers] Module %s: no rules (render skipped or empty)",
+                "[IMP:8][batch_generate_sudoers] Module %s: no rules (render skipped or empty)",
                 mod_name,
             )
 
     if not all_rules:
-        logger.warning("[IMP:9][_batch_generate_sudoers] No rules collected from any module")
+        logger.warning("[IMP:9][batch_generate_sudoers] No rules collected from any module")
         return False
 
-    logger.info("[IMP:8][_batch_generate_sudoers] Total rules: %d", len(all_rules))
+    logger.info("[IMP:8][batch_generate_sudoers] Total rules: %d", len(all_rules))
     success = _write_sudoers_file(target_path, all_rules, "platform-modules")
     if success:
-        logger.info("[IMP:9][_batch_generate_sudoers] DONE: batch sudoers generated for %d modules", len(module_names))
+        logger.info("[IMP:9][batch_generate_sudoers] DONE: batch sudoers generated for %d modules", len(module_names))
     else:
-        logger.error("[IMP:9][_batch_generate_sudoers] FAILED: batch sudoers write failed")
+        logger.error("[IMP:9][batch_generate_sudoers] FAILED: batch sudoers write failed")
     return success
-    # endregion FUNC__batch_generate_sudoers
+    # endregion FUNC_batch_generate_sudoers
 
 
 # ── CLI Entrypoint ──────────────────────────────────────────────────────────
@@ -581,7 +581,7 @@ def main() -> int:
                 platform_root,
             )
         else:
-            rules = _render_sudoers_rules(
+            rules = render_sudoers_rules(
                 args.module_name,
                 modules_dir,
                 templates_dir,
@@ -597,7 +597,7 @@ def main() -> int:
             return 1
 
         module_names = [m.strip() for m in args.module_names.split(",") if m.strip()]
-        success = _batch_generate_sudoers(
+        success = batch_generate_sudoers(
             module_names,
             modules_dir,
             templates_dir,

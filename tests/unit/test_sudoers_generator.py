@@ -3,8 +3,8 @@
 # STRUCTURE: ┌6 test scenarios┐ → ◇ role→username mapping → ◇ rendered line parsing → ◇ template render mock → ◇ visudo validation → ◇ write sudoers file → ◇ batch generation
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/bootstrap/deploy/sudoers_generator.py
-## @scope    Tests: _map_role_to_username, _parse_rendered_lines, _render_sudoers_rules,
-##           _validate_with_visudo, _write_sudoers_file, generate_module_sudoers, _batch_generate_sudoers
+## @scope    Tests: _map_role_to_username, _parse_rendered_lines, render_sudoers_rules,
+##           _validate_with_visudo, _write_sudoers_file, generate_module_sudoers, batch_generate_sudoers
 ## @invariants
 ##   - subprocess.run is mocked for template render and visudo calls
 ##   - temp files use tmp_path fixture (no hardcoded paths)
@@ -25,13 +25,13 @@ import pytest
 # Module under test
 from core.internal.bootstrap.deploy.sudoers_generator import (
     _MAKE_BIN,
-    _batch_generate_sudoers,
     _map_role_to_username,
     _parse_rendered_lines,
-    _render_sudoers_rules,
     _validate_with_visudo,
     _write_sudoers_file,
+    batch_generate_sudoers,
     generate_module_sudoers,
+    render_sudoers_rules,
 )
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -272,18 +272,18 @@ owner make:valid /path/Makefile
     _assert_ldd_trajectory(caplog)
 
 
-# ── Tests: _render_sudoers_rules ────────────────────────────────────────────
+# ── Tests: render_sudoers_rules ────────────────────────────────────────────
 
 
-# 🧪 TRAP[TEST] · Regression: render rules with mock template · Scenario: mock _render_template → parsed + resolved rules · Last fail: N/A · Remove if: _render_sudoers_rules signature changes
-def test_render_sudoers_rules(
+# 🧪 TRAP[TEST] · Regression: render rules with mock template · Scenario: mock _render_template → parsed + resolved rules · Last fail: N/A · Remove if: render_sudoers_rules signature changes
+def testrender_sudoers_rules(
     caplog: pytest.LogCaptureFixture,
     modules_dir: Path,
     templates_dir: Path,
     sample_rendered_text: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_render_sudoers_rules renders template, parses, and resolves MODULE_DIR."""
+    """render_sudoers_rules renders template, parses, and resolves MODULE_DIR."""
     caplog.set_level(logging.DEBUG)
 
     # Monkeypatch _render_template to return sample_rendered_text directly
@@ -298,7 +298,7 @@ def test_render_sudoers_rules(
 
     monkeypatch.setattr(sg, "_render_template", mock_render_template)
 
-    rules = _render_sudoers_rules(
+    rules = render_sudoers_rules(
         module_name="test-module",
         modules_dir=modules_dir,
         templates_dir=templates_dir,
@@ -323,13 +323,13 @@ def test_render_sudoers_rules(
 
 
 # 🧪 TRAP[TEST] · Regression: render rules with failed template · Scenario: _render_template returns None → empty list · Last fail: N/A · Remove if: error handling logic changes
-def test_render_sudoers_rules_template_failure(
+def testrender_sudoers_rules_template_failure(
     caplog: pytest.LogCaptureFixture,
     modules_dir: Path,
     templates_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When template render fails, _render_sudoers_rules returns empty list."""
+    """When template render fails, render_sudoers_rules returns empty list."""
     caplog.set_level(logging.DEBUG)
 
     import core.internal.bootstrap.deploy.sudoers_generator as sg
@@ -343,7 +343,7 @@ def test_render_sudoers_rules_template_failure(
 
     monkeypatch.setattr(sg, "_render_template", mock_render_template_fail)
 
-    rules = _render_sudoers_rules(
+    rules = render_sudoers_rules(
         module_name="test-module",
         modules_dir=modules_dir,
         templates_dir=templates_dir,
@@ -531,7 +531,7 @@ def test_generate_module_sudoers_ok(
 
     import core.internal.bootstrap.deploy.sudoers_generator as sg
 
-    # Mock _render_sudoers_rules to return fake rules
+    # Mock render_sudoers_rules to return fake rules
     fake_rules = [
         "platform ALL=(root) NOPASSWD: /usr/bin/make -C /opt/modules/test start",
         "agent ALL=(root) NOPASSWD: /usr/bin/make -C /opt/modules/test status",
@@ -548,7 +548,7 @@ def test_generate_module_sudoers_ok(
 
     monkeypatch.setattr(
         sg,
-        "_render_sudoers_rules",
+        "render_sudoers_rules",
         lambda mn, md, td, pr: fake_rules,
     )
     monkeypatch.setattr(
@@ -595,7 +595,7 @@ def test_generate_module_sudoers_ok(
     _assert_ldd_trajectory(caplog)
 
 
-# 🧪 TRAP[TEST] · Regression: generate with no rules · Scenario: _render_sudoers_rules returns empty → False · Last fail: N/A · Remove if: empty-guard logic changes
+# 🧪 TRAP[TEST] · Regression: generate with no rules · Scenario: render_sudoers_rules returns empty → False · Last fail: N/A · Remove if: empty-guard logic changes
 def test_generate_module_sudoers_no_rules(
     caplog: pytest.LogCaptureFixture,
     modules_dir: Path,
@@ -609,7 +609,7 @@ def test_generate_module_sudoers_no_rules(
 
     monkeypatch.setattr(
         sg,
-        "_render_sudoers_rules",
+        "render_sudoers_rules",
         lambda mn, md, td, pr: [],
     )
 
@@ -625,17 +625,17 @@ def test_generate_module_sudoers_no_rules(
     _assert_ldd_trajectory(caplog)
 
 
-# ── Tests: _batch_generate_sudoers ───────────────────────────────────────────
+# ── Tests: batch_generate_sudoers ───────────────────────────────────────────
 
 
-# 🧪 TRAP[TEST] · Regression: batch generate all modules · Scenario: multiple modules → one file with all rules · Last fail: N/A · Remove if: _batch_generate_sudoers logic changes
-def test_batch_generate_sudoers_ok(
+# 🧪 TRAP[TEST] · Regression: batch generate all modules · Scenario: multiple modules → one file with all rules · Last fail: N/A · Remove if: batch_generate_sudoers logic changes
+def testbatch_generate_sudoers_ok(
     caplog: pytest.LogCaptureFixture,
     modules_dir: Path,
     templates_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_batch_generate_sudoers collects rules from all modules and writes once."""
+    """batch_generate_sudoers collects rules from all modules and writes once."""
     caplog.set_level(logging.DEBUG)
 
     import core.internal.bootstrap.deploy.sudoers_generator as sg
@@ -649,7 +649,7 @@ def test_batch_generate_sudoers_ok(
     def mock_render(module_name, modules_dir, templates_dir, platform_root):
         return render_results.get(module_name, [])
 
-    monkeypatch.setattr(sg, "_render_sudoers_rules", mock_render)
+    monkeypatch.setattr(sg, "render_sudoers_rules", mock_render)
 
     captured = {}
 
@@ -661,7 +661,7 @@ def test_batch_generate_sudoers_ok(
 
     monkeypatch.setattr(sg, "_write_sudoers_file", capturing_write)
 
-    result = _batch_generate_sudoers(
+    result = batch_generate_sudoers(
         module_names=["nginx", "postgres"],
         modules_dir=modules_dir,
         templates_dir=templates_dir,
@@ -678,7 +678,7 @@ def test_batch_generate_sudoers_ok(
 
 
 # 🧪 TRAP[TEST] · Regression: batch with no modules · Scenario: empty module_names → True (no-op) · Last fail: N/A · Remove if: empty-list handling changes
-def test_batch_generate_sudoers_no_modules(
+def testbatch_generate_sudoers_no_modules(
     caplog: pytest.LogCaptureFixture,
     modules_dir: Path,
     templates_dir: Path,
@@ -686,7 +686,7 @@ def test_batch_generate_sudoers_no_modules(
     """Empty module list returns True without any writes."""
     caplog.set_level(logging.DEBUG)
 
-    result = _batch_generate_sudoers(
+    result = batch_generate_sudoers(
         module_names=[],
         modules_dir=modules_dir,
         templates_dir=templates_dir,
@@ -699,7 +699,7 @@ def test_batch_generate_sudoers_no_modules(
 
 
 # 🧪 TRAP[TEST] · Regression: batch all modules fail render · Scenario: all renders return empty → False · Last fail: N/A · Remove if: empty-collection guard changes
-def test_batch_generate_sudoers_all_fail(
+def testbatch_generate_sudoers_all_fail(
     caplog: pytest.LogCaptureFixture,
     modules_dir: Path,
     templates_dir: Path,
@@ -712,11 +712,11 @@ def test_batch_generate_sudoers_all_fail(
 
     monkeypatch.setattr(
         sg,
-        "_render_sudoers_rules",
+        "render_sudoers_rules",
         lambda mn, md, td, pr: [],
     )
 
-    result = _batch_generate_sudoers(
+    result = batch_generate_sudoers(
         module_names=["nginx", "postgres"],
         modules_dir=modules_dir,
         templates_dir=templates_dir,
@@ -836,7 +836,7 @@ def test_cli_render_rules_action(
     ]
 
     fake_rules = ["rule1", "rule2"]
-    monkeypatch.setattr(sg, "_render_sudoers_rules", lambda mn, md, td, pr: fake_rules)
+    monkeypatch.setattr(sg, "render_sudoers_rules", lambda mn, md, td, pr: fake_rules)
     monkeypatch.setattr(sg.sys, "argv", test_args)
 
     assert sg.main() == 0
@@ -850,7 +850,7 @@ def test_cli_batch_generate_action(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """CLI --action batch-generate dispatches to _batch_generate_sudoers correctly."""
+    """CLI --action batch-generate dispatches to batch_generate_sudoers correctly."""
     caplog.set_level(logging.DEBUG)
 
     import core.internal.bootstrap.deploy.sudoers_generator as sg
@@ -875,9 +875,7 @@ def test_cli_batch_generate_action(
     ]
 
     called_names = {"names": None}
-    monkeypatch.setattr(
-        sg, "_batch_generate_sudoers", lambda mn, md, td, pr: called_names.update({"names": mn}) or True
-    )
+    monkeypatch.setattr(sg, "batch_generate_sudoers", lambda mn, md, td, pr: called_names.update({"names": mn}) or True)
     monkeypatch.setattr(sg.sys, "argv", test_args)
 
     assert sg.main() == 0

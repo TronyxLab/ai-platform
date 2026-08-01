@@ -31,6 +31,10 @@ _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal
 sys.path.insert(0, str(_MODULE_DIR))
 import reconciler
 
+import core.internal.bootstrap.converge.infra as infra
+import core.internal.bootstrap.converge.runtime as _converge_runtime
+import core.internal.bootstrap.converge.sudoers as _converge_sudoers
+
 # ═══════════════════════════════════════════════════════════════════
 # region Fixtures
 # ═══════════════════════════════════════════════════════════════════
@@ -39,9 +43,9 @@ import reconciler
 @pytest.fixture
 def reset_state():
     """Reset reconciler module state before each test."""
-    reconciler._reset_state()
-    reconciler._node_name = "test-node"
-    reconciler._core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
+    infra.reset_state()
+    infra.node_name = "test-node"
+    infra.core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
 
 
 @pytest.fixture
@@ -115,10 +119,10 @@ def test_reconcile_sudoers_converged(tmp_path, caplog, node_yaml_with_modules, s
     logger.info("[IMP:9][test] R8 converged — sudoers files match desired state")
 
     # Set _core_dir to match the test modules directory so R8 resolves the right modules path
-    reconciler._core_dir = str(tmp_path)
+    infra.core_dir = str(tmp_path)
     cooldown_file = tmp_path / ".converge_cooldown.json"
-    monkeypatch.setattr(reconciler, "COOLDOWN_FILE", str(cooldown_file))
-    monkeypatch.setattr(reconciler, "SUDOERS_DIR", sudoers_env["sudoers_d_dir"])
+    monkeypatch.setattr(_converge_runtime, "COOLDOWN_FILE", str(cooldown_file))
+    monkeypatch.setattr(_converge_sudoers, "SUDOERS_DIR", sudoers_env["sudoers_d_dir"])
 
     # Compute expected desired content dynamically for ALL modules (matches what R8 will compute)
     modules_dir_path = Path(sudoers_env["modules_dir"]).resolve()
@@ -127,7 +131,7 @@ def test_reconcile_sudoers_converged(tmp_path, caplog, node_yaml_with_modules, s
             f"ci-deploy ALL=(root) NOPASSWD: /usr/bin/make -C {modules_dir_path}/{mod} restart",
             f"ci-deploy ALL=(root) NOPASSWD: /usr/bin/make -C {modules_dir_path}/{mod} reload",
         ]
-        desired_content = reconciler._build_sudoers_content(mod, expected_rules)
+        desired_content = _converge_sudoers.build_sudoers_content(mod, expected_rules)
         sudoers_file = Path(sudoers_env["sudoers_d_dir"]) / f"platform-{mod}"
         sudoers_file.write_text(desired_content)
 
@@ -168,10 +172,10 @@ def test_reconcile_sudoers_drift_detected(tmp_path, caplog, node_yaml_with_modul
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] R8 drift detected — self-heal via atomic write")
 
-    reconciler._core_dir = str(tmp_path)
+    infra.core_dir = str(tmp_path)
     cooldown_file = tmp_path / ".converge_cooldown.json"
-    monkeypatch.setattr(reconciler, "COOLDOWN_FILE", str(cooldown_file))
-    monkeypatch.setattr(reconciler, "SUDOERS_DIR", sudoers_env["sudoers_d_dir"])
+    monkeypatch.setattr(_converge_runtime, "COOLDOWN_FILE", str(cooldown_file))
+    monkeypatch.setattr(_converge_sudoers, "SUDOERS_DIR", sudoers_env["sudoers_d_dir"])
 
     # Create a STALE sudoers file (WRONG content — should trigger self-heal)
     sudoers_target = Path(sudoers_env["sudoers_d_dir"]) / "platform-nginx"
@@ -228,10 +232,10 @@ def test_reconcile_sudoers_visudo_fail(tmp_path, caplog, node_yaml_with_modules,
     caplog.set_level(logging.INFO)
     logger.info("[IMP:9][test] R8 visudo-fail — atomic write blocked, original untouched")
 
-    reconciler._core_dir = str(tmp_path)
+    infra.core_dir = str(tmp_path)
     cooldown_file = tmp_path / ".converge_cooldown.json"
-    monkeypatch.setattr(reconciler, "COOLDOWN_FILE", str(cooldown_file))
-    monkeypatch.setattr(reconciler, "SUDOERS_DIR", sudoers_env["sudoers_d_dir"])
+    monkeypatch.setattr(_converge_runtime, "COOLDOWN_FILE", str(cooldown_file))
+    monkeypatch.setattr(_converge_sudoers, "SUDOERS_DIR", sudoers_env["sudoers_d_dir"])
 
     # Create original sudoers content (should remain unchanged)
     original_content = "# Original sudoers content — should survive\n"

@@ -68,9 +68,6 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/modules/nginx/nginx_reload_hook.sh",
     # SSH forced-command entrypoint on VPS — not called from Makefile directly
     "core/entrypoints/deploy.sh",
-    # Stub-project reconciler (DevPlan 025) — sourced from converge.sh --reconcile
-    # and node-lifecycle.sh AUTO_RECONCILE. Not a canonical entrypoint per fusion S7.
-    "core/internal/deploy/reconcile-projects.sh",
 ]
 
 # Subdirectory names to exclude when globbing for shebang files.

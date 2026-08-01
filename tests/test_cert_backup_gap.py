@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 CERT_SCRIPTS = {
     "issue_cert": "core/internal/bootstrap/issue-cert.sh",
     "state_machine": "core/internal/bootstrap/lifecycle/state_machine.py",
+    # B9 T1: ssl_provision_via_orchestrator переехал в lifecycle/helpers/domains.py
+    "helpers_domains": "core/internal/bootstrap/lifecycle/helpers/domains.py",
 }
 
 BACKUP_SCRIPTS = {
@@ -363,12 +365,12 @@ def test_state_machine_full_bootstrap_restore_flow():
       OR S3 cache hit? → download & restore
       OR issue-cert.sh → upload to S3
     """
-    # Check state_machine.py for the new function
-    sm_content = _read_script(CERT_SCRIPTS["state_machine"])
+    # B9 T1: ssl_provision_via_orchestrator → lifecycle/helpers/domains.py (I/O-хелперы)
+    sm_content = _read_script(CERT_SCRIPTS["helpers_domains"])
 
     # Must reference _ssl_provision_via_orchestrator (replaces old _ssl_provision)
-    assert "def _ssl_provision_via_orchestrator" in sm_content, (
-        "state_machine.py must have _ssl_provision_via_orchestrator() function"
+    assert "def ssl_provision_via_orchestrator" in sm_content, (
+        "helpers/domains.py must have ssl_provision_via_orchestrator() function (B9 T1)"
     )
 
     # Must delegate to cert_orchestrator
@@ -376,7 +378,7 @@ def test_state_machine_full_bootstrap_restore_flow():
     assert "orchestrate_certs" in sm_content, "_ssl_provision_via_orchestrator() must call orchestrator_certs()"
 
     # Must extract all domains (empty context = all)
-    assert "_extract_domains" in sm_content, "_ssl_provision_via_orchestrator() must call _extract_domains()"
+    assert "extract_domains" in sm_content, "ssl_provision_via_orchestrator() must call extract_domains() (CS-1 public)"
 
     # Check cert_orchestrator.py for restore-first logic
     cert_content = _read_script("core/internal/bootstrap/cert_orchestrator.py")
@@ -558,10 +560,10 @@ def test_node_lifecycle_update_step_calls_ssl_provision():
         → cert_orchestrator.orchestrate_certs()
         → s3_ssl_cache check → download (cache hit) OR issue-cert.sh (cache miss)
     """
-    content = _read_script(CERT_SCRIPTS["state_machine"])
+    content = _read_script(CERT_SCRIPTS["helpers_domains"])
 
-    # Must reference ssl_provision step
-    assert "ssl_provision" in content, "state_machine.py must have ssl_provision step"
+    # Must reference ssl_provision step (B9 T1: helpers/domains.py)
+    assert "ssl_provision" in content, "helpers/domains.py must have ssl_provision step"
 
     # Must have the step in the step definitions
     lines = content.split("\n")
@@ -577,7 +579,7 @@ def test_node_lifecycle_update_step_calls_ssl_provision():
         logger.info("[IMP:8][test_step_list] %s", line)
 
     # Verify the step handler is _ssl_provision_via_orchestrator (replaces old _ssl_provision)
-    assert "_ssl_provision_via_orchestrator" in content, (
+    assert "ssl_provision_via_orchestrator" in content, (
         "There must be a handler function _ssl_provision_via_orchestrator() for the ssl_provision step"
     )
 

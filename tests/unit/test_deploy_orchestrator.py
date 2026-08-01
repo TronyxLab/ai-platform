@@ -441,12 +441,12 @@ def test_preflight_calls_all_steps(tmp_path, caplog) -> None:
     logger.info("[IMP:7][test_preflight_calls_all_steps] START — preflight wiring")
 
     with (
-        mock.patch.object(orch._context_overlay, "ensure_context_repo", return_value=0) as mock_ctx,
+        mock.patch.object(orch.context_overlay, "ensure_context_repo", return_value=0) as mock_ctx,
         mock.patch.object(
-            orch._spool_validator, "verify_spool_dirs", return_value={"status": "ok", "missing": []}
+            orch.spool_validator, "verify_spool_dirs", return_value={"status": "ok", "missing": []}
         ) as mock_spool,
         mock.patch.object(orch, "_create_status_metrics_json") as mock_metrics,
-        mock.patch.object(orch._secrets_validator, "_validate_secret_charsets", return_value=(0, [])) as mock_charsets,
+        mock.patch.object(orch.secrets_validator, "validate_secret_charsets", return_value=(0, [])) as mock_charsets,
     ):
         orch._preflight(str(tmp_path / "core"), str(tmp_path / "node.yaml"), str(tmp_path / "modules"))
 
@@ -484,8 +484,8 @@ def test_postflight_calls_all_steps(tmp_path, caplog) -> None:
     logger.info("[IMP:7][test_postflight_calls_all_steps] START — postflight wiring")
 
     with (
-        mock.patch.object(orch._sudoers_generator, "_batch_generate_sudoers", return_value=True) as mock_sudoers,
-        mock.patch.object(orch._orphan_reconciler, "_batch_orphan_reconciliation", return_value=[]) as mock_orphans,
+        mock.patch.object(orch.sudoers_generator, "batch_generate_sudoers", return_value=True) as mock_sudoers,
+        mock.patch.object(orch.orphan_reconciler, "batch_orphan_reconciliation", return_value=[]) as mock_orphans,
         mock.patch.object(orch, "_render_litellm_config") as mock_litellm,
     ):
         orch._postflight(
@@ -541,15 +541,13 @@ def test_deploy_parallel_calls_topo_sort(tmp_path, caplog) -> None:
         {"name": "redis", "install_type": "docker", "severity": "warn"},
     ]
     with (
-        mock.patch.object(orch._topo_sort, "load_module_yamls", return_value=modules_yamls) as mock_load,
-        mock.patch.object(orch._topo_sort, "filter_docker_modules", return_value=modules_yamls) as mock_filter,
-        mock.patch.object(orch._topo_sort, "build_dag", return_value={"postgres": [], "redis": []}) as mock_dag,
-        mock.patch.object(
-            orch._topo_sort, "kahn_topological_sort", return_value=[["postgres"], ["redis"]]
-        ) as mock_kahn,
-        mock.patch.object(orch._docker_orchestrator, "_pre_pull_images", return_value=(2, 0)),
-        mock.patch.object(orch._secrets_validator, "_batch_check_env", return_value=[]),
-        mock.patch.object(orch._docker_orchestrator, "deploy_docker_group", return_value=(1, 0, [], [])) as mock_group,
+        mock.patch.object(orch.topo_sort, "load_module_yamls", return_value=modules_yamls) as mock_load,
+        mock.patch.object(orch.topo_sort, "filter_docker_modules", return_value=modules_yamls) as mock_filter,
+        mock.patch.object(orch.topo_sort, "build_dag", return_value={"postgres": [], "redis": []}) as mock_dag,
+        mock.patch.object(orch.topo_sort, "kahn_topological_sort", return_value=[["postgres"], ["redis"]]) as mock_kahn,
+        mock.patch.object(orch.docker_orchestrator, "pre_pull_images", return_value=(2, 0)),
+        mock.patch.object(orch.secrets_validator, "batch_check_env", return_value=[]),
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_group", return_value=(1, 0, [], [])) as mock_group,
         mock.patch.object(orch, "_deploy_system_modules", return_value=(0, [])) as mock_sys,
         mock.patch.object(orch, "_set_hc_marker") as mock_hc,
     ):
@@ -607,8 +605,8 @@ def test_deploy_sequential_iterates_modules(tmp_path, caplog) -> None:
     logger.info("[IMP:7][test_deploy_sequential_iterates_modules] START — sequential iteration")
 
     with (
-        mock.patch.object(orch._secrets_validator, "_check_env_requires", return_value=[]) as mock_env,
-        mock.patch.object(orch._docker_orchestrator, "deploy_docker_module", return_value=True) as mock_docker,
+        mock.patch.object(orch.secrets_validator, "check_env_requires", return_value=[]) as mock_env,
+        mock.patch.object(orch.docker_orchestrator, "deploy_docker_module", return_value=True) as mock_docker,
         mock.patch.object(orch, "_invoke_module_interface", return_value=True) as mock_invoke,
     ):
         deployed, failed = orch._deploy_sequential(

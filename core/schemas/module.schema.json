@@ -24,7 +24,7 @@
     "depends_on": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Список модулей, от которых зависит этот модуль (для _topo_sort.py)"
+      "description": "Список модулей, от которых зависит этот модуль (для topo_sort.py)"
     },
     "spool_dir": {
       "oneOf": [

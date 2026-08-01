@@ -147,48 +147,6 @@ def test_gate_converge_reconcile_flag(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region TEST_GATE_RECONCILE_NOT_ENTRYPOINT
-## @purpose  Verify reconcile-projects.sh is NOT executable (no shebang) or has source guard
-## @scenario Check reconcile-projects.sh has direct invocation guard
-## 🧪 TRAP[TEST] · Gate invariant: internal scripts are not entrypoints
-##   · Last fail: N/A (new gate)
-##   · Remove if: reconcile-projects.sh becomes an entrypoint
-@pytest.mark.gate
-def test_gate_reconcile_not_entrypoint(tmp_path):
-    """Gate: reconcile-projects.sh must exit 1 when run directly (internal-only)."""
-    reconcile_path = "core/internal/deploy/reconcile-projects.sh"
-    script = f"""
-    set -euo pipefail
-    RECONCILE="$PROJECT_ROOT/{reconcile_path}"
-    if [[ ! -f "$RECONCILE" ]]; then
-        echo "[IMP:10][gate] FATAL: reconcile-projects.sh not found" >&2
-        exit 1
-    fi
-    # Running directly should fail with error message
-    if bash "$RECONCILE" 2>&1; then
-        echo "[IMP:10][gate] FAIL: reconcile-projects.sh should have failed when run directly" >&2
-        exit 1
-    else
-        echo "[IMP:9][gate] OK: reconcile-projects.sh is not an entrypoint (exit non-zero)" >&2
-    fi
-    """
-    result = _run_bash_test(script, tmp_path)
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    imp_found = False
-    for line in result.stderr.splitlines():
-        if "[IMP:" in line:
-            print(line)
-            if "[IMP:9]" in line:
-                imp_found = True
-    print("--- END LDD TRAJECTORY ---")
-    assert result.returncode == 0, f"Gate failed: {result.stderr}"
-    assert imp_found, "IMP:9 log not found"
-
-
-# endregion
-
-
-# ═══════════════════════════════════════════════════════════════════
 # region TEST_GATE_VPS_READINESS_SOURCEABLE
 ## @purpose  Verify vps-readiness.sh is a sourceable thin shell facade that defines
 ##           check_vps_ready() and delegates business logic to the Python module

@@ -31,6 +31,9 @@ _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal
 sys.path.insert(0, str(_MODULE_DIR))
 import reconciler
 
+import core.internal.bootstrap.converge.infra as infra
+import core.internal.bootstrap.converge.runtime as _converge_runtime
+
 # ═══════════════════════════════════════════════════════════════════
 # region Fixtures
 # ═══════════════════════════════════════════════════════════════════
@@ -39,9 +42,9 @@ import reconciler
 @pytest.fixture
 def reset_state():
     """Reset reconciler module state before each test."""
-    reconciler._reset_state()
-    reconciler._node_name = "test-node"
-    reconciler._core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
+    infra.reset_state()
+    infra.node_name = "test-node"
+    infra.core_dir = str(Path(__file__).resolve().parent.parent.parent / "core")
 
 
 @pytest.fixture
@@ -97,7 +100,7 @@ def test_reconcile_runtime_running(tmp_path, caplog, node_yaml_with_modules, moc
 
     # Set up cooldown file
     cooldown_file = tmp_path / ".converge_cooldown.json"
-    monkeypatch.setattr(reconciler, "COOLDOWN_FILE", str(cooldown_file))
+    monkeypatch.setattr(_converge_runtime, "COOLDOWN_FILE", str(cooldown_file))
 
     compose_up_calls = []
 
@@ -147,7 +150,7 @@ def test_reconcile_runtime_exited(tmp_path, caplog, node_yaml_with_modules, mock
     logger.info("[IMP:9][test] R9 exited — self-heal via docker compose up -d")
 
     cooldown_file = tmp_path / ".converge_cooldown.json"
-    monkeypatch.setattr(reconciler, "COOLDOWN_FILE", str(cooldown_file))
+    monkeypatch.setattr(_converge_runtime, "COOLDOWN_FILE", str(cooldown_file))
 
     compose_up_calls = []
     docker_restart_calls = []
@@ -203,7 +206,7 @@ def test_reconcile_runtime_cooldown(tmp_path, caplog, node_yaml_with_modules, mo
 
     # Set up cooldown file WITH a recent cooldown entry for "postgres"
     cooldown_file = tmp_path / ".converge_cooldown.json"
-    monkeypatch.setattr(reconciler, "COOLDOWN_FILE", str(cooldown_file))
+    monkeypatch.setattr(_converge_runtime, "COOLDOWN_FILE", str(cooldown_file))
     # Write cooldown state: postgres healed 1 run ago (within cooldown window of 3)
     cooldown_data = {"containers": {"postgres": {"last_healed_run": 5}}}
     cooldown_file.write_text(json.dumps(cooldown_data))

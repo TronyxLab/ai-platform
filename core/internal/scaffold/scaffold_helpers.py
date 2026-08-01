@@ -41,6 +41,45 @@ logger = logging.getLogger(__name__)
 # ── Default node for fallback ──────────────────────────────────────────
 _DEFAULT_NODE = os.environ.get("PLATFORM_DEFAULT_NODE", "tronyx-vps")
 
+# ── Compose profiles — SoT: platform-env.yaml env_defaults (DevPlan 116 T2, U-02) ──
+# Repo root resolved relative to this file (core/internal/scaffold/ → 4 levels up).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+# region FUNC_load_compose_profiles_from_platform_env
+## @purpose  Read COMPOSE_PROFILES from repo-root platform-env.yaml env_defaults (SoT).
+##            Local tool — platform-env.yaml is always in the repo (generated).
+##            Fail-fast: raise on missing file/key (invariant 7 — no silent fallback).
+##            Публичная (B9 T5, CS-4) — перенесена из project_adopter._load_compose_profiles_from_platform_env.
+## @io       ⇥ None → ⎋ str: comma-separated profile list ⚡ raise FileNotFoundError/KeyError
+## @complexity O(1) — single YAML load
+## @invariants
+##   - platform-env.yaml resolved relative to this file (repo root), not project dir
+##   - Raises readable error if file or key missing — adopt must not proceed with wrong profiles
+def load_compose_profiles_from_platform_env() -> str:
+    """Return COMPOSE_PROFILES from platform-env.yaml env_defaults (SoT)."""
+    platform_env_path = _REPO_ROOT / "platform-env.yaml"
+    if not platform_env_path.is_file():
+        raise FileNotFoundError(
+            f"[IMP:10][scaffold_helpers] platform-env.yaml not found at {platform_env_path} — "
+            "run `make generate-platform-env` (SoT: core/platform-infra.yaml env_defaults)"
+        )
+    import yaml  # type: ignore[import-untyped]
+
+    with open(platform_env_path) as f:
+        data = yaml.safe_load(f)
+    profiles = (data or {}).get("env_defaults", {}).get("COMPOSE_PROFILES")
+    if not profiles:
+        raise KeyError(
+            f"[IMP:10][scaffold_helpers] env_defaults.COMPOSE_PROFILES missing in {platform_env_path} — "
+            "run `make generate-platform-env` (DevPlan 116 T2, U-02)."
+        )
+    logger.info("[IMP:9][load_compose_profiles] COMPOSE_PROFILES from platform-env.yaml: %s", profiles)
+    return str(profiles)
+
+
+# endregion FUNC_load_compose_profiles_from_platform_env
+
 
 # region FUNC_gen_ai_platform_yaml
 ## @purpose  Generate ai-platform.yaml for a project (shared between new-project + adopt).
@@ -455,3 +494,61 @@ def register_in_node_yaml(
 
 
 # endregion FUNC_register_in_node_yaml
+
+
+# region FUNC_validate_org_against_node_yaml
+## @purpose  Validate org against node.yaml context (case-insensitive). Returns canonical org.
+##            Перенесена из project_adopter.py (B9 T5, U-32) — shared org-валидация (D6 full PyYAML
+##            версия; shell-версия — fast grep в adopt-project.sh). Re-export из project_adopter.
+## @io        ⇥ org: str, node_yaml_path: Path → ⎋ str — canonical org from node.yaml
+##            ⚡ raises ConfigValidationError if org does not match (even case-insensitive)
+## @complexity O(1)
+## @invariants
+##   - Case-insensitive comparison; casing differs → node.yaml variant (canonical)
+##   - node.yaml not found / no context → org unchanged
+##   - D6: duplicated in shell (fast grep) AND Python (full PyYAML)
+def validate_org_against_node_yaml(org: str, node_yaml_path: Path) -> str:
+    """Validate org against node.yaml context (case-insensitive). Returns canonical org."""
+    if not node_yaml_path.exists():
+        logger.info("[IMP:9][validate_org] node.yaml not found at %s — skipping context validation", node_yaml_path)
+        return org
+
+    try:
+        from core.internal.shared.exceptions import ConfigValidationError
+        from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
+
+        node = NodeYaml(str(node_yaml_path))
+        node_context = node.get_context()
+    except (ConfigNotFoundError, ConfigParseError):
+        logger.info("[IMP:9][validate_org] Cannot parse node.yaml — skipping context validation")
+        return org
+    if not node_context:
+        logger.info("[IMP:9][validate_org] node.yaml has no context field — skipping validation")
+        return org
+
+    # Case-insensitive comparison
+    if org.lower() != str(node_context).lower():
+        logger.info(
+            "[IMP:9][validate_org] FAIL-FAST: org='%s' vs node.yaml context='%s' — mismatch detected",
+            org,
+            node_context,
+        )
+        raise ConfigValidationError(
+            f"Project org '{org}' does not match node.yaml context '{node_context}'. "
+            f"Use --org {node_context} or update node.yaml context."
+        )
+
+    # Casing mismatch → adopt node.yaml variant
+    if org != node_context:
+        logger.info(
+            "[IMP:9][validate_org] Casing mismatch: org='%s' vs node.yaml context='%s' — using node.yaml variant",
+            org,
+            node_context,
+        )
+        return str(node_context)
+
+    logger.info("[IMP:9][validate_org] node.yaml context validated: %s", org)
+    return org
+
+
+# endregion FUNC_validate_org_against_node_yaml

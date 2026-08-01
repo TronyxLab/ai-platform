@@ -1,9 +1,9 @@
 """
 # GREP_SUMMARY: test_orphan_reconciler, orphan, container, reconcile, batch, mock-docker, subprocess
-# STRUCTURE: ▶ tmp_path + mock subprocess.run → ◇ _batch_orphan_reconciliation 4× (empty/no-orphans/with-orphans/docker-unavailable) → ⎋ assert orphans list + LDD trajectory [IMP:7-10]
+# STRUCTURE: ▶ tmp_path + mock subprocess.run → ◇ batch_orphan_reconciliation 4× (empty/no-orphans/with-orphans/docker-unavailable) → ⎋ assert orphans list + LDD trajectory [IMP:7-10]
 # region MODULE_CONTRACT
-## @purpose  Unit tests for orphan_reconciler._batch_orphan_reconciliation — orphan container
-##           detection logic extracted from deploy-modules.sh _batch_orphan_reconciliation()
+## @purpose  Unit tests for orphan_reconciler.batch_orphan_reconciliation — orphan container
+##           detection logic extracted from deploy-modules.sh batch_orphan_reconciliation()
 ## @scope    Tests the full orphan detection pipeline using mocked subprocess.run for all docker
 ##           commands. Does NOT require a real docker daemon.
 ## @invariants
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # ── Import the module under test ──
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "deploy"
 sys.path.insert(0, str(_MODULE_DIR))
-from orphan_reconciler import _batch_orphan_reconciliation
+from orphan_reconciler import batch_orphan_reconciliation
 
 
 # region FUNC_mock_subprocess_run
@@ -159,13 +159,13 @@ def modules_dir(tmp_path) -> Path:
 
 # region FUNC_test_empty_module_entries
 ## @purpose  Empty list of module entries returns empty orphan list immediately
-## @io       _batch_orphan_reconciliation([]) → assert empty list + IMP:9
+## @io       batch_orphan_reconciliation([]) → assert empty list + IMP:9
 ## @complexity 1 — edge case: early return before any subprocess calls
 # 🧪 TRAP[TEST] · Regression · Scenario: empty module entries returns [] immediately · Last fail: N/A · Remove if: early-return guard removed
 @ldd_trajectory
 def test_empty_module_entries(caplog) -> None:
     """Empty module entries should return empty list without calling docker."""
-    orphans = _batch_orphan_reconciliation([], "/some/modules/dir")
+    orphans = batch_orphan_reconciliation([], "/some/modules/dir")
     logger.info("[IMP:9][unit][orphan] Empty entries → orphans=%s", orphans)
     assert orphans == [], f"Expected empty list, got {orphans}"
     logger.info("[IMP:9][unit][orphan] Empty entries returns [] ✓")
@@ -176,7 +176,7 @@ def test_empty_module_entries(caplog) -> None:
 
 # region FUNC_test_no_orphans
 ## @purpose  All containers match their expected project labels — no orphans detected
-## @io       tmp_path modules + mock docker → _batch_orphan_reconciliation → assert empty list
+## @io       tmp_path modules + mock docker → batch_orphan_reconciliation → assert empty list
 ## @complexity 3 — full pipeline: compose discovery → docker ps → service config → inspect
 # 🧪 TRAP[TEST] · Regression · Scenario: all containers match project labels returns empty list · Last fail: N/A · Remove if: orphan detection algorithm changes
 @ldd_trajectory
@@ -216,7 +216,7 @@ def test_no_orphans(modules_dir: Path, caplog) -> None:
     )
 
     with patch("orphan_reconciler.subprocess.run", side_effect=mock_run):
-        orphans = _batch_orphan_reconciliation(["postgres", "redis"], str(modules_dir))
+        orphans = batch_orphan_reconciliation(["postgres", "redis"], str(modules_dir))
 
     logger.info("[IMP:9][unit][orphan] Matching containers → orphans=%s", orphans)
     assert orphans == [], f"Expected no orphans, got {len(orphans)}: {orphans}"
@@ -228,7 +228,7 @@ def test_no_orphans(modules_dir: Path, caplog) -> None:
 
 # region FUNC_test_with_orphans
 ## @purpose  Container with mismatched project label is detected as orphan
-## @io       tmp_path modules + mock docker → _batch_orphan_reconciliation → assert 1 orphan
+## @io       tmp_path modules + mock docker → batch_orphan_reconciliation → assert 1 orphan
 ## @complexity 3 — full pipeline with mismatched label detection
 # 🧪 TRAP[TEST] · Regression · Scenario: container with wrong project label is reported as orphan · Last fail: N/A · Remove if: orphan detection algorithm changes
 @ldd_trajectory
@@ -259,7 +259,7 @@ def test_with_orphans(modules_dir: Path, caplog) -> None:
     )
 
     with patch("orphan_reconciler.subprocess.run", side_effect=mock_run):
-        orphans = _batch_orphan_reconciliation(["postgres"], str(modules_dir))
+        orphans = batch_orphan_reconciliation(["postgres"], str(modules_dir))
 
     logger.info("[IMP:9][unit][orphan] Mismatched labels → orphans=%s", orphans)
     assert len(orphans) == 1, f"Expected 1 orphan, got {len(orphans)}: {orphans}"
@@ -273,7 +273,7 @@ def test_with_orphans(modules_dir: Path, caplog) -> None:
 
 # region FUNC_test_empty_project_label_is_orphan
 ## @purpose  Container with empty project label (label missing) is treated as orphan
-## @io       tmp_path modules + mock docker → _batch_orphan_reconciliation → assert orphan
+## @io       tmp_path modules + mock docker → batch_orphan_reconciliation → assert orphan
 ## @complexity 3 — edge case: docker inspect returns empty label
 # 🧪 TRAP[TEST] · Regression · Scenario: container with missing project label is orphan · Last fail: N/A · Remove if: orphan detection algorithm changes
 @ldd_trajectory
@@ -302,7 +302,7 @@ def test_empty_project_label_is_orphan(modules_dir: Path, caplog) -> None:
     )
 
     with patch("orphan_reconciler.subprocess.run", side_effect=mock_run):
-        orphans = _batch_orphan_reconciliation(["postgres"], str(modules_dir))
+        orphans = batch_orphan_reconciliation(["postgres"], str(modules_dir))
 
     logger.info("[IMP:9][unit][orphan] Empty label → orphans=%s", orphans)
     assert len(orphans) == 1, f"Expected 1 orphan for empty label, got {len(orphans)}: {orphans}"
@@ -332,7 +332,7 @@ def test_docker_unavailable(modules_dir: Path, caplog) -> None:
         raise FileNotFoundError("docker: command not found")
 
     with patch("orphan_reconciler.subprocess.run", side_effect=_mock_file_not_found):
-        orphans = _batch_orphan_reconciliation(["postgres", "redis"], str(modules_dir))
+        orphans = batch_orphan_reconciliation(["postgres", "redis"], str(modules_dir))
 
     logger.info("[IMP:9][unit][orphan] Docker unavailable → orphans=%s", orphans)
     assert orphans == [], f"Expected empty list when docker unavailable, got {orphans}"
@@ -394,7 +394,7 @@ def test_docker_compose_config_fails(modules_dir: Path, caplog) -> None:
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch("orphan_reconciler.subprocess.run", side_effect=_mock_partial_fail):
-        orphans = _batch_orphan_reconciliation(["postgres", "redis"], str(modules_dir))
+        orphans = batch_orphan_reconciliation(["postgres", "redis"], str(modules_dir))
 
     logger.info("[IMP:9][unit][orphan] Partial config failure → orphans=%s", orphans)
     # postgres should be skipped (config failed)
@@ -427,7 +427,7 @@ def test_module_without_compose_file(modules_dir: Path, caplog) -> None:
     )
 
     with patch("orphan_reconciler.subprocess.run", side_effect=mock_run):
-        orphans = _batch_orphan_reconciliation(["nginx"], str(modules_dir))
+        orphans = batch_orphan_reconciliation(["nginx"], str(modules_dir))
 
     logger.info("[IMP:9][unit][orphan] Module without compose → orphans=%s", orphans)
     assert orphans == [], f"Expected no orphans for module without compose, got {orphans}"

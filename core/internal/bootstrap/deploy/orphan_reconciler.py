@@ -2,7 +2,7 @@
 # STRUCTURE: ▶ ┌module_entries + modules_dir┐ → ⚡ find compose files → ⚡ docker ps -a (single call) → ○ for each service: docker compose config → ◇ container in existing set? → docker inspect project label → ◇ project != module_name? → ⊕ orphans[] → ⎋ return orphans
 # region MODULE_CONTRACT
 ## @purpose  S8: Batch orphan container reconciliation — replaces inline python3
-##           in deploy-modules.sh _batch_orphan_reconciliation(). Collects all compose
+##           in deploy-modules.sh batch_orphan_reconciliation(). Collects all compose
 ##           files, does one docker ps -a, compares container names with compose project
 ##           labels, and returns list of orphan (foreign) containers.
 ## @scope    Called during module deployment to detect and reconcile containers that belong
@@ -288,7 +288,7 @@ def _inspect_project_label(container_name: str) -> str:
 # endregion FUNC__inspect_project_label
 
 
-# region FUNC__batch_orphan_reconciliation
+# region FUNC_batch_orphan_reconciliation
 ## @purpose  Main entry point: detect orphan containers across all modules in one pass
 ## @io       ⇥ module_entries: list[str], modules_dir: str → ⎋ list[dict[str, str]]
 ## @complexity 3 — multi-step pipeline: compose discovery → docker ps → per-service inspect
@@ -302,7 +302,7 @@ def _inspect_project_label(container_name: str) -> str:
 ## @rationale  One-pass algorithm avoids per-module docker ps -a (O(N) → O(1) docker calls).
 ##             The single docker ps -a call provides a consistent snapshot of container state,
 ##             avoiding TOCTOU race conditions that per-module calls would create.
-def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) -> list[dict[str, str]]:
+def batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) -> list[dict[str, str]]:
     """Detect orphan containers across all modules.
 
     Algorithm:
@@ -316,29 +316,29 @@ def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) ->
     The shell facade reads this output and stops+removes each orphan.
     """
     logger.info(
-        "[IMP:9][_batch_orphan_reconciliation] Starting batch orphan reconciliation for %d entries", len(module_entries)
+        "[IMP:9][batch_orphan_reconciliation] Starting batch orphan reconciliation for %d entries", len(module_entries)
     )
 
     if not module_entries:
-        logger.info("[IMP:9][_batch_orphan_reconciliation] Empty module entries — no orphans to reconcile")
+        logger.info("[IMP:9][batch_orphan_reconciliation] Empty module entries — no orphans to reconcile")
         return []
 
     # Step 1: Find compose files
     compose_files = _find_compose_files(module_entries, modules_dir)
     if not compose_files:
-        logger.info("[IMP:9][_batch_orphan_reconciliation] No compose files found — no orphans to reconcile")
+        logger.info("[IMP:9][batch_orphan_reconciliation] No compose files found — no orphans to reconcile")
         return []
 
     # Step 2: Single docker ps -a
     existing = _get_existing_containers()
     if not existing:
         logger.info(
-            "[IMP:9][_batch_orphan_reconciliation] No existing containers from docker ps -a — no orphans to reconcile"
+            "[IMP:9][batch_orphan_reconciliation] No existing containers from docker ps -a — no orphans to reconcile"
         )
         return []
 
     logger.info(
-        "[IMP:7][_batch_orphan_reconciliation] %d containers in docker ps -a, %d compose files to check",
+        "[IMP:7][batch_orphan_reconciliation] %d containers in docker ps -a, %d compose files to check",
         len(existing),
         len(compose_files),
     )
@@ -347,18 +347,18 @@ def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) ->
     orphans: list[dict[str, str]] = []
 
     for mod_name, cf_path in compose_files:
-        logger.info("[IMP:7][_batch_orphan_reconciliation] Checking module: %s (compose: %s)", mod_name, cf_path)
+        logger.info("[IMP:7][batch_orphan_reconciliation] Checking module: %s (compose: %s)", mod_name, cf_path)
 
         container_names = _get_compose_services(cf_path, mod_name)
         logger.info(
-            "[IMP:7][_batch_orphan_reconciliation] Module %s has %d container names from compose config",
+            "[IMP:7][batch_orphan_reconciliation] Module %s has %d container names from compose config",
             mod_name,
             len(container_names),
         )
 
         for cname in container_names:
             if cname not in existing:
-                logger.info("[IMP:7][_batch_orphan_reconciliation] Container %s not in docker ps -a — skipping", cname)
+                logger.info("[IMP:7][batch_orphan_reconciliation] Container %s not in docker ps -a — skipping", cname)
                 continue
 
             # Check the project label
@@ -367,7 +367,7 @@ def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) ->
             # Container is orphan if: no project label OR project label != module_name
             if not proj or proj != mod_name:
                 logger.info(
-                    "[IMP:9][_batch_orphan_reconciliation] ORPHAN DETECTED: container=%s, expected_project=%s, actual_project='%s'",
+                    "[IMP:9][batch_orphan_reconciliation] ORPHAN DETECTED: container=%s, expected_project=%s, actual_project='%s'",
                     cname,
                     mod_name,
                     proj,
@@ -375,24 +375,24 @@ def _batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) ->
                 orphans.append({"container_name": cname, "project": proj})
             else:
                 logger.info(
-                    "[IMP:7][_batch_orphan_reconciliation] Container %s OK — project label matches module %s",
+                    "[IMP:7][batch_orphan_reconciliation] Container %s OK — project label matches module %s",
                     cname,
                     mod_name,
                 )
 
     logger.info(
-        "[IMP:9][_batch_orphan_reconciliation] Batch orphan reconciliation complete — %d orphans found across %d modules",
+        "[IMP:9][batch_orphan_reconciliation] Batch orphan reconciliation complete — %d orphans found across %d modules",
         len(orphans),
         len(compose_files),
     )
     return orphans
 
 
-# endregion FUNC__batch_orphan_reconciliation
+# endregion FUNC_batch_orphan_reconciliation
 
 
 # region FUNC__self_heal_orphan_containers
-## @purpose  Remove orphan containers detected by _batch_orphan_reconciliation.
+## @purpose  Remove orphan containers detected by batch_orphan_reconciliation.
 ##           Only active when --self-heal flag is set (W5-E5).
 def _self_heal_orphan_containers(orphans: list[dict[str, str]]) -> int:
     """Remove orphan containers using docker rm -f.
@@ -549,7 +549,7 @@ def main() -> int:
     )
 
     # Run reconciliation
-    orphans = _batch_orphan_reconciliation(entries, args.modules_dir)
+    orphans = batch_orphan_reconciliation(entries, args.modules_dir)
 
     # ── Self-heal mode (W5-E5) ──
     if args.self_heal:

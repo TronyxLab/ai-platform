@@ -19,6 +19,7 @@
 ##           2026-08-01 | DevPlan 116 B6 — +schema_validator.py (18-й модуль); inventory update
 ##           2026-08-01 | DevPlan 116 B5 — +timeouts.py (19-й), +ssh_opts.py (20-й); инвентарь
 ##           2026-08-01 | DevPlan 116 B4 — +contracts.py (21-й); инвентарь
+##           2026-08-01 | DevPlan 116 B9 T4 — +stub_detection.py (22-й); инвентарь
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -43,6 +44,7 @@
 | `secrets_manifest_reader.py` | Строгий ридер secrets-manifest.yaml (заменяет 3 парсера с разными graceful-degradation семантиками; отсутствие = громкий fail, не silent `[]`) — DevPlan 116 T4, U-33/U-43 | `iter_secrets()`, `tier()`, `consumers()`, `charset()`, `gen_command()` | secrets_manager, secrets_validator |
 | `ssh_command_parser.py` | Парсер SSH_ORIGINAL_COMMAND (заменяет 2 дублирующихся парсера) | `parse_ssh_command()`, `classify_verb()` | deploy forced-command, deploy.sh |
 | `ssh_opts.py` | Единый SoT SSH-флагов (DevPlan 116 B5 T2, D1 — заменяет 5 Python-копий «SSH_OPTS» + shell lib/ssh.sh фасад) | `SSH_OPTS`, `build_rsync_ssh_opts()`, CLI `--shell`/`--rsync-e` | core_deliverer, overlay_deliverer, remote_executor, channels ×2, lib/ssh.sh (python3 -m) |
+| `stub_detection.py` | Единая is_stub-детекция ai-platform.yaml (DevPlan 116 B9 T4, U-28 — консолидирует дубль reconciler_projects + converge/reconciler) | `is_stub_ai_platform_yaml(path)` | reconciler_projects (wrapper is_stub_project), converge/projects (R3) |
 | `telegram_notifier.py` | Единый Telegram-клиент (заменяет 6 реализаций: 3 shell + 3 Python) | `send_telegram()` | notify-hook, hermes-agent, deploy |
 | `timeouts.py` | Единый реестр таймаутов операционных политик (DevPlan 116 B5 T1, U-11 — единственный источник числовых timeout= в docker/ssh/healthcheck-домене) | `COMPOSE_UP_TIMEOUT`, `PULL_TIMEOUT`, `BUILD_TIMEOUT`, `HEALTHCHECK_POLL_TIMEOUT`, `SSH_CONNECT_TIMEOUT`, `DEPLOY_TIMEOUT`, `SSH_READ_TIMEOUT`, `RETRY_BACKOFF_SECONDS`, `IMAGE_CHECK_TIMEOUT`, `DOCKER_CMD_TIMEOUT`, `DOCKER_STOP_TIMEOUT`, `RSYNC_TIMEOUT`, `RETRY_COUNT` | docker_compose, ssh_opts, channels, docker_orchestrator, deploy_engine, reconciler, context_deployer, remote_executor, overlay_deliverer, context_promoter, orphan_reconciler, deploy_orchestrator |
 | `vps_readiness.py` | VPS pre-flight проверки (SSH, forced-command ping, /opt/projects/, Docker) — Strangler-миграция vps-readiness.sh (DevPlan 105, дедупликация deploy.mk/CI pre-flight) | `check_vps_ready()`, CLI `NODE [--json|--quick]` | deploy.mk pre-flight, deploy-project.yml (через фасад core/lib/vps-readiness.sh) |

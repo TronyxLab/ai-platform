@@ -567,15 +567,15 @@ jobs:
 # ═══════════════════════════════════════════════════════════════════
 
 
-# 🧪 TRAP[TEST] · Regression · Register new project via project_registry import
-# · Scenario: Mock register_project to test safe wrapping of sys.exit (D3)
-# · Last fail: N/A (new test)
-# · Remove if: _register_project_safe logic changes
+# 🧪 TRAP[TEST] · Regression · Register new project via scaffold_helpers delegation
+# · Scenario: Mock scaffold_helpers.register_in_node_yaml → register_in_node_yaml delegates (B9 T5, CS-5)
+# · Last fail: N/A (test updated after _register_project_safe removal, B9 T5)
+# · Remove if: register_in_node_yaml delegation logic changes
 @ldd_trajectory
 def test_register_in_node_yaml_new(
     caplog: pytest.LogCaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Register new project via project_registry import (sys.exit wrapped per D3)."""
+    """Register new project via scaffold_helpers.register_in_node_yaml delegation."""
     caplog.set_level(logging.INFO)
 
     adopter = _make_adopter(tmp_path, domain="example.com")
@@ -583,25 +583,26 @@ def test_register_in_node_yaml_new(
     node_yaml.parent.mkdir(parents=True, exist_ok=True)
     node_yaml.write_text("context: testorg\nprojects: []\n")
 
-    # Track calls to the mock
+    # Track calls to the mock (B9 T5: deprecated _register_project_safe removed — CS-5)
     called: list[dict[str, str]] = []
 
-    def mock_register(**kwargs: str) -> None:
+    def mock_register(**kwargs: str) -> bool:
         called.append(kwargs)
-        raise SystemExit(0)  # Simulate project_registry behavior
+        logger.info("[IMP:9][test][register] scaffold_helpers.register_in_node_yaml called: %s", kwargs.get("name"))
+        return True
 
-    # Import will fail (not in path) — we mock before the import guard
-    # Instead, we directly test _register_project_safe
-    def mock_register_func(**kwargs: str) -> None:
-        called.append(kwargs)
-        raise SystemExit(0)
+    monkeypatch.setattr(
+        "core.internal.scaffold.scaffold_helpers.register_in_node_yaml",
+        mock_register,
+    )
 
-    adopter._register_project_safe(mock_register_func, node_yaml)  # type: ignore[arg-type]
+    result = adopter.register_in_node_yaml(node_yaml)
 
-    assert len(called) == 1, "register_project should have been called once"
+    assert result is True, "register_in_node_yaml should delegate successfully"
+    assert len(called) == 1, "scaffold_helpers.register_in_node_yaml should have been called once"
     assert called[0]["name"] == "test-project"
-    assert called[0]["repo"] == "testorg/test-project"
-    assert called[0]["project_type"] == "adopted"
+    assert called[0]["org"] == "testorg"
+    assert called[0]["ptype"] == "adopted"
 
     found_imp9 = False
     print("--- LDD TRAJECTORY (IMP:7-10) ---")

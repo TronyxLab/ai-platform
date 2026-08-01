@@ -2,13 +2,15 @@
 # GREP_SUMMARY: converge reconciler reconcile-perms reconcile-audit-log reconcile-projects reconcile-networks detect-hosts-drift verify-vhosts unit-filter idempotent drift-detection desired-state
 # STRUCTURE: ▶ argparse ┌--node --dry-run --report-only --units --reconcile┐ → ⚡ lock → ▶ reconciler.py R1-R6 ─exit→ ⊕ aggregate {0,1,2} → ⎋ exit
 # region MODULE_CONTRACT
-## @purpose  Thin shell facade for idempotent desired-state reconciler (W4-E3). Delegates all R1-R6 convergence logic to reconciler.py.
-## @scope    Arg parsing → env setup → flock → reconciler.py dispatch → --reconcile (reconcile-projects.sh) → exit code mapping {0,1,2}
+## @purpose  Thin shell facade for idempotent desired-state reconciler (W4-E3). Delegates all R1-R9 convergence logic to reconciler.py.
+## @scope    Arg parsing → env setup → flock → reconciler.py dispatch → --reconcile (прямой вызов reconciler_projects.py, B9 T4 D4) → exit code mapping {0,1,2}
 ## @location core/internal/bootstrap/converge.sh
-## @invariants  All R1-R6 delegated to converge/reconciler.py; Exit: 0=converged 1=warnings 2=errors; flock /var/lock/platform-converge.lock; --reconcile sources reconcile-projects.sh for stub→deployed recovery
+## @invariants  All R1-R9 delegated to converge/reconciler.py; Exit: 0=converged 1=warnings 2=errors; flock /var/lock/platform-converge.lock; --reconcile вызывает reconciler_projects.py напрямую для stub→deployed recovery (фасад reconcile-projects.sh удалён, B9 T4)
 ## @rationale  W4-E3 Strangler Fig: 1149→<150 LOC. Shell retains orchestration (env, lock, reconcile flag); reconciler.py handles all convergence logic with typed Python contracts.
 ## @changes 2026-07-22 | W4-E3: Extracted R1-R6 to reconciler.py; shell reduced to thin facade
-## ⚠️ TRAP[DECISION] · 2026-07-22 · HI · W4-E3 extraction: shell kept for flock + reconcile-projects.sh orchestration only
+##           2026-08-01 | B9 T4 (D4): --reconcile канал консолидирован — прямой вызов
+##             reconciler_projects.py (паттерн строки 119), shell-фасад reconcile-projects.sh удалён
+## ⚠️ TRAP[DECISION] · 2026-07-22 · HI · W4-E3 extraction: shell kept for flock + reconcile orchestration only
 ## · Rejected: Full Python rewrite including flock (risk: losing POSIX flock semantics on the node)
 ## · Reason: flock is per-process (fd-level) — Python implementation would require different mechanism. Shell retains lock orchestration.
 ## · Rev: if reconciler.py ever needs its own lock, implement at Python level with fcntl.flock.
@@ -121,16 +123,13 @@ main() {
     [[ "${CONVERGE_REPORT_ONLY}" == "true" ]] && recon_cmd+=("--report-only")
     [[ -n "${CONVERGE_UNITS}" ]] && recon_cmd+=("--units" "${CONVERGE_UNITS}")
     "${recon_cmd[@]}" || recon_rc=$?
-    # ── Optional: --reconcile stub → deployed (W4) ──
+    # ── Optional: --reconcile stub → deployed (W4; B9 T4 D4 — прямой вызов reconciler_projects.py) ──
     if [[ "${CONVERGE_RECONCILE}" == "true" ]]; then
-        local reconcile_script="${CORE_DIR}/internal/deploy/reconcile-projects.sh"
-        if [[ -f "$reconcile_script" ]]; then
-            source "$reconcile_script"
-            reconcile_projects "${CONVERGE_NODE}" "${NODE_YAML_PATH}" "${CONVERGE_DRY_RUN}" || {
-                echo "[IMP:10][converge][main] Reconcile step failed" >&2; [[ 2 -gt $recon_rc ]] && recon_rc=2; }
-        else
-            echo "[IMP:8][converge][main] WARN: reconcile-projects.sh not found" >&2
-        fi
+        local reconcile_script="${script_dir}/../reconciler_projects.py"
+        local -a rec_cmd=("${CONVERGE_PYTHON:-python3}" "${reconcile_script}" "--node" "${CONVERGE_NODE}" "--node-yaml" "${NODE_YAML_PATH}")
+        [[ -n "${NODE_HOST_MAP:-}" ]] && rec_cmd+=("--node-host-map" "${NODE_HOST_MAP}")
+        [[ "${CONVERGE_DRY_RUN}" == "true" ]] && rec_cmd+=("--dry-run")
+        "${rec_cmd[@]}" || { echo "[IMP:10][converge][main] Reconcile step failed" >&2; [[ 2 -gt $recon_rc ]] && recon_rc=2; }
     fi
     # ── Final summary and exit ──
     echo "[IMP:9][converge][main] ==============================" >&2

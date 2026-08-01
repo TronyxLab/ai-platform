@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 # ── Import the module under test ──
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "lifecycle"
 sys.path.insert(0, str(_MODULE_DIR))
+# B9 T1: CLI-функции (build_parser/main/run_init_mode/run_update_mode) вынесены в lifecycle/cli.py
+import cli
 import state_machine as sm
 
 # Re-export for fixture cleanups
@@ -448,10 +450,10 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, mon
     """
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(os, "makedirs", lambda *args, **kwargs: None)
-    # Patch via the canonical module path that phases.py imports
-    import core.internal.bootstrap.lifecycle.state_machine as _canonical_sm
+    # Patch via the canonical module path that phases.py imports (helpers.users, B9 T1)
+    import core.internal.bootstrap.lifecycle.helpers.users as _helpers_users
 
-    monkeypatch.setattr(_canonical_sm, "_add_ssh_key", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_helpers_users, "add_ssh_key", lambda *args, **kwargs: None)
     monkeypatch.setenv("TOR_ENABLED", "false")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
     monkeypatch.setenv("CONTEXT", "test-context")
@@ -472,7 +474,7 @@ def test_init_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, mon
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="init", node="test-node")
 
-    exit_code = sm._run_init_mode(m)
+    exit_code = cli.run_init_mode(m)
     assert exit_code == 0
 
     # Verify all init phases completed (phase-based key lookup)
@@ -522,7 +524,7 @@ def test_update_phase_count_devplan_087(caplog):
 @ldd_trajectory
 def test_cli_context_arg(caplog):
     """CLI should parse --context correctly (DevPlan 047)."""
-    parser = sm.build_parser()
+    parser = cli.build_parser()
     args = parser.parse_args(["--mode", "init", "--context", "test-ctx"])
     assert args.context == "test-ctx"
     logger.critical("[IMP:9][test] CLI --context parsed (DevPlan 047) — OK")
@@ -535,8 +537,14 @@ def test_cli_context_arg(caplog):
 @ldd_trajectory
 def test_phase_system_bootstrap_no_root(caplog, machine, monkeypatch):
     """phase_system_bootstrap should fail if not running as root (via precondition check)."""
+    # B9 T1: precondition_check переехал в state_store.py; исключение raise'ится из
+    # канонического пакетного модуля (state_machine.py, ленивый импорт) — не из script-загруженного sm
+    from core.internal.bootstrap.lifecycle.state_machine import (
+        PhasePreconditionError as _CanonicalPhasePreconditionError,
+    )
+
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
-    with pytest.raises(sm.PhasePreconditionError, match="requires root access"):
+    with pytest.raises(_CanonicalPhasePreconditionError, match="requires root access"):
         machine.state.precondition_check(sm.BootstrapPhase.SYSTEM_BOOTSTRAP)
     logger.critical("[IMP:9][test] system_bootstrap precondition detected non-root — OK")
 
@@ -578,7 +586,7 @@ def test_update_flow_all_phases(caplog, state_file, mock_subprocess, env_vars, m
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="update", node="test-node")
 
-    exit_code = sm._run_update_mode(m)
+    exit_code = cli.run_update_mode(m)
     assert exit_code == 0
 
     # Verify all update phases (phase-based key lookup)
@@ -807,9 +815,9 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(os, "makedirs", lambda *args, **kwargs: None)
     # Patch via the canonical module path that phases.py imports
-    import core.internal.bootstrap.lifecycle.state_machine as _canonical_sm
+    import core.internal.bootstrap.lifecycle.helpers.users as _helpers_users
 
-    monkeypatch.setattr(_canonical_sm, "_add_ssh_key", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_helpers_users, "add_ssh_key", lambda *args, **kwargs: None)
     monkeypatch.setenv("TOR_ENABLED", "true")
     monkeypatch.setenv("CORE_DIR", str(Path(state_file).parent))
     monkeypatch.setenv("CONTEXT", "test-context")
@@ -830,7 +838,7 @@ def test_tor_conditional_runs(caplog, state_file, mock_subprocess, env_vars, mon
     m.core_dir = str(Path(state_file).parent)
     m.setup_state(mode="init", node="test-node")
 
-    exit_code = sm._run_init_mode(m)
+    exit_code = cli.run_init_mode(m)
     assert exit_code == 0
 
     # system_bootstrap phase should be done (Tor is handled inside phase)
@@ -1100,7 +1108,7 @@ def test_bootstrapstate_round_trip(caplog):
 @ldd_trajectory
 def test_build_parser(caplog):
     """build_parser should create parser with all expected arguments."""
-    parser = sm.build_parser()
+    parser = cli.build_parser()
     assert parser is not None
     # Test parsing of minimal args
     args = parser.parse_args(["--mode", "init", "--node-name", "test"])
@@ -1124,7 +1132,7 @@ def test_build_parser(caplog):
 @ldd_trajectory
 def test_cli_run_phase(caplog):
     """CLI should parse --run-phase correctly."""
-    parser = sm.build_parser()
+    parser = cli.build_parser()
     args = parser.parse_args(["--mode", "init", "--run-phase", "system_bootstrap"])
     assert args.run_phase == "system_bootstrap"
     logger.critical("[IMP:9][test] CLI --run-phase parsed — OK")

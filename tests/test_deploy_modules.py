@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: deploy-modules, test, static-audit, skip-provision, state-machine, python-modules, topo-sort, enriched
-# STRUCTURE: ▶ test_skip_provision_flag (static grep state_machine.py) → ▶ test_merge_deploy_steps (static grep state_machine.py) → ▶ test_topo_sort_enriched (native _topo_sort.py call with mock yamls) → ◇ W4-E5 edge-cases (Python module contracts: docker_orchestrator / orphan_reconciler / sudoers_generator / secrets_validator / context_overlay) → ⎋ LDD [IMP:9]
+# STRUCTURE: ▶ test_skip_provision_flag (static grep state_machine.py) → ▶ test_merge_deploy_steps (static grep state_machine.py) → ▶ testtopo_sort_enriched (native topo_sort.py call with mock yamls) → ◇ W4-E5 edge-cases (Python module contracts: docker_orchestrator / orphan_reconciler / sudoers_generator / secrets_validator / context_overlay) → ⎋ LDD [IMP:9]
 # region MODULE_CONTRACT
 ## @purpose  Static audit tests verifying that W4-E1 Strangler-Fig extraction (shell → Python modules)
 ##           preserved function contracts. Tests check Python module files in deploy/ for expected
 ##           function definitions, return types, and contracts — replaces original shell-function greps.
 ## @scope    S1: static audit of state_machine.py for --skip-provision pass-through.
 ##           S2: static audit of state_machine.py for merged deploy-modules step + both system/docker types.
-##           S10: native pytest of _topo_sort.py enriched output with mocked module.yaml files.
+##           S10: native pytest of topo_sort.py enriched output with mocked module.yaml files.
 ##           W4-E5 edge-cases: static contract audits of Python modules in deploy/ (docker_orchestrator,
 ##           orphan_reconciler, sudoers_generator, secrets_validator, context_overlay) — verifies that
 ##           extracted Python functions preserve the shell contract (failure isolation, orphan detection,
@@ -24,11 +24,11 @@
 ## @modulemap
 ##   test_skip_provision_flag [S1] — static: grep state_machine.py for --skip-provision pass-through
 ##   test_merge_deploy_steps [S2] — static: grep state_machine.py for merged step + both types
-##   test_topo_sort_enriched_output [S10] — native: _topo_sort.py enriched output with module.yaml mocks
+##   testtopo_sort_enriched_output [S10] — native: topo_sort.py enriched output with module.yaml mocks
 ##   test_batch_module_metadata [S3] — static: secrets_validator.py _batch_module_metadata contract
 ##   test_parallel_healthcheck [S4] — static: docker_orchestrator.py deploy_docker_group parallel HC
-##   test_batch_sudoers [S6] — static: sudoers_generator.py _batch_generate_sudoers contract
-##   test_batch_orphan [S8] — static: orphan_reconciler.py _batch_orphan_reconciliation contract
+##   test_batch_sudoers [S6] — static: sudoers_generator.py batch_generate_sudoers contract
+##   test_batch_orphan [S8] — static: orphan_reconciler.py batch_orphan_reconciliation contract
 ##   test_git_pull_caching [S9] — static: context_overlay.py S9 caching constants + _pull_with_cache
 ##   test_rsync_consolidation [S5] — static: core-deploy.yml consolidated rsync
 ##   test_parallel_deploy_failure_isolates_modules [W4-E5] — edge: docker_orchestrator.py failure isolation
@@ -79,11 +79,11 @@ def _extract_python_func(filepath: Path, func_name: str) -> str:
     raise ValueError(f"Function '{func_name}' not found in {filepath}")
 
 
-# Add bootstrap dir to sys.path for _topo_sort import
+# Add bootstrap dir to sys.path for topo_sort import
 if str(_BOOTSTRAP_DIR) not in sys.path:
     sys.path.insert(0, str(_BOOTSTRAP_DIR))
 
-import _topo_sort
+import topo_sort
 
 # ══════════════════════════════════════════════════════════════════════════════
 # S1: --skip-provision flag
@@ -189,8 +189,8 @@ def test_merge_deploy_steps(caplog) -> None:
     assert '"--skip-provision"' in phases_content, (
         "S2 violation: --skip-provision not passed from phases.py deploy phase (φ8/φ12)"
     )
-    assert "deploy-modules.sh" in sm_content, (
-        "S2 violation: deploy-modules.sh not invoked from state_machine.py deploy_modules step"
+    assert "deploy-modules.sh" in phases_content, (
+        "S2 violation: deploy-modules.sh not invoked from phases.py deploy phase (φ8/φ12)"
     )
     logger.info("[IMP:9][test_merge_deploy_steps] --skip-provision flag in phases.py OK")
 
@@ -219,7 +219,7 @@ def test_merge_deploy_steps(caplog) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# S10: Enriched _topo_sort.py output
+# S10: Enriched topo_sort.py output
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -281,11 +281,11 @@ def _assert_ldd_trajectory(caplog) -> None:
 # endregion FUNC__assert_ldd_trajectory
 
 
-# region FUNC_test_topo_sort_enriched_output
-## @purpose  Verify that _topo_sort.py main() returns enriched output with modules dict
+# region FUNC_testtopo_sort_enriched_output
+## @purpose  Verify that topo_sort.py main() returns enriched output with modules dict
 ##           containing install_type and severity for ALL modules (not just docker).
 ## @io       ⇥ tmp_path, caplog → ⎋ None (pytest.fail if enriched output missing)
-## @complexity 2 — I/O: create mock module.yamls, call _topo_sort functions, parse JSON output
+## @complexity 2 — I/O: create mock module.yamls, call topo_sort functions, parse JSON output
 ## @invariants
 ##   - Enriched modules dict MUST include system and docker modules
 ##   - Enriched modules dict MUST include install_type and severity for each module
@@ -294,14 +294,14 @@ def _assert_ldd_trajectory(caplog) -> None:
 
 
 @pytest.mark.smoke
-def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
+def testtopo_sort_enriched_output(caplog, tmp_path) -> None:
     """
-    # ▶ tmp_path → ⚡ _setup_module_yaml × 4 (mix of docker/system, critical/warn) → ⚡ _topo_sort.load_module_yamls
+    # ▶ tmp_path → ⚡ _setup_module_yaml × 4 (mix of docker/system, critical/warn) → ⚡ topo_sort.load_module_yamls
     # → ◇ assert 'modules' key in output → ⊕ assert install_type + severity correct → ◇ assert 'groups' still present (back compat)
     # → ⎋ pass | fail | LDD
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_topo_sort_enriched_output] Setting up mock module.yamls in %s ...", tmp_path)
+    logger.info("[IMP:7][testtopo_sort_enriched_output] Setting up mock module.yamls in %s ...", tmp_path)
 
     # ── Setup 4 test modules with varied types and severities ──
     _setup_module_yaml(tmp_path, "postgres", install_type="docker", severity="critical")
@@ -309,25 +309,25 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     _setup_module_yaml(tmp_path, "nginx", install_type="system", severity="critical")
     _setup_module_yaml(tmp_path, "hermes-agent", install_type="docker", severity="warn")
 
-    logger.info("[IMP:8][test_topo_sort_enriched_output] Loading module yamls ...")
-    all_modules = _topo_sort.load_module_yamls(str(tmp_path))
+    logger.info("[IMP:8][testtopo_sort_enriched_output] Loading module yamls ...")
+    all_modules = topo_sort.load_module_yamls(str(tmp_path))
     assert len(all_modules) == 4, f"Expected 4 modules loaded, got {len(all_modules)}"
 
-    logger.info("[IMP:8][test_topo_sort_enriched_output] Filtering docker modules ...")
-    docker_modules = _topo_sort.filter_docker_modules(all_modules)
+    logger.info("[IMP:8][testtopo_sort_enriched_output] Filtering docker modules ...")
+    docker_modules = topo_sort.filter_docker_modules(all_modules)
     assert len(docker_modules) == 3, f"Expected 3 docker modules, got {len(docker_modules)}"
 
-    logger.info("[IMP:8][test_topo_sort_enriched_output] Building DAG ...")
-    dag = _topo_sort.build_dag(docker_modules)
+    logger.info("[IMP:8][testtopo_sort_enriched_output] Building DAG ...")
+    dag = topo_sort.build_dag(docker_modules)
     assert len(dag) == 3, f"Expected 3 DAG nodes, got {len(dag)}"
 
-    logger.info("[IMP:8][test_topo_sort_enriched_output] Running Kahn's algorithm ...")
-    groups = _topo_sort.kahn_topological_sort(dag)
+    logger.info("[IMP:8][testtopo_sort_enriched_output] Running Kahn's algorithm ...")
+    groups = topo_sort.kahn_topological_sort(dag)
     assert len(groups) >= 1, "Expected at least 1 deploy group"
 
-    logger.info("[IMP:9][test_topo_sort_enriched_output] Groups: %s", groups)
+    logger.info("[IMP:9][testtopo_sort_enriched_output] Groups: %s", groups)
 
-    # ── Build enriched modules dict (S10 logic — replicated from _topo_sort.py main()) ──
+    # ── Build enriched modules dict (S10 logic — replicated from topo_sort.py main()) ──
     modules_info = {}
     for m in all_modules:
         name = m.get("name", "")
@@ -346,12 +346,12 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     # groups key must be present (backward compat)
     assert "groups" in parsed, "S10 violation: 'groups' key missing from enriched output"
     assert isinstance(parsed["groups"], list), "S10 violation: 'groups' must be a list"
-    logger.info("[IMP:9][test_topo_sort_enriched_output] 'groups' key present OK (backward compat)")
+    logger.info("[IMP:9][testtopo_sort_enriched_output] 'groups' key present OK (backward compat)")
 
     # modules key must be present (new enrichment)
     assert "modules" in parsed, "S10 violation: 'modules' key missing from enriched output"
     assert isinstance(parsed["modules"], dict), "S10 violation: 'modules' must be a dict"
-    logger.info("[IMP:9][test_topo_sort_enriched_output] 'modules' key present OK (enrichment)")
+    logger.info("[IMP:9][testtopo_sort_enriched_output] 'modules' key present OK (enrichment)")
 
     # Verify specific module metadata
     modules = parsed["modules"]
@@ -362,7 +362,7 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     assert modules["postgres"]["severity"] == "critical", (
         f"S10 violation: postgres severity expected 'critical', got '{modules['postgres']['severity']}'"
     )
-    logger.info("[IMP:9][test_topo_sort_enriched_output] postgres metadata OK: install_type=docker, severity=critical")
+    logger.info("[IMP:9][testtopo_sort_enriched_output] postgres metadata OK: install_type=docker, severity=critical")
 
     # System module must be in modules but NOT in groups
     assert "nginx" in modules, "S10 violation: nginx (system module) missing from modules dict"
@@ -372,7 +372,7 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     assert modules["nginx"]["severity"] == "critical", (
         f"S10 violation: nginx severity expected 'critical', got '{modules['nginx']['severity']}'"
     )
-    logger.info("[IMP:9][test_topo_sort_enriched_output] nginx metadata OK: install_type=system, severity=critical")
+    logger.info("[IMP:9][testtopo_sort_enriched_output] nginx metadata OK: install_type=system, severity=critical")
 
     assert "hermes-agent" in modules, "S10 violation: hermes-agent not in modules dict"
     assert modules["hermes-agent"]["install_type"] == "docker", (
@@ -381,7 +381,7 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     assert modules["hermes-agent"]["severity"] == "warn", (
         f"S10 violation: hermes-agent severity expected 'warn', got '{modules['hermes-agent']['severity']}'"
     )
-    logger.info("[IMP:9][test_topo_sort_enriched_output] hermes-agent metadata OK: install_type=docker, severity=warn")
+    logger.info("[IMP:9][testtopo_sort_enriched_output] hermes-agent metadata OK: install_type=docker, severity=warn")
 
     # Verify system module is NOT in groups (groups must only contain docker modules)
     group_modules = set()
@@ -390,14 +390,14 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
     assert "nginx" not in group_modules, (
         "S10 violation: system module 'nginx' should not appear in docker deploy groups"
     )
-    logger.info("[IMP:9][test_topo_sort_enriched_output] System module correctly excluded from docker groups")
+    logger.info("[IMP:9][testtopo_sort_enriched_output] System module correctly excluded from docker groups")
 
     # ── Verify backward compat: groups structure unchanged from pre-S10 ──
     # New enriched output should still produce valid deploy groups
     assert len(parsed["groups"]) > 0, "S10 violation: empty groups in enriched output"
     for group in parsed["groups"]:
         assert isinstance(group, list), "S10 violation: each group must be a list of module names"
-    logger.info("[IMP:9][test_topo_sort_enriched_output] All group entries are valid lists")
+    logger.info("[IMP:9][testtopo_sort_enriched_output] All group entries are valid lists")
 
     # ── LDD trajectory ──
     _assert_ldd_trajectory(caplog)
@@ -406,8 +406,8 @@ def test_topo_sort_enriched_output(caplog, tmp_path) -> None:
 # 🧪 TRAP[TEST] · Regression: S10 enriched output must include all modules (system + docker)
 # · Scenario: 4-module mix (2 docker, 1 system, 1 docker) → all 4 appear in modules, only 3 in groups
 # · Last fail: N/A
-# · Remove if: _topo_sort.py output changes schema
-# endregion FUNC_test_topo_sort_enriched_output
+# · Remove if: topo_sort.py output changes schema
+# endregion FUNC_testtopo_sort_enriched_output
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -448,7 +448,7 @@ def test_batch_module_metadata(caplog) -> None:
     # the orchestrator imports secrets_validator natively (no subprocess).
     orch_content = _ORCHESTRATOR_PY.read_text()
     assert "secrets_validator" in orch_content, "S3 violation: secrets_validator not imported in deploy_orchestrator.py"
-    assert "_batch_check_env" in orch_content or "_check_env_requires" in orch_content, (
+    assert "batch_check_env" in orch_content or "check_env_requires" in orch_content, (
         "S3 violation: batch env check functions not used in deploy_orchestrator.py"
     )
     logger.info("[IMP:9][test_batch_module_metadata] secrets_validator imported in deploy_orchestrator.py OK")
@@ -512,7 +512,7 @@ def test_parallel_healthcheck(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_batch_sudoers
-## @purpose  Static audit: verify _batch_generate_sudoers() exists in sudoers_generator.py
+## @purpose  Static audit: verify batch_generate_sudoers() exists in sudoers_generator.py
 ##           (migrated from deploy-modules.sh by W4-E1 extraction) and is called from deploy-modules.sh.
 ## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/sudoers_generator.py → ⎋ None (pytest.fail if batch sudoers missing)
 ## @complexity 1 — static grep on file content
@@ -521,30 +521,30 @@ def test_parallel_healthcheck(caplog) -> None:
 @pytest.mark.static_audit
 def test_batch_sudoers(caplog) -> None:
     """
-    # ◇ read sudoers_generator.py → ⚡ grep def _batch_generate_sudoers + _render_sudoers_rules → ⎋ pass | fail
+    # ◇ read sudoers_generator.py → ⚡ grep def batch_generate_sudoers + render_sudoers_rules → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_batch_sudoers] Reading sudoers_generator.py ...")
-    py_content = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "_batch_generate_sudoers")
+    py_content = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "batch_generate_sudoers")
 
-    # ── 1. _batch_generate_sudoers function must exist (Python format) ──
-    assert "def _batch_generate_sudoers(" in py_content, (
-        "S6 violation: _batch_generate_sudoers() not found in sudoers_generator.py"
+    # ── 1. batch_generate_sudoers function must exist (Python format) ──
+    assert "def batch_generate_sudoers(" in py_content, (
+        "S6 violation: batch_generate_sudoers() not found in sudoers_generator.py"
     )
-    logger.info("[IMP:9][test_batch_sudoers] _batch_generate_sudoers() function declared OK")
+    logger.info("[IMP:9][test_batch_sudoers] batch_generate_sudoers() function declared OK")
 
-    # ── 2. _render_sudoers_rules helper must exist ──
+    # ── 2. render_sudoers_rules helper must exist ──
     sg_content = (_DEPLOY_PYTHON_DIR / "sudoers_generator.py").read_text()
-    assert "def _render_sudoers_rules(" in sg_content, (
-        "S6 violation: _render_sudoers_rules() helper not found in sudoers_generator.py"
+    assert "def render_sudoers_rules(" in sg_content, (
+        "S6 violation: render_sudoers_rules() helper not found in sudoers_generator.py"
     )
-    logger.info("[IMP:9][test_batch_sudoers] _render_sudoers_rules() helper OK")
+    logger.info("[IMP:9][test_batch_sudoers] render_sudoers_rules() helper OK")
 
-    # ── 3. deploy_orchestrator.py must import sudoers_generator and call _batch_generate_sudoers (DevPlan 100) ──
+    # ── 3. deploy_orchestrator.py must import sudoers_generator and call batch_generate_sudoers (DevPlan 100) ──
     orch_content = _ORCHESTRATOR_PY.read_text()
     assert "sudoers_generator" in orch_content, "S6 violation: sudoers_generator not imported in deploy_orchestrator.py"
-    assert "_batch_generate_sudoers" in orch_content, (
-        "S6 violation: _batch_generate_sudoers not used in deploy_orchestrator.py"
+    assert "batch_generate_sudoers" in orch_content, (
+        "S6 violation: batch_generate_sudoers not used in deploy_orchestrator.py"
     )
     logger.info("[IMP:9][test_batch_sudoers] sudoers_generator imported in deploy_orchestrator.py OK")
 
@@ -553,7 +553,7 @@ def test_batch_sudoers(caplog) -> None:
 
 
 # 🧪 TRAP[TEST] · Regression: S6 batch sudoers must replace per-module calls
-# · Scenario: static grep of deploy-modules.sh for _batch_generate_sudoers and removed per-module calls
+# · Scenario: static grep of deploy-modules.sh for batch_generate_sudoers and removed per-module calls
 # · Last fail: N/A
 # · Remove if: sudoers generation approach changes
 # endregion FUNC_test_batch_sudoers
@@ -564,7 +564,7 @@ def test_batch_sudoers(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_batch_orphan
-## @purpose  Static audit: verify _batch_orphan_reconciliation() exists in orphan_reconciler.py
+## @purpose  Static audit: verify batch_orphan_reconciliation() exists in orphan_reconciler.py
 ##           (migrated from deploy-modules.sh by W4-E1 extraction) and is called from deploy-modules.sh.
 ## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/orphan_reconciler.py → ⎋ None (pytest.fail if batch orphan missing)
 ## @complexity 1 — static grep on file content
@@ -573,30 +573,30 @@ def test_batch_sudoers(caplog) -> None:
 @pytest.mark.static_audit
 def test_batch_orphan(caplog) -> None:
     """
-    # ◇ read orphan_reconciler.py → ⚡ grep def _batch_orphan_reconciliation → ◇ assert docker ps usage → ⎋ pass | fail
+    # ◇ read orphan_reconciler.py → ⚡ grep def batch_orphan_reconciliation → ◇ assert docker ps usage → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_batch_orphan] Reading orphan_reconciler.py ...")
-    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "orphan_reconciler.py", "_batch_orphan_reconciliation")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "orphan_reconciler.py", "batch_orphan_reconciliation")
 
-    # ── 1. _batch_orphan_reconciliation function must exist (Python format) ──
-    assert "def _batch_orphan_reconciliation(" in content, (
-        "S8 violation: _batch_orphan_reconciliation() function not found in orphan_reconciler.py"
+    # ── 1. batch_orphan_reconciliation function must exist (Python format) ──
+    assert "def batch_orphan_reconciliation(" in content, (
+        "S8 violation: batch_orphan_reconciliation() function not found in orphan_reconciler.py"
     )
-    logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation() function declared OK")
+    logger.info("[IMP:9][test_batch_orphan] batch_orphan_reconciliation() function declared OK")
 
     # ── 2. Must use docker ps -a and compose project labels ──
     or_content = (_DEPLOY_PYTHON_DIR / "orphan_reconciler.py").read_text()
     assert "docker ps" in or_content or "docker container" in or_content, (
-        "S8 violation: _batch_orphan_reconciliation must call docker ps"
+        "S8 violation: batch_orphan_reconciliation must call docker ps"
     )
-    logger.info("[IMP:9][test_batch_orphan] _batch_orphan_reconciliation uses docker ps OK")
+    logger.info("[IMP:9][test_batch_orphan] batch_orphan_reconciliation uses docker ps OK")
 
     # ── 3. deploy_orchestrator.py must import orphan_reconciler (DevPlan 100) ──
     orch_content = _ORCHESTRATOR_PY.read_text()
     assert "orphan_reconciler" in orch_content, "S8 violation: orphan_reconciler not imported in deploy_orchestrator.py"
-    assert "_batch_orphan_reconciliation" in orch_content, (
-        "S8 violation: _batch_orphan_reconciliation not used in deploy_orchestrator.py"
+    assert "batch_orphan_reconciliation" in orch_content, (
+        "S8 violation: batch_orphan_reconciliation not used in deploy_orchestrator.py"
     )
     logger.info("[IMP:9][test_batch_orphan] orphan_reconciler imported in deploy_orchestrator.py OK")
 
@@ -605,7 +605,7 @@ def test_batch_orphan(caplog) -> None:
 
 
 # 🧪 TRAP[TEST] · Regression: S8 batch orphan reconciliation must exist
-# · Scenario: static grep of deploy-modules.sh for _batch_orphan_reconciliation function and call
+# · Scenario: static grep of deploy-modules.sh for batch_orphan_reconciliation function and call
 # · Last fail: N/A
 # · Remove if: orphan reconciliation approach changes
 # endregion FUNC_test_batch_orphan
@@ -785,13 +785,13 @@ def test_parallel_deploy_failure_isolates_modules(caplog) -> None:
 
 
 # region FUNC_test_orphan_reconciliation_marks_foreign
-## @purpose  W4-E5 edge-case: verify _batch_orphan_reconciliation in orphan_reconciler.py identifies
+## @purpose  W4-E5 edge-case: verify batch_orphan_reconciliation in orphan_reconciler.py identifies
 ##           containers NOT in compose configs as orphans. This is the contract W4-E1 orphan_reconciler.py
 ##           must preserve — orphan detection must compare docker ps names against compose project labels.
 ## @io       caplog → ⎋ None (pytest.fail if orphan-detection pattern absent)
 ## @complexity 1 — static grep for the orphan-detection logic in Python
 ## @invariants
-##   - _batch_orphan_reconciliation uses docker ps to list running containers
+##   - batch_orphan_reconciliation uses docker ps to list running containers
 ##   - Compares against compose config labels (foreign = not in compose project)
 ##   - Output includes orphan container names for cleanup
 
@@ -799,17 +799,17 @@ def test_parallel_deploy_failure_isolates_modules(caplog) -> None:
 @pytest.mark.static_audit
 def test_orphan_reconciliation_marks_foreign(caplog) -> None:
     """
-    # ◇ read orphan_reconciler.py → ⚡ grep _batch_orphan_reconciliation body → ◇ assert docker ps
+    # ◇ read orphan_reconciler.py → ⚡ grep batch_orphan_reconciliation body → ◇ assert docker ps
     # + compose label comparison + orphan marking pattern → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_orphan_reconciliation] START — static audit of orphan detection in orphan_reconciler.py")
     or_content = (_DEPLOY_PYTHON_DIR / "orphan_reconciler.py").read_text()
-    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "orphan_reconciler.py", "_batch_orphan_reconciliation")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "orphan_reconciler.py", "batch_orphan_reconciliation")
 
     # ── 1. Function exists ──
-    assert "def _batch_orphan_reconciliation(" in content, (
-        "W4-E5 violation: _batch_orphan_reconciliation() not found in orphan_reconciler.py"
+    assert "def batch_orphan_reconciliation(" in content, (
+        "W4-E5 violation: batch_orphan_reconciliation() not found in orphan_reconciler.py"
     )
     logger.info("[IMP:8][test_orphan_reconciliation] function located")
 
@@ -905,21 +905,21 @@ def test_image_exists_short_circuit(caplog) -> None:
 ## @io       caplog → ⎋ None (pytest.fail if determinism pattern absent)
 ## @complexity 1 — static grep for sorted iteration + no-random-source patterns
 ## @invariants
-##   - _batch_generate_sudoers iterates modules in a stable order (not hash-randomized)
-##   - _render_sudoers_rules produces same output for same module name (no timestamp/random)
+##   - batch_generate_sudoers iterates modules in a stable order (not hash-randomized)
+##   - render_sudoers_rules produces same output for same module name (no timestamp/random)
 ##   - _validate_with_visudo gates the final write (rejects malformed sudoers)
 
 
 @pytest.mark.static_audit
 def test_batch_sudoers_determinism(caplog) -> None:
     """
-    # ◇ read sudoers_generator.py → ⚡ grep _batch_generate_sudoers + _render_sudoers_rules
+    # ◇ read sudoers_generator.py → ⚡ grep batch_generate_sudoers + render_sudoers_rules
     # → ◇ assert visudo validation + deterministic rendering (no datetime/random in output) → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_batch_sudoers_determinism] START — checking sudoers_generator.py")
     sg_content = (_DEPLOY_PYTHON_DIR / "sudoers_generator.py").read_text()
-    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "_batch_generate_sudoers")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "batch_generate_sudoers")
 
     # ── 1. _validate_with_visudo validation gates the write ──
     assert "_validate_with_visudo" in sg_content, (
@@ -928,25 +928,23 @@ def test_batch_sudoers_determinism(caplog) -> None:
     logger.info("[IMP:9][test_batch_sudoers_determinism] _validate_with_visudo present")
 
     # ── 2. No non-deterministic sources in rendering ──
-    render_func = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "_render_sudoers_rules")
+    render_func = _extract_python_func(_DEPLOY_PYTHON_DIR / "sudoers_generator.py", "render_sudoers_rules")
     # Python rendering uses string formatting, no datetime/random in template
     assert "datetime" not in render_func, (
-        "W4-E5 violation: _render_sudoers_rules must NOT use datetime (breaks determinism)"
+        "W4-E5 violation: render_sudoers_rules must NOT use datetime (breaks determinism)"
     )
-    assert "random" not in render_func, (
-        "W4-E5 violation: _render_sudoers_rules must NOT use random (breaks determinism)"
-    )
+    assert "random" not in render_func, "W4-E5 violation: render_sudoers_rules must NOT use random (breaks determinism)"
     logger.info("[IMP:9][test_batch_sudoers_determinism] no non-deterministic sources OK")
 
     # ── 3. Sudoers rule template is stable (uses string formatting, not random generation) ──
     assert "ALL=(root) NOPASSWD:" in render_func or "NOPASSWD" in render_func, (
-        "W4-E5 violation: _render_sudoers_rules must produce NOPASSWD sudoers rules"
+        "W4-E5 violation: render_sudoers_rules must produce NOPASSWD sudoers rules"
     )
     logger.info("[IMP:9][test_batch_sudoers_determinism] stable sudoers rule format present")
 
     # ── 4. Module iteration is ordered (for loop over list, not set/dict which are insertion-order in 3.7+) ──
     assert ("for" in content and "mod_name" in content) or "module" in content.lower(), (
-        "W4-E5 violation: _batch_generate_sudoers must iterate modules (deterministic order)"
+        "W4-E5 violation: batch_generate_sudoers must iterate modules (deterministic order)"
     )
     logger.info("[IMP:9][test_batch_sudoers_determinism] deterministic iteration OK")
 
@@ -954,7 +952,7 @@ def test_batch_sudoers_determinism(caplog) -> None:
 
 
 # 🧪 TRAP[TEST] · Regression: W4-E5 batch sudoers determinism (same input → identical output)
-# · Scenario: 2 runs of _batch_generate_sudoers with same modules → byte-identical sudoers file
+# · Scenario: 2 runs of batch_generate_sudoers with same modules → byte-identical sudoers file
 # · Last fail: N/A (W4-E5 baseline)
 # · Remove if: sudoers generation intentionally adds timestamps (then relax the check)
 # endregion FUNC_test_batch_sudoers_determinism

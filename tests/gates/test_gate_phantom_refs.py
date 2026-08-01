@@ -28,8 +28,8 @@
 
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import pytest
 
@@ -98,7 +98,7 @@ def _scan_paths(roots: Sequence[Path]) -> list[str]:
                 if p.is_file() and not any(seg in _EXCLUDE_DIR_PARTS or seg.startswith(".") for seg in p.parts)
             ]
 
-        for path, abs_path in candidates:
+        for path, _abs_path in candidates:
             try:
                 rel = str(path.relative_to(ROOT))
             except ValueError:
@@ -113,10 +113,12 @@ def _scan_paths(roots: Sequence[Path]) -> list[str]:
             if b"\x00" in raw[:2048]:
                 continue  # бинарный файл
             text = raw.decode("utf-8", errors="replace")
-            for i, line in enumerate(text.splitlines(), 1):
-                for name in _PHANTOM_NAMES:
-                    if re.search(re.escape(name), line):
-                        violations.append(f"{rel}:{i}: {name} → {line.strip()[:100]}")
+            violations.extend(
+                f"{rel}:{i}: {name} → {line.strip()[:100]}"
+                for i, line in enumerate(text.splitlines(), 1)
+                for name in _PHANTOM_NAMES
+                if re.search(re.escape(name), line)
+            )
 
     return violations
 
@@ -203,9 +205,7 @@ def test_phantom_scan_detects_dummy_file(tmp_path, caplog) -> None:
     logger.info("[IMP:8][phantom_gate][negative] violations: %s", violations)
 
     assert violations, "CRITICAL: сканер не детектировал 'deploy-project.sh' в фиктивном файле — гейт вечнозелёный!"
-    assert any("deploy-project.sh" in v for v in violations), (
-        f"Сканер нашёл нарушения, но не то имя: {violations}"
-    )
+    assert any("deploy-project.sh" in v for v in violations), f"Сканер нашёл нарушения, но не то имя: {violations}"
     logger.info("[IMP:9][phantom_gate][negative] PASS: фиктивный файл с фантомным именем детектирован")
 
 

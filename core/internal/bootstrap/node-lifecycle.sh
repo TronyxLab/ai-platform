@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: node-lifecycle bootstrap init update orchestrator idempotent state-machine delegation
-# STRUCTURE: ▶ --mode {init|update} → ┌arg parser┐ → ○ resolve NODE_YAML + TOR_ENABLED → ┌python3 state_machine.py --mode $MODE ...┐ → ⎋ exit 0|1
+# STRUCTURE: ▶ --mode {init|update} → ┌arg parser┐ → ○ resolve NODE_YAML + TOR_ENABLED → ┌python3 lifecycle/cli.py --mode $MODE ...┐ → ⎋ exit 0|1
 # region MODULE_CONTRACT
-## @purpose  Thin shell facade (<80 LOC) delegating phase execution to lifecycle/state_machine.py
+## @purpose  Thin shell facade (<80 LOC) delegating phase execution to lifecycle/cli.py
 ## @scope    Called from bootstrap.sh (--mode init) or node-update.sh (--mode update)
 ## @invariants CLI arg parsing, NODE_YAML resolution, TOR_ENABLED detection, SOPS_AGE_KEY fallback
-## @rationale All step logic moved to Python state_machine.py with BootstrapPhase enum
+## @rationale Все step-логика — в Python (cli.py → state_machine.py); compat-заглушка state_machine.py покрывает прямые запуски (B9 T1, CS-7)
 # endregion MODULE_CONTRACT
 set -euo pipefail; MODE=""; RESUME_MODE=false; FORCE_MODE=""; DRY_RUN_MODE=false
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; SM_SCRIPT="${SCRIPT_DIR}/lifecycle/state_machine.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; SM_SCRIPT="${SCRIPT_DIR}/lifecycle/cli.py"
 # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · PYTHONPATH отсутствовал → ModuleNotFoundError: core (script-path не добавляет CWD в sys.path); Fix: корень + lifecycle/ (паттерн converge.sh:64)
 export PYTHONPATH="${SCRIPT_DIR}/../../..:${SCRIPT_DIR}/lifecycle:${PYTHONPATH:-}"
 [[ "${1:-}" == "--mode" ]] && { shift; MODE="${1:-}"; shift || true; }

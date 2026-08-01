@@ -279,7 +279,7 @@ def machine(
     ##   - State begins in init mode with all 23 steps as pending
     ##   - _add_ssh_key redirects /home/ to tmp_path/home_dir/ (macOS compat)
     """
-    import core.internal.bootstrap.lifecycle.state_machine as _sm_module
+    import core.internal.bootstrap.lifecycle.helpers.users as _helpers_users
 
     # Patch _add_ssh_key to use tmp_path/home_dir/ instead of /home/
     # macOS does not support os.makedirs("/home/platform/.ssh") — Errno 45
@@ -303,7 +303,7 @@ def machine(
             safe_ssh,
         )
 
-    monkeypatch.setattr(_sm_module, "_add_ssh_key", _safe_add_ssh_key)
+    monkeypatch.setattr(_helpers_users, "add_ssh_key", _safe_add_ssh_key)
 
     # Patch _ensure_projects_base to use tmp_path/projects/ instead of /opt/projects/
     # macOS does not allow non-root os.makedirs("/opt/projects") — PermissionError
@@ -316,7 +316,7 @@ def machine(
             safe_projects,
         )
 
-    monkeypatch.setattr(_sm_module, "_ensure_projects_base", _safe_ensure_projects_base)
+    monkeypatch.setattr(_helpers_users, "ensure_projects_base", _safe_ensure_projects_base)
 
     sm = StateMachine(state_file_path=str(state_file))
     sm.setup_state("init")

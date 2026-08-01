@@ -4,7 +4,7 @@
 # region MODULE_CONTRACT
 ## @purpose  Single source of truth for reading secrets-manifest.yaml across the ai-platform.
 ##           Replaces 3 independent parsers (secrets_manager._read_manifest,
-##           secrets_validator._check_env_requires, secrets_validator._validate_secret_charsets).
+##           secrets_validator.check_env_requires, secrets_validator.validate_secret_charsets).
 ##           STRICT mode: missing/malformed manifest raises — no silent `return []` fallbacks
 ##           (DevPlan 116 T4, U-33; invariant 7 — «gate зелёный, система врёт»).
 ## @scope    Shared library in core/internal/shared/ consumed by bootstrap/lifecycle,

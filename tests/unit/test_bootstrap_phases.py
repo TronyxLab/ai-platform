@@ -41,9 +41,11 @@ import state_machine as sm
 
 # Re-export for concise test references
 BootstrapPhase = sm.BootstrapPhase
-PhaseDependencyError = sm.PhaseDependencyError
-PhasePreconditionError = sm.PhasePreconditionError
 _phase_dependency_graph = sm._phase_dependency_graph
+
+# B9 T2: precondition_check переехал в state_store.py; исключения raise'ятся из канонического
+# пакетного state_machine (ленивый импорт в state_store) — НЕ из script-загруженного sm
+from core.internal.bootstrap.lifecycle.state_machine import PhasePreconditionError
 
 logger = logging.getLogger(__name__)
 

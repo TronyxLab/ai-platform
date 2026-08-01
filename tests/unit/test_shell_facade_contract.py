@@ -225,7 +225,8 @@ def test_shell_has_python_delegation(caplog) -> None:
     }
     all_present = True
     for mod_name, mod_label in modules.items():
-        present = f"{mod_name} as _" in orch_content
+        # B9 T3: `as _x` алиасы убраны — публичные имена в import-блоке (from core.internal.bootstrap.deploy import (mod, ...))
+        present = f"{mod_name}," in orch_content
         logger.critical("[IMP:9][S3][python] %s (%s) imported in orchestrator: %s", mod_label, mod_name, present)
         if not present:
             all_present = False
@@ -336,12 +337,12 @@ def test_shell_has_context_overlay(caplog) -> None:
     content = _read_deploy_orchestrator()
 
     # ── Context overlay import (native, D1) ──
-    has_import = "context_overlay as _context_overlay" in content
+    has_import = "context_overlay," in content
     logger.critical("[IMP:9][S5][context] context_overlay imported in orchestrator: %s", has_import)
     assert has_import, "deploy_orchestrator.py must import context_overlay natively (D1)"
 
     # ── ensure_context_repo call with node_yaml (preflight phase) ──
-    has_ensure_call = "_context_overlay.ensure_context_repo(node_yaml)" in content
+    has_ensure_call = "context_overlay.ensure_context_repo(node_yaml)" in content
     logger.critical("[IMP:9][S5][context] ensure_context_repo(node_yaml) call: %s", has_ensure_call)
     assert has_ensure_call, "deploy_orchestrator.py must call ensure_context_repo(node_yaml) in _preflight"
 
@@ -368,24 +369,24 @@ def test_shell_has_sudoers_orphan_post_deploy(caplog) -> None:
     """deploy_orchestrator.py must run sudoers batch + orphan reconciliation inside _postflight.
 
     ## @purpose  Verify post-deploy delegation moved to Python (DevPlan 100): PHASE 4 _postflight
-    ##           calls _sudoers_generator._batch_generate_sudoers and
-    ##           _orphan_reconciler._batch_orphan_reconciliation — both AFTER the deploy phase.
+    ##           calls _sudoers_generator.batch_generate_sudoers and
+    ##           orphan_reconciler.batch_orphan_reconciliation — both AFTER the deploy phase.
     ## @scenario S6: structural contract for post-deploy in Python
     ## @invariants
-    ##   - sudoers_generator imported + _batch_generate_sudoers invoked inside _postflight
-    ##   - orphan_reconciler imported + _batch_orphan_reconciliation invoked inside _postflight
+    ##   - sudoers_generator imported + batch_generate_sudoers invoked inside _postflight
+    ##   - orphan_reconciler imported + batch_orphan_reconciliation invoked inside _postflight
     ##   - Both calls live in the _postflight function body (post-deploy phase)
     """
     caplog.set_level(logging.DEBUG)
     content = _read_deploy_orchestrator()
 
     # ── Sudoers generator: import + batch call inside _postflight ──
-    has_sudoers_import = "sudoers_generator as _sudoers_generator" in content
+    has_sudoers_import = "sudoers_generator," in content
     logger.critical("[IMP:9][S6][post-deploy] sudoers_generator imported: %s", has_sudoers_import)
     assert has_sudoers_import, "deploy_orchestrator.py must import sudoers_generator (D1)"
 
     # ── Orphan reconciler: import + batch call inside _postflight ──
-    has_orphan_import = "orphan_reconciler as _orphan_reconciler" in content
+    has_orphan_import = "orphan_reconciler," in content
     logger.critical("[IMP:9][S6][post-deploy] orphan_reconciler imported: %s", has_orphan_import)
     assert has_orphan_import, "deploy_orchestrator.py must import orphan_reconciler (D1)"
 
@@ -395,12 +396,12 @@ def test_shell_has_sudoers_orphan_post_deploy(caplog) -> None:
     postflight_body = (
         content[postflight_start:postflight_end] if postflight_start != -1 and postflight_end != -1 else ""
     )
-    has_sudoers_in_post = "_batch_generate_sudoers" in postflight_body
-    has_orphan_in_post = "_batch_orphan_reconciliation" in postflight_body
-    logger.critical("[IMP:9][S6][post-deploy] _batch_generate_sudoers in _postflight: %s", has_sudoers_in_post)
-    logger.critical("[IMP:9][S6][post-deploy] _batch_orphan_reconciliation in _postflight: %s", has_orphan_in_post)
-    assert has_sudoers_in_post, "deploy_orchestrator.py must call _batch_generate_sudoers inside _postflight"
-    assert has_orphan_in_post, "deploy_orchestrator.py must call _batch_orphan_reconciliation inside _postflight"
+    has_sudoers_in_post = "batch_generate_sudoers" in postflight_body
+    has_orphan_in_post = "batch_orphan_reconciliation" in postflight_body
+    logger.critical("[IMP:9][S6][post-deploy] batch_generate_sudoers in _postflight: %s", has_sudoers_in_post)
+    logger.critical("[IMP:9][S6][post-deploy] batch_orphan_reconciliation in _postflight: %s", has_orphan_in_post)
+    assert has_sudoers_in_post, "deploy_orchestrator.py must call batch_generate_sudoers inside _postflight"
+    assert has_orphan_in_post, "deploy_orchestrator.py must call batch_orphan_reconciliation inside _postflight"
 
     _assert_ldd_imp9(caplog)
 

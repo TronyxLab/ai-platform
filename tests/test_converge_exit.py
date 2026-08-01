@@ -295,21 +295,28 @@ logger = logging.getLogger(__name__)
 _RECONCILER_PY = (
     Path(__file__).resolve().parent.parent / "core" / "internal" / "bootstrap" / "converge" / "reconciler.py"
 )
+# B9 T2 (U-31): доменные модули R-units (SRP-декомпозиция reconciler)
+_CONVERGE_DIR = _RECONCILER_PY.parent
+
+
+def _converge_sources() -> str:
+    """Concatenate converge/ package sources (reconciler + 8 доменов + infra) for static audit."""
+    return "\n".join(p.read_text() for p in sorted(_CONVERGE_DIR.glob("*.py")))
 
 
 # region TEST_test_drift_detection_r_units
 # 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 drift detection R-units → W4-E3 redirect to reconciler.py
 # · Regression: reconciler.py must have 6 reconcile_* functions detecting distinct drift dimensions
-# · Scenario: static grep reconciler.py for reconcile_perms, reconcile_audit_log, reconcile_projects, reconcile_networks, detect_hosts_drift, verify_vhosts
+# · Scenario: static grep converge/ package for reconcile_perms, reconcile_audit_log, reconcile_projects, reconcile_networks, detect_hosts_drift, verify_vhosts
 # · Last fail: N/A (W4-E5 baseline, updated for W4-E3)
 # · Remove if: reconciler.py R-units are fundamentally restructured
 
 
 def test_drift_detection_r_units(tmp_path):
-    """Static audit: reconciler.py has 6 reconcile_* functions for distinct drift dimensions."""
-    content = _RECONCILER_PY.read_text()
+    """Static audit: converge/ package has 6 reconcile_* functions for distinct drift dimensions (B9 T2)."""
+    content = _converge_sources()
 
-    # ── All 6 reconcile functions must exist in reconciler.py ──
+    # ── All 6 reconcile functions must exist in converge/ пакете (домены + оркестратор) ──
     required_units = [
         ("def reconcile_perms", "R1 executable-bit drift"),
         ("def reconcile_audit_log", "R2 audit.log perms drift"),
@@ -322,18 +329,18 @@ def test_drift_detection_r_units(tmp_path):
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     imp_found = False
     for func_def, desc in required_units:
-        assert func_def in content, f"W4-E3 violation: {func_def} missing in reconciler.py — {desc}"
+        assert func_def in content, f"W4-E3 violation: {func_def} missing in converge/ package — {desc}"
         msg = f"[IMP:9][test_drift_detection] {func_def} present — {desc}"
         print(msg)
         imp_found = True
     print("--- END LDD TRAJECTORY ---")
 
-    # ── Each reconcile function uses _set_exit severity tracking (Python equivalent of CONVERGE_HAS_FLAGS) ──
-    assert "_set_exit(1)" in content, "W4-E3 violation: reconciler.py must use _set_exit(1) for warning drifts"
-    assert "_set_exit(2)" in content, "W4-E3 violation: reconciler.py must use _set_exit(2) for error drifts"
-    print("[IMP:9][test_drift_detection] _set_exit(1) + _set_exit(2) severity tracking present")
+    # ── Each reconcile function uses set_exit severity tracking (Python equivalent of CONVERGE_HAS_FLAGS) ──
+    assert "set_exit(1)" in content, "W4-E3 violation: converge/ must use set_exit(1) for warning drifts"
+    assert "set_exit(2)" in content, "W4-E3 violation: converge/ must use set_exit(2) for error drifts"
+    print("[IMP:9][test_drift_detection] set_exit(1) + set_exit(2) severity tracking present")
 
-    # ── Drift reporting mechanism exists ──
+    # ── Drift reporting mechanism exists (infra.report_add) ──
     assert "report_add" in content, "W4-E3 violation: report_add drift reporting mechanism missing"
     print("[IMP:9][test_drift_detection] report_add drift reporting present")
 
@@ -345,15 +352,15 @@ def test_drift_detection_r_units(tmp_path):
 
 # region TEST_test_reconcile_idempotency
 # 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 reconcile idempotency → W4-E3 redirect to reconciler.py
-# · Regression: reconciler.py must have idempotency guards — second run detects no drift
-# · Scenario: static grep for "SKIP" / "already" / "converged" patterns in reconciler.py reconcile functions
+# · Regression: reconcile функции должны иметь idempotency guards — second run detects no drift
+# · Scenario: static grep converge/ package for "SKIP" / "already" / "converged" patterns
 # · Last fail: N/A (W4-E5 baseline, updated for W4-E3)
-# · Remove if: idempotency moves to state-based reconciler.py (then point test at new module)
+# · Remove if: idempotency moves to state-based reconciler (then point test at new module)
 
 
 def test_reconcile_idempotency(tmp_path):
-    """Static audit: reconciler.py reconcile functions are idempotent (SKIP on already-converged)."""
-    content = _RECONCILER_PY.read_text()
+    """Static audit: converge/ reconcile functions are idempotent (SKIP on already-converged)."""
+    content = _converge_sources()
 
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
     imp_found = False
@@ -369,10 +376,10 @@ def test_reconcile_idempotency(tmp_path):
     assert has_converged, "W4-E3 violation: no 'converged'/'already' keyword — idempotent no-op state missing"
     print("[IMP:9][test_idempotency] converged/already keyword present")
 
-    # ── 3. dry_run + report_only modes in reconciler.py (non-mutating inspection) ──
-    assert "dry_run" in content, "W4-E3 violation: dry_run mode missing in reconciler.py"
-    assert "report_only" in content, "W4-E3 violation: report_only mode missing in reconciler.py"
-    print("[IMP:9][test_idempotency] dry_run + report_only present in reconciler.py")
+    # ── 3. dry_run + report_only modes in converge/ (non-mutating inspection) ──
+    assert "dry_run" in content, "W4-E3 violation: dry_run mode missing in converge/ package"
+    assert "report_only" in content, "W4-E3 violation: report_only mode missing in converge/ package"
+    print("[IMP:9][test_idempotency] dry_run + report_only present in converge/ package")
     print("--- END LDD TRAJECTORY ---")
 
     assert imp_found, "Critical LDD Error: No IMP:9 business logic log found"
@@ -382,19 +389,16 @@ def test_reconcile_idempotency(tmp_path):
 
 
 # region TEST_test_is_stub_edge_cases
-# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 _is_stub edge cases → W4-E3 redirect to reconciler.py _is_stub
-# · Regression: _is_stub must distinguish 3 states: stub file, deployed file, missing file
-# · Scenario: import reconciler._is_stub and test with 3 fixture files
-# · Last fail: N/A (W4-E5 baseline, updated for W4-E3)
-# · Remove if: _is_stub is removed from reconciler.py
+# 🧪 TRAP[TEST] · 2026-07-22 · W4-E5 _is_stub edge cases → B9 T4 redirect to shared/stub_detection
+# · Regression: is_stub_ai_platform_yaml must distinguish 3 states: stub file, deployed file, missing file
+# · Scenario: import core.internal.shared.stub_detection.is_stub_ai_platform_yaml (единая реализация, U-28)
+# · Last fail: N/A (W4-E5 baseline, updated for B9 T4)
+# · Remove if: is_stub is removed from shared/stub_detection
 
 
 def test_is_stub_edge_cases(tmp_path):
-    """_is_stub: stub file → true, deployed file → false, missing file → false (not a stub)."""
-    import sys
-
-    sys.path.insert(0, str(_RECONCILER_PY.parent))
-    from reconciler import _is_stub  # type: ignore
+    """is_stub_ai_platform_yaml: stub file → true, deployed file → false, missing file → false."""
+    from core.internal.shared.stub_detection import is_stub_ai_platform_yaml as _is_stub
 
     # Fixture 1: stub file (first line "GENERATED-STUB")
     stub_file = tmp_path / "stub.yaml"

@@ -393,10 +393,10 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
 
     # ── Check 1: shell facade delegates to state_machine.py ──
     content = LIFECYCLE_SCRIPT.read_text()
-    assert "_delegate" in content and "state_machine.py" in content, (
-        "[IMP:9][test] FAIL: shell facade must delegate to state_machine.py"
+    assert "_delegate" in content and "lifecycle/cli.py" in content, (
+        "[IMP:9][test] FAIL: shell facade must delegate to lifecycle/cli.py (B9 T1 CS-7)"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 1 PASS: delegates to state_machine.py")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 1 PASS: delegates to lifecycle/cli.py")
 
     # ── Check 2: state_machine.py has execute_phase for certificates ──
     sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
@@ -411,32 +411,36 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
     phases_content = phases_path.read_text()
     assert "phase_certificates" in phases_content, "[IMP:9][test] FAIL: phases.py must have phase_certificates()"
-    assert "_ssl_provision_via_orchestrator" in phases_content, (
-        "[IMP:9][test] FAIL: phase_certificates must call _ssl_provision_via_orchestrator"
+    assert "ssl_provision_via_orchestrator" in phases_content, (
+        "[IMP:9][test] FAIL: phase_certificates must call helpers.domains.ssl_provision_via_orchestrator (B9 T1)"
     )
     logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: phases.py has cert orchestration")
 
-    # ── Check 4: cert_orchestrator referenced from state_machine.py ──
-    assert "cert_orchestrator" in sm_content or "orchestrate_certs" in sm_content, (
-        "[IMP:9][test] FAIL: state_machine.py must reference cert_orchestrator"
+    # ── Check 4: cert_orchestrator referenced from helpers/domains.py (B9 T1) ──
+    domains_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "helpers" / "domains.py"
+    domains_content = domains_path.read_text()
+    assert "cert_orchestrator" in domains_content or "orchestrate_certs" in domains_content, (
+        "[IMP:9][test] FAIL: helpers/domains.py must reference cert_orchestrator"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: cert_orchestrator referenced")
+    logger.info(
+        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: cert_orchestrator referenced (helpers/domains.py)"
+    )
 
     # ── Check 5: WEBNAMES_API_KEY handling in phases.py ──
     phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
     phases_content = phases_path.read_text()
-    assert "WEBNAMES_API_KEY" in phases_content or "_ssl_provision_via_orchestrator" in phases_content, (
+    assert "WEBNAMES_API_KEY" in phases_content or "ssl_provision_via_orchestrator" in phases_content, (
         "[IMP:9][test] FAIL: phases.py must have SSL provision handling"
     )
     logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: SSL provision in phases.py")
 
-    # ── Check 6: state_machine.py has decrypt_secrets helper ──
-    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
-    sm_content = sm_path.read_text()
-    assert "_decrypt_secrets" in sm_content or "SECRETS_ENV_FILE" in sm_content, (
-        "[IMP:9][test] FAIL: state_machine.py must handle secret decryption"
+    # ── Check 6: helpers/secrets.py has decrypt_secrets (B9 T1) ──
+    secrets_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "helpers" / "secrets.py"
+    secrets_content = secrets_path.read_text()
+    assert "decrypt_secrets" in secrets_content or "SECRETS_ENV_FILE" in secrets_content, (
+        "[IMP:9][test] FAIL: helpers/secrets.py must handle secret decryption"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: state_machine.py handles secrets")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: helpers/secrets.py handles secrets")
 
     # ── Check 7: phase_secrets_provision and phase_certificates exist in phases.py ──
     assert "phase_secrets_provision" in phases_content, (

@@ -574,7 +574,7 @@ def _render_and_provision_llm() -> None:
 # region EXTRACT_DOMAINS
 
 
-# region FUNC_extract_domains_for_context
+# region FUNCextract_domains_for_context
 ## @purpose — Extract all domains from node.yaml for cert orchestration via NodeYaml.
 ##            Migrated from steps.py (DevPlan 079 DRIFT-B3 unification).
 ## @io — ⇥ node_yaml_path: str, context: str → ⎋ list[str]
@@ -583,7 +583,7 @@ def _render_and_provision_llm() -> None:
 ##   - Combines platform domain + project domains (filtered by context)
 ##   - Deduplicates domains
 ##   - Non-fatal: returns [] on parse errors
-def _extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
+def extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
     """Extract all domains from node.yaml for cert orchestration."""
     domains: list[str] = []
     try:
@@ -615,7 +615,7 @@ def _extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]
     return domains
 
 
-# endregion FUNC_extract_domains_for_context
+# endregion FUNCextract_domains_for_context
 
 
 # endregion EXTRACT_DOMAINS
@@ -674,7 +674,7 @@ def deploy_context(
     logger.info("[IMP:9][deploy_context] Using context=%s, node=%s", context, node_name)
 
     # ── Step 2: Cert orchestration ──
-    domains = _extract_domains_for_context(node_yaml, context)
+    domains = extract_domains_for_context(node_yaml, context)
     if domains:
         try:
             import importlib.util

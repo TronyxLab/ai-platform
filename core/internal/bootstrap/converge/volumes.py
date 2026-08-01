@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+# GREP_SUMMARY: converge-volumes, reconcile-volumes, r7, named-volumes, detect-only, o7, docker-compose-config
+# STRUCTURE: ▶ docker info → ◇ parse modules → ○ for each compose: ⚡ docker_compose_config --format json → ⊕ extract_named_volumes (type=volume) → ◇ docker volume inspect? → ⎋ drift entry {R7} (detect-only, O7)
+# region MODULE_CONTRACT
+## @purpose  R7 reconcile_volumes — detect-only named volume check (O7 invariant: NEVER creates).
+##           Извлечён из reconciler.py (B9 T2, U-31).
+## @scope    converge/volumes.py: reconcile_volumes, parse_node_modules_yaml, extract_named_volumes.
+##           Вызывается оркестратором reconciler.py.
+## @invariants
+##   - O7: detect-only — docker volume create НИКОГДА не вызывается
+##   - Bind mounts (type=bind) исключаются из проверки
+##   - docker compose config — через shared/docker_compose.docker_compose_config (sole path, B5 T6)
+## @rationale DevPlan 116 B9 D3: 8 доменов reconciler по модулям.
+## @changes  2026-08-01 · Extracted from reconciler.py (B9 T2)
+# endregion MODULE_CONTRACT
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+import core.internal.bootstrap.converge.infra as infra
+from core.internal.bootstrap.converge.infra import DOCKER_TIMEOUT, report_add, run_subprocess, set_exit
+from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
+
+logger = logging.getLogger(__name__)
+
+
+# region FUNC_parse_node_modules_yaml
+## @purpose  Parse enabled modules from node.yaml for docker module detection.
+##           Returns list of dicts with name, enabled status.
+## @param node_yaml_path  Path to node.yaml
+## @return  List of module dicts (name, enabled). Empty list on parse error.
+def parse_node_modules_yaml(node_yaml_path: str) -> list[dict]:
+    """Parse enabled modules from node.yaml.
+
+    Supports dict entries (with name/enabled keys).
+    Returns empty list on parse error or missing section.
+    """
+    try:
+        from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
+        from core.internal.shared.node_yaml import NodeYaml
+
+        modules_raw = NodeYaml(node_yaml_path).get_list("modules")
+        out: list[dict] = []
+        for m in modules_raw:
+            if isinstance(m, dict):
+                out.append(
+                    {
+                        "name": m.get("name", ""),
+                        "enabled": m.get("enabled", True),
+                    }
+                )
+            elif isinstance(m, str):
+                out.append({"name": m, "enabled": True})
+        return out
+    except (ConfigNotFoundError, ConfigParseError, ConfigValidationError) as exc:
+        logger.warning("[IMP:8][parse_node_modules_yaml] Failed to parse modules from %s: %s", node_yaml_path, exc)
+        return []
+
+
+# endregion FUNC_parse_node_modules_yaml
+
+
+# region FUNC_extract_named_volumes
+## @purpose  Extract named volume source names from docker compose config JSON.
+##           Filters out bind mounts (type=bind). Only returns named volumes
+##           (type=volume or no type specified).
+## @param compose_json  Parsed docker compose config dict (from --format json)
+## @return  List of named volume source names (deduplicated)
+## @invariant O7 — detect-only, never create volumes
+def extract_named_volumes(compose_json: dict) -> list[str]:
+    """Extract named volume source names from compose config JSON.
+
+    Only returns volumes with type: volume or no type (not bind mounts).
+    """
+    volumes_set: set[str] = set()
+    services = compose_json.get("services", {})
+
+    for svc_config in services.values():
+        vol_entries = svc_config.get("volumes", [])
+        if not isinstance(vol_entries, list):
+            continue
+        for entry in vol_entries:
+            if not isinstance(entry, dict):
+                continue
+            vol_type = entry.get("type", "volume")  # default type is volume
+            vol_source = entry.get("source", "")
+            if vol_type == "volume" and vol_source:
+                volumes_set.add(vol_source)
+
+    return list(volumes_set)
+
+
+# endregion FUNC_extract_named_volumes
+
+
+# region FUNC_reconcile_volumes
+## @purpose  Detect-only volume reconciliation (O7 invariant). Reads node.yaml
+##           to find docker modules, inspects compose config for named volumes,
+##           and verifies they exist via `docker volume inspect`. NEVER creates
+##           volumes — only reports missing ones.
+## @complexity O(N×M×V) — N=modules, M=volumes per module, V=volume inspect
+## @io       stdout/stderr: LDD logs [IMP:7-10]
+##           side-effect: subprocess calls to docker compose config + volume inspect
+## @param node_yaml_path  Path to node.yaml
+## @param dry_run         If True, only report planned mutations
+## @param report_only     If True, skip mutations entirely
+## @return  Drift report entry dict
+## @invariant O7 — detect-only, NEVER docker volume create
+## @edge-cases
+##   - Docker daemon unavailable → status=fail, no further checks
+##   - Module without compose.yml → skipped (not a docker module)
+##   - All volumes exist → status=converged
+##   - One or more volumes missing → status=warn, never create
+##   - Bind mounts (type=bind) → excluded from inspection
+def reconcile_volumes(
+    node_yaml_path: str,
+    dry_run: bool = False,
+    report_only: bool = False,
+) -> dict:
+    """Reconcile Docker named volumes — detect-only (O7 invariant).
+
+    Returns a drift entry dict with status: ok|skipped|converged|warn|fail.
+    """
+    unit = "R7"
+    logger.info("[IMP:8][converge][%s] START: reconcile_volumes — detect-only named volume check (O7)", unit)
+
+    # ── Check docker daemon ──
+    docker_info_r = run_subprocess(["docker", "info"], timeout=DOCKER_TIMEOUT)
+    if docker_info_r.returncode != 0:
+        msg = "Docker daemon not available — skipping volume reconciliation"
+        logger.error("[IMP:10][converge][%s] FAIL: %s", unit, msg)
+        report_add(unit, "fail", msg)
+        set_exit(2)
+        return {"unit": unit, "status": "fail", "detail": msg}
+
+    # ── Parse modules from node.yaml ──
+    modules = parse_node_modules_yaml(node_yaml_path)
+    if not modules:
+        logger.info("[IMP:9][converge][%s] SKIP: No modules defined in node.yaml", unit)
+        report_add(unit, "skipped", "No modules defined in node.yaml")
+        return {"unit": unit, "status": "skipped", "detail": "No modules defined in node.yaml"}
+
+    # Derive modules directory from infra.core_dir
+    modules_dir = Path(infra.core_dir) / "modules"
+
+    missing_volumes: list[str] = []
+    checked_modules = 0
+
+    for mod in modules:
+        mod_name = mod.get("name", "")
+        if not mod_name or not mod.get("enabled", True):
+            continue
+
+        # Find compose file for this module
+        compose_file = None
+        mod_dir = modules_dir / mod_name
+        for cf in ("compose.yaml", "compose.yml", "docker-compose.yml"):
+            candidate = mod_dir / cf
+            if candidate.is_file():
+                compose_file = candidate
+                break
+
+        if not compose_file:
+            logger.info("[IMP:7][converge][%s] Module %s has no compose file — skipping (not docker)", unit, mod_name)
+            continue
+
+        checked_modules += 1
+        logger.info("[IMP:7][converge][%s] Checking module: %s (compose: %s)", unit, mod_name, compose_file)
+
+        # Run docker compose config to get resolved JSON (shared — sole path, DevPlan 116 B5 T6)
+        config_r = _shared_docker_compose_config(
+            str(compose_file.parent),
+            timeout=DOCKER_TIMEOUT,
+            compose_args=["-f", str(compose_file), "--profile", mod_name],
+            flags=["--format", "json"],
+        )
+        if config_r.returncode != 0:
+            logger.warning(
+                "[IMP:8][converge][%s] docker compose config failed for %s: %s",
+                unit,
+                mod_name,
+                config_r.stderr.strip(),
+            )
+            continue
+
+        try:
+            compose_json = json.loads(config_r.stdout)
+        except json.JSONDecodeError as exc:
+            logger.warning("[IMP:8][converge][%s] Failed to parse compose JSON for %s: %s", unit, mod_name, exc)
+            continue
+
+        named_volumes = extract_named_volumes(compose_json)
+        if not named_volumes:
+            logger.info("[IMP:7][converge][%s] No named volumes in %s", unit, mod_name)
+            continue
+
+        logger.info("[IMP:7][converge][%s] Named volumes in %s: %s", unit, mod_name, named_volumes)
+
+        for vol_name in named_volumes:
+            inspect_r = run_subprocess(
+                ["docker", "volume", "inspect", vol_name],
+                timeout=DOCKER_TIMEOUT,
+            )
+            if inspect_r.returncode != 0:
+                logger.warning(
+                    "[IMP:9][converge][%s] VOLUME MISSING: %s (module: %s) — detect-only, NOT creating (O7)",
+                    unit,
+                    vol_name,
+                    mod_name,
+                )
+                missing_volumes.append(vol_name)
+            else:
+                logger.info("[IMP:7][converge][%s] Volume OK: %s", unit, vol_name)
+
+    # ── Report ──
+    if not checked_modules:
+        logger.info("[IMP:9][converge][%s] SKIP: No docker modules with compose files found", unit)
+        report_add(unit, "skipped", "No docker modules with compose files")
+        return {"unit": unit, "status": "skipped", "detail": "No docker modules with compose files"}
+
+    if missing_volumes:
+        logger.warning(
+            "[IMP:9][converge][%s] DONE: %d named volume(s) missing (detect-only — O7) — %s",
+            unit,
+            len(missing_volumes),
+            missing_volumes,
+        )
+        report_add(unit, "warn", f"{len(missing_volumes)} named volume(s) missing: {missing_volumes}")
+        set_exit(1)
+        return {
+            "unit": unit,
+            "status": "warn",
+            "detail": f"{len(missing_volumes)} named volume(s) missing",
+        }
+
+    logger.info("[IMP:9][converge][%s] DONE: All named volumes exist (converged)", unit)
+    report_add(unit, "converged", "All named volumes exist")
+    return {"unit": unit, "status": "converged", "detail": "All named volumes exist"}
+
+
+# endregion FUNC_reconcile_volumes

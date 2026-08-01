@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: deploy-orchestrator, routing, severity, parallel, sequential, orchestrator-cli, import-native, deploy-modules
-# STRUCTURE: ▶ orchestrate [preflight → parse → route → postflight → severity] → _deploy_parallel [_topo_sort → pre_pull → batch_check_env → deploy-many|groups → system → hc_marker] | _deploy_sequential [for-loop] → _aggregate_severity → _compute_exit_code → ⎋ {0,1,2}
+# STRUCTURE: ▶ orchestrate [preflight → parse → route → postflight → severity] → _deploy_parallel [topo_sort → pre_pull → batch_check_env → deploy-many|groups → system → hc_marker] | _deploy_sequential [for-loop] → _aggregate_severity → _compute_exit_code → ⎋ {0,1,2}
 # region MODULE_CONTRACT
 ## @purpose  Routing + severity orchestrator for module deployment (DevPlan 100). Extracts the
 ##           PARALLEL/ORCHESTRATOR/SEQUENTIAL routing decision and severity aggregation from
 ##           deploy-modules.sh (260 LOC shell) into typed Python. IMPORTS existing Python modules
-##           in deploy/ + _topo_sort — no subprocess for business logic. CLI + importable
+##           in deploy/ + topo_sort — no subprocess for business logic. CLI + importable
 ##           orchestrate() function. Returns exit code {0,1,2}.
 ## @scope    Called by core/internal/bootstrap/deploy-modules.sh (thin shell facade, ≤50 LOC) via
 ##           `exec python3 deploy/deploy_orchestrator.py`. Covers: preflight (context overlay,
@@ -76,26 +76,17 @@ if _PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, _PLATFORM_ROOT)
 
 # ── Existing Python module imports (DevPlan 100 D1 — import-native, NO subprocess) ──
-from core.internal.bootstrap import _topo_sort
+# B9 T3: приватные `as _x` алиасы убраны — публичные имена (гейт T6.1)
+from core.internal.bootstrap import topo_sort
 from core.internal.bootstrap.deploy import (
-    context_overlay as _context_overlay,
+    context_overlay,
+    docker_orchestrator,
+    orphan_reconciler,
+    secrets_validator,
+    spool_validator,
+    sudoers_generator,
 )
-from core.internal.bootstrap.deploy import (
-    docker_orchestrator as _docker_orchestrator,
-)
-from core.internal.bootstrap.deploy import (
-    orphan_reconciler as _orphan_reconciler,
-)
-from core.internal.bootstrap.deploy import (
-    secrets_validator as _secrets_validator,
-)
-from core.internal.bootstrap.deploy import (
-    spool_validator as _spool_validator,
-)
-from core.internal.bootstrap.deploy import (
-    sudoers_generator as _sudoers_generator,
-)
-from core.internal.llm import config_renderer as _config_renderer
+from core.internal.llm import config_renderer
 
 # DevPlan 116 B4 T1 (U-39): deploy-политика legacy parity — контракт, а не комментарии.
 # DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
@@ -244,14 +235,14 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
     """Run non-fatal preflight steps (legacy `|| true` semantics preserved)."""
     # ── context overlay ensure (clone/pull with S9 cache) ──
     try:
-        rc = _context_overlay.ensure_context_repo(node_yaml)
+        rc = context_overlay.ensure_context_repo(node_yaml)
         logger.info("[IMP:8][_preflight][context_overlay] ensure_context_repo rc=%d", rc)
     except Exception as exc:  # noqa: EXC — non-fatal preflight step (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_preflight][context_overlay] error (non-fatal): %s", exc)
 
     # ── spool dirs verify (verify-only runtime check) ──
     try:
-        report = _spool_validator.verify_spool_dirs(modules_dir)
+        report = spool_validator.verify_spool_dirs(modules_dir)
         logger.info(
             "[IMP:8][_preflight][spool] status=%s missing=%d",
             report.get("status"),
@@ -265,7 +256,7 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 
     # ── secrets charset validation (charset violations logged, deploy continues) ──
     try:
-        failed, _errors = _secrets_validator._validate_secret_charsets(os.path.join(core_dir, "secrets-manifest.yaml"))
+        failed, _errors = secrets_validator.validate_secret_charsets(os.path.join(core_dir, "secrets-manifest.yaml"))
         if failed:
             logger.warning(
                 "[IMP:8][_preflight][charset] %d secret(s) failed charset validation — continuing with deploy",
@@ -290,7 +281,7 @@ def _preflight(core_dir: str, node_yaml: str, modules_dir: str) -> None:
 ##     (legacy shell pattern — config_overlay field from node.yaml is NOT used for deploy)
 def _parse_modules(node_yaml: str, modules_dir: str, modules_filter: str) -> ModuleLists:
     """Parse node.yaml modules and apply enabled/filter/overlay resolution."""
-    raw = _secrets_validator.parse_modules_from_node_yaml(node_yaml)
+    raw = secrets_validator.parse_modules_from_node_yaml(node_yaml)
 
     all_names: list[str] = []
     enabled_names: list[str] = []
@@ -415,11 +406,11 @@ def _deploy_parallel(
     modules_info: dict[str, dict[str, str]] = {}
     groups: list[list[str]] = []
     try:
-        all_modules = _topo_sort.load_module_yamls(modules_dir)
-        docker_modules = _topo_sort.filter_docker_modules(all_modules)
-        dag = _topo_sort.build_dag(docker_modules, filter_names=enabled_names)
+        all_modules = topo_sort.load_module_yamls(modules_dir)
+        docker_modules = topo_sort.filter_docker_modules(all_modules)
+        dag = topo_sort.build_dag(docker_modules, filter_names=enabled_names)
         if dag:
-            groups = _topo_sort.kahn_topological_sort(dag)
+            groups = topo_sort.kahn_topological_sort(dag)
         for m in all_modules:
             name = m.get("name", "")
             if name:
@@ -438,14 +429,14 @@ def _deploy_parallel(
 
     # ── 2. pre-pull docker images (best-effort — compose up retries pull) ──
     try:
-        ok, fail = _docker_orchestrator._pre_pull_images(_build_entries(enabled_names, overlays), modules_dir)
+        ok, fail = docker_orchestrator.pre_pull_images(_build_entries(enabled_names, overlays), modules_dir)
         logger.info("[IMP:9][_deploy_parallel][pre_pull] Pre-pull complete: success=%d failed=%d", ok, fail)
     except Exception as exc:  # noqa: EXC — pre-pull non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_deploy_parallel][pre_pull] Pre-pull error (non-fatal): %s", exc)
 
     # ── 3. batch-check-env (one call replaces per-module check-env) ──
     try:
-        env_results = _secrets_validator._batch_check_env(modules_dir, secrets_manifest)
+        env_results = secrets_validator.batch_check_env(modules_dir, secrets_manifest)
         logger.info(
             "[IMP:9][_deploy_parallel][batch_check_env] batch-check-env completed for %d modules", len(env_results)
         )
@@ -478,7 +469,7 @@ def _deploy_parallel(
                 group_entries,
             )
             try:
-                d, _f, fnames, _rolled = _docker_orchestrator.deploy_docker_group(group_entries, modules_dir)
+                d, _f, fnames, _rolled = docker_orchestrator.deploy_docker_group(group_entries, modules_dir)
                 deployed += d
                 # 🧐 TRAP[DECISION] · 2026-07-31 · — · Group failures aggregated into severity
                 # · Rejected: legacy shell dropped deploy_docker_group failures (WARN only → exit 0 always)
@@ -581,7 +572,7 @@ def _deploy_sequential(
     for m_name in enabled_names:
         # ── env check (missing vars → fail module, skip deploy) ──
         try:
-            missing = _secrets_validator._check_env_requires(m_name, secrets_manifest)
+            missing = secrets_validator.check_env_requires(m_name, secrets_manifest)
         except Exception as exc:  # noqa: EXC — env check failure treated as non-blocking (best-effort: DEPLOY_BEST_EFFORT policy)
             logger.warning("[IMP:8][_deploy_sequential][env_check] env check error for %s: %s", m_name, exc)
             missing = []
@@ -595,7 +586,7 @@ def _deploy_sequential(
             continue
 
         # ── install type detect (module.yaml path — verified signature) ──
-        itype = _secrets_validator.detect_install_type(os.path.join(modules_dir, m_name, "module.yaml"))
+        itype = secrets_validator.detect_install_type(os.path.join(modules_dir, m_name, "module.yaml"))
         if itype == "system":
             if _invoke_module_interface(m_name, "install"):
                 deployed += 1
@@ -604,7 +595,7 @@ def _deploy_sequential(
             _invoke_module_interface(m_name, "healthcheck", "liveness")  # best-effort, non-fatal
         else:
             try:
-                ok = _docker_orchestrator.deploy_docker_module(m_name, modules_dir=modules_dir)
+                ok = docker_orchestrator.deploy_docker_module(m_name, modules_dir=modules_dir)
             except Exception as exc:  # noqa: EXC — docker deploy failure → module failed, continue (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:8][_deploy_sequential][docker] deploy error for %s: %s", m_name, exc)
                 ok = False
@@ -703,7 +694,7 @@ def _postflight(
     """Run post-deploy housekeeping (all steps non-fatal)."""
     # ── sudoers batch generation (single /etc/sudoers.d/platform-modules file) ──
     try:
-        ok = _sudoers_generator._batch_generate_sudoers(
+        ok = sudoers_generator.batch_generate_sudoers(
             all_names,
             Path(modules_dir),
             Path(templates_dir),
@@ -715,7 +706,7 @@ def _postflight(
 
     # ── orphan container detection (batch, detect-only — self-heal not enabled) ──
     try:
-        orphans = _orphan_reconciler._batch_orphan_reconciliation(enabled_names, modules_dir)
+        orphans = orphan_reconciler.batch_orphan_reconciliation(enabled_names, modules_dir)
         logger.info("[IMP:8][_postflight][orphans] %d orphan(s) detected", len(orphans))
     except Exception as exc:  # noqa: EXC — orphan detection non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:5][_postflight][orphans] error (non-fatal): %s", exc)
@@ -740,7 +731,7 @@ def _render_litellm_config(core_dir: str) -> None:
     output_path = Path(core_dir) / "modules" / "litellm" / "config" / "litellm-config.yml"
     logger.info("[IMP:7][_render_litellm_config][start] Rendering litellm-config.yml from %s", policy_path)
     try:
-        _config_renderer.render_to_file(policy_path, output_path)
+        config_renderer.render_to_file(policy_path, output_path)
         logger.info("[IMP:9][_render_litellm_config][done] litellm-config.yml rendered")
     except Exception as exc:  # noqa: EXC — render non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
         logger.warning("[IMP:8][_render_litellm_config][warn] render failed (non-fatal): %s", exc)
@@ -757,7 +748,7 @@ def _render_litellm_config(core_dir: str) -> None:
 ## @complexity 2 — linear lookup with per-module fallback
 ## @invariants
 ##   - severity defaults to "warn" for unknown modules (default warn severity)
-##   - fallback reads module.yaml severity field (secrets_validator._get_module_severity)
+##   - fallback reads module.yaml severity field (secrets_validator.get_module_severity)
 def _aggregate_severity(
     failed: list[str],
     modules_info: dict[str, dict[str, str]],
@@ -772,7 +763,7 @@ def _aggregate_severity(
             severity = modules_info[name].get("severity", "warn")
         else:
             try:
-                severity = _secrets_validator._get_module_severity(os.path.join(modules_dir, name, "module.yaml"))
+                severity = secrets_validator.get_module_severity(os.path.join(modules_dir, name, "module.yaml"))
             except Exception as exc:  # noqa: EXC — severity fallback failure → default warn (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:7][_aggregate_severity][fallback] severity lookup failed for %s: %s", name, exc)
         if severity == "critical":

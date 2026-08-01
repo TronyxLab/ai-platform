@@ -1,9 +1,11 @@
 # GREP_SUMMARY: test_stub_detection stub GENERATED-STUB converge deploy-project --status --report-only
-# STRUCTURE: ▶ test_is_stub_detects_stub (GENERATED-STUB marker) → ◇ test_is_stub_detects_real → ◇ test_is_stub_missing_file → ◇ test_report_only_stub_status → ◇ test_deploy_project_status_stub → ⎋ verify LDD [IMP:9] trajectory
+# STRUCTURE: ▶ test_converge_r3_stub_reporting (stub vs deployed) → ⎋ verify LDD [IMP:9] trajectory
+# NOTE: B9 T4 (CS-6) — inline-bash копии _is_stub удалены; unit-тесты shared/stub_detection → tests/unit/test_stub_detection_shared.py
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for stub detection (DevPlan 025 Wave 3).
-##           Tests _is_stub() helper, R3 stub-vs-deployed reporting, and
-##           stub-aware status output.
+##           Tests R3 stub-vs-deployed reporting semantics.
+##           is_stub-детекция — единая реализация shared/stub_detection (B9 T4, U-28),
+##           unit-тесты в tests/unit/test_stub_detection_shared.py (CS-6).
 ## @scope    Tests bash logic through isolated scripts. No VPS/Docker required.
 ## @invariants
 ##   - Uses tmp_path for isolated test environment
@@ -190,63 +192,3 @@ def test_is_stub_missing_file(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region TEST_CONVERGE_R3_STUB_REPORTING
-## @purpose  Verify R3 reports 'awaiting_deploy' for stub and 'converged' for real config
-## @scenario Simulate R3 reporting logic with stub vs real ai-platform.yaml
-## 🧪 TRAP[TEST] · Regression: report must distinguish stub from deployed
-##   · Last fail: N/A (new test)
-##   · Remove if: R3 reporting is fundamentally changed
-def test_converge_r3_stub_reporting(tmp_path):
-    """Test that converge R3 reports 'awaiting_deploy' for stub and 'converged' for real."""
-    script = """
-    set -euo pipefail
-
-    echo "[IMP:8][test] Testing R3 stub vs deployed reporting..." >&2
-
-    # Create stub file
-    stub_file=$(mktemp)
-    cat > "$stub_file" << 'EOF'
-# GENERATED-STUB by converge — overwritten by CI deliver
-project: test-project
-service: test-project
-EOF
-
-    # Create real config file
-    real_file=$(mktemp)
-    cat > "$real_file" << 'EOF'
-project: test-project
-service: test-project
-domain: example.com
-EOF
-
-    # Test stub detection
-    if head -1 "$stub_file" 2>/dev/null | grep -q "GENERATED-STUB"; then
-        echo "[IMP:9][test] STUB: awaiting_deploy" >&2
-    else
-        echo "[IMP:10][test] FAIL: stub not detected" >&2
-        exit 1
-    fi
-
-    if head -1 "$real_file" 2>/dev/null | grep -q "GENERATED-STUB"; then
-        echo "[IMP:10][test] FAIL: real file detected as stub" >&2
-        exit 1
-    else
-        echo "[IMP:9][test] REAL: converged" >&2
-    fi
-
-    rm -f "$stub_file" "$real_file"
-    """
-    result = _run_bash_test(script, tmp_path)
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    imp_found = False
-    for line in result.stderr.splitlines():
-        if "[IMP:" in line:
-            print(line)
-            if "[IMP:9]" in line:
-                imp_found = True
-    print("--- END LDD TRAJECTORY ---")
-    assert result.returncode == 0, f"Script failed: {result.stderr}"
-    assert imp_found, "IMP:9 log not found"
-
-
-# endregion

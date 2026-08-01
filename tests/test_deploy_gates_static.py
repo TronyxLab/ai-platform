@@ -7,7 +7,7 @@
 ##           All tests are @pytest.mark.static_audit — no Docker daemon required.
 ## @invariants
 ##   - test_env_requires_gate_present: secrets_validator imported by deploy_orchestrator.py (D1);
-##     _check_env_requires (sequential) + _batch_check_env (parallel) invoked BEFORE deploy;
+##     check_env_requires (sequential) + batch_check_env (parallel) invoked BEFORE deploy;
 ##     shell facade delegates via exec python3 deploy/deploy_orchestrator.py
 ##   - test_no_hardcoded_hermes_images: no ghcr.io/tronyx161/hermes-agent literal in deploy-modules.sh
 ##   - test_clickhouse_password_url_safe: dev values in .env.example and platform-env.yaml match ^[A-Za-z0-9._-]+$
@@ -45,8 +45,8 @@ _PLATFORM_ENV_YAML = repo_root() / "platform-env.yaml"
 # region FUNC_test_env_requires_gate_present
 ## @purpose  Assert the env_requires gate (A4) lives in deploy/deploy_orchestrator.py:
 ##           secrets_validator is imported natively (D1) and invoked BEFORE module deploy in
-##           BOTH paths — _deploy_sequential calls _check_env_requires per module before deploy,
-##           _deploy_parallel calls _batch_check_env before group deploy. The thin shell facade
+##           BOTH paths — _deploy_sequential calls check_env_requires per module before deploy,
+##           _deploy_parallel calls batch_check_env before group deploy. The thin shell facade
 ##           deploy-modules.sh delegates via `exec python3 deploy/deploy_orchestrator.py` and
 ##           contains no direct secrets_validator.py call.
 ##           Acceptance criterion A4: module with empty env_requires var fails before compose up.
@@ -54,8 +54,8 @@ _PLATFORM_ENV_YAML = repo_root() / "platform-env.yaml"
 ## @complexity 1 — static grep on file content (orchestrator + facade)
 ## @invariants
 ##   - deploy_orchestrator.py imports secrets_validator as _secrets_validator (import-native, D1)
-##   - _deploy_sequential body calls _check_env_requires BEFORE deploy_docker_module / invoke_module_interface
-##   - _deploy_parallel body calls _batch_check_env BEFORE deploy_docker_group / _deploy_orchestrator
+##   - _deploy_sequential body calls check_env_requires BEFORE deploy_docker_module / invoke_module_interface
+##   - _deploy_parallel body calls batch_check_env BEFORE deploy_docker_group / _deploy_orchestrator
 ##   - deploy-modules.sh facade execs python3 deploy/deploy_orchestrator.py (no direct secrets_validator call)
 
 
@@ -76,45 +76,45 @@ def test_env_requires_gate_present(caplog) -> None:
     shell_content = _DEPLOY_MODULES_SH.read_text()
 
     # ── 1. secrets_validator imported natively (DevPlan 100 D1 — no subprocess) ──
-    has_import = "secrets_validator as _secrets_validator" in orch_content
+    has_import = "secrets_validator," in orch_content
     logger.critical("[IMP:9][test_env_requires_gate] secrets_validator imported in orchestrator: %s", has_import)
     assert has_import, (
         "deploy_orchestrator.py must import secrets_validator natively (D1) — "
         "env_requires validation moved from shell to Python (DevPlan 100)"
     )
 
-    # ── 2. Sequential path: _check_env_requires BEFORE deploy (A4 per-module gate) ──
+    # ── 2. Sequential path: check_env_requires BEFORE deploy (A4 per-module gate) ──
     seq_start = orch_content.find("def _deploy_sequential(")
     seq_end = orch_content.find("# endregion FUNC__deploy_sequential")
     seq_body = orch_content[seq_start:seq_end] if seq_start != -1 and seq_end != -1 else ""
-    has_check_env = "_secrets_validator._check_env_requires" in seq_body
+    has_check_env = "secrets_validator.check_env_requires" in seq_body
     check_before_deploy = False
     if has_check_env:
-        idx_check = seq_body.find("_secrets_validator._check_env_requires")
+        idx_check = seq_body.find("secrets_validator.check_env_requires")
         idx_docker = seq_body.find("deploy_docker_module")
         idx_system = seq_body.find('_invoke_module_interface(m_name, "install")')
         first_deploy = min(i for i in (idx_docker, idx_system) if i != -1)
         check_before_deploy = 0 <= idx_check < first_deploy
-    logger.critical("[IMP:9][test_env_requires_gate] sequential _check_env_requires call: %s", has_check_env)
+    logger.critical("[IMP:9][test_env_requires_gate] sequential check_env_requires call: %s", has_check_env)
     logger.critical("[IMP:9][test_env_requires_gate] sequential check BEFORE deploy: %s", check_before_deploy)
-    assert has_check_env, "deploy_orchestrator.py _deploy_sequential must call _check_env_requires per module"
+    assert has_check_env, "deploy_orchestrator.py _deploy_sequential must call check_env_requires per module"
     assert check_before_deploy, "env_requires check must run BEFORE module deploy (A4 — fail before compose up)"
 
-    # ── 3. Parallel path: _batch_check_env BEFORE group deploy ──
+    # ── 3. Parallel path: batch_check_env BEFORE group deploy ──
     par_start = orch_content.find("def _deploy_parallel(")
     par_end = orch_content.find("# endregion FUNC__deploy_parallel")
     par_body = orch_content[par_start:par_end] if par_start != -1 and par_end != -1 else ""
-    has_batch = "_secrets_validator._batch_check_env" in par_body
+    has_batch = "secrets_validator.batch_check_env" in par_body
     batch_before_groups = False
     if has_batch:
-        idx_batch = par_body.find("_secrets_validator._batch_check_env")
+        idx_batch = par_body.find("secrets_validator.batch_check_env")
         idx_groups = par_body.find("deploy_docker_group")
         idx_orch = par_body.find("_deploy_orchestrator(")
         first_deploy_par = min(i for i in (idx_groups, idx_orch) if i != -1)
         batch_before_groups = 0 <= idx_batch < first_deploy_par
-    logger.critical("[IMP:9][test_env_requires_gate] parallel _batch_check_env call: %s", has_batch)
+    logger.critical("[IMP:9][test_env_requires_gate] parallel batch_check_env call: %s", has_batch)
     logger.critical("[IMP:9][test_env_requires_gate] parallel batch check BEFORE groups: %s", batch_before_groups)
-    assert has_batch, "deploy_orchestrator.py _deploy_parallel must call _batch_check_env before deploy groups"
+    assert has_batch, "deploy_orchestrator.py _deploy_parallel must call batch_check_env before deploy groups"
     assert batch_before_groups, "batch env_requires check must run BEFORE group deploy (A4 — fail before compose up)"
 
     # ── 4. Shell facade delegates to the orchestrator (no direct secrets_validator call) ──

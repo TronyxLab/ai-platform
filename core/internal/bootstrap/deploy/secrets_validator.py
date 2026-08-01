@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Secrets validation and module metadata extraction — W4-E1 deploy-modules.sh decomposition."""
 # GREP_SUMMARY: secrets-validator, env-requires, secrets-env-parser, charset-validation, module-metadata, transitive-deps, node-yaml-parser, deploy-modules-decomposition
-# STRUCTURE: ┌secrets-manifest.yaml → ◇ _check_env_requires(module↦consumers+tier) → ⊕ missing vars │ ┌_validate_secret_charsets → ⊕ re.match(charset) │ ┌_batch_module_metadata → ∑ glob→name:install_type:severity │ ┌_expand_transitive_deps → BFS(module.yaml depends_on) → ⎋ sorted │ ┌parse_modules_from_node_yaml → ⟦(name,enabled,overlay)⟧ │ ┌detect_install_type ← module.yaml.install_type
+# STRUCTURE: ┌secrets-manifest.yaml → ◇ check_env_requires(module↦consumers+tier) → ⊕ missing vars │ ┌validate_secret_charsets → ⊕ re.match(charset) │ ┌_batch_module_metadata → ∑ glob→name:install_type:severity │ ┌_expand_transitive_deps → BFS(module.yaml depends_on) → ⎋ sorted │ ┌parse_modules_from_node_yaml → ⟦(name,enabled,overlay)⟧ │ ┌detect_install_type ← module.yaml.install_type
 # region MODULE_CONTRACT [DOMAIN(DEPLOY): bootstrap; CONCEPT(SECRETS): validation-gauntlet; TECH(PYTHON): argparse+yaml+re+bfs]
 ## @purpose  Extract secrets validation, module metadata, and DAG expansion from deploy-modules.sh into typed Python
 ## @scope    Reads secrets-manifest.yaml, module.yaml files, node.yaml; provides env validation, charset validation,
@@ -15,8 +15,8 @@
 ##   - File-not-found → WARN log + return defaults (graceful degradation)
 ##   - Missing required manifests → empty/fallback output, never crashes
 ##   - _expand_transitive_deps: O(V+E) BFS, validates seed modules, stderr on unknown, cycle-safe (visited-set convergence)
-##   - _validate_secret_charsets: uses re.match (full string match, not re.search)
-##   - Secret charset validation skips empty values (checked separately by _check_env_requires)
+##   - validate_secret_charsets: uses re.match (full string match, not re.search)
+##   - Secret charset validation skips empty values (checked separately by check_env_requires)
 ## @rationale Strangler-Fig decomposition of 1664-line deploy-modules.sh. Each function has a 1:1 mapping to its shell
 ##            counterpart, enabling incremental replacement without breaking existing callers. Python provides type safety,
 ##            testability, and composability — the shell functions were opaque string pipelines.
@@ -54,7 +54,7 @@ from core.internal.shared.secrets_manifest_reader import tier as secret_tier
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# region FUNC__check_env_requires
+# region FUNC_check_env_requires
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -72,8 +72,8 @@ logger = logging.getLogger(__name__)
 ## @rationale Manifest-driven approach replaces module.yaml env_requires parsing.
 ##            secrets-manifest.yaml is the Single Source of Truth. Gate validates
 ##            bidirectional consistency between module.yaml env_requires and manifest.
-def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[str]:
-    logger.info("[IMP:7][_check_env_requires][start] Module=%s, manifest=%s", module_name, secrets_manifest_path)
+def check_env_requires(module_name: str, secrets_manifest_path: str) -> list[str]:
+    logger.info("[IMP:7][check_env_requires][start] Module=%s, manifest=%s", module_name, secrets_manifest_path)
 
     secrets_list = iter_manifest_secrets(secrets_manifest_path)
 
@@ -84,7 +84,7 @@ def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[st
 
     if not module_secrets:
         logger.info(
-            "[IMP:7][_check_env_requires][no_match] No secrets in manifest for module %s with tier in {required, generated}",
+            "[IMP:7][check_env_requires][no_match] No secrets in manifest for module %s with tier in {required, generated}",
             module_name,
         )
         return []
@@ -95,10 +95,10 @@ def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[st
     secrets_file_path = Path(secrets_file)
     if secrets_file_path.is_file():
         env_map = parse_secrets_env(str(secrets_file_path))
-        logger.info("[IMP:7][_check_env_requires][env_file] Loaded %d vars from %s", len(env_map), secrets_file)
+        logger.info("[IMP:7][check_env_requires][env_file] Loaded %d vars from %s", len(env_map), secrets_file)
     else:
         logger.info(
-            "[IMP:7][_check_env_requires][env_file] Secrets file %s not found — checking os.environ only", secrets_file
+            "[IMP:7][check_env_requires][env_file] Secrets file %s not found — checking os.environ only", secrets_file
         )
 
     # Check each required secret: must exist in os.environ OR in the env file map
@@ -107,22 +107,22 @@ def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[st
         var_name = s["name"]
         if not os.environ.get(var_name, "") and not env_map.get(var_name, ""):
             missing.append(var_name)
-            logger.info("[IMP:8][_check_env_requires][missing] Var=%s is empty", var_name)
+            logger.info("[IMP:8][check_env_requires][missing] Var=%s is empty", var_name)
         else:
-            logger.info("[IMP:8][_check_env_requires][ok] Var=%s is present", var_name)
+            logger.info("[IMP:8][check_env_requires][ok] Var=%s is present", var_name)
 
     if missing:
-        logger.warning("[IMP:9][_check_env_requires][FAIL] Missing required env vars for %s: %s", module_name, missing)
+        logger.warning("[IMP:9][check_env_requires][FAIL] Missing required env vars for %s: %s", module_name, missing)
     else:
-        logger.info("[IMP:9][_check_env_requires][PASS] All required env vars present for module %s", module_name)
+        logger.info("[IMP:9][check_env_requires][PASS] All required env vars present for module %s", module_name)
 
     return missing
 
 
-# endregion FUNC__check_env_requires
+# endregion FUNC_check_env_requires
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# region FUNC__validate_secret_charsets
+# region FUNC_validate_secret_charsets
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -133,14 +133,14 @@ def _check_env_requires(module_name: str, secrets_manifest_path: str) -> list[st
 ## @complexity 2 — single YAML parse (delegated to shared iter_secrets) + linear pass with re.match per secret
 ## @invariants
 ##   - Only secrets with explicit charset field are validated (no charset → skip)
-##   - Empty/missing env vars are skipped (checked separately by _check_env_requires)
+##   - Empty/missing env vars are skipped (checked separately by check_env_requires)
 ##   - Uses re.match (full string match, not re.search)
 ##   - STRICT: manifest absent/malformed → RAISE (graceful degradation removed, invariant 7)
 ## @rationale Charset constraint prevents pgbouncer crash-loop from special characters in POSTGRES_PASSWORD.
 ##            Validation happens at deploy time (not decrypt time) because secrets-manifest.yaml is consumed
 ##            by deploy-modules.sh and this is the last checkpoint before docker compose up.
-def _validate_secret_charsets(secrets_manifest_path: str) -> tuple[int, list[str]]:
-    logger.info("[IMP:7][_validate_secret_charsets][start] Manifest=%s", secrets_manifest_path)
+def validate_secret_charsets(secrets_manifest_path: str) -> tuple[int, list[str]]:
+    logger.info("[IMP:7][validate_secret_charsets][start] Manifest=%s", secrets_manifest_path)
 
     secrets_list = iter_manifest_secrets(secrets_manifest_path)
     failed = 0
@@ -154,8 +154,8 @@ def _validate_secret_charsets(secrets_manifest_path: str) -> tuple[int, list[str
         name = s["name"]
         val = os.environ.get(name, "")
         if not val:
-            # Empty values are checked separately by _check_env_requires; skip here
-            logger.info("[IMP:7][_validate_secret_charsets][skip] %s has charset but empty value — skipping", name)
+            # Empty values are checked separately by check_env_requires; skip here
+            logger.info("[IMP:7][validate_secret_charsets][skip] %s has charset but empty value — skipping", name)
             continue
 
         if not _re.match(charset_re, val):
@@ -164,33 +164,33 @@ def _validate_secret_charsets(secrets_manifest_path: str) -> tuple[int, list[str
             failed += 1
             errors.append(msg)
         else:
-            logger.info("[IMP:8][_validate_secret_charsets][ok] %s matches charset %s", name, charset_re)
+            logger.info("[IMP:8][validate_secret_charsets][ok] %s matches charset %s", name, charset_re)
 
     if failed:
-        logger.error("[IMP:9][_validate_secret_charsets][FAIL] %d secret(s) failed charset validation", failed)
+        logger.error("[IMP:9][validate_secret_charsets][FAIL] %d secret(s) failed charset validation", failed)
     else:
-        logger.info("[IMP:9][_validate_secret_charsets][PASS] All secrets passed charset validation")
+        logger.info("[IMP:9][validate_secret_charsets][PASS] All secrets passed charset validation")
 
     return (failed, errors)
 
 
-# endregion FUNC__validate_secret_charsets
+# endregion FUNC_validate_secret_charsets
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# region FUNC__get_module_severity
+# region FUNC_get_module_severity
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 ## @purpose  Read severity field from module.yaml (critical|warn, default warn)
 ## @io       module_yaml_path (str) → str: "critical" or "warn"
 ## @complexity 1 — single YAML parse
-def _get_module_severity(module_yaml_path: str) -> str:
-    logger.info("[IMP:7][_get_module_severity][start] Path=%s", module_yaml_path)
+def get_module_severity(module_yaml_path: str) -> str:
+    logger.info("[IMP:7][get_module_severity][start] Path=%s", module_yaml_path)
 
     yaml_path = Path(module_yaml_path)
     if not yaml_path.is_file():
         logger.warning(
-            "[IMP:5][_get_module_severity][missing] module.yaml not found at %s — defaulting to warn",
+            "[IMP:5][get_module_severity][missing] module.yaml not found at %s — defaulting to warn",
             module_yaml_path,
         )
         return "warn"
@@ -200,24 +200,24 @@ def _get_module_severity(module_yaml_path: str) -> str:
 
     if data is None:
         logger.warning(
-            "[IMP:5][_get_module_severity][empty] module.yaml %s is empty — defaulting to warn", module_yaml_path
+            "[IMP:5][get_module_severity][empty] module.yaml %s is empty — defaulting to warn", module_yaml_path
         )
         return "warn"
 
     severity: str = data.get("severity", "warn")
     if severity not in ("critical", "warn"):
         logger.warning(
-            "[IMP:5][_get_module_severity][invalid] Invalid severity %r in %s — defaulting to warn",
+            "[IMP:5][get_module_severity][invalid] Invalid severity %r in %s — defaulting to warn",
             severity,
             module_yaml_path,
         )
         severity = "warn"
 
-    logger.info("[IMP:9][_get_module_severity][result] Module severity=%s (from %s)", severity, module_yaml_path)
+    logger.info("[IMP:9][get_module_severity][result] Module severity=%s (from %s)", severity, module_yaml_path)
     return severity
 
 
-# endregion FUNC__get_module_severity
+# endregion FUNC_get_module_severity
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # region FUNC__batch_module_metadata
@@ -231,7 +231,7 @@ def _get_module_severity(module_yaml_path: str) -> str:
 ##   - If module.yaml is missing name field, uses the parent directory name
 ##   - install_type defaults to "unknown", severity defaults to "warn"
 ##   - Empty/missing module.yaml files are skipped with WARN
-## @rationale S3 optimization: single python3 call replaces per-module detect_install_type + _get_module_severity calls
+## @rationale S3 optimization: single python3 call replaces per-module detect_install_type + get_module_severity calls
 def _batch_module_metadata(modules_dir: str) -> list[dict[str, str]]:
     logger.info("[IMP:7][_batch_module_metadata][start] modules_dir=%s", modules_dir)
 
@@ -445,28 +445,28 @@ def detect_install_type(module_yaml_path: str) -> str:
 # endregion FUNC_detect_install_type
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# region FUNC__batch_check_env
+# region FUNC_batch_check_env
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 ## @purpose  Validate secrets for ALL modules in one call (replaces N per-module check-env calls).
-##           Iterates over all modules and calls _check_env_requires per module.
+##           Iterates over all modules and calls check_env_requires per module.
 ## @io       modules_dir (str), secrets_manifest_path (str) → list[dict]: [{name, status}, ...]
 ## @output   name:status lines (status = ok/error) for each module
 ## @complexity 2 — glob + N env checks, O(M) where M = module count
 ## @invariants
-##   - Uses existing _check_env_requires logic per module
+##   - Uses existing check_env_requires logic per module
 ##   - Always returns 0 exit code (status is in output lines — shell parses individual results)
 ##   - Empty/missing module.yaml files are skipped with WARN
 ## @rationale S4 optimization: single python3 call replaces M per-module check-env spawns
-def _batch_check_env(modules_dir: str, secrets_manifest_path: str) -> list[dict[str, str]]:
-    logger.info("[IMP:7][_batch_check_env][start] modules_dir=%s", modules_dir)
+def batch_check_env(modules_dir: str, secrets_manifest_path: str) -> list[dict[str, str]]:
+    logger.info("[IMP:7][batch_check_env][start] modules_dir=%s", modules_dir)
 
     modules_path = Path(modules_dir)
     yaml_files = sorted(modules_path.glob("*/module.yaml"))
 
     if not yaml_files:
-        logger.warning("[IMP:5][_batch_check_env][scan] No module.yaml files found in %s", modules_dir)
+        logger.warning("[IMP:5][batch_check_env][scan] No module.yaml files found in %s", modules_dir)
         return []
 
     results: list[dict[str, str]] = []
@@ -475,20 +475,20 @@ def _batch_check_env(modules_dir: str, secrets_manifest_path: str) -> list[dict[
             data = yaml.safe_load(f)
 
         if data is None:
-            logger.warning("[IMP:5][_batch_check_env][skip] Empty YAML in %s, skipping", yf)
+            logger.warning("[IMP:5][batch_check_env][skip] Empty YAML in %s, skipping", yf)
             continue
 
         name: str = data.get("name", yf.parent.name)
-        missing = _check_env_requires(name, secrets_manifest_path)
+        missing = check_env_requires(name, secrets_manifest_path)
         status = "error" if missing else "ok"
         results.append({"name": name, "status": status})
-        logger.info("[IMP:8][_batch_check_env][entry] %s → status=%s", name, status)
+        logger.info("[IMP:8][batch_check_env][entry] %s → status=%s", name, status)
 
-    logger.info("[IMP:9][_batch_check_env][count] Batch env check completed for %d modules", len(results))
+    logger.info("[IMP:9][batch_check_env][count] Batch env check completed for %d modules", len(results))
     return results
 
 
-# endregion FUNC__batch_check_env
+# endregion FUNC_batch_check_env
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # region FUNC_main
@@ -566,7 +566,7 @@ def _dispatch_action(action: str, args: argparse.Namespace) -> int:
         if not args.module_name or not args.secrets_manifest:
             print("ERROR: --module-name and --secrets-manifest required for check-env", file=sys.stderr)
             return 1
-        missing = _check_env_requires(args.module_name, args.secrets_manifest)
+        missing = check_env_requires(args.module_name, args.secrets_manifest)
         if missing:
             print(",".join(missing))
             return 1
@@ -576,7 +576,7 @@ def _dispatch_action(action: str, args: argparse.Namespace) -> int:
         if not args.secrets_manifest:
             print("ERROR: --secrets-manifest required for validate-charsets", file=sys.stderr)
             return 1
-        failed, errors = _validate_secret_charsets(args.secrets_manifest)
+        failed, errors = validate_secret_charsets(args.secrets_manifest)
         if failed:
             for err in errors:
                 print(err, file=sys.stderr)
@@ -590,7 +590,7 @@ def _dispatch_action(action: str, args: argparse.Namespace) -> int:
             else:
                 print("ERROR: --module-yaml required for module-metadata", file=sys.stderr)
                 return 1
-        sev = _get_module_severity(args.module_yaml)
+        sev = get_module_severity(args.module_yaml)
         print(sev)
         return 0
 
@@ -607,7 +607,7 @@ def _dispatch_action(action: str, args: argparse.Namespace) -> int:
         if not args.modules_dir or not args.secrets_manifest:
             print("ERROR: --modules-dir and --secrets-manifest required for batch-check-env", file=sys.stderr)
             return 1
-        results = _batch_check_env(args.modules_dir, args.secrets_manifest)
+        results = batch_check_env(args.modules_dir, args.secrets_manifest)
         for entry in results:
             print(f"{entry['name']}:{entry['status']}")
         return 0

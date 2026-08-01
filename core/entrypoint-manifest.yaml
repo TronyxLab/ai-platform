@@ -623,7 +623,6 @@ lib:
   - core/internal/scaffold/remove-project.sh
   - core/internal/scaffold/project-list.sh
   - core/lib/vps-readiness.sh
-  - core/internal/deploy/reconcile-projects.sh
   description: SSH facade with timeout wrapper — single source of truth for all remote
     operations (W2-E1)
 - script: audit.sh
@@ -1166,6 +1165,9 @@ gates:
 - id: provisioner_no_orphans
   test_file: test_gate_llm_provisioner.py
   description: 'Auto-discovered gate: provisioner_no_orphans'
+- id: loc_allowlist
+  test_file: test_gate_loc_allowlist.py
+  description: 'Auto-discovered gate: loc_allowlist'
 - id: test_all_modules_included
   test_file: test_gate_local_stack.py
   description: 'Auto-discovered gate: test_all_modules_included'
@@ -1358,6 +1360,9 @@ gates:
 - id: test_no_inline_secrets_parsing_outside_shared
   test_file: test_gate_no_inline_secrets_parsing.py
   description: 'Auto-discovered gate: test_no_inline_secrets_parsing_outside_shared'
+- id: no_private_cross_module_imports
+  test_file: test_gate_no_private_cross_module_imports.py
+  description: 'Auto-discovered gate: no_private_cross_module_imports'
 - id: test_no_shell_generators
   test_file: test_gate_no_shell_manifest_generators.py
   description: 'Auto-discovered gate: test_no_shell_generators'
@@ -1520,9 +1525,6 @@ gates:
 - id: makefile_deploy_node_flag
   test_file: test_gate_sequencing.py
   description: 'Auto-discovered gate: makefile_deploy_node_flag'
-- id: reconcile_not_entrypoint
-  test_file: test_gate_sequencing.py
-  description: 'Auto-discovered gate: reconcile_not_entrypoint'
 - id: vps_readiness_sourceable
   test_file: test_gate_sequencing.py
   description: 'Auto-discovered gate: vps_readiness_sourceable'
