@@ -62,10 +62,86 @@ Gate-тесты делятся на категории по предмету п�
 
 ---
 
+## Preflight workflow (agent-oriented gate accelerator)
+
+### Проблема
+
+`make gate MODE=fast` — последовательный конвейер из 8 шагов, останавливается на первом фейле. Агент видит только ошибки текущего шага → фиксит → перезапускает → видит ошибки следующего шага → фиксит → ... Цикл из 4-5 проходов gate вместо одного.
+
+**Корневая причина:** детекция и верификация не разделены. Gate делает и то и другое последовательно.
+
+### Решение: `make preflight`
+
+```bash
+make preflight
+```
+
+**Три фазы:**
+1. `make fix-gate` — авто-фикс (exec bits, ruff, manifests) — ~3s
+2. `pre-commit run --all-files` — авто-фикс гигиены + верификация всех хуков — ~10-20s
+3. **8 проверок параллельно** (ThreadPoolExecutor, 6 workers): validate, check-dead-code, check-exception-patterns, doxygen-check, gates-static, contract, static_audit, predeploy — ~20-40s
+
+**Результат:** все ошибки собраны в ОДНОМ отчёте. Агент фиксит всё за один проход → `make gate MODE=fast` верифицирует один раз.
+
+### Сравнение циклов
+
+| Шаг | Старый цикл (последовательный gate) | Новый цикл (preflight) |
+|-----|-------------------------------------|------------------------|
+| 1 | `make gate` → fail на pre-commit | `make preflight` → собраны ВСЕ ошибки |
+| 2 | Фикс pre-commit → `make gate` → fail на static_audit | Агент читает ОДИН отчёт, фиксит ВСЁ |
+| 3 | Фикс static → `make gate` → fail на format | `make gate MODE=fast` → зелёный |
+| 4 | Фикс format → `make gate` → fail на другое |
+| ... | ... (4-5 итераций) |
+| N | `make gate` → зелёный |
+
+**Экономия:** ~60-80% времени агента на верификации (4-5 проходов → 1 preflight + 1 gate).
+
+### Использование
+
+```bash
+# Стандартный запуск (авто-фикс + все проверки параллельно)
+make preflight
+
+# Только проверки без авто-фикса (когда файлы уже чистые)
+make preflight SKIP_FIX=1
+
+# JSON-вывод для машинной обработки
+make preflight JSON=1
+
+# Подробный вывод (полный stdout/stderr для упавших проверок)
+make preflight VERBOSE=1
+
+# Настроить число параллельных воркеров
+make preflight WORKERS=8
+```
+
+### Инварианты
+
+- **Preflight НЕ заменяет gate.** Gate остаётся канонической верификацией. Preflight — диагностический акселератор.
+- **Preflight НЕ коммитит изменения.** Только авто-фиксы в worktree (так же как `make fix-gate`).
+- **Exit code 0** = все проверки прошли, gate должен быть зелёным.
+- **Exit code 1** = есть ошибки, нужно фиксить. После фикса: `make gate MODE=fast`.
+- **Параллельные проверки read-only** — не мутируют файлы, безопасны для concurrent execution.
+
+### Рекомендуемый agent workflow
+
+```
+1. make preflight                    # ОДИН запуск — все ошибки собраны
+2. Прочитать отчёт — все FAIL-секции
+3. Исправить ВСЕ ошибки за один проход
+4. make gate MODE=fast               # ОДНА верификация
+```
+
+Никаких `fix → gate → fix → gate → ...` циклов.
+
+---
+
 ## Cross-references
 
 | Файл | Назначение |
 |------|-----------|
 | [`core/entrypoint-manifest.yaml`](../../core/entrypoint-manifest.yaml) | YAML-реестр gates (секция `gates:`) |
 | [`../../core/AGENTS.md`](../../core/AGENTS.md) | Канонические операции, структура слоёв |
+| [`../../core/internal/preflight.py`](../../core/internal/preflight.py) | Preflight-модуль — параллельный сбор ошибок |
+| [`../../makefiles/repair.mk`](../../makefiles/repair.mk) | `make preflight` target + repair-таргеты |
 | `../../AGENTS.md` (root) | Архитектурные инварианты платформы |

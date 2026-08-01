@@ -394,6 +394,15 @@ repair:
     repair_safe: true
     repair_idempotent: true
     repair_class: L1
+- make_target: preflight
+  mechanism: python-script
+  delegates_to: python3 -m core.internal.preflight [--skip-fix] [--json] [--workers
+    N]
+  signature: make preflight [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1]
+  operation_ru: Параллельный preflight (сбор всех ошибок gate за один проход)
+  description: 'Agent-oriented preflight — run ALL gate checks in parallel (Phase
+    1: fix-gate, Phase 2: pre-commit, Phase 3: 8 checks parallel). Eliminates iterative
+    fix→gate→fix→gate cycle. Does NOT replace gate — gate remains authoritative.'
 - make_target: check-profiles-parity
   mechanism: pytest-gate
   delegates_to: pytest tests/gates/test_gate_profiles_parity.py (COMPOSE_PROFILES
@@ -795,6 +804,7 @@ allowed_verbs:
 - new-context
 - new-project
 - node-update
+- preflight
 - project-list
 - project-status
 - project-sync-env

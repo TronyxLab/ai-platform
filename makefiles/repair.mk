@@ -20,9 +20,9 @@
 # endregion MODULE_CONTRACT
 
 # ═══ REPAIR_TARGETS — machine-readable реестр для CI-валидации ═══
-REPAIR_TARGETS := fix-executable-bit fix-ruff fix-gate
+REPAIR_TARGETS := fix-executable-bit fix-ruff fix-gate preflight
 
-.PHONY: fix-executable-bit fix-ruff fix-gate
+.PHONY: fix-executable-bit fix-ruff fix-gate preflight
 
 # ── fix-executable-bit: chmod +x for .sh outside core/lib/ ──
 ## @purpose  Двухпроходный fix: (1) staged/new .sh через git add --chmod=+x,
@@ -149,6 +149,21 @@ fix-gate: fix-executable-bit fix-ruff
 	@$(MAKE) generate-manifests
 	@echo "[REPAIR:FIXED][fix-gate] All gate-blocking L1 fixes applied."
 	@echo "  Next: git add -u && make gate MODE=fast"
+
+# ── preflight: parallel gate checks for agent workflow ──
+## @purpose  Run ALL gate checks in parallel, collect errors once. Eliminates the
+##           iterative fix→gate→fix→gate cycle for AI agents and developers.
+##           Phases: (1) make fix-gate, (2) pre-commit run, (3) 8 read-only checks in parallel.
+##           Does NOT replace gate — gate remains the authoritative verification.
+##           preflight is a pre-verification accelerator.
+##   Usage: make preflight [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1]
+preflight:
+	$(eval _workers := $(or $(WORKERS),6))
+	$(eval _flags := --workers $(_workers))
+	$(if $(filter 1,$(JSON)),$(eval _flags := $(_flags) --json))
+	$(if $(filter 1,$(SKIP_FIX)),$(eval _flags := $(_flags) --skip-fix))
+	$(if $(filter 1,$(VERBOSE)),$(eval _flags := $(_flags) --verbose))
+	$(PYTHON) -m core.internal.preflight $(_flags)
 
 # ⚠️ TRAP[DECISION] · 2026-07-23 · — · fix-ruff: newline-separated not null-terminated
 # · Rejected: null-separated storage in bash variables ($()) loses all but first file
