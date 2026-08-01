@@ -187,9 +187,9 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
         "контейнерный модуль; shared.docker_compose — by design (D1, DevPlan 117 D19, DevPlan 117 G T52)",
     ),
     (
-        "core/modules/postgres/hooks/on-project-deploy.sh",
-        47,
-        "postgres-hook; python3 -m shared.node_yaml — by design (D1)",
+        "core/modules/postgres/hooks/on_project_deploy.py",
+        40,
+        "postgres-hook; shared.node_yaml — by design (D1); порт D65 заменил python3 -m в on-project-deploy.sh (запись allowlist перенесена на Python-хук)",
     ),
 )
 

@@ -111,25 +111,31 @@ def test_backup_postgres_uses_port_env(caplog) -> None:
     Verify pg_dumpall uses explicit host connection (not pgbouncer default).
     Bug: pg_dumpall went through pgbouncer (port 5432) but pgbouncer didn't
     know template1 → Connection refused. Fix:
-      A) backup-postgres.sh pg_dumpall call includes -h "${POSTGRESS_HOST}" (direct to postgres)
+      A) backup-postgres.sh/backup_postgres.py pg_dumpall call includes
+         -h "${POSTGRES_HOST}" (direct to postgres) — DevPlan 117 H D64
+         портировал логику из shell в Python: скрипт = thin wrapper,
+         pg_dumpall-команда теперь в backup_postgres.py.
       B) docker-compose.base.yml backup-cron.environment has POSTGRES_HOST
       C) minio-createbuckets service has environment: with MINIO_ROOT_USER
     """
     with caplog.at_level(logging.DEBUG):
         logger.info("[IMP:7][test_backup_cron][pg_port_env] START")
 
-        # ── Check A: backup-postgres.sh has -h "${POSTGRESS_HOST" in pg_dumpall ──
-        assert os.path.isfile(BACKUP_POSTGRES_SH), f"backup-postgres.sh not found: {BACKUP_POSTGRES_SH}"
-        with open(BACKUP_POSTGRES_SH) as f:
-            sh_content = f.read()
+        # ── Check A: pg_dumpall подключается напрямую к postgres по POSTGRES_HOST ──
+        # DevPlan 117 H D64: логика в Python — сканируем backup_postgres.py,
+        # shell-враппер остаётся thin (0 бизнес-логики).
+        backup_postgres_py = os.path.join(MODULE_DIR, "scripts", "backup_postgres.py")
+        assert os.path.isfile(backup_postgres_py), f"backup_postgres.py not found: {backup_postgres_py}"
+        with open(backup_postgres_py) as f:
+            py_content = f.read()
 
-        has_host_flag = '-h "${POSTGRES_HOST' in sh_content
+        has_host_flag = '"-h"' in py_content and "postgres_host" in py_content
         logger.critical(
-            "[IMP:9][test_backup_cron][pg_port_env][checkA] backup-postgres.sh has -h '${POSTGRES_HOST...': %s",
+            "[IMP:9][test_backup_cron][pg_port_env][checkA] backup_postgres.py pg_dumpall uses POSTGRES_HOST: %s",
             has_host_flag,
         )
         assert has_host_flag, (
-            'Bug 1 (Fix B) violation: backup-postgres.sh pg_dumpall call must include -h "${POSTGRES_HOST}"'
+            'Bug 1 (Fix B) violation: backup_postgres.py pg_dumpall call must include -h "${POSTGRES_HOST}"'
         )
 
         # ── Check B: docker-compose.base.yml backup-cron.environment has POSTGRES_HOST ──
