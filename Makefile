@@ -1,5 +1,5 @@
 # GREP_SUMMARY: makefile, include-split, bootstrap, deploy, scaffold, modules, ci, helpers
-# STRUCTURE: ┌variables┐ → ◇ include makefiles/*.mk → ◇ .DEFAULT_GOAL → ⎋ 45 .PHONY targets across 6 includes
+# STRUCTURE: ┌variables┐ → ◇ include makefiles/*.mk → ◇ .DEFAULT_GOAL → ⎋ 71 .PHONY targets across 8 includes
 # region MODULE_CONTRACT
 ## @purpose  Root Makefile for ai-platform — unified facade, delegates to makefiles/*.mk via include
 ## @scope    Variables + COMPOSE_PROFILES + includes — all targets in makefiles/{bootstrap,deploy,scaffold,modules,ci,helpers}.mk

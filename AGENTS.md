@@ -40,7 +40,7 @@
 ## · Rev: если появится второй shell-потребитель флагов — пересмотреть фасад.
 ## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · Единый канон healthcheck-критерия (D5 B5) — inspect State.Health, running-без-healthcheck = здоров
 ## · Rejected: 5 расходящихся реализаций (ps-filter 60/3, wrapper 10/1, inspect 60/2, lib/healthcheck.sh, poller 30) с разными семантиками ""/starting
-## · Reason: U-14 — расхождение уже началось. Канон: контейнер running AND (healthy|""|none) = здоров; "unhealthy" → ждать (стартовые гонки). Python-реализация — ТОЛЬКО shared/healthcheck_poll (гейт docker_sole_path); lib/healthcheck.sh — shell-фасад с тем же критерием (D5).
+## · Reason: U-14 — расхождение уже началось. Канон: контейнер running AND (healthy|""|none) = здоров; "unhealthy" → ждать (стартовые гонки). Python-реализация — ТОЛЬКО deploy/healthcheck_poller.py (гейт docker_sole_path); lib/healthcheck.sh — shell-фасад с тем же критерием (D5).
 ## · Rev: если у контейнера появится состояние, требующее иного трактования — менять канон в одном месте.
 ## ⚠️ TRAP[DECISION] · 2026-07-15 · HI · L1 pushed to ghcr.io as backup, never used directly by contexts
 ## · Rejected: local-only L1 (risk: loss of build machine → rebuild from scratch)
@@ -85,7 +85,7 @@
 └─────────────────────────────────────────────────────┘
                     ▲
                     │ ┌─ Context-overlay (git, pull-based)
-                    │   deploy-modules.sh → ensure_context_repo
+                    │   context_overlay.py → ensure_context_repo()
                     │   git clone/pull → /opt/<context>/platform/
 ```
 
@@ -95,13 +95,13 @@
 |-------|----------|-------------|------------|
 | **Core** | SCP/rsync | Push (с машины оператора/CI) | `core/`, `node-configs/`, `secrets/` — инфраструктурный код платформы |
 | **Context-overlay** | git clone/pull | Pull (с VPS в репозиторий) | Контекстные overlay, модульные конфигурации, кастомизации |
-| **Project payload** | tar по SSH forced-command (`platform-deliver`) | Push (CI) | docker-compose.yml, ai-platform.yaml, .env.platform |
+| **Project payload** | tar по SSH forced-command (`receive`) | Push (CI) | docker-compose.yml, ai-platform.yaml, .env.platform |
 
 ### Инварианты
 
 1. **Core-код NEVER доставляется через git** на VPS — только SCP/rsync. Никаких git-токенов, deploy-keys или repo-URL для core на сервере.
 2. **Context-overlay использует git** для клонирования/пула контекстного репозитория — это overlay-кастомизация поверх core.
-3. **`ensure_context_repo()`** в `deploy-modules.sh` — единственное место, где git выполняется на VPS.
+3. **`ensure_context_repo()`** в `context_overlay.py` (Python-модуль, вызывается из deploy_orchestrator.py) — единственное место, где git выполняется на VPS.
 4. **AGE-ключи, secrets, SSH-keys** никогда не передаются через git — только через SCP/age-encrypted файлы.
 
 ⚠️ TRAP[DECISION] · 2026-07-15 · HI · Dual delivery — не ослабление безопасности
@@ -258,7 +258,7 @@
 | Домен | Механизм | Модуль | Причина |
 |-------|----------|--------|---------|
 | nginx vhost конфиги | `{{UPPER_SNAKE}}` strict regex | `core/internal/template_engine.py` | Go/Prometheus-шаблоны (`{{$labels.x}}`, `{{instance}}`) НЕ должны подменяться. Strict regex чувствителен к регистру — только UPPER_SNAKE переменные. |
-| LiteLLM config (model_list, fallbacks) | Jinja2 | `core/internal/bootstrap/deploy/config_renderer.py` | Сложные структуры данных требуют циклов, условий и фильтров Jinja2. |
+| LiteLLM config (model_list, fallbacks) | Jinja2 | `core/internal/llm/config_renderer.py` | Сложные структуры данных требуют циклов, условий и фильтров Jinja2. |
 | Status-page HTML | Jinja2 | `core/modules/status-page/app.py` | Autoescape + template inheritance для XSS-защиты HTML. |
 | Docker Compose | `${VAR:-default}` | compose engine | Встроенная функция compose. Не требует шаблонизации — compose резолвит env vars при запуске. |
 | `envsubst` | `${VAR}` | systemd units, nginx main config | POSIX-совместимая подстановка env vars для файлов конфигурации. |
@@ -278,8 +278,8 @@
 | [`AGENTS.md`](AGENTS.md) | Root architecture, invariants, deploy model, glossary | Канонический |
 | [`core/AGENTS.md`](core/AGENTS.md) | Каталог операций, слои, forbidden-списки | Канонический |
 | [`core/modules/AGENTS.md`](core/modules/AGENTS.md) | Шаблон модуля, healthcheck/Makefile-контракты | Канонический |
-| [`core/internal/template_engine.py`](core/internal/template_engine.py) | Python-ядро template engine | Канонический |
-| [`core/templates/template-manifest.yaml`](core/templates/template-manifest.yaml) | Единый манифест шаблонов | Канонический |
+| [`core/internal/template_engine.py`](core/internal/template_engine.py) | Python-ядро template engine | Вспомогательный |
+| [`core/templates/template-manifest.yaml`](core/templates/template-manifest.yaml) | Единый манифест шаблонов | Вспомогательный |
 | [`core/internal/bootstrap/AGENTS.md`](core/internal/bootstrap/AGENTS.md) | Bootstrap pipeline, node lifecycle | Вспомогательный |
 | [`tests/gates/AGENTS.md`](tests/gates/AGENTS.md) | Gate test conventions, invariant testing | Вспомогательный |
 | [`templates/template-backend/AGENTS.md`](templates/template-backend/AGENTS.md) | Payload шаблона new-project | Вне скоупа инварианта |
