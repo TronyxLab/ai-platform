@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: converge-audit, reconcile-audit-log, r2, audit-log, adm-group, ci-deploy, symlink-attack
-# STRUCTURE: ▶ symlink check ┌log_dir + audit.log┐ → ⚡ reconcile_ci_deploy_group ┌id -nG → usermod -aG adm┐ → ⚡ mkdir/chmod/chown 0750 root:adm → ⚡ stat verify 0664 root:adm → ⎋ drift entry {R2}
+# STRUCTURE: ▶ symlink check ┌log_dir + audit.jsonl┐ → ⚡ reconcile_ci_deploy_group ┌id -nG → usermod -aG adm┐ → ⚡ mkdir/chmod/chown 0750 root:adm → ⚡ stat verify 0664 root:adm → ⎋ drift entry {R2}
 # region MODULE_CONTRACT
-## @purpose  R2 reconcile_audit_log — audit.log 0664 root:adm + ci-deploy adm group.
+## @purpose  R2 reconcile_audit_log — audit.jsonl 0664 root:adm + ci-deploy adm group.
 ##           Извлечён из reconciler.py (B9 T2, U-31).
 ## @scope    converge/audit.py: reconcile_audit_log, reconcile_ci_deploy_group.
 ##           Вызывается оркестратором reconciler.py.
 ## @invariants
-##   - Symlink на log_dir/audit.log → FATAL (symlink attack prevention)
+##   - Symlink на log_dir/audit.jsonl → FATAL (symlink attack prevention)
 ##   - ci-deploy в adm группе (usermod -aG adm); пользователь не существует → INFO + skip
 ##   - dry_run/report_only → мутации не выполняются
 ## @rationale DevPlan 116 B9 D3: 8 доменов reconciler по модулям.
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # R2 — reconcile_audit_log
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_reconcile_audit_log
-## @purpose  Ensure /var/log/platform/audit.log exists with correct
+## @purpose  Ensure /var/log/platform/audit.jsonl exists with correct
 ##           ownership (root:adm) and permissions (0664). Also ensures
 ##           ci-deploy is in adm group for write access.
 ## @io       stdout/stderr: LDD logs [IMP:7-10]
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 ## @param report_only If True, skip mutations entirely
 ## @return  Drift report entry dict
 ## @edge-cases
-##   - audit.log is a symlink → fail (symlink attack prevention)
+##   - audit.jsonl is a symlink → fail (symlink attack prevention)
 ##   - ci-deploy not in adm group → usermod -aG adm
 ##   - File already correct → SKIP
 def reconcile_audit_log(
@@ -54,7 +54,7 @@ def reconcile_audit_log(
     dry_run: bool = False,
     report_only: bool = False,
 ) -> dict:
-    """Reconcile audit.log and ci-deploy adm group membership.
+    """Reconcile audit.jsonl and ci-deploy adm group membership.
 
     Returns a drift entry dict with status: ok|skipped|mutated|warn|fail.
     """
@@ -107,7 +107,7 @@ def reconcile_audit_log(
                 set_exit(2)
                 return {"unit": unit, "status": "fail", "detail": f"mkdir failed: {exc}"}
 
-    # ── Ensure audit.log exists ──
+    # ── Ensure audit.jsonl exists ──
     if not audit_log.is_file():
         if dry_run or report_only:
             logger.info("[IMP:9][converge][%s] WOULD create: %s 0664 root:adm", unit, AUDIT_LOG_FILE)
@@ -149,7 +149,7 @@ def reconcile_audit_log(
                     current_mode,
                     current_owner,
                 )
-                report_add(unit, "mutated", "audit.log permissions would be fixed")
+                report_add(unit, "mutated", "audit.jsonl permissions would be fixed")
                 set_exit(1)
             else:
                 logger.info(
@@ -162,11 +162,11 @@ def reconcile_audit_log(
                 run_subprocess(["chmod", "0664", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
                 run_subprocess(["chown", "root:adm", AUDIT_LOG_FILE], timeout=FILE_OP_TIMEOUT)
                 logger.info("[IMP:9][converge][%s] DONE: %s permissions corrected", unit, AUDIT_LOG_FILE)
-                report_add(unit, "mutated", "audit.log permissions corrected to 0664 root:adm")
+                report_add(unit, "mutated", "audit.jsonl permissions corrected to 0664 root:adm")
                 set_exit(1)
         else:
             logger.info("[IMP:9][converge][%s] SKIP: %s already 0664 root:adm (converged)", unit, AUDIT_LOG_FILE)
-            report_add(unit, "converged", "audit.log permissions correct")
+            report_add(unit, "converged", "audit.jsonl permissions correct")
 
     logger.info("[IMP:9][converge][%s] DONE: audit log reconciled", unit)
     return {
@@ -211,7 +211,7 @@ def reconcile_ci_deploy_group(unit: str, dry_run: bool, report_only: bool) -> No
             set_exit(1)
         else:
             logger.warning(
-                "[IMP:8][converge][%s] WARN: usermod failed — ci-deploy may not have write access to audit.log: %s",
+                "[IMP:8][converge][%s] WARN: usermod failed — ci-deploy may not have write access to audit.jsonl: %s",
                 unit,
                 usermod_r.stderr.strip(),
             )

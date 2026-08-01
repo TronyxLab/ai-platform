@@ -13,7 +13,7 @@
 ##   3. Idempotent: healthcheck before deploy, skip if healthy
 ##   4. Health-gate: ≤60s per project (same as the legacy deploy pipeline)
 ##   5. Non-fatal: failure of one project does NOT block others
-##   6. Audit: each deploy recorded in /var/log/platform/audit.log
+##   6. Audit: each deploy recorded in /var/log/platform/audit.jsonl (единый файл, D1 — shared/audit_logger)
 ##   7. One node = one context (CONTEXT from node.yaml or CLI --context)
 ## @rationale StatusReport 045: 14/20 containers down after bootstrap because deploy-modules
 ##           does not cover context projects. context_deployer bridges the "last mile":
@@ -70,7 +70,6 @@ from core.internal.shared.timeouts import HEALTHCHECK_POLL_TIMEOUT
 
 HEALTH_GATE_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT  # seconds per project
 DEFAULT_PROJECTS_BASE = "/opt/projects"
-AUDIT_LOG = "/var/log/platform/audit.log"
 PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")
 LITELLM_CONFIG_PATH = pathlib.Path(f"{PLATFORM_ROOT}/core/modules/litellm/config/litellm-config.yml")
 POLICY_PATH = pathlib.Path(f"{PLATFORM_ROOT}/core/internal/llm/policy.yaml")
@@ -487,7 +486,7 @@ def _is_project_healthy(project_name: str) -> bool:
 ## @invariants
 ##   - Non-fatal: if audit log write fails, logs WARN
 ##   - JSON-lines format via shared audit_logger (audit.jsonl)
-##   - Old audit.log pipe-delimited format UNCHANGED (shell compatibility)
+##   - Pipe-delimited legacy format REMOVED (D1, DevPlan 116 B11 T2) — единый JSON-lines writer shared/audit_logger
 def _write_audit(project: ProjectInfo, result: ProjectDeployResult) -> None:
     """Write audit entry for project deploy via shared audit_logger."""
     from core.internal.shared.audit_logger import write_audit_entry

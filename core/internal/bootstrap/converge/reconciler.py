@@ -6,7 +6,7 @@
 ##           converge/ пакета (perms/audit/projects/networks/vhosts/volumes/sudoers/runtime).
 ##           Инфраструктура (report/exit/subprocess/глобалы) — в converge/infra.py (B9 T2, U-31).
 ## @scope    R1 reconcile_perms — executable-bit fix (converge/perms.py)
-##           R2 reconcile_audit_log — audit.log 0664 root:adm + ci-deploy adm group (converge/audit.py)
+##           R2 reconcile_audit_log — audit.jsonl 0664 root:adm + ci-deploy adm group (converge/audit.py)
 ##           R3 reconcile_projects — per-project directory + stub + .env.platform (converge/projects.py)
 ##           R4 reconcile_networks — proxy-net + container connectivity (converge/networks.py)
 ##           R5 detect_hosts_drift — /etc/hosts stale entries (converge/vhosts.py)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: reporting-helpers, run-healthchecks, write-audit-log, send-telegram, telegram-notifier, audit-log
-# STRUCTURE: ▶ run_healthchecks ┌NodeYaml modules → invoke_module_interface liveness┐ → ⚡ write_audit_log ┌/var/log/platform/audit.log append┐ → ⚡ send_telegram ┌telegram_notifier (non-fatal)┐ → ⎋
+# STRUCTURE: ▶ run_healthchecks ┌NodeYaml modules → invoke_module_interface liveness┐ → ⚡ write_audit_log ┌/var/log/platform/audit.jsonl JSON-lines (write_audit_entry)┐ → ⚡ send_telegram ┌telegram_notifier (non-fatal)┐ → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Reporting I/O-хелперы bootstrap-фаз (healthchecks, audit log, Telegram notify) —
 ##           извлечены из state_machine (B9 T1, U-08). Все функции публичные.

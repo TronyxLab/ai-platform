@@ -25,7 +25,7 @@ Modules:
   - reconciler.py — оркестратор R1-R9 (main + dispatch)
   - infra.py      — модульные глобалы + report/exit/subprocess/unit_filter + константы
   - perms.py      — R1 reconcile_perms (executable-bit)
-  - audit.py      — R2 reconcile_audit_log (audit.log 0664 root:adm + ci-deploy adm)
+  - audit.py      — R2 reconcile_audit_log (audit.jsonl 0664 root:adm + ci-deploy adm)
   - projects.py   — R3 reconcile_projects (project dirs + stub + .env.platform)
   - networks.py   — R4 reconcile_networks (proxy-net + connectivity)
   - vhosts.py     — R5 detect_hosts_drift + R6 verify_vhosts (nginx vhosts)

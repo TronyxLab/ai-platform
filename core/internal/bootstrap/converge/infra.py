@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # ── Constants (мигрированы из reconciler.py) ──
 AUDIT_LOG_DIR = "/var/log/platform"
-AUDIT_LOG_FILE = f"{AUDIT_LOG_DIR}/audit.log"
+AUDIT_LOG_FILE = f"{AUDIT_LOG_DIR}/audit.jsonl"  # D1 (DevPlan 116 B11 T2): единый файл — синхронизирован с shared/audit_logger.DEFAULT_LOG_FILE
 PROXY_NET = "proxy-net"
 DOCKER_TIMEOUT = 30
 """## @invariant subprocess timeout for all docker/system commands (seconds)."""
