@@ -9,11 +9,13 @@
 ## @invariants — 3-path search: platform-local → org repos → VPS fallback
 ##              — extract_node_host returns "" if host absent (not error)
 ##              — Dry-run: prints commands to stderr, does NOT execute
-##              — SSH_OPTS mirror lib/ssh.sh SSH_OPTS_COMMON
+##              — SSH_OPTS — единый SoT из shared/ssh_opts.py (DevPlan 116 B5 T2, D1)
 ## @rationale Strangler-Fig: remote-cmd.sh 672→~230 LOC shell facade. Business logic → unit-testable Python.
 ## @changes 2026-07-26 | TASK-036D — Initial implementation (Wave 5d Strangler-Fig)
 ##           2026-07-31 | DevPlan 108 — sync_core_to_vps делегирует core/ rsync в
 ##                       core_deliverer.deliver_core(); dead exclude-const удалён
+##           2026-08-01 | DevPlan 116 B5 T2 — SSH_OPTS/_ssh_e → shared/ssh_opts.py (D1);
+##                      rsync/ssh timeouts → shared/timeouts.py (U-11)
 # ⚠️ TRAP[BUG] · 2026-07-24 · P0 · node-update не доставлял core/ на VPS
 # · Ported from remote-cmd.sh:294. Fix: rsync core/ + node.yaml before remote exec.
 # · Prevention: always call sync_core_to_vps() before remote exec in node-update.
@@ -33,6 +35,12 @@ import sys
 # (DRY-унификация двойного core/ rsync, P2/D3). Направление импорта overlay → core — без цикла.
 from core.internal.bootstrap.core_deliverer import CoreDeliveryError, deliver_core
 from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, ConfigValidationError, NodeYaml
+
+# DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py (дублирующие копии устранены)
+from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
+
+# DevPlan 116 B5 T1: rsync/ssh таймауты — единый реестр shared/timeouts.py (U-11)
+from core.internal.shared.timeouts import RSYNC_TIMEOUT, SSH_CONNECT_TIMEOUT
 
 # DevPlan 089 T15: DeployOrchestrator integration for overlay delivery
 _ORCHESTRATOR_AVAILABLE = False
@@ -78,33 +86,6 @@ class DeliveryError(OverlayDelivererError):
 
 
 # endregion EXC_DeliveryError
-
-
-# Mirror lib/ssh.sh SSH_OPTS_COMMON — BatchMode, accept-new, timeouts
-SSH_OPTS: list[str] = [
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=accept-new",
-    "-o",
-    "ConnectTimeout=30",
-    "-o",
-    "ServerAliveInterval=30",
-    "-o",
-    "ServerAliveCountMax=10",
-]
-
-
-# region FUNC__ssh_e
-## @purpose  Build rsync -e argument from SSH_OPTS list.
-## @io  input: SSH_OPTS (module-level list), output: ssh command string
-## @complexity  O(k) where k = len(SSH_OPTS) — simple string join
-def _ssh_e() -> str:
-    """Build rsync -e argument from SSH_OPTS."""
-    return f"ssh {' '.join(SSH_OPTS)}"
-
-
-# endregion FUNC__ssh_e
 
 
 # region FUNC_resolve_node_yaml
@@ -208,7 +189,7 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
     except CoreDeliveryError as exc:
         raise SyncCoreError(str(exc)) from exc
 
-    ssh_e = _ssh_e()
+    ssh_e = build_rsync_ssh_opts()
     if dry_run:
         if node_yaml and os.path.isfile(node_yaml):
             logger.info(
@@ -222,7 +203,7 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
     if node_yaml and os.path.isfile(node_yaml):
         cmd2 = ["rsync", "-avz", "-e", ssh_e, node_yaml, f"root@{host}:/opt/node-configs/{node_name}/node.yaml"]
         logger.info("[IMP:9][sync_core_to_vps][exec] Rsyncing node.yaml → %s:/opt/node-configs/%s/", host, node_name)
-        r = subprocess.run(cmd2, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(cmd2, capture_output=True, text=True, timeout=RSYNC_TIMEOUT)
         if r.returncode != 0:
             raise SyncCoreError(f"rsync node.yaml failed for {host} (exit={r.returncode}): {r.stderr.strip()}")
         logger.info("[IMP:9][sync_core_to_vps][exec] node.yaml rsync complete")
@@ -331,7 +312,7 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
         return True
 
     logger.info("[IMP:9][deliver_vhost_overlays][deliver] Delivering %d overlay(s) to %s", len(confs), ssh_host)
-    ssh_e = _ssh_e()
+    ssh_e = build_rsync_ssh_opts()
 
     if dry_run:
         logger.info("[IMP:8][deliver_vhost_overlays][dry-run] DRY-RUN: ssh root@%s mkdir -p ...", ssh_host)
@@ -340,7 +321,7 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
 
     mkdir_cmd = ["ssh", *SSH_OPTS, f"root@{ssh_host}", f"mkdir -p /opt/node-configs/{node_name}/overlays/nginx"]
     logger.info("[IMP:9][deliver_vhost_overlays][ssh] Creating remote overlay dir on %s", ssh_host)
-    r = subprocess.run(mkdir_cmd, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(mkdir_cmd, capture_output=True, text=True, timeout=SSH_CONNECT_TIMEOUT)
     if r.returncode != 0:
         raise DeliveryError(f"mkdir failed on {ssh_host} (exit={r.returncode}): {r.stderr.strip()}")
 
@@ -354,7 +335,7 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
         f"root@{ssh_host}:/opt/node-configs/{node_name}/overlays/nginx/",
     ]
     logger.info("[IMP:9][deliver_vhost_overlays][rsync] Rsyncing overlays → %s", ssh_host)
-    r = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=120)
+    r = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=RSYNC_TIMEOUT)
     if r.returncode != 0:
         raise DeliveryError(f"rsync overlays failed for {ssh_host} (exit={r.returncode}): {r.stderr.strip()}")
     logger.info("[IMP:9][deliver_vhost_overlays][done] Overlay delivery complete")

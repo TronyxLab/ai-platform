@@ -20,7 +20,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import re
 import subprocess
 
 import pytest
@@ -198,7 +197,7 @@ def test_no_hardcoded_profiles_outside_allowlist(caplog) -> None:
         logger.error("[IMP:10][profiles_parity][d] Hardcoded COMPOSE_PROFILES copies: %s", violations)
         pytest.fail(
             "COMPOSE_PROFILES hardcoded outside allowlist "
-            f"{{platform-infra.yaml, platform-env.yaml, .env.example}}:\n"
+            "{platform-infra.yaml, platform-env.yaml, .env.example}:\n"
             + "\n".join(f"  - {v}" for v in violations)
             + "\n\nReplace with runtime-read via yaml_query.py (DevPlan 116 T2)."
         )

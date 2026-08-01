@@ -25,7 +25,7 @@ from core.internal.bootstrap.overlay_deliverer import (
     DeliveryError,
     NodeYamlNotFoundError,
     SyncCoreError,
-    _ssh_e,
+    build_rsync_ssh_opts,
     deliver_vhost_overlays,
     extract_node_host,
     resolve_node_yaml,
@@ -88,9 +88,9 @@ def overlay_dir(tmp_path):
 
 # region FUNC_test_ssh_e
 def test_ssh_e(caplog) -> None:
-    """Verify _ssh_e constructs correct -e argument from SSH_OPTS."""
+    """Verify build_rsync_ssh_opts constructs correct -e argument from SSH_OPTS (shared SoT, D1)."""
     caplog.set_level(logging.DEBUG)
-    result = _ssh_e()
+    result = build_rsync_ssh_opts()
     assert "ssh" in result
     assert "StrictHostKeyChecking=accept-new" in result
     logger.info("[IMP:9][test_ssh_e][done] SSH -e arg verified: %s", result)

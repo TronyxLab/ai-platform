@@ -13,7 +13,7 @@
 ## @scope    Called by deploy-project.sh shell facade for deploy/remove/status verbs.
 ##           Importable by other Python modules (context_deployer.py, etc.) via DeployEngine class.
 ## @invariants
-##   1. All Docker operations use subprocess.run(["docker", "compose", ...]) — zero docker-py dependency
+##   1. All Docker operations go through shared docker_compose_* (sole path) — zero docker-py dependency
 ##   2. Previous image saved BEFORE docker compose pull — enables rollback (T1)
 ##   3. Healthcheck poll ≤ max_wait seconds — shell-wrapper poll_until_healthy used
 ##   4. DEPLOY_STATUS="success" set immediately after health-gate — BEFORE non-fatal housekeeping (B1/T3)
@@ -95,7 +95,33 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
+from core.internal.shared.docker_compose import (
+    docker_compose_down as _shared_docker_compose_down,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_images as _shared_docker_compose_images,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_ps as _shared_docker_compose_ps,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_up as _shared_docker_compose_up,
+)
+from core.internal.shared.docker_compose import (
+    healthcheck_poll as _shared_healthcheck_poll,
+)
+from core.internal.shared.docker_compose import (
+    retry_pull as _shared_retry_pull,
+)
 from core.internal.shared.project_registry import validate_project_name
+
+# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
+from core.internal.shared.timeouts import (
+    COMPOSE_UP_TIMEOUT,
+    DOCKER_CMD_TIMEOUT,
+    IMAGE_CHECK_TIMEOUT,
+    PULL_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +206,7 @@ class DeployEngine:
 
     """Atomic deploy/rollback/remove/status engine.
 
-    All Docker operations via subprocess.run(["docker", "compose", ...]).
+    All Docker operations via shared docker_compose_* (sole path, DevPlan 116 B5).
     Healthcheck uses shell lib/healthcheck.sh via subprocess.
     """
 
@@ -344,8 +370,14 @@ class DeployEngine:
         snapshot = self._capture_deploy_snapshot(project_dir)
         logger.info("[IMP:8][deploy][snapshot] Captured snapshot: ts=%s", snapshot.timestamp)
 
-        # ── Pull image with retry ──
-        if not self._pull_image_with_retry(project_dir, service, ref):
+        # ── Pull image with retry (T5.1: shared retry_pull — backoff [5,10,20], env IMAGE_TAG) ──
+        if not _shared_retry_pull(
+            project_dir,
+            max_attempts=3,
+            timeout=PULL_TIMEOUT,
+            service=service,
+            env_override={"IMAGE_TAG": ref},
+        ):
             self._handle_first_deploy(project, service, ref, "Pull failed after 3 attempts")
             # unreachable — _handle_first_deploy raises SystemExit
 
@@ -366,8 +398,10 @@ class DeployEngine:
                     error_message="docker compose up failed, rollback " + ("performed" if rollback_ok else "failed"),
                 )
 
-        # ── Poll health ──
-        healthy = self._poll_health(project_dir, service, max_wait, interval=2)
+        # ── Poll health (T5.3: shared healthcheck_poll — inspect-критерий, service-фильтр) ──
+        healthy = (
+            _shared_healthcheck_poll(project_name=service, timeout=max_wait, interval=2, service=service) == "healthy"
+        )
         if healthy:
             # B1: DEPLOY_STATUS immediately after health-gate
             logger.info("[IMP:9][deploy][health] Healthcheck PASSED for %s/%s", project, service)
@@ -424,19 +458,10 @@ class DeployEngine:
             logger.info("[IMP:9][remove][not-found] Project dir not found: %s — already removed", project_dir)
             return RemoveResult(success=True, project=project, already_removed=True)
 
-        # docker compose down WITHOUT -v (O7 — data preserved)
+        # docker compose down WITHOUT -v (O7 — data preserved) — shared sole path (T5)
         logger.info("[IMP:9][remove][down] Stopping containers for %s (data preserved, no -v)...", project)
-        result = subprocess.run(
-            ["docker", "compose", "down", "--timeout", "30"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=project_dir,
-        )
-        if result.returncode != 0:
-            logger.warning(
-                "[IMP:8][remove][down-warn] docker compose down exit=%s: %s", result.returncode, result.stderr.strip()
-            )
+        if not _shared_docker_compose_down(project_dir, flags=["--timeout", "30"]):
+            logger.warning("[IMP:8][remove][down-warn] docker compose down reported failure")
 
         logger.info("[IMP:9][remove][done] Remove DONE: %s (data preserved)", project)
         return RemoveResult(success=True, project=project, already_removed=False)
@@ -486,18 +511,15 @@ class DeployEngine:
             except OSError:
                 pass
 
-        # ── Docker compose ps ──
+        # ── Docker compose ps (shared sole path — T5) ──
         containers: list[dict[str, Any]] = []
         try:
-            ps_result = subprocess.run(
-                ["docker", "compose", "ps", "--format", "json"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=project_dir,
-            )
-            if ps_result.returncode == 0 and ps_result.stdout.strip():
-                for line in ps_result.stdout.strip().split("\n"):
+            ps_result = _shared_docker_compose_ps(project_dir, format="json")
+            ps_stdout = ps_result.stdout
+            if isinstance(ps_stdout, bytes):
+                ps_stdout = ps_stdout.decode("utf-8")
+            if ps_result.returncode == 0 and ps_stdout.strip():
+                for line in ps_stdout.strip().split("\n"):
                     try:
                         containers.append(json.loads(line))
                     except json.JSONDecodeError:  # noqa: PERF203
@@ -548,25 +570,20 @@ class DeployEngine:
         """
         logger.info("[IMP:8][save-prev] Saving previous image for service %s", service)
 
-        result = subprocess.run(
-            ["docker", "compose", "images", "-q", service],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=project_dir,
-        )
+        # Shared docker_compose_images -q (sole path — T5)
+        result = _shared_docker_compose_images(project_dir, service=service, flags=["-q"])
         image_id = result.stdout.strip()
 
         if not image_id:
             logger.info("[IMP:9][save-prev] FIRST DEPLOY: no previous image for %s", service)
             return None
 
-        # Get tag
+        # Get tag (docker image inspect — локальная image-операция, IMAGE_CHECK_TIMEOUT)
         tag_result = subprocess.run(
             ["docker", "image", "inspect", image_id, "--format", "{{index .RepoTags 0}}"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=IMAGE_CHECK_TIMEOUT,
         )
         tag = tag_result.stdout.strip()
 
@@ -575,7 +592,7 @@ class DeployEngine:
             subprocess.run(
                 ["docker", "tag", image_id, tag],
                 capture_output=True,
-                timeout=30,
+                timeout=DOCKER_CMD_TIMEOUT,
             )
             logger.info("[IMP:8][save-prev] Created fallback tag for dangling image: %s", tag)
 
@@ -604,13 +621,7 @@ class DeployEngine:
         ps_file = os.path.join(snapshot_dir, f"ps-{timestamp}.json")
         images_file = os.path.join(snapshot_dir, f"images-{timestamp}.json")
 
-        ps_result = subprocess.run(
-            ["docker", "compose", "ps", "--format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=project_dir,
-        )
+        ps_result = _shared_docker_compose_ps(project_dir, format="json")
         if ps_result.returncode == 0 and ps_result.stdout:
             with open(ps_file, "w") as f:
                 f.write(ps_result.stdout)
@@ -618,13 +629,7 @@ class DeployEngine:
         else:
             logger.info("[IMP:6][snapshot] ps snapshot empty or failed (rc=%d)", ps_result.returncode)
 
-        images_result = subprocess.run(
-            ["docker", "compose", "images", "--format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=project_dir,
-        )
+        images_result = _shared_docker_compose_images(project_dir, flags=["--format", "json"])
         if images_result.returncode == 0 and images_result.stdout:
             with open(images_file, "w") as f:
                 f.write(images_result.stdout)
@@ -715,166 +720,22 @@ class DeployEngine:
 
     # endregion FUNC__preflight_checks
 
-    # region FUNC__pull_image_with_retry
-    ## @purpose  Pull Docker image with exponential backoff retry, rate-limit detection.
-    ## @io       ⇥ project_dir, service, ref, max_attempts=3 → ⎋ bool
-    ## @complexity — O(max_attempts) — O(1) per attempt
-    ## @invariants
-    ##   - Backoff: [5, 10, 20] seconds
-    ##   - Rate-limit detected via "toomanyrequests|429|rate limit" in output
-    ##   - Returns False after all attempts exhausted
-    def _pull_image_with_retry(
-        self,
-        project_dir: str,
-        service: str,
-        ref: str,
-        max_attempts: int = 3,
-    ) -> bool:
-        """Pull image with retry and backoff.
-
-        Args:
-            project_dir: Project directory.
-            service: Docker Compose service name.
-            ref: Image tag to pull.
-            max_attempts: Number of pull attempts.
-
-        Returns:
-            True if pull succeeded, False after all attempts fail.
-        """
-        delays = [5, 10, 20]
-        env = os.environ.copy()
-        env["IMAGE_TAG"] = ref
-
-        for attempt in range(1, max_attempts + 1):
-            logger.info(
-                "[IMP:8][pull] Attempt %d/%d: pulling %s with IMAGE_TAG=%s", attempt, max_attempts, service, ref
-            )
-            result = subprocess.run(
-                ["docker", "compose", "pull", service],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=project_dir,
-                env=env,
-            )
-
-            if result.returncode == 0:
-                logger.info("[IMP:9][pull] Pull complete: %s:%s", service, ref)
-                return True
-
-            # Rate-limit detection
-            output = (result.stdout + result.stderr).lower()
-            if any(pattern in output for pattern in ("toomanyrequests", "429", "rate limit")):
-                logger.warning("[IMP:9][pull] Rate limit hit on attempt %d", attempt)
-            else:
-                logger.warning(
-                    "[IMP:9][pull] Pull failed on attempt %d (exit=%d): %s",
-                    attempt,
-                    result.returncode,
-                    result.stderr.strip()[:200],
-                )
-
-            if attempt < max_attempts:
-                delay = delays[min(attempt - 1, len(delays) - 1)]
-                logger.info("[IMP:7][pull] Waiting %ds before retry...", delay)
-                time.sleep(delay)
-
-        logger.error("[IMP:10][pull] FATAL: pull failed after %d attempts for %s:%s", max_attempts, service, ref)
-        return False
-
-    # endregion FUNC__pull_image_with_retry
-
     # region FUNC__atomic_up
-    ## @purpose  Execute docker compose up -d for single service.
+    ## @purpose  Execute docker compose up -d for single service (тонкая обёртка над shared, T5.2).
     ## @io       ⇥ project_dir, service, ref → ⎋ bool
-    ## @complexity — O(1) — single docker compose call
+    ## @complexity — O(1) — делегирование в shared docker_compose_up
+    ## @invariants — env_override={"IMAGE_TAG": ref}; shared = {**os.environ, **override} (D7)
     def _atomic_up(self, project_dir: str, service: str, ref: str) -> bool:
-        """Start service via docker compose up -d.
-
-        Args:
-            project_dir: Project directory.
-            service: Docker Compose service name.
-            ref: Image tag.
-
-        Returns:
-            True if up succeeded, False otherwise.
-        """
+        """Start service via docker compose up -d (delegates to shared — sole path)."""
         logger.info("[IMP:9][up] Atomic up: %s (IMAGE_TAG=%s)", service, ref)
-        env = os.environ.copy()
-        env["IMAGE_TAG"] = ref
-
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d", service],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=project_dir,
-            env=env,
+        return _shared_docker_compose_up(
+            project_dir,
+            timeout=COMPOSE_UP_TIMEOUT,
+            service=service,
+            env_override={"IMAGE_TAG": ref},
         )
 
-        if result.returncode != 0:
-            logger.error(
-                "[IMP:10][up] docker compose up -d failed (exit=%d): %s", result.returncode, result.stderr.strip()[:200]
-            )
-            return False
-
-        logger.info("[IMP:8][up] Container started for %s", service)
-        return True
-
     # endregion FUNC__atomic_up
-
-    # region FUNC__poll_health
-    ## @purpose  Poll container health until healthy or timeout.
-    ## @io       ⇥ project_dir, service, timeout, interval → ⎋ bool
-    ## @complexity — O(timeout/interval) healthcheck calls
-    ## @invariants
-    ##   - Uses docker inspect --format for health status
-    ##   - Container "running" without healthcheck → considered healthy
-    ##   - Polls every `interval` seconds until `timeout`
-    def _poll_health(self, project_dir: str, service: str, timeout: int, interval: int = 2) -> bool:
-        """Poll container health until healthy.
-
-        Args:
-            project_dir: Project directory.
-            service: Docker Compose service name.
-            timeout: Max seconds to poll.
-            interval: Seconds between polls.
-
-        Returns:
-            True if healthy, False on timeout.
-        """
-        logger.info("[IMP:8][health] Polling health for %s (timeout=%ds, interval=%ds)", service, timeout, interval)
-        deadline = time.time() + timeout
-
-        while time.time() < deadline:
-            cid_result = subprocess.run(
-                ["docker", "compose", "ps", "-q", service],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                cwd=project_dir,
-            )
-            cid = cid_result.stdout.strip()
-
-            if cid:
-                inspect_result = subprocess.run(
-                    ["docker", "inspect", "--format", "{{.State.Status}} {{.State.Health.Status}}", cid],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                )
-                status_line = inspect_result.stdout.strip()
-
-                if "running" in status_line and ("healthy" in status_line or "unhealthy" not in status_line):
-                    logger.info("[IMP:9][health] Container %s is healthy", service)
-                    return True
-
-            time.sleep(interval)
-
-        logger.error("[IMP:10][health] Healthcheck timeout for %s (%ds)", service, timeout)
-        return False
-
-    # endregion FUNC__poll_health
 
     # region FUNC__perform_rollback
     ## @purpose  Rollback to previous image: re-tag + docker compose up --force-recreate.
@@ -901,32 +762,23 @@ class DeployEngine:
 
         logger.info("[IMP:10][rollback] ROLLING BACK %s to %s", service, previous_image.id)
 
-        # Re-tag previous image
+        # Re-tag previous image (docker tag — локальная image-операция, DOCKER_CMD_TIMEOUT)
         if previous_image.tag:
             subprocess.run(
                 ["docker", "tag", previous_image.id, previous_image.tag],
                 capture_output=True,
-                timeout=30,
+                timeout=DOCKER_CMD_TIMEOUT,
             )
             logger.info("[IMP:9][rollback] Re-tagged %s → %s", previous_image.id, previous_image.tag)
 
-        # docker compose up -d --force-recreate
-        env = os.environ.copy()
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d", "--force-recreate", service],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=project_dir,
-            env=env,
-        )
-
-        if result.returncode != 0:
-            logger.error(
-                "[IMP:10][rollback] Rollback compose up FAILED (exit=%d): %s",
-                result.returncode,
-                result.stderr.strip()[:200],
-            )
+        # docker compose up -d --force-recreate (T5.4: shared docker_compose_up — sole path)
+        if not _shared_docker_compose_up(
+            project_dir,
+            timeout=COMPOSE_UP_TIMEOUT,
+            service=service,
+            flags=["--force-recreate"],
+        ):
+            logger.error("[IMP:10][rollback] Rollback compose up FAILED for %s", service)
             return False
 
         logger.info("[IMP:10][rollback] Rollback complete: %s restored to %s", service, previous_image.id)

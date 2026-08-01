@@ -63,9 +63,12 @@ from core.internal.shared.docker_compose import (
 
 # DevPlan 091 Wave A: retry_pull import removed — was only consumed by the deleted
 # _deploy_single_project() bypass path. ghcr retry/pull now flows through DeployOrchestrator.
-
 # ── Constants ──────────────────────────────────────────────────────────────
-HEALTH_GATE_TIMEOUT = 60  # seconds per project
+# DevPlan 116 B5 T9.2 (U-11): HEALTH_GATE_TIMEOUT — алиас канона shared/timeouts.py
+# (consumer-scan: константа не имеет других потребителей; единственный источник — timeouts)
+from core.internal.shared.timeouts import HEALTHCHECK_POLL_TIMEOUT
+
+HEALTH_GATE_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT  # seconds per project
 DEFAULT_PROJECTS_BASE = "/opt/projects"
 AUDIT_LOG = "/var/log/platform/audit.log"
 PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")

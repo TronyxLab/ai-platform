@@ -30,6 +30,9 @@ import subprocess
 
 import pytest
 
+# DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT (для моделирования ssh_opts --shell в stub)
+from core.internal.shared.ssh_opts import SSH_OPTS
+
 # ── Paths ──────────────────────────────────────────────────────────────────
 
 PLATFORM_ROOT: str = str(pathlib.Path(__file__).resolve().parent.parent)
@@ -321,7 +324,16 @@ def _run_scp_facade(
     bin_dir.mkdir(exist_ok=True)
     stub = bin_dir / "python3"
     stub_extra = f'echo "{stub_stderr}" >&2\n' if stub_stderr else ""
-    stub.write_text('#!/usr/bin/env bash\necho "[IMP:9][mock-python3] $*" >&2\n' + stub_extra + f"exit {stub_exit}\n")
+    # DevPlan 116 B5 T2 (D1): lib/ssh.sh SSH_OPTS_COMMON генерируется из
+    # core.internal.shared.ssh_opts (python3 -m ... --shell). Стуб моделирует ЭТОТ вызов
+    # (флаги в stdout, без mock-маркера — как реальный python3), чтобы ssh.sh-фасад
+    # успешно загрузил SSH_OPTS_COMMON (иначе fail-fast return 1 рвёт source под set -e).
+    ssh_opts_flags = " ".join(SSH_OPTS)
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'if [[ "$*" == *"core.internal.shared.ssh_opts --shell"* ]]; then echo "{ssh_opts_flags}"; exit 0; fi\n'
+        'echo "[IMP:9][mock-python3] $*" >&2\n' + stub_extra + f"exit {stub_exit}\n"
+    )
     stub.chmod(0o755)
 
     script = tmp_path / "facade_test.sh"

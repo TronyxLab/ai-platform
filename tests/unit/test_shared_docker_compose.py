@@ -12,6 +12,7 @@
 # endregion MODULE_CONTRACT
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -176,29 +177,70 @@ def test_up_success(compose_dir: str, caplog: pytest.LogCaptureFixture) -> None:
 # endregion
 
 
+# region FUNC_test_up_passes_flags_service_env
+## @purpose — Verify docker_compose_up passes flags/service/env_override (DevPlan 116 B5 T3, D7).
+##            AC: command order ["docker","compose",*compose_args,"up","-d",*flags,service] + env merge.
+## @complexity — O(1)
+def test_up_passes_flags_service_env(compose_dir: str, caplog: pytest.LogCaptureFixture) -> None:
+    """docker_compose_up должен передавать flags/service/env_override (D7)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: up с политическими флагами и env IMAGE_TAG
+    # · Last fail: N/A (new test — D7 параметры)
+    # · Remove if: docker_compose_up signature changes
+
+    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+
+        result = docker_compose_up(
+            compose_dir,
+            compose_args=["-f", "compose.yaml"],
+            service="app",
+            env_override={"IMAGE_TAG": "v1.0.0"},
+            flags=["--remove-orphans", "--force-recreate"],
+        )
+
+    assert result is True
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:2] == ["docker", "compose"]
+    assert "-f" in cmd and "compose.yaml" in cmd
+    up_idx = cmd.index("up")
+    assert cmd[up_idx : up_idx + 2] == ["up", "-d"]
+    assert "--remove-orphans" in cmd and "--force-recreate" in cmd
+    assert cmd[-1] == "app", "service должен быть последним аргументом"
+    # env: копия os.environ + override (НЕ замена)
+    env = mock_run.call_args.kwargs.get("env")
+    assert env is not None
+    assert env["IMAGE_TAG"] == "v1.0.0"
+    assert env["PATH"] == os.environ["PATH"], "env_override должен быть поверх os.environ, не заменой"
+
+
+# endregion
+
+
 # ── Healthcheck tests ───────────────────────────────────────────────────────
 
 
 # region FUNC_test_healthcheck_poll_healthy
-## @purpose — Verify healthcheck_poll returns "healthy" when containers are healthy.
-##            AC: mock docker ps → "healthy".
+## @purpose — Verify healthcheck_poll returns "healthy" via inspect-критерий (D5).
+##            AC: docker ps → cid, docker inspect → running|healthy → "healthy".
 ## @complexity — O(1)
 def test_healthcheck_poll_healthy(caplog: pytest.LogCaptureFixture) -> None:
-    """healthcheck_poll returns 'healthy' when containers are Up."""
+    """healthcheck_poll returns 'healthy' when container is running+healthy (inspect)."""
     caplog.set_level(logging.INFO)
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: healthy containers
-    # · Last fail: N/A (new test)
-    # · Remove if: healthcheck_poll behavior changes
+    # 🧪 TRAP[TEST] · Regression · Scenario: container healthy via inspect
+    # · Last fail: N/A (T3.4 — критерий переработан на inspect State.Health)
+    # · Remove if: healthcheck_poll criterion changes
 
     with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
-        # First call may show no containers, second shows healthy
+        # docker ps --filter name= → cid; docker inspect → running|healthy
         mock_run.side_effect = [
-            subprocess.CompletedProcess([], returncode=0, stdout="", stderr=""),  # no containers yet
-            subprocess.CompletedProcess([], returncode=0, stdout="Up 2 hours\nhealthy", stderr=""),  # healthy
+            subprocess.CompletedProcess([], returncode=0, stdout="abc123\n", stderr=""),
+            subprocess.CompletedProcess([], returncode=0, stdout="running|healthy", stderr=""),
         ]
 
-        result = healthcheck_poll("test_project", timeout=10, interval=1)
+        result = healthcheck_poll("test_project", timeout=5, interval=1)
 
     found_imp9 = any("[IMP:9]" in r.message for r in caplog.records)
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -214,21 +256,58 @@ def test_healthcheck_poll_healthy(caplog: pytest.LogCaptureFixture) -> None:
 # endregion
 
 
+# region FUNC_test_healthcheck_poll_running_without_healthcheck
+## @purpose — Verify running-без-healthcheck (Health.Status="") считается здоровым (D5, канон).
+##            AC: docker inspect → running| → "healthy".
+## @complexity — O(1)
+def test_healthcheck_poll_running_without_healthcheck(caplog: pytest.LogCaptureFixture) -> None:
+    """healthcheck_poll: контейнер running без healthcheck (""|none) → healthy (D5)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: running без HEALTHCHECK — канон D5
+    # · Last fail: N/A (T3.4 — единый критерий «здоров»)
+    # · Remove if: healthcheck_poll criterion changes
+    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            subprocess.CompletedProcess([], returncode=0, stdout="cid1\n", stderr=""),
+            subprocess.CompletedProcess([], returncode=0, stdout="running|", stderr=""),  # Health.Status == ""
+        ]
+
+        result = healthcheck_poll("svc", timeout=5, interval=1)
+
+    assert result == "healthy"
+
+
+# endregion
+
+
 # region FUNC_test_healthcheck_poll_timeout
-## @purpose — Verify healthcheck_poll returns "unhealthy" after timeout.
-##            AC: mock always unhealthy → returns "unhealthy" after N attempts.
+## @purpose — Verify healthcheck_poll returns "unhealthy" after timeout when container unhealthy.
+##            AC: docker inspect → running|unhealthy → ждём → timeout → "unhealthy".
 ## @complexity — O(1)
 def test_healthcheck_poll_timeout(caplog: pytest.LogCaptureFixture) -> None:
-    """healthcheck_poll returns 'unhealthy' after timeout with unhealthy containers."""
+    """healthcheck_poll returns 'unhealthy' after timeout with unhealthy container."""
     caplog.set_level(logging.WARNING)
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: timeout
-    # · Last fail: N/A (new test)
-    # · Remove if: healthcheck_poll behavior changes
+    # 🧪 TRAP[TEST] · Regression · Scenario: timeout с unhealthy контейнером
+    # · Last fail: N/A (T3.4 — «unhealthy» ждём, timeout → unhealthy)
+    # · Remove if: healthcheck_poll criterion changes
 
-    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "unhealthy"
+    with (
+        patch("core.internal.shared.docker_compose.subprocess.run") as mock_run,
+        patch("core.internal.shared.docker_compose.time.sleep", return_value=None),
+        patch(
+            "core.internal.shared.docker_compose.time.monotonic",
+            side_effect=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1],
+        ),
+    ):
+        # docker ps всегда возвращает cid; inspect всегда running|unhealthy → ждём → timeout
+        def _fake_run(cmd, **kwargs):
+            if "inspect" in cmd:
+                return subprocess.CompletedProcess([], returncode=0, stdout="running|unhealthy", stderr="")
+            return subprocess.CompletedProcess([], returncode=0, stdout="abc123\n", stderr="")
+
+        mock_run.side_effect = _fake_run
 
         result = healthcheck_poll("test_project", timeout=1, interval=1)
 
@@ -239,6 +318,33 @@ def test_healthcheck_poll_timeout(caplog: pytest.LogCaptureFixture) -> None:
     print("--- END LDD TRAJECTORY ---")
 
     assert result == "unhealthy"
+
+
+# endregion
+
+
+# region FUNC_test_healthcheck_poll_service_filter
+## @purpose — Verify healthcheck_poll with service= uses `docker compose ps -q {service}` (T3.4).
+##            AC: первый subprocess-вызов — ["docker","compose","ps","-q",service].
+## @complexity — O(1)
+def test_healthcheck_poll_service_filter(caplog: pytest.LogCaptureFixture) -> None:
+    """healthcheck_poll с service= фильтрует через docker compose ps -q (deploy_engine)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: service-фильтр (T3.4, T5.3)
+    # · Last fail: N/A (new test)
+    # · Remove if: healthcheck_poll signature changes
+    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            subprocess.CompletedProcess([], returncode=0, stdout="cid9\n", stderr=""),  # compose ps -q app
+            subprocess.CompletedProcess([], returncode=0, stdout="running|healthy", stderr=""),
+        ]
+
+        result = healthcheck_poll("app", timeout=5, interval=1, service="app")
+
+    assert result == "healthy"
+    first_cmd = mock_run.call_args_list[0].args[0]
+    assert first_cmd == ["docker", "compose", "ps", "-q", "app"]
 
 
 # endregion

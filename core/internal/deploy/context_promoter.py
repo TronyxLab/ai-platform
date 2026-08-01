@@ -10,7 +10,7 @@
 ##           Invoked as `python3 -m core.internal.deploy.context_promoter <CONTEXT>`.
 ##           CONTEXT from argv[1], GIT_MIRROR_TOKEN from environment (never argv).
 ## @invariants
-##   1. SSH primary: `ssh -T -o ConnectTimeout=10 -o BatchMode=yes git@github.com` —
+##   1. SSH primary: `ssh -T -o ConnectTimeout=<SSH_CONNECT_TIMEOUT> -o BatchMode=yes git@github.com` —
 ##      availability determined by AUTH MESSAGE in output, NOT exit code
 ##      (`ssh -T git@github.com` exits 1 even on success — GitHub provides no shell).
 ##   2. HTTPS fallback ONLY when SSH unavailable AND GIT_MIRROR_TOKEN set; else FATAL exit 1.
@@ -28,6 +28,7 @@
 ##            ssh-agent has the operator key; node secrets (GIT_MIRROR_TOKEN) are
 ##            unavailable locally (B4 root cause). HTTPS fallback keeps PAT-based use possible.
 ## @changes  2026-07-31 | DevPlan 103 — extracted from core/entrypoints/context-promote.sh (161 LOC)
+##           2026-08-01 | DevPlan 116 B5 T2 — ConnectTimeout outlier (10) → SSH_CONNECT_TIMEOUT=30 (U-15)
 ## 🧐 TRAP[DECISION] · 2026-07-18 · — · SSH primary, HTTPS fallback
 ## · Rejected: HTTPS-only (required token, unavailable locally — B4)
 ## · Reason: context-promote runs locally at operator — ssh-agent has operator key,
@@ -44,6 +45,9 @@ import tempfile
 
 from core.internal.shared import audit_logger
 
+# DevPlan 116 B5 T1/T2: единый ConnectTimeout (U-15) — литерал 10 outlier заменён
+from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # GitHub SSH auth greeting markers — identical to the legacy shell grep
@@ -55,7 +59,7 @@ _SSH_AUTH_MARKERS = ("successfully authenticated", "Hi ")
 def check_ssh_available() -> bool:
     """Determine whether the operator's SSH key authenticates to github.com.
 
-    ▶ ┌ssh -T git@github.com (ConnectTimeout=10, BatchMode=yes)┐ → ○ merge stdout+stderr → ◇ auth marker? → ⎋ bool
+    ▶ ┌ssh -T git@github.com (ConnectTimeout=<SSH_CONNECT_TIMEOUT>, BatchMode=yes)┐ → ○ merge stdout+stderr → ◇ auth marker? → ⎋ bool
 
     ## @purpose — SSH primary-channel availability probe. Mirrors the legacy shell check
     ##            (context-promote.sh:50-60) which greps the merged `2>&1` output for the
@@ -71,7 +75,15 @@ def check_ssh_available() -> bool:
     """
     try:
         result = subprocess.run(
-            ["ssh", "-T", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", "git@github.com"],
+            [
+                "ssh",
+                "-T",
+                "-o",
+                f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
+                "-o",
+                "BatchMode=yes",
+                "git@github.com",
+            ],
             capture_output=True,
             text=True,
             check=False,

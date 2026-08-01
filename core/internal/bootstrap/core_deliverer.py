@@ -10,7 +10,7 @@
 ##           (2) overlay_deliverer.sync_core_to_vps() — делегирование deliver_core() (AC4).
 ##           Канал Core per root AGENTS.md «Три канала доставки кода на VPS».
 ## @invariants
-##   - SSH_OPTS mirror lib/ssh.sh SSH_OPTS_COMMON (5 флагов) — единая точка правды остаётся shell
+##   - SSH_OPTS — единый SoT из shared/ssh_opts.py (DevPlan 116 B5 T2, D1) — НЕ mirror lib/ssh.sh
 ##   - RSYNC_EXCLUDES_CORE 5 паттернов / _NODE 3 / _SECRETS 1 — точное соответствие таблице AC7
 ##   - Fail-fast: первая упавшая фаза → CoreDeliveryError → CLI exit 1 (эквивалент shell || return 1)
 ##   - Timeouts: mkdir=30 (parity ssh_exec scp-deliver.sh:142), rsync=600 (deploy-дефолт lib/ssh.sh:119)
@@ -18,10 +18,12 @@
 ##   - subprocess.run с list-args (НЕ string concat) — unit-тестируемость (P3 DevPlan 108)
 ## @rationale SRP (DevPlan 108 D1): ДВА раздельных канала доставки — Core (push SCP/rsync) vs
 ##            Context-overlay (git pull-based). core_deliverer.py = канал Core; overlay_deliverer.py
-##            = overlay-канал. Standalone-конвенция (D2): собственный SSH_OPTS/RSYNC_EXCLUDES mirror
-##            — третий mirror shell-константы (прецедент overlay_deliverer.py:12), разрыв цикла.
+##            = overlay-канал. Standalone-конвенция (D2): SSH_OPTS из shared/ssh_opts.py — единый
+##            SoT (5 дублирующих копий SSH_OPTS заменены импортом, DevPlan 116 B5 T2 D1).
 ## @changes 2026-07-31 | DevPlan 108 — Strangler-Fig Tier 2: scp-deliver.sh 251→≤60 LOC,
 ##           вся rsync/ssh оркестрация scp_to_server() → настоящий Python-модуль
+##           2026-08-01 | DevPlan 116 B5 T2 — SSH_OPTS → импорт из shared/ssh_opts.py (D1);
+##                      _ssh_e → build_rsync_ssh_opts() (единственная реализация)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -30,24 +32,11 @@ import os
 import subprocess
 import sys
 
+# DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py; дублирующие копии устранены.
+from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
+
 logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
-
-
-# Mirror lib/ssh.sh SSH_OPTS_COMMON (readonly const) — 5 флагов, word-split эквивалент
-# shell `${SSH_OPTS_COMMON[*]}` для rsync -e (таблица AC7 DevPlan 108).
-SSH_OPTS: list[str] = [
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=accept-new",
-    "-o",
-    "ConnectTimeout=30",
-    "-o",
-    "ServerAliveInterval=30",
-    "-o",
-    "ServerAliveCountMax=10",
-]
 
 # Rsync exclude-паттерны — дословное соответствие scp-deliver.sh (таблица AC7 DevPlan 108).
 RSYNC_EXCLUDES_CORE: list[str] = [  # Phase 1 core/ — 5 паттернов
@@ -79,18 +68,6 @@ class CoreDeliveryError(Exception):
 
 
 # endregion EXC_CoreDeliveryError
-
-
-# region FUNC__ssh_e
-## @purpose  Build rsync -e argument from SSH_OPTS list (эквивалент shell ${SSH_OPTS_COMMON[*]}).
-## @io  input: SSH_OPTS (module-level list), output: ssh command string
-## @complexity  O(k) where k = len(SSH_OPTS) — simple string join
-def _ssh_e() -> str:
-    """Build rsync -e argument from SSH_OPTS."""
-    return f"ssh {' '.join(SSH_OPTS)}"
-
-
-# endregion FUNC__ssh_e
 
 
 # region FUNC_resolve_remote_base
@@ -190,7 +167,7 @@ def deliver_core(
         "-avz",
         "--delete",
         "-e",
-        _ssh_e(),
+        build_rsync_ssh_opts(),
         *RSYNC_EXCLUDES_CORE,
         f"{core_dir}/",
         f"{remote_user}@{host}:{base}/core/",
@@ -234,7 +211,7 @@ def deliver_platform_env(
     if not os.path.isfile(src):
         logger.info("[IMP:8][deliver_platform_env][skip] Phase 1b/4: SKIP — platform-env.yaml not found at %s", src)
         return True
-    cmd = ["rsync", "-avz", "-e", _ssh_e(), src, f"{remote_user}@{host}:{base}/platform-env.yaml"]
+    cmd = ["rsync", "-avz", "-e", build_rsync_ssh_opts(), src, f"{remote_user}@{host}:{base}/platform-env.yaml"]
     logger.info("[IMP:9][deliver_platform_env][exec] Phase 1b/4: Rsyncing platform-env.yaml → %s:%s/", host, base)
     if dry_run:
         logger.info("[IMP:8][deliver_platform_env][dry-run] DRY-RUN: %s", " ".join(cmd))
@@ -274,7 +251,7 @@ def deliver_makefile(
     if not os.path.isfile(src):
         logger.info("[IMP:8][deliver_makefile][skip] Phase 1c/4: SKIP — Makefile not found at %s", src)
         return True
-    cmd = ["rsync", "-avz", "-e", _ssh_e(), src, f"{remote_user}@{host}:{base}/Makefile"]
+    cmd = ["rsync", "-avz", "-e", build_rsync_ssh_opts(), src, f"{remote_user}@{host}:{base}/Makefile"]
     logger.info("[IMP:9][deliver_makefile][exec] Phase 1c/4: Rsyncing Makefile → %s:%s/", host, base)
     if dry_run:
         logger.info("[IMP:8][deliver_makefile][dry-run] DRY-RUN: %s", " ".join(cmd))
@@ -313,7 +290,7 @@ def deliver_node_configs(
         "-avz",
         "--delete",
         "-e",
-        _ssh_e(),
+        build_rsync_ssh_opts(),
         *RSYNC_EXCLUDES_NODE,
         src_dir,
         f"{remote_user}@{host}:{ncb}/{node}/",
@@ -370,7 +347,7 @@ def deliver_secrets(
         "-avz",
         "--delete",
         "-e",
-        _ssh_e(),
+        build_rsync_ssh_opts(),
         *RSYNC_EXCLUDES_SECRETS,
         f"{src_dir}/",
         f"{remote_user}@{host}:{ncb}/secrets/",

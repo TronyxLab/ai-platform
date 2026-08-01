@@ -31,6 +31,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# DevPlan 116 B5 T3: shared docker compose config — sole path (гейт docker_sole_path)
+from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
+
+# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
+from core.internal.shared.timeouts import IMAGE_CHECK_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──
@@ -46,9 +52,6 @@ COMPOSE_FILE_CANDIDATES: list[str] = [
 
 DOCKER_PS_TIMEOUT: int = 15
 """## @invariant docker ps -a timeout (seconds). Matches deploy-modules.sh value."""
-
-DOCKER_COMPOSE_CONFIG_TIMEOUT: int = 30
-"""## @invariant docker compose config timeout (seconds). Larger — config resolves all includes."""
 
 DOCKER_INSPECT_TIMEOUT: int = 15
 """## @invariant docker inspect timeout (seconds). Single container lookup."""
@@ -178,49 +181,27 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
     service-name fallback).
     """
     logger.info("[IMP:7][_get_compose_services] Resolving services for %s from %s", module_name, compose_path)
+    # Shared docker_compose_config — sole path (DevPlan 116 B5 T3, гейт docker_sole_path).
+    # Shared возвращает CompletedProcess (никогда не raise) — try/except TimeoutExpired/OSError удалены.
+    cfg_r = _shared_docker_compose_config(
+        os.path.dirname(compose_path),
+        compose_args=["-f", compose_path, "--profile", module_name],
+        flags=["--format", "json"],
+    )
+    if cfg_r.returncode != 0:
+        logger.warning(
+            "[IMP:8][_get_compose_services] docker compose config failed for %s (returncode=%d): %s",
+            module_name,
+            cfg_r.returncode,
+            cfg_r.stderr.strip() if cfg_r.stderr else "no stderr",
+        )
+        return []
+
+    cfg_stdout = cfg_r.stdout
+    if isinstance(cfg_stdout, bytes):
+        cfg_stdout = cfg_stdout.decode("utf-8")
     try:
-        cfg_r = subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                compose_path,
-                "--profile",
-                module_name,
-                "config",
-                "--format",
-                "json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_COMPOSE_CONFIG_TIMEOUT,
-        )
-        if cfg_r.returncode != 0:
-            logger.warning(
-                "[IMP:8][_get_compose_services] docker compose config failed for %s (returncode=%d): %s",
-                module_name,
-                cfg_r.returncode,
-                cfg_r.stderr.strip() if cfg_r.stderr else "no stderr",
-            )
-            return []
-
-        cfg = json.loads(cfg_r.stdout)
-        services = cfg.get("services", {})
-        container_names: list[str] = []
-
-        for svc_name, svc in services.items():
-            cname = svc.get("container_name", "") or svc.get("name", "")
-            if cname:
-                container_names.append(cname)
-                logger.info("[IMP:7][_get_compose_services] %s → container_name: %s", svc_name, cname)
-
-        logger.info(
-            "[IMP:7][_get_compose_services] Resolved %d container names from %s",
-            len(container_names),
-            compose_path,
-        )
-        return container_names
-
+        cfg = json.loads(cfg_stdout)
     except json.JSONDecodeError as e:
         logger.warning(
             "[IMP:8][_get_compose_services] Invalid JSON from docker compose config for %s: %s",
@@ -228,23 +209,22 @@ def _get_compose_services(compose_path: str, module_name: str) -> list[str]:
             e,
         )
         return []
-    except FileNotFoundError:
-        logger.warning("[IMP:8][_get_compose_services] docker binary not found — returning empty service list")
-        return []
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            "[IMP:8][_get_compose_services] docker compose config timed out for %s after %ds — returning empty service list",
-            module_name,
-            DOCKER_COMPOSE_CONFIG_TIMEOUT,
-        )
-        return []
-    except (OSError, subprocess.CalledProcessError) as e:
-        logger.warning(
-            "[IMP:8][_get_compose_services] Unexpected compose config error for %s: %s — returning empty service list",
-            module_name,
-            e,
-        )
-        return []
+
+    services = cfg.get("services", {})
+    container_names: list[str] = []
+
+    for svc_name, svc in services.items():
+        cname = svc.get("container_name", "") or svc.get("name", "")
+        if cname:
+            container_names.append(cname)
+            logger.info("[IMP:7][_get_compose_services] %s → container_name: %s", svc_name, cname)
+
+    logger.info(
+        "[IMP:7][_get_compose_services] Resolved %d container names from %s",
+        len(container_names),
+        compose_path,
+    )
+    return container_names
 
 
 # endregion FUNC__get_compose_services
@@ -479,7 +459,7 @@ def _self_heal_aged_images(retention_days: int = DEFAULT_IMAGE_RETENTION_DAYS) -
                 "label=com.docker.compose.project",
             ],
             capture_output=True,
-            timeout=60,
+            timeout=IMAGE_CHECK_TIMEOUT,
             check=False,
         )
         # Parse prune output for count (docker image prune reports "Total reclaimed space")

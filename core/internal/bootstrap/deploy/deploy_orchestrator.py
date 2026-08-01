@@ -100,6 +100,9 @@ from core.internal.bootstrap.deploy import (
 from core.internal.llm import config_renderer as _config_renderer
 from core.internal.shared.node_yaml import NodeYaml
 
+# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
+from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, DEPLOY_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # ── Constants (paths mirror deploy-modules.sh facade / docker_orchestrator.py) ──
@@ -532,7 +535,7 @@ def _deploy_orchestrator(docker_names: list[str]) -> tuple[int, list[str]]:
     ]
     logger.info("[IMP:9][_deploy_orchestrator][start] DeployOrchestrator deploy-many: %s", projects)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=DEPLOY_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("[IMP:5][_deploy_orchestrator][error] deploy-many error (non-fatal): %s", exc)
         return 0, []
@@ -664,7 +667,7 @@ def _invoke_module_interface(module_name: str, interface: str, *args: str) -> bo
         bash_cmd += " " + " ".join(shlex.quote(a) for a in args)
     logger.info("[IMP:8][_invoke_module_interface][invoke] %s %s", module_name, interface)
     try:
-        result = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, timeout=180)
+        result = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, timeout=COMPOSE_UP_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("[IMP:7][_invoke_module_interface][error] %s %s error: %s", module_name, interface, exc)
         return False

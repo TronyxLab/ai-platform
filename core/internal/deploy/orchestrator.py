@@ -45,6 +45,17 @@ from core.internal.deploy.channels import DeliveryChannel, Payload
 from core.internal.deploy.deploy_history import DeployHistory
 from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 
+# DevPlan 116 B5 T3: shared docker compose — sole path (гейт docker_sole_path)
+from core.internal.shared.docker_compose import (
+    docker_compose_down as _shared_docker_compose_down,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_ps as _shared_docker_compose_ps,
+)
+
+# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
+from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROJECTS_BASE = "/opt/projects"
@@ -545,21 +556,16 @@ class DeployOrchestrator:
             except OSError:
                 pass
 
-        # Get containers via docker compose ps
+        # Get containers via docker compose ps (shared — sole path, DevPlan 116 B5 T3)
         containers: list[dict[str, Any]] = []
         try:
-            import subprocess
-
-            ps_result = subprocess.run(
-                ["docker", "compose", "ps", "--format", "json"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=project_dir,
-            )
-            if ps_result.returncode == 0 and ps_result.stdout.strip():
+            ps_result = _shared_docker_compose_ps(project_dir, format="json")
+            ps_stdout = ps_result.stdout
+            if isinstance(ps_stdout, bytes):
+                ps_stdout = ps_stdout.decode("utf-8")
+            if ps_result.returncode == 0 and ps_stdout.strip():
                 containers.extend(
-                    c for line in ps_result.stdout.strip().split("\n") if (c := _try_json_loads(line)) is not None
+                    c for line in ps_stdout.strip().split("\n") if (c := _try_json_loads(line)) is not None
                 )
         except (OSError, subprocess.TimeoutExpired) as e:
             logger.warning("[IMP:8][status] docker compose ps error: %s", e)
@@ -609,29 +615,17 @@ class DeployOrchestrator:
                 duration_s=time.monotonic() - start,
             )
 
-        # docker compose down (± -v)
+        # docker compose down (± -v) — shared sole path (DevPlan 116 B5 T3)
         try:
-            import subprocess
-
-            cmd = ["docker", "compose", "down", "--timeout", "30"]
+            flags = ["--timeout", "30"]
             if purge:
-                cmd.append("-v")
+                flags.append("-v")
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=project_dir,
-            )
+            down_ok = _shared_docker_compose_down(project_dir, flags=flags)
             duration = time.monotonic() - start
 
-            if result.returncode != 0:
-                logger.warning(
-                    "[IMP:8][remove] docker compose down exit=%s: %s",
-                    result.returncode,
-                    result.stderr.strip(),
-                )
+            if not down_ok:
+                logger.warning("[IMP:8][remove] docker compose down reported failure")
 
             self.audit_logger.log(
                 operation="remove",
@@ -644,8 +638,8 @@ class DeployOrchestrator:
                 DeployStatus.DEPLOYED,
                 project_name,
                 duration_s=duration,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                stdout="docker compose down completed",
+                stderr="",
             )
         except (subprocess.TimeoutExpired, OSError) as e:
             return self._result(
@@ -863,12 +857,10 @@ class DeployOrchestrator:
 
             # Re-tag and restart
             if prev_image_id:
-                import subprocess
-
                 subprocess.run(
                     ["docker", "tag", prev_image_id, f"{service}:previous-rollback"],
                     capture_output=True,
-                    timeout=30,
+                    timeout=DOCKER_CMD_TIMEOUT,
                     check=False,
                 )
 

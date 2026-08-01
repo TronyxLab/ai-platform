@@ -39,7 +39,6 @@ import subprocess
 import sys
 
 from core.internal.bootstrap.overlay_deliverer import (
-    SSH_OPTS,
     NodeYamlNotFoundError,
     SyncCoreError,
     extract_node_host,
@@ -47,11 +46,17 @@ from core.internal.bootstrap.overlay_deliverer import (
     sync_core_to_vps,
 )
 
+# DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py (импорт из overlay_deliverer заменён)
+from core.internal.shared.ssh_opts import SSH_OPTS
+
+# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
+from core.internal.shared.timeouts import DEPLOY_TIMEOUT, SSH_CONNECT_TIMEOUT
+
 logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-# Mirror lib/ssh.sh ssh_exec deploy-mode default (600s) + TRAP[DECISION] 2026-07-21
-SSH_EXEC_TIMEOUT = 600
+# Аналог lib/ssh.sh ssh_exec deploy-mode default (600s) — SoT: timeouts.DEPLOY_TIMEOUT (U-11)
+SSH_EXEC_TIMEOUT = DEPLOY_TIMEOUT
 
 # VPS self-SSH marker — та же проверка, что remote-cmd.sh:165 (локальный filesystem probe)
 VPS_NODE_LIFECYCLE = "/opt/platform/core/internal/bootstrap/node-lifecycle.sh"
@@ -79,7 +84,7 @@ def _prepare_ssh_opts(host: str, mode: str = "update") -> None:
     """Prepare SSH options: clean host key only in init mode (mirror scp-deliver.sh)."""
     if mode == "init":
         logger.info("[IMP:8][prepare_ssh_opts][ssh] Cleaning SSH host key for %s (mode=init)", host)
-        subprocess.run(["ssh-keygen", "-R", host], capture_output=True, check=False, timeout=30)
+        subprocess.run(["ssh-keygen", "-R", host], capture_output=True, check=False, timeout=SSH_CONNECT_TIMEOUT)
     else:
         logger.info("[IMP:8][prepare_ssh_opts][ssh] Preserving known_hosts for %s (mode=%s)", host, mode)
 

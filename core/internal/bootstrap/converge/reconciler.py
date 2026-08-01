@@ -52,6 +52,17 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# DevPlan 116 B5 T6: shared docker compose operations — sole path (гейт docker_sole_path)
+from core.internal.shared.docker_compose import (
+    docker_compose_config as _shared_docker_compose_config,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_up as _shared_docker_compose_up,
+)
+
+# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
+from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──
@@ -1445,30 +1456,24 @@ def reconcile_volumes(
         checked_modules += 1
         logger.info("[IMP:7][converge][%s] Checking module: %s (compose: %s)", unit, mod_name, compose_file)
 
-        # Run docker compose config to get resolved JSON
-        cmd = [
-            "docker",
-            "compose",
-            "-f",
-            str(compose_file),
-            "--profile",
-            mod_name,
-            "config",
-            "--format",
-            "json",
-        ]
-        result = _run_subprocess(cmd, timeout=DOCKER_TIMEOUT)
-        if result.returncode != 0:
+        # Run docker compose config to get resolved JSON (shared — sole path, DevPlan 116 B5 T6)
+        config_r = _shared_docker_compose_config(
+            str(compose_file.parent),
+            timeout=DOCKER_TIMEOUT,
+            compose_args=["-f", str(compose_file), "--profile", mod_name],
+            flags=["--format", "json"],
+        )
+        if config_r.returncode != 0:
             logger.warning(
                 "[IMP:8][converge][%s] docker compose config failed for %s: %s",
                 unit,
                 mod_name,
-                result.stderr.strip(),
+                config_r.stderr.strip(),
             )
             continue
 
         try:
-            compose_json = json.loads(result.stdout)
+            compose_json = json.loads(config_r.stdout)
         except json.JSONDecodeError as exc:
             logger.warning("[IMP:8][converge][%s] Failed to parse compose JSON for %s: %s", unit, mod_name, exc)
             continue
@@ -2035,19 +2040,13 @@ def reconcile_runtime_state(
             continue
 
         logger.info("[IMP:8][converge][%s] Self-healing module %s via docker compose up -d", unit, mod_name)
-        heal_r = _run_subprocess(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(compose_file),
-                "up",
-                "-d",
-            ],
-            timeout=DOCKER_TIMEOUT,
-        )
-
-        if heal_r.returncode == 0:
+        # T6 (DevPlan 116 B5, D8): shared docker_compose_up — sole path; timeout COMPOSE_UP_TIMEOUT=180
+        # (DOCKER_TIMEOUT=30 был занижен для up с пуллом образов — стандартизация на канон)
+        if _shared_docker_compose_up(
+            str(compose_file.parent),
+            timeout=COMPOSE_UP_TIMEOUT,
+            compose_args=["-f", str(compose_file)],
+        ):
             logger.info("[IMP:9][converge][%s] Module %s healed successfully", unit, mod_name)
             report_add(unit, "mutated", f"{mod_name}: restarted via compose up -d")
             healed += 1
@@ -2055,12 +2054,7 @@ def reconcile_runtime_state(
             # Record heal in cooldown
             cooldown["containers"][mod_name] = {"last_healed_run": current_run}
         else:
-            logger.error(
-                "[IMP:10][converge][%s] Failed to heal module %s: %s",
-                unit,
-                mod_name,
-                heal_r.stderr.strip(),
-            )
+            logger.error("[IMP:10][converge][%s] Failed to heal module %s via compose up -d", unit, mod_name)
             report_add(unit, "fail", f"{mod_name}: compose up -d failed")
             errors += 1
             _set_exit(2)

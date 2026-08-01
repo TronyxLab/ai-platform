@@ -27,6 +27,7 @@ from unittest import mock
 import pytest
 
 from core.internal.deploy import context_promoter
+from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
 
 SSH_TARGET = "git@github.com:myctx/ai-platform.git"
 HTTPS_URL = "https://github.com/myctx/ai-platform.git"
@@ -84,7 +85,8 @@ def test_check_ssh_available_success(caplog: pytest.LogCaptureFixture) -> None:
 
     args = mocked.call_args.args[0]
     assert args[:1] == ["ssh"], f"Expected ssh invocation, got: {args}"
-    assert "-o" in args and "ConnectTimeout=10" in args and "BatchMode=yes" in args
+    # DevPlan 116 B5 T2: ConnectTimeout унифицирован через timeouts.SSH_CONNECT_TIMEOUT (=30, U-15)
+    assert "-o" in args and f"ConnectTimeout={SSH_CONNECT_TIMEOUT}" in args and "BatchMode=yes" in args
 
     _print_trajectory(caplog)
     assert "[IMP:8][check_ssh_available] SSH key for github.com available" in caplog.text

@@ -174,5 +174,7 @@
 |--------|------|---------|
 | `secrets_env_parser` | `core/internal/shared/secrets_env_parser.py` | Единый парсер secrets.env — parse()/write()/merge()/export_shell(). Заменяет 7 inline-парсеров. |
 | `schema_validator` | `core/internal/shared/schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — validate_yaml_against_schema()/validate_dict_against_schema(). Единственная Draft7Validator-точка (DevPlan 116 B6 T5). |
+| `ssh_opts` | `core/internal/shared/ssh_opts.py` | Единый SoT SSH-флагов — SSH_OPTS/build_rsync_ssh_opts()/CLI --shell. Заменяет 5 Python-копий + lib/ssh.sh фасад (DevPlan 116 B5 T2, D1). |
 | `telegram_notifier` | `core/internal/shared/telegram_notifier.py` | Единый Telegram-клиент — send_telegram(). Заменяет 6 независимых реализаций (3 shell + 3 Python). |
+| `timeouts` | `core/internal/shared/timeouts.py` | Единый реестр таймаутов операционных политик — COMPOSE_UP_TIMEOUT/PULL_TIMEOUT/SSH_CONNECT_TIMEOUT/... Единственный источник числовых timeout= в docker/ssh/healthcheck-домене (DevPlan 116 B5 T1, U-11). |
 | `docker_auth` | `core/internal/shared/docker_auth.py` | Единый Docker registry auth — docker_login()/ghcr_login()/configure_docker_auth(). Заменяет 5 дублирующихся точек. |

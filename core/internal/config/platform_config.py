@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: platform_config, config-facade, defaults, SoT, S3_REGION, S3_PREFIX, S3_BUCKET, CONTEXT, PLATFORM_CONTEXT
-# STRUCTURE: ▶ load platform-env.yaml → env_defaults dict → ◇ typed accessors → ⎋ get_default(key, fallback)
+# GREP_SUMMARY: platform_config, config-facade, defaults, SoT, S3_REGION, S3_PREFIX, S3_BUCKET, CONTEXT, PLATFORM_CONTEXT, fail-visible, PLATFORM_ROOT
+# STRUCTURE: ▶ load platform-env.yaml (PLATFORM_ROOT env → script-relative root) → env_defaults dict → ◇ typed accessors → ⎋ get_default(key)
 # region MODULE_CONTRACT
 ## @purpose  Единый Python-фасад для чтения default-значений из platform-env.yaml.
 ##           Все consumers платформы получают default'ы только через этот модуль.
@@ -10,42 +10,38 @@
 ##   - Единственный Source of Truth для default-значений в Python-коде
 ##   - Загружает platform-env.yaml при первом импорте (lazy-load с кэшированием)
 ##   - Все accessors возвращают str; числовые значения — ответственность вызывающего
-##   - Если platform-env.yaml недоступен — использует жёстко закодированные fallback'и,
-##     идентичные значениям в platform-infra.yaml (defence-in-depth)
-##   - ИСКЛЮЧЕНИЕ (DevPlan 116 B6 D4): CONTEXT не имеет литерального fallback'а —
-##     default_context() возвращает "" при отсутствии platform-env.yaml (fail-visible)
+##   - ЛИТЕРАЛЬНЫХ fallback'ов НЕТ (DevPlan 116 B5 T8, D2, fail-visible): отсутствие
+##     platform-env.yaml → "" + громкий WARNING (консистентно с B6 D4)
+##   - Path-резолвинг (T8.3): (1) env PLATFORM_ROOT → Path(PLATFORM_ROOT)/platform-env.yaml;
+##     (2) script-relative корень репо (parents[3]); cwd-эвристика УДАЛЕНА
 ##   - default_s3_bucket_sentinel() возвращает "" с явной семантикой sentinel
 ##     («S3 не сконфигурирован — graceful degradation»)
 ##   - default_context_sentinel() возвращает "" с семантикой валидационного sentinel
 ##     («CONTEXT обязателен — требуй явного указания»)
 ## @rationale Устраняет класс дрейфа «SoT обновлён, consumers — нет».
-##            Централизованный фасад делает default'ы grepable и тестируемыми.
+##            D2 (DevPlan 116 B5): fallback-копии SoT (_FALLBACK_S3_*_FALLBACK_PLATFORM_CONTEXT)
+##            удалены — fail-visible вместо тихой лжи. Cwd-эвристика заменена каноническим
+##            резолвингом (PLATFORM_ROOT env → script-relative корень репо).
 ## @changes   CREATED: 2026-07-26 · DevPlan 037 — config defaults unification
+##            2026-08-01 · DevPlan 116 B5 T8 — 4 fallback-константы удалены (D2, fail-visible);
+##                       cwd-эвристика удалена; accessors без fallback-аргумента
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import yaml
 
 logger = logging.getLogger(__name__)
 
-# ── Fallback values (defence-in-depth) ──────────────────────────────────────
-# These MUST match values in platform-infra.yaml env_defaults section.
-# Updated when SoT changes.
-_FALLBACK_S3_REGION = "ru-1"
-_FALLBACK_S3_PREFIX = "platform/backups"
-_FALLBACK_S3_BUCKET = "test-bucket"
-# NOTE (DevPlan 116 B6 D4): _FALLBACK_CONTEXT удалён — CONTEXT не имеет литерального
-# fallback'а. default_context() → get_default("CONTEXT", "") — при отсутствии
-# platform-env.yaml возвращает "" (fail-visible вместо тихой лжи "test").
-_FALLBACK_PLATFORM_CONTEXT = "personal"
-
-# Sentinel values (not from SoT — documented semantics)
-_SENTINEL_S3_BUCKET = ""  # «S3 not configured — graceful degradation»
-_SENTINEL_CONTEXT = ""  # «CONTEXT required — explicit validation upstream»
+# Sentinel values (не из SoT — документированная семантика ""):
+#   "" для S3_BUCKET = «S3 не сконфигурирован — graceful degradation»
+#   "" для CONTEXT   = «CONTEXT обязателен — explicit validation upstream»
+_SENTINEL_S3_BUCKET = ""
+_SENTINEL_CONTEXT = ""
 
 # ── Module-level cache (lazy-loaded) ────────────────────────────────────────
 _defaults: dict[str, str] = {}
@@ -58,40 +54,42 @@ _loaded = False
 ## @complexity  O(N) where N = number of env_defaults entries
 ## @invariants
 ##   - Idempotent: second call is no-op (guarded by _loaded flag)
-##   - Non-fatal on missing/parse errors — logs warning, uses fallbacks
+##   - Path-резолвинг (T8.3): PLATFORM_ROOT env → script-relative корень репо; cwd-эвристики НЕТ
+##   - Non-fatal on missing/parse errors — logs громкий WARNING, defaults остаются "" (fail-visible, D2)
 def _load_defaults() -> None:
     """Load env_defaults from platform-env.yaml, cache in module-level dict.
 
-    Searches for platform-env.yaml in the project root (current directory,
-    then parent directories up to 3 levels). Falls back to fallback values
-    if file not found or parse error.
+    Resolves platform-env.yaml via: (1) env PLATFORM_ROOT → Path(PLATFORM_ROOT)/platform-env.yaml;
+    (2) script-relative корень репо (core/internal/config/ → 4 уровня вверх). Cwd-эвристика
+    удалена (DevPlan 116 B5 T8.3). При отсутствии файла — "" (fail-visible, D2).
     """
     global _defaults, _loaded
     if _loaded:
         return
     _loaded = True
 
-    # Search paths: cwd → parent → grandparent (up to 3 levels up)
-    search_dir = Path.cwd()
     yaml_path: Path | None = None
-    for _ in range(4):
-        candidate = search_dir / "platform-env.yaml"
-        if candidate.is_file():
-            yaml_path = candidate
-            break
-        if search_dir.parent == search_dir:
-            break
-        search_dir = search_dir.parent
 
-    if yaml_path is None:
-        # Also check relative to this script's location
-        script_dir = Path(__file__).resolve().parent.parent.parent.parent  # core/
-        candidate = script_dir.parent / "platform-env.yaml"
+    # (1) env PLATFORM_ROOT — канонический override (тесты/деплой задают явно)
+    platform_root = os.environ.get("PLATFORM_ROOT")
+    if platform_root:
+        candidate = Path(platform_root) / "platform-env.yaml"
         if candidate.is_file():
             yaml_path = candidate
 
+    # (2) script-relative: core/internal/config/platform_config.py → parents[3] = корень репо
     if yaml_path is None:
-        logger.warning("[IMP:7][platform_config] platform-env.yaml not found — using fallback values")
+        repo_root = Path(__file__).resolve().parents[3]
+        candidate = repo_root / "platform-env.yaml"
+        if candidate.is_file():
+            yaml_path = candidate
+
+    if yaml_path is None:
+        logger.warning(
+            "[IMP:7][platform_config] platform-env.yaml not found (PLATFORM_ROOT=%s, script-relative) — "
+            "defaults = '' (fail-visible, D2)",
+            platform_root or "<unset>",
+        )
         return
 
     try:
@@ -112,7 +110,7 @@ def _load_defaults() -> None:
         )
     except (FileNotFoundError, yaml.YAMLError, OSError) as e:
         logger.warning(
-            "[IMP:7][platform_config] Failed to load %s: %s — using fallback values",
+            "[IMP:7][platform_config] Failed to load %s: %s — defaults = '' (fail-visible, D2)",
             yaml_path,
             e,
         )
@@ -122,21 +120,20 @@ def _load_defaults() -> None:
 
 
 # region FUNC_get_default
-## @purpose  Get a default value by key, with fallback
-## @io       ⇥ key: str, fallback: str → ⎋ str
+## @purpose  Get a default value by key (без литерального fallback — "" если отсутствует)
+## @io       ⇥ key: str → ⎋ str
 ## @complexity  O(1)
-def get_default(key: str, fallback: str = "") -> str:
+def get_default(key: str) -> str:
     """Get a default value by key from the cached env_defaults.
 
     Args:
         key: Environment variable name (e.g. "S3_REGION")
-        fallback: Value to return if key not found in loaded defaults
 
     Returns:
-        str: The default value, or fallback if not found
+        str: The default value, or "" if not found (fail-visible, D2 — НЕ литеральный fallback)
     """
     _load_defaults()
-    return _defaults.get(key, fallback)
+    return _defaults.get(key, "")
 
 
 # endregion FUNC_get_default
@@ -146,32 +143,32 @@ def get_default(key: str, fallback: str = "") -> str:
 
 
 # region FUNC_default_s3_region
-## @purpose  Get default S3 region (SoT: ru-1)
-## @io       None → ⎋ str
+## @purpose  Get default S3 region (SoT: platform-infra.yaml env_defaults.S3_REGION)
+## @io       None → ⎋ str ("" при отсутствии файла — fail-visible, D2)
 ## @complexity  O(1)
 def default_s3_region() -> str:
     """Get default S3 region.
 
     Returns default from platform-env.yaml env_defaults.S3_REGION,
-    or fallback 'ru-1' if not found.
+    or "" if not found (литеральный fallback 'ru-1' УДАЛЁН — DevPlan 116 B5 T8, D2).
     """
-    return get_default("S3_REGION", _FALLBACK_S3_REGION)
+    return get_default("S3_REGION")
 
 
 # endregion FUNC_default_s3_region
 
 
 # region FUNC_default_s3_prefix
-## @purpose  Get default S3 prefix for backups (SoT: platform/backups)
-## @io       None → ⎋ str
+## @purpose  Get default S3 prefix for backups (SoT: platform-infra.yaml env_defaults.S3_PREFIX)
+## @io       None → ⎋ str ("" при отсутствии файла — fail-visible, D2)
 ## @complexity  O(1)
 def default_s3_prefix() -> str:
     """Get default S3 prefix for backups.
 
     Returns default from platform-env.yaml env_defaults.S3_PREFIX,
-    or fallback 'platform/backups' if not found.
+    or "" if not found (литеральный fallback 'platform/backups' УДАЛЁН — DevPlan 116 B5 T8, D2).
     """
-    return get_default("S3_PREFIX", _FALLBACK_S3_PREFIX)
+    return get_default("S3_PREFIX")
 
 
 # endregion FUNC_default_s3_prefix
@@ -182,16 +179,13 @@ def default_s3_prefix() -> str:
 ## @io       None → ⎋ "" (str)
 ## @complexity  O(1)
 ## @rationale  Python-код использует "" как sentinel «S3 не сконфигурирован».
-##             В production S3_BUCKET всегда задаётся через secrets. Использование
-##             test-bucket как fallback создаст риск: если secrets не загружены,
-##             система начнёт писать в несуществующий бакет вместо graceful degradation.
 ##             Паттерн: if not bucket: logger.warning("S3 not configured"); return False.
+##             Это НЕ fallback SoT — документированная sentinel-семантика (T8.1).
 def default_s3_bucket_sentinel() -> str:
     """Get S3_BUCKET sentinel value — empty string.
 
     Returns "" as sentinel for «S3 not configured — graceful degradation».
-    NOT the SoT value "test-bucket", because Python consumers use
-    "" to detect S3 absence and skip operations gracefully.
+    NOT a literal SoT copy — Python consumers detect S3 absence via "" and skip gracefully.
     """
     return _SENTINEL_S3_BUCKET
 
@@ -212,7 +206,7 @@ def default_context() -> str:
     platform-infra.yaml env_defaults.CONTEXT), or "" if not found — fail-visible
     instead of the silent "test" lie (DevPlan 116 B6 T1, decision D4).
     """
-    return get_default("CONTEXT", "")
+    return get_default("CONTEXT")
 
 
 # endregion FUNC_default_context
@@ -237,16 +231,18 @@ def default_context_sentinel() -> str:
 
 
 # region FUNC_default_platform_context
-## @purpose  Get default PLATFORM_CONTEXT value (SoT: personal)
-## @io       None → ⎋ str
+## @purpose  Get default PLATFORM_CONTEXT value (SoT: platform-infra.yaml env_defaults.PLATFORM_CONTEXT)
+## @io       None → ⎋ str ("" при отсутствии файла — fail-visible, D2)
 ## @complexity  O(1)
+## @invariants  Литеральный fallback 'personal' УДАЛЁН (DevPlan 116 B5 T8, D2) — fail-visible.
+##              Потребителей вне platform_config нет (consumer-scan 2026-08-01).
 def default_platform_context() -> str:
     """Get default PLATFORM_CONTEXT value.
 
     Returns default from platform-env.yaml env_defaults.PLATFORM_CONTEXT,
-    or fallback 'personal' if not found.
+    or "" if not found (литеральный fallback 'personal' УДАЛЁН — DevPlan 116 B5 T8, D2).
     """
-    return get_default("PLATFORM_CONTEXT", _FALLBACK_PLATFORM_CONTEXT)
+    return get_default("PLATFORM_CONTEXT")
 
 
 # endregion FUNC_default_platform_context

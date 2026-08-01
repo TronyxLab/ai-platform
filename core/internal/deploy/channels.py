@@ -37,10 +37,21 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ── Defaults ──
-DEFAULT_DEPLOY_TIMEOUT = int(os.environ.get("PLATFORM_DEPLOY_TIMEOUT", "600"))
-DEFAULT_RETRY_COUNT = 2
-DEFAULT_RETRY_BACKOFF = 5  # seconds, multiplied by 2× each retry
+# ── Defaults (DevPlan 116 B5 T1/T7: значения — из единого реестра shared/timeouts.py) ──
+# DEPLOY_TIMEOUT/SSH_CONNECT_TIMEOUT/SSH_READ_TIMEOUT/RETRY_COUNT/RETRY_BACKOFF_SECONDS — SoT.
+from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
+from core.internal.shared.timeouts import (
+    DEPLOY_TIMEOUT,
+    RETRY_BACKOFF_SECONDS,
+    RETRY_COUNT,
+    SSH_CONNECT_TIMEOUT,
+    SSH_READ_TIMEOUT,
+)
+
+DEFAULT_DEPLOY_TIMEOUT = int(os.environ.get("PLATFORM_DEPLOY_TIMEOUT", str(DEPLOY_TIMEOUT)))
+DEFAULT_RETRY_COUNT = RETRY_COUNT
+# Канал использует RETRY_BACKOFF_SECONDS[0] с delay *= 2 (экспоненциальный backoff — см. _retry_deliver)
+DEFAULT_RETRY_BACKOFF = RETRY_BACKOFF_SECONDS[0]
 
 
 # region DATACLASSES
@@ -125,7 +136,9 @@ class DeliveryChannel(abc.ABC):
             DeliveryResult from the last attempt.
         """
         last_result: DeliveryResult | None = None
-        delay = DEFAULT_RETRY_BACKOFF
+        # Экспоненциальный backoff канала: delay = RETRY_BACKOFF_SECONDS[0] (5s), delay *= 2
+        # (DevPlan 116 B5 T7 — источник значений — shared/timeouts.py)
+        delay = RETRY_BACKOFF_SECONDS[0]
 
         for attempt in range(1 + DEFAULT_RETRY_COUNT):
             logger.info(
@@ -199,18 +212,9 @@ class SCPChannel(DeliveryChannel):
 
     def __init__(self, timeout: int = DEFAULT_DEPLOY_TIMEOUT):
         super().__init__(timeout)
-        self.ssh_opts: list[str] = [
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "ConnectTimeout=30",
-            "-o",
-            "ServerAliveInterval=30",
-            "-o",
-            "ServerAliveCountMax=10",
-        ]
+        # Единый набор SSH-флагов из shared/ssh_opts.py (D1, U-15 — 5 копий заменены импортом).
+        # list() — копия: защита от случайной мутации общего канона.
+        self.ssh_opts: list[str] = list(SSH_OPTS)
 
     def deliver(self, payload: Payload) -> DeliveryResult:
         host = payload.metadata.get("host", "")
@@ -237,7 +241,7 @@ class SCPChannel(DeliveryChannel):
         )
         start = time.monotonic()
         try:
-            mkdir_result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
+            mkdir_result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=SSH_CONNECT_TIMEOUT)
             if mkdir_result.returncode != 0:
                 return DeliveryResult(
                     success=False,
@@ -254,7 +258,7 @@ class SCPChannel(DeliveryChannel):
                 "-avz",
                 "--progress",
                 "-e",
-                f"ssh {' '.join(self.ssh_opts)}",
+                build_rsync_ssh_opts(),
                 str(payload.tar_path),
                 target,
             ]
@@ -272,7 +276,7 @@ class SCPChannel(DeliveryChannel):
                 subprocess.run(
                     ["ssh", *self.ssh_opts, remote, unpack_script],
                     capture_output=True,
-                    timeout=60,
+                    timeout=SSH_READ_TIMEOUT,
                     check=False,
                 )
                 logger.info(
@@ -387,16 +391,10 @@ class ForcedCommandChannel(DeliveryChannel):
 
     def __init__(self, timeout: int = DEFAULT_DEPLOY_TIMEOUT):
         super().__init__(timeout)
-        self.ssh_opts: list[str] = [
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "ConnectTimeout=30",
-            "-o",
-            "ServerAliveInterval=30",
-            "-o",
-            "ServerAliveCountMax=10",
-        ]
+        # Единый набор SSH-флагов из shared/ssh_opts.py (D1, U-15). BatchMode=yes добавляется
+        # (единый набор) — для CI-deploy key это безопасно: ключ уже настроен, BatchMode
+        # не ломает -i-аутентификацию (DevPlan 116 B5 T2).
+        self.ssh_opts: list[str] = list(SSH_OPTS)
 
     def deliver(self, payload: Payload) -> DeliveryResult:
         host = payload.metadata.get("host", "")

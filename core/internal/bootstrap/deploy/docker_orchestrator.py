@@ -89,12 +89,35 @@ from content_hash import check_build_needed, compute_source_hash, save_build_has
 from core.internal.config import platform_config
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
-# DevPlan 079 DRIFT-B6: shared docker compose operations
+# DevPlan 079 DRIFT-B6 + 116 B5 T4: shared docker compose operations — ЕДИНСТВЕННЫЙ путь
+# (docker compose up/build/pull/config/down живут в shared/docker_compose.py, гейт docker_sole_path).
 from core.internal.shared.docker_compose import (
     check_image_exists as _shared_check_image_exists,
 )
 from core.internal.shared.docker_compose import (
-    docker_compose_pull as _shared_docker_compose_pull,
+    docker_compose_build as _shared_docker_compose_build,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_config as _shared_docker_compose_config,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_down as _shared_docker_compose_down,
+)
+from core.internal.shared.docker_compose import (
+    docker_compose_up as _shared_docker_compose_up,
+)
+from core.internal.shared.docker_compose import (
+    retry_pull as _shared_retry_pull,
+)
+
+# DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
+from core.internal.shared.timeouts import (
+    BUILD_TIMEOUT,
+    COMPOSE_UP_TIMEOUT,
+    DOCKER_STOP_TIMEOUT,
+    HEALTHCHECK_POLL_TIMEOUT,
+    IMAGE_CHECK_TIMEOUT,
+    PULL_TIMEOUT,
 )
 
 logger = logging.getLogger(__name__)
@@ -271,28 +294,33 @@ def _build_compose_args(
 ##   - Orchestrates via subprocess calls to docker CLI (same as shell original)
 def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> None:
     logger.info("[IMP:7][_reconcile_orphan_containers][start] Reconciling orphans for %s", module_name)
-    try:
-        # ── docker compose config --format json ──
-        config_cmd = ["docker", "compose", *compose_args, "config", "--format", "json"]
-        cfg_result = subprocess.run(
-            config_cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if cfg_result.returncode != 0:
-            logger.warning(
-                "[IMP:5][_reconcile_orphan_containers][config_fail] compose config failed for %s — skipping orphan check",
-                module_name,
-            )
-            return
-
-        cfg = json.loads(cfg_result.stdout)
-    except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as exc:
+    # ── docker compose config --format json (shared — sole path, DevPlan 116 B5 T4) ──
+    compose_dir = "."
+    for i, arg in enumerate(compose_args):
+        if arg == "-f" and i + 1 < len(compose_args):
+            compose_dir = os.path.dirname(compose_args[i + 1])
+            break
+    cfg_result = _shared_docker_compose_config(
+        compose_dir,
+        compose_args=compose_args,
+        flags=["--format", "json"],
+    )
+    if cfg_result.returncode != 0:
         logger.warning(
-            "[IMP:5][_reconcile_orphan_containers][error] Failed to parse compose config for %s: %s — skipping orphan check",
+            "[IMP:5][_reconcile_orphan_containers][config_fail] compose config failed for %s — skipping orphan check",
             module_name,
-            exc,
+        )
+        return
+
+    cfg_stdout = cfg_result.stdout
+    if isinstance(cfg_stdout, bytes):
+        cfg_stdout = cfg_stdout.decode("utf-8")
+    try:
+        cfg = json.loads(cfg_stdout)
+    except json.JSONDecodeError:
+        logger.warning(
+            "[IMP:5][_reconcile_orphan_containers][error] Failed to parse compose config for %s — skipping orphan check",
+            module_name,
         )
         return
 
@@ -349,8 +377,8 @@ def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> N
                 project_label or "<none>",
             )
             try:
-                subprocess.run(["docker", "stop", cname], capture_output=True, timeout=30, check=False)
-                subprocess.run(["docker", "rm", cname], capture_output=True, timeout=30, check=False)
+                subprocess.run(["docker", "stop", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
+                subprocess.run(["docker", "rm", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
                 logger.info("[IMP:9][_reconcile_orphan_containers][removed] Orphan container removed: %s", cname)
             except OSError as exc:
                 logger.warning("[IMP:5][_reconcile_orphan_containers][remove_fail] Failed to remove %s: %s", cname, exc)
@@ -381,17 +409,24 @@ def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> N
 ## · Prevention: deploy-modules.sh must NOT hardcode any image names — always resolve from compose
 def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: str) -> bool:
     logger.info("[IMP:7][_handle_hermes_agent][start] Handling hermes-agent pre-deploy checks")
-    # ── Resolve actual images from compose config (T4 fix — single source of truth) ──
-    try:
-        images_cmd = ["docker", "compose", *compose_args, "config", "--images"]
-        img_result = subprocess.run(images_cmd, capture_output=True, text=True, timeout=60)
-        if img_result.returncode != 0:
-            logger.error("[IMP:10][_handle_hermes_agent][config_fail] Failed to resolve images from compose config")
-            return False
-        hermes_images = [line.strip() for line in img_result.stdout.splitlines() if line.strip()]
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.error("[IMP:10][_handle_hermes_agent][error] Error resolving images: %s", exc)
+    # ── Resolve actual images from compose config (T4 fix — single source of truth, shared) ──
+    compose_dir = module_dir
+    for i, arg in enumerate(compose_args):
+        if arg == "-f" and i + 1 < len(compose_args):
+            compose_dir = os.path.dirname(compose_args[i + 1])
+            break
+    img_result = _shared_docker_compose_config(
+        compose_dir,
+        compose_args=compose_args,
+        flags=["--images"],
+    )
+    if img_result.returncode != 0:
+        logger.error("[IMP:10][_handle_hermes_agent][config_fail] Failed to resolve images from compose config")
         return False
+    img_stdout = img_result.stdout
+    if isinstance(img_stdout, bytes):
+        img_stdout = img_stdout.decode("utf-8")
+    hermes_images = [line.strip() for line in img_stdout.splitlines() if line.strip()]
 
     if not hermes_images:
         logger.error("[IMP:10][_handle_hermes_agent][no_images] No images resolved from compose config")
@@ -415,7 +450,7 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
         inspect_result = subprocess.run(
             ["docker", "image", "inspect", f"{L1_BASE_IMAGE}:latest"],
             capture_output=True,
-            timeout=30,
+            timeout=IMAGE_CHECK_TIMEOUT,
         )
         l1_exists = inspect_result.returncode == 0
     except OSError:
@@ -429,25 +464,22 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
             pull_result = subprocess.run(
                 ["docker", "pull", f"{GHCR_ORG}/{L1_BASE_IMAGE}:latest"],
                 capture_output=True,
-                timeout=120,
+                timeout=PULL_TIMEOUT,
             )
             if pull_result.returncode != 0:
                 logger.warning("[IMP:5][_handle_hermes_agent][l1_pull_fail] L1 pull failed — building L1 from source")
-                # Build L1 from source
+                # Build L1 from source (shared docker_compose_build — sole path)
                 base_compose = str(Path(module_dir) / "docker-compose.base.yml")
-                build_args = [
-                    "docker",
-                    "compose",
-                    "-f",
-                    base_compose,
-                    "--profile",
-                    module_name,
-                    "build",
-                    "--build-arg",
-                    f"CONTEXT={os.environ.get('CONTEXT', platform_config.default_context())}",
-                ]
-                l1_build = subprocess.run(build_args, capture_output=True, timeout=300)
-                if l1_build.returncode != 0:
+                l1_ok = _shared_docker_compose_build(
+                    os.path.dirname(base_compose),
+                    timeout=BUILD_TIMEOUT,
+                    compose_args=["-f", base_compose, "--profile", module_name],
+                    flags=[
+                        "--build-arg",
+                        f"CONTEXT={os.environ.get('CONTEXT', platform_config.default_context())}",
+                    ],
+                )
+                if not l1_ok:
                     logger.error("[IMP:10][_handle_hermes_agent][l1_build_fail] L1 build failed")
                     return False
                 logger.info("[IMP:9][_handle_hermes_agent][l1_built] L1 built from source")
@@ -459,17 +491,15 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
 
     # ── Build L1→L2 locally ──
     logger.info("[IMP:7][_handle_hermes_agent][build] Building hermes-agent L1→L2 locally (fallback)")
-    try:
-        build_cmd = ["docker", "compose", *compose_args, "build"]
-        build_result = subprocess.run(build_cmd, capture_output=True, timeout=300)
-        if build_result.returncode != 0:
-            logger.error("[IMP:10][_handle_hermes_agent][build_fail] Local L1→L2 build failed")
-            return False
-        logger.info("[IMP:9][_handle_hermes_agent][built] Hermes-agent built locally")
-        return True
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.error("[IMP:10][_handle_hermes_agent][build_error] Build error: %s", exc)
+    if not _shared_docker_compose_build(
+        compose_dir,
+        timeout=BUILD_TIMEOUT,
+        compose_args=compose_args,
+    ):
+        logger.error("[IMP:10][_handle_hermes_agent][build_fail] Local L1→L2 build failed")
         return False
+    logger.info("[IMP:9][_handle_hermes_agent][built] Hermes-agent built locally")
+    return True
 
 
 # endregion FUNC__handle_hermes_agent
@@ -607,144 +637,88 @@ def deploy_docker_module(
                 )
                 # Source unchanged — skip build, still need --force-recreate in
                 # case compose config changed (env files, compose override, etc.)
-                try:
-                    up_cmd_parts = [
-                        "docker",
-                        "compose",
-                        *compose_args,
-                        "up",
-                        "-d",
-                        "--remove-orphans",
-                        "--force-recreate",
-                    ]
-                    logger.info(
-                        "[IMP:8][deploy_docker_module][up_skip_build] Running compose up --force-recreate for %s (build skipped)",
-                        module_name,
-                    )
-                    up_result = subprocess.run(up_cmd_parts, capture_output=True, timeout=180)
-                    if up_result.returncode == 0:
-                        logger.info(
-                            "[IMP:9][deploy_docker_module][done] Module deployed (build-skipped): %s", module_name
-                        )
-                        time.sleep(1)
-                        return True
-                    logger.error(
-                        "[IMP:10][deploy_docker_module][up_fail_skip_build] docker compose up failed for %s: %s",
-                        module_name,
-                        up_result.stderr.decode(errors="replace").strip() if up_result.stderr else "unknown",
-                    )
-                    return False
-                except subprocess.TimeoutExpired:
-                    logger.error(
-                        "[IMP:10][deploy_docker_module][timeout_skip_build] docker compose up timed out for %s",
-                        module_name,
-                    )
-                    return False
-                except OSError as exc:
-                    logger.error(
-                        "[IMP:10][deploy_docker_module][error_skip_build] docker compose up error for %s: %s",
-                        module_name,
-                        exc,
-                    )
-                    return False
-
-            logger.info("[IMP:7][deploy_docker_module][build] Rebuilding image for %s (build: detected)", module_name)
-            try:
-                build_cmd = ["docker", "compose", *compose_args, "build"]
-                build_result = subprocess.run(build_cmd, capture_output=True, timeout=120)
-                if build_result.returncode != 0:
-                    logger.error(
-                        "[IMP:10][deploy_docker_module][build_fail] docker compose build failed for %s: %s",
-                        module_name,
-                        build_result.stderr.decode(errors="replace").strip()[:300]
-                        if build_result.stderr
-                        else "unknown",
-                    )
-                    return False
-                logger.info("[IMP:9][deploy_docker_module][build] Image rebuilt for %s", module_name)
-                # Save hash after successful build (W3.T3.3)
-                # ⚠️ TRAP[BUG] · 2026-07-24 · P2 · compute_source_hash/save_build_hash receives modules root
-                # · Fix: use os.path.join(module_dir, module_name) for specific module subdirectory
-                try:
-                    new_hash = compute_source_hash(os.path.join(module_dir, module_name))
-                    if new_hash:
-                        save_build_hash(os.path.join(module_dir, module_name), new_hash)
-                except (OSError, FileNotFoundError) as exc:
-                    logger.warning(
-                        "[IMP:7][docker_orchestrator][build] Failed to save build hash for %s: %s",
-                        module_name,
-                        exc,
-                    )
-            except subprocess.TimeoutExpired:
+                logger.info(
+                    "[IMP:8][deploy_docker_module][up_skip_build] Running compose up --force-recreate for %s (build skipped)",
+                    module_name,
+                )
+                # T4.2 (DevPlan 116 B5): shared docker_compose_up — sole path (D6: False → IMP:10 + False)
+                if _shared_docker_compose_up(
+                    os.path.join(module_dir, module_name),
+                    timeout=COMPOSE_UP_TIMEOUT,
+                    compose_args=compose_args,
+                    flags=["--remove-orphans", "--force-recreate"],
+                ):
+                    logger.info("[IMP:9][deploy_docker_module][done] Module deployed (build-skipped): %s", module_name)
+                    time.sleep(1)
+                    return True
                 logger.error(
-                    "[IMP:10][deploy_docker_module][build_timeout] docker compose build timed out for %s", module_name
+                    "[IMP:10][deploy_docker_module][up_fail_skip_build] docker compose up failed for %s", module_name
                 )
                 return False
-            except OSError as exc:
+
+            logger.info("[IMP:7][deploy_docker_module][build] Rebuilding image for %s (build: detected)", module_name)
+            # T4.3 (DevPlan 116 B5): shared docker_compose_build — sole path (timeout BUILD_TIMEOUT)
+            if not _shared_docker_compose_build(
+                os.path.join(module_dir, module_name),
+                timeout=BUILD_TIMEOUT,
+                compose_args=compose_args,
+            ):
                 logger.error(
-                    "[IMP:10][deploy_docker_module][build_error] docker compose build error for %s: %s",
+                    "[IMP:10][deploy_docker_module][build_fail] docker compose build failed for %s", module_name
+                )
+                return False
+            logger.info("[IMP:9][deploy_docker_module][build] Image rebuilt for %s", module_name)
+            # Save hash after successful build (W3.T3.3) — бизнес-логика остаётся здесь
+            # ⚠️ TRAP[BUG] · 2026-07-24 · P2 · compute_source_hash/save_build_hash receives modules root
+            # · Fix: use os.path.join(module_dir, module_name) for specific module subdirectory
+            try:
+                new_hash = compute_source_hash(os.path.join(module_dir, module_name))
+                if new_hash:
+                    save_build_hash(os.path.join(module_dir, module_name), new_hash)
+            except (OSError, FileNotFoundError) as exc:
+                logger.warning(
+                    "[IMP:7][docker_orchestrator][build] Failed to save build hash for %s: %s",
                     module_name,
                     exc,
                 )
-                return False
 
     # ── docker compose up -d --remove-orphans [--force-recreate] ──
     # · --force-recreate added for build:-modules to bypass Docker Compose's
     #   local-image-same-tag no-op (build creates new image under same tag,
     #   compose doesn't detect the change → container not recreated).
-    force_flag = "--force-recreate" if has_local_build else ""
-    up_cmd_parts = ["docker", "compose", *compose_args, "up", "-d", "--remove-orphans"]
-    if force_flag:
-        up_cmd_parts.append(force_flag)
+    flags = ["--remove-orphans"] + (["--force-recreate"] if has_local_build else [])
     logger.info(
-        "[IMP:8][deploy_docker_module][up] Running %s for %s",
-        " ".join(up_cmd_parts[-4:]),
+        "[IMP:8][deploy_docker_module][up] Running compose up for %s (flags=%s)",
         module_name,
+        " ".join(flags),
     )
-    try:
-        up_result = subprocess.run(up_cmd_parts, capture_output=True, timeout=180)
-        if up_result.returncode == 0:
-            logger.info("[IMP:9][deploy_docker_module][done] Module deployed: %s", module_name)
-            # DevPlan 081 Phase C: audit via shared audit_logger (TASK-081C3)
-            with contextlib.suppress(Exception):
-                _shared_write_audit_entry(
-                    tag=f"docker_orchestrator:deploy:{module_name}",
-                    status="DEPLOYED",
-                    message=f"docker compose up succeeded for {module_name}",
-                )
-            time.sleep(1)
-            return True
-        logger.error(
-            "[IMP:10][deploy_docker_module][up_fail] docker compose up failed for %s: %s",
-            module_name,
-            up_result.stderr.decode(errors="replace").strip() if up_result.stderr else "unknown",
+    # T4.4 (DevPlan 116 B5): shared docker_compose_up — sole path; audit DEPLOYED/FAILED (D6).
+    # Различение TIMEOUT/ERROR/FAILED схлопывается в FAILED — детали остаются в логах shared (D6).
+    if _shared_docker_compose_up(
+        os.path.join(module_dir, module_name),
+        timeout=COMPOSE_UP_TIMEOUT,
+        compose_args=compose_args,
+        flags=flags,
+    ):
+        logger.info("[IMP:9][deploy_docker_module][done] Module deployed: %s", module_name)
+        # DevPlan 081 Phase C: audit via shared audit_logger (TASK-081C3)
+        with contextlib.suppress(Exception):
+            _shared_write_audit_entry(
+                tag=f"docker_orchestrator:deploy:{module_name}",
+                status="DEPLOYED",
+                message=f"docker compose up succeeded for {module_name}",
+            )
+        time.sleep(1)
+        return True
+    logger.error("[IMP:10][deploy_docker_module][up_fail] docker compose up failed for %s", module_name)
+    # DevPlan 081 Phase C: audit deploy fail (TASK-081C3) — D6: FAILED (не TIMEOUT/ERROR)
+    with contextlib.suppress(Exception):
+        _shared_write_audit_entry(
+            tag=f"docker_orchestrator:deploy:{module_name}",
+            status="FAILED",
+            message=f"docker compose up failed for {module_name}",
         )
-        # DevPlan 081 Phase C: audit deploy fail (TASK-081C3)
-        with contextlib.suppress(Exception):
-            _shared_write_audit_entry(
-                tag=f"docker_orchestrator:deploy:{module_name}",
-                status="FAILED",
-                message=f"docker compose up failed: {up_result.stderr.decode(errors='replace').strip()[:200] if up_result.stderr else 'unknown'}",
-            )
-        return False
-    except subprocess.TimeoutExpired:
-        logger.error("[IMP:10][deploy_docker_module][timeout] docker compose up timed out for %s", module_name)
-        with contextlib.suppress(Exception):
-            _shared_write_audit_entry(
-                tag=f"docker_orchestrator:deploy:{module_name}",
-                status="TIMEOUT",
-                message=f"docker compose up timed out for {module_name}",
-            )
-        return False
-    except OSError as exc:
-        logger.error("[IMP:10][deploy_docker_module][error] docker compose up error for %s: %s", module_name, exc)
-        with contextlib.suppress(Exception):
-            _shared_write_audit_entry(
-                tag=f"docker_orchestrator:deploy:{module_name}",
-                status="ERROR",
-                message=f"docker compose up error: {exc}",
-            )
-        return False
+    return False
 
 
 # endregion FUNC_deploy_docker_module
@@ -775,8 +749,12 @@ def _cleanup_legacy_container(container_name: str) -> None:
             stdout = stdout.decode("utf-8")
         if container_name in stdout.splitlines():
             logger.info("[IMP:8][_cleanup_legacy_container][stop] Stopping legacy container: %s", container_name)
-            subprocess.run(["docker", "stop", container_name], capture_output=True, timeout=30, check=False)
-            subprocess.run(["docker", "rm", container_name], capture_output=True, timeout=30, check=False)
+            subprocess.run(
+                ["docker", "stop", container_name], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False
+            )
+            subprocess.run(
+                ["docker", "rm", container_name], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False
+            )
             logger.info("[IMP:9][_cleanup_legacy_container][removed] Legacy container removed: %s", container_name)
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("[IMP:5][_cleanup_legacy_container][error] Failed to clean up %s: %s", container_name, exc)
@@ -793,25 +771,20 @@ def _cleanup_legacy_container(container_name: str) -> None:
 ## @complexity 2 — docker compose config --services + docker ps + per-service stop/rm
 def _cleanup_observability_containers(compose_file: Path) -> None:
     logger.info("[IMP:7][_cleanup_observability_containers][start] Cleaning observability containers")
-    try:
-        # ── Get services from compose config ──
-        svc_result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "config", "--services"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if svc_result.returncode != 0:
-            logger.warning("[IMP:5][_cleanup_observability_containers][config_fail] compose config --services failed")
-            return
-        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
-        svc_stdout = svc_result.stdout
-        if isinstance(svc_stdout, bytes):
-            svc_stdout = svc_stdout.decode("utf-8")
-        services = [s.strip() for s in svc_stdout.splitlines() if s.strip()]
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("[IMP:5][_cleanup_observability_containers][error] Failed to list services: %s", exc)
+    # ── Get services from compose config (shared — sole path, DevPlan 116 B5 T4) ──
+    svc_result = _shared_docker_compose_config(
+        str(compose_file.parent),
+        compose_args=["-f", str(compose_file)],
+        flags=["--services"],
+    )
+    if svc_result.returncode != 0:
+        logger.warning("[IMP:5][_cleanup_observability_containers][config_fail] compose config --services failed")
         return
+    # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
+    svc_stdout = svc_result.stdout
+    if isinstance(svc_stdout, bytes):
+        svc_stdout = svc_stdout.decode("utf-8")
+    services = [s.strip() for s in svc_stdout.splitlines() if s.strip()]
 
     # ── Get all container names ──
     try:
@@ -833,8 +806,8 @@ def _cleanup_observability_containers(compose_file: Path) -> None:
         if re.search(re.escape(cname), all_containers, re.MULTILINE):
             logger.info("[IMP:8][_cleanup_observability_containers][clean] Stopping/removing container: %s", cname)
             try:
-                subprocess.run(["docker", "stop", cname], capture_output=True, timeout=30, check=False)
-                subprocess.run(["docker", "rm", cname], capture_output=True, timeout=30, check=False)
+                subprocess.run(["docker", "stop", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
+                subprocess.run(["docker", "rm", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
             except (subprocess.TimeoutExpired, OSError):
                 logger.warning("[IMP:5][_cleanup_observability_containers][remove_fail] Failed to remove %s", cname)
 
@@ -878,7 +851,7 @@ def _pull_module_images(
     except OSError:
         pass
 
-    # ── Build pull args and delegate to shared docker_compose_pull ──
+    # ── Build pull args and delegate to shared retry_pull (T4.5: retry [5,10,20]) ──
     pull_args = _build_compose_args(
         compose_file=compose_file,
         secrets_env_file=secrets_env_file,
@@ -888,7 +861,7 @@ def _pull_module_images(
     )
     compose_dir = os.path.dirname(str(compose_file))
     logger.info("[IMP:7][_pull_module_images][pull] Pulling images for %s", mod_name)
-    success = _shared_docker_compose_pull(compose_dir, timeout=300, compose_args=pull_args)
+    success = _shared_retry_pull(compose_dir, timeout=PULL_TIMEOUT, compose_args=pull_args)
     if success:
         logger.info("[IMP:9][_pull_module_images][done] Images pulled for %s", mod_name)
     else:
@@ -1162,17 +1135,16 @@ def deploy_docker_group(
             mod_name, _, _ = entry.partition(":")
             compose_file = _resolve_compose_file(os.path.join(modules_dir, mod_name))
             if compose_file:
-                try:
-                    subprocess.run(
-                        ["docker", "compose", "-f", str(compose_file), "--profile", mod_name, "down"],
-                        capture_output=True,
-                        timeout=30,
-                        check=False,
-                    )
+                # Shared docker_compose_down — sole path (DevPlan 116 B5 T4)
+                if _shared_docker_compose_down(
+                    str(compose_file.parent),
+                    timeout=DOCKER_STOP_TIMEOUT,
+                    compose_args=["-f", str(compose_file), "--profile", mod_name],
+                ):
                     rolled_back.append(mod_name)
                     logger.info("[IMP:8][deploy_docker_group][rollback] Module shut down: %s", mod_name)
-                except (subprocess.TimeoutExpired, OSError) as exc:
-                    logger.warning("[IMP:5][deploy_docker_group][rollback] Failed to shut down %s: %s", mod_name, exc)
+                else:
+                    logger.warning("[IMP:5][deploy_docker_group][rollback] Failed to shut down %s", mod_name)
         logger.info(
             "[IMP:9][deploy_docker_group][rollback] Atomic rollback: %d modules rolled back: %s",
             len(rolled_back),
@@ -1446,7 +1418,7 @@ def _invoke_healthcheck_full(module_name: str, check_type: str) -> tuple[bool, s
             ["bash", "-c", bash_cmd],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=HEALTHCHECK_POLL_TIMEOUT,
         )
         if result.returncode == 0:
             return (True, result.stderr)

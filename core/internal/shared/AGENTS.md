@@ -1,5 +1,5 @@
-# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, platform-deliver, project-registry, exceptions
-# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 18 модулей (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
+# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, platform-deliver, project-registry, exceptions, timeouts, ssh-opts
+# STRUCTURE: ┌контракт области┐ → ◇ инвентарь 20 модулей (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
 # region MODULE_CONTRACT
 ## @purpose  Архитектурный контракт области core/internal/shared/ — инвентарь модулей и правила добавления.
 ## @scope    Все модули под core/internal/shared/. Закрывает остаток RC3 C1: «no canonical architecture document
@@ -17,6 +17,7 @@
 ##           2026-07-31 | DevPlan 104 — +node_detect.py (16-й модуль); age_key.py → compat-шим
 ##           2026-07-31 | DevPlan 105 — +vps_readiness.py (17-й модуль); фасад vps-readiness.sh
 ##           2026-08-01 | DevPlan 116 B6 — +schema_validator.py (18-й модуль); inventory update
+##           2026-08-01 | DevPlan 116 B5 — +timeouts.py (19-й), +ssh_opts.py (20-й); инвентарь
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -39,7 +40,9 @@
 | `secrets_env_parser.py` | Единый парсер secrets.env (заменяет 7 inline-парсеров) | `parse()`, `write()`, `merge()`, `export_shell()` | decrypt-secrets, secrets-init, bootstrap |
 | `secrets_manifest_reader.py` | Строгий ридер secrets-manifest.yaml (заменяет 3 парсера с разными graceful-degradation семантиками; отсутствие = громкий fail, не silent `[]`) — DevPlan 116 T4, U-33/U-43 | `iter_secrets()`, `tier()`, `consumers()`, `charset()`, `gen_command()` | secrets_manager, secrets_validator |
 | `ssh_command_parser.py` | Парсер SSH_ORIGINAL_COMMAND (заменяет 2 дублирующихся парсера) | `parse_ssh_command()`, `classify_verb()` | deploy forced-command, deploy.sh |
+| `ssh_opts.py` | Единый SoT SSH-флагов (DevPlan 116 B5 T2, D1 — заменяет 5 Python-копий «SSH_OPTS» + shell lib/ssh.sh фасад) | `SSH_OPTS`, `build_rsync_ssh_opts()`, CLI `--shell`/`--rsync-e` | core_deliverer, overlay_deliverer, remote_executor, channels ×2, lib/ssh.sh (python3 -m) |
 | `telegram_notifier.py` | Единый Telegram-клиент (заменяет 6 реализаций: 3 shell + 3 Python) | `send_telegram()` | notify-hook, hermes-agent, deploy |
+| `timeouts.py` | Единый реестр таймаутов операционных политик (DevPlan 116 B5 T1, U-11 — единственный источник числовых timeout= в docker/ssh/healthcheck-домене) | `COMPOSE_UP_TIMEOUT`, `PULL_TIMEOUT`, `BUILD_TIMEOUT`, `HEALTHCHECK_POLL_TIMEOUT`, `SSH_CONNECT_TIMEOUT`, `DEPLOY_TIMEOUT`, `SSH_READ_TIMEOUT`, `RETRY_BACKOFF_SECONDS`, `IMAGE_CHECK_TIMEOUT`, `DOCKER_CMD_TIMEOUT`, `DOCKER_STOP_TIMEOUT`, `RSYNC_TIMEOUT`, `RETRY_COUNT` | docker_compose, ssh_opts, channels, docker_orchestrator, deploy_engine, reconciler, context_deployer, remote_executor, overlay_deliverer, context_promoter, orphan_reconciler, deploy_orchestrator |
 | `vps_readiness.py` | VPS pre-flight проверки (SSH, forced-command ping, /opt/projects/, Docker) — Strangler-миграция vps-readiness.sh (DevPlan 105, дедупликация deploy.mk/CI pre-flight) | `check_vps_ready()`, CLI `NODE [--json|--quick]` | deploy.mk pre-flight, deploy-project.yml (через фасад core/lib/vps-readiness.sh) |
 | `__init__.py` | Пакетный контракт shared-области | — | — |
 

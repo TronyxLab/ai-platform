@@ -167,11 +167,14 @@ poll_until_healthy() {
 # region FUNC_check_docker_health
 ## @purpose  Check the health status of a Docker container via docker inspect.
 ##           Works with containers that have a HEALTHCHECK directive.
+##           Единый критерий «здоров» (DevPlan 116 B5 T9, D5): контейнер без healthcheck
+##           (Health.Status == ""/none) в состоянии running → ЗДОРОВ (0), как в shared
+##           healthcheck_poll (docker_compose.py). Parity: Python-критерий только в shared.
 ## @param $1  container_id: container name or ID
 ## @io       out: stderr via log_imp — IMP:7 on healthy, IMP:8 on non-healthy
-## @return   0 — healthy
+## @return   0 — healthy, ИЛИ running-без-healthcheck (""/none + state=running)
 ##           1 — unhealthy
-##           2 — starting (no HEALTHCHECK defined, or status "starting")
+##           2 — starting (status "starting"), или ""/none + не-running, или unknown status
 ##           3 — container not found (docker inspect error)
 ## @complexity O(1) — single docker inspect call
 ## @invariants — Requires docker CLI in PATH
@@ -200,9 +203,19 @@ check_docker_health() {
             log_imp 8 "check_docker_health" "Container '${container_id}' is unhealthy"
             return 1
             ;;
-        "starting"|"")
-            # Empty string means no HEALTHCHECK defined, "starting" means still probing
-            log_imp 8 "check_docker_health" "Container '${container_id}' is starting or has no HEALTHCHECK"
+        "starting")
+            log_imp 8 "check_docker_health" "Container '${container_id}' is starting (still probing)"
+            return 2
+            ;;
+        ""|"none")
+            # Нет HEALTHCHECK — контейнер ЗДОРОВ только если running (D5, канон shared healthcheck_poll)
+            local state
+            state="$(docker inspect --format='{{.State.Status}}' "${container_id}" 2>/dev/null)"
+            if [ "${state}" = "running" ]; then
+                log_imp 7 "check_docker_health" "Container '${container_id}' running without healthcheck — healthy (D5)"
+                return 0
+            fi
+            log_imp 8 "check_docker_health" "Container '${container_id}' no healthcheck and NOT running (state='${state}')"
             return 2
             ;;
         *)

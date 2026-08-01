@@ -25,7 +25,6 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 from __future__ import annotations
 
 import logging
-import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -176,70 +175,41 @@ class HealthcheckPoller:
         return any(self._try_url(url) for url in urls)
 
     def _try_docker(self, project_name: str, project_dir: str) -> HealthcheckResult:
-        """Try Docker inspect for health status.
+        """Try Docker health via shared healthcheck_poll (sole path — DevPlan 116 B5 T7.3).
 
         Args:
             project_name: Project/container name.
-            project_dir: Project directory for compose commands.
+            project_dir: Project directory (unused — shared docker-path is global via docker ps).
 
         Returns:
             HealthcheckResult with Docker health status.
         """
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                # Get container ID
-                cid_result = subprocess.run(
-                    ["docker", "compose", "ps", "-q", project_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=project_dir,
-                )
-                cid = cid_result.stdout.strip()
+        # Единый docker-критерий живёт ТОЛЬКО в shared/docker_compose.healthcheck_poll (D5, T3.4).
+        # HTTP-путь (GET /health) остаётся в poller — это отдельная HTTP-политика, не docker-критерий.
+        from core.internal.shared.docker_compose import healthcheck_poll as _shared_healthcheck_poll
 
-                if not cid:
-                    time.sleep(self.interval)
-                    continue
+        status = _shared_healthcheck_poll(project_name, timeout=self.timeout, interval=self.interval)
+        if status == "healthy":
+            logger.info("[IMP:9][HealthcheckPoller][docker] %s healthy (inspect criterion)", project_name)
+            return HealthcheckResult(
+                status="healthy",
+                project=project_name,
+                method="docker",
+                attempts=1,
+                detail="docker inspect State.Health (shared criterion)",
+            )
 
-                # Inspect health
-                inspect_cmd = [
-                    "docker",
-                    "inspect",
-                    "--format",
-                    "{{.State.Status}} {{.State.Health.Status}}",
-                    cid,
-                ]
-                inspect_result = subprocess.run(inspect_cmd, capture_output=True, text=True, timeout=15)
-                status_line = inspect_result.stdout.strip()
-
-                if "running" in status_line and ("healthy" in status_line or "unhealthy" not in status_line):
-                    return HealthcheckResult(
-                        status="healthy",
-                        project=project_name,
-                        method="docker",
-                        attempts=attempt,
-                        detail=status_line,
-                    )
-
-                logger.info(
-                    "[IMP:8][HealthcheckPoller][docker] %s attempt %d/%d: %s",
-                    project_name,
-                    attempt,
-                    self.max_retries,
-                    status_line,
-                )
-            except (subprocess.TimeoutExpired, OSError) as e:
-                logger.warning("[IMP:7][HealthcheckPoller][docker] Error: %s", e)
-
-            if attempt < self.max_retries:
-                time.sleep(self.interval)
-
+        logger.info(
+            "[IMP:8][HealthcheckPoller][docker] %s not healthy after %ds poll window",
+            project_name,
+            self.timeout,
+        )
         return HealthcheckResult(
             status="timeout",
             project=project_name,
             method="docker",
             attempts=self.max_retries,
-            detail="Docker healthcheck timeout",
+            detail="Docker healthcheck timeout (shared criterion)",
         )
 
 

@@ -118,7 +118,7 @@ if not context and node_yaml and os.path.isfile(node_yaml):
 
 ### T4 — U-20: единый ProjectEntry + единый парсер проектов [FUNDAMENT]
 
-**1. Канон:** `node_yaml.py::ProjectEntry` (204-225) — остаётся единственным определением (поля name/repo/type/domain/database/context, defaults). 
+**1. Канон:** `node_yaml.py::ProjectEntry` (204-225) — остаётся единственным определением (поля name/repo/type/domain/database/context, defaults).
 
 **2. Новый метод `NodeYaml.get_project_entries() -> list[ProjectEntry]`** (рядом с get_project, ~1100):
 - итерирует `get_projects()`; строка-запись (str) или не-dict / dict без name → `ConfigValidationError` (D3 fail-fast) с указанием индекса записи;

@@ -85,11 +85,14 @@ def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
         "W4 violation: hermes-agent _handle_hermes_agent must WARN on missing image with local build fallback"
     )
 
-    # ── 2. docker compose ... build command present (Python subprocess call) ──
+    # ── 2. docker compose ... build present (Python subprocess call) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking BUILD command ...")
-    # In Python, the build command is: ["docker", "compose", *compose_args, "build"]
-    assert '"docker", "compose"' in content and '"build"' in content and "build_cmd" in content, (
-        "W4 violation: docker compose build subprocess call not found in _handle_hermes_agent"
+    # DevPlan 116 B5 T4 (sole-path): docker compose build больше НЕ вызывается локальным
+    # subprocess в docker_orchestrator — fallback делегирует в shared docker_compose_build
+    # (гейт docker_sole_path). Проверяем НОВЫЙ (более сильный) контракт: L1→L2 build fallback
+    # идёт через _shared_docker_compose_build с BUILD_TIMEOUT.
+    assert "_shared_docker_compose_build" in content and "BUILD_TIMEOUT" in content, (
+        "W4 violation: hermes-agent L1→L2 build fallback (shared docker_compose_build) not found in _handle_hermes_agent"
     )
 
     # ── 3. TRAP[BUG] documenting the fallback decision (was TRAP[DECISION] in shell) ──

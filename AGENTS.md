@@ -22,6 +22,14 @@
 ## @rationale Single source of truth for platform architecture consumed by autonomous agents and developers
 ## @rationale (D2) Invariant 4 обновлён по результатам drift-аудита: 3 канонических + 2 вспомогательных (core/internal/bootstrap/, tests/gates/) в §Навигация root AGENTS.md; templates/template-*/ — payload `make new-project`/`make new-context`, вне скоупа инварианта (не являются архитектурной документацией платформы)
 ## @changes  Plan 082 — added Template Mechanisms section with decision table
+## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · SSH_OPTS — Python SoT shared/ssh_opts.py (D1 B5) — триггер vps_readiness:37-42 сработал
+## · Rejected: 5 Python-копий «SSH_OPTS» + shell lib/ssh.sh (каждая правка ConnectTimeout = 6 правок; ConnectTimeout=10 outlier в context_promoter)
+## · Reason: «extract when consumers > 3» (5 потребителей) + решение пользователя 2026-08-01 (D1) — Python SoT, lib/ssh.sh — тонкий фасад через python3 -m ... --shell (уменьшение bash-поверхности). Гейт ssh_opts_sole_path enforce-ит.
+## · Rev: если появится второй shell-потребитель флагов — пересмотреть фасад.
+## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · Единый канон healthcheck-критерия (D5 B5) — inspect State.Health, running-без-healthcheck = здоров
+## · Rejected: 5 расходящихся реализаций (ps-filter 60/3, wrapper 10/1, inspect 60/2, lib/healthcheck.sh, poller 30) с разными семантиками ""/starting
+## · Reason: U-14 — расхождение уже началось. Канон: контейнер running AND (healthy|""|none) = здоров; "unhealthy" → ждать (стартовые гонки). Python-реализация — ТОЛЬКО shared/healthcheck_poll (гейт docker_sole_path); lib/healthcheck.sh — shell-фасад с тем же критерием (D5).
+## · Rev: если у контейнера появится состояние, требующее иного трактования — менять канон в одном месте.
 ## ⚠️ TRAP[DECISION] · 2026-07-15 · HI · L1 pushed to ghcr.io as backup, never used directly by contexts
 ## · Rejected: local-only L1 (risk: loss of build machine → rebuild from scratch)
 ## · Reason: L1 contains no secrets (only Python dependencies). Push = disaster recovery, not delivery model change.

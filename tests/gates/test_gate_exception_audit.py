@@ -43,6 +43,10 @@ _ALLOWED_NON_TARGET_SETS: set[str] = {
     "_MODULE_SCOPED_VERBS",
     "env_dependent",
     "required_fields",  # test_gate_deploy_paths.py:151 — field validation set, not make targets
+    "_CRITICAL_15S",  # test_gate_healthcheck_intervals.py — healthcheck interval классы (D4), не make targets
+    "_SERVICES_30S",  # test_gate_healthcheck_intervals.py — healthcheck interval классы (D4), не make targets
+    "_BACKGROUND_60S",  # test_gate_healthcheck_intervals.py — healthcheck interval классы (D4), не make targets
+    "_DOCKER_SSH_MARKERS",  # test_gate_timeout_literals.py — docker/ssh/healthcheck домен-маркеры, не make targets
 }
 
 logger = logging.getLogger(__name__)

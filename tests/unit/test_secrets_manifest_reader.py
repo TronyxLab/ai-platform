@@ -30,9 +30,8 @@ logger = logging.getLogger(__name__)
 # ── Import the module under test ──
 _SHARED_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "shared"
 sys.path.insert(0, str(_SHARED_DIR))
-import secrets_manifest_reader as smr  # type: ignore[import-untyped]
-
 import pytest
+import secrets_manifest_reader as smr  # type: ignore[import-untyped]
 
 _MANIFEST_DATA = {
     "secrets": [

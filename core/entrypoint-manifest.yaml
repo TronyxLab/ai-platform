@@ -962,6 +962,9 @@ gates:
 - id: test_no_unregistered_paths
   test_file: test_gate_deploy_paths.py
   description: 'Auto-discovered gate: test_no_unregistered_paths'
+- id: test_docker_compose_subprocess_sole_path
+  test_file: test_gate_docker_sole_path.py
+  description: 'Auto-discovered gate: test_docker_compose_subprocess_sole_path'
 - id: test_all_docker_modules_have_dockerignore_symlink
   test_file: test_gate_dockerignore_symlink.py
   description: 'Auto-discovered gate: test_all_docker_modules_have_dockerignore_symlink'
@@ -1082,6 +1085,9 @@ gates:
 - id: test_postgres_deep_includes_pgbouncer
   test_file: test_gate_healthcheck_contract.py
   description: 'Auto-discovered gate: test_postgres_deep_includes_pgbouncer'
+- id: test_healthcheck_intervals_match_classification
+  test_file: test_gate_healthcheck_intervals.py
+  description: 'Auto-discovered gate: test_healthcheck_intervals_match_classification'
 - id: test_all_modules_use_check_docker_health
   test_file: test_gate_healthcheck_unification.py
   description: 'Auto-discovered gate: test_all_modules_use_check_docker_health'
@@ -1505,6 +1511,15 @@ gates:
 - id: test_single_project_entry_definition
   test_file: test_gate_single_project_parser.py
   description: 'Auto-discovered gate: test_single_project_entry_definition'
+- id: test_connect_timeout_literals_sole_path
+  test_file: test_gate_ssh_opts_sole_path.py
+  description: 'Auto-discovered gate: test_connect_timeout_literals_sole_path'
+- id: test_no_mirror_lib_ssh_sh_comments
+  test_file: test_gate_ssh_opts_sole_path.py
+  description: 'Auto-discovered gate: test_no_mirror_lib_ssh_sh_comments'
+- id: test_ssh_opts_list_sole_path
+  test_file: test_gate_ssh_opts_sole_path.py
+  description: 'Auto-discovered gate: test_ssh_opts_list_sole_path'
 - id: test_default_catch_all_no_status_page
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_default_catch_all_no_status_page'
@@ -1625,6 +1640,9 @@ gates:
 - id: test_entrypoint_no_direct_binary_calls
   test_file: test_gate_thin_wrapper.py
   description: 'Auto-discovered gate: test_entrypoint_no_direct_binary_calls'
+- id: test_no_timeout_literals_in_docker_ssh_healthcheck
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_no_timeout_literals_in_docker_ssh_healthcheck'
 - id: test_deploy_order_respects_topology
   test_file: test_gate_topology.py
   description: 'Auto-discovered gate: test_deploy_order_respects_topology'

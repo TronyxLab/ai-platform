@@ -13,6 +13,7 @@
 
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -84,9 +85,9 @@ def _check_ldd(caplog, min_level: int = 9) -> bool:
     "_capture_deploy_snapshot",
     return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
 )
-@patch.object(DeployEngine, "_pull_image_with_retry", return_value=True)
+@patch("core.internal.deploy.deploy_engine._shared_retry_pull", return_value=True)
 @patch.object(DeployEngine, "_atomic_up", return_value=True)
-@patch.object(DeployEngine, "_poll_health", return_value=True)
+@patch("core.internal.deploy.deploy_engine._shared_healthcheck_poll", return_value="healthy")
 def test_deploy_success(
     mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine
 ):
@@ -125,9 +126,9 @@ def test_deploy_success(
     "_capture_deploy_snapshot",
     return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
 )
-@patch.object(DeployEngine, "_pull_image_with_retry", return_value=True)
+@patch("core.internal.deploy.deploy_engine._shared_retry_pull", return_value=True)
 @patch.object(DeployEngine, "_atomic_up", return_value=True)
-@patch.object(DeployEngine, "_poll_health", return_value=False)  # health fails
+@patch("core.internal.deploy.deploy_engine._shared_healthcheck_poll", return_value="unhealthy")  # health fails
 def test_deploy_first_deploy_fail(
     mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine
 ):
@@ -158,9 +159,9 @@ def test_deploy_first_deploy_fail(
     "_capture_deploy_snapshot",
     return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
 )
-@patch.object(DeployEngine, "_pull_image_with_retry", return_value=True)
+@patch("core.internal.deploy.deploy_engine._shared_retry_pull", return_value=True)
 @patch.object(DeployEngine, "_atomic_up", return_value=True)
-@patch.object(DeployEngine, "_poll_health", return_value=False)  # health fails
+@patch("core.internal.deploy.deploy_engine._shared_healthcheck_poll", return_value="unhealthy")  # health fails
 @patch.object(DeployEngine, "_perform_rollback", return_value=True)  # rollback succeeds
 def test_deploy_rollback(
     mock_rollback, mock_health, mock_up, mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine
@@ -194,7 +195,7 @@ def test_deploy_rollback(
     "_capture_deploy_snapshot",
     return_value=SnapshotInfo(timestamp=12345, ps_file="/tmp/test_ps.txt", images_file="/tmp/test_images.txt"),
 )
-@patch.object(DeployEngine, "_pull_image_with_retry", return_value=False)  # pull fails
+@patch("core.internal.deploy.deploy_engine._shared_retry_pull", return_value=False)  # pull fails
 def test_pull_image_all_fail(mock_pull, mock_snap, mock_save, mock_preflight, caplog, tmp_project, engine):
     """All pull attempts fail should trigger first-deploy failure."""
     caplog.set_level(logging.INFO)
@@ -224,11 +225,10 @@ def test_pull_image_all_fail(mock_pull, mock_snap, mock_save, mock_preflight, ca
 # 🧪 TRAP[TEST] · Regression · remove active project
 # · Scenario: project exists → docker compose down called WITHOUT -v
 # · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-def test_remove_active(mock_run, caplog, engine, tmp_project):
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_down", return_value=True)
+def test_remove_active(mock_down, caplog, engine, tmp_project):
     """Remove should stop containers with docker compose down (no -v)."""
     caplog.set_level(logging.INFO)
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
     result = engine.remove(project="test-app", project_dir=tmp_project)
 
@@ -236,14 +236,11 @@ def test_remove_active(mock_run, caplog, engine, tmp_project):
     assert result.success is True
     assert result.already_removed is False
 
-    # Verify docker compose down was called and does NOT contain -v
-    compose_down_calls = [
-        c for c in mock_run.call_args_list if "docker" in str(c) and "compose" in str(c) and "down" in str(c)
-    ]
-    assert len(compose_down_calls) >= 1, "docker compose down should be called"
-    for call in compose_down_calls:
-        args_str = str(call)
-        assert "-v" not in args_str or " — " in args_str, "remove() must NOT use -v flag"
+    # Verify shared docker_compose_down called WITHOUT -v (O7: данные не удаляются)
+    assert mock_down.called, "docker compose down should be called"
+    call_flags = mock_down.call_args.kwargs.get("flags", [])
+    assert "-v" not in call_flags, "remove() must NOT use -v flag"
+    assert "--timeout" in call_flags, "remove() должен передавать --timeout 30"
 
     logger.critical("[IMP:9][test] remove_active: success=%s — OK", result.success)
 
@@ -306,12 +303,13 @@ def test_status_stub(caplog, engine, tmp_path):
 # 🧪 TRAP[TEST] · Regression · status found with containers
 # · Scenario: project exists with docker compose ps data → status="found"
 # · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-def test_status_found(mock_run, caplog, engine, tmp_project):
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_ps")
+def test_status_found(mock_ps, caplog, engine, tmp_project):
     """Status should return 'found' with containers when project exists."""
     caplog.set_level(logging.INFO)
 
-    mock_run.return_value = MagicMock(
+    mock_ps.return_value = subprocess.CompletedProcess(
+        args=[],
         returncode=0,
         stdout='{"Name":"test-app","State":"running"}\n',
         stderr="",
@@ -337,15 +335,14 @@ def test_status_found(mock_run, caplog, engine, tmp_project):
 # · Scenario: Docker compose images returns ID → ImageInfo with ID and tag
 # · Last fail: N/A (new test)
 @patch("core.internal.deploy.deploy_engine.subprocess.run")
-def test_save_previous_image_exists(mock_run, caplog, tmp_project, engine):
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_images")
+def test_save_previous_image_exists(mock_images, mock_run, caplog, tmp_project, engine):
     """_save_previous_image should return ImageInfo when image exists."""
     caplog.set_level(logging.INFO)
 
-    # Two calls: compose images -q returns ID, image inspect returns tag
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="sha256:prev123\n", stderr=""),  # compose images -q
-        MagicMock(returncode=0, stdout="test-app:latest\n", stderr=""),  # image inspect --format
-    ]
+    # shared compose images -q returns ID, docker image inspect returns tag
+    mock_images.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="sha256:prev123\n", stderr="")
+    mock_run.return_value = MagicMock(returncode=0, stdout="test-app:latest\n", stderr="")  # image inspect
 
     result = engine._save_previous_image(tmp_project, "app")
 
@@ -359,11 +356,11 @@ def test_save_previous_image_exists(mock_run, caplog, tmp_project, engine):
 # 🧪 TRAP[TEST] · Regression · save_previous_image returns None on first deploy
 # · Scenario: compose images returns empty → None
 # · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-def test_save_previous_image_first_deploy(mock_run, caplog, tmp_project, engine):
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_images")
+def test_save_previous_image_first_deploy(mock_images, caplog, tmp_project, engine):
     """_save_previous_image should return None for first deploy."""
     caplog.set_level(logging.INFO)
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    mock_images.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
     result = engine._save_previous_image(tmp_project, "app")
 
@@ -375,11 +372,13 @@ def test_save_previous_image_first_deploy(mock_run, caplog, tmp_project, engine)
 # 🧪 TRAP[TEST] · Regression · capture snapshot creates marker file
 # · Scenario: Snapshot dir + .deploy-started created
 # · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-def test_capture_snapshot_creates_files(mock_run, caplog, tmp_project, engine):
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_images")
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_ps")
+def test_capture_snapshot_creates_files(mock_ps, mock_images, caplog, tmp_project, engine):
     """_capture_deploy_snapshot should create .deploy-started marker."""
     caplog.set_level(logging.INFO)
-    mock_run.return_value = MagicMock(returncode=0, stdout="{}", stderr="")
+    mock_ps.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
+    mock_images.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
 
     result = engine._capture_deploy_snapshot(tmp_project)
     snapshot_dir = os.path.join(tmp_project, ".deploy-snapshots")
@@ -390,57 +389,20 @@ def test_capture_snapshot_creates_files(mock_run, caplog, tmp_project, engine):
     logger.critical("[IMP:9][test] capture_snapshot: ts=%s — OK", result.timestamp)
 
 
-# 🧪 TRAP[TEST] · Regression · poll_health finds healthy container
-# · Scenario: docker ps returns cid, inspect returns healthy → True
-# · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-@patch("core.internal.deploy.deploy_engine.time.sleep", return_value=None)
-def test_poll_health_healthy(mock_sleep, mock_run, caplog, tmp_project, engine):
-    """_poll_health should return True when container is healthy."""
-    caplog.set_level(logging.INFO)
-
-    # compose ps -q returns cid, inspect returns healthy
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="container123\n", stderr=""),  # compose ps -q
-        MagicMock(returncode=0, stdout="running healthy\n", stderr=""),  # inspect
-    ]
-
-    result = engine._poll_health(tmp_project, "app", timeout=5, interval=1)
-
-    assert _check_ldd(caplog), "Missing IMP:9 log"
-    assert result is True
-    logger.critical("[IMP:9][test] poll_health_healthy: %s — OK", result)
-
-
-# 🧪 TRAP[TEST] · Regression · poll_health times out
-# · Scenario: inspect returns unhealthy → continue polling → timeout → False
-# · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-@patch("core.internal.deploy.deploy_engine.time.time")
-@patch("core.internal.deploy.deploy_engine.time.sleep", return_value=None)
-def test_poll_health_timeout(mock_sleep, mock_time, mock_run, caplog, tmp_project, engine):
-    """_poll_health should return False on timeout when container is unhealthy."""
-    caplog.set_level(logging.INFO)
-
-    # Mock time to force immediate timeout: only 1 iteration before deadline
-    mock_time.side_effect = [100, 105]  # start=100, deadline=105; second check at 105 → timeout
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="container123\n", stderr=""),  # compose ps -q
-        MagicMock(returncode=0, stdout="running unhealthy\n", stderr=""),  # inspect (unhealthy)
-    ]
-
-    result = engine._poll_health(tmp_project, "app", timeout=5, interval=1)
-
-    assert _check_ldd(caplog), "Missing IMP:9 log"
-    assert result is False
-    logger.critical("[IMP:9][test] poll_health_timeout: %s — OK", result)
+# 🧪 TRAP[TEST] · Regression · _poll_health удалён (DevPlan 116 B5 T5.3)
+# · Scenario: локальная реализация _poll_health удалена — docker-критерий живёт в shared
+# ·   healthcheck_poll (покрыт в test_shared_docker_compose.py). deploy() вызывает
+# ·   _shared_healthcheck_poll(project_name=service, service=service) напрямую.
+# · Last fail: N/A (T5.3 — локальная реализация удалена)
+# · Remove if: критерий снова локализуется в deploy_engine
 
 
 # 🧪 TRAP[TEST] · Regression · perform_rollback succeeds
 # · Scenario: Re-tag + compose up --force-recreate → True
 # · Last fail: N/A (new test)
 @patch("core.internal.deploy.deploy_engine.subprocess.run")
-def test_perform_rollback_success(mock_run, caplog, tmp_project, engine):
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_up", return_value=True)
+def test_perform_rollback_success(mock_up, mock_run, caplog, tmp_project, engine):
     """_perform_rollback should succeed with valid previous image."""
     caplog.set_level(logging.INFO)
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -451,7 +413,9 @@ def test_perform_rollback_success(mock_run, caplog, tmp_project, engine):
     assert _check_ldd(caplog), "Missing IMP:9 log"
     assert result is True
 
-    # Verify docker tag was called
+    # Verify shared docker_compose_up called with --force-recreate + docker tag was called
+    assert mock_up.called, "shared docker_compose_up должен быть вызван"
+    assert mock_up.call_args.kwargs.get("flags") == ["--force-recreate"]
     tag_calls = [c for c in mock_run.call_args_list if "tag" in str(c)]
     assert len(tag_calls) >= 1
     logger.critical("[IMP:9][test] rollback_success: %s — OK", result)
@@ -532,36 +496,57 @@ def test_status_result_dataclass():
 # ═══════════════════════════════════════════════════════════════════
 
 
-# 🧪 TRAP[TEST] · Regression · _pull_image_with_retry succeeds on first attempt
-# · Scenario: First pull attempt succeeds → True
-# · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-@patch("core.internal.deploy.deploy_engine.time.sleep", return_value=None)
-def test_pull_image_retry_first_attempt(mock_sleep, mock_run, caplog, engine):
-    """_pull_image_with_retry should succeed on first attempt."""
+# 🧪 TRAP[TEST] · Regression · _pull_image_with_retry удалён (DevPlan 116 B5 T5.1)
+# · Scenario: deploy() вызывает shared retry_pull с env IMAGE_TAG=ref, service, timeout=PULL_TIMEOUT.
+# · Last fail: N/A (T5.1 — локальная реализация удалена; retry_pull покрыт в test_shared_docker_compose.py)
+# · Remove if: retry wiring возвращается в deploy_engine
+@patch("core.internal.deploy.deploy_engine._shared_retry_pull", return_value=True)
+def test_pull_image_retry_first_attempt(mock_pull, caplog, engine, tmp_path):
+    """deploy() должен делегировать pull в shared retry_pull (T5.1 wiring)."""
     caplog.set_level(logging.INFO)
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-    result = engine._pull_image_with_retry("/tmp", "app", "v1.0.0", max_attempts=1)
+    import core.internal.deploy.deploy_engine as de
 
-    assert _check_ldd(caplog), "Missing IMP:9 log"
-    assert result is True
-    logger.critical("[IMP:9][test] pull_retry_first: %s — OK", result)
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir(parents=True)
+
+    # Мокаем весь pipeline — проверяем только wiring retry_pull через полный deploy()
+    with (
+        patch.object(de.DeployEngine, "_preflight_checks", return_value=None),
+        patch.object(de.DeployEngine, "_save_previous_image", return_value=None),  # first deploy
+        patch.object(
+            de.DeployEngine,
+            "_capture_deploy_snapshot",
+            return_value=SnapshotInfo(timestamp=1, ps_file=None, images_file=None),
+        ),
+        patch.object(de.DeployEngine, "_atomic_up", return_value=True),
+        patch("core.internal.deploy.deploy_engine._shared_healthcheck_poll", return_value="healthy"),
+    ):
+        result = engine.deploy(
+            project="test-app", ref="v1.0.0", service="app", project_dir=str(project_dir), max_wait=2
+        )
+
+    assert result.success is True
+    assert mock_pull.called, "shared retry_pull должен быть вызван из deploy()"
+    kwargs = mock_pull.call_args.kwargs
+    assert kwargs.get("service") == "app"
+    assert kwargs.get("env_override") == {"IMAGE_TAG": "v1.0.0"}
+    logger.critical("[IMP:9][test] pull_retry_first: shared retry_pull wiring — OK")
 
 
 # 🧪 TRAP[TEST] · Regression · _atomic_up succeeds
 # · Scenario: docker compose up -d returns 0 → True
 # · Last fail: N/A (new test)
-@patch("core.internal.deploy.deploy_engine.subprocess.run")
-def test_atomic_up_success(mock_run, caplog, engine):
-    """_atomic_up should return True on success."""
+@patch("core.internal.deploy.deploy_engine._shared_docker_compose_up", return_value=True)
+def test_atomic_up_success(mock_up, caplog, engine):
+    """_atomic_up should return True on success (thin wrapper над shared)."""
     caplog.set_level(logging.INFO)
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
     result = engine._atomic_up("/tmp", "app", "v1.0.0")
 
     assert _check_ldd(caplog), "Missing IMP:9 log"
     assert result is True
+    assert mock_up.call_args.kwargs.get("env_override") == {"IMAGE_TAG": "v1.0.0"}
     logger.critical("[IMP:9][test] atomic_up: %s — OK", result)
 
 

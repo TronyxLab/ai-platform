@@ -18,7 +18,6 @@
 # endregion MODULE_CONTRACT
 
 import logging
-import re
 
 import pytest
 import yaml

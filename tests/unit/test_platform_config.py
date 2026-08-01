@@ -1,27 +1,27 @@
-# 🧪 TRAP[TEST] · Regression · test_platform_config — platform_config facade · verifies all accessors and fallback logic
-# GREP_SUMMARY: test, platform_config, defaults, S3_REGION, S3_PREFIX, S3_BUCKET, CONTEXT, PLATFORM_CONTEXT
-# STRUCTURE: ▶ yaml_fixture → test_load → test_fallback → test_typed_accessors
+# 🧪 TRAP[TEST] · Regression · test_platform_config — platform_config facade · ""-семантика (DevPlan 116 B5 T8, D2)
+# GREP_SUMMARY: test, platform_config, defaults, S3_REGION, S3_PREFIX, S3_BUCKET, CONTEXT, PLATFORM_CONTEXT, fail-visible, PLATFORM_ROOT
+# STRUCTURE: ▶ fixtures(PLATFORM_ROOT → tmp dir) → test_load → test_missing_file_empty → test_typed_accessors
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for platform_config facade module.
-##           Verifies YAML loading, fallback values, and all typed accessors.
+##           Verifies YAML loading via PLATFORM_ROOT, ""-семантику при отсутствии файла (D2),
+##           и все typed accessors.
 ## @scope    Tests core/internal/config/platform_config.py
 ## @invariants
-##   - Tests use tmp_path to create isolated platform-env.yaml fixtures
-##   - Reload is triggered by clearing module cache (sys.modules + reload)
-## @rationale Ensures that all default values from SoT are correctly exposed
-##            through the facade, and that fallback logic works when YAML is missing.
+##   - Тесты используют PLATFORM_ROOT env + tmp_path (Zero Hardcode Rule; T8.3)
+##   - Литеральных fallback'ов НЕТ (D2): отсутствие файла → "" + WARNING
+##   - Reload через monkeypatch PLATFORM_ROOT + сброс module-level кэша
+## @rationale DevPlan 116 B5 T8: fallback-константы удалены (fail-visible); cwd-эвристика заменена
+##            PLATFORM_ROOT env + script-relative резолвингом. Тесты изолированы через PLATFORM_ROOT.
 # endregion MODULE_CONTRACT
 
 import logging
-import os
 import sys
 from collections.abc import Generator
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 import yaml
-
-# region FIXTURES
 
 
 @pytest.fixture
@@ -39,57 +39,73 @@ def env_defaults_yaml() -> dict:
 
 
 @pytest.fixture
-def yaml_file(tmp_path: Path, env_defaults_yaml: dict) -> Path:
-    """Create a temporary platform-env.yaml file."""
-    yaml_path = tmp_path / "platform-env.yaml"
-    with open(yaml_path, "w") as f:
-        yaml.dump(env_defaults_yaml, f)
-    return yaml_path
+def platform_root(tmp_path: Path) -> Path:
+    """Create an isolated PLATFORM_ROOT directory (пустой — отсутствие platform-env.yaml)."""
+    root = tmp_path / "platform-root"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
-@pytest.fixture
-def isolated_platform_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Generator:
-    """Isolate platform_config by changing cwd and clearing module cache.
+def _reload_platform_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path) -> Generator:
+    """Reload platform_config fresh with PLATFORM_ROOT isolated.
 
-    Changes current directory to tmp_path, then reloads the platform_config
-    module fresh. Yields the reloaded module reference.
+    ## @purpose — Изоляция: PLATFORM_ROOT указывает на tmp-директорию (не на репозиторий),
+    ##            чтобы script-relative резолвинг не находил реальный platform-env.yaml репо.
+    ## @io — ⇥ monkeypatch, platform_root → ⎋ Generator[module]
     """
-    # Remove from cache if already imported
     if "core.internal.config.platform_config" in sys.modules:
         del sys.modules["core.internal.config.platform_config"]
     if "core.internal.config" in sys.modules:
         del sys.modules["core.internal.config"]
 
-    old_cwd = Path.cwd()
-    os.chdir(str(tmp_path))
+    monkeypatch.setenv("PLATFORM_ROOT", str(platform_root))
 
-    try:
-        # Import fresh
-        from core.internal.config import platform_config as pc
+    from core.internal.config import platform_config as pc
 
-        # Reset internal state
-        pc._defaults = {}
-        pc._loaded = False
+    pc._defaults = {}
+    pc._loaded = False
 
-        yield pc
-    finally:
-        os.chdir(str(old_cwd))
-        # Clean up — use pop to avoid KeyError on already-removed modules
-        sys.modules.pop("core.internal.config.platform_config", None)
-        sys.modules.pop("core.internal.config", None)
+    yield pc
+
+    monkeypatch.delenv("PLATFORM_ROOT", raising=False)
+    sys.modules.pop("core.internal.config.platform_config", None)
+    sys.modules.pop("core.internal.config", None)
 
 
-# endregion FIXTURES
+@pytest.fixture
+def isolated_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path) -> Generator:
+    """platform_config с ПУСТЫМ PLATFORM_ROOT (файл отсутствует → ""-семантика).
+
+    Дополнительно перенаправляет script-relative резолвинг (parents[3] от __file__) в tmp-дерево,
+    чтобы канонический fallback не находил реальный platform-env.yaml репозитория (Zero Hardcode).
+    """
+    gen = _reload_platform_config(monkeypatch, platform_root)
+    pc = next(gen)
+    # Перенаправляем script-relative корень в tmp (parents[3] от /tmp/.../fake/.../config.py = /tmp/.../fake)
+    pc.__file__ = str(platform_root / "fake" / "core" / "internal" / "config" / "platform_config.py")
+    yield pc
+    with suppress(StopIteration):
+        next(gen)
+
+
+@pytest.fixture
+def isolated_config_with_yaml(
+    monkeypatch: pytest.MonkeyPatch, platform_root: Path, env_defaults_yaml: dict
+) -> Generator:
+    """platform_config с PLATFORM_ROOT, содержащим platform-env.yaml."""
+    with open(platform_root / "platform-env.yaml", "w") as f:
+        yaml.dump(env_defaults_yaml, f)
+    yield from _reload_platform_config(monkeypatch, platform_root)
 
 
 # region TEST_load_from_yaml
-## @purpose  Verify that env_defaults are loaded from platform-env.yaml
-## @scenario Write a platform-env.yaml → import platform_config → verify all accessors
+## @purpose  Verify that env_defaults are loaded from platform-env.yaml via PLATFORM_ROOT (T8.3)
+## @scenario Write platform-env.yaml в PLATFORM_ROOT → import platform_config → verify all accessors
 ## @complexity 1
-def test_load_from_yaml(yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
-    """Verify that env_defaults are loaded from platform-env.yaml."""
+def test_load_from_yaml(isolated_config_with_yaml, caplog: pytest.LogCaptureFixture) -> None:
+    """Verify that env_defaults are loaded from platform-env.yaml (PLATFORM_ROOT)."""
     caplog.set_level(logging.INFO)
-    pc = isolated_platform_config
+    pc = isolated_config_with_yaml
 
     # Trigger load via accessors
     assert pc.default_s3_region() == "ru-1"
@@ -112,44 +128,44 @@ def test_load_from_yaml(yaml_file: Path, isolated_platform_config, caplog: pytes
 # endregion TEST_load_from_yaml
 
 
-# region TEST_fallback_values
-## @purpose  Verify fallback values when platform-env.yaml is missing
-## @scenario empty tmp_dir → import platform_config → verify fallback accessors
+# region TEST_missing_file_empty_semantics
+## @purpose  Verify ""-семантику (D2, T8) при отсутствии platform-env.yaml — НЕ литеральные fallback'и
+## @scenario Пустой PLATFORM_ROOT → все accessors возвращают "" (fail-visible)
 ## @complexity 1
-def test_fallback_values(tmp_path: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
-    """Verify fallback values when platform-env.yaml is missing."""
+def test_missing_file_empty_semantics(isolated_config, caplog: pytest.LogCaptureFixture) -> None:
+    """Verify ""-семантику (D2): отсутствие platform-env.yaml → '', без литеральных fallback'ов."""
     caplog.set_level(logging.INFO)
-    pc = isolated_platform_config
+    pc = isolated_config
 
-    # All values should fall back to hardcoded defaults
-    assert pc.default_s3_region() == "ru-1"
-    assert pc.default_s3_prefix() == "platform/backups"
-    # DevPlan 116 B6 D4: CONTEXT НЕ имеет литерального fallback'а — "" (fail-visible)
+    # DevPlan 116 B5 T8 (D2): fallback-константы УДАЛЕНЫ — все accessors возвращают ""
+    assert pc.default_s3_region() == ""
+    assert pc.default_s3_prefix() == ""
     assert pc.default_context() == ""
-    assert pc.default_platform_context() == "personal"
-    # Sentinel values are always the same
+    assert pc.default_platform_context() == ""
+    # Sentinel values всегда ""
     assert pc.default_s3_bucket_sentinel() == ""
     assert pc.default_context_sentinel() == ""
 
-    # Check LDD telemetry — should have warning log about missing file
+    # LDD: громкий WARNING о ненайденном файле (fail-visible, D2)
+    found_warning = False
     for record in caplog.records:
         if "[IMP:" in record.message and "not found" in record.message:
+            found_warning = True
             break
-    # This is acceptable: when YAML is available, it uses it; when not, fallback
-    # We assert the values are correct regardless
+    assert found_warning, "Missing WARNING log: platform-env.yaml not found"
 
 
-# endregion TEST_fallback_values
+# endregion TEST_missing_file_empty_semantics
 
 
 # region TEST_typed_accessors
 ## @purpose  Verify all typed accessors return correct types and values
 ## @scenario Test each accessor independently with a known YAML
 ## @complexity 1
-def test_typed_accessors(yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
+def test_typed_accessors(isolated_config_with_yaml, caplog: pytest.LogCaptureFixture) -> None:
     """Verify all typed accessor functions."""
     caplog.set_level(logging.INFO)
-    pc = isolated_platform_config
+    pc = isolated_config_with_yaml
 
     # ── default_s3_region ──
     val = pc.default_s3_region()
@@ -201,21 +217,18 @@ def test_typed_accessors(yaml_file: Path, isolated_platform_config, caplog: pyte
 
 
 # region TEST_get_default
-## @purpose  Verify get_default works with custom fallback
-## @scenario Call get_default with unknown key and custom fallback
+## @purpose  Verify get_default without fallback-аргумента (T8: сигнатура get_default(key) → str)
+## @scenario Call get_default с известным/неизвестным ключом
 ## @complexity 1
-def test_get_default(yaml_file: Path, isolated_platform_config, caplog: pytest.LogCaptureFixture) -> None:
-    """Verify get_default with custom fallback for unknown keys."""
+def test_get_default(isolated_config_with_yaml, caplog: pytest.LogCaptureFixture) -> None:
+    """Verify get_default(key) — без fallback-аргумента (DevPlan 116 B5 T8)."""
     caplog.set_level(logging.INFO)
-    pc = isolated_platform_config
+    pc = isolated_config_with_yaml
 
     # Known key — returns from YAML
-    assert pc.get_default("S3_REGION", "fallback") == "ru-1"
+    assert pc.get_default("S3_REGION") == "ru-1"
 
-    # Unknown key — returns fallback
-    assert pc.get_default("NONEXISTENT_KEY", "my-fallback") == "my-fallback"
-
-    # Unknown key without fallback — returns ""
+    # Unknown key — returns "" (fail-visible, D2 — НЕ литеральный fallback)
     assert pc.get_default("NONEXISTENT_KEY") == ""
 
 

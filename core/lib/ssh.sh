@@ -42,25 +42,46 @@
 __LOG_PREFIX="${__LOG_PREFIX:-ssh}"
 
 # ═══════════════════════════════════════════════════════════════════
-# SSH_OPTS_COMMON — shared readonly SSH options
+# SSH_OPTS_COMMON — shared readonly SSH options (Python SoT, DevPlan 116 B5 D1)
 # ═══════════════════════════════════════════════════════════════════
 # region CONST_SSH_OPTS_COMMON
-## @purpose  Default SSH options for all platform SSH connections.
-##           BatchMode=yes — no password prompts
-##           StrictHostKeyChecking=accept-new — auto-accept new host keys
-##           ConnectTimeout=30 — fail fast on unreachable host
-##           ServerAliveInterval=30 + ServerAliveCountMax=10 — detect dead connections
+## @purpose  Default SSH options for all platform SSH connections — ЕДИНЫЙ SoT в
+##           core/internal/shared/ssh_opts.py (Python, DevPlan 116 B5 T2 D1).
+##           BatchMode=yes, StrictHostKeyChecking=accept-new, ConnectTimeout=<SSH_CONNECT_TIMEOUT>,
+##           ServerAliveInterval=30, ServerAliveCountMax=10. 5 Python-копий заменены импортом.
 ## @invariants Readonly array — защита от случайной мутации.
-##             При попытке перезаписи: bash readonly error.
 ##             Source-guard: повторный source безопасен (var уже readonly).
+##             PYTHONPATH-init по паттерну core/lib/audit.sh (repo root = core/lib/../..).
+##             Fail-fast: python3 недоступен или пустой вывод → return 1 с IMP:10
+##             (иначе ssh с пустыми флагами молча повиснет).
+##             bash 3.2 (macOS): НЕ mapfile — read -r -a по IFS (значения без пробелов).
 if ! declare -p SSH_OPTS_COMMON &>/dev/null; then
-    readonly -a SSH_OPTS_COMMON=(
-        -o BatchMode=yes
-        -o StrictHostKeyChecking=accept-new
-        -o ConnectTimeout=30
-        -o ServerAliveInterval=30
-        -o ServerAliveCountMax=10
-    )
+    _SSH_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    export PYTHONPATH="${_SSH_LIB_DIR}/../..:${PYTHONPATH:-}"
+    # ⚡ TRAP[DECISION] · 2026-08-01 · — · SSH_OPTS_COMMON из shared/ssh_opts.py (Python SoT, D1)
+    # · Rejected: 5 дублирующих копий SSH_OPTS (core_deliverer, overlay_deliverer, channels ×2,
+    # ·   remote_executor) + этот shell — ConnectTimeout=10 outlier в context_promoter.
+    # · Reason: триггер «extract when consumers > 3» (vps_readiness:37-42) сработал — 5 потребителей;
+    # ·   D1 пользователя 2026-08-01 — Python SoT уменьшает bash-поверхность (паттерн audit.sh).
+    # · Rev: если появится второй shell-потребитель флагов — пересмотреть фасад.
+    if ! command -v python3 >/dev/null 2>&1; then
+        if declare -f log_imp >/dev/null 2>&1; then
+            log_imp 10 "ssh" "python3 required for SSH_OPTS_COMMON (core.internal.shared.ssh_opts)"
+        else
+            echo "[IMP:10][ssh] python3 required for SSH_OPTS_COMMON (core.internal.shared.ssh_opts)" >&2
+        fi
+        return 1
+    fi
+    read -r -a SSH_OPTS_COMMON <<< "$(python3 -m core.internal.shared.ssh_opts --shell)"
+    if [ "${#SSH_OPTS_COMMON[@]}" -eq 0 ]; then
+        if declare -f log_imp >/dev/null 2>&1; then
+            log_imp 10 "ssh" "SSH_OPTS_COMMON empty — python3 -m core.internal.shared.ssh_opts --shell failed"
+        else
+            echo "[IMP:10][ssh] SSH_OPTS_COMMON empty — python3 -m core.internal.shared.ssh_opts --shell failed" >&2
+        fi
+        return 1
+    fi
+    readonly -a SSH_OPTS_COMMON
 fi
 # endregion CONST_SSH_OPTS_COMMON
 

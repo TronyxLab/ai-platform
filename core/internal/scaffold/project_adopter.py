@@ -68,6 +68,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# DevPlan 116 B5 T3: shared docker compose config — sole path (гейт docker_sole_path)
+from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
+
 logger = logging.getLogger(__name__)
 
 # ── Compose profiles — SoT: platform-env.yaml env_defaults (DevPlan 116 T2, U-02) ──
@@ -561,28 +564,25 @@ jobs:
         ## @io        ⇥ compose_path → ⎋ dict | None
         ## @complexity O(C) where C = compose file size
         """
-        # Method 1: docker compose config (resolves anchors, aliases, extends)
+        # Method 1: docker compose config (resolves anchors, aliases, extends) — shared sole path
+        # (DevPlan 116 B5 T3, гейт docker_sole_path: docker compose subprocess-вызовы только в shared)
         if shutil.which("docker"):
-            try:
-                env = os.environ.copy()
-                env["COMPOSE_PROFILES"] = self.compose_profiles
-                result = subprocess.run(
-                    ["docker", "compose", "-f", str(compose_path), "config"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    env=env,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    logger.info("[IMP:7][%s][validate_net] Compose parsed via docker compose config", self._log_prefix)
-                    try:
-                        import yaml
+            cfg_r = _shared_docker_compose_config(
+                str(compose_path.parent),
+                compose_args=["-f", str(compose_path)],
+                env_override={"COMPOSE_PROFILES": self.compose_profiles},
+            )
+            cfg_stdout = cfg_r.stdout
+            if isinstance(cfg_stdout, bytes):
+                cfg_stdout = cfg_stdout.decode("utf-8")
+            if cfg_r.returncode == 0 and cfg_stdout.strip():
+                logger.info("[IMP:7][%s][validate_net] Compose parsed via docker compose config", self._log_prefix)
+                try:
+                    import yaml
 
-                        return yaml.safe_load(result.stdout)
-                    except (ImportError, yaml.YAMLError):
-                        pass
-            except FileNotFoundError:
-                pass
+                    return yaml.safe_load(cfg_stdout)
+                except (ImportError, yaml.YAMLError):
+                    pass
 
         # Method 2: PyYAML fallback
         try:
