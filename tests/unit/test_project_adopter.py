@@ -81,14 +81,7 @@ def _make_node_yaml(tmp_path: Path, context: str = "testorg") -> Path:
     return node_yaml
 
 
-def _has_yaml_module() -> bool:
-    """Check if PyYAML is available (skip guard)."""
-    try:
-        import yaml  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
+# (removed B10 T7: PyYAML — hard dependency; the conditional-skip guard was unfalsifiable per R2)
 
 
 # endregion Helpers
@@ -104,7 +97,6 @@ def _has_yaml_module() -> bool:
 # · Last fail: N/A (new test)
 # · Remove if: generate_minimal_ai_platform_yaml logic changes
 @ldd_trajectory
-@pytest.mark.skipif(not _has_yaml_module(), reason="PyYAML not available")
 def test_generate_minimal_yaml_no_domain(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     """Generate ai-platform.yaml for backend project without domain."""
     caplog.set_level(logging.INFO)
@@ -145,7 +137,6 @@ def test_generate_minimal_yaml_no_domain(caplog: pytest.LogCaptureFixture, tmp_p
 # · Last fail: N/A (new test)
 # · Remove if: generate_minimal_ai_platform_yaml logic changes
 @ldd_trajectory
-@pytest.mark.skipif(not _has_yaml_module(), reason="PyYAML not available")
 def test_generate_minimal_yaml_with_domain(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     """Generate ai-platform.yaml with domain → expose:true."""
     caplog.set_level(logging.INFO)
@@ -180,7 +171,6 @@ def test_generate_minimal_yaml_with_domain(caplog: pytest.LogCaptureFixture, tmp
 # · Last fail: N/A (new test)
 # · Remove if: type detection logic changes
 @ldd_trajectory
-@pytest.mark.skipif(not _has_yaml_module(), reason="PyYAML not available")
 def test_generate_minimal_yaml_type_detection(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     """Auto-detect project type: frontend, fullstack, backend."""
     caplog.set_level(logging.INFO)
@@ -421,7 +411,6 @@ def test_validate_compose_networks_no_domain_skip(caplog: pytest.LogCaptureFixtu
 # · Last fail: N/A (new test)
 # · Remove if: validate_org_against_node_yaml logic changes
 @ldd_trajectory
-@pytest.mark.skipif(not _has_yaml_module(), reason="PyYAML not available")
 def test_validate_org_mismatch(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     """Org does not match node.yaml context → raise ValueError."""
     caplog.set_level(logging.INFO)
@@ -450,7 +439,6 @@ def test_validate_org_mismatch(caplog: pytest.LogCaptureFixture, tmp_path: Path)
 # · Last fail: N/A (new test)
 # · Remove if: org normalization logic changes
 @ldd_trajectory
-@pytest.mark.skipif(not _has_yaml_module(), reason="PyYAML not available")
 def test_validate_org_casing_mismatch(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
     """Org casing differs from node.yaml → returns node.yaml variant."""
     caplog.set_level(logging.INFO)
@@ -638,12 +626,11 @@ def test_configure_vhost_mocked(
 
     adopter = _make_adopter(tmp_path, domain="example.com")
 
-    # Create ai-platform.yaml for vhost update
-    if _has_yaml_module():
-        import yaml
+    # Create ai-platform.yaml for vhost update (PyYAML hard dep — B10 T7)
+    import yaml
 
-        with open(adopter.yaml_file, "w") as f:
-            yaml.dump({"name": "test-project", "needs": {"domain": False, "expose": False}}, f)
+    with open(adopter.yaml_file, "w") as f:
+        yaml.dump({"name": "test-project", "needs": {"domain": False, "expose": False}}, f)
 
     # Mock vhost_renderer module
     import types

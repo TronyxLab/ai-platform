@@ -18,6 +18,8 @@ import logging
 import sys
 from pathlib import Path
 
+import pytest
+
 # Load the LDD trajectory decorator
 from tests._conftest.ldd import ldd_trajectory
 
@@ -124,11 +126,9 @@ def test_get_context_missing_file_raises(caplog, tmp_path):
 
     missing = tmp_path / "nonexistent.yaml"
 
-    try:
+    # R1 (B10 T1): pytest.raises instead of try/except with bare pass
+    with pytest.raises(ConfigNotFoundError):
         ny.NodeYaml(str(missing)).get_context()
-        raise AssertionError("Expected ConfigNotFoundError for missing file")
-    except ConfigNotFoundError:
-        pass
 
     logger.critical("[IMP:9][test] get_context_missing_file_raises: ConfigNotFoundError — OK")
 

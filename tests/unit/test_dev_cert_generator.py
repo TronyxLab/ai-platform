@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from _conftest.ldd import _dump_ldd_trajectory
 
 from core.modules.nginx.dev_cert_generator import (
     DEFAULT_PLATFORM_DOMAIN,
@@ -39,20 +40,6 @@ _BASE_SAN = ["DNS:*.ai-platform.local", "DNS:localhost", "IP:127.0.0.1"]
 
 
 # region HELPER
-def _print_ldd_trajectory(captured) -> None:
-    """Print IMP:7-10 trajectory from captured stderr before assertions.
-
-    ## @purpose — LDD telemetry: surfaces the module's execution path on failure.
-    ## @io — ⇥ captured (capsys.readouterr result) → ⎋ None
-    ## @complexity — O(N) where N = stderr lines
-    """
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for line in captured.err.splitlines():
-        if "[IMP:" in line:
-            print(line)
-    print("--- END LDD TRAJECTORY ---")
-
-
 def _assert_imp9(captured, needle: str) -> None:
     """Assert an IMP:9 log line containing needle is present in stderr.
 
@@ -126,7 +113,7 @@ def test_required_sans_context(capsys) -> None:
     assert all(entry in result for entry in _BASE_SAN), f"Base SAN missing: {result}"
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     assert "[IMP:8]" in captured.err and "Context domain detected" in captured.err
 
 
@@ -187,7 +174,7 @@ def test_get_cert_sans_parse(tmp_path: Path, capsys) -> None:
     assert "subjectAltName" in pos_args
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
 
 
 # endregion FUNC_test_get_cert_sans_parse
@@ -213,7 +200,7 @@ def test_get_cert_sans_no_file(tmp_path: Path, capsys) -> None:
     mock_run.assert_not_called()
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     assert "[IMP:7]" in captured.err and "not found" in captured.err
 
 
@@ -257,7 +244,7 @@ def test_cert_is_current_exists(tmp_path: Path, capsys) -> None:
     assert str(EXPIRY_CHECK_DAYS * 86400) in pos_args, f"Wrong checkend window: {pos_args}"
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     _assert_imp9(captured, "Cert is current")
 
 
@@ -289,7 +276,7 @@ def test_cert_is_current_missing_san(tmp_path: Path, capsys) -> None:
 
     assert is_current is False
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     assert "SAN entry missing" in captured.err
     assert "SAN drift detected" in captured.err
 
@@ -321,7 +308,7 @@ def test_cert_is_current_missing_file(tmp_path: Path, capsys) -> None:
     mock_run.assert_not_called()
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     assert "Cert or key file missing" in captured.err
 
 
@@ -358,7 +345,7 @@ def test_cert_is_current_expiring(tmp_path: Path, capsys) -> None:
 
     assert is_current is False
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     assert "expires within" in captured.err
 
 
@@ -387,7 +374,7 @@ def test_verify_san_all_present(tmp_path: Path, capsys) -> None:
 
     assert ok is True
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     _assert_imp9(captured, "All required SAN entries present")
 
 
@@ -416,7 +403,7 @@ def test_verify_san_missing(tmp_path: Path, capsys) -> None:
 
     assert result is False
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     assert "[IMP:9]" in captured.err, "No IMP:9 log on SAN verification failure"
     assert any(token in captured.err for token in ("SAN MISSING", "FAILED"))
 
@@ -455,7 +442,7 @@ def test_main_idempotent_noop(tmp_path: Path, monkeypatch, capsys) -> None:
     mock_mkcert.assert_not_called()
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     _assert_imp9(captured, "no action needed")
 
 
@@ -495,7 +482,7 @@ def test_main_generate_missing(tmp_path: Path, monkeypatch, capsys) -> None:
     mock_verify.assert_called_once()
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     _assert_imp9(captured, "Certificate generated successfully")
 
 
@@ -528,7 +515,7 @@ def test_main_unknown_backend(tmp_path: Path, monkeypatch, capsys) -> None:
 
     assert excinfo.value.code == 1
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     _assert_imp9(captured, "Unknown CERT_BACKEND")
 
 
@@ -562,7 +549,7 @@ def test_main_missing_backend_tool(tmp_path: Path, monkeypatch, capsys) -> None:
 
     assert excinfo.value.code == 1
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     _assert_imp9(captured, "mkcert not in PATH")
 
 
@@ -631,7 +618,7 @@ def test_integration_full_flow(tmp_path: Path, monkeypatch, capsys) -> None:
         assert req_count["n"] == 1, f"Cert regenerated — idempotency broken (req x{req_count['n']})"
 
     captured = capsys.readouterr()
-    _print_ldd_trajectory(captured)
+    _dump_ldd_trajectory(captured.err)
     _assert_imp9(captured, "Certificate generated successfully")
     assert "no action needed" in captured.err, "Second run did not log no-op"
 

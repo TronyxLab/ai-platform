@@ -23,6 +23,8 @@ Static tests for node-lifecycle.sh — NODE_YAML derivation, --dry-run, and flag
 """
 
 import logging
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,7 @@ logger = logging.getLogger(__name__)
 CORE_DIR = Path(__file__).resolve().parent.parent / "core"
 LIFECYCLE_SCRIPT = CORE_DIR / "internal" / "bootstrap" / "node-lifecycle.sh"
 ENTRYPOINT_SCRIPT = CORE_DIR / "entrypoints" / "node-update.sh"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 # region FUNC_test_update_mode_resolves_node_yaml
@@ -161,17 +164,10 @@ def test_entrypoint_flags_contract(caplog) -> None:
     lifecycle_content = LIFECYCLE_SCRIPT.read_text()
     entrypoint_content = ENTRYPOINT_SCRIPT.read_text()
 
-    # Extract flags that node-update.sh forwards to node-lifecycle.sh
-    # node-update.sh main() builds args array with: --node-name + --dry-run
-    # The case statements in node-update.sh also accept --node (aliased to --node-name)
-
-    # ── Check 1: --node-name accepted by node-lifecycle.sh ──
-    assert "--node-name" in lifecycle_content, "[IMP:9][test] FAIL: --node-name not in node-lifecycle.sh parser"
-    logger.info("[IMP:8][test_entrypoint_flags_contract] Check 1 PASS: --node-name in lifecycle parser")
-
-    # ── Check 2: --dry-run accepted by node-lifecycle.sh ──
-    assert "--dry-run" in lifecycle_content, "[IMP:9][test] FAIL: --dry-run not in node-lifecycle.sh parser"
-    logger.info("[IMP:8][test_entrypoint_flags_contract] Check 2 PASS: --dry-run in lifecycle parser")
+    # B10 T2 (D2): checks 1-2 (--node-name/--dry-run grep on node-lifecycle.sh parser) replaced
+    # by the behavioral dry-run test test_node_lifecycle_dry_run_contract below — bash subprocess
+    # proves the parser ACCEPTS the flags (no "Unknown argument") via fail-fast exit codes and
+    # proves node-update.sh --dry-run forwarding via a real exit-0 dry-run invocation.
 
     # ── Check 3: node-update.sh forwards --node-name (not --node) ──
     # Lines 75-82: case --node|--node-name → NODE_NAME="$2"; DRY_RUN=true for --dry-run
@@ -231,6 +227,131 @@ def test_entrypoint_flags_contract(caplog) -> None:
 
 
 # endregion FUNC_test_entrypoint_flags_contract
+
+
+# region FUNC_test_node_lifecycle_dry_run_contract
+## @purpose  B10 T2 (D2): behavioral dry-run for the shell facades — replaces grep-asserts
+##           169-173 (--node-name/--dry-run parser acceptance). Uses bash subprocess:
+##           (a) node-lifecycle.sh parser ACCEPTS --mode/--node-name/--node-yaml/--dry-run and
+##               fail-fasts with exit 1 + diagnostic (no "Unknown argument");
+##           (b) node-update.sh --node <existing-node> --dry-run → exit 0 (forwarding contract:
+##               --node alias, --dry-run flag, delegation to remote_executor dry-run, NO mutations).
+## @io       caplog → ⎋ None (pytest assert on subprocess exit codes/stderr)
+## @complexity O(1) — 4-5 bash invocations
+## @invariants
+##   - node-update.sh dry-run is mutation-free: remote_executor --dry-run logs rsync cmd, no SSH/rsync
+##   - PYTHONPATH set to repo root (node-update.sh does NOT export it; node_detect/remote_executor need it)
+##   - node-lifecycle.sh --mode init --dry-run: NOT executed to completion (shell does not forward
+##     --dry-run to cli.py → would run the real bootstrap); parser acceptance proven via fail-fast paths
+## @rationale  node-lifecycle.sh parses --dry-run (DRY_RUN_MODE=true) but does NOT forward it to
+##             lifecycle/cli.py — a full "exit 0 dry-run" would run the real 9-phase init (mutation).
+##             The fail-fast exit-1 paths prove the flags parse without "Unknown argument" and that
+##             validation order (mode → NODE_NAME → NODE_YAML → PLATFORM_OWNER_KEY) is preserved.
+@pytest.mark.static_audit
+def test_node_lifecycle_dry_run_contract(caplog) -> None:
+    """node-lifecycle.sh parser fail-fast + node-update.sh --dry-run forwarding (behavioral, D2)."""
+    # 🧪 TRAP[TEST] · 2026-08-01 · B10 T2 · dry-run forwarding contract
+    # · Scenario: node-update.sh --node <n> --dry-run → exit 0 without mutations;
+    # ·   node-lifecycle.sh parser accepts flags (fail-fast exit 1 with diagnostics)
+    # · Last fail: N/A (replaces grep 169-173)
+    # · Remove if: shell facade parser/dry-run contract changes
+    logger.info("[IMP:7][test_node_lifecycle_dry_run_contract] START")
+    caplog.set_level(logging.DEBUG)
+
+    # ── (a) node-lifecycle.sh: invalid/absent mode → exit 1 (parser validation) ──
+    r_no_mode = subprocess.run(
+        ["bash", str(LIFECYCLE_SCRIPT)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert r_no_mode.returncode == 1, "node-lifecycle.sh without --mode must exit 1"
+    assert "--mode init|update required" in r_no_mode.stderr, (
+        f"Expected mode-required diagnostic, got: {r_no_mode.stderr}"
+    )
+
+    r_bad_mode = subprocess.run(
+        ["bash", str(LIFECYCLE_SCRIPT), "--mode", "bogus"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert r_bad_mode.returncode == 1, "node-lifecycle.sh --mode bogus must exit 1"
+
+    # ── (b) node-lifecycle.sh --mode update --dry-run without --node-name → exit 1 ──
+    # Proves --dry-run is ACCEPTED by the parser (no "Unknown argument") and the
+    # fail-fast NODE_NAME check fires AFTER parsing.
+    r_update_no_node = subprocess.run(
+        ["bash", str(LIFECYCLE_SCRIPT), "--mode", "update", "--dry-run"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert r_update_no_node.returncode == 1, "--mode update --dry-run without --node-name must exit 1"
+    assert "NODE_NAME required" in r_update_no_node.stderr, (
+        f"Expected NODE_NAME-required diagnostic, got: {r_update_no_node.stderr}"
+    )
+
+    # ── (c) node-lifecycle.sh --mode init --dry-run --node-name X --node-yaml <tmp> → exit 1 ──
+    # without PLATFORM_OWNER_KEY. Proves --node-name/--node-yaml/--dry-run all parse (no
+    # "Unknown argument") and the init fail-fast owner-key check fires after them.
+    tmp_node_yaml = subprocess.run(["mktemp"], capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        r_init_no_owner = subprocess.run(
+            [
+                "bash",
+                str(LIFECYCLE_SCRIPT),
+                "--mode",
+                "init",
+                "--dry-run",
+                "--node-name",
+                "test-node",
+                "--node-yaml",
+                tmp_node_yaml,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert r_init_no_owner.returncode == 1, (
+            "--mode init --dry-run without PLATFORM_OWNER_KEY must exit 1 (fail-fast)"
+        )
+        assert "Missing PLATFORM_OWNER_KEY" in r_init_no_owner.stderr, (
+            f"Expected owner-key diagnostic, got: {r_init_no_owner.stderr}"
+        )
+    finally:
+        os.unlink(tmp_node_yaml)
+
+    # ── (d) node-update.sh --node <existing> --dry-run → exit 0 (forwarding + dry-run) ──
+    # node-update.sh forwards --dry-run to remote_executor.py execute-update --dry-run →
+    # sync_core_to_vps(dry_run=True) prints rsync cmd, NEVER executes ssh/rsync → exit 0.
+    # NOTE: remote_executor.py CLI does not basicConfig logging → its INFO (IMP:*) logs are
+    # suppressed when run via `python3 -m`; the forwarding contract is proven by exit 0 +
+    # absence of the LOCAL-fallback marker (which WOULD print from node-update.sh itself).
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    r_update = subprocess.run(
+        ["bash", str(ENTRYPOINT_SCRIPT), "--node", "test-e2e", "--dry-run"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert r_update.returncode == 0, (
+        f"node-update.sh --node test-e2e --dry-run must exit 0, got rc={r_update.returncode}\n"
+        f"stderr: {r_update.stderr[-500:]}"
+    )
+    assert "Starting node-update for NODE=test-e2e" in r_update.stderr, (
+        f"Entrypoint must reach main(), got: {r_update.stderr[-500:]}"
+    )
+    assert "No SSH host" not in r_update.stderr, (
+        "Dry-run must take the remote_executor forwarding path (exit 0), not the local fallback"
+    )
+
+    logger.info("[IMP:9][test_node_lifecycle_dry_run_contract] ALL CHECKS PASS — dry-run contract verified")
+
+
+# endregion FUNC_test_node_lifecycle_dry_run_contract
 
 
 # region FUNC_test_node_update_has_ssh_proxy
@@ -407,24 +528,9 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     )
     logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 2 PASS: state_machine.py has cert phase")
 
-    # ── Check 3: phases.py has phase_certificates with ssl_provision_via_orchestrator ──
-    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
-    phases_content = phases_path.read_text()
-    assert "phase_certificates" in phases_content, "[IMP:9][test] FAIL: phases.py must have phase_certificates()"
-    assert "ssl_provision_via_orchestrator" in phases_content, (
-        "[IMP:9][test] FAIL: phase_certificates must call helpers.domains.ssl_provision_via_orchestrator (B9 T1)"
-    )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 3 PASS: phases.py has cert orchestration")
-
-    # ── Check 4: cert_orchestrator referenced from helpers/domains.py (B9 T1) ──
-    domains_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "helpers" / "domains.py"
-    domains_content = domains_path.read_text()
-    assert "cert_orchestrator" in domains_content or "orchestrate_certs" in domains_content, (
-        "[IMP:9][test] FAIL: helpers/domains.py must reference cert_orchestrator"
-    )
-    logger.info(
-        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 4 PASS: cert_orchestrator referenced (helpers/domains.py)"
-    )
+    # B10 T2 (D2): checks 3-4 (grep on phases.py/helpers/domains.py for phase_certificates +
+    # ssl_provision_via_orchestrator/cert_orchestrator) replaced by NATIVE behavior tests in
+    # tests/unit/test_phase_certificates_contract.py (import + signature + call with fake context).
 
     # ── Check 5: WEBNAMES_API_KEY handling in phases.py ──
     phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"

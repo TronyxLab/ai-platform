@@ -1,12 +1,15 @@
 # GREP_SUMMARY: fixture test-project compose nginx alpine port-8080 healthcheck mirror-gcr
-# STRUCTURE: ┌compose manifest┐ → service web (mirror.gcr.io/library/nginx:alpine) → port 8080:80 → healthcheck wget → ⎋ fixture
+# STRUCTURE: ┌compose manifest┐ → service test-project (mirror.gcr.io/library/nginx:alpine) → port 8080:80 → healthcheck wget → ⎋ fixture
 # region MODULE_CONTRACT
 ## @purpose  Canonical E2E test-project compose (DevPlan 095 T18) — deterministic per Anti-Loop
 ##           Note (0 parameterized). Deployed on the test-VPS via DeployOrchestrator.receive()
 ##           (SCP payload → compose up -d).
 ## @scope    E2E fixture compose consumed during forced-command receive tests.
 ## @invariants
-##   - Service name `web` matches ai-platform.yaml#service
+##   - Service name `test-project` matches ai-platform.yaml#service
+##     (канон B1 D5/U-37: receive() использует service = project_name — phantom-read service
+##     из ai-platform.yaml УДАЛЁН; compose-сервис обязан называться как project_name)
+##   - container_name `test-project-web` — сохраняется (e2e-ассерты docker ps/inspect по имени)
 ##   - image: mirror.gcr.io/library/nginx:alpine — СТАТИЧНЫЙ публичный image
 ##     (DevPlan T18: "nginx:alpine" — зеркало Docker Hub от Google)
 ##   - Port 8080 must be free on the test-VPS (fresh node per invariant 9)
@@ -21,10 +24,13 @@
 ## ·   Для E2E-фикстуры важен детерминированный pull, не production-схема тегов CI-образов.
 ## · Rev: если deploy-пайплайн получит собственный registry с реальными тегами — вернуть
 ## ·   ${IMAGE_TAG}-подстановку с ghcr.io/<org>/test-project.
+## @changes 2026-08-01 · B10 (QA-approved fix) — compose-сервис `web` → `test-project` (канон B1 D5:
+##           receive() резолвит service = project_name; прежнее имя `web` давало
+##           «no such service: test-project» — предсуществующая e2e-регрессия B1).
 # endregion MODULE_CONTRACT
 
 services:
-  web:
+  test-project:
     image: mirror.gcr.io/library/nginx:alpine
     container_name: test-project-web
     ports:

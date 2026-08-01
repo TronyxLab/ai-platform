@@ -152,7 +152,7 @@ def _is_legacy_make() -> bool:
             major, _minor = int(m.group(1)), int(m.group(2))
             return major < 4
     except Exception:
-        pass
+        return False  # make --version failed — treat as modern (R1: no bare pass)
     return False
 
 

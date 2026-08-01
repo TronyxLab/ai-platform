@@ -1,19 +1,33 @@
-# GREP_SUMMARY: fixture test-project ai-platform-yaml metadata backend web v1.0.0
+# GREP_SUMMARY: fixture test-project ai-platform-yaml metadata backend test-project v1.0.0
 # STRUCTURE: ┌manifest┐ → DeployOrchestrator.receive() → project/service/version resolution → ⎋ fixture
+# 📝 TRAP[DEBT] · 2026-08-01 · MED · e2e deploy: service=project_name (B1 D5) vs compose service `web` — RESOLVED (B10, 2026-08-01)
+# · Observed: receive()-доставка падала «docker compose pull: no such service: test-project»
+# ·   (DeployOrchestrator.deploy() → service = project_name, DevPlan 116 B1 D5/U-37 —
+#   phantom-read service из ai-platform.yaml УДАЛЁН).
+# · Root: e2e-фикстура была построена на СТАРОЙ семантике (compose-сервис `web`),
+#   B1 D5 изменил receive() на service=project_name — фикстура не обновлена.
+# · Impact: 4 e2e-теста (deploy/healthcheck/restore/forced-command receive) — FAIL с момента B1
+#   (e2e не гоняется в CI — требуется VPS, поэтому регрессия не была замечена).
+# · When: верификация B10 T10/D3 (2026-08-01) — pre-existing, не связано с B10.
+# · Fix (2026-08-01, B10, QA-approved): compose-сервис переименован `web` → `test-project`
+#   (канон B1 D5: service = project_name). container_name `test-project-web` сохранён —
+#   e2e-ассерты docker ps/inspect по имени контейнера. e2e 10/10 requires_node зелёные.
 # region MODULE_CONTRACT
 ## @purpose  Canonical test-project metadata (DevPlan 095 T18) — read by
 ##           DeployOrchestrator.receive() for project/service/version resolution.
 ## @scope    E2E fixture manifest consumed during forced-command receive tests.
 ## @invariants
 ##   - project name MUST be `test-project` (matches node-configs/test-e2e/node.yaml projects[].name)
-##   - service MUST match the compose service name (`web`)
+##   - service MUST match the compose service name (`test-project` — канон B1 D5: receive()
+##     использует service = project_name; phantom-read service из манифеста удалён U-37)
 ##   - NO monitoring.host_port — skips DeployEngine port-conflict preflight (port 8080
 ##     is asserted by the E2E tests themselves)
 ## @rationale  Mirrors template-backend/ai-platform.yaml schema so receive-path
 ##             exercises a realistic manifest shape.
+## @changes 2026-08-01 · B10 (QA-approved fix) — service: `web` → `test-project` (канон B1 D5)
 # endregion MODULE_CONTRACT
 
 project: test-project
-service: web
+service: test-project
 version: v1.0.0
 type: backend

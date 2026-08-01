@@ -267,11 +267,46 @@ class _TestInfra:
 # endregion CLASS_TestInfra
 
 
-# Module-level singleton — instantiated at import time
+# region CLASS_LazyTestInfraProxy
+## @purpose  Lazy proxy (T5, DevPlan 116 B10): defers the subprocess discover_modules.py
+##           --test-infra call until the FIRST accessor method is used — NOT at import.
+##           Preserves the T21 import protocol (`from _conftest.infra import infra`)
+##           with zero behavioral change for consumers.
+## @io       ⇥ attribute access → ⎋ delegated to the lazily-built _TestInfra singleton
+## @complexity O(1) per access; O(subprocess) on first access (then cached)
+## @invariants
+##   - Importing _conftest.infra runs NO subprocess (delegate is None until first access)
+##   - First accessor call triggers _load_test_infra() (cached via lru_cache — 1 subprocess/session)
+##   - Subsequent accesses reuse the cached delegate
+## @rationale  U-74 (DevPlan 116 B10 T5): infra.py:271 ran subprocess at import — every static
+##             test session paid discover_modules.py cost even without Docker tests; lazy init
+##             isolates static sessions (0 subprocess) and keeps Docker sessions at 1 subprocess.
+class _LazyTestInfraProxy:
+    """Lazy singleton proxy — defers _load_test_infra() subprocess until first accessor call."""
+
+    def __init__(self) -> None:
+        self._delegate: _TestInfra | None = None
+
+    def _get_delegate(self) -> _TestInfra:
+        """Build the real _TestInfra singleton on first access (subprocess boundary)."""
+        if self._delegate is None:
+            self._delegate = _TestInfra()
+        return self._delegate
+
+    def __getattr__(self, name: str):
+        """Delegate attribute access — first access triggers _load_test_infra() (once)."""
+        return getattr(self._get_delegate(), name)
+
+
+# endregion CLASS_LazyTestInfraProxy
+
+
+# Module-level singleton — LAZY (no subprocess at import, T5 B10)
 # ⚠️ TRAP[PERF] · 2026-07-22 · Subprocess on import — triggers discover_modules.py --test-infra
-# · Mitigation: _load_test_infra cached via @lru_cache; one subprocess call per pytest session.
+# · Mitigation (2026-08-01, B10 T5): infra is now a _LazyTestInfraProxy — the subprocess runs on
+# · the FIRST accessor call, NOT at import. _load_test_infra stays cached (lru_cache) → 1 subprocess/session.
 # · If discover_modules.py becomes slow (>500ms), add file-based cache with mtime check.
-infra = _TestInfra()
+infra = _LazyTestInfraProxy()
 
 
 # Mutable flag for dynamic detection of requires_docker marker presence.

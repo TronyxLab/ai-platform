@@ -129,9 +129,7 @@ class TestGateVolumesSot:
             f"ROOT_VOLUMES_MISSING: module services reference volumes not declared in root compose: "
             f"{sorted(missing)} — root docker-compose.yml is the single SoT (DevPlan 116 B3 T4, U-49)"
         )
-        assert not orphans, (
-            f"ROOT_VOLUMES_ORPHAN: root declares volumes no module references: {sorted(orphans)}"
-        )
+        assert not orphans, f"ROOT_VOLUMES_ORPHAN: root declares volumes no module references: {sorted(orphans)}"
         assert len(root_volumes) == 12, (
             f"Expected 12 canonical volumes, got {len(root_volumes)}: {sorted(root_volumes)}"
         )

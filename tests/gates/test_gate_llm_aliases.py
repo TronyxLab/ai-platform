@@ -23,6 +23,7 @@ import pathlib
 
 import pytest
 import yaml
+from _conftest.ldd import _print_ldd_trajectory
 
 from tests.helpers.gate_helpers import repo_root
 
@@ -34,29 +35,6 @@ POLICY_PATH = ROOT / "core" / "internal" / "llm" / "policy.yaml"
 
 
 # ── LDD Helper ───────────────────────────────────────────────────────────────
-
-
-def _print_ldd_trajectory(caplog, test_name: str) -> bool:
-    """Print IMP:7-10 LDD trajectory from caplog.
-
-    ## @purpose  Centralised LDD trajectory printer for all test functions.
-    ## @complexity O(N) where N = caplog records
-    """
-    found = False
-    print(f"\n--- LDD TRAJECTORY ({test_name}) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            try:
-                imp_str = record.message.split("[IMP:")[1].split("]")[0]
-                imp_level = int(imp_str)
-                if imp_level >= 7:
-                    print(record.message)
-                if imp_level >= 9:
-                    found = True
-            except (IndexError, ValueError):
-                pass
-    print("--- END LDD TRAJECTORY ---")
-    return found
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

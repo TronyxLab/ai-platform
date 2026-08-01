@@ -31,22 +31,58 @@ _logger = logging.getLogger(__name__)
 ## @rationale — DRY: previously duplicated in 6 test files; centralize in conftest.
 
 
-def _print_ldd_trajectory(caplog) -> bool:
+def _print_ldd_trajectory(caplog, test_name: str | None = None) -> bool:
     """Print LDD trajectory filtered to IMP:7-10 from caplog records.
 
     ## @purpose — Extract and display IMP:7-10 log entries for agent-visible telemetry.
-    ## @io — ⇥ caplog: pytest fixture → ⎋ bool (True if IMP:9 found)
+    ## @io — ⇥ caplog: pytest fixture, test_name: str|None (optional header prefix)
+    ##      → ⎋ bool (True if IMP:9 found)
     ## @complexity — O(n) where n = number of caplog records
+    ## @invariants
+    ##   - test_name prefixes the header when provided (compat with named variants, B10 T8)
+    ##   - Malformed IMP tags are skipped (robust — B10 T8 consolidation)
     """
     found = False
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    header = f"--- LDD TRAJECTORY ({test_name}) ---" if test_name else "--- LDD TRAJECTORY (IMP:7-10) ---"
+    print(header)
     for record in caplog.records:
         if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            try:
+                imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
+            except (IndexError, ValueError):
+                continue
             if imp_level >= 7:
                 print(record.message)
             if imp_level >= 9:
                 found = True
+    print("--- END LDD TRAJECTORY ---")
+    return found
+
+
+def _dump_ldd_trajectory(text: str) -> bool:
+    """Print LDD trajectory from plain text (subprocess stderr / capsys captured.err).
+
+    ## @purpose — LDD telemetry for shell-subprocess and capsys-based tests: extracts
+    ##            IMP:7-10 lines from a text blob (stderr/captured output) instead of caplog.
+    ## @io — ⇥ text: str → ⎋ bool (True if IMP:9 found)
+    ## @complexity — O(n) where n = text lines
+    ## @invariants
+    ##   - Malformed IMP tags are printed as [MALFORMED] (not swallowed silently)
+    ##   - Single canonical text-based LDD helper (B10 T8: consolidates
+    ##     test_lib_ssh._print_ldd_trajectory_from_stderr + test_dev_cert_generator variants)
+    """
+    found = False
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for line in text.splitlines():
+        if "[IMP:" in line:
+            try:
+                imp_level = int(line.split("[IMP:")[1].split("]")[0])
+                if imp_level >= 7:
+                    print(line)
+                if imp_level >= 9:
+                    found = True
+            except (IndexError, ValueError):
+                print(f"  [MALFORMED] {line}")
     print("--- END LDD TRAJECTORY ---")
     return found
 

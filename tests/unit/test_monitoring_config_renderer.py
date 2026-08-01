@@ -37,6 +37,7 @@ import pathlib
 
 import pytest
 import yaml
+from _conftest.ldd import _print_ldd_trajectory
 
 from core.internal.monitoring_config_renderer import (
     ProjectMonitoringConfig,
@@ -69,34 +70,6 @@ def _write_yaml(data: dict, path: pathlib.Path) -> pathlib.Path:
     with open(path, "w") as f:
         yaml.dump(data, f)
     return path
-
-
-def _print_ldd_trajectory(caplog, test_name: str) -> bool:
-    """Print IMP:7-10 LDD trajectory from caplog and return whether IMP:9+ was found.
-
-    ## @purpose  Centralised LDD trajectory printer for all test functions.
-    ##           Follows the pattern from RULES.md §TESTING.
-    ## @io
-    ##   - caplog — pytest caplog fixture
-    ##   - test_name: str — test identifier for log prefix
-    ##   - ⎋ bool — True if at least one IMP:9+ log was found
-    ## @complexity O(N) where N = caplog records
-    """
-    found = False
-    print(f"\n--- LDD TRAJECTORY ({test_name}) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            try:
-                imp_str = record.message.split("[IMP:")[1].split("]")[0]
-                imp_level = int(imp_str)
-                if imp_level >= 7:
-                    print(record.message)
-                if imp_level >= 9:
-                    found = True
-            except (IndexError, ValueError):
-                pass
-    print("--- END LDD TRAJECTORY ---")
-    return found
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

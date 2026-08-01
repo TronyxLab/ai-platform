@@ -33,6 +33,7 @@ from typing import Any
 
 import pytest
 
+from core.internal.bootstrap.lifecycle.state_machine import BootstrapPhase
 from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
@@ -43,24 +44,9 @@ _DEFAULT_SSH_TIMEOUT = 60  # ssh_read default (lib/ssh.sh: 60s)
 _DEPLOY_SSH_TIMEOUT = 600  # ssh_exec deploy default (lib/ssh.sh: 600s)
 
 # 9 INIT phases (φ1-φ8.5) + 5 UPDATE phases (φ9-φ13) — BootstrapPhase enum canonical keys
-INIT_PHASES: list[str] = [
-    "system_bootstrap",
-    "user_accounts",
-    "platform_setup",
-    "secrets_provision",
-    "node_configuration",
-    "registry_auth",
-    "certificates",
-    "deploy_services",
-    "converge_services",
-]
-UPDATE_PHASES: list[str] = [
-    "secrets_update",
-    "node_config_update",
-    "registry_update",
-    "deploy_update",
-    "converge_update",
-]
+# (T6, DevPlan 116 B10): literals replaced by enum values — state.json keys == enum values.
+INIT_PHASES: list[str] = list(BootstrapPhase.INIT_PHASE_ORDER)
+UPDATE_PHASES: list[str] = list(BootstrapPhase.UPDATE_PHASE_ORDER)
 
 
 # region FUNC__require_node_env

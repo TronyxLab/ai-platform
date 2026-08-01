@@ -83,7 +83,7 @@ def _print_docker_imp_logs(output: str) -> None:
                 if imp_level >= 7:
                     logger.info(line)
             except (ValueError, IndexError):
-                pass
+                logger.info("[IMP:7][hermes] MALFORMED IMP tag: %s", line.strip())
 
 
 def _build_l1() -> None:

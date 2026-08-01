@@ -102,21 +102,6 @@ def _collect_volume_paths(data: dict) -> list[str]:
     return []
 
 
-def _print_ldd_trajectory() -> bool:
-    """Print LDD trajectory from logger output.
-
-    ## @purpose — Manual LDD trajectory printing (not using caplog,
-    ##            which has empty records on Python 3.14/pytest 9.x).
-    ##            The logger calls are still present in the test body for
-    ##            semantic trace; this function prints the trajectory banner.
-    ## @returns — True (IMP:9 assertion marker)
-    """
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    print("[IMP:9][env_contract] Parity contract passed — all env_defaults validated")
-    print("--- END LDD TRAJECTORY ---")
-    return True
-
-
 # ── Tests ──────────────────────────────────────────────────────────────────
 
 
@@ -179,7 +164,9 @@ def test_env_example_matches_platform_env_defaults() -> None:
 
     assert not error_parts, "Parity check failed:\n" + "\n".join(error_parts)
 
-    _print_ldd_trajectory()
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    print("[IMP:9][env_contract] Parity contract passed — all env_defaults validated")
+    print("--- END LDD TRAJECTORY ---")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -226,4 +213,6 @@ def test_prometheus_dirs_canonical() -> None:
     )
     print(f"[IMP:8][prometheus] {PROMETHEUS_RULES_DIR_CANONICAL} registered in platform-env.yaml volumes")
 
-    _print_ldd_trajectory()
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    print("[IMP:9][env_contract] Parity contract passed — all env_defaults validated")
+    print("--- END LDD TRAJECTORY ---")

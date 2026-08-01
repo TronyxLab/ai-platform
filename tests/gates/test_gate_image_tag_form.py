@@ -22,11 +22,14 @@
 ## @changes  2026-08-01 · Created (DevPlan 116 B3 T7)
 # endregion MODULE_CONTRACT
 
+import logging
 import re
 from pathlib import Path
 
 import pytest
 import yaml
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PLATFORM_INFRA = PROJECT_ROOT / "core" / "platform-infra.yaml"
@@ -91,7 +94,7 @@ def _scan_ghcr_refs() -> list[tuple[str, int, str]]:
             if isinstance(ctx_image, str) and "ghcr.io" in ctx_image:
                 found.append((str(PLATFORM_INFRA.relative_to(PROJECT_ROOT)), 0, ctx_image))
         except yaml.YAMLError:
-            pass
+            logger.debug("[IMP:7][image-tag-form] platform-infra.yaml unreadable (corrupt YAML) — skipping")
 
     # ── 2. core/modules/*/docker-compose.base.yml image lines ──
     for compose_file in sorted(MODULES_DIR.glob("*/docker-compose.base.yml")):

@@ -88,6 +88,24 @@ def mock_cache_dir(tmp_path: Path) -> str:
     return str(cache_dir)
 
 
+@pytest.fixture
+def mock_docker_subprocess():
+    """Boundary fixture (T3 D1): ONE docker_collector.subprocess.run mock for the file.
+
+    ## @purpose — Replaces 9 inline docker_collector.subprocess.run patch blocks.
+    ##            Default: empty docker (no containers). Tests configure
+    ##            return_value / side_effect per scenario (ps → inspect → stats).
+    ## @io — ⎋ MagicMock (docker_collector.subprocess.run) — assert on parsed structure, not on calls
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Patches only core.internal.healthcheck.metrics.docker_collector.subprocess.run (module boundary)
+    ##   - Assertions on observable collector output (containers list / sizes dict / exit) — D1
+    """
+    with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+        yield mock_run
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: docker_collector
 # ═══════════════════════════════════════════════════════════════════
@@ -96,252 +114,247 @@ def mock_cache_dir(tmp_path: Path) -> str:
 class TestDockerCollector:
     """Tests for docker_collector.py."""
 
-    def test_docker_collector_containers(self, caplog):
+    def test_docker_collector_containers(self, caplog, mock_docker_subprocess):
         """get_containers returns parsed container data from mock subprocess."""
         caplog.set_level(0)
 
         # Mock subprocess.run for docker ps -aq, inspect, and stats
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            # docker ps -aq → container IDs
-            # docker inspect → JSON array
-            # docker stats → JSON lines
+        # docker ps -aq → container IDs
+        # docker inspect → JSON array
+        # docker stats → JSON lines
 
-            # We need to set up side_effect for 3 calls
-            mock_run.side_effect = [
-                # Call 1: docker ps -aq
-                mock.Mock(returncode=0, stdout="abc123\ndef456\n", stderr=""),
-                # Call 2: docker inspect abc123 def456
-                mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps(
-                        [
-                            {
-                                "Id": "sha256:abc123",
-                                "Name": "/nginx",
-                                "State": {
-                                    "Running": True,
-                                    "ExitCode": 0,
-                                    "Status": "Up 2 hours (healthy)",
-                                    "Health": {"Status": "healthy"},
-                                },
-                                "Config": {"Image": "nginx:latest"},
-                                "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+        # We need to set up side_effect for 3 calls
+        mock_docker_subprocess.side_effect = [
+            # Call 1: docker ps -aq
+            mock.Mock(returncode=0, stdout="abc123\ndef456\n", stderr=""),
+            # Call 2: docker inspect abc123 def456
+            mock.Mock(
+                returncode=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Id": "sha256:abc123",
+                            "Name": "/nginx",
+                            "State": {
+                                "Running": True,
+                                "ExitCode": 0,
+                                "Status": "Up 2 hours (healthy)",
+                                "Health": {"Status": "healthy"},
                             },
-                            {
-                                "Id": "sha256:def456",
-                                "Name": "/redis",
-                                "State": {
-                                    "Running": False,
-                                    "ExitCode": 137,
-                                    "Status": "Exited (137) 1 hour ago",
-                                    "Health": {"Status": "unhealthy"},
-                                },
-                                "Config": {"Image": "redis:alpine"},
-                                "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                            "Config": {"Image": "nginx:latest"},
+                            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+                        },
+                        {
+                            "Id": "sha256:def456",
+                            "Name": "/redis",
+                            "State": {
+                                "Running": False,
+                                "ExitCode": 137,
+                                "Status": "Exited (137) 1 hour ago",
+                                "Health": {"Status": "unhealthy"},
                             },
-                        ]
-                    ),
-                    stderr="",
+                            "Config": {"Image": "redis:alpine"},
+                            "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                        },
+                    ]
                 ),
-                # Call 3: docker stats --no-stream
-                mock.Mock(
-                    returncode=0,
-                    stdout=(
-                        '{"Name":"nginx","CPUPerc":"0.45%","MemUsage":"12.5MiB / 1GiB","MemLimit":"1GiB"}\n'
-                        '{"Name":"redis","CPUPerc":"0.10%","MemUsage":"5.2MiB / 512MiB","MemLimit":"512MiB"}\n'
-                    ),
-                    stderr="",
+                stderr="",
+            ),
+            # Call 3: docker stats --no-stream
+            mock.Mock(
+                returncode=0,
+                stdout=(
+                    '{"Name":"nginx","CPUPerc":"0.45%","MemUsage":"12.5MiB / 1GiB","MemLimit":"1GiB"}\n'
+                    '{"Name":"redis","CPUPerc":"0.10%","MemUsage":"5.2MiB / 512MiB","MemLimit":"512MiB"}\n'
                 ),
-            ]
+                stderr="",
+            ),
+        ]
 
-            from core.internal.healthcheck.metrics.docker_collector import get_containers
+        from core.internal.healthcheck.metrics.docker_collector import get_containers
 
-            containers = get_containers()
+        containers = get_containers()
 
-            # ── LDD TRAJECTORY ──
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        # ── LDD TRAJECTORY ──
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert len(containers) == 2, f"Expected 2 containers, got {len(containers)}"
-            # First container: nginx
-            assert containers[0]["name"] == "nginx", f"Expected nginx, got {containers[0]['name']}"
-            assert containers[0]["running"] is True
-            assert containers[0]["healthy"] is True
-            assert containers[0]["cpu_percent"] == 0.45
-            assert containers[0]["memory_usage_bytes"] > 0
-            assert containers[0]["memory_limit_bytes"] > 0
-            # Second container: redis (stopped)
-            assert containers[1]["name"] == "redis"
-            assert containers[1]["running"] is False
-            assert containers[1]["healthy"] is False
+        assert len(containers) == 2, f"Expected 2 containers, got {len(containers)}"
+        # First container: nginx
+        assert containers[0]["name"] == "nginx", f"Expected nginx, got {containers[0]['name']}"
+        assert containers[0]["running"] is True
+        assert containers[0]["healthy"] is True
+        assert containers[0]["cpu_percent"] == 0.45
+        assert containers[0]["memory_usage_bytes"] > 0
+        assert containers[0]["memory_limit_bytes"] > 0
+        # Second container: redis (stopped)
+        assert containers[1]["name"] == "redis"
+        assert containers[1]["running"] is False
+        assert containers[1]["healthy"] is False
 
-    def test_docker_collector_empty(self, caplog):
+    def test_docker_collector_empty(self, caplog, mock_docker_subprocess):
         """get_containers returns empty list when no containers exist."""
         caplog.set_level(0)
 
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+        mock_docker_subprocess.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 
-            from core.internal.healthcheck.metrics.docker_collector import get_containers
+        from core.internal.healthcheck.metrics.docker_collector import get_containers
 
-            containers = get_containers()
+        containers = get_containers()
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert containers == [], f"Expected empty list, got {containers}"
+        assert containers == [], f"Expected empty list, got {containers}"
 
-    def test_docker_collector_cli_missing(self, caplog):
+    def test_docker_collector_cli_missing(self, caplog, mock_docker_subprocess):
         """get_containers returns empty list gracefully when docker CLI is unavailable."""
         caplog.set_level(0)
 
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            mock_run.side_effect = OSError("docker CLI not found")
+        mock_docker_subprocess.side_effect = OSError("docker CLI not found")
 
-            from core.internal.healthcheck.metrics.docker_collector import get_containers
+        from core.internal.healthcheck.metrics.docker_collector import get_containers
 
-            containers = get_containers()
+        containers = get_containers()
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert containers == []
+        assert containers == []
 
     # 🧪 TRAP[TEST] · TASK-13 · Regression: docker_collector started_at field
     # · Scenario: Container with State.StartedAt ISO timestamp
     # · Last fail: never (new feature)
     # · Remove if: started_at field removed from docker_collector
-    def test_docker_collector_started_at(self, caplog):
+    def test_docker_collector_started_at(self, caplog, mock_docker_subprocess):
         """get_containers includes started_at ISO timestamp from docker inspect State.StartedAt."""
         caplog.set_level(0)
 
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                # Call 1: docker ps -aq
-                mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
-                # Call 2: docker inspect
-                mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps(
-                        [
-                            {
-                                "Id": "sha256:abc123",
-                                "Name": "/nginx",
-                                "State": {
-                                    "Running": True,
-                                    "ExitCode": 0,
-                                    "Status": "Up 2 hours",
-                                    "StartedAt": "2026-07-24T00:00:00.000000000Z",
-                                    "Health": {"Status": "healthy"},
-                                },
-                                "Config": {"Image": "nginx:latest"},
-                                "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
-                            }
-                        ]
-                    ),
-                    stderr="",
+        mock_docker_subprocess.side_effect = [
+            # Call 1: docker ps -aq
+            mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
+            # Call 2: docker inspect
+            mock.Mock(
+                returncode=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Id": "sha256:abc123",
+                            "Name": "/nginx",
+                            "State": {
+                                "Running": True,
+                                "ExitCode": 0,
+                                "Status": "Up 2 hours",
+                                "StartedAt": "2026-07-24T00:00:00.000000000Z",
+                                "Health": {"Status": "healthy"},
+                            },
+                            "Config": {"Image": "nginx:latest"},
+                            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+                        }
+                    ]
                 ),
-                # Call 3: docker stats
-                mock.Mock(returncode=0, stdout="", stderr=""),
-            ]
+                stderr="",
+            ),
+            # Call 3: docker stats
+            mock.Mock(returncode=0, stdout="", stderr=""),
+        ]
 
-            from core.internal.healthcheck.metrics.docker_collector import get_containers
+        from core.internal.healthcheck.metrics.docker_collector import get_containers
 
-            containers = get_containers()
+        containers = get_containers()
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert len(containers) == 1
-            assert containers[0]["started_at"] == "2026-07-24T00:00:00.000000000Z", (
-                f"Expected ISO timestamp, got {containers[0].get('started_at')}"
-            )
+        assert len(containers) == 1
+        assert containers[0]["started_at"] == "2026-07-24T00:00:00.000000000Z", (
+            f"Expected ISO timestamp, got {containers[0].get('started_at')}"
+        )
 
     # 🧪 TRAP[TEST] · TASK-13 · Regression: docker_collector started_at None
     # · Scenario: Container without State.StartedAt → started_at: None
     # · Remove if: started_at field removed
-    def test_docker_collector_started_at_missing(self, caplog):
+    def test_docker_collector_started_at_missing(self, caplog, mock_docker_subprocess):
         """get_containers returns started_at=None when State.StartedAt is absent."""
         caplog.set_level(0)
 
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
-                mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps(
-                        [
-                            {
-                                "Id": "sha256:abc123",
-                                "Name": "/redis",
-                                "State": {
-                                    "Running": False,
-                                    "ExitCode": 0,
-                                    "Status": "Exited (0)",
-                                    # No StartedAt field
-                                },
-                                "Config": {"Image": "redis:alpine"},
-                                "HostConfig": {"RestartPolicy": {"Name": "always"}},
-                            }
-                        ]
-                    ),
-                    stderr="",
+        mock_docker_subprocess.side_effect = [
+            mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
+            mock.Mock(
+                returncode=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Id": "sha256:abc123",
+                            "Name": "/redis",
+                            "State": {
+                                "Running": False,
+                                "ExitCode": 0,
+                                "Status": "Exited (0)",
+                                # No StartedAt field
+                            },
+                            "Config": {"Image": "redis:alpine"},
+                            "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                        }
+                    ]
                 ),
-                mock.Mock(returncode=0, stdout="", stderr=""),
-            ]
+                stderr="",
+            ),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+        ]
 
-            from core.internal.healthcheck.metrics.docker_collector import get_containers
+        from core.internal.healthcheck.metrics.docker_collector import get_containers
 
-            containers = get_containers()
+        containers = get_containers()
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert len(containers) == 1
-            assert containers[0]["started_at"] is None, (
-                f"Expected started_at=None when State.StartedAt absent, got {containers[0].get('started_at')}"
-            )
+        assert len(containers) == 1
+        assert containers[0]["started_at"] is None, (
+            f"Expected started_at=None when State.StartedAt absent, got {containers[0].get('started_at')}"
+        )
 
 
 class TestDockerImageSizes:
     """Tests for get_image_sizes."""
 
-    def test_docker_image_sizes(self, caplog):
+    def test_docker_image_sizes(self, caplog, mock_docker_subprocess):
         """get_image_sizes returns {sha256: size} from docker image inspect."""
         caplog.set_level(0)
 
@@ -350,29 +363,28 @@ class TestDockerImageSizes:
             '{"Id":"sha256:abc123","Size":150000000}',
             '{"Id":"sha256:def456","Size":45000000}',
         ]
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(
-                returncode=0,
-                stdout="\n".join(stdout_lines),
-                stderr="",
-            )
+        mock_docker_subprocess.return_value = mock.Mock(
+            returncode=0,
+            stdout="\n".join(stdout_lines),
+            stderr="",
+        )
 
-            from core.internal.healthcheck.metrics.docker_collector import get_image_sizes
+        from core.internal.healthcheck.metrics.docker_collector import get_image_sizes
 
-            sizes = get_image_sizes({"sha256:abc123", "sha256:def456"})
+        sizes = get_image_sizes({"sha256:abc123", "sha256:def456"})
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert sizes.get("sha256:abc123") == 150000000
-            assert sizes.get("sha256:def456") == 45000000
+        assert sizes.get("sha256:abc123") == 150000000
+        assert sizes.get("sha256:def456") == 45000000
 
     def test_docker_image_sizes_empty(self, caplog):
         """get_image_sizes returns empty dict for empty input."""
@@ -898,7 +910,7 @@ class TestCoordinator:
             if "platform_export_metrics" in key:
                 del sys.modules[key]
 
-    def test_coordinator_empty_state(self, mock_node_yaml_no_projects, tmp_path, caplog):
+    def test_coordinator_empty_state(self, mock_node_yaml_no_projects, tmp_path, caplog, mock_docker_subprocess):
         """Coordinator handles empty state gracefully — no crash, empty arrays + errors."""
         caplog.set_level(0)
 
@@ -912,33 +924,32 @@ class TestCoordinator:
         self._reimport_coordinator()
 
         # Mock all subprocess.run to return empty (no docker)
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+        mock_docker_subprocess.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 
-            from core.internal.healthcheck.platform_export_metrics import main
+        from core.internal.healthcheck.platform_export_metrics import main
 
-            exit_code = main()
+        exit_code = main()
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert exit_code == 0, f"Expected exit code 0, got {exit_code}"
-            assert metrics_file.exists(), "Metrics file should exist"
-            data = json.loads(metrics_file.read_text())
-            assert "containers" in data
-            assert "certs" in data
-            assert "projects" in data
-            assert "host" in data
-            assert "errors" in data
+        assert exit_code == 0, f"Expected exit code 0, got {exit_code}"
+        assert metrics_file.exists(), "Metrics file should exist"
+        data = json.loads(metrics_file.read_text())
+        assert "containers" in data
+        assert "certs" in data
+        assert "projects" in data
+        assert "host" in data
+        assert "errors" in data
 
-    def test_coordinator_partial_failure(self, mock_node_yaml, tmp_path, caplog):
+    def test_coordinator_partial_failure(self, mock_node_yaml, tmp_path, caplog, mock_docker_subprocess):
         """Coordinator produces partial data with errors when some collectors fail."""
         caplog.set_level(0)
 
@@ -952,55 +963,54 @@ class TestCoordinator:
         self._reimport_coordinator()
 
         # Mock docker to succeed but cert to fail
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_docker:
-            mock_docker.side_effect = [
-                # docker ps -aq
-                mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
-                # docker inspect
-                mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps(
-                        [
-                            {
-                                "Id": "sha256:abc123",
-                                "Name": "/nginx",
-                                "State": {
-                                    "Running": True,
-                                    "ExitCode": 0,
-                                    "Status": "Up 2 hours (healthy)",
-                                    "Health": {"Status": "healthy"},
-                                },
-                                "Config": {"Image": "nginx:latest"},
-                                "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
-                            }
-                        ]
-                    ),
-                    stderr="",
+        mock_docker_subprocess.side_effect = [
+            # docker ps -aq
+            mock.Mock(returncode=0, stdout="abc123\n", stderr=""),
+            # docker inspect
+            mock.Mock(
+                returncode=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Id": "sha256:abc123",
+                            "Name": "/nginx",
+                            "State": {
+                                "Running": True,
+                                "ExitCode": 0,
+                                "Status": "Up 2 hours (healthy)",
+                                "Health": {"Status": "healthy"},
+                            },
+                            "Config": {"Image": "nginx:latest"},
+                            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+                        }
+                    ]
                 ),
-                # docker stats
-                mock.Mock(returncode=0, stdout="", stderr=""),
-            ]
+                stderr="",
+            ),
+            # docker stats
+            mock.Mock(returncode=0, stdout="", stderr=""),
+        ]
 
-            from core.internal.healthcheck.platform_export_metrics import main
+        from core.internal.healthcheck.platform_export_metrics import main
 
-            exit_code = main()
+        exit_code = main()
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert exit_code == 0, f"Expected exit code 0 (partial data OK), got {exit_code}"
-            data = json.loads(metrics_file.read_text())
-            assert len(data["containers"]) > 0, "Containers should be present"
-            assert "errors" in data
+        assert exit_code == 0, f"Expected exit code 0 (partial data OK), got {exit_code}"
+        data = json.loads(metrics_file.read_text())
+        assert len(data["containers"]) > 0, "Containers should be present"
+        assert "errors" in data
 
-    def test_coordinator_invalid_yaml(self, tmp_path, caplog):
+    def test_coordinator_invalid_yaml(self, tmp_path, caplog, mock_docker_subprocess):
         """Coordinator handles invalid node.yaml gracefully."""
         caplog.set_level(0)
 
@@ -1017,28 +1027,27 @@ class TestCoordinator:
         self._reimport_coordinator()
 
         # Mock docker to succeed
-        with mock.patch("core.internal.healthcheck.metrics.docker_collector.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                mock.Mock(returncode=0, stdout="", stderr=""),
-            ]
+        mock_docker_subprocess.side_effect = [
+            mock.Mock(returncode=0, stdout="", stderr=""),
+        ]
 
-            from core.internal.healthcheck.platform_export_metrics import main
+        from core.internal.healthcheck.platform_export_metrics import main
 
-            exit_code = main()
+        exit_code = main()
 
-            print("--- LDD TRAJECTORY (IMP:7-10) ---")
-            for record in caplog.records:
-                for attr in ["message", "msg"]:
-                    msg = getattr(record, attr, "")
-                    if "[IMP:" in str(msg):
-                        imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
-                        if imp_level >= 7:
-                            print(msg)
-            print("--- END LDD TRAJECTORY ---")
+        print("--- LDD TRAJECTORY (IMP:7-10) ---")
+        for record in caplog.records:
+            for attr in ["message", "msg"]:
+                msg = getattr(record, attr, "")
+                if "[IMP:" in str(msg):
+                    imp_level = int(str(msg).split("[IMP:")[1].split("]")[0])
+                    if imp_level >= 7:
+                        print(msg)
+        print("--- END LDD TRAJECTORY ---")
 
-            assert exit_code == 0, "Should still exit 0 with partial data"
-            data = json.loads(metrics_file.read_text())
-            assert len(data.get("errors", [])) >= 0
+        assert exit_code == 0, "Should still exit 0 with partial data"
+        data = json.loads(metrics_file.read_text())
+        assert len(data.get("errors", [])) >= 0
 
 
 # ═══════════════════════════════════════════════════════════════════

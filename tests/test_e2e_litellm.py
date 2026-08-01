@@ -78,6 +78,15 @@ def test_litellm_metrics_available(PROMETHEUS_PROXY_URL: str, grafana_credential
         print(f"  \u2022 {metric} \u2192 {value}")
     print("=== END METRICS ===")
 
+    # R1 (B10 T1): the pass path must be falsifiable — assert the Prometheus
+    # series shape. Malformed series (missing metric/value keys) = real failure.
+    assert results, "Prometheus returned no litellm_requests_total time series"
+    for series in results:
+        assert isinstance(series, dict), f"Malformed Prometheus series (not a dict): {series!r}"
+        assert "metric" in series and "value" in series, (
+            f"Malformed Prometheus series (missing metric/value): {series!r}"
+        )
+
     logger.info(
         "[IMP:9][test_litellm_metrics_available][pass] Found %d litellm_requests_total time series \u2014 LiteLLM is being scraped",
         len(results),

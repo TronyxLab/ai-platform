@@ -15,7 +15,10 @@
 # endregion MODULE_CONTRACT
 """
 
+import io
 import sys
+import tarfile
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -255,3 +258,207 @@ def test_cli_upload_command(caplog, monkeypatch):
 
 
 # endregion
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# region B10 T2 additions — native replacements for deleted grep-asserts (DevPlan 116 B10)
+# ═════════════════════════════════════════════════════════════════════════════
+# These cover the gaps formerly guarded by `in content` grep-asserts in
+# tests/test_ssl_s3_cache.py (deleted — redundant Python-source greps per D2):
+#   - G3 account dir resolution (_ecc primary, data/ fallback)
+#   - openssl -checkend expiry path (_validate_cert)
+#   - non-LE issuer rejection (_validate_cert)
+#   - non-fatal return False on S3 errors (_download_s3_file/_upload_s3_file)
+#   - full download restore (fullchain + privkey + chain + account.tar.gz)
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · G3 · _find_acme_account_dir prefers <domain>_ecc
+# · Regression: G3 — account data path was hardcoded to data/<domain>/ which doesn't exist
+# · Last fail: N/A (native replacement for test_upload_with_account_ecc_path grep)
+# · Remove if: _find_acme_account_dir resolution logic changes
+@ldd_trajectory
+def test_find_acme_account_dir_ecc_primary(caplog, tmp_path):
+    """G3: _find_acme_account_dir returns <domain>_ecc/ when both _ecc and data/ exist."""
+    acme = tmp_path / "acme"
+    (acme / "example.com_ecc").mkdir(parents=True)
+    (acme / "data" / "example.com").mkdir(parents=True)
+
+    result = s3_ssl_cache._find_acme_account_dir("example.com", str(acme))
+
+    assert result == str(acme / "example.com_ecc"), f"G3: _ecc path must be primary, got {result}"
+    logger.critical("[IMP:9][test] _find_acme_account_dir prefers <domain>_ecc (G3)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · G3 · _find_acme_account_dir falls back to data/<domain>
+# · Regression: G3 — legacy data/<domain>/ layout must still resolve
+# · Last fail: N/A (native replacement for test_upload_with_account_ecc_path grep)
+# · Remove if: legacy fallback removed
+@ldd_trajectory
+def test_find_acme_account_dir_data_fallback(caplog, tmp_path):
+    """G3: _find_acme_account_dir falls back to data/<domain>/ when _ecc absent."""
+    acme = tmp_path / "acme"
+    (acme / "data" / "example.com").mkdir(parents=True)
+
+    result = s3_ssl_cache._find_acme_account_dir("example.com", str(acme))
+
+    assert result == str(acme / "data" / "example.com"), (
+        f"G3: legacy data/<domain>/ fallback must resolve, got {result}"
+    )
+    logger.critical("[IMP:9][test] _find_acme_account_dir falls back to data/<domain> (G3)")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · 052 · _validate_cert rejects non-LE issuer (mkcert guard)
+# · Regression: 052 Bug — mkcert/dev certs passed validation (no issuer check)
+# · Last fail: N/A (native replacement for test_download_rejects_non_le_issuer grep)
+# · Remove if: issuer validation in _validate_cert changes
+@ldd_trajectory
+def test_validate_cert_rejects_non_le_issuer(caplog, tmp_path, monkeypatch):
+    """_validate_cert() returns False when openssl -issuer is not Let's Encrypt."""
+    cert_path = tmp_path / "cert.pem"
+    cert_path.write_text("fake pem")
+
+    import subprocess as _sp
+
+    def _fake_run(cmd, **kwargs):
+        if "-issuer" in cmd:
+            return _sp.CompletedProcess(cmd, 0, stdout="issuer=CN = mkcert dev CA", stderr="")
+        if "-subject" in cmd:
+            return _sp.CompletedProcess(cmd, 0, stdout="subject=CN = example.com", stderr="")
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    fake_subprocess = types.SimpleNamespace(
+        run=_fake_run,
+        TimeoutExpired=_sp.TimeoutExpired,
+        FileNotFoundError=FileNotFoundError,
+        OSError=OSError,
+    )
+    monkeypatch.setattr(s3_ssl_cache, "subprocess", fake_subprocess)
+
+    result = s3_ssl_cache._validate_cert(str(cert_path), "example.com")
+
+    assert result is False, "Non-LE issuer (mkcert) must be rejected"
+    logger.critical("[IMP:9][test] _validate_cert rejects non-LE issuer — mkcert regression guard")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · openssl-checkend path · expiring cert rejected
+# · Regression: 052 — expired certs must not be restored
+# · Last fail: N/A (gap fill for openssl-checkend path per B10 T2)
+# · Remove if: expiry validation logic changes
+@ldd_trajectory
+def test_validate_cert_checkend_expiring_fails(caplog, tmp_path, monkeypatch):
+    """_validate_cert(check_expiry=True) returns False when openssl -checkend fails (<30 days)."""
+    cert_path = tmp_path / "cert.pem"
+    cert_path.write_text("fake pem")
+
+    import subprocess as _sp
+
+    def _fake_run(cmd, **kwargs):
+        if "-issuer" in cmd:
+            return _sp.CompletedProcess(cmd, 0, stdout="issuer=CN = Let's Encrypt", stderr="")
+        if "-subject" in cmd:
+            return _sp.CompletedProcess(cmd, 0, stdout="subject=CN = example.com", stderr="")
+        if "-checkend" in cmd:
+            return _sp.CompletedProcess(cmd, 1, stdout="", stderr="certificate expires soon")
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    fake_subprocess = types.SimpleNamespace(
+        run=_fake_run,
+        TimeoutExpired=_sp.TimeoutExpired,
+        FileNotFoundError=FileNotFoundError,
+        OSError=OSError,
+    )
+    monkeypatch.setattr(s3_ssl_cache, "subprocess", fake_subprocess)
+
+    result = s3_ssl_cache._validate_cert(str(cert_path), "example.com", check_expiry=True)
+
+    assert result is False, "Cert expiring within 30 days must fail checkend validation"
+    logger.critical("[IMP:9][test] _validate_cert checkend path — expiring cert rejected")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · non-fatal · _download_s3_file returns False on ClientError
+# · Regression: 052 — S3 failures must never raise (graceful degradation)
+# · Last fail: N/A (gap fill for non-fatal return False per B10 T2)
+# · Remove if: _download_s3_file error handling changes
+@ldd_trajectory
+def test_download_s3_file_nonfatal_on_client_error(caplog, tmp_path, monkeypatch):
+    """_download_s3_file() returns False (not raises) on boto3 ClientError — non-fatal."""
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+
+    mock_client = MagicMock()
+    mock_client.download_file.side_effect = s3_ssl_cache.ClientError({"Error": {"Code": "NoSuchKey"}}, "download_file")
+    with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client):
+        ok = s3_ssl_cache._download_s3_file("platform/ssl-certs/x/fullchain.pem", str(tmp_path / "dst.pem"))
+
+    assert ok is False, "ClientError must be swallowed into return False (non-fatal)"
+    logger.critical("[IMP:9][test] _download_s3_file non-fatal on ClientError — returns False")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · non-fatal · _upload_s3_file returns False on ClientError
+# · Regression: 052 — S3 upload failures must never raise (graceful degradation)
+# · Last fail: N/A (gap fill for non-fatal return False per B10 T2)
+# · Remove if: _upload_s3_file error handling changes
+@ldd_trajectory
+def test_upload_s3_file_nonfatal_on_client_error(caplog, tmp_path, monkeypatch):
+    """_upload_s3_file() returns False (not raises) on boto3 ClientError — non-fatal."""
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    src = tmp_path / "cert.pem"
+    src.write_text("content")
+
+    mock_client = MagicMock()
+    mock_client.upload_file.side_effect = s3_ssl_cache.ClientError({"Error": {"Code": "AccessDenied"}}, "upload_file")
+    with patch.object(s3_ssl_cache, "_get_s3_client", return_value=mock_client):
+        ok = s3_ssl_cache._upload_s3_file(str(src), "platform/ssl-certs/x/fullchain.pem")
+
+    assert ok is False, "ClientError must be swallowed into return False (non-fatal)"
+    logger.critical("[IMP:9][test] _upload_s3_file non-fatal on ClientError — returns False")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · G3/full-restore · download_cert restores all 4 artifacts
+# · Regression: 052/G3 — full restore path (fullchain + privkey + chain + account.tar.gz)
+# · Last fail: N/A (native replacement for test_download_accepts_le_cert grep)
+# · Remove if: download_cert restore logic changes
+@ldd_trajectory
+def test_download_cert_restores_all_artifacts(caplog, tmp_path, monkeypatch):
+    """download_cert() restores fullchain + privkey + chain + account.tar.gz (full path)."""
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    acme_home = tmp_path / "acme"
+
+    def _fake_download(s3_key, local_dst):
+        if local_dst.endswith(".tar.gz"):
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                data = b"account-data"
+                info = tarfile.TarInfo("example.com_ecc/account.json")
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+            with open(local_dst, "wb") as f:
+                f.write(buf.getvalue())
+        else:
+            with open(local_dst, "w") as f:
+                f.write(f"pem content: {s3_key}")
+        return True
+
+    with (
+        patch.object(s3_ssl_cache, "_get_s3_client", return_value=MagicMock()),
+        patch.object(s3_ssl_cache, "_validate_cert", return_value=True),
+        patch.object(s3_ssl_cache, "_download_s3_file", side_effect=_fake_download),
+    ):
+        result = s3_ssl_cache.download_cert(
+            "example.com",
+            cert_dir=str(tmp_path / "live"),
+            acme_home=str(acme_home),
+            s3_bucket="test-bucket",
+        )
+
+    assert result is True, "download_cert must return True on full restore"
+    live = tmp_path / "live" / "example.com"
+    assert (live / "fullchain.pem").exists(), "fullchain.pem must be restored"
+    assert (live / "privkey.pem").exists(), "privkey.pem must be restored"
+    assert (live / "chain.pem").exists(), "chain.pem must be restored (optional)"
+    assert (acme_home / "example.com_ecc" / "account.json").exists(), (
+        "account.tar.gz must be extracted to acme_home (G3)"
+    )
+    logger.critical("[IMP:9][test] download_cert restores all 4 artifacts (fullchain+privkey+chain+account)")
+
+
+# endregion B10 T2 additions

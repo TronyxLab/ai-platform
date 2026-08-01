@@ -266,6 +266,24 @@ def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
     return app_module
 
 
+@pytest.fixture
+def mock_subprocess():
+    """Boundary fixture (T3 D1): ONE subprocess.run mock for the whole file.
+
+    ## @purpose — Replaces 16 inline subprocess.run patch blocks. Default
+    ##            behavior: curl returns HTTP 200 (healthy vhost). Tests override
+    ##            return_value/side_effect for specific status codes / timeouts.
+    ## @io — ⎋ MagicMock (subprocess.run) — assert on rendered result, not on calls
+    ## @complexity — O(1)
+    ## @invariants
+    ##   - Patching GLOBAL subprocess.run — the only I/O boundary status-page app.py uses
+    ##   - Assertions on observable rendered results only (D1, без интроспекции вызовов)
+    """
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        yield mock_run
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: app.py — health endpoint
 # ═══════════════════════════════════════════════════════════════════
@@ -274,15 +292,14 @@ def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
 class TestStatusPageHealth:
     """Tests for /health endpoint — binary verdict."""
 
-    def test_health_pass(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_health_pass(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess):
         """All services healthy → /health returns PASS."""
         caplog.set_level(0)
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         # ── LDD TRAJECTORY ──
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -332,15 +349,14 @@ class TestStatusPageHealth:
 class TestStatusPageHtml:
     """Tests for HTML output."""
 
-    def test_html_contains_vhosts(self, mock_node_yaml, mock_status_metrics_json_all_pass, caplog):
+    def test_html_contains_vhosts(self, mock_node_yaml, mock_status_metrics_json_all_pass, caplog, mock_subprocess):
         """HTML response contains vhosts from node.yaml."""
         caplog.set_level(0)
 
         app = _setup_app_env(str(mock_node_yaml), str(mock_status_metrics_json_all_pass))
 
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         # ── LDD TRAJECTORY ──
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -446,11 +462,8 @@ class TestStatusPageHtml047:
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        from unittest import mock as _mock
-
-        with _mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         html = app._render_html(data)
 
@@ -469,17 +482,16 @@ class TestStatusPageHtml047:
                         print(msg)
         print("--- END LDD TRAJECTORY ---")
 
-    def test_html_structure_has_os_fields(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_html_structure_has_os_fields(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+    ):
         """HTML contains OS / Kernel row."""
         caplog.set_level(0)
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        from unittest import mock as _mock
-
-        with _mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         html = app._render_html(data)
 
@@ -497,17 +509,16 @@ class TestStatusPageHtml047:
                         print(msg)
         print("--- END LDD TRAJECTORY ---")
 
-    def test_html_structure_no_cicd_badges(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_html_structure_no_cicd_badges(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+    ):
         """HTML does NOT contain CI/CD Pipeline Verified badges."""
         caplog.set_level(0)
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        from unittest import mock as _mock
-
-        with _mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         html = app._render_html(data)
 
@@ -525,17 +536,16 @@ class TestStatusPageHtml047:
                         print(msg)
         print("--- END LDD TRAJECTORY ---")
 
-    def test_html_structure_has_quick_nav(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_html_structure_has_quick_nav(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+    ):
         """HTML contains quick-nav navbar with section anchors."""
         caplog.set_level(0)
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        from unittest import mock as _mock
-
-        with _mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         html = app._render_html(data)
 
@@ -564,11 +574,8 @@ class TestStatusPageHtml047:
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        from unittest import mock as _mock
-
-        with _mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         html = app._render_html(data)
 
@@ -594,11 +601,8 @@ class TestStatusPageHtml047:
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        from unittest import mock as _mock
-
-        with _mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = _mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         html = app._render_html(data)
 
@@ -766,7 +770,7 @@ class TestStatusPageAntiRecursion:
 class TestStatusPageTimeout:
     """Tests for per-check timeout behavior."""
 
-    def test_timeout_per_check(self, mock_node_yaml, tmp_path, caplog):
+    def test_timeout_per_check(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
         """Unreachable vhost → FAIL that check, not entire request failure."""
         caplog.set_level(0)
 
@@ -796,9 +800,8 @@ class TestStatusPageTimeout:
 
         app = _setup_app_env(str(node_yaml), str(metrics_file))
 
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired(cmd=["curl"], timeout=5)
-            data = app.get_all_checks()
+        mock_subprocess.side_effect = subprocess.TimeoutExpired(cmd=["curl"], timeout=5)
+        data = app.get_all_checks()
 
         # ── LDD TRAJECTORY ──
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -859,7 +862,7 @@ class TestStatusPageXHeaders:
 class TestStatusPageAuthHandling:
     """Tests for HTTP auth handling: 401/403 treated as PASS (service alive, auth required)."""
 
-    def test_vhost_401_is_pass(self, mock_node_yaml, tmp_path, caplog):
+    def test_vhost_401_is_pass(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
         """Vhost returning 401 (auth required) → PASS — service is alive and responding."""
         caplog.set_level(0)
 
@@ -875,9 +878,8 @@ class TestStatusPageAuthHandling:
         )
 
         app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
+        data = app.get_all_checks()
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
@@ -897,7 +899,7 @@ class TestStatusPageAuthHandling:
             )
             assert vc["http_code"] == 401
 
-    def test_vhost_403_is_pass(self, mock_node_yaml, tmp_path, caplog):
+    def test_vhost_403_is_pass(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
         """Vhost returning 403 (forbidden) → PASS — service is alive and responding."""
         caplog.set_level(0)
 
@@ -913,9 +915,8 @@ class TestStatusPageAuthHandling:
         )
 
         app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
+        data = app.get_all_checks()
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
@@ -935,7 +936,7 @@ class TestStatusPageAuthHandling:
             )
             assert vc["http_code"] == 403
 
-    def test_vhost_404_is_warn(self, mock_node_yaml, tmp_path, caplog):
+    def test_vhost_404_is_warn(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
         """Vhost returning 404 → WARN — service is reachable but path not found."""
         caplog.set_level(0)
 
@@ -951,9 +952,8 @@ class TestStatusPageAuthHandling:
         )
 
         app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="404", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="404", stderr="")
+        data = app.get_all_checks()
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -961,7 +961,7 @@ class TestStatusPageAuthHandling:
             assert vc["status"] == "WARN", f"Expected WARN for 404 (not found), got {vc['status']} for {vc['target']}"
             assert vc["http_code"] == 404
 
-    def test_vhost_500_is_warn(self, mock_node_yaml, tmp_path, caplog):
+    def test_vhost_500_is_warn(self, mock_node_yaml, tmp_path, caplog, mock_subprocess):
         """Vhost returning 500 → WARN — service is reachable but internal error."""
         caplog.set_level(0)
 
@@ -977,9 +977,8 @@ class TestStatusPageAuthHandling:
         )
 
         app = _setup_app_env(str(mock_node_yaml), str(metrics_file))
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="500", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="500", stderr="")
+        data = app.get_all_checks()
 
         vhost_checks = [c for c in data["checks"] if c["type"] == "vhost"]
         assert len(vhost_checks) > 0, "Should have vhost checks"
@@ -989,15 +988,16 @@ class TestStatusPageAuthHandling:
             )
             assert vc["http_code"] == 500
 
-    def test_platform_service_401_is_pass(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_platform_service_401_is_pass(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+    ):
         """Platform service returning 401 → PASS — service is alive, auth required."""
         caplog.set_level(0)
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="401", stderr="")
+        data = app.get_all_checks()
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
@@ -1017,15 +1017,16 @@ class TestStatusPageAuthHandling:
             )
             assert pc["http_code"] == 401
 
-    def test_platform_service_403_is_pass(self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog):
+    def test_platform_service_403_is_pass(
+        self, mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass, caplog, mock_subprocess
+    ):
         """Platform service returning 403 → PASS — service is alive, access denied."""
         caplog.set_level(0)
 
         app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
 
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="403", stderr="")
+        data = app.get_all_checks()
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
@@ -1099,7 +1100,7 @@ class TestStatusPageNewFeatures:
         assert result.get("certs", []) == [], "Certs should be empty list"
         assert result.get("projects", []) == [], "Projects should be empty list"
 
-    def test_status_page_schema_version_check(self, tmp_path, caplog):
+    def test_status_page_schema_version_check(self, tmp_path, caplog, mock_subprocess):
         """status-page warns on old schema_version (<2) but continues (AC13-M)."""
         caplog.set_level(0)
 
@@ -1122,9 +1123,8 @@ class TestStatusPageNewFeatures:
         )
 
         app = _setup_app_env(str(node_yaml), str(metrics_file))
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
-            data = app.get_all_checks()
+        mock_subprocess.return_value = mock.Mock(returncode=0, stdout="200", stderr="")
+        data = app.get_all_checks()
 
         print("--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:

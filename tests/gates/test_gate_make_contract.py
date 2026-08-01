@@ -24,6 +24,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _conftest.ldd import _print_ldd_trajectory
 
 from tests.helpers.gate_helpers import repo_root
 
@@ -48,21 +49,6 @@ _DOCKER_MODULES = [
 
 # Матрица D1: stateful-модули, объявляющие backup/restore
 _STATEFUL_MODULES = {"postgres", "backup-cron", "hermes-agent"}
-
-
-def _print_ldd_trajectory(caplog, test_name: str) -> bool:
-    """Print IMP:7-10 LDD trajectory from caplog and return whether IMP:9+ was found."""
-    found = False
-    print(f"\n--- LDD TRAJECTORY ({test_name}) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                print(record.message)
-            if imp_level >= 9:
-                found = True
-    print("--- END LDD TRAJECTORY ---")
-    return found
 
 
 def _parse_phony_targets(makefile: Path) -> list[str]:

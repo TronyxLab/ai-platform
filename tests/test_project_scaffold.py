@@ -124,7 +124,7 @@ def _projects_writable() -> bool:
         opt_projects.mkdir(parents=True, exist_ok=True)
         return True
     except (PermissionError, OSError):
-        pass
+        logger.debug("[IMP:7][ensure_opt_projects] Direct mkdir failed — attempting sudo")
 
     # Try with sudo
     if shutil.which("sudo"):

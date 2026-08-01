@@ -727,6 +727,12 @@ non_repairable_gates:
   repair_class: L3
   repair_reason: 'Template syntax contract: config/ uses ${}, templates/ uses {{}},
     no mixed syntax'
+- gate_id: r1_no_pass_tests
+  repairable: false
+  repair_class: L2
+  repair_reason: 'Test Honesty R1 (.kilo/rules/testing.md): manual test fix — remove
+    assert True / константный assert или bare-pass в except (DevPlan 116 B10 T1).
+    Allowlist пуст — легитимная правка = удалить pass-ассерт.'
 forbidden_directories:
 - core/scripts/e2e
 - core/scripts
@@ -1561,6 +1567,18 @@ gates:
 - id: test_strict_markers_in_pyproject_toml
   test_file: test_gate_pytest_markers.py
   description: 'Auto-discovered gate: test_strict_markers_in_pyproject_toml'
+- id: test_r1_negative_bare_pass_except_detected
+  test_file: test_gate_r1_no_pass_tests.py
+  description: 'Auto-discovered gate: test_r1_negative_bare_pass_except_detected'
+- id: test_r1_negative_constant_assert_detected
+  test_file: test_gate_r1_no_pass_tests.py
+  description: 'Auto-discovered gate: test_r1_negative_constant_assert_detected'
+- id: test_r1_negative_no_assert_file_detected
+  test_file: test_gate_r1_no_pass_tests.py
+  description: 'Auto-discovered gate: test_r1_negative_no_assert_file_detected'
+- id: test_r1_no_pass_tests
+  test_file: test_gate_r1_no_pass_tests.py
+  description: 'Auto-discovered gate: test_r1_no_pass_tests'
 - id: deepseek_required_in_module_yaml
   test_file: test_gate_secrets_llm_cleanup.py
   description: 'Auto-discovered gate: deepseek_required_in_module_yaml'

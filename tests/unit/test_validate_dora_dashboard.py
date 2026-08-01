@@ -257,4 +257,49 @@ def test_cli_exit_code(caplog, tmp_path):
     logger.critical("[IMP:9][test] test_cli_exit_code — CLI exit codes correct (0=valid, 1=invalid)")
 
 
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · extra panels beyond required 4 are allowed
+# · Scenario: dashboard with 5th panel (Workflow Runs 30d) → validate returns True
+# · Last fail: N/A (migrated from deleted tests/test_unit_validate_dora_dashboard.py)
+# · Remove if: panel count becomes strict
+@ldd_trajectory
+def test_extra_panels_allowed(caplog, tmp_path):
+    """Extra panels beyond the required 4 do not break validation (forward compat)."""
+    data = {
+        "uid": "dora-ci-cd",
+        "title": "DORA Metrics",
+        "panels": [
+            {"title": "Deploy Frequency", "type": "stat"},
+            {"title": "Lead Time for Changes", "type": "stat"},
+            {"title": "Mean Time to Recovery (MTTR)", "type": "stat"},
+            {"title": "Change Failure Rate (CFR)", "type": "stat"},
+            {"title": "Workflow Runs (30d)", "type": "stat"},
+        ],
+    }
+    path = tmp_path / "extra_panels.json"
+    path.write_text(json.dumps(data))
+
+    result = vdd.validate(path)
+    assert result is True, "Extra panels must not break validation (production dashboard has 5)"
+    logger.critical("[IMP:9][test] test_extra_panels_allowed — 5th panel accepted")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · CLI default path contract
+# · Scenario: CLI invoked without args uses default production dashboard path → exit 0
+# · Last fail: N/A (migrated from deleted tests/test_unit_validate_dora_dashboard.py)
+# · Remove if: default path removed
+@ldd_trajectory
+def test_cli_default_path_works(caplog):
+    """CLI with no args uses the default production dashboard path (used by platform-test.yml)."""
+    project_root = _MODULE_DIR.parents[2]
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        cwd=str(project_root),
+    )
+    assert result.returncode == 0, f"Default dashboard invalid: stderr={result.stderr}"
+    logger.critical("[IMP:9][test] test_cli_default_path_works — default dashboard valid, exit 0")
+
+
 # endregion

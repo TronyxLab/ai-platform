@@ -22,6 +22,7 @@ import pathlib
 import jsonschema
 import pytest
 import yaml
+from _conftest.ldd import _print_ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -46,34 +47,6 @@ def _load_llm_schema() -> dict:
         raise FileNotFoundError(f"LLM policy schema not found: {LLM_POLICY_SCHEMA_PATH}")
     with open(LLM_POLICY_SCHEMA_PATH) as f:
         return json.load(f)
-
-
-def _print_ldd_trajectory(caplog, test_name: str) -> bool:
-    """Print IMP:7-10 LDD trajectory from caplog and return whether IMP:9+ was found.
-
-    ## @purpose  Centralised LDD trajectory printer for all test functions.
-    ##           Follows the pattern from RULES.md §TESTING.
-    ## @io
-    ##   - caplog — pytest caplog fixture
-    ##   - test_name: str — test identifier for log prefix
-    ##   - ⎋ bool — True if at least one IMP:9+ log was found
-    ## @complexity O(N) where N = caplog records
-    """
-    found = False
-    print(f"\n--- LDD TRAJECTORY ({test_name}) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            try:
-                imp_str = record.message.split("[IMP:")[1].split("]")[0]
-                imp_level = int(imp_str)
-                if imp_level >= 7:
-                    print(record.message)
-                if imp_level >= 9:
-                    found = True
-            except (IndexError, ValueError):
-                pass
-    print("--- END LDD TRAJECTORY ---")
-    return found
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -270,7 +243,14 @@ def test_invalid_policy_missing_aliases_rejected(invalid_policy_path, caplog):
             str(exc_info.value)[:200],
         )
 
-        assert True, "Exception was raised as expected"
+        # R1 (B10 T1): real assertion on the exception — the invalid fixture is
+        # missing the `aliases` section, so validation must fail on that exact
+        # missing-key contract (not just "some exception was raised").
+        exc_text = str(exc_info.value)
+        assert "aliases" in exc_text.lower(), (
+            f"Expected exception to reference missing 'aliases' section, got: {exc_text[:300]}"
+        )
+        assert isinstance(exc_info.value, Exception)
 
         found_imp9 = _print_ldd_trajectory(caplog, "test_invalid_missing_aliases")
         assert found_imp9, "LDD Error: No IMP:9 log for test_invalid_missing_aliases"

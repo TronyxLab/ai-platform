@@ -165,7 +165,9 @@ def _get_registered_markers() -> set[str]:
             )
             return markers
         except Exception:
-            pass
+            logger.debug(
+                "[IMP:7][_get_registered_markers] pyproject.toml markers unreadable — falling back to pytest.ini"
+            )
 
     # Fallback: legacy pytest.ini
     _pytest_ini = _PROJECT_ROOT / "pytest.ini"

@@ -56,14 +56,14 @@ def _extract_host_ports(compose_data: dict) -> list[tuple[str, str, int]]:
                     host_port = int(parts[1])
                     result.append((svc_name, port_str, host_port))
                 except ValueError:
-                    pass  # variable substitution, skip
+                    continue  # variable substitution — skip this port entry (R1: no bare pass)
             elif len(parts) == 2:
                 # Format: host_port:container_port or maybe ip:port
                 try:
                     host_port = int(parts[0])
                     result.append((svc_name, port_str, host_port))
                 except ValueError:
-                    pass
+                    continue  # skip this port entry (R1: no bare pass)
             else:
                 # Just container port — no host port binding
                 pass
@@ -85,7 +85,7 @@ def _is_hardcoded_port(port_entry) -> bool:
         int(port_str)
         return True
     except ValueError:
-        pass
+        logger.debug("[IMP:7][_is_hardcoded_port] '%s' is not a pure number — parsing complex format", port_str)
     # Parse complex format for hardcoded numbers
     # Strip protocol
     port_str_clean = re.sub(r"/[a-z]+$", "", port_str)
@@ -98,7 +98,7 @@ def _is_hardcoded_port(port_entry) -> bool:
             int(part)
             return True  # found a hardcoded number
         except ValueError:
-            pass
+            continue  # not a number — try next part (R1: no bare pass)
     return False
 
 

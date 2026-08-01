@@ -74,6 +74,7 @@ Gate-тесты делятся на категории по предмету п�
 | image tag form | `test_gate_image_tag_form.py` (NEW) | ghcr refs = версионный тег/digest-pin; голый :latest RED; allowlist dev/test |
 | prometheus single source | `test_gate_env_chain.py` (расширен: negative prometheus.yml-дубль запрещён) | .tmpl — единственный источник (U-48) |
 | P20 prometheus targets | `test_p20_container_coupling.py` (PROMETHEUS_YML → .tmpl) | targets резолвятся из .tmpl |
+| R1 no-pass-tests (B10 T1, U-69) | `test_gate_r1_no_pass_tests.py` (NEW) | Test Honesty R1: ast-скан tests/**/*.py — константный assert / bare-pass except / файл без ассертов = RED. Allowlist пуст. repair_class L2 (ручная правка теста) |
 
 ---
 

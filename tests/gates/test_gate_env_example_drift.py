@@ -179,7 +179,7 @@ def test_s3_endpoint_removed(caplog):
                         ctx_end = min(len(content), m.end() + 30)
                         violations.append(f"{search_path}: ...{content[ctx_start:ctx_end]}...")
             except Exception:
-                pass
+                logger.debug("[IMP:7][env-drift] Skipping unreadable search path: %s", search_path)
             continue
         # Directory — search files
         for ext in ("*.py", "*.yml", "*.yaml", "*.sh", "*.env"):
@@ -199,7 +199,7 @@ def test_s3_endpoint_removed(caplog):
                             ctx_end = min(len(content), m.end() + 30)
                             violations.append(f"{fpath}: ...{content[ctx_start:ctx_end]}...")
                 except Exception:
-                    pass
+                    logger.debug("[IMP:7][env-drift] Skipping unreadable file: %s", fpath)
 
     if violations:
         logger.error("[IMP:10][gate] S3_ENDPOINT (without _URL) found in production code:")

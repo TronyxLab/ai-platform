@@ -47,7 +47,7 @@ def _print_ldd(stderr: str, stdout: str) -> bool:
                 if imp_level >= 9:
                     found_imp9 = True
             except (ValueError, IndexError):
-                pass
+                logger.debug("[IMP:7][age-key] MALFORMED IMP tag: %s", line.strip())
     print("--- END LDD TRAJECTORY ---")
     return found_imp9
 

@@ -207,7 +207,7 @@ def test_all_modules_included(caplog):
                 if idx + 1 < len(parts):
                     include_modules.add(parts[idx + 1])
             except ValueError:
-                pass
+                logger.debug("[IMP:7][local_stack] Include path without 'modules' segment: %s", path_str)
 
     logger.info("[IMP:9][gate][local_stack] Include modules: %s", sorted(include_modules))
 

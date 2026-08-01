@@ -91,7 +91,7 @@ def _check_sqlite_in_config_file(config_path: Path) -> list[str]:
             if "sqlite" in line.lower() and ":///" in line:
                 violations.append(f"{config_path.name}:{i}: {line.strip()}")
     except (OSError, UnicodeDecodeError):
-        pass
+        logger.debug("[IMP:7][pg-enforcement] Unreadable config %s — skipping", config_path)
     return violations
 
 

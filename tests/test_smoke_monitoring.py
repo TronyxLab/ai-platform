@@ -64,6 +64,18 @@ _EXTERNAL_NETWORKS = ["test-observability-net", "test-proxy-net"]
 ## @purpose — Module-scoped compose lifecycle fixture for monitoring smoke tests.
 ##            Pre-cleans wave-monitoring project, starts wave-monitoring-smoke,
 ##            yields, tears down on completion.
+# 📝 TRAP[DEBT] · 2026-08-01 · MED · monitoring test stack: volume prometheus-config-gen не объявлен
+# · Observed: compose up падает «service "prometheus" refers to undefined volume prometheus-config-gen»
+# ·   (docker-compose.base.yml:67,104 ссылаются на volume; docker-compose.test.yml объявляет только
+#   networks, не volumes; root compose объявляет volume, но test-стек его не наследует — B3 volumes SoT).
+# · Suspected: B3 (volumes SoT, 80e9d54) консолидировал volumes в root compose; monitoring test-override
+#   не получил volumes-секцию → test-стек сломан с момента B3.
+# · Impact: 3 smoke-теста мониторинга (grafana/prometheus/targets) — ERROR в setup; НЕ входит в
+#   make gate / MARKER=static (requires_docker+smoke) — gate не блокирует, но smoke-покрытие потеряно.
+# · When: верификация B10 T10 (2026-08-01) — pre-existing, не связано с B10 (B10 изменил только
+#   teardown: убрал docker network rm для shared external-сетей).
+# · Fix: добавить `volumes: prometheus-config-gen: {driver: local}` в docker-compose.test.yml —
+#   вне скоупа B10.
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +91,7 @@ def monitoring_compose():
     ##   - Creates external Docker networks if absent (removes if created)
     ##   - docker compose up -d --wait with 90s timeout
     ##   - Teardown: docker compose down -v --remove-orphans --timeout 5
-    ##   - Only removes Docker networks if fixture created them (created_by_us set)
+    ##   - Shared external networks are NEVER removed in teardown (B10 T5 contract)
     """
     _logger = logging.getLogger(__name__)
     _logger.info("[IMP:7][monitoring_compose][setup] Starting monitoring smoke fixture")
@@ -119,7 +131,6 @@ def monitoring_compose():
         _logger.warning("[IMP:8][monitoring_compose][setup] wave-monitoring down timed out")
 
     # ── Step 2: Ensure external networks exist ─────────────────────────────
-    created_by_us = set()
     for net in _EXTERNAL_NETWORKS:
         _logger.info("[IMP:7][monitoring_compose][setup] Checking network %s", net)
         try:
@@ -138,7 +149,6 @@ def monitoring_compose():
                     timeout=_NETWORK_CREATE_TIMEOUT,
                     check=True,
                 )
-                created_by_us.add(net)
                 _logger.info("[IMP:9][monitoring_compose][setup] Created %s", net)
             else:
                 _logger.info("[IMP:8][monitoring_compose][setup] %s already exists", net)
@@ -300,19 +310,12 @@ def monitoring_compose():
     except subprocess.TimeoutExpired:
         _logger.warning("[IMP:8][monitoring_compose][teardown] compose down timed out")
 
-    # ── Remove networks only if we created them ───────────────────────────
-    for net in created_by_us:
-        _logger.info("[IMP:7][monitoring_compose][teardown] Removing network %s (created by fixture)", net)
-        try:
-            subprocess.run(
-                ["docker", "network", "rm", net],
-                capture_output=True,
-                text=True,
-                timeout=_NETWORK_CREATE_TIMEOUT,
-            )
-            _logger.info("[IMP:9][monitoring_compose][teardown] %s removed", net)
-        except subprocess.TimeoutExpired:
-            _logger.warning("[IMP:8][monitoring_compose][teardown] Failed to remove %s", net)
+    # ── External networks are NEVER removed in teardown (contract, DevPlan 116 B10 T5) ──
+    # test-observability-net/test-proxy-net are SHARED external test networks (tests/_conftest/
+    # networks.py TEST_NETWORKS). B10 T5 contract: shared external networks are created once,
+    # reused across sessions, and MUST NOT be removed in teardown (parallel-session race —
+    # TRAP[DEBT] 2026-07-15 networks.py). The old `created_by_us` rm-loop was removed 2026-08-01
+    # (was: this fixture deleted networks it created while other sessions still needed them).
 
     _logger.info("[IMP:9][monitoring_compose][teardown] Fixture teardown complete")
 

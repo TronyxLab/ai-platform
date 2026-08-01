@@ -23,6 +23,7 @@ import pathlib
 
 import pytest
 import yaml
+from _conftest.ldd import _print_ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -35,29 +36,6 @@ _REAL_POLICY_PATH = _PROJECT_ROOT / "core" / "internal" / "llm" / "policy.yaml"
 
 # Real Jinja2 template path
 _REAL_TEMPLATE_PATH = _PROJECT_ROOT / "core" / "modules" / "litellm" / "config" / "litellm-config.yml.j2"
-
-
-def _print_ldd_trajectory(caplog, test_name: str) -> bool:
-    """Print IMP:7-10 LDD trajectory from caplog and return whether IMP:9+ was found.
-
-    ## @purpose  Centralised LDD trajectory printer following RULES.md §TESTING pattern.
-    ## @complexity O(N) where N = caplog records
-    """
-    found = False
-    print(f"\n--- LDD TRAJECTORY ({test_name}) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            try:
-                imp_str = record.message.split("[IMP:")[1].split("]")[0]
-                imp_level = int(imp_str)
-                if imp_level >= 7:
-                    print(record.message)
-                if imp_level >= 9:
-                    found = True
-            except (IndexError, ValueError):
-                pass
-    print("--- END LDD TRAJECTORY ---")
-    return found
 
 
 @pytest.fixture

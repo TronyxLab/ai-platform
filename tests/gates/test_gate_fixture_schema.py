@@ -42,7 +42,7 @@ def test_all_test_fixtures_match_schemas() -> None:
     )
 
     # Run validation — pytest.exit on failure, no return value on success
+    # _validate_test_fixtures() either completes (fixtures valid) or raises
+    # pytest.exit (invalid fixtures) — reaching this point is the assertion.
+    # R1 (B10 T1): trailing `assert True` removed — it was a pass-assert.
     _validate_test_fixtures()
-
-    # If we reach here, all fixtures validated successfully
-    assert True  # Explicit assertion to satisfy Test Honesty R1

@@ -21,34 +21,11 @@ import logging
 import sys
 
 import pytest
+from _conftest.ldd import _print_ldd_trajectory
 
 from core.internal.monitoring_config_renderer import main
 
 logger = logging.getLogger(__name__)
-
-
-def _print_ldd_trajectory(caplog, test_name: str) -> bool:
-    """Print IMP:7-10 LDD trajectory from caplog and return whether IMP:9+ was found.
-
-    ## @purpose  Centralised LDD trajectory printer per RULES.md §TESTING.
-    ## @io       ⇥ caplog, test_name → ⎋ bool (IMP:9+ found)
-    ## @complexity O(N) — N caplog records
-    """
-    found = False
-    print(f"\n--- LDD TRAJECTORY ({test_name}) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            imp_str = record.message.split("[IMP:")[1].split("]")[0]
-            try:
-                imp_level = int(imp_str)
-            except ValueError:
-                continue
-            if imp_level >= 7:
-                print(record.message)
-            if imp_level >= 9:
-                found = True
-    print("--- END LDD TRAJECTORY ---")
-    return found
 
 
 # 🧪 TRAP[TEST] · render_monitoring_cli_valid · Contract · Regression: make render-monitoring exit code

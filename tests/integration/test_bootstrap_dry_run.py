@@ -35,6 +35,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from _conftest.ldd import _print_ldd_trajectory
 
 from core.internal.bootstrap.lifecycle.state_machine import (
     BootstrapPhase,
@@ -342,27 +343,6 @@ def _mark_phase_done(sm: StateMachine, phase_value: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 # region LDD Helper
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-def _print_ldd_trajectory(caplog: pytest.LogCaptureFixture, test_name: str) -> bool:
-    """Print IMP:7-10 log trajectory from caplog and return True if IMP:9 found.
-
-    ## @purpose — Centralized LDD trajectory printer for all test functions.
-    ##            Extracts and displays IMP:7-10 log entries for agent-visible telemetry.
-    ## @io — ⇥ caplog: LogCaptureFixture, test_name: str → ⎋ bool (IMP:9 found)
-    ## @complexity — O(n) where n = number of caplog records
-    """
-    found_imp9 = False
-    print(f"\n--- LDD TRAJECTORY (IMP:7-10) [{test_name}] ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                print(f"  [{record.levelname}] {record.message}")
-            if imp_level >= 9:
-                found_imp9 = True
-    print(f"--- END LDD TRAJECTORY [{test_name}] ---")
-    return found_imp9
 
 
 # endregion LDD Helper

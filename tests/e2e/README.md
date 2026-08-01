@@ -70,6 +70,17 @@ make gate MODE=fast        # зелёный — requires_node тесты иск�
 make test MARKER=static    # requires_node тесты не запускаются
 ```
 
+## CI Preflight Checklist (B10 T9, DevPlan 116 D3)
+
+Перед merge волны, затрагивающей bootstrap/e2e-контракты — локальный прогон E2E (без CI-джобы — решение пользователя 11-Brief AC11):
+
+```bash
+# 1. VPS доступен + AGE-ключ на месте (см. Environment Variables)
+make test-node NODE=test-e2e     # 11 requires_node тестов — все PASSED
+# 2. Если VPS недоступен в момент прогона — зафиксировать в отчёте QA +
+#    повтор после волны (manual-шаг, не блокирует merge)
+```
+
 ## Troubleshooting
 
 | Симптом | Причина | Решение |

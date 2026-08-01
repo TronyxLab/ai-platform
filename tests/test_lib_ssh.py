@@ -21,6 +21,7 @@ import subprocess
 import textwrap
 
 import pytest
+from _conftest.ldd import _dump_ldd_trajectory
 
 # Path to the ssh.sh library under test
 SSH_SH_PATH = os.path.join(
@@ -146,38 +147,6 @@ def _run_wrapper(wrapper_path, mock_bin_dir=None):
 # endregion FUNC__run_wrapper
 
 
-# ──────────────────────────────────────────────────────────────
-# region FUNC__print_ldd_trajectory_from_stderr
-## @purpose  Extract and print LDD trajectory (IMP:7-10) from subprocess stderr.
-##           Used as equivalent of caplog-based _print_ldd_trajectory for shell tests.
-## @param stderr_text  The stderr string from subprocess
-## @return    bool — True if at least one IMP:9 log found
-def _print_ldd_trajectory_from_stderr(stderr_text):
-    """Print LDD trajectory filtered to IMP:7-10 from subprocess stderr.
-
-    ## @purpose — Extract and display IMP:7-10 log entries from bash stderr output.
-    ## @io — ⇥ stderr_text: str → ⎋ bool (True if IMP:9 found)
-    """
-    found = False
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for line in stderr_text.splitlines():
-        if "[IMP:" in line:
-            try:
-                imp_level = int(line.split("[IMP:")[1].split("]")[0])
-                if imp_level >= 7:
-                    print(line)
-                if imp_level >= 9:
-                    found = True
-            except (ValueError, IndexError):
-                # Malformed IMP tag — print anyway for debugging
-                print(f"  [MALFORMED] {line}")
-    print("--- END LDD TRAJECTORY ---")
-    return found
-
-
-# endregion FUNC__print_ldd_trajectory_from_stderr
-
-
 # endregion HELPERS
 
 
@@ -201,7 +170,7 @@ def test_ssh_exec_timeout(tmp_path):
     result = _run_wrapper(wrapper, mock_bin)
 
     # Print LDD trajectory (IMP:9 not expected on timeout path)
-    _print_ldd_trajectory_from_stderr(result.stderr)
+    _dump_ldd_trajectory(result.stderr)
 
     # Assert: exit code 124 (timeout) from wrapper
     # Note: The mock ssh exits 124, but the timeout wrapper also catches it.
@@ -233,7 +202,7 @@ def test_ssh_exec_success(tmp_path):
     result = _run_wrapper(wrapper, mock_bin)
 
     # Print LDD trajectory
-    found_imp9 = _print_ldd_trajectory_from_stderr(result.stderr)
+    found_imp9 = _dump_ldd_trajectory(result.stderr)
 
     assert result.returncode == 0, f"Expected exit 0, got {result.returncode}\nstderr: {result.stderr}"
     assert found_imp9, f"Critical LDD Error: No IMP:9 business logic log found on success path\nstderr: {result.stderr}"
@@ -257,7 +226,7 @@ def test_ssh_read_default_timeout(tmp_path):
     result = _run_wrapper(wrapper, mock_bin)
 
     # Print LDD trajectory
-    found_imp9 = _print_ldd_trajectory_from_stderr(result.stderr)
+    found_imp9 = _dump_ldd_trajectory(result.stderr)
 
     assert result.returncode == 0, f"Expected exit 0, got {result.returncode}\nstderr: {result.stderr}"
     assert found_imp9, f"Critical LDD Error: No IMP:9 log found for ssh_read path\nstderr: {result.stderr}"
@@ -288,7 +257,7 @@ def test_dry_run(tmp_path):
     result = _run_wrapper(wrapper, mock_bin)
 
     # Print LDD trajectory (dry-run path logs at IMP:8, not IMP:9)
-    _print_ldd_trajectory_from_stderr(result.stderr)
+    _dump_ldd_trajectory(result.stderr)
 
     assert result.returncode == 0, f"Expected exit 0 (dry-run), got {result.returncode}\nstderr: {result.stderr}"
 
@@ -355,7 +324,7 @@ class TestInputValidation:
         # cause the script to exit with that code.
 
         # Print LDD trajectory even on failure for debugging
-        _print_ldd_trajectory_from_stderr(result.stderr)
+        _dump_ldd_trajectory(result.stderr)
 
         assert result.returncode == 2, (
             f"Expected exit 2 for '{description}', got {result.returncode}\nstderr: {result.stderr}"
@@ -381,7 +350,7 @@ def test_ssh_exec_fail(tmp_path):
     result = _run_wrapper(wrapper, mock_bin)
 
     # Print LDD trajectory
-    _print_ldd_trajectory_from_stderr(result.stderr)
+    _dump_ldd_trajectory(result.stderr)
 
     assert result.returncode == 1, f"Expected exit 1 (SSH fail), got {result.returncode}\nstderr: {result.stderr}"
     assert "IMP:7" in result.stderr, f"Expected IMP:7 log for SSH failure\nstderr: {result.stderr}"

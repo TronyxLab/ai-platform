@@ -26,16 +26,8 @@ from conftest import assert_ldd_stderr, source_and_run
 
 # ─── Constants ───────────────────────────────────────────────────────
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "core" / "internal" / "scaffold" / "add-vhost.sh"
-# 📝 TRAP[DEBT] · 2026-07-31 · HI · Все 7 тестов этого файла падают (main() exit 1 после
-# · Observed: "Starting vhost management" без stderr — "main() failed"; gate MODE=fast RED
-#   (83 failures на HEAD, из них 7 здесь).
-# · Suspected: needs investigation — add-vhost.sh мигрирован на Strangler-Fig Python-модуль
-#   `core.internal.scaffold.vhost_renderer` (exec python3 -m ..., строка 106), а тесты всё ещё
-#   ожидают shell-генерацию vhost с перехватом через mock validate.sh (TRAP-6). Мок больше
-#   не вызывается; python-модуль падает (exit 1) на синтетическом входе теста.
-# · Impact: make gate MODE=fast красный на HEAD — блокирует CI; TRAP-6 делегирование validate.sh
-#   покрыто vhost_renderer-путем, тест не обновлён.
-# · When: верификация DevPlan 095 AC9 (2026-07-31) — pre-existing, не связано с 095.
+# B10 T9: stale TRAP[DEBT] 2026-07-31 «Все 7 тестов падают» удалён — проверено 2026-08-01:
+# 7 passed (python3 -m pytest tests/test_add_vhost.py). Предупреждение о провале вводило в заблуждение.
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent  # /Users/.../ai-platform
 
 
@@ -369,7 +361,7 @@ target_node: mynode
                 if imp_level >= 7:
                     print(line)
             except (ValueError, IndexError):
-                pass
+                print(f"  [MALFORMED] {line}")
     print("--- END LDD TRAJECTORY ---")
 
 

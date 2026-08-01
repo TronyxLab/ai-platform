@@ -203,4 +203,127 @@ def test_cli_output_status_only(caplog):
     logger.critical("[IMP:9][test] CLI --output-status-only — stdout='found', exit 0")
 
 
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · CLI status=stub exits 0
+# · Scenario: stdin='{"status":"stub"}' → exit 0
+# · Last fail: N/A (migrated from deleted tests/test_unit_vps_status_check.py)
+# · Remove if: CLI exit code logic changes
+@ldd_trajectory
+def test_cli_valid_status_stub(caplog):
+    """CLI with status='stub' → exit 0."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT)],
+        input='{"status": "stub"}',
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    logger.critical("[IMP:9][test] CLI valid status stub — exit 0")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · CLI missing status key exits 1
+# · Scenario: stdin without 'status' field → exit 1
+# · Last fail: N/A (migrated from deleted tests/test_unit_vps_status_check.py)
+# · Remove if: missing-key handling changes
+@ldd_trajectory
+def test_cli_missing_status_key(caplog):
+    """CLI with missing status key (defaults to '') → exit 1."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT)],
+        input='{"other": "value"}',
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    logger.critical("[IMP:9][test] CLI missing status key — exit 1")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · CLI whitespace stdin exits 3
+# · Scenario: whitespace-only stdin treated as empty → exit 3
+# · Last fail: N/A (migrated from deleted tests/test_unit_vps_status_check.py)
+# · Remove if: strip() handling removed
+@ldd_trajectory
+def test_cli_whitespace_stdin(caplog):
+    """CLI with whitespace-only stdin → exit 3 (treated as empty)."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT)],
+        input="   \n  \t  ",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 3
+    logger.critical("[IMP:9][test] CLI whitespace stdin — exit 3")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · CLI non-object root exits 2
+# · Scenario: JSON array root (not object) → exit 2
+# · Last fail: N/A (migrated from deleted tests/test_unit_vps_status_check.py)
+# · Remove if: root type check removed
+@ldd_trajectory
+def test_cli_non_object_root(caplog):
+    """CLI with JSON array root (not object) → exit 2."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT)],
+        input='["not", "object"]',
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    logger.critical("[IMP:9][test] CLI non-object root — exit 2")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · --output-status-only never fails on invalid status
+# · Scenario: print-mode with invalid status → exit 0, prints bare value
+# · Last fail: N/A (migrated from deleted tests/test_unit_vps_status_check.py)
+# · Remove if: --output-status-only validation semantics change
+@ldd_trajectory
+def test_cli_output_status_only_invalid_status(caplog):
+    """--output-status-only prints bare status even for invalid values (exit 0)."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--output-status-only"],
+        input='{"status": "deploying"}',
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "deploying"
+    logger.critical("[IMP:9][test] CLI --output-status-only invalid — prints value, exit 0")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · --output-status-only with missing key prints empty
+# · Scenario: print-mode without status key → exit 0, empty stdout
+# · Last fail: N/A (migrated from deleted tests/test_unit_vps_status_check.py)
+# · Remove if: missing key default changes
+@ldd_trajectory
+def test_cli_output_status_only_missing_key(caplog):
+    """--output-status-only with missing status key prints empty string (exit 0)."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--output-status-only"],
+        input='{"other": "value"}',
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+    logger.critical("[IMP:9][test] CLI --output-status-only missing key — empty stdout, exit 0")
+
+
+# 🧪 TRAP[TEST] · 2026-08-01 · B10 T4 · --output-status-only with extra fields
+# · Scenario: JSON with extra fields → prints status only
+# · Last fail: N/A (migrated from deleted tests/test_unit_vps_status_check.py)
+# · Remove if: status JSON schema becomes strict
+@ldd_trajectory
+def test_cli_output_status_only_extra_fields(caplog):
+    """--output-status-only extracts status from JSON with extra fields."""
+    stdin = json.dumps({"status": "stub", "project": "test", "version": "1.0", "timestamp": "2026-07-22"})
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--output-status-only"],
+        input=stdin,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "stub"
+    logger.critical("[IMP:9][test] CLI --output-status-only extra fields — prints 'stub'")
+
+
 # endregion

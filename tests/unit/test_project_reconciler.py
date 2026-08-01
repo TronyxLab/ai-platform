@@ -29,6 +29,7 @@ from unittest.mock import MagicMock, patch
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal"
 sys.path.insert(0, str(_MODULE_DIR))
 import reconciler_projects
+from _conftest.ldd import _print_ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -578,17 +579,6 @@ class TestProjectSpec:
 # ═══════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════
-
-
-def _print_ldd_trajectory(caplog):
-    """Print LDD trajectory from caplog for debugging."""
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                print(record.message)
-    print("--- END LDD TRAJECTORY ---")
 
 
 def _assert_imp9(caplog, min_count: int = 1):

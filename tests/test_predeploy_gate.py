@@ -286,7 +286,7 @@ def _parse_compose_ports(compose_file: str) -> list[int]:
                             host_port = int(parts[-2])
                             host_ports.append(host_port)
                         except ValueError:
-                            pass
+                            continue  # unparseable host port — skip this entry (R1: no bare pass)
                 elif isinstance(entry, (int, float)):
                     # bare port number (container-only, no host binding) — skip
                     pass

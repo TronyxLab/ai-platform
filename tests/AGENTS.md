@@ -103,6 +103,8 @@ Module-scoped фикстуры **переиспользуют** контейне
 
 `from _conftest.infra import infra` — OK. `from _conftest import infra` — **не сработает**. infra не re-экспортируется через `__init__.py` (предотвращает subprocess при import, T16).
 
+**Lazy-инициализация (T5, DevPlan 116 B10):** `infra` — `_LazyTestInfraProxy` (PEP 562-стиль). Импорт `_conftest.infra` НЕ запускает subprocess — `discover_modules.py --test-infra` выполняется при ПЕРВОМ обращении к accessor-методу (`get_container_name`, `get_test_port`, ...), затем кэшируется (`@lru_cache` — 1 subprocess на сессию). Статические сессии без Docker не запускают discover_modules. Косвенный доступ к `_data`/`_index`/`_delegate` — внутренний контракт, НЕ использовать из тестов.
+
 ### LDD Trajectory (T6)
 
 `@ldd_trajectory` декоратор (`tests/_conftest/ldd.py`) — автоматическая проверка `[IMP:9]` лога. Для тестов без декоратора: `gate_helpers.assert_ldd_imp9(caplog)`.

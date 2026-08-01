@@ -17,27 +17,10 @@ import subprocess
 from unittest import mock
 
 import pytest
+from _conftest.ldd import _print_ldd_trajectory
 
 from core.internal.bootstrap import remote_executor
 from core.internal.bootstrap.overlay_deliverer import NodeYamlNotFoundError, SyncCoreError
-
-
-def _print_ldd_trajectory(caplog: pytest.LogCaptureFixture) -> bool:
-    """Print IMP:7-10 records from caplog; return True if at least one IMP:9 present.
-
-    Anti-Illusion Rule (testing.md): 100% PASSED without reading IMP:9-10 logs is a failure.
-    """
-    found_log = False
-    print("--- LDD TRAJECTORY (IMP:7-10) ---")
-    for record in caplog.records:
-        if "[IMP:" in record.message:
-            imp_level = int(record.message.split("[IMP:")[1].split("]")[0])
-            if imp_level >= 7:
-                print(record.message)
-            if imp_level >= 9:
-                found_log = True
-    print("--- END LDD TRAJECTORY ---")
-    return found_log
 
 
 @pytest.fixture(autouse=True)

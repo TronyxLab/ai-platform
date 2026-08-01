@@ -87,7 +87,7 @@ def is_production_host() -> bool:
     return any(p in hostname for p in PRODUCTION_HOST_PATTERNS)
 
 
-# 📝 TRAP[DEBT] · 2026-07-15 · MED · Parallel test teardown destroys shared external networks
+# 📝 TRAP[DEBT] · 2026-07-15 · MED · Parallel test teardown destroys shared external networks — RESOLVED-частично (B10 T5)
 # · Observed: docker events показали массовый destroy shared-db-net/proxy-net/etc во время
 # ·   параллельной сессии; повторный compose up упал с "network declared as external, but
 # ·   could not be found"
@@ -96,6 +96,12 @@ def is_production_host() -> bool:
 # · Impact: флаки при параллельных волнах/сессиях — up падает между create сети и attach
 # ·   контейнера
 # · When: during wave-postgres T5.2 live-verification (2026-07-15)
+# · 2026-08-01 (B10 T5): RESOLVED-частично — (1) ensure_external_networks() получила verify-цикл
+# ·   (inspect → create → re-inspect, устойчивость к гонке create/remove); (2) контракт
+# ·   зафиксирован: общие тестовые сети — external: true в тестовых compose и НИКОГДА не
+# ·   удаляются в teardown (docker network rm в tests/_conftest отсутствует — проверено);
+# ·   (3) причина (parallel compose down одного прогона) задокументирована. Полный фикс
+# ·   (refcount-менеджер для external-сетей между сессиями) — за рамками B10.
 
 
 def ensure_external_networks(names: list[str], docker_available: bool | None = None) -> None:
@@ -109,6 +115,11 @@ def ensure_external_networks(names: list[str], docker_available: bool | None = N
     ##   - Idempotent: safe to call multiple times with same names
     ##   - Does not fail if Docker is unavailable (silent no-op)
     ##   - Does not fail if network already exists (inspect succeeds)
+    ##   - Verify-cycle (B10 T5): inspect → create → re-inspect — устойчивость к гонке
+    ##     create/remove между параллельными сессиями; если после create сеть всё ещё
+    ##     отсутствует → [IMP:9] видимая ошибка (не тихий пропуск).
+    ##   - Контракт: общие тестовые сети — external: true, НИКОГДА не удаляются в teardown
+    ##     (docker network rm в тестах запрещён — docker network rm в tests/_conftest отсутствует).
     """
     if docker_available is None:
         docker_available = shutil.which("docker") is not None
@@ -120,11 +131,34 @@ def ensure_external_networks(names: list[str], docker_available: bool | None = N
             capture_output=True,
             check=False,
         )
-        if result.returncode != 0:
-            subprocess.run(
-                ["docker", "network", "create", name],
-                capture_output=True,
-                check=False,
+        if result.returncode == 0:
+            continue  # exists — no-op (idempotent)
+        # Missing → create → re-inspect (verify-cycle, race-resilient)
+        create = subprocess.run(
+            ["docker", "network", "create", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        verify = subprocess.run(
+            ["docker", "network", "inspect", name],
+            capture_output=True,
+            check=False,
+        )
+        if verify.returncode != 0:
+            # ⚠️ TRAP[BUG] · 2026-08-01 · HI · Network create без verify → «declared as external, could not be found»
+            # · Root: create best-effort мог тихо провалиться (гонка с параллельным remove); без re-inspect
+            # ·   следующий compose up падал с "network declared as external, but could not be found".
+            # · Fix: verify-цикл — после create обязательный повторный inspect; отсутствие сети = [IMP:9] ошибка.
+            # · Prevention: общие external-сети НИКОГДА не удаляются в teardown (контракт B10 T5).
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[IMP:9][networks] Network '%s' create FAILED (rc=%d: %s) and re-inspect MISSING — "
+                "dependent compose up will fail with 'network declared as external, but could not be found'",
+                name,
+                create.returncode,
+                (create.stderr or "").strip()[-200:],
             )
 
 

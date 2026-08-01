@@ -38,6 +38,7 @@
 
 import logging
 import os
+import sys
 
 import pytest
 
@@ -99,49 +100,15 @@ def _check_s3_cert_line(content: str, s3_key_suffix: str) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.static_audit
-# 🧪 TRAP[TEST] · 2026-07-22 · Scenario: s3_ssl_cache.py upload handles all 4 cert files
-# · Last fail: None (first run) · Remove if: S3 upload file set changes
-# · DevPlan 052 Phase 1: business logic moved from s3-ssl-cache.sh → s3_ssl_cache.py
-def test_s3_cache_upload_all_4_cert_files():
-    """s3_ssl_cache.py upload must handle all 4 cert files: fullchain.pem,
-    privkey.pem, chain.pem, account.tar.gz with correct S3 key prefix.
-
-    DevPlan 052 Phase 1: business logic moved from s3-ssl-cache.sh to
-    s3_ssl_cache.py. The shell is now a thin CLI facade that delegates
-    to the Python module.
-    """
-    # Check Python module for upload/download logic
-    py_path = "core/internal/bootstrap/s3_ssl_cache.py"
-    assert os.path.isfile(py_path), f"s3_ssl_cache.py not found at {py_path}"
-    py_content = _read_script(py_path)
-
-    # Check that the S3 cert prefix constant is defined
-    assert S3_CERT_PREFIX in py_content, f"s3_ssl_cache.py must define prefix {S3_CERT_PREFIX!r}"
-    logger.info("[IMP:7][test_4_files] S3 cert prefix found in s3_ssl_cache.py: %s", S3_CERT_PREFIX)
-
-    # Check upload of fullchain.pem, privkey.pem, chain.pem, account.tar.gz
-    assert "fullchain.pem" in py_content, "s3_ssl_cache.py must upload fullchain.pem"
-    assert "privkey.pem" in py_content, "s3_ssl_cache.py must upload privkey.pem"
-    assert "chain.pem" in py_content, "s3_ssl_cache.py must upload chain.pem"
-    assert "account.tar.gz" in py_content, "s3_ssl_cache.py must upload account.tar.gz"
-
-    # Assert download functions validate and restore certs
-    assert "def download_cert" in py_content, "Must have download_cert function"
-    assert "def upload_cert" in py_content, "Must have upload_cert function"
-    assert "def check_cert" in py_content, "Must have check_cert function"
-    assert "fullchain.pem" in py_content, "download must restore fullchain.pem"
-    assert "privkey.pem" in py_content, "download must restore privkey.pem"
-
-    logger.critical(
-        "[IMP:9][test_4_files] ASSERT: s3_ssl_cache.py uploads and downloads "
-        "all 4 cert files: fullchain.pem, privkey.pem, chain.pem, account.tar.gz"
-    )
+# ═════════════════════════════════════════════════════════════════════════════
+# TEST GROUP 2: make backup coverage — what IS and ISN'T included
+# ═════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-22 · Scenario: ssl-cache prefix is distinct from backup prefix
 # · Last fail: None (first run) · Remove if: S3 key prefix strategy changes
+# · B10 T2: s3_ssl_cache.py prefix grep → native constant import (D2)
 def test_ssl_cache_prefix_distinct_from_backup():
     """The S3 SSL cache key prefix (platform/ssl-certs/) must be distinct from
     the backup key prefix (platform/backups/). This ensures cert files are NOT
@@ -150,11 +117,18 @@ def test_ssl_cache_prefix_distinct_from_backup():
     Also verifies that backup-postgres.sh and backup-app-data.sh do NOT
     reference ssl-certs or s3-ssl-cache — confirming the separation.
     """
-    # s3_ssl_cache.py uses its own prefix (DevPlan 052 Phase 1: business logic moved from shell to Python)
-    py_content = _read_script("core/internal/bootstrap/s3_ssl_cache.py")
-    assert S3_CERT_PREFIX in py_content, f"s3_ssl_cache.py must define prefix {S3_CERT_PREFIX}"
+    # Native: import the canonical prefix constant (B10 T2 — replaces source grep)
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core", "internal", "bootstrap"))
+    from s3_ssl_cache import DEFAULT_SSL_CACHE_PREFIX
 
-    # Verify backup scripts do NOT reference ssl-certs
+    assert DEFAULT_SSL_CACHE_PREFIX == S3_CERT_PREFIX, (
+        f"s3_ssl_cache.DEFAULT_SSL_CACHE_PREFIX={DEFAULT_SSL_CACHE_PREFIX!r} must equal {S3_CERT_PREFIX!r}"
+    )
+    assert DEFAULT_SSL_CACHE_PREFIX != "platform/backups", (
+        "SSL cache prefix must be distinct from backup prefix (platform/backups)"
+    )
+
+    # Verify backup scripts (shell facades — code-presence per D2) do NOT reference ssl-certs
     for name, path in BACKUP_SCRIPTS.items():
         script_content = _read_script(path)
         # backup scripts should NOT mention ssl-certs
@@ -309,8 +283,13 @@ def test_backup_app_data_stub_no_cert_scope_creep():
 
 
 @pytest.mark.static_audit
-# 🧪 TRAP[TEST] · 2026-07-22 · Scenario: issue-cert.sh → s3-ssl-cache.sh upload full flow
+# 🧪 TRAP[TEST] · 2026-07-25 · Scenario: issue-cert.sh → s3-ssl-cache.sh upload full flow
 # · Last fail: None (first run) · Remove if: issue-cert.sh post-issue logic changes
+# · B10 T2 (D2): issue-cert.sh is a shell facade with NO dry-run mode → code-presence with
+# ·   justification. The S3 fallback/wiring contract is covered NATIVELY by
+# ·   tests/unit/test_cert_orchestrator_contract.py (issue-fallback via stub script) +
+# ·   tests/unit/test_s3_ssl_cache.py. Gate invariant 2: grep остаётся только там, где dry-run
+# ·   не покрывает контракт.
 def test_issue_cert_saves_all_4_files_to_s3():
     """issue-cert.sh must wire S3 upload for ALL cert files after successful
     certificate issuance. S3 upload is invoked via acme.sh --reloadcmd and
@@ -348,97 +327,12 @@ def test_issue_cert_saves_all_4_files_to_s3():
 
 
 @pytest.mark.static_audit
-# 🧪 TRAP[TEST] · 2026-07-25 · Scenario: state_machine.py → cert_orchestrator unified entrypoint
-# · Last fail: 2026-07-25 — DevPlan 052 Phase 2: _ssl_provision() replaced by _ssl_provision_via_orchestrator()
-# · Remove if: cert orchestration entrypoint changes
-def test_state_machine_full_bootstrap_restore_flow():
-    """state_machine.py _ssl_provision_via_orchestrator() must delegate to
-    cert_orchestrator.orchestrate_certs() for ALL domains.
-
-    DevPlan 052 Phase 2: _ssl_provision() was replaced by
-    _ssl_provision_via_orchestrator() which delegates to cert_orchestrator.py
-    (unified entrypoint). The restore-first + S3 upload-on-skip logic lives
-    in cert_orchestrator.py, not state_machine.py.
-
-    Restore flow (in cert_orchestrator.py):
-      cert on disk? → upload to S3 → skip (disk_synced)
-      OR S3 cache hit? → download & restore
-      OR issue-cert.sh → upload to S3
-    """
-    # B9 T1: ssl_provision_via_orchestrator → lifecycle/helpers/domains.py (I/O-хелперы)
-    sm_content = _read_script(CERT_SCRIPTS["helpers_domains"])
-
-    # Must reference _ssl_provision_via_orchestrator (replaces old _ssl_provision)
-    assert "def ssl_provision_via_orchestrator" in sm_content, (
-        "helpers/domains.py must have ssl_provision_via_orchestrator() function (B9 T1)"
-    )
-
-    # Must delegate to cert_orchestrator
-    assert "cert_orchestrator" in sm_content, "_ssl_provision_via_orchestrator() must reference cert_orchestrator"
-    assert "orchestrate_certs" in sm_content, "_ssl_provision_via_orchestrator() must call orchestrator_certs()"
-
-    # Must extract all domains (empty context = all)
-    assert "extract_domains" in sm_content, "ssl_provision_via_orchestrator() must call extract_domains() (CS-1 public)"
-
-    # Check cert_orchestrator.py for restore-first logic
-    cert_content = _read_script("core/internal/bootstrap/cert_orchestrator.py")
-
-    # Must check cert on disk first (restore-first)
-    assert "_is_cert_valid" in cert_content, "cert_orchestrator.py must check cert validity"
-    assert "cert on disk" in cert_content.lower() or "_upload_to_s3" in cert_content, (
-        "cert_orchestrator.py must handle disk cert + upload to S3"
-    )
-
-    # Must reference s3_ssl_cache (direct import, no subprocess)
-    assert "import s3_ssl_cache" in cert_content, "cert_orchestrator.py must import s3_ssl_cache directly"
-    assert "s3_ssl_cache.check_cert" in cert_content, "cert_orchestrator.py must check S3 cache via s3_ssl_cache"
-    assert "s3_ssl_cache.download_cert" in cert_content, "cert_orchestrator.py must download from S3 via s3_ssl_cache"
-
-    # Must fallback to issue-cert.sh
-    assert "issue_cert_script" in cert_content, "cert_orchestrator.py must reference issue-cert.sh fallback"
-
-    logger.critical(
-        "[IMP:9][test_restore_flow] ASSERT: _ssl_provision_via_orchestrator() → "
-        "cert_orchestrator.orchestrate_certs() — unified entrypoint with "
-        "restore-first + S3 upload-on-skip"
-    )
-
-
-@pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-25 · Scenario: S3 restore validates cert after download
 # · Last fail: 2026-07-25 — DevPlan 052 Phase 2: validation moved to cert_orchestrator.py + s3_ssl_cache.py
 # · Remove if: S3 restore validation logic changes
-def test_s3_restore_validates_cert_after_download():
-    """After downloading cert from S3, the restore path must validate:
-    1. cert_path (/etc/letsencrypt/live/<domain>/fullchain.pem) exists
-    2. The certificate is usable (openssl validation in s3_ssl_cache.py)
-
-    DevPlan 052: cert_orchestrator.py handles download validation (cert_path check),
-    s3_ssl_cache.py handles openssl validation. state_machine.py delegates entirely.
-    """
-    # Check cert_orchestrator.py for download validation
-    cert_content = _read_script("core/internal/bootstrap/cert_orchestrator.py")
-
-    # Must check if cert_path exists after download
-    assert "cert_path" in cert_content, "cert_orchestrator.py must check cert_path after S3 download"
-    assert "os.path.isfile(cert_path)" in cert_content, (
-        "cert_orchestrator.py must verify cert file exists after S3 download"
-    )
-
-    # Check s3_ssl_cache.py for openssl validation during download (DevPlan 052 Phase 1)
-    py_content = _read_script("core/internal/bootstrap/s3_ssl_cache.py")
-
-    # download must validate with openssl via _validate_cert
-    assert "def _validate_cert" in py_content, "s3_ssl_cache.py must have _validate_cert function"
-    assert "openssl x509" in py_content, "s3_ssl_cache.py must use openssl x509 for cert validation"
-    assert "checkend" in py_content, "s3_ssl_cache.py must use openssl -checkend for cert expiry validation"
-    assert "Let's Encrypt" in py_content, "s3_ssl_cache.py must validate LE issuer"
-    assert "domain" in py_content, "s3_ssl_cache.py must validate domain subject match"
-
-    logger.critical(
-        "[IMP:9][test_restore_validate] ASSERT: S3 restore validates cert "
-        "existence (cert_orchestrator.py) + openssl validation (s3_ssl_cache.py)"
-    )
+# · B10 T2: this test was a Python-source grep (cert_orchestrator.py + s3_ssl_cache.py) — DELETED,
+# ·   replaced by native behavior tests: tests/unit/test_cert_orchestrator_contract.py
+# ·   (orchestrate_certs s3-restore flow) + tests/unit/test_s3_ssl_cache.py (_validate_cert paths).
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -449,6 +343,10 @@ def test_s3_restore_validates_cert_after_download():
 @pytest.mark.static_audit
 # 🧪 TRAP[TEST] · 2026-07-22 · Scenario: S3 unavailable doesn't block cert issue
 # · Last fail: None (first run) · Remove if: S3 failure behavior changes
+# · B10 T2 (D2): issue-cert.sh — shell facade, no dry-run → code-presence (WARN + ordering).
+# ·   s3_ssl_cache.py graceful-degradation grep (return False/ClientError) DELETED — covered
+# ·   natively by tests/unit/test_s3_ssl_cache.py (test_download_s3_file_nonfatal_on_client_error,
+# ·   test_upload_s3_file_nonfatal_on_client_error, test_check_cert_miss).
 def test_s3_unavailable_does_not_block_cert_issue():
     """If S3 is unavailable, certificate issuance must NOT be blocked.
     The S3 cache upload is a best-effort optimization, not a hard dependency.
@@ -470,7 +368,7 @@ def test_s3_unavailable_does_not_block_cert_issue():
     for i, line in enumerate(lines):
         if "install-cert" in line:
             cert_install_line = i
-        if "s3-ssl-cache.sh" in line and "upload" in line:
+        if "s3_ssl_cache.py" in line and "upload" in line:
             s3_upload_line = i
 
     if cert_install_line >= 0 and s3_upload_line >= 0:
@@ -483,18 +381,6 @@ def test_s3_unavailable_does_not_block_cert_issue():
             cert_install_line,
             s3_upload_line,
         )
-
-    # Also check: s3_ssl_cache.py should degrade gracefully (DevPlan 052 Phase 1)
-    py_content = _read_script("core/internal/bootstrap/s3_ssl_cache.py")
-    assert "Non-fatal" in py_content or "non-fatal" in py_content, "s3_ssl_cache.py must document non-fatal behavior"
-    assert "return False" in py_content, "s3_ssl_cache.py must return False on failure (not raise)"
-    # Each public function wraps in try/except to handle S3 failures gracefully
-    assert "try:" in py_content, "s3_ssl_cache.py must use try/except for graceful S3 failure handling"
-    # DevPlan 052: s3_ssl_cache.py catches CONCRETE exceptions (ClientError, OSError,
-    # S3UploadFailedError, FileNotFoundError, tarfile.TarError, subprocess.TimeoutExpired),
-    # not a bare `except Exception` — graceful degradation via specific handlers.
-    assert "except" in py_content, "s3_ssl_cache.py must catch exceptions gracefully"
-    assert "ClientError" in py_content, "s3_ssl_cache.py must catch boto3 ClientError"
 
     logger.critical(
         "[IMP:9][test_s3_nonfatal] ASSERT: S3 unavailability does NOT block "
@@ -546,53 +432,7 @@ def test_dev_certs_not_backed_up_gap():
 # TEST GROUP 5: Node-lifecycle integration — update step calls SSL provision
 # ═════════════════════════════════════════════════════════════════════════════
 
-
-@pytest.mark.static_audit
-# 🧪 TRAP[TEST] · 2026-07-25 · Scenario: node-lifecycle update step calls _ssl_provision_via_orchestrator
-# · Last fail: 2026-07-25 — DevPlan 052 Phase 2: renamed to _ssl_provision_via_orchestrator
-# · Remove if: state machine step handler changes
-def test_node_lifecycle_update_step_calls_ssl_provision():
-    """The state machine update step (step 3/4) must call _ssl_provision_via_orchestrator().
-    This connects the bootstrap pipeline to the unified cert_orchestrator entrypoint.
-
-    node-lifecycle.sh --mode update:
-      step 3: ssl_provision → _ssl_provision_via_orchestrator()
-        → cert_orchestrator.orchestrate_certs()
-        → s3_ssl_cache check → download (cache hit) OR issue-cert.sh (cache miss)
-    """
-    content = _read_script(CERT_SCRIPTS["helpers_domains"])
-
-    # Must reference ssl_provision step (B9 T1: helpers/domains.py)
-    assert "ssl_provision" in content, "helpers/domains.py must have ssl_provision step"
-
-    # Must have the step in the step definitions
-    lines = content.split("\n")
-    step_def_lines = []
-    for _i, line in enumerate(lines):
-        if "ssl_provision" in line and (
-            "step" in line.lower() or "init" in line.lower() or "update" in line.lower() or '"' in line or "'" in line
-        ):
-            step_def_lines.append(line.strip())
-
-    assert step_def_lines, "ssl_provision must appear in a step definition (init or update steps)"
-    for line in step_def_lines:
-        logger.info("[IMP:8][test_step_list] %s", line)
-
-    # Verify the step handler is _ssl_provision_via_orchestrator (replaces old _ssl_provision)
-    assert "ssl_provision_via_orchestrator" in content, (
-        "There must be a handler function _ssl_provision_via_orchestrator() for the ssl_provision step"
-    )
-
-    # Verify the invocation: DevPlan 087 moved step calls from state_machine.py into
-    # phases.py — _sm._ssl_provision_via_orchestrator(core_dir, node_yaml) at φ7
-    # certificates and φ12 deploy_update. The function has type annotations in
-    # state_machine.py (def _ssl_provision_via_orchestrator(core_dir: str, node_yaml: str)).
-    phases_content = _read_script("core/internal/bootstrap/lifecycle/phases.py")
-    assert "_ssl_provision_via_orchestrator" in phases_content, (
-        "phases.py must call _ssl_provision_via_orchestrator (φ7 certificates / φ12 deploy_update)"
-    )
-
-    logger.critical(
-        "[IMP:9][test_step_list] ASSERT: node-lifecycle update step 3 calls "
-        "_ssl_provision_via_orchestrator() — unified cert_orchestrator entrypoint"
-    )
+# B10 T2: test_node_lifecycle_update_step_calls_ssl_provision (Python-source grep on
+# helpers/domains.py + phases.py) DELETED — replaced by native behavior tests:
+#   tests/unit/test_phase_certificates_contract.py (phase_certificates delegation +
+#   ssl_provision_via_orchestrator/extract_domains API contract)
