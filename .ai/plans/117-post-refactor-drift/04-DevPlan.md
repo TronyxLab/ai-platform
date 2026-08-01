@@ -372,3 +372,13 @@ $ARTIFACT_CONTRACT
 | 22 | DeployResult НЕ сливать в один класс (поля разные) → переименовать по доменам | Слияние 4 разных контрактов в 1 класс с 20+ optional-полями — антипаттерн. |
 | 25 | **Задача закрыта без изменений** | pg_isready — стандартный инструмент, не дубликат платформенной логики. 1 потребитель, критерий извлечения в shared не выполнен. |
 | 26 | sha256 — без изменений (stdlib); boto3 — только s3_ssl_cache+preflight, НЕ backup-cron | sha256 — stdlib hashlib, извлечение в обёртку — over-engineering. boto3 upload/retention — отдельный домен backup-cron. |
+
+### Отклонения, зафиксированные при реализации (2026-08-01, волна C)
+
+| Задача | Отклонение | Причина |
+|--------|-----------|---------|
+| 18 | `orphan_reconciler.remove_orphans()` добавлен как публичный API (DevPlan ссылался на него как на существующий, но функция была приватной `_self_heal_orphan_containers`) | Межмодульный доступ к приватным запрещён (гейт T6.1) — docker_orchestrator.deploy_docker_module вызывает remove через публичный wrapper. Поведение не меняется. |
+| 19 | Allowlist в `tests/test_cross_layer_imports.py` обновлён (agent_watchdog: 3 записи → 4, +`shared.docker_compose`) | Новый импорт shared/docker_compose в watchdog сдвинул lineno существующих записей; добавление docker_compose — легитимный D1-паттерн (контейнерный модуль → shared). tests/gates/* НЕ тронуты. |
+| 21 | Тесты `test_cert_orchestrator.py::test_is_le_issuer_*` переориентированы на `shared.ssl_certs.cert_is_le_issuer` | `_is_le_issuer` удалён из cert_orchestrator (делегирование в shared) — тесты тестируют канонический примитив. |
+| 24 | `discover_llm_projects` логирует через `logger` (не `print`) | Функция вызывается из Python (key_provisioner), не из shell — print в stderr не попадал в caplog/LDD. |
+| 26 | Тест назван `test_shared_s3_client.py`, не `test_s3_client.py` | Конфликт имён модулей: `tests/test_s3_client.py` (backup-cron S3Client) vs `tests/unit/test_s3_client.py` — pytest collection failure. Префикс test_shared_* консистентен с shared-тестами. |
