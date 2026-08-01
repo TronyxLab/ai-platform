@@ -39,7 +39,8 @@
 ## ·   validate.sh has a --check-ports mode that scans all ai-platform.yaml files in
 ## ·   PROJECTS_BASE for host_port uniqueness. deploy blocked if conflict found.
 ## ·   Rationale: separate validation step allows CI/CD to check before deploy.
-## ·   platform-deploy.sh also checks individually (defense-in-depth).
+## ·   PlatformError → raise (receive-канал dispatch также проверяет — defense-in-depth,
+## ·   DevPlan 116 B1 T7: legacy deploy-скрипт ссылка заменена на receive-канал).
 ## ·   Rejected: rely only on per-deploy check — CI can fail faster (before pull)
 ## ⚠️ TRAP[DECISION] · 2026-07-31 · MED · Оркестратор делегирует Python-CLI через subprocess, не native import
 ## ·   Rejected: native import validate_yaml_against_schema/check_fqdn_conflict (риск: репликация

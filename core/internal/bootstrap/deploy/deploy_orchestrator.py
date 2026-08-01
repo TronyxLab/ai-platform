@@ -502,20 +502,33 @@ def _deploy_parallel(
 
 # region FUNC__deploy_orchestrator
 ## @purpose  DeployOrchestrator CLI path (DEPLOY_ORCHESTRATOR=true): subprocess orchestrator_cli
-##           deploy-many --scp. Separate CLI layer (core/internal/deploy/) — subprocess by design (D1 exception).
+##           deploy-many. Separate CLI layer (core/internal/deploy/) — subprocess by design (D1 exception).
+##           DevPlan 116 B1 T6 (D7): канал = LocalChannel (БЕЗ --scp) — на-ноде операция: payload
+##           уже в /opt/projects/\<module\>/; SCP-доставка самой себе бессмысленна (тот же прецедент
+##           TRAP[DECISION] receive 2026-07-31). JSON-вывод deploy-many парсится → честные
+##           (deployed, failed) вместо всегда (0, []) (U-30).
 ## @io       ⇥ docker_names: list[str] → ⎋ tuple[int, list[str]] — (deployed, failed)
-## @complexity 1 — single subprocess with graceful failure handling
+## @complexity 1 — single subprocess + JSON-парсинг вывода
 ## @invariants
 ##   - Only DOCKER module names passed (R4) — names = docker compose project names
-##   - Failure is WARN-only (legacy parity: orchestrator failures never added to FAILED)
-##   - Per-module results unavailable without parsing CLI output — deployed stays 0 (legacy parity)
+##   - НЕТ --scp: build_channel в orchestrator_cli вернёт LocalChannel (D7, T6)
+##   - JSON-массив DeployResult парсится: deployed = count(status == DEPLOYED),
+##     failed = [project for status in (FAILED, ROLLED_BACK)] (U-30, честная наблюдаемость)
+##   - Failure is WARN-only (legacy parity: orchestrator failures never added to FAILED severity,
+##     но наблюдаемы через failed-список — DEPLOY_BEST_EFFORT, B4)
+##   - returncode != 0 → WARN + честный (deployed, failed)-из-JSON
 def _deploy_orchestrator(docker_names: list[str]) -> tuple[int, list[str]]:
-    """Call orchestrator_cli deploy-many via subprocess (separate CLI, separate concern — D1 exception)."""
+    """Call orchestrator_cli deploy-many via subprocess (separate CLI, separate concern — D1 exception).
+
+    D7: LocalChannel — deploy-many выполняется НА ноде (payload уже на месте), SCP-транспорт
+    самому себе бессмыслен; поэтому `--scp` НЕ передаётся (build_channel → LocalChannel).
+    """
     if not docker_names:
         logger.info("[IMP:8][_deploy_orchestrator][skip] No docker modules — skipping deploy-many")
         return 0, []
 
     projects = ",".join(docker_names)
+    # D7/T6: БЕЗ --scp/--forced-command/--host → build_channel вернёт LocalChannel (на-ноде).
     cmd = [
         sys.executable,
         "-m",
@@ -523,22 +536,46 @@ def _deploy_orchestrator(docker_names: list[str]) -> tuple[int, list[str]]:
         "deploy-many",
         "--projects",
         projects,
-        "--scp",
     ]
-    logger.info("[IMP:9][_deploy_orchestrator][start] DeployOrchestrator deploy-many: %s", projects)
+    logger.info("[IMP:9][_deploy_orchestrator][start] DeployOrchestrator deploy-many: %s (LocalChannel, D7)", projects)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=DEPLOY_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("[IMP:5][_deploy_orchestrator][error] deploy-many error (non-fatal): %s", exc)
         return 0, []
+
+    # ── Парсинг JSON-вывода deploy-many (U-30): JSON-массив DeployResult ──
+    deployed = 0
+    failed: list[str] = []
+    try:
+        parsed = json.loads(result.stdout) if result.stdout.strip() else []
+        if isinstance(parsed, list):
+            for entry in parsed:
+                if not isinstance(entry, dict):
+                    continue
+                status = entry.get("status", "")
+                if status == "DEPLOYED":
+                    deployed += 1
+                elif status in ("FAILED", "ROLLED_BACK"):
+                    failed.append(entry.get("project", "?"))
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "[IMP:5][_deploy_orchestrator][parse] deploy-many stdout не JSON (%.120r): %s",
+            result.stdout,
+            exc,
+        )
+
     if result.returncode != 0:
         logger.warning(
-            "[IMP:5][_deploy_orchestrator][fail] deploy-many had failures (exit=%d) — continuing",
+            "[IMP:5][_deploy_orchestrator][fail] deploy-many had failures (exit=%d) — continuing (DEPLOY_BEST_EFFORT)",
             result.returncode,
         )
-        return 0, []
-    logger.info("[IMP:9][_deploy_orchestrator][done] deploy-many completed successfully")
-    return 0, []
+    logger.info(
+        "[IMP:9][_deploy_orchestrator][done] deploy-many: deployed=%d failed=%s",
+        deployed,
+        failed,
+    )
+    return deployed, failed
 
 
 # endregion FUNC__deploy_orchestrator

@@ -1,11 +1,12 @@
-# GREP_SUMMARY: test deploy-direct validate-project extract-org platform-deliver parse-ssh-command handle-deliver org-validation backward-compat
-# STRUCTURE: ▶ test_validate_project (3 scenarios) → ▶ test_extract_org (2 scenarios) → ▶ test_deliver_dispatch (3 scenarios) → ⎋ assert exit_codes + PROJECT_DIR
+# GREP_SUMMARY: test deploy-direct validate-project extract-org receive parse-ssh-command handle-receive path-traversal backward-compat
+# STRUCTURE: ▶ test_validate_project (3 scenarios) → ▶ test_extract_org (2 scenarios) → ▶ test_receive_dispatch (3 scenarios) → ⎋ assert exit_codes + PROJECT_DIR
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for bash snippet parity — validate_project/extract_org semantics
-##           reimplemented inline, and platform-deliver backward compatibility
-## @scope    Tests inline bash snippets replicating the legacy deploy shell entrypoint
+##           reimplemented inline, and receive-verb dispatch (DevPlan 116 B1 T7: platform-deliver
+##           backward compat удалён — единый формат receive <project> [<sha>])
+## @scope    Tests inline bash snippets replicating the deploy entrypoint
 ##           validation (validate_project, extract_org, resolve_node_host) and the
-##           parse_ssh_command / handle_deliver org-aware logic
+##           parse_ssh_command / receive org-aware logic
 ## @invariants
 ##   - All tests use tmp_path fixture — no hardcoded paths
 ##   - No Docker, no SSH, no network dependencies
@@ -87,37 +88,28 @@ echo "PROJECT_NAME=${PROJECT_NAME}"
 )
 
 # ═══════════════════════════════════════════════════════════════════
-# Helper: minimal platform-deliver dispatch for testing
+# Helper: minimal receive dispatch for testing (DevPlan 116 B1 T7)
 # ═══════════════════════════════════════════════════════════════════
 _DELIVER_DISPATCH_SCRIPT = (
     """\
 #!/usr/bin/env bash
-# Simulate parse_ssh_command() platform-deliver dispatch
+# Simulate parse_ssh_command() receive dispatch — receive <project> [<sha>] (D5, D1)
 PROJECTS_BASE="${PROJECTS_BASE:-/opt/projects}"
-raw="platform-deliver $*"
+raw="receive $*"
 """
     # DEVPLAN-097: mid-line `#` inside a """...""" string corrupts Doxygen 1.17
     # comment parsing (subsequent @alias docblocks fail to expand). These two
     # bash parameter-expansion lines are kept in plain strings on purpose.
-    + 'args="${raw#platform-deliver }"\n'
+    + 'args="${raw#receive }"\n'
     + """\
 args="$(echo "$args" | xargs)"
-org=""
-project=""
-if [[ "$args" == *" "* ]]; then
-    org="${args%% *}"
-    """
-    + 'project="${args#* }"\n'
-    + """\
-    project="$(echo "$project" | xargs)"
-    if [[ "$org" == */* ]]; then
-        echo "FATAL: org '${org}' contains '/'" >&2
-        exit 1
-    fi
-else
-    project="$args"
+project="${args%% *}"   # receive <project> [<sha>] — первый токен = проект (D5)
+# path traversal defense: '/' в имени проекта → exit 1 (validate_project_name канон)
+if [[ "$project" == */* ]]; then
+    echo "FATAL: project '${project}' contains '/'" >&2
+    exit 1
 fi
-PROJECT_DIR="${PROJECTS_BASE}/${org:+${org}/}${project}"
+PROJECT_DIR="${PROJECTS_BASE}/${project}"
 echo "PROJECT_DIR=${PROJECT_DIR}"
 exit 0
 """
@@ -428,43 +420,43 @@ def test_extract_org_deep_path(caplog, tmp_path: Path) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 6: platform-deliver with org (new format)
+# Test 6: receive with project + sha (D5, DevPlan 116 B1 T7)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# region FUNC_test_deliver_org_project
-## @purpose  Assert platform-deliver with 2 args (org + project) produces PROJECT_DIR
-##           containing both org and project: PROJECTS_BASE/org/project
-## @io       ⇥ subprocess bash dispatch script with args 'myorg myproject' → ⎋ assert PROJECT_DIR contains 'myorg/myproject'
+# region FUNC_test_receive_project_sha
+## @purpose  Assert receive dispatch with 2 args (project + sha) produces PROJECT_DIR
+##           containing only the project (org-сегмент удалён, D1).
+## @io       ⇥ subprocess bash dispatch script with args 'myproject abc123' → ⎋ assert PROJECT_DIR == /opt/projects/myproject
 ## @complexity 1
 
 
 @pytest.mark.static_audit
-def test_deliver_org_project(caplog) -> None:
-    # 🧪 TRAP[TEST] Regression · Scenario: platform-deliver myorg myproject → PROJECT_DIR contains myorg/myproject
+def test_receive_project_sha(caplog) -> None:
+    # 🧪 TRAP[TEST] Regression · Scenario: receive myproject abc123 → PROJECT_DIR=/opt/projects/myproject
     #   Last fail: never
-    #   Remove if: platform-deliver dispatch signature changes
+    #   Remove if: receive dispatch signature changes
     caplog.set_level(logging.WARNING)
 
-    logger.info("[IMP:7][test_deliver_org] Testing platform-deliver myorg myproject")
+    logger.info("[IMP:7][test_receive] Testing receive myproject abc123")
 
     result = subprocess.run(
-        [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "myorg", "myproject"],
+        [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "myproject", "abc123"],
         capture_output=True,
         text=True,
         env={"PROJECTS_BASE": "/opt/projects"},
     )
 
-    logger.critical("[IMP:9][test_deliver_org] stdout: %s", result.stdout.strip())
+    logger.critical("[IMP:9][test_receive] stdout: %s", result.stdout.strip())
     assert result.returncode == 0, f"Script failed: {result.stderr}"
 
     assert "PROJECT_DIR=" in result.stdout, f"No PROJECT_DIR in output: {result.stdout}"
-    # Extract PROJECT_DIR value
     for line in result.stdout.splitlines():
         if line.startswith("PROJECT_DIR="):
             project_dir = line.split("=", 1)[1]
-            logger.critical("[IMP:9][test_deliver_org] PROJECT_DIR=%s", project_dir)
-            assert "myorg" in project_dir, f"Expected 'myorg' in PROJECT_DIR, got '{project_dir}'"
-            assert "myproject" in project_dir, f"Expected 'myproject' in PROJECT_DIR, got '{project_dir}'"
+            logger.critical("[IMP:9][test_receive] PROJECT_DIR=%s", project_dir)
+            assert project_dir == "/opt/projects/myproject", (
+                f"Expected PROJECT_DIR=/opt/projects/myproject (org-сегмент удалён), got '{project_dir}'"
+            )
             break
     else:
         pytest.fail("No PROJECT_DIR= line in output")
@@ -482,28 +474,28 @@ def test_deliver_org_project(caplog) -> None:
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
-# endregion FUNC_test_deliver_org_project
+# endregion FUNC_test_receive_project_sha
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 7: platform-deliver without org (backward compat)
+# Test 7: receive with project only (no sha — локальные вызовы)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# region FUNC_test_deliver_project_only
-## @purpose  Assert platform-deliver with 1 arg (project only) produces PROJECT_DIR
-##           as PROJECTS_BASE/project (backward compat, no org segment).
+# region FUNC_test_receive_project_only
+## @purpose  Assert receive dispatch with 1 arg (project only) produces PROJECT_DIR
+##           as PROJECTS_BASE/project (sha опционален — D5 локальные вызовы).
 ## @io       ⇥ subprocess bash dispatch script with arg 'myproject' → ⎋ assert PROJECT_DIR == /opt/projects/myproject
 ## @complexity 1
 
 
 @pytest.mark.static_audit
-def test_deliver_project_only(caplog) -> None:
-    # 🧪 TRAP[TEST] Regression · Scenario: platform-deliver myproject → PROJECT_DIR = /opt/projects/myproject (backward compat)
+def test_receive_project_only(caplog) -> None:
+    # 🧪 TRAP[TEST] Regression · Scenario: receive myproject → PROJECT_DIR = /opt/projects/myproject
     #   Last fail: never
-    #   Remove if: 1-arg platform-deliver format removed
+    #   Remove if: receive-формат аргументов меняется
     caplog.set_level(logging.WARNING)
 
-    logger.info("[IMP:7][test_deliver_legacy] Testing platform-deliver myproject (backward compat)")
+    logger.info("[IMP:7][test_receive_legacy] Testing receive myproject (no sha)")
 
     result = subprocess.run(
         [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "myproject"],
@@ -512,13 +504,13 @@ def test_deliver_project_only(caplog) -> None:
         env={"PROJECTS_BASE": "/opt/projects"},
     )
 
-    logger.critical("[IMP:9][test_deliver_legacy] stdout: %s", result.stdout.strip())
+    logger.critical("[IMP:9][test_receive_legacy] stdout: %s", result.stdout.strip())
     assert result.returncode == 0, f"Script failed: {result.stderr}"
 
     for line in result.stdout.splitlines():
         if line.startswith("PROJECT_DIR="):
             project_dir = line.split("=", 1)[1]
-            logger.critical("[IMP:9][test_deliver_legacy] PROJECT_DIR=%s", project_dir)
+            logger.critical("[IMP:9][test_receive_legacy] PROJECT_DIR=%s", project_dir)
             assert project_dir == "/opt/projects/myproject", (
                 f"Expected PROJECT_DIR=/opt/projects/myproject, got '{project_dir}'"
             )
@@ -539,44 +531,44 @@ def test_deliver_project_only(caplog) -> None:
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
-# endregion FUNC_test_deliver_project_only
+# endregion FUNC_test_receive_project_only
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 8: platform-deliver org validation — org contains '/'
+# Test 8: receive project path-traversal validation — '/' in project name
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# region FUNC_test_deliver_org_validation
-## @purpose  Assert platform-deliver with org containing '/' exits 1 — defense against
-##           path traversal in deliver verb.
+# region FUNC_test_receive_path_traversal_validation
+## @purpose  Assert receive with project containing '/' exits 1 — defense against
+##           path traversal in receive verb (validate_project_name канон).
 ## @io       ⇥ subprocess bash dispatch script with args 'my/org myproject' → ⎋ assert exit=1
 ## @complexity 1
 
 
 @pytest.mark.static_audit
-def test_deliver_org_validation(caplog) -> None:
-    # 🧪 TRAP[TEST] Regression · Scenario: platform-deliver with '/' in org → exit 1
+def test_receive_path_traversal_validation(caplog) -> None:
+    # 🧪 TRAP[TEST] Regression · Scenario: receive with '/' in project → exit 1
     #   Last fail: never
-    #   Remove if: org '/' validation removed from parse_ssh_command
+    #   Remove if: '/' validation removed from project name validation
     caplog.set_level(logging.WARNING)
 
-    logger.info("[IMP:7][test_deliver_validation] Testing platform-deliver my/org myproject (invalid org)")
+    logger.info("[IMP:7][test_receive_validation] Testing receive my/org (invalid project)")
 
     result = subprocess.run(
-        [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "my/org", "myproject"],
+        [_BASH, "-c", _DELIVER_DISPATCH_SCRIPT, "--", "my/org"],
         capture_output=True,
         text=True,
         env={"PROJECTS_BASE": "/opt/projects"},
     )
 
     logger.critical(
-        "[IMP:9][test_deliver_validation] exit_code=%d, stderr=%s",
+        "[IMP:9][test_receive_validation] exit_code=%d, stderr=%s",
         result.returncode,
         result.stderr.strip(),
     )
-    assert result.returncode != 0, "Expected non-zero exit code for org containing '/'"
+    assert result.returncode != 0, "Expected non-zero exit code for project containing '/'"
     assert "/" in result.stderr or "invalid" in result.stderr.lower(), (
-        f"stderr should mention org validation error, got: {result.stderr}"
+        f"stderr should mention path-traversal validation error, got: {result.stderr}"
     )
 
     found_imp9 = False
@@ -592,7 +584,7 @@ def test_deliver_org_validation(caplog) -> None:
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
-# endregion FUNC_test_deliver_org_validation
+# endregion FUNC_test_receive_path_traversal_validation
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

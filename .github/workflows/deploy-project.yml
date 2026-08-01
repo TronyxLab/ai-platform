@@ -1,8 +1,10 @@
-# GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy deliver-payload platform-deliver verify
-# STRUCTURE: inputs(project_name, [node]) → ○ resolve node from NODE_HOST_MAP or inputs.node → ◇ fromJson → ⊕ ssh_host → ◆ deliver-payload (tar→SSH) → ◆ deploy → ◆ verify → ⎋ done
+# GREP_SUMMARY: deploy-project reusable workflow workflow_call deploy-project lifecycle deploy receive verify ping single-channel
+# STRUCTURE: inputs(project_name, [node]) → ○ resolve node from NODE_HOST_MAP or inputs.node → ◇ fromJson → ⊕ ssh_host → ◆ preflight ping → ◆ deliver+deploy (receive verb, tar→SSH) → ◆ post-deploy verify → ⎋ done
 # region MODULE_CONTRACT
 ## @purpose  Reusable workflow for deploying projects — resolves target node from
-##           NODE_HOST_MAP org variable, then SSH-deploys via forced-command.
+##           NODE_HOST_MAP org variable, then SSH-deploys via the единый forced-command канал
+##           (DevPlan 116 B1 T4, D1): preflight = честный ping; deliver+deploy = один шаг
+##           `receive <project> <sha>` (tar по stdin); post-deploy verify = `verify <node>`.
 ##           Org-agnostic — no hardcoded org references (DD9).
 ## @scope    Called ONCE per project via `uses: <org>/ai-platform/.github/workflows/deploy-project.yml@main`
 ##           from project-level .github/workflows/deploy.yml
@@ -11,13 +13,19 @@
 ##   - Uses `vars.NODE_HOST_MAP` (JSON) for zero-secret node resolution (K4)
 ##   - Uses `secrets: inherit` for CI_DEPLOY_KEY — no project-level secrets
 ##   - No org-specific references — any context org can use this workflow (DD1)
-## - Zero-secret node resolution via NODE_HOST_MAP variable (DD4)
+##   - ТОЛЬКО verbs ping/receive/verify (T4 критерий: 0 масок `|| true`, честные exit-коды)
+##   - `set -euo pipefail` во всех SSH-шагах; exit-код SSH = результат receive (нет || true)
+##   - Legacy workflow-каналы удалены (DevPlan 116 B1 T4, инвариант 9: не чинить)
 ## @rationale Single reusable workflow eliminates 3× duplicate deploy patterns across templates,
 ##            centralizes node resolution, and keeps CI/CD thin (DD1, DD4).
-##            Org-agnostic = context-safe: private workflows are org-scoped by default.
-## @usecases  project deploy -> git push -> CI -> reusable workflow -> SSH forced-command
+##            DevPlan 116 B1 (D1): one-shot receive = extract + preflight + compose-deploy +
+##            healthcheck + notify/catalog в одном вызове; шаг «Verify deliver» удалён как дубль
+##            (receive уже вернул JSON с result.status) — канон пост-деплоя — `verify <node>`.
+## @usecases  project deploy -> git push -> CI -> reusable workflow -> SSH forced-command dispatch
 ## @changes 2026-07-21 | W1: Added Check VPS readiness step before deliver
 ##           2026-07-21 | W5: Added Verify deliver step + command_timeout: 10m + set -euo pipefail on all run steps
+##           2026-08-01 | DevPlan 116 B1 T4: единый канал — preflight `ping`, deliver `receive <project> <sha>`,
+##                       «Verify deliver» удалён (дубль receive-JSON), legacy deliver-verb убран
 # endregion MODULE_CONTRACT
 
 name: Deploy Project (Reusable)
@@ -37,7 +45,7 @@ name: Deploy Project (Reusable)
         required: false
         default: ''
         type: string
-        description: "Organization name (for org-aware paths)"
+        description: "Organization name (kept for caller compatibility — не используется в receive-канале, DevPlan 116 B1 D1)"
     secrets:
       CI_DEPLOY_KEY:
         description: "SSH private key for CI deploy user on target node"
@@ -54,7 +62,7 @@ jobs:
         uses: ./.github/actions/setup-platform
         with:
           # Pinned to 3.14: the payload-validation step runs `make gate MODE=fast PROJECT=...`
-          # locally, which needs .venv/bin/python + PyYAML (yaml_query.py/vps_status_check.py).
+          # locally, which needs .venv/bin/python + PyYAML (yaml_query.py).
           python-version: '3.14'
           install-gitleaks: 'false'
           run-provisioner: 'false'
@@ -107,28 +115,21 @@ jobs:
           ssh-user: ci-deploy
 
       # ═══════════════════════════════════════════════════════════════════
-      # DevPlan 065 P2: SSH pre-flight check — fail-fast before deploy
+      # DevPlan 065 P2 + 116 B1 T4: SSH pre-flight — ЧЕСТНЫЙ ping (без || true).
+      # forced-command dispatch: SSH_ORIGINAL_COMMAND="ping" → "pong", exit 0.
       # ═══════════════════════════════════════════════════════════════════
       - name: SSH pre-flight check
         run: |
-          ssh -o ConnectTimeout=10 ci-deploy@${{ env.ssh_host }} "status test" 2>&1 || true
-          echo "[IMP:9][preflight] SSH connectivity to ci-deploy@${{ env.ssh_host }} verified"
-
-      - name: Check VPS readiness
-        env:
-          NODE_HOST_MAP: ${{ vars.NODE_HOST_MAP }}
-        run: |
           set -euo pipefail
-          echo "[IMP:9][preflight] Checking VPS readiness via forced-command status verb..."
-          STATUS_JSON=$(ssh -o ConnectTimeout=10 \
-            ci-deploy@${{ env.ssh_host }} "status ${{ inputs.project_name }}" 2>&1) || true
-          echo "[IMP:8][preflight] Status response: ${STATUS_JSON}"
-          # StatusReport 046 T5 (CICD-01d): inline python3 → vps_status_check.py
-          echo "${STATUS_JSON}" | python3 core/internal/scripts/vps_status_check.py
-          echo "[IMP:9][preflight] VPS readiness check passed"
-        shell: bash
+          PONG=$(ssh -o ConnectTimeout=10 ci-deploy@${{ env.ssh_host }} "ping")
+          echo "[IMP:9][preflight] ping response: ${PONG}"
+          if [ "${PONG}" != "pong" ]; then
+            echo "[IMP:10][preflight] FATAL: expected 'pong' from forced-command ping, got '${PONG}'"
+            exit 1
+          fi
+          echo "[IMP:9][preflight] SSH connectivity + forced-command verified (ping→pong)"
 
-      - name: Deliver project payload
+      - name: Deliver + deploy (one-shot receive)
         run: |
           set -euo pipefail
           # Build file list — docker-compose.yml OR compose.yaml, ai-platform.yaml always, .env.platform if exists
@@ -138,35 +139,18 @@ jobs:
           [ -f .env.platform ] && FILES="$FILES .env.platform"
 
           echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
-          tar czf - $FILES | ssh -o ConnectTimeout=10 ci-deploy@${{ env.ssh_host }} "platform-deliver ${{ inputs.org && format('{0} {1}', inputs.org, inputs.project_name) || inputs.project_name }}"
-          echo "[IMP:9][deliver] Delivery complete"
-        shell: bash
-
-      - name: Verify deliver
-        if: success()
-        run: |
-          set -euo pipefail
-          echo "[IMP:9][verify-deliver] Verifying deliver via forced-command status verb..."
-          STATUS_JSON=$(ssh -o ConnectTimeout=10 \
-            ci-deploy@${{ env.ssh_host }} "status ${{ inputs.project_name }}" 2>&1) || true
-          # StatusReport 046 T5 (CICD-01d): inline python3 → vps_status_check.py
-          # verify-deliver uses richer semantics (prints success/fatal + exit) — inline check kept minimal
-          STATUS=$(echo "${STATUS_JSON}" | python3 core/internal/scripts/vps_status_check.py --output-status-only 2>/dev/null || echo "")
-          if [ "${STATUS}" = "found" ] || [ "${STATUS}" = "stub" ]; then
-            echo "[IMP:9][verify-deliver] Compose file verified on VPS (status: ${STATUS})"
-          else
-            echo "[IMP:10][verify-deliver] FATAL: project not found on VPS (status: ${STATUS})"
-            exit 1
-          fi
-        shell: bash
-
-      - name: SSH deploy
-        run: |
-          ssh -o ConnectTimeout=10 ci-deploy@${{ env.ssh_host }} \
-            "/opt/platform/core/entrypoints/deploy.sh ${{ inputs.project_name }} ${{ github.sha }} production"
+          # DevPlan 116 B1 D1: one-shot receive — tar по stdin → `receive <project> <sha>`.
+          # forced-command dispatch диспетчеризует SSH_ORIGINAL_COMMAND="receive proj sha".
+          # exit-код SSH = результат receive (БЕЗ || true) — честный канал.
+          tar czf - $FILES | ssh -o ConnectTimeout=10 \
+            ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
+          echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
       - name: Post-deploy verify
         # ⚠️ TRAP[BUG] · 2026-07-20 · ci-deploy forced-command blocks arbitrary scripts.
-        # Use 'verify <node>' verb (verb contract, dispatched by deploy.sh entrypoint).
+        # Use 'verify <node>' verb (verb contract, dispatched by orchestrator_cli dispatch).
+        # DevPlan 116 B1 T4: «Verify deliver» удалён как дубль — receive вернул JSON;
+        # канон пост-деплоя = verify <node>.
         run: |
+          set -euo pipefail
           ssh -o ConnectTimeout=10 ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"

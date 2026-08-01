@@ -111,7 +111,8 @@
 
 | Статус | Глагол | Операция |
 |--------|--------|----------|
-| ✅ | `deploy` | Деплой проекта (git push → CI → forced-command) |
+| ✅ | `deploy` | Деплой проекта (git push → CI → deploy-project.yml receive verb → notify/catalog post-deploy, DevPlan 116 B1) |
+| ✅ | `deploy-project` | Direct project deploy (orchestrator_cli deliver → forced-command receive, NODE→host через extract_node_host, DevPlan 116 B1 T5) |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды (LIFE CYCLE/INIT) |
 | ✅ | `deploy-context` | Деплой всех проектов контекста на ноде (post-bootstrap, standalone) |
 | ✅ | `dev-certs` | Генерация dev SSL-сертификатов (make dev-certs → dev_cert_generator.py) |

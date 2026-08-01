@@ -384,14 +384,14 @@ def deploy_context_projects(
 # region FUNC_ensure_bootstrap_compose
 ## @purpose — Generate minimal docker-compose.yml for first bootstrap (no CI delivery yet).
 ##            Creates a minimal nginx:alpine reverse proxy that will be replaced
-##            by the real docker-compose.yml via CI (platform-deliver) on next deploy.
+##            by the real docker-compose.yml via CI (receive verb, dispatch-канал) on next deploy.
 ## @io — ⇥ project_dir: str, project: ProjectInfo → ⎋ bool (True = success)
 ## @complexity — O(1)
 ## @invariants
 ##   - Non-fatal: returns False on failure
 ##   - Does NOT overwrite existing docker-compose.yml
 ##   - Generated compose has label ai-platform.bootstrap=true
-##   - Will be replaced by real CI delivery on next deploy
+##   - Will be replaced by real CI delivery on next deploy (DevPlan 116 B1 T7)
 def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
     """Generate minimal docker-compose.yml for first bootstrap (no CI delivery yet).
 
@@ -410,7 +410,7 @@ def _ensure_bootstrap_compose(project_dir: str, project: ProjectInfo) -> bool:
     port = getattr(project, "port", None) or "3000"
     domain = getattr(project, "domain", None) or project.name
 
-    compose_content = f'''# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI platform-deliver.
+    compose_content = f'''# GENERATED-STUB: Bootstrap reverse proxy. Replaced by CI receive (dispatch-канал).
 version: '3.8'
 services:
   {project.name}-proxy:

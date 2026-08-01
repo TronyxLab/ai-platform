@@ -36,19 +36,23 @@ bootstrap:
 deploy:
 - make_target: deploy
   mechanism: git-push
-  delegates_to: git push → CI → core/entrypoints/deploy.sh (VPS forced-command) →
-    core/internal/deploy/orchestrator_cli.py receive → core/internal/notify/notify-hook.sh
-    + core/internal/catalog/generate-catalog.sh
+  delegates_to: git push → CI → .github/workflows/deploy-project.yml (receive verb)
+    → orchestrator_cli dispatch receive → core/internal/deploy/orchestrator.py DeployOrchestrator.receive()
+    → core/internal/notify/notify-hook.sh + core/internal/catalog/generate-catalog.sh
+    (post-deploy, D4) → legacy-local-entrypoint → core/entrypoints/deploy.sh (DevPlan
+    116 B1 T7)
   signature: make deploy PROJECT=<dir>
   operation_ru: Деплой проекта
-  description: Deploy a project via git push → CI → SSH forced-command on VPS
+  description: Deploy a project via git push → CI → SSH forced-command dispatch (receive
+    verb) on VPS
 - make_target: deploy-project
   mechanism: ssh+tar
-  delegates_to: core/internal/deploy/orchestrator_cli.py deploy-many (SCPChannel)
+  delegates_to: core/internal/deploy/orchestrator_cli.py deliver (ForcedCommandChannel
+    receive <project> <version>) → orchestrator_cli dispatch receive → DeployOrchestrator.receive()
   signature: make deploy-project PROJECT=<dir> NODE=<node>
-  operation_ru: Прямой деплой минуя CI (DeployOrchestrator)
-  description: Direct project deploy via DeployOrchestrator (SCPChannel) — bypassing
-    CI for emergency fallback
+  operation_ru: Прямой деплой минуя CI (DeployOrchestrator deliver)
+  description: Direct project deploy via orchestrator_cli deliver (ForcedCommandChannel
+    receive) — bypassing CI for emergency fallback (NODE→host через extract_node_host)
 - make_target: context-promote
   mechanism: git-push-context
   delegates_to: core/entrypoints/context-promote.sh → core/internal/deploy/context_promoter.py
@@ -743,10 +747,11 @@ forbidden_verbs:
 scripts:
 - script: orchestrator_cli.py
   path: core/internal/deploy/orchestrator_cli.py
-  signature: python3 -m core.internal.deploy.orchestrator_cli receive/deploy-many
-  operation_ru: CLI entrypoint для DeployOrchestrator
+  signature: python3 -m core.internal.deploy.orchestrator_cli dispatch/deliver/deploy-many
+  operation_ru: CLI entrypoint для DeployOrchestrator (forced-command dispatch + deliver)
   type: python
-  description: Unified deploy CLI
+  description: Unified deploy CLI — dispatch (SSH_ORIGINAL_COMMAND), deliver (operator),
+    receive, deploy-many
 shared_modules:
 - module: secrets_env_parser
   path: core/internal/shared/secrets_env_parser.py
@@ -995,6 +1000,21 @@ gates:
 - id: test_gitignore_covers_debt
   test_file: test_gate_debt_registry.py
   description: 'Auto-discovered gate: test_gitignore_covers_debt'
+- id: test_canonical_verbs_no_legacy
+  test_file: test_gate_deploy_channel.py
+  description: 'Auto-discovered gate: test_canonical_verbs_no_legacy'
+- id: test_cli_subcommands_cover_verb_dictionary
+  test_file: test_gate_deploy_channel.py
+  description: 'Auto-discovered gate: test_cli_subcommands_cover_verb_dictionary'
+- id: test_deploy_make_targets_registered
+  test_file: test_gate_deploy_channel.py
+  description: 'Auto-discovered gate: test_deploy_make_targets_registered'
+- id: test_workflow_uses_only_channel_verbs
+  test_file: test_gate_deploy_channel.py
+  description: 'Auto-discovered gate: test_workflow_uses_only_channel_verbs'
+- id: test_workflow_verb_not_in_dictionary_negative
+  test_file: test_gate_deploy_channel.py
+  description: 'Auto-discovered gate: test_workflow_verb_not_in_dictionary_negative'
 - id: test_canonical_paths_registered
   test_file: test_gate_deploy_paths.py
   description: 'Auto-discovered gate: test_canonical_paths_registered'

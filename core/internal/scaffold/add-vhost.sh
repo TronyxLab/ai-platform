@@ -34,7 +34,9 @@ PLATFORM_ROOT="${PLATFORM_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd
 export PYTHONPATH="${PLATFORM_ROOT}:${PYTHONPATH:-}"
 
 PROJECT_DIR=""
-NODE_CONFIGS_DIR=""
+# DevPlan 116 B1 T8 (U-55): NODE_CONFIGS_DIR с дефолтом ${PLATFORM_ROOT}/node-configs —
+# 0 set -u фейлов на незаданной переменной; --node-configs-dir перекрывает дефолт.
+NODE_CONFIGS_DIR="${NODE_CONFIGS_DIR:-${PLATFORM_ROOT}/node-configs}"
 MODE="add"
 RENDER_NODE=""
 

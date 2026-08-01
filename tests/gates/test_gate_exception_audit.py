@@ -47,6 +47,10 @@ _ALLOWED_NON_TARGET_SETS: set[str] = {
     "_SERVICES_30S",  # test_gate_healthcheck_intervals.py — healthcheck interval классы (D4), не make targets
     "_BACKGROUND_60S",  # test_gate_healthcheck_intervals.py — healthcheck interval классы (D4), не make targets
     "_DOCKER_SSH_MARKERS",  # test_gate_timeout_literals.py — docker/ssh/healthcheck домен-маркеры, не make targets
+    "_WORKFLOW_ALLOWED_VERBS",  # test_gate_deploy_channel.py — forced-command verbs CI-канала {ping,receive,verify}
+    #   (DevPlan 116 B1 T10). Это SSH-verbs, НЕ make-таргеты; authoritative source — CANONICAL_VERBS
+    #   из core/internal/shared/verbs.py (подмножество канала). В entrypoint-manifest.yaml verb-словарь
+    #   forced-command не хранится (он в shared/verbs.py), поэтому чтение из манифеста невозможно.
     "_STATEFUL_MODULES",  # test_gate_make_contract.py — D1-матрица stateful-модулей (postgres/backup-cron/hermes-agent,
     #   DevPlan 116 B7). Это ИМЕНА МОДУЛЕЙ, не make-таргеты. Authoritative source — DevPlan/AGENTS.md (контракт D1);
     #   в entrypoint-manifest.yaml stateful-маркировки нет, поэтому чтение из манифеста невозможно.

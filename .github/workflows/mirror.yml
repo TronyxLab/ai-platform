@@ -39,8 +39,9 @@
 ##       │   Копирует базовую платформу в GitHub-организации контекстов
 ##       │   (один или все сразу).
 ##       │
-##       ▼ CI/CD в контекстной org: build-platform.yml + stage-deploy.yml
+##       ▼ CI/CD в контекстной org: build-platform.yml + deploy-project.yml
 ##       │   Запускается в контекстном репозитории <org>/ai-platform
+##       │   (DevPlan 116 B1 T4: stage-deploy.yml удалён — единый канал deploy-project.yml)
 ##       │
 ##       ▼ Production deployment на VPS контекста
 ##

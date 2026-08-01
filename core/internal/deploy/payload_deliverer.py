@@ -5,7 +5,9 @@
 #            _atomic_move(extracted_files,target_dir) → ⎋ DeliverResult(success|files_delivered)
 # region MODULE_CONTRACT
 ## @purpose  Validate and atomically extract tar.gz payload delivered via stdin.
-##           Used by platform-deliver verb in the legacy shell facade.
+##           Used by the receive-канал (DevPlan 116 B1 T2/T7): payload ассемблируется на
+##           операторской стороне (deliver) и доставляется через ForcedCommandChannel
+##           (remote_cmd "receive <project> <version>") — VPS-side dispatch → DeployOrchestrator.receive().
 ##           Migrated from handle_deliver() in the legacy deploy shell (Wave 5e Strangler-Fig).
 ## @scope    Pure file I/O + tar validation. Zero Docker dependency. Can be reused by
 ##           other entrypoints (reconcile-projects.sh, context_deployer.py, etc.).
@@ -23,16 +25,12 @@
 ##   · Reason: zero new channels/keys, restrict preserved, decision confirmed by user
 ##   · Rev: if payload size exceeds 1M regularly → consider SCP variant
 ##
-##   🧐 TRAP[DECISION] · 2026-07-21 · — · platform-deliver backward compat via argument count
-##   · Rejected: --org flag (breaks existing CI calls immediately)
-##   · Reason: 1-arg = old format, 2-arg = new format. Project names validated as [a-zA-Z0-9_-]+
-##   · Rev: if project names ever allow spaces → switch to explicit --org flag
-##
-##   ⚠️ TRAP[BUG] · 2026-07-20 · platform-deliver exit 1 despite success
+##   ⚠️ TRAP[BUG] · 2026-07-20 · receive exit 1 despite success (актуализирован B1 T7)
 ##   · Symptom: first-time deliver → .deploy-snapshots/ not found → ERR trap → exit 1
 ##   · Root: _write_deploy_result() → cat > .../deploy-result.json fails if dir missing
 ##   · Fix: mkdir -p before writing (idempotent) — handled by shell facade trap/EXIT
 ## @changes 2026-07-26 · DevPlan 036E — Created (Wave 5e Strangler-Fig migration from handle_deliver)
+##           2026-08-01 · DevPlan 116 B1 T7 — docstring: legacy deliver-verb → receive-канал
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

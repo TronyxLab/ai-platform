@@ -35,7 +35,6 @@ _IMPORTABLE_MODULES: tuple[str, ...] = (
     "core.internal.scaffold.project_lister",
     "core.internal.scaffold.project_remover",
     "core.internal.scaffold.gen_env_platform",
-    "core.internal.shared.platform_deliver",
     "core.internal.shared.ssh_command_parser",
     "core.internal.shared.secrets_manifest_reader",
     "core.internal.shared.node_yaml",

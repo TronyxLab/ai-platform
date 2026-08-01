@@ -108,6 +108,9 @@ class DeployResult:
     deploy_time: str = ""
     stdout: str = ""
     stderr: str = ""
+    # DevPlan 116 B1 T2 (D5): version pinning — sha из аргументов SSH-команды (receive \<project\> \<sha\>).
+    # phantom-read version/service из ai-platform.yaml УДАЛЁН (U-37); version = sha из CI.
+    version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -120,6 +123,8 @@ class DeployResult:
             "healthcheck_status": self.healthcheck_status,
             "snapshot_id": self.snapshot_id or "",
             "deploy_time": self.deploy_time,
+            # AC2 (DevPlan 116 B1): JSON receive-результата содержит project, version, sha, status
+            "version": self.version,
         }
 
     def is_success(self) -> bool:
@@ -395,6 +400,7 @@ class DeployOrchestrator:
             duration_s=total_duration,
             healthcheck_status=healthcheck_status,
             snapshot_id=snapshot_id,
+            version=version,
         )
 
     # endregion FUNC_deploy
@@ -655,22 +661,39 @@ class DeployOrchestrator:
     # ── receive() — VPS-side forced-command receiver ──
 
     # region FUNC_receive
-    ## @purpose  VPS-side forced-command receiver. Reads tar from stdin,
-    ##           extracts payload metadata, calls deploy(). Replaces the legacy shell deploy pipeline.
-    ## @io       ⇥ stdin (tar bytes) → ⎋ str (JSON DeployResult) via stdout
-    ## @complexity — O(N) where N = tar entries
+    ## @purpose  VPS-side forced-command receiver (DevPlan 116 B1 T2, D1/D4/D5). Reads tar from
+    ##           stdin, validates payload (fail-fast), extracts to /opt/projects/\<project\>/,
+    ##           runs the full DeployOrchestrator pipeline via LocalChannel, then best-effort
+    ##           post-deploy chain (notify-hook + generate-catalog). Версия (sha) — ТОЛЬКО из
+    ##           аргументов SSH-команды (receive \<project\> \<sha\>); phantom-read version/service
+    ##           из ai-platform.yaml УДАЛЁН (U-37). Вызывается из `orchestrator_cli dispatch receive`.
+    ## @io       ⇥ stdin (tar bytes), project_name: str | None (из SSH-аргументов),
+    ##              version: str (sha из CI, D5) → ⎋ int (exit code 0/1) + JSON DeployResult в stdout
+    ## @complexity — O(N) where N = tar entries + deploy lifecycle
     ## @invariants
-    ##   - Reads tar from stdin (binary)
-    ##   - Extracts to staging directory
-    ##   - Parses payload metadata from ai-platform.yaml
-    ##   - Calls deploy() for the project
-    ##   - Outputs JSON DeployResult to stdout, exit code 0/1
-    @staticmethod
-    def receive() -> int:
+    ##   - Пустой stdin → JSON-ошибка + exit 1 (fail-fast, БЕЗ || true-масок)
+    ##   - ai-platform.yaml отсутствует → JSON-ошибка + exit 1 (fail-fast)
+    ##   - project_name из аргументов (валидируется validate_project_name + verb-reserve U-56);
+    ##     фолбэк на ai-platform.yaml `name` — ТОЛЬКО для локальных/ручных вызовов без аргументов
+    ##   - version ТОЛЬКО из аргументов (D5); service = project_name
+    ##   - Деплой через LocalChannel (payload уже извлечён — TRAP[DECISION] 2026-07-31)
+    ##   - Пост-деплой цепочка (D4): notify-hook + generate-catalog — best-effort,
+    ##     сбой → WARN, деплой НЕ фейлится (notify-hook always exit 0)
+    ##   - JSON DeployResult содержит version (AC2: project, version, sha, status)
+    def receive(
+        self,
+        project_name: str | None = None,
+        version: str = "latest",
+    ) -> int:
         """Receive a deploy payload via stdin (tar) and execute deploy.
 
-        This is the VPS-side entry point for ForcedCommandChannel.
-        Replaces the legacy shell deploy pipeline as the forced-command receiver.
+        This is the VPS-side entry point for the forced-command dispatcher
+        (`orchestrator_cli dispatch receive <project> <sha>`).
+
+        Args:
+            project_name: Project name from SSH_ORIGINAL_COMMAND args (D5). When None
+                (локальные/ручные вызовы) — фолбэк на ai-platform.yaml `name`.
+            version: Version/sha from SSH args (D5). Default "latest" для локальных вызовов.
 
         Returns:
             Exit code (0 = success, 1 = failure).
@@ -681,9 +704,11 @@ class DeployOrchestrator:
         import tarfile
         import tempfile
 
-        logger.info("[IMP:9][DeployOrchestrator][receive] Receiving deploy payload via stdin")
+        from core.internal.shared.project_registry import validate_project_name
 
-        # Read tar from stdin
+        logger.info("[IMP:9][DeployOrchestrator][receive] Receiving deploy payload via stdin (version=%s)", version)
+
+        # Read tar from stdin — пустой stdin → fail-fast (БЕЗ || true-масок)
         tar_bytes = sys.stdin.buffer.read()
         if not tar_bytes:
             logger.error("[IMP:10][DeployOrchestrator][receive] No data received on stdin")
@@ -697,7 +722,7 @@ class DeployOrchestrator:
             with tarfile.open(fileobj=buf, mode="r:gz") as tar:
                 tar.extractall(path=staging, filter="data")
 
-            # Parse ai-platform.yaml for metadata
+            # Parse ai-platform.yaml for metadata (fail-fast: отсутствие = ошибка)
             ai_yaml = Path(staging) / "ai-platform.yaml"
             if not ai_yaml.is_file():
                 logger.error("[IMP:10][DeployOrchestrator][receive] ai-platform.yaml not found in payload")
@@ -709,18 +734,29 @@ class DeployOrchestrator:
             with open(ai_yaml) as f:
                 config = yaml.safe_load(f) or {}
 
-            project_name = config.get("project", config.get("name", ""))
-            service = config.get("service", project_name)
-            version = config.get("version", "latest")
-
-            if not project_name:
-                logger.error("[IMP:10][DeployOrchestrator][receive] No project name in ai-platform.yaml")
-                print(json.dumps({"status": "FAILED", "error": "No project name in ai-platform.yaml"}))
+            # D5: проект — из аргументов SSH-команды (приоритет), фолбэк на yaml `name` для
+            # локальных/ручных вызовов. version — ТОЛЬКО из аргументов (sha-pinning).
+            resolved_project = project_name or config.get("name", config.get("project", ""))
+            if not resolved_project:
+                logger.error("[IMP:10][DeployOrchestrator][receive] No project name in args or ai-platform.yaml")
+                print(json.dumps({"status": "FAILED", "error": "No project name in args or ai-platform.yaml"}))
                 return 1
+
+            # U-56 verb-reserve + canonical name validation (проект «status» невалиден)
+            if not validate_project_name(resolved_project):
+                logger.error(
+                    "[IMP:10][DeployOrchestrator][receive] Invalid/reserved project name: %r", resolved_project
+                )
+                print(
+                    json.dumps({"status": "FAILED", "error": f"Invalid or reserved project name: {resolved_project}"})
+                )
+                return 1
+
+            service = resolved_project  # D5: service = project_name (чтение service из yaml удалено, U-37)
 
             # Copy payload files to project directory
             projects_base = os.environ.get("PROJECTS_BASE", "/opt/projects")
-            target_dir = os.path.join(projects_base, project_name)
+            target_dir = os.path.join(projects_base, resolved_project)
             os.makedirs(target_dir, exist_ok=True)
 
             for item in Path(staging).iterdir():
@@ -745,12 +781,19 @@ class DeployOrchestrator:
             local_channel = LocalChannel()
             orchestrator = DeployOrchestrator(projects_base=projects_base)
             result = orchestrator.deploy(
-                project_name=project_name,
+                project_name=resolved_project,
                 channel=local_channel,
                 version=version,
                 service=service,
                 project_dir=target_dir,
             )
+            # D5: version (sha) попадает в DeployResult JSON — sha-pinning в snapshots уже
+            # сделан внутри deploy() (DeployHistory.create_snapshot(version=version)).
+            result.version = version
+
+            # ── Пост-деплой цепочка (D4, U-24): best-effort, сбой → WARN, НЕ фейлит деплой ──
+            if result.is_success():
+                self._run_post_deploy_chain(resolved_project, version, result.status.value)
 
             output = json.dumps(result.to_dict())
             print(output)
@@ -765,6 +808,63 @@ class DeployOrchestrator:
                 shutil.rmtree(staging, ignore_errors=True)
 
     # endregion FUNC_receive
+
+    # region FUNC__run_post_deploy_chain
+    ## @purpose  Best-effort post-deploy chain (DevPlan 116 B1 T2/D4, U-24): notify-hook (Telegram)
+    ##           + generate-catalog (regen catalog.json). Оба неблокирующие: сбой → WARN,
+    ##           деплой НЕ фейлится (дизайн notify-hook always exit 0).
+    ## @io       ⇥ project: str, version: str, status: str → ⎋ None
+    ## @complexity — O(1) — два subprocess-вызова с timeout
+    ## @invariants
+    ##   - Вызывается ТОЛЬКО после успешного деплоя (DEPLOYED/PARTIAL)
+    ##   - notify-hook timeout 30s, generate-catalog timeout 60s
+    ##   - Сбой цепочки → logger.warning (IMP:8), не raise
+    def _run_post_deploy_chain(self, project: str, version: str, status: str) -> None:
+        """Run notify-hook + generate-catalog after a successful deploy (best-effort, D4)."""
+        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        notify_hook = os.path.join(platform_root, "core", "internal", "notify", "notify-hook.sh")
+        generate_catalog = os.path.join(platform_root, "core", "internal", "catalog", "generate-catalog.sh")
+
+        logger.info(
+            "[IMP:8][DeployOrchestrator][post_deploy_chain] Running notify-hook + generate-catalog for %s (%s)",
+            project,
+            version,
+        )
+
+        # ── notify-hook (Telegram) — неблокирующий (always exit 0) ──
+        try:
+            subprocess.run(
+                [
+                    notify_hook,
+                    "--severity",
+                    "info",
+                    "🚀",
+                    f"Deployed {project} ({version}) — {status}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            logger.info("[IMP:9][DeployOrchestrator][post_deploy_chain] notify-hook sent for %s", project)
+        except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+            # Best-effort: сбой уведомления НЕ фейлит деплой (D4, дизайн notify-hook)
+            logger.warning("[IMP:8][DeployOrchestrator][post_deploy_chain] notify-hook WARN (non-fatal): %s", e)
+
+        # ── generate-catalog (regen catalog.json) ──
+        try:
+            subprocess.run(
+                [generate_catalog],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            logger.info("[IMP:9][DeployOrchestrator][post_deploy_chain] generate-catalog regenerated for %s", project)
+        except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+            logger.warning("[IMP:8][DeployOrchestrator][post_deploy_chain] generate-catalog WARN (non-fatal): %s", e)
+
+    # endregion FUNC__run_post_deploy_chain
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -894,6 +994,7 @@ class DeployOrchestrator:
         snapshot_id: str | None = None,
         stdout: str = "",
         stderr: str = "",
+        version: str = "",
     ) -> DeployResult:
         """Build a DeployResult with common fields.
 
@@ -907,6 +1008,7 @@ class DeployOrchestrator:
             snapshot_id: Optional snapshot ID.
             stdout: Command stdout.
             stderr: Command stderr.
+            version: Version/sha (D5 — из аргументов receive).
 
         Returns:
             DeployResult instance.
@@ -924,6 +1026,7 @@ class DeployOrchestrator:
             deploy_time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             stdout=stdout,
             stderr=stderr,
+            version=version,
         )
 
 

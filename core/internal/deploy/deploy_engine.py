@@ -155,13 +155,34 @@ class RemoveResult:
 
 @dataclass
 class StatusResult:
-    """Result of a status operation."""
+    """Result of a status operation.
+
+    ## @purpose — Status-контракт (DevPlan 116 B1 T3, U-36): StatusResult = ТОТ ЖЕ канон, что
+    ##            ProjectStatus (orchestrator.py) — поля {project, status, containers, last_deploy}.
+    ##            Поле `node` — расширение (заполняется на on-node статусах); в JSON-каноне
+    ##            диспетчера (orchestrator_cli dispatch status) используется ProjectStatus.to_dict().
+    ## @invariants
+    ##   - status ∈ {"found", "not_found", "stub"} — тот же словарь, что у ProjectStatus
+    ##   - containers: list[dict] — docker compose ps JSON-строки (та же структура)
+    ##   - last_deploy: dict | None — содержимое .deploy-snapshots/deploy-result.json (дикт)
+    ##   - Поля НЕ расходятся с ProjectStatus: тест set-сравнения ключей (T3 п.4)
+    """
 
     project: str
     node: str
     status: str  # "found" | "not_found" | "stub"
     containers: list[dict] = field(default_factory=list)
     last_deploy: dict | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON — канон ProjectStatus {project, status, containers, last_deploy} + node."""
+        return {
+            "project": self.project,
+            "node": self.node,
+            "status": self.status,
+            "containers": self.containers,
+            "last_deploy": self.last_deploy,
+        }
 
 
 @dataclass

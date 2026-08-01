@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: test-shared-ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes, forced-command
-# STRUCTURE: ▶ 14 test scenarios ┌parse + classify + strip + error┐ → ○ caplog LDD IMP:9 verification → ⊕ TRAP[TEST] → ⎋
+# STRUCTURE: ▶ 10 test scenarios ┌parse + classify + strip + error + unknown┐ → ○ caplog LDD IMP:9 verification → ⊕ TRAP[TEST] → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/shared/ssh_command_parser.py — pure string-parsing
-##           tests covering parse_ssh_command and classify_verb public API.
-##           14 tests: parse variants, strip variants, classify variants, empty error.
+##           tests covering parse_ssh_command and classify_verb public API (DevPlan 116 B1 T1).
+##           Exact-match семантика (D2): голые verb'ы классифицируются, unknown → ConfigValidationError,
+##           platform-deploy strip удалён. Verb-словарь — shared/verbs.py.
 ## @scope    Tests public API only: parse_ssh_command(raw) → dict and classify_verb(cleaned) → str.
 ##           Does NOT test _strip_prefixes directly (private implementation detail).
 ## @invariants
@@ -13,14 +14,18 @@
 ##   - LDD: at least one IMP:9 log in each successful parse_ssh_command scenario
 ##   - Tests are independent — no shared mutable state
 ## @rationale  DevPlan 081 TASK-081B1: two duplicate SSH parsers consolidated into one
-##             shared Python module. These tests cover the unified public API.
+##             shared Python module. DevPlan 116 B1 T1 (D2): legacy-кейсы (platform-deploy/
+##             platform-deliver, дефолт-фолбэк deploy) удалены из парсера и из тестов.
 ## @changes    2026-07-26 | Created — 14 tests for ssh_command_parser public API
+##             2026-08-01 | DevPlan 116 B1 T1 — обновлено: unknown → error, receive \<project\> [\<sha\>],
+##                         platform-deliver/deploy-фолбэк кейсы удалены
 # endregion MODULE_CONTRACT
 
 import logging
 
 import pytest
 
+from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.ssh_command_parser import classify_verb, parse_ssh_command
 
 # ── LDD helper ─────────────────────────────────────────────────────────────────
@@ -116,121 +121,91 @@ def test_parse_status(caplog: pytest.LogCaptureFixture) -> None:
 # endregion FUNC_test_parse_status
 
 
-# region FUNC_test_parse_platform_deliver_org
-## @purpose — "platform-deliver org project" (2 args) → verb=platform-deliver,
-##            args="org project". Standard CI format with org prefix.
-# 🧪 TRAP[TEST] · Regression · Scenario: platform-deliver with org + project
-# · Last fail: N/A (new test)
-# · Remove if: parse_ssh_command platform-deliver handling changes
-def test_parse_platform_deliver_org(caplog: pytest.LogCaptureFixture) -> None:
-    """Parse 'platform-deliver org project' — verb=platform-deliver, args='org project'."""
+# region FUNC_test_parse_receive
+## @purpose — "receive myproject abc123" → verb=receive, args="myproject abc123" (D5: version через аргументы).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D5 receive \<project\> [\<sha\>]
+# · Last fail: legacy — версия из ai-platform.yaml (phantom-поля)
+# · Remove if: parse_ssh_command receive handling changes
+def test_parse_receive(caplog: pytest.LogCaptureFixture) -> None:
+    """Parse 'receive myproject abc123' — verb=receive, args='myproject abc123'."""
     caplog.set_level(logging.INFO)
 
-    result = parse_ssh_command("platform-deliver my-org my-project")
+    result = parse_ssh_command("receive myproject abc123")
 
     _assert_imp9_logged(caplog)
 
-    assert result["verb"] == "platform-deliver"
-    assert result["args"] == "my-org my-project"
-    assert result["cleaned"] == "platform-deliver my-org my-project"
+    assert result["verb"] == "receive"
+    assert result["args"] == "myproject abc123"
+    assert result["cleaned"] == "receive myproject abc123"
 
 
-# endregion FUNC_test_parse_platform_deliver_org
+# endregion FUNC_test_parse_receive
 
 
-# region FUNC_test_parse_platform_deliver_legacy
-## @purpose — "platform-deliver project" (1 arg) → verb=platform-deliver,
-##            args="project". Legacy format without org prefix.
-# 🧪 TRAP[TEST] · Regression · Scenario: platform-deliver with single arg (legacy)
+# region FUNC_test_parse_verify
+## @purpose — "verify node1" → verb=verify, args="node1".
+# 🧪 TRAP[TEST] · Regression · Scenario: verify → verb=verify, args=node
 # · Last fail: N/A (new test)
-# · Remove if: parse_ssh_command single-arg platform-deliver handling changes
-def test_parse_platform_deliver_legacy(caplog: pytest.LogCaptureFixture) -> None:
-    """Parse 'platform-deliver project' (1 arg) — verb=platform-deliver, args=project."""
+# · Remove if: parse_ssh_command verify handling changes
+def test_parse_verify(caplog: pytest.LogCaptureFixture) -> None:
+    """Parse 'verify node1' — verb=verify, args=node1."""
     caplog.set_level(logging.INFO)
 
-    result = parse_ssh_command("platform-deliver my-project")
+    result = parse_ssh_command("verify node1")
 
     _assert_imp9_logged(caplog)
 
-    assert result["verb"] == "platform-deliver"
-    assert result["args"] == "my-project"
-    assert result["cleaned"] == "platform-deliver my-project"
+    assert result["verb"] == "verify"
+    assert result["args"] == "node1"
+    assert result["cleaned"] == "verify node1"
 
 
-# endregion FUNC_test_parse_platform_deliver_legacy
-
-
-# region FUNC_test_parse_deploy_legacy
-## @purpose — "project sha env" (bare, no prefix) → verb=deploy (default),
-##            args="project sha env". Legacy format with project+sha+env.
-# 🧪 TRAP[TEST] · Regression · Scenario: bare command → verb=deploy (default)
-# · Last fail: N/A (new test)
-# · Remove if: parse_ssh_command fallback deploy classification changes
-def test_parse_deploy_legacy(caplog: pytest.LogCaptureFixture) -> None:
-    """Parse 'project sha env' — verb=deploy (default), args='project sha env'."""
-    caplog.set_level(logging.INFO)
-
-    result = parse_ssh_command("my-project abc123 production")
-
-    _assert_imp9_logged(caplog)
-
-    assert result["verb"] == "deploy"
-    assert result["args"] == "my-project abc123 production"
-    assert result["cleaned"] == "my-project abc123 production"
-
-
-# endregion FUNC_test_parse_deploy_legacy
+# endregion FUNC_test_parse_verify
 
 
 # ── parse_ssh_command: strip tests ────────────────────────────────────────────
 
 
 # region FUNC_test_strip_path_prefix
-## @purpose — "/opt/platform/core/entrypoints/deploy.sh project sha" →
-##            cleaned="project sha". Verifies path prefix stripping via
+## @purpose — "/opt/platform/core/entrypoints/deploy.sh receive proj sha" →
+##            cleaned="receive proj sha". Verifies path prefix stripping via
 ##            _strip_prefixes pipeline inside parse_ssh_command.
 # 🧪 TRAP[TEST] · Regression · Scenario: full path prefix stripped in cleaned field
 # · Last fail: N/A (new test)
 # · Remove if: _strip_prefixes path stripping behavior changes
 def test_strip_path_prefix(caplog: pytest.LogCaptureFixture) -> None:
-    """Full path prefix is stripped; cleaned='project sha'."""
+    """Full path prefix is stripped; cleaned='receive proj sha'."""
     caplog.set_level(logging.INFO)
 
-    raw = "/opt/platform/core/entrypoints/deploy.sh project sha"
+    raw = "/opt/platform/core/entrypoints/deploy.sh receive proj sha"
     result = parse_ssh_command(raw)
 
     _assert_imp9_logged(caplog)
 
-    assert result["cleaned"] == "project sha"
-    assert result["verb"] == "deploy"
-    assert result["args"] == "project sha"
+    assert result["cleaned"] == "receive proj sha"
+    assert result["verb"] == "receive"
+    assert result["args"] == "proj sha"
     assert result["raw"] == raw
 
 
 # endregion FUNC_test_strip_path_prefix
 
 
-# region FUNC_test_strip_platform_deploy
-## @purpose — "platform-deploy project sha" → cleaned="project sha".
-##            Verifies legacy platform-deploy prefix is stripped before
-##            classification, resulting in verb=deploy (not platform-deploy).
-# 🧪 TRAP[TEST] · Regression · Scenario: legacy platform-deploy prefix stripped
-# · Last fail: N/A (new test)
-# · Remove if: _strip_prefixes legacy platform-deploy stripping changes
-def test_strip_platform_deploy(caplog: pytest.LogCaptureFixture) -> None:
-    """Legacy 'platform-deploy' prefix is stripped; cleaned='project sha'."""
+# region FUNC_test_strip_platform_deploy_unknown
+## @purpose — "platform-deploy project sha" НЕ стрипится (D2) → unknown verb →
+##            ConfigValidationError. R5-negative: legacy-префикс больше не префикс.
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D2 negative: platform-deploy → unknown
+# · Last fail: legacy — strip удалял префикс и уходил в deploy
+# · Remove if: legacy-префиксы сознательно возвращаются (запрещено D2)
+def test_strip_platform_deploy_unknown(caplog: pytest.LogCaptureFixture) -> None:
+    """'platform-deploy project sha' → ConfigValidationError (unknown verb, D2)."""
     caplog.set_level(logging.INFO)
 
-    result = parse_ssh_command("platform-deploy project sha")
-
-    _assert_imp9_logged(caplog)
-
-    assert result["cleaned"] == "project sha"
-    assert result["verb"] == "deploy"
-    assert result["args"] == "project sha"
+    with pytest.raises(ConfigValidationError, match="unknown verb"):
+        parse_ssh_command("platform-deploy project sha")
 
 
-# endregion FUNC_test_strip_platform_deploy
+# endregion FUNC_test_strip_platform_deploy_unknown
 
 
 # ── parse_ssh_command: error tests ────────────────────────────────────────────
@@ -243,9 +218,7 @@ def test_strip_platform_deploy(caplog: pytest.LogCaptureFixture) -> None:
 # · Last fail: N/A (new test)
 # · Remove if: parse_ssh_command empty-input validation changes
 def test_empty_command() -> None:
-    """Empty raw command raises ValueError."""
-    from core.internal.shared.exceptions import ConfigValidationError
-
+    """Empty raw command raises ConfigValidationError."""
     with pytest.raises(ConfigValidationError, match="empty command after stripping"):
         parse_ssh_command("")
 
@@ -297,29 +270,30 @@ def test_classify_verb_verify() -> None:
 # endregion FUNC_test_classify_verb_verify
 
 
-# region FUNC_test_classify_verb_platform_deliver
-## @purpose — classify_verb("platform-deliver org proj") → "platform-deliver".
-##            Multi-word prefix match on "platform-deliver ".
-# 🧪 TRAP[TEST] · Regression · Scenario: 'platform-deliver ...' prefix → 'platform-deliver'
-# · Last fail: N/A (new test)
-# · Remove if: classify_verb prefix match for 'platform-deliver' changes
-def test_classify_verb_platform_deliver() -> None:
-    """'platform-deliver org proj' maps to platform-deliver."""
-    assert classify_verb("platform-deliver org proj") == "platform-deliver"
+# region FUNC_test_classify_verb_bare_status
+## @purpose — classify_verb("status") → "status" (голый verb, U-56 — НЕ deploy).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · U-56 голый status
+# · Last fail: legacy — голый status уходил в deploy-фолбэк
+# · Remove if: classify_verb голый-verb семантика меняется
+def test_classify_verb_bare_status() -> None:
+    """'status' (bare) maps to status — НЕ deploy (U-56)."""
+    assert classify_verb("status") == "status"
 
 
-# endregion FUNC_test_classify_verb_platform_deliver
+# endregion FUNC_test_classify_verb_bare_status
 
 
-# region FUNC_test_classify_verb_default_deploy
-## @purpose — classify_verb("someproject sha") → "deploy" (default fallback).
-##            Any input that doesn't match exact or prefix verbs defaults to deploy.
-# 🧪 TRAP[TEST] · Regression · Scenario: unrecognized input → 'deploy' (default)
-# · Last fail: N/A (new test)
-# · Remove if: classify_verb default fallback changes
-def test_classify_verb_default_deploy() -> None:
-    """Unrecognized command maps to deploy (default)."""
-    assert classify_verb("someproject sha") == "deploy"
+# region FUNC_test_classify_verb_unknown
+## @purpose — unknown input → ConfigValidationError (D2: дефолт-фолбэк удалён).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D2 negative: unknown → error
+# · Last fail: legacy — "deploy" фолбэк для любого unrecognized input
+# · Remove if: classify_verb unknown-семантика меняется
+def test_classify_verb_unknown() -> None:
+    """Unknown command raises ConfigValidationError (никакого deploy-фолбэка)."""
+    with pytest.raises(ConfigValidationError, match="unknown verb"):
+        classify_verb("someproject sha")
+    with pytest.raises(ConfigValidationError, match="unknown verb"):
+        classify_verb("deploy proj sha")
 
 
-# endregion FUNC_test_classify_verb_default_deploy
+# endregion FUNC_test_classify_verb_unknown

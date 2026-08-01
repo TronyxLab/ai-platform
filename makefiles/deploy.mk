@@ -15,7 +15,7 @@
 ## deploy: Deploy project via git push → CI pipeline
 ##   Usage: make deploy PROJECT=<dir> [NODE=<node>] [LAUNCH=1]
 ##   NODE=<node>: run VPS pre-flight check before git push (W1)
-##   LAUNCH=1: after git push, wait for CI + verify + print URL (W6)
+##   LAUNCH=1: after git push, deploy directly via deliver (NODE→host, DevPlan 116 B1 T5)
 ##   Pushes main branch to origin, triggering CI workflow
 deploy:
 	@echo "[IMP:7][make][deploy] Deploying PROJECT=$(PROJECT)..."
@@ -44,24 +44,35 @@ deploy:
 	@# ── Git push ──
 	@cd "$(PROJECT)" && git push origin main
 	@echo "[IMP:9][make][deploy] Git push complete — CI pipeline triggered"
-	@# ── W6: LAUNCH=1 mode — deploy-project + verify ──
+	@# ── W6: LAUNCH=1 mode — deliver via orchestrator (NODE→host, DevPlan 116 B1 T5) ──
 	@if [ "$(filter 1,$(LAUNCH))" = "1" ]; then \
-		echo "[IMP:7][make][deploy] LAUNCH mode: deploying directly to NODE=$(NODE) via orchestrator..." >&2; \
+		echo "[IMP:7][make][deploy] LAUNCH mode: deploying directly to NODE=$(NODE) via deliver..." >&2; \
 		if [ -z "$(NODE)" ]; then \
 			echo "[IMP:10][make][deploy] FATAL: LAUNCH=1 requires NODE=<node>" >&2; \
 			exit 1; \
 		fi; \
+		source $(_platform_root)/core/lib/node-resolver.sh; \
+		NODE_YAML_PATH="$$(resolve_node_yaml "$(NODE)" "$(_platform_root)" 2>/dev/null)" || { \
+			echo "[IMP:10][make][deploy] FATAL: node.yaml not found for NODE=$(NODE) — cannot resolve host" >&2; \
+			exit 1; \
+		}; \
+		DEPLOY_HOST="$$(extract_node_host "$$NODE_YAML_PATH")"; \
+		if [ -z "$$DEPLOY_HOST" ]; then \
+			echo "[IMP:10][make][deploy] FATAL: no host field in node.yaml for NODE=$(NODE)" >&2; \
+			exit 1; \
+		fi; \
 		PROJECT_NAME="$$(basename "$(PROJECT)")"; \
-		python3 -m core.internal.deploy.orchestrator_cli deploy \
+		python3 -m core.internal.deploy.orchestrator_cli deliver \
 			--project "$$PROJECT_NAME" \
 			--project-dir "$(PROJECT)" \
-			--host "$(NODE)" \
-			--forced-command; \
+			--host "$$DEPLOY_HOST"; \
 	fi
 
 ## deploy-project: Direct project deploy bypassing CI (emergency fallback)
-##   Usage: make deploy-project PROJECT=<dir> NODE=<node> [SKIP_VERIFY=1] [DRY_RUN=1]
-##   Validates PROJECT has ai-platform.yaml, resolves NODE→SSH host, deploys with audit.
+##   Usage: make deploy-project PROJECT=<dir> NODE=<node> [VERSION=<sha>] [DRY_RUN=1]
+##   Validates PROJECT has ai-platform.yaml, resolves NODE→SSH host via extract_node_host
+##   (core/lib/node-resolver.sh, 3-candidate path), deploys через deliver (ForcedCommandChannel
+##   receive <project> <version>). --skip-verify/--scp УДАЛЕНЫ (DevPlan 116 B1 T5/D3).
 ##   DevPlan 091 Wave A (AC-A2): delegates to DeployOrchestrator via orchestrator_cli.
 deploy-project:
 	@echo "[IMP:7][make][deploy-project] Direct deploy PROJECT=$(PROJECT) NODE=$(NODE)..."
@@ -73,13 +84,22 @@ deploy-project:
 	fi
 	@PROJECT_BASE="$$(dirname "$(PROJECT)")"; \
 	PROJECT_NAME="$$(basename "$(PROJECT)")"; \
-	EXTRA=""; \
-	if [[ "$(filter 1,$(SKIP_VERIFY))" = "1" ]]; then EXTRA="$$EXTRA --skip-verify"; fi; \
-	python3 -m core.internal.deploy.orchestrator_cli deploy \
+	source $(_platform_root)/core/lib/node-resolver.sh; \
+	NODE_YAML_PATH="$$(resolve_node_yaml "$(NODE)" "$(_platform_root)" 2>/dev/null)" || { \
+		echo "[IMP:10][make][deploy-project] FATAL: node.yaml not found for NODE=$(NODE) — cannot resolve host" >&2; \
+		exit 1; \
+	}; \
+	DEPLOY_HOST="$$(extract_node_host "$$NODE_YAML_PATH")"; \
+	if [ -z "$$DEPLOY_HOST" ]; then \
+		echo "[IMP:10][make][deploy-project] FATAL: no host field in node.yaml for NODE=$(NODE) (check node.host)" >&2; \
+		exit 1; \
+	fi; \
+	echo "[IMP:8][make][deploy-project] Resolved NODE=$(NODE) → host=$$DEPLOY_HOST"; \
+	python3 -m core.internal.deploy.orchestrator_cli deliver \
 		--project "$$PROJECT_NAME" \
 		--project-dir "$(PROJECT)" \
-		--scp \
-		$$EXTRA
+		--host "$$DEPLOY_HOST" \
+		$(if $(VERSION),--version '$(VERSION)')
 	@echo "[IMP:9][make][deploy-project] Direct deploy complete"
 
 ## context-promote: Promote platform to context org

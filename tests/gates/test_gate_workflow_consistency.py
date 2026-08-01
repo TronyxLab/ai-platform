@@ -41,20 +41,19 @@ _WORKFLOW_DIR: pathlib.Path = repo_root() / ".github" / "workflows"
 _MAKEFILE_PATH: pathlib.Path = repo_root() / "Makefile"
 
 # Expected workflow files after Plan 2 consolidation + DevPlan 050 build-hermes
+# DevPlan 116 B1 T4: platform-deploy.yml + stage-deploy.yml УДАЛЕНЫ — единый канал deploy-project.yml
 _EXPECTED_WORKFLOWS: set[str] = {
     "build-hermes.yml",
     "build-platform.yml",
     "core-deploy.yml",
     "deploy-project.yml",
     "mirror.yml",
-    "platform-deploy.yml",
     "platform-test.yml",
     "push-gate.yml",
-    "stage-deploy.yml",
 }
 
-# Expected count: 8 pre-existing + 1 (build-hermes.yml, DevPlan 050)
-_EXPECTED_WORKFLOW_COUNT: int = 9
+# Expected count: 7 (9 − platform-deploy.yml − stage-deploy.yml, DevPlan 116 B1 T4)
+_EXPECTED_WORKFLOW_COUNT: int = 7
 
 # Deploy workflows that should trigger on platform-test (workflow_run)
 _DEPLOY_WORKFLOWS: set[str] = {

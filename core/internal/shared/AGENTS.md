@@ -1,4 +1,4 @@
-# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, platform-deliver, project-registry, exceptions, timeouts, ssh-opts, contracts
+# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, verbs, project-registry, exceptions, timeouts, ssh-opts, contracts
 # STRUCTURE: ┌контракт области┐ → ◇ инвентарь 21 модуль (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
 # region MODULE_CONTRACT
 ## @purpose  Архитектурный контракт области core/internal/shared/ — инвентарь модулей и правила добавления.
@@ -20,6 +20,7 @@
 ##           2026-08-01 | DevPlan 116 B5 — +timeouts.py (19-й), +ssh_opts.py (20-й); инвентарь
 ##           2026-08-01 | DevPlan 116 B4 — +contracts.py (21-й); инвентарь
 ##           2026-08-01 | DevPlan 116 B9 T4 — +stub_detection.py (22-й); инвентарь
+##           2026-08-01 | DevPlan 116 B1 T1/T7 — +verbs.py (23-й); −platform_deliver.py (verb УДАЛЁН, D1)
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -37,7 +38,6 @@
 | `exceptions.py` | Типизированная иерархия ошибок платформы | `PlatformError`, `ConfigValidationError`, `ConfigNotFoundError`, `ConfigParseError`, ... | все Python-модули |
 | `node_detect.py` | Детекция AGE-ключа (env-цепочка) + авто-детекция имени ноды из node-configs (DevPlan 104 — дедупликация bootstrap/converge/node-update) | `detect_age_key()`, `auto_detect_node_name()`, CLI `--detect-age-key` / `--detect-node-name` | bootstrap, converge, node-update |
 | `node_yaml.py` | Единый фасад чтения node.yaml (мутации с TRAP[BUG] 2026-07-30) | `NodeYaml(path).get(...)`, CLI `--get/--set` | vhost_renderer, reconciler, converge, scaffold |
-| `platform_deliver.py` | Сборка verb-команды forced-command platform-deliver (замена дублирующих строк) | `build_platform_deliver_verb()` | deploy, orchestrator_cli |
 | `project_registry.py` | Реестр проектов: регистрация/дерегистрация/список поверх NodeYaml | `validate_project_name()`, `register/unregister/list` | DeployEngine, scaffold, lifecycle |
 | `schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — единственная Draft7Validator-точка (DevPlan 116 B6 T5, дедупликация jsonschema_validate.py + node_yaml.validate) | `validate_yaml_against_schema()`, `validate_dict_against_schema()` | jsonschema_validate, node_yaml.validate |
 | `secrets_env_parser.py` | Единый парсер secrets.env (заменяет 7 inline-парсеров) | `parse()`, `write()`, `merge()`, `export_shell()` | decrypt-secrets, secrets-init, bootstrap |
@@ -48,6 +48,7 @@
 | `telegram_notifier.py` | Единый Telegram-клиент (заменяет 6 реализаций: 3 shell + 3 Python) | `send_telegram()` | notify-hook, hermes-agent, deploy |
 | `timeouts.py` | Единый реестр таймаутов операционных политик (DevPlan 116 B5 T1, U-11 — единственный источник числовых timeout= в docker/ssh/healthcheck-домене) | `COMPOSE_UP_TIMEOUT`, `PULL_TIMEOUT`, `BUILD_TIMEOUT`, `HEALTHCHECK_POLL_TIMEOUT`, `SSH_CONNECT_TIMEOUT`, `DEPLOY_TIMEOUT`, `SSH_READ_TIMEOUT`, `RETRY_BACKOFF_SECONDS`, `IMAGE_CHECK_TIMEOUT`, `DOCKER_CMD_TIMEOUT`, `DOCKER_STOP_TIMEOUT`, `RSYNC_TIMEOUT`, `RETRY_COUNT` | docker_compose, ssh_opts, channels, docker_orchestrator, deploy_engine, reconciler, context_deployer, remote_executor, overlay_deliverer, context_promoter, orphan_reconciler, deploy_orchestrator |
 | `vps_readiness.py` | VPS pre-flight проверки (SSH, forced-command ping, /opt/projects/, Docker) — Strangler-миграция vps-readiness.sh (DevPlan 105, дедупликация deploy.mk/CI pre-flight) | `check_vps_ready()`, CLI `NODE [--json|--quick]` | deploy.mk pre-flight, deploy-project.yml (через фасад core/lib/vps-readiness.sh) |
+| `verbs.py` | Канонический verb-словарь forced-command диспетчера (DevPlan 116 B1 T1, U-56) — единый источник CANONICAL_VERBS + reserve-имен для проектов | `CANONICAL_VERBS`, `VERB_RESERVE`, `is_verb()`, `validate_not_verb()` | ssh_command_parser (classify_verb), project_registry (validate_project_name), gate канала (T10) |
 | `__init__.py` | Пакетный контракт shared-области | — | — |
 
 ## Правила добавления нового модуля

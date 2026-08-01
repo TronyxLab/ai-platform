@@ -43,15 +43,20 @@ logger = logging.getLogger(__name__)
 # in standalone CLI (subprocess) mode. For pytest, rootdir = project root.
 from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
+from core.internal.shared.verbs import is_verb
 
 # ── Project name validation ─────────────────────────────────────────────────
 ## @purpose  Canonical project name validation used by deploy_engine, payload_deliverer, reconciler,
 ##           context_initializer, project_scaffolder. Rejects empty names, path traversal sequences,
-##           invalid characters, and leading '-'/'_' (strict regex, DevPlan 116 B6 T3).
+##           invalid characters, leading '-'/'_' (strict regex, DevPlan 116 B6 T3), and
+##           verb-имена из forced-command словаря (U-56: проект «status» задиспатчился бы как verb).
 ## @invariants
 ##   - Regex: ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ — must start with alphanumeric; hyphen/underscore allowed
 ##     only after the first char. STRICT: rejects leading '-'/'_' (эквивалентен бывшему
 ##     контекстному валидатору context_initializer).
+##   - Verb-reserve (U-56, DevPlan 116 B1 T1): is_verb(name) → False. Verb-имена (ping/exit/status/
+##     verify/remove/receive) недоступны как имена проектов — иначе SSH_ORIGINAL_COMMAND
+##     неотличим от verb. VERB_RESERVE импортируется из shared/verbs.py (единый источник).
 ##   - Returns bool (never raises, never sys.exit)
 ##   - DRY: single implementation shared by 5+ consumers
 ## @rationale D7 (DevPlan 036E): приватный валидатор имён дублировался в legacy shell,
@@ -61,12 +66,17 @@ from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 ##            '-'/'_' (эквивалент контекстного валидатора); все 3 локальных валидатора
 ##            (reconciler, context_initializer, project_scaffolder strip-check)
 ##            мигрированы на этот канон.
+##            DevPlan 116 B1 T1 (U-56): verb-имена резервируются через shared/verbs.py.
 ## @changes 2026-07-26 · DevPlan 036E — Added validate_project_name() for Wave 5e Strangler-Fig
 ## @changes 2026-08-01 · DevPlan 116 B6 T3 — regex ужесточён: leading '-'/'_' rejected
+## @changes 2026-08-01 · DevPlan 116 B1 T1 — verb-reserve: is_verb(name) → False (U-56)
 
 
 def validate_project_name(name: str) -> bool:
     """Validate project name: alphanumeric first char, then alphanumeric/underscore/hyphen.
+
+    Rejects verb-имена из forced-command словаря (U-56): проект «status» невалиден,
+    потому что `status` в SSH_ORIGINAL_COMMAND — это verb диспетчера.
 
     Args:
         name: Project name string to validate.
@@ -75,6 +85,9 @@ def validate_project_name(name: str) -> bool:
         True if valid, False otherwise.
     """
     if not name or not isinstance(name, str):
+        return False
+    # Verb-reserve (U-56): verb-имена не доступны для проектов — dispatcher-неоднозначность
+    if is_verb(name):
         return False
     # Strict regex: must start [a-zA-Z0-9]; then [a-zA-Z0-9_-]* — no spaces, slashes,
     # path traversal ('.' not in class), or leading '-'/'_' (DevPlan 116 B6 T3).

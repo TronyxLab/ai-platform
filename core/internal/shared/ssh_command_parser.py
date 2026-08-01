@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes, forced-command
+# GREP_SUMMARY: ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes, forced-command, verbs, dispatch
 # STRUCTURE: ▶ parse_ssh_command(raw) → ◇ _strip_prefixes → ◇ classify_verb(cleaned) → ⊕ dict → ⎋
 #            ▶ CLI: python3 -m core.internal.shared.ssh_command_parser parse|classify <command>
 # region MODULE_CONTRACT
-## @purpose  Unified SSH_ORIGINAL_COMMAND parser — replaces two duplicate parsers in
-##           deploy.sh and the legacy deploy shell with a single canonical implementation.
-##           See: DevPlan 081 TASK-081B1.
+## @purpose  Unified SSH_ORIGINAL_COMMAND parser — canonical implementation for the forced-command
+##           dispatcher (`orchestrator_cli dispatch`, DevPlan 116 B1). Classifies verb against the
+##           closed verb dictionary (shared/verbs.py, D1) with EXACT-match semantics: unknown verb →
+##           ConfigValidationError (никакого дефолт-фолбэка на deploy, D2).
 ## @scope    Core/internal/shared — low-level parsing layer (by DDD). No business logic.
 ##           Two public functions: parse_ssh_command(raw) and classify_verb(cleaned).
 ##           CLI mode for testing and direct invocation.
 ## @invariants
 ##   1. Always returns dict with verb/args/raw/cleaned fields from parse_ssh_command
-##   2. Empty input to parse_ssh_command raises ValueError
-##   3. classify_verb always returns one of the seven defined verb strings (never empty)
-##   4. Stripping order is deterministic: path prefix first, then legacy prefixes, then trim
-##   5. CLI outputs JSON for parse mode, bare string for classify mode
+##   2. Empty input to parse_ssh_command raises ConfigValidationError
+##   3. classify_verb returns one of CANONICAL_VERBS (verbs.py) or raises ConfigValidationError —
+##      НИКОГДА не возвращает "deploy" как фолбэк (D2: legacy-формат `deploy <project> <sha> [env]` удалён)
+##   4. Stripping order is deterministic: path prefix first, then trim. legacy strip-префиксы УДАЛЕНЫ (D2)
+##   5. CLI outputs JSON for parse mode, bare string for classify mode; unknown verb → JSON error + exit 4
 ##   6. Non-fatal: I/O errors in CLI cause sys.exit(1), not silent failures
-## @rationale  D1 from DevPlan 081: Two independent SSH command parsers exist in
-##             deploy.sh (shell-function _strip_command_prefixes) and the legacy deploy shell
-##             (shell-function parse_ssh_command). Both implement the same stripping
-##             and verb classification logic with minor differences. Consolidating into
-##             a single Python module owned by core/internal/shared eliminates
-##             DRIFT-D1 and makes the parser unit-testable.
+##   7. Verb-словарь — из shared/verbs.py (CANONICAL_VERBS); reserve-имена для проектов (U-56)
+## @rationale  DevPlan 081: два дублирующихся парсера консолидированы в единый Python-модуль.
+##             DevPlan 116 B1 T1 (D2): legacy strip-префиксы и дефолт-фолбэк deploy
+##             удалены — неизвестный verb обязан давать JSON-ошибку (честные exit-коды, B4),
+##             а не тихо деплоить чужой проект. Голый `status`/`remove`/`verify`/`receive` теперь
+##             классифицируется как verb (U-56: раньше голый `status` уходил в deploy).
 ## @changes    2026-07-26 | DevPlan 081 TASK-081B1 — Created as shared Python module
+##             2026-08-01 | DevPlan 116 B1 T1 — D2: legacy strip-префиксы удалены, classify_verb
+##                         exact-match по CANONICAL_VERBS, unknown → ConfigValidationError;
+##                         parse_ssh_command: receive <project> [<sha>], status/remove <project>, verify <node>
 # endregion MODULE_CONTRACT
 
 import json
@@ -31,6 +36,7 @@ import os
 import sys
 
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
+from core.internal.shared.verbs import CANONICAL_VERBS
 
 logger = logging.getLogger(__name__)
 
@@ -44,24 +50,24 @@ _DEPLOY_SCRIPT_PATH = f"{_PLATFORM_ROOT}/core/entrypoints/deploy.sh"
 
 
 def _strip_prefixes(raw: str) -> str:
-    """Strip known path prefixes and legacy wrapper tokens from raw SSH command.
+    """Strip known path prefixes from raw SSH command.
 
     ▶ ┌raw┐ → ◇ strip /opt/.../deploy.sh   (with space)
     │           → ◇ strip /opt/.../deploy.sh (bare)
-    │           → ◇ strip "platform-deploy " (with space)
-    │           → ◇ strip "platform-deploy"  (bare)
     │           → ◇ strip "deploy "          (with space)
     │           → ◇ strip "deploy"           (bare)
     │           → ◇ trim whitespace
     │           → ⎋ cleaned string
     ## @purpose  Remove known wrapper prefixes from SSH_ORIGINAL_COMMAND so the
-    ##           remaining string is a plain verb + args (e.g. "deploy --project foo").
+    ##           remaining string is a plain verb + args (e.g. "receive proj abc123").
     ##           The appleboy/ssh-action's forced-command wraps the original command
     ##           with the full deploy.sh path.
     ## @io — ┌raw: str┐ → ⎋ cleaned: str
-    ## @complexity — O(1) — fixed number of prefix checks (max 7)
+    ## @complexity — O(1) — fixed number of prefix checks (max 5)
     ## @invariants
     ##   - Does NOT validate for empty — caller (parse_ssh_command) handles that
+    ##   - legacy strip-префиксы УДАЛЕНЫ (D2, DevPlan 116 B1) — префиксы не распознаются
+    ##     намеренно: legacy-команда остаётся как есть → classify_verb → unknown
     """
     cleaned = raw
 
@@ -74,17 +80,7 @@ def _strip_prefixes(raw: str) -> str:
     if cleaned.startswith(_DEPLOY_SCRIPT_PATH):
         cleaned = cleaned[len(_DEPLOY_SCRIPT_PATH) :]
 
-    # Step 3: Strip legacy "platform-deploy " prefix (with space)
-    if cleaned.startswith("platform-deploy "):
-        cleaned = cleaned[len("platform-deploy ") :]
-
-    # Step 4: Strip bare "platform-deploy" (without space)
-    if cleaned == "platform-deploy" or (
-        cleaned.startswith("platform-deploy") and not cleaned.startswith("platform-deploy ")
-    ):
-        cleaned = cleaned[len("platform-deploy") :]
-
-    # Step 5: Trim whitespace
+    # Step 3: Trim whitespace
     return cleaned.strip()
 
 
@@ -95,43 +91,41 @@ def _strip_prefixes(raw: str) -> str:
 
 
 def classify_verb(cleaned: str) -> str:
-    """Classify a cleaned SSH command string into a canonical verb.
+    """Classify a cleaned SSH command string into a canonical verb (exact-match, D2).
 
-    ▶ ┌cleaned┐ → ◇ exact match (ping|exit)            → ⎋ verb
-    │           → ◇ prefix match (remove |status | ...) → ⎋ verb
-    │           → ◇ default fallback                    → ⎋ "deploy"
+    ▶ ┌cleaned┐ → ◇ exact match (ping|exit|status|verify|remove|receive) → ⎋ verb
+    │           → ◇ prefix match (verb + " ") → ⎋ verb
+    │           → ✗ unknown → raise ConfigValidationError
 
     ## @purpose — Map a cleaned SSH command string to a canonical verb token.
-    ##            Used for K1 verb contract dispatch in deploy.sh entrypoint.
-    ## @io — ⇥ cleaned: str → ⎋ verb: str (one of: ping|exit|remove|status|verify|
-    ##                                    platform-deliver|platform-deploy|deploy)
-    ## @complexity — O(N) where N = number of prefix patterns (7 patterns)
+    ##            NO default fallback: unrecognized input raises ConfigValidationError
+    ##            (честные exit-коды B4, legacy `deploy <project> <sha> [env]` удалён — D2).
+    ## @io — ⇥ cleaned: str → ⎋ verb: str (one of CANONICAL_VERBS from shared/verbs.py)
+    ## @complexity — O(N) where N = len(CANONICAL_VERBS) (6)
     ## @invariants
-    ##   - Exact match (ping/exit) is checked before prefix match
-    ##   - Prefix matches consume the full prefix + space before checking
-    ##   - "deploy" is the fallback for any unrecognized input (never fails)
-    ##   - Returns one of exactly 8 strings, always lowercase
+    ##   - Exact match (bare verb) checked BEFORE prefix match — голый `status` → verb status (U-56)
+    ##   - Prefix match: verb + " " (аргументы после пробела)
+    ##   - Unknown → ConfigValidationError (никогда не "deploy" как фолбэк)
+    ##   - Returns only strings from CANONICAL_VERBS, always lowercase
     """
-    # Exact matches (verb alone — no arguments)
-    if cleaned == "ping":
-        return "ping"
-    if cleaned == "exit":
-        return "exit"
+    # Exact matches (verb alone — no arguments): голый `status` теперь verb, НЕ проект (U-56)
+    if cleaned in CANONICAL_VERBS:
+        return cleaned
 
     # Prefix matches (verb followed by a space and arguments)
-    prefixes = [
-        ("remove ", "remove"),
-        ("status ", "status"),
-        ("verify ", "verify"),
-        ("platform-deliver ", "platform-deliver"),
-        ("platform-deploy ", "platform-deploy"),
-    ]
-    for prefix, verb in prefixes:
+    for verb in CANONICAL_VERBS:
+        prefix = verb + " "
         if cleaned.startswith(prefix):
             return verb
 
-    # Default: treat as deploy
-    return "deploy"
+    # Unknown verb → error (D2: никакого дефолт-фолбэка на deploy)
+    logger.warning(
+        "[IMP:7][classify_verb] Unknown verb in cleaned command: %r",
+        cleaned[:80],
+    )
+    raise ConfigValidationError(
+        f"unknown verb in SSH command: {cleaned!r} (expected one of: {', '.join(CANONICAL_VERBS)})"
+    )
 
 
 # endregion FUNC_classify_verb
@@ -145,18 +139,21 @@ def parse_ssh_command(raw: str) -> dict:
 
     ▶ ┌raw┐ → ◇ _strip_prefixes(raw) → cleaned
     │           → ◇ classify_verb(cleaned) → verb
-    │           → ◇ extract args → ⊕ dict{verb, args, raw, cleaned} → ⎋
+    │           → ◇ extract args per verb → ⊕ dict{verb, args, raw, cleaned} → ⎋
 
     ## @purpose — Parse raw SSH_ORIGINAL_COMMAND into a structured dict with
     ##            verb, args, raw, and cleaned fields. Single entry point for
-    ##            all SSH forced-command parsing.
+    ##            all SSH forced-command parsing (dispatcher, DevPlan 116 B1 T2).
     ## @io — ⇥ raw: str → ⎋ dict{verb: str, args: str|None, raw: str, cleaned: str}
     ## @complexity — O(1) fixed string operations + O(N) classify
     ## @invariants
     ##   - Always returns dict with exactly 4 keys: verb, args, raw, cleaned
     ##   - raw.value == raw (the original input is preserved)
-    ##   - Empty input → raises ValueError("empty command after stripping")
+    ##   - Empty input → raises ConfigValidationError("empty command after stripping")
     ##   - args is None for ping/exit verbs, str for all others
+    ##   - receive: args = "<project> [<sha>]" (два токена, D5 — версия из аргументов)
+    ##   - status/remove: args = "<project>"; verify: args = "<node>"
+    ##   - Unknown verb → ConfigValidationError propagates (никогда не deploy-фолбэк)
     ##   - IMP:9 log emitted on successful parse
     ##   - IMP:7 log emitted for each stripping step
     """
@@ -172,14 +169,18 @@ def parse_ssh_command(raw: str) -> dict:
 
     verb = classify_verb(cleaned)
 
-    # Extract args based on verb
+    # Extract args based on verb (аргументы verb'а — по контракту T1)
     if verb in ("ping", "exit"):
         args = None
-    elif verb in ("remove", "status", "verify", "platform-deliver", "platform-deploy"):
+    elif verb == "receive":
+        # receive <project> [<sha>] — два токена; версия (sha) из аргументов (D5)
         prefix = verb + " "
         args = cleaned[len(prefix) :].strip() if cleaned.startswith(prefix) else None
-    else:  # deploy (default)
-        args = cleaned
+    elif verb in ("status", "remove") or verb == "verify":
+        prefix = verb + " "
+        args = cleaned[len(prefix) :].strip() if cleaned.startswith(prefix) else None
+    else:  # pragma: no cover — CANONICAL_VERBS закрыто, unreachable
+        args = None
 
     result = {
         "verb": verb,
@@ -215,7 +216,7 @@ def _cli_main() -> int:
     ## @purpose — CLI wrapper for ssh_command_parser. Supports:
     ##   parse <command>              — JSON output (default)
     ##   --format lines parse <cmd>   — line-by-line output (avoids inline python3 -c)
-    ##   classify <command>           — bare verb string
+    ##   classify <command>           — bare verb string (unknown → error + exit 4)
     ## @rationale --format lines eliminates inline python3 -c in deploy.sh
     ##   (DevPlan 081 AC7 migration — Tier 1 Strangler trigger).
     """
@@ -263,9 +264,9 @@ def _cli_main() -> int:
         try:
             verb = classify_verb(command)
             print(verb)
-        except (ValueError, KeyError, TypeError) as e:
+        except PlatformError as e:
             print(f"Error: {e}", file=sys.stderr)
-            return 1
+            return e.exit_code
     else:
         print(f"Unknown mode: {mode} (expected parse or classify)", file=sys.stderr)
         return 1

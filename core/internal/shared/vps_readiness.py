@@ -302,7 +302,7 @@ def check_vps_ready(
             all_ok = False
             failures.append(
                 {
-                    "check": "Forced-command 'platform-deliver --ping' did not respond with pong",
+                    "check": "Forced-command 'ping' did not respond with pong (orchestrator_cli dispatch, DevPlan 116 B1)",
                     "remediation": _REMEDIATION_PING.replace("<node>", node_name),
                 }
             )

@@ -2,7 +2,7 @@
 # STRUCTURE: ▶ global:rules → per-project template → $PROJECT substitution → /opt/prometheus/rules/ → ┘
 # region MODULE_CONTRACT
 ## @purpose  Prometheus native alerting rules for per-project monitoring
-## @scope    Generated per-project by _generate_alert_rules() in platform-deploy.sh
+## @scope    Generated per-project post-deploy (receive verb → monitoring_config_renderer.py)
 ##           $PROJECT placeholder is substituted at generation time
 ## @invariants
 ##   - Three base rules: ServiceDown, HighMemoryUsage, HighCPUUsage

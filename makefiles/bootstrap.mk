@@ -77,11 +77,17 @@ converge:
 
 ## render-vhosts: Regenerate Nginx vhost configs from node.yaml
 ##   Usage: make render-vhosts NODE=<name>
+##   NODE_CONFIGS_DIR default: $(_platform_root)/node-configs (DevPlan 116 B1 T8, U-55)
 ##   Delegates to core/internal/scaffold/add-vhost.sh --render-all --node
 render-vhosts:
 	@echo "[IMP:7][make][render-vhosts] Generating vhost configs from node.yaml..."
 	@bash $(_platform_root)/core/internal/scaffold/add-vhost.sh --render-all --node $(NODE) --node-configs-dir $(NODE_CONFIGS_DIR)
 	@echo "[IMP:9][make][render-vhosts] Vhost generation complete"
+
+# DevPlan 116 B1 T8 (U-55): NODE_CONFIGS_DIR с дефолтом — make render-vhosts работает
+# без явного NODE_CONFIGS_DIR (0 set -u фейлов на незаданной переменной).
+# Канон: PLATFORM_ROOT/node-configs (3-candidate path в node-resolver.sh, первый кандидат).
+NODE_CONFIGS_DIR ?= $(_platform_root)/node-configs
 
 ## deploy-context: Deploy all projects of a context on a bootstrapped node (DevPlan 047)
 ##   Usage: make deploy-context NODE=<name> [CONTEXT=<context>]

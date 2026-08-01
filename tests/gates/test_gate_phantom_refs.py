@@ -41,11 +41,14 @@ logger = logging.getLogger(__name__)
 ROOT = repo_root()
 
 # ── Фантомные имена (удалённые файлы, D3) ─────────────────────────────────────
+# DevPlan 116 B1 T7: +platform-deploy.sh (legacy forced-command скрипт — 26 упоминаний
+# очищены волной B1; канал заменён на orchestrator_cli dispatch / receive).
 _PHANTOM_NAMES: tuple[str, ...] = (
     "deploy-project.sh",
     "state_migration.py",
     "audit_logging.sh",
     "generate-dev-certs.sh",
+    "platform-deploy.sh",
 )
 
 # ── Корни скана (D3: core/, tests/, makefiles/, .github/ + файлы) ─────────────

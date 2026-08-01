@@ -26,12 +26,12 @@ from __future__ import annotations
 # make_target in entrypoint-manifest.yaml must be traceable to one of these paths.
 
 CANONICAL_DEPLOY_PATHS: list[str] = [
-    # 1. CI → platform-deliver + deploy.sh
-    #    git push → GitHub CI → tar via SSH forced-command → orchestrator_cli receive
-    "CI → platform-deliver + deploy.sh",
+    # 1. CI → receive verb + dispatcher (DevPlan 116 B1)
+    #    git push → GitHub CI → tar via SSH forced-command → orchestrator_cli dispatch receive
+    "CI → receive + dispatcher (orchestrator_cli dispatch)",
     # 2. make deploy-project (direct)
-    #    tar + SSH, bypass CI, emergency fallback with DEPLOY-DIRECT audit
-    "make deploy-project (direct)",
+    #    deliver (ForcedCommandChannel receive <project> <version>), bypass CI, emergency fallback
+    "make deploy-project (deliver, ForcedCommandChannel receive)",
     # 3. context_deployer.py (Python)
     #    ghcr.io pull (primary) + build-on-node fallback, idempotent health-gate
     "context_deployer.py (Python)",

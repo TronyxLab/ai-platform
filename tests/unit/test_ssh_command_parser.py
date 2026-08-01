@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: test-ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes
-# STRUCTURE: ┌direct calls (no mock/no FS)┐ → ○ test scenarios: strip → classify → parse → CLI
+# STRUCTURE: ┌direct calls (no mock/no FS)┐ → ○ test scenarios: strip → classify → parse → CLI → unknown
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/shared/ssh_command_parser.py
 ##           Pure string-parsing tests — no filesystem, no subprocess.
+##           DevPlan 116 B1 T1 (D2): exact-match семантика, unknown → ConfigValidationError,
+##           platform-deploy/platform-deliver legacy-кейсы удалены.
 ## @scope    Tests: _strip_prefixes, classify_verb, parse_ssh_command, CLI entry point.
 ## @invariants
 ##   - No Docker dependency (pure Python, no subprocess)
 ##   - No tmp_path needed (no file I/O)
 ##   - LDD: at least one IMP:9 log in each successful scenario
+##   - R5: negative-тесты для unknown verb (не deploy-фолбэк)
 ## @rationale  New shared module requires test coverage to prevent regressions
-##             when deploy.sh and the legacy deploy shell are migrated to use this parser.
+##             when the forced-command dispatcher uses this parser.
+## @changes 2026-08-01 | DevPlan 116 B1 T1 — legacy platform-deploy/platform-deliver кейсы удалены,
+##                     unknown → ConfigValidationError, receive <project> [<sha>]
 # endregion MODULE_CONTRACT
 
 import contextlib
@@ -21,6 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
+from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.ssh_command_parser import (
     _strip_prefixes,
     classify_verb,
@@ -32,15 +38,14 @@ from core.internal.shared.ssh_command_parser import (
 
 # region FUNC_test_strip_full_path_with_space
 ## @purpose — Strip path prefix with trailing space (appleboy/ssh-action format).
-##            deploy.sh: "${cleaned#/opt/platform/core/entrypoints/deploy.sh }"
 # 🧪 TRAP[TEST] · Regression · Scenario: path prefix with trailing space stripped
 # · Last fail: N/A (new test)
 # · Remove if: _strip_prefixes behavior changes
 def test_strip_full_path_with_space() -> None:
     """Path prefix with trailing space is stripped."""
-    raw = "/opt/platform/core/entrypoints/deploy.sh project sha"
+    raw = "/opt/platform/core/entrypoints/deploy.sh receive proj sha"
     cleaned = _strip_prefixes(raw)
-    assert cleaned == "project sha"
+    assert cleaned == "receive proj sha"
 
 
 # endregion
@@ -48,64 +53,60 @@ def test_strip_full_path_with_space() -> None:
 
 # region FUNC_test_strip_full_path_bare
 ## @purpose — Strip path prefix without trailing space.
-##            deploy.sh: "${cleaned#/opt/platform/core/entrypoints/deploy.sh}"
 # 🧪 TRAP[TEST] · Regression · Scenario: path prefix without trailing space stripped
 # · Last fail: N/A (new test)
 # · Remove if: _strip_prefixes behavior changes
 def test_strip_full_path_bare() -> None:
     """Path prefix without trailing space is stripped."""
-    raw = "/opt/platform/core/entrypoints/deploy.shproject sha"
+    raw = "/opt/platform/core/entrypoints/deploy.shreceive proj sha"
     cleaned = _strip_prefixes(raw)
-    assert cleaned == "project sha"
+    assert cleaned == "receive proj sha"
 
 
 # endregion
 
 
-# region FUNC_test_strip_legacy_platform_deploy_with_space
-## @purpose — Strip legacy "platform-deploy " prefix via bash parameter expansion.
-# 🧪 TRAP[TEST] · Regression · Scenario: legacy platform-deploy prefix with space
-# · Last fail: N/A (new test)
-# · Remove if: _strip_prefixes behavior changes
-def test_strip_legacy_platform_deploy_with_space() -> None:
-    """Legacy platform-deploy prefix with space is stripped."""
+# region FUNC_test_strip_legacy_platform_deploy_kept
+## @purpose — Legacy "platform-deploy " НЕ стрипится (D2, DevPlan 116 B1) — префикс удалён
+##            из стриппера; команда остаётся как есть (уходит в unknown verb). R5-negative.
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D2 negative: platform-deploy не стрипится
+# · Last fail: legacy — strip удалял префикс и уходил в deploy
+# · Remove if: legacy-префиксы сознательно возвращаются (запрещено D2)
+def test_strip_legacy_platform_deploy_kept() -> None:
+    """Legacy platform-deploy prefix НЕ стрипится (D2)."""
     raw = "platform-deploy project sha"
     cleaned = _strip_prefixes(raw)
-    assert cleaned == "project sha"
+    assert cleaned == "platform-deploy project sha"
 
 
 # endregion
 
 
-# region FUNC_test_strip_legacy_platform_deploy_bare
-## @purpose — Strip bare "platform-deploy" (no args, no trailing space).
-# 🧪 TRAP[TEST] · Regression · Scenario: bare platform-deploy (no args)
-# · Last fail: N/A (new test)
-# · Remove if: _strip_prefixes behavior changes
-def test_strip_legacy_platform_deploy_bare() -> None:
-    """Bare platform-deploy (no args) becomes empty after strip."""
+# region FUNC_test_strip_bare_platform_deploy_kept
+## @purpose — Bare "platform-deploy" (no args) НЕ стрипится (D2).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D2 negative: bare platform-deploy не стрипится
+# · Last fail: legacy — bare platform-deploy становился пустой строкой
+# · Remove if: legacy-префиксы сознательно возвращаются
+def test_strip_bare_platform_deploy_kept() -> None:
+    """Bare platform-deploy НЕ стрипится (остаётся как есть)."""
     raw = "platform-deploy"
     cleaned = _strip_prefixes(raw)
-    assert cleaned == ""
+    assert cleaned == "platform-deploy"
 
 
 # endregion
 
 
 # region FUNC_test_strip_whitespace_trim
-## @purpose — Verify .strip() removes trailing whitespace after prefix stripping
-##            (equivalent to deploy.sh: echo | xargs).
-##            NOTE: Leading whitespace before path prefix is not expected in
-##            real SSH_ORIGINAL_COMMAND — bash parameter expansion also requires
-##            exact prefix match. Only trailing whitespace is tested here.
+## @purpose — Verify .strip() removes trailing whitespace after prefix stripping.
 # 🧪 TRAP[TEST] · Regression · Scenario: trailing whitespace trimmed after stripping
 # · Last fail: leading whitespace caused startswith miss (fixed in test input)
 # · Remove if: _strip_prefixes trims input before prefix checks
 def test_strip_whitespace_trim() -> None:
     """Trailing whitespace is trimmed after stripping."""
-    raw = "/opt/platform/core/entrypoints/deploy.sh   project sha   "
+    raw = "/opt/platform/core/entrypoints/deploy.sh   status myproj   "
     cleaned = _strip_prefixes(raw)
-    assert cleaned == "project sha"
+    assert cleaned == "status myproj"
 
 
 # endregion
@@ -118,9 +119,9 @@ def test_strip_whitespace_trim() -> None:
 # · Remove if: _strip_prefixes behavior changes
 def test_strip_no_prefix() -> None:
     """Command without known prefix passes through trimmed."""
-    raw = "  my-verb arg1 arg2  "
+    raw = "  status myproj  "
     cleaned = _strip_prefixes(raw)
-    assert cleaned == "my-verb arg1 arg2"
+    assert cleaned == "status myproj"
 
 
 # endregion
@@ -207,58 +208,32 @@ def test_classify_verify() -> None:
 # endregion
 
 
-# region FUNC_test_classify_platform_deliver
-## @purpose — Starts with "platform-deliver " → "platform-deliver".
-# 🧪 TRAP[TEST] · Regression · Scenario: platform-deliver prefix → platform-deliver
-# · Last fail: N/A (new test)
-# · Remove if: classify_verb verb map changes
-def test_classify_platform_deliver() -> None:
-    """'platform-deliver org project' maps to platform-deliver."""
-    assert classify_verb("platform-deliver org project") == "platform-deliver"
+# region FUNC_test_classify_bare_status
+## @purpose — Голый "status" → "status" (U-56: голый verb, НЕ проект).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · U-56 голый status
+# · Last fail: legacy — голый status уходил в deploy
+# · Remove if: classify_verb голый-verb семантика меняется
+def test_classify_bare_status() -> None:
+    """Bare 'status' maps to status (НЕ deploy, U-56)."""
+    assert classify_verb("status") == "status"
 
 
 # endregion
 
 
-# region FUNC_test_classify_platform_deploy
-## @purpose — Starts with "platform-deploy " → "platform-deploy".
-##            Note: this is the direct classify_verb call, NOT through
-##            parse_ssh_command which strips the legacy prefix first.
-# 🧪 TRAP[TEST] · Regression · Scenario: platform-deploy prefix (direct classify)
-# · Last fail: N/A (new test)
-# · Remove if: classify_verb verb map changes
-def test_classify_platform_deploy() -> None:
-    """'platform-deploy project sha' maps to platform-deploy."""
-    assert classify_verb("platform-deploy project sha") == "platform-deploy"
-
-
-# endregion
-
-
-# region FUNC_test_classify_deploy_default
-## @purpose — Any unrecognized input → "deploy" (default fallback).
-# 🧪 TRAP[TEST] · Regression · Scenario: unrecognized → deploy (default)
-# · Last fail: N/A (new test)
-# · Remove if: classify_verb default fallback changes
-def test_classify_deploy_default() -> None:
-    """Unknown command maps to deploy (default)."""
-    assert classify_verb("project sha") == "deploy"
-    assert classify_verb("") == "deploy"
-    assert classify_verb("some random command") == "deploy"
-
-
-# endregion
-
-
-# region FUNC_test_classify_ping_precedence_over_prefix
-## @purpose — Exact match "ping" takes precedence over any prefix match.
-# 🧪 TRAP[TEST] · Regression · Scenario: exact ping not prefix-matched
-# · Last fail: N/A (new test)
-# · Remove if: classify_verb match order changes
-def test_classify_ping_precedence_over_prefix() -> None:
-    """Exact 'ping' is not matched as prefix of 'pingpong'."""
-    assert classify_verb("ping") == "ping"
-    assert classify_verb("ping something") == "deploy"
+# region FUNC_test_classify_unknown
+## @purpose — Unknown input → ConfigValidationError (D2: дефолт-фолбэк удалён).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D2 negative: unknown → error
+# · Last fail: legacy — "deploy" фолбэк для любого unrecognized input
+# · Remove if: classify_verb unknown-семантика меняется
+def test_classify_unknown() -> None:
+    """Unknown commands raise ConfigValidationError (никакого deploy-фолбэка)."""
+    with pytest.raises(ConfigValidationError, match="unknown verb"):
+        classify_verb("platform-deploy project sha")
+    with pytest.raises(ConfigValidationError, match="unknown verb"):
+        classify_verb("platform-deliver org project")
+    with pytest.raises(ConfigValidationError, match="unknown verb"):
+        classify_verb("project sha")
 
 
 # endregion
@@ -267,17 +242,17 @@ def test_classify_ping_precedence_over_prefix() -> None:
 # ── parse_ssh_command tests ───────────────────────────────────────────────────
 
 
-# region FUNC_test_parse_deploy_default
-## @purpose — parse_ssh_command with a deploy command produces correct dict
+# region FUNC_test_parse_receive
+## @purpose — parse_ssh_command with receive command produces correct dict
 ##            and verifies IMP:9 log.
-# 🧪 TRAP[TEST] · Regression · Scenario: full deploy command → verb=deploy
+# 🧪 TRAP[TEST] · Regression · Scenario: receive command → verb=receive
 # · Last fail: N/A (new test)
 # · Remove if: parse_ssh_command return format changes
-def test_parse_deploy_default(caplog: pytest.LogCaptureFixture) -> None:
-    """Deploy command parses with verb='deploy'."""
+def test_parse_receive(caplog: pytest.LogCaptureFixture) -> None:
+    """Receive command parses with verb='receive'."""
     caplog.set_level(logging.INFO)
 
-    result = parse_ssh_command("/opt/platform/core/entrypoints/deploy.sh my-project abc123")
+    result = parse_ssh_command("/opt/platform/core/entrypoints/deploy.sh receive my-project abc123")
 
     found_imp9 = any("[IMP:9]" in r.message for r in caplog.records)
     print("--- LDD TRAJECTORY (IMP:7-10) ---")
@@ -286,10 +261,10 @@ def test_parse_deploy_default(caplog: pytest.LogCaptureFixture) -> None:
             print(record.message)
     print("--- END LDD TRAJECTORY ---")
 
-    assert result["verb"] == "deploy"
+    assert result["verb"] == "receive"
     assert result["args"] == "my-project abc123"
-    assert result["raw"] == "/opt/platform/core/entrypoints/deploy.sh my-project abc123"
-    assert result["cleaned"] == "my-project abc123"
+    assert result["raw"] == "/opt/platform/core/entrypoints/deploy.sh receive my-project abc123"
+    assert result["cleaned"] == "receive my-project abc123"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
 
@@ -385,67 +360,33 @@ def test_parse_verify() -> None:
 # endregion
 
 
-# region FUNC_test_parse_platform_deliver
-## @purpose — "platform-deliver org project" → verb="platform-deliver",
-##            args="org project".
-# 🧪 TRAP[TEST] · Regression · Scenario: platform-deliver → verb=platform-deliver
-# · Last fail: N/A (new test)
-# · Remove if: parse_ssh_command platform-deliver handling changes
-def test_parse_platform_deliver() -> None:
-    """platform-deliver command extracts args (org project)."""
-    result = parse_ssh_command("platform-deliver my-org my-project")
-    assert result["verb"] == "platform-deliver"
-    assert result["args"] == "my-org my-project"
-
-
-# endregion
-
-
-# region FUNC_test_parse_platform_deploy_stripped
-## @purpose — "platform-deploy project sha" → legacy prefix is stripped by
-##            _strip_prefixes → classify_verb sees "my-project abc123" → "deploy".
-##            The "platform-deploy" verb classification only fires when
-##            classify_verb is called directly with an already-cleaned string
-##            that still carries the "platform-deploy " prefix.
-# 🧪 TRAP[TEST] · Regression · Scenario: platform-deploy stripped → verb=deploy
-# · Last fail: initial test expected verb="platform-deploy" (incorrect — stripping
-#   removes "platform-deploy " before classification)
-# · Remove if: parse_ssh_command stripping order changes
-def test_parse_platform_deploy_stripped() -> None:
-    """platform-deploy legacy prefix is stripped; verb becomes deploy."""
-    result = parse_ssh_command("platform-deploy my-project abc123")
-    assert result["verb"] == "deploy"
-    assert result["args"] == "my-project abc123"
-    assert result["cleaned"] == "my-project abc123"
-
-
-# endregion
-
-
-# region FUNC_test_parse_full_path_platform_deliver
-## @purpose — Full path prefix + platform-deliver → correct verb and args.
-# 🧪 TRAP[TEST] · Regression · Scenario: full path + platform-deliver
-# · Last fail: N/A (new test)
-# · Remove if: parse_ssh_command multi-prefix stripping changes
-def test_parse_full_path_platform_deliver() -> None:
-    """Full path prefix with platform-deliver parses correctly."""
-    result = parse_ssh_command("/opt/platform/core/entrypoints/deploy.sh platform-deliver org project")
-    assert result["verb"] == "platform-deliver"
-    assert result["args"] == "org project"
+# region FUNC_test_parse_unknown_raises
+## @purpose — Unknown verb (включая legacy platform-deploy/platform-deliver) → ConfigValidationError.
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D2 negative: unknown → error через parse
+# · Last fail: legacy — дефолт-фолбэк deploy
+# · Remove if: unknown-семантика меняется
+def test_parse_unknown_raises() -> None:
+    """Unknown verb (platform-deploy/platform-deliver/bare) raises ConfigValidationError."""
+    for raw in (
+        "platform-deploy my-project abc123",
+        "platform-deliver org project",
+        "deploy my-project abc123",
+        "my-project abc123 production",
+    ):
+        with pytest.raises(ConfigValidationError, match="unknown verb"):
+            parse_ssh_command(raw)
 
 
 # endregion
 
 
 # region FUNC_test_parse_empty_raw_raises
-## @purpose — Empty raw input → ValueError with correct message.
-# 🧪 TRAP[TEST] · Regression · Scenario: empty raw → ValueError
+## @purpose — Empty raw input → ConfigValidationError with correct message.
+# 🧪 TRAP[TEST] · Regression · Scenario: empty raw → ConfigValidationError
 # · Last fail: N/A (new test)
 # · Remove if: parse_ssh_command empty-input handling changes
 def test_parse_empty_raw_raises() -> None:
-    """Empty raw input raises ConfigValidationError (T2 миграция)."""
-    from core.internal.shared.exceptions import ConfigValidationError
-
+    """Empty raw input raises ConfigValidationError."""
     with pytest.raises(ConfigValidationError, match="empty command after stripping"):
         parse_ssh_command("")
 
@@ -454,31 +395,14 @@ def test_parse_empty_raw_raises() -> None:
 
 
 # region FUNC_test_parse_none_raises
-## @purpose — None-ish empty string raises ValueError.
-# 🧪 TRAP[TEST] · Regression · Scenario: whitespace-only → ValueError
+## @purpose — Whitespace-only input raises ConfigValidationError.
+# 🧪 TRAP[TEST] · Regression · Scenario: whitespace-only → ConfigValidationError
 # · Last fail: N/A (new test)
 # · Remove if: parse_ssh_command empty-input handling changes
 def test_parse_none_raises() -> None:
-    """Empty string (whitespace) raises ConfigValidationError (T2 миграция)."""
-    from core.internal.shared.exceptions import ConfigValidationError
-
+    """Empty string (whitespace) raises ConfigValidationError."""
     with pytest.raises(ConfigValidationError, match="empty command after stripping"):
         parse_ssh_command("   ")
-
-
-# endregion
-
-
-# region FUNC_test_parse_legacy_platform_deploy
-## @purpose — Legacy platform-deploy prefix (deprecated format) → verb="deploy".
-# 🧪 TRAP[TEST] · Regression · Scenario: legacy platform-deploy → deploy
-# · Last fail: initial test expected verb="platform-deploy" (incorrect)
-# · Remove if: parse_ssh_command legacy prefix handling changes
-def test_parse_legacy_platform_deploy() -> None:
-    """Legacy 'platform-deploy project' without full path still parses."""
-    result = parse_ssh_command("platform-deploy my-project")
-    assert result["verb"] == "deploy"
-    assert result["args"] == "my-project"
 
 
 # endregion
@@ -491,7 +415,7 @@ def test_parse_legacy_platform_deploy() -> None:
 # · Remove if: parse_ssh_command return format changes
 def test_parse_preserves_raw() -> None:
     """Raw field preserves original input."""
-    raw = "/opt/platform/core/entrypoints/deploy.sh my-project sha"
+    raw = "/opt/platform/core/entrypoints/deploy.sh receive my-project sha"
     result = parse_ssh_command(raw)
     assert result["raw"] == raw
 
@@ -511,7 +435,7 @@ def test_cli_parse() -> None:
     """CLI parse mode outputs JSON."""
     from core.internal.shared.ssh_command_parser import _cli_main
 
-    test_args = ["ssh_command_parser.py", "parse", "/opt/platform/core/entrypoints/deploy.sh my-project sha"]
+    test_args = ["ssh_command_parser.py", "parse", "/opt/platform/core/entrypoints/deploy.sh receive my-project sha"]
     with patch.object(sys, "argv", test_args), patch("sys.stderr"), contextlib.suppress(SystemExit):
         _cli_main()
 
@@ -621,7 +545,6 @@ def test_cli_invalid_mode() -> None:
 
 # region FUNC_test_cli_parse_format_lines
 ## @purpose — CLI parse mode with --format lines outputs verb/args/cleaned on separate lines.
-##            Replaces inline python3 -c in deploy.sh (DevPlan 081 AC7).
 # 🧪 TRAP[TEST] · Regression · Scenario: --format lines produces line-by-line output
 # · Last fail: N/A (new test)
 # · Remove if: --format lines output format changes
@@ -634,7 +557,7 @@ def test_cli_parse_format_lines() -> None:
         "--format",
         "lines",
         "parse",
-        "/opt/platform/core/entrypoints/deploy.sh my-project abc123",
+        "/opt/platform/core/entrypoints/deploy.sh receive my-project abc123",
     ]
     stdout_lines: list[str] = []
 
@@ -645,9 +568,9 @@ def test_cli_parse_format_lines() -> None:
         _cli_main()
 
     assert len(stdout_lines) == 3
-    assert stdout_lines[0] == "deploy"
+    assert stdout_lines[0] == "receive"
     assert stdout_lines[1] == "my-project abc123"
-    assert stdout_lines[2] == "my-project abc123"
+    assert stdout_lines[2] == "receive my-project abc123"
 
 
 # endregion
@@ -681,12 +604,12 @@ def test_cli_parse_format_lines_ping() -> None:
 
 
 # region FUNC_test_cli_parse_format_lines_empty
-## @purpose --format lines parse empty command — exits with code 1.
-# 🧪 TRAP[TEST] · Regression · Scenario: --format lines parse empty → exit 1
+## @purpose --format lines parse empty command — exits with code 4 (ConfigValidationError.exit_code).
+# 🧪 TRAP[TEST] · Regression · Scenario: --format lines parse empty → exit 4
 # · Last fail: N/A (new test)
 # · Remove if: --format lines error handling changes
 def test_cli_parse_format_lines_empty() -> None:
-    """CLI --format lines parse empty command exits 1."""
+    """CLI --format lines parse empty command exits 4."""
     from core.internal.shared.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "--format", "lines", "parse", ""]
@@ -699,7 +622,7 @@ def test_cli_parse_format_lines_empty() -> None:
         patch.object(sys, "argv", test_args),
         patch("builtins.print", fake_print),
     ):
-        assert _cli_main() == 4  # ConfigValidationError.exit_code (T4)
+        assert _cli_main() == 4  # ConfigValidationError.exit_code
     assert len(stdout_lines) == 3
     assert stdout_lines[0] == "error"
     assert "empty command" in stdout_lines[1]
@@ -727,16 +650,16 @@ def test_cli_format_lines_unknown_format() -> None:
 # endregion
 
 
-# region FUNC_test_cli_parse_empty
-## @purpose — CLI parse mode on empty command exits with code 1 and JSON error.
-# 🧪 TRAP[TEST] · Regression · Scenario: CLI parse empty → exit 1 + JSON error
-# · Last fail: N/A (new test)
-# · Remove if: CLI empty-command handling changes
-def test_cli_parse_empty() -> None:
-    """CLI parse with empty command exits 1 with JSON error."""
+# region FUNC_test_cli_parse_unknown_verb
+## @purpose — CLI parse mode on unknown verb exits with code 4 and JSON error (D2).
+# 🧪 TRAP[TEST] · DevPlan 116 B1 T1 · D2 CLI negative: unknown verb → exit 4 + JSON
+# · Last fail: legacy — CLI молча возвращал deploy
+# · Remove if: CLI unknown-verb handling changes
+def test_cli_parse_unknown_verb() -> None:
+    """CLI parse with unknown verb exits 4 with JSON error."""
     from core.internal.shared.ssh_command_parser import _cli_main
 
-    test_args = ["ssh_command_parser.py", "parse", ""]
+    test_args = ["ssh_command_parser.py", "parse", "deploy my-project abc123"]
     stdout_lines: list[str] = []
 
     def fake_print(*args: str, **kwargs: object) -> None:
@@ -746,11 +669,11 @@ def test_cli_parse_empty() -> None:
         patch.object(sys, "argv", test_args),
         patch("builtins.print", fake_print),
     ):
-        assert _cli_main() == 4  # ConfigValidationError.exit_code (T4: CLI возвращает e.exit_code)
+        assert _cli_main() == 4  # ConfigValidationError.exit_code
     assert len(stdout_lines) == 1
     err = json.loads(stdout_lines[0])
     assert "error" in err
-    assert "empty command after stripping" in err["error"]
+    assert "unknown verb" in err["error"]
 
 
 # endregion

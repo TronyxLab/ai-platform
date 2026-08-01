@@ -65,7 +65,10 @@ NON_DEPLOY_IGNORE_PREFIXES: list[str] = [
 
 # Layer 3: ssh forced-command patterns that are ALLOWED
 # These are SSH authorized_keys command="..." directives
+# DevPlan 116 B1 T2/T7: forced-command = `orchestrator_cli dispatch` (диспетчер SSH_ORIGINAL_COMMAND);
+# receive/deploy-many — legacy/локальные subcommands, остаются разрешёнными.
 PERMITTED_FORCED_COMMANDS: list[str] = [
+    r"python3\s+-m\s+core\.internal\.deploy\.orchestrator_cli\s+dispatch",
     r"python3\s+-m\s+core\.internal\.deploy\.orchestrator_cli\s+receive",
     r"python3\s+-m\s+core\.internal\.deploy\.orchestrator_cli\s+deploy-many",
 ]

@@ -2,7 +2,7 @@
 # STRUCTURE: ▶ L1:defaults.yaml → L2:org-overrides → L3:project-config → deep-merge → effective config → ⎋
 # region MODULE_CONTRACT
 ## @purpose  Platform monitoring defaults by project type (L1 layer in three-layer config merge)
-## @scope    Read by platform-deploy.sh _reconfigure_monitoring() to compute effective monitoring config
+## @scope    Read by receive-пост-деплой (monitoring_config_renderer.py) to compute effective monitoring config
 ## @invariants
 ##   - global: fallback when project type is unknown or not matched
 ##   - type-defaults: per-project-type overrides merged on top of global defaults

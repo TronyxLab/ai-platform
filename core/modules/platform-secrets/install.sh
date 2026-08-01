@@ -149,7 +149,7 @@ check_prerequisites() {
 ##   - Creates ${PLATFORM_ROOT}/prometheus-targets/ subdirectory
 ##   - Creates ${PLATFORM_ROOT}/secrets/ subdirectory
 ##   - Sets group to a common platform group so platform/ci-deploy users can write
-##   - This ensures platform-deploy.sh can generate catalog.json and prometheus targets
+##   - This ensures receive-пост-деплой (generate-catalog + monitoring renderer) работает
 ensure_platform_dirs() {
     local platform_dir="${PLATFORM_ROOT}"
     local platform_gid

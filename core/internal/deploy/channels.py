@@ -387,7 +387,11 @@ class ForcedCommandChannel(DeliveryChannel):
     ##   - Host parameter passed in payload.metadata["host"]
     ##   - SSH user from payload.metadata.get("user", "ci-deploy")
     ##   - SSH key from payload.metadata.get("key_file", "~/.ssh/ci_deploy_key")
-    ##   - Uses python3 -m core.internal.deploy.orchestrator_cli receive as remote command
+    ##   - Remote command = "receive <project> <version>" — при forced-command на сервере эта
+    ##     строка становится SSH_ORIGINAL_COMMAND для `orchestrator_cli dispatch` (DevPlan 116
+    ##     B1 T2 D1). Версия (sha) берётся из payload.version (D5 — версия через аргументы).
+    ##   - Ключи БЕЗ forced-command: ssh сам выполнит `receive ...` — команды нет в PATH →
+    ##     понятная ошибка (документировано, T5: deliver — единственный операторский путь)
     """
 
     def __init__(self, timeout: int = DEFAULT_DEPLOY_TIMEOUT):
@@ -410,7 +414,10 @@ class ForcedCommandChannel(DeliveryChannel):
             )
 
         remote_user = f"{user}@{host}" if user else host
-        remote_cmd = "python3 -m core.internal.deploy.orchestrator_cli receive"
+        # DevPlan 116 B1 T2 (D1): verb-форма — SSH_ORIGINAL_COMMAND для forced-command диспетчера.
+        # Версия из payload.version (D5): CI шлёт receive <project> <sha>.
+        version = payload.version or "latest"
+        remote_cmd = f"receive {payload.project_name} {version}"
 
         # Build SSH command with piped tar
         ssh_cmd = [

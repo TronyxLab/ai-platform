@@ -252,8 +252,10 @@ def find_project_node(
 
 
 # region FUNC_get_status_via_ssh
-## @purpose  SSH to target node and query project status via ssh_read.
-##           Uses 10-second timeout to prevent hanging.
+## @purpose  SSH to target node and query project status via the `status <project>` forced-command
+##           verb (DevPlan 116 B1 T3, U-36). SSH-команда — НЕ raw docker compose ps, а verb
+##           `status <project>`: authorized_keys → orchestrator_cli dispatch → ProjectStatus JSON.
+##           JSON парсится и рендерится в человекочитаемую таблицу (Name/Status/Ports из containers).
 ## @param host     SSH host (IP or domain)
 ## @param project  Project name
 ## @param ssh_runner  Callable (host, user, cmd, timeout) → str | None — injected for testing
@@ -262,21 +264,25 @@ def find_project_node(
 ## @complexity O(t) where t = SSH round-trip time (≤10s)
 ## @invariants
 ##   - Timeout ≤ 10 seconds
-##   - Tries ci-deploy user first, then current user
-##   - Returns False on SSH failure (connection refused, timeout)
+##   - SSH-команда = verb `status <project>` (D6: forced-command status; ответ — ProjectStatus JSON)
+##   - Ответ JSON парсится; containers рендерятся в таблицу Name/Status/Ports
+##   - Триггеры ci-deploy user first, then current user
+##   - Returns False on SSH failure (connection refused, timeout, JSON parse fail)
 def get_status_via_ssh(
     host: str,
     project: str,
     ssh_runner: callable | None = None,
 ) -> bool:
-    """Query live project status via SSH.
+    """Query live project status via the `status <project>` forced-command verb.
 
-    ## @purpose  Mirror of get_status_via_ssh() from project-list.sh:284-339.
+    ## @purpose  Mirror of get_status_via_ssh() from project-list.sh:284-339, но через
+    ##            status-verb (U-36): dispatch → ProjectStatus JSON → таблица Name/Status/Ports.
     ## @io        ⇥ host, project, ssh_runner → ⎋ bool — True on success
     ## @complexity O(t) where t = SSH round-trip time
     ## @invariants
     ##   - Timeout enforced via ssh_read (10s by default)
     ##   - Falls back from ci-deploy to $USER on auth failure
+    ##   - Raw docker compose ps path УДАЛЁН — единый status-контракт (T3)
     """
     if not host:
         logger.info("[IMP:10][list][status] FAIL-FAST: No SSH host available for project '%s'", project)
@@ -318,11 +324,9 @@ def get_status_via_ssh(
         effective_user = try_user if try_user else current_user
         logger.info("[IMP:6][list][status]  Trying SSH as: %s@%s", effective_user, host)
 
-        ssh_cmd = (
-            f"cd /opt/projects/{project} 2>/dev/null && "
-            f"docker compose ps --format 'table {{.Name}}\\t{{.Status}}\\t{{.Ports}}' 2>&1 || "
-            f"docker compose -p {project} ps --format 'table {{.Name}}\\t{{.Status}}\\t{{.Ports}}' 2>&1"
-        )
+        # U-36: forced-command status verb (dispatch диспетчеризует SSH_ORIGINAL_COMMAND).
+        # Ответ — ProjectStatus JSON {project, status, containers, last_deploy}.
+        ssh_cmd = f"status {project}"
 
         try:
             output = ssh_runner(host, effective_user, ssh_cmd, timeout=10)
@@ -331,12 +335,22 @@ def get_status_via_ssh(
             continue
 
         if output is not None:
+            try:
+                status_data = json.loads(output.strip())
+            except (json.JSONDecodeError, AttributeError):
+                logger.warning("[IMP:8][list][status] Non-JSON status response from %s — raw passthrough", host)
+                status_data = None
+
             print()
             print("──────────────────────────────────────────────")
             print(f"  Status: {project} on {host}")
             print("──────────────────────────────────────────────")
             print()
-            print(output)
+            if isinstance(status_data, dict):
+                _render_status_json(status_data)
+            elif output:
+                # Фолбэк: не-JSON вывод (legacy нода без dispatch) — как есть
+                print(output)
             print()
             print("──────────────────────────────────────────────")
             logger.info("[IMP:9][list][status] Status retrieved for project '%s' from %s", project, host)
@@ -349,6 +363,40 @@ def get_status_via_ssh(
 
 
 # endregion FUNC_get_status_via_ssh
+
+
+# region FUNC__render_status_json
+## @purpose  Рендер ProjectStatus JSON в человекочитаемую таблицу Name/Status/Ports (U-36, T3).
+## @io       ⇥ status_data: dict (ProjectStatus.to_dict()) → ⎋ None (печатает в stdout)
+## @complexity — O(C) где C = число containers
+## @invariants
+##   - Выводит project/status строку + таблицу containers (Name/Status/Ports)
+##   - containers пуст → "No running containers" строка
+def _render_status_json(status_data: dict) -> None:
+    """Render ProjectStatus JSON to a human-readable table (Name/Status/Ports)."""
+    status = status_data.get("status", "unknown")
+    containers = status_data.get("containers", []) or []
+
+    print(f"  Project:   {status_data.get('project', '')}")
+    print(f"  Status:    {status}")
+    if status_data.get("last_deploy"):
+        print(f"  Last deploy: {status_data['last_deploy']}")
+
+    if containers:
+        print()
+        print(f"{'NAME':<40} {'STATUS':<30} PORTS")
+        print(f"{'─':─<40} {'─':─<30} {'─':─<10}")
+        for c in containers:
+            name = c.get("Name", c.get("name", ""))
+            cstatus = c.get("Status", c.get("status", ""))
+            ports = c.get("Ports", c.get("ports", ""))
+            print(f"{name:<40} {cstatus:<30} {ports}")
+    else:
+        print()
+        print("  No running containers")
+
+
+# endregion FUNC__render_status_json
 
 
 # region FUNC_main
