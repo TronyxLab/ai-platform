@@ -33,7 +33,8 @@ MANIFEST_DIR = MANIFEST.parent
 NGINX_COMPOSE = ROOT / "core" / "modules" / "nginx" / "docker-compose.base.yml"
 
 # Директории, исключаемые из find *.template
-_EXCLUDED_PARTS = {".git", "node_modules", ".venv", "__pycache__"}
+# .kilo — служебная директория Kilo (worktrees агентных сессий, копии репо) — не продукт-контент.
+_EXCLUDED_PARTS = {".git", "node_modules", ".venv", "__pycache__", ".kilo"}
 
 
 def _registered_template_paths() -> set[str]:
