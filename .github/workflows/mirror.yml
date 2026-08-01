@@ -1,11 +1,11 @@
-# GREP_SUMMARY: mirror auto-sync sha-aware platform-test workflow_run Tronyx161 TronyxLab mirror.yml git-push workflow actions
-# STRUCTURE: ┌workflow_run[platform-test] + workflow_dispatch┐ → ◇ if:conclusion=success+push-filter → ○ resolve SHA → ◇ verify → ○ checkout(fetch-depth=0) → ⊕ git push TronyxLab/ai-platform HEAD:main
+# GREP_SUMMARY: mirror auto-sync sha-aware platform-gate-fast workflow_run Tronyx161 TronyxLab mirror.yml git-push workflow actions
+# STRUCTURE: ┌workflow_run[platform-gate-fast] + workflow_dispatch┐ → ◇ if:conclusion=success+push-filter → ○ resolve SHA → ◇ verify → ○ checkout(fetch-depth=0) → ⊕ git push TronyxLab/ai-platform HEAD:main
 # region MODULE_CONTRACT
-## @purpose  SHA-aware mirror sync: triggers on platform-test completion (push main only).
+## @purpose  SHA-aware mirror sync: triggers on platform-gate-fast completion (push main only).
 ##           Verifies gate passed before mirroring. Prevents mirroring untested code.
 ## @scope    Source → Destination push only; no force push, no history rewrite
 ## @invariants
-##   - Triggers on workflow_run: platform-test completed successfully (push only)
+##   - Triggers on workflow_run: platform-gate-fast completed successfully (push only) — D2, DevPlan 116 B11 T4
 ##   - Push filter: github.event.workflow_run.event == 'push' prevents mirror on PR trigger
 ##   - Also supports workflow_dispatch for manual mirror
 ##   - Blocking SHA verification for workflow_dispatch (API check)
@@ -16,8 +16,11 @@
 ##   - Mirror stays up-to-date without force push
 ## @rationale SHA-aware aggregator (D4) ensures only tested code is mirrored.
 ##            Plan 2 consolidation: main-full-gate removed, trigger on platform-test.
+##            DevPlan 116 B11 T4 (D2, U-57): trigger переключён на platform-gate-fast —
+##            mirror не ждёт full-gate + integration + docker-степы platform-test.
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
 ## @changes — 2026-07-20 | Deployment flow documented (Plan 018)
+## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
 ##
 ## ☆ DEPLOYMENT FLOW (canonical — see also context-promote.sh)
 ##
@@ -103,7 +106,7 @@ name: Mirror to TronyxLab
 
 on:
   workflow_run:
-    workflows: ["platform-test"]
+    workflows: ["platform-gate-fast"]
     types:
       - completed
     branches: [main]
@@ -137,13 +140,15 @@ jobs:
           fetch-depth: 0
 
       # region STEP_ResolveSHA
-      ## @purpose: Resolve SHA + verify platform-test via canonical composite action
+      ## @purpose: Resolve SHA + verify platform-gate-fast via canonical composite action
       ## @io:      Event context → SHA output for subsequent steps
-      - name: Resolve SHA + verify platform-test
+      ## @changes: 2026-08-01 — DevPlan 116 B11 T4 (D2): workflow-file = platform-gate-fast.yml
+      - name: Resolve SHA + verify platform-gate-fast
         id: sha
         uses: ./.github/actions/sha-resolve
         with:
           verify: 'true'
+          workflow-file: 'platform-gate-fast.yml'
       # endregion STEP_ResolveSHA
 
       # ─── Step 3: Checkout resolved SHA ────────────────────────────────

@@ -33,7 +33,7 @@ logger = pytest.importorskip("logging").getLogger(__name__)
 def test_init_phases_match_enum() -> None:
     """INIT_PHASES must equal BootstrapPhase.INIT_PHASE_ORDER (9 init keys)."""
     expected = list(BootstrapPhase.INIT_PHASE_ORDER)
-    assert INIT_PHASES == expected, (
+    assert expected == INIT_PHASES, (
         f"INIT_PHASES drifted from BootstrapPhase.INIT_PHASE_ORDER:\n  node.py: {INIT_PHASES}\n  enum:    {expected}"
     )
     assert len(INIT_PHASES) == 9, f"Expected 9 init phases, got {len(INIT_PHASES)}"
@@ -47,7 +47,7 @@ def test_init_phases_match_enum() -> None:
 def test_update_phases_match_enum() -> None:
     """UPDATE_PHASES must equal BootstrapPhase.UPDATE_PHASE_ORDER (5 update keys)."""
     expected = list(BootstrapPhase.UPDATE_PHASE_ORDER)
-    assert UPDATE_PHASES == expected, (
+    assert expected == UPDATE_PHASES, (
         f"UPDATE_PHASES drifted from BootstrapPhase.UPDATE_PHASE_ORDER:\n  node.py: {UPDATE_PHASES}\n  enum:    {expected}"
     )
     assert len(UPDATE_PHASES) == 5, f"Expected 5 update phases, got {len(UPDATE_PHASES)}"

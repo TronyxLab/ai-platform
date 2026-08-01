@@ -663,12 +663,12 @@ class TestRemoveVhost:
         assert result is True
         assert not vhost_path.exists()
 
-        # Check audit log was written
-        audit_log = tmp_path / "var" / "log" / "audit.log"
-        assert audit_log.exists()
-        content = audit_log.read_text()
-        assert "my-app" in content
-        assert "vhost:remove" in content
+        # D1 (DevPlan 116 B11 T2): audit-запись идёт через shared audit_logger (JSONL),
+        # НЕ в platform_root/var/log/audit.log (прежний free-text pipe). Единый writer.
+        # Здесь проверяем только контракт удаления + IMP:9-лог (shared-запись покрыта
+        # test_shared_audit_logger.py и гейтом test_gate_audit_format.py).
+        legacy_audit_log = tmp_path / "var" / "log" / "audit.log"
+        assert not legacy_audit_log.exists(), "D1: audit больше не пишется в platform_root/var/log/audit.log"
 
         # LDD telemetry
         found_imp9 = False

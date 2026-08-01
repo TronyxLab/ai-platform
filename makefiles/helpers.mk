@@ -76,6 +76,12 @@ provision:
 	@echo "[IMP:9][make][provision] Environment provisioned"
 
 ## test-inventory-sync: Regenerate tests/test_inventory.yaml from pytest --collect-only
+##   ⚠️ ЕДИНСТВЕННАЯ точка регенерации (single-source, DevPlan 116 B11 T6, U-79):
+##   - CI (push-gate/platform-test) НЕ вызывает test-inventory-sync
+##   - make fix-gate вызывает generate-manifests (НЕ inventory)
+##   - гейт tests/gates/test_gate_test_inventory.py делает СВОЙ --collect-only
+##     (намеренный anti-tamper дубль T18 — НЕ рефакторить в shared)
+##   - тест test_no_second_inventory_regeneration (гейт) ловит добавление второго вызова
 test-inventory-sync:
 	@echo "[IMP:7][make][test-inventory-sync] Regenerating test inventory..."
 	@$(PYTHON) tests/tools/sync_inventory.py

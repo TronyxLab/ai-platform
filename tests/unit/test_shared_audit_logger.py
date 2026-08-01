@@ -22,6 +22,8 @@ import pytest
 
 from core.internal.shared.audit_logger import read_audit_log, write_audit_entry
 
+logger = logging.getLogger(__name__)
+
 # ── Tests ───────────────────────────────────────────────────────────────────
 
 
@@ -266,6 +268,142 @@ def test_entry_timestamp_format(caplog: pytest.LogCaptureFixture, tmp_path: Path
     iso8601_z_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
     assert iso8601_z_re.match(ts), f"Timestamp '{ts}' does not match ISO8601 with Z format"
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion
+
+
+# region FUNC_test_write_entry_extended_schema
+## @purpose — DevPlan 116 B11 T2 (U-10, D1): расширенная схема — extra-поля
+##            (operation/project/channel/result/duration_s/snapshot_id) в той же JSON-строке.
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_entry_extended_schema(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Extended schema: extra-поля сериализуются в ту же JSON-строку (D1)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · DevPlan 116 B11 T2 (D1) — extended schema
+    # · Scenario: write_audit_entry(..., operation=..., project=..., channel=..., result=..., duration_s=..., snapshot_id=...)
+    # · Last fail: N/A (new schema)
+    # · Remove if: audit schema superseded
+
+    log_file = tmp_path / "audit.jsonl"
+    write_audit_entry(
+        "deploy:deploy",
+        "DEPLOYED",
+        "deploy project=myproj channel=scp",
+        log_file=str(log_file),
+        operation="deploy",
+        project="myproj",
+        channel="scp",
+        result="DEPLOYED",
+        duration_s=5.25,
+        snapshot_id="snap-001",
+    )
+
+    entries = read_audit_log(log_file=str(log_file))
+    assert len(entries) == 1
+    entry = entries[0]
+    # Base schema
+    assert entry["tag"] == "deploy:deploy"
+    assert entry["status"] == "DEPLOYED"
+    assert "ts" in entry and "msg" in entry
+    # Extended schema (D1)
+    assert entry["operation"] == "deploy"
+    assert entry["project"] == "myproj"
+    assert entry["channel"] == "scp"
+    assert entry["result"] == "DEPLOYED"
+    assert entry["duration_s"] == 5.25
+    assert entry["snapshot_id"] == "snap-001"
+    logger.info("[IMP:9][test][extended-schema] ✅ extra-поля сериализованы в единую JSON-строку")
+
+
+# endregion
+
+
+# region FUNC_test_write_entry_backward_compat
+## @purpose — Обратная совместимость: вызов без extra даёт ТОЛЬКО базовую схему (ts/tag/status/msg).
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_entry_backward_compat(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Backward-compat: без extra — только ts/tag/status/msg (никаких лишних ключей)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · backward-compat без extra
+    # · Scenario: старый вызов write_audit_entry(tag, status, msg) — схема не меняется
+    # · Last fail: N/A
+    # · Remove if: audit schema superseded
+
+    log_file = tmp_path / "audit.jsonl"
+    write_audit_entry("context_deploy:proj", "DEPLOYED", "legacy call", log_file=str(log_file))
+
+    entries = read_audit_log(log_file=str(log_file))
+    assert len(entries) == 1
+    entry = entries[0]
+    assert set(entry.keys()) == {"ts", "tag", "status", "msg"}, (
+        f"Backward-compat broken: unexpected keys {set(entry.keys()) - {'ts', 'tag', 'status', 'msg'}}"
+    )
+    logger.info("[IMP:9][test][backward-compat] ✅ базовый вызов без extra — ровно 4 ключа")
+
+
+# endregion
+
+
+# region FUNC_test_write_entry_multi_project
+## @purpose — Мульти-проектная запись (log_many-эквивалент) через extra: projects list.
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_entry_multi_project(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Multi-project запись: projects/per_project_results сериализуются (list → JSON)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · multi-project entry (ex-log_many, D1)
+    # · Scenario: write_audit_entry(..., projects=[...], per_project_results=[...])
+    # · Last fail: N/A
+    # · Remove if: audit schema superseded
+
+    log_file = tmp_path / "audit.jsonl"
+    write_audit_entry(
+        "deploy:deploy_many",
+        "PARTIAL",
+        "deploy_many 2 project(s)",
+        log_file=str(log_file),
+        operation="deploy_many",
+        projects=["proj-a", "proj-b"],
+        project_count=2,
+        per_project_results=["DEPLOYED", "FAILED"],
+    )
+
+    entries = read_audit_log(log_file=str(log_file))
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["projects"] == ["proj-a", "proj-b"]
+    assert entry["per_project_results"] == ["DEPLOYED", "FAILED"]
+    assert entry["project_count"] == 2
+    logger.info("[IMP:9][test][multi-project] ✅ projects/per_project_results — JSON-совместимы")
+
+
+# endregion
+
+
+# region FUNC_test_write_entry_permissions
+## @purpose — Пермишены: после первой записи файл имеет mode 640 (консолидация из deploy/audit_logger.py, D1).
+## @io — ⇥ caplog, tmp_path → ⎋ None
+## @complexity — O(1)
+def test_write_entry_permissions(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    """Permissions: chmod 640 после первой записи (D1, consolidated)."""
+    caplog.set_level(logging.INFO)
+
+    # 🧪 TRAP[TEST] · Regression · permissions 640 (D1)
+    # · Scenario: первый write → os.chmod 0o640
+    # · Last fail: N/A
+    # · Remove if: permissions policy changed
+
+    log_file = tmp_path / "audit.jsonl"
+    write_audit_entry("test:perm", "OK", "permissions check", log_file=str(log_file))
+    mode = log_file.stat().st_mode & 0o777
+    assert mode == 0o640, f"Expected mode 640, got {oct(mode)}"
+    logger.info("[IMP:9][test][permissions] ✅ audit.jsonl mode = 640")
 
 
 # endregion

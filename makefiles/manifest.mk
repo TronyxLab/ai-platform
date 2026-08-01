@@ -75,6 +75,11 @@ generate-agents-md: generate-entrypoint-manifest
 		--manifest core/entrypoint-manifest.yaml \
 		--agents-md core/AGENTS.md \
 		--marker canon_table
+	@echo "[IMP:7][generate-agents-md][root] Generating root AGENTS.md glossary (G4 --target root, DevPlan 116 B11 T3)..."
+	@python3 core/internal/scripts/generate_agents_md.py \
+		--target root \
+		--manifest core/entrypoint-manifest.yaml \
+		--agents-md AGENTS.md
 
 # ── Chain C ─────────────────────────────────────────────────
 .PHONY: generate-litellm-config
@@ -94,12 +99,21 @@ render-monitoring:
 		$(if $(NODE),--node "$(NODE)",)
 
 # ── Atomic generation (staging → rename) ────────────────────
+# 📝 TRAP[DEBT] · 2026-08-01 · MED · generate-manifests-atomic — латентная поломка mv-семантики
+# · Observed: таргет нигде не вызывается (dead); `mv "$$staging"/* "$(CURDIR)/"` кладёт
+#   ВСЕ манифесты в репозиторий (secrets-manifest.yaml должен быть core/, AGENTS.md —
+#   root) — затирает root AGENTS.md содержимым core/AGENTS.md; G4 --target root (B11 T3)
+#   в атомарную цепочку НЕ добавлен именно из-за этого
+# · Suspected: таргет был написан "на будущее" (DevPlan 090) и никогда не запускался
+# · Impact: запуск -atomic тихо повредит root AGENTS.md + разбросает манифесты
+# · When: during B11 T3 implementation — deferred, out of scope
 ## @purpose  Атомарная генерация ВСЕХ манифестов: staging dir (mktemp) → trap EXIT → rename.
 ##           При падении любого генератора staging удаляется, оригиналы не тронуты.
 ## @invariants
 ##   - mktemp создаёт уникальный staging dir (PID collision-resistant)
 ##   - trap EXIT гарантирует очистку при любом failure или signal
 ##   - mv атомарнен на одной файловой системе (staging туда же, где проект)
+##   - ⚠️ НЕ ИСПОЛЬЗОВАТЬ до фикса TRAP[DEBT] 2026-08-01 (mv-семантика ломает root AGENTS.md)
 .PHONY: generate-manifests-atomic
 generate-manifests-atomic:
 	@echo "[IMP:7][generate-manifests-atomic] Starting atomic manifest generation..."
@@ -185,6 +199,12 @@ check-manifests:
 		--manifest core/entrypoint-manifest.yaml \
 		--agents-md core/AGENTS.md \
 		--marker canon_table \
+		--check || errors=$$((errors + 1)); \
+	echo "[IMP:8][check-manifests] G4-root: root AGENTS.md glossary..." && \
+	python3 core/internal/scripts/generate_agents_md.py \
+		--target root \
+		--manifest core/entrypoint-manifest.yaml \
+		--agents-md AGENTS.md \
 		--check || errors=$$((errors + 1)); \
 	echo "[IMP:8][check-manifests] G5: .env.example..." && \
 	python3 core/internal/scripts/sync_env_defaults.py \

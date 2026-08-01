@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: audit-logger, json-lines, write-audit-entry, read-audit-log, platform-audit
-# STRUCTURE: ▶ write_audit_entry(tag, status, msg) → ◇ JSON-lines append → ⊕ read_audit_log(limit) → ⊕ CLI → ⎋
+# GREP_SUMMARY: audit-logger, json-lines, write-audit-entry, read-audit-log, platform-audit, extra-fields, permissions
+# STRUCTURE: ▶ write_audit_entry(tag, status, msg, **extra) → ◇ mkdir -p → ◇ chmod 640/chown :adm → ◇ JSON-lines append → ⊕ read_audit_log(limit) → ⊕ CLI → ⎋
 # region MODULE_CONTRACT
-## @purpose  Unified audit logger with JSON-lines format — replaces direct file.write in
-##           context_deployer.py and docker_orchestrator.py with standardized machine-parseable
-##           audit trail. Uses /var/log/platform/audit.jsonl (JSON-lines) separate from the
-##           existing shell audit.log (pipe-delimited) to avoid breaking existing consumers.
-## @scope    Shared library consumed by context_deployer.py, docker_orchestrator.py, and any
-##           other module needing structured audit logging. Python-importable for direct calls;
+## @purpose  Unified audit logger with JSON-lines format — ЕДИНСТВЕННЫЙ writer платформы (D1, DevPlan 116 B11 T2):
+##           заменяет прямой file.write, deploy/audit_logger.py (удалён) и reporting.py free-text pipe.
+##           Усиленная схема: ts/tag/status/msg + optional extra-поля (operation/project/channel/result/
+##           duration_s/snapshot_id/... через **extra). Uses /var/log/platform/audit.jsonl (JSON-lines).
+## @scope    Shared library consumed by context_deployer.py, DeployOrchestrator (adapter), reporting.py,
+##           and any other module needing structured audit logging. Python-importable for direct calls;
 ##           CLI accessible via `python3 -m core.internal.shared.audit_logger`.
 ## @invariants
 ##   1. JSON-lines format: one JSON object per line (not JSON array)
 ##   2. Thread-safe via O_APPEND (atomic for lines < PIPE_BUF on POSIX)
 ##   3. Creates log directory if absent (os.makedirs with exist_ok=True)
 ##   4. Non-fatal on write failure: catches OSError, logs WARNING, does NOT raise
-##   5. Default log file is /var/log/platform/audit.jsonl (separate from pipe-delimited audit.log)
-##   6. Timestamp in ISO8601 UTC format via datetime.utcnow().strftime
-## @rationale DevPlan 081B5: Existing context_deployer.py writes ad-hoc audit entries via direct
-##            file.write(). A unified JSON-lines format enables machine-parseable audit trails
-##            that can be consumed by observability pipelines. Separate .jsonl extension prevents
-##            breaking existing shell consumers of audit.log.
+##   5. Default log file is /var/log/platform/audit.jsonl (единый файл — deploy-записи тоже сюда, D1)
+##   6. Timestamp in ISO8601 UTC format via datetime.now(timezone.utc).strftime
+##   7. Permissions on first write: chmod 640, chown :adm (если euid=0) — консолидировано из deploy/audit_logger.py (D1)
+##   8. Extended schema: write_audit_entry(..., **extra) — extra-поля сериализуются в ту же JSON-строку;
+##      backward-compat: вызовы без extra работают как раньше (только ts/tag/status/msg)
+## @rationale DevPlan 081B5: unified JSON-lines audit trail. DevPlan 116 B11 T2 (U-10, D1):
+##            полная консолидация — 3 writer'а (shared, deploy/audit_logger.py, reporting pipe) → один.
 ## @changes  2026-07-26 | DevPlan 081B5 — Created audit logger module
+##           2026-08-01 | DevPlan 116 B11 T2 (U-10, D1) — extended schema (**extra),
+##                      permissions chmod 640/chown :adm, единый файл audit.jsonl
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -43,26 +46,32 @@ def write_audit_entry(
     status: str,
     message: str,
     log_file: str = DEFAULT_LOG_FILE,
+    **extra,
 ) -> None:
     """Append a JSON-lines audit entry to the log file.
 
-    ▶ ┌tag, status, msg┐ → ◇ mkdir -p log_dir → ⊕ build JSON line → ⊕ O_APPEND write → ⎋
+    ▶ ┌tag, status, msg, **extra┐ → ◇ mkdir -p log_dir → ◇ chmod 640/chown :adm (first write)
+      → ⊕ build JSON line (base + extra) → ⊕ O_APPEND write → ⎋
 
     ## @purpose — Append a single structured audit entry in JSON-lines format.
     ##            Thread-safe via O_APPEND on POSIX (atomic for lines < PIPE_BUF).
     ##            Non-fatal: failures are logged at WARNING, never raised.
-    ## @io — ⇥ tag: str — logical tag (e.g. "context_deploy:myproj")
-    ##       ⇥ status: str — status code (e.g. "DEPLOYED", "FAILED")
+    ## @io — ⇥ tag: str — logical tag (e.g. "deploy:deploy", "bootstrap:init")
+    ##       ⇥ status: str — status code (e.g. "DEPLOYED", "FAILED", "DONE", "WARN")
     ##       ⇥ message: str — human-readable description
     ##       ⇥ log_file: str — path to JSON-lines log file (default /var/log/platform/audit.jsonl)
+    ##       ⇥ **extra: dict — расширенная схема (D1): operation, project, channel, result,
+    ##            duration_s, snapshot_id, projects, per_project_results, error_info, ...
     ##       → ⎋ None
     ## @complexity — O(1)
     ## @invariants
     ##   - Creates parent directory if absent (os.makedirs exist_ok=True)
     ##   - Uses O_APPEND mode for thread-safe writes
+    ##   - Sets chmod 640 / chown :adm on first write (если euid==0; non-fatal)
     ##   - Catches OSError, logs WARNING, does NOT raise
     ##   - Timestamp in ISO8601 UTC
     ##   - JSON serialization failure logged at ERROR, still does NOT raise
+    ##   - extra-поля сериализуются в ту же JSON-строку (не отдельной записью)
     """
     log_dir = os.path.dirname(log_file)
 
@@ -79,16 +88,23 @@ def write_audit_entry(
             )
             return
 
-    # ── Build JSON entry ──
+    # ── Build JSON entry (base schema + extended extra fields, D1) ──
     entry = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tag": tag,
         "status": status,
         "msg": message,
     }
+    if extra:
+        # Обратная совместимость: extra-поля НЕ перезаписывают базовую схему
+        for key, value in extra.items():
+            if key not in entry:
+                entry[key] = value
+            else:
+                logger.warning("[IMP:7][write_audit_entry] extra key %r collides with base schema — skipped", key)
 
     try:
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
     except (TypeError, ValueError) as e:
         logger.error(
             "[IMP:8][write_audit_entry] JSON serialization failed for tag=%s status=%s: %s",
@@ -103,12 +119,43 @@ def write_audit_entry(
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(line)
         logger.info("[IMP:9][write_audit_entry] Wrote audit entry: tag=%s status=%s", tag, status)
+        # Permissions on first write (chmod 640 / chown :adm) — консолидировано из
+        # deploy/audit_logger.py (D1, DevPlan 116 B11 T2). Non-fatal; set once per file.
+        if log_file not in _PERMISSIONS_SET:
+            _set_audit_permissions(log_file)
+            _PERMISSIONS_SET.add(log_file)
     except OSError as e:
         logger.warning(
             "[IMP:7][write_audit_entry] Cannot write to %s: %s — audit entry dropped",
             log_file,
             e,
         )
+
+
+# Permissions applied per log file (once) — module-level guard for _set_audit_permissions
+_PERMISSIONS_SET: set[str] = set()
+
+
+def _set_audit_permissions(log_file: str) -> None:
+    """Set log file permissions (chmod 640, chown :adm) — non-fatal.
+
+    ▶ ┌log_file┐ → ◇ chmod 0o640 → ◇ euid==0 ? chown :adm → ⎋ None
+    ## @purpose  Consolidated from deploy/audit_logger.py (D1): audit.jsonl имеет те же
+    ##            пермишены, что прежний audit.log (640 root:adm).
+    ## @complexity O(1)
+    """
+    try:
+        os.chmod(log_file, 0o640)
+        if os.geteuid() == 0:
+            import grp
+
+            try:
+                adm_gid = grp.getgrnam("adm").gr_gid
+                os.chown(log_file, -1, adm_gid)
+            except (KeyError, OSError):
+                pass
+    except OSError as e:
+        logger.warning("[IMP:7][_set_audit_permissions] Cannot set permissions on %s: %s", log_file, e)
 
 
 # endregion FUNC_write_audit_entry

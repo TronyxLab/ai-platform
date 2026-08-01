@@ -82,3 +82,6 @@ tests/.test_counter.json
 
 # zcode ephemeral session plans (accidentally committed in a0c7dc1)
 .zcode/
+
+# Runtime deploy artifacts — never committed (DevPlan 116 B11 T5, U-51)
+.deploy-snapshots/

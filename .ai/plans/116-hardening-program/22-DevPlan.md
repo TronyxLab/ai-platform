@@ -24,6 +24,7 @@
 ##            networks.py:90 — TRAP[DEBT] гонки teardown; BootstrapPhase — state_machine.py:96;
 ##            e2e-набор 11 requires_node (bootstrap_pipeline 8 + failure_scenarios 3), ci.mk:107.
 ## @changes 2026-08-01 · Решения пользователя (question 2026-08-01): (D1) U-71 — граничные моки +
+## @changes  SUPERSEDED 2026-08-01 — закрыт волнами 116; VR не требуется (D5, DevPlan 116 B11 T8 U-84) — 22-DevPlan.md
 ##           parametrize, ≤5 @patch на файл через общую фикстуру, prod-код не меняется; (D2) U-70 —
 ##           гибрид: Python native, shell dry-run (bash-субпроцесс, прецедент test_lib_ssh),
 ##           код-присутствие где dry-run не покрывает; (D3) U-72 — e2e прогон сейчас:

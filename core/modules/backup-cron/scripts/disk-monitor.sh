@@ -41,7 +41,7 @@ if [ "$usage" -gt "$THRESHOLD" ]; then
             # Strangler 2026-07-31: inline python3 -c → python3 -m core.internal.shared.telegram_notifier send
             TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
             TELEGRAM_CHAT_ID="${CHAT_ID}" \
-            python3 -m core.internal.shared.telegram_notifier send "⚠️ Disk usage ${usage}% on $(hostname) — threshold ${THRESHOLD}%" 2>/dev/null || true
+            python3 -m core.internal.shared.telegram_notifier send "⚠️ Disk usage ${usage}% on $(hostname) — threshold ${THRESHOLD}%" 2>/dev/null || true  # LINT-EXEMPT: контейнерный модуль; shared.telegram_notifier — by design (D1, allowlist 116 B11 T1)
         fi
     fi
 fi

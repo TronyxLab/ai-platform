@@ -220,12 +220,13 @@ def test_integration_steps_have_structured_logging(caplog) -> None:
 
 
 def _check_workflow_run_on_platform_test(workflow: dict, workflow_name: str) -> list[str]:
-    """Verify that a workflow triggers on workflow_run of platform-test (single workflow).
+    """Verify that a workflow triggers on workflow_run of the gate workflow (single workflow).
 
     ## @purpose — SHA-aware aggregator invariant D4: deploy workflows must trigger on
-    ##            workflow_run of a SINGLE workflow (platform-test), not an array of
-    ##            workflows (prevents OR-semantics). Plan 2: main-full-gate removed,
-    ##            platform-test is the single gate workflow for push main.
+    ##            workflow_run of a SINGLE workflow, not an array of workflows (prevents
+    ##            OR-semantics). DevPlan 116 B11 T4 (D2, U-57): downstream триггерятся на
+    ##            platform-gate-fast (лёгкий fast-gate) — не platform-test (flaky-изоляция).
+    ##            Plan 2: main-full-gate removed; platform-gate-fast — единый gate для push main.
     ## @io — workflow dict → ⎋ list[str] of failures (empty if all pass)
     ## @complexity — O(1)
     """
@@ -243,8 +244,10 @@ def _check_workflow_run_on_platform_test(workflow: dict, workflow_name: str) -> 
             f"(got {len(workflows) if isinstance(workflows, list) else 'not a list'}) "
             f"— prevents OR-semantics (D4)"
         )
-    elif workflows[0] != "platform-test":
-        failures.append(f"{workflow_name}: 'on.workflow_run.workflows' must be ['platform-test'], got {workflows}")
+    elif workflows[0] != "platform-gate-fast":
+        failures.append(
+            f"{workflow_name}: 'on.workflow_run.workflows' must be ['platform-gate-fast'] (D2), got {workflows}"
+        )
     return failures
 
 

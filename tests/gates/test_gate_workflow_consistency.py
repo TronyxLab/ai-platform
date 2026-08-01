@@ -1,19 +1,19 @@
 # GREP_SUMMARY: gate workflow-consistency workflow-count-9 main-full-gate-deleted platform-test-single-job no-observability deploy-triggers push-filter make-targets core-deploy-auto-detect basedpyright-removed provisioner module-list-consistency raw-internal-allowlist nightly-gate-removed build-hermes
 # STRUCTURE: ▶ parse workflow YAMLs → ◇ assert invariants (count, jobs, triggers, refs, module-lists, raw-internal) → ⎋ 14 tests (2 new: module-lists, raw-internal-allowlist)
 # region MODULE_CONTRACT
-## @purpose — Gate test suite for CI workflow structural consistency (Plans 2 + 19).
-##            Validates: workflow count=9, main-full-gate deleted, platform-test single job,
-##            no observability references, deploy triggers on platform-test, push event filter,
+## @purpose — Gate test suite for CI workflow structural consistency (Plans 2 + 19 + DevPlan 116 B11 T4/D2).
+##            Validates: workflow count=8, main-full-gate deleted, platform-test single job,
+##            no observability references, deploy triggers on platform-gate-fast (D2), push event filter,
 ##            make target existence, core-deploy NODE= arg, basedpyright removed, provisioner usage,
 ##            module-list consistency between workflows and filesystem, raw internal call allowlist.
 ## @scope — Parses .github/workflows/*.yml and .github/actions/*.yml files to verify structural
 ##          invariants defined in DevPlan 002 CI Unification §TEST_SPEC and DevPlan 019 Gate Scope Closure.
 ## @invariants
-##   - Exactly 9 workflow files in .github/workflows/
+##   - Exactly 8 workflow files in .github/workflows/ (7 + platform-gate-fast.yml, B11 T4 D2)
 ##   - main-full-gate.yml does not exist
 ##   - platform-test.yml has exactly 1 job (unified, no separate static-gate/basedpyright/platform-integration)
 ##   - No workflow references core/modules/observability/ (D1 fix)
-##   - core-deploy, build-platform, mirror trigger on platform-test (workflow_run)
+##   - core-deploy, build-platform, mirror trigger on platform-gate-fast (workflow_run, D2 — лёгкий gate)
 ##   - Deploy workflows filter workflow_run.event == 'push'
 ##   - All make <target> in workflows exist as .PHONY targets in Makefile
 ##   - core-deploy.yml uses auto-detection (NODE not passed, bootstrap.sh resolves)
@@ -42,20 +42,22 @@ _MAKEFILE_PATH: pathlib.Path = repo_root() / "Makefile"
 
 # Expected workflow files after Plan 2 consolidation + DevPlan 050 build-hermes
 # DevPlan 116 B1 T4: platform-deploy.yml + stage-deploy.yml УДАЛЕНЫ — единый канал deploy-project.yml
+# DevPlan 116 B11 T4 (D2): +platform-gate-fast.yml — лёгкий gate-workflow (push main), downstream на нём
 _EXPECTED_WORKFLOWS: set[str] = {
     "build-hermes.yml",
     "build-platform.yml",
     "core-deploy.yml",
     "deploy-project.yml",
     "mirror.yml",
+    "platform-gate-fast.yml",
     "platform-test.yml",
     "push-gate.yml",
 }
 
-# Expected count: 7 (9 − platform-deploy.yml − stage-deploy.yml, DevPlan 116 B1 T4)
-_EXPECTED_WORKFLOW_COUNT: int = 7
+# Expected count: 8 (7 + platform-gate-fast.yml, DevPlan 116 B11 T4 D2)
+_EXPECTED_WORKFLOW_COUNT: int = 8
 
-# Deploy workflows that should trigger on platform-test (workflow_run)
+# Deploy workflows that should trigger on platform-gate-fast (workflow_run, D2 — DevPlan 116 B11 T4)
 _DEPLOY_WORKFLOWS: set[str] = {
     "core-deploy.yml",
     "build-platform.yml",
@@ -257,7 +259,7 @@ def test_no_observability_references():
 
 @pytest.mark.gate
 def test_deploy_triggers_on_platform_test():
-    """Verify deploy workflows (core-deploy, build-platform, mirror) trigger on platform-test."""
+    """Verify deploy workflows (core-deploy, build-platform, mirror) trigger on platform-gate-fast (D2)."""
     for wf_name in _DEPLOY_WORKFLOWS:
         wf_path = _WORKFLOW_DIR / wf_name
         data = load_yaml(wf_path)
@@ -266,8 +268,10 @@ def test_deploy_triggers_on_platform_test():
         on_section = get_on_section(data)
         workflow_run = on_section.get("workflow_run", {})
         workflows = workflow_run.get("workflows", [])
-        assert "platform-test" in workflows, f"{wf_name} must trigger on platform-test workflow_run, found: {workflows}"
-        logger.info("[IMP:9][test] %s triggers on platform-test (workflow_run)", wf_name)
+        assert "platform-gate-fast" in workflows, (
+            f"{wf_name} must trigger on platform-gate-fast workflow_run (D2, DevPlan 116 B11 T4), found: {workflows}"
+        )
+        logger.info("[IMP:9][test] %s triggers on platform-gate-fast (workflow_run, D2)", wf_name)
         # Verify branches filter
         branches = workflow_run.get("branches", [])
         assert "main" in branches, f"{wf_name} workflow_run should filter branches: [main]"

@@ -100,9 +100,7 @@ def _scan_source_for_pass_tests(source: str, file_name: str) -> list[str]:
                     f"{file_name}:{node.lineno}: bare `pass` in except handler — swallowed "
                     "exception, R1/CONSTITUTION-4 violation"
                 )
-        elif isinstance(node, ast.Raise):
-            has_fail_mechanism = True
-        elif _is_fail_mechanism_call(node):
+        elif isinstance(node, ast.Raise) or _is_fail_mechanism_call(node):
             has_fail_mechanism = True
 
     if not has_fail_mechanism and pathlib.Path(file_name).name.startswith("test_"):
@@ -160,15 +158,14 @@ def test_r1_no_pass_tests() -> None:
 
     assert not violations, (
         f"[GATE:FAIL][id:r1_no_pass_tests] {len(violations)} R1 pass-test violation(s) "
-        f"across {scanned} scanned files:\n" + "\n".join(violations)
+        f"across {scanned} scanned files:\n"
+        + "\n".join(violations)
         + "\nTest Honesty R1 (.kilo/rules/testing.md): a test that cannot fail is not a test. "
         "Remove the constant assert / bare-pass except / add a real assertion."
     )
     import logging
 
-    logging.getLogger(__name__).info(
-        "[IMP:9][r1_no_pass_tests] Scanned %d test files — 0 R1 violations", scanned
-    )
+    logging.getLogger(__name__).info("[IMP:9][r1_no_pass_tests] Scanned %d test files — 0 R1 violations", scanned)
 
 
 # endregion FUNC_test_r1_no_pass_tests
@@ -177,6 +174,7 @@ def test_r1_no_pass_tests() -> None:
 # region R5_NEGATIVES
 ## @purpose  Negative tests (Anti-Survivorship R5): each detector must fire on the exact
 ##           regression input. If a detector breaks, the corresponding negative fails.
+
 
 # 🧪 TRAP[TEST] · 2026-08-01 · R5-negative for constant-assert detector
 # · Scenario: inline fixture with `assert True` (the exact U-69 regression form)
@@ -187,9 +185,7 @@ def test_r1_negative_constant_assert_detected() -> None:
     """Negative (R5): `assert True` source must be detected as a violation."""
     src = "def test_always_passes():\n    assert True  # U-69 regression form\n"
     violations = _scan_source_for_pass_tests(src, "test_fake_constant.py")
-    assert any("constant assert" in v for v in violations), (
-        f"R1 detector FAILED to flag `assert True`: {violations}"
-    )
+    assert any("constant assert" in v for v in violations), f"R1 detector FAILED to flag `assert True`: {violations}"
     assert any("test_fake_constant.py" in v for v in violations)
 
 

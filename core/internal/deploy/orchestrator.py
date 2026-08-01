@@ -40,10 +40,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from core.internal.deploy.audit_logger import AuditLogger
 from core.internal.deploy.channels import DeliveryChannel, Payload
 from core.internal.deploy.deploy_history import DeployHistory
 from core.internal.deploy.healthcheck_poller import HealthcheckPoller
+
+# DevPlan 116 B11 T2 (U-10, D1): единый audit-writer — shared/audit_logger.
+# deploy/audit_logger.py УДАЛЁН; DeployOrchestrator пишет через write_audit_entry
+# (tag="deploy:<operation>") через тонкий адаптер DeployAuditLogger (см. ниже).
+from core.internal.shared.audit_logger import DEFAULT_LOG_FILE as _SHARED_AUDIT_LOG_FILE
+from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
 # DevPlan 116 B5 T3: shared docker compose — sole path (гейт docker_sole_path)
 from core.internal.shared.docker_compose import (
@@ -58,6 +63,79 @@ from core.internal.shared.exceptions import PlatformError
 from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
+
+
+# region CLASS_DeployAuditLogger
+class DeployAuditLogger:
+    """Thin adapter: DeployOrchestrator .log()/.log_many() interface → shared write_audit_entry.
+
+    ## @purpose — Единственный мост между DeployOrchestrator'ом и единым writer'ом
+    ##            shared/audit_logger (D1, DevPlan 116 B11 T2). Маппит deploy-поля
+    ##            (operation/project/channel/result/duration_s/snapshot_id) в расширенную
+    ##            схему write_audit_entry(tag="deploy:<operation>", **extra).
+    ##            Все записи идут в ЕДИНЫЙ файл audit.jsonl (DEFAULT_LOG_FILE).
+    ## @io — ⇥ log_file: str (default shared DEFAULT_LOG_FILE) → ⎋ None
+    ## @complexity O(1) per call
+    ## @invariants
+    ##   - .log()/.log_many() интерфейс сохраняется (тесты/вызовы не ломаются)
+    ##   - НИКАКОГО прямого f.write — все записи через shared write_audit_entry
+    ##   - tag = "deploy:<operation>", status = result (или "UNKNOWN")
+    ##   - Расширенная схема: extra-поля (operation, project, channel, result, duration_s,
+    ##     snapshot_id, projects, per_project_results) — в ту же JSON-строку
+    """
+
+    def __init__(self, log_file: str = _SHARED_AUDIT_LOG_FILE):
+        self.log_file = log_file
+
+    def log(
+        self,
+        operation: str,
+        project: str,
+        channel: str = "",
+        result: str = "",
+        duration_s: float = 0.0,
+        snapshot_id: str | None = None,
+        **extra: str,
+    ) -> None:
+        """Write a single-project deploy audit entry via shared write_audit_entry."""
+        _shared_write_audit_entry(
+            tag=f"deploy:{operation}",
+            status=result or "UNKNOWN",
+            message=f"{operation} project={project} channel={channel or '-'}",
+            log_file=self.log_file,
+            operation=operation,
+            project=project,
+            channel=channel,
+            result=result,
+            duration_s=round(duration_s, 3),
+            snapshot_id=snapshot_id or "",
+            **extra,
+        )
+
+    def log_many(
+        self,
+        operation: str,
+        projects: list[str],
+        channel: str = "",
+        results: list[str] | None = None,
+        overall_result: str = "",
+    ) -> None:
+        """Write a multi-project deploy audit entry via shared write_audit_entry."""
+        _shared_write_audit_entry(
+            tag=f"deploy:{operation}",
+            status=overall_result or "UNKNOWN",
+            message=f"{operation} {len(projects)} project(s)",
+            log_file=self.log_file,
+            operation=operation,
+            projects=projects,
+            channel=channel,
+            result=overall_result,
+            project_count=len(projects),
+            per_project_results=results or [],
+        )
+
+
+# endregion CLASS_DeployAuditLogger
 
 DEFAULT_PROJECTS_BASE = "/opt/projects"
 PROJECTS_BASE = os.environ.get("PROJECTS_BASE", DEFAULT_PROJECTS_BASE)
@@ -180,12 +258,12 @@ class DeployOrchestrator:
     def __init__(
         self,
         projects_base: str = PROJECTS_BASE,
-        audit_logger: AuditLogger | None = None,
+        audit_logger: DeployAuditLogger | None = None,
         deploy_history: DeployHistory | None = None,
         healthcheck_poller: HealthcheckPoller | None = None,
     ):
         self.projects_base = projects_base
-        self.audit_logger = audit_logger or AuditLogger()
+        self.audit_logger = audit_logger or DeployAuditLogger()
         self.deploy_history = deploy_history or DeployHistory(projects_base)
         self.healthcheck_poller = healthcheck_poller or HealthcheckPoller()
 

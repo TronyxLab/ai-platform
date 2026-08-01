@@ -21,12 +21,12 @@ import tempfile
 
 import pytest
 
-from core.internal.deploy.audit_logger import AuditLogger
 from core.internal.deploy.channels import DeliveryChannel, DeliveryResult, Payload
 from core.internal.deploy.deploy_history import DeployHistory
 from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 from core.internal.deploy.orchestrator import (
     DEFAULT_PROJECTS_BASE,
+    DeployAuditLogger,
     DeployOrchestrator,
     DeployResult,
     DeployStatus,
@@ -125,7 +125,7 @@ def history(projects_base: str) -> DeployHistory:
 @pytest.fixture
 def orchestrator(projects_base: str, temp_log_file: str, history: DeployHistory) -> DeployOrchestrator:
     """Create DeployOrchestrator with mocked dependencies."""
-    audit = AuditLogger(log_file=temp_log_file)
+    audit = DeployAuditLogger(log_file=temp_log_file)
     healthcheck = HealthcheckPoller(timeout=1, interval=1, max_retries=1)
     return DeployOrchestrator(
         projects_base=projects_base,

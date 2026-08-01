@@ -1,15 +1,19 @@
-# GREP_SUMMARY: sha-resolve composite-action sha-verification platform-test workflow_run workflow_dispatch skip-output
-# STRUCTURE: inputs:verify(default:true) → ○ resolve SHA from event context → ◇ verify platform-test:SHA succeeds → ⊕ skip output → ⎋ sha+skip outputs
+# GREP_SUMMARY: sha-resolve composite-action sha-verification platform-test platform-gate-fast workflow_run workflow_dispatch skip-output
+# STRUCTURE: inputs:verify(default:true)+workflow-file(default:platform-test.yml) → ○ resolve SHA from event context → ◇ verify <workflow-file>:SHA succeeds → ⊕ skip output → ⎋ sha+skip outputs
 # region MODULE_CONTRACT
-## @purpose  Canonical SHA resolution + platform-test verification in one composite action.
+## @purpose  Canonical SHA resolution + gate-workflow verification in one composite action.
 ##           Eliminates 3× duplicate SHA resolution blocks across workflows (build-platform,
 ##           mirror, core-deploy) with a single Source of Truth for SHA-aware aggregator pattern.
+##           DevPlan 116 B11 T4 (D2): вход workflow-file параметризует, КАКОЙ gate-workflow
+##           верифицируется (platform-gate-fast для downstream, platform-test по умолчанию).
 ## @scope    Used by build-platform.yml, mirror.yml, core-deploy.yml and similar workflows that need
 ##           to resolve SHA from workflow_run or workflow_dispatch event and verify that
-##           platform-test succeeded for that commit.
+##           the gate workflow succeeded for that commit.
 ## @invariants
 ##   - Resolves SHA from workflow_run.head_sha or github.sha depending on event
-##   - When verify=true (default): calls GitHub API to verify platform-test success for SHA
+##   - When verify=true (default): calls GitHub API to verify <workflow-file> success for SHA
+##   - workflow-file: имя файла workflow для верификации (default platform-test.yml;
+##     downstream передаёт platform-gate-fast.yml — D2, DevPlan 116 B11 T4)
 ##   - When verify=false: only resolves SHA without API call (for workflows without gating)
 ##   - Requires GH_TOKEN env when verify=true (set at action level)
 ##   - skip output: 'true' if verification failed (downstream should skip), 'false' otherwise.
@@ -19,16 +23,21 @@
 ##            StatusReport 046 T7 (CICD-03): added `skip` output to absorb core-deploy.yml inline logic.
 ## @changes — 2026-07-16 | Extracted from build-platform.yml + mirror.yml per DevPlan 017 T12
 ##           — 2026-07-22 | Added `skip` output for core-deploy.yml migration (StatusReport 046 T7 — CICD-03)
+##           — 2026-08-01 | DevPlan 116 B11 T4 (D2): workflow-file input (platform-gate-fast для downstream)
 # endregion MODULE_CONTRACT
 
 name: 'Resolve SHA'
-description: 'Determine SHA from event context and optionally verify platform-test succeeded for SHA'
+description: 'Determine SHA from event context and optionally verify the gate workflow succeeded for SHA'
 
 inputs:
   verify:
-    description: 'Verify platform-test succeeded for the SHA via GitHub API (true/false)'
+    description: 'Verify the gate workflow succeeded for the SHA via GitHub API (true/false)'
     required: false
     default: 'true'
+  workflow-file:
+    description: 'Workflow file to verify (default platform-test.yml; downstream uses platform-gate-fast.yml — D2)'
+    required: false
+    default: 'platform-test.yml'
 
 outputs:
   sha:
@@ -58,13 +67,15 @@ runs:
         fi
         echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
-    # ─── Step 2: Verify platform-test success (optional) ─────────────────
+    # ─── Step 2: Verify gate workflow success (optional) ─────────────────
     # StatusReport 046 T7 (CICD-03): added skip output for core-deploy.yml migration.
+    # DevPlan 116 B11 T4 (D2): workflow-file параметризует gate-workflow
+    # (platform-gate-fast для downstream; platform-test по умолчанию).
     # ⚠️ TRAP[DESIGN] · 2026-07-22 · MED · `skip` output — leaky abstraction
     # · sha-resolve изначально stateless SHA resolver. `skip` делает его осведомлённым о downstream flow.
     # · Mitigation: skip существует только когда verify=true. Semantically transparent:
     # ·   `if: steps.sha.outputs.skip != 'true'` reads naturally.
-    - name: Verify platform-test succeeded for SHA
+    - name: Verify gate workflow succeeded for SHA
       if: inputs.verify == 'true'
       id: verify
       shell: bash
@@ -72,17 +83,18 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         SHA="${{ steps.resolve.outputs.sha }}"
-        echo "[IMP:9][sha-resolve][verify] Verifying platform-test for SHA: $SHA"
+        WF="${{ inputs.workflow-file }}"
+        echo "[IMP:9][sha-resolve][verify] Verifying $WF for SHA: $SHA"
 
         COUNT=$(gh api \
-          "/repos/${{ github.repository }}/actions/workflows/platform-test.yml/runs?head_sha=$SHA&status=success&per_page=1" \
+          "/repos/${{ github.repository }}/actions/workflows/$WF/runs?head_sha=$SHA&status=success&per_page=1" \
           --jq '.total_count')
 
         if [ "$COUNT" -eq 0 ]; then
-          echo "[IMP:10][sha-resolve][verify] ERROR: platform-test has no successful run for SHA $SHA"
+          echo "[IMP:10][sha-resolve][verify] ERROR: $WF has no successful run for SHA $SHA"
           echo "skip=true" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
-        echo "[IMP:9][sha-resolve][verify] platform-test succeeded for SHA $SHA"
+        echo "[IMP:9][sha-resolve][verify] $WF succeeded for SHA $SHA"
         echo "skip=false" >> "$GITHUB_OUTPUT"

@@ -114,43 +114,76 @@
 
 | Статус | Глагол | Операция |
 |--------|--------|----------|
-| ✅ | `deploy` | Деплой проекта (git push → CI → deploy-project.yml receive verb → notify/catalog post-deploy, DevPlan 116 B1) |
-| ✅ | `deploy-project` | Direct project deploy (orchestrator_cli deliver → forced-command receive, NODE→host через extract_node_host, DevPlan 116 B1 T5) |
-| ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды (LIFE CYCLE/INIT) |
-| ✅ | `deploy-context` | Деплой всех проектов контекста на ноде (post-bootstrap, standalone) |
-| ✅ | `dev-certs` | Генерация dev SSL-сертификатов (make dev-certs → dev_cert_generator.py) |
-| ✅ | `context-promote` | Промоут платформы в контекстную org |
-| ✅ | `discover-modules` | Авто-обнаружение модулей и обновление docker-compose.yml include-секции (make discover-modules → discover_modules.py) |
-| ✅ | `hermes-build-platform` | Сборка L1 локально |
-| ✅ | `hermes-build-context` | Сборка L1→L2 |
-| ✅ | `hermes-push-l1` | Push L1 в ghcr.io как DR backup и дистрибутивную базу (public package hermes-agent-base, DevPlan 116 B3 D1 — make hermes-push-l1 → docker tag + docker push) |
-| ✅ | `provision` | Provision окружения (сети, volumes, CI env) из platform-env.yaml (`make provision [SCOPE=all|networks|volumes|env]`) |
-| ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES: единый SoT platform-infra.yaml, 0 хардкод-копий вне allowlist (make check-profiles-parity → pytest test_gate_profiles_parity.py) |
-| ✅ | `check-domain-parity` | Parity-гейт PLATFORM_DOMAIN: единое определение, 0 test.local в прод-цепочке (make check-domain-parity → pytest test_gate_domain_parity.py) |
-| ✅ | `templates-check` | Dry-run проверка разрешимости шаблонов |
-| ✅ | `templates-render` | Рендер шаблонов по манифесту |
-| ✅ | `validate` / `lint` / `audit` / `check-file-lines` / `verify` | Проверки и аудит |
-| ✅ | `secrets-unlock` | Расшифровка SOPS/age секретов |
-| ✅ | `test` | Тестирование (`make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]`) |
-| ✅ | `test-inventory-sync` | Регенерация test_inventory.yaml из pytest --collect-only (make test-inventory-sync → tests/tools/sync_inventory.py) |
-| ✅ | `test-summary` | Компактный agent-oriented тестовый раннер (make test-summary [MARKER=static_audit\|...] → core/internal/test_runner.py) |
-| ✅ | `gate` | Production gate (`make gate [MODE=fast|full]`) |
-| ✅ | `new-project` / `new-context` | Создание из шаблона |
-| ✅ | `project-sync-env` | Синхронизация .env.platform из platform-env.yaml (make project-sync-env → scaffold.sh sync-env) |
-| ✅ | `remove-project` | Безопасное удаление проекта из lifecycle (unregister + compose down без -v) |
-| ✅ | `adopt-project` | Адаптация существующего проекта в lifecycle платформы (make adopt-project DIR=&lt;dir&gt;) |
-| ✅ | `project-list` / `project-status` | Список проектов (offline) и live-статус на ноде |
-| ✅ | `backup` / `restore` | Резервное копирование. Root = оркестрация стека, module = один модуль. **Stateful-модули (postgres, backup-cron, hermes-agent); остальные модули НЕ объявляют backup/restore (контракт сужен, DevPlan 116 D1)** |
+<!-- GENERATED:START:glossary -->
+| ✅ | `_get_all_profiles` | Вывод COMPOSE_PROFILES |
+| ✅ | `adopt-project` | Адаптация существующего проекта |
+| ✅ | `audit` | Системный аудит |
+| ✅ | `backup` | Резервное копирование |
+| ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды |
+| ✅ | `check-dead-code` | Проверка мёртвого кода |
+| ✅ | `check-domain-parity` | Parity-гейт PLATFORM_DOMAIN (единое определение, 0 legacy-доменов) |
+| ✅ | `check-env-defaults` | Проверка актуальности .env.example |
+| ✅ | `check-file-lines` | Проверка длины файлов |
+| ✅ | `check-manifests` | Проверка актуальности сгенерированных манифестов |
+| ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) |
+| ✅ | `compose-safe-up` | Deprecated alias for up-safe |
+| ✅ | `context-promote` | Промоут платформы в контекст |
+| ✅ | `converge` | Реконсиляция ноды |
+| ✅ | `deploy` | Деплой проекта |
+| ✅ | `deploy-context` | Деплой проектов контекста на ноде |
+| ✅ | `deploy-project` | Прямой деплой минуя CI (DeployOrchestrator deliver) |
+| ✅ | `dev-certs` | Генерация dev SSL-сертификатов |
+| ✅ | `discover-modules` | Авто-обнаружение модулей |
+| ✅ | `down` | Остановка compose-стека |
+| ✅ | `doxygen-check` | Doxygen zero-warnings проверка |
+| ✅ | `fix-executable-bit` | Исправление executable bit на .sh файлах |
+| ✅ | `fix-gate` | Композитное исправление gate-ошибок |
+| ✅ | `fix-ruff` | Форматирование Python файлов через ruff |
+| ✅ | `gate` | Production gate |
+| ✅ | `generate-agents-md` | Генерация core/AGENTS.md |
+| ✅ | `generate-entrypoint-manifest` | Генерация entrypoint-manifest.yaml |
+| ✅ | `generate-env-example` | Генерация .env.example |
+| ✅ | `generate-litellm-config` | Генерация litellm-config.yml |
+| ✅ | `generate-manifests` | Генерация всех манифестов |
+| ✅ | `generate-manifests-atomic` | Атомарная генерация всех манифестов |
+| ✅ | `generate-platform-env` | Генерация platform-env.yaml + Python env files |
+| ✅ | `generate-secrets-manifest` | Генерация secrets-manifest.yaml |
 | ✅ | `healthcheck` | Проверка здоровья |
-| ✅ | `node-update` | Регулярный update ноды (make node-update → provision + deploy-modules + healthcheck) |
-| ✅ | `converge` | Idempotent reconcile — конвергирует ноду с desired state из node.yaml (make converge NODE=&lt;name&gt;) |
-| ✅ | `render-vhosts` | Генерация nginx vhost конфигов из node.yaml (make render-vhosts NODE=&lt;name&gt;) |
-| ✅ | `render-monitoring` | Рендер конфигурации мониторинга после деплоя проекта (make render-monitoring PROJECT_DIR=&lt;dir&gt; PROJECT=&lt;name&gt; [NODE=&lt;node&gt;] → core/internal/monitoring_config_renderer.py) |
-| ✅ | `up` | Root = оркестрация стека, module = один модуль (compose up) |
-| ✅ | `down` | Root = оркестрация стека, module = удаление контейнеров модуля (compose down — НЕ алиас stop, DevPlan 116 D2) |
-| ✅ | `restart` | Soft restart (stop + start, без пересоздания контейнеров). Root = оркестрация стека, module = один модуль |
-| ✅ | `restart-hard` | Hard restart c `--force-recreate` (module-level target only — нет root Makefile target) |
-| ✅ | `status` | Локальный compose-lifecycle |
+| ✅ | `hermes-build-context` | Сборка L1→L2 образа |
+| ✅ | `hermes-build-platform` | Сборка L1 образа |
+| ✅ | `hermes-push-l1` | Push L1 в ghcr.io |
+| ✅ | `hermes-push-l2` | Push L2 в ghcr.io |
+| ✅ | `lint` | Линтинг |
+| ✅ | `new-context` | Создание контекста деплоя |
+| ✅ | `new-project` | Создание проекта из шаблона |
+| ✅ | `node-update` | Обновление provisioned ноды |
+| ✅ | `preflight` | Параллельный preflight (сбор всех ошибок gate за один проход) |
+| ✅ | `project-list` | Список проектов |
+| ✅ | `project-status` | Статус проекта |
+| ✅ | `project-sync-env` | Синхронизация .env.platform |
+| ✅ | `provision` | Provision окружения |
+| ✅ | `provision-llm` | Provision LiteLLM virtual keys |
+| ✅ | `remove-project` | Удаление проекта из lifecycle |
+| ✅ | `render-monitoring` | Рендер конфигурации мониторинга после деплоя проекта |
+| ✅ | `render-vhosts` | Генерация vhost конфигов |
+| ✅ | `restart` | Мягкий перезапуск compose-стека |
+| ✅ | `restore` | Восстановление из бэкапа |
+| ✅ | `scripts-audit` | Аудит регистрации скриптов |
+| ✅ | `secrets-unlock` | Расшифровка секретов |
+| ✅ | `status` | Статус compose-стека |
+| ✅ | `sync-env-defaults` | Генерация .env.example из SoT |
+| ✅ | `templates-check` | Dry-run проверка шаблонов |
+| ✅ | `templates-render` | Рендер шаблонов |
+| ✅ | `test` | Запуск тестов |
+| ✅ | `test-inventory-sync` | Синхронизация test inventory |
+| ✅ | `test-node` | E2E pipeline тесты на test-VPS |
+| ✅ | `test-summary` | Запуск тестов (агент-ориентированная обёртка) |
+| ✅ | `up` | Запуск compose-стека |
+| ✅ | `up-safe` | Безопасный compose up |
+| ✅ | `validate` | Schema-валидация |
+| ✅ | `validate-modules` | Валидация module.yaml |
+| ✅ | `verify` | HTTPS-верификация |
+<!-- GENERATED:END:glossary -->
 | ❌ | `push-core`, `deploy-node`, `build-local`, `bootstrap-core`, `hermes-deploy-vps` | Запрещены — не из словаря |
 
 **Правило:** одно имя таргета не может означать разное в разных Makefile. Все таргеты регистрируются в `core/entrypoint-manifest.yaml`.
@@ -193,6 +226,7 @@
 ⚠️ TRAP[DECISION] · 2026-07-31 · HI · Enforcement-гейты с allowlist ПРИНЯТЫ (DevPlan 116 T9) — пересмотр TRAP 2026-07-21
 · Rejected: pre-commit/pre-push hook как единственный enforcement (риск: «gate зелёный, система врёт» — хардкод-копии живут без CI-детекции)
 · Reason: решения пользователя 2026-07-31 (D1, 01-Brief §1) — parity-гейты как pytest-гейты (trinity: файл tests/gates/ + @pytest.mark.gate + entrypoint-manifest с repair-полями L1) + тонкие make-обёртки (check-profiles-parity, check-domain-parity). Гейты с allowlist: хардкод значений разрешён ТОЛЬКО в SoT (platform-infra.yaml) и generated-файлах (platform-env.yaml, .env.example); всё остальное — RED. Охват: COMPOSE_PROFILES (profiles_parity), PLATFORM_DOMAIN/test.local (domain_parity), *.template покрытие (template_manifest_coverage), копий-нет по бывшим callsites (compose_profiles_consistency).
+· 2026-08-01 (B11, DevPlan 116): волна расширяет канон — cross-layer allowlist (dotted-импорты + python3 -m, 6 задокументированных записей, НЕ растёт), audit-format R2 (единый shared writer), glossary G4 (генерируемый глоссарий root AGENTS.md), debt-freshness (реестр долга: Status+Rev, stale >90 дней → RED).
 · Rev: если parity-гейты начнут ложно-блокировать легитимные правки (friction > gain) → сузить allowlist или пересмотреть формат; пересмотр 2026-10-21 вместе с TRAP языковой политики.
 
 ⚠️ TRAP[DECISION] · 2026-07-21 · HI · SSH staging-gate для lib/ssh.sh — single point of failure для всех remote-операций

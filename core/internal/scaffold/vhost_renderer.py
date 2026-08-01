@@ -629,7 +629,8 @@ def remove_vhost(project_name: str, overlays_dir: str, platform_root: str | None
     ##            multiple times (no-op if file already removed).
     ## @io — ⇥ project_name: str — name of the project to remove vhost for
     ##       ⇥ overlays_dir: str — path to overlays/nginx directory
-    ##       ⇥ platform_root: str | None — platform root for audit log (optional)
+    ##       ⇥ platform_root: str | None — retained for API compat; audit entry
+    ##            теперь через shared audit_logger (D1, DevPlan 116 B11 T2)
     ##       → ⎋ bool — True on success (or idempotent skip)
     ## @complexity — O(F) where F = number of .conf files in overlays_dir
     ## @invariants
@@ -658,18 +659,18 @@ def remove_vhost(project_name: str, overlays_dir: str, platform_root: str | None
     if not removed:
         logger.info("[IMP:8][remove_vhost] No vhost found for project '%s' — idempotent skip", project_name)
 
-    # Write audit log on actual removal
-    if removed and platform_root:
-        audit_dir = Path(platform_root) / "var" / "log"
-        audit_dir.mkdir(parents=True, exist_ok=True)
-        audit_log = audit_dir / "audit.log"
-        from datetime import datetime, timezone
+    # Write audit log on actual removal — единый writer shared/audit_logger (D1, DevPlan 116 B11 T2)
+    if removed:
+        from core.internal.shared.audit_logger import write_audit_entry
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        audit_line = f"[{timestamp}] [audit] [vhost:remove] project={project_name}\n"
-        with open(audit_log, "a") as f:
-            f.write(audit_line)
-        logger.info("[IMP:8][remove_vhost] Audit log written: removed vhost for %s", project_name)
+        write_audit_entry(
+            tag="vhost:remove",
+            status="DONE",
+            message=f"removed vhost for project={project_name}",
+            project=project_name,
+            operation="vhost:remove",
+        )
+        logger.info("[IMP:8][remove_vhost] Audit entry written: removed vhost for %s", project_name)
 
     return True
 

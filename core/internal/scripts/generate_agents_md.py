@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: generate_agents_md, canon-table, forbidden-lists, inject-into-md, AGENTS.md-generator, CI
-# STRUCTURE: ▶ load manifest → ◇ generate_canon_table(sections) → ◇ generate_forbidden_lists(forbidden_*) → ⊕ inject_into_md(md, marker, content) → ⎋ AGENTS.md with generated regions
+# GREP_SUMMARY: generate_agents_md, canon-table, forbidden-lists, glossary, inject-into-md, AGENTS.md-generator, CI
+# STRUCTURE: ▶ load manifest → ◇ generate_canon_table(sections) → ◇ generate_forbidden_lists(forbidden_*) → ◇ generate_glossary(allowed_verbs) → ⊕ inject_into_md(md, marker, content) → ⎋ AGENTS.md with generated regions
 # region MODULE_CONTRACT
-## @purpose  Generator for core/AGENTS.md — produces canonical operations table and forbidden lists
-##           from entrypoint-manifest.yaml, injects between <!-- GENERATED:START:<marker> --> and
-##           <!-- GENERATED:END:<marker> --> markers.
-## @scope    Used by `make generate-manifests` (Wave 3 of DevPlan 051). Run as CLI.
+## @purpose  Generator for core/AGENTS.md (canonical operations table + forbidden lists) AND
+##           root AGENTS.md (glossary из allowed_verbs) — G4-расширение (DevPlan 116 B11 T3, U-45/D3).
+##           Инъекция между <!-- GENERATED:START:<marker> --> и <!-- GENERATED:END:<marker> --> маркерами.
+## @scope    Used by `make generate-manifests` (Wave 3 of DevPlan 051 + DevPlan 116 B11 T3).
+##           --target core (default) → core/AGENTS.md; --target root → root AGENTS.md глоссарий.
 ## @invariants
 ##   - generate_canon_table produces Markdown table rows from deploy:/bootstrap:/build:/validate:/test:
 ##     scaffold:/secrets:/lifecycle:/provision:/dev sections with signature+operation_ru if available
 ##   - generate_forbidden_lists produces Markdown lists from forbidden_* sections
+##   - generate_glossary produces глоссарий-таблицу из allowed_verbs + join по make_target
+##     с секциями манифеста (operation_ru/description); verbs без описания → '—' (не RED)
 ##   - inject_into_md replaces content between markers, preserving marker lines
 ##   - If no marker found, appends markers + content at end of file
 ##   - Generated regions are idempotent — re-running replaces previous content
-## @rationale DevPlan 051 Wave 3: automated AGENTS.md table generation eliminates manual sync
-##            between entrypoint-manifest.yaml and AGENTS.md canonical operations table.
-##            Forbidden lists also generated to ensure parity.
-## @see      core/AGENTS.md — target file with generated sections
+##   - --target root генерирует ТОЛЬКО секцию между glossary-маркерами; ручные элементы
+##     (❌-глаголы, «Правило», двухуровневая семантика) вне маркеров НЕ трогаются (D3)
+## @rationale DevPlan 051 Wave 3: automated AGENTS.md table generation eliminates manual sync.
+##            DevPlan 116 B11 T3 (U-45, D3): глоссарий root AGENTS.md дрейфовал (37/68) —
+##            расширение G4 (НЕ новый генератор G7) делает таблицу из allowed_verbs (68 строк,
+##            0 ручных правок); check-manifests G4 --check сверяет оба target бесплатно.
+## @see      core/AGENTS.md — target file (target=core) with generated sections
+## @see      AGENTS.md — target file (target=root) with generated glossary
 ## @see      core/entrypoint-manifest.yaml — source file
 ## @changes 2026-07-22 | Created (DevPlan 051 Wave 3)
 ##           2026-07-30 | Added --check mode: in-memory injection + byte comparison, exit 0/1
 ##           Refactored inject_into_md → _inject_content (string-based) + inject_into_md (file wrapper)
+##           2026-08-01 | DevPlan 116 B11 T3 (U-45, D3) — --target {core,root}; generate_glossary
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -178,6 +186,52 @@ def generate_forbidden_lists(manifest: dict) -> str:
     return result
 
 
+def generate_glossary(manifest: dict) -> str:
+    """Generate root AGENTS.md glossary table from allowed_verbs + section descriptions.
+
+    ## @purpose  Глоссарий глаголов (root AGENTS.md) из SoT: allowed_verbs (68 имён) +
+    ##            join по имени make_target с секциями манифеста (operation_ru/description).
+    ##            DevPlan 116 B11 T3 (U-45, D3): расширение G4 — НЕ новый генератор.
+    ## @io       ⇥ manifest: dict — parsed entrypoint-manifest.yaml
+    ##           → ⎋ str: Markdown table rows (| ✅ | `verb` | операция |)
+    ## @complexity O(V * S) where V = verbs, S = section entries
+    ## @invariants
+    ##   - Все allowed_verbs попадают в таблицу (полный список 68, не только ✅-задокументированные)
+    ##   - Verbs без описания (нет make_target-записи с operation_ru/description) → '—' (не RED)
+    ##   - 3 колонки: Статус | Глагол | Операция (формат существующей ручной таблицы)
+    ##   - Порядок: сортировка по имени глагола (детерминизм для check-manifests)
+    """
+    print("[IMP:7][generate_glossary] Generating glossary from allowed_verbs", file=sys.stderr)
+
+    # Build verb → description map from ALL sections (join по имени таргета)
+    verb_desc: dict[str, str] = {}
+    for section in TABLE_SECTIONS:
+        entries = manifest.get(section, [])
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            target = entry.get("make_target")
+            if not target:
+                continue
+            desc = entry.get("operation_ru") or entry.get("description") or "—"
+            if target not in verb_desc:
+                verb_desc[target] = desc
+
+    allowed_verbs = manifest.get("allowed_verbs", [])
+    if not isinstance(allowed_verbs, list):
+        allowed_verbs = []
+
+    rows: list[str] = [f"| ✅ | `{verb}` | {verb_desc.get(verb, '—')} |" for verb in sorted(allowed_verbs)]
+
+    print(
+        f"[IMP:9][generate_glossary] Generated {len(rows)} glossary rows ({len(allowed_verbs)} verbs)",
+        file=sys.stderr,
+    )
+    return "\n".join(rows)
+
+
 def _inject_content(content: str, marker: str, new_content: str) -> str:
     """Inject generated content between GENERATED markers in a string copy.
 
@@ -271,7 +325,14 @@ def main() -> int:
     """
     parser = argparse.ArgumentParser(
         prog="generate_agents_md.py",
-        description="Generate core/AGENTS.md generated sections from entrypoint-manifest.yaml",
+        description="Generate AGENTS.md generated sections from entrypoint-manifest.yaml (core: canon_table+forbidden; root: glossary)",
+    )
+    parser.add_argument(
+        "--target",
+        choices=("core", "root"),
+        default="core",
+        help="core (default): canon_table + forbidden lists в core/AGENTS.md; "
+        "root: glossary-секция в корневом AGENTS.md (DevPlan 116 B11 T3, D3)",
     )
     parser.add_argument(
         "--manifest",
@@ -280,14 +341,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--agents-md",
-        default="core/AGENTS.md",
-        help="Path to core/AGENTS.md (default: core/AGENTS.md)",
+        default=None,
+        help="Path to target AGENTS.md (default: core/AGENTS.md for target=core, AGENTS.md for target=root)",
     )
     parser.add_argument(
         "--marker",
         default="canon-operations",
         help="Marker prefix for GENERATED sections (default: canon-operations). "
-        "Forbidden lists use marker + '-forbidden' (e.g., canon-operations-forbidden)",
+        "Forbidden lists use marker + '-forbidden'. Root glossary uses 'glossary'.",
     )
     parser.add_argument(
         "--check",
@@ -297,7 +358,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    print("[IMP:7][main] Starting AGENTS.md generation", file=sys.stderr)
+    if args.agents_md is None:
+        args.agents_md = "AGENTS.md" if args.target == "root" else "core/AGENTS.md"
+    glossary_marker = "glossary" if args.target == "root" else args.marker
+
+    print(f"[IMP:7][main] Starting AGENTS.md generation (target={args.target})", file=sys.stderr)
 
     try:
         # Load manifest
@@ -311,6 +376,47 @@ def main() -> int:
         if manifest is None:
             manifest = {}
 
+        if args.target == "root":
+            # ══════════════════════════════════════════════════════════════
+            # TARGET=root: глоссарий из allowed_verbs (D3 — расширение G4)
+            # ══════════════════════════════════════════════════════════════
+            glossary_content = generate_glossary(manifest)
+
+            if args.check:
+                root_md_path = Path(args.agents_md)
+                if not root_md_path.is_file():
+                    logger.error("[IMP:1][main][CHECK] root AGENTS.md not found: %s", args.agents_md)
+                    print(f"[IMP:1][main][CHECK] File not found: {args.agents_md}", file=sys.stderr)
+                    return 1
+                existing_content = root_md_path.read_text(encoding="utf-8")
+                simulated = _inject_content(existing_content, glossary_marker, glossary_content)
+                if simulated == existing_content:
+                    logger.info("[IMP:9][main][CHECK][root] glossary is up-to-date — exit 0")
+                    print("[IMP:9][main][CHECK][root] glossary is up-to-date — exit 0", file=sys.stderr)
+                    return 0
+                logger.warning("[IMP:6][main][CHECK][root] glossary is stale — exit 1")
+                print("[IMP:6][main][CHECK][root] glossary divergence detected", file=sys.stderr)
+                diff_lines = list(
+                    difflib.unified_diff(
+                        existing_content.splitlines(keepends=True),
+                        simulated.splitlines(keepends=True),
+                        fromfile=f"{args.agents_md} (file)",
+                        tofile=f"{args.agents_md} (regenerated)",
+                    )
+                )
+                for line in diff_lines[:20]:
+                    print(line, end="", file=sys.stderr)
+                if len(diff_lines) > 20:
+                    print(f"[IMP:6][check] ... truncated ({len(diff_lines) - 20} more lines)", file=sys.stderr)
+                return 1
+
+            inject_into_md(args.agents_md, glossary_marker, glossary_content)
+            print(f"[IMP:9][main][root] Glossary generation complete — {args.agents_md} updated", file=sys.stderr)
+            return 0
+
+        # ══════════════════════════════════════════════════════════════════
+        # TARGET=core: canon_table + forbidden lists (прежнее поведение)
+        # ══════════════════════════════════════════════════════════════════
         # Generate canonical table
         canon_table = generate_canon_table(manifest)
 

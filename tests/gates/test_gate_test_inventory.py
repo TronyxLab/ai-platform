@@ -1,20 +1,29 @@
-# GREP_SUMMARY: gate, test-inventory, baseline, local-file, marker-validation, changelog, anti-tamper
-# STRUCTURE: ┌load test_inventory.yaml + test_inventory_changes.yaml┐ → ◇ pytest --collect-only → ◇ compare → ◇ assert
+# GREP_SUMMARY: gate, test-inventory, baseline, local-file, marker-validation, changelog, anti-tamper, rename-detection
+# STRUCTURE: ┌load test_inventory.yaml + test_inventory_changes.yaml┐ → ◇ pytest --collect-only → ◇ compare → ◇ rename-detection (norm func+file) → ◇ assert
 # region MODULE_CONTRACT
 ## @purpose — Gate tests that validate test inventory integrity:
 ##            1. All collected tests match the inventory YAML (bi-directional)
 ##            2. All tests have registered markers
 ##            3. No test removed without documented changelog (baseline from local file)
+##            4. RENAME-детекция (DevPlan 116 B11 T6, U-79): удаление + добавление пары
+##               (та же тест-функция, тот же файл по нормализованному имени) = rename →
+##               changelog НЕ обязателен (warning); удаление БЕЗ rename-пары → требование
+##               changelog сохраняется (RED)
+##            5. Единая точка регенерации (single-source): нет второго вызова sync_inventory
 ## @scope — Compare PR's test node IDs against baseline from local test_inventory.yaml.
 ##          Prevents silent test deletion or marker drift.
 ## @invariants
 ##   - baseline is from local test_inventory.yaml (committed file)
 ##   - Adding new tests is always OK
 ##   - Removing tests requires changelog entry in test_inventory_changes.yaml
+##   - Rename (remove+add pair, normalized file+func match) → PASS + warning, changelog not required
 ##   - Every test must have at least one registered marker from pytest.ini
+##   - _collect_tests() — намеренный anti-tamper дубль sync_inventory.collect_tests (T18, НЕ менять)
 ## @rationale — Silent test deletion is a CI anti-pattern. Baseline comparison
 ##              catches removal even when inventory is also modified in the same PR.
+##              Rename-detection убирает ложные RED на переименования (U-79).
 ## @changes — 2026-07-10 | Created per TestsMetaDevPlan2.md TASK-10
+##           — 2026-08-01 | DevPlan 116 B11 T6 (U-79): rename-детекция + single-source тест
 # endregion MODULE_CONTRACT
 
 import logging
@@ -244,6 +253,26 @@ def _get_header_test_count() -> int | None:
     return latest_count
 
 
+def _normalize_nodeid(nodeid: str) -> tuple[str, str]:
+    """Normalize a nodeid into (normalized_file, normalized_function) for rename detection.
+
+    ## @purpose — DevPlan 116 B11 T6 (U-79): rename-детекция. Nodeid вида
+    ##            "tests/unit/test_foo.py::test_bar[param]" → нормализованные
+    ##            (file, func): lowercase + strip non-alphanumeric (brackets/params уходят).
+    ## @io — ⇥ nodeid: str → ⎋ (file_key: str, func_key: str)
+    ## @complexity — O(L) where L = nodeid length
+    """
+    if "::" in nodeid:
+        file_part, func_part = nodeid.split("::", 1)
+    else:
+        file_part, func_part = nodeid, ""
+    # Параметризация [key] отбрасывается: test_bar[a] и test_bar[b] — одна тест-функция
+    func_base = func_part.split("[", 1)[0]
+    norm_file = re.sub(r"[^a-z0-9]", "", file_part.lower())
+    norm_func = re.sub(r"[^a-z0-9]", "", func_base.lower())
+    return norm_file, norm_func
+
+
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
 
@@ -341,13 +370,16 @@ def test_no_test_removed_without_changelog(caplog) -> None:
     """Verify no test was removed from inventory baseline without documented changelog.
 
     ## @purpose — Compare collected tests against inventory baseline.
-    ##            If a test exists in inventory but not in PR, it must be documented
-    ##            in test_inventory_changes.yaml. Otherwise, the gate FAILs.
+    ##            Rename-детекция (DevPlan 116 B11 T6, U-79): удаление + добавление пары
+    ##            (нормализованные file+func совпадают) = rename → warning, не RED.
+    ##            Если тест существует в inventory, но не в PR и НЕ имеет rename-пары,
+    ##            он должен быть задокументирован в test_inventory_changes.yaml.
+    ##            Иначе гейт FAILs.
     ## @io — ⎋ None (assert side-effect, pytest.fail on undocumented removal)
     ## @complexity — O(C + I + R) where C = collected, I = inventory, R = changelog removals
     """
 
-    logger.info("[IMP:8][test_no_test_removed_without_changelog] === Anti-tamper audit ===")
+    logger.info("[IMP:8][test_no_test_removed_without_changelog] === Anti-tamper audit (rename-aware) ===")
 
     inventory = _load_inventory()
     collected = _collect_tests()
@@ -359,12 +391,33 @@ def test_no_test_removed_without_changelog(caplog) -> None:
 
     # Tests in inventory (baseline) but not in collected (PR)
     missing = inventory_set - collected_set
+    # Tests in collected but not in inventory (new — кандидаты на rename-пару)
+    new_tests = collected_set - inventory_set
 
-    # Check each missing test against documented removals
+    # Rename-детекция (U-79): missing nid + new nid с той же нормализованной (file, func)
+    new_keys: dict[tuple[str, str], str] = {}
+    for nid in new_tests:
+        new_keys.setdefault(_normalize_nodeid(nid), nid)
+
+    renamed: list[tuple[str, str]] = []
+    non_renamed: list[str] = []
+    for nid in sorted(missing):
+        key = _normalize_nodeid(nid)
+        if key in new_keys:
+            renamed.append((nid, new_keys[key]))
+            logger.warning(
+                "[IMP:8][test_no_test_removed_without_changelog] RENAME detected: %s → %s (changelog not required)",
+                nid,
+                new_keys[key],
+            )
+        else:
+            non_renamed.append(nid)
+
+    # Проверяем non-renamed против documented removals
     undocumented_removals: list[str] = []
     documented_found: list[str] = []
 
-    for nid in sorted(missing):
+    for nid in sorted(non_renamed):
         if nid in documented_removals:
             documented_found.append(nid)
             logger.info("[IMP:8][test_no_test_removed_without_changelog] DOCUMENTED removal: %s", nid)
@@ -375,13 +428,20 @@ def test_no_test_removed_without_changelog(caplog) -> None:
     # Emit IMP:9 before LDD check so trajectory captures business logic
     if undocumented_removals:
         logger.critical(
-            "[IMP:9][test_no_test_removed_without_changelog] FAIL — %d undocumented removal(s) detected",
+            "[IMP:9][test_no_test_removed_without_changelog] FAIL — %d undocumented removal(s) detected (%d rename(s) exempt)",
             len(undocumented_removals),
+            len(renamed),
+        )
+    elif renamed and not documented_found:
+        logger.critical(
+            "[IMP:9][test_no_test_removed_without_changelog] PASS — %d rename(s) detected (changelog not required)",
+            len(renamed),
         )
     elif documented_found:
         logger.critical(
-            "[IMP:9][test_no_test_removed_without_changelog] PASS — %d test(s) removed with documented changelog",
+            "[IMP:9][test_no_test_removed_without_changelog] PASS — %d test(s) removed with documented changelog, %d rename(s) exempt",
             len(documented_found),
+            len(renamed),
         )
     else:
         logger.critical(
@@ -393,7 +453,8 @@ def test_no_test_removed_without_changelog(caplog) -> None:
             f"{len(undocumented_removals)} test(s) are missing from the PR but NOT documented "
             f"in test_inventory_changes.yaml:\n"
             + "\n".join(f"  - {nid}" for nid in undocumented_removals)
-            + "\n\nEither restore the tests or add a changelog entry with reason, issue, and approval."
+            + "\n\nEither restore the tests, add a changelog entry with reason, issue, and approval, "
+            "or if this is a rename, ensure the renamed test appears in the PR (same normalized file+function)."
         )
 
 
@@ -437,4 +498,97 @@ def test_inventory_header_count_matches_entries(caplog) -> None:
     logger.critical(
         "[IMP:9][test_inventory_header_count_matches_entries] PASS — %d tests, header matches actual count",
         actual_count,
+    )
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · Второй вызов sync_inventory (U-79)
+# · Scenario: единая точка регенерации inventory — только makefiles/helpers.mk (test-inventory-sync)
+# · Last fail: N/A (новый single-source тест)
+# · Remove if: регенерация inventory намеренно консолидирована иначе
+def test_single_inventory_regeneration_source(caplog) -> None:
+    """Verify sync_inventory.py has exactly ONE invocation (single-source, U-79).
+
+    ## @purpose — DevPlan 116 B11 T6 (U-79): единая точка регенерации inventory.
+    ##            Единственный вызов sync_inventory.py — makefiles/helpers.mk (test-inventory-sync).
+    ##            CI (push-gate/platform-test) НЕ вызывает; fix-gate НЕ вызывает (generate-manifests).
+    ##            Гейт делает свой --collect-only (anti-tamper T18 — намеренный дубль, не вызов).
+    ## @io — ⎋ None (pytest.fail на второй вызов)
+    ## @complexity — O(L) across makefiles/ + .github/
+    """
+
+    logger.info("[IMP:8][test_single_inventory_regeneration_source] === Single-source audit ===")
+
+    call_sites: list[str] = []
+    for root in (_PROJECT_ROOT / "makefiles", _PROJECT_ROOT / ".github"):
+        if not root.exists():
+            continue
+        for f in root.rglob("*"):
+            if f.suffix not in (".mk", ".yml", ".yaml", ".py", ".sh"):
+                continue
+            try:
+                content = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "sync_inventory.py" in content or "tools/sync_inventory" in content:
+                rel = f.relative_to(_PROJECT_ROOT)
+                if f.name == "helpers.mk":
+                    continue  # единственный канонический вызов (test-inventory-sync)
+                call_sites.append(str(rel))
+
+    if call_sites:
+        logger.error("[IMP:9][test_single_inventory_regeneration_source] FAIL — extra call sites: %s", call_sites)
+        pytest.fail(
+            f"SECOND_INVENTORY_REGENERATION: sync_inventory.py вызывается дополнительно в: {call_sites}. "
+            f"Единственная точка регенерации — makefiles/helpers.mk (make test-inventory-sync). "
+            f"Добавление второго вызова = дрейф (U-79)."
+        )
+    logger.info(
+        "[IMP:9][test_single_inventory_regeneration_source] ✅ sync_inventory.py — единственный вызов: helpers.mk (test-inventory-sync)"
+    )
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · rename-пары (нормализованные file+func) (U-79)
+# · Scenario: _normalize_nodeid — параметризация уходит, переименование = не удаление
+# · Last fail: N/A (новый rename-детектор)
+# · Remove if: rename-семантика реестра изменена
+def test_rename_detection_normalization(caplog) -> None:
+    """Verify _normalize_nodeid detects rename pairs (same normalized file+func).
+
+    ## @purpose — DevPlan 116 B11 T6 (U-79): rename = удаление + добавление пары,
+    ##            файл/функция совпадают по нормализованному имени. Проверяет, что
+    ##            переименованная тест-функция и параметризованные варианты дают
+    ##            одинаковые ключи, а разные функции — разные.
+    ## @io — ⎋ None (assert)
+    ## @complexity — O(1)
+    """
+
+    logger.info("[IMP:8][test_rename_detection_normalization] === Rename normalization audit ===")
+
+    # Одна и та же функция в том же файле (переименование) → равные ключи
+    old_key = _normalize_nodeid("tests/unit/test_foo.py::test_bar")
+    new_key = _normalize_nodeid("tests/unit/test_foo.py::test_bar_renamed")
+    assert old_key[0] == new_key[0], "file part must match after normalization"
+    assert old_key[0] == "testsunittestfoopy", f"unexpected file key: {old_key[0]}"
+
+    # Параметризованные варианты одной функции → равные ключи (param-изменение = не удаление)
+    param_a = _normalize_nodeid("tests/unit/test_foo.py::test_bar[a]")
+    param_b = _normalize_nodeid("tests/unit/test_foo.py::test_bar[b]")
+    assert param_a == param_b, "parametrize brackets must normalize away (rename-pair semantics)"
+
+    # Разные функции → разные ключи (НЕ rename → changelog обязателен)
+    other = _normalize_nodeid("tests/unit/test_foo.py::test_baz")
+    assert param_a[1] != other[1], "different functions must NOT be a rename pair"
+
+    # Разные файлы → разные ключи (перемещение файла = НЕ rename по норме → changelog)
+    moved = _normalize_nodeid("tests/unit/test_bar.py::test_bar")
+    assert param_a[0] != moved[0], "different files must NOT be a rename pair by normalized name"
+
+    logger.info(
+        "[IMP:9][test_rename_detection_normalization] ✅ rename-пары: равные (file,func)-ключи; разные функции/файлы — НЕ rename"
     )

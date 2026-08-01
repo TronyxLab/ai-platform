@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: cross-layer import linter, static-analysis, layer-isolation, entrypoints, internal, modules, data-flow, extended-registry, shellcheck, variable-tracking
-# STRUCTURE: ▶ discover(core/**/*.{sh,py,Makefile}) → ○ classify each file's layer → ▶ scan imports (6 patterns + ShellCheck) → ▶ resolve target path (extended registry + trace) → ◇ allowed by rule? → ⊕ collect violations → ⎋ assert 0 violations
+# GREP_SUMMARY: cross-layer import linter, static-analysis, layer-isolation, entrypoints, internal, modules, data-flow, extended-registry, shellcheck, variable-tracking, dotted-imports, python3-m, allowlist
+# STRUCTURE: ▶ discover(core/**/*.{sh,py,Makefile}) → ○ classify each file's layer → ▶ scan imports (7 patterns + ShellCheck: source, ., exec, bash/sh, make -C, docker compose -f, python3 -m) → ▶ resolve target path (dotted-name → core/ path, extended registry + trace) → ◇ allowed by rule? → ◇ allowlist? → ⊕ collect violations → ⎋ assert 0 violations
 # region MODULE_CONTRACT
 ## @purpose  Static-analysis test enforcing cross-layer import isolation rules
 ##           from core/AGENTS.md §Cross-layer import rules.
@@ -14,7 +14,8 @@
 ##   - Only files in entrypoints/, internal/, modules/ are subject to rules
 ##   - lib/, bootstrap/, scripts/ files are NOT importing layers
 ##   - LINT-EXEMPT comment on offending line NO LONGER suppresses violations
-##     (warns instead — TASK-6C Phase 6)
+##     (warns instead — TASK-6C Phase 6); with a matching allowlist entry the
+##     violation IS suppressed (DevPlan 116 B11 T1 — канон B8 D3, строгий режим)
 ##   - /opt/ paths are filtered for entrypoints/ and internal/ but NOT for
 ##     modules/ (TASK-6C Phase 6: modules→/opt/ may be cross-layer violations)
 ##   - Every modules/*/Makefile must include ../../templates/module.mk,
@@ -22,11 +23,20 @@
 ##     (Makefile contract — TASK-6C Phase 6, extended T3 D3)
 ##   - Extended Variable Registry: _KNOWN_PATH_VARIABLES auto-collected at import time
 ##   - _looks_like_path now detects bare $variable references as potential paths
+##   - Dotted-name imports (core.internal.X) and `python3 -m core.internal.X`
+##     are detected (DevPlan 116 B11 T1 — U-09): _looks_like_path dotted-regex +
+##     resolve_import dotted→path + scan_sh_file pattern 7
+##   - CROSS-LAYER ALLOWLIST: только задокументированные (path, lineno, reason)
+##     записи (контейнеризированные модули, импорт shared by design D1);
+##     НОВОЕ dotted-нарушение вне allowlist → RED (allowlist не растёт)
 ##   - ShellCheck integration: graceful degradation if shellcheck not installed
 ##   - Zero violations → PASS; any violation → FAIL with file:line report
 ## @rationale  Physical enforcement of architectural invariants — prevents
 ##             layer-boundary violations from entering the codebase.
 ## @changes   2026-07-18 | DataFlow DevPlan: Extended Registry + ShellCheck + new patterns
+##            2026-08-01 | DevPlan 116 B11 T1 (U-09): dotted-name + python3 -m
+##                       детекция; CROSS-LAYER ALLOWLIST (канон B8 D3 — строгий);
+##                       негатив-тесты R5 (anti-survivorship)
 ## @usecases  CI gate #8: cross-layer-linter; pre-commit validation
 # endregion MODULE_CONTRACT
 
@@ -116,6 +126,85 @@ _NON_IMPORT_ARGS: set[str] = {
 
 # Patterns that indicate a non-path argument (bare variable, flag, etc.)
 _RE_NOT_A_PATH = re.compile(r'^[\s\$"\'@*]+$')
+
+# ─── DOTTED-NAME DETECTION (DevPlan 116 B11 T1, U-09) ───────────────────────
+# Python module names like core.internal.shared.telegram_notifier and
+# `python3 -m core.internal.shared.node_yaml` are invisible to the old
+# path-based detector (no '/'). Regex: dotted lowercase/underscore names.
+_RE_DOTTED_NAME = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
+
+# ⚠️ TRAP[BUG] · 2026-08-01 · P1 · Cross-layer gate was blind to dotted imports
+# · Symptom: 36 passed при 6 реальных нарушениях (agent_watchdog 3×, backup_config 1×,
+#   disk-monitor.sh 1×, postgres-hook 1×) — dotted-импорты и python3 -m не детектировались
+# · Root: _looks_like_path требовал '/', resolve_import отбрасывал dotted (нет '/'),
+#   scan_sh_file не имел паттерна python3 -m
+# · Fix: _RE_DOTTED_NAME в _looks_like_path + resolve_import dotted→core/ path
+#   + scan_sh_file pattern 7 (python3 -m <module>) + CROSS_LAYER_ALLOWLIST
+# · Prevention: гейт теперь RED на ЛЮБОЕ новое dotted-нарушение вне allowlist
+
+# ─── CROSS-LAYER ALLOWLIST (канон B8 D3 — строгий режим, DevPlan 116 B11 T1) ──
+# Только задокументированные (path-relative-to-repo, lineno, reason) записи.
+# Модули контейнеризированы и импортируют internal/shared по дизайну (D1):
+#   backup-cron / hermes-agent / postgres-hook — контейнерный runtime,
+#   shared-модули — единственный путь (facade-паттерн shared/AGENTS.md инвариант 4).
+# allowlist НЕ растёт: ЛЮБОЕ новое dotted-нарушение вне allowlist → RED.
+# Каждая запись имеет # LINT-EXEMPT: <reason> комментарий на строке нарушения.
+# Rev: сжатие allowlist — отдельный backlog (модули вне контейнерного рантайма).
+_CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
+    (
+        "core/modules/backup-cron/scripts/backup_config.py",
+        36,
+        "контейнерный модуль; internal.config platform_config — by design (D1)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
+        42,
+        "контейнерный модуль; internal.config platform_config — by design (D1)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
+        45,
+        "контейнерный модуль; shared.secrets_env_parser — by design (D1)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
+        48,
+        "контейнерный модуль; shared.telegram_notifier — by design (D1)",
+    ),
+    (
+        "core/modules/backup-cron/scripts/disk-monitor.sh",
+        44,
+        "контейнерный модуль; python3 -m shared.telegram_notifier — by design (D1)",
+    ),
+    (
+        "core/modules/postgres/hooks/on-project-deploy.sh",
+        47,
+        "postgres-hook; python3 -m shared.node_yaml — by design (D1)",
+    ),
+)
+
+
+def _repo_relative(source_file: Path) -> str:
+    """Repo-root-relative posix path of a source file (allowlist key)."""
+    try:
+        return source_file.resolve().relative_to(repo_root().resolve()).as_posix()
+    except ValueError:
+        return source_file.as_posix()
+
+
+def _is_allowlisted(source_file: Path, lineno: int) -> bool:
+    """Check (path, lineno) against the strict cross-layer allowlist."""
+    rel = _repo_relative(source_file)
+    for entry_path, entry_lineno, reason in _CROSS_LAYER_ALLOWLIST:
+        if rel == entry_path and lineno == entry_lineno:
+            logger.info(
+                "[IMP:9][lint][allowlist] %s:%d — allowlisted (D1 by design): %s",
+                source_file,
+                lineno,
+                reason,
+            )
+            return True
+    return False
 
 
 # ─── VARIABLE REGISTRY (Wave 1: DataFlow Extended Registry) ────────────────
@@ -265,6 +354,8 @@ def _looks_like_path(text: str) -> bool:
 
     Extended per DevPlan DataFlow T1.3: detects bare $variable references
     that might be path-bearing variables.
+    Extended per DevPlan 116 B11 T1 (U-09): detects dotted Python module names
+    (core.internal.shared.telegram_notifier) — no '/' but resolvable to a core/ path.
     """
     # region FUNC_looks_like_path
     ## @purpose  Determine if a string argument looks like a file path or path-bearing variable
@@ -290,7 +381,11 @@ def _looks_like_path(text: str) -> bool:
         and not re.match(r"^\$[\d@*!#?\-]$", t)  # спец-переменные: $1, $@, $*, $!, $#, $?, $-
     )
 
-    return has_separator or has_var_prefix or has_relative or has_absolute or is_bare_variable
+    # NEW (DevPlan 116 B11 T1): dotted Python module name — not a flag,
+    # not a $-reference, first char [a-z_], at least one '.'
+    is_dotted_name = bool(_RE_DOTTED_NAME.match(t)) and not t.startswith("$")
+
+    return has_separator or has_var_prefix or has_relative or has_absolute or is_bare_variable or is_dotted_name
     # endregion FUNC_looks_like_path
 
 
@@ -389,6 +484,17 @@ def resolve_import(source_file: Path, import_path: str, source_layer: str) -> Pa
 
     # Step 1: substitute known variables (auto-collected + contextual)
     resolved = _substitute_variables(resolved, source_file, source_layer)
+
+    # Step 1.5 (DevPlan 116 B11 T1): dotted-name → core/ path
+    #   core.internal.shared.telegram_notifier → <CORE_DIR>/internal/shared/telegram_notifier
+    # Non-core dotted names (xml.etree, botocore.session) → bare relative (no leading
+    # '/') → filtered by the "no leading /" check below (None, not a cross-layer import).
+    if "/" not in resolved and _RE_DOTTED_NAME.match(resolved):
+        if resolved.startswith("core.internal."):
+            rel = resolved[len("core.internal.") :].replace(".", "/")
+            resolved = f"{CORE_DIR}/internal/{rel}"
+        else:
+            resolved = resolved.replace(".", "/")
 
     # Step 2: if result is a bare $variable without path, try local tracking
     if resolved.startswith("$") and "/" not in resolved:
@@ -538,6 +644,17 @@ def scan_sh_file(file_path: Path, source_layer: str | None = None) -> list[tuple
             path = m.group(1)
             if _looks_like_path(path) and path not in ("-f",):
                 imports.append((i, path, exempt))
+            continue
+
+        # Pattern 7 (NEW DevPlan 116 B11 T1, U-09): python3 -m <module>
+        # Детектирует `python3 -m core.internal.shared.node_yaml` (в т.ч. внутри
+        # $(...) и с '\'-продолжением строки). Модуль без точки (pytest, pip, venv)
+        # → _looks_like_path=False → пропускается.
+        m = re.search(r"python3\s+-m\s+(\S+)", stripped)
+        if m:
+            mod = m.group(1).rstrip("\\")
+            if _looks_like_path(mod):
+                imports.append((i, mod, exempt))
             continue
 
     # NEW (DataFlow T2.3): ShellCheck data-flow analysis (дополнительный слой)
@@ -920,6 +1037,10 @@ def check_violation(
         allowed = _IMPORT_RULES.get(source_layer, set())
         if target_layer in allowed:
             return None
+        # Strict allowlist (DevPlan 116 B11 T1, канон B8 D3): задокументированные
+        # (path, lineno) записи подавляются; ЛЮБОЕ новое нарушение → RED.
+        if _is_allowlisted(source_file, lineno):
+            return None
         return f"  {source_file}:{lineno} — [{source_layer}→{target_layer}] import '{import_path}' (forbidden)"
 
     # ── Shell imports → resolved already filtered to core/ paths with layers ──
@@ -930,6 +1051,8 @@ def check_violation(
         return None
     allowed = _IMPORT_RULES.get(source_layer, set())
     if target_layer in allowed:
+        return None
+    if _is_allowlisted(source_file, lineno):
         return None
     return f"  {source_file}:{lineno} — [{source_layer}→{target_layer}] '{import_path}' (forbidden)"
 
@@ -1624,3 +1747,82 @@ class TestShellCheckIntegration:
 
 
 # endregion TEST_SHELLCHECK_INTEGRATION
+
+
+# region TEST_B11_NEGATIVE (R5 anti-survivorship — DevPlan 116 B11 T1, U-09)
+@pytest.mark.gate
+class TestB11DottedImportDetection:
+    """R5 negative tests: dotted-imports and python3 -m are RED outside allowlist.
+
+    ## @purpose — Доказывают, что расширенный гейт ловит dotted-нарушения
+    ##            (anti-survivorship: старый гейт был слеп к этим паттернам).
+    ##            Фикстуры создаются ПОД core/modules/ (слой modules — subject to rules)
+    ##            во временном каталоге и удаляются в finally (паттерн
+    ##            test_invoke_registered_interface_passes).
+    """
+
+    # 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · dotted py import in modules → RED
+    # · Scenario: `from core.internal.shared.telegram_notifier import ...` в modules-фикстуре
+    # · Last fail: old gate — 36 passed при 4 реальных py-нарушениях (слепота к dotted)
+    # · Remove if: cross-layer gate superseded
+    def test_dotted_py_import_in_modules_is_violation(self, tmp_path: Path) -> None:
+        """R5 negative: dotted py-import из modules → violation (RED)."""
+        # region FUNC_test_dotted_py_import_in_modules_is_violation
+        fixture_dir = CORE_DIR / "modules" / "_b11_negative_py_tmp"
+        fixture_dir.mkdir(parents=True, exist_ok=True)
+        py_file = fixture_dir / "test_negative.py"
+        try:
+            py_file.write_text(
+                "#!/usr/bin/env python3\nfrom core.internal.shared.telegram_notifier import send_telegram\n"
+            )
+            imports = scan_py_file(py_file)
+            assert len(imports) == 1, f"Expected 1 dotted import, got {imports}"
+            lineno, imp_path, exempt = imports[0]
+            assert _looks_like_path(imp_path), f"dotted name must look like path: {imp_path}"
+            resolved = resolve_import(py_file, imp_path, "modules")
+            assert resolved is not None, "dotted import must resolve to a core/ path"
+            assert "core/internal/shared/telegram_notifier" in str(resolved)
+            msg = check_violation(py_file, lineno, imp_path, "py", exempt, resolved)
+            assert msg is not None, f"R5 FAIL: dotted import {imp_path} in modules must be RED (old gate was blind)"
+            assert "[modules→internal]" in msg
+            logger.info("[IMP:9][test][b11-negative] dotted py import RED: %s", msg)
+        finally:
+            import shutil
+
+            shutil.rmtree(fixture_dir, ignore_errors=True)
+        # endregion FUNC_test_dotted_py_import_in_modules_is_violation
+
+    # 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · python3 -m in modules sh → RED
+    # · Scenario: `python3 -m core.internal.shared.node_yaml` в sh-фикстуре modules
+    # · Last fail: old gate — слепота к python3 -m (disk-monitor/postgres-hook жили незамеченными)
+    # · Remove if: cross-layer gate superseded
+    def test_python3_m_in_modules_is_violation(self, tmp_path: Path) -> None:
+        """R5 negative: python3 -m core.internal.* из modules/sh → violation (RED)."""
+        # region FUNC_test_python3_m_in_modules_is_violation
+        fixture_dir = CORE_DIR / "modules" / "_b11_negative_sh_tmp"
+        fixture_dir.mkdir(parents=True, exist_ok=True)
+        sh_file = fixture_dir / "test_negative.sh"
+        try:
+            sh_file.write_text(
+                "#!/usr/bin/env bash\n"
+                'db_name="$(python3 -m core.internal.shared.node_yaml \\\n'
+                '    --file "${ai_yaml}" --get needs.database)"\n'
+            )
+            imports = scan_sh_file(sh_file, "modules")
+            dotted = [imp for imp in imports if _RE_DOTTED_NAME.match(imp[1])]
+            assert len(dotted) >= 1, f"Expected python3 -m dotted import, got {imports}"
+            lineno, imp_path, exempt = dotted[0]
+            resolved = resolve_import(sh_file, imp_path, "modules")
+            assert resolved is not None, "python3 -m dotted module must resolve to a core/ path"
+            msg = check_violation(sh_file, lineno, imp_path, "sh", exempt, resolved)
+            assert msg is not None, f"R5 FAIL: python3 -m {imp_path} in modules must be RED (old gate was blind)"
+            assert "[modules→internal]" in msg
+            logger.info("[IMP:9][test][b11-negative] python3 -m RED: %s", msg)
+        finally:
+            import shutil
+
+            shutil.rmtree(fixture_dir, ignore_errors=True)
+        # endregion FUNC_test_python3_m_in_modules_is_violation
+
+
+# endregion TEST_B11_NEGATIVE

@@ -856,6 +856,18 @@ gates:
 - id: test_no_partial_writes_on_failure
   test_file: test_gate_atomic_generation_no_partial_writes.py
   description: 'Auto-discovered gate: test_no_partial_writes_on_failure'
+- id: test_negative_direct_write_detected
+  test_file: test_gate_audit_format.py
+  description: 'Auto-discovered gate: test_negative_direct_write_detected'
+- id: test_no_direct_audit_writes
+  test_file: test_gate_audit_format.py
+  description: 'Auto-discovered gate: test_no_direct_audit_writes'
+- id: test_no_free_text_pipe_format
+  test_file: test_gate_audit_format.py
+  description: 'Auto-discovered gate: test_no_free_text_pipe_format'
+- id: test_shared_audit_writes_valid_jsonl
+  test_file: test_gate_audit_format.py
+  description: 'Auto-discovered gate: test_shared_audit_writes_valid_jsonl'
 - id: test_broad_except_requires_noqa_and_policy_marker
   test_file: test_gate_broad_except_allowlist.py
   description: 'Auto-discovered gate: test_broad_except_requires_noqa_and_policy_marker'
@@ -985,6 +997,9 @@ gates:
 - id: test_check_file_lines_ignores_debt
   test_file: test_gate_debt_registry.py
   description: 'Auto-discovered gate: test_check_file_lines_ignores_debt'
+- id: test_debt_registry_all_entries_have_status_rev
+  test_file: test_gate_debt_registry.py
+  description: 'Auto-discovered gate: test_debt_registry_all_entries_have_status_rev'
 - id: test_debt_registry_all_sections
   test_file: test_gate_debt_registry.py
   description: 'Auto-discovered gate: test_debt_registry_all_sections'
@@ -994,6 +1009,9 @@ gates:
 - id: test_debt_registry_exists
   test_file: test_gate_debt_registry.py
   description: 'Auto-discovered gate: test_debt_registry_exists'
+- id: test_debt_registry_no_stale_rev_dates
+  test_file: test_gate_debt_registry.py
+  description: 'Auto-discovered gate: test_debt_registry_no_stale_rev_dates'
 - id: test_debt_registry_no_trivial_entries
   test_file: test_gate_debt_registry.py
   description: 'Auto-discovered gate: test_debt_registry_no_trivial_entries'
@@ -1006,6 +1024,12 @@ gates:
 - id: test_gitignore_covers_debt
   test_file: test_gate_debt_registry.py
   description: 'Auto-discovered gate: test_gitignore_covers_debt'
+- id: test_negative_missing_rev_detected
+  test_file: test_gate_debt_registry.py
+  description: 'Auto-discovered gate: test_negative_missing_rev_detected'
+- id: test_negative_stale_date_detected
+  test_file: test_gate_debt_registry.py
+  description: 'Auto-discovered gate: test_negative_stale_date_detected'
 - id: test_canonical_verbs_no_legacy
   test_file: test_gate_deploy_channel.py
   description: 'Auto-discovered gate: test_canonical_verbs_no_legacy'
@@ -1768,6 +1792,12 @@ gates:
 - id: test_no_test_removed_without_changelog
   test_file: test_gate_test_inventory.py
   description: 'Auto-discovered gate: test_no_test_removed_without_changelog'
+- id: test_rename_detection_normalization
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_rename_detection_normalization'
+- id: test_single_inventory_regeneration_source
+  test_file: test_gate_test_inventory.py
+  description: 'Auto-discovered gate: test_single_inventory_regeneration_source'
 - id: test_test_inventory_matches_collected
   test_file: test_gate_test_inventory.py
   description: 'Auto-discovered gate: test_test_inventory_matches_collected'

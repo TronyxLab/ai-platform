@@ -29,7 +29,7 @@ import pytest
 # ── Import the module under test (core/internal/bootstrap on sys.path) ──
 _BOOTSTRAP_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap"
 sys.path.insert(0, str(_BOOTSTRAP_DIR))
-import cert_orchestrator as co  # noqa: E402
+import cert_orchestrator as co
 
 logger = pytest.importorskip("logging").getLogger(__name__)
 
@@ -88,9 +88,7 @@ def test_orchestrate_certs_skips_valid_disk_cert(cert_env, monkeypatch, caplog) 
     assert entry.source == "disk_synced", f"Expected disk_synced, got {entry.source}"
     assert uploaded == [domain], "upload-on-skip must sync the disk cert to S3"
     assert result.skipped == 1
-    logger.critical(
-        "[IMP:9][test] disk-valid → skipped(disk_synced) + upload-on-skip — restore-first confirmed"
-    )
+    logger.critical("[IMP:9][test] disk-valid → skipped(disk_synced) + upload-on-skip — restore-first confirmed")
 
 
 # endregion

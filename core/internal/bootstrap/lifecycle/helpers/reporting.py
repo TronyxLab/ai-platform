@@ -134,30 +134,41 @@ def run_healthchecks(node_yaml: str) -> None:
 
 
 # region FUNC_write_audit_log
-## @purpose  Write bootstrap/update audit summary to platform audit log.
-## @io       ⇥ sm → ⎋ None (side-effect: writes to audit log)
+## @purpose  Write bootstrap/update audit summary to the ЕДИНЫЙ audit log (shared audit_logger).
+## @io       ⇥ sm → ⎋ None (side-effect: writes JSON-lines entries to /var/log/platform/audit.jsonl)
 ## @complexity O(1)
+## @changes 2026-08-01 | DevPlan 116 B11 T2 (U-10, D1): free-text pipe → shared write_audit_entry;
+##           единый файл audit.jsonl; warnings/errors — отдельные WARN/ERROR записи
 def write_audit_log(sm: StateMachine) -> None:
-    """Write bootstrap/update audit summary to audit log."""
-    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    audit_file = "/var/log/platform/audit.log"
+    """Write bootstrap/update audit summary to the unified audit log (JSON-lines, D1)."""
+    from core.internal.shared.audit_logger import write_audit_entry
+
     try:
-        os.makedirs(os.path.dirname(audit_file), exist_ok=True)
-        with open(audit_file, "a") as f:
-            mode = sm.state.mode
-            node = sm.state.node or "unknown"
-            warnings_count = len(sm.state.warnings)
-            errors_count = len(sm.state.errors)
-            f.write(f"[{ts}] bootstrap:{mode} DONE | node={node} | warnings={warnings_count} | errors={errors_count}\n")
-            if warnings_count > 0:
-                for w in sm.state.warnings:
-                    f.write(f"[{ts}] bootstrap:warnings WARN | {w}\n")
-            if errors_count > 0:
-                for e in sm.state.errors:
-                    f.write(f"[{ts}] bootstrap:errors ERROR | {e}\n")
-        logger.info("[IMP:9][audit] Audit log updated: %s", audit_file)
+        mode = sm.state.mode
+        node = sm.state.node or "unknown"
+        warnings_count = len(sm.state.warnings)
+        errors_count = len(sm.state.errors)
+        summary = f"bootstrap:{mode} DONE | node={node} | warnings={warnings_count} | errors={errors_count}"
+        write_audit_entry(
+            tag=f"bootstrap:{mode}",
+            status="DONE" if errors_count == 0 else "ERROR",
+            message=summary,
+            node=node,
+            warnings_count=warnings_count,
+            errors_count=errors_count,
+        )
+        for w in sm.state.warnings:
+            write_audit_entry(tag=f"bootstrap:{mode}", status="WARN", message=str(w), node=node)
+        for e in sm.state.errors:
+            write_audit_entry(tag=f"bootstrap:{mode}", status="ERROR", message=str(e), node=node)
+        logger.info(
+            "[IMP:9][audit] Audit entries written (bootstrap:%s, %d warnings, %d errors)",
+            mode,
+            warnings_count,
+            errors_count,
+        )
     except OSError as e:
-        logger.warning("[IMP:7][audit] Failed to write audit log: %s", e)
+        logger.warning("[IMP:7][audit] Failed to write audit entries: %s", e)
 
 
 # endregion FUNC_write_audit_log

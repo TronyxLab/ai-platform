@@ -1,14 +1,14 @@
-# GREP_SUMMARY: core-deploy sha-aware-aggregator workflow-run platform-test rsync ssh-native bootstrap node-arg ci-pipeline audit-trail
-# STRUCTURE: on:workflow_run(platform-test:completed,main) + workflow_dispatch → push-filter → verify SHA via GitHub API → rsync core/ → /opt/platform/ → ssh make node-update NODE=<name> → cleanup
+# GREP_SUMMARY: core-deploy sha-aware-aggregator workflow-run platform-gate-fast rsync ssh-native bootstrap node-arg ci-pipeline audit-trail
+# STRUCTURE: on:workflow_run(platform-gate-fast:completed,main) + workflow_dispatch → push-filter → verify SHA via GitHub API → rsync core/ → /opt/platform/ → ssh make node-update NODE=<name> → cleanup
 # region MODULE_CONTRACT
 ## @purpose  CI pipeline for core code delivery to VPS — SHA-aware aggregator:
-##           Triggers on platform-test completion (push to main only), verifies platform-test success
-##           for same SHA, then rsyncs core/ and bootstraps on VPS with NODE= argument.
-## @scope    Triggered by workflow_run on platform-test (completed, success, push event) OR manual workflow_dispatch
+##           Triggers on platform-gate-fast completion (push to main only), verifies platform-gate-fast
+##           success for same SHA, then rsyncs core/ and bootstraps on VPS with NODE= argument.
+## @scope    Triggered by workflow_run on platform-gate-fast (completed, success, push event) OR manual workflow_dispatch
 ## @invariants
-##   - Triggers ONLY on platform-test success (main-full-gate removed — Plan 2 consolidation)
+##   - Triggers ONLY on platform-gate-fast success (D2, DevPlan 116 B11 T4 — лёгкий gate, не full platform-test)
 ##   - Push filter: github.event.workflow_run.event == 'push' prevents deploy on PR trigger
-##   - Verifies platform-test succeeded for the same SHA via GitHub API
+##   - Verifies platform-gate-fast succeeded for the same SHA via GitHub API
 ##   - SHA from workflow_run.head_sha (not github.sha)
 ##   - Rsync excludes: .git/, __pycache__/, *.pyc
 ##   - Destination: /opt/platform/core/ on VPS
@@ -20,16 +20,19 @@
 ## @rationale  SHA-aware aggregator prevents deploy after partial pipeline (D4).
 ##             Plan 2 consolidation: main-full-gate removed, deploy workflows trigger
 ##             on platform-test with push event filter (no race condition P6).
+##             DevPlan 116 B11 T4 (D2, U-57): trigger переключён на platform-gate-fast —
+##             downstream НЕ ждёт full-gate + integration + docker-степы (flaky-изоляция).
 ##             NODE= auto-detected via auto_detect_node_name() in bootstrap.sh (replaces P11 fix).
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
 ## @changes — 2026-07-15 | NODE auto-detected (Option A, replacing P11 secrets-based fix)
+## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
 # endregion MODULE_CONTRACT
 
 name: core-deploy
 
 on:
   workflow_run:
-    workflows: ["platform-test"]
+    workflows: ["platform-gate-fast"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -63,13 +66,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # ─── Step 2: Resolve SHA + verify platform-test (composite) ────────
+      # ─── Step 2: Resolve SHA + verify platform-gate-fast (composite) ────
       # StatusReport 046 T7 (CICD-03): inline SHA verification → sha-resolve composite action.
-      - name: Resolve SHA and verify platform-test
+      # DevPlan 116 B11 T4 (D2): верифицируется platform-gate-fast (workflow-file), не platform-test.
+      - name: Resolve SHA and verify platform-gate-fast
         id: sha
         uses: ./.github/actions/sha-resolve
         with:
           verify: 'true'
+          workflow-file: 'platform-gate-fast.yml'
 
       - name: Setup platform (composite — python only)
         if: steps.sha.outputs.skip != 'true'

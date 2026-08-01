@@ -13,6 +13,7 @@
 ##   5. Fail-visible вместо тихих fallback (консистентно с B6 D4): platform_config без литеральных fallback'ов.
 ## @rationale Shared-модули созданы (DevPlan 079), но мёртвые: docker_compose_up — 0 production-потребителей, каждая новая волна добавляет 4-ю копию вместо перехода на shared (RC7). Волна делает структурно невозможным расхождение политик через код + гейты (sole-path + parity).
 ## @changes 2026-08-01 · Решения пользователя: (D1) SSH_OPTS — Python SoT shared/ssh_opts.py, lib/ssh.sh — тонкий фасад через python3 -m (уменьшение bash-поверхности); (D2) platform_config fallback-константы удаляются (fail-visible); (D3) state_machine — в allowlist до B9; (D4) интервалы healthcheck — классы 15/30/60, postgres 10s→15s; (D5) lib/healthcheck.sh остаётся shell-фасадом, критерий унифицируется, parity-гейт.
+## @changes  SUPERSEDED 2026-08-01 — закрыт волнами 116; VR не требуется (D5, DevPlan 116 B11 T8 U-84) — 15-DevPlan.md
 # endregion MODULE_CONTRACT
 
 $ARTIFACT_CONTRACT:

@@ -23,7 +23,6 @@
 """
 
 import inspect
-from pathlib import Path
 
 import pytest
 
@@ -50,9 +49,7 @@ def test_phase_certificates_api_contract() -> None:
     assert params == ["core_dir", "node_name", "node_yaml"], (
         f"phase_certificates signature must be (core_dir, node_name, node_yaml), got {params}"
     )
-    logger.critical(
-        "[IMP:9][test] phase_certificates API contract — signature (core_dir, node_name, node_yaml) OK"
-    )
+    logger.critical("[IMP:9][test] phase_certificates API contract — signature (core_dir, node_name, node_yaml) OK")
 
 
 # 🧪 TRAP[TEST] · 2026-08-01 · contract · ssl_provision_via_orchestrator exists with (core_dir, node_yaml)
@@ -69,9 +66,7 @@ def test_ssl_provision_via_orchestrator_api_contract() -> None:
     assert params == ["core_dir", "node_yaml"], (
         f"ssl_provision_via_orchestrator signature must be (core_dir, node_yaml), got {params}"
     )
-    logger.critical(
-        "[IMP:9][test] ssl_provision_via_orchestrator API contract — signature (core_dir, node_yaml) OK"
-    )
+    logger.critical("[IMP:9][test] ssl_provision_via_orchestrator API contract — signature (core_dir, node_yaml) OK")
 
 
 # 🧪 TRAP[TEST] · 2026-08-01 · contract · extract_domains public helper exists

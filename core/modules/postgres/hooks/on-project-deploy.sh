@@ -43,6 +43,7 @@ _auto_create_db() {
     # NodeYaml CLI for needs.database (DevPlan 038c — replaces inline python3 import yaml)
     # Note: database: false in YAML returns "False" string, not empty.
     # Handle both missing key (default "") and explicit false.
+    # LINT-EXEMPT: postgres-hook; python3 -m shared.node_yaml — by design (D1, cross-layer allowlist 116 B11 T1)
     db_name="$(python3 -m core.internal.shared.node_yaml \
         --file "${ai_yaml}" \
         --get needs.database \

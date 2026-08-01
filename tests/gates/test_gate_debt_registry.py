@@ -37,6 +37,7 @@ import logging
 import pathlib
 import re
 import subprocess
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -61,6 +62,43 @@ _REQUIRED_SECTIONS: tuple[str, ...] = (
     "§ARCH-DECISIONS",
     "§TRAP-INVENTORY",
 )
+
+# ── B11 T7 (U-82, D4): формат записей — Status + Rev ─────────────────────────
+_VALID_STATUSES: tuple[str, ...] = ("OPEN", "FIXED", "SUPERSEDED")
+# rev = конкретная дата YYYY-MM-DD ИЛИ условие-триггер («При …», «Бессрочно …»)
+_RE_REV_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# Условие-триггер: начинается с «При» или «Бессрочно» (синтаксическая проверка D4)
+_RE_REV_CONDITION = re.compile(r"^(При|Бессрочно)")
+_STALE_DAYS = 90
+
+
+def _is_stale(rev: str, today: date | None = None) -> bool:
+    """Return True if a concrete rev-date is more than _STALE_DAYS in the past (D4).
+
+    ▶ ┌rev, today┐ → ◇ условие-триггер? → ⎋ False → ◇ конкретная дата? → ◇ (today - rev) > 90? → ⎋ bool
+
+    ## @purpose — Гейт свежести (DevPlan 116 B11 T7, U-82/D4): конкретные даты в прошлом
+    ##            > 90 дней → stale (RED). Условия-триггеры («При …», «Бессрочно …») → не stale.
+    ##            FIXED/SUPERSEDED не проверяются на stale (вызывающий код).
+    ## @io — ⇥ rev: str — значение колонки Rev; ⇥ today: date|None — «сегодня» (для тестов)
+    ##       → ⎋ bool
+    ## @complexity — O(1)
+    """
+    if today is None:
+        today = date.today()
+    rev = rev.strip()
+    if not rev:
+        return False  # пустой rev → проверяется отдельным статус-тестом (MISSING_FIELDS)
+    if _RE_REV_CONDITION.match(rev):
+        return False
+    if _RE_REV_DATE.match(rev):
+        try:
+            rev_dt = datetime.strptime(rev, "%Y-%m-%d").date()
+        except ValueError:
+            return False
+        return (today - rev_dt) > timedelta(days=_STALE_DAYS)
+    # Не дата и не условие → не stale (синтаксис проверяется статус-тестом)
+    return False
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -163,8 +201,8 @@ def test_debt_registry_all_sections(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # region FUNC_test_debt_registry_shell_residual_entries
-## @purpose — AC3: SHELL-RESIDUAL has exactly 8 entries, each with 5 columns
-##            (file, LOC, обоснование, rev-дата).
+## @purpose — AC3: SHELL-RESIDUAL has exactly 8 entries, each with 6 columns
+##            (file, LOC, обоснование, Status, Rev) — Status добавлен B11 T7 (D4).
 ## @io — ⇥ caplog → ⎋ None (pytest.fail on count/column mismatch)
 ## @complexity — O(R) where R = SHELL-RESIDUAL rows
 
@@ -173,12 +211,12 @@ def test_debt_registry_all_sections(caplog: pytest.LogCaptureFixture) -> None:
 @ldd_trajectory
 
 # 🧪 TRAP[TEST] · 2026-07-31 · REGRESSION · SHELL-RESIDUAL entries count/columns drift
-# · Scenario: AC3 — 8 rows with file/LOC/обоснование/rev-дата columns
+# · Scenario: AC3 — 8 rows with file/LOC/обоснование/Status/Rev columns (B11 T7: +Status)
 # · Last fail: N/A (preventive)
 # · Remove if: SHELL-RESIDUAL structure changes by approved amendment
 def test_debt_registry_shell_residual_entries(caplog: pytest.LogCaptureFixture) -> None:
     """
-    # ▶ section SHELL-RESIDUAL → ○ split rows → ◇ 8 rows? → ◇ each 5 cols? → ⎋ pass | fail
+    # ▶ section SHELL-RESIDUAL → ○ split rows → ◇ 8 rows? → ◇ each 6 cols? → ⎋ pass | fail
     """
     # region BLOCK_Extract
     content = _read_registry()
@@ -193,13 +231,16 @@ def test_debt_registry_shell_residual_entries(caplog: pytest.LogCaptureFixture) 
     assert len(rows) == 8, f"SHELL_RESIDUAL_ENTRY_COUNT: expected 8, got {len(rows)}"
     for row in rows:
         cols = [c.strip() for c in row.strip("|").split("|")]
-        assert len(cols) == 5, f"SHELL_RESIDUAL_COLUMNS: expected 5 columns, got {len(cols)}: {row}"
+        assert len(cols) == 6, (
+            f"SHELL_RESIDUAL_COLUMNS: expected 6 columns (Status added B11 T7), got {len(cols)}: {row}"
+        )
         assert cols[1].startswith("`") and cols[1].endswith("`"), f"SHELL_RESIDUAL_FILE_COL: {row}"
         assert cols[2].isdigit(), f"SHELL_RESIDUAL_LOC_NOT_NUMERIC: {row}"
         assert cols[3], f"SHELL_RESIDUAL_RATIONALE_EMPTY: {row}"
-        assert cols[4], f"SHELL_RESIDUAL_REVDATE_EMPTY: {row}"
+        assert cols[4] in _VALID_STATUSES, f"SHELL_RESIDUAL_INVALID_STATUS: {cols[4]} in {row}"
+        assert cols[5], f"SHELL_RESIDUAL_REV_EMPTY: {row}"
     logger.info(
-        "[IMP:9][test_debt_registry_shell_residual_entries] ✅ 8 entries × 5 columns (file/LOC/rationale/rev-date)"
+        "[IMP:9][test_debt_registry_shell_residual_entries] ✅ 8 entries × 6 columns (file/LOC/rationale/Status/Rev)"
     )
     # endregion
 
@@ -271,7 +312,7 @@ def test_debt_registry_no_trivial_entries(caplog: pytest.LogCaptureFixture) -> N
     # region BLOCK_Assert
     for row in rows:
         cols = [c.strip() for c in row.strip("|").split("|")]
-        if len(cols) == 5 and cols[2].isdigit() and int(cols[2]) <= 200:
+        if len(cols) == 6 and cols[2].isdigit() and int(cols[2]) <= 200:
             violations.append(row)
     if violations:
         logger.error("[IMP:9][test_debt_registry_no_trivial_entries] Trivial entries (LOC<=200): %s", violations)
@@ -403,3 +444,172 @@ def test_gitignore_covers_debt(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # endregion FUNC_test_gitignore_covers_debt
+
+
+# region B11 T7 (U-82/D4) — Status + Rev формат и гейт свежести
+
+_SECTIONS_WITH_STATUS: tuple[tuple[str, str, int], ...] = (
+    ("## §SHELL-RESIDUAL", "## §P2-BACKLOG", 4),  # #(0) файл(1) LOC(2) обосн(3) Status(4) Rev(5)
+    ("## §P2-BACKLOG", "## §P3-BACKLOG", 5),  # #(0) задача(1) файл(2) scope(3) обосн(4) Status(5) Rev(6)
+    ("## §P3-BACKLOG", "## §TEST-DEBT", 3),  # #(0) файл(1) суть(2) Status(3) Rev(4)
+    ("## §TEST-DEBT", "## §ARCH-DECISIONS", 4),  # #(0) файл(1) суть(2) Sev(3) Status(4) Rev(5)
+    ("## §ARCH-DECISIONS", "## §TRAP-INVENTORY", 5),  # #(0) ист(1) дата(2) Sev(3) реш(4) Status(5) Rev(6)
+)
+
+
+def _iter_registry_rows(section_header: str, next_header: str) -> list[str]:
+    """Extract data rows (| # |) from a registry table section."""
+    content = _read_registry()
+    section = _extract_section(content, section_header, next_header)
+    rows = [ln.strip() for ln in section.splitlines() if ln.strip().startswith("| ") and ln.strip().endswith("|")]
+    # Skip header/separator rows (| # |, |---|)
+    return [r for r in rows if not re.match(r"^\|\s*#\s*\|", r) and not re.match(r"^\|\s*-+\s*\|", r)]
+
+
+# region FUNC_test_debt_registry_all_entries_have_status_rev
+## @purpose — B11 T7 (D4): КАЖДАЯ запись секций SHELL-RESIDUAL/P2/P3/TEST-DEBT/ARCH-DECISIONS
+##            имеет Status ∈ {OPEN,FIXED,SUPERSEDED} + непустой Rev.
+## @io — ⇥ caplog → ⎋ None (pytest.fail на отсутствие полей)
+## @complexity — O(R) где R = все строки таблиц
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · Запись реестра без Status/Rev (U-82)
+# · Scenario: D4 — отсутствие status/rev-date в любой записи → RED
+# · Last fail: N/A (новый гейт свежести)
+# · Remove if: формат реестра изменён одобренным amendment'ом
+def test_debt_registry_all_entries_have_status_rev(caplog: pytest.LogCaptureFixture) -> None:
+    """D4: 100% записей имеют Status + Rev."""
+    caplog.set_level(logging.INFO)
+
+    missing: list[str] = []
+    for section_header, next_header, status_idx in _SECTIONS_WITH_STATUS:
+        for row in _iter_registry_rows(section_header, next_header):
+            cols = [c.strip() for c in row.strip("|").split("|")]
+            # cols: [0]=#, ..., [status_idx]=Status, [status_idx+1]=Rev (после добавленной Status-колонки)
+            status_col = cols[status_idx] if status_idx < len(cols) else ""
+            rev_col = cols[status_idx + 1] if status_idx + 1 < len(cols) else ""
+            if status_col not in _VALID_STATUSES or not rev_col:
+                missing.append(f"{section_header[3:]} :: {row[:100]}")
+
+    if missing:
+        logger.error(
+            "[IMP:9][test_debt_registry_all_entries_have_status_rev] MISSING_STATUS_OR_REV:\n%s", "\n".join(missing)
+        )
+        pytest.fail(f"MISSING_STATUS_OR_REV: {len(missing)} записей без Status/Rev (D4):\n" + "\n".join(missing))
+    logger.info("[IMP:9][test_debt_registry_all_entries_have_status_rev] ✅ все записи имеют Status + Rev")
+
+
+# endregion FUNC_test_debt_registry_all_entries_have_status_rev
+
+
+# region FUNC_test_debt_registry_no_stale_rev_dates
+## @purpose — B11 T7 (D4): гейт свежести — конкретная rev-дата > 90 дней в прошлом → RED.
+##            Условия-триггеры и FIXED/SUPERSEDED — не stale. Сегодня = date.today().
+## @io — ⇥ caplog → ⎋ None (pytest.fail со списком stale-записей)
+## @complexity — O(R)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · Stale rev-дата в реестре (U-82)
+# · Scenario: D4 — rev ≤ (today - 90 дней) → RED (stale-пункты невозможны)
+# · Last fail: N/A (новый гейт свежести)
+# · Remove if: формат реестра изменён одобренным amendment'ом
+def test_debt_registry_no_stale_rev_dates(caplog: pytest.LogCaptureFixture) -> None:
+    """D4: нет stale-записей (конкретная дата > 90 дней в прошлом → RED)."""
+    caplog.set_level(logging.INFO)
+
+    stale: list[str] = []
+    today = date.today()
+    for section_header, next_header, status_idx in _SECTIONS_WITH_STATUS:
+        for row in _iter_registry_rows(section_header, next_header):
+            cols = [c.strip() for c in row.strip("|").split("|")]
+            status_col = cols[status_idx] if status_idx < len(cols) else ""
+            rev_col = cols[status_idx + 1] if status_idx + 1 < len(cols) else ""
+            if status_col in ("FIXED", "SUPERSEDED"):
+                continue  # закрытые записи не stale (D4)
+            if _is_stale(rev_col, today=today):
+                stale.append(f"{section_header[3:]} :: {row[:100]}")
+
+    if stale:
+        logger.error("[IMP:9][test_debt_registry_no_stale_rev_dates] STALE_ENTRIES:\n%s", "\n".join(stale))
+        pytest.fail(
+            f"STALE_ENTRY: {len(stale)} записей с rev-датой старше {_STALE_DAYS} дней (D4):\n" + "\n".join(stale)
+        )
+    logger.info(
+        "[IMP:9][test_debt_registry_no_stale_rev_dates] ✅ нет stale-записей (все rev ≤ %d дней от %s)",
+        _STALE_DAYS,
+        today,
+    )
+
+
+# endregion FUNC_test_debt_registry_no_stale_rev_dates
+
+
+# region FUNC_test_negative_is_stale_missing_rev
+## @purpose — R5 anti-survivorship: запись БЕЗ rev → RED (детект отсутствия полей).
+## @io — ⇥ caplog → ⎋ None
+## @complexity — O(1)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · R5 negative — missing rev must RED
+# · Scenario: запись без rev → гейт all_entries_have_status_rev RED
+# · Last fail: N/A (новый гейт)
+# · Remove if: формат реестра изменён
+def test_negative_missing_rev_detected(caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative: строка реестра без Rev детектируется (MISSING_STATUS_OR_REV)."""
+    caplog.set_level(logging.INFO)
+
+    # Строка без rev (последняя колонка пустая) — имитация дрейфа D4
+    bad_row = "| S99 | `core/lib/foo.sh` | 250 | rationale | OPEN |  |"
+    cols = [c.strip() for c in bad_row.strip("|").split("|")]
+    status_col = cols[4] if len(cols) > 4 else ""
+    rev_col = cols[5] if len(cols) > 5 else ""
+    assert status_col == "OPEN", "precondition: валидный Status"
+    assert not rev_col, "precondition: rev пуст"
+    # Предикат гейта (D4): Status ∉ валидных ИЛИ Rev пуст → RED
+    is_red = status_col not in _VALID_STATUSES or not rev_col
+    assert is_red, "R5 FAIL: missing rev должен быть RED"
+    logger.info("[IMP:9][test_negative_missing_rev_detected] ✅ missing rev → RED (predicate: %s)", is_red)
+
+
+# endregion FUNC_test_negative_missing_rev_detected
+
+
+# region FUNC_test_negative_stale_date_detected
+## @purpose — R5 anti-survivorship: прошедшая дата (параметр today) → stale → RED.
+## @io — ⇥ caplog → ⎋ None
+## @complexity — O(1)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+
+# 🧪 TRAP[TEST] · 2026-08-01 · REGRESSION · R5 negative — stale date must RED
+# · Scenario: rev=2026-01-01 при today=2026-08-01 → > 90 дней → stale
+# · Last fail: N/A (новый гейт)
+# · Remove if: формат реестра изменён
+def test_negative_stale_date_detected(caplog: pytest.LogCaptureFixture) -> None:
+    """R5 negative: rev-дата в прошлом > 90 дней → stale=True (RED)."""
+    caplog.set_level(logging.INFO)
+
+    today = date(2026, 8, 1)
+    # 2026-05-03 = ровно 90 дней назад от 2026-08-01; 2026-05-02 = 91 → stale
+    assert not _is_stale("2026-05-03", today=today), "90 дней ровно — не stale (граница)"
+    assert _is_stale("2026-05-02", today=today), "91 день — stale (RED)"
+    # Условие-триггер и FIXED-семантика — не stale
+    assert not _is_stale("При росте >300 LOC", today=today), "условие-триггер — не stale (D4)"
+    assert not _is_stale("Бессрочно (стабильное API)", today=today), "Бессрочно — не stale (D4)"
+    assert not _is_stale("2026-09-30", today=today), "будущая/близкая дата — не stale"
+    logger.info("[IMP:9][test_negative_stale_date_detected] ✅ stale-детект: 91 день → RED; условия/будущее → PASS")
+
+
+# endregion FUNC_test_negative_stale_date_detected
+# endregion B11 T7 (U-82/D4) — Status + Rev формат и гейт свежести

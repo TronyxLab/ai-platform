@@ -27,7 +27,16 @@ from tests._conftest import infra as infra_mod
 
 logger = pytest.importorskip("logging").getLogger(__name__)
 
-_FAKE_DATA = [{"module": "postgres", "container_names": ["postgres-test"], "networks": [], "ports": {}, "compose_base": "/x", "compose_test": "/y"}]
+_FAKE_DATA = [
+    {
+        "module": "postgres",
+        "container_names": ["postgres-test"],
+        "networks": [],
+        "ports": {},
+        "compose_base": "/x",
+        "compose_test": "/y",
+    }
+]
 
 
 @pytest.fixture(autouse=True)
@@ -53,12 +62,8 @@ def _reset_infra_singleton(monkeypatch) -> None:
 # · Remove if: lazy infra mechanism replaced
 def test_module_infra_is_lazy_proxy() -> None:
     """Importing _conftest.infra must not build the delegate (no subprocess at import)."""
-    assert isinstance(infra_mod.infra, infra_mod._LazyTestInfraProxy), (
-        "module-level `infra` must be the lazy proxy"
-    )
-    assert infra_mod.infra._delegate is None, (
-        "import must NOT instantiate the delegate — subprocess would have run"
-    )
+    assert isinstance(infra_mod.infra, infra_mod._LazyTestInfraProxy), "module-level `infra` must be the lazy proxy"
+    assert infra_mod.infra._delegate is None, "import must NOT instantiate the delegate — subprocess would have run"
     logger.critical("[IMP:9][test] module import — infra is lazy proxy, delegate None (0 subprocess)")
 
 
@@ -101,7 +106,7 @@ def test_first_accessor_triggers_single_load(monkeypatch) -> None:
     proxy = infra_mod._LazyTestInfraProxy()
     assert calls == [], "proxy construction must not load"
 
-    proxy.all_modules  # first accessor → load
+    _ = proxy.all_modules  # first accessor → load (B018: явное присвоение)
     assert calls == ["load"], f"first accessor must trigger exactly 1 load, got: {calls}"
     assert proxy._delegate is not None, "delegate must be built after first access"
     logger.critical("[IMP:9][test] first accessor — exactly 1 _load_test_infra call")
@@ -117,9 +122,9 @@ def test_repeat_access_cached(monkeypatch) -> None:
     monkeypatch.setattr(infra_mod, "_load_test_infra", lambda: (calls.append("load"), _FAKE_DATA)[1])
 
     proxy = infra_mod._LazyTestInfraProxy()
-    proxy.all_modules
-    proxy.all_modules
-    proxy.get_container_name("postgres")
+    _ = proxy.all_modules  # first accessor → load (B018: явное присвоение)
+    _ = proxy.all_modules  # cached after first load (B018: явное присвоение)
+    _ = proxy.get_container_name("postgres")
 
     assert calls == ["load"], f"cached delegate must not re-run _load_test_infra, got: {calls}"
     logger.critical("[IMP:9][test] repeat access — cached, 1 total load")
@@ -135,9 +140,7 @@ def test_proxy_delegates_accessor_result(monkeypatch) -> None:
 
     proxy = infra_mod._LazyTestInfraProxy()
 
-    assert proxy.get_container_name("postgres") == "postgres-test", (
-        "proxy must delegate to the real accessor result"
-    )
+    assert proxy.get_container_name("postgres") == "postgres-test", "proxy must delegate to the real accessor result"
     logger.critical("[IMP:9][test] proxy delegation — get_container_name('postgres')='postgres-test'")
 
 

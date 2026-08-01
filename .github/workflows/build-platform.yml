@@ -1,16 +1,16 @@
-# GREP_SUMMARY: build-platform sha-aware-aggregator workflow-run platform-test hermes-agent-base docker-buildx smoke-test load-true provisioner pull-l1 fallback-build
-# STRUCTURE: on:workflow_run(platform-test:completed,main) + workflow_dispatch → push-filter → verify SHA → ◇ owner==tronyx161 ? build L1 from source : pull public L1 (fallback build) → smoke test → [source org] push L1 → cleanup
+# GREP_SUMMARY: build-platform sha-aware-aggregator workflow-run platform-gate-fast hermes-agent-base docker-buildx smoke-test load-true provisioner pull-l1 fallback-build
+# STRUCTURE: on:workflow_run(platform-gate-fast:completed,main) + workflow_dispatch → push-filter → verify SHA → ◇ owner==tronyx161 ? build L1 from source : pull public L1 (fallback build) → smoke test → [source org] push L1 → cleanup
 # region MODULE_CONTRACT
-## @purpose  SHA-aware platform agent build: triggered by platform-test success, acquires the L1
+## @purpose  SHA-aware platform agent build: triggered by platform-gate-fast success, acquires the L1
 ##           hermes-agent-base image (build from sources in tronyx161, OR pull the public
 ##           ghcr.io/tronyx161/hermes-agent-base:latest distribution base in context orgs),
 ##           runs smoke test. Manual workflow_dispatch also validates SHA.
 ## @scope    Mirrored into context orgs (github.repository_owner != tronyx161) — context-dependent
 ##           L1 acquisition (DevPlan 116 B3 T7, U-60, D1). Uses SHA-aware aggregator (D4).
 ## @invariants
-##   - Triggers on workflow_run of platform-test (main-full-gate removed — Plan 2 consolidation)
+##   - Triggers on workflow_run of platform-gate-fast (D2, DevPlan 116 B11 T4 — лёгкий gate)
 ##   - Push filter: github.event.workflow_run.event == 'push' prevents build on PR trigger
-##   - Verifies platform-test succeeded for same SHA via GitHub API
+##   - Verifies platform-gate-fast succeeded for same SHA via GitHub API
 ##   - tronyx161 (source org): builds L1 from sources (load:true) + pushes to ghcr.io (DR backup +
 ##     distribution base). Context orgs: pull ghcr.io/tronyx161/hermes-agent-base:latest anonymously
 ##     + docker tag hermes-agent-base:latest; pull failure → fallback build from sources.
@@ -22,18 +22,21 @@
 ##             package — distribution base per D1); context orgs pull anonymously (0 keys in foreign
 ##             repos) and build only their thin L2. Fallback build covers registry outage
 ##             (eventual-consistency of :latest is documented — releases use digest-pin).
+##             DevPlan 116 B11 T4 (D2, U-57): trigger переключён на platform-gate-fast —
+##             build не ждёт full-gate + integration + docker-степы platform-test.
 ## @changes — 2026-07-15 | Trigger: main-full-gate→platform-test + push event filter
 ## @changes — 2026-07-15 | Inline docker network create → provision-environment.sh --scope networks --scope volumes
 ## @changes — 2026-07-15 | Removed inline sudo mkdir (provisioner volumes scope handles it)
 ## @changes — 2026-08-01 | DevPlan 116 B3 T7 (U-60, D1): context-dependent L1 — tronyx161 builds+pulls
 ##             nothing; context orgs pull public L1 (fallback → build). Push L1 guarded to source org.
+## @changes — 2026-08-01 | DevPlan 116 B11 T4 (D2): trigger → platform-gate-fast
 # endregion MODULE_CONTRACT
 
 name: Build Platform Agent
 
 on:
   workflow_run:
-    workflows: ["platform-test"]
+    workflows: ["platform-gate-fast"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -66,11 +69,13 @@ jobs:
         uses: actions/checkout@v7
 
       # ─── Step 2: SHA resolution + verification (canonical composite) ──
-      - name: Resolve SHA + verify platform-test
+      # DevPlan 116 B11 T4 (D2): верифицируется platform-gate-fast (workflow-file), не platform-test
+      - name: Resolve SHA + verify platform-gate-fast
         id: sha
         uses: ./.github/actions/sha-resolve
         with:
           verify: 'true'
+          workflow-file: 'platform-gate-fast.yml'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

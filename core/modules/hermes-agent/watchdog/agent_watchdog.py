@@ -39,9 +39,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar, Optional
 
-from core.internal.config import platform_config
-from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
-from core.internal.shared.telegram_notifier import send_telegram as send_tg
+from core.internal.config import (
+    platform_config,
+)  # LINT-EXEMPT: контейнерный модуль; internal.config — by design (D1, allowlist 116 B11 T1)
+from core.internal.shared.secrets_env_parser import (
+    parse as parse_secrets_env,
+)  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1)
+from core.internal.shared.telegram_notifier import (
+    send_telegram as send_tg,
+)  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1)
 
 logger = logging.getLogger(__name__)
 

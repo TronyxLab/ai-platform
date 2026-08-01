@@ -1,0 +1,64 @@
+# GREP_SUMMARY: platform-gate-fast fast-gate push-main gitleaks make-gate-fast workflow-trigger downstream-decoupling D2
+# STRUCTURE: on:push(main)+workflow_dispatch → job(fast-gate: checkout → setup-platform+gitleaks → compose-profiles → make gate MODE=fast) → ⎋ downstream (core-deploy/build-platform/mirror) триггерятся workflow_run
+# region MODULE_CONTRACT
+## @purpose  Лёгкий gate-workflow (D2, DevPlan 116 B11 T4, U-57): развязка downstream
+##           (core-deploy/build-platform/mirror) от полного platform-test (~20 мин + integration/docker).
+##           Триггерится на push в main (и workflow_dispatch), выполняет gitleaks + `make gate MODE=fast`
+##           (~2-3 мин). Downstream workflows слушают workflow_run этого workflow.
+## @scope    Push-гейт для main-ветки. НЕ заменяет platform-test (PR-валидация + full-gate остаются).
+## @invariants
+##   - Имя workflow ТОЧНО "platform-gate-fast" (workflow_run ищет по имени — опечатка = тихий отказ)
+##   - gitleaks через композитный setup-platform (install-gitleaks: 'true') — единый SoT
+##   - concurrency-группа по SHA (паттерн platform-test) — защита от двойного запуска push+dispatch
+##   - COMPOSE_PROFILES экспортируется из platform-env.yaml (compose-profiles action)
+##   - Никаких Docker/integration-степов — flaky-изоляция downstream (D2)
+## @rationale U-57: downstream ждали 20-минутный full-gate + integration — хрупкая цепочка.
+##            Отдельный лёгкий gate-workflow (fast-gate) — единственный триггер downstream.
+## @changes 2026-08-01 | DevPlan 116 B11 T4 (D2, U-57) — Created
+# endregion MODULE_CONTRACT
+
+name: platform-gate-fast
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast-gate:
+    name: Fast Gate (gitleaks + make gate MODE=fast)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ─── Step 1: Checkout ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ─── Step 2: Setup platform + gitleaks (composite SoT) ────────────
+      - name: Setup platform (composite — python + gitleaks)
+        uses: ./.github/actions/setup-platform
+        with:
+          python-version: '3.14'
+          install-pre-commit: 'false'
+          install-gitleaks: 'true'
+          run-provisioner: 'false'
+
+      # ─── Step 3: Export COMPOSE_PROFILES (SoT platform-env.yaml) ──────
+      - name: Export COMPOSE_PROFILES from platform-env.yaml
+        uses: ./.github/actions/compose-profiles
+
+      # ─── Step 4: Fast gate (syntax + JSON + gates + static + predeploy) ──
+      - name: Run fast gate (syntax + JSON + gates + static + predeploy — no Docker)
+        run: make gate MODE=fast
+
+      # ─── Step 5: Manifest generation contract (G1-G6 + G4-root glossary) ──
+      - name: Check generated manifests up to date
+        run: make check-manifests

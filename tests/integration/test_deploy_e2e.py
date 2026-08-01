@@ -5,7 +5,7 @@
 # region MODULE_CONTRACT
 ## @purpose  Integration test for full deploy cycle — verifies end-to-end interaction
 ##           between PayloadDeliverer.assemble_payload(), DeliveryChannel, DeployOrchestrator,
-##           HealthcheckPoller, AuditLogger, and DeployHistory. Uses mocked Docker/SSH.
+##           HealthcheckPoller, DeployAuditLogger, and DeployHistory. Uses mocked Docker/SSH.
 ## @scope    Integration (mocked infrastructure — no real Docker/SSH). Validates AC16.
 ## @invariants
 ##   - Payload assembly creates valid tar.gz
@@ -26,7 +26,6 @@ import tempfile
 
 import pytest
 
-from core.internal.deploy.audit_logger import AuditLogger
 from core.internal.deploy.channels import (
     DeliveryChannel,
     DeliveryResult,
@@ -35,6 +34,7 @@ from core.internal.deploy.channels import (
 from core.internal.deploy.deploy_history import DeployHistory
 from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 from core.internal.deploy.orchestrator import (
+    DeployAuditLogger,
     DeployOrchestrator,
 )
 from core.internal.deploy.payload_deliverer import PayloadDeliverer
@@ -165,7 +165,7 @@ class TestDeployE2E:
         projects_base = os.path.join(work_dir, "projects")
         log_file = os.path.join(work_dir, "audit.log")
         history = DeployHistory(projects_base=projects_base)
-        audit = AuditLogger(log_file=log_file)
+        audit = DeployAuditLogger(log_file=log_file)
         healthcheck = HealthcheckPoller(timeout=1, interval=1, max_retries=1)
 
         orchestrator = DeployOrchestrator(
@@ -218,7 +218,7 @@ class TestDeployE2E:
     ) -> None:
         """Verify audit and history records are consistent."""
         log_file = os.path.join(work_dir, "audit.log")
-        audit = AuditLogger(log_file=log_file)
+        audit = DeployAuditLogger(log_file=log_file)
         history = DeployHistory(projects_base=os.path.join(work_dir, "projects"))
 
         # Simulate deploy cycle

@@ -33,7 +33,9 @@ import logging
 import os
 from typing import TypedDict
 
-from core.internal.config import platform_config
+from core.internal.config import (
+    platform_config,
+)  # LINT-EXEMPT: контейнерный модуль; internal.config — by design (D1, allowlist 116 B11 T1)
 
 logger = logging.getLogger(__name__)
 

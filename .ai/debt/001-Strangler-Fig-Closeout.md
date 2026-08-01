@@ -26,6 +26,7 @@
 ##   - Результаты миграционных волн 099-109 (актуальный P2-пересчёт)
 ##   - Полный TRAP-скан кодовой базы от 2026-07-31 (Шаг 1 DevPlan 111)
 ## @changes  CREATED: 2026-07-31 | DevPlan 111 Wave 1 | TASK-A (реестр) + TASK-B (.gitignore) + TASK-C (check-file-lines) + TASK-D (git add -f)
+## @changes  UPDATED: 2026-08-01 | DevPlan 116 B11 T7 (U-82, D4) — формат записей: Status (OPEN/FIXED/SUPERSEDED) + Rev (дата ИЛИ условие); T1/P2-2 → FIXED (B10); AD8-AD12 (U-83..88 решения); гейт свежести test_gate_debt_registry.py
 
 ---
 
@@ -39,16 +40,16 @@
 
 ## §SHELL-RESIDUAL — Скрипты >200 LOC, исключённые из миграции
 
-| # | Файл | LOC | Обоснование исключения | Rev-дата |
-|---|------|-----|------------------------|----------|
-| S1 | `core/internal/bootstrap/issue-cert.sh` | 704 | acme.sh executor (DNS-01/HTTP-01). Осознанно пропущен в Wave 5a — shell subprocess by design. TRAP[DECISION] 2026-07-26. | 2026-12-31 |
-| S2 | `core/internal/bootstrap/install-tor-proxy.sh` | 422 | Одноразовый bootstrap. Не содержит бизнес-логики для извлечения в Python. TRAP[DECISION] webtunnel degradation. | При росте >500 LOC |
-| S3 | `core/lib/healthcheck.sh` | 388 | STABLE библиотека. Исключена политикой (AGENTS.md: языковая политика п.2 — lib-функции низкого уровня). | Бессрочно (стабильное API) |
-| S4 | `core/modules/platform-secrets/install.sh` | 223 | Bootstrap-установка systemd unit для SOPS/age. P3-кандидат. | При росте >300 LOC |
-| S5 | `core/internal/bootstrap/install-docker.sh` | 218 | Bootstrap-установка Docker. P3-кандидат. | При росте >300 LOC |
-| S6 | `core/internal/bootstrap/setup-node.sh` | 215 | Bootstrap-инициализация ноды (пользователи, директории). P3-кандидат. | При росте >300 LOC |
-| S7 | `core/lib/module-interface.sh` | 206 | STABLE библиотека. Исключена политикой (AGENTS.md: языковая политика п.2). | Бессрочно (стабильное API) |
-| S8 | `core/lib/node-resolver.sh` | 271 | Thin facade для NodeYaml Python CLI. 271 LOC > порога фасада (150 LOC). Inline python3 -c на L306-316 (Tier 1 триггер). Включён в P2-BACKLOG. | 2026-09-30 |
+| # | Файл | LOC | Обоснование исключения | Status | Rev |
+|---|------|-----|------------------------|--------|-----|
+| S1 | `core/internal/bootstrap/issue-cert.sh` | 704 | acme.sh executor (DNS-01/HTTP-01). Осознанно пропущен в Wave 5a — shell subprocess by design (U-85 justified). TRAP[DECISION] 2026-07-26. | OPEN | 2026-12-31 |
+| S2 | `core/internal/bootstrap/install-tor-proxy.sh` | 422 | Одноразовый bootstrap. Не содержит бизнес-логики для извлечения в Python. TRAP[DECISION] webtunnel degradation. | OPEN | При росте >500 LOC |
+| S3 | `core/lib/healthcheck.sh` | 388 | STABLE библиотека. Исключена политикой (AGENTS.md: языковая политика п.2 — lib-функции низкого уровня). | OPEN | Бессрочно (стабильное API) |
+| S4 | `core/modules/platform-secrets/install.sh` | 223 | Bootstrap-установка systemd unit для SOPS/age. P3-кандидат. | OPEN | При росте >300 LOC |
+| S5 | `core/internal/bootstrap/install-docker.sh` | 218 | Bootstrap-установка Docker. P3-кандидат. | OPEN | При росте >300 LOC |
+| S6 | `core/internal/bootstrap/setup-node.sh` | 215 | Bootstrap-инициализация ноды (пользователи, директории). P3-кандидат. | OPEN | При росте >300 LOC |
+| S7 | `core/lib/module-interface.sh` | 206 | STABLE библиотека. Исключена политикой (AGENTS.md: языковая политика п.2). | OPEN | Бессрочно (стабильное API) |
+| S8 | `core/lib/node-resolver.sh` | 271 | Thin facade для NodeYaml Python CLI. 271 LOC > порога фасада (150 LOC). Inline python3 -c мигрирован (строки 214/254 — «Replaces», DevPlan 116 B11 T5 U-58). Включён в P2-BACKLOG. | OPEN | 2026-09-30 |
 
 **Примечание (относительно Brief 111):** P2-кандидаты из Brief (validate.sh, scp-deliver.sh, check-dead-code.sh, lint.sh) ЗАКРЫТЫ волнами 106-109 — все стали thin-фасадами <100 LOC и не входят в SHELL-RESIDUAL. Новый кандидат — node-resolver.sh (S8), не был в Brief.
 
@@ -56,53 +57,58 @@
 
 ## §P2-BACKLOG — Задачи на следующую волну
 
-| # | Задача | Файл | LOC/Scope | Обоснование | Rev-дата |
-|---|--------|------|-----------|-------------|----------|
-| P2-1 | Strangler-Fig node-resolver.sh | `core/lib/node-resolver.sh` | 271 | >150 LOC facade, inline python3 -c L306-316 (TRAP[DEBT] overlay_deliverer.py:21). Кандидат на декомпозицию: shell facade <100 LOC + Python-модуль. | 2026-09-30 |
-| P2-2 | Починить test_add_vhost.py | `tests/test_add_vhost.py` | 7 тестов | Все 7 тестов падают — main() exit 1 (TRAP[DEBT] HI 2026-07-31). Корневая причина: add-vhost.sh мигрирован в vhost_renderer.py, тесты не обновлены. | 2026-08-31 |
-| P2-3 | Удалить мёртвый код state_machine | `core/internal/bootstrap/lifecycle/state_machine.py:213` | ~100 LOC | resume_phase()/execute_grouped_phase()/_grouped_phases — мёртвый код (TRAP[DEBT] MED 2026-07-31). Ни один тест не покрывает. | 2026-08-31 |
-| P2-4 | Починить manifest.mk G2/G4/G5 | `makefiles/manifest.mk:25` | ~20 LOC | generate-manifests не fully repairs stale manifests (TRAP[DEBT] MED 2026-07-31). | 2026-08-31 |
-| P2-5 | Docker operations → shared module | `core/internal/deploy/deploy_engine.py:76` | ~200 LOC | Дублирование docker-операций между deploy_engine, docker_orchestrator, docker.sh (TRAP[DEBT] MED 2026-07-26). | 2026-09-30 |
+| # | Задача | Файл | LOC/Scope | Обоснование | Status | Rev |
+|---|--------|------|-----------|-------------|--------|-----|
+| P2-1 | Strangler-Fig node-resolver.sh | `core/lib/node-resolver.sh` | 271 | >150 LOC facade; inline python3 -c мигрирован (214/254, U-58). Кандидат на декомпозицию: shell facade <100 LOC + Python-модуль (U-86 backlog подтверждён). | OPEN | 2026-09-30 |
+| P2-2 | Починить test_add_vhost.py | `tests/test_add_vhost.py` | 7 тестов | FIXED волной B10 (116): test_add_vhost 7 passed (main() exit 1 устранён). См. TEST-DEBT T1. | FIXED | 2026-08-01 |
+| P2-3 | Удалить мёртвый код state_machine | `core/internal/bootstrap/lifecycle/state_machine.py:213` | ~100 LOC | resume_phase()/execute_grouped_phase()/_grouped_phases — мёртвый код (TRAP[DEBT] MED 2026-07-31). Ни один тест не покрывает. | OPEN | 2026-08-31 |
+| P2-4 | Починить manifest.mk G2/G4/G5 | `makefiles/manifest.mk:25` | ~20 LOC | generate-manifests не fully repairs stale manifests (TRAP[DEBT] MED 2026-07-31). | OPEN | 2026-08-31 |
+| P2-5 | Docker operations → shared module | `core/internal/deploy/deploy_engine.py:76` | ~200 LOC | Дублирование docker-операций между deploy_engine, docker_orchestrator, docker.sh (TRAP[DEBT] MED 2026-07-26). | OPEN | 2026-09-30 |
 
 ---
 
 ## §P3-BACKLOG — Долгосрочные кандидаты
 
-| # | Файл | Суть | Rev-дата |
-|---|------|------|----------|
-| P3-1 | `core/internal/bootstrap/install-docker.sh` (218 LOC) | Bootstrap, кандидат при росте >300 LOC | При росте |
-| P3-2 | `core/internal/bootstrap/setup-node.sh` (215 LOC) | Bootstrap, кандидат при росте >300 LOC | При росте |
-| P3-3 | `core/modules/platform-secrets/install.sh` (223 LOC) | Bootstrap, кандидат при росте >300 LOC | При росте |
-| P3-4 | `core/modules/postgres/docker-compose.base.yml:50` | POSTGRES_PASSWORD rotation risk (TRAP[DEBT] MED) | 2026-12-31 |
-| P3-5 | `tests/_conftest/networks.py:90` | Parallel test teardown destroys shared external networks (TRAP[DEBT] MED) | 2026-12-31 |
+| # | Файл | Суть | Status | Rev |
+|---|------|------|--------|-----|
+| P3-1 | `core/internal/bootstrap/install-docker.sh` (218 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
+| P3-2 | `core/internal/bootstrap/setup-node.sh` (215 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
+| P3-3 | `core/modules/platform-secrets/install.sh` (223 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
+| P3-4 | `core/modules/postgres/docker-compose.base.yml:50` | POSTGRES_PASSWORD rotation risk (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
+| P3-5 | `tests/_conftest/networks.py:90` | Parallel test teardown destroys shared external networks (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
 
 ---
 
 ## §TEST-DEBT — Зарегистрированные тестовые проблемы
 
-| # | Файл | Суть | Severity | Rev-дата |
-|---|------|------|----------|----------|
-| T1 | `tests/test_add_vhost.py` | Все 7 тестов падают (main() exit 1 после миграции add-vhost.sh → vhost_renderer.py) | **HI** | 2026-08-31 |
-| T2 | `tests/test_smoke_litellm.py:72` | litellm first-start crash (httpx.ConnectError) — TRAP[DEBT] MED | MED | 2026-09-30 |
-| T3 | `tests/test_spool_dir.py:18` | 3 модуля без spool_volume: litellm, langfuse, infra-metrics — TRAP[DEBT] MED | MED | 2026-09-30 |
-| T4 | `tests/test_volume_spool_consistency.py:82` | Vacuous Check 3 — TRAP[DEBT] MED | MED | 2026-09-30 |
-| T5 | `tests/test_lib_node_resolver.py:258` | No cleanup of /opt/node-configs/ test files — TRAP[DEBT] LO | LO | 2026-12-31 |
-| T6 | `tests/_conftest/skip_gate.py:36` | _handle_e2e_error не используется uniformly — TRAP[DEBT] LO | LO | 2026-12-31 |
-| T7 | `tests/e2e/test_failure_scenarios.py:23` | Мёртвый код (resume_phase) — см. P2-3 | MED | 2026-08-31 |
+| # | Файл | Суть | Severity | Status | Rev |
+|---|------|------|----------|--------|-----|
+| T1 | `tests/test_add_vhost.py` | FIXED волной B10 (116): все 7 тестов проходят (main() exit 1 после миграции add-vhost.sh → vhost_renderer.py устранён). | **HI** | FIXED | 2026-08-01 |
+| T2 | `tests/test_smoke_litellm.py:72` | litellm first-start crash (httpx.ConnectError) — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
+| T3 | `tests/test_spool_dir.py:18` | 3 модуля без spool_volume: litellm, langfuse, infra-metrics — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
+| T4 | `tests/test_volume_spool_consistency.py:82` | Vacuous Check 3 — TRAP[DEBT] MED | MED | OPEN | 2026-09-30 |
+| T5 | `tests/test_lib_node_resolver.py:258` | No cleanup of /opt/node-configs/ test files — TRAP[DEBT] LO | LO | OPEN | 2026-12-31 |
+| T6 | `tests/_conftest/skip_gate.py:36` | _handle_e2e_error не используется uniformly — TRAP[DEBT] LO | LO | OPEN | 2026-12-31 |
+| T7 | `tests/e2e/test_failure_scenarios.py:23` | Мёртвый код (resume_phase) — см. P2-3 | MED | OPEN | 2026-08-31 |
 
 ---
 
 ## §ARCH-DECISIONS — TRAP[DECISION] с датами пересмотра
 
-| # | Источник | Дата | Sev | Решение | Rev-дата |
-|---|----------|------|-----|---------|----------|
-| AD1 | AGENTS.md:25 | 2026-07-15 | HI | L1 pushed to ghcr.io as backup (disaster recovery, backup-канал не delivery-модель) | При context-specific data в L1 |
-| AD2 | AGENTS.md:29 | 2026-07-22 | MED | Strangler-Fig canonical pattern (декомпозиция, не big-bang rewrite) | При shell >500 LOC с inline python3 |
-| AD3 | AGENTS.md:33 | 2026-07-22 | HI | Bootstrap pipeline — deploy-context step 18 (эволюция state machine, не rewrite) | При deploy-context >5min |
-| AD4 | AGENTS.md:84 | 2026-07-15 | HI | Dual delivery model: core push-only SCP/rsync, context-overlay git-pull | При секретах в context-overlay |
-| AD5 | AGENTS.md:163 | 2026-07-21 | HI | Языковая политика — enforcement pre-commit, не CI gate | **2026-10-21** |
-| AD6 | AGENTS.md:168 | 2026-07-21 | HI | SSH staging-gate для lib/ssh.sh (single point of failure) | При CI-deploy < 300s |
-| AD7 | AGENTS.md:175 | 2026-07-22 | HI | Decision Gate: Python-First VALIDATED — continue Strangler-Fig | **2026-10-22** |
+| # | Источник | Дата | Sev | Решение | Status | Rev |
+|---|----------|------|-----|---------|--------|-----|
+| AD1 | AGENTS.md:25 | 2026-07-15 | HI | L1 pushed to ghcr.io as backup (disaster recovery, backup-канал не delivery-модель) | OPEN | При context-specific data в L1 |
+| AD2 | AGENTS.md:29 | 2026-07-22 | MED | Strangler-Fig canonical pattern (декомпозиция, не big-bang rewrite) | OPEN | При shell >500 LOC с inline python3 |
+| AD3 | AGENTS.md:33 | 2026-07-22 | HI | Bootstrap pipeline — deploy-context step 18 (эволюция state machine, не rewrite) | OPEN | При deploy-context >5min |
+| AD4 | AGENTS.md:84 | 2026-07-15 | HI | Dual delivery model: core push-only SCP/rsync, context-overlay git-pull | OPEN | При секретах в context-overlay |
+| AD5 | AGENTS.md:163 | 2026-07-21 | HI | Языковая политика — enforcement pre-commit, не CI gate (пересмотрен B11: гейты с allowlist — канон, TRAP 2026-07-31) | OPEN | **2026-10-21** |
+| AD6 | AGENTS.md:168 | 2026-07-21 | HI | SSH staging-gate для lib/ssh.sh (single point of failure) | OPEN | При CI-deploy < 300s |
+| AD7 | AGENTS.md:175 | 2026-07-22 | HI | Decision Gate: Python-First VALIDATED — continue Strangler-Fig | OPEN | **2026-10-22** |
+| AD8 | AGENTS.md (root) | 2026-07-31 | HI | Enforcement-гейты с allowlist — канон (пересмотр TRAP 2026-07-21; D1 01-Brief §1 + волна B11: cross-layer allowlist, audit-format R2, glossary G4, debt-freshness) | OPEN | 2026-10-21 |
+| AD9 | P3-наблюдение U-83 | 2026-08-01 | MED | Big-bang коммиты запрещены: процессный лимит ≤2 коммита на DevPlan (docs + feat) в .kilo/rules/_project.md | OPEN | Бессрочно (процессное правило) |
+| AD10 | P3-наблюдение U-84 | 2026-08-01 | MED | DevPlans 085/110/111 — superseded-пометки (VR задним числом НЕ пишутся, D5) | OPEN | При ревизии 116-программы |
+| AD11 | P3-наблюдение U-87 | 2026-08-01 | LO | CI-комментарии (platform-test debug-вывод) — cleanup: gh api удаление лишних комментариев (manual-шаг, при доступе) | OPEN | При появлении лишних CI-комментариев |
+| AD12 | P3-наблюдение U-88 | 2026-08-01 | MED | cert ×3 — тройка по дизайну: cert_orchestrator.py (Python-оркестрация) + issue-cert.sh (S1 justified, acme.sh executor) + s3_ssl_cache.py (Python cache) | OPEN | При изменении контракта сертификатов |
 
 ---
 
@@ -311,3 +317,8 @@ Top-25 файлов по числу TRAP[DECISION]:
 ### После QA
 - P2-1..P2-5: отдельные DevPlan'ы на основе P2-BACKLOG (Non-Goals: реестр НЕ создаёт DevPlan'ы)
 - AD5 (2026-10-21) / AD7 (2026-10-22): пересмотр решений языковой политики и Python-First
+
+### B11 (2026-08-01, DevPlan 116 T7/T8)
+- Формат записей мигрирован: Status (OPEN/FIXED/SUPERSEDED) + Rev (дата ИЛИ условие) — гейт свежести test_gate_debt_registry.py (stale >90 дней → RED)
+- T1 (test_add_vhost) → FIXED (B10: 7 passed); P2-2 → FIXED (тот же фикс)
+- U-83..88 решения: AD8 (enforcement allowlist — канон), AD9 (≤2 коммита на DevPlan), AD10 (superseded 085/110/111), AD11 (CI-комментарии cleanup), AD12 (cert ×3 по дизайну)
