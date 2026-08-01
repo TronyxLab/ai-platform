@@ -6,7 +6,7 @@
 ## @purpose  Unit tests for DeployOrchestrator — deploy(), deploy_many(), rollback(), status(), remove(), receive().
 ## @scope    Tests orchestrator logic with mock channels. No actual SSH/Docker calls.
 ## @invariants
-##   - DeployOrchestrator.deploy() returns DeployResult with correct status
+##   - DeployOrchestrator.deploy() returns OrchestratorDeployResult with correct status
 ##   - deploy_many() processes all projects sequentially
 ##   - rollback() reads from DeployHistory
 ##   - status() returns ProjectStatus
@@ -28,8 +28,8 @@ from core.internal.deploy.orchestrator import (
     DEFAULT_PROJECTS_BASE,
     DeployAuditLogger,
     DeployOrchestrator,
-    DeployResult,
     DeployStatus,
+    OrchestratorDeployResult,
     ProjectStatus,
 )
 
@@ -290,10 +290,10 @@ class TestDeployOrchestrator:
     # endregion
 
     # region FUNC_test_deploy_result_serialization
-    ## @purpose  Verify DeployResult serialization to dict.
+    ## @purpose  Verify OrchestratorDeployResult serialization to dict.
     def test_deploy_result_serialization(self) -> None:
-        """Verify DeployResult.to_dict()."""
-        result = DeployResult(
+        """Verify OrchestratorDeployResult.to_dict()."""
+        result = OrchestratorDeployResult(
             status=DeployStatus.DEPLOYED,
             project="test",
             channel="scp",
@@ -312,12 +312,12 @@ class TestDeployOrchestrator:
     # endregion
 
     # region FUNC_test_deploy_result_is_success
-    ## @purpose  Verify DeployResult.is_success() for different statuses.
+    ## @purpose  Verify OrchestratorDeployResult.is_success() for different statuses.
     def test_deploy_result_is_success(self) -> None:
         """Verify is_success logic."""
-        assert DeployResult(DeployStatus.DEPLOYED, "test").is_success()
-        assert DeployResult(DeployStatus.SKIPPED, "test").is_success()
-        assert DeployResult(DeployStatus.FAILED, "test").is_success() is False
+        assert OrchestratorDeployResult(DeployStatus.DEPLOYED, "test").is_success()
+        assert OrchestratorDeployResult(DeployStatus.SKIPPED, "test").is_success()
+        assert OrchestratorDeployResult(DeployStatus.FAILED, "test").is_success() is False
 
     # endregion
 

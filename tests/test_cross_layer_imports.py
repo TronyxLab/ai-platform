@@ -158,17 +158,22 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        42,
+        44,
         "контейнерный модуль; internal.config platform_config — by design (D1)",
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        45,
+        47,
+        "контейнерный модуль; shared.docker_compose — by design (D1, DevPlan 117 D19)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
+        52,
         "контейнерный модуль; shared.secrets_env_parser — by design (D1)",
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        48,
+        55,
         "контейнерный модуль; shared.telegram_notifier — by design (D1)",
     ),
     (

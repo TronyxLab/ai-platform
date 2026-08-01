@@ -349,11 +349,14 @@ def _expand_transitive_deps(modules_filter: str, modules_dir: str) -> str:
 
 ## @purpose  Parse modules section from node.yaml (supports dict and list formats).
 ##           Returns list of (name, enabled_str, overlay) tuples for further processing.
+##           Нормализационный слой поверх NodeYaml.get_modules() — обрабатывает legacy
+##           dict-формат {name: {enabled, config_overlay}} и list-формат.
 ## @io       node_yaml_path (str) → list[tuple[str, str, str]]: [(name, enabled, overlay), ...]
 ## @complexity 2 — single YAML parse + type-dispatched iteration
 ## @invariants
 ##   - Dict format: {name: {enabled: bool, config_overlay: str}} or {name: bool}
 ##   - List format: [{name: str, enabled: bool, config_overlay: str}]
+##   - Чтение modules через NodeYaml.get_modules() (list-формат); dict-формат — fallback
 ##   - enabled defaults to "true" if not explicitly set
 ##   - overlay defaults to "" if not set
 ##   - File not found → returns [] (graceful degradation for unit-testing without node.yaml)
@@ -371,7 +374,14 @@ def parse_modules_from_node_yaml(node_yaml_path: str) -> list[tuple[str, str, st
     from core.internal.shared.node_yaml import NodeYaml
 
     node = NodeYaml(node_yaml_path)
-    modules = node.get("modules", default={})
+    # DevPlan 117 D20: типизированный доступ через NodeYaml.get_modules() (SoT чтения node.yaml).
+    # Legacy dict-формат {name: {enabled, config_overlay}} NodeYaml НЕ поддерживает (list-only) —
+    # ConfigValidationError → fallback на сырой dict. Нормализация dict/list→tuple остаётся
+    # тонкой надстройкой над get_modules() (см. docstring).
+    try:
+        modules = node.get_modules()
+    except ConfigValidationError:
+        modules = node.get("modules", default={})
     results: list[tuple[str, str, str]] = []
 
     if isinstance(modules, dict):

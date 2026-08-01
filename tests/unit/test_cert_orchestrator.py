@@ -28,6 +28,10 @@ _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal
 sys.path.insert(0, str(_MODULE_DIR))
 import cert_orchestrator as cert
 
+# DevPlan 117 D21: _is_le_issuer → shared/ssl_certs.cert_is_le_issuer (единый openssl-примитив)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from core.internal.shared.ssl_certs import cert_is_le_issuer
+
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: orchestrate_certs
 # ═══════════════════════════════════════════════════════════════════
@@ -221,6 +225,8 @@ def test_idempotent_skip_valid(caplog, tmp_path, monkeypatch):
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: _is_le_issuer — P0 fix: reject non-LE certs
 # ═══════════════════════════════════════════════════════════════════
+# DevPlan 117 D21: _is_le_issuer удалён → тестируется shared/ssl_certs.cert_is_le_issuer
+# (единый openssl-примитив; cert_orchestrator._is_cert_valid вызывает его через shared)
 
 
 # 🧪 TRAP[TEST] · Regression · _is_le_issuer accepts Let's Encrypt certs
@@ -229,16 +235,16 @@ def test_idempotent_skip_valid(caplog, tmp_path, monkeypatch):
 # · Remove if: issuer check logic changes
 @ldd_trajectory
 def test_is_le_issuer_accepts_le_cert(caplog):
-    """_is_le_issuer should return True for Let's Encrypt issuer."""
+    """cert_is_le_issuer should return True for Let's Encrypt issuer."""
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout="issuer=C = US, O = Let's Encrypt, CN = R11\n",
             stderr="",
         )
-        result = cert._is_le_issuer("/fake/path/fullchain.pem")
+        result = cert_is_le_issuer("/fake/path/fullchain.pem")
     assert result is True
-    logger.critical("[IMP:9][test] _is_le_issuer accepts LE cert")
+    logger.critical("[IMP:9][test] cert_is_le_issuer accepts LE cert")
 
 
 # 🧪 TRAP[TEST] · Regression · _is_le_issuer rejects mkcert certs
@@ -247,7 +253,7 @@ def test_is_le_issuer_accepts_le_cert(caplog):
 # · Remove if: NEVER — this is the regression test for the P0 fix
 @ldd_trajectory
 def test_is_le_issuer_rejects_mkcert_cert(caplog):
-    """_is_le_issuer should return False for mkcert/self-signed certs."""
+    """cert_is_le_issuer should return False for mkcert/self-signed certs."""
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -258,9 +264,9 @@ def test_is_le_issuer_rejects_mkcert_cert(caplog):
             ),
             stderr="",
         )
-        result = cert._is_le_issuer("/fake/path/fullchain.pem")
+        result = cert_is_le_issuer("/fake/path/fullchain.pem")
     assert result is False
-    logger.critical("[IMP:9][test] _is_le_issuer rejects mkcert cert")
+    logger.critical("[IMP:9][test] cert_is_le_issuer rejects mkcert cert")
 
 
 # 🧪 TRAP[TEST] · Regression · _is_le_issuer handles openssl failure
@@ -268,12 +274,12 @@ def test_is_le_issuer_rejects_mkcert_cert(caplog):
 # · Last fail: N/A (new test)
 @ldd_trajectory
 def test_is_le_issuer_handles_openssl_failure(caplog):
-    """_is_le_issuer should return False when openssl fails."""
+    """cert_is_le_issuer should return False when openssl fails."""
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
-        result = cert._is_le_issuer("/nonexistent.pem")
+        result = cert_is_le_issuer("/nonexistent.pem")
     assert result is False
-    logger.critical("[IMP:9][test] _is_le_issuer handles openssl failure gracefully")
+    logger.critical("[IMP:9][test] cert_is_le_issuer handles openssl failure gracefully")
 
 
 # 🧪 TRAP[TEST] · Regression · _is_cert_valid rejects mkcert even if not expired

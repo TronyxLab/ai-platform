@@ -36,19 +36,18 @@
 ##
 ## ⚠️ TRAP[DEBT] · 2026-07-22 · P2 · 5 test-side failures in test_docker_orchestrator.py (DevPlan 043-B5)
 ## · Root: mock subprocess.run returns bytes, code expects str via text=True
-## · Impact: 5 unit-тестов падают (test_cleanup_legacy_container_found/not_found,
+## · Impact: 5 unit-тестов падали (test_cleanup_legacy_container_found/not_found,
 ##   test_deploy_docker_module_hermes_agent, testpre_pull_images_single,
-##   test_reconcile_orphan_containers_with_orphan). Production-код корректен:
-##   docker stop/rm присутствуют в _cleanup_legacy_container (L529-530),
-##   _reconcile_orphan_containers (L279-280); os._exit() в pre_pull_images корректен
-##   для forked child. P2 TypeGuard на bytes в L524-526 и L236-237 работает в production.
+##   orphan-reconcile тест). Production-код корректен:
+##   docker stop/rm присутствуют в _cleanup_legacy_container; os._exit() в pre_pull_images
+##   корректен для forked child. P2 TypeGuard на bytes работает в production.
 ## · Fix: адаптировать моки в test_docker_orchestrator.py (DevPlan 042 Phase 4)
 ## · Non-blocking: production-код корректен, тесты требуют адаптации моков
+## · Note: orphan-реконсиляция делегирована в orphan_reconciler (DevPlan 117 D18)
 ## @modulemap
 ##   _check_image_exists [W:1] — docker manifest inspect via subprocess → bool
 ##   _resolve_compose_file [W:1] — find compose.yaml → docker-compose.yaml → docker-compose.base.yml in module dir
 ##   _build_compose_args [W:2] — build docker compose arg list from env-files, overlay, --profile
-##   _reconcile_orphan_containers [W:3] — pre-deploy orphan container cleanup per module
 ##   _handle_hermes_agent [W:3] — hermes-agent L1 pull/build fallback, image existence check
 ##   deploy_docker_module [W:5] — deploy single docker module: build (if build:) + compose up -d
 ##   _pull_module_images [W:2] — pull images for one module (used by pre_pull_images)
@@ -70,7 +69,6 @@
 
 import argparse
 import contextlib
-import json
 import logging
 import os
 import re
@@ -83,6 +81,10 @@ from pathlib import Path
 _THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS_DIR))
 from content_hash import check_build_needed, compute_source_hash, save_build_hash
+
+# DevPlan 117 D18: единый канон orphan-реконсиляции — orphan_reconciler (batch-подход,
+# один docker ps -a). Локальный per-module orphan-cleanup удалён (дубль логики).
+from core.internal.bootstrap.deploy import orphan_reconciler
 
 # DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
 # DRIFT-D6 resolved: unified JSON-lines audit format
@@ -148,31 +150,21 @@ _PATHS_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "paths.s
 
 
 # region FUNC__resolve_compose_profiles_from_infra
-## @purpose  Read COMPOSE_PROFILES from core/platform-infra.yaml env_defaults (SoT, U-02).
-##            Repo root resolved relative to this file (core/internal/bootstrap/deploy/ → 5 levels up).
+## @purpose  Resolve COMPOSE_PROFILES из единого loader'а platform_config (SoT platform-infra.yaml,
+##           DevPlan 117 D23). Удалён сырой yaml.safe_load platform-infra.yaml (дубль loader'а).
+##           Fail-fast: raise FileNotFoundError/KeyError при отсутствии SoT/ключа (инвариант 7).
 ## @io       ⇥ None → ⎋ str: comma-separated profile list ⚡ raise FileNotFoundError/KeyError (fail-fast)
-## @complexity O(1) — single YAML load
+## @complexity O(1) — single config lookup
 ## @invariants
-##   - Raises if platform-infra.yaml missing (fail-fast, invariant 7 — no silent fallback)
-##   - Raises if env_defaults.COMPOSE_PROFILES absent
+##   - platform_config читает platform-infra.yaml env_defaults.COMPOSE_PROFILES (SoT)
+##   - Raises if COMPOSE_PROFILES absent (fail-fast, no silent fallback)
 ##   - Caller keeps os.environ.setdefault semantics — explicit env COMPOSE_PROFILES wins
 def _resolve_compose_profiles_from_infra() -> str:
-    """Return COMPOSE_PROFILES from platform-infra.yaml env_defaults (SoT)."""
-    repo_root = Path(__file__).resolve().parents[4]
-    infra_path = repo_root / "core" / "platform-infra.yaml"
-    if not infra_path.is_file():
-        raise FileNotFoundError(
-            f"[IMP:10][docker_orchestrator] platform-infra.yaml not found at {infra_path} — "
-            "cannot resolve COMPOSE_PROFILES (SoT). File is delivered with core/ (rsync core-deploy)."
-        )
-    import yaml  # type: ignore[import-untyped]
-
-    with open(infra_path) as f:
-        data = yaml.safe_load(f)
-    profiles = (data or {}).get("env_defaults", {}).get("COMPOSE_PROFILES")
+    """Return COMPOSE_PROFILES from platform_config (SoT platform-infra.yaml)."""
+    profiles = platform_config.get_default("COMPOSE_PROFILES")
     if not profiles:
         raise KeyError(
-            f"[IMP:10][docker_orchestrator] env_defaults.COMPOSE_PROFILES missing in {infra_path} — "
+            "[IMP:10][docker_orchestrator] env_defaults.COMPOSE_PROFILES missing in platform-infra.yaml (SoT) — "
             "run `make generate-platform-env` (DevPlan 116 T2, U-02)."
         )
     logger.info("[IMP:9][_resolve_compose_profiles_from_infra][OK] COMPOSE_PROFILES from SoT: %s", profiles)
@@ -267,113 +259,6 @@ def _build_compose_args(
 
 
 # endregion FUNC__build_compose_args
-
-
-# region FUNC__reconcile_orphan_containers
-## @purpose  Pre-deploy orphan container reconciliation: detect containers from other compose
-##           projects that occupy names used by this module, and stop/remove them.
-##           Prevents "container name already in use" errors during compose up.
-## @io       ⇥ module_name: str, compose_args: list[str]
-##           ⎋ None (side-effect: docker stop + rm on foreign containers)
-## @complexity 3 — docker compose config --format json + docker inspect for each service
-## @invariants
-##   - Only removes containers that have a DIFFERENT compose project label (or none)
-##   - Containers from the SAME compose project are left untouched
-##   - Failure to inspect a container is non-fatal (logged, continue)
-##   - Orchestrates via subprocess calls to docker CLI (same as shell original)
-def _reconcile_orphan_containers(module_name: str, compose_args: list[str]) -> None:
-    logger.info("[IMP:7][_reconcile_orphan_containers][start] Reconciling orphans for %s", module_name)
-    # ── docker compose config --format json (shared — sole path, DevPlan 116 B5 T4) ──
-    compose_dir = "."
-    for i, arg in enumerate(compose_args):
-        if arg == "-f" and i + 1 < len(compose_args):
-            compose_dir = os.path.dirname(compose_args[i + 1])
-            break
-    cfg_result = _shared_docker_compose_config(
-        compose_dir,
-        compose_args=compose_args,
-        flags=["--format", "json"],
-    )
-    if cfg_result.returncode != 0:
-        logger.warning(
-            "[IMP:5][_reconcile_orphan_containers][config_fail] compose config failed for %s — skipping orphan check",
-            module_name,
-        )
-        return
-
-    cfg_stdout = cfg_result.stdout
-    if isinstance(cfg_stdout, bytes):
-        cfg_stdout = cfg_stdout.decode("utf-8")
-    try:
-        cfg = json.loads(cfg_stdout)
-    except json.JSONDecodeError:
-        logger.warning(
-            "[IMP:5][_reconcile_orphan_containers][error] Failed to parse compose config for %s — skipping orphan check",
-            module_name,
-        )
-        return
-
-    # ── Get all existing container names ──
-    try:
-        ps_result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
-        stdout = ps_result.stdout
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8")
-        existing_names = set(stdout.splitlines())
-    except (subprocess.TimeoutExpired, OSError):
-        logger.warning("[IMP:5][_reconcile_orphan_containers][ps_fail] docker ps failed — skipping orphan check")
-        return
-
-    # ── Check each service's container_name ──
-    for svc_data in cfg.get("services", {}).values():
-        cname = svc_data.get("container_name", "") or svc_data.get("name", "")
-        if not cname or cname not in existing_names:
-            continue
-
-        # ── Inspect compose project label on existing container ──
-        try:
-            ins_result = subprocess.run(
-                [
-                    "docker",
-                    "inspect",
-                    "--format",
-                    '{{index .Config.Labels "com.docker.compose.project"}}',
-                    cname,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
-            project_label = ins_result.stdout
-            if isinstance(project_label, bytes):
-                project_label = project_label.decode("utf-8")
-            project_label = project_label.strip()
-        except (subprocess.TimeoutExpired, OSError):
-            logger.warning("[IMP:5][_reconcile_orphan_containers][inspect_fail] Failed to inspect %s — skipping", cname)
-            continue
-
-        if not project_label or project_label != module_name:
-            logger.info(
-                "[IMP:8][_reconcile_orphan_containers][orphan] Found orphan: %s (project=%s) — removing",
-                cname,
-                project_label or "<none>",
-            )
-            try:
-                subprocess.run(["docker", "stop", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
-                subprocess.run(["docker", "rm", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
-                logger.info("[IMP:9][_reconcile_orphan_containers][removed] Orphan container removed: %s", cname)
-            except OSError as exc:
-                logger.warning("[IMP:5][_reconcile_orphan_containers][remove_fail] Failed to remove %s: %s", cname, exc)
-
-
-# endregion FUNC__reconcile_orphan_containers
 
 
 # region FUNC__handle_hermes_agent
@@ -582,7 +467,13 @@ def deploy_docker_module(
         _cleanup_observability_containers(compose_file)
 
     # ── Orphan container reconciliation ──
-    _reconcile_orphan_containers(module_name, compose_args)
+    # DevPlan 117 D18: делегирование в orphan_reconciler (единый канон). batch_orphan_reconciliation
+    # работает per-module (один module_entries) и batch-путь (deploy_orchestrator) — batch-подход
+    # эффективнее (один docker ps -a); remove_orphans удаляет найденные orphan-контейнеры.
+    orphans = orphan_reconciler.batch_orphan_reconciliation([module_name], module_dir)
+    if orphans:
+        removed = orphan_reconciler.remove_orphans(orphans)
+        logger.info("[IMP:9][deploy_docker_module][orphan] Removed %d orphan container(s) for %s", removed, module_name)
 
     # ── NGINX overlay env ──
     if module_name == "nginx" and overlay_dir:

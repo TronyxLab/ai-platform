@@ -391,6 +391,27 @@ def batch_orphan_reconciliation(module_entries: list[str], modules_dir: str) -> 
 # endregion FUNC_batch_orphan_reconciliation
 
 
+# region FUNC_remove_orphans
+## @purpose  Remove orphan containers detected by batch_orphan_reconciliation.
+##           Публичный wrapper над приватной _self_heal_orphan_containers (DevPlan 117 D18) —
+##           используется docker_orchestrator.deploy_docker_module (межмодульный доступ
+##           к приватным запрещён, гейт T6.1).
+## @io       ⇥ orphans: list[dict[str, str]] → ⎋ int (removed_count)
+## @complexity — O(n) где n = len(orphans)
+## @invariants
+##   - Delegates to _self_heal_orphan_containers (docker rm -f per orphan)
+##   - Returns removed count (0 если orphans пуст)
+def remove_orphans(orphans: list[dict[str, str]]) -> int:
+    """Remove orphan containers using docker rm -f (public API, DevPlan 117 D18)."""
+    if not orphans:
+        logger.info("[IMP:8][remove_orphans] No orphans to remove")
+        return 0
+    return _self_heal_orphan_containers(orphans)
+
+
+# endregion FUNC_remove_orphans
+
+
 # region FUNC__self_heal_orphan_containers
 ## @purpose  Remove orphan containers detected by batch_orphan_reconciliation.
 ##           Only active when --self-heal flag is set (W5-E5).

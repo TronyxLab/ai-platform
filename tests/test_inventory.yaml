@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-08-01 | regenerated (2734 tests)
+## @changes — 2026-08-01 | regenerated (2757 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -1854,8 +1854,8 @@ test_nodeids:
 - 'tests/unit/test_docker_orchestrator.py::test_pull_module_images'
 - 'tests/unit/test_docker_orchestrator.py::test_pull_module_images_no_compose'
 - 'tests/unit/test_docker_orchestrator.py::test_pull_module_images_skip_build'
-- 'tests/unit/test_docker_orchestrator.py::test_reconcile_orphan_containers_no_orphans'
-- 'tests/unit/test_docker_orchestrator.py::test_reconcile_orphan_containers_with_orphan'
+- 'tests/unit/test_docker_orchestrator.py::test_reconcile_orphan_delegates_to_orphan_reconciler'
+- 'tests/unit/test_docker_orchestrator.py::test_reconcile_orphan_removes_detected_orphans'
 - 'tests/unit/test_docker_orchestrator.py::test_resolve_compose_file_base_yml'
 - 'tests/unit/test_docker_orchestrator.py::test_resolve_compose_file_docker_yaml'
 - 'tests/unit/test_docker_orchestrator.py::test_resolve_compose_file_missing'
@@ -2272,6 +2272,12 @@ test_nodeids:
 - 'tests/unit/test_project_registry.py::test_validate_project_name_leading_dash_underscore'
 - 'tests/unit/test_project_registry.py::test_validate_project_name_traversal'
 - 'tests/unit/test_project_registry.py::test_validate_project_name_valid'
+- 'tests/unit/test_project_registry_llm.py::test_llm_disabled_skipped'
+- 'tests/unit/test_project_registry_llm.py::test_llm_enabled_only'
+- 'tests/unit/test_project_registry_llm.py::test_missing_ai_yaml_skipped'
+- 'tests/unit/test_project_registry_llm.py::test_no_org_flat_path'
+- 'tests/unit/test_project_registry_llm.py::test_node_yaml_missing_empty'
+- 'tests/unit/test_project_registry_llm.py::test_org_repo_resolution'
 - 'tests/unit/test_project_status_contract.py::test_deploy_engine_status_result_contract'
 - 'tests/unit/test_project_status_contract.py::test_dispatch_status_exit_codes'
 - 'tests/unit/test_project_status_contract.py::test_orchestrator_status_to_dict_canon'
@@ -2461,6 +2467,11 @@ test_nodeids:
 - 'tests/unit/test_shared_docker_compose.py::test_retry_pull_success_second_attempt'
 - 'tests/unit/test_shared_docker_compose.py::test_up_passes_flags_service_env'
 - 'tests/unit/test_shared_docker_compose.py::test_up_success'
+- 'tests/unit/test_shared_s3_client.py::test_env_fallback_aws_aliases'
+- 'tests/unit/test_shared_s3_client.py::test_env_fallback_empty_when_unset'
+- 'tests/unit/test_shared_s3_client.py::test_env_fallback_s3_prefix'
+- 'tests/unit/test_shared_s3_client.py::test_explicit_params_override_env'
+- 'tests/unit/test_shared_s3_client.py::test_max_attempts_passthrough'
 - 'tests/unit/test_shared_schema_validator.py::test_broken_yaml_raises_yaml_error'
 - 'tests/unit/test_shared_schema_validator.py::test_schema_root_not_dict_raises_schema_error'
 - 'tests/unit/test_shared_schema_validator.py::test_validate_dict_path_format'
@@ -2566,6 +2577,18 @@ test_nodeids:
 - 'tests/unit/test_ssh_command_parser.py::test_strip_legacy_platform_deploy_kept'
 - 'tests/unit/test_ssh_command_parser.py::test_strip_no_prefix'
 - 'tests/unit/test_ssh_command_parser.py::test_strip_whitespace_trim'
+- 'tests/unit/test_ssl_certs.py::test_default_constants'
+- 'tests/unit/test_ssl_certs.py::test_expiry_expired'
+- 'tests/unit/test_ssl_certs.py::test_expiry_ok'
+- 'tests/unit/test_ssl_certs.py::test_get_issuer_empty'
+- 'tests/unit/test_ssl_certs.py::test_get_issuer_fail'
+- 'tests/unit/test_ssl_certs.py::test_get_issuer_ok'
+- 'tests/unit/test_ssl_certs.py::test_is_le_issuer_accepts_le'
+- 'tests/unit/test_ssl_certs.py::test_is_le_issuer_openssl_failure'
+- 'tests/unit/test_ssl_certs.py::test_is_le_issuer_rejects_mkcert'
+- 'tests/unit/test_ssl_certs.py::test_parseable_fail'
+- 'tests/unit/test_ssl_certs.py::test_parseable_ok'
+- 'tests/unit/test_ssl_certs.py::test_parseable_timeout'
 - 'tests/unit/test_state_machine.py::test_add_warning'
 - 'tests/unit/test_state_machine.py::test_bootstrapstate_round_trip'
 - 'tests/unit/test_state_machine.py::test_build_parser'

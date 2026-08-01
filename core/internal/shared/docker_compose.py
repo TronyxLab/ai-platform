@@ -291,20 +291,24 @@ def docker_compose_down(
     compose_args: list[str] | None = None,
     flags: list[str] | None = None,
     env_override: dict[str, str] | None = None,
+    service: str | None = None,
 ) -> bool:
     """Run docker compose down in a directory.
 
-    ▶ ┌compose_dir┐ → ◇ exists? → subprocess docker compose down [flags] → ⊕ returncode==0 → ⎋ bool
+    ▶ ┌compose_dir┐ → ◇ exists? → subprocess docker compose down [flags] [service] → ⊕ returncode==0 → ⎋ bool
 
     ## @purpose — Stop/remove containers for a docker compose project (данные сохраняются —
     ##            флаг -v НЕ передаётся, если caller его не добавил явно).
     ## @io — ⇥ compose_dir: str, timeout: int, compose_args: list[str] | None,
-    ##       flags: list[str] | None (e.g. --timeout 30), env_override → ⎋ bool (True = success)
+    ##       flags: list[str] | None (e.g. --timeout 30), env_override,
+    ##       service: str | None (ограничить down одним сервисом — watchdog rollback) → ⎋ bool (True = success)
     ## @complexity — O(1) + shutdown I/O
     ## @invariants
     ##   - Non-fatal: returns False on failure
     ##   - Никогда не добавляет -v по умолчанию (O7: данные проекта не удаляются)
+    ##   - service (если задан) — последним аргументом (docker compose down <service>)
     ## @changes 2026-08-01 · DevPlan 116 B5 T3 — sole-path extension (rollback/remove)
+    ##           2026-08-01 · DevPlan 117 D19 — добавлен service параметр (watchdog DockerManager)
     """
     if not os.path.isdir(compose_dir):
         logger.warning("[IMP:7][docker_compose_down] Directory not found: %s", compose_dir)
@@ -317,6 +321,8 @@ def docker_compose_down(
     cmd.append("down")
     if flags:
         cmd.extend(flags)
+    if service:
+        cmd.append(service)
 
     # env=None → subprocess наследует os.environ (функционально идентично); env передаётся
     # ТОЛЬКО при env_override (IMAGE_TAG) — чистота call_args для тестов/отладки

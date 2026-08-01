@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: deploy-engine, atomic-deploy, rollback, healthcheck, remove, status, docker-compose, lifecycle, snapshot, prune-images
-# STRUCTURE: ▶ DataClasses(DeployResult|RemoveResult|StatusResult|ImageInfo|SnapshotInfo) → [DeployEngine] →
+# STRUCTURE: ▶ DataClasses(ServiceDeployResult|RemoveResult|StatusResult|ImageInfo|SnapshotInfo) → [DeployEngine] →
 #            ◇ deploy(project,ref,service,project_dir,node,max_wait,keep_images) → _save_previous_image → _capture_deploy_snapshot →
 #            _preflight_checks → _pull_image_with_retry → _atomic_up → _poll_health →
 #            either success(DEPLOY_STATUS=success) or fail(first_deploy→exit|rollback→_perform_rollback) →
@@ -130,7 +130,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class DeployResult:
+class ServiceDeployResult:
     """Result of a deploy operation."""
 
     success: bool
@@ -246,13 +246,13 @@ class DeployEngine:
     # region FUNC_deploy_compose
     ## @purpose  Simplified deploy interface for DeployOrchestrator. Thin wrapper around deploy()
     ##           with project_dir-based project name extraction.
-    ## @io       ⇥ project_dir: str, service: str, version: str → ⎋ DeployResult
+    ## @io       ⇥ project_dir: str, service: str, version: str → ⎋ ServiceDeployResult
     ## @complexity — O(N) where N = deploy steps
     ## @invariants
     ##   - Extracts project name from project_dir basename
     ##   - Uses default max_wait=60 and keep_images=3
-    ##   - Returns DeployResult compatible with DeployOrchestrator
-    def deploy_compose(self, project_dir: str, service: str, version: str) -> DeployResult:
+    ##   - Returns ServiceDeployResult compatible with DeployOrchestrator
+    def deploy_compose(self, project_dir: str, service: str, version: str) -> ServiceDeployResult:
         """Deploy a single compose service. Called by DeployOrchestrator.
 
         Args:
@@ -261,7 +261,7 @@ class DeployEngine:
             version: Image version/tag to deploy.
 
         Returns:
-            DeployResult with success/failure status.
+            ServiceDeployResult with success/failure status.
         """
         project = os.path.basename(project_dir.rstrip("/"))
         logger.info(
@@ -284,7 +284,7 @@ class DeployEngine:
 
     # region FUNC_deploy
     ## @purpose  Perform atomic deploy with healthcheck-based rollback.
-    ## @io       ⇥ project, ref, service, project_dir, node, max_wait, keep_images → ⎋ DeployResult
+    ## @io       ⇥ project, ref, service, project_dir, node, max_wait, keep_images → ⎋ ServiceDeployResult
     ## @complexity — O(N) where N = pull retry attempts + healthcheck attempts
     ## @invariants
     ##   - Previous image saved BEFORE pull (enables rollback)
@@ -300,7 +300,7 @@ class DeployEngine:
         node: str = "",
         max_wait: int = 60,
         keep_images: int = 3,
-    ) -> DeployResult:
+    ) -> ServiceDeployResult:
         """Execute atomic deploy with rollback capability.
 
         Args:
@@ -313,7 +313,7 @@ class DeployEngine:
             keep_images: Number of old images to keep during prune.
 
         Returns:
-            DeployResult with status and rollback metadata.
+            ServiceDeployResult with status and rollback metadata.
         """
         # ── Validate ──
         logger.info("[IMP:9][deploy][start] Deploy START: %s/%s → %s", project, service, ref)
@@ -321,7 +321,7 @@ class DeployEngine:
         if not validate_project_name(project):
             msg = f"Invalid project name: {project}"
             logger.error("[IMP:10][deploy][validation] %s", msg)
-            return DeployResult(success=False, project=project, ref=ref, service=service, error_message=msg)
+            return ServiceDeployResult(success=False, project=project, ref=ref, service=service, error_message=msg)
 
         # 🧐 TRAP[DECISION] · 2026-07-31 · HI · os.chdir без восстановления — ядовитый cwd для pytest-процесса
         # · Symptom: tests/integration/test_deploy_e2e.py → DeployEngine → os.chdir(project_dir) из tempdir +
@@ -349,7 +349,7 @@ class DeployEngine:
         node: str = "",
         max_wait: int = 60,
         keep_images: int = 3,
-    ) -> DeployResult:
+    ) -> ServiceDeployResult:
         """Execute atomic deploy with rollback capability (cwd=project_dir гарантирован обёрткой).
 
         Args:
@@ -362,7 +362,7 @@ class DeployEngine:
             keep_images: Number of old images to keep during prune.
 
         Returns:
-            DeployResult with status and rollback metadata.
+            ServiceDeployResult with status and rollback metadata.
         """
         # ── Validate ──
         logger.info("[IMP:9][deploy][start] Deploy START: %s/%s → %s", project, service, ref)
@@ -370,13 +370,13 @@ class DeployEngine:
         if not validate_project_name(project):
             msg = f"Invalid project name: {project}"
             logger.error("[IMP:10][deploy][validation] %s", msg)
-            return DeployResult(success=False, project=project, ref=ref, service=service, error_message=msg)
+            return ServiceDeployResult(success=False, project=project, ref=ref, service=service, error_message=msg)
 
         try:
             self._preflight_checks(project_dir, service)
         except (ValidationError, DeployError) as e:
             logger.error("[IMP:10][deploy][preflight] %s", str(e))
-            return DeployResult(success=False, project=project, ref=ref, service=service, error_message=str(e))
+            return ServiceDeployResult(success=False, project=project, ref=ref, service=service, error_message=str(e))
 
         # ── Save previous image (BEFORE pull) ──
         previous_image = self._save_previous_image(project_dir, service)
@@ -410,7 +410,7 @@ class DeployEngine:
             else:
                 logger.warning("[IMP:9][deploy][up-fail] atomic_up failed — attempting rollback")
                 rollback_ok = self._perform_rollback(project_dir, service, previous_image)
-                return DeployResult(
+                return ServiceDeployResult(
                     success=False,
                     project=project,
                     ref=ref,
@@ -427,7 +427,7 @@ class DeployEngine:
         if healthy:
             # B1: DEPLOY_STATUS immediately after health-gate
             logger.info("[IMP:9][deploy][health] Healthcheck PASSED for %s/%s", project, service)
-            return DeployResult(
+            return ServiceDeployResult(
                 success=True,
                 project=project,
                 ref=ref,
@@ -440,7 +440,7 @@ class DeployEngine:
             # unreachable — _handle_first_deploy raises PlatformFatalError
 
         rollback_ok = self._perform_rollback(project_dir, service, previous_image)
-        return DeployResult(
+        return ServiceDeployResult(
             success=False,
             project=project,
             ref=ref,

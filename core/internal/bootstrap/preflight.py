@@ -36,6 +36,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.internal.config import platform_config
+from core.internal.shared.s3_client import get_s3_client as _shared_get_s3_client
 
 logger = logging.getLogger(__name__)
 
@@ -208,18 +209,12 @@ def probe_s3_connectivity(
             detail="S3 credentials not configured — cert restore will use acme.sh only",
         )
     try:
-        import boto3  # type: ignore[import-untyped]
-        from botocore.config import Config as BotoConfig  # type: ignore[import-untyped]
         from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 
         ep = endpoint or os.environ.get("S3_ENDPOINT_URL", "https://s3.timeweb.cloud")
-        client = boto3.client(
-            "s3",
-            endpoint_url=ep,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=BotoConfig(retries={"max_attempts": 1, "mode": "standard"}),
-        )
+        # DevPlan 117 D26: клиент создаётся через shared/s3_client.get_s3_client
+        # (max_attempts=1 — быстрый probe; proxy-stripping не требуется для head_bucket)
+        client = _shared_get_s3_client(endpoint=ep, access_key=access_key, secret_key=secret_key, max_attempts=1)
         client.head_bucket(Bucket=bucket)
         latency = int((time.monotonic() - start) * 1000)
         logger.info("[IMP:9][preflight][s3] S3 probe OK (%dms) — bucket %s reachable", latency, bucket)

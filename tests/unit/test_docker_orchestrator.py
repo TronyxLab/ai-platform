@@ -18,7 +18,6 @@
 # endregion MODULE_CONTRACT
 """
 
-import json
 import logging
 import subprocess
 import sys
@@ -615,78 +614,71 @@ def testpre_pull_images_single(mock_subprocess, module_dir):
 
 
 # ────────────────────────────────────────────────────────────
-# region TEST__reconcile_orphan_containers
+# region TEST__orphan_reconciliation_delegation
 # ────────────────────────────────────────────────────────────
+# DevPlan 117 D18: локальный orphan-cleanup удалён (дубль логики) — deploy_docker_module
+# делегирует в orphan_reconciler.batch_orphan_reconciliation + remove_orphans (единый канон).
+# Тесты верифицируют делегирование (mock orphan_reconciler в docker_orchestrator).
 
 
-# 🧪 TRAP[TEST] · Regression · Orphan container reconciliation via docker compose config · Last fail: N/A · Remove if: orphan reconciliation logic changes
-def test_reconcile_orphan_containers_no_orphans(mock_subprocess):
-    """Test _reconcile_orphan_containers handles case with no orphan containers."""
-    compose_args = ["-f", "/tmp/compose.yaml", "--profile", "test_mod"]
+# 🧪 TRAP[TEST] · Regression · deploy_docker_module delegates orphan reconciliation to orphan_reconciler · Last fail: N/A · Remove if: orphan reconciliation delegation changes
+def test_reconcile_orphan_delegates_to_orphan_reconciler(mock_subprocess, module_dir, monkeypatch):
+    """Test deploy_docker_module calls orphan_reconciler.batch_orphan_reconciliation (DevPlan 117 D18)."""
+    batch_calls = []
 
-    def _side_effect(*args, **kwargs):
-        cmd = args[0] if args else kwargs.get("args", [])
-        cmd_str = " ".join(str(x) for x in cmd) if isinstance(cmd, list) else str(cmd)
-        if "config" in cmd_str and "--format" in cmd_str:
-            cfg = {"services": {"test": {"image": "test:latest", "container_name": "test_container"}}}
-            return mock.MagicMock(
-                returncode=0, stdout=json.dumps(cfg).encode(), stderr=b"", spec=subprocess.CompletedProcess
-            )
-        if "ps" in cmd_str and "--format" in cmd_str:
-            return mock.MagicMock(
-                returncode=0, stdout=b"other_container\n", stderr=b"", spec=subprocess.CompletedProcess
-            )
-        return mock.MagicMock(returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess)
+    def _fake_batch(entries, modules_dir):
+        batch_calls.append((entries, modules_dir))
+        return []
 
-    mock_subprocess.side_effect = _side_effect
+    monkeypatch.setattr(dorch.orphan_reconciler, "batch_orphan_reconciliation", _fake_batch)
+    remove_calls = []
 
-    # Should not raise
-    dorch._reconcile_orphan_containers("test_mod", compose_args)
+    def _fake_remove(orphans):
+        remove_calls.append(orphans)
+        return 0
 
-    # Stop/rm should NOT have been called (container "test_container" not in existing set)
-    stop_calls = [c for c in mock_subprocess.call_args_list if "stop" in str(c)]
-    assert len(stop_calls) == 0
+    monkeypatch.setattr(dorch.orphan_reconciler, "remove_orphans", _fake_remove)
 
+    result = dorch.deploy_docker_module(
+        module_name="test_mod",
+        modules_dir=module_dir,
+    )
 
-# 🧪 TRAP[TEST] · Regression · Orphan container is removed when found · Last fail: N/A · Remove if: orphan reconciliation logic changes
-def test_reconcile_orphan_containers_with_orphan(mock_subprocess):
-    """Test _reconcile_orphan_containers removes an orphan container with different project label."""
-    compose_args = ["-f", "/tmp/compose.yaml", "--profile", "test_mod"]
-
-    call_log: list[str] = []
-
-    def _side_effect(*args, **kwargs):
-        cmd = args[0] if args else kwargs.get("args", [])
-        cmd_str = " ".join(str(x) for x in cmd) if isinstance(cmd, list) else str(cmd)
-        call_log.append(cmd_str)
-
-        if "config" in cmd_str and "--format" in cmd_str:
-            cfg = {"services": {"test": {"image": "test:latest", "container_name": "orphan_container"}}}
-            return mock.MagicMock(
-                returncode=0, stdout=json.dumps(cfg).encode(), stderr=b"", spec=subprocess.CompletedProcess
-            )
-        if "ps" in cmd_str and "--format" in cmd_str:
-            return mock.MagicMock(
-                returncode=0, stdout=b"orphan_container\n", stderr=b"", spec=subprocess.CompletedProcess
-            )
-        if "inspect" in cmd_str and "com.docker.compose.project" in cmd_str:
-            return mock.MagicMock(returncode=0, stdout=b"other_project\n", stderr=b"", spec=subprocess.CompletedProcess)
-        if "stop" in cmd_str:
-            return mock.MagicMock(returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess)
-        if "rm" in cmd_str:
-            return mock.MagicMock(returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess)
-        return mock.MagicMock(returncode=0, stdout=b"", stderr=b"", spec=subprocess.CompletedProcess)
-
-    mock_subprocess.side_effect = _side_effect
-
-    dorch._reconcile_orphan_containers("test_mod", compose_args)
-
-    # Verify stop and rm were called for the orphan
-    assert any("stop" in c and "orphan_container" in c for c in call_log), f"stop not in {call_log}"
-    assert any("rm" in c and "orphan_container" in c for c in call_log), f"rm not in {call_log}"
+    assert result is True
+    # batch_orphan_reconciliation должен быть вызван с [module_name] и modules_dir
+    assert len(batch_calls) == 1, f"batch_orphan_reconciliation not called: {batch_calls}"
+    assert batch_calls[0][0] == ["test_mod"]
+    # orphans пуст → remove_orphans НЕ вызывается
+    assert len(remove_calls) == 0
 
 
-# endregion TEST__reconcile_orphan_containers
+# 🧪 TRAP[TEST] · Regression · deploy_docker_module removes detected orphans · Last fail: N/A · Remove if: orphan reconciliation delegation changes
+def test_reconcile_orphan_removes_detected_orphans(mock_subprocess, module_dir, monkeypatch):
+    """Test deploy_docker_module calls remove_orphans when orphans are detected (DevPlan 117 D18)."""
+    detected = [{"container_name": "orphan_container", "project": "other_project"}]
+    remove_calls = []
+
+    def _fake_batch(entries, modules_dir):
+        return detected
+
+    def _fake_remove(orphans):
+        remove_calls.append(orphans)
+        return 1
+
+    monkeypatch.setattr(dorch.orphan_reconciler, "batch_orphan_reconciliation", _fake_batch)
+    monkeypatch.setattr(dorch.orphan_reconciler, "remove_orphans", _fake_remove)
+
+    result = dorch.deploy_docker_module(
+        module_name="test_mod",
+        modules_dir=module_dir,
+    )
+
+    assert result is True
+    assert len(remove_calls) == 1, f"remove_orphans not called: {remove_calls}"
+    assert remove_calls[0] == detected
+
+
+# endregion TEST__orphan_reconciliation_delegation
 
 
 # ────────────────────────────────────────────────────────────

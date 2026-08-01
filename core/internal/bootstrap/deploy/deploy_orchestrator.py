@@ -28,7 +28,7 @@
 ##            automatic exit-code propagation. D3: JSON interop via native json.loads/json.dumps (Python).
 ## @changes   2026-07-31 · Created (DevPlan 100 TASK-1)
 ## @modulemap
-##   DeployResult [W:1] — dataclass: deployed, failed, crit_count, warn_count, exit_code
+##   ModuleDeployResult [W:1] — dataclass: deployed, failed, crit_count, warn_count, exit_code
 ##   ModuleLists [W:1] — dataclass: all_names, enabled_names, overlays
 ##   orchestrate [W:5] — main entry point: preflight → parse → route → postflight → severity → exit_code
 ##   main [W:2] — CLI entry: argparse → orchestrate() → exit code
@@ -112,12 +112,12 @@ _INVOKE_MODULE_INTERFACE_SH = str(Path(__file__).resolve().parent.parent.parent 
 _PATHS_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "paths.sh")
 
 
-# region FUNC_DeployResult
+# region FUNC_ModuleDeployResult
 ## @purpose  Structured result of one orchestrate() run — consumed by callers for exit code + telemetry
 ## @io       ⇥ (constructed by orchestrate) → ⎋ dataclass
 ## @complexity 1 — plain data container
 @dataclass
-class DeployResult:
+class ModuleDeployResult:
     """Result of a full orchestrate() run.
 
     ## @invariants
@@ -133,7 +133,7 @@ class DeployResult:
     exit_code: int = 0
 
 
-# endregion FUNC_DeployResult
+# endregion FUNC_ModuleDeployResult
 
 
 # region FUNC_ModuleLists
@@ -157,7 +157,7 @@ class ModuleLists:
 ##           Phase flow: PREFLIGHT → PARSE → ROUTE&DEPLOY → POSTFLIGHT → SEVERITY → exit_code.
 ## @io       ⇥ node_yaml: str, modules_dir: str, core_dir: str, templates_dir: str,
 ##           modules_filter: str = "", deploy_parallel: bool = False, deploy_orchestrator: bool = False
-##           ⎋ DeployResult (caller should sys.exit(result.exit_code))
+##           ⎋ ModuleDeployResult (caller should sys.exit(result.exit_code))
 ## @complexity 3 — linear phase pipeline; routing branch dispatches parallel or sequential deploy
 ## @invariants
 ##   - Preflight + parse run before routing — empty enabled set → early return exit_code 0
@@ -172,7 +172,7 @@ def orchestrate(
     modules_filter: str = "",
     deploy_parallel: bool = False,
     deploy_orchestrator: bool = False,
-) -> DeployResult:
+) -> ModuleDeployResult:
     """Main orchestration entry point — importable and CLI-callable."""
     logger.info("[IMP:7][orchestrate][start] node_yaml=%s modules_dir=%s", node_yaml, modules_dir)
 
@@ -183,7 +183,7 @@ def orchestrate(
     modules = _parse_modules(node_yaml, modules_dir, modules_filter)
     if not modules.enabled_names:
         logger.info("[IMP:9][orchestrate][skip] No enabled modules declared in %s — SKIP deploy", node_yaml)
-        return DeployResult(deployed=0, failed=[], crit_count=0, warn_count=0, exit_code=0)
+        return ModuleDeployResult(deployed=0, failed=[], crit_count=0, warn_count=0, exit_code=0)
     logger.info("[IMP:8][orchestrate][parse] enabled=%d all=%d", len(modules.enabled_names), len(modules.all_names))
 
     # PHASE 3: ROUTE & DEPLOY
@@ -210,7 +210,7 @@ def orchestrate(
         warn,
         exit_code,
     )
-    return DeployResult(
+    return ModuleDeployResult(
         deployed=deployed,
         failed=failed,
         crit_count=crit,
@@ -512,7 +512,7 @@ def _deploy_parallel(
 ## @invariants
 ##   - Only DOCKER module names passed (R4) — names = docker compose project names
 ##   - НЕТ --scp: build_channel в orchestrator_cli вернёт LocalChannel (D7, T6)
-##   - JSON-массив DeployResult парсится: deployed = count(status == DEPLOYED),
+##   - JSON-массив ModuleDeployResult парсится: deployed = count(status == DEPLOYED),
 ##     failed = [project for status in (FAILED, ROLLED_BACK)] (U-30, честная наблюдаемость)
 ##   - Failure is WARN-only (legacy parity: orchestrator failures never added to FAILED severity,
 ##     но наблюдаемы через failed-список — DEPLOY_BEST_EFFORT, B4)
@@ -544,7 +544,7 @@ def _deploy_orchestrator(docker_names: list[str]) -> tuple[int, list[str]]:
         logger.warning("[IMP:5][_deploy_orchestrator][error] deploy-many error (non-fatal): %s", exc)
         return 0, []
 
-    # ── Парсинг JSON-вывода deploy-many (U-30): JSON-массив DeployResult ──
+    # ── Парсинг JSON-вывода deploy-many (U-30): JSON-массив ModuleDeployResult ──
     deployed = 0
     failed: list[str] = []
     try:

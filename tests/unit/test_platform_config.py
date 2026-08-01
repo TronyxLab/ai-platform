@@ -26,7 +26,7 @@ import yaml
 
 @pytest.fixture
 def env_defaults_yaml() -> dict:
-    """Return a dict matching platform-env.yaml env_defaults section."""
+    """Return a dict matching platform-infra.yaml env_defaults section (SoT)."""
     return {
         "env_defaults": {
             "S3_REGION": "ru-1",
@@ -40,7 +40,7 @@ def env_defaults_yaml() -> dict:
 
 @pytest.fixture
 def platform_root(tmp_path: Path) -> Path:
-    """Create an isolated PLATFORM_ROOT directory (пустой — отсутствие platform-env.yaml)."""
+    """Create an isolated PLATFORM_ROOT directory (пустой — отсутствие platform-infra.yaml)."""
     root = tmp_path / "platform-root"
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -50,7 +50,7 @@ def _reload_platform_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path
     """Reload platform_config fresh with PLATFORM_ROOT isolated.
 
     ## @purpose — Изоляция: PLATFORM_ROOT указывает на tmp-директорию (не на репозиторий),
-    ##            чтобы script-relative резолвинг не находил реальный platform-env.yaml репо.
+    ##            чтобы script-relative резолвинг не находил реальный platform-infra.yaml репо.
     ## @io — ⇥ monkeypatch, platform_root → ⎋ Generator[module]
     """
     if "core.internal.config.platform_config" in sys.modules:
@@ -77,7 +77,7 @@ def isolated_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path) -> Gen
     """platform_config с ПУСТЫМ PLATFORM_ROOT (файл отсутствует → ""-семантика).
 
     Дополнительно перенаправляет script-relative резолвинг (parents[3] от __file__) в tmp-дерево,
-    чтобы канонический fallback не находил реальный platform-env.yaml репозитория (Zero Hardcode).
+    чтобы канонический fallback не находил реальный platform-infra.yaml репозитория (Zero Hardcode).
     """
     gen = _reload_platform_config(monkeypatch, platform_root)
     pc = next(gen)
@@ -92,18 +92,20 @@ def isolated_config(monkeypatch: pytest.MonkeyPatch, platform_root: Path) -> Gen
 def isolated_config_with_yaml(
     monkeypatch: pytest.MonkeyPatch, platform_root: Path, env_defaults_yaml: dict
 ) -> Generator:
-    """platform_config с PLATFORM_ROOT, содержащим platform-env.yaml."""
-    with open(platform_root / "platform-env.yaml", "w") as f:
+    """platform_config с PLATFORM_ROOT, содержащим core/platform-infra.yaml (SoT, DevPlan 117 D23)."""
+    infra_dir = platform_root / "core"
+    infra_dir.mkdir(parents=True, exist_ok=True)
+    with open(infra_dir / "platform-infra.yaml", "w") as f:
         yaml.dump(env_defaults_yaml, f)
     yield from _reload_platform_config(monkeypatch, platform_root)
 
 
 # region TEST_load_from_yaml
-## @purpose  Verify that env_defaults are loaded from platform-env.yaml via PLATFORM_ROOT (T8.3)
-## @scenario Write platform-env.yaml в PLATFORM_ROOT → import platform_config → verify all accessors
+## @purpose  Verify that env_defaults are loaded from platform-infra.yaml via PLATFORM_ROOT (T8.3 + D23)
+## @scenario Write core/platform-infra.yaml в PLATFORM_ROOT → import platform_config → verify all accessors
 ## @complexity 1
 def test_load_from_yaml(isolated_config_with_yaml, caplog: pytest.LogCaptureFixture) -> None:
-    """Verify that env_defaults are loaded from platform-env.yaml (PLATFORM_ROOT)."""
+    """Verify that env_defaults are loaded from platform-infra.yaml (PLATFORM_ROOT)."""
     caplog.set_level(logging.INFO)
     pc = isolated_config_with_yaml
 
@@ -122,18 +124,18 @@ def test_load_from_yaml(isolated_config_with_yaml, caplog: pytest.LogCaptureFixt
         if "[IMP:" in record.message and "Loaded" in record.message:
             found_yaml_log = True
             break
-    assert found_yaml_log, "Missing log: Loaded N defaults from platform-env.yaml"
+    assert found_yaml_log, "Missing log: Loaded N defaults from platform-infra.yaml"
 
 
 # endregion TEST_load_from_yaml
 
 
 # region TEST_missing_file_empty_semantics
-## @purpose  Verify ""-семантику (D2, T8) при отсутствии platform-env.yaml — НЕ литеральные fallback'и
+## @purpose  Verify ""-семантику (D2, T8) при отсутствии platform-infra.yaml — НЕ литеральные fallback'и
 ## @scenario Пустой PLATFORM_ROOT → все accessors возвращают "" (fail-visible)
 ## @complexity 1
 def test_missing_file_empty_semantics(isolated_config, caplog: pytest.LogCaptureFixture) -> None:
-    """Verify ""-семантику (D2): отсутствие platform-env.yaml → '', без литеральных fallback'ов."""
+    """Verify ""-семантику (D2): отсутствие platform-infra.yaml → '', без литеральных fallback'ов."""
     caplog.set_level(logging.INFO)
     pc = isolated_config
 
@@ -152,7 +154,7 @@ def test_missing_file_empty_semantics(isolated_config, caplog: pytest.LogCapture
         if "[IMP:" in record.message and "not found" in record.message:
             found_warning = True
             break
-    assert found_warning, "Missing WARNING log: platform-env.yaml not found"
+    assert found_warning, "Missing WARNING log: platform-infra.yaml not found"
 
 
 # endregion TEST_missing_file_empty_semantics
