@@ -1,39 +1,36 @@
-# GREP_SUMMARY: platform-secrets static-tests module-yaml service-execstart environmentfile healthcheck-contract install-sh
-# STRUCTURE: ▶ platform_root → ∋ core/modules/platform-secrets/** → ◇ test_module_yaml_schema ⊕ test_module_files_present ⊕ test_healthcheck_sources_lib ⊕ test_service_execstart_path_exists ⊕ test_agekey_environmentfile_format_contract → ⎋ pass|fail
+# GREP_SUMMARY: platform-secrets static-tests module-yaml service-execstart environmentfile install-sh
+# STRUCTURE: ▶ platform_root → ∋ core/modules/platform-secrets/** → ◇ test_module_yaml_schema ⊕ test_module_files_present ⊕ test_service_execstart_path_exists ⊕ test_agekey_environmentfile_format_contract → ⎋ pass|fail
 # @file test_platform_secrets_static.py
 # @purpose  Static validation tests for platform-secrets module: module.yaml schema,
-#           required file presence, healthcheck.sh contract, ExecStart path validity (B2),
+#           required file presence, ExecStart path validity (B2),
 #           and EnvironmentFile/install.sh format contract (B3).
 # @scope    Pure file I/O — no Docker, no subprocess, no external dependencies.
 #           Tests are lightweight and runnable in any environment (local, CI, pre-commit).
 # @invariants
 #   - All tests are marked @pytest.mark.static_audit
 #   - YAML parsing via yaml.safe_load() (stdlib compatible)
-#   - Healthcheck validation via text content analysis (sources lib/healthcheck.sh, has exit 0/1)
 #   - Service-file parsing via line-based .ini-style parsing
 #   - Cross-file invariant: install.sh format must match what platform-secrets.service expects
 #   - IMP:9 logging for all pass/fail assertions (LDD trajectory)
-# @rationale  Static validation catches regressions in module.yaml, healthcheck contract,
+# @rationale  Static validation catches regressions in module.yaml,
 #             and critical boot-chain paths before Docker deployment. Tests B2 and B3
 #             cover known regressions confirmed in live verification.
 # @changes    CREATED: 2026-07-15 | DevPlan 008 T5.1 platform-secrets audit
 
 # region MODULE_CONTRACT
 ## @purpose  Static validation for platform-secrets module: module.yaml schema,
-##           required file inventory, healthcheck contract, service ExecStart path (B2),
+##           required file inventory, service ExecStart path (B2),
 ##           and install.sh→service EnvironmentFile format contract (B3).
-## @scope    5 tests — all pure file I/O, no Docker or subprocess.
+## @scope    4 tests — all pure file I/O, no Docker or subprocess.
 ## @invariants
 ##   - Test 1: module.yaml has name="platform-secrets", install_type="system",
 ##             env_requires contains "AGE_SECRET_KEY"
 ##   - Test 2: All required module files exist (module.yaml, install.sh,
-##             healthcheck.sh, Makefile, platform-secrets.service)
-##   - Test 3: healthcheck.sh sources ../../lib/healthcheck.sh, has exit 0/1,
-##             and has set -euo pipefail
-##   - Test 4: platform-secrets.service ExecStart maps to /opt/platform/core/
+##             Makefile, platform-secrets.service)
+##   - Test 3: platform-secrets.service ExecStart maps to /opt/platform/core/
 ##             internal/secrets/decrypt-secrets.sh (NOT /opt/core/scripts/) —
 ##             RED before fix B2
-##   - Test 5: install.sh writes age key file in EnvironmentFile-compatible format
+##   - Test 4: install.sh writes age key file in EnvironmentFile-compatible format
 ##             (KEY=VALUE) — RED before fix B3
 ##   - All tests use @ldd_trajectory decorator for IMP:9 verification
 ## @rationale — Catches boot-chain regressions before systemd service installation.
@@ -61,15 +58,15 @@ MODULE_DIR: str = os.path.join(PLATFORM_ROOT, "core", "modules", "platform-secre
 
 MODULE_YAML_PATH: str = os.path.join(MODULE_DIR, "module.yaml")
 INSTALL_SH_PATH: str = os.path.join(MODULE_DIR, "install.sh")
-HEALTHCHECK_PATH: str = os.path.join(MODULE_DIR, "healthcheck.sh")
 MAKEFILE_PATH: str = os.path.join(MODULE_DIR, "Makefile")
 SERVICE_PATH: str = os.path.join(MODULE_DIR, "platform-secrets.service")
 
 # Expected files for the module (core/modules/platform-secrets/ inventory)
+# Волна 117 D14: healthcheck.sh удалён — system-модули НЕ содержат healthcheck.sh
+# (контракт core/modules/AGENTS.md); интерфейс healthcheck не зарегистрирован в module.yaml.
 REQUIRED_FILES: list[str] = [
     "module.yaml",
     "install.sh",
-    "healthcheck.sh",
     "Makefile",
     "platform-secrets.service",
 ]
@@ -144,7 +141,7 @@ def test_module_files_present(caplog: pytest.LogCaptureFixture) -> None:
     ## @purpose — Missing files indicate an incomplete checkout, merge conflict,
     ##            or accidental deletion. Each required file serves a specific
     ##            lifecycle role: module.yaml (registry), install.sh (bootstrap),
-    ##            healthcheck.sh (systemd monitoring), Makefile (lifecycle),
+    ##            Makefile (lifecycle),
     ##            platform-secrets.service (systemd unit for boot-time decrypt).
     ## @io — ⇥ caplog → ⎋ None (asserts all files exist)
     ## @complexity — O(N) where N = len(REQUIRED_FILES)
@@ -168,62 +165,7 @@ def test_module_files_present(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 3: Healthcheck contract
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.static_audit
-@ldd_trajectory
-def test_healthcheck_sources_lib(caplog: pytest.LogCaptureFixture) -> None:
-    """Verify platform-secrets/healthcheck.sh follows the module healthcheck contract.
-
-    ## @purpose — Per core/modules/AGENTS.md §Healthcheck-контракт: every healthcheck.sh
-    ##            must source ../../lib/healthcheck.sh (shared library), have proper
-    ##            exit codes (exit 0 = healthy, exit 1 = unhealthy), and strict bash mode.
-    ## @io — ⇥ caplog → ⎋ None (asserts contract compliance)
-    ## @complexity — O(1) — single file content check
-    ## @scenario — AC-3: Healthcheck script follows module contract
-    """
-    logger.info("[IMP:7][ps-healthcheck] Checking healthcheck.sh contract: %s", HEALTHCHECK_PATH)
-
-    assert os.path.isfile(HEALTHCHECK_PATH), (
-        f"[IMP:9][ps-healthcheck] FAIL: healthcheck.sh not found at {HEALTHCHECK_PATH}"
-    )
-
-    with open(HEALTHCHECK_PATH, encoding="utf-8") as fh:
-        content = fh.read()
-
-    # ── Check: sources lib/healthcheck.sh ──
-    sources_lib = "../../lib/healthcheck.sh" in content
-    logger.info("[IMP:7][ps-healthcheck] Sources lib/healthcheck.sh: %s", sources_lib)
-    assert sources_lib, (
-        "[IMP:9][ps-healthcheck] FAIL: healthcheck.sh does not source ../../lib/healthcheck.sh — "
-        "module contract violation (core/modules/AGENTS.md §Healthcheck-контракт)"
-    )
-
-    # ── Check: exit 0 (healthy path) ──
-    has_exit_0 = "exit 0" in content
-    logger.info("[IMP:7][ps-healthcheck] Has exit 0 (healthy): %s", has_exit_0)
-    assert has_exit_0, "[IMP:9][ps-healthcheck] FAIL: healthcheck.sh missing 'exit 0' — healthy path not defined"
-
-    # ── Check: exit 1 (unhealthy path) ──
-    has_exit_1 = "exit 1" in content
-    logger.info("[IMP:7][ps-healthcheck] Has exit 1 (unhealthy): %s", has_exit_1)
-    assert has_exit_1, "[IMP:9][ps-healthcheck] FAIL: healthcheck.sh missing 'exit 1' — unhealthy path not defined"
-
-    # ── Check: strict mode ──
-    has_strict = "set -euo pipefail" in content
-    logger.info("[IMP:7][ps-healthcheck] Has 'set -euo pipefail': %s", has_strict)
-    assert has_strict, (
-        "[IMP:9][ps-healthcheck] FAIL: healthcheck.sh missing 'set -euo pipefail' — "
-        "strict bash mode required for systemd module"
-    )
-
-    logger.info("[IMP:9][ps-healthcheck] PASS: Healthcheck contract satisfied")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Test 4: Service ExecStart path validity (B2 — RED until fix)
+# Test 3: Service ExecStart path validity (B2 — RED until fix)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -291,7 +233,7 @@ def test_service_execstart_path_exists(caplog: pytest.LogCaptureFixture) -> None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 5: EnvironmentFile / install.sh format contract (B3 — RED until fix)
+# Test 4: EnvironmentFile / install.sh format contract (B3 — RED until fix)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 

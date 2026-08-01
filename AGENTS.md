@@ -119,7 +119,6 @@
 <!-- GENERATED:START:glossary -->
 | ✅ | `_get_all_profiles` | Вывод COMPOSE_PROFILES |
 | ✅ | `adopt-project` | Адаптация существующего проекта |
-| ✅ | `audit` | Системный аудит |
 | ✅ | `backup` | Резервное копирование |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды |
 | ✅ | `check-dead-code` | Проверка мёртвого кода |

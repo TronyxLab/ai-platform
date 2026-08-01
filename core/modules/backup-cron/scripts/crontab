@@ -13,7 +13,6 @@
 ## ·   Cron schedule enforces strict order: 03:00 postgres (DB-first, most critical),
 ## ·   03:30 app-data (files), 04:00 cleanup, 05:00 S3 retention rotation,
 ## ·   Rev: if backup times grow beyond schedule window, decouple into separate systemd timers
-## ·   05:00 Sunday — restore verification.
 ## ·   Rationale: postgres is the slowest and most important backup; run it first
 ## ·   Rejected: randomize order for fairness — postgres always needs priority
 # endregion MODULE_CONTRACT
@@ -28,23 +27,14 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # [IMP:8][crontab] 03:30 UTC — application data backup
 30  3   *   *   *   root /usr/local/bin/backup-app-data.sh >> /var/log/platform/backup/app-data.log 2>&1
 
-# [IMP:8][crontab] 03:45 UTC — nightly image pre-warming (TASK-10)
-45  3   *   *   *   root /usr/local/bin/warm-images.sh >> /var/log/platform/backup/warm-images.log 2>&1
-
 # [IMP:8][crontab] 04:00 UTC — spool cleanup (7-day retention, 03 §3)
 0   4   *   *   *   root /usr/local/bin/backup-cleanup.sh >> /var/log/platform/backup/cleanup.log 2>&1
 
 # [IMP:8][crontab] 05:00 UTC — S3 retention rotation (7/28/90, phase 06 §3)
 0   5   *   *   *   root /usr/local/bin/retention.py >> /var/log/platform/backup/retention.log 2>&1
 
-# [IMP:8][crontab] 05:00 UTC Sunday — backup restore verification (stub, Wave 6.3)
-0   5   *   *   0   root /scripts/backup-restore-test.sh >> /var/log/platform/backup/restore-test.log 2>&1
-
 # ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Cron paths used /opt/core/ instead of /opt/platform/core/
 # · Symptom: cron jobs silently failed — /opt/core/ does not exist on VPS; only /opt/platform/ exists
 # · Root: path written before PLATFORM_ROOT canonicalization (core/lib/paths.sh → PLATFORM_ROOT=/opt/platform)
 # · Fix: replaced /opt/core/ → /opt/platform/core/ per paths.sh canonical root
 # · Prevention: gate test_gate_path_consistency scans repo for orphan /opt/core/ references
-
-# [IMP:8][crontab] 0 * * * * — Disk space monitor + docker prune (TASK-12)
-0   *   *   *   *   root /opt/platform/core/modules/backup-cron/scripts/disk-monitor.sh >> /var/log/platform/backup/disk-monitor.log 2>&1

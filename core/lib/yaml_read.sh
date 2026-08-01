@@ -8,8 +8,10 @@
 ## @modulecontract
 ## @purpose  Shell facade for NodeYaml Python CLI. All YAML reading logic
 ##           delegated to `python3 -m core.internal.shared.node_yaml`.
-##           Replaces inline `python3 -c "import yaml; ..."` patterns and
-##           the old yaml_query.py script with a single source of truth.
+##           Replaces inline embedded-Python YAML-parsing one-liners with a
+##           single source of truth (NodeYaml CLI).
+##           Separate tool: yaml_query.py handles arbitrary YAML dotted-keys;
+##           this facade targets node.yaml domain via NodeYaml CLI.
 ##           Provides two functions: yaml_get_field (single value or JSON
 ##           for complex types) and yaml_get_list (one item per line).
 ## @scope    — yaml_get_field(yaml_path, dotted_key): traverse YAML by dotted

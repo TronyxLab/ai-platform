@@ -41,11 +41,9 @@ esac; done
 [[ -z "${AGE_SECRET_KEY:-}" && -n "${SOPS_AGE_KEY:-}" ]] && export AGE_SECRET_KEY="$SOPS_AGE_KEY" && echo "[IMP:8][node-lifecycle][args] AGE_SECRET_KEY from SOPS_AGE_KEY" >&2
 source "${SCRIPT_DIR}/../../lib/paths.sh"; CORE_DIR="${PATHS_CORE_DIR}"
 source "${CORE_DIR}/lib/logging.sh"; source "${CORE_DIR}/lib/secrets.sh"
-STEP=0; STEP_ERRORS=(); __LOG_PREFIX="${MODE/init/bootstrap}"; __LOG_PREFIX="${__LOG_PREFIX/update/node-update}"
-step_start() { STEP=$((STEP+1)); log_step "$1" "START" "${2:-}"; }
-step_done() { log_step "$1" "DONE" "${2:-}"; }
-step_skip() { log_step "$1" "SKIP" "${2:-}"; }
-step_warn() { log_step "$1" "WARN" "${2:-}"; STEP_ERRORS+=("Step ${STEP}: $1 — $2"); }
+# Волна 117 D16: мёртвые определения step_start/step_done/step_skip/step_warn + STEP/STEP_ERRORS
+# удалены — ни один актуальный code path их не вызывает (main() делегирует в lifecycle/cli.py);
+# secrets.sh имеет собственные stub-определения с guard `declare -f step_start`.
 _delegate() { python3 "${SM_SCRIPT}" "$@"; }
 detect_tor_enabled(){
     # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · set -e убивал bootstrap при tor.enabled=false — [[ ]] && в конце функции = rc1; Fix: if-форма без else = rc0

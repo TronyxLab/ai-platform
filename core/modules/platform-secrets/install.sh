@@ -72,7 +72,8 @@ check_prerequisites() {
         #   something the module itself created. Auto-fix makes repeat-run = no-op for the
         #   permission check too.
         # · Rev: if a security audit requires explicit failure on wrong permissions, remove the
-        #   auto-fix and add a dedicated audit check in core/internal/audit/ instead.
+        #   auto-fix and add a dedicated audit entry via core/internal/shared/audit_logger.py
+        #   (каталог core/internal/audit/ удалён волной 117 D9 — make audit упразднён).
         local need_fix=false
         local owner_mode
         owner_mode="$(stat -c '%U:%G %a' "$age_key" 2>/dev/null || stat -f '%Su:%Sg %Lp' "$age_key" 2>/dev/null || echo "unknown")"

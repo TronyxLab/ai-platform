@@ -12,7 +12,7 @@
 ## @changes 2026-07-31 | DevPlan 097 close-out: doxygen-check target + gate step (zero-warnings guard)
 # endregion MODULE_CONTRACT
 
-.PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit audit secrets-unlock check-dead-code doxygen-check
+.PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit secrets-unlock check-dead-code doxygen-check
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration
@@ -336,12 +336,3 @@ check-exception-patterns:
 		| grep -v '# noqa: EXC' \
 		|| (echo "[IMP:9][gate] FAIL: bare except Exception found in non-CLI code" && exit 1)
 	@echo "[IMP:9][gate] All exception handlers are typed — OK"
-
-
-## audit: Run platform system audit
-##   Usage: make audit [NODE=<name>]
-##   Delegates to core/entrypoints/audit.sh
-audit:
-	@echo "[IMP:7][make][audit] Running platform audit..."
-	@$(_platform_root)/core/entrypoints/audit.sh $(NODE)
-	@echo "[IMP:9][make][audit] Audit complete"

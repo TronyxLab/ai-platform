@@ -1,7 +1,7 @@
 """
 Static tests for node-lifecycle.sh — NODE_YAML derivation, --dry-run, and flags contract.
-# GREP_SUMMARY: test node-lifecycle node-yaml node-resolver dry-run flags contract static-audit ssh-proxy remote-cmd secrets-env ssl-provision w4-e5 mode-dispatch checkpoint step-skip tor-conditional step-warn
-# STRUCTURE: ▶ read node-lifecycle.sh + node-update.sh → ◇ grep patterns → ⊕ assertions → ◇ W4-E5 edge-cases (mode-dispatch / checkpoint / TOR / step-warn / init-vs-update steps)
+# GREP_SUMMARY: test node-lifecycle node-yaml node-resolver dry-run flags contract static-audit ssh-proxy remote-cmd secrets-env ssl-provision w4-e5 mode-dispatch checkpoint step-skip tor-conditional
+# STRUCTURE: ▶ read node-lifecycle.sh + node-update.sh → ◇ grep patterns → ⊕ assertions → ◇ W4-E5 edge-cases (mode-dispatch / checkpoint / TOR / init-vs-update steps)
 # region MODULE_CONTRACT
 ## @purpose  Static analysis tests verifying:
 ##           T1 — update-mode has NODE_NAME fail-fast + NODE_YAML derivation via node-resolver.sh
@@ -9,7 +9,7 @@ Static tests for node-lifecycle.sh — NODE_YAML derivation, --dry-run, and flag
 ##           T2c — entrypoint↔internal flags contract (all node-update.sh flags accepted by node-lifecycle.sh)
 ##           W4-E5 (DevPlan 035 §7) — edge-case regression baseline for node-lifecycle.sh internals:
 ##             mode-dispatch (init vs update), checkpoint_step + per-step content-hash skip,
-##             TOR-conditional branch, step_warn error collection, init(18) vs update(6) step counts.
+##             TOR-conditional branch, init(18) vs update(6) step counts.
 ## @scope    Reads script files from disk, applies grep-based pattern assertions
 ## @invariants
 ##   - All tests use @pytest.mark.static_audit (not gate — these verify script internals)
@@ -743,60 +743,6 @@ def test_tor_conditional_branch(caplog) -> None:
 
 
 # endregion FUNC_test_tor_conditional_branch
-
-
-# region FUNC_test_step_warn_collects_errors
-## @purpose  W4-E5 edge-case: verify step_warn() appends to STEP_ERRORS array (error collection).
-##           When a step warns, the error is collected (not just logged) — final exit aggregates.
-##           This is the contract W4-E2 state_machine.py step-warn/error propagation must preserve.
-## @io       caplog → ⎋ None (pytest.fail if error collection absent)
-## @complexity 1 — static grep for STEP_ERRORS array + step_warn append
-## @invariants
-##   - STEP_ERRORS array is declared (collects step warnings/failures)
-##   - step_warn() appends to STEP_ERRORS (not just logs)
-##   - Final exit checks STEP_ERRORS length (non-empty → non-zero exit)
-
-
-@pytest.mark.static_audit
-def test_step_warn_collects_errors(caplog) -> None:
-    """step_warn error collection: STEP_ERRORS array aggregates failures for final exit."""
-    # 🧪 TRAP[TEST] · Regression: W4-E5 step_warn collects into STEP_ERRORS for exit aggregation
-    # · Scenario: N steps warn → STEP_ERRORS has N entries → final exit non-zero
-    # · Last fail: N/A (W4-E5 baseline)
-    # · Remove if: error collection moves to state_machine.py errors[] list
-    logger.info("[IMP:7][test_step_warn_collects_errors] START")
-    caplog.set_level(logging.DEBUG)
-
-    content = LIFECYCLE_SCRIPT.read_text()
-
-    # ── Check 1: STEP_ERRORS array declared ──
-    assert "STEP_ERRORS" in content, "FAIL: STEP_ERRORS array not declared"
-    # Declaration pattern: STEP_ERRORS=() or declare -a STEP_ERRORS
-    assert "STEP_ERRORS=()" in content or "declare -a STEP_ERRORS" in content, (
-        "FAIL: STEP_ERRORS must be declared as empty array"
-    )
-    logger.info("[IMP:8][test_step_warn_collects_errors] Check 1 PASS: STEP_ERRORS declared")
-
-    # ── Check 2: step_warn() appends to STEP_ERRORS ──
-    step_warn_start = content.find("step_warn()")
-    assert step_warn_start >= 0, "FAIL: step_warn() function not found"
-    step_warn_body = content[step_warn_start : step_warn_start + 300]
-    assert "STEP_ERRORS+=" in step_warn_body, "FAIL: step_warn() must append to STEP_ERRORS (not just log)"
-    logger.info("[IMP:8][test_step_warn_collects_errors] Check 2 PASS: step_warn appends to STEP_ERRORS")
-
-    # ── Check 3: state_machine.py has error/warning collection ──
-    # Error collection now happens in state_machine.py via state.errors and state.warnings lists.
-    sm_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "state_machine.py"
-    sm_content = sm_path.read_text()
-    assert "errors" in sm_content and "warnings" in sm_content, (
-        "FAIL: state_machine.py must have errors/warnings collection"
-    )
-    logger.info("[IMP:8][test_step_warn_collects_errors] Check 3 PASS: state_machine.py collects errors/warnings")
-
-    logger.info("[IMP:9][test_step_warn_collects_errors] ALL CHECKS PASS")
-
-
-# endregion FUNC_test_step_warn_collects_errors
 
 
 # region FUNC_test_init_has_more_steps_than_update

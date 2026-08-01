@@ -227,7 +227,8 @@ def main() -> int:
     ▶ ┌argv + env┐ → ◇ parse → ◇ send/get-me dispatch → ⎋ exit 0|1
 
     ## @purpose — CLI для shell-фасадов: send / get-me (Strangler 2026-07-31 — заменяет 3 inline
-    ##            python3 -c с sys.path.insert: notify-hook.sh, tor-proxy-healthcheck.sh, disk-monitor.sh).
+    ##            python3 -c с sys.path.insert: notify-hook.sh, tor-proxy-healthcheck.sh и
+    ##            disk-monitor.sh; последний удалён как мёртвый код волной 117 D10 — остались 2 фасада).
     ## @io — ⇥ argv + env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_URL|PROXY_URL)
     ##       → ⎋ exit 0|1
     ## @invariants — токен/чат читаются из env (никаких секретов в argv)

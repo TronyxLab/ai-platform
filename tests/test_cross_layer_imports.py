@@ -172,11 +172,6 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
         "контейнерный модуль; shared.telegram_notifier — by design (D1)",
     ),
     (
-        "core/modules/backup-cron/scripts/disk-monitor.sh",
-        44,
-        "контейнерный модуль; python3 -m shared.telegram_notifier — by design (D1)",
-    ),
-    (
         "core/modules/postgres/hooks/on-project-deploy.sh",
         47,
         "postgres-hook; python3 -m shared.node_yaml — by design (D1)",

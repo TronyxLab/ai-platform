@@ -966,3 +966,15 @@ removed:
     reason: "Волна 117 D5: см. test_skip_already_done_phases — grouped-phase selective skip удалён вместе с execute_grouped_phase."
     issue: "117-post-refactor-drift D5"
     approved_by: "@tronyx"
+
+  # ── Волна 117 (D14): platform-secrets healthcheck.sh удалён — system-модуль контракт ──
+  - nodeid: "tests/test_platform_secrets_static.py::test_healthcheck_sources_lib"
+    reason: "Волна 117 D14: core/modules/platform-secrets/healthcheck.sh УДАЛЁН — system-модули НЕ содержат healthcheck.sh (контракт core/modules/AGENTS.md); интерфейс healthcheck не зарегистрирован в module.yaml (interfaces: [install]) → invoke_module_interface молча SKIP'ал. Тест консервировал удалённый файл."
+    issue: "117-post-refactor-drift D14"
+    approved_by: "@tronyx"
+
+  # ── Волна 117 (D16): node-lifecycle.sh step_* мёртвые определения удалены ──
+  - nodeid: "tests/test_node_lifecycle_static.py::test_step_warn_collects_errors"
+    reason: "Волна 117 D16: step_start/step_done/step_skip/step_warn + STEP/STEP_ERRORS удалены из node-lifecycle.sh (0 вызовов в актуальных code paths — main() делегирует в lifecycle/cli.py). Условие TRAP[TEST] «Remove if: error collection moves to state_machine.py errors[] list» выполнено — коллекция errors/warnings подтверждена в state_machine.py (Check 3 теста)."
+    issue: "117-post-refactor-drift D16"
+    approved_by: "@tronyx"

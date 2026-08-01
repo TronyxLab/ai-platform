@@ -117,9 +117,9 @@ orphan-реконсиляция и severity-based exit code {0,1,2} — в `depl
 
 ### Типы модулей (из node.yaml)
 - **system-модули** — `invoke_module_interface <name> install` (install.sh в директории модуля),
-  затем healthcheck liveness (best-effort). Примеры: nginx (системная установка)
+  затем healthcheck liveness (best-effort). Примеры: platform-secrets (systemd oneshot)
 - **docker-модули** — Docker Compose через `deploy_docker_module()` / `deploy_docker_group()`.
-  Примеры: postgres, redis, litellm, langfuse, hermes-agent, status-page, backup-cron
+  Примеры: postgres, redis, litellm, langfuse, hermes-agent, status-page, backup-cron, nginx (docker-модуль)
 
 ### Режимы деплоя (feature flag `DEPLOY_PARALLEL`, default=false)
 - **Последовательный** (`DEPLOY_PARALLEL=false`, обратная совместимость): for-loop по enabled-модулям:

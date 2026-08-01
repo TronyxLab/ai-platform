@@ -119,12 +119,6 @@ validate:
   signature: make lint
   operation_ru: Линтинг
   description: shellcheck + yamllint + pytest-lint
-- make_target: audit
-  mechanism: shell-script
-  delegates_to: core/entrypoints/audit.sh → core/internal/audit/audit.sh
-  signature: make audit [NODE=...]
-  operation_ru: Системный аудит
-  description: System audit of platform (local or remote node)
 - make_target: check-file-lines
   mechanism: shell-script
   delegates_to: core/entrypoints/check-file-lines.sh
@@ -775,7 +769,6 @@ shared_modules:
   - agent_watchdog.py
   - state_machine.py
   - notify-hook.sh
-  - disk-monitor.sh
   - tor-proxy-healthcheck.sh
 - module: docker_auth
   path: core/internal/shared/docker_auth.py
@@ -786,7 +779,6 @@ shared_modules:
 allowed_verbs:
 - _get_all_profiles
 - adopt-project
-- audit
 - backup
 - bootstrap-node
 - check-dead-code

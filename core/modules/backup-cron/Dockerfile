@@ -61,7 +61,6 @@ COPY scripts/backup-postgres.sh  /usr/local/bin/backup-postgres.sh
 COPY scripts/backup-app-data.sh  /usr/local/bin/backup-app-data.sh
 COPY scripts/backup-cleanup.sh   /usr/local/bin/backup-cleanup.sh
 COPY scripts/upload-s3.sh        /usr/local/bin/upload-s3.sh
-COPY scripts/warm-images.sh      /usr/local/bin/warm-images.sh
 COPY scripts/upload.py           /usr/local/bin/upload.py
 COPY scripts/backup_config.py    /usr/local/bin/backup_config.py
 COPY scripts/retention.py        /usr/local/bin/retention.py
@@ -82,7 +81,6 @@ RUN chmod 0644 /etc/cron.d/platform-backup && \
       /usr/local/bin/backup-cleanup.sh \
       /usr/local/bin/upload-s3.sh \
       /usr/local/bin/healthcheck.sh \
-      /usr/local/bin/warm-images.sh \
       /usr/local/bin/ready-check.sh
 
 # [IMP:8][backup-cron][Dockerfile] No EXPOSE — backup-net internal only

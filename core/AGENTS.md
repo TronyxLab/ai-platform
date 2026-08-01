@@ -33,7 +33,6 @@
 | `make validate-modules` | Валидация module.yaml | make validate-modules | core/internal/scripts/validate_module_yaml.py --all |
 | `make validate` | Schema-валидация | make validate [FILES=...] | core/entrypoints/validate.sh → core/internal/validate/validate.sh → core/internal/validate/validate_orchestrator.py |
 | `make lint` | Линтинг | make lint | core/entrypoints/validate.sh --lint → core/internal/validate/validate.sh → core/internal/validate/validate_orchestrator.py |
-| `make audit` | Системный аудит | make audit [NODE=...] | core/entrypoints/audit.sh → core/internal/audit/audit.sh |
 | `make check-file-lines` | Проверка длины файлов | make check-file-lines [MAX_LINES=500] | core/entrypoints/check-file-lines.sh |
 | `make scripts-audit` | Аудит регистрации скриптов | make scripts-audit | core/internal/scripts-audit.sh |
 | `make check-dead-code` | Проверка мёртвого кода | make check-dead-code | core/entrypoints/check-dead-code.sh |
