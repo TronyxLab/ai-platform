@@ -14,8 +14,6 @@
 
 import logging
 
-import pytest
-
 from core.internal.shared import contracts
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,

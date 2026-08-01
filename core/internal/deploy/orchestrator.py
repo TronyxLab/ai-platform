@@ -52,6 +52,7 @@ from core.internal.shared.docker_compose import (
 from core.internal.shared.docker_compose import (
     docker_compose_ps as _shared_docker_compose_ps,
 )
+from core.internal.shared.exceptions import PlatformError
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
 from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT
@@ -831,8 +832,11 @@ class DeployOrchestrator:
                 project_dir=project_dir,
             )
             return result.success
-        except SystemExit:
-            logger.error("[IMP:10][DeployOrchestrator][deploy_compose] Deploy engine exited (first deploy failure)")
+        except PlatformError as e:
+            # T3.1 (DevPlan 116 B4): _handle_first_deploy → PlatformFatalError вместо SystemExit
+            logger.error(
+                "[IMP:10][DeployOrchestrator][deploy_compose] Deploy engine error (exit=%d): %s", e.exit_code, e
+            )
             return False
         except (OSError, subprocess.SubprocessError) as e:
             logger.error("[IMP:10][DeployOrchestrator][deploy_compose] Failed: %s", e)
@@ -871,8 +875,9 @@ class DeployOrchestrator:
                 project_dir=project_dir,
             )
             return result.success
-        except SystemExit:
-            logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Engine exited during rollback")
+        except PlatformError as e:
+            # T3.1 (DevPlan 116 B4): _handle_first_deploy → PlatformFatalError вместо SystemExit
+            logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Engine error (exit=%d): %s", e.exit_code, e)
             return False
         except (OSError, subprocess.SubprocessError) as e:
             logger.error("[IMP:10][DeployOrchestrator][rollback_compose] Failed: %s", e)

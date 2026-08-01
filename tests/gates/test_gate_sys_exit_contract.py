@@ -39,7 +39,12 @@ def _is_sys_exit_call(node: ast.Call, imported_sys_exit: set[int]) -> bool:
     ▶ ┌call node┐ → ◇ func Attribute sys.exit? → ◇ Name exit ∈ imported_sys_exit (id-узлов)? → ⎋ bool
     """
     func = node.func
-    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "sys" and func.attr == "exit":
+    if (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "sys"
+        and func.attr == "exit"
+    ):
         return True
     return isinstance(func, ast.Name) and func.id == "exit" and id(func) in imported_sys_exit
 

@@ -47,7 +47,9 @@ def test_exit_codes_documented_in_core_agents(caplog) -> None:
     missing: list[str] = []
     for code, cls in _EXIT_CODE_CONTRACT:
         row_found = code in text and cls in text
-        logger.info("[IMP:8][exit-codes][%s] code=%s class=%s → %s", "ok" if row_found else "MISSING", code, cls, row_found)
+        logger.info(
+            "[IMP:8][exit-codes][%s] code=%s class=%s → %s", "ok" if row_found else "MISSING", code, cls, row_found
+        )
         if not row_found:
             missing.append(f"{code} → {cls}")
 

@@ -105,4 +105,6 @@ def test_no_bare_valueerror_runtimeerror(caplog) -> None:
             " ConfigParseError, PlatformFatalError — см. DevPlan 116 B4 T2 маппинг."
         )
 
-    logger.info("[IMP:9][no-bare-raise][done] PASS: 0 bare raise ValueError/RuntimeError (allowlist=%d)", len(_ALLOWLIST))
+    logger.info(
+        "[IMP:9][no-bare-raise][done] PASS: 0 bare raise ValueError/RuntimeError (allowlist=%d)", len(_ALLOWLIST)
+    )

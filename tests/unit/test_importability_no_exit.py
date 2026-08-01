@@ -20,7 +20,7 @@ import logging
 
 import pytest
 
-from core.internal.shared.exceptions import PlatformError, PlatformFatalError
+from core.internal.shared.exceptions import PlatformFatalError
 from tests.conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -63,20 +63,17 @@ def test_import_library_modules_no_system_exit(caplog) -> None:
 # 🧪 TRAP[TEST] · Regression · provision_networks без docker → PlatformFatalError (DevPlan 116 B4 T3.2/D4)
 def test_provision_networks_no_docker_raises_platform_fatal(caplog, tmp_path, monkeypatch) -> None:
     """provision_networks без docker → PlatformFatalError (exit_code 10), НЕ SystemExit."""
-    from core.internal.provisioner import ProvisionResult, provision_networks
+    from core.internal.provisioner import provision_networks
 
     # docker недоступен: shutil.which("docker") → None (D4: docker-unavailable = Fatal 10)
     monkeypatch.setattr("shutil.which", lambda name: None if name == "docker" else "/usr/bin/" + name)
 
     platform_env = tmp_path / "platform-env.yaml"
-    platform_env.write_text(
-        "networks:\n"
-        "  - name: test-net\n"
-        "    driver: bridge\n"
-    )
+    platform_env.write_text("networks:\n  - name: test-net\n    driver: bridge\n")
 
     class _FakeEnv:
-        networks = [type("Net", (), {"name": "test-net", "driver": "bridge"})()]
+        def __init__(self) -> None:
+            self.networks = [type("Net", (), {"name": "test-net", "driver": "bridge"})()]
 
     with pytest.raises(PlatformFatalError) as excinfo:
         provision_networks(_FakeEnv(), dry_run=False)
