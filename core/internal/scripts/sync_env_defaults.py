@@ -81,42 +81,66 @@ def load_secret_defs(secret_defs_path: Path) -> dict[str, dict[str, str]]:
 # endregion FUNC_load_secret_defs
 
 
-# region FUNC_generate_env_example
-def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> str:
-    """Generate complete .env.example content from SoT data."""
-    sd = secret_defs  # alias for brevity
+# ── Module-level helpers (extracted from generate_env_example closures, DevPlan 117 G T57) ──
 
-    # Canonical platform root — matches gate test allowlist.
-    # Used as base for deployment path defaults.
-    _platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
 
-    def get_val(name: str, default: str = "") -> str:
-        return env_defaults.get(name, default)
+# region HELPER__get_env_val
+def _get_env_val(env_defaults: dict[str, str], name: str, default: str = "") -> str:
+    """Lookup env_defaults with fallback (module-level version of get_val closure)."""
+    return env_defaults.get(name, default)
 
-    def get_val_required(name: str) -> str:
-        """Fail-fast lookup — no silent fallback for SoT keys (DevPlan 116 invariant 7).
 
-        ## @purpose  Keys that MUST exist in platform-env.yaml env_defaults (e.g.
-        ##            PLATFORM_DOMAIN, COMPOSE_PROFILES) raise instead of silently
-        ##            emitting an empty value — eliminates «gate зелёный, система врёт».
-        ## @io        ⇥ name: str → ⎋ str value ⚡ raise KeyError if absent
-        ## @complexity O(1)
-        """
-        if name not in env_defaults:
-            raise KeyError(
-                f"[IMP:10][sync_env] Missing required env_defaults key: {name} — "
-                "run `make generate-platform-env` (SoT: core/platform-infra.yaml env_defaults)"
-            )
-        return str(env_defaults[name])
+# endregion HELPER__get_env_val
 
-    def sd_get(name: str, field: str) -> str:
-        entry = sd.get(name, {})
-        val = entry.get(field, "")
-        return val if val else ""
 
+# region HELPER__get_val_required
+def _get_val_required(env_defaults: dict[str, str], name: str) -> str:
+    """Fail-fast lookup — no silent fallback for SoT keys (DevPlan 116 invariant 7).
+
+    ## @purpose  Keys that MUST exist in platform-env.yaml env_defaults (e.g.
+    ##            PLATFORM_DOMAIN, COMPOSE_PROFILES) raise instead of silently
+    ##            emitting an empty value — eliminates «gate зелёный, система врёт».
+    ## @io        ⇥ name: str → ⎋ str value ⚡ raise KeyError if absent
+    ## @complexity O(1)
+    """
+    if name not in env_defaults:
+        raise KeyError(
+            f"[IMP:10][sync_env] Missing required env_defaults key: {name} — "
+            "run `make generate-platform-env` (SoT: core/platform-infra.yaml env_defaults)"
+        )
+    return str(env_defaults[name])
+
+
+# endregion HELPER__get_val_required
+
+
+# region HELPER__get_secret_def_field
+def _get_secret_def_field(secret_defs: dict[str, dict[str, str]], name: str, field: str) -> str:
+    """Lookup a field from secret-definitions (module-level version of sd_get closure)."""
+    entry = secret_defs.get(name, {})
+    val = entry.get(field, "")
+    return val if val else ""
+
+
+# endregion HELPER__get_secret_def_field
+
+
+# region HELPER__get_platform_root
+def _get_platform_root() -> str:
+    """Canonical platform root — matches gate test allowlist; base for deployment path defaults."""
+    return os.environ.get("PLATFORM_ROOT", "/opt/platform")
+
+
+# endregion HELPER__get_platform_root
+
+
+# ── Section builders (DevPlan 117 G T57 — generate_env_example decomposition) ──
+
+
+# region SECTION_header
+def _section_header() -> list[str]:
+    """Header + MODULE_CONTRACT docstring."""
     lines: list[str] = []
-
-    # ── Header ──
     lines.append(
         "# GREP_SUMMARY: env-example docker-compose variables grouped-by-module platform context platform-secrets postgres redis clickhouse minio s3 litellm langfuse hermes telegram nginx webnames ssl dns proxy monitoring compose-profiles misc"
     )
@@ -177,25 +201,44 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("#    Регенерация: make sync-env-defaults")
     lines.append("# ══════════════════════════════════════════════════════════════════════════════")
     lines.append("")
+    return lines
 
-    # ── Platform / Context ──
+
+# endregion SECTION_header
+
+
+# region SECTION_platform_context
+def _section_platform_context(env_defaults: dict[str, str]) -> list[str]:
+    """Platform / Context section."""
+    lines: list[str] = []
     lines.append("# ── Platform / Context ─────────────────────────────────────────────────────")
     lines.append("# Контекст (GitHub org) для изоляции окружения")
-    lines.append("CONTEXT=" + get_val("CONTEXT", "test"))
+    lines.append("CONTEXT=" + _get_env_val(env_defaults, "CONTEXT", "test"))
     lines.append("# Имя ноды (для деплоя и алертов)")
-    lines.append("NODE_NAME=" + get_val("NODE_NAME", "test-node"))
+    lines.append("NODE_NAME=" + _get_env_val(env_defaults, "NODE_NAME", "test-node"))
     lines.append("# PLATFORM_DOMAIN — домен платформы для dev-сертификатов и vhost-роутинга.")
     lines.append("# Базовое значение: ai-platform.local. При загруженном контексте (context = GitHub org):")
     lines.append("#   PLATFORM_DOMAIN=<context>.local, SAN дополнительно включает *.${PLATFORM_DOMAIN}.")
     lines.append("# Сертификаты генерируются автоматически через dev_cert_generator.py (make dev-certs).")
     lines.append("# @domain-scheme DevPlan 012 — legacy-тестовый домен упразднён.")
-    lines.append("PLATFORM_DOMAIN=" + get_val_required("PLATFORM_DOMAIN"))
+    lines.append("PLATFORM_DOMAIN=" + _get_val_required(env_defaults, "PLATFORM_DOMAIN"))
     lines.append("# ⚠️ Pin to a specific version — avoid float tag (W7 fix).")
     lines.append("# Update this tag when you want to use a newer context overlay image.")
     lines.append("# Available tags: ghcr.io/<context>/hermes-agent-context")
-    lines.append("CONTEXT_IMAGE=" + get_val("CONTEXT_IMAGE", "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1"))
+    lines.append(
+        "CONTEXT_IMAGE="
+        + _get_env_val(env_defaults, "CONTEXT_IMAGE", "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1")
+    )
+    return lines
 
-    # ── Platform secrets ──
+
+# endregion SECTION_platform_context
+
+
+# region SECTION_platform_secrets
+def _section_platform_secrets(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
+    """Platform secrets section (master credentials, AGE key)."""
+    lines: list[str] = []
     lines.append("# ── Platform secrets ───────────────────────────────────────────────────────")
     lines.append(
         "# Master credentials — unified auth for all platform services (status-page, Prometheus, Loki, Grafana, Langfuse, Hermes)."
@@ -204,7 +247,7 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
         "# Overridable per-service via service-specific env var (e.g. GF_SECURITY_ADMIN_PASSWORD overrides PLATFORM_MASTER_PASSWORD for Grafana)."
     )
     lines.append("# ⚠️ NOT for production — set via SOPS/age encrypted secrets on VPS.")
-    constraint_master_pwd = sd_get("PLATFORM_MASTER_PASSWORD", "charset")
+    constraint_master_pwd = _get_secret_def_field(secret_defs, "PLATFORM_MASTER_PASSWORD", "charset")
     if constraint_master_pwd:
         lines.append("# ⚠️ CONSTRAINT: PLATFORM_MASTER_PASSWORD must match " + constraint_master_pwd)
     lines.append("# Unified auth: все сервис-пароли (HERMES_DASHBOARD_PASSWORD, GF_SECURITY_ADMIN_PASSWORD,")
@@ -212,133 +255,212 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# Сервис-пользователи (HERMES_DASHBOARD_USERNAME, GF_SECURITY_ADMIN_USER, LANGFUSE_INIT_USER_EMAIL)")
     lines.append("# инициализируются из PLATFORM_MASTER_EMAIL (admin@PLATFORM_DOMAIN) через secrets-init.sh.")
     lines.append("# Любая переменная может быть переопределена явно — operator-defined значения сохраняются.")
-    gen_master_pwd = sd_get("PLATFORM_MASTER_PASSWORD", "gen_command")
+    gen_master_pwd = _get_secret_def_field(secret_defs, "PLATFORM_MASTER_PASSWORD", "gen_command")
     if gen_master_pwd:
         lines.append("# Генерация: " + gen_master_pwd)
     # Fail-fast: PLATFORM_MASTER_EMAIL всегда в env_defaults (ci_default из secret-definitions.yaml).
     # Legacy-fallback admin@test-домен удалён (DevPlan 116 T3, U-16; parity-гейт domain_parity).
-    lines.append("PLATFORM_MASTER_EMAIL=" + get_val_required("PLATFORM_MASTER_EMAIL"))
-    lines.append("PLATFORM_MASTER_PASSWORD=" + get_val("PLATFORM_MASTER_PASSWORD", "test-master-password"))
+    lines.append("PLATFORM_MASTER_EMAIL=" + _get_val_required(env_defaults, "PLATFORM_MASTER_EMAIL"))
+    lines.append(
+        "PLATFORM_MASTER_PASSWORD=" + _get_env_val(env_defaults, "PLATFORM_MASTER_PASSWORD", "test-master-password")
+    )
     lines.append("")
     lines.append("# AGE_SECRET_KEY — master age-key для SOPS-расшифровки platform-secrets.")
     lines.append("# ⚠️ REQUIRED (env_requires of platform-secrets module) — без него systemd oneshot fails-closed.")
     lines.append("# Генерация: age-keygen -o keys.txt → извлечь публичный/приватный ключ")
     lines.append("# ⚠️ NOT for production .env — только SOPS-encrypted secrets на VPS.")
-    constraint_age = sd_get("AGE_SECRET_KEY", "charset")
+    constraint_age = _get_secret_def_field(secret_defs, "AGE_SECRET_KEY", "charset")
     if constraint_age:
         lines.append("# ⚠️ CONSTRAINT: AGE_SECRET_KEY must match " + constraint_age)
     lines.append(
-        "AGE_SECRET_KEY=" + get_val("AGE_SECRET_KEY", "AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        "AGE_SECRET_KEY="
+        + _get_env_val(env_defaults, "AGE_SECRET_KEY", "AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     )
+    return lines
 
-    # ── Postgres ──
+
+# endregion SECTION_platform_secrets
+
+
+# region SECTION_postgres
+def _section_postgres(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
+    """Postgres (shared-db) section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Postgres (shared-db) ───────────────────────────────────────────────────")
-    lines.append("POSTGRES_USER=" + get_val("POSTGRES_USER", "postgres"))
-    constraint_pg_pwd = sd_get("POSTGRES_PASSWORD", "charset")
+    lines.append("POSTGRES_USER=" + _get_env_val(env_defaults, "POSTGRES_USER", "postgres"))
+    constraint_pg_pwd = _get_secret_def_field(secret_defs, "POSTGRES_PASSWORD", "charset")
     if constraint_pg_pwd:
         lines.append("# ⚠️ CONSTRAINT: POSTGRES_PASSWORD must match " + constraint_pg_pwd)
     lines.append("# Пароль встраивается в DATABASE_URL/DATABASE_URLS без URL-encoding. Генерация: openssl rand -hex 32")
-    lines.append("POSTGRES_PASSWORD=" + get_val("POSTGRES_PASSWORD", "test-pg-pwd"))
-    lines.append("POSTGRES_DB=" + get_val("POSTGRES_DB", "platform"))
+    lines.append("POSTGRES_PASSWORD=" + _get_env_val(env_defaults, "POSTGRES_PASSWORD", "test-pg-pwd"))
+    lines.append("POSTGRES_DB=" + _get_env_val(env_defaults, "POSTGRES_DB", "platform"))
     lines.append("# Postgres через pgbouncer (default: 6432)")
-    lines.append("POSTGRES_PORT=" + str(get_val("POSTGRES_PORT", "6432")))
-    lines.append("POSTGRES_HOST=" + get_val("POSTGRES_HOST", "pgbouncer"))
+    lines.append("POSTGRES_PORT=" + str(_get_env_val(env_defaults, "POSTGRES_PORT", "6432")))
+    lines.append("POSTGRES_HOST=" + _get_env_val(env_defaults, "POSTGRES_HOST", "pgbouncer"))
+    return lines
 
-    # ── PgBouncer ──
+
+# endregion SECTION_postgres
+
+
+# region SECTION_pgbouncer
+def _section_pgbouncer(env_defaults: dict[str, str]) -> list[str]:
+    """PgBouncer section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── PgBouncer (connection pooler for Postgres) ─────────────────────────────")
-    lines.append("PGBOUNCER_IMAGE=" + get_val("PGBOUNCER_IMAGE", "edoburu/pgbouncer:v1.25.2-p0"))
+    lines.append("PGBOUNCER_IMAGE=" + _get_env_val(env_defaults, "PGBOUNCER_IMAGE", "edoburu/pgbouncer:v1.25.2-p0"))
+    return lines
 
-    # ── Redis ──
+
+# endregion SECTION_pgbouncer
+
+
+# region SECTION_redis
+def _section_redis(env_defaults: dict[str, str]) -> list[str]:
+    """Redis section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Redis (cache) ──────────────────────────────────────────────────────────")
-    lines.append("REDIS_PORT=" + str(get_val("REDIS_PORT", "6379")))
-    lines.append("REDIS_HOST=" + get_val("REDIS_HOST", "redis"))
+    lines.append("REDIS_PORT=" + str(_get_env_val(env_defaults, "REDIS_PORT", "6379")))
+    lines.append("REDIS_HOST=" + _get_env_val(env_defaults, "REDIS_HOST", "redis"))
+    return lines
 
-    # ── ClickHouse ──
+
+# endregion SECTION_redis
+
+
+# region SECTION_clickhouse
+def _section_clickhouse(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
+    """ClickHouse section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── ClickHouse (Analytical DB) ─────────────────────────────────────────────")
-    lines.append("CLICKHOUSE_URL=" + get_val("CLICKHOUSE_URL", "http://clickhouse:8123"))
-    lines.append("CLICKHOUSE_USER=" + get_val("CLICKHOUSE_USER", "default"))
-    constraint_ch_pwd = sd_get("CLICKHOUSE_PASSWORD", "charset")
+    lines.append("CLICKHOUSE_URL=" + _get_env_val(env_defaults, "CLICKHOUSE_URL", "http://clickhouse:8123"))
+    lines.append("CLICKHOUSE_USER=" + _get_env_val(env_defaults, "CLICKHOUSE_USER", "default"))
+    constraint_ch_pwd = _get_secret_def_field(secret_defs, "CLICKHOUSE_PASSWORD", "charset")
     if constraint_ch_pwd:
         lines.append("# ⚠️ CONSTRAINT: CLICKHOUSE_PASSWORD must match " + constraint_ch_pwd)
     lines.append("# Пароль встраивается в CLICKHOUSE_MIGRATION_URL без URL-encoding. Генерация: openssl rand -hex 32")
-    lines.append("CLICKHOUSE_PASSWORD=" + get_val("CLICKHOUSE_PASSWORD", "test-clickhouse-pwd-not-for-prod"))
-    lines.append("CLICKHOUSE_HTTP_PORT=" + str(get_val("CLICKHOUSE_HTTP_PORT", "8123")))
-    lines.append("CLICKHOUSE_NATIVE_PORT=" + str(get_val("CLICKHOUSE_NATIVE_PORT", "9000")))
+    lines.append(
+        "CLICKHOUSE_PASSWORD=" + _get_env_val(env_defaults, "CLICKHOUSE_PASSWORD", "test-clickhouse-pwd-not-for-prod")
+    )
+    lines.append("CLICKHOUSE_HTTP_PORT=" + str(_get_env_val(env_defaults, "CLICKHOUSE_HTTP_PORT", "8123")))
+    lines.append("CLICKHOUSE_NATIVE_PORT=" + str(_get_env_val(env_defaults, "CLICKHOUSE_NATIVE_PORT", "9000")))
+    return lines
 
-    # ── MinIO ──
+
+# endregion SECTION_clickhouse
+
+
+# region SECTION_minio
+def _section_minio(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
+    """MinIO (local S3, dev) section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── MinIO (local S3, dev) ────────────────────────────────────────────────")
-    lines.append("MINIO_PORT=" + str(get_val("MINIO_PORT", "9000")))
-    lines.append("MINIO_CONSOLE_PORT=" + str(get_val("MINIO_CONSOLE_PORT", "9001")))
+    lines.append("MINIO_PORT=" + str(_get_env_val(env_defaults, "MINIO_PORT", "9000")))
+    lines.append("MINIO_CONSOLE_PORT=" + str(_get_env_val(env_defaults, "MINIO_CONSOLE_PORT", "9001")))
     lines.append("# ⚠️ REQUIRED (env_requires of minio module) — no defaults in production; set via SOPS secrets")
-    constraint_minio_user = sd_get("MINIO_ROOT_USER", "charset")
+    constraint_minio_user = _get_secret_def_field(secret_defs, "MINIO_ROOT_USER", "charset")
     if constraint_minio_user:
         lines.append("# ⚠️ CONSTRAINT: MINIO_ROOT_USER must match " + constraint_minio_user)
-    lines.append("MINIO_ROOT_USER=" + get_val("MINIO_ROOT_USER", "minioadmin"))
+    lines.append("MINIO_ROOT_USER=" + _get_env_val(env_defaults, "MINIO_ROOT_USER", "minioadmin"))
     lines.append("# ⚠️ REQUIRED (env_requires of minio module) — no defaults in production; set via SOPS secrets")
-    constraint_minio_pwd = sd_get("MINIO_ROOT_PASSWORD", "charset")
+    constraint_minio_pwd = _get_secret_def_field(secret_defs, "MINIO_ROOT_PASSWORD", "charset")
     if constraint_minio_pwd:
         lines.append("# ⚠️ CONSTRAINT: MINIO_ROOT_PASSWORD must match " + constraint_minio_pwd)
-    lines.append("MINIO_ROOT_PASSWORD=" + get_val("MINIO_ROOT_PASSWORD", "minioadmin"))
+    lines.append("MINIO_ROOT_PASSWORD=" + _get_env_val(env_defaults, "MINIO_ROOT_PASSWORD", "minioadmin"))
+    return lines
 
-    # ── S3 / Backup ──
+
+# endregion SECTION_minio
+
+
+# region SECTION_s3_backup
+def _section_s3_backup(env_defaults: dict[str, str]) -> list[str]:
+    """S3 / Backup section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── S3 / Backup ──────────────────────────────────────────────────────────────")
-    lines.append("S3_ENDPOINT_URL=" + get_val("S3_ENDPOINT_URL", "https://s3.timeweb.cloud"))
-    lines.append("S3_REGION=" + get_val("S3_REGION", "ru-1"))
-    lines.append("S3_PREFIX=" + get_val("S3_PREFIX", "platform/backups"))
-    lines.append("S3_BUCKET=" + get_val("S3_BUCKET", "test-bucket"))
-    lines.append("S3_ACCESS_KEY=" + get_val("S3_ACCESS_KEY", "test-access-key"))
-    lines.append("S3_SECRET_KEY=" + get_val("S3_SECRET_KEY", "test-secret-key"))
+    lines.append("S3_ENDPOINT_URL=" + _get_env_val(env_defaults, "S3_ENDPOINT_URL", "https://s3.timeweb.cloud"))
+    lines.append("S3_REGION=" + _get_env_val(env_defaults, "S3_REGION", "ru-1"))
+    lines.append("S3_PREFIX=" + _get_env_val(env_defaults, "S3_PREFIX", "platform/backups"))
+    lines.append("S3_BUCKET=" + _get_env_val(env_defaults, "S3_BUCKET", "test-bucket"))
+    lines.append("S3_ACCESS_KEY=" + _get_env_val(env_defaults, "S3_ACCESS_KEY", "test-access-key"))
+    lines.append("S3_SECRET_KEY=" + _get_env_val(env_defaults, "S3_SECRET_KEY", "test-secret-key"))
     # Дублирующие ключи для upload-s3.sh (AWS SDK совместимость) — значения из SoT
     # (platform-infra.yaml env_defaults, литералы ${S3_ACCESS_KEY}/${S3_SECRET_KEY} —
     # compose резолвит алиасы через S3_*). DevPlan 116 T3 (U-17): генератор без хардкода.
-    lines.append("AWS_ACCESS_KEY_ID=" + get_val("AWS_ACCESS_KEY_ID"))
-    lines.append("AWS_SECRET_ACCESS_KEY=" + get_val("AWS_SECRET_ACCESS_KEY"))
-    lines.append("PLATFORM_CONTEXT=" + get_val("PLATFORM_CONTEXT", "personal"))
+    lines.append("AWS_ACCESS_KEY_ID=" + _get_env_val(env_defaults, "AWS_ACCESS_KEY_ID"))
+    lines.append("AWS_SECRET_ACCESS_KEY=" + _get_env_val(env_defaults, "AWS_SECRET_ACCESS_KEY"))
+    lines.append("PLATFORM_CONTEXT=" + _get_env_val(env_defaults, "PLATFORM_CONTEXT", "personal"))
+    return lines
 
-    # ── LLM Provider API Keys ──
+
+# endregion SECTION_s3_backup
+
+
+# region SECTION_llm_provider
+def _section_llm_provider(env_defaults: dict[str, str]) -> list[str]:
+    """LLM Provider API Key section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── LLM Provider API Key ───────────────────────────────────────────────────")
-    lines.append("DEEPSEEK_API_KEY=" + get_val("DEEPSEEK_API_KEY", "sk-placeholder-key-for-ci"))
+    lines.append("DEEPSEEK_API_KEY=" + _get_env_val(env_defaults, "DEEPSEEK_API_KEY", "sk-placeholder-key-for-ci"))
+    return lines
 
-    # ── LiteLLM ──
+
+# endregion SECTION_llm_provider
+
+
+# region SECTION_litellm
+def _section_litellm(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
+    """LiteLLM (LLM Gateway) section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── LiteLLM (LLM Gateway) ────────────────────────────────────────────────────")
     lines.append("# ⚠️ LITELLM_MASTER_KEY — ОБЯЗАТЕЛЕН для production. Без него LiteLLM стартует")
     lines.append("#    но все API-запросы требующие авторизации будут отклонены (401).")
-    gen_litellm = sd_get("LITELLM_MASTER_KEY", "gen_command")
+    gen_litellm = _get_secret_def_field(secret_defs, "LITELLM_MASTER_KEY", "gen_command")
     if gen_litellm:
         lines.append("#    Генерировать: " + gen_litellm)
-    lines.append("LITELLM_MASTER_KEY=" + get_val("LITELLM_MASTER_KEY", "sk-ci-test-master-key"))
+    lines.append("LITELLM_MASTER_KEY=" + _get_env_val(env_defaults, "LITELLM_MASTER_KEY", "sk-ci-test-master-key"))
     lines.append("# Опциональная лицензия (оставить пустым для community-версии)")
-    lines.append("LITELLM_LICENSE=" + get_val("LITELLM_LICENSE", ""))
+    lines.append("LITELLM_LICENSE=" + _get_env_val(env_defaults, "LITELLM_LICENSE", ""))
     # LITELLM_METRICS_TOKEN removed — unified with LITELLM_MASTER_KEY
-    lines.append("LITELLM_PORT=" + str(get_val("LITELLM_PORT", "4000")))
+    lines.append("LITELLM_PORT=" + str(_get_env_val(env_defaults, "LITELLM_PORT", "4000")))
     lines.append("# URL для healthcheck LiteLLM (default: http://litellm:4000/health)")
-    lines.append("LITELLM_HEALTH_URL=" + get_val("LITELLM_HEALTH_URL", "http://litellm:4000/health"))
+    lines.append("LITELLM_HEALTH_URL=" + _get_env_val(env_defaults, "LITELLM_HEALTH_URL", "http://litellm:4000/health"))
     lines.append("# Клиенты (Hermes, внешние тулы) шлют запросы через LiteLLM")
-    lines.append("OPENAI_BASE_URL=" + get_val("OPENAI_BASE_URL", "http://litellm:4000"))
+    lines.append("OPENAI_BASE_URL=" + _get_env_val(env_defaults, "OPENAI_BASE_URL", "http://litellm:4000"))
     lines.append("# Virtual key for Hermes-agent — provisioned by make provision-llm (unlimited profile)")
-    lines.append("LITELLM_API_KEY=" + get_val("LITELLM_API_KEY", "sk-placeholder-litellm-api-key"))
+    lines.append("LITELLM_API_KEY=" + _get_env_val(env_defaults, "LITELLM_API_KEY", "sk-placeholder-litellm-api-key"))
+    return lines
 
-    # ── Langfuse ──
+
+# endregion SECTION_litellm
+
+
+# region SECTION_langfuse
+def _section_langfuse(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
+    """Langfuse (LLM Tracing) section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Langfuse (LLM Tracing) ───────────────────────────────────────────────────")
-    lines.append("NEXTAUTH_SECRET=" + get_val("NEXTAUTH_SECRET", "ci-test-nextauth-secret-32-chars-min!!"))
-    lines.append("NEXTAUTH_URL=" + get_val("NEXTAUTH_URL", "http://langfuse:3000"))
-    lines.append("SALT=" + get_val("SALT", "ci-test-salt-value"))
+    lines.append(
+        "NEXTAUTH_SECRET=" + _get_env_val(env_defaults, "NEXTAUTH_SECRET", "ci-test-nextauth-secret-32-chars-min!!")
+    )
+    lines.append("NEXTAUTH_URL=" + _get_env_val(env_defaults, "NEXTAUTH_URL", "http://langfuse:3000"))
+    lines.append("SALT=" + _get_env_val(env_defaults, "SALT", "ci-test-salt-value"))
     lines.append("# Headless init — ТРЕБУЕТСЯ только при ПЕРВОМ запуске Langfuse.")
     lines.append("# После инициализации эти переменные можно удалить из secrets.env.")
     lines.append("# Генерировать:")
-    gen_org = sd_get("LANGFUSE_INIT_ORG_ID", "gen_command")
-    gen_proj = sd_get("LANGFUSE_INIT_PROJECT_ID", "gen_command")
-    gen_pub = sd_get("LANGFUSE_PUBLIC_KEY", "gen_command")
-    gen_sec = sd_get("LANGFUSE_SECRET_KEY", "gen_command")
+    gen_org = _get_secret_def_field(secret_defs, "LANGFUSE_INIT_ORG_ID", "gen_command")
+    gen_proj = _get_secret_def_field(secret_defs, "LANGFUSE_INIT_PROJECT_ID", "gen_command")
+    gen_pub = _get_secret_def_field(secret_defs, "LANGFUSE_PUBLIC_KEY", "gen_command")
+    gen_sec = _get_secret_def_field(secret_defs, "LANGFUSE_SECRET_KEY", "gen_command")
     if gen_org:
         lines.append("#   LANGFUSE_INIT_ORG_ID:      " + gen_org)
     if gen_proj:
@@ -349,83 +471,136 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
         lines.append("#   LANGFUSE_SECRET_KEY:       " + gen_sec)
     lines.append("# · Headless init: эти же ключи передаются в langfuse как LANGFUSE_INIT_PROJECT_*")
     lines.append("# · Источник: https://langfuse.com/self-hosting/administration/headless-initialization")
-    lines.append("LANGFUSE_INIT_ORG_ID=" + get_val("LANGFUSE_INIT_ORG_ID", "ci-test-org"))
-    lines.append("LANGFUSE_INIT_PROJECT_ID=" + get_val("LANGFUSE_INIT_PROJECT_ID", "ci-test-project"))
-    lines.append("LANGFUSE_INIT_USER_EMAIL=" + get_val("LANGFUSE_INIT_USER_EMAIL", "admin@ai-platform.local"))
-    lines.append("LANGFUSE_INIT_USER_PASSWORD=" + get_val("LANGFUSE_INIT_USER_PASSWORD", "ci-test-langfuse-pwd"))
+    lines.append("LANGFUSE_INIT_ORG_ID=" + _get_env_val(env_defaults, "LANGFUSE_INIT_ORG_ID", "ci-test-org"))
+    lines.append(
+        "LANGFUSE_INIT_PROJECT_ID=" + _get_env_val(env_defaults, "LANGFUSE_INIT_PROJECT_ID", "ci-test-project")
+    )
+    lines.append(
+        "LANGFUSE_INIT_USER_EMAIL=" + _get_env_val(env_defaults, "LANGFUSE_INIT_USER_EMAIL", "admin@ai-platform.local")
+    )
+    lines.append(
+        "LANGFUSE_INIT_USER_PASSWORD="
+        + _get_env_val(env_defaults, "LANGFUSE_INIT_USER_PASSWORD", "ci-test-langfuse-pwd")
+    )
     lines.append("# ⚠️ LANGFUSE_PUBLIC_KEY и LANGFUSE_SECRET_KEY — генерируются после init")
-    lines.append("LANGFUSE_PUBLIC_KEY=" + get_val("LANGFUSE_PUBLIC_KEY", "ci-test-public-key"))
-    lines.append("LANGFUSE_SECRET_KEY=" + get_val("LANGFUSE_SECRET_KEY", "ci-test-secret-key"))
-    lines.append("LANGFUSE_PORT=" + str(get_val("LANGFUSE_PORT", "3001")))
+    lines.append("LANGFUSE_PUBLIC_KEY=" + _get_env_val(env_defaults, "LANGFUSE_PUBLIC_KEY", "ci-test-public-key"))
+    lines.append("LANGFUSE_SECRET_KEY=" + _get_env_val(env_defaults, "LANGFUSE_SECRET_KEY", "ci-test-secret-key"))
+    lines.append("LANGFUSE_PORT=" + str(_get_env_val(env_defaults, "LANGFUSE_PORT", "3001")))
     lines.append("# S3 для Langfuse event-логов (bucket и path-style)")
-    lines.append("LANGFUSE_S3_BUCKET=" + get_val("LANGFUSE_S3_BUCKET", "langfuse-events"))
-    lines.append("LANGFUSE_S3_FORCE_PATH_STYLE=" + get_val("LANGFUSE_S3_FORCE_PATH_STYLE", "true"))
+    lines.append("LANGFUSE_S3_BUCKET=" + _get_env_val(env_defaults, "LANGFUSE_S3_BUCKET", "langfuse-events"))
+    lines.append("LANGFUSE_S3_FORCE_PATH_STYLE=" + _get_env_val(env_defaults, "LANGFUSE_S3_FORCE_PATH_STYLE", "true"))
+    return lines
 
-    # ── Hermes Dashboard ──
+
+# endregion SECTION_langfuse
+
+
+# region SECTION_hermes_dashboard
+def _section_hermes_dashboard(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
+    """Hermes Agent — Dashboard section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Hermes Agent — Dashboard ──────────────────────────────────────────────")
     lines.append("# Boolean — включает/выключает dashboard UI (default: false)")
-    lines.append("HERMES_DASHBOARD=" + get_val("HERMES_DASHBOARD", "false"))
-    lines.append("HERMES_DASHBOARD_USERNAME=" + get_val("HERMES_DASHBOARD_USERNAME", "admin@ai-platform.local"))
-    constraint_hd_pwd = sd_get("HERMES_DASHBOARD_PASSWORD", "charset")
+    lines.append("HERMES_DASHBOARD=" + _get_env_val(env_defaults, "HERMES_DASHBOARD", "false"))
+    lines.append(
+        "HERMES_DASHBOARD_USERNAME="
+        + _get_env_val(env_defaults, "HERMES_DASHBOARD_USERNAME", "admin@ai-platform.local")
+    )
+    constraint_hd_pwd = _get_secret_def_field(secret_defs, "HERMES_DASHBOARD_PASSWORD", "charset")
     if constraint_hd_pwd:
         lines.append("# ⚠️ CONSTRAINT: HERMES_DASHBOARD_PASSWORD must match " + constraint_hd_pwd)
     lines.append("# Инициализируется из PLATFORM_MASTER_PASSWORD через secrets-init.sh (если не задан явно)")
-    lines.append("HERMES_DASHBOARD_PASSWORD=" + get_val("HERMES_DASHBOARD_PASSWORD", "test-db-pwd"))
+    lines.append("HERMES_DASHBOARD_PASSWORD=" + _get_env_val(env_defaults, "HERMES_DASHBOARD_PASSWORD", "test-db-pwd"))
     lines.append("# 🔗 Цепочка: HERMES_DASHBOARD_USERNAME/PASSWORD → compose (hermes-agent:110-111)")
     lines.append("#    → контейнерные BASIC_AUTH_USERNAME / BASIC_AUTH_PASSWORD.")
     lines.append("#    Переменные HERMES_DASHBOARD_BASIC_AUTH_* УДАЛЕНЫ — они не потребляются ни одним")
     lines.append("#    compose-сервисом. Единственный consumer Basic Auth — сам Hermes Agent Dashboard.")
     lines.append("#    nginx-модуль не использует эти переменные; htpasswd в nginx только для Prometheus/Loki.")
     lines.append("# Dashboard UI порт (default: 9119)")
-    lines.append("HERMES_DASHBOARD_PORT=" + str(get_val("HERMES_DASHBOARD_PORT", "9119")))
+    lines.append("HERMES_DASHBOARD_PORT=" + str(_get_env_val(env_defaults, "HERMES_DASHBOARD_PORT", "9119")))
     lines.append("# Десктопный порт Hermes Agent (default: 8642)")
-    lines.append("HERMES_DESKTOP_PORT=" + str(get_val("HERMES_DESKTOP_PORT", "8642")))
+    lines.append("HERMES_DESKTOP_PORT=" + str(_get_env_val(env_defaults, "HERMES_DESKTOP_PORT", "8642")))
+    return lines
 
-    # ── Hermes API ──
+
+# endregion SECTION_hermes_dashboard
+
+
+# region SECTION_hermes_api
+def _section_hermes_api(env_defaults: dict[str, str]) -> list[str]:
+    """Hermes Agent — API Server section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Hermes Agent — API Server ─────────────────────────────────────────────")
     lines.append("# Встроенный HTTP API-сервер Hermes Agent.")
     lines.append("# Генерировать ключ: openssl rand -hex 32")
-    lines.append("API_SERVER_ENABLED=" + get_val("API_SERVER_ENABLED", "false"))
-    lines.append("API_SERVER_KEY=" + get_val("API_SERVER_KEY", "test-api-server-key-for-ci-only"))
-    lines.append("API_SERVER_HOST=" + get_val("API_SERVER_HOST", "0.0.0.0"))  # nosec B104 — CI test default, not production
+    lines.append("API_SERVER_ENABLED=" + _get_env_val(env_defaults, "API_SERVER_ENABLED", "false"))
+    lines.append("API_SERVER_KEY=" + _get_env_val(env_defaults, "API_SERVER_KEY", "test-api-server-key-for-ci-only"))
+    lines.append("API_SERVER_HOST=" + _get_env_val(env_defaults, "API_SERVER_HOST", "0.0.0.0"))  # nosec B104 — CI test default, not production
+    return lines
 
-    # ── Telegram ──
+
+# endregion SECTION_hermes_api
+
+
+# region SECTION_telegram
+def _section_telegram(env_defaults: dict[str, str]) -> list[str]:
+    """Telegram section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Telegram ─────────────────────────────────────────────────────────────────")
     lines.append("# Bot token для Hermes Agent и Grafana Alerting")
-    lines.append("TELEGRAM_BOT_TOKEN=" + get_val("TELEGRAM_BOT_TOKEN", "1234567890:test-telegram-bot-token-for-ci"))
+    lines.append(
+        "TELEGRAM_BOT_TOKEN="
+        + _get_env_val(env_defaults, "TELEGRAM_BOT_TOKEN", "1234567890:test-telegram-bot-token-for-ci")
+    )
     lines.append("# Разрешённые пользователи (user IDs, comma-separated)")
-    lines.append("TELEGRAM_ALLOWED_USERS=" + get_val("TELEGRAM_ALLOWED_USERS", ""))
+    lines.append("TELEGRAM_ALLOWED_USERS=" + _get_env_val(env_defaults, "TELEGRAM_ALLOWED_USERS", ""))
     lines.append("# Чат для критических алертов")
-    lines.append("TELEGRAM_CHAT_ID_CRITICAL=" + get_val("TELEGRAM_CHAT_ID_CRITICAL", ""))
+    lines.append("TELEGRAM_CHAT_ID_CRITICAL=" + _get_env_val(env_defaults, "TELEGRAM_CHAT_ID_CRITICAL", ""))
     lines.append("# Чат для warning-алертов (можно совпадать с CRITICAL)")
-    lines.append("TELEGRAM_CHAT_ID_WARNING=" + get_val("TELEGRAM_CHAT_ID_WARNING", ""))
+    lines.append("TELEGRAM_CHAT_ID_WARNING=" + _get_env_val(env_defaults, "TELEGRAM_CHAT_ID_WARNING", ""))
+    return lines
 
-    # ── Nginx ──
+
+# endregion SECTION_telegram
+
+
+# region SECTION_nginx
+def _section_nginx(env_defaults: dict[str, str]) -> list[str]:
+    """Nginx (Edge) section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Nginx (Edge) ──────────────────────────────────────────────────────────")
     lines.append("# Директория конфигурации nginx.")
     lines.append("# Прод-дефолт: ./config (Let's Encrypt TLS vhost'ы, envsubst-templates).")
     lines.append("# Путь резолвится относительно core/modules/nginx/ (include-семантика compose).")
     lines.append("# Dev-режим: docker-compose.dev.yml (override поверх config/), НЕ NGINX_CONF_DIR (DevPlan 116 D3).")
-    lines.append("NGINX_CONF_DIR=" + get_val("NGINX_CONF_DIR", "./config"))
+    lines.append("NGINX_CONF_DIR=" + _get_env_val(env_defaults, "NGINX_CONF_DIR", "./config"))
     lines.append("# NGINX_CERT_DIR — директория TLS-сертификатов (Let's Encrypt).")
     lines.append('# VPS: не задавать (default "/etc/letsencrypt", смонтирован в контейнер).')
     lines.append("# Локально: ./dev-certs (macOS Docker Desktop не шарит /etc).")
-    lines.append("NGINX_CERT_DIR=" + get_val("NGINX_CERT_DIR", "./dev-certs"))
+    lines.append("NGINX_CERT_DIR=" + _get_env_val(env_defaults, "NGINX_CERT_DIR", "./dev-certs"))
     lines.append("# NGINX_OVERLAY_DIR — каталог overlay-vhosts из node-configs.")
     lines.append("# VPS: /opt/node-configs/<node>/overlays/nginx (см. add-vhost.sh конвенцию).")
     lines.append('# Локально не задавать — default "./overlays" пустой и не влияет.')
     lines.append("# Конвенция сиблингов: плоский каталог *.conf (глубина 1, non-recursive include).")
-    lines.append("NGINX_OVERLAY_DIR=" + get_val("NGINX_OVERLAY_DIR", ""))
+    lines.append("NGINX_OVERLAY_DIR=" + _get_env_val(env_defaults, "NGINX_OVERLAY_DIR", ""))
     lines.append("# HTTP/HTTPS порты nginx (default: 80/443; кастомные для dev-окружения без sudo)")
-    lines.append("NGINX_HTTP_PORT=" + str(get_val("NGINX_HTTP_PORT", "80")))
-    lines.append("NGINX_HTTPS_PORT=" + str(get_val("NGINX_HTTPS_PORT", "443")))
-    lines.append("NGINX_EXPORTER_PORT=" + str(get_val("NGINX_EXPORTER_PORT", "9113")))
+    lines.append("NGINX_HTTP_PORT=" + str(_get_env_val(env_defaults, "NGINX_HTTP_PORT", "80")))
+    lines.append("NGINX_HTTPS_PORT=" + str(_get_env_val(env_defaults, "NGINX_HTTPS_PORT", "443")))
+    lines.append("NGINX_EXPORTER_PORT=" + str(_get_env_val(env_defaults, "NGINX_EXPORTER_PORT", "9113")))
+    return lines
 
-    # ── SSL / DNS Challenge ──
+
+# endregion SECTION_nginx
+
+
+# region SECTION_ssl_dns
+def _section_ssl_dns(env_defaults: dict[str, str]) -> list[str]:
+    """SSL / DNS Challenge (acme.sh) section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── SSL / DNS Challenge (acme.sh) ──────────────────────────────────────────────")
     lines.append("# WEBNAMES_API_KEY — API-ключ webnames.ru для acme.sh DNS-01 wildcard TLS.")
@@ -433,67 +608,117 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# Хранится в SOPS-encrypted файле на VPS (/opt/node-configs/secrets/<node>.enc.yaml).")
     lines.append("# На VPS: sourced из /run/platform/secrets.env перед step 14 (ssl provision).")
     lines.append("# Локально: не требуется (используются dev-certs через mkcert/openssl).")
-    lines.append("WEBNAMES_API_KEY=" + get_val("WEBNAMES_API_KEY", "*test-webnames-api-key"))
+    lines.append("WEBNAMES_API_KEY=" + _get_env_val(env_defaults, "WEBNAMES_API_KEY", "*test-webnames-api-key"))
+    return lines
 
-    # ── Proxy ──
+
+# endregion SECTION_ssl_dns
+
+
+# region SECTION_proxy
+def _section_proxy(env_defaults: dict[str, str]) -> list[str]:
+    """Proxy (Tor/Privoxy) section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Proxy (Tor/Privoxy, опционально) ─────────────────────────────────────────")
-    lines.append("HTTP_PROXY=" + get_val("HTTP_PROXY", ""))
-    lines.append("HTTPS_PROXY=" + get_val("HTTPS_PROXY", ""))
+    lines.append("HTTP_PROXY=" + _get_env_val(env_defaults, "HTTP_PROXY", ""))
+    lines.append("HTTPS_PROXY=" + _get_env_val(env_defaults, "HTTPS_PROXY", ""))
     lines.append("# Список адресов, исключённых из прокси.")
     lines.append("# ⚠️ Канонический источник: platform-env.yaml proxy.no_proxy_internal.")
     lines.append("#    Этот список должен ⊇ no_proxy_internal — гейт T8.5 валидирует.")
     lines.append("# base: внутренние Docker-сервисы; внешние API-хосты добавляются по контексту.")
     lines.append(
         "NO_PROXY="
-        + get_val(
+        + _get_env_val(
+            env_defaults,
             "NO_PROXY",
             "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus",
         )
     )
+    return lines
 
-    # ── Monitoring ──
+
+# endregion SECTION_proxy
+
+
+# region SECTION_monitoring
+def _section_monitoring(env_defaults: dict[str, str]) -> list[str]:
+    """Monitoring / Observability section."""
+    lines: list[str] = []
+    _platform_root = _get_platform_root()
     lines.append("")
     lines.append("# ── Monitoring / Observability ───────────────────────────────────────────")
     lines.append("# Grafana")
-    lines.append("GF_SECURITY_ADMIN_USER=" + get_val("GF_SECURITY_ADMIN_USER", "admin@ai-platform.local"))
-    lines.append("GF_SECURITY_ADMIN_PASSWORD=" + get_val("GF_SECURITY_ADMIN_PASSWORD", "testpass"))
-    lines.append("GRAFANA_PORT=" + str(get_val("GRAFANA_PORT", "3000")))
+    lines.append(
+        "GF_SECURITY_ADMIN_USER=" + _get_env_val(env_defaults, "GF_SECURITY_ADMIN_USER", "admin@ai-platform.local")
+    )
+    lines.append("GF_SECURITY_ADMIN_PASSWORD=" + _get_env_val(env_defaults, "GF_SECURITY_ADMIN_PASSWORD", "testpass"))
+    lines.append("GRAFANA_PORT=" + str(_get_env_val(env_defaults, "GRAFANA_PORT", "3000")))
     lines.append("# Prometheus")
-    lines.append("PROMETHEUS_TARGETS_DIR=" + get_val("PROMETHEUS_TARGETS_DIR", f"{_platform_root}/prometheus-targets"))
-    lines.append("PROMETHEUS_RULES_DIR=" + get_val("PROMETHEUS_RULES_DIR", f"{_platform_root}/prometheus-rules"))
-    lines.append("PROMETHEUS_PORT=" + str(get_val("PROMETHEUS_PORT", "9090")))
+    lines.append(
+        "PROMETHEUS_TARGETS_DIR="
+        + _get_env_val(env_defaults, "PROMETHEUS_TARGETS_DIR", f"{_platform_root}/prometheus-targets")
+    )
+    lines.append(
+        "PROMETHEUS_RULES_DIR="
+        + _get_env_val(env_defaults, "PROMETHEUS_RULES_DIR", f"{_platform_root}/prometheus-rules")
+    )
+    lines.append("PROMETHEUS_PORT=" + str(_get_env_val(env_defaults, "PROMETHEUS_PORT", "9090")))
     lines.append("# Loki (logging backend)")
-    lines.append("LOKI_PORT=" + str(get_val("LOKI_PORT", "3100")))
+    lines.append("LOKI_PORT=" + str(_get_env_val(env_defaults, "LOKI_PORT", "3100")))
     lines.append("# Infra-metrics exporters")
-    lines.append("CADVISOR_PORT=" + str(get_val("CADVISOR_PORT", "8080")))
-    lines.append("NODE_EXPORTER_PORT=" + str(get_val("NODE_EXPORTER_PORT", "9100")))
+    lines.append("CADVISOR_PORT=" + str(_get_env_val(env_defaults, "CADVISOR_PORT", "8080")))
+    lines.append("NODE_EXPORTER_PORT=" + str(_get_env_val(env_defaults, "NODE_EXPORTER_PORT", "9100")))
     lines.append("# Status Page (внутренний HTTP-порт модуля, DevPlan 117 D31 — зарегистрирован в SoT)")
-    lines.append("STATUS_PAGE_PORT=" + str(get_val("STATUS_PAGE_PORT", "8080")))
+    lines.append("STATUS_PAGE_PORT=" + str(_get_env_val(env_defaults, "STATUS_PAGE_PORT", "8080")))
+    return lines
 
-    # ── Compose Profiles ──
+
+# endregion SECTION_monitoring
+
+
+# region SECTION_compose_profiles
+def _section_compose_profiles(env_defaults: dict[str, str]) -> list[str]:
+    """Compose Profiles section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Compose Profiles ──────────────────────────────────────────────────────")
     # Fail-fast: COMPOSE_PROFILES обязателен в SoT (platform-infra.yaml env_defaults) —
     # fallback-копия удалена (DevPlan 116 T2/T8, U-02/U-68, инвариант 7).
-    compose_profiles = get_val_required("COMPOSE_PROFILES")
+    compose_profiles = _get_val_required(env_defaults, "COMPOSE_PROFILES")
     lines.append(
         f"# Все {len(compose_profiles.split(','))} профилей — активирует все модули при make up (без явного MODULES=)"
     )
     lines.append("COMPOSE_PROFILES=" + compose_profiles)
+    return lines
 
-    # ── Misc ──
+
+# endregion SECTION_compose_profiles
+
+
+# region SECTION_misc
+def _section_misc(env_defaults: dict[str, str]) -> list[str]:
+    """Misc section."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ── Misc ──────────────────────────────────────────────────────────────────────")
     lines.append("# Таймаут проверки зависимостей в секундах (default: 2.0)")
-    lines.append("DEPENDENCY_CHECK_TIMEOUT=" + get_val("DEPENDENCY_CHECK_TIMEOUT", "2.0"))
+    lines.append("DEPENDENCY_CHECK_TIMEOUT=" + _get_env_val(env_defaults, "DEPENDENCY_CHECK_TIMEOUT", "2.0"))
     lines.append("")
     lines.append("# PROJECTS_BASE — базовая директория проектов для DeployOrchestrator (default: /opt/projects)")
-    lines.append("PROJECTS_BASE=" + get_val("PROJECTS_BASE", "/opt/projects"))
+    lines.append("PROJECTS_BASE=" + _get_env_val(env_defaults, "PROJECTS_BASE", "/opt/projects"))
     lines.append("# PLATFORM_DEPLOY_TIMEOUT — таймаут деплоя в секундах для DeliveryChannel (default: 600)")
-    lines.append("PLATFORM_DEPLOY_TIMEOUT=" + get_val("PLATFORM_DEPLOY_TIMEOUT", "600"))
+    lines.append("PLATFORM_DEPLOY_TIMEOUT=" + _get_env_val(env_defaults, "PLATFORM_DEPLOY_TIMEOUT", "600"))
+    return lines
 
-    # ── GitHub Actions secrets ──
+
+# endregion SECTION_misc
+
+
+# region SECTION_github_actions
+def _section_github_actions(env_defaults: dict[str, str]) -> list[str]:
+    """GitHub Actions secrets section — only comments, does not generate variables."""
+    lines: list[str] = []
     lines.append("")
     lines.append("# ══════════════════════════════════════════════════════════════════════════════")
     lines.append("# GitHub Actions secrets (NOT .env vars — create in repo Settings → Secrets)")
@@ -518,17 +743,58 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.append("# E2E_BASE_URL — Base URL for E2E smoke test health endpoint (used by platform-deploy.yml)")
     lines.append("# E2E_GRAFANA_URL — Grafana URL for E2E smoke test health check (used by platform-deploy.yml)")
     lines.append("# GHCR_PULL_TOKEN — Fine-grained PAT for ghcr.io read:packages")
-    lines.append("GHCR_PULL_TOKEN=" + get_val("GHCR_PULL_TOKEN", "ghp_test-token-for-ci-only"))
+    lines.append("GHCR_PULL_TOKEN=" + _get_env_val(env_defaults, "GHCR_PULL_TOKEN", "ghp_test-token-for-ci-only"))
     lines.append("# GHCR_PUSH_TOKEN — Fine-grained PAT for ghcr.io write:packages (L2 push)")
     lines.append("#   Create: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens")
     lines.append("#   Repository access: tronyxlab/ai-platform")
     lines.append("#   Permissions: Packages → Write")
-    lines.append("GHCR_PUSH_TOKEN=" + get_val("GHCR_PUSH_TOKEN", ""))
+    lines.append("GHCR_PUSH_TOKEN=" + _get_env_val(env_defaults, "GHCR_PUSH_TOKEN", ""))
     lines.append("")
     lines.append(
         "# GIT_MIRROR_TOKEN — Token for git mirror operations (optional, SSH fallback — used by platform-deploy.yml)"
     )
     lines.append("# NODE_HOST_MAP — JSON mapping of node names to SSH hosts, org variable (used by deploy-project.yml)")
+    return lines
+
+
+# endregion SECTION_github_actions
+
+
+# region FUNC_generate_env_example
+def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> str:
+    """Generate complete .env.example content from SoT data (orchestrator).
+
+    ## @purpose  Decomposed (DevPlan 117 G T57): each section is a _section_* builder.
+    ##            Signature unchanged — generate_env_example(env_defaults, secret_defs) -> str.
+    ## @io — ⇥ env_defaults, secret_defs → ⎋ str .env.example content
+    ## @complexity — O(S * L) where S = sections, L = lines per section
+    ## @invariants
+    ##   - Output is byte-identical to the pre-decomposition monolithic generator
+    ##   - Section ordering is structural (see _section_header STRUCTURE comment)
+    """
+    lines: list[str] = []
+    lines.extend(_section_header())
+    lines.extend(_section_platform_context(env_defaults))
+    lines.extend(_section_platform_secrets(env_defaults, secret_defs))
+    lines.extend(_section_postgres(env_defaults, secret_defs))
+    lines.extend(_section_pgbouncer(env_defaults))
+    lines.extend(_section_redis(env_defaults))
+    lines.extend(_section_clickhouse(env_defaults, secret_defs))
+    lines.extend(_section_minio(env_defaults, secret_defs))
+    lines.extend(_section_s3_backup(env_defaults))
+    lines.extend(_section_llm_provider(env_defaults))
+    lines.extend(_section_litellm(env_defaults, secret_defs))
+    lines.extend(_section_langfuse(env_defaults, secret_defs))
+    lines.extend(_section_hermes_dashboard(env_defaults, secret_defs))
+    lines.extend(_section_hermes_api(env_defaults))
+    lines.extend(_section_telegram(env_defaults))
+    lines.extend(_section_nginx(env_defaults))
+    lines.extend(_section_ssl_dns(env_defaults))
+    lines.extend(_section_proxy(env_defaults))
+    lines.extend(_section_monitoring(env_defaults))
+    lines.extend(_section_compose_profiles(env_defaults))
+    lines.extend(_section_misc(env_defaults))
+    lines.extend(_section_github_actions(env_defaults))
 
     return "\n".join(lines) + "\n"
 

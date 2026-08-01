@@ -27,13 +27,16 @@ sys.path.insert(
     0,
     str(Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "watchdog"),
 )
+# DevPlan 117 G T52: CircuitBreaker/CircuitBreakerService extracted to circuit_breaker.py.
 from agent_watchdog import (
-    CircuitBreaker,
-    CircuitBreakerService,
     HealthChecker,
     PendingUpdate,
     TelegramNotifier,
     WatchdogConfig,
+)
+from circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerService,
 )
 
 logger = logging.getLogger(__name__)

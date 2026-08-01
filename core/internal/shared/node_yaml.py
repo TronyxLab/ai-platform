@@ -46,7 +46,6 @@
 ## @changes 2026-07-25 · DevPlan 070 — Created as shared module with the deprecated context-extract alias
 # endregion MODULE_CONTRACT
 
-import argparse
 import copy
 import glob as glob_module
 import json
@@ -62,7 +61,6 @@ from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
     ConfigValidationError,
-    PlatformFatalError,
 )
 
 logger = logging.getLogger(__name__)
@@ -1458,433 +1456,57 @@ class NodeYaml:
 
 # ── CLI Entrypoint ────────────────────────────────────────────────────────────
 
+# DevPlan 117 G T51: CLI extracted to core.internal.shared.node_yaml_cli (all 10 _cli_* functions,
+# _build_arg_parser, main — ~430 LOC). Lazy import keeps `python3 -m core.internal.shared.node_yaml`
+# working (AC-G5) without importing node_yaml_cli at module load (start-up time unchanged).
 
-# region FUNC_cli
-## @purpose  CLI entrypoint for shell consumers. python3 -m core.internal.shared.node_yaml [args]
-## @io — ⇥ sys.argv → ⎋ sys.exit(code)
-## @complexity — O(N) YAML parse + O(K) for operations
-## @invariants
-##   Exit codes: 0=success, 1=not found/generic, 2=ConfigNotFoundError,
-##   3=ConfigParseError, 4=ConfigValidationError, 10=PlatformFatalError.
-##   --get with missing key exits 1 (not 4) for shell || compatibility.
-def _build_arg_parser() -> argparse.ArgumentParser:
-    """Build argument parser for the NodeYaml CLI.
+# ⚠️ NOTE (DevPlan 117 G T51 backward-compat): node_yaml_cli symbols are re-exported lazily via
+# PEP 562 __getattr__ — the extraction moved _cli_* helpers to node_yaml_cli.py, and a legacy test
+# (test_node_yaml_cli_get_many.py) imports _cli_get_many from this module. Lazy resolution keeps
+# the name importable without loading node_yaml_cli at module load (AC-G5).
 
-    ## @purpose  Centralized argparse construction for testability.
-    ## @io — ⎋ argparse.ArgumentParser
-    ## @complexity — O(1)
-    """
-    parser = argparse.ArgumentParser(description="NodeYaml unified facade CLI")
-    # --file is NOT argparse-required: --resolve (3-path search) legitimately runs without it.
-    # Runtime enforcement in main(): all other operations print help when --file is absent.
-    # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · --resolve unreachable: --file required=True rejected
-    # · Symptom: `python3 -m core.internal.shared.node_yaml --resolve --resolve-node X` → argparse
-    # ·   error "the following arguments are required: --file", exit 2 — _cli_resolve never ran.
-    # · Root: argparse validates required args BEFORE main() dispatch; --resolve needs no --file.
-    # · Fix: required=False + runtime check in main() (line ~1604: `if not args.file`).
-    # · Prevention: CLI mode-flag args (--resolve, --find-project) must not require --file at parse time.
-    parser.add_argument("--file", required=False, help="Path to node.yaml")
-    parser.add_argument("--get", help="Dotted key to retrieve (e.g., node.host)")
-    parser.add_argument(
-        "--get-many",
-        help="Batch extraction (DevPlan 116 B3 T5, U-52): comma-separated alias:dotted-key pairs "
-        "(e.g. owner_key:node.owner_key,context0:contexts.0.name). Output: alias<TAB>value lines; "
-        "missing key → empty value (exit 0); malformed/empty spec → ConfigValidationError (exit 4).",
-    )
-    parser.add_argument("--default", help="Default value if key not found")
-    parser.add_argument("--items", action="store_true", help="Output list as JSON array")
-    parser.add_argument("--domain-config", action="store_true", help="Output domain config as field:value lines")
-    parser.add_argument("--json-output", action="store_true", help="Output entire YAML document as JSON")
-    parser.add_argument("--find-project", help="Find project by name and output JSON + org + host")
-    parser.add_argument("--context", action="store_true", help="Output context name")
-
-    # DevPlan 088 T2: resolve
-    parser.add_argument("--resolve", action="store_true", help="Resolve node.yaml via 3-path search")
-    parser.add_argument("--resolve-node", help="Node name for --resolve")
-
-    # DevPlan 088 T3: jsonschema validation
-    parser.add_argument("--validate-schema", action="store_true", help="Validate node.yaml against JSON schema")
-    parser.add_argument("--schema-path", help="Path to JSON schema file for --validate-schema")
-
-    # DevPlan 088 T1/T3.5: typed output
-    parser.add_argument("--typed-contexts", action="store_true", help="Output contexts as JSON")
-    parser.add_argument("--typed-node", action="store_true", help="Output node declaration as JSON")
-    parser.add_argument("--typed-firewall", action="store_true", help="Output firewall config as JSON")
-    parser.add_argument("--typed-secrets", action="store_true", help="Output secrets config as JSON")
-    parser.add_argument("--typed-tor", action="store_true", help="Output tor config as JSON")
-    parser.add_argument("--typed-repos", action="store_true", help="Output repos config as JSON")
-    parser.add_argument("--typed-all", action="store_true", help="Output all typed fields as JSON")
-
-    # DevPlan 088 T3.5: mutation API
-    parser.add_argument(
-        "--add-project",
-        type=str,
-        nargs=6,
-        metavar=("NAME", "REPO", "TYPE", "DOMAIN", "DATABASE", "CONTEXT"),
-        help="Add project: name repo type domain database context (use - for empty)",
-    )
-    parser.add_argument("--remove-project", help="Remove project by name")
-    parser.add_argument(
-        "--update-project",
-        type=str,
-        nargs="+",
-        help="Update project: name key=value ... (e.g. myapp domain=new.example.com)",
-    )
-
-    # Legacy
-    parser.add_argument("--validate", action="store_true", help="Validate node.yaml structure (basic checks)")
-    return parser
-
-
-def _cli_get(node: NodeYaml, args: argparse.Namespace) -> int:
-    """Handle --get CLI operation.
-
-    ## @purpose  Execute --get with optional --default and --items.
-    ## @io — ⇥ node: NodeYaml, args → ⎋ exit_code: int
-    ## @complexity — O(1) after load
-    """
-    try:
-        value = node.get(args.get, default=args.default) if args.default is not None else node.get(args.get)
-    except ConfigValidationError:
-        # Missing key without default → exit 1 for shell || compatibility
-        print(f"Key not found: {args.get}", file=sys.stderr)
-        return 1
-
-    if args.items:
-        print(json.dumps(value, indent=2) if isinstance(value, (list, dict)) else json.dumps([value]))
-    else:
-        print(value)
-    return 0
-
-
-def _traverse_dotted_list_aware(data: dict, key: str) -> Any:
-    """Traverse a dotted key supporting numeric list indices (e.g. contexts.0.name).
-
-    ## @purpose — Batch traversal for --get-many (DevPlan 116 B3 T5, U-52). The standard
-    ##            NodeYaml.get() only traverses dicts; the batch spec uses `contexts.0.name`
-    ##            (list-of-dicts contexts array). Missing key / non-dict / non-list / index
-    ##            out of range → ConfigValidationError (caller degrades to empty value, exit 0).
-    ## @io — ⇥ data: dict, key: str → ⎋ Any (value at dotted path)
-    ## @complexity — O(D) where D = dot-separated segments
-    ## @invariants
-    ##   - dict segment → key lookup; list segment → numeric index (isdigit)
-    ##   - Any traversal failure raises ConfigValidationError — never IndexError/TypeError
-    """
-    current: Any = data
-    for part in key.split("."):
-        if isinstance(current, dict):
-            if part not in current:
-                raise ConfigValidationError(f"Key not found: {key} (missing '{part}')")
-            current = current[part]
-        elif isinstance(current, list) and part.isdigit():
-            idx = int(part)
-            if idx >= len(current):
-                raise ConfigValidationError(f"List index out of range: {key} (index {idx})")
-            current = current[idx]
-        else:
-            raise ConfigValidationError(f"Cannot traverse into non-dict at '{part}' for key '{key}'")
-    return current
-
-
-def _cli_get_many(node: NodeYaml, spec: str) -> int:
-    """Handle --get-many CLI operation (batch extraction, DevPlan 116 B3 T5, U-52).
-
-    ## @purpose  Batch extract multiple node.yaml fields in ONE python3 process — replaces
-    ##            N per-field --get calls in shell (bootstrap.sh 6 → 1). Spec format:
-    ##            alias:dotted.key,alias2:dotted.key2 (comma-separated). Output:
-    ##            lines `alias<TAB>value` — TAB separator (values may contain spaces/=).
-    ##            Missing key → line `alias<TAB>` (empty value, exit 0 — shell-compatible,
-    ##            mirrors --default ""). Malformed/empty spec → ConfigValidationError (exit 4,
-    ##            fail-fast — the shell must not silently proceed with a broken extraction).
-    ## @io — ⇥ node: NodeYaml, spec: str → ⎋ exit_code: int (0 always on valid spec)
-    ## @complexity — O(K * D) where K = spec entries, D = dotted-key depth
-    ## @invariants
-    ##   - Empty/whitespace spec → ConfigValidationError (exit 4)
-    ##   - Entry without ':' → ConfigValidationError (exit 4)
-    ##   - Missing key or non-dict traversal → empty value (exit 0), like --default ""
-    ##   - stdout carries ONLY alias<TAB>value lines — machine-parseable by `while IFS=$'\t' read`
-    """
-    if not spec or not spec.strip():
-        logger.error("[IMP:10][NodeYaml._cli_get_many] Empty --get-many spec")
-        raise ConfigValidationError("--get-many spec is empty (expected alias:key,alias2:key2)")
-
-    pairs: list[tuple[str, str]] = []
-    for part in spec.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if ":" not in part:
-            logger.error("[IMP:10][NodeYaml._cli_get_many] Malformed spec entry: %r", part)
-            raise ConfigValidationError(f"--get-many malformed entry (expected alias:key): {part}")
-        alias, key = part.split(":", 1)
-        pairs.append((alias.strip(), key.strip()))
-
-    if not pairs:
-        logger.error("[IMP:10][NodeYaml._cli_get_many] Empty --get-many spec (no valid entries)")
-        raise ConfigValidationError("--get-many spec is empty (expected alias:key,alias2:key2)")
-
-    for alias, key in pairs:
-        try:
-            value = _traverse_dotted_list_aware(node.raw(), key)
-        except ConfigValidationError:
-            # Missing key / non-dict traversal → empty value (exit 0), shell-compatible
-            value = ""
-        print(f"{alias}\t{value}")
-
-    logger.info("[IMP:9][NodeYaml._cli_get_many] Batch-extracted %d field(s)", len(pairs))
-    return 0
-
-
-def _cli_domain_config(node: NodeYaml) -> int:
-    """Handle --domain-config CLI operation.
-
-    ## @purpose  Output domain config as field:value lines for shell parsing.
-    ## @io — ⇥ node: NodeYaml → ⎋ exit_code: int
-    ## @complexity — O(1) after load
-    """
-    cfg = node.get_domain_config()
-    print(f"platform_domain:{cfg.platform_domain}")
-    print(f"email:{cfg.email}")
-    print(f"acme_dns_plugin:{cfg.acme_dns_plugin}")
-    print(f"project_domains:{' '.join(cfg.project_domains)}")
-    return 0
-
-
-def _cli_find_project(node: NodeYaml, project_name: str) -> int:
-    """Handle --find-project CLI operation.
-
-    ## @purpose  Find project by name, output JSON + org + host for shell scripts.
-    ## @io — ⇥ node: NodeYaml, project_name: str → ⎋ exit_code: int
-    ## @complexity — O(P) where P = number of projects
-    """
-    projects = node.get_projects()
-    for proj in projects:
-        if isinstance(proj, dict) and proj.get("name") == project_name:
-            print(json.dumps(proj, indent=2))
-            ctx = node.get_context()
-            if ctx:
-                print(f"___ORG___{ctx}")
-            nfo = node.get_node_info()
-            if nfo.fqdn:
-                print(f"___HOST___{nfo.fqdn}")
-            elif node.get("node.host", default=""):
-                print(f"___HOST___{node.get('node.host')}")
-            return 0
-    print(f"Project not found: {project_name}", file=sys.stderr)
-    return 1
-
-
-def _cli_validate(node: NodeYaml) -> int:
-    """Handle --validate CLI operation (basic checks).
-
-    ## @purpose  Validate node.yaml structure, output errors to stderr.
-    ## @io — ⇥ node: NodeYaml → ⎋ exit_code: int
-    ## @complexity — O(1) after load
-    """
-    errors = node.validate()
-    for err in errors:
-        print(f"ERROR: {err}", file=sys.stderr)
-    return len(errors)
-
-
-def _cli_validate_schema(node: NodeYaml, schema_path: str | None = None) -> int:
-    """Handle --validate-schema CLI operation with jsonschema.
-
-    ## @purpose  Validate node.yaml against JSON schema, output errors to stderr.
-    ## @io — ⇥ node: NodeYaml, schema_path: Optional[str] → ⎋ exit_code: int
-    ## @complexity — O(N) for YAML parse + O(S) for jsonschema
-    """
-    errors = node.validate(schema_path=schema_path)
-    for err in errors:
-        print(f"ERROR: {err}", file=sys.stderr)
-    return len(errors)
-
-
-def _cli_resolve(args: argparse.Namespace) -> int:
-    """Handle --resolve CLI operation.
-
-    ## @purpose  Resolve node.yaml via 3-path search and print path.
-    ## @io — ⇥ args → ⎋ exit_code: int
-    ## @complexity — O(P) for search + O(N) for YAML parse
-    ## @invariants
-    ##   - stdout contains EXACTLY ONE line: the resolved node.yaml path.
-    ##     Shell consumers do `path="$(python3 -m ... --resolve ...)"` — multi-line
-    ##     stdout would corrupt NODE_YAML_PATH (path + marker lines).
-    """
-    try:
-        resolved = NodeYaml.resolve(node_name=args.resolve_node)
-        print(resolved._path)
-        return 0
-    except ConfigNotFoundError as e:
-        print(str(e), file=sys.stderr)
-        return 2
-
-
-def _cli_typed_json(node: NodeYaml, field: str) -> int:
-    """Output a typed dataclass as JSON.
-
-    ## @purpose  Handle --typed-* CLI operations.
-    ## @io — ⇥ node: NodeYaml, field: str → ⎋ exit_code: int
-    ## @complexity — O(1) after load
-    """
-    import dataclasses
-
-    getters = {
-        "contexts": node.get_contexts,
-        "node": lambda: dataclasses.asdict(node.get_node_declaration()),
-        "firewall": lambda: dataclasses.asdict(node.get_firewall()),
-        "secrets": lambda: dataclasses.asdict(node.get_secrets_config()),
-        "tor": lambda: dataclasses.asdict(node.get_tor_config()),
-        "repos": lambda: dataclasses.asdict(node.get_repos()),
+# region FUNC___getattr__
+_CLI_SYMBOLS = frozenset(
+    {
+        "main",
+        "_build_arg_parser",
+        "_cli_get",
+        "_cli_get_many",
+        "_cli_domain_config",
+        "_cli_find_project",
+        "_cli_validate",
+        "_cli_validate_schema",
+        "_cli_resolve",
+        "_cli_typed_json",
+        "_traverse_dotted_list_aware",
     }
-
-    getter = getters.get(field)
-    if getter is None:
-        print(f"Unknown typed field: {field}", file=sys.stderr)
-        return 1
-
-    value = getter()
-    print(json.dumps(value, indent=2, default=str))
-    return 0
+)
 
 
-def main() -> int:
-    """NodeYaml CLI entrypoint.
+def __getattr__(name: str):
+    """Lazily re-export node_yaml_cli symbols for backward compatibility (PEP 562).
 
-    ## @purpose  Main entry for python3 -m core.internal.shared.node_yaml [args]
-    ## @io — ⇥ sys.argv → ⎋ sys.exit(code)
-    ## @complexity — O(1) dispatch
+    ## @purpose — Legacy consumers (tests, external code) importing _cli_* / main from
+    ##            node_yaml still work after the DevPlan 117 G T51 extraction. The import
+    ##            happens on first attribute access — node_yaml_cli is not loaded otherwise.
+    ## @io — ⇥ name: str → ⎋ Any | raise AttributeError
+    ## @complexity — O(1) + first-access import cost
     """
-    parser = _build_arg_parser()
-    args = parser.parse_args()
+    if name in _CLI_SYMBOLS:
+        import importlib as _importlib
 
-    # --resolve does not need --file
-    if args.resolve:
-        return _cli_resolve(args)
-
-    # All other operations need --file
-    if not args.file:
-        parser.print_help()
-        return 0
-
-    try:
-        node = NodeYaml(args.file)
-    except ConfigNotFoundError as e:
-        print(str(e), file=sys.stderr)
-        return 2
-    except ConfigParseError as e:
-        print(str(e), file=sys.stderr)
-        return 3
-
-    try:
-        if args.get:
-            return _cli_get(node, args)
-        if args.get_many:
-            return _cli_get_many(node, args.get_many)
-        if args.domain_config:
-            return _cli_domain_config(node)
-        if args.context:
-            print(node.get_context())
-            return 0
-        if args.json_output:
-            print(json.dumps(node.raw(), indent=2))
-            return 0
-        if args.find_project:
-            return _cli_find_project(node, args.find_project)
-        if args.validate:
-            return _cli_validate(node)
-        if args.validate_schema:
-            return _cli_validate_schema(node, schema_path=args.schema_path)
-        if args.add_project:
-            name, repo, ptype, domain, database, context = args.add_project
-            project = ProjectEntry(
-                name=name,
-                repo=repo,
-                type=ptype,
-                domain=domain if domain != "-" else "",
-                database=database if database != "-" else "",
-                context=context if context != "-" else "",
-            )
-            node.add_project(project)
-            print(f"Added project: {name}")
-            return 0
-        if args.remove_project:
-            removed = node.remove_project(args.remove_project)
-            if removed:
-                print(f"Removed project: {args.remove_project}")
-                return 0
-            print(f"Project not found: {args.remove_project}", file=sys.stderr)
-            return 1
-        if args.update_project:
-            if len(args.update_project) < 2:
-                print("Usage: --update-project name key=value [key=value ...]", file=sys.stderr)
-                return 1
-            name = args.update_project[0]
-            updates: dict[str, str] = {}
-            for kv in args.update_project[1:]:
-                if "=" not in kv:
-                    print(f"Invalid key=value pair: {kv}", file=sys.stderr)
-                    return 1
-                k, v = kv.split("=", 1)
-                updates[k] = v
-            updated = node.update_project(name, **updates)
-            if updated:
-                print(f"Updated project: {name} ({', '.join(updates.keys())})")
-                return 0
-            print(f"Project not found: {name}", file=sys.stderr)
-            return 1
-        if args.typed_contexts:
-            return _cli_typed_json(node, "contexts")
-        if args.typed_node:
-            return _cli_typed_json(node, "node")
-        if args.typed_firewall:
-            return _cli_typed_json(node, "firewall")
-        if args.typed_secrets:
-            return _cli_typed_json(node, "secrets")
-        if args.typed_tor:
-            return _cli_typed_json(node, "tor")
-        if args.typed_repos:
-            return _cli_typed_json(node, "repos")
-        if args.typed_all:
-            import dataclasses
-
-            output = {
-                "contexts": node.get_contexts(),
-                "node": dataclasses.asdict(node.get_node_declaration()),
-                "firewall": dataclasses.asdict(node.get_firewall()),
-                "secrets": dataclasses.asdict(node.get_secrets_config()),
-                "tor": dataclasses.asdict(node.get_tor_config()),
-                "repos": dataclasses.asdict(node.get_repos()),
-                "domain_config": {
-                    "platform_domain": node.get_domain(),
-                    "email": node.get_email(),
-                    "acme_dns_plugin": node.get_acme_dns_plugin(),
-                },
-                "postgres_init_databases": node.get_postgres_init_databases(),
-                "projects": node.get_projects(),
-                "modules": node.get_modules(),
-            }
-            print(json.dumps(output, indent=2, default=str))
-            return 0
-        parser.print_help()
-        return 0
-    except ConfigNotFoundError as e:
-        print(str(e), file=sys.stderr)
-        return 2
-    except ConfigParseError as e:
-        print(str(e), file=sys.stderr)
-        return 3
-    except ConfigValidationError as e:
-        print(str(e), file=sys.stderr)
-        return 4
-    except PlatformFatalError as e:
-        print(str(e), file=sys.stderr)
-        return 10
-    return 0
+        module = _importlib.import_module("core.internal.shared.node_yaml_cli")
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# endregion FUNC_cli
+# endregion FUNC___getattr__
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Lazy import — node_yaml_cli is only loaded on direct CLI invocation.
+    from core.internal.shared.node_yaml_cli import main as _cli_main
+
+    sys.exit(_cli_main())

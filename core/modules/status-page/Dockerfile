@@ -21,6 +21,8 @@ RUN apk add --no-cache curl && \
     pip install --no-cache-dir pyyaml==6.0.2 jinja2==3.1.4 cryptography==41.0.7
 
 COPY app.py /app/app.py
+COPY collectors.py /app/collectors.py
+COPY renderer.py /app/renderer.py
 COPY templates/ /app/templates/
 
 WORKDIR /app

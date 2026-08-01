@@ -528,141 +528,39 @@ def _generate_self_signed(domain: str) -> DomainCertResult:
 
 
 # region FUNC_install_cron
-## @purpose — Install acme.sh --install-cronjob + --renew-hook with S3 upload.
-##            Called after any certs are processed (restored, issued, or skipped).
-##            Idempotent: checks crontab first, skips if already present.
+## @purpose — Lazy facade for cron_installer.install_acme_cron (DevPlan 117 G T58.4).
 ## @io — ⇥ acme_home: str → ⎋ bool (True = cron installed or already present)
-## @complexity — O(1)
+## @complexity — O(1) + delegate
 ## @invariants
 ##   - Includes --renew-hook to upload certs to S3 after each renewal
 ##   - Non-fatal: failure logs WARN, returns False
 ##   - Idempotent: no-op if cron entry already has s3_ssl_cache reference
 def _install_cron(acme_home: str = "/opt/acme.sh") -> bool:
-    """Install acme.sh --install-cronjob + --renew-hook with S3 upload.
+    """Install acme.sh --install-cronjob + --renew-hook with S3 upload."""
+    from core.internal.bootstrap.cron_installer import install_acme_cron as _impl
 
-    ▶ ┌acme.sh exists?┐ → ◇ already installed? → no → ⚡ --install-cronjob → --renew-hook → ⎋
-    """
-    acme_sh = os.path.join(acme_home, "acme.sh")
-    if not os.path.isfile(acme_sh):
-        logger.info("[IMP:7][cert_orchestrator] acme.sh not found at %s — skipping cron install", acme_sh)
-        return False
-
-    try:
-        # Check if cron already has S3-aware entry
-        result = subprocess.run(
-            ["crontab", "-l"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and "s3_ssl_cache" in result.stdout:
-            logger.info("[IMP:8][cert_orchestrator] Cron already has S3 sync — skipping install")
-            return True
-
-        # ── Install cronjob ──
-        logger.info("[IMP:8][cert_orchestrator] Installing acme.sh cronjob")
-        subprocess.run(
-            [acme_sh, "--install-cronjob", "--home", acme_home],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=True,
-        )
-
-        # ── Install renew-hook for S3 upload ──
-        s3_cache_py = os.path.join(os.path.dirname(__file__), "s3_ssl_cache.py")
-        if os.path.isfile(s3_cache_py):
-            subprocess.run(
-                [acme_sh, "--renew-hook", f"python3 '{s3_cache_py}' upload \"$Le_Domain\""],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            logger.info("[IMP:9][cert_orchestrator] Cron installed with S3 sync renew-hook")
-        else:
-            logger.warning("[IMP:7][cert_orchestrator] s3_ssl_cache.py not found — --renew-hook skipped")
-        return True
-
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
-        logger.warning("[IMP:7][cert_orchestrator] Cron install failed: %s", e)
-        return False
+    return _impl(acme_home)
 
 
 # endregion FUNC_install_cron
 
 
 # region FUNC_migrate_cron_if_needed
-## @purpose — Detect and fix old (no-S3) acme.sh cron entries from deleted nginx/install.sh.
-##            The old _acme_install_cron() installed cron WITHOUT --renew-hook for S3 upload.
-##            This function detects the old entry and reinstalls cron with --renew-hook.
+## @purpose — Lazy facade for cron_installer.migrate_acme_cron_if_needed (DevPlan 117 G T58.4).
 ## @io — ⇥ acme_home: str → ⎋ bool (True = migration succeeded or was not needed)
-## @complexity — O(1) + crontab subprocess
+## @complexity — O(1) + delegate
 ## @invariants
 ##   - Idempotent: if cron already has s3_ssl_cache reference, skips
 ##   - Non-fatal: failure logs WARN, returns False
 ##   - Non-fatal: no crontab → returns True (nothing to migrate)
 ##   - Runs on bootstrap init (step_18_deploy_context) and update
 ## @rationale DRIFT-C4: old nginx/install.sh _acme_install_cron() installed
-##            cron WITHOUT --renew-hook for S3 upload. This function detects
-##            the old entry and reinstalls cron with --renew-hook.
+##            cron WITHOUT --renew-hook for S3 upload.
 def migrate_cron_if_needed(acme_home: str = "/opt/acme.sh") -> bool:
-    """Check crontab for old acme.sh entry (no S3 sync) → replace with new one.
+    """Check crontab for old acme.sh entry (no S3 sync) → replace with new one."""
+    from core.internal.bootstrap.cron_installer import migrate_acme_cron_if_needed as _impl
 
-    ▶ ┌crontab -l┐ → ◇ grep acme.sh --cron → ◇ grep -v s3_ssl_cache → ◇ found?
-    → ⚡ --install-cronjob + --renew-hook → ⎋ return True
-    """
-    acme_sh = os.path.join(acme_home, "acme.sh")
-    if not os.path.isfile(acme_sh):
-        logger.info("[IMP:7][cron_migrate] acme.sh not found — skipping cron migration")
-        return False
-
-    try:
-        result = subprocess.run(
-            ["crontab", "-l"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            logger.info("[IMP:8][cron_migrate] No crontab — nothing to migrate")
-            return True  # No crontab = nothing to fix
-
-        cron_content = result.stdout
-        if "s3_ssl_cache" in cron_content:
-            logger.info("[IMP:8][cron_migrate] Cron already has S3 sync — no migration needed")
-            return True
-
-        if acme_sh not in cron_content or "--cron" not in cron_content:
-            logger.info("[IMP:8][cron_migrate] No acme.sh cron entry — nothing to migrate")
-            return True
-
-        # ── Old entry found — reinstall cron ──
-        logger.warning("[IMP:8][cron_migrate] Old acme.sh cron without S3 sync — migrating")
-        subprocess.run(
-            [acme_sh, "--install-cronjob", "--home", acme_home],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=True,
-        )
-
-        # Install renew-hook for S3
-        s3_cache_py = os.path.join(os.path.dirname(__file__), "s3_ssl_cache.py")
-        if os.path.isfile(s3_cache_py):
-            subprocess.run(
-                [acme_sh, "--renew-hook", f"python3 '{s3_cache_py}' upload \"$Le_Domain\""],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            logger.info("[IMP:9][cron_migrate] Cron migration complete — S3 sync enabled")
-        else:
-            logger.warning("[IMP:7][cron_migrate] s3_ssl_cache.py not found — --renew-hook skipped")
-        return True
-
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
-        logger.warning("[IMP:7][cron_migrate] Migration failed: %s", e)
-        return False
+    return _impl(acme_home)
 
 
 # endregion FUNC_migrate_cron_if_needed

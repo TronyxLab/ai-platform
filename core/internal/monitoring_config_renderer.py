@@ -24,13 +24,8 @@
 # endregion MODULE_CONTRACT
 
 import argparse
-import json
 import logging
-import os
-import subprocess
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,50 +37,39 @@ import yaml
 # · Rev: if monitoring_config_renderer gains a packaging namespace, drop the direct-import fallback
 try:
     # Imported as core.internal.monitoring_config_renderer (tests, python3 -m) — single module instance
-    from core.internal.template_engine import TemplateError, render_template
+    # TemplateError re-exported for the monitoring/* generator modules (DevPlan 117 G T54).
+    from core.internal.template_engine import (
+        TemplateError,
+        render_template,
+    )
 except ImportError:  # pragma: no cover — direct-script invocation path
     # Invoked as `python3 ${PLATFORM_ROOT}/core/internal/monitoring_config_renderer.py`:
     # sys.path[0] = core/internal/ — template_engine.py lives in the same directory.
     _INTERNAL_DIR = str(Path(__file__).resolve().parent)
     if _INTERNAL_DIR not in sys.path:
         sys.path.insert(0, _INTERNAL_DIR)
-    from template_engine import TemplateError, render_template
+    from template_engine import TemplateError, render_template  # noqa: F401  (re-exported to monitoring/* generators)
 
 logger = logging.getLogger(__name__)
 
 # region CONSTANTS
 
 # ── module-level constants ──────────────────────────────────────────────────
-
-# Alert rules output dir on VPS (matching original lines 371, 379)
-ALERT_RULES_DIR = Path("/opt/prometheus/rules")
-
-# Default Loki runtime config path relative to platform root
-DEFAULT_LOKI_RUNTIME_CONFIG = "core/modules/logging/config/loki-runtime-config.yml"
-
-# Default Prometheus targets dir relative to platform root
-DEFAULT_PROMETHEUS_TARGETS_DIR = "prometheus-targets"
-
-# Default grafana dashboards output dir (VPS path)
-DEFAULT_GRAFANA_DASHBOARDS_DIR = Path("/opt/grafana/provisioning/dashboards")
-
-# Template paths relative to platform root
-DEFAULT_GRAFANA_TEMPLATE = "core/modules/monitoring/config/dashboards/project-template.json"
-DEFAULT_ALERT_RULES_TEMPLATE = "core/modules/monitoring/config/alert-rules.yml"
-
-# L1 defaults path relative to platform root
-DEFAULT_L1_DEFAULTS = "core/modules/monitoring/defaults.yaml"
-
-# Catalog script relative to platform root
-CATALOG_SCRIPT = "core/internal/catalog/generate-catalog.sh"
-
-# Service reload endpoints
-PROMETHEUS_RELOAD_URL = "http://prometheus:9090/-/reload"
-LOKI_RELOAD_URL = "http://loki:3100/reload"
-
-# Langfuse API endpoint
-LANGFUSE_API_URL = "http://langfuse:3000/api/public/projects"
-
+# DevPlan 117 G T54: constants moved to core/internal/monitoring/constants.py
+# (single source shared by the 7 generator modules + this orchestrator).
+from monitoring.constants import (  # noqa: F401
+    ALERT_RULES_DIR,
+    CATALOG_SCRIPT,
+    DEFAULT_ALERT_RULES_TEMPLATE,
+    DEFAULT_GRAFANA_DASHBOARDS_DIR,
+    DEFAULT_GRAFANA_TEMPLATE,
+    DEFAULT_L1_DEFAULTS,
+    DEFAULT_LOKI_RUNTIME_CONFIG,
+    DEFAULT_PROMETHEUS_TARGETS_DIR,
+    LANGFUSE_API_URL,
+    LOKI_RELOAD_URL,
+    PROMETHEUS_RELOAD_URL,
+)
 
 # endregion CONSTANTS
 
@@ -374,7 +358,7 @@ def _parse_ai_retention(val) -> int:
 # region TEMPLATE_RENDERING
 
 
-def _render_template(template_path: Path, output_path: Path, variables: dict[str, str]) -> None:
+def render_template_file(template_path: Path, output_path: Path, variables: dict[str, str]) -> None:
     """Render template via template_engine.render_template (native import, no subprocess).
 
     ## @purpose  Shared rendering logic for Grafana dashboards and alert rules.
@@ -413,7 +397,7 @@ def _render_template(template_path: Path, output_path: Path, variables: dict[str
 # region RETENTION_PARSING
 
 
-def _parse_retention_hours(retention_str: str) -> int:
+def parse_retention_hours(retention_str: str) -> int:
     """Parse logs_retention string to hours.
 
     ## @purpose  Convert retention strings like "7d", "336h", "forever" to hours.
@@ -448,6 +432,10 @@ def _parse_retention_hours(retention_str: str) -> int:
         return 168
 
 
+# Legacy private alias — white-box tests import _parse_retention_hours (gate does not scan tests/).
+_parse_retention_hours = parse_retention_hours
+
+
 # endregion RETENTION_PARSING
 
 
@@ -458,51 +446,15 @@ def generate_prometheus_target(
     config: ProjectMonitoringConfig,
     output_dir: Path | None = None,
 ) -> RenderResult:
-    """Generate Prometheus file-based service discovery target JSON.
+    """Lazy facade for monitoring.prometheus_targets.generate_prometheus_target (DevPlan 117 G T54).
 
-    ## @purpose  Create project target JSON for Prometheus file_sd_config.
-    ##           Skips if metrics_enabled is False.
-    ## @io
-    ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
-    ##   ⇥ output_dir: Path — output directory (default: platform_root/prometheus-targets)
-    ##   ⎋ RenderResult — outcome with status and output path
-    ## @complexity O(1)
-    ## @invariants
-    ##   - JSON schema: {"targets": ["<project>:<port>"], "labels": {"project", "type", "node", "service"}}
-    ##   - Creates output directory if missing
-    ##   - Non-fatal: file write failure → logged, continue
+    ## @purpose  Backward-compatible entry point retained in monitoring_config_renderer so existing
+    ##            callers (main, tests) keep the same import path. Implementation moved verbatim
+    ##            to monitoring/prometheus_targets.py. Lazy import keeps start-up time unchanged (AC-G5).
     """
-    if not config.metrics_enabled:
-        logger.info("[IMP:8][prometheus] Metrics disabled for %s — skipping Prometheus target", config.project_name)
-        return RenderResult(component="prometheus", status="noop", detail="metrics_enabled=False")
+    from monitoring.prometheus_targets import generate_prometheus_target as _impl
 
-    port = config.metrics_port
-    targets_dir = output_dir or (config.platform_root / DEFAULT_PROMETHEUS_TARGETS_DIR)
-    targets_dir.mkdir(parents=True, exist_ok=True)
-
-    target_file = targets_dir / f"{config.project_name}.json"
-    target = {
-        "targets": [f"{config.project_name}:{port}"],
-        "labels": {
-            "project": config.project_name,
-            "type": config.project_type,
-            "node": config.node_name,
-            "service": config.project_name,
-        },
-    }
-
-    try:
-        target_file.write_text(json.dumps(target, indent=2), encoding="utf-8")
-        logger.info("[IMP:9][prometheus] Prometheus target file generated: %s (port=%d)", target_file, port)
-        return RenderResult(
-            component="prometheus",
-            status="created",
-            output_path=target_file,
-            detail=f"targets=[{config.project_name}:{port}]",
-        )
-    except OSError as e:
-        logger.info("[IMP:6][prometheus] Failed to write Prometheus target file %s: %s", target_file, e)
-        return RenderResult(component="prometheus", status="failed", detail=str(e))
+    return _impl(config, output_dir)
 
 
 # endregion PROMETHEUS_TARGETS
@@ -516,49 +468,10 @@ def generate_grafana_dashboard(
     template_path: Path | None = None,
     output_dir: Path | None = None,
 ) -> RenderResult:
-    """Generate Grafana dashboard JSON from template.
+    """Lazy facade for monitoring.grafana_dashboards.generate_grafana_dashboard (DevPlan 117 G T54)."""
+    from monitoring.grafana_dashboards import generate_grafana_dashboard as _impl
 
-    ## @purpose  Render project dashboard via template_engine.render_template (native).
-    ##           Skips if dashboard_enabled is False or template missing.
-    ## @io
-    ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
-    ##   ⇥ template_path: Path — dashboard template JSON (default: platform-relative)
-    ##   ⇥ output_dir: Path — output directory (default: /opt/grafana/provisioning/dashboards)
-    ##   ⎋ RenderResult — outcome with status
-    ## @complexity O(T + V) where T = template size, V = variables
-    ## @invariants
-    ##   - Skips if dashboard_enabled is False (status="noop")
-    ##   - Skips if template file missing (status="skipped", log IMP:6)
-    ##   - Output directory created if missing
-    ##   - Native render: strict {{UPPER_SNAKE}} substitution (no sed fallback)
-    """
-    if not config.dashboard_enabled:
-        logger.info("[IMP:8][grafana] Dashboard disabled for %s — skipping", config.project_name)
-        return RenderResult(component="grafana", status="noop", detail="dashboard_enabled=False")
-
-    tmpl = template_path or (config.platform_root / DEFAULT_GRAFANA_TEMPLATE)
-    if not tmpl.exists():
-        logger.info("[IMP:6][grafana] Dashboard template not found: %s — skipping", tmpl)
-        return RenderResult(component="grafana", status="skipped", detail=f"template not found: {tmpl}")
-
-    out_dir = output_dir or DEFAULT_GRAFANA_DASHBOARDS_DIR
-    dash_file = out_dir / f"{config.project_name}.json"
-
-    try:
-        _render_template(
-            template_path=tmpl,
-            output_path=dash_file,
-            variables={
-                "PROJECT": config.project_name,
-                "TYPE": config.project_type,
-                "NODE": config.node_name,
-            },
-        )
-        logger.info("[IMP:9][grafana] Dashboard generated: %s", dash_file)
-        return RenderResult(component="grafana", status="created", output_path=dash_file)
-    except (OSError, TemplateError) as e:
-        logger.info("[IMP:6][grafana] Dashboard generation failed for %s: %s", config.project_name, e)
-        return RenderResult(component="grafana", status="failed", detail=str(e))
+    return _impl(config, template_path, output_dir)
 
 
 # endregion GRAFANA_DASHBOARDS
@@ -571,76 +484,10 @@ def update_loki_retention(
     config: ProjectMonitoringConfig,
     runtime_config_path: Path | None = None,
 ) -> RenderResult:
-    """Update Loki runtime config YAML with project retention stream.
+    """Lazy facade for monitoring.loki_retention.update_loki_retention (DevPlan 117 G T54)."""
+    from monitoring.loki_retention import update_loki_retention as _impl
 
-    ## @purpose  Idempotently add or verify a retention stream rule for the project
-    ##           in Loki's runtime config YAML. New rules are inserted BEFORE any
-    ##           catch-all rules (selectors containing 'compose_project=~').
-    ## @io
-    ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
-    ##   ⇥ runtime_config_path: Path — Loki runtime config path (default: platform-relative)
-    ##   ⎋ RenderResult — outcome: "updated", "skipped" (exists), "failed", "noop"
-    ## @complexity O(S) where S = number of existing retention streams
-    ## @invariants
-    ##   - Retention is always applied (no flag gate — Loki retention is universal)
-    ##   - Idempotent: if selector for this project already exists → status="skipped"
-    ##   - New rules inserted before catch-all (compose_project=~) rules
-    ##   - Missing runtime config file → created with just this project's stream
-    ##   - Non-fatal: YAML/dict errors logged, continue
-    """
-    retention_hours = _parse_retention_hours(config.logs_retention)
-    config_path = runtime_config_path or (config.platform_root / DEFAULT_LOKI_RUNTIME_CONFIG)
-    project = config.project_name
-
-    try:
-        # Load existing config or start fresh
-        existing = load_yaml_config(config_path)
-
-        streams = existing.setdefault("limits_config", {}).setdefault("retention_stream", [])
-
-        # Check if selector already exists (idempotent)
-        selector = '{compose_project="' + project + '"}'
-        exists = any(isinstance(s, dict) and s.get("selector", "") == selector for s in streams)
-
-        if exists:
-            logger.info("[IMP:8][loki] Retention stream already exists for %s — skipping", project)
-            return RenderResult(component="loki", status="skipped", detail=f"stream for {project} already exists")
-
-        # Build new rule
-        new_rule = {
-            "selector": selector,
-            "priority": 0,
-            "period": str(retention_hours) + "h",
-        }
-
-        # Insert before catch-all (compose_project=~) rules
-        inserted = False
-        for i, s in enumerate(streams):
-            if isinstance(s, dict) and "compose_project=~" in s.get("selector", ""):
-                streams.insert(i, new_rule)
-                inserted = True
-                break
-
-        if not inserted:
-            streams.append(new_rule)
-
-        # Write back
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, "w") as f:
-            yaml.dump(existing, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-        logger.info(
-            "[IMP:9][loki] Loki runtime config updated for %s: %s (%dh)",
-            project,
-            config.logs_retention,
-            retention_hours,
-        )
-        return RenderResult(
-            component="loki", status="updated", detail=f"retention={config.logs_retention} ({retention_hours}h)"
-        )
-    except (OSError, yaml.YAMLError) as e:
-        logger.info("[IMP:6][loki] Failed to update Loki retention for %s: %s", project, e)
-        return RenderResult(component="loki", status="failed", detail=str(e))
+    return _impl(config, runtime_config_path)
 
 
 # endregion LOKI_RETENTION
@@ -652,64 +499,10 @@ def update_loki_retention(
 def create_langfuse_project(
     config: ProjectMonitoringConfig,
 ) -> RenderResult:
-    """Create Langfuse project via HTTP API.
+    """Lazy facade for monitoring.langfuse_projects.create_langfuse_project (DevPlan 117 G T54)."""
+    from monitoring.langfuse_projects import create_langfuse_project as _impl
 
-    ## @purpose  POST to Langfuse API to create a project for LLM monitoring.
-    ##           Skips if needs_llm is False.
-    ## @io
-    ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
-    ##   ⎋ RenderResult — outcome: "created", "skipped" (exists or no LLM), "failed"
-    ## @complexity O(1) HTTP call
-    ## @invariants
-    ##   - Skips if needs_llm is False (status="noop")
-    ##   - Uses urllib.request (stdlib) — no requests dependency
-    ##   - LANGFUSE_SECRET_KEY read from environment (missing → status="failed")
-    ##   - HTTP 409 / "already exists" → status="skipped" (idempotent)
-    ##   - Non-fatal: HTTP/network errors logged, continue
-    """
-    if not config.needs_llm:
-        logger.info("[IMP:8][langfuse] No LLM needs declared — skipping Langfuse project")
-        return RenderResult(component="langfuse", status="noop", detail="needs_llm=False")
-
-    secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
-    if not secret_key:
-        logger.info("[IMP:6][langfuse] LANGFUSE_SECRET_KEY not set — skipping Langfuse project creation")
-        return RenderResult(component="langfuse", status="failed", detail="LANGFUSE_SECRET_KEY not set")
-
-    body = json.dumps(
-        {
-            "name": config.project_name,
-            "retention": config.ai_retention_days,
-        }
-    ).encode("utf-8")
-
-    req = urllib.request.Request(
-        LANGFUSE_API_URL,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {secret_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 — internal Langfuse API (localhost)
-            status_code = resp.status
-            if status_code in (200, 201):
-                logger.info("[IMP:9][langfuse] Langfuse project created: %s", config.project_name)
-                return RenderResult(component="langfuse", status="created", detail=f"HTTP {status_code}")
-            logger.info("[IMP:6][langfuse] Langfuse API returned HTTP %s for %s", status_code, config.project_name)
-            return RenderResult(component="langfuse", status="failed", detail=f"HTTP {status_code}")
-    except urllib.error.HTTPError as e:
-        if e.code == 409:
-            logger.info("[IMP:8][langfuse] Langfuse project '%s' already exists — skipping", config.project_name)
-            return RenderResult(component="langfuse", status="skipped", detail="HTTP 409 already exists")
-        logger.info("[IMP:6][langfuse] Langfuse HTTP error %s for %s: %s", e.code, config.project_name, e)
-        return RenderResult(component="langfuse", status="failed", detail=f"HTTP {e.code}")
-    except (urllib.error.URLError, OSError) as e:
-        logger.info("[IMP:6][langfuse] Langfuse network error for %s: %s", config.project_name, e)
-        return RenderResult(component="langfuse", status="failed", detail=str(e))
+    return _impl(config)
 
 
 # endregion LANGFUSE_PROJECTS
@@ -723,45 +516,10 @@ def generate_alert_rules(
     template_path: Path | None = None,
     output_dir: Path | None = None,
 ) -> RenderResult:
-    """Generate Prometheus alert rules YAML from template.
+    """Lazy facade for monitoring.alert_rules.generate_alert_rules (DevPlan 117 G T54)."""
+    from monitoring.alert_rules import generate_alert_rules as _impl
 
-    ## @purpose  Render project alert rules via template_engine.render_template (native).
-    ##           Skips if alerting_enabled is False or template missing.
-    ## @io
-    ##   ⇥ config: ProjectMonitoringConfig — resolved monitoring config
-    ##   ⇥ template_path: Path — alert rules template (default: platform-relative)
-    ##   ⇥ output_dir: Path — output directory (default: /opt/prometheus/rules)
-    ##   ⎋ RenderResult — outcome with status
-    ## @complexity O(T + V) where T = template size, V = variables
-    ## @invariants
-    ##   - Skips if alerting_enabled is False (status="noop")
-    ##   - Skips if template file missing (status="skipped", log IMP:6)
-    ##   - Output directory created if missing
-    ##   - Single variable: PROJECT for substitution
-    """
-    if not config.alerting_enabled:
-        logger.info("[IMP:8][alerting] Alerting disabled for %s — skipping alert rules", config.project_name)
-        return RenderResult(component="alerting", status="noop", detail="alerting_enabled=False")
-
-    tmpl = template_path or (config.platform_root / DEFAULT_ALERT_RULES_TEMPLATE)
-    if not tmpl.exists():
-        logger.info("[IMP:6][alerting] Alert rules template not found: %s — skipping", tmpl)
-        return RenderResult(component="alerting", status="skipped", detail=f"template not found: {tmpl}")
-
-    out_dir = output_dir or ALERT_RULES_DIR
-    output_file = out_dir / f"{config.project_name}-alerts.yml"
-
-    try:
-        _render_template(
-            template_path=tmpl,
-            output_path=output_file,
-            variables={"PROJECT": config.project_name},
-        )
-        logger.info("[IMP:9][alerting] Alert rules generated: %s", output_file)
-        return RenderResult(component="alerting", status="created", output_path=output_file)
-    except (OSError, TemplateError) as e:
-        logger.info("[IMP:6][alerting] Alert rules generation failed for %s: %s", config.project_name, e)
-        return RenderResult(component="alerting", status="failed", detail=str(e))
+    return _impl(config, template_path, output_dir)
 
 
 # endregion ALERT_RULES
@@ -771,34 +529,10 @@ def generate_alert_rules(
 
 
 def refresh_catalog(platform_root: Path) -> RenderResult:
-    """Invoke catalog generation script.
+    """Lazy facade for monitoring.catalog_refresh.refresh_catalog (DevPlan 117 G T54)."""
+    from monitoring.catalog_refresh import refresh_catalog as _impl
 
-    ## @purpose  Run core/internal/catalog/generate-catalog.sh to refresh service catalog.
-    ##           Non-fatal: script not found or failure → logged, continue.
-    ## @io
-    ##   ⇥ platform_root: Path — platform root for resolving catalog script
-    ##   ⎋ RenderResult — outcome
-    ## @complexity O(1) subprocess call
-    ## @invariants
-    ##   - Script must be executable (check with is_file())
-    ##   - Script not found → status="noop"
-    ##   - Script failure → status="failed", logged at IMP:6
-    """
-    script_path = platform_root / CATALOG_SCRIPT
-    if not script_path.is_file():
-        logger.info("[IMP:7][catalog] Catalog script not found: %s — skipping", script_path)
-        return RenderResult(component="catalog", status="noop", detail=f"script not found: {script_path}")
-
-    try:
-        subprocess.run([str(script_path)], check=True, capture_output=True, text=True, timeout=60)
-        logger.info("[IMP:8][catalog] Catalog refresh invoked")
-        return RenderResult(component="catalog", status="created", detail="Catalog refreshed")
-    except subprocess.CalledProcessError as e:
-        logger.info("[IMP:6][catalog] Catalog generation failed (exit %s): %s", e.returncode, e.stderr.strip())
-        return RenderResult(component="catalog", status="failed", detail=e.stderr.strip())
-    except (OSError, subprocess.TimeoutExpired) as e:
-        logger.info("[IMP:6][catalog] Catalog generation error: %s", e)
-        return RenderResult(component="catalog", status="failed", detail=str(e))
+    return _impl(platform_root)
 
 
 # endregion CATALOG_REFRESH
@@ -808,41 +542,10 @@ def refresh_catalog(platform_root: Path) -> RenderResult:
 
 
 def reload_monitoring_services() -> list[RenderResult]:
-    """HTTP POST reload Prometheus and Loki.
+    """Lazy facade for monitoring.service_reload.reload_monitoring_services (DevPlan 117 G T54)."""
+    from monitoring.service_reload import reload_monitoring_services as _impl
 
-    ## @purpose  Send reload signals to Prometheus and Loki after config changes.
-    ##           Each call is non-fatal — failures logged, continue to next.
-    ## @io
-    ##   ⎋ list[RenderResult] — one result per service
-    ## @complexity O(1) per service (2 HTTP calls)
-    ## @invariants
-    ##   - Prometheus: POST http://prometheus:9090/-/reload
-    ##   - Loki: POST http://loki:3100/reload
-    ##   - Each failure is logged and continued
-    """
-    results: list[RenderResult] = []
-
-    # Prometheus reload
-    try:
-        req = urllib.request.Request(PROMETHEUS_RELOAD_URL, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 — internal Prometheus API (localhost)
-            logger.info("[IMP:8][reload] Prometheus reload: HTTP %s", resp.status)
-            results.append(RenderResult(component="reload", status="created", detail=f"Prometheus HTTP {resp.status}"))
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-        logger.info("[IMP:6][reload] Prometheus reload failed: %s", e)
-        results.append(RenderResult(component="reload", status="failed", detail=f"Prometheus: {e}"))
-
-    # Loki reload
-    try:
-        req = urllib.request.Request(LOKI_RELOAD_URL, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 — internal Loki API (localhost)
-            logger.info("[IMP:8][reload] Loki reload: HTTP %s", resp.status)
-            results.append(RenderResult(component="reload", status="created", detail=f"Loki HTTP {resp.status}"))
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-        logger.info("[IMP:6][reload] Loki reload failed: %s", e)
-        results.append(RenderResult(component="reload", status="failed", detail=f"Loki: {e}"))
-
-    return results
+    return _impl()
 
 
 # endregion SERVICE_RELOAD

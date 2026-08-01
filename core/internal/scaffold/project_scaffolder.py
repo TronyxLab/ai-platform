@@ -355,82 +355,20 @@ def git_init_project(project_dir: str, name: str, template: str, dry_run: bool =
 
 # region FUNC_create_github_repo
 def create_github_repo(org: str, name: str, project_dir: str, dry_run: bool = False) -> bool:
-    """Create GitHub repo and push initial commit.
+    """Lazy facade for core.internal.scaffold.github_ops.create_github_repo.
 
-    ## @purpose  Mirror of create_github_repo() from add-project.sh:591-628.
-    ## @io        ⇥ org, name, project_dir, dry_run → ⎋ bool
-    ## @complexity O(1)
+    ## @purpose — Backward-compatible entry point retained in project_scaffolder so existing
+    ##            callers (main) keep the same import path. Implementation moved verbatim to
+    ##            github_ops.py (DevPlan 117 G T58.1). Lazy import keeps start-up time unchanged (AC-G5).
+    ## @io — ⇥ org, name, project_dir, dry_run → ⎋ bool
+    ## @complexity — O(1) + delegate
     ## @invariants
     ##   - Graceful: gh not found → warn, skip (non-fatal)
     ##   - Repo already exists → skip creation, add remote
     """
-    # Check gh availability
-    if not shutil.which("gh"):
-        logger.info("[IMP:9][scaffold][gh] WARNING: gh CLI not found — skipping GitHub repo creation")
-        return True  # non-fatal
+    from core.internal.scaffold.github_ops import create_github_repo as _impl
 
-    if dry_run:
-        logger.info("[IMP:7][scaffold][gh] [DRY-RUN] Would create GitHub repo: %s/%s", org, name)
-        return True
-
-    # Check if repo already exists
-    result = subprocess.run(
-        ["gh", "repo", "view", f"{org}/{name}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        logger.info("[IMP:7][scaffold][gh] GitHub repo already exists: %s/%s — skipping creation", org, name)
-        # Add remote if not already set
-        remote_result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=project_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if remote_result.returncode != 0:
-            subprocess.run(
-                ["git", "remote", "add", "origin", f"git@github.com:{org}/{name}.git"],
-                cwd=project_dir,
-                capture_output=True,
-                check=False,
-            )
-            logger.info("[IMP:7][scaffold][gh] Added git remote: origin git@github.com:%s/%s.git", org, name)
-        return True
-
-    logger.info("[IMP:7][scaffold][gh] Creating GitHub repo: %s/%s", org, name)
-
-    result = subprocess.run(
-        ["gh", "repo", "create", f"{org}/{name}", "--private", "--description", f"{name} project"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    if result.returncode == 0:
-        logger.info("[IMP:7][scaffold][gh] GitHub repo created: %s/%s", org, name)
-        subprocess.run(
-            ["git", "remote", "add", "origin", f"git@github.com:{org}/{name}.git"],
-            cwd=project_dir,
-            capture_output=True,
-            check=False,
-        )
-        push_result = subprocess.run(
-            ["git", "push", "-u", "origin", "main"],
-            cwd=project_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if push_result.returncode != 0:
-            logger.info("[IMP:8][scaffold][gh] WARNING: git push failed — push manually")
-        else:
-            logger.info("[IMP:7][scaffold][gh] Initial push to origin/main complete")
-        return True
-    logger.info("[IMP:8][scaffold][gh] WARNING: Failed to create GitHub repo: %s/%s — create manually", org, name)
-    return True  # non-fatal
+    return _impl(org, name, project_dir, dry_run)
 
 
 # endregion FUNC_create_github_repo

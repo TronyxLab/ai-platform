@@ -27,28 +27,23 @@
 ##            replaced send() urllib with telegram_notifier shared module; updated invariants
 # endregion MODULE_CONTRACT
 
+from __future__ import annotations
+
 import argparse
-import json
 import logging
 import os
 import signal
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 from core.internal.config import (
     platform_config,
 )  # LINT-EXEMPT: контейнерный модуль; internal.config — by design (D1, allowlist 116 B11 T1)
-from core.internal.shared.docker_compose import (
-    docker_compose_down,
-    docker_compose_pull,
-    docker_compose_up,
-)  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1, DevPlan 117 D19)
 from core.internal.shared.secrets_env_parser import (
     parse as parse_secrets_env,
 )  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1)
@@ -62,57 +57,20 @@ from core.internal.shared.timeouts import (
     WATCHDOG_TIMEOUT,
 )  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, DevPlan 117 D29)
 
+# ⚠️ NOTE (DevPlan 117 G T52): CircuitBreakerService/CircuitEvent/CircuitBreaker moved to
+# circuit_breaker.py; DockerManager moved to docker_ops.py. Lazy imports inside methods
+# (from circuit_breaker import ... / from docker_ops import ...) — start-up time unchanged (AC-G5).
+# TYPE_CHECKING-only annotations for the extracted classes — never imported at runtime.
+if TYPE_CHECKING:
+    from circuit_breaker import (  # type: ignore[import-not-found]
+        CircuitBreakerService,
+    )
+
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
 # Configuration dataclasses
 # ═══════════════════════════════════════════════════════════════════
-
-
-# region DATACLASS__CircuitBreakerService
-@dataclass
-class CircuitBreakerService:
-    """Configuration for one circuit breaker service.
-
-    Parsed from the shell format: "service_name:check_cmd:max_failures:window_seconds"
-    """
-
-    service_name: str
-    check_command: list[str]  # Pre-split command for safe subprocess execution
-    check_command_str: str  # Original string for logging
-    max_failures: int = 5
-    window_seconds: int = 300
-
-    @classmethod
-    def from_config_entry(cls, entry: str) -> Optional["CircuitBreakerService"]:
-        """Parse colon-separated config entry.
-
-        Format: "postgres:pg_isready -U postgres -h 127.0.0.1 -t 5:5:300"
-
-        TRAP: The shell version used IFS=' ' read -ra to split the check command.
-        In Python, we split by colon first (4 parts), then split the command by spaces.
-        """
-        parts = entry.split(":", 3)
-        if len(parts) < 4:
-            return None
-        service_name, cmd_str, max_fail_str, window_str = parts
-        cmd_parts = cmd_str.split()
-        try:
-            max_failures = int(max_fail_str)
-            window_seconds = int(window_str)
-        except ValueError:
-            max_failures = 5
-            window_seconds = 300
-        return cls(
-            service_name=service_name.strip(),
-            check_command=cmd_parts,
-            check_command_str=cmd_str.strip(),
-            max_failures=max_failures,
-            window_seconds=window_seconds,
-        )
-
-
-# endregion
 
 
 # region DATACLASS__WatchdogConfig
@@ -143,6 +101,8 @@ class WatchdogConfig:
     agent_port: int = 9119
 
     # Circuit breaker
+    # Circuit breaker — services list typed via TYPE_CHECKING import (circuit_breaker.py
+    # is lazy-imported, never at module level).
     cb_state_dir: str = ""
     cb_services: list[CircuitBreakerService] = field(default_factory=list)
 
@@ -155,8 +115,11 @@ class WatchdogConfig:
     telegram_proxy_url: str = ""
 
     @classmethod
-    def from_env(cls) -> "WatchdogConfig":
+    def from_env(cls) -> WatchdogConfig:
         """Construct config from environment variables with defaults."""
+        # Lazy import — CircuitBreakerService lives in circuit_breaker.py (DevPlan 117 G T52).
+        from circuit_breaker import CircuitBreakerService
+
         # AGENT_PORT — runtime env var; соответствует HERMES_DASHBOARD_PORT (9119) из
         # platform-infra.yaml env_defaults (SoT портов). Двойное имя сохранено для
         # backward-compat: AGENT_PORT используется watchdog-контейнером, HERMES_DASHBOARD_PORT —
@@ -224,7 +187,7 @@ class PendingUpdate:
     failure_time: str = ""
 
     @classmethod
-    def from_file(cls, path: str) -> Optional["PendingUpdate"]:
+    def from_file(cls, path: str) -> PendingUpdate | None:
         """Read KEY=VALUE lines from pending file. Returns None if missing."""
         p = Path(path)
         if not p.is_file():
@@ -263,232 +226,11 @@ class PendingUpdate:
 # endregion
 
 
-# region DATACLASS__CircuitEvent
-@dataclass
-class CircuitEvent:
-    """Result of a single circuit breaker check."""
-
-    service: str
-    event_type: str  # "passed", "failed", "opened", "reset"
-    failure_count: int = 0
-    max_failures: int = 0
-
-
-# endregion
-
 # ═══════════════════════════════════════════════════════════════════
-# Circuit Breaker
+# Circuit Breaker — moved to circuit_breaker.py (DevPlan 117 G T52).
+# agent_watchdog.py instantiates it lazily inside Watchdog.__init__.
 # ═══════════════════════════════════════════════════════════════════
 
-
-# region CLASS__CircuitBreaker
-class CircuitBreaker:
-    """Circuit breaker framework for stateful services.
-
-    State machine:
-        CLOSED (circuit_open=False) — normal operation, tracking failures
-        OPEN (circuit_open=True) — failures >= threshold in window, service stopped
-        HALF_OPEN — window expired since last failure, auto-reset to CLOSED
-
-    State persistence: JSON files at {state_dir}/{service_name}.json
-    Format: {"failures": [unix_timestamp, ...], "circuit_open": bool}
-    """
-
-    def __init__(self, config: WatchdogConfig):
-        self._state_dir = Path(config.cb_state_dir)
-        self._services = config.cb_services
-        self._state_dir.mkdir(parents=True, exist_ok=True)
-
-    # region FUNC__read_state
-    def _read_state(self, service_name: str) -> dict:
-        """Read circuit breaker state from JSON file.
-
-        Returns default state {"failures": [], "circuit_open": false} if file missing.
-        """
-        state_file = self._state_dir / f"{service_name}.json"
-        if state_file.is_file():
-            try:
-                return json.loads(state_file.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
-        return {"failures": [], "circuit_open": False}
-
-    # endregion
-
-    # region FUNC__write_state
-    def _write_state(self, service_name: str, state: dict) -> None:
-        """Write circuit breaker state to JSON file atomically."""
-        state_file = self._state_dir / f"{service_name}.json"
-        tmp_file = self._state_dir / f".{service_name}.json.tmp"
-        try:
-            tmp_file.write_text(json.dumps(state))
-            tmp_file.replace(state_file)
-        except OSError:
-            # Non-fatal: state file write failure — log and continue
-            logger.warning("[IMP:8][cb] Failed to write state for %s", service_name)
-
-    # endregion
-
-    # region FUNC__run_health_check
-    def _run_health_check(self, command: list[str]) -> bool:
-        """Execute a health check command. Returns True if healthy (exit 0)."""
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=10,  # Hard timeout for health checks
-            )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            return False
-
-    # endregion
-
-    # region FUNC__increment_failures
-    def _increment_failures(self, service_name: str, max_failures: int, window_seconds: int) -> bool:
-        """Record a failure and check if circuit should open.
-
-        Returns True if circuit is OPEN (stop restarting),
-        False if circuit is CLOSED (continue tracking).
-        """
-        now = int(time.time())
-        state = self._read_state(service_name)
-        circuit_open = state.get("circuit_open", False)
-
-        # If circuit already open, check for auto-recovery
-        if circuit_open:
-            failures = state.get("failures", [])
-            last_failure = failures[-1] if failures else 0
-            if now - last_failure > window_seconds:
-                # Window expired — auto-recover
-                logger.info(
-                    "[IMP:8][cb:%s] Circuit window expired — resetting failures",
-                    service_name,
-                )
-                self._write_state(service_name, {"failures": [], "circuit_open": False})
-                return False
-            logger.info("[IMP:9][cb:%s] Circuit is OPEN — service is stopped", service_name)
-            return True
-
-        # Filter failures within window, append current
-        failures = [f for f in state.get("failures", []) if now - f < window_seconds]
-        failures.append(now)
-        is_open = len(failures) >= max_failures
-
-        new_state = {
-            "failures": failures,
-            "circuit_open": is_open,
-        }
-        self._write_state(service_name, new_state)
-
-        logger.info(
-            "[IMP:8][cb:%s] Failure count: %d/%d in %ds window",
-            service_name,
-            len(failures),
-            max_failures,
-            window_seconds,
-        )
-
-        if is_open:
-            logger.info(
-                "[IMP:9][cb:%s] CIRCUIT BREAKER OPENED — %d failures in %ds",
-                service_name,
-                len(failures),
-                window_seconds,
-            )
-
-        return is_open
-
-    # endregion
-
-    # region FUNC__check_service
-    def _check_service(
-        self,
-        svc: CircuitBreakerService,
-        docker_manager: "DockerManager",
-        telegram: "TelegramNotifier",
-    ) -> CircuitEvent | None:
-        """Check one service and return circuit event or None."""
-        logger.info(
-            "[IMP:8][cb:%s] Checking health via: %s",
-            svc.service_name,
-            svc.check_command_str,
-        )
-
-        if self._run_health_check(svc.check_command):
-            logger.info("[IMP:8][cb:%s] Health check PASSED", svc.service_name)
-            return CircuitEvent(
-                service=svc.service_name,
-                event_type="passed",
-                max_failures=svc.max_failures,
-            )
-
-        logger.info("[IMP:9][cb:%s] Health check FAILED", svc.service_name)
-
-        circuit_opened = self._increment_failures(svc.service_name, svc.max_failures, svc.window_seconds)
-
-        if circuit_opened:
-            # Stop the crash-looping container
-            logger.info(
-                "[IMP:9][cb:%s] CIRCUIT BREAK: Stopping %s due to repeated health failures",
-                svc.service_name,
-                svc.service_name,
-            )
-            docker_manager.stop_container(svc.service_name)
-            # 🧐 TRAP[DECISION] · 2026-08-01 · — · default_context() без "test" fallback (DevPlan 116 B6 D4)
-            # · Rejected: literal fallback "test" (хардкод-копия SoT env_defaults.CONTEXT)
-            # · Reason: platform-env.yaml отсутствует в образе hermes-agent (верифицировано 2026-08-01 —
-            #   нет COPY в L2 Dockerfile, нет volume-маунта); watchdog всегда получает CONTEXT из
-            #   docker-compose env (`${CONTEXT:-test}`, base.yml:154) → поведение не меняется; если env
-            #   отсутствует — fallback деградирует до "" (fail-visible) вместо тихой лжи "test".
-            # · Rev: если образ начнёт доставлять platform-env.yaml — удалить заметку
-            context = os.environ.get("CONTEXT", platform_config.default_context())
-            telegram.send(
-                f"\U0001f6a8 [{context}] Circuit breaker opened for {svc.service_name}%0A"
-                f"{svc.max_failures} failures in {svc.window_seconds}s%0A"
-                f"Auto-stopped to prevent crash-loop data corruption"
-            )
-
-            return CircuitEvent(
-                service=svc.service_name,
-                event_type="opened",
-                failure_count=svc.max_failures,
-                max_failures=svc.max_failures,
-            )
-
-        return CircuitEvent(
-            service=svc.service_name,
-            event_type="failed",
-            max_failures=svc.max_failures,
-        )
-
-    # endregion
-
-    # region FUNC_check_all_services
-    def check_all_services(self, docker_manager: "DockerManager", telegram: "TelegramNotifier") -> list[CircuitEvent]:
-        """Run one circuit breaker check cycle for all configured services.
-
-        Returns list of CircuitEvent results.
-        """
-        logger.info("[IMP:7][cb] Running circuit breaker check cycle")
-        events: list[CircuitEvent] = []
-
-        for svc in self._services:
-            if not svc.service_name:
-                logger.info("[IMP:8][cb] Invalid circuit breaker entry — skipping")
-                continue
-            event = self._check_service(svc, docker_manager, telegram)
-            if event:
-                events.append(event)
-
-        logger.info("[IMP:7][cb] Circuit breaker cycle complete")
-        return events
-
-    # endregion
-
-
-# endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # HealthChecker
@@ -613,192 +355,10 @@ class TelegramNotifier:
 # endregion
 
 # ═══════════════════════════════════════════════════════════════════
-# DockerManager
+# DockerManager — moved to docker_ops.py (DevPlan 117 G T52).
+# agent_watchdog.py instantiates it lazily inside Watchdog.__init__.
 # ═══════════════════════════════════════════════════════════════════
 
-
-# region CLASS__DockerManager
-class DockerManager:
-    """Manage Docker operations: compose, images, containers."""
-
-    def __init__(self, compose_file: str, project_name: str, module_dir: str):
-        self._compose_file = compose_file
-        self._project = project_name
-        self._module_dir = module_dir
-
-    def _run_docker(self, args: list[str], timeout: int = 600) -> subprocess.CompletedProcess:
-        """Run a docker/docker compose command with consistent error handling."""
-        try:
-            return subprocess.run(
-                ["sudo", "docker", *args],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            logger.info("[IMP:9][watchdog][docker] Timeout: docker %s", " ".join(args))
-            return subprocess.CompletedProcess(args=args, returncode=124, stdout="", stderr="timeout")
-        except FileNotFoundError:
-            logger.info("[IMP:9][watchdog][docker] docker not found")
-            return subprocess.CompletedProcess(args=args, returncode=127, stdout="", stderr="docker: not found")
-
-    def compose_down(self, service: str) -> bool:
-        """docker compose down <service> — delegated to shared/docker_compose (DevPlan 117 D19)."""
-        logger.info("[IMP:8][watchdog][rollback] Step 5a: stopping %s via docker compose down", service)
-        ok = docker_compose_down(
-            self._module_dir,
-            compose_args=["-f", self._compose_file, "--project-name", self._project],
-            service=service,
-        )
-        if not ok:
-            logger.info(
-                "[IMP:9][watchdog][rollback] WARNING: docker compose down returned non-zero — continuing rollback"
-            )
-        return ok
-
-    def compose_pull(self) -> bool:
-        """docker compose pull — delegated to shared/docker_compose (DevPlan 117 D19)."""
-        logger.info("[IMP:8][watchdog][rollback] Step 5b: pulling image via docker compose pull")
-        ok = docker_compose_pull(
-            self._module_dir,
-            compose_args=["-f", self._compose_file, "--project-name", self._project],
-        )
-        if not ok:
-            logger.info(
-                "[IMP:9][watchdog][rollback] CRITICAL: docker compose pull failed — "
-                "image may not be available in registry"
-            )
-        return ok
-
-    def compose_up(self, service: str) -> bool:
-        """docker compose up -d <service> — delegated to shared/docker_compose (DevPlan 117 D19)."""
-        logger.info(
-            "[IMP:8][watchdog][rollback] Step 5c: starting %s with previous version (docker compose up -d)",
-            service,
-        )
-        ok = docker_compose_up(
-            self._module_dir,
-            compose_args=["-f", self._compose_file, "--project-name", self._project],
-            service=service,
-        )
-        if not ok:
-            logger.info("[IMP:9][watchdog][rollback] CRITICAL: docker compose up -d failed")
-        return ok
-
-    def cleanup_old_images(self, keep: int) -> int:
-        """Remove old hermes-agent images beyond keep count.
-
-        Returns number of images removed.
-        """
-        logger.info("[IMP:7][watchdog][cleanup] Cleaning old hermes-agent images (keep=%d)", keep)
-
-        # List hermes-agent images sorted by creation date (newest first)
-        result = self._run_docker(
-            [
-                "image",
-                "ls",
-                "--filter",
-                "reference=hermes-agent",
-                "--format",
-                "{{.Repository}}:{{.Tag}} {{.CreatedAt}}",
-            ],
-            timeout=30,
-        )
-
-        if result.returncode != 0 or not result.stdout.strip():
-            logger.info("[IMP:7][watchdog][cleanup] No hermes-agent images found — skipping cleanup")
-            return 0
-
-        # Parse and sort by date (newest first)
-        lines = result.stdout.strip().splitlines()
-        # Each line: "hermes-agent:tag 2024-01-01 12:00:00 +0000 UTC"
-        images = []
-        for line in lines:
-            parts = line.split(" ", 1)
-            if len(parts) >= 2:
-                images.append((parts[0], parts[1]))
-
-        # Sort by date descending (newest first)
-        images.sort(key=lambda x: x[1], reverse=True)
-
-        removed = 0
-        for i, (img_ref, _) in enumerate(images):
-            if i < keep:
-                continue
-            logger.info("[IMP:7][watchdog][cleanup] Removing old image: %s", img_ref)
-            r = self._run_docker(["rmi", img_ref], timeout=30)
-            if r.returncode == 0:
-                removed += 1
-            else:
-                logger.info(
-                    "[IMP:7][watchdog][cleanup] WARNING: Could not remove image %s (may be in use)",
-                    img_ref,
-                )
-
-        logger.info(
-            "[IMP:7][watchdog][cleanup] Image cleanup complete (found=%d, kept=%d, removed=%d)",
-            len(images),
-            min(len(images), keep),
-            removed,
-        )
-        return removed
-
-    def stop_container(self, name: str) -> bool:
-        """Stop a Docker container (docker stop, fallback to docker kill)."""
-        # Check if container is running
-        ps_result = self._run_docker(
-            [
-                "ps",
-                "--format",
-                "{{.Names}}",
-            ],
-            timeout=10,
-        )
-
-        running_containers = ps_result.stdout.strip().splitlines()
-        if name not in running_containers:
-            logger.info(
-                "[IMP:8][watchdog][cb:%s] Container %s is not running",
-                name,
-                name,
-            )
-            return True  # Already stopped = success
-
-        logger.info("[IMP:9][watchdog][cb:%s] Stopping container %s", name, name)
-        stop_result = self._run_docker(["stop", name], timeout=30)
-        if stop_result.returncode == 0:
-            logger.info("[IMP:8][watchdog][cb:%s] Container %s stopped", name, name)
-            return True
-
-        # Fallback to kill
-        logger.info("[IMP:9][watchdog][cb:%s] stop failed — trying kill", name)
-        kill_result = self._run_docker(["kill", name], timeout=10)
-        if kill_result.returncode != 0:
-            logger.info(
-                "[IMP:9][watchdog][cb:%s] WARNING: Could not stop container %s",
-                name,
-                name,
-            )
-            return False
-        return True
-
-    def container_status(self, name: str) -> str:
-        """Get container status for diagnostics."""
-        result = self._run_docker(
-            [
-                "ps",
-                "-a",
-                "--filter",
-                f"name={name}",
-                "--format",
-                "{{.Names}} {{.Status}} {{.Image}}",
-            ],
-            timeout=10,
-        )
-        return result.stdout.strip()
-
-
-# endregion
 
 # ═══════════════════════════════════════════════════════════════════
 # Watchdog — main orchestrator
@@ -815,6 +375,10 @@ class Watchdog:
         # Файл /var/log/platform/watchdog-audit.log никем не читается (grep 2026-08-01) —
         # замена безопасна; логи идут в stderr (systemd journal), форматтер в main().
         self._log = logger
+        # Lazy imports — CircuitBreaker/DockerManager live in sibling modules (DevPlan 117 G T52).
+        from circuit_breaker import CircuitBreaker
+        from docker_ops import DockerManager
+
         self._circuit_breaker = CircuitBreaker(config)
         self._health_checker = HealthChecker(config.health_url, config.poll_interval, config.curl_max_time)
         self._telegram = TelegramNotifier(config.secrets_file, config.telegram_proxy_url, config.curl_tg_max_time)
