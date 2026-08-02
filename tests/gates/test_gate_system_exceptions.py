@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 PLATFORM_ROOT: str = str(pathlib.Path(__file__).resolve().parent.parent.parent)
 MANIFEST: pathlib.Path = pathlib.Path(PLATFORM_ROOT) / "core" / "entrypoint-manifest.yaml"
 CORE_AGENTS: pathlib.Path = pathlib.Path(PLATFORM_ROOT) / "core" / "AGENTS.md"
-GENERATOR: pathlib.Path = pathlib.Path(PLATFORM_ROOT) / "core" / "internal" / "scripts" / "generate_entrypoint_manifest.py"
+GENERATOR: pathlib.Path = (
+    pathlib.Path(PLATFORM_ROOT) / "core" / "internal" / "scripts" / "generate_entrypoint_manifest.py"
+)
 
 # Канонический перечень системных исключений (DevPlan 119 G2)
 # NB: frozenset(tuple), не frozenset({...}) — set-литерал внутри Call ловится гейтом
@@ -84,9 +86,7 @@ def test_system_exceptions_documented() -> None:
 
     # 1. Манифест: перечень system_exceptions
     manifest_exceptions = extract_manifest_exceptions()
-    logger.info(
-        "[IMP:9][system_exceptions] Manifest system_exceptions: %s", sorted(manifest_exceptions)
-    )
+    logger.info("[IMP:9][system_exceptions] Manifest system_exceptions: %s", sorted(manifest_exceptions))
     assert manifest_exceptions == EXPECTED_SYSTEM_EXCEPTIONS, (
         f"Manifest name_linter.system_exceptions mismatch: {sorted(manifest_exceptions)} "
         f"!= {sorted(EXPECTED_SYSTEM_EXCEPTIONS)}"
@@ -115,9 +115,7 @@ def test_system_exceptions_documented() -> None:
     for name in EXPECTED_SYSTEM_EXCEPTIONS:
         assert f'"{name}"' in gen_text, f"Generator SYSTEM_EXCEPTIONS missing {name}"
 
-    logger.info(
-        "[IMP:9][system_exceptions] PASS — system exceptions documented in manifest+AGENTS.md+generator"
-    )
+    logger.info("[IMP:9][system_exceptions] PASS — system exceptions documented in manifest+AGENTS.md+generator")
 
 
 # endregion FUNC_test_system_exceptions_documented
