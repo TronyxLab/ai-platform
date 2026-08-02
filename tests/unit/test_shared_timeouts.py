@@ -93,8 +93,12 @@ def test_constants_values(caplog: pytest.LogCaptureFixture) -> None:
     assert timeouts.WATCHDOG_POLL_INTERVAL == 5
     assert timeouts.WATCHDOG_CURL_MAX_TIME == 3
     assert timeouts.WATCHDOG_CURL_TG_MAX_TIME == 30
-    assert timeouts.PROJECT_HEALTHCHECK_PORTS == [8080, 8000]
-    logger.info("[IMP:9][test_constants_values] Все %d констант канонизированы", 22)
+    # B6 (DevPlan 119): [8080,8000] → [3000,4000,8000,8080,9000] — покрытие реальных compose-портов
+    assert timeouts.PROJECT_HEALTHCHECK_PORTS == [3000, 4000, 8000, 8080, 9000]
+    # B7 (DevPlan 119): +converge-домен
+    assert timeouts.CONVERGE_DOCKER_TIMEOUT == 30
+    assert timeouts.FILE_OP_TIMEOUT == 15
+    logger.info("[IMP:9][test_constants_values] Все %d констант канонизированы", 24)
     _assert_imp9(caplog)
 
 

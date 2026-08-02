@@ -13,7 +13,7 @@
 ##   - ghcr_auth: без GHCR_PULL_TOKEN → skip (не fatal)
 ##   - install_cron_metrics: идемпотентен (content match → no-op), атомарен (temp+mv),
 ##     non-fatal (False при сбое, никогда не raise) — φ3 контракт нефатальности (U-03, DevPlan 116 B3 T1)
-##   - Все subprocess через helpers.subprocess_io.run_subprocess (единый канон)
+##   - Все subprocess через shared/subprocess_io.run_subprocess (единый канон, B4)
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита в публичные helpers
 ##            (DevPlan 116 B9 D1) — state_machine остаётся оркестрацией.
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T1)
@@ -29,9 +29,9 @@ import os
 import subprocess
 import tempfile
 
-from core.internal.bootstrap.lifecycle.helpers.subprocess_io import run_subprocess
 from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login
 from core.internal.shared.exceptions import PlatformError
+from core.internal.shared.subprocess_io import run_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +67,13 @@ def install_apt_packages(packages: list[str]) -> None:
 
     if to_install:
         logger.info("[IMP:9][apt] Installing %d packages: %s", len(to_install), " ".join(to_install))
-        run_subprocess(["apt-get", "update", "-qq"], "apt_update")
-        run_subprocess(["apt-get", "install", "-y", "-qq", *to_install], "apt_install")
+        # B4: единый канон shared/subprocess_io (check=True = lifecycle raise-семантика);
+        # apt-get update/install на свежей VPS (deadnsakes PPA) может занимать >30s —
+        # явный timeout=120 (legacy lifecycle default) вместо канонного дефолта 30.
+        run_subprocess(["apt-get", "update", "-qq"], check=True, timeout=120)
+        run_subprocess(["apt-get", "install", "-y", "-qq", *to_install], check=True, timeout=120)
         for pkg in to_install:
-            run_subprocess(["dpkg", "-s", pkg], f"verify_{pkg}", check_required=True)
+            run_subprocess(["dpkg", "-s", pkg], check=True)
     else:
         logger.info("[IMP:7][apt] All packages already installed — skipping")
 
@@ -106,11 +109,13 @@ def ensure_sops() -> None:
             arch = "amd64"
 
         url = f"https://github.com/getsops/sops/releases/download/v3.9.4/sops-v3.9.4.linux.{arch}"
+        # B4: check=True (raise-семантика); curl скачивание — явный timeout=120 (legacy default)
         run_subprocess(
             ["curl", "-sSL", "-o", "/usr/local/bin/sops", url],
-            "sops_download",
+            check=True,
+            timeout=120,
         )
-        run_subprocess(["chmod", "0755", "/usr/local/bin/sops"], "sops_chmod")
+        run_subprocess(["chmod", "0755", "/usr/local/bin/sops"], check=True)
         logger.info("[IMP:9][sops] sops v3.9.4 installed")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][sops] Failed to install sops: %s", e)

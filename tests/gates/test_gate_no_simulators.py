@@ -73,7 +73,10 @@ def test_no_simulator_classes_in_test_suite(caplog) -> None:
         "[IMP:8][test_no_simulator_classes_in_test_suite] Scanning tests/ for Simulator class definitions via AST"
     )
 
-    all_py_files = sorted(_TESTS_DIR.rglob("*.py"))
+    # Транзиентные probe-директории других R5-гейтов (test_gate_marker_location) создаются и
+    # удаляются во время gate-сессии — исключаем (race: FileNotFoundError при параллельном
+    # удалении probe-файла другим гейтом, DevPlan 119 B — фикс flaky race).
+    all_py_files = sorted(p for p in _TESTS_DIR.rglob("*.py") if "_gate_probe_marker_tmp" not in p.parts)
     logger.info("[IMP:8][test_no_simulator_classes_in_test_suite] Found %d Python files to scan", len(all_py_files))
 
     all_violations: list[tuple[str, int, str]] = []

@@ -23,13 +23,16 @@ import logging
 import os
 import subprocess
 
+# B3: канонический PLATFORM_ROOT — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
+
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
 from core.internal.shared.llm_paths import litellm_config_path
 
 logger = logging.getLogger(__name__)
 
 # PLATFORM_ROOT mirrored from context_deployer (os.environ override for tests)
-_PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+_PLATFORM_ROOT = str(platform_remote_base())
 
 
 # region FUNC_render_and_provision_llm

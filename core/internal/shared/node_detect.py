@@ -40,9 +40,12 @@ import os
 import sys
 from pathlib import Path
 
+# B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
+from core.internal.shared.deploy_paths import node_configs_remote
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_NODE_CONFIGS_DIR = "/opt/node-configs"
+DEFAULT_NODE_CONFIGS_DIR = str(node_configs_remote())
 SKIP_DIRS = frozenset({"scripts", "secrets"})
 
 
@@ -127,14 +130,14 @@ def _log_masked(key_name: str, key_value: str, source: str) -> None:
 ## @purpose  Auto-detect the single node name from a node-configs directory.
 ##            Skips "scripts" and "secrets" subdirectories; exactly 1 valid dir → name.
 ##            Mirrors the removed shell auto_detect_node_name() from bootstrap.sh/converge.sh.
-## @io       ⇥ node_configs_dir: str = "/opt/node-configs" → ⎋ str (node name)
+## @io       ⇥ node_configs_dir: str = DEFAULT_NODE_CONFIGS_DIR → ⎋ str (node name)
 ## @raises   NodeDetectionError on missing dir, 0 candidates, or >1 candidates
 ## @complexity O(N) — N = number of entries in the node-configs directory
 ## @invariants
 ##   - "scripts" and "secrets" are never treated as node candidates
 ##   - Deterministic diagnostic: candidates listed sorted on ambiguity
 ##   - Success logged at IMP:9 (business logic checkpoint)
-def auto_detect_node_name(node_configs_dir: str = "/opt/node-configs") -> str:
+def auto_detect_node_name(node_configs_dir: str = DEFAULT_NODE_CONFIGS_DIR) -> str:
     """Detect the unique node name in the node-configs directory.
 
     ▶ scan node-configs/*/ → ∋ skip scripts|secrets → ◇ count==1? → ⎋ name | ✗ NodeDetectionError

@@ -103,8 +103,10 @@ def update_yaml_for_vhost(yaml_file: Path, domain: str, log_prefix: str = "adopt
     try:
         import yaml
 
-        with open(yaml_file) as f:
-            data = yaml.safe_load(f) or {}
+        # Чтение через единый shared-ридер (B1): yaml_file == <project_dir>/ai-platform.yaml
+        from core.internal.shared import project_yaml as shared_project_yaml
+
+        data = shared_project_yaml.load_project_yaml(yaml_file.parent)
 
         needs = data.get("needs", {})
         if isinstance(needs, dict):

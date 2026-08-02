@@ -55,6 +55,8 @@ if not os.path.isdir(os.path.join(_PLATFORM_ROOT, "core", "internal")):
 if _PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, _PLATFORM_ROOT)
 # Единый реестр таймаутов (DevPlan 117 D28) — visudo валидация: SUDOERS_CMD_TIMEOUT=15
+# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.timeouts import SUDOERS_CMD_TIMEOUT
 from core.internal.template_engine import TemplateError, render_template
 
@@ -105,7 +107,7 @@ def _render_template(
 
     @param module_name: Name of the module (e.g. "nginx", "postgres").
     @param templates_dir: Directory containing sudo-whitelist.template.
-    @param platform_root: PLATFORM_ROOT variable value (e.g. "/opt/platform").
+    @param platform_root: PLATFORM_ROOT variable value (e.g. /opt/platform).
     @returns: Rendered template text, or None if render failed.
     """
     # region FUNC__render_template
@@ -542,7 +544,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--platform-root",
-        default="/opt/platform",
+        default=str(platform_remote_base()),
         help="Platform root directory (default: /opt/platform)",
     )
 

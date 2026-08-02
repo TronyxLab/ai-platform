@@ -73,6 +73,9 @@ from core.internal.bootstrap.lifecycle.state_store import (
 )
 from core.internal.shared.content_hash import compute_content_hash as _shared_compute_content_hash
 
+# B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
+
 logger = logging.getLogger(__name__)
 
 
@@ -450,7 +453,7 @@ class StateMachine:
             raise PhaseDependencyError(f"Unknown phase: {phase_value}")
 
         # Execute
-        core_dir = self.core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
+        core_dir = self.core_dir or os.environ.get("CORE_DIR", str(platform_remote_base() / "core"))
         node_name = os.environ.get("NODE_NAME", "")
         node_yaml = os.environ.get("NODE_YAML", "")
 

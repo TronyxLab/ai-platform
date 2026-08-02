@@ -75,6 +75,9 @@ docker-compose.override.yml
 # ─── Test reports ────────────────────────────────────────────────────
 tests/report*.xml
 tests/.test_counter.json
+# Anti-Loop runtime counter для gate-сессий (DevPlan 119 B — ошибочно закоммичен в 095;
+# каждый pytest-прогон перезаписывает → pre-commit «files were modified» → gate RED)
+tests/gates/.test_counter.json
 
 .mypy_cache/
 .docker-mounts/

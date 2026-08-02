@@ -1926,6 +1926,12 @@ gates:
 - id: test_master_password_registered
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_master_password_registered'
+- id: test_single_run_subprocess_canon
+  test_file: test_gate_subprocess_io_sole.py
+  description: 'Auto-discovered gate: test_single_run_subprocess_canon'
+- id: test_single_run_subprocess_canon_negative
+  test_file: test_gate_subprocess_io_sole.py
+  description: 'Auto-discovered gate: test_single_run_subprocess_canon_negative'
 - id: test_sys_exit_only_in_main_and_main_returns_int
   test_file: test_gate_sys_exit_contract.py
   description: 'Auto-discovered gate: test_sys_exit_only_in_main_and_main_returns_int'
@@ -2004,6 +2010,12 @@ gates:
 - id: test_entrypoint_no_direct_binary_calls
   test_file: test_gate_thin_wrapper.py
   description: 'Auto-discovered gate: test_entrypoint_no_direct_binary_calls'
+- id: test_converge_infra_timeouts_from_shared
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_converge_infra_timeouts_from_shared'
+- id: test_no_opt_path_literals_in_core_internal
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_no_opt_path_literals_in_core_internal'
 - id: test_no_raw_down_timeout_30_literals
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_no_raw_down_timeout_30_literals'
@@ -2013,6 +2025,15 @@ gates:
 - id: test_no_timeout_literals_in_docker_ssh_healthcheck
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_no_timeout_literals_in_docker_ssh_healthcheck'
+- id: test_openssl_timeout_uses_canon
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_openssl_timeout_uses_canon'
+- id: test_opt_platform_nodeconfigs_literal_detected_negative
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_opt_platform_nodeconfigs_literal_detected_negative'
+- id: test_opt_projects_literal_detected_negative
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_opt_projects_literal_detected_negative'
 - id: test_r5_negative_module_rule_detects_run_docker_literal
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_r5_negative_module_rule_detects_run_docker_literal'
@@ -2028,6 +2049,9 @@ gates:
 - id: test_timeout_literal_detected_negative
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_timeout_literal_detected_negative'
+- id: test_vps_readiness_ssh_connect_timeout
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_vps_readiness_ssh_connect_timeout'
 - id: test_deploy_order_respects_topology
   test_file: test_gate_topology.py
   description: 'Auto-discovered gate: test_deploy_order_respects_topology'

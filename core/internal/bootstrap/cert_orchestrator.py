@@ -40,6 +40,7 @@ from core.internal.shared.exceptions import (
 )
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 from core.internal.shared.ssl_certs import (
+    DEFAULT_OPENSSL_TIMEOUT,  # B5: канон openssl-таймаута (литерал 30 удалён)
     cert_is_valid,  # C9: единая комбинация «cert валиден» (DevPlan 118 C9); _is_cert_valid удалён
 )
 
@@ -445,11 +446,11 @@ def _generate_self_signed(domain: str) -> DomainCertResult:
     cert_path = os.path.join(cert_dir, "fullchain.pem")
 
     try:
-        # Generate RSA private key
+        # Generate RSA private key (B5: канон DEFAULT_OPENSSL_TIMEOUT — литерал 30 удалён)
         subprocess.run(
             ["openssl", "genrsa", "-out", key_path, "2048"],
             capture_output=True,
-            timeout=30,
+            timeout=DEFAULT_OPENSSL_TIMEOUT,
             check=True,
         )
         os.chmod(key_path, 0o600)
@@ -471,7 +472,7 @@ def _generate_self_signed(domain: str) -> DomainCertResult:
                 f"/CN={domain}",
             ],
             capture_output=True,
-            timeout=30,
+            timeout=DEFAULT_OPENSSL_TIMEOUT,
             check=True,
         )
         os.chmod(cert_path, 0o644)

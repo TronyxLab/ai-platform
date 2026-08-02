@@ -108,6 +108,20 @@ def test_expiry_expired(caplog: pytest.LogCaptureFixture) -> None:
         assert cert_check_expiry("/tmp/cert.pem", 2592000) is False
 
 
+# 🧪 TRAP[TEST] · 2026-08-02 · Regression · cert_check_expiry использует DEFAULT_OPENSSL_TIMEOUT (B5)
+# · Scenario: timeout kwarg == DEFAULT_OPENSSL_TIMEOUT (10), не литерал 30
+# · Last fail: cert_orchestrator/nginx_harness — timeout=30 для openssl (дубль SoT, AUDIT-4 T4)
+# · Remove if: ssl_certs перестаёт выполнять openssl subprocess
+def test_openssl_timeout_default(caplog: pytest.LogCaptureFixture) -> None:
+    """cert_check_expiry передаёт timeout=DEFAULT_OPENSSL_TIMEOUT в openssl subprocess (B5)."""
+    caplog.set_level(logging.INFO)
+    with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        assert cert_check_expiry("/tmp/cert.pem", 2592000) is True
+        assert mock_run.call_args.kwargs["timeout"] == DEFAULT_OPENSSL_TIMEOUT
+    logger.info("[IMP:9][test][openssl_timeout] cert_check_expiry timeout=%s (канон)", DEFAULT_OPENSSL_TIMEOUT)
+
+
 # endregion TEST_cert_check_expiry
 
 

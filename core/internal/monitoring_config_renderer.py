@@ -269,8 +269,12 @@ def build_merged_config(
         logger.info("[IMP:8][config] No ai-platform.yaml found in %s — skipping monitoring reconfig", project_dir)
         return None
 
-    project_yaml = load_yaml_config(ai_yaml_path)
+    # B1: чтение ai-platform.yaml через единый shared-ридер (load_yaml_config остаётся для L1/L2 файлов)
+    from core.internal.shared import project_yaml as shared_project_yaml
+
+    project_yaml = shared_project_yaml.load_project_yaml(project_dir)
     if not project_yaml:
+        logger.info("[IMP:8][config] ai-platform.yaml unparseable or empty — skipping monitoring reconfig")
         return None
 
     monitoring_section = project_yaml.get("monitoring")

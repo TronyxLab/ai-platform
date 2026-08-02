@@ -21,8 +21,10 @@ import logging
 import os
 import shlex
 
-from core.internal.bootstrap.lifecycle.helpers.subprocess_io import run_subprocess
+# B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
+from core.internal.shared.deploy_paths import node_configs_remote
 from core.internal.shared.exceptions import ConfigNotFoundError
+from core.internal.shared.subprocess_io import run_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,8 @@ def decrypt_secrets(core_dir: str) -> None:
         # · Root: bash -c "source secrets.sh" не имел CORE_DIR и не подгружал checkpoint/logging libs
         # · Fix: export CORE_DIR, source logging.sh перед secrets.sh (checkpoint.sh удалён в 091)
         logging_lib = os.path.join(core_dir, "lib", "logging.sh")
+        # B4: единый канон shared/subprocess_io (check=True = lifecycle raise-семантика;
+        # decrypt FATAL при сбое — TRAP[BUG] 2026-07-23 P0)
         run_subprocess(
             [
                 "bash",
@@ -60,7 +64,7 @@ def decrypt_secrets(core_dir: str) -> None:
                 f" && source {shlex.quote(secrets_lib)}"
                 f" && step_10_decrypt_secrets",
             ],
-            "decrypt_secrets",
+            check=True,
         )
 
 
@@ -88,7 +92,7 @@ def ensure_secrets_exist(core_dir: str) -> None:
     # Step 1: Check file exists (after decrypt)
     if not os.path.isfile(secrets_env):
         node_name = os.environ.get("NODE_NAME", "")
-        configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
+        configs_dir = os.environ.get("NODE_CONFIGS_DIR", str(node_configs_remote()))
         enc_file = os.path.join(configs_dir, "secrets", f"{node_name}.enc.yaml")
         if os.path.isfile(enc_file):
             logger.error("[IMP:9][ensure_secrets] %s not found after decrypt — cannot generate secrets", secrets_env)

@@ -36,9 +36,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+# B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROJECTS_BASE = "/opt/projects"
 SNAPSHOT_DIR = ".deploy-snapshots"
 LOCK_DIR = "/var/lock"
 MAX_SNAPSHOTS = 10

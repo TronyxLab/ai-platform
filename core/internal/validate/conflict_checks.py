@@ -25,7 +25,7 @@ import logging
 import sys
 from pathlib import Path
 
-import yaml
+from core.internal.shared import project_yaml as shared_project_yaml
 
 logger = logging.getLogger("conflict_checks")
 
@@ -33,23 +33,14 @@ _FALSEY_DOMAINS = {"false", "none", "no", "null", ""}
 
 
 def _extract_domain(project_yaml: Path) -> str:
-    """Extract domain from ai-platform.yaml (needs.domain → top-level domain fallback).
+    """Extract domain from ai-platform.yaml via shared reader (needs.domain → top-level fallback, B1).
 
-    ▶ ┌yaml_path┐ → ○ safe_load → ○ needs.domain | domain → ⎋ str (normalized, "" if none)
+    ▶ ┌yaml_path┐ → ○ shared.load_project_yaml → ○ get_domain (needs|top-level, false-y → "") → ⎋ str
     """
-    try:
-        with open(project_yaml, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except (yaml.YAMLError, OSError) as e:
-        logger.warning("[IMP:7][fqdn] Cannot parse %s: %s", project_yaml, e)
+    data = shared_project_yaml.load_project_yaml(project_yaml.parent)
+    if not data:
         return ""
-    if not isinstance(data, dict):
-        return ""
-    needs = data.get("needs", {})
-    domain = needs.get("domain", "") if isinstance(needs, dict) else ""
-    if not domain:
-        domain = data.get("domain", "")
-    return str(domain).strip().lower()
+    return shared_project_yaml.get_domain(data).lower()
 
 
 def check_fqdn_conflict(project_dir: str, projects_base: str | None = None) -> tuple[bool, str]:
@@ -108,16 +99,13 @@ def check_port_conflict(projects_base: str) -> tuple[bool, str]:
     port_map: dict[int, str] = {}
     for yaml_file in sorted(base.glob("*/ai-platform.yaml")):
         project_name = yaml_file.parent.name
-        try:
-            with open(yaml_file, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-        except (yaml.YAMLError, OSError) as e:
-            logger.warning("[IMP:7][ports] Cannot parse %s: %s", yaml_file, e)
+        # Чтение через единый shared-ридер (B1) — парсинг ai-platform.yaml только в shared/project_yaml
+        data = shared_project_yaml.load_project_yaml(yaml_file.parent)
+        if not data:
+            logger.warning("[IMP:7][ports] Cannot parse %s", yaml_file)
             continue
-        if not isinstance(data, dict):
-            continue
-        monitoring = data.get("monitoring", {})
-        host_port = monitoring.get("host_port", 0) if isinstance(monitoring, dict) else 0
+        monitoring = shared_project_yaml.get_monitoring(data)
+        host_port = monitoring.get("host_port", 0)
         if not host_port:
             continue
         try:

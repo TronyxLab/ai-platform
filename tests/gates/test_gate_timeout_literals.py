@@ -478,3 +478,176 @@ def test_timeout_literal_detected_negative(caplog) -> None:
     finally:
         _DOMAIN_FILES.discard(probe_rel)
         probe.unlink(missing_ok=True)
+
+
+# ── DevPlan 119 B2/B3: 0 литералов /opt/{projects,platform,node-configs} вне deploy_paths ──
+# AC-B2.1 / AC-B3.1: grep '"/opt/projects"|"/opt/platform"|"/opt/node-configs"' core/internal/
+# (кроме deploy_paths.py — SoT) → 0. Сканер + R5 negative-тесты.
+
+_OPT_PATH_LITERAL = re.compile(r'["\']/opt/(projects|platform|node-configs)["\']')
+_OPT_PATH_CANON = "shared/deploy_paths.py"
+
+
+def _find_opt_path_literals() -> list[tuple[str, int, str]]:
+    """Найти литералы /opt/{projects,platform,node-configs} в core/internal (кроме deploy_paths.py).
+
+    ▶ ┌core/internal/**/*.py┐ → ○ line scan → ◇ regex ["']/opt/(projects|platform|node-configs)["'] → ⊕ offenders → ⎋ list
+    ## @purpose  AC-B2.1/AC-B3.1 (DevPlan 119): 0 дублирующих литералов путей вне SoT deploy_paths.
+    ##            Комментарии с литералом тоже RED (дрейф-источник — переписывать, не цитировать).
+    """
+    offenders: list[tuple[str, int, str]] = []
+    for p in sorted(_CORE_INTERNAL.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        rel = p.relative_to(_CORE_INTERNAL).as_posix()
+        if rel == _OPT_PATH_CANON:
+            continue
+        try:
+            lines = p.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines, 1):
+            if _OPT_PATH_LITERAL.search(line):
+                offenders.append((rel, i, line.strip()))
+    return offenders
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_no_opt_path_literals_in_core_internal(caplog) -> None:
+    """0 литералов /opt/{projects,platform,node-configs} вне shared/deploy_paths (AC-B2.1/B3.1)."""
+    offenders = _find_opt_path_literals()
+    if offenders:
+        for rel, lineno, line in offenders:
+            logger.error("[IMP:10][opt_path_literals] %s:%d %s", rel, lineno, line)
+        pytest.fail(
+            f"Литералы /opt/* вне SoT ({len(offenders)}):\n"
+            + "\n".join(f"  - {rel}:{lineno} {line}" for rel, lineno, line in offenders)
+            + "\n\nКанон: core/internal/shared/deploy_paths.py — projects_base()/platform_remote_base()/"
+            "node_configs_remote()/DEFAULT_PROJECTS_BASE (DevPlan 119 B2/B3)."
+        )
+    logger.info("[IMP:9][opt_path_literals] PASS: 0 /opt/* литералов вне shared/deploy_paths")
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литерал /opt/projects в новом файле детектится (B2)
+# · Scenario: probe-файл с os.environ.get("PROJECTS_BASE", "/opt/projects") → _find_opt_path_literals ловит
+# · Last fail: deploy_engine.py:234 projects_base="/opt/projects" (исходный вход AUDIT-4 T2)
+# · Remove if: opt-path гейт отменяется
+def test_opt_projects_literal_detected_negative(caplog) -> None:
+    """R5 negative: /opt/projects литерал (исходный вход B2) детектируется."""
+    caplog.set_level(logging.INFO)
+    import textwrap
+
+    probe = _CORE_INTERNAL / "_gate_probe_opt_path.py"
+    probe.write_text(
+        textwrap.dedent(
+            """\
+            import os
+            DEFAULT_PROJECTS_BASE = "/opt/projects"
+            root = os.environ.get("PROJECTS_BASE", "/opt/projects")
+            """
+        )
+    )
+    try:
+        hits = [(rel, ln, line) for rel, ln, line in _find_opt_path_literals() if "_gate_probe_opt_path" in rel]
+        assert hits, "R5 FAIL: /opt/projects literal (исходный вход B2) не обнаружен"
+        logger.info("[IMP:9][opt_path_literals][B2][R5] PASS: probe %s:%d %s detected", *hits[0])
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литералы /opt/platform + /opt/node-configs детектятся (B3)
+# · Scenario: probe-файл с os.environ.get("PLATFORM_ROOT", "/opt/platform") и "/opt/node-configs" → ловится
+# · Last fail: orchestrator.py:890 platform_root="/opt/platform", secrets.py:91 "/opt/node-configs" (AUDIT-4 T3)
+# · Remove if: opt-path гейт отменяется
+def test_opt_platform_nodeconfigs_literal_detected_negative(caplog) -> None:
+    """R5 negative: /opt/platform + /opt/node-configs литералы (исходный вход B3) детектируются."""
+    caplog.set_level(logging.INFO)
+    import textwrap
+
+    probe = _CORE_INTERNAL / "_gate_probe_opt_path_b3.py"
+    probe.write_text(
+        textwrap.dedent(
+            """\
+            import os
+            platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+            node_configs = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
+            """
+        )
+    )
+    try:
+        hits = [(rel, ln, line) for rel, ln, line in _find_opt_path_literals() if "_gate_probe_opt_path_b3" in rel]
+        assert hits, "R5 FAIL: /opt/platform + /opt/node-configs literals (исходный вход B3) не обнаружены"
+        logger.info("[IMP:9][opt_path_literals][B3][R5] PASS: probe %s:%d %s detected", *hits[0])
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+# ── DevPlan 119 B5: openssl timeout → DEFAULT_OPENSSL_TIMEOUT (канон ssl_certs) ──
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · openssl-таймаут = канон DEFAULT_OPENSSL_TIMEOUT (B5)
+# · Scenario: cert_orchestrator + nginx_harness импортируют DEFAULT_OPENSSL_TIMEOUT; timeout=30 литералов нет
+# · Last fail: cert_orchestrator.py:452,474 + nginx_harness.py:159 — timeout=30 (дубль SoT, AUDIT-4 T4)
+# · Remove if: openssl subprocess удаляется из этих модулей
+def test_openssl_timeout_uses_canon(caplog) -> None:
+    """openssl subprocess использует DEFAULT_OPENSSL_TIMEOUT (не литерал 30) — B5."""
+    caplog.set_level(logging.INFO)
+    for rel in ("bootstrap/cert_orchestrator.py", "scaffold/nginx_harness.py"):
+        filepath = _CORE_INTERNAL / rel
+        content = filepath.read_text(errors="replace")
+        assert "DEFAULT_OPENSSL_TIMEOUT" in content, f"[IMP:10][B5] {rel} не использует DEFAULT_OPENSSL_TIMEOUT"
+        # Литерал timeout=30 для openssl — только через канон
+        assert "timeout=30" not in content, f"[IMP:10][B5] {rel} содержит литерал timeout=30 (дубль SoT)"
+    logger.info(
+        "[IMP:9][timeout_literals][B5] PASS: cert_orchestrator + nginx_harness используют DEFAULT_OPENSSL_TIMEOUT"
+    )
+
+
+# ── DevPlan 119 B7: converge/infra таймауты → shared/timeouts ──
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · converge/infra таймауты из shared/timeouts (B7)
+# · Scenario: converge/infra.py импортирует CONVERGE_DOCKER_TIMEOUT/FILE_OP_TIMEOUT; локальных нет
+# · Last fail: DOCKER_TIMEOUT=30, FILE_OP_TIMEOUT=15 локально в converge/infra.py (AUDIT-4 T5)
+# · Remove if: converge/infra перестаёт выполнять docker/file-операции
+def test_converge_infra_timeouts_from_shared(caplog) -> None:
+    """converge/infra.py: таймауты импортируются из shared/timeouts (B7, AC-B7.1/B7.2)."""
+    caplog.set_level(logging.INFO)
+    filepath = _CORE_INTERNAL / "bootstrap" / "converge" / "infra.py"
+    content = filepath.read_text(errors="replace")
+    assert "from core.internal.shared.timeouts import" in content, (
+        "[IMP:10][B7] converge/infra.py не импортирует таймауты из shared/timeouts"
+    )
+    assert "CONVERGE_DOCKER_TIMEOUT" in content, "[IMP:10][B7] CONVERGE_DOCKER_TIMEOUT не используется"
+    assert "FILE_OP_TIMEOUT" in content, "[IMP:10][B7] FILE_OP_TIMEOUT не используется"
+    assert "DOCKER_TIMEOUT = 30" not in content, "[IMP:10][B7] локальный DOCKER_TIMEOUT = 30 остался (SoT drift)"
+    assert "FILE_OP_TIMEOUT = 15" not in content, "[IMP:10][B7] локальный FILE_OP_TIMEOUT = 15 остался (SoT drift)"
+    logger.info("[IMP:9][timeout_literals][B7] PASS: converge/infra таймауты из shared/timeouts")
+
+
+# ── DevPlan 119 B8: vps_readiness SSH_TIMEOUT → SSH_CONNECT_TIMEOUT ──
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · vps_readiness SSH-таймаут = SSH_CONNECT_TIMEOUT (B8)
+# · Scenario: vps_readiness.py использует SSH_CONNECT_TIMEOUT; локального SSH_TIMEOUT нет
+# · Last fail: SSH_TIMEOUT = 30 локально (дубль SoT, AUDIT-4 T6)
+# · Remove if: vps_readiness перестаёт выполнять SSH-проверки
+def test_vps_readiness_ssh_connect_timeout(caplog) -> None:
+    """vps_readiness.py: SSH-таймаут = SSH_CONNECT_TIMEOUT (B8, AC-B8.1)."""
+    caplog.set_level(logging.INFO)
+    filepath = _CORE_INTERNAL / "shared" / "vps_readiness.py"
+    content = filepath.read_text(errors="replace")
+    assert "SSH_CONNECT_TIMEOUT" in content, "[IMP:10][B8] vps_readiness не использует SSH_CONNECT_TIMEOUT"
+    assert "SSH_TIMEOUT" not in content, "[IMP:10][B8] локальный SSH_TIMEOUT остался (SoT drift)"
+    logger.info("[IMP:9][timeout_literals][B8] PASS: vps_readiness использует SSH_CONNECT_TIMEOUT")

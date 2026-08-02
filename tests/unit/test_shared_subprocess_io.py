@@ -79,6 +79,23 @@ def test_check_true_not_found_raises(caplog) -> None:
         run_subprocess(["cmd"], check=True)
 
 
+# 🧪 TRAP[TEST] · 2026-08-02 · Regression · fatal_rc=(127,) — lifecycle exit=127 always fatal (B4)
+# · Scenario: реальный rc=127 + check=False + non_fatal=True + fatal_rc=(127,) → PlatformFatalError
+# · Last fail: lifecycle/helpers/subprocess_io.py — exit=127 raise даже при non_fatal=True
+# ·   (TRAP[BUG] 2026-07-22: command not found — конфигурационная ошибка, не runtime)
+# · Remove if: lifecycle exit=127-fatal семантика меняется
+def test_run_subprocess_fatal_rc_127(caplog) -> None:
+    """fatal_rc=(127,) + check=False: реальный rc=127 → PlatformFatalError (B4, lifecycle семантика)."""
+    caplog.set_level(logging.INFO)
+    fake = mock.MagicMock(returncode=127, stdout="", stderr="command not found")
+    with mock.patch.object(subprocess_io.subprocess, "run", return_value=fake), pytest.raises(PlatformFatalError):
+        run_subprocess(["chown", "x:y", "/tmp"], check=False, non_fatal=True, fatal_rc=(127,))
+    # Контроль: без fatal_rc rc=127 возвращается graceful (не raise)
+    with mock.patch.object(subprocess_io.subprocess, "run", return_value=fake):
+        result = run_subprocess(["chown", "x:y", "/tmp"], check=False, non_fatal=True)
+    assert result.returncode == 127
+
+
 # 🧪 TRAP[TEST] · Regression · success → CompletedProcess rc=0 (C10)
 # · Scenario: rc=0 → результат возвращается
 # · Last fail: N/A (C10 unit)

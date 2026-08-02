@@ -22,7 +22,20 @@ from pathlib import Path
 import pytest
 
 from core.internal.shared.exceptions import ConfigValidationError
-from core.internal.shared.project_yaml import derive_org_from_path, detect_project_config, read_project_yaml
+from core.internal.shared.project_yaml import (
+    derive_org_from_path,
+    detect_project_config,
+    get_domain,
+    get_expose,
+    get_expose_config,
+    get_llm,
+    get_monitoring,
+    get_name,
+    get_needs,
+    get_target_node,
+    load_project_yaml,
+    read_project_yaml,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +84,53 @@ def test_read_project_yaml_malformed(tmp_path: Path) -> None:
     proj.mkdir()
     (proj / "ai-platform.yaml").write_text("not: [valid")
     assert read_project_yaml(proj) == {"target_node": "", "domain": ""}
+
+
+# endregion
+
+
+# region TEST_B1_ACCESSORS (DevPlan 119 B1 — единый парсер ai-platform.yaml)
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · test_read_expose_config — DevPlan 119 B1
+# · Scenario: get_expose_config() читает expose/domain/target_node/name из ai-platform.yaml
+# · Last fail: vhost_renderer read_project_yaml — локальный парсер (дубль shared)
+# · Remove if: get_expose_config() удаляется
+def test_read_expose_config(tmp_path: Path) -> None:
+    """get_expose_config: needs.expose + needs.domain + target_node + name (B1)."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "ai-platform.yaml").write_text(
+        "name: app\ntarget_node: prod-node\nneeds:\n  expose: true\n  domain: app.example.com\n"
+    )
+    cfg = get_expose_config(load_project_yaml(proj))
+    assert cfg["expose"] is True
+    assert cfg["domain"] == "app.example.com"
+    assert cfg["target_node"] == "prod-node"
+    assert cfg["name"] == "app"
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · test_missing_field_raises_negative — R5 (DevPlan 119 B1)
+# · Scenario: отсутствующее target_node + required=True → ConfigValidationError (не None)
+# · Last fail: vhost_renderer read_project_yaml возвращал None при отсутствии target_node —
+# ·   тихая деградация вместо явной ошибки; R5 требует fail-fast для обязательных полей
+# · Remove if: get_target_node(required=True) удаляется
+def test_missing_field_raises_negative(tmp_path: Path) -> None:
+    """R5 negative: отсутствующее поле (target_node) → ConfigValidationError, не None (B1)."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "ai-platform.yaml").write_text("name: app\n")
+    data = load_project_yaml(proj)
+    with pytest.raises(ConfigValidationError, match="target_node is required"):
+        get_target_node(data, required=True)
+    # Не-required → "" (lenient), не None — контракт аксессоров
+    assert get_target_node(data) == ""
+    assert get_domain(data) == ""
+    assert get_expose(data) is False
+    assert get_llm(data) is None
+    assert get_monitoring(data) == {}
+    assert get_needs(data) == {}
+    assert get_name(data) == "app"
 
 
 # endregion

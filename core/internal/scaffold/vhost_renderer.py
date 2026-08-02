@@ -46,8 +46,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
+from core.internal.shared import project_yaml as shared_project_yaml
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, PlatformFatalError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
@@ -125,12 +124,12 @@ class DuplicateDomainError(Exception):
 
 
 def read_project_yaml(project_dir: str) -> ProjectConfig | None:
-    """Read ai-platform.yaml, extract expose/domain/target_node.
+    """Read ai-platform.yaml via shared reader (B1), extract expose/domain/target_node.
 
-    ▶ ┌project_dir┐ → ◇ ai-platform.yaml exists? → ◇ safe_load → ◇ expose:true?
-    → ◇ domain set? → ◇ target_node set? → ⎋ ProjectConfig | None
+    ▶ ┌project_dir┐ → ◇ shared.load_project_yaml → ◇ expose:true? → ◇ domain set?
+    → ◇ target_node set? → ⎋ ProjectConfig | None
 
-    ## @purpose — Parse project YAML for vhost eligibility.
+    ## @purpose — Parse project YAML for vhost eligibility (единственный reader — shared B1).
     ## @io — ⇥ project_dir: str — path to project directory
     ##       → ⎋ ProjectConfig if expose:true + domain + target_node, else None
     ## @complexity — O(P) where P = YAML file size
@@ -138,61 +137,34 @@ def read_project_yaml(project_dir: str) -> ProjectConfig | None:
     ##   - Returns None if expose != true (vhost not needed)
     ##   - Returns None if domain is empty or missing
     ##   - target_node is required — returns None if missing
-    ##   - safe_load prevents YAML code execution
+    ##   - Вся YAML-логика делегирована shared/project_yaml (AC-B1.2: локального парсера нет)
     """
-    yaml_path = Path(project_dir) / "ai-platform.yaml"
-    if not yaml_path.exists():
-        logger.warning("[IMP:7][read_project_yaml] ai-platform.yaml not found: %s", yaml_path)
+    data = shared_project_yaml.load_project_yaml(Path(project_dir))
+    if not data:
+        logger.warning("[IMP:7][read_project_yaml] ai-platform.yaml not found or unparseable: %s", project_dir)
         return None
 
-    logger.info("[IMP:7][read_project_yaml] Reading: %s", yaml_path)
-
-    try:
-        with open(yaml_path) as f:
-            data = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        logger.error("[IMP:8][read_project_yaml] YAML parse error: %s", e)
-        return None
-
-    if not isinstance(data, dict):
-        logger.warning("[IMP:8][read_project_yaml] Invalid YAML structure (not a dict)")
-        return None
-
-    # Check needs.expose structure
-    needs = data.get("needs", {})
-    expose = needs.get("expose", False)
-    domain = needs.get("domain", "")
-    target_node = data.get("target_node", "")
-
-    # Also check top-level expose (legacy format)
-    if not expose:
-        expose = data.get("expose", False)
-    if not domain:
-        domain = data.get("domain", "")
-
-    if not expose:
+    cfg = shared_project_yaml.get_expose_config(data)
+    if not cfg["expose"]:
         logger.info("[IMP:8][read_project_yaml] Project does not have expose: true — skipping")
         return None
 
-    domain_str = str(domain).strip() if domain else ""
-    if not domain_str:
+    if not cfg["domain"]:
         logger.info("[IMP:8][read_project_yaml] expose:true but no domain — skipping")
         return None
 
-    target_node_str = str(target_node).strip() if target_node else ""
-    if not target_node_str:
+    if not cfg["target_node"]:
         logger.warning("[IMP:8][read_project_yaml] expose:true + domain set but no target_node — skipping")
         return None
 
-    project_name = yaml_path.parent.name
     logger.info(
-        "[IMP:9][read_project_yaml] Parsed: expose=true, domain=%s, target_node=%s", domain_str, target_node_str
+        "[IMP:9][read_project_yaml] Parsed: expose=true, domain=%s, target_node=%s", cfg["domain"], cfg["target_node"]
     )
 
     return ProjectConfig(
-        name=project_name,
-        domain=domain_str,
-        target_node=target_node_str,
+        name=Path(project_dir).name,
+        domain=cfg["domain"],
+        target_node=cfg["target_node"],
         expose=True,
     )
 

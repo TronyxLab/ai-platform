@@ -93,10 +93,12 @@ from build_cache import check_build_needed, compute_source_hash, save_build_hash
 # один docker ps -a). Локальный per-module orphan-cleanup удалён (дубль логики).
 # DevPlan 118 D1: healthcheck-инвокации и hermes-workflow вынесены в отдельные модули.
 from core.internal.bootstrap.deploy import healthcheck_runner, hermes_workflow, orphan_reconciler, parallel_runner
+from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
 # DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
 # DRIFT-D6 resolved: unified JSON-lines audit format
-from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
+# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 
 # DevPlan 079 DRIFT-B6 + 116 B5 T4: shared docker compose operations — ЕДИНСТВЕННЫЙ путь
 # (docker compose up/build/pull/config/down живут в shared/docker_compose.py, гейт docker_sole_path).
@@ -252,7 +254,7 @@ def _build_compose_args(
         logger.info("[IMP:8][_build_compose_args][env] Adding secrets env-file: %s", env_file)
 
     # Platform root .env
-    platform_env = os.path.join(platform_root or "/opt/platform", ".env")
+    platform_env = os.path.join(platform_root or str(platform_remote_base()), ".env")
     if os.path.isfile(platform_env):
         args.extend(["--env-file", platform_env])
         logger.info("[IMP:8][_build_compose_args][env] Adding platform env-file: %s", platform_env)

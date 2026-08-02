@@ -21,8 +21,8 @@ import logging
 import os
 from pathlib import Path
 
-from core.internal.bootstrap.lifecycle.helpers.subprocess_io import run_subprocess
 from core.internal.shared.exceptions import ConfigNotFoundError, PlatformFatalError
+from core.internal.shared.subprocess_io import run_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def validate_node_yaml(node_yaml: str, core_dir: str) -> None:
         logger.info("[IMP:9][validate_node_yaml] node.yaml valid against schema")
     except ImportError:
         logger.warning("[IMP:7][validate_node_yaml] yaml/jsonschema not available — skipping Python validation")
-        # Fall back to subprocess python3
+        # Fall back to subprocess python3 (B4: non_fatal=True + fatal_rc=(127,) — единый канон)
         run_subprocess(
             [
                 "python3",
@@ -91,8 +91,8 @@ with open('{schema_file}') as f:
 jsonschema.validate(instance, schema)
 """,
             ],
-            "validate_node_yaml",
             non_fatal=True,
+            fatal_rc=(127,),
         )
     except (json.JSONDecodeError, jsonschema.ValidationError) as e:
         logger.warning("[IMP:7][validate_node_yaml] node.yaml validation failed: %s", e)

@@ -60,11 +60,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+# B8: SSH-таймаут — канон shared/timeouts.SSH_CONNECT_TIMEOUT (литерал SSH_CONNECT_TIMEOUT=30 удалён)
+from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 SSH_USER = "ci-deploy"
-SSH_TIMEOUT = 30  # Все 4 проверки используют timeout=30 (QA Review F2: код авторитетнее Brief)
+# Все 4 проверки используют timeout=SSH_CONNECT_TIMEOUT (QA Review F2: код авторитетнее Brief)
 # NODE_HOST_MAP — JSON-строка node→host в env (K4/K5 pattern)
 _NODE_HOST_MAP_ENV = "NODE_HOST_MAP"
 _PROJECTS_CHECK_CMD = "test -d /opt/projects && test -w /opt/projects && echo OK || echo FAIL"
@@ -284,7 +287,7 @@ def check_vps_ready(
         "[IMP:8][vps_readiness][check] Check 1/4: SSH connectivity to ci-deploy@%s (timeout=30s via ssh_read)",
         ssh_host,
     )
-    ssh_rc, _ssh_out = ssh_runner(ssh_host, SSH_USER, CMD_EXIT, SSH_TIMEOUT)
+    ssh_rc, _ssh_out = ssh_runner(ssh_host, SSH_USER, CMD_EXIT, SSH_CONNECT_TIMEOUT)
     if ssh_rc == 0:
         logger.info("[IMP:9][vps_readiness][check] SSH OK: ci-deploy@%s", ssh_host)
     else:
@@ -295,7 +298,7 @@ def check_vps_ready(
     # ── Step 2: Forced-command ping (fail-if-not-ready) ──────────────
     if all_ok:
         logger.info("[IMP:8][vps_readiness][check] Check 2/4: Forced-command ping (core delivered?)")
-        ping_rc, ping_out = ssh_runner(ssh_host, SSH_USER, CMD_PING, SSH_TIMEOUT)
+        ping_rc, ping_out = ssh_runner(ssh_host, SSH_USER, CMD_PING, SSH_CONNECT_TIMEOUT)
         if "pong" in ping_out:
             logger.info("[IMP:9][vps_readiness][check] Forced-command OK: ping responds with pong")
         else:
@@ -311,7 +314,7 @@ def check_vps_ready(
     # ── Step 3: /opt/projects/ exists + writable (fail-if-not-ready) ─
     if all_ok:
         logger.info("[IMP:8][vps_readiness][check] Check 3/4: /opt/projects/ exists and writable")
-        _pr_rc, projects_out = ssh_runner(ssh_host, SSH_USER, _PROJECTS_CHECK_CMD, SSH_TIMEOUT)
+        _pr_rc, projects_out = ssh_runner(ssh_host, SSH_USER, _PROJECTS_CHECK_CMD, SSH_CONNECT_TIMEOUT)
         if projects_out.strip() == "OK":
             logger.info("[IMP:9][vps_readiness][check] /opt/projects/ OK: exists and writable")
         else:
@@ -327,7 +330,7 @@ def check_vps_ready(
     # ── Step 4: Docker daemon (skip if quick_mode) ───────────────────
     if all_ok and not quick_mode:
         logger.info("[IMP:8][vps_readiness][check] Check 4/4: Docker daemon responsiveness")
-        _dk_rc, docker_out = ssh_runner(ssh_host, SSH_USER, _DOCKER_CHECK_CMD, SSH_TIMEOUT)
+        _dk_rc, docker_out = ssh_runner(ssh_host, SSH_USER, _DOCKER_CHECK_CMD, SSH_CONNECT_TIMEOUT)
         if docker_out.strip() != "FAIL":
             logger.info("[IMP:9][vps_readiness][check] Docker OK: version %s", docker_out.strip())
         else:

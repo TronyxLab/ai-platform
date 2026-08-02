@@ -47,7 +47,7 @@ from core.internal.bootstrap.cert_orchestrator import CERT_VALIDITY_PATH, orches
 from core.internal.config import platform_config
 from core.internal.deploy.channels import LocalChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
-from core.internal.shared import llm_paths
+from core.internal.shared import deploy_paths, llm_paths
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
@@ -86,8 +86,9 @@ from core.internal.shared.timeouts import (
 )
 
 HEALTH_GATE_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT  # seconds per project
-DEFAULT_PROJECTS_BASE = "/opt/projects"
-PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+# B2/B3: канонические дефолты путей — shared/deploy_paths (литералы /opt/* удалены)
+DEFAULT_PROJECTS_BASE = deploy_paths.DEFAULT_PROJECTS_BASE
+PLATFORM_ROOT = str(deploy_paths.platform_remote_base())
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
 LITELLM_CONFIG_PATH = llm_paths.litellm_config_path(f"{PLATFORM_ROOT}/core")
 POLICY_PATH = pathlib.Path(f"{PLATFORM_ROOT}/core/internal/llm/policy.yaml")
@@ -777,7 +778,7 @@ def _step_vhosts(core_dir: str, node_name: str) -> None:
     if not os.path.isfile(vhost_script):
         logger.info("[IMP:7][_step_vhosts] add-vhost.sh not found — skipping vhost render")
         return
-    node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
+    node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", str(deploy_paths.node_configs_remote()))
     try:
         subprocess.run(
             ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
@@ -827,7 +828,7 @@ def _step_verify(core_dir: str, node_name: str) -> None:
     if not os.path.isfile(verify_script):
         logger.info("[IMP:7][_step_verify] verify-domains.sh not found — skipping verify")
         return
-    platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+    platform_root = str(deploy_paths.platform_remote_base())
     try:
         subprocess.run(
             ["bash", verify_script, node_name, platform_root],

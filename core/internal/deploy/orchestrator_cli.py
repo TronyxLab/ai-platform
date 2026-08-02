@@ -63,6 +63,7 @@ import sys
 from core.internal.deploy.channels import ForcedCommandChannel, LocalChannel, SCPChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.deploy.ssh_command_parser import parse_ssh_command
+from core.internal.shared.deploy_paths import platform_remote_base, projects_base
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
 
 logger = logging.getLogger(__name__)
@@ -278,7 +279,7 @@ def _dispatch(argv: list[str]) -> int:
         if not node:
             print(json.dumps({"status": "ERROR", "error": "verify requires <node>"}))
             return 1
-        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        platform_root = str(platform_remote_base())
         try:
             proc = subprocess.run(
                 [
@@ -347,7 +348,7 @@ def _deliver(args: argparse.Namespace) -> int:
         return 1
 
     project_dir = args.project_dir or os.path.join(
-        os.environ.get("PROJECTS_BASE", "/opt/projects"),
+        str(projects_base()),
         args.project,
     )
     if not os.path.isdir(project_dir):
@@ -361,7 +362,7 @@ def _deliver(args: argparse.Namespace) -> int:
         args.host,
     )
 
-    deliverer = PayloadDeliverer(projects_base=os.environ.get("PROJECTS_BASE", "/opt/projects"))
+    deliverer = PayloadDeliverer(projects_base=str(projects_base()))
     payload = deliverer.assemble_payload(
         project_name=args.project,
         version=args.version,
@@ -452,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "deploy":
             channel = build_channel(args)
             project_dir = args.project_dir or os.path.join(
-                os.environ.get("PROJECTS_BASE", "/opt/projects"),
+                str(projects_base()),
                 args.project,
             )
             service = args.service or args.project

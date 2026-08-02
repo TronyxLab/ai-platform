@@ -57,6 +57,8 @@ from typing import Any, NamedTuple
 
 import yaml
 
+# B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
@@ -705,7 +707,7 @@ class NodeYaml:
             node_name = socket.gethostname()
 
         if config_dir is None:
-            config_dir = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+            config_dir = os.environ.get("PLATFORM_ROOT", str(platform_remote_base()))
 
         logger.info("[IMP:8][NodeYaml.resolve] Resolving node.yaml for node=%s", node_name)
 

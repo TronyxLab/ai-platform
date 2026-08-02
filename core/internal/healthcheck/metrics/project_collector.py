@@ -17,6 +17,9 @@ import logging
 import os
 import subprocess
 
+# B2: канонический корень проектов — shared/deploy_paths (литерал /opt/projects удалён)
+from core.internal.shared.deploy_paths import projects_base
+
 logger = logging.getLogger(__name__)
 
 _SUBPROCESS_TIMEOUT = 30  # seconds for du -sb (large projects may take time)
@@ -62,7 +65,8 @@ def get_projects(node_yaml_path: str, image_cache: dict[str, int] | None = None,
     if image_cache is None:
         image_cache = {}
     projects: list[dict] = []
-    code_paths_root = "/opt/projects"
+    # B2: канонический корень проектов — shared/deploy_paths (литерал /opt/projects удалён)
+    code_paths_root = str(projects_base())
 
     for p in projects_config:
         if not isinstance(p, dict):

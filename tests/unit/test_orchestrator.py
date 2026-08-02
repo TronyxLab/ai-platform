@@ -27,13 +27,15 @@ from core.internal.deploy.channels import DeliveryChannel, DeliveryResult, Paylo
 from core.internal.deploy.deploy_history import DeployHistory
 from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 from core.internal.deploy.orchestrator import (
-    DEFAULT_PROJECTS_BASE,
     DeployAuditLogger,
     DeployOrchestrator,
     DeployStatus,
     OrchestratorDeployResult,
     ProjectStatus,
 )
+
+# B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (локальная константа удалена)
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
 
 logger = logging.getLogger(__name__)
 

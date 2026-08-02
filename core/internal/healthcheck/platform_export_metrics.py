@@ -28,6 +28,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
+from core.internal.shared.deploy_paths import node_configs_remote
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError
 from core.internal.shared.node_yaml import NodeYaml
 
@@ -46,7 +48,7 @@ def _get_node_yaml_path() -> str:
     return os.environ.get(
         "NODE_YAML_PATH",
         os.path.join(
-            os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs"),
+            os.environ.get("NODE_CONFIGS_DIR", str(node_configs_remote())),
             os.environ.get("NODE_NAME", "unknown"),
             "node.yaml",
         ),

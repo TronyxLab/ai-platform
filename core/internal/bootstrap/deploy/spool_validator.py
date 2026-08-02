@@ -45,6 +45,9 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
+
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -348,7 +351,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--modules-dir",
-        default=os.path.join(os.environ.get("PLATFORM_ROOT", "/opt/platform"), "core/modules"),
+        default=os.path.join(str(platform_remote_base()), "core/modules"),
         type=str,
         help="Path to modules directory (default: PLATFORM_ROOT/core/modules)",
     )

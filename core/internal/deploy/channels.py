@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 # ── Defaults (DevPlan 116 B5 T1/T7: значения — из единого реестра shared/timeouts.py) ──
 # DEPLOY_TIMEOUT/SSH_CONNECT_TIMEOUT/SSH_READ_TIMEOUT/RETRY_COUNT/RETRY_BACKOFF_SECONDS — SoT.
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
 from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
 from core.internal.shared.timeouts import (
@@ -219,7 +220,7 @@ class SCPChannel(DeliveryChannel):
 
     def deliver(self, payload: Payload) -> DeliveryResult:
         host = payload.metadata.get("host", "")
-        remote_dir = payload.metadata.get("remote_dir", "/opt/projects")
+        remote_dir = payload.metadata.get("remote_dir", DEFAULT_PROJECTS_BASE)
         user = payload.metadata.get("user", "root")
 
         if not host:

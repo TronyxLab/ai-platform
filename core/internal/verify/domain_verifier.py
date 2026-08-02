@@ -32,6 +32,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, NodeYaml
 
 logger = logging.getLogger(__name__)
@@ -370,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Domain verification tool (Wave 5a)")
     parser.add_argument("command", choices=["verify"], help="Subcommand (only 'verify' supported)")
     parser.add_argument("--node", required=True, help="Node name")
-    parser.add_argument("--platform-root", default="/opt/platform", help="Platform root path")
+    parser.add_argument("--platform-root", default=str(platform_remote_base()), help="Platform root path")
     parser.add_argument("--curl-timeout", type=int, default=CURL_TIMEOUT_DEFAULT, help="Curl timeout in seconds")
 
     args = parser.parse_args(argv)

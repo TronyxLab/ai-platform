@@ -97,8 +97,11 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+# B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
 from core.internal.shared.docker_compose import (
     docker_compose_down as _shared_docker_compose_down,
 )
@@ -231,7 +234,7 @@ class DeployEngine:
     Healthcheck uses shell lib/healthcheck.sh via subprocess.
     """
 
-    def __init__(self, projects_base: str = "/opt/projects"):
+    def __init__(self, projects_base: str = DEFAULT_PROJECTS_BASE):
         self.projects_base = projects_base
         self._validate_script = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -640,15 +643,11 @@ class DeployEngine:
         ai_yaml = os.path.join(project_dir, "ai-platform.yaml")
         if os.path.isfile(ai_yaml):
             try:
-                import yaml
+                # B1: единый shared-ридер ai-platform.yaml (yaml.safe_load вне shared удалён)
+                from core.internal.shared import project_yaml as shared_project_yaml
 
-                with open(ai_yaml) as f:
-                    config = yaml.safe_load(f)
-                host_port = None
-                if config and isinstance(config, dict):
-                    monitoring = config.get("monitoring", {})
-                    if isinstance(monitoring, dict):
-                        host_port = monitoring.get("host_port")
+                config = shared_project_yaml.load_project_yaml(Path(project_dir))
+                host_port = shared_project_yaml.get_monitoring(config).get("host_port")
                 if host_port and isinstance(host_port, (int, str)) and int(host_port) > 0:
                     port = int(host_port)
                     logger.info("[IMP:8][preflight] Checking port %s for conflicts...", port)
@@ -663,7 +662,7 @@ class DeployEngine:
                         logger.error("[IMP:10][preflight] %s", msg)
                         raise DeployError(msg)
                     logger.info("[IMP:8][preflight] Port %s available", port)
-            except (ImportError, yaml.YAMLError, OSError) as e:
+            except (ImportError, ValueError, OSError) as e:
                 logger.info("[IMP:6][preflight] Could not check port: %s", str(e))
 
     # endregion FUNC__preflight_checks

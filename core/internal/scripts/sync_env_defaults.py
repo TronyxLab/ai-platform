@@ -32,6 +32,14 @@ from typing import Any
 
 import yaml
 
+# Standalone CLI bootstrap: `python3 core/internal/scripts/sync_env_defaults.py` (makefile)
+# не имеет `core` пакета на sys.path — добавляем repo root (паттерн project_registry.py L36-39,
+# позволяет lazy-импорты core.internal.shared.deploy_paths в codegen-секциях, B2/B3).
+if __name__ == "__main__" or not __package__:
+    _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+
 logger = logging.getLogger(__name__)
 
 # region CONSTANTS — Section definitions with comments and variable assignments
@@ -130,8 +138,13 @@ def _get_secret_def_field(secret_defs: dict[str, dict[str, str]], name: str, fie
 
 # region HELPER__get_platform_root
 def _get_platform_root() -> str:
-    """Canonical platform root — matches gate test allowlist; base for deployment path defaults."""
-    return os.environ.get("PLATFORM_ROOT", "/opt/platform")
+    """Canonical platform root — matches gate test allowlist; base for deployment path defaults.
+
+    B3: резолвер канона shared/deploy_paths (PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform).
+    """
+    from core.internal.shared.deploy_paths import platform_remote_base
+
+    return str(platform_remote_base())
 
 
 # endregion HELPER__get_platform_root
@@ -709,7 +722,10 @@ def _section_misc(env_defaults: dict[str, str]) -> list[str]:
     lines.append("DEPENDENCY_CHECK_TIMEOUT=" + _get_env_val(env_defaults, "DEPENDENCY_CHECK_TIMEOUT", "2.0"))
     lines.append("")
     lines.append("# PROJECTS_BASE — базовая директория проектов для DeployOrchestrator (default: /opt/projects)")
-    lines.append("PROJECTS_BASE=" + _get_env_val(env_defaults, "PROJECTS_BASE", "/opt/projects"))
+    # B2: канонический дефолт — shared/deploy_paths (lazy import: standalone CLI без core на sys.path)
+    from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
+
+    lines.append("PROJECTS_BASE=" + _get_env_val(env_defaults, "PROJECTS_BASE", DEFAULT_PROJECTS_BASE))
     lines.append("# PLATFORM_DEPLOY_TIMEOUT — таймаут деплоя в секундах для DeliveryChannel (default: 600)")
     lines.append("PLATFORM_DEPLOY_TIMEOUT=" + _get_env_val(env_defaults, "PLATFORM_DEPLOY_TIMEOUT", "600"))
     return lines

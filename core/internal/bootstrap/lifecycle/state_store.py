@@ -30,6 +30,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
+
 if TYPE_CHECKING:
     pass
 
@@ -223,7 +226,7 @@ class BootstrapState:
             # · Fix: резолвить core_dir через self.core_dir (уже установлен CLI из PLATFORM_ROOT,
             # ·   строка 1333) — единый источник с _execute_phase (строка 838).
             # · Prevention: не дублировать резолюцию core_dir в прекондишенах — всегда self.core_dir.
-            core_dir = core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
+            core_dir = core_dir or os.environ.get("CORE_DIR", str(platform_remote_base() / "core"))
             acme_script = os.path.join(core_dir, "internal", "bootstrap", "install-acme.sh")
             if not os.path.isfile(acme_script):
                 logger.warning(
@@ -233,7 +236,7 @@ class BootstrapState:
                 )
 
         elif phase_value in ("deploy_services", "deploy_update"):
-            core_dir = core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
+            core_dir = core_dir or os.environ.get("CORE_DIR", str(platform_remote_base() / "core"))
             deploy_script = os.path.join(core_dir, "internal", "bootstrap", "deploy-modules.sh")
             if not os.path.isfile(deploy_script):
                 raise PhasePreconditionError(f"Phase {phase_value} requires deploy-modules.sh at {deploy_script}")
@@ -251,7 +254,7 @@ class BootstrapState:
 
         elif phase_value in ("converge_services", "converge_update"):
             # Converge script must exist
-            core_dir = core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
+            core_dir = core_dir or os.environ.get("CORE_DIR", str(platform_remote_base() / "core"))
             converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
             if not os.path.isfile(converge_script):
                 logger.warning(

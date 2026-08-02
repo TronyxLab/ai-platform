@@ -27,8 +27,7 @@ import logging
 import os
 import re
 import sys
-
-import yaml  # type: ignore[import-untyped]
+from pathlib import Path
 
 # Standalone CLI bootstrap: when run directly (subprocess), add project root to sys.path
 # so that `from core.internal.shared.*` imports resolve. This is the same pattern used
@@ -43,12 +42,14 @@ logger = logging.getLogger(__name__)
 # DevPlan 091 Wave C (AC2): NodeYaml replaces yaml.safe_load/dump.
 # Imports are module-level — the sys.path bootstrap above ensures they resolve
 # in standalone CLI (subprocess) mode. For pytest, rootdir = project root.
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE as DEFAULT_PROJECTS_ROOT
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
+from core.internal.shared.project_yaml import get_llm, load_project_yaml
 from core.internal.shared.verbs import is_verb
 
-# ── LLM-проекты: default projects root на VPS (совпадает с deploy_engine/reconciler) ──
-DEFAULT_PROJECTS_ROOT: str = "/opt/projects"
+# ── LLM-проекты: default projects root на VPS (B2 — переиспользование канона deploy_paths) ──
+# DEFAULT_PROJECTS_ROOT = deploy_paths.DEFAULT_PROJECTS_BASE (единый SoT, B2)
 
 # ── Project name validation ─────────────────────────────────────────────────
 ## @purpose  Canonical project name validation used by deploy_engine, payload_deliverer, reconciler,
@@ -354,15 +355,14 @@ def discover_llm_projects(
             logger.info("[IMP:7][%s][skip] No ai-platform.yaml for %s at %s", log_prefix, name, ai_yaml)
             continue
 
-        try:
-            with open(ai_yaml) as f:
-                data = yaml.safe_load(f) or {}
-        except (OSError, yaml.YAMLError) as e:
-            logger.warning("[IMP:7][%s][error] Failed to parse %s: %s", log_prefix, ai_yaml, e)
+        # B1: единый shared-ридер ai-platform.yaml (load_project_yaml + get_llm)
+        data = load_project_yaml(Path(ai_yaml).parent)
+        if not data:
+            logger.warning("[IMP:7][%s][error] Failed to parse %s", log_prefix, ai_yaml)
             continue
 
-        llm = data.get("llm")
-        if not isinstance(llm, dict) or not llm.get("enabled"):
+        llm = get_llm(data)
+        if not llm or not llm.get("enabled"):
             logger.info("[IMP:7][%s][skip] %s — llm not enabled in %s", log_prefix, name, ai_yaml)
             continue
 

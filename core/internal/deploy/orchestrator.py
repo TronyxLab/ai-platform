@@ -53,6 +53,7 @@ from core.internal.shared.audit_logger import write_audit_entry as _shared_write
 # DevPlan 116 B5 T3: shared docker compose — sole path (гейт docker_sole_path).
 # DevPlan 118 A6: status/remove делегируют DeployEngine (StatusResult/RemoveResult) —
 # прямые вызовы docker compose ps/down из DeployOrchestrator удалены (импорты ниже не нужны).
+from core.internal.shared.deploy_paths import platform_remote_base, projects_base
 from core.internal.shared.exceptions import PlatformError
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
@@ -133,8 +134,8 @@ class DeployAuditLogger:
 
 # endregion CLASS_DeployAuditLogger
 
-DEFAULT_PROJECTS_BASE = "/opt/projects"
-PROJECTS_BASE = os.environ.get("PROJECTS_BASE", DEFAULT_PROJECTS_BASE)
+# B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
+PROJECTS_BASE = str(projects_base())
 
 
 def _try_json_loads(s: str) -> dict | None:
@@ -778,21 +779,20 @@ class DeployOrchestrator:
             with tarfile.open(fileobj=buf, mode="r:gz") as tar:
                 tar.extractall(path=staging, filter="data")
 
-            # Parse ai-platform.yaml for metadata (fail-fast: отсутствие = ошибка)
+            # Parse ai-platform.yaml for metadata via shared reader (B1 — единый парсер)
             ai_yaml = Path(staging) / "ai-platform.yaml"
             if not ai_yaml.is_file():
                 logger.error("[IMP:10][DeployOrchestrator][receive] ai-platform.yaml not found in payload")
                 print(json.dumps({"status": "FAILED", "error": "ai-platform.yaml not found in payload"}))
                 return 1
 
-            import yaml
+            from core.internal.shared import project_yaml as shared_project_yaml
 
-            with open(ai_yaml) as f:
-                config = yaml.safe_load(f) or {}
+            config = shared_project_yaml.load_project_yaml(Path(staging))
 
             # D5: проект — из аргументов SSH-команды (приоритет), фолбэк на yaml `name` для
             # локальных/ручных вызовов. version — ТОЛЬКО из аргументов (sha-pinning).
-            resolved_project = project_name or config.get("name", config.get("project", ""))
+            resolved_project = project_name or shared_project_yaml.get_name(config)
             if not resolved_project:
                 logger.error("[IMP:10][DeployOrchestrator][receive] No project name in args or ai-platform.yaml")
                 print(json.dumps({"status": "FAILED", "error": "No project name in args or ai-platform.yaml"}))
@@ -811,8 +811,10 @@ class DeployOrchestrator:
             service = resolved_project  # D5: service = project_name (чтение service из yaml удалено, U-37)
 
             # Copy payload files to project directory
-            projects_base = os.environ.get("PROJECTS_BASE", "/opt/projects")
-            target_dir = os.path.join(projects_base, resolved_project)
+            # (B2: канонический projects_base из shared; локальная переменная переименована —
+            #  shadowing функции projects_base() вызывал UnboundLocalError)
+            resolved_projects_base = str(projects_base())
+            target_dir = os.path.join(resolved_projects_base, resolved_project)
             os.makedirs(target_dir, exist_ok=True)
 
             for item in Path(staging).iterdir():
@@ -835,7 +837,7 @@ class DeployOrchestrator:
             from core.internal.deploy.channels import LocalChannel
 
             local_channel = LocalChannel()
-            orchestrator = DeployOrchestrator(projects_base=projects_base)
+            orchestrator = DeployOrchestrator(projects_base=resolved_projects_base)
             result = orchestrator.deploy(
                 project_name=resolved_project,
                 channel=local_channel,
@@ -856,7 +858,8 @@ class DeployOrchestrator:
             print(output)
             return 0 if result.is_success() else 1
 
-        except (tarfile.TarError, OSError, yaml.YAMLError) as e:
+        except (tarfile.TarError, OSError) as e:
+            # B1: ai-platform.yaml читается shared-ридером (YAMLError не пробрасывается)
             logger.error("[IMP:10][DeployOrchestrator][receive] Error: %s", e)
             print(json.dumps({"status": "FAILED", "error": str(e)}))
             return 1
@@ -887,7 +890,7 @@ class DeployOrchestrator:
         node_name: str = "",
     ) -> None:
         """Run notify-hook + generate-catalog + module deploy-hooks (best-effort, D4)."""
-        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        platform_root = str(platform_remote_base())
         notify_hook = os.path.join(platform_root, "core", "internal", "notify", "notify-hook.sh")
         generate_catalog = os.path.join(platform_root, "core", "internal", "catalog", "generate-catalog.sh")
 
@@ -953,7 +956,7 @@ class DeployOrchestrator:
         """Invoke registered module deploy-hooks via shared module_interface (B8)."""
         from core.internal.shared.module_interface import invoke as invoke_module_hook
 
-        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        platform_root = str(platform_remote_base())
         modules_dir = os.path.join(platform_root, "core", "modules")
         if not os.path.isdir(modules_dir):
             logger.info("[IMP:7][DeployOrchestrator][deploy_hooks] modules dir not found: %s", modules_dir)

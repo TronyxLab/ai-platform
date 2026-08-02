@@ -38,6 +38,10 @@ import pytest
 
 # ── Directories that are NOT test modules (helper/infra/fixture code) ──
 _EXCLUDED_DIRS = {"_conftest", "helpers", "tools", "test_data"}
+# Транзиентные probe-директории других R5-гейтов (test_gate_marker_location) — создаются и
+# удаляются во время gate-сессии; их содержимое (assert True) не должно влиять на вердикт R1
+# (race: параллельный xdist-скан ловил probe-файл, DevPlan 119 B — фикс flaky race).
+_EXCLUDED_DIRS = _EXCLUDED_DIRS | {"_gate_probe_marker_tmp"}
 
 _TESTS_DIR = pathlib.Path(__file__).resolve().parent.parent  # tests/
 

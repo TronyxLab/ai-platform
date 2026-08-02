@@ -27,11 +27,12 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
-import yaml
-
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE, platform_remote_base
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
+from core.internal.shared.project_yaml import get_monitoring, get_needs, load_project_yaml
 
 # ── logging setup ──────────────────────────────────────────────────────────────
 
@@ -106,7 +107,7 @@ def generate_catalog(projects_root: str, catalog_file: str) -> int:
                 entry: dict[str, Any] = _parse_project_yaml(yaml_file, org_dir, proj_dir)
                 catalog.append(entry)
                 log.log(8, "%s/%s (type=%s)", org_dir, proj_dir, entry["type"], extra={"imp_level": 8})  # type: ignore[call-arg]
-            except (OSError, yaml.YAMLError, AttributeError) as exc:
+            except (OSError, AttributeError) as exc:
                 log.log(6, "WARN: %s: %s", yaml_file, exc, extra={"imp_level": 6})  # type: ignore[call-arg]
 
     # ∑ sort and persist
@@ -155,14 +156,11 @@ def _parse_project_yaml(yaml_file: str, org_dir: str, proj_dir: str) -> dict[str
         Dictionary with catalog entry fields.
 
     Raises:
-        Various exceptions from yaml.safe_load / file I/O — caller handles them.
+        Various exceptions from file I/O — caller handles them. YAML-парсинг — shared reader (B1).
     """
-    import yaml  # lazy import — only needed when actually parsing YAML
-
-    with open(yaml_file) as f:
-        data = yaml.safe_load(f)
-
-    if data is None:
+    # B1: единый shared-ридер ai-platform.yaml (yaml.safe_load вне shared удалён)
+    data = load_project_yaml(Path(yaml_file).parent)
+    if not data:
         data = {}
 
     entry: dict[str, Any] = {
@@ -175,9 +173,9 @@ def _parse_project_yaml(yaml_file: str, org_dir: str, proj_dir: str) -> dict[str
         "metrics_port": None,
     }
 
-    # Extract optional 'needs' block
-    needs = data.get("needs", {})
-    if isinstance(needs, dict):
+    # Extract optional 'needs' block (через shared аксессор get_needs, B1)
+    needs = get_needs(data)
+    if needs:
         domain_val = needs.get("domain")
         if domain_val and domain_val is not False:
             entry["domain"] = domain_val
@@ -185,9 +183,9 @@ def _parse_project_yaml(yaml_file: str, org_dir: str, proj_dir: str) -> dict[str
         if db_val and db_val is not False:
             entry["database"] = db_val
 
-    # Extract optional 'monitoring' block
-    monitoring = data.get("monitoring", {})
-    if isinstance(monitoring, dict):
+    # Extract optional 'monitoring' block (через shared аксессор get_monitoring, B1)
+    monitoring = get_monitoring(data)
+    if monitoring:
         entry["metrics_port"] = monitoring.get("metrics_port")
 
     return entry
@@ -220,12 +218,12 @@ def parse_cli_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--catalog-file",
-        default=os.environ.get("CATALOG_FILE", "/opt/platform/catalog.json"),
-        help="Output catalog JSON path (default: $CATALOG_FILE or /opt/platform/catalog.json)",
+        default=os.environ.get("CATALOG_FILE", str(platform_remote_base() / "catalog.json")),
+        help="Output catalog JSON path (default: $CATALOG_FILE or <platform>/catalog.json)",
     )
     parser.add_argument(
         "--projects-root",
-        default=os.environ.get("PROJECTS_ROOT", "/opt/projects"),
+        default=os.environ.get("PROJECTS_ROOT", DEFAULT_PROJECTS_BASE),
         help="Projects root directory (default: $PROJECTS_ROOT or /opt/projects)",
     )
     return parser.parse_args(argv[1:])

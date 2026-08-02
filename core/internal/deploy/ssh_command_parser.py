@@ -36,18 +36,17 @@
 
 import json
 import logging
-import os
 import sys
 
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
 from core.internal.shared.verbs import CANONICAL_VERBS
 
 logger = logging.getLogger(__name__)
 
 # Canonical deploy.sh path — constructed from PLATFORM_ROOT env var.
-# This matches the gate test allowlist (os.environ.get("PLATFORM_ROOT", "/opt/platform"))
-# and follows the platform convention for deployment paths.
-_PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+# B3: резолвер канона shared/deploy_paths (PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform).
+_PLATFORM_ROOT = str(platform_remote_base())
 _DEPLOY_SCRIPT_PATH = f"{_PLATFORM_ROOT}/core/entrypoints/deploy.sh"
 
 # region FUNC__strip_prefixes

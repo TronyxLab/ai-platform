@@ -40,7 +40,8 @@ import sys
 from core.internal.bootstrap.core_deliverer import CoreDeliveryError, deliver_core
 
 # DevPlan 118 C7: /opt/node-configs — единый резолвер shared/deploy_paths.node_configs_remote().
-from core.internal.shared.deploy_paths import node_configs_remote
+# DevPlan 119 B3: /opt/platform — единый резолвер shared/deploy_paths.platform_remote_base().
+from core.internal.shared.deploy_paths import node_configs_remote, platform_remote_base
 from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, ConfigValidationError, NodeYaml
 
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py (дублирующие копии устранены)
@@ -97,7 +98,7 @@ class DeliveryError(OverlayDelivererError):
 ##             NodeYaml.resolve() which is the single canonical 3-path resolver (AC4).
 def resolve_node_yaml(
     node_name: str,
-    platform_root: str = "/opt/platform",
+    platform_root: str = str(platform_remote_base()),
     projects_dir: str | None = None,
 ) -> str:
     """Search node.yaml via NodeYaml.resolve() (unified 3-path resolver).
@@ -221,7 +222,9 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
 ##           Graceful skip if no overlays, no host, or no .conf files.
 ## @io  input: node_name, platform_root, dry_run; output: bool success
 ## @complexity  O(n + f) where n = candidate paths, f = .conf files to rsync
-def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform", dry_run: bool = False) -> bool:
+def deliver_vhost_overlays(
+    node_name: str, platform_root: str = str(platform_remote_base()), dry_run: bool = False
+) -> bool:
     """Full overlay delivery: resolve → extract → check → dry-run/mkdir/rsync.
 
     Graceful skip if no overlays, no host, or no .conf files.
@@ -295,7 +298,7 @@ def cli() -> int:
 
     rp = sp.add_parser("resolve-node", help="Resolve node.yaml path")
     rp.add_argument("--node", required=True)
-    rp.add_argument("--platform-root", default="/opt/platform")
+    rp.add_argument("--platform-root", default=str(platform_remote_base()))
     rp.add_argument("--projects-dir", default=None)
 
     ep = sp.add_parser("extract-host", help="Extract SSH host from node.yaml")
@@ -310,7 +313,7 @@ def cli() -> int:
 
     dp = sp.add_parser("deliver", help="Deliver vhost overlays")
     dp.add_argument("--node", required=True)
-    dp.add_argument("--platform-root", default="/opt/platform")
+    dp.add_argument("--platform-root", default=str(platform_remote_base()))
     dp.add_argument("--dry-run", action="store_true")
 
     args = p.parse_args()

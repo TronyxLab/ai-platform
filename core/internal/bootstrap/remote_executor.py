@@ -47,6 +47,8 @@ from core.internal.bootstrap.overlay_deliverer import (
 )
 
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py (импорт из overlay_deliverer заменён)
+# B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.ssh_opts import SSH_OPTS
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
@@ -59,7 +61,7 @@ logger = logging.getLogger(__name__)
 SSH_EXEC_TIMEOUT = DEPLOY_TIMEOUT
 
 # VPS self-SSH marker — та же проверка, что remote-cmd.sh:165 (локальный filesystem probe)
-VPS_NODE_LIFECYCLE = "/opt/platform/core/internal/bootstrap/node-lifecycle.sh"
+VPS_NODE_LIFECYCLE = str(platform_remote_base() / "core" / "internal" / "bootstrap" / "node-lifecycle.sh")
 
 
 # region FUNC__core_src

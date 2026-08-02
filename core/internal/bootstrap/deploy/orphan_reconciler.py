@@ -31,9 +31,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.internal.shared.compose_files import COMPOSE_FILENAMES as COMPOSE_FILE_CANDIDATES
+
 # DevPlan 118 A2: единый канон списков compose-файлов — shared/compose_files.py.
 # Локальный COMPOSE_FILE_CANDIDATES УДАЛЁН (6 копий → 1 SoT; канон расширен docker-compose.yml).
-from core.internal.shared.compose_files import COMPOSE_FILENAMES as COMPOSE_FILE_CANDIDATES
+# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 
 # DevPlan 116 B5 T3: shared docker compose config — sole path (гейт docker_sole_path)
 from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
@@ -546,7 +549,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--modules-dir",
-        default=os.path.join(os.environ.get("PLATFORM_ROOT", "/opt/platform"), "modules"),
+        default=os.path.join(str(platform_remote_base()), "modules"),
         type=str,
         help="Path to modules directory (default: PLATFORM_ROOT/modules)",
     )

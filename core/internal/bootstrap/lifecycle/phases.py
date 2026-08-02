@@ -56,7 +56,8 @@ import subprocess
 from pathlib import Path
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
-from core.internal.shared import llm_paths
+# B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
+from core.internal.shared import deploy_paths, llm_paths
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     PlatformError,
@@ -69,10 +70,12 @@ logger = logging.getLogger(__name__)
 from core.internal.bootstrap.lifecycle.helpers import domains as helpers_domains
 from core.internal.bootstrap.lifecycle.helpers import reporting as helpers_reporting
 from core.internal.bootstrap.lifecycle.helpers import secrets as helpers_secrets
-from core.internal.bootstrap.lifecycle.helpers import subprocess_io as helpers_subprocess
 from core.internal.bootstrap.lifecycle.helpers import system as helpers_system
 from core.internal.bootstrap.lifecycle.helpers import users as helpers_users
 from core.internal.bootstrap.lifecycle.helpers import validation as helpers_validation
+from core.internal.shared import (
+    subprocess_io as helpers_subprocess,  # B4: единый канон (копия lifecycle/helpers удалена)
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # INIT PHASES — 9 phases for full node bootstrap
@@ -128,8 +131,8 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
         try:
             helpers_subprocess.run_subprocess(
                 ["python3", python_deps_script, "ensure", "--core-dir", core_dir],
-                "python_deps",
                 timeout=600,
+                check=True,
             )
             logger.info("[IMP:9][phase:system_bootstrap] Python 3.14 + dependencies installed")
         except (PlatformError, subprocess.TimeoutExpired) as e:
@@ -151,7 +154,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
     docker_script = os.path.join(core_dir, "internal", "bootstrap", "install-docker.sh")
     if os.path.isfile(docker_script):
         try:
-            helpers_subprocess.run_subprocess(["bash", docker_script], "install_docker", timeout=300)
+            helpers_subprocess.run_subprocess(["bash", docker_script], timeout=300, check=True)
             logger.info("[IMP:9][phase:system_bootstrap] Docker installed successfully")
         except PlatformFatalError:
             logger.error("[IMP:10][phase:system_bootstrap] Docker installation failed")
@@ -172,7 +175,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
             if skip_verify:
                 tor_cmd.append("--skip-tor-verify")
             try:
-                helpers_subprocess.run_subprocess(tor_cmd, "tor_proxy", non_fatal=True)
+                helpers_subprocess.run_subprocess(tor_cmd, non_fatal=True, fatal_rc=(127,), timeout=120)
                 logger.info("[IMP:9][phase:system_bootstrap] Tor proxy installed")
             except Exception as e:  # noqa: EXC — non-fatal: Tor is best-effort
                 logger.warning("[IMP:7][phase:system_bootstrap] Tor installation failed (non-fatal): %s", e)
@@ -189,7 +192,7 @@ def phase_system_bootstrap(core_dir: str, node_name: str, node_yaml: str) -> boo
     firewall_script = os.path.join(core_dir, "internal", "bootstrap", "firewall.sh")
     if os.path.isfile(firewall_script):
         try:
-            helpers_subprocess.run_subprocess(["bash", firewall_script], "firewall", non_fatal=True)
+            helpers_subprocess.run_subprocess(["bash", firewall_script], non_fatal=True, fatal_rc=(127,), timeout=120)
             logger.info("[IMP:9][phase:system_bootstrap] Firewall applied")
         except Exception as e:  # noqa: EXC — non-fatal: firewall is best-effort on already-configured nodes
             logger.warning("[IMP:7][phase:system_bootstrap] Firewall setup failed (non-fatal): %s", e)
@@ -315,7 +318,7 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
         logger.warning("[IMP:7][phase:platform_setup] Docker Hub credentials not set — rate-limit may apply")
     elif os.path.isfile(auth_script):
         try:
-            helpers_subprocess.run_subprocess(["python3", auth_script], "docker_registry_auth", non_fatal=True)
+            helpers_subprocess.run_subprocess(["python3", auth_script], non_fatal=True, fatal_rc=(127,), timeout=120)
             logger.info("[IMP:9][phase:platform_setup] Docker Hub auth configured")
         except Exception as e:  # noqa: EXC — non-fatal: docker auth is best-effort
             logger.warning("[IMP:7][phase:platform_setup] Docker Hub auth failed (non-fatal): %s", e)
@@ -328,7 +331,7 @@ def phase_platform_setup(core_dir: str, node_name: str, node_yaml: str) -> bool:
     setup_script = os.path.join(core_dir, "internal", "bootstrap", "setup-node.sh")
     if os.path.isfile(setup_script):
         try:
-            helpers_subprocess.run_subprocess(["bash", setup_script], "setup_node", non_fatal=True)
+            helpers_subprocess.run_subprocess(["bash", setup_script], non_fatal=True, fatal_rc=(127,), timeout=120)
             logger.info("[IMP:9][phase:platform_setup] setup-node.sh executed (sudoers generated)")
         except Exception as e:  # noqa: EXC — non-fatal: sudoers generation is best-effort
             logger.warning("[IMP:7][phase:platform_setup] setup-node.sh failed (non-fatal): %s", e)
@@ -462,7 +465,7 @@ def phase_node_configuration(core_dir: str, node_name: str, node_yaml: str) -> b
         non_fatal_issues = True
 
     # ── 4. Verify node configs directory exists ──
-    node_configs_dir = f"/opt/node-configs/{node_name}"
+    node_configs_dir = str(deploy_paths.node_configs_remote() / node_name)
     if not os.path.isdir(node_configs_dir):
         logger.warning("[IMP:7][phase:node_configuration] Node configs directory not found: %s", node_configs_dir)
         non_fatal_issues = True
@@ -656,8 +659,8 @@ def phase_deploy_services(core_dir: str, node_name: str, node_yaml: str) -> bool
         try:
             helpers_subprocess.run_subprocess(
                 ["bash", deploy_script, "--skip-provision"],
-                "deploy_modules",
                 timeout=300,
+                check=True,
             )
             logger.info("[IMP:9][phase:deploy_services] Modules deployed successfully")
         except (PlatformError, subprocess.TimeoutExpired) as e:
@@ -713,7 +716,7 @@ def phase_converge_services(core_dir: str, node_name: str, node_yaml: str) -> bo
         logger.info("[IMP:8][phase:converge_services] Auto-reconcile enabled")
 
     try:
-        helpers_subprocess.run_subprocess(converge_args, "converge", non_fatal=True, timeout=300)
+        helpers_subprocess.run_subprocess(converge_args, non_fatal=True, fatal_rc=(127,), timeout=300)
         logger.info("[IMP:9][phase:converge_services] Converge completed")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][phase:converge_services] Converge failed (non-fatal): %s", e)
@@ -866,8 +869,9 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
         try:
             helpers_subprocess.run_subprocess(
                 ["bash", provision_script, "--scope", "networks", "--scope", "volumes"],
-                "provision",
                 non_fatal=True,
+                fatal_rc=(127,),
+                timeout=120,
             )
             logger.info("[IMP:9][phase:registry_update] Environment provisioned (networks + volumes)")
         except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
@@ -881,7 +885,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
         non_fatal_issues = True
 
     # ── 3. Deliver nginx overlays ──
-    overlay_dir = f"/opt/node-configs/{node_name}/overlays/nginx"
+    overlay_dir = str(deploy_paths.node_configs_remote() / node_name / "overlays" / "nginx")
     if os.path.isdir(overlay_dir):
         conf_files = list(Path(overlay_dir).glob("*.conf"))
         if conf_files:
@@ -893,9 +897,8 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
             try:
                 helpers_subprocess.run_subprocess(
                     ["docker", "exec", "nginx", "nginx", "-s", "reload"],
-                    "deliver_overlays",
                     non_fatal=True,
-                    check_required=False,
+                    fatal_rc=(127,),
                 )
                 logger.info("[IMP:9][phase:registry_update] Nginx reloaded with overlays")
             except Exception as e:  # noqa: EXC — non-fatal (best-effort: DEPLOY_BEST_EFFORT policy)
@@ -914,8 +917,8 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
         try:
             helpers_subprocess.run_subprocess(
                 ["python3", renderer_script, "--output", config_output],
-                "render_litellm_config",
                 non_fatal=True,
+                fatal_rc=(127,),
             )
             logger.info("[IMP:9][phase:registry_update] LiteLLM config rendered")
 
@@ -923,8 +926,8 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
             if os.path.isfile(provision_entrypoint):
                 helpers_subprocess.run_subprocess(
                     ["bash", provision_entrypoint],
-                    "provision_llm_keys",
                     non_fatal=True,
+                    fatal_rc=(127,),
                 )
                 logger.info("[IMP:9][phase:registry_update] LLM virtual keys provisioned")
             else:
@@ -1002,8 +1005,8 @@ def phase_deploy_update(core_dir: str, node_name: str, node_yaml: str) -> bool:
         try:
             helpers_subprocess.run_subprocess(
                 ["bash", deploy_script, "--skip-provision"],
-                "deploy_modules",
                 timeout=300,
+                check=True,
             )
             logger.info("[IMP:9][phase:deploy_update] Modules deployed successfully")
         except (PlatformError, subprocess.TimeoutExpired) as e:
@@ -1067,7 +1070,7 @@ def phase_converge_update(core_dir: str, node_name: str, node_yaml: str) -> bool
         logger.info("[IMP:8][phase:converge_update] Auto-reconcile enabled")
 
     try:
-        helpers_subprocess.run_subprocess(converge_args, "converge", non_fatal=True, timeout=300)
+        helpers_subprocess.run_subprocess(converge_args, non_fatal=True, fatal_rc=(127,), timeout=300)
         logger.info("[IMP:9][phase:converge_update] Converge completed (update)")
     except (PlatformError, subprocess.TimeoutExpired) as e:
         logger.warning("[IMP:7][phase:converge_update] Converge failed (non-fatal): %s", e)

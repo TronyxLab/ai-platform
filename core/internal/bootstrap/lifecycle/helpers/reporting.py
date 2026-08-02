@@ -26,6 +26,8 @@ import subprocess
 import time
 from typing import TYPE_CHECKING
 
+# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.telegram_notifier import send_telegram as _shared_send_telegram
 
@@ -79,7 +81,7 @@ def run_healthchecks(node_yaml: str) -> None:
             # · Symptom: subprocess.run(["invoke_module_interface", ...]) → FileNotFoundError
             # · Root: invoke_module_interface is sourced from module-interface.sh (via paths.sh)
             # · Fix: wrap in bash -c with proper sourcing
-            platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+            platform_root = str(platform_remote_base())
             for attempt in range(1, hc_max_retries + 1):
                 try:
                     hc_cmd = (

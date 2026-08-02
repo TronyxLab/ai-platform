@@ -77,12 +77,15 @@ if _PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, _PLATFORM_ROOT)
 
 try:
+    # B3: канонический node-configs base — shared/deploy_paths (литерал /opt/node-configs удалён)
+    from core.internal.shared.deploy_paths import node_configs_remote
     from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
     from core.internal.shared.secrets_env_parser import write as write_secrets_env
     from core.internal.shared.secrets_manifest_reader import iter_secrets as _iter_manifest_secrets
 except ModuleNotFoundError:
     if _SHARED_DIR not in sys.path:
         sys.path.insert(0, _SHARED_DIR)
+    from deploy_paths import node_configs_remote
     from secrets_env_parser import parse as parse_secrets_env
     from secrets_env_parser import write as write_secrets_env
     from secrets_manifest_reader import iter_secrets as _iter_manifest_secrets
@@ -426,7 +429,7 @@ def ensure_secrets(
 
     # ── Step 4: sops --set persistence (optional, non-fatal) ──
     if persist_to_sops and generated:
-        node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
+        node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", str(node_configs_remote()))
         node_name = os.environ.get("NODE_NAME", "")
         if node_name:
             enc_file = os.path.join(node_configs_dir, "secrets", f"{node_name}.enc.yaml")

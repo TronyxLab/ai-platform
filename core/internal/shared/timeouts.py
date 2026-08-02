@@ -19,7 +19,7 @@
 ##      (экспоненциальное поведение сохраняется).
 ##   4. Значения канонизированы: up=180, pull=300, build=300, healthcheck-poll=60,
 ##      ssh-connect=30, deploy=600, ssh-read=60, image-check=60, docker-cmd=10,
-##      docker-stop=30, rsync=600, watchdog=90/5/3/30, healthcheck-ports=[8080,8000].
+##      docker-stop=30, rsync=600, watchdog=90/5/3/30, healthcheck-ports=[3000,4000,8000,8080,9000] (B6).
 ## @rationale U-11: 226 литералов timeout= (30/120/180/300/600) без констант. Единый реестр
 ##            делает значения grepable, гейт — enforce-емым. Значения стандартизированы из
 ##            существующих канонов (docker_orchestrator up=180, deploy-дефолт ssh.sh=600,
@@ -29,6 +29,8 @@
 ##            + SUDOERS_CMD_TIMEOUT (D28), + PROJECT_HEALTHCHECK_PORTS (D36).
 ## @changes  2026-08-01 | DevPlan 116 B5 T1 — Created (shared-реестр таймаутов)
 ## @changes  2026-08-01 | DevPlan 117 D — watchdog/retry/ports домены (D28-D36)
+## @changes  2026-08-02 | DevPlan 119 B7 — +CONVERGE_DOCKER_TIMEOUT (30), +FILE_OP_TIMEOUT (15)
+##                      (converge/infra локальные константы удалены — импорт из канона)
 # endregion MODULE_CONTRACT
 
 # ── Docker domain ────────────────────────────────────────────────────────────
@@ -61,6 +63,15 @@ SUDOERS_CMD_TIMEOUT = 15
 
 # docker stop/rm — lifecycle операции (orphan/legacy cleanup, rollback) — grace-period безопасный
 DOCKER_STOP_TIMEOUT = 30
+
+# converge/ таймаут docker/system команд (converge/infra DOCKER_TIMEOUT, DevPlan 119 B7):
+#   docker info, docker volume inspect, docker compose config в R-юнитах reconcile.
+#   Отдельный от DOCKER_CMD_TIMEOUT (10) — converge-домен использует 30s окно (C10 канон).
+CONVERGE_DOCKER_TIMEOUT = 30
+
+# converge/ таймаут файловых операций (converge/infra FILE_OP_TIMEOUT, DevPlan 119 B7):
+#   chmod/chown/mkdir в R-юнитах + visudo -c (sudoers.py). 15s достаточно для файловых мутаций.
+FILE_OP_TIMEOUT = 15
 
 # systemctl restart docker — перезапуск docker-демона (docker_registry_auth _restart_docker,
 # bootstrap φ3). systemctl restart на слабых VPS может занять >DOCKER_CMD_TIMEOUT.
@@ -124,4 +135,7 @@ WATCHDOG_CB_CHECK_TIMEOUT = 10
 # ── Healthcheck ports domain ───────────────────────────────────────────────────
 
 # Эвристические порты HTTP /health для проектов без healthcheck (healthcheck_poller _try_http)
-PROJECT_HEALTHCHECK_PORTS: list[int] = [8080, 8000]
+# DevPlan 119 B6: расширен [8080,8000] → [3000,4000,8000,8080,9000] — покрывает реальные
+# compose-порты платформы (grafana/langfuse 3000, litellm 4000, minio 9000) + Node/React
+# (3000), Flask/Django (8000/8080), Go (8080/9000). Уникальные значения, отсортированы.
+PROJECT_HEALTHCHECK_PORTS: list[int] = [3000, 4000, 8000, 8080, 9000]

@@ -41,20 +41,24 @@ from core.internal.shared.audit_logger import (
     DEFAULT_LOG_FILE as AUDIT_LOG_FILE,  # noqa: F401 — публичный re-export канона (C8)
 )
 
+# DevPlan 119 B2/B7: канонические константы путей/таймаутов — shared/deploy_paths + shared/timeouts
+# (литералы /opt/projects, DOCKER_TIMEOUT=30, FILE_OP_TIMEOUT=15 удалены; re-export для доменных
+# модулей converge/*, которые импортируют их из infra — публичные алиасы канона, паттерн C8 AUDIT_LOG_FILE).
+from core.internal.shared.deploy_paths import (
+    DEFAULT_PROJECTS_BASE as PROJECTS_BASE,  # noqa: F401 — публичный re-export канона (B2)
+)
+
 # DevPlan 118 C10: единый канон run_subprocess — shared/subprocess_io (делегирование, check=False).
 from core.internal.shared.subprocess_io import run_subprocess as _shared_run_subprocess
+from core.internal.shared.timeouts import CONVERGE_DOCKER_TIMEOUT as DOCKER_TIMEOUT
+from core.internal.shared.timeouts import FILE_OP_TIMEOUT  # noqa: F401 — публичный re-export канона (B7)
 
 logger = logging.getLogger(__name__)
 
 # ── Constants (мигрированы из reconciler.py) ──
 AUDIT_LOG_DIR = "/var/log/platform"
 PROXY_NET = "proxy-net"
-DOCKER_TIMEOUT = 30
-"""## @invariant subprocess timeout for all docker/system commands (seconds)."""
-FILE_OP_TIMEOUT = 15
-"""## @invariant subprocess timeout for file operations (chmod, chown, mkdir)."""
 HOSTS_FILE = "/etc/hosts"
-PROJECTS_BASE = "/opt/projects"
 
 # R8/R9 constants (overridable by tests via monkeypatch)
 SUDOERS_DIR: str = "/etc/sudoers.d"

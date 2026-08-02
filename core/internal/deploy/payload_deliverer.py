@@ -49,6 +49,9 @@ from typing import BinaryIO
 
 from core.internal.deploy.channels import Payload
 from core.internal.shared.compose_files import PROJECT_COMPOSE_FILENAMES
+
+# B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
+from core.internal.shared.deploy_paths import DEFAULT_PROJECTS_BASE
 from core.internal.shared.project_registry import validate_project_name
 
 logger = logging.getLogger(__name__)
@@ -105,7 +108,7 @@ class PayloadDeliverer:
     Zero Docker dependency. Pure file I/O + tar validation.
     """
 
-    def __init__(self, projects_base: str = "/opt/projects"):
+    def __init__(self, projects_base: str = DEFAULT_PROJECTS_BASE):
         self.projects_base = projects_base
 
     # region FUNC_assemble_payload
@@ -404,7 +407,7 @@ if __name__ == "__main__":
     deliver_parser = sub.add_parser("deliver", help="Deliver payload via stdin")
     deliver_parser.add_argument("project", help="Project name")
     deliver_parser.add_argument("org", nargs="?", default=None, help="Optional org/context name")
-    deliver_parser.add_argument("--projects-base", default="/opt/projects", help="Projects base directory")
+    deliver_parser.add_argument("--projects-base", default=DEFAULT_PROJECTS_BASE, help="Projects base directory")
 
     args = parser.parse_args()
 

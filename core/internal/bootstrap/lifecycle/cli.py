@@ -35,6 +35,9 @@ from core.internal.bootstrap.lifecycle.state_machine import (
     StateMachine,
     phase_is_done,
 )
+
+# B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 
 logger = logging.getLogger(__name__)
@@ -160,7 +163,7 @@ def main() -> int:
     sm = StateMachine(state_file_path=args.state_file)
 
     # Detect CORE_DIR from PLATFORM_ROOT or default
-    platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+    platform_root = str(platform_remote_base())
     core_dir = os.environ.get("CORE_DIR", os.path.join(platform_root, "core"))
     sm.core_dir = core_dir
 
@@ -470,7 +473,7 @@ def _maybe_run_preflight(sm: StateMachine) -> int:
         logger.info("[IMP:7][preflight] SKIP_PREFLIGHT set — skipping preflight")
         return 0
 
-    core_dir = sm.core_dir or os.environ.get("CORE_DIR", "/opt/platform/core")
+    core_dir = sm.core_dir or os.environ.get("CORE_DIR", str(platform_remote_base() / "core"))
     preflight_script = os.path.join(core_dir, "internal", "bootstrap", "preflight.py")
     if not os.path.isfile(preflight_script):
         logger.warning("[IMP:7][preflight] preflight.py not found at %s — skipping", preflight_script)

@@ -37,6 +37,8 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+# B3: канонический platform root — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,7 @@ _SECRETS_ENV_DEFAULT = "/run/platform/secrets.env"
 
 # Default path for secrets-manifest.yaml (relative to platform root)
 _MANIFEST_DEFAULT = os.path.join(
-    os.environ.get("PLATFORM_ROOT", "/opt/platform"),
+    str(platform_remote_base()),
     "core/secrets-manifest.yaml",
 )
 

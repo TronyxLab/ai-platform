@@ -12,7 +12,7 @@
 ##     для ci-deploy (orchestrator_cli dispatch — SSH_ORIGINAL_COMMAND-диспетчер, B1;
 ##     единственный писатель ci-deploy ключа, волна 117 D1: setup-node.sh дубли удалены)
 ##   - ensure_projects_base: /opt/projects ownership ci-deploy + вызов converge R3 (non-fatal)
-##   - Все subprocess через helpers.subprocess_io.run_subprocess (единый канон)
+##   - Все subprocess через shared/subprocess_io.run_subprocess (единый канон, B4)
 ## @rationale Strangler-Fig: извлечение I/O из state_machine-монолита (DevPlan 116 B9 D1).
 ## @changes  2026-08-01 · Extracted from state_machine (B9 T1)
 # endregion MODULE_CONTRACT
@@ -23,7 +23,7 @@ import logging
 import os
 import subprocess
 
-from core.internal.bootstrap.lifecycle.helpers.subprocess_io import run_subprocess
+from core.internal.shared.subprocess_io import run_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,8 @@ def create_user(username: str, groups: list[str] | None = None) -> None:
     if groups_str:
         cmd.extend(["--groups", groups_str])
     cmd.append(username)
-    run_subprocess(cmd, f"create_user_{username}")
+    # B4: единый канон shared/subprocess_io (check=True = lifecycle raise-семантика)
+    run_subprocess(cmd, check=True)
     logger.info("[IMP:9][user] User '%s' created", username)
 
 
@@ -75,8 +76,8 @@ def add_ssh_key(
     auth_keys = os.path.join(ssh_dir, "authorized_keys")
 
     os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
-    # Ensure ownership
-    run_subprocess(["chown", f"{username}:{username}", ssh_dir], f"chown_{username}_ssh", non_fatal=True)
+    # Ensure ownership (B4: non_fatal=True + fatal_rc=(127,) — exit=127 всегда fatal, TRAP[BUG])
+    run_subprocess(["chown", f"{username}:{username}", ssh_dir], non_fatal=True, fatal_rc=(127,))
 
     # Check if key already present
     if os.path.isfile(auth_keys):
@@ -93,7 +94,7 @@ def add_ssh_key(
     with open(auth_keys, "a") as f:
         f.write(entry)
     os.chmod(auth_keys, 0o600)
-    run_subprocess(["chown", f"{username}:{username}", auth_keys], f"chown_{username}_keys", non_fatal=True)
+    run_subprocess(["chown", f"{username}:{username}", auth_keys], non_fatal=True, fatal_rc=(127,))
     logger.info("[IMP:9][ssh_key] SSH key added for %s", username)
 
 
@@ -106,10 +107,13 @@ def add_ssh_key(
 ## @complexity O(1) + subprocess
 def ensure_projects_base(core_dir: str, node_name: str) -> None:
     """Ensure /opt/projects base directory exists with correct ownership."""
-    projects_dir = "/opt/projects"
+    # B2: канонический корень проектов — shared/deploy_paths (литерал /opt/projects удалён)
+    from core.internal.shared.deploy_paths import projects_base
+
+    projects_dir = str(projects_base())
     os.makedirs(projects_dir, exist_ok=True)
-    run_subprocess(["chown", "ci-deploy:ci-deploy", projects_dir], "chown_projects", non_fatal=True)
-    logger.info("[IMP:9][projects_base] /opt/projects ownership set to ci-deploy:ci-deploy")
+    run_subprocess(["chown", "ci-deploy:ci-deploy", projects_dir], non_fatal=True, fatal_rc=(127,))
+    logger.info("[IMP:9][projects_base] %s ownership set to ci-deploy:ci-deploy", projects_dir)
 
     # Call converge R3
     converge_script = os.path.join(core_dir, "internal", "bootstrap", "converge.sh")
@@ -117,8 +121,9 @@ def ensure_projects_base(core_dir: str, node_name: str) -> None:
         logger.info("[IMP:8][projects_base] Calling converge R3 for project scaffold")
         run_subprocess(
             ["bash", converge_script, "--node", node_name, "--units", "R3"],
-            "converge_R3",
             non_fatal=True,
+            fatal_rc=(127,),
+            timeout=120,  # B4: legacy lifecycle default (120) — converge R3 может занимать >30s
         )
 
 

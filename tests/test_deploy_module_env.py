@@ -92,10 +92,10 @@ def test_compose_args_has_platform_env(caplog, docker_orchestrator_source: str) 
     logger.critical("[IMP:9][test_compose_args] --env-file flag in _build_compose_args: %s", has_env_file)
     assert has_env_file, "_build_compose_args must add --env-file for platform .env"
 
-    # ── platform_root fallback ──
-    has_fallback = "/opt/platform" in func_body
-    logger.critical("[IMP:9][test_compose_args] /opt/platform fallback: %s", has_fallback)
-    assert has_fallback, "_build_compose_args must have /opt/platform fallback for platform_root"
+    # ── platform_root fallback (B3: канон shared/deploy_paths.platform_remote_base вместо литерала) ──
+    has_fallback = "platform_remote_base()" in func_body
+    logger.critical("[IMP:9][test_compose_args] platform_remote_base fallback: %s", has_fallback)
+    assert has_fallback, "_build_compose_args must have platform_remote_base() fallback for platform_root"
 
     # ── LDD trajectory ──
     found_imp9 = False
