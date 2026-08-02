@@ -27,6 +27,7 @@
 ##   - Полный TRAP-скан кодовой базы от 2026-07-31 (Шаг 1 DevPlan 111)
 ## @changes  CREATED: 2026-07-31 | DevPlan 111 Wave 1 | TASK-A (реестр) + TASK-B (.gitignore) + TASK-C (check-file-lines) + TASK-D (git add -f)
 ## @changes  UPDATED: 2026-08-01 | DevPlan 116 B11 T7 (U-82, D4) — формат записей: Status (OPEN/FIXED/SUPERSEDED) + Rev (дата ИЛИ условие); T1/P2-2 → FIXED (B10); AD8-AD12 (U-83..88 решения); гейт свежести test_gate_debt_registry.py
+## @changes  UPDATED: 2026-08-02 | DevPlan 119 C2/C6 — +P3-6 (watchdog undelivered, решение на 120) +P3-7 (letsencrypt path hardcode); отдельные файлы .ai/debt/watchdog-undelivered.md, .ai/debt/letsencrypt-path-hardcode.md
 
 ---
 
@@ -76,6 +77,8 @@
 | P3-3 | `core/modules/platform-secrets/install.sh` (223 LOC) | Bootstrap, кандидат при росте >300 LOC | OPEN | При росте >300 LOC |
 | P3-4 | `core/modules/postgres/docker-compose.base.yml:50` | POSTGRES_PASSWORD rotation risk (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
 | P3-5 | `tests/_conftest/networks.py:90` | Parallel test teardown destroys shared external networks (TRAP[DEBT] MED) | OPEN | 2026-12-31 |
+| P3-6 | `core/modules/hermes-agent/watchdog/*` (3 файла) | Watchdog-подсистема не доставляется (0 в Dockerfile/compose/systemd/CI) — решение пользователя на 120 (DevPlan 119 C2, D-1). TRAP[DEBT] HI на agent_watchdog/circuit_breaker/docker_ops. См. `.ai/debt/watchdog-undelivered.md`. | OPEN | 2026-08-31 (решение на 120) |
+| P3-7 | `core/internal/scaffold/vhost_renderer.py`, `core/internal/scaffold/nginx_harness.py` | `/etc/letsencrypt/live` хардкод вне `letsencrypt_live()` (DevPlan 119 C6, AUDIT-4 T7). cert_orchestrator мигрирован (118 C7). TRAP[DEBT] на оба файла. См. `.ai/debt/letsencrypt-path-hardcode.md`. | OPEN | При касании vhost_renderer/nginx_harness |
 
 ---
 

@@ -50,4 +50,4 @@ name: doxygen-typescript
   ### LDD adaptation for TypeScript
   Use `console.log` with `[IMP:X][FUNC][BLOCK]` format. IMP:9-10 for business logic.
 
-<!-- ai-instructions:0.6.1 -->
+<!-- ai-instructions:0.6.3 -->

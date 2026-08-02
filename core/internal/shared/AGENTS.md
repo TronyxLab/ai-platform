@@ -33,6 +33,7 @@
 ##           2026-08-02 | DevPlan 119 B1 — project_yaml: ЕДИНСТВЕННЫЙ парсер ai-platform.yaml (8 потребителей мигрированы, AC-B1.1);
 ##                      B2/B3 — deploy_paths каноны (DEFAULT_PROJECTS_BASE/platform_remote_base/node_configs_remote) во всех /opt/* литералах;
 ##                      B4 — subprocess_io +fatal_rc, lifecycle/helpers/subprocess_io.py удалён
+##           2026-08-02 | DevPlan 119 C3 — verbs.validate_not_verb удалён (0 ссылок)
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -67,7 +68,7 @@
 | `telegram_notifier.py` | Единый Telegram-клиент (заменяет 6 реализаций: 3 shell + 3 Python) | `send_telegram()` | notify-hook, hermes-agent, deploy |
 | `timeouts.py` | Единый реестр таймаутов операционных политик (DevPlan 116 B5 T1, U-11 — единственный источник числовых timeout= в docker/ssh/healthcheck-домене) | `COMPOSE_UP_TIMEOUT`, `PULL_TIMEOUT`, `BUILD_TIMEOUT`, `HEALTHCHECK_POLL_TIMEOUT`, `SSH_CONNECT_TIMEOUT`, `DEPLOY_TIMEOUT`, `SSH_READ_TIMEOUT`, `RETRY_BACKOFF_SECONDS`, `IMAGE_CHECK_TIMEOUT`, `DOCKER_CMD_TIMEOUT`, `DOCKER_STOP_TIMEOUT`, `RSYNC_TIMEOUT`, `RETRY_COUNT` | docker_compose, ssh_opts, channels, docker_orchestrator, deploy_engine, reconciler, context_deployer, remote_executor, overlay_deliverer, context_promoter, orphan_reconciler, deploy_orchestrator |
 | `vps_readiness.py` | VPS pre-flight проверки (SSH, forced-command ping, /opt/projects/, Docker) — Strangler-миграция vps-readiness.sh (DevPlan 105, дедупликация deploy.mk/CI pre-flight) | `check_vps_ready()`, CLI `NODE [--json|--quick]` | deploy.mk pre-flight, deploy-project.yml (через фасад core/lib/vps-readiness.sh) |
-| `verbs.py` | Канонический verb-словарь forced-command диспетчера (DevPlan 116 B1 T1, U-56) — единый источник CANONICAL_VERBS + reserve-имен для проектов | `CANONICAL_VERBS`, `VERB_RESERVE`, `is_verb()`, `validate_not_verb()` | deploy/ssh_command_parser (classify_verb, DevPlan 118 D3), project_registry (validate_project_name), gate канала (T10) |
+| `verbs.py` | Канонический verb-словарь forced-command диспетчера (DevPlan 116 B1 T1, U-56) — единый источник CANONICAL_VERBS + reserve-имен для проектов | `CANONICAL_VERBS`, `VERB_RESERVE`, `is_verb()` (validate_not_verb удалён — 0 ссылок, DevPlan 119 C3) | deploy/ssh_command_parser (classify_verb, DevPlan 118 D3), project_registry (validate_project_name), gate канала (T10) |
 | `__init__.py` | Пакетный контракт shared-области | — | — |
 
 ## Правила добавления нового модуля

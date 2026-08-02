@@ -301,7 +301,7 @@ name: drift-detection
   Определи границы проверки. Если scope не указан явно:
   - Используй glob `**/*` для обзора
   - Сфокусируйся на docker-compose файлах, .env, CI конфигах, тестах, ADR, README
-  - Если файлов >20 — используй task-агентов с subagent_type="explore" для параллельного аудита (см. post-refactor-recovery skill, Phase 1)
+  - Если файлов >20 — используй task-агентов с subagent_type="explore" для параллельного аудита
 
   ### 2. Superposition Scan
 
@@ -386,4 +386,4 @@ name: drift-detection
   ...
   ```
 
-<!-- ai-instructions:0.6.1 -->
+<!-- ai-instructions:0.6.3 -->

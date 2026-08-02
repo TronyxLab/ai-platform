@@ -59,4 +59,4 @@ name: doxygen-python
   ### Doxygen ALIASES
   In Doxyfile, include: purpose, invariants, rationale, io, modulemap, complexity, uses, scope, input, output, links, modulecontract, changes, usecases.
 
-<!-- ai-instructions:0.6.1 -->
+<!-- ai-instructions:0.6.3 -->

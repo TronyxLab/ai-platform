@@ -10,4 +10,4 @@
     6. On ambiguity: use superposition protocol — not open-ended questions.
      7. Language: reply in Russian.
 
-<!-- ai-instructions:0.6.1 -->
+<!-- ai-instructions:0.6.3 -->

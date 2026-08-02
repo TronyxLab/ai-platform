@@ -76,6 +76,12 @@
     **Attempt 4 (Reflection):** "WARNING: Looping risk! Pause and reflect. Are you repeating a failed strategy? Consider alternatives (Superposition)."
 
     **Attempt 5+ (Escalation):** "CRITICAL ERROR: Agent looping detected. STOP. Formulate a help request for an operator."
+
+    **Batched verification (anti-serial):**
+    - Prefer the project's batched verification command — a single invocation that collects ALL failures in one pass (e.g., `make preflight`, `make test-summary`, `npm test` — whichever the project provides).
+    - FORBIDDEN: per-file verification loops — "run file A → fix → run file B → fix". One pass collects the full failure set.
+    - Fix cycle operates on the full failure set: fix ALL known errors → re-run the batched command once → repeat. Escalation levels apply per cycle, not per file.
+    - The full gate runs exactly once, at the end, when the batched command is clean.
 **Test Honesty Rules**
 
     Prevent test suite degradation into unfalsifiable pass-collections. A test that cannot fail is not a test.
@@ -104,4 +110,4 @@
 
     **QA Integration:** QA Phase 4 (Test Quality Deep Audit) checks R1-R5. R1/R3/R4 violation → DEGRADED verdict. R2/R5 violations → documented in report, contribute to test health score.
 
-<!-- ai-instructions:0.6.1 -->
+<!-- ai-instructions:0.6.3 -->

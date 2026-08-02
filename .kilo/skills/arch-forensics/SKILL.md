@@ -359,7 +359,7 @@ name: arch-forensics
   Определи границы анализа. Если scope не указан явно:
   - Используй glob `**/*.py`, `**/*.ts`, `**/*.java` (или соответствующий язык)
   - Сфокусируйся на модулях с бизнес-логикой, исключая тесты и документацию
-  - Если файлов >50 — используй task-агентов с subagent_type="explore" для параллельного анализа (см. post-refactor-recovery skill, Phase 1)
+  - Если файлов >50 — используй task-агентов с subagent_type="explore" для параллельного анализа
 
   ### 2. Superposition Scan — 7 задач + 9 режимов
 
@@ -462,4 +462,4 @@ name: arch-forensics
   ...
   ```
 
-<!-- ai-instructions:0.6.1 -->
+<!-- ai-instructions:0.6.3 -->

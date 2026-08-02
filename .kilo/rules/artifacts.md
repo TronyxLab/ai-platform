@@ -52,4 +52,4 @@
     - NN starts at 01 and increments globally across the folder
     - Readers resolve "the DevPlan" as the highest-NN `*-DevPlan*.md` (R1)
 
-<!-- ai-instructions:0.6.1 -->
+<!-- ai-instructions:0.6.3 -->
