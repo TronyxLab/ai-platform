@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: circuit-breaker circuit-breaker-service circuit-event state-machine failures window open reset check-all
 # STRUCTURE: ▶ CircuitBreakerService.from_config_entry → ▶ CircuitEvent → ▶ CircuitBreaker: _read_state/_write_state → _run_health_check → _increment_failures → _check_service → check_all_services
+# 📝 TRAP[DEBT] · 2026-08-02 · HI · Watchdog subsystem not delivered (DevPlan 119 C2)
+# · Observed: 0 references in Dockerfile/compose/systemd/CI — подсистема не доставляется
+# · Suspected: feature-flag awaiting activation or abandoned prototype
+# · Impact: dead code in repo; тесты покрывают недоставленную функциональность
+# · When: 119 wave 2 audit — deferred, решение пользователя на волну 120 (D-1, Brief 119)
+# · Rev: 2026-08-XX (120) — владелец решает: доставить (feature flag) или полный sweep
+#   (код + тесты + module.yaml env_requires)
 # region MODULE_CONTRACT
 ## @purpose  Circuit breaker framework for stateful services — extracted from agent_watchdog.py
 ##           (DevPlan 117 G T52). Tracks repeated health-check failures per service and stops

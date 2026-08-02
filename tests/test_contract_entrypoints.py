@@ -42,7 +42,7 @@ MANIFEST_PATH: str = os.path.join(PLATFORM_ROOT, MANIFEST_REL)
 # ── Regex: extract script paths from delegates_to strings ──────────────────
 # Matches paths like:
 #   core/entrypoints/bootstrap.sh
-#   core/entrypoints/check-commit-msg.py
+#   core/entrypoints/check_commit_msg.py
 #   core/entrypoints/deploy.sh → git push → CI → core/internal/deploy/orchestrator_cli.py receive
 #   core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh
 _SCRIPT_PATH_RE: re.Pattern = re.compile(r"(?:^|\s+)(core/(?:entrypoints|internal)/[\w./-]+\.(?:sh|py))")

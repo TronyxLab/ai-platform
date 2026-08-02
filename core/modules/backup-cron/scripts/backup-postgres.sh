@@ -14,8 +14,13 @@
 ##            (language policy: business logic in Python, shell = thin facade)
 ## @changes
 ##   LAST_CHANGE: 2026-08-02 | Rewritten as thin wrapper (DevPlan 117 Brief H D64)
+##   2026-08-02 | DevPlan 119 C1 — S3 upload-цепочка активирована: после успешного
+##   pg_dumpall backup_postgres.py вызывает upload-s3.sh (off-site бэкапы). «Не блокировать
+##   при ошибке upload» — exit код upload проверяется, дамп остаётся в spool (см. run_backup).
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
 
+# DevPlan 119 C1 (AC-C1.3): upload-s3.sh вызывается ИЗ backup_postgres.py после успешного
+# pg_dumpall (верифицированный дамп + gzip -t + pg_restore --list). Wrapper — thin facade.
 exec python3 /usr/local/bin/backup_postgres.py "$@"

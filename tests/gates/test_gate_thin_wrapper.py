@@ -41,13 +41,18 @@ ENTRYPOINTS_DIR: pathlib.Path = pathlib.Path(PLATFORM_ROOT) / "core" / "entrypoi
 # Allowlist — entrypoints outside the refactoring scope
 # These are skipped without any checks because they are not part of the
 # thin-wrapper contract enforcement (wave 1 of DevPlan 020).
-# After the refactoring is complete, bootstrap.sh should be removed from
-# the allowlist once it is reduced to ≤150 LOC and ≤4 functions.
+# bootstrap.sh: T15-рефакторинг (DevPlan 020) выполнен — 160 LOC/2 funcs; остаётся в
+# allowlist из-за прямых бинарных вызовов (exec ssh + SCP-делегирование), см. комментарий
+# записи. Обновлено DevPlan 119 C7 (doc-drift).
 # ═══════════════════════════════════════════════════════════════════════════
 
 ALLOWLIST: frozenset[str] = frozenset(
     {
-        "bootstrap.sh",  # Will be refactored to ~150 LOC in T15
+        # bootstrap.sh (160 LOC, 2 funcs): T15-рефакторинг DevPlan 020 выполнен — остаётся
+        # в allowlist из-за exec ssh (L157) + SCP-делегирования (прямые бинарные вызовы,
+        # языковая политика: entrypoint = тонкий фасад над scp-deliver/build-ssh-cmd).
+        # Обновлено DevPlan 119 C7 (doc-drift): комментарий «~150 LOC in T15» устарел.
+        "bootstrap.sh",
         "lint.sh",  # External tool orchestrator — 221 LOC, 6 functions
         "check-doc-headers.sh",  # Documentation audit utility — 215 LOC, 6 functions
         "context-promote.sh",  # Uses ssh -T for SSH auth detection (B4), direct git push

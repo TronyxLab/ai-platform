@@ -1,5 +1,5 @@
-## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-16 s3-stub healthcheck
-## STRUCTURE: FROM debian:12.14-slim → add PGDG repo → install cron+pg-client-16 → COPY scripts → COPY crontab → ENTRYPOINT cron
+## GREP_SUMMARY: backup-cron Dockerfile pgdg cron debian bash pg-client-16 date-parser s3-client retention upload healthcheck
+## STRUCTURE: FROM debian:bookworm-slim → add PGDG repo → install cron+pg-client-16+python → COPY scripts (incl date_parser+s3_client) → COPY crontab → ENTRYPOINT cron
 # region MODULE_CONTRACT
 ## @purpose  Build backup-cron image with cron daemon + backup scripts + pg_dump client
 ## @scope    Phase 02: installs cron schedule; S3 upload = stub (phase 06 fills upload-s3.sh)
@@ -65,6 +65,10 @@ COPY scripts/upload-s3.sh        /usr/local/bin/upload-s3.sh
 COPY scripts/upload.py           /usr/local/bin/upload.py
 COPY scripts/backup_config.py    /usr/local/bin/backup_config.py
 COPY scripts/retention.py        /usr/local/bin/retention.py
+# DevPlan 119 C1 (AC-C1.1): retention.py imports date_parser + s3_client — эти модули
+# ОБЯЗАТЕЛЬНО копируются в образ, иначе cron-запуск retention падает на ImportError.
+COPY scripts/date_parser.py      /usr/local/bin/date_parser.py
+COPY scripts/s3_client.py        /usr/local/bin/s3_client.py
 
 # Copy healthcheck scripts
 COPY healthcheck.sh  /usr/local/bin/healthcheck.sh

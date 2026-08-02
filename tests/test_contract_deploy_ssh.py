@@ -231,7 +231,8 @@ def _print_ldd(stderr: str, stdout: str = "") -> bool:
 
 
 # NOTE: detect_age_key tests removed — bootstrap.sh detect_age_key() now delegates to
-# core/internal/shared/age_key.py (Python). Shell golden log messages are no longer produced.
+# core/internal/shared/node_detect.py (Python; age_key.py compat-шим удалён волной 118 D3).
+# Shell golden log messages are no longer produced.
 # The Python module has its own unit tests in tests/unit/.
 # ═══════════════════════════════════════════════════════════════════
 # ⚠️ NOTE: auto_detect_node_name tests removed (DevPlan 104) — the shell function was

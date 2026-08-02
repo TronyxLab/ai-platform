@@ -54,6 +54,9 @@ _EXCLUDED_DIRS: frozenset = frozenset(
         "node_modules",
         "test_data",
         ".pytest_cache",
+        # Transient probe-директория test_gate_marker_location (xdist race, DevPlan 119 C):
+        # probe-файл без GREP_SUMMARY живёт лишь на время соседнего gate-теста
+        "_gate_probe_marker_tmp",
     }
 )
 
@@ -63,7 +66,6 @@ _EXCLUDED_FILES: frozenset = frozenset(
         ".test_counter.json",
     }
 )
-
 # endregion EXCLUSIONS
 
 

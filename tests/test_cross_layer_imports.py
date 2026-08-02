@@ -152,50 +152,47 @@ _RE_DOTTED_NAME = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
 # Rev: сжатие allowlist — отдельный backlog (модули вне контейнерного рантайма).
 # 2026-08-02 (DevPlan 118 C1): docker_ops.py +1 запись (shared.timeouts — C1 требует импорт
 #   канона таймаутов); docker_compose запись сдвинута 24→27 (импорт-блок вырос на 3 строки).
+# 2026-08-02 (DevPlan 119 C2/C1): watchdog TRAP[DEBT]-блоки (+7 строк) → номера строк +7;
+#   backup_config.py запись УДАЛЕНА — core.internal.config импорт удалён (C1, контейнер без core/internal).
 _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     (
-        "core/modules/backup-cron/scripts/backup_config.py",
-        36,
+        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
+        51,
         "контейнерный модуль; internal.config platform_config — by design (D1)",
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        44,
-        "контейнерный модуль; internal.config platform_config — by design (D1)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        47,
+        54,
         "контейнерный модуль; shared.secrets_env_parser — by design (D1)",
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        50,
+        57,
         "контейнерный модуль; shared.telegram_notifier — by design (D1)",
     ),
     (
         "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        53,
+        60,
         "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 117 D29)",
     ),
     (
         "core/modules/hermes-agent/watchdog/circuit_breaker.py",
-        32,
+        39,
         "контейнерный модуль; internal.config platform_config — by design (D1, DevPlan 117 G T52)",
     ),
     (
         "core/modules/hermes-agent/watchdog/circuit_breaker.py",
-        35,
+        42,
         "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 119 A2)",
     ),
     (
         "core/modules/hermes-agent/watchdog/docker_ops.py",
-        27,
+        34,
         "контейнерный модуль; shared.docker_compose — by design (D1, DevPlan 117 D19, DevPlan 117 G T52)",
     ),
     (
         "core/modules/hermes-agent/watchdog/docker_ops.py",
-        37,
+        44,
         "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 118 C1)",
     ),
     (

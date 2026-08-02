@@ -759,7 +759,10 @@ def _section_github_actions(env_defaults: dict[str, str]) -> list[str]:
     lines.append(
         "# SSH_KEY — SSH private key for ci-deploy passed as workflow_call secret. ≡ CI_DEPLOY_KEY (один ключ, две роли: rsync + forced-command)"
     )
-    lines.append("# E2E_BASE_URL — Base URL for E2E smoke test health endpoint (used by platform-deploy.yml)")
+    lines.append(
+        "# E2E_BASE_URL — Зарезервированный CI-secret для E2E smoke test health endpoint; "
+        "в .github/ не используется (DevPlan 119 C7 doc-drift — заявка на platform-deploy.yml устарела)"
+    )
     lines.append("# E2E_GRAFANA_URL — Grafana URL for E2E smoke test health check (used by platform-deploy.yml)")
     lines.append("# GHCR_PULL_TOKEN — Fine-grained PAT for ghcr.io read:packages")
     lines.append("GHCR_PULL_TOKEN=" + _get_env_val(env_defaults, "GHCR_PULL_TOKEN", "ghp_test-token-for-ci-only"))

@@ -103,8 +103,9 @@ _UPLOAD_SCRIPT = "/usr/local/bin/upload-s3.sh"
 ## @param timestamp   Timestamp override for deterministic tests
 ##                    (default: UTC YYYYMMDDTHHMMSSZ)
 ## @param env         Environment override (default: os.environ)
-## @return  int exit status: 0 = success, 1 = fatal (validate/dump/verify), or
-##          the upload script's exit code (last step, propagated like `set -e`)
+## @return  int exit status: 0 = success, 1 = fatal (validate/dump/verify).
+##          Upload exit code НЕ проваливает бэкап (DevPlan 119 C1: «не блокировать при
+##          ошибке upload») — результат upload логируется, дамп остаётся в spool.
 ## @rationale Line-by-line port of backup-postgres.sh: pipe statuses (PIPESTATUS)
 ##            → Popen returncodes; gzip -t; pg_restore --list; partial-dump
 ##            cleanup on failure (shell trap cleanup_partial → finally block).
@@ -206,9 +207,29 @@ def run_backup(
             size = str(os.path.getsize(dump_file))
         logger.info("[IMP:9][done] BACKUP COMPLETE: %s (size=%s)", dump_file, size)
 
-        # ── [upload] S3 upload (last step — exit code propagated like set -e) ──
+        # ── [upload] S3 upload (last step) — DevPlan 119 C1: off-site бэкапы критичны.
+        #    Семантика «не блокировать при ошибке upload»: exit code ПРОВЕРЯЕТСЯ и
+        #    логируется (IMP:9/IMP:10), но НЕ проваливает бэкап — локальный дамп
+        #    верифицирован и безопасен в spool; upload.py сам ретраит 3×90 мин и
+        #    сохраняет файл в spool при неудаче (no data loss).
+        # 🧐 TRAP[DECISION] · 2026-08-02 · — · Upload failure НЕ проваливает бэкап (C1)
+        # · Rejected: 117 H D64 set -e parity (upload rc → backup rc) — ложно-критичная
+        #   алертинг-семантика для ретраябельной проблемы; дамп уже верифицирован локально
+        # · Reason: DevPlan 119 C1 «с проверкой exit code, не блокировать при ошибке upload»;
+        #   upload.py сохраняет файл в spool при неудаче → retry без потери данных
+        # · Rev: если off-site подтверждение станет жёстким требованием — вернуть propagation
         s3_key = f"postgres/pgdumpall_{ts}.sql.gz"
-        return subprocess.run([_UPLOAD_SCRIPT, dump_file, s3_key]).returncode
+        upload_rc = subprocess.run([_UPLOAD_SCRIPT, dump_file, s3_key]).returncode
+        if upload_rc != 0:
+            logger.critical(
+                "[IMP:9][upload] WARNING: upload-s3.sh exit=%d — off-site backup NOT confirmed; "
+                "dump retained in spool (%s) for manual retry",
+                upload_rc,
+                dump_file,
+            )
+        else:
+            logger.critical("[IMP:9][upload] UPLOAD OK: %s → s3://postgres/%s", dump_file, s3_key)
+        return 0
     finally:
         # Shell trap cleanup_partial EXIT parity: remove partial dump on any
         # failure path (backup_success not reached) without hiding the status.
@@ -228,8 +249,8 @@ def run_backup(
 ## @purpose  CLI entry point — runs the backup pipeline, propagates exit code.
 ## @io       stdin: env (POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_USER,
 ##           BACKUP_SPOOL_DIR) → stdout/stderr: LDD logs
-## @exitcode 0  Success
-## @exitcode 1  Fatal (validate/dump/verify failure) or upload failure (propagated)
+## @exitcode 0  Success (включая upload-failure — дамп сохранён в spool, C1)
+## @exitcode 1  Fatal (validate/dump/verify failure)
 def main() -> int:
     """CLI entry point for backup_postgres.py."""
     logging.basicConfig(

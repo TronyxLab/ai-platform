@@ -59,16 +59,3 @@ def is_verb(name: str | None) -> bool:
 
 
 # endregion FUNC_is_verb
-
-
-# region FUNC_validate_not_verb
-## @purpose  Удобная проверка для callers: True если имя НЕ является verb (валидно для проекта).
-## @io       ⇥ name: str → ⎋ bool (True = не verb → проект допустим)
-## @complexity — O(N) — делегирует is_verb
-## @invariants — Чистый инвертор is_verb; не дублирует логику
-def validate_not_verb(name: str | None) -> bool:
-    """Return True if name is NOT a reserved verb (project name allowed)."""
-    return not is_verb(name)
-
-
-# endregion FUNC_validate_not_verb

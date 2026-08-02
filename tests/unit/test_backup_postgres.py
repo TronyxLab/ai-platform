@@ -10,11 +10,13 @@
 ##   - subprocess.Popen/run mocked via monkeypatch (module-level subprocess replacement)
 ##   - spool_dir/timestamp/env passed explicitly (Zero Hardcode Rule — no env reliance)
 ##   - Partial dump removed on failure (trap cleanup parity)
-##   - Upload exit code propagated as the final return value
+##   - Upload exit code НЕ проваливает бэкап (DevPlan 119 C1: «не блокировать при
+##     ошибке upload») — upload failure → rc 0, дамп остаётся в spool
 ##   - @ldd_trajectory asserts IMP:9 log presence
 ## @rationale DevPlan 09 §D64: unit coverage for the Python backup port — production
 ##            backup is critical, so every failure branch must be covered.
 ## @changes 2026-08-02 | Created (Brief H D64)
+##           2026-08-02 | DevPlan 119 C1 — test_upload_exit_code_propagated → non-blocking
 # endregion MODULE_CONTRACT
 """
 
@@ -98,7 +100,7 @@ class _FakeSubprocess:
 
 @ldd_trajectory
 def test_success_full_pipeline(caplog, tmp_path, monkeypatch):
-    """All steps succeed → returns upload exit code (0) and dump file is kept."""
+    """All steps succeed → returns 0 (upload OK) and dump file is kept."""
     fake = _FakeSubprocess(
         run_rcs={"gzip": 0, "pg_restore": 0, "/usr/local/bin/backup-cleanup.sh": 0, "/usr/local/bin/upload-s3.sh": 0}
     )
@@ -173,8 +175,9 @@ def test_pg_restore_validation_failure(caplog, tmp_path, monkeypatch):
 
 
 @ldd_trajectory
-def test_upload_exit_code_propagated(caplog, tmp_path, monkeypatch):
-    """Upload failure is the last step — its exit code is propagated (set -e parity)."""
+def test_upload_failure_non_blocking(caplog, tmp_path, monkeypatch):
+    """Upload failure does NOT fail the backup (DevPlan 119 C1 «не блокировать при
+    ошибке upload») — rc 0, dump retained in spool, IMP:9 upload warning logged."""
     fake = _FakeSubprocess(
         run_rcs={"gzip": 0, "pg_restore": 0, "/usr/local/bin/backup-cleanup.sh": 0, "/usr/local/bin/upload-s3.sh": 1}
     )
@@ -182,7 +185,12 @@ def test_upload_exit_code_propagated(caplog, tmp_path, monkeypatch):
 
     rc = backup_postgres.run_backup(spool_dir=str(tmp_path), timestamp="t", env=_VALID_ENV)
 
-    assert rc == 1
+    assert rc == 0, "upload failure must NOT fail the local backup (C1 non-blocking)"
+    # Dump retained in spool for manual/retry upload
+    assert (tmp_path / "pgdumpall_t.sql.gz").exists()
+    # Upload still invoked after the dump (off-site chain active)
+    run_names = [call[0][0] for call in fake.run_calls]
+    assert "/usr/local/bin/upload-s3.sh" in run_names, "upload-s3.sh must be invoked after dump"
 
 
 # ═══════════════════════════════════════════════════════════════════

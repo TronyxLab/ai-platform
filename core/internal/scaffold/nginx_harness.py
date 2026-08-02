@@ -182,6 +182,13 @@ add_header X-Frame-Options "DENY" always;
                 continue
             dev_vhost = vhosts_dir / vhost_file.name
             content = vhost_file.read_text(encoding="utf-8")
+            # 📝 TRAP[DEBT] · 2026-08-02 · LO · /etc/letsencrypt/live хардкод (DevPlan 119 C6)
+            # · Observed: regex-литерал /etc/letsencrypt/live/[^/]*/ для dev-cert swap
+            # · Suspected: единый резолвер letsencrypt_live() (shared/deploy_paths, 118 C7)
+            #   покрыл cert_orchestrator, но harness-замена prod→dev путей осталась на литералах
+            # · Impact: при смене корня letsencrypt — dev-валидация молча не найдёт prod-пути
+            # · When: 119 wave 2 audit (AUDIT-4 T7) — см. .ai/debt/letsencrypt-path-hardcode.md
+            # · Rev: при касании nginx_harness.py / плановой path-unification
             # Replace production SSL paths with dev-certs for validation
             swapped = re.sub(
                 r"/etc/letsencrypt/live/[^/]*/fullchain\.pem",

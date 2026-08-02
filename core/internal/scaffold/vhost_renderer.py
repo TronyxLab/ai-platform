@@ -333,6 +333,13 @@ server {{
 
     http2 on;
 
+    # 📝 TRAP[DEBT] · 2026-08-02 · LO · /etc/letsencrypt/live хардкод (DevPlan 119 C6)
+    # · Observed: литерал пути в ssl_certificate/ssl_certificate_key template
+    # · Suspected: единый резолвер letsencrypt_live() (shared/deploy_paths, 118 C7)
+    #   покрыл cert_orchestrator, но scaffold-генераторы vhost-конфигов остались на литералах
+    # · Impact: при смене корня letsencrypt (тест/контейнеризация) — тихий рассинхрон
+    # · When: 119 wave 2 audit (AUDIT-4 T7) — см. .ai/debt/letsencrypt-path-hardcode.md
+    # · Rev: при касании vhost_renderer.py / плановой path-unification
     ssl_certificate /etc/letsencrypt/live/{cert_domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{cert_domain}/privkey.pem;
 

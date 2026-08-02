@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: agent_watchdog, circuit-breaker, self-update, hermes-agent, healthcheck, rollback, telegram, watchdog-daemon, secrets_env_parser, telegram_notifier
 # STRUCTURE: ▶ argparse config → ▶ CircuitBreaker.check_all → ▶ check PENDING_FILE → ◇ poll_ready → ⊕ success(cleanup+exit0) | ◇ rollback(down→pull→up→re-poll) → ⊕ rollback_ok(telegram+exit0) | ⊕ rollback_fail(critical_telegram+exit1)
+# 📝 TRAP[DEBT] · 2026-08-02 · HI · Watchdog subsystem not delivered (DevPlan 119 C2)
+# · Observed: 0 references in Dockerfile/compose/systemd/CI — подсистема не доставляется
+# · Suspected: feature-flag awaiting activation or abandoned prototype
+# · Impact: dead code in repo; тесты покрывают недоставленную функциональность
+# · When: 119 wave 2 audit — deferred, решение пользователя на волну 120 (D-1, Brief 119)
+# · Rev: 2026-08-XX (120) — владелец решает: доставить (feature flag) или полный sweep
+#   (код + тесты + module.yaml env_requires)
 # region MODULE_CONTRACT
 ## @purpose  Production watchdog daemon for hermes-agent self-update monitoring and stateful service circuit breaking.
 ## @scope    OS-level independent process — uses ONLY Python stdlib, no agent dependencies.

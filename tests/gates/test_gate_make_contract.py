@@ -137,7 +137,7 @@ def _extract_target_recipe(makefile: Path, target: str) -> str:
 # · Last fail: U-25 (11/13 модулей: .PHONY restore без рецепта = тихий no-op)
 # · Remove if: make-контракт переезжает с .PHONY на другой механизм
 @pytest.mark.gate
-def test_no_empty_phony_targets(caplog) -> None:
+def test_no_empty_phony_targets(caplog, tmp_path) -> None:
     """0 пустых .PHONY — каждый объявленный таргет имеет рецепт (U-25)."""
     caplog.set_level(logging.INFO)
     root = repo_root()
@@ -152,7 +152,7 @@ def test_no_empty_phony_targets(caplog) -> None:
         module_mk = root / "core" / "templates" / "module.mk"
         common = root / "core" / "Makefile.common"
         combined += "\n" + module_mk.read_text() + "\n" + common.read_text()
-        combined_path = root / "core" / "modules" / mod / ".combined.mk.tmp"
+        combined_path = tmp_path / f"{mod}.combined.mk"
         combined_path.write_text(combined)
         try:
             phony = _parse_phony_targets(combined_path)
@@ -179,15 +179,12 @@ def test_no_empty_phony_targets(caplog) -> None:
 # · Scenario: make -n <target> для всех .PHONY-таргетов всех 13 docker-модулей → exit 0
 # · Last fail: U-25 (restore dry-run был тихим no-op)
 # · Remove if: make-контракт модулей меняется кардинально
-# 📝 TRAP[DEBT] · 2026-08-01 · MED · flaky unlink под xdist: .combined.mk.tmp пишется в фиксированный
-# ·   путь модуля и unlink() в finally падает с FileNotFoundError при параллельном прогоне (observed
-# ·   during DevPlan 116 B3 T10 gate run; passes in isolation)
-# · Suspected: xdist worker/процессный race — фиксированный путь в дереве модуля разделяется между
-# ·   параллельными прогонами одного теста (перезапись/удаление между write_text и unlink)
-# · Impact: периодический красный gate без изменения кода — ложный фейл волны
-# · When: deferred, out of scope B3 — фикс: tmp_path-фикстура вместо core/modules/<mod>/.combined.mk.tmp
+# 📝 TRAP[DEBT] · 2026-08-01 · MED · FIXED 2026-08-02 (DevPlan 119 C): flaky unlink под xdist —
+# ·   .combined.mk.tmp писался в фиксированный путь модуля и unlink() падал с FileNotFoundError
+# ·   при параллельном прогоне. Фикс (как и предписывал TRAP): tmp_path-фикстура вместо
+# ·   core/modules/<mod>/.combined.mk.tmp — 3 функции мигрированы (no_empty_phony, dry_run, restart).
 @pytest.mark.gate
-def test_make_n_dry_run_all_targets(caplog) -> None:
+def test_make_n_dry_run_all_targets(caplog, tmp_path) -> None:
     """make -n для всех .PHONY-таргетов всех docker-модулей — exit 0 (без реального docker)."""
     caplog.set_level(logging.INFO)
     root = repo_root()
@@ -200,7 +197,7 @@ def test_make_n_dry_run_all_targets(caplog) -> None:
         combined = makefile.read_text()
         combined += "\n" + (root / "core" / "templates" / "module.mk").read_text()
         combined += "\n" + (root / "core" / "Makefile.common").read_text()
-        combined_path = root / "core" / "modules" / mod / ".combined.mk.tmp"
+        combined_path = tmp_path / f"{mod}.combined.mk"
         combined_path.write_text(combined)
         try:
             phony = _parse_phony_targets(combined_path)
@@ -285,7 +282,7 @@ def test_backup_restore_matrix_d1(caplog) -> None:
 # · Last fail: U-25 (restart: stop start = recreate из-за stop=down)
 # · Remove if: семантика restart меняется (требует DevPlan)
 @pytest.mark.gate
-def test_restart_soft_semantics(caplog) -> None:
+def test_restart_soft_semantics(caplog, tmp_path) -> None:
     """restart = soft (stop start), не down && up — AGENTS.md:167-контракт."""
     caplog.set_level(logging.INFO)
     root = repo_root()
@@ -298,7 +295,7 @@ def test_restart_soft_semantics(caplog) -> None:
         combined = makefile.read_text()
         combined += "\n" + (root / "core" / "templates" / "module.mk").read_text()
         combined += "\n" + (root / "core" / "Makefile.common").read_text()
-        combined_path = root / "core" / "modules" / mod / ".combined.mk.tmp"
+        combined_path = tmp_path / f"{mod}.combined.mk"
         combined_path.write_text(combined)
         try:
             recipe = _extract_target_recipe(combined_path, "restart")

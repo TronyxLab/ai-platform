@@ -27,15 +27,14 @@ Shared configuration module for backup-cron scripts (upload.py, retention.py, ba
           New ssl-cache feature (DevPlan 024 Wave 1) uses raw S3 keys without backup prefix.
           S3Config provides the base fields for all S3 operations; BackupConfig adds
           backup-specific fields. Both load from the same env vars — zero config overhead.
+@changes 2026-08-02 | DevPlan 119 C1 — удалена зависимость от core.internal.config
+          (platform_config) — контейнерный модуль без core/internal в образе; inline
+          _DEFAULT_S3_REGION="ru-1" согласован с docker-compose.base.yml.
 """
 
 import logging
 import os
 from typing import TypedDict
-
-from core.internal.config import (
-    platform_config,
-)  # LINT-EXEMPT: контейнерный модуль; internal.config — by design (D1, allowlist 116 B11 T1)
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,10 @@ class BackupConfig(S3Config):
 # region CONSTANTS
 
 _DEFAULT_S3_ENDPOINT_URL = "s3.timeweb.cloud"
-# _DEFAULT_S3_REGION removed — use platform_config.default_s3_region() instead
+# DevPlan 119 C1 (AC-C1.2): inline default вместо platform_config.default_s3_region() —
+# core.internal.config отсутствует в backup-cron образе (контейнерный модуль, 0 зависимостей
+# от core/internal). Значение согласовано с docker-compose.base.yml (${S3_REGION:-ru-1}).
+_DEFAULT_S3_REGION = "ru-1"
 _DEFAULT_S3_PREFIX = "platform/backups"
 _DEFAULT_PLATFORM_CONTEXT = "personal"
 
@@ -100,7 +102,7 @@ def get_backup_config() -> BackupConfig:
     aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
     aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")
-    region = os.environ.get("S3_REGION", platform_config.default_s3_region())
+    region = os.environ.get("S3_REGION", _DEFAULT_S3_REGION)
     prefix = os.environ.get("S3_PREFIX", _DEFAULT_S3_PREFIX)
     context = _detect_context()
     node_name = os.environ.get("NODE_NAME", "unknown")
@@ -174,7 +176,7 @@ def get_s3_config() -> S3Config:
     aws_access_key_id = os.environ.get("S3_ACCESS_KEY", "")
     aws_secret_access_key = os.environ.get("S3_SECRET_KEY", "")
     bucket = os.environ.get("S3_BUCKET", "")
-    region = os.environ.get("S3_REGION", platform_config.default_s3_region())
+    region = os.environ.get("S3_REGION", _DEFAULT_S3_REGION)
 
     # Validate required vars (same as get_backup_config)
     missing: list[str] = []

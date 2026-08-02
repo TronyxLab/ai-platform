@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: docker-ops docker-manager compose-down compose-pull compose-up cleanup-images stop-container container-status run-docker
 # STRUCTURE: ▶ DockerManager(compose_file, project_name, module_dir) → _run_docker → compose_down/compose_pull/compose_up (shared) → cleanup_old_images → stop_container → container_status
+# 📝 TRAP[DEBT] · 2026-08-02 · HI · Watchdog subsystem not delivered (DevPlan 119 C2)
+# · Observed: 0 references in Dockerfile/compose/systemd/CI — подсистема не доставляется
+# · Suspected: feature-flag awaiting activation or abandoned prototype
+# · Impact: dead code in repo; тесты покрывают недоставленную функциональность
+# · When: 119 wave 2 audit — deferred, решение пользователя на волну 120 (D-1, Brief 119)
+# · Rev: 2026-08-XX (120) — владелец решает: доставить (feature flag) или полный sweep
+#   (код + тесты + module.yaml env_requires)
 # region MODULE_CONTRACT
 ## @purpose  Docker operations for the hermes-agent watchdog — extracted from agent_watchdog.py
 ##           (DevPlan 117 G T52). compose down/pull/up delegate to shared/docker_compose

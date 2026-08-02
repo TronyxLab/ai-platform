@@ -1728,12 +1728,18 @@ gates:
 - id: test_valid_project_passes
   test_file: test_gate_project_compose.py
   description: 'Auto-discovered gate: test_valid_project_passes'
-- id: test_project_context_consistency
+- id: test_project_context_missing_dir_fails
   test_file: test_gate_project_context.py
-  description: 'Auto-discovered gate: test_project_context_consistency'
-- id: test_project_env_platform
+  description: 'Auto-discovered gate: test_project_context_missing_dir_fails'
+- id: test_project_context_valid
+  test_file: test_gate_project_context.py
+  description: 'Auto-discovered gate: test_project_context_valid'
+- id: test_project_env_missing_dir_fails
   test_file: test_gate_project_env.py
-  description: 'Auto-discovered gate: test_project_env_platform'
+  description: 'Auto-discovered gate: test_project_env_missing_dir_fails'
+- id: test_project_env_valid
+  test_file: test_gate_project_env.py
+  description: 'Auto-discovered gate: test_project_env_valid'
 - id: test_no_dead_markers
   test_file: test_gate_pytest_markers.py
   description: 'Auto-discovered gate: test_no_dead_markers'
@@ -1848,6 +1854,9 @@ gates:
 - id: test_test_network_consistency
   test_file: test_gate_smoke_test_isolation.py
   description: 'Auto-discovered gate: test_test_network_consistency'
+- id: test_single_test_file_negative
+  test_file: test_gate_ssh_command_parser_sole.py
+  description: 'Auto-discovered gate: test_single_test_file_negative'
 - id: test_ci_workflows_no_raw_connect_timeout
   test_file: test_gate_ssh_opts_sole_path.py
   description: 'Auto-discovered gate: test_ci_workflows_no_raw_connect_timeout'
@@ -1926,6 +1935,12 @@ gates:
 - id: test_master_password_registered
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_master_password_registered'
+- id: test_stub_detection_sole_definition
+  test_file: test_gate_stub_detection_sole.py
+  description: 'Auto-discovered gate: test_stub_detection_sole_definition'
+- id: test_stub_detection_sole_import_negative
+  test_file: test_gate_stub_detection_sole.py
+  description: 'Auto-discovered gate: test_stub_detection_sole_import_negative'
 - id: test_single_run_subprocess_canon
   test_file: test_gate_subprocess_io_sole.py
   description: 'Auto-discovered gate: test_single_run_subprocess_canon'
