@@ -10,13 +10,15 @@
 ##   - Prometheus may scrape LiteLLM metrics if configured
 ##   - If Prometheus has litellm_* metrics, the scrape target is alive
 ##   - SSLError → pytest.fail via _handle_e2e_error (not skip), TLS failures are platform errors
-##   - If no litellm metrics exist, the test skips (no traffic yet, not a failure)
+##   - R4-6 (DevPlan 119 F1): если литellm-метрик нет — генерируется тестовый трафик,
+##     при отсутствии метрик после генерации → FAIL (не skip) — scrape-таргет сломан
 ## @rationale — Direct LiteLLM access was removed when services were consolidated
 ##             behind nginx reverse proxy. LiteLLM remains internal-only.
 ## @usecases — AC-5: LiteLLM metrics visible in Prometheus (if traffic exists)
 # endregion MODULE_CONTRACT
 
 import logging
+import os
 
 import pytest
 import requests
@@ -25,9 +27,50 @@ logger = logging.getLogger(__name__)
 
 
 # region IMPORTS
+from _conftest.ldd import _is_ci_environment
 from conftest import _handle_e2e_error, ldd_trajectory
 
 # endregion IMPORTS
+
+
+# region FUNC__generate_litellm_traffic
+def _generate_litellm_traffic(url: str, username: str, password: str, caplog, logger=None) -> None:
+    """Generate a test request to LiteLLM so Prometheus scrape picks up a metric.
+
+    ## @purpose — R4-6 (DevPlan 119 F1): при отсутствии litellm_requests_total — сгенерировать
+    ##            тестовый запрос к LiteLLM API (best-effort). LiteLLM internal-only
+    ##            (127.0.0.1:4000) — через nginx; в тестовом стеке порт 14000 (LITELLM_TEST_PORT).
+    ##            Даже отклонённый auth-запрос создаёт litellm_requests_total-инкремент у
+    ##            Litellm, поэтому POST достаточно. Не фатален при недоступности (логируется).
+    ## @io — ⇥ url (Prometheus proxy URL), username, password, caplog → ⎋ None
+    ## @complexity — O(1) — single HTTP POST
+    ## @invariants
+    ##   - Генерация best-effort: ошибки не фатальны (retry-query решает FAIL)
+    ##   - Порт LiteLLM: LITELLM_TEST_PORT env (default 14000) — тестовый override
+    ##   - POST /v1/chat/completions с минимальным телом (model + messages)
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    litellm_port = int(os.environ.get("LITELLM_TEST_PORT", "14000"))
+    litellm_url = os.environ.get("E2E_LITELLM_URL", f"http://127.0.0.1:{litellm_port}")
+    chat_url = f"{litellm_url}/v1/chat/completions"
+    api_key = os.environ.get("LITELLM_MASTER_KEY", os.environ.get("LITELLM_KEY", "sk-test-master-key"))
+
+    logger.info("[IMP:7][_generate_litellm_traffic] POST %s (test traffic)", chat_url)
+    try:
+        requests.post(
+            chat_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "ping"}]},
+            timeout=10,
+        )
+        logger.info("[IMP:8][_generate_litellm_traffic] Test request sent (any HTTP status = counter increment)")
+    except (requests.exceptions.RequestException, OSError) as exc:
+        logger.warning("[IMP:7][_generate_litellm_traffic] Traffic generation failed (non-fatal): %s", exc)
+
+
+# endregion FUNC__generate_litellm_traffic
 
 
 # region FUNC_test_litellm_metrics_available
@@ -58,8 +101,18 @@ def test_litellm_metrics_available(PROMETHEUS_PROXY_URL: str, grafana_credential
         _handle_e2e_error(exc, url, caplog, logger=logger)
 
     if resp.status_code != 200:
+        # R4-6 (DevPlan 119 F1): proxy недоступен/ошибка — в CI это FAIL (не skip).
+        # Локально (marker mode) — skip через _handle_e2e_error-семантику? Нет: HTTP
+        # ответ получен, но не 200 — это конфигурационная ошибка scrape-прокси.
+        # Используем fail при REQUIRE_HONESTY_MODE=fail, skip локально (transient).
+        if _is_ci_environment() or os.environ.get("REQUIRE_HONESTY_MODE", "marker") == "fail":
+            logger.error(
+                "[IMP:9][test_litellm_metrics_available][fail] Prometheus proxy returned HTTP %d",
+                resp.status_code,
+            )
+            pytest.fail(f"Prometheus proxy returned HTTP {resp.status_code} — scrape proxy broken")
         logger.info(
-            "[IMP:7][test_litellm_metrics_available][skip] Prometheus proxy returned HTTP %d",
+            "[IMP:7][test_litellm_metrics_available][skip] Prometheus proxy returned HTTP %d — local, skip",
             resp.status_code,
         )
         pytest.skip(f"Prometheus proxy returned HTTP {resp.status_code}")
@@ -68,8 +121,46 @@ def test_litellm_metrics_available(PROMETHEUS_PROXY_URL: str, grafana_credential
     results = data.get("data", {}).get("result", [])
 
     if not results:
-        logger.info("[IMP:7][test_litellm_metrics_available][skip] No LiteLLM traffic yet, metrics not available")
-        pytest.skip("No LiteLLM traffic yet, metrics not available")
+        # R4 (Test Honesty, DevPlan 119 F1 R4-6): отсутствие метрик LiteLLM =
+        # конфигурационная ошибка (scrape-таргет не работает / трафик не генерируется),
+        # не повод для skip. Генерируем тестовый запрос к API — при недоступности FAIL.
+        # В CI (REQUIRE_HONESTY_MODE=fail / E2E_MODE=ci) — FAIL; локально (marker) — skip.
+        logger.warning(
+            "[IMP:8][test_litellm_metrics_available][retry] No LiteLLM traffic yet — generating test request",
+        )
+        _generate_litellm_traffic(url, username, password, caplog, logger=logger)
+
+        # После генерации трафика — повторный запрос (1 retry, R4-5 контракт)
+        try:
+            resp2 = requests.get(url, auth=(username, password), params=params, timeout=10)
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.SSLError,
+            requests.exceptions.ProxyError,
+        ) as exc:
+            _handle_e2e_error(exc, url, caplog, logger=logger)
+
+        if resp2.status_code != 200:
+            logger.error(
+                "[IMP:9][test_litellm_metrics_available][fail] Prometheus proxy returned HTTP %d after traffic generation",
+                resp2.status_code,
+            )
+            pytest.fail(
+                f"Prometheus proxy returned HTTP {resp2.status_code} after traffic generation — "
+                "LiteLLM scrape target not working"
+            )
+
+        results = resp2.json().get("data", {}).get("result", [])
+        if not results:
+            logger.error(
+                "[IMP:9][test_litellm_metrics_available][fail] No litellm_requests_total after traffic generation",
+            )
+            pytest.fail(
+                "No litellm_requests_total metric after test traffic generation — LiteLLM "
+                "scrape target is not being collected by Prometheus"
+            )
+        data = resp2.json()
 
     print("\n=== LITELLM METRICS (via Prometheus proxy) ===")
     for r in results:

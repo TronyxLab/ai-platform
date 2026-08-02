@@ -1289,3 +1289,48 @@ class TestHtpasswdGenerationRemoved:
         __import__("logging").getLogger(__name__).critical(
             "[IMP:9][test_htpasswd_facades_removed] PASS: secrets.sh htpasswd facades removed (B6 R5)"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# R5: env-isolation (FRAG-1, DevPlan 119 F6)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# region FUNC_test_env_isolation_negative
+## @purpose  R5 negative (DevPlan 119 F6 AC-F6.3, TEST_SPEC test_env_isolation_negative):
+##           _setup_app_env мутирует 5 env vars (NODE_YAML_PATH/STATUS_METRICS_JSON/NODE_NAME/
+##           NODE_CONFIGS_DIR/PLATFORM_DOMAIN). FRAG-1 фикс — snapshot/restore после reload.
+##           Этот тест верифицирует, что env восстановлен ПОСЛЕ вызова _setup_app_env
+##           (никакой утечки в следующие тесты — флейк test_node_lifecycle_static:291).
+## @io — ⇥ mock_node_yaml_no_vhosts, mock_status_metrics_json_all_pass → ⎋ None
+## @complexity — O(1)
+## @invariants
+##   - _setup_app_env возвращает env к исходному состоянию (snapshot/restore, TRAP[BUG] 2026-08-02)
+##   - NODE_NAME/PLATFORM_DOMAIN и др. НЕ должны «протекать» после вызова
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · status_page env isolation — DevPlan 119 F6 (FRAG-1)
+# · Last fail: NODE_NAME из env видел node-lifecycle.sh (test_node_lifecycle_static.py:291 FAIL)
+# · Remove if: _setup_app_env перестаёт мутировать env (или мигрирует на monkeypatch-фикстуру)
+def test_env_isolation_negative(
+    mock_node_yaml_no_vhosts,
+    mock_status_metrics_json_all_pass,
+) -> None:
+    """R5: env vars восстановлены после _setup_app_env (нет утечки NODE_NAME/PLATFORM_DOMAIN)."""
+    _ENV_KEYS = ("NODE_YAML_PATH", "STATUS_METRICS_JSON", "NODE_NAME", "NODE_CONFIGS_DIR", "PLATFORM_DOMAIN")
+
+    # Snapshot ДО вызова
+    before = {key: os.environ.get(key) for key in _ENV_KEYS}
+
+    app = _setup_app_env(str(mock_node_yaml_no_vhosts), str(mock_status_metrics_json_all_pass))
+    assert app is not None, "_setup_app_env должна вернуть модуль app"
+
+    # Snapshot ПОСЛЕ вызова — env должен совпадать с before (restore в finally-эквиваленте)
+    after = {key: os.environ.get(key) for key in _ENV_KEYS}
+    leaked = {key: (before[key], after[key]) for key in _ENV_KEYS if before[key] != after[key]}
+    assert not leaked, (
+        f"R5 FAIL: env утечка после _setup_app_env (FRAG-1): {leaked}. "
+        f"NODE_NAME leak ломает node-lifecycle-тесты (test_node_lifecycle_static:291)."
+    )
+    print("[IMP:9][test_env_isolation_negative] R5 PASS: env vars restored after _setup_app_env")
+
+
+# endregion FUNC_test_env_isolation_negative

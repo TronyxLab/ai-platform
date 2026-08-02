@@ -186,7 +186,9 @@ class TestDeployE2E:
                 project_dir=project_dir,
             )
 
-        # Check LDD trajectory
+        # Check LDD trajectory (FRAG-4 fix, DevPlan 119 F9): мёртвая ветка
+        # `if imp_level >= 9: pass` заменена на found_log + assert.
+        found_log = False
         print("\n--- LDD TRAJECTORY (IMP:7-10) ---")
         for record in caplog.records:
             if "[IMP:" in record.message:
@@ -194,15 +196,17 @@ class TestDeployE2E:
                 if imp_level >= 7:
                     print(record.message)
                 if imp_level >= 9:
-                    pass
+                    found_log = True
         print("--- END LDD TRAJECTORY ---\n")
+        assert found_log, "No IMP:9 log found — LDD violation (FRAG-4, DevPlan 119 F9)"
 
         # Verify audit log was written
         assert os.path.isfile(log_file)
         with open(log_file) as f:
             entries = [json.loads(line) for line in f if line.strip()]
-        # At minimum, log entries were written (or attempt was made)
-        assert len(entries) >= 0
+        # R2 (DevPlan 119 F10): len(entries) >= 0 — всегда истина (len ≥ 0 гарантирован
+        # языком). Ужесточено до > 0 — audit-записи обязаны быть после deploy-цикла.
+        assert len(entries) > 0, "Audit log должен содержать записи после deploy-цикла (R2)"
 
         # Verify channel was called
         assert len(channel.deliveries) >= 1

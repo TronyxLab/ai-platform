@@ -6,7 +6,7 @@
 ## @invariants
 ##   - _print_ldd_trajectory() prints IMP:7-10 logs from caplog; returns True if IMP:9 found
 ##   - ldd_trajectory decorator auto-sets caplog level and asserts IMP:9 presence
-##   - _handle_e2e_error() maps SSLError/ConnectionError/ProxyError → pytest.fail, Timeout → pytest.skip
+##   - _handle_e2e_error() maps SSLError/ConnectionError/ProxyError → pytest.fail, Timeout → CI:fail / local:skip (R4-5)
 ##   - _ensure_volume_dirs() creates host directories for Docker bind-mount volumes
 ##   - All functions are module-level (not fixtures) for direct import
 ## @rationale DRY: previously duplicated in 6 test files; centralize in tests/conftest/ldd.py
@@ -173,12 +173,15 @@ def _handle_e2e_error(exc: BaseException, url: str, caplog, logger=None) -> None
     ##   - SSLError → pytest.fail with SSL error message
     ##   - ConnectionError → pytest.fail with connection refused message (unless offline mode → skip)
     ##   - ProxyError → pytest.fail with proxy error message
-    ##   - Timeout → pytest.skip with timeout message
+    ##   - Timeout → CI (REQUIRE_HONESTY_MODE=fail / _is_ci_environment) → pytest.fail
+    ##              после 1 retry (вызывающий код делает retry до вызова); локально (marker) → skip
     ##   - Any other → pytest.fail with generic error message
     ## @rationale — Auto-detect offline mode: local dev → skip ConnectionError by default,
     ##            CI → fail ConnectionError (services should be available).
     ##              Explicit E2E_OFFLINE env var overrides auto-detection in both cases.
-    ##              Timeout stays SKIP because it's typically transient network issues, not service down.
+    ##              Timeout (R4, DevPlan 119 F1 R4-5/FRAG-3): в CI Timeout = сервис не
+    ##              отвечает (конфигурационная ошибка) → FAIL; локально — transient → skip.
+    ##              Вызывающий код обязан сделать ≥1 retry перед вызовом (контракт F8).
     """
     from requests.exceptions import (
         ConnectionError as RequestsConnectionError,
@@ -217,7 +220,15 @@ def _handle_e2e_error(exc: BaseException, url: str, caplog, logger=None) -> None
             _print_ldd_trajectory(caplog)
             pytest.fail(f"Connection refused at {url}: {exc}")
     elif isinstance(exc, RequestsTimeout):
-        logger.info("[IMP:7][e2e][skip] Timeout at %s: %s", url, exc)
+        # R4 (DevPlan 119 F1 R4-5, FRAG-3): Timeout НЕ всегда skip.
+        # В CI (REQUIRE_HONESTY_MODE=fail или _is_ci_environment) → FAIL после 1 retry
+        # (вызывающий код обязан сделать минимум 1 повторную попытку ДО вызова
+        # _handle_e2e_error — контракт F8). Локально (marker) → skip (transient).
+        if _is_ci_environment() or os.environ.get("REQUIRE_HONESTY_MODE", "marker") == "fail":
+            logger.error("[IMP:9][e2e][fail] Timeout at %s: %s", url, exc)
+            _print_ldd_trajectory(caplog)
+            pytest.fail(f"Timeout at {url}: {exc}")
+        logger.info("[IMP:7][e2e][skip] Timeout at %s: %s — local dev, skip", url, exc)
         pytest.skip(f"Timeout at {url}: {exc}")
     else:
         logger.error("[IMP:9][e2e][fail] Request error at %s: %s", url, exc)

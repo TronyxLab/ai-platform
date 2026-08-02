@@ -1731,6 +1731,9 @@ gates:
 - id: test_volumes_section_exists
   test_file: test_gate_platform_env_schema.py
   description: 'Auto-discovered gate: test_volumes_section_exists'
+- id: test_provision_coverage_preserved
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_provision_coverage_preserved'
 - id: test_generated_files_match_sot
   test_file: test_gate_profiles_parity.py
   description: 'Auto-discovered gate: test_generated_files_match_sot'

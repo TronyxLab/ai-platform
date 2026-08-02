@@ -1049,7 +1049,11 @@ class TestCoordinator:
 
         assert exit_code == 0, "Should still exit 0 with partial data"
         data = json.loads(metrics_file.read_text())
-        assert len(data.get("errors", [])) >= 0
+        # R2 (DevPlan 119 F10): len(errors) >= 0 — всегда истина (unfalsifiable).
+        # Ужесточено до == 0 — при invalid yaml + успешном docker mock коллекторы
+        # graceful-degrade без ошибок (errors[] пуст).
+        errors = data.get("errors", [])
+        assert len(errors) == 0, f"Unexpected errors: {errors}"
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -8,6 +8,7 @@
 ##   - All Grafana API calls use HTTP Basic Auth with admin credentials
 ##   - Grafana URL is external (https://grafana.tronyx.ru) via nginx reverse proxy
 ##   - Grafana returns 200 for authenticated requests, 401 for missing/invalid auth
+##   - R4-7 (DevPlan 119 F1): 401 → FAIL (auth rejected = конфигурационная ошибка), не skip
 ## @rationale — Datasources must be provisioned for dashboards to show data;
 ##             dashboard search confirms provisioning completed successfully.
 ## @usecases — AC-3: Prometheus + Loki datasources found; AC-4: 4 dashboards exist
@@ -60,7 +61,12 @@ def test_grafana_datasources(GRAFANA_URL: str, grafana_credentials: tuple[str, s
             resp.status_code,
         )
         if resp.status_code == 401:
-            pytest.skip("Grafana datasources API returned 401 — auth rejected, skipping")
+            # R4 (Test Honesty, DevPlan 119 F1 R4-7): 401 = auth rejected — конфигурационная
+            # ошибка (неверные креды/доступ), не повод для skip. NO_SERVICE = FAIL.
+            pytest.fail(
+                "Grafana datasources API returned 401 — auth rejected. "
+                "Check GF_SECURITY_ADMIN_USER/GF_SECURITY_ADMIN_PASSWORD in .env"
+            )
         pytest.fail(f"Grafana datasources API returned {resp.status_code} (check auth)")
 
     datasources = resp.json()
@@ -121,7 +127,11 @@ def test_grafana_dashboard_search(GRAFANA_URL: str, grafana_credentials: tuple[s
             resp.status_code,
         )
         if resp.status_code == 401:
-            pytest.skip("Grafana search API returned 401 — auth rejected, skipping")
+            # R4 (DevPlan 119 F1 R4-7): 401 = auth rejected — FAIL, не skip.
+            pytest.fail(
+                "Grafana search API returned 401 — auth rejected. "
+                "Check GF_SECURITY_ADMIN_USER/GF_SECURITY_ADMIN_PASSWORD in .env"
+            )
         pytest.fail(f"Grafana search API returned {resp.status_code}")
 
     dashboards = resp.json()
@@ -188,7 +198,11 @@ def test_grafana_admin_login(GRAFANA_URL: str, grafana_credentials: tuple[str, s
     if resp.status_code != 200:
         logger.error("[IMP:9][test_grafana_admin_login][fail] Login failed: HTTP %d", resp.status_code)
         if resp.status_code == 401:
-            pytest.skip("Grafana admin login failed: HTTP 401 — auth rejected, skipping")
+            # R4 (DevPlan 119 F1 R4-7): 401 = auth rejected — FAIL, не skip.
+            pytest.fail(
+                "Grafana admin login failed: HTTP 401 — auth rejected. "
+                "Check GF_SECURITY_ADMIN_USER/GF_SECURITY_ADMIN_PASSWORD in .env"
+            )
         pytest.fail(f"Grafana admin login failed: HTTP {resp.status_code}")
 
     user_info = resp.json()

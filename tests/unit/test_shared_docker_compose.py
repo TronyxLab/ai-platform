@@ -25,6 +25,7 @@ from core.internal.shared.docker_compose import (
     docker_compose_pull,
     docker_compose_up,
     healthcheck_poll,
+    nginx_reload,
     retry_pull,
 )
 
@@ -476,3 +477,138 @@ def test_check_image_exists_not_found(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # endregion
+
+
+# ── nginx_reload tests (HOLE-1, DevPlan 119 F4) ──────────────────────────────
+
+
+# region FUNC_test_nginx_reload_success
+## @purpose — nginx_reload() успешный: docker exec nginx nginx -s reload (rc=0) → no-raise.
+##            Закрывает HOLE-1 (shared/docker_compose.py:694 — создан в 118 D6, 0 тестов).
+## @io — ⇥ caplog → ⎋ None (asserts no exception + docker exec вызван)
+## @complexity — O(1)
+## @invariants
+##   - mock subprocess.run: docker exec nginx nginx -s reload → returncode=0
+##   - Команда содержит ["docker", "exec", container, "nginx", "-s", "reload"]
+##   - IMP:9 лог обязателен (LDD)
+# 🧪 TRAP[TEST] · DevPlan 119 F4 (HOLE-1) · nginx_reload success
+# · Last fail: N/A — функция не была покрыта тестами (0 tests)
+# · Remove if: nginx_reload сигнатура/семантика меняется
+def test_nginx_reload_success(caplog: pytest.LogCaptureFixture) -> None:
+    """nginx_reload успешно выполняет docker exec nginx -s reload."""
+    caplog.set_level(logging.INFO)
+
+    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+
+        nginx_reload("nginx", timeout=30)
+
+    cmd = mock_run.call_args.args[0]
+    assert cmd == ["docker", "exec", "nginx", "nginx", "-s", "reload"], f"Unexpected cmd: {cmd}"
+
+    found_imp9 = any("[IMP:9]" in r.message for r in caplog.records)
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in caplog.records:
+        if "[IMP:" in record.message:
+            print(record.message)
+    print("--- END LDD TRAJECTORY ---")
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion FUNC_test_nginx_reload_success
+
+
+# region FUNC_test_nginx_reload_failure_mode
+## @purpose — nginx_reload: контейнер не существует (docker exec rc≠0) — non-fatal контракт.
+##            Функция НЕ бросает исключение (caller решает severity — _step_nginx_reload).
+## @io — ⇥ caplog → ⎋ None (asserts no-raise при rc=1)
+## @complexity — O(1)
+## @invariants
+##   - subprocess.run → returncode=1 (контейнер отсутствует) — функция продолжает (check=False)
+##   - no-raise: docker exec несуществующего контейнера — handled, не исключение
+## @rationale — DevPlan 118 D6: nginx_reload — non-fatal фасад; caller (шаг D6) ловит
+##              subprocess.TimeoutExpired/OSError. rc≠0 НЕ вызывает исключение.
+# 🧪 TRAP[TEST] · DevPlan 119 F4 (HOLE-1) · nginx_reload failure mode
+# · Last fail: N/A — функция не была покрыта тестами
+# · Remove if: nginx_reload контракт меняется на fatal
+def test_nginx_reload_failure_mode(caplog: pytest.LogCaptureFixture) -> None:
+    """nginx_reload: docker exec rc=1 (контейнер отсутствует) → no-raise (non-fatal)."""
+    caplog.set_level(logging.INFO)
+
+    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "Error: No such container: nginx"
+
+        # Должно пройти без исключения (non-fatal контракт D6)
+        nginx_reload("nginx", timeout=30)
+
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in caplog.records:
+        if "[IMP:" in record.message:
+            print(record.message)
+    print("--- END LDD TRAJECTORY ---")
+    assert mock_run.call_count == 1
+
+
+# endregion FUNC_test_nginx_reload_failure_mode
+
+
+# region FUNC_test_nginx_reload_timeout
+## @purpose — nginx_reload: subprocess.TimeoutExpired → пробрасывается (R5 контракт:
+##            исключения TimeoutExpired/OSError/FileNotFoundError — caller ловит, шаг D6).
+## @io — ⇥ caplog → ⎋ None (asserts TimeoutExpired raised)
+## @complexity — O(1)
+## @invariants
+##   - subprocess.run → subprocess.TimeoutExpired → nginx_reload НЕ глотает (пробрасывает)
+##   - Caller (_step_nginx_reload) ловит и логирует WARN
+# 🧪 TRAP[TEST] · DevPlan 119 F4 (HOLE-1) · nginx_reload timeout
+# · Last fail: N/A — функция не была покрыта тестами
+# · Remove if: nginx_reload начинает глотать TimeoutExpired
+def test_nginx_reload_timeout(caplog: pytest.LogCaptureFixture) -> None:
+    """nginx_reload: TimeoutExpired → пробрасывается (caller решает severity)."""
+    caplog.set_level(logging.INFO)
+
+    with (
+        patch(
+            "core.internal.shared.docker_compose.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["docker", "exec", "nginx"], timeout=30),
+        ),
+        pytest.raises(subprocess.TimeoutExpired),
+    ):
+        nginx_reload("nginx", timeout=30)
+
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in caplog.records:
+        if "[IMP:" in record.message:
+            print(record.message)
+    print("--- END LDD TRAJECTORY ---")
+
+
+# endregion FUNC_test_nginx_reload_timeout
+
+
+# region FUNC_test_nginx_reload_container_missing_negative
+## @purpose  R5 negative (DevPlan 119 F4 AC-F4.3): отсутствующий контейнер — исходный вход,
+##           поймавший проблему (docker exec несуществующего контейнера rc=1). Проверяем,
+##           что nginx_reload НЕ падает с необработанным исключением — non-fatal контракт.
+## @io — ⇥ caplog → ⎋ None (asserts no-raise + корректная команда)
+## @complexity — O(1)
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · nginx_reload container missing — DevPlan 119 F4
+# · Last fail: отсутствующий контейнер → необработанный exception (до non-fatal контракта D6)
+# · Remove if: nginx_reload перестаёт быть non-fatal
+def test_nginx_reload_container_missing_negative(caplog: pytest.LogCaptureFixture) -> None:
+    """R5: отсутствующий контейнер → no-raise (non-fatal), docker exec вызван с верной командой."""
+    caplog.set_level(logging.INFO)
+
+    with patch("core.internal.shared.docker_compose.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1  # "No such container"
+        mock_run.return_value.stderr = "Error response from daemon: No such container: nginx"
+
+        nginx_reload("nginx", timeout=30)  # Должно пройти — non-fatal
+
+    cmd = mock_run.call_args.args[0]
+    assert cmd[0] == "docker" and cmd[1] == "exec" and cmd[2] == "nginx"
+    print("[IMP:9][test] R5 PASS: отсутствующий контейнер handled (no-raise)")
+
+
+# endregion FUNC_test_nginx_reload_container_missing_negative

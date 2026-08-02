@@ -29,6 +29,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _conftest.honesty import require_docker_or_fail
 from _conftest.ldd import _print_ldd_trajectory, ldd_trajectory
 
 from tests.helpers.gate_helpers import repo_root
@@ -370,7 +371,10 @@ def test_nginx_dev_compose_valid(caplog) -> None:
     dev = nginx_dir / "docker-compose.dev.yml"
 
     if not shutil.which("docker"):
-        pytest.skip("docker not available — compose dry-run skipped (infra unavailability)")
+        # R4 (Test Honesty, DevPlan 119 F1 R4-4): отсутствие Docker = конфигурационная
+        # ошибка, не повод для skip. require_docker_or_fail диспетчеризует по
+        # REQUIRE_HONESTY_MODE (marker→skip локально, fail→FAIL в CI).
+        require_docker_or_fail(reason="docker compose config dry-run requires Docker daemon")
     if not dev.is_file():
         pytest.fail("docker-compose.dev.yml not found (D3, DevPlan 116 B7 T5)")
 

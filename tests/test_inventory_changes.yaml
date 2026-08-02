@@ -1484,3 +1484,17 @@ removed:
     reason: "DevPlan 119 C1: семантика upload изменена — «не блокировать при ошибке upload» (было set -e parity, 117 D64). Тест переименован в test_upload_failure_non_blocking (rc==0 + dump в spool)."
     issue: "119-wave2-synthesis C1"
     approved_by: "@tronyx"
+
+  # ── DevPlan 119 F2 (Duplicate provision tests removed) ──
+  - nodeid: "tests/test_unit_provision_environment.py::TestYamlParsing::test_profiles_match_modules_dir"
+    reason: "DevPlan 119 F2 (AUDIT-5 DUP-3): побайтовая копия test_gate_platform_env_schema.py::test_profiles_match_modules_dir. Канон в gates-файле сохранён (R5 test_provision_coverage_preserved)."
+    issue: "119-wave2-synthesis F2"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_unit_provision_environment.py::TestYamlParsing::test_no_duplicate_networks"
+    reason: "DevPlan 119 F2 (AUDIT-5 DUP-3): побайтовая копия test_gate_platform_env_schema.py::test_no_duplicate_networks. Канон в gates-файле сохранён (R5 test_provision_coverage_preserved)."
+    issue: "119-wave2-synthesis F2"
+    approved_by: "@tronyx"
+  - nodeid: "tests/test_unit_provision_environment.py::TestYamlParsing::test_no_duplicate_volumes"
+    reason: "DevPlan 119 F2 (AUDIT-5 DUP-3): побайтовая копия test_gate_platform_env_schema.py::test_no_duplicate_volumes. Канон в gates-файле сохранён (R5 test_provision_coverage_preserved)."
+    issue: "119-wave2-synthesis F2"
+    approved_by: "@tronyx"

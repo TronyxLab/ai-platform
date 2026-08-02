@@ -8,6 +8,9 @@
 ##   - Direct Python YAML parsing tests validate platform-env.yaml structure
 ##   - Subprocess tests validate shell script CLI contract and output
 ##   - test_idempotency_second_run requires Docker (marked requires_docker)
+## @changes  2026-08-02 | DevPlan 119 F2: удалены 3 дубля platform-env schema
+##           (test_profiles_match_modules_dir/test_no_duplicate_networks/test_no_duplicate_volumes) —
+##           канон в tests/gates/test_gate_platform_env_schema.py
 ## @rationale  Provisioner is a critical shared component — comprehensive unit coverage
 ##             prevents regression across Makefile, CI, and bootstrap flows.
 # endregion MODULE_CONTRACT
@@ -137,30 +140,6 @@ class TestYamlParsing:
         for vol in env_data.get("volumes", []):
             assert "path" in vol, f"Volume missing 'path' field: {vol}"
             assert vol["path"].startswith("/"), f"Volume path not absolute: {vol['path']}"
-
-    def test_profiles_match_modules_dir(self, env_data: dict) -> None:
-        """Every profile name must correspond to an existing core/modules/ directory."""
-        modules_dir = repo_root() / "core" / "modules"
-        existing_modules = {d.name for d in modules_dir.iterdir() if d.is_dir() and d.name != "platform-secrets"}
-        profiles = set(env_data.get("profiles", []))
-        # All profiles should be in existing_modules (or existing_modules should contain profiles)
-        missing = profiles - existing_modules
-        assert not missing, (
-            f"Profiles without matching module directory: {missing}. "
-            f"Add missing dirs to core/modules/ or remove from profiles in platform-env.yaml"
-        )
-
-    def test_no_duplicate_networks(self, env_data: dict) -> None:
-        """No duplicate network names."""
-        net_names = [n["name"] for n in env_data.get("networks", [])]
-        duplicates = {n for n in net_names if net_names.count(n) > 1}
-        assert not duplicates, f"Duplicate network names: {duplicates}"
-
-    def test_no_duplicate_volumes(self, env_data: dict) -> None:
-        """No duplicate volume paths."""
-        vol_paths = [v["path"] for v in env_data.get("volumes", [])]
-        duplicates = {p for p in vol_paths if vol_paths.count(p) > 1}
-        assert not duplicates, f"Duplicate volume paths: {duplicates}"
 
 
 # ── Test: Provisioner Dry-Run ─────────────────────────────────────────────────

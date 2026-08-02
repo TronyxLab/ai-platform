@@ -224,6 +224,11 @@ def test_all_compose_configs_valid(
     # region BLOCK_Setup
 
     logger.info("[IMP:7][test_all_compose_configs_valid] Validating %d compose file(s)...", len(all_compose_files))
+    # FRAG-2 (DevPlan 119 F7): голый docker subprocess без guard. Этот тест НЕ использует
+    # platform_services фикстуру (только all_compose_files/platform_env) — docker guard
+    # обязателен здесь явно. R4: отсутствие Docker → FAIL/skip через honesty-диспетчер,
+    # не subprocess.CalledProcessError.
+    require_docker_or_fail(reason="compose config validation requires Docker daemon")
     # endregion
 
     # region BLOCK_Assert_AtLeastOne

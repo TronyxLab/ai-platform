@@ -883,10 +883,10 @@ def test_hermes_dashboard_auth(hermes_up, caplog) -> None:
     ##              The healthcheck test separately verifies dashboard is responding.
     ##              Login page details may vary across upstream Hermes versions.
     """
-    try:
-        import requests
-    except ImportError:
-        pytest.skip("requests not installed — install with: pip install requests")
+    # R4 (Test Honesty): отсутствие requests = ошибка конфигурации окружения, не повод
+    # для skip. requests — обязательная dev-зависимость (pyproject.toml dev extra D4).
+    # Отсутствие → ImportError → FAIL (R4: NO_SERVICE = FAIL, DevPlan 119 F1 R4-2).
+    import requests
 
     # ⚠️ TRAP[BUG] · 2026-07-18 · HIGH · F-7: test переведён на shifted порт 19119
     # · Root: до !override hermes-agent-test биндил canonical 9119 через склейку ports.

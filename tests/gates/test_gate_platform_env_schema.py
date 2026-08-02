@@ -15,6 +15,7 @@
 # endregion MODULE_CONTRACT
 
 import logging
+import pathlib
 import re
 
 import pytest
@@ -344,3 +345,41 @@ class TestCrossSectionConsistency:
         logger.info("[IMP:9][gate][platform-env] Checking forbidden keys in env_defaults: found=%s", found)
         assert not found, f"Forbidden env_defaults keys (production-only): {found}"
         logger.info("[IMP:9][gate][platform-env] PLATFORM_DOMAIN SoT present; no forbidden keys ✓")
+
+
+# ── R5 Coverage Preservation (DevPlan 119 F2) ─────────────────────────────────
+
+
+# region FUNC_test_provision_coverage_preserved
+## @purpose  R5 anti-survivorship для F2 (DevPlan 119): 3 дублирующих теста удалены из
+##           test_unit_provision_environment.py (test_profiles_match_modules_dir,
+##           test_no_duplicate_networks, test_no_duplicate_volumes). Канонические тесты
+##           этого файла ОБЯЗАНЫ оставаться — иначе покрытие schema-проверок теряется.
+## @io       — → ⎋ None (asserts канонические тесты существуют в этом файле)
+## @complexity — O(1) — статическая проверка исходного кода файла
+## @invariants
+##   - Тест FAIL'ит, если каноническая проверка удалена из этого gate-файла (drift)
+##   - Три сценария, покрывавшиеся дублями: profiles-match, duplicate networks, duplicate volumes
+## @rationale  AC-F2.3 (R5): покрытие provision environment ≥ до удаления. Negative-тест
+##             гарантирует, что удаление дублей НЕ ослабило канонические проверки.
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · platform-env schema coverage — F2 dup removal
+# · Last fail: дубли в test_unit_provision_environment.py (L141,153,159) — 2 копии одной проверки
+# · Remove if: канон schema-проверок переносится в другой файл
+def test_provision_coverage_preserved() -> None:
+    """R5: канонические schema-проверки (профили/дубли) сохранены в этом gate-файле."""
+    required_methods = {
+        "test_profiles_match_modules_dir": "profiles соответствуют core/modules/",
+        "test_no_duplicate_networks": "сети без дублей",
+        "test_no_duplicate_volumes": "volumes без дублей",
+    }
+    source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    missing = [name for name in required_methods if f"def {name}" not in source]
+    logger.info("[IMP:9][gate][platform-env] R5 coverage check: missing=%s", missing)
+    assert not missing, (
+        f"R5 FAIL: канонические schema-тесты удалены из test_gate_platform_env_schema.py: {missing} "
+        f"(DevPlan 119 F2 — дубли удалены из test_unit_provision_environment.py, канон обязан остаться)"
+    )
+    logger.info("[IMP:9][gate][platform-env] R5 PASS: все 3 канонические проверки сохранены")
+
+
+# endregion FUNC_test_provision_coverage_preserved

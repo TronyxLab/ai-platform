@@ -357,3 +357,88 @@ def test_bootstrap_compose_idempotent(caplog, tmp_path):
 
 
 # endregion
+
+
+# ── _step_nginx_reload tests (HOLE-1, DevPlan 119 F4) ─────────────────────────
+
+
+# region FUNC_test_step_nginx_reload_success
+## @purpose — _step_nginx_reload() успешный: делегирует в shared/docker_compose.nginx_reload,
+##            non-fatal — ошибки (OSError/FileNotFoundError) → WARN, не raise.
+## @io — ⇥ caplog → ⎋ None (asserts делегирование + no-raise)
+## @complexity — O(1)
+## @invariants
+##   - nginx_reload вызывается с дефолтными аргументами (container="nginx")
+##   - Ошибка nginx_reload → перехвачена (non-fatal контракт D6)
+# 🧪 TRAP[TEST] · DevPlan 119 F4 (HOLE-1) · _step_nginx_reload success
+# · Last fail: N/A — _step_nginx_reload (context_deployer:824) не покрыт тестами
+# · Remove if: _step_nginx_reload контракт меняется
+def test_step_nginx_reload_success(caplog, monkeypatch) -> None:
+    """_step_nginx_reload успешно вызывает nginx_reload (non-fatal)."""
+    caplog.set_level(logging.DEBUG)
+
+    called = {}
+
+    def _fake_nginx_reload(*args, **kwargs):
+        called["args"] = args
+        called["kwargs"] = kwargs
+        logger.info("[IMP:9][test][_step_nginx_reload] nginx_reload вызван")
+
+    # Локальный импорт внутри _step_nginx_reload (from core.internal.shared.docker_compose
+    # import nginx_reload) — патчим источник, а не context_deployer namespace.
+    monkeypatch.setattr(
+        "core.internal.shared.docker_compose.nginx_reload",
+        _fake_nginx_reload,
+    )
+
+    cd._step_nginx_reload()
+
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in caplog.records:
+        if "[IMP:" in record.message:
+            print(record.message)
+    print("--- END LDD TRAJECTORY ---")
+    assert "args" in called, "nginx_reload должен быть вызван"
+    assert called["kwargs"].get("container", "nginx") == "nginx"
+    found_imp9 = any("[IMP:9]" in r.message for r in caplog.records)
+    assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
+
+
+# endregion FUNC_test_step_nginx_reload_success
+
+
+# region FUNC_test_step_nginx_reload_failure_nonfatal
+## @purpose — R5 negative (DevPlan 119 F4): nginx_reload бросает OSError (контейнер недоступен)
+##            → _step_nginx_reload ловит и логирует WARN (non-fatal), НЕ raise.
+## @io — ⇥ caplog → ⎋ None (asserts no-raise при OSError)
+## @complexity — O(1)
+## @invariants
+##   - OSError от nginx_reload → перехвачен в except (OSError, CalledProcessError, FileNotFoundError)
+##   - Non-fatal: шаг deploy_context продолжается (reload не критичен)
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · _step_nginx_reload failure — DevPlan 119 F4
+# · Last fail: необработанный OSError из nginx reload падал бы deploy_context
+# · Remove if: _step_nginx_reload становится fatal
+def test_step_nginx_reload_failure_nonfatal(caplog, monkeypatch) -> None:
+    """R5: OSError от nginx_reload → перехвачен (non-fatal), no-raise."""
+    caplog.set_level(logging.DEBUG)
+
+    def _raise_oserror(*args, **kwargs):
+        raise OSError("docker exec failed — container not reachable")
+
+    monkeypatch.setattr(
+        "core.internal.shared.docker_compose.nginx_reload",
+        _raise_oserror,
+    )
+
+    # Должно пройти без исключения (non-fatal контракт D6)
+    cd._step_nginx_reload()
+
+    print("--- LDD TRAJECTORY (IMP:7-10) ---")
+    for record in caplog.records:
+        if "[IMP:" in record.message:
+            print(record.message)
+    print("--- END LDD TRAJECTORY ---")
+    print("[IMP:9][test] R5 PASS: nginx reload OSError handled (non-fatal)")
+
+
+# endregion FUNC_test_step_nginx_reload_failure_nonfatal

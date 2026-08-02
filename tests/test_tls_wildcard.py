@@ -34,6 +34,7 @@ import subprocess
 
 import pytest
 import yaml
+from _conftest.honesty import require_script_or_fail
 from conftest import ldd_trajectory
 
 logger = logging.getLogger(__name__)
@@ -791,17 +792,17 @@ def test_tls_scripts_syntax(_tls_script_paths: list[str]) -> None:
 # region FUNC_test_acme_sh_available
 ## @purpose  Check if acme.sh is available in PATH. acme.sh is the ACME client used for
 ##           wildcard Let's Encrypt certificate issuance via DNS-01 challenge.
-##           This test SKIPS (not fails) if acme.sh is not found — the platform may
-##           install it during bootstrap, and local dev environments typically don't have
-##           it pre-installed.
-## @io       — (uses shutil.which) → ⎋ None (skip if not found)
+##           R4 (Test Honesty, DevPlan 119 F1 R4-3): отсутствие acme.sh = конфигурационная
+##           ошибка, не повод для skip. Диспетчеризация через require_script_or_fail —
+##           REQUIRE_HONESTY_MODE=marker (локально) → skip; =fail (CI) → FAIL.
+## @io       — (uses shutil.which) → ⎋ None (skip|fail через honesty-диспетчер)
 ## @complexity  O(1)
 ## @invariants
 ##   - shutil.which("acme.sh") checks PATH for the binary
-##   - If not found: pytest.skip (not fail) — acme.sh is installed at bootstrap time
+##   - If not found: require_script_or_fail() диспетчеризует по REQUIRE_HONESTY_MODE
 ##   - If found: binary path is logged at IMP:9
-## @rationale  Contract test: verifies the ACME client is available. Skip-acceptable
-##             because acme.sh is installed during bootstrap (step ⑪), not pre-installed.
+## @rationale  Contract test: verifies the ACME client is available. R4: NO_SERVICE = FAIL,
+##             not skip (environmental absence is a configuration error — surface it).
 
 
 # Both @pytest.mark.contract AND @pytest.mark.predeploy — contract tests run in both suites
@@ -809,14 +810,19 @@ def test_tls_scripts_syntax(_tls_script_paths: list[str]) -> None:
 @pytest.mark.predeploy
 def test_acme_sh_available() -> None:
     """
-    # ▶ shutil.which("acme.sh") → ◇ binary found? → ⎋ skip|pass
+    # ▶ shutil.which("acme.sh") → ◇ binary found? → ⎋ require_script_or_fail|pass
     """
     acme_path = shutil.which("acme.sh")
     logger.info("[IMP:7][test_acme_sh_available] Searching for acme.sh in PATH ...")
 
     if acme_path is None:
-        logger.info("[IMP:7][test_acme_sh_available] acme.sh not in PATH — skip (installed at bootstrap time)")
-        pytest.skip("acme.sh not found in PATH — it is installed during bootstrap step ⑪")
+        # R4 (DevPlan 119 F1 R4-3): acme.sh не найден → require_script_or_fail
+        # (marker→skip локально, fail→FAIL в CI). НЕ pytest.skip напрямую.
+        logger.info("[IMP:7][test_acme_sh_available] acme.sh not in PATH — dispatching honesty mode")
+        require_script_or_fail(
+            pathlib.Path("/usr/local/bin/acme.sh"),
+            reason="acme.sh not found in PATH — it is installed during bootstrap step ⑪",
+        )
     else:
         logger.info("[IMP:9][test_acme_sh_available] ✅ acme.sh found: %s", acme_path)
         # Verify it's executable
