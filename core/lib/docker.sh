@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: docker login library ghcr registry-credentials container-registry ghcr-login ghcr_login GHCR_PULL_TOKEN docker_auth
-# STRUCTURE: ┌delegate to docker_auth.py┐ → ◇ docker_login (thin facade) → ◇ ghcr_login (thin facade) → ◇ ensure_docker_network → ⎋ exit
+# STRUCTURE: ┌delegate to docker_auth.py┐ → ◇ docker_login (thin facade) → ◇ ghcr_login (thin facade) → ⎋ exit
 # ═══════════════════════════════════════════════════════════════════
 # MODULE_CONTRACT — Canonical Docker Login Library
 # ═══════════════════════════════════════════════════════════════════
@@ -8,11 +8,11 @@
 ## @modulecontract
 ## @purpose  Canonical Docker and GHCR authentication library (thin facades).
 ##           Delegates docker_login() and ghcr_login() to the shared
-##           docker_auth.py module. Provides ensure_docker_network() for
-##           network creation. All credential handling lives in the shared module.
+##           docker_auth.py module. All credential handling lives in the shared module.
+##           ensure_docker_network УДАЛЁН (волна 118 B6 — 0 callers; первичный
+##           сетевой провайдер — provision-environment.sh, TRAP[DECISION] снят).
 ## @scope    — docker_login() thin facade → shared docker_auth.docker_login()
 ##           — ghcr_login() thin facade → shared docker_auth.ghcr_login()
-##           — ensure_docker_network() — unchanged, unrelated to auth
 ##           — logs at IMP:8 for delegation traceability
 ## @input    — DOCKER_HUB_USERNAME (env var, optional)
 ##           — DOCKER_HUB_TOKEN    (env var, optional)
@@ -75,43 +75,6 @@ docker_login() {
     python3 "${BASH_SOURCE[0]%/*}/../internal/shared/docker_auth.py" docker-login
 }
 # endregion FUNC_docker_login
-
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_ensure_docker_network
-## @purpose  Ensure a Docker network exists; create it if missing.
-##           Runtime fallback belt-and-suspenders — primary network creator
-##           is provision-environment.sh --scope networks.
-## @param $1  network_name  Docker network name (e.g. proxy-net)
-## @param $2  driver        Optional: network driver (default: bridge)
-## @io       stderr: LDD logs [IMP:7-9]
-##           side-effect: docker network create (if missing)
-## @complexity O(1)
-## @invariants
-##   - Idempotent: docker network inspect first, create only if absent
-##   - Does NOT change existing network parameters (driver, subnet, etc.)
-##   - Logs at IMP:7 SKIP, IMP:9 DONE
-## @rationale Extracted from deploy-modules.sh:85 to lib/ for reuse by
-##            converge.sh R4. The function is a runtime fallback, NOT
-##            the primary network creator (provisioner is). Preserved
-##            for CI environments that skip provision step.
-## ⚠️ TRAP[DECISION] · 2026-07-17 · — · Legacy fallback, not primary creator
-## · Rejected: removing ensure_docker_network() entirely
-## · Reason: primary is provisioner; this is runtime belt-and-suspenders
-## · Rev: if provisioner becomes mandatory in ALL deploy paths, remove this
-ensure_docker_network() {
-    local network_name="$1"
-    local driver="${2:-bridge}"
-
-    if docker network inspect "$network_name" &>/dev/null 2>&1; then
-        log_imp 9 "ensure_docker_network" "SKIP: Network '${network_name}' already exists"
-        return 0
-    fi
-
-    log_imp 9 "ensure_docker_network" "Creating Docker network: ${network_name} (driver: ${driver})"
-    docker network create --driver "$driver" "$network_name"
-    log_imp 9 "ensure_docker_network" "DONE: Network '${network_name}' created"
-}
-# endregion FUNC_ensure_docker_network
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_ghcr_login

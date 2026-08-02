@@ -84,7 +84,9 @@ def _patch_deploy_success(monkeypatch, chain_calls: list | None = None) -> None:
 
     monkeypatch.setattr(HealthcheckPoller, "poll_until_healthy", _healthy_poll)
 
-    def _record_chain(self, project, version, status):
+    def _record_chain(self, project, version, status, project_dir=None, node_name=""):
+        # Волна 118 B8: сигнатура _run_post_deploy_chain расширена (project_dir, node_name) —
+        # module deploy-hooks (nginx wire). Тест записывает только первые 3 (D4 контракт).
         if chain_calls is not None:
             chain_calls.append((project, version, status))
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: node_yaml_cli, CLI, argparse, get, get-many, resolve, typed-json, validate, mutation, find-project, domain-config
-# STRUCTURE: ▶ build_arg_parser → ◇ dispatch: --resolve (no file) | --get | --get-many | --domain-config | --find-project | --validate | --validate-schema | --typed-* | mutation (add/remove/update) → ⎋ exit code
+# GREP_SUMMARY: node_yaml_cli, CLI, argparse, get, get-many, resolve, validate, mutation, find-project, domain-config
+# STRUCTURE: ▶ build_arg_parser → ◇ dispatch: --resolve (no file) | --get | --get-many | --domain-config | --find-project | --validate | --validate-schema | mutation (add/remove/update) → ⎋ exit code
 # region MODULE_CONTRACT
 ## @purpose  CLI entrypoint for core.internal.shared.node_yaml (DevPlan 117 G T51 extraction).
 ##           All 10 _cli_* functions + _build_arg_parser + main() moved verbatim from
@@ -8,6 +8,9 @@
 ## @scope    Invoked only via `python3 -m core.internal.shared.node_yaml` (shell facades) or
 ##           `python3 -m core.internal.shared.node_yaml_cli`. No external code imports this module
 ##           directly — node_yaml.py lazy-imports main() for __main__ backward compatibility.
+##           Волна 118 B3: --typed-* флаги и _cli_typed_json удалены вместе с typed-геттерами
+##           node_yaml.py (0 потребителей, verify-then-delete). --domain-config сохранён
+##           (get_domain_config — потребитель preflight.py).
 ## @invariants
 ##   Exit codes: 0=success, 1=not found/generic, 2=ConfigNotFoundError,
 ##   3=ConfigParseError, 4=ConfigValidationError, 10=PlatformFatalError.
@@ -85,14 +88,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--validate-schema", action="store_true", help="Validate node.yaml against JSON schema")
     parser.add_argument("--schema-path", help="Path to JSON schema file for --validate-schema")
 
-    # DevPlan 088 T1/T3.5: typed output
-    parser.add_argument("--typed-contexts", action="store_true", help="Output contexts as JSON")
-    parser.add_argument("--typed-node", action="store_true", help="Output node declaration as JSON")
-    parser.add_argument("--typed-firewall", action="store_true", help="Output firewall config as JSON")
-    parser.add_argument("--typed-secrets", action="store_true", help="Output secrets config as JSON")
-    parser.add_argument("--typed-tor", action="store_true", help="Output tor config as JSON")
-    parser.add_argument("--typed-repos", action="store_true", help="Output repos config as JSON")
-    parser.add_argument("--typed-all", action="store_true", help="Output all typed fields as JSON")
+    # DevPlan 088 T1/T3.5: typed output — УДАЛЕНО (волна 118 B3): typed-геттеры
+    # (get_contexts/get_tor_config/get_repos/get_node_declaration/get_firewall/
+    # get_secrets_config/get_email/get_domain/get_acme_dns_plugin/
+    # get_postgres_init_databases) удалены из node_yaml.py — 0 потребителей
+    # (verify-then-delete). CLI-флаги --typed-* удалены вместе с ними (R5: unknown flag → exit≠0).
 
     # DevPlan 088 T3.5: mutation API
     parser.add_argument(
@@ -299,34 +299,6 @@ def _cli_resolve(args: argparse.Namespace) -> int:
         return 2
 
 
-def _cli_typed_json(node: NodeYaml, field: str) -> int:
-    """Output a typed dataclass as JSON.
-
-    ## @purpose  Handle --typed-* CLI operations.
-    ## @io — ⇥ node: NodeYaml, field: str → ⎋ exit_code: int
-    ## @complexity — O(1) after load
-    """
-    import dataclasses
-
-    getters = {
-        "contexts": node.get_contexts,
-        "node": lambda: dataclasses.asdict(node.get_node_declaration()),
-        "firewall": lambda: dataclasses.asdict(node.get_firewall()),
-        "secrets": lambda: dataclasses.asdict(node.get_secrets_config()),
-        "tor": lambda: dataclasses.asdict(node.get_tor_config()),
-        "repos": lambda: dataclasses.asdict(node.get_repos()),
-    }
-
-    getter = getters.get(field)
-    if getter is None:
-        print(f"Unknown typed field: {field}", file=sys.stderr)
-        return 1
-
-    value = getter()
-    print(json.dumps(value, indent=2, default=str))
-    return 0
-
-
 def main() -> int:
     """NodeYaml CLI entrypoint.
 
@@ -412,39 +384,6 @@ def main() -> int:
                 return 0
             print(f"Project not found: {name}", file=sys.stderr)
             return 1
-        if args.typed_contexts:
-            return _cli_typed_json(node, "contexts")
-        if args.typed_node:
-            return _cli_typed_json(node, "node")
-        if args.typed_firewall:
-            return _cli_typed_json(node, "firewall")
-        if args.typed_secrets:
-            return _cli_typed_json(node, "secrets")
-        if args.typed_tor:
-            return _cli_typed_json(node, "tor")
-        if args.typed_repos:
-            return _cli_typed_json(node, "repos")
-        if args.typed_all:
-            import dataclasses
-
-            output = {
-                "contexts": node.get_contexts(),
-                "node": dataclasses.asdict(node.get_node_declaration()),
-                "firewall": dataclasses.asdict(node.get_firewall()),
-                "secrets": dataclasses.asdict(node.get_secrets_config()),
-                "tor": dataclasses.asdict(node.get_tor_config()),
-                "repos": dataclasses.asdict(node.get_repos()),
-                "domain_config": {
-                    "platform_domain": node.get_domain(),
-                    "email": node.get_email(),
-                    "acme_dns_plugin": node.get_acme_dns_plugin(),
-                },
-                "postgres_init_databases": node.get_postgres_init_databases(),
-                "projects": node.get_projects(),
-                "modules": node.get_modules(),
-            }
-            print(json.dumps(output, indent=2, default=str))
-            return 0
         parser.print_help()
         return 0
     except ConfigNotFoundError as e:

@@ -325,12 +325,6 @@ test/gate:
   signature: make generate-litellm-config
   operation_ru: Генерация litellm-config.yml
   description: Generate LiteLLM config from policy.yaml via config_renderer.py.
-- make_target: generate-manifests-atomic
-  mechanism: python-script
-  delegates_to: mktemp → Chain A+B+C → mv
-  signature: make generate-manifests-atomic
-  operation_ru: Атомарная генерация всех манифестов
-  description: Atomic generation of ALL manifests via staging dir + atomic rename.
 - make_target: sync-env-defaults
   mechanism: python-script
   delegates_to: core/internal/scripts/sync_env_defaults.py → .env.example
@@ -631,9 +625,10 @@ dev:
   delegates_to: python3 core/internal/monitoring_config_renderer.py
   signature: make render-monitoring PROJECT_DIR=<dir> PROJECT=<name> [NODE=<node>]
   operation_ru: Рендер конфигурации мониторинга после деплоя проекта
-  description: Post-deploy monitoring reconfiguration (Prometheus targets, Grafana
+  description: 'Post-deploy monitoring reconfiguration (Prometheus targets, Grafana
     dashboards, Loki retention, Langfuse projects, alert rules). Registered make-target
-    (U-65, DevPlan 116 B7 T7) — основной runtime-путь остаётся module-hook on-project-deploy.sh.
+    (U-65, DevPlan 116 B7 T7). Волна 118 B8: module-hook on-project-deploy.sh удалён
+    — runtime-путь = make render-monitoring (operator) + DeployOrchestrator deploy-hooks.'
 module_hooks:
 - script: nginx_reload_hook.sh
   path: core/modules/nginx/nginx_reload_hook.sh
@@ -819,7 +814,6 @@ allowed_verbs:
 - generate-env-example
 - generate-litellm-config
 - generate-manifests
-- generate-manifests-atomic
 - generate-platform-env
 - generate-secrets-manifest
 - healthcheck
@@ -1002,6 +996,9 @@ gates:
 - id: test_no_ssl_provision_references
   test_file: test_gate_dead_code.py
   description: 'Auto-discovered gate: test_no_ssl_provision_references'
+- id: test_removed_exceptions_absent
+  test_file: test_gate_dead_code.py
+  description: 'Auto-discovered gate: test_removed_exceptions_absent'
 - id: test_ssl_provision_sh_deleted
   test_file: test_gate_dead_code.py
   description: 'Auto-discovered gate: test_ssl_provision_sh_deleted'
@@ -1380,6 +1377,9 @@ gates:
 - id: test_all_hooks_are_specified_as_strings
   test_file: test_gate_module_hooks.py
   description: 'Auto-discovered gate: test_all_hooks_are_specified_as_strings'
+- id: test_deleted_hook_files_absent
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_deleted_hook_files_absent'
 - id: test_hook_contract_validation[backup-cron]
   test_file: test_gate_module_hooks.py
   description: 'Auto-discovered gate: test_hook_contract_validation[backup-cron]'
@@ -1422,6 +1422,9 @@ gates:
 - id: test_hook_contract_validation[status-page]
   test_file: test_gate_module_hooks.py
   description: 'Auto-discovered gate: test_hook_contract_validation[status-page]'
+- id: test_registered_deploy_hooks_have_runtime_trigger
+  test_file: test_gate_module_hooks.py
+  description: 'Auto-discovered gate: test_registered_deploy_hooks_have_runtime_trigger'
 - id: test_all_base_yml_have_profiles
   test_file: test_gate_module_profiles.py
   description: 'Auto-discovered gate: test_all_base_yml_have_profiles'

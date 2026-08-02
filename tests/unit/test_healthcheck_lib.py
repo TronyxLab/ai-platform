@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: test-healthcheck-lib check_tcp exec_check check_http timeout unit bash subprocess
-# STRUCTURE: ▶ _run_bash helper → ○ test_check_tcp_success/timeout → ○ test_exec_check_* → ○ test_check_http_with_timeout → ⎋ LDD trajectory
+# STRUCTURE: ▶ _run_bash helper → ○ test_check_tcp_removed (R5) → ○ test_exec_check_* → ○ test_check_http_with_timeout → ⎋ LDD trajectory
 # region MODULE_CONTRACT
-## @purpose  Unit tests for healthcheck.sh library functions: check_tcp(), exec_check(), check_http() timeout param.
-## @scope    Covers 6 test scenarios from DevPlan 083 §$TEST_SPEC:
-##           1. test_check_tcp_success — TCP connect to reachable host:port returns 0
-##           2. test_check_tcp_timeout — TCP connect to unreachable port returns 1
-##           3. test_exec_check_success — exec_check with valid container + command returns 0
-##           4. test_exec_check_container_not_running — exec_check with stopped container returns 1
-##           5. test_exec_check_command_fails — exec_check with failing command returns 1
-##           6. test_check_http_with_timeout — check_http accepts timeout parameter
+## @purpose  Unit tests for healthcheck.sh library functions: exec_check(), check_http() timeout param.
+##           check_tcp тесты УДАЛЕНЫ (волна 118 B6) — заменены R5 negative (type -t = пусто).
+## @scope    Covers test scenarios from DevPlan 083 §$TEST_SPEC:
+##           1. test_check_tcp_removed — R5 negative: check_tcp удалён из healthcheck.sh
+##           2. test_exec_check_success — exec_check with valid container + command returns 0
+##           3. test_exec_check_container_not_running — exec_check with stopped container returns 1
+##           4. test_exec_check_command_fails — exec_check with failing command returns 1
+##           5. test_check_http_with_timeout — check_http accepts timeout parameter
 ## @invariants
 ##   - Tests use subprocess.run with temp bash scripts (bash function testing)
-##   - check_tcp tests: no Docker required, use TCP /dev/tcp built-in
 ##   - exec_check tests: require Docker (@pytest.mark.requires_docker)
 ##   - check_http tests: no Docker required, use check_http with dummy URLs
 ## @rationale Bash functions must be tested in a real bash environment.
 ##   Subprocess with temp scripts is the standard pattern for bash library testing.
 ## @changes 2026-07-26 · DevPlan 083 — Initial implementation
+##          2026-08-02 · Волна 118 B6 — check_tcp tests → R5 negative
 # endregion MODULE_CONTRACT
 
 import logging
@@ -78,89 +78,42 @@ def _run_bash(tmp_path: Path, code: str) -> subprocess.CompletedProcess:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: check_tcp
+# TESTS: check_tcp (REMOVED API — волна 118 B6)
 # ═══════════════════════════════════════════════════════════════════
+# Волна 118 B6: check_tcp УДАЛЁН из healthcheck.sh (0 callers; TCP-проверки — через
+# Python healthcheck_poller / check_http). R5 negative: type -t check_tcp = пусто.
 
 
-# region FUNC_test_check_tcp_success
-## @purpose  Verify check_tcp returns 0 for a reachable TCP endpoint.
-##           Uses bash's /dev/tcp with a temporary listener (nc or timeout-based).
-## @io       ⇥ tmp_path → ⎋ assert returncode == 0, stderr contains connected
+# region FUNC_test_check_tcp_removed
+## @purpose  Verify check_tcp is REMOVED from healthcheck.sh (волна 118 B6, R5).
+## @io       ⇥ tmp_path → ⎋ assert stderr contains 'command not found' / rc != 0
 ## @complexity O(1)
-def test_check_tcp_success(tmp_path: Path) -> None:
-    # 🧪 TRAP[TEST] · Regression: check_tcp must return 0 for reachable port
-    # · Scenario: Start a temporary TCP listener on a random port, connect via check_tcp
-    # · Last fail: Never
-    # · Remove if: check_tcp signature changes or /dev/tcp support removed
-    import random
-
-    port = random.randint(20000, 30000)
-
-    # Use timeout-based background listener via bash /dev/tcp server
-    result = _run_bash(
-        tmp_path,
-        f"""
-# Start a background TCP listener on port {port} for 3 seconds, then connect
-timeout 3 bash -c "echo ok | nc -l 127.0.0.1 {port}" &
-sleep 0.3  # Give listener time to start
-check_tcp "127.0.0.1" "{port}" 2
-exit_code=$?
-wait  # Clean up listener
-exit $exit_code
-""",
-    )
-
-    # Log output for LDD
-    logger.info("[IMP:7][test_check_tcp_success] stdout: %s", result.stdout)
-    logger.info("[IMP:7][test_check_tcp_success] stderr: %s", result.stderr)
-    logger.info("[IMP:7][test_check_tcp_success] returncode: %d", result.returncode)
-
-    # Check stderr for connected message
-    assert "connected" in result.stderr.lower(), (
-        f"[IMP:9][test_check_tcp_success] FAIL: expected 'connected' in stderr, got: {result.stderr}"
-    )
-    assert result.returncode == 0, (
-        f"[IMP:9][test_check_tcp_success] FAIL: check_tcp returned {result.returncode}, stderr: {result.stderr}"
-    )
-
-    logger.info("[IMP:9][test_check_tcp_success] PASS: check_tcp connected to reachable port")
-
-
-# endregion FUNC_test_check_tcp_success
-
-
-# region FUNC_test_check_tcp_timeout
-## @purpose  Verify check_tcp returns 1 when connecting to an unreachable port (timeout).
-##           Uses port 1 (commonly blocked/unreachable) with 1s timeout.
-## @io       ⇥ tmp_path → ⎋ assert returncode == 1, stderr contains 'failed' or 'timed out'
-## @complexity O(1)
-def test_check_tcp_timeout(tmp_path: Path) -> None:
-    # 🧪 TRAP[TEST] · Regression: check_tcp must return 1 for unreachable port
-    # · Scenario: check_tcp to 127.0.0.1:1 with 1s timeout → returns 1
-    # · Last fail: Never
-    # · Remove if: check_tcp signature changes
+def test_check_tcp_removed(tmp_path: Path) -> None:
+    """B6 R5: check_tcp должен быть удалён (command not found)."""
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · B6 — check_tcp удалён из healthcheck.sh
+    # · Scenario: source healthcheck.sh → type -t check_tcp → пусто (не функция)
+    # · Last fail: check_tcp существовал до волны 118 B6 (healthcheck.sh L327-348)
+    # · Remove if: check_tcp будет восстановлен
     result = _run_bash(
         tmp_path,
         """
-check_tcp "127.0.0.1" "1" 1
-exit $?
+if [[ "$(type -t check_tcp)" == "function" ]]; then
+    echo "[IMP:10][test] FAIL: check_tcp still defined" >&2
+    exit 1
+fi
+echo "[IMP:9][test] check_tcp REMOVED — OK" >&2
+exit 0
 """,
     )
 
-    # Log output for LDD
-    logger.info("[IMP:7][test_check_tcp_timeout] stdout: %s", result.stdout)
-    logger.info("[IMP:7][test_check_tcp_timeout] stderr: %s", result.stderr)
-    logger.info("[IMP:7][test_check_tcp_timeout] returncode: %d", result.returncode)
+    logger.info("[IMP:7][test_check_tcp_removed] stdout: %s", result.stdout)
+    logger.info("[IMP:7][test_check_tcp_removed] stderr: %s", result.stderr)
 
-    assert result.returncode == 1, (
-        f"[IMP:9][test_check_tcp_timeout] FAIL: check_tcp returned {result.returncode} (expected 1), "
-        f"stderr: {result.stderr}"
-    )
-
-    logger.info("[IMP:9][test_check_tcp_timeout] PASS: check_tcp timed out as expected")
+    assert result.returncode == 0, f"[IMP:9][test_check_tcp_removed] FAIL: check_tcp не удалён, stderr: {result.stderr}"
+    logger.info("[IMP:9][test_check_tcp_removed] PASS: check_tcp removed (B6 R5)")
 
 
-# endregion FUNC_test_check_tcp_timeout
+# endregion FUNC_test_check_tcp_removed
 
 
 # ═══════════════════════════════════════════════════════════════════

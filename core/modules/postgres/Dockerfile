@@ -27,12 +27,11 @@ COPY config/pg_hba.conf /etc/postgresql/pg_hba.conf
 
 # Copy healthcheck scripts
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
-COPY ready-check.sh /usr/local/bin/ready-check.sh
 
 # Copy init scripts (database creation for platform projects)
 COPY init/ /docker-entrypoint-initdb.d/
 
-RUN chmod +x /usr/local/bin/healthcheck.sh /usr/local/bin/ready-check.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh
 
 # [IMP:8][postgres][Dockerfile] No EXPOSE — ports blocked at network level (shared-db-net only)
 # Internal postgres port 5432 reachable only within shared-db-net

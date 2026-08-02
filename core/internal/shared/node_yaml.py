@@ -52,7 +52,7 @@ import json
 import logging
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import yaml
@@ -67,6 +67,11 @@ logger = logging.getLogger(__name__)
 
 
 # ── Typed Dataclasses (DevPlan 088 T1) ──────────────────────────────────────
+# Волна 118 B3: NodeDeclaration/FirewallConfig/SecretsConfig/TorConfig/ReposConfig +
+# get_tor_config/get_repos/get_postgres_init_databases/get_node_declaration/
+# get_acme_dns_plugin/get_email/get_firewall/get_secrets_config/get_contexts/get_domain
+# УДАЛЕНЫ (verify-then-delete: 0 потребителей вне node_yaml_cli.py --typed-*, которые сами
+# 0 вызовов; get_domain_config/get_node_info сохранены — потребители preflight.py + CLI).
 
 
 # region DATACLASS_ContextEntry
@@ -89,104 +94,6 @@ class ContextEntry:
 
 
 # endregion DATACLASS_ContextEntry
-
-
-# region DATACLASS_NodeDeclaration
-@dataclass
-class NodeDeclaration:
-    """Typed node declaration from node.yaml.
-
-    ## @purpose  Structured representation of the node section.
-    ## @fields   name — node hostname label
-    ##           host — IP address or FQDN
-    ##           owner_key — SSH public key of node owner
-    ##           ci_deploy_key — SSH public key for ci-deploy user (optional)
-    ##           timezone — system timezone (default UTC)
-    ## @invariants  ci_deploy_key is Optional (may be None).
-    """
-
-    name: str = ""
-    host: str = ""
-    owner_key: str = ""
-    ci_deploy_key: str | None = None
-    timezone: str = "UTC"
-
-
-# endregion DATACLASS_NodeDeclaration
-
-
-# region DATACLASS_FirewallConfig
-@dataclass
-class FirewallConfig:
-    """Typed firewall configuration from node.yaml.
-
-    ## @purpose  Structured representation of the firewall section.
-    ## @fields   extra_ports — additional TCP ports to allow inbound beyond 22/80/443
-    ## @invariants  Defaults to empty list.
-    """
-
-    extra_ports: list[int] = field(default_factory=list)
-
-
-# endregion DATACLASS_FirewallConfig
-
-
-# region DATACLASS_SecretEntry
-@dataclass
-class SecretEntry:
-    """Typed secret entry from node.yaml secrets.required array.
-
-    ## @purpose  Structured representation of a required secret.
-    ## @fields   name — secret identifier
-    ##           env_var — environment variable name
-    ##           description — purpose of this secret
-    ## @invariants  All fields default to empty string.
-    """
-
-    name: str = ""
-    env_var: str = ""
-    description: str = ""
-
-
-# endregion DATACLASS_SecretEntry
-
-
-# region DATACLASS_SecretsConfig
-@dataclass
-class SecretsConfig:
-    """Typed secrets configuration from node.yaml.
-
-    ## @purpose  Structured representation of the secrets section.
-    ## @fields   enc_file — path to encrypted secrets file
-    ##           required — list of required SecretEntry items
-    ## @invariants  required defaults to empty list.
-    """
-
-    enc_file: str = ""
-    required: list[SecretEntry] = field(default_factory=list)
-
-
-# endregion DATACLASS_SecretsConfig
-
-
-# region DATACLASS_TorConfig
-@dataclass
-class TorConfig:
-    """Typed Tor + Privoxy configuration from node.yaml.
-
-    ## @purpose  Structured representation of the tor section.
-    ## @fields   enabled — enable Tor + Privoxy proxy
-    ##           skip_verify — skip Tor circuit verification
-    ##           bridges_file — path to obfs4 bridges file
-    ## @invariants  enabled and skip_verify default to False.
-    """
-
-    enabled: bool = False
-    skip_verify: bool = False
-    bridges_file: str = ""
-
-
-# endregion DATACLASS_TorConfig
 
 
 # region DATACLASS_ModuleEntry
@@ -233,24 +140,6 @@ class ProjectEntry:
 
 
 # endregion DATACLASS_ProjectEntry
-
-
-# region DATACLASS_ReposConfig
-@dataclass
-class ReposConfig:
-    """Typed repos configuration from node.yaml.
-
-    ## @purpose  Structured representation of the repos section.
-    ## @fields   core — Git URL for core repository
-    ##           node_configs — Git URL for node-configs repository
-    ## @invariants  Both fields default to empty string.
-    """
-
-    core: str = ""
-    node_configs: str = ""
-
-
-# endregion DATACLASS_ReposConfig
 
 
 # ── NamedTuples ──────────────────────────────────────────────────────────────
@@ -845,243 +734,6 @@ class NodeYaml:
 
     # endregion FUNC_resolve
 
-    # ── New Typed Getters (DevPlan 088 T3.5) ──────────────────────────────────
-
-    # region FUNC_get_contexts
-    ## @purpose  Get contexts list from node.yaml as raw dicts.
-    ## @io — ⇥ → ⎋ list[dict]
-    ## @complexity — O(1) after _load()
-    def get_contexts(self) -> list[dict]:
-        """Get contexts list from node.yaml.
-
-        Returns:
-            List of context dicts (empty list if 'contexts' key missing or not a list)
-        """
-        data = self._load()
-        contexts = data.get("contexts", [])
-        if not isinstance(contexts, list):
-            logger.info("[IMP:7][NodeYaml.get_contexts] 'contexts' is not a list, returning []")
-            return []
-        logger.info("[IMP:7][NodeYaml.get_contexts] %d context(s)", len(contexts))
-        return contexts
-
-    # endregion FUNC_get_contexts
-
-    # region FUNC_get_firewall
-    ## @purpose  Get firewall configuration as typed FirewallConfig.
-    ## @io — ⇥ → ⎋ FirewallConfig
-    ## @complexity — O(1) after _load()
-    def get_firewall(self) -> FirewallConfig:
-        """Get firewall configuration from node.yaml.
-
-        Returns:
-            FirewallConfig with extra_ports list
-        """
-        data = self._load()
-        fw = data.get("firewall", {})
-        if not isinstance(fw, dict):
-            logger.info("[IMP:7][NodeYaml.get_firewall] 'firewall' not a dict, returning defaults")
-            return FirewallConfig()
-        cfg = FirewallConfig(
-            extra_ports=fw.get("extra_ports", []),
-        )
-        logger.info("[IMP:7][NodeYaml.get_firewall] %d extra port(s)", len(cfg.extra_ports))
-        return cfg
-
-    # endregion FUNC_get_firewall
-
-    # region FUNC_get_secrets_config
-    ## @purpose  Get secrets configuration as typed SecretsConfig.
-    ## @io — ⇥ → ⎋ SecretsConfig
-    ## @complexity — O(K) where K = number of required secret entries
-    def get_secrets_config(self) -> SecretsConfig:
-        """Get secrets configuration from node.yaml.
-
-        Returns:
-            SecretsConfig with enc_file and required list
-        """
-        data = self._load()
-        sc = data.get("secrets", {})
-        if not isinstance(sc, dict):
-            logger.info("[IMP:7][NodeYaml.get_secrets_config] 'secrets' not a dict, returning defaults")
-            return SecretsConfig()
-        required: list[SecretEntry] = [
-            SecretEntry(
-                name=entry.get("name", ""),
-                env_var=entry.get("env_var", ""),
-                description=entry.get("description", ""),
-            )
-            for entry in sc.get("required", [])
-            if isinstance(entry, dict)
-        ]
-        cfg = SecretsConfig(
-            enc_file=sc.get("enc_file", ""),
-            required=required,
-        )
-        logger.info(
-            "[IMP:7][NodeYaml.get_secrets_config] enc_file=%s, %d required secret(s)", cfg.enc_file, len(cfg.required)
-        )
-        return cfg
-
-    # endregion FUNC_get_secrets_config
-
-    # region FUNC_get_tor_config
-    ## @purpose  Get Tor configuration as typed TorConfig.
-    ## @io — ⇥ → ⎋ TorConfig
-    ## @complexity — O(1) after _load()
-    def get_tor_config(self) -> TorConfig:
-        """Get Tor configuration from node.yaml.
-
-        Returns:
-            TorConfig with enabled, skip_verify, bridges_file
-        """
-        data = self._load()
-        tc = data.get("tor", {})
-        if not isinstance(tc, dict):
-            logger.info("[IMP:7][NodeYaml.get_tor_config] 'tor' not a dict, returning defaults")
-            return TorConfig()
-        cfg = TorConfig(
-            enabled=bool(tc.get("enabled", False)),
-            skip_verify=bool(tc.get("skip_verify", False)),
-            bridges_file=tc.get("bridges_file", ""),
-        )
-        logger.info("[IMP:7][NodeYaml.get_tor_config] enabled=%s, skip_verify=%s", cfg.enabled, cfg.skip_verify)
-        return cfg
-
-    # endregion FUNC_get_tor_config
-
-    # region FUNC_get_repos
-    ## @purpose  Get repos configuration as typed ReposConfig.
-    ## @io — ⇥ → ⎋ ReposConfig
-    ## @complexity — O(1) after _load()
-    def get_repos(self) -> ReposConfig:
-        """Get repos configuration from node.yaml.
-
-        Returns:
-            ReposConfig with core and node_configs URLs
-        """
-        data = self._load()
-        rc = data.get("repos", {})
-        if not isinstance(rc, dict):
-            logger.info("[IMP:7][NodeYaml.get_repos] 'repos' not a dict, returning defaults")
-            return ReposConfig()
-        cfg = ReposConfig(
-            core=rc.get("core", ""),
-            node_configs=rc.get("node_configs", ""),
-        )
-        logger.info("[IMP:7][NodeYaml.get_repos] core=%s", cfg.core)
-        return cfg
-
-    # endregion FUNC_get_repos
-
-    # region FUNC_get_postgres_init_databases
-    ## @purpose  Get postgres_init_databases list from node.yaml.
-    ## @io — ⇥ → ⎋ list[str]
-    ## @complexity — O(1) after _load()
-    def get_postgres_init_databases(self) -> list[str]:
-        """Get postgres_init_databases list from node.yaml.
-
-        Returns:
-            List of database names (empty list if key missing or not a list)
-        """
-        data = self._load()
-        dbs = data.get("postgres_init_databases", [])
-        if not isinstance(dbs, list):
-            logger.info("[IMP:7][NodeYaml.get_postgres_init_databases] not a list, returning []")
-            return []
-        logger.info("[IMP:7][NodeYaml.get_postgres_init_databases] %d database(s)", len(dbs))
-        return dbs
-
-    # endregion FUNC_get_postgres_init_databases
-
-    # region FUNC_get_node_declaration
-    ## @purpose  Get node declaration as typed NodeDeclaration dataclass.
-    ## @io — ⇥ → ⎋ NodeDeclaration
-    ## @complexity — O(1) after _load()
-    def get_node_declaration(self) -> NodeDeclaration:
-        """Get node declaration as a typed dataclass.
-
-        Returns:
-            NodeDeclaration with name, host, owner_key, ci_deploy_key, timezone
-        """
-        data = self._load()
-        node = data.get("node", {})
-        if not isinstance(node, dict):
-            logger.info("[IMP:7][NodeYaml.get_node_declaration] 'node' not a dict, returning defaults")
-            return NodeDeclaration()
-        nd = NodeDeclaration(
-            name=node.get("name", ""),
-            host=node.get("host", ""),
-            owner_key=node.get("owner_key", ""),
-            ci_deploy_key=node.get("ci_deploy_key"),
-            timezone=node.get("timezone", "UTC"),
-        )
-        logger.info("[IMP:7][NodeYaml.get_node_declaration] name=%s, host=%s", nd.name, nd.host)
-        return nd
-
-    # endregion FUNC_get_node_declaration
-
-    # region FUNC_get_acme_dns_plugin
-    ## @purpose  Get acme_dns_plugin field from node.yaml.
-    ## @io — ⇥ → ⎋ str
-    ## @complexity — O(1) after _load()
-    def get_acme_dns_plugin(self) -> str:
-        """Get acme_dns_plugin from node.yaml.
-
-        Returns:
-            ACME DNS plugin name or empty string
-        """
-        data = self._load()
-        val = data.get("acme_dns_plugin", "")
-        if not isinstance(val, str):
-            return ""
-        logger.info("[IMP:7][NodeYaml.get_acme_dns_plugin] %s", val)
-        return val
-
-    # endregion FUNC_get_acme_dns_plugin
-
-    # region FUNC_get_email
-    ## @purpose  Get email field from node.yaml.
-    ## @io — ⇥ → ⎋ str
-    ## @complexity — O(1) after _load()
-    def get_email(self) -> str:
-        """Get email from node.yaml.
-
-        Returns:
-            Email string or empty string
-        """
-        data = self._load()
-        val = data.get("email", "")
-        if not isinstance(val, str):
-            return ""
-        logger.info("[IMP:7][NodeYaml.get_email] %s", val if val else "(empty)")
-        return val
-
-    # endregion FUNC_get_email
-
-    # region FUNC_get_domain
-    ## @purpose  Get domain field from node.yaml (flat string only).
-    ## @io — ⇥ → ⎋ str
-    ## @complexity — O(1) after _load()
-    def get_domain(self) -> str:
-        """Get domain from node.yaml.
-
-        Flat string only (DevPlan 116 B6 T7): domain: "example.com".
-        Legacy dict form (domain: { platform: ... }) was removed (greenfield).
-
-        Returns:
-            Domain string or empty string
-        """
-        data = self._load()
-        domain = data.get("domain")
-        if isinstance(domain, str):
-            logger.info("[IMP:7][NodeYaml.get_domain] %s", domain)
-            return domain
-        logger.info("[IMP:7][NodeYaml.get_domain] (empty)")
-        return ""
-
-    # endregion FUNC_get_domain
-
     # ── Mutation API (DevPlan 088 T3.5) ────────────────────────────────────────
 
     # region FUNC_get_project
@@ -1477,7 +1129,7 @@ _CLI_SYMBOLS = frozenset(
         "_cli_validate",
         "_cli_validate_schema",
         "_cli_resolve",
-        "_cli_typed_json",
+        # _cli_typed_json удалён (волна 118 B3 — typed-геттеры + --typed-* флаги удалены)
         "_traverse_dotted_list_aware",
     }
 )

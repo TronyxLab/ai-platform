@@ -178,110 +178,44 @@ def test_save_state(caplog, state_file):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: Step transitions (start/complete/skip/fail)
+# region Tests: Step transitions (REMOVED API — волна 118 B1)
 # ═══════════════════════════════════════════════════════════════════
+# Волна 118 B1: step-API (start_step/complete_step/skip_step/fail_step/get_current_step +
+# _is_step_done/_is_step_skipped/_hash_changed/_check_precondition/_check_postcondition)
+# УДАЛЁН из state_machine.py — 0 callers в core/ + tests/ (CLI работает через
+# execute_phase/setup_state, grouped-phases эра B9). Тесты на удалённые методы помечены
+# removed API (AC-B1). R5 negative-тест: hasattr(StateMachine, '<method>') is False.
 
 
-# 🧪 TRAP[TEST] · Regression · start_step marks step as running with timestamp
-# · Scenario: Call start_step(1) → step state updated to running, current_step set
-# · Last fail: N/A (new test)
-# · Remove if: start_step logic changes
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · B1 — удалённый step-API: hasattr == False
+# · Scenario: start_step/complete_step/skip_step/fail_step/get_current_step + приватные
+#   хелперы (_is_step_done/_is_step_skipped/_hash_changed/_check_precondition/
+#   _check_postcondition) отсутствуют в StateMachine; StateTransitionError отсутствует
+# · Last fail: step-API существовал до волны 118 B1 (state_machine.py ~334-439, ~640-705)
+# · Remove if: step-API будет восстановлен (возврат к grouped-phases эре)
 @ldd_trajectory
-def test_start_step(caplog, machine):
-    """start_step should mark first phase as running and set current_step (phase-based key)."""
-    machine.setup_state(mode="init", node="test")
-    machine.start_step(1)
-    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[0]  # system_bootstrap
-    assert phase_name in machine.state.steps
-    assert machine.state.steps[phase_name].status == "running"
-    assert machine.state.steps[phase_name].started_at is not None
-    assert machine.state.current_step == 1
-    logger.critical("[IMP:9][test] start_step marks phase running — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · complete_step marks step done with optional hash
-# · Scenario: Call complete_step(1, hash_val="abc") → step status=done, hash set
-# · Last fail: N/A (new test)
-# · Remove if: complete_step logic changes
-@ldd_trajectory
-def test_complete_step(caplog, machine):
-    """complete_step should mark first phase as done with hash (phase-based key)."""
-    machine.setup_state(mode="init", node="test")
-    machine.start_step(1)
-    machine.complete_step(1, hash_val="abc123")
-    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[0]  # system_bootstrap
-    assert machine.state.steps[phase_name].status == "done"
-    assert machine.state.steps[phase_name].hash == "abc123"
-    logger.critical("[IMP:9][test] complete_step marks phase done — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · complete_step works without prior start_step
-# · Scenario: Call complete_step directly → creates step entry, marks done
-# · Last fail: N/A (new test)
-# · Remove if: complete_step auto-creation changes
-@ldd_trajectory
-def test_complete_step_without_start(caplog, machine):
-    """complete_step should create phase entry if not started (phase-based key)."""
-    machine.complete_step(5, hash_val="xyz")
-    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[4]  # node_configuration (5th phase)
-    assert phase_name in machine.state.steps
-    assert machine.state.steps[phase_name].status == "done"
-    logger.critical("[IMP:9][test] complete_step auto-creates phase entry — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · skip_step marks step as skipped with reason
-# · Scenario: Call skip_step(3, "TOR_DISABLED") → step status=skipped, reason set
-# · Last fail: N/A (new test)
-# · Remove if: skip_step logic changes
-@ldd_trajectory
-def test_skip_step(caplog, machine):
-    """skip_step should mark phase as skipped with reason (phase-based key)."""
-    machine.skip_step(3, reason="TOR_DISABLED")
-    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[2]  # platform_setup (3rd phase)
-    assert machine.state.steps[phase_name].status == "skipped"
-    assert machine.state.steps[phase_name].reason == "TOR_DISABLED"
-    logger.critical("[IMP:9][test] skip_step marks phase skipped — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · fail_step marks step as failed and collects error
-# · Scenario: Call fail_step(2, "apt-get failed") → step status=failed, error added
-# · Last fail: N/A (new test)
-# · Remove if: fail_step logic changes
-@ldd_trajectory
-def test_fail_step(caplog, machine):
-    """fail_step should mark phase as failed and collect error (phase-based key)."""
-    machine.fail_step(2, "apt-get failed: package not found")
-    phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[1]  # user_accounts (2nd phase)
-    assert machine.state.steps[phase_name].status == "failed"
-    assert machine.state.steps[phase_name].error == "apt-get failed: package not found"
-    assert len(machine.state.errors) == 1
-    assert "Step 2" in machine.state.errors[0]
-    logger.critical("[IMP:9][test] fail_step marks phase failed with error — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · all transitions persist to state file
-# · Scenario: start → complete steps, assert state file reflects transitions
-# · Last fail: N/A (new test)
-# · Remove if: save-on-transition logic changes
-@ldd_trajectory
-def test_transition_persists_to_file(caplog, state_file):
-    """Step transitions should persist to state file via save()."""
-    m = sm.StateMachine(state_file_path=str(state_file))
-    m.setup_state(mode="init", node="test")
-    m.start_step(1)
-    m.complete_step(1, hash_val="abc")
-    m.skip_step(2, reason="CONTENT_UNCHANGED")
-    m.fail_step(3, "error")
-
-    saved = json.loads(state_file.read_text())
-    init_phases = sm.BootstrapPhase.INIT_PHASE_ORDER
-    # After refactor, state.json uses phase-based keys
-    assert saved["steps"][init_phases[0]]["status"] == "done"  # system_bootstrap
-    assert saved["steps"][init_phases[1]]["status"] == "skipped"  # user_accounts
-    assert saved["steps"][init_phases[1]]["reason"] == "CONTENT_UNCHANGED"
-    assert saved["steps"][init_phases[2]]["status"] == "failed"  # platform_setup
-    assert len(saved["errors"]) == 1
-    logger.critical("[IMP:9][test] Transitions persisted to state file (phase-based keys) — OK")
+def test_step_api_removed(caplog):
+    """B1 R5: удалённый step-API не существует (hasattr False)."""
+    removed_methods = [
+        "start_step",
+        "complete_step",
+        "skip_step",
+        "fail_step",
+        "get_current_step",
+        "_is_step_done",
+        "_is_step_skipped",
+        "_hash_changed",
+        "_check_precondition",
+        "_check_postcondition",
+        "_step_name",
+    ]
+    for method in removed_methods:
+        assert not hasattr(sm.StateMachine, method), f"B1 FAIL: {method} должен быть удалён (removed API)"
+    assert not hasattr(sm, "StateTransitionError"), "B1 FAIL: StateTransitionError должен быть удалён (removed API)"
+    # Живой API сохраняется: execute_phase/setup_state/phase_is_done/execute_phase
+    assert hasattr(sm.StateMachine, "execute_phase"), "execute_phase должен сохраниться"
+    assert hasattr(sm.StateMachine, "setup_state"), "setup_state должен сохраниться"
+    logger.critical("[IMP:9][test] B1 step-API удалён (hasattr=False) — OK")
 
 
 # endregion
@@ -354,79 +288,12 @@ def test_step_hash_handles_missing_file(caplog, tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# region Tests: Resume logic
+# region Tests: Resume logic (REMOVED API — волна 118 B1)
 # ═══════════════════════════════════════════════════════════════════
-
-
-# 🧪 TRAP[TEST] · Regression · get_current_step returns 1 when no steps completed
-# · Scenario: Fresh state with current_step=0 → get_current_step returns 1
-# · Last fail: N/A (new test)
-# · Remove if: resume logic changes
-@ldd_trajectory
-def test_get_current_step_fresh(caplog, machine):
-    """get_current_step should return 1 for fresh state."""
-    machine.setup_state(mode="init", node="test")
-    next_step = machine.get_current_step()
-    assert next_step == 1
-    logger.critical("[IMP:9][test] get_current_step returns 1 for fresh state — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · get_current_step returns first pending step after partial run
-# · Scenario: Steps 1-3 done, step 4 pending → get_current_step returns 4
-# · Last fail: N/A (new test)
-# · Remove if: resume logic changes
-@ldd_trajectory
-def test_get_current_step_after_partial_run(caplog, machine):
-    """get_current_step should return first pending step."""
-    machine.setup_state(mode="init", node="test")
-    # start_step() advances current_step — required for get_current_step() to find next
-    machine.start_step(1)
-    machine.complete_step(1, hash_val="a")
-    machine.start_step(2)
-    machine.complete_step(2, hash_val="b")
-    machine.start_step(3)
-    machine.complete_step(3, hash_val="c")
-    next_step = machine.get_current_step()
-    assert next_step == 4
-    logger.critical("[IMP:9][test] get_current_step returns first pending — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · get_current_step returns None when all steps done
-# · Scenario: All steps completed → get_current_step returns None
-# · Last fail: N/A (new test)
-# · Remove if: resume logic changes
-@ldd_trajectory
-def test_get_current_step_all_done(caplog, machine):
-    """get_current_step should return None when all phases done."""
-    phases = sm.BootstrapPhase.INIT_PHASE_ORDER
-    machine.setup_state(mode="init", node="test")
-    for i in range(1, len(phases) + 1):
-        machine.start_step(i)
-        machine.complete_step(i)
-    next_step = machine.get_current_step()
-    assert next_step is None
-    logger.critical("[IMP:9][test] get_current_step None when all done — OK")
-
-
-# 🧪 TRAP[TEST] · Regression · get_current_step returns failed step for retry
-# · Scenario: Step 4 failed → get_current_step returns 4 (for retry)
-# · Last fail: N/A (new test)
-# · Remove if: resume retry logic changes
-@ldd_trajectory
-def test_get_current_step_returns_failed_step(caplog, machine):
-    """get_current_step should return failed step for retry."""
-    machine.setup_state(mode="init", node="test")
-    machine.start_step(1)
-    machine.complete_step(1)
-    machine.start_step(2)
-    machine.complete_step(2)
-    machine.start_step(3)
-    machine.complete_step(3)
-    machine.start_step(4)
-    machine.fail_step(4, "network error")
-    next_step = machine.get_current_step()
-    assert next_step == 4
-    logger.critical("[IMP:9][test] get_current_step returns failed step for retry — OK")
+# Волна 118 B1: get_current_step УДАЛЁН (0 callers — run_init/run_update проходят фазы
+# последовательно через execute_phase + phase_is_done; current_step честно обновляется
+# через cli._mark_phase_success). Тесты на get_current_step помечены removed API.
+# R5 negative-покрытие: test_step_api_removed (hasattr(get_current_step) is False).
 
 
 # endregion
@@ -696,12 +563,9 @@ def test_force_reset(caplog, state_file):
     """reset() should clear state and remove state file."""
     m = sm.StateMachine(state_file_path=str(state_file))
     m.setup_state(mode="init", node="test")
-    m.start_step(1)
-    m.complete_step(1)
-    m.start_step(2)
-    m.complete_step(2)
-    m.start_step(3)
-    m.complete_step(3)
+    # Волна 118 B1: step-API удалён — состояние фазы выставляем через cli._mark_phase_success
+    for i, pv in enumerate(sm.BootstrapPhase.INIT_PHASE_ORDER[:3], 1):
+        cli._mark_phase_success(m, pv, current_index=i)
     assert m.state.current_step == 3
 
     m.reset()
@@ -792,9 +656,10 @@ def test_validate_bootstrap_env_custom_vars(caplog, machine, monkeypatch):
 def test_report_format(caplog, machine):
     """report() should return valid JSON with required fields."""
     machine.setup_state(mode="init", node="test-node")
-    machine.complete_step(1, hash_val="a")
-    machine.complete_step(2, hash_val="b")
-    machine.skip_step(3, reason="TOR_DISABLED")
+    cli._mark_phase_success(machine, sm.BootstrapPhase.INIT_PHASE_ORDER[0], current_index=1)
+    cli._mark_phase_success(machine, sm.BootstrapPhase.INIT_PHASE_ORDER[1], current_index=2)
+    machine.state.steps[sm.BootstrapPhase.INIT_PHASE_ORDER[2]].status = "skipped"
+    machine.state.steps[sm.BootstrapPhase.INIT_PHASE_ORDER[2]].reason = "TOR_DISABLED"
     machine.add_warning("Non-critical warning")
     machine.add_warning("Another warning")
 
@@ -833,8 +698,9 @@ def test_tor_conditional_skip(caplog, machine, monkeypatch):
     monkeypatch.setenv("TOR_ENABLED", "false")
     machine.setup_state(mode="init", node="test")
     phase_name = sm.BootstrapPhase.INIT_PHASE_ORDER[2]  # platform_setup (3rd phase)
-    machine.start_step(3)
-    machine.skip_step(3, reason="TOR_DISABLED")
+    # Волна 118 B1: step-API удалён — статус фазы выставляем напрямую
+    machine.state.steps[phase_name].status = "skipped"
+    machine.state.steps[phase_name].reason = "TOR_DISABLED"
 
     assert machine.state.steps[phase_name].status == "skipped"
     assert machine.state.steps[phase_name].reason == "TOR_DISABLED"
@@ -940,13 +806,11 @@ def test_phase_keys_load(caplog, state_file):
 
     machine = sm.StateMachine(state_file_path=str(state_file))
 
-    # Verify phase-based key lookup
-    assert machine._is_step_done(1) is True, f"{init_phases[0]} (phase 1) should be done"
-    assert machine._is_step_done(4) is False, f"{init_phases[3]} (phase 4) should be pending"
-
-    # Verify get_current_step returns next pending
-    next_step = machine.get_current_step()
-    assert next_step == 4, f"Expected next phase 4 ({init_phases[3]}), got {next_step}"
+    # Verify phase-based key lookup (волна 118 B1: _is_step_done удалён → phase_is_done канон)
+    assert sm.phase_is_done(machine.state.steps[init_phases[0]]) is True, f"{init_phases[0]} (phase 1) should be done"
+    assert sm.phase_is_done(machine.state.steps[init_phases[3]]) is False, (
+        f"{init_phases[3]} (phase 4) should be pending"
+    )
 
     logger.critical("[IMP:9][test] Phase-based keys loaded correctly — phase 1 done, phase 4 pending")
 
@@ -975,15 +839,12 @@ def test_shell_written_state_json(caplog, state_file):
 
     machine = sm.StateMachine(state_file_path=str(state_file))
 
-    # Verify phases 1-5 are done by index
+    # Verify phases 1-5 are done by index (волна 118 B1: _is_step_done удалён → phase_is_done канон)
     for i in range(1, 6):
-        assert machine._is_step_done(i) is True, f"Phase {i} should be done"
+        assert sm.phase_is_done(machine.state.steps[init_phases[i - 1]]) is True, f"Phase {i} should be done"
 
-    # Phase 6 is running → _is_step_done should be False
-    assert machine._is_step_done(6) is False
-
-    # get_current_step should return 6 (running phase → re-run)
-    assert machine.get_current_step() == 6, f"Expected next phase 6, got {machine.get_current_step()}"
+    # Phase 6 is running → phase_is_done should be False
+    assert sm.phase_is_done(machine.state.steps[init_phases[5]]) is False
 
     logger.critical("[IMP:9][test] State.json with phase-based keys loads and resumes correctly")
 
@@ -1021,10 +882,9 @@ def test_phase_key_misalignment_prevented(caplog, state_file):
 
     machine = sm.StateMachine(state_file_path=str(state_file))
 
-    # Phase 4 should be pending
-    assert machine._is_step_done(4) is False, f"Phase 4 ({init_phases[3]}) should be pending"
-    assert machine.get_current_step() == 4, (
-        f"Expected next phase 4 ({init_phases[3]}), got {machine.get_current_step()}"
+    # Phase 4 should be pending (волна 118 B1: _is_step_done/get_current_step удалены → phase_is_done канон)
+    assert sm.phase_is_done(machine.state.steps[init_phases[3]]) is False, (
+        f"Phase 4 ({init_phases[3]}) should be pending"
     )
 
     # ── REMOVED (DevPlan 091 Wave B, AC8): Scenario B — backward-compat migration ──
@@ -1215,8 +1075,8 @@ def test_phase_with_warnings_not_done(caplog, state_file, mock_subprocess, env_v
     phi1_reloaded = m2.state.steps[sm.BootstrapPhase.SYSTEM_BOOTSTRAP]
     assert phi1_reloaded.status == "done_with_warnings", "Перезагрузка state.json должна сохранить done_with_warnings"
     # В run_init loop done_with_warnings НЕ склипается → фаза перевыполняется
-    # (проверяем через get_current_step — первый pending/не-done индекс = 1)
-    assert m2.get_current_step() == 1, "done_with_warnings фаза должна перевыполняться (get_current_step=1)"
+    # (проверяем через phase_is_done — канон done-контракта, волна 118 B1: get_current_step удалён)
+    assert sm.phase_is_done(phi1_reloaded) is False, "done_with_warnings фаза должна перевыполняться (НЕ done)"
 
     logger.critical("[IMP:9][test] WARN-фаза → done_with_warnings + перевыполнение — OK")
 

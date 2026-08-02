@@ -68,7 +68,6 @@ COPY scripts/retention.py        /usr/local/bin/retention.py
 
 # Copy healthcheck scripts
 COPY healthcheck.sh  /usr/local/bin/healthcheck.sh
-COPY ready-check.sh  /usr/local/bin/ready-check.sh
 
 # Copy crontab
 COPY scripts/crontab /etc/cron.d/platform-backup
@@ -82,8 +81,7 @@ RUN chmod 0644 /etc/cron.d/platform-backup && \
       /usr/local/bin/backup-app-data.sh \
       /usr/local/bin/backup-cleanup.sh \
       /usr/local/bin/upload-s3.sh \
-      /usr/local/bin/healthcheck.sh \
-      /usr/local/bin/ready-check.sh
+      /usr/local/bin/healthcheck.sh
 
 # [IMP:8][backup-cron][Dockerfile] No EXPOSE — backup-net internal only
 # ENTRYPOINT: start cron in foreground (Docker requires PID 1 to be long-lived)

@@ -508,7 +508,7 @@ def test_add_context_success(caplog, tmp_path):
     assert result is True
 
     node2 = NodeYaml(str(yaml_path))
-    contexts = node2.get_contexts()
+    contexts = node2.get("contexts")
     names = [c.get("name") for c in contexts if isinstance(c, dict)]
     assert "prod" in names
     assert len(contexts) == 2  # myorg + prod
@@ -546,7 +546,7 @@ def test_add_context_creates_section(caplog, tmp_path):
     node.add_context(name="first-ctx")
 
     node2 = NodeYaml(str(yaml_path))
-    contexts = node2.get_contexts()
+    contexts = node2.get("contexts")
     assert len(contexts) == 1
     assert contexts[0].get("name") == "first-ctx"
 

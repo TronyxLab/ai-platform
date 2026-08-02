@@ -105,7 +105,7 @@ def write_htpasswd_file(
     # ·   каждый вызов → existing == expected всегда False → вечная перезапись.
     # · Fix: при существующем файле извлекаем соль ($apr1$SALT$...), пересчитываем
     # ·   entry с фиксированной солью, сравниваем.
-    # · Ported from: shell _ensure_htpasswd_generated() L221-241
+    # · Ported from: shell _ensure_htpasswd_generated() L221-241 (shell-фасад удалён волна 118 B6)
     try:
         htpasswd_path = Path(htpasswd_file)
         existing = ""

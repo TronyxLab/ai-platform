@@ -52,7 +52,7 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/modules/*/healthcheck.sh",
     "core/modules/*/hooks/*.sh",
     "core/modules/*/install.sh",
-    "core/modules/*/ready-check.sh",
+    # core/modules/*/ready-check.sh УБРАН (волна 118 B7) — оба файла удалены (0 runtime-вызовов)
     "core/modules/*/scripts/*.sh",
     "core/modules/*/config/*.sh",
     "core/modules/*/config/*/*.sh",

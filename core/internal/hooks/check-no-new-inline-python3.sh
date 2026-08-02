@@ -57,7 +57,6 @@ for file in $staged_files; do
             echo "Language policy violation: new inline python3 blocked."
             echo "  -> Extract logic to core/internal/scripts/<module>.py"
             echo "  -> Or use existing core/internal/scripts/yaml_query.py for YAML/JSON access"
-            echo "  -> Or use core/internal/scripts/vps_status_check.py for VPS status JSON"
             echo "  -> See AGENTS.md §Языковая политика (Tier 1 trigger)"
             violations=$((violations + 1))
         fi

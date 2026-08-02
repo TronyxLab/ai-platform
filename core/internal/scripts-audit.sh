@@ -32,7 +32,7 @@ EXCEPTIONS=(
     "core/modules/*/healthcheck.sh"     # Module healthchecks
     "core/modules/*/hooks/*.sh"         # Module hooks
     "core/modules/*/install.sh"         # Module installers
-    "core/modules/*/ready-check.sh"     # Module readiness checks
+    # core/modules/*/ready-check.sh УБРАН (волна 118 B7) — оба файла удалены (0 runtime-вызовов)
     "core/modules/*/scripts/*.sh"       # Module scripts
     "core/modules/*/config/*.sh"        # Module configs
     "core/modules/*/config/*/*.sh"      # Nested module configs

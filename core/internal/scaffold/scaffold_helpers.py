@@ -37,6 +37,13 @@ from pathlib import Path
 from typing import Any
 
 # DevPlan 118 C3: единый loader COMPOSE_PROFILES — shared/compose_profiles.py (SoT platform-infra.yaml).
+# ⚠️ TRAP[BUG] · 2026-08-02 · P1 · функция, импортированная под именем модуля
+# · Symptom: adopt-project падал с AttributeError: 'function' object has no attribute 'load_profiles'
+# · Root: `from ...compose_profiles import load_profiles as compose_profiles` (функция), затем
+# ·   `compose_profiles.load_profiles()` — вызов атрибута на функции. Канон docker_orchestrator:
+# ·   `import load_profiles as compose_profiles_load_profiles` (функция без .load_profiles()).
+# · Fix: вызов `compose_profiles()` (функция напрямую).
+# · Prevention: не алиасить функцию под имя модуля; вызывать функцию напрямую.
 from core.internal.shared.compose_profiles import load_profiles as compose_profiles
 
 logger = logging.getLogger(__name__)
@@ -62,7 +69,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 ##   - Raises readable error if file or key missing — adopt must not proceed with wrong profiles
 def load_compose_profiles_from_platform_env() -> str:
     """Return COMPOSE_PROFILES from shared loader (SoT platform-infra.yaml, C3)."""
-    profiles = compose_profiles.load_profiles()
+    profiles = compose_profiles()
     if not profiles:
         raise KeyError(
             "[IMP:10][scaffold_helpers] env_defaults.COMPOSE_PROFILES missing in platform-infra.yaml (SoT) — "

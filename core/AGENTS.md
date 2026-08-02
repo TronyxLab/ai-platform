@@ -50,7 +50,6 @@
 | `make generate-entrypoint-manifest` | Генерация entrypoint-manifest.yaml | make generate-entrypoint-manifest | python3 core/internal/scripts/generate_entrypoint_manifest.py |
 | `make generate-agents-md` | Генерация core/AGENTS.md | make generate-agents-md | python3 core/internal/scripts/generate_agents_md.py → core/AGENTS.md |
 | `make generate-litellm-config` | Генерация litellm-config.yml | make generate-litellm-config | python3 core/internal/llm/config_renderer.py → litellm-config.yml |
-| `make generate-manifests-atomic` | Атомарная генерация всех манифестов | make generate-manifests-atomic | mktemp → Chain A+B+C → mv |
 | `make sync-env-defaults` | Генерация .env.example из SoT | make sync-env-defaults | core/internal/scripts/sync_env_defaults.py → .env.example |
 | `make check-env-defaults` | Проверка актуальности .env.example | make check-env-defaults | core/internal/scripts/sync_env_defaults.py --check |
 | `make new-project` | Создание проекта из шаблона | make new-project NAME=\<n\> TEMPLATE=\<t\> | core/entrypoints/scaffold.sh → core/internal/scaffold/add-project.sh → core/internal/scaffold/add-vhost.sh |

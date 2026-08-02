@@ -247,7 +247,9 @@ repos:
 
       - id: commit-msg
         name: Conventional Commits
-        entry: core/entrypoints/check-commit-msg.sh
+        # Волна 118 B9: check-commit-msg.sh не существует — реальный модуль check_commit_msg.py
+        # (Python, Strangler-Fig language policy). .git/hooks/commit-msg уже вызывает его напрямую.
+        entry: core/entrypoints/check_commit_msg.py
         language: script
         stages: [commit-msg]
 

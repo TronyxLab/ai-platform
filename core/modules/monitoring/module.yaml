@@ -26,13 +26,13 @@ restart: unless-stopped
 
 interfaces:
   - healthcheck
-  - deploy-hook
 
 spool_dir: /var/lib/platform/grafana-data
 spool_volume: grafana-data
 
-hooks:
-  on_project_deploy: hooks/on-project-deploy.sh
+# Волна 118 B8: hooks.on_project_deploy УДАЛЁН — hook был тонким фасадом над
+# monitoring_config_renderer.py (Python-эквивалент); runtime-путь — make render-monitoring
+# (U-65) + DeployOrchestrator post-deploy chain (только зарегистрированные hooks вызываются).
 
 resources:
   limits:

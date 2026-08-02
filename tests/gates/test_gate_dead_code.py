@@ -83,7 +83,6 @@ _EXCEPTION_PREFIXES: tuple[str, ...] = (
 _EXCEPTION_SUFFIXES: tuple[str, ...] = (
     "healthcheck.sh",  # iterated by healthcheck entrypoint via glob
     "install.sh",  # called from module Makefile
-    "ready-check.sh",  # called from compose readiness probe
 )
 _EXCEPTION_PATHS: tuple[str, ...] = (
     # hermes-agent build/context scripts — called from Dockerfile, not from shell
@@ -100,8 +99,10 @@ _EXCEPTION_PATHS: tuple[str, ...] = (
     "core/internal/bootstrap/install-acme.sh",
     "core/internal/bootstrap/install-docker.sh",
     "core/internal/bootstrap/install-tor-proxy.sh",
-    "core/internal/bootstrap/secrets-init.sh",
     "core/internal/bootstrap/setup-node.sh",
+    # Волна 118 B10: secrets-init.sh УДАЛЁН из исключений — файл удалён (DevPlan 087/091)
+    # Волна 118 B7: ready-check.sh УДАЛЁН из _EXCEPTION_SUFFIXES — оба файла удалены
+    # (postgres/backup-cron; только COPY в Dockerfile, 0 runtime-вызовов)
 )
 
 
@@ -940,3 +941,36 @@ def test_no_ssl_provision_references(caplog) -> None:
 
 
 # endregion FUNC_test_no_ssl_provision_references
+
+
+# region FUNC_test_removed_exceptions_absent
+## @purpose  R5 negative (волна 118 B7/B10): secrets-init.sh и ready-check.sh удалены —
+##           исключения из _EXCEPTION_PATHS/_EXCEPTION_SUFFIXES больше не должны
+##           существовать (файлы удалены DevPlan 087/091 + волна 118 B7).
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · B7/B10 — удалённые исключения отсутствуют в _EXCEPTION_*
+# · Scenario: secrets-init.sh и ready-check.sh удалены из файловой системы → исключения
+#   для них не должны присутствовать в _EXCEPTION_PATHS/_EXCEPTION_SUFFIXES
+# · Last fail: _EXCEPTION_PATHS содержал core/internal/bootstrap/secrets-init.sh (файл удалён
+#   DevPlan 087/091) и _EXCEPTION_SUFFIXES содержал ready-check.sh (оба файла удалены волна 118 B7)
+# · Remove if: ready-check.sh/secrets-init.sh будут восстановлены как живые скрипты
+
+
+@pytest.mark.gate
+@ldd_trajectory
+def test_removed_exceptions_absent(caplog) -> None:
+    """R5: исключения для удалённых файлов не должны существовать."""
+    assert "secrets-init.sh" not in " ".join(_EXCEPTION_PATHS), (
+        "B10 FAIL: secrets-init.sh исключение должно быть удалено (файл удалён DevPlan 087/091)"
+    )
+    assert "ready-check.sh" not in _EXCEPTION_SUFFIXES, (
+        "B7 FAIL: ready-check.sh исключение должно быть удалено (оба файла удалены волна 118 B7)"
+    )
+    assert not any(path.endswith("secrets-init.sh") for path in _EXCEPTION_PATHS), (
+        "B10 FAIL: secrets-init.sh всё ещё в _EXCEPTION_PATHS"
+    )
+    logger.info("[IMP:9][test_removed_exceptions_absent] PASS: secrets-init/ready-check исключения удалены (B7/B10)")
+
+
+# endregion FUNC_test_removed_exceptions_absent

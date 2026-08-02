@@ -1217,28 +1217,21 @@ class TestStatusPageNewFeatures:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: secrets.sh — htpasswd generation (DevPlan 102: thin shell facade)
+# TESTS: secrets.sh — htpasswd facade (REMOVED API — волна 118 B6)
 # ═══════════════════════════════════════════════════════════════════
+# Волна 118 B6: _ensure_htpasswd_generated и step_12b_ensure_secrets УДАЛЕНЫ из
+# secrets.sh (0 callers; бизнес-логика — secrets_manager.py htpasswd/ensure, вызывается
+# из phases.py напрямую). R5 negative: type -t = пусто.
 
 
-class TestHtpasswdGeneration:
-    """Tests for _ensure_htpasswd_generated() in secrets.sh (thin facade, DevPlan 102).
+class TestHtpasswdGenerationRemoved:
+    """R5 negative: _ensure_htpasswd_generated/step_12b_ensure_secrets удалены (B6)."""
 
-    The shell function is now a ≤12 LOC facade that delegates to
-    `python3 secrets_manager.py htpasswd --email --password --htpasswd-file`.
-    APR1 hashing + salt-extraction idempotency live in the Python core
-    (_write_htpasswd_file, TRAP[BUG] 2026-07-31). These tests exercise the
-    shell→Python delegation end-to-end via subprocess (existing pattern).
-    """
-
-    def test_htpasswd_generation_creates_valid_file(self, tmp_path, caplog):
-        """_ensure_htpasswd_generated creates a valid .htpasswd-platform file."""
-        caplog.set_level(0)
-
-        htpasswd_file = tmp_path / ".htpasswd-platform"
-        email = "admin@test.local"
-        password = "test-password-123"
-
+    def test_htpasswd_facades_removed(self, tmp_path):
+        # 🧪 TRAP[TEST] · NEGATIVE (R5) · B6 — secrets.sh фасады удалены
+        # · Scenario: source secrets.sh → type -t _ensure_htpasswd_generated → пусто (не функция)
+        # · Last fail: _ensure_htpasswd_generated существовал до волны 118 B6 (secrets.sh L55-67)
+        # · Remove if: shell htpasswd фасад будет восстановлен
         secrets_script = Path(__file__).parent.parent / "core" / "lib" / "secrets.sh"
         result = subprocess.run(
             [
@@ -1246,141 +1239,26 @@ class TestHtpasswdGeneration:
                 "-c",
                 textwrap.dedent(f"""\
                 set -euo pipefail
-                export PLATFORM_MASTER_EMAIL="{email}"
-                export PLATFORM_MASTER_PASSWORD="{password}"
-                export HTPASSWD_FILE="{htpasswd_file}"
-                # secrets.sh требует CORE_DIR из окружения (контракт — paths.sh консьюмера)
-                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
-                step_start() {{ echo "[IMP:7][htpasswd][start] $*" >&2; }}
-                step_done() {{ echo "[IMP:9][htpasswd][done] $*" >&2; }}
-                log_step() {{ echo "[IMP:7][htpasswd][log] $*" >&2; }}
-                source "{secrets_script}"
-                _ensure_htpasswd_generated
-                echo "HTPASSWD_FILE=$HTPASSWD_FILE"
-            """),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        print("--- LDD TRAJECTORY (IMP:7-10) ---")
-        for line in result.stderr.split("\n"):
-            if "[IMP:" in line:
-                imp_level = int(line.split("[IMP:")[1].split("]")[0])
-                if imp_level >= 7:
-                    print(line)
-        print("--- END LDD TRAJECTORY ---")
-        print("STDOUT:", result.stdout)
-
-        assert result.returncode == 0, f"htpasswd generation failed: {result.stderr}"
-        assert htpasswd_file.exists(), f"htpasswd file not created at {htpasswd_file}"
-        content = htpasswd_file.read_text().strip()
-        assert email in content, f"Email not found in htpasswd file: {content}"
-        assert "$apr1$" in content, f"APR1 hash not found in htpasswd file: {content}"
-        # Thin-facade contract (DevPlan 102 TASK-5): HTPASSWD_FILE exported by the facade
-        assert "HTPASSWD_FILE=" in result.stdout, f"Facade must export HTPASSWD_FILE, got stdout: {result.stdout}"
-
-    def test_htpasswd_generation_idempotent(self, tmp_path):
-        """Second call to _ensure_htpasswd_generated is a no-op.
-
-        Thin-facade contract (DevPlan 102): idempotency now guaranteed by the Python
-        core's salt extraction (_write_htpasswd_file, TRAP[BUG] 2026-07-31) — the
-        facade delegates both calls to `secrets_manager.py htpasswd`.
-        """
-        htpasswd_file = tmp_path / ".htpasswd-platform"
-        email = "admin@test.local"
-        password = "test-password-123"
-
-        secrets_script = Path(__file__).parent.parent / "core" / "lib" / "secrets.sh"
-
-        result1 = subprocess.run(
-            [
-                "bash",
-                "-c",
-                textwrap.dedent(f"""\
-                set -euo pipefail
-                export PLATFORM_MASTER_EMAIL="{email}"
-                export PLATFORM_MASTER_PASSWORD="{password}"
-                export HTPASSWD_FILE="{htpasswd_file}"
-                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
                 step_start() {{ :; }}
                 step_done() {{ :; }}
                 log_step() {{ :; }}
                 source "{secrets_script}"
-                _ensure_htpasswd_generated
-                md5sum "{htpasswd_file}" | cut -d' ' -f1
+                if [[ "$(type -t _ensure_htpasswd_generated)" == "function" ]] \
+                    || [[ "$(type -t step_12b_ensure_secrets)" == "function" ]]; then
+                    echo "[IMP:10][test] FAIL: htpasswd facades still defined" >&2
+                    exit 1
+                fi
+                echo "[IMP:9][test] secrets.sh htpasswd facades REMOVED — OK" >&2
+                exit 0
             """),
             ],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        assert result1.returncode == 0, f"First call failed: {result1.stderr}"
-        first_md5 = result1.stdout.strip()
-
-        result2 = subprocess.run(
-            [
-                "bash",
-                "-c",
-                textwrap.dedent(f"""\
-                set -euo pipefail
-                export PLATFORM_MASTER_EMAIL="{email}"
-                export PLATFORM_MASTER_PASSWORD="{password}"
-                export HTPASSWD_FILE="{htpasswd_file}"
-                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
-                step_start() {{ :; }}
-                step_done() {{ :; }}
-                log_step() {{ :; }}
-                source "{secrets_script}"
-                _ensure_htpasswd_generated
-                md5sum "{htpasswd_file}" | cut -d' ' -f1
-            """),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        print("STDERR:", result.stderr)
+        assert result.returncode == 0, f"htpasswd facades not removed: {result.stderr}"
+        assert "REMOVED" in result.stderr, f"no REMOVED marker: {result.stderr}"
+        __import__("logging").getLogger(__name__).critical(
+            "[IMP:9][test_htpasswd_facades_removed] PASS: secrets.sh htpasswd facades removed (B6 R5)"
         )
-        assert result2.returncode == 0, f"Second call failed: {result2.stderr}"
-        second_md5 = result2.stdout.strip()
-
-        assert first_md5 == second_md5, f"Idempotent check failed: md5 changed ({first_md5} → {second_md5})"
-
-    def test_master_creds_fallback_resolution(self, tmp_path):
-        """SERVICE_SPECIFIC_PASS empty → fallback to PLATFORM_MASTER_PASSWORD."""
-        htpasswd_file = tmp_path / ".htpasswd-fallback"
-        email = "admin@test.local"
-        password = "fallback-password-456"
-
-        secrets_script = Path(__file__).parent.parent / "core" / "lib" / "secrets.sh"
-
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                textwrap.dedent(f"""\
-                set -euo pipefail
-                export PLATFORM_MASTER_EMAIL="{email}"
-                export PLATFORM_MASTER_PASSWORD="{password}"
-                SERVICE_PASSWORD="${{MONITORING_AUTH_PASSWORD:-$PLATFORM_MASTER_PASSWORD}}"
-                export HTPASSWD_FILE="{htpasswd_file}"
-                export CORE_DIR="$(cd "$(dirname "{secrets_script}")/.." && pwd)"
-                step_start() {{ :; }}
-                step_done() {{ :; }}
-                log_step() {{ :; }}
-                source "{secrets_script}"
-                _ensure_htpasswd_generated
-                echo "SERVICE_PASSWORD=$SERVICE_PASSWORD"
-                echo "HTPASSWD_FILE=$HTPASSWD_FILE"
-            """),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        assert result.returncode == 0, f"Fallback test failed: {result.stderr}"
-        assert "SERVICE_PASSWORD=fallback-password-456" in result.stdout, (
-            f"SERVICE_PASSWORD should fall back to PLATFORM_MASTER_PASSWORD, got: {result.stdout}"
-        )
-        assert htpasswd_file.exists(), "htpasswd file should be created with fallback password"

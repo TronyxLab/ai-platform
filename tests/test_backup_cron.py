@@ -441,49 +441,26 @@ def test_liveness_uses_pgrep_cron(caplog) -> None:
 
 
 @ldd_trajectory
-def test_readiness_separate_from_liveness(caplog) -> None:
-    """ready-check.sh must be a SEPARATE distinct file from healthcheck.sh (06 §12)."""
+def test_readiness_check_removed(caplog) -> None:
+    """ready-check.sh УДАЛЁН (волна 118 B7) — 0 runtime-вызовов (только COPY в Dockerfile).
+
+    ## @purpose  R5 negative: файл удалён из core/modules/backup-cron/; Dockerfile чист.
+    ## @rationale В 118 B7 ready-check.sh удалён (мёртвый — только COPY в образ, 0 вызовов
+    ##            из compose/nginx). R5: файл и Dockerfile-COPY должны отсутствовать.
+    """
     with caplog.at_level(logging.DEBUG):
-        logger.info("[IMP:7][test_backup_cron][readiness_separate] START")
+        logger.info("[IMP:7][test_backup_cron][readiness_removed] START: B7 R5 — ready-check.sh удалён")
 
-        assert os.path.isfile(READY_CHECK_SH), f"ready-check.sh not found: {READY_CHECK_SH}"
-        assert os.path.isfile(HEALTHCHECK_SH), f"healthcheck.sh not found: {HEALTHCHECK_SH}"
-
-        with open(HEALTHCHECK_SH) as f:
-            hc_content = f.read()
-        with open(READY_CHECK_SH) as f:
-            rc_content = f.read()
-        are_distinct = hc_content != rc_content
-
-        logger.critical(
-            "[IMP:9][test_backup_cron][readiness_separate] ASSERT: distinct=%s (expected True)",
-            are_distinct,
+        assert not os.path.isfile(READY_CHECK_SH), (
+            f"B7 FAIL: ready-check.sh должен быть удалён (0 callers), найден: {READY_CHECK_SH}"
         )
+        dockerfile = os.path.join(MODULE_DIR, "Dockerfile")
+        if os.path.isfile(dockerfile):
+            with open(dockerfile) as f:
+                content = f.read()
+            assert "ready-check.sh" not in content, "B7 FAIL: Dockerfile всё ещё COPY ready-check.sh"
 
-        assert are_distinct, "ready-check.sh and healthcheck.sh must be distinct scripts (06 §12)"
-
-
-@ldd_trajectory
-def test_readiness_checks_crontab_installed(caplog) -> None:
-    """ready-check.sh must verify crontab file exists (not just pgrep)."""
-    with caplog.at_level(logging.DEBUG):
-        logger.info("[IMP:7][test_backup_cron][readiness_crontab] START")
-
-        with open(READY_CHECK_SH) as f:
-            content = f.read()
-
-        # Readiness must check: pgrep + crontab file existence
-        has_pgrep = "pgrep" in content
-        has_crontab_check = "/etc/cron.d/" in content or "CRONTAB_FILE" in content
-
-        logger.critical(
-            "[IMP:9][test_backup_cron][readiness_crontab] ASSERT: has_pgrep=%s has_crontab_check=%s",
-            has_pgrep,
-            has_crontab_check,
-        )
-
-        assert has_pgrep, "ready-check.sh must use pgrep to verify cron is running"
-        assert has_crontab_check, "ready-check.sh must verify crontab file installation"
+        logger.critical("[IMP:9][test_backup_cron][readiness_removed] PASS: ready-check.sh удалён (B7 R5)")
 
 
 # endregion HEALTHCHECK_TESTS

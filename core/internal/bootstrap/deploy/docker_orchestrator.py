@@ -29,7 +29,7 @@
 ##   2026-07-23 · P0 fix — docker compose build before up -d for modules with build: section
 ##   (status-page served stale container after core-deploy rsync)
 ##   2026-07-24 · W2.T2.1 — added --action deploy-group CLI dispatch + handler in main()
-##   2026-07-24 · W2.T2.4 — integrated content_hash (check_build_needed / save_build_hash)
+##   2026-07-24 · W2.T2.4 — integrated build_cache (check_build_needed / save_build_hash)
 ##             into deploy_docker_module() build section for modules with build: section
 ##   2026-07-24 · W5.T5.1 — enhanced HC fork cycle in deploy_docker_group() with per-module
 ##             pass/fail tracking, IMP:9 logs per module, and summary log with failure names
@@ -77,10 +77,11 @@ import sys
 import time
 from pathlib import Path
 
-# ── Local imports (content_hash.py lives in same deploy/ directory) ──
+# ── Local imports (build_cache.py lives in same deploy/ directory; волна 118 B2:
+#    content_hash.py переименован в build_cache.py — устранение коллизии имён с shared/content_hash.py) ──
 _THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS_DIR))
-from content_hash import check_build_needed, compute_source_hash, save_build_hash
+from build_cache import check_build_needed, compute_source_hash, save_build_hash
 
 # DevPlan 117 D18: единый канон orphan-реконсиляции — orphan_reconciler (batch-подход,
 # один docker ps -a). Локальный per-module orphan-cleanup удалён (дубль логики).

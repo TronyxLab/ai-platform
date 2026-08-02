@@ -147,7 +147,6 @@
 | ✅ | `generate-env-example` | Генерация .env.example |
 | ✅ | `generate-litellm-config` | Генерация litellm-config.yml |
 | ✅ | `generate-manifests` | Генерация всех манифестов |
-| ✅ | `generate-manifests-atomic` | Атомарная генерация всех манифестов |
 | ✅ | `generate-platform-env` | Генерация platform-env.yaml + Python env files |
 | ✅ | `generate-secrets-manifest` | Генерация secrets-manifest.yaml |
 | ✅ | `healthcheck` | Проверка здоровья |

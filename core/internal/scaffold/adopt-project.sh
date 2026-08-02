@@ -15,7 +15,6 @@ PROJECTS_ROOT="${PROJECTS_ROOT:-$(dirname "$PLATFORM_ROOT")}"
 __LOG_PREFIX="adopt-project"
 source "${PLATFORM_ROOT}/core/lib/logging.sh"
 source "${PLATFORM_ROOT}/core/lib/args.sh"
-source "${PLATFORM_ROOT}/core/lib/python_deps.sh"
 
 PROJECT_DIR=""; PROJECT_NAME=""; PROJECT_ORG=""; PROJECT_NODE=""; PROJECT_DOMAIN=""; FORCE=0
 USAGE_SCRIPT="adopt-project.sh"; USAGE_DESC="Adopt an existing project into the ai-platform lifecycle."

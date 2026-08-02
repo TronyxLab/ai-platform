@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: healthcheck library service-check dependency-check module-health check_tcp exec_check
-# STRUCTURE: ┌module healthcheck┐ → ○ poll_until_healthy → ◇ check_docker_health → ◇ check_http → ◇ check_tcp → ◇ exec_check → ⊕ exit 0/1
+# GREP_SUMMARY: healthcheck library service-check dependency-check module-health check_docker_health check_http exec_check
+# STRUCTURE: ┌module healthcheck┐ → ◇ check_docker_health → ◇ check_http → ◇ exec_check → ⊕ exit 0/1
 # ⚠️ Errexit guard: warn if sourced without `set -e` (fail-fast on errors).
 # Uses $- (portable across bash/zsh) instead of [ -o errexit ] (zsh-incompatible).
 case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;; esac
@@ -12,13 +12,14 @@ case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;;
 ## @purpose  Provide composable healthcheck primitives for all platform
 ##           scripts. Eliminates duplicated poll-and-check boilerplate
 ##           across 4+ independent healthcheck implementations.
-## @scope    — poll_until_healthy: universal poll loop with timeout/interval
-##           — check_docker_health: docker container health status
+## @scope    — check_docker_health: docker container health status
 ##           — check_http: HTTP endpoint health check via curl
+##           — exec_check: docker exec command check
 ##           — zero side-effects on source (pure function definitions only)
+##           Волна 118 B6: poll_until_healthy/poll_docker_health/check_tcp УДАЛЕНЫ
+##           (0 callers — поллинг через shared healthcheck_poller (Python, D5) и
+##           модульные healthcheck.sh используют примитивы check_docker_health/check_http)
 ## @input    — __LOG_PREFIX (env var, set before source; default: "healthcheck")
-##           — check_command passed to poll_until_healthy as a string, internally
-##             split into array for safe execution (no eval)
 ## @output   — Structured stderr lines via log_imp (from logging.sh)
 ##           — Return codes: 0=healthy, 1=timeout/unhealthy, 2=starting,
 ##             3=not-found/error
@@ -29,8 +30,6 @@ case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;;
 ## @invariants — MUST NOT execute any code on source (no side-effects)
 ##             — __LOG_PREFIX defaults to "healthcheck" if unset
 ##             — All stderr output MUST go through log_imp (from logging.sh)
-##             — poll_until_healthy MUST accept any bash command as
-##               check_command (executed via array, not eval)
 ##             - check_command exit code determines health (0=healthy, !=0=not)
 ## @rationale Q: Why composable primitives instead of one monolithic check?
 ##            A: Monolithic check functions force every consumer to accept
@@ -39,26 +38,23 @@ case $- in *e*) ;; *) echo "[WARN] healthcheck.sh sourced without set -e" >&2 ;;
 ##            check command) and reuse check_docker_health / check_http as
 ##            building blocks inside poll_until_healthy.
 ## @changes   LAST_CHANGE: 2026-07-07 · T1 — Initial implementation
-## @modulemap — poll_until_healthy  [W:50] Universal poll loop
-##             — check_docker_health [W:30] Docker container health check
+##           2026-08-02 · Волна 118 B6 — poll_until_healthy/poll_docker_health/check_tcp удалены
+## @modulemap — check_docker_health [W:30] Docker container health check
 ##             — check_http          [W:30] HTTP endpoint health check (with timeout)
-##             — check_tcp           [W:20] TCP connectivity check via /dev/tcp
 ##             — exec_check          [W:30] docker exec command check
-## @usecases  — Developer: poll_until_healthy "nginx" "check_http http://localhost:80" 30 2
-##             — Developer: check_docker_health "my_container"
+## @usecases  — Developer: check_docker_health "my_container"
 ##             — Developer: check_http "http://example.com/health" "200,301,302"
 ## @changes   — 2026-07-09 · TASK-10 — Replaced eval with array-based execution for safety;
 ##             check_command string is split into array via IFS read -ra
 ## @changes   — 2026-07-26 · DevPlan 083 — Added check_tcp(), exec_check(); added timeout param to check_http()
+##             (check_tcp удалён волна 118 B6)
 ## @verified  — 2026-07-26 · T1 — check_tcp() + exec_check() + check_http(timeout) added
 ##             (grep -rl "source.*lib/healthcheck.sh" core/modules/*/healthcheck.sh | wc -l → 6;
 ##             platform-secrets has no healthcheck.sh — uses systemd service, not Docker module)
 # endregion MODULE_CONTRACT
-# GREP_SUMMARY: healthcheck, poll, wait_for, docker health, HTTP check, curl, health, liveness, readiness, poll_until_healthy, check_docker_health, check_http
-# STRUCTURE: ▶ ┌SCRIPT_DIR┐ → source logging.sh → ○ poll_until_healthy(name,cmd,timeout,interval) → ┌"${check_cmd[@]}"┐ → ◇ exit 0? → ⎋ 0 | ◇ timeout? → ⎋ 1
-#            └─ ▶ check_docker_health(id) → docker inspect --format ─ ◇ healthy?0 / unhealthy?1 / starting?2 / not-found?3
+# GREP_SUMMARY: healthcheck, poll, wait_for, docker health, HTTP check, curl, health, liveness, readiness, check_docker_health, check_http
+# STRUCTURE: ▶ ┌SCRIPT_DIR┐ → source logging.sh → ◇ check_docker_health(id) → docker inspect --format ─ ◇ healthy?0 / unhealthy?1 / starting?2 / not-found?3
 #            └─ ▶ check_http(url,codes,timeout) → curl -s -o /dev/null -w '%{http_code}' → ◇ code in expected? → ⎋ 0 | ⎋ 1
-#            └─ ▶ check_tcp(host,port,timeout) → timeout bash -c "echo >/dev/tcp/$host/$port" → ◇ success? → ⎋ 0 | ⎋ 1
 #            └─ ▶ exec_check(container,command) → ◇ docker inspect Running → ◇ docker exec command → ◇ exit 0? → ⎋ 0 | ⎋ 1
 
 # ═══════════════════════════════════════════════════════════════════
@@ -81,85 +77,6 @@ source "${_HEALTHCHECK_LIB_DIR}/logging.sh"
 
 # Set default log prefix if not already configured by consumer
 : "${__LOG_PREFIX:=healthcheck}"
-
-# ═══════════════════════════════════════════════════════════════════
-# UNIVERSAL POLL LOOP
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_poll_until_healthy
-## @purpose  Poll a check_command until it exits with 0 or timeout expires.
-##           Universal primitive — accepts any bash command as check.
-## @param $1  Name: human-readable label for logging (e.g. "nginx", "postgres")
-## @param $2  check_command: bash command string to execute via array. Exit 0 = healthy.
-## @param $3  timeout: max wait in seconds (default: 60)
-## @param $4  interval: seconds between retries (default: 5)
-## @io       out: stderr via log_imp — IMP:8 per attempt, IMP:9 on success, IMP:10 on timeout
-## @return   0 if check_command exits 0 before timeout
-##           1 if timeout expires without success
-## @complexity O(n) where n = ceil(timeout / interval)
-## @invariants — check_command is split into array and executed via "${check_cmd[@]}"
-##               — supports simple commands, function names, pipes/redirects not supported
-##                 (use wrapper function for complex pipelines)
-##             — At least one check always runs before timeout comparison
-##             — EPOCHSECONDS used if available (bash 5.0+), else date +%s
-poll_until_healthy() {
-    local name="$1"
-    local check_command="$2"
-    local timeout="${3:-60}"
-    local interval="${4:-5}"
-
-    # Validate required arguments
-    if [ -z "${name}" ] || [ -z "${check_command}" ]; then
-        log_imp 10 "poll_until_healthy" "Invalid arguments: name='${name}' command='${check_command}'"
-        return 1
-    fi
-
-    # ⚠️ TRAP[DECISION] · 2026-07-09 · — · eval replaced with array-based execution
-    # · Rejected: in-shell eval for command strings, complex word-splitting logic
-    # · Reason: eval is a shell injection risk; check_command is trusted but the
-    #   defensive approach is to always use "${check_cmd[@]}" array execution.
-    #   The command string is split into an array via read -ra (simple word splitting
-    #   on IFS). Complex commands with quotes/redirects should use a wrapper function.
-    # · Rev: if check_command needs pipes or redirects, replace with a named function
-    #   that encapsulates the logic and pass just the function name as check_command.
-    local check_cmd=()
-    IFS=' ' read -ra check_cmd <<< "$check_command"
-
-    # Detect monotonic clock source (EPOCHSECONDS is bash 5.0+)
-    local start now elapsed
-    if [ -n "${EPOCHSECONDS+set}" ]; then
-        start=${EPOCHSECONDS}
-    else
-        printf -v start '%(%s)T' -1
-    fi
-
-    log_imp 8 "poll_until_healthy" "Polling '${name}' — timeout=${timeout}s interval=${interval}s"
-
-    while true; do
-        # Run the check command via safe array execution (no eval)
-        if "${check_cmd[@]}"; then
-            log_imp 9 "poll_until_healthy" "'${name}' is healthy (check passed)"
-            return 0
-        fi
-
-        # Compute elapsed time
-        if [ -n "${EPOCHSECONDS+set}" ]; then
-            now=${EPOCHSECONDS}
-        else
-            printf -v now '%(%s)T' -1
-        fi
-        elapsed=$(( now - start ))
-
-        # Check timeout
-        if [ "${elapsed}" -ge "${timeout}" ]; then
-            log_imp 10 "poll_until_healthy" "'${name}' NOT healthy after ${timeout}s — giving up"
-            return 1
-        fi
-
-        log_imp 8 "poll_until_healthy" "'${name}' not ready yet — elapsed=${elapsed}s, waiting ${interval}s"
-        sleep "${interval}"
-    done
-}
-# endregion FUNC_poll_until_healthy
 
 # ═══════════════════════════════════════════════════════════════════
 # DOCKER HEALTH CHECK
@@ -227,34 +144,6 @@ check_docker_health() {
 # endregion FUNC_check_docker_health
 
 # ═══════════════════════════════════════════════════════════════════
-# DOCKER POLL HEALTH — poll until container is healthy or timeout
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_poll_docker_health
-## @purpose  Poll a Docker container until it's healthy or timeout expires.
-##           Convenience wrapper around poll_until_healthy + check_docker_health.
-## @param $1  container_id: container name or ID
-## @param $2  timeout: max wait in seconds (default: 60)
-## @param $3  interval: seconds between retries (default: 5)
-## @io       out: stderr via log_imp — IMP:8 per attempt, IMP:9 on success, IMP:10 on timeout
-## @return   0 if container becomes healthy before timeout
-##           1 if timeout expires without healthy status
-## @complexity O(n) where n = ceil(timeout / interval)
-poll_docker_health() {
-    local container_id="$1"
-    local timeout="${2:-60}"
-    local interval="${3:-5}"
-
-    if [ -z "${container_id}" ]; then
-        log_imp 10 "poll_docker_health" "Invalid arguments: container_id is empty"
-        return 1
-    fi
-
-    log_imp 8 "poll_docker_health" "Polling container '${container_id}' — timeout=${timeout}s interval=${interval}s"
-    poll_until_healthy "${container_id}" "check_docker_health ${container_id}" "${timeout}" "${interval}"
-}
-# endregion FUNC_poll_docker_health
-
-# ═══════════════════════════════════════════════════════════════════
 # HTTP HEALTH CHECK
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_check_http
@@ -307,45 +196,6 @@ check_http() {
     return 1
 }
 # endregion FUNC_check_http
-
-# ═══════════════════════════════════════════════════════════════════
-# TCP HEALTH CHECK
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_check_tcp
-## @purpose  Check TCP connectivity to a host:port using bash's /dev/tcp.
-##           Lightweight — no external tooling beyond bash and timeout.
-## @param $1  host: target hostname or IP
-## @param $2  port: target TCP port
-## @param $3  timeout: max wait in seconds (default: 5)
-## @io       out: stderr via log_imp — IMP:7 on success, IMP:8 on failure
-## @return   0 if TCP connection succeeds
-##           1 if connection fails or times out
-## @complexity O(1) — single timeout bash -c call
-## @invariants — Requires bash with /dev/tcp support (compiled with --enable-net-redirections)
-##             — Not available in pure POSIX sh or some restricted shells (e.g., Docker scratch)
-##             — Does NOT require curl, wget, or any external tooling
-check_tcp() {
-    local host="$1"
-    local port="$2"
-    local timeout="${3:-5}"
-
-    if [ -z "${host}" ] || [ -z "${port}" ]; then
-        log_imp 10 "check_tcp" "Invalid arguments: host='${host}' port='${port}'"
-        return 1
-    fi
-
-    log_imp 8 "check_tcp" "Checking TCP ${host}:${port} — timeout=${timeout}s"
-
-    # Use timeout with bash's built-in /dev/tcp redirection
-    if timeout "${timeout}" bash -c "echo >/dev/tcp/${host}/${port}" 2>/dev/null; then
-        log_imp 7 "check_tcp" "TCP ${host}:${port} — connected"
-        return 0
-    else
-        log_imp 8 "check_tcp" "TCP ${host}:${port} — connection failed or timed out"
-        return 1
-    fi
-}
-# endregion FUNC_check_tcp
 
 # ═══════════════════════════════════════════════════════════════════
 # DOCKER EXEC CHECK

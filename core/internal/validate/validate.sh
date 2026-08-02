@@ -6,7 +6,7 @@
 ##           (discovery, schema-routing, validator selection, error aggregation) в Python.
 ##           Бывший 251-LOC скрипт мигрирован (DevPlan 107 Strangler-завершение области validate).
 ## @scope    Вызывается core/entrypoints/validate.sh (18 LOC, не меняется) для make validate / make lint.
-##           НЕ source'ит logging.sh/python_deps.sh — вся логика в Python (AGENTS.md §Языковая политика).
+##           НЕ source'ит logging.sh — вся логика в Python (AGENTS.md §Языковая политика).
 ## @invariants
 ##   - Все аргументы передаются в orchestrator без изменений
 ##   - exit code = exit code Python-процесса (0=ok, 1=validation errors)

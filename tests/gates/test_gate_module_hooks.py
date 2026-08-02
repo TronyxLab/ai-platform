@@ -289,3 +289,82 @@ def test_all_hooks_are_specified_as_strings():
 
 # endregion FUNC_test_all_hooks_are_specified_as_strings
 # 🧪 TRAP[TEST] · 2026-07-17 · Regression: hook type coercion · Last fail: N/A · Remove if: gate schema validated elsewhere
+
+
+# region FUNC_test_registered_deploy_hooks_have_runtime_trigger
+## @purpose  B8 gate (волна 118): каждый module.yaml hooks.on_project_deploy имеет runtime-вызов
+##           в деплой-пайплайне (registry-driven invoke через shared/module_interface).
+##           Закрывает «зарегистрировано, но не вызывается» (K5): после B8 зарегистрирован
+##           только nginx; мониторинг/postgres хуки удалены (Python-эквиваленты есть).
+## @io       — → ⎋ None (asserts)
+## @complexity — O(M + P) где M = module.yaml, P = строки deploy-пайплайна
+## @invariants
+##   - Для каждого module.yaml с hooks.on_project_deploy: DeployOrchestrator post-deploy chain
+##     содержит registry-driven invoke (module_interface.invoke(module, "deploy-hook", ...))
+##   - Оркестратор НЕ хардкодит имена модулей — читает core/modules/*/module.yaml
+##   - R5: monitoring/postgres hooks удалены (волна 118 B8)
+@pytest.mark.gate
+def test_registered_deploy_hooks_have_runtime_trigger(caplog):
+    """B8: каждый зарегистрированный deploy-hook имеет runtime-вызов в пайплайне."""
+    caplog.set_level(logging.DEBUG)
+
+    # 1. Собрать все зарегистрированные hooks.on_project_deploy
+    registered: dict[str, str] = {}
+    for module_yaml in _get_module_yamls():
+        hook_paths = _get_hook_paths(module_yaml)
+        if hook_paths.get("on_project_deploy"):
+            registered[module_yaml.parent.name] = hook_paths["on_project_deploy"]
+
+    logger.info("[IMP:8][test_registered_deploy_hooks_have_runtime_trigger] Registered hooks: %s", registered)
+
+    # 2. Deploy-пайплайн должен содержать registry-driven invoke (не хардкод имён)
+    orchestrator = PROJECT_ROOT / "core" / "internal" / "deploy" / "orchestrator.py"
+    assert orchestrator.is_file(), f"Deploy orchestrator not found: {orchestrator}"
+    content = orchestrator.read_text()
+    assert "module_interface" in content, (
+        "B8 FAIL: deploy-пайплайн не импортирует shared/module_interface (нет runtime-вызова hooks)"
+    )
+    assert '"deploy-hook"' in content or "'deploy-hook'" in content, (
+        "B8 FAIL: deploy-пайплайн не вызывает интерфейс 'deploy-hook'"
+    )
+    assert "hooks" in content and "on_project_deploy" in content, (
+        "B8 FAIL: deploy-пайплайн не читает hooks.on_project_deploy из module.yaml (registry-driven)"
+    )
+
+    # 3. R5: после B8 зарегистрирован ТОЛЬКО nginx (monitoring/postgres хуки удалены)
+    # Волна 118 B8: monitoring/postgres hooks удалены (Python-эквиваленты: monitoring_config_renderer.py,
+    # on_project_deploy.py). nginx — реальная логика (reload-guard) — восстановлен триггер.
+    assert "nginx" in registered, "B8 FAIL: nginx deploy-hook должен быть зарегистрирован (reload-guard)"
+    assert "monitoring" not in registered, (
+        "B8 FAIL: monitoring deploy-hook должен быть удалён (Python-эквивалент monitoring_config_renderer.py)"
+    )
+    assert "postgres" not in registered, (
+        "B8 FAIL: postgres deploy-hook должен быть удалён (Python-эквивалент on_project_deploy.py)"
+    )
+
+    logger.info(
+        "[IMP:9][test_registered_deploy_hooks_have_runtime_trigger] PASS: %d registered hook(s) — runtime trigger подтверждён (B8)",
+        len(registered),
+    )
+
+
+# endregion FUNC_test_registered_deploy_hooks_have_runtime_trigger
+
+
+# region FUNC_test_deleted_hook_files_absent
+## @purpose  R5 negative (волна 118 B8): удалённые hook-файлы monitoring/postgres отсутствуют.
+## @io       — → ⎋ None (asserts)
+## @complexity — O(1)
+@pytest.mark.gate
+def test_deleted_hook_files_absent(caplog):
+    """B8 R5: monitoring/postgres hook файлы удалены (removed API)."""
+    caplog.set_level(logging.DEBUG)
+    for rel in (
+        "core/modules/monitoring/hooks/on-project-deploy.sh",
+        "core/modules/postgres/hooks/on-project-deploy.sh",
+    ):
+        assert not (PROJECT_ROOT / rel).exists(), f"B8 FAIL: удалённый hook существует: {rel}"
+    logger.info("[IMP:9][test_deleted_hook_files_absent] PASS: monitoring/postgres hook файлы удалены (B8 R5)")
+
+
+# endregion FUNC_test_deleted_hook_files_absent

@@ -6,7 +6,8 @@
 ##           Wraps openssl passwd -apr1 for APR1-hash compatible with nginx auth_basic.
 ##           Single source of truth replacing duplicate htpasswd logic in
 ##           secrets_manager.py and secrets.sh.
-## @scope    Called from secrets_manager._ensure_htpasswd() and secrets.sh _ensure_htpasswd_generated().
+## @scope    Called from secrets_manager._ensure_htpasswd(). (secrets.sh shell-фасад
+##           _ensure_htpasswd_generated удалён волна 118 B6 — 0 callers)
 ##           Uses subprocess for openssl — no pure-Python APR1 implementation needed.
 ## @invariants
 ##   1. hash_apr1(password) generates random salt each call — NOT idempotent

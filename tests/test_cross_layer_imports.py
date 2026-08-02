@@ -196,7 +196,9 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     (
         "core/modules/postgres/hooks/on_project_deploy.py",
         40,
-        "postgres-hook; shared.node_yaml — by design (D1); порт D65 заменил python3 -m в on-project-deploy.sh (запись allowlist перенесена на Python-хук)",
+        "postgres-hook; shared.node_yaml — by design (D1); Python-канон D65. Волна 118 B8: "
+        "shell-фасад on-project-deploy.sh удалён (hook-регистрация убрана), Python-модуль "
+        "остаётся канонической реализацией (unit-тесты, operator-инвокация)",
     ),
 )
 

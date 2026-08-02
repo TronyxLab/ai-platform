@@ -28,13 +28,15 @@ restart: always
 
 interfaces:
   - healthcheck
-  - deploy-hook
 
 spool_dir: /var/lib/platform/postgres-data/
 spool_volume: postgres-data
 
-hooks:
-  on_project_deploy: hooks/on-project-deploy.sh
+# Волна 118 B8: hooks.on_project_deploy УДАЛЁН — hook был тонким фасадом над
+# on_project_deploy.py (Python-эквивалент, DevPlan 117 H D65); runtime-вызов —
+# только через зарегистрированные hooks в DeployOrchestrator post-deploy chain
+# (после B8 зарегистрирован только nginx). on_project_deploy.py остаётся
+# канонической Python-реализацией (unit-тесты, operator-инвокация).
 
 resources:
   limits:

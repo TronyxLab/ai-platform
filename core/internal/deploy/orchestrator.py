@@ -849,7 +849,8 @@ class DeployOrchestrator:
 
             # ── Пост-деплой цепочка (D4, U-24): best-effort, сбой → WARN, НЕ фейлит деплой ──
             if result.is_success():
-                self._run_post_deploy_chain(resolved_project, version, result.status.value)
+                node_name = os.environ.get("NODE_NAME", os.environ.get("NODE", ""))
+                self._run_post_deploy_chain(resolved_project, version, result.status.value, target_dir, node_name)
 
             output = json.dumps(result.to_dict())
             print(output)
@@ -867,22 +868,31 @@ class DeployOrchestrator:
 
     # region FUNC__run_post_deploy_chain
     ## @purpose  Best-effort post-deploy chain (DevPlan 116 B1 T2/D4, U-24): notify-hook (Telegram)
-    ##           + generate-catalog (regen catalog.json). Оба неблокирующие: сбой → WARN,
-    ##           деплой НЕ фейлится (дизайн notify-hook always exit 0).
-    ## @io       ⇥ project: str, version: str, status: str → ⎋ None
-    ## @complexity — O(1) — два subprocess-вызова с timeout
+    ##           + generate-catalog (regen catalog.json) + module deploy-hooks (B8 wire).
+    ##           Все неблокирующие: сбой → WARN, деплой НЕ фейлится (дизайн notify-hook always exit 0).
+    ## @io       ⇥ project: str, version: str, status: str, project_dir: str, node_name: str → ⎋ None
+    ## @complexity — O(1) — subprocess-вызовы с timeout
     ## @invariants
     ##   - Вызывается ТОЛЬКО после успешного деплоя (DEPLOYED/PARTIAL)
-    ##   - notify-hook timeout 30s, generate-catalog timeout 60s
+    ##   - notify-hook timeout 30s, generate-catalog timeout 60s, module deploy-hook COMPOSE_UP_TIMEOUT
     ##   - Сбой цепочки → logger.warning (IMP:8), не raise
-    def _run_post_deploy_chain(self, project: str, version: str, status: str) -> None:
-        """Run notify-hook + generate-catalog after a successful deploy (best-effort, D4)."""
+    ##   - B8 (волна 118): module deploy-hooks (module.yaml hooks.on_project_deploy) вызываются
+    ##     через shared/module_interface.invoke — восстановленный триггер (ранее удалён в 117 sweep)
+    def _run_post_deploy_chain(
+        self,
+        project: str,
+        version: str,
+        status: str,
+        project_dir: str | None = None,
+        node_name: str = "",
+    ) -> None:
+        """Run notify-hook + generate-catalog + module deploy-hooks (best-effort, D4)."""
         platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
         notify_hook = os.path.join(platform_root, "core", "internal", "notify", "notify-hook.sh")
         generate_catalog = os.path.join(platform_root, "core", "internal", "catalog", "generate-catalog.sh")
 
         logger.info(
-            "[IMP:8][DeployOrchestrator][post_deploy_chain] Running notify-hook + generate-catalog for %s (%s)",
+            "[IMP:8][DeployOrchestrator][post_deploy_chain] Running notify-hook + generate-catalog + deploy-hooks for %s (%s)",
             project,
             version,
         )
@@ -920,7 +930,67 @@ class DeployOrchestrator:
         except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
             logger.warning("[IMP:8][DeployOrchestrator][post_deploy_chain] generate-catalog WARN (non-fatal): %s", e)
 
+        # ── Module deploy-hooks (B8, волна 118): deploy-hook для зарегистрированных модулей ──
+        # Регистрация: module.yaml hooks.on_project_deploy (+ entrypoint-manifest module_hooks).
+        # После B8 зарегистрирован только nginx (reload-guard); monitoring/postgres удалены
+        # (Python-эквиваленты: monitoring_config_renderer.py / on_project_deploy.py).
+        if project_dir:
+            self._invoke_registered_deploy_hooks(project_dir, project, node_name)
+
     # endregion FUNC__run_post_deploy_chain
+
+    # region FUNC__invoke_registered_deploy_hooks
+    ## @purpose  Invoke deploy-hook for every module declaring hooks.on_project_deploy (B8 wire).
+    ##            Registry-driven: читает core/modules/*/module.yaml (registry = файловая система),
+    ##            НЕ хардкодит имена модулей. Best-effort: сбой → WARN, деплой не фейлится.
+    ## @io       ⇥ project_dir: str, project: str, node_name: str → ⎋ None
+    ## @complexity — O(M * K) где M = модули с hooks, K = hook-скрипты на модуль
+    ## @invariants
+    ##   - Каждый module.yaml с hooks.on_project_deploy → module_interface.invoke(module, "deploy-hook", ...)
+    ##   - hook args: PROJECT_DIR PROJECT NODE_NAME (сигнатура nginx_reload_hook.sh)
+    ##   - Сбой invoke → WARN (IMP:8), не raise (Best-effort контракт post-deploy chain)
+    def _invoke_registered_deploy_hooks(self, project_dir: str, project: str, node_name: str) -> None:
+        """Invoke registered module deploy-hooks via shared module_interface (B8)."""
+        from core.internal.shared.module_interface import invoke as invoke_module_hook
+
+        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+        modules_dir = os.path.join(platform_root, "core", "modules")
+        if not os.path.isdir(modules_dir):
+            logger.info("[IMP:7][DeployOrchestrator][deploy_hooks] modules dir not found: %s", modules_dir)
+            return
+
+        import glob
+
+        for module_yaml in sorted(glob.glob(os.path.join(modules_dir, "*/module.yaml"))):
+            module_name = os.path.basename(os.path.dirname(module_yaml))
+            try:
+                import yaml
+
+                with open(module_yaml) as f:
+                    data = yaml.safe_load(f) or {}
+                hooks = data.get("hooks") or {}
+                if not hooks.get("on_project_deploy"):
+                    continue
+            except (OSError, yaml.YAMLError) as e:
+                logger.warning("[IMP:8][DeployOrchestrator][deploy_hooks] read error %s: %s", module_yaml, e)
+                continue
+
+            logger.info(
+                "[IMP:8][DeployOrchestrator][deploy_hooks] Invoking deploy-hook for module %s (project=%s)",
+                module_name,
+                project,
+            )
+            ok, output = invoke_module_hook(module_name, "deploy-hook", project_dir, project, node_name)
+            if not ok:
+                logger.warning(
+                    "[IMP:8][DeployOrchestrator][deploy_hooks] %s deploy-hook WARN (non-fatal): %s",
+                    module_name,
+                    (output or "").strip()[-300:],
+                )
+            else:
+                logger.info("[IMP:9][DeployOrchestrator][deploy_hooks] %s deploy-hook done", module_name)
+
+    # endregion FUNC__invoke_registered_deploy_hooks
 
     # ── Internal helpers ──────────────────────────────────────────────────
 

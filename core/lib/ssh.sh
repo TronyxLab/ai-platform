@@ -1,40 +1,38 @@
 #!/usr/bin/env bash
-# GREP_SUMMARY: ssh, facade, timeout, ssh-exec, ssh-read, dry-run, ssh-opts, remote-cmd
-# STRUCTURE: ▶ ┌SSH_OPTS_COMMON readonly const┐ → ○ ssh_exec() → ◇ DRY_RUN=1? → ssh_exec_dry_run | ⚡ validate() → ⚡ timeout "''${timeout}" ssh "''${SSH_OPTS_COMMON[@]}" → ◇ exit=124:return 124 | exit=0:return 0 | return rc → ○ ssh_read() → ssh_exec timeout=60 → ○ ssh_exec_dry_run() → echo cmd → return 0
+# GREP_SUMMARY: ssh, facade, timeout, ssh-exec, ssh-read, ssh-opts, remote-cmd
+# STRUCTURE: ▶ ┌SSH_OPTS_COMMON readonly const┐ → ○ ssh_exec() → ⚡ validate() → ⚡ timeout "''${timeout}" ssh "''${SSH_OPTS_COMMON[@]}" → ◇ exit=124:return 124 | exit=0:return 0 | return rc → ○ ssh_read() → ssh_exec timeout=60 → ⎋ exit
 # ═══════════════════════════════════════════════════════════════════
 # MODULE_CONTRACT — SSH Facade Library
 # ═══════════════════════════════════════════════════════════════════
 # region MODULE_CONTRACT
 ## @purpose  Единая SSH-фасадная функция с timeout-wrapper — single source of truth
 ##           для всех remote-операций платформы. Заменяет 6+ разбросанных inline-ssh
-##           конструкций единым контрактом с валидацией, DRY_RUN и явной детекцией timeout.
+##           конструкций единым контрактом с валидацией и явной детекцией timeout.
 ## @scope    Sourced by bootstrap/*.sh, scaffold/*.sh, deploy/*.sh, lib/*.sh scripts.
-##           Provides: SSH_OPTS_COMMON (readonly const array), ssh_exec(), ssh_read(),
-##           ssh_exec_dry_run(). Requires logging.sh (log_imp) sourced first.
+##           Provides: SSH_OPTS_COMMON (readonly const array), ssh_exec(), ssh_read().
+##           Requires logging.sh (log_imp) sourced first.
+##           Волна 118 B6: ssh_exec_dry_run удалён (0 прод-callers; DRY_RUN env только в тестах).
 ## @invariants
 ##   - Каждый ssh_exec/ssh_read вызов обёрнут в `timeout`
 ##   - exit=124 детектируется явно → log_imp 1 "SSH timeout"
 ##   - SSH_OPTS_COMMON — readonly (защита от случайной мутации)
 ##   - timeout default: deploy mode = 600s, read mode = 60s
-##   - DRY_RUN=1 env → ssh_exec делегирует в ssh_exec_dry_run без exec
 ##   - fail-fast: пустой host/cmd или non-int timeout → return 2
-##   - ssh_exec_dry_run всегда возвращает 0 (echo-only, без exec)
 ## @rationale Q: Why a shared SSH facade instead of inline ssh calls?
 ##            A: Устраняет CRITICAL-проблему P02 (CI hangs из-за SSH-вызовов без timeout).
 ##               Единый source of truth для всех remote-операций (SSH_OPTS, timeout, error handling).
 ##               Уменьшает DRIFT между 6+ потребителями SSH-вызовов.
 ##               Следует принципу AI-First Architecture: module boundary = lib/ssh.sh.
 ## @changes  LAST_CHANGE: 2026-07-21 | W2-E1 — Initial implementation (DevPlan 029)
+##           2026-08-02 | Волна 118 B6 — ssh_exec_dry_run удалён
 ## @modulemap — SSH_OPTS_COMMON   [R]   Readonly const array, общие SSH-флаги
 ##             — ssh_exec          [W:100] Основная SSH-функция с timeout-wrapper
 ##             — ssh_read          [W:80]  Алиас read-only (60s default)
-##             — ssh_exec_dry_run  [W:20]  Echo-mode для --dry-run
 ## @usecases  — deploy: ssh_exec "host" "ci-deploy" "docker compose pull" 600 deploy
 ##             — status: ssh_read "host" "ci-deploy" "docker ps" 60
-##             — dry-run: DRY_RUN=1 ssh_exec ... → echo cmd + return 0 без exec
 # endregion MODULE_CONTRACT
-# GREP_SUMMARY: ssh, facade, timeout, ssh-exec, ssh-read, dry-run, ssh-opts, remote-cmd, bootstrap, scaffold, deploy
-# STRUCTURE: ▶ ┌SSH_OPTS_COMMON readonly┐ → ○ ssh_exec(h,u,c,t=600,m) → ◇ DRY_RUN?→dry_run | ◇ validate:h/c nonempty,t=int → ⚡ timeout t ssh opts u@h c → ◇ exit124→log1:ret124 | exit0→log9:ret0 | rc≠0→log7:retRC → ○ ssh_read(h,u,c,t=60)→ssh_exec → ○ dry_run(h,u,c,t)→echo log8:ret0
+# GREP_SUMMARY: ssh, facade, timeout, ssh-exec, ssh-read, ssh-opts, remote-cmd, bootstrap, scaffold, deploy
+# STRUCTURE: ▶ ┌SSH_OPTS_COMMON readonly┐ → ○ ssh_exec(h,u,c,t=600,m) → ◇ validate:h/c nonempty,t=int → ⚡ timeout t ssh opts u@h c → ◇ exit124→log1:ret124 | exit0→log9:ret0 | rc≠0→log7:retRC → ○ ssh_read(h,u,c,t=60)→ssh_exec
 #            └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 # ── Default prefix ─────────────────────────────────────────────────
@@ -86,31 +84,6 @@ fi
 # endregion CONST_SSH_OPTS_COMMON
 
 # ═══════════════════════════════════════════════════════════════════
-# ssh_exec_dry_run — echo mode for DRY_RUN
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_ssh_exec_dry_run
-## @purpose  Print the SSH command that would be executed, without executing.
-##           Used via DRY_RUN=1 env var detection in ssh_exec().
-## @param $1  SSH host (IP or domain)
-## @param $2  SSH user
-## @param $3  Command to execute (message only, not executed)
-## @param $4  Timeout in seconds (informational, printed in log)
-## @return    Always 0 (no actual execution)
-## @io       stderr: [IMP:8][<prefix>][dry-run] DRY-RUN: timeout ... ssh ... cmd
-## @complexity O(1) — single echo
-ssh_exec_dry_run() {
-    local host="$1"
-    local user="$2"
-    local cmd="$3"
-    local timeout="${4:-}"
-    local timeout_flag=""
-    [[ -n "${timeout}" ]] && timeout_flag="timeout ${timeout}s"
-    log_imp 8 "dry-run" "DRY-RUN: ${timeout_flag} ssh ${user}@${host} '${cmd:0:120}'"
-    return 0
-}
-# endregion FUNC_ssh_exec_dry_run
-
-# ═══════════════════════════════════════════════════════════════════
 # ssh_exec — main SSH execution with timeout wrapper
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_ssh_exec
@@ -126,25 +99,20 @@ ssh_exec_dry_run() {
 ## @return   124 — timeout (SSH command exceeded timeout limit)
 ## @return   2   — input validation failure (empty host/cmd, non-int timeout)
 ## @return   *   — SSH native exit codes propagated (1-255)
-## @sideeffect stderr: LDD logs at IMP:1 (timeout), IMP:7 (fail), IMP:9 (ok), IMP:8 (dry-run)
+## @sideeffect stderr: LDD logs at IMP:1 (timeout), IMP:7 (fail), IMP:9 (ok)
 ## @complexity O(1) — single timeout-wrapped SSH call
 ## @invariants
 ##   - Всегда обёрнут в `timeout`
-##   - DRY_RUN=1 env — делегирует в ssh_exec_dry_run, возвращает 0
 ##   - Валидация: host и cmd непустые, timeout — целое число
 ##   - exit=124 детектируется явно, NOT silent-fail
+##   - Волна 118 B6: DRY_RUN=1 ветка удалена (ssh_exec_dry_run удалён — 0 прод-callers;
+##     DRY_RUN env ставился только в тестах; entrypoints используют свои --dry-run флаги)
 ssh_exec() {
     local host="$1"
     local user="$2"
     local cmd="$3"
     local timeout="${4:-600}"
     local mode="${5:-deploy}"
-
-    # ── DRY_RUN detection ──────────────────────────────────────────
-    if [[ "${DRY_RUN:-}" == "1" ]]; then
-        ssh_exec_dry_run "${host}" "${user}" "${cmd}" "${timeout}"
-        return 0
-    fi
 
     # ── Input validation (fail-fast) ──────────────────────────────
     if [[ -z "${host}" ]]; then

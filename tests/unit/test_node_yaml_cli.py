@@ -187,28 +187,25 @@ class TestCliMisc:
         assert result == 2
         assert "no node.yaml" in capsys.readouterr().err
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: --typed-contexts
-    # · Expect: JSON on stdout
-    # · Last fail: None (new test for DevPlan 117 G T51)
-    # · Remove if: _cli_typed_json logic changes
-    def test_cli_typed_json_output(self, mock_node, capsys) -> None:
-        """--typed-contexts → JSON output."""
-        mock_node.get_contexts.return_value = [{"name": "myorg"}]
-        result = node_yaml_cli._cli_typed_json(mock_node, "contexts")
-
-        assert result == 0
-        assert json.loads(capsys.readouterr().out) == [{"name": "myorg"}]
-
-    # 🧪 TRAP[TEST] · Regression · Scenario: unknown typed field
-    # · Expect: exit 1 + stderr
-    # · Last fail: None (new test for DevPlan 117 G T51)
-    # · Remove if: _cli_typed_json logic changes
-    def test_cli_typed_json_unknown_field(self, mock_node, capsys) -> None:
-        """Unknown typed field → exit 1."""
-        result = node_yaml_cli._cli_typed_json(mock_node, "bogus")
-
-        assert result == 1
-        assert "Unknown typed field: bogus" in capsys.readouterr().err
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · B3 — --typed-* флаги удалены (unknown flag → exit≠0)
+    # · Scenario: main() с --file и --typed-contexts → argparse SystemExit (код ≠ 0),
+    #   т.к. флаг больше не зарегистрирован в _build_arg_parser (волна 118 B3)
+    # · Last fail: --typed-* существовал до волны 118 B3 (node_yaml_cli.py L89-95)
+    # · Remove if: typed-* CLI будет восстановлен
+    def test_cli_typed_flags_removed(self, tmp_path, capsys) -> None:
+        """B3 R5: --typed-contexts → argparse error (exit≠0)."""
+        yaml_path = tmp_path / "node.yaml"
+        yaml_path.write_text("node:\n  name: test\n  host: 1.2.3.4\ncontexts: []\n")
+        with (
+            mock.patch.object(
+                node_yaml_cli.sys,
+                "argv",
+                ["node_yaml", "--file", str(yaml_path), "--typed-contexts"],
+            ),
+            pytest.raises(SystemExit) as excinfo,
+        ):
+            node_yaml_cli.main()
+        assert excinfo.value.code != 0, "B3 FAIL: --typed-contexts должен быть rejected (removed API)"
 
     # 🧪 TRAP[TEST] · Regression · Scenario: --domain-config
     # · Expect: field:value lines

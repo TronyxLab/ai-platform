@@ -1,16 +1,18 @@
-# GREP_SUMMARY: manifest.mk, include-split, manifest-generation, DAG, atomic, check
-# STRUCTURE: ┌Chain A (G1→G2→G5)┐ → ◇ Chain B (G3→G4) → ◇ Chain C (G6) → ⊕ Atomic (staging → rename) → ⊕ check → ⎋ sync-env-defaults
+# GREP_SUMMARY: manifest.mk, include-split, manifest-generation, DAG, check
+# STRUCTURE: ┌Chain A (G1→G2→G5)┐ → ◇ Chain B (G3→G4) → ◇ Chain C (G6) → ⊕ check → ⎋ sync-env-defaults
 # region MODULE_CONTRACT
-## @purpose  Manifest generation targets — DAG of 3 independent chains for atomic generation
+## @purpose  Manifest generation targets — DAG of 3 independent chains
 ## @scope    All generate-*, check-manifests, sync-env-defaults, check-env-defaults targets
 ## @invariants
 ##   - Three independent chains: A (secrets→platform-env→env-example), B (entrypoint→AGENTS.md), C (litellm-config)
 ##   - check-manifests runs --check on all 6 generators without producing output
-##   - generate-manifests-atomic uses mktemp staging dir + atomic mv for no-partial-writes guarantee
+##   - generate-manifests-atomic УДАЛЁН (волна 118 B4) — сломанная mv-семантика (затирал root
+##     AGENTS.md), TRAP[DEBT] 2026-08-01 признал dead; 0 вызовов в Makefile/manifest/глоссарии
 ##   - sync-env-defaults and check-env-defaults are standalone (also part of Chain A via dependencies)
 ## @rationale Extracted from root Makefile (DevPlan 090) to keep root <150 lines per AC-5b.
 ##            Separate file makes DAG structure navigable and reduces merge conflict surface.
 ## @changes 2026-07-30 | Extracted from Makefile lines 49-248 to makefiles/manifest.mk
+##           2026-08-02 | Волна 118 B4 — generate-manifests-atomic удалён (dead target)
 # endregion MODULE_CONTRACT
 
 # === Manifest generation targets — DAG (3 independent chains) ===
@@ -20,7 +22,7 @@
 #   Chain C: G6 (litellm-config)
 # generate-manifests покрывает ВСЕ 6 генераторов (DevPlan 116 T5, U-44) — fix-gate
 # (repair.mk → generate-manifests) чинит check-manifests полностью (G1-G6).
-.PHONY: generate-manifests generate-manifests-atomic check-manifests sync-env-defaults check-env-defaults
+.PHONY: generate-manifests check-manifests sync-env-defaults check-env-defaults
 .PHONY: generate-secrets-manifest generate-platform-env generate-env-example
 .PHONY: generate-entrypoint-manifest generate-agents-md generate-litellm-config render-monitoring
 .PHONY: check-profiles-parity check-domain-parity
@@ -97,69 +99,6 @@ render-monitoring:
 	@python3 core/internal/monitoring_config_renderer.py \
 		--project-dir "$(PROJECT_DIR)" --project "$(PROJECT)" \
 		$(if $(NODE),--node "$(NODE)",)
-
-# ── Atomic generation (staging → rename) ────────────────────
-# 📝 TRAP[DEBT] · 2026-08-01 · MED · generate-manifests-atomic — латентная поломка mv-семантики
-# · Observed: таргет нигде не вызывается (dead); `mv "$$staging"/* "$(CURDIR)/"` кладёт
-#   ВСЕ манифесты в репозиторий (secrets-manifest.yaml должен быть core/, AGENTS.md —
-#   root) — затирает root AGENTS.md содержимым core/AGENTS.md; G4 --target root (B11 T3)
-#   в атомарную цепочку НЕ добавлен именно из-за этого
-# · Suspected: таргет был написан "на будущее" (DevPlan 090) и никогда не запускался
-# · Impact: запуск -atomic тихо повредит root AGENTS.md + разбросает манифесты
-# · When: during B11 T3 implementation — deferred, out of scope
-## @purpose  Атомарная генерация ВСЕХ манифестов: staging dir (mktemp) → trap EXIT → rename.
-##           При падении любого генератора staging удаляется, оригиналы не тронуты.
-## @invariants
-##   - mktemp создаёт уникальный staging dir (PID collision-resistant)
-##   - trap EXIT гарантирует очистку при любом failure или signal
-##   - mv атомарнен на одной файловой системе (staging туда же, где проект)
-##   - ⚠️ НЕ ИСПОЛЬЗОВАТЬ до фикса TRAP[DEBT] 2026-08-01 (mv-семантика ломает root AGENTS.md)
-.PHONY: generate-manifests-atomic
-generate-manifests-atomic:
-	@echo "[IMP:7][generate-manifests-atomic] Starting atomic manifest generation..."
-	@staging="$$(mktemp -d /tmp/manifest-gen-XXXXXX)"; \
-	trap "rm -rf $$staging" EXIT; \
-	echo "[IMP:8][generate-manifests-atomic] Staging dir: $$staging"; \
-	\
-	# Chain A: secrets → platform-env → env-example ; \
-	python3 core/internal/scripts/generate_secrets_manifest.py \
-		--secret-defs core/secret-definitions.yaml \
-		--modules-dir core/modules \
-		--output "$$staging/secrets-manifest.yaml" && \
-	python3 core/internal/scripts/generate_platform_env.py \
-		--infra core/platform-infra.yaml \
-		--modules-dir core/modules \
-		--secret-defs core/secret-definitions.yaml \
-		--output "$$staging/platform-env.yaml" \
-		--smoke-env-output "$$staging/smoke_env_generated.py" \
-		--helpers-output "$$staging/env_defaults_generated.py" && \
-	python3 core/internal/scripts/sync_env_defaults.py \
-		--platform-env platform-env.yaml \
-		--secret-defs core/secret-definitions.yaml \
-		--output "$$staging/.env.example" && \
-	\
-	# Chain B: entrypoint → agents-md ; \
-	python3 core/internal/scripts/generate_entrypoint_manifest.py \
-		--makefile-dir . \
-		--gmake-path "$(shell which gmake 2>/dev/null || which make 2>/dev/null || echo make)" \
-		--existing-manifest core/entrypoint-manifest.yaml \
-		--tests-dir tests/gates \
-		--output "$$staging/entrypoint-manifest.yaml" && \
-	cp core/AGENTS.md "$$staging/AGENTS.md" && \
-	python3 core/internal/scripts/generate_agents_md.py \
-		--manifest core/entrypoint-manifest.yaml \
-		--agents-md "$$staging/AGENTS.md" \
-		--marker canon_table && \
-	\
-	# Chain C: litellm-config ; \
-	python3 core/internal/llm/config_renderer.py \
-		--policy core/internal/llm/policy.yaml \
-		--output "$$staging/litellm-config.yml" && \
-	\
-	# Атомарный rename — все или ничего (единый mv, не цикл) ; \
-	echo "[IMP:9][generate-manifests-atomic] Atomic rename: $$staging → $(CURDIR)"; \
-	mv "$$staging"/* "$(CURDIR)/" && \
-	echo "[IMP:9][generate-manifests-atomic] All manifests generated atomically."
 
 ## @purpose  Проверка актуальности всех сгенерированных манифестов через --check каждого генератора.
 ##           Быстрее git diff (не требует полной генерации) и точнее (byte-level сравнение).

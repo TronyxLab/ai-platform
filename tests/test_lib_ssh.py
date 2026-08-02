@@ -1,9 +1,11 @@
-# GREP_SUMMARY: test, ssh, ssh_exec, ssh_read, dry-run, timeout, ssh-opts, facade
+# GREP_SUMMARY: test, ssh, ssh_exec, ssh_read, timeout, ssh-opts, facade
 # STRUCTURE: ▶ write mock ssh bin → write test wrappers → subprocess.run → ◇ assert exit code → ◇ parse stderr for LDD logs → ⊕ print LDD trajectory → assert IMP:9 found
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/lib/ssh.sh — SSH facade library.
 ##           Covers: ssh_exec timeout detection, ssh_read default timeout,
-##           DRY_RUN mode, SSH_OPTS_COMMON immutability, input validation.
+##           SSH_OPTS_COMMON immutability, input validation.
+##           Волна 118 B6: test_dry_run заменён на R5 negative test_dry_run_removed
+##           (ssh_exec_dry_run удалён из lib — DRY_RUN=1 env не ставился в проде).
 ## @scope    Tests bash shell library via subprocess wrappers. NOT integration —
 ##           ssh binary is mocked via PATH override.
 ## @invariants
@@ -241,34 +243,36 @@ def test_ssh_read_default_timeout(tmp_path):
 
 
 # ──────────────────────────────────────────────────────────────
-# region TEST_dry_run
-## @purpose  Verify DRY_RUN=1 causes ssh_exec to print command without executing.
-## @scenario DRY_RUN=1 with ssh_exec → exit 0, stderr contains dry-run log
-## @coverage ssh_exec_dry_run, DRY_RUN_detection
-def test_dry_run(tmp_path):
-    """DRY_RUN=1 mode should echo without exec, return 0."""
-    # Mock ssh exits 1 if called — DRY_RUN should prevent call
-    mock_bin = _build_mock_ssh(tmp_path, exit_code=1)
+# region TEST_dry_run_removed
+## @purpose  R5 negative (волна 118 B6): ssh_exec_dry_run удалён из ssh.sh —
+##           DRY_RUN=1 ветка убрана из ssh_exec (0 прод-callers; entrypoints
+##           используют свои --dry-run флаги, не env DRY_RUN=1).
+## @scenario source ssh.sh → type -t ssh_exec_dry_run → пусто; DRY_RUN=1 + ssh_exec
+##           больше НЕ печатает DRY-RUN (выполняется настоящий ssh через mock)
+## @coverage ssh_exec_dry_run_removed, DRY_RUN_branch_removed
+def test_dry_run_removed(tmp_path):
+    """B6 R5: ssh_exec_dry_run удалён; DRY_RUN=1 больше не dry-run."""
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · B6 — ssh_exec_dry_run удалён из ssh.sh
+    # · Scenario: source ssh.sh → type -t ssh_exec_dry_run → пусто (не функция)
+    # · Last fail: ssh_exec_dry_run существовал до волны 118 B6 (ssh.sh L101-111)
+    # · Remove if: ssh_exec_dry_run будет восстановлен
+    mock_bin = _build_mock_ssh(tmp_path, exit_code=1)  # ssh НЕ должен быть вызван в dry-run режиме
     wrapper = _build_test_wrapper(
         tmp_path,
-        'ssh_exec "test.host" "ci-deploy" "docker compose pull" 600',
-        extra_setup='export DRY_RUN="1"',
+        'if [[ "$(type -t ssh_exec_dry_run)" == "function" ]]; then exit 10; fi\n'
+        'echo "[IMP:9][test] ssh_exec_dry_run REMOVED — OK" >&2',
     )
     result = _run_wrapper(wrapper, mock_bin)
 
-    # Print LDD trajectory (dry-run path logs at IMP:8, not IMP:9)
     _dump_ldd_trajectory(result.stderr)
 
-    assert result.returncode == 0, f"Expected exit 0 (dry-run), got {result.returncode}\nstderr: {result.stderr}"
-
-    # Verify dry-run log line is present
-    assert "DRY-RUN" in result.stderr, f"Expected DRY-RUN log in stderr\nstderr: {result.stderr}"
-
-    # Verify IMP:8 present (dry-run logs at IMP:8)
-    assert "[IMP:8]" in result.stderr, f"Expected IMP:8 dry-run log\nstderr: {result.stderr}"
+    assert result.returncode == 0, (
+        f"Expected exit 0 (ssh_exec_dry_run removed), got {result.returncode}\nstderr: {result.stderr}"
+    )
+    assert "REMOVED" in result.stderr, f"Expected REMOVED marker in stderr\nstderr: {result.stderr}"
 
 
-# endregion TEST_dry_run
+# endregion TEST_dry_run_removed
 
 
 # ──────────────────────────────────────────────────────────────

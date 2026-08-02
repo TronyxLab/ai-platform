@@ -1,18 +1,19 @@
-# GREP_SUMMARY: test-lib-logging logging.sh bash LDD log_imp log_info log_warn log_fail log_crit subprocess stderr IMP structured-logging wrapper auto-block prefix side-effect
-# STRUCTURE: ▶ _run_bash(script → subprocess.run) → ○ ◇ assert stderr IMP:N + block + msg → ⊕ stdout_empty + returncode_0 → ⎋ 9 test functions
+# GREP_SUMMARY: test-lib-logging logging.sh bash LDD log_imp log_warn log_fail log_crit subprocess stderr IMP structured-logging wrapper auto-block prefix side-effect
+# STRUCTURE: ▶ _run_bash(script → subprocess.run) → ○ ◇ assert stderr IMP:N + block + msg → ⊕ stdout_empty + returncode_0 → ⎋ 8 test functions
 
 # region MODULE_CONTRACT [DOMAIN(TESTING):3; CONCEPT(BASH-LDD):2; TECH(PYTEST):2]
 ## @purpose  Unit tests for core/lib/logging.sh — the centralised LDD logging library
 ##           for all bash scripts in the platform. Tests verify structured stderr output
 ##           format, wrapper semantics, auto-block detection, custom prefix, and zero
 ##           side-effects on source.
-## @scope    9 test functions covering:
+##           Волна 118 B6: log_info (IMP:6) удалён из logging.sh (0 callers) — тест
+##           test_log_wrapper параметр log_info убран; R5 negative: type -t log_info = пусто.
+## @scope    8 test functions covering:
 ##
 ##           - log_imp with explicit block name (test_log_imp_explicit_block)
 ##           - log_imp with auto-block from FUNCNAME[1] (test_log_imp_auto_block)
 ##           - log_imp stderr-only invariant (test_log_imp_stdout_empty)
-##           - 4 semantic wrappers: log_info(IMP:6), log_warn(IMP:8),
-##             log_fail(IMP:9), log_crit(IMP:10)
+##           - 3 semantic wrappers: log_warn(IMP:8), log_fail(IMP:9), log_crit(IMP:10)
 ##           - custom __LOG_PREFIX injection (test_custom_log_prefix)
 ##           - zero side-effects on source (test_no_side_effects_on_source)
 ## @invariants
@@ -36,19 +37,19 @@
 ##            verification is done by asserting stderr contains [IMP:N] for the expected
 ##            importance level.
 ## @changes LAST_CHANGE: 2026-07-07 · Initial implementation per DevPlan test spec
+##           2026-08-02 · Волна 118 B6 — log_info параметр убран (removed API)
 ## @modulemap
 ##   - _run_bash                     [W:30] Helper: write temp script, run bash, return result
 ##   - test_log_imp_explicit_block   [W:40] Explicit block in stderr contains [IMP:7][prefix][myblock]
 ##   - test_log_imp_auto_block       [W:40] Auto-block resolves to "main" at script top level
 ##   - test_log_imp_stdout_empty     [W:30] log_imp writes ONLY to stderr
-##   - test_log_info_wrapper         [W:40] log_info delegates to log_imp 6 with auto-block
 ##   - test_log_warn_wrapper         [W:40] log_warn delegates to log_imp 8 with auto-block
 ##   - test_log_fail_wrapper         [W:40] log_fail delegates to log_imp 9 with auto-block
 ##   - test_log_crit_wrapper         [W:40] log_crit delegates to log_imp 10 with auto-block
 ##   - test_custom_log_prefix        [W:40] __LOG_PREFIX="myscript" → [myscript] in output
 ##   - test_no_side_effects_on_source [W:20] source logging.sh → no stdout/stderr
 ## @usecases
-##   - Developer: run pytest after modifying logging.sh → all 9 tests pass, no regressions
+##   - Developer: run pytest after modifying logging.sh → all 8 tests pass, no regressions
 ##   - Architect: verify __LOG_PREFIX contract, stderr-only invariant, auto-block behavior
 def _module_contract():
     pass
@@ -201,14 +202,14 @@ log_imp 7 "b" "msg"
 @pytest.mark.parametrize(
     "func_name,imp_level,msg,expected_line",
     [
-        ("log_info", 6, "hello", "[IMP:6][unknown][log_info] hello"),
+        # log_info УДАЛЁН (волна 118 B6) — removed API, R5 negative ниже
         ("log_warn", 8, "warning", "[IMP:8][unknown][log_warn] warning"),
         ("log_fail", 9, "error", "[IMP:9][unknown][log_fail] error"),
         ("log_crit", 10, "critical", "[IMP:10][unknown][log_crit] critical"),
     ],
 )
 def test_log_wrapper(func_name, imp_level, msg, expected_line, tmp_path):
-    """Parametrized wrapper test: log_info, log_warn, log_fail, log_crit."""
+    """Parametrized wrapper test: log_warn, log_fail, log_crit."""
     # 🧪 TRAP[TEST] · Regression: each wrapper must delegate to log_imp at correct IMP level
     result = _run_bash(tmp_path, f'{func_name} "{msg}"\n')
     assert result.returncode == 0, f"Script failed: {result.stderr}"
@@ -219,6 +220,37 @@ def test_log_wrapper(func_name, imp_level, msg, expected_line, tmp_path):
         func_name,
         imp_level,
     )
+
+
+# region FUNC_test_log_info_removed
+## @purpose  R5 negative (волна 118 B6): log_info/log_ok удалены из logging.sh (0 callers).
+## @io       ⇥ tmp_path → ⎋ assert rc==0, stderr 'REMOVED'
+## @complexity O(1)
+def test_log_info_removed(tmp_path: Path) -> None:
+    # 🧪 TRAP[TEST] · NEGATIVE (R5) · B6 — log_info/log_ok удалены из logging.sh
+    # · Scenario: source logging.sh → type -t log_info → пусто (не функция)
+    # · Last fail: log_info существовал до волны 118 B6 (logging.sh L98)
+    # · Remove if: log_info/log_ok будут восстановлены
+    result = _run_bash(
+        tmp_path,
+        """
+if [[ "$(type -t log_info)" == "function" ]] || [[ "$(type -t log_ok)" == "function" ]]; then
+    echo "[IMP:10][test] FAIL: log_info/log_ok still defined" >&2
+    exit 1
+fi
+echo "[IMP:9][test] log_info/log_ok REMOVED — OK" >&2
+exit 0
+""",
+    )
+    assert result.returncode == 0, (
+        f"[IMP:9][test_log_info_removed] FAIL: log_info/log_ok не удалены, stderr: {result.stderr}"
+    )
+    assert "REMOVED" in result.stderr, f"[IMP:9][test] FAIL: no REMOVED marker: {result.stderr}"
+    logger = __import__("logging").getLogger(__name__)
+    logger.critical("[IMP:9][test_log_info_removed] PASS: log_info/log_ok removed (B6 R5)")
+
+
+# endregion FUNC_test_log_info_removed
 
 
 # region FUNC_test_custom_log_prefix

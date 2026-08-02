@@ -16,7 +16,8 @@ case $- in *e*) ;; *) echo "[WARN] node-resolver.sh sourced without set -e" >&2 
 ##           3-candidate-path search with a single Python source of truth.
 ## @scope    — resolve_node_yaml() → thin facade (delegates to NodeYaml.resolve())
 ##           — extract_node_host() with YAML host extraction via NodeYaml CLI
-##           — resolve_node_from_env() with JSON NODE_HOST_MAP parsing
+##           (resolve_node_from_env УДАЛЁН, волна 118 B6 — 0 callers: NODE_HOST_MAP
+##           резолвится через Python vps_readiness.py / yaml_query.py в CI)
 ##           — zero side-effects on source (pure function definitions only)
 ## @input    — __LOG_PREFIX (env var, set before source; default: "node-resolver")
 ##           — resolve_node_yaml: node_name, [platform_root], [projects_dir]
@@ -169,65 +170,6 @@ resolve_node_yaml() {
 ## @example   if [[ -z "$(extract_node_host "${yaml_path}")" ]]; then
 ##               echo "WARN: no host defined for this node"
 ##           fi
-# ═══════════════════════════════════════════════════════════════════
-# FUNCTION — resolve_node_from_env
-# ═══════════════════════════════════════════════════════════════════
-# region FUNC_resolve_node_from_env
-## @purpose  Resolve SSH host for a node name from a JSON NODE_HOST_MAP
-##           environment variable (CI context). Parses JSON map, extracts
-##           host by node name. Explicit error if map missing or node not found.
-## @param $1  node_name — name of the node (e.g. "tronyx-vps")
-## @param $2  node_host_map_json — JSON string mapping node names to hosts
-##            (e.g. '{"tronyx-vps":"1.2.3.4"}')
-## @io       stdout: host string (IP or domain)
-##           stderr: LDD logs via log_imp at IMP:7-10
-##           exit 0: success, exit 1: not found / parse error
-## @complexity O(1) — single JSON parse
-## @invariants — If node_host_map_json is empty → explicit error with K5 message
-##             — If node_name not found in map → explicit error with K5 message
-##             — Non-parseable JSON → exit code 1 + IMP:10 log
-##             — python3 used with json module only (stdlib, no deps)
-## @usecases  CI workflow step: ssh_host="$(resolve_node_from_env "tronyx-vps" "$NODE_HOST_MAP")"
-## @example   host="$(resolve_node_from_env "tronyx-vps" '{"tronyx-vps":"10.0.0.1"}')"
-##            # → 10.0.0.1
-## @example   host="$(resolve_node_from_env "web-01" "")" || exit 1
-##            # → "K5: NODE_HOST_MAP not configured" + exit 1
-resolve_node_from_env() {
-    local node_name="${1:-}"
-    local node_host_map_json="${2:-}"
-
-    # ── Validate input ─────────────────────────────────────────────
-    if [[ -z "${node_name}" ]]; then
-        log_imp 10 "-" "Missing required argument: node_name"
-        return 1
-    fi
-
-    if [[ -z "${node_host_map_json}" ]]; then
-        log_imp 10 "-" "K5: NODE_HOST_MAP not configured — org variable is required for node resolution"
-        return 1
-    fi
-
-    # [IMP:8][resolve_node_from_env] Begin resolution
-    log_imp 8 "-" "Resolving host for node=${node_name} from NODE_HOST_MAP"
-
-    # ── Parse JSON via yaml_query.py --stdin ────────────────────────
-    # Replaces inline python3 -c "import json..." (DevPlan 038c T5.2)
-    local host
-    host="$(echo "${node_host_map_json}" | python3 "$(dirname "$_NODE_RESOLVER_LIB_DIR")/internal/scripts/yaml_query.py" \
-        --stdin --get "${node_name}" --default "" 2>/dev/null)" || {
-        log_imp 10 "-" "Failed to resolve node=${node_name} from NODE_HOST_MAP"
-        return 1
-    }
-    if [[ -z "$host" ]]; then
-        log_imp 10 "-" "Node ${node_name} not found in NODE_HOST_MAP"
-        return 1
-    fi
-
-    # ── Result ─────────────────────────────────────────────────────
-    log_imp 9 "-" "Resolved host for node=${node_name}: ${host}"
-    echo "${host}"
-}
-# endregion FUNC_resolve_node_from_env
 
 # ═══════════════════════════════════════════════════════════════════
 # FUNCTION — extract_node_host (fallback, file-based)

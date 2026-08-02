@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, step-transitions, state-json, content-hash, BootstrapPhase, phase-dependency-graph, precondition-check
+# GREP_SUMMARY: state-machine, bootstrap, lifecycle, node-init, node-update, checkpoint-resume, phase-transitions, state-json, content-hash, BootstrapPhase, phase-dependency-graph, precondition-check
 # STRUCTURE: ▶ [BootstrapPhase enum (14)] → ┌StepState + BootstrapState (re-export из state_store)┐ → ◇ precondition_check() → ○ execute_phase() → ◇ statuses {done|done_with_warnings|...} → ⚡ save() → ⎋ compat CLI (lazy cli.py)
 # region MODULE_CONTRACT
 ## @purpose  Explicit state machine for node-lifecycle.sh bootstrap/update process.
@@ -48,6 +48,10 @@
 ##           2026-08-01 | B9 T1/T2 — helpers/, state_store.py, cli.py extraction (2284 → ~950 LOC)
 ##           2026-08-01 | Волна 117 D5 — execute_grouped_phase удалён (мёртвый код); WARN-семантика
 ##           done_with_warnings (≠ done); честный current_step
+##           2026-08-02 | Волна 118 B1 — step-API удалён (start_step/complete_step/skip_step/fail_step/
+##           get_current_step + _is_step_done/_is_step_skipped/_hash_changed/_check_precondition/
+##           _check_postcondition/_step_name + StateTransitionError) — 0 callers в core/ + tests/
+##           (CLI работает через execute_phase/setup_state, grouped-phases эра B9). R5: hasattr=False.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -70,10 +74,6 @@ from core.internal.bootstrap.lifecycle.state_store import (
 from core.internal.shared.content_hash import compute_content_hash as _shared_compute_content_hash
 
 logger = logging.getLogger(__name__)
-
-
-class StateTransitionError(Exception):
-    """Raised when a state transition violates pre/post-conditions (W5-E6 C3)."""
 
 
 class PhaseDependencyError(Exception):
@@ -327,119 +327,6 @@ class StateMachine:
 
     # endregion FUNC_save
 
-    # region FUNC_start_step
-    ## @purpose — Mark a step as running. Sets started_at, updates current_step.
-    ## @io — ⇥ n: step index (1-based) → ⎋ None
-    ## @complexity — O(1)
-    def start_step(self, n: int) -> None:
-        """Validate preconditions and mark step N as running (name-based key)."""
-        step_name = self._step_name(n)
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        step = StepState(name=step_name, status="running", started_at=now)
-        self.state.steps[step_name] = step
-        self.state.current_step = n
-        logger.info("[IMP:9][StateMachine][start_step] Step %d (%s) START", n, step_name)
-        self.save()
-
-    # endregion FUNC_start_step
-
-    # region FUNC_complete_step
-    ## @purpose — Mark a step as done with optional content hash (name-based key).
-    ## @io — ⇥ n: step index, hash_val: optional content hash → ⎋ None
-    ## @complexity — O(1)
-    def complete_step(self, n: int, hash_val: str | None = None) -> None:
-        """Mark step N as completed successfully (name-based key)."""
-        step_name = self._step_name(n)
-        if step_name not in self.state.steps:
-            logger.warning("[IMP:7][StateMachine][complete_step] Step %d not started — creating", n)
-            self.state.steps[step_name] = StepState(name=step_name)
-        self.state.steps[step_name].status = "done"
-        if hash_val:
-            self.state.steps[step_name].hash = hash_val
-        logger.info(
-            "[IMP:9][StateMachine][complete_step] Step %d (%s) DONE",
-            n,
-            self.state.steps[step_name].name,
-        )
-        self.save()
-
-    # endregion FUNC_complete_step
-
-    # region FUNC_skip_step
-    ## @purpose — Mark a step as skipped with reason (TOR_DISABLED, content_unchanged).
-    ## @io — ⇥ n: step index, reason: skip reason → ⎋ None
-    ## @complexity — O(1)
-    def skip_step(self, n: int, reason: str = "") -> None:
-        """Mark step N as skipped (not failed, not run) — name-based key."""
-        step_name = self._step_name(n)
-        if step_name not in self.state.steps:
-            self.state.steps[step_name] = StepState(name=step_name)
-        self.state.steps[step_name].status = "skipped"
-        self.state.steps[step_name].reason = reason or "content_unchanged"
-        logger.info(
-            "[IMP:9][StateMachine][skip_step] Step %d (%s) SKIPPED: %s",
-            n,
-            self.state.steps[step_name].name,
-            reason,
-        )
-        self.save()
-
-    # endregion FUNC_skip_step
-
-    # region FUNC_fail_step
-    ## @purpose — Mark a step as failed, collect error message.
-    ## @io — ⇥ n: step index, error: error description → ⎋ None
-    ## @complexity — O(1)
-    def fail_step(self, n: int, error: str) -> None:
-        """Mark step N as failed (name-based key)."""
-        step_name = self._step_name(n)
-        if step_name not in self.state.steps:
-            self.state.steps[step_name] = StepState(name=step_name)
-        self.state.steps[step_name].status = "failed"
-        self.state.steps[step_name].error = error
-        self.state.errors.append(f"Step {n} ({step_name}): {error}")
-        logger.error(
-            "[IMP:10][StateMachine][fail_step] Step %d (%s) FAILED: %s",
-            n,
-            step_name,
-            error,
-        )
-        self.save()
-
-    # endregion FUNC_fail_step
-
-    # region FUNC_get_current_step
-    ## @purpose — Return the next step index to execute.
-    ##            If state.current_step is 0, returns 1 (not started).
-    ##            If all steps are done/skipped, returns None.
-    ## @io — ⇥ None → ⎋ int or None
-    ## @complexity — O(N) where N = number of steps in mode
-    def get_current_step(self) -> int | None:
-        """Return next step to run (1-based), or None if all done."""
-        step_list = self._step_list()
-        if not step_list:
-            return None
-
-        # If current_step is 0, start from 1
-        if self.state.current_step == 0:
-            return 1
-
-        # Find first step that is pending or failed (name-based key lookup)
-        for i in range(1, len(step_list) + 1):
-            step_name = self._step_name(i)
-            step = self.state.steps.get(step_name)
-            if step is None:
-                return i
-            # done_with_warnings НЕ считается done (волна 117 D5) — фаза перевыполняется
-            if step.status in ("pending", "failed", PHASE_STATUS_DONE_WITH_WARNINGS):
-                return i
-            if step.status == "running":
-                return i  # re-run hanging steps
-
-        return None
-
-    # endregion FUNC_get_current_step
-
     # region FUNC__step_hash
     ## @purpose — Compute SHA256 content hash via shared content_hash module.
     ##            Delegates to compute_content_hash() from core.internal.shared.content_hash.
@@ -625,112 +512,6 @@ class StateMachine:
         return BootstrapPhase.phase_list(self.state.mode)
 
     # endregion FUNC__step_list
-
-    # region FUNC__step_name
-    def _step_name(self, n: int) -> str:
-        """Return the canonical name for step number N."""
-        steps = self._step_list()
-        if 1 <= n <= len(steps):
-            return steps[n - 1]
-        return f"unknown_step_{n}"
-
-    # endregion FUNC__step_name
-
-    # region FUNC__is_step_done
-    def _is_step_done(self, n: int) -> bool:
-        """Check if step N is already completed (name-based key lookup)."""
-        step_name = self._step_name(n)
-        step = self.state.steps.get(step_name)
-        return step is not None and step.status == "done"
-
-    # endregion FUNC__is_step_done
-
-    # region FUNC__is_step_skipped
-    def _is_step_skipped(self, n: int) -> bool:
-        """Check if step N is skipped (name-based key lookup)."""
-        step_name = self._step_name(n)
-        step = self.state.steps.get(step_name)
-        return step is not None and step.status == "skipped"
-
-    # endregion FUNC__is_step_skipped
-
-    # region FUNC__hash_changed
-    def _hash_changed(self, n: int, new_hash: str) -> bool:
-        """Check if step hash changed since last run (name-based key lookup)."""
-        step_name = self._step_name(n)
-        step = self.state.steps.get(step_name)
-        if step is None:
-            return True
-        return step.hash != new_hash
-
-    # endregion FUNC__hash_changed
-
-    # region FUNC__check_precondition
-    ## @purpose — Validate pre-condition before executing a step (W5-E6 C3).
-    ##            Asserts previous step (n-1) is in {done, skipped} or n == 1.
-    ## @io — ⇥ state: BootstrapState, step_index: int, step_name: str
-    ##       ⎋ None (raises StateTransitionError on violation)
-    ## @complexity — O(1)
-    def _check_precondition(self, state: BootstrapState, step_index: int, step_name: str) -> None:
-        """Assert previous step is done/skipped (or step_index == 1 for first step).
-        Uses name-based key lookup for step state.
-        """
-        if step_index == 1:
-            # First step — no previous to check
-            logger.debug(
-                "[IMP:6][StateMachine][_check_precondition] Step %d (%s): first step — pre-condition OK",
-                step_index,
-                step_name,
-            )
-            return
-        prev_name = self._step_name(step_index - 1)
-        prev_step = state.steps.get(prev_name)
-        if prev_step is None:
-            raise StateTransitionError(
-                f"Pre-condition violation: step {step_index - 1} ({prev_name}) has no state (never started). "
-                f"Cannot execute step {step_index} ({step_name})."
-            )
-        if prev_step.status not in ("done", "skipped"):
-            raise StateTransitionError(
-                f"Pre-condition violation: step {step_index - 1} status is '{prev_step.status}', "
-                f"expected 'done' or 'skipped'. Cannot execute step {step_index} ({step_name})."
-            )
-        logger.debug(
-            "[IMP:6][StateMachine][_check_precondition] Step %d (%s): pre-condition OK (prev=%s)",
-            step_index,
-            step_name,
-            prev_step.status,
-        )
-
-    # endregion FUNC__check_precondition
-
-    # region FUNC__check_postcondition
-    ## @purpose — Validate post-condition after completing a step (W5-E6 C3).
-    ##            Asserts current step status == done, state.current_step == step_index.
-    ## @io — ⇥ state: BootstrapState, step_index: int, step_name: str
-    ##       ⎋ None (raises StateTransitionError on violation)
-    ## @complexity — O(1)
-    def _check_postcondition(self, state: BootstrapState, step_index: int, step_name: str) -> None:
-        """Assert current step is done and state.current_step matches step_index.
-        Uses name-based key lookup for step state.
-        """
-        step = state.steps.get(step_name)
-        if step is None:
-            raise StateTransitionError(f"Post-condition violation: step {step_index} ({step_name}) has no state entry.")
-        if step.status != "done":
-            raise StateTransitionError(
-                f"Post-condition violation: step {step_index} ({step_name}) status is '{step.status}', expected 'done'."
-            )
-        if state.current_step != step_index:
-            raise StateTransitionError(
-                f"Post-condition violation: state.current_step is {state.current_step}, "
-                f"expected {step_index} after completing step {step_name}."
-            )
-        logger.debug(
-            "[IMP:6][StateMachine][_check_postcondition] Step %d (%s): post-condition OK", step_index, step_name
-        )
-
-    # endregion FUNC__check_postcondition
 
     # region FUNC_setup_state
     ## @purpose — Initialize state for a run: set mode, node, create phase entries.

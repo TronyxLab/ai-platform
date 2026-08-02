@@ -11,8 +11,10 @@
 ##           Eliminates 9+ duplicated log_imp() definitions across the
 ##           codebase by offering a single source of truth.
 ## @scope    — log_imp() with configurable prefix and auto block detection
-##           — 5 semantic wrapper functions (log_info/ok/warn/fail/crit)
+##           — 3 semantic wrapper functions (log_warn/fail/crit) + log_step
 ##           — zero side-effects on source (pure function definitions only)
+##           Волна 118 B6: log_info (IMP:6) и log_ok (IMP:7) УДАЛЕНЫ — 0 callers
+##           (все скрипты используют log_imp напрямую или log_warn/fail/crit)
 ## @input    — __LOG_PREFIX (env var, set before source; default: "unknown")
 ##           — FUNCNAME[1] via caller context for auto-block detection
 ## @output   — Structured stderr lines: [IMP:N][<prefix>][<block>] <msg>
@@ -28,9 +30,9 @@
 ##            consistent format evolution (e.g., adding timestamps, JSON mode),
 ##            and allows all scripts to benefit from fixes without individual edits.
 ## @changes   LAST_CHANGE: 2026-07-07 · T1 — Initial implementation
+##           2026-08-02 · Волна 118 B6 — log_info/log_ok удалены (0 callers)
 ## @modulemap — log_imp     [W:100] Core LDD logger
-##             — log_info    [W:20]  Semantic wrapper at IMP:6
-##             — log_ok      [W:20]  Semantic wrapper at IMP:7
+##             — log_step    [W:20]  Step status wrapper (bootstrap scripts)
 ##             — log_warn    [W:20]  Semantic wrapper at IMP:8
 ##             — log_fail    [W:20]  Semantic wrapper at IMP:9
 ##             — log_crit    [W:20]  Semantic wrapper at IMP:10
@@ -38,11 +40,10 @@
 ##              log_imp 7 "phase1" "configuration loaded" → stderr
 ##             — Developer: log_warn "disk space low" → auto-block from caller
 # endregion MODULE_CONTRACT
-# GREP_SUMMARY: logging, LDD, log_imp, log_info, log_ok, log_warn, log_fail, log_crit, structured logging, stderr, IMP
+# GREP_SUMMARY: logging, LDD, log_imp, log_warn, log_fail, log_crit, structured logging, stderr, IMP
 # STRUCTURE: ▶ ┌config(__LOG_PREFIX)┐ → ○ log_imp(level,block,msg) → ◇ ┌block=="-"|""?┐ → ⊕ auto(FUNCNAME[1])|explicit → ⊕ [IMP:N][prefix][block] msg → ⎋ stderr
 #            └──────────────── ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘
-#            ⚡ wrappers: log_info→IMP:6, log_ok→IMP:7, log_warn→IMP:8,
-#               log_fail→IMP:9, log_crit→IMP:10
+#            ⚡ wrappers: log_warn→IMP:8, log_fail→IMP:9, log_crit→IMP:10
 
 # ═══════════════════════════════════════════════════════════════════
 # CORE LOGGER
@@ -90,22 +91,6 @@ log_step() {
 # endregion FUNC_log_step
 
 # ═══════════════════════════════════════════════════════════════════
-# region FUNC_log_info
-## @purpose  Log an informational message at IMP:6
-## @param $1  Message text
-## @io       Delegates to log_imp with auto-block detection
-## @complexity O(1)
-log_info() { log_imp 6 "-" "$*"; }
-# endregion FUNC_log_info
-
-# region FUNC_log_ok
-## @purpose  Log a success/ok message at IMP:7
-## @param $1  Message text
-## @io       Delegates to log_imp with auto-block detection
-## @complexity O(1)
-log_ok() { log_imp 7 "-" "$*"; }
-# endregion FUNC_log_ok
-
 # region FUNC_log_warn
 ## @purpose  Log a warning message at IMP:8
 ## @param $1  Message text

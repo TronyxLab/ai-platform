@@ -6,6 +6,7 @@
 # region MODULE_CONTRACT
 ## @purpose  Auto-generate missing tier=generated secrets from secrets-manifest.yaml or fallback hardcoded list.
 ##           Port of core/lib/secrets.sh:step_12b_ensure_secrets() lines 298-411 plus source_secrets_env()
+##           (shell-фасад step_12b_ensure_secrets удалён волна 118 B6 — 0 callers; канон — Python)
 ##           and htpasswd generation. Designed for bootstrap pipeline step 12b.
 ## @scope    core/internal/bootstrap/lifecycle/ — secrets management for bootstrap pipeline.
 ##           Responsibilities: (1) read manifest and fill gaps, (2) parse secrets.env,

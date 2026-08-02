@@ -550,55 +550,38 @@ def test_healthcheck_sh_exists(postgres_fixtures, caplog) -> None:
 
 
 @ldd_trajectory
-def test_ready_check_sh_exists_and_separate(postgres_fixtures, caplog) -> None:
-    """ready-check.sh (readiness) must exist as a SEPARATE script from healthcheck.sh."""
+def test_ready_check_sh_removed(postgres_fixtures, caplog) -> None:
+    """ready-check.sh УДАЛЁН (волна 118 B7) — 0 runtime-вызовов (только COPY в Dockerfile).
+
+    ## @purpose  R5 negative: файл удалён из core/modules/postgres/; Dockerfile COPY строки убраны.
+    ## @scenario postgres_fixtures копирует module dir → ready-check.sh отсутствует
+    ## @rationale В 118 B7 ready-check.sh удалён (мёртвый — только COPY в образ, 0 вызовов
+    ##            из compose/nginx). Резолв пути в фикстуре оставлен для совместимости.
+    """
     with caplog.at_level(logging.DEBUG):
-        logger.info("[IMP:7][test_postgres][ready_check_exists] START: verifying liveness/readiness separation")
+        logger.info("[IMP:7][test_postgres][ready_check_removed] START: B7 R5 — ready-check.sh удалён")
 
         rc_path = postgres_fixtures["READY_CHECK_SH"]
-        hc_path = postgres_fixtures["HEALTHCHECK_SH"]
         rc_exists = os.path.isfile(rc_path)
-        hc_exists = os.path.isfile(hc_path)
-
-        if rc_exists and hc_exists:
-            with open(hc_path) as f:
-                hc_content = f.read()
-            with open(rc_path) as f:
-                rc_content = f.read()
-            are_distinct = hc_content != rc_content
-        else:
-            are_distinct = False
 
         logger.critical(
-            "[IMP:9][test_postgres][ready_check_exists] ASSERT: ready-check exists=%s distinct_from_liveness=%s",
+            "[IMP:9][test_postgres][ready_check_removed] ASSERT: ready-check exists=%s (B7: должен быть удалён)",
             rc_exists,
-            are_distinct,
         )
-        assert rc_exists, f"R2 violation: ready-check.sh not found: {rc_path}"
-        assert are_distinct, "R2 violation: ready-check.sh and healthcheck.sh must be distinct scripts"
+        assert not rc_exists, f"B7 FAIL: ready-check.sh должен быть удалён (0 callers), найден: {rc_path}"
 
 
 @ldd_trajectory
-def test_ready_check_sh_has_two_stage_check(postgres_fixtures, caplog) -> None:
-    """ready-check.sh must perform both TCP liveness (pg_isready) AND query check (psql SELECT 1)."""
+def test_ready_check_sh_absent_from_dockerfile(postgres_fixtures, caplog) -> None:
+    """Dockerfile не должен COPY ready-check.sh (волна 118 B7)."""
     with caplog.at_level(logging.DEBUG):
-        logger.info("[IMP:7][test_postgres][ready_two_stage] START")
-
-        rc_path = postgres_fixtures["READY_CHECK_SH"]
-        assert os.path.isfile(rc_path), f"ready-check.sh not found: {rc_path}"
-        with open(rc_path) as f:
+        logger.info("[IMP:7][test_postgres][ready_check_dockerfile] START")
+        dockerfile = os.path.join(postgres_fixtures["MODULE_DIR"], "Dockerfile")
+        assert os.path.isfile(dockerfile), f"Dockerfile not found: {dockerfile}"
+        with open(dockerfile) as f:
             content = f.read()
-
-        has_pg_isready = "pg_isready" in content
-        has_psql = "psql" in content or "SELECT" in content
-
-        logger.critical(
-            "[IMP:9][test_postgres][ready_two_stage] ASSERT: has_pg_isready=%s has_psql=%s",
-            has_pg_isready,
-            has_psql,
-        )
-        assert has_pg_isready, "ready-check.sh must use pg_isready (TCP liveness step)"
-        assert has_psql, "ready-check.sh must use psql/SELECT to verify query readiness"
+        assert "ready-check.sh" not in content, "B7 FAIL: Dockerfile всё ещё COPY ready-check.sh"
+        logger.critical("[IMP:9][test_postgres][ready_check_dockerfile] PASS: Dockerfile чист (B7)")
 
 
 # endregion HEALTHCHECK_SCRIPT_TESTS
