@@ -32,9 +32,10 @@ TEST_AGE_KEY = "AGE-SECRET-KEY-0123456789abcdef"
 
 
 # region CLASS_TestDetectAgeKey
-## @purpose  Detect_age_key chain scenarios (DevPlan 104 §9 — 4 tests).
-## @scope    env → SOPS → file → not-found. Uses monkeypatch for env, tmp_path for file.
-## @invariants — chain order preserved; None (not empty string) on not found
+## @purpose  Detect_age_key chain scenarios (DevPlan 104 §9 — 4 tests + default-file 2026-08-02).
+## @scope    env → SOPS → file → default-file → not-found. Uses monkeypatch for env, tmp_path for file.
+## @invariants — chain order preserved; None (not empty string) on not found; default-file probed
+##               only after the full env chain is empty (HOME isolated via monkeypatch in every test)
 class TestDetectAgeKey:
     # region FUNC_test_from_age_secret_key_env
     ## @purpose — Verify detect_age_key reads from AGE_SECRET_KEY env var (first chain link).
@@ -118,20 +119,27 @@ class TestDetectAgeKey:
 
     # region FUNC_test_not_found
     ## @purpose — Verify detect_age_key returns None when no key source is available.
-    ## @io — ⇥ monkeypatch → ⎋ None (asserts None)
+    ## @io — ⇥ monkeypatch, tmp_path → ⎋ None (asserts None)
     ## @complexity — O(1)
     @pytest.mark.unit
     @ldd_trajectory
 
     # 🧪 TRAP[TEST] · 2026-07-31 · REGRESSION · No AGE key source available (DevPlan 104 §9)
-    # · Last fail: N/A (new test)
+    # · 2026-08-02: HOME isolated to tmp_path — default-file chain link (added for E2E auto-detect)
+    # ·   would otherwise find the operator's real ~/.ssh/age-key-personal.txt on dev machines
     # · Remove if: detect_age_key chain changes
-    def test_not_found(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
-        """detect_age_key returns None when all three sources are absent."""
+    def test_not_found(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """detect_age_key returns None when all three sources + default files are absent."""
         caplog.set_level(logging.DEBUG)
         monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
         monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
         monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))  # isolate default-file probe from real home
 
         logger.info("[IMP:7][test_node_detect] Testing missing key — all sources absent")
         result = detect_age_key()
@@ -139,6 +147,43 @@ class TestDetectAgeKey:
         logger.info("[IMP:9][test_node_detect] detect_age_key returned None when all sources absent")
 
     # endregion FUNC_test_not_found
+
+    # region FUNC_test_from_default_user_file
+    ## @purpose — Verify detect_age_key falls back to ~/.config/age/keys.txt (4th chain link,
+    ##            E2E auto-detect, 2026-08-02; единственный default-путь с 2026-08-03) when
+    ##            the full env chain is empty.
+    ## @io — ⇥ monkeypatch, tmp_path → ⎋ None (asserts key matches)
+    ## @complexity — O(1)
+    @pytest.mark.unit
+    @ldd_trajectory
+
+    # 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · default key file detection (E2E channel)
+    # · 2026-08-03: путь заменён на ~/.config/age/keys.txt (age CLI default, symlink-конвенция)
+    # · Last fail: N/A (new test — recreatable test-VPS 103.88.243.151)
+    # · Remove if: detect_age_key default-file chain link is removed
+    def test_from_default_user_file(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """detect_age_key reads ~/.config/age/keys.txt when env chain is empty."""
+        caplog.set_level(logging.DEBUG)
+        monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
+        monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+        monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        config_dir = tmp_path / ".config" / "age"
+        config_dir.mkdir(parents=True)
+        (config_dir / "keys.txt").write_text(TEST_AGE_KEY + "\n")
+
+        logger.info("[IMP:7][test_node_detect] Testing default ~/.config/age/keys.txt detection")
+        result = detect_age_key()
+        assert result == TEST_AGE_KEY, f"Expected {TEST_AGE_KEY}, got {result}"
+        logger.info("[IMP:9][test_node_detect] detect_age_key returned key from default key file")
+
+    # endregion FUNC_test_from_default_user_file
 
 
 # endregion CLASS_TestDetectAgeKey
@@ -353,25 +398,28 @@ class TestCLI:
     # region FUNC_test_detect_age_key_not_found
     ## @purpose — Negative test: --detect-age-key with no key → exit 3, empty stdout (R5 anti-survivorship).
     ##            Exit 3 = module OK, key absent (language policy — no inline python3 probe, TRAP[DECISION]).
-    ## @io — ⇥ main(argv) + capsys → ⎋ None (asserts rc + empty stdout)
+    ## @io — ⇥ main(argv) + capsys + tmp_path → ⎋ None (asserts rc + empty stdout)
     ## @complexity — O(1)
     @pytest.mark.unit
     @ldd_trajectory
 
     # 🧪 TRAP[TEST] · 2026-07-31 · REGRESSION · CLI --detect-age-key not-found path (DevPlan 104 §9)
-    # · Last fail: N/A (new test)
+    # · 2026-08-02: HOME isolated to tmp_path — default-file chain link (E2E auto-detect) would
+    # ·   otherwise return the operator's real key on dev machines (exit 0 instead of 3)
     # · Remove if: node_detect CLI is reworked
     def test_detect_age_key_not_found(
         self,
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture,
+        tmp_path: pytest.TempPathFactory,
     ) -> None:
         """main(['--detect-age-key']) with no key returns 3 and empty stdout."""
         caplog.set_level(logging.DEBUG)
         monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
         monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
         monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))  # isolate default-file probe from real home
 
         logger.info("[IMP:7][test_node_detect] Testing CLI --detect-age-key not-found path")
         rc = main(["--detect-age-key"])

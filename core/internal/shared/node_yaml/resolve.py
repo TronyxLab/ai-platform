@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+# GREP_SUMMARY: node-yaml-resolve, ResolveMixin, resolve, 3-path, node-configs, glob, 119-H
+# STRUCTURE: ▶ ResolveMixin.resolve(node_name, config_dir) → ◇ env NODE_NAME/hostname → ◇ 3-path glob (platform_root/~/projects//opt) → ◇ isfile → ⎋ NodeYaml | raise ConfigNotFoundError
+# region MODULE_CONTRACT
+## @purpose  Доменный миксин NodeYaml — 3-path резолв node.yaml (DevPlan 119 H1).
+##           resolve() ищет node.yaml в 3 путях и возвращает загруженный NodeYaml-инстанс.
+## @scope    Миксин для NodeYaml-агрегатора (node_yaml/__init__.py). Потребители:
+##           node-resolver.sh (фасад), remote_executor, e2e conftest (Path 1).
+## @invariants
+##   1. 3-path search (в порядке): {platform_root}/node-configs/{node_name}/node.yaml,
+##      $HOME/projects/*/node-configs/{node_name}/node.yaml (glob), /opt/node-configs/{node_name}/node.yaml.
+##   2. node_name: аргумент → env NODE_NAME → socket.gethostname().
+##   3. config_dir: аргумент → env PLATFORM_ROOT → platform_remote_base() (shared/deploy_paths, B3).
+##   4. Raises ConfigNotFoundError если не найдено ни в одном пути.
+##   5. classmethod: возвращает cls(path) — агрегатор NodeYaml (MRO подставляет конкретный класс).
+## @rationale DevPlan 119 H1 (AUDIT-2 M1): 3-path resolve выделен из монолита node_yaml.py (T2).
+##            Делегирование platform_remote_base сохранено (единый канон путей, DevPlan 118 B3).
+## @changes 2026-08-03 · DevPlan 119 H1 — извлечено из node_yaml.py (resolve) в node_yaml/resolve.py
+##           без изменения логики
+## @changes 2026-07-30 · DevPlan 088 — resolve created (T2)
+# endregion MODULE_CONTRACT
+
+import glob as glob_module
+import logging
+import os
+
+from core.internal.shared.deploy_paths import platform_remote_base
+from core.internal.shared.exceptions import ConfigNotFoundError
+
+logger = logging.getLogger(__name__)
+
+
+# region CLASS_ResolveMixin
+class ResolveMixin:
+    """Доменный миксин NodeYaml: 3-path resolve node.yaml (DevPlan 119 H1).
+
+    GREP_SUMMARY: ResolveMixin, resolve, 3-path, node-configs
+    STRUCTURE: ▶ ResolveMixin.resolve(node_name, config_dir) → ◇ 3-path → ⎋ NodeYaml
+    """
+
+    # region FUNC_resolve
+    ## @purpose  Resolve node.yaml via 3-path search and return loaded NodeYaml instance.
+    ## @io — ⇥ node_name: Optional[str], config_dir: Optional[str] → ⎋ NodeYaml
+    ## @complexity — O(P) where P = number of glob candidates
+    ## @invariants
+    ##   Searches 3 paths in order:
+    ##     1. {platform_root}/node-configs/{node_name}/node.yaml
+    ##     2. $HOME/projects/*/node-configs/{node_name}/node.yaml (glob)
+    ##     3. /opt/node-configs/{node_name}/node.yaml
+    ##   Raises ConfigNotFoundError if not found in any path.
+    @classmethod
+    def resolve(cls, node_name: str | None = None, config_dir: str | None = None) -> "object":
+        """Resolve node.yaml via 3-path search and return loaded NodeYaml instance.
+
+        Searches 3 paths in order:
+          1. {platform_root}/node-configs/{node_name}/node.yaml
+          2. $HOME/projects/*/node-configs/{node_name}/node.yaml (glob)
+          3. /opt/node-configs/{node_name}/node.yaml
+
+        Args:
+            node_name: Node name. If None, tries from env NODE_NAME, then hostname.
+            config_dir: Base config directory. If None, tries PLATFORM_ROOT env, then /opt/platform.
+
+        Returns:
+            Loaded NodeYaml instance
+
+        Raises:
+            ConfigNotFoundError: if node.yaml not found in any path
+        """
+        if node_name is None:
+            node_name = os.environ.get("NODE_NAME", "")
+        if not node_name:
+            import socket
+
+            node_name = socket.gethostname()
+
+        if config_dir is None:
+            config_dir = os.environ.get("PLATFORM_ROOT", str(platform_remote_base()))
+
+        logger.info("[IMP:8][NodeYaml.resolve] Resolving node.yaml for node=%s", node_name)
+
+        # Path 1: platform_root/node-configs/{node_name}/node.yaml
+        candidates: list[str] = [
+            os.path.join(config_dir, "node-configs", node_name, "node.yaml"),
+        ]
+
+        # Path 2: ~/projects/*/node-configs/{node_name}/node.yaml (glob)
+        projects_dir = os.path.expanduser("~/projects")
+        candidates.extend(
+            sorted(glob_module.glob(os.path.join(projects_dir, "*", "node-configs", node_name, "node.yaml")))
+        )
+
+        # Path 3: /opt/node-configs/{node_name}/node.yaml
+        candidates.append(f"/opt/node-configs/{node_name}/node.yaml")
+
+        for p in candidates:
+            if os.path.isfile(p):
+                logger.info("[IMP:9][NodeYaml.resolve] Found: %s", p)
+                return cls(p)
+
+        searched = ", ".join(candidates)
+        logger.error("[IMP:10][NodeYaml.resolve] Not found for node=%s (searched: %s)", node_name, searched)
+        raise ConfigNotFoundError(f"node.yaml not found for node={node_name}")
+
+    # endregion FUNC_resolve
+
+
+# endregion CLASS_ResolveMixin

@@ -40,7 +40,7 @@
 ##           core/internal/bootstrap/lifecycle/secrets_manager.py, core/internal/bootstrap/s3_ssl_cache.py,
 ##           core/internal/bootstrap/deploy/sudoers_generator.py, core/internal/healthcheck/metrics/cache.py,
 ##           core/internal/scripts/sync_env_defaults.py, core/internal/template_engine.py,
-##           core/internal/shared/node_yaml.py), EXCLUDED(core/internal/healthcheck/metrics/json_writer.py)
+##           core/internal/shared/node_yaml/_core.py), EXCLUDED(core/internal/healthcheck/metrics/json_writer.py)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations

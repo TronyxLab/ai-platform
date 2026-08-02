@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: node-detect, detect-age-key, auto-detect-node-name, AGE_SECRET_KEY, SOPS_AGE_KEY, AGE_SECRET_KEY_FILE, node-configs, NodeDetectionError, shared, cli
-# STRUCTURE: ▶ detect_age_key → ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ⊕ masked log → ⎋ str|None ── ▶ auto_detect_node_name → ∋ scan node-configs/*/ (skip scripts|secrets) → ◇ count==1? → ⎋ name | ✗ NodeDetectionError ── ▶ CLI → ◇ --detect-age-key | --detect-node-name → ⎋ exit 0|3|1 (3 = key absent)
+# GREP_SUMMARY: node-detect, detect-age-key, auto-detect-node-name, AGE_SECRET_KEY, SOPS_AGE_KEY, AGE_SECRET_KEY_FILE, default-key-files, node-configs, NodeDetectionError, shared, cli
+# STRUCTURE: ▶ detect_age_key → ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ default key file (~/.config/age/keys.txt)? → ⊕ masked log → ⎋ str|None ── ▶ auto_detect_node_name → ∋ scan node-configs/*/ (skip scripts|secrets) → ◇ count==1? → ⎋ name | ✗ NodeDetectionError ── ▶ CLI → ◇ --detect-age-key | --detect-node-name → ⎋ exit 0|3|1 (3 = key absent)
 # region MODULE_CONTRACT
 ## @purpose  Canonical single-source-of-truth for AGE secret key detection and node name
 ##           auto-detection. Consolidates duplicate shell implementations from
@@ -13,7 +13,11 @@
 ##           node-update.sh, platform-export-metrics.sh (metrics wrapper), core-deploy CI workflow —
 ##           scripts/ and secrets/ are ALWAYS excluded (single detector canon).
 ## @invariants
-##   1. detect_age_key chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE (first non-empty wins)
+##   1. detect_age_key chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE →
+##      default key file ~/.config/age/keys.txt (first non-empty wins). Default — стандартная
+##      age CLI локация; на dev-машине оператора это symlink на ~/.ssh/age-key-personal.txt.
+##      Используется ТОЛЬКО когда env-цепочка пуста (CI/production не затронуты: ключ
+##      всегда передаётся через env/файл)
 ##   2. detect_age_key returns None (never empty string) when no key found
 ##   3. detect_age_key logs masked (first 8 chars) key source at IMP:8 — no plaintext key in logs
 ##   4. auto_detect_node_name skips "scripts" and "secrets" subdirectories
@@ -30,6 +34,10 @@
 ##            node_detect.py becomes the canonical implementation.
 ## @changes  2026-07-31 | DevPlan 104 — Created (consolidates age_key.py logic + shell functions)
 ## @changes  2026-07-31 | Final-gate fix — key-absent exit code 1→3 (language policy: no inline probe)
+## @changes  2026-08-02 | E2E-канал — 4-е звено: default key files для бесшовного локального запуска
+##            make test-node без ручного export (test-VPS пересоздана, 103.88.243.151)
+## @changes  2026-08-03 | Один default-путь: ~/.config/age/keys.txt (age CLI default) — на dev-машине
+##            symlink на ~/.ssh/age-key-personal.txt (решение пользователя: единая стандартная локация)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -63,18 +71,21 @@ class NodeDetectionError(Exception):
 
 # region FUNC_detect_age_key
 ## @purpose  Detect AGE secret key from env chain (logic inherited from age_key.py, DevPlan 078):
-##            AGE_SECRET_KEY env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE content.
+##            AGE_SECRET_KEY env → SOPS_AGE_KEY env → AGE_SECRET_KEY_FILE content →
+##            default key file ~/.config/age/keys.txt.
 ##            Mirrors the removed shell detect_age_key() from bootstrap.sh/node-update.sh.
 ## @io       ⇥ None → ⎋ str | None (None = not found)
-## @complexity O(1) — 3 env/file lookups
+## @complexity O(1) — 3 env lookups + 1 default file probe
 ## @invariants
 ##   - Returns None (never empty string) on not found — caller distinguishes "not set" from "empty"
 ##   - Logs masked (first 8 chars) at IMP:8 for audit
 ##   - AGE_SECRET_KEY_FILE is read as first line (head -1 equivalent, strip newline)
+##   - Default key file is probed ONLY after the full env chain is empty — env (CI/production)
+##     always wins; default file is an operator convenience for local E2E (test-node)
 def detect_age_key() -> str | None:
     """Detect AGE secret key from env chain.
 
-    ▶ ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ⎋ str | None
+    ▶ ◇ AGE_SECRET_KEY env? → ◇ SOPS_AGE_KEY env? → ◇ AGE_SECRET_KEY_FILE? → ◇ ~/.config/age/keys.txt? → ⎋ str | None
     """
     # ── Check 1: AGE_SECRET_KEY env ──
     # Returns key in canonical AGE-SECRET-KEY-xxxxxxxx… format (with prefix)
@@ -102,6 +113,29 @@ def detect_age_key() -> str | None:
             logger.warning("[IMP:8][node_detect] AGE_SECRET_KEY_FILE=%s is empty", file_path)
         except OSError as e:
             logger.warning("[IMP:8][node_detect] Cannot read AGE_SECRET_KEY_FILE=%s: %s", file_path, e)
+
+    # ── Check 4: default key file (operator convenience, local E2E) ──
+    # Probing Path.home() at call time (not import time) so tests can monkeypatch HOME.
+    # Env chain above is empty here — CI/production always set AGE_SECRET_KEY(_FILE), so
+    # this path is a no-op there (single-source-of-truth chain extension, 2026-08-02).
+    # Единственный default: ~/.config/age/keys.txt — стандартная age CLI локация; на dev-машине
+    # оператора это symlink на ~/.ssh/age-key-personal.txt (решение пользователя 2026-08-03).
+    # Файл ключа несёт comment-строки ВЫШЕ ключа (# created / # public key — .zshrc использует
+    # `tail -1` по той же причине), поэтому берётся ПЕРВАЯ строка с каноническим префиксом
+    # AGE-SECRET-KEY-, а не слепой readline().
+    home = Path.home()
+    candidate = home / ".config" / "age" / "keys.txt"
+    if candidate.is_file():
+        try:
+            with open(candidate) as f:
+                key = next((line.strip() for line in f if line.strip().startswith("AGE-SECRET-KEY-")), "")
+        except OSError as e:
+            logger.warning("[IMP:8][node_detect] Cannot read default key file %s: %s", candidate, e)
+        else:
+            if key:
+                _log_masked("AGE_SECRET_KEY", key, f"default file {candidate}")
+                return key
+            logger.warning("[IMP:8][node_detect] Default key file %s has no AGE-SECRET-KEY- line", candidate)
 
     logger.warning(
         "[IMP:8][node_detect] AGE_SECRET_KEY not found — Docker modules requiring secrets will fail to deploy"

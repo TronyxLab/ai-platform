@@ -10,7 +10,8 @@
 ## @invariants
 ##   - 2 functions max: usage, main
 ##   - NODE=<name> optional in --resolve mode (auto-detection from /opt/node-configs/)
-##   - AGE_SECRET_KEY chain: env → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE; missing = WARN (not fatal)
+##   - AGE_SECRET_KEY chain (node_detect.py): env → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE →
+##     default key file ~/.config/age/keys.txt (age CLI default, symlink-конвенция); missing = WARN (not fatal)
 ##   - ci_deploy_key: node.yaml единственный SoT (D2, B3 T6) — env-override удалён
 ##   - --dry-run prints SCP+SSH commands; --resume always passed to node-lifecycle --mode init
 ## 🧐 TRAP[DECISION] · 2026-07-21 · — · Encrypted secrets: <node-configs-dir>/secrets/<NODE>.enc.yaml

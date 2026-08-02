@@ -54,6 +54,20 @@ import pytest
 from tests.conftest import ldd_trajectory
 from tests.helpers.gate_helpers import repo_root
 
+# ⚠️ xdist-race (DevPlan 119 H, TRAP[DEBT] 2026-08-03):
+# R5-negative-тесты пишут probe-файлы (_gate_probe_opt_path.py/_gate_probe_opt_path_b3.py/
+# _gate_probe_timeout_a2.py) в РАБОЧЕЕ дерево core/internal/, а позитивные тесты-сканеры
+# (_find_offenders/_find_opt_path_literals) в параллельных xdist-worker'ах ловят чужой probe →
+# флаки RED (make gate MODE=fast flaky, 2026-08-03, воспроизводится 3/3 с -n auto).
+# Решение: сканеры исключают файлы с префиксом _gate_probe_ (тестовые артефакты, НЕ продукт).
+# Отвергнуто: xdist_group("serial") — требует --dist loadgroup, при -n auto (load) игнорируется.
+# 📝 TRAP[DEBT] · 2026-08-03 · MED · xdist race: probe-файлы R5-тестов в core/internal/ пересекаются
+# · со сканерами тех же тестов (test_no_opt_path_literals_in_core_internal ловит _gate_probe_opt_path)
+# · Observed: flaky 1 failed из 14 при -n auto (2026-08-03, волна H верификация)
+# · Suspected: R5-тесты пишут probe в рабочее дерево вместо tmp_path (Zero Hardcode Rule нарушение);
+# ·   корректный фикс — probe в tmp_path + параметризация сканера; исключение _gate_probe_ — минимальная защита
+# · Impact: без исключения probe-префикса gate flaky; при tmp_path-фиксе исключение можно снять
+# · When: during 119-H NodeYaml verification — deferred, out of scope (волна B/A2 тесты)
 logger = logging.getLogger(__name__)
 
 ROOT = repo_root()
@@ -143,17 +157,20 @@ def _cmd_is_domain(cmd_node: ast.AST) -> bool:
     return False
 
 
-def _find_offenders() -> list[tuple[str, int, int]]:
+def _find_offenders(root: "object | None" = None) -> list[tuple[str, int, int]]:
     """Найти timeout= литералы в docker/ssh/healthcheck-вызовах domain-файлов.
 
     ▶ ┌core/internal domain files┐ → ○ AST walk → ◇ subprocess.* + timeout=литерал ∈ set + cmd domain
-      → ⊕ offenders → ⎋ list. Пути — ОТНОСИТЕЛЬНО core/internal/ (фикс C1).
+      → ⊕ offenders → ⎋ list. Пути — ОТНОСИТЕЛЬНО корня (по умолчанию core/internal/, фикс C1).
+    Параметр root (DevPlan 119 H): R5-тесты сканируют probe во tmp_path — Zero Hardcode Rule,
+    устраняет xdist-race (probe-файлы больше не пишутся в рабочее дерево, TRAP[DEBT] 2026-08-03).
     """
+    base = _CORE_INTERNAL if root is None else root
     offenders: list[tuple[str, int, int]] = []
-    for p in sorted(_CORE_INTERNAL.rglob("*.py")):
+    for p in sorted(base.rglob("*.py")):
         if "__pycache__" in p.parts:
             continue
-        rel = p.relative_to(_CORE_INTERNAL).as_posix()
+        rel = p.relative_to(base).as_posix()
         if not _is_domain_file(rel):
             continue
         if rel in _ALLOWLIST_FILES:
@@ -194,19 +211,22 @@ def _find_offenders() -> list[tuple[str, int, int]]:
     return offenders
 
 
-def _find_module_offenders() -> list[tuple[str, int, int]]:
+def _find_module_offenders(root: "object | None" = None) -> list[tuple[str, int, int]]:
     """Найти timeout= литералы на ЛЮБОМ вызове в модульных domain-файлах (watchdog, DevPlan 118 C1).
 
     ▶ ┌core/modules watchdog files┐ → ○ AST walk → ◇ ЛЮБОЙ Call с timeout=литерал ∈ set → ⊕ offenders → ⎋ list
     ## @purpose  docker_ops._run_docker(...) передаёт timeout литералом АРГУМЕНТОМ (не через
     ##            subprocess.*) — правило «любой вызов» покрывает этот паттерн: файлы из
     ##            _MODULE_DOMAIN_FILES целиком docker/ssh-домен (agent_watchdog, docker_ops).
+    ## Параметр root (DevPlan 119 H): R5-тесты сканируют probe во tmp_path — Zero Hardcode Rule,
+    ## устраняет xdist-race (TRAP[DEBT] 2026-08-03).
     """
+    base = _CORE_MODULES if root is None else root
     offenders: list[tuple[str, int, int]] = []
-    for p in sorted(_CORE_MODULES.rglob("*.py")):
+    for p in sorted(base.rglob("*.py")):
         if "__pycache__" in p.parts:
             continue
-        rel = p.relative_to(_CORE_MODULES).as_posix()
+        rel = p.relative_to(base).as_posix()
         if rel not in _MODULE_DOMAIN_FILES:
             continue
         try:
@@ -307,13 +327,16 @@ def test_r5_negative_raw_timeout_30_detected(caplog) -> None:
 
 @pytest.mark.gate
 @ldd_trajectory
-def test_r5_negative_module_rule_detects_run_docker_literal(caplog) -> None:
+def test_r5_negative_module_rule_detects_run_docker_literal(caplog, tmp_path) -> None:
     """R5 negative: исходный вход C1 (self._run_docker([...], timeout=30)) — module-rule ловит."""
     import textwrap
 
-    tmp = ROOT / "core" / "modules" / "hermes-agent" / "watchdog"
-    probe = tmp / "_gate_probe_tmp.py"
-    probe_rel = "hermes-agent/watchdog/_gate_probe_tmp.py"
+    # DevPlan 119 H: probe во tmp_path (Zero Hardcode Rule) — рабочее дерево не загрязняется,
+    # xdist-race с позитивным сканером _find_module_offenders устранён (TRAP[DEBT] 2026-08-03).
+    # probe_rel добавляется в _MODULE_DOMAIN_FILES с watchdog-префиксом — сканер (root=tmp_path)
+    # вычисляет rel = basename; добавляем БЕЗ префикса, чтобы релятивный путь совпал.
+    probe = tmp_path / "_gate_probe_tmp.py"
+    probe_rel = "_gate_probe_tmp.py"  # rel от tmp_path-корня (сканер root=tmp_path)
     probe.write_text(
         textwrap.dedent(
             """\
@@ -328,7 +351,7 @@ def test_r5_negative_module_rule_detects_run_docker_literal(caplog) -> None:
     )
     try:
         _MODULE_DOMAIN_FILES.add(probe_rel)
-        offenders = _find_module_offenders()
+        offenders = _find_module_offenders(root=tmp_path)
         hits = [(rel, ln, val) for rel, ln, val in offenders if "_gate_probe_tmp" in rel]
         assert hits, "R5 FAIL: module-rule missed original C1 trigger (self._run_docker timeout=30)"
     finally:
@@ -439,10 +462,12 @@ def test_timeout_in_reconciler_projects(caplog) -> None:
 @pytest.mark.gate
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литерал в новом domain-файле детектится (DevPlan 119 A2)
-# · Scenario: probe-файл core/internal/ с subprocess docker + timeout=10 литерал → _find_offenders ловит
+# · Scenario: probe-файл tmp_path/ с subprocess docker + timeout=10 литерал → _find_offenders ловит
+# ·   (DevPlan 119 H: probe перенесён из рабочего дерева core/internal/ в tmp_path — Zero Hardcode
+# ·   Rule + устранение xdist-race, TRAP[DEBT] 2026-08-03)
 # · Last fail: N/A (новый negative-тест — исходный вход AUDIT-4 T1 = timeout=10 в docker_registry_auth:278)
 # · Remove if: timeout-literals гейт отменяется
-def test_timeout_literal_detected_negative(caplog) -> None:
+def test_timeout_literal_detected_negative(caplog, tmp_path) -> None:
     """R5 negative: timeout= литерал в новом domain-файле (A2 scope) детектируется.
 
     ## @purpose — Anti-survivorship: доказывает, что расширенный scope реально сканирует
@@ -453,7 +478,9 @@ def test_timeout_literal_detected_negative(caplog) -> None:
     caplog.set_level(logging.INFO)
     import textwrap
 
-    probe = _CORE_INTERNAL / "_gate_probe_timeout_a2.py"
+    # DevPlan 119 H: probe во tmp_path (Zero Hardcode Rule) — рабочее дерево не загрязняется,
+    # xdist-race между R5-создателем и позитивным сканером устранён (TRAP[DEBT] 2026-08-03).
+    probe = tmp_path / "_gate_probe_timeout_a2.py"
     probe_rel = "_gate_probe_timeout_a2.py"
     probe.write_text(
         textwrap.dedent(
@@ -471,7 +498,7 @@ def test_timeout_literal_detected_negative(caplog) -> None:
     )
     try:
         _DOMAIN_FILES.add(probe_rel)
-        offenders = _find_offenders()
+        offenders = _find_offenders(root=tmp_path)
         hits = [(rel, ln, val) for rel, ln, val in offenders if "_gate_probe_timeout_a2" in rel]
         assert hits, "R5 FAIL: timeout=10 literal in new domain file (A2 scope) was NOT detected"
         logger.info("[IMP:9][timeout_literals][A2][R5] PASS: probe %s:%d timeout=%d detected", *hits[0])
@@ -488,18 +515,21 @@ _OPT_PATH_LITERAL = re.compile(r'["\']/opt/(projects|platform|node-configs)["\']
 _OPT_PATH_CANON = "shared/deploy_paths.py"
 
 
-def _find_opt_path_literals() -> list[tuple[str, int, str]]:
+def _find_opt_path_literals(root: "object | None" = None) -> list[tuple[str, int, str]]:
     """Найти литералы /opt/{projects,platform,node-configs} в core/internal (кроме deploy_paths.py).
 
     ▶ ┌core/internal/**/*.py┐ → ○ line scan → ◇ regex ["']/opt/(projects|platform|node-configs)["'] → ⊕ offenders → ⎋ list
     ## @purpose  AC-B2.1/AC-B3.1 (DevPlan 119): 0 дублирующих литералов путей вне SoT deploy_paths.
     ##            Комментарии с литералом тоже RED (дрейф-источник — переписывать, не цитировать).
+    ## Параметр root (DevPlan 119 H): R5-тесты сканируют probe во tmp_path — Zero Hardcode Rule,
+    ## устраняет xdist-race (probe-файлы больше не пишутся в рабочее дерево, TRAP[DEBT] 2026-08-03).
     """
+    base = _CORE_INTERNAL if root is None else root
     offenders: list[tuple[str, int, str]] = []
-    for p in sorted(_CORE_INTERNAL.rglob("*.py")):
+    for p in sorted(base.rglob("*.py")):
         if "__pycache__" in p.parts:
             continue
-        rel = p.relative_to(_CORE_INTERNAL).as_posix()
+        rel = p.relative_to(base).as_posix()
         if rel == _OPT_PATH_CANON:
             continue
         try:
@@ -532,15 +562,16 @@ def test_no_opt_path_literals_in_core_internal(caplog) -> None:
 @pytest.mark.gate
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литерал /opt/projects в новом файле детектится (B2)
-# · Scenario: probe-файл с os.environ.get("PROJECTS_BASE", "/opt/projects") → _find_opt_path_literals ловит
+# · Scenario: probe-файл (tmp_path) с os.environ.get("PROJECTS_BASE", "/opt/projects") → сканер ловит
+# ·   (DevPlan 119 H: probe в tmp_path — Zero Hardcode Rule, устранение xdist-race, TRAP[DEBT] 2026-08-03)
 # · Last fail: deploy_engine.py:234 projects_base="/opt/projects" (исходный вход AUDIT-4 T2)
 # · Remove if: opt-path гейт отменяется
-def test_opt_projects_literal_detected_negative(caplog) -> None:
+def test_opt_projects_literal_detected_negative(caplog, tmp_path) -> None:
     """R5 negative: /opt/projects литерал (исходный вход B2) детектируется."""
     caplog.set_level(logging.INFO)
     import textwrap
 
-    probe = _CORE_INTERNAL / "_gate_probe_opt_path.py"
+    probe = tmp_path / "_gate_probe_opt_path.py"
     probe.write_text(
         textwrap.dedent(
             """\
@@ -551,7 +582,9 @@ def test_opt_projects_literal_detected_negative(caplog) -> None:
         )
     )
     try:
-        hits = [(rel, ln, line) for rel, ln, line in _find_opt_path_literals() if "_gate_probe_opt_path" in rel]
+        hits = [
+            (rel, ln, line) for rel, ln, line in _find_opt_path_literals(root=tmp_path) if "_gate_probe_opt_path" in rel
+        ]
         assert hits, "R5 FAIL: /opt/projects literal (исходный вход B2) не обнаружен"
         logger.info("[IMP:9][opt_path_literals][B2][R5] PASS: probe %s:%d %s detected", *hits[0])
     finally:
@@ -561,15 +594,17 @@ def test_opt_projects_literal_detected_negative(caplog) -> None:
 @pytest.mark.gate
 @ldd_trajectory
 # 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литералы /opt/platform + /opt/node-configs детектятся (B3)
-# · Scenario: probe-файл с os.environ.get("PLATFORM_ROOT", "/opt/platform") и "/opt/node-configs" → ловится
+# · Scenario: probe-файл (tmp_path) с os.environ.get("PLATFORM_ROOT", "/opt/platform") и
+# ·   "/opt/node-configs" → ловится (DevPlan 119 H: probe в tmp_path — Zero Hardcode Rule,
+# ·   устранение xdist-race, TRAP[DEBT] 2026-08-03)
 # · Last fail: orchestrator.py:890 platform_root="/opt/platform", secrets.py:91 "/opt/node-configs" (AUDIT-4 T3)
 # · Remove if: opt-path гейт отменяется
-def test_opt_platform_nodeconfigs_literal_detected_negative(caplog) -> None:
+def test_opt_platform_nodeconfigs_literal_detected_negative(caplog, tmp_path) -> None:
     """R5 negative: /opt/platform + /opt/node-configs литералы (исходный вход B3) детектируются."""
     caplog.set_level(logging.INFO)
     import textwrap
 
-    probe = _CORE_INTERNAL / "_gate_probe_opt_path_b3.py"
+    probe = tmp_path / "_gate_probe_opt_path_b3.py"
     probe.write_text(
         textwrap.dedent(
             """\
@@ -580,7 +615,11 @@ def test_opt_platform_nodeconfigs_literal_detected_negative(caplog) -> None:
         )
     )
     try:
-        hits = [(rel, ln, line) for rel, ln, line in _find_opt_path_literals() if "_gate_probe_opt_path_b3" in rel]
+        hits = [
+            (rel, ln, line)
+            for rel, ln, line in _find_opt_path_literals(root=tmp_path)
+            if "_gate_probe_opt_path_b3" in rel
+        ]
         assert hits, "R5 FAIL: /opt/platform + /opt/node-configs literals (исходный вход B3) не обнаружены"
         logger.info("[IMP:9][opt_path_literals][B3][R5] PASS: probe %s:%d %s detected", *hits[0])
     finally:

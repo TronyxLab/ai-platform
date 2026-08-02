@@ -6,7 +6,7 @@
 ##            for test_gate_test_inventory.py. Any test removal without documented changelog FAILS the gate.
 ## @rationale — Prevents silent test deletion in PRs. If a test is removed from the suite
 ##              without an entry in test_inventory_changes.yaml, the inventory gate catches it.
-## @changes — 2026-08-02 | regenerated (3287 tests)
+## @changes — 2026-08-03 | regenerated (3303 tests)
 ## @changes — 2026-07-15 | Added 5 gate tests (DevPlan 007: P20 + compose-include-sync)
 ## @changes — 2026-07-10 | Initial baseline per TestsMetaDevPlan2.md TASK-10
 # endregion MODULE_CONTRACT
@@ -409,6 +409,7 @@ test_nodeids:
 - 'tests/gates/test_gate_subprocess_io_sole.py::test_single_run_subprocess_canon'
 - 'tests/gates/test_gate_subprocess_io_sole.py::test_single_run_subprocess_canon_negative'
 - 'tests/gates/test_gate_sys_exit_contract.py::test_sys_exit_only_in_main_and_main_returns_int'
+- 'tests/gates/test_gate_system_exceptions.py::test_system_exceptions_documented'
 - 'tests/gates/test_gate_template_drift.py::test_all_templates_resolvable'
 - 'tests/gates/test_gate_template_manifest_coverage.py::test_all_template_files_registered'
 - 'tests/gates/test_gate_template_manifest_coverage.py::test_nginx_template_volume_sources_registered'
@@ -430,6 +431,7 @@ test_nodeids:
 - 'tests/gates/test_gate_test_inventory.py::test_rename_detection_normalization'
 - 'tests/gates/test_gate_test_inventory.py::test_single_inventory_regeneration_source'
 - 'tests/gates/test_gate_test_inventory.py::test_test_inventory_matches_collected'
+- 'tests/gates/test_gate_thin_wrapper.py::test_allowlist_current'
 - 'tests/gates/test_gate_thin_wrapper.py::test_discovery'
 - 'tests/gates/test_gate_thin_wrapper.py::test_entrypoint_function_count'
 - 'tests/gates/test_gate_thin_wrapper.py::test_entrypoint_loc'
@@ -2329,6 +2331,7 @@ test_nodeids:
 - 'tests/unit/test_node_detect.py::test_detect_age_key_not_found'
 - 'tests/unit/test_node_detect.py::test_detect_node_name_flag'
 - 'tests/unit/test_node_detect.py::test_from_age_secret_key_env'
+- 'tests/unit/test_node_detect.py::test_from_default_user_file'
 - 'tests/unit/test_node_detect.py::test_from_file'
 - 'tests/unit/test_node_detect.py::test_from_sops_age_key_env'
 - 'tests/unit/test_node_detect.py::test_multiple_nodes'
@@ -2346,6 +2349,8 @@ test_nodeids:
 - 'tests/unit/test_node_yaml.py::test_get_context_missing'
 - 'tests/unit/test_node_yaml.py::test_get_context_missing_file_raises'
 - 'tests/unit/test_node_yaml.py::test_get_context_prefers_contexts_over_legacy'
+- 'tests/unit/test_node_yaml.py::test_node_yaml_mixin_parity_negative'
+- 'tests/unit/test_node_yaml.py::test_write_back_atomic_negative'
 - 'tests/unit/test_node_yaml_cli.py::test_cli_domain_config_format_lines'
 - 'tests/unit/test_node_yaml_cli.py::test_cli_domain_config_lines'
 - 'tests/unit/test_node_yaml_cli.py::test_cli_find_project_hit'
@@ -2372,6 +2377,8 @@ test_nodeids:
 - 'tests/unit/test_node_yaml_cli_get_many.py::test_get_many_missing_key_empty_value_exit0'
 - 'tests/unit/test_node_yaml_cli_get_many.py::test_get_many_non_dict_traversal_empty'
 - 'tests/unit/test_node_yaml_cli_get_many.py::test_get_many_returns_alias_tab_value'
+- 'tests/unit/test_node_yaml_consumers.py::test_all_consumers_unchanged'
+- 'tests/unit/test_node_yaml_consumers.py::test_node_yaml_canonical_import_negative'
 - 'tests/unit/test_node_yaml_facade.py::test_cache_hit'
 - 'tests/unit/test_node_yaml_facade.py::test_cli_context'
 - 'tests/unit/test_node_yaml_facade.py::test_cli_domain_config'
@@ -2407,6 +2414,13 @@ test_nodeids:
 - 'tests/unit/test_node_yaml_facade.py::test_reload_invalidates_cache'
 - 'tests/unit/test_node_yaml_facade.py::test_validate_invalid'
 - 'tests/unit/test_node_yaml_facade.py::test_validate_valid'
+- 'tests/unit/test_node_yaml_mixins.py::test_add_context_duplicate_negative'
+- 'tests/unit/test_node_yaml_mixins.py::test_add_context_via_domains_mixin'
+- 'tests/unit/test_node_yaml_mixins.py::test_domains_mixin_direct_instantiation'
+- 'tests/unit/test_node_yaml_mixins.py::test_get_context_empty_via_domains_mixin'
+- 'tests/unit/test_node_yaml_mixins.py::test_get_context_via_domains_mixin'
+- 'tests/unit/test_node_yaml_mixins.py::test_get_domain_config_defaults_via_domains_mixin'
+- 'tests/unit/test_node_yaml_mixins.py::test_get_domain_config_via_domains_mixin'
 - 'tests/unit/test_node_yaml_mutation.py::test_add_context_creates_section'
 - 'tests/unit/test_node_yaml_mutation.py::test_add_context_duplicate_raises'
 - 'tests/unit/test_node_yaml_mutation.py::test_add_context_success'
@@ -3113,6 +3127,7 @@ test_nodeids:
 - 'tests/unit/test_sync_env_defaults.py::test_atomic_write'
 - 'tests/unit/test_sync_env_defaults.py::test_c4_port_fallback_removed_raises'
 - 'tests/unit/test_sync_env_defaults.py::test_check_mode_detects_divergence'
+- 'tests/unit/test_sync_env_defaults.py::test_g4_age_telegram_literals_removed'
 - 'tests/unit/test_sync_env_defaults.py::test_generate_missing_required_key_raises'
 - 'tests/unit/test_sync_env_defaults.py::test_generate_orchestration_section_order'
 - 'tests/unit/test_sync_env_defaults.py::test_generate_output'
@@ -3126,6 +3141,7 @@ test_nodeids:
 - 'tests/unit/test_sync_env_defaults.py::test_section_platform_context'
 - 'tests/unit/test_sync_env_defaults.py::test_section_platform_secrets_constraints'
 - 'tests/unit/test_sync_env_defaults.py::test_section_postgres'
+- 'tests/unit/test_sync_env_defaults.py::test_section_telegram_ci_default'
 - 'tests/unit/test_sync_inventory.py::test_sync_output_matches_collect'
 - 'tests/unit/test_sync_inventory.py::test_sync_yaml_format_roundtrip'
 - 'tests/unit/test_telegram_notifier.py::test_format_notify_message_context_empty'

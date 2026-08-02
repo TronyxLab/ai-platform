@@ -41,15 +41,19 @@ make bootstrap-node NODE=test-e2e          # первый холодный boots
 | Переменная | Обязательна | Описание |
 |------------|-------------|----------|
 | `NODE` | ✅ | Имя ноды (например `test-e2e`). Отсутствие → **FAIL** (Rule R4), не skip |
-| `AGE_SECRET_KEY` / `AGE_SECRET_KEY_FILE` | ✅ | AGE-ключ для φ4 secrets_provision (прекондишен: без ключа bootstrap FAILS) |
+| `AGE_SECRET_KEY` / `AGE_SECRET_KEY_FILE` | ❌¹ | AGE-ключ для φ4 secrets_provision. Цепочка (node_detect): env → SOPS_AGE_KEY → файл из env → default-файл `~/.config/age/keys.txt` |
 | `SSH_KEY` | ❌ | Путь к приватному SSH-ключу для доступа к VPS (`-i`), по умолчанию `~/.ssh` |
 | `SSH_USER` | ❌ | SSH-пользователь, по умолчанию `root` |
+
+¹ — не обязательна, если ключ доступен через `~/.config/age/keys.txt` (стандартная age CLI
+локация; на dev-машине оператора — symlink на `~/.ssh/age-key-personal.txt`, автодетект
+с 2026-08-02; README-пример с `AGE_SECRET_KEY_FILE` остаётся валидным для нестандартных путей).
 
 Пример:
 
 ```bash
 export NODE=test-e2e
-export AGE_SECRET_KEY_FILE=~/.config/age/keys/test-e2e.key
+export AGE_SECRET_KEY_FILE=~/.config/age/keys/test-e2e.key   # опционально — default: ~/.ssh/age-key-personal.txt
 export SSH_KEY=~/.ssh/test-e2e_ed25519
 ```
 

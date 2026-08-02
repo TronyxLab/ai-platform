@@ -283,8 +283,13 @@ echo "KEY_VALUE:$(python3 -m core.internal.shared.node_detect --detect-age-key)"
 # · Remove if: node_detect CLI is reworked
 
 
-def test_detect_age_key_missing_warns(caplog) -> None:
-    """Verify node_detect --detect-age-key exits non-zero (3) with WARN diagnostic when no AGE key is set."""
+def test_detect_age_key_missing_warns(caplog, tmp_path) -> None:
+    """Verify node_detect --detect-age-key exits non-zero (3) with WARN diagnostic when no AGE key is set.
+
+    # 🧪 TRAP[TEST] · 2026-08-02 · HOME isolated to tmp_path — default-file chain link
+    # (node_detect Check 4, E2E auto-detect) would otherwise find the operator's real
+    # ~/.ssh/age-key-personal.txt on dev machines → rc=0 instead of expected rc=3.
+    """
     caplog.set_level(logging.DEBUG)
 
     test_call = """\
@@ -299,7 +304,13 @@ fi
 """
     stdout, stderr, rc = _bash(
         test_call,
-        env={"__LOG_PREFIX": "test", "AGE_SECRET_KEY": "", "SOPS_AGE_KEY": "", "AGE_SECRET_KEY_FILE": ""},
+        env={
+            "__LOG_PREFIX": "test",
+            "AGE_SECRET_KEY": "",
+            "SOPS_AGE_KEY": "",
+            "AGE_SECRET_KEY_FILE": "",
+            "HOME": str(tmp_path),
+        },
     )
 
     found_imp9 = _print_ldd(stderr, stdout)

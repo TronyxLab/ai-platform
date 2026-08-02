@@ -13,12 +13,16 @@
 ##   - (a) reconciler.py / context_deployer.py / project_lister.py / vhost_renderer.py:
 ##         yaml.safe_load НЕ применяется к node.yaml-путям (окно ±300 символов без "node.yaml");
 ##         vhost_renderer.py не объявляет class ProjectEntry
-##   - (b) `rg "class ProjectEntry" core/` → ровно 1 (core/internal/shared/node_yaml.py)
+##   - (b) `rg "class ProjectEntry" core/` → ровно 1 (core/internal/shared/node_yaml/projects.py —
+##         DevPlan 119 H1: монолит node_yaml.py декомпозирован в пакет node_yaml/, ProjectEntry
+##         переехал в node_yaml/projects.py вместе с ProjectsMixin)
 ##   - (c) `rg "Draft7Validator" core/internal/scripts/jsonschema_validate.py
-##         core/internal/shared/node_yaml.py` → 0 (единственная точка — shared/schema_validator)
+##         core/internal/shared/node_yaml/` → 0 (единственная точка — shared/schema_validator)
 ##   - Test marked @pytest.mark.gate — runs in `make gate MODE=fast`
 ## @rationale Typed DTO мертвы (consumers брали raw dicts), парсеры распылены. Единый
 ##            ProjectEntry + единый парсер + grep-гейты делают расхождение невозможным.
+## @changes 2026-08-03 | DevPlan 119 H1 — путь ProjectEntry: node_yaml.py → node_yaml/projects.py
+##                      (декомпозиция пакета); Draft7Validator-скан: node_yaml.py → node_yaml/
 ## @changes 2026-08-01 | Created (DevPlan 116 B6 T9.2)
 # endregion MODULE_CONTRACT
 
@@ -79,13 +83,13 @@ def test_callsites_no_node_yaml_safe_load(caplog) -> None:
 @pytest.mark.gate
 @ldd_trajectory
 def test_single_project_entry_definition(caplog) -> None:
-    """(b) `rg "class ProjectEntry" core/` → ровно 1 (shared/node_yaml.py — канон)."""
+    """(b) `rg "class ProjectEntry" core/` → ровно 1 (shared/node_yaml/projects.py — канон, H1)."""
     hits = []
     for p in CORE_DIR.rglob("*.py"):
         content = p.read_text(encoding="utf-8", errors="replace")
         if re.search(r"^\s*class ProjectEntry", content, re.M):
             hits.append(str(p.relative_to(ROOT)))
-    assert hits == ["core/internal/shared/node_yaml.py"], (
+    assert hits == ["core/internal/shared/node_yaml/projects.py"], (
         f"expected exactly 1 ProjectEntry definition in shared, got {hits}"
     )
     logger.critical("[IMP:9][gate_single_parser][b] PASS: single ProjectEntry in shared (%s)", hits[0])
@@ -98,17 +102,19 @@ def test_single_project_entry_definition(caplog) -> None:
 @pytest.mark.gate
 @ldd_trajectory
 def test_single_draft7_validator_point(caplog) -> None:
-    """(c) Draft7Validator отсутствует в jsonschema_validate.py и node_yaml.py (T5)."""
+    """(c) Draft7Validator отсутствует в jsonschema_validate.py и node_yaml/ (T5)."""
     targets = [
         CORE_DIR / "internal" / "scripts" / "jsonschema_validate.py",
-        CORE_DIR / "internal" / "shared" / "node_yaml.py",
+        CORE_DIR / "internal" / "shared" / "node_yaml",
     ]
     for path in targets:
-        content = path.read_text(encoding="utf-8")
-        assert "Draft7Validator" not in content, (
-            f"{path.name}: Draft7Validator present — единственная точка — shared/schema_validator.py (T5)"
-        )
-        logger.info("[IMP:9][gate_single_parser][c] OK: %s", path.name)
+        files = [path] if path.is_file() else sorted(path.rglob("*.py"))
+        for f in files:
+            content = f.read_text(encoding="utf-8")
+            assert "Draft7Validator" not in content, (
+                f"{f.relative_to(ROOT)}: Draft7Validator present — единственная точка — shared/schema_validator.py (T5)"
+            )
+            logger.info("[IMP:9][gate_single_parser][c] OK: %s", f.relative_to(ROOT))
     logger.critical("[IMP:9][gate_single_parser][c] PASS: single Draft7Validator point in shared/schema_validator")
 
 
