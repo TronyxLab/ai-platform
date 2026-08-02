@@ -195,7 +195,7 @@ def test_deploy_context_uses_real_cert_orchestrator(caplog, node_yaml_file, mock
 
     calls: list = []
     monkeypatch.setattr(cd, "orchestrate_certs", lambda *a, **k: (calls.append(a), SimpleNamespace(domains={}))[1])
-    monkeypatch.setattr(cd, "cert_check_expiry", lambda *a, **k: False)  # все домены invalid → orchestrate
+    monkeypatch.setattr(cd, "cert_is_valid", lambda *a, **k: False)  # C9: все домены invalid → orchestrate
     monkeypatch.setattr(cd, "deploy_context_projects", lambda *a, **k: [])
     monkeypatch.setenv("CONTEXT", "test-ctx")
 

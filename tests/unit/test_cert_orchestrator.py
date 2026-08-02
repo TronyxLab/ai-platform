@@ -30,7 +30,7 @@ import cert_orchestrator as cert
 
 # DevPlan 117 D21: _is_le_issuer → shared/ssl_certs.cert_is_le_issuer (единый openssl-примитив)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from core.internal.shared.ssl_certs import cert_is_le_issuer
+from core.internal.shared.ssl_certs import cert_is_le_issuer, cert_is_valid  # C9: единая комбинация
 
 # ═══════════════════════════════════════════════════════════════════
 # region Tests: orchestrate_certs
@@ -54,7 +54,7 @@ def test_bulk_restore_all_from_s3(caplog, tmp_path, monkeypatch):
     Path(issue_script).touch()
 
     # Mock _is_cert_valid to return False (no valid cert on disk)
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: False)
 
     # Set S3_BUCKET for s3_ssl_cache (required by _try_s3_restore)
     monkeypatch.setenv("S3_BUCKET", "test-bucket")
@@ -103,7 +103,7 @@ def test_partial_restore_then_issue(caplog, tmp_path, monkeypatch):
     Path(s3_script).touch()
     Path(issue_script).touch()
 
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: False)
 
     call_count = {"check": 0, "download": 0, "issue": 0}
 
@@ -145,7 +145,7 @@ def test_s3_unavailable_graceful(caplog, tmp_path, monkeypatch):
     issue_script = str(tmp_path / "issue-cert.sh")
     Path(issue_script).touch()
 
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: False)
     # Redirect CERT_VALIDITY_PATH to tmp_path for self-signed fallback (DevPlan 053 F6)
     monkeypatch.setattr(cert, "CERT_VALIDITY_PATH", str(tmp_path / "live"))
 
@@ -195,7 +195,7 @@ def test_idempotent_skip_valid(caplog, tmp_path, monkeypatch):
     Path(issue_script).touch()
 
     # Mock _is_cert_valid to return True (cert already valid)
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: True)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: True)
 
     # Mock cert_path to exist (non-recursive — use a closure with the real isfile)
     real_isfile = os.path.isfile
@@ -283,15 +283,16 @@ def test_is_le_issuer_handles_openssl_failure(caplog):
 
 
 # 🧪 TRAP[TEST] · Regression · _is_cert_valid rejects mkcert even if not expired
-# · Scenario: cert not expired but issuer is mkcert → _is_cert_valid returns False
+# · Scenario: cert not expired but issuer is mkcert → cert_is_valid (C9) returns False
 # · Last fail: 2026-07-22 — P0: mkcert cert passed as "valid" because only expiry checked
 # · Remove if: NEVER — this is the regression test for the P0 fix
+# · C9 (DevPlan 118): приватный cert_orchestrator._is_cert_valid удалён — регрессия тестирует
+# ·   shared/ssl_certs.cert_is_valid (единая комбинация, AC-C9)
 @ldd_trajectory
 def test_is_cert_valid_rejects_mkcert_even_if_not_expired(caplog, monkeypatch):
-    """_is_cert_valid should return False for non-LE certs regardless of expiry."""
-    # Mock openssl -checkend to pass (cert not expired)
-    # but _is_le_issuer to return False (mkcert cert)
-    checkend_result = MagicMock(returncode=0, stdout="", stderr="")
+    """cert_is_valid should return False for non-LE certs regardless of expiry."""
+    # Mock openssl: parseable OK, но issuer — mkcert (cert не истёк, но issuer не LE)
+    parse_result = MagicMock(returncode=0, stdout="", stderr="")  # -noout OK
     issuer_result = MagicMock(
         returncode=0,
         stdout="issuer=O = mkcert development CA\n",
@@ -301,18 +302,18 @@ def test_is_cert_valid_rejects_mkcert_even_if_not_expired(caplog, monkeypatch):
 
     def mock_run(cmd, **kwargs):
         call_count[0] += 1
-        if "-checkend" in str(cmd):
-            return checkend_result
+        if "-noout" in str(cmd) and "-checkend" not in str(cmd) and "-subject" not in str(cmd):
+            return parse_result
         if "-issuer" in str(cmd):
             return issuer_result
         return MagicMock(returncode=1, stdout="", stderr="")
 
     with patch("subprocess.run", side_effect=mock_run):
-        result = cert._is_cert_valid("tronyx.ru", "/fake/path/fullchain.pem")
+        result = cert_is_valid("/fake/path/fullchain.pem")
 
-    assert result is False, "mkcert cert should NOT pass _is_cert_valid regardless of expiry"
-    assert call_count[0] == 2, "Should have called both -checkend and -issuer"
-    logger.critical("[IMP:9][test] _is_cert_valid rejects mkcert cert — P0 regression test")
+    assert result is False, "mkcert cert should NOT pass cert_is_valid regardless of expiry"
+    assert call_count[0] == 2, "Should have called parseable + issuer (mkcert rejected before subject/expiry)"
+    logger.critical("[IMP:9][test] cert_is_valid rejects mkcert cert — P0 regression test")
 
 
 # endregion
@@ -339,7 +340,7 @@ def test_orchestrate_passes_challenge_mode(caplog, tmp_path, monkeypatch):
     Path(issue_script).write_text("#!/bin/bash\nexit 0\n")
     Path(issue_script).chmod(0o755)
 
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: False)
 
     captured_env = {}
 
@@ -385,7 +386,7 @@ def test_domain_cert_result_includes_challenge_field(caplog, tmp_path, monkeypat
     Path(issue_script).write_text("#!/bin/bash\nexit 0\n")
     Path(issue_script).chmod(0o755)
 
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: False)
 
     def mock_run(cmd, **kwargs):
         if "bash" in str(cmd):

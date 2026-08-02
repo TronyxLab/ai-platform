@@ -43,7 +43,7 @@ import cert_orchestrator as cert
 @ldd_trajectory
 def test_upload_called_on_skip(caplog, tmp_path, monkeypatch):
     """_process_single_domain() calls _upload_to_s3() when cert exists on disk (skip path)."""
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: True)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: True)
 
     # Mock _upload_to_s3 to verify it's called
     upload_called = False
@@ -80,7 +80,7 @@ def test_upload_called_on_skip(caplog, tmp_path, monkeypatch):
 @ldd_trajectory
 def test_upload_called_after_issue(caplog, tmp_path, monkeypatch):
     """After successful issue, _upload_to_s3() is called."""
-    monkeypatch.setattr(cert, "_is_cert_valid", lambda d, p: False)
+    monkeypatch.setattr(cert, "cert_is_valid", lambda *a, **kw: False)
 
     # Mock s3_ssl_cache to return miss
     mock_s3 = MagicMock()

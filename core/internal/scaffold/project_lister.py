@@ -9,7 +9,7 @@
 ##           Provides: list (offline table/JSON), status (live SSH), find-project-node.
 ## @invariants
 ##   - Works offline without network (list mode)
-##   - SSH status has 10s timeout via ssh_read wrapper
+##   - SSH status has SSH_READ_TIMEOUT timeout via ssh_read wrapper (C11 канон shared/timeouts)
 ##   - Never modifies state (read-only: OBSERVE phase)
 ##   - 0 inline python3 blocks — pure Python
 ##   - JSON output is valid JSON array
@@ -19,6 +19,7 @@
 ##           CALLS: NodeYaml.get_projects(), lib/ssh.sh::ssh_read()
 ##           DP-092 Wave 1
 ## @changes  2026-07-30 · Wave 1 — initial implementation
+##           2026-08-02 · DevPlan 118 C11 — timeout=10 → SSH_READ_TIMEOUT (единый канон)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -31,6 +32,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+# DevPlan 118 C11: SSH-таймаут — единый канон shared/timeouts.SSH_READ_TIMEOUT (литерал 10 удалён).
+from core.internal.shared.timeouts import SSH_READ_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +267,7 @@ def find_project_node(
 ## @return    True on success, False on failure
 ## @complexity O(t) where t = SSH round-trip time (≤10s)
 ## @invariants
-##   - Timeout ≤ 10 seconds
+##   - Timeout ≤ SSH_READ_TIMEOUT (C11 канон)
 ##   - SSH-команда = verb `status <project>` (D6: forced-command status; ответ — ProjectStatus JSON)
 ##   - Ответ JSON парсится; containers рендерятся в таблицу Name/Status/Ports
 ##   - Триггеры ci-deploy user first, then current user
@@ -280,7 +284,7 @@ def get_status_via_ssh(
     ## @io        ⇥ host, project, ssh_runner → ⎋ bool — True on success
     ## @complexity O(t) where t = SSH round-trip time
     ## @invariants
-    ##   - Timeout enforced via ssh_read (10s by default)
+    ##   - Timeout enforced via ssh_read (SSH_READ_TIMEOUT by default, C11)
     ##   - Falls back from ci-deploy to $USER on auth failure
     ##   - Raw docker compose ps path УДАЛЁН — единый status-контракт (T3)
     """
@@ -296,8 +300,8 @@ def get_status_via_ssh(
     # Default ssh runner: subprocess-based ssh_read from lib/ssh.sh
     if ssh_runner is None:
 
-        def _ssh_read(h: str, u: str, cmd: str, timeout: int = 10) -> str | None:
-            """Default SSH runner via lib/ssh.sh facade."""
+        def _ssh_read(h: str, u: str, cmd: str, timeout: int = SSH_READ_TIMEOUT) -> str | None:
+            """Default SSH runner via lib/ssh.sh facade (C11: SSH_READ_TIMEOUT канон)."""
             try:
                 result = subprocess.run(
                     [
@@ -329,7 +333,7 @@ def get_status_via_ssh(
         ssh_cmd = f"status {project}"
 
         try:
-            output = ssh_runner(host, effective_user, ssh_cmd, timeout=10)
+            output = ssh_runner(host, effective_user, ssh_cmd, timeout=SSH_READ_TIMEOUT)
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError, ValueError) as exc:
             logger.info("[IMP:8][list][status] SSH attempt failed (%s): %s", effective_user, exc)
             continue

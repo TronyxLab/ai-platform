@@ -54,7 +54,6 @@ import argparse
 import json
 import logging
 import os
-import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -88,6 +87,12 @@ from core.internal.bootstrap.deploy import (
 )
 from core.internal.llm import config_renderer
 
+# DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
+from core.internal.shared.llm_paths import litellm_config_path
+
+# DevPlan 118 C5: единая bash-обёртка invoke_module_interface — shared/module_interface.py (вход для B8).
+from core.internal.shared.module_interface import invoke as module_interface_invoke
+
 # DevPlan 116 B4 T1 (U-39): deploy-политика legacy parity — контракт, а не комментарии.
 # DEPLOY_BEST_EFFORT=True: failing step → WARN, деплой продолжается; WARN→exit 0; HC_DONE_MARKER всегда.
 from core.internal.shared.node_yaml import NodeYaml
@@ -108,8 +113,8 @@ _STATUS_METRICS_TEMPLATE = {
     "projects": [],
     "host": {},
 }
-_INVOKE_MODULE_INTERFACE_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "module-interface.sh")
-_PATHS_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "paths.sh")
+# C5 (DevPlan 118): сборка bash -c делегирована в shared/module_interface.invoke — локальные
+# константы путей (paths.sh/module-interface.sh) УДАЛЕНЫ (единый источник в shared).
 
 
 # region FUNC_ModuleDeployResult
@@ -677,36 +682,19 @@ def _deploy_system_modules(system_names: list[str]) -> tuple[int, list[str]]:
 
 
 # region FUNC__invoke_module_interface
-## @purpose  Invoke a module interface (install/healthcheck/...) via the shell function
-##           invoke_module_interface from core/lib/module-interface.sh (D4 — intentional subprocess).
+## @purpose  Invoke a module interface (install/healthcheck/...) — ДЕЛЕГИРУЕТ в единую bash-обёртку
+##           shared/module_interface.invoke (DevPlan 118 C5). D4 — intentional subprocess для
+##           shell-операций (module-interface.sh поверх module.yaml#interfaces).
 ## @io       ⇥ module_name: str, interface: str, *args: str → ⎋ bool (True on exit 0)
-## @complexity 1 — single bash subprocess with graceful error handling
+## @complexity 1 — single bash subprocess (делегирование в shared)
 ## @invariants
-##   - Sources paths.sh + module-interface.sh inside the bash -c (same pattern as docker_orchestrator._invoke_healthcheck_full)
+##   - Сборка bash -c и экранирование — в shared/module_interface (единый источник, C5)
 ##   - Failure/timeout → False (never raises)
-##   - Timeout 180s (install can take minutes for system services)
+##   - Timeout 180s (COMPOSE_UP_TIMEOUT канон) — install can take minutes for system services
 def _invoke_module_interface(module_name: str, interface: str, *args: str) -> bool:
-    """Call invoke_module_interface (bash) — intentional subprocess for shell operations (D4)."""
-    bash_cmd = (
-        f"source '{_PATHS_SH}' && "
-        f"source '{_INVOKE_MODULE_INTERFACE_SH}' && "
-        f"invoke_module_interface '{module_name}' '{interface}'"
-    )
-    if args:
-        bash_cmd += " " + " ".join(shlex.quote(a) for a in args)
-    logger.info("[IMP:8][_invoke_module_interface][invoke] %s %s", module_name, interface)
-    try:
-        result = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, timeout=COMPOSE_UP_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("[IMP:7][_invoke_module_interface][error] %s %s error: %s", module_name, interface, exc)
-        return False
-    if result.returncode != 0:
-        logger.warning(
-            "[IMP:8][_invoke_module_interface][fail] %s %s exit=%d", module_name, interface, result.returncode
-        )
-        return False
-    logger.info("[IMP:9][_invoke_module_interface][done] %s %s OK", module_name, interface)
-    return True
+    """Call invoke_module_interface (bash) — delegating to shared/module_interface.invoke (C5)."""
+    success, _ = module_interface_invoke(module_name, interface, *args, timeout=COMPOSE_UP_TIMEOUT)
+    return success
 
 
 # endregion FUNC__invoke_module_interface
@@ -765,7 +753,7 @@ def _postflight(
 def _render_litellm_config(core_dir: str) -> None:
     """Render litellm-config.yml from policy.yaml (non-fatal)."""
     policy_path = Path(core_dir) / "internal" / "llm" / "policy.yaml"
-    output_path = Path(core_dir) / "modules" / "litellm" / "config" / "litellm-config.yml"
+    output_path = litellm_config_path(core_dir)  # C6: единый путь shared/llm_paths
     logger.info("[IMP:7][_render_litellm_config][start] Rendering litellm-config.yml from %s", policy_path)
     try:
         config_renderer.render_to_file(policy_path, output_path)

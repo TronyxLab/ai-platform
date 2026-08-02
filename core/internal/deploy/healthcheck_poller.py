@@ -11,15 +11,17 @@ Shared healthcheck poller for DeployOrchestrator. Extracted from context_deploye
 ##           Extracted from context_deployer._shared_healthcheck_poll() + docker_compose.py.healthcheck_poll().
 ## @scope    Used by DeployOrchestrator after deploy to verify health. Single poll, not a lifecycle manager.
 ## @invariants
-##   1. timeout: 30s per check by default
-##   2. retry interval: 10s between attempts
-##   3. max retries: 6 (total ~60s polling window)
+##   1. timeout: HEALTHCHECK_POLL_TIMEOUT (60s) per check — канон shared/timeouts (C11)
+##   2. retry interval: HEALTHCHECK_POLL_INTERVAL (3s) between attempts
+##   3. max retries: HEALTHCHECK_POLL_MAX_RETRIES (20) — окно поллинга 60s
 ##   4. HTTP check: GET /health endpoint, 200 = healthy
 ##   5. Docker check: inspect State.Health.Status == "healthy" OR State.Status == "running" (no healthcheck)
 ##   6. Non-fatal: returns "unhealthy" on failure, does NOT raise
 ## @rationale DevPlan 089 DD4: context_deployer AND DeployEngine both do healthcheck →
 ##            double work. Single HealthcheckPoller used once by DeployOrchestrator.
 ## @changes 2026-07-30 | DevPlan 089 T5 — Created
+## @changes 2026-08-02 | DevPlan 118 C11 — DEFAULT_POLL_TIMEOUT/INTERVAL выровнены с каноном
+##                      timeouts.HEALTHCHECK_POLL_TIMEOUT/INTERVAL (60/3, окно 60s вместо 200s)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -30,14 +32,20 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
-from core.internal.shared.timeouts import HEALTHCHECK_POLL_MAX_RETRIES, PROJECT_HEALTHCHECK_PORTS
+from core.internal.shared.timeouts import (
+    HEALTHCHECK_POLL_INTERVAL,
+    HEALTHCHECK_POLL_MAX_RETRIES,
+    HEALTHCHECK_POLL_TIMEOUT,
+    PROJECT_HEALTHCHECK_PORTS,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_POLL_TIMEOUT = 30
-DEFAULT_POLL_INTERVAL = 10
-# Единый реестр retry-политик — timeouts.py (DevPlan 117 D34). Число retry-попыток
-# healthcheck-poll импортируется из timeouts.HEALTHCHECK_POLL_MAX_RETRIES.
+# DevPlan 118 C11: дефолты поллера выровнены с каноном shared/timeouts.py
+# (HEALTHCHECK_POLL_TIMEOUT=60 / HEALTHCHECK_POLL_INTERVAL=3 — окно поллинга 20×3=60s,
+# вместо прежних 30/10 → 200s). Единый реестр retry-политик (DevPlan 117 D34).
+DEFAULT_POLL_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT
+DEFAULT_POLL_INTERVAL = HEALTHCHECK_POLL_INTERVAL
 DEFAULT_MAX_RETRIES = HEALTHCHECK_POLL_MAX_RETRIES
 
 

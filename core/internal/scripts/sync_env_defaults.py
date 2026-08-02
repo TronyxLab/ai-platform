@@ -11,9 +11,12 @@
 ##   - Secret charset constraints and gen_commands are pulled from secret-definitions.yaml
 ##   - --check mode produces byte-identical output or fails with exit code 1
 ##   - Atomic write (tempfile + os.rename)
+##   - Порты — ОБЯЗАТЕЛЬНОЕ чтение SoT (_get_val_required): fallback-литералы удалены (DevPlan 118 C4)
 ## @rationale Eliminates manual sync between .env, .env.example, and compose defaults.
 ##            Single SoT → single generator → zero drift.
 ## @changes  Plan 082 — created
+##           2026-08-02 | DevPlan 118 C4 — 19 fallback-литералов портов → _get_val_required
+##                      (обязательное чтение SoT, fail-fast при отсутствии ключа)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -296,7 +299,7 @@ def _section_postgres(env_defaults: dict[str, str], secret_defs: dict[str, dict[
     lines.append("POSTGRES_PASSWORD=" + _get_env_val(env_defaults, "POSTGRES_PASSWORD", "test-pg-pwd"))
     lines.append("POSTGRES_DB=" + _get_env_val(env_defaults, "POSTGRES_DB", "platform"))
     lines.append("# Postgres через pgbouncer (default: 6432)")
-    lines.append("POSTGRES_PORT=" + str(_get_env_val(env_defaults, "POSTGRES_PORT", "6432")))
+    lines.append("POSTGRES_PORT=" + _get_val_required(env_defaults, "POSTGRES_PORT"))
     lines.append("POSTGRES_HOST=" + _get_env_val(env_defaults, "POSTGRES_HOST", "pgbouncer"))
     return lines
 
@@ -323,7 +326,7 @@ def _section_redis(env_defaults: dict[str, str]) -> list[str]:
     lines: list[str] = []
     lines.append("")
     lines.append("# ── Redis (cache) ──────────────────────────────────────────────────────────")
-    lines.append("REDIS_PORT=" + str(_get_env_val(env_defaults, "REDIS_PORT", "6379")))
+    lines.append("REDIS_PORT=" + _get_val_required(env_defaults, "REDIS_PORT"))
     lines.append("REDIS_HOST=" + _get_env_val(env_defaults, "REDIS_HOST", "redis"))
     return lines
 
@@ -346,8 +349,8 @@ def _section_clickhouse(env_defaults: dict[str, str], secret_defs: dict[str, dic
     lines.append(
         "CLICKHOUSE_PASSWORD=" + _get_env_val(env_defaults, "CLICKHOUSE_PASSWORD", "test-clickhouse-pwd-not-for-prod")
     )
-    lines.append("CLICKHOUSE_HTTP_PORT=" + str(_get_env_val(env_defaults, "CLICKHOUSE_HTTP_PORT", "8123")))
-    lines.append("CLICKHOUSE_NATIVE_PORT=" + str(_get_env_val(env_defaults, "CLICKHOUSE_NATIVE_PORT", "9000")))
+    lines.append("CLICKHOUSE_HTTP_PORT=" + _get_val_required(env_defaults, "CLICKHOUSE_HTTP_PORT"))
+    lines.append("CLICKHOUSE_NATIVE_PORT=" + _get_val_required(env_defaults, "CLICKHOUSE_NATIVE_PORT"))
     return lines
 
 
@@ -360,8 +363,8 @@ def _section_minio(env_defaults: dict[str, str], secret_defs: dict[str, dict[str
     lines: list[str] = []
     lines.append("")
     lines.append("# ── MinIO (local S3, dev) ────────────────────────────────────────────────")
-    lines.append("MINIO_PORT=" + str(_get_env_val(env_defaults, "MINIO_PORT", "9000")))
-    lines.append("MINIO_CONSOLE_PORT=" + str(_get_env_val(env_defaults, "MINIO_CONSOLE_PORT", "9001")))
+    lines.append("MINIO_PORT=" + _get_val_required(env_defaults, "MINIO_PORT"))
+    lines.append("MINIO_CONSOLE_PORT=" + _get_val_required(env_defaults, "MINIO_CONSOLE_PORT"))
     lines.append("# ⚠️ REQUIRED (env_requires of minio module) — no defaults in production; set via SOPS secrets")
     constraint_minio_user = _get_secret_def_field(secret_defs, "MINIO_ROOT_USER", "charset")
     if constraint_minio_user:
@@ -430,7 +433,7 @@ def _section_litellm(env_defaults: dict[str, str], secret_defs: dict[str, dict[s
     lines.append("# Опциональная лицензия (оставить пустым для community-версии)")
     lines.append("LITELLM_LICENSE=" + _get_env_val(env_defaults, "LITELLM_LICENSE", ""))
     # LITELLM_METRICS_TOKEN removed — unified with LITELLM_MASTER_KEY
-    lines.append("LITELLM_PORT=" + str(_get_env_val(env_defaults, "LITELLM_PORT", "4000")))
+    lines.append("LITELLM_PORT=" + _get_val_required(env_defaults, "LITELLM_PORT"))
     lines.append("# URL для healthcheck LiteLLM (default: http://litellm:4000/health)")
     lines.append("LITELLM_HEALTH_URL=" + _get_env_val(env_defaults, "LITELLM_HEALTH_URL", "http://litellm:4000/health"))
     lines.append("# Клиенты (Hermes, внешние тулы) шлют запросы через LiteLLM")
@@ -485,7 +488,7 @@ def _section_langfuse(env_defaults: dict[str, str], secret_defs: dict[str, dict[
     lines.append("# ⚠️ LANGFUSE_PUBLIC_KEY и LANGFUSE_SECRET_KEY — генерируются после init")
     lines.append("LANGFUSE_PUBLIC_KEY=" + _get_env_val(env_defaults, "LANGFUSE_PUBLIC_KEY", "ci-test-public-key"))
     lines.append("LANGFUSE_SECRET_KEY=" + _get_env_val(env_defaults, "LANGFUSE_SECRET_KEY", "ci-test-secret-key"))
-    lines.append("LANGFUSE_PORT=" + str(_get_env_val(env_defaults, "LANGFUSE_PORT", "3001")))
+    lines.append("LANGFUSE_PORT=" + _get_val_required(env_defaults, "LANGFUSE_PORT"))
     lines.append("# S3 для Langfuse event-логов (bucket и path-style)")
     lines.append("LANGFUSE_S3_BUCKET=" + _get_env_val(env_defaults, "LANGFUSE_S3_BUCKET", "langfuse-events"))
     lines.append("LANGFUSE_S3_FORCE_PATH_STYLE=" + _get_env_val(env_defaults, "LANGFUSE_S3_FORCE_PATH_STYLE", "true"))
@@ -518,9 +521,9 @@ def _section_hermes_dashboard(env_defaults: dict[str, str], secret_defs: dict[st
     lines.append("#    compose-сервисом. Единственный consumer Basic Auth — сам Hermes Agent Dashboard.")
     lines.append("#    nginx-модуль не использует эти переменные; htpasswd в nginx только для Prometheus/Loki.")
     lines.append("# Dashboard UI порт (default: 9119)")
-    lines.append("HERMES_DASHBOARD_PORT=" + str(_get_env_val(env_defaults, "HERMES_DASHBOARD_PORT", "9119")))
+    lines.append("HERMES_DASHBOARD_PORT=" + _get_val_required(env_defaults, "HERMES_DASHBOARD_PORT"))
     lines.append("# Десктопный порт Hermes Agent (default: 8642)")
-    lines.append("HERMES_DESKTOP_PORT=" + str(_get_env_val(env_defaults, "HERMES_DESKTOP_PORT", "8642")))
+    lines.append("HERMES_DESKTOP_PORT=" + _get_val_required(env_defaults, "HERMES_DESKTOP_PORT"))
     return lines
 
 
@@ -588,9 +591,9 @@ def _section_nginx(env_defaults: dict[str, str]) -> list[str]:
     lines.append("# Конвенция сиблингов: плоский каталог *.conf (глубина 1, non-recursive include).")
     lines.append("NGINX_OVERLAY_DIR=" + _get_env_val(env_defaults, "NGINX_OVERLAY_DIR", ""))
     lines.append("# HTTP/HTTPS порты nginx (default: 80/443; кастомные для dev-окружения без sudo)")
-    lines.append("NGINX_HTTP_PORT=" + str(_get_env_val(env_defaults, "NGINX_HTTP_PORT", "80")))
-    lines.append("NGINX_HTTPS_PORT=" + str(_get_env_val(env_defaults, "NGINX_HTTPS_PORT", "443")))
-    lines.append("NGINX_EXPORTER_PORT=" + str(_get_env_val(env_defaults, "NGINX_EXPORTER_PORT", "9113")))
+    lines.append("NGINX_HTTP_PORT=" + _get_val_required(env_defaults, "NGINX_HTTP_PORT"))
+    lines.append("NGINX_HTTPS_PORT=" + _get_val_required(env_defaults, "NGINX_HTTPS_PORT"))
+    lines.append("NGINX_EXPORTER_PORT=" + _get_val_required(env_defaults, "NGINX_EXPORTER_PORT"))
     return lines
 
 
@@ -653,7 +656,7 @@ def _section_monitoring(env_defaults: dict[str, str]) -> list[str]:
         "GF_SECURITY_ADMIN_USER=" + _get_env_val(env_defaults, "GF_SECURITY_ADMIN_USER", "admin@ai-platform.local")
     )
     lines.append("GF_SECURITY_ADMIN_PASSWORD=" + _get_env_val(env_defaults, "GF_SECURITY_ADMIN_PASSWORD", "testpass"))
-    lines.append("GRAFANA_PORT=" + str(_get_env_val(env_defaults, "GRAFANA_PORT", "3000")))
+    lines.append("GRAFANA_PORT=" + _get_val_required(env_defaults, "GRAFANA_PORT"))
     lines.append("# Prometheus")
     lines.append(
         "PROMETHEUS_TARGETS_DIR="
@@ -663,14 +666,14 @@ def _section_monitoring(env_defaults: dict[str, str]) -> list[str]:
         "PROMETHEUS_RULES_DIR="
         + _get_env_val(env_defaults, "PROMETHEUS_RULES_DIR", f"{_platform_root}/prometheus-rules")
     )
-    lines.append("PROMETHEUS_PORT=" + str(_get_env_val(env_defaults, "PROMETHEUS_PORT", "9090")))
+    lines.append("PROMETHEUS_PORT=" + _get_val_required(env_defaults, "PROMETHEUS_PORT"))
     lines.append("# Loki (logging backend)")
-    lines.append("LOKI_PORT=" + str(_get_env_val(env_defaults, "LOKI_PORT", "3100")))
+    lines.append("LOKI_PORT=" + _get_val_required(env_defaults, "LOKI_PORT"))
     lines.append("# Infra-metrics exporters")
-    lines.append("CADVISOR_PORT=" + str(_get_env_val(env_defaults, "CADVISOR_PORT", "8080")))
-    lines.append("NODE_EXPORTER_PORT=" + str(_get_env_val(env_defaults, "NODE_EXPORTER_PORT", "9100")))
+    lines.append("CADVISOR_PORT=" + _get_val_required(env_defaults, "CADVISOR_PORT"))
+    lines.append("NODE_EXPORTER_PORT=" + _get_val_required(env_defaults, "NODE_EXPORTER_PORT"))
     lines.append("# Status Page (внутренний HTTP-порт модуля, DevPlan 117 D31 — зарегистрирован в SoT)")
-    lines.append("STATUS_PAGE_PORT=" + str(_get_env_val(env_defaults, "STATUS_PAGE_PORT", "8080")))
+    lines.append("STATUS_PAGE_PORT=" + _get_val_required(env_defaults, "STATUS_PAGE_PORT"))
     return lines
 
 

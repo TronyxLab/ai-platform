@@ -43,6 +43,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+# DevPlan 118 C4/C11: таймауты — единый канон shared/timeouts.py (литералы 30/120 удалены).
+from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, DOCKER_STOP_TIMEOUT, SSH_READ_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # ── Path defaults ────────────────────────────────────────────────────────
@@ -241,7 +244,7 @@ def ssh_compose_down(
     ## @complexity O(w)
     ## @invariants
     ##   - NO `-v` flag per O7/DD10
-    ##   - Command: `docker compose down --timeout 30` (NO -v)
+    ##   - Command: `docker compose down --timeout <DOCKER_STOP_TIMEOUT>` (NO -v, C4 канон)
     """
     if not host:
         logger.info("[IMP:8][remove][ssh] No SSH host available — skipping remote compose down")
@@ -253,8 +256,11 @@ def ssh_compose_down(
     # Default SSH runner
     if ssh_runner is None:
 
-        def _default_ssh(h: str, u: str, cmd: str, timeout: int = 120) -> tuple[int, str]:
-            """Execute command on remote host via ssh_exec from lib/ssh.sh."""
+        def _default_ssh(h: str, u: str, cmd: str, timeout: int = COMPOSE_UP_TIMEOUT) -> tuple[int, str]:
+            """Execute command on remote host via ssh_exec from lib/ssh.sh.
+
+            C11: дефолтный таймаут — канон COMPOSE_UP_TIMEOUT (shared/timeouts).
+            """
             try:
                 result = subprocess.run(
                     [
@@ -282,19 +288,19 @@ def ssh_compose_down(
         effective_user = try_user if try_user else current_user
         logger.info("[IMP:6][remove][ssh]   Attempting SSH as: %s@%s", effective_user, host)
 
-        # Test connection first
-        rc, _ = ssh_runner(host, effective_user, "echo OK", timeout=10)
+        # Test connection first — C11: read-only probe через SSH_READ_TIMEOUT канон
+        rc, _ = ssh_runner(host, effective_user, "echo OK", timeout=SSH_READ_TIMEOUT)
         if rc != 0:
             continue
 
-        # Run compose down WITHOUT -v per O7/DD10
+        # Run compose down WITHOUT -v per O7/DD10 — C4: --timeout из канона DOCKER_STOP_TIMEOUT
         compose_cmd = (
             f"cd /opt/projects/{project} 2>/dev/null && "
-            f"docker compose down --timeout 30 2>&1 || "
-            f"docker compose -p {project} down --timeout 30 2>&1"
+            f"docker compose down --timeout {DOCKER_STOP_TIMEOUT} 2>&1 || "
+            f"docker compose -p {project} down --timeout {DOCKER_STOP_TIMEOUT} 2>&1"
         )
 
-        rc, output = ssh_runner(host, effective_user, compose_cmd, timeout=120)
+        rc, output = ssh_runner(host, effective_user, compose_cmd, timeout=COMPOSE_UP_TIMEOUT)
         if rc == 0:
             logger.info("[IMP:7][remove][ssh] docker compose down output:")
             for line in output.splitlines():

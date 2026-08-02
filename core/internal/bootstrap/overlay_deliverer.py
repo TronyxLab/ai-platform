@@ -38,6 +38,9 @@ import sys
 # DevPlan 108 F3: sync_core_to_vps делегирует core/ rsync в core_deliverer.deliver_core()
 # (DRY-унификация двойного core/ rsync, P2/D3). Направление импорта overlay → core — без цикла.
 from core.internal.bootstrap.core_deliverer import CoreDeliveryError, deliver_core
+
+# DevPlan 118 C7: /opt/node-configs — единый резолвер shared/deploy_paths.node_configs_remote().
+from core.internal.shared.deploy_paths import node_configs_remote
 from core.internal.shared.node_yaml import ConfigNotFoundError, ConfigParseError, ConfigValidationError, NodeYaml
 
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py (дублирующие копии устранены)
@@ -187,16 +190,19 @@ def sync_core_to_vps(host: str, core_src: str, node_name: str = "", node_yaml: s
     if dry_run:
         if node_yaml and os.path.isfile(node_yaml):
             logger.info(
-                "[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: rsync %s → root@%s:/opt/node-configs/%s/node.yaml",
+                "[IMP:8][sync_core_to_vps][dry-run] DRY-RUN: rsync %s → root@%s:%s/%s/node.yaml",
                 node_yaml,
                 host,
+                node_configs_remote(),
                 node_name,
             )
         return True
 
     if node_yaml and os.path.isfile(node_yaml):
-        cmd2 = ["rsync", "-avz", "-e", ssh_e, node_yaml, f"root@{host}:/opt/node-configs/{node_name}/node.yaml"]
-        logger.info("[IMP:9][sync_core_to_vps][exec] Rsyncing node.yaml → %s:/opt/node-configs/%s/", host, node_name)
+        cmd2 = ["rsync", "-avz", "-e", ssh_e, node_yaml, f"root@{host}:{node_configs_remote()}/{node_name}/node.yaml"]
+        logger.info(
+            "[IMP:9][sync_core_to_vps][exec] Rsyncing node.yaml → %s:%s/%s/", host, node_configs_remote(), node_name
+        )
         r = subprocess.run(cmd2, capture_output=True, text=True, timeout=RSYNC_TIMEOUT)
         if r.returncode != 0:
             raise SyncCoreError(f"rsync node.yaml failed for {host} (exit={r.returncode}): {r.stderr.strip()}")
@@ -252,7 +258,7 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
         logger.info("[IMP:8][deliver_vhost_overlays][dry-run] DRY-RUN: rsync %s/ → root@%s:...", overlay_dir, ssh_host)
         return True
 
-    mkdir_cmd = ["ssh", *SSH_OPTS, f"root@{ssh_host}", f"mkdir -p /opt/node-configs/{node_name}/overlays/nginx"]
+    mkdir_cmd = ["ssh", *SSH_OPTS, f"root@{ssh_host}", f"mkdir -p {node_configs_remote()}/{node_name}/overlays/nginx"]
     logger.info("[IMP:9][deliver_vhost_overlays][ssh] Creating remote overlay dir on %s", ssh_host)
     r = subprocess.run(mkdir_cmd, capture_output=True, text=True, timeout=SSH_CONNECT_TIMEOUT)
     if r.returncode != 0:
@@ -265,7 +271,7 @@ def deliver_vhost_overlays(node_name: str, platform_root: str = "/opt/platform",
         "-e",
         ssh_e,
         f"{overlay_dir}/",
-        f"root@{ssh_host}:/opt/node-configs/{node_name}/overlays/nginx/",
+        f"root@{ssh_host}:{node_configs_remote()}/{node_name}/overlays/nginx/",
     ]
     logger.info("[IMP:9][deliver_vhost_overlays][rsync] Rsyncing overlays → %s", ssh_host)
     r = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=RSYNC_TIMEOUT)

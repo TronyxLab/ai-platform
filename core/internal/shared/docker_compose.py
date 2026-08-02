@@ -300,7 +300,7 @@ def docker_compose_down(
     ## @purpose — Stop/remove containers for a docker compose project (данные сохраняются —
     ##            флаг -v НЕ передаётся, если caller его не добавил явно).
     ## @io — ⇥ compose_dir: str, timeout: int, compose_args: list[str] | None,
-    ##       flags: list[str] | None (e.g. --timeout 30), env_override,
+    ##       flags: list[str] | None (e.g. --timeout <DOCKER_STOP_TIMEOUT>, C4 канон), env_override,
     ##       service: str | None (ограничить down одним сервисом — watchdog rollback) → ⎋ bool (True = success)
     ## @complexity — O(1) + shutdown I/O
     ## @invariants

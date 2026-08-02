@@ -22,6 +22,9 @@
 ## @rationale DevPlan 116 B9 D3: инфраструктура reconciler (report/exit/subprocess — модульные
 ##            глобалы) вынесена в converge/infra.py — домены R1-R9 чистые, без глобального состояния.
 ## @changes  2026-08-01 · Extracted from reconciler.py (B9 T2)
+##           2026-08-02 · DevPlan 118 C8 — AUDIT_LOG_FILE = shared/audit_logger.DEFAULT_LOG_FILE
+##                      (второй источник правды удалён); C10 — run_subprocess делегирует в
+##                      shared/subprocess_io.py (единый канон, check=False — семантика сохраняется)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -29,14 +32,22 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
+import subprocess  # тип CompletedProcess в аннотации run_subprocess (C10)
 from datetime import datetime, timezone
+
+# DevPlan 118 C8: AUDIT_LOG_FILE — ЕДИНСТВЕННЫЙ источник shared/audit_logger.DEFAULT_LOG_FILE
+# (второй источник правды f"{AUDIT_LOG_DIR}/audit.jsonl" удалён — синхронизация была ручной).
+from core.internal.shared.audit_logger import (
+    DEFAULT_LOG_FILE as AUDIT_LOG_FILE,  # noqa: F401 — публичный re-export канона (C8)
+)
+
+# DevPlan 118 C10: единый канон run_subprocess — shared/subprocess_io (делегирование, check=False).
+from core.internal.shared.subprocess_io import run_subprocess as _shared_run_subprocess
 
 logger = logging.getLogger(__name__)
 
 # ── Constants (мигрированы из reconciler.py) ──
 AUDIT_LOG_DIR = "/var/log/platform"
-AUDIT_LOG_FILE = f"{AUDIT_LOG_DIR}/audit.jsonl"  # D1 (DevPlan 116 B11 T2): единый файл — синхронизирован с shared/audit_logger.DEFAULT_LOG_FILE
 PROXY_NET = "proxy-net"
 DOCKER_TIMEOUT = 30
 """## @invariant subprocess timeout for all docker/system commands (seconds)."""
@@ -187,31 +198,22 @@ def set_exit(severity: int) -> None:
 
 # ═══════════════════════════════════════════════════════════════════
 # region FUNC_run_subprocess
-## @purpose  Safe subprocess runner with uniform error handling
+## @purpose  Safe subprocess runner with uniform error handling — ДЕЛЕГИРУЕТ в единый канон
+##           shared/subprocess_io.run_subprocess (DevPlan 118 C10). Семантика converge
+##           сохраняется через check=False: никогда не raise, FileNotFoundError → rc=127,
+##           TimeoutExpired → rc=124 (graceful).
+## @io       ⇥ cmd: list[str], timeout: int, check: bool → ⎋ subprocess.CompletedProcess
+## @complexity O(M) where M = command execution time
+## @invariants
+##   - check=False (default): никогда не raise — rc 127/124 graceful (семантика converge)
+##   - check=True: PlatformFatalError (канон shared/subprocess_io, C10)
 def run_subprocess(
     cmd: list[str],
     timeout: int = DOCKER_TIMEOUT,
     check: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Run a subprocess with consistent error handling.
-
-    Returns a CompletedProcess on success. On failure:
-    - If check=True, the exception propagates
-    - If check=False, returns a failed CompletedProcess with returncode != 0
-    """
-    try:
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        logger.warning("[IMP:8][run_subprocess] Binary not found: %s", cmd[0])
-        return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr=f"{cmd[0]}: not found")
-    except subprocess.TimeoutExpired:
-        logger.warning("[IMP:8][run_subprocess] Timeout after %ds: %s", timeout, " ".join(cmd))
-        return subprocess.CompletedProcess(args=cmd, returncode=124, stdout="", stderr="timeout")
+    """Run a subprocess with consistent error handling (delegates to shared/subprocess_io, C10)."""
+    return _shared_run_subprocess(cmd, timeout=timeout, check=check)
 
 
 # endregion FUNC_run_subprocess

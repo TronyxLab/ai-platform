@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from core.internal.deploy.healthcheck_poller import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_POLL_INTERVAL,
@@ -22,6 +24,8 @@ from core.internal.deploy.healthcheck_poller import (
     HealthcheckPoller,
     HealthcheckResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TestHealthcheckPoller:
@@ -34,6 +38,34 @@ class TestHealthcheckPoller:
         assert poller.timeout == DEFAULT_POLL_TIMEOUT
         assert poller.interval == DEFAULT_POLL_INTERVAL
         assert poller.max_retries == DEFAULT_MAX_RETRIES
+
+    # endregion
+
+    # region FUNC_test_defaults_aligned_with_canon (DevPlan 118 C11)
+    # 🧪 TRAP[TEST] · Regression · C11 — poller дефолты выровнены с каноном shared/timeouts
+    # · Scenario: DEFAULT_POLL_TIMEOUT == HEALTHCHECK_POLL_TIMEOUT (60); INTERVAL == HEALTHCHECK_POLL_INTERVAL (3);
+    # ·   окно поллинга = max_retries × interval == 60s (прежние 30/10 → 200s)
+    # · Last fail: poller 30/10 vs канон 60/3 — расхождение окна поллинга (DevPlan 118 C11)
+    # · Remove if: poller дефолты отвязаны от timeouts канона
+    def test_defaults_aligned_with_canon(self, caplog) -> None:
+        """C11: poller дефолты == HEALTHCHECK_POLL_TIMEOUT/HEALTHCHECK_POLL_INTERVAL (канон timeouts)."""
+        from core.internal.shared.timeouts import HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_POLL_TIMEOUT
+
+        assert DEFAULT_POLL_TIMEOUT == HEALTHCHECK_POLL_TIMEOUT, (
+            f"C11 FAIL: DEFAULT_POLL_TIMEOUT={DEFAULT_POLL_TIMEOUT} != канон {HEALTHCHECK_POLL_TIMEOUT}"
+        )
+        assert DEFAULT_POLL_INTERVAL == HEALTHCHECK_POLL_INTERVAL, (
+            f"C11 FAIL: DEFAULT_POLL_INTERVAL={DEFAULT_POLL_INTERVAL} != канон {HEALTHCHECK_POLL_INTERVAL}"
+        )
+        assert DEFAULT_POLL_TIMEOUT == DEFAULT_MAX_RETRIES * DEFAULT_POLL_INTERVAL, (
+            f"C11 FAIL: окно поллинга {DEFAULT_MAX_RETRIES}×{DEFAULT_POLL_INTERVAL} != timeout {DEFAULT_POLL_TIMEOUT}"
+        )
+        logger.critical(
+            "[IMP:9][test] C11 poller канон: timeout=%ds interval=%ds окно=%ds",
+            DEFAULT_POLL_TIMEOUT,
+            DEFAULT_POLL_INTERVAL,
+            DEFAULT_MAX_RETRIES * DEFAULT_POLL_INTERVAL,
+        )
 
     # endregion
 

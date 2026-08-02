@@ -157,6 +157,26 @@ def test_generate_output(caplog):
         "COMPOSE_PROFILES": "postgres,redis,nginx",
         "NO_PROXY": "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus",
         "S3_ENDPOINT_URL": "https://s3.timeweb.cloud",
+        # C4: портовые ключи обязательны (_get_val_required) — фикстура зеркалит SoT
+        "POSTGRES_PORT": "6432",
+        "REDIS_PORT": "6379",
+        "CLICKHOUSE_HTTP_PORT": "8123",
+        "CLICKHOUSE_NATIVE_PORT": "9000",
+        "MINIO_PORT": "9000",
+        "MINIO_CONSOLE_PORT": "9001",
+        "LITELLM_PORT": "4000",
+        "LANGFUSE_PORT": "3001",
+        "HERMES_DASHBOARD_PORT": "9119",
+        "HERMES_DESKTOP_PORT": "8642",
+        "NGINX_HTTP_PORT": "80",
+        "NGINX_HTTPS_PORT": "443",
+        "NGINX_EXPORTER_PORT": "9113",
+        "GRAFANA_PORT": "3000",
+        "PROMETHEUS_PORT": "9090",
+        "LOKI_PORT": "3100",
+        "CADVISOR_PORT": "8080",
+        "NODE_EXPORTER_PORT": "9100",
+        "STATUS_PAGE_PORT": "8080",
     }
     secret_defs = {
         "POSTGRES_PASSWORD": {
@@ -204,6 +224,26 @@ def test_check_mode_detects_divergence(caplog, tmp_path):
             "PLATFORM_MASTER_EMAIL": "admin@test.local",
             "COMPOSE_PROFILES": "postgres,redis",
             "NO_PROXY": "",
+            # C4: портовые ключи обязательны (_get_val_required) — фикстура зеркалит SoT
+            "POSTGRES_PORT": "6432",
+            "REDIS_PORT": "6379",
+            "CLICKHOUSE_HTTP_PORT": "8123",
+            "CLICKHOUSE_NATIVE_PORT": "9000",
+            "MINIO_PORT": "9000",
+            "MINIO_CONSOLE_PORT": "9001",
+            "LITELLM_PORT": "4000",
+            "LANGFUSE_PORT": "3001",
+            "HERMES_DASHBOARD_PORT": "9119",
+            "HERMES_DESKTOP_PORT": "8642",
+            "NGINX_HTTP_PORT": "80",
+            "NGINX_HTTPS_PORT": "443",
+            "NGINX_EXPORTER_PORT": "9113",
+            "GRAFANA_PORT": "3000",
+            "PROMETHEUS_PORT": "9090",
+            "LOKI_PORT": "3100",
+            "CADVISOR_PORT": "8080",
+            "NODE_EXPORTER_PORT": "9100",
+            "STATUS_PAGE_PORT": "8080",
         }
     }
     with open(str(platform_env), "w") as f:
@@ -276,12 +316,35 @@ def test_atomic_write(caplog, tmp_path):
 
 
 def _full_env_defaults() -> dict[str, str]:
-    """Realistic env_defaults mirroring platform-env.yaml SoT shape."""
+    """Realistic env_defaults mirroring platform-env.yaml SoT shape.
+
+    DevPlan 118 C4: ВСЕ портовые ключи обязательны (_get_val_required, без fallback) —
+    фикстура зеркалит platform-infra.yaml env_defaults.
+    """
     return {
         "PLATFORM_DOMAIN": "ai-platform.local",
         "PLATFORM_MASTER_EMAIL": "admin@ai-platform.local",
         "COMPOSE_PROFILES": "postgres,redis,nginx,litellm,langfuse,hermes-agent,monitoring,status-page",
         "NO_PROXY": "localhost,127.0.0.1,.local,postgres,pgbouncer,redis,clickhouse,litellm,langfuse,minio,grafana,prometheus",
+        "POSTGRES_PORT": "6432",
+        "REDIS_PORT": "6379",
+        "CLICKHOUSE_HTTP_PORT": "8123",
+        "CLICKHOUSE_NATIVE_PORT": "9000",
+        "MINIO_PORT": "9000",
+        "MINIO_CONSOLE_PORT": "9001",
+        "LITELLM_PORT": "4000",
+        "LANGFUSE_PORT": "3001",
+        "HERMES_DASHBOARD_PORT": "9119",
+        "HERMES_DESKTOP_PORT": "8642",
+        "NGINX_HTTP_PORT": "80",
+        "NGINX_HTTPS_PORT": "443",
+        "NGINX_EXPORTER_PORT": "9113",
+        "GRAFANA_PORT": "3000",
+        "PROMETHEUS_PORT": "9090",
+        "LOKI_PORT": "3100",
+        "CADVISOR_PORT": "8080",
+        "NODE_EXPORTER_PORT": "9100",
+        "STATUS_PAGE_PORT": "8080",
     }
 
 
@@ -326,6 +389,21 @@ def test_generate_missing_required_key_raises(caplog):
     caplog.set_level(0)
     with pytest.raises(KeyError):
         sed.generate_env_example({}, {})
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · C4 — портовый fallback удалён (обязательное чтение SoT)
+# · Scenario: env_defaults без REDIS_PORT → KeyError (прежний fallback "6379" УДАЛЁН, DevPlan 118 C4)
+# · Last fail: 6+ fallback-литералов портов (6379/9000/9001/8080/9090) — дрейф SoT↔генератор
+# · Remove if: _get_val_required семантика меняется или портовые ключи снова получают fallback
+def test_c4_port_fallback_removed_raises(caplog):
+    """C4: портовый ключ без значения в SoT → KeyError (0 fallback-портов)."""
+    caplog.set_level(0)
+    env = dict(_full_env_defaults())
+    env.pop("REDIS_PORT")
+    with pytest.raises(KeyError) as exc_info:
+        sed._section_redis(env)
+    assert "REDIS_PORT" in str(exc_info.value)
+    logger.critical("[IMP:9][test] C4: отсутствующий REDIS_PORT → KeyError (fallback удалён)")
 
 
 # 🧪 TRAP[TEST] · Regression · section builder for platform_context

@@ -28,6 +28,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+# DevPlan 118 C11: таймаут docker run nginx -t — канон shared/timeouts.COMPOSE_UP_TIMEOUT
+# (литерал 120 удалён; scope гейта timeout_literals расширен на scaffold/).
+from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
@@ -221,7 +225,7 @@ add_header X-Frame-Options "DENY" always;
                 "-t",
             ],
             capture_output=True,
-            timeout=120,
+            timeout=COMPOSE_UP_TIMEOUT,
         )
 
         if docker_result.returncode == 0:

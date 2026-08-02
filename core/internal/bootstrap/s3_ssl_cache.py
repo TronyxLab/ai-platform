@@ -33,7 +33,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -43,6 +42,9 @@ from boto3.exceptions import S3UploadFailedError
 from botocore.exceptions import ClientError
 
 from core.internal.config import platform_config
+
+# DevPlan 118 C7: /etc/letsencrypt/live — единый резолвер shared/deploy_paths.letsencrypt_live().
+from core.internal.shared.deploy_paths import letsencrypt_live
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
@@ -53,15 +55,13 @@ from core.internal.shared.s3_client import get_s3_client as _shared_get_s3_clien
 from core.internal.shared.ssl_certs import (
     DEFAULT_EXPIRY_THRESHOLD,
     DEFAULT_OPENSSL_TIMEOUT,
-    cert_check_expiry,
-    cert_get_issuer,
-    cert_is_parseable,
+    cert_is_valid,  # C9: единая комбинация «cert валиден» (DevPlan 118 C9)
 )
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
-DEFAULT_CERT_DIR = "/etc/letsencrypt/live"
+DEFAULT_CERT_DIR = str(letsencrypt_live())
 DEFAULT_ACME_HOME = "/opt/acme.sh"
 DEFAULT_SSL_CACHE_PREFIX = "platform/ssl-certs"
 # DEFAULT_S3_ENDPOINT_URL → shared/s3_client (DevPlan 117 D26)
@@ -107,83 +107,31 @@ def _get_s3_client() -> boto3.client:
 
 
 # region FUNC_validate_cert
-## @purpose  Validate a downloaded PEM cert: openssl parseability, LE issuer,
-##           domain subject match, and optional >30-day expiry check.
-##           Openssl-примитивы делегируются в shared/ssl_certs (DevPlan 117 D21).
+## @purpose  Validate a downloaded PEM cert — ДЕЛЕГИРУЕТ в shared/ssl_certs.cert_is_valid
+##           (DevPlan 118 C9, единая комбинация parseable+LE+domain match+expiry).
+##           Тонкий совместимый wrapper (S3-кеш семантика: expected_domains + check_expiry);
+##           РЕАЛИЗАЦИЯ живёт в shared — 0 дублей логики (AC-C9).
 ## @io — ⇥ cert_path: str, domain: str, check_expiry: bool → ⎋ bool
-## @complexity — O(1) + 3-4 openssl subprocess calls
+## @complexity — O(1) + openssl subprocess (в shared)
 ## @invariants
 ##   - Returns False on any validation failure (corrupt cert, wrong issuer, mismatch)
-##   - LE issuer check: case-insensitive "Let's Encrypt" in issuer string
-##   - Domain match: CN contains domain (supports wildcard *.domain) — специфичен для S3-кеша
-##   - check_expiry: uses shared cert_check_expiry (DEFAULT_EXPIRY_THRESHOLD)
 ##   - Non-fatal: on openssl failure, returns False (never raises)
 def _validate_cert(cert_path: str, domain: str, check_expiry: bool = True) -> bool:
-    """Validate PEM cert at cert_path: openssl parseable, LE issuer, domain match.
-
-    ## @purpose  Shared validation used by both check_cert and download_cert.
-    ## @invariants
-    ##   - LE issuer: case-insensitive match on "Let's Encrypt"
-    ##   - Domain match: CN contains domain (escaped for regex safety)
-    ##   - check_expiry: shared ssl_certs.cert_check_expiry
-    """
-    try:
-        # Step 1: Verify cert is parseable (shared primitive)
-        if not cert_is_parseable(cert_path, timeout=DEFAULT_OPENSSL_TIMEOUT):
-            return False
-
-        # Step 2: Verify Let's Encrypt issuer (shared primitive)
-        cert_issuer = cert_get_issuer(cert_path, timeout=DEFAULT_OPENSSL_TIMEOUT)
-        if cert_issuer is None or "Let's Encrypt" not in cert_issuer:
-            logger.info(
-                "[IMP:8][s3_ssl_cache] Cert issuer is not Let's Encrypt: %s",
-                (cert_issuer or "<none>")[:120],
-            )
-            return False
-
-        # Step 3: Check domain subject match (S3-кеш-специфично — остаётся здесь)
-        subject_res = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-subject", "-noout"],
-            capture_output=True,
-            text=True,
-            timeout=DEFAULT_OPENSSL_TIMEOUT,
-        )
-        if subject_res.returncode != 0:
-            return False
-        subject = subject_res.stdout.strip()
-        # Match CN = domain or CN = *.domain (wildcard)
-        if not (
-            f"CN = {domain}" in subject
-            or f"CN= {domain}" in subject
-            or f"CN= {domain}" in subject
-            or f"CN=*.{domain}" in subject
-            or f"CN = *.{domain}" in subject
-        ):
-            logger.info(
-                "[IMP:8][s3_ssl_cache] Cert subject does not match domain '%s': %s",
-                domain,
-                subject[:120],
-            )
-            return False
-
-        # Step 4: Optionally check >30 days expiry (shared primitive)
-        if check_expiry and not cert_check_expiry(cert_path, DEFAULT_EXPIRY_THRESHOLD, timeout=DEFAULT_OPENSSL_TIMEOUT):
-            logger.info(
-                "[IMP:8][s3_ssl_cache] Cert expires within 30 days or is expired: %s",
-                domain,
-            )
-            return False
-
+    """Validate PEM cert at cert_path — delegating to shared cert_is_valid (DevPlan 118 C9)."""
+    valid = cert_is_valid(
+        cert_path,
+        threshold=DEFAULT_EXPIRY_THRESHOLD,
+        expected_domains=domain,
+        check_expiry=check_expiry,
+        timeout=DEFAULT_OPENSSL_TIMEOUT,
+    )
+    if valid:
         logger.info(
             "[IMP:9][s3_ssl_cache] Cert validated OK for %s (LE, domain match%s)",
             domain,
             ", expiry OK" if check_expiry else "",
         )
-        return True
-
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning("[IMP:7][s3_ssl_cache] Cert validation error for %s: %s", domain, e)
-        return False
+    return valid
 
 
 # endregion FUNC_validate_cert

@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.internal.config import platform_config
+from core.internal.shared.deploy_paths import letsencrypt_live  # C7: единый резолвер /etc/letsencrypt/live
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
@@ -39,9 +40,7 @@ from core.internal.shared.exceptions import (
 )
 from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 from core.internal.shared.ssl_certs import (
-    DEFAULT_EXPIRY_THRESHOLD,
-    cert_check_expiry,
-    cert_is_le_issuer,
+    cert_is_valid,  # C9: единая комбинация «cert валиден» (DevPlan 118 C9); _is_cert_valid удалён
 )
 
 logger = logging.getLogger(__name__)
@@ -59,7 +58,7 @@ except ImportError:
 # ── Constants ──────────────────────────────────────────────────────────────
 S3_TIMEOUT = 120  # seconds for S3 cache operations
 ISSUE_TIMEOUT = 300  # seconds for issue-cert.sh
-CERT_VALIDITY_PATH = "/etc/letsencrypt/live"
+CERT_VALIDITY_PATH = str(letsencrypt_live())  # C7: единый резолвер shared/deploy_paths
 
 
 # region DATACLASSES
@@ -222,7 +221,7 @@ def _process_single_domain(
 
     # ── Step 1: Check if cert already valid on disk ──
     cert_path = os.path.join(CERT_VALIDITY_PATH, domain, "fullchain.pem")
-    if os.path.isfile(cert_path) and _is_cert_valid(domain, cert_path):
+    if os.path.isfile(cert_path) and cert_is_valid(cert_path):  # C9: единая комбинация shared/ssl_certs
         logger.info("[IMP:9][cert_orchestrator] %s — valid cert on disk, uploading to S3", domain)
         _upload_to_s3(domain)  # Always sync to S3 (DevPlan 052 §4.5)
         return DomainCertResult(domain=domain, status="skipped", source="disk_synced")
@@ -259,42 +258,6 @@ def _process_single_domain(
 # endregion FUNC_process_single_domain
 
 
-# region FUNC_is_cert_valid
-## @purpose — Check if a certificate on disk is valid (>30 days remaining)
-##            AND issued by a trusted CA (Let's Encrypt).
-##            Делегирует openssl-примитивы в shared/ssl_certs (DevPlan 117 D21).
-## @io — ⇥ domain: str, cert_path: str → ⎋ bool (True = valid LE cert >30 days)
-## @complexity — O(1) + openssl subprocess
-## @invariants
-##   - Returns False if cert file missing or unparseable
-##   - Uses shared cert_check_expiry (DEFAULT_EXPIRY_THRESHOLD = 2592000)
-##   - ⚠️ TRAP[BUG] · 2026-07-22 · P0 · mkcert certs passed as "valid" — no issuer check
-##   - · Symptom: mkcert/dev certs at /etc/letsencrypt/live/ survived bootstrap
-##   - · Root: _is_cert_valid() checked only expiry, not issuer trustworthiness
-##   - · Fix: added cert_is_le_issuer() check — rejects non-LE certs (mkcert, self-signed)
-##   - · Prevention: any cert at /etc/letsencrypt/live/ must have LE issuer to be considered valid
-def _is_cert_valid(domain: str, cert_path: str) -> bool:
-    """Check if cert at cert_path is valid (>30 days) AND from Let's Encrypt."""
-    # Check 1: Cert not expired (>30 days remaining) — shared ssl_certs.cert_check_expiry
-    if not cert_check_expiry(cert_path, DEFAULT_EXPIRY_THRESHOLD):
-        logger.info("[IMP:7][cert_orchestrator] %s — cert expires within 30 days or unparseable", domain)
-        return False
-
-    # Check 2: Issuer must be Let's Encrypt (reject mkcert, self-signed, etc.) — shared
-    if not cert_is_le_issuer(cert_path):
-        logger.warning(
-            "[IMP:9][cert_orchestrator] %s — cert on disk is NOT from Let's Encrypt (mkcert/self-signed?), re-issuing",
-            domain,
-        )
-        return False
-
-    logger.info("[IMP:9][cert_orchestrator] %s — valid LE cert >30 days", domain)
-    return True
-
-
-# endregion FUNC_is_cert_valid
-
-
 # region FUNC_try_s3_restore
 ## @purpose — Try to restore a cert from S3 via s3_ssl_cache (direct import, no subprocess).
 ##            Replaces subprocess calls to the legacy shell S3 cache (DevPlan 052 Phase 1).
@@ -328,7 +291,7 @@ def _try_s3_restore(domain: str) -> DomainCertResult:
             return DomainCertResult(domain=domain, status="pending", source="s3")
 
         # Step 2: Download from S3 via direct import
-        cert_dir = "/etc/letsencrypt/live"
+        cert_dir = CERT_VALIDITY_PATH  # C7: единый резолвер shared/deploy_paths (литерал удалён)
         acme_home = "/opt/acme.sh"
         if not s3_ssl_cache.download_cert(domain, cert_dir, acme_home, s3_bucket):
             logger.warning("[IMP:7][cert_orchestrator] %s — S3 download failed", domain)

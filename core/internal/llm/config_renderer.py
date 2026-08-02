@@ -49,13 +49,15 @@ from jinja2 import Environment, FileSystemLoader
 
 from core.internal.llm.policy_schema import DeploymentList, LLMPolicy
 from core.internal.shared.exceptions import ConfigValidationError
+from core.internal.shared.llm_paths import litellm_template_path  # C6: единый путь shared/llm_paths
 
 logger = logging.getLogger(__name__)
 
 # ── Template resolution ──────────────────────────────────────────────────────
 
-# Template path relative to project root
-_TEMPLATE_REL_PATH = pathlib.Path("core") / "modules" / "litellm" / "config" / "litellm-config.yml.j2"
+# Template path — единый резолвер shared/llm_paths.litellm_template_path (DevPlan 118 C6):
+# <repo_root>/core/modules/litellm/config/litellm-config.yml.j2. Значение абсолютное.
+_TEMPLATE_REL_PATH = litellm_template_path(_PROJECT_ROOT / "core")
 
 # ── Data builders ────────────────────────────────────────────────────────────
 

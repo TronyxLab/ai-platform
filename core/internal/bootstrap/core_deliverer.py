@@ -32,6 +32,10 @@ import os
 import subprocess
 import sys
 
+# DevPlan 118 C7: remote-пути (/opt/platform, /opt/node-configs) — единые резолверы
+# shared/deploy_paths (литералы удалены из канона путей доставки).
+from core.internal.shared.deploy_paths import node_configs_remote, platform_remote_base
+
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py; дублирующие копии устранены.
 from core.internal.shared.ssh_opts import SSH_OPTS, build_rsync_ssh_opts
 
@@ -83,8 +87,8 @@ class CoreDeliveryError(Exception):
 ## · Prevention: любой код, доставляющий core на VPS, использует resolve_remote_base() из core_deliverer.
 ## @invariants  Та же цепочка, что scp-deliver.sh:129 и build_ssh_cmd (remote-cmd.sh:40-43)
 def resolve_remote_base() -> str:
-    """Resolve remote platform base: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform."""
-    return os.environ.get("PLATFORM_REMOTE_BASE") or os.environ.get("PLATFORM_ROOT") or "/opt/platform"
+    """Resolve remote platform base: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform (C7)."""
+    return str(platform_remote_base())
 
 
 # endregion FUNC_resolve_remote_base
@@ -95,8 +99,8 @@ def resolve_remote_base() -> str:
 ## @io  input: env NODE_CONFIGS_REMOTE_BASE, output: str remote node-configs base
 ## @complexity  O(1) — env chain lookup
 def resolve_node_configs_base() -> str:
-    """Resolve remote node-configs base: NODE_CONFIGS_REMOTE_BASE → /opt/node-configs."""
-    return os.environ.get("NODE_CONFIGS_REMOTE_BASE") or "/opt/node-configs"
+    """Resolve remote node-configs base: NODE_CONFIGS_REMOTE_BASE → /opt/node-configs (C7)."""
+    return str(node_configs_remote())
 
 
 # endregion FUNC_resolve_node_configs_base

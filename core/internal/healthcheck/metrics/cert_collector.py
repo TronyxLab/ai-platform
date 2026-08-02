@@ -24,9 +24,12 @@ from datetime import datetime, timezone
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 
+# DevPlan 118 C7: /etc/letsencrypt/live — единый резолвер shared/deploy_paths.letsencrypt_live().
+from core.internal.shared.deploy_paths import letsencrypt_live
+
 logger = logging.getLogger(__name__)
 
-_LETSENCRYPT_LIVE = "/etc/letsencrypt/live"
+_LETSENCRYPT_LIVE = str(letsencrypt_live())
 
 
 # region FUNC__san_match

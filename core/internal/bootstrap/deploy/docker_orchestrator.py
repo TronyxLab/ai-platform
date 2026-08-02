@@ -135,6 +135,12 @@ GHCR_ORG = os.environ.get("GHCR_ORG", "ghcr.io/tronyx161")
 from core.internal.shared.compose_files import COMPOSE_FILENAMES as _CANON_COMPOSE_FILENAMES
 from core.internal.shared.compose_files import resolve_compose_file as _resolve_compose_file_shared
 
+# DevPlan 118 C3: единый loader COMPOSE_PROFILES — shared/compose_profiles.py (SoT platform-infra.yaml).
+from core.internal.shared.compose_profiles import load_profiles as compose_profiles_load_profiles
+
+# DevPlan 118 C5: единая bash-обёртка invoke_module_interface — shared/module_interface.py (вход для B8).
+from core.internal.shared.module_interface import invoke as module_interface_invoke
+
 DEFAULT_PARALLEL_LIMIT = 4
 DEFAULT_READINESS_MAX_ATTEMPTS = 15
 DEFAULT_READINESS_INTERVAL_SEC = 2
@@ -153,31 +159,32 @@ DEFAULT_HEALTHCHECK_RETRY_INTERVAL = HEALTHCHECK_POLL_INTERVAL
 # · Rev: если VPS-деплой когда-либо окажется без platform-infra.yaml — fallback на
 #   os.environ.setdefault без хардкода (dev-ветка проверки), см. DevPlan 116 §4 риски.
 
-# Path to invoke_module_interface shell function — used for readiness and healthcheck
-_INVOKE_MODULE_INTERFACE_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "module-interface.sh")
-_PATHS_SH = str(Path(__file__).resolve().parent.parent.parent / "lib" / "paths.sh")
+# Path to invoke_module_interface shell function — used for readiness and healthcheck.
+# C5 (DevPlan 118): сборка bash -c делегирована в shared/module_interface.invoke — локальные
+# константы путей УДАЛЕНЫ (пути резолвятся в shared-модуле, единый источник).
 
 
 # region FUNC__resolve_compose_profiles_from_infra
-## @purpose  Resolve COMPOSE_PROFILES из единого loader'а platform_config (SoT platform-infra.yaml,
-##           DevPlan 117 D23). Удалён сырой yaml.safe_load platform-infra.yaml (дубль loader'а).
-##           Fail-fast: raise FileNotFoundError/KeyError при отсутствии SoT/ключа (инвариант 7).
+## @purpose  Resolve COMPOSE_PROFILES из единого loader'а shared/compose_profiles (SoT platform-infra.yaml,
+##           DevPlan 117 D23 + 118 C3). Удалён сырой yaml.safe_load platform-infra.yaml и прямой вызов
+##           platform_config.get_default (дубли loader'а). Fail-fast: raise при отсутствии SoT/ключа.
 ## @io       ⇥ None → ⎋ str: comma-separated profile list ⚡ raise FileNotFoundError/KeyError (fail-fast)
 ## @complexity O(1) — single config lookup
 ## @invariants
-##   - platform_config читает platform-infra.yaml env_defaults.COMPOSE_PROFILES (SoT)
+##   - shared/compose_profiles читает platform-infra.yaml env_defaults.COMPOSE_PROFILES (SoT)
 ##   - Raises if COMPOSE_PROFILES absent (fail-fast, no silent fallback)
 ##   - Caller keeps os.environ.setdefault semantics — explicit env COMPOSE_PROFILES wins
 def _resolve_compose_profiles_from_infra() -> str:
-    """Return COMPOSE_PROFILES from platform_config (SoT platform-infra.yaml)."""
-    profiles = platform_config.get_default("COMPOSE_PROFILES")
+    """Return COMPOSE_PROFILES from shared loader (SoT platform-infra.yaml, C3)."""
+    profiles = compose_profiles_load_profiles()
     if not profiles:
         raise KeyError(
             "[IMP:10][docker_orchestrator] env_defaults.COMPOSE_PROFILES missing in platform-infra.yaml (SoT) — "
             "run `make generate-platform-env` (DevPlan 116 T2, U-02)."
         )
-    logger.info("[IMP:9][_resolve_compose_profiles_from_infra][OK] COMPOSE_PROFILES from SoT: %s", profiles)
-    return str(profiles)
+    result = ",".join(profiles)
+    logger.info("[IMP:9][_resolve_compose_profiles_from_infra][OK] COMPOSE_PROFILES from SoT: %s", result)
+    return result
 
 
 # endregion FUNC__resolve_compose_profiles_from_infra
@@ -1224,38 +1231,19 @@ def _invoke_healthcheck(module_name: str, check_type: str) -> bool:
 
 
 # region FUNC__invoke_healthcheck_full
-## @purpose  Call invoke_module_interface for healthcheck via bash subprocess.
+## @purpose  Call invoke_module_interface for healthcheck via shared/module_interface.invoke (C5).
 ##           Returns (bool, str) tuple with success flag and stderr output.
 ## @io       ⇥ module_name: str, check_type: str ("readiness" | "liveness")
 ##           ⎋ tuple[bool, str] — (success, stderr_output)
-## @complexity 1 — single subprocess call
+## @complexity 1 — single subprocess call (делегирование в shared, DevPlan 118 C5)
 def _invoke_healthcheck_full(module_name: str, check_type: str) -> tuple[bool, str]:
-    # Build shell command that sources paths.sh + module-interface.sh, then calls invoke_module_interface
-    bash_cmd = (
-        f"source '{_PATHS_SH}' && "
-        f"source '{_INVOKE_MODULE_INTERFACE_SH}' && "
-        f"invoke_module_interface '{module_name}' healthcheck '{check_type}'"
+    # C5: единая bash-обёртка shared/module_interface.invoke (timeout — канон HEALTHCHECK_POLL_TIMEOUT)
+    return module_interface_invoke(
+        module_name,
+        "healthcheck",
+        check_type,
+        timeout=HEALTHCHECK_POLL_TIMEOUT,
     )
-    try:
-        result = subprocess.run(
-            ["bash", "-c", bash_cmd],
-            capture_output=True,
-            text=True,
-            timeout=HEALTHCHECK_POLL_TIMEOUT,
-        )
-        if result.returncode == 0:
-            return (True, result.stderr)
-        logger.info(
-            "[IMP:8][_invoke_healthcheck][fail] %s %s failed (exit=%d): %s",
-            module_name,
-            check_type,
-            result.returncode,
-            result.stderr.strip()[:200] if result.stderr else "",
-        )
-        return (False, result.stderr)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("[IMP:5][_invoke_healthcheck][error] %s %s error: %s", module_name, check_type, exc)
-        return (False, str(exc))
 
 
 # endregion FUNC__invoke_healthcheck_full

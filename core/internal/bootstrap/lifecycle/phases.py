@@ -55,6 +55,8 @@ import os
 import subprocess
 from pathlib import Path
 
+# DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
+from core.internal.shared import llm_paths
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     PlatformError,
@@ -907,7 +909,7 @@ def phase_registry_update(core_dir: str, node_name: str, node_yaml: str) -> bool
     # ── 4. Provision LLM keys (DevPlan 049 Phase 7) ──
     llm_dir = os.path.join(core_dir, "internal", "llm")
     renderer_script = os.path.join(llm_dir, "config_renderer.py")
-    config_output = os.path.join(core_dir, "modules", "litellm", "config", "litellm-config.yml")
+    config_output = str(llm_paths.litellm_config_path(core_dir))  # C6: единый путь shared/llm_paths
     if os.path.isfile(renderer_script):
         try:
             helpers_subprocess.run_subprocess(

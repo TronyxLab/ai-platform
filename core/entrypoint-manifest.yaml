@@ -1062,6 +1062,12 @@ gates:
 - id: test_deprecated_have_removal_plan
   test_file: test_gate_deploy_paths.py
   description: 'Auto-discovered gate: test_deprecated_have_removal_plan'
+- id: test_letsencrypt_live_sole_resolver
+  test_file: test_gate_deploy_paths.py
+  description: 'Auto-discovered gate: test_letsencrypt_live_sole_resolver'
+- id: test_litellm_config_path_sole_resolver
+  test_file: test_gate_deploy_paths.py
+  description: 'Auto-discovered gate: test_litellm_config_path_sole_resolver'
 - id: test_no_unregistered_paths
   test_file: test_gate_deploy_paths.py
   description: 'Auto-discovered gate: test_no_unregistered_paths'
@@ -1911,12 +1917,21 @@ gates:
 - id: test_entrypoint_no_direct_binary_calls
   test_file: test_gate_thin_wrapper.py
   description: 'Auto-discovered gate: test_entrypoint_no_direct_binary_calls'
+- id: test_no_raw_down_timeout_30_literals
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_no_raw_down_timeout_30_literals'
 - id: test_no_timeout_literals_in_ci_workflows
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_no_timeout_literals_in_ci_workflows'
 - id: test_no_timeout_literals_in_docker_ssh_healthcheck
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_no_timeout_literals_in_docker_ssh_healthcheck'
+- id: test_r5_negative_module_rule_detects_run_docker_literal
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_r5_negative_module_rule_detects_run_docker_literal'
+- id: test_r5_negative_raw_timeout_30_detected
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_r5_negative_raw_timeout_30_detected'
 - id: test_deploy_order_respects_topology
   test_file: test_gate_topology.py
   description: 'Auto-discovered gate: test_deploy_order_respects_topology'

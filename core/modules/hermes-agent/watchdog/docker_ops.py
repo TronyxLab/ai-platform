@@ -13,9 +13,12 @@
 ##   - _run_docker: TimeoutExpired → returncode 124, FileNotFoundError → returncode 127
 ##   - cleanup_old_images: keeps newest `keep` images by CreatedAt, removes the rest
 ##   - stop_container: docker stop → fallback docker kill; already-stopped = success
+##   - таймауты — канон shared/timeouts.py (C1): image ls/rmi/stop=30 → DOCKER_STOP_TIMEOUT,
+##     ps/kill/ps -a=10 → DOCKER_CMD_TIMEOUT (гейт timeout_literals, scope расширен на docker_ops.py)
 ## @rationale  DevPlan 117 G T52 — extracted verbatim from agent_watchdog.py (DockerManager,
 ##            ~202 LOC) with all LDD logs and docstrings preserved — no behavior change (AC-G7).
 ## @changes  2026-08-01 · DevPlan 117 G T52 — extracted from agent_watchdog.py
+##           2026-08-02 · DevPlan 118 C1 — 6 литералов timeout=30/10 → shared/timeouts канон
 # endregion MODULE_CONTRACT
 
 import logging
@@ -26,6 +29,12 @@ from core.internal.shared.docker_compose import (
     docker_compose_pull,
     docker_compose_up,
 )  # LINT-EXEMPT: контейнерный модуль; shared — by design (D1, allowlist 116 B11 T1, DevPlan 117 D19)
+
+# DevPlan 118 C1: таймауты — единый канон shared/timeouts.py (литералы 30/10 удалены,
+# гейт timeout_literals расширен на docker_ops.py). Маппинг: 30s → DOCKER_STOP_TIMEOUT,
+# 10s → DOCKER_CMD_TIMEOUT (значения совпадают с прежними литералами — поведение сохранено).
+# LINT-EXEMPT: контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 118 C1, allowlist)
+from core.internal.shared.timeouts import DOCKER_CMD_TIMEOUT, DOCKER_STOP_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +129,7 @@ class DockerManager:
                 "--format",
                 "{{.Repository}}:{{.Tag}} {{.CreatedAt}}",
             ],
-            timeout=30,
+            timeout=DOCKER_STOP_TIMEOUT,
         )
 
         if result.returncode != 0 or not result.stdout.strip():
@@ -144,7 +153,7 @@ class DockerManager:
             if i < keep:
                 continue
             logger.info("[IMP:7][watchdog][cleanup] Removing old image: %s", img_ref)
-            r = self._run_docker(["rmi", img_ref], timeout=30)
+            r = self._run_docker(["rmi", img_ref], timeout=DOCKER_STOP_TIMEOUT)
             if r.returncode == 0:
                 removed += 1
             else:
@@ -170,7 +179,7 @@ class DockerManager:
                 "--format",
                 "{{.Names}}",
             ],
-            timeout=10,
+            timeout=DOCKER_CMD_TIMEOUT,
         )
 
         running_containers = ps_result.stdout.strip().splitlines()
@@ -183,14 +192,14 @@ class DockerManager:
             return True  # Already stopped = success
 
         logger.info("[IMP:9][watchdog][cb:%s] Stopping container %s", name, name)
-        stop_result = self._run_docker(["stop", name], timeout=30)
+        stop_result = self._run_docker(["stop", name], timeout=DOCKER_STOP_TIMEOUT)
         if stop_result.returncode == 0:
             logger.info("[IMP:8][watchdog][cb:%s] Container %s stopped", name, name)
             return True
 
         # Fallback to kill
         logger.info("[IMP:9][watchdog][cb:%s] stop failed — trying kill", name)
-        kill_result = self._run_docker(["kill", name], timeout=10)
+        kill_result = self._run_docker(["kill", name], timeout=DOCKER_CMD_TIMEOUT)
         if kill_result.returncode != 0:
             logger.info(
                 "[IMP:9][watchdog][cb:%s] WARNING: Could not stop container %s",
@@ -211,7 +220,7 @@ class DockerManager:
                 "--format",
                 "{{.Names}} {{.Status}} {{.Image}}",
             ],
-            timeout=10,
+            timeout=DOCKER_CMD_TIMEOUT,
         )
         return result.stdout.strip()
 

@@ -39,13 +39,14 @@ from core.internal.bootstrap.cert_orchestrator import CERT_VALIDITY_PATH, orches
 from core.internal.config import platform_config
 from core.internal.deploy.channels import LocalChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
+from core.internal.shared import llm_paths
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
     ConfigValidationError,
 )
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
-from core.internal.shared.ssl_certs import DEFAULT_EXPIRY_THRESHOLD, cert_check_expiry, cert_is_le_issuer
+from core.internal.shared.ssl_certs import DEFAULT_EXPIRY_THRESHOLD, cert_is_valid  # C9: единая комбинация
 
 # DevPlan 091 Wave A (AC4): _ORCHESTRATOR_AVAILABLE fallback removed — DeployOrchestrator is sole path.
 # ⚠️ TRAP[DECISION] · 2026-07-30 · HI · Removed _ORCHESTRATOR_AVAILABLE vestigial flag
@@ -80,7 +81,8 @@ from core.internal.shared.timeouts import (
 HEALTH_GATE_TIMEOUT = HEALTHCHECK_POLL_TIMEOUT  # seconds per project
 DEFAULT_PROJECTS_BASE = "/opt/projects"
 PLATFORM_ROOT = os.environ.get("PLATFORM_ROOT", "/opt/platform")
-LITELLM_CONFIG_PATH = pathlib.Path(f"{PLATFORM_ROOT}/core/modules/litellm/config/litellm-config.yml")
+# DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
+LITELLM_CONFIG_PATH = llm_paths.litellm_config_path(f"{PLATFORM_ROOT}/core")
 POLICY_PATH = pathlib.Path(f"{PLATFORM_ROOT}/core/internal/llm/policy.yaml")
 LITELLM_BASE_URL = "http://litellm:4000"
 
@@ -668,18 +670,13 @@ def deploy_context(
             # · Root: обход системы импорта (spec_from_file_location) + приватный _is_cert_valid
             # ·   (дубль логики, уже консолидированной в shared/ssl_certs — DevPlan 117 D21).
             # · Fix: модуль-уровневый импорт cert_orchestrator (ImportError — loud, не silent);
-            # ·   _is_cert_valid заменён на существующие public-примитивы shared/ssl_certs
-            # ·   (cert_check_expiry + cert_is_le_issuer — та же семантика: ≥30 дней + LE issuer).
-            # ·   shared/ssl_certs.cert_is_valid создаст волна C (C9) — здесь НЕ дублируем.
+            # ·   _is_cert_valid заменён на shared/ssl_certs.cert_is_valid (C9, DevPlan 118) —
+            # ·   единая комбинация parseable+LE+expiry (та же семантика: ≥30 дней + LE issuer).
             # · Prevention: приватные API не вызываются кросс-модульно; cert-валидация — через ssl_certs.
             invalid_domains = []
             for dom in domains:
                 cert_path = os.path.join(CERT_VALIDITY_PATH, dom, "fullchain.pem")
-                if not (
-                    os.path.isfile(cert_path)
-                    and cert_check_expiry(cert_path, DEFAULT_EXPIRY_THRESHOLD)
-                    and cert_is_le_issuer(cert_path)
-                ):
+                if not (os.path.isfile(cert_path) and cert_is_valid(cert_path, DEFAULT_EXPIRY_THRESHOLD)):
                     invalid_domains.append(dom)
             if invalid_domains:
                 issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")

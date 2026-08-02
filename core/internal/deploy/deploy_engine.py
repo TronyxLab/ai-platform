@@ -19,7 +19,7 @@
 ##   4. DEPLOY_STATUS="success" set immediately after health-gate — BEFORE non-fatal housekeeping (B1/T3)
 ##   5. Rollback: re-tag previous image → docker compose up -d --force-recreate (T1)
 ##   6. First deploy with health fail → _handle_first_deploy → PlatformFatalError (exit 10, no rollback possible)
-##   7. Remove: docker compose down --timeout 30 WITHOUT -v by default (O7/DD10, T11); purge=True adds -v
+##   7. Remove: docker compose down --timeout <DOCKER_STOP_TIMEOUT> WITHOUT -v by default (O7/DD10, T11, C4 канон); purge=True adds -v
 ##   8. Status: JSON stdout with docker compose ps + DeployHistory last snapshot; stub-aware flag
 ##   9. All methods log at IMP:7-10 for LDD telemetry
 ##   10. No secrets or tokens in output — audit logs go to stderr
@@ -122,9 +122,11 @@ from core.internal.shared.project_registry import validate_project_name
 from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
+# DevPlan 118 C4: DOCKER_STOP_TIMEOUT — канон для `docker compose down --timeout` (литерал 30 удалён).
 from core.internal.shared.timeouts import (
     COMPOSE_UP_TIMEOUT,
     DOCKER_CMD_TIMEOUT,
+    DOCKER_STOP_TIMEOUT,
     IMAGE_CHECK_TIMEOUT,
     PULL_TIMEOUT,
 )
@@ -447,7 +449,8 @@ class DeployEngine:
 
         # docker compose down WITHOUT -v (O7 — data preserved) — shared sole path (T5);
         # purge=True добавляет -v (явное CLI-решение, DevPlan 118 A6)
-        flags = ["--timeout", "30"]
+        # C4: --timeout из канона DOCKER_STOP_TIMEOUT (shared/timeouts, 0 литералов)
+        flags = ["--timeout", str(DOCKER_STOP_TIMEOUT)]
         if purge:
             flags.append("-v")
         logger.info(

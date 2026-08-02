@@ -311,6 +311,8 @@ def test_find_acme_account_dir_data_fallback(caplog, tmp_path):
 # · Regression: 052 Bug — mkcert/dev certs passed validation (no issuer check)
 # · Last fail: N/A (native replacement for test_download_rejects_non_le_issuer grep)
 # · Remove if: issuer validation in _validate_cert changes
+# · C9 (DevPlan 118): _validate_cert делегирует в shared/ssl_certs.cert_is_valid — мок бьёт в
+# ·   core.internal.shared.ssl_certs.subprocess (единая комбинация, AC-C9)
 @ldd_trajectory
 def test_validate_cert_rejects_non_le_issuer(caplog, tmp_path, monkeypatch):
     """_validate_cert() returns False when openssl -issuer is not Let's Encrypt."""
@@ -318,6 +320,8 @@ def test_validate_cert_rejects_non_le_issuer(caplog, tmp_path, monkeypatch):
     cert_path.write_text("fake pem")
 
     import subprocess as _sp
+
+    from core.internal.shared import ssl_certs as _shared_ssl_certs
 
     def _fake_run(cmd, **kwargs):
         if "-issuer" in cmd:
@@ -332,7 +336,7 @@ def test_validate_cert_rejects_non_le_issuer(caplog, tmp_path, monkeypatch):
         FileNotFoundError=FileNotFoundError,
         OSError=OSError,
     )
-    monkeypatch.setattr(s3_ssl_cache, "subprocess", fake_subprocess)
+    monkeypatch.setattr(_shared_ssl_certs, "subprocess", fake_subprocess)
 
     result = s3_ssl_cache._validate_cert(str(cert_path), "example.com")
 
@@ -344,6 +348,7 @@ def test_validate_cert_rejects_non_le_issuer(caplog, tmp_path, monkeypatch):
 # · Regression: 052 — expired certs must not be restored
 # · Last fail: N/A (gap fill for openssl-checkend path per B10 T2)
 # · Remove if: expiry validation logic changes
+# · C9 (DevPlan 118): _validate_cert делегирует в shared/ssl_certs.cert_is_valid — мок бьёт в shared
 @ldd_trajectory
 def test_validate_cert_checkend_expiring_fails(caplog, tmp_path, monkeypatch):
     """_validate_cert(check_expiry=True) returns False when openssl -checkend fails (<30 days)."""
@@ -351,6 +356,8 @@ def test_validate_cert_checkend_expiring_fails(caplog, tmp_path, monkeypatch):
     cert_path.write_text("fake pem")
 
     import subprocess as _sp
+
+    from core.internal.shared import ssl_certs as _shared_ssl_certs
 
     def _fake_run(cmd, **kwargs):
         if "-issuer" in cmd:
@@ -367,7 +374,7 @@ def test_validate_cert_checkend_expiring_fails(caplog, tmp_path, monkeypatch):
         FileNotFoundError=FileNotFoundError,
         OSError=OSError,
     )
-    monkeypatch.setattr(s3_ssl_cache, "subprocess", fake_subprocess)
+    monkeypatch.setattr(_shared_ssl_certs, "subprocess", fake_subprocess)
 
     result = s3_ssl_cache._validate_cert(str(cert_path), "example.com", check_expiry=True)
 

@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: deploy-paths, canonical, deprecated, registry, bootstrap-compose-stub, removal-plan, projects-base, resolver
+# GREP_SUMMARY: deploy-paths, canonical, deprecated, registry, bootstrap-compose-stub, removal-plan, projects-base, resolver, letsencrypt-live, node-configs-remote, platform-remote-base
 # STRUCTURE: ▶ CANONICAL_DEPLOY_PATHS (6 paths) → ◇ DEPRECATED_DEPLOY_PATHS (1 stub) → ⊕ get_canonical_paths() →
-#            ▶ projects_base() ┌env┐ → ◇ PROJECTS_BASE → ⎋ Path (default /opt/projects)
+#            ▶ projects_base() ┌env┐ → ◇ PROJECTS_BASE → ⎋ Path (default /opt/projects) →
+#            ▶ letsencrypt_live() / node_configs_remote() / platform_remote_base() (C7) → ⎋ Path
 # region MODULE_CONTRACT
 ## @purpose  Canonical deploy path registry — single source of truth for all code delivery
 ##           mechanisms. Gate test validates every deploy path in entrypoint-manifest.yaml
 ##           is registered here. DEPRECATED_DEPLOY_PATHS includes explicit removal plans.
+##           DevPlan 118 C7: +реальные прод-резолверы (letsencrypt_live, node_configs_remote,
+##           platform_remote_base) — дедупликация литералов /etc/letsencrypt/live (20 копий),
+##           /opt/node-configs, /opt/platform у топ-5 потребителей.
 ## @scope    Read by tests/gates/test_gate_deploy_paths.py for CI enforcement.
-##           No runtime dependencies — pure data module.
+##           Prod-потребители резолверов: s3_ssl_cache, cert_orchestrator, cert_collector,
+##           core_deliverer, overlay_deliverer (C7). No runtime dependencies — pure data module.
 ## @invariants
 ##   1. Every deploy-related make_target in entrypoint-manifest.yaml must map to a
 ##      canonical path defined here. Adding a new deploy mechanism without registering
 ##      it in CANONICAL_DEPLOY_PATHS blocks CI merge.
 ##   2. Every DEPRECATED entry must have target_date, removal_mechanism, and verification.
 ##   3. This module has zero imports from other shared modules — it is Phase A independent.
+##   4. Резолверы (C7): дефолты определены ТОЛЬКО здесь; env-переменные приоритетнее;
+##      никогда не raise — всегда возвращают Path.
 ## @rationale DRIFT-D1 (Brief 077): deploy pipelines are the most critical production domain,
 ##           yet there was no canonical inventory of deploy paths. CI gate enforcement
 ##           prevents accidental divergence between manifest, code, and documentation.
+##           C7 (DevPlan 118): литералы путей размножены (20 копий /etc/letsencrypt/live,
+##           /opt/node-configs, /opt/platform) — резолверы централизуют канон.
 ## @changes  2026-07-26 | DevPlan 081 Phase A — Created deploy path registry
+##           2026-08-02 | DevPlan 118 C7 — +letsencrypt_live/node_configs_remote/platform_remote_base
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -116,3 +126,68 @@ def projects_base(env: dict | None = None) -> Path:
 
 
 # endregion FUNC_projects_base
+
+
+# ── Remote path resolvers (DevPlan 118 C7 — активация deploy_paths) ──────────
+# Реальные прод-потребители: s3_ssl_cache, cert_orchestrator, cert_collector,
+# core_deliverer, overlay_deliverer (топ-5 по DevPlan 118 C7).
+
+DEFAULT_LETSENCRYPT_LIVE: str = "/etc/letsencrypt/live"
+"""## @invariant Каноническая директория Let's Encrypt live certs (VPS-дефолт)."""
+
+DEFAULT_NODE_CONFIGS_REMOTE: str = "/opt/node-configs"
+"""## @invariant Каноническая remote-директория node-configs (core_deliverer NODE_CONFIGS_REMOTE_BASE)."""
+
+DEFAULT_PLATFORM_BASE: str = "/opt/platform"
+"""## @invariant Канонический remote platform base (core_deliverer PLATFORM_REMOTE_BASE→PLATFORM_ROOT→/opt/platform)."""
+
+
+# region FUNC_letsencrypt_live
+## @purpose — Резолвер /etc/letsencrypt/live (DevPlan 118 C7). Дедупликация 20 копий литерала.
+## @io — ⇥ env: dict | None (None = os.environ) → ⎋ Path
+## @complexity — O(1)
+## @invariants
+##   - env LETSENCRYPT_LIVE приоритетнее дефолта (тесты/альтернативные окружения)
+##   - Никогда не raise — всегда возвращает Path
+def letsencrypt_live(env: dict | None = None) -> Path:
+    """Resolve Let's Encrypt live dir (env → /etc/letsencrypt/live, C7)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("LETSENCRYPT_LIVE", DEFAULT_LETSENCRYPT_LIVE)))
+
+
+# endregion FUNC_letsencrypt_live
+
+
+# region FUNC_node_configs_remote
+## @purpose — Резолвер remote node-configs base (DevPlan 118 C7). Тот же канон, что
+##            core_deliverer.resolve_node_configs_base (NODE_CONFIGS_REMOTE_BASE → /opt/node-configs).
+## @io — ⇥ env: dict | None (None = os.environ) → ⎋ Path
+## @complexity — O(1)
+## @invariants
+##   - env NODE_CONFIGS_REMOTE_BASE приоритетнее дефолта (мигрировано из core_deliverer)
+##   - Никогда не raise — всегда возвращает Path
+def node_configs_remote(env: dict | None = None) -> Path:
+    """Resolve remote node-configs base (env → /opt/node-configs, C7)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("NODE_CONFIGS_REMOTE_BASE", DEFAULT_NODE_CONFIGS_REMOTE)))
+
+
+# endregion FUNC_node_configs_remote
+
+
+# region FUNC_platform_remote_base
+## @purpose — Резолвер remote platform base (DevPlan 118 C7). Цепочка:
+##            PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform (тот же канон, что
+##            core_deliverer.resolve_remote_base / scp-deliver.sh:129).
+## @io — ⇥ env: dict | None (None = os.environ) → ⎋ Path
+## @complexity — O(1)
+## @invariants
+##   - env PLATFORM_REMOTE_BASE приоритетнее PLATFORM_ROOT, оба приоритетнее дефолта
+##   - Никогда не raise — всегда возвращает Path
+def platform_remote_base(env: dict | None = None) -> Path:
+    """Resolve remote platform base (PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform, C7)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("PLATFORM_REMOTE_BASE") or source.get("PLATFORM_ROOT") or DEFAULT_PLATFORM_BASE))
+
+
+# endregion FUNC_platform_remote_base

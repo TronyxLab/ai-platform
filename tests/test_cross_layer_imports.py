@@ -150,6 +150,8 @@ _RE_DOTTED_NAME = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
 # allowlist НЕ растёт: ЛЮБОЕ новое dotted-нарушение вне allowlist → RED.
 # Каждая запись имеет # LINT-EXEMPT: <reason> комментарий на строке нарушения.
 # Rev: сжатие allowlist — отдельный backlog (модули вне контейнерного рантайма).
+# 2026-08-02 (DevPlan 118 C1): docker_ops.py +1 запись (shared.timeouts — C1 требует импорт
+#   канона таймаутов); docker_compose запись сдвинута 24→27 (импорт-блок вырос на 3 строки).
 _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     (
         "core/modules/backup-cron/scripts/backup_config.py",
@@ -183,8 +185,13 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     ),
     (
         "core/modules/hermes-agent/watchdog/docker_ops.py",
-        24,
+        27,
         "контейнерный модуль; shared.docker_compose — by design (D1, DevPlan 117 D19, DevPlan 117 G T52)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/docker_ops.py",
+        37,
+        "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 118 C1)",
     ),
     (
         "core/modules/postgres/hooks/on_project_deploy.py",

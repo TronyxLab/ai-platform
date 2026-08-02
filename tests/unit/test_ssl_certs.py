@@ -23,6 +23,7 @@ from core.internal.shared.ssl_certs import (
     cert_get_issuer,
     cert_is_le_issuer,
     cert_is_parseable,
+    cert_is_valid,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,3 +167,100 @@ def test_is_le_issuer_openssl_failure(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # endregion TEST_cert_is_le_issuer
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# region TEST_cert_is_valid (DevPlan 118 C9 — единая комбинация)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _fake_run_results(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    parseable=True,
+    issuer="Let's Encrypt",
+    subject=None,
+    checkend=True,
+) -> patch:
+    """Вернуть патчер subprocess.run с fake openssl-результатами (C9 — комбинация живёт в shared)."""
+    import subprocess as _sp
+
+    def _run(cmd, **kwargs):
+        joined = " ".join(cmd)
+        if "-noout" in joined and "-subject" not in joined and "-issuer" not in joined and "-checkend" not in joined:
+            return _sp.CompletedProcess(cmd, 0 if parseable else 1, stdout="", stderr="")
+        if "-issuer" in joined:
+            out = f"issuer=O = {issuer}" if issuer else ""
+            return _sp.CompletedProcess(cmd, 0 if issuer else 1, stdout=out, stderr="")
+        if "-subject" in joined:
+            out = subject or "subject=CN = example.com"
+            return _sp.CompletedProcess(cmd, 0, stdout=out, stderr="")
+        if "-checkend" in joined:
+            return _sp.CompletedProcess(cmd, 0 if checkend else 1, stdout="", stderr="")
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    caplog.set_level(logging.INFO)
+    return patch("core.internal.shared.ssl_certs.subprocess.run", _run)
+
+
+# 🧪 TRAP[TEST] · Regression · cert_is_valid — все проверки OK (C9)
+# · Scenario: parseable + LE + domain match + expiry → True
+# · Last fail: три реализации «валиден» расходились (s3_ssl_cache/cert_orchestrator/context_deployer)
+# · Remove if: cert_is_valid combination changes
+def test_cert_is_valid_ok(caplog: pytest.LogCaptureFixture) -> None:
+    """Все проверки проходят → True."""
+    with _fake_run_results(caplog):
+        assert cert_is_valid("/tmp/cert.pem", expected_domains="example.com") is True
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · cert_is_valid — expired cert rejected (C9)
+# · Scenario: -checkend returncode!=0 → False
+# · Last fail: s3_ssl_cache._validate_cert expiry-путь (052: expired certs restored)
+# · Remove if: expiry-check removed from cert_is_valid
+def test_cert_is_valid_negative_expired(caplog: pytest.LogCaptureFixture) -> None:
+    """Expired cert (checkend fail) → False."""
+    with _fake_run_results(caplog, checkend=False):
+        assert cert_is_valid("/tmp/cert.pem") is False
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · cert_is_valid — non-LE rejected (C9)
+# · Scenario: issuer mkcert → False (P0: mkcert certs survived bootstrap)
+# · Last fail: 2026-07-22 P0 — только expiry проверялся
+# · Remove if: NEVER — регрессия P0 mkcert fix
+def test_cert_is_valid_negative_not_le(caplog: pytest.LogCaptureFixture) -> None:
+    """Issuer mkcert → False даже если не истёк."""
+    with _fake_run_results(caplog, issuer="mkcert development CA"):
+        assert cert_is_valid("/tmp/cert.pem") is False
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · cert_is_valid — domain mismatch rejected (C9)
+# · Scenario: expected_domains не совпадает с subject → False
+# · Last fail: s3_ssl_cache domain-match (052: wrong domain's cert served)
+# · Remove if: domain-check removed from cert_is_valid
+def test_cert_is_valid_negative_domain_mismatch(caplog: pytest.LogCaptureFixture) -> None:
+    """expected_domains=other.com при subject=example.com → False."""
+    with _fake_run_results(caplog, subject="subject=CN = example.com"):
+        assert cert_is_valid("/tmp/cert.pem", expected_domains="other.com") is False
+
+
+# 🧪 TRAP[TEST] · Regression · cert_is_valid — expected_domains=None пропускает domain-check (C9)
+# · Scenario: без expected_domains → True (cert_orchestrator/context_deployer семантика)
+# · Last fail: cert_orchestrator._is_cert_valid — только expiry+LE
+# · Remove if: domain-check opt-in semantics changes
+def test_cert_is_valid_no_domains_skips_domain_check(caplog: pytest.LogCaptureFixture) -> None:
+    """expected_domains=None → domain-check пропускается (True)."""
+    with _fake_run_results(caplog):
+        assert cert_is_valid("/tmp/cert.pem") is True
+
+
+# 🧪 TRAP[TEST] · Regression · cert_is_valid — check_expiry=False пропускает expiry (C9)
+# · Scenario: check_expiry=False → True даже при checkend fail (s3 download семантика)
+# · Last fail: s3_ssl_cache.download_cert check_expiry=False
+# · Remove if: check_expiry opt-out semantics changes
+def test_cert_is_valid_check_expiry_false(caplog: pytest.LogCaptureFixture) -> None:
+    """check_expiry=False → expiry-check пропускается (s3 download семантика)."""
+    with _fake_run_results(caplog, checkend=False):
+        assert cert_is_valid("/tmp/cert.pem", check_expiry=False) is True
+
+
+# endregion TEST_cert_is_valid

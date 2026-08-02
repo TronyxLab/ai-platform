@@ -36,46 +36,41 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# DevPlan 118 C3: единый loader COMPOSE_PROFILES — shared/compose_profiles.py (SoT platform-infra.yaml).
+from core.internal.shared.compose_profiles import load_profiles as compose_profiles
+
 logger = logging.getLogger(__name__)
 
 # ── Default node for fallback ──────────────────────────────────────────
 _DEFAULT_NODE = os.environ.get("PLATFORM_DEFAULT_NODE", "tronyx-vps")
 
-# ── Compose profiles — SoT: platform-env.yaml env_defaults (DevPlan 116 T2, U-02) ──
+# ── Compose profiles — SoT: platform-infra.yaml env_defaults (DevPlan 116 T2, U-02 + 118 C3) ──
 # Repo root resolved relative to this file (core/internal/scaffold/ → 4 levels up).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 # region FUNC_load_compose_profiles_from_platform_env
-## @purpose  Read COMPOSE_PROFILES from repo-root platform-env.yaml env_defaults (SoT).
-##            Local tool — platform-env.yaml is always in the repo (generated).
-##            Fail-fast: raise on missing file/key (invariant 7 — no silent fallback).
+## @purpose  Read COMPOSE_PROFILES from platform-infra.yaml env_defaults (SoT) через единый
+##            loader shared/compose_profiles (DevPlan 118 C3 — прежнее чтение generated
+##            platform-env.yaml УДАЛЁНО: два потребителя читали разные источники).
+##            Local tool — platform-infra.yaml всегда в репо (SoT). Fail-fast (инвариант 7).
 ##            Публичная (B9 T5, CS-4) — перенесена из project_adopter._load_compose_profiles_from_platform_env.
 ## @io       ⇥ None → ⎋ str: comma-separated profile list ⚡ raise FileNotFoundError/KeyError
 ## @complexity O(1) — single YAML load
 ## @invariants
-##   - platform-env.yaml resolved relative to this file (repo root), not project dir
+##   - Единый loader shared/compose_profiles (SoT platform-infra.yaml) — НЕ platform-env.yaml
 ##   - Raises readable error if file or key missing — adopt must not proceed with wrong profiles
 def load_compose_profiles_from_platform_env() -> str:
-    """Return COMPOSE_PROFILES from platform-env.yaml env_defaults (SoT)."""
-    platform_env_path = _REPO_ROOT / "platform-env.yaml"
-    if not platform_env_path.is_file():
-        raise FileNotFoundError(
-            f"[IMP:10][scaffold_helpers] platform-env.yaml not found at {platform_env_path} — "
-            "run `make generate-platform-env` (SoT: core/platform-infra.yaml env_defaults)"
-        )
-    import yaml  # type: ignore[import-untyped]
-
-    with open(platform_env_path) as f:
-        data = yaml.safe_load(f)
-    profiles = (data or {}).get("env_defaults", {}).get("COMPOSE_PROFILES")
+    """Return COMPOSE_PROFILES from shared loader (SoT platform-infra.yaml, C3)."""
+    profiles = compose_profiles.load_profiles()
     if not profiles:
         raise KeyError(
-            f"[IMP:10][scaffold_helpers] env_defaults.COMPOSE_PROFILES missing in {platform_env_path} — "
+            "[IMP:10][scaffold_helpers] env_defaults.COMPOSE_PROFILES missing in platform-infra.yaml (SoT) — "
             "run `make generate-platform-env` (DevPlan 116 T2, U-02)."
         )
-    logger.info("[IMP:9][load_compose_profiles] COMPOSE_PROFILES from platform-env.yaml: %s", profiles)
-    return str(profiles)
+    result = ",".join(profiles)
+    logger.info("[IMP:9][load_compose_profiles] COMPOSE_PROFILES from SoT: %s", result)
+    return result
 
 
 # endregion FUNC_load_compose_profiles_from_platform_env

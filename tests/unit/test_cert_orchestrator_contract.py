@@ -77,7 +77,7 @@ def test_orchestrate_certs_skips_valid_disk_cert(cert_env, monkeypatch, caplog) 
     (cert_env / domain).mkdir(parents=True)
     (cert_env / domain / "fullchain.pem").write_text("cert")
 
-    monkeypatch.setattr(co, "_is_cert_valid", lambda d, cp: True)
+    monkeypatch.setattr(co, "cert_is_valid", lambda *a, **kw: True)
     uploaded: list[str] = []
     monkeypatch.setattr(co, "_upload_to_s3", lambda d: (uploaded.append(d), True)[1])
 
@@ -110,7 +110,7 @@ def test_orchestrate_certs_restores_from_s3(cert_env, monkeypatch, caplog) -> No
     (cert_env / domain).mkdir(parents=True)
     (cert_env / domain / "fullchain.pem").write_text("cert")
 
-    monkeypatch.setattr(co, "_is_cert_valid", lambda d, cp: False)
+    monkeypatch.setattr(co, "cert_is_valid", lambda *a, **kw: False)
     monkeypatch.setattr(co.s3_ssl_cache, "check_cert", lambda d, s3_bucket: True)
     monkeypatch.setattr(co.s3_ssl_cache, "download_cert", lambda *a, **k: True)
 
@@ -140,7 +140,7 @@ def test_orchestrate_certs_issue_fallback_on_s3_miss(cert_env, monkeypatch, issu
     caplog.set_level(0)
     domain = "example.com"
 
-    monkeypatch.setattr(co, "_is_cert_valid", lambda d, cp: False)
+    monkeypatch.setattr(co, "cert_is_valid", lambda *a, **kw: False)
     monkeypatch.setattr(co.s3_ssl_cache, "check_cert", lambda d, s3_bucket: False)
     uploaded: list[str] = []
     monkeypatch.setattr(co, "_upload_to_s3", lambda d: (uploaded.append(d), True)[1])
@@ -172,7 +172,7 @@ def test_orchestrate_certs_s3_failure_non_fatal(cert_env, monkeypatch, caplog) -
     caplog.set_level(0)
     domain = "example.com"
 
-    monkeypatch.setattr(co, "_is_cert_valid", lambda d, cp: False)
+    monkeypatch.setattr(co, "cert_is_valid", lambda *a, **kw: False)
 
     def _raise_check(d, s3_bucket):
         raise OSError("S3 unavailable")

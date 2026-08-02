@@ -10,9 +10,10 @@
 ##           Invoked as `python3 -m core.internal.deploy.context_promoter <CONTEXT>`.
 ##           CONTEXT from argv[1], GIT_MIRROR_TOKEN from environment (never argv).
 ## @invariants
-##   1. SSH primary: `ssh -T -o ConnectTimeout=<SSH_CONNECT_TIMEOUT> -o BatchMode=yes git@github.com` —
-##      availability determined by AUTH MESSAGE in output, NOT exit code
-##      (`ssh -T git@github.com` exits 1 even on success — GitHub provides no shell).
+## @invariants
+##   1. SSH primary: `ssh -T <SSH_OPTS> git@github.com` — флаги из единого SoT shared/ssh_opts.py
+##      (DevPlan 118 C2, 0 ручных -o флагов); availability определяется AUTH MESSAGE в output,
+##      НЕ exit code (`ssh -T git@github.com` exits 1 даже на успех — GitHub предоставляет no shell).
 ##   2. HTTPS fallback ONLY when SSH unavailable AND GIT_MIRROR_TOKEN set; else FATAL exit 1.
 ##   3. GIT_ASKPASS temp script contains the LITERAL `${GIT_MIRROR_TOKEN}` (variable name),
 ##      never the token value — the token stays in process env, never on disk/argv/URL (AC2/AC7).
@@ -29,6 +30,7 @@
 ##            unavailable locally (B4 root cause). HTTPS fallback keeps PAT-based use possible.
 ## @changes  2026-07-31 | DevPlan 103 — extracted from core/entrypoints/context-promote.sh (161 LOC)
 ##           2026-08-01 | DevPlan 116 B5 T2 — ConnectTimeout outlier (10) → SSH_CONNECT_TIMEOUT=30 (U-15)
+##           2026-08-02 | DevPlan 118 C2 — ручные -o флаги → SSH_OPTS (единый SoT, 0 ручных флагов)
 ## 🧐 TRAP[DECISION] · 2026-07-18 · — · SSH primary, HTTPS fallback
 ## · Rejected: HTTPS-only (required token, unavailable locally — B4)
 ## · Reason: context-promote runs locally at operator — ssh-agent has operator key,
@@ -46,8 +48,9 @@ import tempfile
 from core.internal.shared import audit_logger
 from core.internal.shared.exceptions import ConfigValidationError
 
-# DevPlan 116 B5 T1/T2: единый ConnectTimeout (U-15) — литерал 10 outlier заменён
-from core.internal.shared.timeouts import SSH_CONNECT_TIMEOUT
+# DevPlan 118 C2: SSH_OPTS — единый SoT флагов (shared/ssh_opts.py, D1). Ручные
+# `-o ConnectTimeout=... -o BatchMode=yes` заменены каноном (0 ручных -o флагов, AC-C2).
+from core.internal.shared.ssh_opts import SSH_OPTS
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +67,7 @@ def check_ssh_available() -> bool:
 
     ## @purpose — SSH primary-channel availability probe. Mirrors the legacy shell check
     ##            (context-promote.sh:50-60) which greps the merged `2>&1` output for the
-    ##            GitHub auth greeting.
+    ##            GitHub auth greeting. SSH-флаги — единый SoT shared/ssh_opts.SSH_OPTS (C2).
     ## @io — ⇥ None → ⎋ bool — True when output contains an auth marker
     ## @complexity — O(1) subprocess + O(len(output))
     ## @invariants
@@ -76,15 +79,7 @@ def check_ssh_available() -> bool:
     """
     try:
         result = subprocess.run(
-            [
-                "ssh",
-                "-T",
-                "-o",
-                f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
-                "-o",
-                "BatchMode=yes",
-                "git@github.com",
-            ],
+            ["ssh", "-T", *SSH_OPTS, "git@github.com"],
             capture_output=True,
             text=True,
             check=False,

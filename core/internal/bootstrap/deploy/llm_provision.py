@@ -23,6 +23,9 @@ import logging
 import os
 import subprocess
 
+# DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
+from core.internal.shared.llm_paths import litellm_config_path
+
 logger = logging.getLogger(__name__)
 
 # PLATFORM_ROOT mirrored from context_deployer (os.environ override for tests)
@@ -47,7 +50,7 @@ def render_and_provision_llm() -> None:
     logger.info("[IMP:7][llm] Rendering litellm-config.yml from policy.yaml...")
     try:
         renderer_path = os.path.join(core_dir, "internal", "llm", "config_renderer.py")
-        config_output = os.path.join(core_dir, "modules", "litellm", "config", "litellm-config.yml")
+        config_output = str(litellm_config_path(core_dir))  # C6: единый путь shared/llm_paths
         if os.path.isfile(renderer_path):
             subprocess.run(
                 ["python3", renderer_path, "--output", config_output],
