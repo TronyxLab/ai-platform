@@ -17,6 +17,7 @@
 ##            + CircuitEvent + CircuitBreaker, ~266 LOC) with all LDD logs, TRAP comments and
 ##            docstrings preserved — no behavior change (AC-G7).
 ## @changes  2026-08-01 · DevPlan 117 G T52 — extracted from agent_watchdog.py
+## @changes  2026-08-02 · DevPlan 119 A2 — timeout=10 литерал → WATCHDOG_CB_CHECK_TIMEOUT из shared/timeouts
 # endregion MODULE_CONTRACT
 
 import json
@@ -31,6 +32,9 @@ from typing import TYPE_CHECKING, Optional
 from core.internal.config import (
     platform_config,
 )  # LINT-EXEMPT: контейнерный модуль; internal.config — by design (D1, allowlist 116 B11 T1)
+from core.internal.shared.timeouts import (
+    WATCHDOG_CB_CHECK_TIMEOUT,
+)  # LINT-EXEMPT: контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 119 A2)
 
 if TYPE_CHECKING:
     from agent_watchdog import WatchdogConfig  # type: ignore[import-not-found]  # duck-typed, never imported at runtime
@@ -162,7 +166,7 @@ class CircuitBreaker:
                 command,
                 capture_output=True,
                 text=True,
-                timeout=10,  # Hard timeout for health checks
+                timeout=WATCHDOG_CB_CHECK_TIMEOUT,  # Hard timeout for health checks (канон shared/timeouts, 119 A2)
             )
             return result.returncode == 0
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):

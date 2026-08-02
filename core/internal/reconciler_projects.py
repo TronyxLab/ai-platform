@@ -20,6 +20,7 @@
 ##            this module deploys stubs remotely via SSH — orthogonal concerns.
 ## @changes 2026-07-25 | Migrated from shell to Python (DevPlan 076)
 ## @changes 2026-07-30 | DRIFT-AC14: deliver_payload + deploy_project removed, DeployOrchestrator is sole path
+## @changes 2026-08-02 | DevPlan 119 A2 — timeout=30 литерал → IMAGE_CHECK_TIMEOUT (60) из shared/timeouts
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -34,6 +35,7 @@ from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.deploy_paths import projects_base
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
+from core.internal.shared.timeouts import IMAGE_CHECK_TIMEOUT
 
 # DevPlan 091 Wave A (AC14): _ORCHESTRATOR_AVAILABLE vestigial flag removed.
 # DeployOrchestrator is the sole deploy path — flag was always True and only masked
@@ -193,7 +195,7 @@ def check_ghcr_image(org: str, project_name: str) -> bool:
             ["docker", "manifest", "inspect", image_ref],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=IMAGE_CHECK_TIMEOUT,
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):

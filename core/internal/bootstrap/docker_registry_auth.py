@@ -25,6 +25,9 @@
 ## @changes  2026-07-22 | DevPlan 047 Phase 2 — Created Docker Hub auth + registry-mirror module
 ##           2026-07-30 | T13b — Delegated _docker_login() to shared docker_auth module
 ##           2026-08-01 | Волна 117 D2 — restart по guard (auth-state change), idempotent no-op
+##           2026-08-02 | DevPlan 119 A2 — timeout-литералы → канон shared/timeouts
+##                      (DOCKER_CMD_TIMEOUT/DOCKER_RESTART_TIMEOUT/DOCKER_RESTART_POLL_*);
+##                      локальная константа DOCKER_RESTART_TIMEOUT удалена
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -43,13 +46,18 @@ if str(_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(_CORE_DIR))
 
 from core.internal.shared.docker_auth import docker_login as shared_docker_login
+from core.internal.shared.timeouts import (
+    DOCKER_CMD_TIMEOUT,
+    DOCKER_RESTART_POLL_INTERVAL,
+    DOCKER_RESTART_POLL_RETRIES,
+    DOCKER_RESTART_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
 DEFAULT_MIRROR_URL = "https://mirror.gcr.io"
 DAEMON_JSON_PATH = "/etc/docker/daemon.json"
-DOCKER_RESTART_TIMEOUT = 60  # seconds
 
 
 # region FUNC_configure_docker_auth
@@ -269,13 +277,13 @@ def _restart_docker() -> bool:
         # Wait for Docker to be responsive
         import time
 
-        for _ in range(6):  # 6 × 5s = 30s max wait
-            time.sleep(5)
+        for _ in range(DOCKER_RESTART_POLL_RETRIES):  # 6 × 5s = 30s max wait
+            time.sleep(DOCKER_RESTART_POLL_INTERVAL)
             check = subprocess.run(
                 ["docker", "info"],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=DOCKER_CMD_TIMEOUT,
             )
             if check.returncode == 0:
                 logger.info("[IMP:9][docker_auth] Docker restarted and responsive")

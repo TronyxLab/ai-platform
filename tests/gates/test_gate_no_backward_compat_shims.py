@@ -1,10 +1,12 @@
-# GREP_SUMMARY: unit-test invariant9 no backward-compat compat-shim legacy markers scan
+# GREP_SUMMARY: gate no-backward-compat invariant9 backward-compat compat-shim legacy markers scan
 # STRUCTURE: ▶ test_no_backward_compat_shims → grep patterns in core/ and node-configs/ → ◇ filter by extension → ◇ exclude comments/docs → ⊕ assert no functional compat markers
 # region MODULE_CONTRACT
-## @purpose  Unit tests for Invariant 9: no backward compatibility shims in core/ or node-configs/
+## @purpose  Gate test for Invariant 9: no backward compatibility shims in core/ or node-configs/
 ## @scope    Scans functional Python, Shell, and Makefile files for backward_compat, legacy,
 ##           compat_shim, deprecated markers. Architectural/design comments about compatibility
 ##           are excluded from the scan — only functional compat shims are flagged.
+##           Перенесён из tests/unit/test_no_backward_compat_markers.py (DevPlan 119 A1 —
+##           зомби-гейт вне tests/gates/; репозиторий-wide скан = gate-природа).
 ## @invariants
 ##   - Only functional source files scanned (.py, .sh, .mk) — not .md, .yml, .yaml, .txt
 ##   - Comments about architecture (not functional code) are excluded
@@ -12,6 +14,7 @@
 ## @rationale  Invariant 9: "тестовый сервер может быть пересоздан заново — обратная
 ##             совместимость не требуется". No functional backward-compat shims should exist.
 ## @changes — 2026-07-18 | Created per DevPlan 011 T7
+## @changes — 2026-08-02 | DevPlan 119 A1 — перенесён из tests/unit/test_no_backward_compat_markers.py
 # endregion MODULE_CONTRACT
 
 import logging

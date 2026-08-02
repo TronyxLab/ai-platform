@@ -1,15 +1,19 @@
-# GREP_SUMMARY: smoke-test isolation container-name conflict parallel up test network-isolation
-# STRUCTURE: ▶ test_all_test_containers_have_test_suffix → ◇ test_no_container_name_collision → ◇ test_all_base_container_names_have_test_override → ◇ test_no_prod_network_in_test_overlay → ◇ test_test_network_consistency
+# GREP_SUMMARY: gate smoke-test-isolation container-name-conflict parallel-up test-network-isolation test-overlay
+# STRUCTURE: ▶ test_all_test_containers_have_test_suffix → ◇ test_no_container_name_collision → ◇ test_all_base_container_names_have_test_override → ◇ test_no_prod_network_in_test_overlay → ◇ test_test_network_consistency → ⎋ gate
 # region MODULE_CONTRACT
-## @purpose  Smoke test: verify test isolation — no container_name conflicts + network isolation (DevPlan 04 TASK-G5, DevPlan 017)
+## @purpose  Gate: verify test isolation — no container_name conflicts + network isolation (DevPlan 04 TASK-G5, DevPlan 017)
 ## @scope    Проверяет -test суффикс во всех test.yml, отсутствие конфликтов с production,
-##           отсутствие prod-сетей в test.yml, консистентность test-* сетей с prod-эквивалентами
+##           отсутствие prod-сетей в test.yml, консистентность test-* сетей с prod-эквивалентами.
+##           Перенесён из tests/test_smoke_test_isolation.py (DevPlan 119 A1 — зомби-гейт вне tests/gates/).
 ## @invariants
 ##   - Все контейнеры в test-проекте имеют -test суффикс
 ##   - Нет пересечений container_name между production и test
 ##   - Ни один test.yml не ссылается на production-сети (все должны быть с префиксом test-)
 ##   - Для каждого сервиса: prod-сеть X → test-сеть test-X
-## @rationale Тестовая изоляция через test-overlay (DevPlan 04 DD2) + DNS-alias изоляция (DevPlan 017 Option B)
+## @rationale Тестовая изоляция через test-overlay (DevPlan 04 DD2) + DNS-alias изоляция (DevPlan 017 Option B).
+##            6 тестов несли @pytest.mark.gate вне tests/gates/ (зомби-гейты, AUDIT-6 F1) —
+##            перенесены целиком в tests/gates/ для исполнения в `make gate MODE=fast`.
+## @changes  2026-08-02 | DevPlan 119 A1 — перенесён из tests/test_smoke_test_isolation.py
 # endregion MODULE_CONTRACT
 
 import logging

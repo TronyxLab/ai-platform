@@ -9,8 +9,10 @@
 ## @scope    Сканирует domain-файлы (docker_orchestrator, deploy_engine, reconciler, channels,
 ##           context_deployer, remote_executor, core_deliverer, overlay_deliverer,
 ##           healthcheck_poller, docker_compose, context_promoter, vps_readiness,
-##           deploy/*, bootstrap/deploy/*, converge/*, scaffold/*) + явный список core/modules
-##           (watchdog subprocess-вызовы) + .github/workflows/*.yml (D68, workflow-скан).
+##           deploy/*, bootstrap/deploy/*, converge/*, scaffold/*, reconciler_projects (119 A2),
+##           bootstrap/docker_registry_auth (119 A2)) + явный список core/modules
+##           (watchdog subprocess-вызовы: agent_watchdog, docker_ops, circuit_breaker (119 A2))
+##           + .github/workflows/*.yml (D68, workflow-скан).
 ##           Не-доменные вызовы (git, python3/bash render, validate.sh, HTTP/S3) — НЕ RED.
 ## @invariants
 ##   - RED: subprocess.* вызов с timeout=литерал ∈ set в domain-файле, где cmd — docker/ssh/
@@ -38,6 +40,9 @@
 ## @changes 2026-08-01 | DevPlan 117 D68 — набор +10/15, scope core/modules, workflow-скан
 ## @changes 2026-08-02 | DevPlan 118 C1/C11 — фикс _is_domain_file (латентный no-op),
 ##                      +docker_ops.py (module-rule «любой вызов»), +scaffold/ префикс
+## @changes 2026-08-02 | DevPlan 119 A2 (AUDIT-4 T1) — слепое пятно: +reconciler_projects.py,
+##                      +bootstrap/docker_registry_auth.py (domain), +circuit_breaker.py (module);
+##                      +3 теста (2 канон-проверки + 1 R5 negative)
 # endregion MODULE_CONTRACT
 
 import ast
@@ -60,6 +65,8 @@ _ALLOWED_TIMEOUT_LITERALS = {10, 15, 30, 60, 120, 180, 300, 600}
 
 # Domain-файлы (DevPlan 116 B5 T10). Директории: deploy/*, bootstrap/deploy/*, converge/*, scaffold/* (C11).
 # Пути ОТНОСИТЕЛЬНО core/internal/ (фикс C1 — прежний ROOT-relative не матчил ни один файл).
+# 2026-08-02 (DevPlan 119 A2): +reconciler_projects.py, +bootstrap/docker_registry_auth.py —
+#   слепое пятно гейта (AUDIT-4 T1), литералы уже мигрированы на shared/timeouts.
 _DOMAIN_FILES: set[str] = {
     "bootstrap/deploy/docker_orchestrator.py",
     "deploy/deploy_engine.py",
@@ -73,6 +80,8 @@ _DOMAIN_FILES: set[str] = {
     "shared/docker_compose.py",
     "deploy/context_promoter.py",
     "shared/vps_readiness.py",
+    "reconciler_projects.py",
+    "bootstrap/docker_registry_auth.py",
 }
 _DOMAIN_DIR_PREFIXES = ("deploy/", "bootstrap/deploy/", "bootstrap/converge/", "scaffold/")
 
@@ -83,6 +92,9 @@ _DOMAIN_DIR_PREFIXES = ("deploy/", "bootstrap/deploy/", "bootstrap/converge/", "
 _MODULE_DOMAIN_FILES: set[str] = {
     "hermes-agent/watchdog/agent_watchdog.py",
     "hermes-agent/watchdog/docker_ops.py",
+    # DevPlan 119 A2: circuit_breaker.py — слепое пятно гейта (AUDIT-4 T1),
+    # timeout=10 литерал мигрирован на WATCHDOG_CB_CHECK_TIMEOUT
+    "hermes-agent/watchdog/circuit_breaker.py",
 }
 
 # Workflow-скан (DevPlan 117 D68): timeout=\d+ в run-шагах workflows → RED.
@@ -368,3 +380,101 @@ def test_no_timeout_literals_in_ci_workflows(caplog) -> None:
         )
 
     logger.info("[IMP:9][timeout_literals][workflow] PASS: 0 timeout= literals in CI workflow run-steps")
+
+
+# ── DevPlan 119 A2: слепое пятно гейта (AUDIT-4 T1) — 3 новых domain-файла ──
+# docker_registry_auth.py / reconciler_projects.py / circuit_breaker.py были ВНЕ scope —
+# их timeout= литералы (10/30/10) ускользали от гейта. Теперь: расширенный scope выше
+# (_DOMAIN_FILES + _MODULE_DOMAIN_FILES) + специфичные проверки канона ниже.
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · docker_registry_auth использует shared/timeouts (DevPlan 119 A2)
+# · Scenario: docker_registry_auth.py импортирует таймауты из shared/timeouts; локальной константы нет
+# · Last fail: DOCKER_RESTART_TIMEOUT = 60 локально (дубль SoT) + timeout=10 литерал (docker info)
+# · Remove if: docker_registry_auth.py перестаёт выполнять docker-операции
+def test_timeout_in_docker_registry_auth(caplog) -> None:
+    """docker_registry_auth.py: таймауты импортируются из shared/timeouts (канон U-11, DevPlan 119 A2)."""
+    caplog.set_level(logging.INFO)
+    filepath = _CORE_INTERNAL / "bootstrap" / "docker_registry_auth.py"
+    assert filepath.is_file(), f"[IMP:10][A2] docker_registry_auth.py not found: {filepath}"
+    content = filepath.read_text(errors="replace")
+
+    assert "from core.internal.shared.timeouts import" in content, (
+        "[IMP:10][A2] docker_registry_auth.py does not import timeouts from shared/timeouts"
+    )
+    assert "DOCKER_CMD_TIMEOUT" in content, "[IMP:10][A2] DOCKER_CMD_TIMEOUT not used in docker_registry_auth.py"
+    assert "DOCKER_RESTART_TIMEOUT = 60" not in content, (
+        "[IMP:10][A2] local DOCKER_RESTART_TIMEOUT = 60 still in docker_registry_auth.py (SoT drift)"
+    )
+
+    logger.info("[IMP:9][timeout_literals][A2][docker_registry_auth] PASS: shared/timeouts imports present")
+    logger.info("[IMP:9][timeout_literals][A2][docker_registry_auth] PASS: 0 local timeout constants")
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · reconciler_projects timeout=IMAGE_CHECK_TIMEOUT (DevPlan 119 A2)
+# · Scenario: docker manifest inspect вызывается с timeout=IMAGE_CHECK_TIMEOUT (60, не 30)
+# · Last fail: timeout=30 (неверное значение — канон IMAGE_CHECK_TIMEOUT=60)
+# · Remove if: reconciler_projects.py перестаёт проверять GHCR-образы
+def test_timeout_in_reconciler_projects(caplog) -> None:
+    """reconciler_projects.py: docker manifest inspect использует IMAGE_CHECK_TIMEOUT=60 (DevPlan 119 A2)."""
+    caplog.set_level(logging.INFO)
+    filepath = _CORE_INTERNAL / "reconciler_projects.py"
+    assert filepath.is_file(), f"[IMP:10][A2] reconciler_projects.py not found: {filepath}"
+    content = filepath.read_text(errors="replace")
+
+    assert "from core.internal.shared.timeouts import IMAGE_CHECK_TIMEOUT" in content, (
+        "[IMP:10][A2] reconciler_projects.py does not import IMAGE_CHECK_TIMEOUT from shared/timeouts"
+    )
+    assert "timeout=IMAGE_CHECK_TIMEOUT" in content, (
+        "[IMP:10][A2] reconciler_projects.py does not use timeout=IMAGE_CHECK_TIMEOUT"
+    )
+
+    logger.info("[IMP:9][timeout_literals][A2][reconciler_projects] PASS: timeout=IMAGE_CHECK_TIMEOUT (60) in use")
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · литерал в новом domain-файле детектится (DevPlan 119 A2)
+# · Scenario: probe-файл core/internal/ с subprocess docker + timeout=10 литерал → _find_offenders ловит
+# · Last fail: N/A (новый negative-тест — исходный вход AUDIT-4 T1 = timeout=10 в docker_registry_auth:278)
+# · Remove if: timeout-literals гейт отменяется
+def test_timeout_literal_detected_negative(caplog) -> None:
+    """R5 negative: timeout= литерал в новом domain-файле (A2 scope) детектируется.
+
+    ## @purpose — Anti-survivorship: доказывает, что расширенный scope реально сканирует
+    ##            новые domain-файлы (бывшее слепое пятно AUDIT-4 T1), а не пропускает их.
+    ## @io — ⎋ None (assert: probe-литерал обнаружен)
+    ## @complexity — O(F) — один временный файл
+    """
+    caplog.set_level(logging.INFO)
+    import textwrap
+
+    probe = _CORE_INTERNAL / "_gate_probe_timeout_a2.py"
+    probe_rel = "_gate_probe_timeout_a2.py"
+    probe.write_text(
+        textwrap.dedent(
+            """\
+            import subprocess
+            def check_image():
+                return subprocess.run(
+                    ["docker", "manifest", "inspect", "ghcr.io/x/y:latest"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            """
+        )
+    )
+    try:
+        _DOMAIN_FILES.add(probe_rel)
+        offenders = _find_offenders()
+        hits = [(rel, ln, val) for rel, ln, val in offenders if "_gate_probe_timeout_a2" in rel]
+        assert hits, "R5 FAIL: timeout=10 literal in new domain file (A2 scope) was NOT detected"
+        logger.info("[IMP:9][timeout_literals][A2][R5] PASS: probe %s:%d timeout=%d detected", *hits[0])
+    finally:
+        _DOMAIN_FILES.discard(probe_rel)
+        probe.unlink(missing_ok=True)

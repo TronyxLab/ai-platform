@@ -1,16 +1,20 @@
 """
-# GREP_SUMMARY: test template syntax gate config templates envsubst jinja mixed_syntax contract
+# GREP_SUMMARY: gate nginx template-syntax config envsubst jinja mixed-syntax contract DRIFT-C8
 # STRUCTURE: ▶ scan config/*.conf.template → ◇ no {{}} → ▶ scan templates/*.conf.template → ◇ no ${} → ▶ no mixed syntax → ⎋ LDD trajectory
 # region MODULE_CONTRACT
 ## @purpose  CI gate: verify template syntax contract — config/ uses ${VAR} (envsubst), templates/ uses {{VAR}} (template_engine.py).
 ##           No mixing of syntaxes allowed in a single file.
-## @scope    core/modules/nginx/config/*.conf.template + core/modules/nginx/templates/*.conf.template
+## @scope    core/modules/nginx/config/*.conf.template + core/modules/nginx/templates/*.conf.template.
+##           Перенесён из tests/test_template_syntax_gate.py (DevPlan 119 A1 — зомби-гейт вне tests/gates/).
 ## @invariants
 ##   - File in config/ must NOT contain {{ (except comments)
 ##   - File in templates/ must NOT contain ${ (except nginx built-in variables)
 ##   - No single .template file may contain both {{}} and ${}
 ## @rationale DRIFT-C8: mixed syntax causes silent config corruption — agent applies wrong renderer.
+##            Отличается от test_gate_template_syntax.py (strict {{UPPER_SNAKE}} grammar по
+##            template-manifest) — этот гейт проверяет nginx config/ vs templates/ контракт.
 ## @changes  2026-07-26 | DevPlan 080 TASK-8 — Created
+## @changes  2026-08-02 | DevPlan 119 A1 — перенесён из tests/test_template_syntax_gate.py
 # endregion MODULE_CONTRACT
 """
 
@@ -25,7 +29,7 @@ from tests.conftest import ldd_trajectory
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _NGINX_CONFIG_DIR = _PROJECT_ROOT / "core" / "modules" / "nginx" / "config"
 _NGINX_TEMPLATES_DIR = _PROJECT_ROOT / "core" / "modules" / "nginx" / "templates"
 

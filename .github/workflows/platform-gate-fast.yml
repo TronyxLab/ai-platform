@@ -37,11 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # Test Honesty R4 (DevPlan 117 Brief F): поэтапный переход skip→fail.
-    # marker = поведение идентично текущему (skip при недоступности сервиса).
-    # Оператор переключает на "fail" когда CI-раннеры готовы (D46-C, out-of-scope).
+    # Test Honesty R4 (DevPlan 117 Brief F + DevPlan 119 A3): CI-раннеры ИМЕЮТ Docker →
+    # REQUIRE_HONESTY_MODE=fail (отсутствие сервиса = FAIL, не skip — R4 compliant).
+    # Локальная dev-машина остаётся marker: переменная не задана → default "marker"
+    # (tests/_conftest/honesty.py _honesty_mode()).
     env:
-      REQUIRE_HONESTY_MODE: marker
+      REQUIRE_HONESTY_MODE: fail
 
     steps:
       # ─── Step 1: Checkout ─────────────────────────────────────────────

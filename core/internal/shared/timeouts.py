@@ -62,6 +62,15 @@ SUDOERS_CMD_TIMEOUT = 15
 # docker stop/rm — lifecycle операции (orphan/legacy cleanup, rollback) — grace-period безопасный
 DOCKER_STOP_TIMEOUT = 30
 
+# systemctl restart docker — перезапуск docker-демона (docker_registry_auth _restart_docker,
+# bootstrap φ3). systemctl restart на слабых VPS может занять >DOCKER_CMD_TIMEOUT.
+DOCKER_RESTART_TIMEOUT = 60
+
+# docker daemon readiness poll после systemctl restart docker (docker_registry_auth):
+#   интервал опроса docker info + число попыток (6 × 5s = 30s окно ожидания демона)
+DOCKER_RESTART_POLL_INTERVAL = 5
+DOCKER_RESTART_POLL_RETRIES = 6
+
 # docker manifest inspect + docker image inspect/prune (check_image_exists, image-майнтенанс)
 IMAGE_CHECK_TIMEOUT = 60
 
@@ -107,6 +116,10 @@ WATCHDOG_CURL_TG_MAX_TIME = 30
 
 # Таймаут curl Tor-proxy healthcheck (tor_proxy_check.py, DevPlan 118 E5 — legacy MAX_TIME=30)
 TOR_PROXY_CURL_TIMEOUT = 30
+
+# Таймаут subprocess health-check команды circuit breaker (circuit_breaker _run_health_check,
+# hermes-agent watchdog — pg_isready и др. сервисные проверки с жёстким таймаутом)
+WATCHDOG_CB_CHECK_TIMEOUT = 10
 
 # ── Healthcheck ports domain ───────────────────────────────────────────────────
 

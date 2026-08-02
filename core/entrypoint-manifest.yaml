@@ -867,6 +867,18 @@ gates:
 - id: test_shared_audit_writes_valid_jsonl
   test_file: test_gate_audit_format.py
   description: 'Auto-discovered gate: test_shared_audit_writes_valid_jsonl'
+- id: test_no_done_file_references_in_bootstrap
+  test_file: test_gate_bootstrap_no_duplicate_steps.py
+  description: 'Auto-discovered gate: test_no_done_file_references_in_bootstrap'
+- id: test_no_shell_to_python_step_references
+  test_file: test_gate_bootstrap_no_duplicate_steps.py
+  description: 'Auto-discovered gate: test_no_shell_to_python_step_references'
+- id: test_no_step_1_step_18_in_node_lifecycle
+  test_file: test_gate_bootstrap_no_duplicate_steps.py
+  description: 'Auto-discovered gate: test_no_step_1_step_18_in_node_lifecycle'
+- id: test_node_lifecycle_under_80_loc
+  test_file: test_gate_bootstrap_no_duplicate_steps.py
+  description: 'Auto-discovered gate: test_node_lifecycle_under_80_loc'
 - id: test_broad_except_requires_noqa_and_policy_marker
   test_file: test_gate_broad_except_allowlist.py
   description: 'Auto-discovered gate: test_broad_except_requires_noqa_and_policy_marker'
@@ -1218,6 +1230,15 @@ gates:
 - id: test_start_period_standardized
   test_file: test_gate_healthcheck_unification.py
   description: 'Auto-discovered gate: test_start_period_standardized'
+- id: test_ci_workflows_require_honesty_fail
+  test_file: test_gate_honesty_mode.py
+  description: 'Auto-discovered gate: test_ci_workflows_require_honesty_fail'
+- id: test_honesty_fail_on_missing_docker
+  test_file: test_gate_honesty_mode.py
+  description: 'Auto-discovered gate: test_honesty_fail_on_missing_docker'
+- id: test_honesty_marker_default_skips
+  test_file: test_gate_honesty_mode.py
+  description: 'Auto-discovered gate: test_honesty_marker_default_skips'
 - id: test_http_calls_have_retry
   test_file: test_gate_http_retry_policy.py
   description: 'Auto-discovered gate: test_http_calls_have_retry'
@@ -1389,6 +1410,12 @@ gates:
 - id: test_manifests_up_to_date
   test_file: test_gate_manifests_up_to_date.py
   description: 'Auto-discovered gate: test_manifests_up_to_date'
+- id: marker_outside_detected_negative
+  test_file: test_gate_marker_location.py
+  description: 'Auto-discovered gate: marker_outside_detected_negative'
+- id: test_no_gate_markers_outside_gates_dir
+  test_file: test_gate_marker_location.py
+  description: 'Auto-discovered gate: test_no_gate_markers_outside_gates_dir'
 - id: test_all_hooks_are_specified_as_strings
   test_file: test_gate_module_hooks.py
   description: 'Auto-discovered gate: test_all_hooks_are_specified_as_strings'
@@ -1503,6 +1530,12 @@ gates:
 - id: test_wrong_env_requires_type
   test_file: test_gate_module_yaml_contract_d5_negative.py
   description: 'Auto-discovered gate: test_wrong_env_requires_type'
+- id: test_all_network_names_in_canon
+  test_file: test_gate_networks_sot.py
+  description: 'Auto-discovered gate: test_all_network_names_in_canon'
+- id: test_non_canonical_network_detected_negative
+  test_file: test_gate_networks_sot.py
+  description: 'Auto-discovered gate: test_non_canonical_network_detected_negative'
 - id: test_base_yml_mounts_templates
   test_file: test_gate_nginx_domain_contract.py
   description: 'Auto-discovered gate: test_base_yml_mounts_templates'
@@ -1512,6 +1545,18 @@ gates:
 - id: test_platform_domain_placeholder_present
   test_file: test_gate_nginx_domain_contract.py
   description: 'Auto-discovered gate: test_platform_domain_placeholder_present'
+- id: test_config_templates_use_envsubst_syntax
+  test_file: test_gate_nginx_template_syntax.py
+  description: 'Auto-discovered gate: test_config_templates_use_envsubst_syntax'
+- id: test_no_mixed_syntax_in_single_file
+  test_file: test_gate_nginx_template_syntax.py
+  description: 'Auto-discovered gate: test_no_mixed_syntax_in_single_file'
+- id: test_template_templates_use_jinja_syntax
+  test_file: test_gate_nginx_template_syntax.py
+  description: 'Auto-discovered gate: test_template_templates_use_jinja_syntax'
+- id: test_no_backward_compat_shims
+  test_file: test_gate_no_backward_compat_shims.py
+  description: 'Auto-discovered gate: test_no_backward_compat_shims'
 - id: test_no_bare_valueerror_runtimeerror
   test_file: test_gate_no_bare_raise.py
   description: 'Auto-discovered gate: test_no_bare_valueerror_runtimeerror'
@@ -1785,6 +1830,24 @@ gates:
 - id: test_single_project_entry_definition
   test_file: test_gate_single_project_parser.py
   description: 'Auto-discovered gate: test_single_project_entry_definition'
+- id: test_all_base_container_names_have_test_override
+  test_file: test_gate_smoke_test_isolation.py
+  description: 'Auto-discovered gate: test_all_base_container_names_have_test_override'
+- id: test_all_docker_modules_have_test_overlay
+  test_file: test_gate_smoke_test_isolation.py
+  description: 'Auto-discovered gate: test_all_docker_modules_have_test_overlay'
+- id: test_all_test_containers_have_test_suffix
+  test_file: test_gate_smoke_test_isolation.py
+  description: 'Auto-discovered gate: test_all_test_containers_have_test_suffix'
+- id: test_no_container_name_collision
+  test_file: test_gate_smoke_test_isolation.py
+  description: 'Auto-discovered gate: test_no_container_name_collision'
+- id: test_no_prod_network_in_test_overlay
+  test_file: test_gate_smoke_test_isolation.py
+  description: 'Auto-discovered gate: test_no_prod_network_in_test_overlay'
+- id: test_test_network_consistency
+  test_file: test_gate_smoke_test_isolation.py
+  description: 'Auto-discovered gate: test_test_network_consistency'
 - id: test_ci_workflows_no_raw_connect_timeout
   test_file: test_gate_ssh_opts_sole_path.py
   description: 'Auto-discovered gate: test_ci_workflows_no_raw_connect_timeout'
@@ -1956,6 +2019,15 @@ gates:
 - id: test_r5_negative_raw_timeout_30_detected
   test_file: test_gate_timeout_literals.py
   description: 'Auto-discovered gate: test_r5_negative_raw_timeout_30_detected'
+- id: test_timeout_in_docker_registry_auth
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_timeout_in_docker_registry_auth'
+- id: test_timeout_in_reconciler_projects
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_timeout_in_reconciler_projects'
+- id: test_timeout_literal_detected_negative
+  test_file: test_gate_timeout_literals.py
+  description: 'Auto-discovered gate: test_timeout_literal_detected_negative'
 - id: test_deploy_order_respects_topology
   test_file: test_gate_topology.py
   description: 'Auto-discovered gate: test_deploy_order_respects_topology'

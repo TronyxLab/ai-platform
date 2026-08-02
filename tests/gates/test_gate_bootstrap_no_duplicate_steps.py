@@ -1,5 +1,5 @@
 """
-# GREP_SUMMARY: test-bootstrap-no-duplicate-steps, gate-test, static-audit, DevPlan-087-T10, bootstrap-consolidation, no-step-deploy-context, no-shell-to-python-step, no-step-underscore, no-done-files, node-lifecycle-clean
+# GREP_SUMMARY: gate-bootstrap-no-duplicate-steps, static-audit, DevPlan-087-T10, bootstrap-consolidation, no-step-deploy-context, no-shell-to-python-step, no-step-underscore, no-done-files, node-lifecycle-clean
 # STRUCTURE: ▶ resolve CORE_DIR + key file paths → ◇ read source files → ○ grep/regex analysis for AC invariants → ⊕ 4 gate test functions → ┌print LDD trajectory┐ → ⎋ IMP:9 assertions
 # region MODULE_CONTRACT
 ## @purpose  Gate test (DevPlan 087 T10) verifying bootstrap consolidation invariants:
@@ -8,6 +8,8 @@
 ##           3. No .done-file references in core/internal/bootstrap/ (all checkpoints via state.json)
 ##           4. No step_1_*, step_18_*, checkpoint_step, checkpoint_migrate_legacy in node-lifecycle.sh
 ##           5. node-lifecycle.sh <80 LOC (thin facade per DevPlan 087 T7)
+##           Перенесён из tests/unit/test_bootstrap_no_duplicate_steps.py (DevPlan 119 A1 —
+##           зомби-гейт вне tests/gates/; self-described "Gate test").
 ## @scope    Static analysis — reads source files from disk, applies grep-based assertions.
 ##           No Docker, VPS, or network access required. All tests are gate-compatible.
 ## @invariants
@@ -25,6 +27,7 @@
 ##           2 теста-консерватора (AC2 test_no_step_deploy_context_in_steps, AC4
 ##           test_no_step_underscore_functions_in_steps) удалены — TRAP[TEST] разрешал
 ##           («Remove if: steps.py is fully replaced by phases.py and deleted»).
+##           2026-08-02 · DevPlan 119 A1 — перенесён из tests/unit/test_bootstrap_no_duplicate_steps.py
 # endregion MODULE_CONTRACT
 """
 

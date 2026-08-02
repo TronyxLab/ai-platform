@@ -180,8 +180,13 @@ _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
     ),
     (
         "core/modules/hermes-agent/watchdog/circuit_breaker.py",
-        31,
+        32,
         "контейнерный модуль; internal.config platform_config — by design (D1, DevPlan 117 G T52)",
+    ),
+    (
+        "core/modules/hermes-agent/watchdog/circuit_breaker.py",
+        35,
+        "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 119 A2)",
     ),
     (
         "core/modules/hermes-agent/watchdog/docker_ops.py",
@@ -1183,7 +1188,6 @@ def lint_core() -> list[str]:
 # region TEST_test_cross_layer_imports
 
 
-@pytest.mark.gate
 @ldd_trajectory
 def test_cross_layer_imports(caplog) -> None:
     """Enforce layer isolation: zero cross-layer import violations in core/.
@@ -1228,7 +1232,6 @@ def test_cross_layer_imports(caplog) -> None:
 
 
 # region TEST_DETECT_DIRECT_CALL
-@pytest.mark.gate
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate #8 v2 — direct module call detection
 # · Last fail: N/A (new test)
 # · Remove if: Gate #8 is superseded
@@ -1248,7 +1251,6 @@ def test_direct_module_call_detected(tmp_path: Path) -> None:
     # endregion FUNC_test_direct_module_call_detected
 
 
-@pytest.mark.gate
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Anti-survivorship — old gate blindness fixed
 # · Last fail: old Gate #8 (blind to bash "$variable" pattern)
 # · Remove if: Gate #8 v2 is superseded or variable tracking is no longer needed
@@ -1277,7 +1279,6 @@ def test_gate8_original_blindness_fixed(tmp_path: Path) -> None:
 
 
 # region TEST_INVOKE_VALIDATION
-@pytest.mark.gate
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate #8 v2 — registered interface passes
 # · Last fail: N/A (new test)
 # · Remove if: Gate #8 is superseded
@@ -1312,7 +1313,6 @@ def test_invoke_registered_interface_passes(tmp_path: Path) -> None:
     # endregion FUNC_test_invoke_registered_interface_passes
 
 
-@pytest.mark.gate
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate #8 v2 — unregistered interface fails
 # · Last fail: N/A (new test)
 # · Remove if: Gate #8 is superseded
@@ -1347,7 +1347,6 @@ def test_invoke_unregistered_interface_fails(tmp_path: Path) -> None:
     # endregion FUNC_test_invoke_unregistered_interface_fails
 
 
-@pytest.mark.gate
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate #8 v2 integration — all call sites validated
 # · Last fail: N/A (new test)
 # · Remove if: Gate #8 is superseded
@@ -1380,7 +1379,6 @@ def test_all_call_sites_use_invoke() -> None:
 
 
 # region TEST_LOOKS_LIKE_PATH (T4.1)
-@pytest.mark.gate
 class TestLooksLikePath:
     """Unit tests for _looks_like_path() function — T4.1 (≥5 tests).
 
@@ -1471,7 +1469,6 @@ class TestLooksLikePath:
 
 
 # region TEST_RESOLVE_IMPORT (T4.2)
-@pytest.mark.gate
 class TestResolveImport:
     """Unit tests for resolve_import() function — T4.2 (≥3 tests).
 
@@ -1561,7 +1558,6 @@ class TestResolveImport:
 
 
 # region TEST_COLLECT_PATH_VARIABLES (T4.3)
-@pytest.mark.gate
 class TestCollectPathVariables:
     """Unit tests for _collect_path_variables() function — T4.3 (≥2 tests).
 
@@ -1620,7 +1616,6 @@ class TestCollectPathVariables:
 
 
 # region TEST_TRACE_VARIABLE_ASSIGNMENT (T4.4)
-@pytest.mark.gate
 class TestTraceVariableAssignment:
     """Unit tests for _trace_variable_assignment() function — T4.4 (≥2 tests).
 
@@ -1697,7 +1692,6 @@ class TestTraceVariableAssignment:
 
 
 # region TEST_SHELLCHECK_INTEGRATION (T4.5)
-@pytest.mark.gate
 class TestShellCheckIntegration:
     """Unit tests for tests/_conftest/shellcheck.py integration — T4.5 (≥2 tests).
 
@@ -1769,7 +1763,6 @@ class TestShellCheckIntegration:
 
 
 # region TEST_B11_NEGATIVE (R5 anti-survivorship — DevPlan 116 B11 T1, U-09)
-@pytest.mark.gate
 class TestB11DottedImportDetection:
     """R5 negative tests: dotted-imports and python3 -m are RED outside allowlist.
 
