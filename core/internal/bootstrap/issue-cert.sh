@@ -597,18 +597,23 @@ issue_tls_cert() {
 ##           2026-08-01 | Волна 117 D4 — TRAP «CLI debug entrypoint» удалён; main() = живой executor
 ##           (факт: cert_orchestrator.py:451 вызывает bash issue-cert.sh — отклонение от DevPlan задокументировано)
 main() {
-    # ── S7: Parse NODE_YAML via NodeYaml CLI --domain-config (replaces the legacy shell domain-config helper) ──
+    # ── S7: Parse NODE_YAML via NodeYaml CLI --domain-config --format lines (DevPlan 118 E12) ──
+    # E12 (D18): replaces grep '^platform_domain:' | cut -d: -f2- re-parsing — node_yaml
+    # --format lines outputs bare values each on own line in fixed order:
+    #   [0]=platform_domain, [1]=email, [2]=acme_dns_plugin, [3]=project_domains
     if [[ -n "${NODE_YAML:-}" ]] && [[ -f "$NODE_YAML" ]]; then
-        local yaml_info
-        yaml_info="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --domain-config 2>/dev/null)" || {
+        local -a yaml_info=()
+        local yaml_raw=""
+        # E12: single node_yaml call, --format lines → 4 bare lines (0 grep|cut)
+        yaml_raw="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --domain-config --format lines 2>/dev/null)" || {
             log_warn "Failed to parse NODE_YAML via NodeYaml CLI — falling back to env vars"
         }
-        if [[ -n "${yaml_info:-}" ]]; then
-            local yaml_domain yaml_email yaml_acme_dns yaml_project_domains
-            yaml_domain="$(echo "$yaml_info" | grep '^platform_domain:' | cut -d: -f2-)"
-            yaml_email="$(echo "$yaml_info" | grep '^email:' | cut -d: -f2-)"
-            yaml_acme_dns="$(echo "$yaml_info" | grep '^acme_dns_plugin:' | cut -d: -f2-)"
-            yaml_project_domains="$(echo "$yaml_info" | grep '^project_domains:' | cut -d: -f2-)"
+        if [[ -n "${yaml_raw:-}" ]]; then
+            mapfile -t yaml_info <<< "$yaml_raw"
+            local yaml_domain="${yaml_info[0]:-}"
+            local yaml_email="${yaml_info[1]:-}"
+            local yaml_acme_dns="${yaml_info[2]:-}"
+            local yaml_project_domains="${yaml_info[3]:-}"
 
             # Export with fallback: node.yaml value takes priority, then existing env, then empty
             export PLATFORM_DOMAIN="${yaml_domain:-${PLATFORM_DOMAIN:-}}"

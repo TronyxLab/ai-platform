@@ -6,42 +6,32 @@
 ##            Adopts an existing project into ai-platform lifecycle: generates ai-platform.yaml,
 ##            simplifies deploy.yml, validates docker-compose proxy-net, registers in node.yaml,
 ##            configures nginx vhost, and generates Makefile/AGENTS.md.
-##            B9 T5 (U-32): compose-валидация и vhost-логика вынесены в scaffold/compose_validator.py
-##            и scaffold/vhost_configurator.py; COMPOSE_PROFILES чтение — в scaffold_helpers (CS-4);
-##            deprecated _register_project_safe/_register_via_node_yaml удалены (CS-5);
-##            validate_org_against_node_yaml → scaffold_helpers (re-export).
+##            B9 T5 (U-32): compose/vhost → compose_validator/vhost_configurator; COMPOSE_PROFILES →
+##            scaffold_helpers; deprecated _register_project_safe/_register_via_node_yaml удалены.
 ## @scope    Called from adopt-project.sh shell facade (≤120 LOC) via `python3 -m core.internal.scaffold.project_adopter adopt`.
-##           Класс ProjectAdopter: adopt()-оркестрация, YAML-генераторы (делегируют в scaffold_helpers),
-##           simplify_deploy_yml/delete_platform_deploy_yml, gen_env_platform, gen_project_makefile,
-##           gen_project_agents, register_in_node_yaml (делегирует), print_diff_report.
+##           Класс ProjectAdopter: adopt()-оркестрация + делегирование в scaffold_helpers/
+##           compose_validator/vhost_configurator; E11: auto-detect → shared/project_yaml.py.
 ## @invariants
 ##   1. NEVER modifies src/, Dockerfile, docker-compose.yml (application code)
 ##   2. .env.platform regenerated via subprocess gen_env_platform.py (CLI-first, D5)
 ##   3. Supports personal domains (O11) — separate cert path
 ##   4. Idempotent: second call with same project → no-op (exit 0) except .env.platform regeneration
-##   5. deploy.yml simplified to use reusable workflow (if exists); platform-deploy.yml deleted if exists
-##   6. validate_compose_networks → compose_validator (3-method cascade); register → scaffold_helpers
+##   5. deploy.yml simplified to reusable workflow (if exists); platform-deploy.yml deleted if exists
+##   6. validate_compose_networks → compose_validator; register → scaffold_helpers
 ##   7. configure_vhost → vhost_configurator (vhost_renderer → add-vhost.sh fallback, D4)
 ##   8. gen_env_platform always via subprocess.run (CLI-first design, D5)
-##   9. validate_org duplicated in shell (fast grep) AND Python (full PyYAML) per D6 —
-##      Python-версия живёт в scaffold_helpers (shared), re-export отсюда
 ## @rationale Migration tool for existing projects. Strangler-Fig per Wave 5 language policy (AGENTS.md).
 ##            DevPlan 116 B9 D5: полный сплит ответственностей project_adopter (SRP, ≤600 LOC гейт T6.2).
 ## @changes  2026-07-26 · Wave 5c — Full Strangler-Fig from adopt-project.sh (906 LOC)
 ##           2026-08-01 · B9 T5 — compose_validator/vhost_configurator/scaffold_helpers split (U-32)
+##           2026-08-02 · DevPlan 118 E11 — auto-detect → shared/project_yaml.py
 # endregion MODULE_CONTRACT
 
 # ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Silent default "personal" org + missing casing normalization — config drift
-# · Symptom: PROJECT_ORG defaulted to "personal" when --org not provided; ghcr.io casing mismatch
-# · Root: отсутствие fail-fast для пустого org + отсутствие lowercase-нормализации ghcr paths
-# · Fix: fail-fast exit 1 с подсказкой + lowercase для ghcr + exact-case для uses: + сверка с node.yaml
-# · Prevention: org всегда явный — отказ вместо молчания
+# · Fix: fail-fast exit 1 + lowercase ghcr + exact-case uses: + сверка с node.yaml · Prevention: org явный
 
-# 📝 TRAP[DEBT] · 2026-07-26 · LO · gen_env_platform.py — CLI-first design prevents direct import
-# · Observed: gen_env_platform.py функции используют sys.exit() вместо return → нельзя импортировать как библиотеку
-# · Suspected: осознанный CLI-first дизайн (Plan 082). Рефакторинг на библиотечный API — отдельная задача.
-# · Impact: project_adopter использует subprocess.run вместо прямого import (overhead ~100ms)
-# · When: during Wave 5c migration — deferred, out of scope
+# 📝 TRAP[DEBT] · 2026-07-26 · LO · gen_env_platform.py — CLI-first (sys.exit) → subprocess.run (overhead ~100ms)
+# · When: Wave 5c — deferred
 
 from __future__ import annotations
 
@@ -63,6 +53,8 @@ from core.internal.scaffold.scaffold_helpers import validate_org_against_node_ya
 
 # DevPlan 118 A2: единый канон compose-резолва — shared/compose_files (SoT списков)
 from core.internal.shared.compose_files import resolve_compose_file
+from core.internal.shared.exceptions import ConfigValidationError
+from core.internal.shared.project_yaml import detect_project_config  # E11: auto-detect (0 grep-YAML)
 
 logger = logging.getLogger(__name__)
 
@@ -476,8 +468,7 @@ jobs:
 
         # ── Step 6: Validate compose networks (proxy-net) ──
         logger.info("[IMP:7][%s][adopt] Step 6/8: Validate compose proxy-net (M4 gate)", self._log_prefix)
-        # DevPlan 118 A2: единый канон compose-резолва — shared/compose_files.resolve_compose_file
-        # (порядок compose.yaml → docker-compose.yml сохранён; канон расширен до 4 имён)
+        # DevPlan 118 A2: единый канон compose-резолва — shared/compose_files (4 имён)
         compose_candidate: Path | None = resolve_compose_file(str(self.project_dir))
 
         if compose_candidate:
@@ -485,10 +476,7 @@ jobs:
             if vr.valid:
                 result.changes.append("✔ Compose proxy-net validated")
             else:
-                logger.info(
-                    "[IMP:8][%s][adopt]   proxy-net validation FAILED — adopt continues, but fix before deploy",
-                    self._log_prefix,
-                )
+                logger.info("[IMP:8][%s][adopt] proxy-net validation FAILED — fix before deploy", self._log_prefix)
                 result.changes.append("⚠️  Compose proxy-net VALIDATION FAILED — must fix before deploy")
         else:
             logger.info("[IMP:6][%s][adopt] No compose file found — skipping proxy-net validation", self._log_prefix)
@@ -566,9 +554,13 @@ def main() -> int:
 
     adopt_parser = sub.add_parser("adopt", help="Adopt a project")
     adopt_parser.add_argument("--project-dir", required=True, type=str, help="Project directory")
-    adopt_parser.add_argument("--project-name", required=True, type=str, help="Project name")
-    adopt_parser.add_argument("--project-org", required=True, type=str, help="Organization / context")
-    adopt_parser.add_argument("--project-node", required=True, type=str, help="Target node name")
+    adopt_parser.add_argument("--project-name", type=str, default=None, help="Project name (auto-detect: dir basename)")
+    adopt_parser.add_argument(
+        "--project-org", type=str, default=None, help="Organization (auto-detect: path → PLATFORM_ORG)"
+    )
+    adopt_parser.add_argument(
+        "--project-node", type=str, default=None, help="Target node (auto-detect: ai-platform.yaml)"
+    )
     adopt_parser.add_argument("--project-domain", type=str, default=None, help="Custom domain (optional)")
     adopt_parser.add_argument("--force", action="store_true", default=False, help="Regenerate Makefile/AGENTS.md")
 
@@ -580,13 +572,21 @@ def main() -> int:
             print(f"[IMP:10][adopt] FAIL-FAST: project directory not found: {project_dir}", file=sys.stderr)
             return 1
 
+        # E11: auto-detect + casing (shared/project_yaml, 0 grep-YAML) — fallback-цепочки в Python
+        try:
+            d = detect_project_config(
+                project_dir,
+                name=args.project_name,
+                org=args.project_org,
+                node=args.project_node,
+                domain=args.project_domain,
+            )
+        except ConfigValidationError as exc:
+            print(f"[IMP:10][adopt] FAIL-FAST: {exc}", file=sys.stderr)
+            return 1
+
         adopter = ProjectAdopter(
-            project_dir=project_dir,
-            name=args.project_name,
-            org=args.project_org,
-            node=args.project_node,
-            domain=args.project_domain,
-            force=args.force,
+            project_dir=project_dir, name=d["name"], org=d["org"], node=d["node"], domain=d["domain"], force=args.force
         )
 
         result = adopter.adopt()

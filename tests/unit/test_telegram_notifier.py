@@ -24,7 +24,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.internal.shared.telegram_notifier import send_telegram
+from core.internal.shared.telegram_notifier import (
+    format_notify_message,
+    notify,
+    resolve_chat_id,
+    send_telegram,
+)
 
 # region FUNC_test_send_telegram_mocked
 
@@ -378,3 +383,129 @@ def test_send_telegram_network_error(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # endregion
+
+
+# region E10_RESOLVE_CHAT_ID
+
+
+def test_resolve_chat_id_critical_prefers_critical_var() -> None:
+    """resolve_chat_id: critical → TELEGRAM_CHAT_ID_CRITICAL (dedicated var wins)."""
+    env = {
+        "TELEGRAM_CHAT_ID": "-100base",
+        "TELEGRAM_CHAT_ID_CRITICAL": "-100crit",
+        "TELEGRAM_CHAT_ID_WARNING": "-100warn",
+    }
+    assert resolve_chat_id("critical", env) == "-100crit"
+
+
+def test_resolve_chat_id_critical_fallback_base() -> None:
+    """resolve_chat_id: critical without dedicated var → TELEGRAM_CHAT_ID fallback."""
+    env = {"TELEGRAM_CHAT_ID": "-100base"}
+    assert resolve_chat_id("critical", env) == "-100base"
+
+
+def test_resolve_chat_id_warning() -> None:
+    """resolve_chat_id: warning → TELEGRAM_CHAT_ID_WARNING."""
+    env = {"TELEGRAM_CHAT_ID": "-100base", "TELEGRAM_CHAT_ID_WARNING": "-100warn"}
+    assert resolve_chat_id("warning", env) == "-100warn"
+
+
+def test_resolve_chat_id_info_uses_base_only() -> None:
+    """resolve_chat_id: info/unknown → TELEGRAM_CHAT_ID (no dedicated var)."""
+    env = {"TELEGRAM_CHAT_ID": "-100base", "TELEGRAM_CHAT_ID_CRITICAL": "-100crit"}
+    assert resolve_chat_id("info", env) == "-100base"
+    assert resolve_chat_id("", env) == "-100base"
+
+
+def test_resolve_chat_id_none_when_unset() -> None:
+    """resolve_chat_id: no TELEGRAM_CHAT_ID at all → None."""
+    assert resolve_chat_id("info", {}) is None
+    assert resolve_chat_id("critical", {}) is None
+
+
+# endregion E10_RESOLVE_CHAT_ID
+
+
+# region E10_FORMAT_NOTIFY_MESSAGE
+
+
+def test_format_notify_message_full() -> None:
+    """format_notify_message: '[context] emoji message'."""
+    assert format_notify_message("🚀", "Deployed app", "platform") == "[platform] 🚀 Deployed app"
+
+
+def test_format_notify_message_emoji_only() -> None:
+    """format_notify_message: empty message → bare emoji (notify-hook contract)."""
+    assert format_notify_message("✅", "", "platform") == "✅"
+
+
+def test_format_notify_message_context_empty() -> None:
+    """format_notify_message: empty context → '[] ✅ msg' (caller supplies default)."""
+    assert format_notify_message("✅", "msg", "") == "[] ✅ msg"
+
+
+# endregion E10_FORMAT_NOTIFY_MESSAGE
+
+
+# region E10_NOTIFY
+
+
+def test_notify_non_blocking_missing_secrets(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """notify: missing secrets file → IMP:7 warning, returns True (never blocks deploy)."""
+    caplog.set_level(logging.WARNING)
+    missing = str(tmp_path / "no-secrets.env")
+
+    with patch.dict(os.environ, {}, clear=True):
+        ok = notify("🚀", "Deployed X", severity="info", secrets_file=missing)
+
+    assert ok is True, "notify must always return True (non-blocking)"
+    assert any("TELEGRAM_BOT_TOKEN" in r.message for r in caplog.records), "IMP:7 missing-token warning expected"
+
+
+def test_notify_reads_secrets_and_sends(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """notify: reads secrets.env (KEY=VALUE), resolves chat by severity, sends via send_telegram."""
+    caplog.set_level(logging.INFO)
+    secrets = tmp_path / "secrets.env"
+    secrets.write_text("TELEGRAM_BOT_TOKEN=123:token\nTELEGRAM_CHAT_ID=-100base\nTELEGRAM_CHAT_ID_WARNING=-100warn\n")
+
+    captured: list[tuple[str, str, str]] = []
+
+    def fake_send(message, bot_token=None, chat_id=None, proxy_url=None, parse_mode=None) -> bool:
+        captured.append((message, bot_token or "", chat_id or ""))
+        return True
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("core.internal.shared.telegram_notifier.send_telegram", side_effect=fake_send),
+    ):
+        ok = notify("⚠️", "Disk almost full", severity="warning", secrets_file=str(secrets))
+
+    assert ok is True
+    assert len(captured) == 1
+    message, token, chat = captured[0]
+    assert token == "123:token"
+    assert chat == "-100warn", "warning severity must resolve to TELEGRAM_CHAT_ID_WARNING"
+    assert "[platform] ⚠️ Disk almost full" in message
+
+    found_imp9 = any("[IMP:9]" in r.message and "notify" in r.message for r in caplog.records)
+    assert found_imp9, "IMP:9 notify-sent log expected"
+
+
+def test_notify_missing_chat_skips_send(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    """notify: token set but no chat resolvable → skip send, return True."""
+    caplog.set_level(logging.WARNING)
+    secrets = tmp_path / "secrets.env"
+    secrets.write_text("TELEGRAM_BOT_TOKEN=123:token\n")
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("core.internal.shared.telegram_notifier.send_telegram", return_value=True) as mock_send,
+    ):
+        ok = notify("✅", "msg", severity="info", secrets_file=str(secrets))
+
+    assert ok is True
+    mock_send.assert_not_called(), "send_telegram must not be called when chat unresolvable"
+    assert any("No TELEGRAM_CHAT_ID resolved" in r.message for r in caplog.records)
+
+
+# endregion E10_NOTIFY

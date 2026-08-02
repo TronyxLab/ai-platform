@@ -24,6 +24,8 @@
 ##            handling, and removes the `requests` external dependency. Stdlib-only
 ##            (urllib) keeps the module deployable without pip install on bare-metal nodes.
 ## @changes  2026-07-30 | DevPlan 081B7 — Created unified telegram_notifier module
+##           2026-08-02 | DevPlan 118 E10 — +resolve_chat_id/format_notify_message/notify()
+##                      (severity-mapping merged from notify-hook.sh); CLI +notify subcommand
 # endregion MODULE_CONTRACT
 
 import json
@@ -32,6 +34,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +223,103 @@ def get_me(
 # endregion FUNC_get_me
 
 
+# region FUNC_resolve_chat_id
+def resolve_chat_id(severity: str, env: Mapping[str, str]) -> str | None:
+    """Resolve Telegram chat_id by notification severity (critical/warning/info).
+
+    ## @purpose  Resolve TELEGRAM_CHAT_ID by severity (DevPlan 118 E10 — merged from notify-hook.sh):
+    ##           critical → TELEGRAM_CHAT_ID_CRITICAL (fallback TELEGRAM_CHAT_ID),
+    ##           warning  → TELEGRAM_CHAT_ID_WARNING (fallback TELEGRAM_CHAT_ID),
+    ##           info/other → TELEGRAM_CHAT_ID.
+    ## @io       ⇥ severity: str, env: Mapping[str, str] → ⎋ str | None — chat_id (None if unresolvable)
+    ## @complexity O(1) — 2 env lookups
+    ## @invariants
+    ##   - critical/warning use their dedicated vars with TELEGRAM_CHAT_ID as fallback
+    ##   - info and unknown severities resolve to TELEGRAM_CHAT_ID only
+    """
+    base = env.get("TELEGRAM_CHAT_ID", "")
+    if severity == "critical":
+        return env.get("TELEGRAM_CHAT_ID_CRITICAL") or base or None
+    if severity == "warning":
+        return env.get("TELEGRAM_CHAT_ID_WARNING") or base or None
+    return base or None
+
+
+# endregion FUNC_resolve_chat_id
+
+
+# region FUNC_format_notify_message
+def format_notify_message(emoji: str, message: str, context: str) -> str:
+    """Build the full notification text: [context] emoji message (message optional).
+
+    ## @purpose  Format notification message: "[context] emoji message" — or bare emoji if message empty
+    ##           (DevPlan 118 E10 — merged from notify-hook.sh).
+    ## @io       ⇥ emoji: str, message: str, context: str → ⎋ str
+    ## @complexity O(1) — string concat
+    """
+    if not message:
+        return emoji
+    return f"[{context}] {emoji} {message}"
+
+
+# endregion FUNC_format_notify_message
+
+
+# region FUNC_notify
+def notify(
+    emoji: str,
+    message: str,
+    severity: str = "",
+    context: str = "platform",
+    secrets_file: str = "/run/platform/secrets.env",
+) -> bool:
+    """Send a non-blocking notification (notify-hook.sh contract, E10). Always returns True.
+
+    ## @purpose  Полный non-blocking notify: load secrets env → resolve token/chat by severity → format →
+    ##           send_telegram (HTML). Всегда возвращает True (exit 0) — неблокирующий по дизайну.
+    ##           (DevPlan 118 E10 — Python-порт notify-hook.sh логики.)
+    ## @io       ⇥ emoji: str, message: str, severity: str, context: str, secrets_file: str → ⎋ bool (всегда True)
+    ## @complexity O(N) — чтение secrets.env (N строк) + 1 HTTP POST
+    ## @invariants
+    ##   - Отсутствие secrets-файла / токена / chat → IMP:7 log, return True (неблокирующий)
+    ##   - send_telegram с parse_mode="HTML" — HTML-разметка в сообщениях деплоя
+    """
+    env = dict(os.environ)
+    if os.path.isfile(secrets_file):
+        try:
+            with open(secrets_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, v = line.partition("=")
+                    env[k.strip()] = v.strip()
+        except OSError as exc:
+            logger.warning("[IMP:7][telegram_notifier][notify] Cannot read secrets %s: %s", secrets_file, exc)
+
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        logger.warning("[IMP:7][telegram_notifier][notify] TELEGRAM_BOT_TOKEN not set — notification skipped")
+        return True
+    chat_id = resolve_chat_id(severity, env)
+    if not chat_id:
+        logger.warning(
+            "[IMP:7][telegram_notifier][notify] No TELEGRAM_CHAT_ID resolved (severity=%s)", severity or "none"
+        )
+        return True
+
+    full_message = format_notify_message(emoji, message, context)
+    proxy = env.get("TELEGRAM_PROXY_URL") or env.get("PROXY_URL")
+    send_telegram(full_message, bot_token=token, chat_id=chat_id, proxy_url=proxy, parse_mode="HTML")
+    logger.info(
+        "[IMP:9][telegram_notifier][notify] Notification sent (severity=%s, context=%s)", severity or "none", context
+    )
+    return True
+
+
+# endregion FUNC_notify
+
+
 # region FUNC_main
 def main() -> int:
     """CLI entry: `python3 -m core.internal.shared.telegram_notifier send <text>|get-me`.
@@ -240,7 +340,27 @@ def main() -> int:
     send_parser = subparsers.add_parser("send", help="Send message to chat")
     send_parser.add_argument("text", help="Message text")
     subparsers.add_parser("get-me", help="Verify Telegram API reachability")
+    notify_parser = subparsers.add_parser(
+        "notify",
+        help="Non-blocking notify (notify-hook.sh contract, DevPlan 118 E10)",
+    )
+    notify_parser.add_argument("--severity", default="", help="critical|warning|info (chat_id resolution)")
+    notify_parser.add_argument("--context", default="platform", help="Context prefix in message")
+    notify_parser.add_argument("--secrets-file", default="/run/platform/secrets.env", help="secrets.env path")
+    notify_parser.add_argument("emoji", default="✅", nargs="?", help="Emoji prefix")
+    notify_parser.add_argument("message", nargs="?", default="", help="Message text")
     args = parser.parse_args()
+
+    if args.command == "notify":
+        # always exit 0 (non-blocking by design — notification failure must not block deploy)
+        notify(
+            emoji=args.emoji,
+            message=args.message,
+            severity=args.severity,
+            context=args.context,
+            secrets_file=args.secrets_file,
+        )
+        return 0
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not token:

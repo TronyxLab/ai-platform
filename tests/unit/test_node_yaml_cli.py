@@ -207,13 +207,14 @@ class TestCliMisc:
             node_yaml_cli.main()
         assert excinfo.value.code != 0, "B3 FAIL: --typed-contexts должен быть rejected (removed API)"
 
-    # 🧪 TRAP[TEST] · Regression · Scenario: --domain-config
-    # · Expect: field:value lines
+    # 🧪 TRAP[TEST] · Regression · Scenario: --domain-config (default field:value)
+    # · Expect: field:value lines (legacy format, backward compat)
     # · Last fail: None (new test for DevPlan 117 G T51)
     # · Remove if: _cli_domain_config logic changes
     def test_cli_domain_config_lines(self, mock_node, capsys) -> None:
-        """--domain-config → field:value lines."""
-        result = node_yaml_cli._cli_domain_config(mock_node)
+        """--domain-config → field:value lines (default format)."""
+        args = mock.MagicMock(format="field:value")
+        result = node_yaml_cli._cli_domain_config(mock_node, args)
 
         out = capsys.readouterr().out
         assert result == 0
@@ -221,6 +222,26 @@ class TestCliMisc:
         assert "email:admin@example.com" in out
         assert "acme_dns_plugin:dns_webnames" in out
         assert "project_domains:app.example.com" in out
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: --domain-config --format lines (DevPlan 118 E12, D18)
+    # · Expect: 4 bare value lines in fixed order (platform_domain, email, acme_dns_plugin, project_domains)
+    # · Last fail: N/A — new test for E12 (replaces shell grep|cut re-parsing in issue-cert.sh:600-619)
+    # · Remove if: --format lines output contract changes
+    def test_cli_domain_config_format_lines(self, mock_node, capsys) -> None:
+        """--domain-config --format lines → 4 bare value lines, 0 field: prefix."""
+        args = mock.MagicMock(format="lines")
+        result = node_yaml_cli._cli_domain_config(mock_node, args)
+
+        out = capsys.readouterr().out
+        lines = [ln for ln in out.splitlines() if ln]
+        assert result == 0
+        assert len(lines) == 4, f"Expected 4 bare lines, got {lines!r}"
+        assert lines[0] == "platform.example.com", f"line[0] must be platform_domain, got {lines[0]!r}"
+        assert lines[1] == "admin@example.com", f"line[1] must be email, got {lines[1]!r}"
+        assert lines[2] == "dns_webnames", f"line[2] must be acme_dns_plugin, got {lines[2]!r}"
+        assert lines[3] == "app.example.com", f"line[3] must be project_domains (space-joined), got {lines[3]!r}"
+        assert "platform_domain:" not in out, "No field: prefix allowed in --format lines mode"
+        assert "email:" not in out, "No field: prefix allowed in --format lines mode"
 
     # 🧪 TRAP[TEST] · Regression · Scenario: --find-project hit
     # · Expect: JSON + ___ORG___ + ___HOST___ markers

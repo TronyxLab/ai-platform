@@ -76,6 +76,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default", help="Default value if key not found")
     parser.add_argument("--items", action="store_true", help="Output list as JSON array")
     parser.add_argument("--domain-config", action="store_true", help="Output domain config as field:value lines")
+    parser.add_argument(
+        "--format",
+        choices=["field:value", "lines"],
+        default="field:value",
+        help="Output format for --domain-config (DevPlan 118 E12): "
+        "'field:value' = legacy field:value lines (default), "
+        "'lines' = bare values each on own line in fixed order "
+        "(platform_domain, email, acme_dns_plugin, project_domains) — "
+        "replaces shell grep|cut re-parsing (issue-cert.sh:600-619, D18).",
+    )
     parser.add_argument("--json-output", action="store_true", help="Output entire YAML document as JSON")
     parser.add_argument("--find-project", help="Find project by name and output JSON + org + host")
     parser.add_argument("--context", action="store_true", help="Output context name")
@@ -214,14 +224,24 @@ def _cli_get_many(node: NodeYaml, spec: str) -> int:
     return 0
 
 
-def _cli_domain_config(node: NodeYaml) -> int:
+def _cli_domain_config(node: NodeYaml, args: argparse.Namespace) -> int:
     """Handle --domain-config CLI operation.
 
     ## @purpose  Output domain config as field:value lines for shell parsing.
+    ##            --format lines (DevPlan 118 E12): bare values each on own line in
+    ##            fixed order (platform_domain, email, acme_dns_plugin, project_domains)
+    ##            — replaces shell grep|cut re-parsing (issue-cert.sh:600-619, D18).
     ## @io — ⇥ node: NodeYaml → ⎋ exit_code: int
     ## @complexity — O(1) after load
     """
     cfg = node.get_domain_config()
+    if args.format == "lines":
+        # Bare values each on own line — mapfile-safe (issue-cert.sh, D18)
+        print(cfg.platform_domain)
+        print(cfg.email)
+        print(cfg.acme_dns_plugin)
+        print(" ".join(cfg.project_domains))
+        return 0
     print(f"platform_domain:{cfg.platform_domain}")
     print(f"email:{cfg.email}")
     print(f"acme_dns_plugin:{cfg.acme_dns_plugin}")
@@ -333,7 +353,7 @@ def main() -> int:
         if args.get_many:
             return _cli_get_many(node, args.get_many)
         if args.domain_config:
-            return _cli_domain_config(node)
+            return _cli_domain_config(node, args)
         if args.context:
             print(node.get_context())
             return 0

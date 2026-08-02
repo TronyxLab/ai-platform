@@ -279,28 +279,28 @@ def test_agekey_environmentfile_format_contract(caplog: pytest.LogCaptureFixture
         "EnvironmentFile=/etc/platform/age-key.txt — test precondition failed"
     )
 
-    # ── Check install.sh: must write age_key in KEY=VALUE format ──
-    assert os.path.isfile(INSTALL_SH_PATH), f"[IMP:9][ps-envfile] FAIL: install.sh not found at {INSTALL_SH_PATH}"
-    with open(INSTALL_SH_PATH, encoding="utf-8") as fh:
-        install_content = fh.read()
+    # ── Check install.sh (facade) + installer.py (E7: business logic) — KEY=VALUE format ──
+    # DevPlan 118 E7: install.sh стал тонким фасадом; возраст-ключ формат пишется в installer.py
+    # (ensure_age_key: f"{SECRETS_ENV_PREFIX}={secret}\n"). Проверка перенесена на Python-модуль (R5).
+    INSTALLER_PY_PATH: str = os.path.join(MODULE_DIR, "installer.py")
+    assert os.path.isfile(INSTALLER_PY_PATH), f"[IMP:9][ps-envfile] FAIL: installer.py not found at {INSTALLER_PY_PATH}"
+    with open(INSTALLER_PY_PATH, encoding="utf-8") as fh:
+        installer_content = fh.read()
 
-    # Look for the printf line that writes to "$age_key" variable
-    # The variable is defined as local age_key="/etc/platform/age-key.txt"
-    # The write happens with: printf ... > "$age_key"
-    # We need to verify it contains "AGE_SECRET_KEY=%s"
-    has_env_format = "AGE_SECRET_KEY=%s" in install_content  # EnvironmentFile format
+    # installer.py: ensure_age_key пишет "AGE_SECRET_KEY=<value>" (EnvironmentFile format)
+    has_env_format = "AGE_SECRET_KEY=" in installer_content and 'f"{SECRETS_ENV_PREFIX}=' in installer_content
     has_bare_format = (
-        "printf '%s\\n' \"$AGE_SECRET_KEY\"" in install_content
-        or "printf '%s\\n' \"$AGE_SECRET_KEY\"" in install_content.replace("'", "'\\''")
+        "printf '%s\\n' \"$AGE_SECRET_KEY\"" in installer_content
+        or "printf '%s\\n' \"$AGE_SECRET_KEY\"" in installer_content.replace("'", "'\\''")
+        or 'f"{secret}\\n"' in installer_content
     )
 
-    logger.info("[IMP:7][ps-envfile] Has AGE_SECRET_KEY=%%s format: %s", has_env_format)
+    logger.info("[IMP:7][ps-envfile] Has AGE_SECRET_KEY= format: %s", has_env_format)
     logger.info("[IMP:7][ps-envfile] Has bare format (no key=): %s", has_bare_format)
 
     assert has_env_format, (
-        "[IMP:9][ps-envfile] FAIL: install.sh writes age key in BARE format "
-        "(printf '%%s\\\\n' \"$AGE_SECRET_KEY\") but systemd EnvironmentFile requires "
-        "KEY=VALUE format. Use: printf 'AGE_SECRET_KEY=%%s\\\\n' \"$AGE_SECRET_KEY\". "
+        "[IMP:9][ps-envfile] FAIL: installer.py writes age key in BARE format but systemd "
+        "EnvironmentFile requires KEY=VALUE format. Use f'AGE_SECRET_KEY={secret}\\n'. "
         "This is cross-file invariant B3 — see DevPlan 008 T5.1."
     )
 

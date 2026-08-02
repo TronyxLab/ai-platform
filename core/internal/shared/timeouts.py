@@ -105,6 +105,9 @@ WATCHDOG_CURL_MAX_TIME = 3
 # Таймаут curl Telegram API (agent_watchdog CURL_TG_MAX_TIME)
 WATCHDOG_CURL_TG_MAX_TIME = 30
 
+# Таймаут curl Tor-proxy healthcheck (tor_proxy_check.py, DevPlan 118 E5 — legacy MAX_TIME=30)
+TOR_PROXY_CURL_TIMEOUT = 30
+
 # ── Healthcheck ports domain ───────────────────────────────────────────────────
 
 # Эвристические порты HTTP /health для проектов без healthcheck (healthcheck_poller _try_http)

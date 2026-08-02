@@ -29,7 +29,9 @@ class TestDrainCompletedCount:
     def test_completed_success(self, caplog) -> None:
         """Завершившийся дочерний процесс (exit 0) снимается WNOHANG → deployed=1."""
         caplog.set_level(logging.DEBUG)
-        with mock.patch.object(parallel_runner.os, "waitpid", return_value=(111, os.waitstatus_to_exitcode(0) and 0)) as m:
+        with mock.patch.object(
+            parallel_runner.os, "waitpid", return_value=(111, os.waitstatus_to_exitcode(0) and 0)
+        ) as m:
             # returncode=0 → WIFEXITED True + WEXITSTATUS 0
             m.return_value = (111, 0)
             deployed, failed, names = parallel_runner.drain_completed_count([111], {111: "mod1"})
@@ -113,9 +115,7 @@ class TestDeployDockerGroupRollback:
 
         # fork → parent; drain_all → fail (имитация failed deploy)
         monkeypatch.setattr(parallel_runner.os, "fork", lambda: 1)
-        monkeypatch.setattr(
-            parallel_runner, "drain_all_count", lambda pids, pid_to_name: (0, 1, ["mod1"])
-        )
+        monkeypatch.setattr(parallel_runner, "drain_all_count", lambda pids, pid_to_name: (0, 1, ["mod1"]))
         monkeypatch.setattr(parallel_runner.os, "waitpid", lambda pid, *a, **k: (pid, 1))
         monkeypatch.setattr(parallel_runner.os, "WIFEXITED", lambda s: True)
         monkeypatch.setattr(parallel_runner.os, "WEXITSTATUS", lambda s: 1)
@@ -128,9 +128,7 @@ class TestDeployDockerGroupRollback:
             lambda *a, **k: True,
         )
 
-        deployed, failed, names, rolled_back = parallel_runner.deploy_docker_group(
-            ["mod1:"], str(modules_dir)
-        )
+        deployed, failed, names, rolled_back = parallel_runner.deploy_docker_group(["mod1:"], str(modules_dir))
         logger.info(
             "[IMP:9][test] deploy_group rollback: deployed=%d failed=%d rolled_back=%s",
             deployed,
@@ -154,9 +152,7 @@ class TestDeployDockerGroupRollback:
 
         # deploy-фаза: fork → parent (pid накапливается), drain_all_count → fail (имитация failed deploy)
         monkeypatch.setattr(parallel_runner.os, "fork", lambda: 1)
-        monkeypatch.setattr(
-            parallel_runner, "drain_all_count", lambda pids, pid_to_name: (0, 1, ["mod1"])
-        )
+        monkeypatch.setattr(parallel_runner, "drain_all_count", lambda pids, pid_to_name: (0, 1, ["mod1"]))
         # HC-фаза: fork → parent, waitpid → exit 1 (fail, не блокирует)
         monkeypatch.setattr(parallel_runner.os, "waitpid", lambda pid, *a, **k: (pid, 1))
         monkeypatch.setattr(parallel_runner.os, "WIFEXITED", lambda s: True)
@@ -177,9 +173,7 @@ class TestDeployDockerGroupRollback:
         )
 
         # deploy_docker_group: drain_all → fail → rollback (docker compose down для mod1)
-        deployed, failed, names, rolled_back = parallel_runner.deploy_docker_group(
-            ["mod1:"], str(modules_dir)
-        )
+        deployed, failed, names, rolled_back = parallel_runner.deploy_docker_group(["mod1:"], str(modules_dir))
         logger.info(
             "[IMP:9][test] deploy_group rollback: deployed=%d failed=%d rolled_back=%s",
             deployed,

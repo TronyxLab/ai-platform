@@ -625,8 +625,54 @@ def _generate_report(success: bool, local_file: str, bucket: str, full_key: str)
 # endregion FUNC_generate_report
 
 
+# region FUNC_validate_cli_inputs
+# @purpose  Validate CLI inputs + S3 env (DevPlan 118 E9 — merge upload-s3.sh validation into upload.py).
+#           Exit code 2 = config error (invalid args / missing file / missing creds) — legacy wrapper contract.
+# @io       (local_file, s3_key) → None (sys.exit(2) on violation)
+# @complexity 1
+def validate_cli_inputs(local_file: str, s3_key: str) -> None:
+    """Validate CLI inputs + S3 env; exits 2 on config error (legacy upload-s3.sh contract).
+
+    Merged from upload-s3.sh (DevPlan 118 E9): empty local_file/s3_key, missing file,
+    missing S3_BUCKET/S3_ACCESS_KEY/S3_SECRET_KEY → exit 2 "config error".
+    """
+    if not local_file:
+        logger.critical("[IMP:9][upload][validate] ERROR: No local file specified")
+        sys.exit(2)
+    if not s3_key:
+        logger.critical("[IMP:9][upload][validate] ERROR: No S3 key specified")
+        sys.exit(2)
+    if not os.path.isfile(local_file):
+        logger.critical("[IMP:9][upload][validate] ERROR: Local file not found: %s", local_file)
+        sys.exit(2)
+    for var in ("S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY"):
+        if not os.environ.get(var, ""):
+            logger.critical("[IMP:9][upload][validate] ERROR: %s not set — cannot upload", var)
+            sys.exit(2)
+    logger.info("[IMP:9][upload][validate] CLI + S3 env validated: file=%s key=%s", local_file, s3_key)
+
+
+# endregion FUNC_validate_cli_inputs
+
+
+# region FUNC_remove_spool_file
+# @purpose  Remove local spool file after successful upload (DevPlan 118 E9 — merged from upload-s3.sh).
+# @io       (local_file) → None (best-effort; failure logged, not fatal — spool cleanup is post-success)
+# @complexity 1
+def remove_spool_file(local_file: str) -> None:
+    """Remove the local spool file after a confirmed successful upload (best-effort)."""
+    try:
+        os.remove(local_file)
+        logger.info("[IMP:8][upload][spool] Removed spool file: %s", local_file)
+    except OSError as exc:
+        logger.warning("[IMP:8][upload][spool] Failed to remove spool file %s: %s", local_file, exc)
+
+
+# endregion FUNC_remove_spool_file
+
+
 # region FUNC_main
-# @purpose  CLI entry point: parse args, upload file, report result.
+# @purpose  CLI entry point: validate → parse args → upload file → report result.
 # @io       sys.argv → exit 0|1|2
 # @complexity 2
 def main() -> None:
@@ -637,11 +683,14 @@ def main() -> None:
            upload.py --config-source ssl-cache <local_file> <s3_key>
 
     Exit codes:
-        0 — upload successful
+        0 — upload successful (spool file removed)
         1 — upload failed (file in spool, verification failure)
-        2 — invalid arguments or config error
+        2 — invalid arguments or config error (DevPlan 118 E9: validation merged from upload-s3.sh)
     """
     args = _parse_args()
+
+    # DevPlan 118 E9: валидация CLI + S3 env (legacy upload-s3.sh contract, exit 2)
+    validate_cli_inputs(args.local_file, args.s3_key)
 
     # Select config source based on --config-source flag
     # backup: uses BackupConfig (includes prefix for backup paths)
@@ -663,9 +712,11 @@ def main() -> None:
     client = _init_client(config)
     local_sha256 = compute_sha256(args.local_file)
 
+    local_size = os.path.getsize(args.local_file)
     logger.info(
-        "[IMP:7][upload][main] Starting upload: file=%s bucket=%s key=%s",
+        "[IMP:7][upload][main] Starting upload: file=%s size=%d bucket=%s key=%s",
         args.local_file,
+        local_size,
         config["bucket"],
         full_key,
     )
@@ -679,6 +730,10 @@ def main() -> None:
         max_retries=args.retries,
         interval_sec=args.interval,
     )
+
+    if success:
+        # DevPlan 118 E9: spool rm после успеха (legacy upload-s3.sh contract) — merged in Python
+        remove_spool_file(args.local_file)
 
     _generate_report(success, args.local_file, config["bucket"], full_key)
 

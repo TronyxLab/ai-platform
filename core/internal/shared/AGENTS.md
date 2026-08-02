@@ -29,6 +29,7 @@
 ##           2026-08-02 | DevPlan 118 D3 — −age_key.py (compat-шим УДАЛЁН, decrypt_secrets → node_detect);
 ##                      −ssh_command_parser.py (перенесён в core/internal/deploy/, потребитель orchestrator_cli)
 ##           2026-08-02 | DevPlan 118 D4 — +env_requires.py (31-й); единый env-requires чекер
+##           2026-08-02 | DevPlan 118 E11 — +project_yaml.py (32-й); общий читатель ai-platform.yaml
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
@@ -45,6 +46,7 @@
 | `docker_auth.py` | Единый Docker registry auth (заменяет 5 дублирующихся точек) | `docker_login()`, `ghcr_login()`, `configure_docker_auth()` | bootstrap registry-auth, phases.py |
 | `docker_compose.py` | Shared compose-операции: pull/build/up/healthcheck_poll | `docker_compose_pull()`, `docker_compose_build()`, `docker_compose_up()`, `healthcheck_poll()` | context_deployer, docker_orchestrator, DeployEngine |
 | `env_requires.py` | Единый env-requires чекер (DevPlan 118 D4 — объединяет module.yaml-driven presence и manifest-driven runtime; устраняет расхождение вердиктов validate_module_yaml vs secrets_validator) | `check_requires_presence()`, `check_runtime_env()`, `check_env_requires()`, `env_var_in_dotenv()`, `env_var_in_secrets_manifest()` | validate_module_yaml (фасад), secrets_validator (фасад) |
+| `project_yaml.py` | Общий читатель ai-platform.yaml (DevPlan 118 E11 — кандидат из аудита монолитов: 18 парсеров в vhost_renderer; читает target_node/domain через PyYAML, 0 grep) + auto-detect (org-from-path, casing vs node.yaml) | `read_project_yaml()`, `derive_org_from_path()`, `detect_project_config()` | project_adopter (detect_project_config re-export) |
 | `exceptions.py` | Типизированная иерархия ошибок платформы | `PlatformError`, `ConfigValidationError`, `ConfigNotFoundError`, `ConfigParseError`, ... | все Python-модули |
 | `llm_paths.py` | Единый источник пути litellm-config.yml (DevPlan 118 C6 — заменяет 4 копии вывода + 1 шаблон: context_deployer, deploy_orchestrator, llm_provision, phases, config_renderer) | `litellm_config_path(core_dir)`, `litellm_template_path(core_dir)` | context_deployer, deploy_orchestrator, llm_provision, phases, config_renderer |
 | `module_interface.py` | Единая bash-обёртка invoke_module_interface (DevPlan 118 C5 — дедупликация docker_orchestrator._invoke_healthcheck_full + deploy_orchestrator._invoke_module_interface; **вход для B8 wire module-hooks**) | `invoke(module, interface, *args, timeout=...) → (bool, output)` | docker_orchestrator, deploy_orchestrator |

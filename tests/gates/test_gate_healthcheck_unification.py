@@ -209,27 +209,29 @@ def test_all_modules_use_check_docker_health(caplog: pytest.LogCaptureFixture) -
 
 @pytest.mark.gate
 def test_modules_healthcheck_uses_lib(caplog: pytest.LogCaptureFixture) -> None:
-    """AC4: modules-healthcheck.sh uses invoke_module_interface → check_docker_health(),
-    not raw docker inspect for liveness checks.
+    """AC4: modules-healthcheck (Python, DevPlan 118 E4) uses shared/module_interface.invoke →
+    check_docker_health(), not raw docker inspect for liveness checks.
 
-    DRIFT-H7 fix: The orchestrator should delegate to module healthcheck.sh via
-    invoke_module_interface instead of performing raw docker inspect calls.
+    DRIFT-H7 fix: The orchestrator delegates to module healthcheck.sh via
+    shared/module_interface.invoke instead of performing raw docker inspect calls.
+    DevPlan 118 E4: логика перенесена из modules-healthcheck.sh в modules_healthcheck.py.
     """
-    # 🧪 TRAP[TEST] · Regression: modules-healthcheck.sh uses invoke_module_interface, not raw docker inspect
-    # · Scenario: check modules-healthcheck.sh for invoke_module_interface calls; verify no Health.Status in code
-    # · Last fail: Never (DevPlan 083 DRIFT-H7 fix)
-    # · Remove if: modules-healthcheck.sh is replaced
+    # 🧪 TRAP[TEST] · Regression: modules-healthcheck uses invoke_module_interface, not raw docker inspect
+    # · Scenario: check modules_healthcheck.py for invoke_module_interface; verify no Health.Status in code
+    # · Last fail: Never (DevPlan 083 DRIFT-H7 fix; 118 E4 Python-перенос)
+    # · Remove if: modules_healthcheck.py is replaced
     caplog.set_level(logging.DEBUG)
 
-    assert _HEALTHCHECK_ORCHESTRATOR.is_file(), f"modules-healthcheck.sh not found: {_HEALTHCHECK_ORCHESTRATOR}"
-    content = _HEALTHCHECK_ORCHESTRATOR.read_text()
+    # E4: Python-модуль — каноническое место бизнес-логики
+    py_path = _HEALTHCHECK_ORCHESTRATOR.parent / "modules_healthcheck.py"
+    assert py_path.is_file(), f"modules_healthcheck.py not found: {py_path}"
+    content = py_path.read_text()
 
     # Check 1: calls invoke_module_interface for default docker mode (not raw docker inspect)
     has_invoke_module = "invoke_module_interface" in content
     logger.info("[IMP:9][gate:orchestrator] invoke_module_interface present: %s", has_invoke_module)
 
     # Check 2: NO raw docker inspect for Health.Status in non-comment code (was DRIFT-H7)
-    # Comments documenting the fix may reference Health.Status — only check code lines
     code_lines = [line for line in content.splitlines() if line.strip() and not line.strip().startswith("#")]
     code_text = "\n".join(code_lines)
     has_raw_docker_inspect = "Health.Status" in code_text
@@ -238,6 +240,13 @@ def test_modules_healthcheck_uses_lib(caplog: pytest.LogCaptureFixture) -> None:
     # Check 3: Still has docker inspect for restart detection (that's OK — different concern)
     has_restart_inspect = "State.Restarting" in content or "RestartCount" in content
     logger.info("[IMP:9][gate:orchestrator] Restart loop inspect: %s", has_restart_inspect)
+
+    # Check 4 (R5 negative): shell facade must NOT carry the business logic anymore (E4)
+    sh_path = _HEALTHCHECK_ORCHESTRATOR
+    sh_code_lines = [ln for ln in sh_path.read_text().splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    sh_code = "\n".join(sh_code_lines)
+    shell_carries_logic = "invoke_module_interface" in sh_code or "State.Restarting" in sh_code
+    logger.info("[IMP:9][gate:orchestrator] Shell facade carries business logic (R5): %s", shell_carries_logic)
 
     # LDD trajectory
     found_imp9 = False
@@ -252,15 +261,19 @@ def test_modules_healthcheck_uses_lib(caplog: pytest.LogCaptureFixture) -> None:
     print("--- END LDD TRAJECTORY ---")
 
     assert has_invoke_module, (
-        "[IMP:9][gate:orchestrator] FAIL: invoke_module_interface not found in modules-healthcheck.sh"
+        "[IMP:9][gate:orchestrator] FAIL: invoke_module_interface not found in modules_healthcheck.py"
     )
     assert not has_raw_docker_inspect, (
         "[IMP:9][gate:orchestrator] FAIL: Raw docker inspect Health.Status found — DRIFT-H7 not fixed. "
-        "modules-healthcheck.sh should use invoke_module_interface → check_docker_health()."
+        "modules_healthcheck.py should use invoke_module_interface → check_docker_health()."
+    )
+    assert not shell_carries_logic, (
+        "[IMP:9][gate:orchestrator] FAIL: modules-healthcheck.sh must be a thin facade (E4) — "
+        "business logic moved to modules_healthcheck.py"
     )
     assert found_imp9, "Critical LDD Error: No IMP:9 business logic log found"
 
-    logger.info("[IMP:9][gate:orchestrator] PASS: modules-healthcheck.sh uses invoke_module_interface")
+    logger.info("[IMP:9][gate:orchestrator] PASS: modules_healthcheck.py uses invoke_module_interface")
 
 
 # ═══════════════════════════════════════════════════════════════════

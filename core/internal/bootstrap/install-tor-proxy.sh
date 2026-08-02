@@ -8,6 +8,7 @@
 ##   - Idempotent: repeated runs do not corrupt configuration
 ##   - Base torrc written first; bridges appended from file if --tor-bridges-file provided
 ##   - Transport auto-detection: parses Bridge lines → emits ClientTransportPlugin per unique transport
+##     (DevPlan 118 E1: parsing/degradation/dedup → Python tor_transport.py, test-first)
 ##   - Degradation: webtunnel binary absent → drop webtunnel Bridge lines, continue obfs4-only
 ##   - Fail-fast: unknown transport (no registered binary path) → ERROR + exit 1
 ##   - Privoxy config lines are inserted only if absent (grep guard)
@@ -16,6 +17,7 @@
 ## @rationale Tor+Privoxy chain is the only reliable way to bypass IP-blocking of api.telegram.org
 ##   from Russia-hosted VPS (Selectel). Privoxy provides HTTP_PROXY interface that works with
 ##   curl, Python httpx/requests, and Docker containers without protocol-specific configuration.
+## @changes  2026-08-02 | DevPlan 118 E1 — write_torrc transport-парсинг → tor_transport.py (test-first)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -144,55 +146,20 @@ BASE
         # · Reason: single bridges.txt may contain obfs4 + webtunnel lines; Tor needs CTP per transport
         # · Rev: if transport count grows past 3 → move mapping to external config
 
-        # Transport binary path registry
-        declare -A TRANSPORT_BIN
-        TRANSPORT_BIN[obfs4]="/usr/bin/obfs4proxy"
-        TRANSPORT_BIN[webtunnel]="/usr/bin/webtunnel"
-
-        local filtered_bridges=""
-        local -A seen_transports
-        local transports_to_emit=()
-
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            if [[ "$line" =~ ^Bridge[[:space:]]+([a-zA-Z0-9_-]+) ]]; then
-                local transport="${BASH_REMATCH[1]}"
-
-                # Fail-fast: unknown transport → no registered binary
-                if [[ -z "${TRANSPORT_BIN[$transport]+_}" ]]; then
-                    log_step "torrc" "ERROR" "Unknown transport '${transport}' — no registered binary path"
-                    exit 1
-                fi
-
-                # Degradation: webtunnel binary not found → drop line
-                if [[ "$transport" == "webtunnel" ]] && ! command -v webtunnel &>/dev/null; then
-                    log_step "torrc" "WARN" "webtunnel binary not found — dropping webtunnel bridge line"
-                    continue
-                fi
-
-                filtered_bridges+="${line}"$'\n'
-                if [[ -z "${seen_transports[$transport]+_}" ]]; then
-                    seen_transports[$transport]=1
-                    transports_to_emit+=("$transport")
-                fi
+        # DevPlan 118 E1 (D19): transport-парсинг/деградация/dedup → Python tor_transport.py (test-first).
+        # Python эмитит torrc-секцию (UseBridges 1 + CTP lines + filtered bridges) на stdout;
+        # unknown transport → exit 1 (fail-fast канон); no usable bridges → пустой stdout (WARN).
+        local bridge_section=""
+        if bridge_section="$(python3 "${SCRIPT_DIR}/tor_transport.py" emit --bridges-file "$BRIDGES_FILE" 2>/dev/null)"; then
+            if [[ -n "$bridge_section" ]]; then
+                printf '%s\n' "$bridge_section" >> "$TOR_CONFIG"
+                log_step "torrc" "INFO" "Bridges appended from ${BRIDGES_FILE} (transport-parsing via tor_transport.py)"
             else
-                # Non-Bridge line — pass through (comments, blanks)
-                filtered_bridges+="${line}"$'\n'
+                log_step "torrc" "WARN" "No usable bridges found in ${BRIDGES_FILE} (all dropped or empty)"
             fi
-        done < "$BRIDGES_FILE"
-
-        if [[ ${#transports_to_emit[@]} -eq 0 ]]; then
-            log_step "torrc" "WARN" "No usable bridges found in ${BRIDGES_FILE} (all dropped or empty)"
         else
-            {
-                echo ""
-                echo "UseBridges 1"
-                for transport in "${transports_to_emit[@]}"; do
-                    echo "ClientTransportPlugin ${transport} exec ${TRANSPORT_BIN[$transport]}"
-                done
-                echo ""
-                echo -n "$filtered_bridges"
-            } >> "$TOR_CONFIG"
-            log_step "torrc" "INFO" "Bridges appended from ${BRIDGES_FILE} — transports: ${transports_to_emit[*]}"
+            log_step "torrc" "ERROR" "Unknown transport in ${BRIDGES_FILE} — no registered binary path"
+            exit 1
         fi
     else
         log_step "torrc" "INFO" "No bridges file — Tor will connect directly"

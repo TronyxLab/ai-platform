@@ -20,6 +20,7 @@
 ##              - test_download_accepts_le_cert — full restore path intact
 # endregion MODULE_CONTRACT
 
+import contextlib
 import logging
 import os
 import sys
@@ -329,7 +330,10 @@ def test_upload_config_source_ssl_cache_uses_s3_config():
                         "get_backup_config() NOT called — ssl-cache config source works"
                     )
         finally:
-            os.unlink(local_file)
+            # DevPlan 118 E9: upload.py remove_spool_file() уже удалил файл после успеха —
+            # cleanup терпим к отсутствию (spool rm merged в Python)
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(local_file)
 
     finally:
         for k, v in original_env.items():
