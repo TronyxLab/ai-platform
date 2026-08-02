@@ -57,6 +57,8 @@ import yaml
 from _conftest.honesty import require_docker_or_fail
 from conftest import ldd_trajectory
 
+from tests._conftest.r1 import r1_delegates
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -655,6 +657,7 @@ def test_all_compose_configs_valid(
 
 @pytest.mark.predeploy
 @ldd_trajectory
+@r1_delegates
 def test_docker_networks_precreated(
     caplog: pytest.LogCaptureFixture,
     all_compose_files: dict[str, str],
@@ -662,6 +665,8 @@ def test_docker_networks_precreated(
     """
     # ◇ all_compose_files → ∋ each .yml → yaml.safe_load → networks → external:true
     # → ⊕ docker network ls → ◇ missing? → ⎋ warning | pass
+    # 🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: warning-only by contract
+    #   ("Missing networks produce WARNING, not FAIL" — module contract выше).
     """
     # region BLOCK_Setup
 

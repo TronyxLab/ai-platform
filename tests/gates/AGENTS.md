@@ -74,7 +74,7 @@ Gate-тесты делятся на категории по предмету п�
 | image tag form | `test_gate_image_tag_form.py` (NEW) | ghcr refs = версионный тег/digest-pin; голый :latest RED; allowlist dev/test |
 | prometheus single source | `test_gate_env_chain.py` (расширен: negative prometheus.yml-дубль запрещён) | .tmpl — единственный источник (U-48) |
 | P20 prometheus targets | `test_p20_container_coupling.py` (PROMETHEUS_YML → .tmpl) | targets резолвятся из .tmpl |
-| R1 no-pass-tests (B10 T1, U-69) | `test_gate_r1_no_pass_tests.py` (NEW) | Test Honesty R1: ast-скан tests/**/*.py — константный assert / bare-pass except / файл без ассертов = RED. Allowlist пуст. repair_class L2 (ручная правка теста) |
+| R1 no-pass-tests (B10 T1, U-69; F1 per-function 118) | `test_gate_r1_no_pass_tests.py` (NEW) | Test Honesty R1: ast-скан tests/**/*.py — константный assert / bare-pass except / тест-функция без fail-механизма = RED. **F1 (118): скан по-функции** — каждая `test_*` функция обязана иметь assert/raise/pytest.fail/raises/mock-assert в теле; файловый скан не заменяет функцию (pass-функции прятались за asserting-соседями). Exemptions через декораторы: `@pytest.fixture`, `@r1_delegates` (tests/_conftest/r1.py — документированная делегация fail-механизма helper/fixture-raise), pure-skip функции (R3-домен). Allowlist пуст. repair_class L2 (ручная правка теста) |
 
 ## Инвентарь волны (DevPlan 116 B11)
 

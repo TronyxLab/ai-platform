@@ -33,6 +33,7 @@ from unittest.mock import patch
 import pytest
 
 from tests._conftest.ldd import ldd_trajectory
+from tests._conftest.r1 import r1_delegates
 
 # ── Import the module under test ──
 _MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "lifecycle"
@@ -315,12 +316,17 @@ def test_precondition_check_system_bootstrap_no_root(
 # · Remove if: φ4 age key check logic changes
 # region FUNC_test_precondition_check_secrets_with_age_key
 @ldd_trajectory
+@r1_delegates
 def test_precondition_check_secrets_with_age_key(
     caplog,
     state: sm.BootstrapState,
     monkeypatch,
 ) -> None:
-    """φ4 precondition should pass when AGE_SECRET_KEY env var is present."""
+    """φ4 precondition should pass when AGE_SECRET_KEY env var is present.
+
+    🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
+    state.precondition_check (raises RuntimeError на нарушение precondition).
+    """
     monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-1234567890abcdef")
     monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
 
@@ -382,13 +388,18 @@ def test_precondition_check_secrets_no_age_key(
 # · Remove if: φ5 node-yaml check logic changes
 # region FUNC_test_precondition_check_node_config_success
 @ldd_trajectory
+@r1_delegates
 def test_precondition_check_node_config_success(
     caplog,
     state: sm.BootstrapState,
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    """φ5 precondition should pass when NODE_YAML points to an existing file."""
+    """φ5 precondition should pass when NODE_YAML points to an existing file.
+
+    🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
+    state.precondition_check (raises RuntimeError на нарушение precondition).
+    """
     node_yaml = tmp_path / "node.yaml"
     node_yaml.write_text("node:\n  name: test-node\n")
     monkeypatch.setenv("NODE_YAML", str(node_yaml))
@@ -474,13 +485,18 @@ def test_precondition_check_registry_auth(
 # · Remove if: φ8 deploy precondition logic changes
 # region FUNC_test_precondition_check_deploy_success
 @ldd_trajectory
+@r1_delegates
 def test_precondition_check_deploy_success(
     caplog,
     state: sm.BootstrapState,
     monkeypatch,
     tmp_core_dir: Path,
 ) -> None:
-    """φ8 precondition should pass when deploy-modules.sh exists and Docker is running."""
+    """φ8 precondition should pass when deploy-modules.sh exists and Docker is running.
+
+    🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
+    state.precondition_check (raises RuntimeError на нарушение precondition).
+    """
     monkeypatch.setenv("CORE_DIR", str(tmp_core_dir))
 
     with patch("subprocess.run") as mock_run:
@@ -543,6 +559,7 @@ def test_precondition_check_deploy_no_docker(
 # · Remove if: update phase precondition logic changes
 # region FUNC_test_precondition_check_update_phases
 @ldd_trajectory
+@r1_delegates
 def test_precondition_check_update_phases(
     caplog,
     state: sm.BootstrapState,
@@ -550,6 +567,9 @@ def test_precondition_check_update_phases(
     tmp_core_dir: Path,
 ) -> None:
     """φ9-φ13 update phases should pass precondition_check without raising errors.
+
+    🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
+    state.precondition_check (raises RuntimeError на нарушение precondition).
 
     φ9-φ11 have no strict preconditions.
     φ12 (deploy_update) requires deploy-modules.sh + Docker.

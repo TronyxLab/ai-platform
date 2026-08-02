@@ -55,6 +55,8 @@ from conftest import (
     ldd_trajectory,
 )
 
+from tests._conftest.r1 import r1_delegates
+
 logger = logging.getLogger(__name__)
 
 # ── Critical Service Labels ─────────────────────────────────────────────────
@@ -167,9 +169,12 @@ def _remove_network(net_name: str) -> None:
 @pytest.mark.requires_docker
 @pytest.mark.smoke
 @ldd_trajectory
+@r1_delegates
 def test_docker_daemon_available(caplog: pytest.LogCaptureFixture) -> None:
     """
     # ⚡ [docker-info] → ◇ exitcode=0 → ⊕ [IMP:9] Docker available → ⎋ pass
+    # 🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм делегирован
+    #   require_docker_or_fail (raise/skip по REQUIRE_HONESTY_MODE).
     #                                    → ◇ exitcode≠0 → ⎋ pytest.skip
     """
     # region BLOCK_Setup

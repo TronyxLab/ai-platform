@@ -20,7 +20,6 @@
 """
 
 import logging
-import sys
 import textwrap
 from pathlib import Path
 
@@ -28,10 +27,11 @@ from tests._conftest.ldd import ldd_trajectory
 
 logger = logging.getLogger(__name__)
 
-# ── Import the module under test (module-specific path) ──
-_HOOKS_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "postgres" / "hooks"
-sys.path.insert(0, str(_HOOKS_DIR))
-import on_project_deploy
+# ── Import the module under test (canonical package import — DevPlan 118 F5) ──
+# Package structure core/modules/postgres/hooks/__init__.py (F5): dotted import works
+# from ANY CWD via the conftest addsitedir chain — no sys.path.insert hack, no
+# dependence on process working directory (VPS watchdog PYTHONPATH-safe).
+from core.modules.postgres.hooks import on_project_deploy
 
 _PASSWORD = "test-password"
 

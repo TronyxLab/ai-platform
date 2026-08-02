@@ -118,25 +118,35 @@ _RAW_INTERNAL_ALLOWLIST: list[tuple[re.Pattern, re.Pattern, str]] = [
 
 
 def _load_makefile_targets() -> set[str]:
-    """Extract .PHONY target names from Makefile."""
+    """Extract .PHONY target names from Makefile + makefiles/*.mk (include-split W4-E4).
+
+    ## @purpose  Makefile includes makefiles/*.mk (bootstrap/ci/deploy/helpers/manifest/
+    ##            modules/repair) — .PHONY targets live across ALL of them, not only the
+    ##            root Makefile. F1 (DevPlan 118): the old warning-only version read only
+    ##            the root Makefile → false-negative on `make pre-commit-run` (ci.mk).
+    ## @io        ⇥ (none) → ⎋ set[str] .PHONY target names
+    ## @complexity O(L) where L = total lines across Makefile + makefiles/*.mk
+    """
     phony_targets: set[str] = set()
-    phony_line_found = False
-    with open(_MAKEFILE_PATH) as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped.startswith(".PHONY:"):
-                phony_line_found = True
-                # Extract target names from the .PHONY line
-                targets = stripped.replace(".PHONY:", "").strip().split()
-                phony_targets.update(targets)
-            elif phony_line_found and stripped and not stripped.startswith("##"):
-                # Multi-line .PHONY continuation via backslash
-                if stripped.endswith("\\"):
-                    targets = stripped.rstrip("\\").strip().split()
+    files = [_MAKEFILE_PATH, *sorted((_MAKEFILE_PATH.parent / "makefiles").glob("*.mk"))]
+    for path in files:
+        if not path.is_file():
+            continue
+        phony_line_found = False
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(".PHONY:"):
+                    phony_line_found = True
+                    targets = stripped.replace(".PHONY:", "").strip().split()
                     phony_targets.update(targets)
-                else:
-                    phony_line_found = False
-    logger.info("[IMP:8][load_makefile] Found %d .PHONY targets", len(phony_targets))
+                elif phony_line_found and stripped and not stripped.startswith("##"):
+                    if stripped.endswith("\\"):
+                        targets = stripped.rstrip("\\").strip().split()
+                        phony_targets.update(targets)
+                    else:
+                        phony_line_found = False
+    logger.info("[IMP:8][load_makefile] Found %d .PHONY targets across %d makefiles", len(phony_targets), len(files))
     return phony_targets
 
 
@@ -296,22 +306,41 @@ def test_deploy_has_push_filter():
 @pytest.mark.gate
 def test_make_targets_exist():
     """Verify all `make <target>` references in workflows exist as Makefile .PHONY targets."""
+    # 🧪 TRAP[TEST] · F1 (DevPlan 118) · Regression: pass-test (warning+PASS, 0 assert) → real assert
+    # · Scenario: every make <target> in workflow CODE (comments stripped) is in .PHONY or allowed_verbs
+    # · Last fail: N/A (was pass-test, R1 hole U-69 family)
+    # · Remove if: make-facade invariant is dropped
     makefile_targets = _load_makefile_targets()
     allowed_verbs = _load_entrypoint_manifest_allowed_verbs()
+    known_targets = makefile_targets | allowed_verbs
+
+    violations: list[str] = []
 
     for wf_file in _WORKFLOW_DIR.glob("*.yml"):
         content = wf_file.read_text()
-        # Extract make <target> patterns
-        make_calls = re.findall(r"make\s+(\S+)", content)
-        for call in make_calls:
-            # Skip variable assignments (MODE=full, MARKER=integration, etc.)
-            if "=" in call:
+        # Extract make <target> from CODE only — YAML comments are stripped per line to
+        # avoid prose/backtick false positives (e.g. "add `make context-promote-all`",
+        # "No rule to make target 'makefiles/repair.mk'" in comments).
+        for line in content.split("\n"):
+            code = re.sub(r"\s*#.*$", "", line)
+            if not code.strip():
                 continue
-            # Verify target exists either in Makefile .PHONY or manifest allowed_verbs
-            if call not in makefile_targets and call not in allowed_verbs:
-                logger.warning(
-                    "[IMP:8][test] %s uses make target '%s' not in .PHONY or allowed_verbs", wf_file.name, call
-                )
+            for call in re.findall(r"\bmake\s+([A-Za-z0-9_./:-]+)", code):
+                # Skip variable assignments (MODE=full, MARKER=integration, etc.)
+                if "=" in call:
+                    continue
+                # Strip trailing punctuation from prose refs ("node-update.", "target`")
+                target = call.rstrip(".,;)\"'`")
+                # Verify target exists either in Makefile .PHONY or manifest allowed_verbs
+                if target not in known_targets:
+                    violations.append(f"{wf_file.name}: make {target!r} not in .PHONY or allowed_verbs")
+                    logger.warning(
+                        "[IMP:8][test] %s uses make target '%s' not in .PHONY or allowed_verbs", wf_file.name, target
+                    )
+
+    assert not violations, "[IMP:9][test] make targets in workflows missing from .PHONY/allowed_verbs:\n" + "\n".join(
+        violations
+    )
     logger.info("[IMP:9][test] All make targets in workflows are .PHONY targets or allowed verbs")
 
 

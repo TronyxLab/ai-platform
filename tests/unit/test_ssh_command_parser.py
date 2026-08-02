@@ -432,12 +432,13 @@ def test_parse_preserves_raw() -> None:
 # · Last fail: N/A (new test)
 # · Remove if: CLI interface or _cli_main changes
 def test_cli_parse() -> None:
-    """CLI parse mode outputs JSON."""
+    """CLI parse mode outputs JSON and returns exit code 0."""
     from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "parse", "/opt/platform/core/entrypoints/deploy.sh receive my-project sha"]
-    with patch.object(sys, "argv", test_args), patch("sys.stderr"), contextlib.suppress(SystemExit):
-        _cli_main()
+    with patch.object(sys, "argv", test_args), patch("sys.stderr"):
+        rc = _cli_main()
+    assert rc == 0, f"_cli_main should return 0 for valid parse, got {rc}"
 
 
 # endregion

@@ -1,18 +1,19 @@
 """
 # GREP_SUMMARY: test_agent_watchdog, circuit-breaker, self-update, healthcheck, telegram, pending-update, watchdog-config
-# STRUCTURE: ▶ Config/Service/PendingUpdate dataclass tests → ▶ CircuitBreaker state machine (read/write/transition/reset/filter) →
-#            ▶ HealthChecker poll (success/timeout) → ▶ TelegramNotifier (missing secrets)
+# STRUCTURE: ▶ Config dataclass tests → ▶ HealthChecker poll (success/timeout) → ▶ PendingUpdate I/O → ▶ TelegramNotifier (missing secrets)
 # region MODULE_CONTRACT
-## @purpose  Unit tests for agent_watchdog.py — watchdog daemon for hermes-agent self-update and circuit breaker.
+## @purpose  Unit tests for agent_watchdog.py — watchdog daemon for hermes-agent self-update.
 ## @scope    Python-only unit tests (no Docker, no subprocess for business logic).
-##           13 test cases covering: config parsing, circuit breaker state machine,
-##           health check polling, pending update I/O, telegram notification.
+##           7 test cases covering: config parsing, health check polling, pending update I/O,
+##           telegram notification. CircuitBreaker/CircuitBreakerService coverage lives in
+##           test_watchdog_circuit_breaker.py (canonical after DevPlan 117 G T52).
 ## @invariants
 ##   - Uses tmp_path for all file I/O — no hardcoded paths
 ##   - Mock urllib for HealthChecker — no network in unit tests
-##   - CircuitBreaker tests use isolated tmp_path state directory
 ##   - All tests verify IMP:9 business logic logs via caplog
-## @rationale DevPlan 075 $TEST_SPEC — full coverage of agent_watchdog.py components.
+## @rationale DevPlan 075 $TEST_SPEC — coverage of agent_watchdog.py components.
+## @changes 2026-08-02 | F2 (DevPlan 118): 6 дубль-тестов CircuitBreaker/CircuitBreakerService
+##           удалены — канон test_watchdog_circuit_breaker.py (12 тестов, 0 потерь покрытия).
 # endregion MODULE_CONTRACT
 """
 
@@ -28,15 +29,14 @@ sys.path.insert(
     str(Path(__file__).resolve().parent.parent.parent / "core" / "modules" / "hermes-agent" / "watchdog"),
 )
 # DevPlan 117 G T52: CircuitBreaker/CircuitBreakerService extracted to circuit_breaker.py.
+# DevPlan 118 F2: duplicate CircuitBreaker/CircuitBreakerService tests removed — canonical
+# coverage lives in test_watchdog_circuit_breaker.py (12 tests). This file keeps
+# config/healthcheck/pending/telegram tests only.
 from agent_watchdog import (
     HealthChecker,
     PendingUpdate,
     TelegramNotifier,
     WatchdogConfig,
-)
-from circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerService,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,195 +145,6 @@ class TestWatchdogConfig:
             "CIRCUIT_BREAKER_SERVICES",
         ]:
             os.environ.pop(key, None)
-
-    # endregion
-
-
-# ═══════════════════════════════════════════════════════════════════
-# CircuitBreakerService tests
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TestCircuitBreakerService:
-    """CircuitBreakerService config entry parsing."""
-
-    # region test_cb_service_from_config_entry
-    def test_cb_service_from_config_entry(self, caplog) -> None:
-        """Parse valid colon-separated config entry → CircuitBreakerService."""
-        # 🧪 TRAP[TEST] · Regression: Ensure config entry parsing matches shell format
-        # · Scenario: "postgres:pg_isready -U postgres -h 127.0.0.1 -t 5:5:300"
-        # · Last fail: N/A
-        # · Remove if: entry format changes
-        caplog.set_level(logging.INFO)
-
-        entry = "postgres:pg_isready -U postgres -h 127.0.0.1 -t 5:5:300"
-        svc = CircuitBreakerService.from_config_entry(entry)
-
-        assert svc is not None
-        assert svc.service_name == "postgres"
-        assert svc.check_command == ["pg_isready", "-U", "postgres", "-h", "127.0.0.1", "-t", "5"]
-        assert svc.check_command_str == "pg_isready -U postgres -h 127.0.0.1 -t 5"
-        assert svc.max_failures == 5
-        assert svc.window_seconds == 300
-
-    # endregion
-
-    # region test_cb_service_from_config_entry_invalid
-    def test_cb_service_from_config_entry_invalid(self, caplog) -> None:
-        """Parse invalid config entry → None."""
-        # 🧪 TRAP[TEST] · Regression: Ensure invalid entries are skipped gracefully
-        # · Scenario: Entry with fewer than 4 colon-separated parts
-        # · Last fail: N/A
-        # · Remove if: parser edge case handling changes
-        caplog.set_level(logging.INFO)
-
-        # Too few parts
-        svc = CircuitBreakerService.from_config_entry("incomplete:entry")
-        assert svc is None
-
-        # Empty string
-        svc = CircuitBreakerService.from_config_entry("")
-        assert svc is None
-
-    # endregion
-
-
-# ═══════════════════════════════════════════════════════════════════
-# CircuitBreaker tests
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TestCircuitBreaker:
-    """Circuit breaker state machine: read/write, open/close, window expiry, filtering."""
-
-    # region test_circuit_breaker_read_write_state
-    def test_circuit_breaker_read_write_state(self, tmp_path: Path, caplog) -> None:
-        """Write circuit breaker state → read back → verify JSON integrity."""
-        # 🧪 TRAP[TEST] · Regression: Ensure state persistence roundtrip preserves data
-        # · Scenario: Write state dict, read back, compare
-        # · Last fail: N/A
-        # · Remove if: state persistence format changes
-        caplog.set_level(logging.INFO)
-
-        config = WatchdogConfig(cb_state_dir=str(tmp_path))
-        config.cb_services = [
-            CircuitBreakerService(
-                service_name="test-svc",
-                check_command=["true"],
-                check_command_str="true",
-                max_failures=5,
-                window_seconds=300,
-            )
-        ]
-        cb = CircuitBreaker(config)
-
-        # Write state
-        expected = {"failures": [1000, 2000], "circuit_open": True}
-        cb._write_state("test-svc", expected)
-
-        # Read state back
-        actual = cb._read_state("test-svc")
-        assert actual == expected
-        assert actual["circuit_open"] is True
-        assert len(actual["failures"]) == 2
-
-    # endregion
-
-    # region test_circuit_breaker_closed_to_open
-    def test_circuit_breaker_closed_to_open(self, tmp_path: Path, caplog) -> None:
-        """5 failures in 300s window → circuit opens on 5th failure."""
-        # 🧪 TRAP[TEST] · Regression: Circuit state machine transitions correctly
-        # · Scenario: Inject 5 failures via _increment_failures, 4th returns False, 5th True
-        # · Last fail: N/A
-        # · Remove if: circuit breaker logic fundamentally changes
-        caplog.set_level(logging.INFO)
-
-        config = WatchdogConfig(cb_state_dir=str(tmp_path))
-        cb = CircuitBreaker(config)
-
-        with patch("time.time", return_value=1000000):
-            # Failures 1-4: circuit stays closed
-            for i in range(4):
-                is_open = cb._increment_failures("test-svc", 5, 300)
-                assert is_open is False, f"Failure {i + 1} should not open circuit"
-
-            # Failure 5: circuit opens
-            is_open = cb._increment_failures("test-svc", 5, 300)
-            assert is_open is True, "5th failure should open circuit"
-
-            # Verify state persisted
-            state = cb._read_state("test-svc")
-            assert state["circuit_open"] is True
-            assert len(state["failures"]) == 5
-
-            # Verify LDD trajectory
-            found_imp9 = False
-            for record in caplog.records:
-                if "[IMP:9]" in record.message and "CIRCUIT BREAKER OPENED" in record.message:
-                    found_imp9 = True
-                    break
-            assert found_imp9, "LDD Error: No [IMP:9] circuit breaker opened log"
-
-    # endregion
-
-    # region test_circuit_breaker_window_expiry_reset
-    def test_circuit_breaker_window_expiry_reset(self, tmp_path: Path, caplog) -> None:
-        """Circuit open, window expired → auto-reset to closed."""
-        # 🧪 TRAP[TEST] · Regression: Circuit auto-recovery after window expiry
-        # · Scenario: Open circuit with failure at t=1000, check at t=2000 with 300s window
-        # · Last fail: N/A
-        # · Remove if: window expiry logic changes
-        caplog.set_level(logging.INFO)
-
-        config = WatchdogConfig(cb_state_dir=str(tmp_path))
-        cb = CircuitBreaker(config)
-
-        with patch("time.time") as mock_time:
-            # Open circuit at t=1000
-            mock_time.return_value = 1000
-            cb._write_state("test-svc", {"failures": [1000], "circuit_open": True})
-
-            # Check at t=2000 — window (300s) has expired (1000 + 300 = 1300 < 2000)
-            mock_time.return_value = 2000
-            is_open = cb._increment_failures("test-svc", 5, 300)
-            assert is_open is False, "Circuit should auto-reset after window expiry"
-
-            # Verify state was reset
-            state = cb._read_state("test-svc")
-            assert state["circuit_open"] is False
-            assert len(state["failures"]) == 0
-
-    # endregion
-
-    # region test_circuit_breaker_failures_filtered_by_window
-    def test_circuit_breaker_failures_filtered_by_window(self, tmp_path: Path, caplog) -> None:
-        """Old failures outside window → filtered out, count correct."""
-        # 🧪 TRAP[TEST] · Regression: Only failures within window count
-        # · Scenario: 2 failures at t=100 (outside 300s window from t=500), 2 at t=400, 1 at t=450
-        # · Check at t=500: only 3 failures in window (t=400, 400, 450) < max_failures=5
-        # · Last fail: N/A
-        # · Remove if: filter logic changes
-        caplog.set_level(logging.INFO)
-
-        config = WatchdogConfig(cb_state_dir=str(tmp_path))
-        cb = CircuitBreaker(config)
-
-        with patch("time.time") as mock_time:
-            # Write state with mixed timestamps
-            cb._write_state("test-svc", {"failures": [100, 100, 400, 400, 450], "circuit_open": False})
-
-            # Check at t=500 with 300s window
-            mock_time.return_value = 500
-            # Only failures >= 200 (500-300) should count
-            # t=100, t=100 are outside window → filtered
-            # t=400, t=400, t=450 are inside window = 3 failures < 5 threshold
-            is_open = cb._increment_failures("test-svc", 5, 300)
-            assert is_open is False, "3 in-window failures < 5 threshold should not open"
-
-            # State should now have 4 failures (3 old + 1 new)
-            state = cb._read_state("test-svc")
-            assert len(state["failures"]) == 4
-            assert state["circuit_open"] is False
 
     # endregion
 

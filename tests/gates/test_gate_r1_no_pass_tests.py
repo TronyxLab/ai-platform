@@ -1,24 +1,34 @@
-# GREP_SUMMARY: gate r1-no-pass-tests test-honesty constant-assert bare-pass except no-assert ast-scan allowlist-empty R5-negative B10
-# STRUCTURE: ┌_scan_source_for_pass_tests (ast)┐ → ◇ constant assert? ⊕ → ◇ bare-pass except? ⊕ → ◇ no assert/fail/raises? ⊕ → violations list →
-#            ◇ test_r1_no_pass_tests (walk tests/ excl. _conftest/helpers/tools/test_data/e2e-fixtures) → ◇ R5 negatives (inline fixtures: assert True / bare-pass / no-assert) → ⎋ gate green
+# GREP_SUMMARY: gate r1-no-pass-tests test-honesty constant-assert bare-pass except no-assert ast-scan allowlist-empty R5-negative B10 per-function F1
+# STRUCTURE: ┌_scan_source_for_pass_tests (ast, per-function)┐ → ◇ constant assert? ⊕ → ◇ bare-pass except? ⊕ → ◇ per-function fail-mechanism? ⊕ →
+#            violations list → ◇ test_r1_no_pass_tests (walk tests/ excl. _conftest/helpers/tools/test_data/e2e-fixtures) →
+#            ◇ R5 negatives (inline fixtures: assert True / bare-pass / no-assert / function-without-assert) → ⎋ gate green
 # region MODULE_CONTRACT
 ## @purpose  Gate test enforcing Test Honesty R1 (.kilo/rules/testing.md): zero pass-tests in tests/.
 ##           AST-scans every tests/**/*.py (excluding non-test modules) and RED on:
 ##             (а) assert with a constant expression (True/False/None/number/string/tuple of constants),
 ##             (б) except-block with a bare `pass` (except:/except X: → pass — swallowed exception),
-##             (в) a test file with no assertion mechanism at all (no assert, no pytest.fail/raises, no raise).
+##             (в) a test FUNCTION whose body has no fail mechanism (assert, pytest.fail/raises, raise,
+##                 mock assert_* method call) — per-function scan (DevPlan 118 F1, AC-F1). File-level
+##                 rule is NOT enough: a file with one asserting function hides sibling pass-functions.
 ## @scope    tests/ tree only, excluding tests/_conftest/, tests/helpers/, tests/tools/, tests/test_data/,
 ##           tests/e2e/fixtures/ (non-test modules). Allowlist is EMPTY (strict mode, DevPlan 116 B8 D3 pattern).
 ## @invariants
 ##   - Allowlist empty — no exceptions for constant asserts or bare-pass excepts
+##   - Per-function exemptions (decorators ONLY): @pytest.fixture (fixture, not test),
+##     r1_delegates (tests/_conftest/r1.py — documented delegation to a raising helper/fixture),
+##     pure pytest.skip body (skip-test, R3 domain — not a pass-test)
 ##   - Scan parses AST (code), never docstrings/comments — `assert True` in prose is ignored
-##   - Rule (в) counts assert / pytest.fail / pytest.raises / raise as fail mechanisms
+##   - Rule (в) counts assert / pytest.fail / pytest.raises / raise / mock assert_* as fail mechanisms
 ##   - R5 negative tests prove each detector fires on the exact regression input
 ##   - Registered in core/entrypoint-manifest.yaml gates (trinity) with repair_class L2
 ## @rationale  U-69 (11-Brief AC1): pass-tests are unfalsifiable — a test that cannot fail is not a test.
 ##             R1 gate prevents return of `assert True` / constant asserts / swallowed-exception pass blocks.
+##             DevPlan 118 F1: file-level rule (в) let pass-functions hide behind asserting siblings
+##             (test_gate_compose_base_contract, test_gate_ci_env_vars, test_gate_workflow_consistency) —
+##             per-function scan closes the hole; delegating tests get the r1_delegates marker.
 ##             CONSTITUTION-4: bare `except: pass` hides errors — flagged as test-code smell.
 ## @changes  2026-08-01 · Created (DevPlan 116 B10 T1)
+## @changes  2026-08-02 · Per-function rule (в) + r1_delegates exemption (DevPlan 118 F1)
 # endregion MODULE_CONTRACT
 
 import ast
@@ -30,6 +40,20 @@ import pytest
 _EXCLUDED_DIRS = {"_conftest", "helpers", "tools", "test_data"}
 
 _TESTS_DIR = pathlib.Path(__file__).resolve().parent.parent  # tests/
+
+# Decorators that exempt a test function from the per-function fail-mechanism rule.
+_EXEMPT_DECORATORS = {"fixture", "r1_delegates"}
+
+# Mock assertion methods — these raise AssertionError on failure (real fail mechanisms).
+_MOCK_ASSERT_METHODS = {
+    "assert_called",
+    "assert_called_once",
+    "assert_called_with",
+    "assert_called_once_with",
+    "assert_not_called",
+    "assert_any_call",
+    "assert_has_calls",
+}
 
 
 # region FUNC_is_constant_expr
@@ -67,13 +91,103 @@ def _is_fail_mechanism_call(node: ast.AST) -> bool:
 # endregion FUNC_is_fail_mechanism_call
 
 
+# region FUNC_has_decorator
+## @purpose  True if a function node carries any of the given decorator names (F1 per-function).
+## @io       ⇥ node: ast.FunctionDef, names: set[str] → ⎋ bool
+## @complexity O(D) where D = decorator count
+def _has_decorator(node: ast.FunctionDef, names: set[str]) -> bool:
+    """Detect decorators by final name — @pytest.fixture, r1_delegates, etc."""
+    for dec in node.decorator_list:
+        if isinstance(dec, ast.Name) and dec.id in names:
+            return True
+        if isinstance(dec, ast.Attribute) and dec.attr in names:
+            return True
+        if isinstance(dec, ast.Call):
+            func = dec.func
+            if isinstance(func, ast.Name) and func.id in names:
+                return True
+            if isinstance(func, ast.Attribute) and func.attr in names:
+                return True
+    return False
+
+
+# endregion FUNC_has_decorator
+
+
+# region FUNC_is_pure_skip_function
+## @purpose  True if the function body is essentially a single pytest.skip(...) call
+##           (skip-test — R3 domain, not a pass-test).
+## @io       ⇥ node: ast.FunctionDef → ⎋ bool
+## @complexity O(S) where S = statements
+def _is_pure_skip_function(node: ast.FunctionDef) -> bool:
+    """A skip-only test function (body = pytest.skip call) is not a pass-test."""
+    statements = [s for s in node.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
+    if len(statements) != 1:
+        return False
+    stmt = statements[0]
+    if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
+        return False
+    call = stmt.value
+    if isinstance(call.func, ast.Attribute) and call.func.attr == "skip":
+        return True
+    return isinstance(call.func, ast.Name) and call.func.id == "skip"
+
+
+# endregion FUNC_is_pure_skip_function
+
+
+# region FUNC_has_fail_mechanism_in_body
+## @purpose  True if a function body contains ANY fail mechanism: assert / raise /
+##           pytest.fail / pytest.raises / mock assert_* method call.
+## @io       ⇥ node: ast.FunctionDef → ⎋ bool
+## @complexity O(N) where N = AST nodes in body
+## @invariants
+##   - Walks the whole function body (nested calls included) — an assert inside a helper
+##     closure called by the test still counts (best-effort; the canonical escape hatch for
+##     genuine delegation is r1_delegates).
+def _has_fail_mechanism_in_body(node: ast.FunctionDef) -> bool:
+    """Per-function (в): does the test function body contain a fail mechanism?"""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Assert):
+            return True
+        if isinstance(sub, ast.Raise):
+            return True
+        if _is_fail_mechanism_call(sub):
+            return True
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in _MOCK_ASSERT_METHODS:
+            return True
+    return False
+
+
+# endregion FUNC_has_fail_mechanism_in_body
+
+
+# region FUNC_iter_test_functions
+## @purpose  Yield module-level and class-level test functions (name starts with test_).
+## @io       ⇥ tree: ast.Module → ⎋ Iterator[ast.FunctionDef]
+## @complexity O(F) where F = functions
+def _iter_test_functions(tree: ast.Module):
+    """Yield test functions: module-level `test_*` defs and methods of any class."""
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+            yield node
+        elif isinstance(node, ast.ClassDef):
+            for member in node.body:
+                if isinstance(member, ast.FunctionDef) and member.name.startswith("test_"):
+                    yield member
+
+
+# endregion FUNC_iter_test_functions
+
+
 # region FUNC_scan_source_for_pass_tests
 ## @purpose  AST-scan a single test-file source for R1 violations:
-##           (а) constant assert, (б) bare-pass except, (в) no assertion mechanism.
+##           (а) constant assert, (б) bare-pass except, (в) per-function no-fail-mechanism.
 ## @io       ⇥ source: str, file_name: str → ⎋ list[str] violations (empty = clean)
 ## @complexity O(N) where N = AST nodes
 ## @invariants
-##   - Rule (в) applies only to files named test_*.py
+##   - Rule (в) applies per-function with decorator exemptions (pytest.fixture, r1_delegates,
+##     pure-skip) — closes the file-level hole where an asserting sibling hides pass-functions
 ##   - Constant assert detection ignores the assert message (second arg)
 ##   - Bare-pass except: body is exactly one `pass` statement
 def _scan_source_for_pass_tests(source: str, file_name: str) -> list[str]:
@@ -84,6 +198,7 @@ def _scan_source_for_pass_tests(source: str, file_name: str) -> list[str]:
     except SyntaxError as exc:
         return [f"{file_name}: SYNTAX ERROR in test file: {exc.msg} (line {exc.lineno})"]
 
+    # ── File-level rules: (а) constant assert, (б) bare-pass except ──
     has_fail_mechanism = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Assert):
@@ -104,10 +219,32 @@ def _scan_source_for_pass_tests(source: str, file_name: str) -> list[str]:
             has_fail_mechanism = True
 
     if not has_fail_mechanism and pathlib.Path(file_name).name.startswith("test_"):
-        violations.append(
-            f"{file_name}: test file without any assertion mechanism "
-            "(no assert, no pytest.fail/raises, no raise) — R1 pass-test"
+        # A file whose ONLY test functions are exempt (@pytest.fixture / @r1_delegates /
+        # pure-skip) is not a pass-file — the per-function rule already handles each function.
+        has_exempt_test = any(
+            _has_decorator(func, _EXEMPT_DECORATORS) or _is_pure_skip_function(func)
+            for func in _iter_test_functions(tree)
         )
+        if not has_exempt_test:
+            violations.append(
+                f"{file_name}: test file without any assertion mechanism "
+                "(no assert, no pytest.fail/raises, no raise) — R1 pass-test"
+            )
+
+    # ── Per-function rule (в) — DevPlan 118 F1: a test function with no fail mechanism
+    #    in its own body is a pass-test even if sibling functions in the file assert. ──
+    if pathlib.Path(file_name).name.startswith("test_"):
+        for func in _iter_test_functions(tree):
+            if _has_decorator(func, _EXEMPT_DECORATORS):
+                continue  # fixture or documented @r1_delegates delegation
+            if _is_pure_skip_function(func):
+                continue  # skip-test — R3 domain, not a pass-test
+            if not _has_fail_mechanism_in_body(func):
+                violations.append(
+                    f"{file_name}:{func.lineno}: test function '{func.name}' without assertion "
+                    "mechanism in its body (no assert, no pytest.fail/raises, no raise, no "
+                    "mock assert_*) — R1 pass-test (DevPlan 118 F1 per-function scan)"
+                )
     return violations
 
 
@@ -215,6 +352,47 @@ def test_r1_negative_no_assert_file_detected() -> None:
     assert any("without any assertion mechanism" in v for v in violations), (
         f"R1 detector FAILED to flag assert-free test file: {violations}"
     )
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · R5-negative for per-function detector (DevPlan 118 F1)
+# · Scenario: file where one function asserts but a SIBLING function has no fail mechanism
+# · Last fail: F1 targets (test_gate_compose_base_contract / test_gate_ci_env_vars /
+#   test_gate_workflow_consistency) — file-level scan missed pass-functions behind asserting siblings
+# · Remove if: per-function rule (в) removed
+@pytest.mark.gate
+def test_r1_negative_function_without_assert_detected() -> None:
+    """Negative (R5): sibling test function without assert must be detected per-function (F1)."""
+    src = (
+        "def test_good():\n"
+        "    assert helper() == 1\n"
+        "\n"
+        "def test_bad(caplog):\n"
+        "    caplog.set_level(0)\n"
+        "    logger.info('PASS')\n"
+    )
+    violations = _scan_source_for_pass_tests(src, "test_fake_perfunc.py")
+    per_func = [v for v in violations if "test function 'test_bad'" in v]
+    assert per_func, f"R1 per-function detector FAILED to flag assert-free sibling: {violations}"
+    good_flagged = [v for v in violations if "test function 'test_good'" in v]
+    assert not good_flagged, f"R1 per-function detector false-positive on asserting function: {good_flagged}"
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · R5-negative: @r1_delegates exemption works (F1)
+# · Scenario: test function decorated with @r1_delegates (documented delegation) is NOT flagged
+# · Last fail: N/A (new gate, F1 exemption mechanism)
+# · Remove if: @r1_delegates exemption removed
+@pytest.mark.gate
+def test_r1_negative_r1_delegates_exempt() -> None:
+    """Negative (R5): @r1_delegates-decorated function must be exempt from per-function scan."""
+    src = (
+        "from tests._conftest.r1 import r1_delegates\n"
+        "\n"
+        "@r1_delegates\n"
+        "def test_delegates(caplog):\n"
+        "    state.precondition_check(phase)  # raises on failure\n"
+    )
+    violations = _scan_source_for_pass_tests(src, "test_fake_delegates.py")
+    assert not violations, f"R1 detector FAILED to honor @r1_delegates exemption: {violations}"
 
 
 # endregion R5_NEGATIVES

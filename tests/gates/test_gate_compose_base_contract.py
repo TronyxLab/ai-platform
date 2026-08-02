@@ -65,42 +65,39 @@ def test_all_base_yml_have_x_logging(caplog):
     logger.info("[IMP:9][gate] PASS: All %d modules have x-logging", len(modules))
 
 
+# Modules whose PRIMARY service uses a well-known tool container name instead of the module
+# directory name. F1 (DevPlan 118): the primary container_name invariant is now a hard assert —
+# any OTHER module without a matching container_name is a violation (drift).
+_TOOL_NAMED_PRIMARY = {
+    "infra-metrics": "cadvisor",
+    "logging": "loki",
+    "monitoring": "prometheus",
+}
+
+
 @pytest.mark.gate
 @ldd_trajectory
 def test_container_name_matches_module_name(caplog):
     """container_name in base.yml follows project naming convention (primary service)."""
+    # 🧪 TRAP[TEST] · F1 (DevPlan 118) · Regression: pass-test → real assert
+    # · Scenario: each module's base.yml primary service container_name == module name
+    # · Last fail: N/A (was pass-test, no assert — R1 hole U-69 family)
+    # · Remove if: container_name convention is intentionally dropped
     modules = _get_base_ymls()
-    matched = []
-    unmatched = []
+    violations = []
     for module_name, _yaml_path, data in modules:
         services = data.get("services", {})
-        for svc_config in services.values():
-            container_name = svc_config.get("container_name", "")
-            # Primary service may have container_name == module_name
-            # (postgres, redis) or a well-known tool name
-            # (prometheus for monitoring, loki for logging, cadvisor for infra-metrics)
-            if container_name and container_name == module_name:
-                matched.append(module_name)
-                logger.info(
-                    "[IMP:8][gate] PASS: %s → container_name '%s' matches module name", module_name, container_name
-                )
-                break
+        container_names = [svc.get("container_name", "") for svc in services.values() if isinstance(svc, dict)]
+        # Primary service may use module_name or a documented tool name
+        expected = _TOOL_NAMED_PRIMARY.get(module_name, module_name)
+        if expected not in container_names:
+            violations.append(f"{module_name}: primary container_name '{expected}' not found in {container_names}")
+            logger.info("[IMP:9][gate] FAIL: %s → expected '%s', got %s", module_name, expected, container_names)
         else:
-            # No exact container_name match — log at IMP:7 (info, not failure)
-            # Some modules use well-known tool names instead of module dir name
-            container_names = [s.get("container_name", "") for s in services.values()]
-            unmatched.append((module_name, container_names))
-            logger.info(
-                "[IMP:7][gate] INFO: %s container_names %s differ from module name (expected for multi-service modules)",
-                module_name,
-                container_names,
-            )
+            logger.info("[IMP:8][gate] PASS: %s → container_name '%s'", module_name, expected)
 
-    # Only report at IMP:7 — not a failure. Profiles and healthcheck are the hard contract.
-    matched_pct = len(matched) / len(modules) * 100
-    logger.info("[IMP:8][gate] Container name match rate: %d/%d (%.0f%%)", len(matched), len(modules), matched_pct)
-    logger.info("[IMP:7][gate] Unmatched modules (tool-named containers): %s", [m for m, _ in unmatched])
-    logger.info("[IMP:9][gate] PASS: Container name convention verified — all modules have services defined")
+    assert not violations, "[IMP:9][gate] Container name violations:\n" + "\n".join(violations)
+    logger.info("[IMP:9][gate] PASS: All %d modules have primary container_name convention verified", len(modules))
 
 
 @pytest.mark.gate

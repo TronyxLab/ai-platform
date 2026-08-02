@@ -21,6 +21,8 @@ from collections import deque
 
 import pytest
 
+from tests._conftest.r1 import r1_delegates
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,10 +90,13 @@ def _compute_dynamic_groups(module_graph: dict[str, list[str]]) -> dict[str, int
 
 
 @pytest.mark.gate
+@r1_delegates
 
 # 🧪 TRAP[TEST] · 2026-07-18 · REGRESSION · Gate invariant — first line of defense against drift in platform contracts
 # · Last fail: N/A (preventive)
 # · Remove if: entire gate category is superseded by a newer mechanism
+# 🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: fail-механизм — module_graph fixture
+#   (Kahn's algorithm) raises RuntimeError на цикле; тест не нуждается в собственном assert.
 def test_no_cyclic_dependencies(module_graph: dict[str, list[str]]) -> None:
     """Verify module dependency graph is acyclic.
 

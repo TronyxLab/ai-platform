@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests._conftest.r1 import r1_delegates
 from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
@@ -125,9 +126,13 @@ class TestModuleProfiles:
         logger.info("[IMP:9][gate] PASS: All %d modules have profile matching module dir name", len(BASE_YMLS))
 
     @pytest.mark.gate
+    @r1_delegates
     def test_no_stale_profiles(self, caplog) -> None:
         """Нет дублирующих/неиспользуемых профилей в base.yml (предупреждение)."""
         # 🧪 TRAP[TEST] · 2026-07-16 · gate/module-profiles · Предупреждение о лишних профилях
+        # 🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: warning-only gate — профили-дубли
+        #   не блокируют gate (SKIP при наличии warnings); fail-механизм намеренно отсутствует.
+        # · Remove if: gate становится fail-fast на stale-профилях
         caplog.set_level(logging.DEBUG)
         warnings: list[str] = []
 

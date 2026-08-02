@@ -36,6 +36,8 @@ import pytest
 import yaml
 from conftest import ldd_trajectory
 
+from tests._conftest.r1 import r1_delegates
+
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[2]
 _PYPROJECT_TOML_PATH: pathlib.Path = _PROJECT_ROOT / "pyproject.toml"
 _INVENTORY_PATH: pathlib.Path = _PROJECT_ROOT / "tests" / "test_inventory.yaml"
@@ -317,6 +319,7 @@ def _find_undocumented_removals(
 
 @pytest.mark.gate
 @ldd_trajectory
+@r1_delegates
 def test_test_inventory_matches_collected(caplog) -> None:
     """Verify every collected test has an entry in test_inventory.yaml.
 
@@ -324,6 +327,8 @@ def test_test_inventory_matches_collected(caplog) -> None:
     ##            and all inventory entries reference existing tests.
     ## @io — ⎋ None (assert side-effect)
     ## @complexity — O(C + I) where C = collected tests, I = inventory entries
+    ## 🧪 TRAP[TEST] · F1 (DevPlan 118) · @r1_delegates: informational reporter — enforcement
+    ##   (незадокументированное удаление → RED) живёт в test_no_test_removed_without_changelog.
     """
 
     logger.info("[IMP:8][test_test_inventory_matches_collected] === Inventory match audit ===")

@@ -1,37 +1,39 @@
-# GREP_SUMMARY: test-monitoring-config-renderer deep-merge config-loading prometheus-targets loki-retention langfuse alert-rules retention-parsing LDD
+# GREP_SUMMARY: test-monitoring-config-renderer deep-merge config-loading L1-L2-L3 retention-parsing LDD
 # STRUCTURE: fixtures(tmp_path YAML factories) →
 #            test_deep_merge_simple → test_deep_merge_nested_3levels →
 #            test_deep_merge_preserves_base_keys → test_load_l1_defaults_with_type →
 #            test_load_l1_defaults_missing_file → test_load_l2_overrides_present →
 #            test_load_l2_overrides_missing_file → test_build_merged_config_full_pipeline →
 #            test_build_merged_config_no_monitoring_section →
-#            test_build_merged_config_no_ai_yaml → test_generate_prometheus_target_json_schema →
-#            test_generate_prometheus_target_metrics_disabled → test_update_loki_retention_* →
-#            test_generate_alert_rules_* → test_retention_parsing_variants → test_cli_missing_args →
+#            test_build_merged_config_no_ai_yaml → test_retention_parsing_variants →
+#            test_str_to_bool_variants → test_load_l3_project_config →
 #            test_all_components_noop_when_no_monitoring
 # region MODULE_CONTRACT
-## @purpose  Unit tests for monitoring_config_renderer.py — test functions covering
-##           deep_merge, config loading, 3-level merge, Prometheus targets, Loki retention,
-##           alert rules, retention parsing, CLI, and full-pipeline no-monitoring scenario.
-## @scope    All tests use tmp_path (no hardcoded paths). HTTP-dependent tests use monkeypatch.
-##           No Docker daemon required. Each test verifies [IMP:9] log presence via caplog.
+## @purpose  Unit tests for monitoring_config_renderer.py — CONFIG-LOADING layer only:
+##           deep_merge, 3-level merge (L1/L2/L3), retention parsing, _str_to_bool.
+## @scope    All tests use tmp_path (no hardcoded paths). No Docker daemon required.
+##           Generator tests (prometheus targets, loki retention, alert rules, grafana)
+##           were REMOVED in DevPlan 118 F3 — canonical coverage lives in 7 files under
+##           tests/unit/test_monitoring_*.py (prometheus_targets, loki_retention,
+##           alert_rules, grafana_dashboards, catalog_refresh, langfuse_projects,
+##           service_reload). CLI contract tests live in test_render_monitoring_cli.py.
 ## @invariants
 ##   - All tests use tmp_path fixture (zero hardcoded paths)
-##   - HTTP-dependent tests use monkeypatch (not responses library)
 ##   - No Docker daemon required for any test
 ##   - Each test verifies [IMP:9] log presence via caplog fixture
 ##   - Tests run in tests/unit/ — no @pytest.mark.requires_docker
 ##   - YAML fixtures written to tmp_path in test setup (not committed as separate files)
 ##   - R1-чистка (DevPlan 116 B7 T7): 0 assert True/pass — все хвостовые pass-asserts удалены
-## @rationale DevPlan 074 §5.1 — test cases covering all monitoring config renderer paths.
-##           Ensures the Python migration preserves all shell behavior exactly.
+## @rationale DevPlan 074 §5.1 — config-loading test cases. Generator-тесты дублировали
+##           7 новых файлов (волна 117 G T54) — F3 удаляет дубли, файл 943→~300 LOC.
 ## @changes
 ##   LAST_CHANGE: 2026-07-25 | Created (DevPlan 074 TASK-4)
 ##   2026-08-01 | B7 T7 (D5): удалены 19 хвостовых assert True (R1-чистка pass-тестов);
 ##               контрактный CLI-тест вынесен в tests/unit/test_render_monitoring_cli.py
+##   2026-08-02 | F3 (DevPlan 118): генератор-тесты удалены (дубли 7 новых файлов);
+##               остались config-loading (deep_merge, L1/L2/L3, retention, _str_to_bool)
 # endregion MODULE_CONTRACT
 
-import json
 import logging
 import pathlib
 
@@ -40,19 +42,13 @@ import yaml
 from _conftest.ldd import _print_ldd_trajectory
 
 from core.internal.monitoring_config_renderer import (
-    ProjectMonitoringConfig,
     _parse_retention_hours,
     _str_to_bool,
     build_merged_config,
     deep_merge,
-    generate_alert_rules,
-    generate_grafana_dashboard,
-    generate_prometheus_target,
     load_l1_defaults,
     load_l2_overrides,
     load_l3_project_config,
-    main,
-    update_loki_retention,
 )
 
 logger = logging.getLogger(__name__)
@@ -141,27 +137,6 @@ def test_l2_override_yaml(tmp_path: pathlib.Path) -> pathlib.Path:
     # Path structure: node-configs/<node>/projects/<project>.yaml
     path = tmp_path / "node-configs" / "test-node" / "projects" / "test-project.yaml"
     return _write_yaml(data, path)
-
-
-@pytest.fixture
-def test_loki_runtime_config_yaml(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Create a pre-existing Loki runtime config for tests.
-
-    ## @purpose  Loki runtime config fixture with one existing stream.
-    ## @complexity O(1)
-    """
-    data = {
-        "limits_config": {
-            "retention_stream": [
-                {
-                    "selector": '{compose_project="existing-project"}',
-                    "priority": 0,
-                    "period": "720h",
-                },
-            ],
-        },
-    }
-    return _write_yaml(data, tmp_path / "loki-runtime-config.yml")
 
 
 # ── T4.1: deep_merge simple ────────────────────────────────────────────────
@@ -452,327 +427,6 @@ def test_build_merged_config_no_ai_yaml(tmp_path: pathlib.Path, caplog) -> None:
     _print_ldd_trajectory(caplog, "test_build_merged_config_no_ai_yaml")
 
 
-# ── T4.11: generate_prometheus_target JSON schema ────────────────────────────
-
-
-# 🧪 TRAP[TEST] · prometheus_target_json_schema · Unit · Regression never · Remove if: target JSON schema changes
-def test_generate_prometheus_target_json_schema(caplog) -> None:
-    """Generate target JSON → verify exact keys (targets, labels).
-
-    ## @purpose T4.11: Verify Prometheus target JSON structure.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    config = ProjectMonitoringConfig(
-        project_name="my-service",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        metrics_enabled=True,
-        metrics_port=9090,
-    )
-
-    result = generate_prometheus_target(config, output_dir=pathlib.Path("/tmp"))
-    # Use tmp_path for actual file write
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        out_dir = pathlib.Path(tmpdir)
-        result = generate_prometheus_target(config, output_dir=out_dir)
-
-        assert result.status == "created"
-        assert result.component == "prometheus"
-        assert result.output_path is not None
-        assert result.output_path.exists()
-
-        # Read and validate JSON schema
-        data = json.loads(result.output_path.read_text())
-        assert "targets" in data
-        assert "labels" in data
-        assert data["targets"] == ["my-service:9090"]
-        assert data["labels"]["project"] == "my-service"
-        assert data["labels"]["type"] == "backend"
-        assert data["labels"]["node"] == "test-node"
-        assert data["labels"]["service"] == "my-service"
-
-    found = _print_ldd_trajectory(caplog, "test_generate_prometheus_target_json_schema")
-    assert found, "No IMP:9 log found — LDD violation"
-
-
-# ── T4.12: generate_prometheus_target metrics disabled ───────────────────────
-
-
-# 🧪 TRAP[TEST] · prometheus_target_disabled · Unit · Regression never · Remove if: skip-on-disabled behavior changes
-def test_generate_prometheus_target_metrics_disabled(caplog) -> None:
-    """metrics_enabled=False → skip, status='noop', no file written.
-
-    ## @purpose T4.12: Verify metrics-disabled project skips target generation.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    config = ProjectMonitoringConfig(
-        project_name="my-service",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        metrics_enabled=False,
-    )
-
-    result = generate_prometheus_target(config)
-
-    assert result.status == "noop"
-    assert result.component == "prometheus"
-
-    _print_ldd_trajectory(caplog, "test_generate_prometheus_target_metrics_disabled")
-
-
-# ── T4.13: update_loki_retention new stream ────────────────────────────────
-
-
-# 🧪 TRAP[TEST] · loki_new_stream · Unit · Regression never · Remove if: Loki retention insertion logic changes
-def test_update_loki_retention_new_stream(
-    test_loki_runtime_config_yaml: pathlib.Path,
-    caplog,
-) -> None:
-    """No existing stream for project → new rule inserted.
-
-    ## @purpose T4.13: Verify new retention stream is added to Loki config.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    config = ProjectMonitoringConfig(
-        project_name="new-project",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        logs_retention="7d",
-    )
-
-    result = update_loki_retention(config, runtime_config_path=test_loki_runtime_config_yaml)
-
-    assert result.status == "updated"
-    assert result.component == "loki"
-
-    # Verify YAML was updated
-    data = yaml.safe_load(test_loki_runtime_config_yaml.read_text())
-    streams = data["limits_config"]["retention_stream"]
-    assert len(streams) == 2  # original + new
-    selectors = [s["selector"] for s in streams]
-    assert '{compose_project="new-project"}' in selectors
-
-    found = _print_ldd_trajectory(caplog, "test_update_loki_retention_new_stream")
-    assert found, "No IMP:9 log found — LDD violation"
-
-
-# ── T4.14: update_loki_retention idempotent ─────────────────────────────────
-
-
-# 🧪 TRAP[TEST] · loki_idempotent · Unit · Regression never · Remove if: idempotent behavior changes
-def test_update_loki_retention_idempotent(
-    test_loki_runtime_config_yaml: pathlib.Path,
-    caplog,
-) -> None:
-    """Same project twice → second call detects EXISTS, skips.
-
-    ## @purpose T4.14: Verify idempotency — no duplicate rules on second call.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    config = ProjectMonitoringConfig(
-        project_name="existing-project",  # matches the fixture's existing stream
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        logs_retention="7d",
-    )
-
-    # First call — should skip (already exists in fixture)
-    result1 = update_loki_retention(config, runtime_config_path=test_loki_runtime_config_yaml)
-    assert result1.status == "skipped"
-
-    # Second call — should still skip (idempotent)
-    result2 = update_loki_retention(config, runtime_config_path=test_loki_runtime_config_yaml)
-    assert result2.status == "skipped"
-
-    # Verify no duplicate rules
-    data = yaml.safe_load(test_loki_runtime_config_yaml.read_text())
-    streams = data["limits_config"]["retention_stream"]
-    assert len(streams) == 1  # still just the original
-
-    _print_ldd_trajectory(caplog, "test_update_loki_retention_idempotent")
-
-
-# ── T4.15: update_loki_retention before catch-all ──────────────────────────
-
-
-# 🧪 TRAP[TEST] · loki_before_catchall · Unit · Regression never · Remove if: insertion-before-catchall behavior changes
-def test_update_loki_retention_before_catch_all(caplog) -> None:
-    """New rule inserted BEFORE compose_project=~ catch-all rules.
-
-    ## @purpose T4.15: Verify new rules are placed before catch-all rules.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
-        yaml.dump(
-            {
-                "limits_config": {
-                    "retention_stream": [
-                        {"selector": '{compose_project="existing"}', "priority": 0, "period": "720h"},
-                        {"selector": '{compose_project=~".+"}', "priority": 0, "period": "168h"},
-                    ],
-                },
-            },
-            f,
-        )
-        config_path = pathlib.Path(f.name)
-
-    config = ProjectMonitoringConfig(
-        project_name="new-project",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        logs_retention="7d",
-    )
-
-    result = update_loki_retention(config, runtime_config_path=config_path)
-
-    assert result.status == "updated"
-
-    # Verify the new rule is before the catch-all
-    data = yaml.safe_load(config_path.read_text())
-    streams = data["limits_config"]["retention_stream"]
-    assert len(streams) == 3
-    assert streams[0]["selector"] == '{compose_project="existing"}'
-    assert streams[1]["selector"] == '{compose_project="new-project"}'
-    assert streams[2]["selector"] == '{compose_project=~".+"}'
-
-    config_path.unlink()
-
-    _print_ldd_trajectory(caplog, "test_update_loki_retention_before_catch_all")
-
-
-# ── T4.16: update_loki_retention forever period ────────────────────────────
-
-
-# 🧪 TRAP[TEST] · loki_forever_period · Unit · Regression never · Remove if: forever retention behavior changes
-def test_update_loki_retention_forever_period(
-    test_loki_runtime_config_yaml: pathlib.Path,
-    caplog,
-) -> None:
-    """logs_retention='forever' → period_h=0.
-
-    ## @purpose T4.16: Verify 'forever' retention produces period='0h'.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    config = ProjectMonitoringConfig(
-        project_name="forever-project",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        logs_retention="forever",
-    )
-
-    result = update_loki_retention(config, runtime_config_path=test_loki_runtime_config_yaml)
-
-    assert result.status == "updated"
-
-    data = yaml.safe_load(test_loki_runtime_config_yaml.read_text())
-    streams = data["limits_config"]["retention_stream"]
-    new_rule = next(s for s in streams if s["selector"] == '{compose_project="forever-project"}')
-    assert new_rule["period"] == "0h"
-
-    _print_ldd_trajectory(caplog, "test_update_loki_retention_forever_period")
-
-
-# ── T4.17: generate_alert_rules enabled ──────────────────────────────────────
-
-
-# 🧪 TRAP[TEST] · alert_rules_enabled · Unit · Regression never · Remove if: alert rules dispatch logic changes
-def test_generate_alert_rules_enabled(tmp_path: pathlib.Path, caplog) -> None:
-    """alerting_enabled=True → native template_engine.render_template invoked, output file created.
-
-    ## @purpose T4.17: Verify alert rules template rendering is invoked (native render,
-    ##            DevPlan 094 — no subprocess, no shell wrapper).
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    # Strict {{UPPER_SNAKE}} placeholder — native render substitutes it
-    template_path = tmp_path / "alert-rules.yml"
-    template_path.write_text("groups:\n  - name: {{PROJECT}}-alerts\n")
-
-    config = ProjectMonitoringConfig(
-        project_name="test-app",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=tmp_path,
-        alerting_enabled=True,
-    )
-
-    # Use tmp_path for output to avoid permission issues with /opt/prometheus/rules
-    output_dir = tmp_path / "alert-output"
-    result = generate_alert_rules(config, template_path=template_path, output_dir=output_dir)
-
-    assert result.status == "created"
-    assert result.component == "alerting"
-
-    # Native render: output file written with substituted PROJECT value
-    output_file = output_dir / "test-app-alerts.yml"
-    assert output_file.is_file(), "Alert rules output file must be created by native render"
-    content = output_file.read_text()
-    assert "name: test-app-alerts" in content, f"PROJECT placeholder not substituted: {content!r}"
-    assert "{{PROJECT}}" not in content
-
-    found = _print_ldd_trajectory(caplog, "test_generate_alert_rules_enabled")
-    assert found, "No IMP:9 log found — LDD violation"
-
-
-# ── T4.18: generate_alert_rules disabled ─────────────────────────────────────
-
-
-# 🧪 TRAP[TEST] · alert_rules_disabled · Unit · Regression never · Remove if: skip-on-disabled behavior changes
-def test_generate_alert_rules_disabled(caplog) -> None:
-    """alerting_enabled=False → skip, status='noop'.
-
-    ## @purpose T4.18: Verify alerting-disabled project skips rule generation.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    config = ProjectMonitoringConfig(
-        project_name="test-app",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        alerting_enabled=False,
-    )
-
-    result = generate_alert_rules(config)
-
-    assert result.status == "noop"
-    assert result.component == "alerting"
-
-    _print_ldd_trajectory(caplog, "test_generate_alert_rules_disabled")
-
-
 # ── T4.19: retention parsing variants ────────────────────────────────────────
 
 
@@ -794,38 +448,6 @@ def test_retention_parsing_variants(caplog) -> None:
     assert _parse_retention_hours("") == 168  # default
 
     _print_ldd_trajectory(caplog, "test_retention_parsing_variants")
-
-
-# ── T4.20: CLI missing args ──────────────────────────────────────────────────
-
-
-# 🧪 TRAP[TEST] · cli_missing_args · Unit · Regression never · Remove if: CLI arg validation changes
-def test_cli_missing_args(caplog) -> None:
-    """Missing --project or --project-dir → exit 1 via argparse.
-
-    ## @purpose T4.20: Verify argparse catches missing required arguments.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    import sys
-    from io import StringIO
-
-    # Capture stderr
-    old_stderr = sys.stderr
-    sys.stderr = StringIO()
-
-    try:
-        with pytest.raises(SystemExit) as exc_info:
-            # Simulate missing --project-dir
-            sys.argv = ["monitoring_config_renderer.py", "--project", "test"]
-            main()
-
-        assert exc_info.value.code == 2  # argparse exits with code 2 on error
-    finally:
-        sys.stderr = old_stderr
-
-    _print_ldd_trajectory(caplog, "test_cli_missing_args")
 
 
 # ── T4.21: all components noop when no monitoring ──────────────────────────
@@ -912,32 +534,3 @@ def test_load_l3_project_config(caplog) -> None:
     assert result2 == {}
 
     _print_ldd_trajectory(caplog, "test_load_l3_project_config")
-
-
-# ── Additional: generate_grafana_dashboard noop ──────────────────────────────
-
-
-# 🧪 TRAP[TEST] · grafana_dashboard_noop · Unit · Regression never · Remove if: dashboard skip logic changes
-def test_generate_grafana_dashboard_disabled(caplog) -> None:
-    """dashboard_enabled=False → skip, status='noop'.
-
-    ## @purpose Verify dashboard-disabled project skips dashboard generation.
-    ## @complexity O(1)
-    """
-    caplog.set_level(logging.INFO)
-
-    config = ProjectMonitoringConfig(
-        project_name="test-app",
-        project_type="backend",
-        project_dir=pathlib.Path("/tmp/test"),
-        node_name="test-node",
-        platform_root=pathlib.Path("/tmp/platform"),
-        dashboard_enabled=False,
-    )
-
-    result = generate_grafana_dashboard(config)
-
-    assert result.status == "noop"
-    assert result.component == "grafana"
-
-    _print_ldd_trajectory(caplog, "test_generate_grafana_dashboard_disabled")

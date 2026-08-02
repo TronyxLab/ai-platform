@@ -1290,6 +1290,12 @@ gates:
 - id: test_make_n_dry_run_all_targets
   test_file: test_gate_make_contract.py
   description: 'Auto-discovered gate: test_make_n_dry_run_all_targets'
+- id: test_manifest_restart_is_soft
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_manifest_restart_is_soft'
+- id: test_module_mk_restart_hard_exists
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_module_mk_restart_hard_exists'
 - id: test_nginx_dev_compose_valid
   test_file: test_gate_make_contract.py
   description: 'Auto-discovered gate: test_nginx_dev_compose_valid'
@@ -1299,9 +1305,18 @@ gates:
 - id: test_no_empty_phony_targets
   test_file: test_gate_make_contract.py
   description: 'Auto-discovered gate: test_no_empty_phony_targets'
+- id: test_no_soft_restart_in_docker_makefiles
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_no_soft_restart_in_docker_makefiles'
+- id: test_platform_secrets_excluded
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_platform_secrets_excluded'
 - id: test_restart_soft_semantics
   test_file: test_gate_make_contract.py
   description: 'Auto-discovered gate: test_restart_soft_semantics'
+- id: test_root_makefile_restart_is_soft
+  test_file: test_gate_make_contract.py
+  description: 'Auto-discovered gate: test_root_makefile_restart_is_soft'
 - id: test_all_phony_targets_discovered
   test_file: test_gate_makefile_targets.py
   description: 'Auto-discovered gate: test_all_phony_targets_discovered'
@@ -1692,9 +1707,15 @@ gates:
 - id: test_r1_negative_constant_assert_detected
   test_file: test_gate_r1_no_pass_tests.py
   description: 'Auto-discovered gate: test_r1_negative_constant_assert_detected'
+- id: test_r1_negative_function_without_assert_detected
+  test_file: test_gate_r1_no_pass_tests.py
+  description: 'Auto-discovered gate: test_r1_negative_function_without_assert_detected'
 - id: test_r1_negative_no_assert_file_detected
   test_file: test_gate_r1_no_pass_tests.py
   description: 'Auto-discovered gate: test_r1_negative_no_assert_file_detected'
+- id: test_r1_negative_r1_delegates_exempt
+  test_file: test_gate_r1_no_pass_tests.py
+  description: 'Auto-discovered gate: test_r1_negative_r1_delegates_exempt'
 - id: test_r1_no_pass_tests
   test_file: test_gate_r1_no_pass_tests.py
   description: 'Auto-discovered gate: test_r1_no_pass_tests'
