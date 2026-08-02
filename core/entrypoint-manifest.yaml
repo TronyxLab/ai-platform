@@ -90,13 +90,6 @@ build:
   operation_ru: Push L2 в ghcr.io
   description: Push L2 (hermes-agent-context) to ghcr.io for a specific context/org
 validate:
-- make_target: templates-check
-  mechanism: python-script
-  delegates_to: core/internal/template_engine.py check --verbose
-  signature: make templates-check
-  operation_ru: Dry-run проверка шаблонов
-  description: Dry-run render all templates from manifest — exit 0 if all resolvable,
-    1 with diagnostic
 - make_target: templates-render
   mechanism: python-script
   delegates_to: core/internal/template_engine.py render-all
@@ -143,6 +136,15 @@ validate:
   operation_ru: Проверка мёртвого кода
   description: CI gate — detect DEPRECATED markers older than 30 days (Dead Code Sweep
     084)
+- make_target: check-exception-patterns
+  mechanism: grep-gate
+  delegates_to: grep -rEn 'except Exception' core/internal/ --include='*.py' (bare
+    except only in __main__ or
+  signature: make check-exception-patterns
+  operation_ru: Проверка паттернов исключений
+  description: 'CI gate (DevPlan 118 G2): bare except Exception only in __main__ or
+    # noqa: EXC-marked. Регистрация loophole-таргета: вызывается gate-конвейером (Step
+    2c/8) но отсутствовал в .PHONY/allowed_verbs/глоссарии.'
 - make_target: doxygen-check
   mechanism: ci-gate
   delegates_to: doxygen Doxyfile (zero-warnings invariant, DevPlan 097)
@@ -375,6 +377,7 @@ repair:
     staged + unstaged. Safe, idempotent, DRY_RUN=1.'
   repairs_gates:
   - gate_id: ruff-format
+    gate_kind: make-target-gate
     repair_id: ruff-format
     repair_command: make fix-ruff
     repair_description: Formats changed Python files with ruff (check --fix + format)
@@ -390,6 +393,7 @@ repair:
     ONLY gate-blocking L1 errors. Not expandable without review.
   repairs_gates:
   - gate_id: check-manifests
+    gate_kind: make-target-gate
     repair_id: manifest-sync
     repair_command: make fix-gate
     repair_description: Regenerates all derived manifests (secrets-manifest.yaml,
@@ -724,12 +728,12 @@ non_repairable_gates:
   repairable: false
   repair_class: L3
   repair_reason: Security gate — requires manual audit
-- gate_id: template-syntax-contract
+- gate_id: test_all_templates_use_strict_grammar
   repairable: false
   repair_class: L3
   repair_reason: 'Template syntax contract: config/ uses ${}, templates/ uses {{}},
     no mixed syntax'
-- gate_id: r1_no_pass_tests
+- gate_id: test_r1_no_pass_tests
   repairable: false
   repair_class: L2
   repair_reason: 'Test Honesty R1 (.kilo/rules/testing.md): manual test fix — remove
@@ -792,6 +796,7 @@ allowed_verbs:
 - check-dead-code
 - check-domain-parity
 - check-env-defaults
+- check-exception-patterns
 - check-file-lines
 - check-manifests
 - check-profiles-parity
@@ -1342,6 +1347,15 @@ gates:
 - id: test_module_targets_use_canonical_names
   test_file: test_gate_manifest_integrity.py
   description: 'Auto-discovered gate: test_module_targets_use_canonical_names'
+- id: test_negative_dangling_gate_id_detected
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_negative_dangling_gate_id_detected'
+- id: test_negative_duplicate_make_target_detected
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_negative_duplicate_make_target_detected'
+- id: test_no_duplicate_make_targets
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_no_duplicate_make_targets'
 - id: test_no_forbidden_verbs_in_makefiles
   test_file: test_gate_manifest_integrity.py
   description: 'Auto-discovered gate: test_no_forbidden_verbs_in_makefiles'
@@ -1351,6 +1365,9 @@ gates:
 - id: test_repair_contract_integrity
   test_file: test_gate_manifest_integrity.py
   description: 'Auto-discovered gate: test_repair_contract_integrity'
+- id: test_repair_gate_ids_resolve
+  test_file: test_gate_manifest_integrity.py
+  description: 'Auto-discovered gate: test_repair_gate_ids_resolve'
 - id: test_manifests_up_to_date
   test_file: test_gate_manifests_up_to_date.py
   description: 'Auto-discovered gate: test_manifests_up_to_date'
@@ -1546,6 +1563,66 @@ gates:
 - id: test_phantom_scan_detects_dummy_file
   test_file: test_gate_phantom_refs.py
   description: 'Auto-discovered gate: test_phantom_scan_detects_dummy_file'
+- id: test_env_defaults_do_not_contain_dot_env_keys
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_env_defaults_do_not_contain_dot_env_keys'
+- id: test_env_defaults_keys_format
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_env_defaults_keys_format'
+- id: test_env_defaults_minimum_count
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_env_defaults_minimum_count'
+- id: test_env_defaults_section_exists
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_env_defaults_section_exists'
+- id: test_env_defaults_values_are_strings
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_env_defaults_values_are_strings'
+- id: test_platform_env_yaml_exists
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_platform_env_yaml_exists'
+- id: test_platform_env_yaml_is_valid_yaml
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_platform_env_yaml_is_valid_yaml'
+- id: test_network_names_format
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_network_names_format'
+- id: test_networks_minimum_count
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_networks_minimum_count'
+- id: test_networks_name_field_required
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_networks_name_field_required'
+- id: test_networks_optional_fields
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_networks_optional_fields'
+- id: test_networks_section_exists
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_networks_section_exists'
+- id: test_no_duplicate_networks
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_no_duplicate_networks'
+- id: test_profiles_match_modules_dir
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_profiles_match_modules_dir'
+- id: test_profiles_minimum_count
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_profiles_minimum_count'
+- id: test_profiles_section_exists
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_profiles_section_exists'
+- id: test_no_duplicate_volumes
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_no_duplicate_volumes'
+- id: test_volumes_minimum_count
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_volumes_minimum_count'
+- id: test_volumes_path_field_required
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_volumes_path_field_required'
+- id: test_volumes_section_exists
+  test_file: test_gate_platform_env_schema.py
+  description: 'Auto-discovered gate: test_volumes_section_exists'
 - id: test_generated_files_match_sot
   test_file: test_gate_profiles_parity.py
   description: 'Auto-discovered gate: test_generated_files_match_sot'

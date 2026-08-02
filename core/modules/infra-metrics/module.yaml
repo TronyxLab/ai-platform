@@ -29,6 +29,10 @@ description: "Infrastructure metrics: cAdvisor (container), Node Exporter (host)
 depends_on:
   - nginx
 
+# D5 (118 G4): severity/restart — метрики, non-critical; restart согласован с base.yml (все 5 сервисов unless-stopped)
+severity: normal
+restart: unless-stopped
+
 interfaces:
   - healthcheck
 

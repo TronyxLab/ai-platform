@@ -80,7 +80,7 @@ Gate-тесты делятся на категории по предмету п�
 
 | Гейт | Файл | Предмет |
 |------|------|---------|
-| cross-layer dotted + python3 -m (B11 T1, U-09) | `tests/test_cross_layer_imports.py` (расширен) | dotted-импорты (core.internal.X) + `python3 -m core.internal.*` детектируются; строгий allowlist (6 записей, D1); LINT-EXEMPT легитимен ТОЛЬКО с allowlist-записью; 2 негатив-теста R5 |
+| cross-layer dotted + python3 -m (B11 T1, U-09) | `tests/test_cross_layer_imports.py` (расширен) | dotted-импорты (core.internal.X) + `python3 -m core.internal.*` детектируются; строгий allowlist (8 записей — расширен до 8: 117 D19/D29/T52); LINT-EXEMPT легитимен ТОЛЬКО с allowlist-записью; 2 негатив-теста R5 |
 | audit-format R2 (B11 T2, U-10/D1) | `test_gate_audit_format.py` (NEW) | единый writer shared/audit_logger: 0 прямых f.write на audit-файлы вне shared; 0 free-text pipe; JSONL-валидация (json.loads построчно); негатив R5 |
 | glossary G4 (B11 T3, U-45/D3) | check-manifests G4-root (makefiles/manifest.mk) | root AGENTS.md глоссарий из allowed_verbs (68 строк), GENERATED-маркеры, байт-сверка через --check |
 | inventory rename (B11 T6, U-79) | `test_gate_test_inventory.py` (расширен) | rename-детекция (нормализованные file+func) → PASS+warning; удаление без пары → changelog RED; single-source регенерации (нет второго вызова sync_inventory) |

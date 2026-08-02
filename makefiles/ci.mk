@@ -1,4 +1,4 @@
-# GREP_SUMMARY: ci.mk, test, test-summary, gate, validate, lint, check-file-lines, doxygen-check, pre-commit, scripts-audit, audit, secrets-unlock
+# GREP_SUMMARY: ci.mk, test, test-summary, gate, validate, lint, check-file-lines, doxygen-check, pre-commit, scripts-audit, audit, secrets-unlock, check-exception-patterns
 # STRUCTURE: ┌variables┐ → ◇ test → ◇ test-summary → ◇ gate → ◇ validate → ◇ lint → ◇ check-file-lines → ◇ doxygen-check → ◇ pre-commit-install → ◇ pre-commit-run → ◇ scripts-audit → ◇ audit → ◇ secrets-unlock
 # region MODULE_CONTRACT
 ## @purpose  CI and quality targets — test, test-summary (agent-oriented wrapper), gate, validate, lint, pre-commit, audit, secrets
@@ -12,7 +12,7 @@
 ## @changes 2026-07-31 | DevPlan 097 close-out: doxygen-check target + gate step (zero-warnings guard)
 # endregion MODULE_CONTRACT
 
-.PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit secrets-unlock check-dead-code doxygen-check
+.PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit secrets-unlock check-dead-code check-exception-patterns doxygen-check
 
 ## test: Run tests with MARKER filter. Usage: make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all]
 ##   MARKER=all (default) — full suite in canonical order: validate → lint → gates → contract → static → predeploy → smoke → component → integration

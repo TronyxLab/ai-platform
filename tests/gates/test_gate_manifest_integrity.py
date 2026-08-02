@@ -1008,6 +1008,256 @@ def _get_phony_targets_from_repair_mk() -> set[str]:
     return set(match.group(1).split())
 
 
+# ── Dangling gate_id detector (118 G5, AC-G5) ─────────────────────────────────
+# Висячие gate_id: ссылка в repair.repairs_gates / non_repairable_gates на id,
+# которого НЕТ в gates[] и которое НЕ помечено как make-target-gate.
+# Класс make-target-gate (118 G5): check-manifests, ruff-format — make-шаги, не pytest-гейты;
+# маркируются gate_kind: make-target-gate в repairs_gates. Прямая ссылка на несуществующий
+# pytest-id ломает fix-gate repair-карту («repair резолвится в никуда»).
+_MAKE_TARGET_GATE_KIND = "make-target-gate"
+
+# region HELPERS_dangling_gate_id
+
+
+def _find_dangling_gate_ids(manifest: dict) -> list[tuple[str, str]]:
+    """Return [(section, gate_id)] for gate_ids that do not resolve to gates[] or make-target-gate.
+
+    ## @purpose — Detector for 118 G5: gate_ids in repair.repairs_gates and
+    ##            non_repairable_gates must resolve to gates[] ids OR be marked
+    ##            gate_kind: make-target-gate. Dangling refs break fix-gate repair-map.
+    ## @io — ⇥ manifest: dict → ⎋ list[tuple[str, str]]: (section, gate_id) dangling
+    ## @complexity — O(R*G + N) where R=repair entries, G=gates per entry, N=non_repairable
+    ## @invariants
+    ##   - repairs_gates entries: gate_id must be in gates[] OR gate_kind == make-target-gate
+    ##   - non_repairable_gates entries: gate_id must be in gates[] (pytest-гейты обязаны существовать)
+    ##   - Empty result = repair-map fully resolvable (AC-G5)
+    """
+    gate_ids: set[str] = {g.get("id", "") for g in manifest.get("gates", [])}
+    dangling: list[tuple[str, str]] = []
+
+    for repair_entry in manifest.get("repair", []):
+        for rg in repair_entry.get("repairs_gates", []):
+            gid = rg.get("gate_id", "")
+            if not gid:
+                continue
+            if gid not in gate_ids and rg.get("gate_kind") != _MAKE_TARGET_GATE_KIND:
+                dangling.append((f"repair:{repair_entry.get('make_target', '?')}", gid))
+                logger.warning(
+                    "[IMP:7][dangling_gate_id] repair:%s → %s (not in gates[], kind=%r)",
+                    repair_entry.get("make_target", "?"),
+                    gid,
+                    rg.get("gate_kind"),
+                )
+
+    for ng in manifest.get("non_repairable_gates", []):
+        gid = ng.get("gate_id", "")
+        if not gid:
+            continue
+        if gid not in gate_ids:
+            dangling.append(("non_repairable_gates", gid))
+            logger.warning("[IMP:7][dangling_gate_id] non_repairable_gates → %s (not in gates[])", gid)
+
+    return dangling
+
+
+# endregion HELPERS_dangling_gate_id
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# region FUNC_test_repair_gate_ids_resolve
+## @purpose  Gate: every gate_id in repair.repairs_gates and non_repairable_gates resolves
+##            to gates[] (pytest) or is marked gate_kind: make-target-gate (118 G5, AC-G5).
+##            FAIL code: DANGLING_GATE_ID
+#
+# 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · dangling gate_id in manifest repair-map (118 G5)
+# · Scenario: repair: fix-ruff → gate_id: ruff-format (нет в gates[]) / non_repairable:
+#   template-syntax-contract, r1_no_pass_tests — висячие pytest-ссылки
+# · Last fail: 118 G5 — 4 висячих gate_id (ruff-format, check-manifests, template-syntax-contract, r1_no_pass_tests)
+# · Remove if: repair-map мигрирует на другой механизм резолва (не gates[]-id)
+def test_repair_gate_ids_resolve(caplog) -> None:
+    """Gate: repair-map gate_ids resolve to gates[] or make-target-gate."""
+    manifest = _load_manifest()
+    dangling = _find_dangling_gate_ids(manifest)
+
+    logger.info("[IMP:8][dangling_gate_id] Repair-map: %d dangling gate_id(s)", len(dangling))
+    for section, gid in dangling:
+        logger.error("[IMP:9][dangling_gate_id] %s → %s", section, gid)
+
+    assert not dangling, (
+        f"[GATE:FAIL][id:repair-gate-ids-resolve] {len(dangling)} dangling gate_id(s) — "
+        f"fix-gate repair-map резолвится в никуда (118 G5):\n"
+        + "\n".join(f"  {section}: {gid}" for section, gid in dangling)
+    )
+    logger.info("[IMP:9][dangling_gate_id] ALL repair-map gate_ids resolve ✓")
+
+
+# endregion FUNC_test_repair_gate_ids_resolve
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# region FUNC_test_negative_dangling_gate_id_detected
+## @purpose  R5 ANTI-SURVIVORSHIP negative companion: детектор обязан поймать ВСЕ 4
+##            исходных висячих gate_id из 118 G5 (точный вход, поймавший баг).
+##            FAIL code: R5_NEGATIVE — детектор не ловит регрессию.
+#
+# 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · test_repair_gate_ids_resolve — 118 G5
+# · Last fail: 4 висячих gate_id в manifest (ruff-format, check-manifests без gate_kind,
+#   template-syntax-contract, r1_no_pass_tests)
+# · Remove if: repair-map перестаёт использовать gates[]-id резолв
+def test_negative_dangling_gate_id_detected(caplog) -> None:
+    """R5 negative: исходные висячие gate_id из 118 G5 детектируются."""
+    # Минимальный синтетический манифест с ВСЕМИ 4 исходными висячими ссылками 118 G5
+    synthetic: dict = {
+        "gates": [
+            {"id": "test_real_gate"},
+            {"id": "test_all_templates_use_strict_grammar"},
+            {"id": "test_r1_no_pass_tests"},
+        ],
+        "repair": [
+            {
+                "make_target": "fix-ruff",
+                "repairs_gates": [
+                    {"gate_id": "ruff-format"},  # висячий pytest-id (G5: fix-ruff → ruff-format)
+                ],
+            },
+            {
+                "make_target": "fix-gate",
+                "repairs_gates": [
+                    {"gate_id": "check-manifests"},  # висячий pytest-id (G5: fix-gate → check-manifests)
+                ],
+            },
+        ],
+        "non_repairable_gates": [
+            {"gate_id": "template-syntax-contract"},  # висячий (G5: нет в gates[], реальный id другой)
+            {"gate_id": "r1_no_pass_tests"},  # висячий (G5: в gates[] id = test_r1_no_pass_tests)
+        ],
+    }
+
+    dangling = _find_dangling_gate_ids(synthetic)
+    dangling_ids = {gid for _section, gid in dangling}
+
+    logger.info("[IMP:8][r5_negative] Dangling detected: %s", sorted(dangling_ids))
+    assert "ruff-format" in dangling_ids, "R5 FAIL: детектор не поймал висячий ruff-format (118 G5)"
+    assert "check-manifests" in dangling_ids, "R5 FAIL: детектор не поймал висячий check-manifests (118 G5)"
+    assert "template-syntax-contract" in dangling_ids, (
+        "R5 FAIL: детектор не поймал висячий template-syntax-contract (118 G5)"
+    )
+    assert "r1_no_pass_tests" in dangling_ids, "R5 FAIL: детектор не поймал висячий r1_no_pass_tests (118 G5)"
+    logger.info("[IMP:9][r5_negative] Все 4 исходных висячих gate_id детектированы ✓")
+
+
+# endregion FUNC_test_negative_dangling_gate_id_detected
+
+
+# ── Duplicate make_target detector (118 G2, AC-G2) ────────────────────────────
+# Дедуп: templates-check был объявлен ДВАЖДЫ (validate + repair). Генератор
+# (G3 merge) СОХРАНЯЕТ структурные секции verbatim → регенерация не убирает дубль.
+# Единственный канон: один make_target = одна запись во ВСЕХ структурных секциях.
+# Repair-map (repairs_gates) резолвится по имени таргета — дубль размывает канон.
+# region FUNC__find_duplicate_make_targets
+
+
+def _find_duplicate_make_targets(manifest: dict) -> list[tuple[str, list[str]]]:
+    """Return [(make_target, [sections])] for make_targets declared in >1 manifest section.
+
+    ## @purpose — Detector for 118 G2: make_target может иметь ровно одну запись
+    ##            во ВСЕХ структурных секциях manifest. Дубль (templates-check в
+    ##            validate + repair) — дрейф, который регенерация НЕ убирает.
+    ## @io — ⇥ manifest: dict → ⎋ list[tuple[str, list[str]]]: (make_target, sections)
+    ## @complexity — O(S*E) where S=sections, E=entries per section
+    ## @invariants
+    ##   - Секции: списки dict с make_target (bootstrap, deploy, validate, repair, ...)
+    ##   - allowed_verbs (простой список имён) НЕ участвует — это не make_target-секция
+    ##   - Один make_target в одной секции = канон; >1 секции = дубль (RED)
+    """
+    target_sections: dict[str, list[str]] = {}
+    for section, entries in manifest.items():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("make_target"):
+                target_sections.setdefault(entry["make_target"], []).append(section)
+
+    duplicates = [(t, sects) for t, sects in target_sections.items() if len(sects) > 1]
+    for t, sects in duplicates:
+        logger.warning(
+            "[IMP:7][dup_make_target] %s объявлен в %d секциях: %s",
+            t,
+            len(sects),
+            ", ".join(sects),
+        )
+    return duplicates
+
+
+# endregion FUNC__find_duplicate_make_targets
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# region FUNC_test_no_duplicate_make_targets
+## @purpose  Gate: каждый make_target объявлен ровно в одной структурной секции manifest
+##            (118 G2, AC-G2 — templates-check дедуп). FAIL code: DUP_MAKE_TARGET.
+#
+# 🧪 TRAP[TEST] · 2026-08-02 · REGRESSION · duplicate make_target in manifest (118 G2)
+# · Scenario: templates-check был в validate: + repair: — регенерация сохраняла дубль
+#   (генератор сохраняет структурные секции verbatim), канон размывался
+# · Last fail: 118 G2 — templates-check объявлен дважды (validate:93 + repair:479)
+# · Remove if: генератор перестаёт сохранять структурные секции verbatim
+def test_no_duplicate_make_targets(caplog) -> None:
+    """Gate: no make_target declared in >1 manifest section (templates-check dedup)."""
+    manifest = _load_manifest()
+    duplicates = _find_duplicate_make_targets(manifest)
+
+    logger.info("[IMP:8][dup_make_target] Duplicate make_target(s): %d", len(duplicates))
+    for t, sects in duplicates:
+        logger.error("[IMP:9][dup_make_target] %s → %s", t, ", ".join(sects))
+
+    assert not duplicates, (
+        f"[GATE:FAIL][id:no-duplicate-make-targets] {len(duplicates)} make_target(s) в >1 секции "
+        f"(118 G2 — templates-check дедуп):\n" + "\n".join(f"  {t}: {', '.join(sects)}" for t, sects in duplicates)
+    )
+    logger.info("[IMP:9][dup_make_target] ALL make_targets объявлены ровно в одной секции ✓")
+
+
+# endregion FUNC_test_no_duplicate_make_targets
+
+
+@pytest.mark.gate
+@ldd_trajectory
+# region FUNC_test_negative_duplicate_make_target_detected
+## @purpose  R5 ANTI-SURVIVORSHIP negative companion: детектор обязан поймать ИСХОДНЫЙ
+##            дубль из 118 G2 (templates-check в validate + repair — точный вход, поймавший баг).
+##            FAIL code: R5_NEGATIVE — детектор не ловит регрессию.
+#
+# 🧪 TRAP[TEST] · 2026-08-02 · NEGATIVE (R5) · test_no_duplicate_make_targets — 118 G2
+# · Last fail: templates-check в validate:93 + repair:479 (дубль, который регенерация не убирала)
+# · Remove if: генератор перестаёт сохранять структурные секции verbatim
+def test_negative_duplicate_make_target_detected(caplog) -> None:
+    """R5 negative: исходный дубль templates-check из 118 G2 детектируется."""
+    synthetic: dict = {
+        "validate": [
+            {"make_target": "templates-check", "description": "Dry-run проверка шаблонов"},
+        ],
+        "repair": [
+            {"make_target": "templates-check", "description": "Проверка покрытия и разрешимости шаблонов"},
+        ],
+        "deploy": [{"make_target": "deploy-project", "description": "Прямой деплой"}],
+    }
+
+    duplicates = _find_duplicate_make_targets(synthetic)
+    dup_targets = {t for t, _sects in duplicates}
+
+    logger.info("[IMP:8][r5_negative_dup] Duplicate detected: %s", sorted(dup_targets))
+    assert "templates-check" in dup_targets, "R5 FAIL: детектор не поймал дубль templates-check (118 G2)"
+    assert len(duplicates) == 1, f"R5 FAIL: ожидался 1 дубль (templates-check), получено {len(duplicates)}"
+    logger.info("[IMP:9][r5_negative_dup] Исходный дубль templates-check детектирован ✓")
+
+
+# endregion FUNC_test_negative_duplicate_make_target_detected
+
+
 @pytest.mark.gate
 @ldd_trajectory
 # region FUNC_test_repair_contract_integrity

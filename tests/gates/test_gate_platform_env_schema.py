@@ -31,6 +31,13 @@ MODULES_DIR = repo_root() / "core" / "modules"
 
 from tests._conftest.audit import discover_docker_modules
 
+# ⚠️ TRAP[TEST] · 2026-08-02 · REGRESSION · invisible-gate registration (118 G1, AC-G1)
+# · Scenario: файл существовал БЕЗ @pytest.mark.gate → невидим для `make gate` (loophole
+#   «gate зелёный, система врёт»). Модульный pytestmark регистрирует ВСЕ тесты файла.
+# · Last fail: 118 G1 — 0 @pytest.mark.gate/pytestmark в файле (339 LOC не выполнялись в gate)
+# · Remove if: gate-протокол переезжает с pytest-маркеров на другой механизм регистрации
+pytestmark = pytest.mark.gate
+
 
 @pytest.fixture(scope="module")
 def env_data() -> dict:

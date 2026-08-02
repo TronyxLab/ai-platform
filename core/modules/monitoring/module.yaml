@@ -19,6 +19,11 @@ description: "Prometheus metrics TSDB and Grafana dashboards — platform monito
 depends_on:
   - nginx
 
+# D5 (118 G4): severity/restart — мониторинг, non-critical; restart согласован с base.yml
+# (prometheus/grafana unless-stopped; one-shot init restart:"no" — carve-out)
+severity: normal
+restart: unless-stopped
+
 interfaces:
   - healthcheck
   - deploy-hook

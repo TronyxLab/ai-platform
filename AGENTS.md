@@ -124,6 +124,7 @@
 | ✅ | `check-dead-code` | Проверка мёртвого кода |
 | ✅ | `check-domain-parity` | Parity-гейт PLATFORM_DOMAIN (единое определение, 0 legacy-доменов) |
 | ✅ | `check-env-defaults` | Проверка актуальности .env.example |
+| ✅ | `check-exception-patterns` | Проверка паттернов исключений |
 | ✅ | `check-file-lines` | Проверка длины файлов |
 | ✅ | `check-manifests` | Проверка актуальности сгенерированных манифестов |
 | ✅ | `check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) |
@@ -173,7 +174,7 @@
 | ✅ | `secrets-unlock` | Расшифровка секретов |
 | ✅ | `status` | Статус compose-стека |
 | ✅ | `sync-env-defaults` | Генерация .env.example из SoT |
-| ✅ | `templates-check` | Dry-run проверка шаблонов |
+| ✅ | `templates-check` | Проверка покрытия и разрешимости шаблонов |
 | ✅ | `templates-render` | Рендер шаблонов |
 | ✅ | `test` | Запуск тестов |
 | ✅ | `test-inventory-sync` | Синхронизация test inventory |
@@ -227,7 +228,7 @@
 ⚠️ TRAP[DECISION] · 2026-07-31 · HI · Enforcement-гейты с allowlist ПРИНЯТЫ (DevPlan 116 T9) — пересмотр TRAP 2026-07-21
 · Rejected: pre-commit/pre-push hook как единственный enforcement (риск: «gate зелёный, система врёт» — хардкод-копии живут без CI-детекции)
 · Reason: решения пользователя 2026-07-31 (D1, 01-Brief §1) — parity-гейты как pytest-гейты (trinity: файл tests/gates/ + @pytest.mark.gate + entrypoint-manifest с repair-полями L1) + тонкие make-обёртки (check-profiles-parity, check-domain-parity). Гейты с allowlist: хардкод значений разрешён ТОЛЬКО в SoT (platform-infra.yaml) и generated-файлах (platform-env.yaml, .env.example); всё остальное — RED. Охват: COMPOSE_PROFILES (profiles_parity), PLATFORM_DOMAIN/test.local (domain_parity), *.template покрытие (template_manifest_coverage), копий-нет по бывшим callsites (compose_profiles_consistency).
-· 2026-08-01 (B11, DevPlan 116): волна расширяет канон — cross-layer allowlist (dotted-импорты + python3 -m, 6 задокументированных записей, НЕ растёт), audit-format R2 (единый shared writer), glossary G4 (генерируемый глоссарий root AGENTS.md), debt-freshness (реестр долга: Status+Rev, stale >90 дней → RED).
+· 2026-08-01 (B11, DevPlan 116): волна расширяет канон — cross-layer allowlist (dotted-импорты + python3 -m, 8 задокументированных записей — расширен до 8 (117: D19/D29/T52), НЕ растёт), audit-format R2 (единый shared writer), glossary G4 (генерируемый глоссарий root AGENTS.md), debt-freshness (реестр долга: Status+Rev, stale >90 дней → RED).
 · Rev: если parity-гейты начнут ложно-блокировать легитимные правки (friction > gain) → сузить allowlist или пересмотреть формат; пересмотр 2026-10-21 вместе с TRAP языковой политики.
 
 ⚠️ TRAP[DECISION] · 2026-07-21 · HI · SSH staging-gate для lib/ssh.sh — single point of failure для всех remote-операций

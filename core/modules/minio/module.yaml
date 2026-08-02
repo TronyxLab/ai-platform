@@ -18,6 +18,11 @@ install_type: docker
 description: MinIO local S3-compatible object storage for platform backup spool and langfuse events
 depends_on: []
 
+# D5 (118 G4): severity/restart — local S3, non-critical; restart согласован с base.yml
+# (minio unless-stopped; minio-createbuckets restart:"no" — one-shot init, carve-out)
+severity: normal
+restart: unless-stopped
+
 interfaces: []
 
 # @changes 2026-08-01 (DevPlan 116 B3 T8, U-67, D3): spool_dir → none — host-путь minio-data

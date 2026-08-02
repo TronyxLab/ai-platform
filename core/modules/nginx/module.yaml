@@ -17,12 +17,25 @@ description: "Reverse proxy — TLS termination, subdomain routing, auth"
 
 depends_on: []
 
+# D5 (118 G4): severity/restart/resources/env_requires — reverse proxy, critical
+# (TLS-терминация и маршрутизация ВСЕХ сервисов — deploy failure блокирует node-update);
+# restart согласован с base.yml (unless-stopped); resources — limits 256M из base.yml;
+# env_requires: [] — секреты не требуются (PLATFORM_DOMAIN передаётся через env_shared)
+severity: critical
+restart: unless-stopped
+
 interfaces:
   - healthcheck
   - deploy-hook
 
 env_shared:
   PLATFORM_DOMAIN: "${PLATFORM_DOMAIN}"
+
+resources:
+  limits:
+    memory: 256M
+
+env_requires: []
 
 spool_dir: none  # reverse proxy — no persistent data (stateless)
 

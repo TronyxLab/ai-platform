@@ -36,6 +36,13 @@ interfaces:
 
 depends_on: []
 
+# D5 (118 G4): severity — critical (fails-closed: docker.service RequiredBy platform-secrets.service,
+# отказ = docker не стартует). restart: "no" — systemd oneshot, авто-re-старта нет (unit без Restart=);
+# жизненный цикл — через systemctl (module-system.mk restart). resources: {} — N/A для systemd (нет контейнера)
+severity: critical
+restart: "no"
+resources: {}
+
 env_requires:
   - AGE_SECRET_KEY
 

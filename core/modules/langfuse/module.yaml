@@ -21,6 +21,10 @@ depends_on:
   - postgres
   - clickhouse
 
+# D5 (118 G4): severity/restart — LLM-tracing, non-critical; restart согласован с base.yml (unless-stopped)
+severity: normal
+restart: unless-stopped
+
 interfaces:
   - healthcheck
 

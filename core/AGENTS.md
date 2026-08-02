@@ -28,7 +28,6 @@
 | `make hermes-build-context` | Сборка L1→L2 образа | make hermes-build-context CONTEXT=\<context\> | core/entrypoints/build.sh → core/internal/build/hermes-images.sh build-context |
 | `make hermes-push-l1` | Push L1 в ghcr.io | make hermes-push-l1 | docker tag + docker push to ghcr.io |
 | `make hermes-push-l2` | Push L2 в ghcr.io | make hermes-push-l2 CONTEXT=\<org\> | docker tag + docker push to ghcr.io |
-| `make templates-check` | Dry-run проверка шаблонов | make templates-check | core/internal/template_engine.py check --verbose |
 | `make templates-render` | Рендер шаблонов | make templates-render | core/internal/template_engine.py render-all |
 | `make validate-modules` | Валидация module.yaml | make validate-modules | core/internal/scripts/validate_module_yaml.py --all |
 | `make validate` | Schema-валидация | make validate [FILES=...] | core/entrypoints/validate.sh → core/internal/validate/validate.sh → core/internal/validate/validate_orchestrator.py |
@@ -36,6 +35,7 @@
 | `make check-file-lines` | Проверка длины файлов | make check-file-lines [MAX_LINES=500] | core/entrypoints/check-file-lines.sh |
 | `make scripts-audit` | Аудит регистрации скриптов | make scripts-audit | core/internal/scripts-audit.sh |
 | `make check-dead-code` | Проверка мёртвого кода | make check-dead-code | core/entrypoints/check-dead-code.sh |
+| `make check-exception-patterns` | Проверка паттернов исключений | make check-exception-patterns | grep -rEn 'except Exception' core/internal/ --include='*.py' (bare except only in __main__ or |
 | `make doxygen-check` | Doxygen zero-warnings проверка | make doxygen-check | doxygen Doxyfile (zero-warnings invariant, DevPlan 097) |
 | `make test` | Запуск тестов | make test [MARKER=...] | make test [MARKER=static|smoke|component|integration|predeploy|contract|e2e|all] |
 | `make test-summary` | Запуск тестов (агент-ориентированная обёртка) | make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static|all] [TIMEOUT=1800] | core/internal/test_runner.py --marker \<MARKER\> |

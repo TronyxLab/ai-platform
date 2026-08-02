@@ -27,6 +27,9 @@ depends_on:
   - redis
   - litellm
 
+# D5 (118 G4): severity — AI agent, non-critical (деградация, не блокирует node-update)
+severity: normal
+
 interfaces:
   - healthcheck
 

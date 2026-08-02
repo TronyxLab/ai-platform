@@ -25,6 +25,11 @@ description: "LiteLLM LLM Gateway proxy — model routing, spend tracking, API k
 depends_on:
   - postgres
 
+# D5 (118 G4): severity/restart — LLM-gateway, non-critical (деградация, не блокирует node-update);
+# restart согласован с base.yml (unless-stopped)
+severity: normal
+restart: unless-stopped
+
 interfaces:
   - healthcheck
 

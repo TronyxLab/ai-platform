@@ -19,6 +19,10 @@ description: "Loki log storage and Promtail log collector — platform logging s
 
 depends_on: []
 
+# D5 (118 G4): severity/restart — логи, non-critical; restart согласован с base.yml (loki/promtail unless-stopped)
+severity: normal
+restart: unless-stopped
+
 interfaces:
   - healthcheck
 
