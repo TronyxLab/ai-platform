@@ -315,8 +315,9 @@ class TestGateStatusPageCrontabContract:
         """
         import ast
 
-        phases_path = PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "phases.py"
-        assert phases_path.exists(), f"phases.py not found: {phases_path}"
+        # DevPlan 119 E3: phases.py → phases/ пакет; phase_platform_setup живёт в phases/system.py
+        phases_path = PROJECT_ROOT / "core" / "internal" / "bootstrap" / "lifecycle" / "phases" / "system.py"
+        assert phases_path.exists(), f"phases/system.py not found: {phases_path}"
 
         tree = ast.parse(_read_file(phases_path))
         called = False

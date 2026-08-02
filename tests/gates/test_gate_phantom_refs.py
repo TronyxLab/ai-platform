@@ -1,14 +1,17 @@
-# GREP_SUMMARY: gate phantom-refs dangling-refs deploy-project.sh state_migration.py audit_logging.sh generate-dev-certs.sh strict-scan consumer-scan D3
-# STRUCTURE: ▶ ┌_PHANTOM_NAMES (4)┐ → ○ scan roots (core/ tests/ makefiles/ .github/ + root files) → ◇ re.escape(name) in line? → ⊕ violations[file:line] → ◇ _ALLOWLIST (пуст, D3) → ⎋ PASS|FAIL
+# GREP_SUMMARY: gate phantom-refs dangling-refs deploy-project.sh state_migration.py audit_logging.sh generate-dev-certs.sh strict-scan consumer-scan D3 preflight-ban check-naming
+# STRUCTURE: ▶ ┌_PHANTOM_NAMES (4) + _PREFLIGHT_BAN┐ → ○ scan roots (core/ tests/ makefiles/ .github/ .kilo/ + root files) → ◇ re.escape(name) in line? → ⊕ violations[file:line] → ◇ _ALLOWLIST (пуст, D3) → ⎋ PASS|FAIL
 # region MODULE_CONTRACT
 ## @purpose  Strict phantom-reference gate (DevPlan 116 B8 T8, D3): 0 упоминаний 4 удалённых
 ##           имён (deploy-project.sh, state_migration.py, audit_logging.sh, generate-dev-certs.sh)
 ##           в коде и CI — ВКЛЮЧАЯ docstring/TRAP-комментарии. Allowlist гейта — пустая
 ##           константа: история удаляется вместе с именами (решение пользователя 2026-08-01, D3).
+##           + DevPlan 120 AC-5 (Wave 4): 0 упоминаний «make preflight» в .kilo/* и AGENTS.md
+##           (нейминг-миграция preflight → check; таргет-алиас остаётся в makefiles/).
 ## @scope    Read-only статический скан. Корни: core/, tests/ (кроме generated
 ##           tests/test_inventory.yaml и архивного tests/test_inventory_changes.yaml),
 ##           makefiles/, .github/, + AGENTS.md, .env.example, .pre-commit-config.yaml, Makefile.
 ##           ВНЕ скоупа (архив): reports/. Исключения: .git, __pycache__, node_modules, .venv.
+##           Скан «make preflight»: .kilo/ + AGENTS.md-файлы (root/core/tests/gates).
 ## @invariants
 ##   - Детект: ЛЮБОЕ вхождение имени как подстроки (re.escape(name)), включая комментарии
 ##   - _ALLOWLIST = frozenset() — строгий режим, никаких исключений
@@ -24,6 +27,7 @@
 ##   потеря исторических TRAP-аннотаций принята (тестовая история — в test_inventory_changes.yaml).
 ## · Rev: 2026-10-21 — пересмотр, если гейт начнёт блокировать легитимную историческую документацию.
 ## @changes 2026-08-01 | Created (DevPlan 116 B8 T8)
+## @changes 2026-08-02 | DevPlan 120 AC-5: _PREFLIGHT_BAN («make preflight») — скан .kilo/ + AGENTS.md
 # endregion MODULE_CONTRACT
 
 import logging
@@ -51,6 +55,16 @@ _PHANTOM_NAMES: tuple[str, ...] = (
     "platform-deploy.sh",
 )
 
+# ── Запрет «make preflight» (DevPlan 120 AC-5, Wave 4) ─────────────────────────
+# Нейминг-миграция: preflight → check (deprecated-алиас, compose-safe-up прецедент).
+# 0 упоминаний ЛИТЕРАЛА «make preflight» в .kilo/* и root AGENTS.md (AC-5: «в .kilo/* и
+# AGENTS.md» — каноническая архитектурная документация и инструкции). core/AGENTS.md
+# canon-таблица — сгенерированный РЕЕСТР таргетов (комpose-safe-up прецедент: deprecated-
+# алиасы документируются в реестре); makefiles/core/tests могут содержать алиас и его тесты.
+_PREFLIGHT_BAN = "make preflight"
+_PREFLIGHT_SCAN_ROOTS: tuple[str, ...] = (".kilo",)
+_PREFLIGHT_SCAN_FILES: tuple[str, ...] = ("AGENTS.md",)
+
 # ── Корни скана (D3: core/, tests/, makefiles/, .github/ + файлы) ─────────────
 _SCAN_ROOTS: tuple[str, ...] = ("core", "tests", "makefiles", ".github")
 _SCAN_FILES: tuple[str, ...] = ("AGENTS.md", ".env.example", ".pre-commit-config.yaml", "Makefile")
@@ -68,20 +82,25 @@ _EXCLUDE_FILES: frozenset[str] = frozenset(
 )
 
 # Директории-исключения (части пути)
-_EXCLUDE_DIR_PARTS: frozenset[str] = frozenset({".git", "__pycache__", "node_modules", ".venv", "reports"})
+# worktrees: архивные снапшоты в .kilo/worktrees/* — исторические копии (как reports/),
+# не являются живой документацией; иначе preflight-ban скан флагит 200+ архивных упоминаний.
+_EXCLUDE_DIR_PARTS: frozenset[str] = frozenset({".git", "__pycache__", "node_modules", ".venv", "reports", "worktrees"})
 
 # D3 2026-08-01: строгий режим — история удаляется вместе с именами. Allowlist пуст.
 _ALLOWLIST: frozenset[str] = frozenset()
 
 
 # region HELPER__scan_paths
-def _scan_paths(roots: Sequence[Path]) -> list[str]:
+def _scan_paths(roots: Sequence[Path], patterns: Sequence[str] = _PHANTOM_NAMES) -> list[str]:
     """Scan files under given roots for phantom name occurrences.
 
     ## @purpose — Core scanner: walks each root, skips excluded dirs/files, and reports
     ##            every line containing a phantom name (substring, re.escape).
-    ## @io — ⇥ roots: sequence of Path → ⎋ list[str] of "rel:line: name → snippet" violations
-    ## @complexity — O(F * L * N) where F = files, L = lines, N = phantom names
+    ##            patterns — имена/литералы для детекта (default: _PHANTOM_NAMES;
+    ##            DevPlan 120 AC-5: «make preflight» для .kilo/AGENTS.md-скана).
+    ## @io — ⇥ roots: sequence of Path, patterns: sequence of str → ⎋ list[str]
+    ##           of "rel:line: name → snippet" violations
+    ## @complexity O(F * L * N) where F = files, L = lines, N = pattern count
     ## @invariants
     ##   - Detection is substring-based (re.escape(name)) — includes comments/docstrings
     ##   - Binary files skipped via NUL-byte probe (first 2048 bytes)
@@ -119,7 +138,7 @@ def _scan_paths(roots: Sequence[Path]) -> list[str]:
             violations.extend(
                 f"{rel}:{i}: {name} → {line.strip()[:100]}"
                 for i, line in enumerate(text.splitlines(), 1)
-                for name in _PHANTOM_NAMES
+                for name in patterns
                 if re.search(re.escape(name), line)
             )
 
@@ -213,3 +232,85 @@ def test_phantom_scan_detects_dummy_file(tmp_path, caplog) -> None:
 
 
 # endregion FUNC_test_phantom_scan_detects_dummy_file
+
+
+# ── Запрет «make preflight» (DevPlan 120 AC-5, Wave 4) ──────────────────────────
+
+
+# region FUNC_test_no_make_preflight_in_kilo_and_agents
+@pytest.mark.gate
+@ldd_trajectory
+def test_no_make_preflight_in_kilo_and_agents(caplog) -> None:
+    """0 упоминаний «make preflight» в .kilo/* и AGENTS.md (AC-5, нейминг-миграция).
+
+    # ▶ скан .kilo/ + AGENTS.md-файлов → ◇ литерал «make preflight»? → RED · └→ PASS
+
+    ## @purpose — DevPlan 120 AC-5 (Wave 4): preflight → check (deprecated-алиас).
+    ##            Канонические доки (.kilo/*, root AGENTS.md) не должны направлять на
+    ##            «make preflight»; таргет-алиас живёт в makefiles/ (вне скоупа скана),
+    ##            тесты алиаса — в tests/ (вне скоупа скана), canon-реестр — в core/AGENTS.md
+    ##            (сгенерированная таблица таргетов, compose-safe-up прецедент).
+    ## @io — caplog → ⎋ None (pytest.fail с файл:строка)
+    ## @complexity O(F * L)
+    """
+    # 🧪 TRAP[TEST] · DevPlan 120 AC-5 · нейминг-регресс «make preflight»
+    # · Regression: возврат «make preflight» в инструкции/доки (кодер снова гоняет preflight)
+    # · Scenario: скан .kilo/ + root/core/tests AGENTS.md на литерал _PREFLIGHT_BAN
+    # · Last fail: 2026-08-02 — 5 упоминаний в .kilo/rules/_project.md, .kilo/agents/code.md,
+    # ·   .kilo/rules/testing.md (очищены волной 120)
+    # · Remove if: preflight-алиас удалён полностью (тогда удалить и скан)
+    caplog.set_level(logging.INFO)
+
+    scan_roots: list[Path] = [ROOT / rel for rel in _PREFLIGHT_SCAN_ROOTS] + [ROOT / f for f in _PREFLIGHT_SCAN_FILES]
+    violations = _scan_paths(scan_roots, patterns=(_PREFLIGHT_BAN,))
+
+    logger.info(
+        "[IMP:8][phantom_gate][preflight-ban] Scanned %d roots, %d violation(s)", len(scan_roots), len(violations)
+    )
+
+    if violations:
+        for v in violations:
+            logger.error("[IMP:10][phantom_gate][preflight-ban] %s", v)
+        pytest.fail(
+            f"[IMP:10][phantom_gate][preflight-ban] {len(violations)} упоминание(й) «{_PREFLIGHT_BAN}» "
+            "в .kilo/* и AGENTS.md — AC-5 нейминг-миграция нарушена:\n" + "\n".join(f"  - {v}" for v in violations)
+        )
+
+    logger.critical("[IMP:9][phantom_gate][preflight-ban] PASS: 0 упоминаний «make preflight» в .kilo/* и AGENTS.md")
+
+
+# endregion FUNC_test_no_make_preflight_in_kilo_and_agents
+
+
+# region FUNC_test_preflight_ban_scan_detects_dummy
+@pytest.mark.gate
+@ldd_trajectory
+def test_preflight_ban_scan_detects_dummy(tmp_path, caplog) -> None:
+    """Falsifiability: сканер обязан находить «make preflight» в фиктивном файле (R5).
+
+    # ▶ tmp_path/dummy.md с «make preflight» → ◇ violations non-empty? → PASS
+
+    ## @purpose — Anti-survivorship: preflight-ban скан, который не может упасть, — не гейт.
+    ##            Доказывает, что _scan_paths(patterns=(_PREFLIGHT_BAN,)) реально детектирует.
+    ## @io — ⇥ tmp_path → ⎋ None (assert детекта)
+    ## @complexity O(1) — один фиктивный файл
+    """
+    # 🧪 TRAP[TEST] · DevPlan 120 AC-5 · R5 anti-survivorship для preflight-ban скана
+    # · Regression: сломанный скан (пустые корни, бинарный-пропуск) → вечнозелёный гейт
+    # · Scenario: dummy.md с «make preflight» в тексте → скан обязан найти
+    # · Last fail: N/A (первый тест)
+    # · Remove if: preflight-ban скан удалён
+    caplog.set_level(logging.INFO)
+
+    dummy = tmp_path / "dummy.md"
+    dummy.write_text("# Инструкция\n\nЗапустите make preflight для диагностики.\n")
+
+    violations = _scan_paths([tmp_path], patterns=(_PREFLIGHT_BAN,))
+    logger.info("[IMP:8][phantom_gate][preflight-ban][negative] violations: %s", violations)
+
+    assert violations, "CRITICAL: preflight-ban скан не детектировал «make preflight» — гейт вечнозелёный!"
+    assert any(_PREFLIGHT_BAN in v for v in violations), f"Сканер нашёл нарушения, но не тот литерал: {violations}"
+    logger.info("[IMP:9][phantom_gate][preflight-ban][negative] PASS: фиктивный файл с «make preflight» детектирован")
+
+
+# endregion FUNC_test_preflight_ban_scan_detects_dummy

@@ -532,13 +532,13 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     # ssl_provision_via_orchestrator/cert_orchestrator) replaced by NATIVE behavior tests in
     # tests/unit/test_phase_certificates_contract.py (import + signature + call with fake context).
 
-    # ── Check 5: WEBNAMES_API_KEY handling in phases.py ──
-    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
+    # ── Check 5: WEBNAMES_API_KEY handling in phases (DevPlan 119 E3: phases.py → phases/certs.py) ──
+    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases" / "certs.py"
     phases_content = phases_path.read_text()
     assert "WEBNAMES_API_KEY" in phases_content or "ssl_provision_via_orchestrator" in phases_content, (
-        "[IMP:9][test] FAIL: phases.py must have SSL provision handling"
+        "[IMP:9][test] FAIL: phases/certs.py must have SSL provision handling"
     )
-    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: SSL provision in phases.py")
+    logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 5 PASS: SSL provision in phases/certs.py")
 
     # ── Check 6: helpers/secrets.py has decrypt_secrets (B9 T1) ──
     secrets_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "helpers" / "secrets.py"
@@ -548,13 +548,15 @@ def test_update_ssl_step_sources_secrets_env(caplog) -> None:
     )
     logger.info("[IMP:8][test_update_ssl_step_sources_secrets_env] Check 6 PASS: helpers/secrets.py handles secrets")
 
-    # ── Check 7: phase_secrets_provision and phase_certificates exist in phases.py ──
-    assert "phase_secrets_provision" in phases_content, (
-        "[IMP:9][test] FAIL: phases.py must have phase_secrets_provision"
+    # ── Check 7: phase_secrets_provision (secrets.py) и phase_certificates (certs.py) в phases-пакете ──
+    secrets_phase_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases" / "secrets.py"
+    secrets_phase_content = secrets_phase_path.read_text()
+    assert "phase_secrets_provision" in secrets_phase_content, (
+        "[IMP:9][test] FAIL: phases/secrets.py must have phase_secrets_provision"
     )
-    assert "phase_certificates" in phases_content, "[IMP:9][test] FAIL: phases.py must have phase_certificates"
+    assert "phase_certificates" in phases_content, "[IMP:9][test] FAIL: phases/certs.py must have phase_certificates"
     logger.info(
-        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 7 PASS: phase_secrets and phase_cert in phases.py"
+        "[IMP:8][test_update_ssl_step_sources_secrets_env] Check 7 PASS: phase_secrets and phase_cert in phases package"
     )
 
     logger.info("[IMP:9][test_update_ssl_step_sources_secrets_env] ALL CHECKS PASS")
@@ -664,13 +666,20 @@ def test_checkpoint_step_uses_content_hash(caplog) -> None:
     )
     logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 2 PASS: state_machine.py has hash-check")
 
-    # ── Check 3: phases.py has _install_acme and other phase functions ──
-    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
-    phases_content = phases_path.read_text()
-    assert "phase_system_bootstrap" in phases_content, "FAIL: phases.py must have phase_system_bootstrap"
-    assert "phase_deploy_services" in phases_content, "FAIL: phases.py must have phase_deploy_services"
-    assert "phase_converge_services" in phases_content, "FAIL: phases.py must have phase_converge_services"
-    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 3 PASS: phases.py has 14 phase functions")
+    # ── Check 3: phases package has 14 phase functions (DevPlan 119 E3: phases.py → phases/) ──
+    # Доменные модули: system.py (φ1/φ2/φ3/φ5/φ8.5/φ10/φ13), docker.py (φ6/φ8/φ11/φ12),
+    # secrets.py (φ4/φ9), certs.py (φ7). Проверяем конкатенацию пакета.
+    phases_pkg = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases"
+    assert phases_pkg.is_dir(), f"FAIL: phases/ package not found: {phases_pkg}"
+    phases_content = ""
+    for _ph in sorted(phases_pkg.glob("*.py")):
+        if _ph.name == "__init__.py":
+            continue  # агрегатор не несёт бизнес-логики (AC-E3.1)
+        phases_content += _ph.read_text()
+    assert "phase_system_bootstrap" in phases_content, "FAIL: phases must have phase_system_bootstrap"
+    assert "phase_deploy_services" in phases_content, "FAIL: phases must have phase_deploy_services"
+    assert "phase_converge_services" in phases_content, "FAIL: phases must have phase_converge_services"
+    logger.info("[IMP:8][test_checkpoint_step_uses_content_hash] Check 3 PASS: phases package has 14 phase functions")
 
     # ── Check 4: state_machine.py has BootstrapPhase enum with 14 values ──
     assert "BootstrapPhase" in sm_content, "FAIL: state_machine.py must have BootstrapPhase enum"
@@ -733,11 +742,11 @@ def test_tor_conditional_branch(caplog) -> None:
     assert "TOR_ENABLED" in sm_content, "FAIL: state_machine.py must handle TOR_ENABLED"
     logger.info("[IMP:8][test_tor_conditional_branch] Check 3 PASS: state_machine.py handles TOR")
 
-    # ── Check 4: phases.py has TOR logic in phase_system_bootstrap ──
-    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases.py"
+    # ── Check 4: phases (system domain) has TOR logic in phase_system_bootstrap (E3) ──
+    phases_path = LIFECYCLE_SCRIPT.parent / "lifecycle" / "phases" / "system.py"
     phases_content = phases_path.read_text()
-    assert "tor" in phases_content.lower(), "FAIL: phases.py must have tor-related logic"
-    logger.info("[IMP:8][test_tor_conditional_branch] Check 4 PASS: phases.py handles tor")
+    assert "tor" in phases_content.lower(), "FAIL: phases/system.py must have tor-related logic"
+    logger.info("[IMP:8][test_tor_conditional_branch] Check 4 PASS: phases/system.py handles tor")
 
     logger.info("[IMP:9][test_tor_conditional_branch] ALL CHECKS PASS")
 

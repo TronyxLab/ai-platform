@@ -45,6 +45,8 @@ _CORE_DIR = Path(__file__).resolve().parent.parent.parent  # core/
 if str(_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(_CORE_DIR))
 
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared.atomic_writer import atomic_write_json as _atomic_write_json
 from core.internal.shared.docker_auth import docker_login as shared_docker_login
 from core.internal.shared.timeouts import (
     DOCKER_CMD_TIMEOUT,
@@ -208,13 +210,9 @@ def _write_daemon_json(mirror_url: str) -> bool:
     if "log-opts" not in existing:
         existing["log-opts"] = {"max-size": "10m", "max-file": "3"}
 
-    # Write atomically (write to tmp then rename)
-    os.makedirs(os.path.dirname(DAEMON_JSON_PATH), exist_ok=True)
-    tmp_path = DAEMON_JSON_PATH + ".tmp"
+    # Write atomically (shared atomic_writer canon — E5: tempfile + fsync + os.replace)
     try:
-        with open(tmp_path, "w") as f:
-            json.dump(existing, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, DAEMON_JSON_PATH)
+        _atomic_write_json(DAEMON_JSON_PATH, existing)
         logger.info("[IMP:9][docker_auth] daemon.json written with registry-mirrors: %s", mirrors)
         return True
     except OSError as e:

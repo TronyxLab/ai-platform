@@ -17,9 +17,10 @@
 import argparse
 import json
 import logging
-import os
 import sys
-import tempfile
+
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared.atomic_writer import atomic_write_json as _atomic_write_json
 
 logger = logging.getLogger("docker_daemon")
 
@@ -42,17 +43,9 @@ def merge_live_restore(daemon_json: str) -> bool:
 
     config["live-restore"] = True
 
-    # Atomic write: tmp file in same dir → os.replace
+    # Atomic write: shared atomic_writer canon (E5 — tempfile + fsync + os.replace)
     try:
-        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(daemon_json) or ".", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-                f.write("\n")
-            os.replace(tmp_path, daemon_json)
-        except OSError:
-            os.unlink(tmp_path)
-            raise
+        _atomic_write_json(daemon_json, config)
     except OSError as e:
         logger.error("[IMP:10][docker_daemon] Cannot write %s: %s", daemon_json, e)
         return False

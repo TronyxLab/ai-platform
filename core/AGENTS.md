@@ -82,7 +82,9 @@
 | `make fix-executable-bit` | Исправление executable bit на .sh файлах | make fix-executable-bit [DRY_RUN=1] | git add --chmod=+x + git update-index --chmod=+x |
 | `make fix-ruff` | Форматирование Python файлов через ruff | make fix-ruff [SCOPE=diff|staged|all] [DRY_RUN=1] | ruff check --fix + ruff format |
 | `make fix-gate` | Композитное исправление gate-ошибок | make fix-gate [DRY_RUN=1] | fix-executable-bit + fix-ruff + generate-manifests |
-| `make preflight` | Параллельный preflight (сбор всех ошибок gate за один проход) | make preflight [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1] | python3 -m core.internal.preflight [--skip-fix] [--json] [--workers N] |
+| `make preflight` | Deprecated-алиас — диагностика через make check | preflight (deprecated — используйте check) | python3 -m core.internal.check_suite run --mode diagnostic (через deprecated-фасад core/internal/preflight.py — DevPlan 120) |
+| `make check` | Диагностика — все проверки из core/check-suite.yaml (экс-preflight) | make check [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1] [CHECK_CACHE=0] | python3 -m core.internal.check_suite run --mode diagnostic (SoT core/check-suite.yaml) |
+| `make check-diff` | Узкая диагностика по изменённым файлам | make check-diff | python3 -m core.internal.check_suite run --mode diff |
 | `make check-profiles-parity` | Parity-гейт COMPOSE_PROFILES (единый SoT platform-infra.yaml) | make check-profiles-parity | pytest tests/gates/test_gate_profiles_parity.py (COMPOSE_PROFILES SoT parity, DevPlan 116 T9) |
 | `make check-domain-parity` | Parity-гейт PLATFORM_DOMAIN (единое определение, 0 legacy-доменов) | make check-domain-parity | pytest tests/gates/test_gate_domain_parity.py (PLATFORM_DOMAIN SoT parity, DevPlan 116 T9) |
 | `make templates-check` | Проверка покрытия и разрешимости шаблонов | make templates-check | core/internal/template_engine.py check (template-manifest coverage) |

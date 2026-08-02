@@ -58,7 +58,8 @@ _DEPLOY_MODULES_SH = repo_root() / "core" / "internal" / "bootstrap" / "deploy-m
 _NODE_LIFECYCLE_SH = repo_root() / "core" / "internal" / "bootstrap" / "node-lifecycle.sh"
 _BOOTSTRAP_DIR = repo_root() / "core" / "internal" / "bootstrap"
 _STATE_MACHINE_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "state_machine.py"
-_PHASES_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "phases.py"
+# DevPlan 119 E3: phases.py → phases/ пакет; deploy-фазы (φ8/φ12) живут в phases/docker.py.
+_PHASES_PY = repo_root() / "core" / "internal" / "bootstrap" / "lifecycle" / "phases" / "docker.py"
 _DEPLOY_PYTHON_DIR = repo_root() / "core" / "internal" / "bootstrap" / "deploy"
 # DevPlan 100: routing + deploy delegation moved from deploy-modules.sh facade to deploy_orchestrator.py.
 # Static grep-цели для python-вызовов (secrets_validator/sudoers_generator/orphan_reconciler) указывают сюда.

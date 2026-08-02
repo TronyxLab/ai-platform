@@ -21,6 +21,9 @@ import logging
 import os
 import time
 
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared.atomic_writer import atomic_write_json as _atomic_write_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,15 +145,8 @@ class CacheManager:
         }
 
         try:
-            # Write atomically using tempfile in same dir, then replace
-            import tempfile
-
-            fd, tmp_path = tempfile.mkstemp(dir=self.cache_dir, suffix=".tmp")
-            with os.fdopen(fd, "w") as tmp:
-                json.dump(cache_entry, tmp, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-            os.replace(tmp_path, cache_path)
+            # Atomic write via shared atomic_writer canon (E5 — tempfile + fsync + os.replace)
+            _atomic_write_json(cache_path, cache_entry)
             _logger.info("[IMP:9][cache][set] Cache updated: %s", key)
         except (OSError, TypeError) as exc:
             _logger.warning("[IMP:8][cache][set] Cache write failed for %s: %s", key, exc)

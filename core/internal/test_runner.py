@@ -28,6 +28,10 @@
 ## @changes 2026-07-31 | DevPlan 098 close-out (VR 098): MARKER=all (AC2, DRIFT-2) —
 ##            _run_all_suites + merge_junit агрегация; FAIL compression (AC1) —
 ##            MAX_FAIL_DETAILS=20 при >20 failures; doxygen docstring XML-escape (DevPlan 097)
+## @changes 2026-08-02 | DevPlan 120 §3.3 (Wave 1): xdist (-n auto) во ВСЕ pytest-инвокации
+##            (marker-режим, _run_static_full, _run_all_suites) при доступности pytest-xdist;
+##            TEST_NO_XDIST=1 отключает (слабые машины, диагностика гонок). test_file-режим
+##            (один файл) — без xdist (нет выигрыша). Корень ускорения preflight 254s → ~60s.
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -100,6 +104,46 @@ _ALL_SUITES_ORDER: list[str] = [
 # "... and M more" — компактный режим держит < 100 строк при ЛЮБОМ числе failures (ранее
 # 2 строки на failure: 119 failures → 244 строки, DevPlan 098 AC1 нарушен).
 MAX_FAIL_DETAILS = 20
+
+
+# region FUNC_HAS_XDIST
+## @purpose  Проверка доступности pytest-xdist (DevPlan 120 §3.3): локальный дубль
+##           _has_xdist из прежнего preflight.py (предписан планом: «перенос в shared
+##           или локальный дубль»). Любая ошибка = недоступен (best-effort).
+## @io       ⇥ python_path: str → bool
+## @complexity O(1) — subprocess python -c "import xdist"
+def _has_xdist(python_path: str) -> bool:
+    """Check if pytest-xdist is available for the given Python."""
+    try:
+        result = subprocess.run(
+            [python_path, "-c", "import xdist"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:  # noqa: EXC — best-effort availability check, any failure = unavailable
+        return False
+
+
+# endregion FUNC_HAS_XDIST
+
+
+# region FUNC_XDIST_ARGS
+## @purpose  pytest-аргументы xdist: ["-n", "auto"] при доступности xdist и отсутствии
+##           TEST_NO_XDIST=1 (слабые машины, диагностика гонок); [] иначе.
+##           Меняется ТОЛЬКО способ исполнения, не набор тестов (AC-9 честность).
+## @io       → ⎋ list[str] ([] или ["-n", "auto"])
+## @complexity O(1)
+def _xdist_args() -> list[str]:
+    """Return pytest xdist args (`-n auto`) unless TEST_NO_XDIST=1 or xdist unavailable."""
+    if os.environ.get("TEST_NO_XDIST") == "1":
+        return []
+    if _has_xdist(sys.executable):
+        return ["-n", "auto"]
+    return []
+
+
+# endregion FUNC_XDIST_ARGS
 
 
 # region FUNC_TESTSUMMARY
@@ -349,7 +393,7 @@ def _run_static_full(platform_root: Path, junit_path: Path, timeout: int) -> int
             print((r2.stderr or r2.stdout or "")[-4000:], file=sys.stderr)
             return r2.returncode
 
-        pytest_args = ["-m", _STATIC_AUDIT_EXPR, "--junitxml", str(junit_path)]
+        pytest_args = [*_xdist_args(), "-m", _STATIC_AUDIT_EXPR, "--junitxml", str(junit_path)]
         logger.info("[IMP:7][static_full][pytest] Running pytest static_audit: %s", " ".join(pytest_args))
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
@@ -397,7 +441,7 @@ def _run_all_suites(platform_root: Path, junit_path: Path, timeout: int) -> int:
         args = MARKER_MAP[marker]
         assert args is not None, f"_ALL_SUITES_ORDER содержит special handler: {marker}"
         suite_junit = suite_dir / f"junit-{marker}.xml"
-        pytest_args = [*args, "--junitxml", str(suite_junit)]
+        pytest_args = [*_xdist_args(), *args, "--junitxml", str(suite_junit)]
         logger.info("[IMP:7][all_suites][run] Suite marker=%s", marker)
         proc: subprocess.CompletedProcess[str] | None = None
         try:
@@ -611,7 +655,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 pytest_args = _build_pytest_args(args.marker)
                 assert pytest_args is not None, f"marker={args.marker} не special handler, но вернул None"
-                pytest_args = [*pytest_args, "--junitxml", str(junit_path)]
+                pytest_args = [*_xdist_args(), *pytest_args, "--junitxml", str(junit_path)]
                 env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
                 try:
                     logger.info(

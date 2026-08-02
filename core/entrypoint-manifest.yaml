@@ -397,13 +397,29 @@ repair:
     repair_class: L1
 - make_target: preflight
   mechanism: python-script
-  delegates_to: python3 -m core.internal.preflight [--skip-fix] [--json] [--workers
-    N]
-  signature: make preflight [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1]
-  operation_ru: Параллельный preflight (сбор всех ошибок gate за один проход)
-  description: 'Agent-oriented preflight — run ALL gate checks in parallel (Phase
-    1: fix-gate, Phase 2: pre-commit, Phase 3: 8 checks parallel). Eliminates iterative
-    fix→gate→fix→gate cycle. Does NOT replace gate — gate remains authoritative.'
+  deprecated: true
+  delegates_to: python3 -m core.internal.check_suite run --mode diagnostic (через
+    deprecated-фасад core/internal/preflight.py — DevPlan 120)
+  signature: preflight (deprecated — используйте check)
+  operation_ru: Deprecated-алиас — диагностика через make check
+  description: 'Deprecated alias for check (compose-safe-up прецедент, DevPlan 120
+    AC-5). Прежние флаги WORKERS/JSON/SKIP_FIX/VERBOSE работают через фасад. Нейминг-миграция:
+    0 упоминаний глагола preflight в .kilo/* и AGENTS.md — гейт phantom-refs.'
+- make_target: check
+  mechanism: python-script
+  delegates_to: python3 -m core.internal.check_suite run --mode diagnostic (SoT core/check-suite.yaml)
+  signature: make check [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1] [CHECK_CACHE=0]
+  operation_ru: Диагностика — все проверки из core/check-suite.yaml (экс-preflight)
+  description: 'Диагностический executor на SoT-манифесте (DevPlan 120): fix-фаза
+    → fingerprint-кэш (replay зелёного прогона) → static параллельно + pytest последовательно
+    с xdist → единый отчёт. НЕ заменяет gate — канонический арбитр.'
+- make_target: check-diff
+  mechanism: python-script
+  delegates_to: python3 -m core.internal.check_suite run --mode diff
+  signature: make check-diff
+  operation_ru: Узкая диагностика по изменённым файлам
+  description: 'Diff-скоуп (DevPlan 120 §3.5): pre-commit --files + ruff по diff +
+    pytest изменённых test-файлов; без кэша; пустой diff → exit 0.'
 - make_target: check-profiles-parity
   mechanism: pytest-gate
   delegates_to: pytest tests/gates/test_gate_profiles_parity.py (COMPOSE_PROFILES
@@ -788,7 +804,9 @@ allowed_verbs:
 - adopt-project
 - backup
 - bootstrap-node
+- check
 - check-dead-code
+- check-diff
 - check-domain-parity
 - check-env-defaults
 - check-exception-patterns
@@ -882,6 +900,21 @@ gates:
 - id: test_broad_except_requires_noqa_and_policy_marker
   test_file: test_gate_broad_except_allowlist.py
   description: 'Auto-discovered gate: test_broad_except_requires_noqa_and_policy_marker'
+- id: step_parity_golden
+  test_file: test_gate_check_suite_consistency.py
+  description: 'Auto-discovered gate: step_parity_golden'
+- id: test_hole_coverage_present
+  test_file: test_gate_check_suite_consistency.py
+  description: 'Auto-discovered gate: test_hole_coverage_present'
+- id: test_manifest_checks_valid
+  test_file: test_gate_check_suite_consistency.py
+  description: 'Auto-discovered gate: test_manifest_checks_valid'
+- id: test_no_hardcoded_checks_in_makefiles
+  test_file: test_gate_check_suite_consistency.py
+  description: 'Auto-discovered gate: test_no_hardcoded_checks_in_makefiles'
+- id: test_registration_in_entrypoint_manifest
+  test_file: test_gate_check_suite_consistency.py
+  description: 'Auto-discovered gate: test_registration_in_entrypoint_manifest'
 - id: test_check_doc_headers_equivalent
   test_file: test_gate_ci_coverage.py
   description: 'Auto-discovered gate: test_check_doc_headers_equivalent'
@@ -1626,12 +1659,18 @@ gates:
 - id: test_no_opt_core_references
   test_file: test_gate_path_consistency.py
   description: 'Auto-discovered gate: test_no_opt_core_references'
+- id: test_no_make_preflight_in_kilo_and_agents
+  test_file: test_gate_phantom_refs.py
+  description: 'Auto-discovered gate: test_no_make_preflight_in_kilo_and_agents'
 - id: test_no_phantom_names_in_code_and_ci
   test_file: test_gate_phantom_refs.py
   description: 'Auto-discovered gate: test_no_phantom_names_in_code_and_ci'
 - id: test_phantom_scan_detects_dummy_file
   test_file: test_gate_phantom_refs.py
   description: 'Auto-discovered gate: test_phantom_scan_detects_dummy_file'
+- id: test_preflight_ban_scan_detects_dummy
+  test_file: test_gate_phantom_refs.py
+  description: 'Auto-discovered gate: test_preflight_ban_scan_detects_dummy'
 - id: test_env_defaults_do_not_contain_dot_env_keys
   test_file: test_gate_platform_env_schema.py
   description: 'Auto-discovered gate: test_env_defaults_do_not_contain_dot_env_keys'

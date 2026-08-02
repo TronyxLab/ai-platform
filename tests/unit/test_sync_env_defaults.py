@@ -285,16 +285,16 @@ def test_check_mode_detects_divergence(caplog, tmp_path):
 
 
 # 🧪 TRAP[TEST] · Regression · write_atomic cleans up temp file on error
-# · Scenario: os.rename raises → temp file cleaned up, no partial output left
-# · Last fail: N/A (new test)
+# · Scenario: os.replace raises → temp file cleaned up, no partial output left
+# · Last fail: N/A (new test); patched os.replace (canon primitive — DevPlan 119 E5)
 # · Remove if: write_atomic logic changes
 @ldd_trajectory
 def test_atomic_write(caplog, tmp_path):
     """write_atomic should clean up temp file on error, leaving no partial output."""
     output_path = tmp_path / ".env.example"
 
-    # Mock os.rename to raise an exception
-    with unittest.mock.patch.object(os, "rename", side_effect=OSError("Permission denied")), pytest.raises(OSError):
+    # Mock os.replace to raise an exception (E5: canonical atomic_writer uses os.replace)
+    with unittest.mock.patch.object(os, "replace", side_effect=OSError("Permission denied")), pytest.raises(OSError):
         sed.write_atomic("test content", output_path)
 
     # Verify output file was NOT created

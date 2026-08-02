@@ -1,6 +1,6 @@
 """
-# GREP_SUMMARY: test_test_runner, junit-xml-parse, testsuites-wrapper, format-summary, build-pytest-args, build-pytest-args-file, marker-map, compact-output, all-marker, compression, TRAP-regression
-# STRUCTURE: ▶ tmp_path XML fixtures → ◇ parse_junit_xml (pass/fail/error/testsuites-wrapper) → ◇ format_summary compressed-bound (MAX_FAIL_DETAILS) → ◇ _build_pytest_args (static/all/unknown) → ◇ _build_pytest_args_file (AC6) → ⎋ LDD IMP:9 trajectory
+# GREP_SUMMARY: test_test_runner, junit-xml-parse, testsuites-wrapper, format-summary, build-pytest-args, build-pytest-args-file, marker-map, compact-output, all-marker, compression, TRAP-regression, xdist-args, TEST_NO_XDIST
+# STRUCTURE: ▶ tmp_path XML fixtures → ◇ parse_junit_xml (pass/fail/error/testsuites-wrapper) → ◇ format_summary compressed-bound (MAX_FAIL_DETAILS) → ◇ _build_pytest_args (static/all/unknown) → ◇ _build_pytest_args_file (AC6) → ◇ _xdist_args (DevPlan 120: enabled/TEST_NO_XDIST/unavailable/3 insertion sites) → ⎋ LDD IMP:9 trajectory
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/test_runner.py — JUnit XML → TestSummary parsing,
 ##           compact summary formatting, marker → pytest args mapping (DevPlan 098 Wave 4, F4).
@@ -357,3 +357,84 @@ def test_build_pytest_args_file(caplog):
 
 
 # endregion Tests: _build_pytest_args_file
+
+
+# ═══════════════════════════════════════════════════════════════
+# region Tests: xdist args (DevPlan 120 Wave 1 — §3.3)
+# ═══════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · DevPlan 120 §3.3 · xdist: _xdist_args() возвращает -n auto при доступности
+# · Scenario: _has_xdist(monkeypatch→True) → ["-n", "auto"]
+# · Last fail: N/A (новый тест — корень ускорения static_audit 254s → ~60s)
+# · Remove if: xdist-политика test_runner изменена
+@ldd_trajectory
+def test_xdist_args_enabled(caplog, monkeypatch):
+    """DevPlan 120: _xdist_args() → ['-n', 'auto'] при доступном pytest-xdist."""
+    from core.internal.test_runner import _xdist_args
+
+    monkeypatch.setenv("TEST_NO_XDIST", "")
+    monkeypatch.delenv("TEST_NO_XDIST", raising=False)
+    monkeypatch.setattr("core.internal.test_runner._has_xdist", lambda python_path: True)
+
+    args = _xdist_args()
+    assert args == ["-n", "auto"], f"ожидался -n auto, got {args}"
+    logger.critical("[IMP:9][test] _xdist_args → %s (xdist доступен)", args)
+
+
+# 🧪 TRAP[TEST] · DevPlan 120 §3.3 · xdist: TEST_NO_XDIST=1 отключает -n auto
+# · Scenario: TEST_NO_XDIST=1 → [] даже при доступном xdist
+# · Last fail: N/A
+# · Remove if: TEST_NO_XDIST удалён
+@ldd_trajectory
+def test_xdist_args_disabled_by_env(caplog, monkeypatch):
+    """TEST_NO_XDIST=1 → [] (слабые машины, диагностика гонок)."""
+    from core.internal.test_runner import _xdist_args
+
+    monkeypatch.setenv("TEST_NO_XDIST", "1")
+    monkeypatch.setattr("core.internal.test_runner._has_xdist", lambda python_path: True)
+
+    assert _xdist_args() == []
+    logger.critical("[IMP:9][test] _xdist_args → [] (TEST_NO_XDIST=1)")
+
+
+# 🧪 TRAP[TEST] · DevPlan 120 §3.3 · xdist: недоступный xdist → без -n
+# · Scenario: _has_xdist(→False) → []
+# · Last fail: N/A
+# · Remove if: fallback-семантика изменена
+@ldd_trajectory
+def test_xdist_args_unavailable(caplog, monkeypatch):
+    """xdist недоступен → [] (graceful degradation)."""
+    from core.internal.test_runner import _xdist_args
+
+    monkeypatch.delenv("TEST_NO_XDIST", raising=False)
+    monkeypatch.setattr("core.internal.test_runner._has_xdist", lambda python_path: False)
+
+    assert _xdist_args() == []
+    logger.critical("[IMP:9][test] _xdist_args → [] (xdist недоступен)")
+
+
+# 🧪 TRAP[TEST] · DevPlan 120 §3.3 · structural: все 3 pytest-инвокации используют *_xdist_args()
+# · Scenario: source-скан — marker-режим, _run_static_full, _run_all_suites содержат *_xdist_args()
+# ·   ПЕРЕД -m (порядок аргументов: -n auto перед -m, DevPlan §3.3)
+# · Last fail: N/A
+# · Remove if: xdist-вставка вынесена в отдельный модуль (обновить скан)
+@ldd_trajectory
+def test_xdist_inserted_in_all_pytest_invocations(caplog):
+    """Все pytest-инвокации test_runner получают *_xdist_args() перед -m."""
+    from pathlib import Path
+
+    import core.internal.test_runner as tr_module
+
+    source = Path(tr_module.__file__).read_text(encoding="utf-8")
+
+    # marker-режим main(): pytest_args = [*_xdist_args(), *pytest_args, "--junitxml", ...]
+    assert "*_xdist_args(), *pytest_args" in source, "marker-режим main() не вставляет xdist"
+    # _run_static_full: [*_xdist_args(), "-m", _STATIC_AUDIT_EXPR, ...]
+    assert '*_xdist_args(), "-m"' in source, "_run_static_full не вставляет xdist перед -m"
+    # _run_all_suites: [*_xdist_args(), *args, "--junitxml", ...]
+    assert "*_xdist_args(), *args" in source, "_run_all_suites не вставляет xdist"
+    logger.critical("[IMP:9][test] xdist вставлен во все 3 pytest-инвокации (marker/static_full/all_suites)")
+
+
+# endregion Tests: xdist args (DevPlan 120)

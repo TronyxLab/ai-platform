@@ -1,15 +1,19 @@
-# GREP_SUMMARY: ci.mk, test, test-summary, gate, validate, lint, check-file-lines, doxygen-check, pre-commit, scripts-audit, audit, secrets-unlock, check-exception-patterns
-# STRUCTURE: ┌variables┐ → ◇ test → ◇ test-summary → ◇ gate → ◇ validate → ◇ lint → ◇ check-file-lines → ◇ doxygen-check → ◇ pre-commit-install → ◇ pre-commit-run → ◇ scripts-audit → ◇ audit → ◇ secrets-unlock
+# GREP_SUMMARY: ci.mk, test, test-summary, gate, validate, lint, check-file-lines, doxygen-check, pre-commit, scripts-audit, audit, secrets-unlock, check-exception-patterns, check-suite-portal
+# STRUCTURE: ┌variables┐ → ◇ test → ◇ test-summary → ◇ gate (check_suite portal) → ◇ validate → ◇ lint → ◇ check-file-lines → ◇ doxygen-check → ◇ pre-commit-install → ◇ pre-commit-run → ◇ scripts-audit → ◇ audit → ◇ secrets-unlock
 # region MODULE_CONTRACT
 ## @purpose  CI and quality targets — test, test-summary (agent-oriented wrapper), gate, validate, lint, pre-commit, audit, secrets
-## @scope    Included from root Makefile; uses pytest + shell entrypoints + Python test_runner
+## @scope    Included from root Makefile; uses pytest + shell entrypoints + Python test_runner + check_suite executor
 ## @invariants
 ##   - gate MODE=fast must pass before push (CI pre-flight rule)
 ##   - gate MODE=fast включает doxygen-check (zero-warnings инвариант DevPlan 097)
+##   - gate — портал на core/check-suite.yaml (DevPlan 120): 0 hardcoded-списков/маркерных
+##     выражений в таргете; порядок шагов из манифеста (паритет прежнего ci.mk — golden-гейт)
 ##   - test MARKER=all runs canonical order: validate→lint→gates→contract→static→predeploy→smoke→component→integration
 ##   - test-summary delegates to core/internal/test_runner.py — compact agent-oriented output
-## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy
+## @rationale Makefile include-split W4-E4: CI targets isolated from bootstrap/deploy.
+##            DevPlan 120 (Wave 2): gate через executor — CI/workflows БЕЗ изменений получают xdist.
 ## @changes 2026-07-31 | DevPlan 097 close-out: doxygen-check target + gate step (zero-warnings guard)
+## @changes 2026-08-02 | DevPlan 120 Wave 2: gate → check_suite run --gate-mode (портал манифеста)
 # endregion MODULE_CONTRACT
 
 .PHONY: test test-summary test-node gate validate lint check-file-lines pre-commit-install pre-commit-run scripts-audit secrets-unlock check-dead-code check-exception-patterns doxygen-check
@@ -128,114 +132,21 @@ test-summary:
 		@$(PYTHON) -m core.internal.test_runner --marker $(MARKER) --timeout $(TIMEOUT) \
 	)
 
-## gate: Production Gate. Usage: make gate [MODE=fast|full|ci-docker] [PROJECT=<name>]
+## gate: Production Gate (портал на SoT-манифесте core/check-suite.yaml, DevPlan 120).
+##   Usage: make gate [MODE=fast|full|ci-docker] [PROJECT=<name>] [SKIP_PRECOMMIT=1]
 ##   MODE=full (default) — validate → lint → gates → contract → static → predeploy → smoke → component
-##   MODE=fast — validate → lint → gates → contract → static → predeploy (no Docker)
+##   MODE=fast — pre-commit → validate → check-dead-code → check-exception-patterns → doxygen-check →
+##     gates → gates-docker → contract → static → predeploy (no Docker, fail-fast)
 ##   MODE=ci-docker — predeploy-docker → smoke → component (Docker stack, no static duplication)
 ##   PROJECT=<name> — filter predeploy tests to a specific project (used in CI deploy workflow)
+##   SKIP_PRECOMMIT=1 — пропуск pre-commit шага (CI-паритет)
+##   Семантика неизменна (порядок шагов = прежний ci.mk, fail-fast fast / accumulate+merge
+##   full/ci-docker); изменяется ТОЛЬКО способ исполнения pytest-шагов (xdist). БЕЗ кэша.
 gate:
 	$(eval MODE := $(or $(MODE),full))
-	@if [ "$(MODE)" = "fast" ]; then \
-		echo "[IMP:7][make][gate] MODE=fast — 8 steps: pre-commit, validate, check-dead-code, check-exception-patterns, gates, contract, static, predeploy..."; \
-		rm -f tests/report.xml tests/report*.xml && \
-		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
-			echo "[IMP:7][make][gate] Step 1/8: pre-commit-run..."; \
-			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; exit 1; }; \
-		else \
-			echo "[IMP:7][make][gate] Step 1/8: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
-		fi; \
-		echo "[IMP:7][make][gate] Step 2/8: validate..."; \
-		bash $(_platform_root)/core/entrypoints/validate.sh || { echo "[IMP:9][make][gate] FAIL: validate"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 2b/8: check-dead-code..."; \
-		$(MAKE) check-dead-code || { echo "[IMP:9][make][gate] FAIL: check-dead-code"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 2c/8: check-exception-patterns..."; \
-		$(MAKE) check-exception-patterns || { echo "[IMP:9][make][gate] FAIL: check-exception-patterns"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 2d/8: doxygen-check (zero-warnings invariant, DevPlan 097)..."; \
-		$(MAKE) doxygen-check || { echo "[IMP:9][make][gate] FAIL: doxygen-check"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 3a/8: anti-drift CI gates (static, parallel)..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v || { echo "[IMP:9][make][gate] FAIL: gates (static)"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 3b/6: anti-drift CI gates (Docker, sequential)..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ -m "gate and requires_docker" -v \
-			|| test $$? -eq 5 \
-			|| { echo "[IMP:9][make][gate] FAIL: gates (Docker)"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 4/6: contract tests..."; \
-		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 5/6: static tests (no Docker) — compact via test_runner..."; \
-		$(PYTHON) -m core.internal.test_runner --marker static_audit --junit-output tests/report-static.xml || { echo "[IMP:9][make][gate] FAIL: static"; exit 1; }; \
-		echo "[IMP:7][make][gate] Step 6/6: predeploy tests (PROJECT=$(or $(PROJECT),all))..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy and not requires_docker" -v --tb=short -rs \
-			$(if $(PROJECT),-k "$(PROJECT)",) \
-			--junitxml=tests/report-predeploy.xml || { echo "[IMP:9][make][gate] FAIL: predeploy"; exit 1; }; \
-	elif [ "$(MODE)" = "full" ]; then \
-		echo "[IMP:7][make][gate] MODE=full — running complete gate pipeline (canonical order)..."; \
-		GATE_FAILED=0; \
-		rm -f tests/report.xml tests/report*.xml; \
-		if [ -z "$(SKIP_PRECOMMIT)" ] || [ "$(SKIP_PRECOMMIT)" != "1" ]; then \
-			echo "[IMP:7][make][gate] Step 1/11: pre-commit-run..."; \
-			$(MAKE) pre-commit-run || { echo "[IMP:9][make][gate] FAIL: pre-commit-run"; GATE_FAILED=1; }; \
-		else \
-			echo "[IMP:7][make][gate] Step 1/11: pre-commit-run skipped (SKIP_PRECOMMIT=1)"; \
-		fi; \
-		echo "[IMP:7][make][gate] Step 2/11: validate..."; \
-		$(MAKE) validate || { echo "[IMP:9][make][gate] FAIL: validate"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 2b/11: check-dead-code..."; \
-		$(MAKE) check-dead-code || { echo "[IMP:9][make][gate] FAIL: check-dead-code"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 3/11: lint..."; \
-		$(MAKE) lint || { echo "[IMP:9][make][gate] FAIL: lint"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 3b/11: doxygen-check (zero-warnings invariant, DevPlan 097)..."; \
-		$(MAKE) doxygen-check || { echo "[IMP:9][make][gate] FAIL: doxygen-check"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 4/10: check-file-lines (non-blocking)..."; \
-		$(MAKE) check-file-lines || true; \
-		echo "[IMP:7][make][gate] Step 5/10: anti-drift gates (fail-fast)..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/gates/ \
-			-m "gate and not skip_enforcement" -v || { echo "[IMP:9][make][gate] FAIL: anti-drift gates"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 6/10: contract tests..."; \
-		$(MAKE) test MARKER=contract || { echo "[IMP:9][make][gate] FAIL: contract"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 7/10: static tests..."; \
-		$(MAKE) test MARKER=static_audit || { echo "[IMP:9][make][gate] FAIL: static"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 8/10: predeploy tests..."; \
-		$(MAKE) test MARKER=predeploy || { echo "[IMP:9][make][gate] FAIL: predeploy"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 9/10: smoke tests..."; \
-		$(MAKE) test MARKER=smoke || { echo "[IMP:9][make][gate] FAIL: smoke"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 10/10: component tests..."; \
-		$(MAKE) test MARKER=component || { echo "[IMP:9][make][gate] FAIL: component"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Merging JUnit XML reports..."; \
-		$(PYTHON) tests/merge_junit.py \
-			tests/report-contract.xml \
-			tests/report-static.xml \
-			tests/report-predeploy.xml \
-			tests/report-smoke.xml \
-			tests/report-component.xml \
-			-o tests/report.xml || { echo "[IMP:9][make][gate] FAIL: JUnit merge"; GATE_FAILED=1; }; \
-		if [ $$GATE_FAILED -ne 0 ]; then \
-			echo "[IMP:9][make][gate] Gate: FAILURES DETECTED (MODE=full) — see individual FAIL messages above"; \
-			exit 1; \
-		fi; \
-	elif [ "$(MODE)" = "ci-docker" ]; then \
-		echo "[IMP:7][make][gate] MODE=ci-docker — running Docker-dependent gate pipeline (smoke + component, no static duplication)..."; \
-		GATE_FAILED=0; \
-		rm -f tests/report.xml tests/report*.xml; \
-		echo "[IMP:7][make][gate] Step 1/3: predeploy tests (Docker-dependent only)..."; \
-		PYTEST_NO_ESCALATION=1 $(PYTHON) -m pytest tests/ -m "predeploy and requires_docker" -v --tb=short -rs \
-			--junitxml=tests/report-predeploy.xml || { echo "[IMP:9][make][gate] FAIL: predeploy-docker"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 2/3: smoke tests..."; \
-		$(MAKE) test MARKER=smoke || { echo "[IMP:9][make][gate] FAIL: smoke"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Step 3/3: component tests..."; \
-		$(MAKE) test MARKER=component || { echo "[IMP:9][make][gate] FAIL: component"; GATE_FAILED=1; }; \
-		echo "[IMP:7][make][gate] Merging JUnit XML reports..."; \
-		$(PYTHON) tests/merge_junit.py \
-			tests/report-predeploy.xml \
-			tests/report-smoke.xml \
-			tests/report-component.xml \
-			-o tests/report.xml || { echo "[IMP:9][make][gate] FAIL: JUnit merge"; GATE_FAILED=1; }; \
-		if [ $$GATE_FAILED -ne 0 ]; then \
-			echo "[IMP:9][make][gate] Gate: FAILURES DETECTED (MODE=ci-docker) — see individual FAIL messages above"; \
-			exit 1; \
-		fi; \
-	else \
-		echo "[IMP:9][make][gate] ERROR: Unknown MODE='$(MODE)'. Valid values: fast, full, ci-docker" >&2; \
-		exit 1; \
-	fi
+	@$(PYTHON) -m core.internal.check_suite run --gate-mode $(MODE) \
+		$(if $(PROJECT),--project "$(PROJECT)",) \
+		$(if $(filter 1,$(SKIP_PRECOMMIT)),--skip-precommit,)
 	@echo "[IMP:9][make][gate] Gate: ALL PASS (MODE=$(MODE))"
 
 ## validate: Run schema validation only (standalone). Same as `make test MARKER=static` step.

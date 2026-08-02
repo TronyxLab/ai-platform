@@ -85,6 +85,24 @@ from core.internal.bootstrap.deploy import (
     spool_validator,
     sudoers_generator,
 )
+
+# DevPlan 119 E6: чистые функции severity/exit-code/status-metrics/hc-marker/llm-summary —
+# извлечены в orchestrator_metrics.py (AUDIT-2 M5). I/O-обёртки здесь делегируют вычисления.
+from core.internal.bootstrap.deploy.orchestrator_metrics import (
+    aggregate_severity as _metrics_aggregate_severity,
+)
+from core.internal.bootstrap.deploy.orchestrator_metrics import (
+    exit_code_from_results as _metrics_exit_code,
+)
+from core.internal.bootstrap.deploy.orchestrator_metrics import (
+    hc_marker_path as _metrics_hc_marker_path,
+)
+from core.internal.bootstrap.deploy.orchestrator_metrics import (
+    render_llm_summary as _metrics_render_llm_summary,
+)
+from core.internal.bootstrap.deploy.orchestrator_metrics import (
+    status_metrics_json as _metrics_status_metrics_json,
+)
 from core.internal.llm import config_renderer
 
 # DevPlan 118 C6: единый путь litellm-config.yml — shared/llm_paths (литерал удалён).
@@ -103,16 +121,10 @@ from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT, DEPLOY_TIMEOUT
 logger = logging.getLogger(__name__)
 
 # ── Constants (paths mirror deploy-modules.sh facade / docker_orchestrator.py) ──
-_HC_DONE_MARKER = "/var/lib/platform/.bootstrap/.hc_done_in_deploy"
+# E6: единственные источники констант — orchestrator_metrics.py (чистые функции).
+# Локальные копии _HC_DONE_MARKER/_STATUS_METRICS_TEMPLATE УДАЛЕНЫ (дубли).
+_HC_DONE_MARKER = _metrics_hc_marker_path()
 _STATUS_METRICS_PATH = "/run/platform/status-metrics.json"
-_STATUS_METRICS_TEMPLATE = {
-    "schema_version": 2,
-    "generated_at": None,
-    "containers": [],
-    "certs": [],
-    "projects": [],
-    "host": {},
-}
 # C5 (DevPlan 118): сборка bash -c делегирована в shared/module_interface.invoke — локальные
 # константы путей (paths.sh/module-interface.sh) УДАЛЕНЫ (единый источник в shared).
 
@@ -744,9 +756,10 @@ def _postflight(
 
 
 # region FUNC__render_litellm_config
-## @purpose  Render litellm-config.yml from policy.yaml via config_renderer (native import).
-## @io       ⇥ core_dir: str → ⎋ None (non-fatal)
-## @complexity 1 — single render_to_file call in try/except
+## @purpose  Render litellm-config.yml from policy.yaml (non-fatal). Резюме-строка — из
+##           orchestrator_metrics.render_llm_summary (E6, pure); I/O (render_to_file) здесь.
+## @io       ⇥ core_dir: str → ⎋ None (side-effect: litellm-config.yml)
+## @complexity 1 — path resolution + render call
 ## @invariants
 ##   - policy: core_dir/internal/llm/policy.yaml; output: core_dir/modules/litellm/config/litellm-config.yml
 ##   - Render failure logs WARN and keeps existing config (legacy `|| { echo WARNING }` parity)
@@ -754,7 +767,10 @@ def _render_litellm_config(core_dir: str) -> None:
     """Render litellm-config.yml from policy.yaml (non-fatal)."""
     policy_path = Path(core_dir) / "internal" / "llm" / "policy.yaml"
     output_path = litellm_config_path(core_dir)  # C6: единый путь shared/llm_paths
-    logger.info("[IMP:7][_render_litellm_config][start] Rendering litellm-config.yml from %s", policy_path)
+    logger.info(
+        "[IMP:7][_render_litellm_config][start] %s",
+        _metrics_render_llm_summary(core_dir, str(policy_path), str(output_path)),
+    )
     try:
         config_renderer.render_to_file(policy_path, output_path)
         logger.info("[IMP:9][_render_litellm_config][done] litellm-config.yml rendered")
@@ -766,22 +782,23 @@ def _render_litellm_config(core_dir: str) -> None:
 
 
 # region FUNC__aggregate_severity
-## @purpose  PHASE 5: map failed modules to severity (critical|warn). Uses enriched modules dict from
-##           topo_sort when available; falls back to per-module module.yaml metadata call.
+## @purpose  PHASE 5: map failed modules to severity (critical|warn). I/O-обёртка: резолвит
+##           severity_map (enriched modules dict из topo_sort + per-module module.yaml fallback),
+##           чистая агрегация делегирована в orchestrator_metrics.aggregate_severity (E6).
 ## @io       ⇥ failed: list[str], modules_info: dict[str, dict[str, str]], modules_dir: str
 ##           ⎋ tuple[int, int] — (crit_count, warn_count)
-## @complexity 2 — linear lookup with per-module fallback
+## @complexity 2 — linear lookup with per-module fallback (резолв) + pure aggregation
 ## @invariants
 ##   - severity defaults to "warn" for unknown modules (default warn severity)
 ##   - fallback reads module.yaml severity field (secrets_validator.get_module_severity)
+##   - Чистая агрегация — в orchestrator_metrics (E6, R5: test_orchestrator_metrics_pure)
 def _aggregate_severity(
     failed: list[str],
     modules_info: dict[str, dict[str, str]],
     modules_dir: str,
 ) -> tuple[int, int]:
     """Aggregate failed module severities into (crit_count, warn_count)."""
-    crit = 0
-    warn = 0
+    severity_map: dict[str, str] = {}
     for name in failed:
         severity = "warn"
         if name in modules_info:
@@ -791,10 +808,8 @@ def _aggregate_severity(
                 severity = secrets_validator.get_module_severity(os.path.join(modules_dir, name, "module.yaml"))
             except Exception as exc:  # noqa: EXC — severity fallback failure → default warn (best-effort: DEPLOY_BEST_EFFORT policy)
                 logger.warning("[IMP:7][_aggregate_severity][fallback] severity lookup failed for %s: %s", name, exc)
-        if severity == "critical":
-            crit += 1
-        else:
-            warn += 1
+        severity_map[name] = severity
+    crit, warn = _metrics_aggregate_severity(failed, severity_map)
     logger.info("[IMP:9][_aggregate_severity][result] crit=%d warn=%d", crit, warn)
     return crit, warn
 
@@ -804,21 +819,22 @@ def _aggregate_severity(
 
 # region FUNC__compute_exit_code
 ## @purpose  Compute final exit code: CRIT>0 → 2, WARN>0 → 0 (logged), no failures → 0.
+##           Чистое вычисление — orchestrator_metrics.exit_code_from_results (E6); здесь логгинг.
 ## @io       ⇥ crit: int, warn: int, deployed: int → ⎋ int
-## @complexity 1 — two comparisons
+## @complexity 1 — delegation + logging
 ## @invariants
 ##   - WARN maps to exit 0 (DEPLOY_BEST_EFFORT policy — warnings are non-critical by definition)
 ##   - Only CRIT failures escalate to exit 2
 def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
     """Severity-based exit code (DEPLOY_BEST_EFFORT contract: CRIT→2, WARN→0, DONE→0)."""
-    if crit > 0:
+    code = _metrics_exit_code(crit, warn, deployed)
+    if code == 2:
         logger.error("[IMP:10][_compute_exit_code][critical] Critical:%d Warn:%d → exit 2", crit, warn)
-        return 2
-    if warn > 0:
+    elif warn > 0:
         logger.warning("[IMP:8][_compute_exit_code][warn] Warn:%d (non-critical — continuing) → exit 0", warn)
-        return 0
-    logger.info("[IMP:9][_compute_exit_code][done] Deploy complete: %d modules (warnings: 0) → exit 0", deployed)
-    return 0
+    else:
+        logger.info("[IMP:9][_compute_exit_code][done] Deploy complete: %d modules (warnings: 0) → exit 0", deployed)
+    return code
 
 
 # endregion FUNC__compute_exit_code
@@ -828,7 +844,7 @@ def _compute_exit_code(crit: int, warn: int, deployed: int) -> int:
 ## @purpose  Touch /var/lib/platform/.bootstrap/.hc_done_in_deploy — signals state_machine.py to skip
 ##           the standalone healthcheck (healthcheck already ran inside deploy_docker_group).
 ##           HC_DONE_MARKER always set (DEPLOY_BEST_EFFORT policy — healthcheck был выполнен
-##           внутри деплоя даже при частичных сбоях).
+##           внутри деплоя даже при частичных сбоях). Путь маркера — orchestrator_metrics (E6).
 ## @io       ⇥ None → ⎋ None (side-effect: marker file)
 ## @complexity 1 — mkdir + touch with graceful failure
 def _set_hc_marker() -> None:
@@ -852,7 +868,8 @@ def _set_hc_marker() -> None:
 
 # region FUNC__create_status_metrics_json
 ## @purpose  Pre-create /run/platform/status-metrics.json as valid empty JSON (P1 fix) — prevents
-##           Docker from creating it as a directory during bind mount.
+##           Docker from creating it as a directory during bind mount. Сериализация шаблона —
+##           orchestrator_metrics.status_metrics_json (E6, pure).
 ## @io       ⇥ None → ⎋ None (side-effect: JSON file)
 ## @complexity 1 — existence check + mkdir + write
 def _create_status_metrics_json() -> None:
@@ -862,7 +879,7 @@ def _create_status_metrics_json() -> None:
     try:
         os.makedirs(os.path.dirname(_STATUS_METRICS_PATH), exist_ok=True)
         with open(_STATUS_METRICS_PATH, "w") as fh:
-            json.dump(_STATUS_METRICS_TEMPLATE, fh)
+            fh.write(_metrics_status_metrics_json())
         logger.info("[IMP:8][_create_status_metrics_json][done] Created %s placeholder", _STATUS_METRICS_PATH)
     except OSError as exc:
         logger.warning("[IMP:7][_create_status_metrics_json][warn] Cannot create %s: %s", _STATUS_METRICS_PATH, exc)

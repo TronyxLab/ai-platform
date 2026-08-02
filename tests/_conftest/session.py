@@ -30,7 +30,7 @@ import pytest
 import yaml
 
 from _conftest.checklist import _print_checklist, _print_escalation, _print_external_help, _print_reflection
-from _conftest.counter import _read_counter, _write_counter
+from _conftest.counter import _increment_counter, _read_counter, _write_counter
 
 # region FIXTURE_SCHEMA_VALIDATION
 
@@ -148,11 +148,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     else:
         print("[IMP:7][session] retention.py import skipped (no backup marker)", file=sys.stderr)
 
-    counter = _read_counter()
-    counter["attempts"] = counter.get("attempts", 0) + 1
-    _write_counter(counter)
+    # DevPlan 120 §3.3 (Wave 1): атомарный _increment_counter под flock — при xdist sessionstart
+    # выполняется в каждом worker'е конкурентно; раздельные read/write теряли бы обновления.
+    attempts = _increment_counter()
     print(
-        f"[IMP:9][conftest][sessionstart] Attempt #{counter['attempts']} — running tests...",
+        f"[IMP:9][conftest][sessionstart] Attempt #{attempts} — running tests...",
         file=sys.stderr,
     )
 

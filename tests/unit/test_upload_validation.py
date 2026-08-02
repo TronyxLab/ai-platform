@@ -24,6 +24,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core" / "modules" / "backup-cron" / "scripts"))
 import upload
 
+logger = logging.getLogger(__name__)
+
 
 # region TEST_validate_cli_inputs
 def test_validate_empty_local_file_exits_2(caplog: pytest.LogCaptureFixture, monkeypatch) -> None:
@@ -151,6 +153,72 @@ def test_main_validate_gate_before_upload(monkeypatch, tmp_path: Path, caplog: p
         upload.main()
     assert exc.value.code == 2
     assert any("S3_BUCKET" in r.message for r in caplog.records), "S3_BUCKET gate must fire before upload"
+
+
+# endregion
+
+
+# region TEST_upload_verify_split (E8 R5)
+def test_upload_verify_split_negative(monkeypatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # 🧪 TRAP[TEST] · 2026-08-02 · R5 · E8 split — upload+verify work as composition
+    """E8 R5: _upload_and_verify = _upload → _verify composition (phase split preserved)."""
+    caplog.set_level(logging.INFO)
+    f = tmp_path / "backup.sql.gz"
+    f.write_bytes(b"x" * 1024)
+
+    fake_client = object()
+    calls = {"upload": 0, "verify": 0}
+
+    def _fake_upload(client, bucket, local_file, full_key, local_sha256, max_retries, interval_sec):
+        calls["upload"] += 1
+        return True
+
+    def _fake_verify(client, bucket, local_file, full_key, local_sha256):
+        calls["verify"] += 1
+        return True
+
+    monkeypatch.setattr(upload, "_upload", _fake_upload)
+    monkeypatch.setattr(upload, "_verify", _fake_verify)
+
+    result = upload._upload_and_verify(
+        fake_client, "bucket", str(f), "backups/key", "deadbeef", max_retries=3, interval_sec=1
+    )
+    assert result is True
+    assert calls["upload"] == 1, "_upload must be called exactly once"
+    assert calls["verify"] == 1, "_verify must be called exactly once"
+    assert upload._upload is not None and upload._verify is not None
+
+
+def test_upload_verify_split_upload_fail_shortcircuits(
+    monkeypatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # 🧪 TRAP[TEST] · 2026-08-02 · R5 · E8 split — upload failure short-circuits verify
+    """E8 R5: _upload False → _verify NOT called (composition short-circuit)."""
+    caplog.set_level(logging.INFO)
+    f = tmp_path / "backup.sql.gz"
+    f.write_bytes(b"x")
+
+    fake_client = object()
+    calls = {"upload": 0, "verify": 0}
+
+    def _fake_upload(client, bucket, local_file, full_key, local_sha256, max_retries, interval_sec):
+        calls["upload"] += 1
+        return False
+
+    def _fake_verify(client, bucket, local_file, full_key, local_sha256):
+        calls["verify"] += 1
+        return True
+
+    monkeypatch.setattr(upload, "_upload", _fake_upload)
+    monkeypatch.setattr(upload, "_verify", _fake_verify)
+
+    result = upload._upload_and_verify(
+        fake_client, "bucket", str(f), "backups/key", "deadbeef", max_retries=3, interval_sec=1
+    )
+    assert result is False
+    assert calls["upload"] == 1
+    assert calls["verify"] == 0, "verify must NOT run when upload fails (short-circuit)"
+    logger.critical("[IMP:9][test] upload_verify_split short-circuit verified")
 
 
 # endregion

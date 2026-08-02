@@ -23,12 +23,12 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
 import subprocess
-import tempfile
 
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared.atomic_writer import atomic_write_text as _atomic_write_text
 from core.internal.shared.docker_auth import ghcr_login as _shared_ghcr_login
 from core.internal.shared.exceptions import PlatformError
 from core.internal.shared.subprocess_io import run_subprocess
@@ -204,18 +204,8 @@ def install_cron_metrics(core_dir: str) -> bool:
         except OSError as e:
             logger.warning("[IMP:7][cron_metrics] mkdir /run/lock failed (best-effort): %s", e)
 
-        # ── Atomic write: temp file in same dir → chmod 0644 → os.replace ──
-        target_dir = os.path.dirname(CRON_METRICS_FILE)
-        fd, tmp_path = tempfile.mkstemp(dir=target_dir, prefix="platform-metrics-")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(cron_line + "\n")
-            os.chmod(tmp_path, 0o644)
-            os.replace(tmp_path, CRON_METRICS_FILE)
-        except OSError:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
-            raise
+        # ── Atomic write: shared atomic_writer canon (E5 — temp + fsync + os.replace, 0644) ──
+        _atomic_write_text(CRON_METRICS_FILE, cron_line + "\n", mode=0o644)
 
         if existing:
             logger.info("[IMP:7][cron_metrics] Cron file updated (content changed)")

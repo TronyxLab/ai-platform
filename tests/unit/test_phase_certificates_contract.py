@@ -28,6 +28,7 @@ import pytest
 
 from core.internal.bootstrap.lifecycle import phases as phases_mod
 from core.internal.bootstrap.lifecycle.helpers import domains as domains_helpers
+from core.internal.bootstrap.lifecycle.phases import certs as phases_certs_mod  # E3: доменный модуль
 
 logger = pytest.importorskip("logging").getLogger(__name__)
 
@@ -101,7 +102,13 @@ def test_phase_certificates_delegates_to_orchestrator(tmp_path, monkeypatch, cap
     core_dir = tmp_path / "core"
     core_dir.mkdir()
 
-    monkeypatch.setattr(phases_mod, "_install_acme", lambda core_dir_arg: True)
+    monkeypatch.setattr(
+        # DevPlan 119 E3: phase_certificates живёт в phases/certs.py — patch доменного модуля.
+        # (Агрегатор re-export не влияет на module-local вызов _install_acme внутри certs.py.)
+        phases_certs_mod,
+        "_install_acme",
+        lambda core_dir_arg: True,
+    )
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
         phases_mod.helpers_domains,
@@ -128,7 +135,8 @@ def test_phase_certificates_non_fatal_on_orchestrator_failure(tmp_path, monkeypa
     node_yaml = tmp_path / "node.yaml"
     node_yaml.write_text("projects: []\nmodules: []\n")
 
-    monkeypatch.setattr(phases_mod, "_install_acme", lambda core_dir_arg: True)
+    # DevPlan 119 E3: patch доменного модуля certs.py (module-local _install_acme)
+    monkeypatch.setattr(phases_certs_mod, "_install_acme", lambda core_dir_arg: True)
 
     def _boom(core_dir_arg, node_yaml_arg):
         raise RuntimeError("orchestrator unavailable")

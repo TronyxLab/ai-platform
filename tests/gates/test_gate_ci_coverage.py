@@ -380,44 +380,42 @@ def test_deploy_workflows_use_sha_aware_aggregator(caplog) -> None:
 def test_mode_fast_excludes_requires_docker(caplog) -> None:
     """Verify MODE=fast expression excludes Docker-dependent markers.
 
-    ## @purpose — Validate C3 fix from TestsMetaDevPlan2 changelog: MODE=fast in Makefile
-    ##            must exclude 'not requires_docker', 'not local_auth'
-    ##            to prevent Docker-dependent tests from running (and failing) in fast mode.
+    ## @purpose — Validate C3 fix from TestsMetaDevPlan2 changelog: MODE=fast in the gate
+    ##            must exclude 'not requires_docker', 'not local_auth' to prevent
+    ##            Docker-dependent tests from running (and failing) in fast mode.
+    ##            DevPlan 120 (Wave 2): gate-портал перенесён на SoT-манифест
+    ##            core/check-suite.yaml — выражения читаются ИЗ МАНИФЕСТА (не из makefiles,
+    ##            где таргет gate теперь только вызывает check_suite run).
     ## @io — ⎋ None (assert side-effect)
-    ## @complexity — O(1)
+    ## @complexity O(1)
     """
 
     logger.info(
-        "[IMP:8][test_mode_fast_excludes_requires_docker] Checking MODE=fast expressions (two-phase: static + Docker)..."
+        "[IMP:8][test_mode_fast_excludes_requires_docker] Checking MODE=fast expressions (SoT-манифест core/check-suite.yaml)..."
     )
 
-    makefile_content = _read_makefile_with_includes()
+    manifest_path = _PROJECT_ROOT / "core" / "check-suite.yaml"
+    with open(manifest_path) as f:
+        manifest = yaml.safe_load(f)
 
-    # MODE=fast now has two phases:
-    # Phase 1 (static, parallel): -m "gate and not requires_docker" -n auto
-    # Phase 2 (Docker, sequential): -m "gate and requires_docker"
-    # Extract both using the step numbering (Step 4 & Step 4b)
+    cmds_by_id: dict[str, dict] = {}
+    for check in manifest.get("checks", []):
+        if isinstance(check, dict):
+            cmds_by_id[check.get("id", "")] = check
 
-    # Phase 1: static gate (parallel, no Docker fixtures)
-    static_section = re.search(
-        r'PYTEST_NO_ESCALATION=1 \$\(PYTHON\) -m pytest tests/gates/ -m "gate and not requires_docker" -n auto -v',
-        makefile_content,
+    # MODE=fast имеет две фазы (как прежний ci.mk): static gates + docker gates
+    gates_fast = (cmds_by_id.get("gates", {}).get("cmds") or {}).get("fast", "")
+    gates_docker_fast = (cmds_by_id.get("gates-docker", {}).get("cmds") or {}).get("fast", "")
+    predeploy_fast = (cmds_by_id.get("predeploy", {}).get("cmds") or {}).get("fast", "")
+
+    assert "gate and not requires_docker" in gates_fast, (
+        f"Manifest gates.fast должен содержать 'gate and not requires_docker', got: {gates_fast}"
     )
-
-    assert static_section, (
-        "Could not find MODE=fast static gate phase in Makefile. "
-        'Expected: pytest tests/gates/ -m "gate and not requires_docker" -n auto -v'
+    assert "gate and requires_docker" in gates_docker_fast, (
+        f"Manifest gates-docker.fast должен содержать 'gate and requires_docker', got: {gates_docker_fast}"
     )
-
-    # Phase 2: Docker gate (sequential, session-scoped fixtures)
-    docker_section = re.search(
-        r'PYTEST_NO_ESCALATION=1 \$\(PYTHON\) -m pytest tests/gates/ -m "gate and requires_docker" -v',
-        makefile_content,
-    )
-
-    assert docker_section, (
-        "Could not find MODE=fast Docker gate phase in Makefile. "
-        'Expected: pytest tests/gates/ -m "gate and requires_docker" -v'
+    assert "predeploy and not requires_docker" in predeploy_fast, (
+        f"Manifest predeploy.fast должен содержать 'predeploy and not requires_docker', got: {predeploy_fast}"
     )
 
     logger.info(
@@ -427,147 +425,61 @@ def test_mode_fast_excludes_requires_docker(caplog) -> None:
         "[IMP:8][test_mode_fast_excludes_requires_docker] Found Docker gate expression: gate and requires_docker"
     )
 
-    # Also extract the make test MARKER=static expression — must exclude requires_docker
-    # for Step 6 (static tests without Docker).
-    # DevPlan 099: MARKER=static now delegates to test_runner.py → check _STATIC_AUDIT_EXPR there.
-    # First check if the static section delegates to test_runner (bounded: between MARKER=static and next elif/fi)
-    uses_test_runner_static = re.search(
-        r'if \[ "\$\(MARKER\)" = "static" \].*?test_runner.*?--marker static',
-        makefile_content,
+    # MARKER=static expression — в test_runner _STATIC_AUDIT_EXPR (DevPlan 099)
+    test_runner_path = _PROJECT_ROOT / "core" / "internal" / "test_runner.py"
+    test_runner_content = test_runner_path.read_text(encoding="utf-8")
+    expr_match = re.search(
+        r'_STATIC_AUDIT_EXPR\s*=\s*\(\s*((?:"[^"]*"\s*)+)\)',
+        test_runner_content,
         re.DOTALL,
     )
+    assert expr_match, (
+        "Could not find _STATIC_AUDIT_EXPR constant in core/internal/test_runner.py. "
+        'Expected: _STATIC_AUDIT_EXPR = ( "..." ... ) with marker expression.'
+    )
+    raw_fragments = expr_match.group(1)
+    expression_static = "".join(re.findall(r'"([^"]*)"', raw_fragments))
+    logger.info(
+        "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (test_runner _STATIC_AUDIT_EXPR): %s",
+        expression_static,
+    )
 
-    if uses_test_runner_static:
-        # DevPlan 099: Makefile delegates to test_runner → check _STATIC_AUDIT_EXPR in Python
-        # Verify delegation is within the static section (not spilling into other markers)
-        # by checking the bounded section between MARKER=static and the next elif
-        bounded_static = re.search(
-            r'if \[ "\$\(MARKER\)" = "static" \].*?(?=elif \[ "\$\(MARKER\)" = ")',
-            makefile_content,
-            re.DOTALL,
-        )
-        if bounded_static and "test_runner" in bounded_static.group(0):
-            logger.info(
-                "[IMP:8][test_mode_fast_excludes_requires_docker] MARKER=static delegates to test_runner — checking _STATIC_AUDIT_EXPR"
-            )
-            test_runner_path = _PROJECT_ROOT / "core" / "internal" / "test_runner.py"
-            test_runner_content = test_runner_path.read_text(encoding="utf-8")
-            # _STATIC_AUDIT_EXPR is a multi-line string concatenation:
-            #   ( "line1 " "line2 " "line3" )
-            # Capture all string literal fragments between the opening ( and closing )
-            expr_match = re.search(
-                r'_STATIC_AUDIT_EXPR\s*=\s*\(\s*((?:"[^"]*"\s*)+)\)',
-                test_runner_content,
-                re.DOTALL,
-            )
-            assert expr_match, (
-                "Could not find _STATIC_AUDIT_EXPR constant in core/internal/test_runner.py. "
-                'Expected: _STATIC_AUDIT_EXPR = ( "..." ... ) with marker expression.'
-            )
-            # Join all quoted fragments, removing quotes and whitespace between them
-            raw_fragments = expr_match.group(1)
-            expression_static = "".join(re.findall(r'"([^"]*)"', raw_fragments))
-            logger.info(
-                "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (test_runner _STATIC_AUDIT_EXPR): %s",
-                expression_static,
-            )
-        else:
-            # Fallback: try old regex
-            marker_static_section = re.search(
-                r'if \[ "\$\(MARKER\)" = "static" \].*?PYTEST_NO_ESCALATION=1.*?pytest tests/.*?-m\s+"([^"]+)"',
-                makefile_content,
-                re.DOTALL,
-            )
-            assert marker_static_section, (
-                "Could not find MARKER=static expression — neither test_runner delegation nor pytest -m expression. "
-                "Expected either test_runner --marker static or pytest -m with marker expression."
-            )
-            expression_static = marker_static_section.group(1)
-            logger.info(
-                "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (legacy): %s",
-                expression_static,
-            )
-    else:
-        # Legacy: direct pytest in Makefile
-        marker_static_section = re.search(
-            r'if \[ "\$\(MARKER\)" = "static" \].*?PYTEST_NO_ESCALATION=1.*?pytest tests/.*?-m\s+"([^"]+)"',
-            makefile_content,
-            re.DOTALL,
-        )
-        assert marker_static_section, (
-            "Could not find MARKER=static pytest -m expression in Makefile. "
-            'Expected a section with \'if [ "$(MARKER)" = "static" ]\' followed by '
-            "pytest with -m expression."
-        )
-        expression_static = marker_static_section.group(1)
-        logger.info(
-            "[IMP:8][test_mode_fast_excludes_requires_docker] Found MARKER=static expression (legacy): %s",
-            expression_static,
-        )
+    # Validate required exclusions across manifest gate expressions
+    required_exclusions_static = ["not requires_docker"]
+    required_inclusions_docker = ["requires_docker"]
+    required_static_exclusions = ["not requires_docker", "not local_auth"]
 
-    # NOTE: MODE=fast and MARKER=static expressions are NOT identical anymore.
-    # MODE=fast gates are split into two phases (static + Docker), while
-    # MARKER=static covers non-gate static_audit tests too. The drift guard
-    # between them is intentionally removed (O2 change from DevPlan 046 W4-1).
-
-    # Validate required exclusions across both MODE=fast gate phases
-    required_exclusions_static = [
-        "not requires_docker",
-    ]
-    required_inclusions_docker = [
-        "requires_docker",
-    ]
-
-    missing_static: list[str] = []
+    all_missing: list[str] = []
     for exclusion in required_exclusions_static:
-        if exclusion not in "gate and not requires_docker":
-            missing_static.append(exclusion)
-            logger.warning(
-                "[IMP:7][test_mode_fast_excludes_requires_docker] MISSING exclusion in static gate: %s", exclusion
-            )
+        if exclusion not in gates_fast:
+            all_missing.append(f"gates.fast MISSING '{exclusion}'")
         else:
-            logger.info(
-                "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in static gate expression", exclusion
-            )
-
-    missing_docker: list[str] = []
+            logger.info("[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in gates.fast", exclusion)
     for inclusion in required_inclusions_docker:
-        if inclusion not in "gate and requires_docker":
-            missing_docker.append(inclusion)
-            logger.warning(
-                "[IMP:7][test_mode_fast_excludes_requires_docker] MISSING inclusion in Docker gate: %s", inclusion
-            )
+        if inclusion not in gates_docker_fast:
+            all_missing.append(f"gates-docker.fast MISSING '{inclusion}'")
         else:
             logger.info(
-                "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in Docker gate expression", inclusion
+                "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in gates-docker.fast", inclusion
             )
-
-    # Validate MARKER=static also excludes Docker-dependent markers
-    # (for Step 6: static tests)
-    required_static_exclusions = [
-        "not requires_docker",
-        "not local_auth",
-    ]
-    missing_static_expr: list[str] = []
     for exclusion in required_static_exclusions:
         if exclusion not in expression_static:
-            missing_static_expr.append(exclusion)
-            logger.warning(
-                "[IMP:7][test_mode_fast_excludes_requires_docker] MISSING exclusion in MARKER=static: %s", exclusion
-            )
+            all_missing.append(f"MARKER=static MISSING '{exclusion}'")
         else:
             logger.info(
                 "[IMP:9][test_mode_fast_excludes_requires_docker] OK: '%s' present in MARKER=static expression",
                 exclusion,
             )
 
-    all_missing = missing_static + missing_docker + missing_static_expr
     if all_missing:
         pytest.fail(
-            f"MODE=fast gate phases have {len(all_missing)} issue(s):\n" + "\n".join(f"  - {m}" for m in all_missing)
+            f"MODE=fast gate expressions have {len(all_missing)} issue(s):\n"
+            + "\n".join(f"  - {m}" for m in all_missing)
         )
 
-    logger.info("[IMP:9][test_mode_fast_excludes_requires_docker] ALL PASS — MODE=fast two-phase gates validated")
+    logger.info(
+        "[IMP:9][test_mode_fast_excludes_requires_docker] ALL PASS — MODE=fast expressions validated (SoT-манифест)"
+    )
 
 
 @pytest.mark.gate

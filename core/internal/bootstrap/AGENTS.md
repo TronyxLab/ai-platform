@@ -9,7 +9,7 @@
 ##           lifecycle/state_machine.py (BootstrapPhase enum, _phase_dependency_graph,
 ##           precondition_check — оркестрация), lifecycle/state_store.py (persistence),
 ##           lifecycle/cli.py (CLI/main), lifecycle/helpers/ (7 I/O-модулей),
-##           lifecycle/phases.py (14 phase implementations),
+##           lifecycle/phases/ (14 phase implementations — пакет, DevPlan 119 E3),
 ##           deploy-modules, setup-node, install-docker, install-tor-proxy, firewall,
 ##           topo_sort, discover_modules, remote-cmd, scp-deliver,
 ##           core_deliverer.py (Python Core-канал: mkdir + 5 rsync фаз, DevPlan 108)
@@ -17,7 +17,8 @@
 ##   1. node-lifecycle.sh — тонкий фасад (<80 LOC), делегирует всё lifecycle/cli.py (B9 T1, CS-7). Режимы: --mode init (9 INIT фаз) и --mode update (5 UPDATE фаз).
 ##   2. state_machine.py — оркестрация: BootstrapPhase enum, _phase_dependency_graph, precondition_check(), execute_phase()
 ##      (execute_grouped_phase удалён, волна 117 D5 — sub-step resume вне скоупа)
-##   3. phases.py — business logic: 14 phase_*() функций, вызываемых из state_machine.py;
+##   3. phases/ — business logic: 14 phase_*() функций в доменных модулях (system/docker/secrets/certs,
+##      DevPlan 119 E3), вызываемых из state_machine.py; агрегатор phases/__init__.py re-export'ит API;
 ##      I/O-хелперы — lifecycle/helpers/ (односторонняя зависимость state_machine → phases → helpers, B9 T1)
 ##   4. checkpoint_migration.py — удалён (DevPlan 087). Все чекпоинты через state.json напрямую.
 ##   (Legacy 23→14 key migration removed in DevPlan 091 Wave B — cold start only.)
@@ -88,7 +89,7 @@ node-lifecycle.sh --mode update → lifecycle/cli.py → state_machine.py
 
 ### `--mode init` — полный bootstrap
 
-Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Python 3.14, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, setup-node/sudoers, metrics-cron → /etc/cron.d/platform-metrics, DevPlan 116 B3 T1) → φ4 secrets-provision (decrypt, ensure-passwords) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: phase-функции в phases.py обрабатывают content-hash пропуск внутри grouped-фаз. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
+Выполняет 9 фаз инициализации bare VPS: φ1 system-bootstrap (root, apt, Python 3.14, Docker, Tor, firewall) → φ2 user-accounts (platform/ci-deploy users, SSH keys) → φ3 platform-setup (Docker Hub auth, setup-node/sudoers, metrics-cron → /etc/cron.d/platform-metrics, DevPlan 116 B3 T1) → φ4 secrets-provision (decrypt, ensure-passwords) → φ5 node-configuration (node.yaml validation, core verification) → φ6 registry-auth (ghcr.io, Docker auth) → φ7 certificates (acme.sh, SSL) → φ8 deploy-services (deploy-modules, deploy-context) → φ8.5 converge-services (converge). Идемпотентен: phase-функции в phases/ обрабатывают content-hash пропуск внутри grouped-фаз. Вызывается из `make bootstrap-node` через `core/entrypoints/bootstrap.sh`.
 
 ### Python runtime на ноде (2026-08-01)
 
@@ -102,7 +103,7 @@ node-lifecycle.sh --mode update → lifecycle/cli.py → state_machine.py
 
 ### `--mode update` — инкрементальный update
 
-Выполняет 5 фаз обновления на уже забутстрапленной ноде: φ9 secrets-update → φ10 node-config-update → φ11 registry-update → φ12 deploy-update → φ13 converge-update. Каждая фаза реализована в phases.py с precondition проверками и dependency graph. Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из пост-инициализационного запуска (после φ8 deploy-services в init-режиме).
+Выполняет 5 фаз обновления на уже забутстрапленной ноде: φ9 secrets-update → φ10 node-config-update → φ11 registry-update → φ12 deploy-update → φ13 converge-update. Каждая фаза реализована в phases/ с precondition проверками и dependency graph. Оптимизирован для CI: ~5 мин вместо ~30 мин полного bootstrap. Вызывается из `make node-update` через `core/entrypoints/node-update.sh`, а также из пост-инициализационного запуска (после φ8 deploy-services в init-режиме).
 
 ---
 

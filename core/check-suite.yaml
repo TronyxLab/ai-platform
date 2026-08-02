@@ -1,0 +1,155 @@
+# core/check-suite.yaml
+# GREP_SUMMARY: check-suite, manifest, SoT, checks, gate-modes, xdist, diagnostic, tiers, junit, allow-no-tests
+# STRUCTURE: ┌version: 1┐ → ◇ checks[] (id → tier fix|static|pytest → cmd|cmds → gate_modes → flags) → ⎋ канонический порядок шагов gate
+# region MODULE_CONTRACT
+## @purpose  Единый SoT-манифест набора проверок платформы (DevPlan 120 §3.1, схема v1).
+##           Устраняет дрейф 3 hardcoded-списков: ci.mk gate, core/internal/preflight.py фаза 3,
+##           CI-workflows + инструкции. Оба executor'а (диагностический `make check` /
+##           `make check-diff` и канонический `make gate`) читают ТОЛЬКО этот манифест —
+##           дрейф невозможен конструктивно (инвариант «два executor'а одного манифеста»).
+## @scope    Схема v1: поля id, tier (fix|static|pytest), timeout, gate_modes (⊆ {fast, full,
+##           ci-docker}), cmd ИЛИ cmds (per gate-mode), diagnostic, xdist, allow_no_tests,
+##           non_blocking, junit, project_filter, docker, repair. Порядок записей =
+##           канонический порядок шагов gate (супермножество fast ∪ full ∪ ci-docker).
+## @invariants
+##   - version: 1 — bump при несовместимом изменении схемы (инвалидирует fingerprint-кэш)
+##   - id — kebab-case, уникальный; junit-пути уникальны
+##   - tier ∈ {fix, static, pytest}; timeout > 0
+##   - gate_modes ⊆ {fast, full, ci-docker}; отсутствие = только диагностика
+##   - diagnostic: default true для tier fix/static/pytest; false для lint/check-file-lines/
+##     smoke/component/predeploy-docker (диагностический прогон их не включает)
+##   - xdist: default true для tier pytest; для `make test MARKER=...` команд xdist
+##     применяется внутри test_runner (Wave 1), для прямых pytest-команд — executor'ом
+##   - allow_no_tests: pytest exit 5 (0 тестов) → PASS
+##   - non_blocking: провал не роняет gate (check-file-lines)
+##   - check-manifests и ruff-check — ТОЛЬКО диагностика (в gate не входят — паритет ci.mk:
+##     check-manifests живёт в pre-commit hook, ruff — тоже)
+## @rationale DevPlan 120: манифест — единый источник правды. Закрывает дыры AC-2
+##            (check-manifests, ruff check ., gates-docker с allow_no_tests). Параметр
+##            project_filter (predeploy) — PROJECT=<name> → -k, как в ci.mk.
+## ⚠️ TRAP[DECISION] · 2026-08-02 · — · gates-docker: gate_modes=[fast] (НЕ [fast, full])
+## · Rejected: [fast, full] как в таблице §3.1 DevPlan (противоречило golden-требованию §3.7 п.4)
+## · Reason: §3.1 DevPlan внутренне противоречив: таблица манифеста даёт gates-docker
+##   gate_modes=[fast, full], но канонический список шагов full («совпадает с текущим ci.mk full»)
+##   gates-docker НЕ содержит, а §3.7 п.4 требует golden = снятый с текущего ci.mk (12 шагов full).
+##   В full docker-гейты исполняются ВНУТРИ шага gates («gate and not skip_enforcement» — паритет
+##   прежнего ci.mk full); отдельный шаг gates-docker с allow_no_tests нужен ТОЛЬКО fast-режиму.
+## · Rev: если full-режим решит отделять docker-гейты — добавить full в gate_modes и обновить golden.
+## @changes 2026-08-02 | Created (DevPlan 120 Wave 1)
+# endregion MODULE_CONTRACT
+
+version: 1
+checks:
+  - id: pre-commit
+    cmd: make pre-commit-run
+    tier: fix
+    timeout: 120
+    gate_modes: [fast, full]
+  - id: validate
+    cmd: bash core/entrypoints/validate.sh
+    tier: static
+    timeout: 60
+    gate_modes: [fast, full]
+  - id: check-dead-code
+    cmd: make check-dead-code
+    tier: static
+    timeout: 60
+    gate_modes: [fast, full]
+  - id: check-exception-patterns
+    cmd: make check-exception-patterns
+    tier: static
+    timeout: 30
+    gate_modes: [fast]
+  - id: lint
+    cmd: bash core/entrypoints/validate.sh --lint
+    tier: static
+    timeout: 120
+    gate_modes: [full]
+    diagnostic: false
+  - id: doxygen-check
+    cmd: make doxygen-check
+    tier: static
+    timeout: 30
+    gate_modes: [fast, full]
+  - id: check-file-lines
+    cmd: make check-file-lines
+    tier: static
+    timeout: 60
+    gate_modes: [full]
+    non_blocking: true
+    diagnostic: false
+  - id: check-manifests
+    cmd: make check-manifests
+    tier: static
+    timeout: 60
+  - id: ruff-check
+    cmd: .venv/bin/ruff check .
+    tier: static
+    timeout: 60
+  - id: gates
+    tier: pytest
+    timeout: 180
+    gate_modes: [fast, full]
+    xdist: true
+    cmds:
+      fast: pytest tests/gates/ -m "gate and not requires_docker"
+      full: pytest tests/gates/ -m "gate and not skip_enforcement"
+  - id: gates-docker
+    tier: pytest
+    timeout: 180
+    gate_modes: [fast]
+    allow_no_tests: true
+    docker: true
+    cmds:
+      fast: pytest tests/gates/ -m "gate and requires_docker"
+  - id: contract
+    cmd: make test MARKER=contract
+    tier: pytest
+    timeout: 180
+    gate_modes: [fast, full]
+    xdist: true
+    junit: tests/report-contract.xml
+  - id: static_audit
+    tier: pytest
+    timeout: 300
+    gate_modes: [fast, full]
+    xdist: true
+    junit: tests/report-static.xml
+    cmds:
+      fast: python3 -m core.internal.test_runner --marker static_audit --junit-output tests/report-static.xml
+      full: make test MARKER=static_audit
+  - id: predeploy
+    tier: pytest
+    timeout: 180
+    gate_modes: [fast, full]
+    xdist: true
+    junit: tests/report-predeploy.xml
+    project_filter: true
+    cmds:
+      fast: pytest tests/ -m "predeploy and not requires_docker" --tb=short -rs --junitxml=tests/report-predeploy.xml
+      full: make test MARKER=predeploy
+  - id: predeploy-docker
+    cmd: pytest tests/ -m "predeploy and requires_docker" --tb=short -rs --junitxml=tests/report-predeploy.xml
+    tier: pytest
+    timeout: 600
+    gate_modes: [ci-docker]
+    xdist: false
+    allow_no_tests: true
+    junit: tests/report-predeploy.xml
+    diagnostic: false
+  - id: smoke
+    cmd: make test MARKER=smoke
+    tier: pytest
+    timeout: 600
+    gate_modes: [full, ci-docker]
+    xdist: true
+    junit: tests/report-smoke.xml
+    diagnostic: false
+  - id: component
+    cmd: make test MARKER=component
+    tier: pytest
+    timeout: 600
+    gate_modes: [full, ci-docker]
+    xdist: true
+    junit: tests/report-component.xml
+    diagnostic: false

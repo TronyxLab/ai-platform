@@ -832,3 +832,50 @@ def test_main_cli_missing_args():
 
 
 # endregion TEST_main_cli
+
+
+# ────────────────────────────────────────────────────────────
+# region TEST_phases_E1
+# ────────────────────────────────────────────────────────────
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · R5 · E1 — спец-фазы диспатчатся через PHASES
+# · Regression: DevPlan 119 E1 — deploy_docker_module разбит на фазы (было 13 if-веток, CC=25)
+# · Scenario: PHASES таблица содержит hermes-agent + observability фазы
+# · Remove if: deploy_docker_module phase dispatch changes
+def test_deploy_docker_module_phases_negative(mock_subprocess, module_dir):
+    """R5 (E1): PHASES dispatch содержит hermes-agent и observability фазы (порядок dispatch)."""
+    assert "hermes-agent" in dorch.PHASES, "PHASES must register hermes-agent phase"
+    assert "observability" in dorch.PHASES, "PHASES must register observability phase"
+    assert callable(dorch.PHASES["hermes-agent"])
+    assert callable(dorch.PHASES["observability"])
+
+    # All phase functions share the (module_name, module_dir, compose_file, compose_args) signature
+    import inspect
+
+    for name, fn in dorch.PHASES.items():
+        sig = inspect.signature(fn)
+        params = list(sig.parameters)
+        assert params == ["module_name", "module_dir", "compose_file", "compose_args"], (
+            f"Phase {name} signature must be (module_name, module_dir, compose_file, compose_args), got {params}"
+        )
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · unit · E1 — observability фаза best-effort (True)
+# · Regression: DevPlan 119 E1 — _phase_observability делегирует в observability.py
+# · Scenario: _phase_observability → True (cleanup non-fatal)
+# · Remove if: observability phase semantics change
+def test_phase_observability_best_effort(mock_subprocess, tmp_path):
+    """E1: _phase_observability returns True (cleanup best-effort, never blocks deploy)."""
+    compose_file = tmp_path / "docker-compose.yaml"
+    compose_file.write_text("services:\n  monitoring:\n    image: x\n")
+    result = dorch._phase_observability(
+        module_name="observability",
+        module_dir=str(tmp_path),
+        compose_file=compose_file,
+        compose_args=["-f", str(compose_file)],
+    )
+    assert result is True
+
+
+# endregion TEST_phases_E1

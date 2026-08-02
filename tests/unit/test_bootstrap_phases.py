@@ -605,18 +605,27 @@ def test_precondition_check_update_phases(
 # · Remove if: forced-command канал заменён другим CI-механизмом доставки
 @ldd_trajectory
 def test_phase_user_accounts_forced_command_dispatch(caplog) -> None:
-    """phases.py ci-deploy forced command uses orchestrator_cli dispatch (K1, AC-A1)."""
+    """phases (system domain) ci-deploy forced command uses orchestrator_cli dispatch (K1, AC-A1).
+
+    DevPlan 119 E3: phases.py → phases/ пакет; phase_user_accounts живёт в phases/system.py.
+    """
     phases_path = (
-        Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "lifecycle" / "phases.py"
+        Path(__file__).resolve().parent.parent.parent
+        / "core"
+        / "internal"
+        / "bootstrap"
+        / "lifecycle"
+        / "phases"
+        / "system.py"
     )
     content = phases_path.read_text()
 
     # Единственный писатель ci-deploy ключа — users.py add_ssh_key с forced-command dispatch
     assert "orchestrator_cli dispatch" in content, (
-        "FAIL: phases.py must write 'orchestrator_cli dispatch' forced command (K1, волна 117 D1)"
+        "FAIL: phases/system.py must write 'orchestrator_cli dispatch' forced command (K1, волна 117 D1)"
     )
     assert 'command="python3 -m core.internal.deploy.orchestrator_cli receive"' not in content, (
-        "FAIL: phases.py must NOT write 'orchestrator_cli receive' forced command "
+        "FAIL: phases/system.py must NOT write 'orchestrator_cli receive' forced command "
         "(K1 — receive игнорирует SSH_ORIGINAL_COMMAND)"
     )
     logger.critical("[IMP:9][test] ci-deploy forced command = orchestrator_cli dispatch — OK")

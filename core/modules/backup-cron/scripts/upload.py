@@ -461,11 +461,11 @@ def _init_client(config: S3Config) -> Any:
 # endregion FUNC_init_client
 
 
-# region FUNC_upload_and_verify
-# @purpose  Upload file to S3 with retries, then verify checksum/size
-# @io       (...) → bool (success)
-# @complexity 4
-def _upload_and_verify(
+# region FUNC_upload
+# @purpose  Upload phase: upload file to S3 with retries (3 attempts × 30min).
+# @io       (client, bucket, local_file, full_key, local_sha256, max_retries, interval_sec) → bool
+# @complexity 1 — delegate to upload_with_retries
+def _upload(
     client: Any,
     bucket: str,
     local_file: str,
@@ -475,10 +475,7 @@ def _upload_and_verify(
     interval_sec: int,
 ) -> bool:
     """
-    Upload with retries + post-upload verification. Returns True on success.
-
-    On verification failure (size or SHA256 mismatch), attempts one re-upload.
-    If S3 metadata retrieval fails (s3_size is None), exits with code 1.
+    Upload with retries. Returns True if upload succeeded, False if all retries exhausted.
 
     Args:
         client: boto3 S3 client.
@@ -490,9 +487,9 @@ def _upload_and_verify(
         interval_sec: Seconds between retry attempts.
 
     Returns:
-        True if upload and verification succeeded, False if all retries exhausted.
+        True if upload succeeded, False if all retries exhausted.
     """
-    success = upload_with_retries(
+    return upload_with_retries(
         client,
         bucket,
         local_file,
@@ -502,9 +499,35 @@ def _upload_and_verify(
         sha256=local_sha256,
     )
 
-    if not success:
-        return False
 
+# endregion FUNC_upload
+
+
+# region FUNC_verify
+# @purpose  Verify phase: post-upload checksum/size verification, on mismatch delete bad object
+#           and re-upload once. Returns True when upload+verification consistent.
+# @io       (client, bucket, local_file, full_key, local_sha256) → bool
+# @complexity 5 — metadata read + mismatch decision + re-upload + re-verify
+def _verify(
+    client: Any,
+    bucket: str,
+    local_file: str,
+    full_key: str,
+    local_sha256: str,
+) -> bool:
+    """
+    Verify upload — size + SHA256 checksum. On mismatch, delete bad object and re-upload once.
+
+    Args:
+        client: boto3 S3 client.
+        bucket: S3 bucket name.
+        local_file: Path to local backup file.
+        full_key: Full S3 key with prefix.
+        local_sha256: SHA256 hex digest of local file.
+
+    Returns:
+        True if upload and verification succeeded.
+    """
     # Verify upload — size + SHA256 checksum
     s3_meta = get_s3_metadata(client, bucket, full_key)
     local_size = os.path.getsize(local_file)
@@ -595,6 +618,55 @@ def _upload_and_verify(
         )
 
     return True
+
+
+# endregion FUNC_verify
+
+
+# region FUNC_upload_and_verify
+# @purpose  Upload with retries + post-upload verification (E8: композиция _upload → _verify).
+# @io       (...) → bool (success)
+# @complexity 2 — composition of two phase functions (DevPlan 119 E8)
+def _upload_and_verify(
+    client: Any,
+    bucket: str,
+    local_file: str,
+    full_key: str,
+    local_sha256: str,
+    max_retries: int,
+    interval_sec: int,
+) -> bool:
+    """
+    Upload with retries + post-upload verification. Returns True on success.
+
+    E8 (DevPlan 119): _upload_and_verify разбита на фазы _upload (загрузка с retries) и
+    _verify (проверка + re-upload при mismatch). Композиция сохраняет контракт (R5:
+    test_upload_verify_split).
+
+    Args:
+        client: boto3 S3 client.
+        bucket: S3 bucket name.
+        local_file: Path to local backup file.
+        full_key: Full S3 key with prefix.
+        local_sha256: SHA256 hex digest of local file.
+        max_retries: Maximum number of upload attempts.
+        interval_sec: Seconds between retry attempts.
+
+    Returns:
+        True if upload and verification succeeded, False if all retries exhausted.
+    """
+    if not _upload(
+        client,
+        bucket,
+        local_file,
+        full_key,
+        local_sha256,
+        max_retries=max_retries,
+        interval_sec=interval_sec,
+    ):
+        return False
+
+    return _verify(client, bucket, local_file, full_key, local_sha256)
 
 
 # endregion FUNC_upload_and_verify

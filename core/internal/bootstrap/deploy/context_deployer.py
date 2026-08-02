@@ -616,6 +616,33 @@ def extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
 # region DEPLOY_CONTEXT
 
 
+# region FUNC__resolve_context
+## @purpose — E7 (DevPlan 119): резолв CONTEXT по цепочке explicit arg → os.environ → node.yaml.
+##            Ветвления deploy_context вынесены в изолированный хелпер (dispatch-упрощение).
+## @io — ⇥ context: str (уже переданный/пустой), node_yaml: str → ⎋ str (resolved, может быть "")
+## @complexity — O(1) — env check + NodeYaml.get_context
+## @invariants
+##   - Explicit arg приоритетен (не пустой → возвращается как есть)
+##   - os.environ CONTEXT → node.yaml contexts[0].name (fallback-цепочка)
+##   - NodeYaml ошибки graceful-degradation (WARN, не raise)
+def _resolve_context(context: str, node_yaml: str) -> str:
+    """Resolve CONTEXT: explicit arg → os.environ → node.yaml (E7 helper)."""
+    if context:
+        return context
+    context = os.environ.get("CONTEXT", platform_config.default_context_sentinel())
+    if not context and node_yaml and os.path.isfile(node_yaml):
+        # DevPlan 116 B6 T2: extract-алиас поглощал ошибки и возвращал "";
+        # graceful-degradation сохранена, но на фасаде NodeYaml.get_context().
+        try:
+            context = NodeYaml(node_yaml).get_context()
+        except (ConfigParseError, ConfigNotFoundError) as exc:
+            logger.warning("[IMP:7][_resolve_context] Cannot read context from %s: %s", node_yaml, exc)
+    return context
+
+
+# endregion FUNC__resolve_context
+
+
 # region FUNC_deploy_context
 ## @purpose — Unified deploy_context entry point: cert orchestration + project deploy + vhost render + verify.
 ##            Replaces steps._step_deploy_context and deprecated 4 standalone entrypoints.
@@ -651,16 +678,8 @@ def deploy_context(
 
     bootstrap_dir = os.path.join(core_dir, "internal", "bootstrap")
 
-    # ── Step 1: Extract/confirm CONTEXT ──
-    if not context:
-        context = os.environ.get("CONTEXT", platform_config.default_context_sentinel())
-    if not context and node_yaml and os.path.isfile(node_yaml):
-        # DevPlan 116 B6 T2: extract-алиас поглощал ошибки и возвращал "";
-        # graceful-degradation сохранена, но на фасаде NodeYaml.get_context().
-        try:
-            context = NodeYaml(node_yaml).get_context()
-        except (ConfigParseError, ConfigNotFoundError) as exc:
-            logger.warning("[IMP:7][deploy_context] Cannot read context from %s: %s", node_yaml, exc)
+    # ── Step 1: Extract/confirm CONTEXT (E7: ветвления вынесены в _resolve_context) ──
+    context = _resolve_context(context, node_yaml)
     if not context:
         logger.error(
             "[IMP:10][deploy_context] CONTEXT not set — pass via --context or ensure node.yaml has contexts[0].name"

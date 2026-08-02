@@ -35,6 +35,7 @@ import pytest
 logger = logging.getLogger(__name__)
 
 COUNTER_FILE = Path(__file__).resolve().parent / ".test_counter.json"
+LOCK_FILE = COUNTER_FILE.parent / (COUNTER_FILE.name + ".lock")
 
 # Checklist of common gate test errors
 CHECKLIST = [
@@ -50,21 +51,51 @@ CHECKLIST = [
 ]
 
 
-def _read_counter() -> int:
-    """Read current attempt counter from .test_counter.json."""
-    if COUNTER_FILE.exists():
+# region CONTEXT_COUNTER_LOCK
+## @purpose  Файловая блокировка flock (fcntl) вокруг counter RMW — xdist-безопасность
+##           (DevPlan 120 §3.3): gates-чеки исполняются с -n auto, session-хуки — в каждом
+##           worker'е; раздельные read/write .test_counter.json = гонка (потерянные обновления).
+## @io       → with _CounterLock(): критическая секция
+## @complexity O(1)
+class _CounterLock:
+    """Advisory flock around gate-counter read-modify-write (xdist-safe)."""
+
+    def __enter__(self) -> "_CounterLock":
+        import fcntl
+
+        self._fh = open(LOCK_FILE, "a+")
+        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        import fcntl
+
         try:
-            data = json.loads(COUNTER_FILE.read_text())
-            return data.get("failed_runs", 0)
-        except (json.JSONDecodeError, KeyError):
-            return 0
-    return 0
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._fh.close()
+
+
+# endregion CONTEXT_COUNTER_LOCK
+
+
+def _read_counter() -> int:
+    """Read current attempt counter from .test_counter.json (under flock)."""
+    with _CounterLock():
+        if COUNTER_FILE.exists():
+            try:
+                data = json.loads(COUNTER_FILE.read_text())
+                return data.get("failed_runs", 0)
+            except (json.JSONDecodeError, KeyError):
+                return 0
+        return 0
 
 
 def _write_counter(count: int) -> None:
-    """Write attempt counter to .test_counter.json."""
-    COUNTER_FILE.write_text(json.dumps({"failed_runs": count}, indent=2) + "\n")
-    logger.info("[IMP:7][anti-loop][counter] Set failed_runs=%d", count)
+    """Write attempt counter to .test_counter.json (under flock)."""
+    with _CounterLock():
+        COUNTER_FILE.write_text(json.dumps({"failed_runs": count}, indent=2) + "\n")
+        logger.info("[IMP:7][anti-loop][counter] Set failed_runs=%d", count)
 
 
 def _print_escalation(attempt: int) -> None:

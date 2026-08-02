@@ -139,7 +139,9 @@ def check_litellm(url: str, timeout: int = LITELLM_TIMEOUT) -> bool:
     ## @complexity O(1) + 1 HTTP запрос
     """
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        # nosec B310 — внутренний LiteLLM healthcheck endpoint (http://litellm:4000, локальная сеть).
+        # Паттерн repo-wide (healthcheck_poller/langfuse_projects/service_reload/agent_watchdog).
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # nosec B310
             ok = resp.status == 200
             logger.info("[IMP:%d][deps] LiteLLM: %s (HTTP %s)", 8 if ok else 9, "ok" if ok else "FAIL", resp.status)
             return ok

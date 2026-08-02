@@ -57,7 +57,8 @@ from typing import Any, NamedTuple
 
 import yaml
 
-# B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared.atomic_writer import atomic_write_text as _atomic_write_text
 from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
@@ -1047,10 +1048,11 @@ class NodeYaml:
     #   (DevPlan 116 B6 T6.1/T6.2) — cache is never poisoned regardless of write outcome.
     # · Prevention: any _write_back exit path (success or failure) must invalidate _data.
     def _write_back(self, data: dict) -> None:
-        """Write the YAML data back to the original file.
+        """Write the YAML data back to the original file (atomic — E5).
 
         Uses ruamel.yaml if available for comment preservation,
-        falls back to PyYAML yaml.dump().
+        falls back to PyYAML yaml.dump(). Рендер в строку → shared atomic_writer
+        (tempfile + fsync + os.replace, DevPlan 119 E5).
 
         Args:
             data: Dict to write as YAML
@@ -1062,14 +1064,17 @@ class NodeYaml:
 
         # Try ruamel.yaml first for comment preservation
         try:
+            import io as _io
+
             from ruamel.yaml import YAML
 
             ryaml = YAML()
             ryaml.width = 4096  # prevent line wrapping
-            with open(self._path, "w") as f:
-                ryaml.dump(data, f)
+            buf = _io.StringIO()
+            ryaml.dump(data, buf)
             self._data = None  # invalidate cache
-            logger.info("[IMP:9][NodeYaml._write_back] Written via ruamel.yaml (comments preserved)")
+            _atomic_write_text(self._path, buf.getvalue())
+            logger.info("[IMP:9][NodeYaml._write_back] Written via ruamel.yaml (comments preserved, atomic)")
             return
         except ImportError:
             logger.info("[IMP:7][NodeYaml._write_back] ruamel.yaml not available, using PyYAML")
@@ -1078,10 +1083,10 @@ class NodeYaml:
 
         # Fallback: PyYAML
         try:
-            with open(self._path, "w") as f:
-                yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
             self._data = None  # invalidate cache
-            logger.info("[IMP:9][NodeYaml._write_back] Written via PyYAML")
+            _atomic_write_text(self._path, content)
+            logger.info("[IMP:9][NodeYaml._write_back] Written via PyYAML (atomic)")
         except (OSError, yaml.YAMLError) as e:
             # DevPlan 116 B6 T6.2: invalidate cache BEFORE raise — mutations work on deepcopy,
             # but this guard protects against any cached-state drift on write failure.

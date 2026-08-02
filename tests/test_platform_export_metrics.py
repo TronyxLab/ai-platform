@@ -910,15 +910,17 @@ class TestCoordinator:
             if "platform_export_metrics" in key:
                 del sys.modules[key]
 
-    def test_coordinator_empty_state(self, mock_node_yaml_no_projects, tmp_path, caplog, mock_docker_subprocess):
+    def test_coordinator_empty_state(
+        self, mock_node_yaml_no_projects, tmp_path, caplog, mock_docker_subprocess, monkeypatch
+    ):
         """Coordinator handles empty state gracefully — no crash, empty arrays + errors."""
         caplog.set_level(0)
 
         metrics_file = tmp_path / "status-metrics.json"
-        os.environ["STATUS_METRICS_JSON"] = str(metrics_file)
-        os.environ["NODE_YAML_PATH"] = mock_node_yaml_no_projects
-        os.environ["NODE_NAME"] = "test-node"
-        os.environ["METRICS_CACHE_DIR"] = str(tmp_path / "cache")
+        monkeypatch.setenv("STATUS_METRICS_JSON", str(metrics_file))
+        monkeypatch.setenv("NODE_YAML_PATH", mock_node_yaml_no_projects)
+        monkeypatch.setenv("NODE_NAME", "test-node")
+        monkeypatch.setenv("METRICS_CACHE_DIR", str(tmp_path / "cache"))
 
         # Force reimport to pick up new env vars
         self._reimport_coordinator()
@@ -949,15 +951,15 @@ class TestCoordinator:
         assert "host" in data
         assert "errors" in data
 
-    def test_coordinator_partial_failure(self, mock_node_yaml, tmp_path, caplog, mock_docker_subprocess):
+    def test_coordinator_partial_failure(self, mock_node_yaml, tmp_path, caplog, mock_docker_subprocess, monkeypatch):
         """Coordinator produces partial data with errors when some collectors fail."""
         caplog.set_level(0)
 
         metrics_file = tmp_path / "status-metrics-partial.json"
-        os.environ["STATUS_METRICS_JSON"] = str(metrics_file)
-        os.environ["NODE_YAML_PATH"] = mock_node_yaml
-        os.environ["NODE_NAME"] = "test-node"
-        os.environ["METRICS_CACHE_DIR"] = str(tmp_path / "cache")
+        monkeypatch.setenv("STATUS_METRICS_JSON", str(metrics_file))
+        monkeypatch.setenv("NODE_YAML_PATH", mock_node_yaml)
+        monkeypatch.setenv("NODE_NAME", "test-node")
+        monkeypatch.setenv("METRICS_CACHE_DIR", str(tmp_path / "cache"))
 
         # Force reimport to pick up new env vars
         self._reimport_coordinator()
@@ -1010,7 +1012,7 @@ class TestCoordinator:
         assert len(data["containers"]) > 0, "Containers should be present"
         assert "errors" in data
 
-    def test_coordinator_invalid_yaml(self, tmp_path, caplog, mock_docker_subprocess):
+    def test_coordinator_invalid_yaml(self, tmp_path, caplog, mock_docker_subprocess, monkeypatch):
         """Coordinator handles invalid node.yaml gracefully."""
         caplog.set_level(0)
 
@@ -1018,10 +1020,10 @@ class TestCoordinator:
         bad_yaml.write_text("{{invalid_yaml: [broken")
 
         metrics_file = tmp_path / "status-metrics.json"
-        os.environ["STATUS_METRICS_JSON"] = str(metrics_file)
-        os.environ["NODE_YAML_PATH"] = str(bad_yaml)
-        os.environ["NODE_NAME"] = "test-node"
-        os.environ["METRICS_CACHE_DIR"] = str(tmp_path / "cache")
+        monkeypatch.setenv("STATUS_METRICS_JSON", str(metrics_file))
+        monkeypatch.setenv("NODE_YAML_PATH", str(bad_yaml))
+        monkeypatch.setenv("NODE_NAME", "test-node")
+        monkeypatch.setenv("METRICS_CACHE_DIR", str(tmp_path / "cache"))
 
         # Force reimport to pick up new env vars
         self._reimport_coordinator()

@@ -24,7 +24,7 @@
 ## ⚠️ TRAP[DECISION] · 2026-08-01 · HI · Bootstrap forced-command → orchestrator_cli dispatch (DevPlan 116 B8 D2, волна 117 D1)
 ## · Rejected: оставить forced-command на удалённый legacy deploy-скрипт (риск: новые ноды получают сломанные authorized_keys)
 ## · Reason: единственный писатель ci-deploy ключа — Python lifecycle φ2 (helpers/users.py add_ssh_key,
-##   phases.py:256): `command="python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict`
+##   phases/system.py): `command="python3 -m core.internal.deploy.orchestrator_cli dispatch",restrict`
 ##   (SSH_ORIGINAL_COMMAND-диспетчер verbs, DevPlan 116 B1). setup-node.sh — ТОЛЬКО generate_sudoers
 ##   (visudo -c + atomic mv); create_user/add_owner_key/add_ci_deploy_command удалены (дубли φ2, волна 117 D1).
 ## · Rev: — (B1 реализован; dispatch — канонический канал. Rev-условие снято волной 117 D1.)
@@ -121,7 +121,9 @@
 | ✅ | `adopt-project` | Адаптация существующего проекта |
 | ✅ | `backup` | Резервное копирование |
 | ✅ | `bootstrap-node` | Идемпотентный bootstrap ноды |
+| ✅ | `check` | Диагностика — все проверки из core/check-suite.yaml (экс-preflight) |
 | ✅ | `check-dead-code` | Проверка мёртвого кода |
+| ✅ | `check-diff` | Узкая диагностика по изменённым файлам |
 | ✅ | `check-domain-parity` | Parity-гейт PLATFORM_DOMAIN (единое определение, 0 legacy-доменов) |
 | ✅ | `check-env-defaults` | Проверка актуальности .env.example |
 | ✅ | `check-exception-patterns` | Проверка паттернов исключений |
@@ -158,7 +160,7 @@
 | ✅ | `new-context` | Создание контекста деплоя |
 | ✅ | `new-project` | Создание проекта из шаблона |
 | ✅ | `node-update` | Обновление provisioned ноды |
-| ✅ | `preflight` | Параллельный preflight (сбор всех ошибок gate за один проход) |
+| ✅ | `preflight` | Deprecated-алиас — диагностика через make check |
 | ✅ | `project-list` | Список проектов |
 | ✅ | `project-status` | Статус проекта |
 | ✅ | `project-sync-env` | Синхронизация .env.platform |

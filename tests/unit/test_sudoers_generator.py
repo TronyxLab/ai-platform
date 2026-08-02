@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Module under test
+import core.internal.bootstrap.deploy.sudoers_generator as sg
 from core.internal.bootstrap.deploy.sudoers_generator import (
     _MAKE_BIN,
     _map_role_to_username,
@@ -916,3 +917,16 @@ def test_cli_missing_module_name(
     assert sg.main() == 1
 
     _assert_ldd_trajectory(caplog)
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · E5 _safe_cleanup removal — DevPlan 119 E5
+# · Regression: _safe_cleanup was dead after _write_sudoers_file migrated to atomic_writer (E5)
+# · Last fail: N/A — removal was part of E5 migration (atomic_writer handles temp cleanup)
+# · Remove if: atomic_writer or _write_sudoers_file semantics change
+def test_safe_cleanup_removed_negative() -> None:
+    """R5 negative: _safe_cleanup must NOT exist (cleanup delegated to atomic_writer)."""
+    assert not hasattr(sg, "_safe_cleanup"), (
+        "R5 FAIL: _safe_cleanup resurrected — temp cleanup must live in atomic_writer (E5)"
+    )
+    assert not hasattr(sg, "shutil"), "R5 FAIL: shutil import resurrected — atomic_writer owns temp lifecycle (E5)"
+    assert not hasattr(sg, "tempfile"), "R5 FAIL: tempfile import resurrected — atomic_writer owns temp lifecycle (E5)"

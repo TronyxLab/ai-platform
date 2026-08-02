@@ -114,6 +114,7 @@ gates:
 - Структурированный stdout: `[REPAIR:FIXED]`, `[REPAIR:NOOP]`, `[REPAIR:ERROR]`.
 - Pre-flight CI правило: `make fix-gate && git add -u && make gate MODE=fast` (см. `.kilo/rules/_project.md`).
 - `repair.mk` экспортирует `REPAIR_TARGETS` — machine-readable реестр для CI-валидации (`test_repair_contract_integrity`).
+- Диагностический цикл кодера (DevPlan 120): `make check` (SoT-манифест `core/check-suite.yaml`, экс-preflight) → фикс-цикл → `make gate MODE=fast`; узкий таргет — `make check-diff`. `preflight` — deprecated-алиас.
 
 ---
 

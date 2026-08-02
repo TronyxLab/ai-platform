@@ -243,13 +243,32 @@ def mock_status_metrics_json_one_unhealthy(tmp_path: Path) -> Path:
 
 
 def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
-    """Set environment variables for app.py and import the module."""
+    """Set environment variables for app.py and import the module.
+
+    ## @purpose — Подготовка env для status-page app.py. app.py читает env ТОЛЬКО на
+    ##            уровне модуля (строки 91-98 — module-level константы), поэтому env
+    ##            нужен лишь на время importlib.reload. После reload константы захвачены
+    ##            в память модуля — env восстанавливается (snapshot/restore), чтобы не
+    ##            отравлять последующие тесты (NODE_NAME/NODE_YAML_PATH leak, флейк
+    ##            test_node_lifecycle_static.py:291 в полном прогоне).
+    ## ⚠️ TRAP[BUG] · 2026-08-02 · P2 · env-утечка: os.environ["NODE_NAME"] без отката
+    ## · Symptom: test_node_lifecycle_static.py::test_node_lifecycle_dry_run_contract FAIL
+    ## ·   "Expected NODE_NAME-required diagnostic" — node-lifecycle.sh видел NODE_NAME из env
+    ## · Root: прямые записи os.environ в тест-хелперах без restore (test_status_page,
+    ## ·   test_platform_export_metrics) — глобальное env-состояние между тестами
+    ## · Fix: snapshot/restore после reload (app.py читает env только на уровне модуля)
+    ## · Prevention: тест-хелперы, мутирующие os.environ, обязаны использовать
+    ## ·   monkeypatch.setenv или snapshot/restore в finally
+    """
     for key in list(sys.modules.keys()):
         if "app" in key.lower() and "status" in str(sys.modules.get(key, "")):
             del sys.modules[key]
 
     node_configs_dir = str(Path(node_yaml_path).parent.parent)
     node_name = Path(node_yaml_path).parent.name
+
+    _ENV_KEYS = ("NODE_YAML_PATH", "STATUS_METRICS_JSON", "NODE_NAME", "NODE_CONFIGS_DIR", "PLATFORM_DOMAIN")
+    saved = {key: os.environ.get(key) for key in _ENV_KEYS}
 
     os.environ["NODE_YAML_PATH"] = node_yaml_path
     os.environ["STATUS_METRICS_JSON"] = metrics_json_path  # Δ: new env var name
@@ -263,6 +282,14 @@ def _setup_app_env(node_yaml_path: str, metrics_json_path: str):
     import app as app_module
 
     importlib.reload(app_module)
+
+    # Restore env — app.py уже захватил константы при reload (module-level reads).
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
     return app_module
 
 

@@ -77,7 +77,6 @@ import argparse
 import contextlib
 import logging
 import os
-import re
 import subprocess
 import sys
 import time
@@ -92,7 +91,14 @@ from build_cache import check_build_needed, compute_source_hash, save_build_hash
 # DevPlan 117 D18: единый канон orphan-реконсиляции — orphan_reconciler (batch-подход,
 # один docker ps -a). Локальный per-module orphan-cleanup удалён (дубль логики).
 # DevPlan 118 D1: healthcheck-инвокации и hermes-workflow вынесены в отдельные модули.
-from core.internal.bootstrap.deploy import healthcheck_runner, hermes_workflow, orphan_reconciler, parallel_runner
+# DevPlan 119 E1: observability-фаза — отдельный модуль (экстракция _cleanup_observability_containers).
+from core.internal.bootstrap.deploy import (
+    healthcheck_runner,
+    hermes_workflow,
+    observability,
+    orphan_reconciler,
+    parallel_runner,
+)
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
 # DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
@@ -107,9 +113,6 @@ from core.internal.shared.docker_compose import (
 )
 from core.internal.shared.docker_compose import (
     docker_compose_build as _shared_docker_compose_build,
-)
-from core.internal.shared.docker_compose import (
-    docker_compose_config as _shared_docker_compose_config,
 )
 from core.internal.shared.docker_compose import (
     docker_compose_up as _shared_docker_compose_up,
@@ -158,6 +161,9 @@ DEFAULT_HEALTHCHECK_RETRY_INTERVAL = healthcheck_runner.DEFAULT_HEALTHCHECK_RETR
 # Path to invoke_module_interface shell function — used for readiness and healthcheck.
 # C5 (DevPlan 118): сборка bash -c делегирована в shared/module_interface.invoke — локальные
 # константы путей УДАЛЕНЫ (пути резолвятся в shared-модуле, единый источник).
+
+# DevPlan 119 E1: dispatch-таблица спец-фаз deploy_docker_module по имени модуля
+# определяется ПОСЛЕ определений фаз (см. PHASES после FUNC__phase_up).
 
 
 # region FUNC__resolve_compose_profiles_from_infra
@@ -295,29 +301,28 @@ def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: 
 
 # region FUNC_deploy_docker_module
 ## @purpose  Deploy a single Docker module via docker compose build (if build: section) + up -d --remove-orphans.
-##           Handles compose file resolution, env files, hermes-agent special case,
-##           orphan container reconciliation, image rebuild for local-build modules, and observability cleanup.
+##           DevPlan 119 E1: монолит (195 LOC, CC=25) разбит на фазы с dispatch-таблицей
+##           PHASES (hermes → hermes_workflow, observability → observability.py, rebuild/up → локально).
+##           Оркестратор: resolve compose → build args → dispatch спец-фаз → orphan reconcile →
+##           nginx overlay → rebuild → up.
 ## @io       ⇥ module_name: str, overlay_dir: str | None, secrets_env_file: str | None,
 ##           platform_root: str | None, modules_dir: str | None
 ##           ⎋ bool: True if deploy succeeded
-## @complexity 5 — multi-step: compose resolve → args build → hermes check → orphan reconcile → image rebuild → compose up
+## @complexity 5 — multi-step: compose resolve → args build → phase dispatch → orphan → rebuild → up
 ## @invariants
 ##   - Returns False (not exception) on failure — caller decides abort vs continue
-##   - Hermes-agent legacy container cleanup runs before hermes-agent pre-deploy checks
+##   - Спец-фазы (hermes/observability) диспатчатся через PHASES (E1) — 0 inline if-каскадов
 ##   - Observability module gets per-service container cleanup before compose up
 ##   - COMPOSE_PROFILES env var is set to full profile list for config --services calls
 ##   - Modules with build: section (except hermes-agent) get `docker compose build` before up -d
 ##     to pick up source changes from core-deploy rsync (docker compose up -d is no-op for
 ##     already-running containers with unchanged config)
-## @rationale Q: Why not raise exceptions? A: deploy_docker_group calls this in parallel —
-##   exceptions in one subprocess would not propagate to the parent. Return code is the
-##   only reliable signal across process boundaries.
-##   Q: Why build for build:-modules? A: core-deploy rsyncs updated source files to VPS,
-##   but docker compose up -d is a no-op for running containers with unchanged compose config.
-##   Modules with build: (status-page, backup-cron) have no registry images — source changes
-##   require local rebuild. Without explicit build, stale container serves indefinitely.
+## @rationale Q: Why phase dispatch? A: E1 (DevPlan 119, AUDIT-2 M7) — deploy_docker_module CC=25,
+##   13 if-веток. Разбиение по фазам + PHASES-таблица снижает CC до ≤10 и даёт изолированные
+##   тесты фаз (test_phase_hermes_build / test_deploy_docker_module_phases_negative).
 ## @changes   2026-07-23 · Added docker compose build step for modules with build: section
 ##             (P0 bug: status-page showing old container after core-deploy)
+##            2026-08-02 · DevPlan 119 E1 — phased decomposition (PHASES dispatch)
 def deploy_docker_module(
     module_name: str,
     overlay_dir: str | None = None,
@@ -361,24 +366,23 @@ def deploy_docker_module(
         module_name=module_name,
     )
 
-    # ── Hermes-agent: legacy container cleanup ──
-    if module_name == "hermes-agent":
-        _cleanup_legacy_container("hermes-base-agent")
-        logger.info("[IMP:8][deploy_docker_module][hermes] Legacy container check done")
-
-    # ── Hermes-agent: pre-deploy image check / build ──
-    if module_name == "hermes-agent" and not _handle_hermes_agent(compose_args, module_dir, module_name):
-        logger.error("[IMP:10][deploy_docker_module][hermes_fail] Hermes-agent pre-deploy checks failed")
-        return False
+    # ── PHASE DISPATCH (E1): спец-фазы по имени модуля ──
+    phase_fn = PHASES.get(module_name)
+    if phase_fn is not None:
+        phase_ok = phase_fn(
+            module_name=module_name,
+            module_dir=module_dir,
+            compose_file=compose_file,
+            compose_args=compose_args,
+        )
+        if phase_ok is False:
+            logger.error("[IMP:10][deploy_docker_module][phase_fail] Phase %s failed for %s", module_name, module_name)
+            return False
 
     # ── COMPOSE_PROFILES for config --services calls ──
     # SoT: core/platform-infra.yaml env_defaults (DevPlan 116 T2, U-02). Explicit env
     # COMPOSE_PROFILES (from Makefile export / CI) takes precedence — setdefault semantics.
     os.environ.setdefault("COMPOSE_PROFILES", _resolve_compose_profiles_from_infra())
-
-    # ── Observability: pre-deploy container cleanup ──
-    if module_name == "observability":
-        _cleanup_observability_containers(compose_file)
 
     # ── Orphan container reconciliation ──
     # DevPlan 117 D18: делегирование в orphan_reconciler (единый канон). batch_orphan_reconciliation
@@ -394,12 +398,96 @@ def deploy_docker_module(
         os.environ["NGINX_OVERLAY_DIR"] = overlay_dir
         logger.info("[IMP:8][deploy_docker_module][nginx] Set NGINX_OVERLAY_DIR=%s", overlay_dir)
 
-    # ── Rebuild image for modules with build: section ──
+    # ── PHASE: rebuild (build:-modules) ──
+    rebuild_ok, has_local_build = _phase_rebuild(
+        module_name=module_name,
+        module_dir=module_dir,
+        compose_file=compose_file,
+        compose_args=compose_args,
+    )
+    if not rebuild_ok:
+        return False
+
+    # ── PHASE: compose up -d ──
+    return _phase_up(
+        module_name=module_name,
+        module_dir=module_dir,
+        compose_args=compose_args,
+        has_local_build=has_local_build,
+    )
+
+
+# endregion FUNC_deploy_docker_module
+
+
+# region FUNC__phase_hermes
+## @purpose  E1 hermes-agent phase: legacy container cleanup + pre-deploy image check/build.
+##           Делегирует в hermes_workflow.handle_hermes_agent (D1). Возвращает False на
+##           фатальном сбое (build/pull failure).
+## @io       ⇥ module_name, module_dir, compose_file, compose_args → ⎋ bool (True = ready)
+## @complexity 1 — delegation (legacy cleanup + hermes_workflow)
+## @invariants
+##   - Legacy container "hermes-base-agent" clean-up перед hermes-проверками
+##   - False → деплой abort (hermes-critical)
+def _phase_hermes(
+    module_name: str,
+    module_dir: str,
+    compose_file,
+    compose_args: list[str],
+) -> bool:
+    """E1 phase: hermes-agent legacy cleanup + pre-deploy image check/build."""
+    _cleanup_legacy_container("hermes-base-agent")
+    logger.info("[IMP:8][_phase_hermes][legacy] Legacy container check done")
+    return _handle_hermes_agent(compose_args, module_dir, module_name)
+
+
+# endregion FUNC__phase_hermes
+
+
+# region FUNC__phase_observability
+## @purpose  E1 observability phase: pre-deploy container cleanup (name-conflict prevention).
+##           Делегирует в observability.cleanup_observability_containers (E1). Всегда True
+##           (cleanup best-effort, не блокирует деплой).
+## @io       ⇥ module_name, module_dir, compose_file, compose_args → ⎋ bool (True)
+## @complexity 1 — delegation
+## @invariants
+##   - Сбой очистки → WARN внутри observability.py, НЕ блокирует деплой
+def _phase_observability(
+    module_name: str,
+    module_dir: str,
+    compose_file,
+    compose_args: list[str],
+) -> bool:
+    """E1 phase: observability pre-deploy container cleanup (best-effort)."""
+    observability.cleanup_observability_containers(compose_file)
+    return True
+
+
+# endregion FUNC__phase_observability
+
+
+# region FUNC__phase_rebuild
+## @purpose  E1 rebuild phase: content-hash skip → docker compose build → save hash.
+##           Возвращает (ok, has_local_build): ok=False → deploy abort; has_local_build →
+##           флаг для --force-recreate в up-фазе.
+## @io       ⇥ module_name, module_dir, compose_file, compose_args
+##           ⎋ tuple[bool, bool] — (success, has_local_build)
+## @complexity 3 — build: detection + content-hash skip + build/save
+## @invariants
+##   - hermes-agent исключён (свой workflow в _phase_hermes)
+##   - Content-hash skip: source unchanged → только up --force-recreate
+##   - Сбой build → False (deploy abort)
+def _phase_rebuild(
+    module_name: str,
+    module_dir: str,
+    compose_file,
+    compose_args: list[str],
+) -> tuple[bool, bool]:
+    """E1 phase: rebuild image for modules with build: section (content-hash skip)."""
     # · Rationale: docker compose up -d is a no-op for already-running containers
     #   with unchanged config. Modules with build: (status-page, backup-cron) need
     #   explicit rebuild to pick up source changes from core-deploy rsync.
-    # · Hermes-agent excluded — has its own image workflow via _handle_hermes_agent
-    #   (GHCR pull + local build fallback).
+    # · Hermes-agent excluded — has its own image workflow via _phase_hermes.
     # ⚠️ TRAP[BUG] · 2026-07-23 · P0 · status-page showing old container after deploy
     # · Symptom: https://platform.tronyx.ru/ shows stale page after successful core-deploy
     # · Root: docker compose up -d no-op — bind-mounted app.py updated on disk but
@@ -426,42 +514,27 @@ def deploy_docker_module(
             build_needed = check_build_needed(os.path.join(module_dir, module_name))
             if not build_needed:
                 logger.info(
-                    "[IMP:9][deploy_docker_module][build_skip] Build skipped for %s — source unchanged (content-hash match)",
+                    "[IMP:9][_phase_rebuild][build_skip] Build skipped for %s — source unchanged (content-hash match)",
                     module_name,
                 )
                 # Source unchanged — skip build, still need --force-recreate in
                 # case compose config changed (env files, compose override, etc.)
                 logger.info(
-                    "[IMP:8][deploy_docker_module][up_skip_build] Running compose up --force-recreate for %s (build skipped)",
+                    "[IMP:8][_phase_rebuild][up_skip_build] Running compose up --force-recreate for %s (build skipped)",
                     module_name,
                 )
-                # T4.2 (DevPlan 116 B5): shared docker_compose_up — sole path (D6: False → IMP:10 + False)
-                if _shared_docker_compose_up(
-                    os.path.join(module_dir, module_name),
-                    timeout=COMPOSE_UP_TIMEOUT,
-                    compose_args=compose_args,
-                    flags=["--remove-orphans", "--force-recreate"],
-                ):
-                    logger.info("[IMP:9][deploy_docker_module][done] Module deployed (build-skipped): %s", module_name)
-                    time.sleep(1)
-                    return True
-                logger.error(
-                    "[IMP:10][deploy_docker_module][up_fail_skip_build] docker compose up failed for %s", module_name
-                )
-                return False
+                return True, has_local_build
 
-            logger.info("[IMP:7][deploy_docker_module][build] Rebuilding image for %s (build: detected)", module_name)
+            logger.info("[IMP:7][_phase_rebuild][build] Rebuilding image for %s (build: detected)", module_name)
             # T4.3 (DevPlan 116 B5): shared docker_compose_build — sole path (timeout BUILD_TIMEOUT)
             if not _shared_docker_compose_build(
                 os.path.join(module_dir, module_name),
                 timeout=BUILD_TIMEOUT,
                 compose_args=compose_args,
             ):
-                logger.error(
-                    "[IMP:10][deploy_docker_module][build_fail] docker compose build failed for %s", module_name
-                )
-                return False
-            logger.info("[IMP:9][deploy_docker_module][build] Image rebuilt for %s", module_name)
+                logger.error("[IMP:10][_phase_rebuild][build_fail] docker compose build failed for %s", module_name)
+                return False, has_local_build
+            logger.info("[IMP:9][_phase_rebuild][build] Image rebuilt for %s", module_name)
             # Save hash after successful build (W3.T3.3) — бизнес-логика остаётся здесь
             # ⚠️ TRAP[BUG] · 2026-07-24 · P2 · compute_source_hash/save_build_hash receives modules root
             # · Fix: use os.path.join(module_dir, module_name) for specific module subdirectory
@@ -471,30 +544,48 @@ def deploy_docker_module(
                     save_build_hash(os.path.join(module_dir, module_name), new_hash)
             except (OSError, FileNotFoundError) as exc:
                 logger.warning(
-                    "[IMP:7][docker_orchestrator][build] Failed to save build hash for %s: %s",
+                    "[IMP:7][_phase_rebuild][hash] Failed to save build hash for %s: %s",
                     module_name,
                     exc,
                 )
+    return True, has_local_build
 
-    # ── docker compose up -d --remove-orphans [--force-recreate] ──
+
+# endregion FUNC__phase_rebuild
+
+
+# region FUNC__phase_up
+## @purpose  E1 up phase: docker compose up -d --remove-orphans [--force-recreate] + audit.
+## @io       ⇥ module_name, module_dir, compose_args, has_local_build → ⎋ bool
+## @complexity 1 — single shared docker_compose_up call + audit
+## @invariants
+##   - --force-recreate added for build:-modules (bypass same-tag no-op)
+##   - Audit DEPLOYED/FAILED через shared audit_logger (D6)
+##   - Различение TIMEOUT/ERROR/FAILED схлопывается в FAILED (детали в shared-логах)
+def _phase_up(
+    module_name: str,
+    module_dir: str,
+    compose_args: list[str],
+    has_local_build: bool,
+) -> bool:
+    """E1 phase: docker compose up -d --remove-orphans [--force-recreate] + audit."""
     # · --force-recreate added for build:-modules to bypass Docker Compose's
     #   local-image-same-tag no-op (build creates new image under same tag,
     #   compose doesn't detect the change → container not recreated).
     flags = ["--remove-orphans"] + (["--force-recreate"] if has_local_build else [])
     logger.info(
-        "[IMP:8][deploy_docker_module][up] Running compose up for %s (flags=%s)",
+        "[IMP:8][_phase_up][up] Running compose up for %s (flags=%s)",
         module_name,
         " ".join(flags),
     )
     # T4.4 (DevPlan 116 B5): shared docker_compose_up — sole path; audit DEPLOYED/FAILED (D6).
-    # Различение TIMEOUT/ERROR/FAILED схлопывается в FAILED — детали остаются в логах shared (D6).
     if _shared_docker_compose_up(
         os.path.join(module_dir, module_name),
         timeout=COMPOSE_UP_TIMEOUT,
         compose_args=compose_args,
         flags=flags,
     ):
-        logger.info("[IMP:9][deploy_docker_module][done] Module deployed: %s", module_name)
+        logger.info("[IMP:9][_phase_up][done] Module deployed: %s", module_name)
         # DevPlan 081 Phase C: audit via shared audit_logger (TASK-081C3)
         with contextlib.suppress(Exception):
             _shared_write_audit_entry(
@@ -504,7 +595,7 @@ def deploy_docker_module(
             )
         time.sleep(1)
         return True
-    logger.error("[IMP:10][deploy_docker_module][up_fail] docker compose up failed for %s", module_name)
+    logger.error("[IMP:10][_phase_up][up_fail] docker compose up failed for %s", module_name)
     # DevPlan 081 Phase C: audit deploy fail (TASK-081C3) — D6: FAILED (не TIMEOUT/ERROR)
     with contextlib.suppress(Exception):
         _shared_write_audit_entry(
@@ -515,7 +606,25 @@ def deploy_docker_module(
     return False
 
 
-# endregion FUNC_deploy_docker_module
+# endregion FUNC__phase_up
+
+
+# region PHASES_DISPATCH
+## @purpose  DevPlan 119 E1: dispatch-таблица спец-фаз deploy_docker_module по имени модуля.
+##           Фазы-кандидаты: hermes-agent (legacy cleanup + image check/build) и observability
+##           (pre-deploy container cleanup). Каждая фаза: (module_name, module_dir, compose_file,
+##           compose_args) -> bool. False → abort деплоя (hermes-critical). rebuild/up фазы
+##           вызываются отдельно (общие для всех модулей, см. deploy_docker_module).
+## @invariants
+##   - Добавление новой спец-фазы = регистрация здесь + определение функции
+##   - Порядок dispatch: PHASES проверяется ПОСЛЕ compose args, ДО orphan/rebuild/up
+PHASES: dict[str, object] = {
+    "hermes-agent": _phase_hermes,
+    "observability": _phase_observability,
+}
+
+
+# endregion PHASES_DISPATCH
 
 
 # region FUNC__cleanup_legacy_container
@@ -560,50 +669,16 @@ def _cleanup_legacy_container(container_name: str) -> None:
 # region FUNC__cleanup_observability_containers
 ## @purpose  Clean up pre-existing containers for observability module services
 ##           before compose up (prevents name conflict on re-deploy).
+##           DevPlan 119 E1: реализация вынесена в observability.cleanup_observability_containers.
+##           Тонкий фасад сохраняет публичное имя для обратной совместимости (тесты).
 ## @io       ⇥ compose_file: Path
 ##           ⎋ None (side-effect: docker stop + rm for each service container)
-## @complexity 2 — docker compose config --services + docker ps + per-service stop/rm
+## @complexity 1 — delegate to observability module
+## @invariants
+##   - Вся логика — в observability.py (E1)
+##   - Фасад не дублирует логику — только делегирование
 def _cleanup_observability_containers(compose_file: Path) -> None:
-    logger.info("[IMP:7][_cleanup_observability_containers][start] Cleaning observability containers")
-    # ── Get services from compose config (shared — sole path, DevPlan 116 B5 T4) ──
-    svc_result = _shared_docker_compose_config(
-        str(compose_file.parent),
-        compose_args=["-f", str(compose_file)],
-        flags=["--services"],
-    )
-    if svc_result.returncode != 0:
-        logger.warning("[IMP:5][_cleanup_observability_containers][config_fail] compose config --services failed")
-        return
-    # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
-    svc_stdout = svc_result.stdout
-    if isinstance(svc_stdout, bytes):
-        svc_stdout = svc_stdout.decode("utf-8")
-    services = [s.strip() for s in svc_stdout.splitlines() if s.strip()]
-
-    # ── Get all container names ──
-    try:
-        ps_result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_CMD_TIMEOUT,
-        )
-        # ⚠️ TRAP[BUG] · 2026-07-22 · P2 · str/bytes type safety (see _cleanup_legacy_container)
-        all_containers = ps_result.stdout
-        if isinstance(all_containers, bytes):
-            all_containers = all_containers.decode("utf-8")
-    except (subprocess.TimeoutExpired, OSError):
-        logger.warning("[IMP:5][_cleanup_observability_containers][ps_fail] docker ps failed")
-        return
-
-    for cname in services:
-        if re.search(re.escape(cname), all_containers, re.MULTILINE):
-            logger.info("[IMP:8][_cleanup_observability_containers][clean] Stopping/removing container: %s", cname)
-            try:
-                subprocess.run(["docker", "stop", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
-                subprocess.run(["docker", "rm", cname], capture_output=True, timeout=DOCKER_STOP_TIMEOUT, check=False)
-            except (subprocess.TimeoutExpired, OSError):
-                logger.warning("[IMP:5][_cleanup_observability_containers][remove_fail] Failed to remove %s", cname)
+    observability.cleanup_observability_containers(compose_file)
 
 
 # endregion FUNC__cleanup_observability_containers

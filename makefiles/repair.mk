@@ -1,28 +1,32 @@
-# GREP_SUMMARY: repair.mk, fix-executable-bit, fix-ruff, fix-gate, repair-contract, repairable, gates, REPAIR_TARGETS, M-ADE
-# STRUCTURE: ┌REPAIR_TARGETS export┐ → ◇ fix-executable-bit (xargs -0) → ◇ fix-ruff (SCOPE=diff) → ◇ fix-gate (composite) → ⊕ .PHONY
+# GREP_SUMMARY: repair.mk, fix-executable-bit, fix-ruff, fix-gate, repair-contract, repairable, gates, REPAIR_TARGETS, M-ADE, check, check-diff, preflight-deprecated
+# STRUCTURE: ┌REPAIR_TARGETS export┐ → ◇ fix-executable-bit (xargs -0) → ◇ fix-ruff (SCOPE=diff) → ◇ fix-gate (composite) → ◇ check (SoT-executor) → ◇ check-diff (diff-скоуп) → ◇ preflight (deprecated alias) → ⊕ .PHONY
 # region MODULE_CONTRACT
-## @purpose  Repair targets for deterministic, idempotent L1 gate errors.
-##           Separated from helpers.mk — repair boundary.
+## @purpose  Repair targets for deterministic, idempotent L1 gate errors + диагностический
+##           check/check-diff (DevPlan 120, экс-preflight).
 ## @scope    Included from root Makefile. All targets are safe (no semantic change,
 ##           no security bypass) and idempotent.
 ## @invariants
 ##   - Каждый repair target — детерминированный и идемпотентный
+##   - check/check-diff НЕ содержат hardcoded-списков проверок — делегируют check_suite
+##     (единственный источник — core/check-suite.yaml, AC-1 DevPlan 120)
+##   - preflight — deprecated-алиас на check (обратная совместимость, compose-safe-up прецедент)
 ##   - Никаких сетевых вызовов
 ##   - Не меняет git history (только index/worktree)
-##   - Не форматирует файлы вне затронутой области
 ##   - fix-gate — ТОЛЬКО gate-blocking L1 ошибки, не расширять без ревью
 ##   - Diagnostics на Windows: core.fileMode=false → warning
 ##   - Null-терминированный парсинг (xargs -0/while read -d '') — безопасен для пробелов
 ##   - DRY_RUN=1 для каждого таргета — вывод "would fix" без мутации
 ##   - Структурированный вывод: [REPAIR:FIXED], [REPAIR:NOOP], [REPAIR:ERROR]
 ## @rationale  Единая точка входа для auto-fix + изоляция от helpers.mk.
-##             Будущий Repair Framework может заменить этот файл на Python-диспетчер.
+##             DevPlan 120: диагностическая проверка переехала на SoT-манифест
+##             (check-suite.yaml), repair-таргеты остаются для auto-fix L1.
+## @changes 2026-08-02 | DevPlan 120 Wave 1/4: preflight → check + check-diff + deprecated alias
 # endregion MODULE_CONTRACT
 
 # ═══ REPAIR_TARGETS — machine-readable реестр для CI-валидации ═══
-REPAIR_TARGETS := fix-executable-bit fix-ruff fix-gate preflight
+REPAIR_TARGETS := fix-executable-bit fix-ruff fix-gate preflight check check-diff
 
-.PHONY: fix-executable-bit fix-ruff fix-gate preflight
+.PHONY: fix-executable-bit fix-ruff fix-gate preflight check check-diff
 
 # ── fix-executable-bit: chmod +x for .sh outside core/lib/ ──
 ## @purpose  Двухпроходный fix: (1) staged/new .sh через git add --chmod=+x,
@@ -150,20 +154,35 @@ fix-gate: fix-executable-bit fix-ruff
 	@echo "[REPAIR:FIXED][fix-gate] All gate-blocking L1 fixes applied."
 	@echo "  Next: git add -u && make gate MODE=fast"
 
-# ── preflight: parallel gate checks for agent workflow ──
-## @purpose  Run ALL gate checks in parallel, collect errors once. Eliminates the
-##           iterative fix→gate→fix→gate cycle for AI agents and developers.
-##           Phases: (1) make fix-gate, (2) pre-commit run, (3) 8 read-only checks in parallel.
-##           Does NOT replace gate — gate remains the authoritative verification.
-##           preflight is a pre-verification accelerator.
-##   Usage: make preflight [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1]
-preflight:
+# ── check: диагностический executor на SoT-манифесте core/check-suite.yaml (экс-preflight) ──
+## @purpose  Run ALL checks from core/check-suite.yaml (SoT), collect errors once (DevPlan 120).
+##           Диагностический акселератор: fix-фаза (fix-gate + tier=fix) → fingerprint-кэш
+##           (replay зелёного прогона на байт-идентичном дереве) → static-чеки параллельно +
+##           pytest-чеки последовательно с xdist → единый отчёт. Кэш ТОЛЬКО здесь.
+##           НЕ заменяет gate — канонический арбитр остаётся `make gate MODE=fast|full|ci-docker`.
+##   Usage: make check [WORKERS=6] [JSON=1] [SKIP_FIX=1] [VERBOSE=1] [CHECK_CACHE=0]
+check:
 	$(eval _workers := $(or $(WORKERS),6))
 	$(eval _flags := --workers $(_workers))
 	$(if $(filter 1,$(JSON)),$(eval _flags := $(_flags) --json))
-	$(if $(filter 1,$(SKIP_FIX)),$(eval _flags := $(_flags) --skip-fix))
+	$(if $(filter 1,$(SKIP_FIX)),$(eval _flags := $(_flags) --no-fix))
 	$(if $(filter 1,$(VERBOSE)),$(eval _flags := $(_flags) --verbose))
-	$(PYTHON) -m core.internal.preflight $(_flags)
+	$(if $(filter 0,$(CHECK_CACHE)),$(eval _flags := $(_flags) --no-cache))
+	$(PYTHON) -m core.internal.check_suite run --mode diagnostic $(_flags)
+
+# ── check-diff: узкий diff-таргет (DevPlan 120 §3.5, без кэша) ──
+## @purpose  Быстрая диагностика по изменённым файлам: pre-commit run --files <diff> +
+##           ruff по изменённым .py + pytest по изменённым test-файлам. Без изменений → exit 0.
+##   Usage: make check-diff
+check-diff:
+	$(PYTHON) -m core.internal.check_suite run --mode diff
+
+# ── preflight: DEPRECATED alias for check (compose-safe-up прецедент, DevPlan 120 AC-5) ──
+## @purpose  Deprecated-алиас: прежние флаги (WORKERS/JSON/SKIP_FIX/VERBOSE) маппятся на check.
+##           Мигрируйте на `make check` (0 упоминаний «make preflight» в .kilo/* и AGENTS.md —
+##           гейт phantom-refs). Таргет остаётся рабочим для обратной совместимости.
+preflight: check
+	@echo "[REPAIR:NOOP][preflight] deprecated — используйте: make check"
 
 # ⚠️ TRAP[DECISION] · 2026-07-23 · — · fix-ruff: newline-separated not null-terminated
 # · Rejected: null-separated storage in bash variables ($()) loses all but first file

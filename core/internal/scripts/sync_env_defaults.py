@@ -26,7 +26,6 @@ import difflib
 import logging
 import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -35,10 +34,15 @@ import yaml
 # Standalone CLI bootstrap: `python3 core/internal/scripts/sync_env_defaults.py` (makefile)
 # не имеет `core` пакета на sys.path — добавляем repo root (паттерн project_registry.py L36-39,
 # позволяет lazy-импорты core.internal.shared.deploy_paths в codegen-секциях, B2/B3).
+# ⚠️ ДОЛЖЕН быть ВЫШЕ импортов core.* (DevPlan 119 E5: atomic_writer импорт — после bootstrap;
+#   иначе system python3 падает ModuleNotFoundError: No module named 'core').
 if __name__ == "__main__" or not __package__:
     _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
+
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared.atomic_writer import atomic_write_text as _atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -826,25 +830,11 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
 
 # region FUNC_write_atomic
 def write_atomic(content: str, output_path: Path) -> None:
-    """Write content atomically using tempfile + os.rename."""
+    """Write content atomically via shared atomic_writer (E5 — tempfile + fsync + os.replace)."""
     logger.info("[IMP:7][sync_env] Writing %d bytes to %s", len(content), output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".env.example",
-        dir=output_path.parent,
-        delete=False,
-    ) as tmp:
-        tmp.write(content)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp_path = tmp.name
-
     try:
-        os.rename(tmp_path, output_path)
+        _atomic_write_text(output_path, content)
     except OSError:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
         raise
     logger.info("[IMP:9][sync_env] Written atomically to %s", output_path)
 

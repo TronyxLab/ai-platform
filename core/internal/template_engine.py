@@ -14,13 +14,13 @@
 ##            коллизию с Go-templating ({{ $labels.x }}) и Grafana ({{instance}}).
 # endregion MODULE_CONTRACT
 
-import contextlib
 import logging
 import os
 import re
 import sys
-import tempfile
 
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+from core.internal.shared.atomic_writer import atomic_write_text as _atomic_write_text
 from core.internal.shared.exceptions import ConfigValidationError
 
 try:
@@ -265,29 +265,14 @@ def _read_large_file(path: str, chunk_size: int = 64 * 1024) -> str:
 
 # region FUNC_ATOMIC_WRITE
 def _atomic_write(content: str, output_path: str) -> None:
-    """Write content atomically via temp file + os.rename.
+    """Write content atomically via shared atomic_writer (E5 — tempfile + fsync + os.replace).
 
     Uses the same directory as output_path to ensure same-filesystem rename.
     """
-    import os
-
-    dir_name = os.path.dirname(os.path.abspath(output_path))
-    os.makedirs(dir_name, exist_ok=True)
-
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".tmp_",
-        suffix=".rendered",
-        dir=dir_name,
-    )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-            tmp.write(content)
-        os.rename(tmp_path, output_path)
-    except BaseException:
-        # Clean up temp file on any failure
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
+        _atomic_write_text(output_path, content)
+    except OSError as exc:
+        raise OSError(f"Atomic write failed for {output_path}: {exc}") from exc
 
 
 # endregion FUNC_ATOMIC_WRITE

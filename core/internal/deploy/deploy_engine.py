@@ -97,7 +97,6 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 # B2: канонический дефолт PROJECTS_BASE — shared/deploy_paths (литерал /opt/projects удалён)
@@ -120,7 +119,7 @@ from core.internal.shared.docker_compose import (
 from core.internal.shared.docker_compose import (
     retry_pull as _shared_retry_pull,
 )
-from core.internal.shared.exceptions import PlatformError, PlatformFatalError
+from core.internal.shared.exceptions import PlatformError
 from core.internal.shared.project_registry import validate_project_name
 from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
 
@@ -204,16 +203,11 @@ class ImageInfo:
     tag: str | None = None
 
 
-# ── Custom exceptions ───────────────────────────────────────────────────────
-
-
-class DeployError(Exception):
-    """Raised on unrecoverable deploy failure."""
-
-
-class ValidationError(Exception):
-    """Raised on input validation failure."""
-
+# ── Custom exceptions (DevPlan 119 E4: единое определение — deploy/preflight.py) ──
+# Локальные классы DeployError/ValidationError УДАЛЕНЫ (дубль); deploy_engine импортирует
+# их из preflight.py, чтобы `except (ValidationError, DeployError)` ловил те же классы,
+# что бросает run_preflight_checks. Backward-compat: имена доступны через deploy_engine.
+from core.internal.deploy.preflight import DeployError, ValidationError
 
 # ── DeployEngine ────────────────────────────────────────────────────────────
 
@@ -602,14 +596,16 @@ class DeployEngine:
 
     # region FUNC__preflight_checks
     ## @purpose  Validate pre-deploy conditions: FQDN uniqueness and port conflicts.
+    ##           DevPlan 119 E4: реализация вынесена в deploy/preflight.py (run_preflight_checks).
+    ##           Тонкий фасад сохраняет имя для обратной совместимости.
     ## @io       ⇥ project_dir, service → ⎋ None (raises on fail)
-    ## @complexity — O(1) — subprocess calls to validate.sh and ss
+    ## @complexity — O(1) — delegation to preflight module
     ## @invariants
     ##   - FQDN check via validate.sh subprocess (canonical, not duplicated in Python)
     ##   - Port conflict via ss -tlnp (shows ALL listening ports)
     ##   - Both checks are non-blocking for first deploy (warnings logged)
     def _preflight_checks(self, project_dir: str, service: str) -> None:
-        """Run pre-deploy validation checks.
+        """Run pre-deploy validation checks (E4 — delegates to deploy/preflight.py).
 
         Args:
             project_dir: Project directory.
@@ -619,51 +615,9 @@ class DeployEngine:
             ValidationError: If FQDN conflict detected.
             DeployError: If port conflict detected.
         """
-        # 🧐 TRAP[DECISION] · 2026-07-26 · — · FQDN uniqueness via validate.sh subprocess
-        # · Rejected: Python socket/FQDN parsing (duplicates validate.sh logic)
-        # · Reason: validate.sh is the canonical FQDN check
-        if os.path.isfile(self._validate_script) and os.access(self._validate_script, os.X_OK):
-            logger.info("[IMP:8][preflight] Checking FQDN uniqueness...")
-            result = subprocess.run(
-                [self._validate_script, "--check-fqdn", project_dir],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                msg = f"FQDN conflict detected: {result.stderr.strip()}"
-                logger.error("[IMP:10][preflight] %s", msg)
-                raise ValidationError(msg)
-        else:
-            logger.info("[IMP:6][preflight] validate.sh not found — skipping FQDN check")
+        from core.internal.deploy.preflight import run_preflight_checks
 
-        # 🧐 TRAP[DECISION] · 2026-07-26 · — · Port conflict via ss -tlnp
-        # · Rejected: Docker network inspect (only shows mapped ports, not host conflicts)
-        # · Reason: ss -tlnp shows ALL listening ports
-        ai_yaml = os.path.join(project_dir, "ai-platform.yaml")
-        if os.path.isfile(ai_yaml):
-            try:
-                # B1: единый shared-ридер ai-platform.yaml (yaml.safe_load вне shared удалён)
-                from core.internal.shared import project_yaml as shared_project_yaml
-
-                config = shared_project_yaml.load_project_yaml(Path(project_dir))
-                host_port = shared_project_yaml.get_monitoring(config).get("host_port")
-                if host_port and isinstance(host_port, (int, str)) and int(host_port) > 0:
-                    port = int(host_port)
-                    logger.info("[IMP:8][preflight] Checking port %s for conflicts...", port)
-                    ss_result = subprocess.run(
-                        ["ss", "-tlnp"],
-                        capture_output=True,
-                        text=True,
-                        timeout=DOCKER_CMD_TIMEOUT,
-                    )
-                    if f":{port} " in ss_result.stdout:
-                        msg = f"Port {port} already in use — deploy blocked"
-                        logger.error("[IMP:10][preflight] %s", msg)
-                        raise DeployError(msg)
-                    logger.info("[IMP:8][preflight] Port %s available", port)
-            except (ImportError, ValueError, OSError) as e:
-                logger.info("[IMP:6][preflight] Could not check port: %s", str(e))
+        run_preflight_checks(project_dir, service, self._validate_script)
 
     # endregion FUNC__preflight_checks
 
@@ -735,9 +689,11 @@ class DeployEngine:
 
     # region FUNC__handle_first_deploy
     ## @purpose  Handle first deploy failure — no rollback possible, escalate.
+    ##           DevPlan 119 E4: реализация вынесена в deploy/first_deploy.py (handle_first_deploy).
+    ##           Тонкий фасад сохраняет имя для обратной совместимости.
     ## @io       ⇥ project, service, ref, reason → ⎋ None (raises PlatformFatalError, exit 10)
     def _handle_first_deploy(self, project: str, service: str, ref: str, reason: str) -> None:
-        """Handle first deploy failure — no rollback possible.
+        """Handle first deploy failure — no rollback possible (E4 — delegates to first_deploy.py).
 
         Args:
             project: Project name.
@@ -749,8 +705,9 @@ class DeployEngine:
             PlatformFatalError: Always — no rollback possible, requires manual intervention
                 (DevPlan 116 B4 T3.1: sys.exit(1) → raise PlatformFatalError, exit code 10).
         """
-        logger.error("[IMP:10][first-deploy] CRITICAL: %s — %s no previous image to rollback", reason, service)
-        raise PlatformFatalError(f"First deploy failed — no rollback possible: {reason}")
+        from core.internal.deploy.first_deploy import handle_first_deploy
+
+        handle_first_deploy(project, service, ref, reason)
 
     # endregion FUNC__handle_first_deploy
 

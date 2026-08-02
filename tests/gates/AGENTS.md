@@ -1,7 +1,7 @@
-<!-- GREP_SUMMARY: AGENTS.md, gates, taxonomy, registration-protocol, marker-contract, manifest -->
+<!-- GREP_SUMMARY: AGENTS.md, gates, taxonomy, registration-protocol, marker-contract, manifest, check-workflow, check-suite -->
 
-# GREP_SUMMARY: AGENTS.md, gates, taxonomy, registration-protocol, marker-contract, manifest
-# STRUCTURE: ┌gate taxonomy┐ → ◇ registration protocol (trinity: file + marker + manifest) → ⊕ add/remove procedure → ⎋ cross-refs
+# GREP_SUMMARY: AGENTS.md, gates, taxonomy, registration-protocol, marker-contract, manifest, check-workflow, check-suite
+# STRUCTURE: ┌gate taxonomy┐ → ◇ registration protocol (trinity: file + marker + manifest) → ◇ check workflow (DevPlan 120) → ⊕ add/remove procedure → ⎋ cross-refs
 # region MODULE_CONTRACT
 ## @purpose  Gate taxonomy and registration protocol for the CI gate suite
 ## @scope    All pytest gate tests under tests/gates/ — registration, marker, and manifest contracts
@@ -88,74 +88,87 @@ Gate-тесты делятся на категории по предмету п�
 
 ---
 
-## Preflight workflow (agent-oriented gate accelerator)
+## Check workflow (agent-oriented gate accelerator, DevPlan 120)
 
 ### Проблема
 
-`make gate MODE=fast` — последовательный конвейер из 8 шагов, останавливается на первом фейле. Агент видит только ошибки текущего шага → фиксит → перезапускает → видит ошибки следующего шага → фиксит → ... Цикл из 4-5 проходов gate вместо одного.
+`make gate MODE=fast` — последовательный конвейер, останавливается на первом фейле. Агент видит только ошибки текущего шага → фиксит → перезапускает → видит ошибки следующего шага → фиксит → ... Цикл из 4-5 проходов gate вместо одного.
 
 **Корневая причина:** детекция и верификация не разделены. Gate делает и то и другое последовательно.
 
-### Решение: `make preflight`
+### Решение: `make check` (экс-preflight)
 
 ```bash
-make preflight
+make check
 ```
 
-**Три фазы:**
-1. `make fix-gate` — авто-фикс (exec bits, ruff, manifests) — ~3s
-2. `pre-commit run --all-files` — авто-фикс гигиены + верификация всех хуков — ~10-20s
-3. **8 проверок параллельно** (ThreadPoolExecutor, 6 workers): validate, check-dead-code, check-exception-patterns, doxygen-check, gates-static, contract, static_audit, predeploy — ~20-40s
+**Три фазы (единый SoT-манифест `core/check-suite.yaml`, DevPlan 120):**
+1. **Fix-фаза** — `make fix-gate` + tier=fix чеки манифеста (pre-commit) — ~25s
+2. **Fingerprint-кэш** — повторный прогон на неизменённом дереве = replay <10s (CHECK_CACHE=0 отключает; кэш ТОЛЬКО у check, gate — без кэша)
+3. **Проверки из манифеста**: static-чеки параллельно (validate, check-dead-code, check-exception-patterns, doxygen-check, check-manifests, ruff check .) + pytest-чеки последовательно с xdist (gates, gates-docker, contract, static_audit, predeploy) — ~90s на 12 ядрах (static_audit xdist: 254s → ~60s)
 
 **Результат:** все ошибки собраны в ОДНОМ отчёте. Агент фиксит всё за один проход → `make gate MODE=fast` верифицирует один раз.
 
+**Узкий таргет:** `make check-diff` — pre-commit --files + ruff по изменённым .py + pytest изменённых test-файлов (без кэша, без изменений → exit 0).
+
 ### Сравнение циклов
 
-| Шаг | Старый цикл (последовательный gate) | Новый цикл (preflight) |
-|-----|-------------------------------------|------------------------|
-| 1 | `make gate` → fail на pre-commit | `make preflight` → собраны ВСЕ ошибки |
+| Шаг | Старый цикл (последовательный gate) | Новый цикл (check) |
+|-----|-------------------------------------|--------------------|
+| 1 | `make gate` → fail на pre-commit | `make check` → собраны ВСЕ ошибки |
 | 2 | Фикс pre-commit → `make gate` → fail на static_audit | Агент читает ОДИН отчёт, фиксит ВСЁ |
 | 3 | Фикс static → `make gate` → fail на format | `make gate MODE=fast` → зелёный |
 | 4 | Фикс format → `make gate` → fail на другое |
 | ... | ... (4-5 итераций) |
 | N | `make gate` → зелёный |
 
-**Экономия:** ~60-80% времени агента на верификации (4-5 проходов → 1 preflight + 1 gate).
+**Экономия:** ~60-80% времени агента на верификации (4-5 проходов → 1 check + 1 gate); повторный check на чистом дереве — <10s (fingerprint replay).
 
 ### Использование
 
 ```bash
-# Стандартный запуск (авто-фикс + все проверки параллельно)
-make preflight
+# Стандартный запуск (автофикс + все проверки манифеста)
+make check
 
 # Только проверки без авто-фикса (когда файлы уже чистые)
-make preflight SKIP_FIX=1
+make check SKIP_FIX=1
 
 # JSON-вывод для машинной обработки
-make preflight JSON=1
+make check JSON=1
 
 # Подробный вывод (полный stdout/stderr для упавших проверок)
-make preflight VERBOSE=1
+make check VERBOSE=1
 
 # Настроить число параллельных воркеров
-make preflight WORKERS=8
+make check WORKERS=8
+
+# Без fingerprint-кэша (полный честный прогон)
+make check CHECK_CACHE=0
+
+# Узкая диагностика по изменённым файлам
+make check-diff
+
+# Deprecated-алиас (обратная совместимость; мигрируйте на check)
+make preflight
 ```
 
 ### Инварианты
 
-- **Preflight НЕ заменяет gate.** Gate остаётся канонической верификацией. Preflight — диагностический акселератор.
-- **Preflight НЕ коммитит изменения.** Только авто-фиксы в worktree (так же как `make fix-gate`).
+- **Check НЕ заменяет gate.** Gate остаётся канонической верификацией (арбитр). Check — диагностический акселератор. Оба executor'а читают ОДИН манифест `core/check-suite.yaml` — дрейф невозможен конструктивно (DevPlan 120 §3.2).
+- **Check НЕ коммитит изменения.** Только авто-фиксы в worktree (так же как `make fix-gate`).
+- **Fingerprint-кэш — только у check.** Gate/CI/pre-push — без кэша (канонический прогон всегда). Replay только при байт-идентичном дереве И зелёном последнем прогоне.
 - **Exit code 0** = все проверки прошли, gate должен быть зелёным.
 - **Exit code 1** = есть ошибки, нужно фиксить. После фикса: `make gate MODE=fast`.
-- **Параллельные проверки read-only** — не мутируют файлы, безопасны для concurrent execution.
+- **Parallel-чеки read-only** — не мутируют файлы, безопасны для concurrent execution; pytest-чеки строго последовательно (1 pytest с -n auto за раз).
 
 ### Рекомендуемый agent workflow
 
 ```
-1. make preflight                    # ОДИН запуск — все ошибки собраны
+1. make check                        # ОДИН запуск — все ошибки собраны (~90s)
 2. Прочитать отчёт — все FAIL-секции
 3. Исправить ВСЕ ошибки за один проход
-4. make gate MODE=fast               # ОДНА верификация
+4. make check                        # повторный — <10s если дерево не менялось, ~90s если фиксили
+5. make gate MODE=fast               # ОДНА финальная верификация
 ```
 
 Никаких `fix → gate → fix → gate → ...` циклов.
@@ -168,6 +181,7 @@ make preflight WORKERS=8
 |------|-----------|
 | [`core/entrypoint-manifest.yaml`](../../core/entrypoint-manifest.yaml) | YAML-реестр gates (секция `gates:`) |
 | [`../../core/AGENTS.md`](../../core/AGENTS.md) | Канонические операции, структура слоёв |
-| [`../../core/internal/preflight.py`](../../core/internal/preflight.py) | Preflight-модуль — параллельный сбор ошибок |
-| [`../../makefiles/repair.mk`](../../makefiles/repair.mk) | `make preflight` target + repair-таргеты |
+| [`../../core/check-suite.yaml`](../../core/check-suite.yaml) | **SoT-манифест набора проверок (DevPlan 120)** |
+| [`../../core/internal/check_suite.py`](../../core/internal/check_suite.py) | Единый executor (diagnostic/gate/diff/fingerprint) |
+| [`../../makefiles/repair.mk`](../../makefiles/repair.mk) | `make check`/`make check-diff` targets + repair-таргеты |
 | `../../AGENTS.md` (root) | Архитектурные инварианты платформы |

@@ -120,16 +120,18 @@ class DuplicateDomainError(Exception):
 # READ_PROJECT_YAML
 # ─────────────────────────────────────────────────────────────────────
 
-# region FUNC_read_project_yaml
+# region FUNC_load_vhost_config
 
 
-def read_project_yaml(project_dir: str) -> ProjectConfig | None:
+def load_vhost_config(project_dir: str) -> ProjectConfig | None:
     """Read ai-platform.yaml via shared reader (B1), extract expose/domain/target_node.
 
     ▶ ┌project_dir┐ → ◇ shared.load_project_yaml → ◇ expose:true? → ◇ domain set?
     → ◇ target_node set? → ⎋ ProjectConfig | None
 
     ## @purpose — Parse project YAML for vhost eligibility (единственный reader — shared B1).
+    ##            DevPlan 119 E9: локальный read_project_yaml ПЕРЕИМЕНОВАН в load_vhost_config
+    ##            (имя read_project_yaml зарезервировано за shared/project_yaml каноном — AC-E9.1).
     ## @io — ⇥ project_dir: str — path to project directory
     ##       → ⎋ ProjectConfig if expose:true + domain + target_node, else None
     ## @complexity — O(P) where P = YAML file size
@@ -141,24 +143,24 @@ def read_project_yaml(project_dir: str) -> ProjectConfig | None:
     """
     data = shared_project_yaml.load_project_yaml(Path(project_dir))
     if not data:
-        logger.warning("[IMP:7][read_project_yaml] ai-platform.yaml not found or unparseable: %s", project_dir)
+        logger.warning("[IMP:7][load_vhost_config] ai-platform.yaml not found or unparseable: %s", project_dir)
         return None
 
     cfg = shared_project_yaml.get_expose_config(data)
     if not cfg["expose"]:
-        logger.info("[IMP:8][read_project_yaml] Project does not have expose: true — skipping")
+        logger.info("[IMP:8][load_vhost_config] Project does not have expose: true — skipping")
         return None
 
     if not cfg["domain"]:
-        logger.info("[IMP:8][read_project_yaml] expose:true but no domain — skipping")
+        logger.info("[IMP:8][load_vhost_config] expose:true but no domain — skipping")
         return None
 
     if not cfg["target_node"]:
-        logger.warning("[IMP:8][read_project_yaml] expose:true + domain set but no target_node — skipping")
+        logger.warning("[IMP:8][load_vhost_config] expose:true + domain set but no target_node — skipping")
         return None
 
     logger.info(
-        "[IMP:9][read_project_yaml] Parsed: expose=true, domain=%s, target_node=%s", cfg["domain"], cfg["target_node"]
+        "[IMP:9][load_vhost_config] Parsed: expose=true, domain=%s, target_node=%s", cfg["domain"], cfg["target_node"]
     )
 
     return ProjectConfig(
@@ -169,7 +171,7 @@ def read_project_yaml(project_dir: str) -> ProjectConfig | None:
     )
 
 
-# endregion FUNC_read_project_yaml
+# endregion FUNC_load_vhost_config
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -928,7 +930,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "add":
             # Read project YAML
-            config = read_project_yaml(args.project_dir)
+            config = load_vhost_config(args.project_dir)
             if config is None:
                 logger.info("[IMP:8][main] No vhost config found — skipping vhost generation")
                 return 0
@@ -951,7 +953,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "remove":
             # Read project YAML
-            config = read_project_yaml(args.project_dir)
+            config = load_vhost_config(args.project_dir)
             if config is None:
                 logger.info("[IMP:8][main] No project config found — skipping vhost removal")
                 return 0

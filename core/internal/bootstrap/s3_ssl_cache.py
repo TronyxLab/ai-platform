@@ -44,6 +44,9 @@ from botocore.exceptions import ClientError
 from core.internal.config import platform_config
 
 # DevPlan 118 C7: /etc/letsencrypt/live — единый резолвер shared/deploy_paths.letsencrypt_live().
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+# Финальный коммит восстановленных pem-файлов (download→validate→atomic commit).
+from core.internal.shared.atomic_writer import atomic_write as _atomic_write
 from core.internal.shared.deploy_paths import letsencrypt_live
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
@@ -449,11 +452,11 @@ def download_cert(
             os.unlink(tmp_fullchain_path)
             return False
 
-        # Create live dir and restore fullchain.pem
+        # Create live dir and restore fullchain.pem (atomic commit via shared canon — E5)
         os.makedirs(live_dir, exist_ok=True)
         dest_fullchain = os.path.join(live_dir, "fullchain.pem")
-        os.replace(tmp_fullchain_path, dest_fullchain)
-        os.chmod(dest_fullchain, 0o644)
+        with open(tmp_fullchain_path, "rb") as _tf:
+            _atomic_write(dest_fullchain, _tf.read(), mode=0o644)
         logger.info("[IMP:9][s3_ssl_cache] fullchain.pem restored for %s", domain)
     except (OSError, FileNotFoundError, PermissionError) as e:
         logger.warning("[IMP:7][s3_ssl_cache] Failed to restore fullchain.pem for %s: %s", domain, e)
@@ -467,8 +470,8 @@ def download_cert(
     try:
         if _download_s3_file(f"{s3_base}/privkey.pem", tmp_privkey_path):
             dest_privkey = os.path.join(live_dir, "privkey.pem")
-            os.replace(tmp_privkey_path, dest_privkey)
-            os.chmod(dest_privkey, 0o600)
+            with open(tmp_privkey_path, "rb") as _tf:
+                _atomic_write(dest_privkey, _tf.read(), mode=0o600)
             logger.info("[IMP:9][s3_ssl_cache] privkey.pem restored for %s", domain)
         else:
             logger.warning("[IMP:8][s3_ssl_cache] privkey.pem not in S3 for %s — proceeding without it", domain)
@@ -484,8 +487,8 @@ def download_cert(
     try:
         if _download_s3_file(f"{s3_base}/chain.pem", tmp_chain_path):
             dest_chain = os.path.join(live_dir, "chain.pem")
-            os.replace(tmp_chain_path, dest_chain)
-            os.chmod(dest_chain, 0o644)
+            with open(tmp_chain_path, "rb") as _tf:
+                _atomic_write(dest_chain, _tf.read(), mode=0o644)
             logger.info("[IMP:9][s3_ssl_cache] chain.pem restored for %s", domain)
         else:
             logger.info("[IMP:8][s3_ssl_cache] chain.pem not in S3 for %s — optional, skipping", domain)

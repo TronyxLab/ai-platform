@@ -24,8 +24,10 @@
 
 import logging
 import os
-import tempfile
 
+# DevPlan 119 E5: атомарная запись — единый канон shared/atomic_writer (tempfile+fsync+replace).
+# Локальная tempfile+os.replace реализация write() УДАЛЕНА (дубль канона).
+from core.internal.shared.atomic_writer import atomic_write as _atomic_write
 from core.internal.shared.exceptions import ConfigValidationError
 
 logger = logging.getLogger(__name__)
@@ -207,20 +209,20 @@ def parse(path: str, prefix_filter: str | None = None) -> dict[str, str]:
 
 
 def write(path: str, data: dict[str, str], mode: int = DEFAULT_SECRETS_MODE) -> None:
-    """Atomically write a dict as a secrets.env file using tempfile + rename.
+    """Atomically write a dict as a secrets.env file via shared atomic_writer (E5).
 
-    ▶ ┌path, data, mode┐ → ⊕ mkdir -p dir → ⊕ tempfile in dir → ⊕ write key=value lines → ⊕ os.chmod → ⊕ os.replace → ⎋
+    ▶ ┌path, data, mode┐ → ⊕ build key=value lines → ⊕ atomic_write (temp+fsync+replace) → ⎋
 
-    ## @purpose — Atomic write to secrets.env file. Uses tempfile in the target
-    ##            directory then os.replace for atomicity. Failures during write
-    ##            do not corrupt the target file (tempfile is cleaned up).
+    ## @purpose — Atomic write to secrets.env file. Делегирует в shared/atomic_writer
+    ##            (DevPlan 119 E5 — единый канон tempfile+fsync+os.replace). Failures
+    ##            during write do not corrupt the target file (temp cleaned up).
     ## @io — ⇥ path: str — target file path
     ##       ⇥ data: dict[str, str] — key-value pairs to write
     ##       ⇥ mode: int — file permissions (default 0o600 = owner rw only)
     ##       → ⎋ None
     ## @complexity — O(N) where N = number of entries
     ## @invariants
-    ##   - Atomic: tempfile in same directory, then os.replace
+    ##   - Atomic: tempfile in same directory, then os.replace (shared canon, E5)
     ##   - Creates parent directory if absent
     ##   - Default mode 0o600 (secrets must not be world-readable)
     ##   - Keys with '=' or newline in value are written as-is (caller responsibility)
@@ -230,34 +232,12 @@ def write(path: str, data: dict[str, str], mode: int = DEFAULT_SECRETS_MODE) -> 
     os.makedirs(dir_path, exist_ok=True)
     logger.info("[IMP:7][write] Atomic write to %s (%d entries, mode=0%o)", path, len(data), mode)
 
-    tmp_path: str | None = None
+    content = "".join(f"{key}={value}\n" for key, value in data.items())
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=dir_path,
-            prefix=".secrets_tmp_",
-            delete=False,
-        ) as f:
-            tmp_path = f.name
-            for key, value in data.items():
-                f.write(f"{key}={value}\n")
-                logger.debug("[IMP:5][write] Wrote: %s='%.80s'", key, value[:80])
-
-        os.chmod(tmp_path, mode)
-        logger.debug("[IMP:7][write] Set permissions on tempfile: 0%o", mode)
-
-        os.replace(tmp_path, path)
+        _atomic_write(path, content, mode=mode)
         logger.info("[IMP:9][write] Atomically wrote %d entries to %s", len(data), path)
-
     except (OSError, TypeError) as e:
         logger.error("[IMP:9][write] Write failed for %s: %s", path, e)
-        if tmp_path is not None and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-                logger.debug("[IMP:5][write] Cleaned up tempfile: %s", tmp_path)
-            except OSError:
-                logger.warning("[IMP:6][write] Could not clean up tempfile: %s", tmp_path)
         raise
 
 

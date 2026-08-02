@@ -28,9 +28,9 @@ from core.internal.scaffold.vhost_renderer import (
     compute_body_hash,
     generate_vhost_body,
     generate_vhost_header,
+    load_vhost_config,  # E9: read_project_yaml → load_vhost_config (AC-E9.1)
     nginx_t_harness,
     read_node_yaml_projects,
-    read_project_yaml,
     remove_vhost,
     render_all,
     render_vhost,
@@ -340,12 +340,12 @@ class TestCheckDuplicateDomains:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# TEST: read_project_yaml
+# TEST: load_vhost_config (E9: read_project_yaml → load_vhost_config)
 # ══════════════════════════════════════════════════════════════════════
 
 
 class TestReadProjectYaml:
-    """Tests for read_project_yaml()."""
+    """Tests for load_vhost_config() (E9 rename of read_project_yaml)."""
 
     # 🧪 TRAP[TEST] · Regression · Scenario: ai-platform.yaml with expose:true + domain + target_node
     # · Expect: ProjectConfig with all fields set
@@ -357,7 +357,7 @@ class TestReadProjectYaml:
     ) -> None:
         """ai-platform.yaml with expose:true + domain + target_node → ProjectConfig."""
         caplog.set_level(0)
-        config = read_project_yaml(str(project_yaml_expose_true))
+        config = load_vhost_config(str(project_yaml_expose_true))
 
         assert config is not None
         assert config.name == "my-app"
@@ -379,7 +379,7 @@ class TestReadProjectYaml:
     def test_read_project_yaml_no_expose(self, project_yaml_no_expose: Path, caplog: pytest.LogCaptureFixture) -> None:
         """ai-platform.yaml without expose:true → None (skip)."""
         caplog.set_level(0)
-        config = read_project_yaml(str(project_yaml_no_expose))
+        config = load_vhost_config(str(project_yaml_no_expose))
 
         assert config is None
 
@@ -393,7 +393,7 @@ class TestReadProjectYaml:
     ) -> None:
         """expose:true but no domain → None (skip)."""
         caplog.set_level(0)
-        config = read_project_yaml(str(project_yaml_expose_no_domain))
+        config = load_vhost_config(str(project_yaml_expose_no_domain))
 
         assert config is None
 
@@ -405,7 +405,7 @@ class TestReadProjectYaml:
     def test_read_project_yaml_missing(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         """No ai-platform.yaml → None (graceful)."""
         caplog.set_level(0)
-        config = read_project_yaml(str(tmp_path / "nonexistent-dir"))
+        config = load_vhost_config(str(tmp_path / "nonexistent-dir"))
 
         assert config is None
 
@@ -984,10 +984,37 @@ class TestReadProjectYamlLegacy:
         with open(project_dir / "ai-platform.yaml", "w") as f:
             yaml.dump(yaml_content, f)
 
-        config = read_project_yaml(str(project_dir))
+        config = load_vhost_config(str(project_dir))
 
         assert config is not None
         assert config.name == "legacy-app"
         assert config.domain == "legacy.example.com"
         assert config.target_node == "test-node"
         assert config.expose is True
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TEST: E9 — shared project_yaml консолидация
+# ══════════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · R5 · E9 — vhost_renderer использует shared/project_yaml
+# · Regression: DevPlan 119 E9 — локальный read_project_yaml удалён (AC-E9.1);
+#   все импорты ai-platform.yaml через shared/project_yaml (AC-E9.2)
+# · Last fail: B1 — vhost_renderer имел собственный парсер (мигрирован в 119 B1)
+# · Remove if: shared/project_yaml канон отменяется
+def test_vhost_renderer_uses_shared_project_yaml_negative() -> None:
+    """R5 (E9): vhost_renderer НЕ содержит локальный read_project_yaml; парсинг — через shared."""
+    import inspect
+
+    src = inspect.getsource(load_vhost_config)
+    # Все YAML-чтение через shared/project_yaml (AC-E9.2)
+    assert "shared_project_yaml.load_project_yaml" in src, "vhost parsing must use shared/project_yaml (E9)"
+    assert "yaml.safe_load" not in src, "local yaml.safe_load forbidden — shared reader only (E9)"
+
+    # AC-E9.1: нет локального парсера-имени read_project_yaml в vhost_renderer (переименован)
+    vhost_src = inspect.getsource(__import__("core.internal.scaffold.vhost_renderer", fromlist=["x"]))
+    assert "def read_project_yaml" not in vhost_src, "vhost_renderer must NOT define read_project_yaml (E9)"
+    import logging
+
+    logging.getLogger(__name__).critical("[IMP:9][test] vhost_renderer uses shared/project_yaml — E9 consolidation OK")

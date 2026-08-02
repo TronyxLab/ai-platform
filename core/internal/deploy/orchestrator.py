@@ -303,6 +303,9 @@ class DeployOrchestrator:
     ) -> OrchestratorDeployResult:
         """Deploy a single project.
 
+        DevPlan 119 E2: тело разбито на шаги _prepare / _apply / _verify / _rollback
+        (было 186 LOC CC=13 → CC ≤ 8 на шаг). Поведение не меняется (R5: parity-тест).
+
         Args:
             project_name: Project name.
             channel: Delivery channel (SCPChannel or ForcedCommandChannel).
@@ -328,9 +331,48 @@ class DeployOrchestrator:
             dry_run,
         )
 
-        # ── Step 1: Validate ──
+        # ── Step 1: _prepare (validate + dry-run + payload assembly) ──
+        payload, failure = self._prepare_deploy(
+            project_name, channel, version, service, project_dir, metadata, dry_run, start
+        )
+        if failure is not None:
+            return failure
+
+        # ── Step 2: _apply (deliver + compose up) ──
+        apply_result = self._apply_deploy(project_name, channel, version, service, project_dir, payload, start)
+        if apply_result is not None:
+            return apply_result
+
+        # ── Step 3: _verify (healthcheck + snapshot + audit) ──
+        return self._verify_deploy(project_name, channel, version, project_dir, start)
+
+    # endregion FUNC_deploy
+
+    # region FUNC__prepare_deploy
+    ## @purpose  E2 deploy step 1 (PREPARE): validate project_name → dry-run short-circuit →
+    ##           assemble payload. Returns (payload, failure_result): failure_result != None
+    ##           → abort (deploy вернёт его как есть).
+    ## @io       ⇥ (deploy args + start) → ⎋ tuple[Payload | None, OrchestratorDeployResult | None]
+    ## @complexity — O(1) — validation + dry-run; O(PAYLOAD) on assemble
+    ## @invariants
+    ##   - Пустой project_name → FAILED (validation)
+    ##   - dry_run=True → SKIPPED plan (no side effects, DevPlan 089 AC10)
+    ##   - Assembly failure (OSError/ValueError) → FAILED
+    def _prepare_deploy(
+        self,
+        project_name: str,
+        channel: DeliveryChannel,
+        version: str,
+        service: str,
+        project_dir: str,
+        metadata: dict[str, Any],
+        dry_run: bool,
+        start: float,
+    ) -> tuple[Payload | None, OrchestratorDeployResult | None]:
+        """Validate inputs, handle dry-run, assemble payload (E2 step PREPARE)."""
+        # ── Validate ──
         if not project_name:
-            return self._result(
+            return None, self._result(
                 DeployStatus.FAILED,
                 project_name,
                 "",
@@ -339,7 +381,6 @@ class DeployOrchestrator:
             )
 
         # ── dry-run short-circuit (DevPlan 089 AC10) ──
-        # Emit a human/machine-readable plan to stderr, return SKIPPED without side effects.
         if dry_run:
             plan_lines = [
                 "[DRY-RUN][DeployOrchestrator][deploy] Plan (no execution):",
@@ -353,7 +394,7 @@ class DeployOrchestrator:
             ]
             for line in plan_lines:
                 logger.info("[IMP:8][DeployOrchestrator][deploy][DRY-RUN] %s", line)
-            return self._result(
+            return None, self._result(
                 DeployStatus.SKIPPED,
                 project_name,
                 channel.__class__.__name__,
@@ -361,19 +402,40 @@ class DeployOrchestrator:
                 duration_s=time.monotonic() - start,
             )
 
-        # ── Step 2: Assemble payload ──
+        # ── Assemble payload ──
         try:
             payload = self._assemble_payload(project_name, version, project_dir, metadata)
         except (OSError, ValueError) as e:
-            return self._result(
+            return None, self._result(
                 DeployStatus.FAILED,
                 project_name,
                 channel.__class__.__name__,
                 error_info=f"Payload assembly failed: {e}",
                 duration_s=time.monotonic() - start,
             )
+        return payload, None
 
-        # ── Step 3: Deliver through channel ──
+    # endregion FUNC__prepare_deploy
+
+    # region FUNC__apply_deploy
+    ## @purpose  E2 deploy step 2 (APPLY): deliver payload through channel → compose up.
+    ##           Returns failure/rolled-back result or None (→ proceed to verify).
+    ## @io       ⇥ (deploy args + payload + start) → ⎋ OrchestratorDeployResult | None
+    ## @complexity — O(1) — deliver + compose call
+    ## @invariants
+    ##   - Delivery failure → FAILED (with delivery stdout/stderr)
+    ##   - Compose failure → rollback if snapshot exists (else FAILED)
+    def _apply_deploy(
+        self,
+        project_name: str,
+        channel: DeliveryChannel,
+        version: str,
+        service: str,
+        project_dir: str,
+        payload: Payload,
+        start: float,
+    ) -> OrchestratorDeployResult | None:
+        """Deliver payload + compose up (E2 step APPLY). Returns result on failure, None on success."""
         delivery_result = channel._retry_deliver(payload)
 
         if not delivery_result.success:
@@ -394,9 +456,7 @@ class DeployOrchestrator:
                 duration_s=delivery_result.duration_s,
             )
 
-        # ── Step 4: Deploy compose ──
         compose_ok = self._deploy_compose(project_dir, service, version)
-
         if not compose_ok:
             # Rollback if previous deployment exists
             snapshot = self.deploy_history.latest_snapshot(project_name)
@@ -405,22 +465,7 @@ class DeployOrchestrator:
                     "[IMP:9][DeployOrchestrator][deploy] Compose failed — attempting rollback for %s",
                     project_name,
                 )
-                rollback_ok = self._rollback_compose(project_dir, service, snapshot)
-                rollback_status = "ROLLED_BACK" if rollback_ok else "FAILED"
-                self.audit_logger.log(
-                    operation="deploy",
-                    project=project_name,
-                    channel=channel.__class__.__name__,
-                    result=rollback_status,
-                    duration_s=time.monotonic() - start,
-                )
-                return self._result(
-                    DeployStatus.ROLLED_BACK if rollback_ok else DeployStatus.FAILED,
-                    project_name,
-                    channel.__class__.__name__,
-                    error_info=f"Compose deploy failed, rollback {'performed' if rollback_ok else 'failed'}",
-                    duration_s=time.monotonic() - start,
-                )
+                return self._rollback_deploy(project_name, channel, service, project_dir, snapshot, start)
 
             self.audit_logger.log(
                 operation="deploy",
@@ -436,21 +481,37 @@ class DeployOrchestrator:
                 error_info="First deploy compose failed (no rollback available)",
                 duration_s=time.monotonic() - start,
             )
+        return None
 
-        # ── Step 5: Healthcheck ──
+    # endregion FUNC__apply_deploy
+
+    # region FUNC__verify_deploy
+    ## @purpose  E2 deploy step 3 (VERIFY): healthcheck → snapshot → audit → final result.
+    ## @io       ⇥ (deploy args + start) → ⎋ OrchestratorDeployResult
+    ## @complexity — O(1) — poll + snapshot + audit
+    ## @invariants
+    ##   - Healthcheck status "healthy" → DEPLOYED, иначе PARTIAL
+    ##   - Snapshot создаётся после healthcheck (содержит post-deploy health)
+    def _verify_deploy(
+        self,
+        project_name: str,
+        channel: DeliveryChannel,
+        version: str,
+        project_dir: str,
+        start: float,
+    ) -> OrchestratorDeployResult:
+        """Healthcheck + snapshot + audit (E2 step VERIFY)."""
         health = self.healthcheck_poller.poll_until_healthy(project_name, project_dir)
         healthcheck_status = health.status
 
         total_duration = time.monotonic() - start
 
-        # ── Step 6: Create snapshot ──
         snapshot_id = self.deploy_history.create_snapshot(
             project=project_name,
             version=version,
             health_status=healthcheck_status,
         )
 
-        # ── Step 7: Audit ──
         result_status = DeployStatus.DEPLOYED if healthcheck_status == "healthy" else DeployStatus.PARTIAL
         self.audit_logger.log(
             operation="deploy",
@@ -478,7 +539,42 @@ class DeployOrchestrator:
             version=version,
         )
 
-    # endregion FUNC_deploy
+    # endregion FUNC__verify_deploy
+
+    # region FUNC__rollback_deploy
+    ## @purpose  E2 deploy step 4 (ROLLBACK): restore compose from snapshot after failed apply.
+    ## @io       ⇥ (project, channel, service, project_dir, snapshot, start) → ⎋ OrchestratorDeployResult
+    ## @complexity — O(1) — rollback compose + audit
+    ## @invariants
+    ##   - Rollback успешен → ROLLED_BACK, иначе FAILED
+    def _rollback_deploy(
+        self,
+        project_name: str,
+        channel: DeliveryChannel,
+        service: str,
+        project_dir: str,
+        snapshot: dict[str, Any],
+        start: float,
+    ) -> OrchestratorDeployResult:
+        """Rollback compose after failed deploy (E2 step ROLLBACK)."""
+        rollback_ok = self._rollback_compose(project_dir, service, snapshot)
+        rollback_status = "ROLLED_BACK" if rollback_ok else "FAILED"
+        self.audit_logger.log(
+            operation="deploy",
+            project=project_name,
+            channel=channel.__class__.__name__,
+            result=rollback_status,
+            duration_s=time.monotonic() - start,
+        )
+        return self._result(
+            DeployStatus.ROLLED_BACK if rollback_ok else DeployStatus.FAILED,
+            project_name,
+            channel.__class__.__name__,
+            error_info=f"Compose deploy failed, rollback {'performed' if rollback_ok else 'failed'}",
+            duration_s=time.monotonic() - start,
+        )
+
+    # endregion FUNC__rollback_deploy
 
     # region FUNC_deploy_many
     ## @purpose  Deploy multiple projects sequentially. Each project uses the same channel.
@@ -718,15 +814,13 @@ class DeployOrchestrator:
     # ── receive() — VPS-side forced-command receiver ──
 
     # region FUNC_receive
-    ## @purpose  VPS-side forced-command receiver (DevPlan 116 B1 T2, D1/D4/D5). Reads tar from
-    ##           stdin, validates payload (fail-fast), extracts to /opt/projects/\<project\>/,
-    ##           runs the full DeployOrchestrator pipeline via LocalChannel, then best-effort
-    ##           post-deploy chain (notify-hook + generate-catalog). Версия (sha) — ТОЛЬКО из
-    ##           аргументов SSH-команды (receive \<project\> \<sha\>); phantom-read version/service
-    ##           из ai-platform.yaml УДАЛЁН (U-37). Вызывается из `orchestrator_cli dispatch receive`.
+    ## @purpose  VPS-side forced-command receiver (DevPlan 116 B1 T2, D1/D4/D5). DevPlan 119 E2:
+    ##           реализация вынесена в deploy/receive_flow.py (ReceiveFlow: unpack → validate →
+    ##           deploy). Тонкий фасад сохраняет публичный API receive(project_name, version) -> int
+    ##           и JSON OrchestratorDeployResult в stdout (контракт orchestrator_cli dispatch).
     ## @io       ⇥ stdin (tar bytes), project_name: str | None (из SSH-аргументов),
-    ##              version: str (sha из CI, D5) → ⎋ int (exit code 0/1) + JSON OrchestratorDeployResult в stdout
-    ## @complexity — O(N) where N = tar entries + deploy lifecycle
+    ##              version: str (sha из CI, D5) → ⎋ int (exit code 0/1) + JSON в stdout
+    ## @complexity — O(1) — delegation to ReceiveFlow (вся логика в receive_flow.py, E2)
     ## @invariants
     ##   - Пустой stdin → JSON-ошибка + exit 1 (fail-fast, БЕЗ || true-масок)
     ##   - ai-platform.yaml отсутствует → JSON-ошибка + exit 1 (fail-fast)
@@ -747,6 +841,9 @@ class DeployOrchestrator:
         This is the VPS-side entry point for the forced-command dispatcher
         (`orchestrator_cli dispatch receive <project> <sha>`).
 
+        E2 (DevPlan 119): делегирование в ReceiveFlow (deploy/receive_flow.py) — unpack,
+        validate, deploy изолированы (CC 15 → ≤8 на метод). Контракт не меняется.
+
         Args:
             project_name: Project name from SSH_ORIGINAL_COMMAND args (D5). When None
                 (локальные/ручные вызовы) — фолбэк на ai-platform.yaml `name`.
@@ -755,117 +852,18 @@ class DeployOrchestrator:
         Returns:
             Exit code (0 = success, 1 = failure).
         """
-        import io
-        import shutil
-        import sys
-        import tarfile
-        import tempfile
+        from core.internal.deploy.receive_flow import ReceiveFlow
 
-        from core.internal.shared.project_registry import validate_project_name
-
-        logger.info("[IMP:9][DeployOrchestrator][receive] Receiving deploy payload via stdin (version=%s)", version)
-
-        # Read tar from stdin — пустой stdin → fail-fast (БЕЗ || true-масок)
-        tar_bytes = sys.stdin.buffer.read()
-        if not tar_bytes:
-            logger.error("[IMP:10][DeployOrchestrator][receive] No data received on stdin")
-            print(json.dumps({"status": "FAILED", "error": "No data received on stdin"}))
-            return 1
-
-        # Extract to staging
-        staging = tempfile.mkdtemp(prefix="deploy-receive-")
-        try:
-            buf = io.BytesIO(tar_bytes)
-            with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-                tar.extractall(path=staging, filter="data")
-
-            # Parse ai-platform.yaml for metadata via shared reader (B1 — единый парсер)
-            ai_yaml = Path(staging) / "ai-platform.yaml"
-            if not ai_yaml.is_file():
-                logger.error("[IMP:10][DeployOrchestrator][receive] ai-platform.yaml not found in payload")
-                print(json.dumps({"status": "FAILED", "error": "ai-platform.yaml not found in payload"}))
-                return 1
-
-            from core.internal.shared import project_yaml as shared_project_yaml
-
-            config = shared_project_yaml.load_project_yaml(Path(staging))
-
-            # D5: проект — из аргументов SSH-команды (приоритет), фолбэк на yaml `name` для
-            # локальных/ручных вызовов. version — ТОЛЬКО из аргументов (sha-pinning).
-            resolved_project = project_name or shared_project_yaml.get_name(config)
-            if not resolved_project:
-                logger.error("[IMP:10][DeployOrchestrator][receive] No project name in args or ai-platform.yaml")
-                print(json.dumps({"status": "FAILED", "error": "No project name in args or ai-platform.yaml"}))
-                return 1
-
-            # U-56 verb-reserve + canonical name validation (проект «status» невалиден)
-            if not validate_project_name(resolved_project):
-                logger.error(
-                    "[IMP:10][DeployOrchestrator][receive] Invalid/reserved project name: %r", resolved_project
-                )
-                print(
-                    json.dumps({"status": "FAILED", "error": f"Invalid or reserved project name: {resolved_project}"})
-                )
-                return 1
-
-            service = resolved_project  # D5: service = project_name (чтение service из yaml удалено, U-37)
-
-            # Copy payload files to project directory
-            # (B2: канонический projects_base из shared; локальная переменная переименована —
-            #  shadowing функции projects_base() вызывал UnboundLocalError)
-            resolved_projects_base = str(projects_base())
-            target_dir = os.path.join(resolved_projects_base, resolved_project)
-            os.makedirs(target_dir, exist_ok=True)
-
-            for item in Path(staging).iterdir():
-                if item.is_file():
-                    shutil.copy2(str(item), os.path.join(target_dir, item.name))
-
-            # Execute deploy
-            # 🧐 TRAP[DECISION] · 2026-07-31 · HI · receive() local delivery channel
-            # · Rejected: SCPChannel() with empty metadata (bug — deliver() always FAILED:
-            #   "SCPChannel requires 'host' in payload.metadata"; the payload is already
-            #   extracted to target_dir, so a transport hop is meaningless; exposed by
-            #   DevPlan 095 E2E T16 on a real VPS — the mocked IntegrationMockChannel never
-            #   caught it)
-            # · Reason: LocalChannel is a no-op delivery that preserves the full
-            #   DeployOrchestrator pipeline (compose up → healthcheck → DeployHistory
-            #   snapshot → audit) on the VPS side. Alternative rejected: self-SSH
-            #   (root@127.0.0.1) — requires the VPS root key to authorize itself.
-            # · Rev: if receive() ever needs to ship the payload to a THIRD host, switch
-            #   back to a real transport channel with explicit host metadata.
-            from core.internal.deploy.channels import LocalChannel
-
-            local_channel = LocalChannel()
-            orchestrator = DeployOrchestrator(projects_base=resolved_projects_base)
-            result = orchestrator.deploy(
-                project_name=resolved_project,
-                channel=local_channel,
-                version=version,
-                service=service,
-                project_dir=target_dir,
-            )
-            # D5: version (sha) попадает в OrchestratorDeployResult JSON — sha-pinning в snapshots уже
-            # сделан внутри deploy() (DeployHistory.create_snapshot(version=version)).
-            result.version = version
-
-            # ── Пост-деплой цепочка (D4, U-24): best-effort, сбой → WARN, НЕ фейлит деплой ──
-            if result.is_success():
-                node_name = os.environ.get("NODE_NAME", os.environ.get("NODE", ""))
-                self._run_post_deploy_chain(resolved_project, version, result.status.value, target_dir, node_name)
-
-            output = json.dumps(result.to_dict())
-            print(output)
-            return 0 if result.is_success() else 1
-
-        except (tarfile.TarError, OSError) as e:
-            # B1: ai-platform.yaml читается shared-ридером (YAMLError не пробрасывается)
-            logger.error("[IMP:10][DeployOrchestrator][receive] Error: %s", e)
-            print(json.dumps({"status": "FAILED", "error": str(e)}))
-            return 1
-        finally:
-            if os.path.isdir(staging):
-                shutil.rmtree(staging, ignore_errors=True)
+        logger.info(
+            "[IMP:9][DeployOrchestrator][receive] Delegating to ReceiveFlow (E2) project=%s version=%s",
+            project_name or "auto",
+            version,
+        )
+        # E2: projects_base резолвится ВНУТРИ ReceiveFlow.run() из env-цепочки (PROJECTS_BASE →
+        # /opt/projects) — legacy receive() семантика: env на момент вызова, не import-константа.
+        # Передача None (не self.projects_base — модульная константа import-времени).
+        flow = ReceiveFlow(projects_base=None)
+        return flow.run(project_name=project_name, version=version)
 
     # endregion FUNC_receive
 
