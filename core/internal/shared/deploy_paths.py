@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: deploy-paths, canonical, deprecated, registry, bootstrap-compose-stub, removal-plan
-# STRUCTURE: ▶ CANONICAL_DEPLOY_PATHS (6 paths) → ◇ DEPRECATED_DEPLOY_PATHS (1 stub) → ⊕ function get_canonical_paths() → ⎋
+# GREP_SUMMARY: deploy-paths, canonical, deprecated, registry, bootstrap-compose-stub, removal-plan, projects-base, resolver
+# STRUCTURE: ▶ CANONICAL_DEPLOY_PATHS (6 paths) → ◇ DEPRECATED_DEPLOY_PATHS (1 stub) → ⊕ get_canonical_paths() →
+#            ▶ projects_base() ┌env┐ → ◇ PROJECTS_BASE → ⎋ Path (default /opt/projects)
 # region MODULE_CONTRACT
 ## @purpose  Canonical deploy path registry — single source of truth for all code delivery
 ##           mechanisms. Gate test validates every deploy path in entrypoint-manifest.yaml
@@ -20,6 +21,9 @@
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
+
+import os
+from pathlib import Path
 
 # ── Canonical Deploy Paths ──────────────────────────────────────────────────
 # These are the 6 documented code delivery mechanisms. Every deploy-related
@@ -88,3 +92,27 @@ def get_deprecated_paths() -> dict[str, dict[str, str]]:
 
 
 # endregion FUNC_get_deprecated_paths
+
+
+# ── PROJECTS_BASE resolver (DevPlan 118 A3) ──────────────────────────────────
+
+DEFAULT_PROJECTS_BASE: str = "/opt/projects"
+"""## @invariant Канонический дефолт PROJECTS_BASE (совпадает с orchestrator/deploy_history/context_deployer)."""
+
+
+# region FUNC_projects_base
+## @purpose — Резолвер PROJECTS_BASE из env-цепочки (PROJECTS_BASE env → /opt/projects).
+##            Единый резолвер для reconciler_projects и будущих потребителей (C7 — активация deploy_paths).
+## @io — ⇥ env: dict | None (None = os.environ) → ⎋ Path
+## @complexity — O(1)
+## @invariants
+##   - env PROJECTS_BASE приоритетнее дефолта (тот же канон, что orchestrator_cli/receive)
+##   - Никогда не raise — всегда возвращает Path
+##   - Параметр env позволяет тестировать без monkeypatch.setenv (tmp_path в тестах)
+def projects_base(env: dict | None = None) -> Path:
+    """Resolve PROJECTS_BASE from the environment chain (env → /opt/projects)."""
+    source = os.environ if env is None else env
+    return Path(str(source.get("PROJECTS_BASE", DEFAULT_PROJECTS_BASE)))
+
+
+# endregion FUNC_projects_base

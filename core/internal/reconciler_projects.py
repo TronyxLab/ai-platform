@@ -31,6 +31,7 @@ from pathlib import Path
 
 from core.internal.deploy.channels import ForcedCommandChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
+from core.internal.shared.deploy_paths import projects_base
 from core.internal.shared.exceptions import ConfigNotFoundError, ConfigParseError, ConfigValidationError
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
 
@@ -387,9 +388,11 @@ def reconcile_projects(
 
         logger.info("[IMP:7][reconcile][%s] Processing...", spec.name)
 
-        # Build project directory path
+        # Build project directory path — DevPlan 118 A3: единый резолвер PROJECTS_BASE
+        # (env-цепочка PROJECTS_BASE → /opt/projects) вместо хардкода f"/opt/projects/...".
+        # Совпадает с deploy_engine/payload_deliverer/orchestrator_cli (тот же канон).
         org_prefix = f"{spec.org}/" if spec.org else ""
-        proj_dir = f"/opt/projects/{org_prefix}{spec.name}"
+        proj_dir = f"{projects_base()}/{org_prefix}{spec.name}"
 
         # Check directory exists
         if not Path(proj_dir).is_dir():

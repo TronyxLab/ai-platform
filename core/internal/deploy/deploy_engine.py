@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: deploy-engine, atomic-deploy, rollback, healthcheck, remove, status, docker-compose, lifecycle, snapshot, prune-images
-# STRUCTURE: ▶ DataClasses(ServiceDeployResult|RemoveResult|StatusResult|ImageInfo|SnapshotInfo) → [DeployEngine] →
-#            ◇ deploy(project,ref,service,project_dir,node,max_wait,keep_images) → _save_previous_image → _capture_deploy_snapshot →
+# GREP_SUMMARY: deploy-engine, atomic-deploy, rollback, healthcheck, remove, status, docker-compose, lifecycle, prune-images
+# STRUCTURE: ▶ DataClasses(ServiceDeployResult|RemoveResult|StatusResult|ImageInfo) → [DeployEngine] →
+#            ◇ deploy(project,ref,service,project_dir,node,max_wait,keep_images) → _save_previous_image →
 #            _preflight_checks → _pull_image_with_retry → _atomic_up → _poll_health →
 #            either success(DEPLOY_STATUS=success) or fail(first_deploy→exit|rollback→_perform_rollback) →
-#            ◇ remove(project,project_dir) → docker compose down(no -v) → ◇ status(project,project_dir,stub_aware) → JSON →
-#            CLI: argparse(subcommands:deploy|remove|status) → ⎋ exit 0|1
+#            ◇ remove(project,project_dir,purge) → docker compose down(no -v by default) →
+#            ◇ status(project,project_dir,stub_aware) → JSON → CLI: argparse(subcommands:deploy|remove|status) → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  Atomic deploy/rollback/remove/status engine for VPS-side forced-command deploy operations.
 ##           Migrated from the legacy deploy shell (1183→~600 LOC) via Strangler-Fig methodology (Wave 5e).
@@ -19,10 +19,15 @@
 ##   4. DEPLOY_STATUS="success" set immediately after health-gate — BEFORE non-fatal housekeeping (B1/T3)
 ##   5. Rollback: re-tag previous image → docker compose up -d --force-recreate (T1)
 ##   6. First deploy with health fail → _handle_first_deploy → PlatformFatalError (exit 10, no rollback possible)
-##   7. Remove: docker compose down --timeout 30 WITHOUT -v (O7/DD10, T11)
-##   8. Status: JSON stdout with docker compose ps + deploy-result.json; stub-aware flag
+##   7. Remove: docker compose down --timeout 30 WITHOUT -v by default (O7/DD10, T11); purge=True adds -v
+##   8. Status: JSON stdout with docker compose ps + DeployHistory last snapshot; stub-aware flag
 ##   9. All methods log at IMP:7-10 for LDD telemetry
 ##   10. No secrets or tokens in output — audit logs go to stderr
+##   11. DevPlan 118 A7: единый snapshot-механизм — DeployHistory (create_snapshot/rollback).
+##       DeployEngine._capture_deploy_snapshot УДАЛЁН (ps/images-файлы + .deploy-started никто не читал;
+##       DeployHistory покрывает rollback/status; два namespace в .deploy-snapshots были источником
+##       TRAP[BUG] deploy_history.py:280). Rollback остаётся на _perform_rollback (docker tag + up --force-recreate).
+##   12. DevPlan 118 A8: deploy()/_deploy_inner схлопнуты — одна функция с contextlib.chdir, без дубля валидации.
 ## @rationale
 ##   ⚠️ TRAP[BUG] · 2026-07-18 · P1 · Deploy reports 'failed' despite success (B1)
 ##   · Symptom: Deploy SUCCESS in logs, deploy-result.json=status:"failed", exit 1
@@ -91,7 +96,6 @@ import logging
 import os
 import subprocess
 import sys
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -115,6 +119,7 @@ from core.internal.shared.docker_compose import (
 )
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
 from core.internal.shared.project_registry import validate_project_name
+from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
 from core.internal.shared.timeouts import (
@@ -164,7 +169,8 @@ class StatusResult:
     ## @invariants
     ##   - status ∈ {"found", "not_found", "stub"} — тот же словарь, что у ProjectStatus
     ##   - containers: list[dict] — docker compose ps JSON-строки (та же структура)
-    ##   - last_deploy: dict | None — содержимое .deploy-snapshots/deploy-result.json (дикт)
+    ##   - last_deploy: dict | None — последний DeployHistory snapshot (DevPlan 118 A6: единый
+    ##     механизм с DeployOrchestrator.status(); legacy deploy-result.json больше не читается)
     ##   - Поля НЕ расходятся с ProjectStatus: тест set-сравнения ключей (T3 п.4)
     """
 
@@ -191,15 +197,6 @@ class ImageInfo:
 
     id: str
     tag: str | None = None
-
-
-@dataclass
-class SnapshotInfo:
-    """Info about a pre-deploy snapshot."""
-
-    timestamp: int
-    ps_file: str | None = None
-    images_file: str | None = None
 
 
 # ── Custom exceptions ───────────────────────────────────────────────────────
@@ -284,6 +281,9 @@ class DeployEngine:
 
     # region FUNC_deploy
     ## @purpose  Perform atomic deploy with healthcheck-based rollback.
+    ##           DevPlan 118 A8: deploy()/_deploy_inner схлопнуты в одну функцию —
+    ##           дублированная validate_project_name убрана; contextlib.chdir гарантирует
+    ##           восстановление cwd при ЛЮБОМ exit path (return/PlatformFatalError).
     ## @io       ⇥ project, ref, service, project_dir, node, max_wait, keep_images → ⎋ ServiceDeployResult
     ## @complexity — O(N) where N = pull retry attempts + healthcheck attempts
     ## @invariants
@@ -333,143 +333,108 @@ class DeployEngine:
         #   рефакторинг с риском регрессии, contextlib.chdir семантически эквивалентен прежнему chdir.
         # · Rev: если deploy() начнёт вызываться из долгоживущих процессов чаще CLI-паттерна → вариант (a).
         with contextlib.chdir(project_dir):
-            return self._deploy_inner(project, ref, service, project_dir, node, max_wait, keep_images)
-
-    # endregion FUNC_deploy
-
-    # region FUNC_deploy_inner
-    ## @purpose  Внутреннее тело deploy() — выполняется внутри contextlib.chdir(project_dir).
-    ## @scope    Изолировано для гарантированного восстановления cwd при любом выходе (return/SystemExit).
-    def _deploy_inner(
-        self,
-        project: str,
-        ref: str,
-        service: str,
-        project_dir: str,
-        node: str = "",
-        max_wait: int = 60,
-        keep_images: int = 3,
-    ) -> ServiceDeployResult:
-        """Execute atomic deploy with rollback capability (cwd=project_dir гарантирован обёрткой).
-
-        Args:
-            project: Project name.
-            ref: Image tag/ref to deploy.
-            service: Docker Compose service name.
-            project_dir: Path to project directory.
-            node: Node name (hostname).
-            max_wait: Max seconds to wait for healthcheck.
-            keep_images: Number of old images to keep during prune.
-
-        Returns:
-            ServiceDeployResult with status and rollback metadata.
-        """
-        # ── Validate ──
-        logger.info("[IMP:9][deploy][start] Deploy START: %s/%s → %s", project, service, ref)
-
-        if not validate_project_name(project):
-            msg = f"Invalid project name: {project}"
-            logger.error("[IMP:10][deploy][validation] %s", msg)
-            return ServiceDeployResult(success=False, project=project, ref=ref, service=service, error_message=msg)
-
-        try:
-            self._preflight_checks(project_dir, service)
-        except (ValidationError, DeployError) as e:
-            logger.error("[IMP:10][deploy][preflight] %s", str(e))
-            return ServiceDeployResult(success=False, project=project, ref=ref, service=service, error_message=str(e))
-
-        # ── Save previous image (BEFORE pull) ──
-        previous_image = self._save_previous_image(project_dir, service)
-        is_first_deploy = previous_image is None
-        logger.log(
-            logging.INFO if not is_first_deploy else logging.WARNING,
-            "[IMP:9][deploy][save-prev] Previous image: %s (first_deploy=%s)",
-            previous_image.id if previous_image else "NONE",
-            is_first_deploy,
-        )
-
-        # ── Snapshot ──
-        snapshot = self._capture_deploy_snapshot(project_dir)
-        logger.info("[IMP:8][deploy][snapshot] Captured snapshot: ts=%s", snapshot.timestamp)
-
-        # ── Pull image with retry (T5.1: shared retry_pull — backoff [5,10,20], env IMAGE_TAG) ──
-        if not _shared_retry_pull(
-            project_dir,
-            max_attempts=3,
-            timeout=PULL_TIMEOUT,
-            service=service,
-            env_override={"IMAGE_TAG": ref},
-        ):
-            self._handle_first_deploy(project, service, ref, "Pull failed after 3 attempts")
-            # unreachable — _handle_first_deploy raises PlatformFatalError
-
-        # ── Atomic up ──
-        if not self._atomic_up(project_dir, service, ref):
-            if is_first_deploy:
-                self._handle_first_deploy(project, service, ref, "docker compose up failed on first deploy")
-            else:
-                logger.warning("[IMP:9][deploy][up-fail] atomic_up failed — attempting rollback")
-                rollback_ok = self._perform_rollback(project_dir, service, previous_image)
+            try:
+                self._preflight_checks(project_dir, service)
+            except (ValidationError, DeployError) as e:
+                logger.error("[IMP:10][deploy][preflight] %s", str(e))
                 return ServiceDeployResult(
-                    success=False,
+                    success=False, project=project, ref=ref, service=service, error_message=str(e)
+                )
+
+            # ── Save previous image (BEFORE pull) ──
+            previous_image = self._save_previous_image(project_dir, service)
+            is_first_deploy = previous_image is None
+            logger.log(
+                logging.INFO if not is_first_deploy else logging.WARNING,
+                "[IMP:9][deploy][save-prev] Previous image: %s (first_deploy=%s)",
+                previous_image.id if previous_image else "NONE",
+                is_first_deploy,
+            )
+
+            # ── Pull image with retry (T5.1: shared retry_pull — backoff [5,10,20], env IMAGE_TAG) ──
+            if not _shared_retry_pull(
+                project_dir,
+                max_attempts=3,
+                timeout=PULL_TIMEOUT,
+                service=service,
+                env_override={"IMAGE_TAG": ref},
+            ):
+                self._handle_first_deploy(project, service, ref, "Pull failed after 3 attempts")
+                # unreachable — _handle_first_deploy raises PlatformFatalError
+
+            # ── Atomic up ──
+            if not self._atomic_up(project_dir, service, ref):
+                if is_first_deploy:
+                    self._handle_first_deploy(project, service, ref, "docker compose up failed on first deploy")
+                else:
+                    logger.warning("[IMP:9][deploy][up-fail] atomic_up failed — attempting rollback")
+                    rollback_ok = self._perform_rollback(project_dir, service, previous_image)
+                    return ServiceDeployResult(
+                        success=False,
+                        project=project,
+                        ref=ref,
+                        service=service,
+                        previous_image=previous_image.id if previous_image else None,
+                        rollback_performed=rollback_ok,
+                        error_message="docker compose up failed, rollback "
+                        + ("performed" if rollback_ok else "failed"),
+                    )
+
+            # ── Poll health (T5.3: shared healthcheck_poll — inspect-критерий, service-фильтр) ──
+            healthy = (
+                _shared_healthcheck_poll(project_name=service, timeout=max_wait, interval=2, service=service)
+                == "healthy"
+            )
+            if healthy:
+                # B1: DEPLOY_STATUS immediately after health-gate
+                logger.info("[IMP:9][deploy][health] Healthcheck PASSED for %s/%s", project, service)
+                return ServiceDeployResult(
+                    success=True,
                     project=project,
                     ref=ref,
                     service=service,
                     previous_image=previous_image.id if previous_image else None,
-                    rollback_performed=rollback_ok,
-                    error_message="docker compose up failed, rollback " + ("performed" if rollback_ok else "failed"),
                 )
+            logger.error("[IMP:10][deploy][health] Healthcheck FAILED for %s/%s", project, service)
+            if is_first_deploy:
+                self._handle_first_deploy(project, service, ref, "Healthcheck failed on first deploy")
+                # unreachable — _handle_first_deploy raises PlatformFatalError
 
-        # ── Poll health (T5.3: shared healthcheck_poll — inspect-критерий, service-фильтр) ──
-        healthy = (
-            _shared_healthcheck_poll(project_name=service, timeout=max_wait, interval=2, service=service) == "healthy"
-        )
-        if healthy:
-            # B1: DEPLOY_STATUS immediately after health-gate
-            logger.info("[IMP:9][deploy][health] Healthcheck PASSED for %s/%s", project, service)
+            rollback_ok = self._perform_rollback(project_dir, service, previous_image)
             return ServiceDeployResult(
-                success=True,
+                success=False,
                 project=project,
                 ref=ref,
                 service=service,
                 previous_image=previous_image.id if previous_image else None,
+                rollback_performed=rollback_ok,
+                error_message="Healthcheck failed, rollback " + ("performed" if rollback_ok else "failed"),
             )
-        logger.error("[IMP:10][deploy][health] Healthcheck FAILED for %s/%s", project, service)
-        if is_first_deploy:
-            self._handle_first_deploy(project, service, ref, "Healthcheck failed on first deploy")
-            # unreachable — _handle_first_deploy raises PlatformFatalError
 
-        rollback_ok = self._perform_rollback(project_dir, service, previous_image)
-        return ServiceDeployResult(
-            success=False,
-            project=project,
-            ref=ref,
-            service=service,
-            previous_image=previous_image.id if previous_image else None,
-            rollback_performed=rollback_ok,
-            error_message="Healthcheck failed, rollback " + ("performed" if rollback_ok else "failed"),
-        )
-
-    # endregion FUNC_deploy_inner
+    # endregion FUNC_deploy
 
     # region FUNC_remove
     ## @purpose  Idempotent remove: stop containers WITHOUT destroying data (O7/DD10).
-    ## @io       ⇥ project, project_dir → ⎋ RemoveResult
+    ## @io       ⇥ project, project_dir, purge → ⎋ RemoveResult
     ## @complexity — O(1) — single docker compose call
     ## @invariants
-    ##   - docker compose down WITHOUT -v (data preserved)
+    ##   - docker compose down WITHOUT -v (data preserved) — О7 (purge=False default)
+    ##   - purge=True — docker compose down -v (удаление volumes; ТОЛЬКО по явному CLI-флагу)
     ##   - Idempotent: if project dir missing or already stopped → already_removed=True
-    def remove(self, project: str, project_dir: str) -> RemoveResult:
+    def remove(self, project: str, project_dir: str, purge: bool = False) -> RemoveResult:
         """Safely remove (disconnect) a project: stop containers, keep data.
 
         Args:
             project: Project name.
             project_dir: Path to project directory.
+            purge: If True, remove compose volumes too (docker compose down -v).
+                Default False — data preserved (O7/DD10). DevPlan 118 A6: purge-поддержка
+                добавлена для делегирования DeployOrchestrator.remove(purge=...) (CLI --purge).
 
         Returns:
             RemoveResult with status.
         """
-        logger.info("[IMP:9][remove][start] Remove START: %s", project)
+        logger.info("[IMP:9][remove][start] Remove START: %s (purge=%s)", project, purge)
 
         if not validate_project_name(project):
             msg = f"Invalid project name: {project}"
@@ -480,9 +445,15 @@ class DeployEngine:
             logger.info("[IMP:9][remove][not-found] Project dir not found: %s — already removed", project_dir)
             return RemoveResult(success=True, project=project, already_removed=True)
 
-        # docker compose down WITHOUT -v (O7 — data preserved) — shared sole path (T5)
-        logger.info("[IMP:9][remove][down] Stopping containers for %s (data preserved, no -v)...", project)
-        if not _shared_docker_compose_down(project_dir, flags=["--timeout", "30"]):
+        # docker compose down WITHOUT -v (O7 — data preserved) — shared sole path (T5);
+        # purge=True добавляет -v (явное CLI-решение, DevPlan 118 A6)
+        flags = ["--timeout", "30"]
+        if purge:
+            flags.append("-v")
+        logger.info(
+            "[IMP:9][remove][down] Stopping containers for %s (purge=%s, data preserved unless purge)", project, purge
+        )
+        if not _shared_docker_compose_down(project_dir, flags=flags):
             logger.warning("[IMP:8][remove][down-warn] docker compose down reported failure")
 
         logger.info("[IMP:9][remove][done] Remove DONE: %s (data preserved)", project)
@@ -491,7 +462,7 @@ class DeployEngine:
     # endregion FUNC_remove
 
     # region FUNC_status
-    ## @purpose  Print JSON status for a project: docker compose ps + deploy-result.json.
+    ## @purpose  Print JSON status for a project: docker compose ps + DeployHistory last snapshot.
     ## @io       ⇥ project, project_dir, stub_aware → ⎋ StatusResult
     ## @complexity — O(1) — reads files + docker ps call
     ## @invariants
@@ -517,21 +488,17 @@ class DeployEngine:
 
         # ── Stub-aware detection ──
         # 🧐 TRAP[DECISION] · 2026-07-26 · — · STUB_AWARE_STATUS flag
+        # DevPlan 118 A6: единая is_stub-детекция через shared/stub_detection (U-28) —
+        # инлайн-копия (первая строка ai-platform.yaml) заменена каноническим детектором.
         ai_yaml = os.path.join(project_dir, "ai-platform.yaml")
-        if stub_aware and os.path.isfile(ai_yaml):
-            try:
-                with open(ai_yaml) as f:
-                    first_line = f.readline().strip()
-                if "GENERATED-STUB" in first_line:
-                    logger.info("[IMP:9][status][stub] Project %s is a GENERATED-STUB", project)
-                    return StatusResult(
-                        project=project,
-                        node="",
-                        status="stub",
-                        last_deploy={"message": "Project directory exists but ai-platform.yaml is a GENERATED-STUB"},
-                    )
-            except OSError:
-                pass
+        if stub_aware and is_stub_ai_platform_yaml(ai_yaml):
+            logger.info("[IMP:9][status][stub] Project %s is a GENERATED-STUB", project)
+            return StatusResult(
+                project=project,
+                node="",
+                status="stub",
+                last_deploy={"message": "Project directory exists but ai-platform.yaml is a GENERATED-STUB"},
+            )
 
         # ── Docker compose ps (shared sole path — T5) ──
         containers: list[dict[str, Any]] = []
@@ -549,15 +516,19 @@ class DeployEngine:
         except (OSError, subprocess.TimeoutExpired) as e:
             logger.warning("[IMP:8][status][ps-error] docker compose ps error: %s", str(e))
 
-        # ── Last deploy result ──
+        # ── Last deploy result — DeployHistory snapshot (канон, DevPlan 118 A6) ──
+        # DevPlan 118 A6: DeployOrchestrator.status() делегирует сюда — last_deploy обязан читать
+        # ТОТ ЖЕ механизм (DeployHistory), что пишет DeployOrchestrator.deploy() (create_snapshot).
+        # deploy-result.json — legacy-артефакт shell-эпохи (больше НИЧЕМ не пишется, U-51) — удалён.
         last_deploy: dict[str, Any] | None = None
-        deploy_result_file = os.path.join(project_dir, ".deploy-snapshots", "deploy-result.json")
-        if os.path.isfile(deploy_result_file):
-            try:
-                with open(deploy_result_file) as f:
-                    last_deploy = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
+        try:
+            from core.internal.deploy.deploy_history import DeployHistory
+
+            snapshot = DeployHistory(projects_base=self.projects_base).latest_snapshot(project)
+            if snapshot:
+                last_deploy = snapshot
+        except OSError as e:
+            logger.warning("[IMP:8][status][last-deploy] Cannot read DeployHistory snapshot: %s", str(e))
 
         logger.info("[IMP:9][status][found] Project %s: %d containers", project, len(containers))
         return StatusResult(
@@ -622,54 +593,6 @@ class DeployEngine:
         return ImageInfo(id=image_id, tag=tag)
 
     # endregion FUNC__save_previous_image
-
-    # region FUNC__capture_deploy_snapshot
-    ## @purpose  Capture pre-deploy state snapshot (ps + images JSON) for rollback verification.
-    ## @io       ⇥ project_dir → ⎋ SnapshotInfo
-    ## @complexity — O(1) — two docker compose calls
-    def _capture_deploy_snapshot(self, project_dir: str) -> SnapshotInfo:
-        """Capture pre-deploy docker state snapshot.
-
-        Args:
-            project_dir: Project directory.
-
-        Returns:
-            SnapshotInfo with timestamp and file paths.
-        """
-        snapshot_dir = os.path.join(project_dir, ".deploy-snapshots")
-        os.makedirs(snapshot_dir, exist_ok=True)
-        timestamp = int(time.time())
-
-        ps_file = os.path.join(snapshot_dir, f"ps-{timestamp}.json")
-        images_file = os.path.join(snapshot_dir, f"images-{timestamp}.json")
-
-        ps_result = _shared_docker_compose_ps(project_dir, format="json")
-        if ps_result.returncode == 0 and ps_result.stdout:
-            with open(ps_file, "w") as f:
-                f.write(ps_result.stdout)
-            logger.info("[IMP:8][snapshot] Wrote ps snapshot: %s (%d bytes)", ps_file, len(ps_result.stdout))
-        else:
-            logger.info("[IMP:6][snapshot] ps snapshot empty or failed (rc=%d)", ps_result.returncode)
-
-        images_result = _shared_docker_compose_images(project_dir, flags=["--format", "json"])
-        if images_result.returncode == 0 and images_result.stdout:
-            with open(images_file, "w") as f:
-                f.write(images_result.stdout)
-            logger.info(
-                "[IMP:8][snapshot] Wrote images snapshot: %s (%d bytes)", images_file, len(images_result.stdout)
-            )
-        else:
-            logger.info("[IMP:6][snapshot] images snapshot empty or failed (rc=%d)", images_result.returncode)
-
-        # Touch .deploy-started marker
-        started_file = os.path.join(snapshot_dir, ".deploy-started")
-        with open(started_file, "w") as f:
-            f.write(str(timestamp))
-
-        logger.info("[IMP:9][snapshot] Snapshot complete: ts=%s dir=%s", timestamp, snapshot_dir)
-        return SnapshotInfo(timestamp=timestamp, ps_file=ps_file, images_file=images_file)
-
-    # endregion FUNC__capture_deploy_snapshot
 
     # region FUNC__preflight_checks
     ## @purpose  Validate pre-deploy conditions: FQDN uniqueness and port conflicts.

@@ -904,6 +904,12 @@ gates:
 - id: test_healthcheck_present
   test_file: test_gate_compose_base_contract.py
   description: 'Auto-discovered gate: test_healthcheck_present'
+- id: test_negative_converge_tuple_detected
+  test_file: test_gate_compose_files_sole_path.py
+  description: 'Auto-discovered gate: test_negative_converge_tuple_detected'
+- id: test_no_second_compose_filenames_tuple
+  test_file: test_gate_compose_files_sole_path.py
+  description: 'Auto-discovered gate: test_no_second_compose_filenames_tuple'
 - id: test_include_matches_discovered_modules
   test_file: test_gate_compose_include_sync.py
   description: 'Auto-discovered gate: test_include_matches_discovered_modules'

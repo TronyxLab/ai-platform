@@ -6,7 +6,7 @@
 # region MODULE_CONTRACT
 ## @purpose  Unit tests for core/internal/deploy/deploy_engine.py — DeployEngine class with mocked Docker I/O boundary (D1, DevPlan 116 B10 T3).
 ## @scope    All Docker CLI operations mocked at the boundary (subprocess.run + shared docker-compose helpers);
-##           DeployEngine methods (_preflight_checks, _save_previous_image, _capture_deploy_snapshot, _atomic_up,
+##           DeployEngine methods (_preflight_checks, _save_previous_image, _atomic_up,
 ##           _perform_rollback) are REAL. Assertions on observable result ONLY — 0 интроспекции вызовов.
 ## @invariants
 ##   - deploy_boundary fixture: ≤5 патчей (subprocess.run, _shared_retry_pull, _shared_healthcheck_poll,
@@ -90,7 +90,7 @@ def deploy_boundary(monkeypatch: pytest.MonkeyPatch):
     """I/O boundary fixture (D1): subprocess.run + 4 shared docker-compose helpers пропатчены;
     _shared_docker_compose_images/_shared_docker_compose_down monkeypatched (не через патчи).
 
-    DeployEngine methods (_preflight_checks, _save_previous_image, _capture_deploy_snapshot,
+    DeployEngine methods (_preflight_checks, _save_previous_image,
     _atomic_up, _perform_rollback) are REAL — only the docker CLI boundary is mocked.
     """
     mock_run = MagicMock(return_value=_cp())
@@ -479,24 +479,95 @@ def test_save_previous_image_first_deploy(deploy_boundary, caplog, tmp_project, 
     logger.critical("[IMP:9][test] save_prev_first_deploy — None — OK")
 
 
-# 🧪 TRAP[TEST] · 2026-08-01 · D1 · capture snapshot creates marker file
-# · Scenario: snapshot dir + .deploy-started created
-# · Last fail: N/A (preserved, boundary-mocked)
-# · Remove if: snapshot mechanism changes
-def test_capture_snapshot_creates_files(deploy_boundary, caplog, tmp_project, engine):
-    """_capture_deploy_snapshot creates .deploy-started marker (observable fs effect)."""
+# 🧪 TRAP[TEST] · 2026-08-02 · A7 · snapshot mechanism consolidated — DeployHistory covers rollback
+# · Scenario: DeployEngine.deploy() НЕ создаёт .deploy-snapshots/ps-*.json (единственный snapshot-механизм —
+# ·   DeployHistory); rollback в DeployOrchestrator работает через DeployHistory.rollback()/latest_snapshot().
+# · Last fail: N/A (A7 — удаление _capture_deploy_snapshot, двойной snapshot на каждый deploy)
+# · Remove if: snapshot mechanism returns to DeployEngine
+def test_deploy_no_engine_snapshot_files(deploy_boundary, caplog, tmp_project, engine):
+    """A7: deploy() must NOT write engine snapshots (.deploy-snapshots/ps-*.json / images-*.json)."""
     caplog.set_level(logging.INFO)
     b = deploy_boundary
-    b.ps.return_value = _cp(stdout="{}")
-    b.images.return_value = _cp(stdout="{}")
+    b.images.return_value = _cp(stdout="")  # first deploy
+    b.run.return_value = _cp(stdout="")
+    snap_files: list[str] = []
+    b.ps.side_effect = lambda *a, **k: (snap_files.extend(_collect_snapshot_files(tmp_project)), _cp())[1]
 
-    result = engine._capture_deploy_snapshot(tmp_project)
-    started_file = Path(tmp_project) / ".deploy-snapshots" / ".deploy-started"
+    result = engine.deploy(project="test-app", ref="v1.0.0", service="app", project_dir=tmp_project, max_wait=2)
 
-    assert started_file.is_file(), ".deploy-started marker must exist"
-    assert result.timestamp > 0
     assert _print_ldd_trajectory(caplog)
-    logger.critical("[IMP:9][test] capture_snapshot — marker created ts=%s — OK", result.timestamp)
+    assert result.success is True
+    # После deploy() не должно появиться ни одного engine-snapshot-файла
+    snap_dir = Path(tmp_project) / ".deploy-snapshots"
+    if snap_dir.is_dir():
+        engine_files = [f.name for f in snap_dir.iterdir() if f.name.startswith(("ps-", "images-"))]
+        assert not engine_files, (
+            f"A7 FAIL: DeployEngine._capture_deploy_snapshot удалён, но deploy() создал: {engine_files}"
+        )
+        assert not (snap_dir / ".deploy-started").exists(), "A7 FAIL: .deploy-started marker must not be written"
+    logger.critical("[IMP:9][test] deploy() без engine-snapshot — единственный механизм DeployHistory — OK")
+
+
+def _collect_snapshot_files(project_dir: str) -> list[str]:
+    """Helper: collect engine-snapshot filenames in .deploy-snapshots (observable fs probe)."""
+    snap_dir = Path(project_dir) / ".deploy-snapshots"
+    if not snap_dir.is_dir():
+        return []
+    return [f.name for f in snap_dir.iterdir()]
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · A7 REGRESSION · rollback работает через DeployHistory после удаления engine-snapshot
+# · Scenario: DeployHistory.create_snapshot → DeployOrchestrator.rollback() (latest_snapshot) → snapshot dict
+# ·   не None — восстановление через deploy_history, engine-snapshot не участвует
+# · Last fail: N/A (A7 — проверка, что удаление engine-snapshot не сломало rollback-контракт)
+# · Remove if: rollback mechanism changes
+def test_rollback_via_deploy_history_after_snapshot_removal(caplog, tmp_path):
+    """A7: rollback через DeployHistory работает (единственный snapshot-механизм)."""
+    from core.internal.deploy.deploy_history import DeployHistory
+
+    caplog.set_level(logging.INFO)
+    projects_base = str(tmp_path / "projects")
+    history = DeployHistory(projects_base=projects_base)
+    history.create_snapshot(
+        project="test-app",
+        version="sha123",
+        health_status="healthy",
+        compose_state={"containers": ["web"]},
+    )
+
+    snap = history.rollback("test-app")
+
+    assert _print_ldd_trajectory(caplog)
+    assert snap is not None, "rollback must return the latest DeployHistory snapshot"
+    assert snap.get("version") == "sha123"
+    assert snap.get("health_status") == "healthy"
+    logger.critical("[IMP:9][test] rollback via DeployHistory — snapshot=%s — OK", snap.get("snapshot_id"))
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · A8 — _deploy_inner / _capture_deploy_snapshot removed from source
+# · Scenario: AST-scan — DeployEngine не содержит _deploy_inner (дубль deploy()) и _capture_deploy_snapshot
+# · Last fail: deploy_engine.py:343 _deploy_inner (дублированный docstring + validate_project_name);
+# ·   :640 _capture_deploy_snapshot (двойной snapshot, никем не читался)
+# · Remove if: methods are legitimately reintroduced
+def test_deploy_engine_no_duplicate_layers_negative(caplog):
+    """R5 negative: _deploy_inner и _capture_deploy_snapshot отсутствуют в DeployEngine (A7/A8)."""
+    import ast
+
+    caplog.set_level(logging.INFO)
+    from core.internal.deploy import deploy_engine
+
+    src = Path(deploy_engine.__file__).read_text()
+    tree = ast.parse(src)
+    forbidden: list[str] = [
+        f"{node.lineno}: {node.name}"
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in ("_deploy_inner", "_capture_deploy_snapshot")
+    ]
+
+    assert not forbidden, f"A7/A8 FAIL: {', '.join(forbidden)} ещё существуют в DeployEngine"
+    assert "contextlib.chdir" in src, "A8: deploy() должен использовать contextlib.chdir"
+    logger.critical("[IMP:9][test] _deploy_inner/_capture_deploy_snapshot удалены — единственный deploy() — OK")
 
 
 # 🧪 TRAP[TEST] · 2026-08-01 · D1 · perform_rollback succeeds

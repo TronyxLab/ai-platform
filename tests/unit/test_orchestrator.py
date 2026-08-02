@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +34,8 @@ from core.internal.deploy.orchestrator import (
     OrchestratorDeployResult,
     ProjectStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 # ── Mock Channel ──
 
@@ -334,6 +338,74 @@ class TestDeployOrchestrator:
         d = status.to_dict()
         assert d["status"] == "found"
         assert d["containers"] == [{"name": "web"}]
+
+    # endregion
+
+    # region FUNC_test_assemble_payload_delegates_to_payload_deliverer
+    ## @purpose  DevPlan 118 A4 — _assemble_payload делегирует PayloadDeliverer.assemble_payload
+    ##           (единственный путь сборки tar.gz); set-сравнение содержимого tar.
+    # 🧪 TRAP[TEST] · REGRESSION · A4 — orchestrator и payload_deliverer собирают payload одним кодом
+    # · Scenario: project_dir с docker-compose.yml + ai-platform.yaml + compose.yaml → оба API дают
+    # ·   tar с идентичным набором членов (set-сравнение содержимого tar)
+    # · Last fail: orchestrator.py:949 _assemble_payload — локальная tar-реализация (дрейф формата K8)
+    # · Remove if: payload assembly moves to a different mechanism
+    def test_assemble_payload_matches_payload_deliverer(self, tmp_path: Path) -> None:
+        """A4: DeployOrchestrator._assemble_payload → PayloadDeliverer.assemble_payload (один код)."""
+        import tarfile
+
+        from core.internal.deploy.payload_deliverer import PayloadDeliverer
+
+        project_dir = tmp_path / "proj-a4"
+        project_dir.mkdir()
+        (project_dir / "docker-compose.yml").write_text("services:\n  web:\n    image: nginx\n")
+        (project_dir / "ai-platform.yaml").write_text("project: proj-a4\n")
+        (project_dir / "compose.yaml").write_text("services: {}\n")
+        (project_dir / ".env.platform").write_text("FOO=bar\n")
+
+        def _tar_members(path: str) -> set[str]:
+            with tarfile.open(path, "r:gz") as t:
+                return {m.name for m in t.getmembers()}
+
+        orch = DeployOrchestrator(projects_base=str(tmp_path / "projects"))
+        payload_orch = orch._assemble_payload("proj-a4", "sha1", str(project_dir), {"k": "v"})
+
+        deliverer = PayloadDeliverer(projects_base=str(tmp_path / "projects"))
+        payload_del = deliverer.assemble_payload("proj-a4", "sha1", str(project_dir), {"k": "v"})
+
+        assert _tar_members(str(payload_orch.tar_path)) == _tar_members(str(payload_del.tar_path)), (
+            "A4 FAIL: tar-содержимое orchestrator vs payload_deliverer разошлось — "
+            "сборка payload'а должна идти одним кодом (K8)"
+        )
+        assert payload_orch.project_name == payload_del.project_name == "proj-a4"
+        assert payload_orch.version == payload_del.version == "sha1"
+        assert payload_orch.metadata == payload_del.metadata == {"k": "v"}
+        logger.critical("[IMP:9][test] A4: _assemble_payload → PayloadDeliverer — tar set идентичен — OK")
+
+    # endregion
+
+    # region FUNC_test_status_stub_via_unified_detector
+    ## @purpose  DevPlan 118 A6 — orchestrator.status() определяет stub-проект единым детектором
+    ##           (is_stub_ai_platform_yaml внутри DeployEngine.status), без инлайн-копии.
+    # 🧪 TRAP[TEST] · REGRESSION · A6 — stub-проект определяется единым детектором
+    # · Scenario: ai-platform.yaml с маркером GENERATED-STUB → orchestrator.status() → status="stub"
+    # · Last fail: orchestrator.py:639 + deploy_engine.py:525 — две инлайн-копии "GENERATED-STUB" в первой строке
+    # · Remove if: stub detection moves out of DeployEngine
+    def test_status_stub_via_unified_detector(self, tmp_path: Path) -> None:
+        """A6: orchestrator.status() → 'stub' через shared/stub_detection (единый детектор)."""
+        from core.internal.shared.stub_detection import is_stub_ai_platform_yaml
+
+        projects_base = tmp_path / "projects"
+        proj_dir = projects_base / "stub-proj"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "ai-platform.yaml").write_text("GENERATED-STUB: true\nproject: stub\n")
+
+        orch = DeployOrchestrator(projects_base=str(projects_base))
+        status = orch.status("stub-proj")
+
+        assert status.status == "stub", f"A6 FAIL: expected stub, got {status.status}"
+        # Единый детектор подтверждает тот же результат — никакой инлайн-копии в orchestrator
+        assert is_stub_ai_platform_yaml(str(proj_dir / "ai-platform.yaml")) is True
+        logger.critical("[IMP:9][test] A6: orchestrator.status() → stub via unified detector — OK")
 
     # endregion
 

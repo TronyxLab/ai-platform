@@ -978,3 +978,9 @@ removed:
     reason: "Волна 117 D16: step_start/step_done/step_skip/step_warn + STEP/STEP_ERRORS удалены из node-lifecycle.sh (0 вызовов в актуальных code paths — main() делегирует в lifecycle/cli.py). Условие TRAP[TEST] «Remove if: error collection moves to state_machine.py errors[] list» выполнено — коллекция errors/warnings подтверждена в state_machine.py (Check 3 теста)."
     issue: "117-post-refactor-drift D16"
     approved_by: "@tronyx"
+
+  # ── Волна 118 (A7): engine snapshot удалён → snapshot-тест заменён DeployHistory-тестами ──
+  - nodeid: "tests/unit/test_deploy_engine.py::test_capture_snapshot_creates_files"
+    reason: "DevPlan 118 A7: DeployEngine._capture_deploy_snapshot УДАЛЁН — двойной snapshot (ps/images-файлы + .deploy-started никем не читались); DeployHistory — единственный snapshot-механизм (create_snapshot/rollback). Тест консервировал удалённый метод. Эквиваленты: test_deploy_no_engine_snapshot_files (A7 — deploy() не пишет engine-файлы) + test_rollback_via_deploy_history_after_snapshot_removal (rollback через DeployHistory работает)."
+    issue: "118-drift-reduction-final A7"
+    approved_by: "@tronyx"

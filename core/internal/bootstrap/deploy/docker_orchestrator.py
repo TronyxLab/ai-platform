@@ -130,7 +130,11 @@ logger = logging.getLogger(__name__)
 # ── Constants ──
 L1_BASE_IMAGE = "hermes-agent-base"
 GHCR_ORG = os.environ.get("GHCR_ORG", "ghcr.io/tronyx161")
-COMPOSE_FILENAMES = ("compose.yaml", "docker-compose.yaml", "docker-compose.base.yml")
+# DevPlan 118 A2: единый канон списков compose-файлов — shared/compose_files.py (гейт
+# compose_files_sole_path). Локальный COMPOSE_FILENAMES УДАЛЁН (6 копий → 1 SoT).
+from core.internal.shared.compose_files import COMPOSE_FILENAMES as _CANON_COMPOSE_FILENAMES
+from core.internal.shared.compose_files import resolve_compose_file as _resolve_compose_file_shared
+
 DEFAULT_PARALLEL_LIMIT = 4
 DEFAULT_READINESS_MAX_ATTEMPTS = 15
 DEFAULT_READINESS_INTERVAL_SEC = 2
@@ -196,21 +200,24 @@ def _check_image_exists(image_ref: str) -> bool:
 
 # region FUNC__resolve_compose_file
 ## @purpose  Find the first existing compose file in a module directory.
-##           Resolution order: compose.yaml → docker-compose.yaml → docker-compose.base.yml.
+##           Resolution order: canonical COMPOSE_FILENAMES from shared/compose_files.py
+##           (compose.yaml → docker-compose.yaml → docker-compose.yml → docker-compose.base.yml,
+##           DevPlan 118 A2) — thin delegating wrapper (публичный API модуля сохраняется).
 ## @io       ⇥ module_dir: str (path to module directory)
 ##           ⎋ Path | None — resolved compose file path, or None if none found
-## @complexity 1 — linear scan of 3 fixed filenames
+## @complexity 1 — linear scan of canonical tuple (delegates to shared)
 def _resolve_compose_file(module_dir: str) -> Path | None:
     logger.info("[IMP:7][_resolve_compose_file][scan] Resolving compose file in %s", module_dir)
-    for fname in COMPOSE_FILENAMES:
-        candidate = Path(module_dir) / fname
-        if candidate.is_file():
-            logger.info("[IMP:8][_resolve_compose_file][found] Using compose file: %s", candidate)
-            return candidate
-    logger.warning(
-        "[IMP:5][_resolve_compose_file][missing] No compose file found in %s (tried %s)", module_dir, COMPOSE_FILENAMES
-    )
-    return None
+    resolved = _resolve_compose_file_shared(module_dir)
+    if resolved is not None:
+        logger.info("[IMP:8][_resolve_compose_file][found] Using compose file: %s", resolved)
+    else:
+        logger.warning(
+            "[IMP:5][_resolve_compose_file][missing] No compose file found in %s (tried %s)",
+            module_dir,
+            _CANON_COMPOSE_FILENAMES,
+        )
+    return resolved
 
 
 # endregion FUNC__resolve_compose_file

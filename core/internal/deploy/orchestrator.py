@@ -50,13 +50,9 @@ from core.internal.deploy.healthcheck_poller import HealthcheckPoller
 from core.internal.shared.audit_logger import DEFAULT_LOG_FILE as _SHARED_AUDIT_LOG_FILE
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
-# DevPlan 116 B5 T3: shared docker compose — sole path (гейт docker_sole_path)
-from core.internal.shared.docker_compose import (
-    docker_compose_down as _shared_docker_compose_down,
-)
-from core.internal.shared.docker_compose import (
-    docker_compose_ps as _shared_docker_compose_ps,
-)
+# DevPlan 116 B5 T3: shared docker compose — sole path (гейт docker_sole_path).
+# DevPlan 118 A6: status/remove делегируют DeployEngine (StatusResult/RemoveResult) —
+# прямые вызовы docker compose ps/down из DeployOrchestrator удалены (импорты ниже не нужны).
 from core.internal.shared.exceptions import PlatformError
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
@@ -614,6 +610,9 @@ class DeployOrchestrator:
 
     # region FUNC_status
     ## @purpose  Get project status (found/not_found/stub + containers + last_deploy).
+    ##           DevPlan 118 A6: канон = DeployEngine.status() (StatusResult); DeployOrchestrator
+    ##           делегирует и преобразует тип StatusResult → ProjectStatus (JSON-канон диспетчера).
+    ##           Единая stub-детекция — shared/stub_detection.is_stub_ai_platform_yaml (внутри engine).
     ## @io       ⇥ project_name: str → ⎋ ProjectStatus
     ## @complexity — O(1) — file reads + docker ps call
     def status(self, project_name: str) -> ProjectStatus:
@@ -628,56 +627,32 @@ class DeployOrchestrator:
         logger.info("[IMP:9][DeployOrchestrator][status] Status check: %s", project_name)
         project_dir = os.path.join(self.projects_base, project_name)
 
-        if not os.path.isdir(project_dir):
-            return ProjectStatus(project=project_name, status="not_found")
+        from core.internal.deploy.deploy_engine import DeployEngine
 
-        # Check for stub
-        ai_yaml = os.path.join(project_dir, "ai-platform.yaml")
-        if os.path.isfile(ai_yaml):
-            try:
-                with open(ai_yaml) as f:
-                    if "GENERATED-STUB" in f.readline():
-                        return ProjectStatus(project=project_name, status="stub")
-            except OSError:
-                pass
+        engine = DeployEngine(projects_base=self.projects_base)
+        sr = engine.status(project=project_name, project_dir=project_dir, stub_aware=True)
 
-        # Get containers via docker compose ps (shared — sole path, DevPlan 116 B5 T3)
-        containers: list[dict[str, Any]] = []
-        try:
-            ps_result = _shared_docker_compose_ps(project_dir, format="json")
-            ps_stdout = ps_result.stdout
-            if isinstance(ps_stdout, bytes):
-                ps_stdout = ps_stdout.decode("utf-8")
-            if ps_result.returncode == 0 and ps_stdout.strip():
-                containers.extend(
-                    c for line in ps_stdout.strip().split("\n") if (c := _try_json_loads(line)) is not None
-                )
-        except (OSError, subprocess.TimeoutExpired) as e:
-            logger.warning("[IMP:8][status] docker compose ps error: %s", e)
-
-        # Get last deploy from snapshots
-        last_deploy: dict | None = None
-        snapshot = self.deploy_history.latest_snapshot(project_name)
-        if snapshot:
-            last_deploy = snapshot
-
+        # StatusResult → ProjectStatus: drop node (не входит в JSON-канон диспетчера, D6)
         return ProjectStatus(
-            project=project_name,
-            status="found",
-            containers=containers,
-            last_deploy=last_deploy,
+            project=sr.project,
+            status=sr.status,
+            containers=sr.containers,
+            last_deploy=sr.last_deploy,
         )
 
     # endregion FUNC_status
 
     # region FUNC_remove
     ## @purpose  Remove a project's containers (idempotent). Data preserved — no -v flag.
+    ##           DevPlan 118 A6: канон = DeployEngine.remove() (RemoveResult); DeployOrchestrator
+    ##           делегирует и преобразует тип RemoveResult → OrchestratorDeployResult.
     ## @io       ⇥ project_name: str, purge: bool = False → ⎋ OrchestratorDeployResult
     ## @complexity — O(1) — single docker compose call
     ## @invariants
-    ##   - docker compose down WITHOUT -v (data preserved)
-    ##   - purge=True removes compose volumes (docker compose down -v)
+    ##   - docker compose down WITHOUT -v (data preserved) — О7
+    ##   - purge=True removes compose volumes (docker compose down -v) — явный CLI-флаг
     ##   - Idempotent: if project dir missing → SKIPPED
+    ##   - Audit пишется через DeployAuditLogger (единый writer, D1)
     def remove(self, project_name: str, purge: bool = False) -> OrchestratorDeployResult:
         """Safely remove project containers (data preserved unless purge=True).
 
@@ -692,47 +667,50 @@ class DeployOrchestrator:
         logger.info("[IMP:9][DeployOrchestrator][remove] START: %s (purge=%s)", project_name, purge)
 
         project_dir = os.path.join(self.projects_base, project_name)
-        if not os.path.isdir(project_dir):
+
+        from core.internal.deploy.deploy_engine import DeployEngine
+
+        engine = DeployEngine(projects_base=self.projects_base)
+        rr = engine.remove(project=project_name, project_dir=project_dir, purge=purge)
+
+        duration = time.monotonic() - start
+
+        # RemoveResult → OrchestratorDeployResult: already_removed → SKIPPED, success → DEPLOYED, fail → FAILED
+        if not rr.success:
+            return self._result(
+                DeployStatus.FAILED,
+                project_name,
+                error_info=rr.error_message or "Remove failed",
+                duration_s=duration,
+            )
+
+        if rr.already_removed:
+            self.audit_logger.log(
+                operation="remove",
+                project=project_name,
+                result=DeployStatus.SKIPPED.value,
+                duration_s=duration,
+            )
             return self._result(
                 DeployStatus.SKIPPED,
                 project_name,
                 error_info="Project directory not found — already removed",
-                duration_s=time.monotonic() - start,
-            )
-
-        # docker compose down (± -v) — shared sole path (DevPlan 116 B5 T3)
-        try:
-            flags = ["--timeout", "30"]
-            if purge:
-                flags.append("-v")
-
-            down_ok = _shared_docker_compose_down(project_dir, flags=flags)
-            duration = time.monotonic() - start
-
-            if not down_ok:
-                logger.warning("[IMP:8][remove] docker compose down reported failure")
-
-            self.audit_logger.log(
-                operation="remove",
-                project=project_name,
-                result=DeployStatus.DEPLOYED.value,
                 duration_s=duration,
             )
 
-            return self._result(
-                DeployStatus.DEPLOYED,
-                project_name,
-                duration_s=duration,
-                stdout="docker compose down completed",
-                stderr="",
-            )
-        except (subprocess.TimeoutExpired, OSError) as e:
-            return self._result(
-                DeployStatus.FAILED,
-                project_name,
-                error_info=str(e),
-                duration_s=time.monotonic() - start,
-            )
+        self.audit_logger.log(
+            operation="remove",
+            project=project_name,
+            result=DeployStatus.DEPLOYED.value,
+            duration_s=duration,
+        )
+        return self._result(
+            DeployStatus.DEPLOYED,
+            project_name,
+            duration_s=duration,
+            stdout="docker compose down completed",
+            stderr="",
+        )
 
     # endregion FUNC_remove
 
@@ -955,6 +933,12 @@ class DeployOrchestrator:
     ) -> Payload:
         """Assemble a deploy payload from project files.
 
+        DevPlan 118 A4: локальная tar-реализация УДАЛЕНА — делегирование в
+        PayloadDeliverer.assemble_payload (единственный путь сборки tar.gz).
+        Контракт аргументов идентичен (project_name/version/project_dir/metadata);
+        file-set совпадает (_PAYLOAD_FILE_NAMES = compose-канон + ai-platform.yaml + .env.platform).
+        Сборка через тот же код, что receive/deliver — исключает дрейф формата payload (K8).
+
         Args:
             project_name: Project name.
             version: Version/tag.
@@ -966,25 +950,14 @@ class DeployOrchestrator:
 
         Raises:
             OSError: If project files cannot be read.
-            ValueError: If required files are missing.
         """
-        import tarfile
-        import tempfile
+        from core.internal.deploy.payload_deliverer import PayloadDeliverer
 
-        # Create tar.gz of project files
-        tar_fd, tar_path = tempfile.mkstemp(suffix=".tar.gz", prefix=f"deploy-{project_name}-")
-        os.close(tar_fd)
-
-        with tarfile.open(tar_path, "w:gz") as tar:
-            for fname in ("docker-compose.yml", "compose.yaml", "ai-platform.yaml", ".env.platform"):
-                fpath = os.path.join(project_dir, fname)
-                if os.path.isfile(fpath):
-                    tar.add(fpath, arcname=fname)
-
-        return Payload(
-            tar_path=Path(tar_path),
+        deliverer = PayloadDeliverer(projects_base=self.projects_base)
+        return deliverer.assemble_payload(
             project_name=project_name,
             version=version,
+            project_dir=project_dir,
             metadata=metadata,
         )
 

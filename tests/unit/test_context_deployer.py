@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -164,6 +165,75 @@ def test_deploy_context_broken_yaml_failed(caplog, tmp_path, monkeypatch):
     assert result.failed == 1
     assert any("CONTEXT not set" in r.message for r in caplog.records), "expected readable CONTEXT-not-set log"
     logger.critical("[IMP:9][test] deploy_context broken yaml → failed=1 with readable log — OK")
+
+
+# endregion
+
+
+# ═══════════════════════════════════════════════════════════════════
+# region Tests: A5 — cert_orchestrator normal import (DevPlan 118 A5)
+# ═══════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · Regression · A5 — deploy_context uses the REAL cert_orchestrator module
+# · Scenario: monkeypatch real cert_orchestrator.orchestrate_certs + cert_check_expiry=False →
+# ·   deploy_context invokes orchestrate_certs; identity-check proves no importlib-copy shadow
+# · Last fail: importlib.util.spec_from_file_location — обход системы импорта (тихий полом)
+# · Remove if: cert orchestration moves out of deploy_context
+@ldd_trajectory
+def test_deploy_context_uses_real_cert_orchestrator(caplog, node_yaml_file, mock_docker, monkeypatch):
+    """deploy_context must orchestrate certs via the real cert_orchestrator module (A5)."""
+    import core.internal.bootstrap.cert_orchestrator as cert_mod
+
+    caplog.set_level(logging.INFO)
+
+    # A5 core: identity — context_deployer references the REAL module function, not an importlib copy.
+    assert cd.orchestrate_certs is cert_mod.orchestrate_certs, (
+        "A5 FAIL: context_deployer.orchestrate_certs must be the real cert_orchestrator function "
+        "(importlib spec_from_file_location creates an unrelated copy)"
+    )
+
+    calls: list = []
+    monkeypatch.setattr(cd, "orchestrate_certs", lambda *a, **k: (calls.append(a), SimpleNamespace(domains={}))[1])
+    monkeypatch.setattr(cd, "cert_check_expiry", lambda *a, **k: False)  # все домены invalid → orchestrate
+    monkeypatch.setattr(cd, "deploy_context_projects", lambda *a, **k: [])
+    monkeypatch.setenv("CONTEXT", "test-ctx")
+
+    result = cd.deploy_context(
+        core_dir="/nonexistent/core",
+        node_name="test-node",
+        node_yaml=node_yaml_file,
+        context="test-ctx",
+    )
+
+    assert calls, "orchestrate_certs must be invoked when context domains lack valid certs"
+    assert result.failed == 0
+    logger.critical("[IMP:9][test] deploy_context cert orchestration via real module — OK")
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · A5 — importlib bypass removed from context_deployer
+# · Scenario: AST-scan — spec_from_file_location + cross-module private _is_cert_valid must be absent
+# · Last fail: context_deployer.py:645-653 importlib.util.spec_from_file_location("cert_orchestrator", ...)
+# · Remove if: importlib bypass is legitimately reintroduced
+@ldd_trajectory
+def test_deploy_context_no_importlib_bypass_negative(caplog):
+    """R5 negative: importlib bypass and private-cert-API usage removed from context_deployer (A5)."""
+    import ast
+
+    caplog.set_level(logging.INFO)
+
+    src = Path(cd.__file__).read_text()
+    tree = ast.parse(src)
+    forbidden: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "spec_from_file_location":
+            forbidden.append(f"{node.lineno}: spec_from_file_location")
+        if isinstance(node, ast.Attribute) and node.attr == "_is_cert_valid":
+            forbidden.append(f"{node.lineno}: _is_cert_valid (private API cross-module)")
+
+    assert not forbidden, f"A5 FAIL: importlib bypass still present: {', '.join(forbidden)}"
+    assert "orchestrate_certs" in src, "A5: normal import of cert_orchestrator.orchestrate_certs required"
+    logger.critical("[IMP:9][test] importlib bypass removed / normal import present — OK")
 
 
 # endregion

@@ -31,24 +31,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+# DevPlan 118 A2: единый канон списков compose-файлов — shared/compose_files.py.
+# Локальный COMPOSE_FILE_CANDIDATES УДАЛЁН (6 копий → 1 SoT; канон расширен docker-compose.yml).
+from core.internal.shared.compose_files import COMPOSE_FILENAMES as COMPOSE_FILE_CANDIDATES
+
 # DevPlan 116 B5 T3: shared docker compose config — sole path (гейт docker_sole_path)
 from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11)
 from core.internal.shared.timeouts import IMAGE_CHECK_TIMEOUT
 
+"""## @invariant Compose file search priority — canonical COMPOSE_FILENAMES (DevPlan 118 A2), first match wins."""
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──
 DEFAULT_IMAGE_RETENTION_DAYS: int = 30
 DOCKER_RM_TIMEOUT: int = 30
-
-COMPOSE_FILE_CANDIDATES: list[str] = [
-    "compose.yaml",
-    "docker-compose.yaml",
-    "docker-compose.base.yml",
-]
-"""## @invariant Compose file search priority — first match wins, mirroring docker compose CLI behavior."""
 
 DOCKER_PS_TIMEOUT: int = 15
 """## @invariant docker ps -a timeout (seconds). Matches deploy-modules.sh value."""

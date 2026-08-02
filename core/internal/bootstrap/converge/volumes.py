@@ -22,6 +22,7 @@ from pathlib import Path
 
 import core.internal.bootstrap.converge.infra as infra
 from core.internal.bootstrap.converge.infra import DOCKER_TIMEOUT, report_add, run_subprocess, set_exit
+from core.internal.shared.compose_files import resolve_compose_file
 from core.internal.shared.docker_compose import docker_compose_config as _shared_docker_compose_config
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ def extract_named_volumes(compose_json: dict) -> list[str]:
 ## @invariant O7 — detect-only, NEVER docker volume create
 ## @edge-cases
 ##   - Docker daemon unavailable → status=fail, no further checks
-##   - Module without compose.yml → skipped (not a docker module)
+##   - Module without canonical compose file (shared/compose_files) → skipped (not a docker module)
 ##   - All volumes exist → status=converged
 ##   - One or more volumes missing → status=warn, never create
 ##   - Bind mounts (type=bind) → excluded from inspection
@@ -154,14 +155,11 @@ def reconcile_volumes(
         if not mod_name or not mod.get("enabled", True):
             continue
 
-        # Find compose file for this module
-        compose_file = None
+        # Find compose file for this module — DevPlan 118 A2: единый канон
+        # shared/compose_files.resolve_compose_file (включает docker-compose.base.yml —
+        # реальные модули имеют ТОЛЬКО base-compose; старый кортеж их не видел)
         mod_dir = modules_dir / mod_name
-        for cf in ("compose.yaml", "compose.yml", "docker-compose.yml"):
-            candidate = mod_dir / cf
-            if candidate.is_file():
-                compose_file = candidate
-                break
+        compose_file = resolve_compose_file(str(mod_dir))
 
         if not compose_file:
             logger.info("[IMP:7][converge][%s] Module %s has no compose file — skipping (not docker)", unit, mod_name)

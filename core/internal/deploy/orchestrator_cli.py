@@ -321,7 +321,8 @@ def _dispatch(argv: list[str]) -> int:
 
 # region FUNC__deliver
 ## @purpose  Operator-side delivery (DevPlan 116 B1 T5, D1-консистентно): ассемблирует payload через
-##           PayloadDeliverer._assemble_payload, доставляет через ForcedCommandChannel
+##           PayloadDeliverer.assemble_payload (публичный API, единственный путь сборки tar.gz — A4),
+##           доставляет через ForcedCommandChannel
 ##           (remote_cmd "receive \<project\> \<version\>" — T2 п.3), печатает JSON-результат с VPS
 ##           (парсинг stdout deliver), exit 0/1 по нему. НЕ вызывает локальный compose.
 ## @io       ⇥ args: argparse.Namespace (--project/--version/--host/--user/--key-file/--project-dir)

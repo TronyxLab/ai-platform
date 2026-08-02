@@ -29,6 +29,7 @@ from core.internal.bootstrap.converge.infra import (
     set_exit,
 )
 from core.internal.bootstrap.converge.volumes import parse_node_modules_yaml
+from core.internal.shared.compose_files import resolve_compose_file
 from core.internal.shared.docker_compose import docker_compose_up as _shared_docker_compose_up
 from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT
 
@@ -218,14 +219,11 @@ def reconcile_runtime_state(
         if not mod_name or not mod.get("enabled", True):
             continue
 
-        # Check if module has a compose file (docker module)
-        compose_file = None
+        # Check if module has a compose file (docker module) — DevPlan 118 A2:
+        # единый канон shared/compose_files.resolve_compose_file (порядок включает docker-compose.base.yml —
+        # реальные модули имеют ТОЛЬКО base-compose; старый кортеж их не видел → converge пропускал все docker-модули)
         mod_dir = modules_dir_path / mod_name
-        for cf in ("compose.yaml", "compose.yml", "docker-compose.yml"):
-            candidate = mod_dir / cf
-            if candidate.is_file():
-                compose_file = candidate
-                break
+        compose_file = resolve_compose_file(str(mod_dir))
 
         if not compose_file:
             logger.info("[IMP:7][converge][%s] %s has no compose file — skipping (not docker)", unit, mod_name)

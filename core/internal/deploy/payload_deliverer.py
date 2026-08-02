@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from core.internal.deploy.channels import Payload
+from core.internal.shared.compose_files import PROJECT_COMPOSE_FILENAMES
 from core.internal.shared.project_registry import validate_project_name
 
 logger = logging.getLogger(__name__)
@@ -56,12 +57,13 @@ logger = logging.getLogger(__name__)
 
 MAX_PAYLOAD_SIZE = 1 * 1024 * 1024  # 1 MiB
 
-WHITELIST_FILES: set[str] = {
-    "docker-compose.yml",
-    "compose.yaml",
-    "ai-platform.yaml",
-    ".env.platform",
-}
+# DevPlan 118 A2: compose-подмножество whitelist'а — из единого канона shared/compose_files
+# (PROJECT_COMPOSE_FILENAMES: docker-compose.yml, compose.yaml). docker-compose.base.yml —
+# модульный паттерн, в проектные payload'ы не входит. Состав членства НЕ изменился.
+WHITELIST_FILES: frozenset[str] = frozenset(PROJECT_COMPOSE_FILENAMES) | {"ai-platform.yaml", ".env.platform"}
+
+# Порядок файлов payload'а для assemble_payload: compose-подмножество канона + platform-файлы
+_PAYLOAD_FILE_NAMES: tuple[str, ...] = (*PROJECT_COMPOSE_FILENAMES, "ai-platform.yaml", ".env.platform")
 
 
 # ── Custom exceptions ───────────────────────────────────────────────────────
@@ -146,7 +148,7 @@ class PayloadDeliverer:
         os.close(tar_fd)
 
         with tarfile.open(tar_path, "w:gz") as tar:
-            for fname in ("docker-compose.yml", "compose.yaml", "ai-platform.yaml", ".env.platform"):
+            for fname in _PAYLOAD_FILE_NAMES:
                 fpath = os.path.join(base_dir, fname)
                 if os.path.isfile(fpath):
                     tar.add(fpath, arcname=fname)
@@ -307,7 +309,7 @@ class PayloadDeliverer:
                 for member in tar.getmembers():
                     tar.extract(member, path=tmp_dir, filter="data")
                     extracted.append(Path(tmp_dir) / member.name)
-                    if member.name in ("docker-compose.yml", "compose.yaml"):
+                    if member.name in PROJECT_COMPOSE_FILENAMES:
                         found_compose = True
 
         except (tarfile.TarError, OSError) as e:

@@ -289,6 +289,10 @@ class DeployHistory:
             # ·   YYYYMMDDTHHMMSS-<8hex>.json) — engine-снапшоты не трогаются.
             # · Prevention: не смешивать namespace'ы в одном prune; фильтр по формату имени —
             # ·   инвариант формата snapshot_id (create_snapshot, строка ~121).
+            # · 2026-08-02 (DevPlan 118 A7): DeployEngine._capture_deploy_snapshot УДАЛЁН —
+            # ·   namespace engine-файлов (ps-<epoch>.json / images-<epoch>.json / .deploy-started)
+            # ·   больше НЕ пишется. Фильтр по формату остаётся defensive (существующие файлы
+            # ·   на VPS не удаляются, только новые записи — чистый history-namespace).
             files = sorted(f for f in os.listdir(snap_dir) if _SNAPSHOT_ID_RE.match(f))
             while len(files) > MAX_SNAPSHOTS:
                 oldest = files.pop(0)

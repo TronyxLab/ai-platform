@@ -521,6 +521,71 @@ projects:
         _assert_imp9(caplog)
         _print_ldd_trajectory(caplog)
 
+    def test_projects_base_env_respected(self, tmp_path, caplog, monkeypatch):
+        """PROJECTS_BASE env must drive project-dir resolution — no /opt/projects hardcode (A3).
+
+        Regression: reconciler_projects.py:392 строил f"/opt/projects/..." без env-резолва,
+        тогда как deploy_engine/payload_deliverer/orchestrator_cli резолвят PROJECTS_BASE.
+        Если бы хардкод остался — проект под tmp_path не нашёлся бы → skipped (deployed=0).
+        """
+        caplog.set_level(logging.INFO)
+
+        # PROJECTS_BASE → tmp_path; stub-проект физически под tmp_path (НЕ под /opt/projects)
+        monkeypatch.setenv("PROJECTS_BASE", str(tmp_path))
+        proj_dir = tmp_path / "env-app"
+        proj_dir.mkdir()
+        (proj_dir / "ai-platform.yaml").write_text("GENERATED-STUB: true\n")
+
+        content = """
+projects:
+  - name: env-app
+"""
+        yaml_path = _make_node_yaml(tmp_path, content)
+
+        with (
+            patch.object(reconciler_projects, "check_ghcr_image", return_value=True),
+            patch.object(reconciler_projects, "resolve_ssh_host", return_value="test-host"),
+            patch.object(reconciler_projects, "deploy_via_orchestrator", return_value=True),
+        ):
+            summary = reconciler_projects.reconcile_projects("test-node", yaml_path)
+
+        assert summary.deployed == 1, (
+            "A3 FAIL: reconciler не нашёл проект под PROJECTS_BASE — используется хардкод /opt/projects"
+        )
+        assert summary.failures == 0
+        _assert_imp9(caplog)
+        _print_ldd_trajectory(caplog)
+
+    def test_projects_base_org_subdir(self, tmp_path, caplog, monkeypatch):
+        """PROJECTS_BASE + org prefix: путь строится как PROJECTS_BASE/<org>/<name> (A3)."""
+        caplog.set_level(logging.INFO)
+
+        monkeypatch.setenv("PROJECTS_BASE", str(tmp_path))
+        proj_dir = tmp_path / "myorg" / "org-app"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "ai-platform.yaml").write_text("GENERATED-STUB: true\n")
+
+        content = """
+projects:
+  - name: org-app
+    repo: myorg/org-app
+"""
+        yaml_path = _make_node_yaml(tmp_path, content)
+
+        with (
+            patch.object(reconciler_projects, "check_ghcr_image", return_value=True),
+            patch.object(reconciler_projects, "resolve_ssh_host", return_value="test-host"),
+            patch.object(reconciler_projects, "deploy_via_orchestrator", return_value=True),
+        ):
+            summary = reconciler_projects.reconcile_projects("test-node", yaml_path)
+
+        assert summary.deployed == 1, (
+            "A3 FAIL: org-проект не найден под PROJECTS_BASE/<org>/ — резолвер не учитывает org-префикс"
+        )
+        assert summary.failures == 0
+        _assert_imp9(caplog)
+        _print_ldd_trajectory(caplog)
+
 
 # endregion reconcile_projects
 

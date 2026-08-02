@@ -61,6 +61,9 @@ from core.internal.scaffold.compose_validator import ValidationResult, validate_
 # Re-export shared org-валидации (B9 T5, U-32 — D6 full PyYAML версия; shell-версия — adopt-project.sh)
 from core.internal.scaffold.scaffold_helpers import validate_org_against_node_yaml  # noqa: F401
 
+# DevPlan 118 A2: единый канон compose-резолва — shared/compose_files (SoT списков)
+from core.internal.shared.compose_files import resolve_compose_file
+
 logger = logging.getLogger(__name__)
 
 
@@ -473,12 +476,9 @@ jobs:
 
         # ── Step 6: Validate compose networks (proxy-net) ──
         logger.info("[IMP:7][%s][adopt] Step 6/8: Validate compose proxy-net (M4 gate)", self._log_prefix)
-        compose_candidate: Path | None = None
-        for candidate in ("compose.yaml", "docker-compose.yml"):
-            p = self.project_dir / candidate
-            if p.exists():
-                compose_candidate = p
-                break
+        # DevPlan 118 A2: единый канон compose-резолва — shared/compose_files.resolve_compose_file
+        # (порядок compose.yaml → docker-compose.yml сохранён; канон расширен до 4 имён)
+        compose_candidate: Path | None = resolve_compose_file(str(self.project_dir))
 
         if compose_candidate:
             vr = self.validate_compose_networks(compose_candidate)

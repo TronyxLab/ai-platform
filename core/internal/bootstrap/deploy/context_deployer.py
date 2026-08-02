@@ -32,8 +32,12 @@ import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+# DevPlan 118 A5: нормальный импорт cert_orchestrator — importlib-обход удалён (тихий полом
+# системы импорта при рефакторинге cert-кода исключён). Модуль-уровневый импорт даёт обычный
+# ImportError при отсутствии cert_orchestrator.py (loud failure), а не silent-деградацию.
+from core.internal.bootstrap.cert_orchestrator import CERT_VALIDITY_PATH, orchestrate_certs
 from core.internal.config import platform_config
-from core.internal.deploy.channels import SCPChannel
+from core.internal.deploy.channels import LocalChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
 from core.internal.shared.exceptions import (
     ConfigNotFoundError,
@@ -41,6 +45,7 @@ from core.internal.shared.exceptions import (
     ConfigValidationError,
 )
 from core.internal.shared.node_yaml import NodeYaml, ProjectEntry
+from core.internal.shared.ssl_certs import DEFAULT_EXPIRY_THRESHOLD, cert_check_expiry, cert_is_le_issuer
 
 # DevPlan 091 Wave A (AC4): _ORCHESTRATOR_AVAILABLE fallback removed — DeployOrchestrator is sole path.
 # ⚠️ TRAP[DECISION] · 2026-07-30 · HI · Removed _ORCHESTRATOR_AVAILABLE vestigial flag
@@ -284,7 +289,20 @@ def _deploy_single_project_via_orchestrator(
 
     # Deploy via orchestrator
     try:
-        channel = SCPChannel()
+        # ⚠️ TRAP[BUG] · 2026-08-02 · P1 · SCPChannel() → LocalChannel() — deploy-context всегда FAILED
+        # · Symptom: deploy-context возвращал status="failed" для ВСЕХ проектов контекста;
+        # ·   `DeployOrchestrator.deploy()` всегда получал failed от канала доставки.
+        # · Root: channel = SCPChannel() без metadata — SCPChannel.deliver() требует
+        # ·   payload.metadata["host"] (channels.py:225-230) → delivery всегда FAILED
+        # ·   ("SCPChannel requires 'host' in payload.metadata"). Payload уже извлечён на VPS
+        # ·   после context_overlay — транспортный канал бессмыслен на receive-стороне.
+        # · Fix: LocalChannel() — contract-compliant no-op delivery (TRAP[DECISION] channels.py:327);
+        # ·   полный пайплайн DeployOrchestrator (compose-up → healthcheck → snapshot → audit) сохраняется.
+        # · Prevention: на VPS-стороне (receive/deploy-context) НИКОГДА не создавать SCPChannel —
+        # ·   только LocalChannel; SCPChannel требует явный host в metadata.
+        # · Rev: если появится реальный «deliver локально»-сценарий — расширять LocalChannel,
+        # ·   не возвращать транспорт (channels.py:337).
+        channel = LocalChannel()
         orchestrator = DeployOrchestrator(projects_base=projects_base)
         result = orchestrator.deploy(
             project_name=project.name,
@@ -596,8 +614,9 @@ def extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
 ## @complexity — O(D * T + P * T) where D = domains, P = projects, T = timeout
 ## @invariants
 ##   1. CONTEXT extracted from: explicit arg → os.environ → node.yaml
-##   2. Cert orchestration via importlib cert_orchestrator (non-fatal); волна 117 D3 —
-##      skip, если все домены имеют валидные сертификаты (≥30 дней, LE)
+##   2. Cert orchestration via НОРМАЛЬНЫЙ импорт cert_orchestrator (DevPlan 118 A5 — importlib-обход
+##      удалён; ImportError при отсутствии cert_orchestrator.py — loud, не silent); волна 117 D3 —
+##      skip, если все домены имеют валидные сертификаты (≥30 дней, LE через shared/ssl_certs)
 ##   3. Project deploy via deploy_context_projects()
 ##   4. Vhost render via subprocess add-vhost.sh --render-all (non-fatal)
 ##   5. Nginx reload via docker exec (non-fatal)
@@ -642,38 +661,38 @@ def deploy_context(
     domains = extract_domains_for_context(node_yaml, context)
     if domains:
         try:
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "cert_orchestrator",
-                os.path.join(bootstrap_dir, "cert_orchestrator.py"),
-            )
-            if spec and spec.loader:
-                cert_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(cert_mod)
-                # ── D3 (волна 117): skip, если все домены контекста имеют валидные сертификаты ──
-                # φ7 (phase_certificates) уже выпустил/восстановил сертификаты для всех доменов;
-                # повторный вызов orchestrate_certs здесь — дубль S3/openssl-проходов (идемпотентен,
-                # но лишний). Критерий — тот же, что у cert_orchestrator._is_cert_valid (≥30 дней + LE).
-                invalid_domains = []
-                for dom in domains:
-                    cert_path = os.path.join(cert_mod.CERT_VALIDITY_PATH, dom, "fullchain.pem")
-                    if not (os.path.isfile(cert_path) and cert_mod._is_cert_valid(dom, cert_path)):
-                        invalid_domains.append(dom)
-                if invalid_domains:
-                    issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
-                    secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-                    cert_result = cert_mod.orchestrate_certs(domains, issue_cert_script, secrets_env)
-                    logger.info("[IMP:9][deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
-                else:
-                    logger.info(
-                        "[IMP:9][deploy_context] All %d domains have valid certs (≥30 days, LE) — "
-                        "skipping cert orchestration (D3)",
-                        len(domains),
-                    )
+            # ⚠️ TRAP[BUG] · 2026-08-02 · P1 · importlib-обход cert_orchestrator → нормальный импорт (A5)
+            # · Symptom: importlib.util.spec_from_file_location("cert_orchestrator", ...) + приватный
+            # ·   cert_mod._is_cert_valid — тихий полом при рефакторинге cert-кода: система импорта
+            # ·   обходилась, приватный API использовался кросс-модульно, ошибки импорта глотались.
+            # · Root: обход системы импорта (spec_from_file_location) + приватный _is_cert_valid
+            # ·   (дубль логики, уже консолидированной в shared/ssl_certs — DevPlan 117 D21).
+            # · Fix: модуль-уровневый импорт cert_orchestrator (ImportError — loud, не silent);
+            # ·   _is_cert_valid заменён на существующие public-примитивы shared/ssl_certs
+            # ·   (cert_check_expiry + cert_is_le_issuer — та же семантика: ≥30 дней + LE issuer).
+            # ·   shared/ssl_certs.cert_is_valid создаст волна C (C9) — здесь НЕ дублируем.
+            # · Prevention: приватные API не вызываются кросс-модульно; cert-валидация — через ssl_certs.
+            invalid_domains = []
+            for dom in domains:
+                cert_path = os.path.join(CERT_VALIDITY_PATH, dom, "fullchain.pem")
+                if not (
+                    os.path.isfile(cert_path)
+                    and cert_check_expiry(cert_path, DEFAULT_EXPIRY_THRESHOLD)
+                    and cert_is_le_issuer(cert_path)
+                ):
+                    invalid_domains.append(dom)
+            if invalid_domains:
+                issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
+                secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+                cert_result = orchestrate_certs(domains, issue_cert_script, secrets_env)
+                logger.info("[IMP:9][deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
             else:
-                logger.warning("[IMP:7][deploy_context] Cannot load cert_orchestrator.py")
-        except (ImportError, OSError, FileNotFoundError) as e:
+                logger.info(
+                    "[IMP:9][deploy_context] All %d domains have valid certs (≥30 days, LE) — "
+                    "skipping cert orchestration (D3)",
+                    len(domains),
+                )
+        except (OSError, subprocess.CalledProcessError) as e:
             logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s", e)
 
     # ── Step 3: Deploy context projects ──
