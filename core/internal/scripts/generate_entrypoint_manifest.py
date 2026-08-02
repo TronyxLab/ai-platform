@@ -489,6 +489,14 @@ def _generate_output(merged: dict) -> str:
         "##   - Forbidden lists are explicit deny — no additions without Architect approval\n"
         "## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad\n"
         "# endregion MODULE_CONTRACT\n"
+        "#\n"
+        "# ⚠️ СИСТЕМНЫЕ ИСКЛЮЧЕНИЯ .PHONY (DevPlan 119 G2, by-design отклонение от @invariants):\n"
+        "#   help, venv, pre-commit-install, pre-commit-run НЕ входят в allowed_verbs/глоссарий —\n"
+        "#   это системные утилиты Makefile (справка, venv bootstrap, pre-commit hook setup), а НЕ\n"
+        "#   канонические операции платформы. Они не исполняются на VPS/CI-нодах, не имеют\n"
+        "#   delegates_to-цепочек и не требуют регистрации в core/AGENTS.md. См. секцию\n"
+        "#   name_linter.system_exceptions ниже и core/AGENTS.md «Системные исключения .PHONY».\n"
+        "#   Полный перечень системных исключений — name_linter.system_exceptions.\n"
         "\n"
     )
     yaml_str = yaml.dump(merged, default_flow_style=False, allow_unicode=True, sort_keys=False)

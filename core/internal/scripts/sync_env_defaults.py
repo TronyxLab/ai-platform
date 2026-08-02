@@ -17,6 +17,9 @@
 ## @changes  Plan 082 — created
 ##           2026-08-02 | DevPlan 118 C4 — 19 fallback-литералов портов → _get_val_required
 ##                      (обязательное чтение SoT, fail-fast при отсутствии ключа)
+##           2026-08-02 | DevPlan 119 G4 (AUDIT-4 S1) — fallback-литералы
+##                      AGE_SECRET_KEY/TELEGRAM_BOT_TOKEN → _get_secret_def_field(..., "ci_default")
+##                      из secret-definitions.yaml (SoT); _section_telegram принял secret_defs
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -292,10 +295,10 @@ def _section_platform_secrets(env_defaults: dict[str, str], secret_defs: dict[st
     constraint_age = _get_secret_def_field(secret_defs, "AGE_SECRET_KEY", "charset")
     if constraint_age:
         lines.append("# ⚠️ CONSTRAINT: AGE_SECRET_KEY must match " + constraint_age)
-    lines.append(
-        "AGE_SECRET_KEY="
-        + _get_env_val(env_defaults, "AGE_SECRET_KEY", "AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    )
+    # G4 (DevPlan 119 G4, AUDIT-4 S1): fallback-литерал AGE_SECRET_KEY удалён —
+    # ci_default берётся из secret-definitions.yaml (SoT), литералы не дублируются.
+    age_ci_default = _get_secret_def_field(secret_defs, "AGE_SECRET_KEY", "ci_default")
+    lines.append("AGE_SECRET_KEY=" + _get_env_val(env_defaults, "AGE_SECRET_KEY", age_ci_default))
     return lines
 
 
@@ -565,16 +568,16 @@ def _section_hermes_api(env_defaults: dict[str, str]) -> list[str]:
 
 
 # region SECTION_telegram
-def _section_telegram(env_defaults: dict[str, str]) -> list[str]:
+def _section_telegram(env_defaults: dict[str, str], secret_defs: dict[str, dict[str, str]]) -> list[str]:
     """Telegram section."""
     lines: list[str] = []
     lines.append("")
     lines.append("# ── Telegram ─────────────────────────────────────────────────────────────────")
     lines.append("# Bot token для Hermes Agent и Grafana Alerting")
-    lines.append(
-        "TELEGRAM_BOT_TOKEN="
-        + _get_env_val(env_defaults, "TELEGRAM_BOT_TOKEN", "1234567890:test-telegram-bot-token-for-ci")
-    )
+    # G4 (DevPlan 119 G4, AUDIT-4 S1): fallback-литерал TELEGRAM_BOT_TOKEN удалён —
+    # ci_default берётся из secret-definitions.yaml (SoT), литералы не дублируются.
+    tg_ci_default = _get_secret_def_field(secret_defs, "TELEGRAM_BOT_TOKEN", "ci_default")
+    lines.append("TELEGRAM_BOT_TOKEN=" + _get_env_val(env_defaults, "TELEGRAM_BOT_TOKEN", tg_ci_default))
     lines.append("# Разрешённые пользователи (user IDs, comma-separated)")
     lines.append("TELEGRAM_ALLOWED_USERS=" + _get_env_val(env_defaults, "TELEGRAM_ALLOWED_USERS", ""))
     lines.append("# Чат для критических алертов")
@@ -813,7 +816,7 @@ def generate_env_example(env_defaults: dict[str, str], secret_defs: dict[str, di
     lines.extend(_section_langfuse(env_defaults, secret_defs))
     lines.extend(_section_hermes_dashboard(env_defaults, secret_defs))
     lines.extend(_section_hermes_api(env_defaults))
-    lines.extend(_section_telegram(env_defaults))
+    lines.extend(_section_telegram(env_defaults, secret_defs))
     lines.extend(_section_nginx(env_defaults))
     lines.extend(_section_ssl_dns(env_defaults))
     lines.extend(_section_proxy(env_defaults))

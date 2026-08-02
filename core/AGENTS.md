@@ -111,6 +111,16 @@
 2. **Local Variable Tracking** — `_trace_variable_assignment` отслеживает локальные присвоения переменных (`local VAR=path`, `export VAR=path`, `readonly VAR=path`) в пределах одного файла
 3. **ShellCheck Data-Flow Analysis** — слой B детекции через SC2154 (переменная «referenced but not assigned»), обнаруживает вызовы `bash "$variable"` где переменная присвоена из path-литерала в другом скоупе. Graceful degradation: при отсутствии ShellCheck слой B отключается без ошибки.
 
+**Bootstrap→deploy import direction (DevPlan 119 G3, AUDIT-4 C1):** `core/internal/bootstrap/` может импортировать `core/internal/deploy/` — bootstrap orchestrates деплой как одну из фаз (φ8 deploy_services). Обратное направление **запрещено**: `core/internal/deploy/` НЕ может импортировать `core/internal/bootstrap/` (0 таких импортов — gate cross_layer_imports валидирует). Подтверждённые законные импорты:
+
+| Импортирующий | Импортируемое | Направление |
+|---------------|---------------|-------------|
+| `bootstrap/deploy/context_deployer.py` | `deploy.channels.LocalChannel`, `deploy.orchestrator.DeployOrchestrator` | bootstrap/ → deploy/ ✅ |
+| `reconciler_projects.py` | `deploy.channels.ForcedCommandChannel`, `deploy.orchestrator.DeployOrchestrator` | internal/ → deploy/ ✅ |
+| любой `deploy/*.py` | `bootstrap/*` | deploy/ → bootstrap/ ❌ запрещено |
+
+Рациональность: deploy — нижележащий транспортный слой (channels/orchestrator — канонический forced-command канал, DevPlan 116 B1); bootstrap — оркестратор жизненного цикла ноды, которому deploy-слой нужен как сервис. Инверсия (deploy → bootstrap) создала бы цикл и размыла бы границу «transport vs orchestration».
+
 ---
 
 <!-- GENERATED:START:canon_table-forbidden -->
@@ -147,6 +157,19 @@
 ### Разрешённые глаголы
 
 Полный список разрешённых глаголов см. в таблице «Канонические операции» выше и в [`entrypoint-manifest.yaml`](entrypoint-manifest.yaml) (`allowed_verbs`).
+
+### Системные исключения .PHONY (by-design, DevPlan 119 G2)
+
+Следующие `.PHONY`-таргеты **намеренно НЕ входят** в глоссарий глаголов и в `allowed_verbs` — это системные утилиты Makefile, а не канонические операции платформы:
+
+| Таргет | Назначение | Почему вне глоссария |
+|--------|-----------|----------------------|
+| `help` | Справка по Makefile (`.DEFAULT_GOAL`) | Интерактивная помощь разработчику, не операция на VPS/CI-ноде |
+| `venv` | Создание локального Python venv для разработки | Dev-инфраструктура, не исполняется на нодах |
+| `pre-commit-install` | Установка pre-commit hooks | Setup-утилита окружения разработчика |
+| `pre-commit-run` | Запуск pre-commit hooks | Локальный инструмент, дублируется CI gate'ами |
+
+**Инвариант:** эти таргеты не имеют `delegates_to`-цепочек, не регистрируются в `core/AGENTS.md` и исключаются генератором манифеста (`SYSTEM_EXCEPTIONS` в `generate_entrypoint_manifest.py`) из `allowed_verbs`. Полный перечень — секция `name_linter.system_exceptions` в `entrypoint-manifest.yaml`. Это by-design отклонение от инварианта «каждый .PHONY → глоссарий».
 
 ---
 

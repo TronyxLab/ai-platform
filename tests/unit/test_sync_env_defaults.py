@@ -406,6 +406,44 @@ def test_c4_port_fallback_removed_raises(caplog):
     logger.critical("[IMP:9][test] C4: отсутствующий REDIS_PORT → KeyError (fallback удалён)")
 
 
+# 🧪 TRAP[TEST] · Regression · section builder for telegram
+# · Scenario: _section_telegram renders TELEGRAM_BOT_TOKEN from secret_defs ci_default (G4)
+# · Last fail: N/A (new test for DevPlan 119 G4)
+# · Remove if: telegram section changes
+def test_section_telegram_ci_default(caplog):
+    """_section_telegram → TELEGRAM_BOT_TOKEN из secret_defs ci_default (G4, AUDIT-4 S1)."""
+    caplog.set_level(0)
+    secret_defs = dict(_full_secret_defs())
+    secret_defs["TELEGRAM_BOT_TOKEN"] = {
+        "ci_default": "1234567890:test-telegram-bot-token-for-ci",
+        "charset": "^[0-9]+:[A-Za-z0-9_-]+$",
+    }
+    lines = sed._section_telegram({}, secret_defs)
+    text = "\n".join(lines)
+    assert "TELEGRAM_BOT_TOKEN=1234567890:test-telegram-bot-token-for-ci" in text
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · G4 — fallback-литералы AGE/TELEGRAM удалены (SoT ci_default)
+# · Scenario: литералы из кода sync_env_defaults.py — исходный вход: захардкоженные
+# ·           "AGE-SECRET-KEY-TEST..." и "1234567890:test-telegram-bot-token-for-ci"
+# ·           (дублировали secret-definitions.yaml ci_default, дрейф SoT↔генератор)
+# · Last fail: AGE_SECRET_KEY/TELEGRAM_BOT_TOKEN литералы в _section_platform_secrets/_section_telegram
+# · Remove if: sync_env_defaults.py перестаёт генерировать эти ключи
+def test_g4_age_telegram_literals_removed(caplog):
+    """G4 R5: fallback-литералы AGE/TELEGRAM отсутствуют в коде генератора."""
+    caplog.set_level(0)
+    source = Path(sed.__file__).read_text(encoding="utf-8")
+    assert "AGE-SECRET-KEY-TEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ" not in source, (
+        "G4 R5 FAIL: AGE_SECRET_KEY fallback-литерал всё ещё в sync_env_defaults.py — "
+        "должен браться из secret-definitions.yaml ci_default"
+    )
+    assert "1234567890:test-telegram-bot-token-for-ci" not in source, (
+        "G4 R5 FAIL: TELEGRAM_BOT_TOKEN fallback-литерал всё ещё в sync_env_defaults.py — "
+        "должен браться из secret-definitions.yaml ci_default"
+    )
+    logger.critical("[IMP:9][test] G4: AGE/TELEGRAM fallback-литералы удалены (ci_default из secret-definitions.yaml)")
+
+
 # 🧪 TRAP[TEST] · Regression · section builder for platform_context
 # · Scenario: _section_platform_context renders PLATFORM_DOMAIN + CONTEXT lines
 # · Last fail: N/A (new test for DevPlan 117 G T57)

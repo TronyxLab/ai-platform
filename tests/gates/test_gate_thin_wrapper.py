@@ -5,11 +5,13 @@
 ## @purpose  Thin-wrapper gate test: validates all core/entrypoints/*.sh conform to
 ##           ≤150 LOC, ≤4 function definitions, no direct rsync/ssh/scp/ssh-keygen calls.
 ## @scope    All files in core/entrypoints/*.sh excluding allowlisted
-##           (bootstrap.sh, lint.sh, check-doc-headers.sh).
+##           (bootstrap.sh, deploy.sh).
 ##           Does not require Docker or external services.
 ## @invariants
 ##   - ALL entrypoints discovered by Path.glob — no hardcoded file list
 ##   - Allowlist skipped entirely without any check
+##   - Allowlist contains ONLY scripts >150 LOC OR with direct binary calls
+##     (justified exceptions — validated by test_allowlist_current, DevPlan 119 G1)
 ##   - LOC checked via wc -l (per DevPlan requirement)
 ##   - Functions counted via grep -cE 'function|() {'
 ##   - Binary calls detected by reading file content, filtering comment/doc lines
@@ -18,6 +20,10 @@
 ##            because there was no gate — this test enforces the thin-wrapper contract.
 ##            T4 from DevPlan 020.
 ## @changes — 2026-07-17 | CREATED: T4 thin-wrapper gate test
+## @changes — 2026-08-02 | DevPlan 119 G1: allowlist актуализирован — lint.sh (40 LOC),
+##            check-doc-headers.sh (17), converge.sh (100), context-promote.sh (32)
+##            удалены (все <150 LOC, 0 binary calls); bootstrap.sh/deploy.sh остаются
+##            (>150 LOC); + test_allowlist_current (R5 negative на возврат удалённых)
 # endregion MODULE_CONTRACT
 
 import logging
@@ -38,26 +44,25 @@ PLATFORM_ROOT: str = str(pathlib.Path(__file__).resolve().parent.parent.parent)
 ENTRYPOINTS_DIR: pathlib.Path = pathlib.Path(PLATFORM_ROOT) / "core" / "entrypoints"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Allowlist — entrypoints outside the refactoring scope
-# These are skipped without any checks because they are not part of the
-# thin-wrapper contract enforcement (wave 1 of DevPlan 020).
-# bootstrap.sh: T15-рефакторинг (DevPlan 020) выполнен — 160 LOC/2 funcs; остаётся в
-# allowlist из-за прямых бинарных вызовов (exec ssh + SCP-делегирование), см. комментарий
-# записи. Обновлено DevPlan 119 C7 (doc-drift).
+# Allowlist — entrypoints outside the thin-wrapper contract enforcement
+# These are skipped without any checks because they are NOT thin wrappers:
+# either they exceed the 150 LOC limit, or they legitimately perform direct
+# binary calls (exec ssh / scp delegation) per the language policy.
+# Актуализировано DevPlan 119 G1: lint.sh, check-doc-headers.sh, converge.sh,
+# context-promote.sh удалены — все <150 LOC, 0 прямых бинарных вызовов, прошли
+# бы все проверки gate'а (AUDIT-6 F2: allowlist устарел после 117/118).
 # ═══════════════════════════════════════════════════════════════════════════
 
 ALLOWLIST: frozenset[str] = frozenset(
     {
-        # bootstrap.sh (160 LOC, 2 funcs): T15-рефакторинг DevPlan 020 выполнен — остаётся
-        # в allowlist из-за exec ssh (L157) + SCP-делегирования (прямые бинарные вызовы,
-        # языковая политика: entrypoint = тонкий фасад над scp-deliver/build-ssh-cmd).
-        # Обновлено DevPlan 119 C7 (doc-drift): комментарий «~150 LOC in T15» устарел.
+        # bootstrap.sh (160 LOC, 1 func): T15-рефакторинг DevPlan 020 выполнен — остаётся
+        # в allowlist из-за exec ssh (L157) + SCP-делегирования (source scp-deliver.sh /
+        # build-ssh-cmd.sh → прямые rsync/ssh-вызовы, языковая политика: entrypoint =
+        # тонкий фасад над scp-deliver/build-ssh-cmd). 160 LOC > 150 — превышает лимит.
         "bootstrap.sh",
-        "lint.sh",  # External tool orchestrator — 221 LOC, 6 functions
-        "check-doc-headers.sh",  # Documentation audit utility — 215 LOC, 6 functions
-        "context-promote.sh",  # Uses ssh -T for SSH auth detection (B4), direct git push
-        "converge.sh",  # 151 LOC (1 over limit) due to --reconcile flag + MODULE_CONTRACT markup
-        "deploy.sh",  # 152 LOC (2 over limit) — K1 verb contract dispatch; DevPlan 081 extended parsing
+        "deploy.sh",  # 175 LOC (25 over limit) — K1 verb contract dispatch; DevPlan 081
+        # extended parsing; D7: переходный SSH forced-command entrypoint — канонический
+        # канал уже orchestrator_cli dispatch; удаление ломает legacy-ноды (authorized_keys)
     }
 )
 
@@ -336,3 +341,51 @@ def test_entrypoint_no_direct_binary_calls(caplog) -> None:
 
 
 # endregion FUNC_test_entrypoint_no_direct_binary_calls
+
+
+# region FUNC_test_allowlist_current
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · DevPlan 119 G1 (AUDIT-6 F2) — thin_wrapper allowlist актуальность
+# · Last fail: lint.sh (221 LOC), check-doc-headers.sh (215), converge.sh (151), context-promote.sh (161)
+# ·            были в allowlist при размерах <150 LOC после 117/118 — скрипты прятались от gate'а
+# · Remove if: thin-wrapper enforcement moved to CI gate (allowlist removed entirely)
+@pytest.mark.gate
+def test_allowlist_current() -> None:
+    """R5 negative: allowlist содержит ТОЛЬКО скрипты >150 LOC или с прямыми бинарными вызовами.
+
+    ## @purpose — Anti-survivorship (DevPlan 119 G1, AC-G1.2): удалённые из allowlist
+    ##            скрипты (lint.sh/check-doc-headers.sh/converge.sh/context-promote.sh)
+    ##            НЕ должны вернуться в allowlist, пока их размер <150 LOC и нет прямых
+    ##            бинарных вызовов. Каждая запись allowlist валидируется: файл существует,
+    ##            размер >150 LOC ИЛИ обнаружен прямой rsync/ssh/scp/ssh-keygen-вызов.
+    ## @io        ⎋ ∅ — fail с деталями при нарушении
+    ## @complexity O(K * L) — K записей allowlist, L строк на файл
+    """
+    logger.info("[IMP:8][test_allowlist_current] Validating allowlist relevance (DevPlan 119 G1)")
+
+    assert ALLOWLIST, "Allowlist must not be empty — it protects bootstrap.sh/deploy.sh (G1)"
+
+    for name in sorted(ALLOWLIST):
+        filepath = ENTRYPOINTS_DIR / name
+        assert filepath.is_file(), f"[IMP:10][G1] Allowlisted file missing: {name}"
+        loc = count_loc(filepath)
+        binary = find_binary_violations(filepath)
+        over_limit = loc > 150
+        has_binary = len(binary) > 0
+        logger.info(
+            "[IMP:8][allowlist_current] %s: %d LOC, %d binary call(s) — over_limit=%s, has_binary=%s",
+            name,
+            loc,
+            len(binary),
+            over_limit,
+            has_binary,
+        )
+        assert over_limit or has_binary, (
+            f"[IMP:10][G1] Allowlist entry '{name}' ({loc} LOC, {len(binary)} binary calls) "
+            "is no longer justified — remove from ALLOWLIST (DevPlan 119 G1: allowlist = "
+            "только скрипты >150 LOC или с прямыми бинарными вызовами)"
+        )
+
+    logger.info("[IMP:9][test_allowlist_current] PASS — allowlist актуален: %d justified entries", len(ALLOWLIST))
+
+
+# endregion FUNC_test_allowlist_current

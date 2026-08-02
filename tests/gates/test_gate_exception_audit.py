@@ -54,6 +54,12 @@ _ALLOWED_NON_TARGET_SETS: set[str] = {
     "_STATEFUL_MODULES",  # test_gate_make_contract.py — D1-матрица stateful-модулей (postgres/backup-cron/hermes-agent,
     #   DevPlan 116 B7). Это ИМЕНА МОДУЛЕЙ, не make-таргеты. Authoritative source — DevPlan/AGENTS.md (контракт D1);
     #   в entrypoint-manifest.yaml stateful-маркировки нет, поэтому чтение из манифеста невозможно.
+    "EXPECTED_SYSTEM_EXCEPTIONS",  # test_gate_system_exceptions.py (DevPlan 119 G2) — ожидаемый перечень
+    #   СИСТЕМНЫХ исключений .PHONY {help, venv, pre-commit-install, pre-commit-run}. Это НЕ канонические
+    #   make-таргеты — они by-design вне глоссария (name_linter.system_exceptions в entrypoint-manifest.yaml).
+    #   Константа-ожидание сравнивается с манифестом, а не подменяет его (тест читает манифест);
+    #   authoritative source — манифест, константа — договор о by-design исключениях (по аналогии
+    #   с _WORKFLOW_ALLOWED_VERBS).
 }
 
 logger = logging.getLogger(__name__)

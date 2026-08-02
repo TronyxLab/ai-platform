@@ -11,6 +11,14 @@
 ##   - Forbidden lists are explicit deny — no additions without Architect approval
 ## @rationale Machine-readable registry enables CI gates to validate the Makefile/AGENTS.md/filesystem triad
 # endregion MODULE_CONTRACT
+#
+# ⚠️ СИСТЕМНЫЕ ИСКЛЮЧЕНИЯ .PHONY (DevPlan 119 G2, by-design отклонение от @invariants):
+#   help, venv, pre-commit-install, pre-commit-run НЕ входят в allowed_verbs/глоссарий —
+#   это системные утилиты Makefile (справка, venv bootstrap, pre-commit hook setup), а НЕ
+#   канонические операции платформы. Они не исполняются на VPS/CI-нодах, не имеют
+#   delegates_to-цепочек и не требуют регистрации в core/AGENTS.md. См. секцию
+#   name_linter.system_exceptions ниже и core/AGENTS.md «Системные исключения .PHONY».
+#   Полный перечень системных исключений — name_linter.system_exceptions.
 
 bootstrap:
 - make_target: bootstrap-node
@@ -1992,6 +2000,9 @@ gates:
 - id: test_sys_exit_only_in_main_and_main_returns_int
   test_file: test_gate_sys_exit_contract.py
   description: 'Auto-discovered gate: test_sys_exit_only_in_main_and_main_returns_int'
+- id: test_system_exceptions_documented
+  test_file: test_gate_system_exceptions.py
+  description: 'Auto-discovered gate: test_system_exceptions_documented'
 - id: test_all_templates_resolvable
   test_file: test_gate_template_drift.py
   description: 'Auto-discovered gate: test_all_templates_resolvable'
@@ -2055,6 +2066,9 @@ gates:
 - id: test_test_inventory_matches_collected
   test_file: test_gate_test_inventory.py
   description: 'Auto-discovered gate: test_test_inventory_matches_collected'
+- id: test_allowlist_current
+  test_file: test_gate_thin_wrapper.py
+  description: 'Auto-discovered gate: test_allowlist_current'
 - id: test_discovery
   test_file: test_gate_thin_wrapper.py
   description: 'Auto-discovered gate: test_discovery'
