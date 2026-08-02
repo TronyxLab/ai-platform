@@ -35,7 +35,7 @@ _REMOVE_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" 
 _ADOPT_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "adopt-project.sh"
 _LIST_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "scaffold" / "project-list.sh"
 _DEPLOY_SCRIPT: pathlib.Path = _PROJECT_ROOT / "core" / "entrypoints" / "deploy.sh"
-_MODULE_INTERFACE_SH: pathlib.Path = _PROJECT_ROOT / "core" / "lib" / "module-interface.sh"
+_PY_MODULE_INTERFACE: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "shared" / "module_interface.py"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -285,50 +285,49 @@ def test_remove_is_safe_no_data_deletion(caplog) -> None:
 
 @ldd_trajectory
 def test_remove_hooks_triggered_in_runtime(caplog) -> None:
-    """module-interface.sh must contain the K2 remove-hook dispatcher (hooks.on_project_remove).
+    """shared/module_interface.py must contain the K2 remove-hook dispatcher (hooks.on_project_remove).
 
-    ── Scenario: grep module-interface.sh for remove-hook interface + _invoke_dispatch_hook ──
+    ── Scenario: grep core/internal/shared/module_interface.py for remove-hook interface + hooks.on_project_remove ──
     """
-    # 🧪 TRAP[TEST] · 2026-07-31 · remove-hook dispatcher lives in core/lib/module-interface.sh
+    # 🧪 TRAP[TEST] · 2026-07-31 · remove-hook dispatcher lives in core/internal/shared/module_interface.py
     # · Regression: test previously required the deleted legacy deploy shell (removed in
     #   aa6bd61). K2 dispatcher (invoke_module_interface remove-hook → _invoke_dispatch_hook
-    #   → hooks.on_project_remove) now lives in core/lib/module-interface.sh:84-85.
-    # · Scenario: grep module-interface.sh for 'remove-hook', '_invoke_dispatch_hook',
-    #   'hooks.on_project_remove'
+    #   → hooks.on_project_remove) lived in core/lib/module-interface.sh:84-85.
+    # · 2026-08-02 (DevPlan 119 D4): module-interface.sh → тонкий фасад (26 LOC), dispatch-логика
+    #   переехала в shared/module_interface.py::dispatch() — тест переведён на новый диспетчер.
+    # · Scenario: grep module_interface.py for 'remove-hook', 'hooks.on_project_remove', 'dispatch'
     # · Last fail: 2026-07-31 — "Missing required file: the legacy deploy shell"
-    # · Remove if: K2 hook dispatch moves to Python (then point test at the new dispatcher module)
+    # · Remove if: K2 hook dispatch moves out of shared/module_interface.py (then point test at the new module)
     # · NOTE: the remove path (project_remover.py) does NOT invoke this hook because no module.yaml
     #   in the repo registers hooks.on_project_remove (grep = 0 matches). If a consumer appears,
     #   extend this test to verify the hook is invoked from project_remover.py at runtime.
-    if not _MODULE_INTERFACE_SH.exists():
-        pytest.fail(f"Missing required file: {_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}")
+    _PY_MODULE_INTERFACE: pathlib.Path = _PROJECT_ROOT / "core" / "internal" / "shared" / "module_interface.py"
+    if not _PY_MODULE_INTERFACE.exists():
+        pytest.fail(f"Missing required file: {_PY_MODULE_INTERFACE.relative_to(_PROJECT_ROOT)}")
 
-    content = _MODULE_INTERFACE_SH.read_text()
+    content = _PY_MODULE_INTERFACE.read_text()
 
     has_remove_hook_interface = "remove-hook" in content
     has_on_project_remove = "hooks.on_project_remove" in content
-    has_dispatch_hook = "_invoke_dispatch_hook" in content
+    has_dispatch_hook = "def dispatch" in content
 
     logger.info(
-        "[IMP:7][test][remove_hooks] remove-hook=%s, hooks.on_project_remove=%s, _invoke_dispatch_hook=%s",
+        "[IMP:7][test][remove_hooks] remove-hook=%s, hooks.on_project_remove=%s, dispatch=%s",
         has_remove_hook_interface,
         has_on_project_remove,
         has_dispatch_hook,
     )
 
     assert has_remove_hook_interface, (
-        f"{_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}: missing 'remove-hook' interface "
-        "in invoke_module_interface() dispatch case (K2)"
+        f"{_PY_MODULE_INTERFACE.relative_to(_PROJECT_ROOT)}: missing 'remove-hook' interface in dispatch() (K2)"
     )
     assert has_on_project_remove, (
-        f"{_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}: missing 'hooks.on_project_remove' "
+        f"{_PY_MODULE_INTERFACE.relative_to(_PROJECT_ROOT)}: missing 'hooks.on_project_remove' "
         "reference in remove-hook dispatch (K2)"
     )
-    assert has_dispatch_hook, (
-        f"{_MODULE_INTERFACE_SH.relative_to(_PROJECT_ROOT)}: missing _invoke_dispatch_hook() function"
-    )
+    assert has_dispatch_hook, f"{_PY_MODULE_INTERFACE.relative_to(_PROJECT_ROOT)}: missing dispatch() function (K2)"
 
-    logger.info("[IMP:9][test][remove_hooks] Verified: K2 remove-hook dispatcher present in module-interface.sh")
+    logger.info("[IMP:9][test][remove_hooks] Verified: K2 remove-hook dispatcher present in shared/module_interface.py")
 
 
 @ldd_trajectory

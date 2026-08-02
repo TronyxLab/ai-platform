@@ -13,7 +13,8 @@
 ##   - exit 0 = healthy; exit 1 = unhealthy
 ## @rationale Unified contract per DevPlan 083 — deep mode is strict superset of liveness (DRIFT-H6 fix).
 ##   check_http replaces docker exec curl copy-paste for liveness/readiness checks (DRIFT-H4 fix).
-##   deps mode preserved as-is (external dependency checks).
+##   deps mode → healthcheck_deps.py (DevPlan 119 D6, AUDIT-1 F8): required/optional агрегация в Python.
+## @changes  2026-08-02 | DevPlan 119 D6 — deps-ветка (48-112) → exec python3 healthcheck_deps.py (test-first)
 ## @source ../../lib/healthcheck.sh
 # endregion MODULE_CONTRACT
 
@@ -46,69 +47,14 @@ if [ "$MODE" = "deep" ]; then
             CHECK_TYPE="READINESS"
             ;;
         deps)
-            # Dependency check mode (preserved as-is — checks external services)
-            log_imp 8 "deps" "Starting dependency checks ..."
-
-            PG_HOST="${POSTGRES_HOST:-pgbouncer}"
-            PG_PORT="${POSTGRES_PORT:-6432}"
-            REDIS_HOST="${REDIS_HOST:-redis}"
-            REDIS_PORT="${REDIS_PORT:-6379}"
-            LITELLM_URL="${LITELLM_HEALTH_URL:-http://litellm:4000/health}"
-
-            PG_OK=false
-            REDIS_OK=false
-            LITELLM_OK=false
-
-            # ── Check PostgreSQL ──
-            if command -v pg_isready &>/dev/null; then
-                if pg_isready -h "$PG_HOST" -p "$PG_PORT" &>/dev/null; then
-                    log_imp 8 "deps" "PostgreSQL: ok (pg_isready)"
-                    PG_OK=true
-                else
-                    log_imp 9 "deps" "PostgreSQL: FAIL (pg_isready)"
-                fi
-            else
-                if timeout 3 bash -c "echo > /dev/tcp/${PG_HOST}/${PG_PORT}" 2>/dev/null; then
-                    log_imp 8 "deps" "PostgreSQL: ok (TCP socket)"
-                    PG_OK=true
-                else
-                    log_imp 9 "deps" "PostgreSQL: FAIL (TCP socket)"
-                fi
-            fi
-
-            # ── Check Redis (optional — warn only) ──
-            if command -v redis-cli &>/dev/null; then
-                if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" PING 2>/dev/null | grep -q "PONG"; then
-                    log_imp 8 "deps" "Redis: ok (redis-cli PONG)"
-                    REDIS_OK=true
-                else
-                    log_imp 8 "deps" "Redis: warn (no PONG — optional)"
-                fi
-            else
-                if timeout 3 bash -c "echo > /dev/tcp/${REDIS_HOST}/${REDIS_PORT}" 2>/dev/null; then
-                    log_imp 8 "deps" "Redis: ok (TCP socket reachable)"
-                    REDIS_OK=true
-                else
-                    log_imp 8 "deps" "Redis: warn (TCP unreachable — optional)"
-                fi
-            fi
-
-            # ── Check LiteLLM ──
-            if curl -sf --connect-timeout 5 --max-time 10 "$LITELLM_URL" > /dev/null 2>&1; then
-                log_imp 8 "deps" "LiteLLM: ok (HTTP 200)"
-                LITELLM_OK=true
-            else
-                log_imp 9 "deps" "LiteLLM: FAIL (HTTP error or timeout)"
-            fi
-
-            # ── Aggregate result ──
-            if $PG_OK && $LITELLM_OK; then
-                log_imp 9 "deps" "All required dependencies ok (PG+LiteLLM)"
-                exit 0
-            else
-                log_imp 9 "deps" "FAIL: required dependencies not available (PG=${PG_OK} LiteLLM=${LITELLM_OK})"
-                exit 1
-            fi
+            # Dependency check mode — DevPlan 119 D6: required/optional агрегация (PG required,
+            # Redis optional, LiteLLM required) в Python healthcheck_deps.py (test-first, R5).
+            # exec + exit passthrough: 0 = healthy, 1 = unhealthy.
+            log_imp 8 "deps" "Starting dependency checks (healthcheck_deps.py)..."
+            exec python3 "${SCRIPT_DIR}/healthcheck_deps.py" \
+                --pg-host "${POSTGRES_HOST:-pgbouncer}" --pg-port "${POSTGRES_PORT:-6432}" \
+                --redis-host "${REDIS_HOST:-redis}" --redis-port "${REDIS_PORT:-6379}" \
+                --litellm-url "${LITELLM_HEALTH_URL:-http://litellm:4000/health}"
             ;;
         *)
             log_imp 9 "deep" "unknown deep mode '$DEEP_MODE' — expected 'liveness', 'readiness', or 'deps'"

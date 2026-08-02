@@ -88,6 +88,8 @@ LABEL org.tronyxlab.do-not-deploy="true"
 COPY --from=validate /tmp/config/ /opt/hermes/config/
 COPY --from=validate /tmp/templates/ /opt/hermes/templates/
 COPY --from=validate /tmp/skills/ /opt/hermes/skills/
+# DevPlan 119 D5: init.py — Python-реализация init.sh (HermesInit); init.sh (02-platform-init) exec'ит его
+COPY --from=validate /tmp/scripts/init.py /usr/local/bin/init.py
 COPY --from=validate /tmp/scripts/init.sh /etc/cont-init.d/02-platform-init
 COPY --from=validate /tmp/scripts/register-profiles.sh /etc/cont-init.d/03-register-profiles
 COPY --from=validate /tmp/plugins/ /opt/hermes/plugins/

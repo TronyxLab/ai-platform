@@ -29,12 +29,16 @@
 ## @changes  2026-08-01 | DevPlan 117 D21 — создан (дедупликация openssl-валидаций)
 ##           2026-08-02 | DevPlan 118 C9 — +cert_is_valid() единая комбинация; +cert_get_subject/
 ##                      cert_subject_matches_domain (domain-match из s3_ssl_cache)
+##           2026-08-02 | DevPlan 119 D1 — +CLI-фасад main() (--is-le/--check-expiry, паттерн
+##                      ssh_opts --shell): issue-cert.sh _is_le_cert/_acme_verify_cert удалены (AUDIT-1 F1/F2)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
+import argparse
 import logging
 import subprocess
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -269,3 +273,57 @@ def cert_is_valid(
 
 
 # endregion FUNC_cert_is_valid
+
+
+# region FUNC_main
+def main(argv: list[str] | None = None) -> int:
+    """CLI facade для shell-фасадов (DevPlan 119 D1 — паттерн ssh_opts --shell).
+
+    ▶ ┌argv┐ → ◇ --is-le CERT? → cert_is_le_issuer → ⎋ exit 0/1 │ ◇ --check-expiry CERT DAYS?
+      → cert_check_expiry(cert, DAYS*86400) → ⎋ exit 0/1
+
+    ## @purpose — Интерфейс для issue-cert.sh: `python3 -m core.internal.shared.ssl_certs --is-le <cert>`
+    ##            / `--check-expiry <cert> <days>` (паттерн ssh_opts --shell, D1). Заменяет удалённые
+    ##            shell-функции _is_le_cert()/_acme_verify_cert() (дубль ssl_certs, AUDIT-1 F1/F2).
+    ## @io       ⇥ argv: list[str] | None → ⎋ int (0=LE/valid, 1=not, 2=usage error)
+    ## @complexity O(1) + 1 openssl subprocess
+    ## @invariants
+    ##   - --is-le CERT: exit 0 iff cert_is_le_issuer(CERT) (non-fatal: missing/unreadable → exit 1)
+    ##   - --check-expiry CERT DAYS: exit 0 iff cert_check_expiry(CERT, DAYS*86400) (same как shell _acme_verify_cert)
+    ##   - Никогда не raise — subprocess ошибки → exit 1 (graceful degradation, канон ssl_certs)
+    ##   - Без аргументов — usage error exit 2 (fail-fast)
+    """
+    parser = argparse.ArgumentParser(description="ssl_certs — единый SoT openssl x509-проверок (D1)")
+    parser.add_argument("--is-le", metavar="CERT", help="Exit 0 if cert issued by Let's Encrypt (exit 1 otherwise)")
+    parser.add_argument(
+        "--check-expiry",
+        nargs=2,
+        metavar=("CERT", "DAYS"),
+        help="Exit 0 if cert remains valid > DAYS days (exit 1 otherwise)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.is_le:
+        if cert_is_le_issuer(args.is_le):
+            logger.info("[IMP:9][ssl_certs][cli] --is-le: LE issuer OK: %s", args.is_le)
+            return 0
+        logger.info("[IMP:8][ssl_certs][cli] --is-le: not Let's Encrypt: %s", args.is_le)
+        return 1
+
+    if args.check_expiry:
+        cert_path, days = args.check_expiry
+        if cert_check_expiry(cert_path, int(days) * 86400):
+            logger.info("[IMP:9][ssl_certs][cli] --check-expiry: OK (>%s days): %s", days, cert_path)
+            return 0
+        logger.info("[IMP:8][ssl_certs][cli] --check-expiry: expires within %s days: %s", days, cert_path)
+        return 1
+
+    parser.error("No action specified — use --is-le CERT or --check-expiry CERT DAYS")
+    return 2  # unreachable (parser.error exits)
+
+
+# endregion FUNC_main
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GREP_SUMMARY: issue-cert, acme.sh, letsencrypt, tls, dns-01, webnames, dnsapi, wildcard-cert, idempotent, cron, cert-expiry, project-certs
-# STRUCTURE: ▶ ┌NODE_YAML env┐ → python3 parse → ○ cert exists? → SKIP exit 0 → ◇ validate env → issue_tls_cert → _acme_install_cron → _acme_verify_cert → ◇ _issue_project_certs → ⎋ exit 0|1
+# STRUCTURE: ▶ ┌NODE_YAML env┐ → python3 parse → ○ cert exists? → SKIP exit 0 → ◇ validate env → issue_tls_cert → _acme_install_cron → ssl_certs CLI --check-expiry → ◇ _issue_project_certs → ⎋ exit 0|1
 # region MODULE_CONTRACT
 ## @purpose  SSL/TLS certificate issuance via acme.sh DNS-01. Called ONLY by cert_orchestrator.py
 ##           subprocess — NOT a standalone entrypoint. All orchestration (domain iteration, S3,
@@ -37,6 +37,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# PYTHONPATH-init по паттерну core/lib/audit.sh: репо-рут для `python3 -m core.internal.shared.*`
+# (DevPlan 119 D1 — ssl_certs CLI-фасад заменяет _is_le_cert/_acme_verify_cert; add-vhost.sh:33 канон:
+# любой facade, вызывающий `python3 -m core.*`, обязан экспортировать PYTHONPATH сам).
+export PYTHONPATH="${SCRIPT_DIR}/../../..:${PYTHONPATH:-}"
 source "${SCRIPT_DIR}/../../lib/paths.sh"
 __LOG_PREFIX="issue-cert"
 source "${SCRIPT_DIR}/../../lib/logging.sh"
@@ -44,6 +48,8 @@ source "${SCRIPT_DIR}/../../lib/logging.sh"
 
 # NOTE: All functions extracted from original monolithic ssl-provision script. Original TRAP comments preserved.
 # The install_acme() function lives in install-acme.sh — this script handles cert issuance only.
+# Cert-валидация (_is_le_cert/_acme_verify_cert) удалена в DevPlan 119 D1 — делегирует
+# `python3 -m core.internal.shared.ssl_certs --is-le/--check-expiry` (единый SoT openssl, AUDIT-1 F1/F2/D9).
 
 # region _IS_LE_CERT
 ## @purpose  Check if a certificate file is from Let's Encrypt (not mkcert/self-signed).
@@ -61,15 +67,16 @@ source "${SCRIPT_DIR}/../../lib/logging.sh"
 ## · Fix: added _is_le_cert() — rejects certs not issued by Let's Encrypt.
 ## · Prevention: any cert at /etc/letsencrypt/live/ must pass issuer check
 ##   before being treated as valid for idempotency skip.
-_is_le_cert() {
-    local cert_path="${1:-}"
-    if [[ ! -f "$cert_path" ]]; then
-        return 1
-    fi
-    local issuer
-    issuer="$(openssl x509 -in "$cert_path" -issuer -noout 2>/dev/null)" || return 1
-    [[ "$issuer" == *"Let's Encrypt"* ]]
-}
+# ⚠️ TRAP[BUG] · 2026-07-22 · P0 · mkcert certs survived bootstrap — no issuer check
+# · Symptom: mkcert/dev certs at /etc/letsencrypt/live/ survived bootstrap,
+#   nginx served untrusted certs, curl SSL verify failed on all domains
+# · Root: idempotency checks (issue_tls_cert + main) checked only file existence,
+#   not issuer. mkcert cert from macOS passed as "valid".
+# · Fix (2026-08-02, DevPlan 119 D1): _is_le_cert() УДАЛЕНА — вызовы делегируют
+#   `python3 -m core.internal.shared.ssl_certs --is-le <cert>` (shared/ssl_certs.cert_is_le_issuer,
+#   единый SoT openssl-проверок, DevPlan 117 D21). Exit 0 = LE, exit 1 = not/missing.
+# · Prevention: any cert at /etc/letsencrypt/live/ must pass issuer check
+#   before being treated as valid for idempotency skip.
 # endregion _IS_LE_CERT
 
 # region ACME_ISSUE
@@ -369,41 +376,11 @@ _acme_install_cron() {
 ##   - Uses openssl x509 — the cert file itself is the source of truth
 ##   - Returns non-zero if cert missing, unreadable, or expires within 30 days
 ##   - Does NOT re-issue the cert (read-only check)
-_acme_verify_cert() {
-    local domain="$1"
-    local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
-
-    if [[ ! -f "$cert_path" ]]; then
-        log_step "acme-verify" "FAIL" "No certificate found at ${cert_path}"
-        return 1
-    fi
-
-    # [IMP:9][issue-cert][acme-verify] BUSINESS INVARIANT: cert must be valid >30 days
-    local expiry_date
-    expiry_date="$(openssl x509 -enddate -noout -in "$cert_path" 2>/dev/null | cut -d= -f2-)"
-    if [[ -z "$expiry_date" ]]; then
-        log_step "acme-verify" "FAIL" "Failed to parse certificate expiry from ${cert_path}"
-        return 1
-    fi
-
-    local expiry_epoch
-    expiry_epoch="$(date -d "$expiry_date" +%s 2>/dev/null)" || {
-        log_step "acme-verify" "FAIL" "Failed to convert expiry date '${expiry_date}' to epoch"
-        return 1
-    }
-
-    local now_epoch
-    now_epoch="$(date +%s)"
-    local days_remaining=$(( (expiry_epoch - now_epoch) / 86400 ))
-
-    if [[ $days_remaining -le 30 ]]; then
-        log_step "acme-verify" "WARN" "Certificate expires in ${days_remaining} days — less than 30 day threshold"
-        return 1
-    fi
-
-    log_step "acme-verify" "DONE" "Certificate valid — expires in ${days_remaining} days (threshold: >30)"
-    return 0
-}
+# ⚠️ TRAP[BUG] · 2026-07-22 · P0 · _acme_verify_cert — УДАЛЕНА (DevPlan 119 D1)
+# · Symptom/функция: openssl x509 -enddate | cut -d= -f2- text-extraction пайплайн (AUDIT-1 F2/D9)
+# · Fix (2026-08-02): вызовы делегируют `python3 -m core.internal.shared.ssl_certs --check-expiry <cert> <days>`
+#   (shared/ssl_certs.cert_check_expiry — openssl x509 -checkend, единый SoT openssl-проверок, 117 D21).
+#   Exit 0 = >30 дней осталось, exit 1 = истёк/в пределах порога/нет файла. read-only, не re-issue.
 # endregion ACME_VERIFY_CERT
 
 # region _IS_SUBDOMAIN
@@ -509,9 +486,10 @@ issue_tls_cert() {
 
     # [IMP:9][issue-cert][acme.sh] Idempotency: do NOT re-issue existing valid LE certificate
     # ⚠️ TRAP[BUG] · 2026-07-22 · P0 · Was: -f check only → mkcert certs passed as valid
-    # · Fix: _is_le_cert() also verifies issuer is Let's Encrypt
+    # · Fix (DevPlan 119 D1): _is_le_cert() → `python3 -m core.internal.shared.ssl_certs --is-le`
+    # ·   (ssl_certs.cert_is_le_issuer) — вердикт тот же (rejects non-LE issuer)
     local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
-    if _is_le_cert "$cert_path"; then
+    if python3 -m core.internal.shared.ssl_certs --is-le "$cert_path"; then
         log_step "acme.sh" "SKIP" "Valid LE certificate already exists: ${cert_path}"
         return 0
     fi
@@ -583,7 +561,7 @@ issue_tls_cert() {
 ## @workflow
 ##   → ○ validate PLATFORM_DOMAIN, PLATFORM_EMAIL, PLATFORM_ACME_DNS_PLUGIN, WEBNAMES_API_KEY
 ##   → install_acme → issue_tls_cert (dns/http/auto per ACME_CHALLENGE_MODE)
-##   → _acme_install_cron → _acme_verify_cert
+##   → _acme_install_cron → ssl_certs CLI --check-expiry (expiry >30 days)
 ##   → [if http/auto] issue individual subdomain certs (platform.domain)
 ##   → [optional] _issue_project_certs for PLATFORM_PROJECT_DOMAINS
 ##   → exit 0 (success) | exit 1 (failure)
@@ -641,10 +619,10 @@ main() {
     # · Reason: return is semantically correct for functions; caller (main "$@") handles exit
     # · Rev: if main() needs to truly terminate parent process, use exit selectively
     # ⚠️ TRAP[BUG] · 2026-07-22 · P0 · Was: -f check only → mkcert certs passed as valid
-    # · Fix: _is_le_cert() also verifies issuer is Let's Encrypt
+    # · Fix (DevPlan 119 D1): _is_le_cert() → `python3 -m core.internal.shared.ssl_certs --is-le`
     local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
     local main_cert_exists=false
-    if [[ -n "$domain" ]] && _is_le_cert "$cert_path"; then
+    if [[ -n "$domain" ]] && python3 -m core.internal.shared.ssl_certs --is-le "$cert_path"; then
         log_step "main" "SKIP" "Valid LE certificate already exists: ${cert_path} (idempotent)"
         log_imp 9 "-" "BUSINESS INVARIANT: main cert exists — skip main, continue project domains"
         main_cert_exists=true
@@ -691,7 +669,7 @@ main() {
         # is individual (not wildcard). Known subdomains need their own individual certs.
         if [[ "$challenge_mode" == "http" ]] || [[ "$challenge_mode" == "auto" ]]; then
             local subdomain_cert_path="/etc/letsencrypt/live/platform.${domain}/fullchain.pem"
-            if [[ -n "$domain" ]] && ! _is_le_cert "$subdomain_cert_path"; then
+            if [[ -n "$domain" ]] && ! python3 -m core.internal.shared.ssl_certs --is-le "$subdomain_cert_path"; then
                 log_step "main" "INFO" "Issuing individual cert for platform.${domain} (HTTP-01 fallback — no wildcard)"
                 issue_tls_cert "platform.${domain}" "$email" "$dns_plugin" "false" || \
                     log_warn "Failed to issue individual cert for platform.${domain} — continuing"
@@ -700,7 +678,10 @@ main() {
 
         # ── Step 3: Verify certificate expiry >30 days ─────────────────
         # [IMP:9][issue-cert][main] BUSINESS INVARIANT: cert must be valid >30 days
-        _acme_verify_cert "$domain" || log_warn "Certificate expires within 30 days — renew soon"
+        # DevPlan 119 D1: _acme_verify_cert → python3 -m core.internal.shared.ssl_certs --check-expiry
+        python3 -m core.internal.shared.ssl_certs \
+            --check-expiry "/etc/letsencrypt/live/${domain}/fullchain.pem" 30 \
+            || log_warn "Certificate expires within 30 days — renew soon"
     fi
 
     # ── Step 4 (Optional): Issue project domain certs ─────────────

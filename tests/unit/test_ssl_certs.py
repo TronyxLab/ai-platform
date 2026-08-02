@@ -25,6 +25,9 @@ from core.internal.shared.ssl_certs import (
     cert_is_parseable,
     cert_is_valid,
 )
+from core.internal.shared.ssl_certs import (
+    main as ssl_certs_cli_main,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -278,3 +281,103 @@ def test_cert_is_valid_check_expiry_false(caplog: pytest.LogCaptureFixture) -> N
 
 
 # endregion TEST_cert_is_valid
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# region TEST_CLI (DevPlan 119 D1 — CLI-фасад для issue-cert.sh, паттерн ssh_opts --shell)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI --is-le: LE-сертификат → exit 0 (D1, TEST_SPEC)
+# · Scenario: issuer "Let's Encrypt" → main(["--is-le", cert]) == 0
+# · Last fail: N/A (new — D1 CLI)
+# · Remove if: ssl_certs CLI --is-le удалён
+def test_cli_is_le(caplog: pytest.LogCaptureFixture) -> None:
+    """CLI --is-le: LE-сертификат → exit 0 (issue-cert.sh _is_le_cert замена, D1)."""
+    caplog.set_level(logging.INFO)
+    with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="issuer=C = US, O = Let's Encrypt, CN = R11\n")
+        rc = ssl_certs_cli_main(["--is-le", "/tmp/le-cert.pem"])
+    assert rc == 0
+    _assert_imp9(caplog, "--is-le")
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI --is-le: mkcert → exit 1 (D1)
+# · Scenario: issuer mkcert → main(["--is-le", cert]) == 1
+# · Last fail: 2026-07-22 P0 — mkcert certs survived bootstrap (без issuer check)
+# · Remove if: ssl_certs CLI --is-le удалён
+def test_cli_is_le_mkcert_rejected(caplog: pytest.LogCaptureFixture) -> None:
+    """CLI --is-le: mkcert/self-signed issuer → exit 1 (P0 регрессия)."""
+    caplog.set_level(logging.INFO)
+    with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="issuer=O = mkcert development CA, CN = mkcert\n")
+        rc = ssl_certs_cli_main(["--is-le", "/tmp/mkcert.pem"])
+    assert rc == 1
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI --check-expiry: >30 дней → exit 0 (D1)
+# · Scenario: openssl -checkend returncode=0 → main(["--check-expiry", cert, "30"]) == 0
+# · Last fail: N/A (new — D1 CLI; replaces _acme_verify_cert openssl -enddate pipeline)
+# · Remove if: ssl_certs CLI --check-expiry удалён
+def test_cli_check_expiry_ok(caplog: pytest.LogCaptureFixture) -> None:
+    """CLI --check-expiry CERT 30: >30 дней до истечения → exit 0."""
+    caplog.set_level(logging.INFO)
+    with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        rc = ssl_certs_cli_main(["--check-expiry", "/tmp/cert.pem", "30"])
+        # Порог передаётся в секундах: 30 дней × 86400 = 2592000
+        args = mock_run.call_args.args[0]
+        assert "2592000" in args
+    assert rc == 0
+    _assert_imp9(caplog, "--check-expiry")
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI --check-expiry: expires within days → exit 1 (D1)
+# · Scenario: -checkend returncode!=0 → main(["--check-expiry", cert, "30"]) == 1
+# · Last fail: N/A (new — D1 CLI)
+# · Remove if: ssl_certs CLI --check-expiry удалён
+def test_cli_check_expiry_fail(caplog: pytest.LogCaptureFixture) -> None:
+    """CLI --check-expiry: истёк/в пределах 30 дней → exit 1 (как shell _acme_verify_cert)."""
+    caplog.set_level(logging.INFO)
+    with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1)
+        rc = ssl_certs_cli_main(["--check-expiry", "/tmp/cert.pem", "30"])
+    assert rc == 1
+
+
+# 🧪 TRAP[TEST] · NEGATIVE (R5) · test_issue_cert_wrapper_consistency — shell/Python parity (D1)
+# · Scenario: удалённая _is_le_cert()/_acme_verify_cert() заменены CLI (issue-cert.sh вызывает
+# ·   python3 -m ... --is-le/--check-expiry). Вердикт CLI (main) == вердикт функции на том же
+# ·   входе (исходный вход P0: mkcert-сертификат / истёкший cert).
+# · Last fail: 2026-07-22 P0 — shell-функции не имели parity-покрытия; удаление без negative = survivorship
+# · Remove if: issue-cert.sh перестаёт вызывать ssl_certs CLI (возврат shell-функций)
+def test_issue_cert_wrapper_consistency_negative(caplog: pytest.LogCaptureFixture) -> None:
+    """R5: CLI-обёртка (что теперь вызывает issue-cert.sh) == функция на исходных входах P0."""
+    caplog.set_level(logging.INFO)
+
+    # Исходный вход 1 (P0 2026-07-22): mkcert-сертификат, который пережил bootstrap
+    with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="issuer=O = mkcert development CA, CN = mkcert\n")
+        assert cert_is_le_issuer("/tmp/mkcert.pem") is False
+        assert ssl_certs_cli_main(["--is-le", "/tmp/mkcert.pem"]) == 1
+
+    # Исходный вход 2 (AC-8): сертификат, истекающий в пределах 30 дней — оба пути отвергают
+    with patch("core.internal.shared.ssl_certs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1)
+        assert cert_check_expiry("/tmp/expiring.pem", 30 * 86400) is False
+        assert ssl_certs_cli_main(["--check-expiry", "/tmp/expiring.pem", "30"]) == 1
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI без аргументов → usage error (D1, fail-fast)
+# · Scenario: main([]) → SystemExit(2) (argparse parser.error)
+# · Last fail: N/A (new — D1 CLI)
+# · Remove if: ssl_certs CLI удалён
+def test_cli_no_args_usage_error(caplog: pytest.LogCaptureFixture) -> None:
+    """CLI без --is-le/--check-expiry → parser.error (fail-fast канон, как ssh_opts)."""
+    caplog.set_level(logging.INFO)
+    with pytest.raises(SystemExit) as excinfo:
+        ssl_certs_cli_main([])
+    assert excinfo.value.code == 2
+
+
+# endregion TEST_CLI

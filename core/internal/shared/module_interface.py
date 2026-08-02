@@ -22,13 +22,17 @@
 ##            (таймауты/семантика возврата). Единый invoke() в shared/ устраняет дубль; B8 wire
 ##            module-hooks строится поверх этого канала.
 ## @changes  2026-08-02 | DevPlan 118 C5 — Created (единая bash-обёртка invoke_module_interface)
+##           2026-08-02 | DevPlan 119 D4 — +dispatch()/CLI invoke (dual-SoT устранён):
+##                      module-interface.sh → тонкий фасад; validate+dispatch логика здесь
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
+import argparse
 import logging
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 from core.internal.shared.timeouts import COMPOSE_UP_TIMEOUT
@@ -95,3 +99,211 @@ def invoke(
 
 
 # endregion FUNC_invoke
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DevPlan 119 D4 — full dispatch (dual-SoT устранён): module-interface.sh становится
+# тонким фасадом, ВСЯ логика (validate interfaces → dispatch) живёт здесь.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# region FUNC_resolve_module_dir
+def resolve_module_dir(module_name: str, modules_dir: str | None = None) -> Path:
+    """Директория модуля (эквивалент ${PATHS_MODULES_DIR}/${module}).
+
+    ## @purpose — D4 (DevPlan 119): единый резолв модульной директории для dispatch.
+    ## @io — ⇥ module_name: str, modules_dir: str | None (default core/modules) → ⎋ Path
+    ## @complexity O(1)
+    """
+    if modules_dir is None:
+        modules_dir = Path(__file__).resolve().parent.parent.parent / "modules"
+    return Path(modules_dir) / module_name
+
+
+# endregion FUNC_resolve_module_dir
+
+
+# region FUNC__read_module_yaml
+def _read_module_yaml(module_yaml: Path) -> dict:
+    """Читает module.yaml (интерфейсы/hooks) — yaml.safe_load канон (как env_requires._load_yaml_file).
+
+    ## @purpose — D4: единая точка чтения module.yaml для validate/dispatch.
+    ## @io — ⇥ module_yaml: Path → ⎋ dict (пустой при ошибке — graceful, как yaml_get_list)
+    """
+    try:
+        import yaml
+
+        with module_yaml.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("[IMP:7][module_interface][yaml] Cannot parse %s: %s", module_yaml, exc)
+        return {}
+
+
+# endregion FUNC__read_module_yaml
+
+
+# region FUNC__registered_interfaces
+def _registered_interfaces(module_yaml: Path) -> list[str]:
+    """Список интерфейсов из module.yaml#interfaces (пустой при отсутствии поля).
+
+    ## @purpose — D4: эквивалент shell _invoke_validate_interface (yaml_get_list).
+    ## @io — ⇥ module_yaml: Path → ⎋ list[str]
+    ## @complexity O(n) — n = интерфейсы
+    """
+    data = _read_module_yaml(module_yaml)
+    interfaces = data.get("interfaces")
+    if not isinstance(interfaces, list):
+        return []
+    return [str(i) for i in interfaces]
+
+
+# endregion FUNC__registered_interfaces
+
+
+# region FUNC__run_module_script
+def _run_module_script(
+    script: Path,
+    args: tuple[str, ...],
+    timeout: int,
+) -> tuple[int, str]:
+    """Выполнить скрипт модуля через `bash <script> [args...]`.
+
+    ## @purpose — D4: диспетчеризация на скрипт модуля (эквивалент shell `bash "$script" "$@"`).
+    ## @io — ⇥ script: Path, args, timeout → ⎋ (rc, stderr) — никогда не raise (TimeoutExpired → rc 1)
+    ## @complexity O(1) — single bash subprocess
+    """
+    if not script.is_file():
+        logger.info("[IMP:8][module_interface][dispatch] Script not found — skipping: %s", script)
+        return 0, ""
+    try:
+        result = subprocess.run(
+            ["bash", str(script), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("[IMP:7][module_interface][dispatch] Timeout (%ds): %s", timeout, script)
+        return 1, str(exc)
+    except OSError as exc:
+        logger.warning("[IMP:7][module_interface][dispatch] Cannot run %s: %s", script, exc)
+        return 1, str(exc)
+    if result.returncode != 0:
+        logger.info(
+            "[IMP:8][module_interface][dispatch] %s exit=%d: %s",
+            script.name,
+            result.returncode,
+            result.stderr.strip()[:200],
+        )
+    else:
+        logger.info("[IMP:9][module_interface][dispatch] %s OK", script.name)
+    return result.returncode, result.stderr
+
+
+# endregion FUNC__run_module_script
+
+
+# region FUNC_dispatch
+def dispatch(
+    module_name: str,
+    interface: str,
+    *args: str,
+    timeout: int = COMPOSE_UP_TIMEOUT,
+    modules_dir: str | None = None,
+) -> tuple[int, str]:
+    """Полный dispatch модульного интерфейса (DevPlan 119 D4) — единый канон.
+
+    ▶ ┌module + interface + args┐ → ◇ module.yaml? rc 2 │ ◇ interface ∈ interfaces? rc 0 (skip)
+      → ◇ dispatch: healthcheck/install/deploy-hook/remove-hook → bash script | unknown → rc 0
+      → ⎋ (rc, stderr)
+
+    ## @purpose — Замена shell-логики module-interface.sh (invoke_module_interface +
+    ##            _invoke_validate_interface + _invoke_dispatch_*) — dual-SoT устранён.
+    ## @io — ⇥ module_name: str, interface: str, *args: str, timeout: int, modules_dir: str | None
+    ##           ⎋ tuple[int, str] — (rc, stderr); rc: 0=success/skip, 1=script failed, 2=invalid config
+    ## @complexity O(n) — n = зарегистрированные интерфейсы (validate) + 1 subprocess
+    ## @invariants
+    ##   - module.yaml отсутствует → rc 2 (invalid config, как shell)
+    ##   - interface не зарегистрирован в module.yaml#interfaces → rc 0 (graceful skip)
+    ##   - unknown interface (в interfaces, вне case) → rc 0 (skip)
+    ##   - healthcheck/install/deploy-hook/remove-hook → bash script; script отсутствует → rc 0
+    ##   - deploy-hook/remove-hook читают hooks.on_project_deploy/on_project_remove из module.yaml
+    ##   - Никогда не raise — TimeoutExpired/OSError → rc 1
+    """
+    module_dir = resolve_module_dir(module_name, modules_dir)
+    module_yaml = module_dir / "module.yaml"
+
+    # ── Module exists? ──
+    if not module_yaml.is_file():
+        logger.info(
+            "[IMP:9][module_interface][invoke] INVALID: module.yaml not found for '%s' at %s", module_name, module_yaml
+        )
+        return 2, f"module.yaml not found for '{module_name}'"
+
+    # ── Validate interface is registered (graceful skip if not) ──
+    interfaces = _registered_interfaces(module_yaml)
+    if interface not in interfaces:
+        logger.info(
+            "[IMP:8][module_interface][skip] Interface '%s' not registered for module '%s' — skipping",
+            interface,
+            module_name,
+        )
+        return 0, ""
+
+    # ── Dispatch ──
+    logger.info("[IMP:8][module_interface][invoke] Invoking module=%s interface=%s", module_name, interface)
+    if interface == "healthcheck":
+        return _run_module_script(module_dir / "healthcheck.sh", args, timeout)
+    if interface == "install":
+        return _run_module_script(module_dir / "install.sh", (), timeout)
+    if interface in ("deploy-hook", "remove-hook"):
+        field = "hooks.on_project_deploy" if interface == "deploy-hook" else "hooks.on_project_remove"
+        data = _read_module_yaml(module_yaml)
+        hook_path = data.get("hooks", {}).get(field.split(".")[1]) if isinstance(data.get("hooks"), dict) else None
+        if not hook_path:
+            logger.info("[IMP:8][module_interface][dispatch] Hook field '%s' not found — skipping", field)
+            return 0, ""
+        return _run_module_script(module_dir / str(hook_path), args, timeout)
+    # Unknown interface (зарегистрирован, но вне канона) — graceful skip
+    logger.info(
+        "[IMP:9][module_interface][invoke] SKIP: Unknown interface '%s' for module '%s'", interface, module_name
+    )
+    return 0, ""
+
+
+# endregion FUNC_dispatch
+
+
+# region FUNC_main
+def main(argv: list[str] | None = None) -> int:
+    """CLI: `python3 -m core.internal.shared.module_interface invoke <module> <interface> [args...]`.
+
+    ▶ ┌argv┐ → ○ invoke <module> <interface> [args...] → ○ dispatch → ⎋ exit rc (0/1/2)
+
+    ## @purpose — Интерфейс для тонкого фасада module-interface.sh (DevPlan 119 D4):
+    ##            shell-библиотека вызывает `python3 -m core.internal.shared.module_interface invoke "$@"`.
+    ## @io — ⇥ argv → ⎋ int (0=success/skip, 1=script failed, 2=invalid config)
+    ## @invariants — exit-code канон shell invoke_module_interface (0/1/2) сохранён байт-в-байт
+    """
+    parser = argparse.ArgumentParser(description="Module interface dispatch (DevPlan 119 D4)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    invoke_p = sub.add_parser("invoke", help="Invoke <module> <interface> [args...]")
+    invoke_p.add_argument("module", help="Module name (directory under core/modules)")
+    invoke_p.add_argument("interface", help="Interface name (healthcheck/install/deploy-hook/remove-hook)")
+    invoke_p.add_argument("args", nargs="*", help="Additional arguments passed to the module script")
+    invoke_p.add_argument("--modules-dir", help="Override modules dir (default core/modules; для тестов)")
+    args = parser.parse_args(argv)
+
+    if args.command == "invoke":
+        rc, _output = dispatch(args.module, args.interface, *args.args, modules_dir=args.modules_dir)
+        return rc
+    return 2  # unreachable (argparse required)
+
+
+# endregion FUNC_main
+
+
+if __name__ == "__main__":
+    sys.exit(main())

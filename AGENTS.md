@@ -243,6 +243,23 @@
 · Recommendation: продолжить Strangler-Fig на legacy-скрипты, завершить test adaptation (042), docker optimization (040)
 · Rev: 2026-10-22 — переоценка метрик после ≥2 недель на production-ноде
 
+### Shell-исключения (keep-решения, DevPlan 119 D8 / AUDIT-1 F9, F11-F16)
+
+Документированные исключения из миграции shell→Python (LOW/INFO классификация аудита 1).
+Каждое имеет явный keep-аргумент и Rev-условие. Новый код — Python; перечисленное — НЕ мигрируется сейчас.
+
+| Скрипт | LOC | Keep-причина | Rev-условие |
+|--------|-----|--------------|-------------|
+| `core/internal/bootstrap/issue-cert.sh` | 700 | acme.sh CLI interaction executor (DNS-01/HTTP-01, API-key shred протокол) — battle-tested shell; оркестрация/валидация уже в Python (cert_orchestrator + ssl_certs CLI, D1). DEFER-2 | после стабилизации acme.sh API ≥6 мес (2027-02) |
+| `core/entrypoints/deploy.sh` | 172 | Переходный SSH forced-command entrypoint — канонический канал уже orchestrator_cli dispatch; удаление ломает legacy-ноды (authorized_keys). D7 | после верификации brief A на production |
+| `core/internal/bootstrap/install-tor-proxy.sh` | 321 | Чистая apt/systemd оркестрация (остаток); бизнес-логика мигрирована: tor_transport (118 E1), tor_setup/privoxy_config (119 D2/D3) | при появлении новой бизнес-логики → Tier-1 извлечение |
+| `core/lib/healthcheck.sh`, `logging.sh`, `paths.sh` | ~100-200 | Стабильные shell-библиотеки — API стабилен, замена не даст прироста (языковая политика, явное исключение) | при смене API |
+| `core/lib/ssh.sh` | ~100 | Тонкий фасад над `python3 -m core.internal.shared.ssh_opts --shell` (116 B5 D1) | при втором shell-потребителе флагов |
+| `core/lib/audit.sh` | ~30 | Тонкий фасад над `shared.audit_logger` (единственный writer, 116 B11 T2) | при изменении схемы аудита |
+| `core/lib/module-interface.sh` | 26 | Тонкий фасад над `python3 -m core.internal.shared.module_interface invoke` (119 D4) | при новом канале dispatch |
+| `core/lib/yaml_read.sh` | legacy | Исторический YAML-reader; вытеснен `yaml_query.py` CLI — сохранён для обратной совместимости (0 активных source-потребителей после 119 D4) | при 0 ссылок в течение 90 дней → удалить |
+| `core/lib/vps-readiness.sh`, `node-resolver.sh` | фасады | Тонкие фасады над Python CLI (node_detect/vps_readiness) | — |
+
 ---
 
 ## Правило

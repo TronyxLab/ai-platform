@@ -18,6 +18,10 @@
 ##   from Russia-hosted VPS (Selectel). Privoxy provides HTTP_PROXY interface that works with
 ##   curl, Python httpx/requests, and Docker containers without protocol-specific configuration.
 ## @changes  2026-08-02 | DevPlan 118 E1 — write_torrc transport-парсинг → tor_transport.py (test-first)
+##           2026-08-02 | DevPlan 119 D2 — install_packages() → tor_setup.py (test-first, webtunnel→obfs4
+##                      деградационная state-machine; shell-фасад <20 LOC)
+##           2026-08-02 | DevPlan 119 D3 — write_privoxy_config() → privoxy_config.py (test-first,
+##                      идемпотентный мутатор; shell-фасад)
 # endregion MODULE_CONTRACT
 
 set -euo pipefail
@@ -50,68 +54,22 @@ parse_args() {
 # endregion CLI_ARGS
 
 # region INSTALL_PACKAGES
+## @purpose  Тонкий фасад установки пакетов Tor+Privoxy (DevPlan 119 D2): бизнес-логика
+##           (webtunnel→obfs4 деградационная state-machine) — в bootstrap/tor_setup.py (test-first).
+## @invariants
+##   - stdout = установленные пакеты через пробел (пусто = все уже установлены → SKIP)
+##   - exit 0 = ok; exit 1 = провал установки базовых пакетов (tor_setup.py → TorSetupError)
 install_packages() {
-    local missing=()
-    local webtunnel_requested=false
-
-    for pkg in tor privoxy obfs4proxy; do
-        if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
-            missing+=("$pkg")
+    local installed
+    if installed="$(python3 "${SCRIPT_DIR}/tor_setup.py" --install 2>/dev/null)"; then
+        if [[ -n "$installed" ]]; then
+            log_step "packages" "DONE" "Installed: ${installed}"
+        else
+            log_step "packages" "SKIP" "All packages already installed"
         fi
-    done
-
-    if ! dpkg -s webtunnel &>/dev/null 2>&1; then
-        missing+=("webtunnel")
-        webtunnel_requested=true
-    fi
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        log_step "packages" "START" "Installing packages: ${missing[*]}"
-        apt-get update -qq
-
-        # Probe webtunnel availability after repo update
-        if [[ "$webtunnel_requested" == true ]] && ! apt-cache show webtunnel &>/dev/null 2>&1; then
-            # ⚠️ TRAP[DECISION] · 2026-07-17 · — · webtunnel binary delivery: apt preferred, static binary reserved
-            # · Rejected: static binary in core/bootstrap/tor/bin/webtunnel (not yet packaged for noble)
-            # · Reason: apt package is cleaner; first release degrades to obfs4-only if absent
-            # · Rev: if webtunnel apt package remains unavailable → implement static binary delivery
-            log_step "packages" "WARN" "webtunnel not in apt repositories — skipping"
-            webtunnel_requested=false
-            local filtered=()
-            for pkg in "${missing[@]}"; do
-                [[ "$pkg" != "webtunnel" ]] && filtered+=("$pkg")
-            done
-            missing=("${filtered[@]}")
-        fi
-
-        if [[ ${#missing[@]} -gt 0 ]]; then
-            local apt_err
-            apt_err="$(apt-get install -y -qq "${missing[@]}" 2>&1)" || {
-                if [[ "$webtunnel_requested" == true ]]; then
-                    # ⚠️ TRAP[DECISION] · 2026-07-17 · MED · webtunnel apt failure → degradation, not abort
-                    # · If webtunnel install fails → drop webtunnel from install list, continue with base packages
-                    # · Rationale: webtunnel is optional; obfs4 is the primary transport for Telegram Bot API
-                    # · Rev: if production requires webtunnel → fail instead of degrade
-                    log_step "packages" "WARN" "apt-get install failed for webtunnel (degradation): ${apt_err}"
-                    local no_web=()
-                    for pkg in "${missing[@]}"; do
-                        [[ "$pkg" != "webtunnel" ]] && no_web+=("$pkg")
-                    done
-                    if [[ ${#no_web[@]} -gt 0 ]]; then
-                        apt_err="$(apt-get install -y -qq "${no_web[@]}" 2>&1)" || {
-                            log_step "packages" "FAIL" "apt-get install failed: ${apt_err}"
-                            exit 1
-                        }
-                    fi
-                else
-                    log_step "packages" "FAIL" "apt-get install failed: ${apt_err}"
-                    exit 1
-                fi
-            }
-        fi
-        log_step "packages" "DONE" "Installed: ${missing[*]}"
     else
-        log_step "packages" "SKIP" "All packages already installed"
+        log_step "packages" "FAIL" "Package installation failed — see tor_setup.py logs (stderr)"
+        exit 1
     fi
 }
 # endregion INSTALL_PACKAGES
@@ -170,45 +128,19 @@ BASE
 # endregion WRITE_TORRC
 
 # region WRITE_PRIVOXY_CONFIG
+## @purpose  Тонкий фасад идемпотентной записи Privoxy-конфига (DevPlan 119 D3): бизнес-логика
+##           (grep-guard + sed мутации) — в bootstrap/privoxy_config.py (test-first).
+## @invariants
+##   - exit 0 = конфиг записан или уже корректен (идемпотентно); exit 1 = OSError (fail-fast)
+##   - Логи мутаций (listen-address/permit-access/forward-socks5t) — stderr privoxy_config.py
 write_privoxy_config() {
     log_step "privoxy-config" "START" "Configuring ${PRIVOXY_CONFIG}"
-
-    # Try template first
-    local privoxy_template="${SCRIPT_DIR}/../../bootstrap/tor/privoxy-config.template"
-    if [[ -f "$privoxy_template" ]]; then
-        cp "$privoxy_template" "$PRIVOXY_CONFIG"
-        log_step "privoxy-config" "INFO" "Config from template: ${privoxy_template}"
+    if python3 "${SCRIPT_DIR}/privoxy_config.py" --config "$PRIVOXY_CONFIG"; then
+        log_step "privoxy-config" "DONE" "${PRIVOXY_CONFIG} ready"
     else
-        # ⚠️ TRAP[BUGFIX] · 2026-06-24 · HI · listen-address 0.0.0.0:8118 + permit-access
-        # · Причина: Docker-контейнеры не могут достучаться до Privoxy на 127.0.0.1:8118
-        # · Fix: 0.0.0.0:8118 (все интерфейсы) + permit-access для Docker bridge и localhost
-        # Ensure listen-address is set
-        if ! grep -q '^listen-address' "$PRIVOXY_CONFIG" 2>/dev/null; then
-            echo 'listen-address 0.0.0.0:8118' >> "$PRIVOXY_CONFIG"
-            log_step "privoxy-config" "INFO" "Added listen-address 0.0.0.0:8118"
-        else
-            # Upgrade existing 127.0.0.1
-            sed -i.bak 's/^listen-address 127.0.0.1:8118/listen-address 0.0.0.0:8118/' "$PRIVOXY_CONFIG" && rm "${PRIVOXY_CONFIG}.bak"
-            log_step "privoxy-config" "INFO" "Upgraded listen-address to 0.0.0.0:8118"
-        fi
-        # Add permit-access for localhost (idempotent)
-        if ! grep -q '^permit-access 127.0.0.1' "$PRIVOXY_CONFIG" 2>/dev/null; then
-            sed -i.bak '/^forward-socks5t/i permit-access 127.0.0.1' "$PRIVOXY_CONFIG" && rm "${PRIVOXY_CONFIG}.bak"
-            log_step "privoxy-config" "INFO" "Added permit-access 127.0.0.1"
-        fi
-        # Add permit-access for Docker bridge networks (172.16.0.0/12)
-        if ! grep -q '^permit-access 172.16.0.0/12' "$PRIVOXY_CONFIG" 2>/dev/null; then
-            sed -i.bak '/^forward-socks5t/i permit-access 172.16.0.0/12' "$PRIVOXY_CONFIG" && rm "${PRIVOXY_CONFIG}.bak"
-            log_step "privoxy-config" "INFO" "Added permit-access 172.16.0.0/12 (Docker bridges)"
-        fi
-        # Add Tor forward (idempotent: check first)
-        if ! grep -q 'forward-socks5t / 127.0.0.1:9050' "$PRIVOXY_CONFIG" 2>/dev/null; then
-            echo 'forward-socks5t / 127.0.0.1:9050 .' >> "$PRIVOXY_CONFIG"
-            log_step "privoxy-config" "INFO" "Added forward-socks5t to Tor"
-        fi
+        log_step "privoxy-config" "FAIL" "Failed to write ${PRIVOXY_CONFIG}"
+        exit 1
     fi
-
-    log_step "privoxy-config" "DONE" "${PRIVOXY_CONFIG} ready"
 }
 # endregion WRITE_PRIVOXY_CONFIG
 
