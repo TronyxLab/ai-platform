@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: context-deployer, project-deploy, ghcr-pull, build-fallback, healthcheck-gate, idempotent, node-yaml-projects, audit-log
-# STRUCTURE: ▶ ┌node.yaml + context┐ → ◇ filter projects[context] → ○ for each: healthcheck? → ghcr pull → (fail?) build → up -d → ⊕ ProjectDeployResult → ⎋
+# STRUCTURE: ▶ ┌node.yaml + context┐ → ◇ filter projects[context] → ○ for each: healthcheck? → ghcr pull → (fail?) build → up -d → ⊕ ProjectDeployResult │ ▶ deploy_context → _step_certs → _step_deploy_projects → _step_vhosts → _step_nginx_reload → _step_verify (D6) → ⎋ ContextDeployResult
 # region MODULE_CONTRACT
 ## @purpose  Deploy all projects of a context from node.yaml after bootstrap.
 ##           Uses ghcr.io pull as primary image channel, falls back to on-node build.
 ##           Implements health-gate (≤60s per project) and idempotent skip for healthy projects.
+##           DevPlan 118 D6: deploy_context god-function разбита на typed-шаги
+##           (_step_certs/_step_deploy_projects/_step_vhosts/_step_nginx_reload/_step_verify);
+##           nginx reload делегирует в shared/docker_compose.nginx_reload (единственный docker CLI путь).
 ## @scope    Called from state_machine.py deploy_context step (18.4) and standalone
 ##           via `make deploy-context NODE=<n>` → core/entrypoints/deploy-context.sh.
 ## @invariants
@@ -15,11 +18,16 @@
 ##   5. Non-fatal: failure of one project does NOT block others
 ##   6. Audit: each deploy recorded in /var/log/platform/audit.jsonl (единый файл, D1 — shared/audit_logger)
 ##   7. One node = one context (CONTEXT from node.yaml or CLI --context)
+##   8. All sub-steps non-fatal (D6): шаг не блокирует последующие
 ## @rationale StatusReport 045: 14/20 containers down after bootstrap because deploy-modules
 ##           does not cover context projects. context_deployer bridges the "last mile":
 ##           it deploys all projects matching the node's context, with ghcr.io primary
 ##           and build fallback for resilience.
+##           DevPlan 118 D6: god-function 606-735 (6 подсистем) → 5 typed-шагов —
+##           по одному методу на инфраструктуру (SRP, AI-First).
 ## @changes  2026-07-22 | DevPlan 047 Phase 4 — Created context deployer
+##           2026-08-02 | DevPlan 118 D6 — deploy_context → шаги с typed-контрактами;
+##                      nginx reload → shared/docker_compose.nginx_reload
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -73,7 +81,6 @@ from core.internal.shared.docker_compose import (
 # DevPlan 116 B5 T9.2 (U-11): HEALTH_GATE_TIMEOUT — алиас канона shared/timeouts.py
 # (consumer-scan: константа не имеет других потребителей; единственный источник — timeouts)
 from core.internal.shared.timeouts import (
-    DOCKER_CMD_TIMEOUT,
     HEALTHCHECK_POLL_INTERVAL,
     HEALTHCHECK_POLL_TIMEOUT,
 )
@@ -612,6 +619,9 @@ def extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
 ## @purpose — Unified deploy_context entry point: cert orchestration + project deploy + vhost render + verify.
 ##            Replaces steps._step_deploy_context and deprecated 4 standalone entrypoints.
 ##            DevPlan 079 DRIFT-B3 — single public API for all deploy context paths.
+##            DevPlan 118 D6 — god-function (606-735) разбита на typed-шаги:
+##            _step_certs / _step_deploy_projects / _step_vhosts / _step_nginx_reload / _step_verify.
+##            deploy_context — тонкий оркестратор шагов (contract: по одному методу на инфраструктуру).
 ## @io — ⇥ core_dir: str, node_name: str, node_yaml: str, context: str → ⎋ ContextDeployResult
 ## @complexity — O(D * T + P * T) where D = domains, P = projects, T = timeout
 ## @invariants
@@ -621,9 +631,10 @@ def extract_domains_for_context(node_yaml_path: str, context: str) -> list[str]:
 ##      skip, если все домены имеют валидные сертификаты (≥30 дней, LE через shared/ssl_certs)
 ##   3. Project deploy via deploy_context_projects()
 ##   4. Vhost render via subprocess add-vhost.sh --render-all (non-fatal)
-##   5. Nginx reload via docker exec (non-fatal)
+##   5. Nginx reload via docker exec (non-fatal) — shared/docker_compose.nginx_reload (D6)
 ##   6. Verify via verify-domains.sh (non-fatal)
 ##   7. All sub-steps are non-fatal — failure in one does NOT block others
+##   8. Каждый шаг — отдельный метод с typed-контрактом (D6); оркестратор не содержит бизнес-логики
 def deploy_context(
     core_dir: str,
     node_name: str,
@@ -632,8 +643,8 @@ def deploy_context(
 ) -> ContextDeployResult:
     """Deploy all context projects + restore certs + render vhosts + verify. Idempotent.
 
-    ▶ ┌core_dir + node + node_yaml┐ → ◇ extract context → ◇ cert orchestration →
-    │  ◇ project deploy → ◇ vhost render → ◇ nginx reload → ◇ verify → ⎋ ContextDeployResult
+    ▶ ┌core_dir + node + node_yaml┐ → ◇ extract context → ◇ _step_certs →
+    │  ◇ _step_deploy_projects → ◇ _step_vhosts → ◇ _step_nginx_reload → ◇ _step_verify → ⎋ ContextDeployResult
     """
     logger.info("[IMP:9][deploy_context] Starting (node=%s, context=%s)", node_name, context or "auto")
 
@@ -659,82 +670,20 @@ def deploy_context(
 
     logger.info("[IMP:9][deploy_context] Using context=%s, node=%s", context, node_name)
 
-    # ── Step 2: Cert orchestration ──
-    domains = extract_domains_for_context(node_yaml, context)
-    if domains:
-        try:
-            # ⚠️ TRAP[BUG] · 2026-08-02 · P1 · importlib-обход cert_orchestrator → нормальный импорт (A5)
-            # · Symptom: importlib.util.spec_from_file_location("cert_orchestrator", ...) + приватный
-            # ·   cert_mod._is_cert_valid — тихий полом при рефакторинге cert-кода: система импорта
-            # ·   обходилась, приватный API использовался кросс-модульно, ошибки импорта глотались.
-            # · Root: обход системы импорта (spec_from_file_location) + приватный _is_cert_valid
-            # ·   (дубль логики, уже консолидированной в shared/ssl_certs — DevPlan 117 D21).
-            # · Fix: модуль-уровневый импорт cert_orchestrator (ImportError — loud, не silent);
-            # ·   _is_cert_valid заменён на shared/ssl_certs.cert_is_valid (C9, DevPlan 118) —
-            # ·   единая комбинация parseable+LE+expiry (та же семантика: ≥30 дней + LE issuer).
-            # · Prevention: приватные API не вызываются кросс-модульно; cert-валидация — через ssl_certs.
-            invalid_domains = []
-            for dom in domains:
-                cert_path = os.path.join(CERT_VALIDITY_PATH, dom, "fullchain.pem")
-                if not (os.path.isfile(cert_path) and cert_is_valid(cert_path, DEFAULT_EXPIRY_THRESHOLD)):
-                    invalid_domains.append(dom)
-            if invalid_domains:
-                issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
-                secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-                cert_result = orchestrate_certs(domains, issue_cert_script, secrets_env)
-                logger.info("[IMP:9][deploy_context] Cert orchestration: %d domains", len(cert_result.domains))
-            else:
-                logger.info(
-                    "[IMP:9][deploy_context] All %d domains have valid certs (≥30 days, LE) — "
-                    "skipping cert orchestration (D3)",
-                    len(domains),
-                )
-        except (OSError, subprocess.CalledProcessError) as e:
-            logger.warning("[IMP:7][deploy_context] Cert orchestration failed (non-fatal): %s", e)
+    # ── Step 2: Cert orchestration (typed-шаг D6) ──
+    _step_certs(bootstrap_dir, node_yaml, context)
 
-    # ── Step 3: Deploy context projects ──
-    project_results = deploy_context_projects(node_yaml, context) or []
+    # ── Step 3: Deploy context projects (typed-шаг D6) ──
+    project_results = _step_deploy_projects(node_yaml, context)
 
-    # ── Step 4: Render vhosts ──
-    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
-    if os.path.isfile(vhost_script):
-        node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
-        try:
-            subprocess.run(
-                ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            logger.info("[IMP:9][deploy_context] Vhosts rendered for node=%s", node_name)
-        except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
-            logger.warning("[IMP:7][deploy_context] Vhost render failed (non-fatal): %s", e)
+    # ── Step 4: Render vhosts (typed-шаг D6) ──
+    _step_vhosts(core_dir, node_name)
 
-    # ── Step 5: Reload nginx ──
-    try:
-        subprocess.run(
-            ["docker", "exec", "nginx", "nginx", "-s", "reload"],
-            capture_output=True,
-            text=True,
-            timeout=DOCKER_CMD_TIMEOUT,
-        )
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
-        logger.warning("[IMP:7][deploy_context] Nginx reload failed (non-fatal): %s", e)
+    # ── Step 5: Reload nginx (typed-шаг D6, shared/docker_compose.nginx_reload) ──
+    _step_nginx_reload()
 
-    # ── Step 6: Final verify ──
-    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
-    if os.path.isfile(verify_script):
-        platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
-        try:
-            subprocess.run(
-                ["bash", verify_script, node_name, platform_root],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            logger.info("[IMP:9][deploy_context] Verify complete for node=%s", node_name)
-        except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
-            logger.warning("[IMP:7][deploy_context] Verify failed (non-fatal): %s", e)
+    # ── Step 6: Final verify (typed-шаг D6) ──
+    _step_verify(core_dir, node_name)
 
     # ── Build result ──
     result = ContextDeployResult()
@@ -748,6 +697,150 @@ def deploy_context(
         result.failed,
     )
     return result
+
+
+# region FUNC__step_certs
+## @purpose — Typed-шаг D6: cert orchestration для всех доменов контекста (non-fatal).
+##            Извлечён из deploy_context god-function (строки 662-693). Отвечает ТОЛЬКО за сертификаты.
+## @io — ⇥ bootstrap_dir: str, node_yaml: str, context: str → ⎋ None (side-effect: certs issued/restored)
+## @complexity — O(D * T) где D = доменов
+## @invariants
+##   - Skip, если все домены имеют валидные сертификаты (≥30 дней, LE через shared/ssl_certs)
+##   - Невалидные домены → orchestrate_certs (нормальный импорт cert_orchestrator, A5)
+##   - Non-fatal: исключения ловятся и логируются
+def _step_certs(bootstrap_dir: str, node_yaml: str, context: str) -> None:
+    """Cert orchestration step (D6) — issue/restore certificates for context domains."""
+    domains = extract_domains_for_context(node_yaml, context)
+    if not domains:
+        logger.info("[IMP:7][_step_certs] No domains for context '%s' — skipping", context)
+        return
+    try:
+        # ⚠️ TRAP[BUG] · 2026-08-02 · P1 · importlib-обход cert_orchestrator → нормальный импорт (A5)
+        # · Symptom: importlib.util.spec_from_file_location("cert_orchestrator", ...) + приватный
+        # ·   cert_mod._is_cert_valid — тихий полом при рефакторинге cert-кода: система импорта
+        # ·   обходилась, приватный API использовался кросс-модульно, ошибки импорта глотались.
+        # · Root: обход системы импорта (spec_from_file_location) + приватный _is_cert_valid
+        # ·   (дубль логики, уже консолидированной в shared/ssl_certs — DevPlan 117 D21).
+        # · Fix: модуль-уровневый импорт cert_orchestrator (ImportError — loud, не silent);
+        # ·   _is_cert_valid заменён на shared/ssl_certs.cert_is_valid (C9, DevPlan 118) —
+        # ·   единая комбинация parseable+LE+expiry (та же семантика: ≥30 дней + LE issuer).
+        # · Prevention: приватные API не вызываются кросс-модульно; cert-валидация — через ssl_certs.
+        invalid_domains = []
+        for dom in domains:
+            cert_path = os.path.join(CERT_VALIDITY_PATH, dom, "fullchain.pem")
+            if not (os.path.isfile(cert_path) and cert_is_valid(cert_path, DEFAULT_EXPIRY_THRESHOLD)):
+                invalid_domains.append(dom)
+        if invalid_domains:
+            issue_cert_script = os.path.join(bootstrap_dir, "issue-cert.sh")
+            secrets_env = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
+            cert_result = orchestrate_certs(domains, issue_cert_script, secrets_env)
+            logger.info("[IMP:9][_step_certs] Cert orchestration: %d domains", len(cert_result.domains))
+        else:
+            logger.info(
+                "[IMP:9][_step_certs] All %d domains have valid certs (≥30 days, LE) — skipping cert orchestration (D3)",
+                len(domains),
+            )
+    except (OSError, subprocess.CalledProcessError) as e:
+        logger.warning("[IMP:7][_step_certs] Cert orchestration failed (non-fatal): %s", e)
+
+
+# endregion FUNC__step_certs
+
+
+# region FUNC__step_deploy_projects
+## @purpose — Typed-шаг D6: деплой всех проектов контекста (non-fatal per-project).
+## @io — ⇥ node_yaml: str, context: str → ⎋ list[ProjectDeployResult]
+## @complexity — O(P * T) где P = проектов
+## @invariants
+##   - Делегирует в deploy_context_projects (idempotent skip healthy, ghcr primary, build fallback)
+##   - Post-deploy: _render_and_provision_llm (lazy facade → llm_provision, DevPlan 117 G T58.5)
+def _step_deploy_projects(node_yaml: str, context: str) -> list[ProjectDeployResult]:
+    """Project deploy step (D6) — deploy all context projects + post-deploy LLM provisioning."""
+    project_results = deploy_context_projects(node_yaml, context) or []
+    logger.info("[IMP:9][_step_deploy_projects] Project deploy complete: %d results", len(project_results))
+    return project_results
+
+
+# endregion FUNC__step_deploy_projects
+
+
+# region FUNC__step_vhosts
+## @purpose — Typed-шаг D6: рендер vhost-конфигов nginx (non-fatal).
+## @io — ⇥ core_dir: str, node_name: str → ⎋ None (side-effect: vhost конфиги)
+## @complexity — O(V) где V = vhost'ов
+## @invariants
+##   - Вызывает add-vhost.sh --render-all --node (subprocess, 60s timeout)
+##   - Non-fatal: отсутствие скрипта/ошибка → WARN
+def _step_vhosts(core_dir: str, node_name: str) -> None:
+    """Vhost render step (D6) — generate nginx vhost configs."""
+    vhost_script = os.path.join(core_dir, "internal", "scaffold", "add-vhost.sh")
+    if not os.path.isfile(vhost_script):
+        logger.info("[IMP:7][_step_vhosts] add-vhost.sh not found — skipping vhost render")
+        return
+    node_configs_dir = os.environ.get("NODE_CONFIGS_DIR", "/opt/node-configs")
+    try:
+        subprocess.run(
+            ["bash", vhost_script, "--render-all", "--node", node_name, "--node-configs-dir", node_configs_dir],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        logger.info("[IMP:9][_step_vhosts] Vhosts rendered for node=%s", node_name)
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+        logger.warning("[IMP:7][_step_vhosts] Vhost render failed (non-fatal): %s", e)
+
+
+# endregion FUNC__step_vhosts
+
+
+# region FUNC__step_nginx_reload
+## @purpose — Typed-шаг D6: reload nginx после рендера vhost'ов (non-fatal).
+##            Делегирует в shared/docker_compose.nginx_reload (единый фасад, DevPlan 118 D6).
+## @io — ⇥ None → ⎋ None (side-effect: nginx -s reload)
+## @complexity — O(1)
+## @invariants
+##   - Все docker CLI вызовы — через shared/docker_compose (гейт docker_sole_path)
+##   - Non-fatal: ошибка → WARN
+def _step_nginx_reload() -> None:
+    """Nginx reload step (D6) — reload nginx via shared docker_compose facade."""
+    from core.internal.shared.docker_compose import nginx_reload
+
+    try:
+        nginx_reload()
+    except (OSError, subprocess.CalledProcessError, FileNotFoundError) as e:
+        logger.warning("[IMP:7][_step_nginx_reload] Nginx reload failed (non-fatal): %s", e)
+
+
+# endregion FUNC__step_nginx_reload
+
+
+# region FUNC__step_verify
+## @purpose — Typed-шаг D6: финальная HTTPS-верификация доменов (non-fatal).
+## @io — ⇥ core_dir: str, node_name: str → ⎋ None (side-effect: verify log)
+## @complexity — O(D) где D = доменов
+## @invariants
+##   - Вызывает verify-domains.sh (subprocess, 120s timeout)
+##   - Non-fatal: отсутствие скрипта/ошибка → WARN
+def _step_verify(core_dir: str, node_name: str) -> None:
+    """Final verify step (D6) — HTTPS verification for all domains."""
+    verify_script = os.path.join(core_dir, "internal", "verify", "verify-domains.sh")
+    if not os.path.isfile(verify_script):
+        logger.info("[IMP:7][_step_verify] verify-domains.sh not found — skipping verify")
+        return
+    platform_root = os.environ.get("PLATFORM_ROOT", "/opt/platform")
+    try:
+        subprocess.run(
+            ["bash", verify_script, node_name, platform_root],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        logger.info("[IMP:9][_step_verify] Verify complete for node=%s", node_name)
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+        logger.warning("[IMP:7][_step_verify] Verify failed (non-fatal): %s", e)
+
+
+# endregion FUNC__step_verify
 
 
 # endregion FUNC_deploy_context

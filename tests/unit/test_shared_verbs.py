@@ -22,9 +22,9 @@ import logging
 
 import pytest
 
+from core.internal.deploy.ssh_command_parser import _strip_prefixes, classify_verb, parse_ssh_command
 from core.internal.shared.exceptions import ConfigValidationError
 from core.internal.shared.project_registry import validate_project_name
-from core.internal.shared.ssh_command_parser import _strip_prefixes, classify_verb, parse_ssh_command
 from core.internal.shared.verbs import CANONICAL_VERBS, VERB_RESERVE, is_verb
 
 # ── LDD helper ─────────────────────────────────────────────────────────────────

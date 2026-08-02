@@ -134,24 +134,28 @@ def test_compose_args_has_platform_env(caplog, docker_orchestrator_source: str) 
 @pytest.mark.static_audit
 def test_prepull_skips_local_build(caplog, docker_orchestrator_source: str) -> None:
     """
-    # ◇ read docker_orchestrator.py → ⚡ grep _pull_module_images → ◇ build: check → ⎋ pass | fail
+    # ◇ read parallel_runner.py (D1: _pull_module_images переехал) → ⚡ grep pull_module_images → ◇ build: check → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    source = docker_orchestrator_source
+    # DevPlan 118 D1: _pull_module_images переехал из docker_orchestrator.py в parallel_runner.py.
+    parallel_runner_py = (
+        Path(__file__).resolve().parent / ".." / "core" / "internal" / "bootstrap" / "deploy" / "parallel_runner.py"
+    ).resolve()
+    source = parallel_runner_py.read_text()
 
-    # ── _pull_module_images function ──
-    func_start = source.find("def _pull_module_images")
-    assert func_start >= 0, "Function _pull_module_images not found"
+    # ── pull_module_images function ──
+    func_start = source.find("def pull_module_images")
+    assert func_start >= 0, "Function pull_module_images not found (parallel_runner.py)"
     func_body = source[func_start:]
     next_def = func_body.find("\ndef ", 1)
     func_body = func_body[:next_def] if next_def > 0 else func_body
 
     # ── build: check ──
     has_build_check = '"build:"' in func_body or "'build:'" in func_body or "build:" in func_body
-    logger.critical("[IMP:9][test_prepull] build: check in _pull_module_images: %s", has_build_check)
+    logger.critical("[IMP:9][test_prepull] build: check in pull_module_images: %s", has_build_check)
     assert has_build_check, (
-        "_pull_module_images must check for 'build:' section in compose file\n"
-        "W4-E1 migrated build: skip logic from shell to docker_orchestrator.py"
+        "pull_module_images must check for 'build:' section in compose file\n"
+        "W4-E1 migrated build: skip logic from shell; DevPlan 118 D1 → parallel_runner.py"
     )
 
     # ── Skip log message ──

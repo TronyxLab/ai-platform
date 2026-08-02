@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes, forced-command, verbs, dispatch
 # STRUCTURE: ▶ parse_ssh_command(raw) → ◇ _strip_prefixes → ◇ classify_verb(cleaned) → ⊕ dict → ⎋
-#            ▶ CLI: python3 -m core.internal.shared.ssh_command_parser parse|classify <command>
+#            ▶ CLI: python3 -m core.internal.deploy.ssh_command_parser parse|classify <command>
 # region MODULE_CONTRACT
 ## @purpose  Unified SSH_ORIGINAL_COMMAND parser — canonical implementation for the forced-command
 ##           dispatcher (`orchestrator_cli dispatch`, DevPlan 116 B1). Classifies verb against the
 ##           closed verb dictionary (shared/verbs.py, D1) with EXACT-match semantics: unknown verb →
 ##           ConfigValidationError (никакого дефолт-фолбэка на deploy, D2).
-## @scope    Core/internal/shared — low-level parsing layer (by DDD). No business logic.
-##           Two public functions: parse_ssh_command(raw) and classify_verb(cleaned).
+## @scope    Core/internal/deploy — рядом с единственным Python-потребителем (orchestrator_cli).
+##           DevPlan 118 D3: перенесён из core/internal/shared/ (1 прод-потребитель — not ≥2).
+##           Два public API: parse_ssh_command(raw) и classify_verb(cleaned).
 ##           CLI mode for testing and direct invocation.
 ## @invariants
 ##   1. Always returns dict with verb/args/raw/cleaned fields from parse_ssh_command
@@ -24,10 +25,13 @@
 ##             удалены — неизвестный verb обязан давать JSON-ошибку (честные exit-коды, B4),
 ##             а не тихо деплоить чужой проект. Голый `status`/`remove`/`verify`/`receive` теперь
 ##             классифицируется как verb (U-56: раньше голый `status` уходил в deploy).
+##             DevPlan 118 D3: переезд в deploy/ — правило shared «≥2 потребителя» не выполнено
+##             (единственный Python-импорт — orchestrator_cli); CLI-потребитель deploy.sh обновлён.
 ## @changes    2026-07-26 | DevPlan 081 TASK-081B1 — Created as shared Python module
 ##             2026-08-01 | DevPlan 116 B1 T1 — D2: legacy strip-префиксы удалены, classify_verb
 ##                         exact-match по CANONICAL_VERBS, unknown → ConfigValidationError;
 ##                         parse_ssh_command: receive <project> [<sha>], status/remove <project>, verify <node>
+##             2026-08-02 | DevPlan 118 D3 — перенесён shared/ → deploy/ (рядом с потребителем orchestrator_cli)
 # endregion MODULE_CONTRACT
 
 import json
@@ -235,7 +239,7 @@ def _cli_main() -> int:
 
     if len(argv) < 2:
         print(
-            "Usage: python3 -m core.internal.shared.ssh_command_parser [--format json|lines] parse|classify <command>",
+            "Usage: python3 -m core.internal.deploy.ssh_command_parser [--format json|lines] parse|classify <command>",
             file=sys.stderr,
         )
         return 1

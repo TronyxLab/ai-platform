@@ -29,7 +29,6 @@ import argparse
 import json
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -139,80 +138,28 @@ def _normalize_env_requires_entry(entry: Any) -> dict[str, Any]:
 def _env_var_in_dotenv(env_example_path: Path, var_name: str) -> tuple[bool, str]:
     """Check presence and non-empty value of var in .env.example.
 
-    Returns (present, value). present=False if var not declared.
-    Lines like `VAR=` (no value) are treated as EMPTY unless preceded by a marker-comment
-    that documents the variable as generated/SOPS-only at runtime (P07 enforcement with carve-out
-    for legitimately-empty placeholders in .env.example).
-
-    Recognized markers (in any comment line within the 5-line block above the var declaration,
-    or in an inline comment after `#`):
-      - `# GENERATED` / `# Генерация:` / `# generate` — value generated at runtime (secrets-init.sh, SOPS)
-      - `# SOPS` / `# sops` — value provided via SOPS/age on VPS
-      - `# NOT for production` — placeholder only, real value from SOPS
-      - `# REQUIRED` — explicit acknowledgement (still must be set somewhere)
-      - `# Инициализируется` / `# Заполняется` — Russian runtime-fill markers
+    ## @purpose  Тонкий фасад на shared/env_requires.env_var_in_dotenv (DevPlan 118 D4 —
+    ##            единая реализация, приватные хелперы migrate в shared). Сохраняет сигнатуру
+    ##            и поведение для обратной совместимости тестов/импортов.
+    ## @io  ⇥ env_example_path: Path, var_name: str → ⎋ tuple[bool, str] (present, value)
+    ## @complexity O(L) где L = строк в .env.example
     """
-    if not env_example_path.exists():
-        return False, ""
-    pattern = re.compile(rf"^{re.escape(var_name)}=(.*)$")
-    marker_re = re.compile(
-        r"#.*(generated|генерация|generate|sops|not for production|required|инициализируется|заполняется)",
-        re.IGNORECASE,
-    )
+    from core.internal.shared.env_requires import env_var_in_dotenv as _impl
 
-    # First pass: collect all lines and their indices to scan a 5-line window above each match.
-    with open(env_example_path) as f:
-        lines = f.readlines()
-
-    for idx, raw_line in enumerate(lines):
-        stripped = raw_line.rstrip("\n")
-        match = pattern.match(stripped)
-        if not match:
-            continue
-        value = match.group(1).strip()
-        # Inline comment after value: VAR=val # comment
-        inline_comment = ""
-        if "#" in value:
-            parts = value.split("#", 1)
-            value = parts[0].strip()
-            inline_comment = parts[1]
-        # Scan up to 8 preceding lines for marker comments.
-        # Note: we deliberately do NOT stop at another VAR= declaration, because .env.example
-        # groups multiple related vars under a single comment block (e.g., PLATFORM_MASTER_EMAIL
-        # and PLATFORM_MASTER_PASSWORD share the "Генерация:" marker).
-        context_lines = [inline_comment]
-        for back in range(1, 9):
-            back_idx = idx - back
-            if back_idx < 0:
-                break
-            back_stripped = lines[back_idx].rstrip("\n").lstrip()
-            context_lines.append(back_stripped)
-        context = " ".join(context_lines)
-        if not value and marker_re.search(context):
-            return True, "<marker:runtime-generated>"
-        return True, value
-    return False, ""
+    return _impl(env_example_path, var_name)
 
 
 def _env_var_in_secrets_manifest(manifest_path: Path, var_name: str) -> bool:
-    """Check presence of var in secrets-manifest.yaml (any tier except 'removed')."""
-    if not manifest_path.exists():
-        return False
-    try:
-        manifest = _load_yaml_file(manifest_path)
-    except (yaml.YAMLError, FileNotFoundError):
-        return False
-    if not isinstance(manifest, dict):
-        return False
-    secrets = manifest.get("secrets", [])
-    if not isinstance(secrets, list):
-        return False
-    for entry in secrets:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("name") == var_name and entry.get("tier") != "removed":
-            return True
-    return False
+    """Check presence of var in secrets-manifest.yaml (any tier except 'removed').
+
+    ## @purpose  Тонкий фасад на shared/env_requires.env_var_in_secrets_manifest (DevPlan 118 D4 —
+    ##            единая реализация, приватные хелперы migrate в shared).
+    ## @io  ⇥ manifest_path: Path, var_name: str → ⎋ bool (registered)
+    ## @complexity O(S) где S = секретов в manifest
+    """
+    from core.internal.shared.env_requires import env_var_in_secrets_manifest as _impl
+
+    return _impl(manifest_path, var_name)
 
 
 def _extract_per_service_restart(compose_base_path: Path) -> dict[str, str]:
@@ -340,63 +287,17 @@ def check_env_requires_presence(
     ##   - For {required: true, type: secret}: must be present in secrets-manifest.yaml
     ##   - For {required: true}: must be present in .env.example with non-empty value
     ##   - For {required: false}: skipped (optional)
+    ## @rationale DevPlan 118 D4: единая реализация в shared/env_requires.check_requires_presence —
+    ##            фасад сохраняет публичный API и поведение (дефолты путей) для обратной совместимости.
     """
     if env_example_path is None:
         env_example_path = _find_env_example()
     if secrets_manifest_path is None:
         secrets_manifest_path = DEFAULT_SECRETS_MANIFEST
 
-    violations: list[str] = []
-    module_name = module.get("name", "<unknown>")
-    env_requires = module.get("env_requires", [])
+    from core.internal.shared.env_requires import check_requires_presence as _impl
 
-    for req in env_requires:
-        if not isinstance(req, dict):
-            violations.append(f"{module_name}: env_requires entry not normalized: {req}")
-            continue
-        name = req.get("name")
-        req_type = req.get("type", "secret")
-        required = req.get("required", True)
-
-        if not required:
-            logger.info("[IMP:7][check_env_requires_presence] %s: %s optional — skipped", module_name, name)
-            continue
-
-        # (a) presence + non-empty in .env.example
-        present, value = _env_var_in_dotenv(env_example_path, name)
-        if not present:
-            violations.append(f"{module_name}: required env var '{name}' missing from {env_example_path}")
-            logger.info(
-                "[IMP:9][check_env_requires_presence] FAIL: %s — '%s' missing in .env.example",
-                module_name,
-                name,
-            )
-        elif not value:
-            violations.append(f"{module_name}: required env var '{name}' declared but EMPTY in {env_example_path}")
-            logger.info(
-                "[IMP:9][check_env_requires_presence] FAIL: %s — '%s' empty value in .env.example",
-                module_name,
-                name,
-            )
-
-        # (b) secrets-manifest registration for type=secret
-        if req_type == "secret" and not _env_var_in_secrets_manifest(secrets_manifest_path, name):
-            violations.append(
-                f"{module_name}: secret env var '{name}' not registered in {secrets_manifest_path} (tier != removed)"
-            )
-            logger.info(
-                "[IMP:9][check_env_requires_presence] FAIL: %s — '%s' not in secrets-manifest",
-                module_name,
-                name,
-            )
-
-    if not violations:
-        logger.info(
-            "[IMP:9][check_env_requires_presence] PASS: %s — all %d required env vars present",
-            module_name,
-            sum(1 for r in env_requires if isinstance(r, dict) and r.get("required", True)),
-        )
-    return violations
+    return _impl(module, env_example_path, secrets_manifest_path)
 
 
 # endregion FUNC_check_env_requires_presence

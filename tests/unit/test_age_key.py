@@ -1,223 +1,58 @@
-# GREP_SUMMARY: unit-test, age-key, detect-age-key, AGE_SECRET_KEY, SOPS_AGE_KEY, AGE_SECRET_KEY_FILE
-# STRUCTURE: ▶ 6 tests → ◇ env → ◇ SOPS → ◇ file → ◇ empty → ◇ missing → ◇ log_tag → ⎋ pass|fail
-
+# GREP_SUMMARY: unit-test, age-key, removed, R5, negative, ModuleNotFoundError, D3, shared-cleanup
+# STRUCTURE: ▶ importlib.util.find_spec("core.internal.shared.age_key") → ◇ exists? → ⊕ assert None (удалён) → ⎋ pass
 # region MODULE_CONTRACT
-## @purpose  Unit tests for core/internal/shared/age_key.py — detect_age_key() function.
-##           Tests all 3 detection mechanisms and edge cases.
-## @scope    Pure unit tests — no subprocess, no Docker, no external dependencies.
-##           Uses monkeypatch for env var manipulation + tmp_path for temp files.
+## @purpose  R5 anti-survivorship negative-тест (DevPlan 118 D3): модуль age_key.py УДАЛЁН.
+##           Детекция AGE-ключа делегирована в канонический node_detect.py (DevPlan 104);
+##           compat-шим age_key.py больше не существует — импорт обязан падать.
+## @scope    Один тест на удалённый API. Не дублирует test_node_detect.py (там живут
+##           позитивные сценарии detect_age_key).
 ## @invariants
-##   - 6 tests: env, SOPS, file, empty, missing, log_tag
-##   - All tests use @ldd_trajectory decorator
-##   - Detection chain: AGE_SECRET_KEY → SOPS_AGE_KEY → AGE_SECRET_KEY_FILE
-## @rationale DevPlan 078 §$TEST_SPEC: 6 tests for age_key.py
-## @changes  2026-07-25 | DevPlan 078 Phase B T1 — Created unit tests
+##   - `core.internal.shared.age_key` НЕ существует на диске (importlib.util.find_spec → None)
+##   - `from age_key import detect_age_key` (bare-импорт) бросает ModuleNotFoundError
+##   - LDD: IMP:9 лог в успешном сценарии (подтверждение удаления)
+## @rationale R5 (Test Honesty): каждое удаление API покрывается negative-тестом на удалённый API.
+##            Без этого теста будущий агент мог бы молча вернуть age_key.py (регрессия D3).
+## @changes  2026-08-02 | DevPlan 118 D3 — переписан: тесты detect_age_key (6 шт) удалены,
+##                      покрытие переехало в test_node_detect.py; заменён R5 negative-тестом.
 # endregion MODULE_CONTRACT
 
+import importlib.util
 import logging
-import os
 
 import pytest
 
 from tests.conftest import ldd_trajectory
 
-# Add shared module to path
-_SHARED_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "core",
-    "internal",
-    "shared",
-)
-import sys as _sys
-
-if _SHARED_DIR not in _sys.path:
-    _sys.path.insert(0, _SHARED_DIR)
-
-from age_key import detect_age_key
-
 logger = logging.getLogger(__name__)
 
-TEST_AGE_KEY = "AGE_SECRET_KEY_CONTENT_0123456789abcdef"
 
-
-# region FUNC_test_detect_age_key_from_env
-## @purpose — Verify detect_age_key reads from AGE_SECRET_KEY env var.
-## @io — ⇥ monkeypatch → ⎋ None (asserts key matches)
+# region FUNC_test_age_key_module_removed
+## @purpose — R5 negative: age_key.py удалён в DevPlan 118 D3 — модуль не существует.
+## @io — ⇥ None → ⎋ None (asserts find_spec None + ModuleNotFoundError)
 ## @complexity — O(1)
 @pytest.mark.unit
 @ldd_trajectory
 
-# 🧪 TRAP[TEST] · 2026-07-25 · REGRESSION · AGE_SECRET_KEY env detection
-# · Last fail: N/A (new test)
-# · Remove if: detect_age_key function is removed
-def test_detect_age_key_from_env(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
-    """detect_age_key returns AGE_SECRET_KEY from env var."""
+# 🧪 TRAP[TEST] · 2026-08-02 · R5 NEGATIVE · age_key.py removed (DevPlan 118 D3)
+# · Last fail: age_key.py существовал как compat-шим (DevPlan 104) — detect_age_key
+# ·   реэкспортировался из node_detect; decrypt_secrets.py импортировал через sys.path-хак.
+# · Remove if: age_key.py будет возвращён (регрессия D3) — тогда тест должен стать
+# ·   позитивным снова и обновиться под новую реализацию.
+def test_age_key_module_removed(caplog: pytest.LogCaptureFixture) -> None:
+    """age_key.py удалён (D3) — импорт обязан падать с ModuleNotFoundError."""
     caplog.set_level(logging.DEBUG)
-    monkeypatch.setenv("AGE_SECRET_KEY", TEST_AGE_KEY)
-    monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
-    monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
+    logger.info("[IMP:7][test_age_key] Verifying age_key.py removed (DevPlan 118 D3)")
 
-    logger.info("[IMP:7][test_age_key] Testing AGE_SECRET_KEY env detection")
-    result = detect_age_key()
-    assert result == TEST_AGE_KEY, f"Expected {TEST_AGE_KEY}, got {result}"
-    logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned key from AGE_SECRET_KEY env")
+    # ── 1. Пакетный spec отсутствует (файл удалён) ──
+    spec = importlib.util.find_spec("core.internal.shared.age_key")
+    logger.info("[IMP:8][test_age_key] find_spec(core.internal.shared.age_key) = %s", spec)
+    assert spec is None, "D3 regression: core.internal.shared.age_key существует — compat-шим не удалён"
 
+    # ── 2. Bare-импорт (legacy sys.path-хак) тоже падает ──
+    with pytest.raises(ModuleNotFoundError):
+        import age_key  # noqa: F401 — R5: модуль удалён, импорт обязан падать
 
-# endregion FUNC_test_detect_age_key_from_env
-
-
-# region FUNC_test_detect_age_key_from_sops
-## @purpose — Verify detect_age_key falls back to SOPS_AGE_KEY env var.
-## @io — ⇥ monkeypatch → ⎋ None (asserts key matches)
-## @complexity — O(1)
-@pytest.mark.unit
-@ldd_trajectory
-
-# 🧪 TRAP[TEST] · 2026-07-25 · REGRESSION · SOPS_AGE_KEY fallback detection
-# · Last fail: N/A (new test)
-# · Remove if: detect_age_key function is removed
-def test_detect_age_key_from_sops(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
-    """detect_age_key falls back to SOPS_AGE_KEY when AGE_SECRET_KEY is not set."""
-    caplog.set_level(logging.DEBUG)
-    monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
-    monkeypatch.setenv("SOPS_AGE_KEY", TEST_AGE_KEY)
-    monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
-
-    logger.info("[IMP:7][test_age_key] Testing SOPS_AGE_KEY fallback")
-    result = detect_age_key()
-    assert result == TEST_AGE_KEY, f"Expected {TEST_AGE_KEY}, got {result}"
-    logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned key from SOPS_AGE_KEY fallback")
+    logger.info("[IMP:9][test_age_key] PASS: age_key.py removed — ModuleNotFoundError confirmed")
 
 
-# endregion FUNC_test_detect_age_key_from_sops
-
-
-# region FUNC_test_detect_age_key_from_file
-## @purpose — Verify detect_age_key reads from AGE_SECRET_KEY_FILE.
-## @io — ⇥ monkeypatch, tmp_path → ⎋ None (asserts key matches)
-## @complexity — O(1)
-@pytest.mark.unit
-@ldd_trajectory
-
-# 🧪 TRAP[TEST] · 2026-07-25 · REGRESSION · AGE_SECRET_KEY_FILE detection
-# · Last fail: N/A (new test)
-# · Remove if: detect_age_key function is removed
-def test_detect_age_key_from_file(
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pytest.TempPathFactory,
-) -> None:
-    """detect_age_key reads AGE_SECRET_KEY_FILE when env vars not set."""
-    caplog.set_level(logging.DEBUG)
-    monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
-
-    key_file = tmp_path / "age-key.txt"
-    key_file.write_text(TEST_AGE_KEY + "\n")
-    monkeypatch.setenv("AGE_SECRET_KEY_FILE", str(key_file))
-
-    logger.info("[IMP:7][test_age_key] Testing AGE_SECRET_KEY_FILE detection")
-    result = detect_age_key()
-    assert result == TEST_AGE_KEY, f"Expected {TEST_AGE_KEY}, got {result}"
-    logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned key from AGE_SECRET_KEY_FILE")
-
-
-# endregion FUNC_test_detect_age_key_from_file
-
-
-# region FUNC_test_detect_age_key_empty_file
-## @purpose — Verify detect_age_key returns None when AGE_SECRET_KEY_FILE is empty.
-## @io — ⇥ monkeypatch, tmp_path → ⎋ None (asserts None)
-## @complexity — O(1)
-@pytest.mark.unit
-@ldd_trajectory
-
-# 🧪 TRAP[TEST] · 2026-07-25 · REGRESSION · Empty AGE_SECRET_KEY_FILE
-# · Last fail: N/A (new test)
-# · Remove if: detect_age_key function is removed
-def test_detect_age_key_empty_file(
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pytest.TempPathFactory,
-) -> None:
-    """detect_age_key returns None when AGE_SECRET_KEY_FILE is empty."""
-    caplog.set_level(logging.DEBUG)
-    monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
-
-    key_file = tmp_path / "empty-key.txt"
-    key_file.write_text("")
-    monkeypatch.setenv("AGE_SECRET_KEY_FILE", str(key_file))
-
-    logger.info("[IMP:7][test_age_key] Testing empty AGE_SECRET_KEY_FILE")
-    result = detect_age_key()
-    assert result is None, f"Expected None, got {result}"
-    logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned None for empty file")
-
-
-# endregion FUNC_test_detect_age_key_empty_file
-
-
-# region FUNC_test_detect_age_key_missing
-## @purpose — Verify detect_age_key returns None when no key source is available.
-## @io — ⇥ monkeypatch → ⎋ None (asserts None)
-## @complexity — O(1)
-@pytest.mark.unit
-@ldd_trajectory
-
-# 🧪 TRAP[TEST] · 2026-07-25 · REGRESSION · No AGE key source available
-# · Last fail: N/A (new test)
-# · Remove if: detect_age_key function is removed
-def test_detect_age_key_missing(
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """detect_age_key returns None when no key source is available."""
-    caplog.set_level(logging.DEBUG)
-    monkeypatch.delenv("AGE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
-    monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
-
-    logger.info("[IMP:7][test_age_key] Testing missing key — all sources absent")
-    result = detect_age_key()
-    assert result is None, f"Expected None, got {result}"
-    logger.info("[IMP:9][test_age_key] ✅ detect_age_key returned None when all sources absent")
-
-
-# endregion FUNC_test_detect_age_key_missing
-
-
-# region FUNC_test_detect_age_key_log_tag
-## @purpose — Verify detect_age_key logs masked (first 8 chars) when key found.
-## @io — ⇥ caplog, monkeypatch → ⎋ None (asserts log contains masked key)
-## @complexity — O(1)
-@pytest.mark.unit
-@ldd_trajectory
-
-# 🧪 TRAP[TEST] · 2026-07-25 · REGRESSION · Log tag masking for AGE key
-# · Last fail: N/A (new test)
-# · Remove if: detect_age_key function is removed
-def test_detect_age_key_log_tag(
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """detect_age_key logs masked key (first 8 chars)."""
-    caplog.set_level(logging.DEBUG)
-    monkeypatch.setenv("AGE_SECRET_KEY", TEST_AGE_KEY)
-    monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
-    monkeypatch.delenv("AGE_SECRET_KEY_FILE", raising=False)
-
-    logger.info("[IMP:7][test_age_key] Testing log masking")
-    detect_age_key()
-
-    masked_expected = TEST_AGE_KEY[:8]
-    found_log = False
-    for record in caplog.records:
-        if masked_expected in record.message:
-            found_log = True
-            break
-    assert found_log, f"Log should contain masked key '{masked_expected}'"
-    logger.info("[IMP:9][test_age_key] ✅ detect_age_key logged masked key '%s...'", masked_expected)
-
-
-# endregion FUNC_test_detect_age_key_log_tag
+# endregion FUNC_test_age_key_module_removed

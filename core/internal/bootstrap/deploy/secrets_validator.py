@@ -39,17 +39,12 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 
 from core.internal.shared.exceptions import ConfigValidationError
-from core.internal.shared.secrets_env_parser import parse as parse_secrets_env
 from core.internal.shared.secrets_manifest_reader import (
     charset as secret_charset,
 )
 from core.internal.shared.secrets_manifest_reader import (
-    consumers as secret_consumers,
-)
-from core.internal.shared.secrets_manifest_reader import (
     iter_secrets as iter_manifest_secrets,
 )
-from core.internal.shared.secrets_manifest_reader import tier as secret_tier
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 ## @purpose  Read secrets-manifest.yaml and verify all secrets required by a given module are non-empty
 ##           in the process environment OR in a secrets.env file. Manifest-driven gate.
+##           DevPlan 118 D4: тонкий фасад на shared/env_requires.check_runtime_env (единый чекер,
+##           устраняет расхождение вердиктов с validate_module_yaml.check_env_requires_presence).
 ## @io       module_name (str), secrets_manifest_path (str) → List[str] of missing variable names
 ##           ⚡ raise FileNotFoundError/ValueError if manifest missing/malformed (strict, DevPlan 116 T4)
 ## @complexity 2 — single YAML parse (delegated to shared iter_secrets) + linear pass over secrets list
@@ -73,50 +70,9 @@ logger = logging.getLogger(__name__)
 ##            secrets-manifest.yaml is the Single Source of Truth. Gate validates
 ##            bidirectional consistency between module.yaml env_requires and manifest.
 def check_env_requires(module_name: str, secrets_manifest_path: str) -> list[str]:
-    logger.info("[IMP:7][check_env_requires][start] Module=%s, manifest=%s", module_name, secrets_manifest_path)
+    from core.internal.shared.env_requires import check_runtime_env as _impl
 
-    secrets_list = iter_manifest_secrets(secrets_manifest_path)
-
-    # Filter: secrets where consumers includes module_name AND tier ∈ {required, generated}
-    module_secrets = [
-        s for s in secrets_list if module_name in secret_consumers(s) and secret_tier(s) in ("required", "generated")
-    ]
-
-    if not module_secrets:
-        logger.info(
-            "[IMP:7][check_env_requires][no_match] No secrets in manifest for module %s with tier in {required, generated}",
-            module_name,
-        )
-        return []
-
-    # Build env map from secrets.env file using shared parser
-    secrets_file = os.environ.get("SECRETS_ENV_FILE", "/run/platform/secrets.env")
-    env_map: dict[str, str] = {}
-    secrets_file_path = Path(secrets_file)
-    if secrets_file_path.is_file():
-        env_map = parse_secrets_env(str(secrets_file_path))
-        logger.info("[IMP:7][check_env_requires][env_file] Loaded %d vars from %s", len(env_map), secrets_file)
-    else:
-        logger.info(
-            "[IMP:7][check_env_requires][env_file] Secrets file %s not found — checking os.environ only", secrets_file
-        )
-
-    # Check each required secret: must exist in os.environ OR in the env file map
-    missing: list[str] = []
-    for s in module_secrets:
-        var_name = s["name"]
-        if not os.environ.get(var_name, "") and not env_map.get(var_name, ""):
-            missing.append(var_name)
-            logger.info("[IMP:8][check_env_requires][missing] Var=%s is empty", var_name)
-        else:
-            logger.info("[IMP:8][check_env_requires][ok] Var=%s is present", var_name)
-
-    if missing:
-        logger.warning("[IMP:9][check_env_requires][FAIL] Missing required env vars for %s: %s", module_name, missing)
-    else:
-        logger.info("[IMP:9][check_env_requires][PASS] All required env vars present for module %s", module_name)
-
-    return missing
+    return _impl(module_name, secrets_manifest_path)
 
 
 # endregion FUNC_check_env_requires

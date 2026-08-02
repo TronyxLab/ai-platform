@@ -7,13 +7,16 @@
 ##           is complete — no legacy inline parsing remains in any consumer.
 ##           NOTE: docker_auth.py and node-lifecycle.sh excluded (indirect env var
 ##           consumers — read from sourced secrets.env, not direct import consumers).
+##           DevPlan 118 D4: secrets_validator.check_env_requires делегирует в
+##           shared/env_requires.py (runtime-семантика) — потребитель секретов-парсера теперь
+##           shared/env_requires.py (проверяется вместо прямого импорта в secrets_validator).
 ## @scope    Scans all 5 known direct import consumers (Python only) for the canonical
 ##           import pattern:
 ##           - Python: "from core.internal.shared.secrets_env_parser import"
 ## @invariants
 ##   - ALL 5 direct import consumers MUST import from secrets_env_parser
 ##   - Missing import → FAIL with clear message
-##   - Consumers: secrets_manager.py, secrets_validator.py, compose_preflight.py,
+##   - Consumers: secrets_manager.py, shared/env_requires.py (D4), compose_preflight.py,
 ##     agent_watchdog.py, cert_orchestrator.py
 ##   - docker_auth.py excluded (indirect env var consumer — reads from sourced env)
 ##   - node-lifecycle.sh excluded (indirect env var consumer — sources secrets.env
@@ -23,6 +26,8 @@
 ##            docker_auth.py is excluded because it reads credentials via os.environ
 ##            (sourced from secrets.env by node-lifecycle.sh), not via direct import.
 ##            If a new direct consumer is added, it must be added to this test's consumer list.
+##            DevPlan 118 D4: secrets_validator перестал парсить secrets.env напрямую —
+##            runtime-проверка непустоты делегирована в shared/env_requires.check_runtime_env.
 # endregion MODULE_CONTRACT
 
 import logging
@@ -48,8 +53,8 @@ _CONSUMERS: list[dict[str, str]] = [
         "pattern": r"from\s+core\.internal\.shared\.secrets_env_parser\s+import",
     },
     {
-        "file": "core/internal/bootstrap/deploy/secrets_validator.py",
-        "description": "Secrets validator — validates secrets.env content via shared parser",
+        "file": "core/internal/shared/env_requires.py",
+        "description": "Единый env-requires чекер (DevPlan 118 D4) — runtime-непустота через shared parser; secrets_validator.check_env_requires делегирует сюда",
         "type": "python",
         "pattern": r"from\s+core\.internal\.shared\.secrets_env_parser\s+import",
     },

@@ -5,7 +5,7 @@
 CLI entrypoint for DeployOrchestrator. Commands: dispatch, deliver, receive, deploy, deploy-many, rollback, status, remove.
 
 `dispatch` — VPS-side forced-command dispatcher (DevPlan 116 B1): reads SSH_ORIGINAL_COMMAND
-  (фолбэк — CLI args), парсит через shared/ssh_command_parser (T1), маршрутизирует verb:
+  (фолбэк — CLI args), парсит через deploy/ssh_command_parser (T1, DevPlan 118 D3), маршрутизирует verb:
   ping → "pong"; exit → 0; status → ProjectStatus JSON (exit 0/1); verify → verify-domains.sh;
   remove → DeployOrchestrator.remove(); receive → tar из stdin + DeployOrchestrator.receive().
 
@@ -62,8 +62,8 @@ import sys
 
 from core.internal.deploy.channels import ForcedCommandChannel, LocalChannel, SCPChannel
 from core.internal.deploy.orchestrator import DeployOrchestrator
+from core.internal.deploy.ssh_command_parser import parse_ssh_command
 from core.internal.shared.exceptions import ConfigValidationError, PlatformError
-from core.internal.shared.ssh_command_parser import parse_ssh_command
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ def build_channel(args: argparse.Namespace) -> SCPChannel | ForcedCommandChannel
 
 # region FUNC__dispatch
 ## @purpose  VPS-side forced-command dispatcher (DevPlan 116 B1 T2, U-04). Читает SSH_ORIGINAL_COMMAND
-##           (фолбэк — CLI args), парсит через shared/ssh_command_parser (T1), маршрутизирует verb:
+##           (фолбэк — CLI args), парсит через deploy/ssh_command_parser (T1, DevPlan 118 D3), маршрутизирует verb:
 ##           ping → "pong" 0; exit → 0; status \<project\> → ProjectStatus JSON (exit 0/1, D6);
 ##           remove \<project\> → DeployOrchestrator.remove() exit 0/1; verify \<node\> →
 ##           verify-domains.sh (pass-through exit); receive [project] [sha] → DeployOrchestrator.receive().

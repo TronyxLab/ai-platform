@@ -1,4 +1,4 @@
-# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, verbs, project-registry, exceptions, timeouts, ssh-opts, contracts
+# GREP_SUMMARY: AGENTS.md, shared, inventory, node-yaml, docker-compose, audit-logger, ssh-parser, telegram, docker-auth, age-key, node-detect, vps-readiness, crypto, content-hash, secrets-env, secrets-manifest-reader, deploy-paths, verbs, project-registry, exceptions, timeouts, ssh-opts, contracts, env-requires
 # STRUCTURE: ┌контракт области┐ → ◇ инвентарь 21 модуль (таблица) → ◇ правила добавления → ◇ запреты → ⎋ cross-refs
 # region MODULE_CONTRACT
 ## @purpose  Архитектурный контракт области core/internal/shared/ — инвентарь модулей и правила добавления.
@@ -26,13 +26,15 @@
 ##           2026-08-02 | DevPlan 118 C3/C5/C6/C10 — +compose_profiles.py (27-й), +module_interface.py (28-й),
 ##                      +llm_paths.py (29-й), +subprocess_io.py (30-й); deploy_paths +letsencrypt_live/
 ##                      node_configs_remote/platform_remote_base (C7); ssl_certs +cert_is_valid (C9)
+##           2026-08-02 | DevPlan 118 D3 — −age_key.py (compat-шим УДАЛЁН, decrypt_secrets → node_detect);
+##                      −ssh_command_parser.py (перенесён в core/internal/deploy/, потребитель orchestrator_cli)
+##           2026-08-02 | DevPlan 118 D4 — +env_requires.py (31-й); единый env-requires чекер
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
 
 | Модуль | Назначение | Ключевой API | Потребители |
 |--------|-----------|--------------|-------------|
-| `age_key.py` | Compat-re-export шим — детекция AGE-ключа делегирована в node_detect.py (DevPlan 104) | `detect_age_key()` (re-export), CLI | decrypt-secrets, bootstrap, node-update |
 | `audit_logger.py` | Единый JSON-lines audit логгер — ЕДИНСТВЕННЫЙ writer (D1, DevPlan 116 B11 T2: deploy/audit_logger.py удалён, reporting pipe мигрирован). Расширенная схема ts/tag/status/msg + extra (operation/project/channel/result/duration_s/snapshot_id) | `write_audit_entry(tag, status, msg, **extra)`, `read_audit_log()`, CLI `write/read --log-file` | context_deployer, deploy_orchestrator (DeployAuditLogger adapter), lifecycle/helpers/reporting, scaffold/vhost_renderer, lib/audit.sh |
 | `content_hash.py` | SHA256 content-hash для идемпотентности bootstrap (state.json sub-steps) | `compute_step_hash()`, `step_hash_changed()` | state_machine |
 | `compose_files.py` | Единый SoT списков compose-файлов и резолва (DevPlan 118 A2 — заменяет 6 локальных кортежей: docker_orchestrator, converge/runtime, converge/volumes, orphan_reconciler, payload_deliverer, project_adopter) | `COMPOSE_FILENAMES`, `PROJECT_COMPOSE_FILENAMES`, `resolve_compose_file()`, `requires_compose_project()` | docker_orchestrator, converge/runtime, converge/volumes, orphan_reconciler, payload_deliverer, project_adopter, gate compose_files_sole_path |
@@ -42,6 +44,7 @@
 | `deploy_paths.py` | Канонический реестр путей доставки кода (SoT для удаления deprecated путей) + резолверы /etc/letsencrypt/live, /opt/node-configs, /opt/platform, /opt/projects (DevPlan 118 C7 — топ-5 потребителей делегируют) | `get_canonical_paths()`, `DEPRECATED_DEPLOY_PATHS`, `projects_base()`, `letsencrypt_live()`, `node_configs_remote()`, `platform_remote_base()` | core-deploy CI, deploy, s3_ssl_cache, cert_orchestrator, cert_collector, core_deliverer, overlay_deliverer |
 | `docker_auth.py` | Единый Docker registry auth (заменяет 5 дублирующихся точек) | `docker_login()`, `ghcr_login()`, `configure_docker_auth()` | bootstrap registry-auth, phases.py |
 | `docker_compose.py` | Shared compose-операции: pull/build/up/healthcheck_poll | `docker_compose_pull()`, `docker_compose_build()`, `docker_compose_up()`, `healthcheck_poll()` | context_deployer, docker_orchestrator, DeployEngine |
+| `env_requires.py` | Единый env-requires чекер (DevPlan 118 D4 — объединяет module.yaml-driven presence и manifest-driven runtime; устраняет расхождение вердиктов validate_module_yaml vs secrets_validator) | `check_requires_presence()`, `check_runtime_env()`, `check_env_requires()`, `env_var_in_dotenv()`, `env_var_in_secrets_manifest()` | validate_module_yaml (фасад), secrets_validator (фасад) |
 | `exceptions.py` | Типизированная иерархия ошибок платформы | `PlatformError`, `ConfigValidationError`, `ConfigNotFoundError`, `ConfigParseError`, ... | все Python-модули |
 | `llm_paths.py` | Единый источник пути litellm-config.yml (DevPlan 118 C6 — заменяет 4 копии вывода + 1 шаблон: context_deployer, deploy_orchestrator, llm_provision, phases, config_renderer) | `litellm_config_path(core_dir)`, `litellm_template_path(core_dir)` | context_deployer, deploy_orchestrator, llm_provision, phases, config_renderer |
 | `module_interface.py` | Единая bash-обёртка invoke_module_interface (DevPlan 118 C5 — дедупликация docker_orchestrator._invoke_healthcheck_full + deploy_orchestrator._invoke_module_interface; **вход для B8 wire module-hooks**) | `invoke(module, interface, *args, timeout=...) → (bool, output)` | docker_orchestrator, deploy_orchestrator |
@@ -52,7 +55,6 @@
 | `schema_validator.py` | Единый schema-валидатор YAML↔JSON-Schema (draft-07) — единственная Draft7Validator-точка (DevPlan 116 B6 T5, дедупликация jsonschema_validate.py + node_yaml.validate) | `validate_yaml_against_schema()`, `validate_dict_against_schema()` | jsonschema_validate, node_yaml.validate |
 | `secrets_env_parser.py` | Единый парсер secrets.env (заменяет 7 inline-парсеров) | `parse()`, `write()`, `merge()`, `export_shell()` | decrypt-secrets, secrets-init, bootstrap |
 | `secrets_manifest_reader.py` | Строгий ридер secrets-manifest.yaml (заменяет 3 парсера с разными graceful-degradation семантиками; отсутствие = громкий fail, не silent `[]`) — DevPlan 116 T4, U-33/U-43 | `iter_secrets()`, `tier()`, `consumers()`, `charset()`, `gen_command()` | secrets_manager, secrets_validator |
-| `ssh_command_parser.py` | Парсер SSH_ORIGINAL_COMMAND (заменяет 2 дублирующихся парсера) | `parse_ssh_command()`, `classify_verb()` | deploy forced-command, deploy.sh |
 | `ssh_opts.py` | Единый SoT SSH-флагов (DevPlan 116 B5 T2, D1 — заменяет 5 Python-копий «SSH_OPTS» + shell lib/ssh.sh фасад) | `SSH_OPTS`, `build_rsync_ssh_opts()`, CLI `--shell`/`--rsync-e` | core_deliverer, overlay_deliverer, remote_executor, channels ×2, lib/ssh.sh (python3 -m) |
 | `ssl_certs.py` | Единый SoT openssl x509-примитивов (DevPlan 117 D21 + 118 C9 — дедупликация s3_ssl_cache._validate_cert + cert_orchestrator._is_cert_valid/_is_le_issuer; C9: cert_is_valid() единая комбинация parseable+LE+domain+expiry) | `cert_is_parseable()`, `cert_check_expiry()`, `cert_get_issuer()`, `cert_get_subject()`, `cert_is_le_issuer()`, `cert_subject_matches_domain()`, `cert_is_valid()`, `DEFAULT_OPENSSL_TIMEOUT=10`, `DEFAULT_EXPIRY_THRESHOLD=2592000` | s3_ssl_cache, cert_orchestrator, context_deployer |
 | `stub_detection.py` | Единая is_stub-детекция ai-platform.yaml (DevPlan 116 B9 T4, U-28 — консолидирует дубль reconciler_projects + converge/reconciler) | `is_stub_ai_platform_yaml(path)` | reconciler_projects (wrapper is_stub_project), converge/projects (R3) |
@@ -60,7 +62,7 @@
 | `telegram_notifier.py` | Единый Telegram-клиент (заменяет 6 реализаций: 3 shell + 3 Python) | `send_telegram()` | notify-hook, hermes-agent, deploy |
 | `timeouts.py` | Единый реестр таймаутов операционных политик (DevPlan 116 B5 T1, U-11 — единственный источник числовых timeout= в docker/ssh/healthcheck-домене) | `COMPOSE_UP_TIMEOUT`, `PULL_TIMEOUT`, `BUILD_TIMEOUT`, `HEALTHCHECK_POLL_TIMEOUT`, `SSH_CONNECT_TIMEOUT`, `DEPLOY_TIMEOUT`, `SSH_READ_TIMEOUT`, `RETRY_BACKOFF_SECONDS`, `IMAGE_CHECK_TIMEOUT`, `DOCKER_CMD_TIMEOUT`, `DOCKER_STOP_TIMEOUT`, `RSYNC_TIMEOUT`, `RETRY_COUNT` | docker_compose, ssh_opts, channels, docker_orchestrator, deploy_engine, reconciler, context_deployer, remote_executor, overlay_deliverer, context_promoter, orphan_reconciler, deploy_orchestrator |
 | `vps_readiness.py` | VPS pre-flight проверки (SSH, forced-command ping, /opt/projects/, Docker) — Strangler-миграция vps-readiness.sh (DevPlan 105, дедупликация deploy.mk/CI pre-flight) | `check_vps_ready()`, CLI `NODE [--json|--quick]` | deploy.mk pre-flight, deploy-project.yml (через фасад core/lib/vps-readiness.sh) |
-| `verbs.py` | Канонический verb-словарь forced-command диспетчера (DevPlan 116 B1 T1, U-56) — единый источник CANONICAL_VERBS + reserve-имен для проектов | `CANONICAL_VERBS`, `VERB_RESERVE`, `is_verb()`, `validate_not_verb()` | ssh_command_parser (classify_verb), project_registry (validate_project_name), gate канала (T10) |
+| `verbs.py` | Канонический verb-словарь forced-command диспетчера (DevPlan 116 B1 T1, U-56) — единый источник CANONICAL_VERBS + reserve-имен для проектов | `CANONICAL_VERBS`, `VERB_RESERVE`, `is_verb()`, `validate_not_verb()` | deploy/ssh_command_parser (classify_verb, DevPlan 118 D3), project_registry (validate_project_name), gate канала (T10) |
 | `__init__.py` | Пакетный контракт shared-области | — | — |
 
 ## Правила добавления нового модуля

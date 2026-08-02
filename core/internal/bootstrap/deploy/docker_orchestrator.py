@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Docker orchestration functions extracted from deploy-modules.sh: deploy, pull, healthcheck."""
-# GREP_SUMMARY: docker-orchestrator, deploy-docker, compose-up, pre-pull, image-check, wait-readiness, healthcheck, hermes-agent, orphan-reconcile
-# STRUCTURE: ▶ _check_image_exists → deploy_docker_module [resolve_compose → build_args → hermes_special → orphan_reconcile → compose_up] → pre_pull_images → deploy_docker_group [parallel_slot → drain → parallel_healthcheck] → wait_for_readiness [N×invoke_interface] → run_healthcheck [N×retry] → CLI dispatch
+# GREP_SUMMARY: docker-orchestrator, deploy-docker, compose-up, pre-pull, image-check, wait-readiness, healthcheck, hermes-agent, orphan-reconcile, parallel-runner, healthcheck-runner, hermes-workflow, D1
+# STRUCTURE: ▶ _check_image_exists → deploy_docker_module [resolve_compose → build_args → hermes_special → orphan_reconcile → compose_up] → wait_for_readiness [N×invoke_interface] → run_healthcheck [N×retry] → CLI dispatch
 # region MODULE_CONTRACT [DOMAIN(INFRA): bootstrap; CONCEPT(DOCKER): orchestration; TECH(PYTHON): subprocess+argparse+logging]
 ## @purpose  Deploy docker modules via docker compose, pre-pull images, check image existence,
 ##           wait for readiness, and run healthchecks — extracted from deploy-modules.sh.
 ## @scope    Called by deploy-modules.sh (shell façade) and directly via CLI. Covers all Docker
 ##           orchestration responsibilities previously in deploy-modules.sh (1664→<100 LOC after extraction).
+##           DevPlan 118 D1: параллелизм (pre_pull_images, deploy_docker_group, drain) → parallel_runner.py;
+##           healthcheck-инвокации → healthcheck_runner.py; hermes-agent спец-workflow → hermes_workflow.py.
+##           Оркестратор остаётся: роутинг модулей (deploy_docker_module) + CLI (AC-D1 <900 LOC).
 ## @input    CLI: --action {deploy,pre-pull,deploy-group,wait,healthcheck,check-image} with module paths
 ## @output   stdout: LDD logs, healthcheck output; exit code 0/1
 ## @invariants
@@ -17,6 +20,7 @@
 ##   - Hermes-agent L1→L2 build fallback on image 404 (not FAIL — automatic rebuild)
 ##   - Orphan container reconciliation runs PER-MODULE before compose up -d
 ##   - --profile is always passed with module_name for standalone compose file deploy
+##   - Fork-параллелизм и healthcheck — ТОЛЬКО через parallel_runner / healthcheck_runner (D1)
 ## @rationale Q: Why Python, not bash? A: deploy_docker_module has 5+ responsibilities (compose
 ##   resolution, hermes special case, orphan reconcile, env-file building, compose up) — bash
 ##   with nested conditionals made this ~120 LOC of hard-to-test shell. Python with isolated
@@ -24,6 +28,7 @@
 ##   Q: Why subprocess.run for docker? A: docker compose CLI is the supported interface —
 ##   direct Docker SDK calls would diverge from compose file semantics (profile resolution,
 ##   env-file handling, compose interpolation).
+##   DevPlan 118 D1: монолит 1397 LOC → оркестратор <900 (параллелизм/HC/hermes вынесены).
 ## @changes   2026-07-22 · W4-E1 — extracted from deploy-modules.sh deploy_docker_module,
 ##   deploy_docker_group, pre_pull_images, _check_image_exists, wait_for_readiness, run_healthcheck
 ##   2026-07-23 · P0 fix — docker compose build before up -d for modules with build: section
@@ -33,6 +38,9 @@
 ##             into deploy_docker_module() build section for modules with build: section
 ##   2026-07-24 · W5.T5.1 — enhanced HC fork cycle in deploy_docker_group() with per-module
 ##             pass/fail tracking, IMP:9 logs per module, and summary log with failure names
+##   2026-08-02 · DevPlan 118 D1 — pre_pull_images/deploy_docker_group/_drain_* → parallel_runner.py;
+##             wait_for_readiness/run_healthcheck/_invoke_healthcheck* → healthcheck_runner.py;
+##             _handle_hermes_agent → hermes_workflow.py (оркестратор: роутинг + CLI)
 ##
 ## ⚠️ TRAP[DEBT] · 2026-07-22 · P2 · 5 test-side failures in test_docker_orchestrator.py (DevPlan 043-B5)
 ## · Root: mock subprocess.run returns bytes, code expects str via text=True
@@ -48,13 +56,10 @@
 ##   _check_image_exists [W:1] — docker manifest inspect via subprocess → bool
 ##   _resolve_compose_file [W:1] — find compose.yaml → docker-compose.yaml → docker-compose.base.yml in module dir
 ##   _build_compose_args [W:2] — build docker compose arg list from env-files, overlay, --profile
-##   _handle_hermes_agent [W:3] — hermes-agent L1 pull/build fallback, image existence check
 ##   deploy_docker_module [W:5] — deploy single docker module: build (if build:) + compose up -d
-##   _pull_module_images [W:2] — pull images for one module (used by pre_pull_images)
-##   pre_pull_images [W:3] — parallel pre-pull for all docker modules with slot limit
-##   deploy_docker_group [W:4] — parallel deploy with slot limit + parallel healthcheck
-##   wait_for_readiness [W:2] — poll module readiness via invoke_module_interface
-##   run_healthcheck [W:2] — healthcheck with retries via invoke_module_interface
+##   _cleanup_legacy_container [W:1] — hermes-agent legacy container cleanup
+##   _cleanup_observability_containers [W:2] — observability pre-deploy cleanup
+##   _pull_module_images [W:2] — pull images for one module (delegate → parallel_runner.pre_pull_images)
 ##   main [W:2] — CLI entry point with argparse
 ## @usecases
 ##   - deploy-modules.sh → docker_orchestrator.py --action deploy --module-name postgres ...
@@ -64,7 +69,8 @@
 ##   - deploy-modules.sh → docker_orchestrator.py --action healthcheck --module-name postgres
 ##   - deploy-modules.sh → docker_orchestrator.py --action check-image --image-ref ghcr.io/...
 ## @links    CALLED_BY(core/internal/bootstrap/deploy-modules.sh), DEPENDS_ON(core/lib/module-interface.sh),
-##           RELATED(core/internal/bootstrap/deploy/orphan_reconciler.py)
+##           RELATED(core/internal/bootstrap/deploy/orphan_reconciler.py),
+##           SIBLINGS(parallel_runner.py, healthcheck_runner.py, hermes_workflow.py — DevPlan 118 D1)
 # endregion MODULE_CONTRACT
 
 import argparse
@@ -85,11 +91,11 @@ from build_cache import check_build_needed, compute_source_hash, save_build_hash
 
 # DevPlan 117 D18: единый канон orphan-реконсиляции — orphan_reconciler (batch-подход,
 # один docker ps -a). Локальный per-module orphan-cleanup удалён (дубль логики).
-from core.internal.bootstrap.deploy import orphan_reconciler
+# DevPlan 118 D1: healthcheck-инвокации и hermes-workflow вынесены в отдельные модули.
+from core.internal.bootstrap.deploy import healthcheck_runner, hermes_workflow, orphan_reconciler, parallel_runner
 
 # DevPlan 081 Phase C (TASK-081C3): shared audit_logger for JSON-lines audit
 # DRIFT-D6 resolved: unified JSON-lines audit format
-from core.internal.config import platform_config
 from core.internal.shared.audit_logger import write_audit_entry as _shared_write_audit_entry
 
 # DevPlan 079 DRIFT-B6 + 116 B5 T4: shared docker compose operations — ЕДИНСТВЕННЫЙ путь
@@ -104,13 +110,7 @@ from core.internal.shared.docker_compose import (
     docker_compose_config as _shared_docker_compose_config,
 )
 from core.internal.shared.docker_compose import (
-    docker_compose_down as _shared_docker_compose_down,
-)
-from core.internal.shared.docker_compose import (
     docker_compose_up as _shared_docker_compose_up,
-)
-from core.internal.shared.docker_compose import (
-    retry_pull as _shared_retry_pull,
 )
 
 # DevPlan 116 B5 T1: таймауты — единый реестр shared/timeouts.py (U-11, гейт timeout_literals)
@@ -119,18 +119,12 @@ from core.internal.shared.timeouts import (
     COMPOSE_UP_TIMEOUT,
     DOCKER_CMD_TIMEOUT,
     DOCKER_STOP_TIMEOUT,
-    HEALTHCHECK_POLL_INTERVAL,
-    HEALTHCHECK_POLL_MAX_RETRIES,
-    HEALTHCHECK_POLL_TIMEOUT,
-    IMAGE_CHECK_TIMEOUT,
-    PULL_TIMEOUT,
 )
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──
-L1_BASE_IMAGE = "hermes-agent-base"
-GHCR_ORG = os.environ.get("GHCR_ORG", "ghcr.io/tronyx161")
+# DevPlan 118 D1: L1_BASE_IMAGE/GHCR_ORG перенесены в hermes_workflow.py (спец-workflow hermes).
 # DevPlan 118 A2: единый канон списков compose-файлов — shared/compose_files.py (гейт
 # compose_files_sole_path). Локальный COMPOSE_FILENAMES УДАЛЁН (6 копий → 1 SoT).
 from core.internal.shared.compose_files import COMPOSE_FILENAMES as _CANON_COMPOSE_FILENAMES
@@ -140,15 +134,14 @@ from core.internal.shared.compose_files import resolve_compose_file as _resolve_
 from core.internal.shared.compose_profiles import load_profiles as compose_profiles_load_profiles
 
 # DevPlan 118 C5: единая bash-обёртка invoke_module_interface — shared/module_interface.py (вход для B8).
-from core.internal.shared.module_interface import invoke as module_interface_invoke
 
-DEFAULT_PARALLEL_LIMIT = 4
-DEFAULT_READINESS_MAX_ATTEMPTS = 15
-DEFAULT_READINESS_INTERVAL_SEC = 2
-# Healthcheck retry-политика — единый реестр timeouts (DevPlan 117 D32/D34):
-# 20 попыток × 3s = 60s окно (HEALTHCHECK_POLL_TIMEOUT=60 канон)
-DEFAULT_HEALTHCHECK_MAX_RETRIES = HEALTHCHECK_POLL_MAX_RETRIES
-DEFAULT_HEALTHCHECK_RETRY_INTERVAL = HEALTHCHECK_POLL_INTERVAL
+# DevPlan 118 D1: константы параллелизма/healthcheck re-export из parallel_runner / healthcheck_runner
+# (обратная совместимость для deploy_orchestrator.py и тестов).
+DEFAULT_PARALLEL_LIMIT = parallel_runner.DEFAULT_PARALLEL_LIMIT
+DEFAULT_READINESS_MAX_ATTEMPTS = healthcheck_runner.DEFAULT_READINESS_MAX_ATTEMPTS
+DEFAULT_READINESS_INTERVAL_SEC = healthcheck_runner.DEFAULT_READINESS_INTERVAL_SEC
+DEFAULT_HEALTHCHECK_MAX_RETRIES = healthcheck_runner.DEFAULT_HEALTHCHECK_MAX_RETRIES
+DEFAULT_HEALTHCHECK_RETRY_INTERVAL = healthcheck_runner.DEFAULT_HEALTHCHECK_RETRY_INTERVAL
 
 # ⚠️ TRAP[BUG] · 2026-07-31 · P1 · COMPOSE_PROFILES hardcoded here diverged from SoT (U-02)
 # · Symptom: 12-item setdefault (без status-page) vs platform-infra.yaml 13-item env_defaults —
@@ -282,118 +275,17 @@ def _build_compose_args(
 
 
 # region FUNC__handle_hermes_agent
-## @purpose  Handle hermes-agent special case: check image existence, L1 pull from GHCR,
-##           L1→L2 build fallback if image not found. This is a pre-deploy step.
+## @purpose  Handle hermes-agent special case — DevPlan 118 D1: реализация вынесена в
+##           hermes_workflow.handle_hermes_agent (спец-workflow). Тонкий фасад сохраняет
+##           публичное имя для обратной совместимости (тесты, deploy_docker_module).
 ## @io       ⇥ compose_args: list[str], module_dir: str, module_name: str
 ##           ⎋ bool: True if images are ready or built, False on fatal failure
-## @complexity 3 — compose config --images + per-image check + conditional pull/build
+## @complexity 1 — delegate to hermes_workflow
 ## @invariants
-##   - L1 base image is pulled from GHCR first, then built from source if pull fails
-##   - L1→L2 build runs docker compose build with --profile
-##   - Failure to resolve images from compose config is fatal (return False)
-##   - If ALL images exist in registry, returns True immediately (no build needed)
-## @rationale Q: Why automatic build instead of FAIL? A: deploy cycle time — manual
-##   make hermes-build-context adds ~2 min to deploy. Automatic fallback on 404 reduces
-##   deploy cycle from 3 steps to 1, matching the FAIL semantics but avoiding manual work.
-## ⚠️ TRAP[BUG] · 2026-07-17 · P1 · Hardcoded hermes images drifted from compose
-## · Symptom: hermes-agent deployed with stale image (tronyx161/hermes-agent-tronyx-lab:latest
-##   vs tronyxlab/hermes-agent-context:v2026.7.1), no tty/command → restart loop 101 times
-## · Root: hardcoded image names duplicated knowledge — compose and deploy-modules.sh diverged
-## · Fix: derive images from `docker compose config --images` (single source of truth)
-## · Prevention: deploy-modules.sh must NOT hardcode any image names — always resolve from compose
+##   - Вся логика (L1 pull/build fallback) — в hermes_workflow.py (D1)
+##   - Фасад не дублирует логику — только делегирование
 def _handle_hermes_agent(compose_args: list[str], module_dir: str, module_name: str) -> bool:
-    logger.info("[IMP:7][_handle_hermes_agent][start] Handling hermes-agent pre-deploy checks")
-    # ── Resolve actual images from compose config (T4 fix — single source of truth, shared) ──
-    compose_dir = module_dir
-    for i, arg in enumerate(compose_args):
-        if arg == "-f" and i + 1 < len(compose_args):
-            compose_dir = os.path.dirname(compose_args[i + 1])
-            break
-    img_result = _shared_docker_compose_config(
-        compose_dir,
-        compose_args=compose_args,
-        flags=["--images"],
-    )
-    if img_result.returncode != 0:
-        logger.error("[IMP:10][_handle_hermes_agent][config_fail] Failed to resolve images from compose config")
-        return False
-    img_stdout = img_result.stdout
-    if isinstance(img_stdout, bytes):
-        img_stdout = img_stdout.decode("utf-8")
-    hermes_images = [line.strip() for line in img_stdout.splitlines() if line.strip()]
-
-    if not hermes_images:
-        logger.error("[IMP:10][_handle_hermes_agent][no_images] No images resolved from compose config")
-        return False
-
-    # ── Check each image ──
-    all_found = True
-    for img in hermes_images:
-        if not _check_image_exists(img):
-            all_found = False
-            logger.warning(
-                "[IMP:5][_handle_hermes_agent][missing] Pre-built image not found: %s — will build locally", img
-            )
-
-    if all_found:
-        logger.info("[IMP:9][_handle_hermes_agent][all_found] All hermes-agent images found in registry")
-        return True
-
-    # ── Ensure L1 base image exists locally ──
-    try:
-        inspect_result = subprocess.run(
-            ["docker", "image", "inspect", f"{L1_BASE_IMAGE}:latest"],
-            capture_output=True,
-            timeout=IMAGE_CHECK_TIMEOUT,
-        )
-        l1_exists = inspect_result.returncode == 0
-    except OSError:
-        l1_exists = False
-
-    if not l1_exists:
-        logger.info(
-            "[IMP:7][_handle_hermes_agent][l1_missing] L1 base image not found locally — attempting pull from GHCR"
-        )
-        try:
-            pull_result = subprocess.run(
-                ["docker", "pull", f"{GHCR_ORG}/{L1_BASE_IMAGE}:latest"],
-                capture_output=True,
-                timeout=PULL_TIMEOUT,
-            )
-            if pull_result.returncode != 0:
-                logger.warning("[IMP:5][_handle_hermes_agent][l1_pull_fail] L1 pull failed — building L1 from source")
-                # Build L1 from source (shared docker_compose_build — sole path)
-                base_compose = str(Path(module_dir) / "docker-compose.base.yml")
-                l1_ok = _shared_docker_compose_build(
-                    os.path.dirname(base_compose),
-                    timeout=BUILD_TIMEOUT,
-                    compose_args=["-f", base_compose, "--profile", module_name],
-                    flags=[
-                        "--build-arg",
-                        f"CONTEXT={os.environ.get('CONTEXT', platform_config.default_context())}",
-                    ],
-                )
-                if not l1_ok:
-                    logger.error("[IMP:10][_handle_hermes_agent][l1_build_fail] L1 build failed")
-                    return False
-                logger.info("[IMP:9][_handle_hermes_agent][l1_built] L1 built from source")
-            else:
-                logger.info("[IMP:9][_handle_hermes_agent][l1_pulled] L1 pulled from GHCR")
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.error("[IMP:10][_handle_hermes_agent][l1_error] L1 pull/build failed: %s", exc)
-            return False
-
-    # ── Build L1→L2 locally ──
-    logger.info("[IMP:7][_handle_hermes_agent][build] Building hermes-agent L1→L2 locally (fallback)")
-    if not _shared_docker_compose_build(
-        compose_dir,
-        timeout=BUILD_TIMEOUT,
-        compose_args=compose_args,
-    ):
-        logger.error("[IMP:10][_handle_hermes_agent][build_fail] Local L1→L2 build failed")
-        return False
-    logger.info("[IMP:9][_handle_hermes_agent][built] Hermes-agent built locally")
-    return True
+    return hermes_workflow.handle_hermes_agent(compose_args, module_dir, module_name)
 
 
 # endregion FUNC__handle_hermes_agent
@@ -716,19 +608,11 @@ def _cleanup_observability_containers(compose_file: Path) -> None:
 
 
 # region FUNC__pull_module_images
-## @purpose  Pull images for a single docker module via shared docker_compose_pull().
-##           Skips modules that have a local build: section (no registry image).
-## @io       ⇥ mod_name: str, overlay_dir: str | None, secrets_env_file: str | None,
-##           platform_root: str | None, modules_dir: str
-##           ⎋ bool: True if pull succeeded or skipped
-## @complexity 2 — compose file resolution + build: section check + shared pull delegate
-## @invariants
-##   - Module with `build:` section in compose file is SKIPPED (no registry image)
-##   - Missing compose file is SKIPPED (logged, returns True)
-##   - Failure is logged but returns True (non-fatal — compose up retries pull)
-##   - Delegates pull execution to core.internal.shared.docker_compose.docker_compose_pull()
-## @changes 2026-07-26 · DevPlan 079 TASK-9 — Replaced inline subprocess.run with
-##           shared docker_compose_pull(compose_dir, timeout=300, compose_args=pull_args)
+## @purpose  Pull images for a single docker module — DevPlan 118 D1: реализация вынесена в
+##           parallel_runner.pull_module_images (fork-параллелизм). Фасад сохраняет публичное
+##           имя для обратной совместимости (тесты, pre_pull_images re-export).
+## @io       ⇥ mod_name, overlay_dir, secrets_env_file, platform_root, modules_dir → ⎋ bool
+## @complexity 1 — delegate to parallel_runner
 def _pull_module_images(
     mod_name: str,
     overlay_dir: str | None,
@@ -736,60 +620,17 @@ def _pull_module_images(
     platform_root: str | None,
     modules_dir: str,
 ) -> bool:
-    module_dir = os.path.join(modules_dir, mod_name)
-    compose_file = _resolve_compose_file(module_dir)
-    if compose_file is None:
-        logger.info("[IMP:7][_pull_module_images][skip] No compose file for %s — skipping pull", mod_name)
-        return True
-
-    # ── Skip modules with local build: section ──
-    try:
-        content = compose_file.read_text()
-        if "build:" in content:
-            logger.info("[IMP:7][_pull_module_images][skip] Local build detected for %s — skipping pull", mod_name)
-            return True
-    except OSError:
-        pass
-
-    # ── Build pull args and delegate to shared retry_pull (T4.5: retry [5,10,20]) ──
-    pull_args = _build_compose_args(
-        compose_file=compose_file,
-        secrets_env_file=secrets_env_file,
-        platform_root=platform_root,
-        overlay_dir=overlay_dir,
-        module_name=mod_name,
-    )
-    compose_dir = os.path.dirname(str(compose_file))
-    logger.info("[IMP:7][_pull_module_images][pull] Pulling images for %s", mod_name)
-    success = _shared_retry_pull(compose_dir, timeout=PULL_TIMEOUT, compose_args=pull_args)
-    if success:
-        logger.info("[IMP:9][_pull_module_images][done] Images pulled for %s", mod_name)
-    else:
-        logger.warning("[IMP:5][_pull_module_images][fail] Pull failed for %s — compose up will retry", mod_name)
-    return True  # Non-fatal: compose up -d retries pull internally
+    return parallel_runner.pull_module_images(mod_name, overlay_dir, secrets_env_file, platform_root, modules_dir)
 
 
 # endregion FUNC__pull_module_images
 
 
 # region FUNC_pre_pull_images
-## @purpose  Parallel pre-pull of all docker module images BEFORE topo-sorted compose up.
-##           Executes docker compose pull for each module in parallel with slot limiting.
-##           Uses same parallel slot pattern as deploy_docker_group (subprocess PIDs via threading).
-## @io       ⇥ entries: list[str] ("module:overlay" format),
-##           modules_dir: str, secrets_env_file: str | None, platform_root: str | None,
-##           parallel_limit: int
-##           ⎋ tuple[int, int] — (success_count, fail_count)
-## @complexity 3 — parallel dispatch with threading-based slot limiting
-## @invariants
-##   - parallel_limit controls max concurrent pull operations (default 4)
-##   - Pull failure is LOGGED but NOT fatal — compose up -d retries pull internally
-##   - Already-cached images return immediately (docker compose pull is no-op)
-## @rationale Q: Why pull separately from up -d? A: docker compose up -d pulls images
-##   sequentially within each project even when modules are parallel. A dedicated pull
-##   phase batches ALL image downloads at once, utilizing full network bandwidth.
-##   Q: Why non-fatal? A: compose up -d already retries pull — pre-pull is optimization,
-##   not correctness. Failing here and succeeding in up -d is harmless.
+## @purpose  Parallel pre-pull of all docker module images — DevPlan 118 D1: реализация вынесена
+##           в parallel_runner.pre_pull_images (fork-параллелизм). Фасад для обратной совместимости.
+## @io       ⇥ entries, modules_dir, ... → ⎋ tuple[int, int] (success_count, fail_count)
+## @complexity 1 — delegate to parallel_runner
 def pre_pull_images(
     entries: list[str],
     modules_dir: str,
@@ -797,97 +638,24 @@ def pre_pull_images(
     platform_root: str | None = None,
     parallel_limit: int = DEFAULT_PARALLEL_LIMIT,
 ) -> tuple[int, int]:
-    logger.info(
-        "[IMP:7][pre_pull_images][start] Pre-pulling for %d modules (parallel: %d)",
-        len(entries),
+    return parallel_runner.pre_pull_images(
+        entries,
+        modules_dir,
+        secrets_env_file,
+        platform_root,
         parallel_limit,
     )
-    pull_ok = 0
-    pull_fail = 0
-    pids: list[int] = []
-    names: list[str] = []
-
-    for entry in entries:
-        mod_name, _, mod_overlay = entry.partition(":")
-        if not mod_overlay or mod_overlay == mod_name:
-            mod_overlay = ""
-
-        # ── Parallel slot waiter ──
-        while len(pids) >= parallel_limit:
-            for i in range(len(pids) - 1, -1, -1):
-                pid = pids[i]
-                try:
-                    # Non-blocking wait with WNOHANG
-                    wpid, status = os.waitpid(pid, os.WNOHANG)
-                    if wpid == pid:
-                        if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
-                            pull_ok += 1
-                        else:
-                            pull_fail += 1
-                        pids.pop(i)
-                        names.pop(i)
-                except ChildProcessError:
-                    pull_fail += 1
-                    pids.pop(i)
-                    names.pop(i)
-            if len(pids) >= parallel_limit:
-                time.sleep(1)
-
-        # ── Fork subprocess for pull ──
-        pid = os.fork()
-        if pid == 0:
-            # Child process — use os._exit() NOT sys.exit() to avoid pytest
-            # intercepting SystemExit in forked children (SystemExit inherits
-            # BaseException, not Exception, so bare Exception catch misses it)
-            try:
-                success = _pull_module_images(
-                    mod_name, mod_overlay or None, secrets_env_file, platform_root, modules_dir
-                )
-                os._exit(0 if success else 1)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
-                os._exit(1)
-        else:
-            pids.append(pid)
-            names.append(mod_name)
-
-    # ── Drain remaining PIDs ──
-    for i in range(len(pids) - 1, -1, -1):
-        try:
-            _pid, status = os.waitpid(pids[i], 0)
-            if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
-                pull_ok += 1
-            else:
-                pull_fail += 1
-        except ChildProcessError:  # noqa: PERF203
-            pull_fail += 1
-
-    logger.info("[IMP:9][pre_pull_images][done] Pre-pull complete: success=%d failed=%d", pull_ok, pull_fail)
-    return (pull_ok, pull_fail)
 
 
 # endregion FUNC_pre_pull_images
 
 
 # region FUNC_deploy_docker_group
-## @purpose  Deploy a group of docker modules in parallel with slot limiting.
-##           Each module is deployed via deploy_docker_module in a child process.
-##           After all deploys complete, runs healthchecks in parallel for each module.
-## @io       ⇥ entries: list[str] ("module:overlay" format),
-##           modules_dir: str, secrets_env_file: str | None, platform_root: str | None,
-##           parallel_limit: int
-##           ⎋ tuple[int, int, list[str], list[str]] — (deployed, failed, failed_names, rolled_back)
-## @usecases (W5-E1) Atomic rollback: if any module fails, ALL modules in the group are shut down
-##           via docker compose down. Rolled_back list contains names of modules that were
-##           successfully shut down. Healthcheck still runs after rollback to verify recovery.
-## @complexity 4 — parallel deploy with fork-based slot limiting + parallel healthcheck
-## @invariants
-##   - parallel_limit controls max concurrent deploy operations (default 4)
-##   - Healthchecks run AFTER all deploys in the group complete
-##   - Healthcheck failures are logged but do NOT affect deploy return count
-##   - Failed module names are tracked for severity-based exit code aggregation
-## @rationale Q: Why fork() instead of threading? A: Bash uses subshell (& + wait).
-##   Fork-based parallelism preserves the exact same semantics: each deploy has its
-##   own process context, environment isolation, and independent failure handling.
+## @purpose  Deploy a group of docker modules in parallel — DevPlan 118 D1: реализация вынесена
+##           в parallel_runner.deploy_docker_group (fork + atomic rollback + parallel HC).
+##           Фасад сохраняет публичное имя и контракт (deploy_orchestrator.py:477).
+## @io       ⇥ entries, modules_dir, ... → ⎋ tuple[int, int, list[str], list[str]]
+## @complexity 1 — delegate to parallel_runner
 def deploy_docker_group(
     entries: list[str],
     modules_dir: str,
@@ -895,356 +663,98 @@ def deploy_docker_group(
     platform_root: str | None = None,
     parallel_limit: int = DEFAULT_PARALLEL_LIMIT,
 ) -> tuple[int, int, list[str], list[str]]:
-    logger.info(
-        "[IMP:7][deploy_docker_group][start] Deploying %d modules in parallel (limit: %d)",
-        len(entries),
+    return parallel_runner.deploy_docker_group(
+        entries,
+        modules_dir,
+        secrets_env_file,
+        platform_root,
         parallel_limit,
     )
-    pids: list[int] = []
-    pid_to_name: dict[int, str] = {}
-    group_deployed = 0
-    group_failed = 0
-    failed_names: list[str] = []
-
-    for entry in entries:
-        mod_name, _, mod_overlay = entry.partition(":")
-        if not mod_overlay or mod_overlay == mod_name:
-            mod_overlay = ""
-
-        # ── Parallel slot waiter ──
-        while len(pids) >= parallel_limit:
-            deployed, failed, fnames = _drain_completed_count(pids, pid_to_name)
-            group_deployed += deployed
-            group_failed += failed
-            failed_names.extend(fnames)
-            if len(pids) >= parallel_limit:
-                time.sleep(1)
-
-        # ── Fork subprocess for deploy ──
-        pid = os.fork()
-        if pid == 0:
-            # Child process — use os._exit() NOT sys.exit() to avoid pytest
-            # intercepting SystemExit in forked children
-            try:
-                success = deploy_docker_module(
-                    mod_name,
-                    mod_overlay or None,
-                    secrets_env_file,
-                    platform_root,
-                    modules_dir,
-                )
-                os._exit(0 if success else 1)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
-                os._exit(1)
-        else:
-            pids.append(pid)
-            pid_to_name[pid] = mod_name
-
-    # ── Drain remaining PIDs ──
-    d, f, fn = _drain_all_count(pids, pid_to_name)
-    group_deployed += d
-    group_failed += f
-    failed_names.extend(fn)
-
-    all_names = list(pid_to_name.values())
-    logger.info(
-        "[IMP:8][deploy_docker_group][deploy] Deploy phase done: deployed=%d failed=%d total=%d",
-        group_deployed,
-        group_failed,
-        len(all_names),
-    )
-
-    # ── Atomic rollback on failure (W5-E1) — shut down ALL modules in the group ──
-    rolled_back: list[str] = []
-    if group_failed > 0:
-        logger.info(
-            "[IMP:8][deploy_docker_group][rollback] %d module(s) failed — initiating atomic rollback of all %d module(s)",
-            group_failed,
-            len(all_names),
-        )
-        for entry in entries:
-            mod_name, _, _ = entry.partition(":")
-            compose_file = _resolve_compose_file(os.path.join(modules_dir, mod_name))
-            if compose_file:
-                # Shared docker_compose_down — sole path (DevPlan 116 B5 T4)
-                if _shared_docker_compose_down(
-                    str(compose_file.parent),
-                    timeout=DOCKER_STOP_TIMEOUT,
-                    compose_args=["-f", str(compose_file), "--profile", mod_name],
-                ):
-                    rolled_back.append(mod_name)
-                    logger.info("[IMP:8][deploy_docker_group][rollback] Module shut down: %s", mod_name)
-                else:
-                    logger.warning("[IMP:5][deploy_docker_group][rollback] Failed to shut down %s", mod_name)
-        logger.info(
-            "[IMP:9][deploy_docker_group][rollback] Atomic rollback: %d modules rolled back: %s",
-            len(rolled_back),
-            rolled_back,
-        )
-
-    # ── Parallel healthcheck (T5.1) — fork-per-module after deploy drain ──
-    # Runs healthcheck on ALL modules in the group (both deployed and failed)
-    # using the same fork pattern as the deploy phase. Failures are collected
-    # (not blocking) for post-deploy summary.
-    hc_pids: list[int] = []
-    hc_names: list[str] = []
-    hc_pass_count = 0
-    hc_fail_count = 0
-    hc_fail_names: list[str] = []
-
-    logger.info("[IMP:7][deploy_docker_group][hc_start] Running healthchecks for %d modules", len(all_names))
-    for mod_name in all_names:
-        pid = os.fork()
-        if pid == 0:
-            # Child process — use os._exit() to avoid SystemExit in forked children
-            try:
-                success = run_healthcheck(mod_name, "docker")
-                os._exit(0 if success else 1)
-            except Exception:  # noqa: EXC — forked child: catch all to prevent base exception propagation (best-effort: DEPLOY_BEST_EFFORT policy)
-                os._exit(1)
-        else:
-            hc_pids.append(pid)
-            hc_names.append(mod_name)
-
-    # Drain HC children and track per-module results
-    for i in range(len(hc_pids) - 1, -1, -1):
-        try:
-            _wpid, status = os.waitpid(hc_pids[i], 0)
-            mod_name = hc_names[i]
-            if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
-                hc_pass_count += 1
-                logger.info("[IMP:9][deploy_docker_group][hc_pass] Healthcheck PASS for %s", mod_name)
-            else:
-                hc_fail_count += 1
-                hc_fail_names.append(mod_name)
-                logger.warning("[IMP:5][deploy_docker_group][hc_fail] Healthcheck FAIL for %s", mod_name)
-        except ChildProcessError:  # noqa: PERF203
-            hc_fail_count += 1
-            hc_fail_names.append(hc_names[i])
-            logger.warning("[IMP:5][deploy_docker_group][hc_error] Healthcheck error for %s", hc_names[i])
-
-    if hc_fail_count > 0:
-        logger.warning(
-            "[IMP:5][deploy_docker_group][hc_summary] Healthcheck: %d passed, %d failed: %s",
-            hc_pass_count,
-            hc_fail_count,
-            hc_fail_names,
-        )
-    else:
-        logger.info(
-            "[IMP:9][deploy_docker_group][hc_summary] Healthcheck: ALL %d modules PASSED",
-            hc_pass_count,
-        )
-
-    logger.info(
-        "[IMP:9][deploy_docker_group][done] Group complete: deployed=%d failed=%d names=%s rolled_back=%d hc_fail=%d",
-        group_deployed,
-        group_failed,
-        failed_names,
-        len(rolled_back),
-        hc_fail_count,
-    )
-    return (group_deployed, group_failed, failed_names, rolled_back)
 
 
 # endregion FUNC_deploy_docker_group
 
 
 # region FUNC__drain_completed_count
-## @purpose  Non-blocking drain of completed child processes, returning success/fail counts.
-##           Used by deploy_docker_group slot-waiter loop to free slots and track results.
-## @io       ⇥ pids: list[int] (mutated in place), pid_to_name: dict[int, str] (mutated)
-##           ⎋ tuple[int, int, list[str]] — (success_count, fail_count, fail_names)
+## @purpose  Non-blocking drain — DevPlan 118 D1: реализация в parallel_runner.drain_completed_count.
+## @io       ⇥ pids, pid_to_name → ⎋ tuple[int, int, list[str]]
+## @complexity 1 — delegate
 def _drain_completed_count(
     pids: list[int],
     pid_to_name: dict[int, str],
 ) -> tuple[int, int, list[str]]:
-    deployed = 0
-    failed = 0
-    failed_names: list[str] = []
-    for i in range(len(pids) - 1, -1, -1):
-        try:
-            wpid, status = os.waitpid(pids[i], os.WNOHANG)
-            if wpid == pids[i]:
-                mod_name = pid_to_name.pop(pids[i], "?")
-                if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
-                    deployed += 1
-                else:
-                    failed += 1
-                    failed_names.append(mod_name)
-                pids.pop(i)
-        except ChildProcessError:  # noqa: PERF203
-            mod_name = pid_to_name.pop(pids[i], "?")
-            failed += 1
-            failed_names.append(mod_name)
-            pids.pop(i)
-    return (deployed, failed, failed_names)
+    return parallel_runner.drain_completed_count(pids, pid_to_name)
 
 
 # endregion FUNC__drain_completed_count
 
 
 # region FUNC__drain_all_count
-## @purpose  Blocking drain of all remaining child processes with result tracking.
-## @io       ⇥ pids: list[int] (cleared), pid_to_name: dict[int, str] (cleared)
-##           ⎋ tuple[int, int, list[str]] — (success_count, fail_count, fail_names)
+## @purpose  Blocking drain — DevPlan 118 D1: реализация в parallel_runner.drain_all_count.
+## @io       ⇥ pids, pid_to_name → ⎋ tuple[int, int, list[str]]
+## @complexity 1 — delegate
 def _drain_all_count(
     pids: list[int],
     pid_to_name: dict[int, str],
 ) -> tuple[int, int, list[str]]:
-    deployed = 0
-    failed = 0
-    failed_names: list[str] = []
-    for i in range(len(pids) - 1, -1, -1):
-        try:
-            os.waitpid(pids[i], 0)
-            mod_name = pid_to_name.pop(pids[i], "?")
-            # Success — waitpid returned without error means process exited
-            deployed += 1
-        except ChildProcessError:  # noqa: PERF203
-            mod_name = pid_to_name.pop(pids[i], "?")
-            failed += 1
-            failed_names.append(mod_name)
-    pids.clear()
-    return (deployed, failed, failed_names)
+    return parallel_runner.drain_all_count(pids, pid_to_name)
 
 
 # endregion FUNC__drain_all_count
 
 
 # region FUNC_wait_for_readiness
-## @purpose  Poll module readiness via invoke_module_interface healthcheck readiness.
-##           Retries up to max_attempts times with interval_sec between attempts.
-##           Timeout is non-fatal (logged WARN) — container may still be starting.
-## @io       ⇥ module_name: str, max_attempts: int, interval_sec: int
-##           ⎋ bool: True if readiness check passed
-## @complexity 2 — polling loop with subprocess calls
-## @invariants
-##   - Uses invoke_module_interface (bash) to call module/healthcheck.sh readiness
-##   - The shell script must be sourceable with paths.sh and module-interface.sh
-##   - Non-zero return from healthcheck.sh means "not ready yet" — retry
-##   - Timeout returns False but does NOT raise — caller decides next action
+## @purpose  Poll module readiness — DevPlan 118 D1: реализация вынесена в
+##           healthcheck_runner.wait_for_readiness. Фасад сохраняет публичное имя.
+## @io       ⇥ module_name, max_attempts, interval_sec → ⎋ bool
+## @complexity 1 — delegate to healthcheck_runner
 def wait_for_readiness(
     module_name: str,
     max_attempts: int = DEFAULT_READINESS_MAX_ATTEMPTS,
     interval_sec: int = DEFAULT_READINESS_INTERVAL_SEC,
 ) -> bool:
-    logger.info(
-        "[IMP:7][wait_for_readiness][start] Waiting for %s readiness (%d attempts, %ds interval)",
-        module_name,
-        max_attempts,
-        interval_sec,
-    )
-    for attempt in range(max_attempts):
-        if _invoke_healthcheck(module_name, "readiness"):
-            logger.info(
-                "[IMP:9][wait_for_readiness][ready] Module %s ready after %d attempts",
-                module_name,
-                attempt + 1,
-            )
-            return True
-        if attempt < max_attempts - 1:
-            time.sleep(interval_sec)
-
-    logger.warning(
-        "[IMP:5][wait_for_readiness][timeout] Readiness timeout for %s after %d attempts — continuing (non-fatal)",
-        module_name,
-        max_attempts,
-    )
-    return False
+    return healthcheck_runner.wait_for_readiness(module_name, max_attempts, interval_sec)
 
 
 # endregion FUNC_wait_for_readiness
 
 
 # region FUNC_run_healthcheck
-## @purpose  Run healthcheck for a module via invoke_module_interface healthcheck liveness.
-##           Retries up to max_retries times with retry_interval between attempts.
-##           Failure is non-fatal (logged WARN) — module may still function.
-## @io       ⇥ module_name: str, install_type: str, max_retries: int, retry_interval: int
-##           ⎋ bool: True if healthcheck passed
-## @complexity 2 — retry loop with subprocess calls
-## @invariants
-##   - Uses invoke_module_interface (bash) to call module/healthcheck.sh liveness
-##   - First failure logs DIAG with healthcheck stderr for debugging
-##   - Failure after max_retries returns False — caller decides severity
+## @purpose  Run healthcheck — DevPlan 118 D1: реализация вынесена в
+##           healthcheck_runner.run_healthcheck. Фасад сохраняет публичное имя.
+## @io       ⇥ module_name, install_type, max_retries, retry_interval → ⎋ bool
+## @complexity 1 — delegate to healthcheck_runner
 def run_healthcheck(
     module_name: str,
     install_type: str,
     max_retries: int = DEFAULT_HEALTHCHECK_MAX_RETRIES,
     retry_interval: int = DEFAULT_HEALTHCHECK_RETRY_INTERVAL,
 ) -> bool:
-    logger.info("[IMP:7][run_healthcheck][start] Healthcheck for %s (%s)", module_name, install_type)
-    last_output = ""
-    for attempt in range(max_retries):
-        success, output = _invoke_healthcheck_full(module_name, "liveness")
-        if success:
-            logger.info(
-                "[IMP:9][run_healthcheck][pass] Healthcheck PASS for %s (attempt %d/%d)",
-                module_name,
-                attempt + 1,
-                max_retries,
-            )
-            return True
-
-        last_output = output
-        if attempt == 0:
-            logger.info("[IMP:8][run_healthcheck][diag] Healthcheck stderr: %s", output[:300] if output else "(none)")
-
-        if attempt < max_retries - 1:
-            logger.info(
-                "[IMP:8][run_healthcheck][retry] Healthcheck attempt %d/%d failed for %s, retrying in %ds",
-                attempt + 1,
-                max_retries,
-                module_name,
-                retry_interval,
-            )
-            time.sleep(retry_interval)
-
-    logger.warning(
-        "[IMP:5][run_healthcheck][fail] Healthcheck FAILED for %s after %d attempts (last: %s)",
-        module_name,
-        max_retries,
-        last_output[:200] if last_output else "",
-    )
-    return False
+    return healthcheck_runner.run_healthcheck(module_name, install_type, max_retries, retry_interval)
 
 
 # endregion FUNC_run_healthcheck
 
 
 # region FUNC__invoke_healthcheck
-## @purpose  Call invoke_module_interface for healthcheck (readiness or liveness) via bash.
-##           Returns True on zero exit code.
-## @io       ⇥ module_name: str, check_type: str ("readiness" | "liveness")
-##           ⎋ bool: True if check passed
-## @complexity 1 — single subprocess call
-## @invariants
-##   - Paths.sh must be sourceable (PATHS_MODULES_DIR for module resolution)
-##   - module-interface.sh must be sourceable (provides invoke_module_interface)
-##   - stderr is captured and logged at IMP:8 on failure
+## @purpose  Call invoke_module_interface for healthcheck — DevPlan 118 D1: реализация в
+##           healthcheck_runner.invoke_healthcheck. Фасад сохраняет публичное имя.
+## @io       ⇥ module_name, check_type → ⎋ bool
+## @complexity 1 — delegate
 def _invoke_healthcheck(module_name: str, check_type: str) -> bool:
-    success, _ = _invoke_healthcheck_full(module_name, check_type)
-    return success
+    return healthcheck_runner.invoke_healthcheck(module_name, check_type)
 
 
 # endregion FUNC__invoke_healthcheck
 
 
 # region FUNC__invoke_healthcheck_full
-## @purpose  Call invoke_module_interface for healthcheck via shared/module_interface.invoke (C5).
-##           Returns (bool, str) tuple with success flag and stderr output.
-## @io       ⇥ module_name: str, check_type: str ("readiness" | "liveness")
-##           ⎋ tuple[bool, str] — (success, stderr_output)
-## @complexity 1 — single subprocess call (делегирование в shared, DevPlan 118 C5)
+## @purpose  Call invoke_module_interface for healthcheck — DevPlan 118 D1: реализация в
+##           healthcheck_runner.invoke_healthcheck_full (делегирует в shared/module_interface, C5).
+## @io       ⇥ module_name, check_type → ⎋ tuple[bool, str]
+## @complexity 1 — delegate
 def _invoke_healthcheck_full(module_name: str, check_type: str) -> tuple[bool, str]:
-    # C5: единая bash-обёртка shared/module_interface.invoke (timeout — канон HEALTHCHECK_POLL_TIMEOUT)
-    return module_interface_invoke(
-        module_name,
-        "healthcheck",
-        check_type,
-        timeout=HEALTHCHECK_POLL_TIMEOUT,
-    )
+    return healthcheck_runner.invoke_healthcheck_full(module_name, check_type)
 
 
 # endregion FUNC__invoke_healthcheck_full

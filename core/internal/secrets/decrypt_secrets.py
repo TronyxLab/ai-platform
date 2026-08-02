@@ -41,7 +41,7 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
-# ── sys.path bootstrap: root (канонические core.* импорты) + shared dir (age_key) ──
+# ── sys.path bootstrap: root (канонические core.* импорты) ──
 # ⚠️ TRAP[BUG] · 2026-08-01 · P1 · dual-module loading: `from exceptions import ...` (shim-имя) vs
 # · `from core.internal.shared.exceptions import ...` создают ДВА разных класса PlatformFatalError
 # · (Python кэширует модули по имени, не по файлу) → pytest.raises(PlatformFatalError) не ловит.
@@ -53,18 +53,13 @@ _PLATFORM_ROOT = os.path.join(
 if _PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, _PLATFORM_ROOT)
 
-_SHARED_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "shared",
-)
-if _SHARED_DIR not in sys.path:
-    sys.path.insert(0, _SHARED_DIR)
-
 import contextlib
 
-from age_key import detect_age_key as _detect_age_key_impl
-
 from core.internal.shared.exceptions import PlatformError, PlatformFatalError
+
+# DevPlan 118 D3: age_key.py (compat-шим) УДАЛЁН — детекция AGE-ключа делегируется
+# напрямую в канонический node_detect.py (DevPlan 104). sys.path-хак на shared/ убран.
+from core.internal.shared.node_detect import detect_age_key as _detect_age_key_impl
 
 # ── Global cleanup state ───────────────────────────────────────────────────────
 _TEMP_FILES: list[str] = []
@@ -131,13 +126,15 @@ signal.signal(signal.SIGINT, _signal_handler)
 
 
 # region FUNC_detect_age_key
-## @purpose — Detect AGE secret key. Wraps shared age_key.detect_age_key() and
+## @purpose — Detect AGE secret key. Wraps shared node_detect.detect_age_key() and
 ##            raises RuntimeError (fail-fast) if key not found through any mechanism.
 ## @io — ⇥ None → ⎋ str (the key) | raises RuntimeError
-## @complexity — O(1) — delegates to age_key.detect_age_key()
+## @complexity — O(1) — delegates to node_detect.detect_age_key()
 ## @invariants
 ##   - RuntimeError raised if no key found (never silently returns None)
 ##   - Key masked to first 8 chars in logs
+## @rationale DevPlan 118 D3: age_key.py compat-шим удалён — прямое делегирование в node_detect
+##            (единственный источник детекции, DevPlan 104). sys.path-хак на shared/ устранён.
 def detect_age_key() -> str:
     """Detect AGE secret key from env chain. Raises RuntimeError if not found."""
     logger.info("[IMP:8][detect_age_key] Detecting AGE secret key from env chain")

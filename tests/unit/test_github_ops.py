@@ -13,10 +13,13 @@
 ## @changes  2026-08-01 · DevPlan 117 G T58.1 — created
 # endregion MODULE_CONTRACT
 
+import logging
 from pathlib import Path
 from unittest import mock
 
 from core.internal.scaffold.github_ops import create_github_repo
+
+logger = logging.getLogger(__name__)
 
 
 class TestCreateGithubRepo:
@@ -160,3 +163,38 @@ class TestCreateGithubRepo:
 
         assert result is True
         assert any("Failed to create GitHub repo" in r.message for r in caplog.records)
+
+
+# ── R5 ANTI-SURVIVORSHIP (DevPlan 118 D5) ─────────────────────────────────────
+# Волна 117 G T58.1: реализация create_github_repo извлечена в github_ops.py,
+# project_scaffolder.create_github_repo стал lazy-facade (0 дублей). DevPlan 118 D5
+# верифицирует: дублирующая реализация НЕ должна вернуться в project_scaffolder.
+
+
+# 🧪 TRAP[TEST] · 2026-08-02 · R5 NEGATIVE · create_github_repo дубль в project_scaffolder
+# · Last fail: add-project.sh:591-628 — локальная реализация gh/git-логики в scaffolder
+# · Remove if: github_ops.py удаляется (тогда delegator тоже должен быть удалён)
+def test_project_scaffolder_no_duplicate_github_repo_impl(caplog) -> None:
+    """project_scaffolder.create_github_repo — lazy facade, НЕ дублирующая реализация (D5)."""
+    import inspect
+
+    import core.internal.scaffold.project_scaffolder as ps
+
+    caplog.set_level(0)
+
+    logger.info("[IMP:7][test_github_ops][R5] Scanning project_scaffolder for duplicate gh/git logic")
+    src = inspect.getsource(ps.create_github_repo)
+
+    # Facade должен делегировать в github_ops (lazy import)…
+    assert "from core.internal.scaffold.github_ops import create_github_repo" in src, (
+        "D5 regression: project_scaffolder.create_github_repo не делегирует в github_ops"
+    )
+    # …и НЕ содержать локальную gh/git-реализацию (дубль удалён в 117 G T58.1).
+    # Docstring-инварианты фасада упоминают "gh not found" (документация graceful-skip) —
+    # проверяем ИСПОЛНЯЕМУЮ часть (тело функции), а не комментарии.
+    body = src.split('"""')[1] if '"""' in src else src  # после docstring
+    body = body.split("from core.internal.scaffold.github_ops")[0]  # до lazy import
+    assert "subprocess" not in body and "shutil" not in body, (
+        "D5 regression: локальная gh-реализация (subprocess/shutil) вернулась в project_scaffolder"
+    )
+    logger.info("[IMP:9][test_github_ops][R5] PASS: project_scaffolder — чистый lazy facade (0 дублей)")

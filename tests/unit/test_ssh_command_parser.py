@@ -2,7 +2,7 @@
 # GREP_SUMMARY: test-ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes
 # STRUCTURE: ┌direct calls (no mock/no FS)┐ → ○ test scenarios: strip → classify → parse → CLI → unknown
 # region MODULE_CONTRACT
-## @purpose  Unit tests for core/internal/shared/ssh_command_parser.py
+## @purpose  Unit tests for core/internal/deploy/ssh_command_parser.py
 ##           Pure string-parsing tests — no filesystem, no subprocess.
 ##           DevPlan 116 B1 T1 (D2): exact-match семантика, unknown → ConfigValidationError,
 ##           platform-deploy/platform-deliver legacy-кейсы удалены.
@@ -26,12 +26,12 @@ from unittest.mock import patch
 
 import pytest
 
-from core.internal.shared.exceptions import ConfigValidationError
-from core.internal.shared.ssh_command_parser import (
+from core.internal.deploy.ssh_command_parser import (
     _strip_prefixes,
     classify_verb,
     parse_ssh_command,
 )
+from core.internal.shared.exceptions import ConfigValidationError
 
 # ── _strip_prefixes tests ─────────────────────────────────────────────────────
 
@@ -433,7 +433,7 @@ def test_parse_preserves_raw() -> None:
 # · Remove if: CLI interface or _cli_main changes
 def test_cli_parse() -> None:
     """CLI parse mode outputs JSON."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "parse", "/opt/platform/core/entrypoints/deploy.sh receive my-project sha"]
     with patch.object(sys, "argv", test_args), patch("sys.stderr"), contextlib.suppress(SystemExit):
@@ -450,7 +450,7 @@ def test_cli_parse() -> None:
 # · Remove if: CLI interface or _cli_main changes
 def test_cli_classify() -> None:
     """CLI classify mode prints verb string."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "classify", "remove my-project"]
     stdout_lines: list[str] = []
@@ -474,7 +474,7 @@ def test_cli_classify() -> None:
 # · Remove if: CLI parse JSON format changes
 def test_cli_parse_json_output() -> None:
     """CLI parse mode produces valid JSON."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "parse", "ping"]
     stdout_lines: list[str] = []
@@ -503,7 +503,7 @@ def test_cli_parse_json_output() -> None:
 # · Remove if: CLI argument parsing changes
 def test_cli_no_args() -> None:
     """CLI with no arguments exits with code 1."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py"]
     captured_stderr: list[str] = []
@@ -531,7 +531,7 @@ def test_cli_no_args() -> None:
 # · Remove if: CLI mode dispatch changes
 def test_cli_invalid_mode() -> None:
     """CLI with unknown mode exits with code 1."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "unknown", "arg"]
     with (
@@ -550,7 +550,7 @@ def test_cli_invalid_mode() -> None:
 # · Remove if: --format lines output format changes
 def test_cli_parse_format_lines() -> None:
     """CLI --format lines parse outputs verb/args/cleaned on separate lines."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = [
         "ssh_command_parser.py",
@@ -583,7 +583,7 @@ def test_cli_parse_format_lines() -> None:
 # · Remove if: --format lines output format changes
 def test_cli_parse_format_lines_ping() -> None:
     """CLI --format lines parse ping — args is empty string."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "--format", "lines", "parse", "ping"]
     stdout_lines: list[str] = []
@@ -610,7 +610,7 @@ def test_cli_parse_format_lines_ping() -> None:
 # · Remove if: --format lines error handling changes
 def test_cli_parse_format_lines_empty() -> None:
     """CLI --format lines parse empty command exits 4."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "--format", "lines", "parse", ""]
     stdout_lines: list[str] = []
@@ -638,7 +638,7 @@ def test_cli_parse_format_lines_empty() -> None:
 # · Remove if: --format argument parsing changes
 def test_cli_format_lines_unknown_format() -> None:
     """CLI --format unknown exits 1."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "--format", "xml", "parse", "ping"]
     with (
@@ -657,7 +657,7 @@ def test_cli_format_lines_unknown_format() -> None:
 # · Remove if: CLI unknown-verb handling changes
 def test_cli_parse_unknown_verb() -> None:
     """CLI parse with unknown verb exits 4 with JSON error."""
-    from core.internal.shared.ssh_command_parser import _cli_main
+    from core.internal.deploy.ssh_command_parser import _cli_main
 
     test_args = ["ssh_command_parser.py", "parse", "deploy my-project abc123"]
     stdout_lines: list[str] = []

@@ -2,7 +2,7 @@
 # GREP_SUMMARY: test-shared-ssh-command-parser, parse-ssh-command, classify-verb, strip-prefixes, forced-command
 # STRUCTURE: ▶ 10 test scenarios ┌parse + classify + strip + error + unknown┐ → ○ caplog LDD IMP:9 verification → ⊕ TRAP[TEST] → ⎋
 # region MODULE_CONTRACT
-## @purpose  Unit tests for core/internal/shared/ssh_command_parser.py — pure string-parsing
+## @purpose  Unit tests for core/internal/deploy/ssh_command_parser.py — pure string-parsing
 ##           tests covering parse_ssh_command and classify_verb public API (DevPlan 116 B1 T1).
 ##           Exact-match семантика (D2): голые verb'ы классифицируются, unknown → ConfigValidationError,
 ##           platform-deploy strip удалён. Verb-словарь — shared/verbs.py.
@@ -25,8 +25,8 @@ import logging
 
 import pytest
 
+from core.internal.deploy.ssh_command_parser import classify_verb, parse_ssh_command
 from core.internal.shared.exceptions import ConfigValidationError
-from core.internal.shared.ssh_command_parser import classify_verb, parse_ssh_command
 
 # ── LDD helper ─────────────────────────────────────────────────────────────────
 

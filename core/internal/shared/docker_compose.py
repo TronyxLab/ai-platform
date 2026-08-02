@@ -679,3 +679,29 @@ def check_image_exists(image_ref: str, timeout: int = IMAGE_CHECK_TIMEOUT) -> bo
 
 
 # endregion FUNC_check_image_exists
+
+
+# region FUNC_nginx_reload
+## @purpose  Reload nginx container via docker exec (DevPlan 118 D6). Единый фасад nginx-reload
+##           в shared-слое — ранее docker exec вызывался инлайн в context_deployer.deploy_context
+##           (god-function, теперь _step_nginx_reload). Устраняет дубль docker CLI вызова.
+## @io       ⇥ container: str = "nginx", timeout: int = DOCKER_CMD_TIMEOUT → ⎋ None (side-effect: reload)
+## @complexity — O(1) — single subprocess call
+## @invariants
+##   - docker exec nginx nginx -s reload (non-fatal контракт: caller решает severity)
+##   - timeout — из shared/timeouts (DOCKER_CMD_TIMEOUT)
+##   - Raises subprocess.TimeoutExpired/OSError/FileNotFoundError — caller (шаг D6) ловит
+def nginx_reload(container: str = "nginx", timeout: int = DOCKER_CMD_TIMEOUT) -> None:
+    """Reload nginx container via docker exec (shared facade, DevPlan 118 D6)."""
+    logger.info("[IMP:7][nginx_reload] Reloading nginx container: %s", container)
+    subprocess.run(
+        ["docker", "exec", container, "nginx", "-s", "reload"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    logger.info("[IMP:9][nginx_reload] nginx reload executed: %s", container)
+
+
+# endregion FUNC_nginx_reload

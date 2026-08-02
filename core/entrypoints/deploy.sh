@@ -19,7 +19,7 @@
 ##   - Backward compatible: legacy <project> <sha> [env] works unchanged (K1)
 ##   - All verbs dispatched to DeployOrchestrator CLI (orchestrator_cli.py)
 ##   - "remove" never contains --purge or volume destruction (O7)
-##   - Parsing delegated to core.internal.shared.ssh_command_parser.parse_ssh_command()
+##   - Parsing delegated to core.internal.deploy.ssh_command_parser.parse_ssh_command()
 ## @rationale Single entrypoint for all deploy verbs — no second SSH user (DD12)
 ## @changes 2026-07-17 · T6 — Added verb contract K1 (remove/status dispatch)
 ##           2026-07-21 · W3: status verb passes --stub-aware to orchestrator_cli
@@ -124,7 +124,7 @@ _dispatch_verb() {
 # region FUNC_parse_verb
 ## @purpose  Orchestrate SSH_ORIGINAL_COMMAND parsing via shared ssh_command_parser.
 ##           Phase B (DevPlan 081 TASK-081B7): strip+classify replaced by:
-##             python3 -m core.internal.shared.ssh_command_parser --format lines parse "$raw"
+##             python3 -m core.internal.deploy.ssh_command_parser --format lines parse "$raw"
 ##           --format lines outputs verb/args/cleaned each on own line, eliminating
 ##           the need for inline python3 -c JSON parsing.
 ## @param $@ CLI arguments (fallback if SSH_ORIGINAL_COMMAND not set)
@@ -153,7 +153,7 @@ parse_verb() {
     # Uses --format lines to output verb/args/cleaned each on own line,
     # eliminating the need for inline python3 -c JSON parsing (DevPlan 081 AC7).
     local verb args cleaned lines_output
-    lines_output=$(python3 -m core.internal.shared.ssh_command_parser --format lines parse "$raw") || {
+    lines_output=$(python3 -m core.internal.deploy.ssh_command_parser --format lines parse "$raw") || {
         log_imp 10 "entrypoint" "FATAL: ssh_command_parser --format lines failed"
         exit 1
     }

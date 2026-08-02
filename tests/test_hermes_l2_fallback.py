@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # GREP_SUMMARY: hermes-agent, L2, fallback, deploy-modules, pull-or-build, docker-compose-build, 404-build
-# STRUCTURE: ▶ static_audit(:grep docker_orchestrator.py fallback pattern) → ▶ hermes_pull_success(:docker manifest inspect alpine) → ▶ hermes_404_build(:compose build on non-existent) → ▶ hermes_build_fail(:broken dockerfile) → ▶ hermes_no_images(:profile mismatch compose)
+# STRUCTURE: ▶ static_audit(:grep hermes_workflow.py fallback pattern, D1) → ▶ hermes_pull_success(:docker manifest inspect alpine) → ▶ hermes_404_build(:compose build on non-existent) → ▶ hermes_build_fail(:broken dockerfile) → ▶ hermes_no_images(:profile mismatch compose)
 # region MODULE_CONTRACT
 ## @purpose  Tests for Wave 4 — Hermes-agent L2 pre-built with fallback (pull-or-build).
-##           Verifies that docker_orchestrator.py (_handle_hermes_agent) replaces FAIL with
+##           Verifies that hermes_workflow.py (handle_hermes_agent, DevPlan 118 D1) replaces FAIL with
 ##           fallback build when hermes-agent pre-built images are not found in registry.
-## @scope    Static audit (no Docker): grep docker_orchestrator.py for WARN/BUILD/TRAP patterns.
+## @scope    Static audit (no Docker): grep hermes_workflow.py for WARN/BUILD/TRAP patterns.
 ##           Integration (Docker required): create temp compose files and test each fallback
 ##           scenario using real Docker CLI: pull success, 404→build, build failure, no images.
 ## @invariants
@@ -19,7 +19,7 @@
 ##             the deploy-blocking manual build step. DevPlan 024 Wave 4.
 ## @changes    2026-07-21 — initial creation for DevPlan 024 Wave 4
 ## @modulemap
-##   test_hermes_fallback_code_present     [W:1] — static: grep docker_orchestrator.py (no Docker)
+##   test_hermes_fallback_code_present     [W:1] — static: grep hermes_workflow.py (no Docker)
 ##   test_hermes_pull_success              [W:3] — integration: docker manifest inspect success
 ##   test_hermes_pull_404_build            [W:3] — integration: 404→docker compose build
 ##   test_hermes_build_fallback_fail       [W:3] — integration: broken Dockerfile→fail
@@ -44,28 +44,30 @@ from tests.helpers.gate_helpers import repo_root
 
 logger = logging.getLogger(__name__)
 
-_DOCKER_ORCHESTRATOR_PY = repo_root() / "core" / "internal" / "bootstrap" / "deploy" / "docker_orchestrator.py"
-# DevPlan 100: hermes-agent fallback code lives in docker_orchestrator.py (_handle_hermes_agent) —
-# deploy-modules.sh is a thin facade (≤50 LOC) that delegates to deploy/deploy_orchestrator.py.
-# Static contract check greps docker_orchestrator.py, NOT the shell facade.
+# DevPlan 100: hermes-agent fallback code lives in docker_orchestrator.py; DevPlan 118 D1 перенёс
+# реализацию в hermes_workflow.py (handle_hermes_agent). deploy-modules.sh is a thin facade (≤50 LOC).
+# docker_orchestrator._handle_hermes_agent — тонкий фасад-делегатор (обратная совместимость).
+_HERMES_WORKFLOW_PY = repo_root() / "core" / "internal" / "bootstrap" / "deploy" / "hermes_workflow.py"
+# Static contract check greps hermes_workflow.py (реализация), NOT the shell facade.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# W4-STATIC: Static audit — grep docker_orchestrator.py for fallback code patterns
+# W4-STATIC: Static audit — grep hermes_workflow.py for fallback code patterns
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_hermes_fallback_code_present
 # 🧪 TRAP[TEST] · 2026-07-21 · REGRESSION · Fallback build code must be present · Last fail: N/A · Remove if: wave 4 rolled back
-## @purpose  Static audit: verify docker_orchestrator.py contains the hermes-agent fallback
+## @purpose  Static audit: verify hermes_workflow.py contains the hermes-agent fallback
 ##           build code (WARN instead of FAIL, docker compose build command, TRAP[BUG]).
+##           DevPlan 118 D1: реализация перенесена из docker_orchestrator.py в hermes_workflow.py.
 ##           No Docker required — pure grep on source file.
-## @io       ⇥ caplog, _DOCKER_ORCHESTRATOR_PY → ⎋ None (pytest.fail if patterns missing)
+## @io       ⇥ caplog, _HERMES_WORKFLOW_PY → ⎋ None (pytest.fail if patterns missing)
 ## @complexity  1 — three grep probes on file content
 ## @invariants
 ##   - "WARN" present in the hermes-agent image check (replaces old "FAIL")
 ##   - "docker compose ... build" present for fallback build
-##   - "TRAP[DECISION]" present documenting the FAIL→build decision
-##   - "Local build failed" present for build failure handling
+##   - "TRAP[BUG]" present documenting the FAIL→build decision
+##   - "Local L1→L2 build failed" present for build failure handling
 ##   - Old "FAIL" for image-not-found (derived from compose config) is GONE
 
 
@@ -73,38 +75,36 @@ _DOCKER_ORCHESTRATOR_PY = repo_root() / "core" / "internal" / "bootstrap" / "dep
 @ldd_trajectory
 def test_hermes_fallback_code_present(caplog: pytest.LogCaptureFixture) -> None:
     """
-    # ◇ read docker_orchestrator.py → ∋ grep patterns: WARN ✓, BUILD ✓, fallback path ✓ → ⎋ pass | fail
+    # ◇ read hermes_workflow.py → ∋ grep patterns: WARN ✓, BUILD ✓, fallback path ✓ → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_hermes_fallback_code_present] Reading docker_orchestrator.py ...")
-    content = _DOCKER_ORCHESTRATOR_PY.read_text()
+    logger.info("[IMP:7][test_hermes_fallback_code_present] Reading hermes_workflow.py ...")
+    content = _HERMES_WORKFLOW_PY.read_text()
 
     # ── 1. Pre-built image not found → will build locally (WARN/INFO instead of FAIL) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking WARN fallback pattern ...")
     assert "Pre-built image not found" in content and "will build locally" in content, (
-        "W4 violation: hermes-agent _handle_hermes_agent must WARN on missing image with local build fallback"
+        "W4 violation: hermes-agent handle_hermes_agent must WARN on missing image with local build fallback"
     )
 
     # ── 2. docker compose ... build present (Python subprocess call) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking BUILD command ...")
     # DevPlan 116 B5 T4 (sole-path): docker compose build больше НЕ вызывается локальным
-    # subprocess в docker_orchestrator — fallback делегирует в shared docker_compose_build
+    # subprocess в hermes_workflow — fallback делегирует в shared docker_compose_build
     # (гейт docker_sole_path). Проверяем НОВЫЙ (более сильный) контракт: L1→L2 build fallback
     # идёт через _shared_docker_compose_build с BUILD_TIMEOUT.
     assert "_shared_docker_compose_build" in content and "BUILD_TIMEOUT" in content, (
-        "W4 violation: hermes-agent L1→L2 build fallback (shared docker_compose_build) not found in _handle_hermes_agent"
+        "W4 violation: hermes-agent L1→L2 build fallback (shared docker_compose_build) not found in handle_hermes_agent"
     )
 
     # ── 3. TRAP[BUG] documenting the fallback decision (was TRAP[DECISION] in shell) ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking TRAP documentation ...")
-    assert "TRAP[BUG]" in content, (
-        "W4 violation: TRAP[BUG] for hermes image drift fix not found in docker_orchestrator.py"
-    )
+    assert "TRAP[BUG]" in content, "W4 violation: TRAP[BUG] for hermes image drift fix not found in hermes_workflow.py"
 
     # ── 4. "Local L1→L2 build failed" present ──
     logger.info("[IMP:8][test_hermes_fallback_code_present] Checking build failure error path ...")
     assert "build_fail" in content and "Local L1" in content, (
-        "W4 violation: 'Local L1→L2 build failed' error path not found in _handle_hermes_agent"
+        "W4 violation: 'Local L1→L2 build failed' error path not found in handle_hermes_agent"
     )
 
     # ── 5. Old FAIL-for-image pattern is gone ──

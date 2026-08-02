@@ -469,26 +469,26 @@ def test_batch_module_metadata(caplog) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # region FUNC_test_parallel_healthcheck
-## @purpose  Static audit: verify deploy_docker_group() in docker_orchestrator.py has parallel
+## @purpose  Static audit: verify deploy_docker_group() in parallel_runner.py has parallel
 ##           healthcheck pattern (os.fork + per-module run_healthcheck) after the drain loop.
-##           Migrated from deploy-modules.sh (W4-E1 extraction).
-## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/docker_orchestrator.py → ⎋ None (pytest.fail if parallel pattern missing)
+##           DevPlan 118 D1: deploy_docker_group переехал из docker_orchestrator.py в parallel_runner.py.
+## @io       ⇥ caplog, _DEPLOY_PYTHON_DIR/parallel_runner.py → ⎋ None (pytest.fail if parallel pattern missing)
 ## @complexity 1 — static grep on file content
 
 
 @pytest.mark.static_audit
 def test_parallel_healthcheck(caplog) -> None:
     """
-    # ◇ read docker_orchestrator.py → ⚡ grep deploy_docker_group for parallel healthcheck (os.fork + run_healthcheck) → ⎋ pass | fail
+    # ◇ read parallel_runner.py → ⚡ grep deploy_docker_group for parallel healthcheck (os.fork + run_healthcheck) → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_parallel_healthcheck] Reading docker_orchestrator.py ...")
-    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "docker_orchestrator.py", "deploy_docker_group")
+    logger.info("[IMP:7][test_parallel_healthcheck] Reading parallel_runner.py ...")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "parallel_runner.py", "deploy_docker_group")
 
     # ── 1. Parallel healthcheck must exist in deploy_docker_group ──
     # Python uses os.fork() for parallel healthchecks instead of bash background PIDs
     assert "os.fork()" in content or "os.fork" in content, (
-        "S4 violation: os.fork for parallel healthcheck not found in deploy_docker_group"
+        "S4 violation: os.fork for parallel healthcheck not found in deploy_docker_group (parallel_runner.py)"
     )
     logger.info("[IMP:9][test_parallel_healthcheck] os.fork() parallelism in deploy_docker_group OK")
 
@@ -733,31 +733,31 @@ def test_rsync_consolidation(caplog) -> None:
 
 
 # region FUNC_test_parallel_deploy_failure_isolates_modules
-## @purpose  W4-E5 edge-case: verify deploy_docker_group in docker_orchestrator.py isolates failure of
+## @purpose  W4-E5 edge-case: verify deploy_docker_group in parallel_runner.py isolates failure of
 ##           1 module in a group. Checks the function signature returns tuple[int, int, list[str]]
 ##           with failure isolation contract (1 failed module does not abort the group).
-##           Originally tested via bash subprocess; after W4-E1 extraction, verifies Python function contract.
+##           DevPlan 118 D1: deploy_docker_group переехал из docker_orchestrator.py в parallel_runner.py.
 ## @io       caplog → ⎋ None (pytest.fail if contract violated)
 ## @complexity 1 — static audit of function signature + docstring
 ## @invariants
 ##   - deploy_docker_group must return tuple[int, int, list[str]]
 ##   - Failed module names must be tracked separately from deployed count
-##   - Function must exist in docker_orchestrator.py with correct contract
+##   - Function must exist in parallel_runner.py with correct contract
 
 
 @pytest.mark.static_audit
 def test_parallel_deploy_failure_isolates_modules(caplog) -> None:
     """
-    # ▶ read docker_orchestrator.py → ⚡ grep deploy_docker_group signature + return type → ◇ assert failure isolation contract → ⎋ pass | fail
+    # ▶ read parallel_runner.py → ⚡ grep deploy_docker_group signature + return type → ◇ assert failure isolation contract → ⎋ pass | fail
     """
     caplog.set_level(logging.DEBUG)
-    logger.info("[IMP:7][test_parallel_deploy_failure] START — verifying deploy_docker_group in docker_orchestrator.py")
+    logger.info("[IMP:7][test_parallel_deploy_failure] START — verifying deploy_docker_group in parallel_runner.py")
 
-    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "docker_orchestrator.py", "deploy_docker_group")
+    content = _extract_python_func(_DEPLOY_PYTHON_DIR / "parallel_runner.py", "deploy_docker_group")
 
     # ── 1. deploy_docker_group must exist (Python format) ──
     assert "def deploy_docker_group(" in content, (
-        "W4-E5 violation: deploy_docker_group() not found in docker_orchestrator.py"
+        "W4-E5 violation: deploy_docker_group() not found in parallel_runner.py"
     )
     logger.info("[IMP:9][test_parallel_deploy_failure] deploy_docker_group() declared OK")
 

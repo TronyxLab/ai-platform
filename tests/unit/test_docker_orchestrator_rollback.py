@@ -18,9 +18,13 @@ from unittest import mock
 
 logger = logging.getLogger(__name__)
 
-_MODULE_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "internal" / "bootstrap" / "deploy"
-sys.path.insert(0, str(_MODULE_DIR))
-import docker_orchestrator as dorch
+# DevPlan 118 D1: deploy_docker_group переехал в parallel_runner.py. Моки drain/healthcheck
+# патчатся в ПАКЕТНОМ parallel_runner (core.internal.bootstrap.deploy.parallel_runner) —
+# docker_orchestrator импортирует его пакетно; sys.path-версия модуля была бы ДРУГИМ объектом
+# (двойная загрузка) и моки бы не сработали.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from core.internal.bootstrap.deploy import docker_orchestrator as dorch
+from core.internal.bootstrap.deploy import parallel_runner as prunner
 
 # ═══════════════════════════════════════════════════════════════════
 # Helper: call deploy_docker_group with mocked drain + os.fork + subprocess
@@ -105,9 +109,9 @@ def _call_group_deploy(
         mock.patch.object(subprocess, "run", side_effect=_fake_run),
         mock.patch.object(os, "fork", side_effect=_fake_fork),
         mock.patch.object(os, "waitpid", return_value=(0, 0)),
-        mock.patch.object(dorch, "_drain_completed_count", side_effect=_fake_drain_completed),
-        mock.patch.object(dorch, "_drain_all_count", side_effect=_fake_drain_all),
-        mock.patch.object(dorch, "run_healthcheck", side_effect=_fake_hc),
+        mock.patch.object(prunner, "drain_completed_count", side_effect=_fake_drain_completed),
+        mock.patch.object(prunner, "drain_all_count", side_effect=_fake_drain_all),
+        mock.patch.object(prunner.healthcheck_runner, "run_healthcheck", side_effect=_fake_hc),
     ):
         return dorch.deploy_docker_group(
             entries=entries,
