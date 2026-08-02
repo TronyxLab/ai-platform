@@ -1,18 +1,18 @@
 # 01-Brief — Волна 120: единая проверочная система check-suite
 
-<!-- GREP_SUMMARY: check-suite, check-all, check-fast, SoT-манифест, кэш-результатов, нейминг, preflight, gate, drift-покрытия, бенчмарк -->
-# STRUCTURE: ┌проблема┐ → ◇ замеры → ◇ целевой дизайн (манифест → executor'ы → кэш → changed-only) → ◇ нейминг check-* → ⊕ волны 0-4 → ⎋ AC/риски/импорты
+<!-- GREP_SUMMARY: check-suite, check, check-diff, SoT-манифест, кэш-результатов, нейминг, preflight, gate, drift-покрытия, бенчмарк -->
+# STRUCTURE: ┌проблема┐ → ◇ замеры → ◇ целевой дизайн (манифест → executor'ы → кэш → changed-only) → ◇ нейминг check-*/gate → ⊕ волны 0-4 → ⎋ AC/риски/импорты
 
 $START_BRIEF
 
 $ARTIFACT_CONTRACT
-PURPOSE:               Устранить потерю времени агента и разработчика на верификацию (30 мин на бриф в лучшем случае, часы при баге) через единую проверочную систему: один SoT-манифест набора проверок (check-suite.yaml), два executor'а (диагностический параллельный + канонический последовательный), кэш результатов с инвалидацией по watch-скоупам, инкрементальный режим по затронутым файлам и единый нейминг линейки `check-*`.
-DESCRIPTION:           Волна 120 — системная замена трёх расходящихся hardcoded списков проверок (makefiles/ci.mk gate, core/internal/preflight.py фаза 3, CI-workflows + ручные команды в инструкциях) на единый манифест `core/check-suite.yaml`. Из манифеста работают: `make check-all` (экс-preflight, параллельная диагностика + автофикс), `make check` (быстрый инкрементальный, кэш + changed-only), `make check-fast/check-full/check-docker` (экс-gate MODE=fast/full/ci-docker, каноническая последовательная верификация без кэша). Кэш результатов по sha256 watch-скоупов превращает повторные прогоны фикс-цикла из ~5 мин в 10-60s. Нейминг приводится к единому стилю `check-*` с deprecated-алиасами (прецедент: compose-safe-up).
-RATIONALE:             (1) Замер: `make preflight SKIP_FIX=1` на чистом рабочем дереве > 4 минут, фаза 3 не завершилась (остановлен принудительно) — документация обещает 20-40s; параллелизм даёт не скорость, а сбор всех ошибок за один проход. (2) Дрейф: 3 независимых hardcoded списка проверок (ci.mk, preflight.py, workflows+инструкции) — check-manifests и ruff check . не входят ни в preflight, ни в gate fast; gates requires_docker — только в gate. (3) Цикл кодера = 2+ полных прогона (preflight → gate fast) + ручная фаза (check-manifests + ruff) по инструкции _project.md п.2-4, плюс двойной pre-commit (preflight фаза 2 + gate fast шаг 1). (4) Боль пользователя: 30 мин на бриф в лучшем случае, часы при баге — доминирует верификация, а не фиксы. (5) Docker на dev-машине стабилен — можно включить requires_docker гейты в локальную диагностику. (6) Единый стиль: глагол `verify` занят (HTTPS-верификация доменов, `make verify NODE=<node>`) — коллизия исключена выбором линейки `check-*`.
-ACCEPTANCE_CRITERIA:   AC-1: preflight.py и ci.mk gate НЕ содержат hardcoded списков проверок — оба читают core/check-suite.yaml; гейт test_gate_check_suite_consistency блокирует расхождение. AC-2: дыры закрыты — check-manifests, ruff check . и gates requires_docker входят в диагностический прогон check-all. AC-3: повторный check-all без изменений рабочего дерева < 30s; повторные прогоны фикс-цикла < 60s (кэш Wave 2); упавшие чеки никогда не берутся из кэша. AC-4: каноническая верификация (check-fast/CI/pre-push hook) — без кэша, семантика gate не изменена. AC-5: нейминг-миграция — 0 упоминаний `make gate`/`make preflight` в .kilo/* и AGENTS.md (гейт phantom-refs); deprecated-алиасы работают. AC-6: `make check-fast && make check-manifests && ruff check .` зелёные (аналог AC-GLOBAL-1 волны 119). AC-7: инструкция кодера (_project.md) переписана: per-task `make check` (changed-only), фикс-цикл `make check-all`, финальная верификация `make check-fast`. AC-8: оба CI-workflow (platform-gate-fast, platform-test) и pre-push-gate.sh используют новые имена.
+PURPOSE:               Устранить потерю времени агента и разработчика на верификацию (30 мин на бриф в лучшем случае, часы при баге) через единую проверочную систему: один SoT-манифест набора проверок (check-suite.yaml), два executor'а (диагностический параллельный + канонический последовательный), кэш результатов с инвалидацией по watch-скоупам, инкрементальный режим по затронутым файлам и нейминг по контракту: `check-*` = диагностика, `gate` = арбитр.
+DESCRIPTION:           Волна 120 — системная замена трёх расходящихся hardcoded списков проверок (makefiles/ci.mk gate, core/internal/preflight.py фаза 3, CI-workflows + ручные команды в инструкциях) на единый манифест `core/check-suite.yaml`. Из манифеста работают: `make check` (экс-preflight, полная параллельная диагностика + автофикс + кэш), `make check-diff` (быстрая диагностика по затронутым файлам, changed-only + кэш) и канонический `make gate` (MODE=fast|full|ci-docker без изменений, последовательно, без кэша). Кэш результатов по sha256 watch-скоупов превращает повторные прогоны фикс-цикла из ~5 мин в 10-60s. Нейминг: `preflight` переименовывается в `check` с deprecated-алиасом (прецедент: compose-safe-up); `gate` остаётся арбитром.
+RATIONALE:             (1) Замер: `make preflight SKIP_FIX=1` на чистом рабочем дереве > 4 минут, фаза 3 не завершилась (остановлен принудительно) — документация обещает 20-40s; параллелизм даёт не скорость, а сбор всех ошибок за один проход. (2) Дрейф: 3 независимых hardcoded списка проверок (ci.mk, preflight.py, workflows+инструкции) — check-manifests и ruff check . не входят ни в preflight, ни в gate fast; gates requires_docker — только в gate. (3) Цикл кодера = 2+ полных прогона (preflight → gate fast) + ручная фаза (check-manifests + ruff) по инструкции _project.md п.2-4, плюс двойной pre-commit (preflight фаза 2 + gate fast шаг 1). (4) Боль пользователя: 30 мин на бриф в лучшем случае, часы при баге — доминирует верификация, а не фиксы. (5) Docker на dev-машине стабилен — можно включить requires_docker гейты в локальную диагностику. (6) Единый стиль: глагол `verify` занят (HTTPS-верификация доменов, `make verify NODE=<node>`) — коллизия исключена. (7) Решение пользователя 2026-08-02 (нейминг-ревью брифа): два корня по контракту — `check-*` = диагностика (быстро, может пропустить edge-case), `gate` = арбитр (не пропустит, но медленно); быстрый режим — `check-diff`; режимы gate остаются MODE=fast|full|ci-docker. Причина: схема check/check-all/check-fast/check-full/check-docker смешивала оси контракта и полноты (два разных «fast»), роль команд не читалась.
+ACCEPTANCE_CRITERIA:   AC-1: preflight.py и ci.mk gate НЕ содержат hardcoded списков проверок — оба читают core/check-suite.yaml; гейт test_gate_check_suite_consistency блокирует расхождение. AC-2: дыры закрыты — check-manifests, ruff check . и gates requires_docker входят в диагностический прогон `make check`. AC-3: повторный `make check` без изменений рабочего дерева < 30s; повторные прогоны фикс-цикла < 60s (кэш Wave 2); упавшие чеки никогда не берутся из кэша. AC-4: каноническая верификация (`make gate`, CI, pre-push hook) — без кэша, семантика gate не изменена (MODE=fast|full|ci-docker). AC-5: нейминг-миграция — 0 упоминаний `make preflight` в .kilo/* и AGENTS.md (гейт phantom-refs); deprecated-алиас preflight → check работает; `make gate` остаётся каноническим именем. AC-6: `make gate MODE=fast && make check-manifests && ruff check .` зелёные (аналог AC-GLOBAL-1 волны 119). AC-7: инструкция кодера (_project.md) переписана: per-task `make check-diff`, фикс-цикл `make check`, финальная верификация `make gate MODE=fast`. AC-8: CI-workflows и pre-push-gate.sh не мигрируют (gate не переименовывается) — только упоминания preflight в инструкциях заменены на check.
 IMPLEMENTS:            U-новые (не зарегистрированы ранее): U-120-1 (время верификации), U-120-2 (дрейф покрытия), U-120-3 (нейминг). Связано: DevPlan 098 (test_runner), DevPlan 060 (Repair Contract), DevPlan 097 (doxygen), инвариант 11 AGENTS.md (Manifest Generation Contract), TRAP[DECISION] 2026-07-31 (parity-гейты).
-IMPACTS:               Makefile (makefiles/ci.mk, makefiles/repair.mk, makefiles/manifest.mk), core/internal/preflight.py, core/check-suite.yaml (новый), core/entrypoint-manifest.yaml (allowed_verbs/gates), core/AGENTS.md (каноническая таблица), tests/gates/AGENTS.md (раздел Preflight), tests/AGENTS.md, .kilo/rules/_project.md, .kilo/agents/code.md, .github/workflows/platform-gate-fast.yml, .github/workflows/platform-test.yml, core/entrypoints/pre-push-gate.sh, README.md, root AGENTS.md (глоссарий).
-REQUIRES:              Wave 0 (замеры per-check таймингов) до проектирования кэша; подтверждённый стабильный локальный Docker; решение пользователя по неймингу зафиксировано в §5 (check-*); DevPlan 120 после ревью брифа.
+IMPACTS:               Makefile (makefiles/ci.mk, makefiles/repair.mk, makefiles/manifest.mk), core/internal/preflight.py, core/check-suite.yaml (новый), core/entrypoint-manifest.yaml (allowed_verbs/gates), core/AGENTS.md (каноническая таблица), tests/gates/AGENTS.md (раздел Preflight), tests/AGENTS.md, .kilo/rules/_project.md, .kilo/agents/code.md, README.md, root AGENTS.md (глоссарий). НЕ мигрируют: .github/workflows/platform-gate-fast.yml, platform-test.yml, core/entrypoints/pre-push-gate.sh (gate не переименовывается).
+REQUIRES:              Wave 0 (замеры per-check таймингов) до проектирования кэша; подтверждённый стабильный локальный Docker; решение пользователя по неймингу зафиксировано в §3 (check-*/gate, решение 2026-08-02); DevPlan 120 после ревью брифа.
 $END_ARTIFACT_CONTRACT
 
 ---
@@ -116,8 +116,8 @@ checks:
 
 | Executor | Таргет | Поведение |
 |----------|--------|-----------|
-| Диагностический (параллельный, автофикс, кэш) | `make check-all` (экс-preflight) | tier=fix последовательно → tier=static/pytest параллельно (ThreadPoolExecutor) → единый отчёт; кэш включён |
-| Канонический (последовательный, fail-fast, без кэша) | `make check-fast` / `check-full` / `check-docker` (экс-gate MODE=...) | Шаги в каноническом порядке из манифеста; CI и pre-push hook вызывают только его |
+| Диагностический (параллельный, автофикс, кэш) | `make check` (экс-preflight) + `make check-diff` (changed-only) | tier=fix последовательно → tier=static/pytest параллельно (ThreadPoolExecutor) → единый отчёт; кэш включён |
+| Канонический (последовательный, fail-fast, без кэша) | `make gate` (MODE=fast/full/ci-docker — без изменений) | Шаги в каноническом порядке из манифеста; CI и pre-push hook вызывают только его |
 
 Инвариант «preflight НЕ заменяет gate» переформулируется системно: *два executor'а одного манифеста; диагностический — параллельный акселератор, канонический — арбитр; дрейф невозможен конструктивно*. Инвариант усиливается, не ослабляется.
 
@@ -127,26 +127,26 @@ checks:
 - Ключ: `sha256(id + watch-скоуп)`, где watch-скоуп = содержимое файлов под паттернами `watch` + git diff.
 - Правила:
   1. Кэш применяется ТОЛЬКО к чекам, прошедшим на идентичном хеше. Упавший чек всегда перезапускается.
-  2. `make check-fast` (канонический), CI и pre-push hook — без кэша, всегда полный прогон.
+  2. `make gate` (канонический), CI и pre-push hook — без кэша, всегда полный прогон.
   3. `--no-cache` / `CACHE=0` для сомнений.
   4. Инвалидация всего кэша при изменении манифеста.
 
 Ожидаемый эффект на цикл кодера:
 | Шаг | Сейчас | После |
 |-----|--------|-------|
-| 1-й check-all | ~5 мин | ~5 мин (полный) |
-| фикс → 2-й check-all | ~5 мин | 10-60s (только затронутое) |
-| фикс → 3-й check-all | ~5 мин | 10-60s |
-| зелёный check-all → check-fast | ~5 мин | ~5-15s (весь набор в кэше; pre-commit кэшируется — двойной прогон исчезает) |
+| 1-й check | ~5 мин | ~5 мин (полный) |
+| фикс → 2-й check | ~5 мин | 10-60s (только затронутое) |
+| фикс → 3-й check | ~5 мин | 10-60s |
+| зелёный check → gate MODE=fast | ~5 мин | ~5-15s (весь набор в кэше; pre-commit кэшируется — двойной прогон исчезает) |
 | Баг-цикл (2 итерации) | 4×5 мин = 20 мин | 5 мин + 2×1 мин ≈ 7 мин |
 
 ### 2.4 Инкрементальный режим changed-only
 
-`make check` (новый): запускает только чеки, чей watch-скоуп пересекается с текущим diff. Для задачи «изменил один .py» — ruff + gates-static + static_audit ≈ 1-2 мин вместо 5. Полнота гарантируется каноническим прогоном перед push (pre-push hook — уже существует).
+`make check-diff` (новый): запускает только чеки, чей watch-скоуп пересекается с текущим diff. Для задачи «изменил один .py» — ruff + gates-static + static_audit ≈ 1-2 мин вместо 5. Полнота гарантируется каноническим прогоном перед push (pre-push hook — уже существует). Семантика: `check` = «проверь проект (всё)», `check-diff` = «проверь то, что в git diff».
 
 ---
 
-## 3. Нейминг: единая линейка `check-*`
+## 3. Нейминг: два корня по контракту — `check-*` (диагностика) + `gate` (арбитр)
 
 ### 3.1 Обоснование
 
@@ -154,27 +154,32 @@ checks:
 - `verify` НЕЛЬЗЯ: занят HTTPS-верификацией доменов (`make verify NODE=<node>`, core/AGENTS.md) — коллизия.
 - `preflight` — вне стиля и коллизирует с bootstrap-preflight (core/internal/bootstrap/preflight.py).
 - Прецедент deprecated-алиаса в платформе: `compose-safe-up` → `up-safe`.
+- Отвергнутая схема (черновик брифа 2026-08-02): `check / check-all / check-fast / check-full / check-docker` смешивала две оси — контракт (диагностика vs верификация) и полноту (fast/full/docker) — в одном ряду; `check` (быстрый по diff) и `check-fast` (без Docker) означали РАЗНЫЕ «fast». Роль команды не читалась.
+- Решение пользователя 2026-08-02: роль видна из корня — `check` = диагностика («проверь, быстро, может пропустить edge-case»), `gate` = арбитр («ворота, не пропустят, но медленно»).
 
-### 3.2 Целевая схема (рекомендуемая)
+### 3.2 Целевая схема
 
-| Старое | Новое | Роль | Миграция |
-|--------|-------|------|----------|
-| `make preflight` | `make check-all` | Полная параллельная диагностика + автофикс (экс-фазы 1-3) | alias preflight → check-all, deprecated |
-| `make preflight SKIP_FIX=1` | `make check` | Быстрый инкрементальный read-only (кэш + changed-only) | — (новый таргет) |
-| `make gate MODE=fast` | `make check-fast` | Каноническая верификация без Docker | alias gate → check-full, deprecated |
-| `make gate MODE=full` | `make check-full` | Полная каноническая (smoke+component) | см. выше |
-| `make gate MODE=ci-docker` | `make check-docker` | Docker-режим | см. выше |
-| единичные check-* | без изменений | check-manifests, check-dead-code, check-exception-patterns, check-profiles-parity, check-domain-parity, check-env-defaults, check-file-lines | — |
+| Команда | Роль | Семантика |
+|---------|------|-----------|
+| `make check` (экс-preflight) | диагностика, полная | ВСЕ проверки из манифеста: автофикс → параллельно (static+pytest, включая requires_docker) → единый отчёт; кэш включён. «Проверь проект» |
+| `make check-diff` (новый) | диагностика, быстрая | Только чеки, чей watch-скоуп пересекается с git diff; кэш включён. «Проверь то, что менял» |
+| `make gate` (без изменений) | верификация, каноническая | Последовательно, fail-fast, без кэша; MODE=fast\|full\|ci-docker. «Ворота перед push/CI» |
+| единичные `check-*` | без изменений | check-manifests, check-dead-code, check-exception-patterns, check-profiles-parity, check-domain-parity, check-env-defaults, check-file-lines |
+
+Флаги продвинутых режимов `check`/`check-diff`: `CHECK_FIX=0` (без автофикса, экс-SKIP_FIX), `CHECK_JSON=1`, `CHECK_WORKERS=N`, `CHECK_CACHE=0` (экс-`--no-cache`).
+
+**Правило для агента:** `check` может пропустить edge-case (диагностика), `gate` решает (арбитр). После зелёного `check`/`check-diff` обязателен `make gate MODE=fast` перед push — как сейчас.
 
 Не трогаем: `make verify` (коллизия), линейку `test-*` (test, test-node, test-inventory-sync — отдельная семантика; конвергенция test-summary — отдельное решение), линейку `fix-*` (автофиксы — отдельная семантика).
 
-### 3.3 Миграция
+### 3.3 Миграция (сужена: только preflight → check/check-diff)
 
-1. Makefile: новые таргеты + deprecated-алиасы (как compose-safe-up).
-2. entrypoint-manifest.yaml: allowed_verbs пополняется новыми именами, старые помечаются deprecated.
+1. Makefile: `check` (экс-preflight) + новый `check-diff`; deprecated-алиас `preflight` (как compose-safe-up).
+2. entrypoint-manifest.yaml: allowed_verbs — `preflight` → deprecated, добавляются `check`, `check-diff`; `gate` остаётся.
 3. Глоссарий root AGENTS.md — регенерируется (G4).
-4. pre-push-gate.sh, оба workflow, .kilo/rules/_project.md, .kilo/agents/code.md — новые имена.
-5. Гейт phantom-refs: 0 упоминаний `make gate`/`make preflight` в .kilo/* и AGENTS.md (по образцу test_gate_phantom_refs.py).
+4. .kilo/rules/_project.md, .kilo/agents/code.md — preflight → check/check-diff (новый цикл из §4 Wave 3).
+5. Гейт phantom-refs: 0 упоминаний `make preflight` в .kilo/* и AGENTS.md (по образцу test_gate_phantom_refs.py). `make gate` НЕ входит в запрет — это каноническое имя.
+6. CI-workflows и pre-push-gate.sh НЕ мигрируют (gate не переименовывается).
 
 ---
 
@@ -200,14 +205,14 @@ checks:
 - Метрика AC-3: повторный прогон без изменений < 30s.
 
 ### Wave 3 — Инкрементальный режим + инструкции
-- `make check` (changed-only по watch-скоупам).
-- Переписывание .kilo/rules/_project.md (раздел «Верификация реализации») под новый цикл: per-task `make check` → фикс-цикл `make check-all` (с SKIP_FIX/CACHE) → финально `make check-fast`.
-- .kilo/agents/code.md: batched verification → check-all.
+- `make check-diff` (changed-only по watch-скоупам).
+- Переписывание .kilo/rules/_project.md (раздел «Верификация реализации») под новый цикл: per-task `make check-diff` → фикс-цикл `make check` (с CHECK_FIX/CACHE) → финально `make gate MODE=fast`.
+- .kilo/agents/code.md: batched verification → check.
 
-### Wave 4 — Нейминг-миграция check-*
-- Таргеты §3.2, deprecated-алиасы, allowed_verbs, глоссарий.
-- pre-push-gate.sh, platform-gate-fast.yml, platform-test.yml.
-- Гейт phantom-refs на старые имена в инструкциях.
+### Wave 4 — Нейминг-миграция (только preflight → check/check-diff)
+- Таргеты §3.2: `check` (экс-preflight) + `check-diff`; deprecated-алиас `preflight`; allowed_verbs; глоссарий.
+- pre-push-gate.sh и CI-workflows НЕ мигрируют (gate не переименовывается).
+- Гейт phantom-refs: 0 упоминаний `make preflight` в инструкциях.
 
 ---
 
@@ -216,8 +221,8 @@ checks:
 | Риск | Защита |
 |------|--------|
 | Кэш скрывает регрессию (ложный зелёный) | Кэш только для passed-чеков на идентичном хеше; канонический прогон/CI/pre-push — всегда полные; `--no-cache` |
-| Медленный чек (static_audit 300s) доминирует в check-all | Wave 0 замер → точечное ускорение (xdist); параллелизм уже есть |
-| Переименование ломает CI/hook/манифест | Deprecated-алиасы (прецедент compose-safe-up); гейты phantom-refs; Wave 4 — последняя, на зелёной базе |
+| Медленный чек (static_audit 300s) доминирует в check | Wave 0 замер → точечное ускорение (xdist); параллелизм уже есть |
+| Переименование preflight ломает ссылки (доки, инструкции) | Deprecated-алиас (прецедент compose-safe-up); гейт phantom-refs; Wave 4 — последняя, на зелёной базе |
 | gates-docker в локальной диагностике капризничает | Docker стабилен (подтверждено); в диагностике best-effort (FAIL — только в каноническом) |
 | Дрейф манифеста vs реальные команды | Гейт консистентности (Wave 1) + check-manifests-подобная сверка |
 | Изменение канонического gate (риск регрессии) | Канонический executor без кэша, тот же порядок шагов, CI-семантика не меняется |
@@ -230,16 +235,16 @@ checks:
 |------|----------|
 | `core/check-suite.yaml` | NEW — SoT набора проверок |
 | `core/internal/preflight.py` | MOD — чтение манифеста, кэш, changed-only |
-| `makefiles/repair.mk` | MOD — check/check-all таргеты + алиасы |
-| `makefiles/ci.mk` | MOD — gate шаги из манифеста, check-fast/full/docker |
+| `makefiles/repair.mk` | MOD — таргеты check/check-diff + deprecated-алиас preflight |
+| `makefiles/ci.mk` | MOD — gate шаги из манифеста (имя gate и MODE не меняются) |
 | `core/internal/scripts/generate_check_suite.py` (или ручная валидация) | NEW — генератор/валидатор манифеста (опционально, в стиле G1-G6) |
 | `tests/gates/test_gate_check_suite_consistency.py` | NEW — гейт консистентности |
 | `tests/gates/test_gate_phantom_refs.py` | MOD — старые имена в запрет |
 | `core/entrypoint-manifest.yaml` | MOD — новые глаголы + deprecated |
 | `core/AGENTS.md`, `tests/gates/AGENTS.md`, `tests/AGENTS.md` | MOD — документация |
-| `.kilo/rules/_project.md`, `.kilo/agents/code.md` | MOD — новый цикл верификации |
-| `.github/workflows/platform-gate-fast.yml`, `platform-test.yml` | MOD — новые имена |
-| `core/entrypoints/pre-push-gate.sh` | MOD — check-fast |
+| `.kilo/rules/_project.md`, `.kilo/agents/code.md` | MOD — новый цикл верификации (check-diff/check/gate) |
+| `.github/workflows/platform-gate-fast.yml`, `platform-test.yml` | БЕЗ ИЗМЕНЕНИЙ (gate не переименовывается) |
+| `core/entrypoints/pre-push-gate.sh` | БЕЗ ИЗМЕНЕНИЙ (вызывает make gate MODE=fast) |
 | `README.md`, root `AGENTS.md` (глоссарий) | MOD |
 
 ---
@@ -248,7 +253,7 @@ checks:
 
 | Сценарий | Сейчас | После 120 |
 |----------|--------|-----------|
-| Чистый бриф (реализация + верификация) | ~30 мин (5 preflight + 5 gate + 5 ручных) | ~8-12 мин (5 check-all + 0.2 check-fast из кэша) |
+| Чистый бриф (реализация + верификация) | ~30 мин (5 preflight + 5 gate + 5 ручных) | ~8-12 мин (5 check + 0.2 gate из кэша) |
 | Баг, 2 фикс-итерации | 60+ мин (4 полных прогона) | ~20-25 мин (1 полный + 2 инкрементальных) |
 | CI-цикл push→fail→fix→push | ~12 мин × 2 (gate + check-manifests) | те же (канонический без кэша), но реже падает — дыры закрыты; setup-кэш (pre-commit/.venv) в Wave 4 |
 
