@@ -59,14 +59,20 @@ services:
     # · Rev: if AGENTS.md layer notation changes
     # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
     # ⚠️ W7 fix: versioned tag (was float tag). Change CONTEXT_IMAGE in .env to upgrade.
-    # ⚡ TRAP[PERF] · 2026-07-18 · >0 · hermes-agent-context:latest — no digest pin
+    # ⚡ TRAP[DECISION] · 2026-08-03 · — · CONTEXT_IMAGE default = SoT (DevPlan 122 T4)
+    # · Rejected: fallback latest@sha256:dd36… (скрытый второй пин — расходился с SoT v2026.7.1)
+    # · Reason: единый источник тега — platform-infra.yaml env_defaults.CONTEXT_IMAGE
+    # ·   (parity-гейт test_gate_image_tag_form). Digest-pin вернётся, когда CI начнёт
+    # ·   публиковать v2026.x.y@sha256:… (см. TRAP[PERF] ниже — Rev-условие живо).
+    # · Rev: при появлении digest-пинов от CI — переключить default на tag@digest.
+    # ⚡ TRAP[PERF] · 2026-07-18 · >0 · hermes-agent-context — no digest pin (временно)
     # · Root: context overlay image has no versioned tag in ghcr.io; tag@digest pinned
     # ·   below. Update digest when CI pushes new overlay image.
     # · 2026-08-01 (B3 T7, U-60): CI pushes versioned tags (см. tag-политику T7) —
     # ·   при появлении версии v2026.x.y переключить default на версионный тег@digest.
     # ·   Default image НЕ меняется в этой волне (digest-pin — канон прод-дефолта).
     # · Rev: when CI pipeline pushes versioned tags (e.g. v2026.7.2), switch to tag@digest.
-    image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:dd36a803acf0ae2871b697d4d478e528c9083f5945d1bf6bd560ea208b59aa5a}
+    image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1}
     # 🧐 TRAP[DECISION] · 2026-07-11 · — · Platform pin: linux/amd64 for cross-platform compatibility
     # · Hermes-agent upstream image (nousresearch/hermes-agent:v2026.7.1) and context overlay
     # · (ghcr.io/tronyxlab/hermes-agent-context:latest) are built for x86_64 only.
@@ -161,7 +167,7 @@ services:
       POSTGRES_PORT: "${POSTGRES_PORT:-6432}"
       REDIS_HOST: "${REDIS_HOST:-redis}"
       REDIS_PORT: "${REDIS_PORT:-6379}"
-      LITELLM_HEALTH_URL: "${LITELLM_HEALTH_URL:-http://litellm:4000/health}"
+      LITELLM_HEALTH_URL: "${LITELLM_HEALTH_URL:-http://litellm:4000/health/liveliness}"
       DEPENDENCY_CHECK_TIMEOUT: "${DEPENDENCY_CHECK_TIMEOUT:-2.0}"
 
     volumes:

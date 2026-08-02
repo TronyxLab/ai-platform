@@ -10,7 +10,7 @@
 ## @rationale Makefile include-split W4-E4: module targets isolated from bootstrap/CI
 # endregion MODULE_CONTRACT
 
-.PHONY: up-safe compose-safe-up up down restart status healthcheck backup restore discover-modules validate-modules
+.PHONY: up-safe compose-safe-up up down down-volumes restart status healthcheck backup restore discover-modules validate-modules
 
 ## up-safe: Start platform stack with preflight secret validation
 ##   Delegates to core/entrypoints/compose-wrapper.sh which runs compose_preflight.py
@@ -41,11 +41,19 @@ up: discover-modules dev-certs
 	fi
 	@echo "[IMP:9][make][up] Platform stack started"
 
-## down: Stop platform stack and remove volumes
+## down: Stop platform stack (data preserved — NO -v, volumes remain)
+##   Destructive teardown is explicit: make down-volumes
 down:
-	@echo "[IMP:7][make][down] Stopping platform stack..."
+	@echo "[IMP:7][make][down] Stopping platform stack (volumes preserved)..."
+	@docker compose $(COMPOSE_BASE_FILES) down
+	@echo "[IMP:9][make][down] Platform stack stopped (volumes preserved)"
+
+## down-volumes: Stop platform stack AND remove volumes (destructive)
+##   ⚠️ Data loss: removes all compose-managed volumes — explicit operator action
+down-volumes:
+	@echo "[IMP:9][make][down-volumes] WARNING: volumes will be removed (destructive)"
 	@docker compose $(COMPOSE_BASE_FILES) down -v
-	@echo "[IMP:9][make][down] Platform stack stopped"
+	@echo "[IMP:9][make][down-volumes] Platform stack stopped, volumes removed"
 
 ## restart: Soft restart all Docker compose services (stop + start)
 restart:

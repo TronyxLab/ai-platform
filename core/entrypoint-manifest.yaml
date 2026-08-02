@@ -275,11 +275,12 @@ secrets:
 test/gate:
 - make_target: gate
   mechanism: pytest+lint
-  delegates_to: make gate [MODE=fast|full]
-  signature: make gate [MODE=fast|full]
+  delegates_to: make gate [MODE=fast|full|ci-docker]
+  signature: make gate [MODE=fast|full|ci-docker]
   operation_ru: Production gate
   description: 'Production gate. MODE=full (default): lint+validate+gates+static+predeploy+smoke+component.
-    MODE=fast: syntax+JSON+gates+static+predeploy (no Docker).'
+    MODE=fast: syntax+JSON+gates+static+predeploy (no Docker). MODE=ci-docker: predeploy-docker
+    → smoke → component.'
 - make_target: check-manifests
   mechanism: python-check
   delegates_to: --check for all 6 generators (G1-G6) — byte-level comparison
@@ -551,17 +552,26 @@ lifecycle:
   description: Health check of platform (local compose or remote node via SSH)
 - make_target: up
   mechanism: provisioner + docker-compose
-  delegates_to: core/internal/provision-environment.sh → docker compose up
-  signature: make up [PROJECT=...]
+  delegates_to: core/internal/provision-environment.sh → docker compose up (MODULES
+    filter)
+  signature: make up [MODULES=<comma-list>]
   operation_ru: Запуск compose-стека
   description: Provision environment (networks, volumes, CI env) from platform-env.yaml,
-    then start local compose lifecycle
+    then start local compose lifecycle. MODULES — фильтр profile'ов (без аргумента
+    — все).
 - make_target: down
   mechanism: docker-compose
   delegates_to: docker compose down
   signature: make down
   operation_ru: Остановка compose-стека
-  description: Stop local compose lifecycle
+  description: Stop local compose lifecycle (data preserved — volumes remain). Destructive
+    teardown — make down-volumes
+- make_target: down-volumes
+  mechanism: docker-compose
+  delegates_to: docker compose down -v
+  signature: make down-volumes
+  operation_ru: Остановка compose-стека и удаление volumes
+  description: Stop and remove compose volumes (destructive — data loss)
 - make_target: restart
   mechanism: docker-compose
   delegates_to: docker compose stop && docker compose start
@@ -576,19 +586,20 @@ lifecycle:
   description: Show status of local compose services
 - make_target: backup
   mechanism: shell-script
-  delegates_to: Module backup scripts
-  signature: make backup [NODE=...]
+  delegates_to: backup-cron module make backup
+  signature: make backup
   operation_ru: Резервное копирование
   description: Run backup for platform services. Stateful-модули (postgres, backup-cron,
     hermes-agent); остальные модули НЕ объявляют backup/restore (контракт сужен, DevPlan
     116 D1)
 - make_target: restore
   mechanism: shell-script
-  delegates_to: Module restore scripts
-  signature: make restore NODE=<n>
+  delegates_to: backup-cron module make restore DUMP_FILE=<path>
+  signature: make restore DUMP_FILE=<path>
   operation_ru: Восстановление из бэкапа
   description: Restore from backup. Stateful-модули (postgres, backup-cron, hermes-agent);
-    остальные модули НЕ объявляют backup/restore (контракт сужен, DevPlan 116 D1)
+    остальные модули НЕ объявляют backup/restore (контракт сужен, DevPlan 116 D1).
+    DUMP_FILE обязателен — без него exit 1 «DUMP_FILE not set»
 - make_target: node-update
   mechanism: ssh+rsync
   delegates_to: core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh
@@ -830,6 +841,7 @@ allowed_verbs:
 - dev-certs
 - discover-modules
 - down
+- down-volumes
 - doxygen-check
 - fix-executable-bit
 - fix-gate
@@ -1139,6 +1151,15 @@ gates:
 - id: test_platform_domain_single_sot
   test_file: test_gate_domain_parity.py
   description: 'Auto-discovered gate: test_platform_domain_single_sot'
+- id: test_down_recipe_has_no_volumes_flag
+  test_file: test_gate_down_no_volumes.py
+  description: 'Auto-discovered gate: test_down_recipe_has_no_volumes_flag'
+- id: test_down_volumes_target_exists_with_flag
+  test_file: test_gate_down_no_volumes.py
+  description: 'Auto-discovered gate: test_down_volumes_target_exists_with_flag'
+- id: test_down_with_volumes_negative
+  test_file: test_gate_down_no_volumes.py
+  description: 'Auto-discovered gate: test_down_with_volumes_negative'
 - id: test_prometheus_config_no_unexpanded_vars
   test_file: test_gate_env_chain.py
   description: 'Auto-discovered gate: test_prometheus_config_no_unexpanded_vars'
@@ -1286,9 +1307,15 @@ gates:
 - id: test_bare_latest_rejected_negative
   test_file: test_gate_image_tag_form.py
   description: 'Auto-discovered gate: test_bare_latest_rejected_negative'
+- id: test_context_image_default_matches_sot
+  test_file: test_gate_image_tag_form.py
+  description: 'Auto-discovered gate: test_context_image_default_matches_sot'
 - id: test_ghcr_refs_follow_tag_policy
   test_file: test_gate_image_tag_form.py
   description: 'Auto-discovered gate: test_ghcr_refs_follow_tag_policy'
+- id: test_latest_digest_fallback_detected_negative
+  test_file: test_gate_image_tag_form.py
+  description: 'Auto-discovered gate: test_latest_digest_fallback_detected_negative'
 - id: test_plain_tag_without_digest_rejected
   test_file: test_gate_image_tag_form.py
   description: 'Auto-discovered gate: test_plain_tag_without_digest_rejected'
@@ -1304,6 +1331,21 @@ gates:
 - id: test_linter_parity
   test_file: test_gate_lint_quality.py
   description: 'Auto-discovered gate: test_linter_parity'
+- id: test_all_sources_use_liveliness
+  test_file: test_gate_litellm_health_url_parity.py
+  description: 'Auto-discovered gate: test_all_sources_use_liveliness'
+- id: test_bare_health_detected_negative
+  test_file: test_gate_litellm_health_url_parity.py
+  description: 'Auto-discovered gate: test_bare_health_detected_negative'
+- id: test_no_bare_health_url
+  test_file: test_gate_litellm_health_url_parity.py
+  description: 'Auto-discovered gate: test_no_bare_health_url'
+- id: test_no_readiness_in_compose_sources
+  test_file: test_gate_litellm_health_url_parity.py
+  description: 'Auto-discovered gate: test_no_readiness_in_compose_sources'
+- id: test_readiness_detected_negative
+  test_file: test_gate_litellm_health_url_parity.py
+  description: 'Auto-discovered gate: test_readiness_detected_negative'
 - id: test_litellm_compose_test_database_url_is_postgres
   test_file: test_gate_litellm_pg_enforcement.py
   description: 'Auto-discovered gate: test_litellm_compose_test_database_url_is_postgres'
@@ -1448,6 +1490,12 @@ gates:
 - id: test_repair_gate_ids_resolve
   test_file: test_gate_manifest_integrity.py
   description: 'Auto-discovered gate: test_repair_gate_ids_resolve'
+- id: test_signatures_match_code
+  test_file: test_gate_manifest_signature_parity.py
+  description: 'Auto-discovered gate: test_signatures_match_code'
+- id: test_stale_signature_detected_negative
+  test_file: test_gate_manifest_signature_parity.py
+  description: 'Auto-discovered gate: test_stale_signature_detected_negative'
 - id: test_manifests_up_to_date
   test_file: test_gate_manifests_up_to_date.py
   description: 'Auto-discovered gate: test_manifests_up_to_date'
@@ -1985,6 +2033,18 @@ gates:
 - id: test_master_password_registered
   test_file: test_gate_status_page.py
   description: 'Auto-discovered gate: test_master_password_registered'
+- id: test_compose_default_matches_sot
+  test_file: test_gate_status_page_port_parity.py
+  description: 'Auto-discovered gate: test_compose_default_matches_sot'
+- id: test_compose_env_injects_port
+  test_file: test_gate_status_page_port_parity.py
+  description: 'Auto-discovered gate: test_compose_env_injects_port'
+- id: test_hardcoded_healthcheck_detected_negative
+  test_file: test_gate_status_page_port_parity.py
+  description: 'Auto-discovered gate: test_hardcoded_healthcheck_detected_negative'
+- id: test_healthcheck_references_variable
+  test_file: test_gate_status_page_port_parity.py
+  description: 'Auto-discovered gate: test_healthcheck_references_variable'
 - id: test_stub_detection_sole_definition
   test_file: test_gate_stub_detection_sole.py
   description: 'Auto-discovered gate: test_stub_detection_sole_definition'

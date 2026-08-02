@@ -139,6 +139,7 @@
 | ✅ | `dev-certs` | Генерация dev SSL-сертификатов |
 | ✅ | `discover-modules` | Авто-обнаружение модулей |
 | ✅ | `down` | Остановка compose-стека |
+| ✅ | `down-volumes` | Остановка compose-стека и удаление volumes |
 | ✅ | `doxygen-check` | Doxygen zero-warnings проверка |
 | ✅ | `fix-executable-bit` | Исправление executable bit на .sh файлах |
 | ✅ | `fix-gate` | Композитное исправление gate-ошибок |

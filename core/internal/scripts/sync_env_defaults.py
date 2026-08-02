@@ -454,8 +454,13 @@ def _section_litellm(env_defaults: dict[str, str], secret_defs: dict[str, dict[s
     lines.append("LITELLM_LICENSE=" + _get_env_val(env_defaults, "LITELLM_LICENSE", ""))
     # LITELLM_METRICS_TOKEN removed — unified with LITELLM_MASTER_KEY
     lines.append("LITELLM_PORT=" + _get_val_required(env_defaults, "LITELLM_PORT"))
-    lines.append("# URL для healthcheck LiteLLM (default: http://litellm:4000/health)")
-    lines.append("LITELLM_HEALTH_URL=" + _get_env_val(env_defaults, "LITELLM_HEALTH_URL", "http://litellm:4000/health"))
+    lines.append(
+        "# URL для healthcheck LiteLLM (default: http://litellm:4000/health/liveliness — единый канон, DevPlan 122 T2)"
+    )
+    lines.append(
+        "LITELLM_HEALTH_URL="
+        + _get_env_val(env_defaults, "LITELLM_HEALTH_URL", "http://litellm:4000/health/liveliness")
+    )
     lines.append("# Клиенты (Hermes, внешние тулы) шлют запросы через LiteLLM")
     lines.append("OPENAI_BASE_URL=" + _get_env_val(env_defaults, "OPENAI_BASE_URL", "http://litellm:4000"))
     lines.append("# Virtual key for Hermes-agent — provisioned by make provision-llm (unlimited profile)")

@@ -54,7 +54,7 @@ if [ "$MODE" = "deep" ]; then
             exec python3 "${SCRIPT_DIR}/healthcheck_deps.py" \
                 --pg-host "${POSTGRES_HOST:-pgbouncer}" --pg-port "${POSTGRES_PORT:-6432}" \
                 --redis-host "${REDIS_HOST:-redis}" --redis-port "${REDIS_PORT:-6379}" \
-                --litellm-url "${LITELLM_HEALTH_URL:-http://litellm:4000/health}"
+                --litellm-url "${LITELLM_HEALTH_URL:-http://litellm:4000/health/liveliness}"
             ;;
         *)
             log_imp 9 "deep" "unknown deep mode '$DEEP_MODE' — expected 'liveness', 'readiness', or 'deps'"

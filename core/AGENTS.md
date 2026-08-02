@@ -41,7 +41,7 @@
 | `make test-summary` | Запуск тестов (агент-ориентированная обёртка) | make test-summary [MARKER=static_audit|smoke|component|integration|predeploy|contract|e2e|static|all] [TIMEOUT=1800] | core/internal/test_runner.py --marker \<MARKER\> |
 | `make test-inventory-sync` | Синхронизация test inventory | make test-inventory-sync | tests/tools/sync_inventory.py |
 | `make test-node` | E2E pipeline тесты на test-VPS | make test-node NODE=\<name\> | pytest tests/e2e/ -m requires_node |
-| `make gate` | Production gate | make gate [MODE=fast|full] | make gate [MODE=fast|full] |
+| `make gate` | Production gate | make gate [MODE=fast|full|ci-docker] | make gate [MODE=fast|full|ci-docker] |
 | `make check-manifests` | Проверка актуальности сгенерированных манифестов | make check-manifests | --check for all 6 generators (G1-G6) — byte-level comparison |
 | `make generate-manifests` | Генерация всех манифестов | make generate-manifests | make generate-manifests |
 | `make generate-secrets-manifest` | Генерация secrets-manifest.yaml | make generate-secrets-manifest | python3 core/internal/scripts/generate_secrets_manifest.py |
@@ -65,12 +65,13 @@
 | `make compose-safe-up` | Deprecated alias for up-safe | make compose-safe-up (deprecated — use up-safe) | up-safe (deprecated alias) |
 | `make converge` | Реконсиляция ноды | make converge NODE=\<name\> | core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh |
 | `make healthcheck` | Проверка здоровья | make healthcheck [NODE=...] | core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh |
-| `make up` | Запуск compose-стека | make up [PROJECT=...] | core/internal/provision-environment.sh → docker compose up |
+| `make up` | Запуск compose-стека | make up [MODULES=\<comma-list\>] | core/internal/provision-environment.sh → docker compose up (MODULES filter) |
 | `make down` | Остановка compose-стека | make down | docker compose down |
+| `make down-volumes` | Остановка compose-стека и удаление volumes | make down-volumes | docker compose down -v |
 | `make restart` | Мягкий перезапуск compose-стека | make restart | docker compose stop && docker compose start |
 | `make status` | Статус compose-стека | make status | docker compose ps |
-| `make backup` | Резервное копирование | make backup [NODE=...] | Module backup scripts |
-| `make restore` | Восстановление из бэкапа | make restore NODE=\<n\> | Module restore scripts |
+| `make backup` | Резервное копирование | make backup | backup-cron module make backup |
+| `make restore` | Восстановление из бэкапа | make restore DUMP_FILE=\<path\> | backup-cron module make restore DUMP_FILE=\<path\> |
 | `make node-update` | Обновление provisioned ноды | make node-update NODE=\<name\> | core/entrypoints/node-update.sh → core/internal/bootstrap/node-lifecycle.sh --mode update → core/internal/bootstrap/lifecycle/cli.py → core/internal/bootstrap/lifecycle/state_machine.py (B9 state machine — UPDATE mode — 5 фаз — φ9 secrets_update · φ10 node_config_update · φ11 registry_update → provision · llm-keys · healthcheck · φ12 deploy_update → core/internal/bootstrap/issue-cert.sh → core/internal/bootstrap/deploy-modules.sh · φ13 converge_update) |
 | `make verify` | HTTPS-верификация | make verify NODE=\<node\> | core/entrypoints/verify.sh → core/internal/verify/verify-domains.sh |
 | `make provision` | Provision окружения | make provision [SCOPE=...] | core/internal/provision-environment.sh → core/internal/provisioner.py |

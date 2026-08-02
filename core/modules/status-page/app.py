@@ -136,7 +136,7 @@ PLATFORM_SERVICES = [
         "internal": "langfuse:3000",
         "health_path": "/api/public/health",
     },
-    {"name": "LiteLLM", "url": None, "internal": "litellm:4000", "health_path": "/health/readiness"},
+    {"name": "LiteLLM", "url": None, "internal": "litellm:4000", "health_path": "/health/liveliness"},
 ]
 
 

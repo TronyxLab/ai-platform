@@ -89,7 +89,9 @@ def test_all_consumers_unchanged(caplog):
 
     assert not failures, "H3 FAIL: потребители не импортируются после декомпозиции:\n" + "\n".join(failures)
     assert imported_ok >= 21, f"H3 FAIL: ожидалось ≥21 потребителя, импортировано {imported_ok}"
-    logger.critical("[IMP:9][consumers] PASS: %d потребителей NodeYaml импортируются без изменений (AC-H3.1)", imported_ok)
+    logger.critical(
+        "[IMP:9][consumers] PASS: %d потребителей NodeYaml импортируются без изменений (AC-H3.1)", imported_ok
+    )
 
 
 # 🧪 TRAP[TEST] · Negative (R5, H3) · NodeYaml доступен по каноническому пути

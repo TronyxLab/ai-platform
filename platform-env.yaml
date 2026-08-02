@@ -155,7 +155,7 @@ env_defaults:
   LITELLM_MASTER_KEY: sk-ci-test-master-key
   LITELLM_LICENSE: ''
   LITELLM_PORT: '4000'
-  LITELLM_HEALTH_URL: http://litellm:4000/health
+  LITELLM_HEALTH_URL: http://litellm:4000/health/liveliness
   OPENAI_BASE_URL: http://litellm:4000
   LITELLM_API_KEY: sk-placeholder-litellm-api-key
   NEXTAUTH_SECRET: ci-test-nextauth-secret-32-chars-min!!

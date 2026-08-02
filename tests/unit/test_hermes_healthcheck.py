@@ -68,7 +68,7 @@ def test_check_deps_all_ok(caplog: pytest.LogCaptureFixture) -> None:
         6432,
         "redis",
         6379,
-        "http://litellm:4000/health",
+        "http://litellm:4000/health/liveliness",
         check_pg_fn=lambda h, p: True,
         check_redis_fn=lambda h, p: True,
         check_litellm_fn=lambda u: True,
@@ -90,7 +90,7 @@ def test_hc_deps_aggregation_negative(caplog: pytest.LogCaptureFixture) -> None:
         6432,
         "redis",
         6379,
-        "http://litellm:4000/health",
+        "http://litellm:4000/health/liveliness",
         check_pg_fn=lambda h, p: False,  # required MISSING
         check_redis_fn=lambda h, p: True,
         check_litellm_fn=lambda u: True,
@@ -111,7 +111,7 @@ def test_hc_deps_aggregation_litellm_required_negative(caplog: pytest.LogCapture
         6432,
         "redis",
         6379,
-        "http://litellm:4000/health",
+        "http://litellm:4000/health/liveliness",
         check_pg_fn=lambda h, p: True,
         check_redis_fn=lambda h, p: True,
         check_litellm_fn=lambda u: False,  # required MISSING
@@ -131,7 +131,7 @@ def test_hc_deps_aggregation_optional_redis_missing_negative(caplog: pytest.LogC
         6432,
         "redis",
         6379,
-        "http://litellm:4000/health",
+        "http://litellm:4000/health/liveliness",
         check_pg_fn=lambda h, p: True,
         check_redis_fn=lambda h, p: False,  # optional MISSING → warn only
         check_litellm_fn=lambda u: True,
@@ -204,7 +204,7 @@ def test_check_litellm_ok(caplog: pytest.LogCaptureFixture) -> None:
     resp.__enter__ = mock.MagicMock(return_value=resp)
     resp.__exit__ = mock.MagicMock(return_value=False)
     with mock.patch("healthcheck_deps.urllib.request.urlopen", return_value=resp):
-        assert check_litellm("http://litellm:4000/health") is True
+        assert check_litellm("http://litellm:4000/health/liveliness") is True
     # Примитив логирует ok на IMP:8 (как shell log_imp 8); IMP:9 — в check_deps агрегации
     assert any("[IMP:8]" in r.message and "LiteLLM: ok" in r.message for r in caplog.records)
 
@@ -222,7 +222,7 @@ def test_check_litellm_error_never_raises(caplog: pytest.LogCaptureFixture) -> N
         "healthcheck_deps.urllib.request.urlopen",
         side_effect=urllib.error.HTTPError("url", 503, "Service Unavailable", None, None),
     ):
-        assert check_litellm("http://litellm:4000/health") is False
+        assert check_litellm("http://litellm:4000/health/liveliness") is False
 
 
 # endregion TEST_check_pg / check_redis / check_litellm
@@ -244,7 +244,7 @@ def test_cli_healthy_exit0(caplog: pytest.LogCaptureFixture) -> None:
         "healthcheck_deps.check_deps",
         return_value=mock.MagicMock(healthy=mock.MagicMock(return_value=True)),
     ):
-        assert hc_main(["--pg-host", "pg", "--litellm-url", "http://litellm:4000/health"]) == 0
+        assert hc_main(["--pg-host", "pg", "--litellm-url", "http://litellm:4000/health/liveliness"]) == 0
 
 
 # 🧪 TRAP[TEST] · 2026-08-02 · Regression · CLI: unhealthy → exit 1 (D6)

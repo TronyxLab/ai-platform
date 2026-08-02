@@ -9,7 +9,7 @@
 ##   - Requires PostgreSQL for spend_logs (no SQLite)
 ##   - depends_on: [postgres] for startup ordering
 ##   - Langfuse tracing via LANGFUSE_HOST env var
-##   - Healthcheck: /health/readiness (no auth required)
+##   - Healthcheck: /health/liveliness (no auth required)
 ## @rationale Split from observability module per Phase 3 refactoring (D1)
 # endregion MODULE_CONTRACT
 

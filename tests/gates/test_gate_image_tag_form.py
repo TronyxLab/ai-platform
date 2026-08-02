@@ -165,3 +165,34 @@ class TestGateImageTagForm:
         """Non-versioned tag without digest (e.g. :foo) → RED (no tag-drift surface)."""
         assert not _is_valid_ghcr_ref("ghcr.io/tronyxlab/hermes-agent-context:latest")
         assert not _is_valid_ghcr_ref("ghcr.io/tronyxlab/hermes-agent-context:staging")
+
+    # 🧪 TRAP[TEST] · 2026-08-03 · REGRESSION · CONTEXT_IMAGE default != SoT (DevPlan 122 T4, P-4)
+    # · Last fail: hermes-agent base.yml:69 fallback `latest@sha256:dd36…` vs SoT v2026.7.1
+    # ·   (platform-infra:146, .env.example:53, platform-env.yaml:128) — скрытый второй пин
+    # · Remove if: CONTEXT_IMAGE канонизируется иначе
+    def test_context_image_default_matches_sot(self):
+        """Default тег CONTEXT_IMAGE в hermes-agent base.yml == env_defaults.CONTEXT_IMAGE (SoT)."""
+        infra = yaml.safe_load(PLATFORM_INFRA.read_text())
+        sot = infra["env_defaults"]["CONTEXT_IMAGE"]
+        assert sot.startswith("ghcr.io/"), f"SoT CONTEXT_IMAGE должен быть ghcr-рефом: {sot}"
+        base = (MODULES_DIR / "hermes-agent" / "docker-compose.base.yml").read_text()
+        m = re.search(r"\$\{CONTEXT_IMAGE:-([^}]+)\}", base)
+        assert m, "GATE_IMAGE_TAG_FORM: fallback ${CONTEXT_IMAGE:-...} не найден в hermes-agent base.yml"
+        assert m.group(1) == sot, (
+            f"GATE_IMAGE_TAG_FORM: compose default '{m.group(1)}' != SoT '{sot}' — скрытый второй пин образа (P-4)"
+        )
+
+    # 🧪 TRAP[TEST] · 2026-08-03 · NEGATIVE (R5) · исходный вход P-4 (DevPlan 122 T4)
+    # · Last fail: base.yml:69 fallback ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:dd36…
+    # · Remove if: CONTEXT_IMAGE канонизируется иначе
+    def test_latest_digest_fallback_detected_negative(self):
+        """R5 negative: inline-фикстура fallback :latest@sha256 → RED (детектор ловит P-4)."""
+        inline_line = "image: ${CONTEXT_IMAGE:-ghcr.io/tronyxlab/hermes-agent-context:latest@sha256:" + "d" * 64 + "}"
+        m = re.search(r"\$\{CONTEXT_IMAGE:-([^}]+)\}", inline_line)
+        assert m, "R5 FAIL: inline fixture must contain CONTEXT_IMAGE fallback"
+        ref = m.group(1)
+        assert ref.startswith("ghcr.io/"), "R5 FAIL: fixture must be a ghcr ref"
+        # Детектор P-4: fallback != SoT (v2026.7.1) → RED
+        assert ref != "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1", (
+            "R5 FAIL: fixture должен отличаться от SoT (воспроизводить вход P-4)"
+        )

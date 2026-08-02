@@ -50,6 +50,10 @@ services:
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}
       NODE_NAME: ${NODE_NAME:-unknown}
       NODE_CONFIGS_DIR: ${NODE_CONFIGS_DIR:-/opt/node-configs}
+      # STATUS_PAGE_PORT — SoT: platform-infra.yaml env_defaults (DevPlan 122 T3).
+      # Порт внутренний (без host-bind); значение 8080 дублирует CADVISOR_PORT намеренно —
+      # разные интерфейсы: status-page слушает внутри контейнера, cadvisor — host-bind 127.0.0.1.
+      STATUS_PAGE_PORT: ${STATUS_PAGE_PORT:-8080}
 
     networks:
       proxy-net:
@@ -66,8 +70,9 @@ services:
 
     # /healthz — lightweight readiness probe (~50ms): checks status-metrics.json exists, readable, fresh.
     # Unlike /health (full system checks), this is fast enough for Docker HEALTHCHECK timeout (5s).
+    # Порт healthcheck — через ${STATUS_PAGE_PORT} (compose-интерполяция), не hardcode (DevPlan 122 T3).
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\" || exit 1"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:${STATUS_PAGE_PORT:-8080}/healthz')\" || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

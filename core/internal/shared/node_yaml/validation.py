@@ -104,9 +104,7 @@ class ValidationMixin:
             # Пакет node_yaml/: /core/internal/shared/node_yaml/validation.py → dirname ×4 = /core/
             # (в монолите node_yaml.py было ×3 — файл лежал на уровень выше; DevPlan 119 H1)
             schema_path = os.path.join(
-                os.path.dirname(
-                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                ),
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
                 "schemas",
                 "node.schema.json",
             )

@@ -206,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pg-port", default="6432")
     parser.add_argument("--redis-host", default="redis")
     parser.add_argument("--redis-port", default="6379")
-    parser.add_argument("--litellm-url", default="http://litellm:4000/health")
+    parser.add_argument("--litellm-url", default="http://litellm:4000/health/liveliness")
     args = parser.parse_args(argv)
 
     result = check_deps(
