@@ -84,16 +84,18 @@ def test_receive_unpack_empty_negative() -> None:
     assert flow.unpack(b"", "/tmp/nonexistent-staging") is False
 
 
-# 🧪 TRAP[TEST] · 2026-08-02 · unit · E2 validate missing ai-platform.yaml → ValueError
-# · Regression: fail-fast отсутствие ai-platform.yaml (контракт receive)
+# 🧪 TRAP[TEST] · 2026-08-02 · unit · E2 validate missing ai-platform.yaml → ConfigValidationError
+# · Regression: fail-fast отсутствие ai-platform.yaml (контракт receive, B4 — не bare ValueError)
 # · Remove if: validate contract change
 def test_receive_validate_missing_yaml_negative(tmp_path: Path) -> None:
-    """ReceiveFlow.validate without ai-platform.yaml → ValueError."""
+    """ReceiveFlow.validate without ai-platform.yaml → ConfigValidationError."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
     staging = tmp_path / "staging"
     staging.mkdir()
     (staging / "docker-compose.yml").write_text("services: {}\n")
     flow = ReceiveFlow()
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigValidationError):
         flow.validate(str(staging), project_name="testproj")
 
 

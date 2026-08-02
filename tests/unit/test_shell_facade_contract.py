@@ -64,13 +64,19 @@ def _read_deploy_modules_shell() -> str:
 
 # region HELPER__read_deploy_orchestrator
 def _read_deploy_orchestrator() -> str:
-    """Read deploy_orchestrator.py source content.
+    """Read deploy_orchestrator.py + orchestrator_metrics.py source content.
 
     ## @purpose — Central helper: reads the Python orchestrator once (DevPlan 100), returning raw text.
-    ## @io — ⎋ str: full content of deploy/deploy_orchestrator.py
+    ##            DevPlan 119 E6: severity/exit-code чистая логика вынесена в orchestrator_metrics.py —
+    ##            S4 контракт проверяется по ОБОИМ файлам (декомпозиция не теряет контракт).
+    ## @io — ⎋ str: full content of deploy/deploy_orchestrator.py + deploy/orchestrator_metrics.py
     ## @complexity 1 — file read
     """
-    return _DEPLOY_ORCHESTRATOR_PY.read_text()
+    metrics_path = _DEPLOY_ORCHESTRATOR_PY.parent / "orchestrator_metrics.py"
+    combined = _DEPLOY_ORCHESTRATOR_PY.read_text()
+    if metrics_path.is_file():
+        combined += "\n" + metrics_path.read_text()
+    return combined
 
 
 # endregion HELPER__read_deploy_orchestrator

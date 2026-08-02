@@ -75,10 +75,12 @@ def test_atomic_write_json_roundtrip(tmp_path: Path) -> None:
 
 # 🧪 TRAP[TEST] · 2026-08-02 · unit · validator rejection leaves target untouched
 # · Regression: sudoers_generator uses validator=visudo — rejection must NOT commit
-# · Last fail: N/A (new canon)
+# · Last fail: N/A (new canon); B4 контракт — ConfigValidationError (не bare ValueError)
 # · Remove if: validator contract changes
 def test_atomic_write_validator_rejects(tmp_path: Path) -> None:
-    """Validator returning False → ValueError, target NOT written, no temp garbage."""
+    """Validator returning False → ConfigValidationError, target NOT written, no temp garbage."""
+    from core.internal.shared.exceptions import ConfigValidationError
+
     target = tmp_path / "sudoers.d"
     target.mkdir()
     dest = target / "platform-test"
@@ -86,7 +88,7 @@ def test_atomic_write_validator_rejects(tmp_path: Path) -> None:
     def _reject(_tmp: str) -> bool:
         return False
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigValidationError):
         atomic_write(str(dest), "bad sudoers\n", mode=0o440, validator=_reject)
 
     assert not dest.exists(), "Validator rejection must leave target untouched"

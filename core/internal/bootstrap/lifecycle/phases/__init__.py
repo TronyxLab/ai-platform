@@ -30,7 +30,7 @@ from core.internal.bootstrap.lifecycle.helpers import secrets as helpers_secrets
 from core.internal.bootstrap.lifecycle.helpers import system as helpers_system
 from core.internal.bootstrap.lifecycle.helpers import users as helpers_users
 from core.internal.bootstrap.lifecycle.helpers import validation as helpers_validation
-from core.internal.bootstrap.lifecycle.phases.certs import _install_acme, phase_certificates
+from core.internal.bootstrap.lifecycle.phases.certs import phase_certificates
 from core.internal.bootstrap.lifecycle.phases.docker import (
     phase_deploy_services,
     phase_deploy_update,
@@ -52,7 +52,8 @@ from core.internal.shared import (
 )
 
 __all__ = [
-    "_install_acme",
+    # _install_acme НЕ re-export'ится (приватное имя — гейт no_private_cross_module_imports;
+    # используется только внутри phases/certs.py; тесты патчат phases.certs._install_acme)
     "helpers_domains",
     "helpers_reporting",
     "helpers_secrets",

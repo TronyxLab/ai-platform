@@ -394,22 +394,25 @@ def test_write_back_pyyaml_fallback(caplog, tmp_path, monkeypatch):
 
 
 def _patch_write_open_raises(monkeypatch):
-    """Patch builtins.open so ANY write-mode open raises OSError; reads pass through.
+    """Patch atomic-commit so ANY _write_back write raises OSError; reads pass through.
 
     ## @purpose  Simulates disk-full/permission-denied for _write_back write paths.
-    ## @io        ⇥ monkeypatch → ⎋ None (side-effect: patched builtins.open)
+    ##           DevPlan 119 E5: _write_back использует shared/atomic_writer
+    ##           (tempfile.NamedTemporaryFile + os.replace) — НЕ builtins.open.
+    ##           Точка коммита = os.replace в atomic_writer → патчим его (той же
+    ##           семантикой disk-full, что раньше ловил builtins.open).
+    ## @io        ⇥ monkeypatch → ⎋ None (side-effect: patched os.replace)
     """
-    import builtins
+    import core.internal.shared.atomic_writer as atomic_writer
 
-    original_open = builtins.open
+    original_replace = atomic_writer.os.replace
 
-    def mock_open(*args, **kwargs):
-        mode = kwargs.get("mode", args[1] if len(args) > 1 else "r")
-        if "w" in str(mode):
-            raise OSError("Mock: disk full (write)")
-        return original_open(*args, **kwargs)
+    def mock_replace(*args, **kwargs):
+        raise OSError("Mock: disk full (write)")
 
-    monkeypatch.setattr(builtins, "open", mock_open)
+    monkeypatch.setattr(atomic_writer.os, "replace", mock_replace)
+    # keep reference to avoid lint-unused (documented simulation target)
+    assert original_replace is not None
 
 
 # 🧪 TRAP[TEST] · Regression · add_project disk error → ConfigParseError + cache clean

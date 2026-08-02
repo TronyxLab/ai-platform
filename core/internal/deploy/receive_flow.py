@@ -44,6 +44,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+# Контракт B4 (DevPlan 116 B4 T2): валидация payload → ConfigValidationError (не bare ValueError).
+from core.internal.shared.exceptions import ConfigValidationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,21 +92,22 @@ class ReceiveFlow:
     # region FUNC_validate
     ## @purpose  Parse ai-platform.yaml (shared reader B1), resolve + validate project name.
     ## @io       ⇥ staging: str, project_name: str | None → ⎋ tuple[str, str] (project, service)
-    ##           ⚡ ValueError — ai-platform.yaml missing / name invalid / no name (fail-fast)
+    ##           ⚡ ConfigValidationError — ai-platform.yaml missing / name invalid / no name (fail-fast)
     ## @complexity O(1) — file read + shared parser + name validation
     ## @invariants
-    ##   - ai-platform.yaml обязателен (отсутствие → ValueError)
+    ##   - ai-platform.yaml обязателен (отсутствие → ConfigValidationError)
     ##   - project_name из аргументов приоритетен; фолбэк на yaml `name` (локальные вызовы)
-    ##   - validate_project_name (verb-reserve U-56) — невалидное имя → ValueError
+    ##   - validate_project_name (verb-reserve U-56) — невалидное имя → ConfigValidationError
     def validate(self, staging: str, project_name: str | None) -> tuple[str, str]:
         """Parse + validate payload. Returns (resolved_project, service)."""
         from core.internal.shared import project_yaml as shared_project_yaml
+        from core.internal.shared.exceptions import ConfigValidationError
         from core.internal.shared.project_registry import validate_project_name
 
         ai_yaml = Path(staging) / "ai-platform.yaml"
         if not ai_yaml.is_file():
             logger.error("[IMP:10][ReceiveFlow][validate] ai-platform.yaml not found in payload")
-            raise ValueError("ai-platform.yaml not found in payload")
+            raise ConfigValidationError("ai-platform.yaml not found in payload")
 
         config = shared_project_yaml.load_project_yaml(Path(staging))
 
@@ -112,12 +116,12 @@ class ReceiveFlow:
         resolved_project = project_name or shared_project_yaml.get_name(config)
         if not resolved_project:
             logger.error("[IMP:10][ReceiveFlow][validate] No project name in args or ai-platform.yaml")
-            raise ValueError("No project name in args or ai-platform.yaml")
+            raise ConfigValidationError("No project name in args or ai-platform.yaml")
 
         # U-56 verb-reserve + canonical name validation (проект «status» невалиден)
         if not validate_project_name(resolved_project):
             logger.error("[IMP:10][ReceiveFlow][validate] Invalid/reserved project name: %r", resolved_project)
-            raise ValueError(f"Invalid or reserved project name: {resolved_project}")
+            raise ConfigValidationError(f"Invalid or reserved project name: {resolved_project}")
 
         service = resolved_project  # D5: service = project_name (чтение service из yaml удалено, U-37)
         logger.info("[IMP:9][ReceiveFlow][validate] Validated project=%s service=%s", resolved_project, service)
@@ -134,7 +138,9 @@ class ReceiveFlow:
     ## @invariants
     ##   - LocalChannel (no-op transport — payload уже на месте, TRAP[DECISION] 2026-07-31)
     ##   - version (sha) прокидывается в deploy() → DeployHistory snapshot (sha-pinning)
-    def deploy(self, project: str, service: str, version: str, staging: str, target_dir: str, base: str | None = None) -> Any:
+    def deploy(
+        self, project: str, service: str, version: str, staging: str, target_dir: str, base: str | None = None
+    ) -> Any:
         """Copy payload + deploy via LocalChannel. Returns OrchestratorDeployResult."""
         from core.internal.deploy.channels import LocalChannel
         from core.internal.deploy.orchestrator import DeployOrchestrator
@@ -190,7 +196,7 @@ class ReceiveFlow:
 
             try:
                 resolved_project, service = self.validate(staging, project_name)
-            except ValueError as e:
+            except ConfigValidationError as e:
                 print(json.dumps({"status": "FAILED", "error": str(e)}))
                 return 1
 

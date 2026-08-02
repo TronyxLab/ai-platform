@@ -232,6 +232,13 @@ def write(path: str, data: dict[str, str], mode: int = DEFAULT_SECRETS_MODE) -> 
     os.makedirs(dir_path, exist_ok=True)
     logger.info("[IMP:7][write] Atomic write to %s (%d entries, mode=0%o)", path, len(data), mode)
 
+    # Fail-fast: значения обязаны быть str (legacy write() raise'ил TypeError на value[:80]
+    # в debug-логе — контракт теста test_secrets_pipeline_write_roundtrip; валидация ДО
+    # tempfile — target не трогается при невалидном типе).
+    for key, value in data.items():
+        if not isinstance(value, str):
+            raise TypeError(f"secrets_env value for {key!r} must be str, got {type(value).__name__}")
+
     content = "".join(f"{key}={value}\n" for key, value in data.items())
     try:
         _atomic_write(path, content, mode=mode)

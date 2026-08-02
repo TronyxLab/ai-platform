@@ -34,12 +34,14 @@
 ##                      B2/B3 — deploy_paths каноны (DEFAULT_PROJECTS_BASE/platform_remote_base/node_configs_remote) во всех /opt/* литералах;
 ##                      B4 — subprocess_io +fatal_rc, lifecycle/helpers/subprocess_io.py удалён
 ##           2026-08-02 | DevPlan 119 C3 — verbs.validate_not_verb удалён (0 ссылок)
+##           2026-08-02 | DevPlan 119 E5 — +atomic_writer.py (33-й); канон атомарной записи
 # endregion MODULE_CONTRACT
 
 # core/internal/shared/ — инвентарь модулей
 
 | Модуль | Назначение | Ключевой API | Потребители |
 |--------|-----------|--------------|-------------|
+| `atomic_writer.py` | Канонический атомарный writer (DevPlan 119 E5 — tempfile+fsync+os.replace+optional validator). Заменяет 12+ локальных копий os.replace/NamedTemporaryFile с разной семантикой. Исключение: json_writer.py (Docker bind mount TRAP) | `atomic_write(path, content, mode, validator)`, `atomic_write_json()`, `atomic_write_text()` | secrets_env_parser, docker_registry_auth, docker_daemon, s3_ssl_cache, sudoers_generator, lifecycle/helpers/system (cron), metrics/cache, sync_env_defaults, template_engine, node_yaml._write_back |
 | `audit_logger.py` | Единый JSON-lines audit логгер — ЕДИНСТВЕННЫЙ writer (D1, DevPlan 116 B11 T2: deploy/audit_logger.py удалён, reporting pipe мигрирован). Расширенная схема ts/tag/status/msg + extra (operation/project/channel/result/duration_s/snapshot_id) | `write_audit_entry(tag, status, msg, **extra)`, `read_audit_log()`, CLI `write/read --log-file` | context_deployer, deploy_orchestrator (DeployAuditLogger adapter), lifecycle/helpers/reporting, scaffold/vhost_renderer, lib/audit.sh |
 | `content_hash.py` | SHA256 content-hash для идемпотентности bootstrap (state.json sub-steps) | `compute_step_hash()`, `step_hash_changed()` | state_machine |
 | `compose_files.py` | Единый SoT списков compose-файлов и резолва (DevPlan 118 A2 — заменяет 6 локальных кортежей: docker_orchestrator, converge/runtime, converge/volumes, orphan_reconciler, payload_deliverer, project_adopter) | `COMPOSE_FILENAMES`, `PROJECT_COMPOSE_FILENAMES`, `resolve_compose_file()`, `requires_compose_project()` | docker_orchestrator, converge/runtime, converge/volumes, orphan_reconciler, payload_deliverer, project_adopter, gate compose_files_sole_path |
