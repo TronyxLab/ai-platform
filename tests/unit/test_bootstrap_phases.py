@@ -672,3 +672,6 @@ def test_phase_user_accounts_forced_command_canonical_base(caplog, monkeypatch) 
     assert "orchestrator_cli dispatch" in prefix, "forced-command = orchestrator_cli dispatch (K1/117 D1)"
     assert "restrict" in prefix, "forced-command должен содержать restrict (ssh security)"
     logger.critical("[IMP:9][test] forced-command command= использует канон platform_remote_base — OK")
+
+
+# endregion FUNC_test_phase_user_accounts_forced_command_canonical_base
