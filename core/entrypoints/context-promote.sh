@@ -23,6 +23,15 @@ export PYTHONPATH="${_EP_DIR}/../..:${PYTHONPATH:-}"
 # region CONTEXT_VALIDATION
 ## @purpose Validate CONTEXT positional argument — must resolve to a GitHub org name
 CONTEXT="${1:-}"
+# ⚠️ TRAP[BUG] 2026-08-03 · --help не обрабатывался (контракт entrypoint'ов: usage)
+# · Symptom: CI contract — test_entrypoint_help_smoke[context-promote]: bash script --help
+#   пытался промоутить org "--help" (git push --mirror git@github.com:--help/...) → FAIL.
+# · Fix: --help/-h → usage в stdout + exit 0 (стандарт entrypoint help-smoke контракта).
+if [[ "$CONTEXT" == "--help" || "$CONTEXT" == "-h" ]]; then
+    echo "Usage: make context-promote CONTEXT=<context>"
+    echo "Promotes the platform into a context GitHub org (git mirror push + CI deploy)."
+    exit 0
+fi
 if [[ -z "$CONTEXT" ]]; then
     echo "[IMP:10][context-promote] ERROR: CONTEXT required — usage: make context-promote CONTEXT=<context>" >&2
     exit 1
