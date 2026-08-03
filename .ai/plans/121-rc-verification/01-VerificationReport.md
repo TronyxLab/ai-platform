@@ -243,7 +243,7 @@ make node-update NODE=tronyx-vps AGE_SECRET_KEY_FILE=~/.ssh/age-key-personal.txt
 |-------|-----------|
 | platform-gate-fast | **GREEN** (5 коммитов фиксов: pydantic→requirements.txt SoT, dev-deps requests/dotenv, env_defaults→.env.example, AGE_SECRET_KEY fixture, acme.sh нода-скоуп, context-promote --help, check_suite stdout-диагностика) |
 | mirror → TronyxLab/ai-platform | **SUCCESS** (каждый push) |
-| core-deploy | rsync core → /opt/platform (SHA совпадает); node-update: фикс /etc/age/key.txt fallback (secrets.sh step_10); последний ран — check-manifest-parity RED в CI (P-21) |
+| core-deploy | **SUCCESS (e1f03d1)**: rsync core → /opt/platform (SHA 8f162ed44c96 == локальный) → provision → node-update NODE=auto-detect=tronyx-vps; 24 контейнера healthy; фиксы: /etc/age/key.txt fallback (secrets.sh step_10), VPS_SSH_KEY base64, node-configs rsync условный |
 | Проекты (3/3) | **push → CI → GHCR build → SSH receive → контейнер → 200**; botanika SUCCESS полный; tronyx-site/dance-site — деплой успешен, фейл только verify-race (см. false-lead 23) |
 | Итерация обновления (5.3) | **ДОКАЗАНА**: title botanika → push → CI success → контейнер пересоздан → новый title в HTTP |
 
@@ -262,7 +262,7 @@ make node-update NODE=tronyx-vps AGE_SECRET_KEY_FILE=~/.ssh/age-key-personal.txt
 | P-13 | HIGH | Build Hermes L1 push 403 | **ОТКРЫТ** (не в скоупе дня; GHCR-токен/пакет) |
 | P-14 | HIGH | CI check-manifests RED | **ЗАКРЫТ** (pydantic→requirements SoT; dev-deps; env_defaults CI-источник) |
 | P-15 | MED | CI-доставка проектов | **ЗАКРЫТ** — 3/3 проекта задеплоены, 200 |
-| P-21 | MED | check-manifest-parity: CI RED, локально 15/15 PASS (c997279, 2 rerun) | **ОТКРЫТ** — вероятна гонка с параллельной сессией 124 (её файлы захвачены в мои коммиты); проверить после завершения 124 |
+| P-21 | MED | check-manifest-parity: CI RED, локально 15/15 PASS (c997279, 2 rerun) | **ЗАКРЫТ** — гонка с параллельной сессией 124 (её файлы захвачены в коммиты 121); после её завершения e1f03d1 gate-fast GREEN |
 | P-22 | MED | verify \<node\> проверяет ВСЕ домены ноды — race при параллельных деплоях (ложные фейлы) | Открыт: verify по проекту или допуск 502 |
 | P-23 | LOW | e2e φ8 deploy_context «No module named 'pydantic'» (non-fatal, error-path) | Открыт (на проде не воспроизвёлся) |
 
