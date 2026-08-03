@@ -37,6 +37,12 @@ def import_deploy_context(core_dir: str, node_name: str, node_yaml: str) -> None
         spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
         if spec and spec.loader:
             deployer_mod = importlib.util.module_from_spec(spec)
+            # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · sys.modules до exec_module (RC 121 прод φ7/φ8)
+            # · Symptom: "'NoneType' object has no attribute '__dict__'" — dataclasses._is_type
+            #   читает sys.modules[cls.__module__]; без регистрации модуля ДО exec_module —
+            #   dataclass-декораторы внутри context_deployer падают.
+            # · Fix: регистрация в sys.modules перед exec (паттерн cert_orchestrator).
+            sys.modules["context_deployer"] = deployer_mod
             spec.loader.exec_module(deployer_mod)
             result = deployer_mod.deploy_context(core_dir, node_name, node_yaml)
             logger.info(
@@ -65,6 +71,10 @@ def extract_domains(core_dir: str, node_yaml: str, context: str) -> list[str]:
         spec = importlib.util.spec_from_file_location("context_deployer", deployer_path)
         if spec and spec.loader:
             deployer_mod = importlib.util.module_from_spec(spec)
+            # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · sys.modules до exec_module (RC 121 прод φ7)
+            # · Symptom: "'NoneType' object has no attribute '__dict__'" — dataclasses._is_type
+            #   читает sys.modules[cls.__module__] (см. import_deploy_context TRAP).
+            sys.modules["context_deployer"] = deployer_mod
             spec.loader.exec_module(deployer_mod)
             return deployer_mod.extract_domains_for_context(node_yaml, context)
     except Exception as e:  # noqa: EXC — catch-all for importlib-based calls (best-effort: DEPLOY_BEST_EFFORT policy)
