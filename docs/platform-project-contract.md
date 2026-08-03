@@ -1,5 +1,5 @@
-<!-- GREP_SUMMARY: platform-project-contract, канон, environment, services, networks, delivery-channels, DO-NOT, instructions-priority, node-boundaries -->
-<!-- STRUCTURE: ┌MODULE_CONTRACT┐ → ◇ окружение (provides-сервисы, сети, каналы доставки) → ◇ команды → ◇ DO NOT → ◇ приоритет инструкций → ⎋ указатель на .env.platform -->
+# GREP_SUMMARY: platform-project-contract, канон, environment, services, networks, delivery-channels, DO-NOT, instructions-priority, node-boundaries
+# STRUCTURE: ┌MODULE_CONTRACT┐ → ◇ окружение (provides-сервисы, сети, каналы доставки) → ◇ команды → ◇ DO NOT → ◇ приоритет инструкций → ⎋ указатель на .env.platform
 # region MODULE_CONTRACT
 ## @purpose  Канонический документ-инструкция платформы ai-platform для агентов, работающих
 ##           в репозиториях проектов. Описывает полное окружение, которое платформа
