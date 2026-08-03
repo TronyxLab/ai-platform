@@ -58,6 +58,7 @@ def _http_code_ok(code: str) -> bool:
     except ValueError:
         return False
 
+
 # Эталонный список контейнеров (docker ps baseline, W1) — заполняется из файла
 _BASELINE_CONTAINERS = [
     "backup-cron",
@@ -224,7 +225,11 @@ class LogAuditManifest:
 
     def _check_auditfile(self, ssh: NodeSSHClient, marker: LogMarker) -> MarkerResult:
         path = marker.path or "/var/log/platform/audit.jsonl"
-        cmd = f"grep -cE '{marker.regex}' {path} 2>/dev/null || true"
+        if marker.container:
+            # файл внутри контейнера (например backup-cron: /var/log/platform/backup/postgres.log)
+            cmd = f"docker exec {marker.container} grep -cE '{marker.regex}' {path} 2>/dev/null || true"
+        else:
+            cmd = f"grep -cE '{marker.regex}' {path} 2>/dev/null || true"
         res = ssh.ssh_read(cmd, timeout=30)
         count = self._count_from_ssh(res)
         found = (count == 0) if marker.negate else (count > 0)
@@ -455,21 +460,35 @@ def host_epoch_seconds(ssh: NodeSSHClient) -> int:
     return int(res.stdout.strip())
 
 
-def sites_status(ssh: NodeSSHClient) -> dict[str, str]:
-    """Проверить HTTP-коды всех сайтов платформы (снаружи-через-хост)."""
+def sites_status(ssh: NodeSSHClient, bypass_dns: bool = False) -> dict[str, str]:
+    """Проверить HTTP-коды всех сайтов платформы (снаружи-через-хост).
+
+    bypass_dns=True: curl --resolve domain:443:127.0.0.1 — DNS-независимый probe
+    (для T2: хостовая резолюция отключена инъекцией, nginx при этом жив).
+    """
     status: dict[str, str] = {}
     for url in SITE_URLS:
-        res = ssh.ssh_read(f"curl -s -L --noproxy '*' -o /dev/null -w '%{{http_code}}' -m 15 '{url}'", timeout=30)
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = parsed.netloc
+        resolve_flag = f"--resolve {host}:443:127.0.0.1" if bypass_dns else ""
+        res = ssh.ssh_read(
+            f"curl -s -L --noproxy '*' {resolve_flag} -o /dev/null -w '%{{http_code}}' -m 15 '{url}'",
+            timeout=30,
+        )
         status[url] = res.stdout.strip()
     return status
 
 
-def wait_sites_up(ssh: NodeSSHClient, timeout_s: int, interval_s: float = 5.0) -> tuple[bool, dict[str, str]]:
+def wait_sites_up(
+    ssh: NodeSSHClient, timeout_s: int, interval_s: float = 5.0, bypass_dns: bool = False
+) -> tuple[bool, dict[str, str]]:
     """Ждать, пока все сайты снова отвечают. Вернуть (ok, последний статус)."""
     deadline = time.monotonic() + timeout_s
     last_status: dict[str, str] = {}
     while time.monotonic() < deadline:
-        last_status = sites_status(ssh)
+        last_status = sites_status(ssh, bypass_dns=bypass_dns)
         if last_status and all(_http_code_ok(code) for code in last_status.values()):
             return True, last_status
         time.sleep(interval_s)

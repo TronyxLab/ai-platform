@@ -40,6 +40,40 @@ logger = logging.getLogger(__name__)
 _TEST_PROJECT_NAME = "test-project"
 
 
+# region HELPER_resolve_test_vps_host
+def _resolve_test_vps_host() -> str:
+    """Resolve test-VPS host from node-configs/<NODE>/node.yaml (FAIL if unresolvable, Rule R4).
+
+    ## @purpose — Единая точка резолва VPS-хоста для node_ssh и test_vps_fresh (DRY,
+    ##            DevPlan 133: test_vps_fresh больше не зависит от node_ssh — локальные
+    ##            integration-тесты без NODE не тянут VPS-фикстуры).
+    ## @io — ⇥ None → ⎋ str (host) | pytest.fail
+    ## @complexity — O(1) — single YAML read
+    """
+    import yaml
+
+    node = _require_node_env()
+    node_yaml = repo_root() / "node-configs" / node / "node.yaml"
+    if not node_yaml.is_file():
+        pytest.fail(
+            f"node-configs/{node}/node.yaml not found at {node_yaml}. "
+            "Create it per DevPlan 095 T5 (node.name, node.host, node.owner_key).",
+            pytrace=False,
+        )
+    with open(node_yaml) as f:
+        data = yaml.safe_load(f) or {}
+    host = (data.get("node") or {}).get("host", "")
+    if not host:
+        pytest.fail(
+            f"node.host missing in {node_yaml} — set the test-VPS host/IP (operator action).",
+            pytrace=False,
+        )
+    return host
+
+
+# endregion HELPER_resolve_test_vps_host
+
+
 # region FIXTURE_requires_node
 @pytest.fixture
 def requires_node() -> str:
@@ -77,24 +111,8 @@ def node_ssh() -> NodeSSHClient:
     ##     function-scoped requires_node fixture, so the check is duplicated here
     ##   - node.yaml must exist at {repo_root}/node-configs/<NODE>/node.yaml (DevPlan 095 T5)
     """
-    import yaml
-
     node = _require_node_env()
-    node_yaml = repo_root() / "node-configs" / node / "node.yaml"
-    if not node_yaml.is_file():
-        pytest.fail(
-            f"node-configs/{node}/node.yaml not found at {node_yaml}. "
-            "Create it per DevPlan 095 T5 (node.name, node.host, node.owner_key).",
-            pytrace=False,
-        )
-    with open(node_yaml) as f:
-        data = yaml.safe_load(f) or {}
-    host = (data.get("node") or {}).get("host", "")
-    if not host:
-        pytest.fail(
-            f"node.host missing in {node_yaml} — set the test-VPS host/IP (operator action).",
-            pytrace=False,
-        )
+    host = _resolve_test_vps_host()
     user = os.environ.get("SSH_USER", "root")
     logger.info("[IMP:9][fixture][node_ssh] Node=%s host=%s user=%s", node, host, user)
     return NodeSSHClient(host=host, user=user)
@@ -116,16 +134,21 @@ def node_state(node_ssh: NodeSSHClient) -> NodeState:
 
 # region FIXTURE_test_vps_fresh
 @pytest.fixture(scope="session", autouse=True)
-def test_vps_fresh(node_state: NodeState) -> None:
+def test_vps_fresh() -> None:
     """Reset test-VPS to clean state before the E2E suite (session-scoped autouse).
 
     ## @purpose — Cold start per AGENTS.md invariant 9 (recreatable test-VPS).
     ##            Resets state.json → the first test performs the full 9-INIT-phase
     ##            bootstrap; subsequent tests run incrementally (DevPlan §4.1 DD3).
-    ## @io — ⇥ node_state → ⎋ None (side-effect: state.json removed on the VPS)
+    ##            ⚠️ DevPlan 133: НЕ autouse-зависит от node_state — локальные
+    ##            integration-тесты (tests/e2e/test_shared_db_access.py, маркер
+    ##            integration, без NODE env) не должны тянуть VPS-фикстуры.
+    ##            R4 сохраняется: VPS-тесты фейлятся через requires_node fixture.
+    ## @io — ⇥ None → ⎋ None (side-effect: state.json removed on the VPS)
     ## @complexity — O(1) — single SSH rm
     ## @invariants
     ##   - Runs EXACTLY ONCE per pytest session (session scope)
+    ##   - NODE env отсутствует → reset пропускается (локальный стек, не VPS)
     ##   - Failure to reset → suite fails loudly (R4), not skip
     ##   - Does NOT touch running containers or docker state — state.json only
     ## @rationale DevPlan §4.1: 1 cold start (~10min) + 11 incremental tests (~5min each)
@@ -135,7 +158,12 @@ def test_vps_fresh(node_state: NodeState) -> None:
     ##            contract: reset via rm state.json (documented operator reset), not
     ##            the mechanically-broken `make bootstrap-node --force`.
     """
+    if not os.environ.get("NODE"):
+        logger.info("[IMP:7][fixture][test_vps_fresh] NODE not set — skip VPS state reset (local e2e tests)")
+        return
     logger.info("[IMP:9][fixture][test_vps_fresh] Resetting state.json before E2E suite (cold start)")
+    node = _require_node_env()
+    node_state = NodeState(NodeSSHClient(host=_resolve_test_vps_host(), user=os.environ.get("SSH_USER", "root")))
     result = node_state.reset_state(timeout=60)
     assert result.exit_code == 0, f"Fresh state reset failed: {result.stderr}"
 

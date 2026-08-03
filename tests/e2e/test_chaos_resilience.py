@@ -111,13 +111,11 @@ def test_t01_docker_daemon_restart(requires_node: str, node_ssh: NodeSSHClient, 
 
     # uptime-эталон: StartedAt ключевых контейнеров ДО инъекции
     started_before = node_ssh.ssh_read(
-        "for c in postgres nginx litellm clickhouse; do echo -n \"$c \"; "
+        'for c in postgres nginx litellm clickhouse; do echo -n "$c "; '
         "docker inspect --format '{{.State.StartedAt}}' $c; done",
         timeout=30,
     )
-    started_before_map = dict(
-        line.split() for line in started_before.stdout.strip().splitlines() if line.strip()
-    )
+    started_before_map = dict(line.split() for line in started_before.stdout.strip().splitlines() if line.strip())
     logger.info("[IMP:9][T1][pre] container StartedAt: %s", started_before_map)
 
     inject = node_ssh.ssh_exec("systemctl restart docker", timeout=300)
@@ -131,26 +129,27 @@ def test_t01_docker_daemon_restart(requires_node: str, node_ssh: NodeSSHClient, 
 
     # контейнеры НЕ пересозданы (StartedAt совпадает) — resilience-факт
     started_after = node_ssh.ssh_read(
-        "for c in postgres nginx litellm clickhouse; do echo -n \"$c \"; "
+        'for c in postgres nginx litellm clickhouse; do echo -n "$c "; '
         "docker inspect --format '{{.State.StartedAt}}' $c; done",
         timeout=30,
     )
-    started_after_map = dict(
-        line.split() for line in started_after.stdout.strip().splitlines() if line.strip()
-    )
+    started_after_map = dict(line.split() for line in started_after.stdout.strip().splitlines() if line.strip())
     no_recreate = all(started_after_map.get(c) == v for c, v in started_before_map.items())
     logger.info("[IMP:9][T1][recovery] containers NOT recreated (uptime continuity): %s", no_recreate)
 
     manifest = LogAuditManifest("T1")
     manifest.add(
-        "journald", r"(Stopped|Stopping) docker\.service.*Docker Application Container Engine",
+        "journald",
+        r"(Stopped|Stopping) docker\.service.*Docker Application Container Engine",
         label="journald:docker-stopped",
     )
     manifest.add(
-        "journald", r"(Starting|Started) docker\.service.*Docker Application Container Engine",
+        "journald",
+        r"(Starting|Started) docker\.service.*Docker Application Container Engine",
         label="journald:docker-started",
     )
     manifest.add("docker", "no upstream", container="nginx", negate=True, label="docker:nginx-no-upstream-errors")
+    manifest.add("loki", ".", container="nginx", label="loki:nginx-pipeline-alive-after-restart")
     _marker_stack_healthy(manifest)
     _marker_http_sites(manifest)
 
@@ -187,11 +186,22 @@ def test_t02_host_dns_failure(requires_node: str, node_ssh: NodeSSHClient, caplo
     stop = node_ssh.ssh_exec("systemctl stop systemd-resolved", timeout=60)
     assert stop.exit_code == 0, f"stop systemd-resolved failed: {stop.stderr}"
 
-    # окно 90с: внутренний стек жив; хостовая резолюция падает
+    # окно 90с: внутренний стек жив (DNS-независимый probe — хостовая резолюция выключена);
+    # хостовые процессы дают ясные fail-логи
     t0 = time.monotonic()
-    sites_ok, site_status = wait_sites_up(node_ssh, timeout_s=90)
+    sites_ok, site_status = wait_sites_up(node_ssh, timeout_s=90, bypass_dns=True)
     probe = node_ssh.ssh_read("getent hosts api.telegram.org; echo RC=$?", timeout=30)
     host_dns_failed = "RC=2" in probe.stdout or "RC=1" in probe.stdout
+    # платформенный путь: apt (хост-процесс, DevPlan T2 «acme/apt») — ясный
+    # «Temporary failure resolving» (персистентный след в /var/log/apt/chaos-dns.log)
+    apt_probe = node_ssh.ssh_exec("apt-get update 2>&1 | tee /var/log/apt/chaos-dns.log | tail -3", timeout=180)
+    apt_dns_failed = "Temporary failure resolving" in apt_probe.stdout
+    logger.info(
+        "[IMP:9][T2][window] host_dns_failed=%s apt_dns_failed=%s (%s)",
+        host_dns_failed,
+        apt_dns_failed,
+        apt_probe.stdout.strip()[-120:],
+    )
     time.sleep(30)
     ttr = int(time.monotonic() - t0) + 30
 
@@ -204,8 +214,22 @@ def test_t02_host_dns_failure(requires_node: str, node_ssh: NodeSSHClient, caplo
     )
 
     manifest = LogAuditManifest("T2")
-    manifest.add("journald", "Stopped Network Name Resolution", label="journald:resolved-stopped")
-    manifest.add("journald", "Started Network Name Resolution", label="journald:resolved-started")
+    manifest.add(
+        "journald",
+        r"Stopped systemd-resolved\.service.*Network Name Resolution",
+        label="journald:resolved-stopped",
+    )
+    manifest.add(
+        "journald",
+        r"Started systemd-resolved\.service.*Network Name Resolution",
+        label="journald:resolved-started",
+    )
+    manifest.add(
+        "auditfile",
+        r"Temporary failure resolving",
+        path="/var/log/apt/chaos-dns.log",
+        label="audit:apt-resolv-fail",
+    )
     manifest.add(
         "docker",
         "Name or service not known|Temporary failure in name resolution",
@@ -223,6 +247,7 @@ def test_t02_host_dns_failure(requires_node: str, node_ssh: NodeSSHClient, caplo
 
     assert sites_ok, f"T2 FAIL: sites down during DNS outage: {site_status}"
     assert host_dns_failed, f"T2 FAIL: host DNS did NOT fail (getent: {probe.stdout})"
+    assert apt_dns_failed, f"T2 FAIL: apt did not show resolv failure: {apt_probe.stdout}"
     assert recovered and sites_ok_after, f"T2 FAIL: recovery incomplete: {site_status_after}"
     record_verdict("T2", _out_dir("T2"), verdict, ttr, results, incident_start)
     logger.info("[IMP:9][T2][verdict] %s ttr=%ss reasons=%s", verdict, ttr, reasons)
@@ -257,19 +282,47 @@ def test_t03_network_partition_outbound(requires_node: str, node_ssh: NodeSSHCli
         "-A OUTPUT -d 192.168.0.0/16 -j ACCEPT\n"
         "COMMIT\n"
     )
-    write = node_ssh.ssh_exec(f"cat > /tmp/chaos-partition.rules <<'EOF'\n{rules}EOF", timeout=30)
-    assert write.exit_code == 0, f"rules write failed: {write.stderr}"
-    logger.info("[IMP:9][T3][inject] iptables-apply OUTPUT DROP (120s auto-revert)")
-
-    inject = node_ssh.ssh_exec(
-        "nohup iptables-apply -t 300 -c 'sleep 120; exit 1' /tmp/chaos-partition.rules >/tmp/iptables-apply.log 2>&1 &",
+    rules6 = (
+        "*filter\n"
+        ":INPUT ACCEPT [0:0]\n"
+        ":FORWARD ACCEPT [0:0]\n"
+        ":OUTPUT DROP [0:0]\n"
+        "-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n"
+        "-A OUTPUT -o lo -j ACCEPT\n"
+        "-A OUTPUT -d fc00::/7 -j ACCEPT\n"
+        "-A OUTPUT -d fe80::/10 -j ACCEPT\n"
+        "COMMIT\n"
+    )
+    write = node_ssh.ssh_exec(
+        f"cat > /tmp/chaos-partition.rules <<'EOF'\n{rules}EOF\ncat > /tmp/chaos-partition6.rules <<'EOF'\n{rules6}EOF",
         timeout=30,
     )
-    assert inject.exit_code == 0, f"iptables-apply start failed: {inject.stderr}"
+    assert write.exit_code == 0, f"rules write failed: {write.stderr}"
+    logger.info("[IMP:9][T3][inject] OUTPUT DROP v4+v6 partition (120s auto-revert, save/restore)")
+
+    # Детерминированная партиция v4+v6: save → apply → conntrack flush (stale ESTABLISHED
+    # маскирует новые SYN через ctstate-ACCEPT — tuple reuse) → автооткат через 120с из
+    # снапшота. IPv6 обязателен: curl Happy-Eyeballs уходит в IPv6 (2001:67c:...) —
+    # без ip6 правил партиция дырявая (наблюдалось 2026-08-03, T3 run 3-5).
+    inject = node_ssh.ssh_exec(
+        "iptables-save > /tmp/chaos-iptables-backup.rules && "
+        "ip6tables-save > /tmp/chaos-iptables6-backup.rules && "
+        "iptables-restore < /tmp/chaos-partition.rules && "
+        "ip6tables-restore < /tmp/chaos-partition6.rules && "
+        "conntrack -F 2>/dev/null; "
+        "nohup bash -c '(sleep 120; iptables-restore < /tmp/chaos-iptables-backup.rules; "
+        "ip6tables-restore < /tmp/chaos-iptables6-backup.rules; "
+        "conntrack -F 2>/dev/null) >/tmp/chaos-partition-restore.log 2>&1' >/dev/null 2>&1 & "
+        "echo PARTITION_OK",
+        timeout=30,
+    )
+    assert "PARTITION_OK" in inject.stdout, f"partition start failed: {inject.stdout} {inject.stderr}"
     time.sleep(10)
 
-    # окно партиции: сайты живы, исходящие платформенные пути падают
-    sites_ok, site_status = wait_sites_up(node_ssh, timeout_s=60)
+    # окно партиции: сайты живы (probe через 127.0.0.1 — публичный URL уходит OUT и
+    # блокируется партицией; внешние пользователи не затронуты — INPUT нетронут),
+    # исходящие платформенные пути падают
+    sites_ok, site_status = wait_sites_up(node_ssh, timeout_s=60, bypass_dns=True)
     outbound_probe = node_ssh.ssh_read(
         "curl -s --noproxy '*' -o /dev/null -w '%{http_code}' -m 8 https://api.telegram.org/ 2>&1; echo C=$?",
         timeout=30,
@@ -282,19 +335,24 @@ def test_t03_network_partition_outbound(requires_node: str, node_ssh: NodeSSHCli
         timeout=120,
     )
     tor_failed = "EXIT=1" in tor_check.stdout or "EXIT=2" in tor_check.stdout
-    # платформенный путь: backup → S3 (upload не может начаться — сеть наружу заблокирована)
+    # платформенный путь: backup → S3 (upload не может начаться — сеть наружу заблокирована);
+    # вывод probe пишется в /var/log/platform/backup/chaos-t3.log (docker exec stdout
+    # НЕ попадает в docker logs — персистентный след в лог-директории бэкапов)
     backup_probe = node_ssh.ssh_exec(
-        "docker exec backup-cron curl -s -m 8 -o /dev/null https://s3.timeweb.cloud 2>&1; echo C=$?",
+        "docker exec backup-cron sh -c "
+        "'curl -sS -m 8 -o /dev/null https://s3.timeweb.cloud 2>&1 "
+        "| tee -a /var/log/platform/backup/chaos-t3.log; "
+        "echo \"curl_exit=$? $(date -u +%FT%TZ)\" >> /var/log/platform/backup/chaos-t3.log'",
         timeout=60,
     )
-    backup_blocked = "C=7" in backup_probe.stdout or "C=28" in backup_probe.stdout
+    backup_blocked = "curl_exit=7" in backup_probe.stdout or "curl_exit=28" in backup_probe.stdout
 
-    # ждём автооткат (iptables-apply -c 'sleep 120; exit 1' → revert)
+    # ждём автооткат (фоновый restore из снапшота через 120с)
     t0 = time.monotonic()
     reverted = False
     while time.monotonic() - t0 < 300:
-        policy = node_ssh.ssh_read("iptables -L OUTPUT -n | head -1", timeout=20)
-        if "ACCEPT" in policy.stdout and "DROP" not in policy.stdout.split("(")[0]:
+        policy = node_ssh.ssh_read("iptables -S OUTPUT | head -1", timeout=20)
+        if "-P OUTPUT ACCEPT" in policy.stdout:
             reverted = True
             break
         time.sleep(5)
@@ -304,7 +362,7 @@ def test_t03_network_partition_outbound(requires_node: str, node_ssh: NodeSSHCli
         timeout=30,
     )
     outbound_restored = "C=0" in recovered_probe.stdout
-    sites_after, site_after = wait_sites_up(node_ssh, timeout_s=60)
+    sites_after, site_after = wait_sites_up(node_ssh, timeout_s=60, bypass_dns=True)
     logger.info(
         "[IMP:9][T3][recovery] reverted=%s outbound_restored=%s tor_failed=%s backup_blocked=%s",
         reverted,
@@ -315,10 +373,11 @@ def test_t03_network_partition_outbound(requires_node: str, node_ssh: NodeSSHCli
 
     manifest = LogAuditManifest("T3")
     manifest.add(
-        "docker",
-        "Failed to connect|Could not resolve|Connection timed out|Network is unreachable",
+        "auditfile",
+        r"curl_exit=(7|28)|Failed to connect|Could not resolve|timed out|unreachable",
         container="backup-cron",
-        label="docker:backup-outbound-fail",
+        path="/var/log/platform/backup/chaos-t3.log",
+        label="audit:backup-outbound-fail",
     )
     manifest.add("journald", "tor-proxy", label="journald:tor-proxy-healthcheck-ran", expected="optional")
     manifest.add("auditfile", "tor-healthcheck", label="audit:tor-healthcheck", expected="optional")
