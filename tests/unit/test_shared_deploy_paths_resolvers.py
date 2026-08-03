@@ -49,14 +49,17 @@ def test_node_configs_remote() -> None:
     assert str(node_configs_remote({"NODE_CONFIGS_REMOTE_BASE": "/tmp/nc"})) == "/tmp/nc"
 
 
-# 🧪 TRAP[TEST] · Regression · platform_remote_base chain (C7)
-# · Scenario: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform (тот же канон core_deliverer)
-# · Last fail: core_deliverer.resolve_remote_base + overlay_deliverer расходились (TRAP[BUG] 2026-07-31)
+# 🧪 TRAP[TEST] · Regression · platform_remote_base chain (C7 + RC 121 fix)
+# · Scenario: PLATFORM_REMOTE_BASE → /opt/platform; PLATFORM_ROOT НЕ влияет на remote-базу
+#   (RC 121: локальный PLATFORM_ROOT ложно детектил VPS-self — см. remote_executor TRAP[BUG])
+# · Last fail: core_deliverer.resolve_remote_base + overlay_deliverer расходились (TRAP[BUG] 2026-07-31);
+#   RC 121 — PLATFORM_ROOT исключён из remote-цепочки
 # · Remove if: platform_remote_base resolver removed
 def test_platform_remote_base_chain() -> None:
-    """platform_remote_base: PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform."""
+    """platform_remote_base: PLATFORM_REMOTE_BASE → /opt/platform (PLATFORM_ROOT не влияет)."""
     assert str(platform_remote_base({})) == DEFAULT_PLATFORM_BASE
-    assert str(platform_remote_base({"PLATFORM_ROOT": "/tmp/root"})) == "/tmp/root"
+    # RC 121: локальный PLATFORM_ROOT НЕ должен менять REMOTE-базу
+    assert str(platform_remote_base({"PLATFORM_ROOT": "/tmp/root"})) == DEFAULT_PLATFORM_BASE
     assert str(platform_remote_base({"PLATFORM_REMOTE_BASE": "/tmp/remote", "PLATFORM_ROOT": "/tmp/root"})) == (
         "/tmp/remote"
     )

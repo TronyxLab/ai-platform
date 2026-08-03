@@ -48,6 +48,7 @@ from core.internal.bootstrap.overlay_deliverer import (
 
 # DevPlan 116 B5 T2 (D1): SSH_OPTS — единый SoT shared/ssh_opts.py (импорт из overlay_deliverer заменён)
 # B3: канонический platform base — shared/deploy_paths (литерал /opt/platform удалён)
+from core.internal.shared.deploy_paths import DEFAULT_PLATFORM_BASE as DEFAULT_REMOTE_PLATFORM
 from core.internal.shared.deploy_paths import platform_remote_base
 from core.internal.shared.ssh_opts import SSH_OPTS
 
@@ -61,6 +62,11 @@ logger = logging.getLogger(__name__)
 SSH_EXEC_TIMEOUT = DEPLOY_TIMEOUT
 
 # VPS self-SSH marker — та же проверка, что remote-cmd.sh:165 (локальный filesystem probe)
+# ⚠️ TRAP[BUG] · 2026-08-03 · P1 · VPS-self-detect брал ЛОКАЛЬНЫЙ PLATFORM_ROOT (RC 121 e2e)
+# · Symptom: make node-update на dev-машине → «Local VPS detected» → deploy-modules «must run as root».
+# · Root: platform_remote_base() наследовал PLATFORM_ROOT (make передаёт локальный корень) —
+#   node-lifecycle.sh существует локально → ложный self-detect.
+# · Fix: remote-база = PLATFORM_REMOTE_BASE → /opt/platform (deploy_paths канон, PLATFORM_ROOT исключён).
 VPS_NODE_LIFECYCLE = str(platform_remote_base() / "core" / "internal" / "bootstrap" / "node-lifecycle.sh")
 
 
@@ -110,9 +116,15 @@ class RemoteExecutor:
     ## @io  input: node_name (str), output: (yaml_path, host); host может быть "" (нет хоста)
     ## @raises NodeYamlNotFoundError  node.yaml не найден или не парсится
     ## @complexity  O(n) — делегирует NodeYaml.resolve() (≤4 кандидата)
+    ## ⚠️ TRAP[BUG] · 2026-08-03 · P1 · локальный поиск через PLATFORM_ROOT (RC 121 e2e)
     def _resolve_host(self, node_name: str) -> tuple[str, str]:
         """Resolve node.yaml and extract SSH host. Returns (yaml_path, host_or_empty)."""
-        yaml_path = resolve_node_yaml(node_name)
+        # Локальный поиск node.yaml: PLATFORM_ROOT env (make передаёт) → /opt/platform.
+        # deploy_paths.platform_remote_base() — REMOTE-база (PLATFORM_ROOT исключён из цепочки).
+        yaml_path = resolve_node_yaml(
+            node_name,
+            platform_root=os.environ.get("PLATFORM_ROOT") or str(DEFAULT_REMOTE_PLATFORM),
+        )
         host = extract_node_host(yaml_path)
         return yaml_path, host
 

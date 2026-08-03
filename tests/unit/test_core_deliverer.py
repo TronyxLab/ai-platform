@@ -115,19 +115,19 @@ def test_resolve_remote_base_default(caplog) -> None:
 
 # region FUNC_test_resolve_remote_base_chain
 def test_resolve_remote_base_chain(monkeypatch, caplog) -> None:
-    """resolve_remote_base: PLATFORM_REMOTE_BASE > PLATFORM_ROOT > /opt/platform."""
+    """resolve_remote_base: PLATFORM_REMOTE_BASE → /opt/platform (RC 121: PLATFORM_ROOT исключён)."""
     caplog.set_level(logging.DEBUG)
     logger.info("[IMP:7][test_resolve_remote_base_chain][start] BEGIN")
-    # PLATFORM_ROOT only → wins over default
+    # RC 121: локальный PLATFORM_ROOT НЕ влияет на remote-базу
     monkeypatch.setenv("PLATFORM_ROOT", "/srv/platform")
-    assert resolve_remote_base() == "/srv/platform"
-    # PLATFORM_REMOTE_BASE → wins over PLATFORM_ROOT
+    assert resolve_remote_base() == "/opt/platform"
+    # PLATFORM_REMOTE_BASE → wins over default
     monkeypatch.setenv("PLATFORM_REMOTE_BASE", "/data/remote")
     assert resolve_remote_base() == "/data/remote"
-    logger.info("[IMP:9][test_resolve_remote_base_chain][done] Env chain verified (REMOTE > ROOT > default)")
+    logger.info("[IMP:9][test_resolve_remote_base_chain][done] Env chain verified (REMOTE > default)")
     # 🧪 TRAP[TEST] · Regression: env chain priority order
-    # · Scenario: PLATFORM_REMOTE_BASE should override PLATFORM_ROOT, both override default
-    # · Last fail: N/A (new test)
+    # · Scenario: PLATFORM_REMOTE_BASE overrides default; PLATFORM_ROOT не влияет (RC 121)
+    # · Last fail: RC 121 — ложный VPS-self-detect из-за PLATFORM_ROOT в remote-цепочке
     # · Remove if: resolve_remote_base chain changes
     _assert_imp9(caplog)
 

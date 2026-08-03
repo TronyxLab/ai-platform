@@ -34,7 +34,7 @@ build_ssh_cmd() {
     # · Prevention: любая remote-команда, выполняющая core-скрипты на VPS, обязана экспортировать
     # ·   PLATFORM_ROOT с той же базой, куда scp/sync доставил core.
     # · Source: обнаружено при верификации DevPlan 095 AC4 (cold-start bootstrap на test-VPS).
-    local remote_root="${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}"
+    local remote_root="${PLATFORM_REMOTE_BASE:-/opt/platform}"  # RC 121: PLATFORM_ROOT исключён из remote-цепочки
     local remote_orchestrator="${remote_root}/core/internal/bootstrap/node-lifecycle.sh"
     local remote_node_yaml="/opt/node-configs/${node_name}/node.yaml"
     local cmd="set -euo pipefail"
@@ -78,7 +78,7 @@ build_update_ssh_cmd() {
     local node_name="$1" age_key="$2"
     shift 2; local passthrough_args=("$@")
     # PLATFORM_ROOT export — same convention as build_ssh_cmd (remote_root = scp-deliver base)
-    local remote_root="${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}"
+    local remote_root="${PLATFORM_REMOTE_BASE:-/opt/platform}"  # RC 121: PLATFORM_ROOT исключён из remote-цепочки
     local remote_orchestrator="${remote_root}/core/internal/bootstrap/node-lifecycle.sh"
     local remote_node_yaml="/opt/node-configs/${node_name}/node.yaml"
     local cmd="set -euo pipefail"
@@ -110,7 +110,7 @@ build_update_ssh_cmd() {
 build_converge_ssh_cmd() {
     local node_name="$1"; shift 1; local passthrough_args=("$@")
     # PLATFORM_ROOT export — same convention as build_ssh_cmd (remote_root = scp-deliver base)
-    local remote_root="${PLATFORM_REMOTE_BASE:-${PLATFORM_ROOT:-/opt/platform}}"
+    local remote_root="${PLATFORM_REMOTE_BASE:-/opt/platform}"  # RC 121: PLATFORM_ROOT исключён из remote-цепочки
     local remote_converge="${remote_root}/core/internal/bootstrap/converge.sh"
     local cmd="set -euo pipefail"
     local q; q="$(printf '%q' "${remote_root}")"; cmd+=" && export PLATFORM_ROOT=${q}"

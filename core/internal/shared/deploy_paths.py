@@ -185,9 +185,18 @@ def node_configs_remote(env: dict | None = None) -> Path:
 ##   - env PLATFORM_REMOTE_BASE приоритетнее PLATFORM_ROOT, оба приоритетнее дефолта
 ##   - Никогда не raise — всегда возвращает Path
 def platform_remote_base(env: dict | None = None) -> Path:
-    """Resolve remote platform base (PLATFORM_REMOTE_BASE → PLATFORM_ROOT → /opt/platform, C7)."""
+    """Resolve remote platform base (PLATFORM_REMOTE_BASE → /opt/platform, C7).
+
+    ⚠️ TRAP[BUG] · 2026-08-03 · P1 · PLATFORM_ROOT УБРАН из remote-цепочки (RC 121 e2e)
+    · Symptom: remote_executor VPS_NODE_LIFECYCLE ложно детектил «мы на VPS» на dev-машине —
+    ·   make передаёт PLATFORM_ROOT=<локальный>, node-lifecycle.sh существует локально.
+    · Root: локальный PLATFORM_ROOT не должен влиять на REMOTE-резолюцию; PLATFORM_REMOTE_BASE
+    ·   — единственный env-override remote-базы (задаётся явно, не наследует локальный корень).
+    · Fix: цепочка PLATFORM_REMOTE_BASE → /opt/platform. Локальный поиск node.yaml использует
+    ·   PLATFORM_ROOT напрямую (см. remote_executor._resolve_host).
+    """
     source = os.environ if env is None else env
-    return Path(str(source.get("PLATFORM_REMOTE_BASE") or source.get("PLATFORM_ROOT") or DEFAULT_PLATFORM_BASE))
+    return Path(str(source.get("PLATFORM_REMOTE_BASE") or DEFAULT_PLATFORM_BASE))
 
 
 # endregion FUNC_platform_remote_base

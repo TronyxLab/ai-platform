@@ -34,7 +34,9 @@ def _capture_imp_logs(caplog: pytest.LogCaptureFixture) -> None:
 def executor(monkeypatch: pytest.MonkeyPatch, tmp_path):
     """RemoteExecutor with resolve/extract/sync mocked; VPS marker absent."""
     sync_mock = mock.Mock(return_value=True)
-    monkeypatch.setattr(remote_executor, "resolve_node_yaml", lambda name: str(tmp_path / "node.yaml"))
+    monkeypatch.setattr(
+        remote_executor, "resolve_node_yaml", lambda name, platform_root=None: str(tmp_path / "node.yaml")
+    )
     monkeypatch.setattr(remote_executor, "extract_node_host", lambda yaml_path: "10.0.0.1")
     monkeypatch.setattr(remote_executor, "sync_core_to_vps", sync_mock)
     monkeypatch.setattr(remote_executor, "VPS_NODE_LIFECYCLE", str(tmp_path / "no-vps-marker"))
@@ -269,7 +271,7 @@ def test_ldd_imp9_logs_on_success(executor, monkeypatch: pytest.MonkeyPatch, cap
 # · Last fail: N/A (new module — mirrors shell _resolve_and_extract return 1)
 # · Remove if: resolve failure exit code semantics change
 def test_resolve_node_failure_returns_1(executor, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
-    def _fail(name: str):
+    def _fail(name: str, platform_root: str | None = None):
         raise NodeYamlNotFoundError("node.yaml not found for node=test-node")
 
     monkeypatch.setattr(remote_executor, "resolve_node_yaml", _fail)
