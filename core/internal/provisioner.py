@@ -115,10 +115,7 @@ def load_platform_env(yaml_path: Path) -> PlatformEnv:
     ]
 
     volumes_raw = data.get("volumes") or []
-    volumes = [
-        VolumeConfig(path=v["path"], owner=str(v.get("owner", "") or "").strip())
-        for v in volumes_raw
-    ]
+    volumes = [VolumeConfig(path=v["path"], owner=str(v.get("owner", "") or "").strip()) for v in volumes_raw]
 
     env_defaults = dict(data.get("env_defaults") or {})
     profiles = list(data.get("profiles") or [])

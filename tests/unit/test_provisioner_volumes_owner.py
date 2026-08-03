@@ -67,9 +67,7 @@ def test_provision_volumes_owner_chown_on_mismatch(tmp_path: Path, caplog) -> No
         os.chown(d, 1, 1)  # macOS dev: chown чужому uid запрещён — mismatch-логика иначе
 
     class _Env:
-        volumes: ClassVar[list[VolumeConfig]] = [
-            VolumeConfig(path=str(d), owner=f"{os.getuid()}:{os.getgid()}")
-        ]
+        volumes: ClassVar[list[VolumeConfig]] = [VolumeConfig(path=str(d), owner=f"{os.getuid()}:{os.getgid()}")]
 
     result = provision_volumes(_Env(), dry_run=False)  # type: ignore[arg-type]
     assert result.skipped >= 1
