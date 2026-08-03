@@ -89,8 +89,13 @@ runs:
           python -m venv .venv
         fi
         .venv/bin/pip install --upgrade pip
-        DEPS="pytest pyyaml jsonschema requests python-dotenv boto3 botocore cryptography jinja2"
+        # ⚠️ TRAP[BUG] 2026-08-03 · хардкод DEPS расходился с pyproject.toml (инвариант 11)
+        # · Symptom: CI gate-fast check-manifests G6 — ModuleNotFoundError: pydantic
+        #   (config_renderer → policy_schema → pydantic); pydantic не было в хардкод-списке.
+        # · Root: setup-python-venv ставил фиксированный список вместо generated
+        #   core/requirements.txt (SoT — pyproject.toml [project].dependencies).
+        # · Fix: pip install -r core/requirements.txt (runtime) + pytest (dev).
+        .venv/bin/pip install -r core/requirements.txt pytest
         if [ "${{ inputs.install-pre-commit }}" = "true" ]; then
-          DEPS="$DEPS pre-commit"
+          .venv/bin/pip install pre-commit
         fi
-        .venv/bin/pip install $DEPS
