@@ -50,7 +50,10 @@ detect_tor_enabled(){
     # Волна 117 D8: stderr не глотаем — ключ отсутствует = rc 0 + default (OK), файл не читается = rc 2/3/4 (WARN)
     TOR_ENABLED=false; local val
     [[ -n "${NODE_YAML:-}" && -f "$NODE_YAML" ]] && val="$(python3 -m core.internal.shared.node_yaml --file "$NODE_YAML" --get tor.enabled --default "false" 2>&1)" || { local _tor_rc=$?; log_imp 7 "node-yaml" "tor.enabled read failed (rc=${_tor_rc}): ${val:0:150} — fallback false"; val="false"; }
-    if [[ "${val:-false}" == "true" ]]; then TOR_ENABLED=true; fi
+    # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · node_yaml CLI возвращает Python-bool "True" (не "true") — RC 121 прод
+    # · Symptom: node.yaml tor.enabled: true → TOR_ENABLED=false → tor не устанавливался
+    # · Fix: case-insensitive сравнение (bash 3.2-совместимо — без ${var,,})
+    if [[ "${val:-false}" == "true" || "${val:-false}" == "True" || "${val:-false}" == "TRUE" ]]; then TOR_ENABLED=true; fi
 }
 main() {
     if [[ "$MODE" == "init" ]]; then
