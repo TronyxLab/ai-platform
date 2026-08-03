@@ -81,6 +81,12 @@ def env_vars(monkeypatch):
     monkeypatch.setenv("PLATFORM_OWNER_KEY", "ssh-ed25519 AAAA... test@test")
     monkeypatch.setenv("PLATFORM_CI_DEPLOY_KEY", "ssh-ed25519 BBBB... ci@test")
     monkeypatch.setenv("GHCR_PULL_TOKEN", "ghp_test_token")
+    # ⚠️ TRAP[BUG] 2026-08-03 · тест зависел от AGE-ключа dev-машины
+    # · Symptom: CI static_audit — «Precondition failed for phase secrets_provision:
+    #   requires AGE_SECRET_KEY env var or /etc/age/key.txt» — локально проходил,
+    #   потому что AGE_SECRET_KEY был в env разработчика; на CI-раннере — нет.
+    # · Fix: детерминированный тестовый ключ (secrets.env в тесте — свой, tmp).
+    monkeypatch.setenv("AGE_SECRET_KEY", "AGE-SECRET-KEY-TEST-RC121")
     yield
 
 
