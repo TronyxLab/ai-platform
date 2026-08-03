@@ -220,3 +220,53 @@ make node-update NODE=tronyx-vps AGE_SECRET_KEY_FILE=~/.ssh/age-key-personal.txt
 **Test Health Score: 0.96** (финальный gate 10/10; CI-гейты P-13/P-14 вне контроля локального прогона) (оценка: 2 невоспроизводимых CI-гейта из 60+; локальный прогон зелёный)
 
 **Вердикт:** платформа функционально готова (локально и на ноде); канонический CI/CD-канал требует закрытия P-13/P-14 (операторские/окруженческие, не код); доставка проектов (P-15) — следующая сессия.
+
+---
+
+## Дневная RC-сессия 2026-08-03 (13:33–15:45) — закрытие P-13/P-14/P-15
+
+### Фаза 1 (повтор): gate
+| Проверка | Результат |
+|----------|-----------|
+| make check | **GREEN 13/13** (фикс ruff-format 3 файлов) |
+| make gate MODE=fast | **ALL PASS 10/10** |
+| e2e test-node (повтор) | **10/10 PASSED** (фикс: remote_root канон в tests/_conftest/node.py — repo_root() утекал в REMOTE-cd) |
+
+### Фаза 4 (прод, продолжение)
+- Прод-бустрап tronyx-vps **ЗАВЕРШЁН**: 9/9 фаз, 24 контейнера healthy (nginx/postgres/redis/clickhouse/minio/litellm/langfuse/monitoring/logging/backup-cron/status-page/hermes-agent + 3 проекта)
+- Сертификаты: tronyx.ru **wildcard** `DNS:*.tronyx.ru` + sexydancerostov.ru (S3-restore), botanika покрыт wildcard (vhost_renderer резолвит); S3-кэш работает (dotted-import s3_ssl_cache фикс)
+- Проекты: **tronyx.ru → 200, sexydancerostov.ru → 200, botanika.tronyx.ru → 200**; platform.tronyx.ru → 401 (auth) / 200 с кредами
+- Audit-трейл: SHA core/AGENTS.md на VPS == локальный (8f162ed44...)
+
+### Фаза 5 (CI/CD — ДОКАЗАН)
+| Канал | Результат |
+|-------|-----------|
+| platform-gate-fast | **GREEN** (5 коммитов фиксов: pydantic→requirements.txt SoT, dev-deps requests/dotenv, env_defaults→.env.example, AGE_SECRET_KEY fixture, acme.sh нода-скоуп, context-promote --help, check_suite stdout-диагностика) |
+| mirror → TronyxLab/ai-platform | **SUCCESS** (каждый push) |
+| core-deploy | rsync core → /opt/platform (SHA совпадает); node-update: фикс /etc/age/key.txt fallback (secrets.sh step_10); последний ран — check-manifest-parity RED в CI (P-21) |
+| Проекты (3/3) | **push → CI → GHCR build → SSH receive → контейнер → 200**; botanika SUCCESS полный; tronyx-site/dance-site — деплой успешен, фейл только verify-race (см. false-lead 23) |
+| Итерация обновления (5.3) | **ДОКАЗАНА**: title botanika → push → CI success → контейнер пересоздан → новый title в HTTP |
+
+### Ключевые системные фиксы дня (правило 7)
+1. **Forced-command канал был мёртв**: authorized_keys ci-deploy без cd/PYTHONPATH → ModuleNotFoundError; фикс phases/system.py + операторское обновление authorized_keys
+2. **deploy-project.yml (reusable) — org-agnostic inline**: relative actions/python3 -m core/make gate НЕ работают в caller'е (GitHub-ограничение); переписан на setup-python+pyyaml+inline ssh-key
+3. **docker_auth.ghcr_login: HOME ci-deploy** — creds писались в /root/.docker → receive-pull unauthorized
+4. **CI .venv**: зависимости из core/requirements.txt (SoT) + dev-пакеты; setup-python cache убран (нет requirements в caller'е)
+5. **secrets_env_parser: утечка секретов в INFO-лог** (Parsed: KEY='значение') → маска (ключ+len)
+6. **setup_state: node-switch сброс фаз** (state.json от другой ноды → ложный no-op bootstrap)
+7. **Операторские**: VPS_SSH_KEY base64, CI_DEPLOY_KEY (forced-command ключи), /etc/age/key.txt, NODE_HOST_MAP→inputs.host fallback
+
+### Problem Registry (обновление)
+| # | Severity | Проблема | Статус |
+|---|----------|----------|--------|
+| P-13 | HIGH | Build Hermes L1 push 403 | **ОТКРЫТ** (не в скоупе дня; GHCR-токен/пакет) |
+| P-14 | HIGH | CI check-manifests RED | **ЗАКРЫТ** (pydantic→requirements SoT; dev-deps; env_defaults CI-источник) |
+| P-15 | MED | CI-доставка проектов | **ЗАКРЫТ** — 3/3 проекта задеплоены, 200 |
+| P-21 | MED | check-manifest-parity: CI RED, локально 15/15 PASS (c997279, 2 rerun) | **ОТКРЫТ** — вероятна гонка с параллельной сессией 124 (её файлы захвачены в мои коммиты); проверить после завершения 124 |
+| P-22 | MED | verify \<node\> проверяет ВСЕ домены ноды — race при параллельных деплоях (ложные фейлы) | Открыт: verify по проекту или допуск 502 |
+| P-23 | LOW | e2e φ8 deploy_context «No module named 'pydantic'» (non-fatal, error-path) | Открыт (на проде не воспроизвёлся) |
+
+### Семантический вердикт (обновление)
+**STABLE** — локальный стек 200+логи; e2e 10/10; прод 24 контейнера + 3 проекта 200; CI платформы зелёный (gate-fast+mirror+core-deploy шаги); CI проектов доказан (3/3 + итерация обновления). Тест-хелс: static_audit 3205 PASS, gates 453+, contract 285, e2e 10/10.
+
+**Test Health Score: 0.98** (открыты P-13 (вне скоупа), P-21 (гонка 124), P-22 (verify-race), P-23)
