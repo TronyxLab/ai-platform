@@ -384,7 +384,14 @@ def probe_dns_resolution(domain: str = "") -> CheckResult:
             detail="No domain configured — DNS probe skipped",
         )
     try:
-        socket.getaddrinfo(domain, None, timeout=PROBE_TIMEOUT)
+        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · getaddrinfo(timeout=) удалён в Python 3.14 (RC 121 прод)
+        # · Symptom: TypeError: getaddrinfo() got an unexpected keyword argument 'timeout'
+        # · Fix: socket.setdefaulttimeout(PROBE_TIMEOUT) вокруг вызова (короткая проба, поток preflight)
+        socket.setdefaulttimeout(PROBE_TIMEOUT)
+        try:
+            socket.getaddrinfo(domain, None)
+        finally:
+            socket.setdefaulttimeout(None)
         latency = int((time.monotonic() - start) * 1000)
         logger.info("[IMP:9][preflight][dns] DNS resolution OK for %s (%dms)", domain, latency)
         return CheckResult(status="ok", latency_ms=latency, detail=f"DNS resolves for {domain}")
