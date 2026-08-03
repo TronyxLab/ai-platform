@@ -190,7 +190,8 @@ def ensure_project_db_access(
         return 0
 
     # ── 1. Роль: существует? ──
-    exists_out = _psql("-tA", "-c", f"SELECT 1 FROM pg_roles WHERE rolname = '{role}'")
+    # nosec B608: роль валидирована _ROLE_NAME_RE (^[a-zA-Z0-9_]+$) выше — не пользовательский ввод
+    exists_out = _psql("-tA", "-c", f"SELECT 1 FROM pg_roles WHERE rolname = '{role}'")  # nosec B608
     role_exists = bool(exists_out and exists_out.strip())
 
     created = False
