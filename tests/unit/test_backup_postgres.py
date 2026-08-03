@@ -54,12 +54,23 @@ class _FakeRunResult:
 class _FakePopenProc:
     """Fake Popen process object with stdout pipe + wait() returncode."""
 
-    def __init__(self, returncode: int = 0):
-        self.stdout = io.StringIO("")
+    def __init__(self, returncode: int = 0, stdout_text: str | None = None):
+        self.stdout = io.StringIO(stdout_text or "")
         self._rc = returncode
 
     def wait(self) -> int:
         return self._rc
+
+
+# Реалистичный text-формат дампа pg_dumpall (header + SQL-стейтменты) — для zcat-валидации
+_FAKE_DUMP_TEXT = (
+    "--\n"
+    "-- PostgreSQL database cluster dump\n"
+    "--\n"
+    "CREATE TABLE public.t (id serial);\n"
+    "COPY public.t (id) FROM stdin;\n"
+    "\\.\n"
+)
 
 
 class _FakeSubprocess:
@@ -83,7 +94,7 @@ class _FakeSubprocess:
         if name == "gzip":
             return _FakePopenProc(self.gzip_rc)
         if name == "zcat":
-            return _FakePopenProc(0)
+            return _FakePopenProc(0, stdout_text=_FAKE_DUMP_TEXT)
         raise AssertionError(f"unexpected Popen command: {cmd}")
 
     def run(self, cmd: list, **kwargs):
@@ -113,17 +124,26 @@ def test_success_full_pipeline(caplog, tmp_path, monkeypatch):
     )
 
     assert rc == 0
-    # All 3 checks executed: gzip -t, pg_restore --list, plus cleanup+du+upload
+    # All checks executed: gzip -t + text-валидация (zcat Popen), cleanup+du+upload
     run_names = [call[0][0] for call in fake.run_calls]
     assert run_names == [
         "gzip",
-        "pg_restore",
         "/usr/local/bin/backup-cleanup.sh",
         "du",
         "/usr/local/bin/upload-s3.sh",
     ]
+    # zcat-валидация выполнена (Popen zcat присутствует)
+    zcat_calls = [call[0] for call in fake.popen_calls if call[0][0] == "zcat"]
+    assert len(zcat_calls) == 1, "text-format structure validation must run zcat"
     # Dump file kept on success (no trap cleanup)
     assert (tmp_path / "pgdumpall_20260802T000000Z.sql.gz").exists()
+    # R5/TRAP[BUG] 2026-08-03 (126-chaos W1): pg_dumpall должен идти с явным портом —
+    #   regression-вход: pgbouncer:5432 «Connection refused» (порт не передавался)
+    dump_cmd = fake.popen_calls[0][0]
+    assert dump_cmd[0] == "pg_dumpall"
+    assert "-p" in dump_cmd and dump_cmd[dump_cmd.index("-p") + 1] == "5432", (
+        f"pg_dumpall must pass explicit POSTGRES_PORT: {dump_cmd}"
+    )
 
 
 @ldd_trajectory
@@ -163,10 +183,22 @@ def test_gzip_t_integrity_failure(caplog, tmp_path, monkeypatch):
 
 
 @ldd_trajectory
-def test_pg_restore_validation_failure(caplog, tmp_path, monkeypatch):
-    """pg_restore --list fails → FAIL, return 1, structurally-invalid dump removed."""
-    fake = _FakeSubprocess(run_rcs={"gzip": 0, "pg_restore": 1})
-    monkeypatch.setattr(backup_postgres, "subprocess", fake)
+def test_dump_structure_validation_failure(caplog, tmp_path, monkeypatch):
+    """zcat-валидация text-дампа не находит header-маркер → FAIL, return 1, dump removed.
+
+    R5-negative: прежний детектор (pg_restore --list) пропускал текст-дампы pg_dumpall
+    («input file appears to be a text format dump») — regression-вход: zcat без
+    «PostgreSQL database cluster dump» маркера обязан быть отвергнут.
+    """
+
+    class _NoHeaderSubprocess(_FakeSubprocess):
+        def Popen(self, cmd: list, **kwargs):
+            if cmd[0] == "zcat":
+                return _FakePopenProc(0, stdout_text="-- no header here\nCREATE TABLE x ();\n")
+            return super().Popen(cmd, **kwargs)
+
+    no_header_fake = _NoHeaderSubprocess(run_rcs={"gzip": 0})
+    monkeypatch.setattr(backup_postgres, "subprocess", no_header_fake)
 
     rc = backup_postgres.run_backup(spool_dir=str(tmp_path), timestamp="t", env=_VALID_ENV)
 

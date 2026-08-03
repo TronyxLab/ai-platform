@@ -56,7 +56,16 @@ services:
     # ports: deliberately absent
 
     environment:
-      POSTGRES_HOST: "pgbouncer"
+      # 🧐 TRAP[DECISION] · 2026-08-03 · HI · backup-cron → postgres НАПРЯМУЮ, не через pgbouncer
+      # · Rejected: POSTGRES_HOST=pgbouncer + POSTGRES_PORT=6432 (канон platform-infra.yaml)
+      # · Reason: pg_dumpall требует session-level доступ ко ВСЕМ БД кластера (включая template1,
+      # ·   pg_dump_globals); pgbouncer pool_mode=transaction + [databases] без template1 →
+      # ·   «FATAL: no such database: template1» (подтверждено 2026-08-03, chaos W1). Бэкап —
+      # ·   единственный потребитель прямого доступа; сервисы продолжают ходить через pgbouncer.
+      # · Rev: если pgbouncer перейдёт в session pooling + добавит template1 — можно вернуть
+      # ·   6432 (канон единого DB-порта), но pg_dumpall через pgbouncer остаётся рискованным.
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?PG_PASSWORD_REQUIRED}"
       POSTGRES_DB: "${POSTGRES_DB:-platform}"

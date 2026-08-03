@@ -129,21 +129,41 @@ def run_backup(
         # ── [validate] Required environment ──
         postgres_host = effective_env.get("POSTGRES_HOST", "")
         postgres_password = effective_env.get("POSTGRES_PASSWORD", "")
+        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · pg_dumpall шёл на pgbouncer:5432 → Connection refused
+        # · Symptom: backup-cron pg_dumpall падал «connection to server at "pgbouncer", port 5432
+        # ·   failed: Connection refused» — бэкап молча не работал (обнаружено на прогоне chaos W1).
+        # · Root: compose задавал POSTGRES_HOST=pgbouncer, но порт НЕ передавался → pg_dumpall
+        # ·   дефолтил на 5432; pgbouncer слушает 6432 (POSTGRES_PORT=6432 канон platform-infra.yaml)
+        # ·   и в pool_mode=transaction не может обслужить pg_dumpall (нет template1 в [databases],
+        # ·   FATAL: no such database: template1). pg_dumpall требует session-level доступ ко всем БД.
+        # · Fix: бэкап ходит НАПРЯМУЮ к postgres:5432 (общий shared-db-net), порт из
+        # ·   POSTGRES_PORT env (default 5432) — pgbouncer для бэкапов НЕ используется.
+        # · Prevention: restore-drill T10 (126-chaos-resilience) верифицирует бэкап-цепочку;
+        # ·   test_pg_dumpall... asserts порта в popen_calls.
         if not postgres_host:
             logger.error("[IMP:9][validate] FAIL: POSTGRES_HOST not set")
             return 1
         if not postgres_password:
             logger.error("[IMP:9][validate] FAIL: POSTGRES_PASSWORD not set")
             return 1
+        postgres_port = effective_env.get("POSTGRES_PORT", "5432")
 
         Path(spool_dir).mkdir(parents=True, exist_ok=True)
 
         # ── [dump] pg_dumpall | gzip (PIPESTATUS parity → Popen returncodes) ──
-        logger.info("[IMP:7][dump] Running pg_dumpall → %s", dump_file)
+        logger.info("[IMP:7][dump] Running pg_dumpall %s:%s → %s", postgres_host, postgres_port, dump_file)
         pg_env = dict(effective_env)
         pg_env["PGPASSWORD"] = postgres_password
         dump_proc = subprocess.Popen(
-            ["pg_dumpall", "-h", postgres_host, "-U", effective_env.get("POSTGRES_USER", "postgres")],
+            [
+                "pg_dumpall",
+                "-h",
+                postgres_host,
+                "-p",
+                postgres_port,
+                "-U",
+                effective_env.get("POSTGRES_USER", "postgres"),
+            ],
             stdout=subprocess.PIPE,
             env=pg_env,
         )
@@ -174,22 +194,39 @@ def run_backup(
             return 1
         logger.info("[IMP:8][verify] gzip integrity OK")
 
-        # ── [verify] pg_restore structure validation ──
-        logger.info("[IMP:7][verify] Validating dump structure via pg_restore --list")
-        zcat_proc = subprocess.Popen(["zcat", dump_file], stdout=subprocess.PIPE)
-        restore_rc = subprocess.run(
-            ["pg_restore", "--list", "-"],
-            stdin=zcat_proc.stdout,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ).returncode
-        if zcat_proc.stdout is not None:
-            zcat_proc.stdout.close()
-        zcat_proc.wait()
-        if restore_rc != 0:
-            logger.error("[IMP:10][verify] FAIL: pg_restore --list validation failed — dump structure invalid")
+        # ── [verify] structure validation (text-format pg_dumpall dump) ──
+        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · pg_restore --list НЕ работает с text-форматом
+        # · Symptom: бэкап падал на verify «pg_restore --list validation failed» — хотя
+        # ·   pg_dumpall+ gzip -t проходили (обнаружено на прогоне chaos W1, tronyx-vps).
+        # · Root: pg_restore --list валидирует ТОЛЬКО custom/archive-формат; pg_dumpall
+        # ·   отдаёт plain-SQL («input file appears to be a text format dump. Please use psql.»).
+        # · Fix: text-валидация — маркер заголовка «PostgreSQL database cluster dump»
+        # ·   + наличие SQL-стейтментов в bounded-скане первых 2000 строк.
+        # · Prevention: unit-тест test_success_full_pipeline проверяет header-маркер.
+        logger.info("[IMP:7][verify] Validating dump structure (text-format markers)")
+        zcat_proc = subprocess.Popen(["zcat", dump_file], stdout=subprocess.PIPE, text=True)
+        header_found = False
+        stmt_count = 0
+        try:
+            for line_idx, line in enumerate(zcat_proc.stdout or []):
+                if line_idx < 5 and "PostgreSQL database cluster dump" in line:
+                    header_found = True
+                stripped = line.lstrip()
+                if stripped.startswith(("CREATE ", "ALTER ", "COPY ", "INSERT INTO ")):
+                    stmt_count += 1
+                if line_idx >= 2000:
+                    break  # bounded scan — первые 2000 строк достаточны для валидации
+        finally:
+            if zcat_proc.stdout is not None:
+                zcat_proc.stdout.close()
+            zcat_proc.wait()
+        if not header_found:
+            logger.error("[IMP:10][verify] FAIL: dump header marker missing — not a pg_dumpall dump")
             return 1
-        logger.info("[IMP:8][verify] Dump structure validation OK")
+        if stmt_count == 0:
+            logger.error("[IMP:10][verify] FAIL: no SQL statements found in dump — structure invalid")
+            return 1
+        logger.info("[IMP:8][verify] Dump structure validation OK (header + %d statements)", stmt_count)
 
         # ── [cleanup] Retention rotation (non-fatal) ──
         logger.info("[IMP:7][cleanup] Running retention cleanup")
