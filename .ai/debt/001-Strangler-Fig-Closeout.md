@@ -29,6 +29,7 @@
 ## @changes  UPDATED: 2026-08-01 | DevPlan 116 B11 T7 (U-82, D4) — формат записей: Status (OPEN/FIXED/SUPERSEDED) + Rev (дата ИЛИ условие); T1/P2-2 → FIXED (B10); AD8-AD12 (U-83..88 решения); гейт свежести test_gate_debt_registry.py
 ## @changes  UPDATED: 2026-08-02 | DevPlan 119 C2/C6 — +P3-6 (watchdog undelivered, решение на 120) +P3-7 (letsencrypt path hardcode); отдельные файлы .ai/debt/watchdog-undelivered.md, .ai/debt/letsencrypt-path-hardcode.md
 ## @changes  UPDATED: 2026-08-03 | RC-сессия (pre-v1.0.0-rc3) — stale-закрытие: P2-3 → FIXED (волна 117 D5, execute_grouped_phase удалён из state_machine и e2e), P2-4 → FIXED (DevPlan 116 T5, generate-manifests покрывает G1-G6), P3-6 → FIXED (решение пользователя 2026-08-03: watchdog удалён полностью — см. watchdog-undelivered.md), P3-7 → FIXED (миграция vhost_renderer/nginx_harness на letsencrypt_live — см. letsencrypt-path-hardcode.md), T7 → FIXED (вместе с 117 D5); T3 путь → tests/unit/test_spool_dir.py
+## @changes  UPDATED: 2026-08-03 | Cleanup .ai/plans — выполненные планы 036-125 удалены (история в git); открытые долги 121 (D-2 L1 push 403 HIGH / D-12 / D-15) перенесены в .ai/debt/121-rc-deferred.md; 118 D2 (node_yaml миксины) → FIXED 119-H, 118 D7 (jinja) → CLOSED 125 T12 — учтены в 121-rc-deferred.md
 
 ---
 
