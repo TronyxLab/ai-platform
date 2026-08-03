@@ -340,7 +340,9 @@ def _parse_modules(node_yaml: str, modules_dir: str, modules_filter: str) -> Mod
 ##   - No context in node.yaml → all overlays empty (legacy grep "^context:" semantics)
 ##   - Overlay only set when the directory actually exists on disk
 ##   - NodeYaml.get_context() returns "" (no raise) when context absent
-def _resolve_overlay_dirs(node_yaml: str, enabled_names: list[str], config_overlays: dict[str, str] | None = None) -> dict[str, str]:
+def _resolve_overlay_dirs(
+    node_yaml: str, enabled_names: list[str], config_overlays: dict[str, str] | None = None
+) -> dict[str, str]:
     """Resolve context overlay dirs from node.yaml context + filesystem existence.
 
     ⚠️ TRAP[BUG] · 2026-08-03 · P1 · config_overlay fallback (RC 121 прод)
@@ -363,7 +365,11 @@ def _resolve_overlay_dirs(node_yaml: str, enabled_names: list[str], config_overl
                 overlay = candidate
         if not overlay and config_overlays and config_overlays.get(name):
             overlay = config_overlays[name]
-            logger.info("[IMP:8][_resolve_overlay_dirs][config_overlay] Using node.yaml config_overlay for %s: %s", name, overlay)
+            logger.info(
+                "[IMP:8][_resolve_overlay_dirs][config_overlay] Using node.yaml config_overlay for %s: %s",
+                name,
+                overlay,
+            )
         overlays[name] = overlay
     return overlays
 
