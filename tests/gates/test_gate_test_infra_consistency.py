@@ -339,6 +339,11 @@ def test_no_hardcoded_ai_platform_test_own_project():
     # Match "ai-platform-test" as a delimited string literal
     pattern = re.compile(r'"ai-platform-test"')
 
+    # Transient probe-директория test_gate_marker_location (xdist race, DevPlan 124, решение
+    # пользователя 2026-08-03): probe-файл живёт в tests/ лишь на время соседнего gate-теста —
+    # сканер читал его в момент конкурентного unlink → FileNotFoundError (флейк static_audit)
+    _PROBE_DIR_PARTS = ("_gate_probe_marker_tmp",)
+
     violations: list[tuple[str, str]] = []  # (file_path, line_content)
 
     for test_file in sorted(tests_dir.rglob("*.py")):
@@ -347,8 +352,14 @@ def test_no_hardcoded_ai_platform_test_own_project():
             continue
         if test_file.name in _AC6E_WHITELIST_FILES:
             continue  # skip entire whitelisted files
+        if any(part in test_file.parts for part in _PROBE_DIR_PARTS):
+            continue  # transient probe-директории не сканируются (xdist race)
 
-        content = test_file.read_text()
+        try:
+            content = test_file.read_text()
+        except FileNotFoundError:
+            # Файл удалён конкурентно (probe-фикстура другого gate-теста) — пропустить
+            continue
         for line_no, line in enumerate(content.splitlines(), 1):
             if pattern.search(line):
                 # Check if this is a whitelisted pattern

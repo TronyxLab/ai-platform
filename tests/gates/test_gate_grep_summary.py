@@ -57,6 +57,12 @@ _EXCLUDED_DIRS: frozenset = frozenset(
         # Transient probe-директория test_gate_marker_location (xdist race, DevPlan 119 C):
         # probe-файл без GREP_SUMMARY живёт лишь на время соседнего gate-теста
         "_gate_probe_marker_tmp",
+        # Transient probe-директории test_cross_layer_imports B11-negative (xdist race,
+        # DevPlan 124, решение пользователя 2026-08-03): probe-файлы БЕЗ GREP_SUMMARY живут
+        # в реальном core/modules/ на время R5 negative-тестов — сканер видел их и давал
+        # ложный MISSING_GREP_SUMMARY (флейк static_audit ~15-30%, junit подтвердил)
+        "_b11_negative_py_tmp",
+        "_b11_negative_sh_tmp",
     }
 )
 

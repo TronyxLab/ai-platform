@@ -70,7 +70,11 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
 ]
 
 # Subdirectory names to exclude when globbing for shebang files.
-_EXCLUDE_DIRS: set[str] = {"node_modules", ".venv", "__pycache__"}
+# _b11_negative_*_tmp — transient probe-директории test_cross_layer_imports B11-negative
+# (xdist race, DevPlan 124, решение пользователя 2026-08-03): probe .sh имеет shebang и НЕ
+# зарегистрирован в манифесте — сканер давал ложный «Unregistered shebang script detected»
+# (флейк static_audit ~15-30%, junit подтвердил механизм).
+_EXCLUDE_DIRS: set[str] = {"node_modules", ".venv", "__pycache__", "_b11_negative_py_tmp", "_b11_negative_sh_tmp"}
 
 # Module lifecycle targets are now read from manifest `module_lifecycle` section.
 # See _load_module_lifecycle() below.

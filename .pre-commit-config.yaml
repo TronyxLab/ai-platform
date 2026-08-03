@@ -262,7 +262,11 @@ repos:
       - id: check-manifest-parity
         name: Manifest ↔ AGENTS.md ↔ Makefile parity
         description: Validate bidirectional sync between manifest, AGENTS.md, and Makefiles
-        entry: python -m pytest tests/gates/test_gate_manifest_integrity.py -v --tb=short -p no:warnings
+        # .venv/bin/python — фикс DevPlan 124 (2026-08-03): голый `python` резолвился в
+        # homebrew python 3.14.6/pytest 9.0.3 (НЕ стек проекта .venv 3.14.5/9.1.1) и давал
+        # интермиттентный pre-commit-fail в gate-прогонах (хук Failed при прошедших тестах,
+        # 2 из 3 make gate MODE=fast). Venv-pin = единый детерминированный тест-стек.
+        entry: .venv/bin/python -m pytest tests/gates/test_gate_manifest_integrity.py -v --tb=short -p no:warnings
         language: system
         files: ^(core/entrypoint-manifest\.yaml|core/AGENTS\.md|Makefile|core/modules/.*/Makefile)$
         pass_filenames: false
