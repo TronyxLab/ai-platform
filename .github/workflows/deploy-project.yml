@@ -132,11 +132,7 @@ jobs:
       - name: SSH pre-flight check
         run: |
           set -euo pipefail
-          PONG=$(ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} \
-            -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-            -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} \
-            ci-deploy@${{ env.ssh_host }} "ping")
+          PONG=$(ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "ping")
           echo "[IMP:9][preflight] ping response: ${PONG}"
           if [ "${PONG}" != "pong" ]; then
             echo "[IMP:10][preflight] FATAL: expected 'pong' from forced-command ping, got '${PONG}'"
@@ -153,19 +149,11 @@ jobs:
           [ -f compose.yaml ] && FILES="$FILES compose.yaml"
           [ -f .env.platform ] && FILES="$FILES .env.platform"
           echo "[IMP:9][deliver] Delivering to ${{ env.ssh_host }}: ${FILES}"
-          tar czf - $FILES | ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} \
-            -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-            -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} \
-            ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
+          tar czf - $FILES | ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "receive ${{ inputs.project_name }} ${{ github.sha }}"
           echo "[IMP:9][deliver] Receive completed (exit=$?)"
 
       # ─── Post-deploy verify ────────────────────────────────────────────
       - name: Post-deploy verify
         run: |
           set -euo pipefail
-          ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} \
-            -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-            -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} \
-            ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"
+          ssh -i ${{ steps.setup-ssh.outputs.ssh-key-path }} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o UserKnownHostsFile=${{ steps.setup-ssh.outputs.ssh-known-hosts-path }} ci-deploy@${{ env.ssh_host }} "verify ${{ env.target_node }}"
