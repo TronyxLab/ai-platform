@@ -420,6 +420,25 @@ def _install_requirements(core_dir: str) -> bool:
     if not _run(pip_jsonschema, label="pip jsonschema"):
         return False
 
+    # Step 1c: pyopenssl with --ignore-installed — RC-сессия 2026-08-03 (e2e preflight fail)
+    # · Symptom: preflight PanicException pyo3_runtime — import OpenSSL (debian pyOpenSSL 23.2)
+    #   падает с cryptography 41.0.7 (pip, --break-system-packages) на Python 3.14
+    # · Root: boto3 (dist-packages) → botocore → pyopenssl (debian 23.2) — несовместим с новой
+    #   cryptography + 3.14. requirements.txt не пинит pyopenssl → остаётся debian-версия.
+    # · Fix: тот же паттерн --ignore-installed (свежий pyopenssl поверх debian-пакета).
+    logger.info("[IMP:9][_install_requirements] Installing pyopenssl (--ignore-installed)")
+    pip_openssl = [
+        python_bin,
+        "-m",
+        "pip",
+        "install",
+        "pyopenssl",
+        "--ignore-installed",
+        "--break-system-packages",
+    ]
+    if not _run(pip_openssl, label="pip pyopenssl"):
+        return False
+
     # Step 2: full requirements.txt
     logger.info("[IMP:9][_install_requirements] Installing -r requirements.txt")
     pip_reqs = [
