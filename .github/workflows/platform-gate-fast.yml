@@ -80,3 +80,12 @@ jobs:
       # ─── Step 5: Manifest generation contract (G1-G6 + G4-root glossary) ──
       - name: Check generated manifests up to date
         run: make check-manifests
+
+      # ─── Step 6: Диагностические junit-артефакты (временный, RC-121) ──
+      - name: Upload junit artifacts (diagnostic)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-reports
+          path: tests/report*.xml
+          if-no-files-found: ignore
