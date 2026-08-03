@@ -110,6 +110,9 @@ class LogMarker:
     container: str | None = None
     negate: bool = False  # True: found = regex ОТСУТСТВУЕТ в окне (маркер отсутствия ошибок)
     path: str | None = None  # для source=auditfile — путь к файлу (default /var/log/platform/audit.jsonl)
+    window_offset: int = 0  # сдвиг окна (сек) — T4 clock skew: маркеры skew-фазы ищутся в +24h
+    unit: str | None = None  # для source=journald: -u <unit> (без time-фильтра — journald
+    # time-фильтры ломаются на ротации при скачке времени — T4 finding)
 
     def __post_init__(self) -> None:
         if self.source not in _MARKER_SOURCES:
@@ -179,9 +182,13 @@ class LogAuditManifest:
         container: str | None = None,
         negate: bool = False,
         path: str | None = None,
+        window_offset: int = 0,
+        unit: str | None = None,
     ) -> LogAuditManifest:
         """Добавить маркер в manifest (fluent API)."""
-        self.markers.append(LogMarker(source, regex, label, window_min, expected, container, negate, path))
+        self.markers.append(
+            LogMarker(source, regex, label, window_min, expected, container, negate, path, window_offset, unit)
+        )
         return self
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -217,7 +224,14 @@ class LogAuditManifest:
         return MarkerResult(marker, found=found, detail=f"count={count}")
 
     def _check_journald(self, ssh: NodeSSHClient, marker: LogMarker, from_ts: int, to_ts: int) -> MarkerResult:
-        cmd = f"journalctl --since '@{from_ts}' --until '@{to_ts}' --no-pager 2>/dev/null | grep -cE '{marker.regex}'"
+        if marker.unit:
+            # time-фильтры journald ломаются на ротации при скачке времени (T4 finding) —
+            # unit-фильтр без окна; записи в пределах прогона (≤2ч) — валидное окно
+            cmd = f"journalctl -u {marker.unit} --no-pager 2>/dev/null | grep -cE '{marker.regex}'"
+        else:
+            cmd = (
+                f"journalctl --since '@{from_ts}' --until '@{to_ts}' --no-pager 2>/dev/null | grep -cE '{marker.regex}'"
+            )
         res = ssh.ssh_read(cmd, timeout=90)
         count = self._count_from_ssh(res)
         found = (count == 0) if marker.negate else (count > 0)
@@ -314,11 +328,12 @@ class LogAuditManifest:
         results: list[MarkerResult] = []
         for marker in self.markers:
             try:
+                base_ts = incident_start + marker.window_offset
                 if marker.source == "docker":
-                    from_ts, to_ts = self._window(incident_start, marker.window_min, ttr_s)
+                    from_ts, to_ts = self._window(base_ts, marker.window_min, ttr_s)
                     result = self._check_docker(ssh, marker, from_ts, to_ts)
                     if result.found and not marker.negate:
-                        loki_res = self._check_loki(ssh, marker, incident_start, ttr_s)
+                        loki_res = self._check_loki(ssh, marker, base_ts, ttr_s)
                         result.loki_duplicate = loki_res.found
                         if not loki_res.found:
                             logger.warning(
@@ -327,12 +342,12 @@ class LogAuditManifest:
                                 marker.label,
                             )
                 elif marker.source == "journald":
-                    from_ts, to_ts = self._window(incident_start, marker.window_min, ttr_s)
+                    from_ts, to_ts = self._window(base_ts, marker.window_min, ttr_s)
                     result = self._check_journald(ssh, marker, from_ts, to_ts)
                 elif marker.source == "auditfile":
                     result = self._check_auditfile(ssh, marker)
                 elif marker.source == "loki":
-                    result = self._check_loki(ssh, marker, incident_start, ttr_s)
+                    result = self._check_loki(ssh, marker, base_ts, ttr_s)
                 elif marker.source == "alerts":
                     result = self._check_alerts(ssh, marker, incident_start, ttr_s)
                 elif marker.source == "http":

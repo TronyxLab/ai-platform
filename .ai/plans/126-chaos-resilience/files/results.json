@@ -1,0 +1,22 @@
+{
+  "T1": {
+    "verdict": "SUCCESS",
+    "ttr_s": 62
+  },
+  "T2": {
+    "verdict": "PARTIAL",
+    "ttr_s": 77
+  },
+  "T3": {
+    "verdict": "PARTIAL",
+    "ttr_s": 188
+  },
+  "T4": {
+    "verdict": "PARTIAL",
+    "ttr_s": 110
+  },
+  "T5": {
+    "verdict": "PARTIAL",
+    "ttr_s": 317
+  }
+}

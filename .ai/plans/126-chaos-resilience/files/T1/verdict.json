@@ -1,0 +1,135 @@
+{
+  "test": "T1",
+  "verdict": "SUCCESS",
+  "ttr_s": 62,
+  "incident_start_epoch": 1785787184,
+  "checked_at": "2026-08-03T20:01:42Z",
+  "markers": [
+    {
+      "label": "journald:docker-stopped",
+      "source": "journald",
+      "regex": "(Stopped|Stopping) docker\\.service.*Docker Application Container Engine",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "count=2"
+    },
+    {
+      "label": "journald:docker-started",
+      "source": "journald",
+      "regex": "(Starting|Started) docker\\.service.*Docker Application Container Engine",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "count=2"
+    },
+    {
+      "label": "docker:nginx-no-upstream-errors",
+      "source": "docker",
+      "regex": "no upstream",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "count=0"
+    },
+    {
+      "label": "loki:nginx-pipeline-alive-after-restart",
+      "source": "loki",
+      "regex": ".",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "streams=5"
+    },
+    {
+      "label": "state:postgres",
+      "source": "state",
+      "regex": "postgres",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy"
+    },
+    {
+      "label": "state:nginx",
+      "source": "state",
+      "regex": "nginx",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy"
+    },
+    {
+      "label": "state:redis",
+      "source": "state",
+      "regex": "redis",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy"
+    },
+    {
+      "label": "state:loki",
+      "source": "state",
+      "regex": "loki",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy"
+    },
+    {
+      "label": "state:prometheus",
+      "source": "state",
+      "regex": "prometheus",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy"
+    },
+    {
+      "label": "state:clickhouse",
+      "source": "state",
+      "regex": "clickhouse",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "status=running/healthy"
+    },
+    {
+      "label": "sites:https://www.tronyx.ru/",
+      "source": "http",
+      "regex": "https://www.tronyx.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://www.tronyx.ru/ → 200"
+    },
+    {
+      "label": "sites:https://sexydancerostov.ru/",
+      "source": "http",
+      "regex": "https://sexydancerostov.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://sexydancerostov.ru/ → 200"
+    },
+    {
+      "label": "sites:https://botanika.tronyx.ru/",
+      "source": "http",
+      "regex": "https://botanika.tronyx.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://botanika.tronyx.ru/ → 200"
+    },
+    {
+      "label": "sites:https://platform.tronyx.ru/",
+      "source": "http",
+      "regex": "https://platform.tronyx.ru/",
+      "expected": "required",
+      "found": true,
+      "loki_duplicate": null,
+      "detail": "https://platform.tronyx.ru/ → 401"
+    }
+  ]
+}
