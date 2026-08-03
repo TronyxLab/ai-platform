@@ -251,7 +251,11 @@ def probe_s3_connectivity(
         )
     except BaseException as e:
         latency = int((time.monotonic() - start) * 1000)
-        logger.warning("[IMP:8][preflight][s3] S3 probe crashed (%s: %s) — WARN, bootstrap continues", type(e).__name__, str(e)[:100])
+        logger.warning(
+            "[IMP:8][preflight][s3] S3 probe crashed (%s: %s) — WARN, bootstrap continues",
+            type(e).__name__,
+            str(e)[:100],
+        )
         return CheckResult(
             status="warn",
             latency_ms=latency,
