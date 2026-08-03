@@ -816,8 +816,15 @@ def test_acme_sh_available() -> None:
     logger.info("[IMP:7][test_acme_sh_available] Searching for acme.sh in PATH ...")
 
     if acme_path is None:
-        # R4 (DevPlan 119 F1 R4-3): acme.sh не найден → require_script_or_fail
-        # (marker→skip локально, fail→FAIL в CI). НЕ pytest.skip напрямую.
+        # ⚠️ TRAP[BUG] 2026-08-03 · CI gate-fast contract — acme.sh обязателен ТОЛЬКО на ноде
+        # · Symptom: «[honesty:fail] Script not found: /usr/local/bin/acme.sh» — CI-раннер
+        #   не выпускает сертификаты; acme.sh ставится bootstrap'ом (φ7 install-acme)
+        #   на НОДЕ, раннер не является нодой → FAIL был ложным.
+        # · Fix: на не-ноде (нет развёрнутой платформы /opt/platform) — легитимный skip
+        #   (инфраструктурная неприменимость, tests/AGENTS.md п.4); на ноде — R4
+        #   require_script_or_fail (отсутствие acme.sh = конфиг-ошибка ноды).
+        if not (os.path.isdir("/opt/platform") or os.environ.get("NODE")):
+            pytest.skip("acme.sh ставится на ноде (bootstrap φ7) — CI-раннер не нода, ACME-клиент не требуется")
         logger.info("[IMP:7][test_acme_sh_available] acme.sh not in PATH — dispatching honesty mode")
         require_script_or_fail(
             pathlib.Path("/usr/local/bin/acme.sh"),
