@@ -39,6 +39,7 @@ USAGE_OPTIONS=(
     "--resolve           Extract node.yaml fields + host from node.yaml"
     "--dry-run           Print SCP+SSH commands without executing"
     "--auto-reconcile    Passthrough to node-lifecycle.sh --reconcile"
+    "--age-secret-key-file <f>  Path to AGE secret key (читается ЛОКАЛЬНО, ключ уходит в remote как env)"
 )
 NODE_NAME=""; RESOLVE_MODE=false; DRY_RUN=false; PASSTHROUGH_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -48,6 +49,14 @@ while [[ $# -gt 0 ]]; do
         --resolve) RESOLVE_MODE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --auto-reconcile) PASSTHROUGH_ARGS+=("--auto-reconcile"); shift ;;
+        # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · --age-secret-key-file уходил в PASSTHROUGH_ARGS
+        # · Symptom: remote node-lifecycle.sh: "file not found: /Users/.../age-key-personal.txt"
+        # · Root: make-таргет передаёт AGE_SECRET_KEY_FILE как аргумент; bootstrap.sh не обрабатывал
+        #   его → аргумент попадал в remote-команду, где локальный путь не существует.
+        # · Fix: локальное чтение через node_detect-цепочку (как node-update.sh) — ключ уходит
+        #   в remote как export AGE_SECRET_KEY (build_ssh_cmd), путь НЕ передаётся.
+        # · Prevention: remote-команды не должны получать локальные пути (test_gate bootstrap).
+        --age-secret-key-file) AGE_SECRET_KEY_FILE="$2"; export AGE_SECRET_KEY_FILE; shift 2 ;;
         *) PASSTHROUGH_ARGS+=("$1"); shift ;;
     esac
 done
