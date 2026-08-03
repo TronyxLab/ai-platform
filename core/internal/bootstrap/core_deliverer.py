@@ -392,12 +392,58 @@ def deliver_all(
     deliver_core(host, core_dir, remote_user, base, dry_run)
     deliver_platform_env(host, core_dir, remote_user, base, dry_run)
     deliver_makefile(host, core_dir, remote_user, base, dry_run)
+    deliver_root_compose(host, core_dir, remote_user, base, dry_run)
     deliver_node_configs(host, node, node_configs_dir, remote_user, ncb, dry_run)
     deliver_secrets(host, node, node_configs_dir, remote_user, ncb, dry_run)
     return True
 
 
 # endregion FUNC_deliver_all
+
+
+# region FUNC_deliver_root_compose
+## @purpose  Доставка root docker-compose.yml (RC 121, U-49 regression fix): модульный деплой
+##           docker_orchestrator использует root compose первым -f (volumes/network SoT в root,
+##           DevPlan 116 B3 T4 U-49). Без него изолированный `docker compose -f modules/<m>/base.yml`
+##           падает: "refers to undefined volume backup-spool".
+## @io  input: host, core_dir, remote_user, base, dry_run; output: bool True (done или skip)
+## @complexity  O(1) — single-file rsync
+def deliver_root_compose(
+    host: str,
+    core_dir: str,
+    remote_user: str = "root",
+    base: str | None = None,
+    dry_run: bool = False,
+) -> bool:
+    """Rsync docker-compose.yml (core_dir/../) → {base}/. Skip if file absent.
+
+    @raises CoreDeliveryError  On rsync failure.
+    """
+    base = base or resolve_remote_base()
+    src = os.path.normpath(os.path.join(core_dir, "..", "docker-compose.yml"))
+    if not os.path.isfile(src):
+        logger.info("[IMP:8][deliver_root_compose][skip] SKIP — docker-compose.yml not found at %s", src)
+        return True
+    cmd = [
+        "rsync",
+        "-avz",
+        "-e",
+        build_rsync_ssh_opts(),
+        src,
+        f"{remote_user}@{host}:{base}/docker-compose.yml",
+    ]
+    logger.info("[IMP:9][deliver_root_compose][exec] Rsyncing docker-compose.yml → %s:%s/", host, base)
+    if dry_run:
+        logger.info("[IMP:8][deliver_root_compose][dry-run] DRY-RUN: %s", " ".join(cmd))
+        return True
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=RSYNC_TIMEOUT)
+    if r.returncode != 0:
+        raise CoreDeliveryError(f"rsync docker-compose.yml failed for {host} (exit={r.returncode}): {r.stderr.strip()}")
+    logger.info("[IMP:9][deliver_root_compose][done] docker-compose.yml delivered")
+    return True
+
+
+# endregion FUNC_deliver_root_compose
 
 
 # region FUNC_cli

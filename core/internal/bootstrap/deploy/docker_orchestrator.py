@@ -251,7 +251,18 @@ def _build_compose_args(
     module_name: str,
 ) -> list[str]:
     logger.info("[IMP:7][_build_compose_args][build] Building compose args for %s", module_name)
-    args: list[str] = ["-f", str(compose_file)]
+    args: list[str] = []
+
+    # ⚠️ TRAP[BUG] · 2026-08-03 · P1 · root docker-compose.yml ПЕРВЫМ -f (RC 121, U-49 regression)
+    # · Symptom: изолированный деплой модуля на VPS: "refers to undefined volume backup-spool"
+    # · Root: U-49 перенёс volumes в root compose; модульный base.yml без root-контекста невалиден.
+    # · Fix: root compose (volumes/network SoT) подключается первым -f, затем модульный файл.
+    root_compose = os.path.join(platform_root or str(platform_remote_base()), "docker-compose.yml")
+    if os.path.isfile(root_compose):
+        args.extend(["-f", root_compose])
+        logger.info("[IMP:8][_build_compose_args][root-compose] Adding root compose: %s", root_compose)
+
+    args.extend(["-f", str(compose_file)])
 
     # Secrets env file
     env_file = secrets_env_file or "/run/platform/secrets.env"
