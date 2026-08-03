@@ -144,6 +144,14 @@ def test_gate_marker_outside_detected_negative(caplog) -> None:
     ## @complexity — O(F) — один временный файл
     """
     caplog.set_level(logging.INFO)
+    # 📝 TRAP[DEBT] · 2026-08-03 · MED · Probe-файл в РЕАЛЬНОМ tests/ — xdist-гонка со сканером
+    # · Observed: static_audit (-n auto) флейк: FileNotFoundError:
+    # ·   tests/_gate_probe_marker_tmp/test_zombie_probe.py — test_no_hardcoded_ai_platform_test_own_project
+    # ·   читает probe, пока этот тест удаляет его в finally (unlink/rmdir гонка с чтением)
+    # · Suspected: сканер-жертва (test_gate_test_infra_consistency.py) не исключает _gate_probe_marker_tmp
+    # ·   и не терпит FileNotFoundError при чтении (probe удаляется конкурентно)
+    # · Impact: ~15-30% флейк static_audit под xdist (ложный ERROR — агент гоняет тесты повторно)
+    # · When: DevPlan 124 верификация — 2 фейла из 10 static_audit-прогонов (junit подтвердил механизм)
     probe_dir = _TESTS_DIR / "_gate_probe_marker_tmp"
     probe = probe_dir / "test_zombie_probe.py"
     probe_dir.mkdir(parents=True, exist_ok=True)

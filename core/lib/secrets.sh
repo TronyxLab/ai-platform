@@ -37,6 +37,15 @@ step_10_decrypt_secrets() {
     local enc_file="${NODE_CONFIGS_DIR:-/opt/node-configs}/secrets/${NODE_NAME}.enc.yaml"
     [[ -f "$enc_file" ]] || { step_skip "decrypt-secrets" "No encrypted secrets file at ${enc_file}"; return 0; }
     [[ -z "${AGE_SECRET_KEY:-}" ]] && [[ -n "${SOPS_AGE_KEY:-}" ]] && export AGE_SECRET_KEY="$SOPS_AGE_KEY"
+    # ⚠️ TRAP[BUG] 2026-08-03 · CI node-update падал «AGE_SECRET_KEY not set»
+    # · Symptom: core-deploy → node-update → secrets_update FAIL — CI не передаёт
+    #   AGE_SECRET_KEY env (bootstrap передавал); /etc/age/key.txt (стандартная
+    #   age-локация) не читалась.
+    # · Fix: fallback на /etc/age/key.txt (операторский ключ ноды, chmod 600).
+    if [[ -z "${AGE_SECRET_KEY:-}" ]] && [[ -f /etc/age/key.txt ]]; then
+        AGE_SECRET_KEY="$(cat /etc/age/key.txt)"
+        export AGE_SECRET_KEY
+    fi
     [[ -z "${AGE_SECRET_KEY:-}" ]] && { log_step "decrypt-secrets" "FAIL" "AGE_SECRET_KEY not set but secrets file exists — aborting"; exit 1; }
     export SECRETS_FILE="$enc_file"
     python3 "${CORE_DIR}/internal/secrets/decrypt_secrets.py" || exit 1
