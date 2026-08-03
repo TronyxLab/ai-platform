@@ -113,6 +113,7 @@ class LogMarker:
     window_offset: int = 0  # сдвиг окна (сек) — T4 clock skew: маркеры skew-фазы ищутся в +24h
     unit: str | None = None  # для source=journald: -u <unit> (без time-фильтра — journald
     # time-фильтры ломаются на ротации при скачке времени — T4 finding)
+    kflag: bool = False  # для source=journald: journalctl -k (kernel), без time-окна
 
     def __post_init__(self) -> None:
         if self.source not in _MARKER_SOURCES:
@@ -184,10 +185,11 @@ class LogAuditManifest:
         path: str | None = None,
         window_offset: int = 0,
         unit: str | None = None,
+        kflag: bool = False,
     ) -> LogAuditManifest:
         """Добавить маркер в manifest (fluent API)."""
         self.markers.append(
-            LogMarker(source, regex, label, window_min, expected, container, negate, path, window_offset, unit)
+            LogMarker(source, regex, label, window_min, expected, container, negate, path, window_offset, unit, kflag)
         )
         return self
 
@@ -224,7 +226,10 @@ class LogAuditManifest:
         return MarkerResult(marker, found=found, detail=f"count={count}")
 
     def _check_journald(self, ssh: NodeSSHClient, marker: LogMarker, from_ts: int, to_ts: int) -> MarkerResult:
-        if marker.unit:
+        if marker.kflag:
+            # kernel log без time-окна (time-фильтры journald ненадёжны — T4/T7 finding)
+            cmd = f"journalctl -k --no-pager 2>/dev/null | grep -cE '{marker.regex}'"
+        elif marker.unit:
             # time-фильтры journald ломаются на ротации при скачке времени (T4 finding) —
             # unit-фильтр без окна; записи в пределах прогона (≤2ч) — валидное окно
             cmd = f"journalctl -u {marker.unit} --no-pager 2>/dev/null | grep -cE '{marker.regex}'"
@@ -273,29 +278,31 @@ class LogAuditManifest:
         return MarkerResult(marker, found=found, detail=detail)
 
     def _check_alerts(self, ssh: NodeSSHClient, marker: LogMarker, incident_start: int, ttr_s: int) -> MarkerResult:
-        # окно не передаётся в API — alertmanager v2 отдаёт активные алерты; проверка
-        # по startsAt внутри окна выполняется ниже (время проверки — момент вызова).
+        # ⚠️ Находка W3 (T8): Grafana alert FIRES, но alertmanager пуст — notification
+        # policies пустые (D-3, contact-points.yml disabled) → алерты не доходят до
+        # alertmanager API. Источник истины состояния правил — Grafana rules API.
         cmd = (
             f"set -a; source {_SECRETS_ENV} 2>/dev/null; set +a; "
             f'curl -s -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" '
-            f"'{_GRAFANA_ALERTS_API}'"
+            f"'http://127.0.0.1:3000/api/prometheus/grafana/api/v1/rules'"
         )
         res = ssh.ssh_read(cmd, timeout=60)
         found = False
-        detail = "no alerts / API error"
+        detail = "no rules / API error"
         try:
-            alerts = json.loads(res.stdout)
-            if isinstance(alerts, list):
-                import re
+            import re
 
-                found_alerts = []
-                for alert in alerts:
-                    blob = json.dumps(alert)
-                    if re.search(marker.regex, blob):
-                        starts_at = alert.get("startsAt") or ""
-                        found_alerts.append(starts_at)
-                found = len(found_alerts) > 0
-                detail = f"matched={found_alerts}" if found_alerts else f"alerts_total={len(alerts)}"
+            data = json.loads(res.stdout)
+            matched_rules = []
+            for group in (data.get("data") or {}).get("groups") or []:
+                for rule in group.get("rules") or []:
+                    blob = json.dumps(rule)
+                    if re.search(marker.regex, blob, re.I):
+                        state = str(rule.get("state", ""))
+                        matched_rules.append(state)
+                        if state.lower() in ("active", "firing"):
+                            found = True
+            detail = f"rule_states={matched_rules}" if matched_rules else "no matching rule"
         except json.JSONDecodeError:
             detail = f"non-JSON: {res.stdout[:120]!r}"
         return MarkerResult(marker, found=found, detail=detail)

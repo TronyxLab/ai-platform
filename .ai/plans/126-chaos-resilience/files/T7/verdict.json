@@ -1,41 +1,32 @@
 {
-  "test": "T2",
+  "test": "T7",
   "verdict": "PARTIAL",
-  "ttr_s": 77,
-  "incident_start_epoch": 1785788374,
-  "checked_at": "2026-08-03T20:21:08Z",
+  "ttr_s": 1,
+  "incident_start_epoch": 1785795429,
+  "checked_at": "2026-08-03T22:18:10Z",
   "markers": [
     {
-      "label": "journald:resolved-stopped",
+      "label": "journald:kernel-oom",
       "source": "journald",
-      "regex": "Stopped systemd-resolved\\.service.*Network Name Resolution",
+      "regex": "Out of memory|oom-kill|Killed process",
       "expected": "required",
       "found": true,
       "loki_duplicate": null,
-      "detail": "count=1"
+      "detail": "count=12"
     },
     {
-      "label": "journald:resolved-started",
-      "source": "journald",
-      "regex": "Started systemd-resolved\\.service.*Network Name Resolution",
+      "label": "state:clickhouse-healthy",
+      "source": "state",
+      "regex": "clickhouse",
       "expected": "required",
       "found": true,
       "loki_duplicate": null,
-      "detail": "count=1"
+      "detail": "status=running/healthy"
     },
     {
-      "label": "audit:apt-resolv-fail",
-      "source": "auditfile",
-      "regex": "Temporary failure resolving",
-      "expected": "required",
-      "found": true,
-      "loki_duplicate": null,
-      "detail": "count=16 (file=/var/log/apt/chaos-dns.log)"
-    },
-    {
-      "label": "docker:litellm-resolv-fail",
+      "label": "docker:clickhouse-startup",
       "source": "docker",
-      "regex": "Name or service not known|Temporary failure in name resolution",
+      "regex": "Available RAM|Startup",
       "expected": "optional",
       "found": false,
       "loki_duplicate": null,
@@ -103,42 +94,6 @@
       "found": true,
       "loki_duplicate": null,
       "detail": "status=running/healthy"
-    },
-    {
-      "label": "sites:https://www.tronyx.ru/",
-      "source": "http",
-      "regex": "https://www.tronyx.ru/",
-      "expected": "required",
-      "found": true,
-      "loki_duplicate": null,
-      "detail": "https://www.tronyx.ru/ → 200"
-    },
-    {
-      "label": "sites:https://sexydancerostov.ru/",
-      "source": "http",
-      "regex": "https://sexydancerostov.ru/",
-      "expected": "required",
-      "found": true,
-      "loki_duplicate": null,
-      "detail": "https://sexydancerostov.ru/ → 200"
-    },
-    {
-      "label": "sites:https://botanika.tronyx.ru/",
-      "source": "http",
-      "regex": "https://botanika.tronyx.ru/",
-      "expected": "required",
-      "found": true,
-      "loki_duplicate": null,
-      "detail": "https://botanika.tronyx.ru/ → 200"
-    },
-    {
-      "label": "sites:https://platform.tronyx.ru/",
-      "source": "http",
-      "regex": "https://platform.tronyx.ru/",
-      "expected": "required",
-      "found": true,
-      "loki_duplicate": null,
-      "detail": "https://platform.tronyx.ru/ → 401"
     }
   ]
 }

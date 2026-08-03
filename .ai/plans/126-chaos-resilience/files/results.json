@@ -18,5 +18,13 @@
   "T5": {
     "verdict": "PARTIAL",
     "ttr_s": 317
+  },
+  "T6": {
+    "verdict": "PARTIAL",
+    "ttr_s": 11
+  },
+  "T7": {
+    "verdict": "PARTIAL",
+    "ttr_s": 1
   }
 }
