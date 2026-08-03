@@ -100,6 +100,7 @@ checks:
     gate_modes: [fast]
     allow_no_tests: true
     docker: true
+    xdist: false
     cmds:
       fast: pytest tests/gates/ -m "gate and requires_docker"
   - id: contract

@@ -414,27 +414,125 @@ def test_xdist_args_unavailable(caplog, monkeypatch):
     logger.critical("[IMP:9][test] _xdist_args → [] (xdist недоступен)")
 
 
-# 🧪 TRAP[TEST] · DevPlan 120 §3.3 · structural: все 3 pytest-инвокации используют *_xdist_args()
-# · Scenario: source-скан — marker-режим, _run_static_full, _run_all_suites содержат *_xdist_args()
-# ·   ПЕРЕД -m (порядок аргументов: -n auto перед -m, DevPlan §3.3)
+# 🧪 TRAP[TEST] · DevPlan 124 T2a · docker-маркеры исключены из -n auto (single-process)
+# · Scenario: _xdist_args("smoke"/"component"/"integration"/"predeploy-docker") == [] ДАЖЕ при
+# ·   доступном xdist и TEST_NO_XDIST≠1; static_audit/contract — по-прежнему ["-n", "auto"]
+# · Last fail: 2026-08-03 — эксперимент -n 2 → 5 passed / 7 errors (гонка docker-стека, факт 6)
+# · Remove if: docker-маркеры вернутся в xdist (пересмотр A2+)
+@ldd_trajectory
+def test_xdist_args_docker_markers_excluded(caplog, monkeypatch):
+    """DevPlan 124 T2a: docker-сьюты — single-process; статика/contract — -n auto."""
+    from core.internal.test_runner import _DOCKER_MARKERS, _xdist_args
+
+    monkeypatch.delenv("TEST_NO_XDIST", raising=False)
+    monkeypatch.setattr("core.internal.test_runner._has_xdist", lambda python_path: True)
+
+    for marker in sorted(_DOCKER_MARKERS):
+        assert _xdist_args(marker) == [], f"{marker}: docker-сьют должен идти БЕЗ -n auto"
+    # Статические/contract-сьюты — поведение DevPlan 120 без изменений
+    assert _xdist_args("static_audit") == ["-n", "auto"]
+    assert _xdist_args("contract") == ["-n", "auto"]
+    assert _xdist_args("predeploy") == ["-n", "auto"]  # predeploy — НЕ docker-маркер (check-suite фильтрует)
+    logger.critical(
+        "[IMP:9][test] _xdist_args: docker-маркеры %s → [] ; static_audit/contract → -n auto",
+        sorted(_DOCKER_MARKERS),
+    )
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T2a · docker-исключение действует и при TEST_NO_XDIST=1
+# · Scenario: docker-маркер → [] независимо от TEST_NO_XDIST (агентский путь test_runner не
+# ·   выставляет TEST_NO_XDIST — F11; исключение docker-маркеров — безусловное)
+# · Last fail: N/A
+# · Remove if: docker-исключение перестанет быть безусловным
+@ldd_trajectory
+def test_xdist_args_docker_exclusion_unconditional(caplog, monkeypatch):
+    """Docker-исключение НЕ зависит от TEST_NO_XDIST (F11: agent-путь его не выставляет)."""
+    from core.internal.test_runner import _xdist_args
+
+    monkeypatch.setenv("TEST_NO_XDIST", "1")
+    monkeypatch.setattr("core.internal.test_runner._has_xdist", lambda python_path: True)
+
+    assert _xdist_args("smoke") == [], "docker-исключение должно работать и при TEST_NO_XDIST=1"
+    logger.critical("[IMP:9][test] _xdist_args('smoke') → [] при TEST_NO_XDIST=1 (безусловное исключение)")
+
+
+# 🧪 TRAP[TEST] · DevPlan 120 §3.3 · structural: все 3 pytest-инвокации используют *_xdist_args(marker)
+# · Scenario: source-скан — marker-режим (_xdist_args(args.marker)), _run_static_full
+# ·   (_xdist_args("static")), _run_all_suites (_xdist_args(marker)) — ПЕРЕД -m (DevPlan §3.3)
 # · Last fail: N/A
 # · Remove if: xdist-вставка вынесена в отдельный модуль (обновить скан)
 @ldd_trajectory
 def test_xdist_inserted_in_all_pytest_invocations(caplog):
-    """Все pytest-инвокации test_runner получают *_xdist_args() перед -m."""
+    """Все pytest-инвокации test_runner получают *_xdist_args(marker) перед -m (DevPlan 124 T2a)."""
     from pathlib import Path
 
     import core.internal.test_runner as tr_module
 
     source = Path(tr_module.__file__).read_text(encoding="utf-8")
 
-    # marker-режим main(): pytest_args = [*_xdist_args(), *pytest_args, "--junitxml", ...]
-    assert "*_xdist_args(), *pytest_args" in source, "marker-режим main() не вставляет xdist"
-    # _run_static_full: [*_xdist_args(), "-m", _STATIC_AUDIT_EXPR, ...]
-    assert '*_xdist_args(), "-m"' in source, "_run_static_full не вставляет xdist перед -m"
-    # _run_all_suites: [*_xdist_args(), *args, "--junitxml", ...]
-    assert "*_xdist_args(), *args" in source, "_run_all_suites не вставляет xdist"
+    # marker-режим main(): pytest_args = [*_xdist_args(args.marker), *pytest_args, "--junitxml", ...]
+    assert "*_xdist_args(args.marker), *pytest_args" in source, "marker-режим main() не вставляет xdist"
+    # _run_static_full: [*_xdist_args("static"), "-m", _STATIC_AUDIT_EXPR, ...]
+    assert '*_xdist_args("static"), "-m"' in source, "_run_static_full не вставляет xdist перед -m"
+    # _run_all_suites: [*_xdist_args(marker), *args, "--junitxml", ...]
+    assert "*_xdist_args(marker), *args" in source, "_run_all_suites не вставляет xdist"
     logger.critical("[IMP:9][test] xdist вставлен во все 3 pytest-инвокации (marker/static_full/all_suites)")
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T2c · процессный flock: _docker_suite_lock сериализует docker-процессы
+# · Scenario: внутри with-контекста второй независимый open+flock(LOCK_EX|LOCK_NB) → BlockingIOError;
+# ·   после выхода из контекста — лок свободен. Лок-файл tests/.docker-suite.lock в tmp_path.
+# · Last fail: 2026-08-03 — межсессионная гонка F4 (два агента → master-клинер сносит чужой стек)
+# · Remove if: docker-лок заменён другим механизмом (A3, отдельный DevPlan)
+@ldd_trajectory
+def test_docker_suite_lock_serializes(caplog, tmp_path):
+    """DevPlan 124 T2c: flock на tests/.docker-suite.lock удерживается и освобождается."""
+    import fcntl
+
+    from core.internal.test_runner import _docker_suite_lock
+
+    lock_path = tmp_path / "tests" / ".docker-suite.lock"
+
+    with _docker_suite_lock(tmp_path):
+        assert lock_path.exists(), "lock-файл должен быть создан"
+        # Второй независимый open() (отдельный open-file-description) — лок обязан блокироваться
+        with open(lock_path, "a+") as fd, pytest.raises(BlockingIOError):
+            fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    # После выхода из контекста — неблокирующий захват обязан пройти
+    with open(lock_path, "a+") as fd:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    logger.critical("[IMP:9][test] docker-suite flock: held → blocked 2nd acquire → released")
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T2c · _run_docker_pytest оборачивает pytest-subprocess в лок
+# · Scenario: docker-маркерный запуск идёт через _run_docker_pytest → _docker_suite_lock entered
+# ·   (wiring-проверка; сама сериализация — test_docker_suite_lock_serializes)
+# · Last fail: N/A
+# · Remove if: docker-запуск перестанет использовать процессный лок
+@ldd_trajectory
+def test_run_docker_pytest_uses_lock(caplog, tmp_path, monkeypatch):
+    """_run_docker_pytest выполняет pytest под _docker_suite_lock (DevPlan 124 T2c wiring)."""
+    import contextlib
+
+    from core.internal.test_runner import _run_docker_pytest
+
+    entered: list[str] = []
+
+    @contextlib.contextmanager
+    def _fake_lock(platform_root):
+        entered.append(str(platform_root))
+        yield
+
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("core.internal.test_runner._docker_suite_lock", _fake_lock)
+    monkeypatch.setattr("core.internal.test_runner._has_xdist", lambda python_path: False)
+
+    proc = _run_docker_pytest(["-h"], {}, 30, tmp_path)
+
+    assert entered == [str(tmp_path)], f"лок должен оборачивать docker-pytest, entered={entered}"
+    assert proc.returncode == 0, f"pytest -h должен завершиться 0, rc={proc.returncode}"
+    logger.critical("[IMP:9][test] _run_docker_pytest: lock entered=%s, rc=%d", entered, proc.returncode)
 
 
 # endregion Tests: xdist args (DevPlan 120)

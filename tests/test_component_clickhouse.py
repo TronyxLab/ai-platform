@@ -138,7 +138,11 @@ def _docker_exec_wget(url: str, timeout: int = 5) -> tuple[int, str]:
 
 
 @pytest.fixture(scope="session")
-def clickhouse_up(platform_services: dict[str, list[str]], modules_dir: str) -> dict:
+def clickhouse_up(
+    platform_services: dict[str, list[str]],
+    modules_dir: str,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict:
     """Start the ClickHouse Docker compose stack and tear it down after the session.
 
     ## @purpose  — One-time setup: resolve compose path, ensure external network
@@ -157,7 +161,14 @@ def clickhouse_up(platform_services: dict[str, list[str]], modules_dir: str) -> 
     ##   - --wait-timeout: 120s (single container, fast startup)
     ##   - teardown runs unconditionally (unless foreign container reused)
     ##   - Foreign container guard reuses clickhouse from platform_services if present
+    ##   - Failure log — в tmp_path_factory (DevPlan 124 T6): общий /tmp путь был межворкерной
+    ##     гонкой записи и мусором между прогонами (факт 9)
     """
+    # ── Failure log path (DevPlan 124 T6): тестовая tmp-директория, НЕ общий /tmp ──
+    # tmp_path_factory — session-scoped (фикстура session-scoped); /tmp/clickhouse-compose-up-failed.log
+    # делили все воркеры → гонка записи и мусор между прогонами (факт 9 DevPlan 124).
+    _compose_failed_log = tmp_path_factory.mktemp("clickhouse") / "compose-up-failed.log"
+
     # ── Resolve compose path ──────────────────────────────────────────────
     compose_dir = os.path.join(modules_dir, "clickhouse")
     compose_base = os.path.join(compose_dir, _COMPOSE_BASE)
@@ -250,13 +261,13 @@ def clickhouse_up(platform_services: dict[str, list[str]], modules_dir: str) -> 
     except subprocess.CalledProcessError as exc:
         full_stderr = exc.stderr or ""
         full_stdout = exc.stdout or ""
-        with open("/tmp/clickhouse-compose-up-failed.log", "w") as f:
+        with open(_compose_failed_log, "w") as f:
             f.write(f"STDOUT:\n{full_stdout}\n\nSTDERR:\n{full_stderr}\n")
-        logger.error("[IMP:9][clickhouse_up] docker compose up failed — /tmp/clickhouse-compose-up-failed.log")
+        logger.error("[IMP:9][clickhouse_up] docker compose up failed — %s", _compose_failed_log)
         print(f"[IMP:9][clickhouse_up] STDERR (last 3000): ...{full_stderr[-3000:]}")
         pytest.fail(
             f"ClickHouse stack failed to start. "
-            f"Full output: /tmp/clickhouse-compose-up-failed.log. "
+            f"Full output: {_compose_failed_log}. "
             f"STDERR (last 3000): {full_stderr[-3000:]}. "
             f"Run 'docker compose -f {compose_base} -f {compose_test} up -d --wait' manually."
         )

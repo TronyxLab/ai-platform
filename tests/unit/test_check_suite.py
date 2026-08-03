@@ -36,13 +36,16 @@ from core.internal.check_suite import (
     _apply_xdist,
     _build_diff_steps,
     _diff_files,
+    _run_cmd,
     compute_fingerprint,
     list_checks,
+    parse_checks,
     run_diagnostic,
     run_diff,
     run_gate,
     validate_manifest,
 )
+from tests._conftest.ldd import ldd_trajectory
 
 logger = __import__("logging").getLogger(__name__)
 
@@ -680,6 +683,57 @@ def test_apply_xdist_inserts_n_auto(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TEST_NO_XDIST", "1")
     assert _apply_xdist("pytest tests/ -m x", spec, tmp_path) == "pytest tests/ -m x"
     logger.critical("[IMP:9][test] _apply_xdist: -n auto только прямые pytest-команды; TEST_NO_XDIST отключает")
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T2b · gates-docker: xdist: false в SoT-манифесте
+# · Scenario: parse_checks реального core/check-suite.yaml → gates-docker spec.xdist == False
+# ·   (первый же docker-gate-тест не унаследует -n auto — F9); predeploy-docker — тоже False
+# · Last fail: 2026-08-03 — gates-docker без явного xdist → default true (check_suite.py:329)
+# · Remove if: docker-чеки вернутся в xdist (пересмотр A2+)
+@ldd_trajectory
+def test_manifest_gates_docker_xdist_false(caplog) -> None:
+    """gates-docker/predeploy-docker — xdist: false в check-suite.yaml (DevPlan 124 T2b)."""
+    # Реальный SoT-манифест (проверка факта T2b в самом источнике; _PROJECT_ROOT — модульная
+    # константа executor'а, не hardcoded-путь в тесте)
+    manifest = check_suite.load_manifest(check_suite._PROJECT_ROOT)
+    specs = {s.id: s for s in parse_checks(manifest)}
+
+    assert specs["gates-docker"].docker is True, "gates-docker должен быть docker-чеком"
+    assert specs["gates-docker"].xdist is False, "gates-docker: xdist должен быть false (T2b)"
+    assert specs["predeploy-docker"].xdist is False, "predeploy-docker: xdist: false (прецедент)"
+    assert specs["smoke"].xdist is True, "smoke — metadata xdist: true, реальный контроль в test_runner (T2a)"
+    logger.critical("[IMP:9][test] gates-docker xdist=False, predeploy-docker xdist=False (single-process docker)")
+
+
+# 🧪 TRAP[TEST] · DevPlan 124 T2c · _run_cmd(docker_lock=True) оборачивает команду в docker-suite лок
+# · Scenario: docker_lock=True → _docker_suite_lock entered c root; docker_lock=False → не entered
+# ·   (wiring-проверка; сериализация flock — test_runner-зеркало test_docker_suite_lock_serializes)
+# · Last fail: 2026-08-03 — межсессионная гонка F4 (два агента гоняют docker-чеки)
+# · Remove if: docker-лок check_suite заменён другим механизмом
+@ldd_trajectory
+def test_run_cmd_docker_lock_applied(caplog, tmp_path, monkeypatch) -> None:
+    """docker_lock=True → _run_cmd входит в _docker_suite_lock; False → без лока (DevPlan 124 T2c)."""
+    import contextlib
+    import os
+
+    entered: list[str] = []
+
+    @contextlib.contextmanager
+    def _fake_lock(root):
+        entered.append(str(root))
+        yield
+
+    monkeypatch.setattr(check_suite, "_docker_suite_lock", _fake_lock)
+
+    out = _run_cmd("echo hi", 10, os.environ.copy(), tmp_path, docker_lock=True)
+    assert out.exit_code == 0, f"echo должен пройти, rc={out.exit_code}"
+    assert entered == [str(tmp_path)], f"docker_lock=True должен обернуть команду в лок, entered={entered}"
+
+    entered.clear()
+    out2 = _run_cmd("echo hi", 10, os.environ.copy(), tmp_path, docker_lock=False)
+    assert out2.exit_code == 0
+    assert entered == [], f"docker_lock=False не должен трогать лок, entered={entered}"
+    logger.critical("[IMP:9][test] _run_cmd: docker_lock=True → lock entered; False → no lock")
 
 
 # endregion Tests: xdist application

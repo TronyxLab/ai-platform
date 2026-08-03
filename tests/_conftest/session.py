@@ -12,10 +12,16 @@
 ##   - Escalation levels: 1-2=checklist, 3=external help, 4=reflection, 5+=critical
 ##   - PYTEST_NO_ESCALATION env var suppresses escalation output (used by git hooks)
 ##   - retention module loaded via importlib from core/modules/backup-cron/scripts/
+##   - МУТИРУЮЩИЕ session-хуки (attempt-счётчик, docker-cleanup, network release) — ТОЛЬКО
+##     master-воркер (PYTEST_XDIST_WORKER гейт, DevPlan 124 T1): при -n auto хуки выполняются
+##     в каждом воркере, конкурентные docker rm -f / reset счётчика ломали параллельную сессию
 ## @rationale  Extracted from tests/conftest.py to reduce file size and isolate session lifecycle logic.
 ##             Path adjusted from __file__ (conftest/) → (conftest/../..) so core/ resolves correctly.
 ## @changes
-##   LAST_CHANGE: 2026-07-12 | Extracted from tests/conftest.py — ESCALATION_DISPATCH + PYTEST_SESSION_HOOKS regions
+##   LAST_CHANGE: 2026-08-03 | DevPlan 124 T1: master-guard для sessionstart/sessionfinish —
+##   _is_xdist_worker() (PYTEST_XDIST_WORKER); counter increment/reset и docker-cleanup —
+##   только master; воркеры — no-op с логом worker id (гонки фактов 4-5 DevPlan 124)
+##   2026-07-12 | Extracted from tests/conftest.py — ESCALATION_DISPATCH + PYTEST_SESSION_HOOKS regions
 ##   DevPlan 123 T5: added _final_hermes_test_cleanup() — name-based sweep for hermes-test-*
 ##   containers (label-free), called from pytest_sessionfinish (false-lead #10, 503 on /health)
 # endregion MODULE_CONTRACT
@@ -114,6 +120,21 @@ def _handle_escalation(attempts: int) -> None:
 # endregion ESCALATION_DISPATCH
 
 
+# region FUNC_IS_XDIST_WORKER
+## @purpose  Детекция xdist-воркера: env PYTEST_XDIST_WORKER устанавливается pytest-xdist
+##           в каждом воркере и отсутствует в master (DevPlan 124, факт 11 — стандартный
+##           контракт xdist). Гейт для session-хуков: attempt-счётчик и docker-cleanup
+##           принадлежат master-сессии (она видит aggregate-результат и владеет стёком).
+## @io       → ⎋ bool (True = текущий процесс — xdist-воркер)
+## @complexity O(1)
+def _is_xdist_worker() -> bool:
+    """True when running inside a pytest-xdist worker (PYTEST_XDIST_WORKER set)."""
+    return bool(os.environ.get("PYTEST_XDIST_WORKER"))
+
+
+# endregion FUNC_IS_XDIST_WORKER
+
+
 # region PYTEST_SESSION_HOOKS
 
 
@@ -150,13 +171,23 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     else:
         print("[IMP:7][session] retention.py import skipped (no backup marker)", file=sys.stderr)
 
-    # DevPlan 120 §3.3 (Wave 1): атомарный _increment_counter под flock — при xdist sessionstart
-    # выполняется в каждом worker'е конкурентно; раздельные read/write теряли бы обновления.
-    attempts = _increment_counter()
-    print(
-        f"[IMP:9][conftest][sessionstart] Attempt #{attempts} — running tests...",
-        file=sys.stderr,
-    )
+    # DevPlan 124 T1: счётчик инкрементирует ТОЛЬКО master-воркер. При -n auto sessionstart
+    # выполняется в каждом воркере; без гейта один фейл-прогон давал Attempt #N (N воркеров)
+    # и anti-loop протокол искажался (факт 4 DevPlan 124: -n 2 → Attempt #2 за один прогон).
+    if _is_xdist_worker():
+        print(
+            f"[IMP:7][conftest][sessionstart] Worker {os.environ.get('PYTEST_XDIST_WORKER')} — "
+            "attempt-counter increment skipped (master owns session)",
+            file=sys.stderr,
+        )
+    else:
+        # DevPlan 120 §3.3: атомарный _increment_counter под flock — защита от ПАРАЛЛЕЛЬНЫХ
+        # pytest-сессий (2 агента одновременно), не от xdist-воркеров (их гейт выше).
+        attempts = _increment_counter()
+        print(
+            f"[IMP:9][conftest][sessionstart] Attempt #{attempts} — running tests...",
+            file=sys.stderr,
+        )
 
 
 def _final_compose_cleanup() -> None:
@@ -278,9 +309,24 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     Also runs final Docker compose cleanup (DevPlan 040 Wave 3), the hermes-test-*
     container sweep (DevPlan 123 T5) and NetworkLeaseManager cleanup.
 
+    DevPlan 124 T1: docker-cleanup и counter read/reset выполняются ТОЛЬКО в master
+    (PYTEST_XDIST_WORKER отсутствует). В xdist-воркерах pytest_sessionfinish выполняется
+    при завершении КАЖДОГО воркера (факт 5): cleanup в рано завершившемся воркере удалял
+    контейнеры/сети, ещё используемые другими воркерами; сброс счётчика воркером терял
+    фейл параллельной сессии (факт 4). Master видит aggregate-результат сессии —
+    reset при полном PASS корректен только там.
+
     - exitstatus == 0 → all passed → reset counter to 0
     - exitstatus != 0 → failures → keep incremented counter, print escalation
     """
+    if _is_xdist_worker():
+        print(
+            f"[IMP:8][conftest][sessionfinish] Worker {os.environ.get('PYTEST_XDIST_WORKER')} — "
+            "cleanup skipped (master owns session)",
+            file=sys.stderr,
+        )
+        return
+
     # ── Final compose cleanup (DevPlan 040 Wave 3) ──────────────────────────
     _final_compose_cleanup()
 

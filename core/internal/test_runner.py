@@ -32,9 +32,14 @@
 ##            (marker-режим, _run_static_full, _run_all_suites) при доступности pytest-xdist;
 ##            TEST_NO_XDIST=1 отключает (слабые машины, диагностика гонок). test_file-режим
 ##            (один файл) — без xdist (нет выигрыша). Корень ускорения preflight 254s → ~60s.
+## @changes 2026-08-03 | DevPlan 124 T2a/T2c (A2+): docker-маркеры {smoke, component, integration,
+##            predeploy-docker} исключены из -n auto (_xdist_args(marker)) — single-process стек;
+##            docker-pytest-процессы обёрнуты в процессный flock tests/.docker-suite.lock
+##            (_docker_suite_lock/_run_docker_pytest) — межсессионная сериализация (F4)
 # endregion MODULE_CONTRACT
 
 import argparse
+import contextlib
 import logging
 import os
 import shutil
@@ -105,6 +110,14 @@ _ALL_SUITES_ORDER: list[str] = [
 # 2 строки на failure: 119 failures → 244 строки, DevPlan 098 AC1 нарушен).
 MAX_FAIL_DETAILS = 20
 
+# DevPlan 124 T2a (A2+, решение пользователя 2026-08-03): docker-сьюты исключены из -n auto —
+# single-process (один compose-стек на машину). xdist на docker-сьютах давал гонку стека
+# (эксперимент 2026-08-03: 5 passed / 7 errors при -n 2): воркеры конкурентно поднимали/сносили
+# один стек (smoke.py:832 pre-cleanup `down --remove-orphans` + smoke.py:858 `rm -f` — факт 6).
+# "predeploy-docker" — defensive (check-suite id, в test_runner не приходит; маркер "predeploy"
+# НЕ docker-сьют — его xdist-политику контролирует check-suite через не-requires_docker выражение).
+_DOCKER_MARKERS = {"smoke", "component", "integration", "predeploy-docker"}
+
 
 # region FUNC_HAS_XDIST
 ## @purpose  Проверка доступности pytest-xdist (DevPlan 120 §3.3): локальный дубль
@@ -129,13 +142,21 @@ def _has_xdist(python_path: str) -> bool:
 
 
 # region FUNC_XDIST_ARGS
-## @purpose  pytest-аргументы xdist: ["-n", "auto"] при доступности xdist и отсутствии
-##           TEST_NO_XDIST=1 (слабые машины, диагностика гонок); [] иначе.
-##           Меняется ТОЛЬКО способ исполнения, не набор тестов (AC-9 честность).
-## @io       → ⎋ list[str] ([] или ["-n", "auto"])
+## @purpose  pytest-аргументы xdist: ["-n", "auto"] при доступности xdist, отсутствии
+##           TEST_NO_XDIST=1 и НЕ docker-маркере; [] иначе (DevPlan 124 T2a, A2+).
+##           Docker-сьюты (smoke/component/integration/predeploy-docker) — single-process:
+##           их исключение ДЕЙСТВУЕТ независимо от TEST_NO_XDIST, т.к. агентский путь
+##           `make test-summary MARKER=smoke` идёт через test_runner, а НЕ через check_suite
+##           (F11 — TEST_NO_XDIST прокидывается только check_suite-инвокациями).
+## @io       ⇥ marker: str | None (имя маркерной суиты) → ⎋ list[str] ([] или ["-n", "auto"])
 ## @complexity O(1)
-def _xdist_args() -> list[str]:
-    """Return pytest xdist args (`-n auto`) unless TEST_NO_XDIST=1 or xdist unavailable."""
+def _xdist_args(marker: str | None = None) -> list[str]:
+    """Return pytest xdist args (`-n auto`) unless docker marker, TEST_NO_XDIST=1, or xdist unavailable."""
+    if marker in _DOCKER_MARKERS:
+        # Docker-сьюты — single-process по построению (DevPlan 124 T2a): воркеры конкурентно
+        # поднимают/сносят один стек (гонка факта 6). Меняется ТОЛЬКО способ исполнения,
+        # не набор тестов (AC-9 честность).
+        return []
     if os.environ.get("TEST_NO_XDIST") == "1":
         return []
     if _has_xdist(sys.executable):
@@ -144,6 +165,76 @@ def _xdist_args() -> list[str]:
 
 
 # endregion FUNC_XDIST_ARGS
+
+
+# region FUNC_DOCKER_SUITE_LOCK
+## @purpose  Процессный advisory flock на tests/.docker-suite.lock (DevPlan 124 T2c, A2+):
+##           межсессионная сериализация docker-pytest-процессов. Два агента, одновременно
+##           гоняющих docker-сьюты, НЕ пересекаются по compose-стеку (F4): master-клинер
+##           одной сессии не сносит активный стек другой. Единый lock-файл для ВСЕХ
+##           docker-pytest-процессов машины (test_runner + check_suite — зеркало).
+##           Реализация — fcntl.flock (прецедент _CounterLock в _conftest/counter.py,
+##           DevPlan 120 §3.3), НЕ flock-CLI: утилита отсутствует на macOS по умолчанию,
+##           fcntl доступен на darwin/linux и держит инвариант stdlib-only. Лок снимается
+##           ядром при закрытии fd или завершении процесса-держателя — retry/release не нужны.
+## @io       ⇥ platform_root: Path (корень репо) → contextmanager (lock удерживается внутри with)
+## @complexity O(1)
+# ⚠️ TRAP[DECISION] · 2026-08-03 · — · process-лок через fcntl.flock вместо flock-CLI
+# · Rejected: префикс `flock tests/.docker-suite.lock` (буквальный текст DevPlan 124 T2c) —
+# ·   на dev-машине macOS flock отсутствует (`which flock` → not found, 2026-08-03);
+# ·   REQUIRES-запись плана «flock (coreutils, доступен на macOS)» фактически неверна;
+# ·   flock-CLI сломал бы `make test-summary MARKER=smoke` на macOS (command not found)
+# · Reason: fcntl.flock — тот же механизм ядра (advisory lock на открытом файле, flock(2)),
+# ·   прецедент counter.py (DevPlan 120 §3.3), stdlib-only инвариант test_runner, одна
+# ·   реализация на macOS/Linux. Единый lock-файл tests/.docker-suite.lock сохранён.
+# · Rev: при появлении shell-потребителя лока (вне Python) — вынести в shared-модуль с CLI.
+@contextlib.contextmanager
+def _docker_suite_lock(platform_root: Path):
+    """Context manager holding the process-level docker-suite flock (T2c)."""
+    import fcntl  # lazy — POSIX-only (darwin/linux); не-docker пути работают на любой платформе
+
+    lock_path = platform_root / "tests" / ".docker-suite.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("[IMP:8][docker_lock][acquire] flock held: %s", lock_path)
+    with open(lock_path, "a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            logger.info("[IMP:8][docker_lock][release] flock released: %s", lock_path)
+
+
+# endregion FUNC_DOCKER_SUITE_LOCK
+
+
+# region FUNC_RUN_DOCKER_PYTEST
+## @purpose  Запуск docker-сьюты под процессным локом (DevPlan 124 T2c): тот же
+##           subprocess.run, что и обычный pytest, но wrapped в _docker_suite_lock —
+##           docker-pytest-процессы на машине сериализуются по единому lock-файлу.
+##           Лок удерживается на ВЕСЬ процесс (до возврата subprocess.run) — воркер B
+##           ждёт завершения воркера A по тому же docker-стеку.
+## @io       ⇥ pytest_args (list[str]), env (dict), timeout (int), platform_root (Path)
+##             → ⎋ subprocess.CompletedProcess[str]
+## @complexity O(1) + время subprocess
+def _run_docker_pytest(
+    pytest_args: list[str],
+    env: dict[str, str],
+    timeout: int,
+    platform_root: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Run a docker-suite pytest process under the process-level docker-suite flock (T2c)."""
+    with _docker_suite_lock(platform_root):
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+            env=env,
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+        )
+
+
+# endregion FUNC_RUN_DOCKER_PYTEST
 
 
 # region FUNC_TESTSUMMARY
@@ -393,7 +484,7 @@ def _run_static_full(platform_root: Path, junit_path: Path, timeout: int) -> int
             print((r2.stderr or r2.stdout or "")[-4000:], file=sys.stderr)
             return r2.returncode
 
-        pytest_args = [*_xdist_args(), "-m", _STATIC_AUDIT_EXPR, "--junitxml", str(junit_path)]
+        pytest_args = [*_xdist_args("static"), "-m", _STATIC_AUDIT_EXPR, "--junitxml", str(junit_path)]
         logger.info("[IMP:7][static_full][pytest] Running pytest static_audit: %s", " ".join(pytest_args))
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
@@ -441,17 +532,22 @@ def _run_all_suites(platform_root: Path, junit_path: Path, timeout: int) -> int:
         args = MARKER_MAP[marker]
         assert args is not None, f"_ALL_SUITES_ORDER содержит special handler: {marker}"
         suite_junit = suite_dir / f"junit-{marker}.xml"
-        pytest_args = [*_xdist_args(), *args, "--junitxml", str(suite_junit)]
+        pytest_args = [*_xdist_args(marker), *args, "--junitxml", str(suite_junit)]
         logger.info("[IMP:7][all_suites][run] Suite marker=%s", marker)
         proc: subprocess.CompletedProcess[str] | None = None
         try:
-            proc = subprocess.run(
-                [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
-                env=env,
-                timeout=timeout,
-                capture_output=True,
-                text=True,
-            )
+            if marker in _DOCKER_MARKERS:
+                # DevPlan 124 T2c: docker-сьюты внутри MARKER=all — под процессным локом
+                # (межсессионная гонка F4; T2a уже убрал их из -n auto)
+                proc = _run_docker_pytest(pytest_args, env, timeout, platform_root)
+            else:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+                    env=env,
+                    timeout=timeout,
+                    capture_output=True,
+                    text=True,
+                )
             exit_codes.append(proc.returncode)
         except subprocess.TimeoutExpired:
             logger.critical("[IMP:9][all_suites][timeout] Suite marker=%s TIMEOUT after %ds", marker, timeout)
@@ -655,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 pytest_args = _build_pytest_args(args.marker)
                 assert pytest_args is not None, f"marker={args.marker} не special handler, но вернул None"
-                pytest_args = [*_xdist_args(), *pytest_args, "--junitxml", str(junit_path)]
+                pytest_args = [*_xdist_args(args.marker), *pytest_args, "--junitxml", str(junit_path)]
                 env = {**os.environ, "PYTEST_NO_ESCALATION": "1"}
                 try:
                     logger.info(
@@ -663,13 +759,18 @@ def main(argv: list[str] | None = None) -> int:
                         platform_root / "tests",
                         " ".join(pytest_args),
                     )
-                    proc = subprocess.run(
-                        [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
-                        env=env,
-                        timeout=args.timeout,
-                        capture_output=True,
-                        text=True,
-                    )
+                    if args.marker in _DOCKER_MARKERS:
+                        # DevPlan 124 T2c: docker-сьюты — под процессным локом (агентский путь
+                        # make test-summary MARKER=smoke; межсессионная гонка F4)
+                        proc = _run_docker_pytest(pytest_args, env, args.timeout, platform_root)
+                    else:
+                        proc = subprocess.run(
+                            [sys.executable, "-m", "pytest", str(platform_root / "tests"), *pytest_args],
+                            env=env,
+                            timeout=args.timeout,
+                            capture_output=True,
+                            text=True,
+                        )
                     result_code = proc.returncode
                 except subprocess.TimeoutExpired:
                     logger.critical("[IMP:9][main][timeout] TIMEOUT after %ds", args.timeout)

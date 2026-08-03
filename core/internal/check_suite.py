@@ -34,6 +34,10 @@
 ##            переформулирован системно: два executor'а одного манифеста — диагностический
 ##            акселератор, канонический арбитр; дрейф невозможен конструктивно.
 ## @changes 2026-08-02 | Created (DevPlan 120 Wave 1-4)
+## @changes 2026-08-03 | DevPlan 124 T2c (A2+): _docker_suite_lock — процессный flock
+##            tests/.docker-suite.lock (зеркало test_runner, ЕДИНЫЙ lock-файл машины);
+##            _run_cmd(docker_lock=True) оборачивает docker-чеки (gates-docker,
+##            predeploy-docker, spec.docker: true) — межсессионная сериализация (F4)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -454,24 +458,71 @@ def _apply_project_filter(cmd_str: str, project: str | None) -> str:
 # endregion FUNC_apply_project_filter
 
 
+# region FUNC_docker_suite_lock
+## @purpose  Процессный advisory flock на tests/.docker-suite.lock (DevPlan 124 T2c) —
+##           зеркало test_runner._docker_suite_lock: ЕДИНЫЙ lock-файл для ВСЕХ
+##           docker-pytest-процессов на машине (test_runner и check_suite). Два агента,
+##           одновременно гоняющих docker-чеки, НЕ пересекаются по compose-стеку (F4).
+##           Реализация fcntl.flock (прецедент counter.py, DevPlan 120 §3.3) вместо
+##           flock-CLI (отсутствует на macOS; stdlib-only инвариант).
+## @io       ⇥ root: Path → contextmanager (lock удерживается внутри with)
+## @complexity O(1)
+# ⚠️ TRAP[DECISION] · 2026-08-03 · — · docker-лок check_suite: fcntl-зеркало test_runner
+# · Rejected: shell-префикс `flock tests/.docker-suite.lock` к команде чека (текст DevPlan
+# ·   124 T2c) — flock-CLI отсутствует на macOS (`which flock` → not found, 2026-08-03);
+# ·   prefix-подход не удержал бы лок при timeout-киле subprocess (flock-ребёнок остался бы)
+# · Reason: in-process fcntl.flock вокруг subprocess.run держит лок ровно на время исполнения
+# ·   команды и безусловно освобождается в finally/при завершении процесса; единый lock-файл
+# ·   tests/.docker-suite.lock общий с test_runner (T2c: «Единый lock-файл для всех процессов»)
+# · Rev: при появлении shell-потребителя лока — вынести в shared-модуль с CLI.
+@contextlib.contextmanager
+def _docker_suite_lock(root: Path):
+    """Context manager holding the process-level docker-suite flock (mirror of test_runner)."""
+    import fcntl  # lazy — POSIX-only (darwin/linux)
+
+    lock_path = root / "tests" / ".docker-suite.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("[IMP:8][docker_lock][acquire] flock held: %s", lock_path)
+    with open(lock_path, "a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            logger.info("[IMP:8][docker_lock][release] flock released: %s", lock_path)
+
+
+# endregion FUNC_docker_suite_lock
+
+
 # region FUNC_run_cmd
 ## @purpose  Исполнение команды чека: subprocess с таймаутом, cwd=root, env; timeout → exit 124;
-##           FileNotFoundError → exit 127. НЕ бросает исключений — caller собирает результат.
-## @io       ⇥ cmd_str: str, timeout: int, env: dict, root: Path → CheckOutcome
+##           FileNotFoundError → exit 127. docker_lock=True → команда оборачивается в
+##           _docker_suite_lock (docker-чеки сериализуются межсессионно, DevPlan 124 T2c).
+##           НЕ бросает исключений — caller собирает результат.
+## @io       ⇥ cmd_str: str, timeout: int, env: dict, root: Path,
+##             docker_lock: bool (spec.docker: true) → CheckOutcome
 ## @complexity O(1) + время subprocess
-def _run_cmd(cmd_str: str, timeout: int, env: dict[str, str], root: Path) -> CheckOutcome:
+def _run_cmd(
+    cmd_str: str,
+    timeout: int,
+    env: dict[str, str],
+    root: Path,
+    docker_lock: bool = False,
+) -> CheckOutcome:
     """Run a single check command; never raises on check failure."""
     tokens = _resolve_command_tokens(shlex.split(cmd_str), root)
     start = time.monotonic()
     try:
-        result = subprocess.run(
-            tokens,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(root),
-            env=env,
-        )
+        with _docker_suite_lock(root) if docker_lock else contextlib.nullcontext():
+            result = subprocess.run(
+                tokens,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(root),
+                env=env,
+            )
         duration = (time.monotonic() - start) * 1000
         logger.info(
             "[IMP:8][run_cmd][exec] %s → exit=%d (%.1fs)",
@@ -897,7 +948,9 @@ def run_diagnostic(
             continue
         cmd_str = _apply_xdist(cmd_str, spec, root)
         print(f"[IMP:7][check] pytest: {spec.id} (sequential, xdist={spec.xdist})...", file=sys.stderr)
-        r = _run_cmd(cmd_str, spec.timeout, env, root)
+        # DevPlan 124 T2c: docker-чеки (spec.docker: true — gates-docker/predeploy-docker)
+        # — под процессным локом (межсессионная сериализация docker-стека, F4)
+        r = _run_cmd(cmd_str, spec.timeout, env, root, docker_lock=spec.docker)
         if spec.allow_no_tests and r.exit_code == 5:
             r.passed_no_tests = True
             print(f"[IMP:8][check] {spec.id}: 0 тестов (rc=5) → PASS (allow_no_tests)", file=sys.stderr)
@@ -1045,7 +1098,8 @@ def run_gate(
         cmd_str = _apply_xdist(cmd_str, spec, root)
         cmd_str = _apply_project_filter(cmd_str, project) if spec.project_filter else cmd_str
         print(f"[IMP:7][gate] Step {i}/{len(steps)}: {spec.id}...", file=sys.stderr)
-        r = _run_cmd(cmd_str, spec.timeout, env, root)
+        # DevPlan 124 T2c: docker-чеки (spec.docker: true) — под процессным локом (F4)
+        r = _run_cmd(cmd_str, spec.timeout, env, root, docker_lock=spec.docker)
         if spec.allow_no_tests and r.exit_code == 5:
             r.passed_no_tests = True
             print(f"[IMP:8][gate] {spec.id}: 0 тестов (rc=5) → PASS (allow_no_tests)", file=sys.stderr)

@@ -146,6 +146,17 @@ def ghcr_login(token: str | None = None, user: str = "ci-deploy") -> bool:
 
     logger.info("[IMP:7][ghcr_login] Logging into ghcr.io as %s", user)
 
+    # ⚠️ TRAP[BUG] 2026-08-03 · creds попадали в /root/.docker (receive от ci-deploy — unauthorized)
+    # · Symptom: DeployOrchestrator.receive (ci-deploy) → docker compose pull ghcr.io/...
+    #   «error from registry: unauthorized» — docker login при bootstrap выполнялся от root,
+    #   creds писались в /root/.docker/config.json (HOME процесса), а receive читает
+    #   /home/ci-deploy/.docker/config.json.
+    # · Fix: HOME=<user-home> в env subprocess (creds — в docker config пользователя receive).
+    docker_env = dict(os.environ)
+    user_home = f"/home/{user}"
+    if user != "root" and os.path.isdir(user_home):
+        docker_env["HOME"] = user_home
+
     try:
         result = subprocess.run(
             ["docker", "login", "ghcr.io", "--username", user, "--password-stdin"],
@@ -153,6 +164,7 @@ def ghcr_login(token: str | None = None, user: str = "ci-deploy") -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            env=docker_env,
         )
         if result.returncode == 0:
             logger.info("[IMP:9][ghcr_login] Auth success for ghcr.io as %s", user)

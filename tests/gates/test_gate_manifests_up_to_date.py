@@ -35,8 +35,15 @@ _GENERATED_FILES = [
 
 
 @pytest.mark.gate
-@pytest.mark.xdist_group("serial")
 @ldd_trajectory
+# ⚠️ TRAP[DECISION] · 2026-08-03 · — · xdist_group("serial") снят — фантом-маркер (DevPlan 124 T3)
+# · Rejected: оставить маркер / ввести --dist loadgroup
+# · Reason: при -n auto (load distribution) xdist_group игнорируется (требует --dist loadgroup,
+#   test_gate_timeout_literals.py:66) — маркер создавал ложное ощущение защиты. Гейт безопасен
+#   параллельно: тесты НЕ пишут в generated files (единственный писатель — pre-commit/генераторы
+#   вне pytest); git diff --exit-code параллелится с любым тестом без эффекта. --dist loadgroup
+#   НЕ вводится: риск деградации параллелизма без реальной гонки.
+# · Rev: при появлении теста, реально пишущего в общие файлы → пересмотреть serial-механизм.
 # 🧪 TRAP[TEST] · 2026-07-22 · REGRESSION · Gate invariant — all generated manifests up to date
 # · Scenario: Generated files (secrets-manifest.yaml, platform-env.yaml, smoke_env_generated.py,
 #   env_defaults_generated.py, entrypoint-manifest.yaml, AGENTS.md) must match authoritative sources.
@@ -48,6 +55,11 @@ def test_manifests_up_to_date(caplog):
     Replaces subprocess.run(["make", "check-manifests"]) with direct git diff --exit-code
     on the generated files list synced from __check_manifests_original in Makefile.
     Saves ~0.5s by eliminating make-fork indirection (DevPlan 046 W3-2).
+
+    Параллельно-безопасен (DevPlan 124 T3): гейт НЕ пишет в generated files — единственный
+    писатель pre-commit-хук/генераторы вне pytest; git diff --exit-code — read-only.
+    Маркер @pytest.mark.xdist_group("serial") снят: при -n auto (load) он игнорируется
+    (требует --dist loadgroup) — был фантомом, а не защитой.
     """
     caplog.set_level(logging.INFO)
     logger.info(

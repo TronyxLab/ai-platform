@@ -8,13 +8,21 @@
 ##   - _read_counter always returns a dict with key "attempts" (int >= 0)
 ##   - _write_counter overwrites the file atomically via json.dump
 ##   - Missing or malformed counter file silently defaults to {"attempts": 0}
-##   - ВСЕ операции под файловой блокировкой flock (fcntl) — xdist-безопасность (DevPlan 120 §3.3):
-##     при -n auto session-хуки выполняются в каждом worker'е → конкурентные RMW без lock = гонка
+##   - ВСЕ операции под файловой блокировкой flock (fcntl) — защита от ПАРАЛЛЕЛЬНЫХ
+##     pytest-сессий (2 агента одновременно, DevPlan 120 §3.3): конкурентные RMW без lock
+##     = потерянные обновления
 ##   - _increment_counter — атомарный read-modify-write (lock → read → inc → write → unlock)
+##   - Master-семантика (DevPlan 124 T1/T4): session-уровневые вызовы инкремента/сброса
+##     выполняет ТОЛЬКО master-воркер (гейт PYTEST_XDIST_WORKER в _conftest/session.py и
+##     tests/gates/conftest.py). flock здесь НЕ про xdist-воркеры (их гейтит caller),
+##     а про параллельные независимые pytest-процессы.
 ## @rationale Extracted from tests/conftest.py COUNTER_IO region to isolate counter persistence logic;
 ##            path adjusted from __file__ (conftest/) to (conftest/..) so .test_counter.json remains in tests/
 ## @changes 2026-08-02 | DevPlan 120 Wave 1: flock-блокировка (fcntl) на .test_counter.json +
 ##            атомарный _increment_counter — устранение гонок при xdist (3106 static_audit тестов)
+## @changes 2026-08-03 | DevPlan 124 T1/T4: уточнена master-семантика — инкремент/сброс вызывает
+##            ТОЛЬКО master (PYTEST_XDIST_WORKER гейт у вызовов); flock остаётся защитой
+##            параллельных независимых сессий (честный Attempt #N при -n auto)
 # endregion MODULE_CONTRACT
 
 import json
@@ -73,11 +81,12 @@ def _write_counter(data: dict) -> None:
 
 
 def _increment_counter() -> int:
-    """Атомарный read-modify-write: попытка = прочитанное значение + 1 (xdist-безопасно).
+    """Атомарный read-modify-write: попытка = прочитанное значение + 1 (xdist-safe).
 
-    ## @purpose  Единая критическая секция increment: при xdist каждый worker вызывает
-    ##            sessionstart конкурентно — раздельные read/write давали бы потерянные
-    ##            обновления (N воркеров записали бы одно и то же значение).
+    ## @purpose  Единая критическая секция increment: конкурентные независимые pytest-сессии
+    ##            (2 агента) не теряют обновления. Xdist-воркеры НЕ доходят до этой функции —
+    ##            master-guard в _conftest/session.py (DevPlan 124 T1) и tests/gates/conftest.py
+    ##            (T4): воркеры — no-op; иначе -n auto давал Attempt #N за один прогон.
     ## @io       → ⎋ int: новое значение attempts
     ## @complexity O(1)
     """
