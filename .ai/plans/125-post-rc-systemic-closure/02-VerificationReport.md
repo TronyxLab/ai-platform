@@ -88,7 +88,7 @@ Per-task прогон затронутых тестов (T1-T6, T9) + прод-�
 | T | Вердикт | Evidence |
 |----|---------|----------|
 | T14 VR 123 | ✅ PASS | Создан .ai/plans/123-nightly-hardening/02-VerificationReport.md — 12/12 PASS с evidence |
-| T15 VR 124 | ✅ PASS | 02-VerificationReport.md дополнен финальным вердиктом FIXED (6/6 пунктов A2+ подтверждены кодом); регрессионный критерий 2× make check — в финале сессии |
+| T15 VR 124 | ✅ PASS | 02-VerificationReport.md дополнен финальным вердиктом FIXED (6/6 пунктов A2+ подтверждены кодом); регрессионный критерий 2× make check — **исполнен: 2× `make check` подряд GREEN (run 3 + run 4, 2026-08-03 21:3x), 0 флаков** |
 | T16 feat-коммит 124 | ✅ PASS | Факт атрибуции задокументирован в VR 124 (реализация A2+ в 95fb62c); незакоммиченные остатки 124 (pre-commit flake closure: check-manifest-parity hook removal, gate TEMP-DIAG, test retry-once) оформлены отдельным `feat(124)`-коммитом 35c0c71 |
 | T17 VR 125 + Debt | ✅ PASS | Настоящий VR; Debt-реестр обновлён (см. ниже); 122 — закрыт формально (см. Debt-актуализация) |
 
@@ -129,3 +129,8 @@ Per-task прогон затронутых тестов (T1-T6, T9) + прод-�
 **Вердикт: PASS.** 17/17 задач: 13 PASS/FIXED, T8/T10 закрыты фактом, T11/T12 by-construction/keep,
 T16 атрибуция задокументирована. Долги D-4..D-11 актуализированы. Единственные незакрытые пункты —
 операторские O1-O3 (не в полномочиях агента; без O3 ночной прогон НЕ штатный).
+
+**Финальный гейт (инвариант 1 DevPlan):** `make check` до чистоты (2× GREEN подряд, фикс-цикл:
+5 ошибок первого прогона — ruff F821/PERF401, doxygen 7 warnings, литералы /etc/letsencrypt/live и
+/home/ci-deploy, незакрытый # endregion — все исправлены) → `make gate MODE=fast` **ALL PASS**
+(2026-08-03, commit 2183154 + 0bda4be). Doxygen: 0 warnings, per-file XML регенерирован.
