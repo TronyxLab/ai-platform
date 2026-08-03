@@ -20,11 +20,12 @@ from core.internal.bootstrap import firewall, security_posture
 
 
 class FakeResult:
-    """Graceful CompletedProcess stand-in (rc + stdout)."""
+    """Graceful CompletedProcess stand-in (rc + stdout + stderr)."""
 
-    def __init__(self, returncode: int = 0, stdout: str = ""):
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = ""):
         self.returncode = returncode
         self.stdout = stdout
+        self.stderr = stderr
 
 
 @pytest.fixture()
@@ -293,6 +294,177 @@ class TestS7:
 # endregion Tests: S7
 
 
+# region Tests: S8 — image freshness (DevPlan 134 L4)
+class TestS8:
+    """docker digest-drift: локальный RepoDigests vs registry manifest inspect."""
+
+    @pytest.fixture()
+    def docker_probe(self, monkeypatch):
+        """Диспечер по полной команде docker: registry[key] -> FakeResult. Default rc=0 stdout=''."""
+        registry: dict[str, FakeResult] = {}
+
+        def _probe(cmd, timeout):
+            key = " ".join(cmd)
+            return registry.get(key, FakeResult())
+
+        monkeypatch.setattr(security_posture, "_probe", _probe)
+        return registry
+
+    PS_OK = "abc123\ndef456\n"
+
+    @staticmethod
+    def _ps(ids: str) -> FakeResult:
+        return FakeResult(0, ids)
+
+    @staticmethod
+    def _inspect(*lines: str) -> FakeResult:
+        return FakeResult(0, "\n".join(lines) + ("\n" if lines else ""))
+
+    @staticmethod
+    def _manifest(payload: str, rc: int = 0, stderr: str = "") -> FakeResult:
+        return FakeResult(rc, payload if rc == 0 else "", stderr=stderr)
+
+    def test_positive_no_containers(self, docker_probe):
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("")
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_PASS
+        assert "no running containers" in result.message
+
+    def test_positive_all_current_pinned(self, docker_probe, caplog):
+        """Digest-pinned образ актуален: registry digest совпадает с локальным (multi-arch set)."""
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
+        docker_probe[
+            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+        ] = self._inspect(
+            "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111|sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        )
+        docker_probe["docker manifest inspect --verbose postgres:16"] = self._manifest(
+            json.dumps(
+                {"Descriptor": {"digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}}
+            )
+        )
+        with caplog.at_level(logging.INFO):
+            result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_PASS
+        assert "current" in result.message
+        assert any("[IMP:9]" in r.message for r in caplog.records), "LDD: IMP:9 не найдено"
+
+    def test_positive_multiarch_list_local_digest_in_set(self, docker_probe):
+        """Multi-arch manifest list: локальный digest входит в набор platform-digest'ов → PASS."""
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
+        docker_probe[
+            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+        ] = self._inspect(
+            "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1|sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        docker_probe["docker manifest inspect --verbose ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1"] = (
+            self._manifest(
+                json.dumps(
+                    [
+                        {
+                            "Descriptor": {
+                                "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            }
+                        },
+                        {
+                            "Descriptor": {
+                                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            }
+                        },
+                    ]
+                )
+            )
+        )
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_PASS
+
+    def test_warn_pinned_stale(self, docker_probe):
+        """R5 negative (original form): апстрим опубликовал новый digest для pinned-тега → WARN."""
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
+        docker_probe[
+            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+        ] = self._inspect(
+            "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111|sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        )
+        docker_probe["docker manifest inspect --verbose postgres:16"] = self._manifest(
+            json.dumps(
+                {"Descriptor": {"digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"}}
+            )
+        )
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_WARN
+        assert "pin устарел" in result.message
+        assert "postgres:16" in result.message
+
+    def test_warn_tag_based_newer(self, docker_probe):
+        """Tag-based L2: локальный digest отличен от registry → WARN с рекомендацией пересборки."""
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
+        docker_probe[
+            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+        ] = self._inspect(
+            "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1|sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        docker_probe["docker manifest inspect --verbose ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1"] = (
+            self._manifest(
+                json.dumps(
+                    {
+                        "Descriptor": {
+                            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        }
+                    }
+                )
+            )
+        )
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_WARN
+        assert "hermes-build-context" in result.message
+
+    def test_positive_local_only_image_skipped(self, docker_probe):
+        """Локально-собранный образ (manifest unknown) → skip, PASS."""
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
+        docker_probe[
+            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+        ] = self._inspect("status-page:latest|sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+        docker_probe["docker manifest inspect --verbose status-page:latest"] = self._manifest(
+            "", rc=1, stderr="Error: no such manifest: status-page:latest"
+        )
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_PASS
+
+    def test_warn_registry_unreachable(self, docker_probe):
+        """Registry недоступен (сеть/auth) → WARN graceful (как apt-check в S2)."""
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
+        docker_probe[
+            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+        ] = self._inspect(
+            "postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111|sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        )
+        docker_probe["docker manifest inspect --verbose postgres:16"] = self._manifest(
+            "", rc=1, stderr='Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp: i/o timeout'
+        )
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_WARN
+        assert "registry query failed" in result.message
+
+    def test_fail_docker_unavailable(self, docker_probe):
+        """docker ps падает (демон не запущен) → FAIL (нельзя оценить образы)."""
+        docker_probe["docker ps --format {{.ID}}"] = FakeResult(1, "", stderr="Cannot connect to the Docker daemon")
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_FAIL
+
+    def test_positive_local_built_no_repo_digests_skipped(self, docker_probe):
+        """Локально-собранный (пустой RepoDigests) → skip, PASS."""
+        docker_probe["docker ps --format {{.ID}}"] = self._ps("abc123")
+        docker_probe[
+            "docker inspect -f {{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} abc123"
+        ] = self._inspect("status-page:latest|")
+        result = security_posture.check_image_freshness()
+        assert result.status == security_posture.STATUS_PASS
+
+
+# endregion Tests: S8
+
+
 # region Tests: aggregation + report + main
 class TestAggregation:
     def test_all_pass_exit_0(self):
@@ -324,7 +496,7 @@ class TestAggregation:
         assert payload["node"] == "n1"
         assert payload["exit_code"] == 2
         ids = [c["id"] for c in payload["checks"]]
-        assert ids == ["S1", "S2", "S3", "S4", "S5", "S6", "S7"]
+        assert ids == ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"]
         assert any(c["status"] == "FAIL" for c in payload["checks"])
 
     def test_full_run_logs_imp9(self, monkeypatch, patch_paths, fake_probe, caplog):

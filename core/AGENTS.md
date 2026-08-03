@@ -66,7 +66,7 @@
 | `make up-safe` | Безопасный compose up | make up-safe [MODULES=...] | core/entrypoints/compose-wrapper.sh → core/internal/bootstrap/deploy/compose_preflight.py → docker compose up |
 | `make compose-safe-up` | Deprecated alias for up-safe | make compose-safe-up (deprecated — use up-safe) | up-safe (deprecated alias) |
 | `make converge` | Реконсиляция ноды | make converge NODE=\<name\> | core/entrypoints/converge.sh → core/internal/bootstrap/converge.sh |
-| `make check-security` | Проверка security-постурa ноды | make check-security NODE=\<name\> | core/entrypoints/check-security.sh → remote_executor.py execute-check-security → core/internal/bootstrap/security_posture.py (S1-S7, DevPlan 134 L2) |
+| `make check-security` | Проверка security-постурa ноды | make check-security NODE=\<name\> | core/entrypoints/check-security.sh → remote_executor.py execute-check-security → core/internal/bootstrap/security_posture.py (S1-S8, DevPlan 134 L2) |
 | `make healthcheck` | Проверка здоровья | make healthcheck [NODE=...] | core/entrypoints/healthcheck.sh → Module healthcheck.sh scripts + core/internal/healthcheck/tor-proxy-healthcheck.sh |
 | `make up` | Запуск compose-стека | make up [MODULES=\<comma-list\>] | core/internal/provision-environment.sh → docker compose up (MODULES filter) |
 | `make down` | Остановка compose-стека | make down | docker compose down |

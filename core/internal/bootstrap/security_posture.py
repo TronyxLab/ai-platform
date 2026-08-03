@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: security-posture S1-S7 unattended-upgrades pending-security ufw sshd docker live-restore world-writable forced-command exit-0-1-2 json DevPlan-134
-# STRUCTURE: ▶ root-check → ○ 7 checks (S1-S7, каждая pure+subprocess probe) → ○ aggregate (FAIL→2, WARN→1) → ○ text|json report → ⎋ exit 0|1|2
+# GREP_SUMMARY: security-posture S1-S8 unattended-upgrades image-freshness digest-drift pending-security ufw sshd docker live-restore world-writable forced-command exit-0-1-2 json DevPlan-134
+# STRUCTURE: ▶ root-check → ○ 8 checks (S1-S8, каждая pure+subprocess probe) → ○ aggregate (FAIL→2, WARN→1) → ○ text|json report → ⎋ exit 0|1|2
 # region MODULE_CONTRACT
-## @purpose  Security posture check ноды (DevPlan 134 L2) — 7 проверок S1-S7, закрывающих главные
+## @purpose  Security posture check ноды (DevPlan 134 L2) — 8 проверок S1-S8, закрывающих главные
 ##           векторы автоматизированных ИИ-атак: автопатчинг (S1/S2), сетевой периметр (S3),
 ##           SSH-поверхность (S4), docker-демон (S5), локальные привилегии (S6), целостность
 ##           forced-command канала деплоя (S7). Выполняется НА ноде как root (sshd -T).
@@ -18,7 +18,7 @@
 ##   - --json: {"node", "exit_code", "checks": [{id, status, message}]} — фундамент L5-мониторинга
 ##   - Не мутирует систему (read-only диагностика) — безопасен для прямого запуска на ноде
 ## @rationale L2 security-гэпа (DevPlan 134): check-suite.yaml — только code-quality чеки;
-##            security-постур ноды не проверялся ничем. Набор S1-S7 — минимально достаточный
+##            security-постур ноды не проверялся ничем. Набор S1-S8 — минимально достаточный
 ##            (DevPlan D4), без мониторинг-тяжести (fail2ban/auditd — L5 follow-up).
 ## @changes 2026-08-04 | DevPlan 134 W2 — Created
 # endregion MODULE_CONTRACT
@@ -69,7 +69,7 @@ _APT_CHECK_SEC_RE = re.compile(r"(\d+)\s+of these updates are security updates")
 # region DATACLS_CheckResult
 @dataclass(frozen=True)
 class CheckResult:
-    """Результат одной проверки S1-S7."""
+    """Результат одной проверки S1-S8."""
 
     check_id: str
     status: str  # PASS | WARN | FAIL
@@ -303,12 +303,128 @@ def check_forced_command() -> CheckResult:
 # endregion FUNC_check_forced_command
 
 
+# region FUNC__collect_manifest_digests
+## @purpose  Извлечь набор digest'ов из `docker manifest inspect --verbose` (один манифест ИЛИ
+##           multi-arch список — Descriptor.digest в обоих формах).
+## @io       ⇥ data: object (json.loads результат) → ⎋ set[str] — sha256:... digest'ы
+## @complexity O(n) — n = число Descriptor'ов
+## @invariants  Пустой результат → registry-digest не определён (WARN, не ложный FAIL)
+def _collect_manifest_digests(data: object) -> set[str]:
+    """Collect digest values from manifest inspect --verbose (dict or list form)."""
+    result: set[str] = set()
+    if isinstance(data, dict):
+        desc = data.get("Descriptor") or {}
+        digest = desc.get("digest") if isinstance(desc, dict) else None
+        if digest:
+            result.add(str(digest))
+    elif isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            desc = item.get("Descriptor") or {}
+            digest = desc.get("digest") if isinstance(desc, dict) else None
+            if digest:
+                result.add(str(digest))
+    return result
+
+
+# endregion FUNC__collect_manifest_digests
+
+
+# region FUNC_check_image_freshness
+## @purpose  S8: docker image freshness — для каждого запущенного контейнера сравнить локальный
+##           digest (RepoDigests) с текущим digest'ом тега в registry (docker manifest inspect —
+##           использует существующий docker auth на ноде: ghcr φ6, Docker Hub φ3). Отклонение =
+##           «образ устарел, апстрим опубликовал новый (вероятно, security-фиксы)» (DevPlan 134 L4).
+## @io       ⇥ — → ⎋ CheckResult
+## @complexity O(C + R) — C = контейнеры (2 docker-вызова), R = registry-запросов (1/образ)
+## @invariants  Digest-pinned ref (tag + sha256-суффикс): tag_ref = часть до суффикса — сравнивается digest тега
+##              Локально-собранные образы (пустой RepoDigests) → skip (не трекаются)
+##              Локальные имена (manifest unknown) → PASS (registry их не знает — не дрейф)
+##              Registry недоступен/timeout/rate-limit → WARN (graceful, как apt-check в S2)
+##              Только WARN (никогда FAIL по дрейфу) — digest-pin — осознанная политика
+##              (гейт image_tag_form): дрейф = «пора обновлять», не «сломано»
+## @rationale L4-детекция (DevPlan 134): content-hash skip не подхватывает фиксы базовых образов;
+##            digest-drift ловит любой опубликованный апстрим-фикс дешевле trivy на ноде
+##            (CVE-точность — CI-скан L3). Docker manifest inspect не тянет слои — дешёвый запрос.
+def check_image_freshness() -> CheckResult:
+    """S8: image freshness — local digest vs registry digest (drift = update available)."""
+    ps = _probe(["docker", "ps", "--format", "{{.ID}}"], timeout=DOCKER_CMD_TIMEOUT)
+    if ps.returncode != 0:
+        return CheckResult("S8", STATUS_FAIL, f"docker ps failed (rc={ps.returncode}) — cannot assess images")
+    cids = [ln.strip() for ln in str(getattr(ps, "stdout", "")).splitlines() if ln.strip()]
+    if not cids:
+        logger.info("[IMP:9][posture][S8] No running containers — nothing to track")
+        return CheckResult("S8", STATUS_PASS, "no running containers — nothing to track")
+
+    inspect = _probe(
+        ["docker", "inspect", "-f", "{{.Config.Image}}|{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}", *cids],
+        timeout=DOCKER_CMD_TIMEOUT,
+    )
+    if inspect.returncode != 0:
+        return CheckResult("S8", STATUS_FAIL, f"docker inspect failed (rc={inspect.returncode})")
+
+    stale: list[str] = []
+    skipped = 0
+    checked = 0
+    for line in str(getattr(inspect, "stdout", "")).splitlines():
+        ref, _, local_digest = line.strip().partition("|")
+        if not ref or not local_digest:
+            skipped += 1  # локально-собранный образ — registry-digest базиса нет
+            continue
+        tag_ref = ref.split("@")[0]
+        if not tag_ref:
+            skipped += 1
+            continue
+        registry = _probe(["docker", "manifest", "inspect", "--verbose", tag_ref], timeout=DOCKER_CMD_TIMEOUT)
+        if registry.returncode == 124:
+            stale.append(f"{ref} (registry query timed out)")
+            continue
+        if registry.returncode != 0:
+            stderr = str(getattr(registry, "stderr", "")).strip()
+            if any(token in stderr.lower() for token in ("no such manifest", "manifest unknown", "not found")):
+                skipped += 1  # локальное имя — registry его не знает
+                continue
+            stale.append(
+                f"{ref} (registry query failed: {stderr.splitlines()[0] if stderr else f'rc={registry.returncode}'})"
+            )
+            continue
+        try:
+            registry_digests = _collect_manifest_digests(json.loads(str(getattr(registry, "stdout", ""))))
+        except json.JSONDecodeError:
+            registry_digests = set()
+        if not registry_digests:
+            stale.append(f"{ref} (registry digest not parseable)")
+            continue
+        checked += 1
+        if local_digest not in registry_digests:
+            if "@" in ref:
+                stale.append(
+                    f"{ref}: pin устарел — registry выдаёт другой digest (апстрим опубликовал новый образ, "
+                    "вероятно с security-фиксами); обновите пин в compose + node-update"
+                )
+            else:
+                stale.append(
+                    f"{ref}: в registry более свежий образ (digest отличен) — пересобрать L2 "
+                    "(make hermes-build-context) и задеплоить"
+                )
+
+    if stale:
+        logger.info("[IMP:8][posture][S8] %d stale image(s) of %d checked", len(stale), checked)
+        return CheckResult("S8", STATUS_WARN, "; ".join(stale))
+    logger.info("[IMP:9][posture][S8] All %d images current (skipped local-built: %d)", checked, skipped)
+    return CheckResult("S8", STATUS_PASS, f"all {checked} tracked images current in registry")
+
+
+# endregion FUNC_check_image_freshness
+
+
 # region FUNC_run_all_checks
-## @purpose  Прогон всех 7 проверок (S1-S7).
+## @purpose  Прогон всех 8 проверок (S1-S8).
 ## @io       ⇥ — → ⎋ list[CheckResult]
-## @complexity O(7) — константное число проверок
+## @complexity O(8) — константное число проверок
 def run_all_checks() -> list[CheckResult]:
-    """Run all S1-S7 posture checks."""
+    """Run all S1-S8 posture checks."""
     return [
         check_unattended_upgrades(),
         check_pending_security_updates(),
@@ -317,6 +433,7 @@ def run_all_checks() -> list[CheckResult]:
         check_docker(),
         check_file_perms(),
         check_forced_command(),
+        check_image_freshness(),
     ]
 
 
