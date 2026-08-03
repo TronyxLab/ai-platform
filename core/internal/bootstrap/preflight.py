@@ -213,8 +213,9 @@ def probe_s3_connectivity(
         #   s3_client тянул boto3→pyopenssl(debian)→cryptography(pip) несовместимость.
         # · Fix: импорт ВНУТРИ probe (префлайт — лёгкая диагностика, не должен тянуть boto3);
         #   ImportError → WARN (boto3 появится в φ1 python_deps — preflight идёт ДО него).
-        from core.internal.shared.s3_client import get_s3_client as _shared_get_s3_client
         from botocore.exceptions import ClientError  # type: ignore[import-untyped]
+
+        from core.internal.shared.s3_client import get_s3_client as _shared_get_s3_client
 
         ep = endpoint or os.environ.get("S3_ENDPOINT_URL", "https://s3.timeweb.cloud")
         # DevPlan 117 D26: клиент создаётся через shared/s3_client.get_s3_client
@@ -248,7 +249,7 @@ def probe_s3_connectivity(
             detail="S3 probe error — cert restore degraded",
             error=str(e)[:200],
         )
-    except BaseException as e:  # noqa: BLE001 — probe не должен ронять bootstrap (RC 121: pyo3 PanicException от битой pyopenssl)
+    except BaseException as e:
         latency = int((time.monotonic() - start) * 1000)
         logger.warning("[IMP:8][preflight][s3] S3 probe crashed (%s: %s) — WARN, bootstrap continues", type(e).__name__, str(e)[:100])
         return CheckResult(
