@@ -91,9 +91,13 @@ def extract_apr1_salt(entry: str) -> str:
 def write_htpasswd_file(
     email: str,
     password: str,
-    htpasswd_file: str = "/run/platform/.htpasswd-platform",
+    htpasswd_file: str | None = None,
 ) -> bool:
     """Generate .htpasswd-platform from explicit credentials. Returns True on success."""
+    # Path resolution: явный аргумент > env HTPASSWD_FILE > прод-дефолт /run/platform (tmpfs).
+    # Dev-локаль (macOS, /run read-only) переопределяет через env — см. .env HTPASSWD_FILE.
+    if htpasswd_file is None:
+        htpasswd_file = os.environ.get("HTPASSWD_FILE", "/run/platform/.htpasswd-platform")
     # Import shared crypto — sys.path insert for module-level availability
     if _SHARED_DIR not in sys.path:
         sys.path.insert(0, _SHARED_DIR)
@@ -163,9 +167,13 @@ def write_htpasswd_file(
 ##   - Requires both PLATFORM_MASTER_EMAIL and PLATFORM_MASTER_PASSWORD to be set
 def ensure_htpasswd(
     secrets_env: str = "/run/platform/secrets.env",
-    htpasswd_file: str = "/run/platform/.htpasswd-platform",
+    htpasswd_file: str | None = None,
 ) -> bool:
     """Generate .htpasswd-platform from platform master credentials. Returns True on success."""
+    # Path resolution: явный аргумент > env HTPASSWD_FILE > прод-дефолт /run/platform (tmpfs).
+    # Dev-локаль (macOS, /run read-only) переопределяет через env — см. .env HTPASSWD_FILE.
+    if htpasswd_file is None:
+        htpasswd_file = os.environ.get("HTPASSWD_FILE", "/run/platform/.htpasswd-platform")
     # Source secrets.env into os.environ if not already set
     if not os.environ.get("PLATFORM_MASTER_PASSWORD") or not os.environ.get("PLATFORM_MASTER_EMAIL"):
         env_vars: dict[str, str] = {}

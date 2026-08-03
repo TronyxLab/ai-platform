@@ -134,7 +134,7 @@ _RE_NOT_A_PATH = re.compile(r'^[\s\$"\'@*]+$')
 _RE_DOTTED_NAME = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
 
 # ⚠️ TRAP[BUG] · 2026-08-01 · P1 · Cross-layer gate was blind to dotted imports
-# · Symptom: 36 passed при 6 реальных нарушениях (agent_watchdog 3×, backup_config 1×,
+# · Symptom: 36 passed при 6 реальных нарушениях (backup_config 1×,
 #   disk-monitor.sh 1×, postgres-hook 1×) — dotted-импорты и python3 -m не детектировались
 # · Root: _looks_like_path требовал '/', resolve_import отбрасывал dotted (нет '/'),
 #   scan_sh_file не имел паттерна python3 -m
@@ -154,47 +154,9 @@ _RE_DOTTED_NAME = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
 #   канона таймаутов); docker_compose запись сдвинута 24→27 (импорт-блок вырос на 3 строки).
 # 2026-08-02 (DevPlan 119 C2/C1): watchdog TRAP[DEBT]-блоки (+7 строк) → номера строк +7;
 #   backup_config.py запись УДАЛЕНА — core.internal.config импорт удалён (C1, контейнер без core/internal).
+# 2026-08-03 (RC 121, долг 119 C2): 8 watchdog allowlist-записей УДАЛЕНЫ вместе с подсистемой
+#   (agent_watchdog/circuit_breaker/docker_ops — код, тесты, env_requires, timeouts).
 _CROSS_LAYER_ALLOWLIST: tuple[tuple[str, int, str], ...] = (
-    (
-        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        51,
-        "контейнерный модуль; internal.config platform_config — by design (D1)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        54,
-        "контейнерный модуль; shared.secrets_env_parser — by design (D1)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        57,
-        "контейнерный модуль; shared.telegram_notifier — by design (D1)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/agent_watchdog.py",
-        60,
-        "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 117 D29)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/circuit_breaker.py",
-        39,
-        "контейнерный модуль; internal.config platform_config — by design (D1, DevPlan 117 G T52)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/circuit_breaker.py",
-        42,
-        "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 119 A2)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/docker_ops.py",
-        34,
-        "контейнерный модуль; shared.docker_compose — by design (D1, DevPlan 117 D19, DevPlan 117 G T52)",
-    ),
-    (
-        "core/modules/hermes-agent/watchdog/docker_ops.py",
-        44,
-        "контейнерный модуль; shared.timeouts — watchdog-таймауты из единого реестра (DevPlan 118 C1)",
-    ),
     (
         "core/modules/postgres/hooks/on_project_deploy.py",
         40,

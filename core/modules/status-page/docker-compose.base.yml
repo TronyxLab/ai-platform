@@ -44,7 +44,9 @@ services:
       # node.yaml — SSoT for vhost list (projects[].domain with expose:true)
       - ${NODE_CONFIGS_DIR:-/opt/node-configs}/${NODE_NAME:-unknown}/node.yaml:/opt/node-configs/${NODE_NAME:-unknown}/node.yaml:ro
       # status-metrics.json — container/cert/project/host metrics (cron-exported every 1m)
-      - /run/platform/status-metrics.json:/run/platform/status-metrics.json:ro
+      # Host source параметризуется: STATUS_METRICS_JSON (dev-локаль, где /run недоступен);
+      # прод-дефолт /run/platform/status-metrics.json (tmpfs) — без изменений.
+      - ${STATUS_METRICS_JSON:-/run/platform/status-metrics.json}:/run/platform/status-metrics.json:ro
 
     environment:
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-}

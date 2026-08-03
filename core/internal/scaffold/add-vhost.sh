@@ -115,6 +115,10 @@ main() {
 
     [[ -n "${PLATFORM_DOMAIN:-}" ]] && common_args+=" --platform-domain ${PLATFORM_DOMAIN}"
     [[ -n "${PLATFORM_ROOT:-}" ]] && common_args+=" --platform-root ${PLATFORM_ROOT}"
+    # Dev-mode passthrough (env → CLI): DEV_DOMAIN_SUFFIX / VHOST_OUTPUT_DIR (NODE_CONFIGS_DIR pattern).
+    # --output-dir существует только в subcommand'ах render-all/add — в remove не передаётся.
+    [[ -n "${DEV_DOMAIN_SUFFIX:-}" ]] && common_args+=" --dev-domain-suffix ${DEV_DOMAIN_SUFFIX}"
+    [[ -n "${VHOST_OUTPUT_DIR:-}" && "$MODE" != "remove" ]] && common_args+=" --output-dir ${VHOST_OUTPUT_DIR}"
 
     if [[ "$MODE" == "render-all" ]]; then
         log_imp 8 "main" "Mode: render-all for node=${RENDER_NODE}"

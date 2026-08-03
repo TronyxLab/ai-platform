@@ -476,21 +476,75 @@ def verify_san(cert_file: Path, required_sans_list: list[str]) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# region FUNC_sync_live_layout
+# ═══════════════════════════════════════════════════════════════════
+def sync_live_layout(dev_certs_dir: Path, live_root: Path, platform_domain: str) -> bool:
+    """Mirror the generated dev cert into letsencrypt-style live/<domain>/ layout.
+
+    ▶ ┌dev_certs_dir + live_root + platform_domain┐ → ◇ files exist? → ⊕ mkdir + copy2
+    → ◇ both copied? → ⎋ bool
+
+    ## @purpose — Dev-mode bridge: production-style nginx vhosts reference
+    ##            /etc/letsencrypt/live/<domain>/fullchain.pem. In local dev the
+    ##            compose stack maps NGINX_CERT_DIR=./dev-certs → /etc/letsencrypt,
+    ##            so the same cert must also exist at <live_root>/live/<platform_domain>/.
+    ##            This is env/config-driven (DEV_CERTS_LIVE_ROOT), NOT an if-local branch:
+    ##            prod never runs make dev-certs (ACME is the cert channel there).
+    ## @io — ⇥ dev_certs_dir: Path — flat cert source (fullchain.pem + privkey.pem)
+    ##       ⇥ live_root: Path — letsencrypt-style root (e.g. <repo>/dev-certs)
+    ##       ⇥ platform_domain: str — wildcard domain directory under live/
+    ##       → ⎋ bool — True on success (or source missing → False)
+    ## @complexity — O(1) file copies
+    ## @invariants
+    ##   - No-op (True) if source cert/key missing — never fabricates files
+    ##   - Copies via shutil.copy2 (preserves mode/timestamps)
+    ##   - Idempotent — repeated calls are byte-identical overwrites
+    ##   - Returns False only on copy failure (logged IMP:9)
+    """
+    cert_src = dev_certs_dir / "fullchain.pem"
+    key_src = dev_certs_dir / "privkey.pem"
+    if not (cert_src.exists() and key_src.exists()):
+        _log(8, "sync_live_layout", "Source flat cert missing — skipping live layout sync")
+        return True
+
+    live_dir = live_root / "live" / platform_domain
+    try:
+        live_dir.mkdir(parents=True, exist_ok=True)
+        for src in (cert_src, key_src):
+            shutil.copy2(src, live_dir / src.name)
+    except OSError as e:
+        _log(9, "sync_live_layout", f"ERROR: live layout sync failed: {e}")
+        return False
+
+    _log(
+        9,
+        "sync_live_layout",
+        f"Dev cert mirrored to {live_dir}/ (letsencrypt-style live layout for local nginx)",
+    )
+    return True
+
+
+# endregion FUNC_sync_live_layout
+
+
+# ═══════════════════════════════════════════════════════════════════
 # region FUNC_main
 # ═══════════════════════════════════════════════════════════════════
 def main() -> None:
     """Main entrypoint: check idempotency → select backend → generate → verify.
 
-    ▶ ┌env vars┐ → ◇ cert_is_current? → exit 0 → ◇ auto? → ⊕ which(mkcert) → ◇ backend → ⚡ generate → ◇ verify_san? → ⎋ sys.exit(0/1)
+    ▶ ┌env vars┐ → ◇ cert_is_current? → ◇ live layout sync → exit 0 → ◇ auto? → ⊕ which(mkcert) → ◇ backend → ⚡ generate → ◇ verify_san? → ⎋ sys.exit(0/1)
 
-    ## @purpose — Orchestration. Reads DEV_CERTS_DIR / PLATFORM_DOMAIN / CERT_BACKEND from
-    ##            environment (Makefile or facade contract). Exit 0 = valid cert
-    ##            (new or up-to-date), exit 1 = failure.
+    ## @purpose — Orchestration. Reads DEV_CERTS_DIR / PLATFORM_DOMAIN / CERT_BACKEND /
+    ##            DEV_CERTS_LIVE_ROOT from environment (Makefile or facade contract).
+    ##            Exit 0 = valid cert (new or up-to-date), exit 1 = failure.
     ## @io — ⇥ env: DEV_CERTS_DIR (default: module dir /dev-certs), PLATFORM_DOMAIN
-    ##   (default: ai-platform.local), CERT_BACKEND (default: auto) → ⎋ sys.exit(0|1)
+    ##   (default: ai-platform.local), CERT_BACKEND (default: auto),
+    ##   DEV_CERTS_LIVE_ROOT (optional — letsencrypt-style mirror root) → ⎋ sys.exit(0|1)
     ## @complexity — O(1) + backend subprocess I/O
     ## @invariants
     ##   - Idempotent no-op path exits 0 BEFORE any subprocess call
+    ##   - Live layout sync runs on BOTH paths (up-to-date + freshly generated)
     ##   - Unknown CERT_BACKEND → IMP:9 error + exit 1
     ##   - Explicit backend with missing tool → IMP:9 error + exit 1
     ##   - Post-generation SAN verification failure → IMP:9 error + exit 1
@@ -500,6 +554,8 @@ def main() -> None:
     dev_certs_dir = Path(os.environ.get("DEV_CERTS_DIR", DEFAULT_DEV_CERTS_DIR))
     platform_domain = os.environ.get("PLATFORM_DOMAIN", DEFAULT_PLATFORM_DOMAIN)
     cert_backend = os.environ.get("CERT_BACKEND", DEFAULT_CERT_BACKEND)
+    live_root_env = os.environ.get("DEV_CERTS_LIVE_ROOT", "").strip()
+    live_root = Path(live_root_env) if live_root_env else None
     cert_file = dev_certs_dir / "fullchain.pem"
     key_file = dev_certs_dir / "privkey.pem"
 
@@ -507,10 +563,14 @@ def main() -> None:
     _log(8, "main", f"DEV_CERTS_DIR={dev_certs_dir}")
     _log(8, "main", f"PLATFORM_DOMAIN={platform_domain}")
     _log(8, "main", f"CERT_BACKEND={cert_backend}")
+    if live_root:
+        _log(8, "main", f"DEV_CERTS_LIVE_ROOT={live_root} (letsencrypt-style mirror)")
 
     # ── Check idempotency ──────────────────────────────────────────────────────
     if cert_is_current(cert_file, key_file, platform_domain):
         _log(9, "main", "Cert up-to-date — no action needed")
+        if live_root and not sync_live_layout(dev_certs_dir, live_root, platform_domain):
+            sys.exit(1)
         sys.exit(0)
 
     # ── Select backend ─────────────────────────────────────────────────────────
@@ -538,6 +598,9 @@ def main() -> None:
     # ── Verify generated cert SAN ──────────────────────────────────────────────
     if not verify_san(cert_file, sans):
         _log(9, "main", "FAILED: generated cert SAN verification failed")
+        sys.exit(1)
+
+    if live_root and not sync_live_layout(dev_certs_dir, live_root, platform_domain):
         sys.exit(1)
 
     _log(9, "main", "Certificate generated successfully")

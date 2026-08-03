@@ -42,6 +42,7 @@ dev-certs:
 	@_env_pd="$$(grep -E '^PLATFORM_DOMAIN=' "$(_platform_root)/.env" 2>/dev/null | tail -n1 | cut -d= -f2-)"; \
 	PLATFORM_DOMAIN="$${PLATFORM_DOMAIN:-$${_env_pd:-$$(python3 "$(_platform_root)/core/internal/scripts/yaml_query.py" --file "$(_platform_root)/platform-env.yaml" --get env_defaults.PLATFORM_DOMAIN)}}" \
 	DEV_CERTS_DIR="$${DEV_CERTS_DIR:-$(_platform_root)/core/modules/nginx/dev-certs}" \
+	DEV_CERTS_LIVE_ROOT="$${DEV_CERTS_LIVE_ROOT:-$(_platform_root)/core/modules/nginx/dev-certs}" \
 	python3 $(_platform_root)/core/modules/nginx/dev_cert_generator.py
 	@echo "[IMP:9][make][dev-certs] Dev certificates check complete"
 

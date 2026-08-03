@@ -89,10 +89,7 @@ def test_constants_values(caplog: pytest.LogCaptureFixture) -> None:
     assert timeouts.HEALTHCHECK_POLL_INTERVAL == 3
     assert timeouts.HEALTHCHECK_POLL_MAX_RETRIES == 20
     assert timeouts.RETRY_BACKOFF_EXPONENTIAL_BASE == 2
-    assert timeouts.WATCHDOG_TIMEOUT == 90
-    assert timeouts.WATCHDOG_POLL_INTERVAL == 5
-    assert timeouts.WATCHDOG_CURL_MAX_TIME == 3
-    assert timeouts.WATCHDOG_CURL_TG_MAX_TIME == 30
+    # RC 121 (долг 119 C2): watchdog-домен удалён вместе с подсистемой — констант WATCHDOG_* больше нет
     # B6 (DevPlan 119): [8080,8000] → [3000,4000,8000,8080,9000] — покрытие реальных compose-портов
     assert timeouts.PROJECT_HEALTHCHECK_PORTS == [3000, 4000, 8000, 8080, 9000]
     # B7 (DevPlan 119): +converge-домен

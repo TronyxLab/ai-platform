@@ -301,14 +301,14 @@ def docker_compose_down(
     ##            флаг -v НЕ передаётся, если caller его не добавил явно).
     ## @io — ⇥ compose_dir: str, timeout: int, compose_args: list[str] | None,
     ##       flags: list[str] | None (e.g. --timeout <DOCKER_STOP_TIMEOUT>, C4 канон), env_override,
-    ##       service: str | None (ограничить down одним сервисом — watchdog rollback) → ⎋ bool (True = success)
+    ##       service: str | None (ограничить down одним сервисом) → ⎋ bool (True = success)
     ## @complexity — O(1) + shutdown I/O
     ## @invariants
     ##   - Non-fatal: returns False on failure
     ##   - Никогда не добавляет -v по умолчанию (O7: данные проекта не удаляются)
     ##   - service (если задан) — последним аргументом (docker compose down <service>)
     ## @changes 2026-08-01 · DevPlan 116 B5 T3 — sole-path extension (rollback/remove)
-    ##           2026-08-01 · DevPlan 117 D19 — добавлен service параметр (watchdog DockerManager)
+    ##           2026-08-01 · DevPlan 117 D19 — добавлен service параметр
     """
     if not os.path.isdir(compose_dir):
         logger.warning("[IMP:7][docker_compose_down] Directory not found: %s", compose_dir)

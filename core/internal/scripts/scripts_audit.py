@@ -48,7 +48,6 @@ EXCEPTIONS: tuple[str, ...] = (
     "core/modules/*/scripts/*.sh",  # Module scripts
     "core/modules/*/config/*.sh",  # Module configs
     "core/modules/*/config/*/*.sh",  # Nested module configs
-    "core/modules/*/watchdog/*.sh",  # Module watchdogs
     "core/internal/healthcheck/*.sh",  # Internal healthchecks
     "core/modules/hermes-agent/build/scripts/*",  # Hermes build
     "core/modules/hermes-agent/context/scripts/*",  # Hermes context

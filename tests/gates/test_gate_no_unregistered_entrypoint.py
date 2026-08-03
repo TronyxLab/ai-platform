@@ -56,7 +56,6 @@ _SHEBANG_EXCEPTION_PATTERNS: list[str] = [
     "core/modules/*/scripts/*.sh",
     "core/modules/*/config/*.sh",
     "core/modules/*/config/*/*.sh",
-    "core/modules/*/watchdog/*.sh",
     "core/bootstrap/systemd/*.sh",
     "core/internal/healthcheck/*.sh",
     # pre-commit hooks — invoked by pre-commit, not Makefile/CI (DevPlan 028 W1-E7)

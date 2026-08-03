@@ -5,7 +5,7 @@
 ## @purpose  Единый Python-фасад для чтения default-значений из platform-infra.yaml (SoT).
 ##           Все consumers платформы получают default'ы только через этот модуль.
 ## @scope    Импортируется backup_config.py, s3_ssl_cache.py, cert_orchestrator.py,
-##           preflight.py, docker_orchestrator.py, agent_watchdog.py, context_deployer.py
+##           preflight.py, docker_orchestrator.py, context_deployer.py
 ## @invariants
 ##   - Единственный Source of Truth для default-значений в Python-коде
 ##   - Загружает platform-infra.yaml (SoT, env_defaults секция) при первом импорте

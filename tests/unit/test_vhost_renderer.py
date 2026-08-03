@@ -764,6 +764,128 @@ class TestRenderVhost:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# TEST: render_vhost dev-mode (DEV_DOMAIN_SUFFIX, DevPlan 121 RC — local *.local scheme)
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestRenderVhostDevMode:
+    """Dev-mode rendering: fqdn = <project>.<suffix>, wildcard cert, prod byte-parity."""
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: DEV_DOMAIN_SUFFIX rewrites FQDN to <project>.<suffix>
+    # · Expect: file <project>.<suffix>.conf, server_name rewritten, wildcard cert, real domain absent
+    # · Last fail: None (new dev-mode feature)
+    # · Remove if: dev-mode removed
+
+    def test_render_vhost_dev_domain_suffix(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """DEV_DOMAIN_SUFFIX=ai-platform.local → fqdn = <project>.ai-platform.local (wildcard cert)."""
+        caplog.set_level(0)
+        entry = ProjectEntry(name="tronyx-site", domain="tronyx.ru")
+        node = "test-node"
+        node_configs_dir = str(tmp_path / "node-configs")
+
+        vhost = render_vhost(
+            entry=entry,
+            node=node,
+            node_configs_dir=node_configs_dir,
+            platform_domain="ai-platform.local",
+            dev_domain_suffix="ai-platform.local",
+        )
+
+        assert vhost.fqdn == "tronyx-site.ai-platform.local"
+        expected_path = Path(node_configs_dir) / node / "overlays" / "nginx" / "tronyx-site.ai-platform.local.conf"
+        assert vhost.path == str(expected_path)
+        assert expected_path.exists()
+
+        content = expected_path.read_text(encoding="utf-8")
+        assert "server_name tronyx-site.ai-platform.local;" in content
+        # Wildcard cert (subdomain of PLATFORM_DOMAIN)
+        assert "/etc/letsencrypt/live/ai-platform.local/fullchain.pem" in content
+        # Real production domain must NOT leak into dev vhost
+        assert "server_name tronyx.ru;" not in content
+
+        found_imp9 = False
+        for record in caplog.records:
+            if "[IMP:9]" in record.message and "Rendered" in record.message:
+                found_imp9 = True
+        assert found_imp9, "No IMP:9 log for dev-mode render"
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: prod render (no suffix) must stay byte-identical (rule 7)
+    # · Expect: None/"" suffix → identical bytes to legacy call
+    # · Last fail: None
+    # · Remove if: render_vhost signature changes
+
+    def test_render_vhost_no_suffix_prod_parity(self, tmp_path: Path) -> None:
+        """Prod parity: dev_domain_suffix=None/"" → byte-identical output (rule 7)."""
+        entry = ProjectEntry(name="tronyx-site", domain="tronyx.ru")
+        node = "test-node"
+        node_configs_dir = str(tmp_path / "node-configs")
+
+        vhost_default = render_vhost(
+            entry=entry, node=node, node_configs_dir=node_configs_dir, platform_domain="ai-platform.local"
+        )
+        vhost_empty = render_vhost(
+            entry=entry,
+            node=node,
+            node_configs_dir=node_configs_dir,
+            platform_domain="ai-platform.local",
+            dev_domain_suffix="",
+        )
+        vhost_none = render_vhost(
+            entry=entry,
+            node=node,
+            node_configs_dir=node_configs_dir,
+            platform_domain="ai-platform.local",
+            dev_domain_suffix=None,
+        )
+
+        content_default = Path(vhost_default.path).read_bytes()
+        assert Path(vhost_empty.path).read_bytes() == content_default
+        assert Path(vhost_none.path).read_bytes() == content_default
+        assert "server_name tronyx.ru;" in content_default.decode()
+
+    # 🧪 TRAP[TEST] · Regression · Scenario: render-all batch in dev vs prod mode
+    # · Expect: dev → <project>.<suffix>.conf; prod (no env) → real domain .conf
+    # · Last fail: None
+    # · Remove if: render_all signature changes
+
+    @mock.patch("core.internal.scaffold.vhost_renderer.nginx_t_harness")
+    def test_render_all_dev_vs_prod_mode(
+        self,
+        mock_harness: mock.MagicMock,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """render-all with DEV_DOMAIN_SUFFIX env → *.local vhosts; without → real domains."""
+        caplog.set_level(0)
+        mock_harness.return_value = True
+
+        import core.internal.scaffold.vhost_renderer as vmod
+
+        node_yaml_path = tmp_path / "node-configs" / "test-node" / "node.yaml"
+        node_yaml_path.parent.mkdir(parents=True)
+        node_yaml_path.write_text(
+            "projects:\n"
+            "  - name: app-alpha\n    domain: alpha.platform.example.com\n"
+            "  - name: app-beta\n    domain: beta.example.com\n"
+        )
+
+        # DEV mode: env DEV_DOMAIN_SUFFIX (CLI-резолв: env > default)
+        monkeypatch.setenv("DEV_DOMAIN_SUFFIX", "ai-platform.local")
+        vmod.main(["render-all", "--node", "test-node", "--node-configs-dir", str(tmp_path / "node-configs")])
+        dev_conf = tmp_path / "node-configs" / "test-node" / "overlays" / "nginx" / "app-alpha.ai-platform.local.conf"
+        assert dev_conf.exists(), "dev-mode render-all must produce <project>.<suffix>.conf"
+        assert "server_name app-alpha.ai-platform.local;" in dev_conf.read_text(encoding="utf-8")
+
+        # Prod mode: no env → real domains preserved
+        monkeypatch.delenv("DEV_DOMAIN_SUFFIX")
+        vmod.main(["render-all", "--node", "test-node", "--node-configs-dir", str(tmp_path / "node-configs")])
+        prod_conf = tmp_path / "node-configs" / "test-node" / "overlays" / "nginx" / "alpha.platform.example.com.conf"
+        assert prod_conf.exists(), "prod render-all must keep real domains"
+        assert "server_name alpha.platform.example.com;" in prod_conf.read_text(encoding="utf-8")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # TEST: compute_body_hash
 # ══════════════════════════════════════════════════════════════════════
 

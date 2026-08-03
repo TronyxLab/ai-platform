@@ -44,12 +44,23 @@ fi
 export PYTHONPATH="${PLATFORM_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
 export NODE_NAME
 
-# Ensure cache + output directories exist on tmpfs (empty after reboot)
-mkdir -p /run/platform /var/cache/platform/metrics
+# Output path: тот же env, что и Python-координатор (STATUS_METRICS_JSON).
+# Прод-дефолт /run/platform/status-metrics.json (tmpfs); dev-локаль (macOS, /run read-only)
+# переопределяет через env — см. .env STATUS_METRICS_JSON.
+STATUS_METRICS_JSON="${STATUS_METRICS_JSON:-/run/platform/status-metrics.json}"
+export STATUS_METRICS_JSON
+
+# Ensure output directory exists (tmpfs on prod, empty after reboot). Fail-fast на
+# НЕсоздаваемом выходном каталоге — это реальная ошибка конфигурации (R4, не skip).
+METRICS_DIR="$(dirname "$STATUS_METRICS_JSON")"
+mkdir -p "$METRICS_DIR"
+
+# Cache dir — best-effort (не-блокирующий): на dev-локаль может не быть /var/cache прав.
+mkdir -p /var/cache/platform/metrics 2>/dev/null || true
 
 # Protective: ensure status-metrics.json is a file, not a directory (P1 safeguard)
-if [ -d /run/platform/status-metrics.json ]; then
-    rmdir /run/platform/status-metrics.json 2>/dev/null || true
+if [ -d "$STATUS_METRICS_JSON" ]; then
+    rmdir "$STATUS_METRICS_JSON" 2>/dev/null || true
 fi
 
 exec python3 "${SCRIPT_DIR}/platform_export_metrics.py" "$@"

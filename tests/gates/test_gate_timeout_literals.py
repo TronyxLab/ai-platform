@@ -100,16 +100,11 @@ _DOMAIN_FILES: set[str] = {
 _DOMAIN_DIR_PREFIXES = ("deploy/", "bootstrap/deploy/", "bootstrap/converge/", "scaffold/")
 
 # Модульные domain-файлы (core/modules, DevPlan 117 D68 + 118 C1): ВЕСЬ файл docker/ssh-домен —
-# timeout=литерал на ЛЮБОМ вызове → RED (docker_ops._run_docker передаёт литералы аргументом,
-# не через subprocess.*). Пути ОТНОСИТЕЛЬНО core/modules/ (фикс C1 — прежний ROOT-relative
-# rel не матчил ни один файл, та же латентная ошибка, что и в _is_domain_file).
-_MODULE_DOMAIN_FILES: set[str] = {
-    "hermes-agent/watchdog/agent_watchdog.py",
-    "hermes-agent/watchdog/docker_ops.py",
-    # DevPlan 119 A2: circuit_breaker.py — слепое пятно гейта (AUDIT-4 T1),
-    # timeout=10 литерал мигрирован на WATCHDOG_CB_CHECK_TIMEOUT
-    "hermes-agent/watchdog/circuit_breaker.py",
-}
+# timeout=литерал на ЛЮБОМ вызове → RED. Пути ОТНОСИТЕЛЬНО core/modules/ (фикс C1 — прежний
+# ROOT-relative rel не матчил ни один файл, та же латентная ошибка, что и в _is_domain_file).
+# 2026-08-03 (RC 121, долг 119 C2): watchdog-файлы (agent_watchdog/docker_ops/circuit_breaker)
+# УДАЛЕНЫ вместе с подсистемой — 3 записи убраны.
+_MODULE_DOMAIN_FILES: set[str] = set()  # watchdog удалён (RC 121); будущие модульные docker/ssh-файлы регистрируются здесь
 
 # Workflow-скан (DevPlan 117 D68): timeout=\d+ в run-шагах workflows → RED.
 # Allowlist — только не-subprocess timeout (actions/cache, docker actions).

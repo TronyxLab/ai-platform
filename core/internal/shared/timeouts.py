@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# GREP_SUMMARY: timeouts, shared, compose-up, pull, build, healthcheck-poll, ssh-connect, deploy, ssh-read, retry-backoff, image-check, docker-cmd, docker-stop, rsync, watchdog, healthcheck-ports, constants
-# STRUCTURE: ▶ ┌registry of operational timeouts┐ → ◇ docker domain (up/pull/build/healthcheck/cmd/stop/image) → ◇ ssh domain (connect/read/deploy) → ◇ retry (backoff list + exponential base) → ◇ watchdog domain → ◇ healthcheck ports → ⎋ import targets
+# GREP_SUMMARY: timeouts, shared, compose-up, pull, build, healthcheck-poll, ssh-connect, deploy, ssh-read, retry-backoff, image-check, docker-cmd, docker-stop, rsync, healthcheck-ports, constants
+# STRUCTURE: ▶ ┌registry of operational timeouts┐ → ◇ docker domain (up/pull/build/healthcheck/cmd/stop/image) → ◇ ssh domain (connect/read/deploy) → ◇ retry (backoff list + exponential base) → ◇ healthcheck ports → ⎋ import targets
 # region MODULE_CONTRACT
 ## @purpose  Единый реестр таймаутов операционных политик (DevPlan 116 B5 T1, U-11).
 ##           Единственный источник числовых значений timeout= в docker/ssh/healthcheck-домене
 ##           core/internal. Литералы {10,15,30,60,120,180,300,600} в этих доменах заменяются
 ##           импортом констант отсюда (гейт test_gate_timeout_literals.py enforce-ит).
-## @scope    Все Python-модули core/internal + core/modules (watchdog), выполняющие
+## @scope    Все Python-модули core/internal + core/modules, выполняющие
 ##           docker/ssh/rsync/healthcheck операции.
 ##           Константы импортируются напрямую: `from core.internal.shared.timeouts import ...`.
 ##           shared/docker_compose.py и shared/ssh_opts.py используют эти константы как дефолты.
@@ -19,17 +19,19 @@
 ##      (экспоненциальное поведение сохраняется).
 ##   4. Значения канонизированы: up=180, pull=300, build=300, healthcheck-poll=60,
 ##      ssh-connect=30, deploy=600, ssh-read=60, image-check=60, docker-cmd=10,
-##      docker-stop=30, rsync=600, watchdog=90/5/3/30, healthcheck-ports=[3000,4000,8000,8080,9000] (B6).
+##      docker-stop=30, rsync=600, healthcheck-ports=[3000,4000,8000,8080,9000] (B6).
 ## @rationale U-11: 226 литералов timeout= (30/120/180/300/600) без констант. Единый реестр
 ##            делает значения grepable, гейт — enforce-емым. Значения стандартизированы из
 ##            существующих канонов (docker_orchestrator up=180, deploy-дефолт ssh.sh=600,
 ##            core_deliverer RSYNC_TIMEOUT=600, healthcheck_poll=60).
-##            DevPlan 117 D (бриф D): + watchdog-домен (D29), + HEALTHCHECK_POLL_INTERVAL/
-##            MAX_RETRIES (D32/D34), + RETRY_BACKOFF_EXPONENTIAL_BASE (D34),
-##            + SUDOERS_CMD_TIMEOUT (D28), + PROJECT_HEALTHCHECK_PORTS (D36).
+##            DevPlan 117 D (бриф D): + HEALTHCHECK_POLL_INTERVAL/MAX_RETRIES (D32/D34),
+##            + RETRY_BACKOFF_EXPONENTIAL_BASE (D34), + SUDOERS_CMD_TIMEOUT (D28),
+##            + PROJECT_HEALTHCHECK_PORTS (D36). Watchdog-домен удалён с подсистемой
+##            watchdog (RC-сессия 2026-08-03, долг 119 C2).
 ## @changes  2026-08-01 | DevPlan 116 B5 T1 — Created (shared-реестр таймаутов)
-## @changes  2026-08-01 | DevPlan 117 D — watchdog/retry/ports домены (D28-D36)
+## @changes  2026-08-01 | DevPlan 117 D — retry/ports домены (D28-D36)
 ## @changes  2026-08-02 | DevPlan 119 B7 — +CONVERGE_DOCKER_TIMEOUT (30), +FILE_OP_TIMEOUT (15)
+## @changes  2026-08-03 | RC 121 — watchdog-домен (WATCHDOG_*, TOR_PROXY сохранён) удалён
 ##                      (converge/infra локальные константы удалены — импорт из канона)
 # endregion MODULE_CONTRACT
 
@@ -111,26 +113,8 @@ RETRY_COUNT = 2
 # База экспоненциального backoff state_machine (2**attempt: 2, 4, 8 — транзиентные ошибки шагов bootstrap)
 RETRY_BACKOFF_EXPONENTIAL_BASE = 2
 
-# ── Watchdog domain ───────────────────────────────────────────────────────────
-
-# Общий таймаут watchdog-цикла (agent_watchdog WATCHDOG_TIMEOUT)
-WATCHDOG_TIMEOUT = 90
-
-# Интервал опроса health endpoint (agent_watchdog POLL_INTERVAL)
-WATCHDOG_POLL_INTERVAL = 5
-
-# Таймаут curl healthcheck (agent_watchdog CURL_MAX_TIME)
-WATCHDOG_CURL_MAX_TIME = 3
-
-# Таймаут curl Telegram API (agent_watchdog CURL_TG_MAX_TIME)
-WATCHDOG_CURL_TG_MAX_TIME = 30
-
 # Таймаут curl Tor-proxy healthcheck (tor_proxy_check.py, DevPlan 118 E5 — legacy MAX_TIME=30)
 TOR_PROXY_CURL_TIMEOUT = 30
-
-# Таймаут subprocess health-check команды circuit breaker (circuit_breaker _run_health_check,
-# hermes-agent watchdog — pg_isready и др. сервисные проверки с жёстким таймаутом)
-WATCHDOG_CB_CHECK_TIMEOUT = 10
 
 # ── Healthcheck ports domain ───────────────────────────────────────────────────
 

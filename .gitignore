@@ -24,12 +24,14 @@ docker.txt
 
 # ─── Dev certs (mkcert, per-developer) ────────────────────────────
 core/modules/nginx/dev-certs/
-
 # ─── node-configs (орг-репозиторий, не в платформе) ────────────────
 node-configs/
 
 # ─── projects (локальный symlink, не в платформе) ─────────────────
 /projects
+
+# ─── local dev artifacts (RC-сессия 2026-08-03: status-metrics.json и пр.) ──
+.local/
 
 # ─── Secrets ───────────────────────────────────────────────────────
 .env

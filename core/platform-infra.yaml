@@ -144,6 +144,13 @@ env_defaults:
   CONTEXT: "test"
   NODE_NAME: "test-node"
   CONTEXT_IMAGE: "ghcr.io/tronyxlab/hermes-agent-context:v2026.7.1"
+  # ── Локальные оверрайды (RC-сессия 2026-08-03, dev-локали) ──────────────────
+  # Пустые дефолты = прод-поведение compose (${VAR:-default} в base.yml):
+  #   NODE_CONFIGS_DIR → /opt/node-configs, STATUS_METRICS_JSON/HTPASSWD_FILE → /run/platform (tmpfs).
+  # Локально (macOS, Docker Desktop не шарит /opt и /run) .env переопределяет абсолютными путями.
+  NODE_CONFIGS_DIR: ""
+  STATUS_METRICS_JSON: ""
+  HTPASSWD_FILE: ""
   # PLATFORM_DOMAIN — единственный SoT домена платформы (DevPlan 116 T3, U-16).
   # Базовое значение: ai-platform.local. При загруженном контексте (context = GitHub org):
   #   PLATFORM_DOMAIN=<context>.local, SAN дополнительно включает *.${PLATFORM_DOMAIN}.

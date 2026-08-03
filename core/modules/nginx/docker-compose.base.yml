@@ -79,7 +79,8 @@ services:
       - ${NGINX_OVERLAY_DIR:-./overlays}:/etc/nginx/conf.d/overlay:ro
       # htpasswd-platform — generated from PLATFORM_MASTER_CREDENTIALS by secrets.sh
       # Used by platform-default.conf.template (+ prometheus/loki vhosts) for Basic Auth
-      - /run/platform/.htpasswd-platform:/etc/nginx/conf.d/.htpasswd-platform:ro
+      # Host source параметризуется: HTPASSWD_FILE (dev-локаль); прод-дефолт /run/platform (tmpfs).
+      - ${HTPASSWD_FILE:-/run/platform/.htpasswd-platform}:/etc/nginx/conf.d/.htpasswd-platform:ro
 
     networks:
       proxy-net:

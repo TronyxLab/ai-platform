@@ -43,7 +43,7 @@ DOT_ENV_EXAMPLE: str = os.path.join(PLATFORM_ROOT, ".env.example")
 # ·   + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (алиасы ${S3_*}, U-17)
 # · 2026-08-01 | 90 — DevPlan 117 D31: STATUS_PAGE_PORT=8080 зарегистрирован в platform-infra.yaml env_defaults
 # · Prevention: keep this constant in sync when adding env_defaults; parity asserts below catch key/value drift
-EXPECTED_ENV_DEFAULTS_COUNT: int = 90
+EXPECTED_ENV_DEFAULTS_COUNT: int = 93  # +3 (RC 121): NODE_CONFIGS_DIR/STATUS_METRICS_JSON/HTPASSWD_FILE (локальные оверрайды, пустые дефолты)
 
 # Canonical Prometheus directory paths
 PROMETHEUS_TARGETS_DIR_CANONICAL: str = "/opt/platform/prometheus-targets"

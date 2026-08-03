@@ -1,4 +1,4 @@
-# GREP_SUMMARY: profile platform infrastructure-monitoring watchdog hermes-cli
+# GREP_SUMMARY: profile platform infrastructure-monitoring hermes-cli
 # STRUCTURE: ▶ profile:platform → model:0.3/1024 → terminal:local → security:redact → tools:hermes-cli → ┘
 # region MODULE_CONTRACT
 ## @purpose  Infrastructure monitoring profile for Hermes Agent

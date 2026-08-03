@@ -52,27 +52,3 @@ env_shared:
 
 env_requires:
   - HERMES_DASHBOARD_PASSWORD
-  # ── Watchdog env (DevPlan 117 D33) — модульные переменные watchdog-контейнера,
-  #    НЕ платформенные (регистрировать в platform-infra.yaml не требуется).
-  #    Все опциональные — env-overridable дефолты живут в shared/timeouts.py (D29).
-  - name: WATCHDOG_TIMEOUT
-    type: int
-    required: false
-  - name: POLL_INTERVAL
-    type: int
-    required: false
-  - name: CURL_MAX_TIME
-    type: int
-    required: false
-  - name: CURL_TG_MAX_TIME
-    type: int
-    required: false
-  - name: AGENT_PORT
-    type: int
-    required: false
-  - name: CIRCUIT_BREAKER_STATE_DIR
-    type: string
-    required: false
-  - name: CIRCUIT_BREAKER_SERVICES
-    type: string
-    required: false

@@ -3,10 +3,10 @@
 # STRUCTURE: ▶ send_telegram(message, [token], [chat_id], [proxy]) → ◇ env fallback → ◇ POST to api.telegram.org → ⊕ HTTP 200? → ⎋ bool
 # region MODULE_CONTRACT
 ## @purpose  Unified Telegram notification client — replaces 6 independent implementations
-##           (3 shell + 3 Python: agent_watchdog.py TelegramNotifier, steps.py _send_telegram_notification,
+##           (3 shell + 3 Python: steps.py _send_telegram_notification,
 ##           notify-hook.sh shell curl variants). Single shared module that all platform
 ##           components import for sending Telegram alerts.
-## @scope    Shared library consumed by bootstrap steps, watchdog agent, deploy hooks,
+## @scope    Shared library consumed by bootstrap steps, deploy hooks,
 ##           and any other platform component needing Telegram notification. Uses urllib
 ##           only (stdlib) — zero external dependencies. No requests library.
 ## @invariants

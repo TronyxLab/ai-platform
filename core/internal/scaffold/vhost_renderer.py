@@ -532,26 +532,35 @@ def render_vhost(
     node_configs_dir: str,
     platform_domain: str | None = None,
     output_dir: str | None = None,
+    dev_domain_suffix: str | None = None,
 ) -> VhostFile:
     """Render a single vhost file for a project entry.
 
-    ▶ ┌entry + node + configs_dir┐ → ◇ resolve_cert_domain → ◇ generate_vhost_body
+    ▶ ┌entry + node + configs_dir┐ → ◇ dev suffix? → ◇ resolve_cert_domain → ◇ generate_vhost_body
     → ◇ compute_body_hash → ◇ generate_vhost_header → ⊕ write <fqdn>.conf → ⎋ VhostFile
 
-    ## @purpose — Full vhost generation pipeline for one project.
+    ## @purpose — Full vhost generation pipeline for one project. Supports optional
+    ##            dev-mode: DEV_DOMAIN_SUFFIX rewrites the FQDN to <project>.<suffix>
+    ##            (local *.local scheme) while leaving production rendering untouched.
     ## @io — ⇥ entry: ProjectEntry — project name and domain
     ##       ⇥ node: str — target node name
     ##       ⇥ node_configs_dir: str — path to node-configs directory
     ##       ⇥ platform_domain: str | None — platform wildcard domain (optional)
     ##       ⇥ output_dir: str | None — override output directory (default: <node-configs>/<node>/overlays/nginx)
+    ##       ⇥ dev_domain_suffix: str | None — dev-mode suffix; fqdn = <project>.<suffix> (optional)
     ##       → ⎋ VhostFile — rendered vhost metadata
     ## @complexity — O(S) where S = template size
     ## @invariants
     ##   - Output is always <fqdn>.conf (flat directory, no subdirs — DRIFT-1)
     ##   - Body hash is computed BEFORE header prepends
     ##   - Header includes project source, domain, node, content-hash
+    ##   - dev_domain_suffix=None/"" → byte-identical output vs pre-dev-mode renderer
+    ##   - Dev mode cert resolution unchanged: subdomain of PLATFORM_DOMAIN → wildcard cert
     """
     fqdn = entry.domain.lower()
+    if dev_domain_suffix:
+        fqdn = f"{entry.name}.{dev_domain_suffix}".lower()
+        logger.info("[IMP:8][render_vhost] DEV mode: %s → %s (suffix=%s)", entry.domain, fqdn, dev_domain_suffix)
     cert_domain = resolve_cert_domain(fqdn, platform_domain)
 
     # Generate body first to compute hash (before header prepends)
@@ -709,6 +718,8 @@ def render_all(
     node_configs_dir: str,
     node: str,
     platform_domain: str | None = None,
+    dev_domain_suffix: str | None = None,
+    output_dir: str | None = None,
 ) -> RenderResult:
     """Render all vhosts from node.yaml#projects with domain.
 
@@ -727,6 +738,8 @@ def render_all(
     ##       ⇥ node_configs_dir: str — path to node-configs directory
     ##       ⇥ node: str — node name (for output path resolution)
     ##       ⇥ platform_domain: str | None — platform wildcard domain (optional)
+    ##       ⇥ dev_domain_suffix: str | None — dev-mode FQDN suffix (optional)
+    ##       ⇥ output_dir: str | None — override final overlay dir (default: <node-configs>/<node>/overlays/nginx)
     ##       → ⎋ RenderResult — summary of rendered vhosts
     ## @complexity — O(P * S + V) where P = projects, S = template size, V = validation
     ## @throws — DuplicateDomainError on FQDN collision
@@ -735,12 +748,15 @@ def render_all(
     ##   - Step ❻: removes ONLY files with # GENERATED marker (not hand-written .conf)
     ##   - All-or-nothing: if nginx -t fails, temp dir is cleaned up, no files moved
     ##   - Deterministic: same inputs → byte-identical output
+    ##   - dev_domain_suffix=None/"" and output_dir=None → legacy behavior byte-for-byte
     """
-    overlay_dir = Path(node_configs_dir) / node / "overlays" / "nginx"
+    overlay_dir = Path(output_dir) if output_dir else Path(node_configs_dir) / node / "overlays" / "nginx"
 
     logger.info("[IMP:7][render_all] Starting render-all for node=%s", node)
     logger.info("[IMP:7][render_all] node.yaml: %s", node_yaml_path)
     logger.info("[IMP:7][render_all] overlay dir: %s", overlay_dir)
+    if dev_domain_suffix:
+        logger.info("[IMP:7][render_all] DEV mode: fqdn suffix=%s", dev_domain_suffix)
 
     # ── Step 1: Parse node.yaml projects ──────────────────────────
     entries = read_node_yaml_projects(node_yaml_path)
@@ -774,6 +790,7 @@ def render_all(
                 node_configs_dir=node_configs_dir,
                 platform_domain=platform_domain,
                 output_dir=str(temp_dir),
+                dev_domain_suffix=dev_domain_suffix,
             )
             rendered_vhosts.append(vhost)
             logger.info("[IMP:9][render_all] Rendered: %s.conf (hash=%s...)", entry.domain, vhost.body_hash[:12])
@@ -869,6 +886,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Platform wildcard domain (PLATFORM_DOMAIN) — subdomains use wildcard cert",
     )
     parser.add_argument("--platform-root", default=None, help="Platform root directory (for audit log path)")
+    parser.add_argument(
+        "--dev-domain-suffix",
+        default=None,
+        help="Dev-mode FQDN suffix (DEV_DOMAIN_SUFFIX) — fqdn = <project>.<suffix>, e.g. ai-platform.local",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Override final overlay dir (default: <node-configs>/<node>/overlays/nginx); VHOST_OUTPUT_DIR env",
+    )
 
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
@@ -916,6 +943,10 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve platform_domain: CLI arg > env var > None
     platform_domain = args.platform_domain or os.environ.get("PLATFORM_DOMAIN")
     platform_root = args.platform_root or os.environ.get("PLATFORM_ROOT")
+    # Resolve dev-mode suffix: CLI arg > env var > None (prod renders are unaffected)
+    dev_domain_suffix = getattr(args, "dev_domain_suffix", None) or os.environ.get("DEV_DOMAIN_SUFFIX") or None
+    # Resolve output dir override: CLI arg > env var > None (legacy default)
+    output_dir = getattr(args, "output_dir", None) or os.environ.get("VHOST_OUTPUT_DIR") or None
 
     try:
         if args.command == "render-all":
@@ -925,6 +956,8 @@ def main(argv: list[str] | None = None) -> int:
                 node_configs_dir=args.node_configs_dir,
                 node=args.node,
                 platform_domain=platform_domain,
+                dev_domain_suffix=dev_domain_suffix,
+                output_dir=output_dir,
             )
             return 0
 
@@ -941,6 +974,8 @@ def main(argv: list[str] | None = None) -> int:
                 node=config.target_node,
                 node_configs_dir=args.node_configs_dir,
                 platform_domain=platform_domain,
+                output_dir=output_dir,
+                dev_domain_suffix=dev_domain_suffix,
             )
 
             print("")
